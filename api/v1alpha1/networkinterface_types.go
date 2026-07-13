@@ -38,6 +38,8 @@ type NetworkInterfaceStatus struct {
 
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // NetworkInterface is a thin NIC attached to a VM: identity plus user-specified overlay IPs.
 type NetworkInterface struct {

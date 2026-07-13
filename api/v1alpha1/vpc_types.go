@@ -42,6 +42,8 @@ type VPCStatus struct {
 
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // VPC is an isolation domain (overlay network) identified by a VNI on the shared underlay.
 type VPC struct {

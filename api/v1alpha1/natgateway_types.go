@@ -22,6 +22,8 @@ type NATGatewayStatus struct {
 
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // NATGateway is a scaffold-only resource. Selector-membership NAT gateway (§3.6).
 type NATGateway struct {

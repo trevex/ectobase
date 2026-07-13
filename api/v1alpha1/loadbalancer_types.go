@@ -22,6 +22,8 @@ type LoadBalancerStatus struct {
 
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // LoadBalancer is a scaffold-only resource. Selector-target load balancer (§3.5).
 type LoadBalancer struct {

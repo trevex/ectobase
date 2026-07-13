@@ -1,0 +1,57 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: loadbalancers.net.ectobase.dev
+spec:
+  group: net.ectobase.dev
+  names:
+    kind: LoadBalancer
+    listKind: LoadBalancerList
+    plural: loadbalancers
+    singular: loadbalancer
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: LoadBalancer is a scaffold-only resource. Selector-target load
+          balancer (§3.5).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              LoadBalancerSpec is the desired state of a LoadBalancer.
+
+              SCAFFOLD ONLY: intentionally empty. Selector-target load balancer (§3.5).
+              Fleshed out in a later plan (YAGNI here).
+            type: object
+          status:
+            description: |-
+              LoadBalancerStatus is the observed state of a LoadBalancer.
+
+              SCAFFOLD ONLY: intentionally empty.
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

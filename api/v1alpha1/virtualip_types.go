@@ -22,6 +22,8 @@ type VirtualIPStatus struct {
 
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // VirtualIP is a scaffold-only resource. Floating/movable virtual IP (§3.7).
 type VirtualIP struct {

@@ -22,6 +22,8 @@ type NetworkPolicyStatus struct {
 
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // NetworkPolicy is a scaffold-only resource. Selector-based distributed firewall (§3.4).
 type NetworkPolicy struct {

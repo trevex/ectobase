@@ -1,0 +1,13 @@
+# This kustomization aggregates the CRD manifests for the
+# net.ectobase.dev/v1alpha1 API group. The CRDs under bases/ are generated
+# from api/v1alpha1 via controller-gen (sigs.k8s.io/controller-tools).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- bases/net.ectobase.dev_vpcs.yaml
+- bases/net.ectobase.dev_networkinterfaces.yaml
+- bases/net.ectobase.dev_vpcpeerings.yaml
+- bases/net.ectobase.dev_networkpolicies.yaml
+- bases/net.ectobase.dev_loadbalancers.yaml
+- bases/net.ectobase.dev_natgateways.yaml
+- bases/net.ectobase.dev_virtualips.yaml

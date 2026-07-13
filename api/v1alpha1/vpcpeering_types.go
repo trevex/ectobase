@@ -22,6 +22,8 @@ type VPCPeeringStatus struct {
 
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // VPCPeering is a scaffold-only resource. Mutual-consent VPC peering (§3.3).
 type VPCPeering struct {
