@@ -7,6 +7,7 @@ pub mod pb {
     tonic::include_proto!("dpdkironcore.v1");
 }
 
+mod attach;
 mod conntrack_gc;
 mod control;
 mod grpc;
@@ -350,9 +351,38 @@ async fn main() -> anyhow::Result<()> {
                 ctrl.take_conntrack(),
                 std::time::Duration::from_secs(10),
             ));
+            // Share one Control between the legacy DPDKironcore service and the DataplaneNode
+            // service (the map handles live inside Control; they can only be taken once).
+            let control = std::sync::Arc::new(ctrl);
+
+            // Seed the underlay /128 allocator that AttachInterface hands endpoints out of. The
+            // operator's declared `--local-underlay` IS this hypervisor's identity on the fabric
+            // /64, so its /64 is authoritatively the pool (no need to re-infer, and re-inferring
+            // could pick an unrelated global ULA on a busy host). We still cross-check that the
+            // declared /64 actually appears among the host's ifaddrs (the inference contract) and
+            // log the inferred /64 for observability, but the pool tracks the declared underlay.
+            let ipam = {
+                let pool = ipnet::Ipv6Net::new(std::net::Ipv6Addr::from(underlay), 64)
+                    .context("build underlay /64 from --local-underlay")?
+                    .trunc();
+                if let Ok(addrs) = underlay::read_host_ifaddrs() {
+                    if let Some(inferred) = underlay::infer_underlay_prefix(&addrs) {
+                        println!("DataplaneNode: inferred host underlay /64 = {inferred}");
+                    }
+                }
+                println!("DataplaneNode: underlay pool = {pool}");
+                underlay::UnderlayIpam::new(pool)
+            };
+            let attach_state = std::sync::Arc::new(attach::AttachState {
+                control: std::sync::Arc::clone(&control),
+                ipam: std::sync::Mutex::new(ipam),
+                gateway_ipv4,
+                mac_seq: std::sync::Mutex::new(0),
+            });
+
             let svc = grpc::Service {
                 state: std::sync::Arc::new(state::State::default()),
-                control: Some(std::sync::Arc::new(ctrl)),
+                control: Some(std::sync::Arc::clone(&control)),
                 underlay,
                 gateway_ipv4,
                 gateway_ipv6,
@@ -370,7 +400,7 @@ async fn main() -> anyhow::Result<()> {
                 .add_service(health_service)
                 .add_service(server)
                 .add_service(node::pb::dataplane_node_server::DataplaneNodeServer::new(
-                    node::NodeService::default(),
+                    node::NodeService::new(attach_state),
                 ))
                 .serve(addr.parse()?)
                 .await?;

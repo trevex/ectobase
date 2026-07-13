@@ -645,6 +645,16 @@ impl Control {
             .map(|r| (r.vni, r.ipv4, r.ipv6, r.underlay, r.device.clone()))
     }
 
+    /// Read the `INTERFACES` map entry for `(vni, ipv4)` straight back out of the live eBPF map.
+    /// Used by the DataplaneNode AttachInterface path to confirm the endpoint is resident in the
+    /// kernel map (a read-back that proves the program actually landed). Returns the tap ifindex.
+    pub fn interface_readback(&self, vni: u32, ipv4: [u8; 4]) -> Option<u32> {
+        let g = self.inner.lock().unwrap();
+        g.ifaces
+            .get(&IfaceKey::new(vni, ipv4))
+            .map(|v| v.tap_ifindex)
+    }
+
     /// All interface ids with their (vni, ipv4, ipv6, underlay, device).
     pub fn list_interfaces(&self) -> Vec<InterfaceRow> {
         let g = self.inner.lock().unwrap();
