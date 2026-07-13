@@ -18,6 +18,18 @@ spec:
         app.kubernetes.io/part-of: netplane
     spec:
       serviceAccountName: netplane-reflector
+      # The reflector is the global rendezvous. It runs on hostNetwork and is pinned
+      # to the control-plane node, listening on that node's FABRIC loopback
+      # (fd00:db8:0:1::1) — reachable from every node (and, in multi-cluster, every
+      # compute cluster) over the same IPv6 BGP fabric the dataplane encaps over. This
+      # avoids ClusterIP DNAT, which does not work from the hostNetwork agents, and is
+      # the address the central reflector would expose cross-cluster.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - operator: Exists
       containers:
         - name: reflector
           image: ghcr.io/trevex/netplane:dev

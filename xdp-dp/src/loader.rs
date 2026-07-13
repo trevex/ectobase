@@ -177,6 +177,21 @@ pub fn register_guest_dhcp_tc(ebpf: &mut Ebpf) -> anyhow::Result<ProgramArray<Ma
     Ok(progs)
 }
 
+/// Attach an XDP program honouring the same mode policy as `attach_xdp_link`: force SKB/generic
+/// when `XDP_DP_SKB_MODE` is set (veth uplinks — e.g. containerlab/kind fabric links — do not
+/// support native XDP), else prefer native and fall back to SKB. Shared by the uplink attach paths.
+fn attach_xdp_mode(prog: &mut Xdp, prog_name: &str, iface: &str) -> anyhow::Result<()> {
+    if std::env::var_os("XDP_DP_SKB_MODE").is_some() {
+        prog.attach(iface, XdpFlags::SKB_MODE)
+            .with_context(|| format!("attach {prog_name} to {iface} (SKB_MODE)"))?;
+    } else {
+        prog.attach(iface, XdpFlags::default())
+            .or_else(|_| prog.attach(iface, XdpFlags::SKB_MODE))
+            .with_context(|| format!("attach {prog_name} to {iface}"))?;
+    }
+    Ok(())
+}
+
 /// Load (verify) and attach a named XDP program to one interface. Call this for the first
 /// interface; use `attach_xdp_loaded` for subsequent interfaces with the same program name.
 pub fn attach_xdp(ebpf: &mut Ebpf, prog_name: &str, iface: &str) -> anyhow::Result<()> {
@@ -185,9 +200,7 @@ pub fn attach_xdp(ebpf: &mut Ebpf, prog_name: &str, iface: &str) -> anyhow::Resu
         .with_context(|| format!("{prog_name} program missing"))?
         .try_into()?;
     prog.load().with_context(|| format!("verify {prog_name}"))?;
-    prog.attach(iface, XdpFlags::default())
-        .with_context(|| format!("attach {prog_name} to {iface}"))?;
-    Ok(())
+    attach_xdp_mode(prog, prog_name, iface)
 }
 
 /// Attach an already-loaded XDP program to an additional interface (skips the `load()` call).
@@ -196,9 +209,7 @@ pub fn attach_xdp_extra(ebpf: &mut Ebpf, prog_name: &str, iface: &str) -> anyhow
         .program_mut(prog_name)
         .with_context(|| format!("{prog_name} program missing"))?
         .try_into()?;
-    prog.attach(iface, XdpFlags::default())
-        .with_context(|| format!("attach {prog_name} to {iface}"))?;
-    Ok(())
+    attach_xdp_mode(prog, prog_name, iface)
 }
 
 /// Attach an already-loaded XDP program to an interface and RETURN the owned link, so the caller

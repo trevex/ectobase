@@ -17,6 +17,9 @@ spec:
         app.kubernetes.io/part-of: netplane
     spec:
       serviceAccountName: netplane-agent
+      # Run on every node, including control-plane (the fabric's cp node is a host too).
+      tolerations:
+        - operator: Exists
       # hostNetwork so the agent can reach the node-local xdp-dp on 127.0.0.1:1337.
       # ClusterFirstWithHostNet keeps in-cluster DNS working, so the reflector
       # Service name (reflector.ectobase-system.svc) still resolves.
@@ -27,14 +30,18 @@ spec:
           image: ghcr.io/trevex/netplane:dev
           imagePullPolicy: IfNotPresent
           command: ["agent"]
-          # NOTE(tune): --underlay is a first-draft value (the node's status.hostIP).
-          # It should be the node's fabric /128 underlay address, and may later be
-          # tuned to read the underlay from xdp-dp instead of the downward API.
+          # NOTE(tune): --underlay here is a fallback only. The reconciler announces
+          # each endpoint's own status.underlayRoute (the /128 the attach path
+          # allocated); --underlay is used only for interfaces not yet attached.
           args:
             - "--node-id=$(NODE_NAME)"
             - "--underlay=$(NODE_IP)"
-            - "--reflector=reflector.ectobase-system.svc:1338"
+            # The reflector listens on the control-plane node's fabric loopback,
+            # reachable from every node over the BGP fabric (and cross-cluster later).
+            - "--reflector=[fd00:db8:0:1::1]:1338"
             - "--dataplane=127.0.0.1:1337"
+            # Reach the API over the fabric (the mgmt net has no inter-node path here).
+            - "--kubeconfig=/etc/netplane/kubeconfig"
           env:
             - name: NODE_NAME
               valueFrom:
@@ -44,3 +51,11 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.hostIP
+          volumeMounts:
+            - name: kubeconfig
+              mountPath: /etc/netplane
+              readOnly: true
+      volumes:
+        - name: kubeconfig
+          configMap:
+            name: netplane-agent-kubeconfig

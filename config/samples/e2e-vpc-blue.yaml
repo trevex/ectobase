@@ -1,0 +1,36 @@
+# Sample overlay for the cross-node e2e: one VPC (vni 100) with an endpoint on each
+# fabric node. status.vni / status.underlayRoute are set here directly because the
+# VPC-allocation controller and the endpoint-attach controller are not part of v1
+# (the agent consumes status; here we stand it in). The underlayRoute of each endpoint
+# is a /128 inside its own node's fabric /64 (cp = fd00:db8:0:1::/64, worker = ...:2::).
+apiVersion: net.ectobase.dev/v1alpha1
+kind: VPC
+metadata:
+  name: blue
+  namespace: default
+spec:
+  vni: 100
+---
+apiVersion: net.ectobase.dev/v1alpha1
+kind: NetworkInterface
+metadata:
+  name: nic-a
+  namespace: default
+spec:
+  vpcRef:
+    name: blue
+  ips:
+    - 10.0.0.1
+  nodeName: k01-control-plane
+---
+apiVersion: net.ectobase.dev/v1alpha1
+kind: NetworkInterface
+metadata:
+  name: nic-b
+  namespace: default
+spec:
+  vpcRef:
+    name: blue
+  ips:
+    - 10.0.0.2
+  nodeName: k01-worker

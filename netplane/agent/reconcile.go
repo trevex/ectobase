@@ -63,12 +63,21 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 		if nic.Spec.NodeName == nil || *nic.Spec.NodeName != r.nodeID {
 			continue // only announce interfaces scheduled to THIS node
 		}
+		// The route's nexthop is the ENDPOINT's own underlay /128 (the identity the
+		// attach path allocated and recorded in status.underlayRoute), NOT the node
+		// address: remote nodes encap to that /128 and the local node's UNDERLAY map
+		// resolves it to the endpoint's tap. Fall back to the node underlay only when
+		// the endpoint hasn't been attached yet (status.underlayRoute empty).
+		nexthop := nic.Status.UnderlayRoute
+		if nexthop == "" {
+			nexthop = r.underlay
+		}
 		for _, ip := range nic.Spec.IPs {
 			prefix, err := hostPrefix(ip)
 			if err != nil {
 				return nil, nil, fmt.Errorf("nic %s/%s ip %q: %w", nic.Namespace, nic.Name, ip, err)
 			}
-			announce = append(announce, Route{Vni: vni, Prefix: prefix, Nexthop: r.underlay})
+			announce = append(announce, Route{Vni: vni, Prefix: prefix, Nexthop: nexthop})
 		}
 	}
 	for v := range vniSet {
