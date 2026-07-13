@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package routebus.v1;
+
+option go_package = "github.com/trevex/xdp-dp/netplane/gen/routebusv1;routebusv1";
+
+// RouteBus is the control-plane route exchange between per-node agents and the
+// central reflector. One long-lived bidi stream per agent.
+service RouteBus {
+  rpc Session(stream ClientMsg) returns (stream ServerMsg);
+}
+
+enum RouteOp {
+  ROUTE_OP_UNSPECIFIED = 0;
+  ROUTE_OP_ADD = 1;
+  ROUTE_OP_WITHDRAW = 2;
+}
+
+// Agent -> reflector.
+message ClientMsg {
+  oneof msg {
+    Hello hello = 1;             // MUST be the first message on the stream
+    Subscribe subscribe = 2;
+    Unsubscribe unsubscribe = 3;
+    Announce announce = 4;
+    Withdraw withdraw = 5;
+    KeepAlive keep_alive = 6;
+  }
+}
+
+// Reflector -> agent.
+message ServerMsg {
+  oneof msg {
+    RouteUpdate route_update = 1;
+    EndOfRIB end_of_rib = 2;     // full-table-for-a-vni delivered; safe to prune
+    KeepAlive keep_alive = 3;
+  }
+}
+
+message Hello {
+  string node_id = 1;       // stable per-agent identity (== the reflector's origin key)
+  string underlay_ipv6 = 2; // this node's underlay /128 (informational for v1)
+}
+message Subscribe { uint32 vni = 1; }
+message Unsubscribe { uint32 vni = 1; }
+
+message Announce {
+  uint32 vni = 1;
+  string prefix = 2;             // CIDR overlay prefix, e.g. "10.0.0.5/32"
+  string nexthop_underlay = 3;   // primary nexthop = this node's underlay IPv6
+  repeated string extra_nexthops = 4; // additional ECMP nexthops (carried, not yet used)
+}
+message Withdraw {
+  uint32 vni = 1;
+  string prefix = 2;
+}
+
+message RouteUpdate {
+  uint32 vni = 1;
+  string prefix = 2;
+  repeated string nexthops = 3;  // nexthops[0] is the primary; rest are ECMP
+  RouteOp op = 4;
+}
+message EndOfRIB { uint32 vni = 1; }
+message KeepAlive {}
