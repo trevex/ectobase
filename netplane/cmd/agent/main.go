@@ -12,6 +12,7 @@ import (
 	dpv1 "github.com/trevex/xdp-dp/cni/gen/dataplanev1"
 	"github.com/trevex/xdp-dp/netplane/agent"
 	rbv1 "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	"github.com/trevex/xdp-dp/netplane/routebus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
@@ -23,6 +24,9 @@ func main() {
 	reflectorAddr := flag.String("reflector", "127.0.0.1:1338", "reflector gRPC address")
 	dataplaneAddr := flag.String("dataplane", "127.0.0.1:1337", "local xdp-dp DataplaneNode address")
 	kubeconfig := flag.String("kubeconfig", "", "kubeconfig for the central API (empty = in-cluster)")
+	tlsCA := flag.String("tls-ca", "", "CA bundle to verify the reflector (enables mTLS)")
+	tlsCert := flag.String("tls-cert", "", "agent client cert (identity == node)")
+	tlsKey := flag.String("tls-key", "", "agent client key")
 	flag.Parse()
 	if *nodeID == "" || *underlay == "" {
 		log.Fatal("--node-id and --underlay are required")
@@ -35,8 +39,16 @@ func main() {
 	defer dpConn.Close()
 	dp := agent.NewDataplaneAdapter(dpv1.NewDataplaneNodeClient(dpConn))
 
+	var rbCreds = insecure.NewCredentials()
+	if *tlsCA != "" || *tlsCert != "" || *tlsKey != "" {
+		tc, err := routebus.ClientTLS(*tlsCA, *tlsCert, *tlsKey)
+		if err != nil {
+			log.Fatalf("tls: %v", err)
+		}
+		rbCreds = tc
+	}
 	rbConn, err := grpc.NewClient(*reflectorAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(rbCreds),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{Time: 2 * time.Second, Timeout: 3 * time.Second, PermitWithoutStream: true}))
 	if err != nil {
 		log.Fatalf("dial reflector: %v", err)
