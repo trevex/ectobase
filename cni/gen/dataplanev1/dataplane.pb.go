@@ -357,6 +357,190 @@ func (*ConfigureNetworkResponse) Descriptor() ([]byte, []int) {
 	return file_dataplane_proto_rawDescGZIP(), []int{5}
 }
 
+type AddRouteRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Vni             uint32                 `protobuf:"varint,1,opt,name=vni,proto3" json:"vni,omitempty"`
+	Prefix          string                 `protobuf:"bytes,2,opt,name=prefix,proto3" json:"prefix,omitempty"`                                          // CIDR: "10.0.0.5/32" or "2001:db8::5/128"
+	NexthopUnderlay string                 `protobuf:"bytes,3,opt,name=nexthop_underlay,json=nexthopUnderlay,proto3" json:"nexthop_underlay,omitempty"` // remote node underlay IPv6, e.g. "fd00:db8:0:2::a"
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *AddRouteRequest) Reset() {
+	*x = AddRouteRequest{}
+	mi := &file_dataplane_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddRouteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddRouteRequest) ProtoMessage() {}
+
+func (x *AddRouteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dataplane_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddRouteRequest.ProtoReflect.Descriptor instead.
+func (*AddRouteRequest) Descriptor() ([]byte, []int) {
+	return file_dataplane_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *AddRouteRequest) GetVni() uint32 {
+	if x != nil {
+		return x.Vni
+	}
+	return 0
+}
+
+func (x *AddRouteRequest) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+func (x *AddRouteRequest) GetNexthopUnderlay() string {
+	if x != nil {
+		return x.NexthopUnderlay
+	}
+	return ""
+}
+
+type AddRouteResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AddRouteResponse) Reset() {
+	*x = AddRouteResponse{}
+	mi := &file_dataplane_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddRouteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddRouteResponse) ProtoMessage() {}
+
+func (x *AddRouteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dataplane_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddRouteResponse.ProtoReflect.Descriptor instead.
+func (*AddRouteResponse) Descriptor() ([]byte, []int) {
+	return file_dataplane_proto_rawDescGZIP(), []int{7}
+}
+
+type WithdrawRouteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Vni           uint32                 `protobuf:"varint,1,opt,name=vni,proto3" json:"vni,omitempty"`
+	Prefix        string                 `protobuf:"bytes,2,opt,name=prefix,proto3" json:"prefix,omitempty"` // CIDR, as in AddRouteRequest
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WithdrawRouteRequest) Reset() {
+	*x = WithdrawRouteRequest{}
+	mi := &file_dataplane_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WithdrawRouteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WithdrawRouteRequest) ProtoMessage() {}
+
+func (x *WithdrawRouteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dataplane_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WithdrawRouteRequest.ProtoReflect.Descriptor instead.
+func (*WithdrawRouteRequest) Descriptor() ([]byte, []int) {
+	return file_dataplane_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *WithdrawRouteRequest) GetVni() uint32 {
+	if x != nil {
+		return x.Vni
+	}
+	return 0
+}
+
+func (x *WithdrawRouteRequest) GetPrefix() string {
+	if x != nil {
+		return x.Prefix
+	}
+	return ""
+}
+
+type WithdrawRouteResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WithdrawRouteResponse) Reset() {
+	*x = WithdrawRouteResponse{}
+	mi := &file_dataplane_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WithdrawRouteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WithdrawRouteResponse) ProtoMessage() {}
+
+func (x *WithdrawRouteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dataplane_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WithdrawRouteResponse.ProtoReflect.Descriptor instead.
+func (*WithdrawRouteResponse) Descriptor() ([]byte, []int) {
+	return file_dataplane_proto_rawDescGZIP(), []int{9}
+}
+
 var File_dataplane_proto protoreflect.FileDescriptor
 
 const file_dataplane_proto_rawDesc = "" +
@@ -383,11 +567,22 @@ const file_dataplane_proto_rawDesc = "" +
 	"\agateway\x18\x02 \x01(\tR\agateway\x12\x10\n" +
 	"\x03mtu\x18\x03 \x01(\rR\x03mtu\x12\x10\n" +
 	"\x03dns\x18\x04 \x03(\tR\x03dns\"\x1a\n" +
-	"\x18ConfigureNetworkResponse2\xb2\x02\n" +
+	"\x18ConfigureNetworkResponse\"f\n" +
+	"\x0fAddRouteRequest\x12\x10\n" +
+	"\x03vni\x18\x01 \x01(\rR\x03vni\x12\x16\n" +
+	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12)\n" +
+	"\x10nexthop_underlay\x18\x03 \x01(\tR\x0fnexthopUnderlay\"\x12\n" +
+	"\x10AddRouteResponse\"@\n" +
+	"\x14WithdrawRouteRequest\x12\x10\n" +
+	"\x03vni\x18\x01 \x01(\rR\x03vni\x12\x16\n" +
+	"\x06prefix\x18\x02 \x01(\tR\x06prefix\"\x17\n" +
+	"\x15WithdrawRouteResponse2\xd7\x03\n" +
 	"\rDataplaneNode\x12^\n" +
 	"\x0fAttachInterface\x12$.dataplane.v1.AttachInterfaceRequest\x1a%.dataplane.v1.AttachInterfaceResponse\x12^\n" +
 	"\x0fDetachInterface\x12$.dataplane.v1.DetachInterfaceRequest\x1a%.dataplane.v1.DetachInterfaceResponse\x12a\n" +
-	"\x10ConfigureNetwork\x12%.dataplane.v1.ConfigureNetworkRequest\x1a&.dataplane.v1.ConfigureNetworkResponseB:Z8github.com/trevex/xdp-dp/cni/gen/dataplanev1;dataplanev1b\x06proto3"
+	"\x10ConfigureNetwork\x12%.dataplane.v1.ConfigureNetworkRequest\x1a&.dataplane.v1.ConfigureNetworkResponse\x12I\n" +
+	"\bAddRoute\x12\x1d.dataplane.v1.AddRouteRequest\x1a\x1e.dataplane.v1.AddRouteResponse\x12X\n" +
+	"\rWithdrawRoute\x12\".dataplane.v1.WithdrawRouteRequest\x1a#.dataplane.v1.WithdrawRouteResponseB:Z8github.com/trevex/xdp-dp/cni/gen/dataplanev1;dataplanev1b\x06proto3"
 
 var (
 	file_dataplane_proto_rawDescOnce sync.Once
@@ -401,7 +596,7 @@ func file_dataplane_proto_rawDescGZIP() []byte {
 	return file_dataplane_proto_rawDescData
 }
 
-var file_dataplane_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_dataplane_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_dataplane_proto_goTypes = []any{
 	(*AttachInterfaceRequest)(nil),   // 0: dataplane.v1.AttachInterfaceRequest
 	(*AttachInterfaceResponse)(nil),  // 1: dataplane.v1.AttachInterfaceResponse
@@ -409,16 +604,24 @@ var file_dataplane_proto_goTypes = []any{
 	(*DetachInterfaceResponse)(nil),  // 3: dataplane.v1.DetachInterfaceResponse
 	(*ConfigureNetworkRequest)(nil),  // 4: dataplane.v1.ConfigureNetworkRequest
 	(*ConfigureNetworkResponse)(nil), // 5: dataplane.v1.ConfigureNetworkResponse
+	(*AddRouteRequest)(nil),          // 6: dataplane.v1.AddRouteRequest
+	(*AddRouteResponse)(nil),         // 7: dataplane.v1.AddRouteResponse
+	(*WithdrawRouteRequest)(nil),     // 8: dataplane.v1.WithdrawRouteRequest
+	(*WithdrawRouteResponse)(nil),    // 9: dataplane.v1.WithdrawRouteResponse
 }
 var file_dataplane_proto_depIdxs = []int32{
 	0, // 0: dataplane.v1.DataplaneNode.AttachInterface:input_type -> dataplane.v1.AttachInterfaceRequest
 	2, // 1: dataplane.v1.DataplaneNode.DetachInterface:input_type -> dataplane.v1.DetachInterfaceRequest
 	4, // 2: dataplane.v1.DataplaneNode.ConfigureNetwork:input_type -> dataplane.v1.ConfigureNetworkRequest
-	1, // 3: dataplane.v1.DataplaneNode.AttachInterface:output_type -> dataplane.v1.AttachInterfaceResponse
-	3, // 4: dataplane.v1.DataplaneNode.DetachInterface:output_type -> dataplane.v1.DetachInterfaceResponse
-	5, // 5: dataplane.v1.DataplaneNode.ConfigureNetwork:output_type -> dataplane.v1.ConfigureNetworkResponse
-	3, // [3:6] is the sub-list for method output_type
-	0, // [0:3] is the sub-list for method input_type
+	6, // 3: dataplane.v1.DataplaneNode.AddRoute:input_type -> dataplane.v1.AddRouteRequest
+	8, // 4: dataplane.v1.DataplaneNode.WithdrawRoute:input_type -> dataplane.v1.WithdrawRouteRequest
+	1, // 5: dataplane.v1.DataplaneNode.AttachInterface:output_type -> dataplane.v1.AttachInterfaceResponse
+	3, // 6: dataplane.v1.DataplaneNode.DetachInterface:output_type -> dataplane.v1.DetachInterfaceResponse
+	5, // 7: dataplane.v1.DataplaneNode.ConfigureNetwork:output_type -> dataplane.v1.ConfigureNetworkResponse
+	7, // 8: dataplane.v1.DataplaneNode.AddRoute:output_type -> dataplane.v1.AddRouteResponse
+	9, // 9: dataplane.v1.DataplaneNode.WithdrawRoute:output_type -> dataplane.v1.WithdrawRouteResponse
+	5, // [5:10] is the sub-list for method output_type
+	0, // [0:5] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -435,7 +638,7 @@ func file_dataplane_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dataplane_proto_rawDesc), len(file_dataplane_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

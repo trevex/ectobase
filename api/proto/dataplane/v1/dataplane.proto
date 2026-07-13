@@ -10,6 +10,11 @@ service DataplaneNode {
   rpc AttachInterface(AttachInterfaceRequest) returns (AttachInterfaceResponse);
   rpc DetachInterface(DetachInterfaceRequest) returns (DetachInterfaceResponse);
   rpc ConfigureNetwork(ConfigureNetworkRequest) returns (ConfigureNetworkResponse);
+  // AddRoute programs a single overlay route (vni, prefix -> nexthop underlay).
+  // Idempotent: re-adding an existing (vni, prefix) replaces its nexthop.
+  rpc AddRoute(AddRouteRequest) returns (AddRouteResponse);
+  // WithdrawRoute removes an overlay route. Removing an absent route is not an error.
+  rpc WithdrawRoute(WithdrawRouteRequest) returns (WithdrawRouteResponse);
 }
 
 message AttachInterfaceRequest {
@@ -37,3 +42,16 @@ message ConfigureNetworkRequest {
   repeated string dns = 4;
 }
 message ConfigureNetworkResponse {}
+
+message AddRouteRequest {
+  uint32 vni = 1;
+  string prefix = 2;           // CIDR: "10.0.0.5/32" or "2001:db8::5/128"
+  string nexthop_underlay = 3; // remote node underlay IPv6, e.g. "fd00:db8:0:2::a"
+}
+message AddRouteResponse {}
+
+message WithdrawRouteRequest {
+  uint32 vni = 1;
+  string prefix = 2;           // CIDR, as in AddRouteRequest
+}
+message WithdrawRouteResponse {}

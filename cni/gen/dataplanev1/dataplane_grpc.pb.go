@@ -22,6 +22,8 @@ const (
 	DataplaneNode_AttachInterface_FullMethodName  = "/dataplane.v1.DataplaneNode/AttachInterface"
 	DataplaneNode_DetachInterface_FullMethodName  = "/dataplane.v1.DataplaneNode/DetachInterface"
 	DataplaneNode_ConfigureNetwork_FullMethodName = "/dataplane.v1.DataplaneNode/ConfigureNetwork"
+	DataplaneNode_AddRoute_FullMethodName         = "/dataplane.v1.DataplaneNode/AddRoute"
+	DataplaneNode_WithdrawRoute_FullMethodName    = "/dataplane.v1.DataplaneNode/WithdrawRoute"
 )
 
 // DataplaneNodeClient is the client API for DataplaneNode service.
@@ -34,6 +36,11 @@ type DataplaneNodeClient interface {
 	AttachInterface(ctx context.Context, in *AttachInterfaceRequest, opts ...grpc.CallOption) (*AttachInterfaceResponse, error)
 	DetachInterface(ctx context.Context, in *DetachInterfaceRequest, opts ...grpc.CallOption) (*DetachInterfaceResponse, error)
 	ConfigureNetwork(ctx context.Context, in *ConfigureNetworkRequest, opts ...grpc.CallOption) (*ConfigureNetworkResponse, error)
+	// AddRoute programs a single overlay route (vni, prefix -> nexthop underlay).
+	// Idempotent: re-adding an existing (vni, prefix) replaces its nexthop.
+	AddRoute(ctx context.Context, in *AddRouteRequest, opts ...grpc.CallOption) (*AddRouteResponse, error)
+	// WithdrawRoute removes an overlay route. Removing an absent route is not an error.
+	WithdrawRoute(ctx context.Context, in *WithdrawRouteRequest, opts ...grpc.CallOption) (*WithdrawRouteResponse, error)
 }
 
 type dataplaneNodeClient struct {
@@ -74,6 +81,26 @@ func (c *dataplaneNodeClient) ConfigureNetwork(ctx context.Context, in *Configur
 	return out, nil
 }
 
+func (c *dataplaneNodeClient) AddRoute(ctx context.Context, in *AddRouteRequest, opts ...grpc.CallOption) (*AddRouteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddRouteResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_AddRoute_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataplaneNodeClient) WithdrawRoute(ctx context.Context, in *WithdrawRouteRequest, opts ...grpc.CallOption) (*WithdrawRouteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WithdrawRouteResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_WithdrawRoute_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DataplaneNodeServer is the server API for DataplaneNode service.
 // All implementations must embed UnimplementedDataplaneNodeServer
 // for forward compatibility.
@@ -84,6 +111,11 @@ type DataplaneNodeServer interface {
 	AttachInterface(context.Context, *AttachInterfaceRequest) (*AttachInterfaceResponse, error)
 	DetachInterface(context.Context, *DetachInterfaceRequest) (*DetachInterfaceResponse, error)
 	ConfigureNetwork(context.Context, *ConfigureNetworkRequest) (*ConfigureNetworkResponse, error)
+	// AddRoute programs a single overlay route (vni, prefix -> nexthop underlay).
+	// Idempotent: re-adding an existing (vni, prefix) replaces its nexthop.
+	AddRoute(context.Context, *AddRouteRequest) (*AddRouteResponse, error)
+	// WithdrawRoute removes an overlay route. Removing an absent route is not an error.
+	WithdrawRoute(context.Context, *WithdrawRouteRequest) (*WithdrawRouteResponse, error)
 	mustEmbedUnimplementedDataplaneNodeServer()
 }
 
@@ -102,6 +134,12 @@ func (UnimplementedDataplaneNodeServer) DetachInterface(context.Context, *Detach
 }
 func (UnimplementedDataplaneNodeServer) ConfigureNetwork(context.Context, *ConfigureNetworkRequest) (*ConfigureNetworkResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ConfigureNetwork not implemented")
+}
+func (UnimplementedDataplaneNodeServer) AddRoute(context.Context, *AddRouteRequest) (*AddRouteResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddRoute not implemented")
+}
+func (UnimplementedDataplaneNodeServer) WithdrawRoute(context.Context, *WithdrawRouteRequest) (*WithdrawRouteResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method WithdrawRoute not implemented")
 }
 func (UnimplementedDataplaneNodeServer) mustEmbedUnimplementedDataplaneNodeServer() {}
 func (UnimplementedDataplaneNodeServer) testEmbeddedByValue()                       {}
@@ -178,6 +216,42 @@ func _DataplaneNode_ConfigureNetwork_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DataplaneNode_AddRoute_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddRouteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneNodeServer).AddRoute(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneNode_AddRoute_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneNodeServer).AddRoute(ctx, req.(*AddRouteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataplaneNode_WithdrawRoute_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WithdrawRouteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneNodeServer).WithdrawRoute(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneNode_WithdrawRoute_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneNodeServer).WithdrawRoute(ctx, req.(*WithdrawRouteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DataplaneNode_ServiceDesc is the grpc.ServiceDesc for DataplaneNode service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -196,6 +270,14 @@ var DataplaneNode_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ConfigureNetwork",
 			Handler:    _DataplaneNode_ConfigureNetwork_Handler,
+		},
+		{
+			MethodName: "AddRoute",
+			Handler:    _DataplaneNode_AddRoute_Handler,
+		},
+		{
+			MethodName: "WithdrawRoute",
+			Handler:    _DataplaneNode_WithdrawRoute_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
