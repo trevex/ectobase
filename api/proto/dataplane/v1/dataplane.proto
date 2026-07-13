@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package dataplane.v1;
+
+option go_package = "github.com/trevex/xdp-dp/cni/gen/dataplanev1;dataplanev1";
+
+// DataplaneNode is the node-local API the CNI calls to wire a VM's interface
+// into the eBPF dataplane. Purpose-built for this platform (not dpservice).
+service DataplaneNode {
+  rpc AttachInterface(AttachInterfaceRequest) returns (AttachInterfaceResponse);
+  rpc DetachInterface(DetachInterfaceRequest) returns (DetachInterfaceResponse);
+  rpc ConfigureNetwork(ConfigureNetworkRequest) returns (ConfigureNetworkResponse);
+}
+
+message AttachInterfaceRequest {
+  string interface_id = 1; // stable id (e.g. VMI uid + iface name)
+  string netns_path = 2;   // target network namespace path
+  uint32 vni = 3;
+  string mac = 4;          // optional; allocated if empty
+  repeated string requested_ips = 5; // optional; allocated if empty
+}
+message AttachInterfaceResponse {
+  string ifname = 1;
+  repeated string ips = 2;
+  string mac = 3;
+  string gateway = 4;
+}
+
+message DetachInterfaceRequest { string interface_id = 1; }
+message DetachInterfaceResponse {}
+
+message ConfigureNetworkRequest {
+  uint32 vni = 1;
+  string gateway = 2;
+  uint32 mtu = 3;
+  repeated string dns = 4;
+}
+message ConfigureNetworkResponse {}

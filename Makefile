@@ -27,6 +27,13 @@ release: ## Build the xdp-dp binary in release mode
 cli: ## Build the genuine dpservice-cli (flake package) into ./result
 	nix build .#dpservice-cli
 
+.PHONY: proto-go
+proto-go: ## Generate Go gRPC stubs for dataplane.v1 into cni/gen/dataplanev1
+	protoc -I api/proto/dataplane/v1 \
+		--go_out=cni/gen --go_opt=module=github.com/trevex/xdp-dp/cni/gen \
+		--go-grpc_out=cni/gen --go-grpc_opt=module=github.com/trevex/xdp-dp/cni/gen \
+		api/proto/dataplane/v1/dataplane.proto
+
 IMAGE ?= ghcr.io/trevex/dpservice-xdp
 TAG   ?= dev
 .PHONY: image
