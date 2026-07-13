@@ -36,9 +36,13 @@ proto-go: ## Generate Go gRPC stubs for dataplane.v1 into cni/gen/dataplanev1
 
 IMAGE ?= ghcr.io/trevex/dpservice-xdp
 TAG   ?= dev
+# The Dockerfile's builder does apt/curl/cargo network I/O. buildkit's default bridge
+# network can't resolve the mirrors on some hosts (apt-get exit 100); host networking is
+# reliable and harmless for a build. Override with DOCKER_BUILD_NET= to disable.
+DOCKER_BUILD_NET ?= host
 .PHONY: image
 image: ## Build the dpservice-xdp container image (self-building Dockerfile; IMAGE/TAG overridable)
-	docker build -t $(IMAGE):$(TAG) .
+	docker build $(if $(DOCKER_BUILD_NET),--network=$(DOCKER_BUILD_NET)) -t $(IMAGE):$(TAG) .
 
 .PHONY: image-push
 image-push: ## Push the dpservice-xdp image (needs `docker login ghcr.io`)
