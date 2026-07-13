@@ -24,6 +24,7 @@ message AttachInterfaceResponse {
   repeated string ips = 2;
   string mac = 3;
   string gateway = 4;
+  string underlay_route = 5; // allocated underlay /128 the overlay encaps to
 }
 
 message DetachInterfaceRequest { string interface_id = 1; }

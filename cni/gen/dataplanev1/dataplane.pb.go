@@ -103,6 +103,7 @@ type AttachInterfaceResponse struct {
 	Ips           []string               `protobuf:"bytes,2,rep,name=ips,proto3" json:"ips,omitempty"`
 	Mac           string                 `protobuf:"bytes,3,opt,name=mac,proto3" json:"mac,omitempty"`
 	Gateway       string                 `protobuf:"bytes,4,opt,name=gateway,proto3" json:"gateway,omitempty"`
+	UnderlayRoute string                 `protobuf:"bytes,5,opt,name=underlay_route,json=underlayRoute,proto3" json:"underlay_route,omitempty"` // allocated underlay /128 the overlay encaps to
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -161,6 +162,13 @@ func (x *AttachInterfaceResponse) GetMac() string {
 func (x *AttachInterfaceResponse) GetGateway() string {
 	if x != nil {
 		return x.Gateway
+	}
+	return ""
+}
+
+func (x *AttachInterfaceResponse) GetUnderlayRoute() string {
+	if x != nil {
+		return x.UnderlayRoute
 	}
 	return ""
 }
@@ -360,12 +368,13 @@ const file_dataplane_proto_rawDesc = "" +
 	"netns_path\x18\x02 \x01(\tR\tnetnsPath\x12\x10\n" +
 	"\x03vni\x18\x03 \x01(\rR\x03vni\x12\x10\n" +
 	"\x03mac\x18\x04 \x01(\tR\x03mac\x12#\n" +
-	"\rrequested_ips\x18\x05 \x03(\tR\frequestedIps\"o\n" +
+	"\rrequested_ips\x18\x05 \x03(\tR\frequestedIps\"\x96\x01\n" +
 	"\x17AttachInterfaceResponse\x12\x16\n" +
 	"\x06ifname\x18\x01 \x01(\tR\x06ifname\x12\x10\n" +
 	"\x03ips\x18\x02 \x03(\tR\x03ips\x12\x10\n" +
 	"\x03mac\x18\x03 \x01(\tR\x03mac\x12\x18\n" +
-	"\agateway\x18\x04 \x01(\tR\agateway\";\n" +
+	"\agateway\x18\x04 \x01(\tR\agateway\x12%\n" +
+	"\x0eunderlay_route\x18\x05 \x01(\tR\runderlayRoute\";\n" +
 	"\x16DetachInterfaceRequest\x12!\n" +
 	"\finterface_id\x18\x01 \x01(\tR\vinterfaceId\"\x19\n" +
 	"\x17DetachInterfaceResponse\"i\n" +
