@@ -121,6 +121,10 @@ enum Cmd {
         #[arg(long = "dhcpv6-dns")]
         dhcpv6_dns: Vec<String>,
     },
+    /// Infer this host's underlay /64 from its interface addresses (prefers a lo/dummy* fabric
+    /// loopback) and print it, then exit. No datapath, no root — reads `ip -6 -o addr`. Used by the
+    /// containerlab IPv6-fabric e2e to assert the inferred /64 matches the fabric-announced dummy0.
+    InferUnderlay,
     /// Attach the trivial xdp_pass program to an interface (redirect-target enabler), then idle.
     Pass {
         #[arg(long)]
@@ -293,6 +297,14 @@ async fn main() -> anyhow::Result<()> {
             let _ebpf = loader::attach_uplink(&uplink)?;
             println!("attached uplink_rx to {uplink}; ctrl-c to detach");
             tokio::signal::ctrl_c().await?;
+        }
+        Cmd::InferUnderlay => {
+            // Pure, root-free observability hook for the containerlab IPv6-fabric e2e: read the
+            // host ifaddrs and print the inferred underlay /64 in a stable, greppable form.
+            let addrs = underlay::read_host_ifaddrs()?;
+            let prefix = underlay::infer_underlay_prefix(&addrs)
+                .context("no global-unicast IPv6 address found to infer underlay /64")?;
+            println!("inferred underlay prefix: {prefix}");
         }
         Cmd::Serve {
             addr,

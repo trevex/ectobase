@@ -1,0 +1,16 @@
+# kind cluster for the xdp-dp IPv6-fabric e2e. Two nodes = two "hosts": the
+# control-plane node announces fd00:db8:0:1::/64, the worker announces
+# fd00:db8:0:2::/64 (see hack/clab/frr/host{1,2}.conf and ipv6-fabric.clab.yml).
+#
+# ipv6 family: the fabric under test is IPv6-only, and we want the kind nodes to
+# have IPv6 enabled in their netns. (Pod/Service CIDRs here are the cluster overlay,
+# unrelated to the fabric /64s on dummy0 — the fabric prefixes are added by clab
+# `exec`, not by kind.) containerlab pins/attaches the node containers; kind just
+# provides them.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  ipFamily: ipv6
+nodes:
+  - role: control-plane
+  - role: worker

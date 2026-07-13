@@ -1,0 +1,25 @@
+! FRR daemons for the lean IPv6-fabric switch. Adapted from the reference lab
+! (icn/sandbox/configs/frr/daemons): only zebra + bgpd + bfdd + staticd, which
+! is all an unnumbered-eBGP ToR needs. Everything else stays off.
+zebra=yes
+bgpd=yes
+bfdd=yes
+staticd=yes
+ospfd=no
+ospf6d=no
+ripd=no
+ripngd=no
+isisd=no
+pimd=no
+pim6d=no
+ldpd=no
+nhrpd=no
+eigrpd=no
+babeld=no
+sharpd=no
+pbrd=no
+bfdd_options="   -A 127.0.0.1"
+bgpd_options="   -A 127.0.0.1"
+zebra_options="  -A 127.0.0.1 -s 90000000"
+staticd_options="-A 127.0.0.1"
+vtysh_enable=yes

@@ -1,0 +1,104 @@
+# Lean IPv6-only, BGP-unnumbered containerlab fabric for xdp-dp underlay-inference
+# e2e testing. Adapted from icn/sandbox/topologies/fabric.clab.yml — stripped to the
+# minimum that exercises: (1) each "host" node announcing a per-node /64 that lives on
+# dummy0, and (2) the fabric routing each /64 to the other so cross-node reach works.
+#
+# NO VyOS edges, NO NAT64/DNS64, NO Garden-Linux VMs. Just one FRR ToR (sw1) and one
+# kind cluster whose two nodes (control-plane + worker) are the "hosts" running xdp-dp.
+#
+# Integration approach (see hack/clab/README.md for the proven-vs-new breakdown):
+#   * `k8s-kind` node  -> containerlab creates/owns the kind cluster lifecycle.
+#   * `ext-container` nodes -> the kind node containers (<cluster>-control-plane,
+#     <cluster>-worker), addressable as clab link endpoints. This is the DOCUMENTED
+#     containerlab way to wire kind nodes into a clab fabric.
+#   * A per-host FRR `linux` sidecar shares the kind node's netns
+#     (network-mode: container:<kind-node>) so it can (a) create dummy0 with the /64
+#     and (b) speak unnumbered eBGP over the kind node's fabric uplink — WITHOUT
+#     running FRR inside the kubelet/containerd node image. xdp-dp runs in that same
+#     netns and infers the /64 from dummy0.
+
+name: xdp-ipv6-fabric
+
+# Management network: keep it IPv4-only. Containerlab (>=0.68) otherwise auto-assigns
+# an IPv6 mgmt subnet and installs a default route via its gateway on every node's
+# eth0; in zebra that kernel-boot default (admin distance 0) outranks the fabric's
+# BGP routes and IPv6 egress would leave via the mgmt bridge instead of the fabric.
+# Tests reach nodes over docker exec, so mgmt IPv6 is unused. (Copied verbatim from
+# the reference lab — it matters.)
+mgmt:
+  network: xdp-clab
+  ipv4-subnet: 172.20.21.0/24
+  ipv6-subnet: ""
+
+topology:
+  defaults:
+    env:
+      TZ: UTC
+
+  kinds:
+    linux:
+      image: frrouting/frr:latest
+
+  nodes:
+    # --- ToR / spine: FRR (AS 65010, IPv6 forwarding on) ---
+    sw1:
+      kind: linux
+      binds:
+        - frr/daemons:/etc/frr/daemons
+        - frr/sw1.conf:/etc/frr/frr.conf
+      sysctls:
+        net.ipv6.conf.all.forwarding: 1
+
+    # --- kind cluster: containerlab owns its lifecycle ---
+    # The two kind nodes (control-plane + worker) are the "hosts" running xdp-dp.
+    k01:
+      kind: k8s-kind
+      startup-config: kind-cluster.yaml
+      extras:
+        k8s_kind:
+          deploy:
+            wait: 120s
+
+    # --- kind node containers, as clab link endpoints ---
+    # Names MUST match the containers kind creates: <cluster>-control-plane / -worker.
+    # `exec` creates dummy0 + the announced /64 in the kind node's own netns, and
+    # turns on IPv6 forwarding so the node can route overlay<->underlay later.
+    k01-control-plane:
+      kind: ext-container
+      exec:
+        - "sysctl -w net.ipv6.conf.all.forwarding=1"
+        - "ip link add dummy0 type dummy || true"
+        - "ip link set dummy0 up"
+        - "ip -6 addr replace fd00:db8:0:1::1/64 dev dummy0"
+    k01-worker:
+      kind: ext-container
+      exec:
+        - "sysctl -w net.ipv6.conf.all.forwarding=1"
+        - "ip link add dummy0 type dummy || true"
+        - "ip link set dummy0 up"
+        - "ip -6 addr replace fd00:db8:0:2::1/64 dev dummy0"
+
+    # --- per-host FRR sidecars sharing each kind node's netns ---
+    # These announce the kind node's dummy0 /64 over unnumbered eBGP. Sharing the
+    # netns (network-mode: container:<kind-node>) means FRR sees the same dummy0 +
+    # uplink that xdp-dp sees. startup-delay lets the kind node + its exec settle.
+    host1-frr:
+      kind: linux
+      network-mode: container:k01-control-plane
+      startup-delay: 20
+      binds:
+        - frr/daemons:/etc/frr/daemons
+        - frr/host1.conf:/etc/frr/frr.conf
+    host2-frr:
+      kind: linux
+      network-mode: container:k01-worker
+      startup-delay: 20
+      binds:
+        - frr/daemons:/etc/frr/daemons
+        - frr/host2.conf:/etc/frr/frr.conf
+
+  links:
+    # host uplinks to the ToR (unnumbered v6, link-local only). The kind node netns
+    # receives eth1; the shared-netns FRR sidecar peers over it.
+    - endpoints: ["k01-control-plane:eth1", "sw1:eth1"]
+    - endpoints: ["k01-worker:eth1", "sw1:eth2"]

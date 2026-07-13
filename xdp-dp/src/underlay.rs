@@ -5,9 +5,10 @@
 //! host's interface addresses rather than configure it, then allocate a /128 per VM endpoint out of
 //! it. Overlay addresses are user-specified elsewhere; the underlay /128 is the ONLY allocation.
 //!
-//! Not yet wired into a CLI command: the bringup path that consumes the inferred /64 + IPAM lands
-//! in a follow-up task, so the pure logic is exercised by unit tests for now. `allow(dead_code)`
-//! in non-test builds mirrors the `maps.rs` convention for map wrappers that tests drive.
+//! Inference is exposed via the `xdp-dp infer-underlay` subcommand (a root-free observability hook
+//! the containerlab IPv6-fabric e2e asserts on). The bringup path that CONSUMES the inferred /64 for
+//! IPAM lands in a follow-up task, so `UnderlayIpam` is still only exercised by unit tests; hence
+//! `allow(dead_code)` in non-test builds, mirroring the `maps.rs` convention for test-driven code.
 #![cfg_attr(not(test), allow(dead_code))]
 use ipnet::Ipv6Net;
 use std::collections::BTreeSet;
