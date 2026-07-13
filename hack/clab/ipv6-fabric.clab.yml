@@ -59,6 +59,16 @@ topology:
           deploy:
             wait: 120s
 
+    # --- second kind cluster: a compute cluster brokered to k01's central control
+    # plane (reflector + CRDs) over the shared fabric. One node, its own /64. ---
+    k02:
+      kind: k8s-kind
+      startup-config: kind-cluster-k02.yaml
+      extras:
+        k8s_kind:
+          deploy:
+            wait: 120s
+
     # --- kind node containers, as clab link endpoints ---
     # Names MUST match the containers kind creates: <cluster>-control-plane / -worker.
     # `exec` creates dummy0 + the announced /64 in the kind node's own netns, and
@@ -77,6 +87,14 @@ topology:
         - "ip link add dummy0 type dummy || true"
         - "ip link set dummy0 up"
         - "ip -6 addr replace fd00:db8:0:2::1/64 dev dummy0"
+    # k02's single node: the compute cluster's fabric host, /64 = fd00:db8:0:3::/64.
+    k02-control-plane:
+      kind: ext-container
+      exec:
+        - "sysctl -w net.ipv6.conf.all.forwarding=1"
+        - "ip link add dummy0 type dummy || true"
+        - "ip link set dummy0 up"
+        - "ip -6 addr replace fd00:db8:0:3::1/64 dev dummy0"
 
     # --- per-host FRR sidecars sharing each kind node's netns ---
     # These announce the kind node's dummy0 /64 over unnumbered eBGP. Sharing the
@@ -96,9 +114,17 @@ topology:
       binds:
         - frr/daemons:/etc/frr/daemons
         - frr/host2.conf:/etc/frr/frr.conf
+    host3-frr:
+      kind: linux
+      network-mode: container:k02-control-plane
+      startup-delay: 20
+      binds:
+        - frr/daemons:/etc/frr/daemons
+        - frr/host3.conf:/etc/frr/frr.conf
 
   links:
     # host uplinks to the ToR (unnumbered v6, link-local only). The kind node netns
     # receives eth1; the shared-netns FRR sidecar peers over it.
     - endpoints: ["k01-control-plane:eth1", "sw1:eth1"]
     - endpoints: ["k01-worker:eth1", "sw1:eth2"]
+    - endpoints: ["k02-control-plane:eth1", "sw1:eth3"]

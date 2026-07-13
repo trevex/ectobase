@@ -1,0 +1,9 @@
+# Second kind cluster for the MULTI-CLUSTER e2e: a compute cluster (k02) brokered to
+# k01's central control plane (reflector + CRDs) over the shared IPv6 BGP fabric.
+# One node keeps it lean; it announces fd00:db8:0:3::/64 on dummy0 (see host3.conf).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  ipFamily: ipv6
+nodes:
+  - role: control-plane
