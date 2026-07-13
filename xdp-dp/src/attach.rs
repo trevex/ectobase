@@ -196,7 +196,12 @@ impl AttachState {
         )
         .context("set guest veth mac")?;
         run_netns(netns_path, &["ip", "link", "set", guest_name, "up"]).context("guest veth up")?;
-        // Host end up (the datapath attaches to it).
+        // Give the HOST end the SAME (guest) MAC, then bring it up. `create_interface` derives the
+        // datapath `guest_mac` from `mac_of(host)` (the "tap" it attaches the guest edge to), and the
+        // local fast path rewrites a locally-delivered frame's dst to that `guest_mac`. If the host
+        // veth kept its auto-generated MAC, local delivery would address the frame to that auto-MAC —
+        // it reaches the peer netns but the guest iface (which has `mac`) drops it as not-for-me.
+        run(&["ip", "link", "set", host, "address", &macs]).context("set host veth mac")?;
         run(&["ip", "link", "set", host, "up"]).context("host veth up")?;
         Ok(())
     }
