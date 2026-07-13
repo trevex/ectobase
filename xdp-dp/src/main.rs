@@ -96,9 +96,12 @@ enum Cmd {
         /// Uplink interface (uplink_rx attaches here).
         #[arg(long)]
         uplink: String,
-        /// This hypervisor's underlay IPv6 (outer src on encap).
-        #[arg(long)]
-        local_underlay: String,
+        /// This hypervisor's underlay IPv6 (outer src on encap; also the /64 the AttachInterface
+        /// pool allocates from). Optional: when unset, resolved from the kubelet node IP
+        /// (`HOST_IP`/`NODE_IP` downward-API env) or inferred from the host's lo/dummy* fabric
+        /// loopback. Set explicitly for tests / hosts without a fabric loopback.
+        #[arg(long = "local-underlay")]
+        local_underlay: Option<String>,
         /// Underlay next-hop MAC — outer eth dst for ALL encapped traffic.
         #[arg(long)]
         gateway_mac: String,
@@ -287,6 +290,35 @@ enum Cmd {
     },
 }
 
+/// Resolve this hypervisor's underlay IPv6 identity (also the /64 the AttachInterface pool
+/// allocates from), in precedence order:
+///   1. `--local-underlay` when set — tests / hosts without a fabric loopback.
+///   2. the kubelet node IP from the downward-API env (`HOST_IP`/`NODE_IP` = `status.hostIP`) —
+///      the proper-cluster path (a KubeVirt node's fabric identity).
+///   3. inference from the host's `lo`/`dummy*` fabric-loopback address.
+fn resolve_underlay_ipv6(flag: Option<&str>) -> anyhow::Result<[u8; 16]> {
+    if let Some(s) = flag {
+        return parse_ipv6(s);
+    }
+    for var in ["HOST_IP", "NODE_IP"] {
+        if let Ok(v) = std::env::var(var) {
+            if let Ok(a) = v.parse::<std::net::Ipv6Addr>() {
+                println!("underlay: using kubelet {var}={v}");
+                return Ok(a.octets());
+            }
+        }
+    }
+    let addrs = underlay::read_host_ifaddrs()?;
+    if let Some(a) = underlay::infer_underlay_address(&addrs) {
+        println!("underlay: inferred fabric-loopback {a}");
+        return Ok(a.octets());
+    }
+    anyhow::bail!(
+        "cannot determine underlay IPv6: pass --local-underlay, set HOST_IP (status.hostIP), \
+         or run on a fabric node with a lo/dummy /64"
+    )
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Logger backend for the eBPF `dlog!` tracing (active only with XDP_DP_DEBUG + a debug image).
@@ -324,7 +356,7 @@ async fn main() -> anyhow::Result<()> {
                 // SAFETY: single-threaded CLI startup, before any datapath thread is spawned.
                 std::env::set_var("XDP_DP_CONNTRACK_MAX", n.to_string());
             }
-            let underlay = parse_ipv6(&local_underlay)?;
+            let underlay = resolve_underlay_ipv6(local_underlay.as_deref())?;
             let gateway_ipv4 = parse_ipv4(&gateway)?;
             let gateway_ipv6 = match &gateway6 {
                 Some(s) => parse_ipv6(s)?,
@@ -355,21 +387,13 @@ async fn main() -> anyhow::Result<()> {
             // service (the map handles live inside Control; they can only be taken once).
             let control = std::sync::Arc::new(ctrl);
 
-            // Seed the underlay /128 allocator that AttachInterface hands endpoints out of. The
-            // operator's declared `--local-underlay` IS this hypervisor's identity on the fabric
-            // /64, so its /64 is authoritatively the pool (no need to re-infer, and re-inferring
-            // could pick an unrelated global ULA on a busy host). We still cross-check that the
-            // declared /64 actually appears among the host's ifaddrs (the inference contract) and
-            // log the inferred /64 for observability, but the pool tracks the declared underlay.
+            // Seed the underlay /128 allocator that AttachInterface hands endpoints out of. `underlay`
+            // was resolved above (flag override > kubelet node IP > lo/dummy inference); its /64 is
+            // authoritatively this node's fabric pool.
             let ipam = {
                 let pool = ipnet::Ipv6Net::new(std::net::Ipv6Addr::from(underlay), 64)
-                    .context("build underlay /64 from --local-underlay")?
+                    .context("build underlay /64 from resolved underlay")?
                     .trunc();
-                if let Ok(addrs) = underlay::read_host_ifaddrs() {
-                    if let Some(inferred) = underlay::infer_underlay_prefix(&addrs) {
-                        println!("DataplaneNode: inferred host underlay /64 = {inferred}");
-                    }
-                }
                 println!("DataplaneNode: underlay pool = {pool}");
                 underlay::UnderlayIpam::new(pool)
             };

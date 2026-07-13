@@ -42,27 +42,22 @@ fn is_loopback_iface(ifname: &str) -> bool {
     ifname == "lo" || ifname.starts_with("dummy")
 }
 
-/// Infer the host underlay /64 from its interface addresses.
+/// Infer the host's underlay IPv6 ADDRESS — the node's fabric-loopback identity (the same address
+/// the kubelet advertises as its node IP on an unnumbered IPv6 fabric).
 ///
-/// Filters to global-unicast addresses (see [`is_underlay_candidate`]), truncates each to its /64, and
-/// PREFERS a /64 that sits on a `lo`/`dummy*` interface (the fabric loopback). Falls back to the
-/// first global-unicast /64 when no loopback/dummy candidate exists. Returns `None` when there is
-/// no global-unicast address at all.
-pub fn infer_underlay_prefix(addrs: &[IfAddr]) -> Option<Ipv6Net> {
-    let to_64 = |ip: Ipv6Addr| Ipv6Net::new(ip, 64).ok().map(|n| n.trunc());
-
-    // Prefer a fabric-loopback (lo/dummy*) global-unicast /64.
-    if let Some(a) = addrs
-        .iter()
-        .find(|a| is_loopback_iface(&a.ifname) && is_underlay_candidate(&a.addr))
-    {
-        return to_64(a.addr);
-    }
-    // Otherwise the first global-unicast /64 we see.
+/// Prefers a `lo`/`dummy*` global-unicast address (the fabric loopback), else the first
+/// global-unicast address. Returns `None` when there is no global-unicast address at all.
+pub fn infer_underlay_address(addrs: &[IfAddr]) -> Option<Ipv6Addr> {
     addrs
         .iter()
-        .find(|a| is_underlay_candidate(&a.addr))
-        .and_then(|a| to_64(a.addr))
+        .find(|a| is_loopback_iface(&a.ifname) && is_underlay_candidate(&a.addr))
+        .or_else(|| addrs.iter().find(|a| is_underlay_candidate(&a.addr)))
+        .map(|a| a.addr)
+}
+
+/// Infer the host underlay /64 — the /64 of [`infer_underlay_address`].
+pub fn infer_underlay_prefix(addrs: &[IfAddr]) -> Option<Ipv6Net> {
+    infer_underlay_address(addrs).and_then(|ip| Ipv6Net::new(ip, 64).ok().map(|n| n.trunc()))
 }
 
 /// A /128 allocator over the host underlay /64.
@@ -213,6 +208,20 @@ mod tests {
         assert_eq!(
             infer_underlay_prefix(&addrs).unwrap(),
             "fd00:db8:0:1::/64".parse::<Ipv6Net>().unwrap()
+        );
+    }
+
+    #[test]
+    fn infers_the_loopback_address_not_just_the_prefix() {
+        // resolve_underlay_ipv6's cluster path needs the actual /128 (the kubelet IP), not just
+        // the /64 — assert the dummy0 fabric-loopback address is returned, over the eth0 pod-net.
+        let addrs = vec![
+            a("eth0", "fd00:aaaa::5", 64),      // pod-net (ULA): not preferred
+            a("dummy0", "fd00:db8:0:1::1", 64), // fabric loopback: PICK
+        ];
+        assert_eq!(
+            infer_underlay_address(&addrs).unwrap(),
+            "fd00:db8:0:1::1".parse::<Ipv6Addr>().unwrap()
         );
     }
 
