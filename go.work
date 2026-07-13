@@ -1,6 +1,7 @@
 go 1.23
 
 use (
+	./api
 	./cni
 	./test/e2e
 )
