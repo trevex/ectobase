@@ -13,6 +13,7 @@ mod grpc;
 mod loader;
 mod maglev;
 mod maps;
+mod node;
 mod state;
 
 use anyhow::Context;
@@ -355,6 +356,9 @@ async fn main() -> anyhow::Result<()> {
             tonic::transport::Server::builder()
                 .add_service(health_service)
                 .add_service(server)
+                .add_service(node::pb::dataplane_node_server::DataplaneNodeServer::new(
+                    node::NodeService::default(),
+                ))
                 .serve(addr.parse()?)
                 .await?;
         }
