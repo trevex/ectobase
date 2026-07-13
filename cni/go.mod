@@ -1,10 +1,10 @@
 module github.com/trevex/xdp-dp/cni
 
-go 1.23
+go 1.26
 
 require (
 	google.golang.org/grpc v1.82.0
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
 )
 
 require (

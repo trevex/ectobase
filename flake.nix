@@ -24,7 +24,12 @@
       let
         overlays = [ go-overlay.overlays.default ];
         pkgs = import nixpkgs { inherit system overlays; };
-        go = pkgs.go-bin.latest;
+        # Pin the dev-shell Go to the latest PATCH of the minor declared in the modules
+        # (go.work + all go.mod say `go 1.26`), via the go-overlay. `fromGoMod` reads the
+        # `go` directive and resolves its newest patch, so the shell tracks patches but never
+        # drifts ahead of the workspace's declared minor. All modules share the minor, so
+        # reading cni/go.mod is representative (there is no fromGoWork).
+        go = pkgs.go-bin.fromGoMod ./cni/go.mod;
 
         # The real dpservice-cli (cli/dpservice-cli in the dpservice repo), built from the pinned
         # `dpservice` flake input via buildGoModule. Placed on PATH in the devShell so the
