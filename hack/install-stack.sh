@@ -1,6 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Installs KubeVirt + Multus + CDI into the current-context cluster.
-# Versions are pinned per the Task 1 research doc; filled in by the CNI+e2e plan.
-echo "install-stack: KubeVirt/Multus/CDI install is implemented in the CNI+e2e plan" >&2
-exit 1
+# Installs KubeVirt + Multus + CDI into the current-context cluster and registers
+# the `dataplane` network binding (managedTap). Versions are pinned per the
+# Phase B research docs; overridable via env.
+KV="${KUBEVIRT_VERSION:-v1.5.0}"
+CDI="${CDI_VERSION:-v1.61.0}"
+
+# Multus (thick)
+kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset-thick.yml
+
+# KubeVirt operator + CR
+kubectl apply -f "https://github.com/kubevirt/kubevirt/releases/download/${KV}/kubevirt-operator.yaml"
+kubectl apply -f "https://github.com/kubevirt/kubevirt/releases/download/${KV}/kubevirt-cr.yaml"
+kubectl -n kubevirt wait kv/kubevirt --for=condition=Available --timeout=10m
+
+# kind has no KVM: emulation + register the managedTap binding
+kubectl -n kubevirt patch kubevirt kubevirt --type=merge -p '{"spec":{"configuration":{
+  "developerConfiguration":{"useEmulation":true},
+  "network":{"binding":{"dataplane":{"domainAttachmentType":"managedTap"}}}}}}'
+
+# CDI
+kubectl apply -f "https://github.com/kubevirt/containerized-data-importer/releases/download/${CDI}/cdi-operator.yaml"
+kubectl apply -f "https://github.com/kubevirt/containerized-data-importer/releases/download/${CDI}/cdi-cr.yaml"
+kubectl -n cdi wait cdi/cdi --for=condition=Available --timeout=10m
