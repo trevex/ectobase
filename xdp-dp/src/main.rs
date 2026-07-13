@@ -10,6 +10,7 @@ pub mod pb {
 mod conntrack_gc;
 mod control;
 mod grpc;
+mod ipam;
 mod loader;
 mod maglev;
 mod maps;
