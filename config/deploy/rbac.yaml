@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: netplane-agent
+  namespace: ectobase-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: netplane-agent
+rules:
+  # The agent watches VPCs and NetworkInterfaces (and their status subresources)
+  # to derive desired route announcements/subscriptions for this node.
+  - apiGroups: ["net.ectobase.dev"]
+    resources:
+      - vpcs
+      - vpcs/status
+      - networkinterfaces
+      - networkinterfaces/status
+    verbs: ["get", "list", "watch"]
+  # The agent reports interface programming state back onto the NIC status.
+  - apiGroups: ["net.ectobase.dev"]
+    resources:
+      - networkinterfaces/status
+    verbs: ["update", "patch"]
+  # Node info (e.g. addresses/labels) may be needed for underlay inference.
+  - apiGroups: [""]
+    resources:
+      - nodes
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: netplane-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: netplane-agent
+subjects:
+  - kind: ServiceAccount
+    name: netplane-agent
+    namespace: ectobase-system
+---
+# The reflector holds no Kubernetes credentials in v1 (it only speaks the
+# routebus gRPC protocol to agents), so it gets a bare ServiceAccount.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: netplane-reflector
+  namespace: ectobase-system

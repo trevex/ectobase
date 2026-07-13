@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# namespace must be applied first; the remaining resources live inside it.
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - reflector.yaml
+  - xdp-dp.yaml
+  - agent.yaml
+  # CRDs (net.ectobase.dev group) required by the agent's watches. Referenced as
+  # a directory (config/crd has its own kustomization.yaml aggregating the bases)
+  # so kustomize's path-safety rules allow it. CRDs can also be applied separately
+  # via `kubectl apply -k config/crd`.
+  - ../crd

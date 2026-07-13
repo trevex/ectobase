@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: netplane-agent
+  namespace: ectobase-system
+  labels:
+    app.kubernetes.io/name: netplane-agent
+    app.kubernetes.io/part-of: netplane
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: netplane-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: netplane-agent
+        app.kubernetes.io/part-of: netplane
+    spec:
+      serviceAccountName: netplane-agent
+      # hostNetwork so the agent can reach the node-local xdp-dp on 127.0.0.1:1337.
+      # ClusterFirstWithHostNet keeps in-cluster DNS working, so the reflector
+      # Service name (reflector.ectobase-system.svc) still resolves.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: agent
+          image: ghcr.io/trevex/netplane:dev
+          imagePullPolicy: IfNotPresent
+          command: ["agent"]
+          # NOTE(tune): --underlay is a first-draft value (the node's status.hostIP).
+          # It should be the node's fabric /128 underlay address, and may later be
+          # tuned to read the underlay from xdp-dp instead of the downward API.
+          args:
+            - "--node-id=$(NODE_NAME)"
+            - "--underlay=$(NODE_IP)"
+            - "--reflector=reflector.ectobase-system.svc:1338"
+            - "--dataplane=127.0.0.1:1337"
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
