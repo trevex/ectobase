@@ -10,12 +10,12 @@ pub mod pb {
 mod conntrack_gc;
 mod control;
 mod grpc;
-mod ipam;
 mod loader;
 mod maglev;
 mod maps;
 mod node;
 mod state;
+mod underlay;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
