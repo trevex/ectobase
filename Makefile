@@ -55,6 +55,11 @@ image: ## Build the dpservice-xdp container image (self-building Dockerfile; IMA
 image-push: ## Push the dpservice-xdp image (needs `docker login ghcr.io`)
 	docker push $(IMAGE):$(TAG)
 
+NETPLANE_IMAGE ?= ghcr.io/trevex/netplane
+.PHONY: image-netplane
+image-netplane: ## Build the netplane (reflector+agent) image
+	docker build $(if $(DOCKER_BUILD_NET),--network=$(DOCKER_BUILD_NET)) -f Dockerfile.netplane -t $(NETPLANE_IMAGE):$(TAG) .
+
 # --- quality ---------------------------------------------------------------
 .PHONY: fmt
 fmt: ## Format all Rust code

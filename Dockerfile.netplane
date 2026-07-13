@@ -1,0 +1,25 @@
+# Container image for the netplane Go binaries: reflector + agent.
+#
+# The netplane module has replace directives to sibling modules (../api, ../cni),
+# so the build context must include api/, cni/ and netplane/. We build with
+# GOWORK=off so the netplane/go.mod replaces are used rather than the repo-level
+# go.work (which additionally lists test/e2e and would drag in extra modules).
+
+# --- builder ---------------------------------------------------------------
+FROM golang:1.26-bookworm AS builder
+WORKDIR /src
+COPY api ./api
+COPY cni ./cni
+COPY netplane ./netplane
+RUN cd netplane \
+    && CGO_ENABLED=0 GOWORK=off go build -o /out/reflector ./cmd/reflector \
+    && CGO_ENABLED=0 GOWORK=off go build -o /out/agent ./cmd/agent
+
+# --- runtime ---------------------------------------------------------------
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends iproute2 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /out/reflector /usr/local/bin/reflector
+COPY --from=builder /out/agent /usr/local/bin/agent
+# No ENTRYPOINT: the DaemonSets/Deployment set their own command (reflector or agent).
