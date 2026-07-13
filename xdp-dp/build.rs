@@ -36,12 +36,15 @@ fn main() -> anyhow::Result<()> {
     )?;
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_DEBUG");
 
-    // 2) Generate the DPDKironcore gRPC service (server only).
+    // 2) Generate the dataplane gRPC services (server only).
     tonic_build::configure()
         .build_client(false)
-        .compile_protos(&["../proto/dpdk.proto"], &["../proto"])
-        .context("tonic-build compile dpdk.proto")?;
-    println!("cargo:rerun-if-changed=../proto/dpdk.proto");
+        .compile_protos(
+            &["../api/proto/dataplane/v1/dpdk.proto"],
+            &["../api/proto/dataplane/v1"],
+        )
+        .context("tonic-build compile dataplane protos")?;
+    println!("cargo:rerun-if-changed=../api/proto/dataplane/v1");
     // Re-run aya-build when the eBPF crate sources change. Without this, the build.rs has a
     // rerun-if-changed directive (the proto above), so cargo would otherwise NOT re-run it on
     // edits to xdp-dp-ebpf/src/*.rs (the build-dependency edge only covers that crate's lib
