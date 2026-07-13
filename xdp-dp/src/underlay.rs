@@ -21,23 +21,19 @@ pub struct IfAddr {
     pub prefix_len: u8,
 }
 
-/// True if `ip` is a global-unicast IPv6 address usable as an underlay endpoint: excludes
-/// link-local (`fe80::/10`), loopback (`::1`), the unspecified address (`::`), multicast, and
-/// ULA (`fc00::/7`, which is not a fabric-routable global address here).
-fn is_global_unicast(ip: &Ipv6Addr) -> bool {
+/// True if `ip` is a routable unicast IPv6 address usable as an underlay endpoint: excludes
+/// link-local (`fe80::/10`), loopback (`::1`), the unspecified address (`::`), and multicast.
+///
+/// ULA (`fc00::/7`) is deliberately INCLUDED: private underlay fabrics commonly number their
+/// loopback /64s from ULA (the icn reference lab and our containerlab fabric both use
+/// `fd00:db8::/…`, and kind's own pod network is ULA too). The `lo`/`dummy*` preference in
+/// [`infer_underlay_prefix`] is what selects the fabric /64 among any ULA addresses.
+fn is_underlay_candidate(ip: &Ipv6Addr) -> bool {
     if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
         return false;
     }
-    let seg0 = ip.segments()[0];
-    // fe80::/10 link-local (and the rest of fe80::/10 .. febf).
-    if (seg0 & 0xffc0) == 0xfe80 {
-        return false;
-    }
-    // fc00::/7 unique-local (fc00 .. fdff).
-    if (seg0 & 0xfe00) == 0xfc00 {
-        return false;
-    }
-    true
+    // fe80::/10 link-local.
+    (ip.segments()[0] & 0xffc0) != 0xfe80
 }
 
 /// True if `ifname` is a loopback/dummy interface we prefer to source the underlay /64 from
@@ -48,7 +44,7 @@ fn is_loopback_iface(ifname: &str) -> bool {
 
 /// Infer the host underlay /64 from its interface addresses.
 ///
-/// Filters to global-unicast addresses (see [`is_global_unicast`]), truncates each to its /64, and
+/// Filters to global-unicast addresses (see [`is_underlay_candidate`]), truncates each to its /64, and
 /// PREFERS a /64 that sits on a `lo`/`dummy*` interface (the fabric loopback). Falls back to the
 /// first global-unicast /64 when no loopback/dummy candidate exists. Returns `None` when there is
 /// no global-unicast address at all.
@@ -58,14 +54,14 @@ pub fn infer_underlay_prefix(addrs: &[IfAddr]) -> Option<Ipv6Net> {
     // Prefer a fabric-loopback (lo/dummy*) global-unicast /64.
     if let Some(a) = addrs
         .iter()
-        .find(|a| is_loopback_iface(&a.ifname) && is_global_unicast(&a.addr))
+        .find(|a| is_loopback_iface(&a.ifname) && is_underlay_candidate(&a.addr))
     {
         return to_64(a.addr);
     }
     // Otherwise the first global-unicast /64 we see.
     addrs
         .iter()
-        .find(|a| is_global_unicast(&a.addr))
+        .find(|a| is_underlay_candidate(&a.addr))
         .and_then(|a| to_64(a.addr))
 }
 
@@ -199,6 +195,24 @@ mod tests {
         assert_eq!(
             infer_underlay_prefix(&addrs).unwrap(),
             "2001:db8:fefe:1::/64".parse::<Ipv6Net>().unwrap()
+        );
+    }
+
+    #[test]
+    fn infers_ula_fabric_dummy_over_ula_podnet() {
+        // Real containerlab/kind scan set: EVERY global addr is ULA (fc00::/7) — the fabric
+        // underlay on dummy0, kind's pod network on eth0, and CNI veth /128s. The dummy0 fabric
+        // /64 must still be picked (regression for the wrongful ULA exclusion found on the lab).
+        let addrs = vec![
+            a("lo", "::1", 128),                      // loopback host: skip
+            a("eth0", "fc00:f853:ccd:e793::2", 64),   // kind pod net (ULA): not preferred
+            a("eth0", "fe80::c80b:ff:fe0b:7af5", 64), // link-local: skip
+            a("dummy0", "fd00:db8:0:1::1", 64),       // fabric underlay (ULA): PICK
+            a("vethafc9dc1b", "fd00:10:244::1", 128), // CNI veth (ULA): not preferred
+        ];
+        assert_eq!(
+            infer_underlay_prefix(&addrs).unwrap(),
+            "fd00:db8:0:1::/64".parse::<Ipv6Net>().unwrap()
         );
     }
 
