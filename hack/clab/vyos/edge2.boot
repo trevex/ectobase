@@ -4,7 +4,8 @@
  * any return (drain-safe, stateless). See edge1.boot for the full datapath description. */
 interfaces {
     dummy dum0 {
-        address "fd00:db8:0:9::e/128"
+        // UNIQUE control-plane identity for edge2 (see edge1.boot for the rationale).
+        address "fd00:db8:0:9::2/128"
     }
     ethernet eth2 {
         address "172.29.0.12/24"
@@ -19,6 +20,8 @@ protocols {
             ipv6-unicast {
                 maximum-paths {
                     ebgp "64"
+                }
+                network fd00:db8:0:9::2/128 {
                 }
                 network fd00:db8:0:9::e/128 {
                 }
@@ -60,6 +63,11 @@ protocols {
         }
         route6 ::/0 {
             next-hop fd00:29::1 {
+            }
+        }
+        // Anycast edge underlay: RIB-only (BGP announces it) without a source-eligible address.
+        route6 fd00:db8:0:9::e/128 {
+            blackhole {
             }
         }
     }

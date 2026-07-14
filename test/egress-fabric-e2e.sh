@@ -59,6 +59,7 @@ echo "$ALLOC" | grep -q "\"source\":\"$SRC_IP\"" || fail "no controller allocati
 echo "  alloc: $ALLOC"
 
 echo "== [3] attach the source endpoint on $SRC_NODE =="
+grpc "$SRC_NODE" '{"interface_id":"src"}' DetachInterface >/dev/null 2>&1 || true   # idempotent re-run
 sudo docker exec "$SRC_NODE" ip netns add src 2>/dev/null || true
 OUT=$(grpc "$SRC_NODE" "{\"interface_id\":\"src\",\"netns_path\":\"/var/run/netns/src\",\"vni\":$VNI,\"requested_ips\":[\"$SRC_IP\"]}" AttachInterface)
 UL=$(echo "$OUT" | grep -o 'fd00:[0-9a-f:]*' | head -1)
@@ -75,12 +76,19 @@ for _ in $(seq 1 40); do
 done
 sudo docker exec "$SRC_NODE" crictl logs "$XW" 2>&1 | grep "NAT source vni=$VNI src=$SRC_IP" | tail -1 | sed 's/^/  /' || fail "agent did not program SNAT"
 
-echo "== [5] program the WAN edge: external default (source) + NEIGHBOR_NAT (both edges) =="
-grpc "$SRC_NODE" "{\"vni\":$VNI,\"prefix\":\"0.0.0.0/0\",\"nexthop_underlay\":\"$EDGE_UL\",\"external\":true}" AddRoute >/dev/null
-for E in "$E1" "$E2"; do
-  grpc "$E" "{\"nat_ip\":\"$NAT_POOL_IP\",\"port_min\":$PMIN,\"port_max\":$PMAX,\"owner_underlay\":\"$UL\",\"vni\":$VNI}" AddNeighborNat >/dev/null
+echo "== [5] WAN edge programmed by its BROKERED AGENTS (edge-identity slice; no grpcurl) =="
+# Each edge runs a netplane agent brokered to k01 (unique per-edge loopback so replies return to
+# the right edge). The edge agents self-advertise: applyNat learns the NEIGHBOR_NAT off routebus
+# and DesiredExternalRoutes (A3) announces the external default -> the source installs it.
+bash "$ROOT/hack/clab/edge-agents-up.sh" >/dev/null 2>&1 || true
+for _ in $(seq 1 30); do
+  ne=$(sudo docker logs edge1-xdp-run 2>&1 | grep -c "NEIGHBOR_NAT add vni=$VNI nat_ip=$NAT_POOL_IP")
+  ex=$(sudo docker exec "$SRC_NODE" crictl logs "$XW" 2>&1 | grep -c "prefix=0.0.0.0/0 -> nexthop=$EDGE_UL external=true")
+  [ "${ne:-0}" -ge 1 ] && [ "${ex:-0}" -ge 1 ] && break; sleep 2
 done
-echo "  external default + NEIGHBOR_NAT (edge1+edge2) programmed"
+[ "${ne:-0}" -ge 1 ] || fail "edge agent did not learn NEIGHBOR_NAT off routebus"
+[ "${ex:-0}" -ge 1 ] || fail "edge agent did not announce the external default route"
+echo "  edge agents: NEIGHBOR_NAT learned + external default announced (via routebus)"
 
 echo "== [6] stage busybox for ping =="
 CID=$(sudo docker create busybox:musl 2>/dev/null); sudo docker cp "$CID":/bin/busybox /tmp/busybox-musl >/dev/null 2>&1; sudo docker rm "$CID" >/dev/null 2>&1

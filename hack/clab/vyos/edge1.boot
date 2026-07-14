@@ -9,7 +9,11 @@
  * by the edge AGENT over routebus (external=true), NOT by BGP default-originate. */
 interfaces {
     dummy dum0 {
-        address "fd00:db8:0:9::e/128"
+        // UNIQUE control-plane identity for edge1 (the edge agent's source addr so replies from
+        // the central apiserver/reflector return to THIS edge, not ECMP'd to a peer). Distinct
+        // from the anycast datapath /128 below, which is announced via a static blackhole (XDP
+        // consumes datapath traffic to it before the kernel would ever route/drop it).
+        address "fd00:db8:0:9::1/128"
     }
     ethernet eth2 {
         address "172.29.0.11/24"
@@ -24,6 +28,8 @@ protocols {
             ipv6-unicast {
                 maximum-paths {
                     ebgp "64"
+                }
+                network fd00:db8:0:9::1/128 {
                 }
                 network fd00:db8:0:9::e/128 {
                 }
@@ -65,6 +71,13 @@ protocols {
         }
         route6 ::/0 {
             next-hop fd00:29::1 {
+            }
+        }
+        // Anycast edge underlay: put the /128 in the RIB (so BGP `network` announces it to the
+        // fabric) WITHOUT giving it a source-eligible interface address. Datapath traffic to it is
+        // XDP-consumed on eth1/eth2 before the kernel routes here, so the blackhole is never hit.
+        route6 fd00:db8:0:9::e/128 {
+            blackhole {
             }
         }
     }
