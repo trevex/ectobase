@@ -108,6 +108,7 @@ impl DataplaneNode for NodeService {
         let nexthop = parse_nexthop6(&r.nexthop_underlay)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
         let vni = r.vni;
+        let external = r.external;
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
             let c = &attach.control;
             // Idempotent: drop any existing (vni, prefix) so a re-announce or a moved prefix
@@ -116,19 +117,19 @@ impl DataplaneNode for NodeService {
             // to Encap when the nexthop has no local UNDERLAY tap).
             if is_v6 {
                 let _ = c.delete_route6(vni, bytes, len)?;
-                c.create_route6(vni, bytes, len, nexthop, vni, false)
+                c.create_route6(vni, bytes, len, nexthop, vni, external)
             } else {
                 let mut v4 = [0u8; 4];
                 v4.copy_from_slice(&bytes[..4]);
                 let _ = c.delete_route(vni, v4, len)?;
-                c.create_route(vni, v4, len, nexthop, vni, false)
+                c.create_route(vni, v4, len, nexthop, vni, external)
             }
         })
         .await
         .map_err(|e| Status::internal(format!("add_route task panicked: {e}")))?
         .map_err(|e| Status::internal(e.to_string()))?;
         println!(
-            "ROUTE add vni={vni} prefix={} -> nexthop={}",
+            "ROUTE add vni={vni} prefix={} -> nexthop={} external={external}",
             r.prefix, r.nexthop_underlay
         );
         Ok(Response::new(AddRouteResponse {}))

@@ -58,6 +58,7 @@ message AddRouteRequest {
   uint32 vni = 1;
   string prefix = 2;           // CIDR: "10.0.0.5/32" or "2001:db8::5/128"
   string nexthop_underlay = 3; // remote node underlay IPv6, e.g. "fd00:db8:0:2::a"
+  bool external = 4;           // if set, matching source traffic egress-SNATs (e.g. an external default route)
 }
 message AddRouteResponse {}
 

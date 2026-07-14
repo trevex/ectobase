@@ -77,7 +77,9 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 			if err != nil {
 				return nil, nil, fmt.Errorf("nic %s/%s ip %q: %w", nic.Namespace, nic.Name, ip, err)
 			}
-			announce = append(announce, Route{Vni: vni, Prefix: prefix, Nexthop: nexthop})
+			// Endpoint host routes are internal; egress-NAT default routes (external=true)
+			// are distributed separately by a controller.
+			announce = append(announce, Route{Vni: vni, Prefix: prefix, Nexthop: nexthop, External: false})
 		}
 	}
 	for v := range vniSet {

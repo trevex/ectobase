@@ -462,6 +462,7 @@ type Announce struct {
 	Prefix          string                 `protobuf:"bytes,2,opt,name=prefix,proto3" json:"prefix,omitempty"`                                          // CIDR overlay prefix, e.g. "10.0.0.5/32"
 	NexthopUnderlay string                 `protobuf:"bytes,3,opt,name=nexthop_underlay,json=nexthopUnderlay,proto3" json:"nexthop_underlay,omitempty"` // primary nexthop = this node's underlay IPv6
 	ExtraNexthops   []string               `protobuf:"bytes,4,rep,name=extra_nexthops,json=extraNexthops,proto3" json:"extra_nexthops,omitempty"`       // additional ECMP nexthops (carried, not yet used)
+	External        bool                   `protobuf:"varint,5,opt,name=external,proto3" json:"external,omitempty"`                                     // if set, matching source traffic egress-SNATs (e.g. an external default route)
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -524,6 +525,13 @@ func (x *Announce) GetExtraNexthops() []string {
 	return nil
 }
 
+func (x *Announce) GetExternal() bool {
+	if x != nil {
+		return x.External
+	}
+	return false
+}
+
 type Withdraw struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Vni           uint32                 `protobuf:"varint,1,opt,name=vni,proto3" json:"vni,omitempty"`
@@ -582,6 +590,7 @@ type RouteUpdate struct {
 	Prefix        string                 `protobuf:"bytes,2,opt,name=prefix,proto3" json:"prefix,omitempty"`
 	Nexthops      []string               `protobuf:"bytes,3,rep,name=nexthops,proto3" json:"nexthops,omitempty"` // nexthops[0] is the primary; rest are ECMP
 	Op            RouteOp                `protobuf:"varint,4,opt,name=op,proto3,enum=routebus.v1.RouteOp" json:"op,omitempty"`
+	External      bool                   `protobuf:"varint,5,opt,name=external,proto3" json:"external,omitempty"` // if set, matching source traffic egress-SNATs (e.g. an external default route)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -642,6 +651,13 @@ func (x *RouteUpdate) GetOp() RouteOp {
 		return x.Op
 	}
 	return RouteOp_ROUTE_OP_UNSPECIFIED
+}
+
+func (x *RouteUpdate) GetExternal() bool {
+	if x != nil {
+		return x.External
+	}
+	return false
 }
 
 type EndOfRIB struct {
@@ -751,20 +767,22 @@ const file_routebus_proto_rawDesc = "" +
 	"\tSubscribe\x12\x10\n" +
 	"\x03vni\x18\x01 \x01(\rR\x03vni\"\x1f\n" +
 	"\vUnsubscribe\x12\x10\n" +
-	"\x03vni\x18\x01 \x01(\rR\x03vni\"\x86\x01\n" +
+	"\x03vni\x18\x01 \x01(\rR\x03vni\"\xa2\x01\n" +
 	"\bAnnounce\x12\x10\n" +
 	"\x03vni\x18\x01 \x01(\rR\x03vni\x12\x16\n" +
 	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12)\n" +
 	"\x10nexthop_underlay\x18\x03 \x01(\tR\x0fnexthopUnderlay\x12%\n" +
-	"\x0eextra_nexthops\x18\x04 \x03(\tR\rextraNexthops\"4\n" +
+	"\x0eextra_nexthops\x18\x04 \x03(\tR\rextraNexthops\x12\x1a\n" +
+	"\bexternal\x18\x05 \x01(\bR\bexternal\"4\n" +
 	"\bWithdraw\x12\x10\n" +
 	"\x03vni\x18\x01 \x01(\rR\x03vni\x12\x16\n" +
-	"\x06prefix\x18\x02 \x01(\tR\x06prefix\"y\n" +
+	"\x06prefix\x18\x02 \x01(\tR\x06prefix\"\x95\x01\n" +
 	"\vRouteUpdate\x12\x10\n" +
 	"\x03vni\x18\x01 \x01(\rR\x03vni\x12\x16\n" +
 	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12\x1a\n" +
 	"\bnexthops\x18\x03 \x03(\tR\bnexthops\x12$\n" +
-	"\x02op\x18\x04 \x01(\x0e2\x14.routebus.v1.RouteOpR\x02op\"\x1c\n" +
+	"\x02op\x18\x04 \x01(\x0e2\x14.routebus.v1.RouteOpR\x02op\x12\x1a\n" +
+	"\bexternal\x18\x05 \x01(\bR\bexternal\"\x1c\n" +
 	"\bEndOfRIB\x12\x10\n" +
 	"\x03vni\x18\x01 \x01(\rR\x03vni\"\v\n" +
 	"\tKeepAlive*L\n" +

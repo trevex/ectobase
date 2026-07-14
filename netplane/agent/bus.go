@@ -16,15 +16,16 @@ import (
 // Dataplane is the subset of xdp-dp the agent drives. dpAdapter wraps the real
 // DataplaneNode gRPC client; tests supply a fake.
 type Dataplane interface {
-	AddRoute(ctx context.Context, vni uint32, prefix, nexthop string) error
+	AddRoute(ctx context.Context, vni uint32, prefix, nexthop string, external bool) error
 	WithdrawRoute(ctx context.Context, vni uint32, prefix string) error
 }
 
 // Route is a local overlay route this node announces.
 type Route struct {
-	Vni     uint32
-	Prefix  string // CIDR, e.g. "10.0.0.5/32"
-	Nexthop string // this node's underlay IPv6
+	Vni      uint32
+	Prefix   string // CIDR, e.g. "10.0.0.5/32"
+	Nexthop  string // this node's underlay IPv6
+	External bool   // if set, matching source traffic egress-SNATs (e.g. an external default route)
 }
 
 // Bus is one agent's route-bus session driver.
@@ -79,7 +80,7 @@ func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, subVNIs []uint32,
 
 func (b *Bus) announce(stream rbv1.RouteBus_SessionClient, r Route) error {
 	return stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_Announce{Announce: &rbv1.Announce{
-		Vni: r.Vni, Prefix: r.Prefix, NexthopUnderlay: r.Nexthop,
+		Vni: r.Vni, Prefix: r.Prefix, NexthopUnderlay: r.Nexthop, External: r.External,
 	}}})
 }
 
@@ -90,8 +91,8 @@ func (b *Bus) apply(ctx context.Context, ru *rbv1.RouteUpdate) {
 	}
 	switch ru.Op {
 	case rbv1.RouteOp_ROUTE_OP_ADD:
-		if err := b.dp.AddRoute(ctx, ru.Vni, ru.Prefix, nh); err != nil {
-			log.Printf("AddRoute vni=%d %s -> %s: %v", ru.Vni, ru.Prefix, nh, err)
+		if err := b.dp.AddRoute(ctx, ru.Vni, ru.Prefix, nh, ru.External); err != nil {
+			log.Printf("AddRoute vni=%d %s -> %s external=%t: %v", ru.Vni, ru.Prefix, nh, ru.External, err)
 		}
 	case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
 		if err := b.dp.WithdrawRoute(ctx, ru.Vni, ru.Prefix); err != nil {
@@ -106,8 +107,8 @@ type dpAdapter struct{ c dpv1.DataplaneNodeClient }
 // NewDataplaneAdapter adapts a DataplaneNode client to the agent's Dataplane interface.
 func NewDataplaneAdapter(c dpv1.DataplaneNodeClient) Dataplane { return dpAdapter{c: c} }
 
-func (d dpAdapter) AddRoute(ctx context.Context, vni uint32, prefix, nexthop string) error {
-	_, err := d.c.AddRoute(ctx, &dpv1.AddRouteRequest{Vni: vni, Prefix: prefix, NexthopUnderlay: nexthop})
+func (d dpAdapter) AddRoute(ctx context.Context, vni uint32, prefix, nexthop string, external bool) error {
+	_, err := d.c.AddRoute(ctx, &dpv1.AddRouteRequest{Vni: vni, Prefix: prefix, NexthopUnderlay: nexthop, External: external})
 	return err
 }
 func (d dpAdapter) WithdrawRoute(ctx context.Context, vni uint32, prefix string) error {

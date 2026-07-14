@@ -76,7 +76,7 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 		case *pb.ClientMsg_Announce:
 			a := m.Announce
 			nh := append([]string{a.NexthopUnderlay}, a.ExtraNexthops...)
-			s.rib.Announce(sink.id, a.Vni, a.Prefix, nh)
+			s.rib.Announce(sink.id, a.Vni, a.Prefix, nh, a.External)
 		case *pb.ClientMsg_Withdraw:
 			s.rib.Withdraw(sink.id, m.Withdraw.Vni, m.Withdraw.Prefix)
 		case *pb.ClientMsg_KeepAlive, *pb.ClientMsg_Hello:

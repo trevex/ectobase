@@ -49,6 +49,7 @@ message Announce {
   string prefix = 2;             // CIDR overlay prefix, e.g. "10.0.0.5/32"
   string nexthop_underlay = 3;   // primary nexthop = this node's underlay IPv6
   repeated string extra_nexthops = 4; // additional ECMP nexthops (carried, not yet used)
+  bool external = 5;             // if set, matching source traffic egress-SNATs (e.g. an external default route)
 }
 message Withdraw {
   uint32 vni = 1;
@@ -60,6 +61,7 @@ message RouteUpdate {
   string prefix = 2;
   repeated string nexthops = 3;  // nexthops[0] is the primary; rest are ECMP
   RouteOp op = 4;
+  bool external = 5;             // if set, matching source traffic egress-SNATs (e.g. an external default route)
 }
 message EndOfRIB { uint32 vni = 1; }
 message KeepAlive {}

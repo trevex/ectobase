@@ -27,9 +27,9 @@ func updates(f *fakeSink) []*pb.RouteUpdate {
 
 func TestSubscribeGetsSnapshotThenEndOfRIB(t *testing.T) {
 	r := NewRIB()
-	r.Announce("nodeA", 100, "10.0.0.1/32", []string{"fd00::a"})
-	r.Announce("nodeA", 100, "10.0.0.2/32", []string{"fd00::a"})
-	r.Announce("nodeA", 200, "10.0.0.9/32", []string{"fd00::a"}) // different vni, must not appear
+	r.Announce("nodeA", 100, "10.0.0.1/32", []string{"fd00::a"}, false)
+	r.Announce("nodeA", 100, "10.0.0.2/32", []string{"fd00::a"}, false)
+	r.Announce("nodeA", 200, "10.0.0.9/32", []string{"fd00::a"}, false) // different vni, must not appear
 
 	sub := &fakeSink{id: "nodeB"}
 	r.Subscribe(100, sub)
@@ -52,7 +52,7 @@ func TestAnnounceFansOutToSubscribersNotOrigin(t *testing.T) {
 	r.Subscribe(100, sub)
 	r.Subscribe(100, origin)
 
-	r.Announce("nodeA", 100, "10.0.0.1/32", []string{"fd00::a"})
+	r.Announce("nodeA", 100, "10.0.0.1/32", []string{"fd00::a"}, false)
 
 	if got := updates(sub); len(got) != 1 || got[0].Op != pb.RouteOp_ROUTE_OP_ADD || got[0].Prefix != "10.0.0.1/32" {
 		t.Fatalf("subscriber should see one ADD, got %+v", got)
@@ -66,7 +66,7 @@ func TestWithdrawFansOut(t *testing.T) {
 	r := NewRIB()
 	sub := &fakeSink{id: "nodeB"}
 	r.Subscribe(100, sub)
-	r.Announce("nodeA", 100, "10.0.0.1/32", []string{"fd00::a"})
+	r.Announce("nodeA", 100, "10.0.0.1/32", []string{"fd00::a"}, false)
 	r.Withdraw("nodeA", 100, "10.0.0.1/32")
 
 	us := updates(sub)
@@ -75,12 +75,40 @@ func TestWithdrawFansOut(t *testing.T) {
 	}
 }
 
+func TestExternalFlagIsDeliveredInFanoutAndSnapshot(t *testing.T) {
+	r := NewRIB()
+
+	// Live fanout: a subscriber present before the announce sees external=true.
+	live := &fakeSink{id: "nodeB"}
+	r.Subscribe(100, live)
+	r.Announce("nodeA", 100, "0.0.0.0/0", []string{"fd00::edge"}, true)
+
+	lu := updates(live)
+	if len(lu) != 1 || lu[0].Op != pb.RouteOp_ROUTE_OP_ADD || lu[0].Prefix != "0.0.0.0/0" {
+		t.Fatalf("live subscriber should see one ADD for the default route, got %+v", lu)
+	}
+	if !lu[0].External {
+		t.Fatalf("live fanout RouteUpdate.External = false, want true")
+	}
+
+	// Subscribe snapshot: a subscriber joining afterwards also gets external=true.
+	snap := &fakeSink{id: "nodeC"}
+	r.Subscribe(100, snap)
+	su := updates(snap)
+	if len(su) != 1 || su[0].Prefix != "0.0.0.0/0" {
+		t.Fatalf("snapshot should replay the default route, got %+v", su)
+	}
+	if !su[0].External {
+		t.Fatalf("snapshot RouteUpdate.External = false, want true")
+	}
+}
+
 func TestDropOriginWithdrawsAllItsRoutes(t *testing.T) {
 	r := NewRIB()
 	sub := &fakeSink{id: "nodeB"}
 	r.Subscribe(100, sub)
-	r.Announce("nodeA", 100, "10.0.0.1/32", []string{"fd00::a"})
-	r.Announce("nodeA", 100, "10.0.0.2/32", []string{"fd00::a"})
+	r.Announce("nodeA", 100, "10.0.0.1/32", []string{"fd00::a"}, false)
+	r.Announce("nodeA", 100, "10.0.0.2/32", []string{"fd00::a"}, false)
 
 	r.DropOrigin("nodeA")
 

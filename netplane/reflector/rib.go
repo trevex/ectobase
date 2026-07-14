@@ -24,6 +24,7 @@ type routeKey struct {
 type routeEntry struct {
 	nexthops []string
 	origin   string
+	external bool
 }
 
 // RIB is the reflector's global route table. Safe for concurrent use.
@@ -63,7 +64,7 @@ func (r *RIB) Subscribe(vni uint32, s Sink) {
 	sort.Slice(keys, func(i, j int) bool { return keys[i].prefix < keys[j].prefix })
 	for _, k := range keys {
 		e := r.routes[k]
-		s.Send(routeUpdate(k, e.nexthops, pb.RouteOp_ROUTE_OP_ADD))
+		s.Send(routeUpdate(k, e.nexthops, pb.RouteOp_ROUTE_OP_ADD, e.external))
 	}
 	s.Send(&pb.ServerMsg{Msg: &pb.ServerMsg_EndOfRib{EndOfRib: &pb.EndOfRIB{Vni: vni}}})
 }
@@ -81,16 +82,16 @@ func (r *RIB) Unsubscribe(vni uint32, sinkID string) {
 
 // Announce inserts/replaces a route and fans out an ADD to subscribers of vni
 // (except the origin, which already has it).
-func (r *RIB) Announce(origin string, vni uint32, prefix string, nexthops []string) {
+func (r *RIB) Announce(origin string, vni uint32, prefix string, nexthops []string, external bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	k := routeKey{vni, prefix}
-	r.routes[k] = routeEntry{nexthops: nexthops, origin: origin}
+	r.routes[k] = routeEntry{nexthops: nexthops, origin: origin, external: external}
 	if r.byOrigin[origin] == nil {
 		r.byOrigin[origin] = map[routeKey]struct{}{}
 	}
 	r.byOrigin[origin][k] = struct{}{}
-	r.fanout(k, nexthops, pb.RouteOp_ROUTE_OP_ADD, origin)
+	r.fanout(k, nexthops, pb.RouteOp_ROUTE_OP_ADD, origin, external)
 }
 
 // Withdraw removes a route and fans out a WITHDRAW.
@@ -105,7 +106,7 @@ func (r *RIB) Withdraw(origin string, vni uint32, prefix string) {
 	if m := r.byOrigin[origin]; m != nil {
 		delete(m, k)
 	}
-	r.fanout(k, nil, pb.RouteOp_ROUTE_OP_WITHDRAW, "")
+	r.fanout(k, nil, pb.RouteOp_ROUTE_OP_WITHDRAW, "", false)
 }
 
 // DropOrigin withdraws every route a node originated and clears its
@@ -118,7 +119,7 @@ func (r *RIB) DropOrigin(origin string) {
 	for k := range owned {
 		if _, ok := r.routes[k]; ok {
 			delete(r.routes, k)
-			r.fanout(k, nil, pb.RouteOp_ROUTE_OP_WITHDRAW, "")
+			r.fanout(k, nil, pb.RouteOp_ROUTE_OP_WITHDRAW, "", false)
 		}
 	}
 	for vni, subs := range r.subscribers {
@@ -131,20 +132,21 @@ func (r *RIB) DropOrigin(origin string) {
 
 // fanout sends an update to all subscribers of k.vni except origin. Caller holds r.mu.
 // Sink.Send is non-blocking, so holding the lock here is safe.
-func (r *RIB) fanout(k routeKey, nexthops []string, op pb.RouteOp, origin string) {
+func (r *RIB) fanout(k routeKey, nexthops []string, op pb.RouteOp, origin string, external bool) {
 	for id, s := range r.subscribers[k.vni] {
 		if id == origin {
 			continue
 		}
-		s.Send(routeUpdate(k, nexthops, op))
+		s.Send(routeUpdate(k, nexthops, op, external))
 	}
 }
 
-func routeUpdate(k routeKey, nexthops []string, op pb.RouteOp) *pb.ServerMsg {
+func routeUpdate(k routeKey, nexthops []string, op pb.RouteOp, external bool) *pb.ServerMsg {
 	return &pb.ServerMsg{Msg: &pb.ServerMsg_RouteUpdate{RouteUpdate: &pb.RouteUpdate{
 		Vni:      k.vni,
 		Prefix:   k.prefix,
 		Nexthops: nexthops,
 		Op:       op,
+		External: external,
 	}}}
 }

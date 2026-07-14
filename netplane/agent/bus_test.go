@@ -18,15 +18,19 @@ import (
 type fakeDP struct {
 	mu       sync.Mutex
 	added    map[string]string // "vni prefix" -> nexthop
+	external map[string]bool   // "vni prefix" -> external flag as programmed
 	withdrew map[string]bool
 }
 
-func newFakeDP() *fakeDP { return &fakeDP{added: map[string]string{}, withdrew: map[string]bool{}} }
+func newFakeDP() *fakeDP {
+	return &fakeDP{added: map[string]string{}, external: map[string]bool{}, withdrew: map[string]bool{}}
+}
 
-func (f *fakeDP) AddRoute(_ context.Context, vni uint32, prefix, nexthop string) error {
+func (f *fakeDP) AddRoute(_ context.Context, vni uint32, prefix, nexthop string, external bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.added[key(vni, prefix)] = nexthop
+	f.external[key(vni, prefix)] = external
 	return nil
 }
 func (f *fakeDP) WithdrawRoute(_ context.Context, vni uint32, prefix string) error {
