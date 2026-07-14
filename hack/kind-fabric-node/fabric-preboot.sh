@@ -44,4 +44,29 @@ if [ -f "$KF" ] && grep -q '^KUBELET_EXTRA_ARGS=' "$KF"; then
 fi
 printf 'KUBELET_EXTRA_ARGS=%s --node-ip=%s\n' "$extra" "$NODEIP" > "$KF"
 
-echo "fabric-preboot: dummy0=${NODEIP}/${PLEN} ; kubelet --node-ip=${NODEIP}"
+# 3) FRR: announce the node's /64 over unnumbered eBGP on the fabric uplink(s).
+#    The node is now the BGP speaker (no sidecar). Uplinks are the clab fabric
+#    links (eth1, and eth2 when dual-homed); they appear once clab wires them, so
+#    FRR simply retries until the session establishes (identity is already local).
+#    UPLINKS overridable via /etc/fabric/uplinks (space-separated); default eth1.
+UPLINKS="eth1"
+[ -r /etc/fabric/uplinks ] && UPLINKS="$(tr -d '\n' < /etc/fabric/uplinks)"
+ROUTERID="10.0.2.$(printf '%s' "$BASE" | sed 's/.*:\([0-9a-f]*\)::$/\1/' | tr -cd '0-9')"
+[ -n "$ROUTERID" ] || ROUTERID="10.0.2.1"
+{
+  echo "frr defaults datacenter"
+  echo "hostname $(hostname)"
+  for u in $UPLINKS; do echo "interface $u"; echo " no ipv6 nd suppress-ra"; done
+  echo "router bgp 65100"
+  echo " bgp router-id ${ROUTERID}"
+  echo " bgp bestpath as-path multipath-relax"
+  for u in $UPLINKS; do echo " neighbor $u interface remote-as external"; done
+  echo " address-family ipv6 unicast"
+  echo "  maximum-paths 64"
+  echo "  network ${PREFIX}"
+  for u in $UPLINKS; do echo "  neighbor $u activate"; echo "  neighbor $u allowas-in 1"; done
+  echo " exit-address-family"
+} > /etc/frr/frr.conf
+systemctl restart frr || systemctl start frr || true
+
+echo "fabric-preboot: dummy0=${NODEIP}/${PLEN} ; kubelet --node-ip=${NODEIP} ; FRR announces ${PREFIX} on ${UPLINKS}"
