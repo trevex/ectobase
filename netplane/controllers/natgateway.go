@@ -114,6 +114,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *Reconciler) natgwsForNIC(ctx context.Context, obj client.Object) []reconcile.Request {
 	var list netv1.NATGatewayList
 	if err := r.Client.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
+		ctrl.Log.WithName("natgwsForNIC").Error(err, "list NATGateways", "namespace", obj.GetNamespace())
 		return nil
 	}
 	reqs := make([]reconcile.Request, 0, len(list.Items))
