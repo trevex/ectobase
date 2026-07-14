@@ -73,6 +73,77 @@ func TestVPCRoundTrip(t *testing.T) {
 	}
 }
 
+func TestNATGatewayRoundTrip(t *testing.T) {
+	orig := &NATGateway{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: SchemeGroupVersion.String(),
+			Kind:       "NATGateway",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "prod-egress",
+			Labels: map[string]string{"env": "prod"},
+		},
+		Spec: NATGatewaySpec{
+			VPCRef:         LocalObjectReference{Name: "prod"},
+			PublicIPs:      []string{"203.0.113.10"},
+			PortsPerSource: int32Ptr(1024),
+		},
+		Status: NATGatewayStatus{
+			Allocations: []NATAllocation{
+				{Source: "10.0.0.5", PublicIP: "203.0.113.10", PortMin: 1024, PortMax: 2047},
+			},
+			State: "Ready",
+		},
+	}
+
+	data, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("marshal NATGateway: %v", err)
+	}
+
+	got := &NATGateway{}
+	if err := json.Unmarshal(data, got); err != nil {
+		t.Fatalf("unmarshal NATGateway: %v", err)
+	}
+
+	if !reflect.DeepEqual(orig, got) {
+		t.Fatalf("NATGateway round-trip mismatch:\n orig=%#v\n got =%#v", orig, got)
+	}
+
+	// Field-level fidelity assertions.
+	if got.Spec.VPCRef.Name != "prod" {
+		t.Errorf("spec.vpcRef.name: want prod, got %q", got.Spec.VPCRef.Name)
+	}
+	if !reflect.DeepEqual(got.Spec.PublicIPs, []string{"203.0.113.10"}) {
+		t.Errorf("spec.publicIPs mismatch: got %v", got.Spec.PublicIPs)
+	}
+	if got.Spec.PortsPerSource == nil || *got.Spec.PortsPerSource != 1024 {
+		t.Errorf("spec.portsPerSource: want 1024, got %v", got.Spec.PortsPerSource)
+	}
+	if got.Status.State != "Ready" {
+		t.Errorf("status.state: want Ready, got %q", got.Status.State)
+	}
+	if len(got.Status.Allocations) != 1 || got.Status.Allocations[0].PortMax != 2047 {
+		t.Errorf("status.allocations mismatch: got %v", got.Status.Allocations)
+	}
+
+	// Verify the wire keys use the spec's camelCase names.
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal raw: %v", err)
+	}
+	spec := raw["spec"].(map[string]interface{})
+	if _, ok := spec["vpcRef"]; !ok {
+		t.Errorf("expected wire key spec.vpcRef, keys=%v", spec)
+	}
+	if _, ok := spec["publicIPs"]; !ok {
+		t.Errorf("expected wire key spec.publicIPs, keys=%v", spec)
+	}
+	if _, ok := spec["portsPerSource"]; !ok {
+		t.Errorf("expected wire key spec.portsPerSource, keys=%v", spec)
+	}
+}
+
 func TestNetworkInterfaceRoundTrip(t *testing.T) {
 	orig := &NetworkInterface{
 		TypeMeta: metav1.TypeMeta{
