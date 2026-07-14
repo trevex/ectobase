@@ -11,6 +11,13 @@ kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 networking:
   ipFamily: ipv6
+  # No kindnet: kindnet reconciles `ip -6 route add <peer-pod-CIDR> via <peer-InternalIP>`,
+  # which EHOSTUNREACHes on our per-node /64 fabric (the peer InternalIP is a BGP-recursive,
+  # non-on-link gateway) and crash-loops. Cilium (hack/clab/cilium-up.sh) runs in TUNNEL mode
+  # instead, encapsulating pod traffic to the peer NODE IP — no pod routes in the underlay.
+  disableDefaultCNI: true
+  # Cilium runs with kubeProxyReplacement=true (eBPF Services), so kube-proxy is not deployed.
+  kubeProxyMode: none
 nodes:
   - role: control-plane
     image: kindest/node-fabric:dev

@@ -116,3 +116,43 @@ runtime). To run it on a capable host:
 ```bash
 cd test/e2e && go test -run TestUnderlayInferenceOnFabric -v ./...
 ```
+
+## CNI = Cilium (tunnel mode), and the harness gotchas behind it
+
+The kind clusters run **Cilium** (not kindnet) — `disableDefaultCNI: true` + `kubeProxyMode:
+none` in `kind-cluster*.yaml`, installed by `cilium-up.sh` (values in `cilium-values.yaml`,
+IPv6-only, `routingMode: tunnel`/vxlan, `kubeProxyReplacement`). Rationale + the debugging that
+led here:
+
+- **Why not kindnet:** kindnet reconciles `ip -6 route add <peer-pod-CIDR> via <peer-InternalIP>`
+  unconditionally and panics on `EHOSTUNREACH`. On our per-node `/64` BGP fabric the peer
+  InternalIP is a BGP-recursive, non-on-link gateway, so that add can never succeed (no covering
+  route or blackhole helps — kindnet adds it regardless). Cilium tunnel mode VXLAN-encaps pod
+  traffic to the peer **node IP** instead, so the k8s pod overlay never enters the underlay FIB
+  or the BGP fabric — which is also the production-correct separation.
+- **Nodes come up NotReady until `cilium-up.sh` runs** (no default CNI). `clab-up.sh` therefore
+  runs the deploy first, then installs Cilium per cluster. The k8s-kind `deploy.wait` is a
+  boot-marker scan timeout (NOT a Ready gate) — keep it comfortably above the node's boot time.
+
+`clab-up.sh` also handles three host/kernel + clab interactions that otherwise break a headless
+bring-up (each cost real debugging — do not "simplify" them away):
+
+1. **`bridge-nf-call-ip6tables=0`** — with it =1, even same-bridge IPv6 ND frames traverse the
+   host ip6tables FORWARD chain, and clab sets that chain's policy to DROP with ACCEPT only for
+   its own bridges (not the `kind` bridge). Result: a multi-node cluster's nodes can't ND each
+   other over the kind bridge → worker can't reach the API → never Ready ("flaky boot-race").
+2. **pty for the deploy** — clab's `vyosnetworks_vyos` kind talks to the VyOS CLI over a pty to
+   wait for "Cli ready". Headless (backgrounded / CI / `>log`) that read fails
+   (`read /dev/ptmx: input/output error`) and clab loops forever. `clab-up.sh` runs the deploy
+   under `script(1)` when stdout is not a TTY.
+3. **VyOS `admin` user + `enforce-startup-config: false`** — clab's vyos readiness probe runs
+   `su - admin`, but `vyos:latest` ships only user `vyos`; `edge{1,2}.boot` therefore also define
+   an `admin` login. Enforce is off because its `docker exec -it … su - admin` needs a TTY and
+   re-applies config redundantly (config.boot is applied at boot regardless — BGP comes up).
+
+Known limitation: on an **nftables-only host kernel without the legacy `ip6_tables` modules**
+(e.g. this NixOS box), Cilium's IPv6 iptables manager crash-loops (`could not load module
+ip6_tables`) so agents sit `0/1` — but **nodes still go Ready and all netplane components are
+`hostNetwork`**, so the dataplane e2e is unaffected. To get fully-healthy Cilium, provide the
+`ip6_tables`/`ip6table_{mangle,raw,filter}` modules on the host (kernel config) or run Cilium
+without IPv6 iptables.

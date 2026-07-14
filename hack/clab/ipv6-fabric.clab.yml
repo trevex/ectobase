@@ -87,7 +87,7 @@ topology:
       extras:
         k8s_kind:
           deploy:
-            wait: 120s
+            wait: 120s   # clab k8s-kind boot-marker scan timeout (NOT a node-Ready gate); must exceed fabric-preboot boot delay
 
     # --- second kind cluster: a compute cluster brokered to k01's central control
     # plane (reflector + CRDs) over the shared fabric. One node, its own /64. ---
@@ -97,7 +97,7 @@ topology:
       extras:
         k8s_kind:
           deploy:
-            wait: 120s
+            wait: 120s   # clab k8s-kind boot-marker scan timeout (NOT a node-Ready gate); must exceed fabric-preboot boot delay
 
     # --- third kind cluster: the GATEWAY host (k03), also brokered to k01's control
     # plane over the fabric. One node, /64 = fd00:db8:0:4::/64. It is dual-homed to
@@ -110,7 +110,7 @@ topology:
       extras:
         k8s_kind:
           deploy:
-            wait: 120s
+            wait: 120s   # clab k8s-kind boot-marker scan timeout (NOT a node-Ready gate); must exceed fabric-preboot boot delay
 
     # --- kind node containers, as clab link endpoints ---
     # Names MUST match the containers kind creates: <cluster>-control-plane / -worker.
@@ -146,7 +146,12 @@ topology:
       kind: vyosnetworks_vyos
       image: vyos:latest
       startup-config: vyos/edge1.boot
-      enforce-startup-config: true
+      # NOT enforced: clab's vyos enforce step runs `docker exec -it <edge> su - admin`, but
+      # this image's user is `vyos` (no `admin`) AND `-it` needs a TTY — so enforce fails and
+      # clab RETRIES FOREVER (the "deploy hang"), esp. headless/CI. The config is delivered as
+      # config.boot (mounted at /opt/vyatta/etc/config) and applied at BOOT regardless, so the
+      # edge comes up fully configured (BGP established) without the enforce step. See README.
+      enforce-startup-config: false
       sysctls:
         net.ipv6.conf.all.forwarding: 1
         net.ipv4.ip_forward: 1
@@ -154,7 +159,7 @@ topology:
       kind: vyosnetworks_vyos
       image: vyos:latest
       startup-config: vyos/edge2.boot
-      enforce-startup-config: true
+      enforce-startup-config: false   # see edge1 — enforce (`su - admin`, needs TTY) hangs clab; config.boot applies at boot
       sysctls:
         net.ipv6.conf.all.forwarding: 1
         net.ipv4.ip_forward: 1

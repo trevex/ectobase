@@ -1,0 +1,44 @@
+# Cilium helm values for the xdp-dp IPv6 fabric kind clusters (installed by
+# hack/clab/cilium-up.sh). Design goals, in order:
+#
+#  1. IPv6-only — the fabric under test is IPv6-only (kind ipFamily: ipv6).
+#  2. TUNNEL (VXLAN) routing — cross-node pod traffic is encapsulated to the peer
+#     NODE IP (the fabric /64 on dummy0, reachable via the underlay BGP). This keeps
+#     the k8s pod overlay OUT of the underlay routing table and OUT of the BGP fabric
+#     entirely — pod/overlay routing is the CNI's job, not the fabric's. It also
+#     sidesteps kindnet's fatal `ip -6 route add <peer-pod-CIDR> via <peer-InternalIP>`
+#     (EHOSTUNREACH on our per-node /64 fabric, since the peer InternalIP is a
+#     BGP-recursive non-on-link gateway).
+#  3. kubeProxyReplacement — full eBPF Services (no kube-proxy; kind sets
+#     kubeProxyMode: none). Closest to a modern Cilium production cluster.
+#
+# k8sServiceHost / k8sServicePort are injected per-cluster at install time by
+# cilium-up.sh (the control-plane API server IP) — required because with kube-proxy
+# replaced there is no ClusterIP to bootstrap the agents' API connection against.
+
+kubeProxyReplacement: true
+
+ipv4:
+  enabled: false
+ipv6:
+  enabled: true
+
+# Use the per-node podCIDR that kube-controller-manager allocates from kind's
+# podSubnet (fd00:10:244::/56), rather than Cilium's own cluster-pool — keeps the
+# pod addressing aligned with what kind/k8s reports on node.spec.podCIDRs.
+ipam:
+  mode: kubernetes
+
+# VXLAN tunnel over the IPv6 underlay. routingMode=tunnel is the explicit form of
+# the classic overlay datapath.
+routingMode: tunnel
+tunnelProtocol: vxlan
+
+# Single control-plane per cluster — one operator replica avoids a permanently
+# Pending second replica on these lean 1-2 node clusters.
+operator:
+  replicas: 1
+
+# Quieter, faster bring-up on kind: no Hubble UI/relay needed for the e2e.
+hubble:
+  enabled: false

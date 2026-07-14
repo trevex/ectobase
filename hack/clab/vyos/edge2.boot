@@ -89,6 +89,12 @@ system {
                 plaintext-password ""
             }
         }
+        user admin {
+            authentication {
+                encrypted-password "$6$QxPS.uk6mfo$9QBSo8u1FkH16gMyAVhus6fU3LOzvLR9Z9.82m3tiHFAxTtIkhaZSWssSgzt4v4dGAL8rhVQxTg0oAG9/q11h/"
+                plaintext-password ""
+            }
+        }
     }
     option {
         reboot-on-upgrade-failure "5"
