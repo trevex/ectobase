@@ -195,6 +195,8 @@ ip route replace 203.0.113.0/28 via 172.29.0.11 dev clabwan
 
 **Deferred (follow-ups):** NAT66 (v6 egress SNAT + a v6 `wan_rx`); the centralized gateway fleet + drain e2e (parent-plan T5/T7–T9); Tayga host-NAT64 (only if non-overlay host traffic ever needs it).
 
+**LB ingress = its own arc (next, after this egress e2e — user 2026-07-14).** Testing LoadBalancers is a full subproject, NOT a Phase-B add-on: the `LoadBalancer` CRD is an empty scaffold, there is no LB controller/agent/`dataplane.proto` RPC/VIP-announcement, and the datapath has **no internet→VIP ingress path** (`lb_select_forward` only handles already-encapped overlay traffic on `uplink_rx`; `try_wan_rx` does only NEIGHBOR_NAT) nor DSR. So LB ingress needs: (1) new verifier-sensitive edge eBPF (plain IPv4 → registered VIP → Maglev-select backend → encap to backend underlay) + DSR reverse-SNAT on the backend hv; (2) flesh out the LoadBalancer CRD + a controller (Maglev target table) + agent wiring + `CreateLb`/`AddLbTarget` RPCs + VIP announcement (edge originates the VIP `/32` to the WAN). It reuses the SAME VyOS edge this plan builds. Sequenced AFTER the egress e2e (egress datapath is ready; LB needs new datapath).
+
 ---
 
 ## Execution Handoff
