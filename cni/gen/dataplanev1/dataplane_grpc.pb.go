@@ -28,6 +28,8 @@ const (
 	DataplaneNode_WithdrawNatSource_FullMethodName   = "/dataplane.v1.DataplaneNode/WithdrawNatSource"
 	DataplaneNode_AddNeighborNat_FullMethodName      = "/dataplane.v1.DataplaneNode/AddNeighborNat"
 	DataplaneNode_WithdrawNeighborNat_FullMethodName = "/dataplane.v1.DataplaneNode/WithdrawNeighborNat"
+	DataplaneNode_AddLbVip_FullMethodName            = "/dataplane.v1.DataplaneNode/AddLbVip"
+	DataplaneNode_AddLbBackend_FullMethodName        = "/dataplane.v1.DataplaneNode/AddLbBackend"
 )
 
 // DataplaneNodeClient is the client API for DataplaneNode service.
@@ -56,6 +58,13 @@ type DataplaneNodeClient interface {
 	AddNeighborNat(ctx context.Context, in *AddNeighborNatRequest, opts ...grpc.CallOption) (*AddNeighborNatResponse, error)
 	// WithdrawNeighborNat removes a return-to-owner entry. Removing an absent one is not an error.
 	WithdrawNeighborNat(ctx context.Context, in *WithdrawNeighborNatRequest, opts ...grpc.CallOption) (*WithdrawNeighborNatResponse, error)
+	// AddLbVip registers an external load balancer VIP: an IPv4 (vni=0 for the WAN edge) with a set
+	// of (port, proto) services, programming the LB map + allocating a Maglev table. Backends are
+	// added via AddLbBackend. On the WAN edge, wan_rx Maglev-selects a backend and encaps to it.
+	AddLbVip(ctx context.Context, in *AddLbVipRequest, opts ...grpc.CallOption) (*AddLbVipResponse, error)
+	// AddLbBackend appends a backend underlay /128 to a registered LB VIP and rebuilds its Maglev
+	// table.
+	AddLbBackend(ctx context.Context, in *AddLbBackendRequest, opts ...grpc.CallOption) (*AddLbBackendResponse, error)
 }
 
 type dataplaneNodeClient struct {
@@ -156,6 +165,26 @@ func (c *dataplaneNodeClient) WithdrawNeighborNat(ctx context.Context, in *Withd
 	return out, nil
 }
 
+func (c *dataplaneNodeClient) AddLbVip(ctx context.Context, in *AddLbVipRequest, opts ...grpc.CallOption) (*AddLbVipResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddLbVipResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_AddLbVip_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataplaneNodeClient) AddLbBackend(ctx context.Context, in *AddLbBackendRequest, opts ...grpc.CallOption) (*AddLbBackendResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddLbBackendResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_AddLbBackend_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DataplaneNodeServer is the server API for DataplaneNode service.
 // All implementations must embed UnimplementedDataplaneNodeServer
 // for forward compatibility.
@@ -182,6 +211,13 @@ type DataplaneNodeServer interface {
 	AddNeighborNat(context.Context, *AddNeighborNatRequest) (*AddNeighborNatResponse, error)
 	// WithdrawNeighborNat removes a return-to-owner entry. Removing an absent one is not an error.
 	WithdrawNeighborNat(context.Context, *WithdrawNeighborNatRequest) (*WithdrawNeighborNatResponse, error)
+	// AddLbVip registers an external load balancer VIP: an IPv4 (vni=0 for the WAN edge) with a set
+	// of (port, proto) services, programming the LB map + allocating a Maglev table. Backends are
+	// added via AddLbBackend. On the WAN edge, wan_rx Maglev-selects a backend and encaps to it.
+	AddLbVip(context.Context, *AddLbVipRequest) (*AddLbVipResponse, error)
+	// AddLbBackend appends a backend underlay /128 to a registered LB VIP and rebuilds its Maglev
+	// table.
+	AddLbBackend(context.Context, *AddLbBackendRequest) (*AddLbBackendResponse, error)
 	mustEmbedUnimplementedDataplaneNodeServer()
 }
 
@@ -218,6 +254,12 @@ func (UnimplementedDataplaneNodeServer) AddNeighborNat(context.Context, *AddNeig
 }
 func (UnimplementedDataplaneNodeServer) WithdrawNeighborNat(context.Context, *WithdrawNeighborNatRequest) (*WithdrawNeighborNatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method WithdrawNeighborNat not implemented")
+}
+func (UnimplementedDataplaneNodeServer) AddLbVip(context.Context, *AddLbVipRequest) (*AddLbVipResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddLbVip not implemented")
+}
+func (UnimplementedDataplaneNodeServer) AddLbBackend(context.Context, *AddLbBackendRequest) (*AddLbBackendResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddLbBackend not implemented")
 }
 func (UnimplementedDataplaneNodeServer) mustEmbedUnimplementedDataplaneNodeServer() {}
 func (UnimplementedDataplaneNodeServer) testEmbeddedByValue()                       {}
@@ -402,6 +444,42 @@ func _DataplaneNode_WithdrawNeighborNat_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DataplaneNode_AddLbVip_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddLbVipRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneNodeServer).AddLbVip(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneNode_AddLbVip_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneNodeServer).AddLbVip(ctx, req.(*AddLbVipRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataplaneNode_AddLbBackend_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddLbBackendRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneNodeServer).AddLbBackend(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneNode_AddLbBackend_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneNodeServer).AddLbBackend(ctx, req.(*AddLbBackendRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DataplaneNode_ServiceDesc is the grpc.ServiceDesc for DataplaneNode service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -444,6 +522,14 @@ var DataplaneNode_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "WithdrawNeighborNat",
 			Handler:    _DataplaneNode_WithdrawNeighborNat_Handler,
+		},
+		{
+			MethodName: "AddLbVip",
+			Handler:    _DataplaneNode_AddLbVip_Handler,
+		},
+		{
+			MethodName: "AddLbBackend",
+			Handler:    _DataplaneNode_AddLbBackend_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -7,6 +7,7 @@ pub mod pb {
 }
 use pb::dataplane_node_server::DataplaneNode;
 use pb::{
+    AddLbBackendRequest, AddLbBackendResponse, AddLbVipRequest, AddLbVipResponse,
     AddNatSourceRequest, AddNatSourceResponse, AddNeighborNatRequest, AddNeighborNatResponse,
     AddRouteRequest, AddRouteResponse, AttachInterfaceRequest, AttachInterfaceResponse,
     ConfigureNetworkRequest, ConfigureNetworkResponse, DetachInterfaceRequest,
@@ -295,6 +296,75 @@ impl DataplaneNode for NodeService {
             r.nat_ip, r.port_min, r.port_max
         );
         Ok(Response::new(WithdrawNeighborNatResponse {}))
+    }
+
+    async fn add_lb_vip(
+        &self,
+        req: Request<AddLbVipRequest>,
+    ) -> Result<Response<AddLbVipResponse>, Status> {
+        let attach = self
+            .attach
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
+            .clone();
+        let r = req.into_inner();
+        let vip = parse_ipv4(&r.vip_ipv4).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let lb_underlay =
+            parse_nexthop6(&r.lb_underlay).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        // (port, proto) services: proto is the IP protocol number (6=TCP, 17=UDP, 1=ICMP).
+        let ports: Vec<(u16, u8)> = r
+            .ports
+            .iter()
+            .map(|pp| -> anyhow::Result<(u16, u8)> {
+                let port = port_u16(pp.port)?;
+                let proto = u8::try_from(pp.proto)
+                    .map_err(|_| anyhow::anyhow!("proto {} > 255", pp.proto))?;
+                Ok((port, proto))
+            })
+            .collect::<anyhow::Result<_>>()
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let id = r.id.clone().into_bytes();
+        let vni = r.vni;
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            attach.control.create_lb(
+                &id,
+                vni,
+                crate::grpc::LbIpBytes::Ipv4(vip),
+                lb_underlay,
+                ports,
+            )
+        })
+        .await
+        .map_err(|e| Status::internal(format!("add_lb_vip task panicked: {e}")))?
+        .map_err(|e| Status::internal(e.to_string()))?;
+        println!(
+            "LB VIP add id={} vni={vni} vip={} lb_underlay={} ports={:?}",
+            r.id, r.vip_ipv4, r.lb_underlay, r.ports
+        );
+        Ok(Response::new(AddLbVipResponse {}))
+    }
+
+    async fn add_lb_backend(
+        &self,
+        req: Request<AddLbBackendRequest>,
+    ) -> Result<Response<AddLbBackendResponse>, Status> {
+        let attach = self
+            .attach
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
+            .clone();
+        let r = req.into_inner();
+        let backend = parse_nexthop6(&r.backend_underlay)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let id = r.id.clone().into_bytes();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            attach.control.add_lb_target(&id, backend)
+        })
+        .await
+        .map_err(|e| Status::internal(format!("add_lb_backend task panicked: {e}")))?
+        .map_err(|e| Status::internal(e.to_string()))?;
+        println!("LB backend add id={} backend={}", r.id, r.backend_underlay);
+        Ok(Response::new(AddLbBackendResponse {}))
     }
 }
 

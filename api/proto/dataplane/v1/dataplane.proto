@@ -26,7 +26,36 @@ service DataplaneNode {
   rpc AddNeighborNat(AddNeighborNatRequest) returns (AddNeighborNatResponse);
   // WithdrawNeighborNat removes a return-to-owner entry. Removing an absent one is not an error.
   rpc WithdrawNeighborNat(WithdrawNeighborNatRequest) returns (WithdrawNeighborNatResponse);
+  // AddLbVip registers an external load balancer VIP: an IPv4 (vni=0 for the WAN edge) with a set
+  // of (port, proto) services, programming the LB map + allocating a Maglev table. Backends are
+  // added via AddLbBackend. On the WAN edge, wan_rx Maglev-selects a backend and encaps to it.
+  rpc AddLbVip(AddLbVipRequest) returns (AddLbVipResponse);
+  // AddLbBackend appends a backend underlay /128 to a registered LB VIP and rebuilds its Maglev
+  // table.
+  rpc AddLbBackend(AddLbBackendRequest) returns (AddLbBackendResponse);
 }
+
+// A (port, proto) load-balancer service tuple. proto is the IP protocol number (6=TCP, 17=UDP,
+// 1=ICMP); ICMP uses port 0.
+message PortProto {
+  uint32 port = 1;
+  uint32 proto = 2;
+}
+
+message AddLbVipRequest {
+  string id = 1;                 // stable LB id (used to add backends later)
+  uint32 vni = 2;                // overlay VNI; 0 for the WAN edge (no VNI)
+  string vip_ipv4 = 3;           // the public VIP IPv4
+  string lb_underlay = 4;        // the LB's own underlay /128 (anycast)
+  repeated PortProto ports = 5;  // the LB services
+}
+message AddLbVipResponse {}
+
+message AddLbBackendRequest {
+  string id = 1;               // the LB id from AddLbVip
+  string backend_underlay = 2; // backend node underlay IPv6 /128
+}
+message AddLbBackendResponse {}
 
 message AttachInterfaceRequest {
   string interface_id = 1; // stable id (e.g. VMI uid + iface name)

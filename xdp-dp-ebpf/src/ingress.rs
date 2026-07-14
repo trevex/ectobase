@@ -358,6 +358,27 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
         Some((_proto, _sport, dp)) => dp,
         None => return Ok(xdp_action::XDP_PASS),
     };
+    // External-LB VIP ingress (vip_rx): if the plain IPv4 dst+port is a registered WAN LB VIP
+    // (vni=0), Maglev-select an overlay backend and encap IP-in-IPv6 straight to its underlay,
+    // exactly like the neighbor-nat return path below. Falls through to neighbor-nat on a miss.
+    if let Some(backend) = crate::lb::lb_select_forward(ctx, ip_off, 0) {
+        let local = LOCAL.get(0).ok_or(())?;
+        let inner_len = (data_end - data - ETH_LEN) as u16;
+        let route = RouteValue {
+            nexthop_vni: 0,
+            nexthop_ipv6: backend,
+            is_external: 0,
+            _pad: [0; 3],
+        };
+        return crate::encap::encap_and_redirect(
+            ctx,
+            local,
+            &local.underlay_ipv6,
+            &route,
+            inner_len,
+            IPPROTO_IPIP,
+        );
+    }
     let (owner_ul, _vni) = match crate::nat::neighbor_nat_lookup_any(inner_dst, dport) {
         Some(v) => v,
         None => return Ok(xdp_action::XDP_PASS),
