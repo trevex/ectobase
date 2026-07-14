@@ -18,6 +18,10 @@ import (
 type Dataplane interface {
 	AddRoute(ctx context.Context, vni uint32, prefix, nexthop string, external bool) error
 	WithdrawRoute(ctx context.Context, vni uint32, prefix string) error
+	// AddNeighborNat installs a return-route for a NAT block OWNED BY ANOTHER node:
+	// a return landing here for natIp:[min,max) re-routes to ownerUnderlay.
+	AddNeighborNat(ctx context.Context, natIp string, min, max uint32, ownerUnderlay string, vni uint32) error
+	WithdrawNeighborNat(ctx context.Context, natIp string, min, max uint32, vni uint32) error
 }
 
 // Route is a local overlay route this node announces.
@@ -74,6 +78,9 @@ func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, subVNIs []uint32,
 		if ru := msg.GetRouteUpdate(); ru != nil {
 			b.apply(ctx, ru)
 		}
+		if nu := msg.GetNatUpdate(); nu != nil {
+			b.applyNat(ctx, nu)
+		}
 		// EndOfRIB / KeepAlive: v1 no-op (prune-on-EoR is a follow-up).
 	}
 }
@@ -82,6 +89,35 @@ func (b *Bus) announce(stream rbv1.RouteBus_SessionClient, r Route) error {
 	return stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_Announce{Announce: &rbv1.Announce{
 		Vni: r.Vni, Prefix: r.Prefix, NexthopUnderlay: r.Nexthop, External: r.External,
 	}}})
+}
+
+// AnnounceNat sends this node's ownership of a deterministic egress NAT block on
+// the given session stream.
+func (b *Bus) AnnounceNat(stream rbv1.RouteBus_SessionClient, blk NatBlock) error {
+	return stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_AnnounceNat{AnnounceNat: &rbv1.AnnounceNat{
+		Vni: blk.Vni, SourceIp: blk.SourceIP, NatIp: blk.NatIP,
+		PortMin: blk.PortMin, PortMax: blk.PortMax, OwnerUnderlay: blk.OwnerUnderlay,
+	}}})
+}
+
+// applyNat programs a learned NAT block. Blocks OWNED BY THIS node are skipped:
+// its local SNAT is already programmed by the reconciler via AddNatSource. For a
+// block owned by a peer, install a neighbor-nat return-route so a return that
+// lands here re-routes to the owner.
+func (b *Bus) applyNat(ctx context.Context, nu *rbv1.NatUpdate) {
+	if nu.OwnerUnderlay == b.underlay {
+		return
+	}
+	switch nu.Op {
+	case rbv1.RouteOp_ROUTE_OP_ADD:
+		if err := b.dp.AddNeighborNat(ctx, nu.NatIp, nu.PortMin, nu.PortMax, nu.OwnerUnderlay, nu.Vni); err != nil {
+			log.Printf("AddNeighborNat %s:[%d,%d) -> %s vni=%d: %v", nu.NatIp, nu.PortMin, nu.PortMax, nu.OwnerUnderlay, nu.Vni, err)
+		}
+	case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
+		if err := b.dp.WithdrawNeighborNat(ctx, nu.NatIp, nu.PortMin, nu.PortMax, nu.Vni); err != nil {
+			log.Printf("WithdrawNeighborNat %s:[%d,%d) vni=%d: %v", nu.NatIp, nu.PortMin, nu.PortMax, nu.Vni, err)
+		}
+	}
 }
 
 func (b *Bus) apply(ctx context.Context, ru *rbv1.RouteUpdate) {
@@ -113,6 +149,18 @@ func (d dpAdapter) AddRoute(ctx context.Context, vni uint32, prefix, nexthop str
 }
 func (d dpAdapter) WithdrawRoute(ctx context.Context, vni uint32, prefix string) error {
 	_, err := d.c.WithdrawRoute(ctx, &dpv1.WithdrawRouteRequest{Vni: vni, Prefix: prefix})
+	return err
+}
+func (d dpAdapter) AddNeighborNat(ctx context.Context, natIp string, min, max uint32, ownerUnderlay string, vni uint32) error {
+	_, err := d.c.AddNeighborNat(ctx, &dpv1.AddNeighborNatRequest{
+		NatIp: natIp, PortMin: min, PortMax: max, OwnerUnderlay: ownerUnderlay, Vni: vni,
+	})
+	return err
+}
+func (d dpAdapter) WithdrawNeighborNat(ctx context.Context, natIp string, min, max uint32, vni uint32) error {
+	_, err := d.c.WithdrawNeighborNat(ctx, &dpv1.WithdrawNeighborNatRequest{
+		NatIp: natIp, PortMin: min, PortMax: max, Vni: vni,
+	})
 	return err
 }
 

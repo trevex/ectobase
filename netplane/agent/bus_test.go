@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -20,10 +21,38 @@ type fakeDP struct {
 	added    map[string]string // "vni prefix" -> nexthop
 	external map[string]bool   // "vni prefix" -> external flag as programmed
 	withdrew map[string]bool
+	nbrNat   map[string]string // "natIp min max" -> ownerUnderlay
+	nbrNatWd map[string]bool
 }
 
 func newFakeDP() *fakeDP {
-	return &fakeDP{added: map[string]string{}, external: map[string]bool{}, withdrew: map[string]bool{}}
+	return &fakeDP{
+		added: map[string]string{}, external: map[string]bool{}, withdrew: map[string]bool{},
+		nbrNat: map[string]string{}, nbrNatWd: map[string]bool{},
+	}
+}
+
+func natKeyStr(natIp string, min, max uint32) string {
+	return fmt.Sprintf("%s %d %d", natIp, min, max)
+}
+
+func (f *fakeDP) AddNeighborNat(_ context.Context, natIp string, min, max uint32, ownerUnderlay string, _ uint32) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nbrNat[natKeyStr(natIp, min, max)] = ownerUnderlay
+	return nil
+}
+func (f *fakeDP) WithdrawNeighborNat(_ context.Context, natIp string, min, max uint32, _ uint32) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nbrNatWd[natKeyStr(natIp, min, max)] = true
+	return nil
+}
+func (f *fakeDP) getNbrNat(natIp string, min, max uint32) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v, ok := f.nbrNat[natKeyStr(natIp, min, max)]
+	return v, ok
 }
 
 func (f *fakeDP) AddRoute(_ context.Context, vni uint32, prefix, nexthop string, external bool) error {
@@ -91,4 +120,30 @@ func TestAgentLearnsRemoteRouteAndProgramsDataplane(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("agent B never programmed A's route")
+}
+
+func TestApplyNatInstallsNeighborNatOnlyForRemoteOwners(t *testing.T) {
+	dp := newFakeDP()
+	// This node's underlay is fd00::b.
+	b := NewBus("nodeB", "fd00::b", dp)
+	ctx := context.Background()
+
+	// A block owned by a PEER (fd00::a) -> installs a neighbor-nat return route.
+	b.applyNat(ctx, &rbv1.NatUpdate{
+		Vni: 100, SourceIp: "10.0.0.1", NatIp: "1.2.3.4",
+		PortMin: 1024, PortMax: 2048, OwnerUnderlay: "fd00::a", Op: rbv1.RouteOp_ROUTE_OP_ADD,
+	})
+	if owner, ok := dp.getNbrNat("1.2.3.4", 1024, 2048); !ok || owner != "fd00::a" {
+		t.Fatalf("remote-owned block should install AddNeighborNat -> fd00::a, got %q ok=%v", owner, ok)
+	}
+
+	// A block owned by THIS node -> must NOT install a neighbor-nat (local SNAT is
+	// programmed by the reconciler, not here).
+	b.applyNat(ctx, &rbv1.NatUpdate{
+		Vni: 100, SourceIp: "10.0.0.9", NatIp: "5.6.7.8",
+		PortMin: 4096, PortMax: 5120, OwnerUnderlay: "fd00::b", Op: rbv1.RouteOp_ROUTE_OP_ADD,
+	})
+	if _, ok := dp.getNbrNat("5.6.7.8", 4096, 5120); ok {
+		t.Fatalf("locally-owned block must NOT install a neighbor-nat")
+	}
 }
