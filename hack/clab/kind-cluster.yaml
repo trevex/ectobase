@@ -18,9 +18,15 @@ nodes:
       - hostPath: PREFIX_DIR/k01-control-plane.prefix
         containerPath: /etc/fabric/prefix
         readOnly: true
+      - hostPath: PREFIX_DIR/uplinks
+        containerPath: /etc/fabric/uplinks
+        readOnly: true
   - role: worker
     image: kindest/node-fabric:dev
     extraMounts:
       - hostPath: PREFIX_DIR/k01-worker.prefix
         containerPath: /etc/fabric/prefix
+        readOnly: true
+      - hostPath: PREFIX_DIR/uplinks
+        containerPath: /etc/fabric/uplinks
         readOnly: true
