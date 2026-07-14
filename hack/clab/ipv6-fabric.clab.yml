@@ -165,13 +165,11 @@ topology:
       kind: linux
       image: ghcr.io/trevex/dpservice-xdp:dev
       network-mode: container:clab-xdp-ipv6-fabric-edge1
-      # Start only once VyOS (edge1) is healthy — its links (eth1/eth2) are wired and BGP is up —
-      # instead of a fixed startup-delay. The wrapper still waits for the ToR neighbour.
-      stages:
-        create:
-          wait-for:
-            - node: edge1
-              stage: healthy
+      # Give VyOS time to boot + clab to wire eth1/eth2; the wrapper additionally waits for the
+      # interfaces + the ToR neighbour before serving. (A stages.create.wait-for the VyOS `healthy`
+      # stage HANGS clab deploy — the healthy-stage never registers for the vyos kind — so a fixed
+      # startup-delay is the robust choice.)
+      startup-delay: 25
       # The image ENTRYPOINT is `xdp-dp`; override it to run the wrapper (clab already runs all
       # nodes privileged, so XDP attach in the shared VyOS netns works; /sys/fs/bpf for bpffs).
       binds:
@@ -182,11 +180,7 @@ topology:
       kind: linux
       image: ghcr.io/trevex/dpservice-xdp:dev
       network-mode: container:clab-xdp-ipv6-fabric-edge2
-      stages:
-        create:
-          wait-for:
-            - node: edge2
-              stage: healthy
+      startup-delay: 25
       binds:
         - edge-xdp-wrapper.sh:/edge-xdp-wrapper.sh:ro
         - /sys/fs/bpf:/sys/fs/bpf

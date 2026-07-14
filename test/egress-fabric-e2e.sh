@@ -21,6 +21,7 @@ VNI=100; SRC_NODE="k01-worker"; SRC_IP="10.0.0.5"
 NAT_POOL_IP="203.0.113.1"; PMIN=1024; PMAX=2047   # matches NATGateway alloc (portsPerSource 1024)
 EDGE_UL="fd00:db8:0:9::e"; TARGET="1.1.1.1"
 E1=clab-xdp-ipv6-fabric-edge1; E2=clab-xdp-ipv6-fabric-edge2
+EX1=clab-xdp-ipv6-fabric-edge1-xdp   # the edge xdp-dp sidecar (clab-managed, shares E1's netns)
 K1=$(mktemp)   # fresh, root-owned (this script runs under sudo)
 PROTO=/home/nik/Development/ironcore-net-xdp/api/proto
 fail() { echo "FAIL: $*"; exit 1; }
@@ -82,7 +83,7 @@ echo "== [5] WAN edge programmed by its BROKERED AGENTS (edge-identity slice; no
 # and DesiredExternalRoutes (A3) announces the external default -> the source installs it.
 bash "$ROOT/hack/clab/edge-agents-up.sh" >/dev/null 2>&1 || true
 for _ in $(seq 1 30); do
-  ne=$(sudo docker logs edge1-xdp-run 2>&1 | grep -c "NEIGHBOR_NAT add vni=$VNI nat_ip=$NAT_POOL_IP")
+  ne=$(sudo docker logs "$EX1" 2>&1 | grep -c "NEIGHBOR_NAT add vni=$VNI nat_ip=$NAT_POOL_IP")
   ex=$(sudo docker exec "$SRC_NODE" crictl logs "$XW" 2>&1 | grep -c "prefix=0.0.0.0/0 -> nexthop=$EDGE_UL external=true")
   [ "${ne:-0}" -ge 1 ] && [ "${ex:-0}" -ge 1 ] && break; sleep 2
 done
