@@ -21,10 +21,41 @@ type routeKey struct {
 	prefix string
 }
 
+// routeEntry reference-counts a (vni, prefix) route by origin: HA anycast edges all
+// announce the same route (e.g. 0.0.0.0/0 -> the anycast edge underlay), so the route
+// must stay advertised while ANY origin announces it and only be withdrawn when the
+// LAST origin drops. origins maps an origin id -> the nexthops it announced.
 type routeEntry struct {
-	nexthops []string
-	origin   string
+	origins  map[string][]string
 	external bool
+}
+
+// mergeNexthops is the deduped, sorted union of every origin's nexthops (deterministic).
+func mergeNexthops(origins map[string][]string) []string {
+	set := map[string]struct{}{}
+	for _, nhs := range origins {
+		for _, nh := range nhs {
+			set[nh] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(set))
+	for nh := range set {
+		out = append(out, nh)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func equalStrs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // RIB is the reflector's global route table. Safe for concurrent use. It also
@@ -81,7 +112,7 @@ func (r *RIB) Subscribe(vni uint32, s Sink) {
 	sort.Slice(keys, func(i, j int) bool { return keys[i].prefix < keys[j].prefix })
 	for _, k := range keys {
 		e := r.routes[k]
-		s.Send(routeUpdate(k, e.nexthops, pb.RouteOp_ROUTE_OP_ADD, e.external))
+		s.Send(routeUpdate(k, mergeNexthops(e.origins), pb.RouteOp_ROUTE_OP_ADD, e.external))
 	}
 	s.Send(&pb.ServerMsg{Msg: &pb.ServerMsg_EndOfRib{EndOfRib: &pb.EndOfRIB{Vni: vni}}})
 }
@@ -103,12 +134,24 @@ func (r *RIB) Announce(origin string, vni uint32, prefix string, nexthops []stri
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	k := routeKey{vni, prefix}
-	r.routes[k] = routeEntry{nexthops: nexthops, origin: origin, external: external}
+	e := r.routes[k]
+	if e.origins == nil {
+		e.origins = map[string][]string{}
+	}
+	before := mergeNexthops(e.origins)
+	e.origins[origin] = nexthops
+	e.external = external
+	r.routes[k] = e
 	if r.byOrigin[origin] == nil {
 		r.byOrigin[origin] = map[routeKey]struct{}{}
 	}
 	r.byOrigin[origin][k] = struct{}{}
-	r.fanout(k, nexthops, pb.RouteOp_ROUTE_OP_ADD, origin, external)
+	// Only fan out when the effective advertised route actually changes — a second
+	// anycast origin announcing an identical route must not churn subscribers.
+	after := mergeNexthops(e.origins)
+	if len(before) == 0 || !equalStrs(before, after) {
+		r.fanout(k, after, pb.RouteOp_ROUTE_OP_ADD, origin, external)
+	}
 }
 
 // Withdraw removes a route and fans out a WITHDRAW.
@@ -116,14 +159,34 @@ func (r *RIB) Withdraw(origin string, vni uint32, prefix string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	k := routeKey{vni, prefix}
-	if _, ok := r.routes[k]; !ok {
-		return
-	}
-	delete(r.routes, k)
 	if m := r.byOrigin[origin]; m != nil {
 		delete(m, k)
 	}
-	r.fanout(k, nil, pb.RouteOp_ROUTE_OP_WITHDRAW, "", false)
+	r.withdrawRouteOrigin(k, origin)
+}
+
+// withdrawRouteOrigin removes one origin from a route and fans out the minimal change:
+// WITHDRAW only when the last origin is gone, otherwise re-ADD if the merged nexthops
+// changed (else nothing). Caller holds r.mu; byOrigin bookkeeping is the caller's job.
+func (r *RIB) withdrawRouteOrigin(k routeKey, origin string) {
+	e, ok := r.routes[k]
+	if !ok {
+		return
+	}
+	if _, has := e.origins[origin]; !has {
+		return
+	}
+	before := mergeNexthops(e.origins)
+	delete(e.origins, origin)
+	if len(e.origins) == 0 {
+		delete(r.routes, k)
+		r.fanout(k, nil, pb.RouteOp_ROUTE_OP_WITHDRAW, "", false)
+		return
+	}
+	r.routes[k] = e
+	if after := mergeNexthops(e.origins); !equalStrs(before, after) {
+		r.fanout(k, after, pb.RouteOp_ROUTE_OP_ADD, "", e.external)
+	}
 }
 
 // DropOrigin withdraws every route a node originated and clears its
@@ -134,10 +197,7 @@ func (r *RIB) DropOrigin(origin string) {
 	owned := r.byOrigin[origin]
 	delete(r.byOrigin, origin)
 	for k := range owned {
-		if _, ok := r.routes[k]; ok {
-			delete(r.routes, k)
-			r.fanout(k, nil, pb.RouteOp_ROUTE_OP_WITHDRAW, "", false)
-		}
+		r.withdrawRouteOrigin(k, origin)
 	}
 	for vni, subs := range r.subscribers {
 		delete(subs, origin)
