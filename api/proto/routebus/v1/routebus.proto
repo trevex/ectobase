@@ -16,6 +16,14 @@ enum RouteOp {
   ROUTE_OP_WITHDRAW = 2;
 }
 
+enum PublicKind {
+  PUBLIC_KIND_UNSPECIFIED = 0;
+  PUBLIC_KIND_EDGE_UNDERLAY = 1;   // edge anycast datapath /128; owner_underlay = edge's UNIQUE loopback
+  PUBLIC_KIND_NAT_IP = 2;          // distributed-SNAT nat_ip block (port_min/max = the block)
+  PUBLIC_KIND_LB_VIP = 3;          // reserved (external LB arc)
+  PUBLIC_KIND_FLOATING_IP = 4;     // reserved
+}
+
 // Agent -> reflector.
 message ClientMsg {
   oneof msg {
@@ -27,6 +35,8 @@ message ClientMsg {
     KeepAlive keep_alive = 6;
     AnnounceNat announce_nat = 7;   // announce a deterministic egress NAT block (global, not per-VNI)
     WithdrawNat withdraw_nat = 8;
+    PublicPrefix announce_public = 9;
+    PublicPrefix withdraw_public = 10;
   }
 }
 
@@ -37,6 +47,7 @@ message ServerMsg {
     EndOfRIB end_of_rib = 2;     // full-table-for-a-vni delivered; safe to prune
     KeepAlive keep_alive = 3;
     NatUpdate nat_update = 4;     // a global NAT block was announced/withdrawn
+    PublicUpdate public_update = 5;
   }
 }
 
@@ -95,3 +106,13 @@ message NatUpdate {
   string owner_underlay = 6;
   RouteOp op = 7;
 }
+
+message PublicPrefix {
+  PublicKind kind           = 1;
+  string     prefix         = 2;
+  string     owner_underlay = 3;
+  uint32     vni            = 4;
+  uint32     port_min       = 5;
+  uint32     port_max       = 6;
+}
+message PublicUpdate { PublicPrefix prefix = 1; RouteOp op = 2; }
