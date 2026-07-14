@@ -60,11 +60,21 @@ ROUTERID="10.0.2.$(printf '%s' "$BASE" | sed 's/.*:\([0-9a-f]*\)::$/\1/' | tr -c
 {
   echo "frr defaults datacenter"
   echo "hostname $(hostname)"
+  echo "bfd"
+  echo " profile fabric-fast"
+  echo "  transmit-interval 150"
+  echo "  receive-interval 150"
+  echo "  detect-multiplier 3"
+  echo " exit"
+  echo "exit"
   for u in $UPLINKS; do echo "interface $u"; echo " no ipv6 nd suppress-ra"; done
   echo "router bgp 65100"
   echo " bgp router-id ${ROUTERID}"
   echo " bgp bestpath as-path multipath-relax"
-  for u in $UPLINKS; do echo " neighbor $u interface remote-as external"; done
+  for u in $UPLINKS; do
+    echo " neighbor $u interface remote-as external"
+    echo " neighbor $u bfd profile fabric-fast"
+  done
   echo " address-family ipv6 unicast"
   echo "  maximum-paths 64"
   echo "  network ${PREFIX}"
