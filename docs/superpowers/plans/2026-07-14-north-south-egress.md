@@ -14,6 +14,20 @@
 
 ---
 
+## PIVOT (2026-07-14): distributed egress first
+
+Datapath investigation showed the existing eBPF **already implements dpservice's full distributed scalable-NAT**: egress SNAT on the source's own hypervisor when the dst route `is_external` (`nat_snat_egress`, peer-independent reverse conntrack key), ingress reverse-NAT on `uplink_rx`, and **NEIGHBOR_NAT** return-routing to the block owner. `create_nat` is keyed by a *local* `interface_id`. So the **distributed** (metalnet) model is nearly free (reuse), while the *centralized gateway* is substantial new verifier-sensitive eBPF. **Decision: do distributed egress first**; revisit the centralized gateway later (its drain-safety is via VM live-migration, not a gateway-drain).
+
+**What stands from the original tasks:** T1 (NATGateway CRD), T2 (deterministic port-block allocator), T3 (AddNatSource/AddNeighborNat RPCs — `AddNatSource` already resolves the *local* interface, exactly right for distributed), T4 (WAN edge + gateway cluster — becomes the WAN *edge* node). **Deferred:** T5 (`--role gateway` centralized), T7 (drain-safe reverse), T8 (fleet reassignment), T9 (gateway-drain e2e) — reopened when we do the centralized gateway.
+
+**Revised remaining tasks (distributed egress):**
+- **D5 — Central NATGateway controller (Go):** the port-block allocator (T2) as a controller that reconciles `NATGateway` → writes `Status.Allocations` (deterministic `(public-IP, port-block)` per selected source).
+- **D6 — Node-agent NAT reconciler (Go):** each node's agent reads allocations for its *local* sources → `AddNatSource` (program local SNAT) + announces the `nat_ip` route + `AddNeighborNat` for all sources' blocks learned via routebus (return re-routing). Also distribute a default `0.0.0.0/0 → WAN-edge underlay` route marked **external** so the source datapath SNATs + encaps egress to the edge. (Needs an `is_external` flag on the route-distribution `AddRoute`/`Announce` — small extension.)
+- **D7 — WAN-edge decap/forward datapath (the one new eBPF bit):** an xdp-dp `--role edge` node whose `uplink_rx` decaps egress overlay traffic whose inner dst is a public IPv4 and **forwards it out the WAN uplink as plain IP**; and on the WAN uplink, receives returns to a `nat_ip`, looks up the owner (NEIGHBOR_NAT / nat_ip route) and **encaps back into the fabric**. Announces the public prefixes (`nat_ip`s, and a default) to the WAN via BGP. Much smaller than the centralized gateway — no per-source NAT here.
+- **D8 — Egress e2e on the fabric:** a source VM on a compute node reaches `wan-server` through its own hypervisor's SNAT + the WAN edge; return works. (Fix the addressing collision: `nat_ip` and `wan-server` must differ — e.g. `nat_ip=203.0.113.10`, `wan-server=198.51.100.10`.)
+
+---
+
 ## File Structure
 
 **Datapath (Rust, `xdp-dp`):**
