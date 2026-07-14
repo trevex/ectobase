@@ -16,5 +16,5 @@ RUN apt-get update \
 COPY fabric-preboot.sh /usr/local/bin/fabric-preboot.sh
 COPY fabric-preboot.service /etc/systemd/system/fabric-preboot.service
 RUN chmod +x /usr/local/bin/fabric-preboot.sh \
- && sed -i 's/^bgpd=no/bgpd=yes/' /etc/frr/daemons \
+ && sed -i -e 's/^bgpd=no/bgpd=yes/' -e 's/^bfdd=no/bfdd=yes/' /etc/frr/daemons \
  && systemctl enable fabric-preboot.service
