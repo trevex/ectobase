@@ -13,7 +13,10 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLUSTER="${1:?usage: cilium-up.sh <kind-cluster-name> [control-plane-container]}"
 CP="${2:-${CLUSTER}-control-plane}"
-CILIUM_VERSION="${CILIUM_VERSION:-1.16.5}"
+# 1.20+ is required on nftables-only host kernels (no legacy ip6_tables module): earlier Cilium
+# fatally `modprobe ip6_tables` in its iptables manager when IPv6 is enabled, even though the
+# rules go through iptables-nft. 1.20 handles the missing legacy module gracefully. See README.
+CILIUM_VERSION="${CILIUM_VERSION:-1.20.0-rc.0}"
 VALUES="${HERE}/cilium-values.yaml"
 
 KC="$(mktemp)"; trap 'rm -f "$KC"' EXIT

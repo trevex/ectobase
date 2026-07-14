@@ -150,9 +150,12 @@ bring-up (each cost real debugging — do not "simplify" them away):
    an `admin` login. Enforce is off because its `docker exec -it … su - admin` needs a TTY and
    re-applies config redundantly (config.boot is applied at boot regardless — BGP comes up).
 
-Known limitation: on an **nftables-only host kernel without the legacy `ip6_tables` modules**
-(e.g. this NixOS box), Cilium's IPv6 iptables manager crash-loops (`could not load module
-ip6_tables`) so agents sit `0/1` — but **nodes still go Ready and all netplane components are
-`hostNetwork`**, so the dataplane e2e is unaffected. To get fully-healthy Cilium, provide the
-`ip6_tables`/`ip6table_{mangle,raw,filter}` modules on the host (kernel config) or run Cilium
-without IPv6 iptables.
+**Cilium is pinned to >=1.20** (`cilium-up.sh`) for a reason: on an **nftables-only host kernel
+without the legacy `ip6_tables` modules** (e.g. this NixOS box), Cilium <=1.19's IPv6 iptables
+manager fatally `modprobe ip6_tables` on startup and the agent crash-loops (`could not load module
+ip6_tables`) — even though the rules would go through `iptables-nft`/`nft_compat` fine and the
+modules aren't actually needed (cilium/cilium#30638). kubeProxyReplacement forces
+`install-iptables-rules=true`, so the "disable iptables rules" escape does not apply. **Cilium
+1.20 handles the missing legacy module gracefully**, so agents come up `1/1` on the stock config
+here. (If you must run an older Cilium, the alternative is a modprobe stub — `install ip6_tables
+/bin/true` in the agent's modprobe.d — or providing the modules via the host kernel config.)
