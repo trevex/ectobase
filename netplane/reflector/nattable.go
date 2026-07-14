@@ -31,6 +31,9 @@ func (r *RIB) RegisterSink(s Sink) {
 		b := r.nat[k]
 		s.Send(natUpdate(b, pb.RouteOp_ROUTE_OP_ADD))
 	}
+	for k := range r.public {
+		s.Send(publicUpdate(r.public[k], pb.RouteOp_ROUTE_OP_ADD))
+	}
 }
 
 // UnregisterSink removes s from the global sink set (on disconnect). Its NAT

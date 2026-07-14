@@ -39,7 +39,12 @@ type RIB struct {
 	// Global NAT state, broadcast to all sinks regardless of VNI subscription.
 	nat         map[natKey]NatBlock
 	natByOrigin map[string]map[natKey]struct{}
-	sinks       map[string]Sink // every connected session, keyed by node id
+
+	// Global PublicPrefix state (publictable.go), broadcast to all sinks.
+	public         map[publicKey]PublicRecord
+	publicByOrigin map[string]map[publicKey]struct{}
+
+	sinks map[string]Sink // every connected session, keyed by node id
 }
 
 func NewRIB() *RIB {
@@ -47,9 +52,11 @@ func NewRIB() *RIB {
 		routes:      map[routeKey]routeEntry{},
 		byOrigin:    map[string]map[routeKey]struct{}{},
 		subscribers: map[uint32]map[string]Sink{},
-		nat:         map[natKey]NatBlock{},
-		natByOrigin: map[string]map[natKey]struct{}{},
-		sinks:       map[string]Sink{},
+		nat:            map[natKey]NatBlock{},
+		natByOrigin:    map[string]map[natKey]struct{}{},
+		public:         map[publicKey]PublicRecord{},
+		publicByOrigin: map[string]map[publicKey]struct{}{},
+		sinks:          map[string]Sink{},
 	}
 }
 
@@ -139,6 +146,7 @@ func (r *RIB) DropOrigin(origin string) {
 		}
 	}
 	r.dropOriginNat(origin)
+	r.dropOriginPublic(origin)
 }
 
 // fanout sends an update to all subscribers of k.vni except origin. Caller holds r.mu.

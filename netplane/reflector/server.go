@@ -92,6 +92,18 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 		case *pb.ClientMsg_WithdrawNat:
 			w := m.WithdrawNat
 			s.rib.WithdrawNat(sink.id, w.NatIp, w.PortMin, w.PortMax)
+		case *pb.ClientMsg_AnnouncePublic:
+			p := m.AnnouncePublic
+			s.rib.AnnouncePublic(sink.id, PublicRecord{
+				Kind: p.Kind, Prefix: p.Prefix, OwnerUnderlay: p.OwnerUnderlay,
+				Vni: p.Vni, PortMin: p.PortMin, PortMax: p.PortMax,
+			})
+		case *pb.ClientMsg_WithdrawPublic:
+			p := m.WithdrawPublic
+			s.rib.WithdrawPublic(sink.id, PublicRecord{
+				Kind: p.Kind, Prefix: p.Prefix, OwnerUnderlay: p.OwnerUnderlay,
+				Vni: p.Vni, PortMin: p.PortMin, PortMax: p.PortMax,
+			})
 		case *pb.ClientMsg_KeepAlive, *pb.ClientMsg_Hello:
 			// keepalive: transport-level for v1; duplicate hello ignored.
 		}
