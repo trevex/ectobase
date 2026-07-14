@@ -305,6 +305,29 @@ impl Control {
         })
     }
 
+    /// WAN-edge role: attach `wan_rx` to the WAN uplink and register the edge's own underlay /128
+    /// as a local-deliver UNDERLAY entry (sentinel tap). Fabric->WAN egress then decaps and
+    /// XDP_PASSes to the local kernel (VyOS), while WAN->fabric returns to a `nat_ip` are caught by
+    /// `wan_rx` and re-encapped to the block owner. Call once, after `bring_up`.
+    pub fn attach_edge(&self, wan_uplink: &str, edge_underlay: [u8; 16]) -> anyhow::Result<()> {
+        let mut g = self.inner.lock().unwrap();
+        loader::attach_xdp(&mut g.ebpf, "wan_rx", wan_uplink)?;
+        g.underlay.upsert(
+            edge_underlay,
+            xdp_dp_common::UnderlayValue {
+                vni: 0,
+                tap_ifindex: xdp_dp_common::UNDERLAY_LOCAL_DELIVER,
+                guest_mac: [0; 6],
+                _pad: [0; 2],
+            },
+        )?;
+        println!(
+            "edge role: wan_rx attached to {wan_uplink}; UNDERLAY[{}] = local-deliver",
+            std::net::Ipv6Addr::from(edge_underlay)
+        );
+        Ok(())
+    }
+
     /// Return a shared handle to the conntrack map (for the GC task and flush operations).
     pub fn take_conntrack(&self) -> Arc<Mutex<Conntrack>> {
         Arc::clone(&self.conntrack)

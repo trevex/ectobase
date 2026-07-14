@@ -63,6 +63,19 @@ pub fn uplink_rx(ctx: XdpContext) -> u32 {
     }
 }
 
+/// WAN-edge return path: attached to the WAN uplink by `serve --role edge`. Encaps internet
+/// return traffic destined to a `nat_ip` back toward the owning hypervisor over the fabric.
+#[xdp]
+pub fn wan_rx(ctx: XdpContext) -> u32 {
+    dbg::dlog!(&ctx, "wan_rx: ingress_ifindex={}", unsafe {
+        (*ctx.ctx).ingress_ifindex
+    });
+    match ingress::try_wan_rx(&ctx) {
+        Ok(act) => act,
+        Err(()) => xdp_action::XDP_PASS,
+    }
+}
+
 #[xdp]
 pub fn xdp_inspect(ctx: XdpContext) -> u32 {
     inspect::try_inspect(&ctx)

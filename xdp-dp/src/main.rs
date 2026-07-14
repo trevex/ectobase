@@ -96,6 +96,14 @@ enum Cmd {
         /// Uplink interface (uplink_rx attaches here).
         #[arg(long)]
         uplink: String,
+        /// Node role: "node" (default, a hypervisor) or "edge" (a WAN edge sidecar sharing VyOS's
+        /// netns — additionally attaches wan_rx and registers a local-deliver edge underlay).
+        #[arg(long, default_value = "node")]
+        role: String,
+        /// WAN-facing uplink interface (edge role only; wan_rx attaches here). Required for
+        /// `--role edge`.
+        #[arg(long = "wan-uplink")]
+        wan_uplink: Option<String>,
         /// This hypervisor's underlay IPv6 (outer src on encap; also the /64 the AttachInterface
         /// pool allocates from). Optional: when unset, resolved from the kubelet node IP
         /// (`HOST_IP`/`NODE_IP` downward-API env) or inferred from the host's lo/dummy* fabric
@@ -342,6 +350,8 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Serve {
             addr,
             uplink,
+            role,
+            wan_uplink,
             local_underlay,
             gateway,
             gateway6,
@@ -369,6 +379,18 @@ async fn main() -> anyhow::Result<()> {
                 parse_mac(&gateway_mac)?,
                 underlay,
             )?;
+            // WAN-edge role: attach wan_rx to the WAN uplink + register the local-deliver edge
+            // underlay so this sidecar handles both egress decap and NAT-return re-encap.
+            match role.as_str() {
+                "node" => {}
+                "edge" => {
+                    let w = wan_uplink
+                        .as_deref()
+                        .context("--role edge requires --wan-uplink")?;
+                    ctrl.attach_edge(w, underlay)?;
+                }
+                other => anyhow::bail!("unknown --role {other:?} (expected \"node\" or \"edge\")"),
+            }
             let dns4: Vec<[u8; 4]> = dhcp_dns
                 .iter()
                 .filter_map(|s| s.parse::<std::net::Ipv4Addr>().ok().map(|a| a.octets()))

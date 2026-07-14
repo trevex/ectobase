@@ -59,6 +59,12 @@ pub struct UnderlayValue {
     pub _pad: [u8; 2],
 }
 
+/// Sentinel `UnderlayValue::tap_ifindex` marking a WAN-edge local-deliver underlay: `uplink_rx`
+/// decaps the inner IPv4 and XDP_PASSes it to the local kernel (VyOS routes/masquerades to the real
+/// WAN) instead of redirecting to a guest tap. A real ifindex is never `u32::MAX`; `tap_ifindex==0`
+/// already means an LB-anycast VNF, so this needs a distinct value.
+pub const UNDERLAY_LOCAL_DELIVER: u32 = u32::MAX;
+
 /// Per-port metadata, keyed by the guest tap's host-side ifindex.
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]

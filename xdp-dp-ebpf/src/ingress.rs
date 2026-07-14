@@ -3,12 +3,12 @@ use aya_ebpf::{
     helpers::{bpf_redirect, bpf_xdp_adjust_head},
     programs::XdpContext,
 };
-use xdp_dp_common::{VipKey, CT_F_NAT64, CT_REWRITE_DST};
+use xdp_dp_common::{RouteValue, VipKey, CT_F_NAT64, CT_REWRITE_DST, UNDERLAY_LOCAL_DELIVER};
 
 use crate::arp_nd::GW_MAC;
 use crate::maps::{LOCAL, NAT_IPS};
 use crate::parse::{
-    write16, write6, ETH_LEN, ETH_P_IP, ETH_P_IPV6, IPPROTO_ICMP, IPPROTO_IPIP, IPV6_LEN,
+    l4_ports, write16, write6, ETH_LEN, ETH_P_IP, ETH_P_IPV6, IPPROTO_ICMP, IPPROTO_IPIP, IPV6_LEN,
 };
 
 const ICMP_ECHO_REQUEST: u8 = 8;
@@ -124,6 +124,12 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
         None => return Ok(xdp_action::XDP_PASS),
     };
     let vni = u.vni;
+    // WAN-edge egress local-deliver: the edge registers its own underlay with a sentinel tap so a
+    // fabric->WAN packet (source hypervisor SNAT'd + encapped toward the edge) is decapped and the
+    // inner IPv4 handed to the local kernel (VyOS), which routes/masquerades it to the real WAN.
+    if u.tap_ifindex == UNDERLAY_LOCAL_DELIVER {
+        return edge_local_deliver(ctx);
+    }
     // LB takes precedence: Maglev-select a backend underlay. If the backend is remote (not in
     // UNDERLAY), reforward the encapped packet directly to the backend node without decap.
     let lb_ul = crate::lb::lb_select_forward(ctx, ETH_LEN + IPV6_LEN, vni);
@@ -302,4 +308,76 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
         crate::vip::dnat_ingress(ctx, ETH_LEN, vni);
     }
     Ok(unsafe { bpf_redirect(tap_ifindex, 0) } as u32)
+}
+
+/// WAN-edge egress delivery: strip the outer Eth+IPv6 from a decapped fabric->WAN packet and hand
+/// the inner IPv4 to the local kernel (VyOS) via XDP_PASS, which routes/masquerades it to the real
+/// WAN. The inner Ethernet dst is set to our uplink MAC so the kernel L3-accepts the frame on the
+/// fabric iface after PASS (src = GW_MAC, a locally-generated placeholder).
+#[inline(always)]
+fn edge_local_deliver(ctx: &XdpContext) -> Result<u32, ()> {
+    if unsafe { bpf_xdp_adjust_head(ctx.ctx, IPV6_LEN as i32) } != 0 {
+        return Err(());
+    }
+    let data = ctx.data();
+    let data_end = ctx.data_end();
+    if data + ETH_LEN > data_end {
+        return Err(());
+    }
+    let local = LOCAL.get(0).ok_or(())?;
+    let q = data as *mut u8;
+    unsafe {
+        write6(q, &local.uplink_mac);
+        write6(q.add(6), &GW_MAC);
+        core::ptr::write_unaligned(q.add(12) as *mut u16, ETH_P_IP.to_be());
+    }
+    Ok(xdp_action::XDP_PASS)
+}
+
+/// WAN-edge return path (`wan_rx`, attached to the WAN uplink). A plain IPv4 packet arriving from
+/// the internet, destined to a `nat_ip` (no overlay VNI), is matched by `(nat_ip, dport)` against
+/// NEIGHBOR_NAT and re-encapped IP-in-IPv6 toward the owning hypervisor's underlay, redirected out
+/// the fabric uplink. The owner's reverse-conntrack key `(vni,0,nat_ip,0,nat_port)` — where vni is
+/// derived from UNDERLAY[owner_underlay] on the owner — then reverse-SNATs to the source VM.
+/// Anything not matching a nat_ip block is XDP_PASSed to the local kernel (VyOS routing/BGP).
+pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
+    let data = ctx.data();
+    let data_end = ctx.data_end();
+    // Need Eth(14) + at least the inner IPv4 header (ends at +20).
+    if data + ETH_LEN + 20 > data_end {
+        return Ok(xdp_action::XDP_PASS);
+    }
+    let p = data as *const u8;
+    let ethertype = u16::from_be(unsafe { core::ptr::read_unaligned(p.add(12) as *const u16) });
+    if ethertype != ETH_P_IP {
+        return Ok(xdp_action::XDP_PASS);
+    }
+    let ip_off = ETH_LEN;
+    let inner_dst = unsafe { core::ptr::read_unaligned(p.add(ip_off + 16) as *const [u8; 4]) };
+    let dport = match l4_ports(data, data_end, ip_off) {
+        Some((_proto, _sport, dp)) => dp,
+        None => return Ok(xdp_action::XDP_PASS),
+    };
+    let (owner_ul, _vni) = match crate::nat::neighbor_nat_lookup_any(inner_dst, dport) {
+        Some(v) => v,
+        None => return Ok(xdp_action::XDP_PASS),
+    };
+    let local = LOCAL.get(0).ok_or(())?;
+    // Encap the plain IPv4 (the outer L2 header is consumed like a guest inner eth) into IP-in-IPv6
+    // toward the owner. inner_len = the IPv4 payload length, captured before adjust_head.
+    let inner_len = (data_end - data - ETH_LEN) as u16;
+    let route = RouteValue {
+        nexthop_vni: 0,
+        nexthop_ipv6: owner_ul,
+        is_external: 0,
+        _pad: [0; 3],
+    };
+    crate::encap::encap_and_redirect(
+        ctx,
+        local,
+        &local.underlay_ipv6,
+        &route,
+        inner_len,
+        IPPROTO_IPIP,
+    )
 }
