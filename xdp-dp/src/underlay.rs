@@ -62,22 +62,37 @@ pub fn infer_underlay_prefix(addrs: &[IfAddr]) -> Option<Ipv6Net> {
 
 /// A /128 allocator over the host underlay /64.
 ///
-/// Hands out the lowest free host address in the /64, skipping the all-zeros host (the
-/// subnet-router anycast address, `<prefix>::`). Released addresses are reused lowest-first.
+/// Hands out the lowest free host address in the SECOND HALF of the /64 (host index >= 2^63 for a
+/// /64). The lower half is reserved for the host's own infrastructure addressing: the node fabric
+/// loopback `<prefix>::1` (which is ALSO the kubelet node IP), the gateway, the subnet-router
+/// anycast `<prefix>::`, etc. Allocating from the upper half guarantees a guest underlay /128 can
+/// never collide with any of those. Released addresses are reused lowest-first within the pool.
 pub struct UnderlayIpam {
     prefix: Ipv6Net,
     used: BTreeSet<u128>,
+    /// Lowest allocatable host index — the start of the prefix's second half.
+    start: u128,
     next: u128,
 }
 
 impl UnderlayIpam {
     /// Build an allocator over `prefix` (expected to be a /64).
     pub fn new(prefix: Ipv6Net) -> UnderlayIpam {
+        // Reserve the lower half of the prefix for host infrastructure; allocate guests out of the
+        // upper half. For host_bits H the second half begins at host 2^(H-1) (e.g. 2^63 for a /64).
+        let host_bits = 128 - prefix.prefix_len() as u32;
+        let start: u128 = if host_bits == 0 {
+            0
+        } else if host_bits >= 128 {
+            1u128 << 127
+        } else {
+            1u128 << (host_bits - 1)
+        };
         UnderlayIpam {
             prefix,
             used: BTreeSet::new(),
-            // Host 0 is the subnet-router anycast; start allocating at host 1.
-            next: 1,
+            start,
+            next: start,
         }
     }
 
@@ -97,10 +112,11 @@ impl UnderlayIpam {
             (1u128 << host_bits) - 1
         };
 
-        // Reuse the lowest released host (a gap below `next`) if there is one; otherwise take the
-        // next fresh host at the `next` high-water mark. Host 0 (subnet-router anycast) is skipped
-        // because `next` starts at 1 and releases never reintroduce host 0.
-        let host = (1..self.next)
+        // Reuse the lowest released host (a gap in [start, next)) if there is one; otherwise take
+        // the next fresh host at the `next` high-water mark. The lower half of the prefix (incl.
+        // host 0 and the node loopback ::1) is never handed out because allocation starts at
+        // `self.start` (the prefix's second half) and releases never reintroduce a host below it.
+        let host = (self.start..self.next)
             .find(|h| !self.used.contains(h))
             .unwrap_or(self.next);
         if host > max_host {
@@ -242,13 +258,18 @@ mod tests {
     }
 
     #[test]
-    fn skips_subnet_router_anycast() {
-        // The first allocation must be host ::1, never the all-zeros ::.
-        let mut ip = UnderlayIpam::new("2001:db8:fefe:1::/64".parse().unwrap());
-        assert_eq!(
-            ip.allocate().unwrap(),
-            "2001:db8:fefe:1::1".parse::<Ipv6Addr>().unwrap()
-        );
+    fn allocates_from_second_half_avoiding_node_loopback() {
+        // The node's own fabric loopback (also the kubelet node IP) is <prefix>::1. A guest
+        // underlay /128 must NEVER collide with it (nor with the gateway or other low-numbered
+        // infra addresses), so allocation starts in the SECOND HALF of the prefix. For a /64 the
+        // second half begins at host 2^63 -> <prefix>:8000::.
+        let mut ip = UnderlayIpam::new("fd00:db8:0:2::/64".parse().unwrap());
+        let node_lo: Ipv6Addr = "fd00:db8:0:2::1".parse().unwrap();
+        let first = ip.allocate().unwrap();
+        assert_ne!(first, node_lo, "must not hand out the node's own loopback");
+        assert_eq!(first, "fd00:db8:0:2:8000::".parse::<Ipv6Addr>().unwrap());
+        // and never the all-zeros subnet-router anycast either
+        assert_ne!(first, "fd00:db8:0:2::".parse::<Ipv6Addr>().unwrap());
     }
 
     #[test]
