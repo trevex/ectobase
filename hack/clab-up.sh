@@ -24,7 +24,7 @@ if ! docker image inspect kindest/node-fabric:dev >/dev/null 2>&1; then
   make -C "${REPO}" image-kindnode
 fi
 PREFIX_DIR="${HERE}/clab/prefixes"
-for f in "${HERE}/clab/kind-cluster.yaml" "${HERE}/clab/kind-cluster-k02.yaml"; do
+for f in "${HERE}/clab/kind-cluster.yaml" "${HERE}/clab/kind-cluster-k02.yaml" "${HERE}/clab/kind-cluster-k03.yaml"; do
   sed "s#PREFIX_DIR#${PREFIX_DIR}#g" "$f" > "${f}.gen"
 done
 

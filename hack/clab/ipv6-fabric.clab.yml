@@ -78,6 +78,19 @@ topology:
           deploy:
             wait: 120s
 
+    # --- third kind cluster: the GATEWAY host (k03), also brokered to k01's control
+    # plane over the fabric. One node, /64 = fd00:db8:0:4::/64. It is dual-homed to
+    # sw1/sw2 like the others (eth1/eth2 = BGP fabric uplinks) AND has a third uplink
+    # eth3 to the WAN edge — its egress path to the "internet". eth3 is NOT a BGP
+    # uplink (see kind-cluster-k03.yaml). ---
+    k03:
+      kind: k8s-kind
+      startup-config: kind-cluster-k03.yaml.gen
+      extras:
+        k8s_kind:
+          deploy:
+            wait: 120s
+
     # --- kind node containers, as clab link endpoints ---
     # Names MUST match the containers kind creates: <cluster>-control-plane / -worker.
     # The custom node image owns dummy0 + the /64 and speaks eBGP itself now (via the
@@ -90,6 +103,47 @@ topology:
     # k02's single node: the compute cluster's fabric host, /64 = fd00:db8:0:3::/64.
     k02-control-plane:
       kind: ext-container
+    # k03's single node: the GATEWAY host, /64 = fd00:db8:0:4::/64. Its eth3 is the WAN
+    # uplink toward wan-edge; give that link a static IPv4 (100.64.0.1/24, CGNAT space)
+    # so the gateway datapath (a later task) has a next-hop to the WAN edge. eth1/eth2
+    # (fabric BGP) are owned by the node image's fabric-preboot oneshot, not here.
+    k03-control-plane:
+      kind: ext-container
+      exec:
+        - "ip link set eth3 up"
+        - "ip -4 addr replace 100.64.0.1/24 dev eth3"
+
+    # --- WAN edge: a lean "internet" gateway. Masquerades the gateway's WAN traffic
+    # (100.64.0.0/24 CGNAT uplink) out to the wan-server segment (203.0.113.0/24). A
+    # plain Alpine/FRR linux node with iproute2 + iptables. Modeled on icn/sandbox's
+    # clabwan routed-NAT edge, kept minimal (no VyOS/Tayga/NAT64). ---
+    wan-edge:
+      kind: linux
+      sysctls:
+        net.ipv4.ip_forward: 1
+      exec:
+        # eth1 = WAN uplink toward the gateway (k03); eth2 = the "internet" segment.
+        - "ip link set eth1 up"
+        - "ip -4 addr replace 100.64.0.254/24 dev eth1"
+        - "ip link set eth2 up"
+        - "ip -4 addr replace 203.0.113.254/24 dev eth2"
+        # Masquerade the gateway's WAN source range out toward the server segment so
+        # wan-server sees connections from the edge, and return traffic finds its way
+        # back. Keyed on the CGNAT uplink prefix, egress on eth2.
+        - "iptables -t nat -C POSTROUTING -s 100.64.0.0/24 -o eth2 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 100.64.0.0/24 -o eth2 -j MASQUERADE"
+
+    # --- WAN server: the "internet" test target. A trivial HTTP listener on
+    # 203.0.113.10:80 reachable through the wan-edge masquerade. ---
+    wan-server:
+      kind: linux
+      exec:
+        - "ip link set eth1 up"
+        - "ip -4 addr replace 203.0.113.10/24 dev eth1"
+        # Route back toward the WAN uplink range via the edge (so replies to the
+        # gateway's pre-masquerade source, if ever unmasqueraded, still return).
+        - "ip -4 route replace 100.64.0.0/24 via 203.0.113.254 dev eth1"
+        # Trivial listener; python3 ships in the frr:latest (Alpine) image.
+        - "sh -c 'nohup python3 -m http.server 80 --bind 0.0.0.0 >/tmp/wan-server.log 2>&1 &'"
 
   links:
     # host uplinks to the ToR (unnumbered v6, link-local only). The kind node netns
@@ -97,7 +151,14 @@ topology:
     - endpoints: ["k01-control-plane:eth1", "sw1:eth1"]
     - endpoints: ["k01-worker:eth1", "sw1:eth2"]
     - endpoints: ["k02-control-plane:eth1", "sw1:eth3"]
+    # the gateway host (k03) is the 4th fabric host -> sw1:eth4 / sw2:eth4.
+    - endpoints: ["k03-control-plane:eth1", "sw1:eth4"]
     # second uplink per node to sw2 (dual-homing)
     - endpoints: ["k01-control-plane:eth2", "sw2:eth1"]
     - endpoints: ["k01-worker:eth2", "sw2:eth2"]
     - endpoints: ["k02-control-plane:eth2", "sw2:eth3"]
+    - endpoints: ["k03-control-plane:eth2", "sw2:eth4"]
+    # --- WAN egress path: the gateway's third uplink (eth3) to the WAN edge, and the
+    # edge's second port (eth2) to the "internet" server segment. ---
+    - endpoints: ["k03-control-plane:eth3", "wan-edge:eth1"]
+    - endpoints: ["wan-edge:eth2", "wan-server:eth1"]

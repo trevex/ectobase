@@ -1,0 +1,23 @@
+# Third kind cluster for the NORTH-SOUTH EGRESS e2e: the GATEWAY host (k03),
+# brokered to k01's central control plane over the shared IPv6 BGP fabric, same as
+# k02. One node keeps it lean; it announces fd00:db8:0:4::/64 on dummy0.
+#
+# Unlike the compute clusters, k03 is a gateway host: besides its two FABRIC uplinks
+# (eth1->sw1, eth2->sw2, the BGP uplinks) it has a THIRD uplink eth3 to the WAN edge
+# (the gateway's egress). eth3 is NOT a BGP/fabric uplink, so /etc/fabric/uplinks stays
+# the SHARED "eth1 eth2" file — the WAN uplink is driven by the gateway datapath (a later
+# task), not FRR.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  ipFamily: ipv6
+nodes:
+  - role: control-plane
+    image: kindest/node-fabric:dev
+    extraMounts:
+      - hostPath: PREFIX_DIR/k03-control-plane.prefix
+        containerPath: /etc/fabric/prefix
+        readOnly: true
+      - hostPath: PREFIX_DIR/uplinks
+        containerPath: /etc/fabric/uplinks
+        readOnly: true
