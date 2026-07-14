@@ -1,0 +1,96 @@
+// Copyright 2026 ectobase contributors
+// SPDX-License-Identifier: Apache-2.0
+
+// Package controllers holds the central control-plane reconcilers. The
+// NATGateway reconciler assigns every source (each IP of every NetworkInterface
+// in the selected VPC) a deterministic (public-IP, port-block) via the shared
+// allocator and publishes the table to NATGateway.Status.Allocations. The
+// determinism is what makes the datapath drain-safe: any gateway can recompute a
+// source's block from this table without shared state.
+package controllers
+
+import (
+	"context"
+	"fmt"
+	"sort"
+
+	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
+	"github.com/trevex/xdp-dp/netplane/allocator"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+// defaultPortsPerSource is the block size used when Spec.PortsPerSource is nil.
+const defaultPortsPerSource int32 = 1024
+
+// Reconciler assigns deterministic egress SNAT blocks for a NATGateway's VPC.
+type Reconciler struct {
+	Client client.Client
+}
+
+// keyOf returns the namespaced name of an object.
+func keyOf(obj client.Object) types.NamespacedName {
+	return types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}
+}
+
+// Reconcile fetches the NATGateway named by req and Syncs it.
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	var natgw netv1.NATGateway
+	if err := r.Client.Get(ctx, req.NamespacedName, &natgw); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if err := r.Sync(ctx, &natgw); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, nil
+}
+
+// Sync computes and persists the deterministic allocation table for natgw.
+//
+// It lists the NetworkInterfaces in natgw's namespace, keeps those whose VPCRef
+// matches natgw's, collects and sorts their IPs (so allocation order is
+// deterministic), assigns each a block from the allocator built over
+// Spec.PublicIPs / PortsPerSource, and writes Status.Allocations + State=Ready.
+func (r *Reconciler) Sync(ctx context.Context, natgw *netv1.NATGateway) error {
+	var nics netv1.NetworkInterfaceList
+	if err := r.Client.List(ctx, &nics, client.InNamespace(natgw.Namespace)); err != nil {
+		return fmt.Errorf("list networkinterfaces: %w", err)
+	}
+
+	var sources []string
+	for i := range nics.Items {
+		nic := &nics.Items[i]
+		if nic.Spec.VPCRef.Name != natgw.Spec.VPCRef.Name {
+			continue
+		}
+		sources = append(sources, nic.Spec.IPs...)
+	}
+	// Deterministic assignment order: existing sources keep their block, and a
+	// fresh reconcile with the same source set produces the identical table.
+	sort.Strings(sources)
+
+	size := defaultPortsPerSource
+	if natgw.Spec.PortsPerSource != nil {
+		size = *natgw.Spec.PortsPerSource
+	}
+
+	a := allocator.New(natgw.Spec.PublicIPs, size)
+	allocations := make([]netv1.NATAllocation, 0, len(sources))
+	for _, src := range sources {
+		b := a.Assign(src)
+		allocations = append(allocations, netv1.NATAllocation{
+			Source:   src,
+			PublicIP: b.PublicIP,
+			PortMin:  b.PortMin,
+			PortMax:  b.PortMax,
+		})
+	}
+
+	natgw.Status.Allocations = allocations
+	natgw.Status.State = "Ready"
+	if err := r.Client.Status().Update(ctx, natgw); err != nil {
+		return fmt.Errorf("update natgateway status: %w", err)
+	}
+	return nil
+}
