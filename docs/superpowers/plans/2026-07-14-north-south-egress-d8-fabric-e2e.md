@@ -58,7 +58,9 @@ Verified 2026-07-14 while planning:
 
 ---
 
-## Phase A — Complete the control-plane wiring (no fabric yet)
+## Phase A — Complete the control-plane wiring (no fabric yet) — ✅ DONE (2026-07-14)
+
+**Shipped** (all TDD, each task spec- + quality-reviewed): A1 NATGateway controller (`SetupWithManager` + `netplane/cmd/controller` binary + `config/deploy/controller.yaml` + RBAC) `6808cfa`; A2 agent NAT reconcile loop (`DesiredNat`→`AddNatSource` + `AnnounceNat` on the Session, resilient per-source) `239aa26`; A3 edge agent announces the external default route (`NATGateway.Spec.EdgeUnderlay` + `DesiredExternalRoutes` → `0.0.0.0/0` + `64:ff9b::/96` external) `ff333c2`. All three binaries build; `netplane` + `api` tests green. **Remaining:** A4 (netns smoke) + Phases B–D (live fabric).
 
 ### Task A1: Run the NATGateway controller
 
