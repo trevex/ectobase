@@ -52,12 +52,28 @@ Optional follow-on (separate): **dual-homing + ECMP** — add `eth2`+`sw2` (dual
 
 **xdp-dp mapping:** grow `LOCAL` from one uplink to **two** `{ifindex, uplink_mac, gateway_mac, up}` + a 10-slot WCMP table; egress picks `idx = wcmp[hash % 10]` (or pf0-else-pf1), `bpf_redirect(uplink[idx])`, writes `gateway_mac[idx]`. Userspace: a netlink watcher keeping each port's ToR MAC + carrier live (the wrapper already does the one-shot version). Default active/standby is trivial; WCMP active-active is the opt-in refinement. Sources: ironcore-dev/dpservice `src/dp_multi_path.c`, `dp_conf_opts.c` (`--pf0/--pf1/--wcmp`), `nodes/ip{v4,v6}_lookup_node.c`, `nodes/ipip_encap_node.c`, `dp_netlink.c` (`dp_nl_get_pf_neigh_mac`), `dp_lpm.h` (single-nh route).
 
-## Spike plan (do first, before a full plan)
-Prove the risky mechanics on **one** custom kind node (no clab needed initially):
-1. Build the custom image; boot one kind node with the `fabric-preboot` unit + a static `/64`; confirm dummy0 has `fd00:db8:0:1::1/64` and `kubectl get node -o wide` reports **InternalIP = fd00:db8:0:1::1** (not the docker IP).
-2. **Restart the node container**; confirm the entrypoint's sed pass does not revert/duplicate the node-ip and the unit re-asserts before kubelet (research risk #1).
-3. Add FRR + one clab ToR; confirm the node establishes unnumbered eBGP and the `/64` is advertised (FRR `network /64` needs the addr present — it is).
-4. Confirm the cluster still bootstraps and host `kubectl` works over the docker port map (hybrid invariant).
+## Spike — DONE (proven; `hack/kind-fabric-node/`)
+Ran on one custom kind node (no clab). **The node-ip mechanism and FRR packaging are proven.**
+
+**Pivotal mechanism (confirmed on the live node):** kind's kubelet unit runs
+`kubelet … $KUBELET_KUBEADM_ARGS $KUBELET_EXTRA_ARGS`, sourcing `KUBELET_EXTRA_ARGS`
+from `/etc/default/kubelet`. kubeadm writes `--node-ip=<docker>` into `KUBELET_KUBEADM_ARGS`
+(kubeadm-flags.env) *after* kubelet.service has started, so we do **not** rewrite that file.
+Instead `fabric-preboot` (a `Before=kubelet.service` oneshot) appends `--node-ip=<fabric>` to
+`KUBELET_EXTRA_ARGS` — it appears **last**, and a repeated `--node-ip` → **last wins**. So kubelet's
+Node InternalIP is the fabric addr regardless of what kubeadm set.
+
+Results:
+1. ✅ Node `InternalIP = fd00:db8:0:1::1` (the `/64`'s `::1` on dummy0), node **Ready**; apiserver/kubeconfig stay on docker (hybrid holds).
+2. ✅ **Survives a container restart** — even though the docker IP changed on restart (kind's IP-migration case; kubeadm re-pins `--node-ip=<new-docker>`), our `KUBELET_EXTRA_ARGS` `--node-ip` is appended last and wins; `/etc/default/kubelet` has the fabric IP so the entrypoint's old→new docker-IP sed can't match/clobber it. **Resolves research risk #1.**
+3. ✅ **FRR baked into the node image**, started by `fabric-preboot`, generating the correct per-node config (`network fd00:db8:0:1::/64`, unnumbered `neighbor eth1`, `maximum-paths 64`, `allowas-in`), active and ready to peer. The node is now its own BGP speaker (no sidecar). An *established* session needs a wired ToR — already proven by the existing sidecar fabric with identical config in the same netns.
+
+Per-node prefix is injected via kind `extraMounts` (`/etc/fabric/prefix`). Optional `/etc/fabric/uplinks` overrides the uplink list (default `eth1`; `eth1 eth2` for dual-homing).
+
+**Remaining before a full plan (lower risk):** wire the custom image into the clab fabric (k8s-kind `startup-config` → the custom image + `extraMounts`; drop the host-frr sidecars and the dummy0 `clab exec`), confirm an **established** BGP session + the `/64` advertised end-to-end, and confirm xdp-dp runs on the now-fabric-identity node. Then the dual-homing (`eth2`+`sw2`) + active-active egress ECMP follow-ons.
+
+## Datapath ECMP decision
+When we build the xdp-dp egress multipath (phase 3), do **active-active per-flow hashing across both uplinks** (not dpservice's default active/standby `wcmp=100`): in a Clos both uplinks are equal-cost, so there's no reason to prefer one. Mirror dpservice's mechanism (per-PF ToR MAC from kernel neigh, single-nexthop route) but set the WCMP split 50/50 by default. See the dpservice egress model above.
 
 ## Top risks / unknowns
 1. **Entrypoint-vs-preboot ordering** (highest): our unit must re-assert node-ip after kindest/node's entrypoint sed but before kubelet — prove empirically across a restart.
