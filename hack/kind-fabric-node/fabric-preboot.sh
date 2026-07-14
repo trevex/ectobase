@@ -73,4 +73,25 @@ ROUTERID="10.0.2.$(printf '%s' "$BASE" | sed 's/.*:\([0-9a-f]*\)::$/\1/' | tr -c
 } > /etc/frr/frr.conf
 systemctl restart frr || systemctl start frr || true
 
+# 4) Gate kubelet on BGP convergence (this unit is Before=kubelet.service). The CNI
+#    (kindnet) routes each peer's pod-CIDR via that peer's Node InternalIP — which is
+#    now the peer's fabric ::1 — so it needs the fabric routed before it initialises,
+#    or it panics ("no route to host"). We wait until the FIB has at least one
+#    BGP-learned route (a peer /64; a session to the ToR delivers them all at once).
+#    BOUNDED: the uplink is wired by clab shortly after boot and FRR converges within
+#    seconds; if it doesn't (uplink never wired / no peer), proceed after the timeout
+#    and let the CNI self-heal — NEVER hard-block kubelet. Keep the timeout under
+#    systemd's TimeoutStartSec (90s) and clab's k8s-kind deploy wait (120s).
+CONVERGE_TIMEOUT="${FABRIC_BGP_TIMEOUT:-60}"
+i=0
+while [ "$i" -lt "$CONVERGE_TIMEOUT" ]; do
+  if ip -6 route show proto bgp 2>/dev/null | grep -q .; then
+    echo "fabric-preboot: BGP converged after ${i}s (peer routes in FIB)"
+    break
+  fi
+  i=$((i + 1)); sleep 1
+done
+[ "$i" -ge "$CONVERGE_TIMEOUT" ] && \
+  echo "fabric-preboot: BGP not converged in ${CONVERGE_TIMEOUT}s — proceeding (CNI will self-heal)"
+
 echo "fabric-preboot: dummy0=${NODEIP}/${PLEN} ; kubelet --node-ip=${NODEIP} ; FRR announces ${PREFIX} on ${UPLINKS}"
