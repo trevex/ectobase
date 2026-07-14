@@ -145,9 +145,12 @@ topology:
       image: ghcr.io/trevex/dpservice-xdp:dev
       network-mode: container:clab-xdp-ipv6-fabric-edge1
       startup-delay: 25
+      # The image ENTRYPOINT is `xdp-dp`; override it to run the wrapper (clab already runs all
+      # nodes privileged, so XDP attach in the shared VyOS netns works; /sys/fs/bpf for bpffs).
       binds:
         - edge-xdp-wrapper.sh:/edge-xdp-wrapper.sh:ro
-      cmd: "/bin/sh /edge-xdp-wrapper.sh"
+        - /sys/fs/bpf:/sys/fs/bpf
+      entrypoint: "/bin/sh /edge-xdp-wrapper.sh"
     edge2-xdp:
       kind: linux
       image: ghcr.io/trevex/dpservice-xdp:dev
@@ -155,7 +158,8 @@ topology:
       startup-delay: 25
       binds:
         - edge-xdp-wrapper.sh:/edge-xdp-wrapper.sh:ro
-      cmd: "/bin/sh /edge-xdp-wrapper.sh"
+        - /sys/fs/bpf:/sys/fs/bpf
+      entrypoint: "/bin/sh /edge-xdp-wrapper.sh"
 
   links:
     # host uplinks to the ToR (unnumbered v6, link-local only). The kind node netns

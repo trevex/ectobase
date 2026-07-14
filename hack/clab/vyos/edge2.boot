@@ -40,6 +40,10 @@ protocols {
             router-id "10.0.9.2"
         }
         peer-group fabric {
+            address-family {
+                ipv6-unicast {
+                }
+            }
             bfd {
             }
             capability {

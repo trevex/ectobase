@@ -45,6 +45,10 @@ protocols {
             router-id "10.0.9.1"
         }
         peer-group fabric {
+            address-family {
+                ipv6-unicast {
+                }
+            }
             bfd {
             }
             capability {
