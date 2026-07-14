@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"sort"
 
@@ -102,10 +103,11 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 	}
 	for _, s := range srcs {
 		if r.dp == nil {
-			break // no dataplane wired (e.g. a unit test only inspecting blocks)
+			continue // no dataplane wired; skip programming (e.g. unit tests that only inspect returned blocks)
 		}
 		if err := r.dp.AddNatSource(ctx, s.Vni, s.SourceIP, s.NatIP, s.PortMin, s.PortMax); err != nil {
-			return nil, nil, nil, fmt.Errorf("add nat source %s->%s vni=%d: %w", s.SourceIP, s.NatIP, s.Vni, err)
+			log.Printf("AddNatSource %s->%s vni=%d: %v", s.SourceIP, s.NatIP, s.Vni, err)
+			continue
 		}
 	}
 	return subs, announce, blocks, nil

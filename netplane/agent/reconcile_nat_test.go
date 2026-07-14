@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"sync"
 	"testing"
 
 	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
@@ -11,10 +10,10 @@ import (
 )
 
 // natRecordingDP records AddNatSource calls (embeds fakeDP for the rest of the
-// Dataplane surface).
+// Dataplane surface). It uses fakeDP's embedded mutex (fakeDP.mu) for all
+// locking — no second mutex so there is no shadowing hazard.
 type natRecordingDP struct {
 	*fakeDP
-	mu      sync.Mutex
 	natSrc  map[string]natSrcCall
 	natSrcN map[string]int
 }
@@ -30,8 +29,8 @@ func newNatRecordingDP() *natRecordingDP {
 }
 
 func (d *natRecordingDP) AddNatSource(_ context.Context, vni uint32, src, nat string, portMin, portMax uint32) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.fakeDP.mu.Lock()
+	defer d.fakeDP.mu.Unlock()
 	d.natSrc[src] = natSrcCall{vni: vni, src: src, nat: nat, portMin: portMin, portMax: portMax}
 	d.natSrcN[src]++
 	return nil
@@ -74,10 +73,10 @@ func TestReconcileProgramsLocalNatSourceAndStagesAnnounce(t *testing.T) {
 	}
 
 	// AddNatSource programmed exactly once with the expected args.
-	dp.mu.Lock()
+	dp.fakeDP.mu.Lock()
 	n := dp.natSrcN["10.0.0.1"]
 	call, ok := dp.natSrc["10.0.0.1"]
-	dp.mu.Unlock()
+	dp.fakeDP.mu.Unlock()
 	if !ok || n != 1 {
 		t.Fatalf("AddNatSource for 10.0.0.1 called %d times (want 1), ok=%v", n, ok)
 	}
