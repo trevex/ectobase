@@ -165,7 +165,11 @@ ip route replace 203.0.113.0/28 via 172.29.0.11 dev clabwan
 
 ---
 
-## Phase C — MILESTONE: NAT44 egress to the real internet
+## Phase C — MILESTONE: NAT44 egress to the real internet — ✅ ACHIEVED (2026-07-14, live, 0% loss)
+
+A source VM (10.0.0.5, k01-worker) reached **1.1.1.1** through hypervisor-SNAT → anycast VyOS edge (`uplink_rx` decap + `wan_rx` return) → clabwan host masquerade → real internet, round-trip. The A1 controller + A2 agent ran live on the fabric (RBAC fix committed: the agent needed `natgateways` read). Three fabric-integration findings recorded in memory [[ns-edge-wan-datapath]]: (1) `wan_rx`'s XDP-redirect needs `xdp_pass` on the ToR edge port (clab veth artifact); (2) `uplink_rx` is eth1-only → HA return needs it on all host uplinks (deferred multi-homing); (3) edge-agent brokering is blocked by the anycast source → wants the PublicVNI edge-underlay identity. Reproducibility (script + topology bake-in) + Phase D (NAT64) are the remaining follow-ups. Original plan below.
+
+
 
 **Files:** Create `test/e2e/egress_test.go` (first half), `config/samples/e2e-natgateway.yaml`.
 
