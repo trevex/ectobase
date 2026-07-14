@@ -28,7 +28,7 @@ Verified 2026-07-14 while planning:
 
 | # | Decision | Rationale |
 |---|----------|-----------|
-| E1 | **Edge = one linux node kernel-forwarding + `xdp-dp --role edge` + agent, both sharing its netns** (`network-mode: container:<edge>`) | Mirrors the k8s DS + the D7 harness (edge kernel forwards egress; `wan_rx` catches returns). No VyOS image dependency; VyOS's role (BGP + forward) is filled by FRR-in-node + the kernel. |
+| E1 | **Edge = a VyOS node + `xdp-dp --role edge` + agent sidecars sharing VyOS's netns** (`network-mode: container:<vyos>`) | **Decided (user, 2026-07-14): keep VyOS** — it is what runs on real hardware (BGP + WAN + firewall + last-hop forward), so the lab stays faithful. The D7 datapath is agnostic: `xdp-dp` just needs to share the netns owning the fab+wan interfaces. VyOS does routing/BGP/forward; `xdp-dp` sidecar does overlay decap/return; the host clabwan bridge does the real-internet masquerade. (A plain-linux+FRR edge was considered and rejected to avoid drifting from hardware.) |
 | E2 | **Masquerade-to-real-internet lives on the HOST clabwan bridge**, keyed on the `nat_ip` source range (icn/sandbox `wan-up.sh` model) | Resolves the plan spike: the edge does NOT masquerade `nat_ip` (so `wan_rx` sees the plain return); the host does the last hop to the real WAN (works over wifi/eth/vpn). |
 | E3 | **No Tayga.** NAT64 is the source hv's `nat64.rs` | The edge is family-agnostic — it only forwards/returns IPv4 `nat_ip`. |
 | E4 | **`nat_ip` pool = `203.0.113.0/28`**, real internet target = a stable public IP (e.g. `1.1.1.1`) + a NAT64 name | Disjoint from any overlay/underlay/test address (fixes the T4 collision). |
