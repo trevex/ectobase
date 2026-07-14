@@ -14,6 +14,18 @@ The D8 egress e2e works, but live bring-up surfaced three loose ends that turn o
 
 **Thesis:** introduce a **PublicVNI** carrying typed *public-prefix records* over the existing routebus reflector, and a **PublicIPPool** IPAM that allocates every public IP (NAT, VIP, floating) + tags each with its owner. Edge identity, LB, and floating IPs then all fall out of the same two primitives.
 
+## 1.5 Prior art (researched + primary-source verified, 2026-07-14)
+
+Two research passes (local ironcore checkout + a web deep-research over metalbond/metalnet/Cilium/OVN-K/kube-vip, 25 claims all 3-0 verified against primary sources) show this design is **the same shape the ironcore lineage already uses** — we're formalizing what metalnet does, plus adding the WAN-edge bridge it lacks.
+
+- **metalbond = our routebus, exactly.** A custom protobuf-over-TCP pub/sub (HELLO/KEEPALIVE/SUBSCRIBE/UNSUBSCRIBE/UPDATE), **per-VNI subscribe**, incremental ADD/REMOVE. Its `NextHop{targetAddress (serving node's underlay), targetVNI, type, natPortRangeFrom/To}` with **`NextHopType ∈ {STANDARD, NAT, LOADBALANCER_TARGET}`** carries routes, NAT, and LB **on the one message via a type tag** — no BGP anywhere. → **Decision:** our routebus should treat NAT/LB/edge/floating as **typed nexthops on one channel**, not parallel RPCs. (We already have `AddRoute`+`AddNeighborNat`; unify under a `kind`/`type` tag rather than growing N message types.) This is `§2`'s `PublicPrefix.Kind` — vindicated.
+- **metalnet already does the PublicVNI + self-advertisement.** Public IPs (VirtualIP/NAT) are announced on a **dedicated PublicVNI** (`r.PublicVNI`, NextHopType STANDARD), separate from tenant VNIs; and each per-node controller **announces ONLY the objects assigned to its own node** (`isAssignedToNode(x, r.NodeName)` early-return), using its **local dpservice underlay as the nexthop**. Materialization dispatches on NextHopType → `CreateLoadBalancerTarget`/`CreateNeighborNat`/`CreateRoute`. → **Decision:** adopt metalnet's model verbatim — dedicated PublicVNI + strict per-node self-advertisement keyed by `(assigned-to-me)` with the local underlay as nexthop. Our A2/A3 agent is already this shape; make the edge one more such node.
+- **Cilium = the IPAM/advertisement decoupling + the anycast-vs-single-owner axis.** `CiliumLoadBalancerIPPool` (`blocks: cidr | start-stop`) **only allocates**; a *separate* feature advertises (BGP-CP for north, L2 locally), chosen per-service via `LoadBalancerClass`. BGP-CP LB = **anycast+ECMP+stateless** (many nodes advertise the same `/32`, governed by `externalTrafficPolicy`); egress-gateway = **single-owner** (one node by nodeSelector, no IPAM — egress IP pre-provisioned). → **Decision:** keep IPAM (allocate) / routebus (distribute) / edge-BGP (advertise) as **three separate stages**, like Cilium; make anycast-vs-single-owner a **per-purpose** choice (below).
+- **ironcore IPAM = the hierarchical pool model.** `Prefix` (root → child via `parentRef`/`parentSelector` + `prefixLength`) + `PrefixAllocation` (scheduler binds to a parent with capacity). A `LoadBalancer(Public)` mints an **ephemeral `/32` Prefix** → one IP. → **Decision:** `PublicIPPool` (§3) borrows this: a root `Prefix` per user-registered public range; NAT/VIP/floating each allocate a child/ephemeral prefix. (The pool's *validity* — that the range is truly WAN-routable/owned — is the **user's responsibility**; we allocate + announce, we don't verify.)
+- **The gap we fill.** metalnet is a hypervisor overlay with **no WAN edge** — nothing re-advertises public IPs externally; that's implicit in "someone peers BGP upstream". **Our contribution is the edge that bridges the internal PublicVNI distribution → external BGP** (northbound only), which is exactly the D8 VyOS edge.
+
+**Anycast vs single-owner (decided per purpose):** *egress* stays **anycast+ECMP+stateless** (our shipped drain-safe model = Cilium BGP-CP LB + Katran/Maglev lineage; the return is drain-safe because NEIGHBOR_NAT + the deterministic port-block map are pure functions). *LB ingress* → **anycast+Maglev+DSR** (spec D3, drain-safe) is the target, **noting metalnet chose single-owner LB** (simpler, stateful, failover-on-reassign) as the conservative alternative if DSR-in-overlay proves hard (spec §10 spike). *Floating IP* is inherently **single-owner** (1:1 to a VM's host).
+
 ## 2. Primitive A — PublicVNI + public-prefix records (routebus)
 
 A reserved VNI (e.g. `VNI 0` or a configured `spec.publicVNI`) that gateways/edges **subscribe** to and the reflector fans out globally (like the existing NAT-block fan-out, which is already global). Records are typed:
@@ -53,6 +65,31 @@ A central **IPAM controller** is the single allocator of public IPs; the determi
 - **Overlay IPAM** (separate, lower priority): optionally allocate NIC overlay IPs from a VPC subnet pool instead of user-specified — reuses the same controller pattern. Underlay `/128`s already auto-allocate (`UnderlayIpam`); no change.
 
 **Why one authority:** NAT IPs, VIPs, and floating IPs are drawn from the *same scarce, BGP-advertised* ranges; independent hand-typing is how you get overlaps and un-advertised addresses. IPAM also produces the exact prefix set the edge/VyOS must **BGP-announce to the WAN** (close the loop: IPAM allocation → PublicPrefix record → edge announces `/32` to the WAN).
+
+## 3.5 The materialization flow (end-to-end, zero hardcoding)
+
+Putting A + B together — the path from "user registers a pool" to "the WAN can reach the IP", with **no address hardcoded anywhere** and **BGP only at the edge**:
+
+```
+1. USER            registers PublicIPPool{ranges} (validity is the user's responsibility)
+                   + a NATGateway / LoadBalancer / VirtualIP referencing it.
+2. IPAM controller allocates a public IP (child/ephemeral Prefix) → writes it to the object's
+                   .status, and decides the OWNER: a source hypervisor (distributed NAT), the
+                   edge fleet (LB VIP / NAT-IP advertisement), or a specific VM's host (floating).
+3. OWNER agent     (self-advertisement, metalnet-style) announces a typed PublicPrefix on the
+                   PublicVNI over routebus, nexthop = its OWN underlay:
+                     - hypervisor: NAT_IP block (it does the SNAT locally, distributed)
+                     - edge:       EDGE_UNDERLAY (anycast) + the NAT_IP/LB_VIP ranges it fronts
+4. SUBSCRIBERS     every node subscribed to the PublicVNI installs the record into its eBPF maps
+                   (dispatch on Kind → NEIGHBOR_NAT / route / Maglev), exactly like metalnet's
+                   NextHopType dispatch. Source hvs learn the (anycast) edge nexthop → their
+                   external default route's nexthop is DISCOVERED, not configured.
+5. EDGE            (the one place BGP appears) sees the LB_VIP / NAT_IP / FLOATING_IP records it
+                   should expose, ASSIGNS each to its loopback, and BGP-announces it NORTHBOUND to
+                   the WAN so returns reach the fleet. Internal reachability never uses BGP.
+```
+
+This is precisely the user's model: *IPAM assigns NAT/LB IPs to (any) owner node; by joining the PublicVNI the edge learns them and materializes them on its loopback + BGP.* The edge is just another self-advertising subscriber that additionally does the north-facing BGP bridge. Replaces every current hardcode: `NATGateway.Spec.EdgeUnderlay`, the `grpcurl` edge programming, and the hand-typed `PublicIPs` list.
 
 ## 4. External L4 LB — how it composes
 
