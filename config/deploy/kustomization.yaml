@@ -9,6 +9,7 @@ resources:
   - xdp-dp.yaml
   - agent.yaml
   - agent-kubeconfig.yaml
+  - controller.yaml
   # CRDs (net.ectobase.dev group) required by the agent's watches. Referenced as
   # a directory (config/crd has its own kustomization.yaml aggregating the bases)
   # so kustomize's path-safety rules allow it. CRDs can also be applied separately

@@ -19,6 +19,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // defaultPortsPerSource is the block size used when Spec.PortsPerSource is nil.
@@ -93,4 +95,35 @@ func (r *Reconciler) Sync(ctx context.Context, natgw *netv1.NATGateway) error {
 		return fmt.Errorf("update natgateway status: %w", err)
 	}
 	return nil
+}
+
+// SetupWithManager registers the Reconciler with the controller-runtime Manager.
+// Any NATGateway change is reconciled directly; any NetworkInterface change
+// re-triggers all NATGateways in the same namespace, because the allocation
+// table is computed over all NICs in the VPC.
+func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&netv1.NATGateway{}).
+		Watches(&netv1.NetworkInterface{}, handler.EnqueueRequestsFromMapFunc(r.natgwsForNIC)).
+		Complete(r)
+}
+
+// natgwsForNIC maps a NetworkInterface event to reconcile requests for every
+// NATGateway in the same namespace. Any NIC add/change may shift the
+// allocation table, so all gateways in that namespace must re-sync.
+func (r *Reconciler) natgwsForNIC(ctx context.Context, obj client.Object) []reconcile.Request {
+	var list netv1.NATGatewayList
+	if err := r.Client.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(list.Items))
+	for i := range list.Items {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Namespace: list.Items[i].Namespace,
+				Name:      list.Items[i].Name,
+			},
+		})
+	}
+	return reqs
 }

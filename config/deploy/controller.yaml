@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netplane-controller
+  namespace: ectobase-system
+  labels:
+    app.kubernetes.io/name: netplane-controller
+    app.kubernetes.io/part-of: netplane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: netplane-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: netplane-controller
+        app.kubernetes.io/part-of: netplane
+    spec:
+      serviceAccountName: netplane-controller
+      # The controller is a singleton reconciler writing NATGateway.Status. It
+      # runs on the control-plane node alongside the reflector so it can reach the
+      # API server without a ClusterIP (hostNetwork, same reasoning as the reflector).
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: controller
+          image: ghcr.io/trevex/netplane:dev
+          imagePullPolicy: IfNotPresent
+          command: ["controller"]
