@@ -7,13 +7,15 @@ pub mod pb {
 }
 use pb::dataplane_node_server::DataplaneNode;
 use pb::{
-    AddLbBackendRequest, AddLbBackendResponse, AddLbVipRequest, AddLbVipResponse,
-    AddNatSourceRequest, AddNatSourceResponse, AddNeighborNatRequest, AddNeighborNatResponse,
-    AddRouteRequest, AddRouteResponse, AttachInterfaceRequest, AttachInterfaceResponse,
-    ConfigureNetworkRequest, ConfigureNetworkResponse, DelLbBackendRequest, DelLbBackendResponse,
-    DelLbVipRequest, DelLbVipResponse, DetachInterfaceRequest, DetachInterfaceResponse,
-    WithdrawNatSourceRequest, WithdrawNatSourceResponse, WithdrawNeighborNatRequest,
-    WithdrawNeighborNatResponse, WithdrawRouteRequest, WithdrawRouteResponse,
+    AddFwRuleRequest, AddFwRuleResponse, AddLbBackendRequest, AddLbBackendResponse,
+    AddLbVipRequest, AddLbVipResponse, AddNatSourceRequest, AddNatSourceResponse,
+    AddNeighborNatRequest, AddNeighborNatResponse, AddRouteRequest, AddRouteResponse,
+    AttachInterfaceRequest, AttachInterfaceResponse, ConfigureNetworkRequest,
+    ConfigureNetworkResponse, DelFwRuleRequest, DelFwRuleResponse, DelLbBackendRequest,
+    DelLbBackendResponse, DelLbVipRequest, DelLbVipResponse, DetachInterfaceRequest,
+    DetachInterfaceResponse, WithdrawNatSourceRequest, WithdrawNatSourceResponse,
+    WithdrawNeighborNatRequest, WithdrawNeighborNatResponse, WithdrawRouteRequest,
+    WithdrawRouteResponse,
 };
 
 use crate::attach::AttachState;
@@ -410,6 +412,99 @@ impl DataplaneNode for NodeService {
         println!("LB backend del id={} backend={}", r.id, r.backend_underlay);
         Ok(Response::new(DelLbBackendResponse {}))
     }
+
+    async fn add_fw_rule(
+        &self,
+        req: Request<AddFwRuleRequest>,
+    ) -> Result<Response<AddFwRuleResponse>, Status> {
+        use xdp_dp_common::{FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS};
+        let attach = self
+            .attach
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
+            .clone();
+        let r = req.into_inner();
+        let (src_ip, src_mask) =
+            parse_fw_cidr(&r.src_cidr).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let (dst_ip, dst_mask) =
+            parse_fw_cidr(&r.dst_cidr).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let proto = u8::try_from(r.proto).map_err(|_| Status::invalid_argument("proto > 255"))?;
+        let dst_port_min =
+            port_u16(r.dst_port_min).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        // dst_port_max of 0 means "unbounded" -> 65535 (0/0 = any port).
+        let dst_port_max = if r.dst_port_max == 0 {
+            65535u16
+        } else {
+            port_u16(r.dst_port_max).map_err(|e| Status::invalid_argument(e.to_string()))?
+        };
+        let rule = xdp_dp_common::FwRule {
+            src_ip,
+            src_mask,
+            dst_ip,
+            dst_mask,
+            src_port_min: 0,
+            src_port_max: 65535,
+            dst_port_min,
+            dst_port_max,
+            icmp_type: 0xffff,
+            icmp_code: 0xffff,
+            proto,
+            action: if r.allow {
+                FW_ACTION_ACCEPT
+            } else {
+                FW_ACTION_DROP
+            },
+            direction: if r.egress {
+                FW_DIR_EGRESS
+            } else {
+                FW_DIR_INGRESS
+            },
+            enabled: 1,
+        };
+        let iface = r.interface_id.clone().into_bytes();
+        let rule_id = r.rule_id.clone().into_bytes();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            attach.control.add_fw_rule(&iface, rule_id, rule)
+        })
+        .await
+        .map_err(|e| Status::internal(format!("add_fw_rule task panicked: {e}")))?
+        .map_err(|e| Status::internal(e.to_string()))?;
+        println!(
+            "FW rule add iface={} id={} src={} dst={} proto={} dports={}..={} allow={} egress={}",
+            r.interface_id,
+            r.rule_id,
+            r.src_cidr,
+            r.dst_cidr,
+            r.proto,
+            dst_port_min,
+            dst_port_max,
+            r.allow,
+            r.egress
+        );
+        Ok(Response::new(AddFwRuleResponse {}))
+    }
+
+    async fn del_fw_rule(
+        &self,
+        req: Request<DelFwRuleRequest>,
+    ) -> Result<Response<DelFwRuleResponse>, Status> {
+        let attach = self
+            .attach
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
+            .clone();
+        let r = req.into_inner();
+        let iface = r.interface_id.clone().into_bytes();
+        let rule_id = r.rule_id.clone().into_bytes();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+            attach.control.del_fw_rule(&iface, &rule_id)
+        })
+        .await
+        .map_err(|e| Status::internal(format!("del_fw_rule task panicked: {e}")))?
+        .map_err(|e| Status::internal(e.to_string()))?;
+        println!("FW rule del iface={} id={}", r.interface_id, r.rule_id);
+        Ok(Response::new(DelFwRuleResponse {}))
+    }
 }
 
 /// Resolve a locally-attached interface id from `(vni, ipv4)`. `create_nat`/`delete_nat` are keyed
@@ -468,6 +563,30 @@ fn parse_prefix(cidr: &str) -> anyhow::Result<(bool, [u8; 16], u32)> {
             Ok((true, buf, len))
         }
     }
+}
+
+/// Parse an IPv4 firewall CIDR (e.g. "10.0.0.0/24", "0.0.0.0/0") into `(ip, mask)`. An empty
+/// string means "any" (0.0.0.0/0). A bare address without "/len" is treated as a /32 host match.
+fn parse_fw_cidr(cidr: &str) -> anyhow::Result<([u8; 4], [u8; 4])> {
+    if cidr.is_empty() {
+        return Ok(([0u8; 4], [0u8; 4]));
+    }
+    let (addr, len) = match cidr.split_once('/') {
+        Some((a, l)) => (
+            a,
+            l.parse::<u32>()
+                .map_err(|_| anyhow::anyhow!("bad prefix len in {cidr:?}"))?,
+        ),
+        None => (cidr, 32u32),
+    };
+    if len > 32 {
+        anyhow::bail!("v4 prefix len {len} > 32 in {cidr:?}");
+    }
+    let ip: std::net::Ipv4Addr = addr
+        .parse()
+        .map_err(|_| anyhow::anyhow!("bad ipv4 address in {cidr:?}"))?;
+    let mask: u32 = if len == 0 { 0 } else { u32::MAX << (32 - len) };
+    Ok((ip.octets(), mask.to_be_bytes()))
 }
 
 /// Parse an IPv6 nexthop underlay address into 16 bytes.

@@ -38,6 +38,12 @@ service DataplaneNode {
   // DelLbBackend removes a single backend underlay /128 from a registered LB VIP and rebuilds its
   // Maglev table.
   rpc DelLbBackend(DelLbBackendRequest) returns (DelLbBackendResponse);
+  // AddFwRule programs a single per-interface firewall rule (ingress or egress). A LoadBalancer
+  // service opens its ports on the backend by adding INGRESS ALLOW rules here; LB/service traffic
+  // is NOT exempt from the firewall.
+  rpc AddFwRule(AddFwRuleRequest) returns (AddFwRuleResponse);
+  // DelFwRule removes a per-interface firewall rule by id.
+  rpc DelFwRule(DelFwRuleRequest) returns (DelFwRuleResponse);
 }
 
 // A (port, proto) load-balancer service tuple. proto is the IP protocol number (6=TCP, 17=UDP,
@@ -72,6 +78,25 @@ message DelLbBackendRequest {
   string backend_underlay = 2; // backend node underlay IPv6 /128
 }
 message DelLbBackendResponse {}
+
+message AddFwRuleRequest {
+  string interface_id = 1;    // target interface (as in AttachInterface)
+  string rule_id = 2;         // stable rule id (used for DelFwRule)
+  string src_cidr = 3;        // source IPv4 CIDR, e.g. "0.0.0.0/0"; empty = any
+  string dst_cidr = 4;        // destination IPv4 CIDR; empty = any
+  uint32 proto = 5;           // IP protocol number (6=TCP, 17=UDP, 1=ICMP); 0 = any
+  uint32 dst_port_min = 6;    // inclusive destination-port range low; 0..=65535 (0/0 = any)
+  uint32 dst_port_max = 7;    // inclusive destination-port range high; 0 => treated as 65535
+  bool allow = 8;             // true = accept, false = drop
+  bool egress = 9;            // true = egress rule, false = ingress rule
+}
+message AddFwRuleResponse {}
+
+message DelFwRuleRequest {
+  string interface_id = 1;
+  string rule_id = 2;
+}
+message DelFwRuleResponse {}
 
 message AttachInterfaceRequest {
   string interface_id = 1; // stable id (e.g. VMI uid + iface name)

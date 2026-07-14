@@ -32,6 +32,8 @@ const (
 	DataplaneNode_AddLbBackend_FullMethodName        = "/dataplane.v1.DataplaneNode/AddLbBackend"
 	DataplaneNode_DelLbVip_FullMethodName            = "/dataplane.v1.DataplaneNode/DelLbVip"
 	DataplaneNode_DelLbBackend_FullMethodName        = "/dataplane.v1.DataplaneNode/DelLbBackend"
+	DataplaneNode_AddFwRule_FullMethodName           = "/dataplane.v1.DataplaneNode/AddFwRule"
+	DataplaneNode_DelFwRule_FullMethodName           = "/dataplane.v1.DataplaneNode/DelFwRule"
 )
 
 // DataplaneNodeClient is the client API for DataplaneNode service.
@@ -72,6 +74,12 @@ type DataplaneNodeClient interface {
 	// DelLbBackend removes a single backend underlay /128 from a registered LB VIP and rebuilds its
 	// Maglev table.
 	DelLbBackend(ctx context.Context, in *DelLbBackendRequest, opts ...grpc.CallOption) (*DelLbBackendResponse, error)
+	// AddFwRule programs a single per-interface firewall rule (ingress or egress). A LoadBalancer
+	// service opens its ports on the backend by adding INGRESS ALLOW rules here; LB/service traffic
+	// is NOT exempt from the firewall.
+	AddFwRule(ctx context.Context, in *AddFwRuleRequest, opts ...grpc.CallOption) (*AddFwRuleResponse, error)
+	// DelFwRule removes a per-interface firewall rule by id.
+	DelFwRule(ctx context.Context, in *DelFwRuleRequest, opts ...grpc.CallOption) (*DelFwRuleResponse, error)
 }
 
 type dataplaneNodeClient struct {
@@ -212,6 +220,26 @@ func (c *dataplaneNodeClient) DelLbBackend(ctx context.Context, in *DelLbBackend
 	return out, nil
 }
 
+func (c *dataplaneNodeClient) AddFwRule(ctx context.Context, in *AddFwRuleRequest, opts ...grpc.CallOption) (*AddFwRuleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddFwRuleResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_AddFwRule_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataplaneNodeClient) DelFwRule(ctx context.Context, in *DelFwRuleRequest, opts ...grpc.CallOption) (*DelFwRuleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DelFwRuleResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_DelFwRule_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DataplaneNodeServer is the server API for DataplaneNode service.
 // All implementations must embed UnimplementedDataplaneNodeServer
 // for forward compatibility.
@@ -250,6 +278,12 @@ type DataplaneNodeServer interface {
 	// DelLbBackend removes a single backend underlay /128 from a registered LB VIP and rebuilds its
 	// Maglev table.
 	DelLbBackend(context.Context, *DelLbBackendRequest) (*DelLbBackendResponse, error)
+	// AddFwRule programs a single per-interface firewall rule (ingress or egress). A LoadBalancer
+	// service opens its ports on the backend by adding INGRESS ALLOW rules here; LB/service traffic
+	// is NOT exempt from the firewall.
+	AddFwRule(context.Context, *AddFwRuleRequest) (*AddFwRuleResponse, error)
+	// DelFwRule removes a per-interface firewall rule by id.
+	DelFwRule(context.Context, *DelFwRuleRequest) (*DelFwRuleResponse, error)
 	mustEmbedUnimplementedDataplaneNodeServer()
 }
 
@@ -298,6 +332,12 @@ func (UnimplementedDataplaneNodeServer) DelLbVip(context.Context, *DelLbVipReque
 }
 func (UnimplementedDataplaneNodeServer) DelLbBackend(context.Context, *DelLbBackendRequest) (*DelLbBackendResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DelLbBackend not implemented")
+}
+func (UnimplementedDataplaneNodeServer) AddFwRule(context.Context, *AddFwRuleRequest) (*AddFwRuleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddFwRule not implemented")
+}
+func (UnimplementedDataplaneNodeServer) DelFwRule(context.Context, *DelFwRuleRequest) (*DelFwRuleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DelFwRule not implemented")
 }
 func (UnimplementedDataplaneNodeServer) mustEmbedUnimplementedDataplaneNodeServer() {}
 func (UnimplementedDataplaneNodeServer) testEmbeddedByValue()                       {}
@@ -554,6 +594,42 @@ func _DataplaneNode_DelLbBackend_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DataplaneNode_AddFwRule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddFwRuleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneNodeServer).AddFwRule(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneNode_AddFwRule_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneNodeServer).AddFwRule(ctx, req.(*AddFwRuleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataplaneNode_DelFwRule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DelFwRuleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneNodeServer).DelFwRule(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneNode_DelFwRule_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneNodeServer).DelFwRule(ctx, req.(*DelFwRuleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DataplaneNode_ServiceDesc is the grpc.ServiceDesc for DataplaneNode service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -612,6 +688,14 @@ var DataplaneNode_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DelLbBackend",
 			Handler:    _DataplaneNode_DelLbBackend_Handler,
+		},
+		{
+			MethodName: "AddFwRule",
+			Handler:    _DataplaneNode_AddFwRule_Handler,
+		},
+		{
+			MethodName: "DelFwRule",
+			Handler:    _DataplaneNode_DelFwRule_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
