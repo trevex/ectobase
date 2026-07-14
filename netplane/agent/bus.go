@@ -18,6 +18,9 @@ import (
 type Dataplane interface {
 	AddRoute(ctx context.Context, vni uint32, prefix, nexthop string, external bool) error
 	WithdrawRoute(ctx context.Context, vni uint32, prefix string) error
+	// AddNatSource programs LOCAL egress SNAT: (vni, sourceIP) is SNATed onto
+	// natIP:[portMin,portMax). Delete-then-add, so re-calling is idempotent.
+	AddNatSource(ctx context.Context, vni uint32, sourceIP, natIP string, portMin, portMax uint32) error
 	// AddNeighborNat installs a return-route for a NAT block OWNED BY ANOTHER node:
 	// a return landing here for natIp:[min,max) re-routes to ownerUnderlay.
 	AddNeighborNat(ctx context.Context, natIp string, min, max uint32, ownerUnderlay string, vni uint32) error
@@ -45,7 +48,7 @@ func NewBus(nodeID, underlay string, dp Dataplane) *Bus {
 
 // Run opens a Session, sends Hello + the initial subscriptions + announcements,
 // then pumps RouteUpdates into the dataplane until ctx is done or the stream errors.
-func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, subVNIs []uint32, announce []Route) error {
+func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, subVNIs []uint32, announce []Route, announceNat []NatBlock) error {
 	stream, err := cc.Session(ctx)
 	if err != nil {
 		return err
@@ -64,6 +67,11 @@ func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, subVNIs []uint32,
 	}
 	for _, r := range announce {
 		if err := b.announce(stream, r); err != nil {
+			return err
+		}
+	}
+	for _, blk := range announceNat {
+		if err := b.AnnounceNat(stream, blk); err != nil {
 			return err
 		}
 	}
@@ -149,6 +157,12 @@ func (d dpAdapter) AddRoute(ctx context.Context, vni uint32, prefix, nexthop str
 }
 func (d dpAdapter) WithdrawRoute(ctx context.Context, vni uint32, prefix string) error {
 	_, err := d.c.WithdrawRoute(ctx, &dpv1.WithdrawRouteRequest{Vni: vni, Prefix: prefix})
+	return err
+}
+func (d dpAdapter) AddNatSource(ctx context.Context, vni uint32, sourceIP, natIP string, portMin, portMax uint32) error {
+	_, err := d.c.AddNatSource(ctx, &dpv1.AddNatSourceRequest{
+		Vni: vni, SourceIp: sourceIP, NatIp: natIP, PortMin: portMin, PortMax: portMax,
+	})
 	return err
 }
 func (d dpAdapter) AddNeighborNat(ctx context.Context, natIp string, min, max uint32, ownerUnderlay string, vni uint32) error {

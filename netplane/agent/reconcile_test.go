@@ -41,7 +41,7 @@ func TestDesiredAnnouncesLocalInterfaces(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(vpc, local, remote).Build()
 	r := &Reconciler{client: c, nodeID: "nodeA", underlay: "fd00::a"}
 
-	subs, ann, err := r.Desired(context.Background())
+	subs, ann, _, err := r.Desired(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

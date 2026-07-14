@@ -19,6 +19,7 @@ type Reconciler struct {
 	client   client.Client
 	nodeID   string
 	underlay string
+	dp       Dataplane // local xdp-dp; used to program egress SNAT sources
 }
 
 // NewReconciler builds a Reconciler from a kubeconfig path (empty = in-cluster).
@@ -42,19 +43,24 @@ func NewReconciler(kubeconfig, nodeID string) (*Reconciler, error) {
 // SetUnderlay records this node's underlay IPv6 (used as the announced nexthop).
 func (r *Reconciler) SetUnderlay(underlay string) { r.underlay = underlay }
 
-// Desired returns the VNIs to subscribe to and the local routes to announce for
-// this node, snapshotting the current NetworkInterface set.
-func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Route, err error) {
+// SetDataplane wires the local xdp-dp so the reconciler can program egress SNAT.
+func (r *Reconciler) SetDataplane(dp Dataplane) { r.dp = dp }
+
+// Desired returns the VNIs to subscribe to, the local routes to announce, and
+// the local egress-NAT blocks to announce for this node, snapshotting the current
+// NetworkInterface set. As a side effect it programs local egress SNAT sources on
+// the dataplane (idempotent: AddNatSource delete-then-adds).
+func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Route, announceNat []NatBlock, err error) {
 	var nics netv1.NetworkInterfaceList
 	if err := r.client.List(ctx, &nics); err != nil {
-		return nil, nil, fmt.Errorf("list networkinterfaces: %w", err)
+		return nil, nil, nil, fmt.Errorf("list networkinterfaces: %w", err)
 	}
 	vniSet := map[uint32]struct{}{}
 	for i := range nics.Items {
 		nic := &nics.Items[i]
 		vni, err := r.vniFor(ctx, nic)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if vni == 0 {
 			continue // VPC not yet allocated a VNI; skip until it is
@@ -75,7 +81,7 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 		for _, ip := range nic.Spec.IPs {
 			prefix, err := hostPrefix(ip)
 			if err != nil {
-				return nil, nil, fmt.Errorf("nic %s/%s ip %q: %w", nic.Namespace, nic.Name, ip, err)
+				return nil, nil, nil, fmt.Errorf("nic %s/%s ip %q: %w", nic.Namespace, nic.Name, ip, err)
 			}
 			// Endpoint host routes are internal; egress-NAT default routes (external=true)
 			// are distributed separately by a controller.
@@ -86,7 +92,23 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 		subs = append(subs, v)
 	}
 	sort.Slice(subs, func(i, j int) bool { return subs[i] < subs[j] })
-	return subs, announce, nil
+
+	// Egress NAT: program the LOCAL SNAT sources for allocations whose source is a
+	// NIC on this node, and return the matching blocks for the caller to announce on
+	// the routebus (so peers learn the neighbor-nat return route to us).
+	srcs, blocks, err := DesiredNat(ctx, r.client, r.nodeID, r.underlay)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	for _, s := range srcs {
+		if r.dp == nil {
+			break // no dataplane wired (e.g. a unit test only inspecting blocks)
+		}
+		if err := r.dp.AddNatSource(ctx, s.Vni, s.SourceIP, s.NatIP, s.PortMin, s.PortMax); err != nil {
+			return nil, nil, nil, fmt.Errorf("add nat source %s->%s vni=%d: %w", s.SourceIP, s.NatIP, s.Vni, err)
+		}
+	}
+	return subs, announce, blocks, nil
 }
 
 // vniFor resolves an interface's VNI: prefer status.vni, else the referenced VPC's status.vni.

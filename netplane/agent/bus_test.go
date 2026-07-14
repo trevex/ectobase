@@ -62,6 +62,9 @@ func (f *fakeDP) AddRoute(_ context.Context, vni uint32, prefix, nexthop string,
 	f.external[key(vni, prefix)] = external
 	return nil
 }
+func (f *fakeDP) AddNatSource(_ context.Context, _ uint32, _, _ string, _, _ uint32) error {
+	return nil
+}
 func (f *fakeDP) WithdrawRoute(_ context.Context, vni uint32, prefix string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -101,12 +104,12 @@ func TestAgentLearnsRemoteRouteAndProgramsDataplane(t *testing.T) {
 	// Agent A announces one local route (no dataplane needed for the announcer here).
 	dpA := newFakeDP()
 	busA := NewBus("nodeA", "fd00::a", dpA)
-	go busA.Run(ctx, cl, nil, []Route{{Vni: 100, Prefix: "10.0.0.1/32", Nexthop: "fd00::a"}})
+	go busA.Run(ctx, cl, nil, []Route{{Vni: 100, Prefix: "10.0.0.1/32", Nexthop: "fd00::a"}}, nil)
 
 	// Agent B subscribes to vni 100 and must program A's route on its dataplane.
 	dpB := newFakeDP()
 	busB := NewBus("nodeB", "fd00::b", dpB)
-	go busB.Run(ctx, cl, []uint32{100}, nil)
+	go busB.Run(ctx, cl, []uint32{100}, nil, nil)
 
 	// Poll for the learned route.
 	deadline := time.Now().Add(3 * time.Second)

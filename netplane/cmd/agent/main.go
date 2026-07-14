@@ -62,17 +62,18 @@ func main() {
 		log.Fatalf("reconciler: %v", err)
 	}
 	r.SetUnderlay(*underlay)
+	r.SetDataplane(dp)
 	// Reconcile the desired announcements/subscriptions for this node, then run the
 	// bus session. On disconnect, retry with backoff (the reflector fast-withdrew us).
 	for {
-		subs, ann, err := r.Desired(ctx)
+		subs, ann, annNat, err := r.Desired(ctx)
 		if err != nil {
 			log.Printf("reconcile: %v", err)
 			time.Sleep(2 * time.Second)
 			continue
 		}
 		bus := agent.NewBus(*nodeID, *underlay, dp)
-		if err := bus.Run(ctx, rb, subs, ann); err != nil {
+		if err := bus.Run(ctx, rb, subs, ann, annNat); err != nil {
 			log.Printf("bus session ended: %v; reconnecting", err)
 		}
 		time.Sleep(time.Second)
