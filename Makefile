@@ -60,6 +60,12 @@ NETPLANE_IMAGE ?= ghcr.io/trevex/netplane
 image-netplane: ## Build the netplane (reflector+agent) image
 	docker build $(if $(DOCKER_BUILD_NET),--network=$(DOCKER_BUILD_NET)) -f Dockerfile.netplane -t $(NETPLANE_IMAGE):$(TAG) .
 
+KINDNODE_IMAGE ?= kindest/node-fabric
+.PHONY: image-kindnode
+image-kindnode: ## Build the fabric kind-node image (node-IP = pre-kubelet BGP /64)
+	docker build $(if $(DOCKER_BUILD_NET),--network=$(DOCKER_BUILD_NET)) \
+		-t $(KINDNODE_IMAGE):$(TAG) hack/kind-fabric-node
+
 # --- quality ---------------------------------------------------------------
 .PHONY: fmt
 fmt: ## Format all Rust code

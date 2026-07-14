@@ -3,7 +3,7 @@
 #
 # Spike scope: identity only (dummy0 + node-ip). FRR/BGP is added in a later
 # layer once the node-ip-survives-restart property is proven.
-ARG BASE=kindest/node:v1.35.0
+ARG BASE=kindest/node:v1.35.0@sha256:452d707d4862f52530247495d180205e029056831160e22870e37e3f6c1ac31f
 FROM ${BASE}
 
 # FRR makes the node its OWN BGP speaker (replacing the shared-netns sidecar): it
