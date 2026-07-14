@@ -41,7 +41,16 @@ Two realism layers were separated:
 3. **clab topology:** keep the ToR(s) + `eth1` (and later `eth2`) links; **drop the host-frr sidecars** (FRR now runs in the node — the node is genuinely the speaker) and **drop the dummy0 `clab exec`** (the node's own unit owns dummy0 pre-kubelet). The per-node `/64` moves from clab `exec` to kind `extraMounts` so it is known at systemd boot, before any clab post-boot step.
 4. **xdp-dp:** unchanged — it infers the `/64` from dummy0 (now set pre-kubelet) and the node-IP is finally consistent with the dataplane underlay.
 
-Optional follow-on (separate): **dual-homing + ECMP** — add `eth2`+`sw2`+ a spine, the node's FRR peers both and `maximum-paths`; and **xdp-dp egress ECMP** (multi-uplink `LOCAL` set + flow-hash + failover), since today `EncapParams.uplink_ifindex` is a single uplink.
+Optional follow-on (separate): **dual-homing + ECMP** — add `eth2`+`sw2` (dual-home to two ToRs, no spine interlink — redundancy IS the dual-homing, per the icn/sandbox reference fabric), the node's FRR peers both, `bestpath as-path multipath-relax` + `maximum-paths` + `fabric-fast` BFD.
+
+**How dpservice does the datapath side (source-verified — simpler than a full ECMP overhaul):**
+- Binds **two independent PFs** (`--pf0` owner, `--pf1` peer), **not a DPDK bond**.
+- The route carries a **single** underlay next-hop (the *remote* hypervisor's underlay IPv6 = the IPinIPv6 outer dst). Local uplink choice is **decoupled from the route** — our `routebus`/`AddRoute` model needs **no change**.
+- Egress PF = **per-flow** `dp_multipath_get_pf(flow_hash)`: a 10-slot WCMP table. **Default `wcmp=100` = pf0-only + carrier failover to pf1** (active/standby); WCMP opt-in for active-active. (Caveat: upstream applies the selector only in `ipv4_lookup_node`, not `ipv6_lookup_node` — v6-inner is effectively pf0.)
+- **Per-PF next-hop MAC from the host kernel IPv6 neighbor table** (`RTM_GETNEIGH` per `if_index`) — dpservice does no uplink ND; the kernel learns the ToR via RA. **This is exactly what our xdp-dp DS wrapper already does** (`ip -6 neigh … router`) for the single-uplink case.
+- Failover = DPDK link-status (carrier); no internal BFD (host routing stack owns BFD).
+
+**xdp-dp mapping:** grow `LOCAL` from one uplink to **two** `{ifindex, uplink_mac, gateway_mac, up}` + a 10-slot WCMP table; egress picks `idx = wcmp[hash % 10]` (or pf0-else-pf1), `bpf_redirect(uplink[idx])`, writes `gateway_mac[idx]`. Userspace: a netlink watcher keeping each port's ToR MAC + carrier live (the wrapper already does the one-shot version). Default active/standby is trivial; WCMP active-active is the opt-in refinement. Sources: ironcore-dev/dpservice `src/dp_multi_path.c`, `dp_conf_opts.c` (`--pf0/--pf1/--wcmp`), `nodes/ip{v4,v6}_lookup_node.c`, `nodes/ipip_encap_node.c`, `dp_netlink.c` (`dp_nl_get_pf_neigh_mac`), `dp_lpm.h` (single-nh route).
 
 ## Spike plan (do first, before a full plan)
 Prove the risky mechanics on **one** custom kind node (no clab needed initially):
