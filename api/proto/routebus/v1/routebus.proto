@@ -25,6 +25,8 @@ message ClientMsg {
     Announce announce = 4;
     Withdraw withdraw = 5;
     KeepAlive keep_alive = 6;
+    AnnounceNat announce_nat = 7;   // announce a deterministic egress NAT block (global, not per-VNI)
+    WithdrawNat withdraw_nat = 8;
   }
 }
 
@@ -34,6 +36,7 @@ message ServerMsg {
     RouteUpdate route_update = 1;
     EndOfRIB end_of_rib = 2;     // full-table-for-a-vni delivered; safe to prune
     KeepAlive keep_alive = 3;
+    NatUpdate nat_update = 4;     // a global NAT block was announced/withdrawn
   }
 }
 
@@ -65,3 +68,30 @@ message RouteUpdate {
 }
 message EndOfRIB { uint32 vni = 1; }
 message KeepAlive {}
+
+// AnnounceNat announces this node's ownership of a deterministic egress SNAT
+// block: overlay source_ip (in vni) is SNATed onto nat_ip:[port_min,port_max)
+// and the owning node's underlay is owner_underlay. NAT blocks are GLOBAL: every
+// node learns every block so a return that lands on the wrong node re-routes.
+message AnnounceNat {
+  uint32 vni = 1;
+  string source_ip = 2;
+  string nat_ip = 3;
+  uint32 port_min = 4;
+  uint32 port_max = 5;
+  string owner_underlay = 6;
+}
+message WithdrawNat {
+  string nat_ip = 1;
+  uint32 port_min = 2;
+  uint32 port_max = 3;
+}
+message NatUpdate {
+  uint32 vni = 1;
+  string source_ip = 2;
+  string nat_ip = 3;
+  uint32 port_min = 4;
+  uint32 port_max = 5;
+  string owner_underlay = 6;
+  RouteOp op = 7;
+}

@@ -81,6 +81,8 @@ type ClientMsg struct {
 	//	*ClientMsg_Announce
 	//	*ClientMsg_Withdraw
 	//	*ClientMsg_KeepAlive
+	//	*ClientMsg_AnnounceNat
+	//	*ClientMsg_WithdrawNat
 	Msg           isClientMsg_Msg `protobuf_oneof:"msg"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -177,6 +179,24 @@ func (x *ClientMsg) GetKeepAlive() *KeepAlive {
 	return nil
 }
 
+func (x *ClientMsg) GetAnnounceNat() *AnnounceNat {
+	if x != nil {
+		if x, ok := x.Msg.(*ClientMsg_AnnounceNat); ok {
+			return x.AnnounceNat
+		}
+	}
+	return nil
+}
+
+func (x *ClientMsg) GetWithdrawNat() *WithdrawNat {
+	if x != nil {
+		if x, ok := x.Msg.(*ClientMsg_WithdrawNat); ok {
+			return x.WithdrawNat
+		}
+	}
+	return nil
+}
+
 type isClientMsg_Msg interface {
 	isClientMsg_Msg()
 }
@@ -205,6 +225,14 @@ type ClientMsg_KeepAlive struct {
 	KeepAlive *KeepAlive `protobuf:"bytes,6,opt,name=keep_alive,json=keepAlive,proto3,oneof"`
 }
 
+type ClientMsg_AnnounceNat struct {
+	AnnounceNat *AnnounceNat `protobuf:"bytes,7,opt,name=announce_nat,json=announceNat,proto3,oneof"` // announce a deterministic egress NAT block (global, not per-VNI)
+}
+
+type ClientMsg_WithdrawNat struct {
+	WithdrawNat *WithdrawNat `protobuf:"bytes,8,opt,name=withdraw_nat,json=withdrawNat,proto3,oneof"`
+}
+
 func (*ClientMsg_Hello) isClientMsg_Msg() {}
 
 func (*ClientMsg_Subscribe) isClientMsg_Msg() {}
@@ -217,6 +245,10 @@ func (*ClientMsg_Withdraw) isClientMsg_Msg() {}
 
 func (*ClientMsg_KeepAlive) isClientMsg_Msg() {}
 
+func (*ClientMsg_AnnounceNat) isClientMsg_Msg() {}
+
+func (*ClientMsg_WithdrawNat) isClientMsg_Msg() {}
+
 // Reflector -> agent.
 type ServerMsg struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -225,6 +257,7 @@ type ServerMsg struct {
 	//	*ServerMsg_RouteUpdate
 	//	*ServerMsg_EndOfRib
 	//	*ServerMsg_KeepAlive
+	//	*ServerMsg_NatUpdate
 	Msg           isServerMsg_Msg `protobuf_oneof:"msg"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -294,6 +327,15 @@ func (x *ServerMsg) GetKeepAlive() *KeepAlive {
 	return nil
 }
 
+func (x *ServerMsg) GetNatUpdate() *NatUpdate {
+	if x != nil {
+		if x, ok := x.Msg.(*ServerMsg_NatUpdate); ok {
+			return x.NatUpdate
+		}
+	}
+	return nil
+}
+
 type isServerMsg_Msg interface {
 	isServerMsg_Msg()
 }
@@ -310,11 +352,17 @@ type ServerMsg_KeepAlive struct {
 	KeepAlive *KeepAlive `protobuf:"bytes,3,opt,name=keep_alive,json=keepAlive,proto3,oneof"`
 }
 
+type ServerMsg_NatUpdate struct {
+	NatUpdate *NatUpdate `protobuf:"bytes,4,opt,name=nat_update,json=natUpdate,proto3,oneof"` // a global NAT block was announced/withdrawn
+}
+
 func (*ServerMsg_RouteUpdate) isServerMsg_Msg() {}
 
 func (*ServerMsg_EndOfRib) isServerMsg_Msg() {}
 
 func (*ServerMsg_KeepAlive) isServerMsg_Msg() {}
+
+func (*ServerMsg_NatUpdate) isServerMsg_Msg() {}
 
 type Hello struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -740,11 +788,251 @@ func (*KeepAlive) Descriptor() ([]byte, []int) {
 	return file_routebus_proto_rawDescGZIP(), []int{9}
 }
 
+// AnnounceNat announces this node's ownership of a deterministic egress SNAT
+// block: overlay source_ip (in vni) is SNATed onto nat_ip:[port_min,port_max)
+// and the owning node's underlay is owner_underlay. NAT blocks are GLOBAL: every
+// node learns every block so a return that lands on the wrong node re-routes.
+type AnnounceNat struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Vni           uint32                 `protobuf:"varint,1,opt,name=vni,proto3" json:"vni,omitempty"`
+	SourceIp      string                 `protobuf:"bytes,2,opt,name=source_ip,json=sourceIp,proto3" json:"source_ip,omitempty"`
+	NatIp         string                 `protobuf:"bytes,3,opt,name=nat_ip,json=natIp,proto3" json:"nat_ip,omitempty"`
+	PortMin       uint32                 `protobuf:"varint,4,opt,name=port_min,json=portMin,proto3" json:"port_min,omitempty"`
+	PortMax       uint32                 `protobuf:"varint,5,opt,name=port_max,json=portMax,proto3" json:"port_max,omitempty"`
+	OwnerUnderlay string                 `protobuf:"bytes,6,opt,name=owner_underlay,json=ownerUnderlay,proto3" json:"owner_underlay,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AnnounceNat) Reset() {
+	*x = AnnounceNat{}
+	mi := &file_routebus_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AnnounceNat) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AnnounceNat) ProtoMessage() {}
+
+func (x *AnnounceNat) ProtoReflect() protoreflect.Message {
+	mi := &file_routebus_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AnnounceNat.ProtoReflect.Descriptor instead.
+func (*AnnounceNat) Descriptor() ([]byte, []int) {
+	return file_routebus_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *AnnounceNat) GetVni() uint32 {
+	if x != nil {
+		return x.Vni
+	}
+	return 0
+}
+
+func (x *AnnounceNat) GetSourceIp() string {
+	if x != nil {
+		return x.SourceIp
+	}
+	return ""
+}
+
+func (x *AnnounceNat) GetNatIp() string {
+	if x != nil {
+		return x.NatIp
+	}
+	return ""
+}
+
+func (x *AnnounceNat) GetPortMin() uint32 {
+	if x != nil {
+		return x.PortMin
+	}
+	return 0
+}
+
+func (x *AnnounceNat) GetPortMax() uint32 {
+	if x != nil {
+		return x.PortMax
+	}
+	return 0
+}
+
+func (x *AnnounceNat) GetOwnerUnderlay() string {
+	if x != nil {
+		return x.OwnerUnderlay
+	}
+	return ""
+}
+
+type WithdrawNat struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NatIp         string                 `protobuf:"bytes,1,opt,name=nat_ip,json=natIp,proto3" json:"nat_ip,omitempty"`
+	PortMin       uint32                 `protobuf:"varint,2,opt,name=port_min,json=portMin,proto3" json:"port_min,omitempty"`
+	PortMax       uint32                 `protobuf:"varint,3,opt,name=port_max,json=portMax,proto3" json:"port_max,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WithdrawNat) Reset() {
+	*x = WithdrawNat{}
+	mi := &file_routebus_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WithdrawNat) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WithdrawNat) ProtoMessage() {}
+
+func (x *WithdrawNat) ProtoReflect() protoreflect.Message {
+	mi := &file_routebus_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WithdrawNat.ProtoReflect.Descriptor instead.
+func (*WithdrawNat) Descriptor() ([]byte, []int) {
+	return file_routebus_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *WithdrawNat) GetNatIp() string {
+	if x != nil {
+		return x.NatIp
+	}
+	return ""
+}
+
+func (x *WithdrawNat) GetPortMin() uint32 {
+	if x != nil {
+		return x.PortMin
+	}
+	return 0
+}
+
+func (x *WithdrawNat) GetPortMax() uint32 {
+	if x != nil {
+		return x.PortMax
+	}
+	return 0
+}
+
+type NatUpdate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Vni           uint32                 `protobuf:"varint,1,opt,name=vni,proto3" json:"vni,omitempty"`
+	SourceIp      string                 `protobuf:"bytes,2,opt,name=source_ip,json=sourceIp,proto3" json:"source_ip,omitempty"`
+	NatIp         string                 `protobuf:"bytes,3,opt,name=nat_ip,json=natIp,proto3" json:"nat_ip,omitempty"`
+	PortMin       uint32                 `protobuf:"varint,4,opt,name=port_min,json=portMin,proto3" json:"port_min,omitempty"`
+	PortMax       uint32                 `protobuf:"varint,5,opt,name=port_max,json=portMax,proto3" json:"port_max,omitempty"`
+	OwnerUnderlay string                 `protobuf:"bytes,6,opt,name=owner_underlay,json=ownerUnderlay,proto3" json:"owner_underlay,omitempty"`
+	Op            RouteOp                `protobuf:"varint,7,opt,name=op,proto3,enum=routebus.v1.RouteOp" json:"op,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NatUpdate) Reset() {
+	*x = NatUpdate{}
+	mi := &file_routebus_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NatUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NatUpdate) ProtoMessage() {}
+
+func (x *NatUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_routebus_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NatUpdate.ProtoReflect.Descriptor instead.
+func (*NatUpdate) Descriptor() ([]byte, []int) {
+	return file_routebus_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *NatUpdate) GetVni() uint32 {
+	if x != nil {
+		return x.Vni
+	}
+	return 0
+}
+
+func (x *NatUpdate) GetSourceIp() string {
+	if x != nil {
+		return x.SourceIp
+	}
+	return ""
+}
+
+func (x *NatUpdate) GetNatIp() string {
+	if x != nil {
+		return x.NatIp
+	}
+	return ""
+}
+
+func (x *NatUpdate) GetPortMin() uint32 {
+	if x != nil {
+		return x.PortMin
+	}
+	return 0
+}
+
+func (x *NatUpdate) GetPortMax() uint32 {
+	if x != nil {
+		return x.PortMax
+	}
+	return 0
+}
+
+func (x *NatUpdate) GetOwnerUnderlay() string {
+	if x != nil {
+		return x.OwnerUnderlay
+	}
+	return ""
+}
+
+func (x *NatUpdate) GetOp() RouteOp {
+	if x != nil {
+		return x.Op
+	}
+	return RouteOp_ROUTE_OP_UNSPECIFIED
+}
+
 var File_routebus_proto protoreflect.FileDescriptor
 
 const file_routebus_proto_rawDesc = "" +
 	"\n" +
-	"\x0eroutebus.proto\x12\vroutebus.v1\"\xd7\x02\n" +
+	"\x0eroutebus.proto\x12\vroutebus.v1\"\xd5\x03\n" +
 	"\tClientMsg\x12*\n" +
 	"\x05hello\x18\x01 \x01(\v2\x12.routebus.v1.HelloH\x00R\x05hello\x126\n" +
 	"\tsubscribe\x18\x02 \x01(\v2\x16.routebus.v1.SubscribeH\x00R\tsubscribe\x12<\n" +
@@ -752,14 +1040,18 @@ const file_routebus_proto_rawDesc = "" +
 	"\bannounce\x18\x04 \x01(\v2\x15.routebus.v1.AnnounceH\x00R\bannounce\x123\n" +
 	"\bwithdraw\x18\x05 \x01(\v2\x15.routebus.v1.WithdrawH\x00R\bwithdraw\x127\n" +
 	"\n" +
-	"keep_alive\x18\x06 \x01(\v2\x16.routebus.v1.KeepAliveH\x00R\tkeepAliveB\x05\n" +
-	"\x03msg\"\xc1\x01\n" +
+	"keep_alive\x18\x06 \x01(\v2\x16.routebus.v1.KeepAliveH\x00R\tkeepAlive\x12=\n" +
+	"\fannounce_nat\x18\a \x01(\v2\x18.routebus.v1.AnnounceNatH\x00R\vannounceNat\x12=\n" +
+	"\fwithdraw_nat\x18\b \x01(\v2\x18.routebus.v1.WithdrawNatH\x00R\vwithdrawNatB\x05\n" +
+	"\x03msg\"\xfa\x01\n" +
 	"\tServerMsg\x12=\n" +
 	"\froute_update\x18\x01 \x01(\v2\x18.routebus.v1.RouteUpdateH\x00R\vrouteUpdate\x125\n" +
 	"\n" +
 	"end_of_rib\x18\x02 \x01(\v2\x15.routebus.v1.EndOfRIBH\x00R\bendOfRib\x127\n" +
 	"\n" +
-	"keep_alive\x18\x03 \x01(\v2\x16.routebus.v1.KeepAliveH\x00R\tkeepAliveB\x05\n" +
+	"keep_alive\x18\x03 \x01(\v2\x16.routebus.v1.KeepAliveH\x00R\tkeepAlive\x127\n" +
+	"\n" +
+	"nat_update\x18\x04 \x01(\v2\x16.routebus.v1.NatUpdateH\x00R\tnatUpdateB\x05\n" +
 	"\x03msg\"E\n" +
 	"\x05Hello\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12#\n" +
@@ -785,7 +1077,26 @@ const file_routebus_proto_rawDesc = "" +
 	"\bexternal\x18\x05 \x01(\bR\bexternal\"\x1c\n" +
 	"\bEndOfRIB\x12\x10\n" +
 	"\x03vni\x18\x01 \x01(\rR\x03vni\"\v\n" +
-	"\tKeepAlive*L\n" +
+	"\tKeepAlive\"\xb0\x01\n" +
+	"\vAnnounceNat\x12\x10\n" +
+	"\x03vni\x18\x01 \x01(\rR\x03vni\x12\x1b\n" +
+	"\tsource_ip\x18\x02 \x01(\tR\bsourceIp\x12\x15\n" +
+	"\x06nat_ip\x18\x03 \x01(\tR\x05natIp\x12\x19\n" +
+	"\bport_min\x18\x04 \x01(\rR\aportMin\x12\x19\n" +
+	"\bport_max\x18\x05 \x01(\rR\aportMax\x12%\n" +
+	"\x0eowner_underlay\x18\x06 \x01(\tR\rownerUnderlay\"Z\n" +
+	"\vWithdrawNat\x12\x15\n" +
+	"\x06nat_ip\x18\x01 \x01(\tR\x05natIp\x12\x19\n" +
+	"\bport_min\x18\x02 \x01(\rR\aportMin\x12\x19\n" +
+	"\bport_max\x18\x03 \x01(\rR\aportMax\"\xd4\x01\n" +
+	"\tNatUpdate\x12\x10\n" +
+	"\x03vni\x18\x01 \x01(\rR\x03vni\x12\x1b\n" +
+	"\tsource_ip\x18\x02 \x01(\tR\bsourceIp\x12\x15\n" +
+	"\x06nat_ip\x18\x03 \x01(\tR\x05natIp\x12\x19\n" +
+	"\bport_min\x18\x04 \x01(\rR\aportMin\x12\x19\n" +
+	"\bport_max\x18\x05 \x01(\rR\aportMax\x12%\n" +
+	"\x0eowner_underlay\x18\x06 \x01(\tR\rownerUnderlay\x12$\n" +
+	"\x02op\x18\a \x01(\x0e2\x14.routebus.v1.RouteOpR\x02op*L\n" +
 	"\aRouteOp\x12\x18\n" +
 	"\x14ROUTE_OP_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fROUTE_OP_ADD\x10\x01\x12\x15\n" +
@@ -806,7 +1117,7 @@ func file_routebus_proto_rawDescGZIP() []byte {
 }
 
 var file_routebus_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_routebus_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_routebus_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_routebus_proto_goTypes = []any{
 	(RouteOp)(0),        // 0: routebus.v1.RouteOp
 	(*ClientMsg)(nil),   // 1: routebus.v1.ClientMsg
@@ -819,6 +1130,9 @@ var file_routebus_proto_goTypes = []any{
 	(*RouteUpdate)(nil), // 8: routebus.v1.RouteUpdate
 	(*EndOfRIB)(nil),    // 9: routebus.v1.EndOfRIB
 	(*KeepAlive)(nil),   // 10: routebus.v1.KeepAlive
+	(*AnnounceNat)(nil), // 11: routebus.v1.AnnounceNat
+	(*WithdrawNat)(nil), // 12: routebus.v1.WithdrawNat
+	(*NatUpdate)(nil),   // 13: routebus.v1.NatUpdate
 }
 var file_routebus_proto_depIdxs = []int32{
 	3,  // 0: routebus.v1.ClientMsg.hello:type_name -> routebus.v1.Hello
@@ -827,17 +1141,21 @@ var file_routebus_proto_depIdxs = []int32{
 	6,  // 3: routebus.v1.ClientMsg.announce:type_name -> routebus.v1.Announce
 	7,  // 4: routebus.v1.ClientMsg.withdraw:type_name -> routebus.v1.Withdraw
 	10, // 5: routebus.v1.ClientMsg.keep_alive:type_name -> routebus.v1.KeepAlive
-	8,  // 6: routebus.v1.ServerMsg.route_update:type_name -> routebus.v1.RouteUpdate
-	9,  // 7: routebus.v1.ServerMsg.end_of_rib:type_name -> routebus.v1.EndOfRIB
-	10, // 8: routebus.v1.ServerMsg.keep_alive:type_name -> routebus.v1.KeepAlive
-	0,  // 9: routebus.v1.RouteUpdate.op:type_name -> routebus.v1.RouteOp
-	1,  // 10: routebus.v1.RouteBus.Session:input_type -> routebus.v1.ClientMsg
-	2,  // 11: routebus.v1.RouteBus.Session:output_type -> routebus.v1.ServerMsg
-	11, // [11:12] is the sub-list for method output_type
-	10, // [10:11] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	11, // 6: routebus.v1.ClientMsg.announce_nat:type_name -> routebus.v1.AnnounceNat
+	12, // 7: routebus.v1.ClientMsg.withdraw_nat:type_name -> routebus.v1.WithdrawNat
+	8,  // 8: routebus.v1.ServerMsg.route_update:type_name -> routebus.v1.RouteUpdate
+	9,  // 9: routebus.v1.ServerMsg.end_of_rib:type_name -> routebus.v1.EndOfRIB
+	10, // 10: routebus.v1.ServerMsg.keep_alive:type_name -> routebus.v1.KeepAlive
+	13, // 11: routebus.v1.ServerMsg.nat_update:type_name -> routebus.v1.NatUpdate
+	0,  // 12: routebus.v1.RouteUpdate.op:type_name -> routebus.v1.RouteOp
+	0,  // 13: routebus.v1.NatUpdate.op:type_name -> routebus.v1.RouteOp
+	1,  // 14: routebus.v1.RouteBus.Session:input_type -> routebus.v1.ClientMsg
+	2,  // 15: routebus.v1.RouteBus.Session:output_type -> routebus.v1.ServerMsg
+	15, // [15:16] is the sub-list for method output_type
+	14, // [14:15] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_routebus_proto_init() }
@@ -852,11 +1170,14 @@ func file_routebus_proto_init() {
 		(*ClientMsg_Announce)(nil),
 		(*ClientMsg_Withdraw)(nil),
 		(*ClientMsg_KeepAlive)(nil),
+		(*ClientMsg_AnnounceNat)(nil),
+		(*ClientMsg_WithdrawNat)(nil),
 	}
 	file_routebus_proto_msgTypes[1].OneofWrappers = []any{
 		(*ServerMsg_RouteUpdate)(nil),
 		(*ServerMsg_EndOfRib)(nil),
 		(*ServerMsg_KeepAlive)(nil),
+		(*ServerMsg_NatUpdate)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -864,7 +1185,7 @@ func file_routebus_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_routebus_proto_rawDesc), len(file_routebus_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   10,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

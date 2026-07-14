@@ -43,6 +43,9 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 		return status.Error(codes.InvalidArgument, "first message must be Hello with node_id")
 	}
 	sink := &chanSink{id: h.NodeId, ch: make(chan *pb.ServerMsg, 1024)}
+	// Register globally on Hello: NAT blocks broadcast to every session (not just
+	// VNI subscribers), and this replays the current NAT snapshot to the new peer.
+	s.rib.RegisterSink(sink)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -55,7 +58,8 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 		}
 	}()
 	defer func() {
-		s.rib.DropOrigin(sink.id) // fast-withdraw this node's routes on disconnect
+		s.rib.UnregisterSink(sink.id) // stop broadcasting NAT updates to this dead session
+		s.rib.DropOrigin(sink.id)     // fast-withdraw this node's routes AND NAT blocks on disconnect
 		close(sink.ch)
 		wg.Wait()
 	}()
@@ -79,6 +83,15 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 			s.rib.Announce(sink.id, a.Vni, a.Prefix, nh, a.External)
 		case *pb.ClientMsg_Withdraw:
 			s.rib.Withdraw(sink.id, m.Withdraw.Vni, m.Withdraw.Prefix)
+		case *pb.ClientMsg_AnnounceNat:
+			a := m.AnnounceNat
+			s.rib.AnnounceNat(sink.id, NatBlock{
+				Vni: a.Vni, SourceIP: a.SourceIp, NatIP: a.NatIp,
+				PortMin: a.PortMin, PortMax: a.PortMax, OwnerUnderlay: a.OwnerUnderlay,
+			})
+		case *pb.ClientMsg_WithdrawNat:
+			w := m.WithdrawNat
+			s.rib.WithdrawNat(sink.id, w.NatIp, w.PortMin, w.PortMax)
 		case *pb.ClientMsg_KeepAlive, *pb.ClientMsg_Hello:
 			// keepalive: transport-level for v1; duplicate hello ignored.
 		}

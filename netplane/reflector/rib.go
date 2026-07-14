@@ -27,12 +27,19 @@ type routeEntry struct {
 	external bool
 }
 
-// RIB is the reflector's global route table. Safe for concurrent use.
+// RIB is the reflector's global route table. Safe for concurrent use. It also
+// holds the GLOBAL NAT table (nattable.go): per-VNI routes are fanned out to
+// VNI subscribers, whereas NAT blocks broadcast to every session (r.sinks).
 type RIB struct {
 	mu          sync.Mutex
 	routes      map[routeKey]routeEntry
 	byOrigin    map[string]map[routeKey]struct{}
 	subscribers map[uint32]map[string]Sink
+
+	// Global NAT state, broadcast to all sinks regardless of VNI subscription.
+	nat         map[natKey]NatBlock
+	natByOrigin map[string]map[natKey]struct{}
+	sinks       map[string]Sink // every connected session, keyed by node id
 }
 
 func NewRIB() *RIB {
@@ -40,6 +47,9 @@ func NewRIB() *RIB {
 		routes:      map[routeKey]routeEntry{},
 		byOrigin:    map[string]map[routeKey]struct{}{},
 		subscribers: map[uint32]map[string]Sink{},
+		nat:         map[natKey]NatBlock{},
+		natByOrigin: map[string]map[natKey]struct{}{},
+		sinks:       map[string]Sink{},
 	}
 }
 
@@ -128,6 +138,7 @@ func (r *RIB) DropOrigin(origin string) {
 			delete(r.subscribers, vni)
 		}
 	}
+	r.dropOriginNat(origin)
 }
 
 // fanout sends an update to all subscribers of k.vni except origin. Caller holds r.mu.

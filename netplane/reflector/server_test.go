@@ -87,3 +87,63 @@ func TestSessionAnnounceReachesSubscriber(t *testing.T) {
 		t.Fatalf("want WITHDRAW after peer close, got %+v", m)
 	}
 }
+
+func TestSessionAnnounceNatBroadcastsAndSnapshots(t *testing.T) {
+	cl := startServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// B connects first (no VNI subscription needed: NAT is global).
+	bStream, err := cl.Session(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hello(t, bStream, "nodeB")
+
+	// A announces a NAT block.
+	aStream, err := cl.Session(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hello(t, aStream, "nodeA")
+	if err := aStream.Send(&pb.ClientMsg{Msg: &pb.ClientMsg_AnnounceNat{AnnounceNat: &pb.AnnounceNat{
+		Vni: 100, SourceIp: "10.0.0.1", NatIp: "1.2.3.4", PortMin: 1024, PortMax: 2048, OwnerUnderlay: "fd00::a",
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// B receives the NatUpdate ADD without ever subscribing to a VNI.
+	m, err := bStream.Recv()
+	if err != nil {
+		t.Fatalf("recv nat update: %v", err)
+	}
+	nu := m.GetNatUpdate()
+	if nu == nil || nu.Op != pb.RouteOp_ROUTE_OP_ADD || nu.NatIp != "1.2.3.4" ||
+		nu.PortMin != 1024 || nu.OwnerUnderlay != "fd00::a" {
+		t.Fatalf("bad NatUpdate: %+v", m)
+	}
+
+	// A late joiner gets the NAT snapshot right after Hello.
+	cStream, err := cl.Session(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hello(t, cStream, "nodeC")
+	m, err = cStream.Recv()
+	if err != nil {
+		t.Fatalf("recv snapshot: %v", err)
+	}
+	if snap := m.GetNatUpdate(); snap == nil || snap.NatIp != "1.2.3.4" || snap.Op != pb.RouteOp_ROUTE_OP_ADD {
+		t.Fatalf("late joiner should replay the NAT snapshot, got %+v", m)
+	}
+
+	// A disconnects -> its NAT block is withdrawn to the survivors.
+	aStream.CloseSend()
+	m, err = bStream.Recv()
+	if err != nil {
+		t.Fatalf("recv withdraw: %v", err)
+	}
+	if nu := m.GetNatUpdate(); nu == nil || nu.Op != pb.RouteOp_ROUTE_OP_WITHDRAW {
+		t.Fatalf("want NAT WITHDRAW after owner disconnect, got %+v", m)
+	}
+}
