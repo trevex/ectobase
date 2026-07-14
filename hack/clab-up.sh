@@ -28,5 +28,9 @@ for f in "${HERE}/clab/kind-cluster.yaml" "${HERE}/clab/kind-cluster-k02.yaml" "
   sed "s#PREFIX_DIR#${PREFIX_DIR}#g" "$f" > "${f}.gen"
 done
 
+# The WAN edge attaches to the `clabwan` host bridge (a clab `bridge`-kind node references a
+# pre-existing host bridge). Create it + the nat_ip masquerade before deploy. Idempotent.
+bash "${HERE}/clab/wan-up.sh"
+
 # --reconfigure makes re-runs idempotent (destroy+deploy the same-named lab).
 exec ${CLAB} deploy --reconfigure -t "${TOPO}" "$@"
