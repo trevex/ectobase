@@ -113,11 +113,14 @@ Add `natgwsForNIC(ctx, obj) []reconcile.Request` returning every `NATGateway` in
 
 - [ ] **Step 3: Implement** the announce (the controller dials the reflector like the agent, or writes it as a route CR the agent announces — pick the pattern already used for LB VIP announcement if one exists; else controller→reflector direct). **Step 4: PASS. Step 5: Commit** (`feat(netplane): announce external default route to the WAN edge`).
 
-### Task A4: MILESTONE — netns control-plane smoke (no fabric)
+### Task A4: MILESTONE — controller integration test (envtest) — ✅ DONE (2026-07-14)
 
-**Files:** Create `test/nat-controlplane-netns.sh` (or extend `test/nat-netns.sh`).
+**Revised approach (user preference: envtest for controllers; see [[feedback-envtest-for-controllers]]).** The original "netns smoke against a fake/kind apiserver" is impractical here — the devShell had no apiserver and the running kind cluster's kubeconfig isn't host-routable. Instead: wired **controller-runtime envtest** into the nix devShell (`kube-apiserver` + `etcd` + `kubectl` via `KUBEBUILDER_ASSETS`) and added a **real-apiserver integration test** for the NATGateway controller.
 
-- [ ] Bring up a reflector + a source `xdp-dp serve` + an edge `xdp-dp serve --role edge` in netns; run the controller + two agents (source + edge) against a fake/kind apiserver holding a `VPC`+`NATGateway`+`NetworkInterface`. Assert: source logs `NAT source …`; source announces a NatBlock; edge logs `NEIGHBOR_NAT add …` (learned via routebus); source installs `ROUTE add … external`. This proves the whole control plane end-to-end before the fabric. **Commit.**
+- [x] `flake.nix`: `kubebuilderAssets` (symlinked kube-apiserver/etcd/kubectl) + `KUBEBUILDER_ASSETS` in the devShell.
+- [x] `netplane/controllers/natgateway_envtest_test.go`: starts envtest, loads the CRDs from `config/crd/bases`, runs the reconciler via `SetupWithManager`, and asserts the **watch-driven** reconcile populates deterministic disjoint `Status.Allocations` (blue-only, green excluded) AND that adding a NIC re-triggers reconcile via `natgwsForNIC` (table grows 2→3). Skips cleanly when `KUBEBUILDER_ASSETS` is unset. **PASS (~6s).**
+
+This proves the A1 controller keystone (manager wiring + real-apiserver status update + NIC watch) fabric-free. **The full agent↔reflector↔dataplane chain** (local SNAT programmed, NatBlock announced, edge learns NEIGHBOR_NAT, external default installed) is validated on the live fabric in **Phase C** (it needs the real reflector + xdp-dp).
 
 ---
 

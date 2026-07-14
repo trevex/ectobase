@@ -48,6 +48,18 @@
         # the conformance suite). Reused across the devShell and any script run via `nix develop`.
         pythonEnv = pkgs.python3.withPackages (ps: with ps; [ scapy pytest ]);
 
+        # controller-runtime envtest assets: a directory holding exactly the three binaries
+        # envtest.Environment starts a real in-process apiserver from (kube-apiserver + etcd + kubectl),
+        # exported via KUBEBUILDER_ASSETS. Lets `go test` spin a real apiserver for controller
+        # integration tests without a cluster. Symlinked individually to avoid bin/ collisions
+        # (pkgs.kubernetes also ships kubectl).
+        kubebuilderAssets = pkgs.runCommand "kubebuilder-envtest-assets" { } ''
+          mkdir -p $out/bin
+          ln -s ${pkgs.kubernetes}/bin/kube-apiserver $out/bin/kube-apiserver
+          ln -s ${pkgs.etcd}/bin/etcd $out/bin/etcd
+          ln -s ${pkgs.kubectl}/bin/kubectl $out/bin/kubectl
+        '';
+
         # Rust is managed entirely by rustup (community-standard for aya/aya-build), pinned
         # via rust-toolchain.toml to nightly-2026-01-15 (LLVM 21) to match nixpkgs bpf-linker.
         # The pre-commit rustfmt/clippy hooks therefore run through rustup too (system hooks
@@ -113,6 +125,8 @@
 
           RUST_BACKTRACE = 1;
           PROTOC = "${pkgs.protobuf}/bin/protoc";
+          # Real in-process apiserver for controller-runtime envtest integration tests.
+          KUBEBUILDER_ASSETS = "${kubebuilderAssets}/bin";
         };
       });
 }
