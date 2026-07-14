@@ -49,6 +49,15 @@ topology:
       sysctls:
         net.ipv6.conf.all.forwarding: 1
 
+    # --- second ToR / spine: sw2 (dual-homing; no sw1-sw2 interlink) ---
+    sw2:
+      kind: linux
+      binds:
+        - frr/daemons:/etc/frr/daemons
+        - frr/sw2.conf:/etc/frr/frr.conf
+      sysctls:
+        net.ipv6.conf.all.forwarding: 1
+
     # --- kind cluster: containerlab owns its lifecycle ---
     # The two kind nodes (control-plane + worker) are the "hosts" running xdp-dp.
     k01:
@@ -88,3 +97,7 @@ topology:
     - endpoints: ["k01-control-plane:eth1", "sw1:eth1"]
     - endpoints: ["k01-worker:eth1", "sw1:eth2"]
     - endpoints: ["k02-control-plane:eth1", "sw1:eth3"]
+    # second uplink per node to sw2 (dual-homing)
+    - endpoints: ["k01-control-plane:eth2", "sw2:eth1"]
+    - endpoints: ["k01-worker:eth2", "sw2:eth2"]
+    - endpoints: ["k02-control-plane:eth2", "sw2:eth3"]
