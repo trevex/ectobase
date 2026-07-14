@@ -9,14 +9,18 @@ kind: ClusterRole
 metadata:
   name: netplane-agent
 rules:
-  # The agent watches VPCs and NetworkInterfaces (and their status subresources)
-  # to derive desired route announcements/subscriptions for this node.
+  # The agent watches VPCs, NetworkInterfaces, and NATGateways (and their status
+  # subresources) to derive desired route/NAT announcements + subscriptions for this
+  # node: NATGateway.Status.Allocations drive local egress SNAT (AddNatSource) + the
+  # external default route (DesiredNat/DesiredExternalRoutes).
   - apiGroups: ["net.ectobase.dev"]
     resources:
       - vpcs
       - vpcs/status
       - networkinterfaces
       - networkinterfaces/status
+      - natgateways
+      - natgateways/status
     verbs: ["get", "list", "watch"]
   # The agent reports interface programming state back onto the NIC status.
   - apiGroups: ["net.ectobase.dev"]
