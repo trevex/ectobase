@@ -23,7 +23,13 @@ Datapath investigation showed the existing eBPF **already implements dpservice's
 **Revised remaining tasks (distributed egress):**
 - **D5 — Central NATGateway controller (Go):** the port-block allocator (T2) as a controller that reconciles `NATGateway` → writes `Status.Allocations` (deterministic `(public-IP, port-block)` per selected source).
 - **D6 — Node-agent NAT reconciler (Go):** each node's agent reads allocations for its *local* sources → `AddNatSource` (program local SNAT) + announces the `nat_ip` route + `AddNeighborNat` for all sources' blocks learned via routebus (return re-routing). Also distribute a default `0.0.0.0/0 → WAN-edge underlay` route marked **external** so the source datapath SNATs + encaps egress to the edge. (Needs an `is_external` flag on the route-distribution `AddRoute`/`Announce` — small extension.)
-- **D7 — WAN-edge decap/forward datapath (concrete design from datapath investigation):**
+- **D7 — WAN-edge decap/forward datapath — ✅ DONE (2026-07-14, commit `ce70524`).** Shipped:
+  `serve --role edge --wan-uplink`; the `wan_rx` XDP program (plain-IPv4 return →
+  `neighbor_nat_lookup_any` → encap toward owner over the fabric); the egress local-deliver path
+  (`uplink_rx` matches the edge underlay's new `UNDERLAY_LOCAL_DELIVER` sentinel tap → decap →
+  `XDP_PASS` to the VyOS kernel); `Control::attach_edge`. **Validated** by `test/edge-netns.sh`
+  (netns harness: return encaps to the owner underlay + egress decaps and reaches the WAN uplink,
+  both ways) — eBPF verifier clean, node-role datapath unaffected. Design notes below stand.
   - **`--role edge`:** attach `uplink_rx` on the fabric uplink AND a new `wan_rx` XDP program on the `--wan-uplink`; register the edge's underlay `/128` in `UNDERLAY` with its "tap" = the WAN ifindex.
   - **Egress (fabric → WAN):** the source hypervisor SNATs + encaps to the edge underlay (via the external default route). At the edge, `uplink_rx` decaps (outer dst = edge underlay) and — since the underlay's tap is the WAN ifindex — delivers the decapped inner IPv4 `(src=nat_ip, dst=public)` **out the WAN uplink as plain IP** (rewrite inner eth dst = WAN next-hop MAC; `bpf_redirect(wan_ifindex)`). Mostly reuses the existing decap+deliver path.
   - **Return (WAN → fabric):** `wan_rx` sees a *plain* IPv4 (dst=`nat_ip`, **no VNI**). It does a **VNI-agnostic** `neighbor_nat_lookup(nat_ip, dport) → (owner_underlay, vni)` — the NEIGHBOR_NAT entry must be extended to **also store the owner VNI** (register with `ALL_VNI=0` for the lookup key, à la dpservice) — then **encaps** the IPv4 into IP-in-IPv6 toward `owner_underlay` with that VNI and `bpf_redirect(fabric_ifindex)`. The owner hypervisor's reverse-conntrack key `(vni,0,nat_ip,0,nat_port)` then matches and it delivers to the source VM.
