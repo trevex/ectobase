@@ -58,6 +58,27 @@ topology:
       sysctls:
         net.ipv6.conf.all.forwarding: 1
 
+    # xdp_pass on each ToR's edge-facing port (eth5): the WAN edge's wan_rx bpf_redirects NAT
+    # returns out its fabric uplink, and a containerlab veth only accepts an XDP_REDIRECT if the
+    # PEER (this ToR port) has an XDP program (a veth artifact — real NICs don't need it). Shares
+    # the ToR netns; attaches once the edge link exists.
+    sw1-pass:
+      kind: linux
+      image: ghcr.io/trevex/dpservice-xdp:dev
+      network-mode: container:clab-xdp-ipv6-fabric-sw1
+      binds:
+        - sw-pass-wrapper.sh:/sw-pass-wrapper.sh:ro
+        - /sys/fs/bpf:/sys/fs/bpf
+      entrypoint: "/bin/sh /sw-pass-wrapper.sh"
+    sw2-pass:
+      kind: linux
+      image: ghcr.io/trevex/dpservice-xdp:dev
+      network-mode: container:clab-xdp-ipv6-fabric-sw2
+      binds:
+        - sw-pass-wrapper.sh:/sw-pass-wrapper.sh:ro
+        - /sys/fs/bpf:/sys/fs/bpf
+      entrypoint: "/bin/sh /sw-pass-wrapper.sh"
+
     # --- kind cluster: containerlab owns its lifecycle ---
     # The two kind nodes (control-plane + worker) are the "hosts" running xdp-dp.
     k01:

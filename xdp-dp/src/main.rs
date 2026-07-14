@@ -104,6 +104,11 @@ enum Cmd {
         /// `--role edge`.
         #[arg(long = "wan-uplink")]
         wan_uplink: Option<String>,
+        /// Additional fabric uplink(s) to also attach `uplink_rx` on (repeatable). A dual-homed
+        /// host must decap returns arriving via EITHER ToR, so `uplink_rx` runs on every fabric
+        /// uplink (`--uplink` is the primary/LOCAL one; `--extra-uplink eth2` covers the second).
+        #[arg(long = "extra-uplink")]
+        extra_uplink: Vec<String>,
         /// This hypervisor's underlay IPv6 (outer src on encap; also the /64 the AttachInterface
         /// pool allocates from). Optional: when unset, resolved from the kubelet node IP
         /// (`HOST_IP`/`NODE_IP` downward-API env) or inferred from the host's lo/dummy* fabric
@@ -352,6 +357,7 @@ async fn main() -> anyhow::Result<()> {
             uplink,
             role,
             wan_uplink,
+            extra_uplink,
             local_underlay,
             gateway,
             gateway6,
@@ -390,6 +396,11 @@ async fn main() -> anyhow::Result<()> {
                     ctrl.attach_edge(w, underlay)?;
                 }
                 other => anyhow::bail!("unknown --role {other:?} (expected \"node\" or \"edge\")"),
+            }
+            // Dual-homed hosts: also run uplink_rx on the additional fabric uplink(s) so returns
+            // arriving via the other ToR (ECMP) are decapped too.
+            for u in &extra_uplink {
+                ctrl.attach_extra_uplink(u)?;
             }
             let dns4: Vec<[u8; 4]> = dhcp_dns
                 .iter()

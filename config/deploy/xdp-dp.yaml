@@ -45,8 +45,16 @@ spec:
                 echo "waiting for fabric router neighbour on $UPLINK ($i)"; sleep 1
               done
               if [ -z "$GW_MAC" ]; then echo "FATAL: no fabric router neighbour on $UPLINK" >&2; exit 1; fi
-              echo "xdp-dp wrapper: uplink=$UPLINK gateway_mac=$GW_MAC"
-              exec xdp-dp serve --addr 127.0.0.1:1337 --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC"
+              # Dual-homed fabric: also run uplink_rx on any OTHER up ethN (the second ToR uplink),
+              # so N-S returns arriving via either ToR (ECMP) are decapped. Primary/LOCAL = $UPLINK.
+              # eth0 is the kind/docker mgmt iface (not fabric) — skip it; fabric uplinks are eth1+.
+              EXTRA=""
+              for d in $(ls /sys/class/net | grep -E '^eth[1-9][0-9]*$'); do
+                [ "$d" = "$UPLINK" ] && continue
+                [ "$(cat /sys/class/net/$d/operstate 2>/dev/null)" = "up" ] && EXTRA="$EXTRA --extra-uplink $d"
+              done
+              echo "xdp-dp wrapper: uplink=$UPLINK gateway_mac=$GW_MAC extra=[$EXTRA]"
+              exec xdp-dp serve --addr 127.0.0.1:1337 --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC" $EXTRA
           env:
             # kind nodes have no native XDP; force generic/SKB mode.
             - name: XDP_DP_SKB_MODE

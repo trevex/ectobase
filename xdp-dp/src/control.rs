@@ -328,6 +328,16 @@ impl Control {
         Ok(())
     }
 
+    /// Attach `uplink_rx` on an ADDITIONAL fabric uplink (a dual-homed host decaps returns arriving
+    /// via either ToR). The program is already loaded by `bring_up`; this just attaches it to
+    /// another interface. LOCAL stays the primary uplink (egress + wan_rx redirect use it).
+    pub fn attach_extra_uplink(&self, iface: &str) -> anyhow::Result<()> {
+        let mut g = self.inner.lock().unwrap();
+        loader::attach_xdp_extra(&mut g.ebpf, "uplink_rx", iface)?;
+        println!("uplink_rx attached to extra uplink {iface}");
+        Ok(())
+    }
+
     /// Return a shared handle to the conntrack map (for the GC task and flush operations).
     pub fn take_conntrack(&self) -> Arc<Mutex<Conntrack>> {
         Arc::clone(&self.conntrack)
