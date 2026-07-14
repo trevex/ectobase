@@ -173,3 +173,30 @@ pub fn neighbor_nat_lookup(vni: u32, dst: [u8; 4], dport: u16) -> Option<[u8; 16
     }
     None
 }
+
+/// VNI-agnostic neighbor-NAT lookup for the WAN edge return path: a plain IPv4 return packet
+/// arriving from the internet carries no overlay VNI, so match on `(nat_ip, dport)` alone and
+/// return BOTH the owning node's underlay /128 AND the owner's VNI. The edge encaps the return
+/// toward `underlay` with that VNI so the owner's reverse-conntrack key `(vni,0,nat_ip,0,nat_port)`
+/// matches. (dpservice reaches the same end via `ALL_VNI=0` entries.)
+#[inline(always)]
+pub fn neighbor_nat_lookup_any(dst: [u8; 4], dport: u16) -> Option<([u8; 16], u32)> {
+    let count = match NEIGHBOR_NAT_COUNT.get(0) {
+        Some(c) => *c,
+        None => return None,
+    };
+    let mut idx: u32 = 0;
+    while idx < NB_MAX_ENTRIES {
+        if idx >= count {
+            break;
+        }
+        if let Some(e) = unsafe { NEIGHBOR_NAT.get(&idx) } {
+            let e: NeighborNatEntry = *e;
+            if e.enabled != 0 && e.nat_ip == dst && dport >= e.port_min && dport < e.port_max {
+                return Some((e.underlay, e.vni));
+            }
+        }
+        idx += 1;
+    }
+    None
+}
