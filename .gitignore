@@ -14,3 +14,4 @@ __pycache__/
 
 # clab-up.sh renders these from the kind configs (absolute prefix mount paths)
 hack/clab/*.gen
+hack/clab/clab-*/
