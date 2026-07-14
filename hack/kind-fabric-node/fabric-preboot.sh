@@ -32,6 +32,23 @@ NODEIP="${BASE}1"                                # fd00:db8:0:1::1
 # used to be a clab `exec`; the node owns it now).
 sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1 || true
 
+# 0) Satisfy kindnet deterministically, WITHOUT leaking the k8s overlay (pod-CIDR)
+#    into the underlay BGP fabric. kindnet reconciles routes to each PEER's pod-CIDR
+#    via that peer's Node InternalIP (= the peer's fabric /128). That /128 is a
+#    BGP-recursive, non-on-link gateway, and Linux rejects `ip -6 route add <cidr>
+#    via <recursive-/128>` with EHOSTUNREACH ("no route to host") — so kindnet
+#    crash-loops (and blocks node Ready / clab deploy) until it happens to give up.
+#    ROOT CAUSE VERIFIED: BGP convergence does NOT fix this (the gateway is still
+#    not on-link); but kindnet SKIPS its add if ANY route already covers the peer
+#    pod-CIDR. So we pre-install a deviceless blackhole for the whole pod supernet:
+#    it covers every peer /64 (kindnet is satisfied, no crash), local pod /128s stay
+#    more-specific (unaffected), and — critically — it never enters the underlay BGP
+#    fabric (pod/overlay routing is the CNI's job, not the fabric's). Deviceless so
+#    it works here at preboot, before any uplink/BGP exists.
+POD_CIDR="${FABRIC_POD_CIDR:-fd00:10:244::/56}"
+[ -r /etc/fabric/pod-cidr ] && POD_CIDR="$(tr -d '\n' < /etc/fabric/pod-cidr)"
+ip -6 route replace blackhole "$POD_CIDR" 2>/dev/null || true
+
 # 1) The underlay /64 lives on dummy0 (next-hop-independent, up instantly — no BGP
 #    peer required for the address to exist, which is what kubelet needs at start).
 ip link show dummy0 >/dev/null 2>&1 || ip link add dummy0 type dummy
@@ -83,15 +100,15 @@ ROUTERID="10.0.2.$(printf '%s' "$BASE" | sed 's/.*:\([0-9a-f]*\)::$/\1/' | tr -c
 } > /etc/frr/frr.conf
 systemctl restart frr || systemctl start frr || true
 
-# 4) Gate kubelet on BGP convergence (this unit is Before=kubelet.service). The CNI
-#    (kindnet) routes each peer's pod-CIDR via that peer's Node InternalIP — which is
-#    now the peer's fabric ::1 — so it needs the fabric routed before it initialises,
-#    or it panics ("no route to host"). We wait until the FIB has at least one
-#    BGP-learned route (a peer /64; a session to the ToR delivers them all at once).
-#    BOUNDED: the uplink is wired by clab shortly after boot and FRR converges within
-#    seconds; if it doesn't (uplink never wired / no peer), proceed after the timeout
-#    and let the CNI self-heal — NEVER hard-block kubelet. Keep the timeout under
-#    systemd's TimeoutStartSec (90s) and clab's k8s-kind deploy wait (120s).
+# 4) Best-effort wait for BGP convergence (underlay reachability) before kubelet.
+#    NOTE: this does NOT fix the kindnet route-add — that is handled deterministically
+#    by the pod-supernet blackhole in step 0 (BGP convergence leaves the peer /128 a
+#    non-on-link recursive gateway, so kindnet's add would still EHOSTUNREACH). We keep
+#    a short wait only so the underlay (peer /64s, the reflector/apiserver loopbacks) is
+#    routable when kubelet + the agents come up. BOUNDED: the uplink is wired by clab
+#    shortly after boot and FRR converges within seconds; if not, proceed after the
+#    timeout — NEVER hard-block kubelet. Keep it under systemd's TimeoutStartSec (90s)
+#    and clab's k8s-kind deploy wait (120s).
 CONVERGE_TIMEOUT="${FABRIC_BGP_TIMEOUT:-60}"
 i=0
 while [ "$i" -lt "$CONVERGE_TIMEOUT" ]; do
