@@ -7,3 +7,8 @@ networking:
   ipFamily: ipv6
 nodes:
   - role: control-plane
+    image: kindest/node-fabric:dev
+    extraMounts:
+      - hostPath: PREFIX_DIR/k02-control-plane.prefix
+        containerPath: /etc/fabric/prefix
+        readOnly: true

@@ -13,4 +13,14 @@ networking:
   ipFamily: ipv6
 nodes:
   - role: control-plane
+    image: kindest/node-fabric:dev
+    extraMounts:
+      - hostPath: PREFIX_DIR/k01-control-plane.prefix
+        containerPath: /etc/fabric/prefix
+        readOnly: true
   - role: worker
+    image: kindest/node-fabric:dev
+    extraMounts:
+      - hostPath: PREFIX_DIR/k01-worker.prefix
+        containerPath: /etc/fabric/prefix
+        readOnly: true
