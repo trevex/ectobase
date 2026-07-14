@@ -30,6 +30,8 @@ const (
 	DataplaneNode_WithdrawNeighborNat_FullMethodName = "/dataplane.v1.DataplaneNode/WithdrawNeighborNat"
 	DataplaneNode_AddLbVip_FullMethodName            = "/dataplane.v1.DataplaneNode/AddLbVip"
 	DataplaneNode_AddLbBackend_FullMethodName        = "/dataplane.v1.DataplaneNode/AddLbBackend"
+	DataplaneNode_DelLbVip_FullMethodName            = "/dataplane.v1.DataplaneNode/DelLbVip"
+	DataplaneNode_DelLbBackend_FullMethodName        = "/dataplane.v1.DataplaneNode/DelLbBackend"
 )
 
 // DataplaneNodeClient is the client API for DataplaneNode service.
@@ -65,6 +67,11 @@ type DataplaneNodeClient interface {
 	// AddLbBackend appends a backend underlay /128 to a registered LB VIP and rebuilds its Maglev
 	// table.
 	AddLbBackend(ctx context.Context, in *AddLbBackendRequest, opts ...grpc.CallOption) (*AddLbBackendResponse, error)
+	// DelLbVip removes a registered LB VIP (and all its state/Maglev table) by id.
+	DelLbVip(ctx context.Context, in *DelLbVipRequest, opts ...grpc.CallOption) (*DelLbVipResponse, error)
+	// DelLbBackend removes a single backend underlay /128 from a registered LB VIP and rebuilds its
+	// Maglev table.
+	DelLbBackend(ctx context.Context, in *DelLbBackendRequest, opts ...grpc.CallOption) (*DelLbBackendResponse, error)
 }
 
 type dataplaneNodeClient struct {
@@ -185,6 +192,26 @@ func (c *dataplaneNodeClient) AddLbBackend(ctx context.Context, in *AddLbBackend
 	return out, nil
 }
 
+func (c *dataplaneNodeClient) DelLbVip(ctx context.Context, in *DelLbVipRequest, opts ...grpc.CallOption) (*DelLbVipResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DelLbVipResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_DelLbVip_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataplaneNodeClient) DelLbBackend(ctx context.Context, in *DelLbBackendRequest, opts ...grpc.CallOption) (*DelLbBackendResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DelLbBackendResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_DelLbBackend_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DataplaneNodeServer is the server API for DataplaneNode service.
 // All implementations must embed UnimplementedDataplaneNodeServer
 // for forward compatibility.
@@ -218,6 +245,11 @@ type DataplaneNodeServer interface {
 	// AddLbBackend appends a backend underlay /128 to a registered LB VIP and rebuilds its Maglev
 	// table.
 	AddLbBackend(context.Context, *AddLbBackendRequest) (*AddLbBackendResponse, error)
+	// DelLbVip removes a registered LB VIP (and all its state/Maglev table) by id.
+	DelLbVip(context.Context, *DelLbVipRequest) (*DelLbVipResponse, error)
+	// DelLbBackend removes a single backend underlay /128 from a registered LB VIP and rebuilds its
+	// Maglev table.
+	DelLbBackend(context.Context, *DelLbBackendRequest) (*DelLbBackendResponse, error)
 	mustEmbedUnimplementedDataplaneNodeServer()
 }
 
@@ -260,6 +292,12 @@ func (UnimplementedDataplaneNodeServer) AddLbVip(context.Context, *AddLbVipReque
 }
 func (UnimplementedDataplaneNodeServer) AddLbBackend(context.Context, *AddLbBackendRequest) (*AddLbBackendResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AddLbBackend not implemented")
+}
+func (UnimplementedDataplaneNodeServer) DelLbVip(context.Context, *DelLbVipRequest) (*DelLbVipResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DelLbVip not implemented")
+}
+func (UnimplementedDataplaneNodeServer) DelLbBackend(context.Context, *DelLbBackendRequest) (*DelLbBackendResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DelLbBackend not implemented")
 }
 func (UnimplementedDataplaneNodeServer) mustEmbedUnimplementedDataplaneNodeServer() {}
 func (UnimplementedDataplaneNodeServer) testEmbeddedByValue()                       {}
@@ -480,6 +518,42 @@ func _DataplaneNode_AddLbBackend_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DataplaneNode_DelLbVip_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DelLbVipRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneNodeServer).DelLbVip(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneNode_DelLbVip_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneNodeServer).DelLbVip(ctx, req.(*DelLbVipRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataplaneNode_DelLbBackend_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DelLbBackendRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneNodeServer).DelLbBackend(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneNode_DelLbBackend_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneNodeServer).DelLbBackend(ctx, req.(*DelLbBackendRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DataplaneNode_ServiceDesc is the grpc.ServiceDesc for DataplaneNode service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -530,6 +604,14 @@ var DataplaneNode_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AddLbBackend",
 			Handler:    _DataplaneNode_AddLbBackend_Handler,
+		},
+		{
+			MethodName: "DelLbVip",
+			Handler:    _DataplaneNode_DelLbVip_Handler,
+		},
+		{
+			MethodName: "DelLbBackend",
+			Handler:    _DataplaneNode_DelLbBackend_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

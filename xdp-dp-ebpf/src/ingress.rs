@@ -245,19 +245,24 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
     // Ingress firewall: enforce the DESTINATION interface's INGRESS rules on NEW inbound flows
     // (established flows — including seeded returns — already have a conntrack entry, so they are
     // allowed without re-evaluation). Runs on the post-LB/NAT-DNAT inner 5-tuple.
-    if let Some(key) = crate::conntrack::ct_key(ctx.data(), ctx.data_end(), ETH_LEN + IPV6_LEN, vni)
-    {
-        if unsafe { crate::maps::CONNTRACK.get(&key) }.is_none()
-            && crate::firewall::fw_eval_dir(
-                ctx.data(),
-                ctx.data_end(),
-                ETH_LEN + IPV6_LEN,
-                tap_ifindex,
-                xdp_dp_common::FW_DIR_INGRESS,
-            ) == xdp_dp_common::FW_ACTION_DROP
-            && crate::firewall::fw_enforcing()
+    // LB-VIP traffic is exempt: the backend VF owns the anycast VIP and the LB itself authorizes
+    // the packet (Maglev-selected the backend), so it bypasses the per-interface ingress firewall.
+    if lb_ul.is_none() {
+        if let Some(key) =
+            crate::conntrack::ct_key(ctx.data(), ctx.data_end(), ETH_LEN + IPV6_LEN, vni)
         {
-            return Ok(xdp_action::XDP_DROP);
+            if unsafe { crate::maps::CONNTRACK.get(&key) }.is_none()
+                && crate::firewall::fw_eval_dir(
+                    ctx.data(),
+                    ctx.data_end(),
+                    ETH_LEN + IPV6_LEN,
+                    tap_ifindex,
+                    xdp_dp_common::FW_DIR_INGRESS,
+                ) == xdp_dp_common::FW_ACTION_DROP
+                && crate::firewall::fw_enforcing()
+            {
+                return Ok(xdp_action::XDP_DROP);
+            }
         }
     }
 

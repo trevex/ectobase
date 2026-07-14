@@ -33,6 +33,11 @@ service DataplaneNode {
   // AddLbBackend appends a backend underlay /128 to a registered LB VIP and rebuilds its Maglev
   // table.
   rpc AddLbBackend(AddLbBackendRequest) returns (AddLbBackendResponse);
+  // DelLbVip removes a registered LB VIP (and all its state/Maglev table) by id.
+  rpc DelLbVip(DelLbVipRequest) returns (DelLbVipResponse);
+  // DelLbBackend removes a single backend underlay /128 from a registered LB VIP and rebuilds its
+  // Maglev table.
+  rpc DelLbBackend(DelLbBackendRequest) returns (DelLbBackendResponse);
 }
 
 // A (port, proto) load-balancer service tuple. proto is the IP protocol number (6=TCP, 17=UDP,
@@ -56,6 +61,17 @@ message AddLbBackendRequest {
   string backend_underlay = 2; // backend node underlay IPv6 /128
 }
 message AddLbBackendResponse {}
+
+message DelLbVipRequest {
+  string id = 1; // the LB id from AddLbVip
+}
+message DelLbVipResponse {}
+
+message DelLbBackendRequest {
+  string id = 1;               // the LB id from AddLbVip
+  string backend_underlay = 2; // backend node underlay IPv6 /128
+}
+message DelLbBackendResponse {}
 
 message AttachInterfaceRequest {
   string interface_id = 1; // stable id (e.g. VMI uid + iface name)

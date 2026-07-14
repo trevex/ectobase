@@ -10,10 +10,10 @@ use pb::{
     AddLbBackendRequest, AddLbBackendResponse, AddLbVipRequest, AddLbVipResponse,
     AddNatSourceRequest, AddNatSourceResponse, AddNeighborNatRequest, AddNeighborNatResponse,
     AddRouteRequest, AddRouteResponse, AttachInterfaceRequest, AttachInterfaceResponse,
-    ConfigureNetworkRequest, ConfigureNetworkResponse, DetachInterfaceRequest,
-    DetachInterfaceResponse, WithdrawNatSourceRequest, WithdrawNatSourceResponse,
-    WithdrawNeighborNatRequest, WithdrawNeighborNatResponse, WithdrawRouteRequest,
-    WithdrawRouteResponse,
+    ConfigureNetworkRequest, ConfigureNetworkResponse, DelLbBackendRequest, DelLbBackendResponse,
+    DelLbVipRequest, DelLbVipResponse, DetachInterfaceRequest, DetachInterfaceResponse,
+    WithdrawNatSourceRequest, WithdrawNatSourceResponse, WithdrawNeighborNatRequest,
+    WithdrawNeighborNatResponse, WithdrawRouteRequest, WithdrawRouteResponse,
 };
 
 use crate::attach::AttachState;
@@ -365,6 +365,50 @@ impl DataplaneNode for NodeService {
         .map_err(|e| Status::internal(e.to_string()))?;
         println!("LB backend add id={} backend={}", r.id, r.backend_underlay);
         Ok(Response::new(AddLbBackendResponse {}))
+    }
+
+    async fn del_lb_vip(
+        &self,
+        req: Request<DelLbVipRequest>,
+    ) -> Result<Response<DelLbVipResponse>, Status> {
+        let attach = self
+            .attach
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
+            .clone();
+        let r = req.into_inner();
+        let id = r.id.clone().into_bytes();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+            attach.control.delete_lb(&id)
+        })
+        .await
+        .map_err(|e| Status::internal(format!("del_lb_vip task panicked: {e}")))?
+        .map_err(|e| Status::internal(e.to_string()))?;
+        println!("LB VIP del id={}", r.id);
+        Ok(Response::new(DelLbVipResponse {}))
+    }
+
+    async fn del_lb_backend(
+        &self,
+        req: Request<DelLbBackendRequest>,
+    ) -> Result<Response<DelLbBackendResponse>, Status> {
+        let attach = self
+            .attach
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
+            .clone();
+        let r = req.into_inner();
+        let backend = parse_nexthop6(&r.backend_underlay)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let id = r.id.clone().into_bytes();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+            attach.control.del_lb_target(&id, backend)
+        })
+        .await
+        .map_err(|e| Status::internal(format!("del_lb_backend task panicked: {e}")))?
+        .map_err(|e| Status::internal(e.to_string()))?;
+        println!("LB backend del id={} backend={}", r.id, r.backend_underlay);
+        Ok(Response::new(DelLbBackendResponse {}))
     }
 }
 
