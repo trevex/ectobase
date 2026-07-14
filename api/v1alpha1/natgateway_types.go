@@ -18,9 +18,10 @@ type NATGatewaySpec struct {
 	// (RFC 7422 / GCP-static style). Default 1024.
 	// +optional
 	PortsPerSource *int32 `json:"portsPerSource,omitempty" protobuf:"varint,3,opt,name=portsPerSource"`
-	// EdgeUnderlay is the WAN-edge sidecar's underlay /128. The edge agent announces the external
-	// default route (0.0.0.0/0, and 64:ff9b::/96 for NAT64) toward this underlay so source
-	// hypervisors egress-SNAT + encap to the edge.
+	// EdgeUnderlay is DEPRECATED and IGNORED. The edge fleet self-advertises via
+	// EDGE_UNDERLAY: egress (0.0.0.0/0 and 64:ff9b::/96 for NAT64) is originated by
+	// any agent started with --edge-loopback, nexthop'd at that edge's own anycast
+	// underlay. Retained only to avoid a CRD breaking change; set nothing here.
 	// +optional
 	EdgeUnderlay string `json:"edgeUnderlay,omitempty" protobuf:"bytes,4,opt,name=edgeUnderlay"`
 }

@@ -51,23 +51,27 @@ type ExternalRoute struct {
 }
 
 // DesiredExternalRoutes returns the external default routes THIS node should
-// announce. A node only originates them when it IS the WAN edge, i.e. its
-// underlay == a NATGateway's Spec.EdgeUnderlay (mirroring a BGP edge originating
-// the default toward itself). For each such gateway it resolves the VPC's VNI
+// announce. A node only originates them when it IS a WAN edge, i.e. it was started
+// with --edge-loopback (edgeLoopback != ""); non-edge nodes originate nothing. The
+// edge role is NO LONGER tied to any per-NATGateway field: the edge fleet self-
+// advertises via its own underlay. For EVERY NATGateway it resolves the VPC's VNI
 // from Spec.VPCRef and returns an external 0.0.0.0/0 route plus a NAT64
-// nat64WellKnownPrefix route, both nexthop'd at the edge underlay.
-func DesiredExternalRoutes(ctx context.Context, c client.Client, underlay string) ([]ExternalRoute, error) {
+// nat64WellKnownPrefix route, both nexthop'd at this edge's own underlay (anycast).
+// VNIs are deduped so multiple gateways sharing a VNI originate one pair of routes.
+func DesiredExternalRoutes(ctx context.Context, c client.Client, underlay, edgeLoopback string) ([]ExternalRoute, error) {
+	if edgeLoopback == "" {
+		return nil, nil // not a WAN edge: originate nothing
+	}
+
 	var gws netv1.NATGatewayList
 	if err := c.List(ctx, &gws); err != nil {
 		return nil, fmt.Errorf("list natgateways: %w", err)
 	}
 
 	var routes []ExternalRoute
+	seen := map[uint32]struct{}{}
 	for gi := range gws.Items {
 		gw := &gws.Items[gi]
-		if gw.Spec.EdgeUnderlay == "" || gw.Spec.EdgeUnderlay != underlay {
-			continue // this node is not the edge for this gateway
-		}
 		vni, err := vpcVNIFor(ctx, c, gw.Namespace, gw.Spec.VPCRef.Name)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
@@ -79,6 +83,10 @@ func DesiredExternalRoutes(ctx context.Context, c client.Client, underlay string
 		if vni == 0 {
 			continue // VPC not yet allocated a VNI; skip until it is
 		}
+		if _, ok := seen[vni]; ok {
+			continue // another gateway already originated this VNI's default
+		}
+		seen[vni] = struct{}{}
 		// The v6 NAT64 prefix rides the same generic (prefix, external) announce path:
 		// the reflector RIB keys prefixes as opaque strings and AddRoute accepts v6 CIDRs.
 		routes = append(routes,

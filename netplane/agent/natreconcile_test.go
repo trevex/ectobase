@@ -9,6 +9,57 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+// TestDesiredExternalRoutesGatedOnEdgeLoopback checks that the external default
+// is originated based on the agent's edge-loopback IDENTITY (--edge-loopback),
+// NOT on NATGateway.Spec.EdgeUnderlay (deprecated/ignored).
+func TestDesiredExternalRoutesGatedOnEdgeLoopback(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := netv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+
+	vpc := &netv1.VPC{}
+	vpc.Name = "blue"
+	vpc.Namespace = "default"
+	vpc.Status.VNI = 100
+
+	// Bogus EdgeUnderlay: proves the routing decision does NOT read this field.
+	gw := &netv1.NATGateway{}
+	gw.Name = "gw"
+	gw.Namespace = "default"
+	gw.Spec.VPCRef = netv1.LocalObjectReference{Name: "blue"}
+	gw.Spec.EdgeUnderlay = "fd00:bogus::1"
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(vpc, gw).Build()
+
+	// Not an edge (empty edge-loopback): originate nothing, regardless of NATGateways.
+	nonEdge, err := DesiredExternalRoutes(context.Background(), c, "fd00::a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nonEdge) != 0 {
+		t.Fatalf("non-edge (empty edgeLoopback) must originate nothing, got %+v", nonEdge)
+	}
+
+	// Edge (edge-loopback set): originate 0.0.0.0/0 + NAT64 for VNI 100 with
+	// nexthop == the edge's own underlay (anycast), despite the bogus EdgeUnderlay.
+	routes, err := DesiredExternalRoutes(context.Background(), c, "fd00::a", "fd00:lo::1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 2 {
+		t.Fatalf("edge must originate exactly the v4 + NAT64 defaults, got %+v", routes)
+	}
+	v4 := findExternalRoute(routes, "0.0.0.0/0")
+	if v4 == nil || v4.Vni != 100 || v4.Nexthop != "fd00::a" || !v4.External {
+		t.Fatalf("bad v4 external default: %+v", routes)
+	}
+	v6 := findExternalRoute(routes, nat64WellKnownPrefix)
+	if v6 == nil || v6.Vni != 100 || v6.Nexthop != "fd00::a" || !v6.External {
+		t.Fatalf("bad NAT64 external default: %+v", routes)
+	}
+}
+
 func TestDesiredNatPicksLocalSourcesAndAnnouncesThem(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {

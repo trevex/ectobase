@@ -30,16 +30,18 @@ func TestDesiredExternalRoutesEdgeAnnouncesDefault(t *testing.T) {
 	vpc.Namespace = "default"
 	vpc.Status.VNI = 100
 
+	// EdgeUnderlay is deliberately left empty/bogus: it is deprecated and MUST be
+	// ignored; edge role is decided by the edge-loopback identity, not this field.
 	gw := &netv1.NATGateway{}
 	gw.Name = "gw"
 	gw.Namespace = "default"
 	gw.Spec.VPCRef = netv1.LocalObjectReference{Name: "blue"}
-	gw.Spec.EdgeUnderlay = "fd00::e"
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(vpc, gw).Build()
 
-	// This node IS the edge (underlay == EdgeUnderlay): it announces the external default.
-	routes, err := DesiredExternalRoutes(context.Background(), c, "fd00::e")
+	// This node IS the edge (edge-loopback set): it originates the external default
+	// with nexthop = its own underlay (anycast).
+	routes, err := DesiredExternalRoutes(context.Background(), c, "fd00::e", "fd00:lo::1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,12 +78,11 @@ func TestDesiredExternalRoutesNonEdgeStagesNothing(t *testing.T) {
 	gw.Name = "gw"
 	gw.Namespace = "default"
 	gw.Spec.VPCRef = netv1.LocalObjectReference{Name: "blue"}
-	gw.Spec.EdgeUnderlay = "fd00::e"
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(vpc, gw).Build()
 
-	// This node is NOT the edge (underlay != EdgeUnderlay): it announces nothing.
-	routes, err := DesiredExternalRoutes(context.Background(), c, "fd00::b")
+	// This node is NOT the edge (empty edge-loopback): it announces nothing.
+	routes, err := DesiredExternalRoutes(context.Background(), c, "fd00::b", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,12 +109,11 @@ func TestReconcileEdgeStagesExternalDefault(t *testing.T) {
 	gw.Name = "gw"
 	gw.Namespace = "default"
 	gw.Spec.VPCRef = netv1.LocalObjectReference{Name: "blue"}
-	gw.Spec.EdgeUnderlay = "fd00::e"
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(vpc, gw).Build()
 
-	// Edge node.
-	edge := &Reconciler{client: c, nodeID: "edge", underlay: "fd00::e"}
+	// Edge node (identified by its edge-loopback, not NATGateway.EdgeUnderlay).
+	edge := &Reconciler{client: c, nodeID: "edge", underlay: "fd00::e", edgeLoopback: "fd00:lo::1"}
 	subs, announce, _, err := edge.Desired(context.Background())
 	if err != nil {
 		t.Fatal(err)

@@ -49,7 +49,8 @@ spec: {vpcRef: {name: blue}, ips: [$SRC_IP], nodeName: $SRC_NODE}
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NATGateway
 metadata: {name: egress-gw, namespace: default}
-spec: {vpcRef: {name: blue}, publicIPs: [$NAT_POOL_IP], portsPerSource: 1024, edgeUnderlay: "$EDGE_UL"}
+# No edgeUnderlay: egress is edge-flag driven now (the edge agents run --edge-loopback).
+spec: {vpcRef: {name: blue}, publicIPs: [$NAT_POOL_IP], portsPerSource: 1024}
 YAML
 kc patch vpc blue --subresource=status --type=merge -p "{\"status\":{\"vni\":$VNI,\"state\":\"Ready\"}}" >/dev/null
 

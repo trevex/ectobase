@@ -112,10 +112,11 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 		}
 	}
 
-	// WAN edge: if THIS node is a NATGateway's edge underlay, originate its external
-	// default routes (0.0.0.0/0 and NAT64 64:ff9b::/96) into the VPC's VNI so source
-	// hypervisors SNAT + encap egress toward us. Non-edge nodes get nothing here.
-	extRoutes, err := DesiredExternalRoutes(ctx, r.client, r.underlay)
+	// WAN edge: if THIS node is a WAN edge (started with --edge-loopback), originate the
+	// external default routes (0.0.0.0/0 and NAT64 64:ff9b::/96) into every NATGateway's
+	// VPC VNI, nexthop'd at our own anycast underlay, so source hypervisors SNAT + encap
+	// egress toward us. Non-edge nodes get nothing here.
+	extRoutes, err := DesiredExternalRoutes(ctx, r.client, r.underlay, r.edgeLoopback)
 	if err != nil {
 		return nil, nil, nil, err
 	}
