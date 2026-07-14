@@ -18,6 +18,11 @@ type NATGatewaySpec struct {
 	// (RFC 7422 / GCP-static style). Default 1024.
 	// +optional
 	PortsPerSource *int32 `json:"portsPerSource,omitempty" protobuf:"varint,3,opt,name=portsPerSource"`
+	// EdgeUnderlay is the WAN-edge sidecar's underlay /128. The edge agent announces the external
+	// default route (0.0.0.0/0, and 64:ff9b::/96 for NAT64) toward this underlay so source
+	// hypervisors egress-SNAT + encap to the edge.
+	// +optional
+	EdgeUnderlay string `json:"edgeUnderlay,omitempty" protobuf:"bytes,4,opt,name=edgeUnderlay"`
 }
 
 // NATAllocation records one source's deterministic mapping.

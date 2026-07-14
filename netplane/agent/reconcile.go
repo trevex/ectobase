@@ -110,6 +110,25 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 			continue
 		}
 	}
+
+	// WAN edge: if THIS node is a NATGateway's edge underlay, originate its external
+	// default routes (0.0.0.0/0 and NAT64 64:ff9b::/96) into the VPC's VNI so source
+	// hypervisors SNAT + encap egress toward us. Non-edge nodes get nothing here.
+	extRoutes, err := DesiredExternalRoutes(ctx, r.client, r.underlay)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	for _, er := range extRoutes {
+		vniSet[er.Vni] = struct{}{} // subscribe to the VNI we originate into
+		announce = append(announce, Route{Vni: er.Vni, Prefix: er.Prefix, Nexthop: er.Nexthop, External: er.External})
+	}
+	// Re-materialize subs so any VNI added above is included and the set stays sorted.
+	subs = subs[:0]
+	for v := range vniSet {
+		subs = append(subs, v)
+	}
+	sort.Slice(subs, func(i, j int) bool { return subs[i] < subs[j] })
+
 	return subs, announce, blocks, nil
 }
 

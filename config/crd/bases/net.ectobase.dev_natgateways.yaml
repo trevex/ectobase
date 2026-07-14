@@ -43,6 +43,12 @@ spec:
               NATGatewaySpec is the desired state of a NATGateway: a drain-safe egress SNAT
               for the sources in a VPC, using deterministic (public-IP, port-block) allocation.
             properties:
+              edgeUnderlay:
+                description: |-
+                  EdgeUnderlay is the WAN-edge sidecar's underlay /128. The edge agent announces the external
+                  default route (0.0.0.0/0, and 64:ff9b::/96 for NAT64) toward this underlay so source
+                  hypervisors egress-SNAT + encap to the edge.
+                type: string
               portsPerSource:
                 description: |-
                   PortsPerSource is the deterministic port-block size handed to each source

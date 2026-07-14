@@ -87,6 +87,7 @@ func TestNATGatewayRoundTrip(t *testing.T) {
 			VPCRef:         LocalObjectReference{Name: "prod"},
 			PublicIPs:      []string{"203.0.113.10"},
 			PortsPerSource: int32Ptr(1024),
+			EdgeUnderlay:   "fd00::e",
 		},
 		Status: NATGatewayStatus{
 			Allocations: []NATAllocation{
@@ -120,6 +121,9 @@ func TestNATGatewayRoundTrip(t *testing.T) {
 	if got.Spec.PortsPerSource == nil || *got.Spec.PortsPerSource != 1024 {
 		t.Errorf("spec.portsPerSource: want 1024, got %v", got.Spec.PortsPerSource)
 	}
+	if got.Spec.EdgeUnderlay != "fd00::e" {
+		t.Errorf("spec.edgeUnderlay: want fd00::e, got %q", got.Spec.EdgeUnderlay)
+	}
 	if got.Status.State != "Ready" {
 		t.Errorf("status.state: want Ready, got %q", got.Status.State)
 	}
@@ -141,6 +145,9 @@ func TestNATGatewayRoundTrip(t *testing.T) {
 	}
 	if _, ok := spec["portsPerSource"]; !ok {
 		t.Errorf("expected wire key spec.portsPerSource, keys=%v", spec)
+	}
+	if _, ok := spec["edgeUnderlay"]; !ok {
+		t.Errorf("expected wire key spec.edgeUnderlay, keys=%v", spec)
 	}
 }
 
