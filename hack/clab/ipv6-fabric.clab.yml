@@ -71,56 +71,16 @@ topology:
 
     # --- kind node containers, as clab link endpoints ---
     # Names MUST match the containers kind creates: <cluster>-control-plane / -worker.
-    # `exec` creates dummy0 + the announced /64 in the kind node's own netns, and
-    # turns on IPv6 forwarding so the node can route overlay<->underlay later.
+    # The custom node image owns dummy0 + the /64 and speaks eBGP itself now (via the
+    # fabric-preboot oneshot), so no `exec` and no FRR sidecars here — the nodes are
+    # bare link endpoints for the eth1 uplinks.
     k01-control-plane:
       kind: ext-container
-      exec:
-        - "sysctl -w net.ipv6.conf.all.forwarding=1"
-        - "ip link add dummy0 type dummy || true"
-        - "ip link set dummy0 up"
-        - "ip -6 addr replace fd00:db8:0:1::1/64 dev dummy0"
     k01-worker:
       kind: ext-container
-      exec:
-        - "sysctl -w net.ipv6.conf.all.forwarding=1"
-        - "ip link add dummy0 type dummy || true"
-        - "ip link set dummy0 up"
-        - "ip -6 addr replace fd00:db8:0:2::1/64 dev dummy0"
     # k02's single node: the compute cluster's fabric host, /64 = fd00:db8:0:3::/64.
     k02-control-plane:
       kind: ext-container
-      exec:
-        - "sysctl -w net.ipv6.conf.all.forwarding=1"
-        - "ip link add dummy0 type dummy || true"
-        - "ip link set dummy0 up"
-        - "ip -6 addr replace fd00:db8:0:3::1/64 dev dummy0"
-
-    # --- per-host FRR sidecars sharing each kind node's netns ---
-    # These announce the kind node's dummy0 /64 over unnumbered eBGP. Sharing the
-    # netns (network-mode: container:<kind-node>) means FRR sees the same dummy0 +
-    # uplink that xdp-dp sees. startup-delay lets the kind node + its exec settle.
-    host1-frr:
-      kind: linux
-      network-mode: container:k01-control-plane
-      startup-delay: 20
-      binds:
-        - frr/daemons:/etc/frr/daemons
-        - frr/host1.conf:/etc/frr/frr.conf
-    host2-frr:
-      kind: linux
-      network-mode: container:k01-worker
-      startup-delay: 20
-      binds:
-        - frr/daemons:/etc/frr/daemons
-        - frr/host2.conf:/etc/frr/frr.conf
-    host3-frr:
-      kind: linux
-      network-mode: container:k02-control-plane
-      startup-delay: 20
-      binds:
-        - frr/daemons:/etc/frr/daemons
-        - frr/host3.conf:/etc/frr/frr.conf
 
   links:
     # host uplinks to the ToR (unnumbered v6, link-local only). The kind node netns
