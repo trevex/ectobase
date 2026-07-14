@@ -17,10 +17,11 @@ import (
 // Reconciler reads NetworkInterfaces scheduled to this node and derives the
 // VNIs to subscribe to plus the local routes to announce.
 type Reconciler struct {
-	client   client.Client
-	nodeID   string
-	underlay string
-	dp       Dataplane // local xdp-dp; used to program egress SNAT sources
+	client       client.Client
+	nodeID       string
+	underlay     string
+	edgeLoopback string    // if set, this node is a WAN edge; value = its UNIQUE control-plane loopback
+	dp           Dataplane // local xdp-dp; used to program egress SNAT sources
 }
 
 // NewReconciler builds a Reconciler from a kubeconfig path (empty = in-cluster).
@@ -46,6 +47,10 @@ func (r *Reconciler) SetUnderlay(underlay string) { r.underlay = underlay }
 
 // SetDataplane wires the local xdp-dp so the reconciler can program egress SNAT.
 func (r *Reconciler) SetDataplane(dp Dataplane) { r.dp = dp }
+
+// SetEdgeLoopback marks this node as a WAN edge with the given UNIQUE
+// control-plane loopback (empty = not an edge).
+func (r *Reconciler) SetEdgeLoopback(loopback string) { r.edgeLoopback = loopback }
 
 // Desired returns the VNIs to subscribe to, the local routes to announce, and
 // the local egress-NAT blocks to announce for this node, snapshotting the current

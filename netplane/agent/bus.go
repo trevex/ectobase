@@ -7,6 +7,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"sync"
 
 	dpv1 "github.com/trevex/xdp-dp/cni/gen/dataplanev1"
 	rbv1 "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
@@ -40,15 +41,21 @@ type Bus struct {
 	nodeID   string
 	underlay string
 	dp       Dataplane
+
+	mu sync.Mutex
+	// learnedEdge maps an edge's anycast datapath /128 (address only) to its
+	// UNIQUE control-plane loopback, learned from EDGE_UNDERLAY PublicPrefix
+	// records. A later task reads it to pin the WAN return path to a specific edge.
+	learnedEdge map[string]string
 }
 
 func NewBus(nodeID, underlay string, dp Dataplane) *Bus {
-	return &Bus{nodeID: nodeID, underlay: underlay, dp: dp}
+	return &Bus{nodeID: nodeID, underlay: underlay, dp: dp, learnedEdge: map[string]string{}}
 }
 
 // Run opens a Session, sends Hello + the initial subscriptions + announcements,
 // then pumps RouteUpdates into the dataplane until ctx is done or the stream errors.
-func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, subVNIs []uint32, announce []Route, announceNat []NatBlock) error {
+func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, subVNIs []uint32, announce []Route, announceNat []NatBlock, announcePublic []PublicPrefix) error {
 	stream, err := cc.Session(ctx)
 	if err != nil {
 		return err
@@ -75,6 +82,11 @@ func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, subVNIs []uint32,
 			return err
 		}
 	}
+	for _, pp := range announcePublic {
+		if err := b.AnnouncePublic(stream, pp); err != nil {
+			return err
+		}
+	}
 	for {
 		msg, err := stream.Recv()
 		if err == io.EOF {
@@ -88,6 +100,9 @@ func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, subVNIs []uint32,
 		}
 		if nu := msg.GetNatUpdate(); nu != nil {
 			b.applyNat(ctx, nu)
+		}
+		if pu := msg.GetPublicUpdate(); pu != nil {
+			b.applyPublic(pu.GetPrefix(), pu.GetOp())
 		}
 		// EndOfRIB / KeepAlive: v1 no-op (prune-on-EoR is a follow-up).
 	}
@@ -105,6 +120,15 @@ func (b *Bus) AnnounceNat(stream rbv1.RouteBus_SessionClient, blk NatBlock) erro
 	return stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_AnnounceNat{AnnounceNat: &rbv1.AnnounceNat{
 		Vni: blk.Vni, SourceIp: blk.SourceIP, NatIp: blk.NatIP,
 		PortMin: blk.PortMin, PortMax: blk.PortMax, OwnerUnderlay: blk.OwnerUnderlay,
+	}}})
+}
+
+// AnnouncePublic sends one typed public-address record on the given session
+// stream (e.g. this edge's EDGE_UNDERLAY anycast -> owner-loopback mapping).
+func (b *Bus) AnnouncePublic(stream rbv1.RouteBus_SessionClient, pp PublicPrefix) error {
+	return stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_AnnouncePublic{AnnouncePublic: &rbv1.PublicPrefix{
+		Kind: pp.Kind, Prefix: pp.Prefix, OwnerUnderlay: pp.OwnerUnderlay,
+		Vni: pp.Vni, PortMin: pp.PortMin, PortMax: pp.PortMax,
 	}}})
 }
 

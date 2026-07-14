@@ -30,12 +30,18 @@ current-context: c
 EOF
 
 for e in edge1 edge2; do
+  # Each edge's UNIQUE control-plane loopback (on VyOS dum0, see vyos/edge{1,2}.boot):
+  # announced as the EDGE_UNDERLAY owner so replies pin to this edge (not the anycast /128).
+  case "$e" in
+    edge1) EDGE_LO="fd00:db8:0:9::1" ;;
+    edge2) EDGE_LO="fd00:db8:0:9::2" ;;
+  esac
   docker rm -f ${e}-agent 2>/dev/null || true
   docker run -d --name ${e}-agent --restart unless-stopped \
     --network "container:clab-xdp-ipv6-fabric-${e}" \
     -v "$KC":/kc:ro ghcr.io/trevex/netplane:dev \
     agent --node-id "${e}" --underlay "$EDGE_UL" --reflector "$REFLECTOR" \
-    --dataplane 127.0.0.1:1337 --kubeconfig /kc >/dev/null
-  echo "started ${e}-agent (node-id=${e}, underlay=${EDGE_UL})"
+    --dataplane 127.0.0.1:1337 --edge-loopback "$EDGE_LO" --kubeconfig /kc >/dev/null
+  echo "started ${e}-agent (node-id=${e}, underlay=${EDGE_UL}, edge-loopback=${EDGE_LO})"
 done
 echo "edge agents up: they learn NEIGHBOR_NAT off routebus + announce the external default (no grpcurl)"

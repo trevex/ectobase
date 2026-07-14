@@ -24,6 +24,7 @@ func main() {
 	reflectorAddr := flag.String("reflector", "127.0.0.1:1338", "reflector gRPC address")
 	dataplaneAddr := flag.String("dataplane", "127.0.0.1:1337", "local xdp-dp DataplaneNode address")
 	kubeconfig := flag.String("kubeconfig", "", "kubeconfig for the central API (empty = in-cluster)")
+	edgeLoopback := flag.String("edge-loopback", "", "if set, this node is a WAN edge; value = its UNIQUE control-plane loopback IPv6 (e.g. fd00:db8:0:9::1)")
 	tlsCA := flag.String("tls-ca", "", "CA bundle to verify the reflector (enables mTLS)")
 	tlsCert := flag.String("tls-cert", "", "agent client cert (identity == node)")
 	tlsKey := flag.String("tls-key", "", "agent client key")
@@ -63,6 +64,7 @@ func main() {
 	}
 	r.SetUnderlay(*underlay)
 	r.SetDataplane(dp)
+	r.SetEdgeLoopback(*edgeLoopback)
 	// Reconcile the desired announcements/subscriptions for this node, then run the
 	// bus session. On disconnect, retry with backoff (the reflector fast-withdrew us).
 	for {
@@ -73,7 +75,7 @@ func main() {
 			continue
 		}
 		bus := agent.NewBus(*nodeID, *underlay, dp)
-		if err := bus.Run(ctx, rb, subs, ann, annNat); err != nil {
+		if err := bus.Run(ctx, rb, subs, ann, annNat, r.DesiredPublic()); err != nil {
 			log.Printf("bus session ended: %v; reconnecting", err)
 		}
 		time.Sleep(time.Second)

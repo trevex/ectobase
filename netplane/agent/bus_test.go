@@ -104,12 +104,12 @@ func TestAgentLearnsRemoteRouteAndProgramsDataplane(t *testing.T) {
 	// Agent A announces one local route (no dataplane needed for the announcer here).
 	dpA := newFakeDP()
 	busA := NewBus("nodeA", "fd00::a", dpA)
-	go busA.Run(ctx, cl, nil, []Route{{Vni: 100, Prefix: "10.0.0.1/32", Nexthop: "fd00::a"}}, nil)
+	go busA.Run(ctx, cl, nil, []Route{{Vni: 100, Prefix: "10.0.0.1/32", Nexthop: "fd00::a"}}, nil, nil)
 
 	// Agent B subscribes to vni 100 and must program A's route on its dataplane.
 	dpB := newFakeDP()
 	busB := NewBus("nodeB", "fd00::b", dpB)
-	go busB.Run(ctx, cl, []uint32{100}, nil, nil)
+	go busB.Run(ctx, cl, []uint32{100}, nil, nil, nil)
 
 	// Poll for the learned route.
 	deadline := time.Now().Add(3 * time.Second)
