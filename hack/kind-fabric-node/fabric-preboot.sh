@@ -28,6 +28,10 @@ BASE="${PREFIX%/*}"                              # fd00:db8:0:1::
 PLEN="${PREFIX#*/}"                              # 64
 NODEIP="${BASE}1"                                # fd00:db8:0:1::1
 
+# The node routes underlay/overlay and runs FRR — enable IPv6 forwarding (this
+# used to be a clab `exec`; the node owns it now).
+sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1 || true
+
 # 1) The underlay /64 lives on dummy0 (next-hop-independent, up instantly — no BGP
 #    peer required for the address to exist, which is what kubelet needs at start).
 ip link show dummy0 >/dev/null 2>&1 || ip link add dummy0 type dummy
