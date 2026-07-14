@@ -3,10 +3,15 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
 
 	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+// nat64WellKnownPrefix is the RFC 6052 well-known NAT64 prefix.
+const nat64WellKnownPrefix = "64:ff9b::/96"
 
 // NatSource is a LOCAL egress SNAT the agent programs via AddNatSource: overlay
 // SourceIP (in Vni) is SNATed onto NatIP:[PortMin,PortMax).
@@ -40,7 +45,7 @@ type localSource struct {
 // the edge's underlay.
 type ExternalRoute struct {
 	Vni      uint32
-	Prefix   string // CIDR, e.g. "0.0.0.0/0" or "64:ff9b::/96"
+	Prefix   string // CIDR, e.g. "0.0.0.0/0" or nat64WellKnownPrefix
 	Nexthop  string // the edge underlay /128
 	External bool   // always true for these
 }
@@ -50,7 +55,7 @@ type ExternalRoute struct {
 // underlay == a NATGateway's Spec.EdgeUnderlay (mirroring a BGP edge originating
 // the default toward itself). For each such gateway it resolves the VPC's VNI
 // from Spec.VPCRef and returns an external 0.0.0.0/0 route plus a NAT64
-// 64:ff9b::/96 route, both nexthop'd at the edge underlay.
+// nat64WellKnownPrefix route, both nexthop'd at the edge underlay.
 func DesiredExternalRoutes(ctx context.Context, c client.Client, underlay string) ([]ExternalRoute, error) {
 	var gws netv1.NATGatewayList
 	if err := c.List(ctx, &gws); err != nil {
@@ -65,6 +70,10 @@ func DesiredExternalRoutes(ctx context.Context, c client.Client, underlay string
 		}
 		vni, err := vpcVNIFor(ctx, c, gw.Namespace, gw.Spec.VPCRef.Name)
 		if err != nil {
+			if apierrors.IsNotFound(err) {
+				log.Printf("VPC %s/%s not found for gateway %s/%s, skipping", gw.Namespace, gw.Spec.VPCRef.Name, gw.Namespace, gw.Name)
+				continue
+			}
 			return nil, err
 		}
 		if vni == 0 {
@@ -74,7 +83,7 @@ func DesiredExternalRoutes(ctx context.Context, c client.Client, underlay string
 		// the reflector RIB keys prefixes as opaque strings and AddRoute accepts v6 CIDRs.
 		routes = append(routes,
 			ExternalRoute{Vni: vni, Prefix: "0.0.0.0/0", Nexthop: underlay, External: true},
-			ExternalRoute{Vni: vni, Prefix: "64:ff9b::/96", Nexthop: underlay, External: true},
+			ExternalRoute{Vni: vni, Prefix: nat64WellKnownPrefix, Nexthop: underlay, External: true},
 		)
 	}
 	return routes, nil

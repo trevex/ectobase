@@ -89,10 +89,6 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 			announce = append(announce, Route{Vni: vni, Prefix: prefix, Nexthop: nexthop, External: false})
 		}
 	}
-	for v := range vniSet {
-		subs = append(subs, v)
-	}
-	sort.Slice(subs, func(i, j int) bool { return subs[i] < subs[j] })
 
 	// Egress NAT: program the LOCAL SNAT sources for allocations whose source is a
 	// NIC on this node, and return the matching blocks for the caller to announce on
