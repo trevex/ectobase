@@ -1,4 +1,4 @@
-# Container image for the netplane Go binaries: reflector + agent.
+# Container image for the netplane Go binaries: reflector + agent + controller.
 #
 # The netplane module has replace directives to sibling modules (../api, ../cni),
 # so the build context must include api/, cni/ and netplane/. We build with
@@ -13,7 +13,8 @@ COPY cni ./cni
 COPY netplane ./netplane
 RUN cd netplane \
     && CGO_ENABLED=0 GOWORK=off go build -o /out/reflector ./cmd/reflector \
-    && CGO_ENABLED=0 GOWORK=off go build -o /out/agent ./cmd/agent
+    && CGO_ENABLED=0 GOWORK=off go build -o /out/agent ./cmd/agent \
+    && CGO_ENABLED=0 GOWORK=off go build -o /out/controller ./cmd/controller
 
 # --- runtime ---------------------------------------------------------------
 FROM debian:bookworm-slim
@@ -22,4 +23,5 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /out/reflector /usr/local/bin/reflector
 COPY --from=builder /out/agent /usr/local/bin/agent
-# No ENTRYPOINT: the DaemonSets/Deployment set their own command (reflector or agent).
+COPY --from=builder /out/controller /usr/local/bin/controller
+# No ENTRYPOINT: the DaemonSets/Deployment set their own command (reflector/agent/controller).
