@@ -7,9 +7,12 @@ pub mod pb {
 }
 use pb::dataplane_node_server::DataplaneNode;
 use pb::{
+    AddNatSourceRequest, AddNatSourceResponse, AddNeighborNatRequest, AddNeighborNatResponse,
     AddRouteRequest, AddRouteResponse, AttachInterfaceRequest, AttachInterfaceResponse,
     ConfigureNetworkRequest, ConfigureNetworkResponse, DetachInterfaceRequest,
-    DetachInterfaceResponse, WithdrawRouteRequest, WithdrawRouteResponse,
+    DetachInterfaceResponse, WithdrawNatSourceRequest, WithdrawNatSourceResponse,
+    WithdrawNeighborNatRequest, WithdrawNeighborNatResponse, WithdrawRouteRequest,
+    WithdrawRouteResponse,
 };
 
 use crate::attach::AttachState;
@@ -161,6 +164,162 @@ impl DataplaneNode for NodeService {
         println!("ROUTE withdraw vni={vni} prefix={}", r.prefix);
         Ok(Response::new(WithdrawRouteResponse {}))
     }
+
+    async fn add_nat_source(
+        &self,
+        req: Request<AddNatSourceRequest>,
+    ) -> Result<Response<AddNatSourceResponse>, Status> {
+        let attach = self
+            .attach
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
+            .clone();
+        let r = req.into_inner();
+        let source =
+            parse_ipv4(&r.source_ip).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let nat_ip = parse_ipv4(&r.nat_ip).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let port_min = port_u16(r.port_min).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let port_max = port_u16(r.port_max).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let vni = r.vni;
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let c = &attach.control;
+            // create_nat is keyed by interface_id; resolve (vni, source) -> id from the
+            // attached interfaces. The source must be locally attached (a source endpoint on
+            // this gateway) for the SNAT block to be owned here.
+            let id = find_interface_id(c, vni, source)?;
+            // Idempotent: drop any existing NAT on this source so a re-announce or a moved
+            // block replaces it instead of hitting SNAT_EXISTS.
+            let _ = c.delete_nat(&id)?;
+            c.create_nat(&id, nat_ip, port_min, port_max, None)?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| Status::internal(format!("add_nat_source task panicked: {e}")))?
+        .map_err(|e| Status::internal(e.to_string()))?;
+        println!(
+            "NAT source vni={vni} src={} -> nat_ip={} ports={}..{}",
+            r.source_ip, r.nat_ip, r.port_min, r.port_max
+        );
+        Ok(Response::new(AddNatSourceResponse {}))
+    }
+
+    async fn withdraw_nat_source(
+        &self,
+        req: Request<WithdrawNatSourceRequest>,
+    ) -> Result<Response<WithdrawNatSourceResponse>, Status> {
+        let attach = self
+            .attach
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
+            .clone();
+        let r = req.into_inner();
+        let source =
+            parse_ipv4(&r.source_ip).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let vni = r.vni;
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let c = &attach.control;
+            // Removing an absent source is not an error: if the interface is gone or has no NAT,
+            // treat it as already withdrawn.
+            if let Ok(id) = find_interface_id(c, vni, source) {
+                let _ = c.delete_nat(&id)?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|e| Status::internal(format!("withdraw_nat_source task panicked: {e}")))?
+        .map_err(|e| Status::internal(e.to_string()))?;
+        println!("NAT source withdraw vni={vni} src={}", r.source_ip);
+        Ok(Response::new(WithdrawNatSourceResponse {}))
+    }
+
+    async fn add_neighbor_nat(
+        &self,
+        req: Request<AddNeighborNatRequest>,
+    ) -> Result<Response<AddNeighborNatResponse>, Status> {
+        let attach = self
+            .attach
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
+            .clone();
+        let r = req.into_inner();
+        let nat_ip = parse_ipv4(&r.nat_ip).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let owner = parse_nexthop6(&r.owner_underlay)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let port_min = port_u16(r.port_min).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let port_max = port_u16(r.port_max).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let vni = r.vni;
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let c = &attach.control;
+            // Idempotent: drop any existing entry for this (vni, nat_ip, ports) first so a
+            // re-announce (e.g. block reassignment on drain) replaces the owner underlay.
+            let _ = c.del_neighbor_nat(vni, nat_ip, port_min, port_max)?;
+            c.add_neighbor_nat(vni, nat_ip, port_min, port_max, owner)?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| Status::internal(format!("add_neighbor_nat task panicked: {e}")))?
+        .map_err(|e| Status::internal(e.to_string()))?;
+        println!(
+            "NEIGHBOR_NAT add vni={vni} nat_ip={} ports={}..{} -> owner={}",
+            r.nat_ip, r.port_min, r.port_max, r.owner_underlay
+        );
+        Ok(Response::new(AddNeighborNatResponse {}))
+    }
+
+    async fn withdraw_neighbor_nat(
+        &self,
+        req: Request<WithdrawNeighborNatRequest>,
+    ) -> Result<Response<WithdrawNeighborNatResponse>, Status> {
+        let attach = self
+            .attach
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
+            .clone();
+        let r = req.into_inner();
+        let nat_ip = parse_ipv4(&r.nat_ip).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let port_min = port_u16(r.port_min).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let port_max = port_u16(r.port_max).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let vni = r.vni;
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let c = &attach.control;
+            // Removing an absent entry is not an error (del_neighbor_nat returns Ok(false)).
+            let _ = c.del_neighbor_nat(vni, nat_ip, port_min, port_max)?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| Status::internal(format!("withdraw_neighbor_nat task panicked: {e}")))?
+        .map_err(|e| Status::internal(e.to_string()))?;
+        println!(
+            "NEIGHBOR_NAT withdraw vni={vni} nat_ip={} ports={}..{}",
+            r.nat_ip, r.port_min, r.port_max
+        );
+        Ok(Response::new(WithdrawNeighborNatResponse {}))
+    }
+}
+
+/// Resolve a locally-attached interface id from `(vni, ipv4)`. `create_nat`/`delete_nat` are keyed
+/// by interface id, but the protocol-agnostic RPCs identify a source by its overlay (vni, ip); the
+/// attach table is the bridge. Errors if no local interface matches (SNAT is owned where the source
+/// is attached).
+fn find_interface_id(
+    control: &crate::control::Control,
+    vni: u32,
+    ipv4: [u8; 4],
+) -> anyhow::Result<Vec<u8>> {
+    control
+        .list_interfaces()
+        .into_iter()
+        .find(|(_, v, ip, _, _, _)| *v == vni && *ip == ipv4)
+        .map(|(id, ..)| id)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "NO_VM: no local interface for vni={vni} ip={}.{}.{}.{}",
+                ipv4[0],
+                ipv4[1],
+                ipv4[2],
+                ipv4[3]
+            )
+        })
 }
 
 /// Parse a CIDR string into (is_v6, 16-byte address buffer, prefix_len). For IPv4 the four
@@ -202,6 +361,17 @@ fn parse_nexthop6(s: &str) -> anyhow::Result<[u8; 16]> {
         .parse()
         .map_err(|_| anyhow::anyhow!("bad nexthop underlay ipv6 {s:?}"))?;
     Ok(a.octets())
+}
+
+/// Parse an IPv4 address string into its four octets.
+fn parse_ipv4(s: &str) -> anyhow::Result<[u8; 4]> {
+    let a: std::net::Ipv4Addr = s.parse().map_err(|_| anyhow::anyhow!("bad ipv4 {s:?}"))?;
+    Ok(a.octets())
+}
+
+/// Narrow a proto `uint32` port into a `u16`, rejecting out-of-range values.
+fn port_u16(p: u32) -> anyhow::Result<u16> {
+    u16::try_from(p).map_err(|_| anyhow::anyhow!("port {p} out of range (0..=65535)"))
 }
 
 #[cfg(test)]

@@ -15,6 +15,17 @@ service DataplaneNode {
   rpc AddRoute(AddRouteRequest) returns (AddRouteResponse);
   // WithdrawRoute removes an overlay route. Removing an absent route is not an error.
   rpc WithdrawRoute(WithdrawRouteRequest) returns (WithdrawRouteResponse);
+  // AddNatSource programs egress SNAT for a source (vni, source_ip) onto a
+  // deterministic (nat_ip, [port_min, port_max]) block. Idempotent-ish: re-adding
+  // an existing source replaces its block.
+  rpc AddNatSource(AddNatSourceRequest) returns (AddNatSourceResponse);
+  // WithdrawNatSource removes a source's SNAT. Removing an absent source is not an error.
+  rpc WithdrawNatSource(WithdrawNatSourceRequest) returns (WithdrawNatSourceResponse);
+  // AddNeighborNat programs a return-to-owner entry: return traffic to
+  // (nat_ip, [port_min, port_max]) is re-forwarded to owner_underlay.
+  rpc AddNeighborNat(AddNeighborNatRequest) returns (AddNeighborNatResponse);
+  // WithdrawNeighborNat removes a return-to-owner entry. Removing an absent one is not an error.
+  rpc WithdrawNeighborNat(WithdrawNeighborNatRequest) returns (WithdrawNeighborNatResponse);
 }
 
 message AttachInterfaceRequest {
@@ -55,3 +66,35 @@ message WithdrawRouteRequest {
   string prefix = 2;           // CIDR, as in AddRouteRequest
 }
 message WithdrawRouteResponse {}
+
+message AddNatSourceRequest {
+  uint32 vni = 1;
+  string source_ip = 2; // overlay IPv4 of the source (a NetworkInterface IP)
+  string nat_ip = 3;    // public IPv4 the source is SNATed onto
+  uint32 port_min = 4;  // inclusive
+  uint32 port_max = 5;  // exclusive
+}
+message AddNatSourceResponse {}
+
+message WithdrawNatSourceRequest {
+  uint32 vni = 1;
+  string source_ip = 2; // overlay IPv4 of the source
+}
+message WithdrawNatSourceResponse {}
+
+message AddNeighborNatRequest {
+  string nat_ip = 1;         // public IPv4 whose return block this entry owns
+  uint32 port_min = 2;       // inclusive
+  uint32 port_max = 3;       // exclusive
+  string owner_underlay = 4; // owner node underlay IPv6 return traffic is forwarded to
+  uint32 vni = 5;
+}
+message AddNeighborNatResponse {}
+
+message WithdrawNeighborNatRequest {
+  string nat_ip = 1;
+  uint32 port_min = 2;
+  uint32 port_max = 3;
+  uint32 vni = 4;
+}
+message WithdrawNeighborNatResponse {}

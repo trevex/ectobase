@@ -19,11 +19,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	DataplaneNode_AttachInterface_FullMethodName  = "/dataplane.v1.DataplaneNode/AttachInterface"
-	DataplaneNode_DetachInterface_FullMethodName  = "/dataplane.v1.DataplaneNode/DetachInterface"
-	DataplaneNode_ConfigureNetwork_FullMethodName = "/dataplane.v1.DataplaneNode/ConfigureNetwork"
-	DataplaneNode_AddRoute_FullMethodName         = "/dataplane.v1.DataplaneNode/AddRoute"
-	DataplaneNode_WithdrawRoute_FullMethodName    = "/dataplane.v1.DataplaneNode/WithdrawRoute"
+	DataplaneNode_AttachInterface_FullMethodName     = "/dataplane.v1.DataplaneNode/AttachInterface"
+	DataplaneNode_DetachInterface_FullMethodName     = "/dataplane.v1.DataplaneNode/DetachInterface"
+	DataplaneNode_ConfigureNetwork_FullMethodName    = "/dataplane.v1.DataplaneNode/ConfigureNetwork"
+	DataplaneNode_AddRoute_FullMethodName            = "/dataplane.v1.DataplaneNode/AddRoute"
+	DataplaneNode_WithdrawRoute_FullMethodName       = "/dataplane.v1.DataplaneNode/WithdrawRoute"
+	DataplaneNode_AddNatSource_FullMethodName        = "/dataplane.v1.DataplaneNode/AddNatSource"
+	DataplaneNode_WithdrawNatSource_FullMethodName   = "/dataplane.v1.DataplaneNode/WithdrawNatSource"
+	DataplaneNode_AddNeighborNat_FullMethodName      = "/dataplane.v1.DataplaneNode/AddNeighborNat"
+	DataplaneNode_WithdrawNeighborNat_FullMethodName = "/dataplane.v1.DataplaneNode/WithdrawNeighborNat"
 )
 
 // DataplaneNodeClient is the client API for DataplaneNode service.
@@ -41,6 +45,17 @@ type DataplaneNodeClient interface {
 	AddRoute(ctx context.Context, in *AddRouteRequest, opts ...grpc.CallOption) (*AddRouteResponse, error)
 	// WithdrawRoute removes an overlay route. Removing an absent route is not an error.
 	WithdrawRoute(ctx context.Context, in *WithdrawRouteRequest, opts ...grpc.CallOption) (*WithdrawRouteResponse, error)
+	// AddNatSource programs egress SNAT for a source (vni, source_ip) onto a
+	// deterministic (nat_ip, [port_min, port_max]) block. Idempotent-ish: re-adding
+	// an existing source replaces its block.
+	AddNatSource(ctx context.Context, in *AddNatSourceRequest, opts ...grpc.CallOption) (*AddNatSourceResponse, error)
+	// WithdrawNatSource removes a source's SNAT. Removing an absent source is not an error.
+	WithdrawNatSource(ctx context.Context, in *WithdrawNatSourceRequest, opts ...grpc.CallOption) (*WithdrawNatSourceResponse, error)
+	// AddNeighborNat programs a return-to-owner entry: return traffic to
+	// (nat_ip, [port_min, port_max]) is re-forwarded to owner_underlay.
+	AddNeighborNat(ctx context.Context, in *AddNeighborNatRequest, opts ...grpc.CallOption) (*AddNeighborNatResponse, error)
+	// WithdrawNeighborNat removes a return-to-owner entry. Removing an absent one is not an error.
+	WithdrawNeighborNat(ctx context.Context, in *WithdrawNeighborNatRequest, opts ...grpc.CallOption) (*WithdrawNeighborNatResponse, error)
 }
 
 type dataplaneNodeClient struct {
@@ -101,6 +116,46 @@ func (c *dataplaneNodeClient) WithdrawRoute(ctx context.Context, in *WithdrawRou
 	return out, nil
 }
 
+func (c *dataplaneNodeClient) AddNatSource(ctx context.Context, in *AddNatSourceRequest, opts ...grpc.CallOption) (*AddNatSourceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddNatSourceResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_AddNatSource_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataplaneNodeClient) WithdrawNatSource(ctx context.Context, in *WithdrawNatSourceRequest, opts ...grpc.CallOption) (*WithdrawNatSourceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WithdrawNatSourceResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_WithdrawNatSource_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataplaneNodeClient) AddNeighborNat(ctx context.Context, in *AddNeighborNatRequest, opts ...grpc.CallOption) (*AddNeighborNatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddNeighborNatResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_AddNeighborNat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataplaneNodeClient) WithdrawNeighborNat(ctx context.Context, in *WithdrawNeighborNatRequest, opts ...grpc.CallOption) (*WithdrawNeighborNatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WithdrawNeighborNatResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_WithdrawNeighborNat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DataplaneNodeServer is the server API for DataplaneNode service.
 // All implementations must embed UnimplementedDataplaneNodeServer
 // for forward compatibility.
@@ -116,6 +171,17 @@ type DataplaneNodeServer interface {
 	AddRoute(context.Context, *AddRouteRequest) (*AddRouteResponse, error)
 	// WithdrawRoute removes an overlay route. Removing an absent route is not an error.
 	WithdrawRoute(context.Context, *WithdrawRouteRequest) (*WithdrawRouteResponse, error)
+	// AddNatSource programs egress SNAT for a source (vni, source_ip) onto a
+	// deterministic (nat_ip, [port_min, port_max]) block. Idempotent-ish: re-adding
+	// an existing source replaces its block.
+	AddNatSource(context.Context, *AddNatSourceRequest) (*AddNatSourceResponse, error)
+	// WithdrawNatSource removes a source's SNAT. Removing an absent source is not an error.
+	WithdrawNatSource(context.Context, *WithdrawNatSourceRequest) (*WithdrawNatSourceResponse, error)
+	// AddNeighborNat programs a return-to-owner entry: return traffic to
+	// (nat_ip, [port_min, port_max]) is re-forwarded to owner_underlay.
+	AddNeighborNat(context.Context, *AddNeighborNatRequest) (*AddNeighborNatResponse, error)
+	// WithdrawNeighborNat removes a return-to-owner entry. Removing an absent one is not an error.
+	WithdrawNeighborNat(context.Context, *WithdrawNeighborNatRequest) (*WithdrawNeighborNatResponse, error)
 	mustEmbedUnimplementedDataplaneNodeServer()
 }
 
@@ -140,6 +206,18 @@ func (UnimplementedDataplaneNodeServer) AddRoute(context.Context, *AddRouteReque
 }
 func (UnimplementedDataplaneNodeServer) WithdrawRoute(context.Context, *WithdrawRouteRequest) (*WithdrawRouteResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method WithdrawRoute not implemented")
+}
+func (UnimplementedDataplaneNodeServer) AddNatSource(context.Context, *AddNatSourceRequest) (*AddNatSourceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddNatSource not implemented")
+}
+func (UnimplementedDataplaneNodeServer) WithdrawNatSource(context.Context, *WithdrawNatSourceRequest) (*WithdrawNatSourceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method WithdrawNatSource not implemented")
+}
+func (UnimplementedDataplaneNodeServer) AddNeighborNat(context.Context, *AddNeighborNatRequest) (*AddNeighborNatResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddNeighborNat not implemented")
+}
+func (UnimplementedDataplaneNodeServer) WithdrawNeighborNat(context.Context, *WithdrawNeighborNatRequest) (*WithdrawNeighborNatResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method WithdrawNeighborNat not implemented")
 }
 func (UnimplementedDataplaneNodeServer) mustEmbedUnimplementedDataplaneNodeServer() {}
 func (UnimplementedDataplaneNodeServer) testEmbeddedByValue()                       {}
@@ -252,6 +330,78 @@ func _DataplaneNode_WithdrawRoute_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DataplaneNode_AddNatSource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddNatSourceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneNodeServer).AddNatSource(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneNode_AddNatSource_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneNodeServer).AddNatSource(ctx, req.(*AddNatSourceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataplaneNode_WithdrawNatSource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WithdrawNatSourceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneNodeServer).WithdrawNatSource(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneNode_WithdrawNatSource_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneNodeServer).WithdrawNatSource(ctx, req.(*WithdrawNatSourceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataplaneNode_AddNeighborNat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddNeighborNatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneNodeServer).AddNeighborNat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneNode_AddNeighborNat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneNodeServer).AddNeighborNat(ctx, req.(*AddNeighborNatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataplaneNode_WithdrawNeighborNat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WithdrawNeighborNatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneNodeServer).WithdrawNeighborNat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneNode_WithdrawNeighborNat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneNodeServer).WithdrawNeighborNat(ctx, req.(*WithdrawNeighborNatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DataplaneNode_ServiceDesc is the grpc.ServiceDesc for DataplaneNode service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -278,6 +428,22 @@ var DataplaneNode_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "WithdrawRoute",
 			Handler:    _DataplaneNode_WithdrawRoute_Handler,
+		},
+		{
+			MethodName: "AddNatSource",
+			Handler:    _DataplaneNode_AddNatSource_Handler,
+		},
+		{
+			MethodName: "WithdrawNatSource",
+			Handler:    _DataplaneNode_WithdrawNatSource_Handler,
+		},
+		{
+			MethodName: "AddNeighborNat",
+			Handler:    _DataplaneNode_AddNeighborNat_Handler,
+		},
+		{
+			MethodName: "WithdrawNeighborNat",
+			Handler:    _DataplaneNode_WithdrawNeighborNat_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
