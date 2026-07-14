@@ -16,5 +16,17 @@ CLAB="${CLAB:-containerlab}"
 command -v "${CLAB%% *}" >/dev/null 2>&1 || { echo "clab-up: containerlab not found on PATH" >&2; exit 1; }
 command -v kind >/dev/null 2>&1 || { echo "clab-up: kind not found on PATH" >&2; exit 1; }
 
+# The fabric nodes use the custom kind-node image (node-IP = pre-kubelet BGP /64).
+# Build it if missing, and render the per-node prefix mount paths to absolutes
+# (kind rejects relative extraMounts hostPaths).
+REPO="$(cd "${HERE}/.." && pwd)"
+if ! docker image inspect kindest/node-fabric:dev >/dev/null 2>&1; then
+  make -C "${REPO}" image-kindnode
+fi
+PREFIX_DIR="${HERE}/clab/prefixes"
+for f in "${HERE}/clab/kind-cluster.yaml" "${HERE}/clab/kind-cluster-k02.yaml"; do
+  sed "s#PREFIX_DIR#${PREFIX_DIR}#g" "$f" > "${f}.gen"
+done
+
 # --reconfigure makes re-runs idempotent (destroy+deploy the same-named lab).
 exec ${CLAB} deploy --reconfigure -t "${TOPO}" "$@"

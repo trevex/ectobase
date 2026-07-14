@@ -53,7 +53,7 @@ topology:
     # The two kind nodes (control-plane + worker) are the "hosts" running xdp-dp.
     k01:
       kind: k8s-kind
-      startup-config: kind-cluster.yaml
+      startup-config: kind-cluster.yaml.gen
       extras:
         k8s_kind:
           deploy:
@@ -63,7 +63,7 @@ topology:
     # plane (reflector + CRDs) over the shared fabric. One node, its own /64. ---
     k02:
       kind: k8s-kind
-      startup-config: kind-cluster-k02.yaml
+      startup-config: kind-cluster-k02.yaml.gen
       extras:
         k8s_kind:
           deploy:

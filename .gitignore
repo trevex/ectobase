@@ -8,3 +8,9 @@
 # Python bytecode cache
 __pycache__/
 *.pyc
+
+# Brainstorming visual-companion session artifacts
+.superpowers/
+
+# clab-up.sh renders these from the kind configs (absolute prefix mount paths)
+hack/clab/*.gen
