@@ -123,12 +123,16 @@ Wiring:
   `LoadBalancer` cache read (a cached informer read, not an apiserver round-trip).
 - **Edge announces the VIP to WAN via BGP** (existing edge announcement path).
 
-### 4.3 Datapath parameterization (small, in-scope)
+### 4.3 Datapath change (minimal)
 
-The hardcoded `vni=0` for the WAN edge LB (`wan_rx` call site and `create_lb`) becomes a configurable
-**edge LB-VNI** supplied by the edge agent flag (`--public-vni` / equivalent). The proto comment
-"`vni=0` for the WAN edge" is removed; the agent always sets it. No node agent needs an LB-VNI (only
-the edge registers an LB). This is the only Rust/datapath change in the subproject.
+Under model A no node ever registers an LB (E/W is a plain anycast route), so there is **no overlay
+"LB VNI" to configure** — the edge keeps `vni=0` as the WAN sentinel, which `wan_rx` already uses. No
+eBPF change and no edge LB-VNI flag are needed. The **only** datapath change is in `create_lb`: it
+must **skip the `UNDERLAY[lb_underlay]` write when `vni==0`**. The edge passes its own anycast
+underlay as `lb_underlay`; `wan_rx` never resolves it (it maglev-selects from a raw WAN frame), but
+`attach_edge` already registered `UNDERLAY[edge_underlay] = LOCAL_DELIVER` for fabric→WAN egress, so
+an unconditional write would clobber it. Guarding the write on `vni!=0` leaves the overlay relay path
+(if ever used) intact while making the edge registration safe.
 
 ## 5. Compiler + controller
 
@@ -185,8 +189,9 @@ compilation is unchanged. `Compile` performs no I/O.
     targets.
   - Agent: route reconcile emits the VIP anycast route (v4 and v6); `DesiredPublic` emits LB_VIP;
     `applyPublic` LB_VIP → `AddLbBackend` diff (fake dataplane, models ALREADY_EXISTS).
-- **Conformance:** an E/W LB test — two backends, ingress-allow on the service port, assert delivery;
-  then remove the allow and assert drop (LB is not exempt from the firewall).
+- **Conformance:** not extended. An E/W LB is inherently multi-node (anycast across backend nodes),
+  which the single-instance conformance harness cannot express; the `xdp-dp-sim` Fabric is the
+  correct multi-node coverage. The firewall-gating property (LB not exempt) is proven there.
 
 ## 8. Non-goals / deferred
 
