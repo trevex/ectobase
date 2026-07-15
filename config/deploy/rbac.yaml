@@ -21,6 +21,12 @@ rules:
       - networkinterfaces/status
       - natgateways
       - natgateways/status
+      # The agent lists CompiledNICs (firewall + LB reconcile) and LoadBalancers
+      # (edge ReconcileLB -> AddLbVip) to program the dataplane.
+      - compilednics
+      - compilednics/status
+      - loadbalancers
+      - loadbalancers/status
     verbs: ["get", "list", "watch"]
   # The agent reports interface programming state back onto the NIC status.
   - apiGroups: ["net.ectobase.dev"]
@@ -76,6 +82,17 @@ rules:
   - apiGroups: ["net.ectobase.dev"]
     resources: ["networkinterfaces"]
     verbs: ["get", "list", "watch"]
+  # The CompiledNICReconciler reads NetworkInterfaces + NetworkPolicies + LoadBalancers
+  # and writes CompiledNIC objects (owned by the NIC) with their status.
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["networkpolicies", "loadbalancers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["compilednics"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["compilednics/status"]
+    verbs: ["get", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

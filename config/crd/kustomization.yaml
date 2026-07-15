@@ -11,3 +11,4 @@ resources:
 - bases/net.ectobase.dev_loadbalancers.yaml
 - bases/net.ectobase.dev_natgateways.yaml
 - bases/net.ectobase.dev_virtualips.yaml
+- bases/net.ectobase.dev_compilednics.yaml
