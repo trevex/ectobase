@@ -124,21 +124,9 @@ spec:
                 description: VIP is the virtual IP (IPv4 or IPv6). It is the LB identity
                   and the AddLbVip id.
                 type: string
-              vpcRef:
-                description: |-
-                  VPCRef references the VPC whose VNI the backends live in. Used to originate the external
-                  default route so DSR replies (source = the public VIP, un-SNAT'd) can egress via the edge.
-                properties:
-                  name:
-                    description: Name is the name of the referenced object.
-                    type: string
-                required:
-                - name
-                type: object
             required:
             - ports
             - vip
-            - vpcRef
             type: object
           status:
             description: LoadBalancerStatus is the observed state of a LoadBalancer.
