@@ -3,6 +3,7 @@
 pub mod conntrack;
 pub mod encap;
 pub mod firewall;
+pub mod lb;
 pub mod maps;
 pub mod parse;
 pub mod pkt;
