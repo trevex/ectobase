@@ -1,6 +1,6 @@
 use aya_ebpf::{
     macros::map,
-    maps::{lpm_trie::LpmTrie, Array, HashMap, LruHashMap, ProgramArray},
+    maps::{lpm_trie::LpmTrie, Array, DevMap, HashMap, LruHashMap, ProgramArray},
 };
 use xdp_dp_common::{
     Config, CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceValue,
@@ -22,6 +22,13 @@ pub static CONFIG: Array<Config> = Array::with_max_entries(1, 0);
 pub static PORT_META: HashMap<u32, PortMeta> = HashMap::with_max_entries(1024, 0);
 #[map]
 pub static LOCAL: Array<Local> = Array::with_max_entries(1, 0);
+// Single-slot devmap holding the fabric uplink ifindex (key 0), populated by userspace when LOCAL
+// is set. The edge `wan_rx` RX->fabric redirect (encap_and_redirect) goes through this instead of a
+// plain bpf_redirect: on veth (containerlab) a plain XDP_REDIRECT only delivers if the peer port has
+// an XDP program (veth ndo_xdp_xmit requirement); the devmap path does not carry that constraint.
+// Production real NICs work either way, so this is a harness-robustness change, not a logic change.
+#[map]
+pub static UPLINK_DEV: DevMap = DevMap::with_max_entries(1, 0);
 #[map]
 pub static INSPECT: Array<InspectEntry> = Array::with_max_entries(1, 0);
 /// 1:1 VIP map. Value is the mapped IPv4 counterpart: (vni,G)->V for egress SNAT, (vni,V)->G for

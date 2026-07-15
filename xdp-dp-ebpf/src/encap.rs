@@ -35,7 +35,13 @@ pub fn encap_and_redirect(
     };
     let mut pkt = CtxPkt { ctx };
     if write_outer_v6(&mut pkt, &e) {
-        Ok(unsafe { bpf_redirect(e.uplink_ifindex, 0) } as u32)
+        // Redirect out the fabric uplink via UPLINK_DEV (devmap key 0 == e.uplink_ifindex) rather
+        // than a plain bpf_redirect: on containerlab veth uplinks a plain XDP_REDIRECT is silently
+        // dropped unless the peer port has an XDP program (veth ndo_xdp_xmit peer requirement); the
+        // devmap redirect path avoids that. Falls back to XDP_ABORTED if the slot is unpopulated.
+        Ok(crate::maps::UPLINK_DEV
+            .redirect(0, 0)
+            .unwrap_or(xdp_action::XDP_ABORTED))
     } else {
         Err(())
     }

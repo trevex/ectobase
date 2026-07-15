@@ -13,7 +13,8 @@ use crate::grpc::LbIpBytes;
 use crate::loader;
 use crate::maps::{
     Conntrack, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwRules, Interfaces, Lb, LocalMap, Maglev,
-    Meter, Nat, NatIps, NeighborNat, NeighborNatCount, PortMetaMap, Routes, Routes6, Vips,
+    Meter, Nat, NatIps, NeighborNat, NeighborNatCount, PortMetaMap, Routes, Routes6, UplinkDevMap,
+    Vips,
 };
 
 /// The owned link for a guest interface's attached datapath program. Dropping either variant
@@ -246,6 +247,10 @@ impl Control {
             gateway_mac,
             underlay_ipv6,
         })?;
+        // Point the uplink devmap at the fabric uplink so the wan_rx fabric redirect delivers over
+        // containerlab veths (the kernel keeps the map entry alive via the loaded program, so the
+        // handle can drop here).
+        UplinkDevMap::open(&mut ebpf)?.set(uplink_ifindex)?;
         let ports = PortMetaMap::open(&mut ebpf)?;
         let ifaces = Interfaces::open(&mut ebpf)?;
         let routes = Routes::open(&mut ebpf)?;

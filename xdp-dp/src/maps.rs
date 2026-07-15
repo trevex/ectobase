@@ -1,7 +1,7 @@
 use anyhow::Context;
 use aya::maps::{
     lpm_trie::{Key, LpmTrie},
-    Array, HashMap, MapData,
+    Array, DevMap, HashMap, MapData,
 };
 use aya::Ebpf;
 use xdp_dp_common::{
@@ -54,6 +54,30 @@ impl LocalMap {
 
     pub fn set(&mut self, local: &Local) -> anyhow::Result<()> {
         self.map.set(0, local, 0).context("write LOCAL[0]")
+    }
+}
+
+/// Typed handle over the `UPLINK_DEV` devmap (single slot 0 -> fabric uplink ifindex). The edge
+/// `wan_rx` fabric redirect goes through this devmap so containerlab veth uplinks deliver the
+/// XDP_REDIRECT without needing a peer XDP program (see the eBPF `UPLINK_DEV` comment).
+pub struct UplinkDevMap {
+    map: DevMap<MapData>,
+}
+
+impl UplinkDevMap {
+    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
+        let map = DevMap::try_from(
+            ebpf.take_map("UPLINK_DEV")
+                .context("UPLINK_DEV map missing")?,
+        )?;
+        Ok(Self { map })
+    }
+
+    /// Point slot 0 at the fabric uplink ifindex (no chained program).
+    pub fn set(&mut self, uplink_ifindex: u32) -> anyhow::Result<()> {
+        self.map
+            .set(0, uplink_ifindex, None, 0)
+            .context("write UPLINK_DEV[0]")
     }
 }
 
