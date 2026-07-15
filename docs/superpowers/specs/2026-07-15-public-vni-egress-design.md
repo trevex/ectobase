@@ -84,6 +84,7 @@ Same subscribe→learn→import path; only the *source VNI* and *prefix set* dif
 - Public-IP IPAM (`PublicIPPool`) — separate slice.
 - Floating IPs — separate feature.
 - Datapath `nexthop_vni` recursion — explicitly NOT needed (control-plane import; datapath unchanged).
+- Removing `RouteValue.nexthop_vni` — **intentionally kept** as the cross-VNI metadata slot (== metalnet `NextHop.targetVNI`) for future VPC peering. It is unused by *our* datapath (delivery VNI is derived from the underlay /128), but dropping it churns the eBPF map layout + BPF anchors + sim + proto for a 4-byte field we'd re-add for peering; not worth it, and out of scope for this pure-control-plane slice.
 - Making the public VNI a real wire VNI — it is control-plane only.
 - VPC peering implementation — only shaped for.
 
