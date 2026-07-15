@@ -4,11 +4,19 @@
 package controllers
 
 import (
+	"context"
 	"fmt"
 
 	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // Compile lowers a NetworkInterface + the NetworkPolicies that select it into a CompiledNIC.
@@ -95,4 +103,78 @@ func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy) netv1.
 	}
 
 	return compiled
+}
+
+// CompiledNICReconciler watches NetworkInterfaces and NetworkPolicies, then
+// writes (create/update) CompiledNIC objects by calling Compile().
+type CompiledNICReconciler struct{ Client client.Client }
+
+// Reconcile fetches the NetworkInterface named by req and upserts its CompiledNIC.
+func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	var nic netv1.NetworkInterface
+	if err := r.Client.Get(ctx, req.NamespacedName, &nic); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	var policies netv1.NetworkPolicyList
+	if err := r.Client.List(ctx, &policies, client.InNamespace(nic.Namespace)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list networkpolicies: %w", err)
+	}
+	compiled := Compile(&nic, policies.Items)
+	key := types.NamespacedName{Namespace: compiled.Namespace, Name: compiled.Name}
+	var existing netv1.CompiledNIC
+	err := r.Client.Get(ctx, key, &existing)
+	switch {
+	case apierrors.IsNotFound(err):
+		if err := controllerutil.SetControllerReference(&nic, &compiled, r.Client.Scheme()); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.Client.Create(ctx, &compiled); err != nil {
+			return ctrl.Result{}, fmt.Errorf("create compilednic: %w", err)
+		}
+	case err != nil:
+		return ctrl.Result{}, err
+	default:
+		existing.Spec = compiled.Spec
+		if err := r.Client.Update(ctx, &existing); err != nil {
+			return ctrl.Result{}, fmt.Errorf("update compilednic: %w", err)
+		}
+	}
+	return ctrl.Result{}, nil
+}
+
+// SetupWithManager registers the CompiledNICReconciler with the controller-runtime Manager.
+// It watches NetworkInterfaces directly (Owns their CompiledNICs) and re-enqueues NICs
+// whenever a matching NetworkPolicy changes.
+func (r *CompiledNICReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&netv1.NetworkInterface{}).
+		Owns(&netv1.CompiledNIC{}).
+		Watches(&netv1.NetworkPolicy{}, handler.EnqueueRequestsFromMapFunc(r.nicsForPolicy)).
+		Complete(r)
+}
+
+// nicsForPolicy maps a NetworkPolicy event to reconcile requests for every
+// NetworkInterface in the same namespace whose labels match the policy's InterfaceSelector.
+func (r *CompiledNICReconciler) nicsForPolicy(ctx context.Context, obj client.Object) []reconcile.Request {
+	pol, ok := obj.(*netv1.NetworkPolicy)
+	if !ok || pol.Spec.InterfaceSelector == nil {
+		return nil
+	}
+	sel, err := metav1.LabelSelectorAsSelector(pol.Spec.InterfaceSelector)
+	if err != nil {
+		return nil
+	}
+	var nics netv1.NetworkInterfaceList
+	if err := r.Client.List(ctx, &nics, client.InNamespace(pol.Namespace)); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range nics.Items {
+		if sel.Matches(labels.Set(nics.Items[i].Labels)) {
+			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{
+				Namespace: nics.Items[i].Namespace, Name: nics.Items[i].Name,
+			}})
+		}
+	}
+	return reqs
 }

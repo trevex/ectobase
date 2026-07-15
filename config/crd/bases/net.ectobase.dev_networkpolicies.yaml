@@ -38,11 +38,99 @@ spec:
           metadata:
             type: object
           spec:
-            description: |-
-              NetworkPolicySpec is the desired state of a NetworkPolicy.
-
-              SCAFFOLD ONLY: intentionally empty. Selector-based distributed firewall (§3.4).
-              Fleshed out in a later plan (YAGNI here).
+            description: NetworkPolicySpec is the desired state of a NetworkPolicy.
+            properties:
+              egress:
+                description: Egress is the ordered list of egress rules to apply to
+                  selected interfaces.
+                items:
+                  description: NetworkPolicyRule is a single allow/deny rule for ingress
+                    or egress traffic.
+                  properties:
+                    action:
+                      description: Action is "Allow" or "Deny".
+                      type: string
+                    cidr:
+                      description: CIDR is the source (ingress) or destination (egress)
+                        CIDR to match.
+                      type: string
+                    port:
+                      description: Port is the destination port to match (0 = any).
+                      format: int32
+                      type: integer
+                    proto:
+                      description: Proto is the IP protocol to match ("TCP", "UDP",
+                        "ICMP", or "" for any).
+                      type: string
+                  required:
+                  - action
+                  - cidr
+                  type: object
+                type: array
+              ingress:
+                description: Ingress is the ordered list of ingress rules to apply
+                  to selected interfaces.
+                items:
+                  description: NetworkPolicyRule is a single allow/deny rule for ingress
+                    or egress traffic.
+                  properties:
+                    action:
+                      description: Action is "Allow" or "Deny".
+                      type: string
+                    cidr:
+                      description: CIDR is the source (ingress) or destination (egress)
+                        CIDR to match.
+                      type: string
+                    port:
+                      description: Port is the destination port to match (0 = any).
+                      format: int32
+                      type: integer
+                    proto:
+                      description: Proto is the IP protocol to match ("TCP", "UDP",
+                        "ICMP", or "" for any).
+                      type: string
+                  required:
+                  - action
+                  - cidr
+                  type: object
+                type: array
+              interfaceSelector:
+                description: InterfaceSelector selects the NetworkInterfaces this
+                  policy applies to via label matching.
+                properties:
+                  matchExpressions:
+                    description: matchExpressions is a list of label selector requirements.
+                    items:
+                      description: A label selector requirement is a selector that
+                        contains values, a key, and an operator.
+                      properties:
+                        key:
+                          description: key is the label key that the selector applies
+                            to.
+                          type: string
+                        operator:
+                          description: operator represents a key's relationship to
+                            a set of values.
+                          type: string
+                        values:
+                          description: values is an array of string values.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                      required:
+                      - key
+                      - operator
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  matchLabels:
+                    additionalProperties:
+                      type: string
+                    description: matchLabels is a map of key-value pairs.
+                    type: object
+                type: object
+                x-kubernetes-map-type: atomic
             type: object
           status:
             description: |-
