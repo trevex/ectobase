@@ -19,85 +19,27 @@ func findExternalRoute(routes []ExternalRoute, prefix string) *ExternalRoute {
 	return nil
 }
 
-func TestDesiredExternalRoutesEdgeAnnouncesDefault(t *testing.T) {
+func TestDesiredExternalRoutesEdgeIntoPublicVNI(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-
-	vpc := &netv1.VPC{}
-	vpc.Name = "blue"
-	vpc.Namespace = "default"
-	vpc.Status.VNI = 100
-
-	// EdgeUnderlay is deliberately left empty/bogus: it is deprecated and MUST be
-	// ignored; edge role is decided by the edge-loopback identity, not this field.
-	gw := &netv1.NATGateway{}
-	gw.Name = "gw"
-	gw.Namespace = "default"
-	gw.Spec.VPCRef = netv1.LocalObjectReference{Name: "blue"}
-
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(vpc, gw).Build()
-
-	// This node IS the edge (edge-loopback set): it originates the external default
-	// with nexthop = its own underlay (anycast).
-	routes, err := DesiredExternalRoutes(context.Background(), c, "fd00::e", "fd00:lo::1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	v4 := findExternalRoute(routes, "0.0.0.0/0")
-	if v4 == nil {
-		t.Fatalf("want an external default 0.0.0.0/0 route, got %+v", routes)
-	}
-	if v4.Vni != 100 || v4.Nexthop != "fd00::e" || !v4.External {
-		t.Fatalf("bad v4 external default route: %+v", *v4)
-	}
-
-	v6 := findExternalRoute(routes, "64:ff9b::/96")
-	if v6 == nil {
-		t.Fatalf("want a NAT64 external 64:ff9b::/96 route, got %+v", routes)
-	}
-	if v6.Vni != 100 || v6.Nexthop != "fd00::e" || !v6.External {
-		t.Fatalf("bad v6 NAT64 external route: %+v", *v6)
-	}
-}
-
-// A LoadBalancer with NO NATGateway must still make the edge originate the external default for its
-// VPC's VNI, so DSR replies (source = the public VIP, un-SNAT'd) can egress. No NAT64 for LB.
-func TestDesiredExternalRoutesLoadBalancerDSR(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := netv1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	vpc := &netv1.VPC{}
-	vpc.Name = "blue"
-	vpc.Namespace = "default"
-	vpc.Status.VNI = 100
-
-	lb := &netv1.LoadBalancer{}
-	lb.Name = "web-lb"
-	lb.Namespace = "default"
-	lb.Spec.VIP = "203.0.113.5"
-	lb.Spec.VPCRef = netv1.LocalObjectReference{Name: "blue"}
-	lb.Spec.Ports = []netv1.LoadBalancerPort{{Port: 80, Proto: "TCP"}}
-
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(vpc, lb).Build()
+	// No VPC/NATGateway/LoadBalancer objects at all: the edge is tenant-agnostic.
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 
 	routes, err := DesiredExternalRoutes(context.Background(), c, "fd00::e", "fd00:lo::1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	v4 := findExternalRoute(routes, "0.0.0.0/0")
-	if v4 == nil {
-		t.Fatalf("LoadBalancer must make the edge originate 0.0.0.0/0 for DSR return, got %+v", routes)
-	}
-	if v4.Vni != 100 || v4.Nexthop != "fd00::e" || !v4.External {
-		t.Fatalf("bad LB external default: %+v", *v4)
-	}
-	// No NAT64 prefix for an LB-only VNI (DSR is same-family).
-	if findExternalRoute(routes, "64:ff9b::/96") != nil {
-		t.Fatalf("LB-only VNI must not originate the NAT64 prefix, got %+v", routes)
+	// Every route is originated into the public VNI (0), nexthop = the edge's own underlay.
+	for _, want := range []string{"0.0.0.0/0", "64:ff9b::/96", "::/0"} {
+		r := findExternalRoute(routes, want)
+		if r == nil {
+			t.Fatalf("want %s originated, got %+v", want, routes)
+		}
+		if r.Vni != PublicVNI || r.Nexthop != "fd00::e" || !r.External {
+			t.Fatalf("bad public-VNI route %s: %+v", want, *r)
+		}
 	}
 }
 
@@ -106,20 +48,7 @@ func TestDesiredExternalRoutesNonEdgeStagesNothing(t *testing.T) {
 	if err := netv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-
-	vpc := &netv1.VPC{}
-	vpc.Name = "blue"
-	vpc.Namespace = "default"
-	vpc.Status.VNI = 100
-
-	gw := &netv1.NATGateway{}
-	gw.Name = "gw"
-	gw.Namespace = "default"
-	gw.Spec.VPCRef = netv1.LocalObjectReference{Name: "blue"}
-
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(vpc, gw).Build()
-
-	// This node is NOT the edge (empty edge-loopback): it announces nothing.
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 	routes, err := DesiredExternalRoutes(context.Background(), c, "fd00::b", "")
 	if err != nil {
 		t.Fatal(err)
@@ -138,17 +67,7 @@ func TestReconcileEdgeStagesExternalDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	vpc := &netv1.VPC{}
-	vpc.Name = "blue"
-	vpc.Namespace = "default"
-	vpc.Status.VNI = 100
-
-	gw := &netv1.NATGateway{}
-	gw.Name = "gw"
-	gw.Namespace = "default"
-	gw.Spec.VPCRef = netv1.LocalObjectReference{Name: "blue"}
-
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(vpc, gw).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 
 	// Edge node (identified by its edge-loopback, not NATGateway.EdgeUnderlay).
 	edge := &Reconciler{client: c, nodeID: "edge", underlay: "fd00::e", edgeLoopback: "fd00:lo::1"}
@@ -159,11 +78,11 @@ func TestReconcileEdgeStagesExternalDefault(t *testing.T) {
 	if findRoute(announce, "0.0.0.0/0") == nil || findRoute(announce, "64:ff9b::/96") == nil {
 		t.Fatalf("edge Desired() must stage the external default routes, got %+v", announce)
 	}
-	if r := findRoute(announce, "0.0.0.0/0"); !r.External || r.Nexthop != "fd00::e" || r.Vni != 100 {
+	if r := findRoute(announce, "0.0.0.0/0"); !r.External || r.Nexthop != "fd00::e" || r.Vni != PublicVNI {
 		t.Fatalf("bad staged external default: %+v", *r)
 	}
-	if !containsVNI(subs, 100) {
-		t.Fatalf("edge must subscribe to the originated VNI 100, subs=%v", subs)
+	if !containsVNI(subs, PublicVNI) {
+		t.Fatalf("edge must subscribe to the public VNI, subs=%v", subs)
 	}
 
 	// Non-edge node.
