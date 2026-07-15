@@ -54,3 +54,34 @@ fn ingress_allow_rule_matches() {
         FW_ACTION_DROP
     );
 }
+
+/// Deny-by-default: with no per-interface firewall meta at all, or meta with zero rules in the
+/// direction, the verdict is DROP (the caller gates the actual drop on `fw_enforcing()`).
+#[test]
+fn deny_by_default_when_no_rules() {
+    let ifindex = 7u32;
+    let pkt = VecPkt::from_bytes(&tcp_v4([10, 0, 0, 5], [10, 0, 0, 10], 5000, 443));
+
+    // No fw_meta for the interface at all → DROP.
+    let empty = MemMaps::default();
+    assert_eq!(
+        fw_eval_dir(&pkt, &empty, 0, ifindex, FW_DIR_INGRESS),
+        FW_ACTION_DROP,
+        "no firewall meta => deny-by-default"
+    );
+
+    // Meta present but zero ingress rules → DROP.
+    let mut m = MemMaps::default();
+    m.fw_meta.insert(
+        ifindex,
+        FwMeta {
+            ingress_count: 0,
+            egress_count: 0,
+        },
+    );
+    assert_eq!(
+        fw_eval_dir(&pkt, &m, 0, ifindex, FW_DIR_INGRESS),
+        FW_ACTION_DROP,
+        "zero rules in direction => deny-by-default"
+    );
+}

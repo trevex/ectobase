@@ -27,6 +27,12 @@
           "port": 443,
           "action": "Allow"
         }
+      ],
+      "egress": [
+        {
+          "cidr": "0.0.0.0/0",
+          "action": "Allow"
+        }
       ]
     }
   },

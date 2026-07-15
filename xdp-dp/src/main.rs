@@ -849,7 +849,9 @@ async fn main() -> anyhow::Result<()> {
 
             // Firewall: each --fw-rule programs a per-interface rule; rules are appended in order
             // to FW_RULES[(ifindex, slot)] and the per-direction counts to FW_META[ifindex].
-            // Whitelist semantics live in the datapath (empty direction => accept).
+            // Deny-by-default in the datapath: an empty direction => DROP (gated by
+            // `--firewall-enforce`). The control plane materializes k8s default-allow as explicit
+            // allow-all rules for unpolicied directions (see netplane `Compile()`).
             let mut fw_rules_map = maps::FwRules::open(&mut ebpf)?;
             let mut fw_meta_map = maps::FwMetaMap::open(&mut ebpf)?;
             let mut fw_config = maps::FwConfig::open(&mut ebpf)?;

@@ -49,7 +49,6 @@ func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy) netv1.
 
 	nicLabels := labels.Set(nic.Labels)
 
-	matched := false
 	for _, policy := range policies {
 		if policy.Spec.InterfaceSelector == nil {
 			continue
@@ -62,7 +61,6 @@ func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy) netv1.
 		if !sel.Matches(nicLabels) {
 			continue
 		}
-		matched = true
 
 		// Translate ingress rules.
 		for _, r := range policy.Spec.Ingress {
@@ -85,10 +83,14 @@ func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy) netv1.
 		}
 	}
 
-	if !matched {
-		// k8s default-allow, materialized explicitly because the dataplane is deny-by-default.
-		allowAll := netv1.CompiledFwRule{CIDR: "0.0.0.0/0", Action: "Allow"} // Proto "" = any, Port 0 = any
+	// k8s default-allow is PER DIRECTION: a direction with no compiled rules is not governed by any
+	// policy, so materialize an explicit allow-all for it (the dataplane is deny-by-default, so an
+	// empty direction would otherwise drop). A direction that a policy governs keeps only its rules.
+	allowAll := netv1.CompiledFwRule{CIDR: "0.0.0.0/0", Action: "Allow"} // Proto "" = any, Port 0 = any
+	if len(compiled.Spec.Firewall.Ingress) == 0 {
 		compiled.Spec.Firewall.Ingress = append(compiled.Spec.Firewall.Ingress, allowAll)
+	}
+	if len(compiled.Spec.Firewall.Egress) == 0 {
 		compiled.Spec.Firewall.Egress = append(compiled.Spec.Firewall.Egress, allowAll)
 	}
 
