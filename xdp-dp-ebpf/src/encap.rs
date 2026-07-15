@@ -7,7 +7,6 @@ use xdp_dp_common::{Local, RouteValue};
 use xdp_dp_core::encap::{write_outer_v6, EncapParams, IPV6_LEN};
 
 use crate::coreimpl::CtxPkt;
-use crate::parse::{write16, write6, ETH_LEN};
 
 /// Encapsulate the current inner IPv4 frame into Eth+IPv6 toward `route.nexthop_ipv6` and
 /// redirect out the local uplink. `inner_len` = (frame len - inner ETH_LEN), captured BEFORE
@@ -52,18 +51,13 @@ pub fn reforward(
     lb_underlay: &[u8; 16],
     backend: &[u8; 16],
 ) -> u32 {
-    let data = ctx.data();
-    let data_end = ctx.data_end();
-    if data + ETH_LEN + IPV6_LEN > data_end {
-        return xdp_action::XDP_DROP;
-    }
-    let p = data as *mut u8;
-    unsafe {
-        write6(p, &local.gateway_mac);
-        write6(p.add(6), &local.uplink_mac);
-        let ip = p.add(ETH_LEN);
-        write16(ip.add(8), lb_underlay);
-        write16(ip.add(24), backend);
-        bpf_redirect(local.uplink_ifindex, 0) as u32
+    match xdp_dp_core::encap::reforward(
+        &mut crate::coreimpl::CtxPkt { ctx },
+        local,
+        lb_underlay,
+        backend,
+    ) {
+        xdp_dp_core::pkt::Action::Redirect(ifindex) => (unsafe { bpf_redirect(ifindex, 0) }) as u32,
+        _ => xdp_action::XDP_DROP,
     }
 }

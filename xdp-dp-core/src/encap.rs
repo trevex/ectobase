@@ -1,4 +1,5 @@
-use crate::pkt::Pkt;
+use crate::pkt::{Action, Pkt};
+use xdp_dp_common::Local;
 
 /// Parameters describing the outer Eth+IPv6 header written by [`write_outer_v6`].
 ///
@@ -36,4 +37,28 @@ pub fn write_outer_v6<P: Pkt>(pkt: &mut P, e: &EncapParams) -> bool {
     ok &= pkt.write_bytes(ip + 8, &e.src_underlay);
     ok &= pkt.write_bytes(ip + 24, &e.nexthop_ipv6);
     ok
+}
+
+/// Re-forward an already-encapped frame to a new backend underlay (LB remote backend): rewrite the
+/// outer Ethernet (dst=gateway_mac, src=uplink_mac) + outer IPv6 src=lb_underlay / dst=backend, and
+/// return Redirect(uplink_ifindex) WITHOUT decap. Faithful port of eBPF `encap::reforward`.
+#[inline(always)]
+pub fn reforward<P: Pkt>(
+    pkt: &mut P,
+    local: &Local,
+    lb_underlay: &[u8; 16],
+    backend: &[u8; 16],
+) -> Action {
+    if ETH_LEN + IPV6_LEN > pkt.len() {
+        return Action::Drop;
+    }
+    let mut ok = true;
+    ok &= pkt.write_bytes(0, &local.gateway_mac);
+    ok &= pkt.write_bytes(6, &local.uplink_mac);
+    ok &= pkt.write_bytes(ETH_LEN + 8, lb_underlay);
+    ok &= pkt.write_bytes(ETH_LEN + 24, backend);
+    if !ok {
+        return Action::Drop;
+    }
+    Action::Redirect(local.uplink_ifindex)
 }
