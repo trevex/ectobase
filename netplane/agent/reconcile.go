@@ -25,6 +25,9 @@ type Reconciler struct {
 	// appliedFw tracks the last set of firewall rules pushed to the dataplane so
 	// ReconcileFirewall can diff and delete stale rules.
 	appliedFw map[string]map[string]FwRule // interfaceID -> ruleID -> rule
+	// appliedLbVips tracks the LB VIPs (id == VIP) this edge has AddLbVip'd, so ReconcileLB adds new
+	// ones, deletes removed ones, and never re-adds (create_lb rejects duplicate ids).
+	appliedLbVips map[string][]LbPort
 }
 
 // NewReconciler builds a Reconciler from a kubeconfig path (empty = in-cluster).

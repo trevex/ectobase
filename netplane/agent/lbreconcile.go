@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
@@ -53,4 +54,66 @@ func (r *Reconciler) desiredLB(ctx context.Context) ([]lbBacking, error) {
 		}
 	}
 	return out, nil
+}
+
+// ReconcileLB is the EDGE-only LB VIP reconcile: it lists LoadBalancers and diffs AddLbVip/DelLbVip
+// against appliedLbVips. Backends are added separately by the bus's applyPublic (LB_VIP records).
+// Non-edge nodes are a no-op (they reach VIPs via the E/W anycast route, not maglev).
+func (r *Reconciler) ReconcileLB(ctx context.Context) error {
+	if r.dp == nil || r.edgeLoopback == "" {
+		return nil
+	}
+	var lbs netv1.LoadBalancerList
+	if err := r.client.List(ctx, &lbs); err != nil {
+		return fmt.Errorf("list loadbalancers: %w", err)
+	}
+	desired := map[string][]LbPort{} // vip -> ports
+	for i := range lbs.Items {
+		lb := &lbs.Items[i]
+		ports := make([]LbPort, 0, len(lb.Spec.Ports))
+		for _, p := range lb.Spec.Ports {
+			ports = append(ports, LbPort{Port: uint32(p.Port), Proto: protoNum(p.Proto)})
+		}
+		desired[lb.Spec.VIP] = ports
+	}
+	if r.appliedLbVips == nil {
+		r.appliedLbVips = map[string][]LbPort{}
+	}
+	var errs []error
+	// Delete VIPs no longer desired (or whose ports changed → delete then re-add below).
+	for vip, prevPorts := range r.appliedLbVips {
+		if want, ok := desired[vip]; ok && lbPortsEqual(want, prevPorts) {
+			continue
+		}
+		if err := r.dp.DelLbVip(ctx, vip); err != nil {
+			errs = append(errs, fmt.Errorf("DelLbVip %s: %w", vip, err))
+			continue
+		}
+		delete(r.appliedLbVips, vip)
+	}
+	// Add VIPs newly desired (or just-deleted because ports changed). lbUnderlay = the edge's own
+	// anycast underlay; vni=0 (WAN). create_lb skips the UNDERLAY write for vni==0 (see Task 2).
+	for vip, ports := range desired {
+		if cur, ok := r.appliedLbVips[vip]; ok && lbPortsEqual(cur, ports) {
+			continue
+		}
+		if err := r.dp.AddLbVip(ctx, vip, 0, vip, r.underlay, ports); err != nil {
+			errs = append(errs, fmt.Errorf("AddLbVip %s: %w", vip, err))
+			continue
+		}
+		r.appliedLbVips[vip] = ports
+	}
+	return errors.Join(errs...)
+}
+
+func lbPortsEqual(a, b []LbPort) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

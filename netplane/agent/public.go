@@ -82,6 +82,22 @@ func (b *Bus) applyPublic(pp *rbv1.PublicPrefix, op rbv1.RouteOp) {
 		}
 		b.mu.Unlock()
 		log.Printf("learned EDGE_UNDERLAY anycast=%s owner=%s op=%s", anycast, owner, op)
+	case rbv1.PublicKind_PUBLIC_KIND_LB_VIP:
+		if !b.isEdge {
+			return // only the edge runs maglev/backends; E/W uses the plain anycast route
+		}
+		vip := stripMask(pp.GetPrefix())
+		owner := pp.GetOwnerUnderlay()
+		switch op {
+		case rbv1.RouteOp_ROUTE_OP_ADD:
+			if err := b.dp.AddLbBackend(context.Background(), vip, owner); err != nil {
+				log.Printf("AddLbBackend vip=%s backend=%s: %v", vip, owner, err)
+			}
+		case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
+			if err := b.dp.DelLbBackend(context.Background(), vip, owner); err != nil {
+				log.Printf("DelLbBackend vip=%s backend=%s: %v", vip, owner, err)
+			}
+		}
 	default:
 		log.Printf("applyPublic: kind=%s not yet handled", pp.GetKind())
 	}

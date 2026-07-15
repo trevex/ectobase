@@ -164,12 +164,12 @@ func TestAgentLearnsRemoteRouteAndProgramsDataplane(t *testing.T) {
 
 	// Agent A announces one local route (no dataplane needed for the announcer here).
 	dpA := newFakeDP()
-	busA := NewBus("nodeA", "fd00::a", dpA)
+	busA := NewBus("nodeA", "fd00::a", dpA, false)
 	go busA.Run(ctx, cl, nil, []Route{{Vni: 100, Prefix: "10.0.0.1/32", Nexthop: "fd00::a"}}, nil, nil)
 
 	// Agent B subscribes to vni 100 and must program A's route on its dataplane.
 	dpB := newFakeDP()
-	busB := NewBus("nodeB", "fd00::b", dpB)
+	busB := NewBus("nodeB", "fd00::b", dpB, false)
 	go busB.Run(ctx, cl, []uint32{100}, nil, nil, nil)
 
 	// Poll for the learned route.
@@ -186,10 +186,32 @@ func TestAgentLearnsRemoteRouteAndProgramsDataplane(t *testing.T) {
 	t.Fatal("agent B never programmed A's route")
 }
 
+func TestApplyPublic_LBVIP_EdgeAddsBackend(t *testing.T) {
+	dp := newFakeDP()
+	b := NewBus("edge1", "2001:db8::e", dp, true) // isEdge = true
+	b.applyPublic(&rbv1.PublicPrefix{
+		Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "2001:db8::dd",
+	}, rbv1.RouteOp_ROUTE_OP_ADD)
+	if got := dp.lbBackends["203.0.113.50"]; len(got) != 1 || got[0] != "2001:db8::dd" {
+		t.Fatalf("edge AddLbBackend not recorded: %+v", dp.lbBackends)
+	}
+}
+
+func TestApplyPublic_LBVIP_NonEdgeIgnores(t *testing.T) {
+	dp := newFakeDP()
+	b := NewBus("nodeA", "2001:db8::dd", dp, false) // not edge
+	b.applyPublic(&rbv1.PublicPrefix{
+		Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "2001:db8::dd",
+	}, rbv1.RouteOp_ROUTE_OP_ADD)
+	if len(dp.lbBackends) != 0 {
+		t.Fatalf("non-edge must ignore LB_VIP; got %+v", dp.lbBackends)
+	}
+}
+
 func TestApplyNatInstallsNeighborNatOnlyForRemoteOwners(t *testing.T) {
 	dp := newFakeDP()
 	// This node's underlay is fd00::b.
-	b := NewBus("nodeB", "fd00::b", dp)
+	b := NewBus("nodeB", "fd00::b", dp, false)
 	ctx := context.Background()
 
 	// A block owned by a PEER (fd00::a) -> installs a neighbor-nat return route.

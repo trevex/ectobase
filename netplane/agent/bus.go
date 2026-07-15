@@ -71,6 +71,7 @@ type Bus struct {
 	nodeID   string
 	underlay string
 	dp       Dataplane
+	isEdge   bool
 
 	mu sync.Mutex
 	// learnedEdge maps an edge's anycast datapath /128 (address only) to its
@@ -79,8 +80,8 @@ type Bus struct {
 	learnedEdge map[string]string
 }
 
-func NewBus(nodeID, underlay string, dp Dataplane) *Bus {
-	return &Bus{nodeID: nodeID, underlay: underlay, dp: dp, learnedEdge: map[string]string{}}
+func NewBus(nodeID, underlay string, dp Dataplane, isEdge bool) *Bus {
+	return &Bus{nodeID: nodeID, underlay: underlay, dp: dp, isEdge: isEdge, learnedEdge: map[string]string{}}
 }
 
 // Run opens a Session, sends Hello + the initial subscriptions + announcements,

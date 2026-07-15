@@ -107,6 +107,49 @@ func TestDesired_EmitsVIPAnycastRoute(t *testing.T) {
 	}
 }
 
+func TestReconcileLB_EdgeAddsAndDiffs(t *testing.T) {
+	s := lbTestScheme(t)
+	lb := &netv1.LoadBalancer{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-lb", Namespace: "default"},
+		Spec:       netv1.LoadBalancerSpec{VIP: "203.0.113.50", Ports: []netv1.LoadBalancerPort{{Port: 443, Proto: "TCP"}}},
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(lb).Build()
+	dp := newFakeDP()
+	r := &Reconciler{client: cl, nodeID: "edge1", underlay: "2001:db8::e", edgeLoopback: "fd00::1", dp: dp}
+
+	if err := r.ReconcileLB(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(dp.lbVips) != 1 || dp.lbVips[0] != "203.0.113.50" {
+		t.Fatalf("want AddLbVip 203.0.113.50, got %+v", dp.lbVips)
+	}
+	// Second reconcile: unchanged → no re-add (create_lb rejects dup ids).
+	dp.lbVips = nil
+	if err := r.ReconcileLB(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(dp.lbVips) != 0 {
+		t.Fatalf("steady-state re-added AddLbVip: %+v", dp.lbVips)
+	}
+}
+
+func TestReconcileLB_NonEdgeNoop(t *testing.T) {
+	s := lbTestScheme(t)
+	lb := &netv1.LoadBalancer{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-lb", Namespace: "default"},
+		Spec:       netv1.LoadBalancerSpec{VIP: "203.0.113.50"},
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(lb).Build()
+	dp := newFakeDP()
+	r := &Reconciler{client: cl, nodeID: "nodeA", dp: dp} // no edgeLoopback
+	if err := r.ReconcileLB(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(dp.lbVips) != 0 {
+		t.Fatalf("non-edge must not AddLbVip: %+v", dp.lbVips)
+	}
+}
+
 func TestDesiredPublic_EmitsLBVIP(t *testing.T) {
 	s := lbTestScheme(t)
 	node := "nodeA"
