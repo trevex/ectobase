@@ -11,7 +11,7 @@
 use etherparse::PacketBuilder;
 use xdp_dp_common::{LbKey, LbValue, MaglevKey};
 use xdp_dp_common::{Local, UnderlayValue};
-use xdp_dp_core::encap::{EncapParams, ETH_LEN, IPV6_LEN};
+use xdp_dp_core::encap::EncapParams;
 
 use crate::compilednic::{apply, CompiledNic};
 use crate::fabric::{Fabric, Outcome, Prog};
@@ -32,7 +32,8 @@ const WAN_VIP: [u8; 4] = [203, 0, 113, 50]; // N/S public VIP (edge, vni=0)
 const WAN_SRC: [u8; 4] = [203, 0, 113, 9];
 const OVERLAY_VIP: [u8; 4] = [10, 0, 100, 1]; // E/W overlay VIP (vni=100)
 const GUEST_A: [u8; 4] = [10, 0, 0, 20];
-const BACKEND_OVERLAY_IP: [u8; 4] = [10, 0, 0, 10]; // hostB guest's own overlay IP
+// hostB guest's own overlay IP is 10.0.0.10 — see `allow_backends_own_ip()` (a policy for it does
+// NOT cover the VIP-dst LB traffic, which is the whole point of the drop reproduction).
 
 const fn ul(last: u8) -> [u8; 16] {
     [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, last]

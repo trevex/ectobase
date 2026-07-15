@@ -4,6 +4,11 @@
 //! `decap_and_rewrite` — in the exact order + gates of the eBPF `try_uplink_rx` LB/base tail
 //! (`ingress.rs` 135-157 dispatch + 245-304 tail). The LB-dispatch glue is composed here (as it is
 //! in the eBPF wrapper); the `BPF_PROG_TEST_RUN` anchor guards native==bytecode on the LB path.
+//!
+//! Scope: this harness models the LB-select + firewall + conntrack-create + decap/reforward tail.
+//! The `try_uplink_rx` branches gated on `lb_ul.is_none()` — NAT64 reply, neighbor-NAT reforward,
+//! ICMP-echo reply, and inner `dnat_ingress` — are NOT modeled (out of scope; separate follow-on
+//! slices per the spec). For LB packets those branches are skipped anyway.
 
 use xdp_dp_common::{Local, UnderlayValue, FW_ACTION_DROP, FW_DIR_INGRESS};
 use xdp_dp_core::conntrack::{ct_create_default, ct_key};
