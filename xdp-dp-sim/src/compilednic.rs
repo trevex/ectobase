@@ -23,6 +23,8 @@ pub struct Spec {
     pub underlay_route: String,
     #[serde(default)]
     pub firewall: Firewall,
+    #[serde(default)]
+    pub lb: Vec<Lb>,
 }
 
 /// Serde mirror of CompiledFirewall.
@@ -43,6 +45,22 @@ pub struct Rule {
     #[serde(default)]
     pub port: i32,
     pub action: String,
+}
+
+/// Serde mirror of CompiledLB.
+#[derive(Deserialize, Default)]
+pub struct Lb {
+    pub vip: String,
+    #[serde(default)]
+    pub ports: Vec<LbPort>,
+}
+
+/// Serde mirror of CompiledLBPort.
+#[derive(Deserialize, Default)]
+pub struct LbPort {
+    pub port: i32,
+    #[serde(default)]
+    pub proto: String,
 }
 
 /// Parse a CIDR string ("a.b.c.d/len") into (ip bytes, mask bytes).

@@ -362,3 +362,57 @@ fn ew_lb_reforward_converges_no_loop() {
     );
     assert!(matches!(t.outcome, Outcome::Delivered { .. }));
 }
+
+#[test]
+fn ew_lb_anycast_delivered_with_policy() {
+    // Model A: the E/W VIP is an anycast route → guest encaps straight to the backend /128.
+    // The backend has NO LB maps; uplink_rx base-delivers after the ingress firewall. Internal
+    // source (10.0.0.0/8) is permitted on 443, so it is delivered.
+    let mut fab = Fabric::new();
+    let mut b = backend_node(false);
+    apply_fw(&mut b.maps, HOSTB_TAP, allow_internal_443());
+    fab.add_node("hostB", b);
+    fab.route(HOSTB_UL, "hostB");
+
+    let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
+    let encapped = encap_to(&inner, HOSTA_UL, HOSTB_UL);
+    let t = fab.deliver("hostB", Prog::UplinkRx, &encapped);
+    assert_eq!(
+        t.outcome,
+        Outcome::Delivered {
+            node: "hostB",
+            tap: HOSTB_TAP
+        },
+        "hops: {}",
+        t.hops.len()
+    );
+    assert_eq!(
+        t.hops.len(),
+        1,
+        "single uplink base-deliver, no maglev/reforward"
+    );
+}
+
+#[test]
+fn ew_lb_anycast_dropped_without_policy() {
+    // Same anycast delivery, but the backend has a policy that does NOT permit the guest source
+    // (only 1.2.3.0/24 on 443). Deny-by-default drops it — LB membership grants no permission.
+    let mut fab = Fabric::new();
+    let mut b = backend_node(false);
+    apply_fw(
+        &mut b.maps,
+        HOSTB_TAP,
+        r#"[{"cidr":"1.2.3.0/24","proto":"TCP","port":443,"action":"Allow"}]"#,
+    );
+    fab.add_node("hostB", b);
+    fab.route(HOSTB_UL, "hostB");
+
+    let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
+    let encapped = encap_to(&inner, HOSTA_UL, HOSTB_UL);
+    let t = fab.deliver("hostB", Prog::UplinkRx, &encapped);
+    assert_eq!(
+        t.outcome,
+        Outcome::Dropped { node: "hostB" },
+        "LB delivery must be dropped when no NetworkPolicy admits the source"
+    );
+}
