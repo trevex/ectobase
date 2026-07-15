@@ -54,17 +54,22 @@ Each `SimNode` keeps its own `MemMaps` (its interfaces, LB/MAGLEV tables, firewa
 - **`encap::reforward<P: Pkt>(pkt, local: &Local, lb_underlay: &[u8;16], backend: &[u8;16]) -> Action`** — port the outer Eth+IPv6 rewrite + `Redirect(uplink_ifindex)` from eBPF `encap.rs` (no decap).
 - **Uplink LB branch** — extend the uplink seam: after resolving `(vni, u)` from `UNDERLAY[outer_dst]`, call `lb_select_forward`; if `Some(bul)` and `bul` is local → deliver via the existing firewall+decap seam using the backend tap; if `Some(bul)` remote → `reforward` to `bul`; if `None` → the existing base path.
 - **Edge `wan_rx` VIP seam** — composes `lb_select_forward(vni=0)` + the existing `encap::write_outer_v6` path (edge encaps the plain WAN IPv4 IP-in-IPv6 to the selected backend underlay). No new logic beyond the two existing pieces.
-- **E/W origin (`guest_tx`)** — egress encap already routes via `ROUTES`; the VIP resolves to its home underlay and that node's `uplink_rx` LB-selects. Minimal/no new core; the sim populates the origin's route to the VIP-home underlay.
+- **E/W origin (`guest_tx`)** — confirmed against dpservice's own conformance (`test_lb.py::test_external_lb_relay`): the LB has a **dedicated relay underlay** (`createlb` returns `lb_ul_ipv6`, distinct from any backend). The origin does **not** select a backend at egress — it routes `lb_ip → the LB relay underlay` via `ROUTES` and encaps there; the **relay node** (owner of that underlay) Maglev-selects and `reforward`s to the backend (dpservice `packet_relay_node`). So `guest_tx` needs only a route-lookup + encap seam (no LB logic); the sim populates the origin's `ROUTES[lb_ip] = lb_relay_underlay`. (Egress firewall/conntrack/NAT on the origin hop are a follow-on; the LB selection + backend firewall are what this spec exercises.)
 
 eBPF programs keep delegating to these core fns (so `test_lb.py` conformance stays green).
 
-## 5. Explicit-firewall verification & the reproduction
+## 5. Firewall posture & explicit-rule verification
 
-The firewall is populated **only** from `NetworkPolicy` via the real pipeline `NetworkPolicy → Compile() → CompiledNIC → apply() → MemMaps`. No LB→rule generation anywhere.
+**Posture (normative):** the **dataplane is deny-by-default** (fail closed); the **control plane** implements k8s "default-allow" (open-until-selected) by synthesizing **explicit allow-all** ingress+egress rules for any interface **not** selected by a `NetworkPolicy`. A selected interface gets **only** its policy's rules (implicit deny for everything else). The firewall is therefore populated **only** from the control plane — LB membership never generates rules — via the real pipeline `NetworkPolicy(+default-allow) → Compile() → CompiledNIC → apply() → MemMaps`.
+
+This spec implements the control-plane half: **`Compile()` emits allow-all ingress+egress when no `NetworkPolicy` selects the NIC.** Consequently every `CompiledNIC` carries explicit rules (`ingress_count > 0`), so the sim always operates under deny-by-default (unmatched ⇒ drop, which the datapath already does for `count > 0`).
+
+**Dataplane fail-closed (flagged, out of scope):** eBPF `fw_eval_dir` currently returns ACCEPT on `count == 0` (fail *open*). With the control plane always installing rules, `count == 0` shouldn't occur in our system; flipping that fallback to DROP-when-enforcing (true fail-closed) is a recommended companion hardening, but it changes the dpservice-vendored conformance baseline (those interfaces have no fw rules) and is deferred to its own change.
 
 Per flow, two poles:
 - **Positive:** backend `NetworkPolicy` permits the VIP traffic (`from` covers the source, `ports` = VIP port) → **delivered**.
 - **Negative:** backend policy selects it but does not cover the VIP (e.g. allows only an internal CIDR while the N/S source is external) → **dropped** at the backend firewall — the exact clab failure as a one-line assertion.
+- **Unpolicied:** no `NetworkPolicy` selects the backend → control-plane allow-all → **delivered** (not a dataplane default — an explicit generated rule).
 
 **The coverage is the reproduction.** If a flow with a *correct explicit allow rule* still drops in the `Fabric`, that is a genuine datapath bug (firewall evaluating the wrong tuple on the reforwarded/DSR packet, or an edge/reforward hop mangling the frame), not operator error — and the `Trace` names the hop that dropped it.
 
@@ -76,9 +81,9 @@ Nodes: `edge`, `hostA`, `hostB` (backend). Built on `Fabric`.
 |---|------|---------------|----------------|----------|
 | 1 | N/S external → WAN VIP | `edge.wan_rx` → `hostB.uplink_rx` | explicit allow (`0.0.0.0/0`:port) | delivered to backend tap |
 | 2 | N/S same | same | policy selects backend, no VIP rule | **drop** at backend FW |
-| 3 | N/S same | same | no policy (`ingress_count == 0`) | delivered (open-until-selected) |
-| 4 | E/W guestA → VIP, backend on hostB | `hostA.guest_tx` → VIP-home → **reforward** → `hostB.uplink_rx` | explicit allow (from guestA CIDR) | delivered; `Trace` shows the reforward hop |
-| 5 | E/W same, VIP-home == backend | `hostB.uplink_rx` local-deliver | explicit allow | delivered, **no** reforward hop |
+| 3 | N/S same | same | no policy → control-plane allow-all | delivered (via generated allow-all rule) |
+| 4 | E/W guestA → LB VIP, backend on hostB | `hostA.guest_tx` → LB-relay node → **reforward** → `hostB.uplink_rx` | explicit allow (from guestA CIDR) | delivered; `Trace` shows the reforward hop |
+| 5 | E/W same, relay node == backend | `hostB.uplink_rx` local-deliver | explicit allow | delivered, **no** reforward hop |
 | 6 | Maglev determinism | same 5-tuple → same backend across nodes | — | reforward converges (no loop; hop cap not hit) |
 
 Each asserts the final `Outcome` **and** the `Trace` path.
@@ -89,7 +94,7 @@ Each asserts the final `Outcome` **and** the `Trace` path.
 - **One `BPF_PROG_TEST_RUN` anchor** for the LB path (e.g. `uplink_rx` LB local-deliver): native `Fabric`/sim output == real bytecode output, per the established "each ported feature adds one anchor case" discipline.
 - **`make sim`** runs the whole matrix, no root.
 
-**In scope (this spec):** the `Fabric` abstraction + full LB port + the §6 matrix.
+**In scope (this spec):** the `Fabric` abstraction + full LB port + `Compile()` default-allow generation (§5) + the §6 matrix.
 
 **Out of scope — follow-on slices (own spec each, reusing `Fabric`):**
 - SNAT/NAT-gateway egress (backend → edge → WAN).
