@@ -8,21 +8,20 @@ use xdp_dp_core::encap::{write_outer_v6, EncapParams, IPV6_LEN};
 
 use crate::coreimpl::CtxPkt;
 
-/// Encapsulate the current inner IPv4 frame into Eth+IPv6 toward `route.nexthop_ipv6` and
-/// redirect out the local uplink. `inner_len` = (frame len - inner ETH_LEN), captured BEFORE
-/// adjust_head. `inner_proto` = IPv6 next-header byte (e.g. IPPROTO_IPIP for IPv4, IPPROTO_IPV6
-/// for IPv6).
+/// Grow headroom and write the outer Eth+IPv6 for an encap toward `route.nexthop_ipv6`. Returns
+/// `true` on success. `inner_len` = (frame len - inner ETH_LEN), captured BEFORE adjust_head.
+/// `inner_proto` = IPv6 next-header byte (IPPROTO_IPIP for an IPv4 inner, IPPROTO_IPV6 for IPv6).
 #[inline(always)]
-pub fn encap_and_redirect(
+fn write_encap_outer(
     ctx: &XdpContext,
     local: &Local,
     src_underlay: &[u8; 16],
     route: &RouteValue,
     inner_len: u16,
     inner_proto: u8,
-) -> Result<u32, ()> {
+) -> bool {
     if unsafe { bpf_xdp_adjust_head(ctx.ctx, -(IPV6_LEN as i32)) } != 0 {
-        return Err(());
+        return false;
     }
     let e = EncapParams {
         gateway_mac: local.gateway_mac,
@@ -33,12 +32,45 @@ pub fn encap_and_redirect(
         inner_len,
         inner_proto,
     };
-    let mut pkt = CtxPkt { ctx };
-    if write_outer_v6(&mut pkt, &e) {
-        // Redirect out the fabric uplink via UPLINK_DEV (devmap key 0 == e.uplink_ifindex) rather
-        // than a plain bpf_redirect: on containerlab veth uplinks a plain XDP_REDIRECT is silently
-        // dropped unless the peer port has an XDP program (veth ndo_xdp_xmit peer requirement); the
-        // devmap redirect path avoids that. Falls back to XDP_ABORTED if the slot is unpopulated.
+    write_outer_v6(&mut CtxPkt { ctx }, &e)
+}
+
+/// Encapsulate the current inner frame and redirect out the local uplink via a plain `bpf_redirect`.
+/// Used by the guest_tx/nat64 path — which reaches this through a BPF tail call, so the redirect
+/// helper here MUST stay a plain `bpf_redirect` (a devmap redirect in a tail-call subprogram trips
+/// the verifier's "tail_call is only allowed in functions that return 'int'" rule). The edge
+/// `wan_rx` path (no tail calls) uses [`encap_and_redirect_via_devmap`] instead.
+#[inline(always)]
+pub fn encap_and_redirect(
+    ctx: &XdpContext,
+    local: &Local,
+    src_underlay: &[u8; 16],
+    route: &RouteValue,
+    inner_len: u16,
+    inner_proto: u8,
+) -> Result<u32, ()> {
+    if write_encap_outer(ctx, local, src_underlay, route, inner_len, inner_proto) {
+        Ok(unsafe { bpf_redirect(local.uplink_ifindex, 0) } as u32)
+    } else {
+        Err(())
+    }
+}
+
+/// Like [`encap_and_redirect`] but redirects via the `UPLINK_DEV` devmap (slot 0 == uplink ifindex)
+/// instead of a plain `bpf_redirect`. On containerlab veth uplinks a plain XDP_REDIRECT is silently
+/// dropped unless the peer port has an XDP program (veth `ndo_xdp_xmit` peer requirement); the devmap
+/// path avoids that. Used ONLY by the edge `wan_rx` branches (which have no tail calls). Production
+/// real NICs are unaffected either way.
+#[inline(always)]
+pub fn encap_and_redirect_via_devmap(
+    ctx: &XdpContext,
+    local: &Local,
+    src_underlay: &[u8; 16],
+    route: &RouteValue,
+    inner_len: u16,
+    inner_proto: u8,
+) -> Result<u32, ()> {
+    if write_encap_outer(ctx, local, src_underlay, route, inner_len, inner_proto) {
         Ok(crate::maps::UPLINK_DEV
             .redirect(0, 0)
             .unwrap_or(xdp_action::XDP_ABORTED))

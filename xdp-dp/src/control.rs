@@ -158,6 +158,10 @@ struct Inner {
     /// dropping it would close the userspace map fd (the kernel map survives via guest_tx).
     _guest_progs: aya::maps::ProgramArray<aya::maps::MapData>,
     _locals: LocalMap,
+    /// Owned `UPLINK_DEV` devmap handle. wan_rx is loaded LATER (attach_edge), so this handle MUST
+    /// stay alive here — dropping it after set() closes the map fd and wan_rx then fails to verify
+    /// ("fd is not pointing to valid bpf_map"), exactly like `_locals`/`_guest_progs`.
+    _uplink_dev: UplinkDevMap,
     ports: PortMetaMap,
     ifaces: Interfaces,
     routes: Routes,
@@ -248,9 +252,10 @@ impl Control {
             underlay_ipv6,
         })?;
         // Point the uplink devmap at the fabric uplink so the wan_rx fabric redirect delivers over
-        // containerlab veths (the kernel keeps the map entry alive via the loaded program, so the
-        // handle can drop here).
-        UplinkDevMap::open(&mut ebpf)?.set(uplink_ifindex)?;
+        // containerlab veths. The handle is stored in Inner (below) so its fd stays open until
+        // wan_rx is loaded in attach_edge.
+        let mut uplink_dev = UplinkDevMap::open(&mut ebpf)?;
+        uplink_dev.set(uplink_ifindex)?;
         let ports = PortMetaMap::open(&mut ebpf)?;
         let ifaces = Interfaces::open(&mut ebpf)?;
         let routes = Routes::open(&mut ebpf)?;
@@ -274,6 +279,7 @@ impl Control {
                 ebpf,
                 _guest_progs: guest_progs,
                 _locals: locals,
+                _uplink_dev: uplink_dev,
                 ports,
                 ifaces,
                 routes,
@@ -1859,6 +1865,8 @@ impl Control {
             gateway_mac: [0; 6],
             underlay_ipv6: [0; 16],
         })?;
+        let mut uplink_dev = UplinkDevMap::open(&mut ebpf)?;
+        uplink_dev.set(0)?;
         let ports = PortMetaMap::open(&mut ebpf)?;
         let ifaces = Interfaces::open(&mut ebpf)?;
         let routes = Routes::open(&mut ebpf)?;
@@ -1882,6 +1890,7 @@ impl Control {
                 ebpf,
                 _guest_progs: guest_progs,
                 _locals: locals,
+                _uplink_dev: uplink_dev,
                 ports,
                 ifaces,
                 routes,

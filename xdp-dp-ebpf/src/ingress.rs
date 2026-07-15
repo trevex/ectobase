@@ -362,7 +362,7 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
                 is_external: 0,
                 _pad: [0; 3],
             };
-            return crate::encap::encap_and_redirect(
+            return crate::encap::encap_and_redirect_via_devmap(
                 ctx,
                 local,
                 &local.underlay_ipv6,
@@ -393,7 +393,7 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
             is_external: 0,
             _pad: [0; 3],
         };
-        return crate::encap::encap_and_redirect(
+        return crate::encap::encap_and_redirect_via_devmap(
             ctx,
             local,
             &local.underlay_ipv6,
@@ -416,7 +416,7 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
         is_external: 0,
         _pad: [0; 3],
     };
-    crate::encap::encap_and_redirect(
+    crate::encap::encap_and_redirect_via_devmap(
         ctx,
         local,
         &local.underlay_ipv6,
