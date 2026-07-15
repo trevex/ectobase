@@ -30,6 +30,15 @@ type Dataplane interface {
 	AddFwRule(ctx context.Context, interfaceID, ruleID string, r FwRule) error
 	// DelFwRule removes a per-interface firewall rule by id.
 	DelFwRule(ctx context.Context, interfaceID, ruleID string) error
+	// AddLbVip registers a load balancer VIP (id == VIP). vni is the WAN/public VNI (0 at the edge);
+	// lbUnderlay is the edge's own anycast underlay (unused-but-required for vni==0).
+	AddLbVip(ctx context.Context, id string, vni uint32, vip, lbUnderlay string, ports []LbPort) error
+	// DelLbVip removes a registered LB VIP by id.
+	DelLbVip(ctx context.Context, id string) error
+	// AddLbBackend appends a backend underlay /128 to a registered LB VIP.
+	AddLbBackend(ctx context.Context, id, backendUnderlay string) error
+	// DelLbBackend removes a backend underlay /128 from a registered LB VIP.
+	DelLbBackend(ctx context.Context, id, backendUnderlay string) error
 }
 
 // FwRule is one compiled firewall rule the agent installs on the dataplane.
@@ -41,6 +50,12 @@ type FwRule struct {
 	DstPortMax uint32
 	Allow      bool // true = accept, false = drop
 	Egress     bool // true = egress rule, false = ingress
+}
+
+// LbPort is one LB service tuple for AddLbVip. Proto is the IP protocol number (6=TCP, 17=UDP).
+type LbPort struct {
+	Port  uint32
+	Proto uint32
 }
 
 // Route is a local overlay route this node announces.
@@ -227,6 +242,26 @@ func (d dpAdapter) AddFwRule(ctx context.Context, interfaceID, ruleID string, r 
 }
 func (d dpAdapter) DelFwRule(ctx context.Context, interfaceID, ruleID string) error {
 	_, err := d.c.DelFwRule(ctx, &dpv1.DelFwRuleRequest{InterfaceId: interfaceID, RuleId: ruleID})
+	return err
+}
+func (d dpAdapter) AddLbVip(ctx context.Context, id string, vni uint32, vip, lbUnderlay string, ports []LbPort) error {
+	pp := make([]*dpv1.PortProto, 0, len(ports))
+	for _, p := range ports {
+		pp = append(pp, &dpv1.PortProto{Port: p.Port, Proto: p.Proto})
+	}
+	_, err := d.c.AddLbVip(ctx, &dpv1.AddLbVipRequest{Id: id, Vni: vni, VipIpv4: vip, LbUnderlay: lbUnderlay, Ports: pp})
+	return err
+}
+func (d dpAdapter) DelLbVip(ctx context.Context, id string) error {
+	_, err := d.c.DelLbVip(ctx, &dpv1.DelLbVipRequest{Id: id})
+	return err
+}
+func (d dpAdapter) AddLbBackend(ctx context.Context, id, backendUnderlay string) error {
+	_, err := d.c.AddLbBackend(ctx, &dpv1.AddLbBackendRequest{Id: id, BackendUnderlay: backendUnderlay})
+	return err
+}
+func (d dpAdapter) DelLbBackend(ctx context.Context, id, backendUnderlay string) error {
+	_, err := d.c.DelLbBackend(ctx, &dpv1.DelLbBackendRequest{Id: id, BackendUnderlay: backendUnderlay})
 	return err
 }
 

@@ -28,6 +28,9 @@ type fakeDP struct {
 	// fwInstalled models the real dataplane: a rule id is unique per interface, and AddFwRule on an
 	// existing id fails (ALREADY_EXISTS) — so a correct reconcile must NOT re-add unchanged rules.
 	fwInstalled map[string]bool
+	lbVips      []string            // ids added
+	lbDels      []string            // ids deleted
+	lbBackends  map[string][]string // id -> backends
 }
 
 type fwCall struct {
@@ -41,6 +44,7 @@ func newFakeDP() *fakeDP {
 		added: map[string]string{}, external: map[string]bool{}, withdrew: map[string]bool{},
 		nbrNat: map[string]string{}, nbrNatWd: map[string]bool{},
 		fwInstalled: map[string]bool{},
+		lbBackends:  map[string][]string{},
 	}
 }
 
@@ -108,6 +112,33 @@ func (f *fakeDP) get(vni uint32, prefix string) (string, bool) {
 	return v, ok
 }
 func key(vni uint32, prefix string) string { return prefix } // vni fixed at 100 in the test
+
+func (f *fakeDP) AddLbVip(ctx context.Context, id string, vni uint32, vip, lbUnderlay string, ports []LbPort) error {
+	f.lbVips = append(f.lbVips, id)
+	return nil
+}
+func (f *fakeDP) DelLbVip(ctx context.Context, id string) error {
+	f.lbDels = append(f.lbDels, id)
+	return nil
+}
+func (f *fakeDP) AddLbBackend(ctx context.Context, id, backendUnderlay string) error {
+	f.lbBackends[id] = append(f.lbBackends[id], backendUnderlay)
+	return nil
+}
+func (f *fakeDP) DelLbBackend(ctx context.Context, id, backendUnderlay string) error {
+	cur := f.lbBackends[id][:0]
+	for _, b := range f.lbBackends[id] {
+		if b != backendUnderlay {
+			cur = append(cur, b)
+		}
+	}
+	f.lbBackends[id] = cur
+	return nil
+}
+
+func TestFakeDP_LBImplementsInterface(t *testing.T) {
+	var _ Dataplane = newFakeDP()
+}
 
 func dialReflector(t *testing.T) rbv1.RouteBusClient {
 	t.Helper()
