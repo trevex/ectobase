@@ -134,6 +134,21 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 	}
 	sort.Slice(subs, func(i, j int) bool { return subs[i] < subs[j] })
 
+	// LB backends: announce each backed VIP as an anycast overlay route (nexthop = this NIC's /128).
+	// Multiple backend NICs announcing the same VIP → the fabric ECMPs across them. This is the E/W
+	// load-balancer path; it reuses the plain route channel and needs no LB-specific datapath state.
+	lbs, err := r.desiredLB(ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	for _, lb := range lbs {
+		prefix, err := hostPrefix(lb.VIP)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("lb vip %q: %w", lb.VIP, err)
+		}
+		announce = append(announce, Route{Vni: lb.Vni, Prefix: prefix, Nexthop: lb.NicUnderlay, External: false})
+	}
+
 	return subs, announce, blocks, nil
 }
 

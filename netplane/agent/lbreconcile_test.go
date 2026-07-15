@@ -71,3 +71,37 @@ func TestDesiredLB_SkipsWhenNoUnderlay(t *testing.T) {
 		t.Fatalf("want 0 (no underlay allocated yet), got %d", len(got))
 	}
 }
+
+func TestDesired_EmitsVIPAnycastRoute(t *testing.T) {
+	s := lbTestScheme(t)
+	node := "nodeA"
+	// VPC provides VNI resolution via vniFor: use a NIC whose Status.VNI is set so vniFor returns it.
+	nic := &netv1.NetworkInterface{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-0", Namespace: "default"},
+		Spec:       netv1.NetworkInterfaceSpec{NodeName: &node, IPs: []string{"10.0.0.20"}},
+		Status:     netv1.NetworkInterfaceStatus{VNI: 100, UnderlayRoute: "2001:db8::dd"},
+	}
+	cnic := &netv1.CompiledNIC{
+		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
+		Spec: netv1.CompiledNICSpec{
+			NodeName: node, NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 100,
+			LB: []netv1.CompiledLB{{VIP: "203.0.113.50", Ports: []netv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(nic, cnic).Build()
+	r := &Reconciler{client: cl, nodeID: node, underlay: "2001:db8::dd"}
+
+	_, announce, _, err := r.Desired(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, rt := range announce {
+		if rt.Prefix == "203.0.113.50/32" && rt.Nexthop == "2001:db8::dd" && rt.Vni == 100 && !rt.External {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("VIP anycast route not emitted; got %+v", announce)
+	}
+}
