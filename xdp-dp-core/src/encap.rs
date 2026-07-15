@@ -1,6 +1,9 @@
 use crate::pkt::Pkt;
 
-/// Parameters for the outer Eth+IPv6 encap header. (Moved from xdp-dp-ebpf egress.rs.)
+/// Parameters describing the outer Eth+IPv6 header written by [`write_outer_v6`].
+///
+/// `uplink_ifindex` is NOT used by the writer itself — it rides along for the caller's
+/// `bpf_redirect(uplink_ifindex, ..)` after the header is written.
 #[derive(Copy, Clone)]
 pub struct EncapParams {
     pub gateway_mac: [u8; 6],
@@ -30,7 +33,7 @@ pub fn write_outer_v6<P: Pkt>(pkt: &mut P, e: &EncapParams) -> bool {
     let ip = ETH_LEN;
     ok &= pkt.write_bytes(ip, &[0x60, 0, 0, 0]);
     ok &= pkt.write_bytes(ip + 4, &e.inner_len.to_be_bytes());
-    ok &= pkt.write_bytes(ip + 6, &[e.inner_proto, 64]);
+    ok &= pkt.write_bytes(ip + 6, &[e.inner_proto, 64]); // [next_header, hop_limit=64]
     ok &= pkt.write_bytes(ip + 8, &e.src_underlay);
     ok &= pkt.write_bytes(ip + 24, &e.nexthop_ipv6);
     ok

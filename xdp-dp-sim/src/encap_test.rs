@@ -16,6 +16,8 @@ fn encap_writes_outer_v6_header() {
         inner_proto: 4,
     };
     assert!(write_outer_v6(&mut p, &e));
+    assert_eq!(p.read_array::<6>(0), Some(e.gateway_mac)); // outer eth dst
+    assert_eq!(p.read_array::<6>(6), Some(e.uplink_mac)); // outer eth src
     assert_eq!(p.read_u16_be(12), Some(0x86DD));
     assert_eq!(p.read_u8(ETH_LEN), Some(0x60));
     assert_eq!(p.read_u16_be(ETH_LEN + 4), Some(34));
