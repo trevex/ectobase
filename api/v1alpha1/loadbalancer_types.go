@@ -7,17 +7,34 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// LoadBalancerSpec is the desired state of a LoadBalancer.
-//
-// SCAFFOLD ONLY: intentionally empty. Selector-target load balancer (§3.5).
-// Fleshed out in a later plan (YAGNI here).
+// LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity
+// (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
 type LoadBalancerSpec struct {
+	// VIP is the virtual IP (IPv4 or IPv6). It is the LB identity and the AddLbVip id.
+	VIP string `json:"vip"`
+	// Ports are the LB service (port, proto) tuples.
+	Ports []LoadBalancerPort `json:"ports"`
+	// TargetSelector selects backend NetworkInterfaces by label. Mutually exclusive with TargetRefs.
+	// +optional
+	TargetSelector *metav1.LabelSelector `json:"targetSelector,omitempty"`
+	// TargetRefs names backend NetworkInterfaces explicitly. Mutually exclusive with TargetSelector.
+	// +optional
+	TargetRefs []LocalObjectReference `json:"targetRefs,omitempty"`
+}
+
+// LoadBalancerPort is one LB service tuple.
+type LoadBalancerPort struct {
+	// Port is the service port.
+	Port int32 `json:"port"`
+	// Proto is the IP protocol ("TCP" or "UDP").
+	Proto string `json:"proto"`
 }
 
 // LoadBalancerStatus is the observed state of a LoadBalancer.
-//
-// SCAFFOLD ONLY: intentionally empty.
 type LoadBalancerStatus struct {
+	// State is the lifecycle state (Pending | Ready).
+	// +optional
+	State string `json:"state,omitempty"`
 }
 
 // +genclient

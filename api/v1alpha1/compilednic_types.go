@@ -23,13 +23,15 @@ type CompiledNICSpec struct {
 	// OverlayIPs are the guest overlay IP addresses.
 	// +optional
 	OverlayIPs []string `json:"overlayIPs,omitempty"`
-	// UnderlayRoute is the allocated underlay /128 for this NIC.
-	UnderlayRoute string `json:"underlayRoute"`
 	// Firewall holds the compiled ingress and egress firewall rules.
 	Firewall CompiledFirewall `json:"firewall"`
 	// NAT holds NAT gateway config for this NIC, if any.
 	// +optional
 	NAT *CompiledNAT `json:"nat,omitempty"`
+	// LB lists the load balancers this NIC is a backend of. Pure forwarding membership —
+	// it grants NO firewall permission (that comes solely from NetworkPolicy).
+	// +optional
+	LB []CompiledLB `json:"lb,omitempty"`
 }
 
 // CompiledFirewall holds pre-compiled ingress and egress rules for a NIC.
@@ -64,6 +66,21 @@ type CompiledNAT struct {
 	PortMin int32 `json:"portMin"`
 	// PortMax is the end of the source-port range (inclusive).
 	PortMax int32 `json:"portMax"`
+}
+
+// CompiledLB is one load-balancer this NIC backs: the VIP (v4 or v6) and its service ports.
+type CompiledLB struct {
+	// VIP is the load-balancer virtual IP (IPv4 or IPv6).
+	VIP string `json:"vip"`
+	// Ports are the LB service (port, proto) tuples.
+	// +optional
+	Ports []CompiledLBPort `json:"ports,omitempty"`
+}
+
+// CompiledLBPort is one LB service tuple.
+type CompiledLBPort struct {
+	Port  int32  `json:"port"`
+	Proto string `json:"proto"`
 }
 
 // CompiledNICStatus is the observed state of a CompiledNIC.
