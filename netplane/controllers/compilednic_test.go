@@ -95,8 +95,31 @@ func TestCompile_SelectorMismatch(t *testing.T) {
 
 	c := Compile(nic, []netv1.NetworkPolicy{pol})
 
-	if len(c.Spec.Firewall.Ingress) != 0 {
-		t.Fatalf("expected no ingress rules for non-matching selector, got %d", len(c.Spec.Firewall.Ingress))
+	// No policy selects this NIC, so it is unpolicied → gets the k8s default-allow-all rule.
+	if len(c.Spec.Firewall.Ingress) != 1 || c.Spec.Firewall.Ingress[0].CIDR != "0.0.0.0/0" || c.Spec.Firewall.Ingress[0].Action != "Allow" {
+		t.Fatalf("expected one allow-all ingress rule for non-matching selector, got %+v", c.Spec.Firewall.Ingress)
+	}
+	if len(c.Spec.Firewall.Egress) != 1 || c.Spec.Firewall.Egress[0].Action != "Allow" {
+		t.Fatalf("expected one allow-all egress rule for non-matching selector, got %+v", c.Spec.Firewall.Egress)
+	}
+}
+
+func TestCompile_UnpoliciedGetsAllowAll(t *testing.T) {
+	nic := testNIC() // has labels that testPolicy() selects
+	c := Compile(nic, nil) // no policies
+	if len(c.Spec.Firewall.Ingress) != 1 || c.Spec.Firewall.Ingress[0].Action != "Allow" ||
+		c.Spec.Firewall.Ingress[0].CIDR != "0.0.0.0/0" || c.Spec.Firewall.Ingress[0].Port != 0 {
+		t.Fatalf("expected one allow-all ingress rule, got %+v", c.Spec.Firewall.Ingress)
+	}
+	if len(c.Spec.Firewall.Egress) != 1 || c.Spec.Firewall.Egress[0].Action != "Allow" {
+		t.Fatalf("expected one allow-all egress rule, got %+v", c.Spec.Firewall.Egress)
+	}
+	// A policied NIC keeps ONLY its policy rules — no allow-all appended.
+	c2 := Compile(nic, []netv1.NetworkPolicy{testPolicy()})
+	for _, r := range c2.Spec.Firewall.Ingress {
+		if r.CIDR == "0.0.0.0/0" && r.Port == 0 && r.Proto == "" {
+			t.Fatalf("policied NIC must not get allow-all: %+v", c2.Spec.Firewall.Ingress)
+		}
 	}
 }
 

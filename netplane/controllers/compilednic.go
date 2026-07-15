@@ -49,6 +49,7 @@ func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy) netv1.
 
 	nicLabels := labels.Set(nic.Labels)
 
+	matched := false
 	for _, policy := range policies {
 		if policy.Spec.InterfaceSelector == nil {
 			continue
@@ -61,6 +62,7 @@ func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy) netv1.
 		if !sel.Matches(nicLabels) {
 			continue
 		}
+		matched = true
 
 		// Translate ingress rules.
 		for _, r := range policy.Spec.Ingress {
@@ -81,6 +83,13 @@ func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy) netv1.
 				Action: r.Action,
 			})
 		}
+	}
+
+	if !matched {
+		// k8s default-allow, materialized explicitly because the dataplane is deny-by-default.
+		allowAll := netv1.CompiledFwRule{CIDR: "0.0.0.0/0", Action: "Allow"} // Proto "" = any, Port 0 = any
+		compiled.Spec.Firewall.Ingress = append(compiled.Spec.Firewall.Ingress, allowAll)
+		compiled.Spec.Firewall.Egress = append(compiled.Spec.Firewall.Egress, allowAll)
 	}
 
 	return compiled
