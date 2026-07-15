@@ -60,6 +60,31 @@ make cli               # build the dpservice-cli flake package
 
 The `conformance`, `e2e`, `ha`, and `tap-*` targets need **passwordless sudo** (XDP attach, network namespaces, raw sockets). The scripts elevate individual commands themselves.
 
+## Synthetic datapath testing
+
+The real datapath logic lives in `xdp-dp-core` — a `no_std` crate whose functions are generic over `Pkt`/`Maps` traits. The same code runs in two contexts:
+
+- **eBPF** — `CtxPkt`/`GlobalMaps` in `xdp-dp-ebpf/src/coreimpl.rs` bind the trait impls to real kernel maps and the XDP packet context.
+- **Native sim** — `VecPkt`/`MemMaps` in `xdp-dp-sim` provide in-process, heap-backed impls. `SimNode` runs the real core functions with no kernel, no clab, no root. `CompiledNIC` (the per-NIC control-plane CRD) is lowered into sim maps via `xdp_dp_sim::compilednic::apply`, so the control-plane→datapath path is tested end-to-end without touching a real interface.
+
+See `docs/superpowers/specs/2026-07-15-compiled-nic-synthetic-datapath-testing-design.md` for the full design.
+
+### Commands
+
+```sh
+make sim             # fast in-process tests — the everyday dev loop (no root, no clab)
+make sim-anchor      # privileged BPF_PROG_TEST_RUN check: native core output == real bytecode output
+make conformance     # full dpservice conformance suite against xdp-dp serve (sudo; the regression gate)
+```
+
+### How to add a datapath feature
+
+1. **Port the fn into `xdp-dp-core`** generic over `Pkt`/`Maps`; add any new map-accessor methods to the `Maps` trait.
+2. **Wire the eBPF side** — call the new fn from `xdp-dp-ebpf` via the existing `CtxPkt`/`GlobalMaps` impls in `coreimpl.rs`.
+3. **Implement `MemMaps`** — add the corresponding in-memory map to `xdp-dp-sim` and implement the new `Maps` accessor.
+4. **Add a sim test** — write a `SimNode`-based test in `xdp-dp-sim/tests/` (or extend an existing scenario file); run it with `make sim`.
+5. **Add an anchor case** — add one `BPF_PROG_TEST_RUN` case in `xdp-dp/tests/anchor_uplink.rs` to assert native-core output matches real bytecode; verify with `make sim-anchor`.
+
 ## Conformance
 
 Drop-in fidelity is proven by **dpservice's own `test/local` suite** — vendored into `test/conformance/` and re-pointed at `xdp-dp serve`. The scapy packet tests and the gRPC client are dpservice's; only the launch + device plumbing is adapted:
