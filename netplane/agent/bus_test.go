@@ -65,6 +65,8 @@ func (f *fakeDP) AddRoute(_ context.Context, vni uint32, prefix, nexthop string,
 func (f *fakeDP) AddNatSource(_ context.Context, _ uint32, _, _ string, _, _ uint32) error {
 	return nil
 }
+func (f *fakeDP) AddFwRule(_ context.Context, _, _ string, _ FwRule) error { return nil }
+func (f *fakeDP) DelFwRule(_ context.Context, _, _ string) error           { return nil }
 func (f *fakeDP) WithdrawRoute(_ context.Context, vni uint32, prefix string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

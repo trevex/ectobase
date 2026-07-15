@@ -26,6 +26,21 @@ type Dataplane interface {
 	// a return landing here for natIp:[min,max) re-routes to ownerUnderlay.
 	AddNeighborNat(ctx context.Context, natIp string, min, max uint32, ownerUnderlay string, vni uint32) error
 	WithdrawNeighborNat(ctx context.Context, natIp string, min, max uint32, vni uint32) error
+	// AddFwRule programs a single per-interface firewall rule (ingress or egress).
+	AddFwRule(ctx context.Context, interfaceID, ruleID string, r FwRule) error
+	// DelFwRule removes a per-interface firewall rule by id.
+	DelFwRule(ctx context.Context, interfaceID, ruleID string) error
+}
+
+// FwRule is one compiled firewall rule the agent installs on the dataplane.
+type FwRule struct {
+	SrcCIDR    string // empty = any
+	DstCIDR    string // empty = any
+	Proto      uint32 // 6=TCP, 17=UDP, 1=ICMP; 0 = any
+	DstPortMin uint32
+	DstPortMax uint32
+	Allow      bool // true = accept, false = drop
+	Egress     bool // true = egress rule, false = ingress
 }
 
 // Route is a local overlay route this node announces.
@@ -199,6 +214,19 @@ func (d dpAdapter) WithdrawNeighborNat(ctx context.Context, natIp string, min, m
 	_, err := d.c.WithdrawNeighborNat(ctx, &dpv1.WithdrawNeighborNatRequest{
 		NatIp: natIp, PortMin: min, PortMax: max, Vni: vni,
 	})
+	return err
+}
+func (d dpAdapter) AddFwRule(ctx context.Context, interfaceID, ruleID string, r FwRule) error {
+	_, err := d.c.AddFwRule(ctx, &dpv1.AddFwRuleRequest{
+		InterfaceId: interfaceID, RuleId: ruleID,
+		SrcCidr: r.SrcCIDR, DstCidr: r.DstCIDR, Proto: r.Proto,
+		DstPortMin: r.DstPortMin, DstPortMax: r.DstPortMax,
+		Allow: r.Allow, Egress: r.Egress,
+	})
+	return err
+}
+func (d dpAdapter) DelFwRule(ctx context.Context, interfaceID, ruleID string) error {
+	_, err := d.c.DelFwRule(ctx, &dpv1.DelFwRuleRequest{InterfaceId: interfaceID, RuleId: ruleID})
 	return err
 }
 
