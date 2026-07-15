@@ -250,7 +250,7 @@ func (d dpAdapter) AddLbVip(ctx context.Context, id string, vni uint32, vip, lbU
 	for _, p := range ports {
 		pp = append(pp, &dpv1.PortProto{Port: p.Port, Proto: p.Proto})
 	}
-	_, err := d.c.AddLbVip(ctx, &dpv1.AddLbVipRequest{Id: id, Vni: vni, VipIpv4: vip, LbUnderlay: lbUnderlay, Ports: pp})
+	_, err := d.c.AddLbVip(ctx, &dpv1.AddLbVipRequest{Id: id, Vni: vni, Vip: vip, LbUnderlay: lbUnderlay, Ports: pp})
 	return err
 }
 func (d dpAdapter) DelLbVip(ctx context.Context, id string) error {

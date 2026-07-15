@@ -79,7 +79,7 @@ type AddLbVipRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                   // stable LB id (used to add backends later)
 	Vni           uint32                 `protobuf:"varint,2,opt,name=vni,proto3" json:"vni,omitempty"`                                // overlay VNI; 0 for the WAN edge (no VNI)
-	VipIpv4       string                 `protobuf:"bytes,3,opt,name=vip_ipv4,json=vipIpv4,proto3" json:"vip_ipv4,omitempty"`          // the public VIP IPv4
+	Vip           string                 `protobuf:"bytes,3,opt,name=vip,proto3" json:"vip,omitempty"`                                 // the public VIP (IPv4 or IPv6)
 	LbUnderlay    string                 `protobuf:"bytes,4,opt,name=lb_underlay,json=lbUnderlay,proto3" json:"lb_underlay,omitempty"` // the LB's own underlay /128 (anycast)
 	Ports         []*PortProto           `protobuf:"bytes,5,rep,name=ports,proto3" json:"ports,omitempty"`                             // the LB services
 	unknownFields protoimpl.UnknownFields
@@ -130,9 +130,9 @@ func (x *AddLbVipRequest) GetVni() uint32 {
 	return 0
 }
 
-func (x *AddLbVipRequest) GetVipIpv4() string {
+func (x *AddLbVipRequest) GetVip() string {
 	if x != nil {
-		return x.VipIpv4
+		return x.Vip
 	}
 	return ""
 }
@@ -1626,11 +1626,11 @@ const file_dataplane_proto_rawDesc = "" +
 	"\x0fdataplane.proto\x12\fdataplane.v1\"5\n" +
 	"\tPortProto\x12\x12\n" +
 	"\x04port\x18\x01 \x01(\rR\x04port\x12\x14\n" +
-	"\x05proto\x18\x02 \x01(\rR\x05proto\"\x9e\x01\n" +
+	"\x05proto\x18\x02 \x01(\rR\x05proto\"\x95\x01\n" +
 	"\x0fAddLbVipRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x10\n" +
-	"\x03vni\x18\x02 \x01(\rR\x03vni\x12\x19\n" +
-	"\bvip_ipv4\x18\x03 \x01(\tR\avipIpv4\x12\x1f\n" +
+	"\x03vni\x18\x02 \x01(\rR\x03vni\x12\x10\n" +
+	"\x03vip\x18\x03 \x01(\tR\x03vip\x12\x1f\n" +
 	"\vlb_underlay\x18\x04 \x01(\tR\n" +
 	"lbUnderlay\x12-\n" +
 	"\x05ports\x18\x05 \x03(\v2\x17.dataplane.v1.PortProtoR\x05ports\"\x12\n" +

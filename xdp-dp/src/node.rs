@@ -310,7 +310,16 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let vip = parse_ipv4(&r.vip_ipv4).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let lb_ip: crate::grpc::LbIpBytes = match r.vip.parse::<std::net::IpAddr>() {
+            Ok(std::net::IpAddr::V4(a)) => crate::grpc::LbIpBytes::Ipv4(a.octets()),
+            Ok(std::net::IpAddr::V6(a)) => crate::grpc::LbIpBytes::Ipv6(a.octets()),
+            Err(e) => {
+                return Err(Status::invalid_argument(format!(
+                    "invalid vip {:?}: {e}",
+                    r.vip
+                )))
+            }
+        };
         let lb_underlay =
             parse_nexthop6(&r.lb_underlay).map_err(|e| Status::invalid_argument(e.to_string()))?;
         // (port, proto) services: proto is the IP protocol number (6=TCP, 17=UDP, 1=ICMP).
@@ -328,20 +337,16 @@ impl DataplaneNode for NodeService {
         let id = r.id.clone().into_bytes();
         let vni = r.vni;
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            attach.control.create_lb(
-                &id,
-                vni,
-                crate::grpc::LbIpBytes::Ipv4(vip),
-                lb_underlay,
-                ports,
-            )
+            attach
+                .control
+                .create_lb(&id, vni, lb_ip, lb_underlay, ports)
         })
         .await
         .map_err(|e| Status::internal(format!("add_lb_vip task panicked: {e}")))?
         .map_err(|e| Status::internal(e.to_string()))?;
         println!(
             "LB VIP add id={} vni={vni} vip={} lb_underlay={} ports={:?}",
-            r.id, r.vip_ipv4, r.lb_underlay, r.ports
+            r.id, r.vip, r.lb_underlay, r.ports
         );
         Ok(Response::new(AddLbVipResponse {}))
     }

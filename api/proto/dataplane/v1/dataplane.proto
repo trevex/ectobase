@@ -56,7 +56,7 @@ message PortProto {
 message AddLbVipRequest {
   string id = 1;                 // stable LB id (used to add backends later)
   uint32 vni = 2;                // overlay VNI; 0 for the WAN edge (no VNI)
-  string vip_ipv4 = 3;           // the public VIP IPv4
+  string vip = 3;                // the public VIP (IPv4 or IPv6)
   string lb_underlay = 4;        // the LB's own underlay /128 (anycast)
   repeated PortProto ports = 5;  // the LB services
 }
