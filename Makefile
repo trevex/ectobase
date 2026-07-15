@@ -97,6 +97,7 @@ sim: ## Fast in-process datapath tests (no root, no clab): pure-core + native si
 sim-anchor: ## Privileged BPF_PROG_TEST_RUN byte-parity anchor (native pure-core vs real bytecode)
 	cargo build -p xdp-dp
 	sudo -E $$(command -v cargo) test -p xdp-dp --test anchor_uplink -- --ignored --exact uplink_rx_bytecode_matches_native_sim
+	sudo -E $$(command -v cargo) test -p xdp-dp --test anchor_lb -- --ignored --exact uplink_rx_lb_deliver_bytecode_matches_native_sim
 
 .PHONY: conformance
 conformance: ## dpservice conformance suite vs `xdp-dp serve` (veth harness; needs sudo)
