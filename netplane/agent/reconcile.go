@@ -62,17 +62,17 @@ func (r *Reconciler) SetEdgeLoopback(loopback string) { r.edgeLoopback = loopbac
 // the local egress-NAT blocks to announce for this node, snapshotting the current
 // NetworkInterface set. As a side effect it programs local egress SNAT sources on
 // the dataplane (idempotent: AddNatSource delete-then-adds).
-func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Route, announceNat []NatBlock, err error) {
+func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Route, announceNat []NatBlock, egressVNIs []uint32, err error) {
 	var nics netv1.NetworkInterfaceList
 	if err := r.client.List(ctx, &nics); err != nil {
-		return nil, nil, nil, fmt.Errorf("list networkinterfaces: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("list networkinterfaces: %w", err)
 	}
-	vniSet := map[uint32]struct{}{}
+	vniSet := map[uint32]struct{}{PublicVNI: {}} // always subscribe to the public VNI to learn defaults
 	for i := range nics.Items {
 		nic := &nics.Items[i]
 		vni, err := r.vniFor(ctx, nic)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		if vni == 0 {
 			continue // VPC not yet allocated a VNI; skip until it is
@@ -93,7 +93,7 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 		for _, ip := range nic.Spec.IPs {
 			prefix, err := hostPrefix(ip)
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("nic %s/%s ip %q: %w", nic.Namespace, nic.Name, ip, err)
+				return nil, nil, nil, nil, fmt.Errorf("nic %s/%s ip %q: %w", nic.Namespace, nic.Name, ip, err)
 			}
 			// Endpoint host routes are internal; egress-NAT default routes (external=true)
 			// are distributed separately by a controller.
@@ -106,7 +106,7 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 	// the routebus (so peers learn the neighbor-nat return route to us).
 	srcs, blocks, err := DesiredNat(ctx, r.client, r.nodeID, r.underlay)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	for _, s := range srcs {
 		if r.dp == nil {
@@ -124,7 +124,7 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 	// egress toward us. Non-edge nodes get nothing here.
 	extRoutes, err := DesiredExternalRoutes(ctx, r.client, r.underlay, r.edgeLoopback)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	for _, er := range extRoutes {
 		vniSet[er.Vni] = struct{}{} // subscribe to the VNI we originate into
@@ -142,17 +142,22 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 	// load-balancer path; it reuses the plain route channel and needs no LB-specific datapath state.
 	lbs, err := r.desiredLB(ctx)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	for _, lb := range lbs {
 		prefix, err := hostPrefix(lb.VIP)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("lb vip %q: %w", lb.VIP, err)
+			return nil, nil, nil, nil, fmt.Errorf("lb vip %q: %w", lb.VIP, err)
 		}
 		announce = append(announce, Route{Vni: lb.Vni, Prefix: prefix, Nexthop: lb.NicUnderlay, External: false})
 	}
 
-	return subs, announce, blocks, nil
+	egressVNIs, err = r.desiredEgressVNIs(ctx)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	return subs, announce, blocks, egressVNIs, nil
 }
 
 // vniFor resolves an interface's VNI: prefer status.vni, else the referenced VPC's status.vni.

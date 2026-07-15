@@ -92,7 +92,7 @@ func TestDesired_EmitsVIPAnycastRoute(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(nic, cnic).Build()
 	r := &Reconciler{client: cl, nodeID: node, underlay: "2001:db8::dd"}
 
-	_, announce, _, err := r.Desired(context.Background())
+	_, announce, _, _, err := r.Desired(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

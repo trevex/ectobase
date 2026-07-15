@@ -41,12 +41,14 @@ func TestDesiredAnnouncesLocalInterfaces(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(vpc, local, remote).Build()
 	r := &Reconciler{client: c, nodeID: "nodeA", underlay: "fd00::a"}
 
-	subs, ann, _, err := r.Desired(context.Background())
+	subs, ann, _, _, err := r.Desired(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(subs) != 1 || subs[0] != 100 {
-		t.Fatalf("subs = %v, want [100]", subs)
+	// Every node always subscribes to the public VNI (0) to learn the external defaults,
+	// in addition to the VNIs it hosts.
+	if len(subs) != 2 || subs[0] != PublicVNI || subs[1] != 100 {
+		t.Fatalf("subs = %v, want [0 100]", subs)
 	}
 	if len(ann) != 1 {
 		t.Fatalf("want 1 local announcement, got %d: %+v", len(ann), ann)
