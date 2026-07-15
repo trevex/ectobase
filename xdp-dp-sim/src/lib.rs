@@ -16,6 +16,8 @@ mod encap_test;
 #[cfg(test)]
 mod firewall_test;
 #[cfg(test)]
+mod lb_scenario_test;
+#[cfg(test)]
 mod lb_select_test;
 #[cfg(test)]
 mod ns_scenario_test;
