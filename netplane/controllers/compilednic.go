@@ -6,6 +6,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -13,9 +14,11 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -152,6 +155,9 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	case err != nil:
 		return ctrl.Result{}, err
 	default:
+		if reflect.DeepEqual(existing.Spec, compiled.Spec) {
+			return ctrl.Result{}, nil // unchanged: no write, no resourceVersion churn
+		}
 		existing.Spec = compiled.Spec
 		if err := r.Client.Update(ctx, &existing); err != nil {
 			return ctrl.Result{}, fmt.Errorf("update compilednic: %w", err)
@@ -167,7 +173,10 @@ func (r *CompiledNICReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&netv1.NetworkInterface{}).
 		Owns(&netv1.CompiledNIC{}).
-		Watches(&netv1.NetworkPolicy{}, handler.EnqueueRequestsFromMapFunc(r.nicsForPolicy)).
+		Watches(&netv1.NetworkPolicy{}, handler.EnqueueRequestsFromMapFunc(r.nicsForPolicy),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Watches(&netv1.LoadBalancer{}, handler.EnqueueRequestsFromMapFunc(r.nicsForLB),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Complete(r)
 }
 
@@ -189,6 +198,28 @@ func (r *CompiledNICReconciler) nicsForPolicy(ctx context.Context, obj client.Ob
 	var reqs []reconcile.Request
 	for i := range nics.Items {
 		if sel.Matches(labels.Set(nics.Items[i].Labels)) {
+			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{
+				Namespace: nics.Items[i].Namespace, Name: nics.Items[i].Name,
+			}})
+		}
+	}
+	return reqs
+}
+
+// nicsForLB maps a LoadBalancer event to reconcile requests for every NetworkInterface in the same
+// namespace it targets (TargetRefs by name or TargetSelector by label).
+func (r *CompiledNICReconciler) nicsForLB(ctx context.Context, obj client.Object) []reconcile.Request {
+	lb, ok := obj.(*netv1.LoadBalancer)
+	if !ok {
+		return nil
+	}
+	var nics netv1.NetworkInterfaceList
+	if err := r.Client.List(ctx, &nics, client.InNamespace(lb.Namespace)); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range nics.Items {
+		if lbMatchesNIC(lb, &nics.Items[i], labels.Set(nics.Items[i].Labels)) {
 			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{
 				Namespace: nics.Items[i].Namespace, Name: nics.Items[i].Name,
 			}})

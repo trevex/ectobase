@@ -5,6 +5,7 @@ package controllers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -12,6 +13,11 @@ import (
 
 	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // testNIC builds a NetworkInterface with the standard test fixture values.
@@ -213,5 +219,63 @@ func TestCompile_LBNoMatch(t *testing.T) {
 	c := Compile(nic, nil, []netv1.LoadBalancer{lb})
 	if len(c.Spec.LB) != 0 {
 		t.Fatalf("want 0 CompiledLB for non-matching NIC, got %d", len(c.Spec.LB))
+	}
+}
+
+func lbScheme(t *testing.T) *runtime.Scheme {
+	s := runtime.NewScheme()
+	if err := netv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestReconcile_NoWriteWhenUnchanged(t *testing.T) {
+	s := lbScheme(t)
+	node := "nodeA"
+	nic := &netv1.NetworkInterface{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-0", Namespace: "default", Labels: map[string]string{"app": "web"}},
+		Spec:       netv1.NetworkInterfaceSpec{NodeName: &node},
+		Status:     netv1.NetworkInterfaceStatus{VNI: 100, UnderlayRoute: "2001:db8::dd"},
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(nic).Build()
+	r := &CompiledNICReconciler{Client: cl}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "web-0"}}
+
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	var first netv1.CompiledNIC
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "default-web-0"}, &first); err != nil {
+		t.Fatal(err)
+	}
+	rv1 := first.ResourceVersion
+
+	// Second reconcile with identical inputs must NOT write (resourceVersion unchanged).
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	var second netv1.CompiledNIC
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "default-web-0"}, &second); err != nil {
+		t.Fatal(err)
+	}
+	if second.ResourceVersion != rv1 {
+		t.Fatalf("resourceVersion changed on no-op reconcile: %s -> %s", rv1, second.ResourceVersion)
+	}
+}
+
+func TestNicsForLB(t *testing.T) {
+	s := lbScheme(t)
+	nic := &netv1.NetworkInterface{ObjectMeta: metav1.ObjectMeta{Name: "web-0", Namespace: "default", Labels: map[string]string{"app": "web"}}}
+	other := &netv1.NetworkInterface{ObjectMeta: metav1.ObjectMeta{Name: "db-0", Namespace: "default", Labels: map[string]string{"app": "db"}}}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(nic, other).Build()
+	r := &CompiledNICReconciler{Client: cl}
+	lb := &netv1.LoadBalancer{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-lb", Namespace: "default"},
+		Spec:       netv1.LoadBalancerSpec{TargetSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}}},
+	}
+	reqs := r.nicsForLB(context.Background(), client.Object(lb))
+	if len(reqs) != 1 || reqs[0].Name != "web-0" {
+		t.Fatalf("nicsForLB = %+v, want [web-0]", reqs)
 	}
 }
