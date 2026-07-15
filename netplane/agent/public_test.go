@@ -1,14 +1,20 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	rbv1 "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestDesiredPublicEdgeRecord(t *testing.T) {
-	r := &Reconciler{underlay: "fd00:db8:0:9::e", edgeLoopback: "fd00:db8:0:9::1"}
-	pubs := r.DesiredPublic()
+	cl := fake.NewClientBuilder().WithScheme(lbTestScheme(t)).Build()
+	r := &Reconciler{client: cl, nodeID: "edge1", underlay: "fd00:db8:0:9::e", edgeLoopback: "fd00:db8:0:9::1"}
+	pubs, err := r.DesiredPublic(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(pubs) != 1 {
 		t.Fatalf("want 1 public record, got %d: %+v", len(pubs), pubs)
 	}
@@ -28,8 +34,13 @@ func TestDesiredPublicEdgeRecord(t *testing.T) {
 }
 
 func TestDesiredPublicNonEdgeEmpty(t *testing.T) {
-	r := &Reconciler{underlay: "fd00::a"}
-	if pubs := r.DesiredPublic(); len(pubs) != 0 {
+	cl := fake.NewClientBuilder().WithScheme(lbTestScheme(t)).Build()
+	r := &Reconciler{client: cl, nodeID: "nodeA", underlay: "fd00::a"}
+	pubs, err := r.DesiredPublic(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pubs) != 0 {
 		t.Fatalf("non-edge node must announce no public records, got %+v", pubs)
 	}
 }

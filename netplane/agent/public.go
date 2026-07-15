@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"strings"
 
@@ -25,16 +27,35 @@ type PublicPrefix struct {
 // EDGE_UNDERLAY record mapping its anycast datapath /128 (the underlay) to its
 // unique control-plane loopback (the owner). Non-edge nodes announce nothing.
 // NAT_IP records ride this channel in a later task.
-func (r *Reconciler) DesiredPublic() []PublicPrefix {
-	if r.edgeLoopback == "" {
-		return nil
+func (r *Reconciler) DesiredPublic(ctx context.Context) ([]PublicPrefix, error) {
+	var recs []PublicPrefix
+	if r.edgeLoopback != "" {
+		recs = append(recs, PublicPrefix{
+			Kind:          rbv1.PublicKind_PUBLIC_KIND_EDGE_UNDERLAY,
+			Prefix:        r.underlay + "/128",
+			OwnerUnderlay: r.edgeLoopback,
+			Vni:           0,
+		})
 	}
-	return []PublicPrefix{{
-		Kind:          rbv1.PublicKind_PUBLIC_KIND_EDGE_UNDERLAY,
-		Prefix:        r.underlay + "/128",
-		OwnerUnderlay: r.edgeLoopback,
-		Vni:           0,
-	}}
+	// LB backends on this node: one LB_VIP record per backed VIP so the edge can AddLbBackend.
+	// vni=0: the edge supplies its WAN LB-VNI at AddLbVip; AddLbBackend needs no VNI.
+	lbs, err := r.desiredLB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, lb := range lbs {
+		prefix, err := hostPrefix(lb.VIP)
+		if err != nil {
+			return nil, fmt.Errorf("lb vip %q: %w", lb.VIP, err)
+		}
+		recs = append(recs, PublicPrefix{
+			Kind:          rbv1.PublicKind_PUBLIC_KIND_LB_VIP,
+			Prefix:        prefix,
+			OwnerUnderlay: lb.NicUnderlay,
+			Vni:           0,
+		})
+	}
+	return recs, nil
 }
 
 // applyPublic handles a learned PublicPrefix update off the routebus. For

@@ -77,8 +77,14 @@ func main() {
 		if err := r.ReconcileFirewall(ctx); err != nil {
 			log.Printf("reconcile firewall: %v", err)
 		}
+		pub, err := r.DesiredPublic(ctx)
+		if err != nil {
+			log.Printf("desired public: %v", err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
 		bus := agent.NewBus(*nodeID, *underlay, dp)
-		if err := bus.Run(ctx, rb, subs, ann, annNat, r.DesiredPublic()); err != nil {
+		if err := bus.Run(ctx, rb, subs, ann, annNat, pub); err != nil {
 			log.Printf("bus session ended: %v; reconnecting", err)
 		}
 		time.Sleep(time.Second)
