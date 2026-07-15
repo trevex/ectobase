@@ -67,7 +67,9 @@ The real datapath logic lives in `xdp-dp-core` — a `no_std` crate whose functi
 - **eBPF** — `CtxPkt`/`GlobalMaps` in `xdp-dp-ebpf/src/coreimpl.rs` bind the trait impls to real kernel maps and the XDP packet context.
 - **Native sim** — `VecPkt`/`MemMaps` in `xdp-dp-sim` provide in-process, heap-backed impls. `SimNode` runs the real core functions with no kernel, no clab, no root. `CompiledNIC` (the per-NIC control-plane CRD) is lowered into sim maps via `xdp_dp_sim::compilednic::apply`, so the control-plane→datapath path is tested end-to-end without touching a real interface.
 
-See `docs/superpowers/specs/2026-07-15-compiled-nic-synthetic-datapath-testing-design.md` for the full design.
+**Multi-node fabric.** `xdp_dp_sim::Fabric` owns several `SimNode`s plus an underlay-`/128`→node table and follows encap/redirect hops across the fabric (`bpf_redirect` semantics), returning a `Trace` of every hop. This runs *whole flows* in-process: North-South (external → edge `wan_rx` → backend host), and East-West load-balancing including the relay **reforward** to a remote backend. The LB coverage (`xdp-dp-sim/src/lb_scenario_test.rs`) reproduces the "LB packets dropped" clab failure synthetically and pins the fix: the firewall is **explicit-only** (LB membership never generates rules) and the dataplane is **deny-by-default** — the control plane materializes k8s open-until-selected as explicit allow-all rules for unpolicied NICs (`Compile()`). Because LB is DSR (inner dst stays the VIP), a policy written for a backend's own overlay IP does *not* cover its LB traffic; an explicit `VIP:port` rule is required.
+
+See `docs/superpowers/specs/2026-07-15-compiled-nic-synthetic-datapath-testing-design.md` (core sim) and `docs/superpowers/specs/2026-07-15-fabric-sim-lb-coverage-design.md` (fabric + LB) for the full designs.
 
 ### Commands
 
@@ -82,8 +84,8 @@ make conformance     # full dpservice conformance suite against xdp-dp serve (su
 1. **Port the fn into `xdp-dp-core`** generic over `Pkt`/`Maps`; add any new map-accessor methods to the `Maps` trait.
 2. **Wire the eBPF side** — call the new fn from `xdp-dp-ebpf` via the existing `CtxPkt`/`GlobalMaps` impls in `coreimpl.rs`.
 3. **Implement `MemMaps`** — add the corresponding in-memory map to `xdp-dp-sim` and implement the new `Maps` accessor.
-4. **Add a sim test** — write a `SimNode`-based test in `xdp-dp-sim/tests/` (or extend an existing scenario file); run it with `make sim`.
-5. **Add an anchor case** — add one `BPF_PROG_TEST_RUN` case in `xdp-dp/tests/anchor_uplink.rs` to assert native-core output matches real bytecode; verify with `make sim-anchor`.
+4. **Add a sim test** — write a `SimNode`- or `Fabric`-based scenario in `xdp-dp-sim/src/*_test.rs` (single-node or multi-hop); run it with `make sim`.
+5. **Add an anchor case** — add one `BPF_PROG_TEST_RUN` case in the relevant `xdp-dp/tests/anchor_*.rs` to assert native-core output matches real bytecode; verify with `make sim-anchor`.
 
 ## Conformance
 
