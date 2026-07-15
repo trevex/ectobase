@@ -88,6 +88,31 @@ def test2_vf_to_vf_firewall_tcp(prepare_ipv4, grpc_client):
 	grpc_client.addfwallrule(VM1.name, f"allow-all-eg-{VM1.name}", src_prefix="0.0.0.0/0", dst_prefix="0.0.0.0/0", action="accept", direction="egress")
 
 
+def test3_vf_to_vf_ingress_firewall_tcp(prepare_ipv4, grpc_client):
+	# Same-node VM-to-VM delivery must ALSO honor the DESTINATION VM's ingress firewall — the local
+	# fast path evaluates it on new flows (regression guard for the ingress-bypass fix). Remove VM2's
+	# allow-all ingress and install a narrow one that does NOT match VM1's source, then send
+	# VM1->VM2 (a fresh 5-tuple so it's a new flow) and assert it does not arrive.
+	sniff_tcp_data = {}
+	negated = True
+	resp_thread = threading.Thread(target=sniff_tcp_fwall_packet, args=(VM2.tap, sniff_tcp_data, negated))
+	resp_thread.start()
+
+	grpc_client.delfwallrule(VM2.name, f"allow-all-in-{VM2.name}")
+	grpc_client.addfwallrule(VM2.name, "fw0-vm2-in", src_prefix="1.2.3.4/16", proto="tcp", direction="ingress")
+	tcp_pkt = (Ether(dst=VM2.mac, src=VM1.mac) /
+			   IP(dst=VM2.ip, src=VM1.ip) /
+			   TCP(sport=1003, dport=1236))
+	delayed_sendp(tcp_pkt, VM1.tap)
+
+	resp_thread.join()
+	# VM1.ip is not in 1.2.3.4/16 and no other ingress rule allows it -> deny-by-default drop at VM2.
+	assert sniff_tcp_data["pkt"] == None
+	grpc_client.delfwallrule(VM2.name, "fw0-vm2-in")
+	# Restore VM2's allow-all ingress so later tests are unaffected.
+	grpc_client.addfwallrule(VM2.name, f"allow-all-in-{VM2.name}", src_prefix="0.0.0.0/0", dst_prefix="0.0.0.0/0", action="accept", direction="ingress")
+
+
 def vf_to_vf_icmp_responder(vf_tap):
 	pkt = sniff_packet(vf_tap, is_icmp_pkt)
 	reply_pkt = (Ether(dst=pkt[Ether].src, src=pkt[Ether].dst) / IP(dst=pkt[IP].src, src=pkt[IP].dst) / ICMP(type=0, id=pkt[ICMP].id))

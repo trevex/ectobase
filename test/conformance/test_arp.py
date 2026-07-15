@@ -27,6 +27,9 @@ def test_l2_addr_once(request, prepare_ifaces, grpc_client):
 		pytest.skip("Cannot test MAC address change with real hardware")
 
 	grpc_client.addinterface(VM4.name, VM4.pci, VM4.vni, VM4.ip, VM4.ipv6)
+	# Always-on deny-by-default: this dynamically-created VM needs an explicit allow-all too.
+	grpc_client.addfwallrule(VM4.name, f"allow-all-in-{VM4.name}", src_prefix="0.0.0.0/0", dst_prefix="0.0.0.0/0", action="accept", direction="ingress")
+	grpc_client.addfwallrule(VM4.name, f"allow-all-eg-{VM4.name}", src_prefix="0.0.0.0/0", dst_prefix="0.0.0.0/0", action="accept", direction="egress")
 
 	# No need to use ARP/DHCP/ND, since dpservice already "guessed" the MAC from the representor
 
@@ -56,6 +59,9 @@ def test_l2_addr_once(request, prepare_ifaces, grpc_client):
 	# This can have different MAC address
 	grpc_client.delinterface(VM4.name)
 	grpc_client.addinterface(VM4.name, VM4.pci, VM4.vni, VM4.ip, VM4.ipv6)
+	# Always-on deny-by-default: this dynamically-created VM needs an explicit allow-all too.
+	grpc_client.addfwallrule(VM4.name, f"allow-all-in-{VM4.name}", src_prefix="0.0.0.0/0", dst_prefix="0.0.0.0/0", action="accept", direction="ingress")
+	grpc_client.addfwallrule(VM4.name, f"allow-all-eg-{VM4.name}", src_prefix="0.0.0.0/0", dst_prefix="0.0.0.0/0", action="accept", direction="egress")
 
 	# Without ARP/DHCP/ND dpservice should try the use the old MAC
 	threading.Thread(target=vm_mac_sender).start()

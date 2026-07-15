@@ -37,6 +37,11 @@ pub fn forward_decision_v4(
     // reverse-NAT entries created for ingress return traffic; they must NOT be applied in the
     // egress path (otherwise a non-NAT'd VM replying to a NATted peer would have its dst
     // incorrectly rewritten and be delivered locally instead of going out to the router).
+    // `was_new` = this is the flow's first packet (conntrack miss). New flows enforce the SOURCE
+    // egress firewall here, and — on the local fast path below — the DESTINATION ingress firewall
+    // (same-node delivery must still honor the dest's ingress policy; established flows, incl. the
+    // reverse/reply entry seeded here, skip both, mirroring the cross-node uplink_rx behavior).
+    let mut was_new = false;
     if let Some(key) = crate::conntrack::ct_key(data, data_end, ETH_LEN, meta.vni) {
         match unsafe { crate::maps::CONNTRACK.get(&key) } {
             Some(e) => {
@@ -47,6 +52,7 @@ pub fn forward_decision_v4(
                 crate::conntrack::ct_touch(data, data_end, ETH_LEN, &key, &mut e);
             }
             None => {
+                was_new = true;
                 if xdp_dp_core::firewall::fw_eval_dir(
                     &crate::coreimpl::RawPkt::new(data, data_end),
                     &crate::coreimpl::GlobalMaps,
@@ -97,6 +103,19 @@ pub fn forward_decision_v4(
     // are skipped (they encap to the selected backend underlay as usual).
     if let Some(u) = unsafe { UNDERLAY.get(&route.nexthop_ipv6) } {
         if u.tap_ifindex != 0 {
+            // Destination ingress firewall on NEW flows (the cross-node uplink_rx path is skipped
+            // for same-node delivery, so enforce the dest's ingress policy here). Deny-by-default.
+            if was_new
+                && xdp_dp_core::firewall::fw_eval_dir(
+                    &crate::coreimpl::RawPkt::new(data, data_end),
+                    &crate::coreimpl::GlobalMaps,
+                    ETH_LEN,
+                    u.tap_ifindex,
+                    xdp_dp_common::FW_DIR_INGRESS,
+                ) == xdp_dp_common::FW_ACTION_DROP
+            {
+                return EgressVerdict::Drop;
+            }
             return EgressVerdict::Local {
                 tap_ifindex: u.tap_ifindex,
                 guest_mac: u.guest_mac,
