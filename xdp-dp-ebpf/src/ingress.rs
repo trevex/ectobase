@@ -287,27 +287,23 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
             }
         }
     }
-    // Strip outer Eth+IPv6, leaving room to write the inner Ethernet.
-    if unsafe { bpf_xdp_adjust_head(ctx.ctx, IPV6_LEN as i32) } != 0 {
-        return Err(());
+    // Strip outer Eth+IPv6 and rewrite the inner Ethernet for the guest via the shared core seam
+    // (byte-identical to the old inline decap+rewrite; also drives the native SimNode).
+    match xdp_dp_core::uplink::decap_and_rewrite(
+        &mut crate::coreimpl::CtxPkt { ctx },
+        tap_ifindex,
+        guest_mac,
+    ) {
+        Err(()) => Err(()),
+        Ok(_) => {
+            // DNAT: rewrite inner IPv4 dest if inner_dst was a VIP (V->G). Skip for LB packets
+            // (already forwarded to the backend VF which owns the LB IP).
+            if lb_ul.is_none() && nat_guest.is_none() {
+                crate::vip::dnat_ingress(ctx, ETH_LEN, vni);
+            }
+            Ok(unsafe { bpf_redirect(tap_ifindex, 0) } as u32)
+        }
     }
-    let data = ctx.data();
-    let data_end = ctx.data_end();
-    if data + ETH_LEN > data_end {
-        return Err(());
-    }
-    let q = data as *mut u8;
-    unsafe {
-        write6(q, &guest_mac);
-        write6(q.add(6), &GW_MAC);
-        core::ptr::write_unaligned(q.add(12) as *mut u16, ETH_P_IP.to_be());
-    }
-    // DNAT: rewrite inner IPv4 dest if inner_dst was a VIP (V->G). Skip for LB packets (already
-    // forwarded to the backend VF which owns the LB IP).
-    if lb_ul.is_none() && nat_guest.is_none() {
-        crate::vip::dnat_ingress(ctx, ETH_LEN, vni);
-    }
-    Ok(unsafe { bpf_redirect(tap_ifindex, 0) } as u32)
 }
 
 /// WAN-edge egress delivery: strip the outer Eth+IPv6 from a decapped fabric->WAN packet and hand

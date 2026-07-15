@@ -6,3 +6,4 @@ pub mod firewall;
 pub mod maps;
 pub mod parse;
 pub mod pkt;
+pub mod uplink;

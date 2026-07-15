@@ -32,6 +32,10 @@ impl Maps for GlobalMaps {
     fn conntrack_insert(&mut self, key: CtKey, entry: CtEntry) {
         let _ = crate::maps::CONNTRACK.insert(&key, &entry, 0);
     }
+    #[inline(always)]
+    fn fw_enforcing(&self) -> bool {
+        crate::firewall::fw_enforcing()
+    }
 }
 
 /// `Pkt` over an XDP context. read/write are bounds-checked against data_end (verifier-safe).

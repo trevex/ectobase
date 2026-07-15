@@ -9,6 +9,7 @@ pub struct MemMaps {
     pub fw_meta: HashMap<u32, FwMeta>,
     pub fw_rules: HashMap<(u32, u32), FwRule>, // (ifindex, idx)
     pub conntrack: HashMap<CtKey, CtEntry>,
+    pub fw_enforcing: bool,
 }
 
 impl Maps for MemMaps {
@@ -29,5 +30,8 @@ impl Maps for MemMaps {
     }
     fn conntrack_insert(&mut self, key: CtKey, entry: CtEntry) {
         self.conntrack.insert(key, entry);
+    }
+    fn fw_enforcing(&self) -> bool {
+        self.fw_enforcing
     }
 }

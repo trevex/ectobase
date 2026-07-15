@@ -9,4 +9,6 @@ pub trait Maps {
     fn fw_rule(&self, key: &FwRuleKey) -> Option<FwRule>;
     fn conntrack_get(&self, key: &CtKey) -> Option<CtEntry>;
     fn conntrack_insert(&mut self, key: CtKey, entry: CtEntry);
+    /// Whether firewall enforcement is enabled (eBPF: FW_CONFIG[0] != 0; sim: a bool field).
+    fn fw_enforcing(&self) -> bool;
 }

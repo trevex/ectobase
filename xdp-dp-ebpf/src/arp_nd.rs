@@ -2,7 +2,8 @@ use aya_ebpf::programs::XdpContext;
 use xdp_dp_common::PortMeta;
 
 /// Virtual gateway MAC the datapath answers ARP with (and uses as inner-eth src on delivery).
-pub const GW_MAC: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
+/// Single-sourced in `xdp_dp_core::uplink` so eBPF, core, and sim share the exact same value.
+pub use xdp_dp_core::uplink::GW_MAC;
 
 /// Reflect a rewritten-in-place reply (ARP / ND / DHCP) back to the guest it arrived from, and
 /// return the XDP action to use.
