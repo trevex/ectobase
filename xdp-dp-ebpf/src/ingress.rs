@@ -8,7 +8,8 @@ use xdp_dp_common::{RouteValue, VipKey, CT_F_NAT64, CT_REWRITE_DST, UNDERLAY_LOC
 use crate::arp_nd::GW_MAC;
 use crate::maps::{LOCAL, NAT_IPS};
 use crate::parse::{
-    l4_ports, write16, write6, ETH_LEN, ETH_P_IP, ETH_P_IPV6, IPPROTO_ICMP, IPPROTO_IPIP, IPV6_LEN,
+    l4_ports, write16, write6, ETH_LEN, ETH_P_IP, ETH_P_IPV6, IPPROTO_ICMP, IPPROTO_IPIP,
+    IPPROTO_IPV6, IPV6_LEN,
 };
 
 const ICMP_ECHO_REQUEST: u8 = 8;
@@ -344,7 +345,34 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
     }
     let p = data as *const u8;
     let ethertype = u16::from_be(unsafe { core::ptr::read_unaligned(p.add(12) as *const u16) });
-    if ethertype != ETH_P_IP {
+    if ethertype == ETH_P_IPV6 {
+        // External-LB VIP ingress (vip_rx) for v6: a plain IPv6 WAN frame whose dst+port is a
+        // registered WAN LB VIP (vni=0) → Maglev-select an overlay backend and encap IPv6-in-IPv6
+        // straight to its underlay. v6 WAN has no neighbor-NAT path (that is IPv4-only), so a miss
+        // falls through to XDP_PASS.
+        if data + ETH_LEN + 40 > data_end {
+            return Ok(xdp_action::XDP_PASS);
+        }
+        if let Some(backend) = crate::lb::lb_select_forward_v6(ctx, ETH_LEN, 0) {
+            let local = LOCAL.get(0).ok_or(())?;
+            let inner_len = (data_end - data - ETH_LEN) as u16;
+            let route = RouteValue {
+                nexthop_vni: 0,
+                nexthop_ipv6: backend,
+                is_external: 0,
+                _pad: [0; 3],
+            };
+            return crate::encap::encap_and_redirect(
+                ctx,
+                local,
+                &local.underlay_ipv6,
+                &route,
+                inner_len,
+                IPPROTO_IPV6, // inner is an IPv6 packet (NOT IPPROTO_IPIP)
+            );
+        }
+        return Ok(xdp_action::XDP_PASS);
+    } else if ethertype != ETH_P_IP {
         return Ok(xdp_action::XDP_PASS);
     }
     let ip_off = ETH_LEN;
