@@ -20,6 +20,9 @@ use crate::pkt::VecPkt;
 /// A native node running the shared eBPF datapath core over in-memory maps.
 pub struct SimNode {
     pub maps: MemMaps,
+    /// This node's own underlay identity (uplink ifindex/MACs, underlay IPv6). Used by `wan_rx` and
+    /// `run` to encapsulate or reforward without an external `Local` argument.
+    pub local: Local,
 }
 
 /// Result of `host_uplink`: the delivery `Action` plus the resulting (decapped) frame bytes.
@@ -38,6 +41,15 @@ impl SimNode {
     pub fn new() -> Self {
         Self {
             maps: MemMaps::default(),
+            local: Local::default(),
+        }
+    }
+
+    /// Construct a node with a pre-set underlay identity.
+    pub fn with_local(local: Local) -> Self {
+        Self {
+            maps: MemMaps::default(),
+            local,
         }
     }
 
@@ -151,5 +163,65 @@ impl SimNode {
             underlay_ipv6: [0; 16],
         };
         self.uplink(encapped, vni, u, [0u8; 16], &local)
+    }
+
+    /// Edge WAN-VIP ingress (`wan_rx`): a plain `[Eth][IPv4]` WAN frame; if its dst+port is a WAN LB
+    /// VIP (vni=0), Maglev-select a backend and encap IP-in-IPv6 to the backend underlay. Else Pass.
+    /// Mirrors `ingress.rs::try_wan_rx` VIP branch. Returns the encapped frame (or the input on Pass).
+    pub fn wan_rx(&self, plain: &[u8]) -> SimOut {
+        use xdp_dp_core::encap::ETH_LEN;
+        match lb_select_forward(&VecPkt::from_bytes(plain), &self.maps, ETH_LEN, 0) {
+            Some(backend) => {
+                let e = EncapParams {
+                    gateway_mac: self.local.gateway_mac,
+                    uplink_mac: self.local.uplink_mac,
+                    uplink_ifindex: self.local.uplink_ifindex,
+                    src_underlay: self.local.underlay_ipv6,
+                    nexthop_ipv6: backend,
+                    inner_len: 0,   // edge_encap sets this
+                    inner_proto: 4, // IPPROTO_IPIP
+                };
+                SimOut {
+                    action: Action::Redirect(self.local.uplink_ifindex),
+                    pkt: self.edge_encap(plain, e),
+                }
+            }
+            None => SimOut {
+                action: Action::Pass,
+                pkt: plain.to_vec(),
+            },
+        }
+    }
+
+    /// Uniform entry for the Fabric. UplinkRx resolves `u = UNDERLAY[outer_dst]` from this node's maps.
+    pub fn run(&mut self, prog: crate::fabric::Prog, pkt: &[u8]) -> SimOut {
+        use xdp_dp_core::encap::ETH_LEN;
+        match prog {
+            crate::fabric::Prog::WanRx => self.wan_rx(pkt),
+            crate::fabric::Prog::UplinkRx => {
+                // outer IPv6 dst at ETH_LEN+24; resolve to this node's UnderlayValue.
+                let vp = VecPkt::from_bytes(pkt);
+                let outer_dst = match vp.read_array::<16>(ETH_LEN + 24) {
+                    Some(d) => d,
+                    None => {
+                        return SimOut {
+                            action: Action::Pass,
+                            pkt: pkt.to_vec(),
+                        }
+                    }
+                };
+                let u = match self.maps.underlay_get(&outer_dst) {
+                    Some(u) => u,
+                    None => {
+                        return SimOut {
+                            action: Action::Pass,
+                            pkt: pkt.to_vec(),
+                        }
+                    }
+                };
+                let local = self.local;
+                self.uplink(pkt, u.vni, u, outer_dst, &local)
+            }
+        }
     }
 }

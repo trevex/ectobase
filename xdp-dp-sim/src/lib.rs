@@ -1,8 +1,10 @@
 pub mod compilednic;
+pub mod fabric;
 pub mod maps;
 pub mod pkt;
 pub mod sim;
 
+pub use fabric::{Fabric, Outcome, Prog, Trace};
 pub use maps::MemMaps;
 pub use pkt::VecPkt;
 pub use sim::{SimNode, SimOut};
