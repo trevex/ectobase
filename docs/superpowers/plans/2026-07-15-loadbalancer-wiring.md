@@ -1438,3 +1438,97 @@ git commit -m "chore(lb): build/vet sweep for LoadBalancer wiring" || echo "noth
 **Placeholder scan:** none — every code step has full code; every command has an expected result.
 
 **Type consistency:** `CompiledLB{VIP, Ports}` and `CompiledLBPort{Port, Proto}` consistent across Tasks 1/3/6/10. `LbPort{Port uint32, Proto uint32}` consistent across Tasks 5/6/9. `lbBacking{VIP, Vni, NicUnderlay, Ports}` consistent across Tasks 6/7/8. `NewBus(nodeID, underlay, dp, isEdge)` consistent across Tasks 8/9. `DesiredPublic(ctx) ([]PublicPrefix, error)` consistent across Tasks 8/9 and main.go. VIP id == VIP string consistent across compiler/agent/edge.
+
+---
+
+# Phase 2: v6 VIP North-South (end-to-end)
+
+**Why:** Phase 1's E/W path is v6-correct (uses `hostPrefix`), but N/S is IPv4-only: `AddLbVipRequest.vip_ipv4` + `node.rs`'s `parse_ipv4`/`LbIpBytes::Ipv4`, AND the edge datapath `try_wan_rx` (ingress.rs:338) only handles `ETH_P_IP`. This phase makes a v6 WAN VIP work end-to-end at the edge: control-plane registration + an eBPF `wan_rx` v6 branch, proven in the sim.
+
+**Key existing pieces:** the eBPF `lb_select_forward_v6` already exists (xdp-dp-ebpf/src/lb.rs — reads v6 dst at +24, last-4-byte LB key, TCP/UDP); `encap_and_redirect(ctx, local, src_ul, route, inner_len, inner_proto)` already takes `inner_proto` (`IPPROTO_IPV6 = 41` in parse.rs). The **core** `lb_select_forward` (xdp-dp-core/src/lb.rs) is v4-only; the sim runs core fns, so v6 sim coverage requires a core v6 variant.
+
+## Task V6-1: Core `lb_select_forward_v6` + eBPF delegates to it
+
+**Files:**
+- Modify: `xdp-dp-core/src/lb.rs` (add `lb_select_forward_v6`)
+- Modify: `xdp-dp-ebpf/src/lb.rs` (make the existing `lb_select_forward_v6` a thin core delegate, like the v4 one at lines 10-18)
+- Test: `xdp-dp-core/src/lb.rs` (or the core test module) + verify eBPF builds
+
+- [ ] **Step 1: Add `lb_select_forward_v6<P: Pkt, M: Maps>(pkt, maps, ip_off, vni) -> Option<[u8;16]>` to xdp-dp-core/src/lb.rs**, a faithful port of the eBPF hand-written v6 logic:
+  - read `nexthdr = pkt.read_u8(ip_off + 6)?`; return None unless TCP(6)/UDP(17).
+  - `dst6 = pkt.read_array::<16>(ip_off + 24)?`, `src6 = pkt.read_array::<16>(ip_off + 8)?`; take last-4 of each (`dst4 = [dst6[12],dst6[13],dst6[14],dst6[15]]`, same for src).
+  - L4 ports at `ip_off + 40`: `sport = u16::from_be_bytes(pkt.read_array::<2>(ip_off+40)?)`, `dport = ...(ip_off+42)?`.
+  - `lb = maps.lb_get(&LbKey{vni, ipv4: dst4, port: dport, proto: nexthdr, _pad:0})?`; if `lb.size==0` return None; `slot = hash5(&src4,&dst4,sport,dport,nexthdr) % lb.size`; `maps.maglev_get(&MaglevKey{table_id: lb.table_id, slot})`.
+  Use the same `hash5`/`l4` helpers already imported. Match the eBPF logic byte-for-byte (it is the reference).
+
+- [ ] **Step 2: Add a core unit test** `lb_v6_select` building a `VecPkt` of an `[IPv6][TCP]` frame (dst last-4 = VIP4, dport 443) + a `MemMaps` with the LB+maglev entry, asserting the backend is selected; and a negative (non-LB dst → None). Mirror the existing v4 lb test in the crate.
+
+- [ ] **Step 3: Refactor eBPF `lb_select_forward_v6`** (xdp-dp-ebpf/src/lb.rs) to delegate to core (like the v4 `lb_select_forward` does): body becomes `xdp_dp_core::lb::lb_select_forward_v6(&crate::coreimpl::CtxPkt{ctx}, &crate::coreimpl::GlobalMaps, ip_off, vni)`. Remove the hand-written duplicate. Keep the `lb_select_forward_v6` public signature identical (callers in v6.rs unchanged).
+
+- [ ] **Step 4:** `cargo test -p xdp-dp-core` PASS; `cargo build -p xdp-dp-ebpf` (or the workspace eBPF build) compiles. If a `make`/anchor build is needed for the eBPF, run it; report if the verifier/build needs privileged run.
+
+- [ ] **Step 5: Commit** `git add xdp-dp-core/src/lb.rs xdp-dp-ebpf/src/lb.rs` — `refactor(lb): core lb_select_forward_v6 (eBPF delegates); shared v6 LB select`.
+
+## Task V6-2: eBPF `wan_rx` v6 branch
+
+**Files:**
+- Modify: `xdp-dp-ebpf/src/ingress.rs` (`try_wan_rx`, around lines 338-376)
+
+- [ ] **Step 1: Add a v6 branch in `try_wan_rx`** BEFORE the `if ethertype != ETH_P_IP { return Ok(XDP_PASS) }` guard. When `ethertype == ETH_P_IPV6`:
+  - bounds: `if data + ETH_LEN + 40 > data_end { return Ok(XDP_PASS) }` (v6 header is 40 bytes).
+  - `if let Some(backend) = crate::lb::lb_select_forward_v6(ctx, ETH_LEN, 0) {` build `RouteValue{ nexthop_vni:0, nexthop_ipv6: backend, is_external:0, _pad:[0;3] }`, `inner_len = (data_end - data - ETH_LEN) as u16`, and `return crate::encap::encap_and_redirect(ctx, LOCAL.get(0).ok_or(())?, &local.underlay_ipv6, &route, inner_len, IPPROTO_IPV6)` (note **IPPROTO_IPV6**, not IPPROTO_IPIP — the inner is an IPv6 packet). `}`
+  - on no LB match, fall through to `return Ok(XDP_PASS)` (v6 WAN has no neighbor-NAT path — that is IPv4-only).
+  Keep the existing IPv4 path (vip_rx + neighbor-nat) exactly as-is. Import `IPPROTO_IPV6` from `crate::parse`.
+
+- [ ] **Step 2: Build + verifier.** `cargo build` the eBPF crate; if there's a `make build-ebpf`/anchor path that runs the verifier, use it. The v6 branch reads only within the `data + ETH_LEN + 40` (and `lb_select_forward_v6`'s own `+44`/`l4_off+4`) bounds — confirm the verifier accepts it. Report any verifier error verbatim (do NOT loosen bounds to force it — investigate).
+
+- [ ] **Step 3: Commit** `git add xdp-dp-ebpf/src/ingress.rs` — `feat(edge): wan_rx v6 branch (v6 WAN VIP -> Maglev backend -> v6-in-IPv6 encap)`.
+
+## Task V6-3: Proto `vip` (family-agnostic) + node.rs family parse + Go adapter
+
+**Files:**
+- Modify: `api/proto/dataplane/v1/dataplane.proto` (rename `AddLbVipRequest.vip_ipv4` → `vip`, keep field number 3)
+- Regenerate: Go stubs (`make proto-go`) + Rust stubs (find the Rust proto-gen: `grep -rn "tonic_build\|dataplane.proto\|build.rs" xdp-dp/ cni/`)
+- Modify: `xdp-dp/src/node.rs` (`add_lb_vip` handler)
+- Modify: `netplane/agent/bus.go` (`dpAdapter.AddLbVip`)
+
+- [ ] **Step 1: Rename the proto field.** In `AddLbVipRequest`, change `string vip_ipv4 = 3;` to `string vip = 3;` (SAME field number 3 → wire-compatible; only the generated name changes). Update the comment to "the public VIP (IPv4 or IPv6)".
+
+- [ ] **Step 2: Regenerate stubs.** Go: `make proto-go`. Rust: locate + run the Rust generation (tonic/prost build). Verify `AddLbVipRequest` now has `vip` in both `cni/gen/dataplanev1/*.go` and the Rust generated module. If Rust stubs are generated at build time via a `build.rs`, a `cargo build` regenerates them.
+
+- [ ] **Step 3: node.rs family parse.** In `add_lb_vip` (node.rs ~313, 334): replace `let vip = parse_ipv4(&r.vip_ipv4)...; ... LbIpBytes::Ipv4(vip)` with a family-detecting parse of `r.vip`:
+  ```rust
+  let lb_ip: crate::grpc::LbIpBytes = match r.vip.parse::<std::net::IpAddr>() {
+      Ok(std::net::IpAddr::V4(a)) => crate::grpc::LbIpBytes::Ipv4(a.octets()),
+      Ok(std::net::IpAddr::V6(a)) => crate::grpc::LbIpBytes::Ipv6(a.octets()),
+      Err(e) => return Err(Status::invalid_argument(format!("invalid vip {:?}: {e}", r.vip))),
+  };
+  ```
+  Pass `lb_ip` to `create_lb(&id, vni, lb_ip, lb_underlay, ports)`. Update the log line's `r.vip_ipv4` → `r.vip`. (If `parse_ipv4` becomes unused, leave it — other handlers use it.)
+
+- [ ] **Step 4: Go adapter.** In `netplane/agent/bus.go` `dpAdapter.AddLbVip`, change `VipIpv4: vip` to `Vip: vip` in the `dpv1.AddLbVipRequest{...}` literal.
+
+- [ ] **Step 5:** `cd netplane && go build ./...` PASS; `cargo build -p xdp-dp` PASS; `cd netplane && go test ./agent/` PASS.
+
+- [ ] **Step 6: Commit** `git add api/proto/dataplane/v1/dataplane.proto cni/gen/dataplanev1/ xdp-dp/src/node.rs netplane/agent/bus.go` (+ any regenerated Rust stub path) — `feat(lb): AddLbVip accepts v6 VIP (family-agnostic vip field + node.rs parse)`.
+
+## Task V6-4: Sim v6 wan_rx + tests + final sweep
+
+**Files:**
+- Modify: `xdp-dp-sim/src/sim.rs` (`wan_rx` — handle v6 via the core v6 fn)
+- Modify: `xdp-dp-sim/src/lb_scenario_test.rs` (v6 N/S test)
+- Modify: `netplane/agent/lbreconcile_test.go` (v6 VIP flows through ReconcileLB)
+
+- [ ] **Step 1: Sim wan_rx v6.** In `SimNode::wan_rx` (sim.rs ~175), detect the frame's ethertype (bytes 12-13). For `0x86DD` (IPv6), call `lb_select_forward_v6(&VecPkt::from_bytes(plain), &self.maps, ETH_LEN, 0)` and, on Some, `edge_encap` with `inner_proto: 41` (IPPROTO_IPV6); for `0x0800` keep the existing v4 path (`inner_proto: 4`). Import the core `lb_select_forward_v6`.
+
+- [ ] **Step 2: Sim v6 N/S test.** In lb_scenario_test.rs add `ns_lb_v6_delivered_with_policy`: an edge node whose LB map has a v6 VIP entry (LbKey vni=0, ipv4=last-4 of the v6 VIP, port 443, proto 6) → HOSTB_UL; a backend_node(false) with an ingress-allow-any-443 firewall; deliver an `[Eth(0x86DD)][IPv6][TCP]` WAN frame (dst = v6 VIP) via `Prog::WanRx`; assert `Delivered{node:"hostB", tap:HOSTB_TAP}`, 2 hops. Add a v6 frame builder + a v6 edge-LB fixture helper (mirror `eth_ipv4_tcp`/`edge_node` for v6). Reuse the existing `backend_node`/`apply_fw`. NOTE: the backend firewall evaluates the inner v6 5-tuple; ensure `apply_fw`/`allow_from_any_443` produce a rule matching v6 (source ::/0). If the sim firewall path is v4-only for the ingress gate on the backend, use an allow-all that matches (or assert delivery via the base v6 uplink path). Investigate and make the assertion honest — do not weaken it to pass.
+
+- [ ] **Step 3: Go v6 VIP test.** In lbreconcile_test.go add `TestReconcileLB_V6VIP`: an edge Reconciler + a LoadBalancer with `VIP: "2001:db8::a"` → assert `dp.lbVips` contains `"2001:db8::a"` (the id == VIP string flows unchanged). Confirms the control-plane path is family-agnostic.
+
+- [ ] **Step 4: Full sweep.** `cargo test -p xdp-dp-sim -p xdp-dp-core -p xdp-dp` and `cd netplane && go test ./...` all PASS. If the eBPF anchor (`make sim-anchor`) is runnable (CAP_BPF), run it to confirm no regression; a dedicated v6 wan_rx anchor is OPTIONAL (log if skipped — the sim + core + verifier cover it).
+
+- [ ] **Step 5: Commit** `git add xdp-dp-sim/ netplane/agent/lbreconcile_test.go` — `test(sim,agent): v6 N/S wan_rx delivery + v6 VIP control-plane coverage`.
+
+## Phase 2 note for the spec
+
+After Phase 2, update spec §2 (VIPs v4/v6) — N/S now supports v6 too; the earlier "N/S IPv4-only" caveat is removed.
