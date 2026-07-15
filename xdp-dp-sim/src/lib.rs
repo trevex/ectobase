@@ -6,3 +6,5 @@ pub use pkt::VecPkt;
 
 #[cfg(test)]
 mod encap_test;
+#[cfg(test)]
+mod firewall_test;

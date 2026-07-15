@@ -47,9 +47,9 @@ pub fn forward_decision_v4(
                 crate::conntrack::ct_touch(data, data_end, ETH_LEN, &key, &mut e);
             }
             None => {
-                if crate::firewall::fw_eval_dir(
-                    data,
-                    data_end,
+                if xdp_dp_core::firewall::fw_eval_dir(
+                    &crate::coreimpl::RawPkt { data, data_end },
+                    &crate::coreimpl::GlobalMaps,
                     ETH_LEN,
                     ifindex,
                     xdp_dp_common::FW_DIR_EGRESS,

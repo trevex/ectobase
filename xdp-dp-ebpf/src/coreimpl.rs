@@ -1,5 +1,38 @@
 use aya_ebpf::{helpers::bpf_xdp_adjust_head, programs::XdpContext};
+use xdp_dp_common::{CtEntry, CtKey, FwMeta, FwRule, FwRuleKey, Local, UnderlayValue};
+use xdp_dp_core::maps::Maps;
 use xdp_dp_core::pkt::Pkt;
+
+/// `Maps` over the real eBPF `#[map]` statics (zero-cost wrapper). Used by the core datapath
+/// modules (e.g. `xdp_dp_core::firewall::fw_eval_dir`) so the same logic runs in eBPF and natively.
+pub struct GlobalMaps;
+
+impl Maps for GlobalMaps {
+    #[inline(always)]
+    fn local(&self) -> Option<Local> {
+        crate::maps::LOCAL.get(0).copied()
+    }
+    #[inline(always)]
+    fn underlay_get(&self, addr: &[u8; 16]) -> Option<UnderlayValue> {
+        unsafe { crate::maps::UNDERLAY.get(addr).copied() }
+    }
+    #[inline(always)]
+    fn fw_meta(&self, ifindex: u32) -> Option<FwMeta> {
+        unsafe { crate::maps::FW_META.get(&ifindex).copied() }
+    }
+    #[inline(always)]
+    fn fw_rule(&self, key: &FwRuleKey) -> Option<FwRule> {
+        unsafe { crate::maps::FW_RULES.get(key).copied() }
+    }
+    #[inline(always)]
+    fn conntrack_get(&self, key: &CtKey) -> Option<CtEntry> {
+        unsafe { crate::maps::CONNTRACK.get(key).copied() }
+    }
+    #[inline(always)]
+    fn conntrack_insert(&mut self, key: CtKey, entry: CtEntry) {
+        let _ = crate::maps::CONNTRACK.insert(&key, &entry, 0);
+    }
+}
 
 /// `Pkt` over an XDP context. read/write are bounds-checked against data_end (verifier-safe).
 pub struct CtxPkt<'a> {

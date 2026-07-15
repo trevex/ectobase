@@ -248,9 +248,9 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
     if let Some(key) = crate::conntrack::ct_key(ctx.data(), ctx.data_end(), ETH_LEN + IPV6_LEN, vni)
     {
         if unsafe { crate::maps::CONNTRACK.get(&key) }.is_none()
-            && crate::firewall::fw_eval_dir(
-                ctx.data(),
-                ctx.data_end(),
+            && xdp_dp_core::firewall::fw_eval_dir(
+                &crate::coreimpl::CtxPkt { ctx },
+                &crate::coreimpl::GlobalMaps,
                 ETH_LEN + IPV6_LEN,
                 tap_ifindex,
                 xdp_dp_common::FW_DIR_INGRESS,
