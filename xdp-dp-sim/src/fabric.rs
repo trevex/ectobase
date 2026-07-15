@@ -100,7 +100,10 @@ impl Fabric {
                 }
                 Action::Redirect(tap) => {
                     // Ethertype at byte 12: 0x0800 => delivered inner frame (guest tap);
-                    // 0x86DD => still encapped on the fabric.
+                    // 0x86DD => still encapped on the fabric, route by outer IPv6 dst.
+                    // NOTE: this assumes an IPv4 inner (0x0800). A delivered IPv6-inner frame would
+                    // itself be 0x86DD and be misclassified as still-encapped — fine for the current
+                    // LB/N-S coverage (all inner-IPv4); revisit when the sim grows IPv6-inner paths.
                     let ethertype = u16::from_be_bytes([
                         outpkt.get(12).copied().unwrap_or(0),
                         outpkt.get(13).copied().unwrap_or(0),
