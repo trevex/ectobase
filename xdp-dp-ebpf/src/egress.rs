@@ -1,7 +1,9 @@
 use aya_ebpf::{bindings::xdp_action, programs::XdpContext};
 use xdp_dp_common::{PortMeta, RouteLpmData6};
+use xdp_dp_core::encap::EncapParams;
 
 use crate::arp_nd::try_arp_reply;
+use crate::coreimpl::CtxPkt;
 use crate::maps::{LOCAL, PORT_META, ROUTES, ROUTES6, UNDERLAY};
 use crate::parse::{write6, ETH_LEN, ETH_P_IP, IPV6_LEN};
 
@@ -14,16 +16,6 @@ pub enum EgressVerdict {
         guest_mac: [u8; 6],
     },
     Encap(EncapParams),
-}
-
-pub struct EncapParams {
-    pub gateway_mac: [u8; 6],
-    pub uplink_mac: [u8; 6],
-    pub uplink_ifindex: u32,
-    pub src_underlay: [u8; 16],
-    pub nexthop_ipv6: [u8; 16],
-    pub inner_len: u16,
-    pub inner_proto: u8,
 }
 
 /// Run the in-place IPv4 egress pipeline (conntrack/firewall/vip/nat/meter/route) and decide what
@@ -253,7 +245,8 @@ pub fn try_guest_tx(ctx: &XdpContext) -> Result<u32, ()> {
             if unsafe { aya_ebpf::helpers::bpf_xdp_adjust_head(ctx.ctx, -(IPV6_LEN as i32)) } != 0 {
                 return Err(());
             }
-            if unsafe { crate::encap::write_outer_v6(ctx.data(), ctx.data_end(), &e) } {
+            let mut pkt = CtxPkt { ctx };
+            if xdp_dp_core::encap::write_outer_v6(&mut pkt, &e) {
                 Ok(unsafe { aya_ebpf::helpers::bpf_redirect(e.uplink_ifindex, 0) } as u32)
             } else {
                 Err(())

@@ -6,6 +6,7 @@ license = "Apache-2.0"
 
 [dependencies]
 xdp-dp-common = { path = "../xdp-dp-common", default-features = false }
+xdp-dp-core = { path = "../xdp-dp-core" }
 aya-ebpf = "0.1"
 aya-log-ebpf = "0.1"
 network-types = "0.0.7"

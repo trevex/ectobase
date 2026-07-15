@@ -3,6 +3,7 @@
 
 mod arp_nd;
 mod conntrack;
+mod coreimpl;
 mod csum;
 mod dbg;
 mod dhcp;

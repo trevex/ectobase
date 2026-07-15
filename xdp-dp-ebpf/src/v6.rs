@@ -6,6 +6,7 @@ use aya_ebpf::{
 use xdp_dp_common::PortMeta;
 
 use crate::arp_nd::GW_MAC;
+use crate::coreimpl::CtxPkt;
 use crate::encap::reforward;
 use crate::maps::{LOCAL, UNDERLAY};
 use crate::parse::{write16, write6, ETH_LEN, ETH_P_IPV6, IPPROTO_ICMPV6, IPV6_LEN};
@@ -124,7 +125,8 @@ pub fn v6_guest_tx(ctx: &XdpContext, meta: &PortMeta) -> Result<u32, ()> {
             if unsafe { bpf_xdp_adjust_head(ctx.ctx, -(IPV6_LEN as i32)) } != 0 {
                 return Err(());
             }
-            if unsafe { crate::encap::write_outer_v6(ctx.data(), ctx.data_end(), &e) } {
+            let mut pkt = CtxPkt { ctx };
+            if xdp_dp_core::encap::write_outer_v6(&mut pkt, &e) {
                 Ok(unsafe { bpf_redirect(e.uplink_ifindex, 0) } as u32)
             } else {
                 Err(())

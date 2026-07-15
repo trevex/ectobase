@@ -4,8 +4,10 @@ use aya_ebpf::{
     programs::XdpContext,
 };
 use xdp_dp_common::{Local, RouteValue};
+use xdp_dp_core::encap::{write_outer_v6, EncapParams, IPV6_LEN};
 
-use crate::parse::{write16, write6, ETH_LEN, ETH_P_IPV6, IPV6_LEN};
+use crate::coreimpl::CtxPkt;
+use crate::parse::{write16, write6, ETH_LEN};
 
 /// Encapsulate the current inner IPv4 frame into Eth+IPv6 toward `route.nexthop_ipv6` and
 /// redirect out the local uplink. `inner_len` = (frame len - inner ETH_LEN), captured BEFORE
@@ -23,7 +25,7 @@ pub fn encap_and_redirect(
     if unsafe { bpf_xdp_adjust_head(ctx.ctx, -(IPV6_LEN as i32)) } != 0 {
         return Err(());
     }
-    let e = crate::egress::EncapParams {
+    let e = EncapParams {
         gateway_mac: local.gateway_mac,
         uplink_mac: local.uplink_mac,
         uplink_ifindex: local.uplink_ifindex,
@@ -32,36 +34,12 @@ pub fn encap_and_redirect(
         inner_len,
         inner_proto,
     };
-    if unsafe { write_outer_v6(ctx.data(), ctx.data_end(), &e) } {
+    let mut pkt = CtxPkt { ctx };
+    if write_outer_v6(&mut pkt, &e) {
         Ok(unsafe { bpf_redirect(e.uplink_ifindex, 0) } as u32)
     } else {
         Err(())
     }
-}
-
-/// Write outer Eth+IPv6 into a frame that already has IPV6_LEN bytes of new front room (inner eth
-/// consumed). Pure byte writes — no resize, no redirect. Shared by XDP `guest_tx` glue and
-/// `encap_and_redirect`.
-#[inline(always)]
-pub unsafe fn write_outer_v6(data: usize, data_end: usize, e: &crate::egress::EncapParams) -> bool {
-    if data + ETH_LEN + IPV6_LEN > data_end {
-        return false;
-    }
-    let p = data as *mut u8;
-    write6(p, &e.gateway_mac);
-    write6(p.add(6), &e.uplink_mac);
-    core::ptr::write_unaligned(p.add(12) as *mut u16, ETH_P_IPV6.to_be());
-    let ip = p.add(ETH_LEN);
-    *ip.add(0) = 0x60;
-    *ip.add(1) = 0;
-    *ip.add(2) = 0;
-    *ip.add(3) = 0;
-    core::ptr::write_unaligned(ip.add(4) as *mut u16, e.inner_len.to_be());
-    *ip.add(6) = e.inner_proto;
-    *ip.add(7) = 64;
-    write16(ip.add(8), &e.src_underlay);
-    write16(ip.add(24), &e.nexthop_ipv6);
-    true
 }
 
 /// Re-forward an already-encapped packet to a new backend underlay (LB remote backend): rewrite

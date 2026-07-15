@@ -1,0 +1,84 @@
+use aya_ebpf::{helpers::bpf_xdp_adjust_head, programs::XdpContext};
+use xdp_dp_core::pkt::Pkt;
+
+/// `Pkt` over an XDP context. read/write are bounds-checked against data_end (verifier-safe).
+pub struct CtxPkt<'a> {
+    pub ctx: &'a XdpContext,
+}
+
+impl Pkt for CtxPkt<'_> {
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.ctx.data_end() - self.ctx.data()
+    }
+    #[inline(always)]
+    fn read_array<const N: usize>(&self, off: usize) -> Option<[u8; N]> {
+        let start = self.ctx.data() + off;
+        if start + N > self.ctx.data_end() {
+            return None;
+        }
+        Some(unsafe { core::ptr::read_unaligned(start as *const [u8; N]) })
+    }
+    #[inline(always)]
+    fn write_bytes(&mut self, off: usize, src: &[u8]) -> bool {
+        let start = self.ctx.data() + off;
+        if start + src.len() > self.ctx.data_end() {
+            return false;
+        }
+        for (i, b) in src.iter().enumerate() {
+            unsafe { *((start + i) as *mut u8) = *b };
+        }
+        true
+    }
+    #[inline(always)]
+    fn grow_head(&mut self, delta: usize) -> bool {
+        unsafe { bpf_xdp_adjust_head(self.ctx.ctx, -(delta as i32)) == 0 }
+    }
+    #[inline(always)]
+    fn shrink_head(&mut self, delta: usize) -> bool {
+        unsafe { bpf_xdp_adjust_head(self.ctx.ctx, delta as i32) == 0 }
+    }
+}
+
+/// `Pkt` over a raw (data, data_end) window with no owning context. Used by callers that resize
+/// with a non-XDP primitive (e.g. tc `adjust_room`/`pull_data`) and then need the pure byte-write
+/// core encap. `grow_head`/`shrink_head` are unsupported (the caller resizes itself); the encap
+/// core only uses `len()`/`write_bytes()`.
+pub struct RawPkt {
+    pub data: usize,
+    pub data_end: usize,
+}
+
+impl Pkt for RawPkt {
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.data_end - self.data
+    }
+    #[inline(always)]
+    fn read_array<const N: usize>(&self, off: usize) -> Option<[u8; N]> {
+        let start = self.data + off;
+        if start + N > self.data_end {
+            return None;
+        }
+        Some(unsafe { core::ptr::read_unaligned(start as *const [u8; N]) })
+    }
+    #[inline(always)]
+    fn write_bytes(&mut self, off: usize, src: &[u8]) -> bool {
+        let start = self.data + off;
+        if start + src.len() > self.data_end {
+            return false;
+        }
+        for (i, b) in src.iter().enumerate() {
+            unsafe { *((start + i) as *mut u8) = *b };
+        }
+        true
+    }
+    #[inline(always)]
+    fn grow_head(&mut self, _delta: usize) -> bool {
+        false
+    }
+    #[inline(always)]
+    fn shrink_head(&mut self, _delta: usize) -> bool {
+        false
+    }
+}
