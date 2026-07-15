@@ -54,7 +54,6 @@ pub fn forward_decision_v4(
                     ifindex,
                     xdp_dp_common::FW_DIR_EGRESS,
                 ) == xdp_dp_common::FW_ACTION_DROP
-                    && crate::firewall::fw_enforcing()
                 {
                     return EgressVerdict::Drop;
                 }

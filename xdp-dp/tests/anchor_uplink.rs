@@ -90,7 +90,6 @@ fn build_input_and_native() -> (Vec<u8>, Action, Vec<u8>) {
     assert_eq!(&encapped[ETH_LEN + 24..ETH_LEN + 40], &HOST_UNDERLAY);
 
     let mut host = SimNode::new();
-    host.maps.fw_enforcing = true;
     host.maps.fw_meta.insert(
         TAP,
         FwMeta {
@@ -185,7 +184,7 @@ fn uplink_rx_bytecode_matches_native_sim() {
     // 2. Load the real eBPF object the same way the daemon's `loader::load_ebpf` does (aya-build
     //    embeds the bpfel object at `$OUT_DIR/xdp-dp-prog`; `xdp-dp` is a binary-only crate with no
     //    lib target, so the load is inlined here rather than imported). Then populate the maps
-    //    uplink_rx reads on the base-delivery path: UNDERLAY, FW_META/FW_RULES/FW_CONFIG, LOCAL.
+    //    uplink_rx reads on the base-delivery path: UNDERLAY, FW_META/FW_RULES, LOCAL.
     let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/xdp-dp-prog"));
     let mut ebpf = aya::EbpfLoader::new()
         .load(bytes)
@@ -234,11 +233,6 @@ fn uplink_rx_bytecode_matches_native_sim() {
                 0,
             )
             .expect("insert FW_RULES");
-    }
-    {
-        let mut fw_config: Array<_, u32> =
-            Array::try_from(ebpf.map_mut("FW_CONFIG").expect("FW_CONFIG map")).unwrap();
-        fw_config.set(0, 1u32, 0).expect("enable FW enforcement");
     }
     {
         // LOCAL[0] is read by several uplink_rx branches (LB reforward, ICMP reply, edge deliver).

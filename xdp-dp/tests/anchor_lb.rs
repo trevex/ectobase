@@ -141,8 +141,7 @@ fn native_output(encapped: &[u8]) -> (Action, Vec<u8>) {
         },
         BACKEND_UL,
     );
-    // Firewall: enforcing, one ingress rule on TAP covering VIP:443.
-    node.maps.fw_enforcing = true;
+    // Firewall: one ingress rule on TAP covering VIP:443 (enforcement is unconditional).
     node.maps.fw_meta.insert(
         TAP,
         FwMeta {
@@ -241,7 +240,7 @@ fn uplink_rx_lb_deliver_bytecode_matches_native_sim() {
 
     // 3. Load the real eBPF object (aya-build embeds the bpfel object at $OUT_DIR/xdp-dp-prog;
     //    xdp-dp is binary-only, so the load is inlined). Populate the maps the LB local-deliver
-    //    path reads: UNDERLAY, LB, MAGLEV, FW_META/FW_RULES/FW_CONFIG, LOCAL.
+    //    path reads: UNDERLAY, LB, MAGLEV, FW_META/FW_RULES, LOCAL.
     let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/xdp-dp-prog"));
     let mut ebpf = aya::EbpfLoader::new()
         .load(bytes)
@@ -314,11 +313,6 @@ fn uplink_rx_lb_deliver_bytecode_matches_native_sim() {
                 0,
             )
             .expect("insert FW_RULES");
-    }
-    {
-        let mut fw_config: Array<_, u32> =
-            Array::try_from(ebpf.map_mut("FW_CONFIG").expect("FW_CONFIG map")).unwrap();
-        fw_config.set(0, 1u32, 0).expect("enable FW enforcement");
     }
     {
         // LOCAL[0]: read by the LB reforward branch (not taken here — LB selects self) and by other

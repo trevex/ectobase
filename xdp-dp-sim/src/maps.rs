@@ -11,7 +11,6 @@ pub struct MemMaps {
     pub fw_meta: HashMap<u32, FwMeta>,
     pub fw_rules: HashMap<(u32, u32), FwRule>, // (ifindex, idx)
     pub conntrack: HashMap<CtKey, CtEntry>,
-    pub fw_enforcing: bool,
     pub lb: HashMap<LbKey, LbValue>,
     pub maglev: HashMap<MaglevKey, [u8; 16]>,
 }
@@ -34,9 +33,6 @@ impl Maps for MemMaps {
     }
     fn conntrack_insert(&mut self, key: CtKey, entry: CtEntry) {
         self.conntrack.insert(key, entry);
-    }
-    fn fw_enforcing(&self) -> bool {
-        self.fw_enforcing
     }
     fn lb_get(&self, key: &LbKey) -> Option<LbValue> {
         self.lb.get(key).copied()

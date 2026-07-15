@@ -206,9 +206,6 @@ enum Cmd {
         /// "<ifname>:<in|eg>:<accept|drop>:<any|icmp|tcp|udp>:<src_cidr>:<dst_cidr>:<dport|*>".
         #[arg(long = "fw-rule")]
         fw_rules: Vec<String>,
-        /// Whether the firewall actually drops on a deny (false = evaluate-only). Default true.
-        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-        firewall_enforce: bool,
         /// Neighbor NAT entry, repeatable:
         /// "<nat_ip>:<port_min>:<port_max>@<owner_underlay_ipv6>@<vni>". Programs NEIGHBOR_NAT
         /// so that return traffic to nat_ip:dport is re-forwarded to the owner's underlay node.
@@ -476,7 +473,6 @@ async fn main() -> anyhow::Result<()> {
             externals,
             conntrack_max,
             fw_rules,
-            firewall_enforce,
             neigh_nats,
             underlay_markers,
             meters,
@@ -849,13 +845,10 @@ async fn main() -> anyhow::Result<()> {
 
             // Firewall: each --fw-rule programs a per-interface rule; rules are appended in order
             // to FW_RULES[(ifindex, slot)] and the per-direction counts to FW_META[ifindex].
-            // Deny-by-default in the datapath: an empty direction => DROP (gated by
-            // `--firewall-enforce`). The control plane materializes k8s default-allow as explicit
-            // allow-all rules for unpolicied directions (see netplane `Compile()`).
+            // Deny-by-default: the datapath always drops on no-match; the control plane materializes
+            // k8s default-allow as explicit allow-all rules for unpolicied directions (Compile()).
             let mut fw_rules_map = maps::FwRules::open(&mut ebpf)?;
             let mut fw_meta_map = maps::FwMetaMap::open(&mut ebpf)?;
-            let mut fw_config = maps::FwConfig::open(&mut ebpf)?;
-            fw_config.set(if firewall_enforce { 1 } else { 0 })?;
             // ifindex -> (ingress_count, egress_count) accumulators while assigning slots.
             let mut fw_slots: std::collections::HashMap<u32, u32> =
                 std::collections::HashMap::new();

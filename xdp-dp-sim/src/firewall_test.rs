@@ -56,7 +56,7 @@ fn ingress_allow_rule_matches() {
 }
 
 /// Deny-by-default: with no per-interface firewall meta at all, or meta with zero rules in the
-/// direction, the verdict is DROP (the caller gates the actual drop on `fw_enforcing()`).
+/// direction, the verdict is DROP (unconditional — the drop is no longer gated).
 #[test]
 fn deny_by_default_when_no_rules() {
     let ifindex = 7u32;

@@ -1,9 +1,8 @@
 //! Directional firewall evaluator, generic over `Pkt` + `Maps`. **Deny-by-default:** the verdict is
 //! ACCEPT only when a rule in this direction explicitly matches with an accept action; every other
 //! outcome — no per-interface meta, zero rules in this direction, an unreadable header, or no
-//! matching rule — is DROP. The actual drop is gated by `fw_enforcing()` at the call site, so a
-//! node with the firewall disabled (evaluate-only) still forwards. The control plane is responsible
-//! for materializing k8s "default-allow" as an explicit allow-all rule per unpolicied direction.
+//! matching rule — is DROP. The drop is unconditional. The control plane is responsible for
+//! materializing k8s "default-allow" as an explicit allow-all rule per unpolicied direction.
 
 use crate::maps::Maps;
 use crate::parse::{fw_rule_matches, icmp_type_code, l4_ports, PacketSelectors};

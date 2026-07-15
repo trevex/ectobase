@@ -116,7 +116,6 @@ impl SimNode {
         if let Some(key) = ct_key(&pkt, inner_off, vni) {
             if self.maps.conntrack_get(&key).is_none()
                 && fw_eval_dir(&pkt, &self.maps, inner_off, tap, FW_DIR_INGRESS) == FW_ACTION_DROP
-                && self.maps.fw_enforcing()
             {
                 return SimOut {
                     action: Action::Drop,

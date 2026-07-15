@@ -255,7 +255,6 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
                 tap_ifindex,
                 xdp_dp_common::FW_DIR_INGRESS,
             ) == xdp_dp_common::FW_ACTION_DROP
-            && crate::firewall::fw_enforcing()
         {
             return Ok(xdp_action::XDP_DROP);
         }

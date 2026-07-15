@@ -337,25 +337,6 @@ impl FwMetaMap {
     }
 }
 
-/// Typed handle over the single-entry `FW_CONFIG` Array map (entry 0 = enforce flag).
-pub struct FwConfig {
-    map: Array<MapData, u32>,
-}
-
-impl FwConfig {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = Array::try_from(
-            ebpf.take_map("FW_CONFIG")
-                .context("FW_CONFIG map missing")?,
-        )?;
-        Ok(Self { map })
-    }
-
-    pub fn set(&mut self, enforce: u32) -> anyhow::Result<()> {
-        self.map.set(0, enforce, 0).context("write FW_CONFIG[0]")
-    }
-}
-
 /// Typed handle over the `UNDERLAY` BPF map (underlay IPv6 -> VNI + tap + guest MAC).
 pub struct Underlay {
     map: HashMap<MapData, [u8; 16], UnderlayValue>,

@@ -9,7 +9,6 @@ mod dbg;
 mod dhcp;
 mod egress;
 mod encap;
-mod firewall;
 mod ingress;
 mod inspect;
 mod lb;

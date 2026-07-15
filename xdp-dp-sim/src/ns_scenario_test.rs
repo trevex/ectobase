@@ -43,9 +43,8 @@ fn encap_params() -> EncapParams {
     }
 }
 
-/// Install an ingress ALLOW rule on `tap` for TCP -> GUEST_IP:port, with enforcement on.
+/// Install an ingress ALLOW rule on `tap` for TCP -> GUEST_IP:port.
 fn allow_tcp(node: &mut SimNode, port: u16) {
-    node.maps.fw_enforcing = true;
     node.maps.fw_meta.insert(
         TAP,
         FwMeta {

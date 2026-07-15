@@ -144,8 +144,6 @@ pub fn apply(m: &mut MemMaps, c: &CompiledNic, tap: u32) {
             rule_to_fw(r, xdp_dp_common::FW_DIR_EGRESS),
         );
     }
-
-    m.fw_enforcing = true;
 }
 
 #[cfg(test)]
@@ -167,8 +165,7 @@ mod tests {
         let mut maps = MemMaps::default();
         apply(&mut maps, &c, tap);
 
-        // Sanity: fw_enforcing is set and 1 ingress rule was installed.
-        assert!(maps.fw_enforcing, "fw_enforcing should be set");
+        // Sanity: 1 ingress rule was installed.
         let meta = maps.fw_meta.get(&tap).expect("fw_meta for tap");
         assert_eq!(meta.ingress_count, 1, "should have 1 ingress rule");
 

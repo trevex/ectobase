@@ -146,7 +146,10 @@ impl Fabric {
 mod tests {
     use super::*;
     use etherparse::PacketBuilder;
-    use xdp_dp_common::{LbKey, LbValue, Local, MaglevKey, UnderlayValue};
+    use xdp_dp_common::{
+        FwMeta, FwRule, LbKey, LbValue, Local, MaglevKey, UnderlayValue, FW_ACTION_ACCEPT,
+        FW_DIR_INGRESS,
+    };
 
     const EDGE_UL: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xed, 0xee];
     const BACKEND_UL: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xba, 0xcc];
@@ -199,7 +202,6 @@ mod tests {
         );
 
         // Backend node: UNDERLAY[backend_ul] = vni 100, tap 42, guest MAC.
-        // fw_enforcing=false so the ingress firewall accepts without any explicit rule.
         let mut backend = SimNode::with_local(Local {
             uplink_ifindex: 8,
             uplink_mac: [0x03; 6],
@@ -215,9 +217,33 @@ mod tests {
                 _pad: [0; 2],
             },
         );
-        // fw_enforcing=false (default): ingress firewall returns ACCEPT when no meta entry exists,
-        // so LB traffic is delivered without needing explicit rules on the backend.
-        backend.maps.fw_enforcing = false;
+        // Always-on deny-by-default: the backend needs an explicit allow rule to deliver.
+        backend.maps.fw_meta.insert(
+            TAP,
+            FwMeta {
+                ingress_count: 1,
+                egress_count: 0,
+            },
+        );
+        backend.maps.fw_rules.insert(
+            (TAP, 0),
+            FwRule {
+                src_ip: [0; 4],
+                src_mask: [0; 4],
+                dst_ip: [0; 4],
+                dst_mask: [0; 4],
+                src_port_min: 0,
+                src_port_max: 65535,
+                dst_port_min: 0,
+                dst_port_max: 65535,
+                icmp_type: 0xffff,
+                icmp_code: 0xffff,
+                proto: 0,
+                action: FW_ACTION_ACCEPT,
+                direction: FW_DIR_INGRESS,
+                enabled: 1,
+            },
+        );
 
         fabric.add_node("edge", edge);
         fabric.add_node("backend", backend);

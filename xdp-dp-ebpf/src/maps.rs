@@ -46,9 +46,6 @@ pub static NAT_IPS: HashMap<VipKey, u8> = HashMap::with_max_entries(1024, 0);
 pub static FW_RULES: HashMap<FwRuleKey, FwRule> = HashMap::with_max_entries(16384, 0);
 #[map]
 pub static FW_META: HashMap<u32, FwMeta> = HashMap::with_max_entries(1024, 0);
-/// Entry 0: firewall enforcement flag (1 = drop on deny, 0 = evaluate-only).
-#[map]
-pub static FW_CONFIG: Array<u32> = Array::with_max_entries(1, 0);
 #[map]
 pub static UNDERLAY: HashMap<[u8; 16], UnderlayValue> = HashMap::with_max_entries(4096, 0);
 #[map]

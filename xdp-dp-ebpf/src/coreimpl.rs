@@ -35,10 +35,6 @@ impl Maps for GlobalMaps {
         let _ = crate::maps::CONNTRACK.insert(&key, &entry, 0);
     }
     #[inline(always)]
-    fn fw_enforcing(&self) -> bool {
-        crate::firewall::fw_enforcing()
-    }
-    #[inline(always)]
     fn lb_get(&self, key: &LbKey) -> Option<LbValue> {
         unsafe { crate::maps::LB.get(key).copied() }
     }
