@@ -894,17 +894,22 @@ impl Control {
                 },
             )?;
         }
-        // Program the LB's own underlay /128 into UNDERLAY so ingress can identify it.
+        // Program the LB's own underlay /128 into UNDERLAY so ingress can identify it — but ONLY for
+        // overlay (relay) LBs. The WAN edge (vni==0) reaches the LB via wan_rx on a raw WAN frame and
+        // never resolves UNDERLAY[lb_underlay]; writing it there would clobber the edge's
+        // LOCAL_DELIVER egress entry (attach_edge). So skip the write for vni==0.
         // tap_ifindex=0 and guest_mac=[0;6] because the LB VIP is anycast (no local tap).
-        g.underlay.upsert(
-            lb_underlay,
-            xdp_dp_common::UnderlayValue {
-                vni,
-                tap_ifindex: 0,
-                guest_mac: [0; 6],
-                _pad: [0; 2],
-            },
-        )?;
+        if vni != 0 {
+            g.underlay.upsert(
+                lb_underlay,
+                xdp_dp_common::UnderlayValue {
+                    vni,
+                    tap_ifindex: 0,
+                    guest_mac: [0; 6],
+                    _pad: [0; 2],
+                },
+            )?;
+        }
         g.lbs.insert(
             id.to_vec(),
             LbEntry {
@@ -1830,5 +1835,127 @@ impl Control {
     pub fn list_neighbor_nats(&self) -> Vec<NeighborNatEntry> {
         let g = self.inner.lock().unwrap();
         g.neigh_nats.clone()
+    }
+}
+
+#[cfg(test)]
+impl Control {
+    /// Build a `Control` from a freshly loaded eBPF object WITHOUT attaching any program to an
+    /// interface. Opens every map handle exactly like `bring_up` does, but skips the XDP/tc attach
+    /// so the test needs only CAP_BPF (a real kernel), not a live uplink. Used to exercise the
+    /// userspace control plane's map programming (e.g. `create_lb`'s UNDERLAY writes) in isolation.
+    fn from_ebpf_for_test() -> anyhow::Result<Self> {
+        let mut ebpf = loader::load_ebpf()?;
+        let guest_progs = loader::register_guest_dhcp_tc(&mut ebpf)?;
+        let mut locals = LocalMap::open(&mut ebpf)?;
+        locals.set(&Local {
+            uplink_ifindex: 0,
+            uplink_mac: [0; 6],
+            gateway_mac: [0; 6],
+            underlay_ipv6: [0; 16],
+        })?;
+        let ports = PortMetaMap::open(&mut ebpf)?;
+        let ifaces = Interfaces::open(&mut ebpf)?;
+        let routes = Routes::open(&mut ebpf)?;
+        let routes6 = Routes6::open(&mut ebpf)?;
+        let vips = Vips::open(&mut ebpf)?;
+        let lb = Lb::open(&mut ebpf)?;
+        let maglev = Maglev::open(&mut ebpf)?;
+        let nat = Nat::open(&mut ebpf)?;
+        let fw_rules = FwRules::open(&mut ebpf)?;
+        let fw_meta = FwMetaMap::open(&mut ebpf)?;
+        let underlay = crate::maps::Underlay::open(&mut ebpf)?;
+        let meter = Meter::open(&mut ebpf)?;
+        let neigh_nat = NeighborNat::open(&mut ebpf)?;
+        let neigh_nat_count = NeighborNatCount::open(&mut ebpf)?;
+        let nat_ips = NatIps::open(&mut ebpf)?;
+        let dhcp_config = DhcpConfigMap::open(&mut ebpf)?;
+        let dhcp_meta = DhcpMetaMap::open(&mut ebpf)?;
+        let conntrack = Arc::new(Mutex::new(Conntrack::open(&mut ebpf)?));
+        Ok(Self {
+            inner: Mutex::new(Inner {
+                ebpf,
+                _guest_progs: guest_progs,
+                _locals: locals,
+                ports,
+                ifaces,
+                routes,
+                routes6,
+                vips,
+                lb,
+                maglev,
+                nat,
+                fw_rules,
+                fw_meta,
+                underlay,
+                meter,
+                neigh_nat,
+                neigh_nat_count,
+                nat_ips,
+                dhcp_config,
+                dhcp_meta,
+                neigh_nats: Vec::new(),
+                lbs: HashMap::new(),
+                next_table_id: 1,
+                by_id: HashMap::new(),
+                by_ifindex: HashMap::new(),
+                iface_underlay: HashMap::new(),
+                prefixes: HashMap::new(),
+                fw: HashMap::new(),
+                lb_prefixes: HashMap::new(),
+                links: HashMap::new(),
+                guest_tc: true,
+                routes_shadow: Vec::new(),
+                routes6_shadow: Vec::new(),
+                learned_macs: HashMap::new(),
+            }),
+            conntrack,
+        })
+    }
+
+    /// Test-only: read the UNDERLAY map entry for `key` (the LB/interface /128).
+    fn underlay_get(&self, key: &[u8; 16]) -> Option<xdp_dp_common::UnderlayValue> {
+        self.inner.lock().unwrap().underlay.get(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires root/CAP_BPF; run via: sudo -E <test-bin> --include-ignored"]
+    fn create_lb_skips_underlay_write_for_wan_edge() {
+        let ctrl = Control::from_ebpf_for_test().expect("build test control");
+        let lb_ul = [0x20u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xaa];
+
+        // WAN edge (vni==0): create_lb must NOT program UNDERLAY[lb_underlay] — wan_rx never resolves
+        // it and a write would clobber attach_edge's LOCAL_DELIVER egress entry.
+        ctrl.create_lb(
+            b"vip-a",
+            0,
+            LbIpBytes::Ipv4([203, 0, 113, 50]),
+            lb_ul,
+            vec![(443, 6)],
+        )
+        .expect("create_lb vni=0");
+        assert!(
+            ctrl.underlay_get(&lb_ul).is_none(),
+            "vni=0 must NOT write UNDERLAY[lb_underlay]"
+        );
+
+        // Overlay relay LB (vni!=0): create_lb MUST program UNDERLAY[lb_underlay] as before.
+        ctrl.create_lb(
+            b"vip-b",
+            100,
+            LbIpBytes::Ipv4([10, 0, 100, 1]),
+            lb_ul,
+            vec![(443, 6)],
+        )
+        .expect("create_lb vni=100");
+        assert!(
+            ctrl.underlay_get(&lb_ul).is_some(),
+            "vni!=0 must write UNDERLAY[lb_underlay]"
+        );
     }
 }
