@@ -1999,6 +1999,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "xdp-dp-core"
+version = "0.1.0"
+dependencies = [
+ "xdp-dp-common",
+]
+
+[[package]]
 name = "xdp-dp-ebpf"
 version = "0.1.0"
 dependencies = [

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["xdp-dp-common", "xdp-dp-ebpf", "xdp-dp"]
-default-members = ["xdp-dp-common", "xdp-dp"]
+members = ["xdp-dp-common", "xdp-dp-core", "xdp-dp-ebpf", "xdp-dp"]
+default-members = ["xdp-dp-common", "xdp-dp-core", "xdp-dp"]
 
 [profile.release.package.xdp-dp-ebpf]
 debug = 2

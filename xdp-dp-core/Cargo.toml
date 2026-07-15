@@ -1,0 +1,8 @@
+[package]
+name = "xdp-dp-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+xdp-dp-common = { path = "../xdp-dp-common" }
