@@ -112,8 +112,16 @@ class DpService:
 		grpc_client.init()
 		dst_ul = 'ul_ipv6_b' if self.secondary else 'ul_ipv6'
 		setattr(VM1, dst_ul, grpc_client.addinterface(VM1.name, VM1.pci, VM1.vni, VM1.ip, VM1.ipv6, pxe_server, ipxe_file_name, hostname=VM1.hostname))
+		# The datapath is deny-by-default (enforce always-on); install allow-all rules so the
+		# conformance suite can forward traffic without per-test rule setup on every VM.
+		grpc_client.addfwallrule(VM1.name, f"allow-all-in-{VM1.name}", src_prefix="0.0.0.0/0", dst_prefix="0.0.0.0/0", action="accept", direction="ingress")
+		grpc_client.addfwallrule(VM1.name, f"allow-all-eg-{VM1.name}", src_prefix="0.0.0.0/0", dst_prefix="0.0.0.0/0", action="accept", direction="egress")
 		setattr(VM2, dst_ul, grpc_client.addinterface(VM2.name, VM2.pci, VM2.vni, VM2.ip, VM2.ipv6, pxe_server, ipxe_file_name))
+		grpc_client.addfwallrule(VM2.name, f"allow-all-in-{VM2.name}", src_prefix="0.0.0.0/0", dst_prefix="0.0.0.0/0", action="accept", direction="ingress")
+		grpc_client.addfwallrule(VM2.name, f"allow-all-eg-{VM2.name}", src_prefix="0.0.0.0/0", dst_prefix="0.0.0.0/0", action="accept", direction="egress")
 		setattr(VM3, dst_ul, grpc_client.addinterface(VM3.name, VM3.pci, VM3.vni, VM3.ip, VM3.ipv6))
+		grpc_client.addfwallrule(VM3.name, f"allow-all-in-{VM3.name}", src_prefix="0.0.0.0/0", dst_prefix="0.0.0.0/0", action="accept", direction="ingress")
+		grpc_client.addfwallrule(VM3.name, f"allow-all-eg-{VM3.name}", src_prefix="0.0.0.0/0", dst_prefix="0.0.0.0/0", action="accept", direction="egress")
 		grpc_client.addroute(vni1, neigh_vni1_ov_ip_route, 0, neigh_vni1_ul_ipv6)
 		grpc_client.addroute(vni1, neigh_vni1_ov_ipv6_route, 0, neigh_vni1_ul_ipv6)
 		grpc_client.addroute(vni1, "0.0.0.0/0", vni1, router_ul_ipv6)

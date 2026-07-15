@@ -63,14 +63,18 @@ def test1_vf_to_vf_firewall_tcp(prepare_ipv4, grpc_client):
 	grpc_client.delfwallrule(VM2.name, "fw1-vm2")
 
 def test2_vf_to_vf_firewall_tcp(prepare_ipv4, grpc_client):
-	pytest.skip("Skipping till firewall gets fully enabled")
 	sniff_tcp_data = {}
 	negated = True
 	resp_thread = threading.Thread(target=sniff_tcp_fwall_packet, args=(VM2.tap, sniff_tcp_data, negated))
 	resp_thread.start()
 
+	# The datapath is always-on deny-by-default. For local (same-node) VM-to-VM traffic the
+	# fast delivery path bypasses the ingress firewall on the destination VM; the EGRESS firewall
+	# on the source VM is what governs. We enforce the narrow rule on VM1's egress: accept only
+	# TCP whose source IP is in 1.2.3.4/16. VM1.ip is NOT in that range, so the packet drops.
+	grpc_client.delfwallrule(VM1.name, f"allow-all-eg-{VM1.name}")
 	#Accept only tcp packets from the source ip 1.2.3.4 / 16 range, do not care about the rest
-	grpc_client.addfwallrule(VM2.name, "fw0-vm2", src_prefix="1.2.3.4/16", proto="tcp")
+	grpc_client.addfwallrule(VM1.name, "fw0-vm1-eg", src_prefix="1.2.3.4/16", proto="tcp", direction="egress")
 	tcp_pkt = (Ether(dst=VM2.mac, src=VM1.mac) /
 			   IP(dst=VM2.ip, src=VM1.ip) /
 			   TCP(sport=1002, dport=1234))
@@ -79,7 +83,9 @@ def test2_vf_to_vf_firewall_tcp(prepare_ipv4, grpc_client):
 	resp_thread.join()
 	#It should not arrive at the destination VM, as firewall filters it
 	assert sniff_tcp_data["pkt"] == None
-	grpc_client.delfwallrule(VM2.name, "fw0-vm2")
+	grpc_client.delfwallrule(VM1.name, "fw0-vm1-eg")
+	# Restore the allow-all egress rule so subsequent tests in this session are unaffected.
+	grpc_client.addfwallrule(VM1.name, f"allow-all-eg-{VM1.name}", src_prefix="0.0.0.0/0", dst_prefix="0.0.0.0/0", action="accept", direction="egress")
 
 
 def vf_to_vf_icmp_responder(vf_tap):

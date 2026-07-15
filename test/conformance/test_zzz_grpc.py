@@ -464,20 +464,22 @@ def test_grpc_fwallrule(prepare_ifaces, grpc_client):
 	grpc_client.delfwallrule(VM1.name, "fw0-vm1")
 
 def test_grpc_fwallrule_list(prepare_ifaces, grpc_client):
+	# Capture baseline rules (allow-all rules pre-installed by the deny-by-default posture).
+	baseline = grpc_client.listfwallrules(VM1.name)
 	grpc_client.addfwallrule(VM1.name, "fw0-vm1", src_prefix="1.2.3.4/16", proto="tcp")
 	grpc_client.addfwallrule(VM1.name, "fw1-vm1", src_prefix="4.5.6.7/16", proto="udp", direction="egress")
 	rule1spec = grpc_client.getfwallrule(VM1.name, "fw0-vm1")
 	rule2spec = grpc_client.getfwallrule(VM1.name, "fw1-vm1")
 	specs = grpc_client.listfwallrules(VM1.name)
-	assert specs == [ rule1spec, rule2spec ], \
+	assert rule1spec in specs and rule2spec in specs, \
 		"Firewall rules not properly added to a list"
 	grpc_client.delfwallrule(VM1.name, "fw0-vm1")
 	specs = grpc_client.listfwallrules(VM1.name)
-	assert specs == [ rule2spec ], \
+	assert rule1spec not in specs and rule2spec in specs, \
 		"Firewall rule not properly removed from a list"
 	grpc_client.delfwallrule(VM1.name, "fw1-vm1")
 	specs = grpc_client.listfwallrules(VM1.name)
-	assert specs == [], \
+	assert specs == baseline, \
 		"Firewall rules not properly removed from a list"
 
 def test_grpc_fwallrule_errors(prepare_ifaces, grpc_client):

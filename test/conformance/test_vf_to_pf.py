@@ -252,11 +252,14 @@ def test_vm_nat_async_tcp_icmperr(prepare_ipv4, grpc_client, port_redundancy):
 	grpc_client.delnat(VM1.name)
 
 def test_vf_to_pf_firewall_tcp_block(prepare_ipv4, grpc_client):
-	pytest.skip("Skipping till firewall gets fully enabled")
 	sniff_tcp_data = {}
 	negated = True
 	resp_thread = threading.Thread(target=sniff_tcp_fwall_packet, args=(PF0.tap, sniff_tcp_data, negated))
 	resp_thread.start()
+	# Remove the broad allow-all egress rule so the narrow port-based rule governs.
+	# The datapath is always-on deny-by-default; without the allow-all the only matching
+	# rule is the narrow dport=453 one below, which does NOT match dport=1024.
+	grpc_client.delfwallrule(VM1.name, f"allow-all-eg-{VM1.name}")
 	# Allow only tcp packets leaving the VM with destination port 453
 	grpc_client.addfwallrule(VM1.name, "fw0-vm1", proto="tcp", dst_port_min=453, dst_port_max=453, direction="egress")
 	tcp_pkt = (Ether(dst=PF0.mac, src=VM1.mac) /
@@ -268,6 +271,8 @@ def test_vf_to_pf_firewall_tcp_block(prepare_ipv4, grpc_client):
 	assert sniff_tcp_data["pkt"] == None, \
 		"Packet should have been filtered"
 	grpc_client.delfwallrule(VM1.name, "fw0-vm1")
+	# Restore the allow-all egress rule so subsequent tests are unaffected.
+	grpc_client.addfwallrule(VM1.name, f"allow-all-eg-{VM1.name}", src_prefix="0.0.0.0/0", dst_prefix="0.0.0.0/0", action="accept", direction="egress")
 
 def test_vf_to_pf_firewall_tcp_allow(prepare_ipv4, grpc_client, port_redundancy):
 	if port_redundancy:
