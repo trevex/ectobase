@@ -1,7 +1,6 @@
-pub const ETH_LEN: usize = 14;
-pub const IPV6_LEN: usize = 40;
-pub const ETH_P_IP: u16 = 0x0800;
-pub const ETH_P_IPV6: u16 = 0x86DD;
+// L2/L3 protocol constants single-sourced in `xdp_dp_common::proto`; re-exported so existing
+// `crate::parse::{ETH_LEN, IPV6_LEN, ETH_P_IP, ETH_P_IPV6}` import paths keep resolving.
+pub use xdp_dp_common::proto::{ETH_LEN, ETH_P_IP, ETH_P_IPV6, IPV6_LEN};
 pub const IPPROTO_IPIP: u8 = 4; // IPv4 encapsulated in IPv6 (outer next-header)
 pub const IPPROTO_IPV6: u8 = 41; // IPv6 encapsulated in IPv6 (outer next-header)
 pub const IPPROTO_ICMPV6: u8 = 58; // ICMPv6

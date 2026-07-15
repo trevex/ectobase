@@ -193,7 +193,7 @@ pub fn ct_touch(data: usize, data_end: usize, ip_off: usize, key: &CtKey, e: &mu
 /// forward key derived from the same packet at `ip_off`; core re-derives it identically.
 #[inline(always)]
 pub fn ct_ensure_default(data: usize, data_end: usize, ip_off: usize, key: &CtKey) {
-    let pkt = RawPkt { data, data_end };
+    let pkt = RawPkt::new(data, data_end);
     let mut maps = GlobalMaps;
     xdp_dp_core::conntrack::ct_create_default(&pkt, &mut maps, ip_off, key.vni, now());
 }

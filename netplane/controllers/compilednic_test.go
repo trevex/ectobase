@@ -4,6 +4,7 @@
 package controllers
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -110,13 +111,27 @@ func TestCompile_WritesFixture(t *testing.T) {
 		t.Fatalf("MarshalIndent: %v", err)
 	}
 
-	// Write to xdp-dp-sim/testdata/compilednic.json (2 dirs up from netplane/controllers).
+	// The committed fixture (2 dirs up) is consumed by the Rust sim's apply() bridge test, so it
+	// must stay in sync with the compiler output. Guard it golden-style: assert-equal by default,
+	// regenerate only under UPDATE_FIXTURES=1.
 	out := filepath.Join("..", "..", "xdp-dp-sim", "testdata", "compilednic.json")
-	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
+
+	if os.Getenv("UPDATE_FIXTURES") != "" {
+		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(out, data, 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		t.Logf("updated fixture %s (%d bytes)", out, len(data))
+		return
 	}
-	if err := os.WriteFile(out, data, 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+
+	want, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read committed fixture (re-run with UPDATE_FIXTURES=1 to regenerate): %v", err)
 	}
-	t.Logf("wrote fixture to %s (%d bytes)", out, len(data))
+	if !bytes.Equal(bytes.TrimSpace(want), bytes.TrimSpace(data)) {
+		t.Fatalf("committed fixture %s is stale vs the compiler output; re-run with UPDATE_FIXTURES=1.\n--- committed ---\n%s\n--- compiled ---\n%s", out, want, data)
+	}
 }

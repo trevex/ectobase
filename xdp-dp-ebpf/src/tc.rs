@@ -142,10 +142,7 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
                 {
                     return TC_ACT_OK;
                 }
-                let mut pkt = RawPkt {
-                    data: ctx.data(),
-                    data_end: ctx.data_end(),
-                };
+                let mut pkt = RawPkt::new(ctx.data(), ctx.data_end());
                 if xdp_dp_core::encap::write_outer_v6(&mut pkt, &e) {
                     return unsafe { bpf_redirect(e.uplink_ifindex, 0) as i32 };
                 }
@@ -216,10 +213,7 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
                 {
                     return TC_ACT_OK;
                 }
-                let mut pkt = RawPkt {
-                    data: ctx.data(),
-                    data_end: ctx.data_end(),
-                };
+                let mut pkt = RawPkt::new(ctx.data(), ctx.data_end());
                 if xdp_dp_core::encap::write_outer_v6(&mut pkt, &e) {
                     return unsafe { bpf_redirect(e.uplink_ifindex, 0) as i32 };
                 }

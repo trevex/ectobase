@@ -38,6 +38,35 @@ impl Maps for GlobalMaps {
     }
 }
 
+/// Shared raw read over a `[base, end)` packet window. `CtxPkt` and `RawPkt` both delegate here so
+/// their bounds/read behavior can never diverge.
+///
+/// # Safety
+/// `base..end` must be the packet's real `data..data_end`. `off`/`N` are small caller-bounded
+/// constants, so `base + off + N` does not overflow in practice; the `> end` compare is the exact
+/// bounds idiom the XDP verifier accepts.
+#[inline(always)]
+unsafe fn read_raw<const N: usize>(base: usize, end: usize, off: usize) -> Option<[u8; N]> {
+    let start = base + off;
+    if start + N > end {
+        return None;
+    }
+    Some(core::ptr::read_unaligned(start as *const [u8; N]))
+}
+
+/// Shared raw write over a `[base, end)` packet window (see [`read_raw`] for the safety contract).
+#[inline(always)]
+unsafe fn write_raw(base: usize, end: usize, off: usize, src: &[u8]) -> bool {
+    let start = base + off;
+    if start + src.len() > end {
+        return false;
+    }
+    for (i, b) in src.iter().enumerate() {
+        *((start + i) as *mut u8) = *b;
+    }
+    true
+}
+
 /// `Pkt` over an XDP context. read/write are bounds-checked against data_end (verifier-safe).
 pub struct CtxPkt<'a> {
     pub ctx: &'a XdpContext,
@@ -50,22 +79,11 @@ impl Pkt for CtxPkt<'_> {
     }
     #[inline(always)]
     fn read_array<const N: usize>(&self, off: usize) -> Option<[u8; N]> {
-        let start = self.ctx.data() + off;
-        if start + N > self.ctx.data_end() {
-            return None;
-        }
-        Some(unsafe { core::ptr::read_unaligned(start as *const [u8; N]) })
+        unsafe { read_raw::<N>(self.ctx.data(), self.ctx.data_end(), off) }
     }
     #[inline(always)]
     fn write_bytes(&mut self, off: usize, src: &[u8]) -> bool {
-        let start = self.ctx.data() + off;
-        if start + src.len() > self.ctx.data_end() {
-            return false;
-        }
-        for (i, b) in src.iter().enumerate() {
-            unsafe { *((start + i) as *mut u8) = *b };
-        }
-        true
+        unsafe { write_raw(self.ctx.data(), self.ctx.data_end(), off, src) }
     }
     #[inline(always)]
     fn grow_head(&mut self, delta: usize) -> bool {
@@ -80,10 +98,20 @@ impl Pkt for CtxPkt<'_> {
 /// `Pkt` over a raw (data, data_end) window with no owning context. Used by callers that resize
 /// with a non-XDP primitive (e.g. tc `adjust_room`/`pull_data`) and then need the pure byte-write
 /// core encap. `grow_head`/`shrink_head` are unsupported (the caller resizes itself); the encap
-/// core only uses `len()`/`write_bytes()`.
+/// core only uses `len()`/`write_bytes()`. Construct via [`RawPkt::new`].
 pub struct RawPkt {
-    pub data: usize,
-    pub data_end: usize,
+    data: usize,
+    data_end: usize,
+}
+
+impl RawPkt {
+    /// Build a window over `[data, data_end)`. Caller guarantees the pointers come from the same
+    /// packet and `data <= data_end`.
+    #[inline(always)]
+    pub fn new(data: usize, data_end: usize) -> Self {
+        debug_assert!(data <= data_end, "RawPkt: data must not exceed data_end");
+        Self { data, data_end }
+    }
 }
 
 impl Pkt for RawPkt {
@@ -93,29 +121,26 @@ impl Pkt for RawPkt {
     }
     #[inline(always)]
     fn read_array<const N: usize>(&self, off: usize) -> Option<[u8; N]> {
-        let start = self.data + off;
-        if start + N > self.data_end {
-            return None;
-        }
-        Some(unsafe { core::ptr::read_unaligned(start as *const [u8; N]) })
+        unsafe { read_raw::<N>(self.data, self.data_end, off) }
     }
     #[inline(always)]
     fn write_bytes(&mut self, off: usize, src: &[u8]) -> bool {
-        let start = self.data + off;
-        if start + src.len() > self.data_end {
-            return false;
-        }
-        for (i, b) in src.iter().enumerate() {
-            unsafe { *((start + i) as *mut u8) = *b };
-        }
-        true
+        unsafe { write_raw(self.data, self.data_end, off, src) }
     }
     #[inline(always)]
     fn grow_head(&mut self, _delta: usize) -> bool {
+        debug_assert!(
+            false,
+            "RawPkt does not support resize; the caller resizes itself"
+        );
         false
     }
     #[inline(always)]
     fn shrink_head(&mut self, _delta: usize) -> bool {
+        debug_assert!(
+            false,
+            "RawPkt does not support resize; the caller resizes itself"
+        );
         false
     }
 }

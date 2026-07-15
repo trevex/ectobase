@@ -12,12 +12,9 @@
 use crate::encap::{ETH_LEN, IPV6_LEN};
 use crate::pkt::{Action, Pkt};
 
-/// Gateway MAC written as the inner-Ethernet source on host delivery. MUST match the eBPF
-/// `arp_nd::GW_MAC` exactly (Task 8 byte-parity anchor).
-pub const GW_MAC: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
-
-/// Inner-Ethernet ethertype for delivered IPv4 frames.
-pub const ETH_P_IP: u16 = 0x0800;
+// `GW_MAC` (inner-eth src on host delivery) + `ETH_P_IP` are single-sourced in
+// `xdp_dp_common::proto`; re-exported so `xdp_dp_core::uplink::{GW_MAC, ETH_P_IP}` keeps resolving.
+pub use xdp_dp_common::proto::{ETH_P_IP, GW_MAC};
 
 /// Strip the outer Eth+IPv6 tunnel header and rewrite the inner Ethernet for the guest, returning
 /// the delivery `Action`. Byte-identical to the decap + inner-Eth-rewrite block of the eBPF

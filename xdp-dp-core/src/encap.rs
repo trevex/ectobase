@@ -15,9 +15,8 @@ pub struct EncapParams {
     pub inner_proto: u8,
 }
 
-pub const ETH_LEN: usize = 14;
-pub const IPV6_LEN: usize = 40;
-pub const ETH_P_IPV6: u16 = 0x86DD;
+// Single-sourced in `xdp_dp_common::proto`; re-exported so `xdp_dp_core::encap::{ETH_LEN, ..}` holds.
+pub use xdp_dp_common::proto::{ETH_LEN, ETH_P_IPV6, IPV6_LEN};
 
 /// Write outer Eth+IPv6 into a frame that already has IPV6_LEN bytes of front room. Pure byte
 /// writes via `Pkt` — no resize, no redirect. Returns false on bounds failure.

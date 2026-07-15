@@ -474,16 +474,28 @@ mod user_impls {
     unsafe impl aya::Pod for DhcpMeta {}
 }
 
+/// Shared L2/L3 protocol constants — the single source of truth for the datapath across the eBPF
+/// crate, `xdp-dp-core`, and `xdp-dp-sim`. Other modules (`arp_nd`, eBPF `parse`, core `encap`/
+/// `uplink`) re-export from here so every call site resolves to ONE definition.
+pub mod proto {
+    pub const ETH_LEN: usize = 14;
+    pub const IPV6_LEN: usize = 40;
+    pub const ETH_P_IP: u16 = 0x0800;
+    pub const ETH_P_IPV6: u16 = 0x86DD;
+    /// Virtual gateway MAC: answered to ARP/ND and used as the inner-eth src on host delivery.
+    pub const GW_MAC: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
+}
+
 /// Pure, host-tested ARP/ND responder byte-rewrites. The datapath glue (XDP and tc) supplies the
 /// gateway address + reply MAC (from maps) and ensures the header range is writable; these
 /// functions only read/rewrite bytes in [data, data_end). Mirrors the `dhcp` module.
 pub mod arp_nd {
-    pub const ETH_LEN: usize = 14;
+    // L2/L3 protocol constants are single-sourced in `super::proto`; re-exported here so existing
+    // `arp_nd::{ETH_LEN, IPV6_LEN, ETH_P_IPV6}` import paths keep resolving.
+    pub use super::proto::{ETH_LEN, ETH_P_IPV6, IPV6_LEN};
     pub const ETH_P_ARP: u16 = 0x0806;
     pub const ARP_LEN: usize = 28; // opcode@6 sha@8 spa@14 tha@18 tpa@24
 
-    pub const IPV6_LEN: usize = 40;
-    pub const ETH_P_IPV6: u16 = 0x86DD;
     pub const IPPROTO_ICMPV6: u8 = 58;
     const ND_NS: u8 = 135;
     const ND_NA: u8 = 136;

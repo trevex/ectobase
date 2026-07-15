@@ -48,7 +48,7 @@ pub fn forward_decision_v4(
             }
             None => {
                 if xdp_dp_core::firewall::fw_eval_dir(
-                    &crate::coreimpl::RawPkt { data, data_end },
+                    &crate::coreimpl::RawPkt::new(data, data_end),
                     &crate::coreimpl::GlobalMaps,
                     ETH_LEN,
                     ifindex,
