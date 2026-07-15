@@ -23,6 +23,14 @@ type fakeDP struct {
 	withdrew map[string]bool
 	nbrNat   map[string]string // "natIp min max" -> ownerUnderlay
 	nbrNatWd map[string]bool
+	fwAdds   []fwCall
+	fwDels   []struct{ iface, ruleID string }
+}
+
+type fwCall struct {
+	iface  string
+	ruleID string
+	rule   FwRule
 }
 
 func newFakeDP() *fakeDP {
@@ -65,8 +73,18 @@ func (f *fakeDP) AddRoute(_ context.Context, vni uint32, prefix, nexthop string,
 func (f *fakeDP) AddNatSource(_ context.Context, _ uint32, _, _ string, _, _ uint32) error {
 	return nil
 }
-func (f *fakeDP) AddFwRule(_ context.Context, _, _ string, _ FwRule) error { return nil }
-func (f *fakeDP) DelFwRule(_ context.Context, _, _ string) error           { return nil }
+func (f *fakeDP) AddFwRule(_ context.Context, iface, ruleID string, r FwRule) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fwAdds = append(f.fwAdds, fwCall{iface, ruleID, r})
+	return nil
+}
+func (f *fakeDP) DelFwRule(_ context.Context, iface, ruleID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fwDels = append(f.fwDels, struct{ iface, ruleID string }{iface, ruleID})
+	return nil
+}
 func (f *fakeDP) WithdrawRoute(_ context.Context, vni uint32, prefix string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
