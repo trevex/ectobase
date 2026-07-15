@@ -1,6 +1,7 @@
-// Command controller runs the central NATGateway reconciler: it watches
+// Command controller runs the central control-plane reconcilers: it watches
 // NATGateway and NetworkInterface objects and writes deterministic
-// (public-IP, port-block) allocations to NATGateway.Status.Allocations.
+// (public-IP, port-block) allocations to NATGateway.Status.Allocations; and
+// watches NetworkInterfaces + NetworkPolicies to write CompiledNIC objects.
 package main
 
 import (
@@ -34,7 +35,11 @@ func main() {
 	}
 
 	if err := (&controllers.Reconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
-		log.Fatalf("setup controller: %v", err)
+		log.Fatalf("setup natgateway controller: %v", err)
+	}
+
+	if err := (&controllers.CompiledNICReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup compilednic controller: %v", err)
 	}
 
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {

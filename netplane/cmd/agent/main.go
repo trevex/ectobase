@@ -74,6 +74,9 @@ func main() {
 			time.Sleep(2 * time.Second)
 			continue
 		}
+		if err := r.ReconcileFirewall(ctx); err != nil {
+			log.Printf("reconcile firewall: %v", err)
+		}
 		bus := agent.NewBus(*nodeID, *underlay, dp)
 		if err := bus.Run(ctx, rb, subs, ann, annNat, r.DesiredPublic()); err != nil {
 			log.Printf("bus session ended: %v; reconnecting", err)

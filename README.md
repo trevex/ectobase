@@ -60,6 +60,10 @@ make cli               # build the dpservice-cli flake package
 
 The `conformance`, `e2e`, `ha`, and `tap-*` targets need **passwordless sudo** (XDP attach, network namespaces, raw sockets). The scripts elevate individual commands themselves.
 
+## Distributed firewall
+
+The distributed firewall is **always-on deny-by-default**: `fw_eval_dir` accepts a packet only on an explicit matching allow rule. The control plane materializes k8s default-allow explicitly — `Compile()` emits a per-direction allow-all for any NIC no `NetworkPolicy` selects. A **compiler controller** (`CompiledNICReconciler`) writes one `CompiledNIC` per `NetworkInterface`; the **node agent** installs its rules on the dataplane via `AddFwRule` during each reconcile loop (`ReconcileFirewall`). See [`docs/superpowers/specs/2026-07-15-compilednic-firewall-pipeline-design.md`](docs/superpowers/specs/2026-07-15-compilednic-firewall-pipeline-design.md) for the full design.
+
 ## Synthetic datapath testing
 
 The real datapath logic lives in `xdp-dp-core` — a `no_std` crate whose functions are generic over `Pkt`/`Maps` traits. The same code runs in two contexts:
