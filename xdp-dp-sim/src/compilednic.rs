@@ -19,8 +19,9 @@ pub struct CompiledNic {
 #[derive(Deserialize)]
 pub struct Spec {
     pub vni: i32,
-    #[serde(rename = "underlayRoute")]
+    #[serde(default, rename = "underlayRoute")]
     pub underlay_route: String,
+    #[serde(default)]
     pub firewall: Firewall,
 }
 
