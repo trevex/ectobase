@@ -24,7 +24,7 @@ import (
 // It copies identity (name, nodeName, vni, underlayRoute, port, overlayIPs) from the NIC, then
 // translates each policy whose interfaceSelector matches the NIC's labels into CompiledFwRules.
 // The returned CompiledNIC has no Status set (caller fills that in if needed).
-func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy) netv1.CompiledNIC {
+func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy, lbs []netv1.LoadBalancer) netv1.CompiledNIC {
 	nodeName := ""
 	if nic.Spec.NodeName != nil {
 		nodeName = *nic.Spec.NodeName
@@ -50,7 +50,6 @@ func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy) netv1.
 			VNI:           nic.Status.VNI,
 			Port:          port,
 			OverlayIPs:    append([]string(nil), nic.Spec.IPs...),
-			UnderlayRoute: nic.Status.UnderlayRoute,
 			Firewall:      netv1.CompiledFirewall{},
 		},
 	}
@@ -102,6 +101,21 @@ func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy) netv1.
 		compiled.Spec.Firewall.Egress = append(compiled.Spec.Firewall.Egress, allowAll)
 	}
 
+	// LB membership: for each LoadBalancer whose selector matches this NIC's labels or whose
+	// TargetRefs name it, record a CompiledLB. This is forwarding membership ONLY — it adds no
+	// firewall rule (permission comes solely from NetworkPolicy).
+	for i := range lbs {
+		lb := &lbs[i]
+		if !lbMatchesNIC(lb, nic, nicLabels) {
+			continue
+		}
+		ports := make([]netv1.CompiledLBPort, 0, len(lb.Spec.Ports))
+		for _, p := range lb.Spec.Ports {
+			ports = append(ports, netv1.CompiledLBPort{Port: p.Port, Proto: p.Proto})
+		}
+		compiled.Spec.LB = append(compiled.Spec.LB, netv1.CompiledLB{VIP: lb.Spec.VIP, Ports: ports})
+	}
+
 	return compiled
 }
 
@@ -119,7 +133,11 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.Client.List(ctx, &policies, client.InNamespace(nic.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list networkpolicies: %w", err)
 	}
-	compiled := Compile(&nic, policies.Items)
+	var lbs netv1.LoadBalancerList
+	if err := r.Client.List(ctx, &lbs, client.InNamespace(nic.Namespace)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list loadbalancers: %w", err)
+	}
+	compiled := Compile(&nic, policies.Items, lbs.Items)
 	key := types.NamespacedName{Namespace: compiled.Namespace, Name: compiled.Name}
 	var existing netv1.CompiledNIC
 	err := r.Client.Get(ctx, key, &existing)
@@ -177,4 +195,21 @@ func (r *CompiledNICReconciler) nicsForPolicy(ctx context.Context, obj client.Ob
 		}
 	}
 	return reqs
+}
+
+// lbMatchesNIC reports whether the LoadBalancer targets this NIC — either its TargetSelector matches
+// the NIC's labels or a TargetRef names it.
+func lbMatchesNIC(lb *netv1.LoadBalancer, nic *netv1.NetworkInterface, nicLabels labels.Set) bool {
+	for _, ref := range lb.Spec.TargetRefs {
+		if ref.Name == nic.Name {
+			return true
+		}
+	}
+	if lb.Spec.TargetSelector != nil {
+		sel, err := metav1.LabelSelectorAsSelector(lb.Spec.TargetSelector)
+		if err == nil && sel.Matches(nicLabels) {
+			return true
+		}
+	}
+	return false
 }

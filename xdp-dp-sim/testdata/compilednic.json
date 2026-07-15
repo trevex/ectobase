@@ -18,7 +18,6 @@
     "overlayIPs": [
       "10.0.0.10"
     ],
-    "underlayRoute": "2001:db8:fefe::bb",
     "firewall": {
       "ingress": [
         {
