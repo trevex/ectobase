@@ -31,12 +31,20 @@ type fakeDP struct {
 	lbVips      []string            // ids added
 	lbDels      []string            // ids deleted
 	lbBackends  map[string][]string // id -> backends
+	routeAdds   []routeCall         // every AddRoute call, in order
 }
 
 type fwCall struct {
 	iface  string
 	ruleID string
 	rule   FwRule
+}
+
+type routeCall struct {
+	vni      uint32
+	prefix   string
+	nexthop  string
+	external bool
 }
 
 func newFakeDP() *fakeDP {
@@ -76,6 +84,7 @@ func (f *fakeDP) AddRoute(_ context.Context, vni uint32, prefix, nexthop string,
 	defer f.mu.Unlock()
 	f.added[key(vni, prefix)] = nexthop
 	f.external[key(vni, prefix)] = external
+	f.routeAdds = append(f.routeAdds, routeCall{vni, prefix, nexthop, external})
 	return nil
 }
 func (f *fakeDP) AddNatSource(_ context.Context, _ uint32, _, _ string, _, _ uint32) error {
@@ -165,12 +174,12 @@ func TestAgentLearnsRemoteRouteAndProgramsDataplane(t *testing.T) {
 	// Agent A announces one local route (no dataplane needed for the announcer here).
 	dpA := newFakeDP()
 	busA := NewBus("nodeA", "fd00::a", dpA, false)
-	go busA.Run(ctx, cl, nil, []Route{{Vni: 100, Prefix: "10.0.0.1/32", Nexthop: "fd00::a"}}, nil, nil)
+	go busA.Run(ctx, cl, nil, []Route{{Vni: 100, Prefix: "10.0.0.1/32", Nexthop: "fd00::a"}}, nil, nil, nil)
 
 	// Agent B subscribes to vni 100 and must program A's route on its dataplane.
 	dpB := newFakeDP()
 	busB := NewBus("nodeB", "fd00::b", dpB, false)
-	go busB.Run(ctx, cl, []uint32{100}, nil, nil, nil)
+	go busB.Run(ctx, cl, []uint32{100}, nil, nil, nil, nil)
 
 	// Poll for the learned route.
 	deadline := time.Now().Add(3 * time.Second)
@@ -231,5 +240,40 @@ func TestApplyNatInstallsNeighborNatOnlyForRemoteOwners(t *testing.T) {
 	})
 	if _, ok := dp.getNbrNat("5.6.7.8", 4096, 5120); ok {
 		t.Fatalf("locally-owned block must NOT install a neighbor-nat")
+	}
+}
+
+func TestApplyPublicVNIRoute_ImportsIntoEgressVNIs(t *testing.T) {
+	dp := newFakeDP()
+	b := NewBus("nodeA", "fd00::a", dp, false)
+	b.egressVNIs = []uint32{100, 200} // set by Run() in production
+
+	b.apply(context.Background(), &rbv1.RouteUpdate{
+		Vni: 0, Prefix: "0.0.0.0/0", Nexthops: []string{"fd00::e"}, Op: rbv1.RouteOp_ROUTE_OP_ADD,
+	})
+
+	// Imported 0.0.0.0/0 -> fd00::e into BOTH egress VNIs (external), and NOT into VNI 0.
+	if got := dp.routeAdds; len(got) != 2 {
+		t.Fatalf("want 2 imported routes, got %d: %+v", len(got), got)
+	}
+	for _, ra := range dp.routeAdds {
+		if ra.prefix != "0.0.0.0/0" || ra.nexthop != "fd00::e" || !ra.external || ra.vni == 0 {
+			t.Fatalf("bad imported route: %+v", ra)
+		}
+	}
+	if b.LearnedPublic()["0.0.0.0/0"] != "fd00::e" {
+		t.Fatalf("learnedPublic not recorded: %+v", b.LearnedPublic())
+	}
+}
+
+func TestApplyNonPublicRoute_InstallsDirectly(t *testing.T) {
+	dp := newFakeDP()
+	b := NewBus("nodeA", "fd00::a", dp, false)
+	b.egressVNIs = []uint32{100}
+	b.apply(context.Background(), &rbv1.RouteUpdate{
+		Vni: 100, Prefix: "10.0.0.5/32", Nexthops: []string{"fd00::d"}, Op: rbv1.RouteOp_ROUTE_OP_ADD,
+	})
+	if len(dp.routeAdds) != 1 || dp.routeAdds[0].vni != 100 || dp.routeAdds[0].external {
+		t.Fatalf("non-public route must install directly (vni=100, external=false): %+v", dp.routeAdds)
 	}
 }
