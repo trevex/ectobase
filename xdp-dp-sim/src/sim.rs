@@ -14,7 +14,7 @@ use xdp_dp_common::{Local, UnderlayValue, FW_ACTION_DROP, FW_DIR_INGRESS};
 use xdp_dp_core::conntrack::{ct_create_default, ct_key};
 use xdp_dp_core::encap::{reforward, write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
 use xdp_dp_core::firewall::fw_eval_dir;
-use xdp_dp_core::lb::lb_select_forward;
+use xdp_dp_core::lb::{lb_select_forward, lb_select_forward_v6};
 use xdp_dp_core::maps::Maps;
 use xdp_dp_core::pkt::{Action, Pkt};
 use xdp_dp_core::uplink::decap_and_rewrite;
@@ -169,21 +169,35 @@ impl SimNode {
         self.uplink(encapped, vni, u, [0u8; 16], &local)
     }
 
-    /// Edge WAN-VIP ingress (`wan_rx`): a plain `[Eth][IPv4]` WAN frame; if its dst+port is a WAN LB
-    /// VIP (vni=0), Maglev-select a backend and encap IP-in-IPv6 to the backend underlay. Else Pass.
-    /// Mirrors `ingress.rs::try_wan_rx` VIP branch. Returns the encapped frame (or the input on Pass).
+    /// Edge WAN-VIP ingress (`wan_rx`): a plain `[Eth][IPv4|IPv6]` WAN frame; if its dst+port is a WAN
+    /// LB VIP (vni=0), Maglev-select a backend and encap the inner packet IP-in-IPv6 to the backend
+    /// underlay. Else Pass. Mirrors `ingress.rs::try_wan_rx` VIP branch. Dispatches on the frame's
+    /// ethertype (bytes [12..14]): `0x0800` runs the v4 core select (`inner_proto=4`/IPIP), `0x86DD`
+    /// runs the v6 core select (`inner_proto=41`/IPPROTO_IPV6). Returns the encapped frame (or the
+    /// input on Pass).
     pub fn wan_rx(&self, plain: &[u8]) -> SimOut {
         use xdp_dp_core::encap::ETH_LEN;
-        match lb_select_forward(&VecPkt::from_bytes(plain), &self.maps, ETH_LEN, 0) {
-            Some(backend) => {
+        let ethertype = u16::from_be_bytes([
+            plain.get(12).copied().unwrap_or(0),
+            plain.get(13).copied().unwrap_or(0),
+        ]);
+        // v4 => IPIP; v6 => IPPROTO_IPV6. Select with the matching core fn, then share one encap.
+        let selected = match ethertype {
+            0x86DD => lb_select_forward_v6(&VecPkt::from_bytes(plain), &self.maps, ETH_LEN, 0)
+                .map(|b| (b, 41u8)),
+            _ => lb_select_forward(&VecPkt::from_bytes(plain), &self.maps, ETH_LEN, 0)
+                .map(|b| (b, 4u8)),
+        };
+        match selected {
+            Some((backend, inner_proto)) => {
                 let e = EncapParams {
                     gateway_mac: self.local.gateway_mac,
                     uplink_mac: self.local.uplink_mac,
                     uplink_ifindex: self.local.uplink_ifindex,
                     src_underlay: self.local.underlay_ipv6,
                     nexthop_ipv6: backend,
-                    inner_len: 0,   // edge_encap sets this
-                    inner_proto: 4, // IPPROTO_IPIP
+                    inner_len: 0, // edge_encap sets this
+                    inner_proto,  // 4 (IPIP) for v4 inner, 41 (IPPROTO_IPV6) for v6 inner
                 };
                 SimOut {
                     action: Action::Redirect(self.local.uplink_ifindex),

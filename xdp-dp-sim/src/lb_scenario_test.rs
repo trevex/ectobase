@@ -31,6 +31,13 @@ const GUEST_MAC: [u8; 6] = [0x66, 0x66, 0x66, 0x66, 0x66, 0x00];
 
 const WAN_VIP: [u8; 4] = [203, 0, 113, 50]; // N/S public VIP (edge, vni=0)
 const WAN_SRC: [u8; 4] = [203, 0, 113, 9];
+// v6 N/S public VIP (edge, vni=0). LB is keyed by the last-4 bytes (control-plane `last4`).
+const WAN_VIP6: [u8; 16] = [
+    0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0xa8, 0xc8, 0x32,
+];
+const WAN_SRC6: [u8; 16] = [
+    0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0xa8, 0xc8, 0x09,
+];
 const OVERLAY_VIP: [u8; 4] = [10, 0, 100, 1]; // E/W overlay VIP (vni=100)
 const GUEST_A: [u8; 4] = [10, 0, 0, 20]; // an internal E/W client (in 10.0.0.0/8)
 
@@ -51,6 +58,16 @@ fn local_for(underlay: [u8; 16], ifindex: u32) -> Local {
 fn eth_ipv4_tcp(src: [u8; 4], dst: [u8; 4], dport: u16) -> Vec<u8> {
     let b = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
         .ipv4(src, dst, 64)
+        .tcp(40000, dport, 0, 1024);
+    let mut out = Vec::new();
+    b.write(&mut out, &[]).unwrap();
+    out
+}
+
+/// A full guest Ethernet frame `[Eth(0x86DD)][IPv6][TCP]` src→dst on `dport`.
+fn eth_ipv6_tcp(src: [u8; 16], dst: [u8; 16], dport: u16) -> Vec<u8> {
+    let b = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
+        .ipv6(src, dst, 64)
         .tcp(40000, dport, 0, 1024);
     let mut out = Vec::new();
     b.write(&mut out, &[]).unwrap();
@@ -142,6 +159,34 @@ fn edge_node() -> SimNode {
         LbKey {
             vni: 0,
             ipv4: WAN_VIP,
+            port: 443,
+            proto: 6,
+            _pad: 0,
+        },
+        LbValue {
+            table_id: 1,
+            size: 1,
+        },
+    );
+    e.maps.maglev.insert(
+        MaglevKey {
+            table_id: 1,
+            slot: 0,
+        },
+        HOSTB_UL,
+    );
+    e
+}
+
+/// Edge node with a v6 WAN-VIP LB (vni=0) → hostB. Keyed by the last-4 bytes of `WAN_VIP6`
+/// (matching the control-plane `last4`), mirroring `edge_node()`.
+fn edge_node_v6() -> SimNode {
+    let mut e = SimNode::with_local(local_for(EDGE_UL, 7));
+    let last4 = [WAN_VIP6[12], WAN_VIP6[13], WAN_VIP6[14], WAN_VIP6[15]];
+    e.maps.lb.insert(
+        LbKey {
+            vni: 0,
+            ipv4: last4,
             port: 443,
             proto: 6,
             _pad: 0,
@@ -415,4 +460,41 @@ fn ew_lb_anycast_dropped_without_policy() {
         Outcome::Dropped { node: "hostB" },
         "LB delivery must be dropped when no NetworkPolicy admits the source"
     );
+}
+
+// ============================ North-South (v6 VIP) ============================
+
+/// Direct edge `wan_rx` test for a v6 WAN VIP. We assert on the EDGE hop only — not a full
+/// `Prog::WanRx → Delivered` Fabric trace — because the sim's Fabric/`SimNode::uplink` assumes a
+/// v4 inner and does NOT yet model v6-inner backend delivery (see fabric.rs:104-106). This proves
+/// the new code this slice adds: the edge v6 Maglev select + v6-in-IPv6 encap toward the backend.
+#[test]
+fn ns_lb_v6_wan_rx_encaps_to_backend() {
+    use xdp_dp_core::encap::ETH_LEN;
+    use xdp_dp_core::pkt::Action;
+
+    let edge = edge_node_v6();
+
+    // A v6 WAN frame hitting the VIP on 443 → Maglev-selects HOSTB_UL, encaps v6-in-IPv6.
+    let frame = eth_ipv6_tcp(WAN_SRC6, WAN_VIP6, 443);
+    let out = edge.wan_rx(&frame);
+
+    assert_eq!(
+        out.action,
+        Action::Redirect(7),
+        "edge must redirect the encapped frame out its uplink ifindex (EDGE_UL local ifindex=7)"
+    );
+    // Outer IPv6 dst is at ETH_LEN+24 .. ETH_LEN+40 of the encapped frame → the Maglev backend.
+    let outer_dst = &out.pkt[ETH_LEN + 24..ETH_LEN + 40];
+    assert_eq!(
+        outer_dst,
+        &HOSTB_UL[..],
+        "outer IPv6 dst must be the Maglev-selected backend underlay (HOSTB_UL)"
+    );
+
+    // Negative sub-case: a non-VIP v6 dst (last-4 != VIP key) → Pass, no encap.
+    let non_vip = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 5];
+    let miss = eth_ipv6_tcp(WAN_SRC6, non_vip, 443);
+    let out2 = edge.wan_rx(&miss);
+    assert_eq!(out2.action, Action::Pass, "non-VIP v6 dst must Pass");
 }
