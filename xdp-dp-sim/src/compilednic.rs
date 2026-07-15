@@ -84,9 +84,11 @@ fn proto_to_u8(proto: &str) -> u8 {
     }
 }
 
-/// Convert a single compiled firewall rule to the native FwRule.
+/// Convert a single compiled firewall rule to the native FwRule. Mirrors the agent's `compiledToFw`:
+/// k8s semantics — an INGRESS rule's peer CIDR is the SOURCE (dst any), an EGRESS rule's is the
+/// DESTINATION (src any); the port is always the destination port.
 pub fn rule_to_fw(r: &Rule, direction: u8) -> FwRule {
-    let (dst_ip, dst_mask) = parse_cidr(&r.cidr);
+    let (peer_ip, peer_mask) = parse_cidr(&r.cidr);
     let proto = proto_to_u8(&r.proto);
     let action = if r.action == "Allow" {
         FW_ACTION_ACCEPT
@@ -100,9 +102,15 @@ pub fn rule_to_fw(r: &Rule, direction: u8) -> FwRule {
         (r.port as u16, r.port as u16)
     };
 
+    let (src_ip, src_mask, dst_ip, dst_mask) = if direction == FW_DIR_INGRESS {
+        (peer_ip, peer_mask, [0; 4], [0; 4])
+    } else {
+        ([0; 4], [0; 4], peer_ip, peer_mask)
+    };
+
     FwRule {
-        src_ip: [0; 4],
-        src_mask: [0; 4],
+        src_ip,
+        src_mask,
         dst_ip,
         dst_mask,
         src_port_min: 0,
@@ -169,18 +177,26 @@ mod tests {
         let meta = maps.fw_meta.get(&tap).expect("fw_meta for tap");
         assert_eq!(meta.ingress_count, 1, "should have 1 ingress rule");
 
-        // Packet to dst 10.0.0.10 on port 443 (within fixture allow CIDR 10.0.0.0/24).
-        // PacketBuilder::ipv4 emits starting at the IPv4 header (no Ethernet), so ip_off = 0.
-        let pkt_accept = VecPkt::from_bytes(&tcp_v4([192, 168, 1, 1], [10, 0, 0, 10], 5000, 443));
+        // Ingress rule = allow from SOURCE 10.0.0.0/24 on port 443. A packet FROM 10.0.0.5:*->:443
+        // matches. (PacketBuilder::ipv4 emits starting at the IPv4 header, so ip_off = 0.)
+        let pkt_accept = VecPkt::from_bytes(&tcp_v4([10, 0, 0, 5], [10, 0, 0, 10], 5000, 443));
         assert_eq!(pkt_accept.read_u8(9), Some(6), "proto should be TCP=6");
         assert_eq!(
             fw_eval_dir(&pkt_accept, &maps, 0, tap, FW_DIR_INGRESS),
             FW_ACTION_ACCEPT,
-            "port 443 should be accepted"
+            "in-range source on port 443 should be accepted"
         );
 
-        // Packet on port 80 — not allowed by the fixture rule → DROP.
-        let pkt_drop = VecPkt::from_bytes(&tcp_v4([192, 168, 1, 1], [10, 0, 0, 10], 5000, 80));
+        // Wrong source (not in 10.0.0.0/24) → no match → deny-by-default DROP.
+        let pkt_bad_src = VecPkt::from_bytes(&tcp_v4([192, 168, 1, 1], [10, 0, 0, 10], 5000, 443));
+        assert_eq!(
+            fw_eval_dir(&pkt_bad_src, &maps, 0, tap, FW_DIR_INGRESS),
+            FW_ACTION_DROP,
+            "out-of-range source should be dropped"
+        );
+
+        // In-range source but wrong port (80) → no match → DROP.
+        let pkt_drop = VecPkt::from_bytes(&tcp_v4([10, 0, 0, 5], [10, 0, 0, 10], 5000, 80));
         assert_eq!(
             fw_eval_dir(&pkt_drop, &maps, 0, tap, FW_DIR_INGRESS),
             FW_ACTION_DROP,

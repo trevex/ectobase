@@ -65,10 +65,9 @@ class DpService:
 			f" --dhcp-mtu={dhcp_mtu}"
 			f" --dhcp-dns={dhcp_dns1} --dhcp-dns={dhcp_dns2}"
 			f" --dhcpv6-dns={dhcpv6_dns1} --dhcpv6-dns={dhcpv6_dns2}"
-			# The datapath verdict is deny-by-default, but `serve` leaves FW_CONFIG unset, so
-			# enforcement is OFF (evaluate-only) — the dpservice datapath-parity tests run with
-			# ruleless VMs and must forward. (Enforcement turns on once the control plane installs
-			# per-interface allow-all/policy rules.)
+			# The datapath firewall is always-on deny-by-default. The dpservice datapath-parity tests
+			# create VMs without policies, so `init_ifaces` installs an explicit allow-all rule per VM
+			# (we own the firewall posture); firewall-specific tests add their own narrower rules.
 		)
 		if test_virtsvc:
 			self.cmd += (f' --udp-virtsvc="{virtsvc_udp_virtual_ip},{virtsvc_udp_virtual_port},{virtsvc_udp_svc_ipv6},{virtsvc_udp_svc_port}"'

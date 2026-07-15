@@ -2,11 +2,12 @@
 //! REAL datapath core. This is the synthetic reproduction of the clab "LB packets dropped" failure
 //! and its explicit-firewall fix — no clab, no root.
 //!
-//! Firewall model under test (verified against `compilednic::apply`): a compiled rule's `cidr`
-//! matches the packet's **destination** IP (src is always "any"), `port` is the destination port.
-//! LB is DSR — the inner dst stays the **VIP** — so a policy written for the backend's own overlay
-//! IP does NOT cover LB traffic to the VIP. Coverage proves LB is delivered IFF an explicit rule
-//! covers `VIP:port`, and dropped otherwise.
+//! Firewall model under test (matches `compilednic::apply` + the agent's `compiledToFw`): an INGRESS
+//! rule's `cidr` matches the packet's **source** (k8s `from` semantics), `port` is the destination
+//! port. LB is DSR — the inner dst stays the VIP — and the traffic's SOURCE is the external/remote
+//! client. So a backend policy that only permits INTERNAL sources does NOT cover external N/S LB
+//! traffic (its source is external) → dropped; a policy permitting the LB source (or any) → delivered.
+//! Coverage proves LB flows IFF an explicit rule permits its source on the port.
 
 use etherparse::PacketBuilder;
 use xdp_dp_common::{LbKey, LbValue, MaglevKey};
@@ -31,9 +32,7 @@ const GUEST_MAC: [u8; 6] = [0x66, 0x66, 0x66, 0x66, 0x66, 0x00];
 const WAN_VIP: [u8; 4] = [203, 0, 113, 50]; // N/S public VIP (edge, vni=0)
 const WAN_SRC: [u8; 4] = [203, 0, 113, 9];
 const OVERLAY_VIP: [u8; 4] = [10, 0, 100, 1]; // E/W overlay VIP (vni=100)
-const GUEST_A: [u8; 4] = [10, 0, 0, 20];
-// hostB guest's own overlay IP is 10.0.0.10 — see `allow_backends_own_ip()` (a policy for it does
-// NOT cover the VIP-dst LB traffic, which is the whole point of the drop reproduction).
+const GUEST_A: [u8; 4] = [10, 0, 0, 20]; // an internal E/W client (in 10.0.0.0/8)
 
 const fn ul(last: u8) -> [u8; 16] {
     [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, last]
@@ -86,15 +85,14 @@ fn apply_fw(maps: &mut MemMaps, tap: u32, ingress_json: &str) {
     apply(maps, &c, tap);
 }
 
-fn allow_vip_443() -> &'static str {
-    r#"[{"cidr":"203.0.113.50/32","proto":"TCP","port":443,"action":"Allow"}]"#
+/// Ingress allow from ANY source on 443 — permits external N/S LB traffic.
+fn allow_from_any_443() -> &'static str {
+    r#"[{"cidr":"0.0.0.0/0","proto":"TCP","port":443,"action":"Allow"}]"#
 }
-fn allow_overlay_vip_443() -> &'static str {
-    r#"[{"cidr":"10.0.100.1/32","proto":"TCP","port":443,"action":"Allow"}]"#
-}
-fn allow_backends_own_ip() -> &'static str {
-    // Policy for the backend's OWN overlay service — does NOT cover the VIP-dst LB traffic.
-    r#"[{"cidr":"10.0.0.10/32","proto":"TCP","port":8443,"action":"Allow"}]"#
+/// Ingress allow only INTERNAL sources (10.0.0.0/8) on 443. Delivers E/W LB (internal guest source);
+/// DROPS external N/S LB (its source is a public client, not in 10.0.0.0/8) — the clab reproduction.
+fn allow_internal_443() -> &'static str {
+    r#"[{"cidr":"10.0.0.0/8","proto":"TCP","port":443,"action":"Allow"}]"#
 }
 fn allow_all() -> &'static str {
     r#"[{"cidr":"0.0.0.0/0","action":"Allow"}]"#
@@ -170,7 +168,7 @@ fn ns_lb_delivered_with_vip_allow() {
     let mut fab = Fabric::new();
     fab.add_node("edge", edge_node());
     let mut b = backend_node(false);
-    apply_fw(&mut b.maps, HOSTB_TAP, allow_vip_443());
+    apply_fw(&mut b.maps, HOSTB_TAP, allow_from_any_443());
     fab.add_node("hostB", b);
     fab.route(HOSTB_UL, "hostB");
 
@@ -190,11 +188,12 @@ fn ns_lb_delivered_with_vip_allow() {
 
 #[test]
 fn ns_lb_dropped_when_policy_misses_vip() {
-    // THE CLAB REPRODUCTION: backend policied for its OWN overlay IP:8443, not the WAN VIP:443.
+    // THE CLAB REPRODUCTION: the backend's policy only permits INTERNAL sources (10.0.0.0/8) on 443,
+    // but N/S LB traffic arrives with an EXTERNAL source (a public client) — so it is denied.
     let mut fab = Fabric::new();
     fab.add_node("edge", edge_node());
     let mut b = backend_node(false);
-    apply_fw(&mut b.maps, HOSTB_TAP, allow_backends_own_ip());
+    apply_fw(&mut b.maps, HOSTB_TAP, allow_internal_443());
     fab.add_node("hostB", b);
     fab.route(HOSTB_UL, "hostB");
 
@@ -203,7 +202,7 @@ fn ns_lb_dropped_when_policy_misses_vip() {
     assert_eq!(
         t.outcome,
         Outcome::Dropped { node: "hostB" },
-        "LB traffic to the VIP must be dropped by a policy that only covers the backend's own IP"
+        "external-sourced LB traffic must be dropped by a policy that only permits internal sources"
     );
 }
 
@@ -268,7 +267,7 @@ fn ew_lb_reforward_delivered() {
     fab.add_node("relay", relay);
 
     let mut b = backend_node(true); // hostB re-selects itself (DSR)
-    apply_fw(&mut b.maps, HOSTB_TAP, allow_overlay_vip_443());
+    apply_fw(&mut b.maps, HOSTB_TAP, allow_internal_443());
     fab.add_node("hostB", b);
 
     fab.route(RELAY_UL, "relay");
@@ -294,7 +293,7 @@ fn ew_lb_local_deliver_no_reforward() {
     // Relay node IS the backend: single uplink_rx, LB selects self, no reforward hop.
     let mut fab = Fabric::new();
     let mut b = backend_node(true);
-    apply_fw(&mut b.maps, HOSTB_TAP, allow_overlay_vip_443());
+    apply_fw(&mut b.maps, HOSTB_TAP, allow_internal_443());
     fab.add_node("hostB", b);
     fab.route(HOSTB_UL, "hostB");
 

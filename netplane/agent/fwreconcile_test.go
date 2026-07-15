@@ -49,8 +49,12 @@ func TestReconcileFirewall_PushesRules(t *testing.T) {
 	if ing.iface != "web-0-nic0" {
 		t.Fatalf("ingress rule iface = %q, want web-0-nic0", ing.iface)
 	}
-	if ing.rule.DstCIDR != "10.0.0.0/24" {
-		t.Fatalf("ingress rule DstCIDR = %q, want 10.0.0.0/24", ing.rule.DstCIDR)
+	// k8s ingress: the policy CIDR is the SOURCE (dst is any).
+	if ing.rule.SrcCIDR != "10.0.0.0/24" {
+		t.Fatalf("ingress rule SrcCIDR = %q, want 10.0.0.0/24", ing.rule.SrcCIDR)
+	}
+	if ing.rule.DstCIDR != "0.0.0.0/0" {
+		t.Fatalf("ingress rule DstCIDR = %q, want 0.0.0.0/0 (any)", ing.rule.DstCIDR)
 	}
 	if ing.rule.Proto != 6 {
 		t.Fatalf("ingress rule Proto = %d, want 6 (TCP)", ing.rule.Proto)
@@ -105,7 +109,8 @@ func TestReconcileFirewall_DeletesStaleRules(t *testing.T) {
 	// Reset fwAdds to check only second reconcile additions.
 	dp.fwAdds = nil
 
-	// Second reconcile: should delete fw-in-1 and re-add fw-in-0.
+	// Second reconcile: deletes fw-in-1 (vanished) and leaves fw-in-0 (unchanged) untouched — it
+	// must NOT be re-added (the dataplane would reject the duplicate id).
 	if err := r.ReconcileFirewall(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -114,5 +119,41 @@ func TestReconcileFirewall_DeletesStaleRules(t *testing.T) {
 	}
 	if dp.fwDels[0].ruleID != "fw-in-1" {
 		t.Fatalf("deleted ruleID = %q, want fw-in-1", dp.fwDels[0].ruleID)
+	}
+	if len(dp.fwAdds) != 0 {
+		t.Fatalf("second reconcile re-added unchanged rules: %+v", dp.fwAdds)
+	}
+}
+
+// Reconcile is level-triggered and runs on every bus reconnect. The dataplane rejects duplicate
+// rule ids, so re-adding an unchanged rule errors — a correct reconcile must skip unchanged rules
+// and therefore never error in steady state.
+func TestReconcileFirewall_ConvergesOnRepeat(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := netv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	cnic := &netv1.CompiledNIC{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-0-nic0", Namespace: "default"},
+		Spec: netv1.CompiledNICSpec{
+			NodeName: "nodeA",
+			NICRef:   netv1.LocalObjectReference{Name: "web-0-nic0"},
+			Firewall: netv1.CompiledFirewall{
+				Ingress: []netv1.CompiledFwRule{{CIDR: "0.0.0.0/0", Proto: "TCP", Port: 443, Action: "Allow"}},
+				Egress:  []netv1.CompiledFwRule{{CIDR: "0.0.0.0/0", Action: "Allow"}},
+			},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cnic).Build()
+	dp := newFakeDP() // rejects duplicate rule ids (models the real dataplane)
+	r := &Reconciler{client: cl, nodeID: "nodeA", dp: dp}
+
+	for i := 0; i < 3; i++ {
+		if err := r.ReconcileFirewall(context.Background()); err != nil {
+			t.Fatalf("reconcile #%d errored (steady-state re-add?): %v", i+1, err)
+		}
+	}
+	if len(dp.fwAdds) != 2 {
+		t.Fatalf("want exactly 2 adds across 3 reconciles, got %d: %+v", len(dp.fwAdds), dp.fwAdds)
 	}
 }

@@ -25,6 +25,9 @@ type fakeDP struct {
 	nbrNatWd map[string]bool
 	fwAdds   []fwCall
 	fwDels   []struct{ iface, ruleID string }
+	// fwInstalled models the real dataplane: a rule id is unique per interface, and AddFwRule on an
+	// existing id fails (ALREADY_EXISTS) — so a correct reconcile must NOT re-add unchanged rules.
+	fwInstalled map[string]bool
 }
 
 type fwCall struct {
@@ -37,6 +40,7 @@ func newFakeDP() *fakeDP {
 	return &fakeDP{
 		added: map[string]string{}, external: map[string]bool{}, withdrew: map[string]bool{},
 		nbrNat: map[string]string{}, nbrNatWd: map[string]bool{},
+		fwInstalled: map[string]bool{},
 	}
 }
 
@@ -76,12 +80,18 @@ func (f *fakeDP) AddNatSource(_ context.Context, _ uint32, _, _ string, _, _ uin
 func (f *fakeDP) AddFwRule(_ context.Context, iface, ruleID string, r FwRule) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	k := iface + "|" + ruleID
+	if f.fwInstalled[k] {
+		return fmt.Errorf("fwrule %s already exists", k) // model dataplane ALREADY_EXISTS
+	}
+	f.fwInstalled[k] = true
 	f.fwAdds = append(f.fwAdds, fwCall{iface, ruleID, r})
 	return nil
 }
 func (f *fakeDP) DelFwRule(_ context.Context, iface, ruleID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	delete(f.fwInstalled, iface+"|"+ruleID)
 	f.fwDels = append(f.fwDels, struct{ iface, ruleID string }{iface, ruleID})
 	return nil
 }
