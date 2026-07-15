@@ -94,6 +94,36 @@ func DesiredExternalRoutes(ctx context.Context, c client.Client, underlay, edgeL
 			ExternalRoute{Vni: vni, Prefix: nat64WellKnownPrefix, Nexthop: underlay, External: true},
 		)
 	}
+
+	// LoadBalancer VNIs also need an external default so DSR replies can leave the fabric: the
+	// backend answers FROM the public VIP (a public IP), so it needs no NATGateway/SNAT — the reply
+	// misses the SNAT lookup and egresses un-SNAT'd via the edge. Originate 0.0.0.0/0 for each LB's
+	// VPC VNI (deduped with the NATGateway VNIs above). No NAT64 prefix — DSR is same-family.
+	var lbs netv1.LoadBalancerList
+	if err := c.List(ctx, &lbs); err != nil {
+		return nil, fmt.Errorf("list loadbalancers: %w", err)
+	}
+	for li := range lbs.Items {
+		lb := &lbs.Items[li]
+		vni, err := vpcVNIFor(ctx, c, lb.Namespace, lb.Spec.VPCRef.Name)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				log.Printf("VPC %s/%s not found for loadbalancer %s/%s, skipping", lb.Namespace, lb.Spec.VPCRef.Name, lb.Namespace, lb.Name)
+				continue
+			}
+			return nil, err
+		}
+		if vni == 0 {
+			continue
+		}
+		if _, ok := seen[vni]; ok {
+			continue
+		}
+		seen[vni] = struct{}{}
+		routes = append(routes,
+			ExternalRoute{Vni: vni, Prefix: "0.0.0.0/0", Nexthop: underlay, External: true},
+		)
+	}
 	return routes, nil
 }
 

@@ -204,10 +204,11 @@ struct Inner {
     guest_tc: bool,
     routes_shadow: Vec<RouteShadowV4>,
     routes6_shadow: Vec<RouteShadowV6>,
-    /// Shadow cache of learned guest MACs: underlay_ipv6 -> guest_mac.
-    /// Persists across interface delete+recreate so that the datapath can continue
-    /// delivering to the last-known MAC even when the interface is reprogrammed.
-    learned_macs: HashMap<[u8; 16], [u8; 6]>,
+    /// Shadow cache of learned guest MACs: interface_id -> guest_mac.
+    /// Persists across delete+recreate of the SAME interface so the datapath keeps delivering to a
+    /// datapath-learned MAC (e.g. a VM's self-set MAC) when it is reprogrammed. Keyed by
+    /// interface_id so a different interface reusing a freed underlay /128 never inherits it.
+    learned_macs: HashMap<Vec<u8>, [u8; 6]>,
 }
 
 impl Control {
@@ -487,12 +488,13 @@ impl Control {
         g.by_ifindex.insert(interface_id.to_vec(), tap);
         g.iface_underlay
             .insert(interface_id.to_vec(), underlay_ipv6);
-        Self::program_iface_maps(&mut g, tap, mac, &params)
+        Self::program_iface_maps(&mut g, interface_id, tap, mac, &params)
     }
 
     /// Program PORT_META / INTERFACES / UNDERLAY / METER / local self-route for one interface.
     fn program_iface_maps(
         g: &mut Inner,
+        interface_id: &[u8],
         tap: u32,
         mac: [u8; 6],
         params: &IfaceParams,
@@ -507,11 +509,12 @@ impl Control {
             total_mbps,
             public_mbps,
         } = *params;
-        // MAC learning persistence: use the shadow cache of learned MACs, which is populated
-        // by detach_interface before it removes the UNDERLAY entry. This ensures that a
-        // delete+recreate cycle preserves the datapath-learned MAC even though the BPF UNDERLAY
-        // map entry is gone by the time program_iface_maps is called.
-        let effective_mac = g.learned_macs.get(&underlay_ipv6).copied().unwrap_or(mac);
+        // MAC learning persistence: prefer the shadow-cached learned MAC (populated by
+        // detach_interface) so a delete+recreate of the SAME interface preserves a datapath-learned
+        // MAC (e.g. a VM behind the tap using a self-set MAC) even though the BPF UNDERLAY entry is
+        // gone. Keyed by interface_id (NOT the underlay /128): a DIFFERENT interface reusing a freed
+        // underlay must NOT inherit the previous endpoint's MAC — it uses its own device MAC.
+        let effective_mac = g.learned_macs.get(interface_id).copied().unwrap_or(mac);
         g.ports.upsert(
             tap,
             PortMeta {
@@ -601,7 +604,7 @@ impl Control {
         // (the datapath may have updated it via DHCP/ARP MAC learning). This snapshot
         // survives the delete so that addinterface can restore the learned MAC.
         if let Some(u) = g.underlay.get(&rec.underlay) {
-            g.learned_macs.insert(rec.underlay, u.guest_mac);
+            g.learned_macs.insert(interface_id.to_vec(), u.guest_mac);
         }
         let _ = g.underlay.remove(&rec.underlay);
         let _ = g.meter.remove(&tap);

@@ -12,6 +12,9 @@ import (
 type LoadBalancerSpec struct {
 	// VIP is the virtual IP (IPv4 or IPv6). It is the LB identity and the AddLbVip id.
 	VIP string `json:"vip"`
+	// VPCRef references the VPC whose VNI the backends live in. Used to originate the external
+	// default route so DSR replies (source = the public VIP, un-SNAT'd) can egress via the edge.
+	VPCRef LocalObjectReference `json:"vpcRef"`
 	// Ports are the LB service (port, proto) tuples.
 	Ports []LoadBalancerPort `json:"ports"`
 	// TargetSelector selects backend NetworkInterfaces by label. Mutually exclusive with TargetRefs.

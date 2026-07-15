@@ -63,6 +63,44 @@ func TestDesiredExternalRoutesEdgeAnnouncesDefault(t *testing.T) {
 	}
 }
 
+// A LoadBalancer with NO NATGateway must still make the edge originate the external default for its
+// VPC's VNI, so DSR replies (source = the public VIP, un-SNAT'd) can egress. No NAT64 for LB.
+func TestDesiredExternalRoutesLoadBalancerDSR(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := netv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	vpc := &netv1.VPC{}
+	vpc.Name = "blue"
+	vpc.Namespace = "default"
+	vpc.Status.VNI = 100
+
+	lb := &netv1.LoadBalancer{}
+	lb.Name = "web-lb"
+	lb.Namespace = "default"
+	lb.Spec.VIP = "203.0.113.5"
+	lb.Spec.VPCRef = netv1.LocalObjectReference{Name: "blue"}
+	lb.Spec.Ports = []netv1.LoadBalancerPort{{Port: 80, Proto: "TCP"}}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(vpc, lb).Build()
+
+	routes, err := DesiredExternalRoutes(context.Background(), c, "fd00::e", "fd00:lo::1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v4 := findExternalRoute(routes, "0.0.0.0/0")
+	if v4 == nil {
+		t.Fatalf("LoadBalancer must make the edge originate 0.0.0.0/0 for DSR return, got %+v", routes)
+	}
+	if v4.Vni != 100 || v4.Nexthop != "fd00::e" || !v4.External {
+		t.Fatalf("bad LB external default: %+v", *v4)
+	}
+	// No NAT64 prefix for an LB-only VNI (DSR is same-family).
+	if findExternalRoute(routes, "64:ff9b::/96") != nil {
+		t.Fatalf("LB-only VNI must not originate the NAT64 prefix, got %+v", routes)
+	}
+}
+
 func TestDesiredExternalRoutesNonEdgeStagesNothing(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {
