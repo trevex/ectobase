@@ -1,5 +1,7 @@
 use aya_ebpf::{helpers::bpf_xdp_adjust_head, programs::XdpContext};
-use xdp_dp_common::{CtEntry, CtKey, FwMeta, FwRule, FwRuleKey, Local, UnderlayValue};
+use xdp_dp_common::{
+    CtEntry, CtKey, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local, MaglevKey, UnderlayValue,
+};
 use xdp_dp_core::maps::Maps;
 use xdp_dp_core::pkt::Pkt;
 
@@ -35,6 +37,14 @@ impl Maps for GlobalMaps {
     #[inline(always)]
     fn fw_enforcing(&self) -> bool {
         crate::firewall::fw_enforcing()
+    }
+    #[inline(always)]
+    fn lb_get(&self, key: &LbKey) -> Option<LbValue> {
+        unsafe { crate::maps::LB.get(key).copied() }
+    }
+    #[inline(always)]
+    fn maglev_get(&self, key: &MaglevKey) -> Option<[u8; 16]> {
+        unsafe { crate::maps::MAGLEV.get(key).copied() }
     }
 }
 

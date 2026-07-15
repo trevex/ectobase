@@ -1,4 +1,6 @@
-use xdp_dp_common::{CtEntry, CtKey, FwMeta, FwRule, FwRuleKey, Local, UnderlayValue};
+use xdp_dp_common::{
+    CtEntry, CtKey, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local, MaglevKey, UnderlayValue,
+};
 
 /// Typed access to the datapath maps the core needs. eBPF impl wraps the `#[map]` statics
 /// (zero-cost); native impl is HashMap-backed. Monomorphized — no `dyn`.
@@ -11,4 +13,6 @@ pub trait Maps {
     fn conntrack_insert(&mut self, key: CtKey, entry: CtEntry);
     /// Whether firewall enforcement is enabled (eBPF: FW_CONFIG[0] != 0; sim: a bool field).
     fn fw_enforcing(&self) -> bool;
+    fn lb_get(&self, key: &LbKey) -> Option<LbValue>;
+    fn maglev_get(&self, key: &MaglevKey) -> Option<[u8; 16]>;
 }
