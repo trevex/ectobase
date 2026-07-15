@@ -1994,6 +1994,7 @@ dependencies = [
  "cargo_metadata",
  "clap",
  "env_logger",
+ "etherparse",
  "ipnet",
  "libc",
  "prost",
@@ -2003,7 +2004,9 @@ dependencies = [
  "tonic-health",
  "uuid",
  "xdp-dp-common",
+ "xdp-dp-core",
  "xdp-dp-ebpf",
+ "xdp-dp-sim",
 ]
 
 [[package]]

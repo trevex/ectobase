@@ -89,6 +89,11 @@ test: ## Host unit + POD-layout tests (no root needed)
 verifier: ## Load both XDP programs through the kernel verifier (needs root)
 	cargo test -p xdp-dp both_programs_pass_verifier -- --ignored
 
+.PHONY: sim-anchor
+sim-anchor: ## Privileged BPF_PROG_TEST_RUN byte-parity anchor (native pure-core vs real bytecode)
+	cargo build -p xdp-dp
+	sudo -E $$(command -v cargo) test -p xdp-dp --test anchor_uplink -- --ignored --exact uplink_rx_bytecode_matches_native_sim
+
 .PHONY: conformance
 conformance: ## dpservice conformance suite vs `xdp-dp serve` (veth harness; needs sudo)
 	./test/conformance/run.sh

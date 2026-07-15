@@ -19,6 +19,14 @@ libc = "0.2"
 env_logger = "0.11"
 ipnet = "2"
 
+[dev-dependencies]
+# Native datapath sim: builds the encapped N-S input frame AND the native pure-core expected
+# output (SimNode) that the BPF_PROG_TEST_RUN anchor (tests/anchor_uplink.rs) compares the real
+# compiled bytecode against. xdp-dp-core supplies EncapParams/GW_MAC/Action for the fixture.
+xdp-dp-sim = { path = "../xdp-dp-sim" }
+xdp-dp-core = { path = "../xdp-dp-core" }
+etherparse = "0.15"
+
 [features]
 # Build a debug image: compiles the eBPF crate with its `debug` feature (dlog!/aya-log) via
 # build.rs. At runtime, set XDP_DP_DEBUG=1 so the loader installs the EbpfLogger drain; without
