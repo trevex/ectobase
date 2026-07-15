@@ -49,6 +49,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&NATGatewayList{},
 		&VirtualIP{},
 		&VirtualIPList{},
+		&CompiledNIC{},
+		&CompiledNICList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil

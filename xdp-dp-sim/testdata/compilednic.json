@@ -1,0 +1,34 @@
+{
+  "kind": "CompiledNIC",
+  "apiVersion": "net.ectobase.dev/v1alpha1",
+  "metadata": {
+    "name": "default-nic-frontend",
+    "namespace": "default"
+  },
+  "spec": {
+    "nodeName": "node-1",
+    "nicRef": {
+      "name": "nic-frontend"
+    },
+    "vni": 100,
+    "port": {
+      "type": "tap",
+      "name": "dtapvf_0"
+    },
+    "overlayIPs": [
+      "10.0.0.10"
+    ],
+    "underlayRoute": "2001:db8:fefe::bb",
+    "firewall": {
+      "ingress": [
+        {
+          "cidr": "10.0.0.0/24",
+          "proto": "TCP",
+          "port": 443,
+          "action": "Allow"
+        }
+      ]
+    }
+  },
+  "status": {}
+}

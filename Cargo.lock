@@ -2037,6 +2037,7 @@ name = "xdp-dp-sim"
 version = "0.1.0"
 dependencies = [
  "etherparse",
+ "serde",
  "serde_json",
  "xdp-dp-common",
  "xdp-dp-core",

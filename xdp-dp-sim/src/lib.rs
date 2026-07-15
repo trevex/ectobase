@@ -1,3 +1,4 @@
+pub mod compilednic;
 pub mod maps;
 pub mod pkt;
 pub mod sim;

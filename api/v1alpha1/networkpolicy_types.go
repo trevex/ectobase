@@ -8,10 +8,31 @@ import (
 )
 
 // NetworkPolicySpec is the desired state of a NetworkPolicy.
-//
-// SCAFFOLD ONLY: intentionally empty. Selector-based distributed firewall (§3.4).
-// Fleshed out in a later plan (YAGNI here).
 type NetworkPolicySpec struct {
+	// InterfaceSelector selects the NetworkInterfaces this policy applies to via label matching.
+	// +optional
+	InterfaceSelector *metav1.LabelSelector `json:"interfaceSelector,omitempty"`
+	// Ingress is the ordered list of ingress rules to apply to selected interfaces.
+	// +optional
+	Ingress []NetworkPolicyRule `json:"ingress,omitempty"`
+	// Egress is the ordered list of egress rules to apply to selected interfaces.
+	// +optional
+	Egress []NetworkPolicyRule `json:"egress,omitempty"`
+}
+
+// NetworkPolicyRule is a single allow/deny rule for ingress or egress traffic.
+type NetworkPolicyRule struct {
+	// CIDR is the source (ingress) or destination (egress) CIDR to match.
+	// "0.0.0.0/0" matches all addresses.
+	CIDR string `json:"cidr"`
+	// Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any).
+	// +optional
+	Proto string `json:"proto,omitempty"`
+	// Port is the destination port to match (0 = any).
+	// +optional
+	Port int32 `json:"port,omitempty"`
+	// Action is "Allow" or "Deny".
+	Action string `json:"action"`
 }
 
 // NetworkPolicyStatus is the observed state of a NetworkPolicy.
