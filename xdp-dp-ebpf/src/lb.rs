@@ -113,59 +113,10 @@ pub fn lb_select_forward_icmp_error(ctx: &XdpContext, ip_off: usize, vni: u32) -
 /// `ip_off` points to the inner IPv6 header (= ETH_LEN + outer_IPV6_LEN).
 #[inline(always)]
 pub fn lb_select_forward_v6(ctx: &XdpContext, ip_off: usize, vni: u32) -> Option<[u8; 16]> {
-    let data = ctx.data();
-    let data_end = ctx.data_end();
-    // Need inner IPv6 (40) + L4 header (at least 4 bytes for src/dst port).
-    if data + ip_off + 44 > data_end {
-        return None;
-    }
-    let p = data as *const u8;
-    let inner_nexthdr = unsafe { *p.add(ip_off + 6) };
-    // Only relay TCP/UDP (matching dpservice behaviour).
-    if inner_nexthdr != IPPROTO_TCP && inner_nexthdr != IPPROTO_UDP {
-        return None;
-    }
-    // Inner IPv6 src (offset 8, 16 bytes) and dst (offset 24, 16 bytes).
-    let inner_dst6 = unsafe { core::ptr::read_unaligned(p.add(ip_off + 24) as *const [u8; 16]) };
-    let inner_src6 = unsafe { core::ptr::read_unaligned(p.add(ip_off + 8) as *const [u8; 16]) };
-    // LB key uses the last 4 bytes of the IPv6 address (matching the control-plane `last4`).
-    let dst4: [u8; 4] = [
-        inner_dst6[12],
-        inner_dst6[13],
-        inner_dst6[14],
-        inner_dst6[15],
-    ];
-    let src4: [u8; 4] = [
-        inner_src6[12],
-        inner_src6[13],
-        inner_src6[14],
-        inner_src6[15],
-    ];
-    // L4 ports at ip_off + 40 (right after inner IPv6 header; no extension headers assumed).
-    let l4_off = ip_off + 40;
-    if data + l4_off + 4 > data_end {
-        return None;
-    }
-    let sport = u16::from_be(unsafe { core::ptr::read_unaligned(p.add(l4_off) as *const u16) });
-    let dport = u16::from_be(unsafe { core::ptr::read_unaligned(p.add(l4_off + 2) as *const u16) });
-    let lb = unsafe {
-        LB.get(&LbKey {
-            vni,
-            ipv4: dst4,
-            port: dport,
-            proto: inner_nexthdr,
-            _pad: 0,
-        })
-    }?;
-    if lb.size == 0 {
-        return None;
-    }
-    let slot = hash5(&src4, &dst4, sport, dport, inner_nexthdr) % lb.size;
-    let backend = unsafe {
-        MAGLEV.get(&MaglevKey {
-            table_id: lb.table_id,
-            slot,
-        })
-    }?;
-    Some(*backend)
+    xdp_dp_core::lb::lb_select_forward_v6(
+        &crate::coreimpl::CtxPkt { ctx },
+        &crate::coreimpl::GlobalMaps,
+        ip_off,
+        vni,
+    )
 }
