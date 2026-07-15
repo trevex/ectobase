@@ -1,12 +1,15 @@
 //! Native `SimNode` that runs the REAL `xdp_dp_core` datapath fns over the sim `VecPkt`/`MemMaps`.
-//! No parallel reimplementation: `edge_encap` calls `write_outer_v6`; `host_uplink` composes
-//! `fw_eval_dir` + `ct_create_default` + `decap_and_rewrite` in the exact order + gates of the
-//! eBPF `try_uplink_rx` base-delivery tail.
+//! No parallel reimplementation: `edge_encap` calls `write_outer_v6`; `uplink` composes the REAL
+//! core fns — `lb_select_forward` + `reforward` + `fw_eval_dir` + `ct_create_default` +
+//! `decap_and_rewrite` — in the exact order + gates of the eBPF `try_uplink_rx` LB/base tail
+//! (`ingress.rs` 135-157 dispatch + 245-304 tail). The LB-dispatch glue is composed here (as it is
+//! in the eBPF wrapper); the `BPF_PROG_TEST_RUN` anchor guards native==bytecode on the LB path.
 
-use xdp_dp_common::{FW_ACTION_DROP, FW_DIR_INGRESS};
+use xdp_dp_common::{Local, UnderlayValue, FW_ACTION_DROP, FW_DIR_INGRESS};
 use xdp_dp_core::conntrack::{ct_create_default, ct_key};
-use xdp_dp_core::encap::{write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
+use xdp_dp_core::encap::{reforward, write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
 use xdp_dp_core::firewall::fw_eval_dir;
+use xdp_dp_core::lb::lb_select_forward;
 use xdp_dp_core::maps::Maps;
 use xdp_dp_core::pkt::{Action, Pkt};
 use xdp_dp_core::uplink::decap_and_rewrite;
@@ -55,23 +58,44 @@ impl SimNode {
         p.into_bytes()
     }
 
-    /// Host: run the REAL base uplink path (ingress firewall on new+enforcing, conntrack create on
-    /// miss, then decap + inner-Ethernet rewrite) on an encapped frame. Mirrors the eBPF
-    /// `try_uplink_rx` tail's ordering and gates. Returns the final `Action` + decapped bytes.
-    ///
-    /// The inner IPv4 is at `ETH_LEN + IPV6_LEN` pre-decap (outer Eth+IPv6 precede the bare IPv4).
-    pub fn host_uplink(
+    /// Host uplink_rx for the LB + base path. `u` is `UNDERLAY[outer_dst]` (this node's resolved
+    /// vni + base tap); `outer_dst` is the encapped frame's current outer IPv6 dst; `local` supplies
+    /// the outer MACs/ifindex for an LB remote `reforward`. Mirrors `try_uplink_rx`:
+    ///   1. `lb_select_forward` → local backend (deliver to its tap) | remote (reforward, no decap)
+    ///      | None (base tap);
+    ///   2. ingress firewall on the inner 5-tuple against the deliver tap (new-flow gate);
+    ///   3. conntrack create-on-miss, **skipped for LB** (DSR, no ct — `ingress.rs:266`);
+    ///   4. decap + inner-Ethernet rewrite.
+    /// Returns the final `Action` + the resulting frame bytes.
+    pub fn uplink(
         &mut self,
         encapped: &[u8],
         vni: u32,
-        tap: u32,
-        guest_mac: [u8; 6],
+        u: UnderlayValue,
+        outer_dst: [u8; 16],
+        local: &Local,
     ) -> SimOut {
-        use xdp_dp_core::encap::ETH_LEN;
         let inner_off = ETH_LEN + IPV6_LEN;
         let mut pkt = VecPkt::from_bytes(encapped);
 
-        // 1. Ingress firewall: enforce the tap's INGRESS rules on NEW inbound flows only.
+        // 1. LB dispatch (mirror ingress.rs:135-157).
+        let lb_ul = lb_select_forward(&pkt, &self.maps, inner_off, vni);
+        let (tap, guest_mac, is_lb) = match lb_ul {
+            Some(bul) => match self.maps.underlay_get(&bul) {
+                Some(bu) => (bu.tap_ifindex, bu.guest_mac, true), // LB backend local
+                None => {
+                    // Remote backend: reforward the encapped frame, no decap.
+                    let action = reforward(&mut pkt, local, &outer_dst, &bul);
+                    return SimOut {
+                        action,
+                        pkt: pkt.into_bytes(),
+                    };
+                }
+            },
+            None => (u.tap_ifindex, u.guest_mac, false), // non-LB base
+        };
+
+        // 2. Ingress firewall on NEW inbound flows against the deliver tap.
         if let Some(key) = ct_key(&pkt, inner_off, vni) {
             if self.maps.conntrack_get(&key).is_none()
                 && fw_eval_dir(&pkt, &self.maps, inner_off, tap, FW_DIR_INGRESS) == FW_ACTION_DROP
@@ -84,15 +108,16 @@ impl SimNode {
             }
         }
 
-        // 2. Conntrack: create a DEFAULT entry on miss (base path, non-LB/non-NAT). `now`=0 in sim.
-        if let Some(key) = ct_key(&pkt, inner_off, vni) {
-            if self.maps.conntrack_get(&key).is_none() {
-                ct_create_default(&pkt, &mut self.maps, inner_off, vni, 0);
+        // 3. Conntrack: create on miss, but ONLY for non-LB (LB is DSR — no ct, ingress.rs:266).
+        if !is_lb {
+            if let Some(key) = ct_key(&pkt, inner_off, vni) {
+                if self.maps.conntrack_get(&key).is_none() {
+                    ct_create_default(&pkt, &mut self.maps, inner_off, vni, 0);
+                }
             }
-            // else: eBPF calls ct_touch (last_seen refresh) — a no-op for observable base state.
         }
 
-        // 3+4. Decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest.
+        // 4. Decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest.
         let action = match decap_and_rewrite(&mut pkt, tap, guest_mac) {
             Ok(a) => a,
             Err(()) => Action::Drop,
@@ -101,5 +126,30 @@ impl SimNode {
             action,
             pkt: pkt.into_bytes(),
         }
+    }
+
+    /// Convenience wrapper for a plain non-LB delivery to `tap` (used by `ns_scenario_test`): builds
+    /// a base `UnderlayValue` and delegates to [`SimNode::uplink`]. With no LB maps set,
+    /// `lb_select_forward` returns None and the base path runs.
+    pub fn host_uplink(
+        &mut self,
+        encapped: &[u8],
+        vni: u32,
+        tap: u32,
+        guest_mac: [u8; 6],
+    ) -> SimOut {
+        let u = UnderlayValue {
+            vni,
+            tap_ifindex: tap,
+            guest_mac,
+            _pad: [0; 2],
+        };
+        let local = Local {
+            uplink_ifindex: 0,
+            uplink_mac: [0; 6],
+            gateway_mac: [0; 6],
+            underlay_ipv6: [0; 16],
+        };
+        self.uplink(encapped, vni, u, [0u8; 16], &local)
     }
 }
