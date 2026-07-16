@@ -39,6 +39,13 @@ impl Interfaces {
     pub fn get(&self, key: &IfaceKey) -> Option<IfaceValue> {
         self.map.get(key, 0).ok()
     }
+
+    /// Snapshot every (key, value) — used at restart to rebuild in-memory bookkeeping from the
+    /// surviving pinned map. Mirrors `Conntrack::entries`. (Wired in by Task 5's restart path.)
+    #[allow(dead_code)]
+    pub fn entries(&self) -> Vec<(IfaceKey, IfaceValue)> {
+        self.map.iter().filter_map(|r| r.ok()).collect()
+    }
 }
 
 /// Typed handle over the single-entry `LOCAL` Array map.
@@ -412,6 +419,14 @@ impl Underlay {
 
     pub fn get(&self, key: &[u8; 16]) -> Option<UnderlayValue> {
         self.map.get(key, 0).ok()
+    }
+
+    /// Every underlay /128 currently programmed — used at restart to rebuild `UnderlayIpam`'s
+    /// used-set (via `mark_used`) so a recovered live allocation is never reissued. (Wired in by
+    /// Task 5's restart path.)
+    #[allow(dead_code)]
+    pub fn keys(&self) -> Vec<[u8; 16]> {
+        self.map.keys().filter_map(|r| r.ok()).collect()
     }
 }
 
