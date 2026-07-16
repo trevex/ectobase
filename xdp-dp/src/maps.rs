@@ -552,7 +552,12 @@ mod tests {
     #[ignore = "requires root/CAP_BPF; run via: sudo -E <test-bin> --include-ignored"]
     fn interfaces_roundtrip_through_bpf_map() {
         // Requires CAP_BPF/root and a real kernel; run the test binary under `sudo -E`.
-        let mut ebpf = crate::loader::load_ebpf().expect("load ebpf object");
+        // The `pinned` state maps need a bpffs `map_pin_path`; a private tempdir isolates this run.
+        let pin = tempfile::Builder::new()
+            .prefix("xdp-dp-maps-test-")
+            .tempdir_in("/sys/fs/bpf")
+            .expect("bpffs tempdir");
+        let mut ebpf = crate::loader::load_ebpf(pin.path()).expect("load ebpf object");
         let mut ifaces = Interfaces::open(&mut ebpf).expect("open INTERFACES");
         let k = IfaceKey::new(100, [10, 0, 0, 5]);
         let v = IfaceValue {

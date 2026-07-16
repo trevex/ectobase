@@ -27,6 +27,9 @@ ipnet = "2"
 xdp-dp-sim = { path = "../xdp-dp-sim" }
 xdp-dp-core = { path = "../xdp-dp-core" }
 etherparse = "0.15"
+# Per-run bpffs pin dir for the anchor/verifier tests: the state maps are declared `pinned`, so
+# every load path (including the inline EbpfLoader tests) must set a `map_pin_path` on a bpffs.
+tempfile = { workspace = true }
 
 [features]
 # Build a debug image: compiles the eBPF crate with its `debug` feature (dlog!/aya-log) via

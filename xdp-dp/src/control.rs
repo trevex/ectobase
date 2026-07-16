@@ -1,5 +1,6 @@
 use parking_lot::Mutex;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -221,8 +222,9 @@ impl Control {
         uplink_mac: [u8; 6],
         gateway_mac: [u8; 6],
         underlay_ipv6: [u8; 16],
+        pin_dir: &Path,
     ) -> anyhow::Result<Self> {
-        let mut ebpf = loader::load_ebpf()?;
+        let mut ebpf = loader::load_ebpf(pin_dir)?;
         loader::maybe_install_logger(&mut ebpf);
         // The uplink RX path is always XDP, regardless of the guest edge attach mode.
         loader::attach_xdp(&mut ebpf, "uplink_rx", uplink)?;
@@ -1899,7 +1901,14 @@ impl Control {
     /// so the test needs only CAP_BPF (a real kernel), not a live uplink. Used to exercise the
     /// userspace control plane's map programming (e.g. `create_lb`'s UNDERLAY writes) in isolation.
     fn from_ebpf_for_test() -> anyhow::Result<Self> {
-        let mut ebpf = loader::load_ebpf()?;
+        // Unique per-run bpffs dir: the `pinned` state maps need a `map_pin_path`, and a private
+        // dir keeps this test's maps isolated from any other test in the same process. The maps
+        // outlive the tempdir via the `ebpf` handle, so cleanup on drop is fine.
+        let pin = tempfile::Builder::new()
+            .prefix("xdp-dp-ctrl-test-")
+            .tempdir_in("/sys/fs/bpf")
+            .context("bpffs tempdir")?;
+        let mut ebpf = loader::load_ebpf(pin.path())?;
         let guest_progs = loader::register_guest_dhcp_tc(&mut ebpf)?;
         let mut locals = LocalMap::open(&mut ebpf)?;
         locals.set(&Local {

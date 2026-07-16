@@ -242,7 +242,13 @@ fn uplink_rx_lb_deliver_bytecode_matches_native_sim() {
     //    xdp-dp is binary-only, so the load is inlined). Populate the maps the LB local-deliver
     //    path reads: UNDERLAY, LB, MAGLEV, FW_META/FW_RULES, LOCAL.
     let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/xdp-dp-prog"));
+    // The state maps are declared `pinned`, so the loader needs a bpffs `map_pin_path`.
+    let pin = tempfile::Builder::new()
+        .prefix("xdp-dp-anchor-lb-")
+        .tempdir_in("/sys/fs/bpf")
+        .expect("bpffs tempdir");
     let mut ebpf = aya::EbpfLoader::new()
+        .map_pin_path(pin.path())
         .load(bytes)
         .expect("load compiled eBPF object");
 

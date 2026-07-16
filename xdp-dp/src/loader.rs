@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use aya::maps::{MapData, ProgramArray};
@@ -21,9 +21,16 @@ use aya::Ebpf;
 /// | PORT_META  | XDP_DP_PORT_META_MAX     | 1_024                |
 ///
 /// Unset variables leave the compile-time `with_max_entries` default in place.
-pub fn load_ebpf() -> anyhow::Result<Ebpf> {
+///
+/// `pin_dir` is where ByName-pinned maps live and MUST be set: the state maps are declared
+/// `pinned` (a `pinned` map with no `map_pin_path` fails to load). A fresh run passes a per-run
+/// dir (see [`ephemeral_pin_dir`]) so the maps are created+pinned there and behaviour matches a
+/// non-pinned load; a restart passes the persistent bpffs dir so the reloaded programs re-bind to
+/// the surviving maps instead of creating fresh ones.
+pub fn load_ebpf(pin_dir: &Path) -> anyhow::Result<Ebpf> {
     let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/xdp-dp-prog"));
     let mut loader = aya::EbpfLoader::new();
+    loader.map_pin_path(pin_dir);
     // Map name -> env var. Unset => keep the compile-time `with_max_entries` default.
     for (map, var) in [
         ("CONNTRACK", "XDP_DP_CONNTRACK_MAX"),
@@ -42,6 +49,19 @@ pub fn load_ebpf() -> anyhow::Result<Ebpf> {
         }
     }
     loader.load(bytes).context("load ebpf object")
+}
+
+/// A per-process bpffs pin dir for load paths that do NOT persist datapath state across a restart:
+/// the debug/lab subcommands (`Load`/`Pass`/`Inspect`/`TcBringup`, and `Bringup` without `--pin-dir`).
+/// The state maps are declared `pinned`, so every load needs *some* bpffs `map_pin_path`; these
+/// callers get a private `/sys/fs/bpf/xdp-dp-eph-<pid>` dir. Nothing here is meant to survive — the
+/// maps stay alive via the returned handles even after this dir is removed — so the persistent
+/// adopt path (production `Serve`) never uses it.
+pub fn ephemeral_pin_dir() -> anyhow::Result<PathBuf> {
+    let dir = PathBuf::from(format!("/sys/fs/bpf/xdp-dp-eph-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("create ephemeral pin dir {}", dir.display()))?;
+    Ok(dir)
 }
 
 /// Install the aya-log `EbpfLogger` that drains the datapath's `dlog!` messages to the `log`
@@ -259,9 +279,10 @@ pub fn attach_tc_clsact_ingress_link(
     prog.take_link(link_id).context("take tc link")
 }
 
-/// Load the eBPF object and attach `uplink_rx` to the named uplink interface.
-pub fn attach_uplink(iface: &str) -> anyhow::Result<Ebpf> {
-    let mut ebpf = load_ebpf()?;
+/// Load the eBPF object and attach `uplink_rx` to the named uplink interface. `pin_dir` is the
+/// bpffs `map_pin_path` for the load (debug `Load` command passes [`ephemeral_pin_dir`]).
+pub fn attach_uplink(iface: &str, pin_dir: &Path) -> anyhow::Result<Ebpf> {
+    let mut ebpf = load_ebpf(pin_dir)?;
     attach_xdp(&mut ebpf, "uplink_rx", iface)?;
     Ok(ebpf)
 }
@@ -332,8 +353,14 @@ mod tests {
     #[ignore = "requires root/CAP_BPF; loads programs through the verifier"]
     fn both_programs_pass_verifier() {
         let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/xdp-dp-prog"));
+        // The state maps are declared `pinned`, so the loader needs a bpffs `map_pin_path`.
+        let pin = tempfile::Builder::new()
+            .prefix("xdp-dp-verify-")
+            .tempdir_in("/sys/fs/bpf")
+            .expect("bpffs tempdir");
         let mut ebpf = EbpfLoader::new()
             .verifier_log_level(VerifierLogLevel::VERBOSE | VerifierLogLevel::STATS)
+            .map_pin_path(pin.path())
             .load(bytes)
             .expect("load ebpf object");
         for name in ["uplink_rx", "guest_tx", "guest_dhcp"] {

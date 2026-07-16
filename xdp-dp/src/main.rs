@@ -337,7 +337,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::Load { uplink } => {
-            let _ebpf = loader::attach_uplink(&uplink)?;
+            let _ebpf = loader::attach_uplink(&uplink, &loader::ephemeral_pin_dir()?)?;
             println!("attached uplink_rx to {uplink}; ctrl-c to detach");
             tokio::signal::ctrl_c().await?;
         }
@@ -375,12 +375,16 @@ async fn main() -> anyhow::Result<()> {
                 Some(s) => parse_ipv6(s)?,
                 None => [0u8; 16],
             };
+            // Task 1: Serve loads into a fresh ephemeral pin dir, so behaviour is identical to the
+            // pre-pinning daemon. Task 5 replaces this with the persistent `--pin-dir` + adopt path.
+            let serve_pin_dir = loader::ephemeral_pin_dir()?;
             let ctrl = control::Control::bring_up(
                 &uplink,
                 ifindex(&uplink)?,
                 mac_of(&uplink)?,
                 parse_mac(&gateway_mac)?,
                 underlay,
+                &serve_pin_dir,
             )?;
             // WAN-edge role: attach wan_rx to the WAN uplink + register the local-deliver edge
             // underlay so this sidecar handles both egress decap and NAT-return re-encap.
@@ -502,7 +506,13 @@ async fn main() -> anyhow::Result<()> {
                 // SAFETY: single-threaded CLI startup, before any datapath thread is spawned.
                 std::env::set_var("XDP_DP_CONNTRACK_MAX", n.to_string());
             }
-            let mut ebpf = loader::load_ebpf()?;
+            // A `--pin-dir` bringup reuses/creates its pinned state maps there; without one, a fresh
+            // ephemeral dir keeps the `pinned` maps satisfiable while behaving like a throwaway load.
+            let map_pin_dir = match pin_dir.as_deref() {
+                Some(d) => std::path::PathBuf::from(d),
+                None => loader::ephemeral_pin_dir()?,
+            };
+            let mut ebpf = loader::load_ebpf(&map_pin_dir)?;
             loader::maybe_install_logger(&mut ebpf);
 
             // Pass 1: attach ALL XDP programs while ebpf is still fully intact
@@ -1119,7 +1129,7 @@ async fn main() -> anyhow::Result<()> {
             guest6,
             remotes6,
         } => {
-            let mut ebpf = loader::load_ebpf()?;
+            let mut ebpf = loader::load_ebpf(&loader::ephemeral_pin_dir()?)?;
             loader::maybe_install_logger(&mut ebpf);
             let tap_ifindex = ifindex(&tap)?;
             let guest_mac = parse_mac(&guest_mac)?;
@@ -1253,13 +1263,13 @@ async fn main() -> anyhow::Result<()> {
             tokio::signal::ctrl_c().await?;
         }
         Cmd::Pass { iface } => {
-            let mut ebpf = loader::load_ebpf()?;
+            let mut ebpf = loader::load_ebpf(&loader::ephemeral_pin_dir()?)?;
             loader::attach_xdp(&mut ebpf, "xdp_pass", &iface)?;
             println!("attached xdp_pass to {iface}; ctrl-c to detach");
             tokio::signal::ctrl_c().await?;
         }
         Cmd::Inspect { iface } => {
-            let mut ebpf = loader::load_ebpf()?;
+            let mut ebpf = loader::load_ebpf(&loader::ephemeral_pin_dir()?)?;
 
             // Try native (driver) mode first; fall back to SKB (generic) mode if rejected.
             let prog: &mut aya::programs::Xdp = ebpf

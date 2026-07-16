@@ -186,7 +186,13 @@ fn uplink_rx_bytecode_matches_native_sim() {
     //    lib target, so the load is inlined here rather than imported). Then populate the maps
     //    uplink_rx reads on the base-delivery path: UNDERLAY, FW_META/FW_RULES, LOCAL.
     let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/xdp-dp-prog"));
+    // The state maps are declared `pinned`, so the loader needs a bpffs `map_pin_path`.
+    let pin = tempfile::Builder::new()
+        .prefix("xdp-dp-anchor-uplink-")
+        .tempdir_in("/sys/fs/bpf")
+        .expect("bpffs tempdir");
     let mut ebpf = aya::EbpfLoader::new()
+        .map_pin_path(pin.path())
         .load(bytes)
         .expect("load compiled eBPF object");
 

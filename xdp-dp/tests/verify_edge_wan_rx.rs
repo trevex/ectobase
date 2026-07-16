@@ -16,7 +16,13 @@ use aya::programs::Xdp;
 fn wan_rx_devmap_redirect_verifies() {
     // Load the real compiled eBPF object the same way the daemon (and the anchors) do.
     let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/xdp-dp-prog"));
+    // The state maps are declared `pinned`, so the loader needs a bpffs `map_pin_path`.
+    let pin = tempfile::Builder::new()
+        .prefix("xdp-dp-verify-wan-rx-")
+        .tempdir_in("/sys/fs/bpf")
+        .expect("bpffs tempdir");
     let mut ebpf = aya::EbpfLoader::new()
+        .map_pin_path(pin.path())
         .load(bytes)
         .expect("load compiled eBPF object (creates all maps, incl UPLINK_DEV)");
 

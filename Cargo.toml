@@ -25,3 +25,4 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 network-types = "0.0.7"
 parking_lot = "0.12"
+tempfile = "3"
