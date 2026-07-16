@@ -491,13 +491,36 @@ async fn main() -> anyhow::Result<()> {
                 .set_service_status("", tonic_health::ServingStatus::Serving)
                 .await;
             println!("serving DPDKironcore on {addr}");
+            // Graceful shutdown that PRESERVES the pinned datapath: stop the gRPC server on SIGINT
+            // (ctrl-c) or SIGTERM (kubelet/`docker stop` send SIGTERM, not SIGINT) WITHOUT any
+            // map/link unpin. Pinned maps survive the process exit unconditionally, so the next
+            // process adopts them; the programs re-attach fresh on that restart. Do NOT add cleanup
+            // here — that would defeat the whole point of pinning.
+            let shutdown = async {
+                let mut term =
+                    match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    {
+                        Ok(t) => t,
+                        Err(e) => {
+                            eprintln!("cannot install SIGTERM handler ({e}); ctrl-c only");
+                            // Fall back to ctrl-c only.
+                            let _ = tokio::signal::ctrl_c().await;
+                            return;
+                        }
+                    };
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = term.recv() => {}
+                }
+                println!("shutting down; pinned datapath preserved for adopt on restart");
+            };
             tonic::transport::Server::builder()
                 .add_service(health_service)
                 .add_service(server)
                 .add_service(node::pb::dataplane_node_server::DataplaneNodeServer::new(
                     node::NodeService::new(attach_state),
                 ))
-                .serve(addr.parse()?)
+                .serve_with_shutdown(addr.parse()?, shutdown)
                 .await?;
         }
         Cmd::Bringup {
