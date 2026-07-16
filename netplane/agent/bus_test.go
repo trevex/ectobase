@@ -244,6 +244,35 @@ func TestAgentWithdrawsRemovedRouteToSubscriber(t *testing.T) {
 	})
 }
 
+// TestPruneOnEndOfRIB proves the learner side: a route installed in a prior session that is NOT
+// replayed in the new session's snapshot is withdrawn when EndOfRIB arrives; one that IS replayed
+// survives. This is what removes routes that left the RIB while the agent was disconnected.
+func TestPruneOnEndOfRIB(t *testing.T) {
+	ctx := context.Background()
+	dp := newFakeDP()
+	b := NewBus("nodeB", "fd00::b", dp, false)
+
+	// Session 1: learn two routes in vni 100.
+	stale := &rbv1.RouteUpdate{Vni: 100, Prefix: "10.0.0.1/32", Nexthops: []string{"fd00::a"}, Op: rbv1.RouteOp_ROUTE_OP_ADD}
+	kept := &rbv1.RouteUpdate{Vni: 100, Prefix: "10.0.0.2/32", Nexthops: []string{"fd00::a"}, Op: rbv1.RouteOp_ROUTE_OP_ADD}
+	b.apply(ctx, stale)
+	b.apply(ctx, kept)
+
+	// Reconnect: Run resets the per-session seen set (done inline here). Only 10.0.0.2 is replayed.
+	b.seen = map[uint32]map[string]bool{}
+	b.apply(ctx, kept)
+
+	// EndOfRIB(100): 10.0.0.1 was not re-seen → pruned; 10.0.0.2 was → kept.
+	b.handleServerMsg(ctx, &rbv1.ServerMsg{Msg: &rbv1.ServerMsg_EndOfRib{EndOfRib: &rbv1.EndOfRIB{Vni: 100}}})
+
+	if !dp.withdrew[key(100, "10.0.0.1/32")] {
+		t.Fatalf("stale route (not replayed) must be pruned on EndOfRIB")
+	}
+	if dp.withdrew[key(100, "10.0.0.2/32")] {
+		t.Fatalf("replayed route must NOT be pruned")
+	}
+}
+
 func waitFor(t *testing.T, d time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(d)

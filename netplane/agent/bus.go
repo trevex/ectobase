@@ -83,6 +83,14 @@ type Bus struct {
 	egressVNIs    []uint32          // local VNIs that import the public default(s); set each reconcile
 	learnedPublic map[string]string // public-VNI prefix -> nexthop (recorded, imported into egressVNIs)
 
+	// installed[vni] is the set of directly-installed (non public-VNI) route prefixes this Bus has
+	// programmed on the dataplane. It PERSISTS across reconnects (the dataplane outlives a session)
+	// so prune-on-EndOfRIB can remove routes that vanished from the RIB while we were disconnected.
+	installed map[uint32]map[string]bool
+	// seen[vni] is the set of prefixes (re)learned in the CURRENT session's snapshot; reset at each
+	// session open. On EndOfRIB(vni) any installed[vni] prefix not in seen[vni] is stale → withdrawn.
+	seen map[uint32]map[string]bool
+
 	// reconcileEvery is how often Run recomputes the desired announcement set and pushes deltas onto
 	// the live stream. Tests override it for fast convergence.
 	reconcileEvery time.Duration
@@ -97,6 +105,8 @@ func NewBus(nodeID, underlay string, dp Dataplane, isEdge bool) *Bus {
 	return &Bus{
 		nodeID: nodeID, underlay: underlay, dp: dp, isEdge: isEdge,
 		learnedEdge: map[string]string{}, learnedPublic: map[string]string{},
+		installed:      map[uint32]map[string]bool{},
+		seen:           map[uint32]map[string]bool{},
 		reconcileEvery: defaultReconcileEvery,
 	}
 }
@@ -121,6 +131,10 @@ func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, reconcile func(co
 	}}); err != nil {
 		return err
 	}
+	// New session: the reflector will replay each subscribed VNI's snapshot then send EndOfRIB. Reset
+	// the per-session "seen" set so prune-on-EndOfRIB removes routes that left the RIB while we were
+	// disconnected (installed[] persists across sessions; the dataplane still holds those routes).
+	b.seen = map[uint32]map[string]bool{}
 
 	recvCh := make(chan *rbv1.ServerMsg, 64)
 	recvErr := make(chan error, 1)
@@ -201,7 +215,51 @@ func (b *Bus) handleServerMsg(ctx context.Context, msg *rbv1.ServerMsg) {
 	if pu := msg.GetPublicUpdate(); pu != nil {
 		b.applyPublic(pu.GetPrefix(), pu.GetOp())
 	}
-	// EndOfRIB / KeepAlive: v1 no-op (learner-side prune-on-EoR is a follow-up).
+	if eor := msg.GetEndOfRib(); eor != nil {
+		b.pruneVNI(ctx, eor.GetVni())
+	}
+	// KeepAlive: no-op. Global NAT/public records have no EoR marker; they re-converge via the
+	// owner's steady-state withdraw + the reflector's DropOrigin on disconnect.
+}
+
+// pruneVNI removes any directly-installed route in vni that was NOT (re)seen in this session's
+// snapshot — i.e. a route that left the RIB (peer withdrew, or its owner disconnected) while this
+// node was disconnected, and would otherwise linger on the dataplane as a stale blackhole/misroute.
+func (b *Bus) pruneVNI(ctx context.Context, vni uint32) {
+	inst := b.installed[vni]
+	seen := b.seen[vni]
+	for prefix := range inst {
+		if seen[prefix] {
+			continue
+		}
+		if err := b.dp.WithdrawRoute(ctx, vni, prefix); err != nil {
+			log.Printf("prune WithdrawRoute vni=%d %s: %v", vni, prefix, err)
+			continue
+		}
+		delete(inst, prefix)
+	}
+	if len(inst) == 0 {
+		delete(b.installed, vni)
+	}
+}
+
+// markInstalled / markSeen / markWithdrawn maintain the directly-installed route set used by
+// prune-on-EndOfRIB. Called only from the Run goroutine (apply), so no locking.
+func (b *Bus) markInstalled(vni uint32, prefix string) {
+	if b.installed[vni] == nil {
+		b.installed[vni] = map[string]bool{}
+	}
+	b.installed[vni][prefix] = true
+	if b.seen[vni] == nil {
+		b.seen[vni] = map[string]bool{}
+	}
+	b.seen[vni][prefix] = true
+}
+
+func (b *Bus) markWithdrawn(vni uint32, prefix string) {
+	if m := b.installed[vni]; m != nil {
+		delete(m, prefix)
+	}
 }
 
 // sendDelta writes one busDelta to the stream: subscribes + announces first (so we start receiving
@@ -332,11 +390,15 @@ func (b *Bus) apply(ctx context.Context, ru *rbv1.RouteUpdate) {
 	case rbv1.RouteOp_ROUTE_OP_ADD:
 		if err := b.dp.AddRoute(ctx, ru.Vni, ru.Prefix, nh, ru.External); err != nil {
 			log.Printf("AddRoute vni=%d %s -> %s external=%t: %v", ru.Vni, ru.Prefix, nh, ru.External, err)
+			return
 		}
+		b.markInstalled(ru.Vni, ru.Prefix)
 	case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
 		if err := b.dp.WithdrawRoute(ctx, ru.Vni, ru.Prefix); err != nil {
 			log.Printf("WithdrawRoute vni=%d %s: %v", ru.Vni, ru.Prefix, err)
+			return
 		}
+		b.markWithdrawn(ru.Vni, ru.Prefix)
 	}
 }
 

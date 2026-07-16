@@ -88,10 +88,11 @@ func main() {
 		return agent.DesiredState{Subs: subs, Routes: routes, Nats: nats, Pubs: pubs, EgressVNIs: egressVNIs}, nil
 	}
 
-	// Run the bus session; on disconnect, retry (the reflector fast-withdrew us, and the next Run
-	// re-announces the full desired set from scratch).
+	// One Bus for the process lifetime: its installed-route bookkeeping must survive reconnects so
+	// prune-on-EndOfRIB can remove routes that left the RIB while we were disconnected. On disconnect,
+	// retry (the reflector fast-withdrew our announcements; the next Run re-announces from scratch).
+	bus := agent.NewBus(*nodeID, *underlay, dp, *edgeLoopback != "")
 	for {
-		bus := agent.NewBus(*nodeID, *underlay, dp, *edgeLoopback != "")
 		if err := bus.Run(ctx, rb, reconcile); err != nil {
 			log.Printf("bus session ended: %v; reconnecting", err)
 		}
