@@ -335,8 +335,9 @@ fn link_pin_path(pin_dir: &Path, name: &str) -> std::path::PathBuf {
     pin_dir.join("links").join(name)
 }
 
-/// Attach an already-loaded XDP `prog` to `iface` and pin the link to `<pin_dir>/links/<name>` so it
-/// survives this process exiting. The bpffs pin owns the attachment; the caller need not hold a handle.
+/// Attach XDP `prog` to `iface` and pin the link to `<pin_dir>/links/<name>` so it survives this
+/// process exiting. The bpffs pin owns the attachment; the caller need not hold a handle. Loads the
+/// program if it is not already loaded (uplink_rx/wan_rx are not pre-loaded in bring_up).
 pub fn attach_xdp_pinned_at(
     ebpf: &mut Ebpf,
     prog: &str,
@@ -348,6 +349,9 @@ pub fn attach_xdp_pinned_at(
         .program_mut(prog)
         .with_context(|| format!("{prog} missing"))?
         .try_into()?;
+    if p.fd().is_err() {
+        p.load().with_context(|| format!("load {prog}"))?;
+    }
     let id = if std::env::var_os("XDP_DP_SKB_MODE").is_some() {
         p.attach(iface, aya::programs::XdpFlags::SKB_MODE)
             .with_context(|| format!("attach {prog} to {iface} (SKB_MODE)"))?
@@ -420,6 +424,9 @@ pub fn attach_tc_pinned_at(
         .program_mut(prog)
         .with_context(|| format!("tc {prog} missing"))?
         .try_into()?;
+    if p.fd().is_err() {
+        p.load().with_context(|| format!("load {prog}"))?;
+    }
     let id = p
         .attach(iface, aya::programs::TcAttachType::Ingress)
         .with_context(|| format!("attach {prog} to {iface}"))?;
