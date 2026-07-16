@@ -73,7 +73,9 @@ RUN cargo +nightly-2026-01-15 build --release -p xdp-dp \
 # net_tap PMD used to make) AND the datapath (`xdp-dp serve`) — one image, no extra init image.
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends iproute2 \
+# iproute2 for veth/netns setup; ethtool to disable tx-checksum offload on guest veths (their
+# CHECKSUM_PARTIAL packets would otherwise be encapped with a stale/partial inner L4 checksum).
+RUN apt-get update && apt-get install -y --no-install-recommends iproute2 ethtool \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /xdp-dp /usr/local/bin/xdp-dp

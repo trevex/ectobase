@@ -103,16 +103,18 @@ echo "== [5b] fix VyOS WAN default (clab injects a competing mgmt default — ha
 for e in edge1 edge2; do sudo docker exec clab-xdp-ipv6-fabric-$e ip route replace default via 172.29.0.1 dev eth2 >/dev/null 2>&1; done
 sudo ip route replace 203.0.113.0/28 nexthop via 172.29.0.11 dev clabwan nexthop via 172.29.0.12 dev clabwan
 
-echo "== [6] start an external HTTP server on the clabwan bridge ($HTTP_HOST:$HTTP_PORT) =="
-sudo pkill -f "http.server $HTTP_PORT" 2>/dev/null || true
-( cd /tmp && sudo nohup python3 -m http.server "$HTTP_PORT" --bind "$HTTP_HOST" >/tmp/httpsrv.log 2>&1 & ) 2>/dev/null
-sleep 1
-
-echo "== [7] stage curl (busybox) + attempt HTTP GET from the pod =="
+echo "== [6] stage busybox for the pod's ICMP + HTTP checks =="
 CID=$(sudo docker create busybox:musl 2>/dev/null); sudo docker cp "$CID":/bin/busybox /tmp/busybox-musl >/dev/null 2>&1; sudo docker rm "$CID" >/dev/null 2>&1
 sudo docker cp /tmp/busybox-musl "$SRC_NODE":/busybox 2>/dev/null
-echo "  --- pod egress reachability (ICMP first) ---"
+
+echo "== [7] the pod reaches the REAL internet (ICMP + HTTP) through NAT =="
+# ICMP to a controlled host on the WAN bridge (proves the return hop deterministically).
+echo "  --- ICMP -> $HTTP_HOST (clabwan host) ---"
 sudo docker exec "$SRC_NODE" ip netns exec "$NIC" /busybox ping -c 3 -W 2 "$HTTP_HOST" 2>&1 | grep -E "packets transmitted" | sed 's/^/  /'
-echo "  --- HTTP GET http://$HTTP_HOST:$HTTP_PORT/ ---"
-sudo docker exec "$SRC_NODE" ip netns exec "$NIC" /busybox wget -T 5 -O - "http://$HTTP_HOST:$HTTP_PORT/" 2>&1 | head -5 | sed 's/^/  /'
-echo "== done (if HTTP/ICMP still fails, the egress emits but the RETURN hop to the container is the open item) =="
+# HTTP to a real internet server by IP (bypasses the host's inbound firewall; exercises the double
+# NAT: dataplane SNAT + the clabwan host masquerade). 1.1.1.1 answers HTTP with a 301 -> proves the
+# full TCP round-trip incl. the tx-checksum fix (guest CHECKSUM_PARTIAL would otherwise be dropped).
+INET_HTTP="${INET_HTTP:-1.1.1.1}"
+echo "  --- HTTP GET http://$INET_HTTP/ (real internet) ---"
+sudo docker exec "$SRC_NODE" ip netns exec "$NIC" /busybox wget -T 8 -S -O /dev/null "http://$INET_HTTP/" 2>&1 | grep -iE "HTTP/|Location:|moved|OK" | head -3 | sed 's/^/  /'
+echo "== done =="

@@ -196,6 +196,16 @@ impl AttachState {
         )
         .context("set guest veth mac")?;
         run_netns(netns_path, &["ip", "link", "set", guest_name, "up"]).context("guest veth up")?;
+        // Disable tx-checksum offload on the guest end: the guest stack otherwise emits TCP/UDP with
+        // CHECKSUM_PARTIAL (a pseudo-header-only partial csum, finalized "by hardware"). Our tc guest
+        // edge SNATs (incremental csum update) + encapsulates and redirects, bypassing the xmit-time
+        // finalization — so the inner L4 checksum reaches the wire partial/wrong and the peer drops
+        // the segment (ICMP is immune; it has no offload). Forcing full csums here makes the SNAT's
+        // incremental update land on a valid checksum. Best-effort: don't fail attach if unavailable.
+        let _ = run_netns(
+            netns_path,
+            &["ethtool", "-K", guest_name, "tx-checksum-ip-generic", "off"],
+        );
         // Give the HOST end the SAME (guest) MAC, then bring it up. `create_interface` derives the
         // datapath `guest_mac` from `mac_of(host)` (the "tap" it attaches the guest edge to), and the
         // local fast path rewrites a locally-delivered frame's dst to that `guest_mac`. If the host
