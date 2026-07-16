@@ -1,5 +1,7 @@
 # Graceful Datapath Restart Implementation Plan
 
+> **Context:** This is item #1 (graceful restart) of the 2026-07-16 hardening backlog — see the `review-hardening-backlog` memory. Branch: `hardening/resilience-security`. Foundation `UnderlayIpam::mark_used` already merged (6f2f089).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the `xdp-dp` dataplane survive a process restart (DaemonSet roll / crash / OOM) without dropping the node's overlay datapath or reissuing a live guest underlay `/128`.
