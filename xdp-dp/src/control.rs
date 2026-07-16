@@ -241,13 +241,19 @@ impl Control {
         loader::maybe_install_logger(&mut ebpf);
         // The uplink RX path is always XDP, regardless of the guest edge attach mode.
         if pin_links {
-            loader::attach_xdp_pinned_at(
-                &mut ebpf,
-                "uplink_rx",
-                uplink,
-                pin_dir,
-                &format!("uplink-{uplink}"),
-            )?;
+            let uplink_pin = format!("uplink-{uplink}");
+            // Adopt: atomically re-point the surviving pinned link at the fresh program (no gap). A
+            // missing/broken pin falls through to a fresh attach+pin.
+            let readopted = adopt
+                && loader::readopt_xdp_link(&mut ebpf, "uplink_rx", pin_dir, &uplink_pin)
+                    .unwrap_or_else(|e| {
+                        eprintln!("re-adopt uplink link failed ({e:#}); attaching fresh");
+                        loader::unpin_link(pin_dir, &uplink_pin);
+                        false
+                    });
+            if !readopted {
+                loader::attach_xdp_pinned_at(&mut ebpf, "uplink_rx", uplink, pin_dir, &uplink_pin)?;
+            }
         } else {
             loader::attach_xdp(&mut ebpf, "uplink_rx", uplink)?;
         }
@@ -471,7 +477,22 @@ impl Control {
     /// `wan_rx` and re-encapped to the block owner. Call once, after `bring_up`.
     pub fn attach_edge(&self, wan_uplink: &str, edge_underlay: [u8; 16]) -> anyhow::Result<()> {
         let mut g = self.inner.lock();
-        loader::attach_xdp(&mut g.ebpf, "wan_rx", wan_uplink)?;
+        let pin_links = g.pin_links;
+        let pin_dir = g.pin_dir.clone();
+        if pin_links {
+            let name = format!("wan-{wan_uplink}");
+            let readopted = loader::readopt_xdp_link(&mut g.ebpf, "wan_rx", &pin_dir, &name)
+                .unwrap_or_else(|e| {
+                    eprintln!("re-adopt wan link failed ({e:#}); attaching fresh");
+                    loader::unpin_link(&pin_dir, &name);
+                    false
+                });
+            if !readopted {
+                loader::attach_xdp_pinned_at(&mut g.ebpf, "wan_rx", wan_uplink, &pin_dir, &name)?;
+            }
+        } else {
+            loader::attach_xdp(&mut g.ebpf, "wan_rx", wan_uplink)?;
+        }
         g.underlay.upsert(
             edge_underlay,
             xdp_dp_common::UnderlayValue {
@@ -493,7 +514,22 @@ impl Control {
     /// another interface. LOCAL stays the primary uplink (egress + wan_rx redirect use it).
     pub fn attach_extra_uplink(&self, iface: &str) -> anyhow::Result<()> {
         let mut g = self.inner.lock();
-        loader::attach_xdp_extra(&mut g.ebpf, "uplink_rx", iface)?;
+        let pin_links = g.pin_links;
+        let pin_dir = g.pin_dir.clone();
+        if pin_links {
+            let name = format!("uplink-{iface}");
+            let readopted = loader::readopt_xdp_link(&mut g.ebpf, "uplink_rx", &pin_dir, &name)
+                .unwrap_or_else(|e| {
+                    eprintln!("re-adopt extra uplink {iface} failed ({e:#}); attaching fresh");
+                    loader::unpin_link(&pin_dir, &name);
+                    false
+                });
+            if !readopted {
+                loader::attach_xdp_pinned_at(&mut g.ebpf, "uplink_rx", iface, &pin_dir, &name)?;
+            }
+        } else {
+            loader::attach_xdp_extra(&mut g.ebpf, "uplink_rx", iface)?;
+        }
         println!("uplink_rx attached to extra uplink {iface}");
         Ok(())
     }

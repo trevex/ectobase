@@ -380,6 +380,15 @@ pub fn readopt_xdp_link(
     if !path.exists() {
         return Ok(false);
     }
+    {
+        let p: &mut Xdp = ebpf
+            .program_mut(prog)
+            .with_context(|| format!("{prog} missing"))?
+            .try_into()?;
+        if p.fd().is_err() {
+            p.load().with_context(|| format!("load {prog}"))?;
+        }
+    }
     let pinned =
         PinnedLink::from_pin(&path).with_context(|| format!("from_pin {}", path.display()))?;
     let fd: FdLink = pinned.into();
@@ -433,6 +442,15 @@ pub fn readopt_tc_link(
     let path = link_pin_path(pin_dir, name);
     if !path.exists() {
         return Ok(false);
+    }
+    {
+        let p: &mut SchedClassifier = ebpf
+            .program_mut(prog)
+            .with_context(|| format!("tc {prog} missing"))?
+            .try_into()?;
+        if p.fd().is_err() {
+            p.load().with_context(|| format!("load {prog}"))?;
+        }
     }
     let pinned =
         PinnedLink::from_pin(&path).with_context(|| format!("from_pin {}", path.display()))?;
