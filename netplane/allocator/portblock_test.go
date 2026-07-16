@@ -32,6 +32,40 @@ func TestExhaustionSpillsToNextIP(t *testing.T) {
 	}
 }
 
+// TestPreassignKeepsExistingBlockWhenLowerSourceInserted is the drain-safety regression: inserting a
+// source that sorts BEFORE an existing one must NOT move the existing source's block (the old
+// positional scheme shifted it, re-NATing live flows).
+func TestPreassignKeepsExistingBlockWhenLowerSourceInserted(t *testing.T) {
+	// Reconcile 1: only 10.0.0.5 exists → gets the first block.
+	a1 := New([]string{"203.0.113.10"}, 1024)
+	b5 := a1.Assign("10.0.0.5")
+
+	// Reconcile 2: 10.0.0.1 (sorts first) is added. Seed the persisted block for 10.0.0.5, then
+	// assign in sorted order (10.0.0.1, 10.0.0.5).
+	a2 := New([]string{"203.0.113.10"}, 1024)
+	a2.Preassign("10.0.0.5", b5)
+	newB := a2.Assign("10.0.0.1")
+	keptB := a2.Assign("10.0.0.5")
+
+	if keptB != b5 {
+		t.Fatalf("existing source's block moved: was %+v now %+v", b5, keptB)
+	}
+	if newB.PortMin == b5.PortMin {
+		t.Fatalf("new source overlaps the existing block: %+v vs %+v", newB, b5)
+	}
+}
+
+// TestPreassignInvalidBlockReallocates: a persisted block whose IP left the pool is dropped and the
+// source is reassigned within the current pool.
+func TestPreassignInvalidBlockReallocates(t *testing.T) {
+	a := New([]string{"203.0.113.20"}, 1024)
+	a.Preassign("10.0.0.5", Block{PublicIP: "203.0.113.99", PortMin: 1024, PortMax: 2047}) // IP not in pool
+	b := a.Assign("10.0.0.5")
+	if b.PublicIP != "203.0.113.20" {
+		t.Fatalf("invalid preassign must reallocate within the pool: %+v", b)
+	}
+}
+
 func ipN(i int) string { return "10.1." + itoa(i/256) + "." + itoa(i%256) }
 
 func itoa(i int) string {

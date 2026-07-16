@@ -68,8 +68,8 @@ func (r *Reconciler) Sync(ctx context.Context, natgw *netv1.NATGateway) error {
 		}
 		sources = append(sources, nic.Spec.IPs...)
 	}
-	// Deterministic assignment order: existing sources keep their block, and a
-	// fresh reconcile with the same source set produces the identical table.
+	// Sorted only so that NEW sources fill free blocks deterministically; existing
+	// sources keep their block via Preassign below regardless of order.
 	sort.Strings(sources)
 
 	size := defaultPortsPerSource
@@ -78,6 +78,12 @@ func (r *Reconciler) Sync(ctx context.Context, natgw *netv1.NATGateway) error {
 	}
 
 	a := allocator.New(natgw.Spec.PublicIPs, size)
+	// Seed existing assignments from the persisted Status so a source that is still
+	// present keeps its exact block — adding/removing OTHER sources must never
+	// re-NAT its live flows. Stale entries (source gone) are simply not re-emitted.
+	for _, al := range natgw.Status.Allocations {
+		a.Preassign(al.Source, allocator.Block{PublicIP: al.PublicIP, PortMin: al.PortMin, PortMax: al.PortMax})
+	}
 	allocations := make([]netv1.NATAllocation, 0, len(sources))
 	for _, src := range sources {
 		b := a.Assign(src)

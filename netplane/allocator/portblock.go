@@ -1,12 +1,18 @@
 // Copyright 2026 ectobase contributors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package allocator implements the deterministic (public-IP, port-block) egress
-// SNAT allocator. Each source is handed a disjoint, fixed-size port block on one
-// of the gateway's public IPs. Assignments are stable (an existing source always
-// gets the same block) and spill across the public-IP pool as blocks are used up.
-// This determinism is the control-plane fact that makes the datapath drain-safe:
-// any gateway can recompute a source's block without shared state.
+// Package allocator implements the (public-IP, port-block) egress SNAT allocator.
+// Each source is handed a disjoint, fixed-size port block on one of the gateway's
+// public IPs.
+//
+// Stability is the control-plane fact that makes the datapath drain-safe: an
+// existing source must ALWAYS keep its block so its live flows are never re-NATed.
+// The previous positional scheme (assign in sorted order, block = rank×size) broke
+// this — inserting a lower-sorting source shifted every later source's block. Now
+// the allocator is seeded from the persisted NATGateway.Status (Preassign): existing
+// sources keep their block regardless of what else is added or removed, and only NEW
+// sources are handed the lowest free block. The Status is the source of truth (we no
+// longer require stateless recomputation / metalnet-style determinism).
 package allocator
 
 // firstUsablePort is the lowest port a block may start at. Ports below 1024 are
@@ -25,15 +31,16 @@ type Block struct {
 
 // Allocator hands out disjoint, stable port blocks across a pool of public IPs.
 //
-// The block space is a flat, monotonically-increasing sequence: block index N
-// maps to public IP N/blocksPerIP and, within that IP, the (N%blocksPerIP)'th
-// port block starting at firstUsablePort. A cursor tracks the next free index;
-// a source→Block map keeps existing assignments stable.
+// The block space is a flat sequence: block index N maps to public IP
+// N/blocksPerIP and, within that IP, the (N%blocksPerIP)'th port block starting
+// at firstUsablePort. `used` tracks occupied indices; `assigned` keeps every
+// source's block. Seed existing sources with Preassign (from the persisted
+// Status) BEFORE assigning new ones, so existing blocks are never disturbed.
 type Allocator struct {
 	ips         []string
 	size        int32
 	blocksPerIP int32
-	cursor      int32
+	used        map[int32]bool
 	assigned    map[string]Block
 }
 
@@ -48,46 +55,96 @@ func New(ips []string, size int32) *Allocator {
 		ips:         ips,
 		size:        size,
 		blocksPerIP: blocksPerIP,
+		used:        make(map[int32]bool),
 		assigned:    make(map[string]Block),
 	}
 }
 
-// Assign returns the deterministic block for a source. An already-assigned
-// source always returns its existing block (stable). A new source is handed the
-// next free block, spilling to the next public IP when the current one's blocks
-// are exhausted. When the whole pool is exhausted the last block is reused as an
-// overflow fallback (callers relying on strict disjointness should size the pool
-// for the expected source count).
+// total is the number of blocks across the whole pool.
+func (a *Allocator) total() int32 { return int32(len(a.ips)) * a.blocksPerIP }
+
+// blockToIndex reverse-maps a (publicIP, portMin) block to its flat index, or
+// false if the IP is no longer in the pool or the port is unaligned/out of range
+// (e.g. the pool shrank or the block size changed — the source is then treated as
+// new and re-allocated).
+func (a *Allocator) blockToIndex(b Block) (int32, bool) {
+	if a.blocksPerIP == 0 || a.size == 0 {
+		return 0, false
+	}
+	ipIdx := int32(-1)
+	for i, ip := range a.ips {
+		if ip == b.PublicIP {
+			ipIdx = int32(i)
+			break
+		}
+	}
+	if ipIdx < 0 {
+		return 0, false
+	}
+	off := b.PortMin - firstUsablePort
+	if off < 0 || off%a.size != 0 {
+		return 0, false
+	}
+	blockInIP := off / a.size
+	if blockInIP >= a.blocksPerIP {
+		return 0, false
+	}
+	return ipIdx*a.blocksPerIP + blockInIP, true
+}
+
+// blockAt materializes the Block for a flat index.
+func (a *Allocator) blockAt(idx int32) Block {
+	portMin := firstUsablePort + (idx%a.blocksPerIP)*a.size
+	return Block{
+		PublicIP: a.ips[idx/a.blocksPerIP],
+		PortMin:  portMin,
+		PortMax:  portMin + a.size - 1,
+	}
+}
+
+// Preassign seeds an existing source's block (read from NATGateway.Status) so a
+// subsequent Assign returns it unchanged and no new source can take its slot.
+// Invalid blocks (IP dropped from the pool, unaligned port, or a slot already
+// taken by an earlier Preassign) are ignored; that source is then treated as new.
+func (a *Allocator) Preassign(source string, b Block) {
+	idx, ok := a.blockToIndex(b)
+	if !ok || a.used[idx] {
+		return
+	}
+	a.used[idx] = true
+	a.assigned[source] = a.blockAt(idx)
+}
+
+// Assign returns the block for a source. An already-assigned source (incl. one
+// seeded via Preassign) always returns its existing block — stable regardless of
+// what other sources are added or removed. A new source is handed the LOWEST free
+// block. When the whole pool is exhausted the last block is reused as an overflow
+// fallback (size the pool for the expected source count to avoid this).
 func (a *Allocator) Assign(source string) Block {
 	if b, ok := a.assigned[source]; ok {
 		return b
 	}
-
-	idx := a.cursor
-	total := int32(len(a.ips)) * a.blocksPerIP
-	if a.blocksPerIP == 0 || total == 0 {
-		// No usable capacity; return a zero-value block on the first IP (if any).
+	total := a.total()
+	if total == 0 {
 		var ip string
 		if len(a.ips) > 0 {
 			ip = a.ips[0]
 		}
 		return Block{PublicIP: ip}
 	}
-	if idx >= total {
-		// Pool exhausted: reuse the last block as an overflow fallback.
-		idx = total - 1
-	} else {
-		a.cursor++
+	idx := int32(-1)
+	for i := range total {
+		if !a.used[i] {
+			idx = i
+			break
+		}
 	}
-
-	ipIdx := idx / a.blocksPerIP
-	blockInIP := idx % a.blocksPerIP
-	portMin := firstUsablePort + blockInIP*a.size
-	b := Block{
-		PublicIP: a.ips[ipIdx],
-		PortMin:  portMin,
-		PortMax:  portMin + a.size - 1,
+	if idx < 0 {
+		idx = total - 1 // pool exhausted: overflow fallback (do not mark used)
+		return a.blockAt(idx)
 	}
+	a.used[idx] = true
+	b := a.blockAt(idx)
 	a.assigned[source] = b
 	return b
 }
