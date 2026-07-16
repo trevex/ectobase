@@ -1,6 +1,6 @@
 use aya_ebpf::{
     macros::map,
-    maps::{lpm_trie::LpmTrie, Array, DevMap, HashMap, LruHashMap, ProgramArray},
+    maps::{lpm_trie::LpmTrie, Array, DevMap, DevMapHash, HashMap, LruHashMap, ProgramArray},
 };
 use xdp_dp_common::{
     Config, CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceValue,
@@ -29,6 +29,13 @@ pub static LOCAL: Array<Local> = Array::with_max_entries(1, 0);
 // Production real NICs work either way, so this is a harness-robustness change, not a logic change.
 #[map]
 pub static UPLINK_DEV: DevMap = DevMap::with_max_entries(1, 0);
+// Per-guest-tap devmap (key = tap ifindex -> same ifindex), populated by userspace on interface
+// attach. `uplink_rx`'s guest DELIVERY redirect goes through this instead of a plain bpf_redirect:
+// on containerlab veths a plain XDP_REDIRECT into the guest veth is silently dropped (veth
+// ndo_xdp_xmit peer requirement), while the devmap path delivers. Production real NICs are
+// unaffected. Mirrors UPLINK_DEV, but keyed by ifindex (many guests) via DEVMAP_HASH.
+#[map]
+pub static GUEST_DEV: DevMapHash = DevMapHash::with_max_entries(1024, 0);
 #[map]
 pub static INSPECT: Array<InspectEntry> = Array::with_max_entries(1, 0);
 /// 1:1 VIP map. Value is the mapped IPv4 counterpart: (vni,G)->V for egress SNAT, (vni,V)->G for

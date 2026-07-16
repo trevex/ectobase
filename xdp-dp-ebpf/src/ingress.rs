@@ -301,7 +301,13 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
             if lb_ul.is_none() && nat_guest.is_none() {
                 crate::vip::dnat_ingress(ctx, ETH_LEN, vni);
             }
-            Ok(unsafe { bpf_redirect(tap_ifindex, 0) } as u32)
+            // Deliver to the guest via the GUEST_DEV devmap (keyed by tap ifindex), NOT a plain
+            // bpf_redirect: on containerlab veths a plain XDP_REDIRECT into the guest veth is
+            // silently dropped (veth ndo_xdp_xmit peer requirement); the devmap path delivers.
+            // Fall back to a plain redirect if the tap isn't in the devmap (real-NIC / not yet set).
+            Ok(crate::maps::GUEST_DEV
+                .redirect(tap_ifindex, 0)
+                .unwrap_or_else(|_| unsafe { bpf_redirect(tap_ifindex, 0) } as u32))
         }
     }
 }

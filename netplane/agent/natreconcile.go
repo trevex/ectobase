@@ -40,6 +40,12 @@ type NatBlock struct {
 // localSource is a NetworkInterface IP scheduled to this node, with its VNI.
 type localSource struct {
 	vni uint32
+	// underlay is the source NIC's own underlay /128 (status.underlayRoute). It is the NAT-block
+	// owner (NOT the node underlay): the WAN edge re-encaps a nat_ip return to this /128, and the
+	// owner's uplink_rx resolves it via UNDERLAY[owner] -> {vni, tap} to reverse-NAT + deliver to
+	// the guest. The node underlay is NOT in UNDERLAY, so using it would leave the return
+	// unresolved (XDP_PASS -> kernel drop). Empty until the NIC is attached.
+	underlay string
 }
 
 // ExternalRoute is an external (egress-SNAT) route this node ANNOUNCES on the
@@ -110,9 +116,17 @@ func DesiredNat(ctx context.Context, c client.Client, nodeID, underlay string) (
 				Vni: ls.vni, SourceIP: a.Source, NatIP: a.PublicIP,
 				PortMin: uint32(a.PortMin), PortMax: uint32(a.PortMax),
 			})
+			// The NAT-block owner is the SOURCE NIC's own underlay /128 (uniquely resolves
+			// {vni, tap} in the owner's UNDERLAY for reverse-NAT + delivery), NOT the node
+			// underlay (which is not registered in UNDERLAY). Fall back to the node underlay
+			// only if the NIC hasn't been attached yet (no status.underlayRoute).
+			owner := ls.underlay
+			if owner == "" {
+				owner = underlay
+			}
 			blocks = append(blocks, NatBlock{
 				Vni: ls.vni, SourceIP: a.Source, NatIP: a.PublicIP,
-				PortMin: uint32(a.PortMin), PortMax: uint32(a.PortMax), OwnerUnderlay: underlay,
+				PortMin: uint32(a.PortMin), PortMax: uint32(a.PortMax), OwnerUnderlay: owner,
 			})
 		}
 	}
@@ -151,7 +165,7 @@ func localSources(ctx context.Context, c client.Client, nodeID string) (map[stri
 			continue // VPC not yet allocated a VNI; skip until it is
 		}
 		for _, ip := range nic.Spec.IPs {
-			out[ip] = localSource{vni: vni}
+			out[ip] = localSource{vni: vni, underlay: nic.Status.UnderlayRoute}
 		}
 	}
 	return out, nil

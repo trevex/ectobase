@@ -1,7 +1,7 @@
 use anyhow::Context;
 use aya::maps::{
     lpm_trie::{Key, LpmTrie},
-    Array, DevMap, HashMap, MapData,
+    Array, DevMap, DevMapHash, HashMap, MapData,
 };
 use aya::Ebpf;
 use xdp_dp_common::{
@@ -78,6 +78,36 @@ impl UplinkDevMap {
         self.map
             .set(0, uplink_ifindex, None, 0)
             .context("write UPLINK_DEV[0]")
+    }
+}
+
+/// Typed handle over the `GUEST_DEV` devmap-hash (tap ifindex -> same ifindex). `uplink_rx`'s guest
+/// DELIVERY redirect goes through this so containerlab veth guest taps deliver the XDP_REDIRECT
+/// without a peer XDP program (see the eBPF `GUEST_DEV` comment). Populated on attach, cleared on
+/// detach, keyed by the tap ifindex (many guests, unlike the single-slot UPLINK_DEV).
+pub struct GuestDevMap {
+    map: DevMapHash<MapData>,
+}
+
+impl GuestDevMap {
+    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
+        let map = DevMapHash::try_from(
+            ebpf.take_map("GUEST_DEV")
+                .context("GUEST_DEV map missing")?,
+        )?;
+        Ok(Self { map })
+    }
+
+    /// Map `tap_ifindex` -> `tap_ifindex` so `GUEST_DEV.redirect(tap_ifindex)` delivers to the tap.
+    pub fn insert(&mut self, tap_ifindex: u32) -> anyhow::Result<()> {
+        self.map
+            .insert(tap_ifindex, tap_ifindex, None, 0)
+            .with_context(|| format!("write GUEST_DEV[{tap_ifindex}]"))
+    }
+
+    /// Remove a tap ifindex on detach (best-effort).
+    pub fn remove(&mut self, tap_ifindex: u32) {
+        let _ = self.map.remove(tap_ifindex);
     }
 }
 

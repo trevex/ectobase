@@ -12,9 +12,9 @@ use xdp_dp_common::{
 use crate::grpc::LbIpBytes;
 use crate::loader;
 use crate::maps::{
-    Conntrack, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwRules, Interfaces, Lb, LocalMap, Maglev,
-    Meter, Nat, NatIps, NeighborNat, NeighborNatCount, PortMetaMap, Routes, Routes6, UplinkDevMap,
-    Vips,
+    Conntrack, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwRules, GuestDevMap, Interfaces, Lb,
+    LocalMap, Maglev, Meter, Nat, NatIps, NeighborNat, NeighborNatCount, PortMetaMap, Routes,
+    Routes6, UplinkDevMap, Vips,
 };
 
 /// The owned link for a guest interface's attached datapath program. Dropping either variant
@@ -162,6 +162,7 @@ struct Inner {
     /// stay alive here — dropping it after set() closes the map fd and wan_rx then fails to verify
     /// ("fd is not pointing to valid bpf_map"), exactly like `_locals`/`_guest_progs`.
     _uplink_dev: UplinkDevMap,
+    guest_dev: GuestDevMap,
     ports: PortMetaMap,
     ifaces: Interfaces,
     routes: Routes,
@@ -257,6 +258,7 @@ impl Control {
         // wan_rx is loaded in attach_edge.
         let mut uplink_dev = UplinkDevMap::open(&mut ebpf)?;
         uplink_dev.set(uplink_ifindex)?;
+        let guest_dev = GuestDevMap::open(&mut ebpf)?;
         let ports = PortMetaMap::open(&mut ebpf)?;
         let ifaces = Interfaces::open(&mut ebpf)?;
         let routes = Routes::open(&mut ebpf)?;
@@ -281,6 +283,7 @@ impl Control {
                 _guest_progs: guest_progs,
                 _locals: locals,
                 _uplink_dev: uplink_dev,
+                guest_dev,
                 ports,
                 ifaces,
                 routes,
@@ -488,6 +491,8 @@ impl Control {
         g.by_ifindex.insert(interface_id.to_vec(), tap);
         g.iface_underlay
             .insert(interface_id.to_vec(), underlay_ipv6);
+        // Register the tap in GUEST_DEV so uplink_rx's delivery redirect reaches it over clab veths.
+        g.guest_dev.insert(tap)?;
         Self::program_iface_maps(&mut g, interface_id, tap, mac, &params)
     }
 
@@ -594,6 +599,7 @@ impl Control {
         };
         let vni = rec.vni;
         let tap = g.by_ifindex.remove(interface_id).unwrap_or(0);
+        g.guest_dev.remove(tap);
         g.iface_underlay.remove(interface_id);
         g.prefixes.remove(interface_id);
         // Dropping the link detaches the program from the device.
@@ -1870,6 +1876,7 @@ impl Control {
         })?;
         let mut uplink_dev = UplinkDevMap::open(&mut ebpf)?;
         uplink_dev.set(0)?;
+        let guest_dev = GuestDevMap::open(&mut ebpf)?;
         let ports = PortMetaMap::open(&mut ebpf)?;
         let ifaces = Interfaces::open(&mut ebpf)?;
         let routes = Routes::open(&mut ebpf)?;
@@ -1894,6 +1901,7 @@ impl Control {
                 _guest_progs: guest_progs,
                 _locals: locals,
                 _uplink_dev: uplink_dev,
+                guest_dev,
                 ports,
                 ifaces,
                 routes,
