@@ -132,7 +132,7 @@ enum Cmd {
         pin_dir: Option<String>,
         /// Pin program links to bpffs so a restart keeps the datapath attached (zero forwarding gap).
         /// Disable for a guaranteed fresh re-attach on every start.
-        #[arg(long = "pin-links", default_value_t = true, action = clap::ArgAction::Set)]
+        #[arg(long = "pin-links", default_value_t = true, action = clap::ArgAction::Set, env = "XDP_DP_PIN_LINKS")]
         pin_links: bool,
         /// DHCP options (stored for sub-project 2b; accepted now to keep the ioiab arg list stable).
         #[arg(long = "dhcp-mtu")]
