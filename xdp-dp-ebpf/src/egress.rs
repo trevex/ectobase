@@ -31,7 +31,11 @@ pub fn forward_decision_v4(
 ) -> EgressVerdict {
     let p = data as *const u8;
     // Conntrack + egress firewall. Established flows: apply translation + refresh. New flows:
-    // enforce the SOURCE interface's EGRESS firewall (whitelist; no rules => accept).
+    // enforce the SOURCE interface's EGRESS firewall. The firewall is DENY-BY-DEFAULT: with no
+    // FW_META entry, or no egress rule that matches, `fw_eval_dir` returns DROP (see its impl).
+    // So an egress-INITIATED flow needs an explicit egress-allow NetworkPolicy; an ingress-
+    // ESTABLISHED flow is exempt because its reverse conntrack entry (pre-seeded by ct_*_default)
+    // makes this a CT hit, skipping the firewall entirely.
     //
     // Only apply CT_REWRITE_SRC (egress-direction) translations here. CT_REWRITE_DST entries are
     // reverse-NAT entries created for ingress return traffic; they must NOT be applied in the
