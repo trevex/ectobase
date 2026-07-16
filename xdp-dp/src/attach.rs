@@ -59,6 +59,16 @@ impl AttachState {
         }
     }
 
+    /// Reseed the underlay IPAM used-set from addresses recovered on restart (the surviving pinned
+    /// UNDERLAY map), so a live guest's /128 is never handed out again after an xdp-dp restart —
+    /// the reissue-a-live-/128 blackhole the review flagged. Called once, on adopt.
+    pub fn seed_ipam(&self, addrs: &[[u8; 16]]) {
+        let mut ipam = self.ipam.lock();
+        for a in addrs {
+            ipam.mark_used(std::net::Ipv6Addr::from(*a));
+        }
+    }
+
     /// Allocate a locally-administered unicast MAC (02:xx:...) from the process-local counter.
     fn alloc_mac(&self) -> [u8; 6] {
         let mut seq = self.mac_seq.lock();

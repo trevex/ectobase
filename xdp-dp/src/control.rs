@@ -415,17 +415,37 @@ impl Control {
     }
 
     /// The `(interface_id, device)` list recovered on adopt, whose guest program the caller must
-    /// re-attach. Empty after a fresh bring-up. (Wired into `Serve` by Task 5.)
-    #[allow(dead_code)]
+    /// re-attach. Empty after a fresh bring-up.
     pub fn recovered_interfaces(&self) -> Vec<(Vec<u8>, String)> {
         self.inner.lock().recovered.clone()
     }
 
     /// The underlay /128s recovered on adopt, for reseeding `UnderlayIpam`. Empty after a fresh
-    /// bring-up. (Wired into `Serve` by Task 5.)
-    #[allow(dead_code)]
+    /// bring-up.
     pub fn recovered_underlays(&self) -> Vec<[u8; 16]> {
         self.inner.lock().recovered_underlays.clone()
+    }
+
+    /// Re-attach the guest datapath program to an ADOPTED interface's device after a restart. The
+    /// pinned maps and in-memory bookkeeping already describe it (map_pin_path reuse +
+    /// `rebuild_from_maps`); this ONLY re-creates the `GuestLink` (the old one died with the process)
+    /// and stores it so a later DetachInterface can drop it — no map writes, no bookkeeping insert.
+    /// Mirrors the attach half of `create_interface`.
+    pub fn reattach_guest(&self, interface_id: &[u8], device: &str) -> anyhow::Result<()> {
+        let mut g = self.inner.lock();
+        let link = if g.guest_tc {
+            GuestLink::Tc(
+                loader::attach_tc_clsact_ingress_link(&mut g.ebpf, "tc_guest_tx", device)
+                    .with_context(|| format!("re-attach tc_guest_tx to {device}"))?,
+            )
+        } else {
+            GuestLink::Xdp(
+                loader::attach_xdp_link(&mut g.ebpf, "guest_tx", device)
+                    .with_context(|| format!("re-attach guest_tx to {device}"))?,
+            )
+        };
+        g.links.insert(interface_id.to_vec(), link);
+        Ok(())
     }
 
     /// WAN-edge role: attach `wan_rx` to the WAN uplink and register the edge's own underlay /128

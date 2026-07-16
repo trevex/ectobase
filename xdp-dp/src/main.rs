@@ -360,7 +360,7 @@ async fn main() -> anyhow::Result<()> {
             gateway6,
             gateway_mac,
             conntrack_max,
-            pin_dir: _pin_dir,
+            pin_dir,
             dhcp_mtu,
             dhcp_dns,
             dhcpv6_dns,
@@ -375,9 +375,21 @@ async fn main() -> anyhow::Result<()> {
                 Some(s) => parse_ipv6(s)?,
                 None => [0u8; 16],
             };
-            // Task 1: Serve loads into a fresh ephemeral pin dir, so behaviour is identical to the
-            // pre-pinning daemon. Task 5 replaces this with the persistent `--pin-dir` + adopt path.
-            let serve_pin_dir = loader::ephemeral_pin_dir()?;
+            // Graceful restart: pin the state maps under a persistent bpffs dir (default overridable
+            // by --pin-dir). `adopt` = that dir already holds our pins from a previous run, so the
+            // reloaded programs re-bind to the surviving maps and we rebuild in-memory state instead
+            // of starting fresh. Detected by the presence of a marker pin (INTERFACES).
+            let serve_pin_dir = pin_dir.unwrap_or_else(|| "/sys/fs/bpf/xdp-dp".to_string());
+            std::fs::create_dir_all(&serve_pin_dir)
+                .with_context(|| format!("create pin dir {serve_pin_dir}"))?;
+            let serve_pin_dir = std::path::PathBuf::from(serve_pin_dir);
+            let adopt = serve_pin_dir.join("INTERFACES").exists();
+            if adopt {
+                println!(
+                    "adopt: found pinned datapath at {} — recovering state",
+                    serve_pin_dir.display()
+                );
+            }
             let ctrl = control::Control::bring_up(
                 &uplink,
                 ifindex(&uplink)?,
@@ -385,7 +397,7 @@ async fn main() -> anyhow::Result<()> {
                 parse_mac(&gateway_mac)?,
                 underlay,
                 &serve_pin_dir,
-                false, // adopt: Task 5 computes this from a persistent --pin-dir; fresh for now.
+                adopt,
             )?;
             // WAN-edge role: attach wan_rx to the WAN uplink + register the local-deliver edge
             // underlay so this sidecar handles both egress decap and NAT-return re-encap.
@@ -438,6 +450,30 @@ async fn main() -> anyhow::Result<()> {
                 gateway_ipv4,
                 mac_seq: parking_lot::Mutex::new(0),
             });
+
+            // On adopt, finish restart recovery: the maps + bookkeeping survived (bring_up), but the
+            // guest program links died with the old process — re-attach each recovered interface's
+            // program to its (surviving) veth — and reseed the IPAM used-set from the recovered /128s
+            // so a live guest's underlay address is never handed out again.
+            if adopt {
+                let recovered = control.recovered_interfaces();
+                let mut reattached = 0usize;
+                for (id, device) in &recovered {
+                    match control.reattach_guest(id, device) {
+                        Ok(()) => reattached += 1,
+                        Err(e) => {
+                            eprintln!("adopt: re-attach guest program to {device} failed: {e:#}")
+                        }
+                    }
+                }
+                let underlays = control.recovered_underlays();
+                attach_state.seed_ipam(&underlays);
+                println!(
+                    "adopt: re-attached {reattached}/{} guest program(s); reseeded IPAM with {} /128(s)",
+                    recovered.len(),
+                    underlays.len()
+                );
+            }
 
             let svc = grpc::Service {
                 state: std::sync::Arc::new(state::State::default()),
