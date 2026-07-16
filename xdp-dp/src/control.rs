@@ -27,6 +27,17 @@ enum GuestLink {
     // detaches the program from the device (RAII detach).
     Xdp(#[allow(dead_code)] aya::programs::xdp::XdpLink),
     Tc(#[allow(dead_code)] aya::programs::tc::SchedClassifierLink),
+    /// pin-links mode: the link lives in bpffs at links/<name>; we track the name to unpin on detach.
+    Pinned(String),
+}
+
+/// Lowercase-hex encode an interface_id for a filesystem-safe, collision-free link pin name.
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
 }
 
 /// Per-interface addressing + rate-limit parameters for `create_interface` / `program_iface_maps`.
@@ -456,6 +467,37 @@ impl Control {
     /// Mirrors the attach half of `create_interface`.
     pub fn reattach_guest(&self, interface_id: &[u8], device: &str) -> anyhow::Result<()> {
         let mut g = self.inner.lock();
+        if g.pin_links {
+            let pin_dir = g.pin_dir.clone();
+            let gname = format!("guest-{}", hex_encode(interface_id));
+            let prog = if g.guest_tc {
+                "tc_guest_tx"
+            } else {
+                "guest_tx"
+            };
+            // Re-point the surviving pinned link at the fresh program (atomic, no gap). A missing or
+            // broken pin falls through to a fresh attach+pin.
+            let readopted = if g.guest_tc {
+                loader::readopt_tc_link(&mut g.ebpf, prog, &pin_dir, &gname)
+            } else {
+                loader::readopt_xdp_link(&mut g.ebpf, prog, &pin_dir, &gname)
+            }
+            .unwrap_or_else(|e| {
+                eprintln!("re-adopt guest link {gname} failed ({e:#}); attaching fresh");
+                loader::unpin_link(&pin_dir, &gname);
+                false
+            });
+            if !readopted {
+                if g.guest_tc {
+                    loader::attach_tc_pinned_at(&mut g.ebpf, prog, device, &pin_dir, &gname)?;
+                } else {
+                    loader::attach_xdp_pinned_at(&mut g.ebpf, prog, device, &pin_dir, &gname)?;
+                }
+            }
+            g.links
+                .insert(interface_id.to_vec(), GuestLink::Pinned(gname));
+            return Ok(());
+        }
         let link = if g.guest_tc {
             GuestLink::Tc(
                 loader::attach_tc_clsact_ingress_link(&mut g.ebpf, "tc_guest_tx", device)
@@ -663,7 +705,18 @@ impl Control {
         // droppable link back — dropping it detaches the program on interface teardown. Use tc
         // clsact ingress by default, or XDP when opted out (XDP_DP_GUEST_TC=0). (guest_tc lives on
         // Inner alongside ebpf/links, so it's readable here under the same lock.)
-        let link = if g.guest_tc {
+        let link = if g.pin_links {
+            let pin_dir = g.pin_dir.clone();
+            let gname = format!("guest-{}", hex_encode(interface_id));
+            if g.guest_tc {
+                loader::attach_tc_pinned_at(&mut g.ebpf, "tc_guest_tx", device, &pin_dir, &gname)
+                    .with_context(|| format!("attach+pin tc_guest_tx to {device}"))?;
+            } else {
+                loader::attach_xdp_pinned_at(&mut g.ebpf, "guest_tx", device, &pin_dir, &gname)
+                    .with_context(|| format!("attach+pin guest_tx to {device}"))?;
+            }
+            GuestLink::Pinned(gname)
+        } else if g.guest_tc {
             GuestLink::Tc(
                 loader::attach_tc_clsact_ingress_link(&mut g.ebpf, "tc_guest_tx", device)
                     .with_context(|| format!("attach tc_guest_tx to {device}"))?,
@@ -839,7 +892,10 @@ impl Control {
             let _ = g.iface_meta.remove(&k);
         }
         // Dropping the link detaches the program from the device.
-        g.links.remove(interface_id);
+        if let Some(GuestLink::Pinned(name)) = g.links.remove(interface_id) {
+            let pin_dir = g.pin_dir.clone();
+            loader::unpin_link(&pin_dir, &name);
+        }
         let _ = g.ports.remove(tap);
         let _ = g.ifaces.remove(IfaceKey::new(rec.vni, rec.ipv4));
         // Before removing the UNDERLAY entry, snapshot the currently-learned guest MAC
@@ -2216,6 +2272,12 @@ impl Control {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guest_pin_name_is_stable_and_hex() {
+        assert_eq!(hex_encode(b"natpod"), "6e6174706f64");
+        assert_eq!(hex_encode(b"rpod"), hex_encode(b"rpod"));
+    }
 
     /// Pure (no-BPF) check that an IFACE_META journal entry round-trips back to the interface_id,
     /// device, and IfaceRecord the restart rebuild needs — the crux of the adopt path.
