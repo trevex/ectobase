@@ -189,6 +189,10 @@ struct Inner {
     recovered: Vec<(Vec<u8>, String)>,
     /// Underlay /128s recovered from the surviving UNDERLAY map on adopt, for reseeding `UnderlayIpam`.
     recovered_underlays: Vec<[u8; 16]>,
+    /// Link-pinning enabled: pin program links + adopt them atomically on restart.
+    pin_links: bool,
+    /// Persistent pin dir for link pins; mirrors the map pin dir passed to load_ebpf.
+    pin_dir: std::path::PathBuf,
     /// In-memory neighbor NAT entries (drives the BPF map reprogram).
     neigh_nats: Vec<NeighborNatEntry>,
     /// loadbalancer_id -> its LB state.
@@ -231,11 +235,22 @@ impl Control {
         underlay_ipv6: [u8; 16],
         pin_dir: &Path,
         adopt: bool,
+        pin_links: bool,
     ) -> anyhow::Result<Self> {
         let mut ebpf = loader::load_ebpf(pin_dir)?;
         loader::maybe_install_logger(&mut ebpf);
         // The uplink RX path is always XDP, regardless of the guest edge attach mode.
-        loader::attach_xdp(&mut ebpf, "uplink_rx", uplink)?;
+        if pin_links {
+            loader::attach_xdp_pinned_at(
+                &mut ebpf,
+                "uplink_rx",
+                uplink,
+                pin_dir,
+                &format!("uplink-{uplink}"),
+            )?;
+        } else {
+            loader::attach_xdp(&mut ebpf, "uplink_rx", uplink)?;
+        }
         // Guest edge attach mode: tc clsact is the DEFAULT (native XDP can't intercept guest egress
         // on a vhost-backed tap — see the tc-BPF guest-edge design). Opt out to the legacy XDP
         // guest_tx with XDP_DP_GUEST_TC=0/false/no/off (kept for regression testing). We pre-load the
@@ -315,6 +330,8 @@ impl Control {
             iface_meta,
             recovered: Vec::new(),
             recovered_underlays: Vec::new(),
+            pin_links,
+            pin_dir: pin_dir.to_path_buf(),
             neigh_nats: Vec::new(),
             lbs: HashMap::new(),
             next_table_id: 1,
@@ -2133,6 +2150,8 @@ impl Control {
                 iface_meta,
                 recovered: Vec::new(),
                 recovered_underlays: Vec::new(),
+                pin_links: false,
+                pin_dir: std::path::PathBuf::from("/tmp"),
                 neigh_nats: Vec::new(),
                 lbs: HashMap::new(),
                 next_table_id: 1,

@@ -130,6 +130,10 @@ enum Cmd {
         /// Pin programs+maps under this dir for HA (control-plane restart re-adopts).
         #[arg(long = "pin-dir")]
         pin_dir: Option<String>,
+        /// Pin program links to bpffs so a restart keeps the datapath attached (zero forwarding gap).
+        /// Disable for a guaranteed fresh re-attach on every start.
+        #[arg(long = "pin-links", default_value_t = true, action = clap::ArgAction::Set)]
+        pin_links: bool,
         /// DHCP options (stored for sub-project 2b; accepted now to keep the ioiab arg list stable).
         #[arg(long = "dhcp-mtu")]
         dhcp_mtu: Option<u32>,
@@ -361,6 +365,7 @@ async fn main() -> anyhow::Result<()> {
             gateway_mac,
             conntrack_max,
             pin_dir,
+            pin_links,
             dhcp_mtu,
             dhcp_dns,
             dhcpv6_dns,
@@ -398,6 +403,7 @@ async fn main() -> anyhow::Result<()> {
                 underlay,
                 &serve_pin_dir,
                 adopt,
+                pin_links,
             )?;
             // WAN-edge role: attach wan_rx to the WAN uplink + register the local-deliver edge
             // underlay so this sidecar handles both egress decap and NAT-return re-encap.
