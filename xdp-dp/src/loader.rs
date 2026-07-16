@@ -345,6 +345,9 @@ pub fn attach_xdp_pinned_at(
     pin_dir: &Path,
     name: &str,
 ) -> anyhow::Result<()> {
+    // Detach any stale pinned link of this name first (removing the bpffs pin drops the old
+    // program's last refcount) so the fresh attach below cannot hit EBUSY.
+    let _ = std::fs::remove_file(link_pin_path(pin_dir, name));
     let p: &mut Xdp = ebpf
         .program_mut(prog)
         .with_context(|| format!("{prog} missing"))?
@@ -419,6 +422,8 @@ pub fn attach_tc_pinned_at(
     pin_dir: &Path,
     name: &str,
 ) -> anyhow::Result<()> {
+    // Detach any stale pinned link of this name first (avoids a doubled tcx attach).
+    let _ = std::fs::remove_file(link_pin_path(pin_dir, name));
     let _ = aya::programs::tc::qdisc_add_clsact(iface);
     let p: &mut SchedClassifier = ebpf
         .program_mut(prog)

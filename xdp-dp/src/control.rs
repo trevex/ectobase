@@ -266,6 +266,9 @@ impl Control {
                 loader::attach_xdp_pinned_at(&mut ebpf, "uplink_rx", uplink, pin_dir, &uplink_pin)?;
             }
         } else {
+            // pin-links off: clear any stale pin from a previous pin-on run so the fresh (unpinned)
+            // attach can't hit EBUSY against a link that survived the last process.
+            loader::unpin_link(pin_dir, &format!("uplink-{uplink}"));
             loader::attach_xdp(&mut ebpf, "uplink_rx", uplink)?;
         }
         // Guest edge attach mode: tc clsact is the DEFAULT (native XDP can't intercept guest egress
@@ -533,6 +536,7 @@ impl Control {
                 loader::attach_xdp_pinned_at(&mut g.ebpf, "wan_rx", wan_uplink, &pin_dir, &name)?;
             }
         } else {
+            loader::unpin_link(&pin_dir, &format!("wan-{wan_uplink}"));
             loader::attach_xdp(&mut g.ebpf, "wan_rx", wan_uplink)?;
         }
         g.underlay.upsert(
@@ -570,6 +574,7 @@ impl Control {
                 loader::attach_xdp_pinned_at(&mut g.ebpf, "uplink_rx", iface, &pin_dir, &name)?;
             }
         } else {
+            loader::unpin_link(&pin_dir, &format!("uplink-{iface}"));
             loader::attach_xdp_extra(&mut g.ebpf, "uplink_rx", iface)?;
         }
         println!("uplink_rx attached to extra uplink {iface}");
@@ -738,7 +743,14 @@ impl Control {
             .insert(tap)
             .context("register tap in GUEST_DEV")?;
         if let Err(e) = Self::program_iface_maps(&mut g, interface_id, device, tap, mac, &params) {
-            let _ = g.guest_dev.remove(tap); // unwind the GUEST_DEV write; `link` drops -> detaches
+            let _ = g.guest_dev.remove(tap); // unwind the GUEST_DEV write
+                                             // A non-pinned `link` drops here -> detaches. A pinned link is held by the bpffs pin, not
+                                             // by `link`, so explicitly unpin to detach the program and avoid leaking the pin — keeping
+                                             // the partial-failure rollback invariant (attach.rs deletes the veth + releases the /128).
+            if let GuestLink::Pinned(name) = &link {
+                let pd = g.pin_dir.clone();
+                loader::unpin_link(&pd, name);
+            }
             return Err(e);
         }
         // All datapath writes succeeded — commit the in-memory bookkeeping.
