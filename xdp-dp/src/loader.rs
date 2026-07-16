@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use aya::maps::{MapData, ProgramArray};
+use aya::programs::links::{FdLink, PinnedLink};
 use aya::programs::{tc, ProgramFd, SchedClassifier, TcAttachType, Xdp, XdpFlags};
 use aya::Ebpf;
 
@@ -328,6 +329,131 @@ pub fn attach_xdp_pinned(
         .pin(Path::new(&link_path))
         .with_context(|| format!("pin link {link_path}"))?;
     Ok(())
+}
+
+fn link_pin_path(pin_dir: &Path, name: &str) -> std::path::PathBuf {
+    pin_dir.join("links").join(name)
+}
+
+/// Attach an already-loaded XDP `prog` to `iface` and pin the link to `<pin_dir>/links/<name>` so it
+/// survives this process exiting. The bpffs pin owns the attachment; the caller need not hold a handle.
+pub fn attach_xdp_pinned_at(
+    ebpf: &mut Ebpf,
+    prog: &str,
+    iface: &str,
+    pin_dir: &Path,
+    name: &str,
+) -> anyhow::Result<()> {
+    let p: &mut Xdp = ebpf
+        .program_mut(prog)
+        .with_context(|| format!("{prog} missing"))?
+        .try_into()?;
+    let id = if std::env::var_os("XDP_DP_SKB_MODE").is_some() {
+        p.attach(iface, aya::programs::XdpFlags::SKB_MODE)
+            .with_context(|| format!("attach {prog} to {iface} (SKB_MODE)"))?
+    } else {
+        p.attach(iface, aya::programs::XdpFlags::default())
+            .or_else(|_| p.attach(iface, aya::programs::XdpFlags::SKB_MODE))
+            .with_context(|| format!("attach {prog} to {iface}"))?
+    };
+    let fd: FdLink = p
+        .take_link(id)?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("XDP link is not an FdLink (kernel < 5.9?)"))?;
+    let path = link_pin_path(pin_dir, name);
+    std::fs::create_dir_all(path.parent().unwrap()).ok();
+    let _ = std::fs::remove_file(&path);
+    fd.pin(&path)
+        .with_context(|| format!("pin xdp link {}", path.display()))?;
+    Ok(())
+}
+
+/// Re-open a pinned XDP link and atomically re-point it at (a freshly-loaded) `prog` — no gap.
+/// Returns true if the pin existed (adopted); false if absent (caller attaches fresh).
+pub fn readopt_xdp_link(
+    ebpf: &mut Ebpf,
+    prog: &str,
+    pin_dir: &Path,
+    name: &str,
+) -> anyhow::Result<bool> {
+    let path = link_pin_path(pin_dir, name);
+    if !path.exists() {
+        return Ok(false);
+    }
+    let pinned =
+        PinnedLink::from_pin(&path).with_context(|| format!("from_pin {}", path.display()))?;
+    let fd: FdLink = pinned.into();
+    let xlink: aya::programs::xdp::XdpLink = fd
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("pinned link at {} is not an XDP link", path.display()))?;
+    let p: &mut Xdp = ebpf
+        .program_mut(prog)
+        .with_context(|| format!("{prog} missing"))?
+        .try_into()?;
+    let id = p
+        .attach_to_link(xlink)
+        .with_context(|| format!("attach_to_link {prog}"))?;
+    let _ = p.take_link(id);
+    Ok(true)
+}
+
+/// tc analogues (tcx FdLink).
+pub fn attach_tc_pinned_at(
+    ebpf: &mut Ebpf,
+    prog: &str,
+    iface: &str,
+    pin_dir: &Path,
+    name: &str,
+) -> anyhow::Result<()> {
+    let _ = aya::programs::tc::qdisc_add_clsact(iface);
+    let p: &mut SchedClassifier = ebpf
+        .program_mut(prog)
+        .with_context(|| format!("tc {prog} missing"))?
+        .try_into()?;
+    let id = p
+        .attach(iface, aya::programs::TcAttachType::Ingress)
+        .with_context(|| format!("attach {prog} to {iface}"))?;
+    let fd: FdLink = p.take_link(id)?.try_into().map_err(|_| {
+        anyhow::anyhow!("tc link is not a tcx FdLink (kernel < 6.6); pinning unavailable")
+    })?;
+    let path = link_pin_path(pin_dir, name);
+    std::fs::create_dir_all(path.parent().unwrap()).ok();
+    let _ = std::fs::remove_file(&path);
+    fd.pin(&path)
+        .with_context(|| format!("pin tc link {}", path.display()))?;
+    Ok(())
+}
+
+pub fn readopt_tc_link(
+    ebpf: &mut Ebpf,
+    prog: &str,
+    pin_dir: &Path,
+    name: &str,
+) -> anyhow::Result<bool> {
+    let path = link_pin_path(pin_dir, name);
+    if !path.exists() {
+        return Ok(false);
+    }
+    let pinned =
+        PinnedLink::from_pin(&path).with_context(|| format!("from_pin {}", path.display()))?;
+    let fd: FdLink = pinned.into();
+    let tlink: aya::programs::tc::SchedClassifierLink = fd
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("pinned link at {} is not a tcx link", path.display()))?;
+    let p: &mut SchedClassifier = ebpf
+        .program_mut(prog)
+        .with_context(|| format!("tc {prog} missing"))?
+        .try_into()?;
+    let id = p
+        .attach_to_link(tlink)
+        .with_context(|| format!("attach_to_link {prog}"))?;
+    let _ = p.take_link(id);
+    Ok(true)
+}
+
+/// Remove a link pin (detaches the program). Used on guest detach.
+pub fn unpin_link(pin_dir: &Path, name: &str) {
+    let _ = std::fs::remove_file(link_pin_path(pin_dir, name));
 }
 
 /// Pin a loaded map to `<pin_dir>/<name>` so a restarted control plane can re-acquire it.
