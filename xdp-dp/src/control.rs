@@ -6,17 +6,17 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use aya::Ebpf;
 use xdp_dp_common::{
-    CtKey, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceValue, LbKey, LbValue, Local, MaglevKey,
-    NatKey, NatValue, NeighborNatEntry, PortMeta, RouteValue, VipKey, FW_DIR_EGRESS, FW_MAX_RULES,
-    NB_MAX_ENTRIES,
+    CtKey, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue, LbKey,
+    LbValue, Local, MaglevKey, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteValue, VipKey,
+    FW_DIR_EGRESS, FW_MAX_RULES, IFACE_DEV_MAX, NB_MAX_ENTRIES,
 };
 
 use crate::grpc::LbIpBytes;
 use crate::loader;
 use crate::maps::{
-    Conntrack, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwRules, GuestDevMap, Interfaces, Lb,
-    LocalMap, Maglev, Meter, Nat, NatIps, NeighborNat, NeighborNatCount, PortMetaMap, Routes,
-    Routes6, UplinkDevMap, Vips,
+    Conntrack, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwRules, GuestDevMap, IfaceMetaMap,
+    Interfaces, Lb, LocalMap, Maglev, Meter, Nat, NatIps, NeighborNat, NeighborNatCount,
+    PortMetaMap, Routes, Routes6, UplinkDevMap, Vips,
 };
 
 /// The owned link for a guest interface's attached datapath program. Dropping either variant
@@ -182,6 +182,13 @@ struct Inner {
     nat_ips: NatIps,
     dhcp_config: DhcpConfigMap,
     dhcp_meta: DhcpMetaMap,
+    /// Restart journal: interface_id -> rebuild detail. Written on attach/detach; scanned on adopt.
+    iface_meta: IfaceMetaMap,
+    /// Interfaces recovered by `rebuild_from_maps` on adopt: (interface_id, device) whose guest
+    /// program must be re-attached by the caller (`Serve`). Empty on a fresh (non-adopt) bring-up.
+    recovered: Vec<(Vec<u8>, String)>,
+    /// Underlay /128s recovered from the surviving UNDERLAY map on adopt, for reseeding `UnderlayIpam`.
+    recovered_underlays: Vec<[u8; 16]>,
     /// In-memory neighbor NAT entries (drives the BPF map reprogram).
     neigh_nats: Vec<NeighborNatEntry>,
     /// loadbalancer_id -> its LB state.
@@ -223,6 +230,7 @@ impl Control {
         gateway_mac: [u8; 6],
         underlay_ipv6: [u8; 16],
         pin_dir: &Path,
+        adopt: bool,
     ) -> anyhow::Result<Self> {
         let mut ebpf = loader::load_ebpf(pin_dir)?;
         loader::maybe_install_logger(&mut ebpf);
@@ -279,48 +287,145 @@ impl Control {
         let nat_ips = NatIps::open(&mut ebpf)?;
         let dhcp_config = DhcpConfigMap::open(&mut ebpf)?;
         let dhcp_meta = DhcpMetaMap::open(&mut ebpf)?;
+        let iface_meta = IfaceMetaMap::open(&mut ebpf)?;
         let conntrack = Arc::new(Mutex::new(Conntrack::open(&mut ebpf)?));
+        let mut inner = Inner {
+            ebpf,
+            _guest_progs: guest_progs,
+            _locals: locals,
+            _uplink_dev: uplink_dev,
+            guest_dev,
+            ports,
+            ifaces,
+            routes,
+            routes6,
+            vips,
+            lb,
+            maglev,
+            nat,
+            fw_rules,
+            fw_meta,
+            underlay,
+            meter,
+            neigh_nat,
+            neigh_nat_count,
+            nat_ips,
+            dhcp_config,
+            dhcp_meta,
+            iface_meta,
+            recovered: Vec::new(),
+            recovered_underlays: Vec::new(),
+            neigh_nats: Vec::new(),
+            lbs: HashMap::new(),
+            next_table_id: 1,
+            by_id: HashMap::new(),
+            by_ifindex: HashMap::new(),
+            iface_underlay: HashMap::new(),
+            prefixes: HashMap::new(),
+            fw: HashMap::new(),
+            lb_prefixes: HashMap::new(),
+            links: HashMap::new(),
+            guest_tc,
+            routes_shadow: Vec::new(),
+            routes6_shadow: Vec::new(),
+            learned_macs: HashMap::new(),
+        };
+        // Restart adopt: the pinned state maps were reused by map_pin_path, so rebuild the in-memory
+        // bookkeeping (by_id/by_ifindex/iface_underlay) and the re-attach + IPAM-reseed lists from the
+        // surviving IFACE_META journal and UNDERLAY map. A fresh (non-adopt) bring-up starts empty.
+        if adopt {
+            let (recovered, recovered_underlays) = Self::rebuild_from_maps(&mut inner)?;
+            eprintln!(
+                "adopt: recovered {} interface(s) and {} underlay /128(s) from pinned maps",
+                recovered.len(),
+                recovered_underlays.len()
+            );
+            inner.recovered = recovered;
+            inner.recovered_underlays = recovered_underlays;
+        }
         Ok(Self {
-            inner: Mutex::new(Inner {
-                ebpf,
-                _guest_progs: guest_progs,
-                _locals: locals,
-                _uplink_dev: uplink_dev,
-                guest_dev,
-                ports,
-                ifaces,
-                routes,
-                routes6,
-                vips,
-                lb,
-                maglev,
-                nat,
-                fw_rules,
-                fw_meta,
-                underlay,
-                meter,
-                neigh_nat,
-                neigh_nat_count,
-                nat_ips,
-                dhcp_config,
-                dhcp_meta,
-                neigh_nats: Vec::new(),
-                lbs: HashMap::new(),
-                next_table_id: 1,
-                by_id: HashMap::new(),
-                by_ifindex: HashMap::new(),
-                iface_underlay: HashMap::new(),
-                prefixes: HashMap::new(),
-                fw: HashMap::new(),
-                lb_prefixes: HashMap::new(),
-                links: HashMap::new(),
-                guest_tc,
-                routes_shadow: Vec::new(),
-                routes6_shadow: Vec::new(),
-                learned_macs: HashMap::new(),
-            }),
+            inner: Mutex::new(inner),
             conntrack,
         })
+    }
+
+    /// After adopting pinned maps on restart, repopulate the in-memory bookkeeping from the surviving
+    /// `IFACE_META` journal so subsequent AttachInterface/DetachInterface/get/list see the pre-restart
+    /// state. Returns `(reattach, underlays)`:
+    ///   - `reattach`: `(interface_id, device)` whose guest program must be RE-ATTACHED by the caller
+    ///     (their links died with the old process; the maps survived).
+    ///   - `underlays`: every programmed underlay /128 (from the surviving UNDERLAY map) so the caller
+    ///     can reseed `UnderlayIpam` and never reissue a live allocation.
+    fn rebuild_from_maps(g: &mut Inner) -> anyhow::Result<(Vec<(Vec<u8>, String)>, Vec<[u8; 16]>)> {
+        let journal = g.iface_meta.entries();
+        // Sanity cross-check: the journal should track the surviving INTERFACES map 1:1.
+        let iface_count = g.ifaces.entries().len();
+        if iface_count != journal.len() {
+            eprintln!(
+                "adopt: WARNING IFACE_META has {} entries but INTERFACES has {} — journal drift",
+                journal.len(),
+                iface_count
+            );
+        }
+        let mut reattach = Vec::with_capacity(journal.len());
+        for (k, v) in &journal {
+            let (id, device, rec) = Self::decode_iface_meta(k, v);
+            // Re-derive the CURRENT tap ifindex — the veth persists across the restart, but the
+            // stored ifindex is only a cross-check. If the device is gone (pod deleted during the
+            // downtime), skip re-attach; its stale maps are cleaned by a later DetachInterface.
+            let tap = match crate::ifindex(&device) {
+                Ok(ix) => ix,
+                Err(e) => {
+                    eprintln!("adopt: device {device} for a recovered interface is gone ({e}); skipping re-attach");
+                    continue;
+                }
+            };
+            if tap != v.tap_ifindex {
+                eprintln!(
+                    "adopt: {device} ifindex changed {} -> {tap} since attach; using live value",
+                    v.tap_ifindex
+                );
+            }
+            g.by_id.insert(id.clone(), rec);
+            g.by_ifindex.insert(id.clone(), tap);
+            g.iface_underlay.insert(id.clone(), v.underlay);
+            // GUEST_DEV is pinned and keyed by ifindex; re-insert defensively in case ifindex drifted.
+            let _ = g.guest_dev.insert(tap);
+            reattach.push((id, device));
+        }
+        let underlays = g.underlay.keys();
+        Ok((reattach, underlays))
+    }
+
+    /// Pure decode of one `IFACE_META` journal entry into `(interface_id, device, IfaceRecord)`.
+    /// Factored out so the parsing is unit-testable without a live BPF map.
+    fn decode_iface_meta(k: &IfaceMetaKey, v: &IfaceMetaVal) -> (Vec<u8>, String, IfaceRecord) {
+        let id = k.id[..(v.id_len as usize).min(k.id.len())].to_vec();
+        let device =
+            String::from_utf8_lossy(&v.device[..(v.device_len as usize).min(v.device.len())])
+                .into_owned();
+        let rec = IfaceRecord {
+            vni: v.vni,
+            ipv4: v.ipv4,
+            ipv6: v.ipv6,
+            device: device.clone(),
+            underlay: v.underlay,
+        };
+        (id, device, rec)
+    }
+
+    /// The `(interface_id, device)` list recovered on adopt, whose guest program the caller must
+    /// re-attach. Empty after a fresh bring-up. (Wired into `Serve` by Task 5.)
+    #[allow(dead_code)]
+    pub fn recovered_interfaces(&self) -> Vec<(Vec<u8>, String)> {
+        self.inner.lock().recovered.clone()
+    }
+
+    /// The underlay /128s recovered on adopt, for reseeding `UnderlayIpam`. Empty after a fresh
+    /// bring-up. (Wired into `Serve` by Task 5.)
+    #[allow(dead_code)]
+    pub fn recovered_underlays(&self) -> Vec<[u8; 16]> {
+        self.inner.lock().recovered_underlays.clone()
     }
 
     /// WAN-edge role: attach `wan_rx` to the WAN uplink and register the edge's own underlay /128
@@ -451,6 +556,22 @@ impl Control {
         let tap = crate::ifindex(device)
             .map_err(|e| anyhow::anyhow!("read ifindex for {device}: {e}"))?;
         let mac = crate::mac_of(device)?;
+        // The restart journal (IFACE_META) stores the interface_id and device in fixed-width fields;
+        // reject anything that would not round-trip rather than silently truncate (a truncated id
+        // could alias another interface on adopt).
+        if interface_id.len() > xdp_dp_common::IFACE_ID_MAX {
+            anyhow::bail!(
+                "interface_id too long ({} > {}) for the restart journal",
+                interface_id.len(),
+                xdp_dp_common::IFACE_ID_MAX
+            );
+        }
+        if device.len() > IFACE_DEV_MAX {
+            anyhow::bail!(
+                "device name {device:?} too long ({} > {IFACE_DEV_MAX}) for the restart journal",
+                device.len()
+            );
+        }
         let mut g = self.inner.lock();
         if g.by_id.contains_key(interface_id) {
             anyhow::bail!("interface already exists");
@@ -490,7 +611,7 @@ impl Control {
         g.guest_dev
             .insert(tap)
             .context("register tap in GUEST_DEV")?;
-        if let Err(e) = Self::program_iface_maps(&mut g, interface_id, tap, mac, &params) {
+        if let Err(e) = Self::program_iface_maps(&mut g, interface_id, device, tap, mac, &params) {
             let _ = g.guest_dev.remove(tap); // unwind the GUEST_DEV write; `link` drops -> detaches
             return Err(e);
         }
@@ -516,6 +637,7 @@ impl Control {
     fn program_iface_maps(
         g: &mut Inner,
         interface_id: &[u8],
+        device: &str,
         tap: u32,
         mac: [u8; 6],
         params: &IfaceParams,
@@ -600,6 +722,27 @@ impl Control {
             g.meter
                 .upsert(tap, Self::meter_state(total_mbps, public_mbps))?;
         }
+        // Restart journal (never read by the datapath): persist what a restart needs to rebuild
+        // bookkeeping and re-attach the guest program. Lengths are guarded in create_interface, so
+        // `from_id` is `Some` and the device fits.
+        if let Some(key) = IfaceMetaKey::from_id(interface_id) {
+            let n = device.len().min(IFACE_DEV_MAX);
+            let mut dev = [0u8; IFACE_DEV_MAX];
+            dev[..n].copy_from_slice(&device.as_bytes()[..n]);
+            g.iface_meta.upsert(
+                key,
+                IfaceMetaVal {
+                    vni,
+                    tap_ifindex: tap,
+                    ipv4,
+                    id_len: interface_id.len().min(xdp_dp_common::IFACE_ID_MAX) as u16,
+                    device_len: n as u16,
+                    ipv6,
+                    underlay: underlay_ipv6,
+                    device: dev,
+                },
+            )?;
+        }
         Ok(())
     }
 
@@ -618,6 +761,10 @@ impl Control {
         g.guest_dev.remove(tap);
         g.iface_underlay.remove(interface_id);
         g.prefixes.remove(interface_id);
+        // Drop the restart-journal entry so a later adopt does not resurrect a deleted interface.
+        if let Some(k) = IfaceMetaKey::from_id(interface_id) {
+            let _ = g.iface_meta.remove(&k);
+        }
         // Dropping the link detaches the program from the device.
         g.links.remove(interface_id);
         let _ = g.ports.remove(tap);
@@ -1937,6 +2084,7 @@ impl Control {
         let nat_ips = NatIps::open(&mut ebpf)?;
         let dhcp_config = DhcpConfigMap::open(&mut ebpf)?;
         let dhcp_meta = DhcpMetaMap::open(&mut ebpf)?;
+        let iface_meta = IfaceMetaMap::open(&mut ebpf)?;
         let conntrack = Arc::new(Mutex::new(Conntrack::open(&mut ebpf)?));
         Ok(Self {
             inner: Mutex::new(Inner {
@@ -1962,6 +2110,9 @@ impl Control {
                 nat_ips,
                 dhcp_config,
                 dhcp_meta,
+                iface_meta,
+                recovered: Vec::new(),
+                recovered_underlays: Vec::new(),
                 neigh_nats: Vec::new(),
                 lbs: HashMap::new(),
                 next_table_id: 1,
@@ -1990,6 +2141,50 @@ impl Control {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pure (no-BPF) check that an IFACE_META journal entry round-trips back to the interface_id,
+    /// device, and IfaceRecord the restart rebuild needs — the crux of the adopt path.
+    #[test]
+    fn rebuild_decode_roundtrip() {
+        let id: &[u8] = b"550e8400-e29b-41d4-a716-446655440000/eth0";
+        let key = IfaceMetaKey::from_id(id).expect("id fits IFACE_ID_MAX");
+        let mut dev = [0u8; IFACE_DEV_MAX];
+        dev[..8].copy_from_slice(b"dtapvf_3");
+        let val = IfaceMetaVal {
+            vni: 100,
+            tap_ifindex: 42,
+            ipv4: [10, 0, 0, 5],
+            id_len: id.len() as u16,
+            device_len: 8,
+            ipv6: [0x20; 16],
+            underlay: [0xfd; 16],
+            device: dev,
+        };
+        let (got_id, got_dev, rec) = Control::decode_iface_meta(&key, &val);
+        assert_eq!(
+            got_id, id,
+            "interface_id restored verbatim (not hashed/truncated)"
+        );
+        assert_eq!(got_dev, "dtapvf_3");
+        assert_eq!(rec.vni, 100);
+        assert_eq!(rec.ipv4, [10, 0, 0, 5]);
+        assert_eq!(rec.ipv6, [0x20; 16]);
+        assert_eq!(rec.underlay, [0xfd; 16]);
+        assert_eq!(rec.device, "dtapvf_3");
+    }
+
+    /// An interface_id at the exact cap round-trips; one byte over is rejected (would alias on adopt).
+    #[test]
+    fn iface_meta_key_length_bounds() {
+        let max = vec![b'x'; xdp_dp_common::IFACE_ID_MAX];
+        let key = IfaceMetaKey::from_id(&max).expect("exactly IFACE_ID_MAX fits");
+        assert_eq!(&key.id[..], &max[..]);
+        let over = vec![b'x'; xdp_dp_common::IFACE_ID_MAX + 1];
+        assert!(
+            IfaceMetaKey::from_id(&over).is_none(),
+            "over-cap id rejected"
+        );
+    }
 
     #[test]
     #[ignore = "requires root/CAP_BPF; run via: sudo -E <test-bin> --include-ignored"]

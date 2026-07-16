@@ -385,6 +385,7 @@ async fn main() -> anyhow::Result<()> {
                 parse_mac(&gateway_mac)?,
                 underlay,
                 &serve_pin_dir,
+                false, // adopt: Task 5 computes this from a persistent --pin-dir; fresh for now.
             )?;
             // WAN-edge role: attach wan_rx to the WAN uplink + register the local-deliver edge
             // underlay so this sidecar handles both egress decap and NAT-return re-encap.

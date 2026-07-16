@@ -3,13 +3,19 @@ use aya_ebpf::{
     maps::{lpm_trie::LpmTrie, Array, DevMap, DevMapHash, HashMap, LruHashMap, ProgramArray},
 };
 use xdp_dp_common::{
-    Config, CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceValue,
-    InspectEntry, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry,
-    PortMeta, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue, VipKey,
+    Config, CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceKey,
+    IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbKey, LbValue, Local, MaglevKey,
+    MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteLpmData, RouteLpmData6,
+    RouteValue, UnderlayValue, VipKey,
 };
 
 #[map]
 pub static INTERFACES: HashMap<IfaceKey, IfaceValue> = HashMap::pinned(1024, 0);
+// Control-plane restart journal: interface_id -> (vni, ipv4/ipv6, device, underlay, tap). Written by
+// userspace on attach, removed on detach, and scanned on restart to rebuild in-memory bookkeeping +
+// re-attach guest programs. NEVER read by the datapath. Pinned so it survives an xdp-dp restart.
+#[map]
+pub static IFACE_META: HashMap<IfaceMetaKey, IfaceMetaVal> = HashMap::pinned(1024, 0);
 // LPM trie: key data = [vni_be(4) ++ ipv4(4)], prefix_len = 32 + ipv4_prefix. flags=1 is
 // BPF_F_NO_PREALLOC, REQUIRED for LPM tries (the load fails without it).
 #[map]

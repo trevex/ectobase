@@ -87,6 +87,52 @@ impl IfaceKey {
     }
 }
 
+/// Max bytes of an `interface_id` persisted in the `IFACE_META` restart journal. An interface_id is
+/// a k8s UID plus a short interface name (~60 bytes in practice); attach rejects longer ids.
+pub const IFACE_ID_MAX: usize = 64;
+/// Max bytes of a device (kernel netdev) name in the journal — Linux IFNAMSIZ (16) covers it.
+pub const IFACE_DEV_MAX: usize = 16;
+
+/// Key of the `IFACE_META` restart journal: the full `interface_id`, zero-padded to a fixed width so
+/// the whole id survives a restart (a hash would lose it — we need the id back verbatim to rebuild
+/// `by_id`/`links`). Written by userspace only; the datapath never reads this map.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct IfaceMetaKey {
+    pub id: [u8; IFACE_ID_MAX],
+}
+
+/// Value of the `IFACE_META` restart journal: everything the control plane needs to rebuild its
+/// in-memory bookkeeping and re-attach the guest program after an xdp-dp restart. `id_len`/`device_len`
+/// give the used prefix of the padded `IfaceMetaKey.id` / `device`. `tap_ifindex` is the ifindex at
+/// attach time; the rebuild re-derives the live ifindex from `device` (the veth persists) and treats
+/// this as a cross-check. Field order is chosen so the struct has no implicit padding.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct IfaceMetaVal {
+    pub vni: u32,
+    pub tap_ifindex: u32,
+    pub ipv4: [u8; 4],
+    pub id_len: u16,
+    pub device_len: u16,
+    pub ipv6: [u8; 16],
+    pub underlay: [u8; 16],
+    pub device: [u8; IFACE_DEV_MAX],
+}
+
+impl IfaceMetaKey {
+    /// Pad `id` into the fixed-width key. Returns `None` if `id` exceeds [`IFACE_ID_MAX`] (attach
+    /// rejects such ids rather than silently truncating — a truncated key could alias another id).
+    pub fn from_id(id: &[u8]) -> Option<Self> {
+        if id.len() > IFACE_ID_MAX {
+            return None;
+        }
+        let mut k = [0u8; IFACE_ID_MAX];
+        k[..id.len()].copy_from_slice(id);
+        Some(Self { id: k })
+    }
+}
+
 /// Key for the `routes` map: (VNI, IPv4 prefix). Host-order length in `prefix_len`.
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
@@ -448,6 +494,8 @@ mod user_impls {
     use super::*;
     unsafe impl aya::Pod for IfaceKey {}
     unsafe impl aya::Pod for IfaceValue {}
+    unsafe impl aya::Pod for IfaceMetaKey {}
+    unsafe impl aya::Pod for IfaceMetaVal {}
     unsafe impl aya::Pod for UnderlayValue {}
     unsafe impl aya::Pod for PortMeta {}
     unsafe impl aya::Pod for RouteKey {}

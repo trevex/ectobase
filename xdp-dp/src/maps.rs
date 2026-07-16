@@ -5,9 +5,10 @@ use aya::maps::{
 };
 use aya::Ebpf;
 use xdp_dp_common::{
-    CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceValue,
-    InspectEntry, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry,
-    PortMeta, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue, VipKey,
+    CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceMetaKey,
+    IfaceMetaVal, IfaceValue, InspectEntry, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey,
+    NatValue, NeighborNatEntry, PortMeta, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue,
+    VipKey,
 };
 
 /// Typed handle over the `INTERFACES` BPF map (overlay (VNI, IPv4) -> delivery info).
@@ -44,6 +45,35 @@ impl Interfaces {
     /// surviving pinned map. Mirrors `Conntrack::entries`. (Wired in by Task 5's restart path.)
     #[allow(dead_code)]
     pub fn entries(&self) -> Vec<(IfaceKey, IfaceValue)> {
+        self.map.iter().filter_map(|r| r.ok()).collect()
+    }
+}
+
+/// Typed handle over the `IFACE_META` restart journal (interface_id -> rebuild detail). Written by
+/// the control plane on attach/detach and scanned on restart; never read by the datapath.
+pub struct IfaceMetaMap {
+    map: HashMap<MapData, IfaceMetaKey, IfaceMetaVal>,
+}
+
+impl IfaceMetaMap {
+    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
+        let map = HashMap::try_from(
+            ebpf.take_map("IFACE_META")
+                .context("IFACE_META map missing")?,
+        )?;
+        Ok(Self { map })
+    }
+
+    pub fn upsert(&mut self, key: IfaceMetaKey, val: IfaceMetaVal) -> anyhow::Result<()> {
+        self.map.insert(key, val, 0).context("insert iface_meta")
+    }
+
+    pub fn remove(&mut self, key: &IfaceMetaKey) -> anyhow::Result<()> {
+        self.map.remove(key).context("remove iface_meta")
+    }
+
+    /// Snapshot the whole journal — scanned once on restart to rebuild bookkeeping.
+    pub fn entries(&self) -> Vec<(IfaceMetaKey, IfaceMetaVal)> {
         self.map.iter().filter_map(|r| r.ok()).collect()
     }
 }
