@@ -78,15 +78,19 @@ type Bus struct {
 	// UNIQUE control-plane loopback, learned from EDGE_UNDERLAY PublicPrefix
 	// records. A later task reads it to pin the WAN return path to a specific edge.
 	learnedEdge map[string]string
+
+	egressVNIs    []uint32          // local VNIs that import the public default(s); set by Run
+	learnedPublic map[string]string // public-VNI prefix -> nexthop (recorded, imported into egressVNIs)
 }
 
 func NewBus(nodeID, underlay string, dp Dataplane, isEdge bool) *Bus {
-	return &Bus{nodeID: nodeID, underlay: underlay, dp: dp, isEdge: isEdge, learnedEdge: map[string]string{}}
+	return &Bus{nodeID: nodeID, underlay: underlay, dp: dp, isEdge: isEdge, learnedEdge: map[string]string{}, learnedPublic: map[string]string{}}
 }
 
 // Run opens a Session, sends Hello + the initial subscriptions + announcements,
 // then pumps RouteUpdates into the dataplane until ctx is done or the stream errors.
-func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, subVNIs []uint32, announce []Route, announceNat []NatBlock, announcePublic []PublicPrefix) error {
+func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, subVNIs []uint32, announce []Route, announceNat []NatBlock, announcePublic []PublicPrefix, egressVNIs []uint32) error {
+	b.egressVNIs = egressVNIs
 	stream, err := cc.Session(ctx)
 	if err != nil {
 		return err
@@ -188,6 +192,33 @@ func (b *Bus) apply(ctx context.Context, ru *rbv1.RouteUpdate) {
 	if len(ru.Nexthops) > 0 {
 		nh = ru.Nexthops[0] // ECMP set carried; v1 programs the primary
 	}
+	if ru.Vni == PublicVNI {
+		// Public-VNI routes are aggregation records: record them and IMPORT into each local egress VNI
+		// (a tenant node has no VNI-0 table). External=true so SNAT sources follow it; LB-VIP replies
+		// miss SNAT and stay public.
+		b.mu.Lock()
+		switch ru.Op {
+		case rbv1.RouteOp_ROUTE_OP_ADD:
+			b.learnedPublic[ru.Prefix] = nh
+		case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
+			delete(b.learnedPublic, ru.Prefix)
+		}
+		evs := append([]uint32(nil), b.egressVNIs...)
+		b.mu.Unlock()
+		for _, vni := range evs {
+			switch ru.Op {
+			case rbv1.RouteOp_ROUTE_OP_ADD:
+				if err := b.dp.AddRoute(ctx, vni, ru.Prefix, nh, true); err != nil {
+					log.Printf("import AddRoute vni=%d %s -> %s: %v", vni, ru.Prefix, nh, err)
+				}
+			case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
+				if err := b.dp.WithdrawRoute(ctx, vni, ru.Prefix); err != nil {
+					log.Printf("import WithdrawRoute vni=%d %s: %v", vni, ru.Prefix, err)
+				}
+			}
+		}
+		return
+	}
 	switch ru.Op {
 	case rbv1.RouteOp_ROUTE_OP_ADD:
 		if err := b.dp.AddRoute(ctx, ru.Vni, ru.Prefix, nh, ru.External); err != nil {
@@ -198,6 +229,18 @@ func (b *Bus) apply(ctx context.Context, ru *rbv1.RouteUpdate) {
 			log.Printf("WithdrawRoute vni=%d %s: %v", ru.Vni, ru.Prefix, err)
 		}
 	}
+}
+
+// LearnedPublic returns a copy of the learned public-VNI prefix -> nexthop map
+// (the external default routes imported into this node's egress VNIs).
+func (b *Bus) LearnedPublic() map[string]string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make(map[string]string, len(b.learnedPublic))
+	for k, v := range b.learnedPublic {
+		out[k] = v
+	}
+	return out
 }
 
 // dpAdapter wraps the real DataplaneNode gRPC client as a Dataplane.

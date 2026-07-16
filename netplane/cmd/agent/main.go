@@ -68,7 +68,7 @@ func main() {
 	// Reconcile the desired announcements/subscriptions for this node, then run the
 	// bus session. On disconnect, retry with backoff (the reflector fast-withdrew us).
 	for {
-		subs, ann, annNat, err := r.Desired(ctx)
+		subs, ann, annNat, egressVNIs, err := r.Desired(ctx)
 		if err != nil {
 			log.Printf("reconcile: %v", err)
 			time.Sleep(2 * time.Second)
@@ -87,7 +87,7 @@ func main() {
 			continue
 		}
 		bus := agent.NewBus(*nodeID, *underlay, dp, *edgeLoopback != "")
-		if err := bus.Run(ctx, rb, subs, ann, annNat, pub); err != nil {
+		if err := bus.Run(ctx, rb, subs, ann, annNat, pub, egressVNIs); err != nil {
 			log.Printf("bus session ended: %v; reconnecting", err)
 		}
 		time.Sleep(time.Second)
