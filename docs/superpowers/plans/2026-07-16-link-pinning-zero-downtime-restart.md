@@ -18,7 +18,8 @@
 - `GuestLink` (control.rs:25-30) = `Xdp(XdpLink)` | `Tc(SchedClassifierLink)`.
 - An existing `attach_xdp_pinned` (loader.rs) already pins an XDP link (`XdpLink` → `FdLink` → `FdLink::pin`) — the pattern to generalize. It's used only by the lab `Bringup` path today.
 - aya kernel-version behavior: `SchedClassifier::attach(iface, Ingress)` uses **tcx** (`BPF_TCX_INGRESS`, an `FdLink`) on kernel ≥ 6.6, else netlink `cls_bpf`. Our nodes are 7.0.11.
-- `Xdp::attach_to_link(link: XdpLink)` and `SchedClassifier::attach_to_link(link: SchedClassifierLink)` are public and do `bpf_link_update` (atomic replace). `PinnedLink::from_pin(path) -> PinnedLink`; `PinnedLink::unpin() -> FdLink`; `FdLink::pin(path) -> PinnedLink`; `XdpLink: From<FdLink>` and `SchedClassifierLink` wraps `FdLink` (via `TcLinkInner::FdLink`).
+- `Xdp::attach_to_link(link: XdpLink)` and `SchedClassifier::attach_to_link(link: SchedClassifierLink)` are public and do `bpf_link_update` (atomic replace). `PinnedLink::from_pin(path) -> PinnedLink`; `FdLink: From<PinnedLink>` (so `pinned.into()`); `FdLink::pin(path) -> PinnedLink`; `XdpLink: TryFrom<FdLink>` and `SchedClassifierLink: TryFrom<FdLink>` (so `fd.try_into()` — the tc TryFrom requires `BPF_LINK_TYPE_TCX`). `XdpLink: TryInto<FdLink>` for the pin path (as existing `attach_xdp_pinned` uses).
+- **Task 0 spike result (validated on kernel 7.0.11):** guest tc attach yields a **tcx `FdLink`** (pinnable); XDP attach yields a pinnable `FdLink`; `from_pin → try_into → attach_to_link` succeeds and **the bpffs pin survives `attach_to_link`** (zero-gap re-point confirmed). So the netlink-fallback branch is not exercised on our kernels.
 - **tcx attachments appear in `bpftool net show` (`tc:` section), NOT in `tc filter show … ingress`.**
 - The `--pin-dir` flag already exists on `Serve` (main.rs:131-132, destructured at 363). `serve_pin_dir` is computed at main.rs:382. Guest re-attach on adopt is `main.rs` adopt block (`control.reattach_guest`) + `control.rs::reattach_guest`.
 
@@ -185,7 +186,8 @@ pub fn readopt_xdp_link(ebpf: &mut Ebpf, prog: &str, pin_dir: &Path, name: &str)
     if !path.exists() { return Ok(false); }
     let pinned = PinnedLink::from_pin(&path).with_context(|| format!("from_pin {}", path.display()))?;
     let fd: FdLink = pinned.into();
-    let xlink: aya::programs::xdp::XdpLink = fd.into();
+    let xlink: aya::programs::xdp::XdpLink = fd.try_into()
+        .map_err(|_| anyhow::anyhow!("pinned link at {} is not an XDP link", path.display()))?;
     let p: &mut Xdp = ebpf.program_mut(prog).with_context(|| format!("{prog} missing"))?.try_into()?;
     let id = p.attach_to_link(xlink).with_context(|| format!("attach_to_link {prog}"))?;
     let _ = p.take_link(id); // held by the process; the bpffs pin persists the attachment
@@ -215,7 +217,8 @@ pub fn readopt_tc_link(ebpf: &mut Ebpf, prog: &str, pin_dir: &Path, name: &str) 
     if !path.exists() { return Ok(false); }
     let pinned = PinnedLink::from_pin(&path).with_context(|| format!("from_pin {}", path.display()))?;
     let fd: FdLink = pinned.into();
-    let tlink: aya::programs::tc::SchedClassifierLink = fd.into();
+    let tlink: aya::programs::tc::SchedClassifierLink = fd.try_into()
+        .map_err(|_| anyhow::anyhow!("pinned link at {} is not a tcx link", path.display()))?;
     let p: &mut SchedClassifier = ebpf.program_mut(prog).with_context(|| format!("tc {prog} missing"))?.try_into()?;
     let id = p.attach_to_link(tlink).with_context(|| format!("attach_to_link {prog}"))?;
     let _ = p.take_link(id);
