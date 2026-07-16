@@ -54,6 +54,11 @@ sudo docker exec "$SRC_NODE" ls "$PIN/INTERFACES" "$PIN/UNDERLAY" "$PIN/IFACE_ME
 [ "$(COUNT UNDERLAY)" -ge 1 ] || fail "UNDERLAY empty before kill"
 [ "$(COUNT IFACE_META)" -ge 1 ] || fail "IFACE_META (journal) empty before kill"
 CID_OLD=$(xdp_cid); pass "pins present; UNDERLAY=$(COUNT UNDERLAY) IFACE_META=$(COUNT IFACE_META); xdp-dp=$CID_OLD"
+# Link-pinning pre-state: the uplink XDP link should be pinned and a program attached to eth1.
+UPLINK_PIN="$PIN/links/uplink-eth1"
+UPLINK_PINNED_PRE=no; sudo docker exec "$SRC_NODE" ls "$UPLINK_PIN" >/dev/null 2>&1 && UPLINK_PINNED_PRE=yes
+UPLINK_ID_PRE=$(sudo docker exec "$SRC_NODE" bpftool net show dev eth1 2>/dev/null | grep -oE 'id [0-9]+' | head -1)
+echo "    uplink link pinned (pre)=$UPLINK_PINNED_PRE; eth1 xdp $UPLINK_ID_PRE"
 
 echo "== [2] KILL the xdp-dp container (crictl stop) — kubelet restarts it, Serve adopts =="
 sudo docker exec "$SRC_NODE" crictl stop "$CID_OLD" >/dev/null 2>&1 || fail "crictl stop failed"
@@ -83,13 +88,27 @@ else
   pass "UNDERLAY non-empty after restart (python3 missing; skipped exact /128 match)"
 fi
 
-echo "== [4] guest program re-attach (best-effort on clab; informational) =="
-if sudo docker exec "$SRC_NODE" tc filter show dev "veth-$NIC" ingress 2>/dev/null | grep -qi bpf; then
-  pass "guest tc program re-attached to veth-$NIC"
+echo "== [4] uplink link stayed attached across the restart (zero-gap, link-pinning) =="
+# The pinned uplink link must survive the crictl stop (the program is never detached) and an XDP
+# program must still be on eth1 afterwards. This is the zero-gap invariant that link-pinning adds.
+if [ "$UPLINK_PINNED_PRE" = yes ]; then
+  UPLINK_ID_POST=$(sudo docker exec "$SRC_NODE" bpftool net show dev eth1 2>/dev/null | grep -oE 'id [0-9]+' | head -1)
+  sudo docker exec "$SRC_NODE" ls "$UPLINK_PIN" >/dev/null 2>&1 \
+    || fail "uplink link pin vanished across the restart — link was NOT persisted"
+  [ -n "$UPLINK_ID_POST" ] \
+    || fail "no XDP program on eth1 after restart — uplink datapath dropped"
+  pass "uplink link pin survived + eth1 xdp present ($UPLINK_ID_PRE -> $UPLINK_ID_POST) — zero-gap"
 else
-  echo "    INFO: no tc bpf filter on veth-$NIC after restart. On the clab kind SKB fabric aya's"
-  echo "    tc-clsact attach silently no-ops (affects the ORIGINAL attach identically), so this is a"
-  echo "    fabric limitation, not a restart regression. The adopt log above shows re-attach was run."
+  echo "    INFO: uplink link was not pinned pre-kill (--pin-links off?); skipping zero-gap assertion."
+fi
+
+echo "== [4b] guest program re-attach (tcx shows in 'bpftool net show', not 'tc filter show') =="
+if sudo docker exec "$SRC_NODE" bpftool net show dev "veth-$NIC" 2>/dev/null | grep -qiE "tcx|tc_guest_tx|guest_tx"; then
+  pass "guest program re-attached to veth-$NIC (tcx present)"
+else
+  echo "    INFO: no tcx program on veth-$NIC after restart. On the clab kind SKB fabric the guest"
+  echo "    tcx attach does not land (confirmed: bpftool net 'tc:' empty) — a fabric limitation, not a"
+  echo "    restart regression. The adopt log above shows the re-adopt/re-attach was run."
 fi
 
 echo "== [5] IPAM did NOT reissue the live /128: a NEW pod gets a DIFFERENT /128 =="

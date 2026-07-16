@@ -403,6 +403,7 @@ pub fn readopt_xdp_link(
         .attach_to_link(xlink)
         .with_context(|| format!("attach_to_link {prog}"))?;
     let _ = p.take_link(id);
+    println!("adopt: re-pointed pinned link {name} -> {prog} (atomic, zero-gap)");
     Ok(true)
 }
 
@@ -466,6 +467,7 @@ pub fn readopt_tc_link(
         .attach_to_link(tlink)
         .with_context(|| format!("attach_to_link {prog}"))?;
     let _ = p.take_link(id);
+    println!("adopt: re-pointed pinned link {name} -> {prog} (atomic, zero-gap)");
     Ok(true)
 }
 
