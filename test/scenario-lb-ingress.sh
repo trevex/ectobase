@@ -5,13 +5,14 @@
 # Reply is DSR (src=VIP) and — being an ingress-ESTABLISHED flow — needs NO egress rule (the reverse
 # conntrack entry, pre-seeded on the inbound SYN, makes the backend's replies "established").
 #
-# Wiring notes:
+# Wiring notes (fully CRD/bus-driven — no manual dataplane calls):
 #   * Backend attaches with interface_id == NIC name ("web") so the agent's firewall (from the
 #     INGRESS NetworkPolicy) reaches the attached interface (deny-by-default otherwise).
-#   * Edge learns the VIP from the LoadBalancer CRD (agent ReconcileLB -> AddLbVip). Backend
-#     registration on the edge (AddLbBackend) rides PUBLIC_KIND_LB_VIP over routebus, which is
-#     currently RESERVED/not-yet-wired — so we register the backend on the edges via grpcurl here
-#     as an interim (the SOURCE side is fully CRD-driven).
+#   * Edge learns the VIP from the LoadBalancer CRD (agent ReconcileLB -> AddLbVip).
+#   * Backend registration on the edge (AddLbBackend) rides PUBLIC_KIND_LB_VIP over routebus: the
+#     backend node's agent DesiredPublic announces one LB_VIP record (owner = the NIC's underlay
+#     /128) which the reflector fans out (and replays to late-joining edges); each edge's applyPublic
+#     consumes it -> AddLbBackend. So BOTH the VIP and its backends are CRD-driven end to end.
 #
 # PREREQ: fabric up + netplane stack on k01. root + kubectl + grpcurl image.
 set -uo pipefail
@@ -87,15 +88,15 @@ CID=$(sudo docker exec "$NODE" sh -c 'crictl ps | grep " xdp-dp " | awk "{print 
 echo "  backend node firewall/LB programming:"
 sudo docker exec "$NODE" sh -c "crictl logs $CID 2>&1 | grep -iE 'FwRule.*$NIC|LB' | tail -4" | sed 's/^/    /'
 
-echo "== [4] edge: AddLbVip via agent (CRD) + AddLbBackend (interim: LB_VIP routebus arc is reserved) =="
+echo "== [4] edge: agents reconcile the VIP (AddLbVip) + learn the backend off the bus (AddLbBackend) =="
 bash "$ROOT/hack/clab/edge-agents-up.sh" >/dev/null 2>&1 || true
-sleep 3
+# Give the edge agents a beat to: ReconcileLB (AddLbVip from the CRD), connect to the reflector, and
+# receive the replayed PUBLIC_KIND_LB_VIP record the backend node announced (-> applyPublic AddLbBackend).
+sleep 5
 for E in edge1 edge2; do
   EC="clab-xdp-ipv6-fabric-$E"
-  # AddLbVip is idempotent; the edge agent's ReconcileLB also does it from the CRD. Register the backend.
-  grpc "$EC" "{\"id\":\"$VIP\",\"vni\":0,\"vip\":\"$VIP\",\"lb_underlay\":\"fd00:db8:0:9::e\",\"ports\":[{\"port\":$PORT,\"proto\":6}]}" AddLbVip >/dev/null 2>&1
-  R=$(grpc "$EC" "{\"id\":\"$VIP\",\"backend_underlay\":\"$UL\"}" AddLbBackend)
-  echo "  $E AddLbBackend($UL) -> ${R:-ok}"
+  echo "  $E LB programming (bus-driven):"
+  sudo docker logs "$EC" 2>&1 | grep -iE "AddLbVip|AddLbBackend|LB_VIP|vip=$VIP" | tail -3 | sed 's/^/    /'
 done
 
 echo "== [5] fix VyOS default (harness) + prepare a WAN client on clabwan =="
@@ -106,4 +107,4 @@ sudo ip route replace $VIP/32 nexthop via 172.29.0.11 dev clabwan nexthop via 17
 echo "== [6] WAN client (host on clabwan) curls the VIP =="
 echo "  --- curl http://$VIP:$PORT/ (timeout 6) ---"
 timeout 6 curl -s "http://$VIP:$PORT/" 2>&1 | head -3 | sed 's/^/  /' || echo "  (no response — inbound reaches backend but the DSR RETURN hop to the WAN is the open item)"
-echo "== done (N/S ingress wired; completion needs the return hop + the LB_VIP routebus arc) =="
+echo "== done (N/S ingress fully CRD/bus-driven: VIP + backends via routebus; DSR return hop is the open item) =="
