@@ -135,6 +135,30 @@ impl UnderlayIpam {
         let host = u128::from(ip).wrapping_sub(base);
         self.used.remove(&host);
     }
+
+    /// Mark `ip` as ALREADY allocated (restart recovery). A restarted control plane rebuilds its
+    /// `used` set by calling this for every /128 found in the live (pinned) UNDERLAY map, so it can
+    /// never re-hand-out an address an existing guest still holds — the reissue-a-live-/128 blackhole
+    /// the review flagged. Addresses outside this prefix's allocatable second half are ignored (they
+    /// can never be handed out anyway, so tracking them is pointless). Also advances the `next`
+    /// high-water mark past a recovered address so fresh allocations continue above it.
+    pub fn mark_used(&mut self, ip: Ipv6Addr) {
+        let base = u128::from(self.prefix.network());
+        let host = u128::from(ip).wrapping_sub(base);
+        let host_bits = 128 - self.prefix.prefix_len() as u32;
+        let max_host: u128 = if host_bits >= 128 {
+            u128::MAX
+        } else {
+            (1u128 << host_bits) - 1
+        };
+        if host < self.start || host > max_host {
+            return;
+        }
+        self.used.insert(host);
+        if host >= self.next {
+            self.next = host + 1;
+        }
+    }
 }
 
 /// Read the host's IPv6 interface addresses by shelling out to `ip -6 -o addr`.
@@ -249,6 +273,35 @@ mod tests {
         assert_ne!(x, y);
         ip.release(x);
         assert_eq!(ip.allocate().unwrap(), x); // lowest free reused
+    }
+
+    #[test]
+    fn mark_used_prevents_reissue_after_restart() {
+        // Simulate a restart: a prior process handed out the first two /128s. Rebuilding the used
+        // set via mark_used must stop allocate() from reissuing either (which would blackhole the
+        // still-attached guests that hold them).
+        let mut ip = UnderlayIpam::new("fd00:db8:0:2::/64".parse().unwrap());
+        let live0: Ipv6Addr = "fd00:db8:0:2:8000::".parse().unwrap();
+        let live1: Ipv6Addr = "fd00:db8:0:2:8000::1".parse().unwrap();
+        ip.mark_used(live0);
+        ip.mark_used(live1);
+        let got = ip.allocate().unwrap();
+        assert_ne!(got, live0);
+        assert_ne!(got, live1);
+        assert_eq!(got, "fd00:db8:0:2:8000::2".parse::<Ipv6Addr>().unwrap());
+    }
+
+    #[test]
+    fn mark_used_ignores_out_of_range_addresses() {
+        // A foreign or lower-half address (e.g. the node loopback) in the map must be ignored, not
+        // tracked — and must not disturb the allocation cursor.
+        let mut ip = UnderlayIpam::new("fd00:db8:0:2::/64".parse().unwrap());
+        ip.mark_used("fd00:db8:0:2::1".parse().unwrap()); // node loopback (lower half) — ignore
+        ip.mark_used("2001:db8::1".parse().unwrap()); // different prefix — ignore
+        assert_eq!(
+            ip.allocate().unwrap(),
+            "fd00:db8:0:2:8000::".parse::<Ipv6Addr>().unwrap()
+        );
     }
 
     #[test]
