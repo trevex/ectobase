@@ -1,6 +1,7 @@
 //! Userspace conntrack aging: periodically evict entries idle longer than their timeout. Mirrors
 //! dpservice (30 s default, 1-day established-TCP). Times are kernel-monotonic ns (bpf_ktime).
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::time::Duration;
 
 use xdp_dp_common::{CtEntry, TCP_ESTABLISHED};
@@ -35,7 +36,7 @@ pub async fn run(ct: Arc<Mutex<Conntrack>>, interval: Duration) {
         tokio::time::sleep(interval).await;
         let now = ktime_now_ns();
         let stale: Vec<_> = {
-            let ct_guard = ct.lock().unwrap();
+            let ct_guard = ct.lock();
             ct_guard
                 .entries()
                 .into_iter()
@@ -43,7 +44,7 @@ pub async fn run(ct: Arc<Mutex<Conntrack>>, interval: Duration) {
                 .map(|(k, _)| k)
                 .collect()
         };
-        let mut ct_guard = ct.lock().unwrap();
+        let mut ct_guard = ct.lock();
         for k in stale {
             let _ = ct_guard.remove(&k);
         }

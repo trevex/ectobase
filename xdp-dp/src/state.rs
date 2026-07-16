@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 use uuid::Uuid;
 
@@ -16,7 +16,7 @@ struct Inner {
 impl State {
     /// Idempotently initialize; returns the stable service uuid.
     pub fn initialize(&self) -> String {
-        let mut g = self.inner.lock().unwrap();
+        let mut g = self.inner.lock();
         g.uuid
             .get_or_insert_with(|| Uuid::new_v4().to_string())
             .clone()
@@ -24,7 +24,7 @@ impl State {
 
     /// Returns Some(uuid) if initialized.
     pub fn check_initialized(&self) -> Option<String> {
-        self.inner.lock().unwrap().uuid.clone()
+        self.inner.lock().uuid.clone()
     }
 }
 

@@ -12,9 +12,10 @@
 //! INTERFACES / UNDERLAY / the local self-route. Our job here is the veth+netns lifecycle plus the
 //! underlay-/128 IPAM (via [`UnderlayIpam`]) and MAC allocation, then delegation.
 
+use parking_lot::Mutex;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use anyhow::{bail, Context};
 
@@ -60,7 +61,7 @@ impl AttachState {
 
     /// Allocate a locally-administered unicast MAC (02:xx:...) from the process-local counter.
     fn alloc_mac(&self) -> [u8; 6] {
-        let mut seq = self.mac_seq.lock().unwrap();
+        let mut seq = self.mac_seq.lock();
         *seq = seq.wrapping_add(1);
         let s = seq.to_be_bytes();
         [0x02, 0x00, s[0], s[1], s[2], s[3]]
@@ -97,7 +98,7 @@ impl AttachState {
 
         // Underlay /128 out of the inferred host /64.
         let underlay_ipv6 = {
-            let mut ipam = self.ipam.lock().unwrap();
+            let mut ipam = self.ipam.lock();
             ipam.allocate().context("underlay /64 exhausted")?.octets()
         };
 
@@ -111,7 +112,7 @@ impl AttachState {
         // the veth is created, tear it down so we don't leak.
         if let Err(e) = self.setup_veth(&host, guest_name, netns_path, mac) {
             let _ = run(&["ip", "link", "del", &host]);
-            let mut ipam = self.ipam.lock().unwrap();
+            let mut ipam = self.ipam.lock();
             ipam.release(Ipv6Addr::from(underlay_ipv6));
             return Err(e);
         }
@@ -133,7 +134,7 @@ impl AttachState {
             .create_interface(interface_id.as_bytes(), &host, params)
         {
             let _ = run(&["ip", "link", "del", &host]);
-            let mut ipam = self.ipam.lock().unwrap();
+            let mut ipam = self.ipam.lock();
             ipam.release(Ipv6Addr::from(underlay_ipv6));
             return Err(e).context("program datapath for interface");
         }
@@ -148,7 +149,7 @@ impl AttachState {
             None => {
                 let _ = self.control.detach_interface(interface_id.as_bytes());
                 let _ = run(&["ip", "link", "del", &host]);
-                let mut ipam = self.ipam.lock().unwrap();
+                let mut ipam = self.ipam.lock();
                 ipam.release(Ipv6Addr::from(underlay_ipv6));
                 bail!("INTERFACES read-back failed after programming");
             }
@@ -231,7 +232,7 @@ impl AttachState {
         // Deleting the host end removes the veth pair (guest peer goes with it).
         let _ = run(&["ip", "link", "del", &host]);
         if let Some(ul) = underlay {
-            self.ipam.lock().unwrap().release(Ipv6Addr::from(ul));
+            self.ipam.lock().release(Ipv6Addr::from(ul));
         }
         Ok(())
     }

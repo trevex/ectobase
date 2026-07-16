@@ -429,9 +429,9 @@ async fn main() -> anyhow::Result<()> {
             };
             let attach_state = std::sync::Arc::new(attach::AttachState {
                 control: std::sync::Arc::clone(&control),
-                ipam: std::sync::Mutex::new(ipam),
+                ipam: parking_lot::Mutex::new(ipam),
                 gateway_ipv4,
-                mac_seq: std::sync::Mutex::new(0),
+                mac_seq: parking_lot::Mutex::new(0),
             });
 
             let svc = grpc::Service {
@@ -490,7 +490,7 @@ async fn main() -> anyhow::Result<()> {
                 let dir = pin_dir.as_deref().context("--adopt requires --pin-dir")?;
                 let ct = maps::Conntrack::from_pin(&format!("{dir}/CONNTRACK"))?;
                 tokio::spawn(conntrack_gc::run(
-                    std::sync::Arc::new(std::sync::Mutex::new(ct)),
+                    std::sync::Arc::new(parking_lot::Mutex::new(ct)),
                     std::time::Duration::from_secs(10),
                 ));
                 println!("adopted pinned datapath at {dir}; resuming conntrack GC; ctrl-c to stop");
@@ -1084,7 +1084,7 @@ async fn main() -> anyhow::Result<()> {
             }
             let ct = maps::Conntrack::open(&mut ebpf)?;
             tokio::spawn(conntrack_gc::run(
-                std::sync::Arc::new(std::sync::Mutex::new(ct)),
+                std::sync::Arc::new(parking_lot::Mutex::new(ct)),
                 std::time::Duration::from_secs(10),
             ));
 
