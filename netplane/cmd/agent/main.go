@@ -65,14 +65,15 @@ func main() {
 	r.SetUnderlay(*underlay)
 	r.SetDataplane(dp)
 	r.SetEdgeLoopback(*edgeLoopback)
-	// Reconcile the desired announcements/subscriptions for this node, then run the
-	// bus session. On disconnect, retry with backoff (the reflector fast-withdrew us).
-	for {
-		subs, ann, annNat, egressVNIs, err := r.Desired(ctx)
+
+	// reconcile recomputes this node's full desired bus state AND programs the local dataplane
+	// (SNAT via Desired's side effect, firewall + LB diffs). The Bus calls it every reconcile tick
+	// and on session (re)open, pushing only the deltas onto the live stream — so CRD changes after
+	// startup converge without waiting for a disconnect, and removed NICs are withdrawn fabric-wide.
+	reconcile := func(ctx context.Context) (agent.DesiredState, error) {
+		subs, routes, nats, egressVNIs, err := r.Desired(ctx)
 		if err != nil {
-			log.Printf("reconcile: %v", err)
-			time.Sleep(2 * time.Second)
-			continue
+			return agent.DesiredState{}, err
 		}
 		if err := r.ReconcileFirewall(ctx); err != nil {
 			log.Printf("reconcile firewall: %v", err)
@@ -80,14 +81,18 @@ func main() {
 		if err := r.ReconcileLB(ctx); err != nil {
 			log.Printf("reconcile lb: %v", err)
 		}
-		pub, err := r.DesiredPublic(ctx)
+		pubs, err := r.DesiredPublic(ctx)
 		if err != nil {
-			log.Printf("desired public: %v", err)
-			time.Sleep(2 * time.Second)
-			continue
+			return agent.DesiredState{}, err
 		}
+		return agent.DesiredState{Subs: subs, Routes: routes, Nats: nats, Pubs: pubs, EgressVNIs: egressVNIs}, nil
+	}
+
+	// Run the bus session; on disconnect, retry (the reflector fast-withdrew us, and the next Run
+	// re-announces the full desired set from scratch).
+	for {
 		bus := agent.NewBus(*nodeID, *underlay, dp, *edgeLoopback != "")
-		if err := bus.Run(ctx, rb, subs, ann, annNat, pub, egressVNIs); err != nil {
+		if err := bus.Run(ctx, rb, reconcile); err != nil {
 			log.Printf("bus session ended: %v; reconnecting", err)
 		}
 		time.Sleep(time.Second)

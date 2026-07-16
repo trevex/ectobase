@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"sync"
+	"time"
 
 	dpv1 "github.com/trevex/xdp-dp/cni/gen/dataplanev1"
 	rbv1 "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
@@ -79,19 +80,39 @@ type Bus struct {
 	// records. A later task reads it to pin the WAN return path to a specific edge.
 	learnedEdge map[string]string
 
-	egressVNIs    []uint32          // local VNIs that import the public default(s); set by Run
+	egressVNIs    []uint32          // local VNIs that import the public default(s); set each reconcile
 	learnedPublic map[string]string // public-VNI prefix -> nexthop (recorded, imported into egressVNIs)
+
+	// reconcileEvery is how often Run recomputes the desired announcement set and pushes deltas onto
+	// the live stream. Tests override it for fast convergence.
+	reconcileEvery time.Duration
 }
+
+// defaultReconcileEvery bounds how stale this node's fabric-wide announcements can get after a CRD
+// change while the bus session stays up (the K8s watch would make this event-driven; the ticker is
+// the simple, robust floor).
+const defaultReconcileEvery = 5 * time.Second
 
 func NewBus(nodeID, underlay string, dp Dataplane, isEdge bool) *Bus {
-	return &Bus{nodeID: nodeID, underlay: underlay, dp: dp, isEdge: isEdge, learnedEdge: map[string]string{}, learnedPublic: map[string]string{}}
+	return &Bus{
+		nodeID: nodeID, underlay: underlay, dp: dp, isEdge: isEdge,
+		learnedEdge: map[string]string{}, learnedPublic: map[string]string{},
+		reconcileEvery: defaultReconcileEvery,
+	}
 }
 
-// Run opens a Session, sends Hello + the initial subscriptions + announcements,
-// then pumps RouteUpdates into the dataplane until ctx is done or the stream errors.
-func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, subVNIs []uint32, announce []Route, announceNat []NatBlock, announcePublic []PublicPrefix, egressVNIs []uint32) error {
-	b.egressVNIs = egressVNIs
-	stream, err := cc.Session(ctx)
+// Run drives one route-bus session to steady state. It opens a Session, sends Hello, then loops:
+// on every reconcile tick it calls `reconcile` to recompute the full DesiredState and pushes only the
+// deltas (announce new/changed, withdraw removed) onto the live stream, while concurrently applying
+// inbound RouteUpdates to the dataplane. It returns when ctx is done or the stream errors (the caller
+// reconnects, and the next Run re-announces the whole set because `applied` resets to empty).
+//
+// All stream.Send calls happen from THIS goroutine — the receive side is offloaded to a goroutine
+// feeding recvCh, so there is never a concurrent Send on the gRPC stream.
+func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, reconcile func(context.Context) (DesiredState, error)) error {
+	sessCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stream, err := cc.Session(sessCtx)
 	if err != nil {
 		return err
 	}
@@ -100,47 +121,135 @@ func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, subVNIs []uint32,
 	}}); err != nil {
 		return err
 	}
-	for _, v := range subVNIs {
-		if err := stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_Subscribe{
-			Subscribe: &rbv1.Subscribe{Vni: v},
-		}}); err != nil {
+
+	recvCh := make(chan *rbv1.ServerMsg, 64)
+	recvErr := make(chan error, 1)
+	go func() {
+		for {
+			msg, err := stream.Recv()
+			if err != nil {
+				recvErr <- err
+				return
+			}
+			select {
+			case recvCh <- msg:
+			case <-sessCtx.Done():
+				return
+			}
+		}
+	}()
+
+	ticker := time.NewTicker(b.reconcileEvery)
+	defer ticker.Stop()
+
+	// applied is what we have currently announced on THIS session; empty at session open so the first
+	// reconcile announces the full desired set (and a reconnect re-announces everything).
+	var applied DesiredState
+	if err := b.reconcileStep(ctx, stream, reconcile, &applied); err != nil {
+		return err
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-recvErr:
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		case msg := <-recvCh:
+			b.handleServerMsg(ctx, msg)
+		case <-ticker.C:
+			if err := b.reconcileStep(ctx, stream, reconcile, &applied); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// reconcileStep recomputes the desired set and pushes the delta to the stream. A `reconcile` error
+// (e.g. a transient API-server read) is logged and swallowed so the session stays up and retries next
+// tick; a stream Send error is returned so the caller reconnects (and re-announces from scratch).
+func (b *Bus) reconcileStep(ctx context.Context, stream rbv1.RouteBus_SessionClient, reconcile func(context.Context) (DesiredState, error), applied *DesiredState) error {
+	desired, err := reconcile(ctx)
+	if err != nil {
+		log.Printf("reconcile: %v", err)
+		return nil
+	}
+	b.mu.Lock()
+	b.egressVNIs = append(b.egressVNIs[:0:0], desired.EgressVNIs...)
+	b.mu.Unlock()
+	d := diffDesired(*applied, desired)
+	if d.empty() {
+		return nil
+	}
+	if err := b.sendDelta(stream, d); err != nil {
+		return err
+	}
+	*applied = desired
+	return nil
+}
+
+// handleServerMsg applies one inbound server message to the local dataplane.
+func (b *Bus) handleServerMsg(ctx context.Context, msg *rbv1.ServerMsg) {
+	if ru := msg.GetRouteUpdate(); ru != nil {
+		b.apply(ctx, ru)
+	}
+	if nu := msg.GetNatUpdate(); nu != nil {
+		b.applyNat(ctx, nu)
+	}
+	if pu := msg.GetPublicUpdate(); pu != nil {
+		b.applyPublic(pu.GetPrefix(), pu.GetOp())
+	}
+	// EndOfRIB / KeepAlive: v1 no-op (learner-side prune-on-EoR is a follow-up).
+}
+
+// sendDelta writes one busDelta to the stream: subscribes + announces first (so we start receiving
+// and upsert changed records), then withdraws + unsubscribes. Returns the first Send error.
+func (b *Bus) sendDelta(stream rbv1.RouteBus_SessionClient, d busDelta) error {
+	for _, v := range d.subscribe {
+		if err := stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_Subscribe{Subscribe: &rbv1.Subscribe{Vni: v}}}); err != nil {
 			return err
 		}
 	}
-	for _, r := range announce {
+	for _, r := range d.announceR {
 		if err := b.announce(stream, r); err != nil {
 			return err
 		}
 	}
-	for _, blk := range announceNat {
-		if err := b.AnnounceNat(stream, blk); err != nil {
+	for _, n := range d.announceN {
+		if err := b.AnnounceNat(stream, n); err != nil {
 			return err
 		}
 	}
-	for _, pp := range announcePublic {
-		if err := b.AnnouncePublic(stream, pp); err != nil {
+	for _, p := range d.announceP {
+		if err := b.AnnouncePublic(stream, p); err != nil {
 			return err
 		}
 	}
-	for {
-		msg, err := stream.Recv()
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
+	for _, k := range d.withdrawR {
+		if err := stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_Withdraw{Withdraw: &rbv1.Withdraw{Vni: k.Vni, Prefix: k.Prefix}}}); err != nil {
 			return err
 		}
-		if ru := msg.GetRouteUpdate(); ru != nil {
-			b.apply(ctx, ru)
-		}
-		if nu := msg.GetNatUpdate(); nu != nil {
-			b.applyNat(ctx, nu)
-		}
-		if pu := msg.GetPublicUpdate(); pu != nil {
-			b.applyPublic(pu.GetPrefix(), pu.GetOp())
-		}
-		// EndOfRIB / KeepAlive: v1 no-op (prune-on-EoR is a follow-up).
 	}
+	for _, k := range d.withdrawN {
+		if err := stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_WithdrawNat{WithdrawNat: &rbv1.WithdrawNat{NatIp: k.NatIP, PortMin: k.PortMin, PortMax: k.PortMax}}}); err != nil {
+			return err
+		}
+	}
+	for _, p := range d.withdrawP {
+		if err := stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_WithdrawPublic{WithdrawPublic: &rbv1.PublicPrefix{
+			Kind: p.Kind, Prefix: p.Prefix, OwnerUnderlay: p.OwnerUnderlay, Vni: p.Vni, PortMin: p.PortMin, PortMax: p.PortMax,
+		}}}); err != nil {
+			return err
+		}
+	}
+	for _, v := range d.unsubscribe {
+		if err := stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_Unsubscribe{Unsubscribe: &rbv1.Unsubscribe{Vni: v}}}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b *Bus) announce(stream rbv1.RouteBus_SessionClient, r Route) error {

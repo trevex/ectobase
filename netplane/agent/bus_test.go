@@ -174,12 +174,18 @@ func TestAgentLearnsRemoteRouteAndProgramsDataplane(t *testing.T) {
 	// Agent A announces one local route (no dataplane needed for the announcer here).
 	dpA := newFakeDP()
 	busA := NewBus("nodeA", "fd00::a", dpA, false)
-	go busA.Run(ctx, cl, nil, []Route{{Vni: 100, Prefix: "10.0.0.1/32", Nexthop: "fd00::a"}}, nil, nil, nil)
+	busA.reconcileEvery = 50 * time.Millisecond
+	reconcileA := func(context.Context) (DesiredState, error) {
+		return DesiredState{Routes: []Route{{Vni: 100, Prefix: "10.0.0.1/32", Nexthop: "fd00::a"}}}, nil
+	}
+	go busA.Run(ctx, cl, reconcileA)
 
 	// Agent B subscribes to vni 100 and must program A's route on its dataplane.
 	dpB := newFakeDP()
 	busB := NewBus("nodeB", "fd00::b", dpB, false)
-	go busB.Run(ctx, cl, []uint32{100}, nil, nil, nil, nil)
+	busB.reconcileEvery = 50 * time.Millisecond
+	reconcileB := func(context.Context) (DesiredState, error) { return DesiredState{Subs: []uint32{100}}, nil }
+	go busB.Run(ctx, cl, reconcileB)
 
 	// Poll for the learned route.
 	deadline := time.Now().Add(3 * time.Second)
@@ -193,6 +199,61 @@ func TestAgentLearnsRemoteRouteAndProgramsDataplane(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("agent B never programmed A's route")
+}
+
+// TestAgentWithdrawsRemovedRouteToSubscriber proves steady-state reconcile: a route the announcer
+// STOPS desiring (e.g. its NIC was descheduled) is withdrawn on the live stream and the subscriber
+// removes it — without either side reconnecting. The old one-shot Run could never do this.
+func TestAgentWithdrawsRemovedRouteToSubscriber(t *testing.T) {
+	cl := dialReflector(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Announcer A: desired route present until `present` is flipped false.
+	var mu sync.Mutex
+	present := true
+	dpA := newFakeDP()
+	busA := NewBus("nodeA", "fd00::a", dpA, false)
+	busA.reconcileEvery = 30 * time.Millisecond
+	reconcileA := func(context.Context) (DesiredState, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !present {
+			return DesiredState{}, nil
+		}
+		return DesiredState{Routes: []Route{{Vni: 100, Prefix: "10.0.0.1/32", Nexthop: "fd00::a"}}}, nil
+	}
+	go busA.Run(ctx, cl, reconcileA)
+
+	dpB := newFakeDP()
+	busB := NewBus("nodeB", "fd00::b", dpB, false)
+	busB.reconcileEvery = 30 * time.Millisecond
+	go busB.Run(ctx, cl, func(context.Context) (DesiredState, error) { return DesiredState{Subs: []uint32{100}}, nil })
+
+	// B learns the route.
+	waitFor(t, 3*time.Second, func() bool { _, ok := dpB.get(100, "10.0.0.1/32"); return ok })
+
+	// A stops desiring the route → next reconcile tick withdraws it → B removes it.
+	mu.Lock()
+	present = false
+	mu.Unlock()
+	waitFor(t, 3*time.Second, func() bool {
+		dpB.mu.Lock()
+		defer dpB.mu.Unlock()
+		return dpB.withdrew[key(100, "10.0.0.1/32")]
+	})
+}
+
+func waitFor(t *testing.T, d time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("condition not met within timeout")
 }
 
 func TestApplyPublic_LBVIP_EdgeAddsBackend(t *testing.T) {
