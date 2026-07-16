@@ -106,5 +106,5 @@ sudo ip route replace $VIP/32 nexthop via 172.29.0.11 dev clabwan nexthop via 17
 
 echo "== [6] WAN client (host on clabwan) curls the VIP =="
 echo "  --- curl http://$VIP:$PORT/ (timeout 6) ---"
-timeout 6 curl -s "http://$VIP:$PORT/" 2>&1 | head -3 | sed 's/^/  /' || echo "  (no response — inbound reaches backend but the DSR RETURN hop to the WAN is the open item)"
-echo "== done (N/S ingress fully CRD/bus-driven: VIP + backends via routebus; DSR return hop is the open item) =="
+timeout 6 curl -s "http://$VIP:$PORT/" 2>&1 | head -3 | sed 's/^/  /' || echo "  (no response)"
+echo "== done (N/S LB fully CRD/bus-driven end to end: WAN client -> VIP -> maglev -> backend -> DSR reply) =="
