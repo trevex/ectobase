@@ -225,16 +225,22 @@ impl AttachState {
             .control
             .get_interface(interface_id.as_bytes())
             .map(|(_, _, _, ul, _)| ul);
-        self.control
+        // Best-effort cleanup: run ALL reclaim steps regardless of a datapath-detach failure. If the
+        // datapath detach errored and we returned early (the old behaviour), the host veth AND the
+        // underlay /128 would leak on every partial detach. Reclaim the veth + IPAM unconditionally,
+        // then surface the datapath error to the caller.
+        let dp = self
+            .control
             .detach_interface(interface_id.as_bytes())
-            .context("detach datapath")?;
+            .context("detach datapath");
         let host = Self::host_veth_name(interface_id);
-        // Deleting the host end removes the veth pair (guest peer goes with it).
+        // Deleting the host end removes the veth pair (guest peer goes with it). Idempotent: an
+        // already-absent veth is fine, so the error is intentionally ignored.
         let _ = run(&["ip", "link", "del", &host]);
         if let Some(ul) = underlay {
             self.ipam.lock().release(Ipv6Addr::from(ul));
         }
-        Ok(())
+        dp.map(|_| ())
     }
 }
 

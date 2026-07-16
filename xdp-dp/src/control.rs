@@ -478,6 +478,21 @@ impl Control {
                     .with_context(|| format!("load+attach guest_tx to {device}"))?,
             )
         };
+        // Do the FALLIBLE datapath writes first and commit the in-memory bookkeeping only after they
+        // all succeed. Otherwise a failed guest_dev/map write left a ghost by_id/links entry behind
+        // while attach.rs (seeing the Err) deleted the veth + released the IPAM /128 — so Control
+        // referenced a dead device and a retry of the same id hit "interface already exists". `link`
+        // is a local until commit, so any early return here drops it, detaching the guest program.
+        //
+        // Register the tap in GUEST_DEV so uplink_rx's delivery redirect reaches it over clab veths.
+        g.guest_dev
+            .insert(tap)
+            .context("register tap in GUEST_DEV")?;
+        if let Err(e) = Self::program_iface_maps(&mut g, interface_id, tap, mac, &params) {
+            let _ = g.guest_dev.remove(tap); // unwind the GUEST_DEV write; `link` drops -> detaches
+            return Err(e);
+        }
+        // All datapath writes succeeded — commit the in-memory bookkeeping.
         g.links.insert(interface_id.to_vec(), link);
         g.by_id.insert(
             interface_id.to_vec(),
@@ -492,9 +507,7 @@ impl Control {
         g.by_ifindex.insert(interface_id.to_vec(), tap);
         g.iface_underlay
             .insert(interface_id.to_vec(), underlay_ipv6);
-        // Register the tap in GUEST_DEV so uplink_rx's delivery redirect reaches it over clab veths.
-        g.guest_dev.insert(tap)?;
-        Self::program_iface_maps(&mut g, interface_id, tap, mac, &params)
+        Ok(())
     }
 
     /// Program PORT_META / INTERFACES / UNDERLAY / METER / local self-route for one interface.
@@ -892,7 +905,6 @@ impl Control {
             anyhow::bail!("load balancer already exists");
         }
         let table_id = g.next_table_id;
-        g.next_table_id += 1;
 
         let lb_ip = match &ip {
             LbIpBytes::Ipv4(a) => LbIp::Ipv4(*a),
@@ -900,37 +912,58 @@ impl Control {
         };
         let lb_ip_bytes4 = lb_ip.last4();
 
+        // Write the per-port LB rows, tracking each so a partial failure can be unwound. Otherwise an
+        // upsert error part-way left orphaned LB map rows (and a burned table_id) with NO `lbs`
+        // bookkeeping — DelLbVip iterates entry.ports, so it could never reach or remove them.
+        let mut written: Vec<LbKey> = Vec::with_capacity(ports.len());
+        let mut result: anyhow::Result<()> = Ok(());
         for &(port, proto) in &ports {
-            g.lb.upsert(
-                LbKey {
-                    vni,
-                    ipv4: lb_ip_bytes4,
-                    port,
-                    proto,
-                    _pad: 0,
-                },
+            let key = LbKey {
+                vni,
+                ipv4: lb_ip_bytes4,
+                port,
+                proto,
+                _pad: 0,
+            };
+            if let Err(e) = g.lb.upsert(
+                key,
                 LbValue {
                     table_id,
                     size: crate::maglev::TABLE_SIZE,
                 },
-            )?;
+            ) {
+                result = Err(e);
+                break;
+            }
+            written.push(key);
         }
         // Program the LB's own underlay /128 into UNDERLAY so ingress can identify it — but ONLY for
         // overlay (relay) LBs. The WAN edge (vni==0) reaches the LB via wan_rx on a raw WAN frame and
         // never resolves UNDERLAY[lb_underlay]; writing it there would clobber the edge's
         // LOCAL_DELIVER egress entry (attach_edge). So skip the write for vni==0.
         // tap_ifindex=0 and guest_mac=[0;6] because the LB VIP is anycast (no local tap).
-        if vni != 0 {
-            g.underlay.upsert(
-                lb_underlay,
-                xdp_dp_common::UnderlayValue {
-                    vni,
-                    tap_ifindex: 0,
-                    guest_mac: [0; 6],
-                    _pad: [0; 2],
-                },
-            )?;
+        if result.is_ok() && vni != 0 {
+            result = g
+                .underlay
+                .upsert(
+                    lb_underlay,
+                    xdp_dp_common::UnderlayValue {
+                        vni,
+                        tap_ifindex: 0,
+                        guest_mac: [0; 6],
+                        _pad: [0; 2],
+                    },
+                )
+                .map_err(anyhow::Error::from);
         }
+        if let Err(e) = result {
+            for key in &written {
+                let _ = g.lb.remove(key); // unwind the partial LB rows
+            }
+            return Err(e);
+        }
+        // All datapath writes succeeded — commit table_id + bookkeeping.
+        g.next_table_id += 1;
         g.lbs.insert(
             id.to_vec(),
             LbEntry {
