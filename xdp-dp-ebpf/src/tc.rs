@@ -129,7 +129,13 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
                 }
                 return TC_ACT_OK;
             }
-            crate::egress::EgressVerdict::Encap(e) => {
+            crate::egress::EgressVerdict::Encap(mut e) => {
+                // See the IPv4 Encap branch below: in the tc (skb) path forward_decision_v6's
+                // inner_len counts only the linear head, so a non-linear inner-IPv6 skb would get a
+                // short outer payload_length and be dropped as truncated. Recompute from skb->len
+                // (full logical length) before adjust_room: outer IPv6 payload = skb->len - ETH_LEN.
+                e.inner_len =
+                    (ctx.len() as usize).saturating_sub(xdp_dp_common::arp_nd::ETH_LEN) as u16;
                 if ctx
                     .adjust_room(crate::parse::IPV6_LEN as i32, BPF_ADJ_ROOM_MAC, 0)
                     .is_err()
@@ -193,7 +199,17 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
                 }
                 return TC_ACT_OK;
             }
-            crate::egress::EgressVerdict::Encap(e) => {
+            crate::egress::EgressVerdict::Encap(mut e) => {
+                // forward_decision_v4 derived inner_len from data_end-data, which in the tc (skb)
+                // path is only the LINEAR head of the skb. A non-linear skb — e.g. a TCP segment
+                // whose L4 payload sits in a paged frag (busybox wget's GET reproduces this) —
+                // undercounts by that payload, so the outer IPv6 payload_length would be written
+                // short and the fabric/edge drops the frame as truncated (pure-ACK/SYN and raw ICMP
+                // are linear, so they slipped through). Recompute from skb->len (the full logical
+                // length) captured BEFORE adjust_room: the skb is [inner_eth(ETH_LEN)][inner_ip], so
+                // the outer IPv6 payload = skb->len - ETH_LEN.
+                e.inner_len =
+                    (ctx.len() as usize).saturating_sub(xdp_dp_common::arp_nd::ETH_LEN) as u16;
                 // WORKING invocation (validated by test/tc-egress-netns.sh):
                 // bpf_skb_adjust_room(skb, +IPV6_LEN, BPF_ADJ_ROOM_MAC, 0) inserts IPV6_LEN bytes
                 // immediately AFTER the L2 (MAC) header, i.e. between the inner Ethernet and the
