@@ -1,4 +1,4 @@
-//! Conformance tests for the guest-egress network SNAT path.
+//! Conformance tests for the guest-egress network SNAT path and the return-path reverse DNAT.
 //!
 //! These tests drive the REAL `flowplane_core::nat::snat_egress` (and the full `SimNode::guest_tx`
 //! compose that calls it) over in-memory `MemMaps` / `VecPkt`.  Nothing is reimplemented — the
@@ -6,22 +6,19 @@
 //! port allocation within `[port_min, port_max)`, valid IP/L4 checksums, and per-source block
 //! isolation.
 //!
-//! # Scope note — return-path DNAT (c)
+//! # Scope — return-path DNAT (c)
 //! `snat_egress` inserts a reverse conntrack entry with `CT_REWRITE_DST` that maps the NAT'd
 //! (external) 5-tuple back to the guest's original IP:port.  Applying that entry on ingress is
-//! `ct_apply` / `dnat_ingress` — a step that is explicitly documented as NOT yet extracted into
-//! `flowplane-core` (sim.rs comment: "ct_apply/ct_touch is NOT modelled here — separate slice").
-//! There is no sim-reachable entry point for the DNAT-apply today.  Accordingly (c) is NOT
-//! covered here; it requires a follow-up seam extraction (`ct_apply` over `Pkt`/`Maps`) before a
-//! sim conformance test can be written.  The reverse-entry STATE is asserted in (a) and (b) as a
-//! proxy for correctness until then.
+//! `ct_apply` — now extracted into `flowplane-core::conntrack::ct_apply` and exercised by
+//! `SimNode::uplink_nat_return`.  The DNAT-return conformance tests are in the
+//! `dnat_return_*` group below (TCP + UDP), asserting inner-dst rewrite + checksum update.
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule, Local, NatKey, NatValue, PortMeta, RouteValue, UnderlayValue, FW_ACTION_ACCEPT,
-    FW_DIR_EGRESS,
+    CtEntry, CtKey, FwMeta, FwRule, Local, NatKey, NatValue, PortMeta, RouteValue, UnderlayValue,
+    CT_F_SRC_NAT, CT_REWRITE_DST, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
 };
-use flowplane_core::encap::{ETH_LEN, IPV6_LEN};
+use flowplane_core::encap::{EncapParams, ETH_LEN, IPV6_LEN};
 use flowplane_core::pkt::Action;
 
 use crate::{MemMaps, SimNode};
@@ -557,5 +554,249 @@ fn snat_no_op_for_internal_route() {
         "no NAT CT entries (CT_REWRITE_DST | CT_F_SRC_NAT) should exist for an internal-route flow; \
          found {} unexpected entries",
         nat_entries.len()
+    );
+}
+
+// ─── (c) Return-path DNAT: SimNode::uplink_nat_return applies CT_REWRITE_DST ────────────────────
+
+/// Topology re-used by both DNAT-return sub-tests (mirrors `anchor_dnat.rs`):
+///   - NAT_IP (public NAT IPv4) is the inner dst of the returning packet
+///   - GUEST_IP is the xlate target (inner dst after reverse-DNAT)
+///   - ORIG_SPORT is the original guest L4 src-port (inner dst port after reverse-DNAT)
+///   - EXT_IP / EXT_PORT is the external peer (inner src, unchanged)
+///   - Reverse CT entry: `(vni, src=0, dst=NAT_IP, sport=0, dport=NAT_PORT, proto)` →
+///     `CT_REWRITE_DST | CT_F_SRC_NAT`, `xlate_ip=GUEST_IP`, `xlate_port=ORIG_SPORT`
+const DNAT_VNI: u32 = 100;
+const DNAT_TAP: u32 = 42;
+const DNAT_GUEST_MAC: [u8; 6] = [0x66, 0x66, 0x66, 0x66, 0x66, 0x00];
+const DNAT_GUEST_IP: [u8; 4] = [10, 0, 0, 10];
+const DNAT_NAT_IP: [u8; 4] = [198, 51, 100, 7];
+const DNAT_EXT_IP: [u8; 4] = [203, 0, 113, 9];
+const DNAT_ORIG_SPORT: u16 = 40000; // restored inner dst port after reverse-DNAT
+const DNAT_NAT_PORT: u16 = 20018; // allocated NAT port (inner dst port in the returning packet)
+const DNAT_EXT_PORT: u16 = 443; // external peer's port (inner src port, unchanged)
+
+const EDGE_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xaa];
+const HOST_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xbb];
+
+fn dnat_encap_params() -> EncapParams {
+    EncapParams {
+        gateway_mac: [1; 6],
+        uplink_mac: [2; 6],
+        uplink_ifindex: 7,
+        src_underlay: EDGE_UNDERLAY,
+        nexthop_ipv6: HOST_UNDERLAY,
+        inner_proto: 4,
+    }
+}
+
+fn dnat_reverse_ct_entry() -> CtEntry {
+    CtEntry {
+        last_seen: 0,
+        xlate_ip: DNAT_GUEST_IP,
+        xlate_port: DNAT_ORIG_SPORT,
+        flags: CT_REWRITE_DST | CT_F_SRC_NAT,
+        tcp_state: 0,
+        fwall_action: 0,
+        _pad: [0; 7],
+    }
+}
+
+fn dnat_reverse_ct_key(proto: u8) -> CtKey {
+    CtKey {
+        vni: DNAT_VNI,
+        src_ip: [0; 4],
+        dst_ip: DNAT_NAT_IP,
+        src_port: 0,
+        dst_port: DNAT_NAT_PORT,
+        proto,
+        _pad: [0; 3],
+    }
+}
+
+/// Build a node with the reverse CT entry + NAT_IPS registration seeded for DNAT return.
+fn dnat_host_node(proto: u8) -> SimNode {
+    use flowplane_common::UnderlayValue;
+
+    let mut node = SimNode::new();
+    node.maps
+        .conntrack
+        .insert(dnat_reverse_ct_key(proto), dnat_reverse_ct_entry());
+    node.maps.nat_ips.insert((DNAT_VNI, DNAT_NAT_IP));
+    // Seed UNDERLAY so uplink_nat_return can find the base tap.
+    node.maps.underlay.insert(
+        HOST_UNDERLAY,
+        UnderlayValue {
+            vni: DNAT_VNI,
+            tap_ifindex: DNAT_TAP,
+            guest_mac: DNAT_GUEST_MAC,
+            _pad: [0; 2],
+        },
+    );
+    node
+}
+
+/// Build an encapped returning TCP frame: `[OuterEth][OuterIPv6][inner IPv4 TCP]`
+/// where inner is `EXT_IP:EXT_PORT → NAT_IP:NAT_PORT` (as the frame arrives from the peer).
+fn dnat_tcp_encapped() -> Vec<u8> {
+    let inner = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
+        .ipv4(DNAT_EXT_IP, DNAT_NAT_IP, 64)
+        .tcp(DNAT_EXT_PORT, DNAT_NAT_PORT, 0, 1024);
+    let mut frame = Vec::new();
+    inner.write(&mut frame, &[0x01, 0x02, 0x03, 0x04]).unwrap();
+    SimNode::new().edge_encap(&frame, dnat_encap_params())
+}
+
+/// Build an encapped returning UDP frame with a non-zero payload (so UDP csum is non-zero).
+fn dnat_udp_encapped() -> Vec<u8> {
+    let inner = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
+        .ipv4(DNAT_EXT_IP, DNAT_NAT_IP, 64)
+        .udp(DNAT_EXT_PORT, DNAT_NAT_PORT);
+    let mut frame = Vec::new();
+    inner.write(&mut frame, &[0xaa, 0xbb, 0xcc, 0xdd]).unwrap();
+    SimNode::new().edge_encap(&frame, dnat_encap_params())
+}
+
+/// (c) TCP DNAT return: a reply arriving `EXT_IP:EXT_PORT → NAT_IP:NAT_PORT` is reverse-DNAT'd
+/// by `uplink_nat_return` to `EXT_IP:EXT_PORT → GUEST_IP:ORIG_SPORT` and delivered to the guest tap.
+///
+/// Pinned expected values:
+///   - inner dst IP  == DNAT_GUEST_IP == [10, 0, 0, 10]
+///   - inner TCP dst port == DNAT_ORIG_SPORT == 40_000
+///   - IP + TCP checksums are non-zero after rewrite
+#[test]
+fn dnat_return_tcp_rewrites_dst_ip_and_port() {
+    let encapped = dnat_tcp_encapped();
+    let u = flowplane_common::UnderlayValue {
+        vni: DNAT_VNI,
+        tap_ifindex: DNAT_TAP,
+        guest_mac: DNAT_GUEST_MAC,
+        _pad: [0; 2],
+    };
+    let out = dnat_host_node(6).uplink_nat_return(&encapped, DNAT_VNI, u, DNAT_GUEST_MAC);
+
+    assert_eq!(
+        out.action,
+        Action::Redirect(DNAT_TAP),
+        "reverse-DNAT'd return must be delivered to the guest tap (Redirect({DNAT_TAP}))"
+    );
+
+    // After decap, outer IPv6 (40B) is stripped, leaving [InnerEth(14)][IPv4 ...].
+    // Inner IPv4 header starts at ETH_LEN = 14.
+    let pkt = &out.pkt;
+    assert!(
+        pkt.len() >= ETH_LEN + IPV6_LEN,
+        "output too short after decap"
+    );
+
+    // dst IP at inner_ip_off + 16 == ETH_LEN + 16 = 30.
+    let inner_ip_off = ETH_LEN;
+    let dst_ip: [u8; 4] = pkt[inner_ip_off + 16..inner_ip_off + 20]
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        dst_ip, DNAT_GUEST_IP,
+        "inner dst IP must be reverse-DNAT'd to DNAT_GUEST_IP [10,0,0,10]; \
+         if this fails ct_apply CT_REWRITE_DST (TCP) did not rewrite the dst address"
+    );
+
+    // TCP dst port at l4_off + 2 = ETH_LEN + 20 + 2 = 36.
+    let l4_off = inner_ip_off + 20;
+    let dst_port = u16::from_be_bytes([pkt[l4_off + 2], pkt[l4_off + 3]]);
+    assert_eq!(
+        dst_port, DNAT_ORIG_SPORT,
+        "inner TCP dst port must be restored to DNAT_ORIG_SPORT ({DNAT_ORIG_SPORT}); \
+         if this fails ct_apply CT_REWRITE_DST did not rewrite the dst L4 port"
+    );
+
+    // IP checksum at inner_ip_off + 10.
+    let ip_csum = u16::from_be_bytes([pkt[inner_ip_off + 10], pkt[inner_ip_off + 11]]);
+    assert_ne!(
+        ip_csum, 0,
+        "IP checksum must be non-zero after dst-IP rewrite"
+    );
+
+    // TCP checksum at l4_off + 16.
+    let tcp_csum = u16::from_be_bytes([pkt[l4_off + 16], pkt[l4_off + 17]]);
+    assert_ne!(
+        tcp_csum, 0,
+        "TCP checksum must be non-zero after dst-IP + port rewrite"
+    );
+
+    // Inner src IP must be unchanged (EXT_IP).
+    let src_ip: [u8; 4] = pkt[inner_ip_off + 12..inner_ip_off + 16]
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        src_ip, DNAT_EXT_IP,
+        "inner src IP must remain EXT_IP (unchanged)"
+    );
+}
+
+/// (c) UDP DNAT return: same as TCP but for UDP. Verifies `ct_apply` UDP branch folds the
+/// non-zero UDP checksum. UDP checksum is non-zero because the payload is `[0xaa,0xbb,0xcc,0xdd]`.
+///
+/// Pinned expected values:
+///   - inner dst IP  == DNAT_GUEST_IP == [10, 0, 0, 10]
+///   - inner UDP dst port == DNAT_ORIG_SPORT == 40_000
+///   - UDP checksum is non-zero after fold
+#[test]
+fn dnat_return_udp_rewrites_dst_ip_and_port() {
+    let encapped = dnat_udp_encapped();
+    let u = flowplane_common::UnderlayValue {
+        vni: DNAT_VNI,
+        tap_ifindex: DNAT_TAP,
+        guest_mac: DNAT_GUEST_MAC,
+        _pad: [0; 2],
+    };
+    let out = dnat_host_node(17).uplink_nat_return(&encapped, DNAT_VNI, u, DNAT_GUEST_MAC);
+
+    assert_eq!(
+        out.action,
+        Action::Redirect(DNAT_TAP),
+        "UDP reverse-DNAT return must deliver to guest tap"
+    );
+
+    let pkt = &out.pkt;
+    let inner_ip_off = ETH_LEN;
+
+    // dst IP at inner_ip_off + 16.
+    let dst_ip: [u8; 4] = pkt[inner_ip_off + 16..inner_ip_off + 20]
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        dst_ip, DNAT_GUEST_IP,
+        "inner dst IP must be reverse-DNAT'd to DNAT_GUEST_IP [10,0,0,10] (UDP)"
+    );
+
+    // UDP dst port at l4_off + 2 = ETH_LEN + 20 + 2 = 36.
+    let l4_off = inner_ip_off + 20;
+    let dst_port = u16::from_be_bytes([pkt[l4_off + 2], pkt[l4_off + 3]]);
+    assert_eq!(
+        dst_port, DNAT_ORIG_SPORT,
+        "inner UDP dst port must be restored to DNAT_ORIG_SPORT ({DNAT_ORIG_SPORT})"
+    );
+
+    // IP checksum non-zero.
+    let ip_csum = u16::from_be_bytes([pkt[inner_ip_off + 10], pkt[inner_ip_off + 11]]);
+    assert_ne!(
+        ip_csum, 0,
+        "IP checksum must be non-zero after dst-IP rewrite (UDP)"
+    );
+
+    // UDP checksum non-zero (payload is [0xaa,0xbb,0xcc,0xdd] → csum != 0).
+    let udp_csum = u16::from_be_bytes([pkt[l4_off + 6], pkt[l4_off + 7]]);
+    assert_ne!(
+        udp_csum, 0,
+        "UDP checksum must be non-zero after fold (non-zero payload)"
+    );
+
+    // Inner src IP unchanged.
+    let src_ip: [u8; 4] = pkt[inner_ip_off + 12..inner_ip_off + 16]
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        src_ip, DNAT_EXT_IP,
+        "inner src IP must remain EXT_IP (unchanged, UDP)"
     );
 }
