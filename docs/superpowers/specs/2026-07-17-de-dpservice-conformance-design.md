@@ -37,15 +37,32 @@ that is native, fast, and deterministic.
   reforward, policy interplay), firewall (deny-by-default, ingress allow), conntrack create, and
   the north-south external↔guest encap/decap/FW/CT path.
 
-## Architecture: three layers after the change
+## Architecture: test at the right level
+
+Each concern is asserted at the *cheapest level that can actually observe it* — sim for
+determinism, Go e2e for the real gRPC/attach + connectivity, clab for behaviors that only
+manifest under real continuous forwarding.
 
 1. **Sim conformance (source of truth)** — `flowplane-sim`, native Rust, in-process,
    deterministic, no netns. Drives the pure core + real eBPF programs (via `BPF_PROG_TEST_RUN`)
-   with `VecPkt` and asserts on exact bytes/verdicts.
-2. **Thin Go live smoke** — `test/e2e`, a handful of end-to-end cases through the real stack;
-   catches only what the sim structurally cannot (real program load/attach, real veth redirect,
-   real gRPC over the wire, real DHCP client exchange, graceful-restart adoption).
-3. **`DataplaneNode` — the one and only control API.** No compatibility shim.
+   with `VecPkt` and asserts on exact bytes/verdicts. Owns byte-level behavior.
+2. **Thin Go live smoke** (`test/e2e`) — a handful of end-to-end cases through the real stack;
+   catches what the sim structurally cannot at the *control/connectivity* level: real program
+   load/attach, real veth redirect, real gRPC over the wire, real DHCP client exchange, and
+   graceful-restart **state survival** (adoption, no /128 reissue — asserted via `DataplaneNode`).
+3. **clab continuity tests** (`test/scenario-*.sh`) — the things that only appear under real,
+   continuous forwarding through the kernel: most importantly **zero-drop across a graceful
+   restart** (the link-pinning guarantee), and native-XDP-only behaviors. A continuous flow runs
+   *through* the datapath while `flowplane` is `crictl`-restarted; the test asserts ~0 packet
+   loss + the eBPF prog-id atomically swaps (re-point, not detach). This is where "traffic is not
+   dropped" is actually proven — a programmatic Go assertion cannot see a sub-second forwarding
+   gap the way a continuous in-fabric flow can.
+4. **`DataplaneNode` — the one and only control API.** No compatibility shim.
+
+**Principle — test where sensible:** determinism/bytes → sim; real API + attach + connectivity →
+Go e2e; real continuous forwarding / zero-drop / native-XDP → clab. Don't push a concern to a
+heavier level than needed, and don't assert a forwarding-continuity property at a level that
+can't observe it.
 
 ## §1 — Remove (break the lineage)
 
@@ -89,11 +106,29 @@ client and asserting with `ping`/`nc` for connectivity and `goscapy`
   the target sees).
 - **LB distributes** across ≥2 backends (connectivity + distribution).
 - **DHCP lease** — a real client on a tap/veth gets a lease (goscapy inspects the offer).
-- **Graceful-restart adoption** — `crictl` kill of `flowplane`; datapath state survives, no /128
-  reissue (reuses the existing restart scenario, asserted through `DataplaneNode`).
+- **Graceful-restart state survival** — `crictl` kill of `flowplane`; datapath state survives, no
+  /128 reissue, asserted through `DataplaneNode` (the *control-plane* half of graceful restart).
 
 `goscapy` is added as a `test/e2e` Go dependency. Cases needing byte-exact assertions stay in the
-sim; the smoke asserts "works end-to-end through the real kernel + gRPC."
+sim; the smoke asserts "works end-to-end through the real kernel + gRPC." The *forwarding-continuity*
+half of graceful restart (zero drop) is NOT a Go smoke case — it lives in clab (§3b) because a
+programmatic assertion can't observe a sub-second gap.
+
+## §3b — clab graceful-restart continuity (zero-drop)
+
+Formalize the link-pinning zero-gap guarantee as a repeatable clab test (evolve the existing
+`test/scenario-restart.sh`):
+
+- Bring up the clab fabric with a guest whose traffic transits the `flowplane` datapath.
+- Start a **continuous flow** across the restart boundary — e.g. `ping -i 0.2` (or a small UDP/TCP
+  stream with a sequence counter) between a guest and a peer/edge, through the datapath.
+- `crictl stop` / restart the `flowplane` container (rolling-upgrade path: same or new bytecode).
+- **Assert:** packet loss is ~0 (allow a tiny bounded threshold), the pinned bpf-link survived the
+  stop, and the eBPF prog-id on the uplink/guest interfaces **atomically swapped** (re-point via
+  `bpf_link_update`, not a detach/re-attach). This reproduces the live-validated result
+  (prog-id 31133→31168, pin survives) as a checked-in, repeatable test.
+- Runs under sudo on the clab host (the established `sudo -E` + nix-flake harness); gated in CI as
+  a privileged/manual scenario, not a unit test.
 
 ## §4 — The dev netns scripts (`test/*-netns.sh`)
 
@@ -127,7 +162,7 @@ ordering keeps a working oracle until the replacement is proven.
 | `test_vni` | **sim (add VNI isolation)** |
 | `test_vf_to_vf` | sim guest↔guest + live smoke connectivity |
 | `test_zzz_grpc` (API surface) | covered by `DataplaneNode` unit/integration tests |
-| `xtratest_ha` / `xtratest_flow_timeout` | live smoke (restart adoption) + sim (timeout) |
+| `xtratest_ha` / `xtratest_flow_timeout` | Go smoke (restart **state survival**) + clab §3b (restart **zero-drop continuity**) + sim (flow timeout) |
 | `test_virtsvc`, `test_pf_to_vf`, `test_vf_to_pf`, `test_telemetry` | **dropped** (dpservice-only) |
 
 ## Non-goals
