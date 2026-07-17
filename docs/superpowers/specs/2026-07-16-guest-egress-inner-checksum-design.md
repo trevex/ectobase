@@ -1,5 +1,21 @@
 # Correct Inner-L4 Checksum for Encapped Guest Egress — Design
 
+> **STATUS 2026-07-17: DEFERRED (approach D disproven by prototype; clab-only `ethtool` workaround
+> retained).** A live prototype (Task 1 of the plan) disproved approach D's premise: **`bpf_skb_adjust_room`
+> does not re-point `skb->csum_start` at the inner L4 after our encap.** bpftrace at eth1 xmit showed
+> `csum_start` stuck at the guest's *original* absolute offset (constant 288 from `skb->head`) regardless
+> of flags — it lands on the inner L4 (off-74) only by coincidence when `headroom` happens to be 206;
+> otherwise it points at the inner IP (off-54) → the kernel's `skb_checksum_help` sums the wrong range.
+> Both `BPF_F_ADJ_ROOM_NO_CSUM_RESET` (candidate 1) and `BPF_F_ADJ_ROOM_ENCAP_L3_IPV6|FIXED_GSO`
+> (candidate 2) failed identically. So "let the kernel finalize" is not reachable via an adjust_room
+> flag. Remaining paths are harder: candidate 3 (compute the inner L4 checksum in BPF **and** defeat the
+> kernel's re-finalization of the still-`CHECKSUM_PARTIAL` skb — no clean helper to clear PARTIAL), or
+> candidate 4 (normalize headroom so `adjust_room` never reallocs — fragile). **Decision:** this is a
+> clab/kind all-veth artifact — production real NICs finalize the inner checksum in hardware for both
+> containers and vhost taps, so the `ethtool -K … tx-checksum-ip-generic off` line in `attach.rs` is
+> load-bearing **only on the test fabric**. We keep it (clab-only), and revisit the datapath fix
+> (candidate 3/4) if a real all-software-NIC deployment appears. The root-cause analysis below stands.
+
 > **Context:** The guest tc-egress edge (`tc_guest_tx`) SNATs + encapsulates guest packets into the
 > IP-in-IPv6 overlay. Guest TCP/UDP arrives with `CHECKSUM_PARTIAL` (offloaded — the L4 field holds
 > only the pseudo-header partial sum, meant to be finalized "by hardware" at real egress). Today the

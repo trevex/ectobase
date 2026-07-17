@@ -1,5 +1,14 @@
 # Guest-Egress Inner-L4 Checksum Fix — Implementation Plan
 
+> **STATUS 2026-07-17: DEFERRED after Task 1.** The Task-1 prototype loop disproved the leading
+> mechanism: `bpf_skb_adjust_room` does not maintain `skb->csum_start` on the inner L4 (it stays at the
+> guest's original absolute offset; `NO_CSUM_RESET` and `ENCAP_L3_IPV6|FIXED_GSO` both failed —
+> off_from_data stayed 54). Approach D (kernel finalizes) is not reachable via an adjust_room flag.
+> Tasks 2-6 were NOT executed. The clab-only `ethtool` workaround (Task 3's target) is intentionally
+> **kept**. Production real NICs already finalize the checksum for veth + tap. See the spec's STATUS
+> block for the full prototype findings and the remaining candidates (3: compute-in-BPF + defeat
+> re-finalize; 4: normalize headroom).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the encapped inner L4 (TCP/UDP) checksum correct on the wire for `CHECKSUM_PARTIAL` guest packets — without disabling guest offload — for both container veth and vhost-tap (VM) sources, and delete the `ethtool` workaround.
