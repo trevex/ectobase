@@ -9,7 +9,7 @@ replace github.com/trevex/ectobase/cni => ../cni
 require (
 	github.com/trevex/ectobase/api v0.0.0-00010101000000-000000000000
 	github.com/trevex/ectobase/cni v0.0.0-00010101000000-000000000000
-	google.golang.org/grpc v1.82.0
+	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
 	k8s.io/apimachinery v0.36.2
 	k8s.io/client-go v0.36.2
@@ -48,7 +48,7 @@ require (
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/term v0.42.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
