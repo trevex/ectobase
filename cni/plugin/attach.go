@@ -103,7 +103,7 @@ func resolvePodInterfaceRef(ctx context.Context, kubeconfigPath, podNS, podName 
 	return ns, name, nil
 }
 
-// dialDataplane dials the node-local xdp-dp DataplaneNode gRPC. The DaemonSet
+// dialDataplane dials the node-local flowplane DataplaneNode gRPC. The DaemonSet
 // runs with hostNetwork, so from the host netns the CNI reaches it over TCP at
 // dataplaneAddr (default 127.0.0.1:1337).
 func dialDataplane(addr string) (dataplanev1.DataplaneNodeClient, func() error, error) {

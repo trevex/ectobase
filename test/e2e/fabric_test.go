@@ -9,8 +9,8 @@ import (
 
 // TestUnderlayInferenceOnFabric brings up the lean IPv6 BGP-unnumbered containerlab
 // fabric (hack/clab/ipv6-fabric.clab.yml) and asserts that a kind node running the
-// xdp-dp dataplane INFERS an underlay /64 matching the /64 the fabric put on its
-// dummy0. This is the end-to-end proof that xdp-dp's underlay inference agrees with
+// flowplane dataplane INFERS an underlay /64 matching the /64 the fabric put on its
+// dummy0. This is the end-to-end proof that flowplane's underlay inference agrees with
 // the fabric's addressing.
 //
 // It SKIPs (never fails) when containerlab or kind is not installed — this machine
@@ -18,7 +18,7 @@ import (
 // mirrors TestKindClusterLifecycle in kind_test.go.
 //
 // What it checks: the control-plane kind node (k01-control-plane), whose clab `exec`
-// gave dummy0 the address fd00:db8:0:1::1/64, must have xdp-dp report
+// gave dummy0 the address fd00:db8:0:1::1/64, must have flowplane report
 // "inferred underlay prefix: fd00:db8:0:1::/64".
 func TestUnderlayInferenceOnFabric(t *testing.T) {
 	if _, err := exec.LookPath("containerlab"); err != nil {
@@ -34,11 +34,11 @@ func TestUnderlayInferenceOnFabric(t *testing.T) {
 	}
 
 	// The kind node container clab attaches (see ipv6-fabric.clab.yml) and the /64
-	// its dummy0 carries. xdp-dp must infer exactly this /64.
+	// its dummy0 carries. flowplane must infer exactly this /64.
 	const (
 		kindNode       = "k01-control-plane"
 		wantPrefix     = "fd00:db8:0:1::/64"
-		xdpImage       = "ghcr.io/trevex/dpservice-xdp:dev"
+		xdpImage       = "ghcr.io/trevex/ectobase/flowplane:dev"
 		deployTimeout  = 15 * time.Minute
 		commandTimeout = 5 * time.Minute
 	)
@@ -58,7 +58,7 @@ func TestUnderlayInferenceOnFabric(t *testing.T) {
 	})
 
 	// Sanity: confirm the fabric put the expected /64 on the kind node's dummy0.
-	// If this fails the topology `exec` did not run — a fabric problem, not xdp-dp.
+	// If this fails the topology `exec` did not run — a fabric problem, not flowplane.
 	addr := exec.Command("docker", "exec", kindNode, "ip", "-6", "-o", "addr", "show", "dev", "dummy0")
 	if out, err := runWithTimeout(addr, commandTimeout); err != nil {
 		t.Fatalf("reading dummy0 on %s failed: %v\n%s", kindNode, err, out)
@@ -66,7 +66,7 @@ func TestUnderlayInferenceOnFabric(t *testing.T) {
 		t.Fatalf("kind node %s dummy0 missing the fabric /64; got:\n%s", kindNode, out)
 	}
 
-	// Run `xdp-dp infer-underlay` in the kind node's netns via the dpservice-xdp
+	// Run `flowplane infer-underlay` in the kind node's netns via the ectobase/flowplane
 	// image (network-mode: container:<kind-node> puts it in the same netns, so it
 	// sees the same dummy0). This is the observable surface the test asserts on.
 	infer := exec.Command("docker", "run", "--rm",
@@ -74,14 +74,14 @@ func TestUnderlayInferenceOnFabric(t *testing.T) {
 		xdpImage, "infer-underlay")
 	out, err := runWithTimeout(infer, commandTimeout)
 	if err != nil {
-		t.Fatalf("`xdp-dp infer-underlay` on %s failed: %v\n%s", kindNode, err, out)
+		t.Fatalf("`flowplane infer-underlay` on %s failed: %v\n%s", kindNode, err, out)
 	}
 	want := "inferred underlay prefix: " + wantPrefix
 	if !strings.Contains(out, want) {
-		t.Fatalf("xdp-dp inferred the wrong underlay /64 on %s\nwant substring: %q\ngot:\n%s",
+		t.Fatalf("flowplane inferred the wrong underlay /64 on %s\nwant substring: %q\ngot:\n%s",
 			kindNode, want, out)
 	}
-	t.Logf("xdp-dp on %s inferred underlay %s (matches fabric dummy0)", kindNode, wantPrefix)
+	t.Logf("flowplane on %s inferred underlay %s (matches fabric dummy0)", kindNode, wantPrefix)
 }
 
 // runWithTimeout runs cmd, killing it (and returning an error) if it exceeds d.

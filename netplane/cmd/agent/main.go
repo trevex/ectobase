@@ -1,4 +1,4 @@
-// Command agent runs the per-node control plane: it dials the local xdp-dp
+// Command agent runs the per-node control plane: it dials the local flowplane
 // DataplaneNode and the central reflector, then reconciles NetworkInterfaces on
 // this node into route announcements while programming learned remote routes.
 package main
@@ -22,7 +22,7 @@ func main() {
 	nodeID := flag.String("node-id", "", "stable node identity (required)")
 	underlay := flag.String("underlay", "", "this node's underlay IPv6 (required)")
 	reflectorAddr := flag.String("reflector", "127.0.0.1:1338", "reflector gRPC address")
-	dataplaneAddr := flag.String("dataplane", "127.0.0.1:1337", "local xdp-dp DataplaneNode address")
+	dataplaneAddr := flag.String("dataplane", "127.0.0.1:1337", "local flowplane DataplaneNode address")
 	kubeconfig := flag.String("kubeconfig", "", "kubeconfig for the central API (empty = in-cluster)")
 	edgeLoopback := flag.String("edge-loopback", "", "if set, this node is a WAN edge; value = its UNIQUE control-plane loopback IPv6 (e.g. fd00:db8:0:9::1)")
 	tlsCA := flag.String("tls-ca", "", "CA bundle to verify the reflector (enables mTLS)")

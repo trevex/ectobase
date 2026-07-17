@@ -1,9 +1,9 @@
 // Copyright 2026 ectobase contributors
 // SPDX-License-Identifier: Apache-2.0
 
-// Command xdp-dp-cni is the primary-UDN CNI plugin. It is the Multus default
+// Command flowplane-cni is the primary-UDN CNI plugin. It is the Multus default
 // delegate for a virt-launcher pod: on ADD it resolves the pod's overlay
-// {vni, ips} from the net.ectobase.dev CRDs and calls the node-local xdp-dp
+// {vni, ips} from the net.ectobase.dev CRDs and calls the node-local flowplane
 // DataplaneNode gRPC to attach the interface into the eBPF dataplane.
 package main
 
@@ -35,7 +35,7 @@ type netConf struct {
 
 	// Kubeconfig is the on-node SA-token kubeconfig used to read pod + CRDs.
 	Kubeconfig string `json:"kubeconfig,omitempty"`
-	// DataplaneAddr is the TCP address of the node-local xdp-dp DataplaneNode gRPC.
+	// DataplaneAddr is the TCP address of the node-local flowplane DataplaneNode gRPC.
 	DataplaneAddr string `json:"dataplaneAddr,omitempty"`
 }
 
@@ -61,7 +61,7 @@ func main() {
 			Check: cmdCheck,
 		},
 		version.All,
-		"xdp-dp primary-UDN CNI plugin",
+		"flowplane primary-UDN CNI plugin",
 	)
 }
 

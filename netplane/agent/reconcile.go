@@ -21,7 +21,7 @@ type Reconciler struct {
 	nodeID       string
 	underlay     string
 	edgeLoopback string    // if set, this node is a WAN edge; value = its UNIQUE control-plane loopback
-	dp           Dataplane // local xdp-dp; used to program egress SNAT sources
+	dp           Dataplane // local flowplane; used to program egress SNAT sources
 	// appliedFw tracks the last set of firewall rules pushed to the dataplane so
 	// ReconcileFirewall can diff and delete stale rules.
 	appliedFw map[string]map[string]FwRule // interfaceID -> ruleID -> rule
@@ -34,7 +34,7 @@ type Reconciler struct {
 type Deps struct {
 	// Underlay is this node's underlay IPv6 (used as the announced nexthop).
 	Underlay string
-	// Dataplane is the local xdp-dp so the reconciler can program egress SNAT.
+	// Dataplane is the local flowplane so the reconciler can program egress SNAT.
 	Dataplane Dataplane
 	// EdgeLoopback marks this node as a WAN edge with the given UNIQUE
 	// control-plane loopback (empty = not an edge).
