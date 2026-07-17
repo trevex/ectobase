@@ -4,20 +4,9 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flowplane_common::{CtEntry, TCP_ESTABLISHED};
+use flowplane_core::conntrack::ct_is_expired;
 
 use crate::maps::Conntrack;
-
-const DEFAULT_TIMEOUT_NS: u64 = 30 * 1_000_000_000;
-const TCP_ESTABLISHED_TIMEOUT_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
-
-fn timeout_ns(e: &CtEntry) -> u64 {
-    if e.tcp_state == TCP_ESTABLISHED {
-        TCP_ESTABLISHED_TIMEOUT_NS
-    } else {
-        DEFAULT_TIMEOUT_NS
-    }
-}
 
 /// Kernel-monotonic time (ns) — the same clock `bpf_ktime_get_ns` stamps `last_seen` with.
 fn ktime_now_ns() -> u64 {
@@ -40,7 +29,7 @@ pub async fn run(ct: Arc<Mutex<Conntrack>>, interval: Duration) {
             ct_guard
                 .entries()
                 .into_iter()
-                .filter(|(_, e)| now.saturating_sub(e.last_seen) > timeout_ns(e))
+                .filter(|(_, e)| ct_is_expired(e, now))
                 .map(|(k, _)| k)
                 .collect()
         };
@@ -53,8 +42,10 @@ pub async fn run(ct: Arc<Mutex<Conntrack>>, interval: Duration) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use flowplane_common::{CtEntry, TCP_ESTABLISHED, TCP_NONE};
+    use flowplane_core::conntrack::{
+        ct_is_expired, timeout_ns, DEFAULT_TIMEOUT_NS, TCP_ESTABLISHED_TIMEOUT_NS,
+    };
 
     fn entry(tcp_state: u8, last_seen: u64) -> CtEntry {
         CtEntry {
@@ -78,7 +69,7 @@ mod tests {
         let now = 60 * 1_000_000_000u64; // 60s
         let fresh = entry(TCP_NONE, now - 5 * 1_000_000_000); // 5s idle -> keep
         let old = entry(TCP_NONE, now - 40 * 1_000_000_000); // 40s idle -> evict (>30s)
-        assert!(now.saturating_sub(fresh.last_seen) <= timeout_ns(&fresh));
-        assert!(now.saturating_sub(old.last_seen) > timeout_ns(&old));
+        assert!(!ct_is_expired(&fresh, now));
+        assert!(ct_is_expired(&old, now));
     }
 }

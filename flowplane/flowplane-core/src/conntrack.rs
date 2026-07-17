@@ -5,15 +5,40 @@
 //! Time impurity: the eBPF default-create stamps `last_seen` from `bpf_ktime_get_ns()`, which has no
 //! native equivalent. `ct_create_default` therefore takes `now: u64` as a parameter — the eBPF
 //! wrapper passes `now()`, the sim passes 0.
+//!
+//! GC expiry: `timeout_ns` + `ct_is_expired` live here so the production GC loop and conformance
+//! tests share a single implementation. Mirrors dpservice (30 s default, 24 h established-TCP).
 
+use crate::maps::Maps;
+use crate::parse::{l4_ports, IPPROTO_TCP};
+use crate::pkt::Pkt;
 use flowplane_common::{
     CtEntry, CtKey, CT_F_DEFAULT, TCP_ESTABLISHED, TCP_FINWAIT, TCP_NEW_SYN, TCP_NEW_SYNACK,
     TCP_RST_FIN,
 };
 
-use crate::maps::Maps;
-use crate::parse::{l4_ports, IPPROTO_TCP};
-use crate::pkt::Pkt;
+/// Idle timeout for non-established flows (30 s), in nanoseconds. Mirrors dpservice.
+pub const DEFAULT_TIMEOUT_NS: u64 = 30 * 1_000_000_000;
+
+/// Idle timeout for TCP-ESTABLISHED flows (24 h), in nanoseconds. Mirrors dpservice.
+pub const TCP_ESTABLISHED_TIMEOUT_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
+
+/// Return the idle timeout (ns) for a conntrack entry: 24 h for ESTABLISHED TCP, 30 s otherwise.
+#[inline(always)]
+pub fn timeout_ns(e: &CtEntry) -> u64 {
+    if e.tcp_state == TCP_ESTABLISHED {
+        TCP_ESTABLISHED_TIMEOUT_NS
+    } else {
+        DEFAULT_TIMEOUT_NS
+    }
+}
+
+/// Return `true` if the entry has been idle long enough at `now` (kernel-monotonic ns) to be
+/// evicted: `now.saturating_sub(e.last_seen) > timeout_ns(e)`.
+#[inline(always)]
+pub fn ct_is_expired(e: &CtEntry, now: u64) -> bool {
+    now.saturating_sub(e.last_seen) > timeout_ns(e)
+}
 
 /// Build the VNI-keyed 5-tuple key for the packet at `ip_off` (host-order ports; ICMP id in both
 /// ports). Faithful port of the eBPF `conntrack::ct_key`.
