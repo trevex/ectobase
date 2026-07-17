@@ -4,29 +4,29 @@
 
 **Goal:** Close the two tractable tc gaps so the guest edge has IPv4+IPv6 parity for the common paths: (1) IPv6-inner overlay egress (route6 + encap, inner-proto 41) and (2) DHCPv6, both on the tc datapath — reusing Phase 1–3's composable pattern.
 
-**Architecture:** Extend the `EgressVerdict` model to IPv6: a shared `forward_decision_v6(data, data_end, ifindex, &PortMeta) -> EgressVerdict` (route6 + Local/Encap, NO NAT64), executed by the XDP and tc glue (tc reuses the Phase-3 `skb_adjust_room` encap). For DHCPv6, extract a pure `write_dhcpv6_reply` into `xdp-dp-common` (mirroring `write_dhcpv4_reply`) and have `tc_guest_dhcp` answer SOLICIT/REQUEST/CONFIRM for v6 as well as v4. **NAT64 egress (`64:ff9b::/96`) stays XDP-only** (size-changing; Phase 3.6) — the XDP `v6_guest_tx` keeps calling `nat64_egress` before `forward_decision_v6`; the tc path route-misses 64:ff9b (documented gap).
+**Architecture:** Extend the `EgressVerdict` model to IPv6: a shared `forward_decision_v6(data, data_end, ifindex, &PortMeta) -> EgressVerdict` (route6 + Local/Encap, NO NAT64), executed by the XDP and tc glue (tc reuses the Phase-3 `skb_adjust_room` encap). For DHCPv6, extract a pure `write_dhcpv6_reply` into `flowplane-common` (mirroring `write_dhcpv4_reply`) and have `tc_guest_dhcp` answer SOLICIT/REQUEST/CONFIRM for v6 as well as v4. **NAT64 egress (`64:ff9b::/96`) stays XDP-only** (size-changing; Phase 3.6) — the XDP `v6_guest_tx` keeps calling `nat64_egress` before `forward_decision_v6`; the tc path route-misses 64:ff9b (documented gap).
 
-**Tech Stack:** Rust + aya/aya-ebpf (eBPF), `xdp-dp-common` host tests, bash + ip-netns + scapy gates, the dpservice conformance suite as the XDP regression gate (must stay **93 passed / 2 skipped** — conformance still exercises the XDP path; the tc datapath is validated by the netns gates until the Phase-4 serve cutover).
+**Tech Stack:** Rust + aya/aya-ebpf (eBPF), `flowplane-common` host tests, bash + ip-netns + scapy gates, the dpservice conformance suite as the XDP regression gate (must stay **93 passed / 2 skipped** — conformance still exercises the XDP path; the tc datapath is validated by the netns gates until the Phase-4 serve cutover).
 
-**Context for the implementer:** Phases 1–3 are done. The XDP IPv6 egress is `xdp-dp-ebpf/src/v6.rs::v6_guest_tx` (lines 92–138): `nat64_egress` (keep) → route6 lookup (`ROUTES6`) → local-fast-path (`UNDERLAY`) → `encap_and_redirect(.., IPPROTO_IPV6)`. The IPv4 egress already uses `egress::forward_decision_v4 -> EgressVerdict {Pass,Drop,Local{tap_ifindex,guest_mac},Encap(EncapParams)}`, executed by XDP glue (`adjust_head`) and tc glue (`skb_adjust_room(IPV6_LEN, BPF_ADJ_ROOM_MAC, 0)` — see `tc.rs`). `encap::write_outer_v6(data,data_end,&EncapParams)` is the shared pure outer-header writer. The DHCPv4 pure builder is `xdp_dp_common::dhcp::write_dhcpv4_reply`; the XDP responder `dhcp.rs::try_dhcpv6_reply` (lines 659–~1050) is the code to mirror for v6; `tc.rs::tc_guest_dhcp` currently does v4 only.
+**Context for the implementer:** Phases 1–3 are done. The XDP IPv6 egress is `flowplane-ebpf/src/v6.rs::v6_guest_tx` (lines 92–138): `nat64_egress` (keep) → route6 lookup (`ROUTES6`) → local-fast-path (`UNDERLAY`) → `encap_and_redirect(.., IPPROTO_IPV6)`. The IPv4 egress already uses `egress::forward_decision_v4 -> EgressVerdict {Pass,Drop,Local{tap_ifindex,guest_mac},Encap(EncapParams)}`, executed by XDP glue (`adjust_head`) and tc glue (`skb_adjust_room(IPV6_LEN, BPF_ADJ_ROOM_MAC, 0)` — see `tc.rs`). `encap::write_outer_v6(data,data_end,&EncapParams)` is the shared pure outer-header writer. The DHCPv4 pure builder is `flowplane_common::dhcp::write_dhcpv4_reply`; the XDP responder `dhcp.rs::try_dhcpv6_reply` (lines 659–~1050) is the code to mirror for v6; `tc.rs::tc_guest_dhcp` currently does v4 only.
 
 ---
 
 ## File Structure
 
 **Modified files:**
-- `xdp-dp-ebpf/src/egress.rs` — add `forward_decision_v6(data, data_end, ifindex, &PortMeta) -> EgressVerdict` (route6 + Local/Encap; inner_proto = IPPROTO_IPV6). Reuse the existing `EgressVerdict`/`EncapParams`.
-- `xdp-dp-ebpf/src/v6.rs` — rewrite `v6_guest_tx` as: `nat64_egress` (keep) → `forward_decision_v6` → execute verdict with XDP primitives (behaviour-preserving).
-- `xdp-dp-ebpf/src/tc.rs` — `tc_guest_tx` IPv6 branch (after ND): if not ND, call `forward_decision_v6` and execute (local redirect / `skb_adjust_room` encap — identical to the v4 Encap glue). `tc_guest_dhcp`: answer v6 too.
-- `xdp-dp-common/src/lib.rs` — extend `pub mod dhcp` with the pure `write_dhcpv6_reply` + `parse_dhcpv6_request` + `Dhcpv6Reply`/`Dhcpv6Request` + DHCPv6 constants + host unit test (mirror the v4 work).
-- `xdp-dp-ebpf/src/dhcp.rs` — `try_dhcpv6_reply` becomes XDP glue over the common builder + the map-touching `gather`/`learn` (mirror `try_dhcpv4_reply`).
-- `test/tc-egress-netns.sh`, `test/tc-dhcp-netns.sh`, `test/tap-dhcp-probe.py`, `xdp-dp/src/main.rs` — extend the gates: IPv6 VM↔overlay encap on the uplink, and a DHCPv6 SOLICIT→ADVERTISE on the tap.
+- `flowplane-ebpf/src/egress.rs` — add `forward_decision_v6(data, data_end, ifindex, &PortMeta) -> EgressVerdict` (route6 + Local/Encap; inner_proto = IPPROTO_IPV6). Reuse the existing `EgressVerdict`/`EncapParams`.
+- `flowplane-ebpf/src/v6.rs` — rewrite `v6_guest_tx` as: `nat64_egress` (keep) → `forward_decision_v6` → execute verdict with XDP primitives (behaviour-preserving).
+- `flowplane-ebpf/src/tc.rs` — `tc_guest_tx` IPv6 branch (after ND): if not ND, call `forward_decision_v6` and execute (local redirect / `skb_adjust_room` encap — identical to the v4 Encap glue). `tc_guest_dhcp`: answer v6 too.
+- `flowplane-common/src/lib.rs` — extend `pub mod dhcp` with the pure `write_dhcpv6_reply` + `parse_dhcpv6_request` + `Dhcpv6Reply`/`Dhcpv6Request` + DHCPv6 constants + host unit test (mirror the v4 work).
+- `flowplane-ebpf/src/dhcp.rs` — `try_dhcpv6_reply` becomes XDP glue over the common builder + the map-touching `gather`/`learn` (mirror `try_dhcpv4_reply`).
+- `test/tc-egress-netns.sh`, `test/tc-dhcp-netns.sh`, `test/tap-dhcp-probe.py`, `flowplane/src/main.rs` — extend the gates: IPv6 VM↔overlay encap on the uplink, and a DHCPv6 SOLICIT→ADVERTISE on the tap.
 
 ---
 
 ## Task 1: `forward_decision_v6` + rewire XDP `v6_guest_tx` (behaviour-preserving)
 
-**Files:** `xdp-dp-ebpf/src/egress.rs`, `xdp-dp-ebpf/src/v6.rs`
+**Files:** `flowplane-ebpf/src/egress.rs`, `flowplane-ebpf/src/v6.rs`
 
 - [ ] **Step 1: Add `forward_decision_v6` to `egress.rs`**
 ```rust
@@ -78,12 +78,12 @@ pub fn v6_guest_tx(ctx: &XdpContext, meta: &PortMeta) -> Result<u32, ()> {
 Keep `try_icmpv6_echo_reply`, `v6_uplink_rx`, `reforward` untouched. Remove now-unused imports as the compiler dictates; keep `forward_decision_v6` `#[inline(always)]` (stack).
 
 - [ ] **Step 3: Build + conformance**
-`nix develop -c cargo build -p xdp-dp 2>&1 | grep -E "error|Finished" | tail -3` → Finished.
+`nix develop -c cargo build -p flowplane 2>&1 | grep -E "error|Finished" | tail -3` → Finished.
 `nix develop -c ./test/conformance/run.sh 2>&1 | tail -3` → **93 passed, 2 skipped** (the v6 VM↔VM + encap tests prove the extraction is behaviour-preserving).
 
 - [ ] **Step 4: Commit**
 ```bash
-git add xdp-dp-ebpf/src/egress.rs xdp-dp-ebpf/src/v6.rs
+git add flowplane-ebpf/src/egress.rs flowplane-ebpf/src/v6.rs
 git commit -m "refactor(v6): forward_decision_v6 + EgressVerdict; XDP v6_guest_tx executes it"
 ```
 
@@ -91,22 +91,22 @@ git commit -m "refactor(v6): forward_decision_v6 + EgressVerdict; XDP v6_guest_t
 
 ## Task 2: tc IPv6 overlay egress in `tc_guest_tx`
 
-**Files:** `xdp-dp-ebpf/src/tc.rs`
+**Files:** `flowplane-ebpf/src/tc.rs`
 
 - [ ] **Step 1: Add the IPv6 forwarding tail to the `ETH_P_IPV6` branch**
 
 Today the `ethertype == ETH_P_IPV6` branch in `tc_guest_tx` tries ND then falls through. After the ND attempt (when `try_write_nd_reply` returns false), add IPv6 overlay forwarding (mirror the v4 Encap glue exactly, but call `forward_decision_v6`):
 ```rust
 // (inside the ETH_P_IPV6 branch, after the ND try that fell through)
-let _ = ctx.pull_data((xdp_dp_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN) as u32);
-if ctx.data() + xdp_dp_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN > ctx.data_end() {
+let _ = ctx.pull_data((flowplane_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN) as u32);
+if ctx.data() + flowplane_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN > ctx.data_end() {
     return TC_ACT_OK;
 }
 match crate::egress::forward_decision_v6(ctx.data(), ctx.data_end(), ifindex, &meta) {
     crate::egress::EgressVerdict::Pass => return TC_ACT_OK,
     crate::egress::EgressVerdict::Drop => return TC_ACT_SHOT,
     crate::egress::EgressVerdict::Local { tap_ifindex, guest_mac } => {
-        if ctx.data() + xdp_dp_common::arp_nd::ETH_LEN <= ctx.data_end() {
+        if ctx.data() + flowplane_common::arp_nd::ETH_LEN <= ctx.data_end() {
             let q = ctx.data() as *mut u8;
             unsafe {
                 let g = guest_mac; let gw = crate::arp_nd::GW_MAC; let mut i = 0;
@@ -121,7 +121,7 @@ match crate::egress::forward_decision_v6(ctx.data(), ctx.data_end(), ifindex, &m
         if unsafe { ctx.adjust_room(crate::parse::IPV6_LEN as i32, BPF_ADJ_ROOM_MAC, 0) }.is_err() {
             return TC_ACT_OK;
         }
-        if ctx.pull_data((xdp_dp_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN) as u32).is_err() {
+        if ctx.pull_data((flowplane_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN) as u32).is_err() {
             return TC_ACT_OK;
         }
         if unsafe { crate::encap::write_outer_v6(ctx.data(), ctx.data_end(), &e) } {
@@ -133,11 +133,11 @@ match crate::egress::forward_decision_v6(ctx.data(), ctx.data_end(), ifindex, &m
 ```
 This is identical to the v4 Encap glue (same `adjust_room` + `write_outer_v6`) — the only difference is `forward_decision_v6` and the IPv6 ethertype in the Local rewrite. Use the SAME working `ctx.adjust_room(.., BPF_ADJ_ROOM_MAC, 0)` invocation proven in Phase 3 Task 3.
 
-- [ ] **Step 2: Build** → `nix develop -c cargo build -p xdp-dp 2>&1 | grep -E "error|Finished" | tail` → Finished.
+- [ ] **Step 2: Build** → `nix develop -c cargo build -p flowplane 2>&1 | grep -E "error|Finished" | tail` → Finished.
 
 - [ ] **Step 3: Commit**
 ```bash
-git add xdp-dp-ebpf/src/tc.rs
+git add flowplane-ebpf/src/tc.rs
 git commit -m "feat(ebpf): tc guest edge forwards inner IPv6 to overlay (encap proto 41)"
 ```
 
@@ -145,17 +145,17 @@ git commit -m "feat(ebpf): tc guest edge forwards inner IPv6 to overlay (encap p
 
 ## Task 3: DHCPv6 — pure builder in common + XDP rewire + tc wiring
 
-**Files:** `xdp-dp-common/src/lib.rs`, `xdp-dp-ebpf/src/dhcp.rs`, `xdp-dp-ebpf/src/tc.rs`
+**Files:** `flowplane-common/src/lib.rs`, `flowplane-ebpf/src/dhcp.rs`, `flowplane-ebpf/src/tc.rs`
 
-- [ ] **Step 1: Extract the pure DHCPv6 reply into `xdp_dp_common::dhcp` (mirror the v4 work)**
+- [ ] **Step 1: Extract the pure DHCPv6 reply into `flowplane_common::dhcp` (mirror the v4 work)**
 
-Read `xdp-dp-ebpf/src/dhcp.rs::try_dhcpv6_reply` (lines 659–~1050). Split it exactly like `try_dhcpv4_reply` was split (Phase 1):
-- Into `xdp_dp_common::dhcp`: `pub fn looks_like_dhcpv6(data,data_end)->bool`, `pub fn parse_dhcpv6_request(data,data_end)->Option<Dhcpv6Request>` (DUID/msg-type extraction; pure), `pub unsafe fn write_dhcpv6_reply(data,data_end,&Dhcpv6Reply)->Option<usize>` (the byte builder, verbatim move), the `Dhcpv6Request`/`Dhcpv6Reply` structs + the D6_* constants + `MIN_D6_LEN`/the reply-len const. ALL the byte-builder functions `#[inline(always)]` (stack — `v6_guest_dhcp`/`tc_guest_dhcp` are small but be safe).
-- Keep in `xdp-dp-ebpf/src/dhcp.rs`: the map-touching glue (`gather_dhcpv6_reply` reading `DHCP_CONFIG`/`DHCP_META`, any v6 MAC/state learning) and `try_dhcpv6_reply` rewritten as XDP glue: parse → gather → resize (`bpf_xdp_adjust_tail`) → `write_dhcpv6_reply` → `Some(reflect(ctx))`.
-- Add a host unit test in the `dhcp` module asserting the DHCPv6 ADVERTISE framing (msg-type, IA address option carrying the guest IPv6, the echoed client DUID). Run `nix develop -c cargo test -p xdp-dp-common 2>&1 | grep "test result"` → ok (count grows).
+Read `flowplane-ebpf/src/dhcp.rs::try_dhcpv6_reply` (lines 659–~1050). Split it exactly like `try_dhcpv4_reply` was split (Phase 1):
+- Into `flowplane_common::dhcp`: `pub fn looks_like_dhcpv6(data,data_end)->bool`, `pub fn parse_dhcpv6_request(data,data_end)->Option<Dhcpv6Request>` (DUID/msg-type extraction; pure), `pub unsafe fn write_dhcpv6_reply(data,data_end,&Dhcpv6Reply)->Option<usize>` (the byte builder, verbatim move), the `Dhcpv6Request`/`Dhcpv6Reply` structs + the D6_* constants + `MIN_D6_LEN`/the reply-len const. ALL the byte-builder functions `#[inline(always)]` (stack — `v6_guest_dhcp`/`tc_guest_dhcp` are small but be safe).
+- Keep in `flowplane-ebpf/src/dhcp.rs`: the map-touching glue (`gather_dhcpv6_reply` reading `DHCP_CONFIG`/`DHCP_META`, any v6 MAC/state learning) and `try_dhcpv6_reply` rewritten as XDP glue: parse → gather → resize (`bpf_xdp_adjust_tail`) → `write_dhcpv6_reply` → `Some(reflect(ctx))`.
+- Add a host unit test in the `dhcp` module asserting the DHCPv6 ADVERTISE framing (msg-type, IA address option carrying the guest IPv6, the echoed client DUID). Run `nix develop -c cargo test -p flowplane-common 2>&1 | grep "test result"` → ok (count grows).
 
 - [ ] **Step 2: Build + conformance (XDP DHCPv6 must be unchanged)**
-`nix develop -c cargo build -p xdp-dp 2>&1 | grep -E "error|Finished" | tail -3` → Finished.
+`nix develop -c cargo build -p flowplane 2>&1 | grep -E "error|Finished" | tail -3` → Finished.
 `nix develop -c ./test/conformance/run.sh 2>&1 | tail -3` → **93 passed, 2 skipped** (`test_dhcpv6` proves the v6 builder move is byte-correct on the XDP path).
 
 - [ ] **Step 3: Wire DHCPv6 into `tc_guest_dhcp`**
@@ -164,7 +164,7 @@ Read `xdp-dp-ebpf/src/dhcp.rs::try_dhcpv6_reply` (lines 659–~1050). Split it e
 
 - [ ] **Step 4: Commit**
 ```bash
-git add xdp-dp-common/src/lib.rs xdp-dp-ebpf/src/dhcp.rs xdp-dp-ebpf/src/tc.rs
+git add flowplane-common/src/lib.rs flowplane-ebpf/src/dhcp.rs flowplane-ebpf/src/tc.rs
 git commit -m "feat(dhcpv6): pure write_dhcpv6_reply in common; XDP + tc answer DHCPv6"
 ```
 
@@ -172,7 +172,7 @@ git commit -m "feat(dhcpv6): pure write_dhcpv6_reply in common; XDP + tc answer 
 
 ## Task 4: Extend the gates (tc IPv6 encap + tc DHCPv6) + regression
 
-**Files:** `test/tc-egress-netns.sh`, `test/tc-dhcp-netns.sh`, `test/tap-dhcp-probe.py`, `xdp-dp/src/main.rs`
+**Files:** `test/tc-egress-netns.sh`, `test/tc-dhcp-netns.sh`, `test/tap-dhcp-probe.py`, `flowplane/src/main.rs`
 
 - [ ] **Step 1: tc IPv6 egress in the egress gate**
 
@@ -185,13 +185,13 @@ Extend `test/tc-dhcp-netns.sh` (+ `tap-dhcp-probe.py`): send a DHCPv6 SOLICIT (`
 - [ ] **Step 3: Run the gates + full regression**
 `nix develop -c ./test/tc-egress-netns.sh` → `ENCAP OK` and `ENCAP6 OK`.
 `nix develop -c ./test/tc-dhcp-netns.sh` → DHCP + ARP + ND + DHCPv6 all OK.
-`nix develop -c cargo test -p xdp-dp-common 2>&1 | grep "test result"` → ok.
+`nix develop -c cargo test -p flowplane-common 2>&1 | grep "test result"` → ok.
 `nix develop -c ./test/conformance/run.sh 2>&1 | tail -3` → **93 passed, 2 skipped** (XDP path still intact).
 If the tc IPv6 encap layout is wrong, inspect the captured hex and adjust as in Phase 3 (the `adjust_room` invocation is the same as v4, so it should be correct).
 
 - [ ] **Step 4: Commit**
 ```bash
-git add test/tc-egress-netns.sh test/tc-dhcp-netns.sh test/tap-dhcp-probe.py xdp-dp/src/main.rs
+git add test/tc-egress-netns.sh test/tc-dhcp-netns.sh test/tap-dhcp-probe.py flowplane/src/main.rs
 git commit -m "test(tc): gates cover tc IPv6 overlay egress + DHCPv6"
 ```
 

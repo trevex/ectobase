@@ -27,7 +27,7 @@
 ## File Structure
 
 ```
-xdp-dp/src/
+flowplane/src/
   loader.rs   # attach_xdp_pinned (pin link); pin_map helper; load with map adoption left default
   maps.rs     # Conntrack::from_pin(path)
   main.rs     # bringup: --pin-dir / --adopt lifecycle
@@ -38,7 +38,7 @@ env/ha-smoke.sh   # NEW: kill+restart-CP HA acceptance
 
 ## Task 1: Loader — pin XDP links + pin/open the conntrack map
 
-**Files:** Modify `xdp-dp/src/loader.rs`, `xdp-dp/src/maps.rs`
+**Files:** Modify `flowplane/src/loader.rs`, `flowplane/src/maps.rs`
 
 - [ ] **Step 1: `attach_xdp_pinned` in `loader.rs`**
 Read `loader.rs`. `attach_xdp` currently does `let prog: &mut Xdp = ebpf.program_mut(name).try_into()?; prog.load()?; prog.attach(iface, XdpFlags::default())?;` (discarding the link id). Add a pinned variant that pins the link so it survives `Ebpf` drop:
@@ -104,15 +104,15 @@ pub fn pin_map(ebpf: &mut aya::Ebpf, name: &str, pin_dir: &str) -> anyhow::Resul
 
 - [ ] **Step 3: build + commit**
 ```bash
-cargo build -p xdp-dp
+cargo build -p flowplane
 cargo fmt --all
-git add xdp-dp
+git add flowplane
 git commit -m "feat(ha): loader pin-xdp-link + pin-map + Conntrack::from_pin"
 ```
 
 ## Task 2: Bringup `--pin-dir` / `--adopt` lifecycle
 
-**Files:** Modify `xdp-dp/src/main.rs`
+**Files:** Modify `flowplane/src/main.rs`
 
 - [ ] **Step 1: CLI flags**
 Add to the `Bringup` subcommand:
@@ -178,14 +178,14 @@ IMPORTANT: when pinned, the `ebpf` object is still dropped at the end of `main` 
 
 - [ ] **Step 4: build + a quick non-HA regression**
 ```bash
-cargo build -p xdp-dp
+cargo build -p flowplane
 ./env/netns-e2e.sh run 2>&1 | tail -6   # 12 tests still pass (no --pin-dir => unchanged path)
 ```
 
 - [ ] **Step 5: Commit**
 ```bash
 cargo fmt --all
-git add xdp-dp
+git add flowplane
 git commit -m "feat(ha): bringup --pin-dir (pin links + CONNTRACK) and --adopt restart"
 ```
 
@@ -194,16 +194,16 @@ git commit -m "feat(ha): bringup --pin-dir (pin links + CONNTRACK) and --adopt r
 **Files:** Create `env/ha-smoke.sh`
 
 - [ ] **Step 1: Minimal 2-node setup + kill/restart scenario**
-A focused script (model the netns-e2e structure: EXIT-trap teardown, `$BIN`, tcpdump optional) with two hypervisors (hypa/guesta 10.0.0.5, hypb/guestb 10.0.0.6) on a bridge, brought up **with `--pin-dir /sys/fs/bpf/xdp-dp-uA` (hypa) / `/sys/fs/bpf/xdp-dp-uB` (hypb)** and broadcast gateway-mac. Scenario:
+A focused script (model the netns-e2e structure: EXIT-trap teardown, `$BIN`, tcpdump optional) with two hypervisors (hypa/guesta 10.0.0.5, hypb/guestb 10.0.0.6) on a bridge, brought up **with `--pin-dir /sys/fs/bpf/flowplane-uA` (hypa) / `/sys/fs/bpf/flowplane-uB` (hypb)** and broadcast gateway-mac. Scenario:
 ```bash
 # 1. up + verify guesta->guestb works.
 # 2. start a sustained background ping guesta->guestb (e.g. ping -i 0.3, capture loss).
 # 3. record hypa's bringup PID; kill it (SIGKILL). The pinned links keep hypa's datapath running.
 # 4. while hypa's CP is DEAD, confirm guesta->guestb STILL works (the datapath survived).
-# 5. restart hypa: `bringup ... --pin-dir /sys/fs/bpf/xdp-dp-uA --adopt` (re-acquires CONNTRACK).
+# 5. restart hypa: `bringup ... --pin-dir /sys/fs/bpf/flowplane-uA --adopt` (re-acquires CONNTRACK).
 # 6. confirm guesta->guestb still works after adopt; the sustained ping shows ~0 loss across the
 #    kill+restart window.
-# 7. teardown: kill procs, `sudo rm -rf /sys/fs/bpf/xdp-dp-uA /sys/fs/bpf/xdp-dp-uB`, del ns/bridge.
+# 7. teardown: kill procs, `sudo rm -rf /sys/fs/bpf/flowplane-uA /sys/fs/bpf/flowplane-uB`, del ns/bridge.
 ```
 Concretely, the acceptance prints:
 ```

@@ -23,11 +23,11 @@
 ## File Structure
 
 ```
-xdp-dp-common/src/lib.rs   # + RouteLpmData (8B) + layout test
-xdp-dp-ebpf/src/
+flowplane-common/src/lib.rs   # + RouteLpmData (8B) + layout test
+flowplane-ebpf/src/
   maps.rs                  # ROUTES: HashMap -> LpmTrie<RouteLpmData, RouteValue>
   egress.rs                # lookup via Key::new(64, RouteLpmData{vni_be, dst})
-xdp-dp/src/
+flowplane/src/
   maps.rs                  # Routes wrapper -> LpmTrie; upsert(vni,ipv4,prefix_len,RouteValue)
   control.rs               # create_route builds the LPM key; + prefix shadow store + add/del/list_prefix
   grpc.rs                  # CreatePrefix/DeletePrefix/ListPrefixes
@@ -39,7 +39,7 @@ env/netns-e2e.sh           # LPM acceptance (a /32 beats a /24 supernet) (Test 1
 
 ## Task 1: Common `RouteLpmData` type
 
-**Files:** Modify `xdp-dp-common/src/lib.rs`
+**Files:** Modify `flowplane-common/src/lib.rs`
 
 - [ ] **Step 1: Add the type**
 ```rust
@@ -55,21 +55,21 @@ pub struct RouteLpmData {
 ```
 Add `unsafe impl aya::Pod for RouteLpmData {}` in `user_impls`.
 
-- [ ] **Step 2: Layout test** — assert `size_of::<RouteLpmData>() == 8`. Run `cargo test -p xdp-dp-common --features user` → pass. `cargo build -p xdp-dp` (RouteLpmData unused yet — fine).
+- [ ] **Step 2: Layout test** — assert `size_of::<RouteLpmData>() == 8`. Run `cargo test -p flowplane-common --features user` → pass. `cargo build -p flowplane` (RouteLpmData unused yet — fine).
 
 - [ ] **Step 3: Commit**
 ```bash
 cargo fmt --all
-git add xdp-dp-common
+git add flowplane-common
 git commit -m "feat(lpm): RouteLpmData key for the LPM routes trie"
 ```
 
 ## Task 2: eBPF ROUTES → LPM trie + egress lookup
 
-**Files:** Modify `xdp-dp-ebpf/src/maps.rs`, `xdp-dp-ebpf/src/egress.rs`
+**Files:** Modify `flowplane-ebpf/src/maps.rs`, `flowplane-ebpf/src/egress.rs`
 
 - [ ] **Step 1: Change the map type (`maps.rs`)**
-Add to imports: `use aya_ebpf::maps::lpm_trie::LpmTrie;` and `RouteLpmData` from `xdp_dp_common`. Replace the `ROUTES` declaration:
+Add to imports: `use aya_ebpf::maps::lpm_trie::LpmTrie;` and `RouteLpmData` from `flowplane_common`. Replace the `ROUTES` declaration:
 ```rust
 // LPM trie: key data = [vni_be(4) ++ ipv4(4)], prefix_len = 32 + ipv4_prefix. flags=1 is
 // BPF_F_NO_PREALLOC, REQUIRED for LPM tries (the load fails without it).
@@ -91,7 +91,7 @@ Replace with an LPM lookup (full-length key; the trie returns the longest stored
     let route = unsafe {
         ROUTES.get(&aya_ebpf::maps::lpm_trie::Key::new(
             64,
-            xdp_dp_common::RouteLpmData {
+            flowplane_common::RouteLpmData {
                 vni: meta.vni.to_be_bytes(),
                 ipv4: dst,
             },
@@ -103,9 +103,9 @@ Update `egress.rs` imports: drop `RouteKey` (no longer used), keep `RouteValue` 
 
 - [ ] **Step 3: build + verifier + e2e**
 ```bash
-cargo build -p xdp-dp
-cargo test -p xdp-dp --no-run 2>&1 | tee /tmp/t.log
-BIN=$(grep -oE 'target/debug/deps/xdp_dp-[a-f0-9]+' /tmp/t.log | head -1)
+cargo build -p flowplane
+cargo test -p flowplane --no-run 2>&1 | tee /tmp/t.log
+BIN=$(grep -oE 'target/debug/deps/flowplane-[a-f0-9]+' /tmp/t.log | head -1)
 sudo -E "$BIN" --include-ignored --exact loader::tests::both_programs_pass_verifier   # 1 passed
 ```
 The full e2e can't pass until Task 3 makes the userspace side write LPM entries — so the **verifier gate is Task 2's acceptance** (it confirms the LPM map loads with NO_PREALLOC and the program verifies). If the load fails with `BPF_F_NO_PREALLOC`-related errors, ensure `flags = 1`. (Tasks 3 restores the e2e.)
@@ -113,18 +113,18 @@ The full e2e can't pass until Task 3 makes the userspace side write LPM entries 
 - [ ] **Step 4: Commit**
 ```bash
 cargo fmt --all
-git add xdp-dp-ebpf
+git add flowplane-ebpf
 git commit -m "feat(lpm): ROUTES is an LPM trie; egress does longest-prefix match"
 ```
 
 ## Task 3: Userspace Routes wrapper → LPM + control + CLI
 
-**Files:** Modify `xdp-dp/src/maps.rs`, `xdp-dp/src/control.rs`, `xdp-dp/src/main.rs`
+**Files:** Modify `flowplane/src/maps.rs`, `flowplane/src/control.rs`, `flowplane/src/main.rs`
 
-- [ ] **Step 1: `Routes` wrapper over `LpmTrie` (`xdp-dp/src/maps.rs`)**
+- [ ] **Step 1: `Routes` wrapper over `LpmTrie` (`flowplane/src/maps.rs`)**
 ```rust
 use aya::maps::lpm_trie::{Key, LpmTrie};
-// ... add RouteLpmData to the xdp_dp_common import ...
+// ... add RouteLpmData to the flowplane_common import ...
 
 #[allow(dead_code)]
 pub struct Routes {
@@ -188,7 +188,7 @@ The `--remote` loop currently parses `"<ipv4>=<nexthop_underlay>=<vni>"` and cal
                     vni,
                     ip,
                     plen,
-                    xdp_dp_common::RouteValue {
+                    flowplane_common::RouteValue {
                         nexthop_vni: vni,
                         nexthop_ipv6: nh,
                         is_external: external_set.contains(&ip) as u8,
@@ -200,7 +200,7 @@ The `--remote` loop currently parses `"<ipv4>=<nexthop_underlay>=<vni>"` and cal
 
 - [ ] **Step 4: build + verifier + e2e**
 ```bash
-cargo build -p xdp-dp
+cargo build -p flowplane
 # verifier gate -> 1 passed
 ./env/netns-e2e.sh run 2>&1 | tail -14   # Tests 1-10 pass (all /32 routes now LPM entries)
 ```
@@ -208,13 +208,13 @@ cargo build -p xdp-dp
 - [ ] **Step 5: Commit**
 ```bash
 cargo fmt --all
-git add xdp-dp xdp-dp-ebpf
+git add flowplane flowplane-ebpf
 git commit -m "feat(lpm): userspace LPM Routes wrapper + create_route + --remote CIDR"
 ```
 
 ## Task 4: gRPC alias prefixes (CreatePrefix / DeletePrefix / ListPrefixes)
 
-**Files:** Modify `xdp-dp/src/control.rs`, `xdp-dp/src/grpc.rs`
+**Files:** Modify `flowplane/src/control.rs`, `flowplane/src/grpc.rs`
 
 - [ ] **Step 1: `Control` prefix store + methods**
 Add to `Inner`: `prefixes: std::collections::HashMap<Vec<u8>, Vec<([u8;4], u32)>>` (interface_id → list of (prefix_ip, prefix_len)). Methods:
@@ -231,10 +231,10 @@ Verify shapes in the generated file: `CreatePrefixRequest{interface_id, prefix: 
 
 - [ ] **Step 3: build + host tests + commit**
 ```bash
-cargo build -p xdp-dp
-cargo test -p xdp-dp 2>&1 | tail -3
+cargo build -p flowplane
+cargo test -p flowplane 2>&1 | tail -3
 cargo fmt --all
-git add xdp-dp
+git add flowplane
 git commit -m "feat(grpc): CreatePrefix/DeletePrefix/ListPrefixes (alias prefixes via LPM routes)"
 ```
 

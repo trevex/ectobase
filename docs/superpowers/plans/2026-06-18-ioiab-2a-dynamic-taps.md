@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `xdp-dp serve` a complete gRPC-driven dataplane daemon that metalnet (and dpservice's own `test/local` conformance suite) can drive — runtime XDP attach/detach on VF interfaces, full non-DHCP gRPC surface, and a same-host guest-to-guest fast path — proven green against the vendored dpservice conformance tests.
+**Goal:** Make `flowplane serve` a complete gRPC-driven dataplane daemon that metalnet (and dpservice's own `test/local` conformance suite) can drive — runtime XDP attach/detach on VF interfaces, full non-DHCP gRPC surface, and a same-host guest-to-guest fast path — proven green against the vendored dpservice conformance tests.
 
 **Architecture:** Extend the existing `Cmd::Serve` (which already attaches `uplink_rx` and serves gRPC) and the existing `Control::create_interface` (which already attaches `guest_tx` dynamically). Add: server-configured gateways (v4 ARP / v6 ND), retained `XdpLink` handles for clean detach, the missing observe/delete RPCs backed by userspace shadow state, an in-datapath local-delivery fast path, and a vendored+adapted conformance harness (veth substitution + real `dpservice-cli`).
 
@@ -11,27 +11,27 @@
 **Spec:** `docs/superpowers/specs/2026-06-18-ioiab-2a-dynamic-taps-design.md`.
 
 **Starting point (verified in tree):**
-- `xdp-dp/src/main.rs` `Cmd::Serve { addr, uplink, local_underlay, gateway_mac, conntrack_max }` → `Control::bring_up` (attach `uplink_rx`) → tonic serve. Builds `grpc::Service { state, control: Some(Arc<Control>), underlay }`.
-- `xdp-dp/src/control.rs` `Control::create_interface(id, device, vni, ipv4, gateway_ipv4, underlay, total_mbps, public_mbps)` already does `attach_xdp_extra(ebpf,"guest_tx",device).or_else(attach_xdp(...))` and programs `PORT_META` (with `gateway_ipv6: [0;16]`), `INTERFACES`, `UNDERLAY`, optional `METER`. Shadow state: `by_id: HashMap<Vec<u8>,(u32,[u8;4])>`, `by_ifindex`, `iface_underlay`, `prefixes`, `fw`, `lbs`, `neigh_nats`. Delete/list methods exist for vip/nat/lb/fw/prefix/neighbor_nat; **none for interface/route/vni**.
-- `xdp-dp/src/grpc.rs` `Service { state, control, underlay }`. `create_interface` derives `gateway_ipv4 = [ip0,ip1,ip2,1]`, `gateway_ipv6` not set. 17 stubs return `Status::unimplemented` (incl. `delete_interface`, `list_interfaces`, `get_interface`, `list_routes`, `delete_route`, `check_vni_in_use`, `reset_vni`, and the LB/NAT/VIP/FW list/get/delete the create-side already has control methods for).
-- `xdp-dp/src/loader.rs` `attach_xdp_extra(ebpf, prog, iface)` attaches but **discards the link** (no detach possible). `attach_xdp_pinned` shows the `take_link`/`FdLink` pattern.
-- `xdp-dp-ebpf/src/egress.rs` `try_guest_tx`: after `ROUTES.get(...)` → `route`, always `encap_and_redirect(...)`. `UNDERLAY: HashMap<[u8;16],UnderlayValue{vni,tap_ifindex,guest_mac,_pad}>`, `GW_MAC` in `arp_nd.rs`, `write6` in `parse.rs`.
+- `flowplane/src/main.rs` `Cmd::Serve { addr, uplink, local_underlay, gateway_mac, conntrack_max }` → `Control::bring_up` (attach `uplink_rx`) → tonic serve. Builds `grpc::Service { state, control: Some(Arc<Control>), underlay }`.
+- `flowplane/src/control.rs` `Control::create_interface(id, device, vni, ipv4, gateway_ipv4, underlay, total_mbps, public_mbps)` already does `attach_xdp_extra(ebpf,"guest_tx",device).or_else(attach_xdp(...))` and programs `PORT_META` (with `gateway_ipv6: [0;16]`), `INTERFACES`, `UNDERLAY`, optional `METER`. Shadow state: `by_id: HashMap<Vec<u8>,(u32,[u8;4])>`, `by_ifindex`, `iface_underlay`, `prefixes`, `fw`, `lbs`, `neigh_nats`. Delete/list methods exist for vip/nat/lb/fw/prefix/neighbor_nat; **none for interface/route/vni**.
+- `flowplane/src/grpc.rs` `Service { state, control, underlay }`. `create_interface` derives `gateway_ipv4 = [ip0,ip1,ip2,1]`, `gateway_ipv6` not set. 17 stubs return `Status::unimplemented` (incl. `delete_interface`, `list_interfaces`, `get_interface`, `list_routes`, `delete_route`, `check_vni_in_use`, `reset_vni`, and the LB/NAT/VIP/FW list/get/delete the create-side already has control methods for).
+- `flowplane/src/loader.rs` `attach_xdp_extra(ebpf, prog, iface)` attaches but **discards the link** (no detach possible). `attach_xdp_pinned` shows the `take_link`/`FdLink` pattern.
+- `flowplane-ebpf/src/egress.rs` `try_guest_tx`: after `ROUTES.get(...)` → `route`, always `encap_and_redirect(...)`. `UNDERLAY: HashMap<[u8;16],UnderlayValue{vni,tap_ifindex,guest_mac,_pad}>`, `GW_MAC` in `arp_nd.rs`, `write6` in `parse.rs`.
 - Harness device model (dpservice `test/local/config.py`): `PF0.tap=dtap0` mac `22:22:22:22:22:00`; `PF1.tap=dtap1`; `VM1.tap=dtapvf_0` mac `66:66:66:66:66:00` vni=100 ip=10.100.1.1 ipv6=2000:100:1::1; `VM2=dtapvf_1` mac `..:01` vni=100 ip=10.100.1.2; `VM3=dtapvf_2` vni=200; `VM4=dtapvf_3` vni=100 (manual). `gateway_ip=169.254.0.1`, `gateway_ipv6=fe80::1`, `local_ul_ipv6=fc00:1::1`, `grpc_port=1337`. `grpc_client.addinterface` calls `dpservice-cli add interface --id={name} --device={pci} --vni= --ipv4= --ipv6=`.
 
 ## File Structure
 
 ```
-xdp-dp/src/main.rs       # Cmd::Serve gains --gateway/--gateway6/--pin-dir/--dhcp-* ; thread gateways into Service
-xdp-dp/src/grpc.rs       # Service gains gateway_ipv4/gateway_ipv6 ; implement the 7 + feature observe/delete RPCs
-xdp-dp/src/control.rs    # links HashMap (XdpLink) ; create_interface(+gateway_ipv6) ; detach_interface ;
+flowplane/src/main.rs       # Cmd::Serve gains --gateway/--gateway6/--pin-dir/--dhcp-* ; thread gateways into Service
+flowplane/src/grpc.rs       # Service gains gateway_ipv4/gateway_ipv6 ; implement the 7 + feature observe/delete RPCs
+flowplane/src/control.rs    # links HashMap (XdpLink) ; create_interface(+gateway_ipv6) ; detach_interface ;
                          #   route shadow + list_routes/delete_route ; interface shadow detail ; vni helpers
-xdp-dp/src/loader.rs     # attach_xdp_link() -> XdpLink (retained for detach)
-xdp-dp-ebpf/src/egress.rs# local guest-to-guest fast path (v4) before encap
-xdp-dp-ebpf/src/v6.rs    # local fast path (v6) before encap
+flowplane/src/loader.rs     # attach_xdp_link() -> XdpLink (retained for detach)
+flowplane-ebpf/src/egress.rs# local guest-to-guest fast path (v4) before encap
+flowplane-ebpf/src/v6.rs    # local fast path (v6) before encap
 test/conformance/        # VENDORED dpservice test/local + adapters (NEW)
   setup-net.sh           #   veth substitution + xdp_pass enablers (NEW)
-  run.sh                 #   build, bring up net, start xdp-dp serve, pytest the non-DHCP suite (NEW)
-  dp_service.py          #   patched launcher: xdp-dp serve instead of dpservice-bin
+  run.sh                 #   build, bring up net, start flowplane serve, pytest the non-DHCP suite (NEW)
+  dp_service.py          #   patched launcher: flowplane serve instead of dpservice-bin
   config.py              #   .pci -> xdp-side veth names (scaffolding edit)
   bin/dpservice-cli      #   pinned released binary (fetched)
 ```
@@ -40,9 +40,9 @@ test/conformance/        # VENDORED dpservice test/local + adapters (NEW)
 
 ## Task 1: Serve-mode config — server-configured gateways + pin/dhcp flags
 
-**Files:** Modify `xdp-dp/src/main.rs` (`Cmd::Serve` variant + arm), `xdp-dp/src/grpc.rs` (`Service` struct + `create_interface`)
+**Files:** Modify `flowplane/src/main.rs` (`Cmd::Serve` variant + arm), `flowplane/src/grpc.rs` (`Service` struct + `create_interface`)
 
-- [ ] **Step 1: Extend the `Cmd::Serve` variant** in `xdp-dp/src/main.rs` (the struct around line 80). Add fields after `gateway_mac`:
+- [ ] **Step 1: Extend the `Cmd::Serve` variant** in `flowplane/src/main.rs` (the struct around line 80). Add fields after `gateway_mac`:
 
 ```rust
         /// Overlay IPv4 gateway the datapath answers ARP for (e.g. 169.254.0.1).
@@ -81,7 +81,7 @@ test/conformance/        # VENDORED dpservice test/local + adapters (NEW)
         } => {
             if let Some(n) = conntrack_max {
                 // SAFETY: single-threaded CLI startup, before any datapath thread is spawned.
-                std::env::set_var("XDP_DP_CONNTRACK_MAX", n.to_string());
+                std::env::set_var("FLOWPLANE_CONNTRACK_MAX", n.to_string());
             }
             let underlay = parse_ipv6(&local_underlay)?;
             let gateway_ipv4 = parse_ipv4(&gateway)?;
@@ -117,7 +117,7 @@ test/conformance/        # VENDORED dpservice test/local + adapters (NEW)
 
 (`parse_ipv4` already exists in `main.rs` — it is used by `Bringup`. If it is not `pub`/in-scope, reuse the existing helper.)
 
-- [ ] **Step 3: Add gateway fields to `Service`** in `xdp-dp/src/grpc.rs` (struct around line 36):
+- [ ] **Step 3: Add gateway fields to `Service`** in `flowplane/src/grpc.rs` (struct around line 36):
 
 ```rust
 pub struct Service {
@@ -152,20 +152,20 @@ and change the `control.create_interface(...)` call to pass `gateway_ipv6` (sign
 
 - [ ] **Step 5: Build.**
 
-Run: `cargo build -p xdp-dp 2>&1 | tail -3`
+Run: `cargo build -p flowplane 2>&1 | tail -3`
 Expected: compiles (a `control.create_interface` arity error here is expected and fixed in Task 3 — if so, temporarily keep the old call without `gateway_ipv6` and revisit in Task 3; prefer doing Task 3 immediately after).
 
 - [ ] **Step 6: Commit.**
 
 ```bash
 cargo fmt --all
-git add xdp-dp/src/main.rs xdp-dp/src/grpc.rs
+git add flowplane/src/main.rs flowplane/src/grpc.rs
 git commit -m "feat(serve): server-configured ARP/ND gateways + pin/dhcp passthrough args"
 ```
 
 ## Task 2: Retain XDP links for clean detach
 
-**Files:** Modify `xdp-dp/src/loader.rs`, `xdp-dp/src/control.rs`
+**Files:** Modify `flowplane/src/loader.rs`, `flowplane/src/control.rs`
 
 - [ ] **Step 1: Add a link-returning attach** to `loader.rs` (after `attach_xdp_extra`):
 
@@ -206,20 +206,20 @@ In `Control::bring_up`'s `Inner { .. }` initializer add `links: HashMap::new(),`
 
 - [ ] **Step 3: Build (links unused yet is fine — it is wired in Task 3).**
 
-Run: `cargo build -p xdp-dp 2>&1 | tail -3`
+Run: `cargo build -p flowplane 2>&1 | tail -3`
 Expected: compiles with a `dead_code`/unused warning on `links` (acceptable until Task 3).
 
 - [ ] **Step 4: Commit.**
 
 ```bash
 cargo fmt --all
-git add xdp-dp/src/loader.rs xdp-dp/src/control.rs
+git add flowplane/src/loader.rs flowplane/src/control.rs
 git commit -m "feat(control): attach_xdp_link returns owned XdpLink for dynamic detach"
 ```
 
 ## Task 3: create_interface (gateway_ipv6 + link retention + detail shadow) + detach_interface
 
-**Files:** Modify `xdp-dp/src/control.rs`, `xdp-dp/src/grpc.rs`
+**Files:** Modify `flowplane/src/control.rs`, `flowplane/src/grpc.rs`
 
 - [ ] **Step 1: Extend the interface shadow record.** In `control.rs`, replace the `by_id` map's value type to carry full interface detail for `get/list_interfaces`. Change the field:
 
@@ -334,7 +334,7 @@ Every existing reader of `by_id` uses the `(vni, ipv4)` tuple — update them: `
         )?;
         g.underlay.upsert(
             underlay_ipv6,
-            xdp_dp_common::UnderlayValue { vni, tap_ifindex: tap, guest_mac: mac, _pad: [0; 2] },
+            flowplane_common::UnderlayValue { vni, tap_ifindex: tap, guest_mac: mac, _pad: [0; 2] },
         )?;
         if total_mbps != 0 || public_mbps != 0 {
             g.meter.upsert(tap, Self::meter_state(total_mbps, public_mbps))?;
@@ -382,7 +382,7 @@ Every existing reader of `by_id` uses the `(vni, ipv4)` tuple — update them: `
     }
 ```
 
-(Confirm `PortMetaMap::remove`, `Interfaces::remove`, `Underlay::remove`, `Meter::remove` exist in `xdp-dp/src/maps.rs`; if any is missing, add a thin `remove` wrapper mirroring the existing `upsert` — aya `HashMap::remove(&key)`.)
+(Confirm `PortMetaMap::remove`, `Interfaces::remove`, `Underlay::remove`, `Meter::remove` exist in `flowplane/src/maps.rs`; if any is missing, add a thin `remove` wrapper mirroring the existing `upsert` — aya `HashMap::remove(&key)`.)
 
 - [ ] **Step 3: Update the gRPC `create_interface` call** in `grpc.rs` to pass `ipv6` + `gateway_ipv6`. Decode the optional IPv6 and pass through:
 
@@ -427,13 +427,13 @@ fn ipv4_config_ipv6_or(r: &CreateInterfaceRequest) -> Option<Vec<u8>> {
 
 - [ ] **Step 5: Build.**
 
-Run: `cargo build -p xdp-dp 2>&1 | tail -5`
+Run: `cargo build -p flowplane 2>&1 | tail -5`
 Expected: compiles. Fix any `by_id` tuple-destructuring sites the compiler flags (Step 1).
 
 - [ ] **Step 6: Verifier + e2e regression.**
 
 ```bash
-cargo test -p xdp-dp --test '*' 2>/dev/null; cargo build -p xdp-dp
+cargo test -p flowplane --test '*' 2>/dev/null; cargo build -p flowplane
 ./env/netns-e2e.sh run 2>&1 | tail -3   # 15 tests still green (uses Bringup, not Serve — unaffected)
 ```
 Expected: `=== All tests passed ===`.
@@ -442,13 +442,13 @@ Expected: `=== All tests passed ===`.
 
 ```bash
 cargo fmt --all
-git add xdp-dp/src/control.rs xdp-dp/src/grpc.rs
+git add flowplane/src/control.rs flowplane/src/grpc.rs
 git commit -m "feat(serve): dual-stack create_interface + detach_interface + interface shadow detail"
 ```
 
 ## Task 4: Interface observe RPCs (list/get)
 
-**Files:** Modify `xdp-dp/src/grpc.rs`
+**Files:** Modify `flowplane/src/grpc.rs`
 
 - [ ] **Step 1: Implement `get_interface`** (replace stub ~line 438). Build a proto `Interface` from shadow state. Inspect `pb::Interface` / `pb::GetInterfaceResponse` field names first (`grep -n "struct Interface" target/.../pb` or the generated module); the message carries at least `primary_ipv4_address`, `primary_ipv6_address`, `vni`, `id`, `underlay_route`. Implement:
 
@@ -507,20 +507,20 @@ fn make_interface(id: &[u8], vni: u32, ipv4: [u8;4], ipv6: [u8;16], underlay: [u
 
 - [ ] **Step 3: Build.**
 
-Run: `cargo build -p xdp-dp 2>&1 | tail -5`
+Run: `cargo build -p flowplane 2>&1 | tail -5`
 Expected: compiles. If a `pb::Interface` field name differs (e.g. `ipv4_config`), adjust `make_interface` to the generated names — `cargo doc` / the compile error names them exactly.
 
 - [ ] **Step 4: Commit.**
 
 ```bash
 cargo fmt --all
-git add xdp-dp/src/grpc.rs
+git add flowplane/src/grpc.rs
 git commit -m "feat(grpc): list/get interface from shadow state"
 ```
 
 ## Task 5: Route shadow + list/delete route + VNI RPCs
 
-**Files:** Modify `xdp-dp/src/control.rs`, `xdp-dp/src/grpc.rs`
+**Files:** Modify `flowplane/src/control.rs`, `flowplane/src/grpc.rs`
 
 - [ ] **Step 1: Track routes in shadow state.** In `Inner` add:
 
@@ -608,15 +608,15 @@ Init `routes_shadow: Vec::new(),` in `bring_up`. In `create_route`, after the ma
 - [ ] **Step 3: Build + commit.**
 
 ```bash
-cargo build -p xdp-dp 2>&1 | tail -5   # compiles (adjust pb field names if flagged)
+cargo build -p flowplane 2>&1 | tail -5   # compiles (adjust pb field names if flagged)
 cargo fmt --all
-git add xdp-dp/src/control.rs xdp-dp/src/grpc.rs
+git add flowplane/src/control.rs flowplane/src/grpc.rs
 git commit -m "feat(grpc): route list/delete + VNI in-use/reset from shadow state"
 ```
 
 ## Task 6: Wire the feature delete/list/get RPCs (VIP/LB/NAT/NeighborNat/Firewall/Prefix)
 
-**Files:** Modify `xdp-dp/src/grpc.rs`
+**Files:** Modify `flowplane/src/grpc.rs`
 
 The `control` methods already exist (`delete_vip`, `get_vip`, `delete_lb`, `get_nat`, `delete_nat`, `list_neighbor_nats`, `del_neighbor_nat`, `get_fw_rule`, `del_fw_rule`, `list_fw_rules`, `del_prefix`, `list_prefixes`, plus `get_load_balancer`/`list_load_balancers` need a small shadow read). This task only wires the gRPC stubs to them and shapes proto responses.
 
@@ -635,20 +635,20 @@ For LB get/list, add a small `control.list_lbs() -> Vec<(Vec<u8>, u32, [u8;4], [
 
 - [ ] **Step 2: Build.**
 
-Run: `cargo build -p xdp-dp 2>&1 | tail -8`
-Expected: compiles; `grep -c unimplemented xdp-dp/src/grpc.rs` now shows only `capture_*` (3) remaining.
+Run: `cargo build -p flowplane 2>&1 | tail -8`
+Expected: compiles; `grep -c unimplemented flowplane/src/grpc.rs` now shows only `capture_*` (3) remaining.
 
 - [ ] **Step 3: Commit.**
 
 ```bash
 cargo fmt --all
-git add xdp-dp/src/grpc.rs xdp-dp/src/control.rs
+git add flowplane/src/grpc.rs flowplane/src/control.rs
 git commit -m "feat(grpc): wire VIP/LB/NAT/NeighborNat/Firewall/Prefix delete+list (only Capture* left)"
 ```
 
 ## Task 7: Local guest-to-guest fast path (datapath)
 
-**Files:** Modify `xdp-dp-ebpf/src/egress.rs`, `xdp-dp-ebpf/src/v6.rs`
+**Files:** Modify `flowplane-ebpf/src/egress.rs`, `flowplane-ebpf/src/v6.rs`
 
 - [ ] **Step 1: v4 fast path** in `egress.rs`. Add imports at top:
 
@@ -715,8 +715,8 @@ Then, immediately AFTER the `let route = ROUTES.get(...).ok_or(())?;` block and 
 - [ ] **Step 3: Build + verifier.**
 
 ```bash
-cargo build -p xdp-dp 2>&1 | tail -3
-cargo test -p xdp-dp loader::tests::both_programs_pass_verifier -- --ignored 2>&1 | tail -3  # 1 passed (root)
+cargo build -p flowplane 2>&1 | tail -3
+cargo test -p flowplane loader::tests::both_programs_pass_verifier -- --ignored 2>&1 | tail -3  # 1 passed (root)
 ```
 Expected: verifier accepts both programs (constant offsets; bounds checked).
 
@@ -729,7 +729,7 @@ Expected: `=== All tests passed ===` (cross-host flows still encap; guesta/guest
 
 ```bash
 cargo fmt --all
-git add xdp-dp-ebpf/src/egress.rs xdp-dp-ebpf/src/v6.rs
+git add flowplane-ebpf/src/egress.rs flowplane-ebpf/src/v6.rs
 git commit -m "feat(datapath): same-host guest-to-guest local delivery fast path (v4+v6)"
 ```
 
@@ -769,10 +769,10 @@ Verify: `nix develop -c python3 -c 'import scapy, pytest; print("ok")'` → `ok`
 ```bash
 #!/usr/bin/env bash
 # Build the veth topology the conformance harness expects. For each dpservice device we create a
-# veth pair: the dpservice-named end (scapy side) <-> an xdp-side end (xdp-dp attaches here).
+# veth pair: the dpservice-named end (scapy side) <-> an xdp-side end (flowplane attaches here).
 # xdp_pass enablers go on the scapy-side ends so bpf_redirect into them lands.
 set -euo pipefail
-BIN="$(pwd)/target/debug/xdp-dp"
+BIN="$(pwd)/target/debug/flowplane"
 PIDFILE="${TMPDIR:-/tmp}/xdp-conf-pids"
 declare -A MAC=( [dtap0]=22:22:22:22:22:00 [dtap1]=22:22:22:22:22:01 \
                  [dtapvf_0]=66:66:66:66:66:00 [dtapvf_1]=66:66:66:66:66:01 \
@@ -790,26 +790,26 @@ up() {
 }
 down() {
   [[ -f "$PIDFILE" ]] && { while read -r p; do sudo kill "$p" 2>/dev/null||true; done < "$PIDFILE"; rm -f "$PIDFILE"; }
-  sudo pkill -f 'xdp-dp (serve|pass) --' 2>/dev/null || true
+  sudo pkill -f 'flowplane (serve|pass) --' 2>/dev/null || true
   for dev in dtap0 dtap1 dtapvf_0 dtapvf_1 dtapvf_2 dtapvf_3; do sudo ip link del "$dev" 2>/dev/null || true; done
 }
 case "${1:-}" in up) up;; down) down;; *) echo "usage: $0 up|down">&2; exit 1;; esac
 ```
 
-- [ ] **Step 4: Point the harness at the xdp-side devices.** In `test/conformance/config.py`, set each spec's `.pci` (the `--device` value addinterface passes) to the **xdp-side** veth name so `xdp-dp` attaches there. Append after the `PF0/VM1...` definitions:
+- [ ] **Step 4: Point the harness at the xdp-side devices.** In `test/conformance/config.py`, set each spec's `.pci` (the `--device` value addinterface passes) to the **xdp-side** veth name so `flowplane` attaches there. Append after the `PF0/VM1...` definitions:
 
 ```python
-# xdp-dp drop-in: addinterface --device must name the xdp-side veth (xdtapvf_N), and the uplink
+# flowplane drop-in: addinterface --device must name the xdp-side veth (xdtapvf_N), and the uplink
 # the serve daemon attaches to is the xdp-side PF (xdtap0). Test bodies use .tap/.mac/.name/.ip.
 PF0.pci = "xdtap0"; PF1.pci = "xdtap1"
 VM1.pci = "xdtapvf_0"; VM2.pci = "xdtapvf_1"; VM3.pci = "xdtapvf_2"; VM4.pci = "xdtapvf_3"
 ```
 
-- [ ] **Step 5: Patch the launcher** `test/conformance/dp_service.py` `DpService.__init__` to build an `xdp-dp serve` command instead of `dpservice-bin`. Replace the cmd assembly with:
+- [ ] **Step 5: Patch the launcher** `test/conformance/dp_service.py` `DpService.__init__` to build an `flowplane serve` command instead of `dpservice-bin`. Replace the cmd assembly with:
 
 ```python
         self.cmd = (
-            f"{self.build_path}/target/debug/xdp-dp serve"
+            f"{self.build_path}/target/debug/flowplane serve"
             f" --addr=127.0.0.1:{grpc_port}"
             f" --uplink=xdtap0"
             f" --local-underlay={local_ul_ipv6}"
@@ -826,11 +826,11 @@ VM1.pci = "xdtapvf_0"; VM2.pci = "xdtapvf_1"; VM3.pci = "xdtapvf_2"; VM4.pci = "
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-cargo build -p xdp-dp
+cargo build -p flowplane
 trap './test/conformance/setup-net.sh down' EXIT INT TERM
 ./test/conformance/setup-net.sh up
 # Run the non-DHCP suite via the flake devShell python (scapy+pytest). dp_service.py launches
-# xdp-dp serve via the patched cmd; conftest waits for the gRPC port.
+# flowplane serve via the patched cmd; conftest waits for the gRPC port.
 cd test/conformance
 nix develop "$(git rev-parse --show-toplevel)" -c python3 -m pytest -q \
   test_vf_to_vf.py test_vf_to_pf.py test_pf_to_vf.py test_encap.py \
@@ -841,18 +841,18 @@ nix develop "$(git rev-parse --show-toplevel)" -c python3 -m pytest -q \
 - [ ] **Step 7: Smoke one test.**
 
 Run: `./test/conformance/run.sh test_vf_to_vf.py -x 2>&1 | tail -20`
-Expected: `test_vf_to_vf` collects and runs against `xdp-dp serve`. Triage failures in Task 9 (this step just proves the harness wiring — net up, daemon starts, gRPC reachable, scapy injects).
+Expected: `test_vf_to_vf` collects and runs against `flowplane serve`. Triage failures in Task 9 (this step just proves the harness wiring — net up, daemon starts, gRPC reachable, scapy injects).
 
 - [ ] **Step 8: Commit.**
 
 ```bash
 git add test/conformance .gitignore
-git commit -m "test(conformance): vendor dpservice test/local; veth substitution + xdp-dp serve launcher"
+git commit -m "test(conformance): vendor dpservice test/local; veth substitution + flowplane serve launcher"
 ```
 
 ## Task 9: Make the full non-DHCP conformance suite green
 
-**Files:** iterate on `xdp-dp/src/grpc.rs`, `xdp-dp/src/control.rs`, `xdp-dp-ebpf/*` as failures dictate
+**Files:** iterate on `flowplane/src/grpc.rs`, `flowplane/src/control.rs`, `flowplane-ebpf/*` as failures dictate
 
 - [ ] **Step 1: Run the whole suite.**
 
@@ -865,7 +865,7 @@ Expected (target): all of `test_vf_to_vf test_vf_to_pf test_pf_to_vf test_encap 
   - **encap/pf_to_vf/vf_to_pf** → outer/underlay address derivation; confirm `--local-underlay=fc00:1::1` and the neighbor underlay routes the tests program via `addroute` land in `ROUTES`.
   - **lb/nat** → the create-side already works in netns e2e; failures here are usually gRPC response shaping (Task 6) or the per-test underlay constants.
   - **zzz_grpc** → exercises list/get/delete on everything; fix response field names until it passes.
-  Fix, rebuild (`cargo build -p xdp-dp`), re-run the single test (`./test/conformance/run.sh test_X.py -x`), repeat.
+  Fix, rebuild (`cargo build -p flowplane`), re-run the single test (`./test/conformance/run.sh test_X.py -x`), repeat.
 
 - [ ] **Step 3: Full green + regression.**
 
@@ -878,8 +878,8 @@ Expected (target): all of `test_vf_to_vf test_vf_to_pf test_pf_to_vf test_encap 
 - [ ] **Step 4: Document + commit.** Add a short `test/conformance/README.md` (how to run, which tests are in/out of scope and why: DHCP→2b, virtsvc dropped, telemetry/HA-extras/benchmark out). Commit:
 
 ```bash
-git add test/conformance xdp-dp xdp-dp-ebpf
-git commit -m "test(conformance): full non-DHCP dpservice suite green against xdp-dp serve"
+git add test/conformance flowplane flowplane-ebpf
+git commit -m "test(conformance): full non-DHCP dpservice suite green against flowplane serve"
 ```
 
 ---

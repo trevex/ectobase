@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Prove, on the live containerlab fabric, that an overlay VM egresses to the **real internet** through its own hypervisor's distributed SNAT and a WAN-edge `xdp-dp` sidecar — for both **NAT44** (v4 guest → v4 internet) and **NAT64** (v6 guest → v4 internet) — and that returns route back statelessly via NEIGHBOR_NAT.
+**Goal:** Prove, on the live containerlab fabric, that an overlay VM egresses to the **real internet** through its own hypervisor's distributed SNAT and a WAN-edge `flowplane` sidecar — for both **NAT44** (v4 guest → v4 internet) and **NAT64** (v6 guest → v4 internet) — and that returns route back statelessly via NEIGHBOR_NAT.
 
-**Architecture:** The datapath (D7, shipped) is done; D8 (a) completes the D6 **control-plane wiring** so the running agent programs local SNAT + announces/learns NAT blocks, (b) builds the **clabwan-style WAN edge** (a linux node kernel-forwarding egress + `xdp-dp --role edge` + an agent sidecar sharing its netns; masquerade-to-real-internet lives on the **host** clabwan bridge, keyed on the `nat_ip` source range), and (c) drives the **e2e** with real TEST-NET ranges. NAT64 is done by the source hypervisor's `nat64.rs` (no Tayga needed); the edge only sees IPv4 `nat_ip` flows.
+**Architecture:** The datapath (D7, shipped) is done; D8 (a) completes the D6 **control-plane wiring** so the running agent programs local SNAT + announces/learns NAT blocks, (b) builds the **clabwan-style WAN edge** (a linux node kernel-forwarding egress + `flowplane --role edge` + an agent sidecar sharing its netns; masquerade-to-real-internet lives on the **host** clabwan bridge, keyed on the `nat_ip` source range), and (c) drives the **e2e** with real TEST-NET ranges. NAT64 is done by the source hypervisor's `nat64.rs` (no Tayga needed); the edge only sees IPv4 `nat_ip` flows.
 
-**Tech Stack:** Go (netplane agent + NATGateway controller), Rust/aya (xdp-dp, already built), containerlab + kind + FRR + nftables (fabric + clabwan host masquerade), bash/Go e2e.
+**Tech Stack:** Go (netplane agent + NATGateway controller), Rust/aya (flowplane, already built), containerlab + kind + FRR + nftables (fabric + clabwan host masquerade), bash/Go e2e.
 
 **Spec:** `docs/superpowers/specs/2026-07-14-north-south-gateway-design.md` (§5 egress data flow). **Parent plan:** `docs/superpowers/plans/2026-07-14-north-south-egress.md` (D7 = commit `ce70524`).
 
@@ -20,7 +20,7 @@ Verified 2026-07-14 while planning:
 2. **The NATGateway controller is not deployed.** `netplane/controllers/natgateway.go` has `Reconcile()`/`Sync()` but no `SetupWithManager` and no binary runs it. `NATGateway.Status.Allocations` is never populated at runtime. → **Task A1.**
 3. **No `external=true` default route is announced.** `bus.go::announce()` sets `external:false` for host routes; nothing announces `0.0.0.0/0 → edge-underlay, external=true` (nor `::/0` for NAT64 guests via the 64:ff9b path). → **Task A3.**
 4. **The edge learns NEIGHBOR_NAT via a normal agent.** `bus.go::applyNat` already calls `AddNeighborNat` for every non-local block. Running a stock agent on the edge (no local sources → `DesiredNat` returns empty) programs all blocks as neighbor-nat. → **Task B4.**
-5. **NAT64 is distributed (source hv), not at the edge.** `xdp-dp-ebpf/src/nat64.rs` + `v6.rs:93` translate `64:ff9b::/96` → IPv4 + SNAT on `guest_tx`. The edge sees only IPv4 `nat_ip`. **Tayga is not needed.**
+5. **NAT64 is distributed (source hv), not at the edge.** `flowplane-ebpf/src/nat64.rs` + `v6.rs:93` translate `64:ff9b::/96` → IPv4 + SNAT on `guest_tx`. The edge sees only IPv4 `nat_ip`. **Tayga is not needed.**
 6. **NAT66 is unimplemented** (no v6 egress SNAT, no v6 `wan_rx`). **Out of scope** — noted as a follow-up.
 7. **T4 addressing (must fix):** the shipped topology uses `wan-edge` CGNAT `100.64.0.0/24` → `wan-server` `203.0.113.10`, but `203.0.113.0/24` (TEST-NET-3) is exactly a natural `nat_ip` pool. The `nat_ip` pool MUST differ from every test target. → **Task B1** picks `nat_ip` = `203.0.113.0/28` and real targets reached via clabwan host masquerade (no toy `wan-server`).
 
@@ -28,7 +28,7 @@ Verified 2026-07-14 while planning:
 
 | # | Decision | Rationale |
 |---|----------|-----------|
-| E1 | **Edge = a VyOS node + `xdp-dp --role edge` + agent sidecars sharing VyOS's netns** (`network-mode: container:<vyos>`) | **Decided (user, 2026-07-14): keep VyOS** — it is what runs on real hardware (BGP + WAN + firewall + last-hop forward), so the lab stays faithful. The D7 datapath is agnostic: `xdp-dp` just needs to share the netns owning the fab+wan interfaces. VyOS does routing/BGP/forward; `xdp-dp` sidecar does overlay decap/return; the host clabwan bridge does the real-internet masquerade. (A plain-linux+FRR edge was considered and rejected to avoid drifting from hardware.) |
+| E1 | **Edge = a VyOS node + `flowplane --role edge` + agent sidecars sharing VyOS's netns** (`network-mode: container:<vyos>`) | **Decided (user, 2026-07-14): keep VyOS** — it is what runs on real hardware (BGP + WAN + firewall + last-hop forward), so the lab stays faithful. The D7 datapath is agnostic: `flowplane` just needs to share the netns owning the fab+wan interfaces. VyOS does routing/BGP/forward; `flowplane` sidecar does overlay decap/return; the host clabwan bridge does the real-internet masquerade. (A plain-linux+FRR edge was considered and rejected to avoid drifting from hardware.) |
 | E2 | **Masquerade-to-real-internet lives on the HOST clabwan bridge**, keyed on the `nat_ip` source range (icn/sandbox `wan-up.sh` model) | Resolves the plan spike: the edge does NOT masquerade `nat_ip` (so `wan_rx` sees the plain return); the host does the last hop to the real WAN (works over wifi/eth/vpn). |
 | E3 | **No Tayga.** NAT64 is the source hv's `nat64.rs` | The edge is family-agnostic — it only forwards/returns IPv4 `nat_ip`. |
 | E4 | **`nat_ip` pool = `203.0.113.0/28`**, real internet target = a stable public IP (e.g. `1.1.1.1`) + a NAT64 name | Disjoint from any overlay/underlay/test address (fixes the T4 collision). |
@@ -54,7 +54,7 @@ Verified 2026-07-14 while planning:
 **E2E:**
 - `test/e2e/egress_test.go` — NAT44 + NAT64 real-internet reachability + return-path assertions (Create).
 
-**Reuse (do NOT reimplement):** `xdp-dp --role edge` + `wan_rx` + local-deliver (D7, `ce70524`); `test/edge-netns.sh` (the datapath proof); `DesiredNat`/`AnnounceNat`/`applyNat` (D6); `natgateway.go::Sync` + `allocator` (D5); `nat64.rs` (NAT64).
+**Reuse (do NOT reimplement):** `flowplane --role edge` + `wan_rx` + local-deliver (D7, `ce70524`); `test/edge-netns.sh` (the datapath proof); `DesiredNat`/`AnnounceNat`/`applyNat` (D6); `natgateway.go::Sync` + `allocator` (D5); `nat64.rs` (NAT64).
 
 ---
 
@@ -120,7 +120,7 @@ Add `natgwsForNIC(ctx, obj) []reconcile.Request` returning every `NATGateway` in
 - [x] `flake.nix`: `kubebuilderAssets` (symlinked kube-apiserver/etcd/kubectl) + `KUBEBUILDER_ASSETS` in the devShell.
 - [x] `netplane/controllers/natgateway_envtest_test.go`: starts envtest, loads the CRDs from `config/crd/bases`, runs the reconciler via `SetupWithManager`, and asserts the **watch-driven** reconcile populates deterministic disjoint `Status.Allocations` (blue-only, green excluded) AND that adding a NIC re-triggers reconcile via `natgwsForNIC` (table grows 2→3). Skips cleanly when `KUBEBUILDER_ASSETS` is unset. **PASS (~6s).**
 
-This proves the A1 controller keystone (manager wiring + real-apiserver status update + NIC watch) fabric-free. **The full agent↔reflector↔dataplane chain** (local SNAT programmed, NatBlock announced, edge learns NEIGHBOR_NAT, external default installed) is validated on the live fabric in **Phase C** (it needs the real reflector + xdp-dp).
+This proves the A1 controller keystone (manager wiring + real-apiserver status update + NIC watch) fabric-free. **The full agent↔reflector↔dataplane chain** (local SNAT programmed, NatBlock announced, edge learns NEIGHBOR_NAT, external default installed) is validated on the live fabric in **Phase C** (it needs the real reflector + flowplane).
 
 ---
 
@@ -151,9 +151,9 @@ ip route replace 203.0.113.0/28 via 172.29.0.11 dev clabwan
 **Files:** Modify `hack/clab/ipv6-fabric.clab.yml`, `hack/clab-up.sh`; Create `hack/clab/frr/edge.conf`.
 
 - [ ] **Step 1:** Remove `wan-server`; retarget `wan-edge` → `edge` (kind linux, an FRR-capable image). Give `edge`: `eth1`/`eth2` to sw1/sw2 (fabric, dual-homed like the hosts), `eth3` to `clabwan` (WAN). Assign the edge underlay `/128` (e.g. `fd00:db8:0:9::e` on dummy0) and `172.29.0.11/24` on `eth3`; `ip_forward=1`; default route `via 172.29.0.1 dev eth3`.
-- [ ] **Step 2: `edge-xdp` sidecar** node: `image: ghcr.io/trevex/dpservice-xdp:dev`, `network-mode: container:edge`, command `serve --role edge --uplink eth1 --wan-uplink eth3 --local-underlay fd00:db8:0:9::e --gateway 169.254.0.1 --gateway-mac <sw1 mac>` with `XDP_DP_SKB_MODE=1` (veths). (Resolve the ToR MAC dynamically like the DS wrapper.)
+- [ ] **Step 2: `edge-xdp` sidecar** node: `image: ghcr.io/trevex/ectobase/flowplane:dev`, `network-mode: container:edge`, command `serve --role edge --uplink eth1 --wan-uplink eth3 --local-underlay fd00:db8:0:9::e --gateway 169.254.0.1 --gateway-mac <sw1 mac>` with `FLOWPLANE_SKB_MODE=1` (veths). (Resolve the ToR MAC dynamically like the DS wrapper.)
 - [ ] **Step 3: `edge-agent` sidecar** node: `image: ghcr.io/trevex/netplane:dev`, `network-mode: container:edge`, running the agent with `--node-id edge` pointed at the central apiserver + reflector over the fabric (reuse the brokered-agent kubeconfig pattern from `hack/multicluster-e2e.sh`). It learns NEIGHBOR_NAT (Task B4).
-- [ ] **Step 4: `edge.conf`** FRR: unnumbered eBGP on eth1/eth2 to sw1/sw2; `network fd00:db8:0:9::e/128`; originate the `nat_ip` reachability the WAN needs (the host route already covers clabwan; BGP into the fabric announces the edge underlay so hosts route encap to it). **Step 5:** wire `hack/clab-up.sh` to call `wan-up.sh`. **Step 6: Validate** topology parses (`containerlab inspect`). **Commit** (`feat(clab): WAN edge = kernel-forward + xdp-dp+agent sidecars (clabwan)`).
+- [ ] **Step 4: `edge.conf`** FRR: unnumbered eBGP on eth1/eth2 to sw1/sw2; `network fd00:db8:0:9::e/128`; originate the `nat_ip` reachability the WAN needs (the host route already covers clabwan; BGP into the fabric announces the edge underlay so hosts route encap to it). **Step 5:** wire `hack/clab-up.sh` to call `wan-up.sh`. **Step 6: Validate** topology parses (`containerlab inspect`). **Commit** (`feat(clab): WAN edge = kernel-forward + flowplane+agent sidecars (clabwan)`).
 
 ### Task B3: Bring up the fabric + confirm edge datapath attaches
 

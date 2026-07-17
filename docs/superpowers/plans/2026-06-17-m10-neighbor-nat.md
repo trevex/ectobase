@@ -26,12 +26,12 @@
 ## File Structure
 
 ```
-xdp-dp-common/src/lib.rs   # + NeighborNatEntry (32B) + layout test
-xdp-dp-ebpf/src/
+flowplane-common/src/lib.rs   # + NeighborNatEntry (32B) + layout test
+flowplane-ebpf/src/
   maps.rs                  # + NEIGHBOR_NAT, NEIGHBOR_NAT_COUNT maps
   nat.rs                   # + neighbor_nat_lookup(vni, dst, dport) -> Option<[u8;16]>
   ingress.rs               # neighbor-NAT re-forward when not locally handled
-xdp-dp/src/
+flowplane/src/
   maps.rs                  # NeighborNat wrapper
   control.rs               # add_neighbor_nat / del_neighbor_nat (+ shadow store)
   grpc.rs                  # CreateNeighborNat / DeleteNeighborNat / ListNeighborNats
@@ -43,7 +43,7 @@ env/netns-e2e.sh           # + hypc + extclient; NeighborNat scenario (Test 12)
 
 ## Task 1: Common `NeighborNatEntry` type
 
-**Files:** Modify `xdp-dp-common/src/lib.rs`
+**Files:** Modify `flowplane-common/src/lib.rs`
 
 - [ ] **Step 1: Add the type + consts**
 ```rust
@@ -64,21 +64,21 @@ pub struct NeighborNatEntry {
     pub _pad: [u8; 3],
 }
 ```
-Add `unsafe impl aya::Pod for NeighborNatEntry {}` in `user_impls`. Add layout assert `size_of::<NeighborNatEntry>() == 32`. Run `cargo test -p xdp-dp-common --features user` → pass.
+Add `unsafe impl aya::Pod for NeighborNatEntry {}` in `user_impls`. Add layout assert `size_of::<NeighborNatEntry>() == 32`. Run `cargo test -p flowplane-common --features user` → pass.
 
 - [ ] **Step 2: Commit**
 ```bash
 cargo fmt --all
-git add xdp-dp-common
+git add flowplane-common
 git commit -m "feat(neighnat): NeighborNatEntry POD type"
 ```
 
 ## Task 2: eBPF maps + `neighbor_nat_lookup`
 
-**Files:** Modify `xdp-dp-ebpf/src/maps.rs`, `xdp-dp-ebpf/src/nat.rs`
+**Files:** Modify `flowplane-ebpf/src/maps.rs`, `flowplane-ebpf/src/nat.rs`
 
 - [ ] **Step 1: Maps (`maps.rs`)**
-Add `NeighborNatEntry` to the `xdp_dp_common` import. Append:
+Add `NeighborNatEntry` to the `flowplane_common` import. Append:
 ```rust
 #[map]
 pub static NEIGHBOR_NAT: HashMap<u32, NeighborNatEntry> = HashMap::with_max_entries(64, 0);
@@ -89,7 +89,7 @@ pub static NEIGHBOR_NAT_COUNT: Array<u32> = Array::with_max_entries(1, 0);
 
 - [ ] **Step 2: `neighbor_nat_lookup` (`nat.rs`)**
 ```rust
-use xdp_dp_common::{NeighborNatEntry, NB_MAX_ENTRIES};
+use flowplane_common::{NeighborNatEntry, NB_MAX_ENTRIES};
 use crate::maps::{NEIGHBOR_NAT, NEIGHBOR_NAT_COUNT};
 
 /// If `(vni, dst, dport)` matches a neighbor-NAT entry, return the owning node's underlay /128.
@@ -124,9 +124,9 @@ pub fn neighbor_nat_lookup(vni: u32, dst: [u8; 4], dport: u16) -> Option<[u8; 16
 
 - [ ] **Step 3: build + verifier**
 ```bash
-cargo build -p xdp-dp
-cargo test -p xdp-dp --no-run 2>&1 | tee /tmp/t.log
-BIN=$(grep -oE 'target/debug/deps/xdp_dp-[a-f0-9]+' /tmp/t.log | head -1)
+cargo build -p flowplane
+cargo test -p flowplane --no-run 2>&1 | tee /tmp/t.log
+BIN=$(grep -oE 'target/debug/deps/flowplane-[a-f0-9]+' /tmp/t.log | head -1)
 sudo -E "$BIN" --include-ignored --exact loader::tests::both_programs_pass_verifier   # 1 passed
 ```
 (Not wired into a program yet — confirms the bounded scan compiles into the object and verifies.)
@@ -134,13 +134,13 @@ sudo -E "$BIN" --include-ignored --exact loader::tests::both_programs_pass_verif
 - [ ] **Step 4: Commit**
 ```bash
 cargo fmt --all
-git add xdp-dp-ebpf
+git add flowplane-ebpf
 git commit -m "feat(neighnat): NEIGHBOR_NAT maps + bounded neighbor_nat_lookup"
 ```
 
 ## Task 3: Ingress neighbor-NAT re-forward
 
-**Files:** Modify `xdp-dp-ebpf/src/ingress.rs`
+**Files:** Modify `flowplane-ebpf/src/ingress.rs`
 
 - [ ] **Step 1: Re-forward on a neighbor match**
 In `try_uplink_rx`, the current flow computes `lb_ul`, `deliver_u`, then `nat_guest`. After `nat_guest` is computed and BEFORE the firewall/delivery, add a neighbor-NAT check: if this is not an LB packet (`lb_ul.is_none()`), not a locally-owned NAT return (`nat_guest.is_none()`), and the inner dst is **not** a local interface for this VNI, consult `NEIGHBOR_NAT`. To know "not a local interface", check `INTERFACES`/`UNDERLAY`: the inner dst would be delivered to `deliver_u` (the underlay-resolved iface) — but for a neighbor-NAT gateway the `outer_dst` is the gateway's own marker and the inner dst is a foreign nat_ip. The simplest robust trigger: read the inner dst + dport and consult `NEIGHBOR_NAT`; if it matches, re-forward (the neighbor table only contains foreign nat_ips, so a match is authoritative). Insert after `let guest_mac = deliver_u.guest_mac;`:
@@ -167,9 +167,9 @@ In `try_uplink_rx`, the current flow computes `lb_ul`, `deliver_u`, then `nat_gu
 
 - [ ] **Step 2: build + verifier + e2e (regression)**
 ```bash
-cargo build -p xdp-dp
-cargo test -p xdp-dp --no-run 2>&1 | tee /tmp/t.log
-BIN=$(grep -oE 'target/debug/deps/xdp_dp-[a-f0-9]+' /tmp/t.log | head -1)
+cargo build -p flowplane
+cargo test -p flowplane --no-run 2>&1 | tee /tmp/t.log
+BIN=$(grep -oE 'target/debug/deps/flowplane-[a-f0-9]+' /tmp/t.log | head -1)
 sudo -E "$BIN" --include-ignored --exact loader::tests::both_programs_pass_verifier   # 1 passed
 ./env/netns-e2e.sh run 2>&1 | tail -14   # Tests 1-11 still pass (NEIGHBOR_NAT empty -> no-op)
 ```
@@ -177,15 +177,15 @@ sudo -E "$BIN" --include-ignored --exact loader::tests::both_programs_pass_verif
 - [ ] **Step 3: Commit**
 ```bash
 cargo fmt --all
-git add xdp-dp-ebpf
+git add flowplane-ebpf
 git commit -m "feat(neighnat): ingress re-forwards neighbor-NAT returns to the owner"
 ```
 
 ## Task 4: Control + CLI + gRPC
 
-**Files:** Modify `xdp-dp/src/maps.rs`, `xdp-dp/src/control.rs`, `xdp-dp/src/grpc.rs`, `xdp-dp/src/main.rs`
+**Files:** Modify `flowplane/src/maps.rs`, `flowplane/src/control.rs`, `flowplane/src/grpc.rs`, `flowplane/src/main.rs`
 
-- [ ] **Step 1: `NeighborNat` wrapper (`xdp-dp/src/maps.rs`)**
+- [ ] **Step 1: `NeighborNat` wrapper (`flowplane/src/maps.rs`)**
 Add a wrapper over `HashMap<MapData, u32, NeighborNatEntry>` (`open("NEIGHBOR_NAT")`, `upsert(u32, NeighborNatEntry)`, `remove(&u32)`) AND a `NeighborNatCount` over `Array<MapData, u32>` (`open("NEIGHBOR_NAT_COUNT")`, `set(u32)`), mirroring `FwRules`/`FwConfig`.
 
 - [ ] **Step 2: `Control` methods (`control.rs`)**
@@ -199,10 +199,10 @@ Add `--neigh-nat` repeatable: `"<nat_ip>:<port_min>:<port_max>:<owner_underlay_i
 
 - [ ] **Step 5: build + commit**
 ```bash
-cargo build -p xdp-dp
-cargo test -p xdp-dp 2>&1 | tail -3
+cargo build -p flowplane
+cargo test -p flowplane 2>&1 | tail -3
 cargo fmt --all
-git add xdp-dp
+git add flowplane
 git commit -m "feat(neighnat): control + CLI + gRPC CreateNeighborNat program NEIGHBOR_NAT"
 ```
 

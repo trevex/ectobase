@@ -175,7 +175,7 @@ compilation is unchanged. `Compile` performs no I/O.
 
 ## 7. Testing
 
-- **Sim (`xdp-dp-sim`):**
+- **Sim (`flowplane-sim`):**
   - Extend the Fabric LB scenario to prove **E/W ECMP-direct**: guest → VIP → backend base-deliver;
     with no NetworkPolicy the ingress firewall drops it (deny-by-default), with `port 443 via ::/0`
     (or `/0`) it is delivered — proving LB needs explicit FW.
@@ -190,7 +190,7 @@ compilation is unchanged. `Compile` performs no I/O.
   - Agent: route reconcile emits the VIP anycast route (v4 and v6); `DesiredPublic` emits LB_VIP;
     `applyPublic` LB_VIP → `AddLbBackend` diff (fake dataplane, models ALREADY_EXISTS).
 - **Conformance:** not extended. An E/W LB is inherently multi-node (anycast across backend nodes),
-  which the single-instance conformance harness cannot express; the `xdp-dp-sim` Fabric is the
+  which the single-instance conformance harness cannot express; the `flowplane-sim` Fabric is the
   correct multi-node coverage. The firewall-gating property (LB not exempt) is proven there.
 
 ## 8. Non-goals / deferred
@@ -211,6 +211,6 @@ compilation is unchanged. `Compile` performs no I/O.
 - `netplane/agent/public.go` — `DesiredPublic` LB_VIP emission; `applyPublic` LB_VIP case.
 - `netplane/agent/bus.go` — `AddLbBackend`/`DelLbBackend`/`AddLbVip`/`DelLbVip` on the Dataplane
   interface + adapter (proto RPCs already exist).
-- `xdp-dp/src/main.rs` / control plane — edge LB-VNI flag; `wan_rx`/`create_lb` vni parameterization.
-- `xdp-dp-sim/src/compilednic.rs` + LB scenario tests.
+- `flowplane/src/main.rs` / control plane — edge LB-VNI flag; `wan_rx`/`create_lb` vni parameterization.
+- `flowplane-sim/src/compilednic.rs` + LB scenario tests.
 - `test/conformance/` — E/W LB test.

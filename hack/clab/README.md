@@ -1,7 +1,8 @@
-# IPv6 fabric (containerlab + kind) for the overlay dataplane
+# IPv6 fabric (containerlab + kind) for ectobase
 
-The integration environment for `xdp-dp` + `netplane`: a **containerlab IPv6 fabric** wrapping one
-or more **kind** clusters, with **FRR ToRs**, **dual VyOS WAN edges** (each with an `xdp-dp` sidecar),
+The integration environment for **ectobase** — the `flowplane` dataplane + the `netplane` control
+plane: a **containerlab IPv6 fabric** wrapping one
+or more **kind** clusters, with **FRR ToRs**, **dual VyOS WAN edges** (each with a `flowplane` sidecar),
 a **Cilium** CNI, and the full **netplane** control plane deployed. It exercises the real paths:
 underlay inference, overlay routing over the fabric, distributed SNAT + WAN egress through the edges,
 North-South load balancing, and graceful datapath restart.
@@ -20,7 +21,7 @@ North-South load balancing, and graceful datapath restart.
 | `vyos/` | VyOS edge boot configs (`edge{1,2}.boot`): BGP to the fabric + WAN forwarding/masquerade toward `clabwan`. |
 | `cilium-up.sh`, `cilium-values.yaml` | Install Cilium (IPv6, tunnel/VXLAN mode) per kind cluster — the pod CNI (see below). |
 | `wan-up.sh`, `wan-down.sh` | Create/destroy the `clabwan` host bridge + the WAN masquerade (the edges' path to the "internet"). |
-| `edge-agents-up.sh`, `edge-xdp-wrapper.sh`, `sw-pass-wrapper.sh` | Start the edge `xdp-dp` sidecars (`--role edge`, `wan_rx`) + their brokered agents; the ToR xdp_pass shims. |
+| `edge-agents-up.sh`, `edge-xdp-wrapper.sh`, `sw-pass-wrapper.sh` | Start the edge `flowplane` sidecars (`--role edge`, `wan_rx`) + their brokered agents; the ToR xdp_pass shims. |
 | `prefixes/` | Per-node announced-prefix inputs. |
 | `../clab-up.sh`, `../clab-down.sh` | Idempotent deploy/destroy wrappers (WAN bring-up → clab deploy → Cilium per cluster). |
 
@@ -31,12 +32,12 @@ North-South load balancing, and graceful datapath restart.
                     │
           ┌─────────┴─────────┐
       edge1 (VyOS)        edge2 (VyOS)     WAN edges: VyOS owns BGP + WAN forwarding;
-      + edge1-xdp         + edge2-xdp      an xdp-dp `--role edge` sidecar (wan_rx) shares its netns
+      + edge1-xdp         + edge2-xdp      a flowplane `--role edge` sidecar (wan_rx) shares its netns
           │                   │
         sw1 (FRR ToR)     sw2 (FRR ToR)    unnumbered eBGP-via-LLA transit + BFD + ECMP
           │   ┌───────────────┤            (sw{1,2}-pass = xdp_pass shims on the edge-facing ports)
    ┌──────┴───┴──────┐
-   │ k01-control-plane│  k01-worker        kind nodes (ext-container): each runs the xdp-dp DaemonSet
+   │ k01-control-plane│  k01-worker        kind nodes (ext-container): each runs the flowplane DaemonSet
    │   (fd00:db8:0:1::/64)  (…:0:2::/64)    + a netplane agent; Cilium is the pod CNI
    └──────────────────┘
 ```
@@ -48,9 +49,9 @@ Prereqs: `containerlab`, `kind`, `docker`, root/sudo, the `dummy` kernel module,
 
 ```bash
 hack/clab-up.sh        # wan-up → clab deploy (--reconfigure, idempotent) → Cilium per cluster
-# deploy the netplane stack (agent + reflector + controller) + the xdp-dp DaemonSet on k01:
+# deploy the netplane stack (agent + reflector + controller) + the flowplane DaemonSet on k01:
 kubectl apply -k config/deploy            # (namespace ectobase-system)
-hack/clab/edge-agents-up.sh               # start the WAN-edge xdp-dp sidecars + brokered agents
+hack/clab/edge-agents-up.sh               # start the WAN-edge flowplane sidecars + brokered agents
 
 # sanity: fabric addressing + BGP/BFD
 docker exec k01-control-plane ip -6 -o addr show dev dummy0   # fd00:db8:0:1::1/64
@@ -71,11 +72,11 @@ hack/clab-down.sh      # destroy the fabric + kind clusters
 - **`ext-container` nodes** (`k01-control-plane`, `k01-worker`, …) — the kind node containers,
   referenced by the exact name kind gives them; these are the clab link endpoints, so the kind nodes
   attach to the FRR fabric (`sw1:eth1 ↔ k01-control-plane:eth1`). Their `exec:` blocks create
-  `dummy0` + the announced `/64` **inside the kind node's netns** — where `xdp-dp` infers from.
+  `dummy0` + the announced `/64` **inside the kind node's netns** — where `flowplane` infers from.
 - **FRR runs in the kind node's netns** (shared-netns sidecar) so it can announce `dummy0`'s `/64`
   over the fabric uplink without baking FRR into the kubelet/containerd node image.
 - **`vyosnetworks_vyos` edges** (`edge1`/`edge2`) run real VyOS (BGP + WAN forwarding, what hardware
-  runs); an `xdp-dp --role edge` sidecar shares each edge's netns and owns the overlay `wan_rx` path.
+  runs); a `flowplane --role edge` sidecar shares each edge's netns and owns the overlay `wan_rx` path.
 
 The **mgmt-IPv6-disabled** note genuinely bites: a clab-auto mgmt IPv6 default route can outrank the
 fabric — keep it disabled on the fabric nodes.

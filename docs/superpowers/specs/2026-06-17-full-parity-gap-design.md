@@ -3,11 +3,11 @@
 **Date:** 2026-06-17
 **Status:** Draft for review
 **Author:** Niklas Voss (with Claude)
-**Builds on:** `2026-06-15-xdp-dpservice-design.md` (foundation), `2026-06-17-datapath-feature-parity-design.md` (M1–M4, complete).
+**Builds on:** `2026-06-15-flowplaneservice-design.md` (foundation), `2026-06-17-datapath-feature-parity-design.md` (M1–M4, complete).
 
 ## 1. Goal & stance
 
-`xdp-dp` must be a **true drop-in replacement** for the DPDK `dpservice` dataplane — not a
+`flowplane` must be a **true drop-in replacement** for the DPDK `dpservice` dataplane — not a
 lookalike that covers the easy 80%. This document inventories every behavioral gap between the
 current implementation (M1–M4: generalized datapath, ARP, VIP, LB/Maglev, single-node NAT) and
 upstream dpservice, and lays out a design approach for closing each one. **We do not defer the
@@ -26,9 +26,9 @@ implementation plan (`writing-plans`) before execution.
 
 ## 2. Reference: dpservice datapath (rte_graph nodes)
 
-dpservice's datapath is a 22-node `rte_graph`. Current `xdp-dp` coverage:
+dpservice's datapath is a 22-node `rte_graph`. Current `flowplane` coverage:
 
-| dpservice node | Function | xdp-dp status |
+| dpservice node | Function | flowplane status |
 |---|---|---|
 | `rx` / `tx` / `rx_periodic` | DPDK port I/O + periodic timers | N/A (XDP hooks; periodic → userspace timer) |
 | `cls_node` | Packet + **flow-direction classification** (N↔S vs E↔W) | **Gap** — approximated by an `is_external` route flag |
@@ -168,8 +168,8 @@ failover doesn't drop live NAT/virtsvc connections.
 all dynamic-state maps under `bpffs`; (b) make the loader adopt-or-create pinned maps idempotently;
 (c) document the failover model and prove it (kill + restart the control plane mid-flow; flows
 survive). The dpservice `0x88B5` same-machine sync protocol is **not** implemented — pinned
-kernel-resident maps cover the failover motive in an all-`xdp-dp` deployment, and mixed
-dpservice/xdp-dp HA pairs are not a requirement. **Milestone M13.**
+kernel-resident maps cover the failover motive in an all-`flowplane` deployment, and mixed
+dpservice/flowplane HA pairs are not a requirement. **Milestone M13.**
 
 ### 4.9 Packet capture (`Capture*`)
 dpservice offloads capture via `rte_flow` mirror to a remote pcap sink. The on-wire mirror format is
@@ -181,7 +181,7 @@ strips with `editcap -C 62`), sent to `CaptureConfig.sink_node_ip:udp_dst_port`.
 `sink_node_ip` + `udp_src_port`/`udp_dst_port` + per-interface `filter`. Mechanism: pure XDP has **no
 packet-clone helper**, so the faithful approach is userspace-assisted — eBPF ring-buffers matched
 frames (per-ifindex capture flag set on the VF-rx `guest_tx` and PF-rx `uplink_rx` hooks, original
-forwarding untouched) to the `xdp-dp` process, which forwards each captured Ethernet frame as the UDP
+forwarding untouched) to the `flowplane` process, which forwards each captured Ethernet frame as the UDP
 payload to `sink_node_ip:udp_dst_port` via a socket bound to the local underlay (src port =
 `udp_src_port`). The kernel prepends Eth+IPv6+UDP, reproducing dpservice's exact 62-byte wire format.
 Rejected alternative: ringbuf → local `.pcap` (leaves `sink_node_ip`/UDP fields unused, not

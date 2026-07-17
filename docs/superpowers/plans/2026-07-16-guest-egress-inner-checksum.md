@@ -24,15 +24,15 @@
 ## Background & Key Facts (read before starting)
 
 - Encap call sites (all `ctx.adjust_room(IPV6_LEN as i32, BPF_ADJ_ROOM_MAC, 0)` — the trailing `0` is the `flags: u64`):
-  - `xdp-dp-ebpf/src/tc.rs:140` — IPv6-inner encap branch.
-  - `xdp-dp-ebpf/src/tc.rs:221` — IPv4-inner encap branch.
-  - `xdp-dp-ebpf/src/nat64.rs` — the NAT64 translate→encap path (grep `adjust_room`; the ENCAP one adds `IPV6_LEN`).
+  - `flowplane-ebpf/src/tc.rs:140` — IPv6-inner encap branch.
+  - `flowplane-ebpf/src/tc.rs:221` — IPv4-inner encap branch.
+  - `flowplane-ebpf/src/nat64.rs` — the NAT64 translate→encap path (grep `adjust_room`; the ENCAP one adds `IPV6_LEN`).
 - aya flags value: `aya_ebpf::bindings::BPF_F_ADJ_ROOM_NO_CSUM_RESET` (numeric 32). Import path is under `aya_ebpf::bindings`.
-- The workaround to delete: `xdp-dp/src/attach.rs:210-219` (`ethtool -K <guest> tx-checksum-ip-generic off`).
+- The workaround to delete: `flowplane/src/attach.rs:210-219` (`ethtool -K <guest> tx-checksum-ip-generic off`).
 - **Validator (already built):** with guest offload **ON**, the fix is confirmed by BOTH:
   1. bpftrace at eth1 xmit: `off_from_data == inner-L4 offset` (IPv4-inner 74, IPv6-inner 94).
   2. `tcpdump -vv` on eth1: inner TCP `cksum (correct)`.
-- Live pipeline (controller runs these; a code subagent does NOT): rebuild image, `kind load`, roll DS, set natpod offload on, run the bpftrace/tcpdump validator. Kubeconfig at `/tmp/k01.conf` (server `[::1]:43107`; regenerate from `k01-control-plane:/etc/kubernetes/admin.conf` if stale). Image: `sudo docker build -t ghcr.io/trevex/dpservice-xdp:dev . && sudo ~/go/bin/kind load docker-image ghcr.io/trevex/dpservice-xdp:dev --name k01 && kubectl -n ectobase-system delete pod -l ... ` (recreate pods). bpftrace: `/nix/store/…-bpftrace-0.24.1/bin/bpftrace` (or `nix run nixpkgs#bpftrace`).
+- Live pipeline (controller runs these; a code subagent does NOT): rebuild image, `kind load`, roll DS, set natpod offload on, run the bpftrace/tcpdump validator. Kubeconfig at `/tmp/k01.conf` (server `[::1]:43107`; regenerate from `k01-control-plane:/etc/kubernetes/admin.conf` if stale). Image: `sudo docker build -t ghcr.io/trevex/ectobase/flowplane:dev . && sudo ~/go/bin/kind load docker-image ghcr.io/trevex/ectobase/flowplane:dev --name k01 && kubectl -n ectobase-system delete pod -l ... ` (recreate pods). bpftrace: `/nix/store/…-bpftrace-0.24.1/bin/bpftrace` (or `nix run nixpkgs#bpftrace`).
 
 ### The validator scripts (reuse verbatim)
 
@@ -58,7 +58,7 @@ Wire check: `sudo docker exec k01-worker sh -c 'timeout 8 tcpdump -vvni eth1 -c 
 De-risks the fix empirically before touching all sites. Try candidates in order; stop at the first that yields `off_from_data == 74` AND on-wire `cksum (correct)` with offload ON.
 
 **Files:**
-- Modify (prototype only, IPv4 branch first): `xdp-dp-ebpf/src/tc.rs:221`
+- Modify (prototype only, IPv4 branch first): `flowplane-ebpf/src/tc.rs:221`
 
 - [ ] **Step 1: Candidate 1 — add `BPF_F_ADJ_ROOM_NO_CSUM_RESET`**
 
@@ -77,15 +77,15 @@ to:
 
 - [ ] **Step 2: Build the eBPF object**
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 Expected: compiles.
 
 - [ ] **Step 3: Build + deploy the image, reproduce with offload ON**
 
 ```bash
-sudo docker build -t ghcr.io/trevex/dpservice-xdp:dev .
-sudo ~/go/bin/kind load docker-image ghcr.io/trevex/dpservice-xdp:dev --name k01
-KUBECONFIG=/tmp/k01.conf kubectl -n ectobase-system get pods | awk '/xdp-dp-/{print $1}' | xargs -r kubectl --kubeconfig /tmp/k01.conf -n ectobase-system delete pod
+sudo docker build -t ghcr.io/trevex/ectobase/flowplane:dev .
+sudo ~/go/bin/kind load docker-image ghcr.io/trevex/ectobase/flowplane:dev --name k01
+KUBECONFIG=/tmp/k01.conf kubectl -n ectobase-system get pods | awk '/flowplane-/{print $1}' | xargs -r kubectl --kubeconfig /tmp/k01.conf -n ectobase-system delete pod
 # re-establish natpod egress (SNAT+route+fw) and turn offload ON:
 sudo -E env "PATH=/run/wrappers/bin:$HOME/go/bin:/run/current-system/sw/bin:$PATH" bash test/scenario-nat-egress.sh
 sudo docker exec k01-worker ip netns exec natpod ethtool -K natpod tx-checksum-ip-generic on
@@ -120,15 +120,15 @@ Record the winning mechanism in a one-line comment at each encap site in Task 2.
 - [ ] **Step 6: Revert the prototype-only single-site edit**
 
 The prototype touched only `tc.rs:221`. Leave it if Candidate 1 won (Task 2 extends it to the other
-sites); otherwise `git checkout xdp-dp-ebpf/src/tc.rs` before Task 2. No commit in Task 1.
+sites); otherwise `git checkout flowplane-ebpf/src/tc.rs` before Task 2. No commit in Task 1.
 
 ---
 
 ## Task 2: Apply the locked mechanism to ALL encap sites
 
 **Files:**
-- Modify: `xdp-dp-ebpf/src/tc.rs:140` (IPv6-inner), `xdp-dp-ebpf/src/tc.rs:221` (IPv4-inner)
-- Modify: `xdp-dp-ebpf/src/nat64.rs` (the ENCAP `adjust_room(+IPV6_LEN, …)` site)
+- Modify: `flowplane-ebpf/src/tc.rs:140` (IPv6-inner), `flowplane-ebpf/src/tc.rs:221` (IPv4-inner)
+- Modify: `flowplane-ebpf/src/nat64.rs` (the ENCAP `adjust_room(+IPV6_LEN, …)` site)
 
 - [ ] **Step 1: Apply the Task-1 mechanism to both tc.rs encap branches**
 
@@ -145,20 +145,20 @@ Add a one-line comment above each: `// keep csum_start on the inner L4 so the ke
 
 - [ ] **Step 2: Apply to the NAT64 encap `adjust_room`**
 
-In `xdp-dp-ebpf/src/nat64.rs`, find the ENCAP `adjust_room` that adds `IPV6_LEN` (the translate+encap
+In `flowplane-ebpf/src/nat64.rs`, find the ENCAP `adjust_room` that adds `IPV6_LEN` (the translate+encap
 path; NOT the `-20` shrink or `+20` translate step) and apply the identical flag/mechanism. If NAT64
 does its own inner L4 checksum recompute after translation (grep the function for `csum`), confirm the
 partial-vs-complete interaction and match Task 1's decision.
 
 - [ ] **Step 3: Build**
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 Expected: compiles.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add xdp-dp-ebpf/src/tc.rs xdp-dp-ebpf/src/nat64.rs
+git add flowplane-ebpf/src/tc.rs flowplane-ebpf/src/nat64.rs
 git commit -m "fix(ebpf): keep csum_start on inner L4 across encap (correct partial checksum)"
 ```
 
@@ -167,7 +167,7 @@ git commit -m "fix(ebpf): keep csum_start on inner L4 across encap (correct part
 ## Task 3: Remove the ethtool workaround
 
 **Files:**
-- Modify: `xdp-dp/src/attach.rs` (delete the `ethtool -K … tx-checksum-ip-generic off` block ~210-219)
+- Modify: `flowplane/src/attach.rs` (delete the `ethtool -K … tx-checksum-ip-generic off` block ~210-219)
 
 - [ ] **Step 1: Delete the workaround block**
 
@@ -183,13 +183,13 @@ Remove these lines (the comment + the `run_netns(... "ethtool" ...)` call) from 
 
 - [ ] **Step 2: Build**
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 Expected: compiles (the `run_netns`/imports remain used elsewhere).
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add xdp-dp/src/attach.rs
+git add flowplane/src/attach.rs
 git commit -m "refactor(attach): drop ethtool tx-csum workaround (datapath now finalizes the inner checksum)"
 ```
 
@@ -201,7 +201,7 @@ git commit -m "refactor(attach): drop ethtool tx-csum workaround (datapath now f
 
 - [ ] **Step 1: Run the root verifier/anchor tests**
 
-Run: `sudo -E cargo test -p xdp-dp --test anchor_uplink --test anchor_lb --test verify_edge_wan_rx -- --ignored`
+Run: `sudo -E cargo test -p flowplane --test anchor_uplink --test anchor_lb --test verify_edge_wan_rx -- --ignored`
 Then: `sudo chown -R "$(id -un):$(id -gn)" target`
 Expected: all PASS (the added flag must not break tc/xdp program verification).
 

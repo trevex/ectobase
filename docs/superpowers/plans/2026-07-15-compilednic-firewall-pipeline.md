@@ -6,7 +6,7 @@
 
 **Architecture:** Rust datapath drops on a deny verdict unconditionally (delete `fw_enforcing()`/`FW_CONFIG`/flag). A Go compiler controller reconciles `NetworkInterface`+`NetworkPolicy` → `CompiledNIC` (via the existing `Compile()`, which already emits per-direction allow-all). The node agent watches `CompiledNIC` for its node and reconciles firewall rules onto the dataplane. Conformance owns the firewall posture (allow-all per VM).
 
-**Tech Stack:** Rust (aya eBPF, `xdp-dp-core`/`xdp-dp-sim`), Go (controller-runtime, envtest), gRPC (`DataplaneNode.AddFwRule`/`DelFwRule` — already defined), Python conformance.
+**Tech Stack:** Rust (aya eBPF, `flowplane-core`/`flowplane-sim`), Go (controller-runtime, envtest), gRPC (`DataplaneNode.AddFwRule`/`DelFwRule` — already defined), Python conformance.
 
 **Parent spec:** `docs/superpowers/specs/2026-07-15-compilednic-firewall-pipeline-design.md`
 
@@ -14,11 +14,11 @@
 
 ## Key existing facts (verified)
 
-- Enforce gate call sites: `xdp-dp-ebpf/src/ingress.rs:258` (`&& crate::firewall::fw_enforcing()`), `egress.rs:57` (same), `xdp-dp-sim/src/sim.rs:119` (`&& self.maps.fw_enforcing()`).
-- `fw_enforcing()` in `xdp-dp-ebpf/src/firewall.rs`; `FW_CONFIG` map in `maps.rs:51`; `FwConfig` opener in `xdp-dp/src/maps.rs:341`; `firewall_enforce` clap flag in `xdp-dp/src/main.rs:209` + `fw_config.set(...)` at `~856`.
-- `Maps::fw_enforcing` in `xdp-dp-core/src/maps.rs`; `GlobalMaps::fw_enforcing` in `xdp-dp-ebpf/src/coreimpl.rs:38`; `MemMaps.fw_enforcing` field `xdp-dp-sim/src/maps.rs:14` + impl `:39`.
+- Enforce gate call sites: `flowplane-ebpf/src/ingress.rs:258` (`&& crate::firewall::fw_enforcing()`), `egress.rs:57` (same), `flowplane-sim/src/sim.rs:119` (`&& self.maps.fw_enforcing()`).
+- `fw_enforcing()` in `flowplane-ebpf/src/firewall.rs`; `FW_CONFIG` map in `maps.rs:51`; `FwConfig` opener in `flowplane/src/maps.rs:341`; `firewall_enforce` clap flag in `flowplane/src/main.rs:209` + `fw_config.set(...)` at `~856`.
+- `Maps::fw_enforcing` in `flowplane-core/src/maps.rs`; `GlobalMaps::fw_enforcing` in `flowplane-ebpf/src/coreimpl.rs:38`; `MemMaps.fw_enforcing` field `flowplane-sim/src/maps.rs:14` + impl `:39`.
 - Sim tests referencing `fw_enforcing`: `sim.rs:119`, `fabric.rs:202,218,220`, `ns_scenario_test.rs:48`, `compilednic.rs:148,171`, `firewall_test.rs:59` (comment).
-- BPF anchors set `FW_CONFIG=1`: `xdp-dp/tests/anchor_uplink.rs`, `xdp-dp/tests/anchor_lb.rs`.
+- BPF anchors set `FW_CONFIG=1`: `flowplane/tests/anchor_uplink.rs`, `flowplane/tests/anchor_lb.rs`.
 - `AddFwRuleRequest{ interface_id, rule_id, src_cidr, dst_cidr, proto:uint32, dst_port_min, dst_port_max, allow:bool, egress:bool }`; `DelFwRuleRequest{ interface_id, rule_id }`. `interface_id` = the id used at `AttachInterface` (conformance keys by VM name).
 - `Dataplane` interface + `dpAdapter` in `netplane/agent/bus.go` (mirror `AddNatSource`). Agent reconcile in `netplane/agent/reconcile.go` (`Desired()`).
 - Controller pattern: `netplane/controllers/natgateway.go` (`Reconcile`/`Sync`/`SetupWithManager`/`Watches`). Pure `Compile()` in `compilednic.go`.
@@ -28,25 +28,25 @@
 
 ## Task 1: Remove the firewall enforce gate — dataplane always enforces (Rust)
 
-**Files:** Modify `xdp-dp-ebpf/src/{firewall.rs,maps.rs,ingress.rs,egress.rs,coreimpl.rs}`, `xdp-dp/src/{maps.rs,main.rs}`, `xdp-dp-core/src/maps.rs`, `xdp-dp-sim/src/{maps.rs,sim.rs,fabric.rs,ns_scenario_test.rs,compilednic.rs,firewall_test.rs}`, `xdp-dp/tests/{anchor_uplink.rs,anchor_lb.rs}`.
+**Files:** Modify `flowplane-ebpf/src/{firewall.rs,maps.rs,ingress.rs,egress.rs,coreimpl.rs}`, `flowplane/src/{maps.rs,main.rs}`, `flowplane-core/src/maps.rs`, `flowplane-sim/src/{maps.rs,sim.rs,fabric.rs,ns_scenario_test.rs,compilednic.rs,firewall_test.rs}`, `flowplane/tests/{anchor_uplink.rs,anchor_lb.rs}`.
 
 - [ ] **Step 1: Remove `fw_enforcing` from the `Maps` trait + impls.**
-  - `xdp-dp-core/src/maps.rs`: delete the `fn fw_enforcing(&self) -> bool;` trait method.
-  - `xdp-dp-ebpf/src/coreimpl.rs`: delete the `GlobalMaps::fw_enforcing` impl (lines ~35-39).
-  - `xdp-dp-sim/src/maps.rs`: delete the `pub fw_enforcing: bool` field (line 14) and the `fn fw_enforcing(&self)` impl (line ~38-40).
+  - `flowplane-core/src/maps.rs`: delete the `fn fw_enforcing(&self) -> bool;` trait method.
+  - `flowplane-ebpf/src/coreimpl.rs`: delete the `GlobalMaps::fw_enforcing` impl (lines ~35-39).
+  - `flowplane-sim/src/maps.rs`: delete the `pub fw_enforcing: bool` field (line 14) and the `fn fw_enforcing(&self)` impl (line ~38-40).
 
 - [ ] **Step 2: Drop unconditionally in the eBPF gates.**
-  - `xdp-dp-ebpf/src/ingress.rs`: at the firewall check (~248-261), remove `&& crate::firewall::fw_enforcing()` so the condition is `if ct miss && fw_eval_dir(...) == FW_ACTION_DROP { return Ok(XDP_DROP); }`.
-  - `xdp-dp-ebpf/src/egress.rs:57`: remove `&& crate::firewall::fw_enforcing()` similarly.
+  - `flowplane-ebpf/src/ingress.rs`: at the firewall check (~248-261), remove `&& crate::firewall::fw_enforcing()` so the condition is `if ct miss && fw_eval_dir(...) == FW_ACTION_DROP { return Ok(XDP_DROP); }`.
+  - `flowplane-ebpf/src/egress.rs:57`: remove `&& crate::firewall::fw_enforcing()` similarly.
 
 - [ ] **Step 3: Delete `fw_enforcing()` + `FW_CONFIG` + `FwConfig` + the flag.**
-  - `xdp-dp-ebpf/src/firewall.rs`: delete the whole `fw_enforcing()` fn and `use crate::maps::FW_CONFIG;` (the file may then be empty except a doc comment — if so, remove `mod firewall;` from `main.rs` and delete the file; verify nothing else in the eBPF crate references `crate::firewall::*`).
-  - `xdp-dp-ebpf/src/maps.rs:51`: delete the `FW_CONFIG` `#[map]` static.
-  - `xdp-dp/src/maps.rs:340-...`: delete the `FwConfig` struct + its opener.
-  - `xdp-dp/src/main.rs`: delete the `firewall_enforce` clap field (~209-211) and the `let mut fw_config = ...; fw_config.set(...)` lines (~855-856). Remove `firewall_enforce` from the destructuring (~479).
+  - `flowplane-ebpf/src/firewall.rs`: delete the whole `fw_enforcing()` fn and `use crate::maps::FW_CONFIG;` (the file may then be empty except a doc comment — if so, remove `mod firewall;` from `main.rs` and delete the file; verify nothing else in the eBPF crate references `crate::firewall::*`).
+  - `flowplane-ebpf/src/maps.rs:51`: delete the `FW_CONFIG` `#[map]` static.
+  - `flowplane/src/maps.rs:340-...`: delete the `FwConfig` struct + its opener.
+  - `flowplane/src/main.rs`: delete the `firewall_enforce` clap field (~209-211) and the `let mut fw_config = ...; fw_config.set(...)` lines (~855-856). Remove `firewall_enforce` from the destructuring (~479).
 
 - [ ] **Step 4: Update the sim (drop is unconditional).**
-  - `xdp-dp-sim/src/sim.rs:119`: change the firewall gate to drop without `&& self.maps.fw_enforcing()`:
+  - `flowplane-sim/src/sim.rs:119`: change the firewall gate to drop without `&& self.maps.fw_enforcing()`:
     ```rust
     if let Some(key) = ct_key(&pkt, inner_off, vni) {
         if self.maps.conntrack_get(&key).is_none()
@@ -56,28 +56,28 @@
         }
     }
     ```
-  - `xdp-dp-sim/src/compilednic.rs`: in `apply()` delete `m.fw_enforcing = true;` (line 148); in the test delete the `assert!(maps.fw_enforcing, ...)` (line 171).
-  - `xdp-dp-sim/src/ns_scenario_test.rs:48`: delete `node.maps.fw_enforcing = true;` in `allow_tcp` (the rule alone now governs).
-  - `xdp-dp-sim/src/firewall_test.rs`: update the `deny_by_default_when_no_rules` doc comment (line ~59) to drop the "gated by `fw_enforcing()`" clause — the drop is now unconditional.
+  - `flowplane-sim/src/compilednic.rs`: in `apply()` delete `m.fw_enforcing = true;` (line 148); in the test delete the `assert!(maps.fw_enforcing, ...)` (line 171).
+  - `flowplane-sim/src/ns_scenario_test.rs:48`: delete `node.maps.fw_enforcing = true;` in `allow_tcp` (the rule alone now governs).
+  - `flowplane-sim/src/firewall_test.rs`: update the `deny_by_default_when_no_rules` doc comment (line ~59) to drop the "gated by `fw_enforcing()`" clause — the drop is now unconditional.
 
-- [ ] **Step 5: Fix the Fabric 2-node test (backend now needs an explicit allow rule).** In `xdp-dp-sim/src/fabric.rs` the 2-node test currently sets `backend.maps.fw_enforcing = false` (lines ~202,218,220) to accept without a rule. Under always-on deny-by-default that would DROP. Replace those with an explicit allow-all ingress rule on the backend tap:
+- [ ] **Step 5: Fix the Fabric 2-node test (backend now needs an explicit allow rule).** In `flowplane-sim/src/fabric.rs` the 2-node test currently sets `backend.maps.fw_enforcing = false` (lines ~202,218,220) to accept without a rule. Under always-on deny-by-default that would DROP. Replace those with an explicit allow-all ingress rule on the backend tap:
     ```rust
     // Always-on deny-by-default: the backend needs an explicit allow rule to deliver.
-    backend.maps.fw_meta.insert(BACKEND_TAP, xdp_dp_common::FwMeta { ingress_count: 1, egress_count: 0 });
-    backend.maps.fw_rules.insert((BACKEND_TAP, 0), xdp_dp_common::FwRule {
+    backend.maps.fw_meta.insert(BACKEND_TAP, flowplane_common::FwMeta { ingress_count: 1, egress_count: 0 });
+    backend.maps.fw_rules.insert((BACKEND_TAP, 0), flowplane_common::FwRule {
         src_ip: [0;4], src_mask: [0;4], dst_ip: [0;4], dst_mask: [0;4],
         src_port_min: 0, src_port_max: 65535, dst_port_min: 0, dst_port_max: 65535,
         icmp_type: 0xffff, icmp_code: 0xffff, proto: 0,
-        action: xdp_dp_common::FW_ACTION_ACCEPT, direction: xdp_dp_common::FW_DIR_INGRESS, enabled: 1,
+        action: flowplane_common::FW_ACTION_ACCEPT, direction: flowplane_common::FW_DIR_INGRESS, enabled: 1,
     });
     ```
     (Use the backend tap constant the test already defines; delete the `fw_enforcing = false` lines + their comments.)
 
-- [ ] **Step 6: Update the BPF anchors (no `FW_CONFIG`).** In `xdp-dp/tests/anchor_uplink.rs` and `anchor_lb.rs`, delete the code that opens/sets `FW_CONFIG` (the map no longer exists). The anchors already install an allow rule, so delivery still holds. Keep everything else.
+- [ ] **Step 6: Update the BPF anchors (no `FW_CONFIG`).** In `flowplane/tests/anchor_uplink.rs` and `anchor_lb.rs`, delete the code that opens/sets `FW_CONFIG` (the map no longer exists). The anchors already install an allow rule, so delivery still holds. Keep everything else.
 
 - [ ] **Step 7: Build + sim tests.**
-  Run: `cargo build -p xdp-dp` → compiles (eBPF).
-  Run: `cargo test -p xdp-dp-core -p xdp-dp-sim` → PASS (all sim tests green; `deny_by_default_when_no_rules` still drops).
+  Run: `cargo build -p flowplane` → compiles (eBPF).
+  Run: `cargo test -p flowplane-core -p flowplane-sim` → PASS (all sim tests green; `deny_by_default_when_no_rules` still drops).
 
 - [ ] **Step 8: BPF anchors byte-parity.**
   Run: `nix develop -c bash -c 'make sim-anchor'` → both anchors PASS (byte-parity; no FW_CONFIG).
@@ -85,7 +85,7 @@
 
 - [ ] **Step 9: Commit.**
   ```bash
-  git add xdp-dp-ebpf xdp-dp xdp-dp-core xdp-dp-sim
+  git add flowplane-ebpf flowplane flowplane-core flowplane-sim
   git commit -m "feat(fw): firewall enforcement is unconditional (remove fw_enforcing/FW_CONFIG/flag)"
   ```
 
@@ -212,7 +212,7 @@
     import (
         "context"
         "fmt"
-        netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
+        netv1 "github.com/trevex/flowplane/api/v1alpha1"
     )
 
     // ReconcileFirewall lists CompiledNICs scheduled to this node and installs their firewall rules
@@ -399,5 +399,5 @@
 - **Task 1 breaks conformance** (VMs go ruleless → deny). That's expected; Task 2 restores it (allow-all per VM). Don't run conformance between Task 1 and Task 2.
 - **Rule ordering (Task 2 deny test):** the datapath returns the FIRST matching rule, so a broad allow-all installed at idx 0 shadows a later deny. The deny test must remove the VM's allow-all (or install its deny at a lower index) — implement per Task 2 Step 2.
 - **Verify generated names before use:** `dpv1.AddFwRuleRequest` field casing (`InterfaceId`/`RuleId`/`SrcCidr`/...), `CompiledNIC`/`CompiledFwRule`/`NetworkPolicyRule` Go fields, the `Reconciler` struct field names in the agent (`client`/`nodeID`/`dp`/`appliedFw` — match `reconcile.go`).
-- **interface_id contract:** the agent keys `AddFwRule` by `CompiledNIC.spec.nicRef.name`; the dataplane must have that same id from `AttachInterface`. If attach keys by a different id, the plan's mapping needs adjustment — confirm against `xdp-dp/src/control.rs`/`grpc.rs` `create_interface`/`add_fw_rule`.
+- **interface_id contract:** the agent keys `AddFwRule` by `CompiledNIC.spec.nicRef.name`; the dataplane must have that same id from `AttachInterface`. If attach keys by a different id, the plan's mapping needs adjustment — confirm against `flowplane/src/control.rs`/`grpc.rs` `create_interface`/`add_fw_rule`.
 - **Scope:** LB wiring (`AddLbVip`/`AddLbBackend`, `CompiledNIC.LB`) is subproject B — not here.

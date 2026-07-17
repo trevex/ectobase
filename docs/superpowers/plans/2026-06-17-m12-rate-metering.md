@@ -24,13 +24,13 @@
 ## File Structure
 
 ```
-xdp-dp-common/src/lib.rs   # + MeterState (64B) + layout test
-xdp-dp-ebpf/src/
+flowplane-common/src/lib.rs   # + MeterState (64B) + layout test
+flowplane-ebpf/src/
   maps.rs                  # + METER map
   meter.rs                 # NEW: meter_pass(ifindex, len, is_external) -> bool (token bucket)
   egress.rs                # meter check before encap; XDP_DROP if over
   main.rs                  # + mod meter;
-xdp-dp/src/
+flowplane/src/
   maps.rs                  # Meter wrapper
   control.rs               # set_meter(interface_id, total_mbps, public_mbps); create_interface honors it
   grpc.rs                  # create_interface decodes metering_parameters
@@ -42,7 +42,7 @@ env/netns-e2e.sh           # rate-cap acceptance (flood drops, slow passes) (Tes
 
 ## Task 1: Common `MeterState` type
 
-**Files:** Modify `xdp-dp-common/src/lib.rs`
+**Files:** Modify `flowplane-common/src/lib.rs`
 
 - [ ] **Step 1: Add the type**
 ```rust
@@ -62,21 +62,21 @@ pub struct MeterState {
     pub public_last_ns: u64,
 }
 ```
-Add `unsafe impl aya::Pod for MeterState {}` in `user_impls`. Add layout assert `size_of::<MeterState>() == 64`. `cargo test -p xdp-dp-common --features user` → pass.
+Add `unsafe impl aya::Pod for MeterState {}` in `user_impls`. Add layout assert `size_of::<MeterState>() == 64`. `cargo test -p flowplane-common --features user` → pass.
 
 - [ ] **Step 2: Commit**
 ```bash
 cargo fmt --all
-git add xdp-dp-common
+git add flowplane-common
 git commit -m "feat(meter): MeterState POD (per-interface token buckets)"
 ```
 
 ## Task 2: eBPF METER map + `meter.rs`
 
-**Files:** Modify `xdp-dp-ebpf/src/maps.rs`, `xdp-dp-ebpf/src/main.rs`; Create `xdp-dp-ebpf/src/meter.rs`
+**Files:** Modify `flowplane-ebpf/src/maps.rs`, `flowplane-ebpf/src/main.rs`; Create `flowplane-ebpf/src/meter.rs`
 
 - [ ] **Step 1: Map (`maps.rs`)**
-Add `MeterState` to the `xdp_dp_common` import; append:
+Add `MeterState` to the `flowplane_common` import; append:
 ```rust
 #[map]
 pub static METER: HashMap<u32, MeterState> = HashMap::with_max_entries(1024, 0);
@@ -85,7 +85,7 @@ pub static METER: HashMap<u32, MeterState> = HashMap::with_max_entries(1024, 0);
 - [ ] **Step 2: `meter.rs`**
 ```rust
 use aya_ebpf::helpers::bpf_ktime_get_ns;
-use xdp_dp_common::MeterState;
+use flowplane_common::MeterState;
 
 use crate::maps::METER;
 
@@ -133,13 +133,13 @@ pub fn meter_pass(ifindex: u32, len: u64, is_external: bool) -> bool {
     pass
 }
 ```
-Add `mod meter;` to `xdp-dp-ebpf/src/main.rs` (alphabetical: after `mod maps;`, before `mod nat;`).
+Add `mod meter;` to `flowplane-ebpf/src/main.rs` (alphabetical: after `mod maps;`, before `mod nat;`).
 
 - [ ] **Step 3: build + verifier**
 ```bash
-cargo build -p xdp-dp
-cargo test -p xdp-dp --no-run 2>&1 | tee /tmp/t.log
-BIN=$(grep -oE 'target/debug/deps/xdp_dp-[a-f0-9]+' /tmp/t.log | head -1)
+cargo build -p flowplane
+cargo test -p flowplane --no-run 2>&1 | tee /tmp/t.log
+BIN=$(grep -oE 'target/debug/deps/flowplane-[a-f0-9]+' /tmp/t.log | head -1)
 sudo -E "$BIN" --include-ignored --exact loader::tests::both_programs_pass_verifier   # 1 passed
 ```
 (Not wired yet; confirms it compiles + verifies. The `u128` math is userspace-style but compiles in eBPF for division by a constant; if the verifier/bpf-linker rejects the `u128` divide, fall back to `elapsed.saturating_mul(bps) / 1_000_000_000` in u64 — acceptable precision for lab rates — and note the change.)
@@ -147,13 +147,13 @@ sudo -E "$BIN" --include-ignored --exact loader::tests::both_programs_pass_verif
 - [ ] **Step 4: Commit**
 ```bash
 cargo fmt --all
-git add xdp-dp-ebpf
+git add flowplane-ebpf
 git commit -m "feat(meter): METER map + token-bucket meter_pass"
 ```
 
 ## Task 3: Egress enforcement
 
-**Files:** Modify `xdp-dp-ebpf/src/egress.rs`
+**Files:** Modify `flowplane-ebpf/src/egress.rs`
 
 - [ ] **Step 1: Meter check before encap**
 In `try_guest_tx`, after the route lookup + `nat_snat_egress` (so `is_external` is known) and BEFORE `encap_and_redirect`, add:
@@ -168,7 +168,7 @@ In `try_guest_tx`, after the route lookup + `nat_snat_egress` (so `is_external` 
 
 - [ ] **Step 2: build + verifier + e2e**
 ```bash
-cargo build -p xdp-dp
+cargo build -p flowplane
 # verifier gate -> 1 passed
 ./env/netns-e2e.sh run 2>&1 | tail -8   # Tests 1-12 pass (no meter configured => meter_pass returns true)
 ```
@@ -176,15 +176,15 @@ cargo build -p xdp-dp
 - [ ] **Step 3: Commit**
 ```bash
 cargo fmt --all
-git add xdp-dp-ebpf
+git add flowplane-ebpf
 git commit -m "feat(meter): enforce per-interface egress rate cap (drop over-rate)"
 ```
 
 ## Task 4: Control + CLI + gRPC
 
-**Files:** Modify `xdp-dp/src/maps.rs`, `xdp-dp/src/control.rs`, `xdp-dp/src/grpc.rs`, `xdp-dp/src/main.rs`
+**Files:** Modify `flowplane/src/maps.rs`, `flowplane/src/control.rs`, `flowplane/src/grpc.rs`, `flowplane/src/main.rs`
 
-- [ ] **Step 1: `Meter` wrapper (`xdp-dp/src/maps.rs`)**
+- [ ] **Step 1: `Meter` wrapper (`flowplane/src/maps.rs`)**
 Add a `Meter` wrapper over `HashMap<MapData, u32, MeterState>` (`open("METER")`, `upsert(u32, MeterState)`, `remove(&u32)`), mirroring `FwMetaMap`. Add `MeterState` to imports.
 
 - [ ] **Step 2: `Control` (`control.rs`)**
@@ -196,7 +196,7 @@ Add `meter: crate::maps::Meter` to `Inner` (open in `bring_up`). Add:
         let ifindex = *g.by_ifindex.get(interface_id).ok_or_else(|| anyhow::anyhow!("unknown interface"))?;
         let total_bps = total_mbps.saturating_mul(1_000_000) / 8;
         let public_bps = public_mbps.saturating_mul(1_000_000) / 8;
-        g.meter.upsert(ifindex, xdp_dp_common::MeterState {
+        g.meter.upsert(ifindex, flowplane_common::MeterState {
             total_bps, total_burst: (total_bps / 8).max(2000), total_tokens: total_bps / 8,
             total_last_ns: 0,
             public_bps, public_burst: (public_bps / 8).max(2000), public_tokens: public_bps / 8,
@@ -214,10 +214,10 @@ Add `--meter` repeatable: `"<ifname>=<total_mbps>:<public_mbps>"`. In bringup, a
 
 - [ ] **Step 5: build + commit**
 ```bash
-cargo build -p xdp-dp
-cargo test -p xdp-dp 2>&1 | tail -3
+cargo build -p flowplane
+cargo test -p flowplane 2>&1 | tail -3
 cargo fmt --all
-git add xdp-dp
+git add flowplane
 git commit -m "feat(meter): control/CLI/gRPC program per-interface rate caps"
 ```
 
@@ -255,7 +255,7 @@ GATE: the flood shows meaningful loss (≥20%) while slow traffic is lossless; T
 - [ ] **Step 3: Run + commit**
 ```bash
 ./env/netns-e2e.sh run 2>&1 | tail -45   # Tests 1-13 pass, clean teardown
-git add xdp-dp env/netns-e2e.sh
+git add flowplane env/netns-e2e.sh
 git commit -m "test(e2e): per-interface egress rate metering (flood throttled, slow passes)"
 ```
 

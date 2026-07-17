@@ -10,19 +10,19 @@
 
 **Reference:** `docs/superpowers/specs/2026-06-19-guest-tx-tail-call-split-design.md`
 
-**Pre-existing state:** `xdp-dp-ebpf/src/dhcp.rs` already contains the full DHCPv6 responder (`try_dhcpv6_reply` + `d6_parse`/`d6_emit`/`d6_checksum` bpf-to-bpf subprograms). It is correct and verified at ~749k instructions in isolation; it only fails today because it shares `guest_tx` with the IPv4 firewall. **Do not rewrite the DHCPv6 datapath** — this plan only changes program structure so it gets its own budget. These dhcp.rs changes are currently uncommitted on the working tree.
+**Pre-existing state:** `flowplane-ebpf/src/dhcp.rs` already contains the full DHCPv6 responder (`try_dhcpv6_reply` + `d6_parse`/`d6_emit`/`d6_checksum` bpf-to-bpf subprograms). It is correct and verified at ~749k instructions in isolation; it only fails today because it shares `guest_tx` with the IPv4 firewall. **Do not rewrite the DHCPv6 datapath** — this plan only changes program structure so it gets its own budget. These dhcp.rs changes are currently uncommitted on the working tree.
 
 ---
 
 ### Task 1: Add `GUEST_PROGS` PROG_ARRAY map + index constants
 
 **Files:**
-- Modify: `xdp-dp-common/src/lib.rs`
-- Modify: `xdp-dp-ebpf/src/maps.rs`
+- Modify: `flowplane-common/src/lib.rs`
+- Modify: `flowplane-ebpf/src/maps.rs`
 
 - [ ] **Step 1: Add the tail-call index constants to common**
 
-In `xdp-dp-common/src/lib.rs`, add (near the other shared constants, e.g. by `DHCP_MAX_DNS`):
+In `flowplane-common/src/lib.rs`, add (near the other shared constants, e.g. by `DHCP_MAX_DNS`):
 
 ```rust
 /// Tail-call indices into the `GUEST_PROGS` program array (egress datapath split).
@@ -34,7 +34,7 @@ pub const GUEST_PROG_IPV6: u32 = 2;
 
 - [ ] **Step 2: Declare the PROG_ARRAY map in the eBPF crate**
 
-In `xdp-dp-ebpf/src/maps.rs`, add `ProgramArray` to the aya-ebpf import and declare the map:
+In `flowplane-ebpf/src/maps.rs`, add `ProgramArray` to the aya-ebpf import and declare the map:
 
 ```rust
 use aya_ebpf::{
@@ -44,7 +44,7 @@ use aya_ebpf::{
 ```
 
 ```rust
-/// Tail-call targets for the egress datapath split. Index with `GUEST_PROG_*` from xdp-dp-common.
+/// Tail-call targets for the egress datapath split. Index with `GUEST_PROG_*` from flowplane-common.
 /// Populated by the loader at startup (guest_dhcp at GUEST_PROG_DHCP). 8 slots leaves room for the
 /// Phase 2 IPv4/IPv6 split without resizing.
 #[map]
@@ -53,13 +53,13 @@ pub static GUEST_PROGS: ProgramArray = ProgramArray::with_max_entries(8, 0);
 
 - [ ] **Step 3: Build the eBPF crate to confirm it compiles**
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 Expected: `Finished` with no errors (the new map compiles into the object).
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add xdp-dp-common/src/lib.rs xdp-dp-ebpf/src/maps.rs
+git add flowplane-common/src/lib.rs flowplane-ebpf/src/maps.rs
 git commit -m "feat(egress): add GUEST_PROGS prog-array map + tail-call indices"
 ```
 
@@ -68,12 +68,12 @@ git commit -m "feat(egress): add GUEST_PROGS prog-array map + tail-call indices"
 ### Task 2: Add `guest_dhcp` program + `egress::dhcp_handle`
 
 **Files:**
-- Modify: `xdp-dp-ebpf/src/egress.rs`
-- Modify: `xdp-dp-ebpf/src/main.rs`
+- Modify: `flowplane-ebpf/src/egress.rs`
+- Modify: `flowplane-ebpf/src/main.rs`
 
 - [ ] **Step 1: Add the DHCP handler to egress.rs**
 
-Append to `xdp-dp-ebpf/src/egress.rs`:
+Append to `flowplane-ebpf/src/egress.rs`:
 
 ```rust
 /// Tail-call target: run the in-datapath DHCPv4 + DHCPv6 responders. Re-looks-up the port by its
@@ -99,7 +99,7 @@ pub fn dhcp_handle(ctx: &XdpContext) -> u32 {
 
 - [ ] **Step 2: Add the `guest_dhcp` XDP entry point**
 
-In `xdp-dp-ebpf/src/main.rs`, after the `guest_tx` definition:
+In `flowplane-ebpf/src/main.rs`, after the `guest_tx` definition:
 
 ```rust
 #[xdp]
@@ -110,10 +110,10 @@ pub fn guest_dhcp(ctx: XdpContext) -> u32 {
 
 - [ ] **Step 3: Build and run the verifier on guest_dhcp**
 
-Run: `cargo build -p xdp-dp && cargo test -p xdp-dp --no-run`
+Run: `cargo build -p flowplane && cargo test -p flowplane --no-run`
 Then load guest_dhcp through the verifier (root):
 ```bash
-BIN=$(ls -t target/debug/deps/xdp_dp-* | grep -v '\.d$' | head -1)
+BIN=$(ls -t target/debug/deps/flowplane-* | grep -v '\.d$' | head -1)
 sudo "$BIN" both_programs_pass_verifier --ignored --nocapture 2>&1 | tail -5
 ```
 Expected at this step: the existing test only loads `uplink_rx` + `guest_tx`; `guest_tx` still contains DHCP inline here so it may still fail the 1M limit. That is fine — Task 2 only needs `cargo build` to succeed (guest_dhcp compiles into the object). The standalone guest_dhcp verification is asserted in Task 5 after Task 3 removes DHCP from guest_tx. If you want an early signal, temporarily add `"guest_dhcp"` to the test loop and confirm it loads in isolation, then revert.
@@ -121,7 +121,7 @@ Expected at this step: the existing test only loads `uplink_rx` + `guest_tx`; `g
 - [ ] **Step 4: Commit**
 
 ```bash
-git add xdp-dp-ebpf/src/egress.rs xdp-dp-ebpf/src/main.rs
+git add flowplane-ebpf/src/egress.rs flowplane-ebpf/src/main.rs
 git commit -m "feat(egress): guest_dhcp tail-call target running the DHCP responders"
 ```
 
@@ -130,7 +130,7 @@ git commit -m "feat(egress): guest_dhcp tail-call target running the DHCP respon
 ### Task 3: Make `try_guest_tx` classify + tail-call DHCP (remove inline DHCP)
 
 **Files:**
-- Modify: `xdp-dp-ebpf/src/egress.rs:8-44` (the early-return section of `try_guest_tx`)
+- Modify: `flowplane-ebpf/src/egress.rs:8-44` (the early-return section of `try_guest_tx`)
 
 - [ ] **Step 1: Replace the two inline DHCP blocks with a tail-call**
 
@@ -157,7 +157,7 @@ and in their place add a DHCP classifier that tail-calls `guest_dhcp`. Insert it
     // on a tail-call miss we fall through and PASS (benign — DHCP is never forwarded anyway).
     if is_dhcp_request(ctx) {
         let _ = unsafe {
-            crate::maps::GUEST_PROGS.tail_call(ctx, xdp_dp_common::GUEST_PROG_DHCP)
+            crate::maps::GUEST_PROGS.tail_call(ctx, flowplane_common::GUEST_PROG_DHCP)
         };
         // tail_call only returns here on failure (empty slot / depth limit).
         return Ok(xdp_action::XDP_PASS);
@@ -166,7 +166,7 @@ and in their place add a DHCP classifier that tail-calls `guest_dhcp`. Insert it
 
 - [ ] **Step 2: Add the `is_dhcp_request` detection helper**
 
-Add to `xdp-dp-ebpf/src/egress.rs` (uses `parse` offsets; add `ETH_P_IPV6`, `IPPROTO_UDP` to the `crate::parse` import as needed):
+Add to `flowplane-ebpf/src/egress.rs` (uses `parse` offsets; add `ETH_P_IPV6`, `IPPROTO_UDP` to the `crate::parse` import as needed):
 
 ```rust
 /// True if the frame is a DHCP request a guest would send: IPv4/UDP to dport 67, or IPv6/UDP to
@@ -204,9 +204,9 @@ fn is_dhcp_request(ctx: &XdpContext) -> bool {
 
 - [ ] **Step 3: Build, then verify `guest_tx` loads again (DHCP removed → back under budget)**
 
-Run: `cargo build -p xdp-dp && cargo test -p xdp-dp --no-run`
+Run: `cargo build -p flowplane && cargo test -p flowplane --no-run`
 ```bash
-BIN=$(ls -t target/debug/deps/xdp_dp-* | grep -v '\.d$' | head -1)
+BIN=$(ls -t target/debug/deps/flowplane-* | grep -v '\.d$' | head -1)
 sudo "$BIN" both_programs_pass_verifier --ignored --nocapture 2>&1 | tail -5
 ```
 Expected: `test result: ok. 1 passed` — `guest_tx` no longer carries DHCPv6, so it verifies within its budget (`uplink_rx` + `guest_tx` both load).
@@ -214,7 +214,7 @@ Expected: `test result: ok. 1 passed` — `guest_tx` no longer carries DHCPv6, s
 - [ ] **Step 4: Commit**
 
 ```bash
-git add xdp-dp-ebpf/src/egress.rs
+git add flowplane-ebpf/src/egress.rs
 git commit -m "feat(egress): guest_tx classifies DHCP and tail-calls guest_dhcp"
 ```
 
@@ -223,12 +223,12 @@ git commit -m "feat(egress): guest_tx classifies DHCP and tail-calls guest_dhcp"
 ### Task 4: Loader — load `guest_dhcp` and populate `GUEST_PROGS`
 
 **Files:**
-- Modify: `xdp-dp/src/loader.rs`
-- Modify: `xdp-dp/src/control.rs:145-150` (the `bring_up` startup path)
+- Modify: `flowplane/src/loader.rs`
+- Modify: `flowplane/src/control.rs:145-150` (the `bring_up` startup path)
 
 - [ ] **Step 1: Add a loader helper that loads guest_dhcp and registers it in the prog array**
 
-In `xdp-dp/src/loader.rs`:
+In `flowplane/src/loader.rs`:
 
 ```rust
 use aya::maps::ProgramArray;
@@ -256,7 +256,7 @@ pub fn register_guest_dhcp(ebpf: &mut Ebpf) -> anyhow::Result<()> {
         .context("GUEST_PROGS map missing")?
         .try_into()?;
     progs
-        .set(xdp_dp_common::GUEST_PROG_DHCP, &prog_fd, 0)
+        .set(flowplane_common::GUEST_PROG_DHCP, &prog_fd, 0)
         .context("register guest_dhcp in GUEST_PROGS")?;
     Ok(())
 }
@@ -269,7 +269,7 @@ entry before any conflicting borrow. Verify against `aya::maps::array::program_a
 
 - [ ] **Step 2: Call it from bring_up**
 
-In `xdp-dp/src/control.rs` `bring_up`, right after `loader::load_program(&mut ebpf, "guest_tx")?;` (around line 150):
+In `flowplane/src/control.rs` `bring_up`, right after `loader::load_program(&mut ebpf, "guest_tx")?;` (around line 150):
 
 ```rust
         // Load guest_dhcp and wire it into GUEST_PROGS so guest_tx's DHCP tail call resolves.
@@ -278,13 +278,13 @@ In `xdp-dp/src/control.rs` `bring_up`, right after `loader::load_program(&mut eb
 
 - [ ] **Step 3: Build the userspace binary**
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 Expected: `Finished` with no errors.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add xdp-dp/src/loader.rs xdp-dp/src/control.rs
+git add flowplane/src/loader.rs flowplane/src/control.rs
 git commit -m "feat(loader): load guest_dhcp and register it in GUEST_PROGS at startup"
 ```
 
@@ -293,11 +293,11 @@ git commit -m "feat(loader): load guest_dhcp and register it in GUEST_PROGS at s
 ### Task 5: Extend the verifier test to assert guest_dhcp loads
 
 **Files:**
-- Modify: `xdp-dp/src/loader.rs` (the `both_programs_pass_verifier` test)
+- Modify: `flowplane/src/loader.rs` (the `both_programs_pass_verifier` test)
 
 - [ ] **Step 1: Add guest_dhcp to the loaded-programs list**
 
-In the test at `xdp-dp/src/loader.rs`, change:
+In the test at `flowplane/src/loader.rs`, change:
 
 ```rust
         for name in ["uplink_rx", "guest_tx"] {
@@ -310,8 +310,8 @@ to:
 - [ ] **Step 2: Run the verifier gate**
 
 ```bash
-cargo test -p xdp-dp --no-run
-BIN=$(ls -t target/debug/deps/xdp_dp-* | grep -v '\.d$' | head -1)
+cargo test -p flowplane --no-run
+BIN=$(ls -t target/debug/deps/flowplane-* | grep -v '\.d$' | head -1)
 sudo "$BIN" both_programs_pass_verifier --ignored --nocapture 2>&1 | tail -5
 ```
 Expected: `test result: ok. 1 passed` — all three programs (`uplink_rx`, `guest_tx`, `guest_dhcp`) load through the verifier. This is the core proof that the split works.
@@ -319,7 +319,7 @@ Expected: `test result: ok. 1 passed` — all three programs (`uplink_rx`, `gues
 - [ ] **Step 3: Commit**
 
 ```bash
-git add xdp-dp/src/loader.rs
+git add flowplane/src/loader.rs
 git commit -m "test(verifier): assert guest_dhcp loads alongside uplink_rx and guest_tx"
 ```
 

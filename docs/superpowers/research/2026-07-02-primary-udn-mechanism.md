@@ -129,14 +129,14 @@ spec:
 **Concrete steps our components must perform:**
 
 *Our CNI (`cni/`, invoked by Multus as the default delegate for our NAD):*
-1. On `ADD`: dial the local `xdp-dp` `DataplaneNode` socket, call `AttachInterface{netns, vni, mac?, requested_ips?}`.
+1. On `ADD`: dial the local `flowplane` `DataplaneNode` socket, call `AttachInterface{netns, vni, mac?, requested_ips?}`.
 2. Create the pod-side interface named **`eth0`** (Multus default → eth0) in the pod netns and program the eBPF endpoint for it.
 3. Return a valid CNI `Result` with **at least one IP** (required for a default network) + gateway + routes, so Multus accepts it as the pod IP.
 4. On `DEL`: `DetachInterface`.
 
 *The `managedTap` binding (built-in KubeVirt):* creates the tap + bridge over our `eth0` and generates the domain XML. **No code from us for ①.** (A custom sidecar becomes relevant only if we later want in-pod DHCP or migration link-refresh instead of dataplane-served DHCP.)
 
-*Node agent (`xdp-dp`):* serve `AttachInterface`/`DetachInterface`/`ConfigureNetwork`; program overlay/DHCP/ARP-ND for the attached endpoint (already the plan's §5.1–5.2).
+*Node agent (`flowplane`):* serve `AttachInterface`/`DetachInterface`/`ConfigureNetwork`; program overlay/DHCP/ARP-ND for the attached endpoint (already the plan's §5.1–5.2).
 
 *Cluster bring-up (`hack/`):* install KubeVirt v1.5.x (enable `NetworkBindingPlugins` if <1.5), Multus, CDI; register the `dataplane` binding in the KubeVirt CR; create our `NetworkAttachmentDefinition` referencing our CNI binary.
 
@@ -150,7 +150,7 @@ spec:
 |---|---|---|---|
 | Pod primary interface = our CNI, no cluster eth0 | Multus | `networks[].multus.default: true` → `v1.multus-cni.io/default-network` | Ship a NAD + our CNI as the default delegate; return an IP |
 | Tap into guest VM | KubeVirt | binding `domainAttachmentType: managedTap` | Register binding in KubeVirt CR; no code |
-| Endpoint/overlay/DHCP program | `xdp-dp` | `DataplaneNode` gRPC | Implement `AttachInterface` (plan §5.1–5.2) |
+| Endpoint/overlay/DHCP program | `flowplane` | `DataplaneNode` gRPC | Implement `AttachInterface` (plan §5.1–5.2) |
 | DHCP to guest | dataplane | eBPF DHCP responder (already built) | Reuse |
 
 ---

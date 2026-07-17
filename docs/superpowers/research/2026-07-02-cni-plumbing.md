@@ -17,7 +17,7 @@ Our CNI is the Multus **default delegate** for the virt-launcher pod (via `v1.mu
 1. Read pod identity from **`CNI_ARGS`** (`K8S_POD_NAME`, `K8S_POD_NAMESPACE`, `K8S_POD_UID`), which Multus forwards to the delegate unchanged.
 2. Using an **in-cluster ServiceAccount token** (installed on the node as a kubeconfig by our CNI-installer DaemonSet), `GET` the pod object and read the annotation **`net.ectobase.dev/network-interface: <ns>/<name>`** naming a pre-created **`NetworkInterface`** CRD. **CHOSEN over a "direct API-derived" query** — the annotation is an explicit, immutable, race-free binding set at VM-create time.
 3. `GET` that `NetworkInterface` → `spec.ips` (overlay IPs) + `vpcRef` → `VPC.status.vni`.
-4. Dial the node-local `xdp-dp` `DataplaneNode` gRPC and call `AttachInterface{netns, vni, overlay_ips, mac?}`; receive `underlay_route` (`/128`).
+4. Dial the node-local `flowplane` `DataplaneNode` gRPC and call `AttachInterface{netns, vni, overlay_ips, mac?}`; receive `underlay_route` (`/128`).
 5. Wire `eth0` in the pod netns, program the eBPF endpoint, and **return a CNI `Result` with ≥1 IP** (mandatory for a Multus default network).
 
 Node-install: a **CNI-installer DaemonSet** copies our CNI binary into `/opt/cni/bin` and writes a kubeconfig (SA token) into `/etc/cni/net.d/` on every node. The NAD and `NetworkInterface`/`VPC` CRDs are ordinary cluster objects (applied via manifests/controller), not node-local files.
@@ -91,14 +91,14 @@ A privileged **CNI-installer DaemonSet** per node:
 1. Parse `CNI_ARGS` → `K8S_POD_{NAME,NAMESPACE,UID}`; read `CNI_NETNS`, `CNI_IFNAME` (=`eth0` for the default delegate).
 2. `GET pods/<ns>/<name>` (SA-token kubeconfig); read annotation `net.ectobase.dev/network-interface`.
 3. `GET networkinterfaces/<ns>/<name>` → `spec.ips`, `spec.vpcRef`; `GET vpcs/<vpcRef>` → `status.vni`.
-4. Dial node-local `xdp-dp` `DataplaneNode` gRPC → `AttachInterface{netns: CNI_NETNS, vni, overlay_ips: spec.ips, mac?}`; get `underlay_route`.
+4. Dial node-local `flowplane` `DataplaneNode` gRPC → `AttachInterface{netns: CNI_NETNS, vni, overlay_ips: spec.ips, mac?}`; get `underlay_route`.
 5. Create/move the pod-side `eth0` into `CNI_NETNS`; program the eBPF endpoint.
 6. (Optionally) patch `NetworkInterface.status` with `underlayRoute`/`port`/`state: Ready`.
 7. Return a CNI `Result` (cniVersion, `interfaces`, `ips` with **≥1 IP** — mandatory for a Multus default network — gateway, routes).
 
 **DEL:**
 1. Parse `CNI_ARGS` (name/ns/uid) + `CNI_NETNS`.
-2. `AttachInterface`'s inverse: `DetachInterface{netns/uid, vni}` on `xdp-dp` (idempotent — must succeed if already gone).
+2. `AttachInterface`'s inverse: `DetachInterface{netns/uid, vni}` on `flowplane` (idempotent — must succeed if already gone).
 3. Tear down `eth0` / eBPF endpoint; free the underlay `/128`. Return success even if the pod/CR is already deleted (best-effort, key off `K8S_POD_UID`).
 
 **CHECK** (optional but recommended): verify the endpoint still programmed for `{uid, vni}`.
@@ -113,7 +113,7 @@ A privileged **CNI-installer DaemonSet** per node:
 | Pod identity → CNI | kubelet/CRI → Multus | `CNI_ARGS` `K8S_POD_{NAME,NAMESPACE,UID}` forwarded to delegate | Parse in ADD/DEL |
 | Identity → `{vni, overlay ips}` | our CNI | pod annotation → `NetworkInterface` → `vpcRef`→`VPC.status.vni` | Implement API reads (SA token) |
 | Node install | CNI-installer DaemonSet | copy binary → `/opt/cni/bin`; SA-token kubeconfig → `/etc/cni/net.d` | Build installer image + RBAC |
-| Endpoint / overlay program | `xdp-dp` | `DataplaneNode` gRPC `AttachInterface`/`DetachInterface` | Implement (network-api-design §6) |
+| Endpoint / overlay program | `flowplane` | `DataplaneNode` gRPC `AttachInterface`/`DetachInterface` | Implement (network-api-design §6) |
 | Tap into guest VM | KubeVirt | binding `domainAttachmentType: managedTap` | Register binding; no code (primary-UDN spike) |
 
 ---

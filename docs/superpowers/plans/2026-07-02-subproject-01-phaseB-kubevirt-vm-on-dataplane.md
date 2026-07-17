@@ -4,13 +4,13 @@
 
 **Goal:** Two KubeVirt VMs, each with **no pod network** (primary-UDN via Multus default-network + `managedTap` binding), boot in a single kind cluster, get **DHCP from the eBPF dataplane**, and **ping each other over the overlay**.
 
-**Architecture:** Multus delegates the virt-launcher pod's *only* interface to our CNI (`multus.default: true` → `v1.multus-cni.io/default-network`); KubeVirt's built-in `managedTap` binding wires that interface into the guest. Our CNI (the default delegate) resolves the VM's `{vni, overlay ips}` and dials the node's `xdp-dp` `DataplaneNode.AttachInterface` gRPC (implemented in Phase A) to program the datapath. No pod network exists on the launcher pod.
+**Architecture:** Multus delegates the virt-launcher pod's *only* interface to our CNI (`multus.default: true` → `v1.multus-cni.io/default-network`); KubeVirt's built-in `managedTap` binding wires that interface into the guest. Our CNI (the default delegate) resolves the VM's `{vni, overlay ips}` and dials the node's `flowplane` `DataplaneNode.AttachInterface` gRPC (implemented in Phase A) to program the datapath. No pod network exists on the launcher pod.
 
-**Tech Stack:** Go (CNI, controller-runtime/k8s client), KubeVirt v1.5 + Multus + CDI, containerlab+kind (the IPv6 fabric from Phase A), the `net.ectobase.dev/v1alpha1` CRDs + `xdp-dp` DataplaneNode (both from Phase A).
+**Tech Stack:** Go (CNI, controller-runtime/k8s client), KubeVirt v1.5 + Multus + CDI, containerlab+kind (the IPv6 fabric from Phase A), the `net.ectobase.dev/v1alpha1` CRDs + `flowplane` DataplaneNode (both from Phase A).
 
 **Parent spec:** `docs/superpowers/specs/2026-07-02-subproject-01-vm-dataplane-attach-design.md`; mechanism research: `docs/superpowers/research/2026-07-02-primary-udn-mechanism.md`.
 
-**Prereqs already in place (Phase A):** `xdp-dp` `DataplaneNode.AttachInterface` (netns veth + underlay `/128` + `INTERFACES`/`UNDERLAY`/`PORT_META`/DHCP programming, verified by `test/attach-netns.sh`); `VPC`/`NetworkInterface` Go types; the `dpservice-xdp:dev` image; the containerlab+kind fabric harness; `kind` v0.32 + `containerlab` v0.77 installed.
+**Prereqs already in place (Phase A):** `flowplane` `DataplaneNode.AttachInterface` (netns veth + underlay `/128` + `INTERFACES`/`UNDERLAY`/`PORT_META`/DHCP programming, verified by `test/attach-netns.sh`); `VPC`/`NetworkInterface` Go types; the `ectobase/flowplane:dev` image; the containerlab+kind fabric harness; `kind` v0.32 + `containerlab` v0.77 installed.
 
 ---
 
@@ -26,7 +26,7 @@
 - `hack/install-stack.sh` — **Replace** (Task 2): install KubeVirt v1.5 + Multus + CDI + register the `managedTap` binding + enable emulation.
 - `cni/plugin/main.go`, `cni/plugin/attach.go` — **Create** (Task 3): the primary-UDN CNI (ADD/DEL → `AttachInterface`/`DetachInterface`).
 - `cni/plugin/resolve.go` — **Create** (Task 3): pod → `NetworkInterface`/`VPC` → `{vni, ips}` resolver (per Task 1).
-- `hack/clab/dpservice-daemonset.yaml`, `hack/clab/cni-install.yaml` — **Create** (Task 4): `xdp-dp` DaemonSet (host socket) + a CNI-installer DaemonSet that drops the CNI binary + NAD + kubeconfig on nodes.
+- `hack/clab/dpservice-daemonset.yaml`, `hack/clab/cni-install.yaml` — **Create** (Task 4): `flowplane` DaemonSet (host socket) + a CNI-installer DaemonSet that drops the CNI binary + NAD + kubeconfig on nodes.
 - `test/e2e/vm_on_dataplane_test.go` — **Create** (Task 5): the two-VM boot+DHCP+ping+no-pod-net e2e.
 - `test/e2e/manifests/` — **Create** (Task 5): `VPC`, two `NetworkInterface`, the NAD, two `VirtualMachine` YAMLs.
 
@@ -105,7 +105,7 @@ git commit -m "feat(hack): install KubeVirt v1.5 + Multus + CDI + managedTap bin
 
 - [ ] **Step 3: Implement `resolve.go`** — `resolve(ctx, k8sClient, podRef) -> (vni uint32, ips []string, err error)`: read the pod/VMI's `net.ectobase.dev/network-interface` annotation → get the `NetworkInterface` → its `VPC.status.vni` + `spec.ips`. Green the test.
 
-- [ ] **Step 4: Implement `main.go` + `attach.go`** — CNI `ADD`: parse stdin netconf + `CNI_ARGS`, `resolve()`, dial the node's `xdp-dp` `DataplaneNode` unix socket, `AttachInterface{netns_path: CNI_NETNS, vni, requested_ips: ips}`, return a CNI `types.Result` (v1.0.0) with the IP + gateway + routes from the reply. `DEL`: `DetachInterface`. Build the plugin binary.
+- [ ] **Step 4: Implement `main.go` + `attach.go`** — CNI `ADD`: parse stdin netconf + `CNI_ARGS`, `resolve()`, dial the node's `flowplane` `DataplaneNode` unix socket, `AttachInterface{netns_path: CNI_NETNS, vni, requested_ips: ips}`, return a CNI `types.Result` (v1.0.0) with the IP + gateway + routes from the reply. `DEL`: `DetachInterface`. Build the plugin binary.
 
 Run: `go build ./cni/plugin/...`
 Expected: PASS.
@@ -118,20 +118,20 @@ git commit -m "feat(cni): primary-UDN CNI plugin -> DataplaneNode.AttachInterfac
 
 ---
 
-### Task 4: Deploy `xdp-dp` DaemonSet + install the CNI on nodes
+### Task 4: Deploy `flowplane` DaemonSet + install the CNI on nodes
 
 **Files:** Create `hack/clab/dpservice-daemonset.yaml`, `hack/clab/cni-install.yaml`.
 
-- [ ] **Step 1: Write the `xdp-dp` DaemonSet** — runs `xdp-dp serve` on each node (hostNetwork, privileged, `HOST_IP` from `status.hostIP` via downward API for underlay resolution), exposing the `DataplaneNode` gRPC on a host unix socket via a `hostPath` mount (e.g. `/run/xdp-dp/node.sock`).
+- [ ] **Step 1: Write the `flowplane` DaemonSet** — runs `flowplane serve` on each node (hostNetwork, privileged, `HOST_IP` from `status.hostIP` via downward API for underlay resolution), exposing the `DataplaneNode` gRPC on a host unix socket via a `hostPath` mount (e.g. `/run/flowplane/node.sock`).
 
-- [ ] **Step 2: Write the CNI-installer DaemonSet** — an initContainer that copies the CNI plugin binary into the node's `/opt/cni/bin` and writes the NAD + a node kubeconfig (per Task 1) into `/etc/cni/net.d`, using the `dpservice-xdp:dev` image (or a small installer image).
+- [ ] **Step 2: Write the CNI-installer DaemonSet** — an initContainer that copies the CNI plugin binary into the node's `/opt/cni/bin` and writes the NAD + a node kubeconfig (per Task 1) into `/etc/cni/net.d`, using the `ectobase/flowplane:dev` image (or a small installer image).
 
-- [ ] **Step 3: Apply both to a kind cluster and verify** the DaemonSets are Ready and the socket + CNI binary exist on a node (`docker exec <kind-node> ls /run/xdp-dp/node.sock /opt/cni/bin/<plugin>`).
+- [ ] **Step 3: Apply both to a kind cluster and verify** the DaemonSets are Ready and the socket + CNI binary exist on a node (`docker exec <kind-node> ls /run/flowplane/node.sock /opt/cni/bin/<plugin>`).
 
 - [ ] **Step 4: Commit.**
 ```bash
 git add hack/clab/dpservice-daemonset.yaml hack/clab/cni-install.yaml
-git commit -m "feat(deploy): xdp-dp DaemonSet + CNI installer for kind nodes"
+git commit -m "feat(deploy): flowplane DaemonSet + CNI installer for kind nodes"
 ```
 
 ---
@@ -161,7 +161,7 @@ git commit -m "test(e2e): two KubeVirt VMs on the eBPF dataplane (boot+DHCP+ping
 
 ## Notes for the executor
 
-- **Environment IS capable** (this session's host): passwordless sudo, Docker, `kind`+`containerlab` on `~/go/bin`, the `dpservice-xdp:dev` image built. Run kind/containerlab/e2e under `sudo env "PATH=$PATH" …`. **`make image` needs `--network=host`** (already in the Makefile).
+- **Environment IS capable** (this session's host): passwordless sudo, Docker, `kind`+`containerlab` on `~/go/bin`, the `ectobase/flowplane:dev` image built. Run kind/containerlab/e2e under `sudo env "PATH=$PATH" …`. **`make image` needs `--network=host`** (already in the Makefile).
 - **Commit hygiene (every task):** unrelated design docs are uncommitted — **never `git add -A`**; stage explicit paths; verify `git show --stat HEAD`.
 - **Research/integration tasks (1, 3, 4):** report the discovered plumbing before writing code; if the CNI↔k8s resolution or node-install is genuinely opaque after a real attempt, stop and report `NEEDS_CONTEXT`.
 - **The hard, novel risk is Task 1** (the CNI plumbing + true primary-UDN with a *custom* CNI on kind). De-risk it first; everything else is assembly.

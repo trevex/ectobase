@@ -4,24 +4,24 @@
 
 **Goal:** Replace the placeholder overlay IPAM with real **underlay `/128`-from-inferred-`/64`** allocation, add the `net.ectobase.dev/v1alpha1` CRD types (`VPC`, `NetworkInterface`), extend the `dataplane.v1` gRPC with `underlay_route`, implement the real `AttachInterface`, and stand up a **containerlab IPv6-fabric e2e harness** so underlay inference is testable end-to-end.
 
-**Architecture:** The node agent (`xdp-dp`, Rust) infers its host underlay `/64` from the loopback/dummy fabric IPv6 (the kubelet IP in an unnumbered IPv6 BGP fabric) and hands out `/128`s to VM endpoints; the CNI (later) resolves `VPC`/`NetworkInterface` CRDs and calls `AttachInterface{vni, overlay_ips}`. Testing uses nix (Rust), Go unit/envtest (CRDs), netns (attach), and **containerlab + kind** (IPv6 fabric e2e).
+**Architecture:** The node agent (`flowplane`, Rust) infers its host underlay `/64` from the loopback/dummy fabric IPv6 (the kubelet IP in an unnumbered IPv6 BGP fabric) and hands out `/128`s to VM endpoints; the CNI (later) resolves `VPC`/`NetworkInterface` CRDs and calls `AttachInterface{vni, overlay_ips}`. Testing uses nix (Rust), Go unit/envtest (CRDs), netns (attach), and **containerlab + kind** (IPv6 fabric e2e).
 
 **Tech Stack:** Rust (aya, tonic, rtnetlink/ip), Go (`apiserver-kit`, controller-runtime), protobuf/gRPC, containerlab + FRR + kind, KubeVirt.
 
 **Parent spec:** `docs/superpowers/specs/2026-07-02-network-api-design.md`
-**Supersedes:** the overlay allocator in `xdp-dp/src/ipam.rs` (commit `10df2ff`).
+**Supersedes:** the overlay allocator in `flowplane/src/ipam.rs` (commit `10df2ff`).
 
 ---
 
 ## File Structure
 
-- `xdp-dp/src/underlay.rs` — **Create**: pure `infer_underlay_prefix()` + `UnderlayIpam` (`/128` from `/64`). Replaces `ipam.rs`.
-- `xdp-dp/src/ipam.rs` — **Delete** (overlay allocator, wrong abstraction).
-- `xdp-dp/src/main.rs` — **Modify**: `mod underlay;` (drop `mod ipam;`).
+- `flowplane/src/underlay.rs` — **Create**: pure `infer_underlay_prefix()` + `UnderlayIpam` (`/128` from `/64`). Replaces `ipam.rs`.
+- `flowplane/src/ipam.rs` — **Delete** (overlay allocator, wrong abstraction).
+- `flowplane/src/main.rs` — **Modify**: `mod underlay;` (drop `mod ipam;`).
 - `api/proto/dataplane/v1/dataplane.proto` — **Modify**: add `underlay_route` to `AttachInterfaceResponse`.
 - `api/net.ectobase.dev/v1alpha1/*.go` — **Create**: `VPC`, `NetworkInterface` types (+ deepcopy, registration).
-- `xdp-dp/src/attach.rs` — **Create**: real `AttachInterface`/`DetachInterface` (netns + eBPF + underlay).
-- `xdp-dp/src/node.rs` — **Modify**: call `attach`.
+- `flowplane/src/attach.rs` — **Create**: real `AttachInterface`/`DetachInterface` (netns + eBPF + underlay).
+- `flowplane/src/node.rs` — **Modify**: call `attach`.
 - `test/attach-netns.sh` — **Create**: netns attach acceptance test.
 - `hack/clab/ipv6-fabric.clab.yml`, `hack/clab-up.sh` — **Create**: containerlab IPv6-fabric topology + bring-up.
 - `test/e2e/fabric_test.go` — **Create**: containerlab+kind underlay-inference e2e (skips if tooling absent).
@@ -30,9 +30,9 @@
 
 ### Task 1: Underlay IPAM — infer host `/64`, allocate `/128`s (Rust)
 
-**Files:** Create `xdp-dp/src/underlay.rs`; delete `xdp-dp/src/ipam.rs`; modify `xdp-dp/src/main.rs`.
+**Files:** Create `flowplane/src/underlay.rs`; delete `flowplane/src/ipam.rs`; modify `flowplane/src/main.rs`.
 
-- [ ] **Step 1: Write failing unit tests** for the *pure* inference + allocation. Create `xdp-dp/src/underlay.rs` starting with tests:
+- [ ] **Step 1: Write failing unit tests** for the *pure* inference + allocation. Create `flowplane/src/underlay.rs` starting with tests:
 
 ```rust
 //! Underlay addressing: infer the host /64 from the fabric loopback, hand out /128s.
@@ -77,22 +77,22 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail.** Run: `nix develop --command cargo test -p xdp-dp underlay` — Expected: FAIL (`infer_underlay_prefix`/`UnderlayIpam` undefined).
+- [ ] **Step 2: Run tests to verify they fail.** Run: `nix develop --command cargo test -p flowplane underlay` — Expected: FAIL (`infer_underlay_prefix`/`UnderlayIpam` undefined).
 
 - [ ] **Step 3: Implement the pure logic.**
   - `infer_underlay_prefix(&[IfAddr]) -> Option<Ipv6Net>`: filter to **global unicast** (exclude link-local `fe80::/10`, loopback `::1`, ULA optional), truncate each to its `/64`; **prefer** an address on a `lo`/`dummy*` interface, else the first global-unicast `/64`. Return the `/64`.
   - `UnderlayIpam { prefix: Ipv6Net, used: BTreeSet<u128>, next: u128 }`: `new(prefix)`, `allocate() -> Option<Ipv6Addr>` (lowest free host in the `/64`, skipping the all-zeros subnet-router anycast), `release(Ipv6Addr)`.
 
-- [ ] **Step 4: Run tests to verify they pass.** Run: `nix develop --command cargo test -p xdp-dp underlay` — Expected: PASS (3 tests).
+- [ ] **Step 4: Run tests to verify they pass.** Run: `nix develop --command cargo test -p flowplane underlay` — Expected: PASS (3 tests).
 
-- [ ] **Step 5: Add the real host reader + a root-gated netns test.** Add `pub fn read_host_ifaddrs() -> anyhow::Result<Vec<IfAddr>>` (use the `rtnetlink` crate, or shell out to `ip -6 -o addr`). Add an `#[ignore]`-marked test `infers_from_dummy_iface` that (when run as root) creates a netns + `dummy0` with `2001:db8:fefe:9::1/64`, calls `read_host_ifaddrs()` + `infer_underlay_prefix()`, asserts `2001:db8:fefe:9::/64`. Document `cargo test -p xdp-dp -- --ignored` needs root.
+- [ ] **Step 5: Add the real host reader + a root-gated netns test.** Add `pub fn read_host_ifaddrs() -> anyhow::Result<Vec<IfAddr>>` (use the `rtnetlink` crate, or shell out to `ip -6 -o addr`). Add an `#[ignore]`-marked test `infers_from_dummy_iface` that (when run as root) creates a netns + `dummy0` with `2001:db8:fefe:9::1/64`, calls `read_host_ifaddrs()` + `infer_underlay_prefix()`, asserts `2001:db8:fefe:9::/64`. Document `cargo test -p flowplane -- --ignored` needs root.
 
-- [ ] **Step 6: Delete the old overlay allocator.** `git rm xdp-dp/src/ipam.rs`; in `xdp-dp/src/main.rs` replace `mod ipam;` with `mod underlay;`. Run: `nix develop --command cargo build -p xdp-dp && nix develop --command cargo test -p xdp-dp` — Expected: PASS, no dangling `ipam` references.
+- [ ] **Step 6: Delete the old overlay allocator.** `git rm flowplane/src/ipam.rs`; in `flowplane/src/main.rs` replace `mod ipam;` with `mod underlay;`. Run: `nix develop --command cargo build -p flowplane && nix develop --command cargo test -p flowplane` — Expected: PASS, no dangling `ipam` references.
 
 - [ ] **Step 7: Commit** (explicit paths only — the tree has unrelated uncommitted docs; never `git add -A`):
 ```bash
-git add xdp-dp/src/underlay.rs xdp-dp/src/main.rs xdp-dp/Cargo.toml Cargo.lock
-git rm xdp-dp/src/ipam.rs
+git add flowplane/src/underlay.rs flowplane/src/main.rs flowplane/Cargo.toml Cargo.lock
+git rm flowplane/src/ipam.rs
 git commit -m "feat(underlay): infer host /64 from fabric loopback + /128 IPAM (replaces overlay ipam)"
 ```
 Verify `git show --stat HEAD` shows only those files.
@@ -108,7 +108,7 @@ Verify `git show --stat HEAD` shows only those files.
     string underlay_route = 5; // allocated underlay /128 the overlay encaps to
 ```
 
-- [ ] **Step 2: Regenerate + verify Rust.** Run: `nix develop --command cargo build -p xdp-dp` — Expected: PASS.
+- [ ] **Step 2: Regenerate + verify Rust.** Run: `nix develop --command cargo build -p flowplane` — Expected: PASS.
 
 - [ ] **Step 3: Regenerate + verify Go.** Run: `make proto-go && go build ./cni/...` — Expected: PASS (regenerated `cni/gen/dataplanev1/*` compiles).
 
@@ -125,11 +125,11 @@ Verify the commit contains only the proto + regenerated Go stubs.
 
 **Integration-heavy** (touches the existing eBPF maps/loader). Begins with a codebase-read step; acceptance is a netns test.
 
-**Files:** Create `xdp-dp/src/attach.rs`, `test/attach-netns.sh`; modify `xdp-dp/src/node.rs`, `xdp-dp/src/main.rs`.
+**Files:** Create `flowplane/src/attach.rs`, `test/attach-netns.sh`; modify `flowplane/src/node.rs`, `flowplane/src/main.rs`.
 
-- [ ] **Step 1: Read the existing datapath internals.** Read `xdp-dp/src/maps.rs` and `xdp-dp/src/loader.rs` (and `grpc.rs` for how the legacy `CreateInterface` programs an endpoint) to learn the exact map types + helper signatures for: programming an interface endpoint `{vni, overlay_ip, mac, ifindex, underlay_route}` and attaching the tc/XDP program. **Report the signatures you will use before writing code** (this is the integration surface).
+- [ ] **Step 1: Read the existing datapath internals.** Read `flowplane/src/maps.rs` and `flowplane/src/loader.rs` (and `grpc.rs` for how the legacy `CreateInterface` programs an endpoint) to learn the exact map types + helper signatures for: programming an interface endpoint `{vni, overlay_ip, mac, ifindex, underlay_route}` and attaching the tc/XDP program. **Report the signatures you will use before writing code** (this is the integration surface).
 
-- [ ] **Step 2: Write the failing netns acceptance test.** Create `test/attach-netns.sh` that: creates a netns `attach-t`; starts `xdp-dp` serving `DataplaneNode`; calls `AttachInterface{interface_id:"t0", netns_path:/var/run/netns/attach-t, vni:100, requested_ips:["10.0.0.10"]}` via `grpcurl`; asserts (a) a veth/tap exists in the netns, (b) the response `underlay_route` is a `/128` inside the host's inferred `/64`, (c) the eBPF endpoint map contains `{vni:100, ip:10.0.0.10 → underlay_route}`. Print `PASS`/`FAIL`. Run: `sudo test/attach-netns.sh` — Expected: FAIL (`attach_interface` still `unimplemented`).
+- [ ] **Step 2: Write the failing netns acceptance test.** Create `test/attach-netns.sh` that: creates a netns `attach-t`; starts `flowplane` serving `DataplaneNode`; calls `AttachInterface{interface_id:"t0", netns_path:/var/run/netns/attach-t, vni:100, requested_ips:["10.0.0.10"]}` via `grpcurl`; asserts (a) a veth/tap exists in the netns, (b) the response `underlay_route` is a `/128` inside the host's inferred `/64`, (c) the eBPF endpoint map contains `{vni:100, ip:10.0.0.10 → underlay_route}`. Print `PASS`/`FAIL`. Run: `sudo test/attach-netns.sh` — Expected: FAIL (`attach_interface` still `unimplemented`).
 
 - [ ] **Step 3: Implement `attach.rs`.** `attach_interface(req, &mut UnderlayIpam, &BpfMaps) -> AttachInterfaceResponse`:
   1. allocate MAC (if empty) + an underlay `/128` via `UnderlayIpam` (Task 1);
@@ -141,11 +141,11 @@ Verify the commit contains only the proto + regenerated Go stubs.
 
 - [ ] **Step 4: Run the netns test to verify it passes.** Run: `sudo test/attach-netns.sh` — Expected: `PASS`.
 
-- [ ] **Step 5: No-regression.** Run: `nix develop --command cargo test -p xdp-dp` — Expected: PASS.
+- [ ] **Step 5: No-regression.** Run: `nix develop --command cargo test -p flowplane` — Expected: PASS.
 
 - [ ] **Step 6: Commit.**
 ```bash
-git add xdp-dp/src/attach.rs xdp-dp/src/node.rs xdp-dp/src/main.rs test/attach-netns.sh
+git add flowplane/src/attach.rs flowplane/src/node.rs flowplane/src/main.rs test/attach-netns.sh
 git commit -m "feat(attach): real AttachInterface with underlay allocation + eBPF programming"
 ```
 
@@ -187,7 +187,7 @@ git commit -m "feat(api): net.ectobase.dev/v1alpha1 VPC + NetworkInterface types
 
 - [ ] **Step 2: Write the fabric topology + bring-up.** `hack/clab/ipv6-fabric.clab.yml`: ≥2 FRR leaf nodes running BGP unnumbered over IPv6, each with a loopback `/64` (e.g. `2001:db8:fefe:1::/64`, `:2::/64`), and kind node(s) attached so the kind node's dummy/loopback sits in the fabric. `hack/clab-up.sh`: `containerlab deploy -t hack/clab/ipv6-fabric.clab.yml` (idempotent) + a matching `clab destroy`.
 
-- [ ] **Step 3: Write the e2e test (skips if tooling absent).** `test/e2e/fabric_test.go` `TestUnderlayInferenceOnFabric`: if `containerlab` or `kind` missing → `t.Skip`. Else bring up the fabric+kind, deploy `xdp-dp` as a DaemonSet, and assert a node **infers a `/64` matching its fabric loopback** (e.g. exec `xdp-dp` a debug subcommand or read a log line reporting the inferred prefix). Tear down.
+- [ ] **Step 3: Write the e2e test (skips if tooling absent).** `test/e2e/fabric_test.go` `TestUnderlayInferenceOnFabric`: if `containerlab` or `kind` missing → `t.Skip`. Else bring up the fabric+kind, deploy `flowplane` as a DaemonSet, and assert a node **infers a `/64` matching its fabric loopback** (e.g. exec `flowplane` a debug subcommand or read a log line reporting the inferred prefix). Tear down.
 
 - [ ] **Step 4: Verify.** Run: `cd test/e2e && go test -run TestUnderlayInferenceOnFabric -v` — Expected: PASS if tooling present, else SKIP. Also `go vet ./test/e2e/...` passes.
 

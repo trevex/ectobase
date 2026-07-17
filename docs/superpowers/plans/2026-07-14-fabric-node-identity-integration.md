@@ -2,15 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make every kind node in the containerlab fabric its own BGP speaker whose kubelet Node InternalIP is its announced fabric `/64` address, by wiring the (already-spiked) custom `kindest/node-fabric` image into the fabric and removing the post-boot sidecar/`exec` scaffolding — with the xdp-dp dataplane + overlay still green on the new identity.
+**Goal:** Make every kind node in the containerlab fabric its own BGP speaker whose kubelet Node InternalIP is its announced fabric `/64` address, by wiring the (already-spiked) custom `kindest/node-fabric` image into the fabric and removing the post-boot sidecar/`exec` scaffolding — with the flowplane dataplane + overlay still green on the new identity.
 
 **Architecture:** The custom node image (`hack/kind-fabric-node/`) runs a `Before=kubelet.service` oneshot (`fabric-preboot`) that puts the node's `/64` on dummy0, sets kubelet `--node-ip` to `<prefix>::1` via `KUBELET_EXTRA_ARGS` (last-wins), and starts an in-node FRR announcing the `/64` over unnumbered eBGP. clab keeps the ToR + `eth1` links but drops the per-node `host*-frr` sidecars and the dummy0 `exec` (the node owns both now). The per-node `/64` is injected via kind `extraMounts` so it is known at systemd boot, before any clab post-boot step. Hybrid: kind still bootstraps + exports kubeconfig over docker; only Node identity + dataplane move to the fabric.
 
-**Tech Stack:** containerlab, kind (custom node image), FRR, systemd, bash/YAML; the existing Rust xdp-dp + Go netplane stack (unchanged) for the regression check.
+**Tech Stack:** containerlab, kind (custom node image), FRR, systemd, bash/YAML; the existing Rust flowplane + Go netplane stack (unchanged) for the regression check.
 
 **Spike (already proven, `hack/kind-fabric-node/`):** node-ip = fabric addr survives container restart; FRR baked in and configured. See `docs/superpowers/research/2026-07-14-realistic-bgp-fabric-node-identity.md`.
 
-**Scope:** Phase 1 only — single-homed fabric, faithful node identity. Deferred to separate plans: **dual-homing** (`eth2`+`sw2`, no spine interlink) and **xdp-dp egress ECMP** (two uplinks + 50/50 WCMP + per-port ToR MAC via netlink neigh, mirroring dpservice active-active).
+**Scope:** Phase 1 only — single-homed fabric, faithful node identity. Deferred to separate plans: **dual-homing** (`eth2`+`sw2`, no spine interlink) and **flowplane egress ECMP** (two uplinks + 50/50 WCMP + per-port ToR MAC via netlink neigh, mirroring dpservice active-active).
 
 ---
 
@@ -311,28 +311,28 @@ Expected: `PASS: no FRR sidecars`.
 
 ---
 
-### Task 7: Regression — xdp-dp dataplane + overlay still green on the fabric identity
+### Task 7: Regression — flowplane dataplane + overlay still green on the fabric identity
 
 **Files:** none (verification task; reuses `config/` + `hack/multicluster-e2e.sh`)
 
-**Context:** The identity change must not break the dataplane. xdp-dp still infers its `/64` from dummy0 (now set by preboot instead of the clab `exec`) and the DS wrapper still resolves the ToR MAC from `eth1` neigh. The reflector/agent still target `fd00:db8:0:1::1` — which is now *also* k01-cp's Node IP, still correct.
+**Context:** The identity change must not break the dataplane. flowplane still infers its `/64` from dummy0 (now set by preboot instead of the clab `exec`) and the DS wrapper still resolves the ToR MAC from `eth1` neigh. The reflector/agent still target `fd00:db8:0:1::1` — which is now *also* k01-cp's Node IP, still correct.
 
 - [ ] **Step 1: Load images + run the multi-cluster overlay e2e**
 
 ```bash
 export PATH="$HOME/go/bin:$PATH"
 for c in k01 k02; do
-  sudo kind load docker-image ghcr.io/trevex/dpservice-xdp:dev --name "$c"
+  sudo kind load docker-image ghcr.io/trevex/ectobase/flowplane:dev --name "$c"
   sudo kind load docker-image ghcr.io/trevex/netplane:dev --name "$c"
 done
 bash hack/multicluster-e2e.sh 2>&1 | tail -25
 ```
 Expected: the script's final two pings (`k01 ep-a 10.0.0.1 -> k02 ep-c 10.0.0.3` and reverse) report **0% packet loss** — the cross-cluster overlay still works with nodes whose K8s identity is now the fabric `/64`.
 
-- [ ] **Step 2: Confirm xdp-dp inferred the correct underlay on a node**
+- [ ] **Step 2: Confirm flowplane inferred the correct underlay on a node**
 
 ```bash
-KX=$(sudo docker exec k01-worker crictl ps --name xdp-dp -o json 2>/dev/null | grep -o '"id": "[a-f0-9]*"' | head -1 | cut -d'"' -f4)
+KX=$(sudo docker exec k01-worker crictl ps --name flowplane -o json 2>/dev/null | grep -o '"id": "[a-f0-9]*"' | head -1 | cut -d'"' -f4)
 sudo docker exec k01-worker crictl logs "$KX" 2>&1 | grep -iE 'inferred|underlay pool'
 ```
 Expected: `underlay pool = fd00:db8:0:2::/64` (unchanged — dummy0 still carries the `/64`, now set pre-kubelet).
@@ -352,13 +352,13 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ## Self-Review
 
-**1. Spec/design coverage:** Every element of the design doc's "Target architecture" + "Remaining before a full plan" is covered — custom image into clab (T3), drop sidecars + exec (T4), prefix via extraMounts (T3/T5), forwarding moved to preboot (T2), established-BGP verification (T6.3), and the xdp-dp/overlay regression (T7). Node-ip mechanism itself was proven in the spike (not re-litigated). Dual-homing + datapath ECMP are explicitly deferred to separate plans (scope check — each is its own working increment).
+**1. Spec/design coverage:** Every element of the design doc's "Target architecture" + "Remaining before a full plan" is covered — custom image into clab (T3), drop sidecars + exec (T4), prefix via extraMounts (T3/T5), forwarding moved to preboot (T2), established-BGP verification (T6.3), and the flowplane/overlay regression (T7). Node-ip mechanism itself was proven in the spike (not re-litigated). Dual-homing + datapath ECMP are explicitly deferred to separate plans (scope check — each is its own working increment).
 
 **2. Placeholder scan:** The only intentional placeholder is `PREFIX_DIR` in the committed kind configs, which Task 5 renders to an absolute path at deploy time (kind rejects relative extraMounts hostPaths) — this is a documented mechanism, not a gap. No TBD/"handle errors"/vague steps.
 
 **3. Consistency:** Image name `kindest/node-fabric:dev` (Makefile `KINDNODE_IMAGE`+`TAG`) is used identically in the Dockerfile build, kind configs, and clab-up. Node/prefix mapping (`k01-control-plane`→`fd00:db8:0:1::/64`, `-worker`→`:2::`, `k02-control-plane`→`:3::`) matches the existing topology and the multicluster e2e's endpoint plan. `fabric-preboot` reads `/etc/fabric/prefix` (the extraMounts target) — consistent between the spike script and the mount. Reflector/agent addresses (`fd00:db8:0:1::1`) unchanged and still valid (now also the CP Node IP).
 
-**Deferred (separate plans):** dual-homing (`eth2`+`sw2`); xdp-dp egress ECMP (two-uplink `LOCAL` + 50/50 WCMP + netlink-neigh ToR MACs).
+**Deferred (separate plans):** dual-homing (`eth2`+`sw2`); flowplane egress ECMP (two-uplink `LOCAL` + 50/50 WCMP + netlink-neigh ToR MACs).
 
 ---
 

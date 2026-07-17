@@ -1,4 +1,4 @@
-# Design: ironcore-in-a-box drop-in (xdp-dp replaces DPDK dpservice)
+# Design: ironcore-in-a-box drop-in (flowplane replaces DPDK dpservice)
 
 **Date:** 2026-06-17
 **Status:** Approved design, pre-implementation
@@ -14,7 +14,7 @@ order between this drop-in and the remaining VIP/LB/NAT features is decided at p
 
 ## 1. Goal
 
-Run our `xdp-dp` (eBPF/XDP) as the **dpservice replacement** in a fork of
+Run our `flowplane` (eBPF/XDP) as the **dpservice replacement** in a fork of
 `ironcore-dev/ironcore-in-a-box`, achieving real VM-to-VM overlay connectivity driven by the
 unmodified IronCore control plane (metalnet/metalbond over the `DPDKironcore` gRPC contract) —
 proving the XDP datapath is a true drop-in for the DPDK one. A key improvement over the current
@@ -44,7 +44,7 @@ our existing datapath offsets work unchanged on real VM taps.
 
 ## 3. Architecture
 
-- **`xdp-dp` as a privileged DaemonSet** replacing the `dpservice` DaemonSet: host network +
+- **`flowplane` as a privileged DaemonSet** replacing the `dpservice` DaemonSet: host network +
   `CAP_BPF` + `NET_ADMIN` + `/dev` access; serves `DPDKironcore` gRPC on `:1337`.
 - **Dynamic port lifecycle** (core improvement):
   - `CreateInterface` → create a **tap** netdev (deterministic name derived from the interface
@@ -59,8 +59,8 @@ our existing datapath offsets work unchanged on real VM taps.
 - **In-datapath DHCPv4 responder (new feature, §4).**
 - **Minimal cross-repo patches (in the fork):**
   - metalnet `--tapdevice-mod`: drop the pool/claim; derive the device name from the NIC UID and
-    let `xdp-dp` create it.
-  - libvirt-provider: attach the VM to the `xdp-dp`-created tap (exact attach path confirmed
+    let `flowplane` create it.
+  - libvirt-provider: attach the VM to the `flowplane`-created tap (exact attach path confirmed
     during implementation by reading the apinet attach code).
   - node `setup-network.sh`: adapt the uplink/underlay wiring to the XDP model (drop the
     `ip6tnl` path; point `uplink_rx` at the inter-node device; set the gateway MAC).
@@ -69,7 +69,7 @@ our existing datapath offsets work unchanged on real VM taps.
 
 ironcore VMs obtain their addressing via **DHCP/ND served by the dataplane** (dpservice's
 `--dhcp-*`/`--dhcpv6-*` and `--enable-ipv6-overlay`; confirmed by the CirrOS spike VM emitting
-`DHCPDISCOVER`). `xdp-dp` answers these in XDP on the guest tap:
+`DHCPDISCOVER`). `flowplane` answers these in XDP on the guest tap:
 - **DHCPv4** — respond to `DISCOVER`/`REQUEST` with the interface's IPv4, gateway (`=<subnet>.1`,
   owned by the ARP responder), MTU (1450), DNS.
 - **DHCPv6** — respond to `SOLICIT`/`REQUEST` with the interface's IPv6 + DNS.
@@ -83,10 +83,10 @@ DHCPv4 + ARP (IPv4 overlay) first, then DHCPv6 + ND (IPv6 overlay).
 
 ## 5. Components & isolation
 
-- `xdp-dp-ebpf`: existing pipeline + a new `dhcp` module (DHCPv4 parse/respond in XDP).
-- `xdp-dp` userspace: a `netdev` module owning tap create/delete (netlink); the gRPC handlers
+- `flowplane-ebpf`: existing pipeline + a new `dhcp` module (DHCPv4 parse/respond in XDP).
+- `flowplane` userspace: a `netdev` module owning tap create/delete (netlink); the gRPC handlers
   call it from `CreateInterface`/`DeleteInterface`; a container image + DaemonSet manifest.
-- Fork of `ironcore-in-a-box`: a kustomize overlay swapping the dpservice DaemonSet for `xdp-dp`,
+- Fork of `ironcore-in-a-box`: a kustomize overlay swapping the dpservice DaemonSet for `flowplane`,
   plus the metalnet/libvirt/node-setup patches.
 - Each unit keeps one responsibility (tap lifecycle, DHCP, gRPC, manifests) and is testable on
   its own.
@@ -103,14 +103,14 @@ DHCPv4 + ARP (IPv4 overlay) first, then DHCPv6 + ND (IPv6 overlay).
    handling in the pipeline; a VM autoconfigures IPv6 and reaches its IPv6 gateway.
 4. **Two-node underlay overlay:** uplink attach + gateway-MAC + metalbond-driven `ROUTES`;
    VM-to-VM (IPv4 and IPv6) across two nodes/hosts with `proto 4`/IP-in-IPv6 on the underlay.
-5. **Full ironcore-in-a-box fork:** replace the dpservice DaemonSet with `xdp-dp`; patch
+5. **Full ironcore-in-a-box fork:** replace the dpservice DaemonSet with `flowplane`; patch
    metalnet (pool→dynamic), libvirt attach, and node `setup-network.sh`; `make up`, spin a
    `Machine`, demonstrate VM-to-VM.
 
 ## 7. Testing — including a tap-based harness
 
 A first-class goal of this sub-project is to **test on real taps**, not only veth. Extend the
-test suite with a **tap-based lab mode**: each "guest" is a tap device (created as `xdp-dp` does
+test suite with a **tap-based lab mode**: each "guest" is a tap device (created as `flowplane` does
 in production, `IFF_TAP|IFF_VNET_HDR`) with either (a) a lightweight userspace endpoint that
 emits/consumes frames, or (b) a tiny real QEMU VM (as in the XDP-on-tap spike) for full-fidelity
 DHCP/ND/boot tests. This validates tap-specific behavior (vnet_hdr stripping, native XDP attach,
