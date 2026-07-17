@@ -54,7 +54,7 @@ func TestNATGatewayControllerEnvtest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	if err := (&Reconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+	if err := (&NATGatewayReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("setup reconciler: %v", err)
 	}
 

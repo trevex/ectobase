@@ -86,7 +86,6 @@ fn encap_to(inner: &[u8], src_ul: [u8; 16], dst_ul: [u8; 16]) -> Vec<u8> {
             uplink_ifindex: 7,
             src_underlay: src_ul,
             nexthop_ipv6: dst_ul,
-            inner_len: 0,
             inner_proto: 4,
         },
     )

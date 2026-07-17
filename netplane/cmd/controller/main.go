@@ -34,7 +34,7 @@ func main() {
 		log.Fatalf("new manager: %v", err)
 	}
 
-	if err := (&controllers.Reconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+	if err := (&controllers.NATGatewayReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup natgateway controller: %v", err)
 	}
 

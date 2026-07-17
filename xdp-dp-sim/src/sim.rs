@@ -62,15 +62,14 @@ impl SimNode {
     /// producing `[OuterEth(14)][OuterIPv6(40)][bare IPv4 ...]` — the exact fabric wire format the
     /// eBPF egress path emits. Byte-identical to the real encap: `grow_head(40)` prepends 40 bytes,
     /// then the 54-byte outer header write consumes the 40 new bytes AND the 14-byte inner Ethernet,
-    /// leaving the bare inner IPv4 (inner_proto=IPIP, inner_len = IPv4 length = frame len - 14).
-    pub fn edge_encap(&self, inner_frame: &[u8], mut e: EncapParams) -> Vec<u8> {
+    /// leaving the bare inner IPv4 (inner_proto=IPIP; the outer length is derived from `logical_len`).
+    pub fn edge_encap(&self, inner_frame: &[u8], e: EncapParams) -> Vec<u8> {
         assert!(
             inner_frame.len() >= ETH_LEN,
             "inner_frame must be a full Eth+IPv4 frame"
         );
         let mut p = VecPkt::from_bytes(inner_frame);
         assert!(p.grow_head(IPV6_LEN));
-        e.inner_len = (inner_frame.len() - ETH_LEN) as u16; // bare inner IPv4 length
         assert!(write_outer_v6(&mut p, &e));
         p.into_bytes()
     }
@@ -136,7 +135,7 @@ impl SimNode {
         // 4. Decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest.
         let action = match decap_and_rewrite(&mut pkt, tap, guest_mac) {
             Ok(a) => a,
-            Err(()) => Action::Drop,
+            Err(_) => Action::Drop,
         };
         SimOut {
             action,
@@ -196,8 +195,7 @@ impl SimNode {
                     uplink_ifindex: self.local.uplink_ifindex,
                     src_underlay: self.local.underlay_ipv6,
                     nexthop_ipv6: backend,
-                    inner_len: 0, // edge_encap sets this
-                    inner_proto,  // 4 (IPIP) for v4 inner, 41 (IPPROTO_IPV6) for v6 inner
+                    inner_proto, // 4 (IPIP) for v4 inner, 41 (IPPROTO_IPV6) for v6 inner
                 };
                 SimOut {
                     action: Action::Redirect(self.local.uplink_ifindex),

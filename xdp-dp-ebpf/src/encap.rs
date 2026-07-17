@@ -5,11 +5,12 @@ use aya_ebpf::{
 };
 use xdp_dp_common::{Local, RouteValue};
 use xdp_dp_core::encap::{write_outer_v6, EncapParams, IPV6_LEN};
+use xdp_dp_core::err::DpErr;
 
 use crate::coreimpl::CtxPkt;
 
 /// Grow headroom and write the outer Eth+IPv6 for an encap toward `route.nexthop_ipv6`. Returns
-/// `true` on success. `inner_len` = (frame len - inner ETH_LEN), captured BEFORE adjust_head.
+/// `true` on success.
 /// `inner_proto` = IPv6 next-header byte (IPPROTO_IPIP for an IPv4 inner, IPPROTO_IPV6 for IPv6).
 #[inline(always)]
 fn write_encap_outer(
@@ -17,7 +18,6 @@ fn write_encap_outer(
     local: &Local,
     src_underlay: &[u8; 16],
     route: &RouteValue,
-    inner_len: u16,
     inner_proto: u8,
 ) -> bool {
     if unsafe { bpf_xdp_adjust_head(ctx.ctx, -(IPV6_LEN as i32)) } != 0 {
@@ -29,7 +29,6 @@ fn write_encap_outer(
         uplink_ifindex: local.uplink_ifindex,
         src_underlay: *src_underlay,
         nexthop_ipv6: route.nexthop_ipv6,
-        inner_len,
         inner_proto,
     };
     write_outer_v6(&mut CtxPkt { ctx }, &e)
@@ -46,13 +45,12 @@ pub fn encap_and_redirect(
     local: &Local,
     src_underlay: &[u8; 16],
     route: &RouteValue,
-    inner_len: u16,
     inner_proto: u8,
-) -> Result<u32, ()> {
-    if write_encap_outer(ctx, local, src_underlay, route, inner_len, inner_proto) {
+) -> Result<u32, DpErr> {
+    if write_encap_outer(ctx, local, src_underlay, route, inner_proto) {
         Ok(unsafe { bpf_redirect(local.uplink_ifindex, 0) } as u32)
     } else {
-        Err(())
+        Err(DpErr::Bounds)
     }
 }
 
@@ -67,15 +65,14 @@ pub fn encap_and_redirect_via_devmap(
     local: &Local,
     src_underlay: &[u8; 16],
     route: &RouteValue,
-    inner_len: u16,
     inner_proto: u8,
-) -> Result<u32, ()> {
-    if write_encap_outer(ctx, local, src_underlay, route, inner_len, inner_proto) {
+) -> Result<u32, DpErr> {
+    if write_encap_outer(ctx, local, src_underlay, route, inner_proto) {
         Ok(crate::maps::UPLINK_DEV
             .redirect(0, 0)
             .unwrap_or(xdp_action::XDP_ABORTED))
     } else {
-        Err(())
+        Err(DpErr::Bounds)
     }
 }
 

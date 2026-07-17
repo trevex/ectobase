@@ -15,6 +15,13 @@ pub enum Action {
 pub trait Pkt {
     /// Current frame length in bytes.
     fn len(&self) -> usize;
+    /// Logical (wire) length of the packet in bytes.
+    ///
+    /// On skb-backed contexts this is `skb->len`, which may exceed the linear head
+    /// (`data_end - data`). On XDP and linear buffers it equals the head length. The encap
+    /// header writer uses this (not `len()`) so a non-linear skb gets a correct outer payload
+    /// length.
+    fn logical_len(&self) -> usize;
     /// Copy `N` bytes at `off`, bounds-checked. None if out of range.
     fn read_array<const N: usize>(&self, off: usize) -> Option<[u8; N]>;
     /// Overwrite `src.len()` bytes at `off`, bounds-checked. false if out of range.

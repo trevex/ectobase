@@ -84,6 +84,10 @@ impl Pkt for CtxPkt<'_> {
         self.ctx.data_end() - self.ctx.data()
     }
     #[inline(always)]
+    fn logical_len(&self) -> usize {
+        self.ctx.data_end() - self.ctx.data()
+    }
+    #[inline(always)]
     fn read_array<const N: usize>(&self, off: usize) -> Option<[u8; N]> {
         unsafe { read_raw::<N>(self.ctx.data(), self.ctx.data_end(), off) }
     }
@@ -108,15 +112,33 @@ impl Pkt for CtxPkt<'_> {
 pub struct RawPkt {
     data: usize,
     data_end: usize,
+    logical_len: usize,
 }
 
 impl RawPkt {
-    /// Build a window over `[data, data_end)`. Caller guarantees the pointers come from the same
-    /// packet and `data <= data_end`.
+    /// Build a window over `[data, data_end)`. Linear: `logical_len == data_end - data`.
+    /// Caller guarantees the pointers come from the same packet and `data <= data_end`.
     #[inline(always)]
     pub fn new(data: usize, data_end: usize) -> Self {
         debug_assert!(data <= data_end, "RawPkt: data must not exceed data_end");
-        Self { data, data_end }
+        Self {
+            data,
+            data_end,
+            logical_len: data_end - data,
+        }
+    }
+
+    /// Build a window whose logical (wire) length differs from the linear head — e.g. a tc
+    /// skb whose true length is `skb->len` (`ctx.len()`) but whose `[data, data_end)` covers
+    /// only the pulled linear head.
+    #[inline(always)]
+    pub fn with_logical_len(data: usize, data_end: usize, logical_len: usize) -> Self {
+        debug_assert!(data <= data_end, "RawPkt: data must not exceed data_end");
+        Self {
+            data,
+            data_end,
+            logical_len,
+        }
     }
 }
 
@@ -124,6 +146,10 @@ impl Pkt for RawPkt {
     #[inline(always)]
     fn len(&self) -> usize {
         self.data_end - self.data
+    }
+    #[inline(always)]
+    fn logical_len(&self) -> usize {
+        self.logical_len
     }
     #[inline(always)]
     fn read_array<const N: usize>(&self, off: usize) -> Option<[u8; N]> {

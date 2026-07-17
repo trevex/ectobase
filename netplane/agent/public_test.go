@@ -46,34 +46,34 @@ func TestDesiredPublicNonEdgeEmpty(t *testing.T) {
 }
 
 func TestApplyPublicEdgeUnderlayAddThenWithdraw(t *testing.T) {
-	b := NewBus("nodeA", "fd00::a", newFakeDP(), false)
+	b := NewBus("nodeA", "fd00::a", newRecordingDP(), false)
 
 	add := &rbv1.PublicPrefix{
 		Kind:          rbv1.PublicKind_PUBLIC_KIND_EDGE_UNDERLAY,
 		Prefix:        "fd00:db8:0:9::e/128",
 		OwnerUnderlay: "fd00:db8:0:9::1",
 	}
-	b.applyPublic(add, rbv1.RouteOp_ROUTE_OP_ADD)
+	b.applyPublic(context.Background(), add, rbv1.RouteOp_ROUTE_OP_ADD)
 
 	if got := b.LearnedEdge()["fd00:db8:0:9::e"]; got != "fd00:db8:0:9::1" {
 		t.Fatalf("learnedEdge[anycast] = %q, want fd00:db8:0:9::1", got)
 	}
 
-	b.applyPublic(add, rbv1.RouteOp_ROUTE_OP_WITHDRAW)
+	b.applyPublic(context.Background(), add, rbv1.RouteOp_ROUTE_OP_WITHDRAW)
 	if _, ok := b.LearnedEdge()["fd00:db8:0:9::e"]; ok {
 		t.Fatalf("learnedEdge still has anycast entry after withdraw")
 	}
 }
 
 func TestApplyPublicNatIPIsNoOp(t *testing.T) {
-	b := NewBus("nodeA", "fd00::a", newFakeDP(), false)
+	b := NewBus("nodeA", "fd00::a", newRecordingDP(), false)
 	natIP := &rbv1.PublicPrefix{
 		Kind:          rbv1.PublicKind_PUBLIC_KIND_NAT_IP,
 		Prefix:        "1.2.3.4/32",
 		OwnerUnderlay: "fd00::b",
 	}
 	// Must not panic and must not touch learnedEdge.
-	b.applyPublic(natIP, rbv1.RouteOp_ROUTE_OP_ADD)
+	b.applyPublic(context.Background(), natIP, rbv1.RouteOp_ROUTE_OP_ADD)
 	if len(b.LearnedEdge()) != 0 {
 		t.Fatalf("NAT_IP must not populate learnedEdge, got %+v", b.LearnedEdge())
 	}

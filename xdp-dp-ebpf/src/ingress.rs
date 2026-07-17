@@ -4,6 +4,7 @@ use aya_ebpf::{
     programs::XdpContext,
 };
 use xdp_dp_common::{RouteValue, VipKey, CT_F_NAT64, CT_REWRITE_DST, UNDERLAY_LOCAL_DELIVER};
+use xdp_dp_core::err::DpErr;
 
 use crate::arp_nd::GW_MAC;
 use crate::maps::{LOCAL, NAT_IPS};
@@ -98,7 +99,7 @@ fn try_icmp_echo_reply(
     Some(unsafe { bpf_redirect(local.uplink_ifindex, 0) } as u32)
 }
 
-pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
+pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
     let data = ctx.data();
     let data_end = ctx.data_end();
     // Need outer Eth(14) + IPv6(40) + at least the inner IPv4 dst (ends at +20).
@@ -141,7 +142,7 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
     // key) and handles the dpservice packet_relay_node ICMP-error forwarding semantics.
     if lb_ul.is_none() {
         if let Some(bul) = crate::lb::lb_select_forward_icmp_error(ctx, ETH_LEN + IPV6_LEN, vni) {
-            let local = LOCAL.get(0).ok_or(())?;
+            let local = LOCAL.get(0).ok_or(DpErr::NoRoute)?;
             return Ok(crate::encap::reforward(ctx, local, &outer_dst, &bul));
         }
     }
@@ -150,7 +151,7 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
         Some(bul) => match unsafe { crate::maps::UNDERLAY.get(&bul) } {
             Some(bu) => *bu,
             None => {
-                let local = LOCAL.get(0).ok_or(())?;
+                let local = LOCAL.get(0).ok_or(DpErr::NoRoute)?;
                 return Ok(crate::encap::reforward(ctx, local, &outer_dst, &bul));
             }
         },
@@ -226,7 +227,7 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
             let inner_dst = unsafe { core::ptr::read_unaligned(q.add(off + 16) as *const [u8; 4]) };
             if let Some((_proto, _sport, dport)) = crate::parse::l4_ports(d, de, off) {
                 if let Some(owner_ul) = crate::nat::neighbor_nat_lookup(vni, inner_dst, dport) {
-                    let local = LOCAL.get(0).ok_or(())?;
+                    let local = LOCAL.get(0).ok_or(DpErr::NoRoute)?;
                     return Ok(crate::encap::reforward(ctx, local, &outer_dst, &owner_ul));
                 }
             }
@@ -294,7 +295,7 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
         tap_ifindex,
         guest_mac,
     ) {
-        Err(()) => Err(()),
+        Err(e) => Err(e),
         Ok(_) => {
             // DNAT: rewrite inner IPv4 dest if inner_dst was a VIP (V->G). Skip for LB packets
             // (already forwarded to the backend VF which owns the LB IP).
@@ -317,16 +318,16 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
 /// WAN. The inner Ethernet dst is set to our uplink MAC so the kernel L3-accepts the frame on the
 /// fabric iface after PASS (src = GW_MAC, a locally-generated placeholder).
 #[inline(always)]
-fn edge_local_deliver(ctx: &XdpContext) -> Result<u32, ()> {
+fn edge_local_deliver(ctx: &XdpContext) -> Result<u32, DpErr> {
     if unsafe { bpf_xdp_adjust_head(ctx.ctx, IPV6_LEN as i32) } != 0 {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
     let data = ctx.data();
     let data_end = ctx.data_end();
     if data + ETH_LEN > data_end {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
-    let local = LOCAL.get(0).ok_or(())?;
+    let local = LOCAL.get(0).ok_or(DpErr::NoRoute)?;
     let q = data as *mut u8;
     unsafe {
         write6(q, &local.uplink_mac);
@@ -342,7 +343,7 @@ fn edge_local_deliver(ctx: &XdpContext) -> Result<u32, ()> {
 /// the fabric uplink. The owner's reverse-conntrack key `(vni,0,nat_ip,0,nat_port)` — where vni is
 /// derived from UNDERLAY[owner_underlay] on the owner — then reverse-SNATs to the source VM.
 /// Anything not matching a nat_ip block is XDP_PASSed to the local kernel (VyOS routing/BGP).
-pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
+pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
     let data = ctx.data();
     let data_end = ctx.data_end();
     // Need Eth(14) + at least the inner IPv4 header (ends at +20).
@@ -360,8 +361,7 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
             return Ok(xdp_action::XDP_PASS);
         }
         if let Some(backend) = crate::lb::lb_select_forward_v6(ctx, ETH_LEN, 0) {
-            let local = LOCAL.get(0).ok_or(())?;
-            let inner_len = (data_end - data - ETH_LEN) as u16;
+            let local = LOCAL.get(0).ok_or(DpErr::NoRoute)?;
             let route = RouteValue {
                 nexthop_vni: 0,
                 nexthop_ipv6: backend,
@@ -373,7 +373,6 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
                 local,
                 &local.underlay_ipv6,
                 &route,
-                inner_len,
                 IPPROTO_IPV6, // inner is an IPv6 packet (NOT IPPROTO_IPIP)
             );
         }
@@ -391,8 +390,7 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
     // (vni=0), Maglev-select an overlay backend and encap IP-in-IPv6 straight to its underlay,
     // exactly like the neighbor-nat return path below. Falls through to neighbor-nat on a miss.
     if let Some(backend) = crate::lb::lb_select_forward(ctx, ip_off, 0) {
-        let local = LOCAL.get(0).ok_or(())?;
-        let inner_len = (data_end - data - ETH_LEN) as u16;
+        let local = LOCAL.get(0).ok_or(DpErr::NoRoute)?;
         let route = RouteValue {
             nexthop_vni: 0,
             nexthop_ipv6: backend,
@@ -404,7 +402,6 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
             local,
             &local.underlay_ipv6,
             &route,
-            inner_len,
             IPPROTO_IPIP,
         );
     }
@@ -412,10 +409,9 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
         Some(v) => v,
         None => return Ok(xdp_action::XDP_PASS),
     };
-    let local = LOCAL.get(0).ok_or(())?;
+    let local = LOCAL.get(0).ok_or(DpErr::NoRoute)?;
     // Encap the plain IPv4 (the outer L2 header is consumed like a guest inner eth) into IP-in-IPv6
-    // toward the owner. inner_len = the IPv4 payload length, captured before adjust_head.
-    let inner_len = (data_end - data - ETH_LEN) as u16;
+    // toward the owner.
     let route = RouteValue {
         nexthop_vni: 0,
         nexthop_ipv6: owner_ul,
@@ -427,7 +423,6 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
         local,
         &local.underlay_ipv6,
         &route,
-        inner_len,
         IPPROTO_IPIP,
     )
 }

@@ -26,8 +26,8 @@ import (
 // defaultPortsPerSource is the block size used when Spec.PortsPerSource is nil.
 const defaultPortsPerSource int32 = 1024
 
-// Reconciler assigns deterministic egress SNAT blocks for a NATGateway's VPC.
-type Reconciler struct {
+// NATGatewayReconciler assigns deterministic egress SNAT blocks for a NATGateway's VPC.
+type NATGatewayReconciler struct {
 	Client client.Client
 }
 
@@ -37,7 +37,7 @@ func keyOf(obj client.Object) types.NamespacedName {
 }
 
 // Reconcile fetches the NATGateway named by req and Syncs it.
-func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *NATGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var natgw netv1.NATGateway
 	if err := r.Client.Get(ctx, req.NamespacedName, &natgw); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -54,7 +54,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // matches natgw's, collects and sorts their IPs (so allocation order is
 // deterministic), assigns each a block from the allocator built over
 // Spec.PublicIPs / PortsPerSource, and writes Status.Allocations + State=Ready.
-func (r *Reconciler) Sync(ctx context.Context, natgw *netv1.NATGateway) error {
+func (r *NATGatewayReconciler) Sync(ctx context.Context, natgw *netv1.NATGateway) error {
 	var nics netv1.NetworkInterfaceList
 	if err := r.Client.List(ctx, &nics, client.InNamespace(natgw.Namespace)); err != nil {
 		return fmt.Errorf("list networkinterfaces: %w", err)
@@ -103,11 +103,11 @@ func (r *Reconciler) Sync(ctx context.Context, natgw *netv1.NATGateway) error {
 	return nil
 }
 
-// SetupWithManager registers the Reconciler with the controller-runtime Manager.
+// SetupWithManager registers the NATGatewayReconciler with the controller-runtime Manager.
 // Any NATGateway change is reconciled directly; any NetworkInterface change
 // re-triggers all NATGateways in the same namespace, because the allocation
 // table is computed over all NICs in the VPC.
-func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *NATGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&netv1.NATGateway{}).
 		Watches(&netv1.NetworkInterface{}, handler.EnqueueRequestsFromMapFunc(r.natgwsForNIC)).
@@ -117,7 +117,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 // natgwsForNIC maps a NetworkInterface event to reconcile requests for every
 // NATGateway in the same namespace. Any NIC add/change may shift the
 // allocation table, so all gateways in that namespace must re-sync.
-func (r *Reconciler) natgwsForNIC(ctx context.Context, obj client.Object) []reconcile.Request {
+func (r *NATGatewayReconciler) natgwsForNIC(ctx context.Context, obj client.Object) []reconcile.Request {
 	var list netv1.NATGatewayList
 	if err := r.Client.List(ctx, &list, client.InNamespace(obj.GetNamespace())); err != nil {
 		ctrl.Log.WithName("natgwsForNIC").Error(err, "list NATGateways", "namespace", obj.GetNamespace())

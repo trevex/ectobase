@@ -4,6 +4,7 @@ use aya_ebpf::{
     programs::XdpContext,
 };
 use xdp_dp_common::PortMeta;
+use xdp_dp_core::err::DpErr;
 
 use crate::arp_nd::GW_MAC;
 use crate::coreimpl::CtxPkt;
@@ -90,7 +91,7 @@ fn try_icmpv6_echo_reply(
 /// Egress for an inner IPv6 frame: run NAT64 first (XDP-only, size-changing), then execute the
 /// shared `forward_decision_v6` verdict (route6 + local/encap).
 #[inline(always)]
-pub fn v6_guest_tx(ctx: &XdpContext, meta: &PortMeta) -> Result<u32, ()> {
+pub fn v6_guest_tx(ctx: &XdpContext, meta: &PortMeta) -> Result<u32, DpErr> {
     // NAT64: intercept packets destined to 64:ff9b::/96, translate IPv6→IPv4, SNAT, encap.
     if let Some(act) =
         crate::nat64::nat64_egress(ctx, meta.vni, meta.guest_ipv4, &meta.underlay_ipv6)?
@@ -123,13 +124,13 @@ pub fn v6_guest_tx(ctx: &XdpContext, meta: &PortMeta) -> Result<u32, ()> {
         }
         crate::egress::EgressVerdict::Encap(e) => {
             if unsafe { bpf_xdp_adjust_head(ctx.ctx, -(IPV6_LEN as i32)) } != 0 {
-                return Err(());
+                return Err(DpErr::Bounds);
             }
             let mut pkt = CtxPkt { ctx };
             if xdp_dp_core::encap::write_outer_v6(&mut pkt, &e) {
                 Ok(unsafe { bpf_redirect(e.uplink_ifindex, 0) } as u32)
             } else {
-                Err(())
+                Err(DpErr::Bounds)
             }
         }
     }
@@ -138,7 +139,7 @@ pub fn v6_guest_tx(ctx: &XdpContext, meta: &PortMeta) -> Result<u32, ()> {
 /// Ingress for an inner IPv6 frame (outer next-header 41): deliver by outer IPv6 dst, decap, write
 /// the inner Ethernet (Ethertype IPv6), redirect to the tap.
 #[inline(always)]
-pub fn v6_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
+pub fn v6_uplink_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
     let data = ctx.data();
     let data_end = ctx.data_end();
     if data + ETH_LEN + IPV6_LEN + 40 > data_end {
@@ -164,12 +165,12 @@ pub fn v6_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
                 let guest_mac = bu.guest_mac;
                 let tap_ifindex = bu.tap_ifindex;
                 if unsafe { bpf_xdp_adjust_head(ctx.ctx, IPV6_LEN as i32) } != 0 {
-                    return Err(());
+                    return Err(DpErr::Bounds);
                 }
                 let data2 = ctx.data();
                 let data_end2 = ctx.data_end();
                 if data2 + ETH_LEN > data_end2 {
-                    return Err(());
+                    return Err(DpErr::Bounds);
                 }
                 let q = data2 as *mut u8;
                 unsafe {
@@ -181,7 +182,7 @@ pub fn v6_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
             }
             None => {
                 // Remote backend: reforward without decap.
-                let local = LOCAL.get(0).ok_or(())?;
+                let local = LOCAL.get(0).ok_or(DpErr::NoRoute)?;
                 return Ok(reforward(ctx, local, &outer_dst, &bul));
             }
         }
@@ -196,12 +197,12 @@ pub fn v6_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
         return Ok(xdp_action::XDP_DROP);
     }
     if unsafe { bpf_xdp_adjust_head(ctx.ctx, IPV6_LEN as i32) } != 0 {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
     let data = ctx.data();
     let data_end = ctx.data_end();
     if data + ETH_LEN > data_end {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
     let q = data as *mut u8;
     unsafe {

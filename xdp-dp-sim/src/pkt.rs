@@ -2,11 +2,15 @@ use xdp_dp_core::pkt::Pkt;
 
 pub struct VecPkt {
     buf: Vec<u8>,
+    logical_len: usize,
 }
 
 impl VecPkt {
     pub fn from_bytes(b: &[u8]) -> Self {
-        Self { buf: b.to_vec() }
+        Self {
+            buf: b.to_vec(),
+            logical_len: b.len(),
+        }
     }
     pub fn bytes(&self) -> &[u8] {
         &self.buf
@@ -14,11 +18,19 @@ impl VecPkt {
     pub fn into_bytes(self) -> Vec<u8> {
         self.buf
     }
+    /// Override the logical (wire) length to simulate a non-linear skb whose true length
+    /// exceeds the linear buffer. Used to exercise the encap inner-length path.
+    pub fn set_logical_len(&mut self, n: usize) {
+        self.logical_len = n;
+    }
 }
 
 impl Pkt for VecPkt {
     fn len(&self) -> usize {
         self.buf.len()
+    }
+    fn logical_len(&self) -> usize {
+        self.logical_len
     }
     fn read_array<const N: usize>(&self, off: usize) -> Option<[u8; N]> {
         let end = off.checked_add(N)?;
@@ -44,6 +56,7 @@ impl Pkt for VecPkt {
         let mut prefix = vec![0u8; delta];
         prefix.extend_from_slice(&self.buf);
         self.buf = prefix;
+        self.logical_len += delta;
         true
     }
     fn shrink_head(&mut self, delta: usize) -> bool {
@@ -51,6 +64,7 @@ impl Pkt for VecPkt {
             return false;
         }
         self.buf.drain(0..delta);
+        self.logical_len -= delta;
         true
     }
 }
@@ -77,5 +91,18 @@ mod tests {
         assert!(p.shrink_head(2));
         assert_eq!(p.len(), 4);
         assert_eq!(p.read_array::<4>(0), Some([1, 2, 3, 4]));
+    }
+
+    #[test]
+    fn logical_len_defaults_to_buf_and_tracks_resize() {
+        let mut p = VecPkt::from_bytes(&[0u8; 20]);
+        assert_eq!(p.logical_len(), 20);
+        assert!(p.grow_head(14));
+        assert_eq!(p.logical_len(), 34); // tracks grow
+        assert!(p.shrink_head(14));
+        assert_eq!(p.logical_len(), 20); // tracks shrink
+        p.set_logical_len(1500); // simulate non-linear skb
+        assert_eq!(p.logical_len(), 1500);
+        assert_eq!(p.len(), 20); // linear buffer unchanged
     }
 }

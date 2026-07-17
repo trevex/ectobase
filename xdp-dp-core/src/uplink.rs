@@ -10,6 +10,7 @@
 //! real core fns — `fw_eval_dir`, `ct_create_default`, `decap_and_rewrite` — in the wrapper's order.
 
 use crate::encap::{ETH_LEN, IPV6_LEN};
+use crate::err::DpErr;
 use crate::pkt::{Action, Pkt};
 
 // `GW_MAC` (inner-eth src on host delivery) + `ETH_P_IP` are single-sourced in
@@ -25,27 +26,27 @@ pub use xdp_dp_common::proto::{ETH_P_IP, GW_MAC};
 /// strips 40 bytes from the front, leaving 14 bytes of room + the inner IPv4, which is then
 /// rewritten into the inner Ethernet header (dst=guest_mac, src=GW_MAC, ethertype=IPv4).
 ///
-/// Returns `Ok(Action::Redirect(tap_ifindex))` after successful decap+rewrite; `Err(())` if decap
-/// or bounds fail (matches the eBPF `Err` path).
+/// Returns `Ok(Action::Redirect(tap_ifindex))` after successful decap+rewrite; `Err(DpErr::Bounds)`
+/// if decap or bounds fail (matches the eBPF `Err` path).
 #[inline(always)]
 pub fn decap_and_rewrite<P: Pkt>(
     pkt: &mut P,
     tap_ifindex: u32,
     guest_mac: [u8; 6],
-) -> Result<Action, ()> {
+) -> Result<Action, DpErr> {
     // Strip outer Eth+IPv6, leaving room to write the inner Ethernet.
     if !pkt.shrink_head(IPV6_LEN) {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
     if pkt.len() < ETH_LEN {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
     let mut ok = true;
     ok &= pkt.write_bytes(0, &guest_mac); // dst = guest MAC
     ok &= pkt.write_bytes(6, &GW_MAC); // src = gateway MAC
     ok &= pkt.write_bytes(12, &ETH_P_IP.to_be_bytes()); // ethertype = IPv4
     if !ok {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
     Ok(Action::Redirect(tap_ifindex))
 }

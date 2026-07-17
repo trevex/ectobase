@@ -30,8 +30,19 @@ type Reconciler struct {
 	appliedLbVips map[string][]LbPort
 }
 
+// Deps carries the runtime dependencies wired into a Reconciler at construction.
+type Deps struct {
+	// Underlay is this node's underlay IPv6 (used as the announced nexthop).
+	Underlay string
+	// Dataplane is the local xdp-dp so the reconciler can program egress SNAT.
+	Dataplane Dataplane
+	// EdgeLoopback marks this node as a WAN edge with the given UNIQUE
+	// control-plane loopback (empty = not an edge).
+	EdgeLoopback string
+}
+
 // NewReconciler builds a Reconciler from a kubeconfig path (empty = in-cluster).
-func NewReconciler(kubeconfig, nodeID string) (*Reconciler, error) {
+func NewReconciler(kubeconfig, nodeID string, deps Deps) (*Reconciler, error) {
 	cfg, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
 		return nil, fmt.Errorf("load kubeconfig %q: %w", kubeconfig, err)
@@ -44,19 +55,14 @@ func NewReconciler(kubeconfig, nodeID string) (*Reconciler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build client: %w", err)
 	}
-	// underlay is threaded in by main via SetUnderlay to avoid a wider signature.
-	return &Reconciler{client: c, nodeID: nodeID}, nil
+	return &Reconciler{
+		client:       c,
+		nodeID:       nodeID,
+		underlay:     deps.Underlay,
+		dp:           deps.Dataplane,
+		edgeLoopback: deps.EdgeLoopback,
+	}, nil
 }
-
-// SetUnderlay records this node's underlay IPv6 (used as the announced nexthop).
-func (r *Reconciler) SetUnderlay(underlay string) { r.underlay = underlay }
-
-// SetDataplane wires the local xdp-dp so the reconciler can program egress SNAT.
-func (r *Reconciler) SetDataplane(dp Dataplane) { r.dp = dp }
-
-// SetEdgeLoopback marks this node as a WAN edge with the given UNIQUE
-// control-plane loopback (empty = not an edge).
-func (r *Reconciler) SetEdgeLoopback(loopback string) { r.edgeLoopback = loopback }
 
 // Desired returns the VNIs to subscribe to, the local routes to announce, and
 // the local egress-NAT blocks to announce for this node, snapshotting the current
