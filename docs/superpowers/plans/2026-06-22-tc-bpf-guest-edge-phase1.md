@@ -15,30 +15,30 @@
 ## File Structure
 
 **New files:**
-- `xdp-dp-ebpf/src/verdict.rs` — the context-neutral `Verdict` enum returned by the pure core; glue maps it to `XDP_*` / `TC_ACT_*`. One responsibility: the core↔glue seam type.
-- `xdp-dp-ebpf/src/tc.rs` — the tc (classifier) glue programs `tc_guest_tx` and `tc_guest_dhcp`, plus tc-specific helpers (`pull_writable`, `set_total_len_tc`, `redirect_to_guest`). One responsibility: tc I/O glue.
+- `flowplane-ebpf/src/verdict.rs` — the context-neutral `Verdict` enum returned by the pure core; glue maps it to `XDP_*` / `TC_ACT_*`. One responsibility: the core↔glue seam type.
+- `flowplane-ebpf/src/tc.rs` — the tc (classifier) glue programs `tc_guest_tx` and `tc_guest_dhcp`, plus tc-specific helpers (`pull_writable`, `set_total_len_tc`, `redirect_to_guest`). One responsibility: tc I/O glue.
 - `test/tc-dhcp-netns.sh` — the Phase-1 integration gate: a tap in a netns with the tc datapath attached, a scapy DHCP DISCOVER, asserts an OFFER comes back.
 
 **Modified files:**
-- `xdp-dp-common/src/lib.rs` — **new `pub mod dhcp`** holding the PURE, host-testable pieces: `write_dhcpv4_reply`, `parse_dhcpv4_request`, `looks_like_dhcpv4`, the `Dhcpv4Request`/`Dhcpv4Reply` structs, and the DHCP framing constants the writer needs (`REPLY_LEN`, message-type/offset consts). This follows the existing precedent in this file (the `fw_match` pure firewall logic at lib.rs:360 — "no_std; used by the datapath and host-tested"). The eBPF crate is `#![no_std] #![no_main]` and its `dhcp.rs` is a *bin* module, so it cannot host-run `cargo test`; the pure logic must live in `xdp-dp-common`, which IS host-testable (`cargo test -p xdp-dp-common`).
-- `xdp-dp-ebpf/src/dhcp.rs` — keeps the MAP-touching glue: `gather_dhcpv4_reply(req, meta)` (reads `DHCP_CONFIG`/`DHCP_META`), `learn_mac(ifindex, meta, eth_src)` (writes `PORT_META`/`UNDERLAY`/`INTERFACES`), and the rewritten XDP glue `try_dhcpv4_reply` that calls `xdp_dp_common::dhcp::{parse_dhcpv4_request, write_dhcpv4_reply}` around the XDP tail-resize. Remove the now-moved byte-builder and request-field constants (re-export or import from common).
-- `xdp-dp-ebpf/src/maps.rs:69` — add a second `ProgramArray` `GUEST_PROGS_TC` for the tc tail-call (tc progs can only tail-call tc progs).
-- `xdp-dp-ebpf/src/main.rs` — register `mod verdict; mod tc;`.
-- `xdp-dp/src/loader.rs` — add `attach_tc_clsact_ingress(ebpf, prog, iface)` and `register_guest_dhcp_tc(ebpf)`.
-- `xdp-dp/src/main.rs` — add a `tc-bringup` subcommand (minimal: one uplink + one guest tap, DHCP only) used by the netns gate; keeps the existing commands untouched.
+- `flowplane-common/src/lib.rs` — **new `pub mod dhcp`** holding the PURE, host-testable pieces: `write_dhcpv4_reply`, `parse_dhcpv4_request`, `looks_like_dhcpv4`, the `Dhcpv4Request`/`Dhcpv4Reply` structs, and the DHCP framing constants the writer needs (`REPLY_LEN`, message-type/offset consts). This follows the existing precedent in this file (the `fw_match` pure firewall logic at lib.rs:360 — "no_std; used by the datapath and host-tested"). The eBPF crate is `#![no_std] #![no_main]` and its `dhcp.rs` is a *bin* module, so it cannot host-run `cargo test`; the pure logic must live in `flowplane-common`, which IS host-testable (`cargo test -p flowplane-common`).
+- `flowplane-ebpf/src/dhcp.rs` — keeps the MAP-touching glue: `gather_dhcpv4_reply(req, meta)` (reads `DHCP_CONFIG`/`DHCP_META`), `learn_mac(ifindex, meta, eth_src)` (writes `PORT_META`/`UNDERLAY`/`INTERFACES`), and the rewritten XDP glue `try_dhcpv4_reply` that calls `flowplane_common::dhcp::{parse_dhcpv4_request, write_dhcpv4_reply}` around the XDP tail-resize. Remove the now-moved byte-builder and request-field constants (re-export or import from common).
+- `flowplane-ebpf/src/maps.rs:69` — add a second `ProgramArray` `GUEST_PROGS_TC` for the tc tail-call (tc progs can only tail-call tc progs).
+- `flowplane-ebpf/src/main.rs` — register `mod verdict; mod tc;`.
+- `flowplane/src/loader.rs` — add `attach_tc_clsact_ingress(ebpf, prog, iface)` and `register_guest_dhcp_tc(ebpf)`.
+- `flowplane/src/main.rs` — add a `tc-bringup` subcommand (minimal: one uplink + one guest tap, DHCP only) used by the netns gate; keeps the existing commands untouched.
 
 ---
 
 ## Task 1: `Verdict` seam type
 
 **Files:**
-- Create: `xdp-dp-ebpf/src/verdict.rs`
-- Modify: `xdp-dp-ebpf/src/main.rs:4-20` (module list)
+- Create: `flowplane-ebpf/src/verdict.rs`
+- Modify: `flowplane-ebpf/src/main.rs:4-20` (module list)
 
 - [ ] **Step 1: Create the verdict module**
 
 ```rust
-// xdp-dp-ebpf/src/verdict.rs
+// flowplane-ebpf/src/verdict.rs
 //! Context-neutral verdict returned by the pure datapath core. Each glue layer (XDP, tc) maps
 //! it to that program type's concrete return code and performs the redirect/tail-call. Keeping
 //! this enum free of `xdp_action`/`TC_ACT_*` constants is what lets one core serve both.
@@ -56,7 +56,7 @@ pub enum Verdict {
 
 - [ ] **Step 2: Register the module**
 
-In `xdp-dp-ebpf/src/main.rs`, add `mod verdict;` to the module list (alphabetical, after `mod parse;` / before `mod vip;`):
+In `flowplane-ebpf/src/main.rs`, add `mod verdict;` to the module list (alphabetical, after `mod parse;` / before `mod vip;`):
 
 ```rust
 mod parse;
@@ -67,13 +67,13 @@ mod vip;
 
 - [ ] **Step 3: Verify it compiles**
 
-Run: `nix develop --command cargo build -p xdp-dp 2>&1 | grep -E "error|Finished" | tail -5`
+Run: `nix develop --command cargo build -p flowplane 2>&1 | grep -E "error|Finished" | tail -5`
 Expected: `Finished` (a `dead_code` warning on unused variants is fine at this stage).
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add xdp-dp-ebpf/src/verdict.rs xdp-dp-ebpf/src/main.rs
+git add flowplane-ebpf/src/verdict.rs flowplane-ebpf/src/main.rs
 git commit -m "feat(ebpf): add context-neutral Verdict seam type"
 ```
 
@@ -81,13 +81,13 @@ git commit -m "feat(ebpf): add context-neutral Verdict seam type"
 
 ## Task 2: Extract the pure DHCPv4 reply serializer (+ std unit test)
 
-> **CORRECTION (location):** the pure functions + structs + DHCP constants + unit tests go in **`xdp-dp-common/src/lib.rs`** under a new `pub mod dhcp` — NOT in the eBPF crate. The eBPF crate is `#![no_std] #![no_main]` and `dhcp.rs` is a *bin* module, so `cargo test` cannot run there; `xdp-dp-common` is host-testable (`cargo test -p xdp-dp-common`, 16 tests already pass) and already hosts pure datapath logic (the `fw_match`/csum functions). The eBPF `dhcp.rs` keeps only the map-touching glue (`gather_dhcpv4_reply`, `learn_mac`) and the XDP entry `try_dhcpv4_reply`, importing the pure pieces from `xdp_dp_common::dhcp`. Tests run with `cargo test -p xdp-dp-common`, not `cargo test -p xdp-dp-ebpf`.
+> **CORRECTION (location):** the pure functions + structs + DHCP constants + unit tests go in **`flowplane-common/src/lib.rs`** under a new `pub mod dhcp` — NOT in the eBPF crate. The eBPF crate is `#![no_std] #![no_main]` and `dhcp.rs` is a *bin* module, so `cargo test` cannot run there; `flowplane-common` is host-testable (`cargo test -p flowplane-common`, 16 tests already pass) and already hosts pure datapath logic (the `fw_match`/csum functions). The eBPF `dhcp.rs` keeps only the map-touching glue (`gather_dhcpv4_reply`, `learn_mac`) and the XDP entry `try_dhcpv4_reply`, importing the pure pieces from `flowplane_common::dhcp`. Tests run with `cargo test -p flowplane-common`, not `cargo test -p flowplane-ebpf`.
 
-**Goal:** Split `try_dhcpv4_reply` (`xdp-dp-ebpf/src/dhcp.rs:53`) so the *byte-writing* is a pure function over `(data, data_end)` with no context, tail-resize, or map access — placed in `xdp-dp-common` and testable in plain `cargo test`. The context-coupled steps (read `ingress_ifindex`, MAC-learn map writes, `bpf_xdp_adjust_tail`) stay in the eBPF XDP glue.
+**Goal:** Split `try_dhcpv4_reply` (`flowplane-ebpf/src/dhcp.rs:53`) so the *byte-writing* is a pure function over `(data, data_end)` with no context, tail-resize, or map access — placed in `flowplane-common` and testable in plain `cargo test`. The context-coupled steps (read `ingress_ifindex`, MAC-learn map writes, `bpf_xdp_adjust_tail`) stay in the eBPF XDP glue.
 
 **Files:**
-- Modify: `xdp-dp-ebpf/src/dhcp.rs` (the v4 block, ~lines 53–400)
-- Test: `xdp-dp-ebpf/src/dhcp.rs` (a `#[cfg(test)] mod tests` at file end — std, no eBPF)
+- Modify: `flowplane-ebpf/src/dhcp.rs` (the v4 block, ~lines 53–400)
+- Test: `flowplane-ebpf/src/dhcp.rs` (a `#[cfg(test)] mod tests` at file end — std, no eBPF)
 
 - [ ] **Step 1: Define the pure builder's inputs**
 
@@ -104,7 +104,7 @@ pub struct Dhcpv4Reply {
     pub server_mac: [u8; 6],   // reply Ethernet src (the gateway MAC the datapath owns)
     pub xid_secs_flags: [u8; 8],// BOOTP xid(4)+secs(2)+flags(2) copied from the request
     pub mtu: u16,              // from DHCP_CONFIG (0 = omit option)
-    pub dns: [[u8; 4]; xdp_dp_common::DHCP_MAX_DNS],
+    pub dns: [[u8; 4]; flowplane_common::DHCP_MAX_DNS],
     pub dns_len: u8,
     pub lease_secs: u32,       // from DHCP_META or a default
 }
@@ -112,7 +112,7 @@ pub struct Dhcpv4Reply {
 
 - [ ] **Step 2: Write the failing unit test first**
 
-At the end of `xdp-dp-ebpf/src/dhcp.rs`, add a std test that builds a reply into a stack buffer and asserts the BOOTP/IP/UDP framing. `write_dhcpv4_reply` operates on raw `data..data_end` so a `[u8; REPLY_LEN]` buffer works under `cargo test`:
+At the end of `flowplane-ebpf/src/dhcp.rs`, add a std test that builds a reply into a stack buffer and asserts the BOOTP/IP/UDP framing. `write_dhcpv4_reply` operates on raw `data..data_end` so a `[u8; REPLY_LEN]` buffer works under `cargo test`:
 
 ```rust
 #[cfg(test)]
@@ -158,7 +158,7 @@ mod tests {
 
 - [ ] **Step 2b: Run the test to confirm it fails to compile (function missing)**
 
-Run: `nix develop --command cargo test -p xdp-dp-ebpf --lib 2>&1 | grep -E "cannot find function|error\[|test result" | head`
+Run: `nix develop --command cargo test -p flowplane-ebpf --lib 2>&1 | grep -E "cannot find function|error\[|test result" | head`
 Expected: a compile error `cannot find function write_dhcpv4_reply`.
 
 - [ ] **Step 3: Extract the pure writer**
@@ -227,18 +227,18 @@ match unsafe { write_dhcpv4_reply(ctx.data(), ctx.data_end(), &r) } {
 
 - [ ] **Step 5: Run the unit test to confirm it passes**
 
-Run: `nix develop --command cargo test -p xdp-dp-ebpf --lib write 2>&1 | grep -E "test result|error" | tail -5`
+Run: `nix develop --command cargo test -p flowplane-ebpf --lib write 2>&1 | grep -E "test result|error" | tail -5`
 Expected: `test result: ok. 1 passed`.
 
 - [ ] **Step 6: Confirm the eBPF object still builds and the XDP datapath is unchanged**
 
-Run: `nix develop --command cargo build -p xdp-dp 2>&1 | grep -E "error|Finished" | tail -3`
+Run: `nix develop --command cargo build -p flowplane 2>&1 | grep -E "error|Finished" | tail -3`
 Expected: `Finished` (the XDP path now routes through the pure writer; behaviour identical).
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add xdp-dp-ebpf/src/dhcp.rs
+git add flowplane-ebpf/src/dhcp.rs
 git commit -m "refactor(ebpf): extract pure write_dhcpv4_reply + learn_mac (unit-tested)"
 ```
 
@@ -247,12 +247,12 @@ git commit -m "refactor(ebpf): extract pure write_dhcpv4_reply + learn_mac (unit
 ## Task 3: tc glue programs (`tc_guest_tx`, `tc_guest_dhcp`)
 
 **Files:**
-- Create: `xdp-dp-ebpf/src/tc.rs`
-- Modify: `xdp-dp-ebpf/src/maps.rs:69` (add `GUEST_PROGS_TC`), `xdp-dp-ebpf/src/main.rs` (`mod tc;`)
+- Create: `flowplane-ebpf/src/tc.rs`
+- Modify: `flowplane-ebpf/src/maps.rs:69` (add `GUEST_PROGS_TC`), `flowplane-ebpf/src/main.rs` (`mod tc;`)
 
 - [ ] **Step 1: Add the tc tail-call program array**
 
-In `xdp-dp-ebpf/src/maps.rs`, after `GUEST_PROGS` (line 69):
+In `flowplane-ebpf/src/maps.rs`, after `GUEST_PROGS` (line 69):
 
 ```rust
 /// Tail-call targets for the **tc** guest-edge split. Separate from `GUEST_PROGS` because a tc
@@ -265,7 +265,7 @@ pub static GUEST_PROGS_TC: ProgramArray = ProgramArray::with_max_entries(8, 0);
 - [ ] **Step 2: Write the tc glue module**
 
 ```rust
-// xdp-dp-ebpf/src/tc.rs
+// flowplane-ebpf/src/tc.rs
 //! tc (clsact ingress) glue for the guest edge. Mirrors the XDP `guest_tx`/`guest_dhcp` split,
 //! but uses skb primitives (pull_data/change_tail) and tc return codes, and replies to the guest
 //! by redirecting back out the tap. The heavy logic lives in the shared pure core (dhcp.rs etc.).
@@ -279,7 +279,7 @@ use aya_ebpf::{
 
 use crate::dhcp::gather_dhcpv4_reply; // map-touching glue stays in the eBPF crate
 use crate::maps::{GUEST_PROGS_TC, PORT_META};
-use xdp_dp_common::dhcp::{looks_like_dhcpv4, parse_dhcpv4_request, write_dhcpv4_reply, REPLY_LEN};
+use flowplane_common::dhcp::{looks_like_dhcpv4, parse_dhcpv4_request, write_dhcpv4_reply, REPLY_LEN};
 
 /// clsact-ingress on a guest tap. Classifies guest egress; DHCP is tail-called to keep verifier
 /// cost split, mirroring the XDP path.
@@ -291,7 +291,7 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
     }
     if is_dhcpv4_request(&ctx) {
         // tail_call returns only on failure; on success control does not return here.
-        let _ = unsafe { GUEST_PROGS_TC.tail_call(&ctx, xdp_dp_common::GUEST_PROG_DHCP) };
+        let _ = unsafe { GUEST_PROGS_TC.tail_call(&ctx, flowplane_common::GUEST_PROG_DHCP) };
         return TC_ACT_OK; // tail-call miss → let it pass (mirrors XDP_PASS)
     }
     TC_ACT_OK // Phase 1: only DHCP is handled on tc; forwarding/responders land in later phases.
@@ -350,17 +350,17 @@ fn is_dhcpv4_request(ctx: &TcContext) -> bool {
 
 - [ ] **Step 3: Register the module**
 
-In `xdp-dp-ebpf/src/main.rs` add `mod tc;` (after `mod parse;`, before `mod v6;`).
+In `flowplane-ebpf/src/main.rs` add `mod tc;` (after `mod parse;`, before `mod v6;`).
 
 - [ ] **Step 4: Build the eBPF object (verifier-relevant load happens in Task 4/5; here just compile)**
 
-Run: `nix develop --command cargo build -p xdp-dp 2>&1 | grep -E "error|Finished" | tail -5`
+Run: `nix develop --command cargo build -p flowplane 2>&1 | grep -E "error|Finished" | tail -5`
 Expected: `Finished`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add xdp-dp-ebpf/src/tc.rs xdp-dp-ebpf/src/maps.rs xdp-dp-ebpf/src/main.rs
+git add flowplane-ebpf/src/tc.rs flowplane-ebpf/src/maps.rs flowplane-ebpf/src/main.rs
 git commit -m "feat(ebpf): tc clsact guest-edge glue (tc_guest_tx, tc_guest_dhcp) for DHCPv4"
 ```
 
@@ -369,12 +369,12 @@ git commit -m "feat(ebpf): tc clsact guest-edge glue (tc_guest_tx, tc_guest_dhcp
 ## Task 4: Userspace loader — clsact attach + tc tail-call registration
 
 **Files:**
-- Modify: `xdp-dp/src/loader.rs`
+- Modify: `flowplane/src/loader.rs`
 
 - [ ] **Step 1: Add the tc attach + registration helpers**
 
 ```rust
-// in xdp-dp/src/loader.rs
+// in flowplane/src/loader.rs
 use aya::programs::{tc, SchedClassifier, TcAttachType};
 
 /// Ensure a clsact qdisc exists on `iface`, then load+attach a tc (classifier) program to its
@@ -417,23 +417,23 @@ pub fn register_guest_dhcp_tc(ebpf: &mut Ebpf) -> anyhow::Result<ProgramArray<Ma
         .take_map("GUEST_PROGS_TC")
         .context("GUEST_PROGS_TC map missing")?
         .try_into()?;
-    arr.set(xdp_dp_common::GUEST_PROG_DHCP, &prog_fd, 0)
+    arr.set(flowplane_common::GUEST_PROG_DHCP, &prog_fd, 0)
         .context("set GUEST_PROGS_TC[DHCP]")?;
     Ok(arr)
 }
 ```
 
-> Note: model `register_guest_dhcp_tc` on the existing `register_guest_dhcp` (`xdp-dp/src/loader.rs:63`) for the exact `ProgramFd`/`set` calls available in this aya version; the sketch above shows intent. The returned `ProgramArray` must be held in scope by the caller for the datapath's lifetime (same as the XDP one).
+> Note: model `register_guest_dhcp_tc` on the existing `register_guest_dhcp` (`flowplane/src/loader.rs:63`) for the exact `ProgramFd`/`set` calls available in this aya version; the sketch above shows intent. The returned `ProgramArray` must be held in scope by the caller for the datapath's lifetime (same as the XDP one).
 
 - [ ] **Step 2: Build the userspace crate**
 
-Run: `nix develop --command cargo build -p xdp-dp 2>&1 | grep -E "error|Finished" | tail -5`
+Run: `nix develop --command cargo build -p flowplane 2>&1 | grep -E "error|Finished" | tail -5`
 Expected: `Finished`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add xdp-dp/src/loader.rs
+git add flowplane/src/loader.rs
 git commit -m "feat(loader): clsact-ingress tc attach + GUEST_PROGS_TC registration"
 ```
 
@@ -442,11 +442,11 @@ git commit -m "feat(loader): clsact-ingress tc attach + GUEST_PROGS_TC registrat
 ## Task 5: `tc-bringup` CLI subcommand (minimal, DHCP-only) for the gate
 
 **Files:**
-- Modify: `xdp-dp/src/main.rs` (add a `TcBringup` subcommand + arm)
+- Modify: `flowplane/src/main.rs` (add a `TcBringup` subcommand + arm)
 
 - [ ] **Step 1: Add the subcommand enum variant**
 
-In the `Cmd` enum in `xdp-dp/src/main.rs`, add:
+In the `Cmd` enum in `flowplane/src/main.rs`, add:
 
 ```rust
 /// Minimal tc guest-edge bringup for the Phase-1 DHCP gate: attach tc_guest_tx to one tap's
@@ -467,11 +467,11 @@ TcBringup {
 ```rust
 Cmd::TcBringup { tap, guest_ipv4, gateway_ipv4, guest_mac, gateway_mac, dhcp_mtu, dhcp_dns } => {
     let mut ebpf = loader::load_ebpf()?;
-    loader::maybe_install_logger(&mut ebpf); // XDP_DP_DEBUG honoured
+    loader::maybe_install_logger(&mut ebpf); // FLOWPLANE_DEBUG honoured
     let tap_ifindex = ifindex(&tap)?;
     // Program the one interface's PortMeta so tc_guest_dhcp can answer for it.
     let mut ports = maps::PortMetaMap::open(&mut ebpf)?;
-    ports.upsert(tap_ifindex, xdp_dp_common::PortMeta {
+    ports.upsert(tap_ifindex, flowplane_common::PortMeta {
         vni: 100,
         guest_ipv4: parse_ipv4(&guest_ipv4)?,
         gateway_ipv4: parse_ipv4(&gateway_ipv4)?,
@@ -486,13 +486,13 @@ Cmd::TcBringup { tap, guest_ipv4, gateway_ipv4, guest_mac, gateway_mac, dhcp_mtu
         let mut dhcp_cfg = maps::DhcpConfigMap::open(&mut ebpf)?;
         let dns4: Vec<[u8;4]> = dhcp_dns.iter()
             .filter_map(|s| s.parse::<std::net::Ipv4Addr>().ok().map(|a| a.octets())).collect();
-        let dns4_len = dns4.len().min(xdp_dp_common::DHCP_MAX_DNS) as u8;
-        let mut cfg = xdp_dp_common::DhcpConfig {
+        let dns4_len = dns4.len().min(flowplane_common::DHCP_MAX_DNS) as u8;
+        let mut cfg = flowplane_common::DhcpConfig {
             mtu: dhcp_mtu as u16, dns4_len, dns6_len: 0,
-            dns4: [[0;4]; xdp_dp_common::DHCP_MAX_DNS],
-            dns6: [[0;16]; xdp_dp_common::DHCP_MAX_DNS],
+            dns4: [[0;4]; flowplane_common::DHCP_MAX_DNS],
+            dns6: [[0;16]; flowplane_common::DHCP_MAX_DNS],
         };
-        for (i,a) in dns4.iter().take(xdp_dp_common::DHCP_MAX_DNS).enumerate() { cfg.dns4[i] = *a; }
+        for (i,a) in dns4.iter().take(flowplane_common::DHCP_MAX_DNS).enumerate() { cfg.dns4[i] = *a; }
         dhcp_cfg.set(&cfg)?;
     }
     let _gpt = loader::register_guest_dhcp_tc(&mut ebpf)?; // hold in scope
@@ -507,13 +507,13 @@ Cmd::TcBringup { tap, guest_ipv4, gateway_ipv4, guest_mac, gateway_mac, dhcp_mtu
 
 - [ ] **Step 3: Build**
 
-Run: `nix develop --command cargo build -p xdp-dp 2>&1 | grep -E "error|Finished" | tail -5`
+Run: `nix develop --command cargo build -p flowplane 2>&1 | grep -E "error|Finished" | tail -5`
 Expected: `Finished`.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add xdp-dp/src/main.rs
+git add flowplane/src/main.rs
 git commit -m "feat(cli): tc-bringup subcommand (minimal DHCP-only tc guest edge)"
 ```
 
@@ -527,7 +527,7 @@ git commit -m "feat(cli): tc-bringup subcommand (minimal DHCP-only tc guest edge
 
 - [ ] **Step 1: Write the test harness**
 
-The harness: builds the binary, creates a netns + a `vnet_hdr`-less tap, runs `xdp-dp tc-bringup` against it, injects a DHCP DISCOVER on the tap from a scapy client, and asserts an OFFER for `10.0.0.1` returns. Model the scapy client on `test/tap-dhcp-probe.py`.
+The harness: builds the binary, creates a netns + a `vnet_hdr`-less tap, runs `flowplane tc-bringup` against it, injects a DHCP DISCOVER on the tap from a scapy client, and asserts an OFFER for `10.0.0.1` returns. Model the scapy client on `test/tap-dhcp-probe.py`.
 
 ```bash
 #!/usr/bin/env bash
@@ -538,7 +538,7 @@ TAP=tctap0
 GUEST_IP=10.0.0.1
 GUEST_MAC=52:54:00:00:00:01
 GW_MAC=66:66:66:66:66:00
-BIN=target/release/xdp-dp
+BIN=target/release/flowplane
 
 cleanup() {
   [ -n "${DP_PID:-}" ] && kill "$DP_PID" 2>/dev/null || true
@@ -546,7 +546,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-nix develop --command cargo build --release -p xdp-dp >/dev/null 2>&1
+nix develop --command cargo build --release -p flowplane >/dev/null 2>&1
 
 ip netns add "$NS"
 ip netns exec "$NS" ip tuntap add dev "$TAP" mode tap
@@ -554,7 +554,7 @@ ip netns exec "$NS" ip link set "$TAP" address "$GW_MAC"
 ip netns exec "$NS" ip link set "$TAP" up
 
 # Start the tc datapath inside the netns (needs CAP_NET_ADMIN + CAP_BPF → run via sudo).
-sudo ip netns exec "$NS" env XDP_DP_DEBUG=1 "$BIN" tc-bringup \
+sudo ip netns exec "$NS" env FLOWPLANE_DEBUG=1 "$BIN" tc-bringup \
   --tap "$TAP" --guest-ipv4 "$GUEST_IP" --gateway-ipv4 "$GUEST_IP" \
   --guest-mac "$GUEST_MAC" --gateway-mac "$GW_MAC" --dhcp-dns 8.8.8.8 &
 DP_PID=$!
@@ -577,11 +577,11 @@ Run:
 chmod +x test/tc-dhcp-netns.sh
 nix develop --command ./test/tc-dhcp-netns.sh
 ```
-Expected: ends with `PASS: tc DHCP OFFER received`. If the eBPF verifier rejects `tc_guest_dhcp`, the `xdp-dp tc-bringup` process prints the verifier log — fix the glue (most likely a missing bounds re-check after `pull_data`/`change_tail`) and re-run.
+Expected: ends with `PASS: tc DHCP OFFER received`. If the eBPF verifier rejects `tc_guest_dhcp`, the `flowplane tc-bringup` process prints the verifier log — fix the glue (most likely a missing bounds re-check after `pull_data`/`change_tail`) and re-run.
 
 - [ ] **Step 3: Confirm existing tests still pass (no XDP regression)**
 
-Run: `nix develop --command cargo test -p xdp-dp-ebpf --lib 2>&1 | grep "test result"`
+Run: `nix develop --command cargo test -p flowplane-ebpf --lib 2>&1 | grep "test result"`
 Expected: `ok` (the Task-2 unit test + any existing ones).
 
 Run (root): `sudo nix develop --command ./test/conformance/run.sh 2>&1 | tail -5`

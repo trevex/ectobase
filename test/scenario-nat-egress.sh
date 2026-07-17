@@ -28,7 +28,7 @@ grpc() { sudo docker run --rm --network "container:$1" -v "$PROTO":/proto:ro ful
 
 echo "== [0] kubeconfig + stack =="
 sudo -E env "PATH=$PATH" kind get kubeconfig --name k01 > "$K1" 2>/dev/null
-kc -n ectobase-system get ds xdp-dp >/dev/null 2>&1 || fail "netplane stack not deployed on k01"
+kc -n ectobase-system get ds flowplane >/dev/null 2>&1 || fail "netplane stack not deployed on k01"
 
 echo "== [1] CRDs: VPC + private NIC + NATGateway + EGRESS NetworkPolicy =="
 cat <<YAML | kc apply -f - >/dev/null || fail "apply CRs"
@@ -82,7 +82,7 @@ kc -n ectobase-system rollout status ds/netplane-agent --timeout=60s >/dev/null 
 echo "== [4] agent programs local SNAT + EGRESS firewall (from the NetworkPolicy) =="
 XW=""
 for _ in $(seq 1 40); do
-  XW=$(sudo docker exec "$SRC_NODE" crictl ps 2>/dev/null | grep ' xdp-dp ' | awk '{print $1}' | head -1)
+  XW=$(sudo docker exec "$SRC_NODE" crictl ps 2>/dev/null | grep ' flowplane ' | awk '{print $1}' | head -1)
   [ -n "$XW" ] && sudo docker exec "$SRC_NODE" crictl logs "$XW" 2>&1 | grep -q "NAT source vni=$VNI src=$SRC_IP" && break; sleep 2
 done
 sudo docker exec "$SRC_NODE" crictl logs "$XW" 2>&1 | grep "NAT source vni=$VNI src=$SRC_IP" | tail -1 | sed 's/^/  /' || fail "agent did not program SNAT"

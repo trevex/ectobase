@@ -12,7 +12,7 @@
 #
 # GATE: (a) `ip neigh show 10.0.0.1` inside VM shows 02:00:00:00:00:01 (ARP resolved by
 #           datapath in-kernel via XDP_TX on the tap), AND
-#       (b) xdp-dp inspect on smg0 sees the VM's ARP/IP frames (guest_tx is active).
+#       (b) flowplane inspect on smg0 sees the VM's ARP/IP frames (guest_tx is active).
 #
 # NOTE: ICMP to 10.0.0.1 is NOT answered (no ICMP responder, no routable peer). The gate
 # is ARP resolution + guest_tx attachment, which are the meaningful fidelity proofs. Full
@@ -25,7 +25,7 @@
 #   ./env/tap-vm-smoke.sh run      up + test + down  (EXIT trap guarantees teardown)
 #
 # Requirements:
-#   - cargo build -p xdp-dp (binary at target/debug/xdp-dp)
+#   - cargo build -p flowplane (binary at target/debug/flowplane)
 #   - /tmp/cirros.img  (downloaded automatically if absent)
 #   - /dev/kvm
 #   - passwordless sudo
@@ -33,7 +33,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="$REPO/target/debug/xdp-dp"
+BIN="$REPO/target/debug/flowplane"
 PIDFILE="${TMPDIR:-/tmp}/sm-pids"
 CIRROS_IMG="${CIRROS_IMG:-/tmp/cirros.img}"
 CIRROS_URL="https://github.com/cirros-dev/cirros/releases/download/0.6.2/cirros-0.6.2-x86_64-disk.img"
@@ -50,7 +50,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
 cmd_up() {
-    [[ -x "$BIN" ]] || die "binary not found at $BIN — run: cargo build -p xdp-dp"
+    [[ -x "$BIN" ]] || die "binary not found at $BIN — run: cargo build -p flowplane"
     [[ -e /dev/kvm ]] || die "/dev/kvm not available — KVM required"
 
     # Download CirrOS if needed
@@ -62,7 +62,7 @@ cmd_up() {
         echo "=== CirrOS image present: $(ls -lh "$CIRROS_IMG" | awk '{print $5}')"
     fi
 
-    # ---- guest tap (smg0) — what xdp-dp attaches guest_tx to ----
+    # ---- guest tap (smg0) — what flowplane attaches guest_tx to ----
     # Note: vnet_hdr without multi_queue; QEMU uses single-queue vhost=on which works fine.
     # multi_queue requires queues=N in QEMU's -netdev, complicating the smoke.
     sudo ip tuntap add dev smg0 mode tap vnet_hdr 2>/dev/null || \
@@ -354,9 +354,9 @@ cmd_down() {
         rm -f "$PIDFILE"
     fi
 
-    # Belt-and-suspenders: kill any remaining xdp-dp bringup or qemu we started
+    # Belt-and-suspenders: kill any remaining flowplane bringup or qemu we started
     # Only match our specific instances by process name + the exact interfaces
-    sudo pkill -f 'xdp-dp (bringup|pass) --' 2>/dev/null || true
+    sudo pkill -f 'flowplane (bringup|pass) --' 2>/dev/null || true
     # Kill qemu processes using smg0 (our tap)
     # Use precise match: qemu processes with smg0 in their cmdline
     for pid in $(ps aux 2>/dev/null | grep 'qemu-system-x86_64' | grep 'smg0' | grep -v grep | awk '{print $2}'); do

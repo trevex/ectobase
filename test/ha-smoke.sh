@@ -11,7 +11,7 @@
 #         ./env/ha-smoke.sh up|down
 set -euo pipefail
 
-BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/target/debug/xdp-dp"
+BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/target/debug/flowplane"
 PIDFILE="${TMPDIR:-/tmp}/xdp-ha-pids"
 MARK="xdp-ha"
 # bpffs must live OUTSIDE /sys: `ip netns exec` remounts a fresh /sys, shadowing a bpffs at
@@ -26,7 +26,7 @@ command -v tcpdump &>/dev/null && TCPDUMP="$(command -v tcpdump)"
 die() { echo "ERROR: $*" >&2; exit 1; }
 
 cmd_up() {
-    [[ -x "$BIN" ]] || die "binary not found at $BIN — run: cargo build -p xdp-dp"
+    [[ -x "$BIN" ]] || die "binary not found at $BIN — run: cargo build -p flowplane"
     # bpffs must be mounted (under /run so it survives `ip netns exec`'s /sys remount).
     sudo mkdir -p "$BPFFS"
     mountpoint -q "$BPFFS" || sudo mount -t bpf bpf "$BPFFS"
@@ -100,10 +100,10 @@ cmd_test() {
 
     # KILL hypa's control-plane process (only hypa's bringup; the pass enablers + hypb stay).
     echo "--- SIGKILL hypa control-plane (bringup --uplink uA) ---"
-    sudo pkill -9 -f 'xdp-dp bringup --uplink uA' 2>/dev/null || true
+    sudo pkill -9 -f 'flowplane bringup --uplink uA' 2>/dev/null || true
     sleep 1
     # Verify hypa's bringup is actually gone.
-    if pgrep -f 'xdp-dp bringup --uplink uA' >/dev/null; then
+    if pgrep -f 'flowplane bringup --uplink uA' >/dev/null; then
         echo "  WARNING: hypa bringup still running after kill"
     else
         echo "  hypa control-plane is DEAD"
@@ -138,7 +138,7 @@ cmd_down() {
         while read -r pid; do sudo kill "$pid" 2>/dev/null || true; done < "$PIDFILE"
         rm -f "$PIDFILE"
     fi
-    sudo pkill -f 'xdp-dp (bringup|pass) --' 2>/dev/null || true
+    sudo pkill -f 'flowplane (bringup|pass) --' 2>/dev/null || true
     sleep 1
     # Remove the pinned datapath (so the next run is a clean first-start, not a stale adopt).
     sudo rm -rf "$PIN_A" "$PIN_B" 2>/dev/null || true

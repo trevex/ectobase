@@ -1,6 +1,6 @@
 package reflector
 
-import pb "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+import pb "github.com/trevex/ectobase/netplane/gen/routebusv1"
 
 // PublicRecord is a globally-relevant "public" prefix advertised on the typed
 // PublicPrefix channel: an edge anycast /128, a distributed-SNAT nat_ip block,

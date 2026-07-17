@@ -15,7 +15,7 @@
 # i.e. routes distributed by the central reflector to agents in a DIFFERENT cluster.
 #
 # Prereqs: the two-cluster fabric is up (sudo ./hack/clab-up.sh), and the images
-# ghcr.io/trevex/{dpservice-xdp,netplane}:dev are built. Run from the repo root.
+# ghcr.io/trevex/ectobase/{flowplane,netplane}:dev are built. Run from the repo root.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 export PATH="$HOME/go/bin:$PATH"
@@ -26,8 +26,8 @@ K1=/tmp/k01.kubeconfig
 K2=/tmp/k02.kubeconfig
 GRPCURL_IMG="fullstorydev/grpcurl:latest"
 PROTO_MNT="-v $(pwd)/api/proto:/proto:ro"
-XDP=ghcr.io/trevex/dpservice-xdp:dev
-NETPLANE=ghcr.io/trevex/netplane:dev
+XDP=ghcr.io/trevex/ectobase/flowplane:dev
+NETPLANE=ghcr.io/trevex/ectobase/netplane:dev
 
 say() { echo -e "\n=== $* ==="; }
 
@@ -43,7 +43,7 @@ for c in k01 k02; do
   sudo kind load docker-image "$NETPLANE" --name "$c" 2>&1 | tail -1
 done
 
-say "k01 (central): CRDs + full stack (reflector + xdp-dp + agent)"
+say "k01 (central): CRDs + full stack (reflector + flowplane + agent)"
 kubectl --kubeconfig "$K1" apply -k config/crd 2>&1 | tail -1
 kubectl --kubeconfig "$K1" apply -k config/deploy 2>&1 | grep -E 'created|configured|unchanged' | tail -6
 
@@ -52,10 +52,10 @@ kubectl --kubeconfig "$K1" -n ectobase-system create serviceaccount netplane-age
 TOKEN=$(kubectl --kubeconfig "$K1" -n ectobase-system create token netplane-agent --duration=8760h)
 [ -n "$TOKEN" ] && echo "token minted (${#TOKEN} chars)"
 
-say "k02 (compute): namespace + xdp-dp DS + agent (points at k01 central over the fabric)"
+say "k02 (compute): namespace + flowplane DS + agent (points at k01 central over the fabric)"
 kubectl --kubeconfig "$K2" apply -f config/deploy/namespace.yaml
 kubectl --kubeconfig "$K2" apply -f config/deploy/rbac.yaml
-kubectl --kubeconfig "$K2" apply -f config/deploy/xdp-dp.yaml
+kubectl --kubeconfig "$K2" apply -f config/deploy/flowplane.yaml
 # k02 agent kubeconfig: explicit k01 token (not the local SA), server = k01 API on the fabric.
 kubectl --kubeconfig "$K2" -n ectobase-system create configmap netplane-agent-kubeconfig \
   --from-literal=kubeconfig="apiVersion: v1
@@ -77,7 +77,7 @@ current-context: central
 # k02 agent DS: same image, reflector on the fabric, kubeconfig = the central one above.
 sed -e 's#\(--reflector=\).*#\1[fd00:db8:0:1::1]:1338"#' config/deploy/agent.yaml \
   | kubectl --kubeconfig "$K2" apply -f -
-kubectl --kubeconfig "$K2" -n ectobase-system rollout status ds/xdp-dp --timeout=90s 2>&1 | tail -1
+kubectl --kubeconfig "$K2" -n ectobase-system rollout status ds/flowplane --timeout=90s 2>&1 | tail -1
 
 say "VPC + NetworkInterfaces in k01 (central): 10.0.0.1 on k01-cp, 10.0.0.3 on k02-cp"
 kubectl --kubeconfig "$K1" apply -f - <<'EOF'
@@ -128,8 +128,8 @@ kubectl --kubeconfig "$K1" -n ectobase-system rollout restart ds/netplane-agent
 kubectl --kubeconfig "$K2" -n ectobase-system rollout restart ds/netplane-agent
 sleep 18
 
-say "routes learned cross-cluster? (k02's xdp-dp should have 10.0.0.1 via k01's underlay)"
-K2X=$(sudo docker exec k02-control-plane crictl ps --name xdp-dp -o json 2>/dev/null | grep -o '"id": "[a-f0-9]*"' | head -1 | cut -d'"' -f4)
+say "routes learned cross-cluster? (k02's flowplane should have 10.0.0.1 via k01's underlay)"
+K2X=$(sudo docker exec k02-control-plane crictl ps --name flowplane -o json 2>/dev/null | grep -o '"id": "[a-f0-9]*"' | head -1 | cut -d'"' -f4)
 sudo docker exec k02-control-plane crictl logs "$K2X" 2>&1 | grep -i ROUTE | tail -4
 
 say "stage busybox (musl) for ping"

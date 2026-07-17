@@ -4,7 +4,7 @@
 
 **Goal:** Ship a walking skeleton that proves both pillars end-to-end: a first-class `CompiledNIC` CRD compiled from the high-level CRDs, and an in-process native harness that runs the *real* datapath code (behind `Pkt`/`Maps` traits) on crafted packets — external → edge encap → host decap → firewall allow → conntrack create — with a `BPF_PROG_TEST_RUN` byte-parity anchor.
 
-**Architecture:** Extract the leaf datapath units (encap header write, firewall eval, conntrack create) plus one base-path orchestration seam into a new `no_std` `xdp-dp-core` crate generic over a `Pkt` trait (bounds-checked byte access) and a `Maps` trait (typed map access). The real `#[xdp]` programs become thin glue that builds the aya-backed impls and calls core; a new `std` `xdp-dp-sim` crate provides `Vec`/`HashMap`-backed impls and drives scenarios. A Go compiler controller emits `CompiledNIC` objects; the sim consumes the same object (via a JSON fixture) through a shared `apply()` lowering.
+**Architecture:** Extract the leaf datapath units (encap header write, firewall eval, conntrack create) plus one base-path orchestration seam into a new `no_std` `flowplane-core` crate generic over a `Pkt` trait (bounds-checked byte access) and a `Maps` trait (typed map access). The real `#[xdp]` programs become thin glue that builds the aya-backed impls and calls core; a new `std` `flowplane-sim` crate provides `Vec`/`HashMap`-backed impls and drives scenarios. A Go compiler controller emits `CompiledNIC` objects; the sim consumes the same object (via a JSON fixture) through a shared `apply()` lowering.
 
 **Tech Stack:** Rust (aya-ebpf 0.1, aya 0.13, `no_std` core, `etherparse` for packet crafting, `serde_json` for fixtures), Go (controller-runtime, envtest), protobuf-free CRDs under `net.ectobase.dev/v1alpha1`.
 
@@ -14,11 +14,11 @@
 
 ## File Structure
 
-- `xdp-dp-core/Cargo.toml`, `xdp-dp-core/src/lib.rs` — **Create**: `no_std` crate. `pub mod pkt` (`Pkt` trait + `Action`), `pub mod maps` (`Maps` trait), `pub mod parse` (pure `l4_ports`/`icmp_type_code`/`PacketSelectors` on `Pkt`), `pub mod firewall` (`fw_eval_dir`), `pub mod encap` (`write_outer_v6`, `EncapParams`), `pub mod conntrack` (`ct_key`/`ct_create`), `pub mod uplink` (base-path seam). Depends on `xdp-dp-common`.
-- `xdp-dp-ebpf/src/coreimpl.rs` — **Create**: `CtxPkt` (`Pkt` for `XdpContext`) + `GlobalMaps` (`Maps` over the `#[map]` statics).
-- `xdp-dp-ebpf/src/encap.rs`, `firewall.rs`, `ingress.rs`, `main.rs`, `maps.rs` — **Modify**: call `xdp_dp_core::*` instead of local copies; delegate `try_uplink_rx` base path to `core::uplink`.
-- `xdp-dp-sim/Cargo.toml`, `xdp-dp-sim/src/lib.rs` — **Create**: `std` crate. `VecPkt`, `MemMaps`, `SimNode`, `apply(&CompiledNic)`, `CompiledNic` (serde mirror), scenario tests.
-- `Cargo.toml` (workspace) — **Modify**: add `xdp-dp-core`, `xdp-dp-sim` to members.
+- `flowplane-core/Cargo.toml`, `flowplane-core/src/lib.rs` — **Create**: `no_std` crate. `pub mod pkt` (`Pkt` trait + `Action`), `pub mod maps` (`Maps` trait), `pub mod parse` (pure `l4_ports`/`icmp_type_code`/`PacketSelectors` on `Pkt`), `pub mod firewall` (`fw_eval_dir`), `pub mod encap` (`write_outer_v6`, `EncapParams`), `pub mod conntrack` (`ct_key`/`ct_create`), `pub mod uplink` (base-path seam). Depends on `flowplane-common`.
+- `flowplane-ebpf/src/coreimpl.rs` — **Create**: `CtxPkt` (`Pkt` for `XdpContext`) + `GlobalMaps` (`Maps` over the `#[map]` statics).
+- `flowplane-ebpf/src/encap.rs`, `firewall.rs`, `ingress.rs`, `main.rs`, `maps.rs` — **Modify**: call `flowplane_core::*` instead of local copies; delegate `try_uplink_rx` base path to `core::uplink`.
+- `flowplane-sim/Cargo.toml`, `flowplane-sim/src/lib.rs` — **Create**: `std` crate. `VecPkt`, `MemMaps`, `SimNode`, `apply(&CompiledNic)`, `CompiledNic` (serde mirror), scenario tests.
+- `Cargo.toml` (workspace) — **Modify**: add `flowplane-core`, `flowplane-sim` to members.
 - `api/v1alpha1/compilednic_types.go` — **Create**: `CompiledNIC` CRD types.
 - `api/v1alpha1/register.go`, `zz_generated.deepcopy.go` — **Modify**: register + deepcopy.
 - `netplane/controllers/compilednic.go`, `compilednic_test.go` — **Create**: the compiler (pure `Compile()` fn + reconciler) + envtest.
@@ -26,35 +26,35 @@
 
 ---
 
-## Task 1: `xdp-dp-core` crate + `Pkt`/`Maps` traits
+## Task 1: `flowplane-core` crate + `Pkt`/`Maps` traits
 
 **Files:**
-- Create: `xdp-dp-core/Cargo.toml`, `xdp-dp-core/src/lib.rs`, `xdp-dp-core/src/pkt.rs`, `xdp-dp-core/src/maps.rs`
+- Create: `flowplane-core/Cargo.toml`, `flowplane-core/src/lib.rs`, `flowplane-core/src/pkt.rs`, `flowplane-core/src/maps.rs`
 - Modify: `Cargo.toml` (workspace members)
 
 - [ ] **Step 1: Create the crate manifest**
 
-`xdp-dp-core/Cargo.toml`:
+`flowplane-core/Cargo.toml`:
 ```toml
 [package]
-name = "xdp-dp-core"
+name = "flowplane-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-xdp-dp-common = { path = "../xdp-dp-common" }
+flowplane-common = { path = "../flowplane-common" }
 ```
 
 - [ ] **Step 2: Add to the workspace**
 
-In `Cargo.toml`, add `"xdp-dp-core"` to `members` AND to `default-members` (so `cargo build`/`cargo test` build it natively):
+In `Cargo.toml`, add `"flowplane-core"` to `members` AND to `default-members` (so `cargo build`/`cargo test` build it natively):
 ```toml
-members = ["xdp-dp-common", "xdp-dp-core", "xdp-dp-ebpf", "xdp-dp"]
-default-members = ["xdp-dp-common", "xdp-dp-core", "xdp-dp"]
+members = ["flowplane-common", "flowplane-core", "flowplane-ebpf", "flowplane"]
+default-members = ["flowplane-common", "flowplane-core", "flowplane"]
 ```
 
-- [ ] **Step 3: Define the `Pkt` trait + `Action`** in `xdp-dp-core/src/pkt.rs`
+- [ ] **Step 3: Define the `Pkt` trait + `Action`** in `flowplane-core/src/pkt.rs`
 
 ```rust
 //! Packet access abstraction. eBPF impl uses raw ptr + manual bounds checks (verifier-safe);
@@ -93,10 +93,10 @@ pub trait Pkt {
 }
 ```
 
-- [ ] **Step 4: Define the `Maps` trait** in `xdp-dp-core/src/maps.rs`
+- [ ] **Step 4: Define the `Maps` trait** in `flowplane-core/src/maps.rs`
 
 ```rust
-use xdp_dp_common::{CtEntry, CtKey, FwMeta, FwRule, FwRuleKey, Local, UnderlayValue};
+use flowplane_common::{CtEntry, CtKey, FwMeta, FwRule, FwRuleKey, Local, UnderlayValue};
 
 /// Typed access to the datapath maps the core needs. eBPF impl wraps the `#[map]` statics
 /// (zero-cost); native impl is HashMap-backed. Monomorphized — no `dyn`.
@@ -110,7 +110,7 @@ pub trait Maps {
 }
 ```
 
-- [ ] **Step 5: Wire `lib.rs`** in `xdp-dp-core/src/lib.rs`
+- [ ] **Step 5: Wire `lib.rs`** in `flowplane-core/src/lib.rs`
 
 ```rust
 #![no_std]
@@ -121,49 +121,49 @@ pub mod pkt;
 
 - [ ] **Step 6: Build**
 
-Run: `cargo build -p xdp-dp-core`
+Run: `cargo build -p flowplane-core`
 Expected: PASS (compiles clean, no warnings about unused — traits are `pub`).
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add xdp-dp-core Cargo.toml
-git commit -m "feat(core): xdp-dp-core crate with Pkt + Maps traits"
+git add flowplane-core Cargo.toml
+git commit -m "feat(core): flowplane-core crate with Pkt + Maps traits"
 ```
 
 ---
 
-## Task 2: `xdp-dp-sim` crate — native `VecPkt` + `MemMaps`
+## Task 2: `flowplane-sim` crate — native `VecPkt` + `MemMaps`
 
 **Files:**
-- Create: `xdp-dp-sim/Cargo.toml`, `xdp-dp-sim/src/lib.rs`, `xdp-dp-sim/src/pkt.rs`, `xdp-dp-sim/src/maps.rs`
+- Create: `flowplane-sim/Cargo.toml`, `flowplane-sim/src/lib.rs`, `flowplane-sim/src/pkt.rs`, `flowplane-sim/src/maps.rs`
 - Modify: `Cargo.toml` (workspace members)
 
 - [ ] **Step 1: Create the crate manifest**
 
-`xdp-dp-sim/Cargo.toml`:
+`flowplane-sim/Cargo.toml`:
 ```toml
 [package]
-name = "xdp-dp-sim"
+name = "flowplane-sim"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-xdp-dp-core = { path = "../xdp-dp-core" }
-xdp-dp-common = { path = "../xdp-dp-common", features = ["user"] }
+flowplane-core = { path = "../flowplane-core" }
+flowplane-common = { path = "../flowplane-common", features = ["user"] }
 
 [dev-dependencies]
 etherparse = "0.15"
 serde_json = "1"
 ```
 
-Add `"xdp-dp-sim"` to workspace `members` and `default-members`.
+Add `"flowplane-sim"` to workspace `members` and `default-members`.
 
-- [ ] **Step 2: Write the failing test for `VecPkt`** in `xdp-dp-sim/src/pkt.rs`
+- [ ] **Step 2: Write the failing test for `VecPkt`** in `flowplane-sim/src/pkt.rs`
 
 ```rust
-use xdp_dp_core::pkt::Pkt;
+use flowplane_core::pkt::Pkt;
 
 /// Native packet backing: a Vec the core mutates in place. `head` tracks the logical front
 /// after grow/shrink so bytes aren't copied on every adjust.
@@ -201,13 +201,13 @@ mod tests {
 
 - [ ] **Step 3: Run to verify it fails**
 
-Run: `cargo test -p xdp-dp-sim`
+Run: `cargo test -p flowplane-sim`
 Expected: FAIL (does not compile — `VecPkt` unimplemented).
 
 - [ ] **Step 4: Implement `VecPkt`**
 
 ```rust
-use xdp_dp_core::pkt::Pkt;
+use flowplane_core::pkt::Pkt;
 
 pub struct VecPkt {
     buf: Vec<u8>,
@@ -265,12 +265,12 @@ impl Pkt for VecPkt {
 }
 ```
 
-- [ ] **Step 5: Write + implement `MemMaps`** in `xdp-dp-sim/src/maps.rs`
+- [ ] **Step 5: Write + implement `MemMaps`** in `flowplane-sim/src/maps.rs`
 
 ```rust
 use std::collections::HashMap;
-use xdp_dp_common::{CtEntry, CtKey, FwMeta, FwRule, FwRuleKey, Local, UnderlayValue};
-use xdp_dp_core::maps::Maps;
+use flowplane_common::{CtEntry, CtKey, FwMeta, FwRule, FwRuleKey, Local, UnderlayValue};
+use flowplane_core::maps::Maps;
 
 #[derive(Default)]
 pub struct MemMaps {
@@ -303,7 +303,7 @@ impl Maps for MemMaps {
 }
 ```
 
-Note: `CtKey` must derive `Hash + Eq` for the HashMap key — verify in `xdp-dp-common`; if absent, add `#[derive(Hash, Eq, PartialEq)]` to `CtKey` (it is `#[repr(C)]` POD, safe to derive) as part of this step and commit that change with it.
+Note: `CtKey` must derive `Hash + Eq` for the HashMap key — verify in `flowplane-common`; if absent, add `#[derive(Hash, Eq, PartialEq)]` to `CtKey` (it is `#[repr(C)]` POD, safe to derive) as part of this step and commit that change with it.
 
 - [ ] **Step 6: `lib.rs`**
 
@@ -317,13 +317,13 @@ pub use pkt::VecPkt;
 
 - [ ] **Step 7: Run tests**
 
-Run: `cargo test -p xdp-dp-sim`
+Run: `cargo test -p flowplane-sim`
 Expected: PASS (both `VecPkt` tests green).
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add xdp-dp-sim Cargo.toml xdp-dp-common
+git add flowplane-sim Cargo.toml flowplane-common
 git commit -m "feat(sim): native VecPkt + MemMaps impls"
 ```
 
@@ -332,16 +332,16 @@ git commit -m "feat(sim): native VecPkt + MemMaps impls"
 ## Task 3: Port the encap header writer to core; rewire eBPF
 
 **Files:**
-- Create: `xdp-dp-core/src/encap.rs`
-- Modify: `xdp-dp-core/src/lib.rs`, `xdp-dp-ebpf/src/encap.rs`, `xdp-dp-ebpf/src/coreimpl.rs` (create), `xdp-dp-sim/src/lib.rs`
-- Test: `xdp-dp-sim/src/encap_test.rs`
+- Create: `flowplane-core/src/encap.rs`
+- Modify: `flowplane-core/src/lib.rs`, `flowplane-ebpf/src/encap.rs`, `flowplane-ebpf/src/coreimpl.rs` (create), `flowplane-sim/src/lib.rs`
+- Test: `flowplane-sim/src/encap_test.rs`
 
-- [ ] **Step 1: Move `EncapParams` + `write_outer_v6` into core** as `xdp-dp-core/src/encap.rs`, rewritten against `Pkt`
+- [ ] **Step 1: Move `EncapParams` + `write_outer_v6` into core** as `flowplane-core/src/encap.rs`, rewritten against `Pkt`
 
 ```rust
 use crate::pkt::Pkt;
 
-/// Parameters for the outer Eth+IPv6 encap header. (Moved from xdp-dp-ebpf egress.rs.)
+/// Parameters for the outer Eth+IPv6 encap header. (Moved from flowplane-ebpf egress.rs.)
 #[derive(Copy, Clone)]
 pub struct EncapParams {
     pub gateway_mac: [u8; 6],
@@ -379,14 +379,14 @@ pub fn write_outer_v6<P: Pkt>(pkt: &mut P, e: &EncapParams) -> bool {
 }
 ```
 
-Add `pub mod encap;` to `xdp-dp-core/src/lib.rs`.
+Add `pub mod encap;` to `flowplane-core/src/lib.rs`.
 
-- [ ] **Step 2: Write the failing sim test** `xdp-dp-sim/src/encap_test.rs` (declare `mod encap_test;` in `lib.rs` under `#[cfg(test)]`)
+- [ ] **Step 2: Write the failing sim test** `flowplane-sim/src/encap_test.rs` (declare `mod encap_test;` in `lib.rs` under `#[cfg(test)]`)
 
 ```rust
-use xdp_dp_common as common;
-use xdp_dp_core::encap::{write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
-use xdp_dp_core::pkt::Pkt;
+use flowplane_common as common;
+use flowplane_core::encap::{write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
+use flowplane_core::pkt::Pkt;
 use crate::VecPkt;
 
 #[test]
@@ -420,14 +420,14 @@ fn encap_writes_outer_v6_header() {
 
 - [ ] **Step 3: Run — verify fail then pass**
 
-Run: `cargo test -p xdp-dp-sim encap_writes_outer_v6_header`
+Run: `cargo test -p flowplane-sim encap_writes_outer_v6_header`
 Expected: FAIL first (module not declared) → after wiring `mod encap_test;`, PASS.
 
-- [ ] **Step 4: Create the eBPF `Pkt`/`Maps` impls** `xdp-dp-ebpf/src/coreimpl.rs`
+- [ ] **Step 4: Create the eBPF `Pkt`/`Maps` impls** `flowplane-ebpf/src/coreimpl.rs`
 
 ```rust
 use aya_ebpf::{helpers::bpf_xdp_adjust_head, programs::XdpContext};
-use xdp_dp_core::pkt::Pkt;
+use flowplane_core::pkt::Pkt;
 
 /// `Pkt` over an XDP context. read/write are bounds-checked against data_end (verifier-safe).
 pub struct CtxPkt<'a> {
@@ -470,13 +470,13 @@ impl Pkt for CtxPkt<'_> {
 }
 ```
 
-Add `mod coreimpl;` to `xdp-dp-ebpf/src/main.rs`. (The `Maps` impl `GlobalMaps` is added in Task 4.)
+Add `mod coreimpl;` to `flowplane-ebpf/src/main.rs`. (The `Maps` impl `GlobalMaps` is added in Task 4.)
 
-- [ ] **Step 5: Rewire eBPF `encap.rs`** to call the core writer. In `xdp-dp-ebpf/src/encap.rs`, delete the local `write_outer_v6` body and replace its uses. `encap_and_redirect` becomes:
+- [ ] **Step 5: Rewire eBPF `encap.rs`** to call the core writer. In `flowplane-ebpf/src/encap.rs`, delete the local `write_outer_v6` body and replace its uses. `encap_and_redirect` becomes:
 
 ```rust
 use crate::coreimpl::CtxPkt;
-use xdp_dp_core::encap::{write_outer_v6, EncapParams, IPV6_LEN};
+use flowplane_core::encap::{write_outer_v6, EncapParams, IPV6_LEN};
 
 #[inline(always)]
 pub fn encap_and_redirect(
@@ -508,11 +508,11 @@ pub fn encap_and_redirect(
 }
 ```
 
-Update the other `write_outer_v6` caller (the `guest_tx` glue that calls it after its own `adjust_head`) to build a `CtxPkt` and call the core fn. Remove the now-unused `EncapParams` definition from `egress.rs` and `use xdp_dp_core::encap::EncapParams;` everywhere it was referenced (`egress.rs`, `encap.rs`).
+Update the other `write_outer_v6` caller (the `guest_tx` glue that calls it after its own `adjust_head`) to build a `CtxPkt` and call the core fn. Remove the now-unused `EncapParams` definition from `egress.rs` and `use flowplane_core::encap::EncapParams;` everywhere it was referenced (`egress.rs`, `encap.rs`).
 
 - [ ] **Step 6: Build the eBPF + confirm no behavior change via conformance encap test**
 
-Run: `cargo build -p xdp-dp` (builds the eBPF via aya-build)
+Run: `cargo build -p flowplane` (builds the eBPF via aya-build)
 Expected: PASS (compiles + verifier-clean at load; the load happens in conformance).
 Run: `nix develop -c bash -c 'CONF_TESTS=test_encap.py ./test/conformance/run.sh'`
 Expected: PASS (encap datapath unchanged).
@@ -520,8 +520,8 @@ Expected: PASS (encap datapath unchanged).
 - [ ] **Step 7: Commit**
 
 ```bash
-git add xdp-dp-core xdp-dp-ebpf xdp-dp-sim
-git commit -m "refactor(core): move encap header writer to xdp-dp-core behind Pkt; rewire eBPF"
+git add flowplane-core flowplane-ebpf flowplane-sim
+git commit -m "refactor(core): move encap header writer to flowplane-core behind Pkt; rewire eBPF"
 ```
 
 ---
@@ -529,21 +529,21 @@ git commit -m "refactor(core): move encap header writer to xdp-dp-core behind Pk
 ## Task 4: Port firewall eval to core; rewire eBPF
 
 **Files:**
-- Create: `xdp-dp-core/src/parse.rs`, `xdp-dp-core/src/firewall.rs`
-- Modify: `xdp-dp-core/src/lib.rs`, `xdp-dp-ebpf/src/firewall.rs`, `xdp-dp-ebpf/src/coreimpl.rs`
-- Test: `xdp-dp-sim/src/firewall_test.rs`
+- Create: `flowplane-core/src/parse.rs`, `flowplane-core/src/firewall.rs`
+- Modify: `flowplane-core/src/lib.rs`, `flowplane-ebpf/src/firewall.rs`, `flowplane-ebpf/src/coreimpl.rs`
+- Test: `flowplane-sim/src/firewall_test.rs`
 
-- [ ] **Step 1: Port the pure parse helpers to `xdp-dp-core/src/parse.rs`**, rewritten on `Pkt`: `l4_ports<P: Pkt>(pkt, ip_off) -> Option<(u8,u16,u16)>`, `icmp_type_code<P: Pkt>(pkt, ip_off) -> (u16,u16)`, and `PacketSelectors` + `fw_rule_matches`. These are faithful moves of the existing `xdp-dp-ebpf/src/parse.rs` / `firewall.rs` bodies with raw `read_unaligned(p.add(off))` replaced by `pkt.read_array::<N>(off)` / `pkt.read_u16_be(off)`. Keep the exact field offsets and matching logic (they define behavior).
+- [ ] **Step 1: Port the pure parse helpers to `flowplane-core/src/parse.rs`**, rewritten on `Pkt`: `l4_ports<P: Pkt>(pkt, ip_off) -> Option<(u8,u16,u16)>`, `icmp_type_code<P: Pkt>(pkt, ip_off) -> (u16,u16)`, and `PacketSelectors` + `fw_rule_matches`. These are faithful moves of the existing `flowplane-ebpf/src/parse.rs` / `firewall.rs` bodies with raw `read_unaligned(p.add(off))` replaced by `pkt.read_array::<N>(off)` / `pkt.read_u16_be(off)`. Keep the exact field offsets and matching logic (they define behavior).
 
-- [ ] **Step 2: Port `fw_eval_dir` to `xdp-dp-core/src/firewall.rs`**
+- [ ] **Step 2: Port `fw_eval_dir` to `flowplane-core/src/firewall.rs`**
 
 ```rust
 use crate::maps::Maps;
 use crate::parse::{icmp_type_code, l4_ports, fw_rule_matches, PacketSelectors};
 use crate::pkt::Pkt;
-use xdp_dp_common::{FwRuleKey, FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_EGRESS, FW_MAX_RULES};
+use flowplane_common::{FwRuleKey, FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_EGRESS, FW_MAX_RULES};
 
-/// Firewall verdict for one direction. Faithful port of xdp-dp-ebpf::firewall::fw_eval_dir,
+/// Firewall verdict for one direction. Faithful port of flowplane-ebpf::firewall::fw_eval_dir,
 /// generic over Pkt + Maps. Returns FW_ACTION_ACCEPT / FW_ACTION_DROP.
 pub fn fw_eval_dir<P: Pkt, M: Maps>(
     pkt: &P,
@@ -587,13 +587,13 @@ pub fn fw_eval_dir<P: Pkt, M: Maps>(
 }
 ```
 
-(Verify the exact names `FW_ACTION_ACCEPT`/`FW_ACTION_DROP`/`FW_DIR_EGRESS`/`FW_MAX_RULES`/`PacketSelectors`/`fw_rule_matches` in `xdp-dp-common`/`xdp-dp-ebpf`; move any that live in the ebpf crate into `xdp-dp-common` or `xdp-dp-core` so both sides share them.) Add `pub mod parse; pub mod firewall;` to `lib.rs`.
+(Verify the exact names `FW_ACTION_ACCEPT`/`FW_ACTION_DROP`/`FW_DIR_EGRESS`/`FW_MAX_RULES`/`PacketSelectors`/`fw_rule_matches` in `flowplane-common`/`flowplane-ebpf`; move any that live in the ebpf crate into `flowplane-common` or `flowplane-core` so both sides share them.) Add `pub mod parse; pub mod firewall;` to `lib.rs`.
 
-- [ ] **Step 3: Add `GlobalMaps` `Maps` impl** for the eBPF side in `xdp-dp-ebpf/src/coreimpl.rs`
+- [ ] **Step 3: Add `GlobalMaps` `Maps` impl** for the eBPF side in `flowplane-ebpf/src/coreimpl.rs`
 
 ```rust
-use xdp_dp_core::maps::Maps;
-use xdp_dp_common::{CtEntry, CtKey, FwMeta, FwRule, FwRuleKey, Local, UnderlayValue};
+use flowplane_core::maps::Maps;
+use flowplane_common::{CtEntry, CtKey, FwMeta, FwRule, FwRuleKey, Local, UnderlayValue};
 
 pub struct GlobalMaps;
 
@@ -619,14 +619,14 @@ impl Maps for GlobalMaps {
 }
 ```
 
-- [ ] **Step 4: Rewire eBPF `firewall.rs`** — delete the local `fw_eval_dir`/`l4_ports`/`icmp_type_code`/`fw_rule_matches`/`PacketSelectors` bodies; re-export from core. All existing callers (`ingress.rs`, `egress.rs`) change from `crate::firewall::fw_eval_dir(data, data_end, ip_off, ifindex, dir)` to `xdp_dp_core::firewall::fw_eval_dir(&CtxPkt{ctx}, &GlobalMaps, ip_off, ifindex, dir)`.
+- [ ] **Step 4: Rewire eBPF `firewall.rs`** — delete the local `fw_eval_dir`/`l4_ports`/`icmp_type_code`/`fw_rule_matches`/`PacketSelectors` bodies; re-export from core. All existing callers (`ingress.rs`, `egress.rs`) change from `crate::firewall::fw_eval_dir(data, data_end, ip_off, ifindex, dir)` to `flowplane_core::firewall::fw_eval_dir(&CtxPkt{ctx}, &GlobalMaps, ip_off, ifindex, dir)`.
 
-- [ ] **Step 5: Write the failing sim test** `xdp-dp-sim/src/firewall_test.rs`
+- [ ] **Step 5: Write the failing sim test** `flowplane-sim/src/firewall_test.rs`
 
 ```rust
 use etherparse::PacketBuilder;
-use xdp_dp_common::{FwMeta, FwRule, FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_INGRESS};
-use xdp_dp_core::firewall::fw_eval_dir;
+use flowplane_common::{FwMeta, FwRule, FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_INGRESS};
+use flowplane_core::firewall::fw_eval_dir;
 use crate::{MemMaps, VecPkt};
 
 fn tcp_v4(src: [u8;4], dst: [u8;4], sport: u16, dport: u16) -> Vec<u8> {
@@ -661,7 +661,7 @@ fn ingress_allow_rule_matches() {
 
 - [ ] **Step 6: Run — verify pass**
 
-Run: `cargo test -p xdp-dp-sim firewall`
+Run: `cargo test -p flowplane-sim firewall`
 Expected: PASS.
 Run: `nix develop -c bash -c 'CONF_TESTS=test_flows.py ./test/conformance/run.sh'`
 Expected: PASS (firewall datapath unchanged).
@@ -669,7 +669,7 @@ Expected: PASS (firewall datapath unchanged).
 - [ ] **Step 7: Commit**
 
 ```bash
-git add xdp-dp-core xdp-dp-ebpf xdp-dp-sim
+git add flowplane-core flowplane-ebpf flowplane-sim
 git commit -m "refactor(core): move firewall eval + parse helpers to core; rewire eBPF"
 ```
 
@@ -678,18 +678,18 @@ git commit -m "refactor(core): move firewall eval + parse helpers to core; rewir
 ## Task 5: Port conntrack key + create to core; rewire eBPF
 
 **Files:**
-- Create: `xdp-dp-core/src/conntrack.rs`
-- Modify: `xdp-dp-core/src/lib.rs`, `xdp-dp-ebpf/src/conntrack.rs`
-- Test: `xdp-dp-sim/src/conntrack_test.rs`
+- Create: `flowplane-core/src/conntrack.rs`
+- Modify: `flowplane-core/src/lib.rs`, `flowplane-ebpf/src/conntrack.rs`
+- Test: `flowplane-sim/src/conntrack_test.rs`
 
-- [ ] **Step 1: Port `ct_key` + a `ct_create_default` to core** (`xdp-dp-core/src/conntrack.rs`), generic over `Pkt` + `Maps`. `ct_key<P: Pkt>(pkt, ip_off, vni) -> Option<CtKey>` is a faithful move of the existing `xdp-dp-ebpf::conntrack::ct_key` (raw reads → `pkt.read_array`). `ct_create_default<P, M>(pkt, maps, ip_off, vni)` builds the forward key, and if `maps.conntrack_get(&key).is_none()` inserts a default `CtEntry` (mirror `ct_ensure_default`). Keep `invert_key`, `tcp_advance` pure moves.
+- [ ] **Step 1: Port `ct_key` + a `ct_create_default` to core** (`flowplane-core/src/conntrack.rs`), generic over `Pkt` + `Maps`. `ct_key<P: Pkt>(pkt, ip_off, vni) -> Option<CtKey>` is a faithful move of the existing `flowplane-ebpf::conntrack::ct_key` (raw reads → `pkt.read_array`). `ct_create_default<P, M>(pkt, maps, ip_off, vni)` builds the forward key, and if `maps.conntrack_get(&key).is_none()` inserts a default `CtEntry` (mirror `ct_ensure_default`). Keep `invert_key`, `tcp_advance` pure moves.
 
-- [ ] **Step 2: Rewire eBPF `conntrack.rs`** — the existing functions call `crate::maps::CONNTRACK` directly; refactor them to take `&mut impl Maps` OR keep the eBPF versions as thin wrappers that construct `GlobalMaps` and call core. Pick the wrapper approach to bound churn: eBPF `ct_ensure_default(data, data_end, ip_off, key)` → builds `CtxPkt` + `GlobalMaps` and calls `xdp_dp_core::conntrack::ct_create_default`. Verify verifier-clean.
+- [ ] **Step 2: Rewire eBPF `conntrack.rs`** — the existing functions call `crate::maps::CONNTRACK` directly; refactor them to take `&mut impl Maps` OR keep the eBPF versions as thin wrappers that construct `GlobalMaps` and call core. Pick the wrapper approach to bound churn: eBPF `ct_ensure_default(data, data_end, ip_off, key)` → builds `CtxPkt` + `GlobalMaps` and calls `flowplane_core::conntrack::ct_create_default`. Verify verifier-clean.
 
-- [ ] **Step 3: Write the failing sim test** `xdp-dp-sim/src/conntrack_test.rs`
+- [ ] **Step 3: Write the failing sim test** `flowplane-sim/src/conntrack_test.rs`
 
 ```rust
-use xdp_dp_core::conntrack::{ct_key, ct_create_default};
+use flowplane_core::conntrack::{ct_key, ct_create_default};
 use crate::{MemMaps, VecPkt};
 // reuse tcp_v4 helper via `use crate::firewall_test::tcp_v4;` (make it pub(crate))
 
@@ -707,7 +707,7 @@ fn conntrack_entry_created_for_new_flow() {
 
 - [ ] **Step 4: Run — verify pass + conformance**
 
-Run: `cargo test -p xdp-dp-sim conntrack`
+Run: `cargo test -p flowplane-sim conntrack`
 Expected: PASS.
 Run: `nix develop -c bash -c 'CONF_TESTS=test_flows.py ./test/conformance/run.sh'`
 Expected: PASS.
@@ -715,7 +715,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add xdp-dp-core xdp-dp-ebpf xdp-dp-sim
+git add flowplane-core flowplane-ebpf flowplane-sim
 git commit -m "refactor(core): move conntrack key+create to core; rewire eBPF"
 ```
 
@@ -724,11 +724,11 @@ git commit -m "refactor(core): move conntrack key+create to core; rewire eBPF"
 ## Task 6: The base-path seam + full N-S sim scenario
 
 **Files:**
-- Create: `xdp-dp-core/src/uplink.rs`
-- Modify: `xdp-dp-core/src/lib.rs`, `xdp-dp-ebpf/src/ingress.rs`, `xdp-dp-sim/src/lib.rs` (`SimNode`)
-- Test: `xdp-dp-sim/src/ns_scenario_test.rs`
+- Create: `flowplane-core/src/uplink.rs`
+- Modify: `flowplane-core/src/lib.rs`, `flowplane-ebpf/src/ingress.rs`, `flowplane-sim/src/lib.rs` (`SimNode`)
+- Test: `flowplane-sim/src/ns_scenario_test.rs`
 
-- [ ] **Step 1: Extract the uplink base path into a core seam** `xdp-dp-core/src/uplink.rs`
+- [ ] **Step 1: Extract the uplink base path into a core seam** `flowplane-core/src/uplink.rs`
 
 ```rust
 use crate::maps::Maps;
@@ -737,7 +737,7 @@ use crate::encap::{ETH_LEN, IPV6_LEN};
 use crate::firewall::fw_eval_dir;
 use crate::conntrack::ct_create_default;
 use crate::pkt::Action;
-use xdp_dp_common::{FW_ACTION_DROP, FW_DIR_INGRESS};
+use flowplane_common::{FW_ACTION_DROP, FW_DIR_INGRESS};
 
 /// Base (non-LB, non-NAT) decap+deliver: the packet is an encapped IPv4-in-IPv6 frame whose
 /// outer dst resolved to a LOCAL tap `u`. Strips the outer v6, runs the ingress firewall on the
@@ -768,16 +768,16 @@ pub fn uplink_base_deliver<P: Pkt, M: Maps>(
 }
 ```
 
-Add `pub mod uplink;`. NOTE: match the *exact* delivery semantics of the existing `try_uplink_rx` base path (inner eth handling, which ifindex, whether outer eth is reused) — read `xdp-dp-ebpf/src/ingress.rs:230-317` and mirror it precisely. The sim scenario test (Step 3) + the BPF anchor (Task 8) pin this.
+Add `pub mod uplink;`. NOTE: match the *exact* delivery semantics of the existing `try_uplink_rx` base path (inner eth handling, which ifindex, whether outer eth is reused) — read `flowplane-ebpf/src/ingress.rs:230-317` and mirror it precisely. The sim scenario test (Step 3) + the BPF anchor (Task 8) pin this.
 
-- [ ] **Step 2: Delegate the eBPF base path** — in `xdp-dp-ebpf/src/ingress.rs`, after the LB/NAT64/neighbor-NAT branches fall through (the point where today it computes `tap_ifindex`/`guest_mac` and delivers), replace the inline delivery with a call to `xdp_dp_core::uplink::uplink_base_deliver(&mut CtxPkt{ctx}, &mut GlobalMaps, vni, tap_ifindex, guest_mac)` and translate the returned `Action` into `XDP_REDIRECT`/`XDP_DROP`/`XDP_PASS`. Leave the branchy prefix untouched.
+- [ ] **Step 2: Delegate the eBPF base path** — in `flowplane-ebpf/src/ingress.rs`, after the LB/NAT64/neighbor-NAT branches fall through (the point where today it computes `tap_ifindex`/`guest_mac` and delivers), replace the inline delivery with a call to `flowplane_core::uplink::uplink_base_deliver(&mut CtxPkt{ctx}, &mut GlobalMaps, vni, tap_ifindex, guest_mac)` and translate the returned `Action` into `XDP_REDIRECT`/`XDP_DROP`/`XDP_PASS`. Leave the branchy prefix untouched.
 
-- [ ] **Step 3: Add `SimNode`** to `xdp-dp-sim/src/lib.rs`
+- [ ] **Step 3: Add `SimNode`** to `flowplane-sim/src/lib.rs`
 
 ```rust
-use xdp_dp_core::pkt::Action;
-use xdp_dp_core::encap::{write_outer_v6, EncapParams, IPV6_LEN};
-use xdp_dp_core::uplink::uplink_base_deliver;
+use flowplane_core::pkt::Action;
+use flowplane_core::encap::{write_outer_v6, EncapParams, IPV6_LEN};
+use flowplane_core::uplink::uplink_base_deliver;
 
 pub struct SimNode {
     pub maps: MemMaps,
@@ -810,13 +810,13 @@ impl SimNode {
 }
 ```
 
-- [ ] **Step 4: Write the failing full-path scenario** `xdp-dp-sim/src/ns_scenario_test.rs`
+- [ ] **Step 4: Write the failing full-path scenario** `flowplane-sim/src/ns_scenario_test.rs`
 
 ```rust
 use etherparse::PacketBuilder;
-use xdp_dp_core::pkt::Action;
-use xdp_dp_core::encap::{EncapParams, ETH_LEN, IPV6_LEN};
-use xdp_dp_common::{FwMeta, FwRule, FW_ACTION_ACCEPT, FW_DIR_INGRESS};
+use flowplane_core::pkt::Action;
+use flowplane_core::encap::{EncapParams, ETH_LEN, IPV6_LEN};
+use flowplane_common::{FwMeta, FwRule, FW_ACTION_ACCEPT, FW_DIR_INGRESS};
 use crate::SimNode;
 
 fn inner_v4_eth(src: [u8;4], dst: [u8;4], dport: u16) -> Vec<u8> {
@@ -865,11 +865,11 @@ fn external_to_guest_encap_decap_fw_ct() {
 }
 ```
 
-(Fix the `[0;6records]` typo to `[0u8;6]`; it is a placeholder to remind you to set inner MACs. Confirm inner IPv4 offset inside the decapped frame — if the inner frame carries its own Ethernet, the FW `inner_off` in `uplink_base_deliver` must account for it; align the test's frame layout with the real tunnel payload format documented in `xdp-dp-ebpf/src/ingress.rs`.)
+(Fix the `[0;6records]` typo to `[0u8;6]`; it is a placeholder to remind you to set inner MACs. Confirm inner IPv4 offset inside the decapped frame — if the inner frame carries its own Ethernet, the FW `inner_off` in `uplink_base_deliver` must account for it; align the test's frame layout with the real tunnel payload format documented in `flowplane-ebpf/src/ingress.rs`.)
 
 - [ ] **Step 5: Run — verify pass + conformance regression**
 
-Run: `cargo test -p xdp-dp-sim external_to_guest`
+Run: `cargo test -p flowplane-sim external_to_guest`
 Expected: PASS.
 Run: `nix develop -c bash -c './test/conformance/run.sh'` (full suite)
 Expected: PASS (whole datapath still green after the base-path delegation).
@@ -877,7 +877,7 @@ Expected: PASS (whole datapath still green after the base-path delegation).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add xdp-dp-core xdp-dp-ebpf xdp-dp-sim
+git add flowplane-core flowplane-ebpf flowplane-sim
 git commit -m "feat(core): uplink base-path seam; full N-S sim scenario green"
 ```
 
@@ -888,8 +888,8 @@ git commit -m "feat(core): uplink base-path seam; full N-S sim scenario green"
 **Files:**
 - Create: `api/v1alpha1/compilednic_types.go`, `netplane/controllers/compilednic.go`, `netplane/controllers/compilednic_test.go`
 - Modify: `api/v1alpha1/register.go`, `api/v1alpha1/zz_generated.deepcopy.go`
-- Create: `xdp-dp-sim/src/compilednic.rs` + test fixture `xdp-dp-sim/testdata/compilednic.json`
-- Modify: `xdp-dp-sim/src/lib.rs` (`apply`)
+- Create: `flowplane-sim/src/compilednic.rs` + test fixture `flowplane-sim/testdata/compilednic.json`
+- Modify: `flowplane-sim/src/lib.rs` (`apply`)
 
 - [ ] **Step 1: Define the `CompiledNIC` Go types** `api/v1alpha1/compilednic_types.go` (mirror the `NetworkInterface` file's conventions: `TypeMeta`/`ObjectMeta`, `+kubebuilder` markers, `List` type)
 
@@ -985,11 +985,11 @@ func TestCompile_ProducesCompiledNIC(t *testing.T) {
 Run: `cd netplane && go test ./controllers/ -run TestCompile`
 Expected: PASS.
 
-- [ ] **Step 5: Emit a fixture + add the Rust `apply()` bridge.** Add a Go test (or `go run` helper) that marshals the compiled object to `xdp-dp-sim/testdata/compilednic.json`. Then in `xdp-dp-sim/src/compilednic.rs` define a serde mirror + `apply`:
+- [ ] **Step 5: Emit a fixture + add the Rust `apply()` bridge.** Add a Go test (or `go run` helper) that marshals the compiled object to `flowplane-sim/testdata/compilednic.json`. Then in `flowplane-sim/src/compilednic.rs` define a serde mirror + `apply`:
 
 ```rust
 use serde::Deserialize;
-use xdp_dp_common::{FwMeta, FwRule, FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_INGRESS};
+use flowplane_common::{FwMeta, FwRule, FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_INGRESS};
 use crate::MemMaps;
 
 #[derive(Deserialize)]
@@ -1017,12 +1017,12 @@ pub fn apply(m: &mut MemMaps, c: &CompiledNic, tap: u32) {
 // rule_to_fw: parse CIDR -> dst_ip/dst_mask, proto string -> num, port -> min=max, action -> const.
 ```
 
-- [ ] **Step 6: Write the failing bridge test** (in `compilednic.rs` `#[cfg(test)]`): load `testdata/compilednic.json`, `apply()` into a `MemMaps`, craft a matching TCP/443 packet, assert `fw_eval_dir == FW_ACTION_ACCEPT`; craft TCP/80, assert DROP. Run `cargo test -p xdp-dp-sim compilednic`. Expected: PASS.
+- [ ] **Step 6: Write the failing bridge test** (in `compilednic.rs` `#[cfg(test)]`): load `testdata/compilednic.json`, `apply()` into a `MemMaps`, craft a matching TCP/443 packet, assert `fw_eval_dir == FW_ACTION_ACCEPT`; craft TCP/80, assert DROP. Run `cargo test -p flowplane-sim compilednic`. Expected: PASS.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add api netplane xdp-dp-sim
+git add api netplane flowplane-sim
 git commit -m "feat(compiledNIC): CRD + Compile() + sim apply() bridge"
 ```
 
@@ -1031,12 +1031,12 @@ git commit -m "feat(compiledNIC): CRD + Compile() + sim apply() bridge"
 ## Task 8: `BPF_PROG_TEST_RUN` fidelity anchor
 
 **Files:**
-- Create: `xdp-dp/tests/anchor_encap.rs` (integration test, privileged, `#[ignore]` by default)
+- Create: `flowplane/tests/anchor_encap.rs` (integration test, privileged, `#[ignore]` by default)
 - Modify: `Makefile` (`sim-anchor` target)
 
-- [ ] **Step 1: Write the anchor test** `xdp-dp/tests/anchor_encap.rs`
+- [ ] **Step 1: Write the anchor test** `flowplane/tests/anchor_encap.rs`
 
-Load the compiled eBPF object (the same artifact `xdp-dp` embeds), populate the maps for a single-NIC N-S fixture (LOCAL, UNDERLAY, FW_META/FW_RULES from the same `compilednic.json`), then for the `uplink_rx` program call `aya`'s test-run:
+Load the compiled eBPF object (the same artifact `flowplane` embeds), populate the maps for a single-NIC N-S fixture (LOCAL, UNDERLAY, FW_META/FW_RULES from the same `compilednic.json`), then for the `uplink_rx` program call `aya`'s test-run:
 
 ```rust
 // Gated: requires CAP_BPF + a kernel. Ignored unless run explicitly.
@@ -1046,11 +1046,11 @@ fn uplink_rx_bytecode_matches_native_sim() {
     // 1. Craft the SAME encapped packet the sim uses (reuse a shared builder or embed bytes).
     let encapped = fixtures::encapped_ns_frame();
     // 2. Native sim output.
-    let mut host = xdp_dp_sim::SimNode::new();
-    xdp_dp_sim::compilednic::apply(&mut host.maps, &fixtures::compiled_nic(), TAP);
+    let mut host = flowplane_sim::SimNode::new();
+    flowplane_sim::compilednic::apply(&mut host.maps, &fixtures::compiled_nic(), TAP);
     let native = host.host_uplink(&encapped, VNI, TAP, GUEST_MAC);
     // 3. Real bytecode via BPF_PROG_TEST_RUN.
-    let mut bpf = load_xdp_dp_object();
+    let mut bpf = load_flowplane_object();
     populate_maps_from_compiled(&mut bpf, &fixtures::compiled_nic());
     let prog: &mut aya::programs::Xdp = bpf.program_mut("uplink_rx").unwrap().try_into().unwrap();
     prog.load().unwrap();
@@ -1069,8 +1069,8 @@ If the installed `aya` version lacks an XDP `test_run` wrapper, call `libbpf`/th
 ```make
 .PHONY: sim-anchor
 sim-anchor: ## Run the privileged BPF_PROG_TEST_RUN byte-parity anchor
-	cargo build -p xdp-dp
-	sudo -E $$(command -v cargo) test -p xdp-dp --test anchor_encap -- --ignored --exact \
+	cargo build -p flowplane
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_encap -- --ignored --exact \
 		uplink_rx_bytecode_matches_native_sim
 ```
 
@@ -1082,7 +1082,7 @@ Expected: PASS (native pure-core output == real bytecode output). If it fails wi
 - [ ] **Step 4: Commit**
 
 ```bash
-git add xdp-dp/tests Makefile
+git add flowplane/tests Makefile
 git commit -m "test(anchor): BPF_PROG_TEST_RUN byte-parity anchor for the N-S path"
 ```
 
@@ -1098,7 +1098,7 @@ git commit -m "test(anchor): BPF_PROG_TEST_RUN byte-parity anchor for the N-S pa
 ```make
 .PHONY: sim
 sim: ## Fast in-process datapath tests (no root, no clab)
-	cargo test -p xdp-dp-core -p xdp-dp-sim
+	cargo test -p flowplane-core -p flowplane-sim
 ```
 
 - [ ] **Step 2: Document the harness** — a short README section: what `make sim` covers, what `make sim-anchor` guarantees, and the rule "new datapath feature ⇒ port the fn behind `Maps`/`Pkt`, add a sim scenario, add one anchor case."
@@ -1117,6 +1117,6 @@ git commit -m "docs: sim + sim-anchor targets and the port-a-feature workflow"
 ## Self-Review notes (for the executor)
 
 - **Spec coverage:** Task 1–2 = crates + traits (§5.1–5.2); Task 3–5 = leaf ports (§5.3); Task 6 = base-path seam + the §6 green test; Task 7 = pillars-1↔2 bridge (§4, §5.4 `apply`); Task 8 = anchor (§5.5); Task 9 = verification ergonomics (§7).
-- **The delicate task is 6** — `uplink_base_deliver` MUST mirror the real `try_uplink_rx` delivery byte-for-byte; the conformance suite (Step 5) and the anchor (Task 8) are the guards. Read `xdp-dp-ebpf/src/ingress.rs:100-317` fully before writing it.
+- **The delicate task is 6** — `uplink_base_deliver` MUST mirror the real `try_uplink_rx` delivery byte-for-byte; the conformance suite (Step 5) and the anchor (Task 8) are the guards. Read `flowplane-ebpf/src/ingress.rs:100-317` fully before writing it.
 - **Verifier risk** surfaces at eBPF load (conformance `serve` startup). If a `Pkt`/`Maps` rewire breaks the verifier, it fails immediately at Task 3/4/5 Step 6 — fix before moving on.
-- **Names to verify against the codebase before use:** `FW_ACTION_ACCEPT/DROP`, `FW_DIR_INGRESS/EGRESS`, `FW_MAX_RULES`, `PacketSelectors`, `fw_rule_matches`, `UnderlayValue` fields (`vni`, `tap_ifindex`, `guest_mac`), `CtKey`/`CtEntry` fields, `PortStatus`/`LocalObjectReference` Go types. Where a symbol lives in `xdp-dp-ebpf` but is needed by core, move it to `xdp-dp-common` (POD/consts) or `xdp-dp-core` (logic).
+- **Names to verify against the codebase before use:** `FW_ACTION_ACCEPT/DROP`, `FW_DIR_INGRESS/EGRESS`, `FW_MAX_RULES`, `PacketSelectors`, `fw_rule_matches`, `UnderlayValue` fields (`vni`, `tap_ifindex`, `guest_mac`), `CtKey`/`CtEntry` fields, `PortStatus`/`LocalObjectReference` Go types. Where a symbol lives in `flowplane-ebpf` but is needed by core, move it to `flowplane-common` (POD/consts) or `flowplane-core` (logic).

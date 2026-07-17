@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# test/edge-netns.sh — WAN-edge datapath harness (D7). Proves the `xdp-dp serve --role edge`
+# test/edge-netns.sh — WAN-edge datapath harness (D7). Proves the `flowplane serve --role edge`
 # sidecar forwards BOTH directions of North-South egress WITHOUT the fabric/k8s, using pure
 # veth/netns + crafted packets (scapy) + capture (tcpdump).
 #
-# The edge = VyOS + an xdp-dp sidecar sharing a netns. Here `edge` netns stands in for that shared
+# The edge = VyOS + an flowplane sidecar sharing a netns. Here `edge` netns stands in for that shared
 # netns: `fab` is the fabric-facing uplink (uplink_rx) and `wan` is the WAN-facing uplink (wan_rx).
 # `fabpeer` stands in for the owning hypervisor (captures the return encap / injects egress encap);
 # `wanpeer` stands in for the internet + VyOS's real WAN next-hop (injects the return / captures
 # the masqueraded egress).
 #
-#   fabpeer(owner hv)                 edge (xdp-dp sidecar)                 wanpeer(internet/WAN)
+#   fabpeer(owner hv)                 edge (flowplane sidecar)                 wanpeer(internet/WAN)
 #     fabp-eth <===veth===> fab  [uplink_rx]        [wan_rx]  wan <===veth===> wanp-eth
 #
 # RETURN (WAN -> fabric): wanpeer sends a plain IPv4 to nat_ip:nat_port. wan_rx matches the
@@ -38,7 +38,7 @@ EXT_DST="192.0.2.200"                # the egress target on the internet (TEST-N
 # IPv4 transit between the edge kernel and the WAN next-hop (VyOS's last hop to the real host).
 WAN4_EDGE="100.64.0.1"; WAN4_PEER="100.64.0.2"; WAN4_MASK=24
 LOG="$(mktemp)"; RET_PCAP="$(mktemp --suffix=.pcap)"; EGR_PCAP="$(mktemp --suffix=.pcap)"
-BIN="$ROOT/target/debug/xdp-dp"
+BIN="$ROOT/target/debug/flowplane"
 GRPCURL="$(command -v grpcurl)"
 SERVE_PID=""; PASS_PID=""; TCPDUMP_PID=""
 
@@ -49,8 +49,8 @@ cleanup() {
   [ -n "$SERVE_PID" ] && kill -9 "$SERVE_PID" 2>/dev/null
   [ -n "$PASS_PID" ] && kill -9 "$PASS_PID" 2>/dev/null
   [ -n "$TCPDUMP_PID" ] && kill -9 "$TCPDUMP_PID" 2>/dev/null
-  pkill -f "xdp-dp serve --addr $ADDR" 2>/dev/null
-  pkill -f "xdp-dp pass --iface $FABP" 2>/dev/null
+  pkill -f "flowplane serve --addr $ADDR" 2>/dev/null
+  pkill -f "flowplane pass --iface $FABP" 2>/dev/null
   ip netns del "$EDGE_NS" 2>/dev/null
   ip netns del "$FAB_NS" 2>/dev/null
   ip netns del "$WAN_NS" 2>/dev/null
@@ -58,8 +58,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "== build xdp-dp =="
-cargo build -p xdp-dp 2>&1 | tail -1
+echo "== build flowplane =="
+cargo build -p flowplane 2>&1 | tail -1
 [ -x "$BIN" ] || fail "$BIN missing after build"
 
 echo "== netns: $EDGE_NS (sidecar), $FAB_NS (owner hv), $WAN_NS (internet/WAN) =="
@@ -98,12 +98,12 @@ WANP_MAC="$(ip netns exec "$WAN_NS" cat /sys/class/net/"$WANP"/address)"
 ip netns exec "$EDGE_NS" ip neigh replace "$WAN4_PEER" lladdr "$WANP_MAC" dev "$WAN" nud permanent
 
 echo "== xdp_pass on $FABP (redirect-target enabler for wan_rx -> $FAB) =="
-ip netns exec "$FAB_NS" env XDP_DP_SKB_MODE=1 "$BIN" pass --iface "$FABP" >/dev/null 2>&1 &
+ip netns exec "$FAB_NS" env FLOWPLANE_SKB_MODE=1 "$BIN" pass --iface "$FABP" >/dev/null 2>&1 &
 PASS_PID=$!
 sleep 0.5
 
-echo "== start xdp-dp serve --role edge in $EDGE_NS (uplink_rx on $FAB, wan_rx on $WAN) =="
-ip netns exec "$EDGE_NS" env XDP_DP_SKB_MODE=1 "$BIN" serve \
+echo "== start flowplane serve --role edge in $EDGE_NS (uplink_rx on $FAB, wan_rx on $WAN) =="
+ip netns exec "$EDGE_NS" env FLOWPLANE_SKB_MODE=1 "$BIN" serve \
   --addr "$ADDR" \
   --role edge \
   --uplink "$FAB" \

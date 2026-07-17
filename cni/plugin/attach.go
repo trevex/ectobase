@@ -8,16 +8,16 @@ import (
 	"fmt"
 	"strings"
 
-	dataplanev1 "github.com/trevex/xdp-dp/cni/gen/dataplanev1"
+	dataplanev1 "github.com/trevex/ectobase/cni/gen/dataplanev1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	v1alpha1 "github.com/trevex/xdp-dp/api/v1alpha1"
+	v1alpha1 "github.com/trevex/ectobase/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/clientcmd"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -103,7 +103,7 @@ func resolvePodInterfaceRef(ctx context.Context, kubeconfigPath, podNS, podName 
 	return ns, name, nil
 }
 
-// dialDataplane dials the node-local xdp-dp DataplaneNode gRPC. The DaemonSet
+// dialDataplane dials the node-local flowplane DataplaneNode gRPC. The DaemonSet
 // runs with hostNetwork, so from the host netns the CNI reaches it over TCP at
 // dataplaneAddr (default 127.0.0.1:1337).
 func dialDataplane(addr string) (dataplanev1.DataplaneNodeClient, func() error, error) {

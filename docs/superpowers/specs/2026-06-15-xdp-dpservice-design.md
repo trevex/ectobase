@@ -1,4 +1,4 @@
-# Design: `xdp-dpservice` — an eBPF/XDP drop-in dataplane for IronCore
+# Design: `flowplaneservice` — an eBPF/XDP drop-in dataplane for IronCore
 
 **Date:** 2026-06-15
 **Status:** Approved design, pre-implementation
@@ -59,12 +59,12 @@ programmed by the **real Go `dpservice-cli`** talking to our Rust gRPC server. V
 
 ## 4. Components
 
-- **`xdp-dp` (control plane, Rust):** `tonic` gRPC server implementing the `DPDKironcore`
+- **`flowplane` (control plane, Rust):** `tonic` gRPC server implementing the `DPDKironcore`
   service; loads/attaches XDP programs via `aya`; owns and writes the BPF maps; small local
   CLI for ops/debug.
-- **`xdp-dp-ebpf` (datapath, Rust / `aya-ebpf`):** XDP programs for the guest-tap and uplink
+- **`flowplane-ebpf` (datapath, Rust / `aya-ebpf`):** XDP programs for the guest-tap and uplink
   interfaces.
-- **`xdp-dp-common` (shared crate):** map key/value structs (`#[repr(C)]`, `Pod`) shared
+- **`flowplane-common` (shared crate):** map key/value structs (`#[repr(C)]`, `Pod`) shared
   between userspace and eBPF; tunnel/header constants.
 - **Environment tooling:** scripts / `just` targets to build the two KVM hypervisor VMs, the
   host underlay bridge, k3s, and netns/tap guests.
@@ -121,15 +121,15 @@ authoritative state; maps are the kernel-visible projection.
 ## 8. Environment
 
 Host bridge as the underlay network ↔ two KVM VMs (`hypA`, `hypB`), each running k3s +
-`xdp-dp` + the XDP programs, each with a guest netns/tap. KVM confirmed available on the host
+`flowplane` + the XDP programs, each with a guest netns/tap. KVM confirmed available on the host
 (AMD-V, 16 cores, ~30 GB RAM). Built reproducibly via `just` + the Nix flake toolchain
 (already provides Rust stable + rust-src + Go); add `aya`/`bpf-linker` and qemu/libvirt.
 
 ```
 host (underlay bridge)
-  ├─ hypervisorVM-A (k3s, xdp-dp, XDP programs)
+  ├─ hypervisorVM-A (k3s, flowplane, XDP programs)
   │    └─ guest netns A  (tap0)
-  └─ hypervisorVM-B (k3s, xdp-dp, XDP programs)
+  └─ hypervisorVM-B (k3s, flowplane, XDP programs)
        └─ guest netns B  (tap0)
 
 A.guest --tap--> XDP encap --IPv6 underlay--> XDP decap --tap--> B.guest
@@ -137,7 +137,7 @@ A.guest --tap--> XDP encap --IPv6 underlay--> XDP decap --tap--> B.guest
 
 ## 9. Milestones (each independently demoable)
 
-1. **Scaffold:** cargo workspace (`xdp-dp`, `xdp-dp-ebpf`, `xdp-dp-common`), aya XDP
+1. **Scaffold:** cargo workspace (`flowplane`, `flowplane-ebpf`, `flowplane-common`), aya XDP
    "hello", flake + `just` additions, bpf-linker.
 2. **gRPC skeleton:** `tonic` server exposing `DPDKironcore` with in-memory state; real
    `dpservice-cli` connects and lists interfaces/routes.

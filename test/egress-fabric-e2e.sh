@@ -8,7 +8,7 @@
 # -> reverse-conntrack -> VM. Also exercises the HA return via BOTH edges (multi-uplink uplink_rx).
 #
 # PREREQ: the fabric is up (hack/clab-up.sh) with the netplane stack loaded on k01 and the edge
-# xdp-dp sidecars running. Needs root (docker/netns) + kubectl + the fullstorydev/grpcurl image.
+# flowplane sidecars running. Needs root (docker/netns) + kubectl + the fullstorydev/grpcurl image.
 #   sudo -E env "PATH=$HOME/go/bin:/run/current-system/sw/bin:$PATH" bash test/egress-fabric-e2e.sh
 #
 # INTERIM: the EDGE side (NEIGHBOR_NAT + external default) is programmed via grpcurl here because
@@ -21,7 +21,7 @@ VNI=100; SRC_NODE="k01-worker"; SRC_IP="10.0.0.5"
 NAT_POOL_IP="203.0.113.1"; PMIN=1024; PMAX=2047   # matches NATGateway alloc (portsPerSource 1024)
 EDGE_UL="fd00:db8:0:9::e"; TARGET="1.1.1.1"
 E1=clab-xdp-ipv6-fabric-edge1; E2=clab-xdp-ipv6-fabric-edge2
-EX1=clab-xdp-ipv6-fabric-edge1-xdp   # the edge xdp-dp sidecar (clab-managed, shares E1's netns)
+EX1=clab-xdp-ipv6-fabric-edge1-xdp   # the edge flowplane sidecar (clab-managed, shares E1's netns)
 K1=$(mktemp)   # fresh, root-owned (this script runs under sudo)
 PROTO=/home/nik/Development/ironcore-net-xdp/api/proto
 fail() { echo "FAIL: $*"; exit 1; }
@@ -32,7 +32,7 @@ grpc() { sudo docker run --rm --network "container:$1" -v "$PROTO":/proto:ro ful
 
 echo "== [0] kubeconfig + stack up =="
 sudo -E env "PATH=$HOME/go/bin:/run/current-system/sw/bin:$PATH" kind get kubeconfig --name k01 > "$K1" 2>/dev/null
-kc -n ectobase-system get ds xdp-dp >/dev/null 2>&1 || fail "netplane stack not deployed on k01 (apply config/crd + config/deploy)"
+kc -n ectobase-system get ds flowplane >/dev/null 2>&1 || fail "netplane stack not deployed on k01 (apply config/crd + config/deploy)"
 
 echo "== [1] VPC + NATGateway + source NIC (CRDs) =="
 cat <<YAML | kc apply -f - >/dev/null || fail "apply CRs"
@@ -73,7 +73,7 @@ kc -n ectobase-system rollout restart ds/netplane-agent >/dev/null 2>&1
 
 echo "== [4] agent programs local SNAT (A2) =="
 for _ in $(seq 1 40); do
-  XW=$(sudo docker exec "$SRC_NODE" crictl ps 2>/dev/null | grep -i xdp-dp | awk '{print $1}' | head -1)
+  XW=$(sudo docker exec "$SRC_NODE" crictl ps 2>/dev/null | grep -i flowplane | awk '{print $1}' | head -1)
   sudo docker exec "$SRC_NODE" crictl logs "$XW" 2>&1 | grep -q "NAT source vni=$VNI src=$SRC_IP" && break; sleep 2
 done
 sudo docker exec "$SRC_NODE" crictl logs "$XW" 2>&1 | grep "NAT source vni=$VNI src=$SRC_IP" | tail -1 | sed 's/^/  /' || fail "agent did not program SNAT"

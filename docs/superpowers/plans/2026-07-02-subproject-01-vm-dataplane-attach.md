@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Establish the monorepo foundations for running a KubeVirt VM exclusively on the eBPF dataplane — the primary-UDN research spike, the `api/` proto move, the Go workspace + kind e2e harness, the clean `dataplane.v1` gRPC, and a netns-proven `AttachInterface` on the extended `xdp-dp` daemon.
+**Goal:** Establish the monorepo foundations for running a KubeVirt VM exclusively on the eBPF dataplane — the primary-UDN research spike, the `api/` proto move, the Go workspace + kind e2e harness, the clean `dataplane.v1` gRPC, and a netns-proven `AttachInterface` on the extended `flowplane` daemon.
 
-**Architecture:** Polyglot monorepo. The Rust `xdp-dp` daemon (existing aya datapath) gains a new clean `DataplaneNode` gRPC service under `api/proto/dataplane/v1`. A Go workspace holds the future CNI + the kind-based e2e harness. This Phase A stops before the primary-UDN CNI wiring, which gets its own plan once Task 1's spike fixes the mechanism.
+**Architecture:** Polyglot monorepo. The Rust `flowplane` daemon (existing aya datapath) gains a new clean `DataplaneNode` gRPC service under `api/proto/dataplane/v1`. A Go workspace holds the future CNI + the kind-based e2e harness. This Phase A stops before the primary-UDN CNI wiring, which gets its own plan once Task 1's spike fixes the mechanism.
 
 **Tech Stack:** Rust (tonic, aya), Go (protoc-gen-go, controller-runtime/envtest, kind), KubeVirt + Multus + CDI, protobuf/gRPC, nix + Make.
 
@@ -17,11 +17,11 @@
 - `docs/superpowers/research/2026-07-02-primary-udn-mechanism.md` — **Create** (Task 1): the spike decision doc.
 - `api/proto/dataplane/v1/dpdk.proto` — **Move** from `proto/dpdk.proto` (Task 2).
 - `api/proto/dataplane/v1/dataplane.proto` — **Create** (Task 4): the clean `DataplaneNode` service.
-- `xdp-dp/build.rs` — **Modify** (Tasks 2, 4): proto include paths.
-- `xdp-dp/src/node.rs` — **Create** (Task 5): the `DataplaneNode` service impl.
-- `xdp-dp/src/main.rs` — **Modify** (Task 5): register the new service (`~355-358`).
-- `xdp-dp/src/ipam.rs` — **Create** (Task 6): minimal per-network IP allocator.
-- `xdp-dp/src/attach.rs` — **Create** (Task 7): netns interface setup + eBPF endpoint programming.
+- `flowplane/build.rs` — **Modify** (Tasks 2, 4): proto include paths.
+- `flowplane/src/node.rs` — **Create** (Task 5): the `DataplaneNode` service impl.
+- `flowplane/src/main.rs` — **Modify** (Task 5): register the new service (`~355-358`).
+- `flowplane/src/ipam.rs` — **Create** (Task 6): minimal per-network IP allocator.
+- `flowplane/src/attach.rs` — **Create** (Task 7): netns interface setup + eBPF endpoint programming.
 - `go.work` — **Create** (Task 3).
 - `cni/go.mod`, `cni/doc.go` — **Create** (Task 3): Go module placeholder for the CNI.
 - `test/e2e/go.mod`, `test/e2e/kind_test.go` — **Create** (Task 3): kind harness + smoke test.
@@ -60,11 +60,11 @@ git commit -m "docs(research): primary-UDN mechanism decision for sub-project 1"
 
 **Files:**
 - Move: `proto/dpdk.proto` → `api/proto/dataplane/v1/dpdk.proto`
-- Modify: `xdp-dp/build.rs:40-44`
+- Modify: `flowplane/build.rs:40-44`
 
 - [ ] **Step 1: Verify the current build is green (baseline).**
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 Expected: builds successfully (compiles `../proto/dpdk.proto`).
 
 - [ ] **Step 2: Move the proto with git.**
@@ -74,7 +74,7 @@ git mv proto/dpdk.proto api/proto/dataplane/v1/dpdk.proto
 rmdir proto 2>/dev/null || true
 ```
 
-- [ ] **Step 3: Update `xdp-dp/build.rs`** — replace the proto paths (lines ~40-44):
+- [ ] **Step 3: Update `flowplane/build.rs`** — replace the proto paths (lines ~40-44):
 ```rust
     // 2) Generate the dataplane gRPC services (server only).
     tonic_build::configure()
@@ -89,7 +89,7 @@ rmdir proto 2>/dev/null || true
 
 - [ ] **Step 4: Verify the build still passes** (the proto's `package dpdkironcore.v1;` is unchanged, so `main.rs:7 include_proto!("dpdkironcore.v1")` still resolves).
 
-Run: `cargo build -p xdp-dp && cargo test -p xdp-dp`
+Run: `cargo build -p flowplane && cargo test -p flowplane`
 Expected: PASS — no code change beyond the path.
 
 - [ ] **Step 5: Commit.**
@@ -116,9 +116,9 @@ use (
 )
 EOF
 mkdir -p cni test/e2e
-( cd cni && go mod init github.com/trevex/xdp-dp/cni )
+( cd cni && go mod init github.com/trevex/flowplane/cni )
 printf 'package cni\n\n// Package cni holds the primary-UDN CNI plugin (implemented in a later plan).\n' > cni/doc.go
-( cd test/e2e && go mod init github.com/trevex/xdp-dp/test/e2e )
+( cd test/e2e && go mod init github.com/trevex/flowplane/test/e2e )
 ```
 
 - [ ] **Step 2: Write the failing kind smoke test.**
@@ -204,7 +204,7 @@ git add go.work cni test/e2e hack && git commit -m "test(e2e): Go workspace + ki
 
 **Files:**
 - Create: `api/proto/dataplane/v1/dataplane.proto`
-- Modify: `xdp-dp/build.rs` (add the new proto to the compile list)
+- Modify: `flowplane/build.rs` (add the new proto to the compile list)
 
 - [ ] **Step 1: Write the clean node-agent proto.**
 
@@ -214,7 +214,7 @@ syntax = "proto3";
 
 package dataplane.v1;
 
-option go_package = "github.com/trevex/xdp-dp/cni/gen/dataplanev1;dataplanev1";
+option go_package = "github.com/trevex/flowplane/cni/gen/dataplanev1;dataplanev1";
 
 // DataplaneNode is the node-local API the CNI calls to wire a VM's interface
 // into the eBPF dataplane. Purpose-built for this platform (not dpservice).
@@ -250,7 +250,7 @@ message ConfigureNetworkRequest {
 message ConfigureNetworkResponse {}
 ```
 
-- [ ] **Step 2: Add it to the Rust codegen** — update the `compile_protos` call in `xdp-dp/build.rs`:
+- [ ] **Step 2: Add it to the Rust codegen** — update the `compile_protos` call in `flowplane/build.rs`:
 ```rust
         .compile_protos(
             &[
@@ -263,15 +263,15 @@ message ConfigureNetworkResponse {}
 
 - [ ] **Step 3: Verify Rust codegen compiles** (add a throwaway `let _ = "dataplane.v1";` usage is unnecessary — just confirm the crate builds; the module is included in Task 5).
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 Expected: PASS (both protos compile).
 
 - [ ] **Step 4: Generate + compile the Go stubs.** Add a `proto-go` target to the `Makefile` (the `go_package` option is already in `dataplane.proto`):
 ```make
 proto-go:
 	protoc -I api/proto/dataplane/v1 \
-		--go_out=cni/gen --go_opt=module=github.com/trevex/xdp-dp/cni/gen \
-		--go-grpc_out=cni/gen --go-grpc_opt=module=github.com/trevex/xdp-dp/cni/gen \
+		--go_out=cni/gen --go_opt=module=github.com/trevex/flowplane/cni/gen \
+		--go-grpc_out=cni/gen --go-grpc_opt=module=github.com/trevex/flowplane/cni/gen \
 		api/proto/dataplane/v1/dataplane.proto
 ```
 
@@ -285,17 +285,17 @@ git add -A && git commit -m "feat(api): clean dataplane.v1 DataplaneNode gRPC + 
 
 ---
 
-### Task 5: `DataplaneNode` service skeleton on `xdp-dp`
+### Task 5: `DataplaneNode` service skeleton on `flowplane`
 
-`xdp-dp` is a **binary** crate (no lib target), so external `tests/` can't reach its internals. Test the service **in-crate** by calling the trait method directly — no client/server/lib-target needed (`build.rs` stays server-only).
+`flowplane` is a **binary** crate (no lib target), so external `tests/` can't reach its internals. Test the service **in-crate** by calling the trait method directly — no client/server/lib-target needed (`build.rs` stays server-only).
 
 **Files:**
-- Create: `xdp-dp/src/node.rs` (service impl + in-crate unit test)
-- Modify: `xdp-dp/src/main.rs` (`mod node;` + service registration at `~355-358`)
+- Create: `flowplane/src/node.rs` (service impl + in-crate unit test)
+- Modify: `flowplane/src/main.rs` (`mod node;` + service registration at `~355-358`)
 
 - [ ] **Step 1: Write the skeleton with a failing unit test** (`configure_network` returns `unimplemented` so the test is red first).
 
-Create `xdp-dp/src/node.rs`:
+Create `flowplane/src/node.rs`:
 ```rust
 use tonic::{Request, Response, Status};
 
@@ -346,21 +346,21 @@ mod tests {
     }
 }
 ```
-Add `mod node;` near the other module declarations in `xdp-dp/src/main.rs`.
+Add `mod node;` near the other module declarations in `flowplane/src/main.rs`.
 
 - [ ] **Step 2: Run the test to verify it fails.**
 
-Run: `cargo test -p xdp-dp node::tests::configure_network_returns_ok`
+Run: `cargo test -p flowplane node::tests::configure_network_returns_ok`
 Expected: FAIL — `unwrap()` panics on the `unimplemented` status.
 
 - [ ] **Step 3: Make it green** — change `configure_network` to return `Ok(Response::new(ConfigureNetworkResponse {}))`.
 
 - [ ] **Step 4: Run the test to verify it passes.**
 
-Run: `cargo test -p xdp-dp node::tests::configure_network_returns_ok`
+Run: `cargo test -p flowplane node::tests::configure_network_returns_ok`
 Expected: PASS.
 
-- [ ] **Step 5: Register the service on the gRPC server.** In `xdp-dp/src/main.rs` at `~355-358`:
+- [ ] **Step 5: Register the service on the gRPC server.** In `flowplane/src/main.rs` at `~355-358`:
 ```rust
             tonic::transport::Server::builder()
                 .add_service(health_service)
@@ -373,12 +373,12 @@ Expected: PASS.
 
 - [ ] **Step 6: Build to confirm the server wires up.**
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 Expected: PASS.
 
 - [ ] **Step 7: Commit.**
 ```bash
-git add -A && git commit -m "feat(node): DataplaneNode gRPC service skeleton on xdp-dp"
+git add -A && git commit -m "feat(node): DataplaneNode gRPC service skeleton on flowplane"
 ```
 
 ---
@@ -386,12 +386,12 @@ git add -A && git commit -m "feat(node): DataplaneNode gRPC service skeleton on 
 ### Task 6: Minimal per-network IPAM (Rust, unit-tested)
 
 **Files:**
-- Create: `xdp-dp/src/ipam.rs`
-- Modify: `xdp-dp/src/main.rs` (`mod ipam;`)
+- Create: `flowplane/src/ipam.rs`
+- Modify: `flowplane/src/main.rs` (`mod ipam;`)
 
 - [ ] **Step 1: Write failing unit tests.**
 
-Create `xdp-dp/src/ipam.rs` with tests first:
+Create `flowplane/src/ipam.rs` with tests first:
 ```rust
 //! Minimal per-network IPv4 allocator for sub-project ① (no CRD/state store yet).
 use std::collections::BTreeSet;
@@ -432,14 +432,14 @@ mod tests {
 
 - [ ] **Step 2: Run tests to verify they fail.**
 
-Run: `cargo test -p xdp-dp ipam`
+Run: `cargo test -p flowplane ipam`
 Expected: FAIL — `Ipam::{new,allocate,release}` not implemented.
 
-- [ ] **Step 3: Implement `Ipam`** (`new` parses a `ipnet::Ipv4Net`-style prefix; `allocate` returns the lowest free host ≠ gateway; `release` clears it). Use the `ipnet` crate (add to `xdp-dp/Cargo.toml`) or hand-roll the prefix math. Return `Ipv4Addr`.
+- [ ] **Step 3: Implement `Ipam`** (`new` parses a `ipnet::Ipv4Net`-style prefix; `allocate` returns the lowest free host ≠ gateway; `release` clears it). Use the `ipnet` crate (add to `flowplane/Cargo.toml`) or hand-roll the prefix math. Return `Ipv4Addr`.
 
 - [ ] **Step 4: Run tests to verify they pass.**
 
-Run: `cargo test -p xdp-dp ipam`
+Run: `cargo test -p flowplane ipam`
 Expected: PASS (3 tests).
 
 - [ ] **Step 5: Commit.**
@@ -452,13 +452,13 @@ git add -A && git commit -m "feat(ipam): minimal per-network IPv4 allocator"
 ### Task 7: `AttachInterface`/`DetachInterface` real implementation (netns-tested)
 
 **Files:**
-- Create: `xdp-dp/src/attach.rs`
-- Modify: `xdp-dp/src/node.rs` (call into `attach`), `xdp-dp/src/main.rs` (`mod attach;`)
+- Create: `flowplane/src/attach.rs`
+- Modify: `flowplane/src/node.rs` (call into `attach`), `flowplane/src/main.rs` (`mod attach;`)
 - Create: `test/attach-netns.sh` (mirrors existing `test/netns-e2e.sh` style)
 
 - [ ] **Step 1: Write a failing netns integration test.**
 
-Create `test/attach-netns.sh` that: creates a netns, starts `xdp-dp` with the DataplaneNode service, calls `AttachInterface{interface_id, netns_path=/var/run/netns/X, vni, requested_ips=[]}` via `grpcurl`, then asserts (a) a veth/tap appears in the netns, (b) the returned IP is pingable from the netns to the dataplane gateway, and (c) the eBPF interface map contains the endpoint. Print `PASS`/`FAIL`.
+Create `test/attach-netns.sh` that: creates a netns, starts `flowplane` with the DataplaneNode service, calls `AttachInterface{interface_id, netns_path=/var/run/netns/X, vni, requested_ips=[]}` via `grpcurl`, then asserts (a) a veth/tap appears in the netns, (b) the returned IP is pingable from the netns to the dataplane gateway, and (c) the eBPF interface map contains the endpoint. Print `PASS`/`FAIL`.
 
 - [ ] **Step 2: Run it to verify it fails.**
 
@@ -468,8 +468,8 @@ Expected: FAIL — `attach_interface` returns `unimplemented`.
 - [ ] **Step 3: Implement `attach.rs`** — `attach_interface(req, &Ipam, &BpfMaps) -> AttachInterfaceResponse`:
   - allocate MAC (if empty) and IP (via `Ipam`, Task 6);
   - create the veth pair, move one end into `netns_path`, name it, set MAC/up;
-  - program the eBPF interface/endpoint map for `{vni, ip, mac, ifindex}` reusing the existing datapath maps (`xdp-dp/src/maps.rs`);
-  - attach the tc/XDP program to the host-side interface (reuse `xdp-dp/src/loader.rs` helpers);
+  - program the eBPF interface/endpoint map for `{vni, ip, mac, ifindex}` reusing the existing datapath maps (`flowplane/src/maps.rs`);
+  - attach the tc/XDP program to the host-side interface (reuse `flowplane/src/loader.rs` helpers);
   - return `{ifname, ips, mac, gateway}`.
   `detach_interface` reverses it (unprogram map, delete veth). Wire both into `node.rs`.
 
@@ -480,7 +480,7 @@ Expected: `PASS` — interface created, IP reachable, endpoint programmed.
 
 - [ ] **Step 5: Run the full Rust test suite (no regressions).**
 
-Run: `cargo test -p xdp-dp`
+Run: `cargo test -p flowplane`
 Expected: PASS.
 
 - [ ] **Step 6: Commit.**
@@ -492,4 +492,4 @@ git add -A && git commit -m "feat(attach): AttachInterface/DetachInterface with 
 
 ## Phase A exit / next plan
 
-At this point the monorepo has: the `api/` proto root, the clean `dataplane.v1` `DataplaneNode` service on `xdp-dp`, a netns-proven interface attach, minimal IPAM, and a working kind harness — all committed and testable. **The primary-UDN mechanism is now known (Task 1).** Re-enter `superpowers:writing-plans` to write **Phase B**: the Go CNI plugin (wiring the VM's primary interface per Task 1's decision), `hack/install-stack.sh` (pinned KubeVirt/Multus/CDI), and the two-VM kind e2e (boot + DHCP + ping + **no-pod-net** assertion) that is ①'s acceptance gate.
+At this point the monorepo has: the `api/` proto root, the clean `dataplane.v1` `DataplaneNode` service on `flowplane`, a netns-proven interface attach, minimal IPAM, and a working kind harness — all committed and testable. **The primary-UDN mechanism is now known (Task 1).** Re-enter `superpowers:writing-plans` to write **Phase B**: the Go CNI plugin (wiring the VM's primary interface per Task 1's decision), `hack/install-stack.sh` (pinned KubeVirt/Multus/CDI), and the two-VM kind e2e (boot + DHCP + ping + **no-pod-net** assertion) that is ①'s acceptance gate.

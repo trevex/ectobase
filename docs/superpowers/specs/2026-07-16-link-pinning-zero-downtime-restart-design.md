@@ -2,13 +2,13 @@
 
 > **Context:** Follow-on to the graceful-restart work (hardening backlog item #1, branch
 > `hardening/resilience-security`, commits `127e021`→`169dd7f`). That work made the datapath
-> *state* survive an xdp-dp restart (pinned maps + adopt + `IFACE_META` journal). This adds
+> *state* survive an flowplane restart (pinned maps + adopt + `IFACE_META` journal). This adds
 > *forwarding continuity* — the eBPF programs stay attached across the restart, closing the
 > ~1–2 s packet gap the current design opens by re-attaching fresh.
 
 ## Problem
 
-xdp-dp attaches its programs via `bpf_link`s owned by the process — `uplink_rx` on the fabric uplink,
+flowplane attaches its programs via `bpf_link`s owned by the process — `uplink_rx` on the fabric uplink,
 `wan_rx` on the edge, and a guest program per veth. On kernel ≥ 6.6 (our nodes are 7.0.11), aya
 attaches XDP via `bpf_link_create` and tc via **tcx** (`BPF_TCX_INGRESS`), so *all three are fd-owned
 links*. When the process exits, the links are destroyed and the programs **detach**. On restart,
@@ -40,7 +40,7 @@ atomically swaps in its own (possibly newer) bytecode. This is exactly Cilium's 
 
 ## Flag
 
-New `Serve` flag `--pin-links` (bool, **default true**), with env fallback `XDP_DP_PIN_LINKS` for the
+New `Serve` flag `--pin-links` (bool, **default true**), with env fallback `FLOWPLANE_PIN_LINKS` for the
 DaemonSet. Threaded into `Control::bring_up`, `attach_edge`, and the guest attach path.
 `--pin-links=false` restores today's Task-5 behavior exactly (in-process links, fresh re-attach on
 restart) — the safe rollback.

@@ -1,4 +1,4 @@
-# Cilium helm values for the xdp-dp IPv6 fabric kind clusters (installed by
+# Cilium helm values for the flowplane IPv6 fabric kind clusters (installed by
 # hack/clab/cilium-up.sh). Design goals, in order:
 #
 #  1. IPv6-only — the fabric under test is IPv6-only (kind ipFamily: ipv6).

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	pb "github.com/trevex/ectobase/netplane/gen/routebusv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"

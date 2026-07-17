@@ -4,33 +4,33 @@
 
 **Goal:** Answer guest ARP requests and IPv6 Neighbor Solicitations from the tc (clsact-ingress) datapath, reusing Phase 1's composable pure-core/per-type-glue pattern — so the tap guest edge now handles ARP + ND + DHCP on tc.
 
-**Architecture:** Extract the in-place ARP/ND reply builders into pure, host-tested functions in `xdp-dp-common` (like Phase 1's `write_dhcpv4_reply`); the XDP glue (`arp_nd.rs`) and the tc glue (`tc.rs`) both call them. ARP/ND are **fixed-size in-place rewrites** (no `change_tail`), so the tc glue only needs `pull_data` (to make the header range writable) + the builder + `bpf_redirect(tap,0)`.
+**Architecture:** Extract the in-place ARP/ND reply builders into pure, host-tested functions in `flowplane-common` (like Phase 1's `write_dhcpv4_reply`); the XDP glue (`arp_nd.rs`) and the tc glue (`tc.rs`) both call them. ARP/ND are **fixed-size in-place rewrites** (no `change_tail`), so the tc glue only needs `pull_data` (to make the header range writable) + the builder + `bpf_redirect(tap,0)`.
 
-**Tech Stack:** Rust + aya/aya-ebpf 0.1 (eBPF), `xdp-dp-common` host unit tests (`cargo test -p xdp-dp-common`), bash + ip-netns + scapy gate. Build via `nix develop`.
+**Tech Stack:** Rust + aya/aya-ebpf 0.1 (eBPF), `flowplane-common` host unit tests (`cargo test -p flowplane-common`), bash + ip-netns + scapy gate. Build via `nix develop`.
 
-**Context for the implementer:** Phase 1 established the pattern. Pure packet logic lives in `xdp-dp-common` (`#![cfg_attr(not(feature="user"), no_std)]`, host-testable — see the `dhcp` module added in Phase 1 and the `fw_match` precedent). The eBPF crate is `#![no_std] #![no_main]`; its modules are a bin target (NOT host-testable). The tc entry is `xdp-dp-ebpf/src/tc.rs::tc_guest_tx` (clsact ingress; reads ifindex via `(*ctx.skb.skb).ifindex`; replies via `bpf_redirect(ifindex, 0)` which returns `TC_ACT_REDIRECT`). `aya_ebpf::bindings::{TC_ACT_OK, TC_ACT_SHOT}` are `i32`. The current XDP responders are `xdp-dp-ebpf/src/arp_nd.rs::{try_arp_reply, try_nd_reply}` — they rewrite in place and return `Some(reflect(ctx))`. `reflect`/`GW_MAC` stay in `arp_nd.rs`.
+**Context for the implementer:** Phase 1 established the pattern. Pure packet logic lives in `flowplane-common` (`#![cfg_attr(not(feature="user"), no_std)]`, host-testable — see the `dhcp` module added in Phase 1 and the `fw_match` precedent). The eBPF crate is `#![no_std] #![no_main]`; its modules are a bin target (NOT host-testable). The tc entry is `flowplane-ebpf/src/tc.rs::tc_guest_tx` (clsact ingress; reads ifindex via `(*ctx.skb.skb).ifindex`; replies via `bpf_redirect(ifindex, 0)` which returns `TC_ACT_REDIRECT`). `aya_ebpf::bindings::{TC_ACT_OK, TC_ACT_SHOT}` are `i32`. The current XDP responders are `flowplane-ebpf/src/arp_nd.rs::{try_arp_reply, try_nd_reply}` — they rewrite in place and return `Some(reflect(ctx))`. `reflect`/`GW_MAC` stay in `arp_nd.rs`.
 
 ---
 
 ## File Structure
 
 **Modified files:**
-- `xdp-dp-common/src/lib.rs` — new `pub mod arp_nd` with the PURE, host-tested builders `try_write_arp_reply`, `try_write_nd_reply`, the `csum16` helper, and the small constants they need (`ETH_LEN`, `IPV6_LEN`, ethertypes, `ARP_LEN`, ND type codes). Mirrors the Phase 1 `dhcp` module.
-- `xdp-dp-ebpf/src/arp_nd.rs` — `try_arp_reply`/`try_nd_reply` become thin XDP glue calling the common builders (behaviour-preserving). `reflect` + `GW_MAC` stay.
-- `xdp-dp-ebpf/src/tc.rs` — `tc_guest_tx` gains ARP + ND handling before the DHCP tail-call.
+- `flowplane-common/src/lib.rs` — new `pub mod arp_nd` with the PURE, host-tested builders `try_write_arp_reply`, `try_write_nd_reply`, the `csum16` helper, and the small constants they need (`ETH_LEN`, `IPV6_LEN`, ethertypes, `ARP_LEN`, ND type codes). Mirrors the Phase 1 `dhcp` module.
+- `flowplane-ebpf/src/arp_nd.rs` — `try_arp_reply`/`try_nd_reply` become thin XDP glue calling the common builders (behaviour-preserving). `reflect` + `GW_MAC` stay.
+- `flowplane-ebpf/src/tc.rs` — `tc_guest_tx` gains ARP + ND handling before the DHCP tail-call.
 - `test/tc-dhcp-netns.sh` + `test/tap-dhcp-probe.py` — extend the Phase-1 gate to also send an ARP request (expect a reply) and an ND NS (expect an NA).
 
 ---
 
-## Task 1: Pure ARP reply builder in `xdp-dp-common` (+ unit test) + rewire XDP
+## Task 1: Pure ARP reply builder in `flowplane-common` (+ unit test) + rewire XDP
 
 **Files:**
-- Modify: `xdp-dp-common/src/lib.rs` (new `pub mod arp_nd`), `xdp-dp-ebpf/src/arp_nd.rs`
-- Test: `xdp-dp-common/src/lib.rs` (`#[cfg(test)]` in the new module)
+- Modify: `flowplane-common/src/lib.rs` (new `pub mod arp_nd`), `flowplane-ebpf/src/arp_nd.rs`
+- Test: `flowplane-common/src/lib.rs` (`#[cfg(test)]` in the new module)
 
 - [ ] **Step 1: Write the failing unit test in the new `pub mod arp_nd`**
 
-Add to `xdp-dp-common/src/lib.rs`:
+Add to `flowplane-common/src/lib.rs`:
 ```rust
 /// Pure, host-tested ARP/ND responder byte-rewrites. The datapath glue (XDP and tc) supplies the
 /// gateway address + reply MAC (from maps) and ensures the header range is writable; these
@@ -78,12 +78,12 @@ pub mod arp_nd {
 }
 ```
 
-Run: `nix develop --command cargo test -p xdp-dp-common 2>&1 | grep -E "cannot find|test result" | tail`
+Run: `nix develop --command cargo test -p flowplane-common 2>&1 | grep -E "cannot find|test result" | tail`
 Expected: compile error `cannot find function try_write_arp_reply`.
 
 - [ ] **Step 2: Implement `try_write_arp_reply` (move the body from `arp_nd.rs:36-74`)**
 
-Add inside `pub mod arp_nd` (before the test module). Move the in-place rewrite from `xdp-dp-ebpf/src/arp_nd.rs::try_arp_reply`, replacing `meta.gateway_ipv4`→`gateway_ipv4`, `meta.guest_mac`→`reply_mac`, `ctx.data()/data_end()`→params, dropping the `reflect`/`Some`:
+Add inside `pub mod arp_nd` (before the test module). Move the in-place rewrite from `flowplane-ebpf/src/arp_nd.rs::try_arp_reply`, replacing `meta.gateway_ipv4`→`gateway_ipv4`, `meta.guest_mac`→`reply_mac`, `ctx.data()/data_end()`→params, dropping the `reflect`/`Some`:
 ```rust
     /// If [data,data_end) is an ARP request for `gateway_ipv4`, rewrite it in place into a reply
     /// from `reply_mac`/`gateway_ipv4` and return true. Else false (unchanged). Caller must have
@@ -114,18 +114,18 @@ Add inside `pub mod arp_nd` (before the test module). Move the in-place rewrite 
         true
     }
 ```
-`write6`/`write16` are tiny pointer-copy helpers currently in `xdp-dp-ebpf/src/parse.rs`. Add equivalents to the common `arp_nd` module (small `#[inline(always)] unsafe fn write6/write16(dst: *mut u8, src: &[u8; N])`), or to a shared spot in common — define them locally in the module to keep it self-contained.
+`write6`/`write16` are tiny pointer-copy helpers currently in `flowplane-ebpf/src/parse.rs`. Add equivalents to the common `arp_nd` module (small `#[inline(always)] unsafe fn write6/write16(dst: *mut u8, src: &[u8; N])`), or to a shared spot in common — define them locally in the module to keep it self-contained.
 
-Run: `nix develop --command cargo test -p xdp-dp-common 2>&1 | grep "test result"` → ok (the new 2 tests + Phase-1's 18 → 20).
+Run: `nix develop --command cargo test -p flowplane-common 2>&1 | grep "test result"` → ok (the new 2 tests + Phase-1's 18 → 20).
 
 - [ ] **Step 3: Rewire the XDP `try_arp_reply` to call the common builder (behaviour-preserving)**
 
-Replace the body of `xdp-dp-ebpf/src/arp_nd.rs::try_arp_reply` with:
+Replace the body of `flowplane-ebpf/src/arp_nd.rs::try_arp_reply` with:
 ```rust
 #[inline(always)]
 pub fn try_arp_reply(ctx: &XdpContext, meta: &PortMeta) -> Option<u32> {
     if unsafe {
-        xdp_dp_common::arp_nd::try_write_arp_reply(
+        flowplane_common::arp_nd::try_write_arp_reply(
             ctx.data(), ctx.data_end(), meta.gateway_ipv4, meta.guest_mac,
         )
     } {
@@ -137,20 +137,20 @@ pub fn try_arp_reply(ctx: &XdpContext, meta: &PortMeta) -> Option<u32> {
 ```
 Remove the now-dead local `ARP_LEN` const if unused. Keep `GW_MAC`, `reflect`, `csum16` (csum16 is still used by `try_nd_reply` until Task 2 moves it).
 
-Run: `nix develop --command cargo build -p xdp-dp 2>&1 | grep -E "error|Finished" | tail -3` → Finished.
+Run: `nix develop --command cargo build -p flowplane 2>&1 | grep -E "error|Finished" | tail -3` → Finished.
 
 - [ ] **Step 4: Commit**
 ```bash
-git add xdp-dp-common/src/lib.rs xdp-dp-ebpf/src/arp_nd.rs
-git commit -m "refactor(arp): pure host-tested try_write_arp_reply in xdp-dp-common"
+git add flowplane-common/src/lib.rs flowplane-ebpf/src/arp_nd.rs
+git commit -m "refactor(arp): pure host-tested try_write_arp_reply in flowplane-common"
 ```
 
 ---
 
-## Task 2: Pure ND reply builder in `xdp-dp-common` (+ unit test) + rewire XDP
+## Task 2: Pure ND reply builder in `flowplane-common` (+ unit test) + rewire XDP
 
 **Files:**
-- Modify: `xdp-dp-common/src/lib.rs` (extend `pub mod arp_nd`), `xdp-dp-ebpf/src/arp_nd.rs`
+- Modify: `flowplane-common/src/lib.rs` (extend `pub mod arp_nd`), `flowplane-ebpf/src/arp_nd.rs`
 
 - [ ] **Step 1: Add the failing ND unit test**
 
@@ -194,16 +194,16 @@ Move `csum16` (`arp_nd.rs:84-98`) into the common `arp_nd` module as `pub(crate)
     ) -> bool { /* move body; meta.gateway_ipv6 → gateway_ipv6, meta.guest_mac → reply_mac,
         ctx.data()/data_end() → params, return true at the end / false on each early-out */ }
 ```
-Run: `nix develop --command cargo test -p xdp-dp-common 2>&1 | grep "test result"` → ok (now 21 tests).
+Run: `nix develop --command cargo test -p flowplane-common 2>&1 | grep "test result"` → ok (now 21 tests).
 
 - [ ] **Step 3: Rewire the XDP `try_nd_reply`**
 
-Replace the body of `xdp-dp-ebpf/src/arp_nd.rs::try_nd_reply` with:
+Replace the body of `flowplane-ebpf/src/arp_nd.rs::try_nd_reply` with:
 ```rust
 #[inline(always)]
 pub fn try_nd_reply(ctx: &XdpContext, meta: &PortMeta) -> Option<u32> {
     if unsafe {
-        xdp_dp_common::arp_nd::try_write_nd_reply(
+        flowplane_common::arp_nd::try_write_nd_reply(
             ctx.data(), ctx.data_end(), meta.gateway_ipv6, meta.guest_mac,
         )
     } {
@@ -213,14 +213,14 @@ pub fn try_nd_reply(ctx: &XdpContext, meta: &PortMeta) -> Option<u32> {
     }
 }
 ```
-Remove the now-dead local `csum16`/`ND_NS`/`ND_NA`/`ARP_LEN` consts from `arp_nd.rs` if nothing else uses them (check: `csum16` is `pub(crate)` — grep for other users with `grep -rn csum16 xdp-dp-ebpf/src`; if used elsewhere, keep a re-export or leave it). Keep `GW_MAC` + `reflect`.
+Remove the now-dead local `csum16`/`ND_NS`/`ND_NA`/`ARP_LEN` consts from `arp_nd.rs` if nothing else uses them (check: `csum16` is `pub(crate)` — grep for other users with `grep -rn csum16 flowplane-ebpf/src`; if used elsewhere, keep a re-export or leave it). Keep `GW_MAC` + `reflect`.
 
-Run: `nix develop --command cargo build -p xdp-dp 2>&1 | grep -E "error|Finished" | tail -3` → Finished.
+Run: `nix develop --command cargo build -p flowplane 2>&1 | grep -E "error|Finished" | tail -3` → Finished.
 
 - [ ] **Step 4: Commit**
 ```bash
-git add xdp-dp-common/src/lib.rs xdp-dp-ebpf/src/arp_nd.rs
-git commit -m "refactor(nd): pure host-tested try_write_nd_reply in xdp-dp-common"
+git add flowplane-common/src/lib.rs flowplane-ebpf/src/arp_nd.rs
+git commit -m "refactor(nd): pure host-tested try_write_nd_reply in flowplane-common"
 ```
 
 ---
@@ -228,7 +228,7 @@ git commit -m "refactor(nd): pure host-tested try_write_nd_reply in xdp-dp-commo
 ## Task 3: tc glue — answer ARP + ND in `tc_guest_tx`
 
 **Files:**
-- Modify: `xdp-dp-ebpf/src/tc.rs`
+- Modify: `flowplane-ebpf/src/tc.rs`
 
 - [ ] **Step 1: Extend `tc_guest_tx`**
 
@@ -251,12 +251,12 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
         u16::from_be(unsafe { core::ptr::read_unaligned((data as *const u8).add(12) as *const u16) });
 
     // ARP request for the gateway → reply in place, redirect back to the guest.
-    if ethertype == xdp_dp_common::arp_nd::ETH_P_ARP {
+    if ethertype == flowplane_common::arp_nd::ETH_P_ARP {
         if ctx
-            .pull_data((xdp_dp_common::arp_nd::ETH_LEN + xdp_dp_common::arp_nd::ARP_LEN) as u32)
+            .pull_data((flowplane_common::arp_nd::ETH_LEN + flowplane_common::arp_nd::ARP_LEN) as u32)
             .is_ok()
             && unsafe {
-                xdp_dp_common::arp_nd::try_write_arp_reply(
+                flowplane_common::arp_nd::try_write_arp_reply(
                     ctx.data(), ctx.data_end(), meta.gateway_ipv4, meta.guest_mac,
                 )
             }
@@ -267,12 +267,12 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
     }
 
     // IPv6 → may be an ND Neighbor Solicitation for the gateway.
-    if ethertype == xdp_dp_common::arp_nd::ETH_P_IPV6 {
+    if ethertype == flowplane_common::arp_nd::ETH_P_IPV6 {
         const ND_FRAME: usize =
-            xdp_dp_common::arp_nd::ETH_LEN + xdp_dp_common::arp_nd::IPV6_LEN + 32;
+            flowplane_common::arp_nd::ETH_LEN + flowplane_common::arp_nd::IPV6_LEN + 32;
         if ctx.pull_data(ND_FRAME as u32).is_ok()
             && unsafe {
-                xdp_dp_common::arp_nd::try_write_nd_reply(
+                flowplane_common::arp_nd::try_write_nd_reply(
                     ctx.data(), ctx.data_end(), meta.gateway_ipv6, meta.guest_mac,
                 )
             }
@@ -284,24 +284,24 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
 
     // DHCPv4 → tail-call the dedicated responder.
     if looks_like_dhcpv4(ctx.data(), ctx.data_end()) {
-        let _ = unsafe { GUEST_PROGS_TC.tail_call(&ctx, xdp_dp_common::GUEST_PROG_DHCP) };
+        let _ = unsafe { GUEST_PROGS_TC.tail_call(&ctx, flowplane_common::GUEST_PROG_DHCP) };
         return TC_ACT_OK;
     }
     TC_ACT_OK
 }
 ```
 Notes:
-- `ETH_P_IPV6`/`ETH_LEN`/`IPV6_LEN`/`ARP_LEN`/`ETH_P_ARP` must be `pub` in `xdp_dp_common::arp_nd` (Tasks 1–2 made the ethertypes/lengths `pub const`). Ensure they are.
+- `ETH_P_IPV6`/`ETH_LEN`/`IPV6_LEN`/`ARP_LEN`/`ETH_P_ARP` must be `pub` in `flowplane_common::arp_nd` (Tasks 1–2 made the ethertypes/lengths `pub const`). Ensure they are.
 - `pull_data(N)` makes N bytes writable; for ARP (`42`) and ND (`86`) these are ≤ the real frame length (guest ARP frames are padded to ≥60; an NS is ~86+), so the pull succeeds (unlike the Phase-1 DHCP pitfall where the pull exceeded a short DISCOVER). The builders also bounds-check internally and return false if the frame is shorter.
 - The IPv6 branch falls through on non-NS so DHCPv6 (later phase) is unaffected.
 
 - [ ] **Step 2: Build**
 
-Run: `nix develop --command cargo build -p xdp-dp 2>&1 | grep -E "error|Finished" | tail -5` → Finished.
+Run: `nix develop --command cargo build -p flowplane 2>&1 | grep -E "error|Finished" | tail -5` → Finished.
 
 - [ ] **Step 3: Commit**
 ```bash
-git add xdp-dp-ebpf/src/tc.rs
+git add flowplane-ebpf/src/tc.rs
 git commit -m "feat(ebpf): tc guest edge answers ARP + IPv6 ND (in place, redirect to guest)"
 ```
 
@@ -330,18 +330,18 @@ Expected: ends with `PASS: tc DHCP + ARP + ND OK`, exit 0. If a responder doesn'
 
 - [ ] **Step 4: Regression + commit**
 
-Run: `nix develop --command cargo test -p xdp-dp-common 2>&1 | grep "test result"` → ok (21).
+Run: `nix develop --command cargo test -p flowplane-common 2>&1 | grep "test result"` → ok (21).
 ```bash
-git add test/tc-dhcp-netns.sh test/tap-dhcp-probe.py xdp-dp/src/main.rs
+git add test/tc-dhcp-netns.sh test/tap-dhcp-probe.py flowplane/src/main.rs
 git commit -m "test(tc): extend Phase gate — tc datapath answers ARP + ND + DHCP"
 ```
-(Include `xdp-dp/src/main.rs` only if you added the `--gateway6` arg to `tc-bringup`.)
+(Include `flowplane/src/main.rs` only if you added the `--gateway6` arg to `tc-bringup`.)
 
 ---
 
 ## Done criteria (Phase 2)
 
-- `try_write_arp_reply` + `try_write_nd_reply` are pure and host-unit-tested (`cargo test -p xdp-dp-common`, ~21 passing).
+- `try_write_arp_reply` + `try_write_nd_reply` are pure and host-unit-tested (`cargo test -p flowplane-common`, ~21 passing).
 - The XDP datapath is behaviour-identical (responders now route through the common builders; `reflect` unchanged).
 - `tc_guest_tx` answers ARP + ND in place and redirects to the guest; `test/tc-dhcp-netns.sh` prints `PASS: tc DHCP + ARP + ND OK`.
 - Pattern extended cleanly: the tap guest edge handles ARP + ND + DHCP on tc. Phase 3 (overlay egress: encap + redirect-to-uplink) follows.

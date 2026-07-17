@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: flowplane
+  namespace: ectobase-system
+  labels:
+    app.kubernetes.io/name: flowplane
+    app.kubernetes.io/part-of: netplane
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flowplane
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: flowplane
+        app.kubernetes.io/part-of: netplane
+    spec:
+      # Programs the host datapath and listens on the node-local loopback, so it
+      # shares the host network namespace (gRPC on 127.0.0.1:1337) and PID ns.
+      hostNetwork: true
+      hostPID: true
+      dnsPolicy: ClusterFirstWithHostNet
+      # Run on every node, including the control-plane (it is a fabric host too).
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: flowplane
+          image: ghcr.io/trevex/ectobase/flowplane:dev
+          imagePullPolicy: IfNotPresent
+          # The overlay uplink is the containerlab fabric link (eth1, not the kind
+          # mgmt eth0). The encap outer-eth next hop is the fabric router (sw1),
+          # resolved dynamically as the "router" neighbour on the uplink so ONE
+          # DaemonSet works on every node (each node's sw1 port has its own MAC).
+          # local-underlay is left unset: flowplane infers the /64 from dummy0 (the
+          # fabric loopback), NOT status.hostIP (which is the kind mgmt address).
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              UPLINK="${XDP_UPLINK:-eth1}"
+              for i in $(seq 1 30); do
+                GW_MAC=$(ip -6 neigh show dev "$UPLINK" | grep -m1 router | grep -o 'lladdr [0-9a-f:]*' | cut -d' ' -f2 || true)
+                [ -n "$GW_MAC" ] && break
+                echo "waiting for fabric router neighbour on $UPLINK ($i)"; sleep 1
+              done
+              if [ -z "$GW_MAC" ]; then echo "FATAL: no fabric router neighbour on $UPLINK" >&2; exit 1; fi
+              # Dual-homed fabric: also run uplink_rx on any OTHER up ethN (the second ToR uplink),
+              # so N-S returns arriving via either ToR (ECMP) are decapped. Primary/LOCAL = $UPLINK.
+              # eth0 is the kind/docker mgmt iface (not fabric) — skip it; fabric uplinks are eth1+.
+              EXTRA=""
+              for d in $(ls /sys/class/net | grep -E '^eth[1-9][0-9]*$'); do
+                [ "$d" = "$UPLINK" ] && continue
+                [ "$(cat /sys/class/net/$d/operstate 2>/dev/null)" = "up" ] && EXTRA="$EXTRA --extra-uplink $d"
+              done
+              echo "flowplane wrapper: uplink=$UPLINK gateway_mac=$GW_MAC extra=[$EXTRA]"
+              exec flowplane serve --addr 127.0.0.1:1337 --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC" $EXTRA
+          env:
+            # kind nodes have no native XDP; force generic/SKB mode.
+            - name: FLOWPLANE_SKB_MODE
+              value: "1"
+          securityContext:
+            # Needs CAP_BPF/CAP_NET_ADMIN to load XDP programs and program the
+            # host datapath; privileged is the blunt first-draft form.
+            privileged: true
+          volumeMounts:
+            - name: bpf-fs
+              mountPath: /sys/fs/bpf
+              mountPropagation: Bidirectional
+            - name: sys
+              mountPath: /sys
+              readOnly: true
+            - name: lib-modules
+              mountPath: /lib/modules
+              readOnly: true
+            - name: netns
+              mountPath: /var/run/netns
+              mountPropagation: Bidirectional
+      volumes:
+        - name: bpf-fs
+          hostPath:
+            path: /sys/fs/bpf
+            type: DirectoryOrCreate
+        - name: sys
+          hostPath:
+            path: /sys
+            type: Directory
+        - name: lib-modules
+          hostPath:
+            path: /lib/modules
+            type: Directory
+        - name: netns
+          hostPath:
+            path: /var/run/netns
+            type: DirectoryOrCreate

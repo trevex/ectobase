@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deploy the lean IPv6 BGP-unnumbered fabric (FRR ToR + a kind cluster whose two
-# nodes are xdp-dp "hosts"). Idempotent: containerlab deploy --reconfigure tears
+# nodes are flowplane "hosts"). Idempotent: containerlab deploy --reconfigure tears
 # down a prior instance of the same lab first. Mirrors the reference lab's
 # `make deploy` (icn/sandbox/Makefile).
 #
@@ -20,7 +20,7 @@ command -v kind >/dev/null 2>&1 || { echo "clab-up: kind not found on PATH" >&2;
 # Build it if missing, and render the per-node prefix mount paths to absolutes
 # (kind rejects relative extraMounts hostPaths).
 REPO="$(cd "${HERE}/.." && pwd)"
-if ! docker image inspect kindest/node-fabric:dev >/dev/null 2>&1; then
+if ! docker image inspect ghcr.io/trevex/ectobase/kind-node-fabric:dev >/dev/null 2>&1; then
   make -C "${REPO}" image-kindnode
 fi
 PREFIX_DIR="${HERE}/clab/prefixes"

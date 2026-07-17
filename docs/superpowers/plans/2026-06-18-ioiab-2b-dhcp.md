@@ -4,18 +4,18 @@
 
 **Goal:** Serve DHCPv4 + DHCPv6 in the XDP datapath at full dpservice feature parity (same flags, same options), so guests obtain their configured IP/MTU/DNS/hostname/PXE in-datapath — closing the last dpservice conformance test to reach **89/89**.
 
-**Architecture:** Two in-XDP responders in `xdp-dp-ebpf/src/dhcp.rs` (`try_dhcpv4_reply`, `try_dhcpv6_reply`), dispatched from `guest_tx` after ARP/ND, mirroring `arp_nd.rs` and dpservice's `dhcp_node.c`/`dhcpv6_node.c`. They rewrite the request in place into the reply (`bpf_xdp_adjust_tail` to size options), recompute checksums, and `XDP_TX`. Config comes from a server-wide `DHCP_CONFIG` map (`--dhcp-mtu/--dhcp-dns/--dhcpv6-dns`) and a per-interface `DHCP_META` map (`hostname` + `pxe_config`).
+**Architecture:** Two in-XDP responders in `flowplane-ebpf/src/dhcp.rs` (`try_dhcpv4_reply`, `try_dhcpv6_reply`), dispatched from `guest_tx` after ARP/ND, mirroring `arp_nd.rs` and dpservice's `dhcp_node.c`/`dhcpv6_node.c`. They rewrite the request in place into the reply (`bpf_xdp_adjust_tail` to size options), recompute checksums, and `XDP_TX`. Config comes from a server-wide `DHCP_CONFIG` map (`--dhcp-mtu/--dhcp-dns/--dhcpv6-dns`) and a per-interface `DHCP_META` map (`hostname` + `pxe_config`).
 
 **Tech Stack:** Rust + aya/aya-ebpf (rustup `nightly-2026-01-15`, bpf-linker), the dpservice `test/conformance` suite, scapy.
 
 **Spec:** `docs/superpowers/specs/2026-06-18-ioiab-2b-dhcp-design.md`. dpservice references (clone at `/tmp/dpservice`, tag v0.3.22): `src/nodes/dhcp_node.c`, `src/nodes/dhcpv6_node.c`, `include/nodes/dhcp_node.h`, `include/protocols/dp_dhcpv6.h`.
 
 **Starting point (verified):**
-- `xdp-dp-ebpf/src/egress.rs::try_guest_tx`: dispatch order is `try_arp_reply` → `try_nd_reply` → IPv6 ethertype branch (`v6_guest_tx`) → IPv4 pipeline. We insert DHCP dispatch after `try_nd_reply`.
+- `flowplane-ebpf/src/egress.rs::try_guest_tx`: dispatch order is `try_arp_reply` → `try_nd_reply` → IPv6 ethertype branch (`v6_guest_tx`) → IPv4 pipeline. We insert DHCP dispatch after `try_nd_reply`.
 - `arp_nd.rs` shows the in-place rewrite + `XDP_TX` pattern; `try_nd_reply` shows fixed-size IPv6/ICMPv6 build + pseudo-header checksum (`csum16`); `nat64.rs` shows `bpf_xdp_adjust_*` resize with verifier-safe fixed-offset checksums.
 - `PortMeta{vni, guest_ipv4, gateway_ipv4, guest_mac, _pad, underlay_ipv6, gateway_ipv6, guest_ipv6}`.
-- `xdp-dp/src/main.rs` `Cmd::Serve` already PARSES `--dhcp-mtu/--dhcp-dns/--dhcpv6-dns` (currently `_dhcp_*` unused). `Cmd::Bringup` does NOT yet.
-- `xdp-dp/src/grpc.rs::create_interface` decodes `ipv4_config`/`ipv6_config`; it does NOT yet read `hostname` (field 10) or `pxe_config` (field 6, `PxeConfig{next_server, boot_filename}`).
+- `flowplane/src/main.rs` `Cmd::Serve` already PARSES `--dhcp-mtu/--dhcp-dns/--dhcpv6-dns` (currently `_dhcp_*` unused). `Cmd::Bringup` does NOT yet.
+- `flowplane/src/grpc.rs::create_interface` decodes `ipv4_config`/`ipv6_config`; it does NOT yet read `hostname` (field 10) or `pxe_config` (field 6, `PxeConfig{next_server, boot_filename}`).
 - `test/conformance/conftest.py::prepare_ipv4` has `request_ip(...)` commented out (deferred in 2a). `config.py`: `dhcp_mtu=1337`, `dhcp_dns1/2`, `dhcpv6_dns1/2`, `pxe_server`, `pxe_file_name`, `ipxe_file_name`. `VM1.hostname="vm1-host"`.
 
 **dpservice byte-exact facts (pin from source — deterministic):**
@@ -27,13 +27,13 @@
 ## File Structure
 
 ```
-xdp-dp-common/src/lib.rs    # + DhcpConfig, DhcpMeta (POD) + layout tests
-xdp-dp-ebpf/src/
+flowplane-common/src/lib.rs    # + DhcpConfig, DhcpMeta (POD) + layout tests
+flowplane-ebpf/src/
   maps.rs                   # + DHCP_CONFIG (Array<DhcpConfig>), DHCP_META (HashMap<u32, DhcpMeta>)
   dhcp.rs                   # NEW: try_dhcpv4_reply, try_dhcpv6_reply + helpers (option build, checksum)
   egress.rs                 # guest_tx: dispatch DHCP after ARP/ND
   main.rs                   # + mod dhcp;
-xdp-dp/src/
+flowplane/src/
   maps.rs                   # DhcpConfigMap, DhcpMetaMap wrappers
   control.rs                # set_dhcp_config(); create_interface writes DHCP_META
   grpc.rs                   # create_interface decodes hostname + pxe_config
@@ -48,9 +48,9 @@ env/netns-e2e.sh            # DHCPv4 + DHCPv6 probe tests
 
 ## Task 1: Common POD types + maps + layout tests
 
-**Files:** Modify `xdp-dp-common/src/lib.rs`, `xdp-dp-ebpf/src/maps.rs`, `xdp-dp/src/maps.rs`
+**Files:** Modify `flowplane-common/src/lib.rs`, `flowplane-ebpf/src/maps.rs`, `flowplane/src/maps.rs`
 
-- [ ] **Step 1: Add `DhcpConfig` + `DhcpMeta`** to `xdp-dp-common/src/lib.rs` (near `PortMeta`):
+- [ ] **Step 1: Add `DhcpConfig` + `DhcpMeta`** to `flowplane-common/src/lib.rs` (near `PortMeta`):
 
 ```rust
 /// Max DNS servers per family carried in DHCP replies (dpservice's flags are repeatable; this caps
@@ -94,7 +94,7 @@ module:
     }
 ```
 
-- [ ] **Step 2: Declare the eBPF maps** in `xdp-dp-ebpf/src/maps.rs` (add `DhcpConfig, DhcpMeta` to the `xdp_dp_common::{...}` import, then append):
+- [ ] **Step 2: Declare the eBPF maps** in `flowplane-ebpf/src/maps.rs` (add `DhcpConfig, DhcpMeta` to the `flowplane_common::{...}` import, then append):
 
 ```rust
 #[map]
@@ -103,7 +103,7 @@ pub static DHCP_CONFIG: Array<DhcpConfig> = Array::with_max_entries(1, 0);
 pub static DHCP_META: HashMap<u32, DhcpMeta> = HashMap::with_max_entries(1024, 0);
 ```
 
-- [ ] **Step 3: Userspace wrappers** in `xdp-dp/src/maps.rs` (add `DhcpConfig, DhcpMeta` to imports; mirror the existing `PortMetaMap`/`ConfigMap` wrappers):
+- [ ] **Step 3: Userspace wrappers** in `flowplane/src/maps.rs` (add `DhcpConfig, DhcpMeta` to imports; mirror the existing `PortMetaMap`/`ConfigMap` wrappers):
 
 ```rust
 pub struct DhcpConfigMap {
@@ -139,21 +139,21 @@ impl DhcpMetaMap {
 - [ ] **Step 4: Build + layout test.**
 
 ```bash
-cargo test -p xdp-dp-common 2>&1 | tail -3   # dhcp_layouts passes
-cargo build -p xdp-dp 2>&1 | tail -3          # compiles (maps unused yet = ok)
+cargo test -p flowplane-common 2>&1 | tail -3   # dhcp_layouts passes
+cargo build -p flowplane 2>&1 | tail -3          # compiles (maps unused yet = ok)
 ```
 
 - [ ] **Step 5: Commit.**
 
 ```bash
 cargo fmt --all
-git add xdp-dp-common xdp-dp-ebpf/src/maps.rs xdp-dp/src/maps.rs
+git add flowplane-common flowplane-ebpf/src/maps.rs flowplane/src/maps.rs
 git commit -m "feat(dhcp): DhcpConfig/DhcpMeta POD + DHCP_CONFIG/DHCP_META maps"
 ```
 
 ## Task 2: Plumbing — flags → DHCP_CONFIG, gRPC/CLI → DHCP_META, harness flags
 
-**Files:** Modify `xdp-dp/src/control.rs`, `xdp-dp/src/grpc.rs`, `xdp-dp/src/main.rs`, `test/conformance/dp_service.py`
+**Files:** Modify `flowplane/src/control.rs`, `flowplane/src/grpc.rs`, `flowplane/src/main.rs`, `test/conformance/dp_service.py`
 
 - [ ] **Step 1: `Control` opens the DHCP maps + setters.** In `control.rs` `Inner` add `dhcp_config: crate::maps::DhcpConfigMap` and `dhcp_meta: crate::maps::DhcpMetaMap`; open both in `bring_up` (mirror the other `::open` calls) and init them in the `Inner { .. }` literal. Add methods:
 
@@ -164,15 +164,15 @@ git commit -m "feat(dhcp): DhcpConfig/DhcpMeta POD + DHCP_CONFIG/DHCP_META maps"
         dns4: &[[u8; 4]],
         dns6: &[[u8; 16]],
     ) -> anyhow::Result<()> {
-        let mut cfg = xdp_dp_common::DhcpConfig {
+        let mut cfg = flowplane_common::DhcpConfig {
             mtu,
-            dns4_len: dns4.len().min(xdp_dp_common::DHCP_MAX_DNS) as u8,
-            dns6_len: dns6.len().min(xdp_dp_common::DHCP_MAX_DNS) as u8,
-            dns4: [[0; 4]; xdp_dp_common::DHCP_MAX_DNS],
-            dns6: [[0; 16]; xdp_dp_common::DHCP_MAX_DNS],
+            dns4_len: dns4.len().min(flowplane_common::DHCP_MAX_DNS) as u8,
+            dns6_len: dns6.len().min(flowplane_common::DHCP_MAX_DNS) as u8,
+            dns4: [[0; 4]; flowplane_common::DHCP_MAX_DNS],
+            dns6: [[0; 16]; flowplane_common::DHCP_MAX_DNS],
         };
-        for (i, a) in dns4.iter().take(xdp_dp_common::DHCP_MAX_DNS).enumerate() { cfg.dns4[i] = *a; }
-        for (i, a) in dns6.iter().take(xdp_dp_common::DHCP_MAX_DNS).enumerate() { cfg.dns6[i] = *a; }
+        for (i, a) in dns4.iter().take(flowplane_common::DHCP_MAX_DNS).enumerate() { cfg.dns4[i] = *a; }
+        for (i, a) in dns6.iter().take(flowplane_common::DHCP_MAX_DNS).enumerate() { cfg.dns6[i] = *a; }
         self.inner.lock().unwrap().dhcp_config.set(&cfg)
     }
 
@@ -186,7 +186,7 @@ git commit -m "feat(dhcp): DhcpConfig/DhcpMeta POD + DHCP_CONFIG/DHCP_META maps"
         let mut g = self.inner.lock().unwrap();
         let ifindex = *g.by_ifindex.get(interface_id)
             .ok_or_else(|| anyhow::anyhow!("unknown interface"))?;
-        let mut m = xdp_dp_common::DhcpMeta {
+        let mut m = flowplane_common::DhcpMeta {
             hostname: [0; 64], hostname_len: 0,
             boot_filename: [0; 64], boot_filename_len: 0,
             _pad: [0; 2], pxe_ip,
@@ -229,7 +229,7 @@ Also clear DHCP_META in `detach_interface` (add `let _ = g.dhcp_meta.remove(tap)
 ```
 Add the same three flags (`--dhcp-mtu/--dhcp-dns/--dhcpv6-dns`) to the `Cmd::Bringup` variant + arm (mirror the `Serve` clap fields) and call `set_dhcp_config` there too, so the netns lab can drive DHCP. The bringup `--guest` spec gains an optional trailing `hostname` (and the lab can pass it); if absent, hostname stays empty.
 
-- [ ] **Step 4: Harness launches serve with the DHCP flags.** In `test/conformance/dp_service.py`, append to the `xdp-dp serve` command (using `config.py`'s constants):
+- [ ] **Step 4: Harness launches serve with the DHCP flags.** In `test/conformance/dp_service.py`, append to the `flowplane serve` command (using `config.py`'s constants):
 
 ```python
             f" --dhcp-mtu={dhcp_mtu}"
@@ -241,15 +241,15 @@ Add the same three flags (`--dhcp-mtu/--dhcp-dns/--dhcpv6-dns`) to the `Cmd::Bri
 - [ ] **Step 5: Build + commit.**
 
 ```bash
-cargo build -p xdp-dp 2>&1 | tail -5   # compiles
+cargo build -p flowplane 2>&1 | tail -5   # compiles
 cargo fmt --all
-git add xdp-dp test/conformance/dp_service.py
+git add flowplane test/conformance/dp_service.py
 git commit -m "feat(dhcp): plumb --dhcp-* flags -> DHCP_CONFIG and hostname/pxe -> DHCP_META"
 ```
 
 ## Task 3: DHCPv4 responder + dispatch + MAC learning
 
-**Files:** Create `xdp-dp-ebpf/src/dhcp.rs`; Modify `xdp-dp-ebpf/src/egress.rs`, `xdp-dp-ebpf/src/main.rs`
+**Files:** Create `flowplane-ebpf/src/dhcp.rs`; Modify `flowplane-ebpf/src/egress.rs`, `flowplane-ebpf/src/main.rs`
 
 - [ ] **Step 1: `dhcp.rs` DHCPv4 responder.** Implement `try_dhcpv4_reply(ctx, meta) -> Option<u32>`. Detection: ethertype `ETH_P_IP`, IPv4 IHL==5, proto UDP(17), UDP dst port 67. Parse the BOOTP/DHCP: magic `0x63825363` at the options start; scan options (bounded loop, cap 64 iterations) for MESSAGE_TYPE (53) → DISCOVER(1)/REQUEST(3); VENDOR_CLASS_ID(60) → PXE/TFTP; USER_CLASS(77) containing the iPXE marker → HTTP. Then rewrite in place:
   - BOOTP: `op=2` (BOOTREPLY), `yiaddr = meta.guest_ipv4`, `chaddr` unchanged, magic kept.
@@ -269,20 +269,20 @@ git commit -m "feat(dhcp): plumb --dhcp-* flags -> DHCP_CONFIG and hostname/pxe 
         return Ok(act);
     }
 ```
-Add `mod dhcp;` to `xdp-dp-ebpf/src/main.rs` (alphabetical, near `mod conntrack;`).
+Add `mod dhcp;` to `flowplane-ebpf/src/main.rs` (alphabetical, near `mod conntrack;`).
 
 - [ ] **Step 3: Build + verifier.**
 
 ```bash
-cargo build -p xdp-dp 2>&1 | tail -3
-cargo test -p xdp-dp both_programs_pass_verifier -- --ignored 2>&1 | tail -3   # 1 passed (needs root)
+cargo build -p flowplane 2>&1 | tail -3
+cargo test -p flowplane both_programs_pass_verifier -- --ignored 2>&1 | tail -3   # 1 passed (needs root)
 ```
 If the verifier rejects, the cause is almost always a non-constant offset or an unbounded option loop — constrain to a fixed max option length and a bounded (≤64) parse loop with explicit `data_end` checks.
 
 - [ ] **Step 4: Conformance — DHCPv4 + MAC learning.**
 
 ```bash
-sudo pkill -f 'xdp-dp (serve|pass)' 2>/dev/null; ./test/conformance/setup-net.sh down 2>/dev/null; sleep 1
+sudo pkill -f 'flowplane (serve|pass)' 2>/dev/null; ./test/conformance/setup-net.sh down 2>/dev/null; sleep 1
 CONF_TESTS="test_dhcpv4.py test_arp.py" ./test/conformance/run.sh -v 2>&1 | grep -E 'PASSED|FAILED|passed|failed'
 ```
 Expected: `test_dhcpv4_vf0`, `test_dhcpv4_vf1`, `test_l2_addr_once` PASS. (Run with `dangerouslyDisableSandbox: true`; `EXIT=127` is the teardown trap — read the pytest summary.)
@@ -292,13 +292,13 @@ Expected: `test_dhcpv4_vf0`, `test_dhcpv4_vf1`, `test_l2_addr_once` PASS. (Run w
 ```bash
 ./env/netns-e2e.sh run 2>&1 | tail -3   # All tests passed (DHCP path is additive; lab has no DHCP guests yet)
 cargo fmt --all
-git add xdp-dp-ebpf
+git add flowplane-ebpf
 git commit -m "feat(dhcp): in-datapath DHCPv4 responder (OFFER/ACK + PXE) + MAC learning"
 ```
 
 ## Task 4: DHCPv6 responder + dispatch
 
-**Files:** Modify `xdp-dp-ebpf/src/dhcp.rs`, `xdp-dp-ebpf/src/egress.rs`
+**Files:** Modify `flowplane-ebpf/src/dhcp.rs`, `flowplane-ebpf/src/egress.rs`
 
 - [ ] **Step 1: `try_dhcpv6_reply(ctx, meta) -> Option<u32>`.** Detection: ethertype `ETH_P_IPV6`, IPv6 next-header UDP(17), UDP dst port 547. Parse the DHCPv6 message: msg-type at the first byte (SOLICIT=1 → Advertise=2, or Reply=7 if RAPID_COMMIT present; REQUEST=3 → Reply=7; CONFIRM=4 → Reply=7); transaction-id (3 bytes) echoed; scan options (bounded ≤32 loop) for CLIENTID(1) → capture the client DUID (bounded copy, cap e.g. 32 bytes), IA_NA(3) → capture iaid (4 bytes), RAPID_COMMIT(14) → present-flag, VENDOR_CLASS(16, enterprise 343) → PXE/TFTP, USER_CLASS(15) "iPXE" → HTTP. Build the reply (fixed maximum layout, constant offsets; pin the exact struct bytes from `/tmp/dpservice/include/protocols/dp_dhcpv6.h` + `src/nodes/dhcpv6_node.c`):
   - msg-type + echoed transaction-id.
@@ -325,14 +325,14 @@ git commit -m "feat(dhcp): in-datapath DHCPv4 responder (OFFER/ACK + PXE) + MAC 
 - [ ] **Step 3: Build + verifier.**
 
 ```bash
-cargo build -p xdp-dp 2>&1 | tail -3
-cargo test -p xdp-dp both_programs_pass_verifier -- --ignored 2>&1 | tail -3   # 1 passed
+cargo build -p flowplane 2>&1 | tail -3
+cargo test -p flowplane both_programs_pass_verifier -- --ignored 2>&1 | tail -3   # 1 passed
 ```
 
 - [ ] **Step 4: Conformance — DHCPv6 (PXE + iPXE).**
 
 ```bash
-sudo pkill -f 'xdp-dp (serve|pass)' 2>/dev/null; ./test/conformance/setup-net.sh down 2>/dev/null; sleep 1
+sudo pkill -f 'flowplane (serve|pass)' 2>/dev/null; ./test/conformance/setup-net.sh down 2>/dev/null; sleep 1
 CONF_TESTS="test_dhcpv6.py" ./test/conformance/run.sh -v 2>&1 | grep -E 'PASSED|FAILED|passed|failed'
 ```
 Expected: `test_dhcpv6_vf0` (PXE → `tftp://...`) and `test_dhcpv6_vf1` (iPXE → `http://...`) PASS. (`dangerouslyDisableSandbox: true`.)
@@ -342,7 +342,7 @@ Expected: `test_dhcpv6_vf0` (PXE → `tftp://...`) and `test_dhcpv6_vf1` (iPXE �
 ```bash
 ./env/netns-e2e.sh run 2>&1 | tail -3   # All tests passed
 cargo fmt --all
-git add xdp-dp-ebpf
+git add flowplane-ebpf
 git commit -m "feat(dhcp): in-datapath DHCPv6 responder (IA_NA/IAADDR, DUID, BootFileUrl, DNS)"
 ```
 
@@ -366,7 +366,7 @@ def prepare_ipv4(prepare_ifaces):
 - [ ] **Step 2: Full conformance — 89/89.**
 
 ```bash
-sudo pkill -f 'xdp-dp (serve|pass)' 2>/dev/null; ./test/conformance/setup-net.sh down 2>/dev/null; sleep 1
+sudo pkill -f 'flowplane (serve|pass)' 2>/dev/null; ./test/conformance/setup-net.sh down 2>/dev/null; sleep 1
 ./test/conformance/run.sh 2>&1 | grep -E 'passed|failed' | tail -1
 ```
 Expected: `89 passed ... 0 failed`. (`dangerouslyDisableSandbox: true`.) If `request_ip` now fails a previously-passing test, the OFFER/ACK options are off — compare against dpservice `dhcp_node.c` byte-for-byte and re-run `CONF_TESTS="test_dhcpv4.py" ... -v`.
@@ -391,7 +391,7 @@ Expected: `89 passed ... 0 failed`. (`dangerouslyDisableSandbox: true`.) If `req
 ./test/conformance/run.sh 2>&1 | grep -E 'passed|failed' | tail -1   # 89 passed
 ./env/netns-e2e.sh run 2>&1 | tail -3                                  # All tests passed
 ./env/ha-smoke.sh run 2>&1 | tail -3                                   # HA smoke passed
-cargo test -p xdp-dp-common 2>&1 | tail -2                             # layout tests pass
+cargo test -p flowplane-common 2>&1 | tail -2                             # layout tests pass
 cargo fmt --all
 git add test/conformance/conftest.py env/netns-e2e.sh
 git commit -m "test(conformance): restore DHCP IP-init; DHCPv4/v6 green -> 89/89; netns DHCP probe"

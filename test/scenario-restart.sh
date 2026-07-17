@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test/scenario-restart.sh — Graceful datapath restart kill-test (hardening item #1).
 #
-# Proves that an xdp-dp PROCESS restart (crictl stop -> kubelet restarts the container; the pod
+# Proves that an flowplane PROCESS restart (crictl stop -> kubelet restarts the container; the pod
 # sandbox, guest netns, and host veths stay up) does NOT drop the node's overlay datapath STATE and
 # does NOT reissue a live guest underlay /128. This is the acceptance test for the pinned-maps +
 # adopt work:
@@ -20,13 +20,13 @@
 # check as informational. On a native-XDP fabric the egress assertion becomes meaningful.
 #
 # PREREQ: fabric up (hack/clab-up.sh) + netplane stack on k01, running an image built from THIS
-# branch (make image TAG=dev && kind load docker-image ghcr.io/trevex/dpservice-xdp:dev --name k01
-# && kubectl -n ectobase-system rollout restart ds/xdp-dp).
+# branch (make image TAG=dev && kind load docker-image ghcr.io/trevex/ectobase/flowplane:dev --name k01
+# && kubectl -n ectobase-system rollout restart ds/flowplane).
 #   sudo -E env "PATH=/run/wrappers/bin:$HOME/go/bin:/run/current-system/sw/bin:$PATH" bash test/scenario-restart.sh
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
 
-SRC_NODE=k01-worker; VNI=100; PIN=/sys/fs/bpf/xdp-dp
+SRC_NODE=k01-worker; VNI=100; PIN=/sys/fs/bpf/flowplane
 # Dedicated overlay IPs so this test never collides with a pod left attached by another scenario
 # (create_interface rejects a duplicate (vni, ipv4) with ROUTE_EXISTS).
 NIC=rpod; SRC_IP=10.0.0.31
@@ -38,7 +38,7 @@ grpc() { sudo docker run --rm --network "container:$SRC_NODE" -v "$PROTO":/proto
   -plaintext -import-path /proto/dataplane/v1 -proto dataplane.proto -d "$1" 127.0.0.1:1337 "dataplane.v1.DataplaneNode/$2" 2>&1; }
 DUMP() { sudo docker exec "$SRC_NODE" bpftool map dump pinned "$PIN/$1" 2>/dev/null; }
 COUNT() { DUMP "$1" | grep -c '^key:'; }
-xdp_cid() { sudo docker exec "$SRC_NODE" crictl ps 2>/dev/null | grep ' xdp-dp ' | awk '{print $1}' | head -1; }
+xdp_cid() { sudo docker exec "$SRC_NODE" crictl ps 2>/dev/null | grep ' flowplane ' | awk '{print $1}' | head -1; }
 
 echo "== [0] attach a pod directly via the DataplaneNode gRPC (node-local, no WAN deps) =="
 grpc "{\"interface_id\":\"$NIC\"}" DetachInterface >/dev/null 2>&1
@@ -53,14 +53,14 @@ sudo docker exec "$SRC_NODE" ls "$PIN/INTERFACES" "$PIN/UNDERLAY" "$PIN/IFACE_ME
   || fail "state maps not pinned under $PIN — is the DS running the branch image?"
 [ "$(COUNT UNDERLAY)" -ge 1 ] || fail "UNDERLAY empty before kill"
 [ "$(COUNT IFACE_META)" -ge 1 ] || fail "IFACE_META (journal) empty before kill"
-CID_OLD=$(xdp_cid); pass "pins present; UNDERLAY=$(COUNT UNDERLAY) IFACE_META=$(COUNT IFACE_META); xdp-dp=$CID_OLD"
+CID_OLD=$(xdp_cid); pass "pins present; UNDERLAY=$(COUNT UNDERLAY) IFACE_META=$(COUNT IFACE_META); flowplane=$CID_OLD"
 # Link-pinning pre-state: the uplink XDP link should be pinned and a program attached to eth1.
 UPLINK_PIN="$PIN/links/uplink-eth1"
 UPLINK_PINNED_PRE=no; sudo docker exec "$SRC_NODE" ls "$UPLINK_PIN" >/dev/null 2>&1 && UPLINK_PINNED_PRE=yes
 UPLINK_ID_PRE=$(sudo docker exec "$SRC_NODE" bpftool net show dev eth1 2>/dev/null | grep -oE 'id [0-9]+' | head -1)
 echo "    uplink link pinned (pre)=$UPLINK_PINNED_PRE; eth1 xdp $UPLINK_ID_PRE"
 
-echo "== [2] KILL the xdp-dp container (crictl stop) — kubelet restarts it, Serve adopts =="
+echo "== [2] KILL the flowplane container (crictl stop) — kubelet restarts it, Serve adopts =="
 sudo docker exec "$SRC_NODE" crictl stop "$CID_OLD" >/dev/null 2>&1 || fail "crictl stop failed"
 CID_NEW=""; ADOPTED=""
 for _ in $(seq 1 45); do
@@ -70,7 +70,7 @@ for _ in $(seq 1 45); do
   fi
   sleep 2
 done
-[ -n "$CID_NEW" ] && [ "$CID_NEW" != "$CID_OLD" ] || fail "no new xdp-dp container appeared"
+[ -n "$CID_NEW" ] && [ "$CID_NEW" != "$CID_OLD" ] || fail "no new flowplane container appeared"
 [ -n "$ADOPTED" ] || fail "new container ($CID_NEW) did not log an adopt recovery line"
 sudo docker exec "$SRC_NODE" crictl logs "$CID_NEW" 2>&1 | grep -iE "adopt|recovered|re-attach" | sed 's/^/    | /'
 pass "restarted: $CID_OLD -> $CID_NEW adopted the pinned datapath"
@@ -125,4 +125,4 @@ echo "== [6] cleanup =="
 grpc "{\"interface_id\":\"$NIC2\"}" DetachInterface >/dev/null 2>&1
 sudo docker exec "$SRC_NODE" ip netns del "$NIC2" 2>/dev/null || true
 
-echo "== ALL DETERMINISTIC CHECKS PASSED: state survived an xdp-dp restart; no live /128 reissued =="
+echo "== ALL DETERMINISTIC CHECKS PASSED: state survived an flowplane restart; no live /128 reissued =="

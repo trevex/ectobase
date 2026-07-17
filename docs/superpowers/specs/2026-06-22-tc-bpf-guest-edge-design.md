@@ -6,7 +6,7 @@
 
 ## Problem
 
-The xdp-dp datapath attaches **native XDP to the kernel tap** that each VM uses via **vhost-net**. Root-cause (see `memory/native-xdp-needs-kvm-vhost.md`): native XDP on a vhost-net tap only runs on the *datacopy fast path* (non-GSO, single-page). Stock virtio guests negotiate GSO/offload, so vhost builds an skb and `tun_xdp_one()` is never reached — **native XDP is silently bypassed** for guest egress. Generic/SKB XDP works (hooks post-skb) but isn't "native", and carries cloned-skb/TCP caveats.
+The flowplane datapath attaches **native XDP to the kernel tap** that each VM uses via **vhost-net**. Root-cause (see `memory/native-xdp-needs-kvm-vhost.md`): native XDP on a vhost-net tap only runs on the *datacopy fast path* (non-GSO, single-page). Stock virtio guests negotiate GSO/offload, so vhost builds an skb and `tun_xdp_one()` is never reached — **native XDP is silently bypassed** for guest egress. Generic/SKB XDP works (hooks post-skb) but isn't "native", and carries cloned-skb/TCP caveats.
 
 Research (kernel source + Cilium/Calico practice) shows the production VM-edge pattern is **tc-BPF on the host-side virtual device**, with **XDP reserved for the physical NIC**. The real DPDK `dpservice` doesn't use a tap at all (SR-IOV VF + `rte_flow` HW offload); "tap + XDP" was never the production topology. Both future goals — HW offload (tc-flower/`rte_flow`/switchdev) and encryption (XFRM/WireGuard live on the skb path; Cilium disables XDP under encryption) — favor the tc/skb path. Native XDP *hardware* offload is Netronome-NFP-only (EOL); the broadly-supported "XDP" is native **driver** mode (host CPU), a software fast path.
 
@@ -79,7 +79,7 @@ This is the kernel's *supported* native guest-injection path (redirect from a di
 - Tap-side attach switches from `aya::programs::Xdp` to **`aya::programs::SchedClassifier`** + `tc::qdisc_add_clsact(tap)` + attach `TcAttachType::Ingress`. The per-interface create/delete-interface gRPC path swaps its stored `XdpLink` for the tc attachment handle (same lifecycle shape).
 - `uplink_rx` attach is unchanged (XDP).
 - `GUEST_PROGS` becomes a tc (classifier) prog-array for the DHCP tail-call.
-- **ioiab / libvirt-provider unchanged** — same tap device; we attach tc instead of XDP. `XDP_DP_SKB_MODE` becomes irrelevant for the guest path. `vnet_hdr` on the tap is harmless to leave.
+- **ioiab / libvirt-provider unchanged** — same tap device; we attach tc instead of XDP. `FLOWPLANE_SKB_MODE` becomes irrelevant for the guest path. `vnet_hdr` on the tap is harmless to leave.
 
 ## Risks & mitigations
 

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 )
 
 // lbBacking is one (VIP, backend NIC) pairing this node hosts: the join of a CompiledNIC.LB entry

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make an xdp-dp process restart (crash/OOM/liveness-kill/`crictl stop`/rolling upgrade) cause **zero** forwarding gap by pinning the eBPF program links to bpffs and atomically re-pointing them at the freshly-loaded program on adopt.
+**Goal:** Make an flowplane process restart (crash/OOM/liveness-kill/`crictl stop`/rolling upgrade) cause **zero** forwarding gap by pinning the eBPF program links to bpffs and atomically re-pointing them at the freshly-loaded program on adopt.
 
 **Architecture:** Extends the merged graceful-restart work (pinned maps + `IFACE_META` adopt, commits `127e021`→`169dd7f`). Programs are attached via fd-owned links (XDP `bpf_link`; tc via **tcx** on kernel ≥ 6.6). We pin those links under `<pin_dir>/links/` so they outlive the process; on restart we re-open each with `PinnedLink::from_pin` and call `Xdp/SchedClassifier::attach_to_link` — an atomic `bpf_link_update` that swaps in the new process's program with no packet gap (Cilium's mechanism). Gated by `--pin-links` (default on); `--pin-links=false` is the exact revert to today's fresh re-attach.
 
@@ -33,11 +33,11 @@
 
 ## File Structure
 
-- `xdp-dp/src/loader.rs` — new link helpers: `attach_xdp_pinned_at`, `attach_tc_pinned_at`, `readopt_xdp_link`, `readopt_tc_link`, `unpin_link`. One responsibility: attach/pin/re-adopt/unpin eBPF links.
-- `xdp-dp/src/control.rs` — `bring_up`/`attach_edge`/`attach_extra_uplink`/`create_interface`/`reattach_guest`/`detach_interface` honour a `pin_links: bool`; `Inner` gains `pin_links`, `pin_dir: PathBuf`, and guest link-pin tracking. One responsibility: control-plane attach/detach + adopt wiring.
-- `xdp-dp/src/main.rs` — `Serve` gains `--pin-links` (default true) and threads it in. One responsibility: process wiring.
+- `flowplane/src/loader.rs` — new link helpers: `attach_xdp_pinned_at`, `attach_tc_pinned_at`, `readopt_xdp_link`, `readopt_tc_link`, `unpin_link`. One responsibility: attach/pin/re-adopt/unpin eBPF links.
+- `flowplane/src/control.rs` — `bring_up`/`attach_edge`/`attach_extra_uplink`/`create_interface`/`reattach_guest`/`detach_interface` honour a `pin_links: bool`; `Inner` gains `pin_links`, `pin_dir: PathBuf`, and guest link-pin tracking. One responsibility: control-plane attach/detach + adopt wiring.
+- `flowplane/src/main.rs` — `Serve` gains `--pin-links` (default true) and threads it in. One responsibility: process wiring.
 - `test/scenario-restart.sh` — extend with the uplink zero-gap assertion + fix the guest check to `bpftool net show`. One responsibility: live restart validation.
-- `xdp-dp/tests/spike_link_pin.rs` (throwaway, deleted after Task 0) — validates the aya pin/re-adopt/attach_to_link API on a scratch veth.
+- `flowplane/tests/spike_link_pin.rs` (throwaway, deleted after Task 0) — validates the aya pin/re-adopt/attach_to_link API on a scratch veth.
 
 ---
 
@@ -46,13 +46,13 @@
 De-risks the exact aya API + confirms guest tc is a pinnable tcx `FdLink` here, before wiring into the datapath. This task writes a throwaway root test, records findings inline in the plan, and is reverted at the end.
 
 **Files:**
-- Create (throwaway): `xdp-dp/tests/spike_link_pin.rs`
+- Create (throwaway): `flowplane/tests/spike_link_pin.rs`
 
 - [ ] **Step 1: Write the spike**
 
 ```rust
-// xdp-dp/tests/spike_link_pin.rs — THROWAWAY (deleted at end of Task 0).
-// Run: sudo -E cargo test -p xdp-dp --test spike_link_pin -- --ignored --nocapture
+// flowplane/tests/spike_link_pin.rs — THROWAWAY (deleted at end of Task 0).
+// Run: sudo -E cargo test -p flowplane --test spike_link_pin -- --ignored --nocapture
 use aya::programs::links::{FdLink, PinnedLink};
 use aya::programs::{tc, Link, SchedClassifier, TcAttachType, Xdp, XdpFlags};
 
@@ -62,7 +62,7 @@ fn xdp_pin_readopt_attach_to_link() {
     // scratch veth pair
     let _ = std::process::Command::new("ip").args(["link","add","spk0","type","veth","peer","name","spk1"]).status();
     let pin = tempfile::Builder::new().prefix("spike-").tempdir_in("/sys/fs/bpf").unwrap();
-    let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/xdp-dp-prog"));
+    let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowplane-prog"));
     let mut ebpf = aya::EbpfLoader::new().map_pin_path(pin.path()).load(bytes).unwrap();
 
     // attach uplink_rx to spk0, pin the link
@@ -94,7 +94,7 @@ fn xdp_pin_readopt_attach_to_link() {
 fn tc_is_tcx_fdlink_and_pins() {
     let _ = std::process::Command::new("ip").args(["link","add","spk2","type","veth","peer","name","spk3"]).status();
     let pin = tempfile::Builder::new().prefix("spike-").tempdir_in("/sys/fs/bpf").unwrap();
-    let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/xdp-dp-prog"));
+    let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowplane-prog"));
     let mut ebpf = aya::EbpfLoader::new().map_pin_path(pin.path()).load(bytes).unwrap();
     let _ = tc::qdisc_add_clsact("spk2");
     let link_path = pin.path().join("guest-spk2");
@@ -122,7 +122,7 @@ fn tc_is_tcx_fdlink_and_pins() {
 
 - [ ] **Step 2: Run the spike as root**
 
-Run: `sudo -E cargo test -p xdp-dp --test spike_link_pin -- --ignored --nocapture`
+Run: `sudo -E cargo test -p flowplane --test spike_link_pin -- --ignored --nocapture`
 Then chown back: `sudo chown -R "$(id -un):$(id -gn)" target`
 Expected: both tests PASS. If `try_into::<FdLink>()` on the tc link fails, RECORD IT — guests use the fallback (Task 5 note) and only uplink/wan get zero-gap.
 
@@ -132,9 +132,9 @@ The precise conversions used above (`FdLink: From<PinnedLink>` vs `PinnedLink::u
 
 - [ ] **Step 4: Record findings + delete the spike**
 
-Append findings (tc is/ isn't tcx FdLink; the exact conversion calls) as a comment block at the top of `xdp-dp/src/loader.rs` in Task 1. Then:
+Append findings (tc is/ isn't tcx FdLink; the exact conversion calls) as a comment block at the top of `flowplane/src/loader.rs` in Task 1. Then:
 ```bash
-git rm -f xdp-dp/tests/spike_link_pin.rs 2>/dev/null || rm -f xdp-dp/tests/spike_link_pin.rs
+git rm -f flowplane/tests/spike_link_pin.rs 2>/dev/null || rm -f flowplane/tests/spike_link_pin.rs
 ```
 (No commit for the spike itself.)
 
@@ -143,7 +143,7 @@ git rm -f xdp-dp/tests/spike_link_pin.rs 2>/dev/null || rm -f xdp-dp/tests/spike
 ## Task 1: loader.rs link helpers (attach+pin, re-adopt, unpin)
 
 **Files:**
-- Modify: `xdp-dp/src/loader.rs`
+- Modify: `flowplane/src/loader.rs`
 
 - [ ] **Step 1: Add the helpers (use the exact conversions validated in Task 0)**
 
@@ -162,7 +162,7 @@ pub fn attach_xdp_pinned_at(
     ebpf: &mut Ebpf, prog: &str, iface: &str, pin_dir: &Path, name: &str,
 ) -> anyhow::Result<()> {
     let p: &mut Xdp = ebpf.program_mut(prog).with_context(|| format!("{prog} missing"))?.try_into()?;
-    let id = if std::env::var_os("XDP_DP_SKB_MODE").is_some() {
+    let id = if std::env::var_os("FLOWPLANE_SKB_MODE").is_some() {
         p.attach(iface, aya::programs::XdpFlags::SKB_MODE)
             .with_context(|| format!("attach {prog} to {iface} (SKB_MODE)"))?
     } else {
@@ -233,13 +233,13 @@ pub fn unpin_link(pin_dir: &Path, name: &str) {
 
 - [ ] **Step 2: Build**
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 Expected: compiles. (Adjust the `From`/`try_into` conversions to whatever Task 0 validated.)
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add xdp-dp/src/loader.rs
+git add flowplane/src/loader.rs
 git commit -m "feat(loader): pinned-link helpers (attach+pin, readopt via attach_to_link, unpin)"
 ```
 
@@ -248,16 +248,16 @@ git commit -m "feat(loader): pinned-link helpers (attach+pin, readopt via attach
 ## Task 2: `Serve` gains `--pin-links` (default true), threaded to Control
 
 **Files:**
-- Modify: `xdp-dp/src/main.rs` (Serve arg + bring_up call)
-- Modify: `xdp-dp/src/control.rs` (`bring_up` signature + `Inner` fields)
+- Modify: `flowplane/src/main.rs` (Serve arg + bring_up call)
+- Modify: `flowplane/src/control.rs` (`bring_up` signature + `Inner` fields)
 
 - [ ] **Step 1: Add the flag to `Cmd::Serve`**
 
-In `xdp-dp/src/main.rs`, in the `Serve { … }` variant (near `pin_dir` at line 131-132), add:
+In `flowplane/src/main.rs`, in the `Serve { … }` variant (near `pin_dir` at line 131-132), add:
 ```rust
         /// Pin program links to bpffs so a restart keeps the datapath attached (zero forwarding gap).
         /// Disable for a guaranteed fresh re-attach on every start.
-        #[arg(long = "pin-links", default_value_t = true, action = clap::ArgAction::Set, env = "XDP_DP_PIN_LINKS")]
+        #[arg(long = "pin-links", default_value_t = true, action = clap::ArgAction::Set, env = "FLOWPLANE_PIN_LINKS")]
         pin_links: bool,
 ```
 Destructure `pin_links,` in the `Cmd::Serve { … }` match arm (next to `pin_dir,`).
@@ -290,13 +290,13 @@ In `main.rs`, pass `pin_links` to `bring_up(&uplink, …, &serve_pin_dir, adopt,
 
 - [ ] **Step 5: Build**
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 Expected: compiles.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add xdp-dp/src/main.rs xdp-dp/src/control.rs
+git add flowplane/src/main.rs flowplane/src/control.rs
 git commit -m "feat(serve): --pin-links flag (default on); bring_up pins the uplink link"
 ```
 
@@ -305,7 +305,7 @@ git commit -m "feat(serve): --pin-links flag (default on); bring_up pins the upl
 ## Task 3: Adopt re-points the uplink link atomically (zero gap)
 
 **Files:**
-- Modify: `xdp-dp/src/control.rs` (`bring_up` adopt branch), `xdp-dp/src/main.rs`
+- Modify: `flowplane/src/control.rs` (`bring_up` adopt branch), `flowplane/src/main.rs`
 
 - [ ] **Step 1: On adopt, re-adopt the uplink pin instead of attaching fresh**
 
@@ -328,13 +328,13 @@ In `attach_extra_uplink` (control.rs:477) and `attach_edge` (control.rs:455), re
 
 - [ ] **Step 3: Build**
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 Expected: compiles.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add xdp-dp/src/control.rs xdp-dp/src/main.rs
+git add flowplane/src/control.rs flowplane/src/main.rs
 git commit -m "feat(control): adopt re-points uplink/wan links atomically (attach_to_link)"
 ```
 
@@ -343,7 +343,7 @@ git commit -m "feat(control): adopt re-points uplink/wan links atomically (attac
 ## Task 4: Guests — pin on attach, re-adopt on restart, unpin on detach
 
 **Files:**
-- Modify: `xdp-dp/src/control.rs` (`GuestLink`, `create_interface`, `reattach_guest`, `detach_interface`)
+- Modify: `flowplane/src/control.rs` (`GuestLink`, `create_interface`, `reattach_guest`, `detach_interface`)
 
 - [ ] **Step 1: Add a pinned guest-link variant**
 
@@ -426,13 +426,13 @@ fn guest_pin_name_is_stable_and_hex() {
     assert_eq!(hex_encode(b"rpod"), hex_encode(b"rpod"));
 }
 ```
-Run: `cargo test -p xdp-dp guest_pin_name` — Expected: PASS.
+Run: `cargo test -p flowplane guest_pin_name` — Expected: PASS.
 
 - [ ] **Step 6: Build + commit**
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 ```bash
-git add xdp-dp/src/control.rs
+git add flowplane/src/control.rs
 git commit -m "feat(control): pin guest links; re-adopt atomically on restart; unpin on detach"
 ```
 
@@ -441,11 +441,11 @@ git commit -m "feat(control): pin guest links; re-adopt atomically on restart; u
 ## Task 5: Verifier anchors + fresh-start regression (root)
 
 **Files:**
-- Modify: `xdp-dp/tests` usage — run existing anchors to confirm no load/verify regression.
+- Modify: `flowplane/tests` usage — run existing anchors to confirm no load/verify regression.
 
 - [ ] **Step 1: Anchors still pass (pinned maps + new helpers don't perturb load)**
 
-Run: `sudo -E cargo test -p xdp-dp --test anchor_uplink --test anchor_lb --test verify_edge_wan_rx -- --ignored`
+Run: `sudo -E cargo test -p flowplane --test anchor_uplink --test anchor_lb --test verify_edge_wan_rx -- --ignored`
 Then: `sudo chown -R "$(id -un):$(id -gn)" target`
 Expected: all PASS.
 
@@ -462,7 +462,7 @@ git add -A && git commit -m "test: confirm anchors pass with pinned-link helpers
 **Files:**
 - Modify: `test/scenario-restart.sh`
 
-**Prereq:** clab fabric up + netplane stack on k01; image rebuilt with Tasks 1-4 and rolled (`sudo docker build -t ghcr.io/trevex/dpservice-xdp:dev . && sudo ~/go/bin/kind load docker-image ghcr.io/trevex/dpservice-xdp:dev --name k01 && kubectl -n ectobase-system rollout restart ds/xdp-dp`). The DS needs no manifest change (default `--pin-links=true`, bpffs already hostPath-mounted).
+**Prereq:** clab fabric up + netplane stack on k01; image rebuilt with Tasks 1-4 and rolled (`sudo docker build -t ghcr.io/trevex/ectobase/flowplane:dev . && sudo ~/go/bin/kind load docker-image ghcr.io/trevex/ectobase/flowplane:dev --name k01 && kubectl -n ectobase-system rollout restart ds/flowplane`). The DS needs no manifest change (default `--pin-links=true`, bpffs already hostPath-mounted).
 
 - [ ] **Step 1: Fix the guest check to `bpftool net show`**
 

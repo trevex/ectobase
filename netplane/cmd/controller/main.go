@@ -8,8 +8,8 @@ import (
 	"flag"
 	"log"
 
-	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
-	"github.com/trevex/xdp-dp/netplane/controllers"
+	netv1 "github.com/trevex/ectobase/api/v1alpha1"
+	"github.com/trevex/ectobase/netplane/controllers"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	// registers --kubeconfig flag to flag.CommandLine via init().

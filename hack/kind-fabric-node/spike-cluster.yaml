@@ -8,7 +8,7 @@ networking:
   ipFamily: ipv6
 nodes:
   - role: control-plane
-    image: kindest/node-fabric:spike
+    image: ghcr.io/trevex/ectobase/kind-node-fabric:spike
     extraMounts:
       - hostPath: /tmp/fabric-prefix-cp
         containerPath: /etc/fabric/prefix

@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["xdp-dp-common", "xdp-dp-core", "xdp-dp-ebpf", "xdp-dp", "xdp-dp-sim"]
-default-members = ["xdp-dp-common", "xdp-dp-core", "xdp-dp", "xdp-dp-sim"]
+members = ["flowplane/flowplane-common", "flowplane/flowplane-core", "flowplane/flowplane-ebpf", "flowplane/flowplane", "flowplane/flowplane-sim"]
+default-members = ["flowplane/flowplane-common", "flowplane/flowplane-core", "flowplane/flowplane", "flowplane/flowplane-sim"]
 
-[profile.release.package.xdp-dp-ebpf]
+[profile.release.package.flowplane-ebpf]
 debug = 2
 codegen-units = 1
 strip = false

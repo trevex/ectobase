@@ -6,7 +6,7 @@
 
 **Architecture:** A compiler resolves each `LoadBalancer`'s selector/refs and stamps `CompiledNIC.LB` (pure membership) onto backend NICs. The per-node agent turns that into (a) an E/W anycast overlay route `VIP → backend /128` on the existing route channel and (b) an `LB_VIP` PublicPrefix record consumed by the edge to `AddLbBackend`. The edge reads the `LoadBalancer` CRD to `AddLbVip` and runs maglev in `wan_rx`. Backends deliver via the normal base path, gated by their NetworkPolicy ingress firewall.
 
-**Tech Stack:** Go (controller-runtime controllers + per-node agent + reflector client), Rust (xdp-dp userspace `control.rs`), `xdp-dp-sim` (Rust datapath simulation), protobuf (stubs already generated).
+**Tech Stack:** Go (controller-runtime controllers + per-node agent + reflector client), Rust (flowplane userspace `control.rs`), `flowplane-sim` (Rust datapath simulation), protobuf (stubs already generated).
 
 **Spec:** `docs/superpowers/specs/2026-07-15-loadbalancer-wiring-design.md`
 
@@ -26,14 +26,14 @@
 - `api/v1alpha1/loadbalancer_types.go` — flesh out `LoadBalancerSpec`/`Status` + `LoadBalancerPort`.
 - `api/v1alpha1/compilednic_types.go` — add `LB []CompiledLB` + `CompiledLB`/`CompiledLBPort`; remove `UnderlayRoute`.
 - `api/v1alpha1/zz_generated.deepcopy.go`, `config/crd/bases/*.yaml` — regenerated.
-- `xdp-dp/src/control.rs` — guard `create_lb`'s `UNDERLAY` write for `vni==0`.
+- `flowplane/src/control.rs` — guard `create_lb`'s `UNDERLAY` write for `vni==0`.
 - `netplane/controllers/compilednic.go` — `Compile(…, lbs)`, `nicsForLB`, LoadBalancer watch + predicates, diff-before-write.
 - `netplane/agent/bus.go` — LB methods on `Dataplane` + `dpAdapter`; `applyPublic` LB_VIP case; `Bus.isEdge`.
 - `netplane/agent/lbreconcile.go` (NEW) — `desiredLB` join helper + edge `ReconcileLB`.
 - `netplane/agent/reconcile.go` — emit E/W anycast routes; `DesiredPublic(ctx)` emits LB_VIP records; `appliedLbVips` field.
 - `netplane/cmd/agent/main.go` — call `ReconcileLB`; pass `isEdge` to `NewBus`; `DesiredPublic(ctx)`.
-- `xdp-dp-sim/src/compilednic.rs` — `CompiledLB` serde mirror; drop the `underlayRoute` requirement.
-- `xdp-dp-sim/src/lb_scenario_test.rs` — model-A E/W anycast coverage.
+- `flowplane-sim/src/compilednic.rs` — `CompiledLB` serde mirror; drop the `underlayRoute` requirement.
+- `flowplane-sim/src/lb_scenario_test.rs` — model-A E/W anycast coverage.
 - Tests: `netplane/controllers/compilednic_test.go` (or envtest), `netplane/agent/lbreconcile_test.go`, `netplane/agent/bus_test.go`.
 
 ---
@@ -151,14 +151,14 @@ git commit -m "feat(api): LoadBalancer spec/status + CompiledNIC.LB; drop Compil
 ## Task 2: Datapath — skip the UNDERLAY write in create_lb for the WAN edge (vni==0)
 
 **Files:**
-- Modify: `xdp-dp/src/control.rs:897-907` (the `UNDERLAY.upsert` inside `create_lb`)
-- Test: `xdp-dp/src/control.rs` (add a `#[cfg(test)]` test)
+- Modify: `flowplane/src/control.rs:897-907` (the `UNDERLAY.upsert` inside `create_lb`)
+- Test: `flowplane/src/control.rs` (add a `#[cfg(test)]` test)
 
 **Why:** the WAN edge registers its LB with `vni=0` and passes its own anycast underlay as `lb_underlay`. `wan_rx` never resolves `UNDERLAY[lb_underlay]` (it maglev-selects from a raw WAN frame), but `attach_edge` registered `UNDERLAY[edge_underlay] = LOCAL_DELIVER` for fabric→WAN egress. Writing `UNDERLAY[lb_underlay]` in `create_lb` would clobber that. For `vni==0` the entry is unnecessary, so skip it.
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `xdp-dp/src/control.rs` inside (or add) a `#[cfg(test)] mod tests`. If a test module already exists, add just the function. The test builds a `Control`, calls `create_lb` with `vni=0` and an `lb_underlay`, and asserts the `UNDERLAY` map has NO entry for that address; then repeats with `vni=100` and asserts the entry IS present. Use the existing test constructors in the file for `Control` (search the file for how other `control.rs` tests build a `Control`/`GlobalState`; mirror that). Concretely:
+Add to `flowplane/src/control.rs` inside (or add) a `#[cfg(test)] mod tests`. If a test module already exists, add just the function. The test builds a `Control`, calls `create_lb` with `vni=0` and an `lb_underlay`, and asserts the `UNDERLAY` map has NO entry for that address; then repeats with `vni=100` and asserts the entry IS present. Use the existing test constructors in the file for `Control` (search the file for how other `control.rs` tests build a `Control`/`GlobalState`; mirror that). Concretely:
 
 ```rust
 #[test]
@@ -173,16 +173,16 @@ fn create_lb_skips_underlay_write_for_wan_edge() {
 }
 ```
 
-If no `underlay_get` test accessor exists on `Control`, read the map directly the way other tests in the file inspect `g.underlay`/maps (mirror the closest existing test). If no test harness exists in `control.rs` at all, place this test in the module that already exercises `create_lb`/`add_lb_target` (search: `grep -rn "create_lb\|add_lb_target" xdp-dp/src --include=*.rs | grep test`), and adapt the constructor accordingly.
+If no `underlay_get` test accessor exists on `Control`, read the map directly the way other tests in the file inspect `g.underlay`/maps (mirror the closest existing test). If no test harness exists in `control.rs` at all, place this test in the module that already exercises `create_lb`/`add_lb_target` (search: `grep -rn "create_lb\|add_lb_target" flowplane/src --include=*.rs | grep test`), and adapt the constructor accordingly.
 
 - [ ] **Step 2: Run it — verify it fails**
 
-Run: `cargo test -p xdp-dp create_lb_skips_underlay_write_for_wan_edge`
+Run: `cargo test -p flowplane create_lb_skips_underlay_write_for_wan_edge`
 Expected: FAIL (the current code always writes `UNDERLAY[lb_underlay]`).
 
 - [ ] **Step 3: Guard the UNDERLAY write**
 
-In `xdp-dp/src/control.rs`, wrap the `g.underlay.upsert(lb_underlay, …)` block (lines ~897-907) in a `vni != 0` guard:
+In `flowplane/src/control.rs`, wrap the `g.underlay.upsert(lb_underlay, …)` block (lines ~897-907) in a `vni != 0` guard:
 
 ```rust
         // Program the LB's own underlay /128 into UNDERLAY so ingress can identify it — but ONLY for
@@ -192,7 +192,7 @@ In `xdp-dp/src/control.rs`, wrap the `g.underlay.upsert(lb_underlay, …)` block
         if vni != 0 {
             g.underlay.upsert(
                 lb_underlay,
-                xdp_dp_common::UnderlayValue {
+                flowplane_common::UnderlayValue {
                     vni,
                     tap_ifindex: 0,
                     guest_mac: [0; 6],
@@ -204,18 +204,18 @@ In `xdp-dp/src/control.rs`, wrap the `g.underlay.upsert(lb_underlay, …)` block
 
 - [ ] **Step 4: Run it — verify it passes**
 
-Run: `cargo test -p xdp-dp create_lb_skips_underlay_write_for_wan_edge`
+Run: `cargo test -p flowplane create_lb_skips_underlay_write_for_wan_edge`
 Expected: PASS.
 
-- [ ] **Step 5: Run the broader xdp-dp tests to confirm no regression**
+- [ ] **Step 5: Run the broader flowplane tests to confirm no regression**
 
-Run: `cargo test -p xdp-dp`
+Run: `cargo test -p flowplane`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add xdp-dp/src/control.rs
+git add flowplane/src/control.rs
 git commit -m "fix(lb): create_lb skips UNDERLAY[lb_underlay] write for the WAN edge (vni==0)"
 ```
 
@@ -237,7 +237,7 @@ package controllers
 import (
 	"testing"
 
-	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
+	netv1 "github.com/trevex/flowplane/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -678,7 +678,7 @@ import (
 	"context"
 	"testing"
 
-	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
+	netv1 "github.com/trevex/flowplane/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -763,7 +763,7 @@ import (
 	"context"
 	"fmt"
 
-	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
+	netv1 "github.com/trevex/flowplane/api/v1alpha1"
 )
 
 // lbBacking is one (VIP, backend NIC) pairing this node hosts: the join of a CompiledNIC.LB entry
@@ -936,7 +936,7 @@ git commit -m "feat(agent): announce E/W anycast VIP routes for LB backends"
 Append to `netplane/agent/lbreconcile_test.go`:
 
 ```go
-import rbv1 "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+import rbv1 "github.com/trevex/flowplane/netplane/gen/routebusv1"
 
 func TestDesiredPublic_EmitsLBVIP(t *testing.T) {
 	s := lbTestScheme(t)
@@ -1284,12 +1284,12 @@ git commit -m "feat(agent): edge consumes LB (applyPublic AddLbBackend + Reconci
 ## Task 10: Sim — CompiledLB serde + model-A E/W anycast coverage
 
 **Files:**
-- Modify: `xdp-dp-sim/src/compilednic.rs:19-45` (serde structs; `underlay_route` optional)
-- Modify: `xdp-dp-sim/src/lb_scenario_test.rs` (add model-A E/W tests)
+- Modify: `flowplane-sim/src/compilednic.rs:19-45` (serde structs; `underlay_route` optional)
+- Modify: `flowplane-sim/src/lb_scenario_test.rs` (add model-A E/W tests)
 
 - [ ] **Step 1: Make underlay_route optional + add LB serde (so the fixture drop is tolerated)**
 
-In `xdp-dp-sim/src/compilednic.rs`, in `struct Spec` (lines 19-25) make `underlay_route` optional (the field is being removed from the Go CRD; keep the sim tolerant):
+In `flowplane-sim/src/compilednic.rs`, in `struct Spec` (lines 19-25) make `underlay_route` optional (the field is being removed from the Go CRD; keep the sim tolerant):
 
 ```rust
 pub struct Spec {
@@ -1325,7 +1325,7 @@ pub struct LbPort {
 
 - [ ] **Step 2: Write the failing model-A E/W tests**
 
-In `xdp-dp-sim/src/lb_scenario_test.rs`, add two tests proving model-A E/W: the backend has NO LB maps (`backend_node(false)`); an encapped guest→VIP frame delivered straight to the backend's underlay base-delivers, gated by the ingress firewall.
+In `flowplane-sim/src/lb_scenario_test.rs`, add two tests proving model-A E/W: the backend has NO LB maps (`backend_node(false)`); an encapped guest→VIP frame delivered straight to the backend's underlay base-delivers, gated by the ingress firewall.
 
 ```rust
 #[test]
@@ -1378,18 +1378,18 @@ fn ew_lb_anycast_dropped_without_policy() {
 
 - [ ] **Step 3: Run them — verify they pass (and the serde change compiles)**
 
-Run: `cargo test -p xdp-dp-sim ew_lb_anycast`
+Run: `cargo test -p flowplane-sim ew_lb_anycast`
 Expected: PASS. (These exercise the base path + firewall directly; they should pass immediately once the serde struct compiles — they validate the model-A datapath, which needs no new datapath code.)
 
 - [ ] **Step 4: Run the full sim + compilednic serde tests**
 
-Run: `cargo test -p xdp-dp-sim`
+Run: `cargo test -p flowplane-sim`
 Expected: PASS (existing `apply_and_eval_from_fixture` still parses — `underlayRoute` still present in that fixture is fine since it's now `#[serde(default)]`).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add xdp-dp-sim/src/compilednic.rs xdp-dp-sim/src/lb_scenario_test.rs
+git add flowplane-sim/src/compilednic.rs flowplane-sim/src/lb_scenario_test.rs
 git commit -m "test(sim): CompiledLB serde + model-A E/W anycast LB coverage (deliver iff policy admits)"
 ```
 
@@ -1402,12 +1402,12 @@ git commit -m "test(sim): CompiledLB serde + model-A E/W anycast LB coverage (de
 
 - [ ] **Step 1: Build everything**
 
-Run: `cd netplane && go build ./... && cd .. && go build ./api/... && cargo build -p xdp-dp -p xdp-dp-sim`
+Run: `cd netplane && go build ./... && cd .. && go build ./api/... && cargo build -p flowplane -p flowplane-sim`
 Expected: PASS.
 
 - [ ] **Step 2: Run all Go + Rust tests**
 
-Run: `cd netplane && go test ./... && cd .. && cargo test -p xdp-dp -p xdp-dp-sim -p xdp-dp-core`
+Run: `cd netplane && go test ./... && cd .. && cargo test -p flowplane -p flowplane-sim -p flowplane-core`
 Expected: PASS.
 
 - [ ] **Step 3: Grep for stale UnderlayRoute references on CompiledNIC**
@@ -1433,7 +1433,7 @@ git commit -m "chore(lb): build/vet sweep for LoadBalancer wiring" || echo "noth
 
 **Spec coverage:**
 - §3.1 LoadBalancer CRD → Task 1. §3.2 CompiledNIC.LB + remove UnderlayRoute → Tasks 1, 3. §4.1 E/W anycast route → Tasks 6, 7. §4.2 N/S LB_VIP + edge AddLbVip/AddLbBackend → Tasks 5, 8, 9. §4.3 datapath (edge vni handling) → Task 2 (note: no eBPF/flag needed under model A — the `vni=0` WAN sentinel is retained and `create_lb`'s UNDERLAY write is guarded; recorded as a deviation below). §5 compiler + fine-grained watches + diff-before-write → Tasks 3, 4. §6 agent reconcile → Tasks 7, 8, 9. §7 testing (sim + Go unit) → Tasks 3-10. Conformance test (§7 third bullet) → **deviation** (see below).
-- **Deviations from spec, intentional:** (1) No edge LB-VNI flag / `wan_rx` parameterization — model A keeps `vni=0` as the WAN sentinel (nodes never register an LB), so the only datapath change is the `create_lb` UNDERLAY guard (Task 2). (2) No conformance test — the E/W LB is inherently multi-node (anycast across backends), which the single-instance conformance harness cannot express; the `xdp-dp-sim` Fabric is the correct multi-node coverage (Task 10). Update the spec's §4.3 and §7 to reflect these before/at execution.
+- **Deviations from spec, intentional:** (1) No edge LB-VNI flag / `wan_rx` parameterization — model A keeps `vni=0` as the WAN sentinel (nodes never register an LB), so the only datapath change is the `create_lb` UNDERLAY guard (Task 2). (2) No conformance test — the E/W LB is inherently multi-node (anycast across backends), which the single-instance conformance harness cannot express; the `flowplane-sim` Fabric is the correct multi-node coverage (Task 10). Update the spec's §4.3 and §7 to reflect these before/at execution.
 
 **Placeholder scan:** none — every code step has full code; every command has an expected result.
 
@@ -1445,16 +1445,16 @@ git commit -m "chore(lb): build/vet sweep for LoadBalancer wiring" || echo "noth
 
 **Why:** Phase 1's E/W path is v6-correct (uses `hostPrefix`), but N/S is IPv4-only: `AddLbVipRequest.vip_ipv4` + `node.rs`'s `parse_ipv4`/`LbIpBytes::Ipv4`, AND the edge datapath `try_wan_rx` (ingress.rs:338) only handles `ETH_P_IP`. This phase makes a v6 WAN VIP work end-to-end at the edge: control-plane registration + an eBPF `wan_rx` v6 branch, proven in the sim.
 
-**Key existing pieces:** the eBPF `lb_select_forward_v6` already exists (xdp-dp-ebpf/src/lb.rs — reads v6 dst at +24, last-4-byte LB key, TCP/UDP); `encap_and_redirect(ctx, local, src_ul, route, inner_len, inner_proto)` already takes `inner_proto` (`IPPROTO_IPV6 = 41` in parse.rs). The **core** `lb_select_forward` (xdp-dp-core/src/lb.rs) is v4-only; the sim runs core fns, so v6 sim coverage requires a core v6 variant.
+**Key existing pieces:** the eBPF `lb_select_forward_v6` already exists (flowplane-ebpf/src/lb.rs — reads v6 dst at +24, last-4-byte LB key, TCP/UDP); `encap_and_redirect(ctx, local, src_ul, route, inner_len, inner_proto)` already takes `inner_proto` (`IPPROTO_IPV6 = 41` in parse.rs). The **core** `lb_select_forward` (flowplane-core/src/lb.rs) is v4-only; the sim runs core fns, so v6 sim coverage requires a core v6 variant.
 
 ## Task V6-1: Core `lb_select_forward_v6` + eBPF delegates to it
 
 **Files:**
-- Modify: `xdp-dp-core/src/lb.rs` (add `lb_select_forward_v6`)
-- Modify: `xdp-dp-ebpf/src/lb.rs` (make the existing `lb_select_forward_v6` a thin core delegate, like the v4 one at lines 10-18)
-- Test: `xdp-dp-core/src/lb.rs` (or the core test module) + verify eBPF builds
+- Modify: `flowplane-core/src/lb.rs` (add `lb_select_forward_v6`)
+- Modify: `flowplane-ebpf/src/lb.rs` (make the existing `lb_select_forward_v6` a thin core delegate, like the v4 one at lines 10-18)
+- Test: `flowplane-core/src/lb.rs` (or the core test module) + verify eBPF builds
 
-- [ ] **Step 1: Add `lb_select_forward_v6<P: Pkt, M: Maps>(pkt, maps, ip_off, vni) -> Option<[u8;16]>` to xdp-dp-core/src/lb.rs**, a faithful port of the eBPF hand-written v6 logic:
+- [ ] **Step 1: Add `lb_select_forward_v6<P: Pkt, M: Maps>(pkt, maps, ip_off, vni) -> Option<[u8;16]>` to flowplane-core/src/lb.rs**, a faithful port of the eBPF hand-written v6 logic:
   - read `nexthdr = pkt.read_u8(ip_off + 6)?`; return None unless TCP(6)/UDP(17).
   - `dst6 = pkt.read_array::<16>(ip_off + 24)?`, `src6 = pkt.read_array::<16>(ip_off + 8)?`; take last-4 of each (`dst4 = [dst6[12],dst6[13],dst6[14],dst6[15]]`, same for src).
   - L4 ports at `ip_off + 40`: `sport = u16::from_be_bytes(pkt.read_array::<2>(ip_off+40)?)`, `dport = ...(ip_off+42)?`.
@@ -1463,16 +1463,16 @@ git commit -m "chore(lb): build/vet sweep for LoadBalancer wiring" || echo "noth
 
 - [ ] **Step 2: Add a core unit test** `lb_v6_select` building a `VecPkt` of an `[IPv6][TCP]` frame (dst last-4 = VIP4, dport 443) + a `MemMaps` with the LB+maglev entry, asserting the backend is selected; and a negative (non-LB dst → None). Mirror the existing v4 lb test in the crate.
 
-- [ ] **Step 3: Refactor eBPF `lb_select_forward_v6`** (xdp-dp-ebpf/src/lb.rs) to delegate to core (like the v4 `lb_select_forward` does): body becomes `xdp_dp_core::lb::lb_select_forward_v6(&crate::coreimpl::CtxPkt{ctx}, &crate::coreimpl::GlobalMaps, ip_off, vni)`. Remove the hand-written duplicate. Keep the `lb_select_forward_v6` public signature identical (callers in v6.rs unchanged).
+- [ ] **Step 3: Refactor eBPF `lb_select_forward_v6`** (flowplane-ebpf/src/lb.rs) to delegate to core (like the v4 `lb_select_forward` does): body becomes `flowplane_core::lb::lb_select_forward_v6(&crate::coreimpl::CtxPkt{ctx}, &crate::coreimpl::GlobalMaps, ip_off, vni)`. Remove the hand-written duplicate. Keep the `lb_select_forward_v6` public signature identical (callers in v6.rs unchanged).
 
-- [ ] **Step 4:** `cargo test -p xdp-dp-core` PASS; `cargo build -p xdp-dp-ebpf` (or the workspace eBPF build) compiles. If a `make`/anchor build is needed for the eBPF, run it; report if the verifier/build needs privileged run.
+- [ ] **Step 4:** `cargo test -p flowplane-core` PASS; `cargo build -p flowplane-ebpf` (or the workspace eBPF build) compiles. If a `make`/anchor build is needed for the eBPF, run it; report if the verifier/build needs privileged run.
 
-- [ ] **Step 5: Commit** `git add xdp-dp-core/src/lb.rs xdp-dp-ebpf/src/lb.rs` — `refactor(lb): core lb_select_forward_v6 (eBPF delegates); shared v6 LB select`.
+- [ ] **Step 5: Commit** `git add flowplane-core/src/lb.rs flowplane-ebpf/src/lb.rs` — `refactor(lb): core lb_select_forward_v6 (eBPF delegates); shared v6 LB select`.
 
 ## Task V6-2: eBPF `wan_rx` v6 branch
 
 **Files:**
-- Modify: `xdp-dp-ebpf/src/ingress.rs` (`try_wan_rx`, around lines 338-376)
+- Modify: `flowplane-ebpf/src/ingress.rs` (`try_wan_rx`, around lines 338-376)
 
 - [ ] **Step 1: Add a v6 branch in `try_wan_rx`** BEFORE the `if ethertype != ETH_P_IP { return Ok(XDP_PASS) }` guard. When `ethertype == ETH_P_IPV6`:
   - bounds: `if data + ETH_LEN + 40 > data_end { return Ok(XDP_PASS) }` (v6 header is 40 bytes).
@@ -1482,14 +1482,14 @@ git commit -m "chore(lb): build/vet sweep for LoadBalancer wiring" || echo "noth
 
 - [ ] **Step 2: Build + verifier.** `cargo build` the eBPF crate; if there's a `make build-ebpf`/anchor path that runs the verifier, use it. The v6 branch reads only within the `data + ETH_LEN + 40` (and `lb_select_forward_v6`'s own `+44`/`l4_off+4`) bounds — confirm the verifier accepts it. Report any verifier error verbatim (do NOT loosen bounds to force it — investigate).
 
-- [ ] **Step 3: Commit** `git add xdp-dp-ebpf/src/ingress.rs` — `feat(edge): wan_rx v6 branch (v6 WAN VIP -> Maglev backend -> v6-in-IPv6 encap)`.
+- [ ] **Step 3: Commit** `git add flowplane-ebpf/src/ingress.rs` — `feat(edge): wan_rx v6 branch (v6 WAN VIP -> Maglev backend -> v6-in-IPv6 encap)`.
 
 ## Task V6-3: Proto `vip` (family-agnostic) + node.rs family parse + Go adapter
 
 **Files:**
 - Modify: `api/proto/dataplane/v1/dataplane.proto` (rename `AddLbVipRequest.vip_ipv4` → `vip`, keep field number 3)
-- Regenerate: Go stubs (`make proto-go`) + Rust stubs (find the Rust proto-gen: `grep -rn "tonic_build\|dataplane.proto\|build.rs" xdp-dp/ cni/`)
-- Modify: `xdp-dp/src/node.rs` (`add_lb_vip` handler)
+- Regenerate: Go stubs (`make proto-go`) + Rust stubs (find the Rust proto-gen: `grep -rn "tonic_build\|dataplane.proto\|build.rs" flowplane/ cni/`)
+- Modify: `flowplane/src/node.rs` (`add_lb_vip` handler)
 - Modify: `netplane/agent/bus.go` (`dpAdapter.AddLbVip`)
 
 - [ ] **Step 1: Rename the proto field.** In `AddLbVipRequest`, change `string vip_ipv4 = 3;` to `string vip = 3;` (SAME field number 3 → wire-compatible; only the generated name changes). Update the comment to "the public VIP (IPv4 or IPv6)".
@@ -1508,15 +1508,15 @@ git commit -m "chore(lb): build/vet sweep for LoadBalancer wiring" || echo "noth
 
 - [ ] **Step 4: Go adapter.** In `netplane/agent/bus.go` `dpAdapter.AddLbVip`, change `VipIpv4: vip` to `Vip: vip` in the `dpv1.AddLbVipRequest{...}` literal.
 
-- [ ] **Step 5:** `cd netplane && go build ./...` PASS; `cargo build -p xdp-dp` PASS; `cd netplane && go test ./agent/` PASS.
+- [ ] **Step 5:** `cd netplane && go build ./...` PASS; `cargo build -p flowplane` PASS; `cd netplane && go test ./agent/` PASS.
 
-- [ ] **Step 6: Commit** `git add api/proto/dataplane/v1/dataplane.proto cni/gen/dataplanev1/ xdp-dp/src/node.rs netplane/agent/bus.go` (+ any regenerated Rust stub path) — `feat(lb): AddLbVip accepts v6 VIP (family-agnostic vip field + node.rs parse)`.
+- [ ] **Step 6: Commit** `git add api/proto/dataplane/v1/dataplane.proto cni/gen/dataplanev1/ flowplane/src/node.rs netplane/agent/bus.go` (+ any regenerated Rust stub path) — `feat(lb): AddLbVip accepts v6 VIP (family-agnostic vip field + node.rs parse)`.
 
 ## Task V6-4: Sim v6 wan_rx + tests + final sweep
 
 **Files:**
-- Modify: `xdp-dp-sim/src/sim.rs` (`wan_rx` — handle v6 via the core v6 fn)
-- Modify: `xdp-dp-sim/src/lb_scenario_test.rs` (v6 N/S test)
+- Modify: `flowplane-sim/src/sim.rs` (`wan_rx` — handle v6 via the core v6 fn)
+- Modify: `flowplane-sim/src/lb_scenario_test.rs` (v6 N/S test)
 - Modify: `netplane/agent/lbreconcile_test.go` (v6 VIP flows through ReconcileLB)
 
 - [ ] **Step 1: Sim wan_rx v6.** In `SimNode::wan_rx` (sim.rs ~175), detect the frame's ethertype (bytes 12-13). For `0x86DD` (IPv6), call `lb_select_forward_v6(&VecPkt::from_bytes(plain), &self.maps, ETH_LEN, 0)` and, on Some, `edge_encap` with `inner_proto: 41` (IPPROTO_IPV6); for `0x0800` keep the existing v4 path (`inner_proto: 4`). Import the core `lb_select_forward_v6`.
@@ -1525,9 +1525,9 @@ git commit -m "chore(lb): build/vet sweep for LoadBalancer wiring" || echo "noth
 
 - [ ] **Step 3: Go v6 VIP test.** In lbreconcile_test.go add `TestReconcileLB_V6VIP`: an edge Reconciler + a LoadBalancer with `VIP: "2001:db8::a"` → assert `dp.lbVips` contains `"2001:db8::a"` (the id == VIP string flows unchanged). Confirms the control-plane path is family-agnostic.
 
-- [ ] **Step 4: Full sweep.** `cargo test -p xdp-dp-sim -p xdp-dp-core -p xdp-dp` and `cd netplane && go test ./...` all PASS. If the eBPF anchor (`make sim-anchor`) is runnable (CAP_BPF), run it to confirm no regression; a dedicated v6 wan_rx anchor is OPTIONAL (log if skipped — the sim + core + verifier cover it).
+- [ ] **Step 4: Full sweep.** `cargo test -p flowplane-sim -p flowplane-core -p flowplane` and `cd netplane && go test ./...` all PASS. If the eBPF anchor (`make sim-anchor`) is runnable (CAP_BPF), run it to confirm no regression; a dedicated v6 wan_rx anchor is OPTIONAL (log if skipped — the sim + core + verifier cover it).
 
-- [ ] **Step 5: Commit** `git add xdp-dp-sim/ netplane/agent/lbreconcile_test.go` — `test(sim,agent): v6 N/S wan_rx delivery + v6 VIP control-plane coverage`.
+- [ ] **Step 5: Commit** `git add flowplane-sim/ netplane/agent/lbreconcile_test.go` — `test(sim,agent): v6 N/S wan_rx delivery + v6 VIP control-plane coverage`.
 
 ## Phase 2 note for the spec
 

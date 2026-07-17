@@ -3,12 +3,12 @@
 # DataplaneNode.AttachInterface gRPC, proving they reach each other over the LOCAL fast path.
 #
 # Modeled closely on test/attach-netns.sh (same idioms: a root-netns dummy with a global ULA /64
-# for underlay inference, `xdp-dp serve` bringing up the datapath + gRPC listener, AttachInterface
+# for underlay inference, `flowplane serve` bringing up the datapath + gRPC listener, AttachInterface
 # via grpcurl, an EXIT-trap cleanup). Differs by attaching TWO endpoints in two netns and pinging
 # between them.
 #
 # Topology (no KubeVirt/k8s/fabric — pure veth/netns):
-#   ep-a(10.0.0.1) --veth-a0-- [ xdp-dp serve datapath ] --veth-b0-- ep-b(10.0.0.2)     (vni 100)
+#   ep-a(10.0.0.1) --veth-a0-- [ flowplane serve datapath ] --veth-b0-- ep-b(10.0.0.2)     (vni 100)
 #
 # AttachInterface creates a veth pair per endpoint (host end named veth-<id>, guest end named <id>
 # moved into the target netns), allocates an underlay /128 out of fd00:db8:0:7::/64, and programs
@@ -62,7 +62,7 @@ cleanup() {
         kill "$DP_PID" 2>/dev/null
         wait "$DP_PID" 2>/dev/null
     fi
-    pkill -f "xdp-dp serve --addr $ADDR" 2>/dev/null
+    pkill -f "flowplane serve --addr $ADDR" 2>/dev/null
     ip netns del "$NS_A" 2>/dev/null
     ip netns del "$NS_B" 2>/dev/null
     ip link del "$DUMMY" 2>/dev/null
@@ -72,9 +72,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "== build xdp-dp =="
-nix develop --command cargo build -p xdp-dp || fail "cargo build failed"
-BIN="$ROOT/target/debug/xdp-dp"
+echo "== build flowplane =="
+nix develop --command cargo build -p flowplane || fail "cargo build failed"
+BIN="$ROOT/target/debug/flowplane"
 [[ -x "$BIN" ]] || fail "$BIN missing after build"
 
 GRPCURL="$(command -v grpcurl)" || fail "grpcurl not on PATH (run inside nix develop)"
@@ -106,8 +106,8 @@ ip link add "$UPLINK" type veth peer name "$UPLINK_PEER" || fail "add uplink vet
 ip link set "$UPLINK" up
 ip link set "$UPLINK_PEER" up
 
-echo "== start xdp-dp serve on $ADDR (SKB mode; DHCP DNS/MTU set for the responder) =="
-XDP_DP_SKB_MODE=1 "$BIN" serve \
+echo "== start flowplane serve on $ADDR (SKB mode; DHCP DNS/MTU set for the responder) =="
+FLOWPLANE_SKB_MODE=1 "$BIN" serve \
     --addr "$ADDR" \
     --uplink "$UPLINK" \
     --local-underlay "fd00:db8:0:7::1" \

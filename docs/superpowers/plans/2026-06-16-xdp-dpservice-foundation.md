@@ -1,16 +1,16 @@
-# xdp-dpservice Foundation Implementation Plan (Milestones 1–3)
+# flowplaneservice Foundation Implementation Plan (Milestones 1–3)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stand up a Rust/aya eBPF-XDP dataplane that speaks the real dpservice `DPDKironcore` gRPC contract and carries guest-to-guest traffic across two hypervisor VMs via XDP IP-in-IPv6 encap/decap.
 
-**Architecture:** A cargo workspace with three crates — `xdp-dp-common` (`no_std` POD types shared with eBPF), `xdp-dp-ebpf` (XDP programs built for the BPF target), and `xdp-dp` (userspace `tonic` gRPC server + `aya` loader/CLI) — plus an `xtask` build helper and an `env/` harness (KVM VMs, host underlay bridge, k3s, netns/tap guests). The control plane translates `DPDKironcore` RPCs into BPF map writes; XDP programs on the guest tap and uplink do encap/redirect and decap/redirect (Approach A, pure XDP).
+**Architecture:** A cargo workspace with three crates — `flowplane-common` (`no_std` POD types shared with eBPF), `flowplane-ebpf` (XDP programs built for the BPF target), and `flowplane` (userspace `tonic` gRPC server + `aya` loader/CLI) — plus an `xtask` build helper and an `env/` harness (KVM VMs, host underlay bridge, k3s, netns/tap guests). The control plane translates `DPDKironcore` RPCs into BPF map writes; XDP programs on the guest tap and uplink do encap/redirect and decap/redirect (Approach A, pure XDP).
 
 **Tech Stack:** Rust (stable + nightly/`rust-src` for the BPF target), `aya` / `aya-ebpf`, `bpf-linker`, `tonic` + `prost` (+ `protoc`), Nix flake devShell, `just`, qemu/libvirt, iproute2, k3s, the real Go `dpservice-cli` as conformance driver.
 
 **Scope:** This plan covers spec Milestones 1–3 (Scaffold → gRPC skeleton → Overlay base). Milestones 4–8 (VIP, LB/maglev, NAT-GW, metalbond, metalnet) are deferred to follow-on plans; each builds on the maps + datapath established here.
 
-**Spec:** `docs/superpowers/specs/2026-06-15-xdp-dpservice-design.md`
+**Spec:** `docs/superpowers/specs/2026-06-15-flowplaneservice-design.md`
 
 ---
 
@@ -18,7 +18,7 @@
 
 ```
 ironcore-net-xdp/
-  Cargo.toml                # [workspace] members = common, ebpf, xdp-dp, xtask
+  Cargo.toml                # [workspace] members = common, ebpf, flowplane, xtask
   flake.nix                 # devShell: single NIGHTLY toolchain (+rust-src, bpfel target),
                             #   bpf-linker, protobuf, qemu/libvirt, iproute2
   # NOTE: no rust-toolchain.toml — this host uses a Nix-provided toolchain with NO rustup,
@@ -26,13 +26,13 @@ ironcore-net-xdp/
   #   toolchain; the ambient `cargo` runs `-Z build-std=core` directly.
   proto/
     dpdk.proto              # vendored from ironcore-dev/dpservice (package dpdkironcore.v1)
-  xdp-dp-common/
+  flowplane-common/
     Cargo.toml
     src/lib.rs              # no_std POD map key/value structs + tunnel constants
-  xdp-dp-ebpf/
+  flowplane-ebpf/
     Cargo.toml
     src/main.rs             # #[xdp] guest_tx (encap) + uplink_rx (decap) programs + maps
-  xdp-dp/
+  flowplane/
     Cargo.toml
     build.rs                # tonic_build compile of proto/dpdk.proto
     src/main.rs             # CLI entry (serve / load / debug)
@@ -46,7 +46,7 @@ ironcore-net-xdp/
   env/
     justfile                # up/down/demo targets
     setup-host.sh           # underlay bridge on host
-    setup-hyp-vm.sh         # per-VM: k3s, tap, netns guest, attach xdp-dp
+    setup-hyp-vm.sh         # per-VM: k3s, tap, netns guest, attach flowplane
     cloud-init/             # VM images / ignition (libvirt)
 ```
 
@@ -68,13 +68,13 @@ ironcore-net-xdp/
 resolver = "2"
 # Members start empty and are appended by each crate task (cargo errors on a listed
 # member whose Cargo.toml does not exist yet, and a `*` glob errors on non-crate dirs
-# like docs/proto/env — so we grow this list explicitly: Task 3 adds "xdp-dp-common",
-# Task 4 adds "xtask", Task 5 adds "xdp-dp").
+# like docs/proto/env — so we grow this list explicitly: Task 3 adds "flowplane-common",
+# Task 4 adds "xtask", Task 5 adds "flowplane").
 members = []
-# xdp-dp-ebpf is built out-of-tree for the BPF target via xtask. `exclude` is REQUIRED:
-# xtask runs `cargo` inside xdp-dp-ebpf/, which would otherwise error that the package
+# flowplane-ebpf is built out-of-tree for the BPF target via xtask. `exclude` is REQUIRED:
+# xtask runs `cargo` inside flowplane-ebpf/, which would otherwise error that the package
 # is inside the workspace root but not a member.
-exclude = ["xdp-dp-ebpf"]
+exclude = ["flowplane-ebpf"]
 
 [workspace.package]
 version = "0.1.0"
@@ -176,18 +176,18 @@ git add flake.nix flake.lock
 git commit -m "chore: add eBPF, gRPC and VM tooling to devShell"
 ```
 
-### Task 3: `xdp-dp-common` crate with a tested POD type
+### Task 3: `flowplane-common` crate with a tested POD type
 
 **Files:**
-- Create: `xdp-dp-common/Cargo.toml`
-- Create: `xdp-dp-common/src/lib.rs`
+- Create: `flowplane-common/Cargo.toml`
+- Create: `flowplane-common/src/lib.rs`
 
 - [ ] **Step 1: Write the crate manifest**
 
-`xdp-dp-common/Cargo.toml`:
+`flowplane-common/Cargo.toml`:
 ```toml
 [package]
-name = "xdp-dp-common"
+name = "flowplane-common"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -201,12 +201,12 @@ user = []   # gates std-only impls (e.g. aya Pod) for the userspace side
 
 Then register the crate in the root workspace — edit root `Cargo.toml` so:
 ```toml
-members = ["xdp-dp-common"]
+members = ["flowplane-common"]
 ```
 
 - [ ] **Step 2: Write the failing test**
 
-`xdp-dp-common/src/lib.rs`:
+`flowplane-common/src/lib.rs`:
 ```rust
 #![cfg_attr(not(feature = "user"), no_std)]
 
@@ -251,12 +251,12 @@ mod tests {
 
 - [ ] **Step 3: Run the test (expect compile-driven failure first, then pass)**
 
-Run: `cargo test -p xdp-dp-common --features user`
+Run: `cargo test -p flowplane-common --features user`
 Expected: PASS (`iface_key_is_word_packed`). If size assertion fails, fix field order/padding before proceeding.
 
 - [ ] **Step 4: Add the aya `Pod` impls behind the `user` feature**
 
-Append to `xdp-dp-common/src/lib.rs`:
+Append to `flowplane-common/src/lib.rs`:
 ```rust
 #[cfg(feature = "user")]
 mod user_impls {
@@ -265,7 +265,7 @@ mod user_impls {
     unsafe impl aya::Pod for IfaceValue {}
 }
 ```
-Add to `[dependencies]` in `xdp-dp-common/Cargo.toml`:
+Add to `[dependencies]` in `flowplane-common/Cargo.toml`:
 ```toml
 aya = { workspace = true, optional = true }
 ```
@@ -278,51 +278,51 @@ user = ["dep:aya"]
 
 Run:
 ```bash
-cargo test -p xdp-dp-common --features user
-cargo build -p xdp-dp-common   # no_std shape, no aya
+cargo test -p flowplane-common --features user
+cargo build -p flowplane-common   # no_std shape, no aya
 ```
 Expected: both succeed.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add xdp-dp-common
+git add flowplane-common
 git commit -m "feat(common): POD map key/value types shared with eBPF"
 ```
 
-### Task 4: `xdp-dp-ebpf` crate (XDP_PASS skeleton; compiled later by aya-build)
+### Task 4: `flowplane-ebpf` crate (XDP_PASS skeleton; compiled later by aya-build)
 
 **Files:**
-- Create: `xdp-dp-ebpf/Cargo.toml`
-- Create: `xdp-dp-ebpf/src/lib.rs`
-- Create: `xdp-dp-ebpf/src/main.rs`
-- Create: `xdp-dp-ebpf/build.rs`
+- Create: `flowplane-ebpf/Cargo.toml`
+- Create: `flowplane-ebpf/src/lib.rs`
+- Create: `flowplane-ebpf/src/main.rs`
+- Create: `flowplane-ebpf/build.rs`
 - Modify: root `Cargo.toml` (workspace membership + ebpf profile)
 
 > **Build model (IMPORTANT — no xtask).** Following the current aya pattern, the eBPF object
-> is compiled by the `aya-build` crate invoked from `xdp-dp`'s `build.rs` (Task 5). aya-build
+> is compiled by the `aya-build` crate invoked from `flowplane`'s `build.rs` (Task 5). aya-build
 > runs cargo-in-cargo with `-Z build-std` and selects `bpf-linker` automatically — so there
 > is no hand-rolled xtask and no manual linker config. Consequences for this crate:
 > - It is a workspace **member** but excluded from `default-members`, so a normal host
 >   `cargo build` does not try to compile its `#![no_main]` bin for the host.
 > - It exposes a tiny `src/lib.rs` (`#![no_std]`) purely to provide a **library target** so
->   the host-built `path` build-dependency declared by `xdp-dp` (Task 5) resolves; the actual
+>   the host-built `path` build-dependency declared by `flowplane` (Task 5) resolves; the actual
 >   XDP programs live in `src/main.rs` and are compiled only for `bpfel-unknown-none`.
-> - Never run `cargo build -p xdp-dp-ebpf` (whole-package) or `cargo build --workspace`: those
+> - Never run `cargo build -p flowplane-ebpf` (whole-package) or `cargo build --workspace`: those
 >   try to host-compile the bin and fail. Build only the lib target for sanity checks.
 
 - [ ] **Step 1: Write the eBPF crate manifest**
 
-`xdp-dp-ebpf/Cargo.toml`:
+`flowplane-ebpf/Cargo.toml`:
 ```toml
 [package]
-name = "xdp-dp-ebpf"
+name = "flowplane-ebpf"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 
 [dependencies]
-xdp-dp-common = { path = "../xdp-dp-common", default-features = false }
+flowplane-common = { path = "../flowplane-common", default-features = false }
 aya-ebpf = "0.1"
 aya-log-ebpf = "0.1"
 network-types = "0.0.7"
@@ -334,7 +334,7 @@ which = "6"
 path = "src/lib.rs"
 
 [[bin]]
-name = "xdp-dp-ebpf"
+name = "flowplane-ebpf"
 path = "src/main.rs"
 ```
 > Do NOT put `[profile.*]` here — profile settings in a workspace member are ignored with a
@@ -342,18 +342,18 @@ path = "src/main.rs"
 
 - [ ] **Step 2: Write the library shim**
 
-`xdp-dp-ebpf/src/lib.rs`:
+`flowplane-ebpf/src/lib.rs`:
 ```rust
 #![no_std]
 
 // This crate's real content is the bpfel-only program binary in `src/main.rs`. This empty
-// `#![no_std]` library target exists so that `xdp-dp`'s host-built `path` build-dependency on
+// `#![no_std]` library target exists so that `flowplane`'s host-built `path` build-dependency on
 // this crate resolves (build-dependencies compile the lib target for the host).
 ```
 
 - [ ] **Step 3: Write the XDP_PASS programs**
 
-`xdp-dp-ebpf/src/main.rs`:
+`flowplane-ebpf/src/main.rs`:
 ```rust
 #![no_std]
 #![no_main]
@@ -385,7 +385,7 @@ static LICENSE: [u8; 13] = *b"Dual MIT/GPL\0";
 
 - [ ] **Step 4: Write the build.rs bpf-linker rebuild hint**
 
-`xdp-dp-ebpf/build.rs`:
+`flowplane-ebpf/build.rs`:
 ```rust
 use which::which;
 
@@ -399,30 +399,30 @@ fn main() {
 
 - [ ] **Step 5: Register the crate in the workspace (member, not default; BPF profile)**
 
-Edit root `Cargo.toml`: add `xdp-dp-ebpf` as a member, **remove** the `exclude` line, add a
+Edit root `Cargo.toml`: add `flowplane-ebpf` as a member, **remove** the `exclude` line, add a
 `default-members` that omits the ebpf crate, and add the BPF release profile. The
 `[workspace]` table should read:
 ```toml
 [workspace]
 resolver = "2"
-members = ["xdp-dp-common", "xdp-dp-ebpf"]
-default-members = ["xdp-dp-common"]
+members = ["flowplane-common", "flowplane-ebpf"]
+default-members = ["flowplane-common"]
 
-[profile.release.package.xdp-dp-ebpf]
+[profile.release.package.flowplane-ebpf]
 debug = 2
 codegen-units = 1
 strip = false
 ```
 (Leave `[workspace.package]` and `[workspace.dependencies]` unchanged. Task 5 appends
-`xdp-dp` to both `members` and `default-members`.)
+`flowplane` to both `members` and `default-members`.)
 
 - [ ] **Step 6: Verify structural validity (host lib only; the bpfel object builds in Task 5)**
 
 Run:
 ```bash
-cargo build -p xdp-dp-ebpf --lib          # host-compiles the no_std lib shim only
-cargo build -p xdp-dp-common              # default member still builds
-cargo metadata --no-deps --format-version 1 | grep -q '"name":"xdp-dp-ebpf"' && echo MEMBER_OK
+cargo build -p flowplane-ebpf --lib          # host-compiles the no_std lib shim only
+cargo build -p flowplane-common              # default member still builds
+cargo metadata --no-deps --format-version 1 | grep -q '"name":"flowplane-ebpf"' && echo MEMBER_OK
 ```
 Expected: both builds finish; `MEMBER_OK` printed. Do NOT attempt to build the bin/object
 here — that happens via aya-build in Task 5.
@@ -430,23 +430,23 @@ here — that happens via aya-build in Task 5.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add xdp-dp-ebpf Cargo.toml
-git commit -m "feat(ebpf): XDP_PASS skeleton (aya-build compiles it from xdp-dp)"
+git add flowplane-ebpf Cargo.toml
+git commit -m "feat(ebpf): XDP_PASS skeleton (aya-build compiles it from flowplane)"
 ```
 
-### Task 5: `xdp-dp` userspace crate loads and attaches the eBPF program
+### Task 5: `flowplane` userspace crate loads and attaches the eBPF program
 
 **Files:**
-- Create: `xdp-dp/Cargo.toml`
-- Create: `xdp-dp/src/main.rs`
-- Create: `xdp-dp/src/loader.rs`
+- Create: `flowplane/Cargo.toml`
+- Create: `flowplane/src/main.rs`
+- Create: `flowplane/src/loader.rs`
 
 - [ ] **Step 1: Write the userspace manifest**
 
-`xdp-dp/Cargo.toml`:
+`flowplane/Cargo.toml`:
 ```toml
 [package]
-name = "xdp-dp"
+name = "flowplane"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -454,7 +454,7 @@ license.workspace = true
 [dependencies]
 aya = { workspace = true }
 aya-log = { workspace = true }
-xdp-dp-common = { path = "../xdp-dp-common", features = ["user"] }
+flowplane-common = { path = "../flowplane-common", features = ["user"] }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
@@ -467,26 +467,26 @@ aya-build = "0.1.3"
 cargo_metadata = "0.23"
 # Declared so cargo tracks the ebpf crate for cache invalidation; it is built for the host
 # as a (no_std) lib here, and separately compiled to bpfel by aya-build in build.rs.
-xdp-dp-ebpf = { path = "../xdp-dp-ebpf" }
+flowplane-ebpf = { path = "../flowplane-ebpf" }
 ```
 (`tonic-build` is added in Task 6 when the proto is introduced.)
 
-Register `xdp-dp` in the root workspace — edit root `Cargo.toml` so both lists include it:
+Register `flowplane` in the root workspace — edit root `Cargo.toml` so both lists include it:
 ```toml
-members = ["xdp-dp-common", "xdp-dp-ebpf", "xdp-dp"]
-default-members = ["xdp-dp-common", "xdp-dp"]
+members = ["flowplane-common", "flowplane-ebpf", "flowplane"]
+default-members = ["flowplane-common", "flowplane"]
 ```
 
 - [ ] **Step 2: Write build.rs that compiles the eBPF object via aya-build**
 
-`xdp-dp/build.rs`:
+`flowplane/build.rs`:
 ```rust
 use anyhow::{anyhow, Context as _};
 use aya_build::{Package, Toolchain};
 
 fn main() -> anyhow::Result<()> {
-    // Locate the xdp-dp-ebpf package and compile its bin to bpfel via build-std + bpf-linker.
-    // aya-build places the resulting object at $OUT_DIR/xdp-dp-ebpf.
+    // Locate the flowplane-ebpf package and compile its bin to bpfel via build-std + bpf-linker.
+    // aya-build places the resulting object at $OUT_DIR/flowplane-ebpf.
     let metadata = cargo_metadata::MetadataCommand::new()
         .no_deps()
         .exec()
@@ -494,15 +494,15 @@ fn main() -> anyhow::Result<()> {
     let ebpf = metadata
         .packages
         .into_iter()
-        .find(|p| p.name.as_str() == "xdp-dp-ebpf")
-        .ok_or_else(|| anyhow!("xdp-dp-ebpf package not found"))?;
+        .find(|p| p.name.as_str() == "flowplane-ebpf")
+        .ok_or_else(|| anyhow!("flowplane-ebpf package not found"))?;
     let root_dir = ebpf
         .manifest_path
         .parent()
         .ok_or_else(|| anyhow!("no parent dir for {}", ebpf.manifest_path))?
         .to_string();
     aya_build::build_ebpf(
-        [Package { name: "xdp-dp-ebpf", root_dir: root_dir.as_str(), ..Default::default() }],
+        [Package { name: "flowplane-ebpf", root_dir: root_dir.as_str(), ..Default::default() }],
         Toolchain::Custom("nightly-2026-01-15"),
     )
 }
@@ -518,7 +518,7 @@ fn main() -> anyhow::Result<()> {
 
 - [ ] **Step 3: Write the loader that embeds and attaches the eBPF object**
 
-`xdp-dp/src/loader.rs`:
+`flowplane/src/loader.rs`:
 ```rust
 use anyhow::Context;
 use aya::programs::{Xdp, XdpFlags};
@@ -526,7 +526,7 @@ use aya::Ebpf;
 
 /// Load the eBPF object that aya-build compiled to bpfel and placed in OUT_DIR.
 pub fn load_ebpf() -> anyhow::Result<Ebpf> {
-    Ebpf::load(aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/xdp-dp-ebpf")))
+    Ebpf::load(aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowplane-ebpf")))
         .context("load ebpf object")
 }
 
@@ -546,14 +546,14 @@ pub fn attach_uplink(iface: &str) -> anyhow::Result<Ebpf> {
 
 - [ ] **Step 4: Write the CLI entrypoint**
 
-`xdp-dp/src/main.rs`:
+`flowplane/src/main.rs`:
 ```rust
 mod loader;
 
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "xdp-dp")]
+#[command(name = "flowplane")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -584,9 +584,9 @@ async fn main() -> anyhow::Result<()> {
 
 - [ ] **Step 5: Build the userspace binary (this compiles the eBPF object via build.rs)**
 
-Run: `cargo build -p xdp-dp`
-Expected: succeeds. The first build runs `build.rs` → `aya-build` compiles `xdp-dp-ebpf` to
-bpfel and writes `$OUT_DIR/xdp-dp-ebpf`, which `include_bytes_aligned!` then embeds. If the
+Run: `cargo build -p flowplane`
+Expected: succeeds. The first build runs `build.rs` → `aya-build` compiles `flowplane-ebpf` to
+bpfel and writes `$OUT_DIR/flowplane-ebpf`, which `include_bytes_aligned!` then embeds. If the
 build fails inside aya-build, capture the exact error (toolchain/linker) and report it — do
 not paper over it.
 
@@ -595,7 +595,7 @@ not paper over it.
 This step needs root/CAP_BPF; the controller will run it or hand it to the user. Commands:
 ```bash
 sudo ip link add veth-smoke type veth peer name veth-smoke-peer
-sudo ./target/debug/xdp-dp load --uplink veth-smoke &
+sudo ./target/debug/flowplane load --uplink veth-smoke &
 sleep 1; sudo bpftool prog show | grep -i xdp && echo ATTACH_OK
 sudo kill %1; sudo ip link del veth-smoke
 ```
@@ -605,7 +605,7 @@ tooling; if absent, verify via `ip link show veth-smoke` reporting an attached `
 - [ ] **Step 7: Commit**
 
 ```bash
-git add xdp-dp Cargo.toml
+git add flowplane Cargo.toml
 git commit -m "feat(userspace): load and attach XDP datapath via aya (aya-build)"
 ```
 
@@ -617,9 +617,9 @@ git commit -m "feat(userspace): load and attach XDP datapath via aya (aya-build)
 
 **Files:**
 - Create: `proto/dpdk.proto` (+ any imported protos)
-- Modify: `xdp-dp/build.rs` (Task 5 created it for aya-build; here we ALSO compile the proto)
-- Modify: `xdp-dp/Cargo.toml` (add `tonic-build` build-dependency)
-- Modify: `xdp-dp/src/main.rs`
+- Modify: `flowplane/build.rs` (Task 5 created it for aya-build; here we ALSO compile the proto)
+- Modify: `flowplane/Cargo.toml` (add `tonic-build` build-dependency)
+- Modify: `flowplane/src/main.rs`
 
 - [ ] **Step 1: Vendor the proto**
 
@@ -632,11 +632,11 @@ If `dpdk.proto` has `import` lines, fetch those siblings into `proto/` too (re-r
 
 - [ ] **Step 2: Add the tonic-build dependency and extend build.rs**
 
-Add to `xdp-dp/Cargo.toml` under `[build-dependencies]` (keep the aya-build entries):
+Add to `flowplane/Cargo.toml` under `[build-dependencies]` (keep the aya-build entries):
 ```toml
 tonic-build = "0.12"
 ```
-Then EXTEND the existing `xdp-dp/build.rs` (created in Task 5 for aya-build) so it ALSO
+Then EXTEND the existing `flowplane/build.rs` (created in Task 5 for aya-build) so it ALSO
 compiles the proto. The file becomes:
 ```rust
 use anyhow::{anyhow, Context as _};
@@ -651,15 +651,15 @@ fn main() -> anyhow::Result<()> {
     let ebpf = metadata
         .packages
         .into_iter()
-        .find(|p| p.name.as_str() == "xdp-dp-ebpf")
-        .ok_or_else(|| anyhow!("xdp-dp-ebpf package not found"))?;
+        .find(|p| p.name.as_str() == "flowplane-ebpf")
+        .ok_or_else(|| anyhow!("flowplane-ebpf package not found"))?;
     let root_dir = ebpf
         .manifest_path
         .parent()
         .ok_or_else(|| anyhow!("no parent dir for {}", ebpf.manifest_path))?
         .to_string();
     aya_build::build_ebpf(
-        [Package { name: "xdp-dp-ebpf", root_dir: root_dir.as_str(), ..Default::default() }],
+        [Package { name: "flowplane-ebpf", root_dir: root_dir.as_str(), ..Default::default() }],
         Toolchain::Custom("nightly-2026-01-15"),
     )?;
 
@@ -675,32 +675,32 @@ fn main() -> anyhow::Result<()> {
 
 - [ ] **Step 3: Wire the generated module and verify it compiles**
 
-Add to top of `xdp-dp/src/main.rs`:
+Add to top of `flowplane/src/main.rs`:
 ```rust
 pub mod pb {
     tonic::include_proto!("dpdkironcore.v1");
 }
 ```
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 Expected: builds; generated types available under `pb::` (e.g. `pb::dpdk_ironcore_server::DpdkIroncore`). If the generated server trait/module name differs, note the exact path printed in the error and use it in Task 7.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add proto xdp-dp/build.rs xdp-dp/src/main.rs
+git add proto flowplane/build.rs flowplane/src/main.rs
 git commit -m "feat(grpc): vendor dpservice proto and generate DPDKironcore service"
 ```
 
 ### Task 7: Implement `Initialize`/`CheckInitialized`/`GetVersion` with state
 
 **Files:**
-- Create: `xdp-dp/src/state.rs`
-- Create: `xdp-dp/src/grpc.rs`
-- Modify: `xdp-dp/src/main.rs`
+- Create: `flowplane/src/state.rs`
+- Create: `flowplane/src/grpc.rs`
+- Modify: `flowplane/src/main.rs`
 
 - [ ] **Step 1: Write the failing test for init state**
 
-`xdp-dp/src/state.rs`:
+`flowplane/src/state.rs`:
 ```rust
 use std::sync::Mutex;
 
@@ -745,19 +745,19 @@ mod tests {
     }
 }
 ```
-Add to `xdp-dp/Cargo.toml` `[dependencies]`:
+Add to `flowplane/Cargo.toml` `[dependencies]`:
 ```toml
 uuid = { version = "1", features = ["v4"] }
 ```
 
 - [ ] **Step 2: Run the test to verify it passes**
 
-Run: `cargo test -p xdp-dp state::tests`
+Run: `cargo test -p flowplane state::tests`
 Expected: PASS (`initialize_is_idempotent_and_check_reflects_it`).
 
 - [ ] **Step 3: Implement the gRPC service over the state**
 
-`xdp-dp/src/grpc.rs` (adjust the trait/type paths to whatever Task 6 Step 3 printed):
+`flowplane/src/grpc.rs` (adjust the trait/type paths to whatever Task 6 Step 3 printed):
 ```rust
 use std::sync::Arc;
 
@@ -819,7 +819,7 @@ impl DpdKironcore for Service {
 
 - [ ] **Step 4: Add a `serve` subcommand**
 
-In `xdp-dp/src/main.rs` add modules and a command:
+In `flowplane/src/main.rs` add modules and a command:
 ```rust
 mod grpc;
 mod state;
@@ -841,7 +841,7 @@ Cmd::Serve { addr } => {
 
 Run:
 ```bash
-cargo run -p xdp-dp -- serve --addr 127.0.0.1:1337 &
+cargo run -p flowplane -- serve --addr 127.0.0.1:1337 &
 sleep 1
 grpcurl -plaintext -import-path proto -proto dpdk.proto \
   127.0.0.1:1337 dpdkironcore.v1.DPDKironcore/Initialize
@@ -852,7 +852,7 @@ Expected: a JSON response containing a `uuid` and `status` with `OK`. (Add `grpc
 - [ ] **Step 6: Commit**
 
 ```bash
-git add xdp-dp
+git add flowplane
 git commit -m "feat(grpc): Initialize/CheckInitialized/GetVersion backed by state"
 ```
 
@@ -873,7 +873,7 @@ go install github.com/ironcore-dev/dpservice/cli/dpservice-cli@latest || \
 
 Run:
 ```bash
-cargo run -p xdp-dp -- serve --addr 127.0.0.1:1337 &
+cargo run -p flowplane -- serve --addr 127.0.0.1:1337 &
 sleep 1
 dpservice-cli --address 127.0.0.1:1337 init || dpservice-cli --address 127.0.0.1:1337 get version
 kill %1
@@ -903,11 +903,11 @@ git commit -m "test(grpc): conformance recipe driving server with real dpservice
 ### Task 9: `interfaces` + `routes` BPF maps shared common types
 
 **Files:**
-- Modify: `xdp-dp-common/src/lib.rs`
+- Modify: `flowplane-common/src/lib.rs`
 
 - [ ] **Step 1: Write the failing test for the route types**
 
-Append to `xdp-dp-common/src/lib.rs` (above the `#[cfg(test)]` module, then extend tests):
+Append to `flowplane-common/src/lib.rs` (above the `#[cfg(test)]` module, then extend tests):
 ```rust
 /// Key for the `routes` map: (VNI, IPv4 prefix). Host-order length in `prefix_len`.
 #[repr(C)]
@@ -942,29 +942,29 @@ And add the Pod impls in `user_impls`:
 
 - [ ] **Step 2: Run the test**
 
-Run: `cargo test -p xdp-dp-common --features user`
+Run: `cargo test -p flowplane-common --features user`
 Expected: PASS (`route_types_have_stable_layout`).
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add xdp-dp-common
+git add flowplane-common
 git commit -m "feat(common): RouteKey/RouteValue POD types"
 ```
 
 ### Task 10: Userspace typed map wrappers (TDD against a real BPF map)
 
 **Files:**
-- Create: `xdp-dp/src/maps.rs`
-- Modify: `xdp-dp/src/main.rs` (add `mod maps;`)
+- Create: `flowplane/src/maps.rs`
+- Modify: `flowplane/src/main.rs` (add `mod maps;`)
 
 - [ ] **Step 1: Declare maps in the eBPF crate**
 
-In `xdp-dp-ebpf/src/main.rs`, above the programs:
+In `flowplane-ebpf/src/main.rs`, above the programs:
 ```rust
 use aya_ebpf::maps::HashMap;
 use aya_ebpf::macros::map;
-use xdp_dp_common::{IfaceKey, IfaceValue, RouteKey, RouteValue};
+use flowplane_common::{IfaceKey, IfaceValue, RouteKey, RouteValue};
 
 #[map]
 static INTERFACES: HashMap<IfaceKey, IfaceValue> = HashMap::with_max_entries(1024, 0);
@@ -976,12 +976,12 @@ Rebuild the object: `cargo run -p xtask -- --release` (expected: `ebpf build OK`
 
 - [ ] **Step 2: Write the failing test for the userspace wrapper**
 
-`xdp-dp/src/maps.rs`:
+`flowplane/src/maps.rs`:
 ```rust
 use anyhow::Context;
 use aya::maps::{HashMap, MapData};
 use aya::Ebpf;
-use xdp_dp_common::{IfaceKey, IfaceValue};
+use flowplane_common::{IfaceKey, IfaceValue};
 
 /// Typed handle over the `INTERFACES` BPF map.
 pub struct Interfaces {
@@ -1010,7 +1010,7 @@ mod tests {
     use super::*;
 
     static OBJ: &[u8] =
-        include_bytes!("../../xdp-dp-ebpf/target/bpfel-unknown-none/release/xdp-dp");
+        include_bytes!("../../flowplane-ebpf/target/bpfel-unknown-none/release/flowplane");
 
     #[test]
     fn interfaces_roundtrip_through_bpf_map() {
@@ -1024,24 +1024,24 @@ mod tests {
     }
 }
 ```
-Add to `xdp-dp/src/main.rs`: `mod maps;`
+Add to `flowplane/src/main.rs`: `mod maps;`
 
 - [ ] **Step 3: Run the test (privileged)**
 
-Run: `cargo run -p xtask -- --release && sudo -E cargo test -p xdp-dp maps::tests`
+Run: `cargo run -p xtask -- --release && sudo -E cargo test -p flowplane maps::tests`
 Expected: PASS. If it fails with EPERM, the runner lacks CAP_BPF — run as root. This is the gate proving userspace ↔ kernel map I/O works end to end.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add xdp-dp xdp-dp-ebpf
+git add flowplane flowplane-ebpf
 git commit -m "feat(maps): typed Interfaces wrapper with BPF-map roundtrip test"
 ```
 
 ### Task 11: XDP encap on guest tap + decap on uplink
 
 **Files:**
-- Modify: `xdp-dp-ebpf/src/main.rs`
+- Modify: `flowplane-ebpf/src/main.rs`
 
 - [ ] **Step 1: Implement decap in `uplink_rx`**
 
@@ -1143,22 +1143,22 @@ Expected: `ebpf build OK`. Resolve any field-name/borrow errors now (this is whe
 - [ ] **Step 4: Commit**
 
 ```bash
-git add xdp-dp-ebpf
+git add flowplane-ebpf
 git commit -m "feat(ebpf): IPv6 encap on guest_tx and decap on uplink_rx"
 ```
 
 ### Task 12: Control plane programs maps from `CreateInterface`/`CreateRoute`
 
 **Files:**
-- Modify: `xdp-dp/src/state.rs`
-- Modify: `xdp-dp/src/grpc.rs`
-- Modify: `xdp-dp/src/loader.rs`
+- Modify: `flowplane/src/state.rs`
+- Modify: `flowplane/src/grpc.rs`
+- Modify: `flowplane/src/loader.rs`
 
 - [ ] **Step 1: Write the failing test for route translation**
 
-Add to `xdp-dp/src/state.rs` a pure helper that converts a proto `Route` into `(RouteKey, RouteValue)`, and test it:
+Add to `flowplane/src/state.rs` a pure helper that converts a proto `Route` into `(RouteKey, RouteValue)`, and test it:
 ```rust
-use xdp_dp_common::{RouteKey, RouteValue};
+use flowplane_common::{RouteKey, RouteValue};
 
 /// Convert a (vni, ipv4 prefix, prefix_len, nexthop ipv6, nexthop vni) into map entries.
 pub fn route_entry(
@@ -1192,23 +1192,23 @@ mod route_tests {
 
 - [ ] **Step 2: Run the test**
 
-Run: `cargo test -p xdp-dp route_tests`
+Run: `cargo test -p flowplane route_tests`
 Expected: PASS (`route_entry_maps_fields`).
 
 - [ ] **Step 3: Implement `CreateInterface` / `CreateRoute` RPCs**
 
-Extend `xdp-dp/src/grpc.rs` with the two methods, parsing the proto messages and calling into a `State` that holds the opened map wrappers (`Interfaces`, `Routes`). Decode `interface_id`/IP `bytes` fields into `[u8;4]`/`[u8;16]`, call `route_entry`, and `upsert`. (Mirror the `Interfaces` wrapper with a `Routes` wrapper in `maps.rs`.) Return `status: ok()`.
+Extend `flowplane/src/grpc.rs` with the two methods, parsing the proto messages and calling into a `State` that holds the opened map wrappers (`Interfaces`, `Routes`). Decode `interface_id`/IP `bytes` fields into `[u8;4]`/`[u8;16]`, call `route_entry`, and `upsert`. (Mirror the `Interfaces` wrapper with a `Routes` wrapper in `maps.rs`.) Return `status: ok()`.
 > The exact proto field access (`req.into_inner().route`, `Prefix`, `IpAddress.address` bytes) must match generated types from Task 6.
 
 - [ ] **Step 4: Build**
 
-Run: `cargo run -p xtask -- --release && cargo build -p xdp-dp`
+Run: `cargo run -p xtask -- --release && cargo build -p flowplane`
 Expected: success.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add xdp-dp
+git add flowplane
 git commit -m "feat(grpc): CreateInterface/CreateRoute program BPF maps"
 ```
 
@@ -1225,7 +1225,7 @@ git commit -m "feat(grpc): CreateInterface/CreateRoute program BPF maps"
 
 - [ ] **Step 2: Per-hypervisor-VM setup script**
 
-`env/setup-hyp-vm.sh` (runs inside each VM): install/enable k3s (`curl -sfL https://get.k3s.io | sh -`), create a guest netns + veth/tap pair (`guest0` ↔ `tap0`), assign the guest overlay IPv4 (e.g. A=`10.0.0.5/24`, B=`10.0.0.6/24`), set the VM's underlay IPv6 on its uplink, then run `xdp-dp` attaching `guest_tx` to `tap0` and `uplink_rx` to the uplink, seeding `UPLINK_IFINDEX`.
+`env/setup-hyp-vm.sh` (runs inside each VM): install/enable k3s (`curl -sfL https://get.k3s.io | sh -`), create a guest netns + veth/tap pair (`guest0` ↔ `tap0`), assign the guest overlay IPv4 (e.g. A=`10.0.0.5/24`, B=`10.0.0.6/24`), set the VM's underlay IPv6 on its uplink, then run `flowplane` attaching `guest_tx` to `tap0` and `uplink_rx` to the uplink, seeding `UPLINK_IFINDEX`.
 
 - [ ] **Step 3: `just` orchestration targets**
 
@@ -1262,7 +1262,7 @@ git commit -m "feat(env): two-VM overlay harness (host bridge, k3s, netns/tap)"
 
 - [ ] **Step 1: Write the demo/acceptance script**
 
-`env/demo.sh`: assumes `host-up`, `vms-up`, both `xdp-dp` attached, and `overlay-up` applied. Then from guest netns A, ping guest B and run iperf3, and capture the underlay to prove encapsulation:
+`env/demo.sh`: assumes `host-up`, `vms-up`, both `flowplane` attached, and `overlay-up` applied. Then from guest netns A, ping guest B and run iperf3, and capture the underlay to prove encapsulation:
 ```bash
 set -euo pipefail
 # 1. connectivity
@@ -1301,7 +1301,7 @@ git commit -m "test(e2e): guest-to-guest connectivity over XDP IPv6 overlay"
 
 ## Deferred to follow-on plans
 
-- **Milestone 4 — VIP (1:1 DNAT/SNAT):** extend `xdp-dp-common` with a `vips` map, add `CreateVip`/`GetVip`/`DeleteVip`, rewrite in the XDP pass.
+- **Milestone 4 — VIP (1:1 DNAT/SNAT):** extend `flowplane-common` with a `vips` map, add `CreateVip`/`GetVip`/`DeleteVip`, rewrite in the XDP pass.
 - **Milestone 5 — LB (maglev):** maglev backend table in a BPF map; `CreateLoadBalancer`/`...Target`; consistent-hash select + rewrite.
 - **Milestone 6 — NAT-GW:** SNAT + port-range allocation; the one feature permitted a TC-egress/userspace-assist carve-out.
 - **Milestone 7 — metalbond client:** subscribe for dynamic overlay routes and program `ROUTES`.

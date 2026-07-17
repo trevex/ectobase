@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-17-datapath-feature-parity-design.md` (milestone M1).
 
-**Starting point (foundation, complete):** `xdp-dp-ebpf/src/main.rs` is one file with `xdp_pass`, CONFIG-driven `guest_tx`/`uplink_rx`, maps `INTERFACES`/`ROUTES`/`CONFIG`, `write6`/`write16`. Userspace `xdp-dp` has `loader`, `maps` (`Interfaces`, `ConfigMap`), `grpc` (DPDKironcore: Init/Version real, rest unimplemented), `state`, and CLI `load`/`serve`/`bringup`/`pass`. The netns lab `env/netns-e2e.sh` runs 2 hyp + 2 guest netns with **static neighs**.
+**Starting point (foundation, complete):** `flowplane-ebpf/src/main.rs` is one file with `xdp_pass`, CONFIG-driven `guest_tx`/`uplink_rx`, maps `INTERFACES`/`ROUTES`/`CONFIG`, `write6`/`write16`. Userspace `flowplane` has `loader`, `maps` (`Interfaces`, `ConfigMap`), `grpc` (DPDKironcore: Init/Version real, rest unimplemented), `state`, and CLI `load`/`serve`/`bringup`/`pass`. The netns lab `env/netns-e2e.sh` runs 2 hyp + 2 guest netns with **static neighs**.
 
 ---
 
@@ -25,7 +25,7 @@
 ## File Structure (target)
 
 ```
-xdp-dp-ebpf/src/
+flowplane-ebpf/src/
   main.rs        # #![no_std]#![no_main]; mod decls; #[xdp] entrypoints (xdp_pass, guest_tx, uplink_rx); panic; LICENSE
   maps.rs        # all #[map] statics: PORT_META, INTERFACES, ROUTES (CONFIG removed in Task 8)
   parse.rs       # bounds-checked header cursors: ptr_at/ptr_at_mut, eth/ipv4/ipv6/arp views, write6/write16
@@ -33,12 +33,12 @@ xdp-dp-ebpf/src/
   encap.rs       # encap_and_redirect(ctx, vni, inner_len, nexthop_ipv6) using fib_lookup + adjust_head
   egress.rs      # guest_tx pipeline body (try_guest_tx)
   ingress.rs     # uplink_rx pipeline body (try_uplink_rx)
-xdp-dp/src/
+flowplane/src/
   maps.rs        # + PortMeta, Routes wrappers (Interfaces extended)
   control.rs     # NEW: owns loaded Ebpf + map handles; program_interface/route/port helpers
   grpc.rs        # CreateInterface/CreateRoute implemented over control
   main.rs        # CLI: serve now loads ebpf + attaches + owns control; `port` subcommand for port_meta
-xdp-dp-common/src/lib.rs   # + PortMeta type; IfaceValue extended with guest_mac + flags
+flowplane-common/src/lib.rs   # + PortMeta type; IfaceValue extended with guest_mac + flags
 ```
 
 ---
@@ -46,18 +46,18 @@ xdp-dp-common/src/lib.rs   # + PortMeta type; IfaceValue extended with guest_mac
 ## Task 1: Decompose the eBPF datapath into modules (pure refactor)
 
 **Files:**
-- Create: `xdp-dp-ebpf/src/maps.rs`, `xdp-dp-ebpf/src/parse.rs`
-- Modify: `xdp-dp-ebpf/src/main.rs`
+- Create: `flowplane-ebpf/src/maps.rs`, `flowplane-ebpf/src/parse.rs`
+- Modify: `flowplane-ebpf/src/main.rs`
 
 - [ ] **Step 1: Move the map declarations into `maps.rs`**
 
-`xdp-dp-ebpf/src/maps.rs`:
+`flowplane-ebpf/src/maps.rs`:
 ```rust
 use aya_ebpf::{
     macros::map,
     maps::{Array, HashMap},
 };
-use xdp_dp_common::{Config, IfaceKey, IfaceValue, RouteKey, RouteValue};
+use flowplane_common::{Config, IfaceKey, IfaceValue, RouteKey, RouteValue};
 
 #[map]
 pub static INTERFACES: HashMap<IfaceKey, IfaceValue> = HashMap::with_max_entries(1024, 0);
@@ -69,7 +69,7 @@ pub static CONFIG: Array<Config> = Array::with_max_entries(1, 0);
 
 - [ ] **Step 2: Move the parse helpers into `parse.rs`**
 
-`xdp-dp-ebpf/src/parse.rs` — the existing constants and `write6`/`write16`, plus shared
+`flowplane-ebpf/src/parse.rs` — the existing constants and `write6`/`write16`, plus shared
 ethertype/proto consts:
 ```rust
 pub const ETH_LEN: usize = 14;
@@ -100,7 +100,7 @@ pub unsafe fn write16(dst: *mut u8, src: &[u8; 16]) {
 
 - [ ] **Step 3: Reduce `main.rs` to module decls + entrypoints**
 
-`xdp-dp-ebpf/src/main.rs` keeps `#![no_std] #![no_main]`, adds `mod maps; mod parse;` (and in
+`flowplane-ebpf/src/main.rs` keeps `#![no_std] #![no_main]`, adds `mod maps; mod parse;` (and in
 later tasks `mod arp_nd; mod encap; mod egress; mod ingress;`), keeps the three `#[xdp]`
 functions but now their bodies call into the modules. For THIS task, keep the existing
 CONFIG-driven bodies but reference `maps::CONFIG`, `parse::write6`, etc. Keep `xdp_pass`, the
@@ -108,16 +108,16 @@ CONFIG-driven bodies but reference `maps::CONFIG`, `parse::write6`, etc. Keep `x
 
 - [ ] **Step 4: Build the eBPF object**
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 Expected: builds. (aya-build recompiles the ebpf; rerun-if-changed covers the new files since
-it watches `../xdp-dp-ebpf/src`.)
+it watches `../flowplane-ebpf/src`.)
 
 - [ ] **Step 5: Verifier-load gate still passes**
 
 Run:
 ```bash
-cargo test -p xdp-dp --no-run 2>&1 | tee /tmp/t.log
-BIN=$(grep -oE 'target/debug/deps/xdp_dp-[a-f0-9]+' /tmp/t.log | head -1)
+cargo test -p flowplane --no-run 2>&1 | tee /tmp/t.log
+BIN=$(grep -oE 'target/debug/deps/flowplane-[a-f0-9]+' /tmp/t.log | head -1)
 sudo -E "$BIN" --include-ignored --exact loader::tests::both_programs_pass_verifier
 ```
 Expected: `ok` — refactor preserved verifier acceptance.
@@ -126,18 +126,18 @@ Expected: `ok` — refactor preserved verifier acceptance.
 
 ```bash
 cargo fmt --all
-git add xdp-dp-ebpf
+git add flowplane-ebpf
 git commit -m "refactor(ebpf): split datapath into maps/parse modules (no behavior change)"
 ```
 
 ## Task 2: Shared `PortMeta` type + extend `IfaceValue` (TDD)
 
 **Files:**
-- Modify: `xdp-dp-common/src/lib.rs`
+- Modify: `flowplane-common/src/lib.rs`
 
 - [ ] **Step 1: Write the failing layout test**
 
-Add to `xdp-dp-common/src/lib.rs`:
+Add to `flowplane-common/src/lib.rs`:
 ```rust
 /// Per-port metadata, keyed by the guest tap's host-side ifindex.
 #[repr(C)]
@@ -180,36 +180,36 @@ Add `unsafe impl aya::Pod for PortMeta {}` to `user_impls`.
 
 - [ ] **Step 2: Run the test**
 
-Run: `cargo test -p xdp-dp-common --features user`
+Run: `cargo test -p flowplane-common --features user`
 Expected: PASS (`port_meta_and_iface_layout`). If sizes differ, fix padding to the asserted
 values before proceeding (20 and 32).
 
 - [ ] **Step 3: Fix the userspace `Interfaces`/`IfaceValue` construction sites**
 
-`xdp-dp/src/maps.rs` and any test constructing `IfaceValue` now need the new fields. Update
+`flowplane/src/maps.rs` and any test constructing `IfaceValue` now need the new fields. Update
 the roundtrip test's `IfaceValue { tap_ifindex: 7, underlay_ipv6: [0xfd;16] }` to include
-`is_local: 1, guest_mac: [2,0,0,0,0,5], _pad: [0;2]`. Build: `cargo build -p xdp-dp`.
+`is_local: 1, guest_mac: [2,0,0,0,0,5], _pad: [0;2]`. Build: `cargo build -p flowplane`.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 cargo fmt --all
-git add xdp-dp-common xdp-dp
+git add flowplane-common flowplane
 git commit -m "feat(common): PortMeta type; IfaceValue carries guest_mac + is_local"
 ```
 
 ## Task 3: `PORT_META` map + ingress port identification
 
 **Files:**
-- Modify: `xdp-dp-ebpf/src/maps.rs`
-- Create: `xdp-dp/src/control.rs` (stub, grown in Task 7)
-- Modify: `xdp-dp/src/maps.rs`
+- Modify: `flowplane-ebpf/src/maps.rs`
+- Create: `flowplane/src/control.rs` (stub, grown in Task 7)
+- Modify: `flowplane/src/maps.rs`
 
 - [ ] **Step 1: Declare `PORT_META` in the eBPF maps**
 
-Add to `xdp-dp-ebpf/src/maps.rs`:
+Add to `flowplane-ebpf/src/maps.rs`:
 ```rust
-use xdp_dp_common::PortMeta;
+use flowplane_common::PortMeta;
 
 #[map]
 pub static PORT_META: HashMap<u32, PortMeta> = HashMap::with_max_entries(1024, 0);
@@ -217,37 +217,37 @@ pub static PORT_META: HashMap<u32, PortMeta> = HashMap::with_max_entries(1024, 0
 
 - [ ] **Step 2: Userspace `PortMetaMap` + `Routes` wrappers (TDD via the existing root roundtrip pattern)**
 
-Add to `xdp-dp/src/maps.rs` a `PortMetaMap` wrapper (HashMap<u32, PortMeta>) and a `Routes`
+Add to `flowplane/src/maps.rs` a `PortMetaMap` wrapper (HashMap<u32, PortMeta>) and a `Routes`
 wrapper (HashMap<RouteKey, RouteValue>), mirroring the existing `Interfaces` wrapper
 (`open`/`upsert`/`get` via `ebpf.take_map`). Reuse the `#[allow(dead_code)]` pattern.
 
 - [ ] **Step 3: Build**
 
-Run: `cargo run -p xtask 2>/dev/null; cargo build -p xdp-dp`
-Expected: builds. (No xtask exists; just `cargo build -p xdp-dp`.)
+Run: `cargo run -p xtask 2>/dev/null; cargo build -p flowplane`
+Expected: builds. (No xtask exists; just `cargo build -p flowplane`.)
 
 - [ ] **Step 4: Commit**
 
 ```bash
 cargo fmt --all
-git add xdp-dp-ebpf xdp-dp
+git add flowplane-ebpf flowplane
 git commit -m "feat(maps): PORT_META map + userspace PortMetaMap/Routes wrappers"
 ```
 
 ## Task 4: In-datapath ARP responder (`arp_nd.rs`)
 
 **Files:**
-- Create: `xdp-dp-ebpf/src/arp_nd.rs`
-- Modify: `xdp-dp-ebpf/src/main.rs`
+- Create: `flowplane-ebpf/src/arp_nd.rs`
+- Modify: `flowplane-ebpf/src/main.rs`
 
 - [ ] **Step 1: Implement the ARP responder**
 
-`xdp-dp-ebpf/src/arp_nd.rs` — given the guest's `PortMeta`, answer ARP requests for
+`flowplane-ebpf/src/arp_nd.rs` — given the guest's `PortMeta`, answer ARP requests for
 `gateway_ipv4` with the virtual gateway MAC `02:00:00:00:00:01`, rewriting the packet in place
 and returning `XDP_TX`:
 ```rust
 use aya_ebpf::{bindings::xdp_action, programs::XdpContext};
-use xdp_dp_common::PortMeta;
+use flowplane_common::PortMeta;
 
 use crate::parse::{write6, ETH_LEN, ETH_P_ARP};
 
@@ -301,13 +301,13 @@ pub fn try_arp_reply(ctx: &XdpContext, meta: &PortMeta) -> Option<u32> {
 > NOTE: IPv6 ND (`try_nd_reply`) is added in Task 4b after ARP is proven; ARP alone unblocks
 > the IPv4 overlay e2e. Keep `arp_nd.rs` focused.
 
-- [ ] **Step 2: Add `mod arp_nd;` to `main.rs`**, build: `cargo build -p xdp-dp` (expect OK).
+- [ ] **Step 2: Add `mod arp_nd;` to `main.rs`**, build: `cargo build -p flowplane` (expect OK).
 
 - [ ] **Step 3: Commit**
 
 ```bash
 cargo fmt --all
-git add xdp-dp-ebpf
+git add flowplane-ebpf
 git commit -m "feat(ebpf): in-datapath ARP responder for the overlay gateway"
 ```
 
@@ -325,14 +325,14 @@ git commit -m "feat(ebpf): in-datapath ARP responder for the overlay gateway"
 > The `fib_lookup` code below is kept for reference only — do NOT implement it.
 
 **Files:**
-- Modify: `xdp-dp-common/src/lib.rs` (extend `RouteValue`; add `Local`)
-- Modify: `xdp-dp-ebpf/src/maps.rs` (add `LOCAL`)
-- Create: `xdp-dp-ebpf/src/encap.rs`
-- Modify: `xdp-dp-ebpf/src/main.rs`
+- Modify: `flowplane-common/src/lib.rs` (extend `RouteValue`; add `Local`)
+- Modify: `flowplane-ebpf/src/maps.rs` (add `LOCAL`)
+- Create: `flowplane-ebpf/src/encap.rs`
+- Modify: `flowplane-ebpf/src/main.rs`
 
 - [ ] **Step 1: Implement encap with FIB-resolved underlay L2**
 
-`xdp-dp-ebpf/src/encap.rs` — grow headroom by `IPV6_LEN`, write the outer IPv6 (src = this
+`flowplane-ebpf/src/encap.rs` — grow headroom by `IPV6_LEN`, write the outer IPv6 (src = this
 hypervisor's underlay — from a 1-entry `LOCAL` array or `PORT_META`/route; dst = `nexthop`),
 resolve the outer Ethernet via `bpf_fib_lookup` on `nexthop`, and `bpf_redirect` to the FIB
 egress ifindex:
@@ -422,21 +422,21 @@ pub fn encap_and_redirect(
 > integration proves too fiddly, fall back to an `underlay_neigh` map (`[u8;16] -> [u8;6]`)
 > populated by the control plane and report the change.
 
-- [ ] **Step 2: Add `mod encap;`**, build: `cargo build -p xdp-dp` (expect OK; resolve binding-name errors here).
+- [ ] **Step 2: Add `mod encap;`**, build: `cargo build -p flowplane` (expect OK; resolve binding-name errors here).
 
 - [ ] **Step 3: Commit**
 
 ```bash
 cargo fmt --all
-git add xdp-dp-ebpf
+git add flowplane-ebpf
 git commit -m "feat(ebpf): map-driven encap with bpf_fib_lookup underlay L2"
 ```
 
 ## Task 6: Map-driven `guest_tx` and `uplink_rx` pipelines
 
 **Files:**
-- Create: `xdp-dp-ebpf/src/egress.rs`, `xdp-dp-ebpf/src/ingress.rs`
-- Modify: `xdp-dp-ebpf/src/main.rs`
+- Create: `flowplane-ebpf/src/egress.rs`, `flowplane-ebpf/src/ingress.rs`
+- Modify: `flowplane-ebpf/src/main.rs`
 
 - [ ] **Step 1: Implement the egress pipeline (`egress.rs`)**
 
@@ -447,7 +447,7 @@ up `ROUTES[(vni, dst/32)]` (fallback to `INTERFACES` for /32 hosts) → `nexthop
 written by the control plane.
 ```rust
 use aya_ebpf::{bindings::xdp_action, programs::XdpContext, EbpfContext};
-use xdp_dp_common::RouteKey;
+use flowplane_common::RouteKey;
 
 use crate::arp_nd::try_arp_reply;
 use crate::encap::encap_and_redirect;
@@ -495,7 +495,7 @@ dst, look up `INTERFACES` for a LOCAL interface, strip outer headers, build inne
 (dst = `iface.guest_mac`, src = `GW_MAC`, ethertype IPv4), redirect to `iface.tap_ifindex`.
 ```rust
 use aya_ebpf::{bindings::xdp_action, helpers::{bpf_redirect, bpf_xdp_adjust_head}, programs::XdpContext};
-use xdp_dp_common::IfaceKey;
+use flowplane_common::IfaceKey;
 
 use crate::arp_nd::GW_MAC;
 use crate::maps::INTERFACES;
@@ -544,7 +544,7 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, ()> {
 > encoding (e.g. VNI in the IPv6 flow label) is deferred — the spec's overlay stays IPv4 and
 > the lab uses one VNI; keep the key shape so VNI can be threaded later.
 
-- [ ] **Step 3: Wire entrypoints in `main.rs`** to call `egress::try_guest_tx` / `ingress::try_uplink_rx`; remove the old CONFIG-driven bodies. Build: `cargo build -p xdp-dp`.
+- [ ] **Step 3: Wire entrypoints in `main.rs`** to call `egress::try_guest_tx` / `ingress::try_uplink_rx`; remove the old CONFIG-driven bodies. Build: `cargo build -p flowplane`.
 
 - [ ] **Step 4: Verifier-load gate**
 
@@ -556,22 +556,22 @@ read/write. Do not weaken the logic to pass.
 
 ```bash
 cargo fmt --all
-git add xdp-dp-ebpf xdp-dp-common
+git add flowplane-ebpf flowplane-common
 git commit -m "feat(ebpf): map-driven guest_tx/uplink_rx pipelines (multi-interface)"
 ```
 
 ## Task 7: Control plane programs the maps (`CreateInterface`/`CreateRoute` + port/local)
 
 **Files:**
-- Create: `xdp-dp/src/control.rs`
-- Modify: `xdp-dp/src/grpc.rs`, `xdp-dp/src/main.rs`, `xdp-dp/src/maps.rs`
+- Create: `flowplane/src/control.rs`
+- Modify: `flowplane/src/grpc.rs`, `flowplane/src/main.rs`, `flowplane/src/maps.rs`
 
 - [ ] **Step 1: Pure translation helpers (TDD)**
 
-In `xdp-dp/src/control.rs`, pure functions converting proto messages → map entries, with unit
+In `flowplane/src/control.rs`, pure functions converting proto messages → map entries, with unit
 tests:
 ```rust
-use xdp_dp_common::{IfaceKey, IfaceValue, RouteKey, RouteValue};
+use flowplane_common::{IfaceKey, IfaceValue, RouteKey, RouteValue};
 
 /// (vni, ipv4, underlay, guest_mac, local) -> interface map entry.
 pub fn iface_entry(
@@ -625,14 +625,14 @@ Decode the proto (`interface_id`, `vni`, `ipv4`/`ipv6` config bytes, `device_nam
 
 - [ ] **Step 5: Build + unit tests**
 
-Run: `cargo build -p xdp-dp && cargo test -p xdp-dp control::`
+Run: `cargo build -p flowplane && cargo test -p flowplane control::`
 Expected: builds; translation unit tests pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 cargo fmt --all
-git add xdp-dp xdp-dp-common
+git add flowplane flowplane-common
 git commit -m "feat(cp): CreateInterface/CreateRoute program maps; serve owns datapath"
 ```
 
@@ -640,17 +640,17 @@ git commit -m "feat(cp): CreateInterface/CreateRoute program maps; serve owns da
 
 **Files:**
 - Modify: `env/netns-e2e.sh`
-- Modify: `xdp-dp-ebpf/src/*`, `xdp-dp/src/*` (remove CONFIG/bringup)
+- Modify: `flowplane-ebpf/src/*`, `flowplane/src/*` (remove CONFIG/bringup)
 
 - [ ] **Step 1: Remove the CONFIG-driven path**
 
 Delete the `CONFIG` map (ebpf `maps.rs`), the `Config`/`ConfigMap` usage, and the `bringup`
 subcommand (superseded by `serve` + `port`/gRPC). Keep `Config` POD type removal out of
-`xdp-dp-common` only if nothing else uses it (it doesn't). Build: `cargo build -p xdp-dp`.
+`flowplane-common` only if nothing else uses it (it doesn't). Build: `cargo build -p flowplane`.
 
 - [ ] **Step 2: Extend `netns-e2e.sh` to the map-driven model**
 
-Rewrite the bring-up portion: per hypervisor run `xdp-dp serve` (or a non-gRPC `port`+attach
+Rewrite the bring-up portion: per hypervisor run `flowplane serve` (or a non-gRPC `port`+attach
 sequence) to attach `uplink_rx` + `guest_tx`, set `LOCAL`, register each guest tap via `port`,
 and program `interfaces`/`routes` for BOTH guests (local + remote). Add a **second guest per
 hypervisor** (`gA2`/`gB2`, IPs `10.0.0.7`/`10.0.0.8`). **Remove the static guest neigh
@@ -671,7 +671,7 @@ Expected gates (script asserts):
 - [ ] **Step 4: Commit**
 
 ```bash
-git add env/netns-e2e.sh xdp-dp xdp-dp-ebpf xdp-dp-common
+git add env/netns-e2e.sh flowplane flowplane-ebpf flowplane-common
 git commit -m "feat(e2e): map-driven multi-guest lab with datapath ARP (no static neigh)"
 ```
 

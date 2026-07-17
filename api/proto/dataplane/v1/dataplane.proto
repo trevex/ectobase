@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package dataplane.v1;
 
-option go_package = "github.com/trevex/xdp-dp/cni/gen/dataplanev1;dataplanev1";
+option go_package = "github.com/trevex/ectobase/cni/gen/dataplanev1;dataplanev1";
 
 // DataplaneNode is the node-local API the CNI calls to wire a VM's interface
 // into the eBPF dataplane. Purpose-built for this platform (not dpservice).

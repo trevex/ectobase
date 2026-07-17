@@ -3,7 +3,7 @@
 **Date:** 2026-06-17
 **Status:** Approved design, pre-implementation
 **Author:** Niklas Voss (with Claude)
-**Builds on:** `docs/superpowers/specs/2026-06-15-xdp-dpservice-design.md` (foundation PoC, complete)
+**Builds on:** `docs/superpowers/specs/2026-06-15-flowplaneservice-design.md` (foundation PoC, complete)
 
 ## 1. Background & goal
 
@@ -19,7 +19,7 @@ Internal algorithms (exact Maglev table construction, exact NAT port-allocation 
 **not** be byte-identical to dpservice's C implementation.
 
 This is **sub-project 1 of two**. Sub-project 2 (separate spec) forks
-`ironcore-dev/ironcore-in-a-box` and uses this `xdp-dp` as a drop-in replacement for the DPDK
+`ironcore-dev/ironcore-in-a-box` and uses this `flowplane` as a drop-in replacement for the DPDK
 tap-device dev setup. Sub-project 2 is out of scope here.
 
 ## 2. Architecture — map-driven, multi-interface pipeline
@@ -61,7 +61,7 @@ The pipeline stays **pure XDP** (offload-aligned) on both hooks.
 | `neighbor_nat` | (nat_ipv4, port range) → underlay endpoint (distributed-NAT return) |
 | `conntrack` | 5-tuple → { translation, flags, last_seen } — `BPF_MAP_TYPE_LRU_HASH` |
 
-All POD key/value types live in `xdp-dp-common` (shared, `#[repr(C)]`, layout-tested).
+All POD key/value types live in `flowplane-common` (shared, `#[repr(C)]`, layout-tested).
 
 ## 4. Per-feature mechanics (functional parity)
 
@@ -98,9 +98,9 @@ serving therefore requires CAP_BPF (dpservice runs privileged too).
 
 ## 6. Code organization
 
-The eBPF datapath grows, so split `xdp-dp-ebpf/src` into focused modules: `parse` (header
+The eBPF datapath grows, so split `flowplane-ebpf/src` into focused modules: `parse` (header
 bounds-checked parsing), `arp_nd`, `vip`, `lb`, `nat`, `conntrack`, `encap`. Userspace
-(`xdp-dp/src`) gains per-feature map writers, a `maglev` builder module, and a `conntrack_gc`
+(`flowplane/src`) gains per-feature map writers, a `maglev` builder module, and a `conntrack_gc`
 task. Each file keeps one clear responsibility; the monolithic `main.rs` datapath from the
 foundation is decomposed as part of M1.
 

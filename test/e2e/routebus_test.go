@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// TestCrossNodeOverlayPing brings up the IPv6 fabric, runs xdp-dp on both kind
+// TestCrossNodeOverlayPing brings up the IPv6 fabric, runs flowplane on both kind
 // nodes with one endpoint each, programs the cross-node routes via AddRoute, and
 // asserts ping works over the IP-in-IPv6 overlay — then that WithdrawRoute breaks
 // it. SKIPs (never fails) without containerlab/kind/docker, like the sibling tests.
@@ -50,16 +50,16 @@ func TestCrossNodeOverlayPing(t *testing.T) {
 		out, err := runWithTimeout(exec.Command("docker", full...), cmdTimeout)
 		return out, err
 	}
-	// grpcurlIn runs grpcurl inside a node against its local xdp-dp.
+	// grpcurlIn runs grpcurl inside a node against its local flowplane.
 	grpcurlIn := func(node, method, body string) (string, error) {
 		return dockerExec(node, "grpcurl", "-plaintext", "-d", body, grpcAddr, method)
 	}
 
-	// Start xdp-dp on each node (image already loaded by the fabric; serve in background).
+	// Start flowplane on each node (image already loaded by the fabric; serve in background).
 	for _, node := range []string{cp, wk} {
 		if _, err := dockerExec(node, "sh", "-c",
-			"pkill -f 'xdp-dp serve' 2>/dev/null; (xdp-dp serve --grpc "+grpcAddr+" >/tmp/xdp.log 2>&1 &) ; sleep 3"); err != nil {
-			t.Fatalf("start xdp-dp on %s: %v", node, err)
+			"pkill -f 'flowplane serve' 2>/dev/null; (flowplane serve --grpc "+grpcAddr+" >/tmp/xdp.log 2>&1 &) ; sleep 3"); err != nil {
+			t.Fatalf("start flowplane on %s: %v", node, err)
 		}
 	}
 
@@ -105,7 +105,7 @@ func TestCrossNodeOverlayPing(t *testing.T) {
 	}
 	if !pinged {
 		log, _ := dockerExec(cp, "cat", "/tmp/xdp.log")
-		t.Fatalf("cross-node overlay ping A->B never succeeded\nxdp-dp log:\n%s", log)
+		t.Fatalf("cross-node overlay ping A->B never succeeded\nflowplane log:\n%s", log)
 	}
 
 	// Withdraw A's route to B on the cp node; ping must now fail (route gone => Pass, no encap).

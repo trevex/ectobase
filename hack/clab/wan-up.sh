@@ -4,7 +4,7 @@
 # needs root. No uplink interface is named — masquerade is keyed on the lab's public source range,
 # so it works over WiFi/eth/VPN alike.
 #
-# The WAN edge (a VyOS node + xdp-dp sidecar) attaches to this bridge at 172.29.0.11. The datapath
+# The WAN edge (a VyOS node + flowplane sidecar) attaches to this bridge at 172.29.0.11. The datapath
 # SNATs overlay sources to the `nat_ip` pool 203.0.113.0/28 on their own hypervisor and encaps to
 # the edge; the edge decaps + forwards the plain nat_ip packet out here; THIS host masquerades the
 # nat_ip range to the real uplink (the "clabwan trick"). Returns to a nat_ip route back to the edge,

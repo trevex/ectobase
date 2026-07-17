@@ -4,7 +4,7 @@
 
 **Goal:** Give the eBPF dataplane dynamically distributed overlay routes so endpoints on different nodes reach each other over the IP-in-IPv6 overlay, via a strict control/data-plane split (dumb Rust datapath + a Go control plane: per-node agent + a single global route reflector).
 
-**Architecture:** `xdp-dp` (Rust/eBPF) gains a protocol-agnostic `AddRoute`/`WithdrawRoute` on `dataplane.v1` and stays a dumb, gRPC-driven datapath. A new Go module `netplane` provides a central **reflector** (in-memory per-VNI RIB behind a gRPC bidi `Session` stream) and a per-node **agent** (route-bus client that announces local endpoint routes, subscribes by VNI, and drives the local `xdp-dp` as remote routes arrive). Single global reflector; single-cluster is the degenerate co-located case.
+**Architecture:** `flowplane` (Rust/eBPF) gains a protocol-agnostic `AddRoute`/`WithdrawRoute` on `dataplane.v1` and stays a dumb, gRPC-driven datapath. A new Go module `netplane` provides a central **reflector** (in-memory per-VNI RIB behind a gRPC bidi `Session` stream) and a per-node **agent** (route-bus client that announces local endpoint routes, subscribes by VNI, and drives the local `flowplane` as remote routes arrive). Single global reflector; single-cluster is the degenerate co-located case.
 
 **Tech Stack:** Rust (aya/tonic) for the datapath; Go 1.26 for the control plane (`google.golang.org/grpc`, `google.golang.org/protobuf`, controller-runtime/client-go for CRD reconcile); protoc for codegen; containerlab + kind for the e2e.
 
@@ -14,13 +14,13 @@
 
 ## File Structure
 
-**Datapath (Rust, existing `xdp-dp` crate):**
+**Datapath (Rust, existing `flowplane` crate):**
 - `api/proto/dataplane/v1/dataplane.proto` — add `AddRoute`/`WithdrawRoute` RPCs + messages (Modify).
-- `xdp-dp/src/node.rs` — implement the two RPC handlers (delegate to `AttachState.control.create_route`/`delete_route`); add a CIDR parse helper + its unit tests (Modify).
+- `flowplane/src/node.rs` — implement the two RPC handlers (delegate to `AttachState.control.create_route`/`delete_route`); add a CIDR parse helper + its unit tests (Modify).
 - `cni/gen/dataplanev1/*.pb.go` — regenerated Go stubs (Generated).
 - `test/route-netns.sh` — netns smoke test: attach one endpoint, `AddRoute` a remote /32, assert the datapath programmed it (Create).
 
-**Control plane (new Go module `github.com/trevex/xdp-dp/netplane` at `./netplane`):**
+**Control plane (new Go module `github.com/trevex/flowplane/netplane` at `./netplane`):**
 - `netplane/go.mod` — new module; requires `../api` and `../cni` via replace (Create).
 - `api/proto/routebus/v1/routebus.proto` — the route-bus protocol (Create).
 - `netplane/gen/routebusv1/*.pb.go` — generated stubs (Generated).
@@ -37,19 +37,19 @@
 - `test/e2e/routebus_test.go` — two-node cross-node encap ping + liveness-withdraw on the containerlab fabric (Create).
 
 **Design notes locked in here:**
-- **Remote routes need no `UNDERLAY` entry.** `forward_decision_v4`/`_v6` (`xdp-dp-ebpf/src/egress.rs:107-128`, `:155-168`) take the local fast path only when `UNDERLAY[nexthop].tap_ifindex != 0`; a `ROUTES` hit whose nexthop has no local `UNDERLAY` entry falls through to `Encap` using `route.nexthop_ipv6` + the `LOCAL` uplink info. So `AddRoute` for a remote endpoint only calls `create_route` — it must NOT program `UNDERLAY` (that would make the datapath try local delivery). This refines spec §4.1 ("+ ensure UNDERLAY[nexthop]"), which is unnecessary and would be wrong for the encap path.
+- **Remote routes need no `UNDERLAY` entry.** `forward_decision_v4`/`_v6` (`flowplane-ebpf/src/egress.rs:107-128`, `:155-168`) take the local fast path only when `UNDERLAY[nexthop].tap_ifindex != 0`; a `ROUTES` hit whose nexthop has no local `UNDERLAY` entry falls through to `Encap` using `route.nexthop_ipv6` + the `LOCAL` uplink info. So `AddRoute` for a remote endpoint only calls `create_route` — it must NOT program `UNDERLAY` (that would make the datapath try local delivery). This refines spec §4.1 ("+ ensure UNDERLAY[nexthop]"), which is unnecessary and would be wrong for the encap path.
 - **`AddRoute` is idempotent by delete-then-create.** `Control::create_route` bails with `ROUTE_EXISTS` on a duplicate (`control.rs:687-692`); a route bus re-announces and moves prefixes between nodes, so the handler deletes any existing `(vni,prefix)` first, then creates with the new nexthop.
 - **v1 liveness = gRPC/stream keepalive + session-close fast-withdraw**, not a separate BFD/UDP daemon (spec §5 explicitly allows "aggressive stream keepalive as a v1 fallback"). When a session's stream ends, the reflector withdraws all routes that node originated. A dedicated BFD/UDP sidecar is a follow-up.
 - **ECMP is carried but not yet consumed.** `Announce`/`RouteUpdate` carry a nexthop set; the v1 datapath `AddRoute` takes a single nexthop, so the agent programs `nexthops[0]`. This satisfies spec §7's "Announce carries a set" without widening the datapath yet.
 
 ---
 
-### Task 1: `xdp-dp` `AddRoute`/`WithdrawRoute` on `dataplane.v1`
+### Task 1: `flowplane` `AddRoute`/`WithdrawRoute` on `dataplane.v1`
 
 **Files:**
 - Modify: `api/proto/dataplane/v1/dataplane.proto`
-- Modify: `xdp-dp/src/node.rs`
-- Test: `xdp-dp/src/node.rs` (unit test for the CIDR parser), `test/route-netns.sh` (netns smoke)
+- Modify: `flowplane/src/node.rs`
+- Test: `flowplane/src/node.rs` (unit test for the CIDR parser), `test/route-netns.sh` (netns smoke)
 
 - [ ] **Step 1: Add the RPCs + messages to the proto**
 
@@ -90,14 +90,14 @@ message WithdrawRouteResponse {}
 Run (inside the dev shell):
 
 ```bash
-nix develop --command sh -c 'make proto-go && cargo build -p xdp-dp 2>&1 | tail -5'
+nix develop --command sh -c 'make proto-go && cargo build -p flowplane 2>&1 | tail -5'
 ```
 
-Expected: `make proto-go` regenerates `cni/gen/dataplanev1/dataplane.pb.go` + `dataplane_grpc.pb.go` (now containing `AddRoute`/`WithdrawRoute`). `cargo build` FAILS to compile `node.rs` because `DataplaneNode` now requires `add_route`/`withdraw_route` methods — that is the expected red state proving the trait grew. (`xdp-dp/build.rs:44-49` compiles the proto via tonic on every build; `rerun-if-changed` covers the dir.)
+Expected: `make proto-go` regenerates `cni/gen/dataplanev1/dataplane.pb.go` + `dataplane_grpc.pb.go` (now containing `AddRoute`/`WithdrawRoute`). `cargo build` FAILS to compile `node.rs` because `DataplaneNode` now requires `add_route`/`withdraw_route` methods — that is the expected red state proving the trait grew. (`flowplane/build.rs:44-49` compiles the proto via tonic on every build; `rerun-if-changed` covers the dir.)
 
 - [ ] **Step 3: Add the CIDR parser + its unit test (write the failing test first)**
 
-In `xdp-dp/src/node.rs`, add to the `tests` module:
+In `flowplane/src/node.rs`, add to the `tests` module:
 
 ```rust
 #[test]
@@ -124,12 +124,12 @@ fn parse_prefix_rejects_bad() {
 
 - [ ] **Step 4: Run the test to verify it fails**
 
-Run: `nix develop --command cargo test -p xdp-dp parse_prefix 2>&1 | tail -8`
+Run: `nix develop --command cargo test -p flowplane parse_prefix 2>&1 | tail -8`
 Expected: FAIL — `parse_prefix` is not defined (also the crate won't yet compile from Step 2; both errors point at the missing function + trait methods).
 
 - [ ] **Step 5: Implement `parse_prefix` and the two RPC handlers**
 
-In `xdp-dp/src/node.rs`, extend the `use pb::{…}` import to add the new messages:
+In `flowplane/src/node.rs`, extend the `use pb::{…}` import to add the new messages:
 
 ```rust
 use pb::{
@@ -258,12 +258,12 @@ Add the two handlers inside `impl DataplaneNode for NodeService` (after `configu
 
 - [ ] **Step 6: Run unit tests + clippy to verify green**
 
-Run: `nix develop --command sh -c 'cargo test -p xdp-dp parse_prefix 2>&1 | tail -5 && cargo clippy -p xdp-dp --all-targets 2>&1 | tail -2'`
-Expected: `parse_prefix` tests PASS; clippy clean. Also confirm the crate builds: `cargo build -p xdp-dp 2>&1 | tail -3` → success (the trait now has all methods).
+Run: `nix develop --command sh -c 'cargo test -p flowplane parse_prefix 2>&1 | tail -5 && cargo clippy -p flowplane --all-targets 2>&1 | tail -2'`
+Expected: `parse_prefix` tests PASS; clippy clean. Also confirm the crate builds: `cargo build -p flowplane 2>&1 | tail -3` → success (the trait now has all methods).
 
 - [ ] **Step 7: Write the netns smoke test**
 
-Create `test/route-netns.sh` (model it on `test/two-endpoint-netns.sh`'s scaffolding — root-netns dummy for underlay inference, `xdp-dp serve`, `grpcurl` for the RPCs, an EXIT-trap cleanup). The assertion is the greppable `ROUTE add …` line the handler prints and a successful `AddRoute` RPC:
+Create `test/route-netns.sh` (model it on `test/two-endpoint-netns.sh`'s scaffolding — root-netns dummy for underlay inference, `flowplane serve`, `grpcurl` for the RPCs, an EXIT-trap cleanup). The assertion is the greppable `ROUTE add …` line the handler prints and a successful `AddRoute` RPC:
 
 ```bash
 #!/usr/bin/env bash
@@ -287,8 +287,8 @@ sudo ip link add "$DUMMY" type dummy 2>/dev/null || true
 sudo ip link set "$DUMMY" up
 sudo ip -6 addr replace "$ULA_ADDR" dev "$DUMMY"
 sudo ip netns add "$NS"
-cargo build -p xdp-dp 2>&1 | tail -1
-sudo ./target/debug/xdp-dp serve --grpc "$ADDR" >"$LOG" 2>&1 &
+cargo build -p flowplane 2>&1 | tail -1
+sudo ./target/debug/flowplane serve --grpc "$ADDR" >"$LOG" 2>&1 &
 SERVE_PID=$!
 for i in $(seq 1 30); do grpcurl -plaintext "$ADDR" list >/dev/null 2>&1 && break; sleep 0.3; done
 grpcurl -plaintext -d "{\"interface_id\":\"rt0\",\"netns_path\":\"/var/run/netns/$NS\",\"vni\":$VNI,\"requested_ips\":[\"10.0.0.1\"]}" \
@@ -311,15 +311,15 @@ Make it executable: `chmod +x test/route-netns.sh`.
 - [ ] **Step 8: Run the netns smoke test**
 
 Run: `nix develop --command sh -c 'sudo env "PATH=$PATH" bash test/route-netns.sh' 2>&1 | tail -15`
-Expected: two `PASS:` lines (AddRoute + WithdrawRoute programmed). If `--grpc` is not the serve flag name, check `xdp-dp serve --help` and adjust; the existing `test/two-endpoint-netns.sh` shows the exact serve invocation this repo uses.
+Expected: two `PASS:` lines (AddRoute + WithdrawRoute programmed). If `--grpc` is not the serve flag name, check `flowplane serve --help` and adjust; the existing `test/two-endpoint-netns.sh` shows the exact serve invocation this repo uses.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add api/proto/dataplane/v1/dataplane.proto xdp-dp/src/node.rs cni/gen/dataplanev1 test/route-netns.sh
+git add api/proto/dataplane/v1/dataplane.proto flowplane/src/node.rs cni/gen/dataplanev1 test/route-netns.sh
 git commit -m "feat(dataplane): AddRoute/WithdrawRoute on dataplane.v1
 
-xdp-dp gains a protocol-agnostic route interface: AddRoute(vni, prefix,
+flowplane gains a protocol-agnostic route interface: AddRoute(vni, prefix,
 nexthop_underlay) / WithdrawRoute(vni, prefix), delegating to the existing
 Control::create_route/delete_route. Remote routes program only ROUTES (no
 UNDERLAY) so the datapath encaps to the nexthop. Idempotent via delete-then-create.
@@ -346,7 +346,7 @@ syntax = "proto3";
 
 package routebus.v1;
 
-option go_package = "github.com/trevex/xdp-dp/netplane/gen/routebusv1;routebusv1";
+option go_package = "github.com/trevex/flowplane/netplane/gen/routebusv1;routebusv1";
 
 // RouteBus is the control-plane route exchange between per-node agents and the
 // central reflector. One long-lived bidi stream per agent.
@@ -417,8 +417,8 @@ In `Makefile`, after the `proto-go` target, add:
 .PHONY: proto-routebus
 proto-routebus: ## Generate Go gRPC stubs for routebus.v1 into netplane/gen/routebusv1
 	protoc -I api/proto/routebus/v1 \
-		--go_out=netplane/gen --go_opt=module=github.com/trevex/xdp-dp/netplane/gen \
-		--go-grpc_out=netplane/gen --go-grpc_opt=module=github.com/trevex/xdp-dp/netplane/gen \
+		--go_out=netplane/gen --go_opt=module=github.com/trevex/flowplane/netplane/gen \
+		--go-grpc_out=netplane/gen --go-grpc_opt=module=github.com/trevex/flowplane/netplane/gen \
 		api/proto/routebus/v1/routebus.proto
 ```
 
@@ -426,7 +426,7 @@ proto-routebus: ## Generate Go gRPC stubs for routebus.v1 into netplane/gen/rout
 
 ```bash
 mkdir -p netplane/gen
-cd netplane && nix develop "$OLDPWD" --command sh -c 'go mod init github.com/trevex/xdp-dp/netplane && go mod edit -go=1.26.0 -replace github.com/trevex/xdp-dp/api=../api -replace github.com/trevex/xdp-dp/cni=../cni' && cd ..
+cd netplane && nix develop "$OLDPWD" --command sh -c 'go mod init github.com/trevex/flowplane/netplane && go mod edit -go=1.26.0 -replace github.com/trevex/flowplane/api=../api -replace github.com/trevex/flowplane/cni=../cni' && cd ..
 nix develop --command make proto-routebus
 ```
 
@@ -454,7 +454,7 @@ Expected: no output (builds clean). `ls netplane/gen/routebusv1/` shows `routebu
 git add api/proto/routebus go.work Makefile netplane/go.mod netplane/go.sum netplane/gen
 git commit -m "feat(netplane): routebus.v1 proto + netplane Go module
 
-New Go module github.com/trevex/xdp-dp/netplane (reflector + agent) with the
+New Go module github.com/trevex/flowplane/netplane (reflector + agent) with the
 route-bus protocol: a single bidi Session stream carrying Hello/Subscribe/
 Announce/Withdraw (agent->reflector) and RouteUpdate/EndOfRIB (reflector->agent).
 
@@ -479,7 +479,7 @@ package reflector
 import (
 	"testing"
 
-	pb "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	pb "github.com/trevex/flowplane/netplane/gen/routebusv1"
 )
 
 // fakeSink records everything the RIB sends it.
@@ -590,7 +590,7 @@ import (
 	"sort"
 	"sync"
 
-	pb "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	pb "github.com/trevex/flowplane/netplane/gen/routebusv1"
 )
 
 // Sink is a subscriber's outbound path. Send MUST NOT block — implementations
@@ -773,7 +773,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	pb "github.com/trevex/flowplane/netplane/gen/routebusv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
@@ -872,7 +872,7 @@ import (
 	"io"
 	"sync"
 
-	pb "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	pb "github.com/trevex/flowplane/netplane/gen/routebusv1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -973,8 +973,8 @@ import (
 	"log"
 	"net"
 
-	"github.com/trevex/xdp-dp/netplane/gen/routebusv1"
-	"github.com/trevex/xdp-dp/netplane/reflector"
+	"github.com/trevex/flowplane/netplane/gen/routebusv1"
+	"github.com/trevex/flowplane/netplane/reflector"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 	"time"
@@ -1022,7 +1022,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ---
 
-### Task 5: Agent route-bus client + xdp-dp driver + binary
+### Task 5: Agent route-bus client + flowplane driver + binary
 
 **Files:**
 - Create: `netplane/agent/bus.go`, `netplane/cmd/agent/main.go`
@@ -1042,8 +1042,8 @@ import (
 	"testing"
 	"time"
 
-	rbv1 "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
-	"github.com/trevex/xdp-dp/netplane/reflector"
+	rbv1 "github.com/trevex/flowplane/netplane/gen/routebusv1"
+	"github.com/trevex/flowplane/netplane/reflector"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
@@ -1136,7 +1136,7 @@ Create `netplane/agent/bus.go`:
 
 ```go
 // Package agent is the per-node control plane: a route-bus client that announces
-// local endpoint routes, subscribes by VNI, and drives the local xdp-dp datapath
+// local endpoint routes, subscribes by VNI, and drives the local flowplane datapath
 // as remote routes arrive.
 package agent
 
@@ -1145,12 +1145,12 @@ import (
 	"io"
 	"log"
 
-	dpv1 "github.com/trevex/xdp-dp/cni/gen/dataplanev1"
-	rbv1 "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	dpv1 "github.com/trevex/flowplane/cni/gen/dataplanev1"
+	rbv1 "github.com/trevex/flowplane/netplane/gen/routebusv1"
 	"google.golang.org/grpc"
 )
 
-// Dataplane is the subset of xdp-dp the agent drives. dpAdapter wraps the real
+// Dataplane is the subset of flowplane the agent drives. dpAdapter wraps the real
 // DataplaneNode gRPC client; tests supply a fake.
 type Dataplane interface {
 	AddRoute(ctx context.Context, vni uint32, prefix, nexthop string) error
@@ -1267,7 +1267,7 @@ Expected: PASS. If build complains about an unused `grpc` import, remove that im
 Create `netplane/cmd/agent/main.go`:
 
 ```go
-// Command agent runs the per-node control plane: it dials the local xdp-dp
+// Command agent runs the per-node control plane: it dials the local flowplane
 // DataplaneNode and the central reflector, then reconciles NetworkInterfaces on
 // this node into route announcements while programming learned remote routes.
 package main
@@ -1278,9 +1278,9 @@ import (
 	"log"
 	"time"
 
-	dpv1 "github.com/trevex/xdp-dp/cni/gen/dataplanev1"
-	"github.com/trevex/xdp-dp/netplane/agent"
-	rbv1 "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	dpv1 "github.com/trevex/flowplane/cni/gen/dataplanev1"
+	"github.com/trevex/flowplane/netplane/agent"
+	rbv1 "github.com/trevex/flowplane/netplane/gen/routebusv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
@@ -1290,7 +1290,7 @@ func main() {
 	nodeID := flag.String("node-id", "", "stable node identity (required)")
 	underlay := flag.String("underlay", "", "this node's underlay IPv6 (required)")
 	reflectorAddr := flag.String("reflector", "127.0.0.1:1338", "reflector gRPC address")
-	dataplaneAddr := flag.String("dataplane", "127.0.0.1:1337", "local xdp-dp DataplaneNode address")
+	dataplaneAddr := flag.String("dataplane", "127.0.0.1:1337", "local flowplane DataplaneNode address")
 	kubeconfig := flag.String("kubeconfig", "", "kubeconfig for the central API (empty = in-cluster)")
 	flag.Parse()
 	if *nodeID == "" || *underlay == "" {
@@ -1347,7 +1347,7 @@ Expected: PASS. (Do not `go build ./...` yet — `cmd/agent` references Task 6's
 
 ```bash
 git add netplane/agent/bus.go netplane/agent/bus_test.go
-git commit -m "feat(agent): route-bus client that drives the local xdp-dp
+git commit -m "feat(agent): route-bus client that drives the local flowplane
 
 The agent opens a routebus Session (Hello + subscribe-by-VNI + announce local
 routes) and programs learned remote RouteUpdates onto the local DataplaneNode
@@ -1379,7 +1379,7 @@ import (
 	"sort"
 	"testing"
 
-	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
+	netv1 "github.com/trevex/flowplane/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -1451,7 +1451,7 @@ import (
 	"net"
 	"sort"
 
-	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
+	netv1 "github.com/trevex/flowplane/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/clientcmd"
@@ -1728,7 +1728,7 @@ Replace the `srv := grpc.NewServer(...)` construction so it appends TLS creds wh
 	srv := grpc.NewServer(opts...)
 ```
 
-Add `"github.com/trevex/xdp-dp/netplane/routebus"` to the imports.
+Add `"github.com/trevex/flowplane/netplane/routebus"` to the imports.
 
 In `netplane/cmd/agent/main.go`, add the same three flags and select client transport credentials for the reflector dial:
 
@@ -1754,7 +1754,7 @@ Replace the reflector dial's transport credential:
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{Time: 2 * time.Second, Timeout: 3 * time.Second, PermitWithoutStream: true}))
 ```
 
-Add `"github.com/trevex/xdp-dp/netplane/routebus"` to the agent imports. (`credentials.TransportCredentials` is the common type of both `insecure.NewCredentials()` and the mTLS creds, so the `var rbCreds` assignment type-checks.)
+Add `"github.com/trevex/flowplane/netplane/routebus"` to the agent imports. (`credentials.TransportCredentials` is the common type of both `insecure.NewCredentials()` and the mTLS creds, so the `var rbCreds` assignment type-checks.)
 
 - [ ] **Step 5: Run tests + build**
 
@@ -1781,7 +1781,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 **Files:**
 - Create: `test/e2e/routebus_test.go`
 
-**Context:** This is spec §11's acceptance test — the first test that exercises the *encap* path. It reuses the existing fabric (`hack/clab/ipv6-fabric.clab.yml`: kind cluster `k01` with nodes `k01-control-plane` = underlay `fd00:db8:0:1::/64` and `k01-worker` = `fd00:db8:0:2::/64`, routed to each other by FRR `sw1`). It follows `test/e2e/fabric_test.go`'s exact skip-style and `clab-up.sh`/`clab-down.sh` harness. On each kind node it runs `xdp-dp serve` and attaches one endpoint via `AttachInterface`; then it drives the two dataplanes' `AddRoute` directly (the reflector/agent path is unit-tested in Tasks 3-6; here we prove the *datapath encap* end-to-end without needing the agent's k8s wiring inside the fabric) and asserts cross-node ping succeeds over IP-in-IPv6, then that a `WithdrawRoute` breaks it.
+**Context:** This is spec §11's acceptance test — the first test that exercises the *encap* path. It reuses the existing fabric (`hack/clab/ipv6-fabric.clab.yml`: kind cluster `k01` with nodes `k01-control-plane` = underlay `fd00:db8:0:1::/64` and `k01-worker` = `fd00:db8:0:2::/64`, routed to each other by FRR `sw1`). It follows `test/e2e/fabric_test.go`'s exact skip-style and `clab-up.sh`/`clab-down.sh` harness. On each kind node it runs `flowplane serve` and attaches one endpoint via `AttachInterface`; then it drives the two dataplanes' `AddRoute` directly (the reflector/agent path is unit-tested in Tasks 3-6; here we prove the *datapath encap* end-to-end without needing the agent's k8s wiring inside the fabric) and asserts cross-node ping succeeds over IP-in-IPv6, then that a `WithdrawRoute` breaks it.
 
 - [ ] **Step 1: Write the e2e test**
 
@@ -1798,7 +1798,7 @@ import (
 	"time"
 )
 
-// TestCrossNodeOverlayPing brings up the IPv6 fabric, runs xdp-dp on both kind
+// TestCrossNodeOverlayPing brings up the IPv6 fabric, runs flowplane on both kind
 // nodes with one endpoint each, programs the cross-node routes via AddRoute, and
 // asserts ping works over the IP-in-IPv6 overlay — then that WithdrawRoute breaks
 // it. SKIPs (never fails) without containerlab/kind/docker, like the sibling tests.
@@ -1840,16 +1840,16 @@ func TestCrossNodeOverlayPing(t *testing.T) {
 		out, err := runWithTimeout(exec.Command("docker", full...), cmdTimeout)
 		return out, err
 	}
-	// grpcurlIn runs grpcurl inside a node against its local xdp-dp.
+	// grpcurlIn runs grpcurl inside a node against its local flowplane.
 	grpcurlIn := func(node, method, body string) (string, error) {
 		return dockerExec(node, "grpcurl", "-plaintext", "-d", body, grpcAddr, method)
 	}
 
-	// Start xdp-dp on each node (image already loaded by the fabric; serve in background).
+	// Start flowplane on each node (image already loaded by the fabric; serve in background).
 	for _, node := range []string{cp, wk} {
 		if _, err := dockerExec(node, "sh", "-c",
-			"pkill -f 'xdp-dp serve' 2>/dev/null; (xdp-dp serve --grpc "+grpcAddr+" >/tmp/xdp.log 2>&1 &) ; sleep 3"); err != nil {
-			t.Fatalf("start xdp-dp on %s: %v", node, err)
+			"pkill -f 'flowplane serve' 2>/dev/null; (flowplane serve --grpc "+grpcAddr+" >/tmp/xdp.log 2>&1 &) ; sleep 3"); err != nil {
+			t.Fatalf("start flowplane on %s: %v", node, err)
 		}
 	}
 
@@ -1895,7 +1895,7 @@ func TestCrossNodeOverlayPing(t *testing.T) {
 	}
 	if !pinged {
 		log, _ := dockerExec(cp, "cat", "/tmp/xdp.log")
-		t.Fatalf("cross-node overlay ping A->B never succeeded\nxdp-dp log:\n%s", log)
+		t.Fatalf("cross-node overlay ping A->B never succeeded\nflowplane log:\n%s", log)
 	}
 
 	// Withdraw A's route to B on the cp node; ping must now fail (route gone => Pass, no encap).
@@ -1920,7 +1920,7 @@ func TestCrossNodeOverlayPing(t *testing.T) {
 - [ ] **Step 2: Run the test (skips if tooling absent; full run needs the fabric)**
 
 Run: `nix develop --command sh -c 'cd test/e2e && go test -run TestCrossNodeOverlayPing -v -timeout 25m 2>&1 | tail -30'`
-Expected on a fabric-capable host: PASS (cross-node ping succeeds, then fails after withdraw). On a host without containerlab/kind/docker: `--- SKIP`. If `xdp-dp serve` isn't on the node's `PATH` or the image entrypoint differs, adjust the `serve` invocation to match how `test/e2e/fabric_test.go` runs xdp-dp on `k01-control-plane` (it uses the same `ghcr.io/trevex/dpservice-xdp:dev` image — mirror its exact exec form). If `grpcurl` isn't in the node image, install it in the serve step or shell out from the host with `-import-path`.
+Expected on a fabric-capable host: PASS (cross-node ping succeeds, then fails after withdraw). On a host without containerlab/kind/docker: `--- SKIP`. If `flowplane serve` isn't on the node's `PATH` or the image entrypoint differs, adjust the `serve` invocation to match how `test/e2e/fabric_test.go` runs flowplane on `k01-control-plane` (it uses the same `ghcr.io/trevex/ectobase/flowplane:dev` image — mirror its exact exec form). If `grpcurl` isn't in the node image, install it in the serve step or shell out from the host with `-import-path`.
 
 - [ ] **Step 3: Verify the whole workspace still builds and unit tests pass**
 
@@ -1933,7 +1933,7 @@ Expected: builds clean; netplane unit tests PASS; `go vet` clean on the e2e modu
 git add test/e2e/routebus_test.go
 git commit -m "test(e2e): cross-node overlay ping over IP-in-IPv6 on the clab fabric
 
-Acceptance test (spec §11): xdp-dp on both kind nodes, one endpoint each,
+Acceptance test (spec §11): flowplane on both kind nodes, one endpoint each,
 AddRoute programs the cross-node routes, and ping A->B succeeds over the encap
 path — the first test exercising ENCAP, not the same-node fast path. WithdrawRoute
 then breaks it. Skips without containerlab/kind/docker.
@@ -1946,8 +1946,8 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 ## Self-Review
 
 **1. Spec coverage:**
-- §4.1 `xdp-dp` AddRoute/WithdrawRoute → Task 1. ✓ (Refinement: remote routes program only ROUTES, no UNDERLAY — justified against egress.rs.)
-- §4.2 per-node agent (reconcile CRDs, drive xdp-dp, route-bus client) → Tasks 5 (bus + driver) + 6 (reconcile). ✓
+- §4.1 `flowplane` AddRoute/WithdrawRoute → Task 1. ✓ (Refinement: remote routes program only ROUTES, no UNDERLAY — justified against egress.rs.)
+- §4.2 per-node agent (reconcile CRDs, drive flowplane, route-bus client) → Tasks 5 (bus + driver) + 6 (reconcile). ✓
 - §4.3 reflector (per-VNI table, snapshot-then-incremental, fast-withdraw) → Tasks 3 (RIB) + 4 (server). ✓
 - §4.4 central controllers (VPC→VNI, scheduling) → **partially deferred.** The agent reads `status.vni`/`status.nodeName`; the controllers that *populate* them are out of this plan's scope. Noted here as the one intentional gap — v1 e2e (Task 8) drives routes directly and does not depend on the controllers. Follow-up plan.
 - §5 route bus protocol (Session bidi, Hello/Subscribe/Announce/Withdraw/KeepAlive, RouteUpdate/EndOfRIB, full-table-then-EoR) → Task 2 proto + Tasks 3-5 behavior. ✓
@@ -1955,7 +1955,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - §7 metalbond improvements: HA consistent state → **deferred** (single reflector instance; noted); graceful-restart/EndOfRIB → ✓ (RIB snapshot + EndOfRIB); ECMP nexthop-sets → carried in proto, primary programmed (✓ partial, noted); BFD liveness → v1 uses aggressive gRPC keepalive + session-close fast-withdraw (Task 4/7), dedicated BFD deferred (noted); mTLS + authz → Task 7 (transport ✓; per-VNI authz deferred, noted). 
 - §8 security (mTLS, node==cert) → Task 7. ✓ (authz deferred, noted §7.)
 - §11 acceptance e2e (two kind nodes, cross-node encap ping, liveness withdraw) → Task 8. ✓
-- §12 repo layout → matches (api/proto/routebus, add to dataplane.proto, cmd/agent, cmd/reflector, xdp-dp). `cmd/controllers` folded away for v1 per §12's "or fold into agent/reflector." ✓
+- §12 repo layout → matches (api/proto/routebus, add to dataplane.proto, cmd/agent, cmd/reflector, flowplane). `cmd/controllers` folded away for v1 per §12's "or fold into agent/reflector." ✓
 
 **2. Placeholder scan:** No TBD/TODO left as work. The one `var _ = grpc.WaitForReady` line in Task 5 is explicitly flagged for deletion with an instruction. The deferred items (HA, per-VNI authz, dedicated BFD, central controllers) are called out as scoped-out follow-ups, not silent gaps.
 

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Dual-home every fabric kind node to **two** FRR ToRs (`sw1`, `sw2`) so each node's `/64` is announced on both uplinks and reachable via **ECMP** (equal-cost, `multipath-relax` + `maximum-paths`) with **BFD** sub-second failover — a faithful leaf-spine underlay — while the existing single-uplink xdp-dp datapath keeps working.
+**Goal:** Dual-home every fabric kind node to **two** FRR ToRs (`sw1`, `sw2`) so each node's `/64` is announced on both uplinks and reachable via **ECMP** (equal-cost, `multipath-relax` + `maximum-paths`) with **BFD** sub-second failover — a faithful leaf-spine underlay — while the existing single-uplink flowplane datapath keeps working.
 
-**Architecture:** Add a second ToR `sw2` (FRR, AS 65010, no `sw1–sw2` interlink — redundancy *is* the dual-homing, per `icn/sandbox/FABRIC.md`). Each kind node gets a second uplink `eth2 → sw2` alongside `eth1 → sw1`. The in-node `fabric-preboot` FRR config generator already loops over `UPLINKS`; we set `UPLINKS="eth1 eth2"` via an `/etc/fabric/uplinks` mount and add a `fabric-fast` BFD profile to the generated config. The kubelet BGP-convergence gate already covers both uplinks. **No datapath changes** — xdp-dp still egresses on `eth1`; the fabric ECMPs the return path. (Datapath egress ECMP is the separate Phase-3 plan.)
+**Architecture:** Add a second ToR `sw2` (FRR, AS 65010, no `sw1–sw2` interlink — redundancy *is* the dual-homing, per `icn/sandbox/FABRIC.md`). Each kind node gets a second uplink `eth2 → sw2` alongside `eth1 → sw1`. The in-node `fabric-preboot` FRR config generator already loops over `UPLINKS`; we set `UPLINKS="eth1 eth2"` via an `/etc/fabric/uplinks` mount and add a `fabric-fast` BFD profile to the generated config. The kubelet BGP-convergence gate already covers both uplinks. **No datapath changes** — flowplane still egresses on `eth1`; the fabric ECMPs the return path. (Datapath egress ECMP is the separate Phase-3 plan.)
 
 **Tech Stack:** containerlab, kind (custom node image), FRR (unnumbered eBGP + BFD), bash/YAML.
 
@@ -249,12 +249,12 @@ sudo docker exec k01-control-plane ip link set eth2 up
 ```
 Expected: after `eth2 down`, the route to `fd00:db8:0:2::/64` remains (now single next-hop via `eth1`) — sub-second BFD failover, no blackhole. (Bring eth2 back up to restore ECMP.)
 
-- [ ] **Step 6: Regression — xdp-dp overlay still green on the dual-homed fabric**
+- [ ] **Step 6: Regression — flowplane overlay still green on the dual-homed fabric**
 
 ```bash
 export PATH="$HOME/go/bin:$PATH"
 for c in k01 k02; do
-  sudo kind load docker-image ghcr.io/trevex/dpservice-xdp:dev --name "$c"
+  sudo kind load docker-image ghcr.io/trevex/ectobase/flowplane:dev --name "$c"
   sudo kind load docker-image ghcr.io/trevex/netplane:dev --name "$c"
 done
 bash hack/multicluster-e2e.sh 2>&1 | tail -12
@@ -282,7 +282,7 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 **3. Consistency:** `UPLINKS="eth1 eth2"` (T3 file) matches the `eth2` links (T4) and `sw2`'s three host-facing interfaces (T1, mirroring `sw1`). Router-ids distinct (`sw1=10.0.1.1`, `sw2=10.0.1.2`; nodes keep `10.0.2.x`). BFD profile name `fabric-fast` identical across `sw1`/`sw2`/node configs (required for the profile to match). Both switches share AS 65010; nodes AS 65100 with `allowas-in 1` (already generated) so a node accepts the other node's `/64` transited via the shared-AS switches.
 
-**Deferred (separate plan):** xdp-dp egress ECMP — grow `LOCAL` to two uplinks + a 50/50 active-active WCMP table + per-port ToR MAC from netlink neigh (mirroring dpservice), so *outbound* traffic uses both uplinks too.
+**Deferred (separate plan):** flowplane egress ECMP — grow `LOCAL` to two uplinks + a 50/50 active-active WCMP table + per-port ToR MAC from netlink neigh (mirroring dpservice), so *outbound* traffic uses both uplinks too.
 
 ---
 

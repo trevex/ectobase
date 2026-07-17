@@ -1,4 +1,4 @@
-/* VyOS WAN edge #2 for the xdp-dp N-S egress fabric. HA peer of edge1: single-homed to sw2 (eth1,
+/* VyOS WAN edge #2 for the flowplane N-S egress fabric. HA peer of edge1: single-homed to sw2 (eth1,
  * unnumbered eBGP), eth2 to the clabwan host bridge. dum0 carries the SAME anycast edge underlay
  * fd00:db8:0:9::e/128 as edge1 -> the fabric ECMPs egress across both edges and either edge handles
  * any return (drain-safe, stateless). See edge1.boot for the full datapath description. */

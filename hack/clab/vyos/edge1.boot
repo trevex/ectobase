@@ -1,9 +1,9 @@
-/* VyOS WAN edge #1 for the xdp-dp N-S egress fabric. Adapted from icn/sandbox edge1.boot.
+/* VyOS WAN edge #1 for the flowplane N-S egress fabric. Adapted from icn/sandbox edge1.boot.
  * Single-homed to sw1 (eth1, unnumbered eBGP); eth2 faces the clabwan host bridge (the real
  * internet, via the host masquerade). dum0 carries the ANYCAST edge underlay fd00:db8:0:9::e/128
  * (edge2 announces the same /128 -> fabric ECMP + drain-safe: either edge handles any egress or
  * return). No Tayga/DNS64/NAT64 (the source hypervisor's nat64.rs does NAT64; the edge only ever
- * sees IPv4 nat_ip). The xdp-dp sidecar (shared netns) owns the overlay: uplink_rx on eth1 decaps
+ * sees IPv4 nat_ip). The flowplane sidecar (shared netns) owns the overlay: uplink_rx on eth1 decaps
  * egress -> XDP_PASS to this kernel (routed out eth2 via the v4 default); wan_rx on eth2 re-encaps
  * nat_ip returns to the owning hypervisor. The external default route into the fabric is announced
  * by the edge AGENT over routebus (external=true), NOT by BGP default-originate. */

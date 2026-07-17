@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	rbv1 "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	rbv1 "github.com/trevex/ectobase/netplane/gen/routebusv1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 

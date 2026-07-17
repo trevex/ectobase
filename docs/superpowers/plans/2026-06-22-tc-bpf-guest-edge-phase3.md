@@ -6,9 +6,9 @@
 
 **Architecture:** Split the egress forwarding into (a) a shared, map-driven `forward_decision_v4(data, data_end, ifindex, meta) -> EgressVerdict` in the eBPF crate that mutates the packet in place (NAT/VIP, no size change) and returns a context-neutral verdict, and (b) per-program glue that *executes* the verdict — `XDP_REDIRECT`/`bpf_xdp_adjust_head` for XDP, `TC_ACT_REDIRECT`/`bpf_skb_adjust_room` for tc. The packet mutators (`ct_apply`, `vip::*`, `nat_snat_egress`, …) are refactored from `&XdpContext` to `(data, data_end)` so both glues share them. This extends Phase 1/2's composable pattern to the forwarding path.
 
-**Tech Stack:** Rust + aya/aya-ebpf (eBPF), `xdp-dp-common` host tests, bash + ip-netns + scapy gate, the dpservice conformance suite (XDP regression gate). Build via `nix develop`.
+**Tech Stack:** Rust + aya/aya-ebpf (eBPF), `flowplane-common` host tests, bash + ip-netns + scapy gate, the dpservice conformance suite (XDP regression gate). Build via `nix develop`.
 
-**Context for the implementer:** Phases 1–2 are done. Pure packet logic lives in `xdp-dp-common`; map-driven logic lives in the eBPF crate. The XDP egress forwarding is `xdp-dp-ebpf/src/egress.rs::try_guest_tx` (lines ~52–150, after the ARP/ND/DHCP classify): conntrack → egress firewall → VIP snat/dnat → route lookup → network NAT → conntrack track → meter → local-fast-path OR `encap_and_redirect` (`encap.rs`). The tc entry is `tc.rs::tc_guest_tx` (currently: ARP/ND/DHCP, else `TC_ACT_OK`). **Every change to the XDP path must keep `nix develop -c ./test/conformance/run.sh` at 93 passed / 2 skipped.** Also: out-of-line BPF subprograms sum stack frames (512-byte limit) — keep shared helpers `#[inline(always)]` where the stack-heavy `guest_tx` calls them (see Phase 2's `fix(arp_nd): inline pure builders`).
+**Context for the implementer:** Phases 1–2 are done. Pure packet logic lives in `flowplane-common`; map-driven logic lives in the eBPF crate. The XDP egress forwarding is `flowplane-ebpf/src/egress.rs::try_guest_tx` (lines ~52–150, after the ARP/ND/DHCP classify): conntrack → egress firewall → VIP snat/dnat → route lookup → network NAT → conntrack track → meter → local-fast-path OR `encap_and_redirect` (`encap.rs`). The tc entry is `tc.rs::tc_guest_tx` (currently: ARP/ND/DHCP, else `TC_ACT_OK`). **Every change to the XDP path must keep `nix develop -c ./test/conformance/run.sh` at 93 passed / 2 skipped.** Also: out-of-line BPF subprograms sum stack frames (512-byte limit) — keep shared helpers `#[inline(always)]` where the stack-heavy `guest_tx` calls them (see Phase 2's `fix(arp_nd): inline pure builders`).
 
 **Scope note:** IPv4 egress only (the `ETH_P_IP` path). The IPv6 inner path (`v6::v6_guest_tx`) and DHCPv6 are out of scope (later). Phase 4 = conformance/e2e harness cutover; Phase 5 = ioiab.
 
@@ -17,17 +17,17 @@
 ## File Structure
 
 **Modified files:**
-- `xdp-dp-ebpf/src/conntrack.rs`, `xdp-dp-ebpf/src/vip.rs`, `xdp-dp-ebpf/src/nat.rs` — change the packet mutators from `&XdpContext` to `(data: usize, data_end: usize)` params (they do in-place rewrites + incremental checksums; no size change). Behaviour-preserving.
-- `xdp-dp-ebpf/src/egress.rs` — extract the forwarding pipeline into `pub fn forward_decision_v4(data, data_end, ifindex, &PortMeta) -> EgressVerdict`; rewrite XDP `try_guest_tx`'s IPv4 tail as glue that executes the verdict. Add the `EgressVerdict` enum.
-- `xdp-dp-ebpf/src/encap.rs` — split `encap_and_redirect` into `write_outer_v6(data, data_end, &EncapParams)` (pure byte write, no size change) + keep the XDP room-making (`bpf_xdp_adjust_head`) in the XDP glue.
-- `xdp-dp-ebpf/src/tc.rs` — `tc_guest_tx` IPv4 path: call `forward_decision_v4`, execute the verdict with tc primitives (`pull_data` + `bpf_skb_adjust_room` for encap + `bpf_redirect`).
+- `flowplane-ebpf/src/conntrack.rs`, `flowplane-ebpf/src/vip.rs`, `flowplane-ebpf/src/nat.rs` — change the packet mutators from `&XdpContext` to `(data: usize, data_end: usize)` params (they do in-place rewrites + incremental checksums; no size change). Behaviour-preserving.
+- `flowplane-ebpf/src/egress.rs` — extract the forwarding pipeline into `pub fn forward_decision_v4(data, data_end, ifindex, &PortMeta) -> EgressVerdict`; rewrite XDP `try_guest_tx`'s IPv4 tail as glue that executes the verdict. Add the `EgressVerdict` enum.
+- `flowplane-ebpf/src/encap.rs` — split `encap_and_redirect` into `write_outer_v6(data, data_end, &EncapParams)` (pure byte write, no size change) + keep the XDP room-making (`bpf_xdp_adjust_head`) in the XDP glue.
+- `flowplane-ebpf/src/tc.rs` — `tc_guest_tx` IPv4 path: call `forward_decision_v4`, execute the verdict with tc primitives (`pull_data` + `bpf_skb_adjust_room` for encap + `bpf_redirect`).
 - `test/tc-egress-netns.sh` (new) — a gate: guest tap + an "uplink" veth; send an inner IPv4 packet to a remote overlay IP from the tap; assert an **encapsulated IPv6 frame** (outer IPv6, next-header IPIP, correct underlay src/dst) arrives on the uplink. Also assert local-delivery to a second tap.
 
 ---
 
 ## Task 1: Refactor egress mutators to `(data, data_end)` (behaviour-preserving)
 
-**Files:** `xdp-dp-ebpf/src/{conntrack.rs, vip.rs, nat.rs, egress.rs}`
+**Files:** `flowplane-ebpf/src/{conntrack.rs, vip.rs, nat.rs, egress.rs}`
 
 - [ ] **Step 1: Change the mutator signatures**
 
@@ -55,12 +55,12 @@ Also check `ingress.rs` (uplink_rx) for callers of these same functions (ct_appl
 
 - [ ] **Step 3: Build + conformance (the gate for this refactor)**
 
-Run: `nix develop -c cargo build -p xdp-dp 2>&1 | grep -E "error|Finished" | tail -3` → Finished.
+Run: `nix develop -c cargo build -p flowplane 2>&1 | grep -E "error|Finished" | tail -3` → Finished.
 Run: `nix develop -c ./test/conformance/run.sh 2>&1 | tail -3` → **93 passed, 2 skipped**. (This is the real proof the in-place mutators are unchanged. If a count drops, a mutator's data/data_end substitution is wrong — most likely a missing re-fetch after a NAT rewrite, but these don't resize so bounds are stable; recheck the edit.)
 
 - [ ] **Step 4: Commit**
 ```bash
-git add xdp-dp-ebpf/src/conntrack.rs xdp-dp-ebpf/src/vip.rs xdp-dp-ebpf/src/nat.rs xdp-dp-ebpf/src/egress.rs xdp-dp-ebpf/src/ingress.rs
+git add flowplane-ebpf/src/conntrack.rs flowplane-ebpf/src/vip.rs flowplane-ebpf/src/nat.rs flowplane-ebpf/src/egress.rs flowplane-ebpf/src/ingress.rs
 git commit -m "refactor(egress): mutators take (data,data_end) not XdpContext (shareable by tc)"
 ```
 
@@ -68,7 +68,7 @@ git commit -m "refactor(egress): mutators take (data,data_end) not XdpContext (s
 
 ## Task 2: Shared `forward_decision_v4` + `EgressVerdict`; XDP glue executes it
 
-**Files:** `xdp-dp-ebpf/src/egress.rs`, `xdp-dp-ebpf/src/encap.rs`
+**Files:** `flowplane-ebpf/src/egress.rs`, `flowplane-ebpf/src/encap.rs`
 
 - [ ] **Step 1: Add the `EgressVerdict` enum + `EncapParams` (in `egress.rs`)**
 ```rust
@@ -160,13 +160,13 @@ match egress::forward_decision_v4(ctx.data(), ctx.data_end(), ifindex, meta) {
 
 - [ ] **Step 5: Build + conformance (XDP must be unchanged)**
 
-Run: `nix develop -c cargo build -p xdp-dp 2>&1 | grep -E "error|Finished" | tail -3` → Finished.
+Run: `nix develop -c cargo build -p flowplane 2>&1 | grep -E "error|Finished" | tail -3` → Finished.
 Run: `nix develop -c ./test/conformance/run.sh 2>&1 | tail -3` → **93 passed, 2 skipped**.
 If the verifier rejects `guest_tx` for stack size, ensure `forward_decision_v4` is `#[inline(always)]` (and if that overflows the single-frame limit, drop the `#[inline(always)]` and instead reduce locals — but try inline first; the original was one inlined body).
 
 - [ ] **Step 6: Commit**
 ```bash
-git add xdp-dp-ebpf/src/egress.rs xdp-dp-ebpf/src/encap.rs
+git add flowplane-ebpf/src/egress.rs flowplane-ebpf/src/encap.rs
 git commit -m "refactor(egress): forward_decision_v4 + EgressVerdict; XDP glue executes it"
 ```
 
@@ -174,7 +174,7 @@ git commit -m "refactor(egress): forward_decision_v4 + EgressVerdict; XDP glue e
 
 ## Task 3: tc glue — execute the egress verdict on `tc_guest_tx`
 
-**Files:** `xdp-dp-ebpf/src/tc.rs`
+**Files:** `flowplane-ebpf/src/tc.rs`
 
 - [ ] **Step 1: Add the IPv4 forwarding tail to `tc_guest_tx`**
 
@@ -183,12 +183,12 @@ After the ARP/ND handling and the DHCP tail-call check (i.e. where it currently 
 // IPv4 inner → overlay forwarding (conntrack/nat/vip/fw/meter/route → local or encap).
 if ethertype == 0x0800 /* ETH_P_IP */ {
     // Make the inner IPv4 header range writable for the in-place pipeline (NAT/VIP rewrites).
-    let _ = ctx.pull_data((xdp_dp_common::arp_nd::ETH_LEN + 40) as u32);
+    let _ = ctx.pull_data((flowplane_common::arp_nd::ETH_LEN + 40) as u32);
     match crate::egress::forward_decision_v4(ctx.data(), ctx.data_end(), ifindex, &meta) {
         crate::egress::EgressVerdict::Pass => return TC_ACT_OK,
         crate::egress::EgressVerdict::Drop => return TC_ACT_SHOT,
         crate::egress::EgressVerdict::Local { tap_ifindex, guest_mac } => {
-            if ctx.data() + xdp_dp_common::arp_nd::ETH_LEN <= ctx.data_end() {
+            if ctx.data() + flowplane_common::arp_nd::ETH_LEN <= ctx.data_end() {
                 let q = ctx.data() as *mut u8;
                 unsafe {
                     write6_local(q, &guest_mac);
@@ -212,7 +212,7 @@ if ethertype == 0x0800 /* ETH_P_IP */ {
                 return TC_ACT_OK;
             }
             if ctx
-                .pull_data((xdp_dp_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN) as u32)
+                .pull_data((flowplane_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN) as u32)
                 .is_err()
             {
                 return TC_ACT_OK;
@@ -226,7 +226,7 @@ if ethertype == 0x0800 /* ETH_P_IP */ {
 }
 TC_ACT_OK
 ```
-Provide a small local `write6_local` (or reuse one already imported) for the 6-byte eth rewrite, and import `BPF_ADJ_ROOM_MAC` from `aya_ebpf::bindings`. `IPV6_LEN`/`ETH_LEN` constants: use `crate::parse::IPV6_LEN`/`xdp_dp_common::arp_nd::ETH_LEN`.
+Provide a small local `write6_local` (or reuse one already imported) for the 6-byte eth rewrite, and import `BPF_ADJ_ROOM_MAC` from `aya_ebpf::bindings`. `IPV6_LEN`/`ETH_LEN` constants: use `crate::parse::IPV6_LEN`/`flowplane_common::arp_nd::ETH_LEN`.
 
 ### CRITICAL implementation notes (the hard part of this plan)
 - **`bpf_skb_adjust_room` semantics differ from `bpf_xdp_adjust_head`.** The XDP path does `adjust_head(-40)` (grow headroom by 40; the inner eth's 14 bytes become part of the 54-byte outer header region → net +40, inner eth consumed). The tc equivalent that yields the SAME wire layout `[outer_eth(14)][outer_ipv6(40)][inner_ipv4...]` is NOT obvious — verify empirically:
@@ -236,11 +236,11 @@ Provide a small local `write6_local` (or reuse one already imported) for the 6-b
 - Stack: keep `forward_decision_v4` `#[inline(always)]`; `tc_guest_tx` is lighter than XDP `guest_tx` so the 512-byte limit is unlikely to bite, but watch for it at load.
 
 - [ ] **Step 2: Build**
-Run: `nix develop -c cargo build -p xdp-dp 2>&1 | grep -E "error|Finished" | tail -5` → Finished. (Load/verify happens in the Task-4 gate.)
+Run: `nix develop -c cargo build -p flowplane 2>&1 | grep -E "error|Finished" | tail -5` → Finished. (Load/verify happens in the Task-4 gate.)
 
 - [ ] **Step 3: Commit**
 ```bash
-git add xdp-dp-ebpf/src/tc.rs
+git add flowplane-ebpf/src/tc.rs
 git commit -m "feat(ebpf): tc guest edge forwards IPv4 to overlay (encap) or local tap"
 ```
 
@@ -248,7 +248,7 @@ git commit -m "feat(ebpf): tc guest edge forwards IPv4 to overlay (encap) or loc
 
 ## Task 4: Egress gate — encap output on the uplink (+ local delivery)
 
-**Files:** `test/tc-egress-netns.sh` (new), `test/tap-dhcp-probe.py` (extend), `xdp-dp/src/main.rs` (extend `tc-bringup`)
+**Files:** `test/tc-egress-netns.sh` (new), `test/tap-dhcp-probe.py` (extend), `flowplane/src/main.rs` (extend `tc-bringup`)
 
 - [ ] **Step 1: Extend `tc-bringup` for an egress test topology**
 
@@ -256,7 +256,7 @@ The current `tc-bringup` programs one tap + DHCP. For egress it must also progra
 
 - [ ] **Step 2: Write the gate `test/tc-egress-netns.sh`**
 
-Topology in a netns: a guest tap `tctap0` (gateway MAC) and an "uplink" veth pair `uplink`/`uplinkpeer` (so frames redirected to `uplink` are readable on `uplinkpeer`). Run `xdp-dp tc-bringup --tap tctap0 --uplink uplink --guest-ipv4 10.0.0.1 --gateway-ipv4 10.0.0.1 --guest-mac 52:54:00:00:00:01 --gateway-mac <uplink-nexthop-mac> --remote 10.0.0.2=fc00:2::2=100 ...` (program the guest's own underlay + the remote). Then, from the guest tap, send an inner IPv4 packet `Ether(src=guest_mac)/IP(src=10.0.0.1,dst=10.0.0.2)/ICMP` and **capture on `uplinkpeer`**. Assert the captured frame is `Ether/IPv6(nh=4 IPIP, dst=fc00:2::2, src=<guest underlay>)/IP(src=10.0.0.1,dst=10.0.0.2)` — i.e. correctly encapsulated. Print `ENCAP OK`. (Add a second local tap + a `--guest` local route to assert `EgressVerdict::Local` delivers the inner frame to that tap, printing `LOCAL OK` — optional if it complicates the harness; the encap assertion is the primary gate.)
+Topology in a netns: a guest tap `tctap0` (gateway MAC) and an "uplink" veth pair `uplink`/`uplinkpeer` (so frames redirected to `uplink` are readable on `uplinkpeer`). Run `flowplane tc-bringup --tap tctap0 --uplink uplink --guest-ipv4 10.0.0.1 --gateway-ipv4 10.0.0.1 --guest-mac 52:54:00:00:00:01 --gateway-mac <uplink-nexthop-mac> --remote 10.0.0.2=fc00:2::2=100 ...` (program the guest's own underlay + the remote). Then, from the guest tap, send an inner IPv4 packet `Ether(src=guest_mac)/IP(src=10.0.0.1,dst=10.0.0.2)/ICMP` and **capture on `uplinkpeer`**. Assert the captured frame is `Ether/IPv6(nh=4 IPIP, dst=fc00:2::2, src=<guest underlay>)/IP(src=10.0.0.1,dst=10.0.0.2)` — i.e. correctly encapsulated. Print `ENCAP OK`. (Add a second local tap + a `--guest` local route to assert `EgressVerdict::Local` delivers the inner frame to that tap, printing `LOCAL OK` — optional if it complicates the harness; the encap assertion is the primary gate.)
 Reuse the scapy/tap-fd scaffolding from `test/tap-dhcp-probe.py` (add an `--egress` probe mode); keep existing modes intact. Cleanup trap, unique netns, datapath log capture + verifier-rejection check (as in `tc-dhcp-netns.sh`).
 
 - [ ] **Step 3: Run the gate (iterate on the adjust_room invocation here)**
@@ -264,10 +264,10 @@ Run: `nix develop -c ./test/tc-egress-netns.sh` → expect `ENCAP OK`. If the ca
 
 - [ ] **Step 4: Regression + commit**
 Run: `nix develop -c ./test/tc-dhcp-netns.sh 2>&1 | tail -1` → still `PASS: tc DHCP + ARP + ND OK` (the IPv4 path addition must not break responders).
-Run: `nix develop -c cargo test -p xdp-dp-common 2>&1 | grep "test result"` → ok.
+Run: `nix develop -c cargo test -p flowplane-common 2>&1 | grep "test result"` → ok.
 Run: `nix develop -c ./test/conformance/run.sh 2>&1 | tail -3` → still **93 passed, 2 skipped**.
 ```bash
-git add test/tc-egress-netns.sh test/tap-dhcp-probe.py xdp-dp/src/main.rs xdp-dp-ebpf/src/tc.rs
+git add test/tc-egress-netns.sh test/tap-dhcp-probe.py flowplane/src/main.rs flowplane-ebpf/src/tc.rs
 git commit -m "test(tc): egress gate — tc datapath encapsulates IPv4 to overlay on the uplink"
 ```
 

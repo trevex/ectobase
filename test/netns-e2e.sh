@@ -16,13 +16,13 @@
 #
 # Requirements:
 #   - Passwordless sudo
-#   - cargo build -p xdp-dp must have been run (binary at target/debug/xdp-dp)
+#   - cargo build -p flowplane must have been run (binary at target/debug/flowplane)
 #   - tcpdump in Nix store (detected automatically)
 set -euo pipefail
 
 # Repo root from the script's own location (this script lives in test/).
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$REPO/target/debug/xdp-dp"
+BIN="$REPO/target/debug/flowplane"
 # User-writable: the script runs as the normal user (only individual commands use sudo),
 # so this must NOT be under root-owned /run.
 PIDFILE="${TMPDIR:-/tmp}/xdp-e2e-pids"
@@ -36,7 +36,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
 cmd_up() {
-    [[ -x "$BIN" ]] || die "binary not found at $BIN — run: cargo build -p xdp-dp"
+    [[ -x "$BIN" ]] || die "binary not found at $BIN — run: cargo build -p flowplane"
 
     # ---- bridge ----
     sudo ip link add br-ul type bridge 2>/dev/null || true
@@ -615,18 +615,18 @@ cmd_down() {
     echo "=== Tearing down ==="
 
     # Kill all backgrounded datapath processes by their recorded PIDs (precise).
-    # These PIDs are the `sudo ...` wrappers; SIGTERM is forwarded to the xdp-dp child.
+    # These PIDs are the `sudo ...` wrappers; SIGTERM is forwarded to the flowplane child.
     if [[ -f "$PIDFILE" ]]; then
         while read -r pid; do
             sudo kill "$pid" 2>/dev/null || true
         done < "$PIDFILE"
         rm -f "$PIDFILE"
     fi
-    # Belt-and-suspenders fallback. IMPORTANT: do NOT use a broad `pkill -f target/debug/xdp-dp`
+    # Belt-and-suspenders fallback. IMPORTANT: do NOT use a broad `pkill -f target/debug/flowplane`
     # — that regex also matches ANY shell whose command line merely mentions the binary path
     # (e.g. an interactive verification command), killing unrelated processes. Match only the
     # actual datapath subcommands.
-    sudo pkill -f 'xdp-dp (bringup|pass) --' 2>/dev/null || true
+    sudo pkill -f 'flowplane (bringup|pass) --' 2>/dev/null || true
 
     sleep 1
 

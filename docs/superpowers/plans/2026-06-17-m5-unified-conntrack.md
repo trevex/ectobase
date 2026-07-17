@@ -58,8 +58,8 @@ a footnote. Key facts and decisions:
 ## File Structure
 
 ```
-xdp-dp-common/src/lib.rs    # + CtEntry + CT_* consts; remove CtVal/NatCtVal at the end (Task 3)
-xdp-dp-ebpf/src/
+flowplane-common/src/lib.rs    # + CtEntry + CT_* consts; remove CtVal/NatCtVal at the end (Task 3)
+flowplane-ebpf/src/
   conntrack.rs              # NEW: unified map helpers (ct_lookup/ct_apply/ct_touch/tcp_advance/now/ct_key)
   maps.rs                   # CONNTRACK value -> CtEntry; remove NAT_CT (Task 3)
   lb.rs                     # ingress insert unified entry; remove ct_reverse_snat (Task 2)
@@ -68,7 +68,7 @@ xdp-dp-ebpf/src/
   ingress.rs                # generic ct apply-or-create on ingress
   parse.rs                  # + tcp_flags() reader (Task 4)
   main.rs                   # + mod conntrack;
-xdp-dp/src/
+flowplane/src/
   maps.rs                   # Conntrack wrapper: value CtEntry + iter()/remove() (Task 6)
   conntrack_gc.rs           # NEW: userspace aging task (Task 6)
   main.rs / control.rs      # spawn GC in bringup + serve (Task 6)
@@ -79,7 +79,7 @@ env/netns-e2e.sh            # + conntrack/aging assertions (Task 7)
 
 ## Task 1: Unified `CtEntry` type + flag/TCP-state constants
 
-**Files:** Modify `xdp-dp-common/src/lib.rs`
+**Files:** Modify `flowplane-common/src/lib.rs`
 
 - [ ] **Step 1: Add the type + consts**
 
@@ -123,25 +123,25 @@ In the layout-test module add:
 ```rust
         assert_eq!(core::mem::size_of::<CtEntry>(), 24);
 ```
-Run `cargo test -p xdp-dp-common --features user` → PASS.
+Run `cargo test -p flowplane-common --features user` → PASS.
 
 - [ ] **Step 3: Build + commit**
 ```bash
-cargo build -p xdp-dp
+cargo build -p flowplane
 cargo fmt --all
-git add xdp-dp-common
+git add flowplane-common
 git commit -m "feat(ct): unified CtEntry conntrack value + flag/TCP-state consts"
 ```
 
 ## Task 2: `conntrack.rs` module + migrate LB onto the unified table
 
-**Files:** Create `xdp-dp-ebpf/src/conntrack.rs`; Modify `xdp-dp-ebpf/src/maps.rs`, `xdp-dp-ebpf/src/main.rs`, `xdp-dp-ebpf/src/lb.rs`, `xdp-dp-ebpf/src/egress.rs`, `xdp-dp-ebpf/src/ingress.rs`
+**Files:** Create `flowplane-ebpf/src/conntrack.rs`; Modify `flowplane-ebpf/src/maps.rs`, `flowplane-ebpf/src/main.rs`, `flowplane-ebpf/src/lb.rs`, `flowplane-ebpf/src/egress.rs`, `flowplane-ebpf/src/ingress.rs`
 
 This task changes the `CONNTRACK` map value to `CtEntry`, adds the generic helpers, and moves LB onto them (NAT stays on `NAT_CT` until Task 3). Behavior-preserving.
 
 - [ ] **Step 1: Change the `CONNTRACK` map value type**
 
-In `xdp-dp-ebpf/src/maps.rs`: add `CtEntry` to the `xdp_dp_common` import and change the value type
+In `flowplane-ebpf/src/maps.rs`: add `CtEntry` to the `flowplane_common` import and change the value type
 **and size** (the old `65536` was a PoC value; size to dpservice's table — see "Scaling & BPF map
 sizing" below):
 ```rust
@@ -152,11 +152,11 @@ pub static CONNTRACK: LruHashMap<CtKey, CtEntry> = LruHashMap::with_max_entries(
 ```
 (Leave `NAT_CT` and `CtVal`/`NatCtVal` imports for now — NAT still uses them this task.)
 
-- [ ] **Step 2: Create `xdp-dp-ebpf/src/conntrack.rs`**
+- [ ] **Step 2: Create `flowplane-ebpf/src/conntrack.rs`**
 
 ```rust
 use aya_ebpf::{helpers::bpf_ktime_get_ns, programs::XdpContext};
-use xdp_dp_common::{CtEntry, CtKey, CT_REWRITE_SRC};
+use flowplane_common::{CtEntry, CtKey, CT_REWRITE_SRC};
 
 use crate::csum::csum_replace4;
 use crate::parse::l4_ports;
@@ -269,11 +269,11 @@ pub fn ct_apply(ctx: &XdpContext, ip_off: usize, e: &CtEntry) {
     }
 }
 ```
-Add `mod conntrack;` to `xdp-dp-ebpf/src/main.rs` (alphabetical: after `mod arp_nd;`, before `mod csum;`).
+Add `mod conntrack;` to `flowplane-ebpf/src/main.rs` (alphabetical: after `mod arp_nd;`, before `mod csum;`).
 
 - [ ] **Step 3: Move LB onto the unified entry**
 
-In `xdp-dp-ebpf/src/lb.rs`: the reverse-conntrack insert in `lb_select_dnat` currently builds a `CtKey` and inserts a `CtVal{lb_ipv4}`. Replace that insert with a unified `CtEntry`:
+In `flowplane-ebpf/src/lb.rs`: the reverse-conntrack insert in `lb_select_dnat` currently builds a `CtKey` and inserts a `CtVal{lb_ipv4}`. Replace that insert with a unified `CtEntry`:
 ```rust
     // reverse conntrack: backend->client expected on the return; restore lb (= dst) on egress.
     let key = CtKey {
@@ -286,11 +286,11 @@ In `xdp-dp-ebpf/src/lb.rs`: the reverse-conntrack insert in `lb_select_dnat` cur
     };
     let _ = CONNTRACK.insert(
         &key,
-        &xdp_dp_common::CtEntry {
+        &flowplane_common::CtEntry {
             last_seen: crate::conntrack::now(),
             xlate_ip: dst,
             xlate_port: 0,
-            flags: xdp_dp_common::CT_REWRITE_SRC | xdp_dp_common::CT_F_DST_LB,
+            flags: flowplane_common::CT_REWRITE_SRC | flowplane_common::CT_F_DST_LB,
             tcp_state: 0,
             fwall_action: 0,
             _pad: [0; 7],
@@ -303,7 +303,7 @@ Update `lb.rs` imports: remove `CtVal`, keep `CtKey`; the `CONNTRACK` import sta
 
 - [ ] **Step 4: Generic conntrack apply on egress (replaces `lb::ct_reverse_snat`)**
 
-In `xdp-dp-ebpf/src/egress.rs`, replace the line `crate::lb::ct_reverse_snat(ctx, ETH_LEN);` with a generic lookup-and-apply:
+In `flowplane-ebpf/src/egress.rs`, replace the line `crate::lb::ct_reverse_snat(ctx, ETH_LEN);` with a generic lookup-and-apply:
 ```rust
     // Conntrack: apply any established translation (LB reverse, later NAT/DEFAULT) before SNAT/route.
     if let Some(key) = crate::conntrack::ct_key(data, data_end, ETH_LEN) {
@@ -317,9 +317,9 @@ In `xdp-dp-ebpf/src/egress.rs`, replace the line `crate::lb::ct_reverse_snat(ctx
 
 - [ ] **Step 5: Build + verifier gate + e2e**
 ```bash
-cargo build -p xdp-dp
-cargo test -p xdp-dp --no-run 2>&1 | tee /tmp/t.log
-BIN=$(grep -oE 'target/debug/deps/xdp_dp-[a-f0-9]+' /tmp/t.log | head -1)
+cargo build -p flowplane
+cargo test -p flowplane --no-run 2>&1 | tee /tmp/t.log
+BIN=$(grep -oE 'target/debug/deps/flowplane-[a-f0-9]+' /tmp/t.log | head -1)
 sudo -E "$BIN" --include-ignored --exact loader::tests::both_programs_pass_verifier   # 1 passed
 ./env/netns-e2e.sh run 2>&1 | tail -20   # Tests 1-8 still pass (esp. Test 7 LB return)
 ```
@@ -327,19 +327,19 @@ sudo -E "$BIN" --include-ignored --exact loader::tests::both_programs_pass_verif
 - [ ] **Step 6: Commit**
 ```bash
 cargo fmt --all
-git add xdp-dp-ebpf
+git add flowplane-ebpf
 git commit -m "feat(ct): unified conntrack map + generic ct_apply; migrate LB onto it"
 ```
 
 ## Task 3: Migrate NAT onto the unified conntrack; remove `NAT_CT`/`CtVal`/`NatCtVal`
 
-**Files:** Modify `xdp-dp-ebpf/src/nat.rs`, `xdp-dp-ebpf/src/maps.rs`, `xdp-dp-ebpf/src/ingress.rs`, `xdp-dp-common/src/lib.rs`
+**Files:** Modify `flowplane-ebpf/src/nat.rs`, `flowplane-ebpf/src/maps.rs`, `flowplane-ebpf/src/ingress.rs`, `flowplane-common/src/lib.rs`
 
 - [ ] **Step 1: NAT egress uses the unified table**
 
-In `xdp-dp-ebpf/src/nat.rs` `nat_snat_egress`: replace the forward-port reuse lookup and the two `NAT_CT.insert` calls with unified `CONNTRACK` operations. The forward lookup reuses an existing `CT_F_SRC_NAT` forward entry's `xlate_port`:
+In `flowplane-ebpf/src/nat.rs` `nat_snat_egress`: replace the forward-port reuse lookup and the two `NAT_CT.insert` calls with unified `CONNTRACK` operations. The forward lookup reuses an existing `CT_F_SRC_NAT` forward entry's `xlate_port`:
 ```rust
-    use xdp_dp_common::{CtEntry, CT_F_SRC_NAT, CT_REWRITE_DST, CT_REWRITE_SRC};
+    use flowplane_common::{CtEntry, CT_F_SRC_NAT, CT_REWRITE_DST, CT_REWRITE_SRC};
     // Forward conntrack: reuse the allocated port for an already-tracked flow.
     let fwd_key = CtKey { src_ip: src, dst_ip: dst, src_port: sport, dst_port: dport, proto, _pad: [0; 3] };
     let nat_port = match unsafe { crate::maps::CONNTRACK.get(&fwd_key) } {
@@ -376,7 +376,7 @@ Leave the rest of `nat_snat_egress` (the actual src/port rewrite + checksums) un
 
 - [ ] **Step 2: NAT ingress reverse becomes the generic apply**
 
-In `xdp-dp-ebpf/src/ingress.rs`, the NAT reverse currently calls `crate::nat::nat_dnat_ingress(ctx, ETH_LEN + IPV6_LEN)` returning `Option<[u8;4]>` used for `deliver_ip`. Replace it with a generic conntrack lookup that both yields the delivery IP and applies the rewrite:
+In `flowplane-ebpf/src/ingress.rs`, the NAT reverse currently calls `crate::nat::nat_dnat_ingress(ctx, ETH_LEN + IPV6_LEN)` returning `Option<[u8;4]>` used for `deliver_ip`. Replace it with a generic conntrack lookup that both yields the delivery IP and applies the rewrite:
 ```rust
     let lb_backend = crate::lb::lb_select_dnat(ctx, ETH_LEN + IPV6_LEN, 0);
     let nat_guest = if lb_backend.is_none() {
@@ -385,7 +385,7 @@ In `xdp-dp-ebpf/src/ingress.rs`, the NAT reverse currently calls `crate::nat::na
         let de = ctx.data_end();
         match crate::conntrack::ct_key(d, de, ETH_LEN + IPV6_LEN) {
             Some(key) => match unsafe { crate::maps::CONNTRACK.get(&key) } {
-                Some(e) if e.flags & xdp_dp_common::CT_REWRITE_DST != 0 => {
+                Some(e) if e.flags & flowplane_common::CT_REWRITE_DST != 0 => {
                     let e = *e;
                     crate::conntrack::ct_apply(ctx, ETH_LEN + IPV6_LEN, &e);
                     Some(e.xlate_ip)
@@ -403,13 +403,13 @@ Then **delete `nat_dnat_ingress`** from `nat.rs` (and its now-unused `csum_repla
 
 - [ ] **Step 3: Remove the dead map + types**
 
-In `xdp-dp-ebpf/src/maps.rs`: delete the `NAT_CT` map and drop `NatCtVal`/`CtVal` from the import. In `xdp-dp-common/src/lib.rs`: delete `CtVal` and `NatCtVal` structs, their `Pod` impls, and their `size_of` assertions (their roles are now in `CtEntry`). In `xdp-dp/src/maps.rs`: delete the `NatCt` wrapper and the `Conntrack` wrapper's `CtVal` usage (the `Conntrack` wrapper is rebuilt in Task 6; for now make it open `CONNTRACK` as `HashMap<MapData, CtKey, CtEntry>` or delete it if unused — grep for `NatCt`/`Conntrack` references first and remove dead ones).
+In `flowplane-ebpf/src/maps.rs`: delete the `NAT_CT` map and drop `NatCtVal`/`CtVal` from the import. In `flowplane-common/src/lib.rs`: delete `CtVal` and `NatCtVal` structs, their `Pod` impls, and their `size_of` assertions (their roles are now in `CtEntry`). In `flowplane/src/maps.rs`: delete the `NatCt` wrapper and the `Conntrack` wrapper's `CtVal` usage (the `Conntrack` wrapper is rebuilt in Task 6; for now make it open `CONNTRACK` as `HashMap<MapData, CtKey, CtEntry>` or delete it if unused — grep for `NatCt`/`Conntrack` references first and remove dead ones).
 
 - [ ] **Step 4: Build + verifier + e2e**
 ```bash
-cargo build -p xdp-dp
-cargo test -p xdp-dp --no-run 2>&1 | tee /tmp/t.log
-BIN=$(grep -oE 'target/debug/deps/xdp_dp-[a-f0-9]+' /tmp/t.log | head -1)
+cargo build -p flowplane
+cargo test -p flowplane --no-run 2>&1 | tee /tmp/t.log
+BIN=$(grep -oE 'target/debug/deps/flowplane-[a-f0-9]+' /tmp/t.log | head -1)
 sudo -E "$BIN" --include-ignored --exact loader::tests::both_programs_pass_verifier   # 1 passed
 ./env/netns-e2e.sh run 2>&1 | tail -20   # Tests 1-8 pass (esp. Test 8 NAT return)
 ```
@@ -417,13 +417,13 @@ sudo -E "$BIN" --include-ignored --exact loader::tests::both_programs_pass_verif
 - [ ] **Step 5: Commit**
 ```bash
 cargo fmt --all
-git add xdp-dp-ebpf xdp-dp-common xdp-dp
+git add flowplane-ebpf flowplane-common flowplane
 git commit -m "feat(ct): migrate NAT onto unified conntrack; drop NAT_CT/CtVal/NatCtVal"
 ```
 
 ## Task 4: TCP state machine + `last_seen` refresh on every touch
 
-**Files:** Modify `xdp-dp-ebpf/src/parse.rs`, `xdp-dp-ebpf/src/conntrack.rs`, `xdp-dp-ebpf/src/egress.rs`, `xdp-dp-ebpf/src/ingress.rs`
+**Files:** Modify `flowplane-ebpf/src/parse.rs`, `flowplane-ebpf/src/conntrack.rs`, `flowplane-ebpf/src/egress.rs`, `flowplane-ebpf/src/ingress.rs`
 
 - [ ] **Step 1: TCP flags reader in `parse.rs`**
 ```rust
@@ -448,7 +448,7 @@ pub fn tcp_flags(data: usize, data_end: usize, ip_off: usize) -> Option<u8> {
 
 - [ ] **Step 2: `tcp_advance` + `ct_touch` in `conntrack.rs`**
 ```rust
-use xdp_dp_common::{TCP_ESTABLISHED, TCP_FINWAIT, TCP_NEW_SYN, TCP_NEW_SYNACK, TCP_RST_FIN};
+use flowplane_common::{TCP_ESTABLISHED, TCP_FINWAIT, TCP_NEW_SYN, TCP_NEW_SYNACK, TCP_RST_FIN};
 
 const TCP_FIN: u8 = 0x01;
 const TCP_SYN: u8 = 0x02;
@@ -487,7 +487,7 @@ pub fn ct_touch(ctx: &XdpContext, ip_off: usize, key: &CtKey, e: &mut CtEntry) {
     let _ = crate::maps::CONNTRACK.insert(key, e, 0);
 }
 ```
-(Imports: add `CtKey` to the `conntrack.rs` `use xdp_dp_common::{...}` line.)
+(Imports: add `CtKey` to the `conntrack.rs` `use flowplane_common::{...}` line.)
 
 - [ ] **Step 3: Touch on every hit (egress + ingress)**
 
@@ -503,24 +503,24 @@ In `ingress.rs`'s generic reverse block, after `ct_apply(ctx, ETH_LEN + IPV6_LEN
 
 - [ ] **Step 4: Build + verifier + e2e + commit**
 ```bash
-cargo build -p xdp-dp
+cargo build -p flowplane
 # verifier gate (as in Task 2 Step 5) -> 1 passed
 ./env/netns-e2e.sh run 2>&1 | tail -8   # Tests 1-8 pass
 cargo fmt --all
-git add xdp-dp-ebpf
+git add flowplane-ebpf
 git commit -m "feat(ct): TCP state machine + last_seen refresh on conntrack hits"
 ```
 
 ## Task 5: DEFAULT-flow tracking (every flow gets an entry)
 
-**Files:** Modify `xdp-dp-ebpf/src/egress.rs`, `xdp-dp-ebpf/src/ingress.rs`, `xdp-dp-ebpf/src/conntrack.rs`
+**Files:** Modify `flowplane-ebpf/src/egress.rs`, `flowplane-ebpf/src/ingress.rs`, `flowplane-ebpf/src/conntrack.rs`
 
 - [ ] **Step 0 (CRITICAL): guard `ct_apply` so DEFAULT entries are a no-op**
 
 `ct_apply` currently *always* rewrites (src if `CT_REWRITE_SRC`, else dst). A DEFAULT entry has neither flag and `xlate_ip = 0.0.0.0`, so applying it would corrupt the dst to `0.0.0.0`. Add an early return at the top of `ct_apply` (in `conntrack.rs`):
 ```rust
     // DEFAULT (and any flag-less) entries carry no translation — never rewrite.
-    if e.flags & (xdp_dp_common::CT_REWRITE_SRC | xdp_dp_common::CT_REWRITE_DST) == 0 {
+    if e.flags & (flowplane_common::CT_REWRITE_SRC | flowplane_common::CT_REWRITE_DST) == 0 {
         return;
     }
 ```
@@ -528,7 +528,7 @@ Place it as the first statement of `ct_apply`, before the bounds check. (Add `CT
 
 - [ ] **Step 1: `ct_ensure_default` helper in `conntrack.rs`**
 ```rust
-use xdp_dp_common::CT_F_DEFAULT;
+use flowplane_common::CT_F_DEFAULT;
 
 /// Insert a no-translation DEFAULT conntrack entry for a flow on conntrack-miss, so every flow is
 /// tracked (firewall + aging see it). Records last_seen + initial TCP state.
@@ -583,21 +583,21 @@ In `ingress.rs`, after `deliver_ip` is resolved but before `adjust_head`, **touc
 
 - [ ] **Step 4: Build + verifier + e2e + commit**
 ```bash
-cargo build -p xdp-dp
+cargo build -p flowplane
 # verifier gate -> 1 passed ; iterate if the added map ops trip bounds checks
 ./env/netns-e2e.sh run 2>&1 | tail -8   # Tests 1-8 pass
 cargo fmt --all
-git add xdp-dp-ebpf
+git add flowplane-ebpf
 git commit -m "feat(ct): DEFAULT-flow tracking (every flow gets a conntrack entry)"
 ```
 
 ## Task 6: Userspace conntrack GC (aging)
 
-**Files:** Modify `xdp-dp/src/maps.rs`; Create `xdp-dp/src/conntrack_gc.rs`; Modify `xdp-dp/src/main.rs`, `xdp-dp/src/control.rs`
+**Files:** Modify `flowplane/src/maps.rs`; Create `flowplane/src/conntrack_gc.rs`; Modify `flowplane/src/main.rs`, `flowplane/src/control.rs`
 
 - [ ] **Step 1: `Conntrack` wrapper with iterate + remove**
 
-In `xdp-dp/src/maps.rs`, ensure a `Conntrack` handle over `HashMap<MapData, CtKey, CtEntry>` exists with:
+In `flowplane/src/maps.rs`, ensure a `Conntrack` handle over `HashMap<MapData, CtKey, CtEntry>` exists with:
 ```rust
 #[allow(dead_code)]
 pub struct Conntrack {
@@ -619,15 +619,15 @@ impl Conntrack {
     }
 }
 ```
-(Add `CtEntry` to the `xdp_dp_common` import. `HashMap::iter` yields `Result<(K,V),_>`.)
+(Add `CtEntry` to the `flowplane_common` import. `HashMap::iter` yields `Result<(K,V),_>`.)
 
-- [ ] **Step 2: GC task in `xdp-dp/src/conntrack_gc.rs`**
+- [ ] **Step 2: GC task in `flowplane/src/conntrack_gc.rs`**
 ```rust
 //! Userspace conntrack aging: periodically evict entries idle longer than their timeout. Mirrors
 //! dpservice (30 s default, 1-day established-TCP). Times are kernel-monotonic ns (bpf_ktime).
 use std::time::Duration;
 
-use xdp_dp_common::{CtEntry, TCP_ESTABLISHED};
+use flowplane_common::{CtEntry, TCP_ESTABLISHED};
 
 use crate::maps::Conntrack;
 
@@ -667,11 +667,11 @@ pub async fn run(mut ct: Conntrack, interval: Duration) {
     }
 }
 ```
-Add `libc = "0.2"` to `xdp-dp/Cargo.toml` `[dependencies]` if not present (check first). Add `mod conntrack_gc;` to `xdp-dp/src/main.rs`.
+Add `libc = "0.2"` to `flowplane/Cargo.toml` `[dependencies]` if not present (check first). Add `mod conntrack_gc;` to `flowplane/src/main.rs`.
 
 - [ ] **Step 3: Spawn the GC in `bringup` and `serve`**
 
-In `xdp-dp/src/main.rs` `Cmd::Bringup`, after the maps are programmed and before `tokio::signal::ctrl_c().await?`, open a `Conntrack` and spawn the sweeper:
+In `flowplane/src/main.rs` `Cmd::Bringup`, after the maps are programmed and before `tokio::signal::ctrl_c().await?`, open a `Conntrack` and spawn the sweeper:
 ```rust
             let ct = maps::Conntrack::open(&mut ebpf)?;
             tokio::spawn(conntrack_gc::run(ct, std::time::Duration::from_secs(10)));
@@ -685,25 +685,25 @@ In `serve`, `Control::bring_up` should likewise open a `Conntrack` and the `serv
 
 - [ ] **Step 4: Build + e2e + commit**
 ```bash
-cargo build -p xdp-dp
+cargo build -p flowplane
 ./env/netns-e2e.sh run 2>&1 | tail -8   # Tests 1-8 pass (GC running, 10s interval, won't evict mid-test)
 cargo fmt --all
-git add xdp-dp
+git add flowplane
 git commit -m "feat(ct): userspace conntrack GC (idle aging, 30s/1-day timeouts)"
 ```
 
 ## Task 7: Acceptance — unit tests + lab conntrack assertions
 
-**Files:** Modify `xdp-dp/src/conntrack_gc.rs` (unit tests), `env/netns-e2e.sh`
+**Files:** Modify `flowplane/src/conntrack_gc.rs` (unit tests), `env/netns-e2e.sh`
 
 - [ ] **Step 1: Host unit tests for aging eligibility + TCP timeout selection**
 
-Add to `xdp-dp/src/conntrack_gc.rs`:
+Add to `flowplane/src/conntrack_gc.rs`:
 ```rust
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xdp_dp_common::{CtEntry, TCP_ESTABLISHED, TCP_NONE};
+    use flowplane_common::{CtEntry, TCP_ESTABLISHED, TCP_NONE};
 
     fn entry(tcp_state: u8, last_seen: u64) -> CtEntry {
         CtEntry { last_seen, tcp_state, ..Default::default() }
@@ -725,7 +725,7 @@ mod tests {
     }
 }
 ```
-Run `cargo test -p xdp-dp conntrack_gc::` → PASS.
+Run `cargo test -p flowplane conntrack_gc::` → PASS.
 
 - [ ] **Step 2: Lab assertion that flows are tracked**
 
@@ -751,16 +751,16 @@ In `env/netns-e2e.sh` `cmd_test`, after Test 8, add a Test 9 that proves the uni
 
 - [ ] **Step 3: Run + commit**
 ```bash
-cargo test -p xdp-dp 2>&1 | tail -5
+cargo test -p flowplane 2>&1 | tail -5
 ./env/netns-e2e.sh run 2>&1 | tail -30   # Tests 1-9 pass, clean teardown
 cargo fmt --all
-git add xdp-dp env/netns-e2e.sh
+git add flowplane env/netns-e2e.sh
 git commit -m "test(ct): conntrack aging unit tests + sustained-flow lab gate (Test 9)"
 ```
 
 ## Task 8: Configurable BPF map sizes (env vars + flag override)
 
-**Files:** Modify `xdp-dp/src/loader.rs`, `xdp-dp/src/main.rs`
+**Files:** Modify `flowplane/src/loader.rs`, `flowplane/src/main.rs`
 
 Operators must be able to size the hot maps per node role without recompiling. Make `load_ebpf`
 apply `EbpfLoader::set_max_entries` overrides read from env vars (uniform across every subcommand
@@ -771,18 +771,18 @@ that loads the datapath), with the compile-time `with_max_entries` values as def
 Replace `load_ebpf` with an `EbpfLoader`-based version that overrides sizes from env vars when set:
 ```rust
 pub fn load_ebpf() -> anyhow::Result<Ebpf> {
-    let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/xdp-dp-prog"));
+    let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowplane-prog"));
     let mut loader = aya::EbpfLoader::new();
     // Map name -> env var. Unset => keep the compile-time `with_max_entries` default.
     for (map, var) in [
-        ("CONNTRACK", "XDP_DP_CONNTRACK_MAX"),
-        ("NAT_CT", "XDP_DP_CONNTRACK_MAX"), // same knob while NAT_CT still exists (pre-Task 3)
-        ("ROUTES", "XDP_DP_ROUTES_MAX"),
-        ("INTERFACES", "XDP_DP_INTERFACES_MAX"),
-        ("MAGLEV", "XDP_DP_MAGLEV_MAX"),
-        ("NAT", "XDP_DP_NAT_MAX"),
-        ("LB", "XDP_DP_LB_MAX"),
-        ("PORT_META", "XDP_DP_PORT_META_MAX"),
+        ("CONNTRACK", "FLOWPLANE_CONNTRACK_MAX"),
+        ("NAT_CT", "FLOWPLANE_CONNTRACK_MAX"), // same knob while NAT_CT still exists (pre-Task 3)
+        ("ROUTES", "FLOWPLANE_ROUTES_MAX"),
+        ("INTERFACES", "FLOWPLANE_INTERFACES_MAX"),
+        ("MAGLEV", "FLOWPLANE_MAGLEV_MAX"),
+        ("NAT", "FLOWPLANE_NAT_MAX"),
+        ("LB", "FLOWPLANE_LB_MAX"),
+        ("PORT_META", "FLOWPLANE_PORT_META_MAX"),
     ] {
         if let Ok(v) = std::env::var(var) {
             let n: u32 = v
@@ -802,12 +802,12 @@ cleanliness when NAT_CT goes.
 
 - [ ] **Step 2: `--conntrack-max` flag on `serve`/`bringup` (optional convenience over the env var)**
 
-In `xdp-dp/src/main.rs`, add an optional `#[arg(long)]  conntrack_max: Option<u32>` to the `Serve`
+In `flowplane/src/main.rs`, add an optional `#[arg(long)]  conntrack_max: Option<u32>` to the `Serve`
 and `Bringup` subcommands; when set, export it so `load_ebpf` (called downstream) picks it up:
 ```rust
             if let Some(n) = conntrack_max {
                 // SAFETY: single-threaded CLI startup, before any datapath thread is spawned.
-                unsafe { std::env::set_var("XDP_DP_CONNTRACK_MAX", n.to_string()) };
+                unsafe { std::env::set_var("FLOWPLANE_CONNTRACK_MAX", n.to_string()) };
             }
 ```
 Place this at the very top of the `Serve` / `Bringup` arms, before `load_ebpf`/`bring_up` runs.
@@ -815,20 +815,20 @@ Place this at the very top of the `Serve` / `Bringup` arms, before `load_ebpf`/`
 
 - [ ] **Step 3: Build + verify override works**
 ```bash
-cargo build -p xdp-dp
+cargo build -p flowplane
 # Sanity: load with a tiny conntrack and confirm the program still loads (root).
-sudo XDP_DP_CONNTRACK_MAX=4096 ./target/debug/xdp-dp pass --iface lo &
-sleep 1; sudo pkill -f 'xdp-dp pass' || true
+sudo FLOWPLANE_CONNTRACK_MAX=4096 ./target/debug/flowplane pass --iface lo &
+sleep 1; sudo pkill -f 'flowplane pass' || true
 ```
 Expected: loads cleanly (no error). Then run the e2e once with an override to confirm nothing breaks:
 ```bash
-XDP_DP_CONNTRACK_MAX=262144 ./env/netns-e2e.sh run 2>&1 | tail -6   # Tests pass
+FLOWPLANE_CONNTRACK_MAX=262144 ./env/netns-e2e.sh run 2>&1 | tail -6   # Tests pass
 ```
 
 - [ ] **Step 4: Commit**
 ```bash
 cargo fmt --all
-git add xdp-dp
+git add flowplane
 git commit -m "feat(loader): configurable BPF map sizes via env vars + --conntrack-max flag"
 ```
 

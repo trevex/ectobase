@@ -24,12 +24,12 @@
 ## File Structure
 
 ```
-xdp-dp-ebpf/src/
+flowplane-ebpf/src/
   maps.rs        # MAGLEV value [u8;4] -> [u8;16]
   lb.rs          # lb_select_forward (no DNAT/conntrack) -> Option<[u8;16]>
   encap.rs       # + reforward(ctx, local, lb_underlay, backend) -> u32
   ingress.rs     # LB forward: local deliver vs remote re-forward
-xdp-dp/src/
+flowplane/src/
   maps.rs        # Maglev wrapper value [u8;16]
   control.rs     # create_lb(+lb_underlay, program UNDERLAY marker); add_lb_target(backend underlay)
   grpc.rs        # CreateLoadBalancer/Target decode underlays (or keep for ioiab; lab uses CLI)
@@ -41,16 +41,16 @@ env/netns-e2e.sh # backends own the LB IP; LB underlay marker; a remote backend;
 
 ## Task 1: MAGLEV value → underlay /128 + `lb_select_forward`
 
-**Files:** Modify `xdp-dp-ebpf/src/maps.rs`, `xdp-dp-ebpf/src/lb.rs`, `xdp-dp/src/maps.rs`
+**Files:** Modify `flowplane-ebpf/src/maps.rs`, `flowplane-ebpf/src/lb.rs`, `flowplane/src/maps.rs`
 
-- [ ] **Step 1: MAGLEV value type (`xdp-dp-ebpf/src/maps.rs`)**
+- [ ] **Step 1: MAGLEV value type (`flowplane-ebpf/src/maps.rs`)**
 Change `pub static MAGLEV: HashMap<MaglevKey, [u8; 4]>` → `HashMap<MaglevKey, [u8; 16]>`.
 
 - [ ] **Step 2: Rewrite `lb.rs`**
 Replace the whole file with:
 ```rust
 use aya_ebpf::programs::XdpContext;
-use xdp_dp_common::{LbKey, MaglevKey};
+use flowplane_common::{LbKey, MaglevKey};
 
 use crate::maps::{LB, MAGLEV};
 use crate::parse::{hash5, l4_ports};
@@ -83,15 +83,15 @@ pub fn lb_select_forward(ctx: &XdpContext, ip_off: usize, vni: u32) -> Option<[u
 }
 ```
 
-- [ ] **Step 3: userspace Maglev wrapper value (`xdp-dp/src/maps.rs`)**
+- [ ] **Step 3: userspace Maglev wrapper value (`flowplane/src/maps.rs`)**
 Change the `Maglev` wrapper's value type `[u8;4]` → `[u8;16]` (struct field + `upsert`/`get` signatures).
 
 - [ ] **Step 4: build**
-`cargo build -p xdp-dp` — this will FAIL to compile `ingress.rs`/`control.rs` (they still call `lb_select_dnat` / pass `[u8;4]` backends). That is expected; Tasks 2–3 fix the callers. **Do not gate Task 1 on a full build** — instead confirm `xdp-dp-ebpf` + the two `maps.rs` edits are internally consistent by checking the compile errors are ONLY about `lb_select_dnat`/Maglev callers (ingress.rs, control.rs, main.rs). Proceed to Task 2 before committing, OR commit Tasks 1–3 together. Prefer: do Tasks 2 + 3, then commit all three.
+`cargo build -p flowplane` — this will FAIL to compile `ingress.rs`/`control.rs` (they still call `lb_select_dnat` / pass `[u8;4]` backends). That is expected; Tasks 2–3 fix the callers. **Do not gate Task 1 on a full build** — instead confirm `flowplane-ebpf` + the two `maps.rs` edits are internally consistent by checking the compile errors are ONLY about `lb_select_dnat`/Maglev callers (ingress.rs, control.rs, main.rs). Proceed to Task 2 before committing, OR commit Tasks 1–3 together. Prefer: do Tasks 2 + 3, then commit all three.
 
 ## Task 2: Ingress LB forward (local deliver vs remote re-forward)
 
-**Files:** Modify `xdp-dp-ebpf/src/encap.rs`, `xdp-dp-ebpf/src/ingress.rs`
+**Files:** Modify `flowplane-ebpf/src/encap.rs`, `flowplane-ebpf/src/ingress.rs`
 
 - [ ] **Step 1: `reforward` helper (`encap.rs`)**
 ```rust
@@ -168,23 +168,23 @@ Then update the downstream guards that referenced `lb_backend`/`nat_guest`:
 
 - [ ] **Step 3: build + verifier gate**
 ```bash
-cargo build -p xdp-dp     # (control.rs/main.rs LB callers still need Task 3; if they break, do Task 3 first)
+cargo build -p flowplane     # (control.rs/main.rs LB callers still need Task 3; if they break, do Task 3 first)
 ```
-If `xdp-dp-ebpf` compiles but `xdp-dp` userspace fails only on `create_lb`/`add_lb_target`/CLI, proceed to Task 3, then run the verifier gate after the whole workspace builds:
+If `flowplane-ebpf` compiles but `flowplane` userspace fails only on `create_lb`/`add_lb_target`/CLI, proceed to Task 3, then run the verifier gate after the whole workspace builds:
 ```bash
-cargo test -p xdp-dp --no-run 2>&1 | tee /tmp/t.log
-BIN=$(grep -oE 'target/debug/deps/xdp_dp-[a-f0-9]+' /tmp/t.log | head -1)
+cargo test -p flowplane --no-run 2>&1 | tee /tmp/t.log
+BIN=$(grep -oE 'target/debug/deps/flowplane-[a-f0-9]+' /tmp/t.log | head -1)
 sudo -E "$BIN" --include-ignored --exact loader::tests::both_programs_pass_verifier   # 1 passed
 ```
 
 ## Task 3: Control + CLI — LB underlay marker + backend underlays
 
-**Files:** Modify `xdp-dp/src/control.rs`, `xdp-dp/src/main.rs`
+**Files:** Modify `flowplane/src/control.rs`, `flowplane/src/main.rs`
 
 - [ ] **Step 1: `control.rs`**
 `create_lb(id, vni, ip, ports)` gains a `lb_underlay: [u8;16]` parameter: after writing the `LB` service entries, program the LB's UNDERLAY marker so `uplink_rx` resolves the VNI for this LB IP:
 ```rust
-        g.underlay.upsert(lb_underlay, xdp_dp_common::UnderlayValue { vni, tap_ifindex: 0, guest_mac: [0; 6], _pad: [0; 2] })?;
+        g.underlay.upsert(lb_underlay, flowplane_common::UnderlayValue { vni, tap_ifindex: 0, guest_mac: [0; 6], _pad: [0; 2] })?;
 ```
 `add_lb_target(id, backend)` changes `backend: [u8;4]` → `backend: [u8;16]` (a backend underlay); the Maglev build/write now stores `[u8;16]` per slot (`LbEntry.backends: Vec<[u8;16]>`). `crate::maglev::build(&backends)` operates on `&[[u8;16]]` — **update `maglev.rs` `build` to be generic or to take `&[[u8;16]]`** (the FNV hash over the bytes works the same; change the element type and the `table[i]` indexing returns `[u8;16]`). Update `Maglev::upsert(MaglevKey, [u8;16])`.
 
@@ -196,11 +196,11 @@ Change `pub fn build(backends: &[[u8; 16]]) -> Vec<u32>` (it returns slot→back
 
 - [ ] **Step 4: build + verifier + commit (Tasks 1–3 together)**
 ```bash
-cargo build -p xdp-dp
-cargo test -p xdp-dp maglev:: 2>&1 | tail -5   # maglev host tests pass (16-byte backends)
+cargo build -p flowplane
+cargo test -p flowplane maglev:: 2>&1 | tail -5   # maglev host tests pass (16-byte backends)
 # verifier gate -> 1 passed
 cargo fmt --all
-git add xdp-dp-common xdp-dp-ebpf xdp-dp
+git add flowplane-common flowplane-ebpf flowplane
 git commit -m "feat(lb): dpservice underlay-forwarding LB (maglev->backend underlay, no DNAT)"
 ```
 

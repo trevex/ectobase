@@ -3,7 +3,7 @@ package reflector
 import (
 	"testing"
 
-	pb "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	pb "github.com/trevex/ectobase/netplane/gen/routebusv1"
 )
 
 // lastOpFor returns the last RouteUpdate op the sink saw for prefix.

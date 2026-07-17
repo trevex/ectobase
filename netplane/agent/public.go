@@ -6,7 +6,7 @@ import (
 	"log"
 	"strings"
 
-	rbv1 "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	rbv1 "github.com/trevex/ectobase/netplane/gen/routebusv1"
 )
 
 // PublicPrefix is a typed public-address record this node ANNOUNCES on the

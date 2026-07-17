@@ -1,13 +1,13 @@
 # Sub-project 2a — Dynamic Tap Lifecycle + gRPC Completeness (ioiab drop-in)
 
 **Status:** Implemented (2026-06-18) — **88 / 89 dpservice non-DHCP conformance passing.**
-**Parent effort:** ioiab drop-in (replace DPDK `dpservice` with `xdp-dp`). Decomposed into:
+**Parent effort:** ioiab drop-in (replace DPDK `dpservice` with `flowplane`). Decomposed into:
 **2a** (this) dynamic tap lifecycle + gRPC completeness · **2b** DHCPv4/v6 · **2c** ioiab deployment.
 **Predecessor:** full datapath parity M5–M10, M12, M13, M15 (M14 capture deferred).
 
 ## Conformance result (final for 2a)
 
-`./test/conformance/run.sh` drives the vendored dpservice `test/local` suite against `xdp-dp serve`
+`./test/conformance/run.sh` drives the vendored dpservice `test/local` suite against `flowplane serve`
 via the real `dpservice-cli` (per-test daemon isolation). **88 passed / 1 failed / 2 skipped.**
 
 The single remaining failure, `test_arp::test_l2_addr_once`, requires **DHCP** (it re-learns the
@@ -20,7 +20,7 @@ and implemented here on top of 2a's gRPC/tap foundation:
 - **NAT64** — IPv6 guest → IPv4 external via the `64:ff9b::/96` prefix (v6↔v4 header + ICMP
   translation with `bpf_xdp_adjust_head` resize, verifier-safe fixed-offset checksums), bidirectional.
 
-**Also delivered in 2a:** `xdp-dp serve` (runtime XDP attach/detach), the full non-DHCP gRPC surface
+**Also delivered in 2a:** `flowplane serve` (runtime XDP attach/detach), the full non-DHCP gRPC surface
 with dpservice error-code semantics, same-host fast path, virtual-gateway ARP/ND (VF's own MAC),
 NAT-GW external with peer-independent return demux (globally-unique ports per nat_ip), same-host VIP
 DNAT, ICMP NAT, conntrack flush, and the vendored conformance harness (real `dpservice-cli`, veth
@@ -28,13 +28,13 @@ substitution, run-as-root, per-test isolation). netns (15) + HA smoke stay green
 
 ## 1. Goal
 
-Make `xdp-dp` a runtime, gRPC-driven dataplane that metalnet can drive exactly as it drives
+Make `flowplane` a runtime, gRPC-driven dataplane that metalnet can drive exactly as it drives
 dpservice: a long-running daemon that attaches `uplink_rx` to the PF, serves the `DPDKironcore`
 gRPC contract on a configurable port, and **attaches/detaches the `guest_tx` XDP program on VF
 interfaces at runtime** as `CreateInterface`/`DeleteInterface` arrive — no static `--guest` flags.
 
 Proven by vendoring dpservice's own `test/local` pytest+scapy conformance suite into this repo and
-re-pointing it at `xdp-dp`, with the **test bodies unchanged**. 2a's gate is the **full non-DHCP
+re-pointing it at `flowplane`, with the **test bodies unchanged**. 2a's gate is the **full non-DHCP
 suite** (DHCP is 2b; virtsvc is dropped; telemetry/HA-extras/benchmark are out of scope).
 
 ## 2. Why this shape
@@ -49,7 +49,7 @@ suite** (DHCP is 2b; virtsvc is dropped; telemetry/HA-extras/benchmark are out o
 ## 3. Architecture
 
 ```
-                        xdp-dp serve --uplink PF --local-underlay fc00:1::1 --grpc-port 1337
+                        flowplane serve --uplink PF --local-underlay fc00:1::1 --grpc-port 1337
    metalnet / pytest ─────────── gRPC :1337 ──────────►  Service (grpc.rs)
    (DPDKironcore client)                                    │  CreateInterface(device, ip, vni)
                                                             ▼
@@ -67,7 +67,7 @@ VF ifindexes over time, each attach returning a link retained for clean detach.
 
 ## 4. Components
 
-### 4.1 `serve` subcommand (`xdp-dp/src/main.rs`)
+### 4.1 `serve` subcommand (`flowplane/src/main.rs`)
 Args: `--uplink <pf>`, `--local-underlay <ipv6>`, `--grpc-port <u16>` (default 1337),
 `--gateway <ipv4>` + `--gateway-mac` (ARP target the datapath answers), `--gateway6 <ipv6>` (ND
 target), `--pin-dir <path>` (optional HA pinning, reuses M13), `--adopt`. The `--dhcp-mtu` /
@@ -75,7 +75,7 @@ target), `--pin-dir <path>` (optional HA pinning, reuses M13), `--adopt`. The `-
 the ioiab arg list stable). Boots `Control` in **serve mode** (attach `uplink_rx` to the PF only;
 no guests), spawns the tonic gRPC server + the conntrack GC task, idles until ctrl-c.
 
-### 4.2 Runtime attach/detach (`xdp-dp/src/loader.rs`, `xdp-dp/src/control.rs`)
+### 4.2 Runtime attach/detach (`flowplane/src/loader.rs`, `flowplane/src/control.rs`)
 - `loader.rs`: expose runtime attach of the already-loaded `guest_tx` program to an additional
   ifindex, returning the `XdpLink` (today attach is one-shot at bringup; refactor so the loaded
   `Ebpf` + program handle live in `Control` and can attach later). When `--pin-dir` is set, pin the
@@ -90,7 +90,7 @@ no guests), spawns the tonic gRPC server + the conntrack GC task, idles until ct
     entries and shadow state. Idempotent.
   - Holds `links: HashMap<Vec<u8>, XdpLink>` (or `FdLink` when pinned).
 
-### 4.3 gRPC completeness (`xdp-dp/src/grpc.rs`)
+### 4.3 gRPC completeness (`flowplane/src/grpc.rs`)
 Wire and complete every RPC the non-DHCP conformance suite + metalnet reconcile drives:
 - **Interface lifecycle:** `create_interface → attach_interface` (return `underlay_route` + `vf`);
   implement `delete_interface`, `list_interfaces`, `get_interface` from shadow state.
@@ -103,7 +103,7 @@ Wire and complete every RPC the non-DHCP conformance suite + metalnet reconcile 
 All reads come from authoritative userspace shadow state (no map scans for list/get). `Capture*`
 stays stubbed (M14 deferred).
 
-### 4.4 Local guest-to-guest fast path (`xdp-dp-ebpf/src/egress.rs`)
+### 4.4 Local guest-to-guest fast path (`flowplane-ebpf/src/egress.rs`)
 dpservice `test_vf_to_vf` puts both VMs on the **same host**. Today `guest_tx` always encaps and
 redirects to the PF, hairpinning a same-host flow off-box. New rule: after ROUTES resolves the
 nexthop underlay, if that underlay is **local** (present in `UNDERLAY`), deliver straight to the
@@ -118,25 +118,25 @@ LB re-forward when the selected backend underlay is local.
 Vendor dpservice `test/local` into `test/conformance/`. **Adapt scaffolding only; never touch the
 `test_*.py` bodies.**
 - **veth substitution** (`setup-conformance-net.sh`): each dpservice device (`dtap0`, `dtap1`,
-  `dtapvf_0..3`) becomes the **scapy-facing end** of a veth pair; `xdp-dp` attaches its XDP program
+  `dtapvf_0..3`) becomes the **scapy-facing end** of a veth pair; `flowplane` attaches its XDP program
   to the **hidden peer**. `xdp_pass` enablers on the scapy-facing ends so `bpf_redirect` into them
   lands as XDP-RX. Test bodies keep sending/sniffing on `VM1.tap` etc. unchanged. (In real ioiab —
   2c — the guest interface is a qemu-owned tap where XDP-on-netdev works natively; veth is a
   harness-only stand-in.)
-- **Launcher** (`dp_service.py` patch): build an `xdp-dp serve` command (uplink = PF peer,
+- **Launcher** (`dp_service.py` patch): build an `flowplane serve` command (uplink = PF peer,
   `--local-underlay=fc00:1::1`, `--grpc-port`, `--gateway`/`--gateway6` from `config.py`) instead of
-  `dpservice-bin`. Keep the existing `--attach` path (start `xdp-dp` out-of-band, run pytest against
+  `dpservice-bin`. Keep the existing `--attach` path (start `flowplane` out-of-band, run pytest against
   it). The harness must create the veth topology + enablers before launch and tear it down after.
 - **gRPC client = the real `dpservice-cli`** (decided): the harness's `grpc_client.py` is reused
   **unchanged** — it shells out to `dpservice-cli --address=localhost:<port> -o json <subcommand>`
   and parses the JSON. `dpservice-cli` is a generic client for the same `DPDKironcore` contract
-  `xdp-dp` implements, so it drives us directly; this also validates our wire responses against the
+  `flowplane` implements, so it drives us directly; this also validates our wire responses against the
   *actual* client metalnet's ecosystem uses. A pinned released `dpservice-cli` binary is fetched as
   a test dependency (dev shell / CI), at the version matching `proto/dpdk.proto`. `config.py`
-  constants are reused as-is. **Implication for `grpc.rs`:** every response `xdp-dp` returns must
+  constants are reused as-is. **Implication for `grpc.rs`:** every response `flowplane` returns must
   populate its proto fields correctly (e.g. `list_interfaces` → real `Interface` messages with
   `spec`, `delete_*` → proper `Status`), because `dpservice-cli` renders JSON from those fields and
-  the tests assert on them (`spec['underlay_route']`, `status['code']`, `source`). No `xdp-dp ctl`
+  the tests assert on them (`spec['underlay_route']`, `status['code']`, `source`). No `flowplane ctl`
   CLI and no python `grpcio` shim are built.
 
 ## 5. Data flow
@@ -167,7 +167,7 @@ VF peer → scapy sniffs on `VM1.tap`.
 
 **Conformance gate (vendored `test/conformance`, full non-DHCP suite):**
 `test_vf_to_vf`, `test_vf_to_pf`, `test_pf_to_vf`, `test_encap`, `test_arp`, `test_ipv6_nd`,
-`test_flows`, `test_lb`, `test_nat`, `test_vni`, `test_zzz_grpc` — all green against `xdp-dp serve`.
+`test_flows`, `test_lb`, `test_nat`, `test_vni`, `test_zzz_grpc` — all green against `flowplane serve`.
 
 **Explicitly out of 2a:** `test_dhcpv4`/`test_dhcpv6` (→ 2b), `test_virtsvc` (feature dropped),
 `test_telemetry` (`--no-stats`, no telemetry surface), `xtratest_*` / `benchmark_test` (HA-extra /

@@ -4,7 +4,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the `xdp-dp` dataplane survive a process restart (DaemonSet roll / crash / OOM) without dropping the node's overlay datapath or reissuing a live guest underlay `/128`.
+**Goal:** Make the `flowplane` dataplane survive a process restart (DaemonSet roll / crash / OOM) without dropping the node's overlay datapath or reissuing a live guest underlay `/128`.
 
 **Architecture:** Pin the *state* eBPF maps by name (load-time `LIBBPF_PIN_BY_NAME` via aya) so their contents survive a restart; on boot, `Serve` in `--pin-dir` mode ADOPTS the pinned maps, re-attaches the programs fresh (their links died with the old process), and rebuilds `Control`'s in-memory bookkeeping + `UnderlayIpam` by scanning the surviving maps. Program-array maps (`GUEST_PROGS*`) are deliberately NOT reused (they hold per-load program fds).
 
@@ -15,9 +15,9 @@
 ## Background & Key Facts (read before starting)
 
 Current state (verified 2026-07-16):
-- `Cmd::Serve` (production) accepts `--pin-dir` but **ignores it** (`pin_dir: _pin_dir` in `xdp-dp/src/main.rs`). It does NO pinning. A restart therefore drops every XDP/tc link and every map.
+- `Cmd::Serve` (production) accepts `--pin-dir` but **ignores it** (`pin_dir: _pin_dir` in `flowplane/src/main.rs`). It does NO pinning. A restart therefore drops every XDP/tc link and every map.
 - `Cmd::Bringup` (lab) has partial pinning: `attach_xdp_pinned` (links) + `pin_map` for CONNTRACK only + `--adopt` re-opening `Conntrack::from_pin`. This is the pattern to generalize, but note the map-classification and program-array caveats below.
-- eBPF maps are declared in `xdp-dp-ebpf/src/maps.rs` with `X::with_max_entries(n, flags)`. aya-ebpf also provides `X::pinned(n, flags)` (verified: `HashMap::pinned`, `LpmTrie::pinned` exist as `const fn`).
+- eBPF maps are declared in `flowplane-ebpf/src/maps.rs` with `X::with_max_entries(n, flags)`. aya-ebpf also provides `X::pinned(n, flags)` (verified: `HashMap::pinned`, `LpmTrie::pinned` exist as `const fn`).
 - aya userspace `EbpfLoader::map_pin_path(dir)` (verified `aya-0.13.1/src/bpf.rs:243`) makes a `pinned` map bind to `<dir>/<name>` if it already exists (reuse), else create+pin. **This is the ONLY mechanism that makes a freshly-loaded program use surviving maps.** Runtime `pin_map`/`Map::from_pin` does NOT — the reloaded program keeps its own fresh maps.
 - aya userspace `HashMap` has `.iter()` and `.keys()` (verified `aya-0.13.1/src/maps/hash_map/hash_map.rs:66,72`). `Conntrack::entries()` already uses this pattern.
 - `UnderlayIpam::mark_used(ip)` already exists (committed 6f2f089) for the rebuild.
@@ -26,7 +26,7 @@ Current state (verified 2026-07-16):
 If a map is declared `pinned` but the loader has no `map_pin_path`, aya errors at load. Every load path — production `Serve`, lab `Bringup`, the verifier anchor tests, the sim — must therefore set a `map_pin_path`. Solution: `load_ebpf()` gains a `pin_dir: &Path` parameter and always calls `loader.map_pin_path(pin_dir)`. Fresh/test runs pass a per-run temp dir (maps created+pinned there, behaves like today); production passes the persistent bpffs dir.
 
 ### Map classification (WHICH maps to pin)
-PIN (state that must survive a restart — the veths/taps they reference persist across the xdp-dp restart, so their ifindex/tap values stay valid):
+PIN (state that must survive a restart — the veths/taps they reference persist across the flowplane restart, so their ifindex/tap values stay valid):
 `INTERFACES, ROUTES, ROUTES6, PORT_META, LB, MAGLEV, CONNTRACK, NAT, NAT_IPS, VIPS, FW_RULES, FW_META, UNDERLAY, NEIGHBOR_NAT, NEIGHBOR_NAT_COUNT, METER, GUEST_DEV, DHCP_CONFIG, DHCP_META, CONFIG, LOCAL`
 
 DO NOT PIN (must be rebuilt each load):
@@ -43,12 +43,12 @@ Unit tests cannot catch a lifecycle regression. Every integration task ends with
 
 ## File Structure
 
-- `xdp-dp-ebpf/src/maps.rs` — change the PINNED maps from `with_max_entries` to `pinned`. One responsibility: eBPF map declarations.
-- `xdp-dp/src/loader.rs` — `load_ebpf(pin_dir)` sets `map_pin_path`; new `adopt_program(ebpf, name)` (attach-only, program already verified) is not needed — reuse existing attach helpers. One responsibility: load/verify/attach + pin plumbing.
-- `xdp-dp/src/maps.rs` — add `iter_entries()` to the `Interfaces` and `Underlay` userspace wrappers (for the rebuild scan). One responsibility: userspace map wrappers.
-- `xdp-dp/src/control.rs` — new `Control::adopt(...)` constructor + `rebuild_from_maps()` that repopulates `by_id`/`iface_underlay`/`next_table_id` and returns the set of `(interface_id, device)` to re-attach; `bring_up` gains a `pin_dir`. One responsibility: control-plane state.
-- `xdp-dp/src/main.rs` — `Serve` honours `--pin-dir`: adopt-or-fresh, re-attach uplink + guests, rebuild IPAM. One responsibility: process wiring.
-- `xdp-dp/src/attach.rs` — `AttachState` gains a way to seed `UnderlayIpam` from recovered addresses (uses `mark_used`). One responsibility: veth/netns/IPAM lifecycle.
+- `flowplane-ebpf/src/maps.rs` — change the PINNED maps from `with_max_entries` to `pinned`. One responsibility: eBPF map declarations.
+- `flowplane/src/loader.rs` — `load_ebpf(pin_dir)` sets `map_pin_path`; new `adopt_program(ebpf, name)` (attach-only, program already verified) is not needed — reuse existing attach helpers. One responsibility: load/verify/attach + pin plumbing.
+- `flowplane/src/maps.rs` — add `iter_entries()` to the `Interfaces` and `Underlay` userspace wrappers (for the rebuild scan). One responsibility: userspace map wrappers.
+- `flowplane/src/control.rs` — new `Control::adopt(...)` constructor + `rebuild_from_maps()` that repopulates `by_id`/`iface_underlay`/`next_table_id` and returns the set of `(interface_id, device)` to re-attach; `bring_up` gains a `pin_dir`. One responsibility: control-plane state.
+- `flowplane/src/main.rs` — `Serve` honours `--pin-dir`: adopt-or-fresh, re-attach uplink + guests, rebuild IPAM. One responsibility: process wiring.
+- `flowplane/src/attach.rs` — `AttachState` gains a way to seed `UnderlayIpam` from recovered addresses (uses `mark_used`). One responsibility: veth/netns/IPAM lifecycle.
 - `test/scenario-restart.sh` (new) — the live kill-test harness. One responsibility: restart validation.
 
 ---
@@ -56,8 +56,8 @@ Unit tests cannot catch a lifecycle regression. Every integration task ends with
 ## Task 1: `load_ebpf` takes a pin dir and always sets `map_pin_path`
 
 **Files:**
-- Modify: `xdp-dp/src/loader.rs:24-45` (`load_ebpf`)
-- Modify all callers: `xdp-dp/src/loader.rs:263-266` (`attach_uplink`), `xdp-dp/src/control.rs` (`bring_up` ~line 218), `xdp-dp/src/main.rs` (Serve/Bringup/TcBringup), `xdp-dp/src/loader.rs:333` (verifier test), any sim/anchor load.
+- Modify: `flowplane/src/loader.rs:24-45` (`load_ebpf`)
+- Modify all callers: `flowplane/src/loader.rs:263-266` (`attach_uplink`), `flowplane/src/control.rs` (`bring_up` ~line 218), `flowplane/src/main.rs` (Serve/Bringup/TcBringup), `flowplane/src/loader.rs:333` (verifier test), any sim/anchor load.
 
 - [ ] **Step 1: Change the signature to require a pin dir**
 
@@ -70,17 +70,17 @@ use std::path::Path;
 /// pass a per-run dir (maps are created+pinned there); a restart passes the persistent dir so the
 /// reloaded programs re-bind to the surviving maps.
 pub fn load_ebpf(pin_dir: &Path) -> anyhow::Result<Ebpf> {
-    let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/xdp-dp-prog"));
+    let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowplane-prog"));
     let mut loader = aya::EbpfLoader::new();
     loader.map_pin_path(pin_dir);
     for (map, var) in [
-        ("CONNTRACK", "XDP_DP_CONNTRACK_MAX"),
-        ("ROUTES", "XDP_DP_ROUTES_MAX"),
-        ("INTERFACES", "XDP_DP_INTERFACES_MAX"),
-        ("MAGLEV", "XDP_DP_MAGLEV_MAX"),
-        ("NAT", "XDP_DP_NAT_MAX"),
-        ("LB", "XDP_DP_LB_MAX"),
-        ("PORT_META", "XDP_DP_PORT_META_MAX"),
+        ("CONNTRACK", "FLOWPLANE_CONNTRACK_MAX"),
+        ("ROUTES", "FLOWPLANE_ROUTES_MAX"),
+        ("INTERFACES", "FLOWPLANE_INTERFACES_MAX"),
+        ("MAGLEV", "FLOWPLANE_MAGLEV_MAX"),
+        ("NAT", "FLOWPLANE_NAT_MAX"),
+        ("LB", "FLOWPLANE_LB_MAX"),
+        ("PORT_META", "FLOWPLANE_PORT_META_MAX"),
     ] {
         if let Ok(v) = std::env::var(var) {
             let n: u32 = v.parse().with_context(|| format!("{var} must be a u32, got {v:?}"))?;
@@ -99,22 +99,22 @@ For `attach_uplink`, thread a `pin_dir: &Path` param. For the verifier test (`lo
 let pin_dir = tempfile::tempdir().expect("tempdir");
 // use EbpfLoader::new().map_pin_path(pin_dir.path())...  (mirror load_ebpf)
 ```
-Add `tempfile` to `xdp-dp` dev-dependencies if not present (`tempfile = "3"` in `[workspace.dependencies]` + `tempfile = { workspace = true }` under `[dev-dependencies]`).
+Add `tempfile` to `flowplane` dev-dependencies if not present (`tempfile = "3"` in `[workspace.dependencies]` + `tempfile = { workspace = true }` under `[dev-dependencies]`).
 
 - [ ] **Step 3: Build**
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 Expected: compiles (maps are still `with_max_entries`, so `map_pin_path` is a harmless no-op until Task 2).
 
 - [ ] **Step 4: Run the verifier anchor to confirm loading still works with a pin path**
 
-Run: `sudo -E cargo test -p xdp-dp --test anchor_uplink -- --ignored` (and `both_programs_pass_verifier`)
+Run: `sudo -E cargo test -p flowplane --test anchor_uplink -- --ignored` (and `both_programs_pass_verifier`)
 Expected: PASS (loading with a temp `map_pin_path` and unpinned maps is unaffected).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add xdp-dp/src/loader.rs xdp-dp/src/control.rs xdp-dp/src/main.rs Cargo.toml xdp-dp/Cargo.toml Cargo.lock
+git add flowplane/src/loader.rs flowplane/src/control.rs flowplane/src/main.rs Cargo.toml flowplane/Cargo.toml Cargo.lock
 git commit -m "refactor(loader): load_ebpf takes a pin dir + always sets map_pin_path"
 ```
 
@@ -123,7 +123,7 @@ git commit -m "refactor(loader): load_ebpf takes a pin dir + always sets map_pin
 ## Task 2: Declare the state maps `pinned`
 
 **Files:**
-- Modify: `xdp-dp-ebpf/src/maps.rs` (the PIN list from the classification above)
+- Modify: `flowplane-ebpf/src/maps.rs` (the PIN list from the classification above)
 
 - [ ] **Step 1: Change each PINNED map from `with_max_entries` to `pinned`**
 
@@ -140,18 +140,18 @@ pub static CONNTRACK: LruHashMap<CtKey, CtEntry> = LruHashMap::pinned(1_048_576,
 
 - [ ] **Step 2: Rebuild the eBPF object**
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 Expected: the eBPF object compiles (aya-build reinvokes bpf-linker).
 
 - [ ] **Step 3: Verify a fresh load pins the maps**
 
-Run: `sudo -E cargo test -p xdp-dp --test anchor_uplink -- --ignored`
+Run: `sudo -E cargo test -p flowplane --test anchor_uplink -- --ignored`
 Expected: PASS. The anchor sets a temp `map_pin_path`; after load, `ls <tempdir>` shows the pinned map files (add a temporary `eprintln!` of the dir listing if unsure, then remove it).
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add xdp-dp-ebpf/src/maps.rs
+git add flowplane-ebpf/src/maps.rs
 git commit -m "feat(ebpf): pin state maps by name (survive a dataplane restart)"
 ```
 
@@ -160,8 +160,8 @@ git commit -m "feat(ebpf): pin state maps by name (survive a dataplane restart)"
 ## Task 3: Iteration wrappers on `Interfaces` and `Underlay`
 
 **Files:**
-- Modify: `xdp-dp/src/maps.rs` (`Interfaces` wrapper ~line 15, `Underlay` wrapper ~line 395)
-- Test: `xdp-dp/src/maps.rs` `#[cfg(test)]` (unit test with a MockableMap is impractical; instead validate in the Task 7 live test — mark this task's test as an integration assertion).
+- Modify: `flowplane/src/maps.rs` (`Interfaces` wrapper ~line 15, `Underlay` wrapper ~line 395)
+- Test: `flowplane/src/maps.rs` `#[cfg(test)]` (unit test with a MockableMap is impractical; instead validate in the Task 7 live test — mark this task's test as an integration assertion).
 
 - [ ] **Step 1: Add `entries()` to `Interfaces`**
 
@@ -176,7 +176,7 @@ impl Interfaces {
     }
 }
 ```
-(Mirror `Conntrack::entries()` at `xdp-dp/src/maps.rs:329` for the exact `self.map` field name and error handling.)
+(Mirror `Conntrack::entries()` at `flowplane/src/maps.rs:329` for the exact `self.map` field name and error handling.)
 
 - [ ] **Step 2: Add `keys()` to `Underlay`**
 
@@ -191,13 +191,13 @@ impl Underlay {
 
 - [ ] **Step 3: Build**
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 Expected: compiles.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add xdp-dp/src/maps.rs
+git add flowplane/src/maps.rs
 git commit -m "feat(maps): iteration wrappers on Interfaces/Underlay for restart rebuild"
 ```
 
@@ -206,7 +206,7 @@ git commit -m "feat(maps): iteration wrappers on Interfaces/Underlay for restart
 ## Task 4: `Control` adopt + rebuild-from-maps
 
 **Files:**
-- Modify: `xdp-dp/src/control.rs` (`bring_up` ~218, add `rebuild_from_maps`)
+- Modify: `flowplane/src/control.rs` (`bring_up` ~218, add `rebuild_from_maps`)
 
 - [ ] **Step 1: Thread `pin_dir` into `bring_up` and split adopt-vs-fresh**
 
@@ -241,13 +241,13 @@ impl Control {
 
 The existing maps do NOT store `interface_id` or the device name, so a faithful rebuild needs them. Add a pinned map:
 ```rust
-// xdp-dp-ebpf/src/maps.rs  (userspace-written, never read by the datapath — a control-plane journal)
+// flowplane-ebpf/src/maps.rs  (userspace-written, never read by the datapath — a control-plane journal)
 #[map]
 pub static IFACE_META: HashMap<IfaceMetaKey, IfaceMetaVal> = HashMap::pinned(1024, 0);
 ```
-Define `IfaceMetaKey { id_hash: u64 }` and `IfaceMetaVal { vni, ipv4, ipv6, device_bytes: [u8; 16], device_len, underlay: [u8;16] }` in `xdp-dp-common`. Write it in `program_iface_maps` (Task 4 Step 4) and read it in `rebuild_from_maps`. `interface_id` itself can exceed the map value; store the full id in a second parallel structure keyed by id_hash if needed, or cap device/id length (document the cap).
+Define `IfaceMetaKey { id_hash: u64 }` and `IfaceMetaVal { vni, ipv4, ipv6, device_bytes: [u8; 16], device_len, underlay: [u8;16] }` in `flowplane-common`. Write it in `program_iface_maps` (Task 4 Step 4) and read it in `rebuild_from_maps`. `interface_id` itself can exceed the map value; store the full id in a second parallel structure keyed by id_hash if needed, or cap device/id length (document the cap).
 
-> This is the one genuinely new persistent structure. If it feels heavy, the fallback is to have the AGENT re-drive AttachInterface for all NICs on this node after an xdp-dp restart (control-plane rebuild instead of dataplane journal) — see "Alternative" at the end. Decide before implementing Step 2/3.
+> This is the one genuinely new persistent structure. If it feels heavy, the fallback is to have the AGENT re-drive AttachInterface for all NICs on this node after an flowplane restart (control-plane rebuild instead of dataplane journal) — see "Alternative" at the end. Decide before implementing Step 2/3.
 
 - [ ] **Step 4: Write `IFACE_META` in `program_iface_maps`**
 
@@ -257,13 +257,13 @@ Add the `IFACE_META.upsert(...)` write alongside the existing PORT_META/INTERFAC
 
 Add a unit test that constructs synthetic `IFACE_META` entries and asserts `rebuild_from_maps` produces the expected `(interface_id, device)` list and underlay set. (Pure parsing of the recovered structs — no BPF needed if you factor the pure part out.)
 
-Run: `cargo test -p xdp-dp rebuild`
+Run: `cargo test -p flowplane rebuild`
 Expected: PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add xdp-dp/src/control.rs xdp-dp-ebpf/src/maps.rs xdp-dp-common/src/lib.rs
+git add flowplane/src/control.rs flowplane-ebpf/src/maps.rs flowplane-common/src/lib.rs
 git commit -m "feat(control): adopt pinned maps + rebuild bookkeeping on restart"
 ```
 
@@ -272,14 +272,14 @@ git commit -m "feat(control): adopt pinned maps + rebuild bookkeeping on restart
 ## Task 5: `Serve` honours `--pin-dir` (adopt-or-fresh + re-attach)
 
 **Files:**
-- Modify: `xdp-dp/src/main.rs` (`Cmd::Serve` ~352-460)
-- Modify: `xdp-dp/src/attach.rs` (`AttachState` gains `seed_ipam(addrs: &[[u8;16]])` calling `UnderlayIpam::mark_used`)
+- Modify: `flowplane/src/main.rs` (`Cmd::Serve` ~352-460)
+- Modify: `flowplane/src/attach.rs` (`AttachState` gains `seed_ipam(addrs: &[[u8;16]])` calling `UnderlayIpam::mark_used`)
 
 - [ ] **Step 1: Serve computes the pin dir (default + `--pin-dir`) and detects adopt**
 
 ```rust
 // Default persistent bpffs dir; overridable by --pin-dir. adopt = the dir already has our pins.
-let pin_dir = pin_dir.unwrap_or_else(|| "/sys/fs/bpf/xdp-dp".to_string());
+let pin_dir = pin_dir.unwrap_or_else(|| "/sys/fs/bpf/flowplane".to_string());
 std::fs::create_dir_all(&pin_dir).ok();
 let adopt = std::path::Path::new(&pin_dir).join("INTERFACES").exists();
 ```
@@ -302,13 +302,13 @@ if adopt {
 
 - [ ] **Step 3: Build**
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 Expected: compiles.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add xdp-dp/src/main.rs xdp-dp/src/attach.rs
+git add flowplane/src/main.rs flowplane/src/attach.rs
 git commit -m "feat(serve): adopt pinned datapath on restart (re-attach programs, reseed IPAM)"
 ```
 
@@ -317,7 +317,7 @@ git commit -m "feat(serve): adopt pinned datapath on restart (re-attach programs
 ## Task 6: SIGTERM = clean exit that PRESERVES pins
 
 **Files:**
-- Modify: `xdp-dp/src/main.rs` (Serve await)
+- Modify: `flowplane/src/main.rs` (Serve await)
 
 - [ ] **Step 1: On SIGTERM, drop the tonic server but DO NOT unpin maps/links**
 
@@ -334,9 +334,9 @@ log::info!("shutting down; pinned datapath preserved for adopt on restart");
 
 - [ ] **Step 2: Build + commit**
 
-Run: `cargo build -p xdp-dp`
+Run: `cargo build -p flowplane`
 ```bash
-git add xdp-dp/src/main.rs
+git add flowplane/src/main.rs
 git commit -m "feat(serve): handle SIGTERM (kubelet) with pin-preserving shutdown"
 ```
 
@@ -347,18 +347,18 @@ git commit -m "feat(serve): handle SIGTERM (kubelet) with pin-preserving shutdow
 **Files:**
 - Create: `test/scenario-restart.sh`
 
-**Prereq:** `hack/clab-up.sh` up, netplane stack on k01, image rebuilt+loaded with Tasks 1-6 (`make image TAG=dev && kind load docker-image ghcr.io/trevex/dpservice-xdp:dev --name k01 && kubectl -n ectobase-system rollout restart ds/xdp-dp`). The DS pod command must pass `--pin-dir /sys/fs/bpf/xdp-dp` AND mount a bpffs at that path (add a `hostPath`/`emptyDir` won't persist across pod restarts on the same node — use a bpffs mount; verify the DS spec pins to a path under a `bpffs` volume that survives container restart on the node).
+**Prereq:** `hack/clab-up.sh` up, netplane stack on k01, image rebuilt+loaded with Tasks 1-6 (`make image TAG=dev && kind load docker-image ghcr.io/trevex/ectobase/flowplane:dev --name k01 && kubectl -n ectobase-system rollout restart ds/flowplane`). The DS pod command must pass `--pin-dir /sys/fs/bpf/flowplane` AND mount a bpffs at that path (add a `hostPath`/`emptyDir` won't persist across pod restarts on the same node — use a bpffs mount; verify the DS spec pins to a path under a `bpffs` volume that survives container restart on the node).
 
 - [ ] **Step 1: Attach a NAT pod (reuse scenario-nat-egress.sh setup) and confirm egress works**
 
 Run the NAT egress scenario; confirm `wget http://1.1.1.1/` returns 301 and note the pod's underlay `/128` (e.g. `fd00:db8:0:2:8000::`).
 
-- [ ] **Step 2: Kill the xdp-dp container (simulate a crash/roll) WITHOUT tearing down the pod netns**
+- [ ] **Step 2: Kill the flowplane container (simulate a crash/roll) WITHOUT tearing down the pod netns**
 
 ```bash
-CID=$(sudo docker exec k01-worker sh -c 'crictl ps | grep " xdp-dp " | awk "{print \$1}" | head -1')
+CID=$(sudo docker exec k01-worker sh -c 'crictl ps | grep " flowplane " | awk "{print \$1}" | head -1')
 sudo docker exec k01-worker crictl stop "$CID"   # kubelet restarts it -> Serve adopts
-# wait for the new xdp-dp container to be Running and logs "adopted pinned datapath"
+# wait for the new flowplane container to be Running and logs "adopted pinned datapath"
 ```
 
 - [ ] **Step 3: Assert the datapath SURVIVED**
@@ -367,7 +367,7 @@ sudo docker exec k01-worker crictl stop "$CID"   # kubelet restarts it -> Serve 
 # The SAME pod's egress must work again with NO re-attach from the CNI:
 sudo docker exec k01-worker ip netns exec natpod /busybox wget -T 8 -O /dev/null http://1.1.1.1/
 ```
-Expected: 301 again. Verify via `bpftool map dump pinned /sys/fs/bpf/xdp-dp/UNDERLAY` that the pod's `/128` is still present, and `bpftool link` / `query_tcx` that a guest program is re-attached to the veth.
+Expected: 301 again. Verify via `bpftool map dump pinned /sys/fs/bpf/flowplane/UNDERLAY` that the pod's `/128` is still present, and `bpftool link` / `query_tcx` that a guest program is re-attached to the veth.
 
 - [ ] **Step 4: Assert IPAM did NOT reissue the live `/128`**
 
@@ -381,7 +381,7 @@ An established TCP flow's conntrack entry should survive the restart (CONNTRACK 
 
 ```bash
 git add test/scenario-restart.sh
-git commit -m "test(restart): live kill-test proving datapath survives an xdp-dp restart"
+git commit -m "test(restart): live kill-test proving datapath survives an flowplane restart"
 ```
 
 ---
@@ -394,7 +394,7 @@ git commit -m "test(restart): live kill-test proving datapath survives an xdp-dp
 
 ## Alternative (simpler, if the map-journal rebuild is too heavy)
 
-Instead of a dataplane `IFACE_META` journal, do a **control-plane rebuild**: on xdp-dp restart with adopted maps, the *agent* re-drives `AttachInterface` for every NetworkInterface scheduled to this node (it already lists them for reconcile). `create_interface` becomes idempotent against surviving maps (skip map writes that already match; only re-attach the program + re-commit bookkeeping). This trades a new pinned map for making attach idempotent, and leans on the steady-state reconcile loop already merged (commit 7c4d985). Evaluate both at Task 4; pick one, delete the other from the plan.
+Instead of a dataplane `IFACE_META` journal, do a **control-plane rebuild**: on flowplane restart with adopted maps, the *agent* re-drives `AttachInterface` for every NetworkInterface scheduled to this node (it already lists them for reconcile). `create_interface` becomes idempotent against surviving maps (skip map writes that already match; only re-attach the program + re-commit bookkeeping). This trades a new pinned map for making attach idempotent, and leans on the steady-state reconcile loop already merged (commit 7c4d985). Evaluate both at Task 4; pick one, delete the other from the plan.
 
 ---
 

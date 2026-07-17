@@ -10,6 +10,6 @@ for i in $(seq 1 60); do
   ip link show "$IFACE" >/dev/null 2>&1 && break
   echo "sw-pass: waiting for $IFACE ($i)"; sleep 1
 done
-export XDP_DP_SKB_MODE=1
+export FLOWPLANE_SKB_MODE=1
 echo "sw-pass: attaching xdp_pass to $IFACE"
-exec xdp-dp pass --iface "$IFACE"
+exec flowplane pass --iface "$IFACE"

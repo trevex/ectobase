@@ -16,17 +16,17 @@ post-grow, layout `[outer_eth][outer_ipv6][inner_ip]`), remove the field, and le
 carry a settable logical length so a sim test guards the bug class. The substitution is
 byte-identical on the wire.
 
-**Tech Stack:** Rust (`no_std` eBPF core + aya), `xdp-dp-core`/`xdp-dp-ebpf`/`xdp-dp-sim`;
+**Tech Stack:** Rust (`no_std` eBPF core + aya), `flowplane-core`/`flowplane-ebpf`/`flowplane-sim`;
 Go (`netplane`, controller-runtime).
 
 **Reference spec:** `docs/superpowers/specs/2026-07-17-sim-seam-and-polish-design.md`
 
 **Build/test commands** (from repo root, needs the nix flake PATH):
-- Core + sim: `cargo test -p xdp-dp-core -p xdp-dp-sim`
-- eBPF compile (verifier-target build): `cargo build -p xdp-dp-ebpf` (per the repo's ebpf build
+- Core + sim: `cargo test -p flowplane-core -p flowplane-sim`
+- eBPF compile (verifier-target build): `cargo build -p flowplane-ebpf` (per the repo's ebpf build
   target; if the workspace uses a dedicated command, e.g. `cargo xtask build-ebpf`, use that).
-- Verifier load-anchors: `cargo test -p xdp-dp --test <name>` (mirrors
-  `xdp-dp/tests/verify_edge_wan_rx.rs`).
+- Verifier load-anchors: `cargo test -p flowplane --test <name>` (mirrors
+  `flowplane/tests/verify_edge_wan_rx.rs`).
 - Go: `cd netplane && go test ./...`
 
 ---
@@ -36,10 +36,10 @@ Go (`netplane`, controller-runtime).
 ### Task A1: Add `Pkt::logical_len()` + `RawPkt` logical length
 
 **Files:**
-- Modify: `xdp-dp-core/src/pkt.rs` (trait)
-- Modify: `xdp-dp-ebpf/src/coreimpl.rs` (`CtxPkt`, `RawPkt`)
+- Modify: `flowplane-core/src/pkt.rs` (trait)
+- Modify: `flowplane-ebpf/src/coreimpl.rs` (`CtxPkt`, `RawPkt`)
 
-- [ ] **Step 1: Add the trait method** in `xdp-dp-core/src/pkt.rs`, inside `trait Pkt`, right
+- [ ] **Step 1: Add the trait method** in `flowplane-core/src/pkt.rs`, inside `trait Pkt`, right
   after `fn len(&self) -> usize;`:
 
 ```rust
@@ -52,7 +52,7 @@ Go (`netplane`, controller-runtime).
     fn logical_len(&self) -> usize;
 ```
 
-- [ ] **Step 2: Implement for `CtxPkt`** in `xdp-dp-ebpf/src/coreimpl.rs` (XDP is always linear),
+- [ ] **Step 2: Implement for `CtxPkt`** in `flowplane-ebpf/src/coreimpl.rs` (XDP is always linear),
   inside `impl Pkt for CtxPkt<'_>`, after `len`:
 
 ```rust
@@ -100,14 +100,14 @@ impl RawPkt {
     }
 ```
 
-- [ ] **Step 5: Compile.** Run: `cargo build -p xdp-dp-ebpf` and `cargo test -p xdp-dp-core`
+- [ ] **Step 5: Compile.** Run: `cargo build -p flowplane-ebpf` and `cargo test -p flowplane-core`
   Expected: builds clean. Existing `RawPkt::new` callers (e.g. firewall reads in `egress.rs`,
   `tc.rs`) are unaffected — `new` still sets `logical_len` to the linear length.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add xdp-dp-core/src/pkt.rs xdp-dp-ebpf/src/coreimpl.rs
+git add flowplane-core/src/pkt.rs flowplane-ebpf/src/coreimpl.rs
 git commit -m "feat(pkt): add Pkt::logical_len() + RawPkt::with_logical_len"
 ```
 
@@ -116,7 +116,7 @@ git commit -m "feat(pkt): add Pkt::logical_len() + RawPkt::with_logical_len"
 ### Task A2: `VecPkt` logical length + unit test
 
 **Files:**
-- Modify: `xdp-dp-sim/src/pkt.rs`
+- Modify: `flowplane-sim/src/pkt.rs`
 
 - [ ] **Step 1: Add the field + setter.** Update the struct, `from_bytes`, and impl `Pkt`:
 
@@ -157,7 +157,7 @@ impl VecPkt {
   (so a linear `VecPkt` keeps `logical_len == buf.len()`); in `shrink_head`, after the
   `self.buf.drain(0..delta)`, add `self.logical_len -= delta;`.
 
-- [ ] **Step 3: Add a unit test** in the `tests` module of `xdp-dp-sim/src/pkt.rs`:
+- [ ] **Step 3: Add a unit test** in the `tests` module of `flowplane-sim/src/pkt.rs`:
 
 ```rust
     #[test]
@@ -174,13 +174,13 @@ impl VecPkt {
     }
 ```
 
-- [ ] **Step 4: Run tests.** Run: `cargo test -p xdp-dp-sim pkt::tests`
+- [ ] **Step 4: Run tests.** Run: `cargo test -p flowplane-sim pkt::tests`
   Expected: PASS (3 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add xdp-dp-sim/src/pkt.rs
+git add flowplane-sim/src/pkt.rs
 git commit -m "feat(sim): VecPkt settable logical_len (models non-linear skb)"
 ```
 
@@ -189,15 +189,15 @@ git commit -m "feat(sim): VecPkt settable logical_len (models non-linear skb)"
 ### Task A3: Compute `inner_len` in `write_outer_v6`; delete tc override; regression test
 
 **Files:**
-- Modify: `xdp-dp-core/src/encap.rs` (`write_outer_v6`)
-- Modify: `xdp-dp-ebpf/src/tc.rs` (both Encap branches)
-- Modify: `xdp-dp-sim/src/encap_test.rs` (existing test + new regression test)
+- Modify: `flowplane-core/src/encap.rs` (`write_outer_v6`)
+- Modify: `flowplane-ebpf/src/tc.rs` (both Encap branches)
+- Modify: `flowplane-sim/src/encap_test.rs` (existing test + new regression test)
 
 Note: `EncapParams.inner_len` is **kept** in this task (still set by literals, now ignored by
 `write_outer_v6`). The field is removed in Task A4. This keeps the tree compiling and behavior
 byte-identical at each step.
 
-- [ ] **Step 1: Compute `inner_len` inside `write_outer_v6`** in `xdp-dp-core/src/encap.rs`.
+- [ ] **Step 1: Compute `inner_len` inside `write_outer_v6`** in `flowplane-core/src/encap.rs`.
   Replace the line `ok &= pkt.write_bytes(ip + 4, &e.inner_len.to_be_bytes());` with a locally
   computed value, and update the doc comment. The full function becomes:
 
@@ -230,7 +230,7 @@ pub fn write_outer_v6<P: Pkt>(pkt: &mut P, e: &EncapParams) -> bool {
 }
 ```
 
-- [ ] **Step 2: Delete the tc v6 override + use `with_logical_len`** in `xdp-dp-ebpf/src/tc.rs`.
+- [ ] **Step 2: Delete the tc v6 override + use `with_logical_len`** in `flowplane-ebpf/src/tc.rs`.
   In the `EgressVerdict::Encap(mut e)` branch near line 132, remove the override block:
 
 ```rust
@@ -239,7 +239,7 @@ pub fn write_outer_v6<P: Pkt>(pkt: &mut P, e: &EncapParams) -> bool {
                 // short outer payload_length and be dropped as truncated. Recompute from skb->len
                 // (full logical length) before adjust_room: outer IPv6 payload = skb->len - ETH_LEN.
                 e.inner_len =
-                    (ctx.len() as usize).saturating_sub(xdp_dp_common::arp_nd::ETH_LEN) as u16;
+                    (ctx.len() as usize).saturating_sub(flowplane_common::arp_nd::ETH_LEN) as u16;
 ```
 
   Change `Encap(mut e)` to `Encap(e)` (no longer mutated). Then change the `RawPkt::new` at the
@@ -266,7 +266,7 @@ pub fn write_outer_v6<P: Pkt>(pkt: &mut P, e: &EncapParams) -> bool {
                 // length) captured BEFORE adjust_room: the skb is [inner_eth(ETH_LEN)][inner_ip], so
                 // the outer IPv6 payload = skb->len - ETH_LEN.
                 e.inner_len =
-                    (ctx.len() as usize).saturating_sub(xdp_dp_common::arp_nd::ETH_LEN) as u16;
+                    (ctx.len() as usize).saturating_sub(flowplane_common::arp_nd::ETH_LEN) as u16;
 ```
 
   Change `Encap(mut e)` to `Encap(e)`, and change that branch's `RawPkt::new(ctx.data(),
@@ -274,14 +274,14 @@ pub fn write_outer_v6<P: Pkt>(pkt: &mut P, e: &EncapParams) -> bool {
   with the same comment as Step 2. Keep the surrounding `adjust_room`/`pull_data` calls exactly
   as they are — the `RawPkt` is still built *after* them.
 
-- [ ] **Step 4: Update the existing sim test** in `xdp-dp-sim/src/encap_test.rs`. The header is
+- [ ] **Step 4: Update the existing sim test** in `flowplane-sim/src/encap_test.rs`. The header is
   written from `p`'s logical length now. The test builds `[0u8; 34]` then `grow_head(IPV6_LEN)`,
   so `logical_len == 34 + IPV6_LEN` and `inner_len == 34`. The `inner_len: 34` literal in the
   `EncapParams` is now ignored but still compiles (removed in Task A4). Leave the assertion
   `assert_eq!(p.read_u16_be(ETH_LEN + 4), Some(34));` — it still holds (34 == logical 74 − 54).
   No change required here beyond confirming it passes.
 
-- [ ] **Step 5: Add the non-linear regression test** to `xdp-dp-sim/src/encap_test.rs`:
+- [ ] **Step 5: Add the non-linear regression test** to `flowplane-sim/src/encap_test.rs`:
 
 ```rust
 #[test]
@@ -307,19 +307,19 @@ fn encap_inner_len_uses_logical_not_linear() {
 }
 ```
 
-- [ ] **Step 6: Run the tests.** Run: `cargo test -p xdp-dp-core -p xdp-dp-sim`
+- [ ] **Step 6: Run the tests.** Run: `cargo test -p flowplane-core -p flowplane-sim`
   Expected: PASS, including the new `encap_inner_len_uses_logical_not_linear`. To confirm it is a
   real guard, temporarily change `write_outer_v6` to use `pkt.len()` — the new test must FAIL —
   then revert.
 
-- [ ] **Step 7: Verify the eBPF still builds + verifier-loads.** Run: `cargo build -p xdp-dp-ebpf`
-  and the verifier load tests (`cargo test -p xdp-dp --test verify_edge_wan_rx` and any sibling
+- [ ] **Step 7: Verify the eBPF still builds + verifier-loads.** Run: `cargo build -p flowplane-ebpf`
+  and the verifier load tests (`cargo test -p flowplane --test verify_edge_wan_rx` and any sibling
   verify tests). Expected: builds + loads clean.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add xdp-dp-core/src/encap.rs xdp-dp-ebpf/src/tc.rs xdp-dp-sim/src/encap_test.rs
+git add flowplane-core/src/encap.rs flowplane-ebpf/src/tc.rs flowplane-sim/src/encap_test.rs
 git commit -m "feat(encap): derive inner_len from logical_len in write_outer_v6; drop tc override
 
 write_outer_v6 now computes the outer IPv6 payload_length from the packet's
@@ -333,28 +333,28 @@ regression test with a non-linear VecPkt guards the bug class."
 ### Task A4: Remove the dead `inner_len` field + plumbing
 
 **Files:**
-- Modify: `xdp-dp-core/src/encap.rs` (`EncapParams`)
-- Modify: `xdp-dp-ebpf/src/encap.rs` (drop param from 3 fns)
-- Modify: `xdp-dp-ebpf/src/egress.rs` (forward_decision v4/v6)
-- Modify: `xdp-dp-ebpf/src/ingress.rs` (3 call sites)
-- Modify: `xdp-dp-ebpf/src/nat64.rs` (1 call site — the `encap_and_redirect` one, NOT the inline synth path)
-- Modify: `xdp-dp-sim/src/sim.rs`, `xdp-dp-sim/src/encap_test.rs`, `xdp-dp-sim/src/lb_scenario_test.rs`, `xdp-dp-sim/src/ns_scenario_test.rs` (EncapParams literals)
+- Modify: `flowplane-core/src/encap.rs` (`EncapParams`)
+- Modify: `flowplane-ebpf/src/encap.rs` (drop param from 3 fns)
+- Modify: `flowplane-ebpf/src/egress.rs` (forward_decision v4/v6)
+- Modify: `flowplane-ebpf/src/ingress.rs` (3 call sites)
+- Modify: `flowplane-ebpf/src/nat64.rs` (1 call site — the `encap_and_redirect` one, NOT the inline synth path)
+- Modify: `flowplane-sim/src/sim.rs`, `flowplane-sim/src/encap_test.rs`, `flowplane-sim/src/lb_scenario_test.rs`, `flowplane-sim/src/ns_scenario_test.rs` (EncapParams literals)
 
 This is an atomic dead-code removal: `EncapParams.inner_len` is written nowhere-read after A3,
 so remove the field and every site that sets or plumbs it. The tree must compile at the end.
 
-- [ ] **Step 1: Remove the field** from `EncapParams` in `xdp-dp-core/src/encap.rs` (delete the
+- [ ] **Step 1: Remove the field** from `EncapParams` in `flowplane-core/src/encap.rs` (delete the
   `pub inner_len: u16,` line).
 
 - [ ] **Step 2: Drop the `inner_len` param from the three ebpf encap fns** in
-  `xdp-dp-ebpf/src/encap.rs`: `write_encap_outer`, `encap_and_redirect`,
+  `flowplane-ebpf/src/encap.rs`: `write_encap_outer`, `encap_and_redirect`,
   `encap_and_redirect_via_devmap`. Remove the `inner_len: u16,` parameter, remove `inner_len,`
   from the `EncapParams { … }` literal in `write_encap_outer`, and drop the argument where
   `write_encap_outer` is called inside the two `encap_and_redirect*` bodies. Update the doc
   comment on `write_encap_outer` (delete the `inner_len` sentence).
 
 - [ ] **Step 3: Fix `forward_decision_v4` and `forward_decision_v6`** in
-  `xdp-dp-ebpf/src/egress.rs`: delete `let inner_len = (data_end - data - ETH_LEN) as u16;`
+  `flowplane-ebpf/src/egress.rs`: delete `let inner_len = (data_end - data - ETH_LEN) as u16;`
   (lines ~129 and ~177) and the `inner_len,` field in each `EncapParams { … }` literal (lines
   ~140 and ~188). `data`/`data_end` may become unused in the tail — if the compiler warns,
   prefix with `_` at the binding or remove if genuinely unused (they are still used earlier for
@@ -371,17 +371,17 @@ so remove the field and every site that sets or plumbs it. The tree must compile
   outer header directly, not via `EncapParams`/`write_outer_v6`, and is out of scope.
 
 - [ ] **Step 6: Remove `inner_len` from the sim `EncapParams` literals:**
-  - `xdp-dp-sim/src/sim.rs:199` — delete `inner_len: 0, // edge_encap sets this`.
-  - `xdp-dp-sim/src/sim.rs` `edge_encap` (line ~73) — delete `e.inner_len = (inner_frame.len()
+  - `flowplane-sim/src/sim.rs:199` — delete `inner_len: 0, // edge_encap sets this`.
+  - `flowplane-sim/src/sim.rs` `edge_encap` (line ~73) — delete `e.inner_len = (inner_frame.len()
     - ETH_LEN) as u16;` and change the `mut e` param to `e` if `e` is no longer mutated (it is
     still passed to `write_outer_v6` by `&e`); adjust the doc comment's `inner_len = …` clause.
-  - `xdp-dp-sim/src/encap_test.rs:15` — delete `inner_len: 34,` (both the existing test literal
+  - `flowplane-sim/src/encap_test.rs:15` — delete `inner_len: 34,` (both the existing test literal
     and the regression-test literal's `inner_len: 0,` added in A3 Step 5).
-  - `xdp-dp-sim/src/lb_scenario_test.rs:89` — delete `inner_len: 0,`.
-  - `xdp-dp-sim/src/ns_scenario_test.rs:41` — delete `inner_len: 0,   // set by edge_encap`.
+  - `flowplane-sim/src/lb_scenario_test.rs:89` — delete `inner_len: 0,`.
+  - `flowplane-sim/src/ns_scenario_test.rs:41` — delete `inner_len: 0,   // set by edge_encap`.
 
 - [ ] **Step 7: Build everything + run tests.** Run:
-  `cargo build -p xdp-dp-ebpf && cargo test -p xdp-dp-core -p xdp-dp-sim` and the verifier load
+  `cargo build -p flowplane-ebpf && cargo test -p flowplane-core -p flowplane-sim` and the verifier load
   tests. Expected: compiles clean (no unused-field/param warnings), all tests green, verifier
   loads. The on-wire bytes are unchanged from A3.
 
@@ -401,14 +401,14 @@ computations, and the sim literals. No behavior change."
 ### Task A5: Verifier load-anchors for the tc classifiers
 
 **Files:**
-- Create: `xdp-dp/tests/verify_tc_guest.rs`
-- Reference: `xdp-dp/tests/verify_edge_wan_rx.rs` (existing pattern)
+- Create: `flowplane/tests/verify_tc_guest.rs`
+- Reference: `flowplane/tests/verify_edge_wan_rx.rs` (existing pattern)
 
-- [ ] **Step 1: Read the reference test** `xdp-dp/tests/verify_edge_wan_rx.rs` to copy its
+- [ ] **Step 1: Read the reference test** `flowplane/tests/verify_edge_wan_rx.rs` to copy its
   harness (how it locates the compiled ebpf object, loads it, and asserts a program loads). Note
   its program-load line (~32) casts to `Xdp`; the tc classifiers cast to `SchedClassifier`.
 
-- [ ] **Step 2: Write the load-anchor test** `xdp-dp/tests/verify_tc_guest.rs`, loading the same
+- [ ] **Step 2: Write the load-anchor test** `flowplane/tests/verify_tc_guest.rs`, loading the same
   ebpf object and asserting each tc classifier loads into the kernel (verifier-clean). Structure
   (adapt paths/loader to match the reference exactly):
 
@@ -431,14 +431,14 @@ fn tc_guest_classifiers_load() {
 }
 ```
 
-- [ ] **Step 3: Run it.** Run: `cargo test -p xdp-dp --test verify_tc_guest`
+- [ ] **Step 3: Run it.** Run: `cargo test -p flowplane --test verify_tc_guest`
   Expected: PASS — all three classifiers load. (This test needs the same privileges/env as the
   existing verify tests; run under the repo's usual `sudo -E`/flake harness if required.)
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add xdp-dp/tests/verify_tc_guest.rs
+git add flowplane/tests/verify_tc_guest.rs
 git commit -m "test(verify): load-anchor tc_guest_tx/nat64/dhcp classifiers"
 ```
 
@@ -447,7 +447,7 @@ git commit -m "test(verify): load-anchor tc_guest_tx/nat64/dhcp classifiers"
 ## Part B — Opportunistic polish
 
 Each task is independent and mechanical; no behavior change. Run `cd netplane && go test ./...`
-(Go tasks) or `cargo build -p xdp-dp-ebpf && cargo test -p xdp-dp-core` (Rust task) after each.
+(Go tasks) or `cargo build -p flowplane-ebpf && cargo test -p flowplane-core` (Rust task) after each.
 
 ### Task B1: Rename `Reconciler` → `NATGatewayReconciler`
 
@@ -537,11 +537,11 @@ Each task is independent and mechanical; no behavior change. Run `cd netplane &&
 ### Task B7: `DpErr` enum replacing `Result<_, ()>`
 
 **Files:**
-- Create: the enum in `xdp-dp-core` (e.g. `xdp-dp-core/src/err.rs`, re-exported from `lib.rs`)
-- Modify: `xdp-dp-core/src/uplink.rs:35`; `xdp-dp-ebpf/src/encap.rs:51,72`,
+- Create: the enum in `flowplane-core` (e.g. `flowplane-core/src/err.rs`, re-exported from `lib.rs`)
+- Modify: `flowplane-core/src/uplink.rs:35`; `flowplane-ebpf/src/encap.rs:51,72`,
   `nat64.rs:267,661,953`, `ingress.rs:101,320,345`, `v6.rs:93,141`, `egress.rs:193`
 
-- [ ] **Step 1:** Add the enum in `xdp-dp-core` (`no_std`-safe, no `std::error::Error`):
+- [ ] **Step 1:** Add the enum in `flowplane-core` (`no_std`-safe, no `std::error::Error`):
 
 ```rust
 /// Coarse datapath failure reason for the eBPF hot path. Verifier-friendly: `Copy`, no alloc,
@@ -559,7 +559,7 @@ pub enum DpErr {
 }
 ```
 
-  Re-export from `xdp-dp-core/src/lib.rs` (`pub use err::DpErr;` or `pub mod err;`).
+  Re-export from `flowplane-core/src/lib.rs` (`pub use err::DpErr;` or `pub mod err;`).
 
 - [ ] **Step 2:** At each of the 12 sites, change the function's error type from `()` to
   `DpErr` and replace `.ok_or(())?` / `Err(())` / `.map_err(|_| ())` with the fitting variant
@@ -570,8 +570,8 @@ pub enum DpErr {
   follow the chain up; if it reaches a top-level program fn that returns an xdp/tc action, map
   `DpErr` to the existing action (e.g. `XDP_ABORTED`/`TC_ACT_SHOT`) exactly as `Err(())` mapped
   before.
-- [ ] **Step 3:** Build + verifier-load. Run: `cargo build -p xdp-dp-ebpf && cargo test -p
-  xdp-dp-core` and the verifier load tests (`verify_edge_wan_rx`, `verify_tc_guest`). Expected:
+- [ ] **Step 3:** Build + verifier-load. Run: `cargo build -p flowplane-ebpf && cargo test -p
+  flowplane-core` and the verifier load tests (`verify_edge_wan_rx`, `verify_tc_guest`). Expected:
   compiles, no new panics/allocation, verifier clean.
 - [ ] **Step 4:** Commit: `git commit -am "refactor(xdp): replace Result<_,()> with coarse DpErr enum"`
 

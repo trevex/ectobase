@@ -3,7 +3,7 @@ package reflector
 import (
 	"testing"
 
-	pb "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	pb "github.com/trevex/ectobase/netplane/gen/routebusv1"
 )
 
 // fakeSink records everything the RIB sends it.
@@ -12,7 +12,7 @@ type fakeSink struct {
 	msgs []*pb.ServerMsg
 }
 
-func (f *fakeSink) ID() string          { return f.id }
+func (f *fakeSink) ID() string           { return f.id }
 func (f *fakeSink) Send(m *pb.ServerMsg) { f.msgs = append(f.msgs, m) }
 
 func updates(f *fakeSink) []*pb.RouteUpdate {

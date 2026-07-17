@@ -16,12 +16,12 @@ help: ## Show this help
 
 # --- build -----------------------------------------------------------------
 .PHONY: build
-build: ## Build the xdp-dp binary (host crates + the eBPF object via aya-build)
-	cargo build -p xdp-dp
+build: ## Build the flowplane binary (host crates + the eBPF object via aya-build)
+	cargo build -p flowplane
 
 .PHONY: release
-release: ## Build the xdp-dp binary in release mode
-	cargo build -p xdp-dp --release
+release: ## Build the flowplane binary in release mode
+	cargo build -p flowplane --release
 
 .PHONY: cli
 cli: ## Build the genuine dpservice-cli (flake package) into ./result
@@ -30,37 +30,37 @@ cli: ## Build the genuine dpservice-cli (flake package) into ./result
 .PHONY: proto-go
 proto-go: ## Generate Go gRPC stubs for dataplane.v1 into cni/gen/dataplanev1
 	protoc -I api/proto/dataplane/v1 \
-		--go_out=cni/gen --go_opt=module=github.com/trevex/xdp-dp/cni/gen \
-		--go-grpc_out=cni/gen --go-grpc_opt=module=github.com/trevex/xdp-dp/cni/gen \
+		--go_out=cni/gen --go_opt=module=github.com/trevex/ectobase/cni/gen \
+		--go-grpc_out=cni/gen --go-grpc_opt=module=github.com/trevex/ectobase/cni/gen \
 		api/proto/dataplane/v1/dataplane.proto
 
 .PHONY: proto-routebus
 proto-routebus: ## Generate Go gRPC stubs for routebus.v1 into netplane/gen/routebusv1
 	protoc -I api/proto/routebus/v1 \
-		--go_out=netplane/gen --go_opt=module=github.com/trevex/xdp-dp/netplane/gen \
-		--go-grpc_out=netplane/gen --go-grpc_opt=module=github.com/trevex/xdp-dp/netplane/gen \
+		--go_out=netplane/gen --go_opt=module=github.com/trevex/ectobase/netplane/gen \
+		--go-grpc_out=netplane/gen --go-grpc_opt=module=github.com/trevex/ectobase/netplane/gen \
 		api/proto/routebus/v1/routebus.proto
 
-IMAGE ?= ghcr.io/trevex/dpservice-xdp
+IMAGE ?= ghcr.io/trevex/ectobase/flowplane
 TAG   ?= dev
 # The Dockerfile's builder does apt/curl/cargo network I/O. buildkit's default bridge
 # network can't resolve the mirrors on some hosts (apt-get exit 100); host networking is
 # reliable and harmless for a build. Override with DOCKER_BUILD_NET= to disable.
 DOCKER_BUILD_NET ?= host
 .PHONY: image
-image: ## Build the dpservice-xdp container image (self-building Dockerfile; IMAGE/TAG overridable)
+image: ## Build the flowplane container image (self-building Dockerfile; IMAGE/TAG overridable)
 	docker build $(if $(DOCKER_BUILD_NET),--network=$(DOCKER_BUILD_NET)) -t $(IMAGE):$(TAG) .
 
 .PHONY: image-push
-image-push: ## Push the dpservice-xdp image (needs `docker login ghcr.io`)
+image-push: ## Push the flowplane image (needs `docker login ghcr.io`)
 	docker push $(IMAGE):$(TAG)
 
-NETPLANE_IMAGE ?= ghcr.io/trevex/netplane
+NETPLANE_IMAGE ?= ghcr.io/trevex/ectobase/netplane
 .PHONY: image-netplane
 image-netplane: ## Build the netplane (reflector+agent) image
 	docker build $(if $(DOCKER_BUILD_NET),--network=$(DOCKER_BUILD_NET)) -f Dockerfile.netplane -t $(NETPLANE_IMAGE):$(TAG) .
 
-KINDNODE_IMAGE ?= kindest/node-fabric
+KINDNODE_IMAGE ?= ghcr.io/trevex/ectobase/kind-node-fabric
 .PHONY: image-kindnode
 image-kindnode: ## Build the fabric kind-node image (node-IP = pre-kubelet BGP /64)
 	docker build $(if $(DOCKER_BUILD_NET),--network=$(DOCKER_BUILD_NET)) \
@@ -83,24 +83,24 @@ check: ## fmt --check + clippy (what the pre-commit hooks run)
 # --- tests -----------------------------------------------------------------
 .PHONY: test
 test: ## Host unit + POD-layout tests (no root needed)
-	cargo test -p xdp-dp-common -p xdp-dp
+	cargo test -p flowplane-common -p flowplane
 
 .PHONY: verifier
 verifier: ## Load both XDP programs through the kernel verifier (needs root)
-	cargo test -p xdp-dp both_programs_pass_verifier -- --ignored
+	cargo test -p flowplane both_programs_pass_verifier -- --ignored
 
 .PHONY: sim
 sim: ## Fast in-process datapath tests (no root, no clab): pure-core + native sim
-	cargo test -p xdp-dp-core -p xdp-dp-sim
+	cargo test -p flowplane-core -p flowplane-sim
 
 .PHONY: sim-anchor
 sim-anchor: ## Privileged BPF_PROG_TEST_RUN byte-parity anchor (native pure-core vs real bytecode)
-	cargo build -p xdp-dp
-	sudo -E $$(command -v cargo) test -p xdp-dp --test anchor_uplink -- --ignored --exact uplink_rx_bytecode_matches_native_sim
-	sudo -E $$(command -v cargo) test -p xdp-dp --test anchor_lb -- --ignored --exact uplink_rx_lb_deliver_bytecode_matches_native_sim
+	cargo build -p flowplane
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_uplink -- --ignored --exact uplink_rx_bytecode_matches_native_sim
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_lb -- --ignored --exact uplink_rx_lb_deliver_bytecode_matches_native_sim
 
 .PHONY: conformance
-conformance: ## dpservice conformance suite vs `xdp-dp serve` (veth harness; needs sudo)
+conformance: ## dpservice conformance suite vs `flowplane serve` (veth harness; needs sudo)
 	./test/conformance/run.sh
 
 .PHONY: e2e

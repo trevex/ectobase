@@ -16,7 +16,7 @@ networking:
   kubeProxyMode: none
 nodes:
   - role: control-plane
-    image: kindest/node-fabric:dev
+    image: ghcr.io/trevex/ectobase/kind-node-fabric:dev
     extraMounts:
       - hostPath: PREFIX_DIR/k03-control-plane.prefix
         containerPath: /etc/fabric/prefix

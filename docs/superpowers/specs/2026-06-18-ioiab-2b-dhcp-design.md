@@ -79,14 +79,14 @@ UDP src 547 / dst 546, to the client's link-local; IPv6 + UDP checksum over the 
 ## 5. Architecture & components
 
 ```
-xdp-dp-ebpf/src/
+flowplane-ebpf/src/
   dhcp.rs            # NEW: try_dhcpv4_reply, try_dhcpv6_reply (+ option builders, checksums)
   egress.rs          # guest_tx dispatches DHCP after ARP/ND, before the forwarding pipeline
   maps.rs            # + DHCP_CONFIG (Array<DhcpConfig>), DHCP_META (HashMap<u32, DhcpMeta>)
-xdp-dp-common/src/lib.rs
+flowplane-common/src/lib.rs
                      # + DhcpConfig{ mtu, dns4[N]+len, dns6[N]+len }, DhcpMeta{ hostname[64]+len,
                      #   pxe_ip[16], boot_filename[64]+len }; layout tests
-xdp-dp/src/
+flowplane/src/
   maps.rs            # userspace DhcpConfigMap, DhcpMetaMap wrappers
   control.rs         # set_dhcp_config(); create_interface writes DHCP_META (hostname + pxe)
   grpc.rs            # create_interface decodes hostname + pxe_config -> DhcpMeta
@@ -142,7 +142,7 @@ variable-offset packet loops — the lesson from the NAT64 checksum work). The D
   this re-enables a real DHCP exchange in every test's IP-init, so DHCP is exercised suite-wide.
 
 **Regression:** the existing 88 non-DHCP conformance tests stay green; `env/netns-e2e.sh` (15) + HA
-smoke stay green; `xdp-dp-common` layout tests pass; eBPF verifier accepts both programs.
+smoke stay green; `flowplane-common` layout tests pass; eBPF verifier accepts both programs.
 
 **Lab:** add a netns DHCPv4 + DHCPv6 probe (scapy or `dhcpcd`) proving a guest obtains its IP, MTU,
 and DNS from the datapath over both families.

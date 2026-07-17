@@ -63,7 +63,7 @@ the fall-through path returns `XDP_PASS` as a safe default. Each tail-called pro
 ### Map and constants
 
 - New `BPF_MAP_TYPE_PROG_ARRAY` map `GUEST_PROGS` (aya `ProgramArray`), 4 entries.
-- Index constants in `xdp-dp-common`: `GUEST_PROG_DHCP = 0`, `GUEST_PROG_IPV4 = 1`,
+- Index constants in `flowplane-common`: `GUEST_PROG_DHCP = 0`, `GUEST_PROG_IPV4 = 1`,
   `GUEST_PROG_IPV6 = 2`.
 
 ### Loader / control plane

@@ -1,5 +1,5 @@
 // Package agent is the per-node control plane: a route-bus client that announces
-// local endpoint routes, subscribes by VNI, and drives the local xdp-dp datapath
+// local endpoint routes, subscribes by VNI, and drives the local flowplane datapath
 // as remote routes arrive.
 package agent
 
@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
-	dpv1 "github.com/trevex/xdp-dp/cni/gen/dataplanev1"
-	rbv1 "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	dpv1 "github.com/trevex/ectobase/cni/gen/dataplanev1"
+	rbv1 "github.com/trevex/ectobase/netplane/gen/routebusv1"
 )
 
-// Dataplane is the subset of xdp-dp the agent drives. dpAdapter wraps the real
+// Dataplane is the subset of flowplane the agent drives. dpAdapter wraps the real
 // DataplaneNode gRPC client; tests supply a fake.
 type Dataplane interface {
 	AddRoute(ctx context.Context, vni uint32, prefix, nexthop string, external bool) error

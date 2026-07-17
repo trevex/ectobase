@@ -54,9 +54,9 @@ Make the distributed firewall **real and unconditional**, and build the control-
 
 ### 4.1 Datapath cleanup (Rust) — revises commit `1a88241`
 - **Remove** `fw_enforcing()` (eBPF `firewall.rs`), the `FW_CONFIG` `#[map]` + `FwConfig` opener (`maps.rs`), and the `firewall_enforce` clap flag + its `fw_config.set(...)` wiring (`main.rs`).
-- **Remove** the `Maps::fw_enforcing` trait method (`xdp-dp-core`), the `GlobalMaps`/`MemMaps` impls, and the `MemMaps.fw_enforcing` field.
+- **Remove** the `Maps::fw_enforcing` trait method (`flowplane-core`), the `GlobalMaps`/`MemMaps` impls, and the `MemMaps.fw_enforcing` field.
 - `ingress.rs`/`egress.rs`: the firewall check drops on `fw_eval_dir(...) == FW_ACTION_DROP` **unconditionally** (delete `&& fw_enforcing()`).
-- `xdp-dp-sim` `SimNode::uplink` + the tests: delete the `&& self.maps.fw_enforcing()` gate; drop is unconditional. `deny_by_default_when_no_rules` stays.
+- `flowplane-sim` `SimNode::uplink` + the tests: delete the `&& self.maps.fw_enforcing()` gate; drop is unconditional. `deny_by_default_when_no_rules` stays.
 - `fw_eval_dir` deny-by-default verdict is unchanged (already correct).
 
 ### 4.2 Compiler controller (Go)
@@ -94,7 +94,7 @@ Make the distributed firewall **real and unconditional**, and build the control-
 ## 7. Testing
 - **Compiler controller:** envtest (`compilednic_envtest_test.go`, mirroring `natgateway_envtest_test.go`) — NIC + policy → assert the `CompiledNIC` object + its rules (incl. per-direction allow-all). Pure `Compile()` unit tests already exist.
 - **Agent:** unit test with a mock `Dataplane` + fake client (mirroring `reconcile_test.go`) — feed `CompiledNIC`s; assert `AddFwRule`/`DelFwRule` calls (add on new rule, del on removal, idempotent on no-change).
-- **Dataplane (Rust):** `cargo test -p xdp-dp-sim` green after removing the enforce gate; both BPF anchors updated (no `FW_CONFIG`) and byte-parity; `deny_by_default_when_no_rules` stays.
+- **Dataplane (Rust):** `cargo test -p flowplane-sim` green after removing the enforce gate; both BPF anchors updated (no `FW_CONFIG`) and byte-parity; `deny_by_default_when_no_rules` stays.
 - **Conformance:** updated setup (allow-all per VM) + re-enabled deny test → full suite green.
 - **Success criterion:** the agent unit test + envtest demonstrate NIC(no policy)→allow-all→flows and NIC(policy)→uncovered-denied, with enforcement unconditionally on.
 

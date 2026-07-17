@@ -186,7 +186,7 @@ import (
 	"context"
 	"testing"
 
-	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
+	netv1 "github.com/trevex/flowplane/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -291,7 +291,7 @@ import (
 	"context"
 	"fmt"
 
-	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
+	netv1 "github.com/trevex/flowplane/api/v1alpha1"
 )
 
 // desiredEgressVNIs returns the VNIs this node hosts that need internet egress: a VNI whose VPC has a

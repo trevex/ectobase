@@ -1,4 +1,4 @@
-module github.com/trevex/xdp-dp/api
+module github.com/trevex/ectobase/api
 
 go 1.26.0
 

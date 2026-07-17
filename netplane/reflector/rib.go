@@ -6,7 +6,7 @@ import (
 	"sort"
 	"sync"
 
-	pb "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	pb "github.com/trevex/ectobase/netplane/gen/routebusv1"
 )
 
 // Sink is a subscriber's outbound path. Send MUST NOT block — implementations
@@ -80,9 +80,9 @@ type RIB struct {
 
 func NewRIB() *RIB {
 	return &RIB{
-		routes:      map[routeKey]routeEntry{},
-		byOrigin:    map[string]map[routeKey]struct{}{},
-		subscribers: map[uint32]map[string]Sink{},
+		routes:         map[routeKey]routeEntry{},
+		byOrigin:       map[string]map[routeKey]struct{}{},
+		subscribers:    map[uint32]map[string]Sink{},
 		nat:            map[natKey]NatBlock{},
 		natByOrigin:    map[string]map[natKey]struct{}{},
 		public:         map[publicKey]PublicRecord{},

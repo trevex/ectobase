@@ -162,7 +162,7 @@ VM3 = VMSpec.create(vni2)
 # add it and delete manually, note that it is configured for VNI1
 VM4 = VMSpec.create(vni1)
 
-# xdp-dp drop-in: addinterface --device must name the xdp-side veth (xdtapvf_N), and the uplink
+# flowplane drop-in: addinterface --device must name the xdp-side veth (xdtapvf_N), and the uplink
 # the serve daemon attaches to is the xdp-side PF (xdtap0). Test bodies use .tap/.mac/.name/.ip.
 PF0.pci = "xdtap0"; PF1.pci = "xdtap1"
 VM1.pci = "xdtapvf_0"; VM2.pci = "xdtapvf_1"; VM3.pci = "xdtapvf_2"; VM4.pci = "xdtapvf_3"

@@ -21,7 +21,7 @@ with no datapath behavior change:
   written on the wire is byte-identical before and after.
 
 - **Part B — Opportunistic polish.** Seven independent, mechanical cleanups in `netplane` (Go)
-  and `xdp-dp` (Rust) that reduce footguns and duplication. No behavior change.
+  and `flowplane` (Rust) that reduce footguns and duplication. No behavior change.
 
 ## Part A — Sim seam closure (option B, the real fix)
 
@@ -65,7 +65,7 @@ inner_len = logical_len - ETH_LEN - IPV6_LEN
 This is *byte-identical* to every current computation: each existing value is
 `(pre-grow frame_len - ETH_LEN)`, and `post-grow logical_len = pre-grow frame_len + IPV6_LEN`.
 
-1. **`Pkt` trait — new method** (`xdp-dp-core/src/pkt.rs`):
+1. **`Pkt` trait — new method** (`flowplane-core/src/pkt.rs`):
 
    ```rust
    /// Logical (wire) length of the packet in bytes.
@@ -81,11 +81,11 @@ This is *byte-identical* to every current computation: each existing value is
      sets it to `data_end - data` (unchanged for existing linear callers, e.g. firewall reads);
      a new `RawPkt::with_logical_len(data, data_end, logical_len)` sets it explicitly.
      `logical_len()` returns the field.
-   - `VecPkt` (`xdp-dp-sim/src/pkt.rs`) gains a `logical_len: usize` field, defaulting to
+   - `VecPkt` (`flowplane-sim/src/pkt.rs`) gains a `logical_len: usize` field, defaulting to
      `buf.len()` in `from_bytes`, kept in sync by `grow_head`/`shrink_head` (±delta), plus a
      `with_logical_len(n)` / `set_logical_len(n)` setter for tests. `logical_len()` returns it.
 
-3. **`write_outer_v6` computes `inner_len`** (`xdp-dp-core/src/encap.rs`): remove `inner_len`
+3. **`write_outer_v6` computes `inner_len`** (`flowplane-core/src/encap.rs`): remove `inner_len`
    from `EncapParams`; inside `write_outer_v6` compute
    `let inner_len = pkt.logical_len().saturating_sub(ETH_LEN + IPV6_LEN) as u16;` and write it
    into the outer IPv6 `payload_length`. The write bounds check still uses `pkt.len()` (the
@@ -111,7 +111,7 @@ This is *byte-identical* to every current computation: each existing value is
    `inner_len` field from every `EncapParams` literal (`sim.rs:193`, `lb_scenario_test.rs:83`,
    `ns_scenario_test.rs:35`, `encap_test.rs:9`).
 
-7. **Regression test** (`xdp-dp-sim`, `encap_test.rs`): construct a grown `VecPkt` whose
+7. **Regression test** (`flowplane-sim`, `encap_test.rs`): construct a grown `VecPkt` whose
    `logical_len > buf.len()` (a simulated non-linear skb: linear head holds the outer header,
    logical length is larger), call `write_outer_v6`, and assert the outer IPv6 `payload_length`
    equals `logical_len - ETH_LEN - IPV6_LEN`, **not** `buf.len() - ETH_LEN - IPV6_LEN`. This
@@ -120,7 +120,7 @@ This is *byte-identical* to every current computation: each existing value is
 
 8. **Verifier load-anchors** for the three tc classifiers that have none today —
    `tc_guest_tx` (`tc.rs:27`), `tc_guest_nat64` (`tc.rs:248`), `tc_guest_dhcp` (`tc.rs:265`).
-   Follow the pattern in `xdp-dp/tests/verify_edge_wan_rx.rs:32`, but cast the loaded program
+   Follow the pattern in `flowplane/tests/verify_edge_wan_rx.rs:32`, but cast the loaded program
    to `SchedClassifier` instead of `Xdp`.
 
 ### Non-goals (Part A)
@@ -161,11 +161,11 @@ Each item is independently committable. No behavior change.
    `agent/natreconcile.go:31`, `reflector/nattable.go:9`, `reflector/publictable.go:9` into
    shared types.
 
-### Rust (xdp-dp)
+### Rust (flowplane)
 
 7. **`DpErr` enum replacing `Result<_, ()>`** across 12 sites (`uplink.rs:35`,
    `encap.rs:51,72`, `nat64.rs:267,661,953`, `ingress.rs:101,320,345`, `v6.rs:93,141`,
-   `egress.rs:193`). A small error enum in `xdp-dp-core` with **coarse semantic variants**
+   `egress.rs:193`). A small error enum in `flowplane-core` with **coarse semantic variants**
    (e.g. `Bounds`, `Parse`, `Unsupported`, `NoRoute`) — each site maps to whichever fits.
    Constraints: `no_std`-compatible (no `std::error::Error` impl), verifier-friendly (no
    panics, no allocation), `#[derive(Copy, Clone, PartialEq, Eq, Debug)]`.
@@ -179,12 +179,12 @@ Each item is independently committable. No behavior change.
 
 - **Part A:** the new sim regression test (non-linear `VecPkt`, `logical_len > buf.len()`) is
   the load-bearing proof — it fails if `write_outer_v6` reads `len()` and passes once it reads
-  `logical_len()`. The existing `xdp-dp-sim` encap/scenario tests and any `BPF_PROG_TEST_RUN`
+  `logical_len()`. The existing `flowplane-sim` encap/scenario tests and any `BPF_PROG_TEST_RUN`
   byte-parity anchors must remain green (they assert the on-wire bytes are unchanged — the
   substitution is byte-identical). The three verifier load-anchors gate that the tc classifiers
   still load into the kernel. Because the change removes an `EncapParams` field and function
   params, "compiles + verifier-loads + existing byte-parity tests green" is a strong signal.
-- **Part B:** `go test ./...` in `netplane` and `cargo test` / verifier tests in `xdp-dp`.
+- **Part B:** `go test ./...` in `netplane` and `cargo test` / verifier tests in `flowplane`.
   The DpErr change is compile-and-verifier-gated; the Go items are covered by existing unit
   and envtest suites.
 

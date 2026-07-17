@@ -1,0 +1,31 @@
+[package]
+name = "flowplane-ebpf"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+flowplane-common = { path = "../flowplane-common", default-features = false }
+flowplane-core = { path = "../flowplane-core" }
+aya-ebpf = "0.1"
+aya-log-ebpf = "0.1"
+network-types = "0.0.7"
+
+[features]
+# Compile in `dlog!` datapath tracing (aya-log). Off by default → zero runtime/verifier cost.
+# A debug image must ALSO run with FLOWPLANE_DEBUG=1 so the loader installs the EbpfLogger drain.
+debug = []
+
+[build-dependencies]
+which = "6"
+
+[lib]
+path = "src/lib.rs"
+
+# NOTE: the bin name must DIFFER from the package name ("flowplane-ebpf"). aya-build 0.1.3 uses
+# $OUT_DIR/<pkg-name> as the build --target-dir AND copies the artifact to $OUT_DIR/<bin-name>;
+# if they match, the copy destination is the target-dir (a directory) and the build fails with
+# EISDIR. The BPF program names (uplink_rx, guest_tx) are unaffected by this file name.
+[[bin]]
+name = "flowplane-prog"
+path = "src/main.rs"

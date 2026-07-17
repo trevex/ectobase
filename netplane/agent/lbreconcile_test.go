@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
-	rbv1 "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	netv1 "github.com/trevex/ectobase/api/v1alpha1"
+	rbv1 "github.com/trevex/ectobase/netplane/gen/routebusv1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"

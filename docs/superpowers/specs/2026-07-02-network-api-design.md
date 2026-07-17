@@ -14,7 +14,7 @@ The user-facing network API for the platform: a **lean, hybrid** CRD set that le
 ## 2. Key principles
 
 - **Overlay IPs are user-specified** on the NIC (`spec.ips`) — the platform does **not** allocate them.
-- **The only allocation is the underlay** — each NIC endpoint gets an IPv6 `/128` from the **host's underlay `/64`**, which in a proper cluster is the **node's kubelet IP** (its loopback/dummy identity in the unnumbered IPv6-only BGP fabric). Resolution precedence (implemented in `xdp-dp serve`): (1) an explicit `--local-underlay` flag **overrides** — for tests / hosts without a fabric loopback; (2) the kubelet node IP from the downward-API `HOST_IP`/`NODE_IP` env (`status.hostIP`); (3) inference from the `lo`/`dummy*` fabric-loopback address. No CRD. This is what "IPAM" means here; it replaces sub-project ①'s placeholder overlay-host allocator.
+- **The only allocation is the underlay** — each NIC endpoint gets an IPv6 `/128` from the **host's underlay `/64`**, which in a proper cluster is the **node's kubelet IP** (its loopback/dummy identity in the unnumbered IPv6-only BGP fabric). Resolution precedence (implemented in `flowplane serve`): (1) an explicit `--local-underlay` flag **overrides** — for tests / hosts without a fabric loopback; (2) the kubelet node IP from the downward-API `HOST_IP`/`NODE_IP` env (`status.hostIP`); (3) inference from the `lo`/`dummy*` fabric-loopback address. No CRD. This is what "IPAM" means here; it replaces sub-project ①'s placeholder overlay-host allocator.
 - **Overlay IPs are free-form** for now (no `VPC`-level range validation).
 - **VNI is a global space, allocated by the central cluster** (`VPC.status.vni`); when `VPC`s are pooled/synced from central, allocation happens there. Single-cluster (degenerate) = local. User-overridable via optional `spec.vni`.
 - **Hybrid decomposition:** thin NIC; VIP/NAT/LB/Firewall/Peering are their own resources referencing NICs/VPCs by ref or **label selector** (k8s-idiomatic, shareable).
@@ -163,4 +163,4 @@ This is the core of **sub-project ② (the aggregated API + logical model)** sur
 **Residual:**
 - How the central **VNI allocator** syncs allocations down to pooled/attached clusters (sub-project ②/③).
 - Exact per-host `/64` **inference** — which interface/label identifies the fabric loopback, and the fallback if ambiguous.
-- **Go module path** — code is currently under `github.com/trevex/xdp-dp`; whether to re-root under an `ectobase` module is a separate repo decision (the API *group* is `net.ectobase.dev` regardless).
+- **Go module path** — code is currently under `github.com/trevex/flowplane`; whether to re-root under an `ectobase` module is a separate repo decision (the API *group* is `net.ectobase.dev` regardless).

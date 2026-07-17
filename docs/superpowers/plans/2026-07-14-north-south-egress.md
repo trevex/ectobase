@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give overlay tenants **egress to the internet** through a **fleet of `xdp-dp` gateway nodes** that is **drain-safe** (any gateway removable mid-flow with ~zero impact), and prove it on the containerlab fabric — including a **mid-flow gateway-drain e2e**.
+**Goal:** Give overlay tenants **egress to the internet** through a **fleet of `flowplane` gateway nodes** that is **drain-safe** (any gateway removable mid-flow with ~zero impact), and prove it on the containerlab fabric — including a **mid-flow gateway-drain e2e**.
 
-**Architecture:** A gateway-role `xdp-dp` subscribes to a dedicated **PublicVNI**, decaps tenant egress, **SNATs** to a deterministic `(public-IP, port-block)` per source, and forwards to a WAN edge. Return traffic BGP-ECMPs to *any* gateway, which routes it to the block's owner via **NEIGHBOR_NAT** (already implemented) and reverse-SNATs — **statelessly recomputed from the deterministic map when conntrack misses**, so a drain/reassignment survives. VyOS/WAN edge does BGP + physical egress. Reuses the existing NAT datapath (`create_nat`, `add_neighbor_nat`, `nat.rs`).
+**Architecture:** A gateway-role `flowplane` subscribes to a dedicated **PublicVNI**, decaps tenant egress, **SNATs** to a deterministic `(public-IP, port-block)` per source, and forwards to a WAN edge. Return traffic BGP-ECMPs to *any* gateway, which routes it to the block's owner via **NEIGHBOR_NAT** (already implemented) and reverse-SNATs — **statelessly recomputed from the deterministic map when conntrack misses**, so a drain/reassignment survives. VyOS/WAN edge does BGP + physical egress. Reuses the existing NAT datapath (`create_nat`, `add_neighbor_nat`, `nat.rs`).
 
-**Tech Stack:** Rust/aya (xdp-dp NAT datapath), Go (netplane: NATGateway CRD, port-block allocator, gateway agent, routebus PublicVNI records), containerlab/kind/FRR (fabric + WAN edge), bash/Go e2e.
+**Tech Stack:** Rust/aya (flowplane NAT datapath), Go (netplane: NATGateway CRD, port-block allocator, gateway agent, routebus PublicVNI records), containerlab/kind/FRR (fabric + WAN edge), bash/Go e2e.
 
 **Spec:** `docs/superpowers/specs/2026-07-14-north-south-gateway-design.md`. **Scope:** EGRESS only (this plan). Ingress L4 LB + DSR and floating-IP are separate plans (the spec's §10 DSR spike gates ingress).
 
@@ -36,27 +36,27 @@ Datapath investigation showed the existing eBPF **already implements dpservice's
   - **BGP:** the edge announces the `nat_ip` prefixes (and a default) to the WAN so returns route to it.
   - **New eBPF:** the `wan_rx` program (the vni-agnostic lookup already landed; `NeighborNatEntry` already has `vni`). **Test:** a netns harness (edge with a WAN veth + a fabric veth + a source netns) exercising egress + return both ways BEFORE the fabric e2e. Verifier-sensitive — implement carefully.
 
-  **Edge topology (decided):** the edge = **VyOS + an `xdp-dp` sidecar sharing VyOS's netns** — the same netns-sharing pattern as the in-node FRR and the reference fabric's Tayga-on-VyOS sidecar. **VyOS owns the WAN uplink**: physical/host egress, **BGP** (announces the `nat_ip`/VIP ranges to the real WAN), routing/firewall, and the final **lab-range → host masquerade** (`clabwan` trick, so TEST-NET ranges reach the real internet). **`xdp-dp` (sidecar)** owns only the overlay: it attaches to the fabric- and WAN-facing interfaces in VyOS's netns. This **shrinks D7** because VyOS's kernel does the WAN forwarding:
+  **Edge topology (decided):** the edge = **VyOS + an `flowplane` sidecar sharing VyOS's netns** — the same netns-sharing pattern as the in-node FRR and the reference fabric's Tayga-on-VyOS sidecar. **VyOS owns the WAN uplink**: physical/host egress, **BGP** (announces the `nat_ip`/VIP ranges to the real WAN), routing/firewall, and the final **lab-range → host masquerade** (`clabwan` trick, so TEST-NET ranges reach the real internet). **`flowplane` (sidecar)** owns only the overlay: it attaches to the fabric- and WAN-facing interfaces in VyOS's netns. This **shrinks D7** because VyOS's kernel does the WAN forwarding:
   - Egress (fabric→WAN): `uplink_rx` decaps → **`XDP_PASS`** the inner IPv4 to the VyOS kernel, which routes/masquerades to the real WAN (no custom WAN-forward needed).
   - Return (WAN→fabric): `wan_rx` catches only `nat_ip`-destined plain IPv4 → `neighbor_nat_lookup_any` → encap to owner → fabric; everything else passes to VyOS.
-  - **Spike/decision:** VyOS should **route the `nat_ip` range to the sidecar and NOT masquerade it** (masquerade only the last hop to the real host if off-box internet is needed), so the `nat_ip → owner` decision stays entirely in `xdp-dp`. The netns harness + fabric e2e validate this.
+  - **Spike/decision:** VyOS should **route the `nat_ip` range to the sidecar and NOT masquerade it** (masquerade only the last hop to the real host if off-box internet is needed), so the `nat_ip → owner` decision stays entirely in `flowplane`. The netns harness + fabric e2e validate this.
 - **D8 — Egress e2e on the fabric (real ranges + interop):** per [[feedback-ns-edge-real-ranges-testing]] — do NOT use a toy fixed server. Revise the WAN edge (T4) to the icn/sandbox **`clabwan` model**: the edge holds **real IPv4 AND IPv6 public ranges** (the SNAT `nat_ip` pool + a v6 pool) and **masquerades them toward the actual host/internet** (host-agnostic nftables/iptables masquerade keyed on the lab source ranges) plus a **Tayga-style NAT64** translator (v6 overlay → v4 internet, `64:ff9b::/96`; our datapath has `nat64.rs`). e2e asserts a source VM reaches the **real internet** through its hypervisor SNAT + the edge, and **tests cross-family interop** (NAT44 / NAT66 / NAT64). Fix the T4 collision: the `nat_ip` pool must differ from any test target.
 
 ---
 
 ## File Structure
 
-**Datapath (Rust, `xdp-dp`):**
-- `xdp-dp/src/main.rs` — a `--role gateway` serve mode (WAN uplink + PublicVNI subscribe; no local VMs) (Modify).
-- `xdp-dp/src/control.rs` / `nat.rs` — deterministic reverse-SNAT fallback: on a conntrack miss for a return packet whose `(nat_ip, dport)` matches a local NAT block, reverse-SNAT from the block→source map instead of dropping (Modify).
+**Datapath (Rust, `flowplane`):**
+- `flowplane/src/main.rs` — a `--role gateway` serve mode (WAN uplink + PublicVNI subscribe; no local VMs) (Modify).
+- `flowplane/src/control.rs` / `nat.rs` — deterministic reverse-SNAT fallback: on a conntrack miss for a return packet whose `(nat_ip, dport)` matches a local NAT block, reverse-SNAT from the block→source map instead of dropping (Modify).
 - `api/proto/dataplane/v1/dataplane.proto` — `AddNatSource`/`WithdrawNatSource` + `AddNeighborNat`/`WithdrawNeighborNat` on `dataplane.v1` (protocol-agnostic, like AddRoute) (Modify).
-- `xdp-dp/src/node.rs` — implement those RPCs (delegate to existing `create_nat`/`add_neighbor_nat`) (Modify).
+- `flowplane/src/node.rs` — implement those RPCs (delegate to existing `create_nat`/`add_neighbor_nat`) (Modify).
 
 **Control plane (Go, `netplane`):**
 - `api/v1alpha1/natgateway_types.go` — flesh out the scaffold (Modify).
 - `api/proto/routebus/v1/routebus.proto` — a PublicVNI `NatBlock` record (nat_ip, port-block, source, owner underlay) (Modify).
 - `netplane/allocator/portblock.go` — deterministic `(public-IP, port-block)` allocator + overflow (Create).
-- `netplane/agent/gateway.go` — gateway agent: reconcile NATGateway → program local gateway `xdp-dp` NAT + announce/learn NatBlocks via routebus (Create).
+- `netplane/agent/gateway.go` — gateway agent: reconcile NATGateway → program local gateway `flowplane` NAT + announce/learn NatBlocks via routebus (Create).
 - `netplane/cmd/gateway/main.go` — gateway binary (Create).
 
 **Fabric + e2e:**
@@ -205,9 +205,9 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ### Task 3: dataplane.v1 NAT RPCs (protocol-agnostic)
 
-**Files:** Modify `api/proto/dataplane/v1/dataplane.proto`, `xdp-dp/src/node.rs`; regenerate stubs.
+**Files:** Modify `api/proto/dataplane/v1/dataplane.proto`, `flowplane/src/node.rs`; regenerate stubs.
 
-**Context:** Mirror the AddRoute pattern: give `xdp-dp` protocol-agnostic RPCs the gateway agent drives, delegating to the existing `Control::create_nat` / `add_neighbor_nat`.
+**Context:** Mirror the AddRoute pattern: give `flowplane` protocol-agnostic RPCs the gateway agent drives, delegating to the existing `Control::create_nat` / `add_neighbor_nat`.
 
 - [ ] **Step 1: Add RPCs + messages**
 
@@ -225,7 +225,7 @@ message WithdrawNeighborNatResponse {}
 
 - [ ] **Step 2: Regen + red state**
 
-Run: `nix develop --command sh -c 'export PATH=/home/nik/go/bin:$PATH && make proto-go && cargo build -p xdp-dp 2>&1 | tail -3'` → Rust fails (trait grew). Expected.
+Run: `nix develop --command sh -c 'export PATH=/home/nik/go/bin:$PATH && make proto-go && cargo build -p flowplane 2>&1 | tail -3'` → Rust fails (trait grew). Expected.
 
 - [ ] **Step 3: Implement handlers in node.rs**
 
@@ -234,7 +234,7 @@ Add the four handlers, parsing IPs (reuse the `parse_prefix`/`parse_nexthop6` he
 - [ ] **Step 4: Build + clippy green**; **Step 5: netns smoke** (extend `test/route-netns.sh` or a new `test/nat-netns.sh`: AttachInterface a source, `AddNatSource`, assert the greppable line). **Step 6: Commit.**
 
 ```bash
-git add api/proto/dataplane/v1/dataplane.proto cni/gen/dataplanev1 xdp-dp/src/node.rs test/nat-netns.sh
+git add api/proto/dataplane/v1/dataplane.proto cni/gen/dataplanev1 flowplane/src/node.rs test/nat-netns.sh
 git commit -m "feat(dataplane): AddNatSource/AddNeighborNat on dataplane.v1
 
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
@@ -264,13 +264,13 @@ Run: `PATH=$HOME/go/bin:$PATH containerlab inspect -t hack/clab/ipv6-fabric.clab
 
 ---
 
-### Task 5: Gateway role in xdp-dp + gateway agent + binary
+### Task 5: Gateway role in flowplane + gateway agent + binary
 
-**Files:** Modify `xdp-dp/src/main.rs` (`--role gateway`); Create `netplane/agent/gateway.go`, `netplane/cmd/gateway/main.go`; Modify `api/proto/routebus/v1/routebus.proto` (NatBlock record).
+**Files:** Modify `flowplane/src/main.rs` (`--role gateway`); Create `netplane/agent/gateway.go`, `netplane/cmd/gateway/main.go`; Modify `api/proto/routebus/v1/routebus.proto` (NatBlock record).
 
 - [ ] **Step 1: `--role gateway` serve mode**
 
-In `xdp-dp` serve, add `--role gateway` (default `node`): a gateway attaches `uplink_rx` to BOTH the fabric uplink(s) AND a `--wan-uplink`, subscribes conceptually to the PublicVNI (decaps PublicVNI-encapped egress), and does NOT require local VM interfaces. Reuse the existing datapath; the difference is the WAN uplink + that egress SNAT is applied at this node. Verify `xdp-dp serve --role gateway --wan-uplink eth3 …` starts.
+In `flowplane` serve, add `--role gateway` (default `node`): a gateway attaches `uplink_rx` to BOTH the fabric uplink(s) AND a `--wan-uplink`, subscribes conceptually to the PublicVNI (decaps PublicVNI-encapped egress), and does NOT require local VM interfaces. Reuse the existing datapath; the difference is the WAN uplink + that egress SNAT is applied at this node. Verify `flowplane serve --role gateway --wan-uplink eth3 …` starts.
 
 - [ ] **Step 2: routebus NatBlock record**
 
@@ -290,7 +290,7 @@ Add to `routebus.proto` a server/client message so gateways learn every source's
 
 - [ ] **Step 1: Deploy + drive a single gateway**
 
-Redeploy the fabric (now with k03 gateway + WAN edge). Deploy xdp-dp (gateway role on k03) + the gateway agent + reflector. Create a `VPC` + a `NATGateway{publicIPs, portsPerSource}` + a source `NetworkInterface` on a compute node; attach a source endpoint; set the compute VPC default route → PublicVNI → the gateway.
+Redeploy the fabric (now with k03 gateway + WAN edge). Deploy flowplane (gateway role on k03) + the gateway agent + reflector. Create a `VPC` + a `NATGateway{publicIPs, portsPerSource}` + a source `NetworkInterface` on a compute node; attach a source endpoint; set the compute VPC default route → PublicVNI → the gateway.
 
 - [ ] **Step 2: Assert egress reachability**
 
@@ -300,7 +300,7 @@ From the source endpoint netns, connect to `wan-server` (through the gateway SNA
 
 ### Task 7: Drain-safe reverse-SNAT (conntrack-as-cache)
 
-**Files:** Modify `xdp-dp-ebpf/src/nat.rs` (+ `egress.rs`/`ingress.rs` as needed), `xdp-dp/src/control.rs`.
+**Files:** Modify `flowplane-ebpf/src/nat.rs` (+ `egress.rs`/`ingress.rs` as needed), `flowplane/src/control.rs`.
 
 **Context:** Today the return reverse-SNAT relies on the forward conntrack entry (`CT_REWRITE_DST`). For drain-safety, when a return packet `(nat_ip, dport)` hits a gateway with **no conntrack entry** but a **matching local NAT block** (source table), reverse-SNAT from the deterministic block→source map and re-encap to the source — instead of dropping. Conntrack stays as the fast path (cache); the deterministic map is the correctness fallback.
 

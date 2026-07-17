@@ -90,14 +90,14 @@ The chosen mechanism must produce, for a guest TCP packet with offload **on**:
 
 ## Components / files
 
-- `xdp-dp-ebpf/src/tc.rs` — the two encap branches (IPv4-inner ~line 202, IPv6-inner ~line 132): apply
+- `flowplane-ebpf/src/tc.rs` — the two encap branches (IPv4-inner ~line 202, IPv6-inner ~line 132): apply
   the chosen `csum_start`-preserving mechanism to the `adjust_room`/`write_outer_v6` sequence. One
   responsibility: tc guest-egress verdict execution.
-- `xdp-dp-ebpf/src/nat64.rs` — the NAT64 encap path (`adjust_room(+IPV6_LEN, …)`): same fix so
+- `flowplane-ebpf/src/nat64.rs` — the NAT64 encap path (`adjust_room(+IPV6_LEN, …)`): same fix so
   translated IPv4→IPv6 egress is also correct. One responsibility: NAT64 translate+encap.
-- `xdp-dp/src/attach.rs` — **remove** the `ethtool -K … tx-checksum-ip-generic off` block (lines
+- `flowplane/src/attach.rs` — **remove** the `ethtool -K … tx-checksum-ip-generic off` block (lines
   210-219). One responsibility: veth/netns setup.
-- `xdp-dp-core/src/encap.rs` — if the fix needs the inner-L4 offset at encap time, expose it from the
+- `flowplane-core/src/encap.rs` — if the fix needs the inner-L4 offset at encap time, expose it from the
   pure core (it already computes `inner_len`); keep the checksum-offset logic testable in the sim.
 - `test/scenario-guest-csum.sh` (new) — the live regression: offload **on**, assert on-wire inner TCP
   `cksum (correct)` on veth (natpod) and, where available, the tap path. One responsibility: checksum
@@ -114,7 +114,7 @@ final fold — the only bug is the lost `csum_start`.
 
 ## Testing
 
-- **Unit / sim (`xdp-dp-core`, `xdp-dp-sim`):** the pure encap computes the correct inner-L4
+- **Unit / sim (`flowplane-core`, `flowplane-sim`):** the pure encap computes the correct inner-L4
   offset/`csum_offset` for IPv4-inner and IPv6-inner; assert the offset the datapath will hand the
   kernel. (The sim can't model skb offload, so on-wire correctness is a live test — noted.)
 - **Verifier anchors:** the existing `sudo -E cargo test --test anchor_*`/`verify_edge_wan_rx` must

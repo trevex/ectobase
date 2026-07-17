@@ -24,8 +24,8 @@ This spec delivers a **walking skeleton**: one North-South path end-to-end throu
 
 **Goals**
 - A `CompiledNIC` CRD + a minimal compiler controller producing it from the high-level CRDs.
-- Extract the N-S datapath subset into `xdp-dp-core` behind `Maps`/`Pkt` traits, with the eBPF programs re-expressed as thin glue over the core (existing conformance suite stays green — regression guard).
-- An `xdp-dp-sim` crate that runs the core natively and lets a test express: *external packet → edge encap → host decap → guest deliver*, asserting at each hop.
+- Extract the N-S datapath subset into `flowplane-core` behind `Maps`/`Pkt` traits, with the eBPF programs re-expressed as thin glue over the core (existing conformance suite stays green — regression guard).
+- An `flowplane-sim` crate that runs the core natively and lets a test express: *external packet → edge encap → host decap → guest deliver*, asserting at each hop.
 - One `BPF_PROG_TEST_RUN` anchor asserting native/bytecode byte-parity for that path.
 
 **Non-goals (this spec)**
@@ -52,7 +52,7 @@ This spec delivers a **walking skeleton**: one North-South path end-to-end throu
                                         │                            │
                         gRPC → real dataplane maps      apply → native Maps (HashMap)
                                                                      │
-                                          craft pkt → xdp-dp-core → pkt out   pillar 2
+                                          craft pkt → flowplane-core → pkt out   pillar 2
 ```
 
 Three test seams fall out of this shape:
@@ -110,9 +110,9 @@ status: { state: Ready, generationApplied: 7 }
 
 ### 5.1 Crates
 
-- **`xdp-dp-core`** *(new, `no_std`, natively testable)* — the extracted datapath functions, generic over `Maps` + `Pkt`. Depends on `xdp-dp-common` for the POD key/value types (already the shared home for `IfaceKey`, `RouteValue`, `CtKey`, `CtEntry`, `NatKey`, `FwRule`, …).
-- **`xdp-dp-ebpf`** — depends on `xdp-dp-core`; provides the aya impls (`Maps` = wrappers over the existing `#[map]` statics in `maps.rs`; `Pkt` = over `ctx.data()/data_end()`). The `#[xdp]`/`#[classifier]` fns shrink to glue: build the impls, call core.
-- **`xdp-dp-sim`** *(new, `std`, dev/test)* — native `Maps` (HashMaps + tiny LPM/LRU stand-ins), native `Pkt` (over a `Vec<u8>`), `SimNode`, `apply(&CompiledNIC)`, and packet crafting via `etherparse`.
+- **`flowplane-core`** *(new, `no_std`, natively testable)* — the extracted datapath functions, generic over `Maps` + `Pkt`. Depends on `flowplane-common` for the POD key/value types (already the shared home for `IfaceKey`, `RouteValue`, `CtKey`, `CtEntry`, `NatKey`, `FwRule`, …).
+- **`flowplane-ebpf`** — depends on `flowplane-core`; provides the aya impls (`Maps` = wrappers over the existing `#[map]` statics in `maps.rs`; `Pkt` = over `ctx.data()/data_end()`). The `#[xdp]`/`#[classifier]` fns shrink to glue: build the impls, call core.
+- **`flowplane-sim`** *(new, `std`, dev/test)* — native `Maps` (HashMaps + tiny LPM/LRU stand-ins), native `Pkt` (over a `Vec<u8>`), `SimNode`, `apply(&CompiledNIC)`, and packet crafting via `etherparse`.
 
 ### 5.2 The two traits
 
@@ -171,7 +171,7 @@ let delivered = host.run(Prog::UplinkRx, &out.pkt);  // decap + FW + conntrack
 assert_delivered_to_guest(&delivered, overlay_ip);
 ```
 
-- **`SimNode`** owns a native `Maps` + config and exposes `run(Prog, &[u8]) -> SimOutput { verdict, pkt }` by calling the `xdp-dp-core` entry fns with the native impls.
+- **`SimNode`** owns a native `Maps` + config and exposes `run(Prog, &[u8]) -> SimOutput { verdict, pkt }` by calling the `flowplane-core` entry fns with the native impls.
 - **`apply(&CompiledNIC)`** is the shared lowering (`CompiledNIC → map writes`), factored so the sim exercises the *real* wiring rather than a parallel reimplementation. Where practical, the agent's gRPC-handler map writes and `apply` share this lowering.
 - Packet crafting is **`etherparse`** (pure Rust, in-process) — no scapy/Python/FFI on the fast path. Scapy remains only in the existing conformance suite.
 
@@ -184,14 +184,14 @@ A privileged, separately-gated test: load the real compiled programs, populate t
 The one N-S path, end to end:
 
 1. `CompiledNIC` CRD type + deepcopy/registration + a **minimal compiler** covering only the slice (identity, underlay, one ingress FW allow rule).
-2. `xdp-dp-core` crate with `Maps`/`Pkt` traits + the N-S subset ported: `wan_rx` (encap) and `uplink_rx` (decap + FW + conntrack). eBPF wrappers wired.
-3. `xdp-dp-sim` crate: native impls, `SimNode`, `apply(&CompiledNIC)`, `etherparse` crafting.
+2. `flowplane-core` crate with `Maps`/`Pkt` traits + the N-S subset ported: `wan_rx` (encap) and `uplink_rx` (decap + FW + conntrack). eBPF wrappers wired.
+3. `flowplane-sim` crate: native impls, `SimNode`, `apply(&CompiledNIC)`, `etherparse` crafting.
 4. **The green test:** external → `wan_rx` encap → `uplink_rx` decap → guest-deliver, asserting encap headers, FW allow, and a conntrack entry created.
 5. **One** `BPF_PROG_TEST_RUN` anchor asserting byte-parity for that path.
 
 ## 7. Verification
 
-- `cargo test -p xdp-dp-core -p xdp-dp-sim` — fast, no root; the feature-coverage home.
+- `cargo test -p flowplane-core -p flowplane-sim` — fast, no root; the feature-coverage home.
 - `cargo build` + existing `test/conformance` — the real datapath is unchanged in behavior and stays green (regression guard on the extraction).
 - `make sim-anchor` (privileged) — the `BPF_PROG_TEST_RUN` byte-parity anchor.
 - Go unit/envtest — the compiler produces the expected `CompiledNIC` from CRDs.
