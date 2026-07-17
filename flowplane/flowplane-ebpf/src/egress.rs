@@ -194,6 +194,13 @@ pub fn forward_decision_v6(
     })
 }
 
+// Force-inline into the int-returning `guest_tx` entry so the DHCP `bpf_tail_call` below always
+// lives in a function the verifier sees as returning `int` (a `Result`-returning bpf-to-bpf
+// subprogram would trip "tail_call is only allowed in functions that return 'int'"). Without this
+// pin the tail-call site's inlining is at LLVM's whole-object discretion, so an unrelated code-size
+// change elsewhere (e.g. the ingress `ct_apply` core call) can flip `try_guest_tx` from inlined to
+// outlined and break the verifier.
+#[inline(always)]
 pub fn try_guest_tx(ctx: &XdpContext) -> Result<u32, DpErr> {
     // Identify the port by its ingress ifindex.
     let ifindex = unsafe { (*ctx.ctx).ingress_ifindex };

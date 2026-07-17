@@ -152,6 +152,60 @@ impl SimNode {
         }
     }
 
+    /// Host uplink_rx for the NAT return / reverse-DNAT path. `encapped` is the fabric frame
+    /// `[OuterEth(14)][OuterIPv6(40)][inner IPv4 ...]` returning from an external peer to a NAT'd
+    /// guest; `u`/`guest_mac` come from `UNDERLAY[outer_dst]` (base tap). Composes the REAL core fns
+    /// in the exact order + gates of the eBPF `try_uplink_rx` non-LB NAT branch (`ingress.rs`
+    /// 160-209 + the base decap tail):
+    ///   1. build the inner 5-tuple key; if the inner dst is a registered nat_ip, zero the external
+    ///      src ip+port so it hits the peer-independent `(vni,0,nat_ip,0,nat_port)` reverse entry;
+    ///   2. CT lookup: if the entry has `CT_REWRITE_DST`, apply the reverse-DNAT translation
+    ///      (`ct_apply`: inner dst IP -> guest, dst port -> orig sport, +IP/L4 checksums);
+    ///   3. decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest.
+    /// Returns the delivery `Action` + resulting (decapped, reverse-DNAT'd) frame bytes.
+    ///
+    /// Scope: the `ct_touch` refresh, NAT64 v4->v6 expansion, neighbor-NAT reforward, and inner
+    /// `dnat_ingress` (VIP) branches are NOT modelled here — this seam covers the network-NAT
+    /// reverse-DNAT apply (`ct_apply`) + decap, which is the byte-output-relevant slice for a
+    /// plain (non-NAT64) NAT return.
+    pub fn uplink_nat_return(
+        &mut self,
+        encapped: &[u8],
+        vni: u32,
+        u: UnderlayValue,
+        guest_mac: [u8; 6],
+    ) -> SimOut {
+        use flowplane_common::CT_REWRITE_DST;
+        use flowplane_core::conntrack::ct_apply;
+
+        let inner_off = ETH_LEN + IPV6_LEN;
+        let mut pkt = VecPkt::from_bytes(encapped);
+
+        // 1. Build the inner 5-tuple key; NAT returns are demuxed peer-independently.
+        if let Some(mut key) = ct_key(&pkt, inner_off, vni) {
+            if self.maps.nat_ips.contains(&(vni, key.dst_ip)) {
+                key.src_ip = [0; 4];
+                key.src_port = 0;
+            }
+            // 2. Reverse-DNAT apply when the matched entry carries CT_REWRITE_DST.
+            if let Some(e) = self.maps.conntrack_get(&key) {
+                if e.flags & CT_REWRITE_DST != 0 {
+                    ct_apply(&mut pkt, inner_off, &e);
+                }
+            }
+        }
+
+        // 3. Decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest.
+        let action = match decap_and_rewrite(&mut pkt, u.tap_ifindex, guest_mac) {
+            Ok(a) => a,
+            Err(_) => Action::Drop,
+        };
+        SimOut {
+            action,
+            pkt: pkt.into_bytes(),
+        }
+    }
+
     /// Convenience wrapper for a plain non-LB delivery to `tap` (used by `ns_scenario_test`): builds
     /// a base `UnderlayValue` and delegates to [`SimNode::uplink`]. With no LB maps set,
     /// `lb_select_forward` returns None and the base path runs.

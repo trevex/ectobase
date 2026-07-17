@@ -10,11 +10,12 @@
 //! tests share a single implementation. Mirrors dpservice (30 s default, 24 h established-TCP).
 
 use crate::maps::Maps;
-use crate::parse::{l4_ports, IPPROTO_TCP};
+use crate::parse::{l4_ports, IPPROTO_ICMP, IPPROTO_TCP, IPPROTO_UDP};
 use crate::pkt::Pkt;
+use flowplane_common::csum::{csum_replace2, csum_replace4};
 use flowplane_common::{
-    CtEntry, CtKey, CT_F_DEFAULT, TCP_ESTABLISHED, TCP_FINWAIT, TCP_NEW_SYN, TCP_NEW_SYNACK,
-    TCP_RST_FIN,
+    CtEntry, CtKey, CT_F_DEFAULT, CT_REWRITE_DST, CT_REWRITE_SRC, TCP_ESTABLISHED, TCP_FINWAIT,
+    TCP_NEW_SYN, TCP_NEW_SYNACK, TCP_RST_FIN,
 };
 
 /// Idle timeout for non-established flows (30 s), in nanoseconds. Mirrors dpservice.
@@ -100,6 +101,117 @@ pub fn invert_key(k: &CtKey) -> CtKey {
         dst_port: k.src_port,
         proto: k.proto,
         _pad: [0; 3],
+    }
+}
+
+/// Apply a conntrack entry's translation to the IPv4 packet at `ip_off`, ported over the `Pkt`
+/// trait so the SAME rewrite runs in eBPF and natively. Faithful port of the eBPF
+/// `conntrack::ct_apply`:
+///
+/// - `CT_REWRITE_SRC` rewrites the inner src IP (+ src L4 port / ICMP id); otherwise `CT_REWRITE_DST`
+///   rewrites the inner dst IP (+ dst L4 port). Flag-less DEFAULT entries carry no translation and
+///   are left untouched (returns without writing).
+/// - The address change is folded into the IP checksum and into the L4 checksum (TCP / non-zero
+///   UDP), and the port change (when `xlate_port != 0`) into the L4 checksum, with the exact RFC-1624
+///   incremental updates of the inline path. ICMP folds the id change into the ICMP checksum.
+///
+/// Only handles standard 20-byte IPv4 headers (IHL == 5); packets with options were dropped at
+/// ingress, so `l4 = ip_off + 20` is a CONSTANT offset (no variable-offset provenance to fight).
+///
+/// eBPF-verifier seam: the inline path split reads (phase 1) from writes (phase 3) with raw pointers
+/// re-derived against a single dominating bound. Here we use the READ-MODIFY-WRITE window idiom (as
+/// in `nat::snat_egress`): ONE `read_array::<20>(ip_off)` proves the IP header window, ONE
+/// `read_array::<N>(l4)` proves the L4 window; the address/port/checksum edits happen inside the
+/// stack-local arrays; then ONE `write_array` per window re-checks the SAME range and stores it back.
+/// Byte-identical to the deleted inline rewrite (same fields, same checksum ops, same conditions).
+#[inline(always)]
+pub fn ct_apply<P: Pkt>(pkt: &mut P, ip_off: usize, e: &CtEntry) {
+    // DEFAULT (flag-less) entries carry no translation — never rewrite, or we'd null the address.
+    if e.flags & (CT_REWRITE_SRC | CT_REWRITE_DST) == 0 {
+        return;
+    }
+    // Read the whole 20-byte IPv4 header window (faithful to the eBPF `ip_off + 20 > data_end`).
+    let mut ip = match pkt.read_array::<20>(ip_off) {
+        Some(h) => h,
+        None => return,
+    };
+    // Only handle standard 20-byte headers (IHL == 5); options-carrying flows were dropped upstream.
+    if ip[0] & 0x0f != 5 {
+        return;
+    }
+    let proto = ip[9];
+    let rewrite_src = e.flags & CT_REWRITE_SRC != 0;
+    // Address field offset WITHIN the IP header window: src at +12, dst at +16.
+    let addr_rel = if rewrite_src { 12 } else { 16 };
+    let old_addr: [u8; 4] = [
+        ip[addr_rel],
+        ip[addr_rel + 1],
+        ip[addr_rel + 2],
+        ip[addr_rel + 3],
+    ];
+    let new_addr = e.xlate_ip;
+
+    // IP checksum at +10: fold the address change in.
+    let old_ip_csum = u16::from_be_bytes([ip[10], ip[11]]);
+    let new_ip_csum = csum_replace4(old_ip_csum, &old_addr, &new_addr);
+    ip[10..12].copy_from_slice(&new_ip_csum.to_be_bytes());
+    // Rewrite the address in the window.
+    ip[addr_rel..addr_rel + 4].copy_from_slice(&new_addr);
+    // Store the IP header window back (single re-checked write).
+    if !pkt.write_array(ip_off, &ip) {
+        return;
+    }
+
+    // L4 rewrite. `l4 = ip_off + 20` is a constant. Port offset: src at l4+0, dst at l4+2.
+    let l4 = ip_off + 20;
+    let port_rel = if rewrite_src { 0 } else { 2 };
+    if proto == IPPROTO_TCP {
+        // TCP window = 18 bytes: ports at [0..4], checksum at [16..18].
+        if let Some(mut h) = pkt.read_array::<18>(l4) {
+            let c0 = u16::from_be_bytes([h[16], h[17]]);
+            let c1 = csum_replace4(c0, &old_addr, &new_addr);
+            let c2 = if e.xlate_port != 0 {
+                let old_port = u16::from_be_bytes([h[port_rel], h[port_rel + 1]]);
+                csum_replace2(c1, old_port, e.xlate_port)
+            } else {
+                c1
+            };
+            h[16..18].copy_from_slice(&c2.to_be_bytes());
+            if e.xlate_port != 0 {
+                h[port_rel..port_rel + 2].copy_from_slice(&e.xlate_port.to_be_bytes());
+            }
+            pkt.write_array(l4, &h);
+        }
+    } else if proto == IPPROTO_UDP {
+        // UDP window = 8 bytes: ports at [0..4], checksum at [6..8]. A zero UDP checksum stays zero.
+        if let Some(mut h) = pkt.read_array::<8>(l4) {
+            let c0 = u16::from_be_bytes([h[6], h[7]]);
+            if c0 != 0 {
+                let c1 = csum_replace4(c0, &old_addr, &new_addr);
+                let c2 = if e.xlate_port != 0 {
+                    let old_port = u16::from_be_bytes([h[port_rel], h[port_rel + 1]]);
+                    csum_replace2(c1, old_port, e.xlate_port)
+                } else {
+                    c1
+                };
+                h[6..8].copy_from_slice(&c2.to_be_bytes());
+            }
+            if e.xlate_port != 0 {
+                h[port_rel..port_rel + 2].copy_from_slice(&e.xlate_port.to_be_bytes());
+            }
+            pkt.write_array(l4, &h);
+        }
+    } else if proto == IPPROTO_ICMP && e.xlate_port != 0 {
+        // ICMP window = 8 bytes: checksum at [2..4], identifier at [4..6]. The address change does
+        // not affect the ICMP checksum; only the id change is folded in.
+        if let Some(mut h) = pkt.read_array::<8>(l4) {
+            let icmp_id = u16::from_be_bytes([h[4], h[5]]);
+            let c0 = u16::from_be_bytes([h[2], h[3]]);
+            let c1 = csum_replace2(c0, icmp_id, e.xlate_port);
+            h[2..4].copy_from_slice(&c1.to_be_bytes());
+            h[4..6].copy_from_slice(&e.xlate_port.to_be_bytes());
+            pkt.write_array(l4, &h);
+        }
     }
 }
 

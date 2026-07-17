@@ -3,7 +3,7 @@ use flowplane_common::{
     RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// An IPv4 route as stored in the sim `ROUTES` LPM trie: a `(vni, ipv4/prefix)` key plus its
 /// [`RouteValue`]. `prefix` is the number of IPv4 host bits (0..=32); the sim does longest-prefix
@@ -35,6 +35,11 @@ pub struct MemMaps {
     pub lb: HashMap<LbKey, LbValue>,
     pub maglev: HashMap<MaglevKey, [u8; 16]>,
     pub nat: HashMap<NatKey, NatValue>,
+    /// Registered NAT IPs (`NAT_IPS` map), keyed `(vni, ipv4)`. The ingress return path uses this to
+    /// demux NAT returns peer-independently: if the inner dst is a registered nat_ip, the external
+    /// src ip+port are zeroed so the CT lookup hits the globally-unique `(vni,0,nat_ip,0,nat_port)`
+    /// reverse entry the egress allocator stored.
+    pub nat_ips: HashSet<(u32, [u8; 4])>,
     pub routes4: Vec<Route4>,
     pub routes6: Vec<Route6>,
 }
