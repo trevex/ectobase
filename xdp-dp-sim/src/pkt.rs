@@ -20,6 +20,9 @@ impl Pkt for VecPkt {
     fn len(&self) -> usize {
         self.buf.len()
     }
+    fn logical_len(&self) -> usize {
+        self.buf.len()
+    }
     fn read_array<const N: usize>(&self, off: usize) -> Option<[u8; N]> {
         let end = off.checked_add(N)?;
         if end > self.buf.len() {
