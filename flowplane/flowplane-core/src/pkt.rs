@@ -26,6 +26,18 @@ pub trait Pkt {
     fn read_array<const N: usize>(&self, off: usize) -> Option<[u8; N]>;
     /// Overwrite `src.len()` bytes at `off`, bounds-checked. false if out of range.
     fn write_bytes(&mut self, off: usize, src: &[u8]) -> bool;
+
+    /// Overwrite a FIXED `N` bytes at `off`, bounds-checked. false if out of range.
+    ///
+    /// This is the write-side dual of [`read_array`](Pkt::read_array): passing the length as a const
+    /// generic (rather than a runtime slice via [`write_bytes`](Pkt::write_bytes)) lets the eBPF impl
+    /// lower each write to a single fixed-width store instead of a byte loop — materially smaller
+    /// bytecode on the hot path (keeps large in-place rewriters like SNAT inside the XDP verifier's
+    /// single-function budget). The default delegates to `write_bytes` for impls that don't override.
+    #[inline(always)]
+    fn write_array<const N: usize>(&mut self, off: usize, src: &[u8; N]) -> bool {
+        self.write_bytes(off, src)
+    }
     /// Prepend `delta` bytes of headroom (encap). Models bpf_xdp_adjust_head(-delta).
     fn grow_head(&mut self, delta: usize) -> bool;
     /// Remove `delta` bytes from the front (decap). Models bpf_xdp_adjust_head(+delta).

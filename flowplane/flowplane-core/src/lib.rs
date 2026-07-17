@@ -1,11 +1,13 @@
 #![no_std]
 
 pub mod conntrack;
+pub mod egress;
 pub mod encap;
 pub mod err;
 pub mod firewall;
 pub mod lb;
 pub mod maps;
+pub mod nat;
 pub mod parse;
 pub mod pkt;
 pub mod uplink;

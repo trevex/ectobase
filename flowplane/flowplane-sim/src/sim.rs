@@ -10,14 +10,18 @@
 //! ICMP-echo reply, and inner `dnat_ingress` — are NOT modeled (out of scope; separate follow-on
 //! slices per the spec). For LB packets those branches are skipped anyway.
 
-use flowplane_common::{Local, UnderlayValue, FW_ACTION_DROP, FW_DIR_INGRESS};
+use flowplane_common::{
+    Local, PortMeta, UnderlayValue, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS,
+};
 use flowplane_core::conntrack::{ct_create_default, ct_key};
+use flowplane_core::egress::{deliver, route4, Deliver, IPPROTO_IPIP};
 use flowplane_core::encap::{reforward, write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
 use flowplane_core::firewall::fw_eval_dir;
 use flowplane_core::lb::{lb_select_forward, lb_select_forward_v6};
 use flowplane_core::maps::Maps;
+use flowplane_core::nat::snat_egress;
 use flowplane_core::pkt::{Action, Pkt};
-use flowplane_core::uplink::decap_and_rewrite;
+use flowplane_core::uplink::{decap_and_rewrite, GW_MAC};
 
 use crate::maps::MemMaps;
 use crate::pkt::VecPkt;
@@ -28,6 +32,9 @@ pub struct SimNode {
     /// This node's own underlay identity (uplink ifindex/MACs, underlay IPv6). Used by `wan_rx` and
     /// `run` to encapsulate or reforward without an external `Local` argument.
     pub local: Local,
+    /// Source (guest tap) ifindex the `guest_tx` egress firewall is keyed on — the eBPF path uses
+    /// the frame's ingress_ifindex. Defaults to 0; set it before calling `guest_tx`.
+    pub src_ifindex: u32,
 }
 
 /// Result of `host_uplink`: the delivery `Action` plus the resulting (decapped) frame bytes.
@@ -47,6 +54,7 @@ impl SimNode {
         Self {
             maps: MemMaps::default(),
             local: Local::default(),
+            src_ifindex: 0,
         }
     }
 
@@ -55,6 +63,7 @@ impl SimNode {
         Self {
             maps: MemMaps::default(),
             local,
+            src_ifindex: 0,
         }
     }
 
@@ -166,6 +175,129 @@ impl SimNode {
             underlay_ipv6: [0; 16],
         };
         self.uplink(encapped, vni, u, [0u8; 16], &local)
+    }
+
+    /// Guest egress (`guest_tx`) for the IPv4 forwarding path. `frame` is a full guest Ethernet
+    /// frame `[InnerEth(14)][IPv4][L4]`; `meta` is the sending port's `PortMeta` (vni + underlay
+    /// identity). Composes the REAL core fns in the exact order + gates of the eBPF
+    /// `egress::forward_decision_v4` for the byte-parity-relevant steps:
+    ///   1. conntrack: on a NEW flow (miss) enforce the SOURCE egress firewall (deny-by-default);
+    ///      an established flow's CT_REWRITE_SRC translation + refresh (ct_apply/ct_touch) is NOT
+    ///      modelled here (separate slice) — the anchor + tests exercise fresh flows;
+    ///   2. VIP snat/dnat: NOT modelled (separate slice; anchor installs no VIP maps → no-op);
+    ///   3. route lookup (`route4`) → Pass on miss;
+    ///   4. network NAT SNAT (`snat_egress`) when the route is external;
+    ///   5. conntrack create-on-miss (`ct_create_default`);
+    ///   6. rate metering: NOT modelled (separate slice; no METER map → unlimited);
+    ///   7. deliver decision (`deliver`): Local tap (inner-Eth rewrite) | Encap | Pass.
+    ///
+    /// Returns the delivery `Action` + the resulting frame bytes (encapped on the Encap path).
+    ///
+    /// NOTE (scope): only the fresh-flow / non-VIP / unmetered path is composed here — that is the
+    /// slice whose OUTPUT PACKET is byte-identical to the eBPF program and thus anchorable. The
+    /// interleaved un-ported steps (ct_apply/ct_touch, vip, meter) are map/refresh-only on this
+    /// fixture and do not change the emitted bytes.
+    pub fn guest_tx(&mut self, frame: &[u8], meta: &PortMeta) -> SimOut {
+        let ip_off = ETH_LEN;
+        let mut pkt = VecPkt::from_bytes(frame);
+
+        // 1. Conntrack miss → source egress firewall (deny-by-default). Fresh flow only.
+        let mut was_new = false;
+        if let Some(key) = ct_key(&pkt, ip_off, meta.vni) {
+            if self.maps.conntrack_get(&key).is_none() {
+                was_new = true;
+                // Egress firewall keyed on the SOURCE interface. The sim keys FW_META/FW_RULES on a
+                // synthetic ifindex == meta.vni's port; the fixture installs it under `src_ifindex`.
+                if fw_eval_dir(&pkt, &self.maps, ip_off, self.src_ifindex, FW_DIR_EGRESS)
+                    == FW_ACTION_DROP
+                {
+                    return SimOut {
+                        action: Action::Drop,
+                        pkt: pkt.into_bytes(),
+                    };
+                }
+            }
+        }
+
+        // 2. VIP snat/dnat: not modelled (no VIP maps → no-op in the eBPF path too).
+
+        // 3. Route lookup on the inner IPv4 dst.
+        let dst = match pkt.read_array::<4>(ip_off + 16) {
+            Some(d) => d,
+            None => {
+                return SimOut {
+                    action: Action::Pass,
+                    pkt: pkt.into_bytes(),
+                }
+            }
+        };
+        let route = match route4(&self.maps, meta.vni, &dst) {
+            Some(r) => r,
+            None => {
+                return SimOut {
+                    action: Action::Pass,
+                    pkt: pkt.into_bytes(),
+                }
+            }
+        };
+
+        // 4. Network NAT SNAT when the route is external.
+        let is_ext = route.is_external != 0;
+        snat_egress(&mut pkt, &mut self.maps, ip_off, meta.vni, is_ext, 0);
+
+        // 5. Track every flow (create-on-miss).
+        if let Some(key) = ct_key(&pkt, ip_off, meta.vni) {
+            if self.maps.conntrack_get(&key).is_none() {
+                ct_create_default(&pkt, &mut self.maps, ip_off, meta.vni, 0);
+            }
+        }
+
+        // 6. Rate metering: not modelled (no METER map → unlimited pass).
+
+        // 7. Deliver decision.
+        match deliver(&self.maps, &route, meta, IPPROTO_IPIP) {
+            Deliver::Local {
+                tap_ifindex,
+                guest_mac,
+            } => {
+                // Destination ingress firewall on NEW flows (same-node delivery).
+                if was_new
+                    && fw_eval_dir(&pkt, &self.maps, ip_off, tap_ifindex, FW_DIR_INGRESS)
+                        == FW_ACTION_DROP
+                {
+                    return SimOut {
+                        action: Action::Drop,
+                        pkt: pkt.into_bytes(),
+                    };
+                }
+                // Rewrite the inner Ethernet for the local guest: dst=guest MAC, src=GW_MAC,
+                // ethertype stays IPv4.
+                pkt.write_bytes(0, &guest_mac);
+                pkt.write_bytes(6, &GW_MAC);
+                SimOut {
+                    action: Action::Redirect(tap_ifindex),
+                    pkt: pkt.into_bytes(),
+                }
+            }
+            Deliver::Encap(e) => {
+                // Prepend 40 bytes (bpf_xdp_adjust_head(-40)) then write the outer Eth+IPv6, which
+                // consumes the new 40 bytes + the 14-byte inner Ethernet, leaving the bare inner IPv4.
+                if !pkt.grow_head(IPV6_LEN) || !write_outer_v6(&mut pkt, &e) {
+                    return SimOut {
+                        action: Action::Drop,
+                        pkt: pkt.into_bytes(),
+                    };
+                }
+                SimOut {
+                    action: Action::Redirect(e.uplink_ifindex),
+                    pkt: pkt.into_bytes(),
+                }
+            }
+            Deliver::Pass => SimOut {
+                action: Action::Pass,
+                pkt: pkt.into_bytes(),
+            },
+        }
     }
 
     /// Edge WAN-VIP ingress (`wan_rx`): a plain `[Eth][IPv4|IPv6]` WAN frame; if its dst+port is a WAN

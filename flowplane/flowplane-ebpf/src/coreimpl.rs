@@ -1,6 +1,7 @@
 use aya_ebpf::{helpers::bpf_xdp_adjust_head, programs::XdpContext};
 use flowplane_common::{
-    CtEntry, CtKey, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local, MaglevKey, UnderlayValue,
+    CtEntry, CtKey, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local, MaglevKey, NatKey, NatValue,
+    RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
 use flowplane_core::pkt::Pkt;
@@ -42,6 +43,34 @@ impl Maps for GlobalMaps {
     fn maglev_get(&self, key: &MaglevKey) -> Option<[u8; 16]> {
         unsafe { crate::maps::MAGLEV.get(key).copied() }
     }
+    #[inline(always)]
+    fn nat_get(&self, key: &NatKey) -> Option<NatValue> {
+        unsafe { crate::maps::NAT.get(key).copied() }
+    }
+    #[inline(always)]
+    fn route4_get(&self, vni: u32, dst: &[u8; 4]) -> Option<RouteValue> {
+        crate::maps::ROUTES
+            .get(&aya_ebpf::maps::lpm_trie::Key::new(
+                64,
+                RouteLpmData {
+                    vni: vni.to_be_bytes(),
+                    ipv4: *dst,
+                },
+            ))
+            .copied()
+    }
+    #[inline(always)]
+    fn route6_get(&self, vni: u32, dst: &[u8; 16]) -> Option<RouteValue> {
+        crate::maps::ROUTES6
+            .get(&aya_ebpf::maps::lpm_trie::Key::new(
+                160,
+                RouteLpmData6 {
+                    vni: vni.to_be_bytes(),
+                    ipv6: *dst,
+                },
+            ))
+            .copied()
+    }
 }
 
 /// Shared raw read over a `[base, end)` packet window. `CtxPkt` and `RawPkt` both delegate here so
@@ -73,6 +102,24 @@ unsafe fn write_raw(base: usize, end: usize, off: usize, src: &[u8]) -> bool {
     true
 }
 
+/// Fixed-size raw write: bounds-check then a SINGLE `write_unaligned` of `[u8; N]` (see [`read_raw`]
+/// for the safety contract). Const `N` lets LLVM emit one store instead of a byte loop — the smaller
+/// bytecode that keeps the SNAT rewriter inside the XDP verifier's single-function budget.
+#[inline(always)]
+unsafe fn write_raw_array<const N: usize>(
+    base: usize,
+    end: usize,
+    off: usize,
+    src: &[u8; N],
+) -> bool {
+    let start = base + off;
+    if start + N > end {
+        return false;
+    }
+    core::ptr::write_unaligned(start as *mut [u8; N], *src);
+    true
+}
+
 /// `Pkt` over an XDP context. read/write are bounds-checked against data_end (verifier-safe).
 pub struct CtxPkt<'a> {
     pub ctx: &'a XdpContext,
@@ -94,6 +141,10 @@ impl Pkt for CtxPkt<'_> {
     #[inline(always)]
     fn write_bytes(&mut self, off: usize, src: &[u8]) -> bool {
         unsafe { write_raw(self.ctx.data(), self.ctx.data_end(), off, src) }
+    }
+    #[inline(always)]
+    fn write_array<const N: usize>(&mut self, off: usize, src: &[u8; N]) -> bool {
+        unsafe { write_raw_array::<N>(self.ctx.data(), self.ctx.data_end(), off, src) }
     }
     #[inline(always)]
     fn grow_head(&mut self, delta: usize) -> bool {
@@ -158,6 +209,10 @@ impl Pkt for RawPkt {
     #[inline(always)]
     fn write_bytes(&mut self, off: usize, src: &[u8]) -> bool {
         unsafe { write_raw(self.data, self.data_end, off, src) }
+    }
+    #[inline(always)]
+    fn write_array<const N: usize>(&mut self, off: usize, src: &[u8; N]) -> bool {
+        unsafe { write_raw_array::<N>(self.data, self.data_end, off, src) }
     }
     #[inline(always)]
     fn grow_head(&mut self, _delta: usize) -> bool {

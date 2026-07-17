@@ -19,8 +19,8 @@ use crate::parse::{
     write16, write6, ETH_LEN, ETH_P_IPV6, IPPROTO_ICMPV6, IPPROTO_TCP, IPPROTO_UDP, IPV6_LEN,
 };
 
-/// Re-export PROBE_LIMIT for port allocation.
-use crate::nat::PROBE_LIMIT;
+/// Port-allocation probe limit, single-sourced in the shared core NAT module.
+use flowplane_core::nat::PROBE_LIMIT;
 
 /// ICMPv6 type constants.
 const ICMPV6_ECHO_REQUEST: u8 = 128;

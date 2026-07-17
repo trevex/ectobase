@@ -5,7 +5,7 @@ use flowplane_core::err::DpErr;
 
 use crate::arp_nd::try_arp_reply;
 use crate::coreimpl::CtxPkt;
-use crate::maps::{LOCAL, PORT_META, ROUTES, ROUTES6, UNDERLAY};
+use crate::maps::{LOCAL, PORT_META, ROUTES6, UNDERLAY};
 use crate::parse::{write6, ETH_LEN, ETH_P_IP, IPV6_LEN};
 
 /// What the per-program glue should do after the in-place egress pipeline runs.
@@ -79,19 +79,26 @@ pub fn forward_decision_v4(
     crate::vip::dnat_egress(data, data_end, ETH_LEN, meta.vni);
     // inner IPv4 dst at ETH_LEN + 16
     let dst = unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + 16) as *const [u8; 4]) };
-    let route = match ROUTES.get(&aya_ebpf::maps::lpm_trie::Key::new(
-        64,
-        flowplane_common::RouteLpmData {
-            vni: meta.vni.to_be_bytes(),
-            ipv4: dst,
-        },
-    )) {
+    // Route lookup via the shared core seam (`ROUTES` LPM at prefix_len 64). Same bytecode result as
+    // the old inline `ROUTES.get(Key::new(64, ..))`, now single-sourced in `flowplane_core::egress`.
+    let route = match flowplane_core::egress::route4(&crate::coreimpl::GlobalMaps, meta.vni, &dst) {
         Some(r) => r,
         None => return EgressVerdict::Pass,
     };
-    // Network NAT: SNAT guest -> nat_ip:port when the dst route is external.
+    // Network NAT: SNAT guest -> nat_ip:port when the dst route is external. Delegates to the shared
+    // core `flowplane_core::nat::snat_egress` (the SAME code the native SimNode + BPF_PROG_TEST_RUN
+    // anchor run) over a fresh `RawPkt` window on `[data, data_end)` — the wrapper re-derives the
+    // packet bounds on every read/write, so the variable-IHL L4 accesses stay verifier-provable
+    // across the bpf-to-bpf subprogram-call boundary. `now()` stamps the conntrack `last_seen`.
     let is_ext = route.is_external != 0;
-    crate::nat::nat_snat_egress(data, data_end, ETH_LEN, meta.vni, is_ext);
+    flowplane_core::nat::snat_egress(
+        &mut crate::coreimpl::RawPkt::new(data, data_end),
+        &mut crate::coreimpl::GlobalMaps,
+        ETH_LEN,
+        meta.vni,
+        is_ext,
+        crate::conntrack::now(),
+    );
     // Track every flow.
     if let Some(key) = crate::conntrack::ct_key(data, data_end, ETH_LEN, meta.vni) {
         if unsafe { crate::maps::CONNTRACK.get(&key) }.is_none() {
@@ -103,11 +110,21 @@ pub fn forward_decision_v4(
     if !crate::meter::meter_pass(ifindex, frame_len, is_ext) {
         return EgressVerdict::Drop;
     }
-    // Local fast path: if the route's nexthop underlay is one of our own LOCAL interfaces, deliver
-    // straight to that tap (no encap, no PF hairpin). LB anycast entries have tap_ifindex==0 and
-    // are skipped (they encap to the selected backend underlay as usual).
-    if let Some(u) = unsafe { UNDERLAY.get(&route.nexthop_ipv6) } {
-        if u.tap_ifindex != 0 {
+    // Deliver decision via the shared core seam: local fast path (nexthop underlay is one of our own
+    // LOCAL interfaces -> deliver to that tap, no encap) vs. encap toward the nexthop vs. pass. LB
+    // anycast entries have tap_ifindex==0 and fall through to encap. Single-sourced in
+    // `flowplane_core::egress::deliver` (the SAME decision the native SimNode runs). The dest ingress
+    // firewall gate on the local path stays HERE in the wrapper — it needs `was_new` + the packet.
+    match flowplane_core::egress::deliver(
+        &crate::coreimpl::GlobalMaps,
+        &route,
+        meta,
+        crate::parse::IPPROTO_IPIP,
+    ) {
+        flowplane_core::egress::Deliver::Local {
+            tap_ifindex,
+            guest_mac,
+        } => {
             // Destination ingress firewall on NEW flows (the cross-node uplink_rx path is skipped
             // for same-node delivery, so enforce the dest's ingress policy here). Deny-by-default.
             if was_new
@@ -115,30 +132,20 @@ pub fn forward_decision_v4(
                     &crate::coreimpl::RawPkt::new(data, data_end),
                     &crate::coreimpl::GlobalMaps,
                     ETH_LEN,
-                    u.tap_ifindex,
+                    tap_ifindex,
                     flowplane_common::FW_DIR_INGRESS,
                 ) == flowplane_common::FW_ACTION_DROP
             {
                 return EgressVerdict::Drop;
             }
-            return EgressVerdict::Local {
-                tap_ifindex: u.tap_ifindex,
-                guest_mac: u.guest_mac,
-            };
+            EgressVerdict::Local {
+                tap_ifindex,
+                guest_mac,
+            }
         }
+        flowplane_core::egress::Deliver::Encap(e) => EgressVerdict::Encap(e),
+        flowplane_core::egress::Deliver::Pass => EgressVerdict::Pass,
     }
-    let local = match LOCAL.get(0) {
-        Some(l) => l,
-        None => return EgressVerdict::Pass,
-    };
-    EgressVerdict::Encap(EncapParams {
-        gateway_mac: local.gateway_mac,
-        uplink_mac: local.uplink_mac,
-        uplink_ifindex: local.uplink_ifindex,
-        src_underlay: meta.underlay_ipv6,
-        nexthop_ipv6: route.nexthop_ipv6,
-        inner_proto: crate::parse::IPPROTO_IPIP,
-    })
 }
 
 /// IPv6-inner egress decision (route6 + local/encap). Map-driven; shared by XDP `v6_guest_tx` and
