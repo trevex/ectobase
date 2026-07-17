@@ -30,15 +30,15 @@ cli: ## Build the genuine dpservice-cli (flake package) into ./result
 .PHONY: proto-go
 proto-go: ## Generate Go gRPC stubs for dataplane.v1 into cni/gen/dataplanev1
 	protoc -I api/proto/dataplane/v1 \
-		--go_out=cni/gen --go_opt=module=github.com/trevex/xdp-dp/cni/gen \
-		--go-grpc_out=cni/gen --go-grpc_opt=module=github.com/trevex/xdp-dp/cni/gen \
+		--go_out=cni/gen --go_opt=module=github.com/trevex/ectobase/cni/gen \
+		--go-grpc_out=cni/gen --go-grpc_opt=module=github.com/trevex/ectobase/cni/gen \
 		api/proto/dataplane/v1/dataplane.proto
 
 .PHONY: proto-routebus
 proto-routebus: ## Generate Go gRPC stubs for routebus.v1 into netplane/gen/routebusv1
 	protoc -I api/proto/routebus/v1 \
-		--go_out=netplane/gen --go_opt=module=github.com/trevex/xdp-dp/netplane/gen \
-		--go-grpc_out=netplane/gen --go-grpc_opt=module=github.com/trevex/xdp-dp/netplane/gen \
+		--go_out=netplane/gen --go_opt=module=github.com/trevex/ectobase/netplane/gen \
+		--go-grpc_out=netplane/gen --go-grpc_opt=module=github.com/trevex/ectobase/netplane/gen \
 		api/proto/routebus/v1/routebus.proto
 
 IMAGE ?= ghcr.io/trevex/dpservice-xdp

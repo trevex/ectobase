@@ -7,7 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	v1alpha1 "github.com/trevex/xdp-dp/api/v1alpha1"
+	v1alpha1 "github.com/trevex/ectobase/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )

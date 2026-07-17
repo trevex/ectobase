@@ -7,9 +7,9 @@ import (
 	"log"
 	"net"
 
-	"github.com/trevex/xdp-dp/netplane/gen/routebusv1"
-	"github.com/trevex/xdp-dp/netplane/reflector"
-	"github.com/trevex/xdp-dp/netplane/routebus"
+	"github.com/trevex/ectobase/netplane/gen/routebusv1"
+	"github.com/trevex/ectobase/netplane/reflector"
+	"github.com/trevex/ectobase/netplane/routebus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 	"time"

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 )
 
 // desiredEgressVNIs returns the VNIs this node hosts that need internet egress: a VNI whose VPC has a

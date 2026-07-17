@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -108,7 +108,7 @@ func TestCompile_SelectorMismatch(t *testing.T) {
 }
 
 func TestCompile_UnpoliciedGetsAllowAll(t *testing.T) {
-	nic := testNIC() // has labels that testPolicy() selects
+	nic := testNIC()            // has labels that testPolicy() selects
 	c := Compile(nic, nil, nil) // no policies
 	if len(c.Spec.Firewall.Ingress) != 1 || c.Spec.Firewall.Ingress[0].Action != "Allow" ||
 		c.Spec.Firewall.Ingress[0].CIDR != "0.0.0.0/0" || c.Spec.Firewall.Ingress[0].Port != 0 {
@@ -140,7 +140,7 @@ func TestCompile_WritesFixture(t *testing.T) {
 	// The committed fixture (2 dirs up) is consumed by the Rust sim's apply() bridge test, so it
 	// must stay in sync with the compiler output. Guard it golden-style: assert-equal by default,
 	// regenerate only under UPDATE_FIXTURES=1.
-	out := filepath.Join("..", "..", "xdp-dp-sim", "testdata", "compilednic.json")
+	out := filepath.Join("..", "..", "flowplane", "flowplane-sim", "testdata", "compilednic.json")
 
 	if os.Getenv("UPDATE_FIXTURES") != "" {
 		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {

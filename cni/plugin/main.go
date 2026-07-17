@@ -18,7 +18,7 @@ import (
 	types100 "github.com/containernetworking/cni/pkg/types/100"
 	"github.com/containernetworking/cni/pkg/version"
 
-	dataplanev1 "github.com/trevex/xdp-dp/cni/gen/dataplanev1"
+	dataplanev1 "github.com/trevex/ectobase/cni/gen/dataplanev1"
 )
 
 const (

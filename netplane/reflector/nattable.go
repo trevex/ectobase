@@ -1,8 +1,8 @@
 package reflector
 
 import (
-	pb "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
-	"github.com/trevex/xdp-dp/netplane/routebus"
+	pb "github.com/trevex/ectobase/netplane/gen/routebusv1"
+	"github.com/trevex/ectobase/netplane/routebus"
 )
 
 // NatBlock aliases the shared routebus.NatBlock: a deterministic egress SNAT

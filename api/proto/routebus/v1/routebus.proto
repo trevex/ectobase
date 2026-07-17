@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package routebus.v1;
 
-option go_package = "github.com/trevex/xdp-dp/netplane/gen/routebusv1;routebusv1";
+option go_package = "github.com/trevex/ectobase/netplane/gen/routebusv1;routebusv1";
 
 // RouteBus is the control-plane route exchange between per-node agents and the
 // central reflector. One long-lived bidi stream per agent.

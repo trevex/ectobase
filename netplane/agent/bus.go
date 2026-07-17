@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	dpv1 "github.com/trevex/xdp-dp/cni/gen/dataplanev1"
-	rbv1 "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	dpv1 "github.com/trevex/ectobase/cni/gen/dataplanev1"
+	rbv1 "github.com/trevex/ectobase/netplane/gen/routebusv1"
 )
 
 // Dataplane is the subset of xdp-dp the agent drives. dpAdapter wraps the real

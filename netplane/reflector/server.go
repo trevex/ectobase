@@ -4,7 +4,7 @@ import (
 	"io"
 	"sync"
 
-	pb "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	pb "github.com/trevex/ectobase/netplane/gen/routebusv1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

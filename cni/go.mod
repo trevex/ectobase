@@ -1,4 +1,4 @@
-module github.com/trevex/xdp-dp/cni
+module github.com/trevex/ectobase/cni
 
 go 1.26.0
 
@@ -28,7 +28,7 @@ require (
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
-	github.com/trevex/xdp-dp/api v0.0.0-00010101000000-000000000000
+	github.com/trevex/ectobase/api v0.0.0-00010101000000-000000000000
 	github.com/x448/float16 v0.8.4 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
@@ -55,4 +55,4 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-replace github.com/trevex/xdp-dp/api => ../api
+replace github.com/trevex/ectobase/api => ../api

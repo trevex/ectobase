@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"reflect"
 
-	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -48,12 +48,12 @@ func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy, lbs []
 			Namespace: nic.Namespace,
 		},
 		Spec: netv1.CompiledNICSpec{
-			NodeName:      nodeName,
-			NICRef:        netv1.LocalObjectReference{Name: nic.Name},
-			VNI:           nic.Status.VNI,
-			Port:          port,
-			OverlayIPs:    append([]string(nil), nic.Spec.IPs...),
-			Firewall:      netv1.CompiledFirewall{},
+			NodeName:   nodeName,
+			NICRef:     netv1.LocalObjectReference{Name: nic.Name},
+			VNI:        nic.Status.VNI,
+			Port:       port,
+			OverlayIPs: append([]string(nil), nic.Spec.IPs...),
+			Firewall:   netv1.CompiledFirewall{},
 		},
 	}
 

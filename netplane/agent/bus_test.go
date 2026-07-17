@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	rbv1 "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
-	"github.com/trevex/xdp-dp/netplane/reflector"
+	rbv1 "github.com/trevex/ectobase/netplane/gen/routebusv1"
+	"github.com/trevex/ectobase/netplane/reflector"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
