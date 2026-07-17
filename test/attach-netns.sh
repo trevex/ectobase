@@ -90,12 +90,12 @@ for _ in $(seq 1 50); do
     if ! kill -0 "$DP_PID" 2>/dev/null; then
         fail "serve died during startup"
     fi
-    if grep -q "serving DPDKironcore on" "$DP_LOG" 2>/dev/null; then
+    if grep -q "serving DataplaneNode on" "$DP_LOG" 2>/dev/null; then
         break
     fi
     sleep 0.2
 done
-grep -q "serving DPDKironcore on" "$DP_LOG" 2>/dev/null || fail "serve did not start listening"
+grep -q "serving DataplaneNode on" "$DP_LOG" 2>/dev/null || fail "serve did not start listening"
 
 echo "== AttachInterface RPC =="
 REQ="{\"interface_id\":\"$IFACE_ID\",\"netns_path\":\"/var/run/netns/$NS\",\"vni\":$VNI,\"requested_ips\":[\"$OVERLAY_IP\"]}"

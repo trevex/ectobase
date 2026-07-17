@@ -50,10 +50,10 @@ SERVE_PID=$!
 # Wait for the gRPC listener.
 for _ in $(seq 1 50); do
   if ! kill -0 "$SERVE_PID" 2>/dev/null; then echo "FAIL: serve died during startup"; cat "$LOG"; exit 1; fi
-  grep -q "serving DPDKironcore on" "$LOG" 2>/dev/null && break
+  grep -q "serving DataplaneNode on" "$LOG" 2>/dev/null && break
   sleep 0.2
 done
-grep -q "serving DPDKironcore on" "$LOG" 2>/dev/null || { echo "FAIL: serve did not start listening"; cat "$LOG"; exit 1; }
+grep -q "serving DataplaneNode on" "$LOG" 2>/dev/null || { echo "FAIL: serve did not start listening"; cat "$LOG"; exit 1; }
 
 grpc() { "$GRPCURL" -plaintext -import-path "$ROOT/api/proto" -proto dataplane/v1/dataplane.proto "$@"; }
 
