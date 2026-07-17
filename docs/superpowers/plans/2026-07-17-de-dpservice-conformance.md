@@ -38,21 +38,59 @@ Pre-commit hook runs clippy+rustfmt — `cargo fmt` before every commit and veri
 
 ---
 
-## Phase 1 — Sim expansion (native conformance source of truth)
+## Phase 1 — Complete the pure core (extraction), then conformance
 
-Each task adds a focused `flowplane-sim` test (native, in-process). **Mirror the existing sim test
-pattern** — read a sibling first (e.g. `flowplane/flowplane-sim/src/ns_scenario_test.rs` and
-`firewall_test.rs`) for how `VecPkt`/`MemMaps`/`SimNode` are set up. Where a real eBPF program backs
-the behavior, add a `BPF_PROG_TEST_RUN` byte-parity anchor mirroring
-`flowplane/flowplane/tests/anchor_uplink.rs`. **Before writing each test, read the responder/handler
-source named in the task** to derive exact packet layouts and expected bytes (do NOT guess wire
-formats — read the implementation).
+**REVISED 2026-07-17 (see spec §2).** Implementation revealed the target behaviors (guest-egress
+NAT/routing, DHCP/ARP/ND responders) live in `flowplane-ebpf` glue, NOT in the sim-drivable
+`flowplane-core`. Per the user's decision, we **extract each path into the pure core first**, then
+write the sim conformance test. Each extracted path must be a **pure relocation** — proven
+byte-identical to the ebpf original.
 
-### Task 1.1: NAT source-block conformance
-**Files:** Create `flowplane/flowplane-sim/src/nat_test.rs`; register it in the sim lib
-(`flowplane/flowplane-sim/src/lib.rs` — follow how `ns_scenario_test` is included).
-**Read first:** the SNAT source-block logic in `flowplane/flowplane-core/` + `flowplane-ebpf`
-(egress NAT path) and the netplane allocator semantics (`netplane/allocator`) for block layout.
+**Extraction-unit pattern — every Phase-1 path task does these 6 steps (the test task follows):**
+1. Add the `Maps`-trait accessor(s) the path reads/writes (+ `MemMaps` impl in
+   `flowplane/flowplane-sim/src/maps.rs`) — e.g. `nat_get`/`nat_insert`, a route/underlay accessor,
+   a DHCP-config accessor. Reuse existing ones (`local`, `underlay_get`, `conntrack_*`, `fw_*`,
+   `lb_get`, `maglev_get`) where they fit.
+2. Write a core fn `…_core<P: Pkt, M: Maps>(…)` in `flowplane-core` implementing the logic against
+   the traits (mirror `flowplane-core/src/uplink.rs::decap_and_rewrite` and `encap.rs`).
+3. Rewire the ebpf glue to CALL the core fn (via `CtxPkt`/`RawPkt` + `GlobalMaps`) instead of its
+   inline impl — the program now delegates to core.
+4. Add a `SimNode` entry point (e.g. `guest_tx`) that calls the same core fn via `VecPkt`/`MemMaps`.
+5. **Byte-parity gate (mandatory):** a `BPF_PROG_TEST_RUN` anchor (real program, mirror
+   `flowplane/flowplane/tests/anchor_uplink.rs`) and the sim core-fn MUST produce byte-identical
+   output for the same input. Run the anchor under sudo. eBPF verifier must still accept the
+   rewired program (`cargo build -p flowplane` + verifier anchors green).
+6. Only then write the conformance test (the matching task below), mirroring
+   `ns_scenario_test.rs`. **Read the real source before writing packet bytes — never guess wire
+   formats.**
+
+Order the path tasks so the biggest/foundational extraction (guest-egress routing + NAT) lands
+first. Each path = one extraction commit + one conformance-test commit (or a combined commit with
+both, byte-parity anchor included). Keep the datapath BUILDING + verifier-green at every commit.
+
+**Task 1.0 (do first — likely no extraction needed):** flow-timeout. `conntrack_*` is already on
+the `Maps` trait, so conntrack expiry may be sim-reachable today. Verify by reading
+`flowplane-core`/`flowplane-common` conntrack + the sim's `conntrack_test.rs`; if reachable, write
+the flow-timeout test directly (extend `conntrack_test.rs`); if the expiry check itself is in ebpf
+glue, extract it per the 6-step pattern first.
+
+### Task 1.1: EXTRACT guest-egress routing + NAT SNAT into core, then NAT conformance
+**Extraction target (mapped during the blocked first attempt):** SNAT lives in
+`flowplane/flowplane-ebpf/src/nat.rs::nat_snat_egress` (raw `data/data_end`, reads the ebpf
+`NAT` + `CONNTRACK` `#[map]` statics directly), called from `flowplane-ebpf/src/egress.rs:94`;
+the guest-egress routing decision is `forward_decision_v4/v6` in `egress.rs` (reads `UNDERLAY`/
+`ROUTES6`/`LOCAL` maps directly). Neither uses `Pkt`/`Maps`. The `Maps` trait
+(`flowplane-core/src/maps.rs`) has no NAT-map accessor; `NatKey`/`NatValue` are in
+`flowplane-common`.
+**Do the 6-step extraction:** add `nat_get`/`nat_insert` (+ route/underlay accessors as needed) to
+`Maps` + `MemMaps`; write `forward_decision`/`snat` core fns against `Pkt`/`Maps`; rewire
+`egress.rs`/`nat.rs` to call them; add `SimNode::guest_tx`; add a `BPF_PROG_TEST_RUN` byte-parity
+anchor (guest_tx program output == sim `guest_tx` output). Keep NAT source-BLOCK allocation OUT of
+scope (that's Go `netplane/allocator`, already tested).
+**Then the conformance test files:** Create `flowplane/flowplane-sim/src/nat_test.rs`; register it
+in `flowplane/flowplane-sim/src/lib.rs` (follow how `ns_scenario_test` is included).
+**Read first:** `flowplane/flowplane-core/src/uplink.rs::decap_and_rewrite` (the extraction
+precedent), `flowplane-ebpf/src/{nat.rs,egress.rs}`, `flowplane-sim/src/{sim.rs,maps.rs}`.
 
 - [ ] **Step 1: Write failing tests** covering: (a) a guest egress packet gets SNAT'd to a source
   IP+port within its assigned block; (b) two distinct sources get distinct, stable blocks (a

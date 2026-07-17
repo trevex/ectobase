@@ -75,20 +75,44 @@ can't observe it.
 - `test/conformance/` (the vendored Python suite), `bin/dpservice-cli`, `VENDORED.md`,
   `DPSERVICE_ERROR_CODES.txt`.
 
-## §2 — Sim expansion (close the coverage gap)
+## §2 — Complete the pure core, THEN add sim conformance (scope-expanded 2026-07-17)
 
-Add focused sim conformance for the applicable semantics not yet covered. Each is a
-`flowplane-sim` test over the pure core (`VecPkt` + `MemMaps`), with a `BPF_PROG_TEST_RUN`
-byte-parity anchor where a real program backs the behavior:
+**Discovery during implementation:** the behaviors we want the sim to assert (guest-egress NAT
+SNAT/DNAT, the DHCP/ARP/ND responders, guest-egress routing/VNI) live **entirely in
+`flowplane-ebpf` glue** — raw `data/data_end` pointers reading eBPF-`#[map]` statics — NOT in
+`flowplane-core`. The sim drives only `flowplane-core` (via the `Pkt`/`Maps` traits), whose
+surface today covers the *middle* transforms (encap `write_outer_v6`, `decap_and_rewrite`,
+firewall `fw_eval`, conntrack, LB `lb_select`/`reforward`) but none of the guest-facing paths.
+So the sim cannot assert these behaviors without first extracting them into the pure core.
 
-- **NAT** — distributed SNAT source-block allocation (per-source block stability, port-range
-  bounds) + DNAT/VIP rewrite. (N-S edge NAT is partially exercised in `ns_scenario_test`; add a
-  focused NAT suite.)
-- **DHCPv4 / DHCPv6** — the in-datapath responder: offer/reply contents (assigned IP, MTU
-  option, DNS servers, lease), driven as request packets through the responder path.
-- **ARP + IPv6 ND** — gateway MAC responder: a request in → a correct reply out.
-- **VNI isolation** — traffic in VNI A must not resolve/deliver into VNI B.
-- **Flow timeout** — conntrack entry expiry (create is already covered; add expiry/eviction).
+**Decision (user, 2026-07-17): extract everything into `flowplane-core`.** Port the full guest
+datapath out of ebpf glue into the pure core against `Pkt`/`Maps`, following the existing
+precedent (`decap_and_rewrite`, `write_outer_v6`). This strengthens the pure-core/sim pattern and
+makes the whole datapath deterministically testable. It is a real datapath refactor and precedes
+the conformance tests.
+
+**Extraction unit (per path — the load-bearing pattern):**
+1. Add the `Maps`-trait accessors the path needs (+ `MemMaps` impl for the sim): e.g. a NAT-map
+   accessor `nat_get`/`nat_insert`, a route/underlay accessor for the egress path, a DHCP-config
+   accessor. (Some exist: `local`, `underlay_get`, `conntrack_*`, `fw_*`, `lb_get`, `maglev_get`.)
+2. Write a core fn `…_core<P: Pkt, M: Maps>(…)` implementing the logic against the traits.
+3. Replace the ebpf glue's inline impl with a call to the core fn (via `CtxPkt`/`RawPkt` +
+   `GlobalMaps`) — the ebpf program now *calls* the core, it doesn't reimplement it.
+4. Add a `SimNode` entry point (e.g. `guest_tx`) that calls the same core fn via `VecPkt`/`MemMaps`.
+5. **Prove byte-parity:** a `BPF_PROG_TEST_RUN` anchor (the real eBPF program) and the sim (the
+   core fn) MUST produce byte-identical output for the same input. This is the safety gate for
+   touching the hot datapath — no behavior change is allowed, only relocation.
+6. Then write the conformance test against the core fn.
+
+**Paths to extract, then assert:**
+- **Guest-egress routing + NAT SNAT** — `forward_decision_v4/v6` (eBPF-map-coupled) +
+  `nat.rs::nat_snat_egress`. Enables NAT-SNAT + VNI-isolation conformance.
+- **DNAT (return)** — the `conntrack.rs` `CT_REWRITE_DST` apply invoked from `ingress.rs`.
+- **DHCPv4 / DHCPv6 responder** — offer/reply builder (assigned IP, MTU, DNS from `DHCP_CONFIG`).
+- **ARP + IPv6 ND responder** — `arp_nd.rs` gateway reply builders.
+- **VNI isolation** — falls out of the extracted guest-egress routing (route LPM keyed by VNI).
+- **Flow timeout** — conntrack expiry; `conntrack_*` is already on the `Maps` trait, so this one
+  is likely sim-reachable today without extraction (verify first).
 
 **Dropped (dpservice-only; not our model):** `virtsvc`, SR-IOV PF/VF representor
 (`pf_to_vf`/`vf_to_pf`), dpservice telemetry, dpservice error-code conformance.
@@ -174,8 +198,20 @@ ordering keeps a working oracle until the replacement is proven.
 
 ## Risks
 
+- **Datapath-refactor risk (NEW, the biggest).** The §2 extraction moves hot-path code
+  (NAT/routing/DHCP/ARP-ND) from ebpf glue into `flowplane-core`. Any behavioral drift is a
+  production bug. Mitigated by the mandatory per-path **byte-parity anchor** (`BPF_PROG_TEST_RUN`
+  real-program output == sim core-fn output) — extraction is proven a pure relocation, and the
+  ebpf verifier must still accept the refactored programs. Extract one path at a time, each gated.
 - **Coverage regression** if a dpservice test asserted something our sim/smoke misses. Mitigated
   by §5 ordering (oracle stays until replacement proven) and the coverage-mapping table (every
   applicable Python test has a named destination before removal).
 - **goscapy maturity** — smaller/less battle-tested than scapy; mitigated by keeping byte-exact
   assertions in the sim and using goscapy only for a few inspection cases.
+
+## Scope note
+
+The §2 "extract everything into core" decision makes this initiative substantially larger than a
+test rewrite — it is a datapath-architecture effort (completing the pure core) that *enables* the
+conformance. It may warrant being tracked/executed as its own phase set, extracting one path at a
+time behind byte-parity gates, before the dpservice-removal phase.
