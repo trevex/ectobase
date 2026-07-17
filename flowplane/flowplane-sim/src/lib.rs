@@ -25,3 +25,5 @@ mod nat_test;
 mod ns_scenario_test;
 #[cfg(test)]
 mod reforward_test;
+#[cfg(test)]
+mod vni_test;
