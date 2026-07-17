@@ -12,6 +12,7 @@ use aya_ebpf::{
 use xdp_dp_common::{
     CtEntry, CtKey, NatKey, CT_F_NAT64, CT_F_SRC_NAT, CT_REWRITE_DST, CT_REWRITE_SRC,
 };
+use xdp_dp_core::err::DpErr;
 
 use crate::maps::{LOCAL, NAT, PORT_META};
 use crate::parse::{
@@ -257,14 +258,14 @@ fn tcp_udp_v4_to_v6(
 /// `meta_underlay_ipv6`: guest's underlay IPv6 (used as outer src on encap).
 ///
 /// Returns `Ok(Some(action))` if the packet was fully handled, `Ok(None)` to fall through,
-/// `Err(())` on a non-recoverable error.
+/// `Err(DpErr)` on a non-recoverable error.
 #[inline(always)]
 pub fn nat64_egress(
     ctx: &XdpContext,
     vni: u32,
     meta_guest_ipv4: [u8; 4],
     meta_underlay_ipv6: &[u8; 16],
-) -> Result<Option<u32>, ()> {
+) -> Result<Option<u32>, DpErr> {
     let data = ctx.data();
     let data_end = ctx.data_end();
     // Eth(14) + IPv6(40) + min L4(8).
@@ -432,12 +433,12 @@ pub fn nat64_egress(
 
     // adjust_head(+20): move data pointer forward 20 bytes (shrinks packet by 20).
     if unsafe { bpf_xdp_adjust_head(ctx.ctx, 20) } != 0 {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
     let data = ctx.data();
     let data_end = ctx.data_end();
     if data + ETH_LEN + 20 + 8 > data_end {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
     let q = data as *mut u8;
 
@@ -478,7 +479,7 @@ pub fn nat64_egress(
     // Fix L4 header (L4 is at data + ETH_LEN + 20 = data + 34).
     let l4_off = ETH_LEN + 20;
     if data + l4_off + 8 > data_end {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
     let lp = unsafe { q.add(l4_off) };
     match l4_proto_v4 {
@@ -507,7 +508,7 @@ pub fn nat64_egress(
         }
         IPPROTO_TCP => {
             if data + l4_off + 20 > data_end {
-                return Err(());
+                return Err(DpErr::Bounds);
             }
             // Translate checksum: v6 pseudo → v4 pseudo, old sport → nat_port.
             let new_ck = tcp_udp_v6_to_v4(
@@ -528,7 +529,7 @@ pub fn nat64_egress(
         }
         IPPROTO_UDP => {
             if data + l4_off + 8 > data_end {
-                return Err(());
+                return Err(DpErr::Bounds);
             }
             let new_ck = tcp_udp_v6_to_v4(
                 old_l4_cksum_be,
@@ -561,7 +562,7 @@ pub fn nat64_egress(
         None => return Ok(None),
     };
 
-    let local = LOCAL.get(0).ok_or(())?;
+    let local = LOCAL.get(0).ok_or(DpErr::NoRoute)?;
     let act = crate::encap::encap_and_redirect(
         ctx,
         local,
@@ -645,7 +646,7 @@ fn tc_nat64_alloc_port(fwd_key: &CtKey, nat_ipv4: [u8; 4], port_min: u16, range:
 /// Each resize is followed by `pull_data` so the fixed-offset rewrite region is writable/linear and
 /// the verifier sees a fresh packet range. Does NOT touch the verifier-tuned XDP `nat64_egress`.
 ///
-/// Returns `Ok(Some(action))` if handled, `Ok(None)` to fall through, `Err(())` on error.
+/// Returns `Ok(Some(action))` if handled, `Ok(None)` to fall through, `Err(DpErr)` on error.
 ///
 /// Deliberately NOT `#[inline(always)]`: `tc_guest_tx` is one large function carrying the IPv4
 /// egress + DHCP stack frames, and inlining this body on top blows the 512-byte BPF stack limit.
@@ -656,7 +657,7 @@ pub fn tc_nat64_egress(
     vni: u32,
     meta_guest_ipv4: [u8; 4],
     meta_underlay_ipv6: &[u8; 16],
-) -> Result<Option<i32>, ()> {
+) -> Result<Option<i32>, DpErr> {
     use aya_ebpf::bindings::bpf_adj_room_mode::BPF_ADJ_ROOM_MAC;
 
     // Make the inner IPv6 header + min L4 range writable/linear for the in-place rewrite.
@@ -773,16 +774,16 @@ pub fn tc_nat64_egress(
     // Then overwrite [0..74] with the final outer Eth + outer IPv6 + inner IPv4, leaving L4 in place
     // at offset 74 (= ETH_LEN + IPV6_LEN + 20).
     if ctx.adjust_room(20, BPF_ADJ_ROOM_MAC, 0).is_err() {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
     // inner IPv4 at ETH_LEN+IPV6_LEN, L4 at ETH_LEN+IPV6_LEN+20.
     if ctx.pull_data((ETH_LEN + IPV6_LEN + 20 + 8) as u32).is_err() {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
     let data = ctx.data();
     let data_end = ctx.data_end();
     if data + ETH_LEN + IPV6_LEN + 20 + 8 > data_end {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
     let q = data as *mut u8;
 
@@ -813,7 +814,7 @@ pub fn tc_nat64_egress(
     // ── Translate the L4 header in place at [74..] (= ETH_LEN + IPV6_LEN + 20). ──
     let l4_off = ETH_LEN + IPV6_LEN + 20;
     if data + l4_off + 8 > data_end {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
     let lp = unsafe { q.add(l4_off) };
     match l4_proto_v4 {
@@ -839,7 +840,7 @@ pub fn tc_nat64_egress(
         }
         IPPROTO_TCP => {
             if data + l4_off + 20 > data_end {
-                return Err(());
+                return Err(DpErr::Bounds);
             }
             let new_ck = tcp_udp_v6_to_v4(
                 old_l4_cksum_be,
@@ -859,7 +860,7 @@ pub fn tc_nat64_egress(
         }
         IPPROTO_UDP => {
             if data + l4_off + 8 > data_end {
-                return Err(());
+                return Err(DpErr::Bounds);
             }
             let new_ck = tcp_udp_v6_to_v4(
                 old_l4_cksum_be,
@@ -897,14 +898,14 @@ pub fn tc_nat64_egress(
         Some(r) => r.nexthop_ipv6,
         None => return Ok(None),
     };
-    let local = LOCAL.get(0).ok_or(())?;
+    let local = LOCAL.get(0).ok_or(DpErr::NoRoute)?;
     let gateway_mac = local.gateway_mac;
     let uplink_mac = local.uplink_mac;
     let uplink_ifindex = local.uplink_ifindex;
     let inner_len = (20u16).wrapping_add(l4_len as u16);
     // Re-check the [0..54] write window is in-bounds (verifier needs this against data_end).
     if data + ETH_LEN + IPV6_LEN > data_end {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
     unsafe {
         // Outer Ethernet: dst=gateway_mac, src=uplink_mac, ethertype IPv6.
@@ -940,7 +941,7 @@ pub fn tc_nat64_egress(
 /// `orig_sport`: the original guest L4 port/id from the CT entry (xlate_port).
 /// `tap_ifindex` + `guest_mac`: from the UNDERLAY lookup.
 ///
-/// Returns `Ok(Some(action))` if handled, `Ok(None)` to fall through, `Err(())` on error.
+/// Returns `Ok(Some(action))` if handled, `Ok(None)` to fall through, `Err(DpErr)` on error.
 #[inline(always)]
 pub fn nat64_ingress(
     ctx: &XdpContext,
@@ -948,7 +949,7 @@ pub fn nat64_ingress(
     guest_mac: [u8; 6],
     _nat_guest_ipv4: [u8; 4],
     orig_sport: u16,
-) -> Result<Option<u32>, ()> {
+) -> Result<Option<u32>, DpErr> {
     let data = ctx.data();
     let data_end = ctx.data_end();
     // Eth(14) + outer IPv6(40) + inner IPv4(20) + L4(8).
@@ -1037,12 +1038,12 @@ pub fn nat64_ingress(
     // After adjust_head(+20), data moves +20. Physical L4 is at old_data+74 = new_data+54. ✓
 
     if unsafe { bpf_xdp_adjust_head(ctx.ctx, 20) } != 0 {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
     let data = ctx.data();
     let data_end = ctx.data_end();
     if data + ETH_LEN + IPV6_LEN + 8 > data_end {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
     let q = data as *mut u8;
 
@@ -1077,7 +1078,7 @@ pub fn nat64_ingress(
     // Fix L4 header (L4 is at data + ETH_LEN + IPV6_LEN = data + 54).
     let l4_off = ETH_LEN + IPV6_LEN;
     if data + l4_off + 8 > data_end {
-        return Err(());
+        return Err(DpErr::Bounds);
     }
     let lp = unsafe { q.add(l4_off) };
     match l4_proto {
@@ -1112,7 +1113,7 @@ pub fn nat64_ingress(
             // checksum reflects orig_sport dport in an IPv4 pseudo-header context.
             // Use incremental update: v4 pseudo → v6 pseudo, no port change needed here.
             if data + l4_off + 20 > data_end {
-                return Err(());
+                return Err(DpErr::Bounds);
             }
             let new_ck = tcp_udp_v4_to_v6(
                 old_l4_cksum_be,
@@ -1129,7 +1130,7 @@ pub fn nat64_ingress(
         }
         IPPROTO_UDP => {
             if data + l4_off + 8 > data_end {
-                return Err(());
+                return Err(DpErr::Bounds);
             }
             let new_ck = tcp_udp_v4_to_v6(
                 old_l4_cksum_be,

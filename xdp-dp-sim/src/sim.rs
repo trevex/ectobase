@@ -135,7 +135,7 @@ impl SimNode {
         // 4. Decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest.
         let action = match decap_and_rewrite(&mut pkt, tap, guest_mac) {
             Ok(a) => a,
-            Err(()) => Action::Drop,
+            Err(_) => Action::Drop,
         };
         SimOut {
             action,

@@ -5,6 +5,7 @@ use aya_ebpf::{
 };
 use xdp_dp_common::{Local, RouteValue};
 use xdp_dp_core::encap::{write_outer_v6, EncapParams, IPV6_LEN};
+use xdp_dp_core::err::DpErr;
 
 use crate::coreimpl::CtxPkt;
 
@@ -45,11 +46,11 @@ pub fn encap_and_redirect(
     src_underlay: &[u8; 16],
     route: &RouteValue,
     inner_proto: u8,
-) -> Result<u32, ()> {
+) -> Result<u32, DpErr> {
     if write_encap_outer(ctx, local, src_underlay, route, inner_proto) {
         Ok(unsafe { bpf_redirect(local.uplink_ifindex, 0) } as u32)
     } else {
-        Err(())
+        Err(DpErr::Bounds)
     }
 }
 
@@ -65,13 +66,13 @@ pub fn encap_and_redirect_via_devmap(
     src_underlay: &[u8; 16],
     route: &RouteValue,
     inner_proto: u8,
-) -> Result<u32, ()> {
+) -> Result<u32, DpErr> {
     if write_encap_outer(ctx, local, src_underlay, route, inner_proto) {
         Ok(crate::maps::UPLINK_DEV
             .redirect(0, 0)
             .unwrap_or(xdp_action::XDP_ABORTED))
     } else {
-        Err(())
+        Err(DpErr::Bounds)
     }
 }
 

@@ -1,6 +1,7 @@
 use aya_ebpf::{bindings::xdp_action, programs::XdpContext};
 use xdp_dp_common::{PortMeta, RouteLpmData6};
 use xdp_dp_core::encap::EncapParams;
+use xdp_dp_core::err::DpErr;
 
 use crate::arp_nd::try_arp_reply;
 use crate::coreimpl::CtxPkt;
@@ -186,10 +187,10 @@ pub fn forward_decision_v6(
     })
 }
 
-pub fn try_guest_tx(ctx: &XdpContext) -> Result<u32, ()> {
+pub fn try_guest_tx(ctx: &XdpContext) -> Result<u32, DpErr> {
     // Identify the port by its ingress ifindex.
     let ifindex = unsafe { (*ctx.ctx).ingress_ifindex };
-    let meta = unsafe { PORT_META.get(&ifindex) }.ok_or(())?;
+    let meta = unsafe { PORT_META.get(&ifindex) }.ok_or(DpErr::NoRoute)?;
 
     // Answer ARP for the gateway in-datapath.
     if let Some(act) = try_arp_reply(ctx, meta) {
@@ -261,13 +262,13 @@ pub fn try_guest_tx(ctx: &XdpContext) -> Result<u32, ()> {
         }
         EgressVerdict::Encap(e) => {
             if unsafe { aya_ebpf::helpers::bpf_xdp_adjust_head(ctx.ctx, -(IPV6_LEN as i32)) } != 0 {
-                return Err(());
+                return Err(DpErr::Bounds);
             }
             let mut pkt = CtxPkt { ctx };
             if xdp_dp_core::encap::write_outer_v6(&mut pkt, &e) {
                 Ok(unsafe { aya_ebpf::helpers::bpf_redirect(e.uplink_ifindex, 0) } as u32)
             } else {
-                Err(())
+                Err(DpErr::Bounds)
             }
         }
     }

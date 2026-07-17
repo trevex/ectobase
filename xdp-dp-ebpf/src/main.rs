@@ -40,7 +40,7 @@ pub fn guest_tx(ctx: XdpContext) -> u32 {
             dbg::dlog!(&ctx, "guest_tx: action={}", act);
             act
         }
-        Err(()) => xdp_action::XDP_PASS,
+        Err(_) => xdp_action::XDP_PASS,
     }
 }
 
@@ -59,7 +59,7 @@ pub fn uplink_rx(ctx: XdpContext) -> u32 {
     });
     match ingress::try_uplink_rx(&ctx) {
         Ok(act) => act,
-        Err(()) => xdp_action::XDP_PASS,
+        Err(_) => xdp_action::XDP_PASS,
     }
 }
 
@@ -72,7 +72,7 @@ pub fn wan_rx(ctx: XdpContext) -> u32 {
     });
     match ingress::try_wan_rx(&ctx) {
         Ok(act) => act,
-        Err(()) => xdp_action::XDP_PASS,
+        Err(_) => xdp_action::XDP_PASS,
     }
 }
 

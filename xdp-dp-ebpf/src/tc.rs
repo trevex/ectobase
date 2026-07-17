@@ -248,7 +248,7 @@ pub fn tc_guest_nat64(ctx: TcContext) -> i32 {
     match crate::nat64::tc_nat64_egress(&ctx, vni, guest_ipv4, &underlay_ipv6) {
         Ok(Some(act)) => act,
         Ok(None) => TC_ACT_OK,
-        Err(()) => TC_ACT_SHOT,
+        Err(_) => TC_ACT_SHOT,
     }
 }
 
