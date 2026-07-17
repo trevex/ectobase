@@ -27,7 +27,7 @@ func TestReconcileFirewall_PushesRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(c).Build()
-	dp := newFakeDP()
+	dp := newRecordingDP()
 	r := &Reconciler{client: cl, nodeID: "nodeA", dp: dp}
 
 	if err := r.ReconcileFirewall(context.Background()); err != nil {
@@ -88,7 +88,7 @@ func TestReconcileFirewall_DeletesStaleRules(t *testing.T) {
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cnic).Build()
-	dp := newFakeDP()
+	dp := newRecordingDP()
 	r := &Reconciler{client: cl, nodeID: "nodeA", dp: dp}
 
 	if err := r.ReconcileFirewall(context.Background()); err != nil {
@@ -145,7 +145,7 @@ func TestReconcileFirewall_ConvergesOnRepeat(t *testing.T) {
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cnic).Build()
-	dp := newFakeDP() // rejects duplicate rule ids (models the real dataplane)
+	dp := newRecordingDP() // rejects duplicate rule ids (models the real dataplane)
 	r := &Reconciler{client: cl, nodeID: "nodeA", dp: dp}
 
 	for i := 0; i < 3; i++ {

@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -15,138 +14,8 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-// fakeDP records the routes the agent programs on the local dataplane.
-type fakeDP struct {
-	mu       sync.Mutex
-	added    map[string]string // "vni prefix" -> nexthop
-	external map[string]bool   // "vni prefix" -> external flag as programmed
-	withdrew map[string]bool
-	nbrNat   map[string]string // "natIp min max" -> ownerUnderlay
-	nbrNatWd map[string]bool
-	fwAdds   []fwCall
-	fwDels   []struct{ iface, ruleID string }
-	// fwInstalled models the real dataplane: a rule id is unique per interface, and AddFwRule on an
-	// existing id fails (ALREADY_EXISTS) — so a correct reconcile must NOT re-add unchanged rules.
-	fwInstalled map[string]bool
-	lbVips      []string            // ids added
-	lbDels      []string            // ids deleted
-	lbBackends  map[string][]string // id -> backends
-	routeAdds   []routeCall         // every AddRoute call, in order
-}
-
-type fwCall struct {
-	iface  string
-	ruleID string
-	rule   FwRule
-}
-
-type routeCall struct {
-	vni      uint32
-	prefix   string
-	nexthop  string
-	external bool
-}
-
-func newFakeDP() *fakeDP {
-	return &fakeDP{
-		added: map[string]string{}, external: map[string]bool{}, withdrew: map[string]bool{},
-		nbrNat: map[string]string{}, nbrNatWd: map[string]bool{},
-		fwInstalled: map[string]bool{},
-		lbBackends:  map[string][]string{},
-	}
-}
-
-func natKeyStr(natIp string, min, max uint32) string {
-	return fmt.Sprintf("%s %d %d", natIp, min, max)
-}
-
-func (f *fakeDP) AddNeighborNat(_ context.Context, natIp string, min, max uint32, ownerUnderlay string, _ uint32) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.nbrNat[natKeyStr(natIp, min, max)] = ownerUnderlay
-	return nil
-}
-func (f *fakeDP) WithdrawNeighborNat(_ context.Context, natIp string, min, max uint32, _ uint32) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.nbrNatWd[natKeyStr(natIp, min, max)] = true
-	return nil
-}
-func (f *fakeDP) getNbrNat(natIp string, min, max uint32) (string, bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	v, ok := f.nbrNat[natKeyStr(natIp, min, max)]
-	return v, ok
-}
-
-func (f *fakeDP) AddRoute(_ context.Context, vni uint32, prefix, nexthop string, external bool) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.added[key(vni, prefix)] = nexthop
-	f.external[key(vni, prefix)] = external
-	f.routeAdds = append(f.routeAdds, routeCall{vni, prefix, nexthop, external})
-	return nil
-}
-func (f *fakeDP) AddNatSource(_ context.Context, _ uint32, _, _ string, _, _ uint32) error {
-	return nil
-}
-func (f *fakeDP) AddFwRule(_ context.Context, iface, ruleID string, r FwRule) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	k := iface + "|" + ruleID
-	if f.fwInstalled[k] {
-		return fmt.Errorf("fwrule %s already exists", k) // model dataplane ALREADY_EXISTS
-	}
-	f.fwInstalled[k] = true
-	f.fwAdds = append(f.fwAdds, fwCall{iface, ruleID, r})
-	return nil
-}
-func (f *fakeDP) DelFwRule(_ context.Context, iface, ruleID string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.fwInstalled, iface+"|"+ruleID)
-	f.fwDels = append(f.fwDels, struct{ iface, ruleID string }{iface, ruleID})
-	return nil
-}
-func (f *fakeDP) WithdrawRoute(_ context.Context, vni uint32, prefix string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.withdrew[key(vni, prefix)] = true
-	return nil
-}
-func (f *fakeDP) get(vni uint32, prefix string) (string, bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	v, ok := f.added[key(vni, prefix)]
-	return v, ok
-}
-func key(vni uint32, prefix string) string { return prefix } // vni fixed at 100 in the test
-
-func (f *fakeDP) AddLbVip(ctx context.Context, id string, vni uint32, vip, lbUnderlay string, ports []LbPort) error {
-	f.lbVips = append(f.lbVips, id)
-	return nil
-}
-func (f *fakeDP) DelLbVip(ctx context.Context, id string) error {
-	f.lbDels = append(f.lbDels, id)
-	return nil
-}
-func (f *fakeDP) AddLbBackend(ctx context.Context, id, backendUnderlay string) error {
-	f.lbBackends[id] = append(f.lbBackends[id], backendUnderlay)
-	return nil
-}
-func (f *fakeDP) DelLbBackend(ctx context.Context, id, backendUnderlay string) error {
-	cur := f.lbBackends[id][:0]
-	for _, b := range f.lbBackends[id] {
-		if b != backendUnderlay {
-			cur = append(cur, b)
-		}
-	}
-	f.lbBackends[id] = cur
-	return nil
-}
-
 func TestFakeDP_LBImplementsInterface(t *testing.T) {
-	var _ Dataplane = newFakeDP()
+	var _ Dataplane = newRecordingDP()
 }
 
 func dialReflector(t *testing.T) rbv1.RouteBusClient {
@@ -172,7 +41,7 @@ func TestAgentLearnsRemoteRouteAndProgramsDataplane(t *testing.T) {
 	defer cancel()
 
 	// Agent A announces one local route (no dataplane needed for the announcer here).
-	dpA := newFakeDP()
+	dpA := newRecordingDP()
 	busA := NewBus("nodeA", "fd00::a", dpA, false)
 	busA.reconcileEvery = 50 * time.Millisecond
 	reconcileA := func(context.Context) (DesiredState, error) {
@@ -181,7 +50,7 @@ func TestAgentLearnsRemoteRouteAndProgramsDataplane(t *testing.T) {
 	go busA.Run(ctx, cl, reconcileA)
 
 	// Agent B subscribes to vni 100 and must program A's route on its dataplane.
-	dpB := newFakeDP()
+	dpB := newRecordingDP()
 	busB := NewBus("nodeB", "fd00::b", dpB, false)
 	busB.reconcileEvery = 50 * time.Millisecond
 	reconcileB := func(context.Context) (DesiredState, error) { return DesiredState{Subs: []uint32{100}}, nil }
@@ -212,7 +81,7 @@ func TestAgentWithdrawsRemovedRouteToSubscriber(t *testing.T) {
 	// Announcer A: desired route present until `present` is flipped false.
 	var mu sync.Mutex
 	present := true
-	dpA := newFakeDP()
+	dpA := newRecordingDP()
 	busA := NewBus("nodeA", "fd00::a", dpA, false)
 	busA.reconcileEvery = 30 * time.Millisecond
 	reconcileA := func(context.Context) (DesiredState, error) {
@@ -225,7 +94,7 @@ func TestAgentWithdrawsRemovedRouteToSubscriber(t *testing.T) {
 	}
 	go busA.Run(ctx, cl, reconcileA)
 
-	dpB := newFakeDP()
+	dpB := newRecordingDP()
 	busB := NewBus("nodeB", "fd00::b", dpB, false)
 	busB.reconcileEvery = 30 * time.Millisecond
 	go busB.Run(ctx, cl, func(context.Context) (DesiredState, error) { return DesiredState{Subs: []uint32{100}}, nil })
@@ -249,7 +118,7 @@ func TestAgentWithdrawsRemovedRouteToSubscriber(t *testing.T) {
 // survives. This is what removes routes that left the RIB while the agent was disconnected.
 func TestPruneOnEndOfRIB(t *testing.T) {
 	ctx := context.Background()
-	dp := newFakeDP()
+	dp := newRecordingDP()
 	b := NewBus("nodeB", "fd00::b", dp, false)
 
 	// Session 1: learn two routes in vni 100.
@@ -286,7 +155,7 @@ func waitFor(t *testing.T, d time.Duration, cond func() bool) {
 }
 
 func TestApplyPublic_LBVIP_EdgeAddsBackend(t *testing.T) {
-	dp := newFakeDP()
+	dp := newRecordingDP()
 	b := NewBus("edge1", "2001:db8::e", dp, true) // isEdge = true
 	b.applyPublic(&rbv1.PublicPrefix{
 		Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "2001:db8::dd",
@@ -297,7 +166,7 @@ func TestApplyPublic_LBVIP_EdgeAddsBackend(t *testing.T) {
 }
 
 func TestApplyPublic_LBVIP_NonEdgeIgnores(t *testing.T) {
-	dp := newFakeDP()
+	dp := newRecordingDP()
 	b := NewBus("nodeA", "2001:db8::dd", dp, false) // not edge
 	b.applyPublic(&rbv1.PublicPrefix{
 		Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "2001:db8::dd",
@@ -308,7 +177,7 @@ func TestApplyPublic_LBVIP_NonEdgeIgnores(t *testing.T) {
 }
 
 func TestApplyNatInstallsNeighborNatOnlyForRemoteOwners(t *testing.T) {
-	dp := newFakeDP()
+	dp := newRecordingDP()
 	// This node's underlay is fd00::b.
 	b := NewBus("nodeB", "fd00::b", dp, false)
 	ctx := context.Background()
@@ -334,7 +203,7 @@ func TestApplyNatInstallsNeighborNatOnlyForRemoteOwners(t *testing.T) {
 }
 
 func TestApplyPublicVNIRoute_ImportsIntoEgressVNIs(t *testing.T) {
-	dp := newFakeDP()
+	dp := newRecordingDP()
 	b := NewBus("nodeA", "fd00::a", dp, false)
 	b.egressVNIs = []uint32{100, 200} // set by Run() in production
 
@@ -357,7 +226,7 @@ func TestApplyPublicVNIRoute_ImportsIntoEgressVNIs(t *testing.T) {
 }
 
 func TestApplyNonPublicRoute_InstallsDirectly(t *testing.T) {
-	dp := newFakeDP()
+	dp := newRecordingDP()
 	b := NewBus("nodeA", "fd00::a", dp, false)
 	b.egressVNIs = []uint32{100}
 	b.apply(context.Background(), &rbv1.RouteUpdate{

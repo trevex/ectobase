@@ -9,33 +9,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-// natRecordingDP records AddNatSource calls (embeds fakeDP for the rest of the
-// Dataplane surface). It uses fakeDP's embedded mutex (fakeDP.mu) for all
-// locking — no second mutex so there is no shadowing hazard.
-type natRecordingDP struct {
-	*fakeDP
-	natSrc  map[string]natSrcCall
-	natSrcN map[string]int
-}
-
-type natSrcCall struct {
-	vni              uint32
-	src, nat         string
-	portMin, portMax uint32
-}
-
-func newNatRecordingDP() *natRecordingDP {
-	return &natRecordingDP{fakeDP: newFakeDP(), natSrc: map[string]natSrcCall{}, natSrcN: map[string]int{}}
-}
-
-func (d *natRecordingDP) AddNatSource(_ context.Context, vni uint32, src, nat string, portMin, portMax uint32) error {
-	d.fakeDP.mu.Lock()
-	defer d.fakeDP.mu.Unlock()
-	d.natSrc[src] = natSrcCall{vni: vni, src: src, nat: nat, portMin: portMin, portMax: portMax}
-	d.natSrcN[src]++
-	return nil
-}
-
 func TestReconcileProgramsLocalNatSourceAndStagesAnnounce(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {
@@ -64,7 +37,7 @@ func TestReconcileProgramsLocalNatSourceAndStagesAnnounce(t *testing.T) {
 	}
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(vpc, local, gw).Build()
-	dp := newNatRecordingDP()
+	dp := newRecordingDP()
 	r := &Reconciler{client: c, nodeID: "nodeA", underlay: "fd00::a", dp: dp}
 
 	_, _, blocks, _, err := r.Desired(context.Background())
@@ -73,10 +46,10 @@ func TestReconcileProgramsLocalNatSourceAndStagesAnnounce(t *testing.T) {
 	}
 
 	// AddNatSource programmed exactly once with the expected args.
-	dp.fakeDP.mu.Lock()
+	dp.mu.Lock()
 	n := dp.natSrcN["10.0.0.1"]
 	call, ok := dp.natSrc["10.0.0.1"]
-	dp.fakeDP.mu.Unlock()
+	dp.mu.Unlock()
 	if !ok || n != 1 {
 		t.Fatalf("AddNatSource for 10.0.0.1 called %d times (want 1), ok=%v", n, ok)
 	}

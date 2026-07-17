@@ -46,7 +46,7 @@ func TestDesiredPublicNonEdgeEmpty(t *testing.T) {
 }
 
 func TestApplyPublicEdgeUnderlayAddThenWithdraw(t *testing.T) {
-	b := NewBus("nodeA", "fd00::a", newFakeDP(), false)
+	b := NewBus("nodeA", "fd00::a", newRecordingDP(), false)
 
 	add := &rbv1.PublicPrefix{
 		Kind:          rbv1.PublicKind_PUBLIC_KIND_EDGE_UNDERLAY,
@@ -66,7 +66,7 @@ func TestApplyPublicEdgeUnderlayAddThenWithdraw(t *testing.T) {
 }
 
 func TestApplyPublicNatIPIsNoOp(t *testing.T) {
-	b := NewBus("nodeA", "fd00::a", newFakeDP(), false)
+	b := NewBus("nodeA", "fd00::a", newRecordingDP(), false)
 	natIP := &rbv1.PublicPrefix{
 		Kind:          rbv1.PublicKind_PUBLIC_KIND_NAT_IP,
 		Prefix:        "1.2.3.4/32",

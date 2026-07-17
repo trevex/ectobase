@@ -114,7 +114,7 @@ func TestReconcileLB_EdgeAddsAndDiffs(t *testing.T) {
 		Spec:       netv1.LoadBalancerSpec{VIP: "203.0.113.50", Ports: []netv1.LoadBalancerPort{{Port: 443, Proto: "TCP"}}},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(lb).Build()
-	dp := newFakeDP()
+	dp := newRecordingDP()
 	r := &Reconciler{client: cl, nodeID: "edge1", underlay: "2001:db8::e", edgeLoopback: "fd00::1", dp: dp}
 
 	if err := r.ReconcileLB(context.Background()); err != nil {
@@ -141,7 +141,7 @@ func TestReconcileLB_V6VIP(t *testing.T) {
 		Spec:       netv1.LoadBalancerSpec{VIP: "2001:db8::a", Ports: []netv1.LoadBalancerPort{{Port: 443, Proto: "TCP"}}},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(lb).Build()
-	dp := newFakeDP()
+	dp := newRecordingDP()
 	r := &Reconciler{client: cl, nodeID: "edge1", underlay: "2001:db8::e", edgeLoopback: "fd00::1", dp: dp}
 
 	if err := r.ReconcileLB(context.Background()); err != nil {
@@ -159,7 +159,7 @@ func TestReconcileLB_NonEdgeNoop(t *testing.T) {
 		Spec:       netv1.LoadBalancerSpec{VIP: "203.0.113.50"},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(lb).Build()
-	dp := newFakeDP()
+	dp := newRecordingDP()
 	r := &Reconciler{client: cl, nodeID: "nodeA", dp: dp} // no edgeLoopback
 	if err := r.ReconcileLB(context.Background()); err != nil {
 		t.Fatal(err)
