@@ -12,7 +12,6 @@ import (
 
 	dpv1 "github.com/trevex/xdp-dp/cni/gen/dataplanev1"
 	rbv1 "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
-	"google.golang.org/grpc"
 )
 
 // Dataplane is the subset of xdp-dp the agent drives. dpAdapter wraps the real
@@ -479,5 +478,3 @@ func (d dpAdapter) DelLbBackend(ctx context.Context, id, backendUnderlay string)
 	_, err := d.c.DelLbBackend(ctx, &dpv1.DelLbBackendRequest{Id: id, BackendUnderlay: backendUnderlay})
 	return err
 }
-
-var _ = grpc.WaitForReady // keep grpc import if unused after edits; remove if the linter objects
