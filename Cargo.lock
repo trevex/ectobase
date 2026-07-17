@@ -550,6 +550,71 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
+name = "flowplane"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aya",
+ "aya-build",
+ "aya-log",
+ "cargo_metadata",
+ "clap",
+ "env_logger",
+ "etherparse",
+ "flowplane-common",
+ "flowplane-core",
+ "flowplane-ebpf",
+ "flowplane-sim",
+ "ipnet",
+ "libc",
+ "parking_lot",
+ "prost",
+ "tempfile",
+ "tokio",
+ "tonic",
+ "tonic-build",
+ "tonic-health",
+ "uuid",
+]
+
+[[package]]
+name = "flowplane-common"
+version = "0.1.0"
+dependencies = [
+ "aya",
+]
+
+[[package]]
+name = "flowplane-core"
+version = "0.1.0"
+dependencies = [
+ "flowplane-common",
+]
+
+[[package]]
+name = "flowplane-ebpf"
+version = "0.1.0"
+dependencies = [
+ "aya-ebpf",
+ "aya-log-ebpf",
+ "flowplane-common",
+ "flowplane-core",
+ "network-types",
+ "which",
+]
+
+[[package]]
+name = "flowplane-sim"
+version = "0.1.0"
+dependencies = [
+ "etherparse",
+ "flowplane-common",
+ "flowplane-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2028,71 +2093,6 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
-]
-
-[[package]]
-name = "xdp-dp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "aya",
- "aya-build",
- "aya-log",
- "cargo_metadata",
- "clap",
- "env_logger",
- "etherparse",
- "ipnet",
- "libc",
- "parking_lot",
- "prost",
- "tempfile",
- "tokio",
- "tonic",
- "tonic-build",
- "tonic-health",
- "uuid",
- "xdp-dp-common",
- "xdp-dp-core",
- "xdp-dp-ebpf",
- "xdp-dp-sim",
-]
-
-[[package]]
-name = "xdp-dp-common"
-version = "0.1.0"
-dependencies = [
- "aya",
-]
-
-[[package]]
-name = "xdp-dp-core"
-version = "0.1.0"
-dependencies = [
- "xdp-dp-common",
-]
-
-[[package]]
-name = "xdp-dp-ebpf"
-version = "0.1.0"
-dependencies = [
- "aya-ebpf",
- "aya-log-ebpf",
- "network-types",
- "which",
- "xdp-dp-common",
- "xdp-dp-core",
-]
-
-[[package]]
-name = "xdp-dp-sim"
-version = "0.1.0"
-dependencies = [
- "etherparse",
- "serde",
- "serde_json",
- "xdp-dp-common",
- "xdp-dp-core",
 ]
 
 [[package]]

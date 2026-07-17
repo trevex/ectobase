@@ -1,0 +1,46 @@
+[package]
+name = "flowplane"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aya = { workspace = true }
+aya-log = { workspace = true }
+flowplane-common = { path = "../flowplane-common", features = ["user"] }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+parking_lot = { workspace = true }
+clap = { workspace = true }
+tonic = { workspace = true, features = ["transport"] }
+tonic-health = "0.12"
+prost = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+libc = "0.2"
+env_logger = "0.11"
+ipnet = "2"
+
+[dev-dependencies]
+# Native datapath sim: builds the encapped N-S input frame AND the native pure-core expected
+# output (SimNode) that the BPF_PROG_TEST_RUN anchor (tests/anchor_uplink.rs) compares the real
+# compiled bytecode against. flowplane-core supplies EncapParams/GW_MAC/Action for the fixture.
+flowplane-sim = { path = "../flowplane-sim" }
+flowplane-core = { path = "../flowplane-core" }
+etherparse = "0.15"
+# Per-run bpffs pin dir for the anchor/verifier tests: the state maps are declared `pinned`, so
+# every load path (including the inline EbpfLoader tests) must set a `map_pin_path` on a bpffs.
+tempfile = { workspace = true }
+
+[features]
+# Build a debug image: compiles the eBPF crate with its `debug` feature (dlog!/aya-log) via
+# build.rs. At runtime, set FLOWPLANE_DEBUG=1 so the loader installs the EbpfLogger drain; without
+# that env the EbpfLogger is not started (the AYA_LOGS map is also absent in non-debug images).
+debug = []
+
+[build-dependencies]
+anyhow = { workspace = true }
+parking_lot = { workspace = true }
+aya-build = "0.1.3"
+cargo_metadata = "0.23"
+flowplane-ebpf = { path = "../flowplane-ebpf" }
+tonic-build = "0.12"
