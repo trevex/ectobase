@@ -10,6 +10,8 @@ pub use pkt::VecPkt;
 pub use sim::{SimNode, SimOut};
 
 #[cfg(test)]
+mod arp_nd_test;
+#[cfg(test)]
 mod conntrack_test;
 #[cfg(test)]
 mod ct_apply_test;
