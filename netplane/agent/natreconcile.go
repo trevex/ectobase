@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	netv1 "github.com/trevex/xdp-dp/api/v1alpha1"
+	"github.com/trevex/xdp-dp/netplane/routebus"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -28,14 +29,9 @@ type NatSource struct {
 
 // NatBlock is a NAT block this node ANNOUNCES on the routebus (so every other
 // node can return-route to us). It carries this node's underlay as the owner.
-type NatBlock struct {
-	Vni           uint32
-	SourceIP      string
-	NatIP         string
-	PortMin       uint32
-	PortMax       uint32
-	OwnerUnderlay string
-}
+// It aliases the shared routebus.NatBlock so the agent and reflector use one
+// canonical representation.
+type NatBlock = routebus.NatBlock
 
 // localSource is a NetworkInterface IP scheduled to this node, with its VNI.
 type localSource struct {

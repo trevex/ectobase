@@ -1,19 +1,16 @@
 package reflector
 
-import pb "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+import (
+	pb "github.com/trevex/xdp-dp/netplane/gen/routebusv1"
+	"github.com/trevex/xdp-dp/netplane/routebus"
+)
 
-// NatBlock is a deterministic egress SNAT block: overlay SourceIP (in Vni) is
-// SNATed onto NatIP:[PortMin,PortMax) and owned by the node at OwnerUnderlay.
-// NAT blocks are GLOBAL (not per-VNI): every node learns every block so a return
-// packet that lands on the wrong node can re-route to the owner.
-type NatBlock struct {
-	Vni           uint32
-	SourceIP      string
-	NatIP         string
-	PortMin       uint32
-	PortMax       uint32
-	OwnerUnderlay string
-}
+// NatBlock aliases the shared routebus.NatBlock: a deterministic egress SNAT
+// block where overlay SourceIP (in Vni) is SNATed onto NatIP:[PortMin,PortMax)
+// and owned by the node at OwnerUnderlay. NAT blocks are GLOBAL (not per-VNI):
+// every node learns every block so a return packet that lands on the wrong node
+// can re-route to the owner.
+type NatBlock = routebus.NatBlock
 
 // natKey identifies a block by its NAT (public-IP, port-block-start).
 type natKey struct {
