@@ -40,6 +40,21 @@ pub struct AttachState {
     pub gateway_ipv4: [u8; 4],
     /// Monotonic MAC suffix so auto-allocated guest MACs are unique within this process.
     pub mac_seq: Mutex<u32>,
+    /// Disable guest tx-checksum offload at attach. Only needed when the fabric uplink is a
+    /// software veth (clab/kind) that advertises HW_CSUM but never finalizes CHECKSUM_PARTIAL, so
+    /// the encapped inner L4 checksum would reach the wire partial/wrong. A real NIC finalizes the
+    /// inner checksum in hardware after our encap, so we leave offload on there (avoids the guest-CPU
+    /// checksum tax). See docs/superpowers/specs/2026-07-16-guest-egress-inner-checksum-design.md.
+    pub disable_guest_csum_offload: bool,
+}
+
+/// Whether the fabric `uplink` can finalize a `CHECKSUM_PARTIAL` inner checksum in hardware. A real
+/// NIC (PCI/virtio) has a `/sys/class/net/<iface>/device` link and offloads the checksum after our
+/// encap; a software veth (clab/kind fabric) has no such link and never finalizes, so guests there
+/// must emit complete checksums (offload disabled at attach). Errs toward "software" (disable offload)
+/// on any uncertainty — the wrong guess that direction is a tiny perf tax, not a correctness bug.
+pub fn uplink_finalizes_checksum(uplink: &str) -> bool {
+    std::fs::symlink_metadata(format!("/sys/class/net/{uplink}/device")).is_ok()
 }
 
 impl AttachState {
@@ -207,16 +222,19 @@ impl AttachState {
         )
         .context("set guest veth mac")?;
         run_netns(netns_path, &["ip", "link", "set", guest_name, "up"]).context("guest veth up")?;
-        // Disable tx-checksum offload on the guest end: the guest stack otherwise emits TCP/UDP with
-        // CHECKSUM_PARTIAL (a pseudo-header-only partial csum, finalized "by hardware"). Our tc guest
-        // edge SNATs (incremental csum update) + encapsulates and redirects, bypassing the xmit-time
-        // finalization — so the inner L4 checksum reaches the wire partial/wrong and the peer drops
-        // the segment (ICMP is immune; it has no offload). Forcing full csums here makes the SNAT's
-        // incremental update land on a valid checksum. Best-effort: don't fail attach if unavailable.
-        let _ = run_netns(
-            netns_path,
-            &["ethtool", "-K", guest_name, "tx-checksum-ip-generic", "off"],
-        );
+        // Disable tx-checksum offload on the guest end — BUT ONLY when the uplink can't finalize
+        // CHECKSUM_PARTIAL in hardware (software veth fabric, e.g. clab/kind). The guest stack
+        // otherwise emits TCP/UDP with CHECKSUM_PARTIAL (a pseudo-header-only partial csum, meant to
+        // be finalized "by hardware"); our encap redirects to the uplink bypassing that finalization,
+        // so on a veth uplink the inner L4 checksum reaches the wire partial/wrong (ICMP is immune).
+        // On a real NIC the hardware finalizes it after encap, so we keep offload on there (avoids the
+        // guest-CPU checksum tax). Best-effort: don't fail attach if ethtool is unavailable.
+        if self.disable_guest_csum_offload {
+            let _ = run_netns(
+                netns_path,
+                &["ethtool", "-K", guest_name, "tx-checksum-ip-generic", "off"],
+            );
+        }
         // Give the HOST end the SAME (guest) MAC, then bring it up. `create_interface` derives the
         // datapath `guest_mac` from `mac_of(host)` (the "tap" it attaches the guest edge to), and the
         // local fast path rewrites a locally-delivered frame's dst to that `guest_mac`. If the host
@@ -310,6 +328,14 @@ mod tests {
     #[test]
     fn host_veth_name_short_passthrough() {
         assert_eq!(AttachState::host_veth_name("t0"), "veth-t0");
+    }
+
+    #[test]
+    fn uplink_finalizes_checksum_false_for_virtual_and_missing() {
+        // Loopback is a virtual device (no /sys/class/net/lo/device) → cannot finalize in HW.
+        assert!(!uplink_finalizes_checksum("lo"));
+        // A non-existent interface also has no device link → false (errs toward "software").
+        assert!(!uplink_finalizes_checksum("definitely-not-an-iface-xyz"));
     }
 
     #[test]

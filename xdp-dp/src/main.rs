@@ -450,11 +450,21 @@ async fn main() -> anyhow::Result<()> {
                 println!("DataplaneNode: underlay pool = {pool}");
                 underlay::UnderlayIpam::new(pool)
             };
+            // Disable guest tx-checksum offload at attach ONLY on a software-veth uplink (clab/kind),
+            // which can't finalize CHECKSUM_PARTIAL; a real NIC finalizes the inner checksum in HW.
+            let disable_guest_csum_offload = !attach::uplink_finalizes_checksum(&uplink);
+            if disable_guest_csum_offload {
+                println!(
+                    "uplink {uplink} is a software device (no HW csum finalize); disabling guest \
+                     tx-checksum offload at attach"
+                );
+            }
             let attach_state = std::sync::Arc::new(attach::AttachState {
                 control: std::sync::Arc::clone(&control),
                 ipam: parking_lot::Mutex::new(ipam),
                 gateway_ipv4,
                 mac_seq: parking_lot::Mutex::new(0),
+                disable_guest_csum_offload,
             });
 
             // On adopt, finish restart recovery: the maps + bookkeeping survived (bring_up), but the
