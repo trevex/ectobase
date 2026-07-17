@@ -58,13 +58,14 @@ func main() {
 	rb := rbv1.NewRouteBusClient(rbConn)
 
 	ctx := context.Background()
-	r, err := agent.NewReconciler(*kubeconfig, *nodeID)
+	r, err := agent.NewReconciler(*kubeconfig, *nodeID, agent.Deps{
+		Underlay:     *underlay,
+		Dataplane:    dp,
+		EdgeLoopback: *edgeLoopback,
+	})
 	if err != nil {
 		log.Fatalf("reconciler: %v", err)
 	}
-	r.SetUnderlay(*underlay)
-	r.SetDataplane(dp)
-	r.SetEdgeLoopback(*edgeLoopback)
 
 	// reconcile recomputes this node's full desired bus state AND programs the local dataplane
 	// (SNAT via Desired's side effect, firewall + LB diffs). The Bus calls it every reconcile tick
