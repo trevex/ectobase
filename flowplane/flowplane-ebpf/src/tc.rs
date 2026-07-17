@@ -41,20 +41,15 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
     });
 
     // ARP request for the gateway → reply in place, redirect back to the guest.
-    if ethertype == flowplane_common::arp_nd::ETH_P_ARP {
+    if ethertype == flowplane_core::arp_nd::ETH_P_ARP {
         if ctx
-            .pull_data(
-                (flowplane_common::arp_nd::ETH_LEN + flowplane_common::arp_nd::ARP_LEN) as u32,
-            )
+            .pull_data((flowplane_common::arp_nd::ETH_LEN + flowplane_core::arp_nd::ARP_LEN) as u32)
             .is_ok()
-            && unsafe {
-                flowplane_common::arp_nd::try_write_arp_reply(
-                    ctx.data(),
-                    ctx.data_end(),
-                    meta.gateway_ipv4,
-                    meta.guest_mac,
-                )
-            }
+            && flowplane_core::arp_nd::arp_reply(
+                &mut crate::coreimpl::RawPkt::new(ctx.data(), ctx.data_end()),
+                meta.gateway_ipv4,
+                meta.guest_mac,
+            )
         {
             return unsafe { bpf_redirect(ifindex, 0) as i32 };
         }
@@ -85,14 +80,11 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
         const ND_FRAME: usize =
             flowplane_common::arp_nd::ETH_LEN + flowplane_common::arp_nd::IPV6_LEN + 32;
         if ctx.pull_data(ND_FRAME as u32).is_ok()
-            && unsafe {
-                flowplane_common::arp_nd::try_write_nd_reply(
-                    ctx.data(),
-                    ctx.data_end(),
-                    meta.gateway_ipv6,
-                    meta.guest_mac,
-                )
-            }
+            && flowplane_core::arp_nd::nd_reply(
+                &mut crate::coreimpl::RawPkt::new(ctx.data(), ctx.data_end()),
+                meta.gateway_ipv6,
+                meta.guest_mac,
+            )
         {
             return unsafe { bpf_redirect(ifindex, 0) as i32 };
         }

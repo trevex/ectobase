@@ -23,16 +23,13 @@ pub fn reflect(ctx: &XdpContext) -> u32 {
 /// If the frame is an ARP request for `meta.gateway_ipv4`, rewrite it in place into an ARP
 /// reply (from GW_MAC / gateway IP) and return `Some(XDP_TX)`. Otherwise return `None` and the
 /// caller continues its pipeline.
+///
+/// Delegates the byte rewrite to `flowplane_core::arp_nd::arp_reply` through the `RawPkt` seam — the
+/// SAME code the native sim + the `BPF_PROG_TEST_RUN` byte-parity anchor run. No inline builder here.
 #[inline(always)]
 pub fn try_arp_reply(ctx: &XdpContext, meta: &PortMeta) -> Option<u32> {
-    if unsafe {
-        flowplane_common::arp_nd::try_write_arp_reply(
-            ctx.data(),
-            ctx.data_end(),
-            meta.gateway_ipv4,
-            meta.guest_mac,
-        )
-    } {
+    let mut pkt = crate::coreimpl::RawPkt::new(ctx.data(), ctx.data_end());
+    if flowplane_core::arp_nd::arp_reply(&mut pkt, meta.gateway_ipv4, meta.guest_mac) {
         Some(reflect(ctx))
     } else {
         None
@@ -42,16 +39,12 @@ pub fn try_arp_reply(ctx: &XdpContext, meta: &PortMeta) -> Option<u32> {
 /// If the frame is an ICMPv6 Neighbor Solicitation for `meta.gateway_ipv6`, rewrite it in place
 /// into a solicited Neighbor Advertisement from GW_MAC and return Some(XDP_TX). NS/NA are a fixed
 /// size here (40 IPv6 + 32 ICMPv6) so all accesses are constant-offset (verifier-friendly).
+///
+/// Delegates the byte rewrite to `flowplane_core::arp_nd::nd_reply` through the `RawPkt` seam.
 #[inline(always)]
 pub fn try_nd_reply(ctx: &XdpContext, meta: &PortMeta) -> Option<u32> {
-    if unsafe {
-        flowplane_common::arp_nd::try_write_nd_reply(
-            ctx.data(),
-            ctx.data_end(),
-            meta.gateway_ipv6,
-            meta.guest_mac,
-        )
-    } {
+    let mut pkt = crate::coreimpl::RawPkt::new(ctx.data(), ctx.data_end());
+    if flowplane_core::arp_nd::nd_reply(&mut pkt, meta.gateway_ipv6, meta.guest_mac) {
         Some(reflect(ctx))
     } else {
         None

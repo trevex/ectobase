@@ -1,5 +1,6 @@
 #![no_std]
 
+pub mod arp_nd;
 pub mod conntrack;
 pub mod egress;
 pub mod encap;

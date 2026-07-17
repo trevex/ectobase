@@ -395,6 +395,33 @@ impl SimNode {
         }
     }
 
+    /// Guest-facing gateway responder (`guest_tx` ARP/ND head): if `frame` is an ARP request for
+    /// `meta.gateway_ipv4` OR an ICMPv6 Neighbor Solicitation for `meta.gateway_ipv6`, rewrite it in
+    /// place into the corresponding reply (ARP reply / Neighbor Advertisement from `meta.guest_mac`)
+    /// and return `Redirect(ingress_ifindex)` — the exact `reflect(ctx)` verdict the eBPF datapath
+    /// uses (`bpf_redirect(ingress_ifindex)`). Otherwise `Pass` (unchanged frame).
+    ///
+    /// Runs the SAME `flowplane_core::arp_nd::{arp_reply, nd_reply}` the production eBPF `guest_tx`
+    /// dispatches to. `ingress_ifindex` models the frame's arrival interface (the redirect target);
+    /// the eBPF path uses `ctx.ingress_ifindex` (== 1 under `BPF_PROG_TEST_RUN`).
+    pub fn guest_arp_nd(&self, frame: &[u8], meta: &PortMeta, ingress_ifindex: u32) -> SimOut {
+        use flowplane_core::arp_nd::{arp_reply, nd_reply};
+        let mut pkt = VecPkt::from_bytes(frame);
+        // Mirror the eBPF `try_guest_tx` head: ARP first, then ND.
+        if arp_reply(&mut pkt, meta.gateway_ipv4, meta.guest_mac)
+            || nd_reply(&mut pkt, meta.gateway_ipv6, meta.guest_mac)
+        {
+            return SimOut {
+                action: Action::Redirect(ingress_ifindex),
+                pkt: pkt.into_bytes(),
+            };
+        }
+        SimOut {
+            action: Action::Pass,
+            pkt: pkt.into_bytes(),
+        }
+    }
+
     /// Uniform entry for the Fabric. UplinkRx resolves `u = UNDERLAY[outer_dst]` from this node's maps.
     pub fn run(&mut self, prog: crate::fabric::Prog, pkt: &[u8]) -> SimOut {
         use flowplane_core::encap::ETH_LEN;
