@@ -360,10 +360,12 @@ func TestDhcpLeaseSmoke(t *testing.T) {
 	}
 
 	// 4. AttachInterface via DataplaneNode — creates the veth, programs PORT_META, INTERFACES,
-	//    UNDERLAY, and attaches guest_tx in SKB mode.
+	//    UNDERLAY, and attaches guest_tx in SKB mode. Both the guest IPv4 and IPv6 are passed in
+	//    requested_ips: AttachInterface extracts the IPv6 into PortMeta.guest_ipv6, which the
+	//    DHCPv6 responder reads to fill the IA Address (no legacy DPDKironcore call needed).
 	attachBody := fmt.Sprintf(
-		`{"interface_id":%q,"netns_path":"/var/run/netns/%s","vni":%d,"requested_ips":[%q]}`,
-		guestID, guestID, vni, guestIP,
+		`{"interface_id":%q,"netns_path":"/var/run/netns/%s","vni":%d,"requested_ips":[%q,%q]}`,
+		guestID, guestID, vni, guestIP, guestIPv6,
 	)
 	attachOut, err := grpcurlIn("dataplane.v1.DataplaneNode/AttachInterface", attachBody)
 	if err != nil {
@@ -386,29 +388,12 @@ func TestDhcpLeaseSmoke(t *testing.T) {
 	}
 	t.Logf("guest MAC: %s", clientMAC)
 
-	// 5. Program the guest IPv6 address in PORT_META via the legacy DPDKironcore CreateInterface.
-	//    AttachInterface (DataplaneNode) does NOT set guest_ipv6 — it leaves it all-zero. To
-	//    enable the DHCPv6 responder (which reads guest_ipv6 from PORT_META to fill in the IA
-	//    Address), we call the legacy CreateInterface with ipv6_config to re-program the port.
-	//    This mirrors how the production netplane agent wires dual-stack via dpservice calls.
+	// 5. guest_ipv6 is now set purely via DataplaneNode/AttachInterface (step 4 passed the IPv6 in
+	//    requested_ips) — no legacy DPDKironcore call is needed. The DHCPv6 responder reads
+	//    PortMeta.guest_ipv6 to fill the IA Address.
 	//
 	//    The veth host-side device is named "veth-<guestID>" (see attach.rs host_veth_name).
 	hostVeth := fmt.Sprintf("veth-%s", guestID)
-	// Use the legacy DPDKironcore gRPC (the dataplane.v1 DataplaneNode RPC doesn't expose v6 yet).
-	// Body uses the protobuf field names for the DPDKironcore service:
-	//   interface_id, device_name, vni, ipv4_config.primary_address, ipv6_config.primary_address.
-	createIfBody := fmt.Sprintf(
-		`{"interface_id":%q,"device_name":%q,"vni":%d,"ipv4_config":{"primary_address":%q},"ipv6_config":{"primary_address":%q}}`,
-		guestID, hostVeth, vni, guestIP, guestIPv6,
-	)
-	createIfOut, err := grpcurlIn("dpdkironcore.v1.DPDKironcore/CreateInterface", createIfBody)
-	if err != nil {
-		// Non-fatal: DHCPv4 smoke still proceeds; DHCPv6 assertion is degraded to
-		// "datapath responded with something" rather than "correct IA address".
-		t.Logf("CreateInterface (DPDKironcore) for IPv6 setup failed (non-fatal for DHCPv4): %v\n%s", err, createIfOut)
-	} else {
-		t.Logf("CreateInterface ok (guest_ipv6=%s): %s", guestIPv6, strings.TrimSpace(createIfOut))
-	}
 
 	// 6. Copy the tap-dhcp-probe.py script into the kind node so python3 can run it.
 	//    The script lives at test/tap-dhcp-probe.py relative to the repo root (two levels up
@@ -485,14 +470,12 @@ func TestDhcpLeaseSmoke(t *testing.T) {
 
 	if v6Err != nil {
 		log, _ := dockerExec("cat", "/tmp/dhcpsmoke.log")
-		// Check if CreateInterface for IPv6 failed — that would explain no ADVERTISE.
-		if strings.Contains(createIfOut, "error") || err != nil {
-			t.Fatalf("DHCPv6 probe FAILED; likely because CreateInterface(DPDKironcore) could "+
-				"not set guest_ipv6 in PORT_META (rc=%v). "+
-				"This is the PRIMARY DHCPv6 conformance — fix the IPv6 wiring.\n"+
-				"DHCPv6 probe output:\n%s\nflowplane log:\n%s", v6Err, v6Out, log)
-		}
-		t.Fatalf("DHCPv6 probe FAILED (rc=%v)\nflowplane log:\n%s", v6Err, log)
+		// guest_ipv6 is set via DataplaneNode/AttachInterface (requested_ips). A missing ADVERTISE
+		// most likely means AttachInterface didn't program PortMeta.guest_ipv6 from the requested
+		// IPv6. This is the PRIMARY DHCPv6 conformance.
+		t.Fatalf("DHCPv6 probe FAILED (rc=%v); guest_ipv6 comes from DataplaneNode/AttachInterface "+
+			"requested_ips — verify it programmed PortMeta.guest_ipv6.\n"+
+			"DHCPv6 probe output:\n%s\nflowplane log:\n%s", v6Err, v6Out, log)
 	}
 	// Verify key DHCPv6 lease contents.
 	if !strings.Contains(v6Out, "ia_addr=") {
