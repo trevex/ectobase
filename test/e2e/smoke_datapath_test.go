@@ -114,7 +114,7 @@ func TestNatEgressSmoke(t *testing.T) {
 
 	// 2. Wait for the readiness log line. flowplane serve prints exactly this string
 	// once the gRPC listener is accepting connections (confirmed in main.rs line 509).
-	const readyMarker = "serving DPDKironcore on"
+	const readyMarker = "serving DataplaneNode on"
 	ready := false
 	for i := 0; i < 50; i++ {
 		out, _ := dockerExec("sh", "-c", "cat /tmp/natsmoke.log 2>/dev/null")

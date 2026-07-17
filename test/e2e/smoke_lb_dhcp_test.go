@@ -109,7 +109,7 @@ func TestLbDistributeSmoke(t *testing.T) {
 	}
 
 	// 2. Wait for the readiness line.
-	const readyMarker = "serving DPDKironcore on"
+	const readyMarker = "serving DataplaneNode on"
 	ready := false
 	for i := 0; i < 50; i++ {
 		out, _ := dockerExec("sh", "-c", "cat /tmp/lbsmoke.log 2>/dev/null")
@@ -334,7 +334,7 @@ func TestDhcpLeaseSmoke(t *testing.T) {
 	}
 
 	// 2. Wait for the readiness line.
-	const readyMarker = "serving DPDKironcore on"
+	const readyMarker = "serving DataplaneNode on"
 	ready := false
 	for i := 0; i < 50; i++ {
 		out, _ := dockerExec("sh", "-c", "cat /tmp/dhcpsmoke.log 2>/dev/null")

@@ -310,9 +310,9 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let lb_ip: crate::grpc::LbIpBytes = match r.vip.parse::<std::net::IpAddr>() {
-            Ok(std::net::IpAddr::V4(a)) => crate::grpc::LbIpBytes::Ipv4(a.octets()),
-            Ok(std::net::IpAddr::V6(a)) => crate::grpc::LbIpBytes::Ipv6(a.octets()),
+        let lb_ip: crate::control::LbIpBytes = match r.vip.parse::<std::net::IpAddr>() {
+            Ok(std::net::IpAddr::V4(a)) => crate::control::LbIpBytes::Ipv4(a.octets()),
+            Ok(std::net::IpAddr::V6(a)) => crate::control::LbIpBytes::Ipv6(a.octets()),
             Err(e) => {
                 return Err(Status::invalid_argument(format!(
                     "invalid vip {:?}: {e}",

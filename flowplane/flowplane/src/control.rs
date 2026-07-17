@@ -11,7 +11,6 @@ use flowplane_common::{
     FW_DIR_EGRESS, FW_MAX_RULES, IFACE_DEV_MAX, NB_MAX_ENTRIES,
 };
 
-use crate::grpc::LbIpBytes;
 use crate::loader;
 use crate::maps::{
     Conntrack, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwRules, GuestDevMap, IfaceMetaMap,
@@ -40,6 +39,12 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
+/// LB IP address (IPv4 or IPv6) for create/get LB operations.
+pub enum LbIpBytes {
+    Ipv4([u8; 4]),
+    Ipv6([u8; 16]),
+}
+
 /// Per-interface addressing + rate-limit parameters for `create_interface` / `program_iface_maps`.
 /// Bundled into one struct so the programming path doesn't thread ten positional arguments.
 pub struct IfaceParams {
@@ -65,15 +70,24 @@ pub(crate) type RouteShadowV6 = (u32, [u8; 16], u32, u32, [u8; 16]);
 pub(crate) type InterfaceDetail = (u32, [u8; 4], [u8; 16], [u8; 16], String);
 /// `(interface_id, vni, ipv4, ipv6, underlay, device)` row.
 pub(crate) type InterfaceRow = (Vec<u8>, u32, [u8; 4], [u8; 16], [u8; 16], String);
+// The read-side row/detail shapes below (and the `Control` list/get methods that return them) were
+// consumed solely by the now-removed DPDKironcore gRPC service. They are retained — unit-tested and
+// a natural fit for future DataplaneNode read RPCs — so they carry `#[allow(dead_code)]` now that
+// their last caller left with `grpc.rs`.
 /// `(route_vni, ip_bytes_16, prefix_len, nexthop_vni, nexthop_ipv6, is_ipv6)` row.
+#[allow(dead_code)]
 pub(crate) type RouteRow = (u32, [u8; 16], u32, u32, [u8; 16], bool);
 /// `(vni, ip_bytes, lb_underlay, ports)` for a single load balancer.
+#[allow(dead_code)]
 pub(crate) type LbDetail = (u32, LbIpBytes, [u8; 16], Vec<(u16, u8)>);
 /// `(id, vni, ip_bytes, lb_underlay, ports)` load-balancer row.
+#[allow(dead_code)]
 pub(crate) type LbRow = (Vec<u8>, u32, LbIpBytes, [u8; 16], Vec<(u16, u8)>);
 /// `(nat_ip, port_min, port_max, underlay, vni)` for a guest's NAT config.
+#[allow(dead_code)]
 pub(crate) type NatDetail = ([u8; 4], u16, u16, [u8; 16], u32);
 /// `(interface_id, guest_ipv4, nat_ip, port_min, port_max, vni, underlay)` local-NAT row.
+#[allow(dead_code)]
 pub(crate) type LocalNatRow = (Vec<u8>, [u8; 4], [u8; 4], u16, u16, u32, [u8; 16]);
 
 /// Resolve a gRPC `device_name` to an actual kernel netdev name.
@@ -127,6 +141,7 @@ impl LbIp {
         }
     }
 
+    #[allow(dead_code)] // retained for future DataplaneNode LB read RPCs (was DPDKironcore-only)
     fn as_lb_ip_bytes(&self) -> LbIpBytes {
         match self {
             LbIp::Ipv4(ip) => LbIpBytes::Ipv4(*ip),
@@ -147,7 +162,10 @@ struct LbEntry {
 }
 
 /// Prefix record: ip bytes (4 or 16), prefix_len, underlay route, is_ipv6 flag.
+/// Fields were read only by the removed DPDKironcore list-prefix RPCs; kept for the shadow bookkeeping
+/// and future DataplaneNode read RPCs.
 #[derive(Clone)]
+#[allow(dead_code)]
 struct PrefixRecord {
     ip: [u8; 16], // first 4 bytes for IPv4, all 16 for IPv6
     len: u32,
@@ -220,6 +238,7 @@ struct Inner {
     /// ifindex -> ordered (rule_id, rule) pairs
     fw: HashMap<u32, Vec<(Vec<u8>, FwRule)>>,
     /// interface_id -> list of LB-prefix records (announce-only).
+    #[allow(dead_code)] // read only by the removed DPDKironcore list-lb-prefix RPCs
     lb_prefixes: HashMap<Vec<u8>, Vec<PrefixRecord>>,
     /// interface_id -> the owned guest datapath link (dropping it detaches the program).
     /// Either a tc clsact link (default) or an XDP link when `guest_tc` is opted out.
@@ -608,6 +627,7 @@ impl Control {
         self.inner.lock().dhcp_config.set(&cfg)
     }
 
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode RPCs
     pub fn set_dhcp_meta(
         &self,
         interface_id: &[u8],
@@ -1124,6 +1144,7 @@ impl Control {
 
     /// List routes for a VNI (or all if vni=0).
     /// Returns (route_vni, ip_bytes_16, prefix_len, nexthop_vni, nexthop_ipv6, is_ipv6).
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode read RPCs
     pub fn list_routes_all(&self, vni: u32) -> Vec<RouteRow> {
         let g = self.inner.lock();
         let mut result = Vec::new();
@@ -1144,6 +1165,7 @@ impl Control {
         result
     }
 
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode read RPCs
     pub fn vni_in_use(&self, vni: u32) -> bool {
         let g = self.inner.lock();
         g.by_id.values().any(|r| r.vni == vni)
@@ -1153,6 +1175,7 @@ impl Control {
             || g.neigh_nats.iter().any(|n| n.vni == vni)
     }
 
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode RPCs
     pub fn reset_vni(&self, vni: u32) -> anyhow::Result<()> {
         // Remove all routes for the vni (interfaces are torn down via DeleteInterface).
         let ipv4_to_del: Vec<_> = {
@@ -1331,6 +1354,7 @@ impl Control {
     }
 
     /// Return detail for a single LB: (vni, ip_bytes, lb_underlay, ports).
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode read RPCs
     pub fn get_lb(&self, id: &[u8]) -> Option<LbDetail> {
         let g = self.inner.lock();
         g.lbs
@@ -1339,6 +1363,7 @@ impl Control {
     }
 
     /// List all LBs: (id, vni, ip_bytes, lb_underlay, ports).
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode read RPCs
     pub fn list_lbs(&self) -> Vec<LbRow> {
         let g = self.inner.lock();
         g.lbs
@@ -1356,6 +1381,7 @@ impl Control {
     }
 
     /// List the backend underlay addresses for a given LB.
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode read RPCs
     pub fn list_lb_targets(&self, id: &[u8]) -> Vec<[u8; 16]> {
         let g = self.inner.lock();
         g.lbs
@@ -1365,6 +1391,7 @@ impl Control {
     }
 
     /// List all backends across all LBs (global).
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode read RPCs
     pub fn list_lb_targets_all(&self) -> Vec<[u8; 16]> {
         let g = self.inner.lock();
         g.lbs
@@ -1402,6 +1429,7 @@ impl Control {
 
     /// Program the VIPS map for SNAT (G->V) and DNAT (V->G).
     /// Returns the underlay route for this interface on success.
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode RPCs
     pub fn create_vip(
         &self,
         interface_id: &[u8],
@@ -1439,6 +1467,7 @@ impl Control {
 
     /// Remove both VIPS map entries for this interface.
     /// Returns true if a VIP existed and was removed, false if none existed.
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode RPCs
     pub fn delete_vip(&self, interface_id: &[u8]) -> anyhow::Result<bool> {
         let mut g = self.inner.lock();
         let rec = g
@@ -1457,6 +1486,7 @@ impl Control {
     }
 
     /// Return the VIP and underlay for this interface, if one has been set.
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode read RPCs
     pub fn get_vip(&self, interface_id: &[u8]) -> Option<([u8; 4], [u8; 16])> {
         let g = self.inner.lock();
         let rec = g.by_id.get(interface_id)?;
@@ -1527,6 +1557,7 @@ impl Control {
     }
 
     /// Return a guest's NAT config (nat_ip, port_min, port_max, underlay, vni), if set.
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode read RPCs
     pub fn get_nat(&self, interface_id: &[u8]) -> Option<NatDetail> {
         let g = self.inner.lock();
         let rec = g.by_id.get(interface_id)?;
@@ -1538,6 +1569,7 @@ impl Control {
     }
 
     /// List all local NAT entries: (interface_id, guest_ipv4, nat_ip, port_min, port_max, vni, underlay).
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode read RPCs
     pub fn list_local_nats(&self) -> Vec<LocalNatRow> {
         let g = self.inner.lock();
         let mut result: Vec<LocalNatRow> = g
@@ -1731,6 +1763,7 @@ impl Control {
     }
 
     /// Get a single firewall rule by id.
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode read RPCs
     pub fn get_fw_rule(&self, interface_id: &[u8], rule_id: &[u8]) -> Option<FwRule> {
         let g = self.inner.lock();
         let ifindex = *g.by_ifindex.get(interface_id)?;
@@ -1741,6 +1774,7 @@ impl Control {
     }
 
     /// List all firewall rules for an interface as (rule_id, rule) pairs.
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode read RPCs
     pub fn list_fw_rules(&self, interface_id: &[u8]) -> Vec<(Vec<u8>, FwRule)> {
         let g = self.inner.lock();
         match g.by_ifindex.get(interface_id) {
@@ -1755,6 +1789,7 @@ impl Control {
 
     /// Announce an alias prefix routed to an interface: program a route (vni, prefix/len) -> the
     /// interface's underlay /128. Returns the underlay route.
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode RPCs
     pub fn add_prefix(
         &self,
         interface_id: &[u8],
@@ -1823,6 +1858,7 @@ impl Control {
     }
 
     /// Add an IPv6 alias prefix. Returns the underlay route.
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode RPCs
     pub fn add_prefix6(
         &self,
         interface_id: &[u8],
@@ -1875,6 +1911,7 @@ impl Control {
     }
 
     /// Remove an alias prefix. Returns true if removed, false if not found.
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode RPCs
     pub fn del_prefix(
         &self,
         interface_id: &[u8],
@@ -1900,6 +1937,7 @@ impl Control {
     }
 
     /// Remove an IPv6 alias prefix. Returns true if removed, false if not found.
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode RPCs
     pub fn del_prefix6(
         &self,
         interface_id: &[u8],
@@ -1925,6 +1963,7 @@ impl Control {
     }
 
     /// Return all alias prefixes for an interface as (ip_bytes_16, len, underlay, is_ipv6).
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode read RPCs
     pub fn list_prefixes_with_underlay(
         &self,
         interface_id: &[u8],
@@ -1941,6 +1980,7 @@ impl Control {
     }
 
     /// Return all prefix records across all interfaces (global list).
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode read RPCs
     pub fn list_prefixes_all(&self) -> Vec<([u8; 16], u32, [u8; 16], bool)> {
         let g = self.inner.lock();
         g.prefixes
@@ -1955,6 +1995,7 @@ impl Control {
 
     /// Add an LB-prefix shadow entry (announce-only; no datapath route needed).
     /// Returns the underlay route.
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode RPCs
     pub fn add_lb_prefix(
         &self,
         interface_id: &[u8],
@@ -1994,6 +2035,7 @@ impl Control {
     }
 
     /// Add an IPv6 LB-prefix shadow entry. Returns the underlay route.
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode RPCs
     pub fn add_lb_prefix6(
         &self,
         interface_id: &[u8],
@@ -2031,6 +2073,7 @@ impl Control {
     }
 
     /// Remove an LB-prefix shadow entry. Returns true if removed, false if not found.
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode RPCs
     pub fn del_lb_prefix(
         &self,
         interface_id: &[u8],
@@ -2053,6 +2096,7 @@ impl Control {
     }
 
     /// Remove an IPv6 LB-prefix shadow entry. Returns true if removed, false if not found.
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode RPCs
     pub fn del_lb_prefix6(
         &self,
         interface_id: &[u8],
@@ -2074,6 +2118,7 @@ impl Control {
     }
 
     /// Return LB-prefix entries for an interface as (ip_bytes_16, len, underlay, is_ipv6).
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode read RPCs
     pub fn list_lb_prefixes_with_underlay(
         &self,
         interface_id: &[u8],
@@ -2090,6 +2135,7 @@ impl Control {
     }
 
     /// Return all LB-prefix records across all interfaces (global).
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode read RPCs
     pub fn list_lb_prefixes_all(&self) -> Vec<([u8; 16], u32, [u8; 16], bool)> {
         let g = self.inner.lock();
         g.lb_prefixes
@@ -2176,6 +2222,7 @@ impl Control {
     }
 
     /// List all neighbor-NAT entries.
+    #[allow(dead_code)] // was DPDKironcore-only; retained for future DataplaneNode read RPCs
     pub fn list_neighbor_nats(&self) -> Vec<NeighborNatEntry> {
         let g = self.inner.lock();
         g.neigh_nats.clone()
