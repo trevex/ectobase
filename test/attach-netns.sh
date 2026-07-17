@@ -3,7 +3,7 @@
 #
 # Proves the real AttachInterface/DetachInterface control path end to end:
 #   1. a dummy0 with a global ULA /64 in the ROOT netns gives underlay inference a /64;
-#   2. `xdp-dp serve` brings up the datapath + gRPC DataplaneNode listener;
+#   2. `flowplane serve` brings up the datapath + gRPC DataplaneNode listener;
 #   3. an AttachInterface RPC (via grpcurl) for {interface_id:t0, netns_path, vni:100,
 #      requested_ips:[10.0.0.10]} makes the daemon:
 #        (a) create a veth and move its guest end into the target netns,
@@ -43,7 +43,7 @@ cleanup() {
         kill "$DP_PID" 2>/dev/null
         wait "$DP_PID" 2>/dev/null
     fi
-    pkill -f "xdp-dp serve --addr $ADDR" 2>/dev/null
+    pkill -f "flowplane serve --addr $ADDR" 2>/dev/null
     ip netns del "$NS" 2>/dev/null
     ip link del "$DUMMY" 2>/dev/null
     ip link del "$UPLINK" 2>/dev/null
@@ -51,9 +51,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "== build xdp-dp =="
-nix develop --command cargo build -p xdp-dp || fail "cargo build failed"
-BIN="$ROOT/target/debug/xdp-dp"
+echo "== build flowplane =="
+nix develop --command cargo build -p flowplane || fail "cargo build failed"
+BIN="$ROOT/target/debug/flowplane"
 [[ -x "$BIN" ]] || fail "$BIN missing after build"
 
 GRPCURL="$(command -v grpcurl)" || fail "grpcurl not on PATH (run inside nix develop)"
@@ -75,8 +75,8 @@ ip link add "$UPLINK" type veth peer name "$UPLINK_PEER" || fail "add uplink vet
 ip link set "$UPLINK" up
 ip link set "$UPLINK_PEER" up
 
-echo "== start xdp-dp serve on $ADDR =="
-XDP_DP_SKB_MODE=1 "$BIN" serve \
+echo "== start flowplane serve on $ADDR =="
+FLOWPLANE_SKB_MODE=1 "$BIN" serve \
     --addr "$ADDR" \
     --uplink "$UPLINK" \
     --local-underlay "fd00:db8:0:7::1" \

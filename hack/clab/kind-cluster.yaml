@@ -1,4 +1,4 @@
-# kind cluster for the xdp-dp IPv6-fabric e2e. Two nodes = two "hosts": the
+# kind cluster for the flowplane IPv6-fabric e2e. Two nodes = two "hosts": the
 # control-plane node announces fd00:db8:0:1::/64, the worker announces
 # fd00:db8:0:2::/64 (see hack/clab/frr/host{1,2}.conf and ipv6-fabric.clab.yml).
 #
@@ -20,7 +20,7 @@ networking:
   kubeProxyMode: none
 nodes:
   - role: control-plane
-    image: kindest/node-fabric:dev
+    image: ghcr.io/trevex/ectobase/kind-node-fabric:dev
     extraMounts:
       - hostPath: PREFIX_DIR/k01-control-plane.prefix
         containerPath: /etc/fabric/prefix
@@ -29,7 +29,7 @@ nodes:
         containerPath: /etc/fabric/uplinks
         readOnly: true
   - role: worker
-    image: kindest/node-fabric:dev
+    image: ghcr.io/trevex/ectobase/kind-node-fabric:dev
     extraMounts:
       - hostPath: PREFIX_DIR/k01-worker.prefix
         containerPath: /etc/fabric/prefix

@@ -5,7 +5,7 @@
 # verifier. It proves the clsact datapath answers guest DHCPv4 end-to-end:
 #   1. build the release binary,
 #   2. make a netns + a tap inside it (MAC = gateway MAC),
-#   3. run `xdp-dp tc-bringup` to attach the tc datapath to that tap (verifier runs HERE),
+#   3. run `flowplane tc-bringup` to attach the tc datapath to that tap (verifier runs HERE),
 #   4. send a DHCP DISCOVER on the tap (via the tap fd, exactly how a guest TXes),
 #   5. assert a DHCP OFFER for 10.0.0.1 comes back.
 #
@@ -43,8 +43,8 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== build release binary =="
-nix develop --command cargo build --release -p xdp-dp
-BIN="$ROOT/target/release/xdp-dp"
+nix develop --command cargo build --release -p flowplane
+BIN="$ROOT/target/release/flowplane"
 [[ -x "$BIN" ]] || { echo "FAIL: $BIN missing after build"; exit 1; }
 
 echo "== create netns $NS + tap $TAP =="
@@ -55,7 +55,7 @@ sudo ip netns exec "$NS" ip link set dev "$TAP" address "$GW_MAC"
 sudo ip netns exec "$NS" ip link set dev "$TAP" up
 
 echo "== run tc-bringup inside $NS (verifier loads tc_guest_tx + tc_guest_dhcp here) =="
-sudo ip netns exec "$NS" env XDP_DP_DEBUG=1 "$BIN" tc-bringup \
+sudo ip netns exec "$NS" env FLOWPLANE_DEBUG=1 "$BIN" tc-bringup \
     --tap "$TAP" \
     --guest-ipv4 "$GUEST_IP" \
     --gateway-ipv4 "$GUEST_IP" \

@@ -10,7 +10,7 @@
 # Steps:
 #   1. build the release binary,
 #   2. create the netns + devices,
-#   3. run `xdp-dp tc-bringup --tap tctap0 --uplink uplink ... --remote 10.0.0.2=fc00:2::2=100`
+#   3. run `flowplane tc-bringup --tap tctap0 --uplink uplink ... --remote 10.0.0.2=fc00:2::2=100`
 #      (the verifier loads tc_guest_tx here),
 #   4. send Ether/IP(10.0.0.1->10.0.0.2)/ICMP on tctap0 (guest egress) and capture on uplinkpeer,
 #   5. REQUIRE the captured frame to be outer Ether + IPv6(nh=4, src=fc00:1::1, dst=fc00:2::2)
@@ -48,8 +48,8 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== build release binary =="
-nix develop --command cargo build --release -p xdp-dp
-BIN="$ROOT/target/release/xdp-dp"
+nix develop --command cargo build --release -p flowplane
+BIN="$ROOT/target/release/flowplane"
 [[ -x "$BIN" ]] || { echo "FAIL: $BIN missing after build"; exit 1; }
 
 echo "== create netns $NS + tap $TAP + veth $UPLINK/$PEER =="
@@ -66,7 +66,7 @@ sudo ip netns exec "$NS" ethtool -K "$UPLINK" gro off tso off gso off 2>/dev/nul
 sudo ip netns exec "$NS" ethtool -K "$PEER" gro off tso off gso off 2>/dev/null || true
 
 echo "== run tc-bringup inside $NS (verifier loads tc_guest_tx here) =="
-sudo ip netns exec "$NS" env XDP_DP_DEBUG=1 "$BIN" tc-bringup \
+sudo ip netns exec "$NS" env FLOWPLANE_DEBUG=1 "$BIN" tc-bringup \
     --tap "$TAP" --uplink "$UPLINK" \
     --guest-ipv4 "$GUEST_IP" --gateway-ipv4 "$GUEST_IP" --guest-mac "$GUEST_MAC" \
     --gateway-mac "$GW_MAC" --local-underlay fc00:1::1 --guest-underlay fc00:1::1 \

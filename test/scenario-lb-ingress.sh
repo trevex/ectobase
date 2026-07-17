@@ -30,7 +30,7 @@ grpc() { sudo docker run --rm --network "container:$1" -v "$PROTO":/proto:ro ful
 
 echo "== [0] kubeconfig + stack =="
 sudo -E env "PATH=$PATH" kind get kubeconfig --name k01 > "$K1" 2>/dev/null
-kc -n ectobase-system get ds xdp-dp >/dev/null 2>&1 || fail "netplane stack not deployed on k01"
+kc -n ectobase-system get ds flowplane >/dev/null 2>&1 || fail "netplane stack not deployed on k01"
 
 echo "== [1] CRDs: VPC + backend NIC + LoadBalancer + INGRESS NetworkPolicy (:80) =="
 cat <<YAML | kc apply -f - >/dev/null || fail "apply CRs"
@@ -84,7 +84,7 @@ echo "== [3] kick the agent so it re-reconciles: INGRESS firewall (:80) + LB mem
 kc -n ectobase-system rollout restart ds/netplane-agent >/dev/null 2>&1
 kc -n ectobase-system rollout status ds/netplane-agent --timeout=60s >/dev/null 2>&1
 sleep 4
-CID=$(sudo docker exec "$NODE" sh -c 'crictl ps | grep " xdp-dp " | awk "{print \$1}" | head -1')
+CID=$(sudo docker exec "$NODE" sh -c 'crictl ps | grep " flowplane " | awk "{print \$1}" | head -1')
 echo "  backend node firewall/LB programming:"
 sudo docker exec "$NODE" sh -c "crictl logs $CID 2>&1 | grep -iE 'FwRule.*$NIC|LB' | tail -4" | sed 's/^/    /'
 

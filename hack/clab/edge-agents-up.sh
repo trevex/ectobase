@@ -39,7 +39,7 @@ for e in edge1 edge2; do
   docker rm -f ${e}-agent 2>/dev/null || true
   docker run -d --name ${e}-agent --restart unless-stopped \
     --network "container:clab-xdp-ipv6-fabric-${e}" \
-    -v "$KC":/kc:ro ghcr.io/trevex/netplane:dev \
+    -v "$KC":/kc:ro ghcr.io/trevex/ectobase/netplane:dev \
     agent --node-id "${e}" --underlay "$EDGE_UL" --reflector "$REFLECTOR" \
     --dataplane 127.0.0.1:1337 --edge-loopback "$EDGE_LO" --kubeconfig /kc >/dev/null
   echo "started ${e}-agent (node-id=${e}, underlay=${EDGE_UL}, edge-loopback=${EDGE_LO})"

@@ -42,20 +42,20 @@ class DpService:
 			if offloading:
 				raise ValueError("Offloading is only possible when testing on actual hardware")
 
-		# xdp-dp serve replaces dpservice-bin; all DPDK vdev/pf/vf-pattern assembly is dropped.
+		# flowplane serve replaces dpservice-bin; all DPDK vdev/pf/vf-pattern assembly is dropped.
 		# build_path is the repo root (passed via --build-path).
 		# sudo is required to attach XDP programs to network interfaces.
-		# XDP_DP_SKB_MODE=1: force generic XDP so the DHCP responder's bpf_xdp_adjust_tail growth
+		# FLOWPLANE_SKB_MODE=1: force generic XDP so the DHCP responder's bpf_xdp_adjust_tail growth
 		# works on the veth substrate (native veth XDP cannot grow frames). Passed inside the sudo
 		# arg list because sudo resets the environment. Production taps use native mode (default).
 		# The guest edge runs on tc/clsact by DEFAULT (so the suite exercises the tc datapath
-		# out of the box). Forward XDP_DP_GUEST_TC verbatim from the pytest env (sudo accepts
-		# VAR=val before the command) so XDP_DP_GUEST_TC=0 ./run.sh falls back to the legacy XDP
+		# out of the box). Forward FLOWPLANE_GUEST_TC verbatim from the pytest env (sudo accepts
+		# VAR=val before the command) so FLOWPLANE_GUEST_TC=0 ./run.sh falls back to the legacy XDP
 		# guest_tx for regression testing.
-		_gtc = os.environ.get("XDP_DP_GUEST_TC")
-		guest_tc = f"XDP_DP_GUEST_TC={_gtc} " if _gtc is not None else ""
+		_gtc = os.environ.get("FLOWPLANE_GUEST_TC")
+		guest_tc = f"FLOWPLANE_GUEST_TC={_gtc} " if _gtc is not None else ""
 		self.cmd = (
-			f"sudo XDP_DP_SKB_MODE=1 {guest_tc}{self.build_path}/target/debug/xdp-dp serve"
+			f"sudo FLOWPLANE_SKB_MODE=1 {guest_tc}{self.build_path}/target/debug/flowplane serve"
 			f" --addr=127.0.0.1:{grpc_port}"
 			f" --uplink=xdtap0"
 			f" --local-underlay={local_ul_ipv6}"
@@ -77,18 +77,18 @@ class DpService:
 		return self.cmd
 
 	def start(self):
-		# xdp-dp serve is a plain binary; pass full environment (no DPDK DP_CONF hack needed).
+		# flowplane serve is a plain binary; pass full environment (no DPDK DP_CONF hack needed).
 		self.process = subprocess.Popen(shlex.split(self.cmd))
 
 	def stop(self):
 		if self.process:
 			stop_process(self.process)
-		# `xdp-dp serve` runs under `sudo`, which does NOT forward SIGTERM/SIGKILL to its child, so
+		# `flowplane serve` runs under `sudo`, which does NOT forward SIGTERM/SIGKILL to its child, so
 		# stop_process only reaps the sudo wrapper — the root daemon survives, holds the gRPC port,
 		# and the next test file's daemon then races/binds-fails. Kill the actual daemon and wait for
 		# the port to free so each package-scoped daemon starts from a clean slate. (Killing the
 		# process also closes its BPF link fds, detaching the XDP programs from the veths.)
-		subprocess.run(["sudo", "pkill", "-9", "-f", "xdp-dp serve"], check=False)
+		subprocess.run(["sudo", "pkill", "-9", "-f", "flowplane serve"], check=False)
 		port = grpc_port_b if self.secondary else grpc_port
 		for _ in range(50):
 			if not is_port_open(port):

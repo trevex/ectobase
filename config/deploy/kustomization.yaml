@@ -6,7 +6,7 @@ resources:
   - namespace.yaml
   - rbac.yaml
   - reflector.yaml
-  - xdp-dp.yaml
+  - flowplane.yaml
   - agent.yaml
   - agent-kubeconfig.yaml
   - controller.yaml

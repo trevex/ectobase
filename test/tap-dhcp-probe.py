@@ -3,7 +3,7 @@
 #
 # WHY: the conformance harness uses veth pairs (so dpservice's unchanged `sendp(iface=)` tests
 # feed XDP's RX), and veth's NATIVE XDP cannot grow a frame via bpf_xdp_adjust_tail — which the
-# DHCP responder needs (DISCOVER ~300B -> OFFER ~360B+). That forced XDP_DP_SKB_MODE=1 in the
+# DHCP responder needs (DISCOVER ~300B -> OFFER ~360B+). That forced FLOWPLANE_SKB_MODE=1 in the
 # harness. But PRODUCTION uses real qemu/libvirt TAPs in native mode. This probe answers the open
 # question empirically: create a real tap, attach guest_tx in NATIVE mode (bringup, no SKB env),
 # write a DHCP DISCOVER to the tap fd (exactly how qemu delivers a guest's TX -> tap RX -> XDP),
@@ -32,7 +32,7 @@ IFF_TAP = 0x0002
 IFF_NO_PI = 0x1000
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BIN = f"{REPO}/target/debug/xdp-dp"
+BIN = f"{REPO}/target/debug/flowplane"
 
 
 def open_tap_queue(name):
@@ -432,7 +432,7 @@ def main():
         return client_only(args.tap, args.client_mac, args.expect_ip, args.timeout)
 
     if not os.path.exists(BIN):
-        print(f"ERROR: {BIN} missing — run: cargo build -p xdp-dp", file=sys.stderr)
+        print(f"ERROR: {BIN} missing — run: cargo build -p flowplane", file=sys.stderr)
         return 2
 
     gfd = mk_tap("dhg0")  # guest tap: guest_tx attaches here
@@ -441,7 +441,7 @@ def main():
     umac = open("/sys/class/net/dhu0/address").read().strip()
 
     # bringup attaches via attach_xdp (XdpFlags::default() = NATIVE), and does NOT consult
-    # XDP_DP_SKB_MODE — so this is a genuine native-mode test. DHCP config: mtu 1337 + 2 DNS.
+    # FLOWPLANE_SKB_MODE — so this is a genuine native-mode test. DHCP config: mtu 1337 + 2 DNS.
     bringup = subprocess.Popen(
         [BIN, "bringup", "--uplink", "dhu0", "--local-underlay", "fd00::1",
          "--gateway", "10.0.0.1", "--gateway-mac", umac,

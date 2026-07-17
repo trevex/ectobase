@@ -29,6 +29,6 @@ spec:
         - operator: Exists
       containers:
         - name: controller
-          image: ghcr.io/trevex/netplane:dev
+          image: ghcr.io/trevex/ectobase/netplane:dev
           imagePullPolicy: IfNotPresent
           command: ["controller"]

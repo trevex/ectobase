@@ -1,9 +1,9 @@
 #!/bin/sh
-# hack/clab/edge-xdp-wrapper.sh — entrypoint for the edge xdp-dp sidecar. Runs in the VyOS edge's
+# hack/clab/edge-xdp-wrapper.sh — entrypoint for the edge flowplane sidecar. Runs in the VyOS edge's
 # netns (clab `network-mode: container:<edge>`), so it sees the edge's eth1 (fabric uplink) + eth2
 # (WAN / clabwan). Waits for both links + the fabric ToR neighbour (the "router" on eth1, learned
 # via the ToR's RA — sw{1,2}:eth5 have `no ipv6 nd suppress-ra`), then runs `serve --role edge`.
-# SKB/generic XDP (clab veths have no native XDP). Mirrors config/deploy/xdp-dp.yaml's wrapper.
+# SKB/generic XDP (clab veths have no native XDP). Mirrors config/deploy/flowplane.yaml's wrapper.
 set -e
 UPLINK=eth1          # fabric uplink (uplink_rx decaps egress here)
 WAN=eth2             # clabwan uplink (wan_rx re-encaps nat_ip returns here)
@@ -24,7 +24,7 @@ done
 [ -z "$GW_MAC" ] && { echo "FATAL: no fabric router neighbour on $UPLINK" >&2; exit 1; }
 
 echo "edge-xdp: uplink=$UPLINK wan=$WAN underlay=$UL gateway_mac=$GW_MAC"
-export XDP_DP_SKB_MODE=1
-exec xdp-dp serve --addr 127.0.0.1:1337 --role edge \
+export FLOWPLANE_SKB_MODE=1
+exec flowplane serve --addr 127.0.0.1:1337 --role edge \
   --uplink "$UPLINK" --wan-uplink "$WAN" \
   --local-underlay "$UL" --gateway 169.254.0.1 --gateway-mac "$GW_MAC"

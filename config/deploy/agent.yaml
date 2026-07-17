@@ -20,14 +20,14 @@ spec:
       # Run on every node, including control-plane (the fabric's cp node is a host too).
       tolerations:
         - operator: Exists
-      # hostNetwork so the agent can reach the node-local xdp-dp on 127.0.0.1:1337.
+      # hostNetwork so the agent can reach the node-local flowplane on 127.0.0.1:1337.
       # ClusterFirstWithHostNet keeps in-cluster DNS working, so the reflector
       # Service name (reflector.ectobase-system.svc) still resolves.
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: agent
-          image: ghcr.io/trevex/netplane:dev
+          image: ghcr.io/trevex/ectobase/netplane:dev
           imagePullPolicy: IfNotPresent
           command: ["agent"]
           # NOTE(tune): --underlay here is a fallback only. The reconciler announces

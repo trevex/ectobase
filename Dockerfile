@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 #
-# Container image for the `xdp-dp` XDP datapath binary.
+# Container image for the `flowplane` XDP datapath binary.
 #
 # The eBPF object is compiled by aya-build (via bpf-linker) and include_bytes!-baked into
-# the xdp-dp binary at build time; the runtime image therefore needs ONLY that one binary.
+# the flowplane binary at build time; the runtime image therefore needs ONLY that one binary.
 #
 # Toolchain pinning is version-sensitive (see rust-toolchain.toml):
 #   * rustc nightly-2026-01-15 emits LLVM 21 bitcode.
@@ -58,19 +58,19 @@ RUN cargo +nightly-2026-01-15 install bpf-linker --locked
 WORKDIR /src
 COPY . .
 
-# Build only the xdp-dp host binary; aya-build (invoked from its build.rs) compiles and
+# Build only the flowplane host binary; aya-build (invoked from its build.rs) compiles and
 # bakes in the eBPF object. The bin name differs from the package so the build never tries
 # to compile the #![no_main] eBPF bin on the host target.
-RUN cargo +nightly-2026-01-15 build --release -p xdp-dp \
-    && cp target/release/xdp-dp /xdp-dp \
-    && strip /xdp-dp
+RUN cargo +nightly-2026-01-15 build --release -p flowplane \
+    && cp target/release/flowplane /flowplane \
+    && strip /flowplane
 
 # ---------------------------------------------------------------------------
 # Runtime
 # ---------------------------------------------------------------------------
 # debian:bookworm-slim (matches the builder's glibc) + iproute2. iproute2 is included so the SAME
 # image can run the tap-pool init container (`ip tuntap add ...` to create the kernel taps DPDK's
-# net_tap PMD used to make) AND the datapath (`xdp-dp serve`) — one image, no extra init image.
+# net_tap PMD used to make) AND the datapath (`flowplane serve`) — one image, no extra init image.
 FROM debian:bookworm-slim
 
 # iproute2 for veth/netns setup; ethtool to disable tx-checksum offload on guest veths (their
@@ -78,6 +78,6 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends iproute2 ethtool \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /xdp-dp /usr/local/bin/xdp-dp
+COPY --from=builder /flowplane /usr/local/bin/flowplane
 
-ENTRYPOINT ["/usr/local/bin/xdp-dp"]
+ENTRYPOINT ["/usr/local/bin/flowplane"]

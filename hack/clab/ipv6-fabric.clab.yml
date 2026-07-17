@@ -1,10 +1,10 @@
-# Lean IPv6-only, BGP-unnumbered containerlab fabric for xdp-dp underlay-inference
+# Lean IPv6-only, BGP-unnumbered containerlab fabric for flowplane underlay-inference
 # e2e testing. Adapted from icn/sandbox/topologies/fabric.clab.yml — stripped to the
 # minimum that exercises: (1) each "host" node announcing a per-node /64 that lives on
 # dummy0, and (2) the fabric routing each /64 to the other so cross-node reach works.
 #
 # NO VyOS edges, NO NAT64/DNS64, NO Garden-Linux VMs. Just one FRR ToR (sw1) and one
-# kind cluster whose two nodes (control-plane + worker) are the "hosts" running xdp-dp.
+# kind cluster whose two nodes (control-plane + worker) are the "hosts" running flowplane.
 #
 # Integration approach (see hack/clab/README.md for the proven-vs-new breakdown):
 #   * `k8s-kind` node  -> containerlab creates/owns the kind cluster lifecycle.
@@ -14,7 +14,7 @@
 #   * A per-host FRR `linux` sidecar shares the kind node's netns
 #     (network-mode: container:<kind-node>) so it can (a) create dummy0 with the /64
 #     and (b) speak unnumbered eBGP over the kind node's fabric uplink — WITHOUT
-#     running FRR inside the kubelet/containerd node image. xdp-dp runs in that same
+#     running FRR inside the kubelet/containerd node image. flowplane runs in that same
 #     netns and infers the /64 from dummy0.
 
 name: xdp-ipv6-fabric
@@ -64,7 +64,7 @@ topology:
     # the ToR netns; attaches once the edge link exists.
     sw1-pass:
       kind: linux
-      image: ghcr.io/trevex/dpservice-xdp:dev
+      image: ghcr.io/trevex/ectobase/flowplane:dev
       network-mode: container:clab-xdp-ipv6-fabric-sw1
       binds:
         - sw-pass-wrapper.sh:/sw-pass-wrapper.sh:ro
@@ -72,7 +72,7 @@ topology:
       entrypoint: "/bin/sh /sw-pass-wrapper.sh"
     sw2-pass:
       kind: linux
-      image: ghcr.io/trevex/dpservice-xdp:dev
+      image: ghcr.io/trevex/ectobase/flowplane:dev
       network-mode: container:clab-xdp-ipv6-fabric-sw2
       binds:
         - sw-pass-wrapper.sh:/sw-pass-wrapper.sh:ro
@@ -80,7 +80,7 @@ topology:
       entrypoint: "/bin/sh /sw-pass-wrapper.sh"
 
     # --- kind cluster: containerlab owns its lifecycle ---
-    # The two kind nodes (control-plane + worker) are the "hosts" running xdp-dp.
+    # The two kind nodes (control-plane + worker) are the "hosts" running flowplane.
     k01:
       kind: k8s-kind
       startup-config: kind-cluster.yaml.gen
@@ -126,13 +126,13 @@ topology:
       kind: ext-container
     # k03's single node: a compute host like the others, /64 = fd00:db8:0:4::/64. (In the
     # distributed egress model there is no centralized "gateway host" — every hypervisor SNATs its
-    # own sources; the WAN edge is the VyOS+xdp-dp sidecar below.) eth1/eth2 (fabric BGP) are owned
+    # own sources; the WAN edge is the VyOS+flowplane sidecar below.) eth1/eth2 (fabric BGP) are owned
     # by the node image's fabric-preboot oneshot.
     k03-control-plane:
       kind: ext-container
 
-    # --- WAN edge (HA): two VyOS nodes (edge1, edge2), each with an xdp-dp sidecar sharing its
-    # netns. VyOS owns BGP + WAN forwarding (what real hardware runs); the xdp-dp sidecar owns the
+    # --- WAN edge (HA): two VyOS nodes (edge1, edge2), each with an flowplane sidecar sharing its
+    # netns. VyOS owns BGP + WAN forwarding (what real hardware runs); the flowplane sidecar owns the
     # overlay (uplink_rx decap of egress + wan_rx re-encap of nat_ip returns). Both edges announce
     # the ANYCAST edge underlay fd00:db8:0:9::e/128, so the fabric ECMPs egress across them and
     # either edge handles any return (drain-safe/stateless). eth1 = fabric (edge1->sw1, edge2->sw2);
@@ -163,19 +163,19 @@ topology:
       sysctls:
         net.ipv6.conf.all.forwarding: 1
         net.ipv4.ip_forward: 1
-    # xdp-dp sidecars: share each edge's netns (no links of their own), attach uplink_rx (eth1) +
+    # flowplane sidecars: share each edge's netns (no links of their own), attach uplink_rx (eth1) +
     # wan_rx (eth2). The wrapper waits for the links + resolves the ToR MAC, then `serve --role
     # edge`. Privileged + /sys/fs/bpf for XDP; SKB mode (clab veths have no native XDP).
     edge1-xdp:
       kind: linux
-      image: ghcr.io/trevex/dpservice-xdp:dev
+      image: ghcr.io/trevex/ectobase/flowplane:dev
       network-mode: container:clab-xdp-ipv6-fabric-edge1
       # Give VyOS time to boot + clab to wire eth1/eth2; the wrapper additionally waits for the
       # interfaces + the ToR neighbour before serving. (A stages.create.wait-for the VyOS `healthy`
       # stage HANGS clab deploy — the healthy-stage never registers for the vyos kind — so a fixed
       # startup-delay is the robust choice.)
       startup-delay: 25
-      # The image ENTRYPOINT is `xdp-dp`; override it to run the wrapper (clab already runs all
+      # The image ENTRYPOINT is `flowplane`; override it to run the wrapper (clab already runs all
       # nodes privileged, so XDP attach in the shared VyOS netns works; /sys/fs/bpf for bpffs).
       binds:
         - edge-xdp-wrapper.sh:/edge-xdp-wrapper.sh:ro
@@ -183,7 +183,7 @@ topology:
       entrypoint: "/bin/sh /edge-xdp-wrapper.sh"
     edge2-xdp:
       kind: linux
-      image: ghcr.io/trevex/dpservice-xdp:dev
+      image: ghcr.io/trevex/ectobase/flowplane:dev
       network-mode: container:clab-xdp-ipv6-fabric-edge2
       startup-delay: 25
       binds:
@@ -205,7 +205,7 @@ topology:
     - endpoints: ["k02-control-plane:eth2", "sw2:eth3"]
     - endpoints: ["k03-control-plane:eth2", "sw2:eth4"]
     # --- WAN edge (HA): each VyOS edge single-homes to a distinct ToR (eth1) and faces the
-    # clabwan host bridge on eth2 (the real internet). The xdp-dp sidecars share the edges' netns
+    # clabwan host bridge on eth2 (the real internet). The flowplane sidecars share the edges' netns
     # (no links of their own). ---
     - endpoints: ["edge1:eth1", "sw1:eth5"]
     - endpoints: ["edge2:eth1", "sw2:eth5"]

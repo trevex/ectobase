@@ -5,7 +5,7 @@
 #
 # The per-node underlay /64 is read from /etc/fabric/prefix (injected via kind
 # extraMounts), e.g. "fd00:db8:0:1::/64". The node's own address is <prefix>::1
-# on dummy0 (the same /64 xdp-dp infers and allocates endpoint /128s from), and
+# on dummy0 (the same /64 flowplane infers and allocates endpoint /128s from), and
 # kubelet's --node-ip is set to it.
 #
 # node-ip is injected via KUBELET_EXTRA_ARGS in /etc/default/kubelet, NOT by

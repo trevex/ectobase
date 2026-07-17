@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Build the veth topology the conformance harness expects. For each dpservice device we create a
-# veth pair: the dpservice-named end (scapy side) <-> an xdp-side end (xdp-dp attaches here).
+# veth pair: the dpservice-named end (scapy side) <-> an xdp-side end (flowplane attaches here).
 # xdp_pass enablers go on the scapy-side ends so bpf_redirect into them lands.
 set -euo pipefail
 
-BIN="$(cd "$(dirname "$0")/../.." && pwd)/target/debug/xdp-dp"
+BIN="$(cd "$(dirname "$0")/../.." && pwd)/target/debug/flowplane"
 PIDFILE="${TMPDIR:-/tmp}/xdp-conf-pids"
 
 declare -A MAC=( [dtap0]=22:22:22:22:22:00 [dtap1]=22:22:22:22:22:01 \
@@ -38,7 +38,7 @@ up() {
 
 down() {
   [[ -f "$PIDFILE" ]] && { while read -r p; do sudo kill "$p" 2>/dev/null||true; done < "$PIDFILE"; rm -f "$PIDFILE"; }
-  sudo pkill -f 'xdp-dp (serve|pass) --' 2>/dev/null || true
+  sudo pkill -f 'flowplane (serve|pass) --' 2>/dev/null || true
   for dev in dtap0 dtap1 dtapvf_0 dtapvf_1 dtapvf_2 dtapvf_3; do sudo ip link del "$dev" 2>/dev/null || true; done
 }
 

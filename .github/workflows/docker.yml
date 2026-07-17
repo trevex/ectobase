@@ -1,6 +1,6 @@
 name: docker
 
-# Build and publish the xdp-dp container image:
+# Build and publish the flowplane container image:
 #   * every push to main  -> tagged with the short commit SHA (e.g. d76a033)
 #   * every pushed tag    -> tagged with the tag name (e.g. v1.2.3)
 on:
@@ -37,7 +37,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/${{ github.repository }}/flowplane
           tags: |
             # main pushes: the bare short SHA, plus the moving `main` tag
             type=sha,prefix=,format=short,enable={{is_default_branch}}

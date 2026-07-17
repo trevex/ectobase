@@ -33,8 +33,8 @@ ip link add "$UPLINK" type veth peer name "$UPLINK_PEER"
 ip link set "$UPLINK" up
 ip link set "$UPLINK_PEER" up
 
-cargo build -p xdp-dp 2>&1 | tail -1
-XDP_DP_SKB_MODE=1 ./target/debug/xdp-dp serve \
+cargo build -p flowplane 2>&1 | tail -1
+FLOWPLANE_SKB_MODE=1 ./target/debug/flowplane serve \
   --addr "$ADDR" \
   --uplink "$UPLINK" \
   --local-underlay "fd00:db8:0:7::1" \

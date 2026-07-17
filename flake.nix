@@ -78,7 +78,7 @@
             clippy-rustup = {
               enable = true;
               name = "clippy (rustup)";
-              # default-members excludes xdp-dp-ebpf, so the host build never tries to compile
+              # default-members excludes flowplane-ebpf, so the host build never tries to compile
               # the #![no_main] eBPF bin; the ebpf object is built via aya-build from build.rs.
               entry = "cargo clippy --all-targets";
               language = "system";
