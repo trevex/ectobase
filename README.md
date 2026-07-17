@@ -57,7 +57,7 @@ ectobase is two planes — the `flowplane` datapath and the `netplane` control p
 
 ## Getting started
 
-Everything is provided by the Nix flake — Rust (pinned in `rust-toolchain.toml`), `bpf-linker`, `protobuf`, Go, `kind`/`containerlab`, `python3`+`scapy`+`pytest`, the genuine `dpservice-cli`, plus `qemu`, `iproute2`, `bpftool`, `tcpdump`, etc.
+Everything is provided by the Nix flake — Rust (pinned in `rust-toolchain.toml`), `bpf-linker`, `protobuf`, Go, `kind`/`containerlab`, `python3`+`scapy`+`pytest`, plus `qemu`, `iproute2`, `bpftool`, `tcpdump`, etc.
 
 ```sh
 nix develop            # enter the dev shell (all targets assume you are inside it)
@@ -128,15 +128,11 @@ make conformance     # full dpservice conformance suite against flowplane serve 
 
 ## Conformance
 
-Datapath fidelity is proven by **dpservice's own `test/local` suite** — vendored into `test/conformance/` and re-pointed at `flowplane serve`. The scapy packet tests and the gRPC client are dpservice's; only the launch + device plumbing is adapted:
+Datapath fidelity is proven at three levels:
 
-- The real **`dpservice-cli`** drives our gRPC server — built from source by the flake (`buildGoModule` over the pinned `dpservice` input).
-- **veth substitution** lets dpservice's unchanged `sendp(iface=…)` tests feed our RX hook (a veth pair turns "TX on one end" into "RX on the other"). Production uses real qemu taps / pod veths; `make tap-vm-smoke` / `make tap-dhcp-probe` and the clab fabric validate those paths.
-
-```sh
-make conformance                      # the default suite
-CONF_TESTS="test_lb.py" make conformance   # a subset
-```
+- **In-process sim (`make sim`)** — `flowplane-core` + `flowplane-sim` cover every protocol path (encap/decap, NAT, LB, DHCP, ARP/ND, firewall) via `MemMaps`/`VecPkt`; zero privileges, zero network stack.
+- **Byte-parity anchors (`make sim-anchor`)** — `BPF_PROG_TEST_RUN` anchors assert the real eBPF bytecode produces identical output to the native-core sim for the same input.
+- **Go e2e smoke (`make e2e`)** — real gRPC attach, real kernel netns topology; proves the control-plane wiring and live forwarding end-to-end.
 
 ## Design docs
 
