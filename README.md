@@ -1,64 +1,96 @@
 # ironcore-net-xdp
 
-An **eBPF/XDP drop-in replacement for IronCore's DPDK [`dpservice`](https://github.com/ironcore-dev/dpservice)** — the L3 software-defined-network dataplane behind [metalnet](https://github.com/ironcore-dev/metalnet). It speaks the same `DPDKironcore` gRPC contract metalnet drives and reproduces dpservice's on-wire behaviour, but runs as a pure-XDP, map-driven datapath in the Linux kernel instead of a DPDK poll-mode application.
+A **Kubernetes-native, eBPF/XDP overlay dataplane and CNI** for both **containers and KubeVirt VMs**. It gives every workload an address on a shared IPv6-underlay, IP-in-IPv6 overlay, and provides routing, stateful NAT, load balancing, a deny-by-default firewall, and DHCP/ARP/ND — all in the Linux kernel via eBPF, driven by a Kubernetes control plane (`netplane`).
 
-The goal is **functional + wire-compatible parity** with dpservice, with a **map-driven design that is offload-ready** (every forwarding decision is a per-flow-keyed table lookup — the shape a SmartNIC `rte_flow`/hardware rule would encode). The end target is forking [ironcore-in-a-box](https://github.com/ironcore-dev/ironcore-in-a-box) and dropping this in for the DPDK `dpservice`.
+> **Lineage & scope.** The datapath began as an eBPF/XDP reimplementation of IronCore's DPDK [`dpservice`](https://github.com/ironcore-dev/dpservice) and still speaks its `DPDKironcore` gRPC contract (and is validated by dpservice's own conformance suite — hence the repo name and the `dpservice-xdp` image). It has since grown its **own** Kubernetes control plane (`netplane`), CRD API, route-distribution bus, and CNI, and now targets containers + KubeVirt VMs directly. **metalnet/ironcore compatibility is no longer a design constraint** — the `DPDKironcore` surface is retained as a legacy/parity contract, not the primary driver.
 
-> Status: full datapath parity is implemented and the gRPC control plane is driven by dpservice's own conformance suite. See [Conformance](#conformance) for the live number.
+## Architecture at a glance
 
-## What it does
+Two planes:
 
-A map-driven XDP overlay dataplane. Guests live on tap/veth interfaces; the underlay is IPv6; overlay traffic is **IP-in-IPv6** (inner-proto 4 for IPv4, 41 for IPv6). The datapath implements:
+**1. Datapath (`xdp-dp`, Rust/eBPF).** A map-driven kernel dataplane — every forwarding decision is a per-flow-keyed table lookup (the shape a SmartNIC `rte_flow` would encode). Programs:
 
-- **Overlay forwarding** — encap/decap, LPM routing (v4 + v6), multi-VNI tenancy, same-host fast path.
-- **In-datapath responders** — ARP, IPv6 Neighbour Discovery, and **DHCPv4/v6** (built in XDP next to ARP/ND, mirroring dpservice's `dhcp_node`/`dhcpv6_node`).
-- **Stateful services** — unified conntrack, **NAT-GW** (network NAT with distributed return via neighbor-NAT), **VIP** (1:1 DNAT/SNAT), **load balancing** (Maglev consistent hashing, dpservice underlay-forwarding model), **NAT64**, and **packet relay**.
-- **Firewall** (stateful whitelist, enforce-by-default), **rate metering** (srTCM token bucket), and **HA** via pinned maps (control-plane restart re-adopts the kernel-resident datapath).
+- **`uplink_rx`** — XDP on the fabric uplink: overlay → local guest (decap, deliver, LB local-deliver, NAT return). Edge nodes also attach **`wan_rx`** for the WAN↔overlay return path.
+- **`tc_guest_tx`** — **tcx (tc) on the guest tap/veth ingress = guest egress** (the default guest edge): firewall, SNAT/VIP, encap, redirect to the uplink. Legacy XDP **`guest_tx`** is the opt-out fallback (`XDP_DP_GUEST_TC=0`).
+- In-datapath responders (**ARP, IPv6 ND, DHCPv4/v6**), **conntrack**, **NAT-GW** (distributed return via neighbor-NAT), **VIP** (1:1 DNAT/SNAT), **load balancing** (Maglev, dpservice underlay-forwarding model), **NAT64**, **firewall** (stateful, deny-by-default), and **rate metering** (srTCM).
+- **Overlay:** IPv6 underlay, IP-in-IPv6 encap (inner-proto 4 for IPv4, 41 for IPv6), multi-VNI tenancy, same-host fast path.
+- **Graceful restart / HA:** state maps are pinned to bpffs and **adopted** on restart (bookkeeping rebuilt from an `IFACE_META` journal, IPAM reseeded so a live `/128` is never reissued), and the program **links are pinned** so a same-image restart is *zero forwarding gap* (atomic `bpf_link_update` re-point; new bytecode on a rolling upgrade). See `docs/superpowers/{specs,plans}/2026-07-16-*`.
 
-The control plane is a `tonic` gRPC server implementing the `DPDKironcore` contract, programming the eBPF maps and dynamically attaching/detaching the XDP program on VF taps as `CreateInterface`/`DeleteInterface` arrive.
+**2. Control plane (`netplane`, Go + Kubernetes).** CRDs describe intent; the control plane compiles and distributes them to the per-node dataplanes:
+
+- **agent** (per node) — reconciles the node's `NetworkInterface`s, programs the local dataplane over the **DataplaneNode gRPC** (`127.0.0.1:1337`), and announces/learns overlay routes, NAT blocks, and edge identities over the **route bus**.
+- **reflector** (central) — a route broker: agents open a bidi `RouteBus` stream and it reflects per-VNI routes (and NAT/public records) between nodes. This is the overlay's routing distribution (custom, not BGP; BGP is used only for the WAN-edge announcement).
+- **controller** (central) — controller-runtime reconcilers: the **NATGateway** port-block allocator and the **CompiledNIC** compiler that lowers `NetworkInterface` + `NetworkPolicy` into per-NIC firewall rules the agent programs.
+- **CNI** (`cni/`) — on pod ADD, resolves the pod's overlay VNI/IPs from the CRDs and calls the node's DataplaneNode gRPC (`AttachInterface`) to create the veth + program the datapath.
+
+**CRD API** (`net.ectobase.dev/v1alpha1`, in `api/`): `VPC`, `NetworkInterface`, `NetworkPolicy`, `NATGateway`, `VirtualIP`, `LoadBalancer`, `VPCPeering`, plus the controller-written `CompiledNIC`/`CompiledFirewall`/`CompiledNAT`/`CompiledLB`.
 
 ## Repository layout
 
 | Path | What |
 |---|---|
-| `xdp-dp-common/` | `#[repr(C)]` POD types shared between the eBPF and userspace sides (map keys/values), with layout tests. |
-| `xdp-dp-ebpf/` | The XDP programs: `guest_tx` (guest→overlay egress) and `uplink_rx` (overlay→guest ingress), plus the feature modules (conntrack, nat, nat64, lb, vip, firewall, meter, arp_nd, dhcp, v6, encap). |
-| `xdp-dp/` | The userspace daemon: gRPC server (`grpc.rs`), map control plane (`control.rs`), loaders, and the CLI (`serve`, `bringup`, `pass`, `inspect`). |
-| `proto/dpdk.proto` | The `DPDKironcore` gRPC contract (mirrors dpservice). |
-| `test/conformance/` | dpservice's own `test/local` pytest+scapy suite, vendored and re-pointed at `xdp-dp serve` (see [Conformance](#conformance)). |
-| `test/*.sh`, `test/*.py` | Local harnesses: `netns-e2e.sh` (3-node overlay), `ha-smoke.sh`, `tap-vm-smoke.sh` (real CirrOS VM), `tap-dhcp-probe.sh`. |
-| `docs/superpowers/specs/`, `docs/superpowers/plans/` | Per-milestone design specs and implementation plans. |
+| `xdp-dp-common/` | `#[repr(C)]` POD types shared between eBPF and userspace (map keys/values), with layout tests. `no_std` by default; a `user` feature adds the aya integration. |
+| `xdp-dp-core/` | `no_std`, generic (over `Pkt`/`Maps` traits) **pure datapath logic** — the same forwarding/conntrack/NAT/LB/firewall code runs in eBPF, in the native sim, and in unit tests. |
+| `xdp-dp-ebpf/` | The eBPF programs (`uplink_rx`, `wan_rx`, `guest_tx`, `tc_guest_tx`, `guest_dhcp`/`tc_guest_dhcp`, `tc_guest_nat64`, `xdp_pass`, `xdp_inspect`) + the map declarations. Compiled to bytecode via `aya-build`. |
+| `xdp-dp/` | The Rust userspace daemon: gRPC servers (`DataplaneNode` + legacy `DPDKironcore`), the map control plane (`control.rs`), the eBPF loader + link/adopt logic (`loader.rs`), veth/tap lifecycle + IPAM (`attach.rs`), and the CLI (`main.rs`). |
+| `xdp-dp-sim/` | An **in-process datapath simulator**: heap-backed `Pkt`/`Maps` impls + `SimNode`/`Fabric` run the real `xdp-dp-core` logic with **no kernel, no clab, no root** — the fast dev/regression loop. |
+| `netplane/` | The Go control plane: `cmd/agent`, `cmd/reflector`, `cmd/controller`, and the `routebus` client/server + reconcile/desired-state logic. |
+| `cni/` | The CNI plugin (`cni/plugin/main.go`) that attaches pods via the DataplaneNode gRPC. |
+| `api/` | Kubernetes CRD types (`api/v1alpha1/`, group `net.ectobase.dev`) and the gRPC contracts (`api/proto/dataplane/v1/{dataplane,dpdk}.proto`, `api/proto/routebus/v1/routebus.proto`). |
+| `config/` | Kubernetes manifests: CRD bases, the `xdp-dp` DaemonSet, netplane agent/reflector/controller deployments, RBAC, and the `ectobase-system` namespace. |
+| `hack/` | Lab bring-up: the **containerlab + kind fabric** (`clab-up.sh`/`clab-down.sh`, `clab/`), the fabric kind-node image, and edge-agent helpers. |
+| `test/` | Local harnesses: the `scenario-*.sh` feature scenarios, `netns-e2e.sh`, `ha-smoke.sh`, `scenario-restart.sh`, `tap-vm-smoke.sh`, the WAN-edge netns tests, and the vendored dpservice `conformance/` suite. |
+| `docs/superpowers/{specs,plans}/` | Per-milestone design specs and implementation plans. |
 
-## CLI modes (`xdp-dp`)
+## `xdp-dp` CLI
 
-- **`serve`** — the production gRPC daemon: attaches `uplink_rx`, serves `DPDKironcore` on a port, and attaches/detaches `guest_tx` on VF taps at runtime as gRPC drives it.
-- **`bringup`** — static, flag-driven datapath for the netns lab (no gRPC).
-- **`pass`** — attach a trivial `xdp_pass` program (redirect-target enabler for veth peers).
-- **`inspect`** — debug packet inspector.
+| Subcommand | What |
+|---|---|
+| **`serve`** | The production daemon: attaches `uplink_rx`, serves `DataplaneNode` + `DPDKironcore` gRPC, attaches/detaches the guest edge per interface as gRPC drives it. Key flags: `--role node\|edge` (edge adds `wan_rx`), `--uplink`/`--extra-uplink`/`--wan-uplink`, `--gateway-mac`, `--pin-dir` (bpffs, default `/sys/fs/bpf/xdp-dp`), `--pin-links` (default on — zero-gap restart), `--dhcp-*`. |
+| **`bringup`** | Static, flag-driven datapath for the netns lab (no gRPC). |
+| **`tc-bringup`** | Minimal tc guest-edge bringup (one tap). |
+| **`load` / `pass` / `inspect`** | Debug helpers: attach `uplink_rx` and idle / attach `xdp_pass` / attach `xdp_inspect`. |
+| **`infer-underlay`** | Print the inferred host underlay `/64` and exit (no root, no datapath). |
 
 ## Getting started
 
-Everything is provided by the Nix flake — Rust (via rustup, pinned in `rust-toolchain.toml`), `bpf-linker`, `protobuf`, `python3`+`scapy`+`pytest`, the genuine `dpservice-cli` (built from source via `buildGoModule`), plus `qemu`, `iproute2`, `ethtool`, `tcpdump`, etc. There are no host-specific paths; run things through the flake.
+Everything is provided by the Nix flake — Rust (pinned in `rust-toolchain.toml`), `bpf-linker`, `protobuf`, Go, `kind`/`containerlab`, `python3`+`scapy`+`pytest`, the genuine `dpservice-cli`, plus `qemu`, `iproute2`, `bpftool`, `tcpdump`, etc.
 
 ```sh
 nix develop            # enter the dev shell (all targets assume you are inside it)
 make                   # list all targets
 ```
 
-Common workflows (run them from inside `nix develop`):
+Common workflows (from inside `nix develop`):
 
 ```sh
 make build             # build xdp-dp (host crates + the eBPF object via aya-build)
-make lint              # clippy
-make test              # host unit + POD-layout tests (no root)
-make conformance       # dpservice conformance suite vs `xdp-dp serve`   (sudo)
-make e2e               # 3-node netns overlay end-to-end                 (sudo)
-make ha                # HA pinned-maps kill+adopt smoke                 (sudo)
-make tap-vm-smoke      # boot a CirrOS VM on a real tap                  (sudo + KVM)
-make cli               # build the dpservice-cli flake package
+make lint              # clippy across all targets
+make test              # host unit + POD-layout tests           (no root)
+make sim               # in-process datapath tests              (no root, no clab)
+make sim-anchor        # BPF_PROG_TEST_RUN byte-parity anchor    (sudo)
+make verifier          # load the programs through the verifier  (sudo)
+make conformance       # dpservice conformance suite vs `serve`  (sudo)
+make e2e               # 3-node netns overlay end-to-end         (sudo)
+make ha                # HA pinned-maps kill+adopt smoke         (sudo)
+make tap-vm-smoke      # boot a CirrOS VM on a real tap          (sudo + KVM)
+make image             # build the ghcr.io/trevex/dpservice-xdp image
 ```
 
 The `conformance`, `e2e`, `ha`, and `tap-*` targets need **passwordless sudo** (XDP attach, network namespaces, raw sockets). The scripts elevate individual commands themselves.
+
+### The clab + kind fabric (integration)
+
+The primary integration environment is a **containerlab IPv6 fabric wrapping a kind cluster**, with the full netplane stack (agent + reflector + controller) and the `xdp-dp` DaemonSet deployed:
+
+```sh
+hack/clab-up.sh            # bring up the fabric + kind + netplane stack
+# ... deploy workloads / run scenarios ...
+sudo -E bash test/scenario-nat-egress.sh    # container egress via distributed SNAT + WAN edge
+sudo -E bash test/scenario-lb-ingress.sh    # N-S load balancing
+sudo -E bash test/scenario-restart.sh       # graceful datapath restart (crictl kill -> adopt, no /128 reissue)
+hack/clab-down.sh
+```
 
 ## Distributed firewall
 
@@ -93,10 +125,10 @@ make conformance     # full dpservice conformance suite against xdp-dp serve (su
 
 ## Conformance
 
-Drop-in fidelity is proven by **dpservice's own `test/local` suite** — vendored into `test/conformance/` and re-pointed at `xdp-dp serve`. The scapy packet tests and the gRPC client are dpservice's; only the launch + device plumbing is adapted:
+Datapath fidelity is proven by **dpservice's own `test/local` suite** — vendored into `test/conformance/` and re-pointed at `xdp-dp serve`. The scapy packet tests and the gRPC client are dpservice's; only the launch + device plumbing is adapted:
 
-- The real **`dpservice-cli`** (the client metalnet's ecosystem uses) drives our gRPC server — built from source by the flake (`buildGoModule` over the pinned `dpservice` input).
-- **veth substitution** lets dpservice's unchanged `sendp(iface=…)` tests feed our XDP RX hook (a veth pair turns "TX on one end" into "RX on the other"). Production uses real qemu taps, where XDP attaches natively; `make tap-vm-smoke` / `make tap-dhcp-probe` validate that path.
+- The real **`dpservice-cli`** drives our gRPC server — built from source by the flake (`buildGoModule` over the pinned `dpservice` input).
+- **veth substitution** lets dpservice's unchanged `sendp(iface=…)` tests feed our RX hook (a veth pair turns "TX on one end" into "RX on the other"). Production uses real qemu taps / pod veths; `make tap-vm-smoke` / `make tap-dhcp-probe` and the clab fabric validate those paths.
 
 ```sh
 make conformance                      # the default suite
@@ -105,4 +137,4 @@ CONF_TESTS="test_lb.py" make conformance   # a subset
 
 ## Design docs
 
-Each milestone has a spec (`docs/superpowers/specs/`) and an implementation plan (`docs/superpowers/plans/`) — the parity gap analysis, the ioiab drop-in sub-projects (2a dynamic taps + gRPC, 2b DHCP, 2c deployment), and the per-feature designs (NAT, LB, NAT64, HA, IPv6 overlay, …).
+Each milestone has a spec (`docs/superpowers/specs/`) and an implementation plan (`docs/superpowers/plans/`) — the parity gap analysis, the KubeVirt/multi-cluster designs, the netplane control-plane + route-distribution designs, the CompiledNIC firewall pipeline, the synthetic-testing (core sim + fabric) designs, and the resilience work (graceful restart, link-pinning). Each carries its outcome, including deferred items and their root-cause analyses (e.g. the clab-only guest-egress checksum artifact).

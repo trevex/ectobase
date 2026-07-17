@@ -1,121 +1,84 @@
-# Lean IPv6 BGP-unnumbered fabric (containerlab) for underlay-inference e2e
+# IPv6 fabric (containerlab + kind) for the overlay dataplane
 
-A minimal, kind-native containerlab lab that exercises **xdp-dp underlay inference**:
-each "host" node announces a per-node `/64` that lives on its `dummy0`, the FRR ToR
-routes each `/64` to the other, and `xdp-dp infer-underlay` must report the same `/64`
-it read off `dummy0`.
+The integration environment for `xdp-dp` + `netplane`: a **containerlab IPv6 fabric** wrapping one
+or more **kind** clusters, with **FRR ToRs**, **dual VyOS WAN edges** (each with an `xdp-dp` sidecar),
+a **Cilium** CNI, and the full **netplane** control plane deployed. It exercises the real paths:
+underlay inference, overlay routing over the fabric, distributed SNAT + WAN egress through the edges,
+North-South load balancing, and graceful datapath restart.
 
-It is adapted from a proven reference lab (`icn/sandbox`) but recreated **lean**: NO
-VyOS edges, NO NAT64/DNS64, NO Garden-Linux VMs — just enough FRR fabric to route the
-per-node `/64`s between kind nodes.
+> Historical note: this started as a *lean* single-ToR underlay-inference lab; it has since grown the
+> VyOS WAN edges, multiple kind clusters, and the netplane stack. The Cilium section at the bottom and
+> the host/kernel gotchas are the load-bearing operational knowledge — read them.
 
 ## What is here
 
 | File | Role |
 |------|------|
-| `ipv6-fabric.clab.yml` | Topology: FRR ToR `sw1` + kind cluster `k01` (2 nodes as "hosts") |
-| `kind-cluster.yaml` | The kind cluster config clab deploys (control-plane + worker, IPv6) |
-| `frr/daemons` | FRR daemons (zebra/bgpd/bfdd/staticd only) |
-| `frr/sw1.conf` | ToR: unnumbered eBGP transit (AS 65010) |
-| `frr/host1.conf`, `frr/host2.conf` | Per-host FRR: announce `fd00:db8:0:1::/64` / `fd00:db8:0:2::/64` (AS 65100) |
-| `../clab-up.sh`, `../clab-down.sh` | Idempotent deploy/destroy wrappers |
+| `ipv6-fabric.clab.yml` | Topology: FRR ToRs `sw1`/`sw2` (+ `sw1-pass`/`sw2-pass` xdp_pass sidecars), VyOS edges `edge1`/`edge2` (+ `edge1-xdp`/`edge2-xdp` dataplane sidecars), the `clabwan` "internet" bridge, and kind clusters `k01`/`k02`/`k03`. |
+| `kind-cluster.yaml`, `kind-cluster-k0{2,3}.yaml` | The kind cluster configs clab deploys (IPv6, `disableDefaultCNI: true`, `kubeProxyMode: none`). |
+| `frr/` | FRR configs for the ToRs (`sw1.conf`/`sw2.conf`) + `daemons`. Unnumbered eBGP-via-LLA transit + BFD + ECMP. |
+| `vyos/` | VyOS edge boot configs (`edge{1,2}.boot`): BGP to the fabric + WAN forwarding/masquerade toward `clabwan`. |
+| `cilium-up.sh`, `cilium-values.yaml` | Install Cilium (IPv6, tunnel/VXLAN mode) per kind cluster — the pod CNI (see below). |
+| `wan-up.sh`, `wan-down.sh` | Create/destroy the `clabwan` host bridge + the WAN masquerade (the edges' path to the "internet"). |
+| `edge-agents-up.sh`, `edge-xdp-wrapper.sh`, `sw-pass-wrapper.sh` | Start the edge `xdp-dp` sidecars (`--role edge`, `wan_rx`) + their brokered agents; the ToR xdp_pass shims. |
+| `prefixes/` | Per-node announced-prefix inputs. |
+| `../clab-up.sh`, `../clab-down.sh` | Idempotent deploy/destroy wrappers (WAN bring-up → clab deploy → Cilium per cluster). |
 
-Topology:
+## Topology (k01 shown)
 
 ```
-        ┌──────┐
-        │ sw1  │            FRR ToR (AS 65010), unnumbered eBGP transit
-        └┬────┬┘
-     eth1│    │eth2         unnumbered IPv6 links (link-local only)
-   ┌─────┴┐  ┌┴─────┐
-   │ host1│  │ host2│       kind nodes k01-control-plane / k01-worker (AS 65100)
-   │dummy0│  │dummy0│       host1 announces fd00:db8:0:1::/64
-   │ ::1  │  │ ::1  │       host2 announces fd00:db8:0:2::/64
-   └──────┘  └──────┘       each runs xdp-dp -> infers its /64 from dummy0
+                 clabwan  (host bridge = "the internet", NAT-masqueraded)
+                    │
+          ┌─────────┴─────────┐
+      edge1 (VyOS)        edge2 (VyOS)     WAN edges: VyOS owns BGP + WAN forwarding;
+      + edge1-xdp         + edge2-xdp      an xdp-dp `--role edge` sidecar (wan_rx) shares its netns
+          │                   │
+        sw1 (FRR ToR)     sw2 (FRR ToR)    unnumbered eBGP-via-LLA transit + BFD + ECMP
+          │   ┌───────────────┤            (sw{1,2}-pass = xdp_pass shims on the edge-facing ports)
+   ┌──────┴───┴──────┐
+   │ k01-control-plane│  k01-worker        kind nodes (ext-container): each runs the xdp-dp DaemonSet
+   │   (fd00:db8:0:1::/64)  (…:0:2::/64)    + a netplane agent; Cilium is the pod CNI
+   └──────────────────┘
 ```
 
-## The kind ↔ containerlab integration (read this)
+## Bring it up
 
-The reference lab used Garden-Linux VMs as hosts; using **kind** is new here. The
-integration uses documented containerlab features:
-
-- **`k8s-kind` node** (`k01`) — containerlab owns the kind cluster lifecycle
-  (create on deploy, delete on destroy). `startup-config: kind-cluster.yaml`.
-- **`ext-container` nodes** (`k01-control-plane`, `k01-worker`) — the kind node
-  containers, referenced **by the exact name kind gives them**
-  (`<cluster>-control-plane`, `<cluster>-worker`). These CAN be clab link endpoints,
-  which is how the kind nodes attach to the fabric (`sw1:eth1` ↔ `k01-control-plane:eth1`).
-  Their `exec:` blocks create `dummy0` + the announced `/64` **inside the kind node's
-  own netns**, which is exactly where `xdp-dp` runs and infers from.
-- **Per-host FRR sidecars** (`host1-frr`, `host2-frr`) — plain `linux` nodes with
-  `network-mode: container:k01-control-plane` / `-worker`, so FRR runs in the **same
-  netns** as the kind node. That lets FRR announce `dummy0`'s `/64` over the kind
-  node's fabric uplink **without baking FRR into the kubelet/containerd node image**.
-
-### Proven-from-reference vs new-and-unvalidated
-
-**Proven** (copied/adapted directly from `icn/sandbox`, which runs green):
-- The unnumbered-eBGP pattern (`neighbor ethN interface remote-as external`), the
-  `fabric-fast` BFD profile, `maximum-paths` ECMP, `bestpath as-path multipath-relax`,
-  the host-announces-`dummy0`-`/64` model, and the **mgmt-IPv6-disabled** note (that
-  one genuinely bites — a clab-auto mgmt IPv6 default route outranks the fabric).
-
-**New / UNVALIDATED here** (could not run — no containerlab/kind/root in the authoring
-env). Flagged assumptions a capable host must confirm:
-1. **`k8s-kind` + `ext-container` naming.** Assumes the containers are named
-   `k01-control-plane` / `k01-worker`. Verify with `docker ps` after deploy; adjust
-   node names + the e2e's `kindNode` constant if your clab/kind version differs.
-2. **`exec` runs in the kind node netns and iproute2 is present** in `kindest/node`
-   (it is, for `ip`/`dummy`), and dummy module is loadable. If `ip link add dummy0`
-   fails, load `dummy` on the host or add `--sysctl`/`modprobe dummy` on the host.
-3. **Shared-netns FRR sidecar** sees `dummy0` + `eth1`. `network-mode: container:` +
-   `startup-delay` should order it after the kind node + its `exec`; if the LLA on
-   `eth1` lost the race (session Idle), bounce it:
-   `docker exec k01-control-plane sh -c 'ip link set eth1 down; ip link set eth1 up'`.
-4. **Unnumbered eBGP needs an IPv6 link-local on every peering iface.** clab/kind
-   veths default to `addr_gen_mode=eui64` so this should hold; if a session is Idle,
-   confirm `ip -6 addr show dev eth1` shows an `fe80::` on both ends.
-5. **xdp-dp image reachability.** The e2e runs `docker run --network container:<node>
-   ghcr.io/trevex/dpservice-xdp:dev infer-underlay`. Build/pull that image first
-   (`make image` at the repo root), or override the tag.
-
-## Run it (on a capable host)
-
-Prereqs: `containerlab`, `kind`, `docker` (or another clab runtime), root/sudo, the
-`dummy` kernel module, and the `dpservice-xdp` image built (`make image`).
+Prereqs: `containerlab`, `kind`, `docker`, root/sudo, the `dummy` kernel module, and the images built
+(`make image` + `make image-netplane` + `make image-kindnode` at the repo root).
 
 ```bash
-# from the repo root
-hack/clab-up.sh                        # deploy (idempotent: --reconfigure)
+hack/clab-up.sh        # wan-up → clab deploy (--reconfigure, idempotent) → Cilium per cluster
+# deploy the netplane stack (agent + reflector + controller) + the xdp-dp DaemonSet on k01:
+kubectl apply -k config/deploy            # (namespace ectobase-system)
+hack/clab/edge-agents-up.sh               # start the WAN-edge xdp-dp sidecars + brokered agents
 
-# confirm the fabric addressing + sessions
+# sanity: fabric addressing + BGP/BFD
 docker exec k01-control-plane ip -6 -o addr show dev dummy0   # fd00:db8:0:1::1/64
 docker exec clab-xdp-ipv6-fabric-sw1 vtysh -c 'show bgp ipv6 unicast summary'
-docker exec clab-xdp-ipv6-fabric-sw1 vtysh -c 'show bfd peers brief'
 
-# the actual assertion: xdp-dp infers the same /64 the fabric put on dummy0
-docker run --rm --network container:k01-control-plane \
-  ghcr.io/trevex/dpservice-xdp:dev infer-underlay
-# expect: inferred underlay prefix: fd00:db8:0:1::/64
-docker run --rm --network container:k01-worker \
-  ghcr.io/trevex/dpservice-xdp:dev infer-underlay
-# expect: inferred underlay prefix: fd00:db8:0:2::/64
+# scenarios (repo root; need sudo + the flake PATH):
+sudo -E bash test/scenario-nat-egress.sh   # container egress via distributed SNAT + the VyOS WAN edge
+sudo -E bash test/scenario-lb-ingress.sh   # N-S load balancing
+sudo -E bash test/scenario-restart.sh      # graceful datapath restart (crictl kill -> adopt)
 
-# cross-node reachability (each /64 routed to the other via sw1)
-docker exec k01-control-plane ping6 -c2 fd00:db8:0:2::1
-
-hack/clab-down.sh                      # destroy (also deletes the kind cluster)
+hack/clab-down.sh      # destroy the fabric + kind clusters
 ```
 
-## The Go e2e
+## The kind ↔ containerlab integration
 
-`test/e2e/fabric_test.go` → `TestUnderlayInferenceOnFabric` automates the above and
-**skips cleanly** when `containerlab`/`kind`/`docker` are absent (as in CI without a
-runtime). To run it on a capable host:
+- **`k8s-kind` nodes** (`k01`/`k02`/`k03`) — containerlab owns the kind cluster lifecycle
+  (create on deploy, delete on destroy).
+- **`ext-container` nodes** (`k01-control-plane`, `k01-worker`, …) — the kind node containers,
+  referenced by the exact name kind gives them; these are the clab link endpoints, so the kind nodes
+  attach to the FRR fabric (`sw1:eth1 ↔ k01-control-plane:eth1`). Their `exec:` blocks create
+  `dummy0` + the announced `/64` **inside the kind node's netns** — where `xdp-dp` infers from.
+- **FRR runs in the kind node's netns** (shared-netns sidecar) so it can announce `dummy0`'s `/64`
+  over the fabric uplink without baking FRR into the kubelet/containerd node image.
+- **`vyosnetworks_vyos` edges** (`edge1`/`edge2`) run real VyOS (BGP + WAN forwarding, what hardware
+  runs); an `xdp-dp --role edge` sidecar shares each edge's netns and owns the overlay `wan_rx` path.
 
-```bash
-cd test/e2e && go test -run TestUnderlayInferenceOnFabric -v ./...
-```
+The **mgmt-IPv6-disabled** note genuinely bites: a clab-auto mgmt IPv6 default route can outrank the
+fabric — keep it disabled on the fabric nodes.
 
 ## CNI = Cilium (tunnel mode), and the harness gotchas behind it
 
