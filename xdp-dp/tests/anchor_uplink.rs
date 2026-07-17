@@ -56,7 +56,6 @@ fn encap_params() -> EncapParams {
         uplink_ifindex: 7,
         src_underlay: EDGE_UNDERLAY,
         nexthop_ipv6: HOST_UNDERLAY,
-        inner_len: 0,   // set by edge_encap
         inner_proto: 4, // IPPROTO_IPIP
     }
 }

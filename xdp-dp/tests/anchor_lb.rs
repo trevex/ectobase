@@ -82,7 +82,6 @@ fn encapped_input() -> Vec<u8> {
             uplink_ifindex: 7,
             src_underlay: ORIGIN_UL,
             nexthop_ipv6: BACKEND_UL,
-            inner_len: 0,
             inner_proto: 4, // IPPROTO_IPIP
         },
     );

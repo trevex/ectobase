@@ -12,7 +12,6 @@ pub struct EncapParams {
     pub uplink_ifindex: u32,
     pub src_underlay: [u8; 16],
     pub nexthop_ipv6: [u8; 16],
-    pub inner_len: u16,
     pub inner_proto: u8,
 }
 

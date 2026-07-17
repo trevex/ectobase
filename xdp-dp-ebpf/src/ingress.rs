@@ -361,7 +361,6 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
         }
         if let Some(backend) = crate::lb::lb_select_forward_v6(ctx, ETH_LEN, 0) {
             let local = LOCAL.get(0).ok_or(())?;
-            let inner_len = (data_end - data - ETH_LEN) as u16;
             let route = RouteValue {
                 nexthop_vni: 0,
                 nexthop_ipv6: backend,
@@ -373,7 +372,6 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
                 local,
                 &local.underlay_ipv6,
                 &route,
-                inner_len,
                 IPPROTO_IPV6, // inner is an IPv6 packet (NOT IPPROTO_IPIP)
             );
         }
@@ -392,7 +390,6 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
     // exactly like the neighbor-nat return path below. Falls through to neighbor-nat on a miss.
     if let Some(backend) = crate::lb::lb_select_forward(ctx, ip_off, 0) {
         let local = LOCAL.get(0).ok_or(())?;
-        let inner_len = (data_end - data - ETH_LEN) as u16;
         let route = RouteValue {
             nexthop_vni: 0,
             nexthop_ipv6: backend,
@@ -404,7 +401,6 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
             local,
             &local.underlay_ipv6,
             &route,
-            inner_len,
             IPPROTO_IPIP,
         );
     }
@@ -414,8 +410,7 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
     };
     let local = LOCAL.get(0).ok_or(())?;
     // Encap the plain IPv4 (the outer L2 header is consumed like a guest inner eth) into IP-in-IPv6
-    // toward the owner. inner_len = the IPv4 payload length, captured before adjust_head.
-    let inner_len = (data_end - data - ETH_LEN) as u16;
+    // toward the owner.
     let route = RouteValue {
         nexthop_vni: 0,
         nexthop_ipv6: owner_ul,
@@ -427,7 +422,6 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, ()> {
         local,
         &local.underlay_ipv6,
         &route,
-        inner_len,
         IPPROTO_IPIP,
     )
 }

@@ -126,7 +126,6 @@ pub fn forward_decision_v4(
             };
         }
     }
-    let inner_len = (data_end - data - ETH_LEN) as u16;
     let local = match LOCAL.get(0) {
         Some(l) => l,
         None => return EgressVerdict::Pass,
@@ -137,7 +136,6 @@ pub fn forward_decision_v4(
         uplink_ifindex: local.uplink_ifindex,
         src_underlay: meta.underlay_ipv6,
         nexthop_ipv6: route.nexthop_ipv6,
-        inner_len,
         inner_proto: crate::parse::IPPROTO_IPIP,
     })
 }
@@ -148,7 +146,7 @@ pub fn forward_decision_v4(
 #[inline(always)]
 pub fn forward_decision_v6(
     data: usize,
-    data_end: usize,
+    _data_end: usize,
     _ifindex: u32,
     meta: &PortMeta,
 ) -> EgressVerdict {
@@ -174,7 +172,6 @@ pub fn forward_decision_v6(
             };
         }
     }
-    let inner_len = (data_end - data - ETH_LEN) as u16;
     let local = match LOCAL.get(0) {
         Some(l) => l,
         None => return EgressVerdict::Pass,
@@ -185,7 +182,6 @@ pub fn forward_decision_v6(
         uplink_ifindex: local.uplink_ifindex,
         src_underlay: meta.underlay_ipv6,
         nexthop_ipv6: route.nexthop_ipv6,
-        inner_len,
         inner_proto: crate::parse::IPPROTO_IPV6,
     })
 }

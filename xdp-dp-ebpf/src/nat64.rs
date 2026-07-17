@@ -561,14 +561,12 @@ pub fn nat64_egress(
         None => return Ok(None),
     };
 
-    let inner_len = (ctx.data_end() - ctx.data() - ETH_LEN) as u16;
     let local = LOCAL.get(0).ok_or(())?;
     let act = crate::encap::encap_and_redirect(
         ctx,
         local,
         meta_underlay_ipv6,
         route,
-        inner_len,
         crate::parse::IPPROTO_IPIP,
     )?;
     Ok(Some(act))

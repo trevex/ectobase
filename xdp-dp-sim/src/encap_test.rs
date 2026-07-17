@@ -12,7 +12,6 @@ fn encap_writes_outer_v6_header() {
         uplink_ifindex: 7,
         src_underlay: [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xaa],
         nexthop_ipv6: [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xbb],
-        inner_len: 34,
         inner_proto: 4,
     };
     assert!(write_outer_v6(&mut p, &e));
@@ -42,7 +41,6 @@ fn encap_inner_len_uses_logical_not_linear() {
         uplink_ifindex: 7,
         src_underlay: [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xaa],
         nexthop_ipv6: [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xbb],
-        inner_len: 0, // ignored — write_outer_v6 derives it from logical_len
         inner_proto: 4,
     };
     assert!(write_outer_v6(&mut p, &e));
