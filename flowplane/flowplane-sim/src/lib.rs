@@ -16,6 +16,8 @@ mod conntrack_test;
 #[cfg(test)]
 mod ct_apply_test;
 #[cfg(test)]
+mod dhcp_test;
+#[cfg(test)]
 mod encap_test;
 #[cfg(test)]
 mod firewall_test;
