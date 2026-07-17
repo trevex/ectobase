@@ -1,6 +1,6 @@
 use flowplane_common::{
-    CtEntry, CtKey, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local, MaglevKey, NatKey, NatValue,
-    RouteValue, UnderlayValue,
+    CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
+    MaglevKey, NatKey, NatValue, RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
 use std::collections::{HashMap, HashSet};
@@ -42,6 +42,10 @@ pub struct MemMaps {
     pub nat_ips: HashSet<(u32, [u8; 4])>,
     pub routes4: Vec<Route4>,
     pub routes6: Vec<Route6>,
+    /// Server-wide DHCP config (`DHCP_CONFIG[0]`): MTU + DNS lists.
+    pub dhcp_config: Option<DhcpConfig>,
+    /// Per-interface DHCP config (`DHCP_META[ifindex]`): hostname + PXE.
+    pub dhcp_meta: HashMap<u32, DhcpMeta>,
 }
 
 /// True if the first `prefix` bits of `a` and `b` (big-endian byte order) are equal.
@@ -121,6 +125,12 @@ impl Maps for MemMaps {
             .filter(|r| r.vni == vni && prefix_match(&r.ipv6, dst, r.prefix))
             .max_by_key(|r| r.prefix)
             .map(|r| r.value)
+    }
+    fn dhcp_config(&self) -> Option<DhcpConfig> {
+        self.dhcp_config
+    }
+    fn dhcp_meta(&self, ifindex: u32) -> Option<DhcpMeta> {
+        self.dhcp_meta.get(&ifindex).copied()
     }
 }
 

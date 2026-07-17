@@ -1,7 +1,7 @@
 use aya_ebpf::{helpers::bpf_xdp_adjust_head, programs::XdpContext};
 use flowplane_common::{
-    CtEntry, CtKey, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local, MaglevKey, NatKey, NatValue,
-    RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue,
+    CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
+    MaglevKey, NatKey, NatValue, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
 use flowplane_core::pkt::Pkt;
@@ -70,6 +70,14 @@ impl Maps for GlobalMaps {
                 },
             ))
             .copied()
+    }
+    #[inline(always)]
+    fn dhcp_config(&self) -> Option<DhcpConfig> {
+        crate::maps::DHCP_CONFIG.get(0).copied()
+    }
+    #[inline(always)]
+    fn dhcp_meta(&self, ifindex: u32) -> Option<DhcpMeta> {
+        unsafe { crate::maps::DHCP_META.get(&ifindex).copied() }
     }
 }
 

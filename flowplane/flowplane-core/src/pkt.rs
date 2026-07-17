@@ -43,6 +43,17 @@ pub trait Pkt {
     /// Remove `delta` bytes from the front (decap). Models bpf_xdp_adjust_head(+delta).
     fn shrink_head(&mut self, delta: usize) -> bool;
 
+    /// Resize the frame to exactly `new_len` bytes at the tail (grow or shrink). Models
+    /// `bpf_xdp_adjust_tail` / `bpf_skb_change_tail` — the DHCPv4 responder grows the frame to a
+    /// constant `REPLY_LEN` before writing the fixed-layout reply. The eBPF `RawPkt` impl does NOT
+    /// resize itself (the XDP/tc glue resizes with the native primitive, then wraps the grown frame
+    /// in a fresh `RawPkt`); only owning buffers (`VecPkt`) implement this. The default is a no-op
+    /// returning false so non-resizable impls stay usable for callers that never resize.
+    #[inline(always)]
+    fn set_tail(&mut self, _new_len: usize) -> bool {
+        false
+    }
+
     #[inline(always)]
     fn read_u16_be(&self, off: usize) -> Option<u16> {
         self.read_array::<2>(off).map(u16::from_be_bytes)

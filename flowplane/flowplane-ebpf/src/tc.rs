@@ -9,14 +9,12 @@ use aya_ebpf::{
     programs::TcContext,
 };
 
-use crate::coreimpl::RawPkt;
+use crate::coreimpl::{GlobalMaps, RawPkt};
+use crate::dhcp::learn_mac;
 use crate::dhcp::tc_dhcpv6_respond;
-use crate::dhcp::{gather_dhcpv4_reply, learn_mac};
 use crate::maps::{GUEST_PROGS_TC, PORT_META};
-use flowplane_common::dhcp::{
-    looks_like_dhcpv4, looks_like_dhcpv6, parse_dhcpv4_request, write_dhcpv4_reply, MIN_DHCP_LEN,
-    REPLY_LEN,
-};
+use flowplane_common::dhcp::{looks_like_dhcpv4, looks_like_dhcpv6};
+use flowplane_core::dhcp::{parse as dhcp4_parse, write as dhcp4_write, MIN_DHCP_LEN, REPLY_LEN};
 
 // `aya_ebpf::bindings::{TC_ACT_OK, TC_ACT_SHOT}` are already `i32` (the verdict type a
 // `#[classifier]` returns), so they're used directly below.
@@ -271,12 +269,11 @@ pub fn tc_guest_dhcp(ctx: TcContext) -> i32 {
     if ctx.pull_data(MIN_DHCP_LEN as u32).is_err() {
         return TC_ACT_OK;
     }
-    let req = match parse_dhcpv4_request(ctx.data(), ctx.data_end()) {
+    let req = match dhcp4_parse(&RawPkt::new(ctx.data(), ctx.data_end())) {
         Some(r) => r,
         None => return TC_ACT_OK,
     };
     learn_mac(ifindex, &meta, req.client_mac);
-    let r = gather_dhcpv4_reply(&req, &meta, ifindex);
     // Resize the skb to REPLY_LEN, then re-establish writability (change_tail invalidates bounds).
     let cur = (ctx.data_end() - ctx.data()) as u32;
     if cur != REPLY_LEN as u32
@@ -287,7 +284,16 @@ pub fn tc_guest_dhcp(ctx: TcContext) -> i32 {
     if ctx.pull_data(REPLY_LEN as u32).is_err() {
         return TC_ACT_OK;
     }
-    if unsafe { write_dhcpv4_reply(ctx.data(), ctx.data_end(), &r) }.is_none() {
+    let ok = dhcp4_write(
+        &mut RawPkt::new(ctx.data(), ctx.data_end()),
+        &req,
+        meta.guest_ipv4,
+        meta.gateway_ipv4,
+        crate::arp_nd::GW_MAC,
+        &GlobalMaps,
+        ifindex,
+    );
+    if !ok {
         return TC_ACT_SHOT;
     }
     // Reply to the guest: redirect back out the tap we arrived on (egress = toward guest).

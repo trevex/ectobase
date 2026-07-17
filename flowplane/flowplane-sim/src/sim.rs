@@ -422,6 +422,48 @@ impl SimNode {
         }
     }
 
+    /// Guest DHCPv4 responder. If `frame` is a DISCOVER/REQUEST (UDP dport 67) for this port, build
+    /// the OFFER/ACK and return `Redirect(ingress_ifindex)` — the exact `reflect(ctx)` verdict the
+    /// eBPF `guest_dhcp` datapath uses (`bpf_redirect(ingress_ifindex)`). Otherwise `Pass`.
+    ///
+    /// Runs the SAME `flowplane_core::dhcp::{parse, write}` the production eBPF `guest_dhcp` glue
+    /// dispatches to, over `VecPkt`/`MemMaps`. Mirrors the eBPF glue exactly: parse the request, then
+    /// resize the frame to the constant `REPLY_LEN` (models `bpf_xdp_adjust_tail`) before writing the
+    /// fixed-layout reply. The reply's server MAC / assigned IP / gateway come from `meta`; MTU + DNS
+    /// + host-name come from the node's `DHCP_CONFIG` / `DHCP_META[ingress_ifindex]`.
+    pub fn guest_dhcp4(&self, frame: &[u8], meta: &PortMeta, ingress_ifindex: u32) -> SimOut {
+        use flowplane_core::dhcp;
+        let mut pkt = VecPkt::from_bytes(frame);
+        let req = match dhcp::parse(&pkt) {
+            Some(r) => r,
+            None => {
+                return SimOut {
+                    action: Action::Pass,
+                    pkt: pkt.into_bytes(),
+                }
+            }
+        };
+        // Grow/shrink the frame to the constant reply length, as the eBPF glue does via adjust_tail.
+        pkt.set_tail(dhcp::REPLY_LEN);
+        let ok = dhcp::write(
+            &mut pkt,
+            &req,
+            meta.guest_ipv4,
+            meta.gateway_ipv4,
+            GW_MAC,
+            &self.maps,
+            ingress_ifindex,
+        );
+        SimOut {
+            action: if ok {
+                Action::Redirect(ingress_ifindex)
+            } else {
+                Action::Pass
+            },
+            pkt: pkt.into_bytes(),
+        }
+    }
+
     /// Uniform entry for the Fabric. UplinkRx resolves `u = UNDERLAY[outer_dst]` from this node's maps.
     pub fn run(&mut self, prog: crate::fabric::Prog, pkt: &[u8]) -> SimOut {
         use flowplane_core::encap::ETH_LEN;

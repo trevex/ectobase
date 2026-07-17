@@ -2,6 +2,7 @@
 
 pub mod arp_nd;
 pub mod conntrack;
+pub mod dhcp;
 pub mod egress;
 pub mod encap;
 pub mod err;

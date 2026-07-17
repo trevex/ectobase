@@ -7,9 +7,11 @@ use flowplane_common::PortMeta;
 use crate::arp_nd::GW_MAC;
 use crate::parse::{write16, write6, ETH_LEN, ETH_P_IPV6, IPPROTO_UDP};
 
-// The DHCPv4 wire-format constants and the pure byte writer/parser now live in
-// `flowplane_common::dhcp` (host-testable). The glue below reads maps, learns MACs, and resizes the
-// frame; the byte construction is `flowplane_common::dhcp::write_dhcpv4_reply`.
+// The DHCPv4 request parse + reply byte construction live in `flowplane_core::dhcp` over the
+// `Pkt`/`Maps` seam (the SAME code the sim + the byte-parity anchor run). The glue below learns
+// MACs, resizes the frame, and reflects the reply. The DHCPv6 responder still lives in this file:
+// its option block is runtime-variable-length and is emitted at runtime offsets via
+// bpf_xdp_store_bytes, which the fixed-size const-generic `Pkt` trait cannot express.
 
 /// MAC learning for the egress edge: if the request's Ethernet source differs from the cached
 /// `meta.guest_mac`, update PORT_META (keyed by ifindex), UNDERLAY (keyed by underlay IPv6), and
@@ -36,71 +38,37 @@ pub(crate) fn learn_mac(ifindex: u32, meta: &PortMeta, eth_src: [u8; 6]) {
     }
 }
 
-/// Read DHCP_CONFIG/DHCP_META and assemble the resolved `Dhcpv4Reply` from the parsed request and
-/// the port's `meta`. The reply's Ethernet source is the synthetic GW_MAC (the ARP/ND responders
-/// advertise the same), and the lease is infinite (0xffffffff) — both match the previous inline
-/// builder byte-for-byte. `ifindex` keys the per-interface DHCP_META (hostname) lookup.
-#[inline(always)]
-pub(crate) fn gather_dhcpv4_reply(
-    req: &flowplane_common::dhcp::Dhcpv4Request,
-    meta: &PortMeta,
-    ifindex: u32,
-) -> flowplane_common::dhcp::Dhcpv4Reply {
-    let mut r = flowplane_common::dhcp::Dhcpv4Reply {
-        reply_type: req.reply_type,
-        client_mac: req.client_mac,
-        yiaddr: meta.guest_ipv4,
-        gateway_ipv4: meta.gateway_ipv4,
-        server_mac: GW_MAC,
-        xid_secs_flags: req.xid_secs_flags,
-        mtu: 1500,
-        dns: [[0u8; 4]; flowplane_common::DHCP_MAX_DNS],
-        dns_len: 0,
-        lease_secs: 0xffff_ffff,
-        hostname: [0u8; flowplane_common::dhcp::MAX_HOSTNAME],
-        hostname_len: 0,
-    };
-
-    if let Some(cfg) = crate::maps::DHCP_CONFIG.get(0) {
-        r.mtu = cfg.mtu;
-        let dns_len = (cfg.dns4_len as usize).min(flowplane_common::DHCP_MAX_DNS);
-        let mut j = 0usize;
-        while j < dns_len {
-            r.dns[j] = cfg.dns4[j];
-            j += 1;
-        }
-        r.dns_len = dns_len as u8;
-    }
-
-    if let Some(dm) = unsafe { crate::maps::DHCP_META.get(&ifindex) } {
-        let hn_len = (dm.hostname_len as usize).min(flowplane_common::dhcp::MAX_HOSTNAME);
-        let mut k = 0usize;
-        while k < hn_len {
-            r.hostname[k] = dm.hostname[k];
-            k += 1;
-        }
-        r.hostname_len = hn_len as u8;
-    }
-    r
-}
-
-/// In-datapath DHCPv4 responder (XDP glue). Parses the DISCOVER/REQUEST (pure), learns the source
-/// MAC, gathers the reply from maps, resizes the frame to REPLY_LEN, then writes the reply bytes
-/// via the pure `write_dhcpv4_reply`. Returns `Some(XDP_TX)` on reply.
+/// In-datapath DHCPv4 responder (XDP glue). Delegates the request parse and the reply byte
+/// construction to `flowplane_core::dhcp::{parse, write}` over the `RawPkt`/`GlobalMaps` seam — the
+/// SAME code the native SimNode and the `BPF_PROG_TEST_RUN` byte-parity anchor run. The glue owns
+/// only what is genuinely eBPF-specific: MAC learning, the `bpf_xdp_adjust_tail` frame resize (core
+/// requires an already-`REPLY_LEN` frame), and the reflect verdict. Returns `Some(XDP_TX)` on reply.
 #[inline(always)]
 pub fn try_dhcpv4_reply(ctx: &XdpContext, meta: &PortMeta) -> Option<u32> {
-    let req = flowplane_common::dhcp::parse_dhcpv4_request(ctx.data(), ctx.data_end())?;
+    let req =
+        flowplane_core::dhcp::parse(&crate::coreimpl::RawPkt::new(ctx.data(), ctx.data_end()))?;
     let ifindex = unsafe { (*ctx.ctx).ingress_ifindex };
     learn_mac(ifindex, meta, req.client_mac);
-    let r = gather_dhcpv4_reply(&req, meta, ifindex);
     let cur_len = ctx.data_end() - ctx.data();
-    if cur_len != flowplane_common::dhcp::REPLY_LEN {
-        let delta = flowplane_common::dhcp::REPLY_LEN as i32 - cur_len as i32;
+    if cur_len != flowplane_core::dhcp::REPLY_LEN {
+        let delta = flowplane_core::dhcp::REPLY_LEN as i32 - cur_len as i32;
         if unsafe { bpf_xdp_adjust_tail(ctx.ctx, delta) } != 0 {
             return None;
         }
     }
-    unsafe { flowplane_common::dhcp::write_dhcpv4_reply(ctx.data(), ctx.data_end(), &r) }?;
+    // Re-wrap the resized frame: adjust_tail invalidates the prior data/data_end.
+    let ok = flowplane_core::dhcp::write(
+        &mut crate::coreimpl::RawPkt::new(ctx.data(), ctx.data_end()),
+        &req,
+        meta.guest_ipv4,
+        meta.gateway_ipv4,
+        GW_MAC,
+        &crate::coreimpl::GlobalMaps,
+        ifindex,
+    );
+    if !ok {
+        return None;
+    }
     Some(crate::arp_nd::reflect(ctx))
 }
 
