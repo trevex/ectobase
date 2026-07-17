@@ -141,25 +141,29 @@ tap), which the byte-parity anchors cover at the eBPF bytecode level.
 
 ### DHCPv6 — `test_dhcpv6.py`
 
-**Status: deferred to goscapy live smoke (Task 2.3 — PLANNED, not yet implemented).**
+**Status: covered by the Go live lease smoke — `test/e2e/smoke_lb_dhcp_test.go::TestDhcpLeaseSmoke` (DHCPv6 case).**
 
 `test_dhcpv6_vf0` / `test_dhcpv6_vf1` test a full DHCPv6 Solicit→Reply + Request→Reply
 exchange including PXE/iPXE vendor-class and Boot File URL options, plus a Confirm→Reply.
 
-DHCPv6 is intentionally NOT covered by the sim conformance layer:
+DHCPv6 is intentionally NOT covered by the sim conformance layer (unlike DHCPv4, which was
+extracted into `flowplane-core` and is sim-tested in `dhcp_test.rs`):
 
 - The DHCPv6 reply option block is runtime-variable-length and emitted at runtime offsets
-  via `bpf_xdp_store_bytes`. This idiom cannot be expressed by the fixed-size
-  const-generic `Pkt` seam that the pure-core / sim share.
+  via `bpf_xdp_store_bytes`. A `store_bytes`/`load_bytes` `Pkt` primitive was prototyped to
+  bridge this, but the resulting core-called `guest_dhcp` exceeded the XDP verifier's
+  1,000,000-instruction ceiling (`processed 1000001 insns`) — the responder's checksum /
+  option-walk loop state-exploration, layered on the seam's per-access overhead, tips the
+  original hand-tuned equilibrium over. The attempt was reverted.
 - The DHCPv6 responder therefore stays entirely in `flowplane-ebpf` (XDP path), not in
-  `flowplane-core`.
-- Correct conformance requires a real DHCPv6 client receiving a real lease — this is the
-  goscapy/scapy DHCPv6 live smoke (Task 2.3), which should be added to `test/e2e/` or a
-  dedicated `test/dhcpv6-smoke/` harness.
+  `flowplane-core`, and its conformance is asserted at the live level instead of the sim level.
 
-**Current state:** `test/e2e/` contains `fabric_test.go`, `kind_test.go`, and
-`routebus_test.go` — no DHCPv6 smoke test is present yet. Phase 3 deletion of the
-Python DHCPv6 test must not proceed until Task 2.3 is implemented.
+**Current state:** `TestDhcpLeaseSmoke` (`test/e2e/smoke_lb_dhcp_test.go`) drives a real
+DHCPv6 client through the datapath and asserts the ADVERTISE/Reply IA Address equals the
+guest's configured IPv6 (programmed via `DataplaneNode/AttachInterface` `requested_ips`,
+after the dual-stack fix that made `AttachInterface` set `guest_ipv6`). This is the sole
+DHCPv6 conformance; it is clab/root-gated (skips off-fabric). Phase 3 removal of the vendored
+Python suite is complete.
 
 ---
 

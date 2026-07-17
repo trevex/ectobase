@@ -95,6 +95,7 @@ sim-anchor: ## Privileged BPF_PROG_TEST_RUN byte-parity anchor (native pure-core
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_uplink -- --ignored --exact uplink_rx_bytecode_matches_native_sim
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_lb -- --ignored --exact uplink_rx_lb_deliver_bytecode_matches_native_sim
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_guest_tx -- --ignored --exact guest_tx_snat_bytecode_matches_native_sim
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_guest_tx -- --ignored --exact guest_tx_bytecode_matches_original_golden
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dnat -- --ignored --exact dnat_return_bytecode_matches_native_sim
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dnat -- --ignored --exact dnat_return_bytecode_matches_original_golden
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_arp_nd -- --ignored --exact arp_nd_bytecode_matches_native_sim
