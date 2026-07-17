@@ -157,7 +157,7 @@ func waitFor(t *testing.T, d time.Duration, cond func() bool) {
 func TestApplyPublic_LBVIP_EdgeAddsBackend(t *testing.T) {
 	dp := newRecordingDP()
 	b := NewBus("edge1", "2001:db8::e", dp, true) // isEdge = true
-	b.applyPublic(&rbv1.PublicPrefix{
+	b.applyPublic(context.Background(), &rbv1.PublicPrefix{
 		Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "2001:db8::dd",
 	}, rbv1.RouteOp_ROUTE_OP_ADD)
 	if got := dp.lbBackends["203.0.113.50"]; len(got) != 1 || got[0] != "2001:db8::dd" {
@@ -168,7 +168,7 @@ func TestApplyPublic_LBVIP_EdgeAddsBackend(t *testing.T) {
 func TestApplyPublic_LBVIP_NonEdgeIgnores(t *testing.T) {
 	dp := newRecordingDP()
 	b := NewBus("nodeA", "2001:db8::dd", dp, false) // not edge
-	b.applyPublic(&rbv1.PublicPrefix{
+	b.applyPublic(context.Background(), &rbv1.PublicPrefix{
 		Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "2001:db8::dd",
 	}, rbv1.RouteOp_ROUTE_OP_ADD)
 	if len(dp.lbBackends) != 0 {

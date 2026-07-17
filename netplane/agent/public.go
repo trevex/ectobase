@@ -62,7 +62,7 @@ func (r *Reconciler) DesiredPublic(ctx context.Context) ([]PublicPrefix, error) 
 // EDGE_UNDERLAY it records the anycast-underlay -> owner-loopback mapping in
 // learnedEdge (so a later task can pin the WAN return path to the specific edge
 // rather than ECMP'ing the anycast /128). Other kinds are not yet handled.
-func (b *Bus) applyPublic(pp *rbv1.PublicPrefix, op rbv1.RouteOp) {
+func (b *Bus) applyPublic(ctx context.Context, pp *rbv1.PublicPrefix, op rbv1.RouteOp) {
 	if pp == nil {
 		return
 	}
@@ -90,11 +90,11 @@ func (b *Bus) applyPublic(pp *rbv1.PublicPrefix, op rbv1.RouteOp) {
 		owner := pp.GetOwnerUnderlay()
 		switch op {
 		case rbv1.RouteOp_ROUTE_OP_ADD:
-			if err := b.dp.AddLbBackend(context.Background(), vip, owner); err != nil {
+			if err := b.dp.AddLbBackend(ctx, vip, owner); err != nil {
 				log.Printf("AddLbBackend vip=%s backend=%s: %v", vip, owner, err)
 			}
 		case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
-			if err := b.dp.DelLbBackend(context.Background(), vip, owner); err != nil {
+			if err := b.dp.DelLbBackend(ctx, vip, owner); err != nil {
 				log.Printf("DelLbBackend vip=%s backend=%s: %v", vip, owner, err)
 			}
 		}

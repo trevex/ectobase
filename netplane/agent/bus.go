@@ -213,7 +213,7 @@ func (b *Bus) handleServerMsg(ctx context.Context, msg *rbv1.ServerMsg) {
 		b.applyNat(ctx, nu)
 	}
 	if pu := msg.GetPublicUpdate(); pu != nil {
-		b.applyPublic(pu.GetPrefix(), pu.GetOp())
+		b.applyPublic(ctx, pu.GetPrefix(), pu.GetOp())
 	}
 	if eor := msg.GetEndOfRib(); eor != nil {
 		b.pruneVNI(ctx, eor.GetVni())
