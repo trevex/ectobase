@@ -1090,7 +1090,7 @@ async fn main() -> anyhow::Result<()> {
                 let public_mbps: u64 = public_s.parse().context("--meter: bad public_mbps")?;
                 let tap = ifindex(ifname)?;
                 // Single-source the mbps→bps + burst derivation with the per-interface program
-                // path and the ConfigureMeter RPC.
+                // path and the ConfigureQoS RPC.
                 meter_map.upsert(
                     tap,
                     control::Control::meter_state(total_mbps, public_mbps, 0),

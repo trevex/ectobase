@@ -79,8 +79,8 @@ pub static METER: HashMap<u32, MeterState> = HashMap::pinned(1024, 0);
 pub static DHCP_CONFIG: Array<DhcpConfig> = Array::pinned(1, 0);
 #[map]
 pub static DHCP_META: HashMap<u32, DhcpMeta> = HashMap::pinned(1024, 0);
-/// Tail-call targets for the **tc** guest-edge split. Separate from `GUEST_PROGS` because a tc
-/// (classifier) program may only tail-call other tc programs. Populated by the loader with
-/// `tc_guest_dhcp` at `GUEST_PROG_DHCP`.
+/// Tail-call targets for the **tc** guest-edge split. tc classifiers can only tail-call other tc
+/// programs, so these live in a separate array from any XDP tail-call table. Populated by the
+/// loader with `tc_guest_dhcp` at `GUEST_PROG_DHCP`.
 #[map]
 pub static GUEST_PROGS_TC: ProgramArray = ProgramArray::with_max_entries(8, 0);

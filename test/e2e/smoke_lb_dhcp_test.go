@@ -360,7 +360,7 @@ func TestDhcpLeaseSmoke(t *testing.T) {
 	}
 
 	// 4. AttachInterface via DataplaneNode — creates the veth, programs PORT_META, INTERFACES,
-	//    UNDERLAY, and attaches guest_tx in SKB mode. Both the guest IPv4 and IPv6 are passed in
+	//    UNDERLAY, and attaches tc_guest_tx (tc datapath). Both the guest IPv4 and IPv6 are passed in
 	//    requested_ips: AttachInterface extracts the IPv6 into PortMeta.guest_ipv6, which the
 	//    DHCPv6 responder reads to fill the IA Address (no legacy DPDKironcore call needed).
 	attachBody := fmt.Sprintf(
@@ -418,7 +418,7 @@ func TestDhcpLeaseSmoke(t *testing.T) {
 
 	// 8. DHCPv4 probe: send DISCOVER on the host-side veth via tap-dhcp-probe.py --client-only.
 	//    The script writes the frame to the tap fd (which is the host side of the veth, exactly
-	//    where guest_tx is attached) and reads back the OFFER.
+	//    where tc_guest_tx is attached) and reads back the OFFER.
 	//
 	//    Expected assertions in the probe output:
 	//      "yiaddr=10.1.0.7" — correct IP assigned.

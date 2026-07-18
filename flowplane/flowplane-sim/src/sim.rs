@@ -270,11 +270,13 @@ impl SimNode {
     ///   3. route lookup (`route4`) → Pass on miss;
     ///   4. network NAT SNAT (`snat_egress`) when the route is external;
     ///   5. conntrack create-on-miss (`ct_create_default`);
-    ///   6. rate metering: public-lane policing (`public_pass`, external only) + EDT egress shaping
-    ///      (`edt_egress`, records `self.last_tstamp`, no drop). Mirrors the eBPF split in
-    ///      `egress.rs` + `tc.rs`. No METER entry => unlimited (pass / no tstamp), preserving prior
-    ///      behavior. `now` comes from `self.now` (the controlled clock);
+    ///   6. rate metering: public-lane policing (`public_pass`, external only, step 6a). Mirrors
+    ///      `egress.rs`. No METER entry => unlimited (pass). `now` comes from `self.now`;
     ///   7. deliver decision (`deliver`): Local tap (inner-Eth rewrite) | Encap | Pass.
+    ///      In the Encap arm ONLY, after `grow_head(IPV6_LEN)`/`write_outer_v6`, EDT egress shaping
+    ///      (`edt_egress`, records `self.last_tstamp`, no drop, step 6b) is called using the
+    ///      POST-encap `pkt.len()` — mirrors `tc.rs` `edt_stamp` after `adjust_room`. Local/Pass
+    ///      leave `last_tstamp` unchanged (same-node delivery is unshaped per spec).
     ///
     /// Returns the delivery `Action` + the resulting frame bytes (encapped on the Encap path).
     ///
@@ -284,6 +286,9 @@ impl SimNode {
     /// the emitted bytes are unaffected; the interleaved un-ported steps (ct_apply/ct_touch, vip) are
     /// map/refresh-only on this fixture and do not change the emitted bytes.
     pub fn guest_tx(&mut self, frame: &[u8], meta: &PortMeta) -> SimOut {
+        // Reset the stamp so a Local/Pass verdict leaves last_tstamp = None (unshaped), matching
+        // the eBPF `tc_guest_tx` which only calls `edt_stamp` on the Encap arm.
+        self.last_tstamp = None;
         let ip_off = ETH_LEN;
         let mut pkt = VecPkt::from_bytes(frame);
 
@@ -340,11 +345,10 @@ impl SimNode {
 
         // 6. Egress metering — mirrors the eBPF split in egress.rs + tc.rs:
         //    a) Public-lane policing (drop-on-exhaust, external only) — mirrors egress.rs `public_pass`.
-        //    b) EDT egress shaping (records departure stamp, no drop) — mirrors tc.rs `edt_stamp`.
-        //    The `total` token-bucket (`meter_pass`) has been removed: the eBPF path migrated to
-        //    EDT shaping and `meter_pass` had no remaining callers. `total_burst`/`total_tokens` are
-        //    still zeroed in `meter_state()` (no bucket field), so the old policing path would have
-        //    dropped all capped egress anyway.
+        //    b) EDT egress shaping — mirrors tc.rs `edt_stamp`, called ONLY in the Encap arm (step 7)
+        //       AFTER `grow_head(IPV6_LEN)` / `write_outer_v6`, using the POST-encap `pkt.len()`.
+        //       Same-node LOCAL delivery is unshaped (eBPF `tc_guest_tx` only stamps on the Encap
+        //       arm, after `adjust_room`). `last_tstamp` stays `None` for Local / Pass.
         let frame_len = pkt.len() as u64;
         // a) Public-lane policing (external egress only) — mirrors egress.rs.
         if !flowplane_core::meter::public_pass(
@@ -359,14 +363,6 @@ impl SimNode {
                 pkt: pkt.into_bytes(),
             };
         }
-        // b) EDT egress shaping — mirrors tc.rs encap path. The sim records the departure stamp so
-        // tests can assert pacing; wire bytes are unchanged (FQ pacing is kernel-side).
-        self.last_tstamp = flowplane_core::meter::edt_egress(
-            &mut self.maps,
-            self.src_ifindex,
-            frame_len,
-            self.now,
-        );
 
         // 7. Deliver decision.
         match deliver(&self.maps, &route, meta, IPPROTO_IPIP) {
@@ -385,7 +381,7 @@ impl SimNode {
                     };
                 }
                 // Rewrite the inner Ethernet for the local guest: dst=guest MAC, src=GW_MAC,
-                // ethertype stays IPv4.
+                // ethertype stays IPv4. Same-node delivery is unshaped — last_tstamp left as-is.
                 pkt.write_bytes(0, &guest_mac);
                 pkt.write_bytes(6, &GW_MAC);
                 SimOut {
@@ -394,14 +390,25 @@ impl SimNode {
                 }
             }
             Deliver::Encap(e) => {
-                // Prepend 40 bytes (bpf_xdp_adjust_head(-40)) then write the outer Eth+IPv6, which
-                // consumes the new 40 bytes + the 14-byte inner Ethernet, leaving the bare inner IPv4.
+                // Prepend 40 bytes (bpf_skb_adjust_room(+IPV6_LEN, MAC)) then write the outer
+                // Eth+IPv6, consuming the new 40 bytes + the 14-byte inner Ethernet, leaving the
+                // bare inner IPv4 — mirrors tc.rs `adjust_room` + `write_outer_v6`.
                 if !pkt.grow_head(IPV6_LEN) || !write_outer_v6(&mut pkt, &e) {
                     return SimOut {
                         action: Action::Drop,
                         pkt: pkt.into_bytes(),
                     };
                 }
+                // b) EDT egress shaping: stamp AFTER the frame has been grown to its wire length,
+                // using pkt.len() which is now the full post-encap length (inner + 40-byte outer
+                // IPv6 header) — mirrors tc.rs `ctx.len()` after `adjust_room`. Wire bytes are
+                // unchanged (FQ pacing is kernel-side); last_tstamp lets tests assert pacing.
+                self.last_tstamp = flowplane_core::meter::edt_egress(
+                    &mut self.maps,
+                    self.src_ifindex,
+                    pkt.len() as u64,
+                    self.now,
+                );
                 SimOut {
                     action: Action::Redirect(e.uplink_ifindex),
                     pkt: pkt.into_bytes(),

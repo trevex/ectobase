@@ -52,7 +52,7 @@ fn csum16<P: Pkt>(mut sum: u32, pkt: &P, off: usize, len: usize) -> u16 {
 /// NS/NA are a fixed size here (14 Eth + 40 IPv6 + 32 ICMPv6), so every access is constant-offset —
 /// verifier-friendly. Faithful port of `flowplane_common::arp_nd::try_write_nd_reply`.
 ///
-/// `#[inline(always)]`: the XDP `guest_tx` caller is stack-heavy (conntrack/nat/v6); keeping this
+/// `#[inline(always)]`: the `tc_guest_tx` caller is stack-heavy (conntrack/nat/v6); keeping this
 /// out-of-line makes it a separate BPF subprogram whose frame is summed with the caller's, blowing
 /// the 512-byte BPF stack limit.
 #[inline(always)]

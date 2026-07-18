@@ -1,5 +1,5 @@
 //! Conformance for the guest-facing gateway responders (`SimNode::guest_arp_nd`, which runs the REAL
-//! `flowplane_core::arp_nd::{arp_reply, nd_reply}` — the same code the eBPF `guest_tx` datapath calls,
+//! `flowplane_core::arp_nd::{arp_reply, nd_reply}` — the same code the eBPF `tc_guest_tx` datapath calls,
 //! byte-parity-anchored in `flowplane/tests/anchor_arp_nd.rs`).
 //!
 //! ARP: a guest ARP request for the virtual gateway IPv4 must be rewritten in place into an ARP reply

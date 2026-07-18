@@ -189,26 +189,68 @@ fn no_meter_entry_always_passes() {
 /// EDT total-lane shaping: packets are NEVER dropped by the total lane; instead `edt_egress`
 /// advances the departure cursor and records a `last_tstamp`. Mirrors the eBPF `tc_guest_tx` path.
 ///
-/// Fixture: total_bps = 1 frame/s. Three packets fired at now=0:
+/// The fixture routes packets via an EXTERNAL/ENCAP path (no local tap resolved → `deliver` returns
+/// `Encap`) so the sim stamps EDT after `grow_head(IPV6_LEN)` + `write_outer_v6`, using the
+/// POST-encap length — exactly when `tc_guest_tx` calls `edt_stamp` (after `adjust_room`). A local
+/// route (Local delivery) does NOT stamp, matching the eBPF behaviour (same-node is unshaped).
+///
+/// Rate = 1 wire-frame/s. Three packets fired at now=0:
 ///   - packet 1: idle cursor (total_last_ns=0 ≤ now=0) → departs AT now (0); cursor = 0 + airtime.
 ///   - packet 2: cursor > now → departs AT cursor (back-to-back queueing); cursor advances again.
 ///   - packet 3: same; all three PASS — EDT never drops.
 /// Advance now past the cursor → packet 4 departs at now (queue drained).
+/// Optional: after a local delivery last_tstamp is None (local is unshaped).
 #[test]
 fn edt_total_lane_shapes_not_drops() {
-    let mut node = deliver_node();
+    // Wire up an ENCAP route: ext_ip has no local UnderlayValue → deliver() returns Encap.
+    let ext_ip: [u8; 4] = [8, 8, 8, 8];
+    let ext_nexthop: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xed, 0x01];
+    const UPLINK_IFINDEX: u32 = 5;
 
-    let frame_len = guest_frame(1).len() as u64;
-    // Rate = 1 frame/s → airtime = frame_len * 1e9 / frame_len = 1 s per packet.
-    set_meter(&mut node, frame_len, 0); // total_bps = frame_len B/s; burst field unused by EDT
+    let mut node = SimNode::new();
+    node.src_ifindex = SRC_IFINDEX;
+    node.maps.local = Some(flowplane_common::Local {
+        uplink_ifindex: UPLINK_IFINDEX,
+        uplink_mac: [0xde; 6],
+        gateway_mac: [0xbe; 6],
+        underlay_ipv6: [0xfd; 16],
+    });
+    // External route (is_external=1, no local tap) → `deliver` returns Encap.
+    node.maps.add_route4(
+        VNI,
+        ext_ip,
+        flowplane_common::RouteValue {
+            nexthop_vni: 0,
+            nexthop_ipv6: ext_nexthop,
+            is_external: 1,
+            _pad: [0; 3],
+        },
+    );
+    allow(&mut node, SRC_IFINDEX, FW_DIR_EGRESS);
+
+    // Build an external frame from GUEST_IP → ext_ip.
+    let ext_frame = |sport: u16| -> Vec<u8> {
+        let builder = etherparse::PacketBuilder::ethernet2([0xaa; 6], [0xbb; 6])
+            .ipv4(GUEST_IP, ext_ip, 64)
+            .tcp(sport, 80, 0, 1024);
+        let mut out = Vec::new();
+        builder.write(&mut out, &[]).unwrap();
+        out
+    };
+
+    // The wire length the meter sees is the POST-encap length: inner frame + 40-byte outer IPv6.
+    let inner_len = ext_frame(1).len() as u64;
+    let wire_len = inner_len + IPV6_LEN as u64;
+    // Rate = 1 wire-frame/s → airtime = wire_len * 1e9 / wire_len = 1 s per packet.
+    set_meter(&mut node, wire_len, 0); // total_bps = wire_len B/s; burst field unused by EDT
 
     node.now = 0;
 
-    // Packet 1: idle cursor → departs at now=0.
-    let out1 = node.guest_tx(&guest_frame(1), &port_meta());
+    // Packet 1: idle cursor → departs at now=0, action Redirect(uplink).
+    let out1 = node.guest_tx(&ext_frame(1), &port_meta());
     assert_eq!(
         out1.action,
-        Action::Redirect(PEER_TAP),
+        Action::Redirect(UPLINK_IFINDEX),
         "packet 1 must PASS — EDT never drops"
     );
     assert_eq!(
@@ -218,20 +260,20 @@ fn edt_total_lane_shapes_not_drops() {
     );
 
     // Packet 2: cursor is now at airtime; departs at the cursor (backlog).
-    let out2 = node.guest_tx(&guest_frame(2), &port_meta());
+    let out2 = node.guest_tx(&ext_frame(2), &port_meta());
     assert_eq!(
         out2.action,
-        Action::Redirect(PEER_TAP),
+        Action::Redirect(UPLINK_IFINDEX),
         "packet 2 must PASS — EDT never drops"
     );
     let ts2 = node.last_tstamp.expect("EDT stamp must be set");
     assert!(ts2 >= SEC, "packet 2 must be scheduled ≥1 s after packet 1");
 
-    // Packet 3: still at now=0, cursor further advanced — passes immediately.
-    let out3 = node.guest_tx(&guest_frame(3), &port_meta());
+    // Packet 3: still at now=0, cursor further advanced — passes and stamps again.
+    let out3 = node.guest_tx(&ext_frame(3), &port_meta());
     assert_eq!(
         out3.action,
-        Action::Redirect(PEER_TAP),
+        Action::Redirect(UPLINK_IFINDEX),
         "packet 3 must PASS — EDT never drops (confirms no total-lane policing)"
     );
     let ts3 = node.last_tstamp.expect("EDT stamp must be set");
@@ -242,10 +284,10 @@ fn edt_total_lane_shapes_not_drops() {
 
     // Advance now past the cursor → next packet departs at now (queue drained).
     node.now = ts3 + 2 * SEC;
-    let out4 = node.guest_tx(&guest_frame(4), &port_meta());
+    let out4 = node.guest_tx(&ext_frame(4), &port_meta());
     assert_eq!(
         out4.action,
-        Action::Redirect(PEER_TAP),
+        Action::Redirect(UPLINK_IFINDEX),
         "packet 4 must PASS after clock advanced past the cursor"
     );
     assert_eq!(
@@ -259,6 +301,40 @@ fn edt_total_lane_shapes_not_drops() {
     assert!(
         m.total_last_ns > 0,
         "meter state must be persisted with the last-seen cursor"
+    );
+
+    // Confirm that LOCAL delivery does NOT stamp: route GUEST_IP→PEER_IP internally, then
+    // verify last_tstamp is None after the local Redirect (same-node is unshaped).
+    node.maps.underlay.insert(
+        PEER_UNDERLAY,
+        flowplane_common::UnderlayValue {
+            vni: VNI,
+            tap_ifindex: PEER_TAP,
+            guest_mac: [0xcc; 6],
+            _pad: [0; 2],
+        },
+    );
+    node.maps.add_route4(
+        VNI,
+        PEER_IP,
+        flowplane_common::RouteValue {
+            nexthop_vni: 0,
+            nexthop_ipv6: PEER_UNDERLAY,
+            is_external: 0,
+            _pad: [0; 3],
+        },
+    );
+    allow(&mut node, PEER_TAP, FW_DIR_INGRESS);
+    node.last_tstamp = Some(99999); // poison — must be cleared by None on local delivery
+    let local_out = node.guest_tx(&guest_frame(9999), &port_meta());
+    assert_eq!(
+        local_out.action,
+        Action::Redirect(PEER_TAP),
+        "local delivery must pass (internal route)"
+    );
+    assert_eq!(
+        node.last_tstamp, None,
+        "local delivery must NOT stamp EDT (same-node is unshaped per spec)"
     );
 }
 
