@@ -9,47 +9,21 @@ use aya_ebpf::{
     helpers::{bpf_redirect, bpf_xdp_adjust_head},
     programs::XdpContext,
 };
-use flowplane_common::{
-    CtEntry, CtKey, NatKey, CT_F_NAT64, CT_F_SRC_NAT, CT_REWRITE_DST, CT_REWRITE_SRC,
-};
 use flowplane_core::err::DpErr;
 
-use crate::maps::{LOCAL, NAT, PORT_META};
+use crate::maps::{LOCAL, PORT_META};
 use crate::parse::{
     write16, write6, ETH_LEN, ETH_P_IPV6, IPPROTO_ICMPV6, IPPROTO_TCP, IPPROTO_UDP, IPV6_LEN,
 };
 
-/// Port-allocation probe limit, single-sourced in the shared core NAT module.
-use flowplane_core::nat::PROBE_LIMIT;
-
-/// ICMPv6 type constants.
-const ICMPV6_ECHO_REQUEST: u8 = 128;
+/// ICMPv6 echo-reply type (ingress reply). The egress `ICMPV6_ECHO_REQUEST` / `ICMP_ECHO_REQUEST`
+/// consts moved into `flowplane_core::nat64` with the egress translation.
 const ICMPV6_ECHO_REPLY: u8 = 129;
-/// ICMPv4 type constants.
-const ICMP_ECHO_REQUEST: u8 = 8;
 const IPPROTO_ICMP: u8 = 1;
 
-/// The NAT64 well-known prefix 64:ff9b::/96 — first 12 bytes.
-/// Full 16-byte form: [0x00,0x64,0xff,0x9b, 0,0,0,0, 0,0,0,0, v4[0..3]]
-const NAT64_PFX: [u8; 12] = [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0];
-
-/// Check if a 16-byte IPv6 address is in the NAT64 well-known prefix 64:ff9b::/96.
-/// Fully unrolled for BPF verifier (no loops over slice references).
-#[inline(always)]
-pub fn is_nat64_addr(addr: &[u8; 16]) -> bool {
-    addr[0] == NAT64_PFX[0]
-        && addr[1] == NAT64_PFX[1]
-        && addr[2] == NAT64_PFX[2]
-        && addr[3] == NAT64_PFX[3]
-        && addr[4] == NAT64_PFX[4]
-        && addr[5] == NAT64_PFX[5]
-        && addr[6] == NAT64_PFX[6]
-        && addr[7] == NAT64_PFX[7]
-        && addr[8] == NAT64_PFX[8]
-        && addr[9] == NAT64_PFX[9]
-        && addr[10] == NAT64_PFX[10]
-        && addr[11] == NAT64_PFX[11]
-}
+// The NAT64 well-known-prefix check `is_nat64_addr` (+ the `64:ff9b::/96` prefix const) now lives in
+// `flowplane_core::nat64` (the shared seam); the tc classifier and the egress parse both call it
+// there. `nat64_embed` stays here — only `nat64_ingress` uses it.
 
 /// Build a 64:ff9b:: IPv6 address embedding a 4-byte IPv4 address.
 #[inline(always)]
@@ -78,33 +52,11 @@ fn csum_add16(sum: u32, hi: u8, lo: u8) -> u32 {
     sum.wrapping_add(((hi as u32) << 8) | lo as u32)
 }
 
-/// Ones-complement checksum over a 20-byte IPv4 header in a stack buffer.
-#[inline(always)]
-fn ipv4_hdr_checksum(hdr: &[u8; 20]) -> u16 {
-    let mut s: u32 = 0;
-    s = csum_add16(s, hdr[0], hdr[1]);
-    s = csum_add16(s, hdr[2], hdr[3]);
-    s = csum_add16(s, hdr[4], hdr[5]);
-    s = csum_add16(s, hdr[6], hdr[7]);
-    s = csum_add16(s, hdr[8], hdr[9]);
-    s = csum_add16(s, hdr[10], hdr[11]);
-    s = csum_add16(s, hdr[12], hdr[13]);
-    s = csum_add16(s, hdr[14], hdr[15]);
-    s = csum_add16(s, hdr[16], hdr[17]);
-    s = csum_add16(s, hdr[18], hdr[19]);
-    csum_fold(s)
-}
-
-/// Checksum over an 8-byte ICMPv4 echo header (in a stack buffer).
-#[inline(always)]
-fn icmpv4_echo_checksum(hdr: &[u8; 8]) -> u16 {
-    let mut s: u32 = 0;
-    s = csum_add16(s, hdr[0], hdr[1]);
-    s = csum_add16(s, hdr[2], hdr[3]);
-    s = csum_add16(s, hdr[4], hdr[5]);
-    s = csum_add16(s, hdr[6], hdr[7]);
-    csum_fold(s)
-}
+// NOTE: the egress-only pure helpers `ipv4_hdr_checksum` / `icmpv4_echo_checksum` /
+// `tcp_udp_v6_to_v4` moved into `flowplane_core::nat64` (the shared Pkt/Maps seam the XDP + tc egress
+// paths, the native SimNode, and the BPF_PROG_TEST_RUN anchor all run). The helpers below
+// (`icmpv6_echo_checksum` / `tcp_udp_v4_to_v6` + their `pseudo_*` / `csum_*` deps) stay because
+// `nat64_ingress` (the IPv4→IPv6 reply path — a SEPARATE task) still uses them inline.
 
 /// Checksum over an 8-byte ICMPv6 echo header with an IPv6 pseudo-header.
 /// pseudo-header: src(16) + dst(16) + upper-layer length (4 BE) + zeros(3) + next-header(1).
@@ -186,44 +138,6 @@ fn pseudo_v6(src: &[u8; 16], dst: &[u8; 16], proto: u8, l4_len: u16) -> u32 {
     s
 }
 
-/// Translate a TCP/UDP checksum from IPv6 pseudo-header to IPv4 pseudo-header using
-/// incremental update.  All arguments in network byte order.
-///
-/// The checksum in the packet was computed with `pseudo_v6(src6, dst6, proto, l4_len)`.
-/// After translation the checksum must use `pseudo_v4(src4, dst4, proto, l4_len)`.
-///
-/// Because ones-complement is commutative, removing the v6 pseudo contribution and adding
-/// the v4 pseudo contribution yields the correct new checksum:
-///   new_hc = fold( ~old_hc - pseudo_v6 + pseudo_v4 )
-/// Using ~(~hc + ~pseudo_v6 + pseudo_v4) = standard RFC 1624 trick applied to 32-bit blocks.
-#[inline(always)]
-fn tcp_udp_v6_to_v4(
-    cksum_be: u16,
-    src6: &[u8; 16],
-    dst6: &[u8; 16],
-    src4: [u8; 4],
-    dst4: [u8; 4],
-    proto: u8,
-    l4_len: u16,
-    old_sport_be: u16,
-    new_sport_be: u16,
-) -> u16 {
-    // new_cksum = ~(~HC_old + ~pseudo_v6 + pseudo_v4 + ~old_sport + new_sport)
-    let s0 = !u16::from_be(cksum_be) as u32; // ~HC in 16-bit (folded, host order)
-    let pv6 = pseudo_v6(src6, dst6, proto, l4_len); // folded to 16-bit
-    let pv4 = pseudo_v4(src4, dst4, proto, l4_len); // folded to 16-bit
-    let old_sp = !u16::from_be(old_sport_be) as u32;
-    let new_sp = u16::from_be(new_sport_be) as u32;
-    let mut sum = s0
-        .wrapping_add(!pv6 as u16 as u32) // remove v6 pseudo contribution
-        .wrapping_add(pv4) // add v4 pseudo contribution
-        .wrapping_add(old_sp) // remove old sport
-        .wrapping_add(new_sp); // add new sport
-    sum = (sum & 0xffff) + (sum >> 16);
-    sum = (sum & 0xffff) + (sum >> 16);
-    (!(sum as u16)).to_be()
-}
-
 /// Translate a TCP/UDP checksum from IPv4 pseudo-header to IPv6 pseudo-header.
 /// The port fields are assumed unchanged (already handled by ct_apply before calling this).
 #[inline(always)]
@@ -266,172 +180,25 @@ pub fn nat64_egress(
     meta_guest_ipv4: [u8; 4],
     meta_underlay_ipv6: &[u8; 16],
 ) -> Result<Option<u32>, DpErr> {
-    let data = ctx.data();
-    let data_end = ctx.data_end();
-    // Eth(14) + IPv6(40) + min L4(8).
-    if data + ETH_LEN + IPV6_LEN + 8 > data_end {
-        return Ok(None);
-    }
-    let p = data as *const u8;
-
-    // Inner IPv6 dst: ETH_LEN + 24 (dst is at offset 24 inside the IPv6 header).
-    let ip6_dst: [u8; 16] =
-        unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + 24) as *const [u8; 16]) };
-    if !is_nat64_addr(&ip6_dst) {
-        return Ok(None);
-    }
-    // Embedded IPv4 dst.
-    let ipv4_dst: [u8; 4] = [ip6_dst[12], ip6_dst[13], ip6_dst[14], ip6_dst[15]];
-
-    // NAT config for this guest.
-    let nat = match unsafe {
-        NAT.get(&NatKey {
-            vni,
-            ipv4: meta_guest_ipv4,
-        })
-    } {
-        Some(v) => *v,
+    // Parse phase over the shared core seam (the SAME code the native SimNode + the BPF_PROG_TEST_RUN
+    // byte-parity anchor run): verify the dst is in 64:ff9b::/96, read the guest NAT config, allocate
+    // the source port, and pin the forward + reverse CT_F_NAT64 conntrack entries. Runs on the
+    // PRE-resize [Eth][IPv6][L4] frame; `None` => not a NAT64 frame, fall through to the v6 path.
+    let xlate = match flowplane_core::nat64::nat64_egress_parse(
+        &crate::coreimpl::RawPkt::new(ctx.data(), ctx.data_end()),
+        &mut crate::coreimpl::GlobalMaps,
+        ETH_LEN,
+        vni,
+        meta_guest_ipv4,
+        crate::conntrack::now(),
+    ) {
+        Some(x) => x,
         None => return Ok(None),
     };
-    let range = nat.port_max.wrapping_sub(nat.port_min);
-    if range == 0 {
-        return Ok(None);
-    }
 
-    // IPv6 src (the guest IPv6 address).
-    let ip6_src: [u8; 16] =
-        unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + 8) as *const [u8; 16]) };
-
-    // L4 protocol (IPv6 next-header).
-    let nh = unsafe { *p.add(ETH_LEN + 6) };
-    // IPv6 payload length = l4_len.
-    let ip6_plen =
-        u16::from_be(unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + 4) as *const u16) });
-    let l4_len = ip6_plen as usize;
-    // `ip6_plen` is attacker-controlled. It feeds the translated IPv4 `total_len` and the L4
-    // pseudo-header checksum length, so a frame that overstates it would produce a malformed,
-    // mis-checksummed packet. Reject anything whose claimed payload overruns the actual buffer.
-    if data + ETH_LEN + IPV6_LEN + l4_len > data_end {
-        return Ok(None);
-    }
-
-    // Existing L4 checksum (big-endian, from packet) — used for incremental update.
-    // For TCP: offset 16 in L4; for UDP: offset 6; for ICMPv6: offset 2.
-    let (l4_proto_v4, sport, dport, old_l4_cksum_be): (u8, u16, u16, u16) = match nh {
-        IPPROTO_ICMPV6 => {
-            if data + ETH_LEN + IPV6_LEN + 8 > data_end {
-                return Ok(None);
-            }
-            if unsafe { *p.add(ETH_LEN + IPV6_LEN) } != ICMPV6_ECHO_REQUEST {
-                return Ok(None); // only echo for now
-            }
-            let id = u16::from_be(unsafe {
-                core::ptr::read_unaligned(p.add(ETH_LEN + IPV6_LEN + 4) as *const u16)
-            });
-            let cksum =
-                unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + IPV6_LEN + 2) as *const u16) };
-            (IPPROTO_ICMP, id, id, cksum)
-        }
-        IPPROTO_TCP => {
-            if data + ETH_LEN + IPV6_LEN + 20 > data_end {
-                return Ok(None);
-            }
-            let sp = unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + IPV6_LEN) as *const u16) };
-            let dp =
-                unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + IPV6_LEN + 2) as *const u16) };
-            let ck =
-                unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + IPV6_LEN + 16) as *const u16) };
-            (IPPROTO_TCP, u16::from_be(sp), u16::from_be(dp), ck)
-        }
-        IPPROTO_UDP => {
-            if data + ETH_LEN + IPV6_LEN + 8 > data_end {
-                return Ok(None);
-            }
-            let sp = unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + IPV6_LEN) as *const u16) };
-            let dp =
-                unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + IPV6_LEN + 2) as *const u16) };
-            let ck =
-                unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + IPV6_LEN + 6) as *const u16) };
-            (IPPROTO_UDP, u16::from_be(sp), u16::from_be(dp), ck)
-        }
-        _ => return Ok(None),
-    };
-
-    // Forward conntrack key (keyed on IPv4 5-tuple after translation).
-    let fwd_key = CtKey {
-        vni,
-        src_ip: meta_guest_ipv4,
-        dst_ip: ipv4_dst,
-        src_port: sport,
-        dst_port: dport,
-        proto: l4_proto_v4,
-        _pad: [0; 3],
-    };
-    let nat_port = match unsafe { crate::maps::CONNTRACK.get(&fwd_key) } {
-        Some(v) if v.flags & CT_F_SRC_NAT != 0 => v.xlate_port,
-        _ => {
-            let start =
-                (crate::parse::hash5(&meta_guest_ipv4, &ipv4_dst, sport, dport, l4_proto_v4)
-                    % range as u32) as u16;
-            let mut chosen = nat.port_min.wrapping_add(start);
-            let mut i: u16 = 0;
-            while i < PROBE_LIMIT {
-                let cand = nat.port_min.wrapping_add((start.wrapping_add(i)) % range);
-                let rev_key = CtKey {
-                    vni,
-                    src_ip: [0; 4],
-                    dst_ip: nat.nat_ipv4,
-                    src_port: 0,
-                    dst_port: cand,
-                    proto: l4_proto_v4,
-                    _pad: [0; 3],
-                };
-                if unsafe { crate::maps::CONNTRACK.get(&rev_key) }.is_none() {
-                    chosen = cand;
-                    // Reverse entry: guest xlate_ip + original sport/id in xlate_port.
-                    // CT_F_NAT64 tells the ingress path to do IPv4→IPv6 expansion on reply.
-                    let _ = crate::maps::CONNTRACK.insert(
-                        &rev_key,
-                        &CtEntry {
-                            last_seen: crate::conntrack::now(),
-                            xlate_ip: meta_guest_ipv4,
-                            xlate_port: sport,
-                            flags: CT_REWRITE_DST | CT_F_SRC_NAT | CT_F_NAT64,
-                            tcp_state: 0,
-                            fwall_action: 0,
-                            _pad: [0; 7],
-                        },
-                        0,
-                    );
-                    break;
-                }
-                i += 1;
-            }
-            let _ = crate::maps::CONNTRACK.insert(
-                &fwd_key,
-                &CtEntry {
-                    last_seen: crate::conntrack::now(),
-                    xlate_ip: nat.nat_ipv4,
-                    xlate_port: chosen,
-                    flags: CT_REWRITE_SRC | CT_F_SRC_NAT | CT_F_NAT64,
-                    tcp_state: 0,
-                    fwall_action: 0,
-                    _pad: [0; 7],
-                },
-                0,
-            );
-            chosen
-        }
-    };
-
-    // ── Packet resize: shrink IPv6(40) → IPv4(20), i.e. drop 20 bytes ──
-    // Total L4 bytes (= ip6_plen).
-    // Save Ethernet header and IPv6 TTL before the adjust.
-    let eth_dst: [u8; 6] = unsafe { core::ptr::read_unaligned(p as *const [u8; 6]) };
-    let eth_src: [u8; 6] = unsafe { core::ptr::read_unaligned(p.add(6) as *const [u8; 6]) };
-    let hop_limit = unsafe { *p.add(ETH_LEN + 7) };
-
-    // adjust_head(+20): move data pointer forward 20 bytes (shrinks packet by 20).
+    // ── Packet resize: shrink IPv6(40) → IPv4(20) via adjust_head(+20) (drops 20 bytes off the
+    // front). The old Ethernet header is shifted off; the core writer restores it in front of the
+    // new IPv4 header. The resize stays in the glue (the core is a pure Pkt reader/writer). ──
     if unsafe { bpf_xdp_adjust_head(ctx.ctx, 20) } != 0 {
         return Err(DpErr::Bounds);
     }
@@ -440,122 +207,26 @@ pub fn nat64_egress(
     if data + ETH_LEN + 20 + 8 > data_end {
         return Err(DpErr::Bounds);
     }
-    let q = data as *mut u8;
 
-    // New layout: [Eth(14)][IPv4(20)][L4(l4_len)] with L4 at data+34.
-    // Write Ethernet header.
-    unsafe {
-        core::ptr::write_unaligned(q as *mut [u8; 6], eth_dst);
-        core::ptr::write_unaligned(q.add(6) as *mut [u8; 6], eth_src);
-        core::ptr::write_unaligned(q.add(12) as *mut u16, crate::parse::ETH_P_IP.to_be());
-    }
-
-    // Build and write IPv4 header (20 bytes, IHL=5) into a stack buffer first.
-    let total_len = (20u16).wrapping_add(l4_len as u16);
-    let mut ip4hdr = [0u8; 20];
-    ip4hdr[0] = 0x45;
-    ip4hdr[1] = 0;
-    ip4hdr[2] = (total_len >> 8) as u8;
-    ip4hdr[3] = (total_len & 0xff) as u8;
-    // id = 0, flags/frag = 0 (already 0 from init).
-    ip4hdr[8] = hop_limit;
-    ip4hdr[9] = l4_proto_v4;
-    // checksum placeholder at [10..12] = 0 (already 0).
-    ip4hdr[12] = nat.nat_ipv4[0];
-    ip4hdr[13] = nat.nat_ipv4[1];
-    ip4hdr[14] = nat.nat_ipv4[2];
-    ip4hdr[15] = nat.nat_ipv4[3];
-    ip4hdr[16] = ipv4_dst[0];
-    ip4hdr[17] = ipv4_dst[1];
-    ip4hdr[18] = ipv4_dst[2];
-    ip4hdr[19] = ipv4_dst[3];
-    let ip4_chk = ipv4_hdr_checksum(&ip4hdr);
-    ip4hdr[10] = (ip4_chk >> 8) as u8;
-    ip4hdr[11] = (ip4_chk & 0xff) as u8;
-    unsafe {
-        core::ptr::copy_nonoverlapping(ip4hdr.as_ptr(), q.add(ETH_LEN), 20);
-    }
-
-    // Fix L4 header (L4 is at data + ETH_LEN + 20 = data + 34).
-    let l4_off = ETH_LEN + 20;
-    if data + l4_off + 8 > data_end {
+    // Write phase over the shared core seam: restore the Ethernet header (IPv4 ethertype), build the
+    // 20-byte IPv4 header, and translate the L4 (TCP/UDP checksum v6→v4 + src-port rewrite; ICMPv6
+    // echo → ICMPv4). Re-wrap the resized frame in a fresh RawPkt (adjust_head invalidated the prior
+    // bounds). Byte-identical to the deleted inline translation.
+    if !flowplane_core::nat64::nat64_egress_write(
+        &mut crate::coreimpl::RawPkt::new(data, data_end),
+        ETH_LEN,
+        true, // XDP in-place path: writer restores the Ethernet header.
+        &xlate,
+    ) {
         return Err(DpErr::Bounds);
     }
-    let lp = unsafe { q.add(l4_off) };
-    match l4_proto_v4 {
-        IPPROTO_ICMP => {
-            // ICMPv6→ICMPv4: type 128→8, rewrite id to nat_port, recompute ICMPv4 checksum.
-            // Read the 8-byte ICMPv6 header into a stack array (fixed offsets → verifier happy).
-            let seq_be = unsafe { core::ptr::read_unaligned(lp.add(6) as *const u16) };
-            let icmp4: [u8; 8] = [
-                ICMP_ECHO_REQUEST, // type
-                0,                 // code
-                0,
-                0,                       // checksum placeholder
-                (nat_port >> 8) as u8,   // id hi
-                (nat_port & 0xff) as u8, // id lo
-                (u16::from_be(seq_be) >> 8) as u8,
-                (u16::from_be(seq_be) & 0xff) as u8,
-            ];
-            let chk = icmpv4_echo_checksum(&icmp4);
-            unsafe {
-                *lp.add(0) = ICMP_ECHO_REQUEST;
-                *lp.add(1) = 0;
-                core::ptr::write_unaligned(lp.add(2) as *mut u16, chk.to_be());
-                core::ptr::write_unaligned(lp.add(4) as *mut u16, nat_port.to_be());
-                // seq unchanged (lp+6,7 still has the correct bytes)
-            }
-        }
-        IPPROTO_TCP => {
-            if data + l4_off + 20 > data_end {
-                return Err(DpErr::Bounds);
-            }
-            // Translate checksum: v6 pseudo → v4 pseudo, old sport → nat_port.
-            let new_ck = tcp_udp_v6_to_v4(
-                old_l4_cksum_be,
-                &ip6_src,
-                &ip6_dst,
-                nat.nat_ipv4,
-                ipv4_dst,
-                IPPROTO_TCP,
-                l4_len as u16,
-                sport.to_be(),
-                nat_port.to_be(),
-            );
-            unsafe {
-                core::ptr::write_unaligned(lp as *mut u16, nat_port.to_be()); // src port
-                core::ptr::write_unaligned(lp.add(16) as *mut u16, new_ck); // checksum
-            }
-        }
-        IPPROTO_UDP => {
-            if data + l4_off + 8 > data_end {
-                return Err(DpErr::Bounds);
-            }
-            let new_ck = tcp_udp_v6_to_v4(
-                old_l4_cksum_be,
-                &ip6_src,
-                &ip6_dst,
-                nat.nat_ipv4,
-                ipv4_dst,
-                IPPROTO_UDP,
-                l4_len as u16,
-                sport.to_be(),
-                nat_port.to_be(),
-            );
-            unsafe {
-                core::ptr::write_unaligned(lp as *mut u16, nat_port.to_be()); // src port
-                core::ptr::write_unaligned(lp.add(6) as *mut u16, new_ck); // checksum
-            }
-        }
-        _ => return Ok(None),
-    }
 
-    // Look up the external route for the IPv4 dst.
+    // Look up the external route for the IPv4 dst and encap+redirect toward the nexthop.
     let route = match crate::maps::ROUTES.get(&aya_ebpf::maps::lpm_trie::Key::new(
         64,
         flowplane_common::RouteLpmData {
             vni: vni.to_be_bytes(),
-            ipv4: ipv4_dst,
+            ipv4: xlate.ipv4_dst,
         },
     )) {
         Some(r) => r,
@@ -573,76 +244,15 @@ pub fn nat64_egress(
     Ok(Some(act))
 }
 
-/// Allocate a SNAT port for a new NAT64 flow and install the forward + reverse conntrack entries.
-/// Pure map work (no packet access). Inlined into `tc_nat64_egress`: keeping it a separate
-/// sub-program added a 144-byte frame on top of tc_nat64_egress's, pushing the call chain over the
-/// BPF 512-byte combined-stack budget; inlined, the CtKey/CtEntry temporaries reuse the parent's
-/// frame slots (they're dead before the packet rewrite begins).
-#[inline(always)]
-fn tc_nat64_alloc_port(fwd_key: &CtKey, nat_ipv4: [u8; 4], port_min: u16, range: u16) -> u16 {
-    // All other inputs are recoverable from the forward key (≤5-arg BPF calling convention).
-    let vni = fwd_key.vni;
-    let meta_guest_ipv4 = fwd_key.src_ip;
-    let ipv4_dst = fwd_key.dst_ip;
-    let sport = fwd_key.src_port;
-    let dport = fwd_key.dst_port;
-    let l4_proto_v4 = fwd_key.proto;
-    let start = (crate::parse::hash5(&meta_guest_ipv4, &ipv4_dst, sport, dport, l4_proto_v4)
-        % range as u32) as u16;
-    let mut chosen = port_min.wrapping_add(start);
-    let mut i: u16 = 0;
-    while i < PROBE_LIMIT {
-        let cand = port_min.wrapping_add((start.wrapping_add(i)) % range);
-        let rev_key = CtKey {
-            vni,
-            src_ip: [0; 4],
-            dst_ip: nat_ipv4,
-            src_port: 0,
-            dst_port: cand,
-            proto: l4_proto_v4,
-            _pad: [0; 3],
-        };
-        if unsafe { crate::maps::CONNTRACK.get(&rev_key) }.is_none() {
-            chosen = cand;
-            let _ = crate::maps::CONNTRACK.insert(
-                &rev_key,
-                &CtEntry {
-                    last_seen: crate::conntrack::now(),
-                    xlate_ip: meta_guest_ipv4,
-                    xlate_port: sport,
-                    flags: CT_REWRITE_DST | CT_F_SRC_NAT | CT_F_NAT64,
-                    tcp_state: 0,
-                    fwall_action: 0,
-                    _pad: [0; 7],
-                },
-                0,
-            );
-            break;
-        }
-        i += 1;
-    }
-    let _ = crate::maps::CONNTRACK.insert(
-        fwd_key,
-        &CtEntry {
-            last_seen: crate::conntrack::now(),
-            xlate_ip: nat_ipv4,
-            xlate_port: chosen,
-            flags: CT_REWRITE_SRC | CT_F_SRC_NAT | CT_F_NAT64,
-            tcp_state: 0,
-            fwall_action: 0,
-            _pad: [0; 7],
-        },
-        0,
-    );
-    chosen
-}
-
-/// tc variant of `nat64_egress`. Same logic (NAT lookup, conntrack/port allocation, v6→v4 header
-/// + L4 translation, encap+redirect out the uplink), but built on skb primitives:
-///   - shrink IPv6(40)→IPv4(20): `adjust_room(-20, BPF_ADJ_ROOM_MAC, 0)` (removes 20 bytes after
-///     the MAC header) instead of `bpf_xdp_adjust_head(+20)`.
-///   - encap: `adjust_room(+IPV6_LEN, BPF_ADJ_ROOM_MAC, 0)` + `pull_data` + `write_outer_v6` +
-///     `bpf_redirect`, the same glue `tc_guest_tx` already uses for the IPv4/IPv6 Encap verdicts.
+/// tc variant of `nat64_egress`. Same translation (v6→v4 header + L4 + SNAT), delegated to the shared
+/// `flowplane_core::nat64` core (the SAME code the XDP path, native SimNode, and BPF_PROG_TEST_RUN
+/// anchor run), but built on skb primitives for the resize + outer encap:
+///   - the v6→v4 shrink is folded into the outer encap: a single `adjust_room(+20, BPF_ADJ_ROOM_MAC)`
+///     grow (net -20 inner + 40 outer = +20) makes room; the inner IPv4 lands at ETH_LEN+IPV6_LEN,
+///     the L4 at ETH_LEN+IPV6_LEN+20.
+///   - the core `nat64_egress_write` (with `write_eth = false`) builds the inner IPv4 header + the L4
+///     translation at that offset; the outer Eth+IPv6 is then written straight-line here (folding it
+///     into a helper this close to the return trips the verifier's "return stack pointer" check).
 /// Each resize is followed by `pull_data` so the fixed-offset rewrite region is writable/linear and
 /// the verifier sees a fresh packet range. Does NOT touch the verifier-tuned XDP `nat64_egress`.
 ///
@@ -660,110 +270,29 @@ pub fn tc_nat64_egress(
 ) -> Result<Option<i32>, DpErr> {
     use aya_ebpf::bindings::bpf_adj_room_mode::BPF_ADJ_ROOM_MAC;
 
-    // Make the inner IPv6 header + min L4 range writable/linear for the in-place rewrite.
+    // Make the inner IPv6 header + min L4 range writable/linear for the parse read.
     let _ = ctx.pull_data((ETH_LEN + IPV6_LEN + 8) as u32);
     let data = ctx.data();
     let data_end = ctx.data_end();
     if data + ETH_LEN + IPV6_LEN + 8 > data_end {
         return Ok(None);
     }
-    let p = data as *const u8;
 
-    // Inner IPv6 dst: ETH_LEN + 24.
-    let ip6_dst: [u8; 16] =
-        unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + 24) as *const [u8; 16]) };
-    if !is_nat64_addr(&ip6_dst) {
-        return Ok(None);
-    }
-    let ipv4_dst: [u8; 4] = [ip6_dst[12], ip6_dst[13], ip6_dst[14], ip6_dst[15]];
-
-    // NAT config for this guest.
-    let nat = match unsafe {
-        NAT.get(&NatKey {
-            vni,
-            ipv4: meta_guest_ipv4,
-        })
-    } {
-        Some(v) => *v,
+    // Parse phase over the shared core seam (PRE-resize [Eth][IPv6][L4] frame): dst-prefix check, NAT
+    // config, port allocation + forward/reverse CT_F_NAT64 conntrack inserts. `None` => fall through.
+    let xlate = match flowplane_core::nat64::nat64_egress_parse(
+        &crate::coreimpl::RawPkt::new(data, data_end),
+        &mut crate::coreimpl::GlobalMaps,
+        ETH_LEN,
+        vni,
+        meta_guest_ipv4,
+        crate::conntrack::now(),
+    ) {
+        Some(x) => x,
         None => return Ok(None),
     };
-    let range = nat.port_max.wrapping_sub(nat.port_min);
-    if range == 0 {
-        return Ok(None);
-    }
-
-    let ip6_src: [u8; 16] =
-        unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + 8) as *const [u8; 16]) };
-    let nh = unsafe { *p.add(ETH_LEN + 6) };
-    let ip6_plen =
-        u16::from_be(unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + 4) as *const u16) });
-    let l4_len = ip6_plen as usize;
-    // See the XDP path: `ip6_plen` is attacker-controlled and feeds the translated IPv4
-    // `total_len`/`inner_len` and the L4 checksum length. Reject claimed payloads that overrun.
-    if data + ETH_LEN + IPV6_LEN + l4_len > data_end {
-        return Ok(None);
-    }
-
-    let (l4_proto_v4, sport, dport, old_l4_cksum_be): (u8, u16, u16, u16) = match nh {
-        IPPROTO_ICMPV6 => {
-            if data + ETH_LEN + IPV6_LEN + 8 > data_end {
-                return Ok(None);
-            }
-            if unsafe { *p.add(ETH_LEN + IPV6_LEN) } != ICMPV6_ECHO_REQUEST {
-                return Ok(None);
-            }
-            let id = u16::from_be(unsafe {
-                core::ptr::read_unaligned(p.add(ETH_LEN + IPV6_LEN + 4) as *const u16)
-            });
-            let cksum =
-                unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + IPV6_LEN + 2) as *const u16) };
-            (IPPROTO_ICMP, id, id, cksum)
-        }
-        IPPROTO_TCP => {
-            if data + ETH_LEN + IPV6_LEN + 20 > data_end {
-                return Ok(None);
-            }
-            let sp = unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + IPV6_LEN) as *const u16) };
-            let dp =
-                unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + IPV6_LEN + 2) as *const u16) };
-            let ck =
-                unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + IPV6_LEN + 16) as *const u16) };
-            (IPPROTO_TCP, u16::from_be(sp), u16::from_be(dp), ck)
-        }
-        IPPROTO_UDP => {
-            if data + ETH_LEN + IPV6_LEN + 8 > data_end {
-                return Ok(None);
-            }
-            let sp = unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + IPV6_LEN) as *const u16) };
-            let dp =
-                unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + IPV6_LEN + 2) as *const u16) };
-            let ck =
-                unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + IPV6_LEN + 6) as *const u16) };
-            (IPPROTO_UDP, u16::from_be(sp), u16::from_be(dp), ck)
-        }
-        _ => return Ok(None),
-    };
-
-    // Forward conntrack key (keyed on IPv4 5-tuple after translation).
-    let fwd_key = CtKey {
-        vni,
-        src_ip: meta_guest_ipv4,
-        dst_ip: ipv4_dst,
-        src_port: sport,
-        dst_port: dport,
-        proto: l4_proto_v4,
-        _pad: [0; 3],
-    };
-    let nat_port = match unsafe { crate::maps::CONNTRACK.get(&fwd_key) } {
-        Some(v) if v.flags & CT_F_SRC_NAT != 0 => v.xlate_port,
-        // The port allocation + conntrack inserts build large CtKey/CtEntry stack temporaries;
-        // emitting them in a separate sub-program keeps tc_nat64_egress's own frame under the BPF
-        // stack limit (it already carries ip6_src/ip6_dst/ip4hdr/EncapParams).
-        _ => tc_nat64_alloc_port(&fwd_key, nat.nat_ipv4, nat.port_min, range),
-    };
-
-    // IPv6 hop-limit (becomes the inner IPv4 TTL) — read before the resize.
-    let hop_limit = unsafe { *p.add(ETH_LEN + 7) };
+    let ipv4_dst = xlate.ipv4_dst;
+    let l4_len = xlate.l4_len as usize;
 
     // ── Single +20 grow (no minimal-frame shrink). ──
     // NAT64 egress net size change is -20 (v6→v4 inner) + 40 (outer encap) = +20. Growing has no
@@ -787,98 +316,16 @@ pub fn tc_nat64_egress(
     }
     let q = data as *mut u8;
 
-    // ── Build + write the inner IPv4 header into [54..74]. ──
-    let total_len = (20u16).wrapping_add(l4_len as u16);
-    let mut ip4hdr = [0u8; 20];
-    ip4hdr[0] = 0x45;
-    ip4hdr[1] = 0;
-    ip4hdr[2] = (total_len >> 8) as u8;
-    ip4hdr[3] = (total_len & 0xff) as u8;
-    ip4hdr[8] = hop_limit;
-    ip4hdr[9] = l4_proto_v4;
-    ip4hdr[12] = nat.nat_ipv4[0];
-    ip4hdr[13] = nat.nat_ipv4[1];
-    ip4hdr[14] = nat.nat_ipv4[2];
-    ip4hdr[15] = nat.nat_ipv4[3];
-    ip4hdr[16] = ipv4_dst[0];
-    ip4hdr[17] = ipv4_dst[1];
-    ip4hdr[18] = ipv4_dst[2];
-    ip4hdr[19] = ipv4_dst[3];
-    let ip4_chk = ipv4_hdr_checksum(&ip4hdr);
-    ip4hdr[10] = (ip4_chk >> 8) as u8;
-    ip4hdr[11] = (ip4_chk & 0xff) as u8;
-    unsafe {
-        core::ptr::copy_nonoverlapping(ip4hdr.as_ptr(), q.add(ETH_LEN + IPV6_LEN), 20);
-    }
-
-    // ── Translate the L4 header in place at [74..] (= ETH_LEN + IPV6_LEN + 20). ──
-    let l4_off = ETH_LEN + IPV6_LEN + 20;
-    if data + l4_off + 8 > data_end {
+    // ── Write phase over the shared core seam: build the inner IPv4 header at [54..74] + translate
+    // the L4 header at [74..], via the SAME core writer the XDP path uses. `write_eth = false`: the
+    // outer Eth+IPv6 is written straight-line below (the writer only does the inner IPv4 + L4). ──
+    if !flowplane_core::nat64::nat64_egress_write(
+        &mut crate::coreimpl::RawPkt::new(data, data_end),
+        ETH_LEN + IPV6_LEN,
+        false,
+        &xlate,
+    ) {
         return Err(DpErr::Bounds);
-    }
-    let lp = unsafe { q.add(l4_off) };
-    match l4_proto_v4 {
-        IPPROTO_ICMP => {
-            let seq_be = unsafe { core::ptr::read_unaligned(lp.add(6) as *const u16) };
-            let icmp4: [u8; 8] = [
-                ICMP_ECHO_REQUEST,
-                0,
-                0,
-                0,
-                (nat_port >> 8) as u8,
-                (nat_port & 0xff) as u8,
-                (u16::from_be(seq_be) >> 8) as u8,
-                (u16::from_be(seq_be) & 0xff) as u8,
-            ];
-            let chk = icmpv4_echo_checksum(&icmp4);
-            unsafe {
-                *lp.add(0) = ICMP_ECHO_REQUEST;
-                *lp.add(1) = 0;
-                core::ptr::write_unaligned(lp.add(2) as *mut u16, chk.to_be());
-                core::ptr::write_unaligned(lp.add(4) as *mut u16, nat_port.to_be());
-            }
-        }
-        IPPROTO_TCP => {
-            if data + l4_off + 20 > data_end {
-                return Err(DpErr::Bounds);
-            }
-            let new_ck = tcp_udp_v6_to_v4(
-                old_l4_cksum_be,
-                &ip6_src,
-                &ip6_dst,
-                nat.nat_ipv4,
-                ipv4_dst,
-                IPPROTO_TCP,
-                l4_len as u16,
-                sport.to_be(),
-                nat_port.to_be(),
-            );
-            unsafe {
-                core::ptr::write_unaligned(lp as *mut u16, nat_port.to_be());
-                core::ptr::write_unaligned(lp.add(16) as *mut u16, new_ck);
-            }
-        }
-        IPPROTO_UDP => {
-            if data + l4_off + 8 > data_end {
-                return Err(DpErr::Bounds);
-            }
-            let new_ck = tcp_udp_v6_to_v4(
-                old_l4_cksum_be,
-                &ip6_src,
-                &ip6_dst,
-                nat.nat_ipv4,
-                ipv4_dst,
-                IPPROTO_UDP,
-                l4_len as u16,
-                sport.to_be(),
-                nat_port.to_be(),
-            );
-            unsafe {
-                core::ptr::write_unaligned(lp as *mut u16, nat_port.to_be());
-                core::ptr::write_unaligned(lp.add(6) as *mut u16, new_ck);
-            }
-        }
-        _ => return Ok(None),
     }
 
     // ── Write outer Eth + outer IPv6 into [0..54], inline + straight-line. ──

@@ -10,6 +10,7 @@ pub mod firewall;
 pub mod lb;
 pub mod maps;
 pub mod nat;
+pub mod nat64;
 pub mod parse;
 pub mod pkt;
 pub mod uplink;

@@ -354,6 +354,87 @@ impl SimNode {
         }
     }
 
+    /// Guest NAT64 egress (`v6_guest_tx` → `nat64_egress`) for the IPv6→IPv4 translation path.
+    /// `frame` is a full guest Ethernet frame `[InnerEth(14)][IPv6(40)][L4]` whose IPv6 dst is in the
+    /// NAT64 well-known prefix `64:ff9b::/96`; `meta` is the sending port's `PortMeta` (vni + guest
+    /// IPv4 for the NAT key + underlay identity). Composes the REAL core fns in the exact order + gates
+    /// of the eBPF `nat64_egress`:
+    ///   1. parse (`nat64_egress_parse`): dst-prefix check, NAT config lookup, source-port allocation,
+    ///      forward + reverse `CT_F_NAT64` conntrack inserts;
+    ///   2. resize: shrink the inner IPv6(40)→IPv4(20) — models `bpf_xdp_adjust_head(+20)` (drop 20
+    ///      bytes off the front; the writer restores the Ethernet header in front of the IPv4 hdr);
+    ///   3. write (`nat64_egress_write`, `write_eth = true`): Ethernet + IPv4 header + L4 translation;
+    ///   4. route lookup (`route4`) → Pass on miss;
+    ///   5. encap IP-in-IPv6 toward the route nexthop (`write_outer_v6`).
+    ///
+    /// Returns `Redirect(uplink_ifindex)` + the encapped `[OuterEth][OuterIPv6][IPv4][L4]` frame, or
+    /// `Pass` when the frame is not a NAT64 packet / has no route. Byte-identical to the eBPF path.
+    pub fn guest_tx_nat64(&mut self, frame: &[u8], meta: &PortMeta) -> SimOut {
+        use flowplane_core::nat64::{nat64_egress_parse, nat64_egress_write};
+
+        let ip6_off = ETH_LEN;
+        let mut pkt = VecPkt::from_bytes(frame);
+
+        // 1. Parse (dst-prefix check + NAT config + port alloc + CT_F_NAT64 conntrack inserts).
+        let xlate =
+            match nat64_egress_parse(&pkt, &mut self.maps, ip6_off, meta.vni, meta.guest_ipv4, 0) {
+                Some(x) => x,
+                None => {
+                    return SimOut {
+                        action: Action::Pass,
+                        pkt: pkt.into_bytes(),
+                    }
+                }
+            };
+
+        // 2. Resize: shrink inner IPv6(40)→IPv4(20) via a 20-byte front drop (models adjust_head(+20)).
+        if !pkt.shrink_head(20) {
+            return SimOut {
+                action: Action::Drop,
+                pkt: pkt.into_bytes(),
+            };
+        }
+
+        // 3. Write: restore the Ethernet header + build the IPv4 header + translate the L4.
+        if !nat64_egress_write(&mut pkt, ETH_LEN, true, &xlate) {
+            return SimOut {
+                action: Action::Drop,
+                pkt: pkt.into_bytes(),
+            };
+        }
+
+        // 4. Route lookup on the embedded IPv4 dst.
+        let route = match route4(&self.maps, meta.vni, &xlate.ipv4_dst) {
+            Some(r) => r,
+            None => {
+                return SimOut {
+                    action: Action::Pass,
+                    pkt: pkt.into_bytes(),
+                }
+            }
+        };
+
+        // 5. Encap IP-in-IPv6 toward the route nexthop (IPIP inner-proto).
+        let e = EncapParams {
+            gateway_mac: self.local.gateway_mac,
+            uplink_mac: self.local.uplink_mac,
+            uplink_ifindex: self.local.uplink_ifindex,
+            src_underlay: meta.underlay_ipv6,
+            nexthop_ipv6: route.nexthop_ipv6,
+            inner_proto: IPPROTO_IPIP,
+        };
+        if !pkt.grow_head(IPV6_LEN) || !write_outer_v6(&mut pkt, &e) {
+            return SimOut {
+                action: Action::Drop,
+                pkt: pkt.into_bytes(),
+            };
+        }
+        SimOut {
+            action: Action::Redirect(self.local.uplink_ifindex),
+            pkt: pkt.into_bytes(),
+        }
+    }
+
     /// Edge WAN-VIP ingress (`wan_rx`): a plain `[Eth][IPv4|IPv6]` WAN frame; if its dst+port is a WAN
     /// LB VIP (vni=0), Maglev-select a backend and encap the inner packet IP-in-IPv6 to the backend
     /// underlay. Else Pass. Mirrors `ingress.rs::try_wan_rx` VIP branch. Dispatches on the frame's
