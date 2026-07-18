@@ -55,8 +55,11 @@ xw() { sudo docker exec "$SRC_NODE" crictl ps 2>/dev/null | grep ' flowplane ' |
 IPERF3=""   # resolved host path to a portable (static) iperf3, if available
 stage_iperf3() {
   # A fully-static iperf3 runs unmodified in both the host netns sink AND the debian kind node.
-  IPERF3=$(nix build --no-link --print-out-paths nixpkgs#pkgsStatic.iperf3 2>/dev/null)/bin/iperf3
-  [ -x "$IPERF3" ] || { IPERF3=""; return 1; }
+  # pkgsStatic.iperf3 has multiple outputs (bin + -man); pick the non-man store path.
+  local base
+  base=$(nix build --no-link --print-out-paths nixpkgs#pkgsStatic.iperf3 2>/dev/null | grep '/nix/store' | grep -v -- '-man' | head -1)
+  IPERF3="$base/bin/iperf3"
+  [ -n "$base" ] && [ -x "$IPERF3" ] || { IPERF3=""; return 1; }
   sudo docker cp "$IPERF3" "$SRC_NODE":/iperf3 >/dev/null 2>&1 || return 1
 }
 sink_up() {
