@@ -1,7 +1,7 @@
-//! Conformance tests for the guest-egress rate meter.
+//! Conformance tests for the guest-egress rate meter and the ingress-lane policer.
 //!
-//! These drive the REAL `flowplane_core::meter::{public_pass, edt_egress}` through the full
-//! `SimNode::guest_tx` compose (the SAME code path the eBPF `egress::forward_decision_v4` +
+//! The egress tests drive the REAL `flowplane_core::meter::{public_pass, edt_egress}` through the
+//! full `SimNode::guest_tx` compose (the SAME code path the eBPF `egress::forward_decision_v4` +
 //! `tc_guest_tx` call) over in-memory `MemMaps`/`VecPkt`. Metering does not mutate packet bytes —
 //! it reads/writes the `METER[src_ifindex]` state and returns a pass/drop verdict (public lane) or
 //! records a departure timestamp (EDT total lane) — so these assert on the delivery `Action`
@@ -12,12 +12,18 @@
 //! policing to EDT shaping: packets are NEVER dropped by the total lane; instead, `edt_egress`
 //! records when the packet should depart (kernel FQ enforces pacing). Public-lane policing still
 //! drops external packets when the public bucket is exhausted.
+//!
+//! The ingress test drives `flowplane_core::meter::ingress_pass` through the full
+//! `SimNode::host_uplink` compose (the SAME code path the eBPF `try_uplink_rx` calls after
+//! `decap_and_rewrite`). Over-rate frames directed at the guest tap are dropped; under-rate
+//! frames (and frames with no METER entry) pass.
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
     FwMeta, FwRule, MeterState, PortMeta, RouteValue, UnderlayValue, FW_ACTION_ACCEPT,
     FW_DIR_EGRESS, FW_DIR_INGRESS,
 };
+use flowplane_core::encap::{EncapParams, ETH_LEN, IPV6_LEN};
 use flowplane_core::pkt::Action;
 
 use crate::SimNode;
@@ -357,5 +363,158 @@ fn public_lane_exhaust_drop_then_pass_internal() {
         out4.action,
         Action::Redirect(PEER_TAP),
         "internal packet must PASS even when the public bucket is exhausted"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Ingress-lane policing tests (mirrors ingress.rs `try_uplink_rx` after decap)
+// ---------------------------------------------------------------------------
+
+/// Constants for the uplink ingress fixture.
+const INGRESS_VNI: u32 = 400;
+const INGRESS_TAP: u32 = 55;
+const INGRESS_GUEST_MAC: [u8; 6] = [0x52, 0x54, 0x00, 0x01, 0x02, 0x03];
+const INGRESS_GUEST_IP: [u8; 4] = [10, 1, 0, 10];
+const INGRESS_EXT_IP: [u8; 4] = [203, 0, 113, 42];
+const EDGE_UNDERLAY_INGRESS: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xcc];
+
+/// Build a TCP/IPv4 inner Ethernet frame from INGRESS_EXT_IP -> INGRESS_GUEST_IP.
+fn ingress_inner_frame(sport: u16) -> Vec<u8> {
+    let builder = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
+        .ipv4(INGRESS_EXT_IP, INGRESS_GUEST_IP, 64)
+        .tcp(sport, 443, 0, 1024);
+    let mut out = Vec::new();
+    builder.write(&mut out, &[]).unwrap();
+    out
+}
+
+/// Build an encapped fabric frame ready for `host_uplink` by running the real `edge_encap`.
+fn ingress_encapped(sport: u16) -> Vec<u8> {
+    let inner = ingress_inner_frame(sport);
+    let edge = SimNode::new();
+    let e = EncapParams {
+        gateway_mac: [0x01; 6],
+        uplink_mac: [0x02; 6],
+        uplink_ifindex: 7,
+        src_underlay: EDGE_UNDERLAY_INGRESS,
+        nexthop_ipv6: [0u8; 16], // outer IPv6 dst; resolved by host_uplink via UnderlayValue
+        inner_proto: 4,          // IPPROTO_IPIP
+    };
+    edge.edge_encap(&inner, e)
+}
+
+/// Open an ingress ALLOW rule on INGRESS_TAP (needed so the firewall pass gate doesn't drop).
+fn allow_ingress_tap(node: &mut SimNode) {
+    node.maps.fw_meta.insert(
+        INGRESS_TAP,
+        FwMeta {
+            ingress_count: 1,
+            egress_count: 0,
+        },
+    );
+    node.maps.fw_rules.insert(
+        (INGRESS_TAP, 0),
+        FwRule {
+            src_ip: [0; 4],
+            src_mask: [0; 4],
+            dst_ip: [0; 4],
+            dst_mask: [0; 4],
+            src_port_min: 0,
+            src_port_max: 65535,
+            dst_port_min: 0,
+            dst_port_max: 65535,
+            icmp_type: 0xffff,
+            icmp_code: 0xffff,
+            proto: 6,
+            action: FW_ACTION_ACCEPT,
+            direction: FW_DIR_INGRESS,
+            enabled: 1,
+        },
+    );
+}
+
+/// Program a tight ingress-lane METER entry on INGRESS_TAP. `ingress_burst` tokens are pre-loaded so
+/// the first packets within the burst pass, and subsequent packets (at `now=0`, no refill) drop.
+fn set_ingress_meter(node: &mut SimNode, ingress_bps: u64, ingress_burst: u64) {
+    node.maps.meter.insert(
+        INGRESS_TAP,
+        MeterState {
+            total_bps: 0,
+            total_burst: 0,
+            total_tokens: 0,
+            total_last_ns: 0,
+            public_bps: 0,
+            public_burst: 0,
+            public_tokens: 0,
+            public_last_ns: 0,
+            ingress_bps,
+            ingress_burst,
+            ingress_tokens: ingress_burst, // start full
+            ingress_last_ns: 0,
+        },
+    );
+}
+
+/// Ingress-lane policing: frames to the guest tap are dropped once the ingress bucket is exhausted.
+///
+/// Fixture: ingress_burst sized for ~2 inner frames. Three encapped packets arrive at now=0:
+///   - packets 1 and 2: within burst → Redirect(INGRESS_TAP);
+///   - packet 3: bucket exhausted, no time elapsed → Drop.
+/// No METER entry configured on the SENDING side (egress), confirming the ingress lane is independent.
+#[test]
+fn ingress_lane_exhaust_drop() {
+    // Compute burst from one inner frame length (outer Eth+IPv6 stripped by decap_and_rewrite).
+    let inner_len = ingress_inner_frame(1).len() as u64;
+    // Burst fits ~2 frames: first two pass, third drops.
+    let ingress_burst = inner_len * 2 + 10;
+
+    let mut node = SimNode::new();
+    node.now = 0;
+    allow_ingress_tap(&mut node);
+    set_ingress_meter(&mut node, inner_len, ingress_burst); // bps=1 frame/s; burst=~2 frames
+
+    // Build three different flows (distinct sports) so each hits the firewall as a new flow.
+    let pkt1 = ingress_encapped(40001);
+    let pkt2 = ingress_encapped(40002);
+    let pkt3 = ingress_encapped(40003);
+
+    // Verify: outer Eth+IPv6 header is present (sanity check on the fixture).
+    assert!(
+        pkt1.len() > ETH_LEN + IPV6_LEN,
+        "encapped frame must contain outer Eth+IPv6"
+    );
+
+    let out1 = node.host_uplink(&pkt1, INGRESS_VNI, INGRESS_TAP, INGRESS_GUEST_MAC);
+    assert_eq!(
+        out1.action,
+        Action::Redirect(INGRESS_TAP),
+        "ingress packet 1 must PASS (bucket full)"
+    );
+
+    let out2 = node.host_uplink(&pkt2, INGRESS_VNI, INGRESS_TAP, INGRESS_GUEST_MAC);
+    assert_eq!(
+        out2.action,
+        Action::Redirect(INGRESS_TAP),
+        "ingress packet 2 must PASS (bucket ~1 frame remaining)"
+    );
+
+    // Bucket now < 1 frame, no time elapsed → ingress policing drops.
+    let out3 = node.host_uplink(&pkt3, INGRESS_VNI, INGRESS_TAP, INGRESS_GUEST_MAC);
+    assert_eq!(
+        out3.action,
+        Action::Drop,
+        "ingress packet 3 must DROP (ingress bucket exhausted)"
+    );
+
+    // Meter state must have been persisted with updated tokens (proves ingress_pass ran its update).
+    let m = node.maps.meter.get(&INGRESS_TAP).copied().unwrap();
+    assert!(
+        m.ingress_last_ns == 0,
+        "ingress_last_ns stays 0 (all packets at now=0)"
+    );
+    // After 2 passes (each spending ~inner_len tokens), remaining tokens < inner_len.
+    assert!(
+        m.ingress_tokens < inner_len,
+        "ingress tokens must be depleted below one frame after two passes"
     );
 }

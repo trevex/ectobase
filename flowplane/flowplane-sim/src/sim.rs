@@ -157,6 +157,23 @@ impl SimNode {
             Ok(a) => a,
             Err(_) => Action::Drop,
         };
+        if action == Action::Drop {
+            return SimOut {
+                action,
+                pkt: pkt.into_bytes(),
+            };
+        }
+
+        // 5. Ingress-lane policing (keyed by dest tap) — mirrors ingress.rs uplink_rx. Post-decap inner
+        // length is the frame delivered to the guest. No cap => pass.
+        let in_len = pkt.len() as u64;
+        if !flowplane_core::meter::ingress_pass(&mut self.maps, tap, in_len, self.now) {
+            return SimOut {
+                action: Action::Drop,
+                pkt: pkt.into_bytes(),
+            };
+        }
+
         SimOut {
             action,
             pkt: pkt.into_bytes(),
