@@ -66,6 +66,49 @@ case "${1:-trace}" in
     XDPDUMP=$(nix_bin nixpkgs#xdp-tools xdpdump)
     echo "== xdpdump $ctr:$ifc (Ctrl-C to stop) — shows packets entering XDP incl. those it consumes =="
     exec $SUDO nsenter -t "$(docker inspect -f '{{.State.Pid}}' "$ctr")" -n "$XDPDUMP" -i "$ifc" -x ;;
+  map)
+    # Dump + DECODE a flowplane state map on one node. bpf map ids are global, so we resolve the
+    # node's map from its uplink_rx prog (attached to the node's fabric uplink) and dump from the host.
+    node="${2:?usage: bpf-trace.sh map <node-container> [UNDERLAY|CONNTRACK|NAT_IPS|NEIGHBOR_NAT]}"
+    want="${3:-UNDERLAY}"
+    BPFTOOL=$(nix_bin nixpkgs#bpftools bpftool) || { echo "no bpftool" >&2; exit 1; }
+    # prog id of uplink_rx on this node (from any fabric ethN carrying it)
+    pid=$(docker exec "$node" sh -c 'for i in $(ls /sys/class/net|grep -E "^eth"); do ip -d link show $i 2>/dev/null|grep -oE "prog/xdp id [0-9]+ name uplink_rx"|grep -oE "[0-9]+"|head -1; done' 2>/dev/null | head -1)
+    [ -z "$pid" ] && { echo "no uplink_rx prog on $node (is flowplane up there?)" >&2; exit 1; }
+    mids=$($SUDO "$BPFTOOL" prog show id "$pid" 2>/dev/null | grep -oE "map_ids [0-9,]+" | cut -d' ' -f2 | tr ',' ' ')
+    mid=""; for id in $mids; do [ "$($SUDO "$BPFTOOL" map show id "$id" 2>/dev/null | grep -oE 'name [A-Z_0-9]+' | cut -d' ' -f2)" = "$want" ] && mid=$id && break; done
+    [ -z "$mid" ] && { echo "map $want not found on $node (prog $pid)" >&2; exit 1; }
+    echo "== $node $want (map id $mid, via uplink_rx prog $pid) =="
+    PYF=$(mktemp --suffix=.py); cat > "$PYF" <<'PY'
+import sys, json
+want = sys.argv[1]
+def b(a):  # bpftool -j byte arrays are ["0x64",...]; return list[int]
+    return [int(x,16) for x in a]
+def le(bs): return int.from_bytes(bytes(bs), 'little')
+def ip4(bs): return ".".join(str(x) for x in bs)
+def ip6(bs):
+    import ipaddress; return str(ipaddress.IPv6Address(bytes(bs)))
+def mac(bs): return ":".join("%02x"%x for x in bs)
+rows = json.load(sys.stdin)
+if not rows: print("  (empty)"); sys.exit()
+CT_FLAGS=[(0x01,"REWRITE_SRC"),(0x02,"REWRITE_DST"),(0x04,"SRC_NAT"),(0x08,"DST_LB"),(0x10,"DEFAULT"),(0x20,"FIREWALL"),(0x40,"NAT64")]
+for r in rows:
+    k=b(r["key"]); v=b(r.get("value",[]))
+    if want=="UNDERLAY":
+        print(f"  underlay={ip6(k[:16])}  vni={le(v[0:4])} tap_ifindex={le(v[4:8])} guest_mac={mac(v[8:14])}")
+    elif want=="CONNTRACK":
+        fl=v[20]; names="|".join(n for m,n in CT_FLAGS if fl&m)
+        print(f"  vni={le(k[0:4])} {ip4(k[4:8])}:{int.from_bytes(k[12:14],'little')} -> {ip4(k[8:12])}:{int.from_bytes(k[14:16],'little')} proto={k[16]}  =>  xlate_ip={ip4(v[8:12])} xlate_port={int.from_bytes(v[12:14],'little')} flags=0x{fl:02x}({names})")
+    elif want=="NAT_IPS":
+        print(f"  vni={le(k[0:4])} nat_ip={ip4(k[4:8])}")
+    elif want=="NEIGHBOR_NAT":
+        print(f"  slot={le(k[0:4])} raw_value={' '.join('%02x'%x for x in v[:16])}")
+    else:
+        print("  key="+" ".join("%02x"%x for x in k)+"  value="+" ".join("%02x"%x for x in v))
+PY
+    $SUDO "$BPFTOOL" map dump id "$mid" -j 2>/dev/null | python3 "$PYF" "$want"
+    rm -f "$PYF"
+    exit 0 ;;
 esac
 
 DUR=0
