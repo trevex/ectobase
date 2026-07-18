@@ -16,6 +16,9 @@ use crate::maps::{GUEST_PROGS_TC, PORT_META};
 use flowplane_common::dhcp::{looks_like_dhcpv4, looks_like_dhcpv6};
 use flowplane_core::dhcp::{parse as dhcp4_parse, write as dhcp4_write, MIN_DHCP_LEN, REPLY_LEN};
 
+// skb->tstamp delivery-time kind: monotonic delivery time honored by the fq qdisc (EDT model).
+const BPF_SKB_TSTAMP_DELIVERY_MONO: u32 = 1;
+
 // `aya_ebpf::bindings::{TC_ACT_OK, TC_ACT_SHOT}` are already `i32` (the verdict type a
 // `#[classifier]` returns), so they're used directly below.
 
@@ -141,6 +144,18 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
                 let mut pkt =
                     RawPkt::with_logical_len(ctx.data(), ctx.data_end(), ctx.len() as usize);
                 if flowplane_core::encap::write_outer_v6(&mut pkt, &e) {
+                    // EDT egress shaping: stamp the wire-length-derived departure time so the
+                    // uplink's fq qdisc paces this flow. `ctx.len()` is the full post-encap logical
+                    // length. No shaping configured => no stamp (send immediately).
+                    if let Some(ts) = crate::meter::edt_stamp(ifindex, ctx.len() as u64) {
+                        unsafe {
+                            aya_ebpf::helpers::gen::bpf_skb_set_tstamp(
+                                ctx.skb.skb as *mut _,
+                                ts,
+                                BPF_SKB_TSTAMP_DELIVERY_MONO,
+                            );
+                        }
+                    }
                     return unsafe { bpf_redirect(e.uplink_ifindex, 0) as i32 };
                 }
                 return TC_ACT_SHOT;
@@ -216,6 +231,18 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
                 let mut pkt =
                     RawPkt::with_logical_len(ctx.data(), ctx.data_end(), ctx.len() as usize);
                 if flowplane_core::encap::write_outer_v6(&mut pkt, &e) {
+                    // EDT egress shaping: stamp the wire-length-derived departure time so the
+                    // uplink's fq qdisc paces this flow. `ctx.len()` is the full post-encap logical
+                    // length. No shaping configured => no stamp (send immediately).
+                    if let Some(ts) = crate::meter::edt_stamp(ifindex, ctx.len() as u64) {
+                        unsafe {
+                            aya_ebpf::helpers::gen::bpf_skb_set_tstamp(
+                                ctx.skb.skb as *mut _,
+                                ts,
+                                BPF_SKB_TSTAMP_DELIVERY_MONO,
+                            );
+                        }
+                    }
                     return unsafe { bpf_redirect(e.uplink_ifindex, 0) as i32 };
                 }
                 return TC_ACT_SHOT;
