@@ -67,21 +67,22 @@ func NewReconciler(kubeconfig, nodeID string, deps Deps) (*Reconciler, error) {
 	}, nil
 }
 
-// Desired returns the VNIs to subscribe to, the local routes to announce, and
-// the local egress-NAT blocks to announce for this node, snapshotting the current
-// NetworkInterface set. As a side effect it programs local egress SNAT sources on
-// the dataplane (idempotent: AddNatSource delete-then-adds).
-func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Route, announceNat []NatBlock, egressVNIs []uint32, err error) {
+// Desired returns the VNIs to subscribe to, the local routes to announce, the
+// local egress-NAT blocks to announce, the egress VNIs, and the peering-import
+// map for this node, snapshotting the current NetworkInterface set. As a side
+// effect it programs local egress SNAT sources on the dataplane (idempotent:
+// AddNatSource delete-then-adds).
+func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Route, announceNat []NatBlock, egressVNIs []uint32, peeringImports map[uint32][]PeerImport, err error) {
 	var nics netv1.NetworkInterfaceList
 	if err := r.client.List(ctx, &nics); err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("list networkinterfaces: %w", err)
+		return nil, nil, nil, nil, nil, fmt.Errorf("list networkinterfaces: %w", err)
 	}
 	vniSet := map[uint32]struct{}{PublicVNI: {}} // always subscribe to the public VNI to learn defaults
 	for i := range nics.Items {
 		nic := &nics.Items[i]
 		vni, err := r.vniFor(ctx, nic)
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, err
 		}
 		if vni == 0 {
 			continue // VPC not yet allocated a VNI; skip until it is
@@ -102,7 +103,7 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 		for _, ip := range nic.Spec.IPs {
 			prefix, err := hostPrefix(ip)
 			if err != nil {
-				return nil, nil, nil, nil, fmt.Errorf("nic %s/%s ip %q: %w", nic.Namespace, nic.Name, ip, err)
+				return nil, nil, nil, nil, nil, fmt.Errorf("nic %s/%s ip %q: %w", nic.Namespace, nic.Name, ip, err)
 			}
 			// Endpoint host routes are internal; egress-NAT default routes (external=true)
 			// are distributed separately by a controller.
@@ -115,7 +116,7 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 	// the routebus (so peers learn the neighbor-nat return route to us).
 	srcs, blocks, err := DesiredNat(ctx, r.client, r.nodeID, r.underlay)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	for _, s := range srcs {
 		if r.dp == nil {
@@ -133,40 +134,55 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 	// egress toward us. Non-edge nodes get nothing here.
 	extRoutes, err := DesiredExternalRoutes(ctx, r.client, r.underlay, r.edgeLoopback)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	for _, er := range extRoutes {
 		vniSet[er.Vni] = struct{}{} // subscribe to the VNI we originate into
 		announce = append(announce, Route{Vni: er.Vni, Prefix: er.Prefix, Nexthop: er.Nexthop, External: er.External})
 	}
-	// Re-materialize subs so any VNI added above is included and the set stays sorted.
-	subs = subs[:0]
-	for v := range vniSet {
-		subs = append(subs, v)
-	}
-	sort.Slice(subs, func(i, j int) bool { return subs[i] < subs[j] })
 
 	// LB backends: announce each backed VIP as an anycast overlay route (nexthop = this NIC's /128).
 	// Multiple backend NICs announcing the same VIP → the fabric ECMPs across them. This is the E/W
 	// load-balancer path; it reuses the plain route channel and needs no LB-specific datapath state.
 	lbs, err := r.desiredLB(ctx)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	for _, lb := range lbs {
 		prefix, err := hostPrefix(lb.VIP)
 		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("lb vip %q: %w", lb.VIP, err)
+			return nil, nil, nil, nil, nil, fmt.Errorf("lb vip %q: %w", lb.VIP, err)
 		}
 		announce = append(announce, Route{Vni: lb.Vni, Prefix: prefix, Nexthop: lb.NicUnderlay, External: false})
 	}
 
 	egressVNIs, err = r.desiredEgressVNIs(ctx)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 
-	return subs, announce, blocks, egressVNIs, nil
+	// VPC peering: collect peer imports for local VNIs and union every peer VNI into the
+	// subscription set so the Bus receives its routes and can import them.
+	peeringImports, err = r.desiredPeeringImports(ctx)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	for _, imports := range peeringImports {
+		for _, pi := range imports {
+			if pi.PeerVNI != 0 {
+				vniSet[pi.PeerVNI] = struct{}{}
+			}
+		}
+	}
+
+	// Re-materialize subs after all VNIs (local, egress, external, peer) have been added to vniSet.
+	subs = subs[:0]
+	for v := range vniSet {
+		subs = append(subs, v)
+	}
+	sort.Slice(subs, func(i, j int) bool { return subs[i] < subs[j] })
+
+	return subs, announce, blocks, egressVNIs, peeringImports, nil
 }
 
 // vniFor resolves an interface's VNI: prefer status.vni, else the referenced VPC's status.vni.

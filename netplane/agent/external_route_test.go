@@ -71,7 +71,7 @@ func TestReconcileEdgeStagesExternalDefault(t *testing.T) {
 
 	// Edge node (identified by its edge-loopback, not NATGateway.EdgeUnderlay).
 	edge := &Reconciler{client: c, nodeID: "edge", underlay: "fd00::e", edgeLoopback: "fd00:lo::1"}
-	subs, announce, _, _, err := edge.Desired(context.Background())
+	subs, announce, _, _, _, err := edge.Desired(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestReconcileEdgeStagesExternalDefault(t *testing.T) {
 
 	// Non-edge node.
 	other := &Reconciler{client: c, nodeID: "other", underlay: "fd00::b"}
-	_, announce2, _, _, err := other.Desired(context.Background())
+	_, announce2, _, _, _, err := other.Desired(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

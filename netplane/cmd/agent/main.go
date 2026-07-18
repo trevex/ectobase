@@ -72,7 +72,7 @@ func main() {
 	// and on session (re)open, pushing only the deltas onto the live stream — so CRD changes after
 	// startup converge without waiting for a disconnect, and removed NICs are withdrawn fabric-wide.
 	reconcile := func(ctx context.Context) (agent.DesiredState, error) {
-		subs, routes, nats, egressVNIs, err := r.Desired(ctx)
+		subs, routes, nats, egressVNIs, peeringImports, err := r.Desired(ctx)
 		if err != nil {
 			return agent.DesiredState{}, err
 		}
@@ -89,7 +89,7 @@ func main() {
 		if err != nil {
 			return agent.DesiredState{}, err
 		}
-		return agent.DesiredState{Subs: subs, Routes: routes, Nats: nats, Pubs: pubs, EgressVNIs: egressVNIs}, nil
+		return agent.DesiredState{Subs: subs, Routes: routes, Nats: nats, Pubs: pubs, EgressVNIs: egressVNIs, PeeringImports: peeringImports}, nil
 	}
 
 	// One Bus for the process lifetime: its installed-route bookkeeping must survive reconnects so

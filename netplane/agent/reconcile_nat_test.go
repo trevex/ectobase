@@ -40,7 +40,7 @@ func TestReconcileProgramsLocalNatSourceAndStagesAnnounce(t *testing.T) {
 	dp := newRecordingDP()
 	r := &Reconciler{client: c, nodeID: "nodeA", underlay: "fd00::a", dp: dp}
 
-	_, _, blocks, _, err := r.Desired(context.Background())
+	_, _, blocks, _, _, err := r.Desired(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
