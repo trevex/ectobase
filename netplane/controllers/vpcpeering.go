@@ -42,6 +42,9 @@ func (r *VPCPeeringReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 // reciprocal peering (peer→local) exists; else Pending. A List error is propagated so
 // Reconcile can return it and let controller-runtime requeue with backoff.
 func (r *VPCPeeringReconciler) evaluate(ctx context.Context, p *netv1.VPCPeering) (string, string, error) {
+	if p.Spec.VPCRef.Name == p.Spec.PeerVPCRef.Name && p.Namespace == p.Spec.PeerVPCRef.Namespace {
+		return netv1.VPCPeeringInvalid, "a VPC cannot peer with itself", nil
+	}
 	for _, c := range p.Spec.ExposedPrefixes {
 		if _, _, err := net.ParseCIDR(c); err != nil {
 			return netv1.VPCPeeringInvalid, "malformed exposedPrefix: " + c, nil
