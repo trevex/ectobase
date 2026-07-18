@@ -34,26 +34,6 @@ fn write_encap_outer(
     write_outer_v6(&mut CtxPkt { ctx }, &e)
 }
 
-/// Encapsulate the current inner frame and redirect out the local uplink via a plain `bpf_redirect`.
-/// Used by the guest_tx/nat64 path — which reaches this through a BPF tail call, so the redirect
-/// helper here MUST stay a plain `bpf_redirect` (a devmap redirect in a tail-call subprogram trips
-/// the verifier's "tail_call is only allowed in functions that return 'int'" rule). The edge
-/// `wan_rx` path (no tail calls) uses [`encap_and_redirect_via_devmap`] instead.
-#[inline(always)]
-pub fn encap_and_redirect(
-    ctx: &XdpContext,
-    local: &Local,
-    src_underlay: &[u8; 16],
-    route: &RouteValue,
-    inner_proto: u8,
-) -> Result<u32, DpErr> {
-    if write_encap_outer(ctx, local, src_underlay, route, inner_proto) {
-        Ok(unsafe { bpf_redirect(local.uplink_ifindex, 0) } as u32)
-    } else {
-        Err(DpErr::Bounds)
-    }
-}
-
 /// Like [`encap_and_redirect`] but redirects via the `UPLINK_DEV` devmap (slot 0 == uplink ifindex)
 /// instead of a plain `bpf_redirect`. On containerlab veth uplinks a plain XDP_REDIRECT is silently
 /// dropped unless the peer port has an XDP program (veth `ndo_xdp_xmit` peer requirement); the devmap

@@ -129,7 +129,7 @@ pub fn snat_egress<P: Pkt, M: Maps>(
 
     // Rewrite src IP guest -> nat_ip (+ IP checksum), then the L4 src port / ICMP id -> nat_port.
     // All packet writes use fixed-size `write_array` (single stores) to keep the eBPF bytecode small
-    // enough for the XDP verifier's single-function budget on the guest_tx path.
+    // enough for the XDP verifier's single-function budget on the tc_guest_tx path.
     let ihl = (hdr[0] & 0x0f) as usize * 4;
     // src IP at ip_off + 12.
     if !pkt.write_array(ip_off + 12, &nat.nat_ipv4) {

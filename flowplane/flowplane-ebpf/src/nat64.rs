@@ -1,6 +1,6 @@
 /// NAT64: bidirectional translation between IPv6 (64:ff9b::/96 prefix) guests and IPv4 external.
 ///
-/// Egress (guest_tx): an IPv6 frame whose dst is in 64:ff9b::/96 is translated to IPv4 + SNAT'd
+/// Egress (tc_guest_tx): an IPv6 frame whose dst is in 64:ff9b::/96 is translated to IPv4 + SNAT'd
 /// via the guest's NAT config, then encap'd and forwarded like a normal IPv4 NAT flow.
 ///
 /// Ingress (uplink_rx): an IPv4 reply that was reverse-NAT'd back to the guest IPv4 and carries
@@ -24,85 +24,6 @@ use crate::parse::{write16, write6, ETH_LEN, ETH_P_IPV6, IPV6_LEN};
 // ─────────────────────────────────────────────────────────────────────────────
 // EGRESS: IPv6→IPv4 translation + SNAT
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// Attempt NAT64 egress translation for the packet in `ctx`.
-///
-/// Packet layout on entry: `Eth(14) + IPv6(40) + L4(...)` — the raw guest TX frame.
-/// `vni`: guest VNI. `meta_guest_ipv4`: guest's IPv4 from PORT_META (NAT map key).
-/// `meta_underlay_ipv6`: guest's underlay IPv6 (used as outer src on encap).
-///
-/// Returns `Ok(Some(action))` if the packet was fully handled, `Ok(None)` to fall through,
-/// `Err(DpErr)` on a non-recoverable error.
-#[inline(always)]
-pub fn nat64_egress(
-    ctx: &XdpContext,
-    vni: u32,
-    meta_guest_ipv4: [u8; 4],
-    meta_underlay_ipv6: &[u8; 16],
-) -> Result<Option<u32>, DpErr> {
-    // Parse phase over the shared core seam (the SAME code the native SimNode + the BPF_PROG_TEST_RUN
-    // byte-parity anchor run): verify the dst is in 64:ff9b::/96, read the guest NAT config, allocate
-    // the source port, and pin the forward + reverse CT_F_NAT64 conntrack entries. Runs on the
-    // PRE-resize [Eth][IPv6][L4] frame; `None` => not a NAT64 frame, fall through to the v6 path.
-    let xlate = match flowplane_core::nat64::nat64_egress_parse(
-        &crate::coreimpl::RawPkt::new(ctx.data(), ctx.data_end()),
-        &mut crate::coreimpl::GlobalMaps,
-        ETH_LEN,
-        vni,
-        meta_guest_ipv4,
-        crate::conntrack::now(),
-    ) {
-        Some(x) => x,
-        None => return Ok(None),
-    };
-
-    // ── Packet resize: shrink IPv6(40) → IPv4(20) via adjust_head(+20) (drops 20 bytes off the
-    // front). The old Ethernet header is shifted off; the core writer restores it in front of the
-    // new IPv4 header. The resize stays in the glue (the core is a pure Pkt reader/writer). ──
-    if unsafe { bpf_xdp_adjust_head(ctx.ctx, 20) } != 0 {
-        return Err(DpErr::Bounds);
-    }
-    let data = ctx.data();
-    let data_end = ctx.data_end();
-    if data + ETH_LEN + 20 + 8 > data_end {
-        return Err(DpErr::Bounds);
-    }
-
-    // Write phase over the shared core seam: restore the Ethernet header (IPv4 ethertype), build the
-    // 20-byte IPv4 header, and translate the L4 (TCP/UDP checksum v6→v4 + src-port rewrite; ICMPv6
-    // echo → ICMPv4). Re-wrap the resized frame in a fresh RawPkt (adjust_head invalidated the prior
-    // bounds). Byte-identical to the deleted inline translation.
-    if !flowplane_core::nat64::nat64_egress_write(
-        &mut crate::coreimpl::RawPkt::new(data, data_end),
-        ETH_LEN,
-        true, // XDP in-place path: writer restores the Ethernet header.
-        &xlate,
-    ) {
-        return Err(DpErr::Bounds);
-    }
-
-    // Look up the external route for the IPv4 dst and encap+redirect toward the nexthop.
-    let route = match crate::maps::ROUTES.get(&aya_ebpf::maps::lpm_trie::Key::new(
-        64,
-        flowplane_common::RouteLpmData {
-            vni: vni.to_be_bytes(),
-            ipv4: xlate.ipv4_dst,
-        },
-    )) {
-        Some(r) => r,
-        None => return Ok(None),
-    };
-
-    let local = LOCAL.get(0).ok_or(DpErr::NoRoute)?;
-    let act = crate::encap::encap_and_redirect(
-        ctx,
-        local,
-        meta_underlay_ipv6,
-        route,
-        crate::parse::IPPROTO_IPIP,
-    )?;
-    Ok(Some(act))
-}
 
 /// tc variant of `nat64_egress`. Same translation (v6→v4 header + L4 + SNAT), delegated to the shared
 /// `flowplane_core::nat64` core (the SAME code the XDP path, native SimNode, and BPF_PROG_TEST_RUN

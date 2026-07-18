@@ -167,7 +167,7 @@ enum Cmd {
         gateway_mac: String,
         /// Local guest, repeatable:
         /// "<ifname>=<overlay_ipv4>=<guest_mac>=<underlay_ipv6>=<vni>". The per-interface underlay
-        /// /128 is the interface's identity on the underlay (UNDERLAY map key); guest_tx attaches
+        /// /128 is the interface's identity on the underlay (UNDERLAY map key); tc_guest_tx attaches
         /// to <ifname> (the hypervisor-side veth peer).
         #[arg(long = "guest")]
         guests: Vec<String>,
@@ -236,7 +236,7 @@ enum Cmd {
         #[arg(long = "guest6")]
         guests6: Vec<String>,
         /// Remote IPv6 route, repeatable: "<overlay_ipv6>[/len]=<nexthop_underlay_ipv6>=<vni>".
-        /// Programs the ROUTES6 LPM trie so v6_guest_tx can forward overlay IPv6 packets.
+        /// Programs the ROUTES6 LPM trie so tc_guest_tx can forward overlay IPv6 packets.
         #[arg(long = "remote6")]
         remotes6: Vec<String>,
         /// DHCP MTU option (server-wide). Defaults to 1500 if unset.
@@ -585,28 +585,17 @@ async fn main() -> anyhow::Result<()> {
                 }
                 None => loader::attach_xdp(&mut ebpf, "uplink_rx", &uplink)?,
             }
-            // guest_tx: load once (first guest), then attach-only for additional guests.
-            for (idx, g) in guests.iter().enumerate() {
+            loader::ensure_fq_qdisc(&uplink);
+            // tc_guest_tx: pre-load once, then attach via clsact ingress for each guest.
+            // Register GUEST_PROGS_TC (tc_guest_dhcp + tc_guest_nat64 tail calls) first, then
+            // pre-load tc_guest_tx. Held in scope so the userspace map fd lives for the lifetime.
+            let _guest_progs = loader::register_guest_dhcp_tc(&mut ebpf)?;
+            loader::load_program_tc(&mut ebpf, "tc_guest_tx")?;
+            for g in guests.iter() {
                 let mut it = g.splitn(3, '=');
                 let ifname = it.next().context("--guest must be ifname=ipv4=mac")?;
-                match pin_dir.as_deref() {
-                    Some(dir) => {
-                        loader::attach_xdp_pinned(&mut ebpf, "guest_tx", ifname, dir, idx != 0)?
-                    }
-                    None => {
-                        if idx == 0 {
-                            loader::attach_xdp(&mut ebpf, "guest_tx", ifname)?;
-                        } else {
-                            loader::attach_xdp_extra(&mut ebpf, "guest_tx", ifname)?;
-                        }
-                    }
-                }
+                loader::attach_tc_clsact_ingress(&mut ebpf, "tc_guest_tx", ifname)?;
             }
-            // Load guest_dhcp and register it in GUEST_PROGS so guest_tx's DHCP tail call resolves
-            // (same wiring serve's bring_up does). Without this the lab bringup path attaches
-            // guest_tx but the DHCP tail call misses → XDP_PASS → no DHCP reply. Held in scope below
-            // (the arm parks on ctrl_c) so the userspace map fd lives for the datapath's lifetime.
-            let _guest_progs = loader::register_guest_dhcp(&mut ebpf)?;
 
             // Pass 2: open map wrappers (each calls take_map, consuming the map slot).
             let mut local_map = maps::LocalMap::open(&mut ebpf)?;
@@ -1101,8 +1090,11 @@ async fn main() -> anyhow::Result<()> {
                 let public_mbps: u64 = public_s.parse().context("--meter: bad public_mbps")?;
                 let tap = ifindex(ifname)?;
                 // Single-source the mbps→bps + burst derivation with the per-interface program
-                // path and the ConfigureMeter RPC.
-                meter_map.upsert(tap, control::Control::meter_state(total_mbps, public_mbps))?;
+                // path and the ConfigureQoS RPC.
+                meter_map.upsert(
+                    tap,
+                    control::Control::meter_state(total_mbps, public_mbps, 0),
+                )?;
             }
 
             // DHCP_CONFIG: program server-wide DHCP options (MTU + DNS servers).

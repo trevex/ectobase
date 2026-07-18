@@ -243,7 +243,7 @@ func TestNatEgressSmoke(t *testing.T) {
 	//     conntrack entry to settle — same pattern as TestCrossNodeOverlayPing.
 	//
 	//     Success = "0% packet loss" in the ping output, which proves:
-	//       (a) the guest veth is wired into the XDP datapath (guest_tx fires),
+	//       (a) the guest veth is wired into the tc datapath (tc_guest_tx fires),
 	//       (b) egress SNAT rewrites the source to natIP,
 	//       (c) the return path reaches the guest netns (uplink_rx + decap fires),
 	//       (d) the firewall rule allows the flow.

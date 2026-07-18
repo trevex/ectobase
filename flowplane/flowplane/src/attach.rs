@@ -8,7 +8,7 @@
 //!
 //! Rather than duplicate the map-programming + datapath-attach sequence, we reuse the legacy
 //! [`Control::create_interface`] path (the exact same one the dpservice CreateInterface handler
-//! drives): it attaches `tc_guest_tx`/`guest_tx` to the host-side veth and programs PORT_META /
+//! drives): it attaches `tc_guest_tx` to the host-side veth and programs PORT_META /
 //! INTERFACES / UNDERLAY / the local self-route. Our job here is the veth+netns lifecycle plus the
 //! underlay-/128 IPAM (via [`UnderlayIpam`]) and MAC allocation, then delegation.
 
@@ -155,7 +155,7 @@ impl AttachState {
         }
 
         // Delegate map-programming + datapath-attach to the legacy Control path (attaches
-        // tc_guest_tx / guest_tx to the HOST-side veth and programs PORT_META/INTERFACES/UNDERLAY).
+        // tc_guest_tx to the HOST-side veth and programs PORT_META/INTERFACES/UNDERLAY).
         let params = IfaceParams {
             vni,
             ipv4,

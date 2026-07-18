@@ -19,12 +19,11 @@ use crate::maps::{
 };
 
 /// The owned link for a guest interface's attached datapath program. Dropping either variant
-/// detaches the program from the device. The Tc variant (tc clsact on the guest tap) is the
-/// default; the Xdp variant is the legacy fallback (`FLOWPLANE_GUEST_TC=0`). The uplink is always XDP.
+/// detaches the program from the device. The guest edge is tcx-only (`tc_guest_tx`); the uplink
+/// is always XDP.
 enum GuestLink {
     // The link handles are never read back; they are held solely so that dropping the variant
     // detaches the program from the device (RAII detach).
-    Xdp(#[allow(dead_code)] aya::programs::xdp::XdpLink),
     Tc(#[allow(dead_code)] aya::programs::tc::SchedClassifierLink),
     /// pin-links mode: the link lives in bpffs at links/<name>; we track the name to unpin on detach.
     Pinned(String),
@@ -184,9 +183,9 @@ pub struct Control {
 
 struct Inner {
     ebpf: Ebpf,
-    /// Owned `GUEST_PROGS` program array handle. Holds `GUEST_PROGS[GUEST_PROG_DHCP] = guest_dhcp`
-    /// so guest_tx's DHCP tail call resolves. Kept alive here for the datapath's lifetime;
-    /// dropping it would close the userspace map fd (the kernel map survives via guest_tx).
+    /// Owned `GUEST_PROGS_TC` program array handle. Holds the tc_guest_dhcp/tc_guest_nat64
+    /// tail-call slots so `tc_guest_tx`'s tail calls resolve. Kept alive here for the datapath's
+    /// lifetime; dropping it would close the userspace map fd.
     _guest_progs: aya::maps::ProgramArray<aya::maps::MapData>,
     _locals: LocalMap,
     /// Owned `UPLINK_DEV` devmap handle. wan_rx is loaded LATER (attach_edge), so this handle MUST
@@ -241,11 +240,7 @@ struct Inner {
     #[allow(dead_code)] // read only by the removed DPDKironcore list-lb-prefix RPCs
     lb_prefixes: HashMap<Vec<u8>, Vec<PrefixRecord>>,
     /// interface_id -> the owned guest datapath link (dropping it detaches the program).
-    /// Either a tc clsact link (default) or an XDP link when `guest_tc` is opted out.
     links: HashMap<Vec<u8>, GuestLink>,
-    /// The guest edge is attached via tc clsact ingress (`tc_guest_tx`) by DEFAULT; set
-    /// `FLOWPLANE_GUEST_TC=0/false/no/off` to fall back to XDP (`guest_tx`). The uplink stays XDP either way.
-    guest_tc: bool,
     routes_shadow: Vec<RouteShadowV4>,
     routes6_shadow: Vec<RouteShadowV6>,
     /// Shadow cache of learned guest MACs: interface_id -> guest_mac.
@@ -290,26 +285,13 @@ impl Control {
             loader::unpin_link(pin_dir, &format!("uplink-{uplink}"));
             loader::attach_xdp(&mut ebpf, "uplink_rx", uplink)?;
         }
-        // Guest edge attach mode: tc clsact is the DEFAULT (native XDP can't intercept guest egress
-        // on a vhost-backed tap — see the tc-BPF guest-edge design). Opt out to the legacy XDP
-        // guest_tx with FLOWPLANE_GUEST_TC=0/false/no/off (kept for regression testing). We pre-load the
-        // guest program (and register its DHCP/NAT64 tail-call array) once here so that every
-        // per-interface attach only needs attach() — the returned link is then always droppable on
-        // teardown (no ghost attachment surviving an interface delete).
-        let guest_tc = !matches!(
-            std::env::var("FLOWPLANE_GUEST_TC").as_deref(),
-            Ok("0") | Ok("false") | Ok("no") | Ok("off"),
-        );
-        let guest_progs = if guest_tc {
-            // tc path: register_guest_dhcp_tc loads tc_guest_dhcp/tc_guest_nat64 into GUEST_PROGS_TC;
-            // tc_guest_tx itself still needs a separate pre-load.
+        loader::ensure_fq_qdisc(uplink);
+        // Guest edge is tcx-only. Pre-load tc_guest_tx and register the tc DHCP/NAT64 tail-call
+        // array (GUEST_PROGS_TC) once here; per-interface attach then only needs attach().
+        let guest_progs = {
             let progs = loader::register_guest_dhcp_tc(&mut ebpf)?;
             loader::load_program_tc(&mut ebpf, "tc_guest_tx")?;
             progs
-        } else {
-            // XDP path: pre-load guest_tx, then wire guest_dhcp into GUEST_PROGS for its tail call.
-            loader::load_program(&mut ebpf, "guest_tx")?;
-            loader::register_guest_dhcp(&mut ebpf)?
         };
         let mut locals = LocalMap::open(&mut ebpf)?;
         locals.set(&Local {
@@ -381,7 +363,6 @@ impl Control {
             fw: HashMap::new(),
             lb_prefixes: HashMap::new(),
             links: HashMap::new(),
-            guest_tc,
             routes_shadow: Vec::new(),
             routes6_shadow: Vec::new(),
             learned_macs: HashMap::new(),
@@ -492,45 +473,23 @@ impl Control {
         if g.pin_links {
             let pin_dir = g.pin_dir.clone();
             let gname = format!("guest-{}", hex_encode(interface_id));
-            let prog = if g.guest_tc {
-                "tc_guest_tx"
-            } else {
-                "guest_tx"
-            };
-            // Re-point the surviving pinned link at the fresh program (atomic, no gap). A missing or
-            // broken pin falls through to a fresh attach+pin.
-            let readopted = if g.guest_tc {
-                loader::readopt_tc_link(&mut g.ebpf, prog, &pin_dir, &gname)
-            } else {
-                loader::readopt_xdp_link(&mut g.ebpf, prog, &pin_dir, &gname)
-            }
-            .unwrap_or_else(|e| {
-                eprintln!("re-adopt guest link {gname} failed ({e:#}); attaching fresh");
-                loader::unpin_link(&pin_dir, &gname);
-                false
-            });
+            let readopted = loader::readopt_tc_link(&mut g.ebpf, "tc_guest_tx", &pin_dir, &gname)
+                .unwrap_or_else(|e| {
+                    eprintln!("re-adopt guest link {gname} failed ({e:#}); attaching fresh");
+                    loader::unpin_link(&pin_dir, &gname);
+                    false
+                });
             if !readopted {
-                if g.guest_tc {
-                    loader::attach_tc_pinned_at(&mut g.ebpf, prog, device, &pin_dir, &gname)?;
-                } else {
-                    loader::attach_xdp_pinned_at(&mut g.ebpf, prog, device, &pin_dir, &gname)?;
-                }
+                loader::attach_tc_pinned_at(&mut g.ebpf, "tc_guest_tx", device, &pin_dir, &gname)?;
             }
             g.links
                 .insert(interface_id.to_vec(), GuestLink::Pinned(gname));
             return Ok(());
         }
-        let link = if g.guest_tc {
-            GuestLink::Tc(
-                loader::attach_tc_clsact_ingress_link(&mut g.ebpf, "tc_guest_tx", device)
-                    .with_context(|| format!("re-attach tc_guest_tx to {device}"))?,
-            )
-        } else {
-            GuestLink::Xdp(
-                loader::attach_xdp_link(&mut g.ebpf, "guest_tx", device)
-                    .with_context(|| format!("re-attach guest_tx to {device}"))?,
-            )
-        };
+        let link = GuestLink::Tc(
+            loader::attach_tc_clsact_ingress_link(&mut g.ebpf, "tc_guest_tx", device)
+                .with_context(|| format!("re-attach tc_guest_tx to {device}"))?,
+        );
         g.links.insert(interface_id.to_vec(), link);
         Ok(())
     }
@@ -558,6 +517,7 @@ impl Control {
             loader::unpin_link(&pin_dir, &format!("wan-{wan_uplink}"));
             loader::attach_xdp(&mut g.ebpf, "wan_rx", wan_uplink)?;
         }
+        loader::ensure_fq_qdisc(wan_uplink);
         g.underlay.upsert(
             edge_underlay,
             flowplane_common::UnderlayValue {
@@ -596,6 +556,7 @@ impl Control {
             loader::unpin_link(&pin_dir, &format!("uplink-{iface}"));
             loader::attach_xdp_extra(&mut g.ebpf, "uplink_rx", iface)?;
         }
+        loader::ensure_fq_qdisc(iface);
         println!("uplink_rx attached to extra uplink {iface}");
         Ok(())
     }
@@ -661,27 +622,36 @@ impl Control {
         g.dhcp_meta.upsert(ifindex, m)
     }
 
-    /// Build a `MeterState` token bucket from total/public caps in Mbit/s. The mbps→bytes/s
-    /// conversion and burst derivation are the single source of truth shared by
-    /// `program_iface_maps`, the `--meter` CLI flag, and the `ConfigureMeter` RPC. Both rates
-    /// 0 = unlimited (`bps==0` is the datapath's pass sentinel).
-    pub fn meter_state(total_mbps: u64, public_mbps: u64) -> flowplane_common::MeterState {
-        let tb = total_mbps.saturating_mul(1_000_000) / 8;
-        let pb = public_mbps.saturating_mul(1_000_000) / 8;
+    /// Build a `MeterState` from per-lane caps in Mbit/s. Egress total is EDT-shaped: only
+    /// `total_bps` + the schedule cursor (`total_last_ns`, seeded 0) matter — no token bucket.
+    /// Public + ingress are token-bucket policers (burst = 1/8 s of rate, min 2000B). All 0 =>
+    /// unlimited. Single source of truth shared by program_iface_maps, the CLI, and ConfigureQoS.
+    pub fn meter_state(
+        egress_mbps: u64,
+        public_mbps: u64,
+        ingress_mbps: u64,
+    ) -> flowplane_common::MeterState {
+        let e = egress_mbps.saturating_mul(1_000_000) / 8;
+        let p = public_mbps.saturating_mul(1_000_000) / 8;
+        let i = ingress_mbps.saturating_mul(1_000_000) / 8;
         flowplane_common::MeterState {
-            total_bps: tb,
-            total_burst: (tb / 8).max(2000),
-            total_tokens: tb / 8,
+            total_bps: e,
+            total_burst: 0,
+            total_tokens: 0,
             total_last_ns: 0,
-            public_bps: pb,
-            public_burst: (pb / 8).max(2000),
-            public_tokens: pb / 8,
+            public_bps: p,
+            public_burst: (p / 8).max(2000),
+            public_tokens: p / 8,
             public_last_ns: 0,
+            ingress_bps: i,
+            ingress_burst: (i / 8).max(2000),
+            ingress_tokens: i / 8,
+            ingress_last_ns: 0,
         }
     }
 
-    /// Program a LOCAL interface: attach guest_tx to its device, set PORT_META + INTERFACES +
-    /// UNDERLAY, retain the XDP link for detach, and record shadow detail.
+    /// Program a LOCAL interface: attach tc_guest_tx to its device, set PORT_META + INTERFACES +
+    /// UNDERLAY, retain the link for detach, and record shadow detail.
     pub fn create_interface(
         &self,
         interface_id: &[u8],
@@ -731,29 +701,17 @@ impl Control {
         // NOTE: preferred underlay collision is NOT checked here; it is checked only when
         // the caller explicitly supplies a preferred_underlay_route (see grpc.rs handler).
         // The guest program was pre-loaded in bring_up, so attach always succeeds and we get a
-        // droppable link back — dropping it detaches the program on interface teardown. Use tc
-        // clsact ingress by default, or XDP when opted out (FLOWPLANE_GUEST_TC=0). (guest_tc lives on
-        // Inner alongside ebpf/links, so it's readable here under the same lock.)
+        // droppable link back — dropping it detaches the program on interface teardown.
         let link = if g.pin_links {
             let pin_dir = g.pin_dir.clone();
             let gname = format!("guest-{}", hex_encode(interface_id));
-            if g.guest_tc {
-                loader::attach_tc_pinned_at(&mut g.ebpf, "tc_guest_tx", device, &pin_dir, &gname)
-                    .with_context(|| format!("attach+pin tc_guest_tx to {device}"))?;
-            } else {
-                loader::attach_xdp_pinned_at(&mut g.ebpf, "guest_tx", device, &pin_dir, &gname)
-                    .with_context(|| format!("attach+pin guest_tx to {device}"))?;
-            }
+            loader::attach_tc_pinned_at(&mut g.ebpf, "tc_guest_tx", device, &pin_dir, &gname)
+                .with_context(|| format!("attach+pin tc_guest_tx to {device}"))?;
             GuestLink::Pinned(gname)
-        } else if g.guest_tc {
+        } else {
             GuestLink::Tc(
                 loader::attach_tc_clsact_ingress_link(&mut g.ebpf, "tc_guest_tx", device)
                     .with_context(|| format!("attach tc_guest_tx to {device}"))?,
-            )
-        } else {
-            GuestLink::Xdp(
-                loader::attach_xdp_link(&mut g.ebpf, "guest_tx", device)
-                    .with_context(|| format!("load+attach guest_tx to {device}"))?,
             )
         };
         // Do the FALLIBLE datapath writes first and commit the in-memory bookkeeping only after they
@@ -853,8 +811,8 @@ impl Control {
             },
         )?;
         // Local self-route: a same-host guest reaches this interface by its overlay IP. Program a
-        // /32 (and /128 when dual-stack) route to this interface's OWN underlay so guest_tx's LPM
-        // resolves a local destination to a local underlay, and the local fast path delivers it
+        // /32 (and /128 when dual-stack) route to this interface's OWN underlay so tc_guest_tx's
+        // LPM resolves a local destination to a local underlay, and the local fast path delivers it
         // without a wire round-trip. These are NOT added to routes_shadow (not user-visible routes).
         g.routes.upsert(
             vni,
@@ -882,7 +840,7 @@ impl Control {
         }
         if total_mbps != 0 || public_mbps != 0 {
             g.meter
-                .upsert(tap, Self::meter_state(total_mbps, public_mbps))?;
+                .upsert(tap, Self::meter_state(total_mbps, public_mbps, 0))?;
         }
         // Restart journal (never read by the datapath): persist what a restart needs to rebuild
         // bookkeeping and re-attach the guest program. Lengths are guarded in create_interface, so
@@ -908,7 +866,7 @@ impl Control {
         Ok(())
     }
 
-    /// Tear down a local interface: detach guest_tx (drop the link) and clear its maps + shadow.
+    /// Tear down a local interface: detach tc_guest_tx (drop the link) and clear its maps + shadow.
     /// Returns true if found and deleted, false if not found.
     /// When the last interface on a VNI is removed, also auto-resets the VNI (purges neighbor NATs,
     /// VIPs, and routes for that VNI) to match dpservice's behaviour.
@@ -1787,29 +1745,23 @@ impl Control {
         }
     }
 
-    /// Program the egress bandwidth cap (METER token-bucket) for a locally-attached interface.
-    /// `total_mbps`/`public_mbps` are the caps in Mbit/s; both 0 = unlimited, which REMOVES the
-    /// meter entry (the datapath's `bps==0` pass also holds if the entry survives, but clearing
-    /// keeps the map tidy). Reuses `meter_state` so the mbps→bps + burst derivation matches the
-    /// `--meter` CLI and the per-interface program path exactly. Idempotent: re-configuring
-    /// replaces the state.
-    pub fn set_meter(
+    pub fn set_qos(
         &self,
         interface_id: &[u8],
-        total_mbps: u64,
+        egress_mbps: u64,
         public_mbps: u64,
+        ingress_mbps: u64,
     ) -> anyhow::Result<()> {
         let mut g = self.inner.lock();
         let tap = *g
             .by_ifindex
             .get(interface_id)
             .ok_or_else(|| anyhow::anyhow!("NO_VM: unknown interface"))?;
-        if total_mbps == 0 && public_mbps == 0 {
-            // Unlimited: drop any existing entry. Removing an absent entry is not an error.
+        if egress_mbps == 0 && public_mbps == 0 && ingress_mbps == 0 {
             let _ = g.meter.remove(&tap);
             Ok(())
         } else {
-            let state = Self::meter_state(total_mbps, public_mbps);
+            let state = Self::meter_state(egress_mbps, public_mbps, ingress_mbps);
             g.meter.upsert(tap, state)
         }
     }
@@ -2344,7 +2296,6 @@ impl Control {
                 fw: HashMap::new(),
                 lb_prefixes: HashMap::new(),
                 links: HashMap::new(),
-                guest_tc: true,
                 routes_shadow: Vec::new(),
                 routes6_shadow: Vec::new(),
                 learned_macs: HashMap::new(),
@@ -2369,28 +2320,35 @@ mod tests {
         assert_eq!(hex_encode(b"rpod"), hex_encode(b"rpod"));
     }
 
-    /// The single-source mbps->MeterState conversion shared by the --meter CLI, the per-interface
-    /// program path, and the ConfigureMeter RPC. 1 Mbit/s = 125_000 bytes/s; burst = bps/8 floored
-    /// at 2000; tokens seed to the burst; last_ns starts at 0. 0 mbps = 0 bps (the datapath's pass
-    /// sentinel) with the 2000-byte burst floor.
+    /// Three-lane mbps->MeterState conversion: egress=EDT (no token bucket, burst=0),
+    /// public/ingress=token-bucket policers (burst = bps/8, min 2000B). 0 mbps = pass sentinel.
     #[test]
     fn meter_state_conversion() {
-        let m = Control::meter_state(100, 40);
+        let m = Control::meter_state(100, 40, 50);
         assert_eq!(m.total_bps, 100 * 1_000_000 / 8); // 12_500_000 B/s
         assert_eq!(m.public_bps, 40 * 1_000_000 / 8); // 5_000_000 B/s
-        assert_eq!(m.total_burst, (m.total_bps / 8).max(2000));
+        assert_eq!(m.ingress_bps, 50 * 1_000_000 / 8); // 6_250_000 B/s
+                                                       // EDT total: no token bucket
+        assert_eq!(m.total_burst, 0);
+        assert_eq!(m.total_tokens, 0);
+        // Public policer
         assert_eq!(m.public_burst, (m.public_bps / 8).max(2000));
-        assert_eq!(m.total_tokens, m.total_bps / 8);
         assert_eq!(m.public_tokens, m.public_bps / 8);
+        // Ingress policer
+        assert_eq!(m.ingress_burst, (m.ingress_bps / 8).max(2000));
+        assert_eq!(m.ingress_tokens, m.ingress_bps / 8);
         assert_eq!(m.total_last_ns, 0);
         assert_eq!(m.public_last_ns, 0);
+        assert_eq!(m.ingress_last_ns, 0);
 
-        // 0 mbps = unlimited sentinel (bps==0) with the burst floor.
-        let z = Control::meter_state(0, 0);
+        // 0 mbps = unlimited sentinel (bps==0).
+        let z = Control::meter_state(0, 0, 0);
         assert_eq!(z.total_bps, 0);
         assert_eq!(z.public_bps, 0);
-        assert_eq!(z.total_burst, 2000);
+        assert_eq!(z.ingress_bps, 0);
+        assert_eq!(z.total_burst, 0);
         assert_eq!(z.public_burst, 2000);
+        assert_eq!(z.ingress_burst, 2000);
     }
 
     /// Pure (no-BPF) check that an IFACE_META journal entry round-trips back to the interface_id,

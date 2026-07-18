@@ -302,6 +302,13 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
             if lb_ul.is_none() && nat_guest.is_none() {
                 crate::vip::dnat_ingress(ctx, ETH_LEN, vni);
             }
+            // Ingress-lane policing (token bucket keyed by the destination tap). Over-rate frames
+            // are dropped here, before delivery. No cap configured => pass. Post-decap length is the
+            // inner frame delivered to the guest.
+            let in_len = (ctx.data_end() - ctx.data()) as u64;
+            if !crate::meter::ingress_pass(tap_ifindex, in_len) {
+                return Ok(xdp_action::XDP_DROP);
+            }
             // Deliver to the guest via the GUEST_DEV devmap (keyed by tap ifindex), NOT a plain
             // bpf_redirect: on containerlab veths a plain XDP_REDIRECT into the guest veth is
             // silently dropped (veth ndo_xdp_xmit peer requirement); the devmap path delivers.

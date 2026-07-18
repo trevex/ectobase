@@ -52,6 +52,43 @@ spec:
                 description: NodeName is the node the interface is scheduled onto.
                   Set by the scheduler.
                 type: string
+              qos:
+                description: QoS caps/shapes throughput for this interface. Nil =
+                  unlimited.
+                properties:
+                  egress:
+                    description: Egress shapes outbound (VM->out) throughput.
+                    properties:
+                      burstKB:
+                        description: BurstKB is an optional burst allowance in KB.
+                          Reserved (EDT ignores it in v1). 0 = default.
+                        format: int32
+                        type: integer
+                      publicMbps:
+                        description: PublicMbps caps external/NATed egress in Mbit/s
+                          (policed). 0 = unlimited.
+                        format: int32
+                        type: integer
+                      rateMbps:
+                        description: RateMbps is the EDT-shaped total egress rate
+                          in Mbit/s. 0 = unlimited.
+                        format: int32
+                        type: integer
+                    type: object
+                  ingress:
+                    description: Ingress polices inbound (out->VM) throughput.
+                    properties:
+                      burstKB:
+                        description: BurstKB is an optional burst allowance in KB.
+                          Reserved (default burst in v1). 0 = default.
+                        format: int32
+                        type: integer
+                      rateMbps:
+                        description: RateMbps caps throughput in Mbit/s. 0 = unlimited.
+                        format: int32
+                        type: integer
+                    type: object
+                type: object
               vpcRef:
                 description: VPCRef references the VPC this interface belongs to.
                 properties:

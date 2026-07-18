@@ -40,9 +40,9 @@ type Dataplane interface {
 	AddLbBackend(ctx context.Context, id, backendUnderlay string) error
 	// DelLbBackend removes a backend underlay /128 from a registered LB VIP.
 	DelLbBackend(ctx context.Context, id, backendUnderlay string) error
-	// ConfigureMeter sets the per-interface egress bandwidth cap (METER token-bucket).
-	// totalMbps/publicMbps are in Mbit/s; both 0 = unlimited (clears the meter). Idempotent.
-	ConfigureMeter(ctx context.Context, interfaceID string, totalMbps, publicMbps uint32) error
+	// ConfigureQoS sets the per-interface QoS lanes: egressMbps is EDT-shaped, publicMbps and
+	// ingressMbps are policed. All 0 = unlimited (clears). Idempotent.
+	ConfigureQoS(ctx context.Context, interfaceID string, egressMbps, publicMbps, ingressMbps uint32) error
 }
 
 // FwRule is one compiled firewall rule the agent installs on the dataplane.
@@ -672,9 +672,9 @@ func (d dpAdapter) DelLbBackend(ctx context.Context, id, backendUnderlay string)
 	_, err := d.c.DelLbBackend(ctx, &dpv1.DelLbBackendRequest{Id: id, BackendUnderlay: backendUnderlay})
 	return err
 }
-func (d dpAdapter) ConfigureMeter(ctx context.Context, interfaceID string, totalMbps, publicMbps uint32) error {
-	_, err := d.c.ConfigureMeter(ctx, &dpv1.ConfigureMeterRequest{
-		InterfaceId: interfaceID, TotalMbps: totalMbps, PublicMbps: publicMbps,
+func (d dpAdapter) ConfigureQoS(ctx context.Context, interfaceID string, egressMbps, publicMbps, ingressMbps uint32) error {
+	_, err := d.c.ConfigureQoS(ctx, &dpv1.ConfigureQoSRequest{
+		InterfaceId: interfaceID, EgressMbps: egressMbps, PublicMbps: publicMbps, IngressMbps: ingressMbps,
 	})
 	return err
 }
