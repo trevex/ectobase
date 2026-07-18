@@ -41,8 +41,6 @@ pub struct AttachState {
     /// Server-wide overlay IPv6 gateway (from `--gateway6`), programmed into
     /// `PortMeta.gateway_ipv6` so the ND / DHCPv6 responders have a gateway. All-zeros = disabled.
     pub gateway_ipv6: [u8; 16],
-    /// Monotonic MAC suffix so auto-allocated guest MACs are unique within this process.
-    pub mac_seq: Mutex<u32>,
     /// Disable guest tx-checksum offload at attach. Only needed when the fabric uplink is a
     /// software veth (clab/kind) that advertises HW_CSUM but never finalizes CHECKSUM_PARTIAL, so
     /// the encapped inner L4 checksum would reach the wire partial/wrong. A real NIC finalizes the
@@ -87,11 +85,19 @@ impl AttachState {
         }
     }
 
-    /// Allocate a locally-administered unicast MAC (02:xx:...) from the process-local counter.
-    fn alloc_mac(&self) -> [u8; 6] {
-        let mut seq = self.mac_seq.lock();
-        *seq = seq.wrapping_add(1);
-        let s = seq.to_be_bytes();
+    /// A locally-administered unicast MAC (02:xx:...) derived DETERMINISTICALLY from the
+    /// interface_id (FNV-1a, same idiom as `host_veth_name`). Determinism is a correctness
+    /// requirement, not a nicety: on detach the datapath's current guest MAC is cached in
+    /// `learned_macs` (control.rs) so a detach+re-attach of the SAME interface preserves it; a
+    /// per-attach counter would hand the re-created veth a NEW MAC while the maps kept the cached
+    /// OLD one, so `uplink_rx` would deliver returns to the stale MAC and the guest would drop them.
+    /// Deriving from the id makes the re-attached veth, the cache, and the maps all agree.
+    fn mac_for(interface_id: &str) -> [u8; 6] {
+        let mut h: u32 = 2166136261;
+        for b in interface_id.as_bytes() {
+            h = (h ^ *b as u32).wrapping_mul(16777619);
+        }
+        let s = h.to_be_bytes();
         [0x02, 0x00, s[0], s[1], s[2], s[3]]
     }
 
@@ -119,9 +125,10 @@ impl AttachState {
         // responder (IA Address) and NAT64 require. Mirrors the bare-IP parse the v4 side uses.
         let ipv6 = primary_ipv6(requested_ips);
 
-        // MAC: honour a caller-supplied MAC, else allocate one.
+        // MAC: honour a caller-supplied MAC, else derive a stable one from the interface_id (so a
+        // detach+re-attach reuses the same MAC — see `mac_for`).
         let mac = if mac_req.is_empty() {
-            self.alloc_mac()
+            Self::mac_for(interface_id)
         } else {
             parse_mac(mac_req).context("invalid mac")?
         };
@@ -373,6 +380,28 @@ mod tests {
     fn parse_mac_roundtrips() {
         assert_eq!(parse_mac("02:00:00:00:00:0a").unwrap(), [2, 0, 0, 0, 0, 10]);
         assert_eq!(fmt_mac([2, 0, 0, 0, 0, 10]), "02:00:00:00:00:0a");
+    }
+
+    #[test]
+    fn mac_for_is_deterministic_laa_unicast_and_distinct() {
+        let a1 = AttachState::mac_for("natpod");
+        let a2 = AttachState::mac_for("natpod");
+        // Determinism is the whole point: a detach+re-attach of the SAME id must reuse the SAME MAC
+        // so the re-created veth agrees with the learned_macs cache + the datapath maps (else
+        // uplink_rx delivers returns to a stale MAC and the guest silently drops them).
+        assert_eq!(
+            a1, a2,
+            "mac_for must be stable across re-attach of the same interface_id"
+        );
+        // Locally-administered (bit 1 set) unicast (bit 0 clear).
+        assert_eq!(
+            a1[0] & 0x03,
+            0x02,
+            "must be a locally-administered unicast MAC"
+        );
+        // Different ids get different MACs (no aliasing between endpoints on a node).
+        assert_ne!(a1, AttachState::mac_for("web"));
+        assert_ne!(a1, AttachState::mac_for("natpod2"));
     }
 
     #[test]

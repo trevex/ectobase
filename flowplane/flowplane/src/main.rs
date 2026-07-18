@@ -458,7 +458,6 @@ async fn main() -> anyhow::Result<()> {
                 ipam: parking_lot::Mutex::new(ipam),
                 gateway_ipv4,
                 gateway_ipv6,
-                mac_seq: parking_lot::Mutex::new(0),
                 disable_guest_csum_offload,
             });
 
