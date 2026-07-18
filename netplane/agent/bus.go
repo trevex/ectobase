@@ -402,40 +402,51 @@ func (b *Bus) apply(ctx context.Context, ru *rbv1.RouteUpdate) {
 		}
 		return
 	}
-	// Peer-import path: a route learned on a VNI that some LOCAL vni imports (VPC peering). Handled
-	// BEFORE the own/direct path so it can't be mistaken for an own route on that (peer) VNI. A VNI
-	// only appears as a peer VNI when a local VNI imports it, so this and the own path are disjoint.
-	if importers := b.importersOf(ru.Vni); len(importers) > 0 {
-		b.applyPeer(ctx, ru, nh, importers)
-		return
-	}
+	// A non-public RouteUpdate on ru.Vni is BOTH an own/direct route for ru.Vni's OWN table AND, if any
+	// LOCAL vni imports ru.Vni (VPC peering), a peer route to import into those importers' tables. These
+	// are ADDITIVE (they target different tables), not mutually exclusive — a node that hosts guests in
+	// two peered VPCs sees ru.Vni be its own table *and* a peer VNI at once. So install the own route
+	// into ru.Vni's table first, then (if ru.Vni is imported) import it into the importer tables.
 	switch ru.Op {
 	case rbv1.RouteOp_ROUTE_OP_ADD:
 		if err := b.dp.AddRoute(ctx, ru.Vni, ru.Prefix, nh, ru.External); err != nil {
 			log.Printf("AddRoute vni=%d %s -> %s external=%t: %v", ru.Vni, ru.Prefix, nh, ru.External, err)
-			return
+			// Still attempt the peer import below: it targets other tables and must not be skipped.
+		} else {
+			b.markInstalled(ru.Vni, ru.Prefix)
+			// Tag as own; if a peer import currently held this (vni, prefix) the AddRoute above overwrote
+			// it in the dataplane (one value per key), so flipping the tag to "own" completes the eviction.
+			b.setOrigin(ru.Vni, ru.Prefix, "own")
 		}
-		b.markInstalled(ru.Vni, ru.Prefix)
-		// Tag as own; if a peer import currently held this (vni, prefix) the AddRoute above overwrote
-		// it in the dataplane (one value per key), so flipping the tag to "own" completes the eviction.
-		b.setOrigin(ru.Vni, ru.Prefix, "own")
+		// Additionally import into any LOCAL vni that imports ru.Vni. applyPeer targets the IMPORTER
+		// tables (never ru.Vni's own table), so there is no self-conflict with the own install above.
+		if importers := b.importersOf(ru.Vni); len(importers) > 0 {
+			b.applyPeer(ctx, ru, nh, importers)
+		}
 	case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
 		if err := b.dp.WithdrawRoute(ctx, ru.Vni, ru.Prefix); err != nil {
 			log.Printf("WithdrawRoute vni=%d %s: %v", ru.Vni, ru.Prefix, err)
-			return
+		} else {
+			b.markWithdrawn(ru.Vni, ru.Prefix)
+			// The own route is gone: restore a shadowed peer import for this (vni, prefix) if one exists,
+			// else clear the tag entirely.
+			b.clearOrigin(ru.Vni, ru.Prefix)
+			b.restoreImport(ctx, ru.Vni, ru.Prefix)
 		}
-		b.markWithdrawn(ru.Vni, ru.Prefix)
-		// The own route is gone: restore a shadowed peer import for this (vni, prefix) if one exists,
-		// else clear the tag entirely.
-		b.clearOrigin(ru.Vni, ru.Prefix)
-		b.restoreImport(ctx, ru.Vni, ru.Prefix)
+		// Withdraw from importer tables too: applyPeer clears its own learnedPeer bookkeeping and only
+		// touches importer tables tagged "peer", so the own withdraw/restore above is unaffected.
+		if importers := b.importersOf(ru.Vni); len(importers) > 0 {
+			b.applyPeer(ctx, ru, nh, importers)
+		}
 	}
 }
 
-// applyPeer handles a RouteUpdate on a peer VNI: it records the raw learned peer route (for later
-// restore) and, for each LOCAL vni importing that peer VNI whose import prefixes contain the route,
-// installs it into the local table UNLESS a local (own) route already holds that exact key. Local
-// routes always win.
+// applyPeer handles the peer-import side of a RouteUpdate whose VNI is imported by some LOCAL vni: it
+// records the raw learned peer route (for later restore) and, for each LOCAL vni importing that peer
+// VNI whose import prefixes contain the route, installs it into the importer's local table UNLESS a
+// local (own) route already holds that exact key. Local routes always win. This runs IN ADDITION to
+// the own install into ru.Vni's own table (see apply): the two target different tables, so a VNI that
+// is both a local table and a peer VNI (co-resident peered VPCs) gets both without conflict.
 func (b *Bus) applyPeer(ctx context.Context, ru *rbv1.RouteUpdate, nh string, importers []importer) {
 	switch ru.Op {
 	case rbv1.RouteOp_ROUTE_OP_ADD:

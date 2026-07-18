@@ -116,6 +116,45 @@ func TestPeeringImport_EvictAndRestore(t *testing.T) {
 	}
 }
 
+// (d) Dual-role VNI: when this node hosts guests in BOTH peered VPCs, a RouteUpdate on VNI-A (its own
+// table) must install into A's OWN table AND import into B's table (B imports A). Both, not either.
+func TestPeeringImport_DualRoleVNIInstallsBoth(t *testing.T) {
+	ctx := context.Background()
+	dp := newRecordingDP()
+	b := NewBus("nodeA", "fd00::a", dp, false)
+	// Node hosts VPC-A (local VNI 100) and VPC-B (local VNI 200); B imports A.
+	setPeerImports(b, map[uint32][]PeerImport{
+		200: {{PeerVNI: 100, ImportPrefixes: []string{"10.0.0.0/24"}}},
+	})
+
+	// An A-guest host route arrives on VNI 100.
+	deliverOwn(ctx, b, 100, "10.0.0.5/32", "fd00::nh")
+
+	// Own install into A's OWN table (vni=100).
+	if nh, ok := dp.get(100, "10.0.0.5/32"); !ok || nh != "fd00::nh" {
+		t.Fatalf("own install into A's table (vni=100) must happen; got %q ok=%v", nh, ok)
+	}
+	if b.origin[100]["10.0.0.5/32"] != "own" {
+		t.Fatalf("origin in A's table must be own; got %q", b.origin[100]["10.0.0.5/32"])
+	}
+	// Peer import into B's table (vni=200).
+	if nh, ok := dp.get(200, "10.0.0.5/32"); !ok || nh != "fd00::nh" {
+		t.Fatalf("peer import into B's table (vni=200) must ALSO happen; got %q ok=%v", nh, ok)
+	}
+	if b.origin[200]["10.0.0.5/32"] != "peer" {
+		t.Fatalf("origin in B's table must be peer; got %q", b.origin[200]["10.0.0.5/32"])
+	}
+
+	// The withdraw must clear BOTH tables (assert via withdrew: the fake never deletes from `added`).
+	withdrawOwn(ctx, b, 100, "10.0.0.5/32")
+	if !dp.withdrew[key(100, "10.0.0.5/32")] {
+		t.Fatalf("withdraw must clear A's own route (vni=100)")
+	}
+	if !dp.withdrew[key(200, "10.0.0.5/32")] {
+		t.Fatalf("withdraw must clear B's imported route (vni=200)")
+	}
+}
+
 // lastAdd returns the last recorded AddRoute for a prefix (nil if none).
 func lastAdd(dp *recordingDP, prefix string) *routeCall {
 	dp.mu.Lock()

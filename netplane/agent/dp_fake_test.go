@@ -137,7 +137,7 @@ func (f *recordingDP) get(vni uint32, prefix string) (string, bool) {
 	v, ok := f.added[key(vni, prefix)]
 	return v, ok
 }
-func key(vni uint32, prefix string) string { return prefix } // vni fixed at 100 in the test
+func key(vni uint32, prefix string) string { return fmt.Sprintf("%d %s", vni, prefix) } // VNI-aware: dual-role tests need per-table keys
 
 func (f *recordingDP) AddLbVip(ctx context.Context, id string, vni uint32, vip, lbUnderlay string, ports []LbPort) error {
 	f.mu.Lock()
