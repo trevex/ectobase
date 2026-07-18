@@ -28,9 +28,9 @@ type Reconciler struct {
 	// appliedLbVips tracks the LB VIPs (id == VIP) this edge has AddLbVip'd, so ReconcileLB adds new
 	// ones, deletes removed ones, and never re-adds (create_lb rejects duplicate ids).
 	appliedLbVips map[string][]LbPort
-	// appliedMeter tracks the last per-interface bandwidth cap pushed so ReconcileMeter only calls
-	// ConfigureMeter when a NIC's Bandwidth spec changes (level-triggered convergence).
-	appliedMeter map[string]netv1.InterfaceBandwidth // interfaceID -> last-applied caps
+	// appliedQoS tracks the last per-interface QoS pushed so ReconcileQoS only calls ConfigureQoS
+	// when a NIC's QoS spec changes (level-triggered convergence).
+	appliedQoS map[string]netv1.InterfaceQoS // interfaceID -> last-applied QoS
 }
 
 // Deps carries the runtime dependencies wired into a Reconciler at construction.

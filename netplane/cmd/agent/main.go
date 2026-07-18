@@ -82,8 +82,8 @@ func main() {
 		if err := r.ReconcileLB(ctx); err != nil {
 			log.Printf("reconcile lb: %v", err)
 		}
-		if err := r.ReconcileMeter(ctx); err != nil {
-			log.Printf("reconcile meter: %v", err)
+		if err := r.ReconcileQoS(ctx); err != nil {
+			log.Printf("reconcile qos: %v", err)
 		}
 		pubs, err := r.DesiredPublic(ctx)
 		if err != nil {
