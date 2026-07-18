@@ -10,10 +10,10 @@ use pb::{
     AddFwRuleRequest, AddFwRuleResponse, AddLbBackendRequest, AddLbBackendResponse,
     AddLbVipRequest, AddLbVipResponse, AddNatSourceRequest, AddNatSourceResponse,
     AddNeighborNatRequest, AddNeighborNatResponse, AddRouteRequest, AddRouteResponse,
-    AttachInterfaceRequest, AttachInterfaceResponse, ConfigureMeterRequest, ConfigureMeterResponse,
-    ConfigureNetworkRequest, ConfigureNetworkResponse, DelFwRuleRequest, DelFwRuleResponse,
-    DelLbBackendRequest, DelLbBackendResponse, DelLbVipRequest, DelLbVipResponse,
-    DetachInterfaceRequest, DetachInterfaceResponse, WithdrawNatSourceRequest,
+    AttachInterfaceRequest, AttachInterfaceResponse, ConfigureNetworkRequest,
+    ConfigureNetworkResponse, ConfigureQoSRequest, ConfigureQoSResponse, DelFwRuleRequest,
+    DelFwRuleResponse, DelLbBackendRequest, DelLbBackendResponse, DelLbVipRequest,
+    DelLbVipResponse, DetachInterfaceRequest, DetachInterfaceResponse, WithdrawNatSourceRequest,
     WithdrawNatSourceResponse, WithdrawNeighborNatRequest, WithdrawNeighborNatResponse,
     WithdrawRouteRequest, WithdrawRouteResponse,
 };
@@ -511,10 +511,10 @@ impl DataplaneNode for NodeService {
         Ok(Response::new(DelFwRuleResponse {}))
     }
 
-    async fn configure_meter(
+    async fn configure_qo_s(
         &self,
-        req: Request<ConfigureMeterRequest>,
-    ) -> Result<Response<ConfigureMeterResponse>, Status> {
+        req: Request<ConfigureQoSRequest>,
+    ) -> Result<Response<ConfigureQoSResponse>, Status> {
         let attach = self
             .attach
             .as_ref()
@@ -522,21 +522,22 @@ impl DataplaneNode for NodeService {
             .clone();
         let r = req.into_inner();
         let iface = r.interface_id.clone().into_bytes();
-        let total_mbps = r.total_mbps as u64;
+        let egress_mbps = r.egress_mbps as u64;
         let public_mbps = r.public_mbps as u64;
+        let ingress_mbps = r.ingress_mbps as u64;
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            // Resolve interface_id -> ifindex + program the METER map via the same control path
-            // (and mbps->MeterState conversion) the --meter CLI uses. 0/0 = unlimited (clears).
-            attach.control.set_qos(&iface, total_mbps, public_mbps, 0)
+            attach
+                .control
+                .set_qos(&iface, egress_mbps, public_mbps, ingress_mbps)
         })
         .await
-        .map_err(|e| Status::internal(format!("configure_meter task panicked: {e}")))?
+        .map_err(|e| Status::internal(format!("configure_qos task panicked: {e}")))?
         .map_err(|e| Status::internal(e.to_string()))?;
         println!(
-            "METER configure iface={} total_mbps={} public_mbps={}",
-            r.interface_id, r.total_mbps, r.public_mbps
+            "QOS configure iface={} egress_mbps={} public_mbps={} ingress_mbps={}",
+            r.interface_id, r.egress_mbps, r.public_mbps, r.ingress_mbps
         );
-        Ok(Response::new(ConfigureMeterResponse {}))
+        Ok(Response::new(ConfigureQoSResponse {}))
     }
 }
 

@@ -34,7 +34,7 @@ const (
 	DataplaneNode_DelLbBackend_FullMethodName        = "/dataplane.v1.DataplaneNode/DelLbBackend"
 	DataplaneNode_AddFwRule_FullMethodName           = "/dataplane.v1.DataplaneNode/AddFwRule"
 	DataplaneNode_DelFwRule_FullMethodName           = "/dataplane.v1.DataplaneNode/DelFwRule"
-	DataplaneNode_ConfigureMeter_FullMethodName      = "/dataplane.v1.DataplaneNode/ConfigureMeter"
+	DataplaneNode_ConfigureQoS_FullMethodName        = "/dataplane.v1.DataplaneNode/ConfigureQoS"
 )
 
 // DataplaneNodeClient is the client API for DataplaneNode service.
@@ -81,10 +81,9 @@ type DataplaneNodeClient interface {
 	AddFwRule(ctx context.Context, in *AddFwRuleRequest, opts ...grpc.CallOption) (*AddFwRuleResponse, error)
 	// DelFwRule removes a per-interface firewall rule by id.
 	DelFwRule(ctx context.Context, in *DelFwRuleRequest, opts ...grpc.CallOption) (*DelFwRuleResponse, error)
-	// ConfigureMeter sets (or clears) the egress bandwidth cap for a locally-attached interface by
-	// programming its METER token-bucket. Idempotent: re-configuring replaces the caps. Both rates
-	// 0 = unlimited (the datapath treats bps==0 as pass), which also clears an existing meter.
-	ConfigureMeter(ctx context.Context, in *ConfigureMeterRequest, opts ...grpc.CallOption) (*ConfigureMeterResponse, error)
+	// ConfigureQoS sets (or clears) the per-interface QoS lanes. egress_mbps is EDT-shaped; public and
+	// ingress are token-bucket policed. All 0 = unlimited (clears the entry). Idempotent.
+	ConfigureQoS(ctx context.Context, in *ConfigureQoSRequest, opts ...grpc.CallOption) (*ConfigureQoSResponse, error)
 }
 
 type dataplaneNodeClient struct {
@@ -245,10 +244,10 @@ func (c *dataplaneNodeClient) DelFwRule(ctx context.Context, in *DelFwRuleReques
 	return out, nil
 }
 
-func (c *dataplaneNodeClient) ConfigureMeter(ctx context.Context, in *ConfigureMeterRequest, opts ...grpc.CallOption) (*ConfigureMeterResponse, error) {
+func (c *dataplaneNodeClient) ConfigureQoS(ctx context.Context, in *ConfigureQoSRequest, opts ...grpc.CallOption) (*ConfigureQoSResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ConfigureMeterResponse)
-	err := c.cc.Invoke(ctx, DataplaneNode_ConfigureMeter_FullMethodName, in, out, cOpts...)
+	out := new(ConfigureQoSResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_ConfigureQoS_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -299,10 +298,9 @@ type DataplaneNodeServer interface {
 	AddFwRule(context.Context, *AddFwRuleRequest) (*AddFwRuleResponse, error)
 	// DelFwRule removes a per-interface firewall rule by id.
 	DelFwRule(context.Context, *DelFwRuleRequest) (*DelFwRuleResponse, error)
-	// ConfigureMeter sets (or clears) the egress bandwidth cap for a locally-attached interface by
-	// programming its METER token-bucket. Idempotent: re-configuring replaces the caps. Both rates
-	// 0 = unlimited (the datapath treats bps==0 as pass), which also clears an existing meter.
-	ConfigureMeter(context.Context, *ConfigureMeterRequest) (*ConfigureMeterResponse, error)
+	// ConfigureQoS sets (or clears) the per-interface QoS lanes. egress_mbps is EDT-shaped; public and
+	// ingress are token-bucket policed. All 0 = unlimited (clears the entry). Idempotent.
+	ConfigureQoS(context.Context, *ConfigureQoSRequest) (*ConfigureQoSResponse, error)
 	mustEmbedUnimplementedDataplaneNodeServer()
 }
 
@@ -358,8 +356,8 @@ func (UnimplementedDataplaneNodeServer) AddFwRule(context.Context, *AddFwRuleReq
 func (UnimplementedDataplaneNodeServer) DelFwRule(context.Context, *DelFwRuleRequest) (*DelFwRuleResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DelFwRule not implemented")
 }
-func (UnimplementedDataplaneNodeServer) ConfigureMeter(context.Context, *ConfigureMeterRequest) (*ConfigureMeterResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ConfigureMeter not implemented")
+func (UnimplementedDataplaneNodeServer) ConfigureQoS(context.Context, *ConfigureQoSRequest) (*ConfigureQoSResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConfigureQoS not implemented")
 }
 func (UnimplementedDataplaneNodeServer) mustEmbedUnimplementedDataplaneNodeServer() {}
 func (UnimplementedDataplaneNodeServer) testEmbeddedByValue()                       {}
@@ -652,20 +650,20 @@ func _DataplaneNode_DelFwRule_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DataplaneNode_ConfigureMeter_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ConfigureMeterRequest)
+func _DataplaneNode_ConfigureQoS_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfigureQoSRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(DataplaneNodeServer).ConfigureMeter(ctx, in)
+		return srv.(DataplaneNodeServer).ConfigureQoS(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: DataplaneNode_ConfigureMeter_FullMethodName,
+		FullMethod: DataplaneNode_ConfigureQoS_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DataplaneNodeServer).ConfigureMeter(ctx, req.(*ConfigureMeterRequest))
+		return srv.(DataplaneNodeServer).ConfigureQoS(ctx, req.(*ConfigureQoSRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -738,8 +736,8 @@ var DataplaneNode_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _DataplaneNode_DelFwRule_Handler,
 		},
 		{
-			MethodName: "ConfigureMeter",
-			Handler:    _DataplaneNode_ConfigureMeter_Handler,
+			MethodName: "ConfigureQoS",
+			Handler:    _DataplaneNode_ConfigureQoS_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

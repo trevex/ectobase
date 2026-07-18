@@ -1619,29 +1619,32 @@ func (*WithdrawNeighborNatResponse) Descriptor() ([]byte, []int) {
 	return file_dataplane_proto_rawDescGZIP(), []int{30}
 }
 
-type ConfigureMeterRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	InterfaceId   string                 `protobuf:"bytes,1,opt,name=interface_id,json=interfaceId,proto3" json:"interface_id,omitempty"` // target interface (as in AttachInterface)
-	TotalMbps     uint32                 `protobuf:"varint,2,opt,name=total_mbps,json=totalMbps,proto3" json:"total_mbps,omitempty"`      // total egress cap in Mbit/s; 0 = unlimited
-	PublicMbps    uint32                 `protobuf:"varint,3,opt,name=public_mbps,json=publicMbps,proto3" json:"public_mbps,omitempty"`   // public (external/NATed) egress cap in Mbit/s; 0 = unlimited
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+type ConfigureQoSRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	InterfaceId    string                 `protobuf:"bytes,1,opt,name=interface_id,json=interfaceId,proto3" json:"interface_id,omitempty"`             // target interface (as in AttachInterface)
+	EgressMbps     uint32                 `protobuf:"varint,2,opt,name=egress_mbps,json=egressMbps,proto3" json:"egress_mbps,omitempty"`               // EDT-shaped total egress in Mbit/s; 0 = unlimited
+	PublicMbps     uint32                 `protobuf:"varint,3,opt,name=public_mbps,json=publicMbps,proto3" json:"public_mbps,omitempty"`               // external/NATed egress policer in Mbit/s; 0 = unlimited
+	IngressMbps    uint32                 `protobuf:"varint,4,opt,name=ingress_mbps,json=ingressMbps,proto3" json:"ingress_mbps,omitempty"`            // ingress policer in Mbit/s; 0 = unlimited
+	EgressBurstKb  uint32                 `protobuf:"varint,5,opt,name=egress_burst_kb,json=egressBurstKb,proto3" json:"egress_burst_kb,omitempty"`    // reserved (EDT ignores in v1); 0 = default
+	IngressBurstKb uint32                 `protobuf:"varint,6,opt,name=ingress_burst_kb,json=ingressBurstKb,proto3" json:"ingress_burst_kb,omitempty"` // reserved (default burst in v1); 0 = default
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
-func (x *ConfigureMeterRequest) Reset() {
-	*x = ConfigureMeterRequest{}
+func (x *ConfigureQoSRequest) Reset() {
+	*x = ConfigureQoSRequest{}
 	mi := &file_dataplane_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ConfigureMeterRequest) String() string {
+func (x *ConfigureQoSRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ConfigureMeterRequest) ProtoMessage() {}
+func (*ConfigureQoSRequest) ProtoMessage() {}
 
-func (x *ConfigureMeterRequest) ProtoReflect() protoreflect.Message {
+func (x *ConfigureQoSRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_dataplane_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1653,52 +1656,73 @@ func (x *ConfigureMeterRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ConfigureMeterRequest.ProtoReflect.Descriptor instead.
-func (*ConfigureMeterRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use ConfigureQoSRequest.ProtoReflect.Descriptor instead.
+func (*ConfigureQoSRequest) Descriptor() ([]byte, []int) {
 	return file_dataplane_proto_rawDescGZIP(), []int{31}
 }
 
-func (x *ConfigureMeterRequest) GetInterfaceId() string {
+func (x *ConfigureQoSRequest) GetInterfaceId() string {
 	if x != nil {
 		return x.InterfaceId
 	}
 	return ""
 }
 
-func (x *ConfigureMeterRequest) GetTotalMbps() uint32 {
+func (x *ConfigureQoSRequest) GetEgressMbps() uint32 {
 	if x != nil {
-		return x.TotalMbps
+		return x.EgressMbps
 	}
 	return 0
 }
 
-func (x *ConfigureMeterRequest) GetPublicMbps() uint32 {
+func (x *ConfigureQoSRequest) GetPublicMbps() uint32 {
 	if x != nil {
 		return x.PublicMbps
 	}
 	return 0
 }
 
-type ConfigureMeterResponse struct {
+func (x *ConfigureQoSRequest) GetIngressMbps() uint32 {
+	if x != nil {
+		return x.IngressMbps
+	}
+	return 0
+}
+
+func (x *ConfigureQoSRequest) GetEgressBurstKb() uint32 {
+	if x != nil {
+		return x.EgressBurstKb
+	}
+	return 0
+}
+
+func (x *ConfigureQoSRequest) GetIngressBurstKb() uint32 {
+	if x != nil {
+		return x.IngressBurstKb
+	}
+	return 0
+}
+
+type ConfigureQoSResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ConfigureMeterResponse) Reset() {
-	*x = ConfigureMeterResponse{}
+func (x *ConfigureQoSResponse) Reset() {
+	*x = ConfigureQoSResponse{}
 	mi := &file_dataplane_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ConfigureMeterResponse) String() string {
+func (x *ConfigureQoSResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ConfigureMeterResponse) ProtoMessage() {}
+func (*ConfigureQoSResponse) ProtoMessage() {}
 
-func (x *ConfigureMeterResponse) ProtoReflect() protoreflect.Message {
+func (x *ConfigureQoSResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_dataplane_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1710,8 +1734,8 @@ func (x *ConfigureMeterResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ConfigureMeterResponse.ProtoReflect.Descriptor instead.
-func (*ConfigureMeterResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use ConfigureQoSResponse.ProtoReflect.Descriptor instead.
+func (*ConfigureQoSResponse) Descriptor() ([]byte, []int) {
 	return file_dataplane_proto_rawDescGZIP(), []int{32}
 }
 
@@ -1814,14 +1838,17 @@ const file_dataplane_proto_rawDesc = "" +
 	"\bport_min\x18\x02 \x01(\rR\aportMin\x12\x19\n" +
 	"\bport_max\x18\x03 \x01(\rR\aportMax\x12\x10\n" +
 	"\x03vni\x18\x04 \x01(\rR\x03vni\"\x1d\n" +
-	"\x1bWithdrawNeighborNatResponse\"z\n" +
-	"\x15ConfigureMeterRequest\x12!\n" +
-	"\finterface_id\x18\x01 \x01(\tR\vinterfaceId\x12\x1d\n" +
-	"\n" +
-	"total_mbps\x18\x02 \x01(\rR\ttotalMbps\x12\x1f\n" +
+	"\x1bWithdrawNeighborNatResponse\"\xef\x01\n" +
+	"\x13ConfigureQoSRequest\x12!\n" +
+	"\finterface_id\x18\x01 \x01(\tR\vinterfaceId\x12\x1f\n" +
+	"\vegress_mbps\x18\x02 \x01(\rR\n" +
+	"egressMbps\x12\x1f\n" +
 	"\vpublic_mbps\x18\x03 \x01(\rR\n" +
-	"publicMbps\"\x18\n" +
-	"\x16ConfigureMeterResponse2\x9a\v\n" +
+	"publicMbps\x12!\n" +
+	"\fingress_mbps\x18\x04 \x01(\rR\vingressMbps\x12&\n" +
+	"\x0fegress_burst_kb\x18\x05 \x01(\rR\regressBurstKb\x12(\n" +
+	"\x10ingress_burst_kb\x18\x06 \x01(\rR\x0eingressBurstKb\"\x16\n" +
+	"\x14ConfigureQoSResponse2\x94\v\n" +
 	"\rDataplaneNode\x12^\n" +
 	"\x0fAttachInterface\x12$.dataplane.v1.AttachInterfaceRequest\x1a%.dataplane.v1.AttachInterfaceResponse\x12^\n" +
 	"\x0fDetachInterface\x12$.dataplane.v1.DetachInterfaceRequest\x1a%.dataplane.v1.DetachInterfaceResponse\x12a\n" +
@@ -1837,8 +1864,8 @@ const file_dataplane_proto_rawDesc = "" +
 	"\bDelLbVip\x12\x1d.dataplane.v1.DelLbVipRequest\x1a\x1e.dataplane.v1.DelLbVipResponse\x12U\n" +
 	"\fDelLbBackend\x12!.dataplane.v1.DelLbBackendRequest\x1a\".dataplane.v1.DelLbBackendResponse\x12L\n" +
 	"\tAddFwRule\x12\x1e.dataplane.v1.AddFwRuleRequest\x1a\x1f.dataplane.v1.AddFwRuleResponse\x12L\n" +
-	"\tDelFwRule\x12\x1e.dataplane.v1.DelFwRuleRequest\x1a\x1f.dataplane.v1.DelFwRuleResponse\x12[\n" +
-	"\x0eConfigureMeter\x12#.dataplane.v1.ConfigureMeterRequest\x1a$.dataplane.v1.ConfigureMeterResponseB<Z:github.com/trevex/ectobase/cni/gen/dataplanev1;dataplanev1b\x06proto3"
+	"\tDelFwRule\x12\x1e.dataplane.v1.DelFwRuleRequest\x1a\x1f.dataplane.v1.DelFwRuleResponse\x12U\n" +
+	"\fConfigureQoS\x12!.dataplane.v1.ConfigureQoSRequest\x1a\".dataplane.v1.ConfigureQoSResponseB<Z:github.com/trevex/ectobase/cni/gen/dataplanev1;dataplanev1b\x06proto3"
 
 var (
 	file_dataplane_proto_rawDescOnce sync.Once
@@ -1885,8 +1912,8 @@ var file_dataplane_proto_goTypes = []any{
 	(*AddNeighborNatResponse)(nil),      // 28: dataplane.v1.AddNeighborNatResponse
 	(*WithdrawNeighborNatRequest)(nil),  // 29: dataplane.v1.WithdrawNeighborNatRequest
 	(*WithdrawNeighborNatResponse)(nil), // 30: dataplane.v1.WithdrawNeighborNatResponse
-	(*ConfigureMeterRequest)(nil),       // 31: dataplane.v1.ConfigureMeterRequest
-	(*ConfigureMeterResponse)(nil),      // 32: dataplane.v1.ConfigureMeterResponse
+	(*ConfigureQoSRequest)(nil),         // 31: dataplane.v1.ConfigureQoSRequest
+	(*ConfigureQoSResponse)(nil),        // 32: dataplane.v1.ConfigureQoSResponse
 }
 var file_dataplane_proto_depIdxs = []int32{
 	0,  // 0: dataplane.v1.AddLbVipRequest.ports:type_name -> dataplane.v1.PortProto
@@ -1905,7 +1932,7 @@ var file_dataplane_proto_depIdxs = []int32{
 	7,  // 13: dataplane.v1.DataplaneNode.DelLbBackend:input_type -> dataplane.v1.DelLbBackendRequest
 	9,  // 14: dataplane.v1.DataplaneNode.AddFwRule:input_type -> dataplane.v1.AddFwRuleRequest
 	11, // 15: dataplane.v1.DataplaneNode.DelFwRule:input_type -> dataplane.v1.DelFwRuleRequest
-	31, // 16: dataplane.v1.DataplaneNode.ConfigureMeter:input_type -> dataplane.v1.ConfigureMeterRequest
+	31, // 16: dataplane.v1.DataplaneNode.ConfigureQoS:input_type -> dataplane.v1.ConfigureQoSRequest
 	14, // 17: dataplane.v1.DataplaneNode.AttachInterface:output_type -> dataplane.v1.AttachInterfaceResponse
 	16, // 18: dataplane.v1.DataplaneNode.DetachInterface:output_type -> dataplane.v1.DetachInterfaceResponse
 	18, // 19: dataplane.v1.DataplaneNode.ConfigureNetwork:output_type -> dataplane.v1.ConfigureNetworkResponse
@@ -1921,7 +1948,7 @@ var file_dataplane_proto_depIdxs = []int32{
 	8,  // 29: dataplane.v1.DataplaneNode.DelLbBackend:output_type -> dataplane.v1.DelLbBackendResponse
 	10, // 30: dataplane.v1.DataplaneNode.AddFwRule:output_type -> dataplane.v1.AddFwRuleResponse
 	12, // 31: dataplane.v1.DataplaneNode.DelFwRule:output_type -> dataplane.v1.DelFwRuleResponse
-	32, // 32: dataplane.v1.DataplaneNode.ConfigureMeter:output_type -> dataplane.v1.ConfigureMeterResponse
+	32, // 32: dataplane.v1.DataplaneNode.ConfigureQoS:output_type -> dataplane.v1.ConfigureQoSResponse
 	17, // [17:33] is the sub-list for method output_type
 	1,  // [1:17] is the sub-list for method input_type
 	1,  // [1:1] is the sub-list for extension type_name
