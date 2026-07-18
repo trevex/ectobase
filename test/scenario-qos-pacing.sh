@@ -13,16 +13,23 @@
 #     D. EGRESS WORKS  : with a cap programmed, a guest TCP flow still egresses (wget an external
 #                        host through SNAT + the WAN edge) — proves the QoS-programmed tcx datapath
 #                        forwards, not drops-all.
-#   BEST-EFFORT (informational, NOT a hard assert — clab CANNOT reliably measure it):
-#     E. THROUGHPUT    : a bulk guest upload measured at a sink. In clab the only easy sink is the
-#                        clabwan HOST IP (172.29.0.1), and a bulk TCP upload to the host-self through
-#                        the double-NAT return path does not land reliably (ICMP + real-internet
-#                        egress DO). So the achieved-rate-vs-cap number — the actual proof of EDT
-#                        pacing vs policing — remains a REAL-HARDWARE measurement (Task 15). This
-#                        step measures + reports what it can and never fails the run.
+#   BEST-EFFORT (informational, NOT a hard assert — clab still can't PROVE veth EDT pacing):
+#     E. THROUGHPUT    : iperf3 UDP from the guest at a target rate ABOVE the cap, received-rate +
+#                        loss measured at a DEDICATED sink on the clabwan "internet" bridge
+#                        (172.29.0.100 in its own netns) — NOT the host-self IP (172.29.0.1), whose
+#                        double-NAT/host-local return path silently drops bulk TCP uploads (an
+#                        earlier busybox+socat attempt hit exactly that; ICMP + real-internet egress
+#                        DO work). UDP-at-target-rate is the textbook shaper-vs-policer probe: it
+#                        removes the TCP-congestion-control confound. Expected at cap=C:
+#                          - EDT egress (egress.rateMbps=C): received ~C Mbps, LOW loss (fq paces)
+#                          - Policing  (publicMbps=C):       received ~C Mbps, HIGH loss (drops)
+#                        Reported, not asserted, until validated on real hardware (Task 15). Falls
+#                        back to a note if iperf3 can't be staged.
 #
 # PREREQ: fabric up (hack/clab-up.sh) + netplane stack on k01 built from THIS tree (the QoS code) +
-#   images kind-loaded. Needs root + kubectl + grpcurl image + socat (flake devShell).
+#   images kind-loaded. Needs root + kubectl + grpcurl image + socat (flake devShell). For [E], a
+#   static iperf3 is fetched via `nix build nixpkgs#pkgsStatic.iperf3` (portable across the host netns
+#   + the kind node); if that's unavailable [E] is skipped with a note.
 #   sudo -E env "PATH=/run/wrappers/bin:$HOME/go/bin:/run/current-system/sw/bin:$PATH" bash test/scenario-qos-pacing.sh
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
@@ -31,7 +38,10 @@ VNI=100; NIC=qospod; SRC_NODE=k01-worker; SRC_IP=10.0.0.5
 NAT_IP=203.0.113.1
 CAP_MBPS="${CAP_MBPS:-20}"
 INET_HTTP="${INET_HTTP:-1.1.1.1}"   # a real external host reachable through the WAN edge (egress proof)
-SINK_HOST=172.29.0.1; SINK_PORT=5206; WIN=10   # best-effort upload sink (clabwan host)
+# [E] iperf3 UDP throughput: dedicated sink on the clabwan bridge (its own netns + IP), NOT host-self.
+SINK_NS=qossink; SINK_IP=172.29.0.100; SINK_BR=clabwan; SINK_PORT=5201
+UDP_TARGET="${UDP_TARGET:-100}"     # UDP offered load (Mbps), well above CAP_MBPS so the cap binds
+IPERF_T="${IPERF_T:-8}"             # test duration (s)
 PROTO="$ROOT/api/proto"
 K1=$(mktemp)
 RESULT=0
@@ -40,6 +50,57 @@ kc() { kubectl --kubeconfig "$K1" "$@"; }
 grpc() { sudo docker run --rm --network "container:$1" -v "$PROTO":/proto:ro fullstorydev/grpcurl:latest \
   -plaintext -import-path /proto/dataplane/v1 -proto dataplane.proto -d "$2" 127.0.0.1:1337 "dataplane.v1.DataplaneNode/$3" 2>&1; }
 xw() { sudo docker exec "$SRC_NODE" crictl ps 2>/dev/null | grep ' flowplane ' | awk '{print $1}' | head -1; }
+
+# --- [E] iperf3 sink helpers -------------------------------------------------------------------
+IPERF3=""   # resolved host path to a portable (static) iperf3, if available
+stage_iperf3() {
+  # A fully-static iperf3 runs unmodified in both the host netns sink AND the debian kind node.
+  IPERF3=$(nix build --no-link --print-out-paths nixpkgs#pkgsStatic.iperf3 2>/dev/null)/bin/iperf3
+  [ -x "$IPERF3" ] || { IPERF3=""; return 1; }
+  sudo docker cp "$IPERF3" "$SRC_NODE":/iperf3 >/dev/null 2>&1 || return 1
+}
+sink_up() {
+  # A dedicated iperf3 endpoint on the clabwan "internet" bridge in its own netns (172.29.0.100),
+  # with a return route to the guest's NAT block via the two edges — behaves like a real external
+  # host (the wget-to-1.1.1.1 path), unlike the host-self IP whose masquerade eats bulk TCP uploads.
+  sudo ip netns del "$SINK_NS" 2>/dev/null || true
+  sudo ip link del "${SINK_NS}0" 2>/dev/null || true
+  sudo ip netns add "$SINK_NS"
+  sudo ip link add "${SINK_NS}0" type veth peer name "${SINK_NS}1"
+  sudo ip link set "${SINK_NS}0" master "$SINK_BR" up
+  sudo ip link set "${SINK_NS}1" netns "$SINK_NS"
+  sudo ip netns exec "$SINK_NS" ip addr add "$SINK_IP/24" dev "${SINK_NS}1"
+  sudo ip netns exec "$SINK_NS" ip link set "${SINK_NS}1" up
+  sudo ip netns exec "$SINK_NS" ip link set lo up
+  sudo ip netns exec "$SINK_NS" ip route replace 203.0.113.0/28 \
+    nexthop via 172.29.0.11 dev "${SINK_NS}1" nexthop via 172.29.0.12 dev "${SINK_NS}1"
+}
+sink_down() { sudo ip netns del "$SINK_NS" 2>/dev/null || true; sudo ip link del "${SINK_NS}0" 2>/dev/null || true; }
+set_qos_via_cr() { # egress_mbps public_mbps ingress_mbps — patch spec.qos + re-trigger ReconcileQoS
+  kc patch networkinterface "$NIC" --type=merge \
+    -p "{\"spec\":{\"qos\":{\"egress\":{\"rateMbps\":$1,\"publicMbps\":$2},\"ingress\":{\"rateMbps\":$3}}}}" >/dev/null
+  kc -n ectobase-system rollout restart ds/netplane-agent >/dev/null 2>&1
+  kc -n ectobase-system rollout status ds/netplane-agent --timeout=60s >/dev/null 2>&1
+  sleep 3
+}
+trap 'sink_down' EXIT   # always tear the [E] sink netns/veth down, even on early exit
+udp_run() { # $1 = qos-lane label (for logging); server received-rate + loss via iperf3 -J at the sink
+  local out srv
+  sudo ip netns exec "$SINK_NS" "$IPERF3" -s --one-off -J >/tmp/qos-iperf.json 2>/dev/null &
+  srv=$!; sleep 1
+  sudo docker exec "$SRC_NODE" ip netns exec "$NIC" /iperf3 -u -b "${UDP_TARGET}M" -t "$IPERF_T" -l 1200 \
+    -c "$SINK_IP" >/dev/null 2>&1 || true
+  wait $srv 2>/dev/null || true
+  # Parse the server's received throughput + loss from iperf3 JSON (python3 from the flake pythonEnv).
+  python3 - <<'PY' 2>/dev/null || echo "parse-failed"
+import json,sys
+try:
+    d=json.load(open("/tmp/qos-iperf.json")); s=d["end"]["sum"]
+    print("%.1f Mbit/s, %.1f%% loss" % (s["bits_per_second"]/1e6, s.get("lost_percent",0.0)))
+except Exception:
+    print("no-data")
+PY
+}
 
 echo "== [0] kubeconfig + stack =="
 sudo -E env "PATH=$PATH" kind get kubeconfig --name k01 > "$K1" 2>/dev/null
@@ -124,21 +185,21 @@ echo "== [D] EGRESS WORKS through the QoS-programmed datapath: guest wget http:/
 RESP=$(sudo docker exec "$SRC_NODE" ip netns exec "$NIC" /busybox wget -T 8 -S -O /dev/null "http://$INET_HTTP/" 2>&1 | grep -iE "HTTP/" | head -1)
 if echo "$RESP" | grep -qiE "HTTP/"; then echo "  $RESP"; echo "  [D] PASS"; else fail "[D] guest TCP egress failed (no HTTP response from $INET_HTTP)"; fi
 
-echo "== [E] THROUGHPUT (best-effort, NOT asserted — clab host-sink return path is unreliable) =="
-# Fixed-window upload to a non-sudo socat sink on the clabwan host (sudo strips the nix socat PATH).
-rm -f /tmp/qos-sink.bin; pkill -f "socat.*TCP-LISTEN:$SINK_PORT" 2>/dev/null || true
-timeout $((WIN+2)) socat -u TCP-LISTEN:$SINK_PORT,reuseaddr,fork OPEN:/tmp/qos-sink.bin,creat,append >/dev/null 2>&1 &
-SP=$!; sleep 1
-sudo docker exec "$SRC_NODE" ip netns exec "$NIC" sh -c \
-  "timeout $WIN sh -c 'dd if=/dev/zero bs=64k 2>/dev/null | /busybox nc $SINK_HOST $SINK_PORT'" >/dev/null 2>&1 || true
-sleep 1; kill $SP 2>/dev/null || true; pkill -f "socat.*TCP-LISTEN:$SINK_PORT" 2>/dev/null || true
-BYTES=$(stat -c%s /tmp/qos-sink.bin 2>/dev/null || echo 0)
-MBPS=$(awk "BEGIN{printf \"%.1f\", ($BYTES*8)/$WIN/1000000}")
-if [ "$BYTES" -gt 0 ]; then
-  echo "  measured egress = ${MBPS} Mbit/s over ${WIN}s (cap=$CAP_MBPS)  [informational]"
+echo "== [E] THROUGHPUT via iperf3 UDP -> clabwan sink (informational; shaper-vs-policer probe) =="
+if stage_iperf3; then
+  sink_up
+  echo "  sink up: iperf3 -s @ $SINK_IP (netns $SINK_NS on $SINK_BR); UDP offered=${UDP_TARGET}M, cap=${CAP_MBPS}"
+  # EDT lane: egress.rateMbps=cap, public unlimited -> fq should pace to ~cap with LOW loss.
+  set_qos_via_cr "$CAP_MBPS" 0 0
+  echo "  EDT egress=${CAP_MBPS}M   -> $(udp_run edt)   (expect ~${CAP_MBPS} Mbit/s, low loss = pacing)"
+  # Public lane: publicMbps=cap, egress unlimited -> token-bucket drops -> ~cap with HIGH loss.
+  set_qos_via_cr 0 "$CAP_MBPS" 0
+  echo "  POLICE public=${CAP_MBPS}M -> $(udp_run police)   (expect ~${CAP_MBPS} Mbit/s, high loss = policing)"
+  sink_down
+  echo "  [E] informational — assert on real hardware (clab veth EDT pacing is not yet proven)."
 else
-  echo "  no bytes at sink — clab host-sink upload path did not land (expected; ICMP + real-internet"
-  echo "  egress DO work — see [D]). Precise EDT pacing rate is a real-hardware measurement."
+  echo "  iperf3 unavailable (nix build nixpkgs#pkgsStatic.iperf3 failed) — [E] skipped."
+  echo "  Datapath egress itself is proven by [D]. Precise pacing rate is a real-hardware measurement."
 fi
 
 echo "== summary =="
