@@ -370,7 +370,7 @@ pub struct FwMeta {
 /// the in-map array — 8 covers the conformance set + headroom).
 pub const DHCP_MAX_DNS: usize = 8;
 
-/// Tail-call indices into the `GUEST_PROGS` program array (egress datapath split).
+/// Tail-call indices into the `GUEST_PROGS_TC` program array (egress datapath split).
 /// `GUEST_PROG_DHCP` is used in Phase 1; IPV4/IPV6 are reserved for the Phase 2 split.
 pub const GUEST_PROG_DHCP: u32 = 0;
 pub const GUEST_PROG_IPV4: u32 = 1;

@@ -341,9 +341,10 @@ impl SimNode {
         // 6. Egress metering — mirrors the eBPF split in egress.rs + tc.rs:
         //    a) Public-lane policing (drop-on-exhaust, external only) — mirrors egress.rs `public_pass`.
         //    b) EDT egress shaping (records departure stamp, no drop) — mirrors tc.rs `edt_stamp`.
-        //    The `total` token-bucket (`meter_pass`) is no longer called: the eBPF path migrated the
-        //    total lane to EDT shaping, so `meter_state()` sets `total_burst=0`/`total_tokens=0`
-        //    (no bucket); calling `meter_pass` would clamp tokens to 0 and drop all capped egress.
+        //    The `total` token-bucket (`meter_pass`) has been removed: the eBPF path migrated to
+        //    EDT shaping and `meter_pass` had no remaining callers. `total_burst`/`total_tokens` are
+        //    still zeroed in `meter_state()` (no bucket field), so the old policing path would have
+        //    dropped all capped egress anyway.
         let frame_len = pkt.len() as u64;
         // a) Public-lane policing (external egress only) — mirrors egress.rs.
         if !flowplane_core::meter::public_pass(

@@ -22,6 +22,8 @@ func lanes(q netv1.InterfaceQoS) (egress, public, ingress uint32) {
 
 // qosEqual compares two InterfaceQoS by VALUE on the lanes we program (InterfaceQoS has pointer
 // fields, so `==` would compare pointers and defeat the idempotent-skip).
+// BurstKB is intentionally excluded: the adapter does not forward it and the dataplane ignores it
+// in v1; revisit when burst activation is implemented.
 func qosEqual(a, b netv1.InterfaceQoS) bool {
 	ae, ap, ai := lanes(a)
 	be, bp, bi := lanes(b)

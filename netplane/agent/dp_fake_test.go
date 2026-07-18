@@ -35,7 +35,7 @@ type recordingDP struct {
 }
 
 type qosCall struct {
-	iface                          string
+	iface                               string
 	egressMbps, publicMbps, ingressMbps uint32
 }
 
@@ -64,8 +64,8 @@ func newRecordingDP() *recordingDP {
 		nbrNat: map[string]string{}, nbrNatWd: map[string]bool{},
 		fwInstalled: map[string]bool{},
 		lbBackends:  map[string][]string{},
-		natSrc: map[string]natSrcCall{}, natSrcN: map[string]int{},
-		qos:    map[string]qosCall{}, qosN: map[string]int{},
+		natSrc:      map[string]natSrcCall{}, natSrcN: map[string]int{},
+		qos: map[string]qosCall{}, qosN: map[string]int{},
 	}
 }
 

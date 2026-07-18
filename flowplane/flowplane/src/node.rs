@@ -534,8 +534,8 @@ impl DataplaneNode for NodeService {
         .map_err(|e| Status::internal(format!("configure_qos task panicked: {e}")))?
         .map_err(|e| Status::internal(e.to_string()))?;
         println!(
-            "QOS configure iface={} egress_mbps={} public_mbps={} ingress_mbps={}",
-            r.interface_id, r.egress_mbps, r.public_mbps, r.ingress_mbps
+            "QOS configure iface={} egress_mbps={egress_mbps} public_mbps={public_mbps} ingress_mbps={ingress_mbps}",
+            r.interface_id
         );
         Ok(Response::new(ConfigureQoSResponse {}))
     }

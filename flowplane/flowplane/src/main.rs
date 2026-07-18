@@ -236,7 +236,7 @@ enum Cmd {
         #[arg(long = "guest6")]
         guests6: Vec<String>,
         /// Remote IPv6 route, repeatable: "<overlay_ipv6>[/len]=<nexthop_underlay_ipv6>=<vni>".
-        /// Programs the ROUTES6 LPM trie so v6_guest_tx can forward overlay IPv6 packets.
+        /// Programs the ROUTES6 LPM trie so tc_guest_tx can forward overlay IPv6 packets.
         #[arg(long = "remote6")]
         remotes6: Vec<String>,
         /// DHCP MTU option (server-wide). Defaults to 1500 if unset.

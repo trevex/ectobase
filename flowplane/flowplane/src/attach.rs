@@ -155,7 +155,7 @@ impl AttachState {
         }
 
         // Delegate map-programming + datapath-attach to the legacy Control path (attaches
-        // tc_guest_tx / guest_tx to the HOST-side veth and programs PORT_META/INTERFACES/UNDERLAY).
+        // tc_guest_tx to the HOST-side veth and programs PORT_META/INTERFACES/UNDERLAY).
         let params = IfaceParams {
             vni,
             ipv4,

@@ -141,7 +141,7 @@ struct D6Reply {
 }
 
 // Constant option bytes live in `.rodata` so `d6_emit` doesn't stage them on its stack — the
-// combined stack of `guest_tx` + `d6_emit` must stay under the BPF 512-byte limit, and a 50-byte
+// combined stack of `tc_guest_tx` + `d6_emit` must stay under the BPF 512-byte limit, and a 50-byte
 // IA_NA stack buffer pushed it to 592. store_bytes copies straight from these read-only sources.
 //
 // IA_NA template: opt(3)+len(46) | iaid(0) | t1=∞ | t2=∞ | IAADDR opt(5)+len(30) | addr(0) |
@@ -170,8 +170,8 @@ static URL_LBRACKET: [u8; 1] = [b'['];
 static URL_RBRACKET: [u8; 2] = [b']', b'/'];
 
 /// Compute and write the DHCPv6 reply's UDP checksum. A separate BPF subprogram (not nested under
-/// `d6_emit`) so its locals form their own short call chain with the large `guest_tx` frame rather
-/// than adding to `guest_tx + d6_emit` (the combined-stack 512-byte limit is the binding one here).
+/// `d6_emit`) so its locals form their own short call chain with the large `tc_guest_tx` frame rather
+/// than adding to `tc_guest_tx + d6_emit` (the combined-stack 512-byte limit is the binding one here).
 ///
 /// `data`/`data_end` are passed in (re-deriving via `ctx` in a subprogram trips the verifier — see
 /// `d6_parse`). Sums the IPv6 pseudo-header + UDP datagram over a CONSTANT number of words, folding

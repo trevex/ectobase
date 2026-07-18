@@ -2,8 +2,8 @@
 //! trait so the SAME logic runs in eBPF and natively.
 //!
 //! `MeterState` has three lanes per interface:
-//! - **`total`** — gates ALL egress; being migrated from token-bucket policing ([`meter_pass`]) to
-//!   EDT shaping ([`edt_egress`]). `meter_pass` is kept for now and removed in a later task.
+//! - **`total`** — EDT shaping of ALL egress ([`edt_egress`]); the old token-bucket `meter_pass`
+//!   was removed once eBPF and sim both migrated to EDT.
 //! - **`public`** — token-bucket POLICING of south-north / external egress ([`public_pass`],
 //!   checked only when `is_external`).
 //! - **`ingress`** — token-bucket POLICING of traffic delivered to the guest tap ([`ingress_pass`]).
@@ -134,57 +134,6 @@ pub fn ingress_pass<M: Maps>(maps: &mut M, ifindex: u32, len: u64, now: u64) -> 
     );
     m.ingress_tokens = tok;
     m.ingress_last_ns = now;
-    maps.meter_update(ifindex, m);
-    pass
-}
-
-/// Token-bucket rate check for `ifindex` sending a `len`-byte frame. Gates `total` always, `public`
-/// when `is_external`. `true` = pass, `false` = drop. No METER entry => unlimited (pass).
-///
-/// **Legacy two-bucket gate** (total + public). The `ingress` lane is not touched here. The `total`
-/// lane is being migrated to EDT shaping via [`edt_egress`]; `meter_pass` is kept for compatibility
-/// and will be removed in a later task once the eBPF/sim callers are updated.
-///
-/// Faithful port of the eBPF `meter::meter_pass`: reads `METER[ifindex]`, refills+spends the total
-/// bucket (and the public bucket when external) via [`take`], stamps `*_last_ns = now`, and writes
-/// the updated state back. `now` is the current monotonic time (ns); the eBPF wrapper passes
-/// `bpf_ktime_get_ns()`, the sim passes a controlled clock.
-#[inline(always)]
-pub fn meter_pass<M: Maps>(
-    maps: &mut M,
-    ifindex: u32,
-    len: u64,
-    is_external: bool,
-    now: u64,
-) -> bool {
-    let mut m: MeterState = match maps.meter_get(ifindex) {
-        Some(m) => m,
-        None => return true,
-    };
-    let (pass_t, tok_t) = take(
-        m.total_bps,
-        m.total_burst,
-        m.total_tokens,
-        m.total_last_ns,
-        now,
-        len,
-    );
-    m.total_tokens = tok_t;
-    m.total_last_ns = now;
-    let mut pass = pass_t;
-    if is_external {
-        let (pass_p, tok_p) = take(
-            m.public_bps,
-            m.public_burst,
-            m.public_tokens,
-            m.public_last_ns,
-            now,
-            len,
-        );
-        m.public_tokens = tok_p;
-        m.public_last_ns = now;
-        pass = pass && pass_p;
-    }
     maps.meter_update(ifindex, m);
     pass
 }

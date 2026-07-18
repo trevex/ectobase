@@ -7,7 +7,7 @@ use aya_ebpf::helpers::bpf_ktime_get_ns;
 /// EDT egress: compute+advance the departure schedule for `ifindex` sending `wire_len` bytes.
 /// Returns `Some(tstamp_ns)` when shaping is configured (caller sets `skb->tstamp`), else `None`.
 /// `#[inline(never)]`: the 96-byte `MeterState` local must live in this subprogram's own 512-byte
-/// BPF stack frame, not the entry program's (see Task 1's meter_pass fix).
+/// BPF stack frame, not the entry program's (keeps the entry frame under the 512-byte BPF limit).
 #[inline(never)]
 pub fn edt_stamp(ifindex: u32, wire_len: u64) -> Option<u64> {
     let now = unsafe { bpf_ktime_get_ns() };

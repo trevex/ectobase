@@ -14,7 +14,7 @@ ectobase is two planes — the `flowplane` datapath and the `netplane` control p
 **1. Datapath (`flowplane`, Rust/eBPF).** A map-driven kernel dataplane — every forwarding decision is a per-flow-keyed table lookup (the shape a SmartNIC `rte_flow` would encode). Programs:
 
 - **`uplink_rx`** — XDP on the fabric uplink: overlay → local guest (decap, deliver, LB local-deliver, NAT return). Edge nodes also attach **`wan_rx`** for the WAN↔overlay return path.
-- **`tc_guest_tx`** — **tcx (tc) on the guest tap/veth ingress = guest egress** (the default guest edge): firewall, SNAT/VIP, encap, redirect to the uplink. Legacy XDP **`guest_tx`** is the opt-out fallback (`FLOWPLANE_GUEST_TC=0`).
+- **`tc_guest_tx`** — **tcx (tc) on the guest tap/veth ingress = guest egress**: firewall, SNAT/VIP, encap, redirect to the uplink.
 - In-datapath responders (**ARP, IPv6 ND, DHCPv4/v6**), **conntrack**, **NAT-GW** (distributed return via neighbor-NAT), **VIP** (1:1 DNAT/SNAT), **load balancing** (Maglev, dpservice underlay-forwarding model), **NAT64**, **firewall** (stateful, deny-by-default), and **rate metering** (srTCM).
 - **Overlay:** IPv6 underlay, IP-in-IPv6 encap (inner-proto 4 for IPv4, 41 for IPv6), multi-VNI tenancy, same-host fast path.
 - **Graceful restart / HA:** state maps are pinned to bpffs and **adopted** on restart (bookkeeping rebuilt from an `IFACE_META` journal, IPAM reseeded so a live `/128` is never reissued), and the program **links are pinned** so a same-image restart is *zero forwarding gap* (atomic `bpf_link_update` re-point; new bytecode on a rolling upgrade). See `docs/superpowers/{specs,plans}/2026-07-16-*`.
@@ -34,7 +34,7 @@ ectobase is two planes — the `flowplane` datapath and the `netplane` control p
 |---|---|
 | `flowplane-common/` | `#[repr(C)]` POD types shared between eBPF and userspace (map keys/values), with layout tests. `no_std` by default; a `user` feature adds the aya integration. |
 | `flowplane-core/` | `no_std`, generic (over `Pkt`/`Maps` traits) **pure datapath logic** — the same forwarding/conntrack/NAT/LB/firewall code runs in eBPF, in the native sim, and in unit tests. |
-| `flowplane-ebpf/` | The eBPF programs (`uplink_rx`, `wan_rx`, `guest_tx`, `tc_guest_tx`, `guest_dhcp`/`tc_guest_dhcp`, `tc_guest_nat64`, `xdp_pass`, `xdp_inspect`) + the map declarations. Compiled to bytecode via `aya-build`. |
+| `flowplane-ebpf/` | The eBPF programs (`uplink_rx`, `wan_rx`, `tc_guest_tx`, `tc_guest_dhcp`, `tc_guest_nat64`, `xdp_pass`, `xdp_inspect`) + the map declarations. Compiled to bytecode via `aya-build`. |
 | `flowplane/` | The Rust userspace daemon: gRPC server (`DataplaneNode`), the map control plane (`control.rs`), the eBPF loader + link/adopt logic (`loader.rs`), veth/tap lifecycle + IPAM (`attach.rs`), and the CLI (`main.rs`). |
 | `flowplane-sim/` | An **in-process datapath simulator**: heap-backed `Pkt`/`Maps` impls + `SimNode`/`Fabric` run the real `flowplane-core` logic with **no kernel, no clab, no root** — the fast dev/regression loop. |
 | `netplane/` | The Go control plane: `cmd/agent`, `cmd/reflector`, `cmd/controller`, and the `routebus` client/server + reconcile/desired-state logic. |

@@ -178,7 +178,7 @@ message ConfigureQoSRequest {
   uint32 egress_mbps = 2;       // EDT-shaped total egress in Mbit/s; 0 = unlimited
   uint32 public_mbps = 3;       // external/NATed egress policer in Mbit/s; 0 = unlimited
   uint32 ingress_mbps = 4;      // ingress policer in Mbit/s; 0 = unlimited
-  uint32 egress_burst_kb = 5;   // reserved (EDT ignores in v1); 0 = default
-  uint32 ingress_burst_kb = 6;  // reserved (default burst in v1); 0 = default
+  uint32 egress_burst_kb = 5;   // placeholder; not consumed in v1 (EDT uses a fixed burst); 0 = default
+  uint32 ingress_burst_kb = 6;  // placeholder; not consumed in v1 (policer uses a fixed burst); 0 = default
 }
 message ConfigureQoSResponse {}
