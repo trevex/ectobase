@@ -578,6 +578,7 @@ impl DhcpMetaMap {
         Ok(Self { map })
     }
 
+    #[allow(dead_code)] // sole caller was Control::set_dhcp_meta (was DPDKironcore-only)
     pub fn upsert(&mut self, ifindex: u32, meta: DhcpMeta) -> anyhow::Result<()> {
         self.map
             .insert(ifindex, meta, 0)

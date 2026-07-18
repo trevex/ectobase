@@ -67,6 +67,13 @@ impl Pkt for VecPkt {
         self.logical_len -= delta;
         true
     }
+    fn set_tail(&mut self, new_len: usize) -> bool {
+        // Grow (zero-fill) or shrink the linear buffer at the tail, mirroring bpf_xdp_adjust_tail /
+        // bpf_skb_change_tail's absolute-length resize.
+        self.buf.resize(new_len, 0);
+        self.logical_len = new_len;
+        true
+    }
 }
 
 #[cfg(test)]

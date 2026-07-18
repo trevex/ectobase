@@ -26,10 +26,33 @@ pub trait Pkt {
     fn read_array<const N: usize>(&self, off: usize) -> Option<[u8; N]>;
     /// Overwrite `src.len()` bytes at `off`, bounds-checked. false if out of range.
     fn write_bytes(&mut self, off: usize, src: &[u8]) -> bool;
+
+    /// Overwrite a FIXED `N` bytes at `off`, bounds-checked. false if out of range.
+    ///
+    /// This is the write-side dual of [`read_array`](Pkt::read_array): passing the length as a const
+    /// generic (rather than a runtime slice via [`write_bytes`](Pkt::write_bytes)) lets the eBPF impl
+    /// lower each write to a single fixed-width store instead of a byte loop — materially smaller
+    /// bytecode on the hot path (keeps large in-place rewriters like SNAT inside the XDP verifier's
+    /// single-function budget). The default delegates to `write_bytes` for impls that don't override.
+    #[inline(always)]
+    fn write_array<const N: usize>(&mut self, off: usize, src: &[u8; N]) -> bool {
+        self.write_bytes(off, src)
+    }
     /// Prepend `delta` bytes of headroom (encap). Models bpf_xdp_adjust_head(-delta).
     fn grow_head(&mut self, delta: usize) -> bool;
     /// Remove `delta` bytes from the front (decap). Models bpf_xdp_adjust_head(+delta).
     fn shrink_head(&mut self, delta: usize) -> bool;
+
+    /// Resize the frame to exactly `new_len` bytes at the tail (grow or shrink). Models
+    /// `bpf_xdp_adjust_tail` / `bpf_skb_change_tail` — the DHCPv4 responder grows the frame to a
+    /// constant `REPLY_LEN` before writing the fixed-layout reply. The eBPF `RawPkt` impl does NOT
+    /// resize itself (the XDP/tc glue resizes with the native primitive, then wraps the grown frame
+    /// in a fresh `RawPkt`); only owning buffers (`VecPkt`) implement this. The default is a no-op
+    /// returning false so non-resizable impls stay usable for callers that never resize.
+    #[inline(always)]
+    fn set_tail(&mut self, _new_len: usize) -> bool {
+        false
+    }
 
     #[inline(always)]
     fn read_u16_be(&self, off: usize) -> Option<u16> {

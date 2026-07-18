@@ -38,6 +38,9 @@ pub struct AttachState {
     pub control: Arc<Control>,
     pub ipam: Mutex<UnderlayIpam>,
     pub gateway_ipv4: [u8; 4],
+    /// Server-wide overlay IPv6 gateway (from `--gateway6`), programmed into
+    /// `PortMeta.gateway_ipv6` so the ND / DHCPv6 responders have a gateway. All-zeros = disabled.
+    pub gateway_ipv6: [u8; 16],
     /// Monotonic MAC suffix so auto-allocated guest MACs are unique within this process.
     pub mac_seq: Mutex<u32>,
     /// Disable guest tx-checksum offload at attach. Only needed when the fabric uplink is a
@@ -114,6 +117,15 @@ impl AttachState {
             .map(|a| a.octets())
             .context("attach requires at least one IPv4 in requested_ips")?;
 
+        // Primary overlay IPv6: first requested IPv6 (OPTIONAL — IPv4-only guests are valid, so this
+        // defaults to all-zeros rather than bailing). Set into PortMeta.guest_ipv6, which the DHCPv6
+        // responder (IA Address) and NAT64 require. Mirrors the bare-IP parse the v4 side uses.
+        let ipv6 = requested_ips
+            .iter()
+            .find_map(|s| s.parse::<Ipv6Addr>().ok())
+            .map(|a| a.octets())
+            .unwrap_or([0u8; 16]);
+
         // MAC: honour a caller-supplied MAC, else allocate one.
         let mac = if mac_req.is_empty() {
             self.alloc_mac()
@@ -147,9 +159,9 @@ impl AttachState {
         let params = IfaceParams {
             vni,
             ipv4,
-            ipv6: [0u8; 16],
+            ipv6,
             gateway_ipv4: self.gateway_ipv4,
-            gateway_ipv6: [0u8; 16],
+            gateway_ipv6: self.gateway_ipv6,
             underlay_ipv6,
             total_mbps: 0,
             public_mbps: 0,

@@ -116,10 +116,10 @@ SERVE_PID=$!
 
 for _ in $(seq 1 50); do
   kill -0 "$SERVE_PID" 2>/dev/null || fail "serve --role edge died during startup (verifier?)"
-  grep -q "serving DPDKironcore on" "$LOG" 2>/dev/null && break
+  grep -q "serving DataplaneNode on" "$LOG" 2>/dev/null && break
   sleep 0.2
 done
-grep -q "serving DPDKironcore on" "$LOG" 2>/dev/null || fail "serve --role edge did not start listening"
+grep -q "serving DataplaneNode on" "$LOG" 2>/dev/null || fail "serve --role edge did not start listening"
 grep -q "edge role: wan_rx attached" "$LOG" 2>/dev/null || fail "no 'edge role: wan_rx attached' confirmation (wan_rx not wired)"
 echo "PASS: edge role loaded (eBPF verified, wan_rx + local-deliver attached)"
 

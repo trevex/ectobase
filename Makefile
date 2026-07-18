@@ -1,10 +1,10 @@
 # ironcore-net-xdp — common workflows.
 #
 # Run these from inside the flake devShell (`nix develop`), which provides all tooling — the Rust
-# toolchain (rustup), bpf-linker, protobuf, python3+scapy+pytest, the genuine dpservice-cli, qemu,
+# toolchain (rustup), bpf-linker, protobuf, python3+scapy+pytest, qemu,
 # iproute2, ethtool, tcpdump. The targets use bare tool names; there are no host-specific paths.
 #
-# The conformance / e2e / ha / tap targets need passwordless sudo (XDP attach, netns, raw sockets);
+# The e2e / ha / tap targets need passwordless sudo (XDP attach, netns, raw sockets);
 # the scripts elevate individual commands themselves.
 
 .DEFAULT_GOAL := help
@@ -22,10 +22,6 @@ build: ## Build the flowplane binary (host crates + the eBPF object via aya-buil
 .PHONY: release
 release: ## Build the flowplane binary in release mode
 	cargo build -p flowplane --release
-
-.PHONY: cli
-cli: ## Build the genuine dpservice-cli (flake package) into ./result
-	nix build .#dpservice-cli
 
 .PHONY: proto-go
 proto-go: ## Generate Go gRPC stubs for dataplane.v1 into cni/gen/dataplanev1
@@ -98,10 +94,14 @@ sim-anchor: ## Privileged BPF_PROG_TEST_RUN byte-parity anchor (native pure-core
 	cargo build -p flowplane
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_uplink -- --ignored --exact uplink_rx_bytecode_matches_native_sim
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_lb -- --ignored --exact uplink_rx_lb_deliver_bytecode_matches_native_sim
-
-.PHONY: conformance
-conformance: ## dpservice conformance suite vs `flowplane serve` (veth harness; needs sudo)
-	./test/conformance/run.sh
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_guest_tx -- --ignored --exact guest_tx_snat_bytecode_matches_native_sim
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_guest_tx -- --ignored --exact guest_tx_bytecode_matches_original_golden
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dnat -- --ignored --exact dnat_return_bytecode_matches_native_sim
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dnat -- --ignored --exact dnat_return_bytecode_matches_original_golden
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_arp_nd -- --ignored --exact arp_nd_bytecode_matches_native_sim
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_arp_nd -- --ignored --exact arp_nd_bytecode_matches_original_golden
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dhcp -- --ignored --exact dhcp_bytecode_matches_native_sim
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dhcp -- --ignored --exact dhcp_bytecode_matches_original_golden
 
 .PHONY: e2e
 e2e: ## 3-node netns end-to-end overlay test (needs sudo)
@@ -120,7 +120,7 @@ tap-vm-smoke: ## Boot a CirrOS VM on a real tap and verify guest_tx/ARP (needs s
 	./test/tap-vm-smoke.sh run
 
 .PHONY: test-all
-test-all: test e2e ha conformance ## Run the full local test matrix (needs sudo)
+test-all: test e2e ha ## Run the full local test matrix (needs sudo)
 
 # --- housekeeping ----------------------------------------------------------
 .PHONY: clean

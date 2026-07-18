@@ -1,22 +1,5 @@
 {
   "nodes": {
-    "dpservice": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1774273434,
-        "narHash": "sha256-OjvNeW0pKt6hxu4s1i7sFtWxrguawvYBwNA1fwCVBOY=",
-        "owner": "ironcore-dev",
-        "repo": "dpservice",
-        "rev": "0eb5acbd262ba4b8e6ae2762352a27924e44f990",
-        "type": "github"
-      },
-      "original": {
-        "owner": "ironcore-dev",
-        "ref": "v0.3.22",
-        "repo": "dpservice",
-        "type": "github"
-      }
-    },
     "flake-compat": {
       "flake": false,
       "locked": {
@@ -213,7 +196,6 @@
     },
     "root": {
       "inputs": {
-        "dpservice": "dpservice",
         "flake-utils": "flake-utils",
         "git-hooks": "git-hooks",
         "go-overlay": "go-overlay",

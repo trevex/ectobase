@@ -40,10 +40,7 @@ fn main() -> anyhow::Result<()> {
     tonic_build::configure()
         .build_client(false)
         .compile_protos(
-            &[
-                "../../api/proto/dataplane/v1/dpdk.proto",
-                "../../api/proto/dataplane/v1/dataplane.proto",
-            ],
+            &["../../api/proto/dataplane/v1/dataplane.proto"],
             &["../../api/proto/dataplane/v1"],
         )
         .context("tonic-build compile dataplane protos")?;

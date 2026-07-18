@@ -1,21 +1,15 @@
-// `tonic::Status` is a large type, and it is the error type the generated `DPDKironcore` trait
-// mandates for every handler (and the decode helpers that feed them). Boxing it everywhere to
+// `tonic::Status` is a large type, and it is the error type the generated gRPC service traits
+// mandate for every handler (and the decode helpers that feed them). Boxing it everywhere to
 // satisfy `result_large_err` would add indirection and noise for no real benefit on a gRPC server.
 #![allow(clippy::result_large_err)]
-
-pub mod pb {
-    tonic::include_proto!("dpdkironcore.v1");
-}
 
 mod attach;
 mod conntrack_gc;
 mod control;
-mod grpc;
 mod loader;
 mod maglev;
 mod maps;
 mod node;
-mod state;
 mod underlay;
 
 use anyhow::Context;
@@ -436,8 +430,8 @@ async fn main() -> anyhow::Result<()> {
                 ctrl.take_conntrack(),
                 std::time::Duration::from_secs(10),
             ));
-            // Share one Control between the legacy DPDKironcore service and the DataplaneNode
-            // service (the map handles live inside Control; they can only be taken once).
+            // Wrap Control for the DataplaneNode service (the map handles live inside Control;
+            // they can only be taken once).
             let control = std::sync::Arc::new(ctrl);
 
             // Seed the underlay /128 allocator that AttachInterface hands endpoints out of. `underlay`
@@ -463,6 +457,7 @@ async fn main() -> anyhow::Result<()> {
                 control: std::sync::Arc::clone(&control),
                 ipam: parking_lot::Mutex::new(ipam),
                 gateway_ipv4,
+                gateway_ipv6,
                 mac_seq: parking_lot::Mutex::new(0),
                 disable_guest_csum_offload,
             });
@@ -491,14 +486,6 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
 
-            let svc = grpc::Service {
-                state: std::sync::Arc::new(state::State::default()),
-                control: Some(std::sync::Arc::clone(&control)),
-                underlay,
-                gateway_ipv4,
-                gateway_ipv6,
-            };
-            let server = crate::pb::dpd_kironcore_server::DpdKironcoreServer::new(svc);
             // gRPC health service (grpc.health.v1.Health) so the Kubernetes gRPC liveness probe
             // passes — the empty service name "" reports Serving (what the probe checks by default).
             // dpservice implements this; without it the probe SIGKILLs the pod every period.
@@ -506,7 +493,7 @@ async fn main() -> anyhow::Result<()> {
             health_reporter
                 .set_service_status("", tonic_health::ServingStatus::Serving)
                 .await;
-            println!("serving DPDKironcore on {addr}");
+            println!("serving DataplaneNode on {addr}");
             // Graceful shutdown that PRESERVES the pinned datapath: stop the gRPC server on SIGINT
             // (ctrl-c) or SIGTERM (kubelet/`docker stop` send SIGTERM, not SIGINT) WITHOUT any
             // map/link unpin. Pinned maps survive the process exit unconditionally, so the next
@@ -532,7 +519,6 @@ async fn main() -> anyhow::Result<()> {
             };
             tonic::transport::Server::builder()
                 .add_service(health_service)
-                .add_service(server)
                 .add_service(node::pb::dataplane_node_server::DataplaneNodeServer::new(
                     node::NodeService::new(attach_state),
                 ))
