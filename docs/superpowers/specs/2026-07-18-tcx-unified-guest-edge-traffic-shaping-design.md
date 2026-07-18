@@ -171,8 +171,11 @@ identical for tc and XDP, so going tcx-only does not, on its own, let DHCPv6 mov
   clock.
 - **Ingress + public policing:** reuse `take()` unchanged; add sim coverage for the ingress
   lane at the `uplink_rx` delivery point.
-- **BPF_PROG_TEST_RUN anchor:** assert `tc_guest_tx` sets `skb->tstamp` to the core-computed
-  value for a known input (byte/verdict parity with the sim).
+- **No tstamp anchor (infeasible):** `xdp_md` has no `tstamp` field and there is no tc
+  `BPF_PROG_TEST_RUN` precedent for reading `skb->tstamp` in this repo (all anchors are XDP).
+  So the EDT *computation* is covered by pure-core unit tests + a sim departure-spacing test;
+  the tstamp *wiring* in `tc.rs` is covered by the existing `verify_tc_guest.rs` load check
+  plus live validation. Byte-parity anchors for the non-shaping guest_tx path stay as-is.
 - **Controller:** envtest for `qosreconcile` (desired/applied diff, clear-on-removal),
   mirroring the existing meter reconcile test.
 - **Cannot be unit-tested:** FQ actually pacing packets is kernel qdisc behavior → live
