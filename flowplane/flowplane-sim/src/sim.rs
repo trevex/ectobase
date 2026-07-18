@@ -35,6 +35,9 @@ pub struct SimNode {
     /// Source (guest tap) ifindex the `guest_tx` egress firewall is keyed on — the eBPF path uses
     /// the frame's ingress_ifindex. Defaults to 0; set it before calling `guest_tx`.
     pub src_ifindex: u32,
+    /// Controlled monotonic clock (ns) the `guest_tx` egress meter stamps `last_ns` from — models
+    /// `bpf_ktime_get_ns()`. Defaults to 0; tests advance it to drive token-bucket refill.
+    pub now: u64,
 }
 
 /// Result of `host_uplink`: the delivery `Action` plus the resulting (decapped) frame bytes.
@@ -55,6 +58,7 @@ impl SimNode {
             maps: MemMaps::default(),
             local: Local::default(),
             src_ifindex: 0,
+            now: 0,
         }
     }
 
@@ -64,6 +68,7 @@ impl SimNode {
             maps: MemMaps::default(),
             local,
             src_ifindex: 0,
+            now: 0,
         }
     }
 
@@ -242,15 +247,18 @@ impl SimNode {
     ///   3. route lookup (`route4`) → Pass on miss;
     ///   4. network NAT SNAT (`snat_egress`) when the route is external;
     ///   5. conntrack create-on-miss (`ct_create_default`);
-    ///   6. rate metering: NOT modelled (separate slice; no METER map → unlimited);
+    ///   6. rate metering (`meter_pass`): drop when the `METER[src_ifindex]` token bucket is
+    ///      exhausted; with no METER entry the bucket is unlimited (pass), preserving prior behavior.
+    ///      `now` comes from `self.now` (the controlled clock);
     ///   7. deliver decision (`deliver`): Local tap (inner-Eth rewrite) | Encap | Pass.
     ///
     /// Returns the delivery `Action` + the resulting frame bytes (encapped on the Encap path).
     ///
-    /// NOTE (scope): only the fresh-flow / non-VIP / unmetered path is composed here — that is the
-    /// slice whose OUTPUT PACKET is byte-identical to the eBPF program and thus anchorable. The
-    /// interleaved un-ported steps (ct_apply/ct_touch, vip, meter) are map/refresh-only on this
-    /// fixture and do not change the emitted bytes.
+    /// NOTE (scope): only the fresh-flow / non-VIP path is composed here for the OUTPUT PACKET — that
+    /// slice is byte-identical to the eBPF program and thus anchorable. Metering does not mutate
+    /// packet bytes (it only reads/writes the METER map and returns a verdict), so with no METER entry
+    /// the emitted bytes are unaffected; the interleaved un-ported steps (ct_apply/ct_touch, vip) are
+    /// map/refresh-only on this fixture and do not change the emitted bytes.
     pub fn guest_tx(&mut self, frame: &[u8], meta: &PortMeta) -> SimOut {
         let ip_off = ETH_LEN;
         let mut pkt = VecPkt::from_bytes(frame);
@@ -306,7 +314,22 @@ impl SimNode {
             }
         }
 
-        // 6. Rate metering: not modelled (no METER map → unlimited pass).
+        // 6. Rate metering (token bucket over METER[src_ifindex]). No entry => unlimited pass, so
+        // byte-parity fixtures (which install no METER) are unaffected. `frame_len` is the current
+        // packet length, as the eBPF path uses `data_end - data`. Mirrors `egress.rs:108-112`.
+        let frame_len = pkt.len() as u64;
+        if !flowplane_core::meter::meter_pass(
+            &mut self.maps,
+            self.src_ifindex,
+            frame_len,
+            is_ext,
+            self.now,
+        ) {
+            return SimOut {
+                action: Action::Drop,
+                pkt: pkt.into_bytes(),
+            };
+        }
 
         // 7. Deliver decision.
         match deliver(&self.maps, &route, meta, IPPROTO_IPIP) {

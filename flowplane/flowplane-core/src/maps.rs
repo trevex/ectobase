@@ -1,6 +1,6 @@
 use flowplane_common::{
     CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
-    MaglevKey, NatKey, NatValue, RouteValue, UnderlayValue,
+    MaglevKey, MeterState, NatKey, NatValue, RouteValue, UnderlayValue,
 };
 
 /// Typed access to the datapath maps the core needs. eBPF impl wraps the `#[map]` statics
@@ -26,4 +26,8 @@ pub trait Maps {
     fn dhcp_config(&self) -> Option<DhcpConfig>;
     /// Per-interface DHCP config (`DHCP_META[ifindex]`): hostname + PXE. `None` if unset.
     fn dhcp_meta(&self, ifindex: u32) -> Option<DhcpMeta>;
+    /// Per-interface egress token-bucket state (`METER[ifindex]`). `None` = no rate limit configured.
+    fn meter_get(&self, ifindex: u32) -> Option<MeterState>;
+    /// Store the refilled per-interface token-bucket state back (`METER[ifindex]`).
+    fn meter_update(&mut self, ifindex: u32, state: MeterState);
 }

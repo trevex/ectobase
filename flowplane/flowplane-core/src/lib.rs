@@ -9,6 +9,7 @@ pub mod err;
 pub mod firewall;
 pub mod lb;
 pub mod maps;
+pub mod meter;
 pub mod nat;
 pub mod nat64;
 pub mod parse;

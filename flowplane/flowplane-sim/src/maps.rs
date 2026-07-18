@@ -1,6 +1,6 @@
 use flowplane_common::{
     CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
-    MaglevKey, NatKey, NatValue, RouteValue, UnderlayValue,
+    MaglevKey, MeterState, NatKey, NatValue, RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
 use std::collections::{HashMap, HashSet};
@@ -46,6 +46,8 @@ pub struct MemMaps {
     pub dhcp_config: Option<DhcpConfig>,
     /// Per-interface DHCP config (`DHCP_META[ifindex]`): hostname + PXE.
     pub dhcp_meta: HashMap<u32, DhcpMeta>,
+    /// Per-interface egress token-bucket state (`METER[ifindex]`).
+    pub meter: HashMap<u32, MeterState>,
 }
 
 /// True if the first `prefix` bits of `a` and `b` (big-endian byte order) are equal.
@@ -131,6 +133,12 @@ impl Maps for MemMaps {
     }
     fn dhcp_meta(&self, ifindex: u32) -> Option<DhcpMeta> {
         self.dhcp_meta.get(&ifindex).copied()
+    }
+    fn meter_get(&self, ifindex: u32) -> Option<MeterState> {
+        self.meter.get(&ifindex).copied()
+    }
+    fn meter_update(&mut self, ifindex: u32, state: MeterState) {
+        self.meter.insert(ifindex, state);
     }
 }
 
