@@ -26,6 +26,8 @@ mod lb_scenario_test;
 #[cfg(test)]
 mod lb_select_test;
 #[cfg(test)]
+mod nat64_test;
+#[cfg(test)]
 mod nat_test;
 #[cfg(test)]
 mod ns_scenario_test;
