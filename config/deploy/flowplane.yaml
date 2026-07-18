@@ -59,6 +59,29 @@ spec:
             # kind nodes have no native XDP; force generic/SKB mode.
             - name: FLOWPLANE_SKB_MODE
               value: "1"
+          # Readiness gates on the gRPC listener (127.0.0.1:1337), which flowplane opens
+          # ONLY after the base datapath is loaded + attached and DataplaneNode is serving
+          # (main.rs: load/attach -> health Serving -> serve). So pod-Ready == "ready to
+          # AttachInterface", and `kubectl rollout status ds/flowplane` genuinely waits for
+          # the datapath — callers (scenarios/CI) can wait-for-ready before driving attaches.
+          # A native gRPC probe can't be used: flowplane binds 127.0.0.1 only (node-local),
+          # not the pod IP the kubelet probe would dial. `ss` ships in the image (iproute2).
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "ss -ltn | grep -q '127.0.0.1:1337'"]
+            initialDelaySeconds: 2
+            periodSeconds: 3
+            timeoutSeconds: 2
+            # Allow up to ~2min: the wrapper waits up to 30s for the fabric router neighbour
+            # before `flowplane serve`, then load+attach takes a few seconds.
+            failureThreshold: 40
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "ss -ltn | grep -q '127.0.0.1:1337'"]
+            initialDelaySeconds: 90
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
           securityContext:
             # Needs CAP_BPF/CAP_NET_ADMIN to load XDP programs and program the
             # host datapath; privileged is the blunt first-draft form.
