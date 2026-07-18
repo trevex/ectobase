@@ -32,6 +32,11 @@ type CompiledNICSpec struct {
 	// it grants NO firewall permission (that comes solely from NetworkPolicy).
 	// +optional
 	LB []CompiledLB `json:"lb,omitempty"`
+	// PeerImports lists peer VPCs whose routes this NIC imports (reachability only — grants NO
+	// firewall permission; that comes solely from NetworkPolicy). Populated from Ready VPCPeerings
+	// involving this NIC's VPC.
+	// +optional
+	PeerImports []CompiledPeerImport `json:"peerImports,omitempty"`
 }
 
 // CompiledFirewall holds pre-compiled ingress and egress rules for a NIC.
@@ -81,6 +86,16 @@ type CompiledLB struct {
 type CompiledLBPort struct {
 	Port  int32  `json:"port"`
 	Proto string `json:"proto"`
+}
+
+// CompiledPeerImport is one peer VPC's reachability import for a NIC.
+type CompiledPeerImport struct {
+	// PeerVNI is the peer VPC's VNI to subscribe to on routebus.
+	PeerVNI int32 `json:"peerVni"`
+	// ImportPrefixes is the peer's exposedPrefixes: only peer routes within these CIDRs are
+	// imported (filter applied importer-side).
+	// +optional
+	ImportPrefixes []string `json:"importPrefixes,omitempty"`
 }
 
 // CompiledNICStatus is the observed state of a CompiledNIC.
