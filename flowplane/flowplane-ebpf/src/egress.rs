@@ -105,9 +105,10 @@ pub fn forward_decision_v4(
             crate::conntrack::ct_ensure_default(data, data_end, ETH_LEN, &key);
         }
     }
-    // Rate metering.
+    // Public-lane policing (external egress only). Total egress is EDT-shaped at the uplink FQ
+    // via `edt_stamp` in tc_guest_tx's encap path, not policed here.
     let frame_len = (data_end - data) as u64;
-    if !crate::meter::meter_pass(ifindex, frame_len, is_ext) {
+    if !crate::meter::public_pass(ifindex, frame_len, is_ext) {
         return EgressVerdict::Drop;
     }
     // Deliver decision via the shared core seam: local fast path (nexthop underlay is one of our own
