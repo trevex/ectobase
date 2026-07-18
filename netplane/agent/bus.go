@@ -7,6 +7,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"net"
 	"sync"
 	"time"
 
@@ -85,6 +86,15 @@ type Bus struct {
 	egressVNIs    []uint32          // local VNIs that import the public default(s); set each reconcile
 	learnedPublic map[string]string // public-VNI prefix -> nexthop (recorded, imported into egressVNIs)
 
+	// Peering import bookkeeping (VPC peering). peerImports is set each reconcile (localVNI -> imports).
+	// origin tags every installed (vni, prefix) as "own" (locally-originated / direct route) or "peer"
+	// (imported from a peer VNI) so LOCAL routes always take precedence over imports and an own-route
+	// withdraw can restore a previously-shadowed peer import. learnedPeer keeps the raw learned peer
+	// routes (peerVNI -> prefix -> nexthop) so a restore has a nexthop to reinstall.
+	peerImports map[uint32][]PeerImport      // localVNI -> imports (set each reconcile; nil-safe)
+	origin      map[uint32]map[string]string // vni -> prefix -> "own" | "peer"
+	learnedPeer map[uint32]map[string]string // peerVNI -> prefix -> nexthop (raw learned peer routes)
+
 	// installed[vni] is the set of directly-installed (non public-VNI) route prefixes this Bus has
 	// programmed on the dataplane. It PERSISTS across reconnects (the dataplane outlives a session)
 	// so prune-on-EndOfRIB can remove routes that vanished from the RIB while we were disconnected.
@@ -109,6 +119,9 @@ func NewBus(nodeID, underlay string, dp Dataplane, isEdge bool) *Bus {
 		learnedEdge: map[string]string{}, learnedPublic: map[string]string{},
 		installed:      map[uint32]map[string]bool{},
 		seen:           map[uint32]map[string]bool{},
+		peerImports:    map[uint32][]PeerImport{},
+		origin:         map[uint32]map[string]string{},
+		learnedPeer:    map[uint32]map[string]string{},
 		reconcileEvery: defaultReconcileEvery,
 	}
 }
@@ -194,6 +207,7 @@ func (b *Bus) reconcileStep(ctx context.Context, stream rbv1.RouteBus_SessionCli
 	}
 	b.mu.Lock()
 	b.egressVNIs = append(b.egressVNIs[:0:0], desired.EgressVNIs...)
+	b.setPeerImportsLocked(desired.PeeringImports)
 	b.mu.Unlock()
 	d := diffDesired(*applied, desired)
 	if d.empty() {
@@ -388,6 +402,13 @@ func (b *Bus) apply(ctx context.Context, ru *rbv1.RouteUpdate) {
 		}
 		return
 	}
+	// Peer-import path: a route learned on a VNI that some LOCAL vni imports (VPC peering). Handled
+	// BEFORE the own/direct path so it can't be mistaken for an own route on that (peer) VNI. A VNI
+	// only appears as a peer VNI when a local VNI imports it, so this and the own path are disjoint.
+	if importers := b.importersOf(ru.Vni); len(importers) > 0 {
+		b.applyPeer(ctx, ru, nh, importers)
+		return
+	}
 	switch ru.Op {
 	case rbv1.RouteOp_ROUTE_OP_ADD:
 		if err := b.dp.AddRoute(ctx, ru.Vni, ru.Prefix, nh, ru.External); err != nil {
@@ -395,13 +416,172 @@ func (b *Bus) apply(ctx context.Context, ru *rbv1.RouteUpdate) {
 			return
 		}
 		b.markInstalled(ru.Vni, ru.Prefix)
+		// Tag as own; if a peer import currently held this (vni, prefix) the AddRoute above overwrote
+		// it in the dataplane (one value per key), so flipping the tag to "own" completes the eviction.
+		b.setOrigin(ru.Vni, ru.Prefix, "own")
 	case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
 		if err := b.dp.WithdrawRoute(ctx, ru.Vni, ru.Prefix); err != nil {
 			log.Printf("WithdrawRoute vni=%d %s: %v", ru.Vni, ru.Prefix, err)
 			return
 		}
 		b.markWithdrawn(ru.Vni, ru.Prefix)
+		// The own route is gone: restore a shadowed peer import for this (vni, prefix) if one exists,
+		// else clear the tag entirely.
+		b.clearOrigin(ru.Vni, ru.Prefix)
+		b.restoreImport(ctx, ru.Vni, ru.Prefix)
 	}
+}
+
+// applyPeer handles a RouteUpdate on a peer VNI: it records the raw learned peer route (for later
+// restore) and, for each LOCAL vni importing that peer VNI whose import prefixes contain the route,
+// installs it into the local table UNLESS a local (own) route already holds that exact key. Local
+// routes always win.
+func (b *Bus) applyPeer(ctx context.Context, ru *rbv1.RouteUpdate, nh string, importers []importer) {
+	switch ru.Op {
+	case rbv1.RouteOp_ROUTE_OP_ADD:
+		b.setLearnedPeer(ru.Vni, ru.Prefix, nh)
+		for _, im := range importers {
+			if !prefixInCIDRs(ru.Prefix, im.prefixes) {
+				continue
+			}
+			if b.origin[im.localVNI][ru.Prefix] == "own" {
+				continue // local route wins; do not shadow it
+			}
+			if err := b.dp.AddRoute(ctx, im.localVNI, ru.Prefix, nh, false); err != nil {
+				log.Printf("peer import AddRoute vni=%d %s -> %s: %v", im.localVNI, ru.Prefix, nh, err)
+				continue
+			}
+			b.setOrigin(im.localVNI, ru.Prefix, "peer")
+			b.markInstalled(im.localVNI, ru.Prefix)
+		}
+	case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
+		b.delLearnedPeer(ru.Vni, ru.Prefix)
+		for _, im := range importers {
+			if !prefixInCIDRs(ru.Prefix, im.prefixes) {
+				continue
+			}
+			if b.origin[im.localVNI][ru.Prefix] != "peer" {
+				continue // an own route (or nothing) holds this key; leave it
+			}
+			if err := b.dp.WithdrawRoute(ctx, im.localVNI, ru.Prefix); err != nil {
+				log.Printf("peer import WithdrawRoute vni=%d %s: %v", im.localVNI, ru.Prefix, err)
+				continue
+			}
+			b.clearOrigin(im.localVNI, ru.Prefix)
+			b.markWithdrawn(im.localVNI, ru.Prefix)
+		}
+	}
+}
+
+// restoreImport reinstalls a peer import that was shadowed by a now-withdrawn own route on (vni,
+// prefix): for each active import on this local vni whose prefixes contain the route and for which a
+// learned peer route still exists, AddRoute it back and re-tag as "peer".
+func (b *Bus) restoreImport(ctx context.Context, localVNI uint32, prefix string) {
+	for _, im := range b.peerImports[localVNI] {
+		if !prefixInCIDRs(prefix, im.ImportPrefixes) {
+			continue
+		}
+		nh, ok := b.learnedPeer[im.PeerVNI][prefix]
+		if !ok {
+			continue
+		}
+		if err := b.dp.AddRoute(ctx, localVNI, prefix, nh, false); err != nil {
+			log.Printf("peer import restore AddRoute vni=%d %s -> %s: %v", localVNI, prefix, nh, err)
+			return
+		}
+		b.setOrigin(localVNI, prefix, "peer")
+		b.markInstalled(localVNI, prefix)
+		return
+	}
+}
+
+// importer is one local VNI importing the peer VNI of a RouteUpdate, with that import's prefixes.
+type importer struct {
+	localVNI uint32
+	prefixes []string
+}
+
+// importersOf returns the local VNIs (with their import prefixes) that import peerVNI. Nil-safe.
+func (b *Bus) importersOf(peerVNI uint32) []importer {
+	var out []importer
+	for local, imports := range b.peerImports {
+		for _, im := range imports {
+			if im.PeerVNI == peerVNI {
+				out = append(out, importer{localVNI: local, prefixes: im.ImportPrefixes})
+			}
+		}
+	}
+	return out
+}
+
+// setPeerImportsLocked replaces the peer-import table (called under b.mu each reconcile). A copy is
+// stored so a later mutation of the DesiredState map can't race the apply goroutine.
+func (b *Bus) setPeerImportsLocked(m map[uint32][]PeerImport) {
+	next := map[uint32][]PeerImport{}
+	for local, imports := range m {
+		cp := make([]PeerImport, len(imports))
+		for i, im := range imports {
+			cp[i] = PeerImport{PeerVNI: im.PeerVNI, ImportPrefixes: append([]string(nil), im.ImportPrefixes...)}
+		}
+		next[local] = cp
+	}
+	b.peerImports = next
+}
+
+// origin / learnedPeer bookkeeping. Called only from the apply (Run) goroutine, so no locking.
+func (b *Bus) setOrigin(vni uint32, prefix, kind string) {
+	if b.origin[vni] == nil {
+		b.origin[vni] = map[string]string{}
+	}
+	b.origin[vni][prefix] = kind
+}
+
+func (b *Bus) clearOrigin(vni uint32, prefix string) {
+	if m := b.origin[vni]; m != nil {
+		delete(m, prefix)
+		if len(m) == 0 {
+			delete(b.origin, vni)
+		}
+	}
+}
+
+func (b *Bus) setLearnedPeer(peerVNI uint32, prefix, nh string) {
+	if b.learnedPeer[peerVNI] == nil {
+		b.learnedPeer[peerVNI] = map[string]string{}
+	}
+	b.learnedPeer[peerVNI][prefix] = nh
+}
+
+func (b *Bus) delLearnedPeer(peerVNI uint32, prefix string) {
+	if m := b.learnedPeer[peerVNI]; m != nil {
+		delete(m, prefix)
+		if len(m) == 0 {
+			delete(b.learnedPeer, peerVNI)
+		}
+	}
+}
+
+// prefixInCIDRs reports whether the route prefix's host address is contained in any of cidrs. A
+// route "10.1.0.5/32" is "within" "10.1.0.0/24" when the address 10.1.0.5 is inside the CIDR. An
+// empty cidrs set never matches (fail-closed): an import with no prefixes exposes nothing.
+func prefixInCIDRs(prefix string, cidrs []string) bool {
+	addr, _, err := net.ParseCIDR(prefix)
+	if err != nil {
+		// prefix may be a bare address rather than CIDR form; try that.
+		if addr = net.ParseIP(prefix); addr == nil {
+			return false
+		}
+	}
+	for _, c := range cidrs {
+		_, ipnet, err := net.ParseCIDR(c)
+		if err != nil {
+			continue
+		}
+		if ipnet.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 // LearnedPublic returns a copy of the learned public-VNI prefix -> nexthop map
