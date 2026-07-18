@@ -115,8 +115,8 @@ pub fn attach_tc_clsact_ingress(
 }
 
 /// Load `tc_guest_dhcp` and register it in `GUEST_PROGS_TC[GUEST_PROG_DHCP]` so `tc_guest_tx`'s
-/// DHCP tail-call resolves. Mirrors `register_guest_dhcp` but for the tc program array. The
-/// returned `ProgramArray` MUST be held in scope by the caller for the datapath's lifetime.
+/// DHCP tail-call resolves. The returned `ProgramArray` MUST be held in scope by the caller for
+/// the datapath's lifetime.
 pub fn register_guest_dhcp_tc(ebpf: &mut Ebpf) -> anyhow::Result<ProgramArray<MapData>> {
     {
         let prog: &mut SchedClassifier = ebpf
@@ -454,7 +454,7 @@ mod tests {
             .map_pin_path(pin.path())
             .load(bytes)
             .expect("load ebpf object");
-        for name in ["uplink_rx", "guest_dhcp"] {
+        for name in ["uplink_rx"] {
             let prog: &mut Xdp = ebpf
                 .program_mut(name)
                 .unwrap_or_else(|| panic!("XDP program {name} missing"))

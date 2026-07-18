@@ -31,14 +31,6 @@ pub fn xdp_pass(_ctx: XdpContext) -> u32 {
 }
 
 #[xdp]
-pub fn guest_dhcp(ctx: XdpContext) -> u32 {
-    dbg::dlog!(&ctx, "guest_dhcp: tail-call entered");
-    let act = egress::dhcp_handle(&ctx);
-    dbg::dlog!(&ctx, "guest_dhcp: action={}", act);
-    act
-}
-
-#[xdp]
 pub fn uplink_rx(ctx: XdpContext) -> u32 {
     dbg::dlog!(&ctx, "uplink_rx: ingress_ifindex={}", unsafe {
         (*ctx.ctx).ingress_ifindex

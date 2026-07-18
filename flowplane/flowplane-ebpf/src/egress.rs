@@ -1,9 +1,8 @@
-use aya_ebpf::{bindings::xdp_action, programs::XdpContext};
 use flowplane_common::{PortMeta, RouteLpmData6};
 use flowplane_core::encap::EncapParams;
 
-use crate::maps::{LOCAL, PORT_META, ROUTES6, UNDERLAY};
-use crate::parse::{ETH_LEN, ETH_P_IP};
+use crate::maps::{LOCAL, ROUTES6, UNDERLAY};
+use crate::parse::ETH_LEN;
 
 /// What the per-program glue should do after the in-place egress pipeline runs.
 pub enum EgressVerdict {
@@ -190,55 +189,4 @@ pub fn forward_decision_v6(
         nexthop_ipv6: route.nexthop_ipv6,
         inner_proto: crate::parse::IPPROTO_IPV6,
     })
-}
-
-/// True if the frame is a DHCP request a guest would send: IPv4/UDP to dport 67, or IPv6/UDP to
-/// dport 547. Pure reads, constant offsets, no packet mutation — cheap to run on every frame.
-#[inline(always)]
-fn is_dhcp_request(ctx: &XdpContext) -> bool {
-    let data = ctx.data();
-    let data_end = ctx.data_end();
-    if data + ETH_LEN + 44 > data_end {
-        return false;
-    }
-    let p = data as *const u8;
-    let ethertype = u16::from_be(unsafe { core::ptr::read_unaligned(p.add(12) as *const u16) });
-    if ethertype == ETH_P_IP {
-        // Assumes IHL==5 (UDP dport at ETH+22). DHCP requests carry no IP options; an IHL>5 frame
-        // that happens to read 67 here is harmless — `try_dhcpv4_reply` re-checks IHL==5 and PASSes.
-        if unsafe { *p.add(ETH_LEN + 9) } != crate::parse::IPPROTO_UDP {
-            return false;
-        }
-        let dport =
-            u16::from_be(unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + 22) as *const u16) });
-        return dport == 67;
-    }
-    if ethertype == crate::parse::ETH_P_IPV6 {
-        if unsafe { *p.add(ETH_LEN + 6) } != crate::parse::IPPROTO_UDP {
-            return false;
-        }
-        let dport = u16::from_be(unsafe {
-            core::ptr::read_unaligned(p.add(ETH_LEN + 40 + 2) as *const u16)
-        });
-        return dport == 547;
-    }
-    false
-}
-
-/// Tail-call target: run the in-datapath DHCPv4 + DHCPv6 responders. Re-looks-up the port by its
-/// ingress ifindex (tail calls invalidate the previous program's pointers/locals). Returns
-/// `XDP_PASS` when the frame is not actually a DHCP request we answer.
-pub fn dhcp_handle(ctx: &XdpContext) -> u32 {
-    let ifindex = unsafe { (*ctx.ctx).ingress_ifindex };
-    let meta = match unsafe { PORT_META.get(&ifindex) } {
-        Some(m) => m,
-        None => return xdp_action::XDP_PASS,
-    };
-    if let Some(act) = crate::dhcp::try_dhcpv4_reply(ctx, meta) {
-        return act;
-    }
-    if let Some(act) = crate::dhcp::try_dhcpv6_reply(ctx, meta) {
-        return act;
-    }
-    xdp_action::XDP_PASS
 }

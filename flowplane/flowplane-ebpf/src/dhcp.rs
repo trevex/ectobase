@@ -1,17 +1,12 @@
-use aya_ebpf::{
-    helpers::{bpf_xdp_adjust_tail, bpf_xdp_load_bytes, bpf_xdp_store_bytes},
-    programs::XdpContext,
-};
 use flowplane_common::PortMeta;
 
 use crate::arp_nd::GW_MAC;
 use crate::parse::{write16, write6, ETH_LEN, ETH_P_IPV6, IPPROTO_UDP};
 
-// The DHCPv4 request parse + reply byte construction live in `flowplane_core::dhcp` over the
-// `Pkt`/`Maps` seam (the SAME code the sim + the byte-parity anchor run). The glue below learns
-// MACs, resizes the frame, and reflects the reply. The DHCPv6 responder still lives in this file:
-// its option block is runtime-variable-length and is emitted at runtime offsets via
-// bpf_xdp_store_bytes, which the fixed-size const-generic `Pkt` trait cannot express.
+// The DHCPv4 request parse + reply byte construction lived in `flowplane_core::dhcp` over the
+// `Pkt`/`Maps` seam. The XDP guest_dhcp entry point has been removed (the guest edge is now
+// tcx-only); the DHCPv6 responder logic below is TC-only (`tc_dhcpv6_respond`). The helpers
+// (`d6_checksum`, `d6_url_len`, `D6Reply`, constants) are shared between XDP (removed) and tc.
 
 /// MAC learning for the egress edge: if the request's Ethernet source differs from the cached
 /// `meta.guest_mac`, update PORT_META (keyed by ifindex), UNDERLAY (keyed by underlay IPv6), and
@@ -36,40 +31,6 @@ pub(crate) fn learn_mac(ifindex: u32, meta: &PortMeta, eth_src: [u8; 6]) {
             let _ = crate::maps::INTERFACES.insert(&ikey, &iv2, 0);
         }
     }
-}
-
-/// In-datapath DHCPv4 responder (XDP glue). Delegates the request parse and the reply byte
-/// construction to `flowplane_core::dhcp::{parse, write}` over the `RawPkt`/`GlobalMaps` seam — the
-/// SAME code the native SimNode and the `BPF_PROG_TEST_RUN` byte-parity anchor run. The glue owns
-/// only what is genuinely eBPF-specific: MAC learning, the `bpf_xdp_adjust_tail` frame resize (core
-/// requires an already-`REPLY_LEN` frame), and the reflect verdict. Returns `Some(XDP_TX)` on reply.
-#[inline(always)]
-pub fn try_dhcpv4_reply(ctx: &XdpContext, meta: &PortMeta) -> Option<u32> {
-    let req =
-        flowplane_core::dhcp::parse(&crate::coreimpl::RawPkt::new(ctx.data(), ctx.data_end()))?;
-    let ifindex = unsafe { (*ctx.ctx).ingress_ifindex };
-    learn_mac(ifindex, meta, req.client_mac);
-    let cur_len = ctx.data_end() - ctx.data();
-    if cur_len != flowplane_core::dhcp::REPLY_LEN {
-        let delta = flowplane_core::dhcp::REPLY_LEN as i32 - cur_len as i32;
-        if unsafe { bpf_xdp_adjust_tail(ctx.ctx, delta) } != 0 {
-            return None;
-        }
-    }
-    // Re-wrap the resized frame: adjust_tail invalidates the prior data/data_end.
-    let ok = flowplane_core::dhcp::write(
-        &mut crate::coreimpl::RawPkt::new(ctx.data(), ctx.data_end()),
-        &req,
-        meta.guest_ipv4,
-        meta.gateway_ipv4,
-        GW_MAC,
-        &crate::coreimpl::GlobalMaps,
-        ifindex,
-    );
-    if !ok {
-        return None;
-    }
-    Some(crate::arp_nd::reflect(ctx))
 }
 
 // ──────────────────────── DHCPv6 responder ────────────────────────
@@ -150,73 +111,6 @@ fn d6_url_len(pxe_mode: u8, dm: &flowplane_common::DhcpMeta) -> usize {
     7 + 1 + host_len + 2 + path_len
 }
 
-/// Copy `len` bytes from `buf` into the packet at byte `offset` via bpf_xdp_store_bytes.
-///
-/// The helper performs its own bounds check against the (post-adjust_tail) packet length,
-/// so `offset`/`len` may be runtime values — this is what lets us emit DHCPv6 options at a
-/// running `off` offset without the verifier rejecting variable-offset direct packet writes.
-#[inline(always)]
-unsafe fn store(ctx: &XdpContext, offset: usize, buf: *const u8, len: usize) -> bool {
-    bpf_xdp_store_bytes(
-        ctx.ctx,
-        offset as u32,
-        buf as *mut core::ffi::c_void,
-        len as u32,
-    ) == 0
-}
-
-/// Emit the PXE boot file URL into the packet starting at byte `base`, one small piece at a
-/// time via bpf_xdp_store_bytes. Returns the number of bytes written (0 on bad host length).
-///
-/// Pieces (scheme / "[" / host / "]/" / path) are stored separately so no large URL staging
-/// buffer is needed on the stack; the constant pieces come straight from `.rodata` and the
-/// helper bounds-checks each store against the packet.
-#[inline(always)]
-unsafe fn d6_store_url(
-    ctx: &XdpContext,
-    base: usize,
-    pxe_mode: u8,
-    dm: &flowplane_common::DhcpMeta,
-) -> usize {
-    let host_len = dm.pxe_host_len as usize;
-    if host_len == 0 || host_len > 46 {
-        return 0;
-    }
-    // scheme (7 bytes) from .rodata
-    let scheme_ptr = if pxe_mode == PXE_TFTP {
-        TFTP_SCHEME.as_ptr()
-    } else {
-        HTTP_SCHEME.as_ptr()
-    };
-    let mut up = 0usize;
-    store(ctx, base + up, scheme_ptr, 7);
-    up += 7;
-    // "["
-    store(ctx, base + up, URL_LBRACKET.as_ptr(), 1);
-    up += 1;
-    // host (from map memory)
-    store(ctx, base + up, dm.pxe_host.as_ptr(), host_len);
-    up += host_len;
-    // "]/"
-    store(ctx, base + up, URL_RBRACKET.as_ptr(), 2);
-    up += 2;
-    // path
-    if pxe_mode == PXE_TFTP {
-        let path_len = TFTP_PATH.len();
-        store(ctx, base + up, TFTP_PATH.as_ptr(), path_len);
-        up += path_len;
-    } else {
-        let file_len = (dm.boot_filename_len as usize).min(64);
-        // store_bytes rejects a zero length ("invalid zero-sized read"), so only emit a path
-        // when there actually is a boot filename. An empty path (http://[host]/) is valid.
-        if file_len > 0 {
-            store(ctx, base + up, dm.boot_filename.as_ptr(), file_len);
-            up += file_len;
-        }
-    }
-    up
-}
-
 // Scan window for the option parser: copied from the packet into a stack buffer so the parse
 // loop iterates a fixed-size array (no per-iteration packet-bound branch, which is what made the
 // inlined parser explode the verifier's state count). 192 bytes covers any realistic SOLICIT.
@@ -224,11 +118,11 @@ const D6_SCAN: usize = 128;
 
 const D6_MAX_TOTAL: usize = F6_OPTS + D6_MAX_OPTS;
 
-/// Parsed request fields plus the values `try_dhcpv6_reply` computes before emitting the reply.
+/// Parsed request fields plus the values the DHCPv6 responder computes before emitting the reply.
 /// Passed by reference across the BPF-to-BPF call boundary so parse / emit verify independently.
 #[derive(Clone, Copy)]
 struct D6Reply {
-    // Filled by `d6_parse`:
+    // Filled by the parse subprogram:
     got_clientid: bool,
     duid: [u8; D6_MAX_DUID],
     duid_len: u16,
@@ -236,7 +130,7 @@ struct D6Reply {
     iaid: u32,
     rapid_commit: bool,
     pxe_mode: u8,
-    // Filled by `try_dhcpv6_reply`:
+    // Filled by the responder entry point:
     reply_type: u8,
     tid: [u8; 3],
     dns6_count: u16,
@@ -244,124 +138,6 @@ struct D6Reply {
     real_reply_len: u16,
     req_src6: [u8; 16],
     req_eth_src: [u8; 6],
-}
-
-/// Parse DHCPv6 options into `r` (out-param). Marked `#[inline(never)]` so it compiles to a
-/// separate BPF subprogram: its loop state is verified once, instead of being multiplied by the
-/// emit path's branch combinations (which is what inlining everything into one function did).
-///
-/// The packet has ALREADY been tail-grown to D6_MAX_TOTAL (>= F6_OPTS + D6_SCAN) by the caller, so
-/// a single constant-size bounds check lets every option read below use a constant offset — no
-/// per-iteration `ptr >= data_end` branch, and no stack scratch buffer (the memset of which got
-/// `mark_precise`-walked once per loop state and exploded the verifier's instruction count).
-/// `n` is the real option-byte count (original packet length) so we stop before the zero/garbage
-/// tail the grow added.
-///
-/// Returns the parsed `pxe_mode` as a scalar. A BPF subprogram may not leave a stack pointer in
-/// R0 at return, and LLVM otherwise leaves `&r.duid[i]` (from the loop) there. Returning a runtime
-/// scalar that the caller actually stores forces R0 to a scalar at the exit and isn't DCE'd (a
-/// constant `0` return was — the caller discarded it, so R0 was never materialised).
-///
-/// Reads go through bpf_xdp_load_bytes rather than direct packet access: a variable option offset
-/// added to a packet pointer resets the verifier's range to 0, and LLVM reassociates/decomposes
-/// multi-byte loads so per-read `ptr + size <= data_end` checks don't stick. load_bytes does its
-/// own in-kernel bounds check on a runtime (offset, len), sidestepping all of that. The option-skip
-/// loop keeps the call count tiny (~one per option) and the staging buffers are only a few bytes,
-/// so neither the loads nor a scratch-buffer memset blow up the verifier's state count.
-#[inline(never)]
-fn d6_parse(ctx: &XdpContext, r: &mut D6Reply, n: usize) -> u32 {
-    let mut i: usize = 0;
-    let mut guard: u32 = 0;
-    // A DHCPv6 SOLICIT/REQUEST carries well under a dozen options; cap the loop tightly so the
-    // verifier explores few symbolic iterations (each option-skip iteration with its load_bytes
-    // calls is expensive, and a loose cap pushed total instructions over the 1M limit).
-    while i + 4 <= n && i + 4 <= D6_SCAN && guard < 12 {
-        guard += 1;
-        // Option header: code(2) + len(2).
-        let mut hb = [0u8; 4];
-        if unsafe {
-            bpf_xdp_load_bytes(
-                ctx.ctx,
-                (F6_OPTS + i) as u32,
-                hb.as_mut_ptr() as *mut core::ffi::c_void,
-                4,
-            )
-        } != 0
-        {
-            break;
-        }
-        let code = ((hb[0] as u16) << 8) | hb[1] as u16;
-        // Clamp the option length to the scan window: it advances `i`, and an unclamped 0..65535
-        // from the packet made the verifier track `i = v + olen` with an exploding range (the
-        // option-skip loop's instruction count blew past 1M). Valid options are far smaller than
-        // the scan window, and the loop stops at `n` anyway, so the clamp is correctness-neutral.
-        let olen = (((hb[2] as u16) << 8) | hb[3] as u16).min(D6_SCAN as u16);
-        let v = i + 4; // value start
-
-        match code {
-            D6_OPT_RAPID_COMMIT => r.rapid_commit = true,
-            D6_OPT_USER_CLASS => {
-                // dpservice carries "iPXE" in a User Class option to request HTTP boot; treat the
-                // option's presence as that signal (avoids a per-byte string matcher).
-                if r.pxe_mode == PXE_NONE {
-                    r.pxe_mode = PXE_HTTP;
-                }
-            }
-            D6_OPT_IA_NA => {
-                // IAID = first 4 value bytes (big-endian).
-                let mut vb = [0u8; 4];
-                if unsafe {
-                    bpf_xdp_load_bytes(
-                        ctx.ctx,
-                        (F6_OPTS + v) as u32,
-                        vb.as_mut_ptr() as *mut core::ffi::c_void,
-                        4,
-                    )
-                } == 0
-                {
-                    r.iaid = u32::from_be_bytes(vb);
-                    r.got_iana = true;
-                }
-            }
-            D6_OPT_VENDOR_CLASS => {
-                // Enterprise number = first 4 value bytes (big-endian); 343 → TFTP boot.
-                let mut vb = [0u8; 4];
-                if unsafe {
-                    bpf_xdp_load_bytes(
-                        ctx.ctx,
-                        (F6_OPTS + v) as u32,
-                        vb.as_mut_ptr() as *mut core::ffi::c_void,
-                        4,
-                    )
-                } == 0
-                    && u32::from_be_bytes(vb) == PXE_ENTERPRISE
-                    && r.pxe_mode == PXE_NONE
-                {
-                    r.pxe_mode = PXE_TFTP;
-                }
-            }
-            D6_OPT_CLIENTID => {
-                r.got_clientid = true;
-                let dl = (olen as usize).min(D6_MAX_DUID);
-                r.duid_len = dl as u16;
-                // Load up to D6_MAX_DUID DUID bytes straight into `r.duid`; emit echoes `duid_len`
-                // of them. Loading the full 10 is harmless (the frame was grown) and never echoed.
-                let _ = unsafe {
-                    bpf_xdp_load_bytes(
-                        ctx.ctx,
-                        (F6_OPTS + v) as u32,
-                        r.duid.as_mut_ptr() as *mut core::ffi::c_void,
-                        D6_MAX_DUID as u32,
-                    )
-                };
-            }
-            _ => {}
-        }
-        // Advance to the next option. A zero-length option still advances by the 4-byte header,
-        // and `guard` bounds the loop regardless, so this always terminates for the verifier.
-        i = v + olen as usize;
-    }
-    r.pxe_mode as u32
 }
 
 // Constant option bytes live in `.rodata` so `d6_emit` doesn't stage them on its stack — the
@@ -392,180 +168,6 @@ static TFTP_SCHEME: [u8; 7] = *b"tftp://";
 static HTTP_SCHEME: [u8; 7] = *b"http://";
 static URL_LBRACKET: [u8; 1] = [b'['];
 static URL_RBRACKET: [u8; 2] = [b']', b'/'];
-
-/// Emit the DHCPv6 reply into the (already tail-adjusted) packet. Marked `#[inline(never)]` so it
-/// is a separate BPF subprogram — its option-branch combinations are verified on their own rather
-/// than multiplied against the parse loop's states.
-#[inline(never)]
-fn d6_emit(ctx: &XdpContext, data: usize, data_end: usize, meta: &PortMeta, r: &D6Reply) {
-    // Constant-size check: after this the verifier proves any constant offset < D6_MAX_TOTAL is
-    // in-bounds for direct packet access. (adjust_tail already grew the frame, so this holds.)
-    // data/data_end are passed in rather than re-derived from `ctx` inside the subprogram — see
-    // d6_parse for why (`ctx.data_end()` in a subprogram trips "pointer arithmetic on pkt_end").
-    if data + D6_MAX_TOTAL > data_end {
-        return;
-    }
-    let p = data as *mut u8;
-    let real_reply_len = r.real_reply_len as usize;
-
-    // NOTE: we deliberately do NOT zero-fill the option region. A constant-length `write_bytes`
-    // memset here became a byte loop that the verifier `mark_precise`-walked once per downstream
-    // store_bytes state — tens of thousands of times — blowing the 1M instruction limit. Instead
-    // the checksum below sums only the real bytes (gated by length) and zeroes the lone odd-pad
-    // byte, so the uninitialised grown tail never affects the result.
-
-    // ─── Ethernet ───
-    unsafe {
-        write6(p, &r.req_eth_src);
-        write6(p.add(6), &GW_MAC);
-        core::ptr::write_unaligned(p.add(12) as *mut u16, ETH_P_IPV6.to_be());
-    }
-
-    // ─── IPv6 ───
-    let ipv6_payload_len = (real_reply_len - ETH_LEN - 40) as u16;
-    unsafe {
-        core::ptr::write_unaligned(p.add(ETH_LEN + 4) as *mut u16, ipv6_payload_len.to_be());
-        *p.add(ETH_LEN + 6) = IPPROTO_UDP;
-        *p.add(ETH_LEN + 7) = 64; // hop limit
-        write16(p.add(ETH_LEN + 8), &meta.gateway_ipv6);
-        write16(p.add(ETH_LEN + 24), &r.req_src6);
-    }
-
-    // ─── UDP ───
-    let udp_len = ipv6_payload_len;
-    unsafe {
-        core::ptr::write_unaligned(p.add(ETH_LEN + 40) as *mut u16, 547u16.to_be());
-        core::ptr::write_unaligned(p.add(ETH_LEN + 42) as *mut u16, 546u16.to_be());
-        core::ptr::write_unaligned(p.add(ETH_LEN + 44) as *mut u16, udp_len.to_be());
-        core::ptr::write_unaligned(p.add(ETH_LEN + 46) as *mut u16, 0u16); // cksum filled later
-    }
-
-    // ─── DHCPv6 message header ───
-    unsafe {
-        *p.add(F6_DHCP) = r.reply_type;
-        *p.add(F6_DHCP + 1) = r.tid[0];
-        *p.add(F6_DHCP + 2) = r.tid[1];
-        *p.add(F6_DHCP + 3) = r.tid[2];
-    }
-
-    let dhcp_cfg = crate::maps::DHCP_CONFIG.get(0);
-    let ifindex = unsafe { (*ctx.ctx).ingress_ifindex };
-    let dhcp_meta = unsafe { crate::maps::DHCP_META.get(&ifindex) };
-    let duid_len_usize = (r.duid_len as usize).min(D6_MAX_DUID);
-
-    let mut off: usize = 0;
-
-    // ServerId: DUID-LL (always present) — constant offset, direct packet write.
-    unsafe {
-        core::ptr::write_unaligned(p.add(F6_OPTS + off) as *mut u16, D6_OPT_SERVERID.to_be());
-        core::ptr::write_unaligned(p.add(F6_OPTS + off + 2) as *mut u16, 10u16.to_be());
-        core::ptr::write_unaligned(p.add(F6_OPTS + off + 4) as *mut u16, DUID_LL_TYPE.to_be());
-        core::ptr::write_unaligned(
-            p.add(F6_OPTS + off + 6) as *mut u16,
-            DP_DHCPV6_HW_ID.to_be(),
-        );
-        write6(p.add(F6_OPTS + off + 8), &meta.guest_mac);
-    }
-    off += 14;
-
-    // ClientId: echo the client's DUID (off is still constant 14 here).
-    if r.got_clientid && duid_len_usize > 0 {
-        unsafe {
-            core::ptr::write_unaligned(p.add(F6_OPTS + off) as *mut u16, D6_OPT_CLIENTID.to_be());
-            core::ptr::write_unaligned(
-                p.add(F6_OPTS + off + 2) as *mut u16,
-                (duid_len_usize as u16).to_be(),
-            );
-        }
-        let duid_ptr = r.duid.as_ptr();
-        let mut di = 0usize;
-        while di < duid_len_usize && di < D6_MAX_DUID {
-            unsafe {
-                *p.add(F6_OPTS + off + 4 + di) = *duid_ptr.add(di);
-            }
-            di += 1;
-        }
-        off += 4 + duid_len_usize;
-    }
-
-    // From here `off` is runtime-variable. Adding a variable to a packet pointer yields range=0
-    // (the verifier won't combine it with the static data range), so these options are written
-    // with bpf_xdp_store_bytes, which bounds-checks each store internally.
-
-    // One small reused stack buffer for the option headers that carry a runtime length.
-    let mut hdr = [0u8; 4];
-
-    // IA_NA: store the constant template from .rodata, then overlay the runtime iaid (offset 4)
-    // and the assigned IPv6 address (offset 20, straight from map memory).
-    if r.got_iana {
-        let iaid_be = r.iaid.to_be_bytes();
-        unsafe {
-            store(ctx, F6_OPTS + off, IA_TEMPLATE.as_ptr(), 50);
-            store(ctx, F6_OPTS + off + 4, iaid_be.as_ptr(), 4);
-            store(ctx, F6_OPTS + off + 20, meta.guest_ipv6.as_ptr(), 16);
-        }
-        off += 50;
-    }
-
-    // RapidCommit (only if client sent it) — constant option from .rodata.
-    if r.rapid_commit {
-        unsafe {
-            store(ctx, F6_OPTS + off, RC_OPT.as_ptr(), 4);
-        }
-        off += 4;
-    }
-
-    // DNS servers: 4-byte header then each 16-byte address stored straight from map memory.
-    let dns6_count = (r.dns6_count as usize).min(D6_MAX_DNS);
-    if dns6_count > 0 {
-        if let Some(cfg) = dhcp_cfg {
-            let dns_data_len = (dns6_count as u16) * 16;
-            hdr[0..2].copy_from_slice(&D6_OPT_DNS.to_be_bytes());
-            hdr[2..4].copy_from_slice(&dns_data_len.to_be_bytes());
-            unsafe {
-                store(ctx, F6_OPTS + off, hdr.as_ptr(), 4);
-            }
-            let dns6_ptr = cfg.dns6.as_ptr();
-            let mut di = 0usize;
-            while di < dns6_count {
-                unsafe {
-                    store(
-                        ctx,
-                        F6_OPTS + off + 4 + di * 16,
-                        dns6_ptr.add(di) as *const u8,
-                        16,
-                    );
-                }
-                di += 1;
-            }
-            off += 4 + dns6_count * 16;
-        }
-    }
-
-    // Boot File URL: 4-byte header then the URL pieces, all via store_bytes.
-    if r.url_len as usize > 0 {
-        if let Some(dm) = dhcp_meta {
-            hdr[0..2].copy_from_slice(&D6_OPT_BOOT_FILE.to_be_bytes());
-            hdr[2..4].copy_from_slice(&r.url_len.to_be_bytes());
-            unsafe {
-                store(ctx, F6_OPTS + off, hdr.as_ptr(), 4);
-                let written = d6_store_url(ctx, F6_OPTS + off + 4, r.pxe_mode, dm);
-                off += 4 + written;
-            }
-        }
-    }
-    let _ = off;
-
-    // Zero the single odd-length pad byte: when udp_len is odd, the last checksummed 16-bit word
-    // straddles the last real byte and the first (uninitialised) pad byte — zeroing that pad byte
-    // makes the word = real_byte<<8, which is the RFC's "pad the final odd byte with zero" rule.
-    // (The maximum-size reply has an even udp_len, so real_reply_len < D6_MAX_TOTAL whenever this
-    // matters and the 1-byte store stays in-bounds.) The UDP checksum itself is computed by the
-    // separate `d6_checksum` subprogram so its locals don't add to this frame.
-    unsafe {
-        store(ctx, real_reply_len, ZERO1.as_ptr(), 1);
-    }
-}
 
 /// Compute and write the DHCPv6 reply's UDP checksum. A separate BPF subprogram (not nested under
 /// `d6_emit`) so its locals form their own short call chain with the large `guest_tx` frame rather
@@ -615,159 +217,7 @@ fn d6_checksum(data: usize, data_end: usize, udp_len: u16) -> u32 {
     cksum as u32
 }
 
-/// In-datapath DHCPv6 responder.
-///
-/// Detects DHCPv6 SOLICIT/REQUEST/CONFIRM on UDP dst port 547, then delegates option parsing to
-/// `d6_parse` and reply construction to `d6_emit` (both separate BPF subprograms — see their docs
-/// for why splitting keeps the verifier's state count in check). Returns `Some(XDP_TX)` on reply.
-#[inline(always)]
-pub fn try_dhcpv6_reply(ctx: &XdpContext, meta: &PortMeta) -> Option<u32> {
-    let data = ctx.data();
-    let data_end = ctx.data_end();
-    if data + MIN_D6_LEN > data_end {
-        return None;
-    }
-    let p = data as *const u8;
-
-    // Detect: ETH_P_IPV6 / next-header UDP / UDP dst port 547.
-    let ethertype = u16::from_be(unsafe { core::ptr::read_unaligned(p.add(12) as *const u16) });
-    if ethertype != ETH_P_IPV6 {
-        return None;
-    }
-    if unsafe { *p.add(ETH_LEN + 6) } != IPPROTO_UDP {
-        return None;
-    }
-    let udp_dst =
-        u16::from_be(unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + 40 + 2) as *const u16) });
-    if udp_dst != 547 {
-        return None;
-    }
-
-    let msg_type = unsafe { *p.add(F6_DHCP) };
-    if msg_type != D6_SOLICIT && msg_type != D6_REQUEST && msg_type != D6_CONFIRM {
-        return None;
-    }
-
-    let mut r = D6Reply {
-        got_clientid: false,
-        duid: [0u8; D6_MAX_DUID],
-        duid_len: 0,
-        got_iana: false,
-        iaid: 0,
-        rapid_commit: false,
-        pxe_mode: PXE_NONE,
-        reply_type: D6_REPLY,
-        tid: [
-            unsafe { *p.add(F6_DHCP + 1) },
-            unsafe { *p.add(F6_DHCP + 2) },
-            unsafe { *p.add(F6_DHCP + 3) },
-        ],
-        dns6_count: 0,
-        url_len: 0,
-        real_reply_len: 0,
-        req_src6: unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + 8) as *const [u8; 16]) },
-        req_eth_src: unsafe { core::ptr::read_unaligned(p.add(6) as *const [u8; 6]) },
-    };
-
-    // Real option-byte count in the *original* frame, captured before we grow it (the grown tail
-    // is garbage and must not be parsed). Clamp to the scan window.
-    let cur_len = data_end - data;
-    let opts_avail = if cur_len > F6_OPTS {
-        cur_len - F6_OPTS
-    } else {
-        0
-    };
-    let n = if opts_avail < D6_SCAN {
-        opts_avail
-    } else {
-        D6_SCAN
-    };
-
-    // Grow the frame to the MAXIMUM possible reply size FIRST, so both parse and emit can use a
-    // single constant-size bounds check for all their direct packet accesses (the UDP/IPv6 length
-    // fields carry the REAL payload length; trailing pad is zeroed and checksum-neutral).
-    let delta: i32 = D6_MAX_TOTAL as i32 - cur_len as i32;
-    if unsafe { bpf_xdp_adjust_tail(ctx.ctx, delta) } != 0 {
-        return None;
-    }
-    // Re-fetch packet bounds after the grow (adjust_tail invalidates the old pointers) and pass
-    // them explicitly to the subprograms.
-    let data = ctx.data();
-    let data_end = ctx.data_end();
-
-    // Parse options (separate subprogram). Store the returned pxe_mode back into `r` — using the
-    // return value keeps it live so the subprogram materialises a scalar in R0 (see d6_parse).
-    r.pxe_mode = d6_parse(ctx, &mut r, n) as u8;
-
-    // Reply type: SOLICIT+RapidCommit → REPLY, plain SOLICIT → ADVERTISE, REQUEST/CONFIRM → REPLY.
-    r.reply_type = if msg_type == D6_SOLICIT && !r.rapid_commit {
-        D6_ADVERTISE
-    } else {
-        D6_REPLY
-    };
-
-    // Config-derived option sizes (DNS, PXE boot file URL).
-    let dhcp_cfg = crate::maps::DHCP_CONFIG.get(0);
-    let ifindex = unsafe { (*ctx.ctx).ingress_ifindex };
-    let dhcp_meta = unsafe { crate::maps::DHCP_META.get(&ifindex) };
-
-    let dns6_count = if let Some(cfg) = dhcp_cfg {
-        (cfg.dns6_len as usize).min(D6_MAX_DNS)
-    } else {
-        0
-    };
-    r.dns6_count = dns6_count as u16;
-
-    let url_len = if r.pxe_mode != PXE_NONE {
-        if let Some(dm) = dhcp_meta {
-            d6_url_len(r.pxe_mode, dm).min(D6_MAX_URL)
-        } else {
-            0
-        }
-    } else {
-        0
-    };
-    r.url_len = url_len as u16;
-
-    // Size the reply. The sum is ≤ D6_MAX_OPTS by construction, but the `.min` makes that explicit
-    // to the verifier so it does NOT keep an (unreachable) "too big → return None" branch: such a
-    // None after the tail-grow would fall through to guest_tx's forwarding path, and the verifier
-    // explored that whole map-heavy path once per parse state — tens of thousands of times, blowing
-    // the 1M instruction limit. We have already grown the frame, so from here we ALWAYS emit.
-    let duid_len_usize = (r.duid_len as usize).min(D6_MAX_DUID);
-    let real_opts_len: usize =
-        (14 + if r.got_clientid && duid_len_usize > 0 {
-            4 + duid_len_usize
-        } else {
-            0
-        } + if r.got_iana { 50 } else { 0 }
-            + if r.rapid_commit { 4 } else { 0 }
-            + if dns6_count > 0 {
-                4 + dns6_count * 16
-            } else {
-                0
-            }
-            + if url_len > 0 { 4 + url_len } else { 0 })
-        .min(D6_MAX_OPTS);
-    r.real_reply_len = (F6_OPTS + real_opts_len) as u16;
-
-    // Emit the reply, then compute its UDP checksum (two separate subprograms, each a short call
-    // chain off the large guest_tx frame — see d6_checksum for why the checksum is split out).
-    d6_emit(ctx, data, data_end, meta, &r);
-    let udp_len = (real_opts_len + F6_OPTS - ETH_LEN - 40) as u16;
-    let _ = d6_checksum(data, data_end, udp_len);
-
-    Some(crate::arp_nd::reflect(ctx))
-}
-
 // ──────────────────────── DHCPv6 responder (tc / skb) ────────────────────────
-//
-// FALLBACK design (see task notes): the XDP responder above is left 100% untouched so the
-// conformance datapath is zero-risk. The functions below mirror its byte logic exactly, but use
-// the skb helpers (bpf_skb_load_bytes / bpf_skb_store_bytes / bpf_skb_change_tail) instead of the
-// xdp_md ones, because tc operates on a `__sk_buff`. The variable-offset reads/writes go through
-// the helpers for the same verifier reason as XDP (load/store_bytes bounds-check a runtime
-// (offset,len) in-kernel); fixed-offset access uses direct packet pointers.
 
 /// skb variant of `store`: copy `len` bytes from `buf` into the skb at byte `offset`.
 #[inline(always)]

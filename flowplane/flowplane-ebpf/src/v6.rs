@@ -3,11 +3,9 @@ use aya_ebpf::{
     helpers::{bpf_redirect, bpf_xdp_adjust_head},
     programs::XdpContext,
 };
-use flowplane_common::PortMeta;
 use flowplane_core::err::DpErr;
 
 use crate::arp_nd::GW_MAC;
-use crate::coreimpl::CtxPkt;
 use crate::encap::reforward;
 use crate::maps::{LOCAL, UNDERLAY};
 use crate::parse::{write16, write6, ETH_LEN, ETH_P_IPV6, IPPROTO_ICMPV6, IPV6_LEN};
@@ -86,54 +84,6 @@ fn try_icmpv6_echo_reply(
     }
 
     Some(unsafe { bpf_redirect(local.uplink_ifindex, 0) } as u32)
-}
-
-/// Egress for an inner IPv6 frame: run NAT64 first (XDP-only, size-changing), then execute the
-/// shared `forward_decision_v6` verdict (route6 + local/encap).
-#[inline(always)]
-pub fn v6_guest_tx(ctx: &XdpContext, meta: &PortMeta) -> Result<u32, DpErr> {
-    // NAT64: intercept packets destined to 64:ff9b::/96, translate IPv6→IPv4, SNAT, encap.
-    if let Some(act) =
-        crate::nat64::nat64_egress(ctx, meta.vni, meta.guest_ipv4, &meta.underlay_ipv6)?
-    {
-        return Ok(act);
-    }
-
-    let data = ctx.data();
-    let data_end = ctx.data_end();
-    if data + ETH_LEN + IPV6_LEN > data_end {
-        return Ok(xdp_action::XDP_PASS);
-    }
-    match crate::egress::forward_decision_v6(ctx.data(), ctx.data_end(), 0, meta) {
-        crate::egress::EgressVerdict::Pass => Ok(xdp_action::XDP_PASS),
-        crate::egress::EgressVerdict::Drop => Ok(xdp_action::XDP_DROP),
-        crate::egress::EgressVerdict::Local {
-            tap_ifindex,
-            guest_mac,
-        } => {
-            if ctx.data() + ETH_LEN > ctx.data_end() {
-                return Ok(xdp_action::XDP_PASS);
-            }
-            let q = ctx.data() as *mut u8;
-            unsafe {
-                write6(q, &guest_mac);
-                write6(q.add(6), &GW_MAC);
-                core::ptr::write_unaligned(q.add(12) as *mut u16, ETH_P_IPV6.to_be());
-            }
-            Ok(unsafe { bpf_redirect(tap_ifindex, 0) } as u32)
-        }
-        crate::egress::EgressVerdict::Encap(e) => {
-            if unsafe { bpf_xdp_adjust_head(ctx.ctx, -(IPV6_LEN as i32)) } != 0 {
-                return Err(DpErr::Bounds);
-            }
-            let mut pkt = CtxPkt { ctx };
-            if flowplane_core::encap::write_outer_v6(&mut pkt, &e) {
-                Ok(unsafe { bpf_redirect(e.uplink_ifindex, 0) } as u32)
-            } else {
-                Err(DpErr::Bounds)
-            }
-        }
-    }
 }
 
 /// Ingress for an inner IPv6 frame (outer next-header 41): deliver by outer IPv6 dst, decap, write
