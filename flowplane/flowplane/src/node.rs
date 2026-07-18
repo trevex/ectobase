@@ -10,12 +10,12 @@ use pb::{
     AddFwRuleRequest, AddFwRuleResponse, AddLbBackendRequest, AddLbBackendResponse,
     AddLbVipRequest, AddLbVipResponse, AddNatSourceRequest, AddNatSourceResponse,
     AddNeighborNatRequest, AddNeighborNatResponse, AddRouteRequest, AddRouteResponse,
-    AttachInterfaceRequest, AttachInterfaceResponse, ConfigureNetworkRequest,
-    ConfigureNetworkResponse, DelFwRuleRequest, DelFwRuleResponse, DelLbBackendRequest,
-    DelLbBackendResponse, DelLbVipRequest, DelLbVipResponse, DetachInterfaceRequest,
-    DetachInterfaceResponse, WithdrawNatSourceRequest, WithdrawNatSourceResponse,
-    WithdrawNeighborNatRequest, WithdrawNeighborNatResponse, WithdrawRouteRequest,
-    WithdrawRouteResponse,
+    AttachInterfaceRequest, AttachInterfaceResponse, ConfigureMeterRequest, ConfigureMeterResponse,
+    ConfigureNetworkRequest, ConfigureNetworkResponse, DelFwRuleRequest, DelFwRuleResponse,
+    DelLbBackendRequest, DelLbBackendResponse, DelLbVipRequest, DelLbVipResponse,
+    DetachInterfaceRequest, DetachInterfaceResponse, WithdrawNatSourceRequest,
+    WithdrawNatSourceResponse, WithdrawNeighborNatRequest, WithdrawNeighborNatResponse,
+    WithdrawRouteRequest, WithdrawRouteResponse,
 };
 
 use crate::attach::AttachState;
@@ -509,6 +509,34 @@ impl DataplaneNode for NodeService {
         .map_err(|e| Status::internal(e.to_string()))?;
         println!("FW rule del iface={} id={}", r.interface_id, r.rule_id);
         Ok(Response::new(DelFwRuleResponse {}))
+    }
+
+    async fn configure_meter(
+        &self,
+        req: Request<ConfigureMeterRequest>,
+    ) -> Result<Response<ConfigureMeterResponse>, Status> {
+        let attach = self
+            .attach
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
+            .clone();
+        let r = req.into_inner();
+        let iface = r.interface_id.clone().into_bytes();
+        let total_mbps = r.total_mbps as u64;
+        let public_mbps = r.public_mbps as u64;
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            // Resolve interface_id -> ifindex + program the METER map via the same control path
+            // (and mbps->MeterState conversion) the --meter CLI uses. 0/0 = unlimited (clears).
+            attach.control.set_meter(&iface, total_mbps, public_mbps)
+        })
+        .await
+        .map_err(|e| Status::internal(format!("configure_meter task panicked: {e}")))?
+        .map_err(|e| Status::internal(e.to_string()))?;
+        println!(
+            "METER configure iface={} total_mbps={} public_mbps={}",
+            r.interface_id, r.total_mbps, r.public_mbps
+        );
+        Ok(Response::new(ConfigureMeterResponse {}))
     }
 }
 

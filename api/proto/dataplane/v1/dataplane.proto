@@ -44,6 +44,10 @@ service DataplaneNode {
   rpc AddFwRule(AddFwRuleRequest) returns (AddFwRuleResponse);
   // DelFwRule removes a per-interface firewall rule by id.
   rpc DelFwRule(DelFwRuleRequest) returns (DelFwRuleResponse);
+  // ConfigureMeter sets (or clears) the egress bandwidth cap for a locally-attached interface by
+  // programming its METER token-bucket. Idempotent: re-configuring replaces the caps. Both rates
+  // 0 = unlimited (the datapath treats bps==0 as pass), which also clears an existing meter.
+  rpc ConfigureMeter(ConfigureMeterRequest) returns (ConfigureMeterResponse);
 }
 
 // A (port, proto) load-balancer service tuple. proto is the IP protocol number (6=TCP, 17=UDP,
@@ -169,3 +173,10 @@ message WithdrawNeighborNatRequest {
   uint32 vni = 4;
 }
 message WithdrawNeighborNatResponse {}
+
+message ConfigureMeterRequest {
+  string interface_id = 1; // target interface (as in AttachInterface)
+  uint32 total_mbps = 2;   // total egress cap in Mbit/s; 0 = unlimited
+  uint32 public_mbps = 3;  // public (external/NATed) egress cap in Mbit/s; 0 = unlimited
+}
+message ConfigureMeterResponse {}
