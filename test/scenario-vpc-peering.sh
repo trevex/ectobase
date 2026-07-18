@@ -57,9 +57,17 @@ fi
 BLUE_NODE=k01-worker
 GREEN_NODE=k01-control-plane
 
-# VPC names and subnets — unique to this scenario (avoid collisions).
+# VPC names, subnets, and PINNED VNIs — unique to this scenario (avoid collisions).
+#
+# There is NO VPC-VNI-allocator controller in this deployment: the central VNI allocator
+# does not run on the k01 fabric, so an auto-VNI VPC (spec:{}) never gets a status.vni and
+# the scenario would stall forever. The working scenarios (scenario-nat-egress.sh /
+# scenario-lb-ingress.sh) therefore PIN spec.vni and MANUALLY patch status. We do the same:
+# pin both VNIs here and patch each VPC's status (vni + state:Ready) in [1].
 BLUE_VPC=peer-blue
 GREEN_VPC=peer-green
+BLUE_VNI=110
+GREEN_VNI=120
 BLUE_SUBNET=10.0.10.0/24
 GREEN_SUBNET=10.0.20.0/24
 
@@ -186,17 +194,17 @@ info "fabric nodes up; netplane stack present; pre-flight ok"
 # ---------------------------------------------------------------------------
 # [1] Create VPCs + guest NICs
 # ---------------------------------------------------------------------------
-echo "== [1] create VPCs ($BLUE_VPC / $GREEN_VPC) + guest NICs =="
+echo "== [1] create VPCs ($BLUE_VPC VNI=$BLUE_VNI / $GREEN_VPC VNI=$GREEN_VNI) + guest NICs =="
 cat <<YAML | kc apply -f - >/dev/null || { echo "FAIL: apply VPC/NIC CRs"; exit 1; }
 apiVersion: net.ectobase.dev/v1alpha1
 kind: VPC
 metadata: {name: $BLUE_VPC, namespace: default}
-spec: {}
+spec: {vni: $BLUE_VNI}
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: VPC
 metadata: {name: $GREEN_VPC, namespace: default}
-spec: {}
+spec: {vni: $GREEN_VNI}
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NetworkInterface
@@ -224,18 +232,14 @@ spec:
 YAML
 info "CRs applied"
 
-# Wait for both VPCs to get VNIs assigned (the VPC allocator sets status.vni).
-info "waiting for VPC VNIs to be allocated..."
-for _ in $(seq 1 60); do
-  BLUE_VNI=$(kc get vpc "$BLUE_VPC"  -o jsonpath='{.status.vni}' 2>/dev/null || true)
-  GREEN_VNI=$(kc get vpc "$GREEN_VPC" -o jsonpath='{.status.vni}' 2>/dev/null || true)
-  [ -n "$BLUE_VNI"  ] && [ "$BLUE_VNI"  != "0" ] && \
-  [ -n "$GREEN_VNI" ] && [ "$GREEN_VNI" != "0" ] && break
-  sleep 1
-done
-[ -n "$BLUE_VNI"  ] && [ "$BLUE_VNI"  != "0" ] || { echo "FAIL: VPC $BLUE_VPC VNI not allocated"; exit 1; }
-[ -n "$GREEN_VNI" ] && [ "$GREEN_VNI" != "0" ] || { echo "FAIL: VPC $GREEN_VPC VNI not allocated"; exit 1; }
-info "$BLUE_VPC VNI=$BLUE_VNI  |  $GREEN_VPC VNI=$GREEN_VNI"
+# Patch both VPCs' status directly (vni + state:Ready). There is NO VPC controller on this
+# fabric, so nothing else would ever populate status.vni — exactly as scenario-nat-egress.sh
+# does for its single VPC. The VNIs are the PINNED values from spec.vni above.
+kc patch vpc "$BLUE_VPC"  --subresource=status --type=merge \
+  -p "{\"status\":{\"vni\":$BLUE_VNI,\"state\":\"Ready\"}}" >/dev/null
+kc patch vpc "$GREEN_VPC" --subresource=status --type=merge \
+  -p "{\"status\":{\"vni\":$GREEN_VNI,\"state\":\"Ready\"}}" >/dev/null
+info "$BLUE_VPC VNI=$BLUE_VNI (status Ready)  |  $GREEN_VPC VNI=$GREEN_VNI (status Ready)"
 
 # ---------------------------------------------------------------------------
 # [2] Attach guests via DataplaneNode gRPC + kick netplane-agent
