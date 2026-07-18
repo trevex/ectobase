@@ -1,12 +1,13 @@
-//! NAT64 EGRESS (guest IPv6 → external IPv4), ported over the `Pkt` + `Maps` trait seam so the SAME
-//! translation runs in the eBPF datapath (`RawPkt`/`GlobalMaps`), natively in the sim
-//! (`VecPkt`/`MemMaps`), and under the `BPF_PROG_TEST_RUN` byte-parity anchor.
+//! NAT64 (bidirectional IPv6 ⇆ IPv4 translation for the `64:ff9b::/96` prefix), ported over the
+//! `Pkt` + `Maps` trait seam so the SAME translation runs in the eBPF datapath
+//! (`RawPkt`/`GlobalMaps`), natively in the sim (`VecPkt`/`MemMaps`), and under the
+//! `BPF_PROG_TEST_RUN` byte-parity anchor.
 //!
-//! Faithful port of the previous inline eBPF `nat64::nat64_egress` (XDP) / `tc_nat64_egress` (TC): a
-//! guest IPv6 frame whose dst is in the NAT64 well-known prefix `64:ff9b::/96` is translated to IPv4,
-//! SNAT'd via the guest's NAT config, then forwarded like a normal IPv4 NAT flow (the glue encaps
-//! IP-in-IPv6 toward the route nexthop). ONLY egress lives here; `nat64_ingress` (the IPv4-to-IPv6
-//! reply path) stays in the eBPF crate.
+//! Faithful port of the previous inline eBPF `nat64::nat64_egress` (XDP) / `tc_nat64_egress` (TC) +
+//! `nat64::nat64_ingress` (XDP): the EGRESS path (guest IPv6 dst in `64:ff9b::/96` → external IPv4 +
+//! SNAT, encapped IP-in-IPv6 toward the route nexthop) and the INGRESS path (an external IPv4 reply
+//! whose reverse conntrack entry carries [`CT_F_NAT64`] → expanded back to the guest's IPv6 and
+//! delivered to its tap) both live here now.
 //!
 //! ## The resize seam (why this is a two-call parse/write split)
 //!
@@ -33,10 +34,9 @@
 //! ## Checksum helpers
 //!
 //! The pure checksum/translation helpers (`ipv4_hdr_checksum`, `icmpv4_echo_checksum`,
-//! `tcp_udp_v6_to_v4`, `pseudo_v4`/`pseudo_v6`) are ported verbatim from the eBPF module — they
-//! operate on fixed-size stack arrays and have no packet/map dependency, so they cross the seam
-//! trivially. `nat64_ingress`'s `icmpv6_echo_checksum` / `tcp_udp_v4_to_v6` are NOT ported (ingress
-//! is a separate task).
+//! `tcp_udp_v6_to_v4`, `icmpv6_echo_checksum`, `tcp_udp_v4_to_v6`, `pseudo_v4`/`pseudo_v6`) are
+//! ported verbatim from the eBPF module — they operate on fixed-size stack arrays and have no
+//! packet/map dependency, so they cross the seam trivially.
 
 use flowplane_common::{
     CtEntry, CtKey, NatKey, CT_F_NAT64, CT_F_SRC_NAT, CT_REWRITE_DST, CT_REWRITE_SRC,
@@ -50,6 +50,7 @@ use crate::pkt::Pkt;
 const ETH_LEN: usize = 14;
 const IPV6_LEN: usize = 40;
 const ETH_P_IP: u16 = 0x0800;
+const ETH_P_IPV6: u16 = 0x86DD;
 
 /// L4 protocol numbers.
 const IPPROTO_ICMP: u8 = 1;
@@ -60,6 +61,8 @@ const IPPROTO_ICMPV6: u8 = 58;
 /// ICMPv6 / ICMPv4 echo type constants.
 const ICMPV6_ECHO_REQUEST: u8 = 128;
 const ICMP_ECHO_REQUEST: u8 = 8;
+/// ICMPv6 echo-REPLY type (the ingress reply path translates ICMPv4 echo-reply → this).
+const ICMPV6_ECHO_REPLY: u8 = 129;
 
 /// Port-allocation probe limit, single-sourced with the guest-egress SNAT allocator.
 pub use crate::nat::PROBE_LIMIT;
@@ -205,6 +208,79 @@ fn tcp_udp_v6_to_v4(
         .wrapping_add(pv4)
         .wrapping_add(old_sp)
         .wrapping_add(new_sp);
+    sum = (sum & 0xffff) + (sum >> 16);
+    sum = (sum & 0xffff) + (sum >> 16);
+    (!(sum as u16)).to_be()
+}
+
+/// Build a `64:ff9b::` IPv6 address embedding a 4-byte IPv4 address. Used by the INGRESS path to
+/// reconstruct the reply's IPv6 source from the external server's IPv4. Faithful port of the eBPF
+/// `nat64_embed`.
+#[inline(always)]
+fn nat64_embed(ipv4: [u8; 4]) -> [u8; 16] {
+    [
+        0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, ipv4[0], ipv4[1], ipv4[2], ipv4[3],
+    ]
+}
+
+/// Checksum over an 8-byte ICMPv6 echo header with an IPv6 pseudo-header. Faithful port of the eBPF
+/// ingress `icmpv6_echo_checksum`. pseudo-header: src(16) + dst(16) + upper-layer length (4 BE) +
+/// zeros(3) + next-header(1); upper-layer length is fixed at 8 (the echo header).
+#[inline(always)]
+fn icmpv6_echo_checksum(src: &[u8; 16], dst: &[u8; 16], hdr: &[u8; 8]) -> u16 {
+    let mut s: u32 = 0;
+    // src — 8 words.
+    s = csum_add16(s, src[0], src[1]);
+    s = csum_add16(s, src[2], src[3]);
+    s = csum_add16(s, src[4], src[5]);
+    s = csum_add16(s, src[6], src[7]);
+    s = csum_add16(s, src[8], src[9]);
+    s = csum_add16(s, src[10], src[11]);
+    s = csum_add16(s, src[12], src[13]);
+    s = csum_add16(s, src[14], src[15]);
+    // dst — 8 words.
+    s = csum_add16(s, dst[0], dst[1]);
+    s = csum_add16(s, dst[2], dst[3]);
+    s = csum_add16(s, dst[4], dst[5]);
+    s = csum_add16(s, dst[6], dst[7]);
+    s = csum_add16(s, dst[8], dst[9]);
+    s = csum_add16(s, dst[10], dst[11]);
+    s = csum_add16(s, dst[12], dst[13]);
+    s = csum_add16(s, dst[14], dst[15]);
+    // Upper-layer length = 8 (fits in low 16 bits).
+    s = csum_add16(s, 0, 8);
+    // Next-header = 58 (ICMPv6).
+    s = csum_add16(s, 0, IPPROTO_ICMPV6);
+    // ICMPv6 header — 4 words.
+    s = csum_add16(s, hdr[0], hdr[1]);
+    s = csum_add16(s, hdr[2], hdr[3]);
+    s = csum_add16(s, hdr[4], hdr[5]);
+    s = csum_add16(s, hdr[6], hdr[7]);
+    csum_fold(s)
+}
+
+/// Translate a TCP/UDP checksum from an IPv4 pseudo-header to an IPv6 pseudo-header (INGRESS). The
+/// port fields are assumed unchanged (the reverse `ct_apply` already restored the dst port + folded
+/// it into the checksum before this runs). All arguments in network byte order. Faithful port of the
+/// eBPF ingress `tcp_udp_v4_to_v6`.
+///
+/// new_cksum = ~(~HC_old + ~pseudo_v4 + pseudo_v6).
+#[inline(always)]
+fn tcp_udp_v4_to_v6(
+    cksum_be: u16,
+    src4: [u8; 4],
+    dst4: [u8; 4],
+    src6: &[u8; 16],
+    dst6: &[u8; 16],
+    proto: u8,
+    l4_len: u16,
+) -> u16 {
+    let s0 = !u16::from_be(cksum_be) as u32;
+    let pv4 = pseudo_v4(src4, dst4, proto, l4_len); // folded to 16-bit
+    let pv6 = pseudo_v6(src6, dst6, proto, l4_len); // folded to 16-bit
+    let mut sum = s0
+        .wrapping_add(!pv4 as u16 as u32) // remove v4 pseudo contribution
+        .wrapping_add(pv6); // add v6 pseudo contribution
     sum = (sum & 0xffff) + (sum >> 16);
     sum = (sum & 0xffff) + (sum >> 16);
     (!(sum as u16)).to_be()
@@ -530,6 +606,247 @@ pub fn nat64_egress_write<P: Pkt>(
                 None => return false,
             };
             h[0..2].copy_from_slice(&x.nat_port.to_be_bytes());
+            h[6..8].copy_from_slice(&new_ck.to_ne_bytes());
+            pkt.write_array(l4, &h)
+        }
+        _ => false,
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INGRESS parse + write over the Pkt/Maps seam
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The INGRESS reply path is the mirror of egress: an external IPv4 reply whose reverse conntrack
+// entry carries CT_F_NAT64 (detected by `try_uplink_rx`, which has already run `ct_apply` to restore
+// the guest IPv4 dst + orig L4 port + fold both into the IPv4/L4 checksums) is expanded from IPv4
+// back to IPv6 and delivered to the guest tap. Because the frame GROWS on the wire only in the outer
+// sense — the layout goes `[Eth][outerIPv6(40)][innerIPv4(20)][L4]` (74+L4) →
+// `[Eth][innerIPv6(40)][L4]` (54+L4), a net SHRINK of 20 — the eBPF path performs it with
+// `bpf_xdp_adjust_head(+20)` (drop 20 bytes off the front) and the sim with `VecPkt::shrink_head(20)`.
+// As with egress, the RESIZE stays in the glue; the core is a two-call parse/write split:
+//
+//   1. [`nat64_ingress_parse`] — runs on the PRE-resize `[Eth][outerIPv6][innerIPv4][L4]` frame:
+//      checks IHL==5, reads the L4 proto / TTL / inner v4 src+dst / total-len / L4 checksum,
+//      reconstructs the reply's IPv6 src from the embedded external v4 (`64:ff9b::src4`), takes the
+//      guest's IPv6 dst from the caller (PORT_META `guest_ipv6`), and returns a [`Nat64InXlate`].
+//      `None` => the glue falls through (short frame / IHL≠5 / unsupported L4 / no guest IPv6).
+//   2. [`nat64_ingress_write`] — runs on the POST-resize `[Eth][innerIPv6][L4]` frame (L4 at
+//      `ETH_LEN + IPV6_LEN`): writes the guest-facing Ethernet (dst=guest_mac, src=GW_MAC, IPv6
+//      ethertype), the 40-byte inner IPv6 header (src=64:ff9b::server, dst=guest_ipv6, TTL from the
+//      inner v4), and translates the L4 (TCP/UDP checksum v4→v6; ICMPv4 echo-reply → ICMPv6
+//      echo-reply, id restored to `orig_sport`). Byte-identical to the deleted inline rewrite.
+
+/// The translation state `nat64_ingress_parse` returns for `nat64_ingress_write` to consume. Carries
+/// the values read from the PRE-resize `[Eth][outerIPv6][innerIPv4][L4]` frame (so the writer,
+/// running on the resized `[Eth][innerIPv6][L4]` frame, reproduces the exact v4→v6 header + checksum
+/// translation).
+#[derive(Copy, Clone)]
+pub struct Nat64InXlate {
+    /// The inner IPv4 L4 protocol (TCP/UDP/ICMP) — the translated IPv6 next-header for TCP/UDP, or
+    /// ICMPv6 for ICMP.
+    pub l4_proto: u8,
+    /// The inner IPv4 TTL → the inner IPv6 hop-limit.
+    pub ttl: u8,
+    /// The external server's IPv4 (inner IPv4 src) — embedded into the reconstructed IPv6 src.
+    pub inner_src_v4: [u8; 4],
+    /// The inner IPv4 dst (= the restored guest IPv4 after `ct_apply`) — for the checksum pseudo-hdr.
+    pub inner_dst_v4: [u8; 4],
+    /// L4 length (bytes) = IPv4 total_len − 20. Feeds the IPv6 payload-length + the pseudo-header.
+    pub l4_len: u16,
+    /// The original L4 checksum (big-endian, as read from the packet, POST-`ct_apply`).
+    pub old_l4_cksum_be: u16,
+    /// The reconstructed IPv6 src = `64:ff9b::inner_src_v4`.
+    pub ipv6_src: [u8; 16],
+    /// The guest's IPv6 dst (from PORT_META `guest_ipv6`, supplied by the caller).
+    pub guest_ipv6: [u8; 16],
+    /// The guest tap's MAC (Ethernet dst on the delivered frame).
+    pub guest_mac: [u8; 6],
+    /// The original guest L4 port / ICMP id (CT `xlate_port`) — restored into the ICMPv6 echo id.
+    pub orig_sport: u16,
+}
+
+/// INGRESS parse phase — runs on the PRE-resize `[Eth][outerIPv6][innerIPv4][L4]` frame at
+/// `inner_off` (= the offset of the inner IPv4 header, i.e. `ETH_LEN + IPV6_LEN`). Verifies IHL==5,
+/// reads the L4 proto / TTL / inner v4 addrs / total-len / L4 checksum, reconstructs the IPv6 src
+/// (`64:ff9b::inner_src_v4`), and returns the [`Nat64InXlate`] the writer needs. `None` => the glue
+/// falls through (short frame / IHL≠5 / unsupported L4 / all-zero guest IPv6). Faithful to the eBPF
+/// `nat64_ingress` pre-resize logic.
+///
+/// `guest_ipv6` / `guest_mac` / `orig_sport` come from the caller (PORT_META + the reverse CT entry
+/// the dispatch already resolved); the core does not re-read them from maps.
+#[inline(always)]
+pub fn nat64_ingress_parse<P: Pkt>(
+    pkt: &P,
+    inner_off: usize,
+    guest_ipv6: [u8; 16],
+    guest_mac: [u8; 6],
+    orig_sport: u16,
+) -> Option<Nat64InXlate> {
+    // Eth(14) + outer IPv6(40) + inner IPv4(20) + min L4(8). Faithful to the eBPF bound
+    // `data + ETH_LEN + IPV6_LEN + 20 + 8 > data_end`.
+    let inner: [u8; 20] = pkt.read_array::<20>(inner_off)?;
+    // Inner IPv4 IHL == 5 (no options; constant L4 offset).
+    if inner[0] & 0x0f != 5 {
+        return None;
+    }
+    let l4_proto = inner[9];
+    match l4_proto {
+        IPPROTO_ICMP | IPPROTO_TCP | IPPROTO_UDP => {}
+        _ => return None,
+    }
+    let ttl = inner[8];
+    // The inner IPv4 src (= the external server) → NAT64-prefix IPv6 src.
+    let inner_src_v4: [u8; 4] = [inner[12], inner[13], inner[14], inner[15]];
+    // The inner IPv4 dst = the restored guest IPv4 (ct_apply already applied CT_REWRITE_DST).
+    let inner_dst_v4: [u8; 4] = [inner[16], inner[17], inner[18], inner[19]];
+    let inner_total_len = u16::from_be_bytes([inner[2], inner[3]]) as usize;
+    let l4_len = if inner_total_len >= 20 {
+        inner_total_len - 20
+    } else {
+        return None;
+    };
+
+    // Existing L4 checksum (big-endian, from the packet POST-`ct_apply`). Incremental v4→v6 update
+    // for TCP/UDP; ICMP is recomputed fully. Each read reproduces the eBPF's proto-specific bound.
+    let l4_off = inner_off + 20;
+    let old_l4_cksum_be: u16 = match l4_proto {
+        IPPROTO_TCP => u16::from_be(pkt.read_u16_be(l4_off + 16)?),
+        IPPROTO_UDP => u16::from_be(pkt.read_u16_be(l4_off + 6)?),
+        IPPROTO_ICMP => u16::from_be(pkt.read_u16_be(l4_off + 2)?),
+        _ => return None,
+    };
+
+    if guest_ipv6 == [0u8; 16] {
+        return None;
+    }
+    let ipv6_src = nat64_embed(inner_src_v4);
+
+    Some(Nat64InXlate {
+        l4_proto,
+        ttl,
+        inner_src_v4,
+        inner_dst_v4,
+        l4_len: l4_len as u16,
+        old_l4_cksum_be,
+        ipv6_src,
+        guest_ipv6,
+        guest_mac,
+        orig_sport,
+    })
+}
+
+/// INGRESS write phase — runs on the POST-resize `[Eth][innerIPv6][L4]` frame. `ip6_off` is the
+/// offset of the (freshly created) inner IPv6 header (= `ETH_LEN`); the L4 header is at
+/// `ip6_off + IPV6_LEN`. Writes the guest-facing Ethernet (dst=guest_mac, src=`gw_mac`, IPv6
+/// ethertype), the 40-byte IPv6 header (src=`64:ff9b::server`, dst=guest_ipv6, TTL from the inner
+/// v4), and translates the L4 in place. Returns `false` on a bounds failure. Byte-identical to the
+/// deleted inline eBPF rewrite.
+///
+/// `gw_mac` is the dataplane gateway MAC (eBPF: `arp_nd::GW_MAC`; sim: `uplink::GW_MAC`) — passed in
+/// rather than referenced so the core stays free of the eBPF map/const layer.
+#[inline(always)]
+pub fn nat64_ingress_write<P: Pkt>(
+    pkt: &mut P,
+    ip6_off: usize,
+    gw_mac: [u8; 6],
+    x: &Nat64InXlate,
+) -> bool {
+    // Ethernet header directly in front of the IPv6 header: dst=guest_mac, src=gw_mac, ethertype IPv6.
+    let eth_off = ip6_off - ETH_LEN;
+    let mut eth = [0u8; 14];
+    eth[0..6].copy_from_slice(&x.guest_mac);
+    eth[6..12].copy_from_slice(&gw_mac);
+    eth[12..14].copy_from_slice(&ETH_P_IPV6.to_be_bytes());
+    if !pkt.write_array(eth_off, &eth) {
+        return false;
+    }
+
+    // Build the 40-byte IPv6 header in a stack buffer, then a single write.
+    let l4_proto_v6 = if x.l4_proto == IPPROTO_ICMP {
+        IPPROTO_ICMPV6
+    } else {
+        x.l4_proto
+    };
+    let mut ip6 = [0u8; 40];
+    ip6[0] = 0x60; // version 6, TC/flow = 0.
+                   // [1..4] flow label = 0 (already 0).
+    ip6[4] = (x.l4_len >> 8) as u8;
+    ip6[5] = (x.l4_len & 0xff) as u8;
+    ip6[6] = l4_proto_v6;
+    ip6[7] = x.ttl;
+    ip6[8..24].copy_from_slice(&x.ipv6_src);
+    ip6[24..40].copy_from_slice(&x.guest_ipv6);
+    if !pkt.write_array(ip6_off, &ip6) {
+        return false;
+    }
+
+    // Translate the L4 header in place at ip6_off + IPV6_LEN.
+    let l4 = ip6_off + IPV6_LEN;
+    match x.l4_proto {
+        IPPROTO_ICMP => {
+            // ICMPv4 echo reply → ICMPv6 echo reply: type 0→129, id → orig_sport, seq unchanged,
+            // recompute the ICMPv6 echo checksum. Read the 8-byte window, patch, write it back.
+            let h = match pkt.read_array::<8>(l4) {
+                Some(h) => h,
+                None => return false,
+            };
+            let icmp6: [u8; 8] = [
+                ICMPV6_ECHO_REPLY,           // type 129
+                0,                           // code
+                0,                           // checksum placeholder hi
+                0,                           // checksum placeholder lo
+                (x.orig_sport >> 8) as u8,   // id hi (restored)
+                (x.orig_sport & 0xff) as u8, // id lo
+                h[6],                        // seq hi (unchanged)
+                h[7],                        // seq lo (unchanged)
+            ];
+            let chk = icmpv6_echo_checksum(&x.ipv6_src, &x.guest_ipv6, &icmp6);
+            let out: [u8; 8] = [
+                ICMPV6_ECHO_REPLY,
+                0,
+                (chk >> 8) as u8,
+                (chk & 0xff) as u8,
+                (x.orig_sport >> 8) as u8,
+                (x.orig_sport & 0xff) as u8,
+                h[6],
+                h[7],
+            ];
+            pkt.write_array(l4, &out)
+        }
+        IPPROTO_TCP => {
+            let new_ck = tcp_udp_v4_to_v6(
+                x.old_l4_cksum_be,
+                x.inner_src_v4,
+                x.inner_dst_v4,
+                &x.ipv6_src,
+                &x.guest_ipv6,
+                IPPROTO_TCP,
+                x.l4_len,
+            );
+            // TCP: checksum at l4[16..18]. Window = 18 bytes, single RMW.
+            let mut h = match pkt.read_array::<18>(l4) {
+                Some(h) => h,
+                None => return false,
+            };
+            h[16..18].copy_from_slice(&new_ck.to_ne_bytes());
+            pkt.write_array(l4, &h)
+        }
+        IPPROTO_UDP => {
+            let new_ck = tcp_udp_v4_to_v6(
+                x.old_l4_cksum_be,
+                x.inner_src_v4,
+                x.inner_dst_v4,
+                &x.ipv6_src,
+                &x.guest_ipv6,
+                IPPROTO_UDP,
+                x.l4_len,
+            );
+            // UDP: checksum at l4[6..8]. Window = 8 bytes, single RMW.
+            let mut h = match pkt.read_array::<8>(l4) {
+                Some(h) => h,
+                None => return false,
+            };
             h[6..8].copy_from_slice(&new_ck.to_ne_bytes());
             pkt.write_array(l4, &h)
         }

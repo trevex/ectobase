@@ -13,7 +13,7 @@
 use flowplane_common::{
     Local, PortMeta, UnderlayValue, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS,
 };
-use flowplane_core::conntrack::{ct_create_default, ct_key};
+use flowplane_core::conntrack::{ct_apply, ct_create_default, ct_key};
 use flowplane_core::egress::{deliver, route4, Deliver, IPPROTO_IPIP};
 use flowplane_core::encap::{reforward, write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
 use flowplane_core::firewall::fw_eval_dir;
@@ -431,6 +431,73 @@ impl SimNode {
         }
         SimOut {
             action: Action::Redirect(self.local.uplink_ifindex),
+            pkt: pkt.into_bytes(),
+        }
+    }
+
+    /// Host NAT64 INGRESS reply (`try_uplink_rx` → `nat64_ingress`): an external IPv4 reply arriving
+    /// encapped IP-in-IPv6 as `[Eth][outerIPv6(40)][innerIPv4(20)][L4]`, whose reverse conntrack entry
+    /// (`rev` — keyed peer-independently on `(vni, 0, nat_ip, 0, nat_port)`, carrying `CT_REWRITE_DST`
+    /// + `CT_F_NAT64`) restores the guest IPv4 + orig L4 port. `meta` supplies the guest tap
+    /// (`guest_mac`) plus the guest IPv6 (`guest_ipv6`). Composes the REAL core fns in the exact
+    /// order and gates of the eBPF ingress dispatch:
+    ///   1. `ct_apply(rev)`: rewrite the inner IPv4 dst (nat_ip→guest_ipv4) + L4 dst port
+    ///      (nat_port→orig_sport) + fold both into the IPv4/L4 checksums (mirrors `ingress.rs:187`);
+    ///   2. parse (`nat64_ingress_parse`): IHL==5, L4 proto/TTL/inner-v4-addrs/total-len/L4-checksum,
+    ///      reconstruct the `64:ff9b::server` IPv6 src;
+    ///   3. resize: shrink `[Eth][outerIPv6][innerIPv4][L4]`→`[Eth][innerIPv6][L4]` — models
+    ///      `bpf_xdp_adjust_head(+20)` (drop 20 bytes off the front; the writer rebuilds Eth+IPv6);
+    ///   4. write (`nat64_ingress_write`): guest Ethernet + inner IPv6 header + L4 translation.
+    ///
+    /// Returns `Redirect(tap_ifindex)` + the reconstructed `[Eth][IPv6][L4]` guest frame. Byte-identical
+    /// to the eBPF path. `rev.xlate_port` is the restored guest L4 port/id (used by the ICMPv6 id +
+    /// consumed here before `ct_apply` overwrites the packet).
+    pub fn uplink_nat64_ingress(
+        &self,
+        encapped: &[u8],
+        tap_ifindex: u32,
+        guest_mac: [u8; 6],
+        guest_ipv6: [u8; 16],
+        rev: &flowplane_common::CtEntry,
+    ) -> SimOut {
+        use flowplane_core::nat64::{nat64_ingress_parse, nat64_ingress_write};
+
+        let inner_off = ETH_LEN + IPV6_LEN;
+        let orig_sport = rev.xlate_port;
+        let mut pkt = VecPkt::from_bytes(encapped);
+
+        // 1. Reverse conntrack apply: restore the guest IPv4 dst + orig L4 port (+ checksums).
+        ct_apply(&mut pkt, inner_off, rev);
+
+        // 2. Parse (IHL/proto/TTL/addrs/checksum + reconstructed 64:ff9b:: IPv6 src).
+        let xlate = match nat64_ingress_parse(&pkt, inner_off, guest_ipv6, guest_mac, orig_sport) {
+            Some(x) => x,
+            None => {
+                return SimOut {
+                    action: Action::Pass,
+                    pkt: pkt.into_bytes(),
+                }
+            }
+        };
+
+        // 3. Resize: shrink 20 bytes off the front (models adjust_head(+20)).
+        if !pkt.shrink_head(20) {
+            return SimOut {
+                action: Action::Drop,
+                pkt: pkt.into_bytes(),
+            };
+        }
+
+        // 4. Write: guest Ethernet + inner IPv6 header + L4 translation.
+        if !nat64_ingress_write(&mut pkt, ETH_LEN, GW_MAC, &xlate) {
+            return SimOut {
+                action: Action::Drop,
+                pkt: pkt.into_bytes(),
+            };
+        }
+
+        SimOut {
+            action: Action::Redirect(tap_ifindex),
             pkt: pkt.into_bytes(),
         }
     }

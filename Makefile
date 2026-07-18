@@ -104,6 +104,8 @@ sim-anchor: ## Privileged BPF_PROG_TEST_RUN byte-parity anchor (native pure-core
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dhcp -- --ignored --exact dhcp_bytecode_matches_original_golden
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_nat64 -- --ignored --exact nat64_egress_bytecode_matches_native_sim
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_nat64 -- --ignored --exact nat64_egress_bytecode_matches_original_golden
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_nat64 -- --ignored --exact nat64_ingress_bytecode_matches_native_sim
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_nat64 -- --ignored --exact nat64_ingress_bytecode_matches_original_golden
 
 .PHONY: e2e
 e2e: ## 3-node netns end-to-end overlay test (needs sudo)

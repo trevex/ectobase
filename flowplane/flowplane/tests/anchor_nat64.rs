@@ -33,7 +33,10 @@ use aya::maps::{
 };
 use aya::programs::{ProgramFd, Xdp};
 use aya::{Ebpf, EbpfLoader};
-use flowplane_common::{Local, NatKey, NatValue, PortMeta, RouteLpmData, RouteValue};
+use flowplane_common::{
+    CtEntry, CtKey, Local, NatKey, NatValue, PortMeta, RouteLpmData, RouteValue, UnderlayValue,
+    VipKey, CT_F_NAT64, CT_F_SRC_NAT, CT_REWRITE_DST,
+};
 use flowplane_core::encap::{ETH_LEN, IPV6_LEN};
 use flowplane_core::pkt::Action;
 use flowplane_sim::SimNode;
@@ -426,3 +429,289 @@ fn nat64_egress_bytecode_matches_original_golden() {
 
 // Ignore usages so unused-const lints stay quiet for the two ports referenced only in fixtures.
 const _: (u8, u8) = (IPPROTO_TCP, IPPROTO_UDP);
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+// NAT64 INGRESS byte-parity anchor (external IPv4 reply → guest IPv6 translation)
+//
+// The eBPF `nat64_ingress` (reached from `uplink_rx` → `try_uplink_rx` when the reverse conntrack
+// entry carries CT_F_NAT64) now CALLS `flowplane_core::nat64::{nat64_ingress_parse,
+// nat64_ingress_write}`. This anchor proves the compiled `uplink_rx` still emits the exact same
+// bytes as the ORIGINAL pre-extraction inline program:
+//
+//   1. `nat64_ingress_bytecode_matches_native_sim` — runs the REAL compiled `uplink_rx` on a crafted
+//      encapped IPv4 reply via BPF_PROG_TEST_RUN and asserts the kernel output equals the native
+//      `SimNode::uplink_nat64_ingress` for the same input + map state. (Shares the extracted core, so
+//      this alone can't catch a source-level behavior change — hence the golden below.)
+//   2. `nat64_ingress_bytecode_matches_original_golden` — asserts the CURRENT bytecode output equals
+//      GOLDEN bytes captured from the ORIGINAL, PRE-extraction inline `nat64_ingress` (HEAD before
+//      `nat64_ingress_parse`/`nat64_ingress_write` existed) via BPF_PROG_TEST_RUN on identical
+//      fixtures. INDEPENDENT of SimNode. Covers TCP, UDP, and ICMPv4→ICMPv6 echo replies.
+
+const IPPROTO_ICMP: u8 = 1;
+const TAP_IFINDEX: u32 = 9;
+/// The external server's underlay (outer IPv6 src of the reply).
+const SERVER_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xdd];
+
+/// The reverse (peer-independent) conntrack entry the egress allocator stored — restores the guest
+/// IPv4 + orig port and flags the flow NAT64. The nat_port the reply's inner L4 dst carries.
+fn rev_ct() -> CtEntry {
+    CtEntry {
+        last_seen: 0,
+        xlate_ip: GUEST_IP,
+        xlate_port: SPORT,
+        flags: CT_REWRITE_DST | CT_F_SRC_NAT | CT_F_NAT64,
+        tcp_state: 0,
+        fwall_action: 0,
+        _pad: [0; 7],
+    }
+}
+
+/// The nat_port the egress allocator picked for a 5-tuple — the reply's inner L4 dst port / ICMP id.
+fn expected_nat_port(proto: u8, sport: u16, dport: u16) -> u16 {
+    use flowplane_core::parse::hash5;
+    let range = (PORT_MAX - PORT_MIN) as u32;
+    let start = (hash5(&GUEST_IP, &EXT_V4, sport, dport, proto) % range) as u16;
+    PORT_MIN.wrapping_add(start)
+}
+
+/// UnderlayValue for this node's own underlay (the reply's outer dst) → vni + base tap + guest MAC.
+fn underlay_value() -> UnderlayValue {
+    UnderlayValue {
+        vni: VNI,
+        tap_ifindex: TAP_IFINDEX,
+        guest_mac: [0x22; 6],
+        _pad: [0; 2],
+    }
+}
+
+/// Wrap an inner `[IPv4][L4]` reply in the outer `[Eth][IPv6]` IP-in-IPv6 encap the uplink receives.
+fn encap_reply(inner: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(ETH_LEN + IPV6_LEN + inner.len());
+    out.extend_from_slice(&UPLINK_MAC); // outer eth dst
+    out.extend_from_slice(&GATEWAY_MAC); // outer eth src
+    out.extend_from_slice(&0x86DDu16.to_be_bytes());
+    out.push(0x60);
+    out.extend_from_slice(&[0, 0, 0]);
+    out.extend_from_slice(&(inner.len() as u16).to_be_bytes());
+    out.push(4); // IPPROTO_IPIP
+    out.push(64);
+    out.extend_from_slice(&SERVER_UNDERLAY);
+    out.extend_from_slice(&SELF_UNDERLAY);
+    out.extend_from_slice(inner);
+    out
+}
+
+/// Inner IPv4 TCP reply `EXT_V4:DPORT → NAT_IP:nat_port` (pre-ct_apply, valid v4 checksums).
+fn tcp_reply() -> Vec<u8> {
+    use etherparse::PacketBuilder;
+    let nat_port = expected_nat_port(IPPROTO_TCP, SPORT, DPORT);
+    let builder = PacketBuilder::ethernet2([0; 6], [0; 6])
+        .ipv4(EXT_V4, NAT_IP, 63)
+        .tcp(DPORT, nat_port, 0, 1024);
+    let mut full = Vec::new();
+    builder.write(&mut full, &[0x01, 0x02, 0x03, 0x04]).unwrap();
+    encap_reply(&full[ETH_LEN..])
+}
+
+/// Inner IPv4 UDP reply (non-empty payload → non-zero checksum).
+fn udp_reply() -> Vec<u8> {
+    use etherparse::PacketBuilder;
+    let nat_port = expected_nat_port(IPPROTO_UDP, SPORT, DPORT);
+    let builder = PacketBuilder::ethernet2([0; 6], [0; 6])
+        .ipv4(EXT_V4, NAT_IP, 63)
+        .udp(DPORT, nat_port);
+    let mut full = Vec::new();
+    builder.write(&mut full, &[0xaa, 0xbb, 0xcc, 0xdd]).unwrap();
+    encap_reply(&full[ETH_LEN..])
+}
+
+/// Inner IPv4 ICMP echo-reply — id == nat_port (the server echoes the SNAT'd id).
+fn icmp_reply() -> Vec<u8> {
+    use etherparse::PacketBuilder;
+    // ICMP ct key uses the id as both sport+dport → nat_port for (SPORT, SPORT).
+    let nat_port = expected_nat_port(IPPROTO_ICMP, SPORT, SPORT);
+    let builder = PacketBuilder::ethernet2([0; 6], [0; 6])
+        .ipv4(EXT_V4, NAT_IP, 63)
+        .icmpv4_echo_reply(nat_port, 1);
+    let mut full = Vec::new();
+    builder.write(&mut full, &[0xde, 0xad, 0xbe, 0xef]).unwrap();
+    encap_reply(&full[ETH_LEN..])
+}
+
+/// Load the compiled object, populate every map `uplink_rx`'s NAT64-ingress path reads (UNDERLAY,
+/// CONNTRACK reverse entry, NAT_IPS, PORT_META, LOCAL), and return the verified `uplink_rx` fd. The
+/// reverse CT key is `(vni, 0, NAT_IP, 0, nat_port, proto)` — the peer-independent key the egress
+/// allocator stored (the ingress dispatch zeros the external src ip+port when the inner dst is a
+/// registered nat_ip). `nat_port` = the reply's inner L4 dst / ICMP id.
+fn load_uplink_prog(proto: u8, nat_port: u16) -> (Ebpf, RawFd) {
+    let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowplane-prog"));
+    let pin = Box::leak(Box::new(
+        tempfile::Builder::new()
+            .prefix("flowplane-anchor-nat64-in-")
+            .tempdir_in("/sys/fs/bpf")
+            .expect("bpffs tempdir"),
+    ));
+    let mut ebpf = EbpfLoader::new()
+        .map_pin_path(pin.path())
+        .load(bytes)
+        .expect("load compiled eBPF object");
+
+    {
+        let mut m: AyaHashMap<_, [u8; 16], UnderlayValue> =
+            AyaHashMap::try_from(ebpf.map_mut("UNDERLAY").expect("UNDERLAY map")).unwrap();
+        m.insert(SELF_UNDERLAY, underlay_value(), 0)
+            .expect("insert UNDERLAY");
+    }
+    {
+        let mut m: AyaHashMap<_, u32, PortMeta> =
+            AyaHashMap::try_from(ebpf.map_mut("PORT_META").expect("PORT_META map")).unwrap();
+        m.insert(TAP_IFINDEX, port_meta(), 0)
+            .expect("insert PORT_META");
+    }
+    {
+        let mut m: AyaHashMap<_, VipKey, u8> =
+            AyaHashMap::try_from(ebpf.map_mut("NAT_IPS").expect("NAT_IPS map")).unwrap();
+        m.insert(
+            VipKey {
+                vni: VNI,
+                ipv4: NAT_IP,
+            },
+            1,
+            0,
+        )
+        .expect("insert NAT_IPS");
+    }
+    {
+        let mut m: AyaHashMap<_, CtKey, CtEntry> =
+            AyaHashMap::try_from(ebpf.map_mut("CONNTRACK").expect("CONNTRACK map")).unwrap();
+        m.insert(
+            CtKey {
+                vni: VNI,
+                src_ip: [0; 4],
+                dst_ip: NAT_IP,
+                src_port: 0,
+                dst_port: nat_port,
+                proto,
+                _pad: [0; 3],
+            },
+            rev_ct(),
+            0,
+        )
+        .expect("insert reverse CONNTRACK");
+    }
+    {
+        let mut m: Array<_, Local> =
+            Array::try_from(ebpf.map_mut("LOCAL").expect("LOCAL map")).unwrap();
+        m.set(0, local(), 0).expect("write LOCAL[0]");
+    }
+
+    let prog: &mut Xdp = ebpf
+        .program_mut("uplink_rx")
+        .expect("uplink_rx program present")
+        .try_into()
+        .expect("uplink_rx is an XDP program");
+    prog.load().expect("verify/load uplink_rx");
+    let prog_fd = prog.fd().expect("uplink_rx fd").as_fd().as_raw_fd();
+    (ebpf, prog_fd)
+}
+
+/// Build the native (pure-core) expected `SimOut` for an encapped reply fixture.
+fn native_ingress(encapped: &[u8]) -> (Action, Vec<u8>) {
+    let node = SimNode::with_local(local());
+    let out = node.uplink_nat64_ingress(encapped, TAP_IFINDEX, [0x22; 6], GUEST_IP6, &rev_ct());
+    (out.action, out.pkt)
+}
+
+#[test]
+#[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel)"]
+fn nat64_ingress_bytecode_matches_native_sim() {
+    let frame = tcp_reply();
+    let (native_action, native_pkt) = native_ingress(&frame);
+    assert_eq!(
+        native_action,
+        Action::Redirect(TAP_IFINDEX),
+        "sanity: native sim expands + delivers the NAT64 reply to the guest tap"
+    );
+    // sanity: native reconstructed the guest IPv6 dst at [Eth][IPv6] dst = ETH_LEN+24.
+    assert_eq!(
+        &native_pkt[ETH_LEN + 24..ETH_LEN + 40],
+        &GUEST_IP6,
+        "sanity: native NAT64 ingress reconstructed the guest IPv6 dst"
+    );
+
+    let nat_port = expected_nat_port(IPPROTO_TCP, SPORT, DPORT);
+    let (_ebpf, prog_fd) = load_uplink_prog(IPPROTO_TCP, nat_port);
+    let out = bpf_prog_test_run(prog_fd, &frame)
+        .expect("BPF_PROG_TEST_RUN on uplink_rx (needs CAP_BPF + kernel test-run support)");
+    assert_eq!(
+        out.retval, XDP_REDIRECT,
+        "native pure-core diverged from real bytecode: expected XDP_REDIRECT, got {}",
+        out.retval
+    );
+    assert_eq!(
+        out.data, native_pkt,
+        "native pure-core diverged from real bytecode: NAT64-ingress output bytes differ from SimNode"
+    );
+    // NAT64 ingress net -20 bytes (outer 54 + inner 20 headers → inner 40 header).
+    assert_eq!(
+        out.data.len(),
+        frame.len() - 20,
+        "NAT64 ingress is net -20 bytes"
+    );
+}
+
+// Goldens captured from the ORIGINAL (pre-extraction) inline-eBPF `nat64_ingress` via
+// BPF_PROG_TEST_RUN on the ingress fixtures + the map state `load_uplink_prog` installs. Included
+// from the same goldens file as the egress vectors.
+
+#[test]
+#[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel)"]
+fn nat64_ingress_bytecode_matches_original_golden() {
+    struct Vector {
+        name: &'static str,
+        proto: u8,
+        nat_port: u16,
+        frame: Vec<u8>,
+        golden: &'static [u8],
+    }
+    let vectors = [
+        Vector {
+            name: "TCP",
+            proto: IPPROTO_TCP,
+            nat_port: expected_nat_port(IPPROTO_TCP, SPORT, DPORT),
+            frame: tcp_reply(),
+            golden: GOLDEN_IN_TCP,
+        },
+        Vector {
+            name: "UDP",
+            proto: IPPROTO_UDP,
+            nat_port: expected_nat_port(IPPROTO_UDP, SPORT, DPORT),
+            frame: udp_reply(),
+            golden: GOLDEN_IN_UDP,
+        },
+        Vector {
+            name: "ICMP",
+            proto: IPPROTO_ICMP,
+            nat_port: expected_nat_port(IPPROTO_ICMP, SPORT, SPORT),
+            frame: icmp_reply(),
+            golden: GOLDEN_IN_ICMP,
+        },
+    ];
+
+    for v in &vectors {
+        let (_ebpf, prog_fd) = load_uplink_prog(v.proto, v.nat_port);
+        let out = bpf_prog_test_run(prog_fd, &v.frame)
+            .unwrap_or_else(|e| panic!("BPF_PROG_TEST_RUN on uplink_rx [{}] failed: {e}", v.name));
+        assert_eq!(
+            out.retval, XDP_REDIRECT,
+            "[{}] expected XDP_REDIRECT, got action {}",
+            v.name, out.retval
+        );
+        assert_eq!(
+            out.data, v.golden,
+            "[{}] current bytecode output diverged from the ORIGINAL inline-eBPF golden — the \
+             flowplane-core NAT64-ingress extraction is NOT byte-faithful for this branch",
+            v.name
+        );
+    }
+}
