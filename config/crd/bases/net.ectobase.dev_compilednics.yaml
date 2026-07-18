@@ -168,6 +168,29 @@ spec:
                 items:
                   type: string
                 type: array
+              peerImports:
+                description: PeerImports lists the prefixes imported from peered VPCs.
+                  Each entry carries the peer VNI and the prefixes visible through
+                  that peering. Optional; absent when no VPC peerings are active.
+                items:
+                  description: CompiledPeerImport is one set of prefixes imported
+                    from a peered VPC.
+                  properties:
+                    importPrefixes:
+                      description: ImportPrefixes are the CIDR prefixes imported from
+                        the peer VPC.
+                      items:
+                        type: string
+                      type: array
+                    peerVni:
+                      description: PeerVNI is the VXLAN network identifier of the
+                        peer VPC.
+                      format: int32
+                      type: integer
+                  required:
+                  - peerVni
+                  type: object
+                type: array
               port:
                 description: Port describes the dataplane port allocated for this
                   interface.

@@ -38,17 +38,52 @@ spec:
           metadata:
             type: object
           spec:
-            description: |-
-              VPCPeeringSpec is the desired state of a VPCPeering.
-
-              SCAFFOLD ONLY: intentionally empty. Mutual-consent VPC peering (§3.3).
-              Fleshed out in a later plan (YAGNI here).
+            description: VPCPeeringSpec is the desired state of a VPCPeering.
+            properties:
+              exposedPrefixes:
+                description: ExposedPrefixes are the CIDR prefixes this side exposes
+                  to the peer VPC. Optional; if empty no prefixes are advertised.
+                items:
+                  type: string
+                type: array
+              peerVpcRef:
+                description: PeerVPCRef references the peer VPC (may be in another
+                  namespace).
+                properties:
+                  name:
+                    description: Name is the name of the referenced VPC.
+                    type: string
+                  namespace:
+                    description: Namespace is the namespace of the referenced VPC.
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
+              vpcRef:
+                description: VPCRef references the local VPC that initiates the peering.
+                properties:
+                  name:
+                    description: Name is the name of the referenced object.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - peerVpcRef
+            - vpcRef
             type: object
           status:
-            description: |-
-              VPCPeeringStatus is the observed state of a VPCPeering.
-
-              SCAFFOLD ONLY: intentionally empty.
+            description: VPCPeeringStatus is the observed state of a VPCPeering.
+            properties:
+              message:
+                description: Message is a human-readable explanation of the current
+                  state.
+                type: string
+              state:
+                description: State is the current lifecycle state of the peering (e.g.
+                  Pending, Active, Error).
+                type: string
             type: object
         type: object
     served: true
