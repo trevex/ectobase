@@ -11,6 +11,12 @@ package agent
 
 import "fmt"
 
+// PeerImport is one peer VPC's import for a local VNI (runtime form of CompiledNIC.PeerImports).
+type PeerImport struct {
+	PeerVNI        uint32
+	ImportPrefixes []string
+}
+
 // DesiredState is the complete set of things this node wants live on the route bus at a point in
 // time. It is recomputed from the K8s objects every reconcile tick.
 type DesiredState struct {
@@ -21,6 +27,8 @@ type DesiredState struct {
 	// EgressVNIs is not announced; it configures how learned public-VNI routes are imported into
 	// local VNIs (see Bus.apply). Carried here so one reconcile pass produces it alongside the rest.
 	EgressVNIs []uint32
+	// PeeringImports maps a LOCAL vni -> the peer imports for it.
+	PeeringImports map[uint32][]PeerImport
 }
 
 // routeRef / natRef identify a withdrawn record by its reflector key (see reflector.natKey /
@@ -55,8 +63,8 @@ func (d busDelta) empty() bool {
 		len(d.announceP) == 0 && len(d.withdrawP) == 0
 }
 
-func routeKey(r Route) routeRef  { return routeRef{Vni: r.Vni, Prefix: r.Prefix} }
-func natKey(n NatBlock) natRef   { return natRef{NatIP: n.NatIP, PortMin: n.PortMin, PortMax: n.PortMax} }
+func routeKey(r Route) routeRef { return routeRef{Vni: r.Vni, Prefix: r.Prefix} }
+func natKey(n NatBlock) natRef  { return natRef{NatIP: n.NatIP, PortMin: n.PortMin, PortMax: n.PortMax} }
 func pubKey(p PublicPrefix) string {
 	return fmt.Sprintf("%d|%s|%s", p.Kind, p.Prefix, p.OwnerUnderlay)
 }
