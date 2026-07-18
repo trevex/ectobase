@@ -65,7 +65,7 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
         if ctx.pull_data(V6_HDR as u32).is_ok()
             && ctx.data() + V6_HDR <= ctx.data_end()
             && unsafe {
-                crate::nat64::is_nat64_addr(&core::ptr::read_unaligned(
+                flowplane_core::nat64::is_nat64_addr(&core::ptr::read_unaligned(
                     (ctx.data() as *const u8).add(flowplane_common::arp_nd::ETH_LEN + 24)
                         as *const [u8; 16],
                 ))

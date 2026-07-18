@@ -13,7 +13,7 @@
 use flowplane_common::{
     Local, PortMeta, UnderlayValue, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS,
 };
-use flowplane_core::conntrack::{ct_create_default, ct_key};
+use flowplane_core::conntrack::{ct_apply, ct_create_default, ct_key};
 use flowplane_core::egress::{deliver, route4, Deliver, IPPROTO_IPIP};
 use flowplane_core::encap::{reforward, write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
 use flowplane_core::firewall::fw_eval_dir;
@@ -35,6 +35,9 @@ pub struct SimNode {
     /// Source (guest tap) ifindex the `guest_tx` egress firewall is keyed on — the eBPF path uses
     /// the frame's ingress_ifindex. Defaults to 0; set it before calling `guest_tx`.
     pub src_ifindex: u32,
+    /// Controlled monotonic clock (ns) the `guest_tx` egress meter stamps `last_ns` from — models
+    /// `bpf_ktime_get_ns()`. Defaults to 0; tests advance it to drive token-bucket refill.
+    pub now: u64,
 }
 
 /// Result of `host_uplink`: the delivery `Action` plus the resulting (decapped) frame bytes.
@@ -55,6 +58,7 @@ impl SimNode {
             maps: MemMaps::default(),
             local: Local::default(),
             src_ifindex: 0,
+            now: 0,
         }
     }
 
@@ -64,6 +68,7 @@ impl SimNode {
             maps: MemMaps::default(),
             local,
             src_ifindex: 0,
+            now: 0,
         }
     }
 
@@ -242,15 +247,18 @@ impl SimNode {
     ///   3. route lookup (`route4`) → Pass on miss;
     ///   4. network NAT SNAT (`snat_egress`) when the route is external;
     ///   5. conntrack create-on-miss (`ct_create_default`);
-    ///   6. rate metering: NOT modelled (separate slice; no METER map → unlimited);
+    ///   6. rate metering (`meter_pass`): drop when the `METER[src_ifindex]` token bucket is
+    ///      exhausted; with no METER entry the bucket is unlimited (pass), preserving prior behavior.
+    ///      `now` comes from `self.now` (the controlled clock);
     ///   7. deliver decision (`deliver`): Local tap (inner-Eth rewrite) | Encap | Pass.
     ///
     /// Returns the delivery `Action` + the resulting frame bytes (encapped on the Encap path).
     ///
-    /// NOTE (scope): only the fresh-flow / non-VIP / unmetered path is composed here — that is the
-    /// slice whose OUTPUT PACKET is byte-identical to the eBPF program and thus anchorable. The
-    /// interleaved un-ported steps (ct_apply/ct_touch, vip, meter) are map/refresh-only on this
-    /// fixture and do not change the emitted bytes.
+    /// NOTE (scope): only the fresh-flow / non-VIP path is composed here for the OUTPUT PACKET — that
+    /// slice is byte-identical to the eBPF program and thus anchorable. Metering does not mutate
+    /// packet bytes (it only reads/writes the METER map and returns a verdict), so with no METER entry
+    /// the emitted bytes are unaffected; the interleaved un-ported steps (ct_apply/ct_touch, vip) are
+    /// map/refresh-only on this fixture and do not change the emitted bytes.
     pub fn guest_tx(&mut self, frame: &[u8], meta: &PortMeta) -> SimOut {
         let ip_off = ETH_LEN;
         let mut pkt = VecPkt::from_bytes(frame);
@@ -306,7 +314,22 @@ impl SimNode {
             }
         }
 
-        // 6. Rate metering: not modelled (no METER map → unlimited pass).
+        // 6. Rate metering (token bucket over METER[src_ifindex]). No entry => unlimited pass, so
+        // byte-parity fixtures (which install no METER) are unaffected. `frame_len` is the current
+        // packet length, as the eBPF path uses `data_end - data`. Mirrors `egress.rs:108-112`.
+        let frame_len = pkt.len() as u64;
+        if !flowplane_core::meter::meter_pass(
+            &mut self.maps,
+            self.src_ifindex,
+            frame_len,
+            is_ext,
+            self.now,
+        ) {
+            return SimOut {
+                action: Action::Drop,
+                pkt: pkt.into_bytes(),
+            };
+        }
 
         // 7. Deliver decision.
         match deliver(&self.maps, &route, meta, IPPROTO_IPIP) {
@@ -351,6 +374,154 @@ impl SimNode {
                 action: Action::Pass,
                 pkt: pkt.into_bytes(),
             },
+        }
+    }
+
+    /// Guest NAT64 egress (`v6_guest_tx` → `nat64_egress`) for the IPv6→IPv4 translation path.
+    /// `frame` is a full guest Ethernet frame `[InnerEth(14)][IPv6(40)][L4]` whose IPv6 dst is in the
+    /// NAT64 well-known prefix `64:ff9b::/96`; `meta` is the sending port's `PortMeta` (vni + guest
+    /// IPv4 for the NAT key + underlay identity). Composes the REAL core fns in the exact order + gates
+    /// of the eBPF `nat64_egress`:
+    ///   1. parse (`nat64_egress_parse`): dst-prefix check, NAT config lookup, source-port allocation,
+    ///      forward + reverse `CT_F_NAT64` conntrack inserts;
+    ///   2. resize: shrink the inner IPv6(40)→IPv4(20) — models `bpf_xdp_adjust_head(+20)` (drop 20
+    ///      bytes off the front; the writer restores the Ethernet header in front of the IPv4 hdr);
+    ///   3. write (`nat64_egress_write`, `write_eth = true`): Ethernet + IPv4 header + L4 translation;
+    ///   4. route lookup (`route4`) → Pass on miss;
+    ///   5. encap IP-in-IPv6 toward the route nexthop (`write_outer_v6`).
+    ///
+    /// Returns `Redirect(uplink_ifindex)` + the encapped `[OuterEth][OuterIPv6][IPv4][L4]` frame, or
+    /// `Pass` when the frame is not a NAT64 packet / has no route. Byte-identical to the eBPF path.
+    pub fn guest_tx_nat64(&mut self, frame: &[u8], meta: &PortMeta) -> SimOut {
+        use flowplane_core::nat64::{nat64_egress_parse, nat64_egress_write};
+
+        let ip6_off = ETH_LEN;
+        let mut pkt = VecPkt::from_bytes(frame);
+
+        // 1. Parse (dst-prefix check + NAT config + port alloc + CT_F_NAT64 conntrack inserts).
+        let xlate =
+            match nat64_egress_parse(&pkt, &mut self.maps, ip6_off, meta.vni, meta.guest_ipv4, 0) {
+                Some(x) => x,
+                None => {
+                    return SimOut {
+                        action: Action::Pass,
+                        pkt: pkt.into_bytes(),
+                    }
+                }
+            };
+
+        // 2. Resize: shrink inner IPv6(40)→IPv4(20) via a 20-byte front drop (models adjust_head(+20)).
+        if !pkt.shrink_head(20) {
+            return SimOut {
+                action: Action::Drop,
+                pkt: pkt.into_bytes(),
+            };
+        }
+
+        // 3. Write: restore the Ethernet header + build the IPv4 header + translate the L4.
+        if !nat64_egress_write(&mut pkt, ETH_LEN, true, &xlate) {
+            return SimOut {
+                action: Action::Drop,
+                pkt: pkt.into_bytes(),
+            };
+        }
+
+        // 4. Route lookup on the embedded IPv4 dst.
+        let route = match route4(&self.maps, meta.vni, &xlate.ipv4_dst) {
+            Some(r) => r,
+            None => {
+                return SimOut {
+                    action: Action::Pass,
+                    pkt: pkt.into_bytes(),
+                }
+            }
+        };
+
+        // 5. Encap IP-in-IPv6 toward the route nexthop (IPIP inner-proto).
+        let e = EncapParams {
+            gateway_mac: self.local.gateway_mac,
+            uplink_mac: self.local.uplink_mac,
+            uplink_ifindex: self.local.uplink_ifindex,
+            src_underlay: meta.underlay_ipv6,
+            nexthop_ipv6: route.nexthop_ipv6,
+            inner_proto: IPPROTO_IPIP,
+        };
+        if !pkt.grow_head(IPV6_LEN) || !write_outer_v6(&mut pkt, &e) {
+            return SimOut {
+                action: Action::Drop,
+                pkt: pkt.into_bytes(),
+            };
+        }
+        SimOut {
+            action: Action::Redirect(self.local.uplink_ifindex),
+            pkt: pkt.into_bytes(),
+        }
+    }
+
+    /// Host NAT64 INGRESS reply (`try_uplink_rx` → `nat64_ingress`): an external IPv4 reply arriving
+    /// encapped IP-in-IPv6 as `[Eth][outerIPv6(40)][innerIPv4(20)][L4]`, whose reverse conntrack entry
+    /// (`rev` — keyed peer-independently on `(vni, 0, nat_ip, 0, nat_port)`, carrying `CT_REWRITE_DST`
+    /// + `CT_F_NAT64`) restores the guest IPv4 + orig L4 port. `meta` supplies the guest tap
+    /// (`guest_mac`) plus the guest IPv6 (`guest_ipv6`). Composes the REAL core fns in the exact
+    /// order and gates of the eBPF ingress dispatch:
+    ///   1. `ct_apply(rev)`: rewrite the inner IPv4 dst (nat_ip→guest_ipv4) + L4 dst port
+    ///      (nat_port→orig_sport) + fold both into the IPv4/L4 checksums (mirrors `ingress.rs:187`);
+    ///   2. parse (`nat64_ingress_parse`): IHL==5, L4 proto/TTL/inner-v4-addrs/total-len/L4-checksum,
+    ///      reconstruct the `64:ff9b::server` IPv6 src;
+    ///   3. resize: shrink `[Eth][outerIPv6][innerIPv4][L4]`→`[Eth][innerIPv6][L4]` — models
+    ///      `bpf_xdp_adjust_head(+20)` (drop 20 bytes off the front; the writer rebuilds Eth+IPv6);
+    ///   4. write (`nat64_ingress_write`): guest Ethernet + inner IPv6 header + L4 translation.
+    ///
+    /// Returns `Redirect(tap_ifindex)` + the reconstructed `[Eth][IPv6][L4]` guest frame. Byte-identical
+    /// to the eBPF path. `rev.xlate_port` is the restored guest L4 port/id (used by the ICMPv6 id +
+    /// consumed here before `ct_apply` overwrites the packet).
+    pub fn uplink_nat64_ingress(
+        &self,
+        encapped: &[u8],
+        tap_ifindex: u32,
+        guest_mac: [u8; 6],
+        guest_ipv6: [u8; 16],
+        rev: &flowplane_common::CtEntry,
+    ) -> SimOut {
+        use flowplane_core::nat64::{nat64_ingress_parse, nat64_ingress_write};
+
+        let inner_off = ETH_LEN + IPV6_LEN;
+        let orig_sport = rev.xlate_port;
+        let mut pkt = VecPkt::from_bytes(encapped);
+
+        // 1. Reverse conntrack apply: restore the guest IPv4 dst + orig L4 port (+ checksums).
+        ct_apply(&mut pkt, inner_off, rev);
+
+        // 2. Parse (IHL/proto/TTL/addrs/checksum + reconstructed 64:ff9b:: IPv6 src).
+        let xlate = match nat64_ingress_parse(&pkt, inner_off, guest_ipv6, guest_mac, orig_sport) {
+            Some(x) => x,
+            None => {
+                return SimOut {
+                    action: Action::Pass,
+                    pkt: pkt.into_bytes(),
+                }
+            }
+        };
+
+        // 3. Resize: shrink 20 bytes off the front (models adjust_head(+20)).
+        if !pkt.shrink_head(20) {
+            return SimOut {
+                action: Action::Drop,
+                pkt: pkt.into_bytes(),
+            };
+        }
+
+        // 4. Write: guest Ethernet + inner IPv6 header + L4 translation.
+        if !nat64_ingress_write(&mut pkt, ETH_LEN, GW_MAC, &xlate) {
+            return SimOut {
+                action: Action::Drop,
+                pkt: pkt.into_bytes(),
+            };
+        }
+
+        SimOut {
+            action: Action::Redirect(tap_ifindex),
+            pkt: pkt.into_bytes(),
         }
     }
 

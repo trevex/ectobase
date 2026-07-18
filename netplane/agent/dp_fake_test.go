@@ -29,6 +29,14 @@ type recordingDP struct {
 	// natSrc/natSrcN record AddNatSource calls (local egress SNAT programming).
 	natSrc  map[string]natSrcCall // sourceIP -> last call
 	natSrcN map[string]int        // sourceIP -> call count
+	// meters/meterN record ConfigureMeter calls (per-interface egress bandwidth caps).
+	meters map[string]meterCall // interfaceID -> last call
+	meterN map[string]int       // interfaceID -> call count
+}
+
+type meterCall struct {
+	iface                 string
+	totalMbps, publicMbps uint32
 }
 
 type fwCall struct {
@@ -57,6 +65,7 @@ func newRecordingDP() *recordingDP {
 		fwInstalled: map[string]bool{},
 		lbBackends:  map[string][]string{},
 		natSrc:      map[string]natSrcCall{}, natSrcN: map[string]int{},
+		meters: map[string]meterCall{}, meterN: map[string]int{},
 	}
 }
 
@@ -159,4 +168,17 @@ func (f *recordingDP) DelLbBackend(ctx context.Context, id, backendUnderlay stri
 	}
 	f.lbBackends[id] = cur
 	return nil
+}
+func (f *recordingDP) ConfigureMeter(_ context.Context, iface string, totalMbps, publicMbps uint32) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.meters[iface] = meterCall{iface: iface, totalMbps: totalMbps, publicMbps: publicMbps}
+	f.meterN[iface]++
+	return nil
+}
+func (f *recordingDP) getMeter(iface string) (meterCall, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v, ok := f.meters[iface]
+	return v, ok
 }

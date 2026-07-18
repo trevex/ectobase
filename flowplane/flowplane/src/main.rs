@@ -1091,7 +1091,6 @@ async fn main() -> anyhow::Result<()> {
             // --meter: "<ifname>=<total_mbps>:<public_mbps>" — program per-interface egress
             // token-bucket rate caps. Opt-in: interfaces without an entry are unlimited.
             let mut meter_map = maps::Meter::open(&mut ebpf)?;
-            let mbps_to_bps = |mbps: u64| mbps.saturating_mul(1_000_000) / 8;
             for spec in &meters {
                 let (ifname, rates) = spec
                     .split_once('=')
@@ -1102,21 +1101,9 @@ async fn main() -> anyhow::Result<()> {
                 let total_mbps: u64 = total_s.parse().context("--meter: bad total_mbps")?;
                 let public_mbps: u64 = public_s.parse().context("--meter: bad public_mbps")?;
                 let tap = ifindex(ifname)?;
-                let tb = mbps_to_bps(total_mbps);
-                let pb = mbps_to_bps(public_mbps);
-                meter_map.upsert(
-                    tap,
-                    flowplane_common::MeterState {
-                        total_bps: tb,
-                        total_burst: (tb / 8).max(2000),
-                        total_tokens: tb / 8,
-                        total_last_ns: 0,
-                        public_bps: pb,
-                        public_burst: (pb / 8).max(2000),
-                        public_tokens: pb / 8,
-                        public_last_ns: 0,
-                    },
-                )?;
+                // Single-source the mbps→bps + burst derivation with the per-interface program
+                // path and the ConfigureMeter RPC.
+                meter_map.upsert(tap, control::Control::meter_state(total_mbps, public_mbps))?;
             }
 
             // DHCP_CONFIG: program server-wide DHCP options (MTU + DNS servers).
