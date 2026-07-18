@@ -83,20 +83,8 @@ pub fn maybe_install_logger(ebpf: &mut Ebpf) {
     }
 }
 
-/// Load (verify) a named XDP program without attaching it. Call this once at startup so that
-/// subsequent `attach_xdp_link` calls only need to attach (not load).
-pub fn load_program(ebpf: &mut Ebpf, prog_name: &str) -> anyhow::Result<()> {
-    let prog: &mut Xdp = ebpf
-        .program_mut(prog_name)
-        .with_context(|| format!("{prog_name} program missing"))?
-        .try_into()?;
-    prog.load().with_context(|| format!("verify {prog_name}"))?;
-    Ok(())
-}
-
-/// Load (verify) a named tc (classifier) program without attaching it. The tc analogue of
-/// `load_program`: `load_program` casts to `Xdp`, which fails for SchedClassifier programs, so
-/// the guest tc edge needs its own pre-load. Call once at startup before `attach_tc_clsact_ingress_link`.
+/// Load (verify) a named tc (classifier) program without attaching it. Call once at startup before
+/// `attach_tc_clsact_ingress_link`.
 pub fn load_program_tc(ebpf: &mut Ebpf, prog_name: &str) -> anyhow::Result<()> {
     let prog: &mut SchedClassifier = ebpf
         .program_mut(prog_name)
@@ -104,34 +92,6 @@ pub fn load_program_tc(ebpf: &mut Ebpf, prog_name: &str) -> anyhow::Result<()> {
         .try_into()?;
     prog.load().with_context(|| format!("verify {prog_name}"))?;
     Ok(())
-}
-
-/// Load (verify) `guest_dhcp` and register its fd in the `GUEST_PROGS` program array at
-/// `GUEST_PROG_DHCP`, so `guest_tx`'s DHCP tail call resolves at runtime. Returns the owned
-/// `ProgramArray` handle; the caller MUST keep it alive (dropping it closes the userspace map fd —
-/// the kernel map itself survives because guest_tx references it, but holding the handle is the
-/// clean, explicit lifetime). Call once at startup after `load_ebpf`, before attaching guest_tx.
-pub fn register_guest_dhcp(ebpf: &mut Ebpf) -> anyhow::Result<ProgramArray<MapData>> {
-    {
-        let prog: &mut Xdp = ebpf
-            .program_mut("guest_dhcp")
-            .context("guest_dhcp program missing")?
-            .try_into()?;
-        prog.load().context("verify guest_dhcp")?;
-    }
-    let mut progs: ProgramArray<_> = ebpf
-        .take_map("GUEST_PROGS")
-        .context("GUEST_PROGS map missing")?
-        .try_into()?;
-    let prog: &Xdp = ebpf
-        .program("guest_dhcp")
-        .context("guest_dhcp program missing")?
-        .try_into()?;
-    let fd: &ProgramFd = prog.fd()?;
-    progs
-        .set(flowplane_common::GUEST_PROG_DHCP, fd, 0)
-        .context("register guest_dhcp in GUEST_PROGS")?;
-    Ok(progs)
 }
 
 /// Ensure a clsact qdisc exists on `iface`, then load+attach a tc (classifier) program to its
@@ -198,9 +158,9 @@ pub fn register_guest_dhcp_tc(ebpf: &mut Ebpf) -> anyhow::Result<ProgramArray<Ma
     Ok(progs)
 }
 
-/// Attach an XDP program honouring the same mode policy as `attach_xdp_link`: force SKB/generic
-/// when `FLOWPLANE_SKB_MODE` is set (veth uplinks — e.g. containerlab/kind fabric links — do not
-/// support native XDP), else prefer native and fall back to SKB. Shared by the uplink attach paths.
+/// Attach an XDP program: force SKB/generic when `FLOWPLANE_SKB_MODE` is set (veth uplinks — e.g.
+/// containerlab/kind fabric links — do not support native XDP), else prefer native and fall back
+/// to SKB. Shared by the uplink attach paths.
 fn attach_xdp_mode(prog: &mut Xdp, prog_name: &str, iface: &str) -> anyhow::Result<()> {
     if std::env::var_os("FLOWPLANE_SKB_MODE").is_some() {
         prog.attach(iface, XdpFlags::SKB_MODE)
@@ -233,36 +193,9 @@ pub fn attach_xdp_extra(ebpf: &mut Ebpf, prog_name: &str, iface: &str) -> anyhow
     attach_xdp_mode(prog, prog_name, iface)
 }
 
-/// Attach an already-loaded XDP program to an interface and RETURN the owned link, so the caller
-/// can later drop it to detach (used for dynamic interface teardown). Falls back to SKB mode.
-pub fn attach_xdp_link(
-    ebpf: &mut Ebpf,
-    prog_name: &str,
-    iface: &str,
-) -> anyhow::Result<aya::programs::xdp::XdpLink> {
-    let prog: &mut Xdp = ebpf
-        .program_mut(prog_name)
-        .with_context(|| format!("{prog_name} program missing"))?
-        .try_into()?;
-    // Attach mode: default to native (driver) mode and fall back to SKB (generic) so production
-    // guest taps get the fast path. The DHCP responder grows the frame via bpf_xdp_adjust_tail,
-    // which veth's native XDP cannot do — so the conformance harness sets FLOWPLANE_SKB_MODE=1 to
-    // force generic mode (where adjust_tail growth works). Real tap/NIC drivers support native
-    // adjust_tail, so production stays on the fast path.
-    let id = if std::env::var_os("FLOWPLANE_SKB_MODE").is_some() {
-        prog.attach(iface, XdpFlags::SKB_MODE)
-            .with_context(|| format!("attach {prog_name} to {iface} (SKB_MODE)"))?
-    } else {
-        prog.attach(iface, XdpFlags::default())
-            .or_else(|_| prog.attach(iface, XdpFlags::SKB_MODE))
-            .with_context(|| format!("attach {prog_name} to {iface}"))?
-    };
-    prog.take_link(id).context("take xdp link")
-}
-
 /// Ensure a clsact qdisc exists on `iface`, then attach an already-loaded tc (classifier) program
-/// to its INGRESS hook and RETURN the owned link, so the caller can later drop it to detach (the
-/// tc analogue of `attach_xdp_link`, used for dynamic guest interface teardown). The program must
+/// to its INGRESS hook and RETURN the owned link, so the caller can later drop it to detach (used
+/// for dynamic guest interface teardown). The program must
 /// be pre-loaded once via `load_program_tc`; this only attaches. The qdisc add is idempotent.
 pub fn attach_tc_clsact_ingress_link(
     ebpf: &mut Ebpf,
@@ -504,12 +437,12 @@ pub fn pin_map(ebpf: &mut Ebpf, name: &str, pin_dir: &str) -> anyhow::Result<()>
 
 #[cfg(test)]
 mod tests {
-    use aya::programs::Xdp;
+    use aya::programs::{SchedClassifier, Xdp};
     use aya::{EbpfLoader, VerifierLogLevel};
 
     #[test]
     #[ignore = "requires root/CAP_BPF; loads programs through the verifier"]
-    fn both_programs_pass_verifier() {
+    fn programs_pass_verifier() {
         let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowplane-prog"));
         // The state maps are declared `pinned`, so the loader needs a bpffs `map_pin_path`.
         let pin = tempfile::Builder::new()
@@ -521,12 +454,21 @@ mod tests {
             .map_pin_path(pin.path())
             .load(bytes)
             .expect("load ebpf object");
-        for name in ["uplink_rx", "guest_tx", "guest_dhcp"] {
+        for name in ["uplink_rx", "guest_dhcp"] {
             let prog: &mut Xdp = ebpf
                 .program_mut(name)
-                .unwrap_or_else(|| panic!("program {name} missing"))
+                .unwrap_or_else(|| panic!("XDP program {name} missing"))
                 .try_into()
                 .expect("is xdp");
+            prog.load()
+                .unwrap_or_else(|e| panic!("verifier rejected {name}: {e}"));
+        }
+        for name in ["tc_guest_tx", "tc_guest_dhcp", "tc_guest_nat64"] {
+            let prog: &mut SchedClassifier = ebpf
+                .program_mut(name)
+                .unwrap_or_else(|| panic!("tc program {name} missing"))
+                .try_into()
+                .expect("is tc");
             prog.load()
                 .unwrap_or_else(|e| panic!("verifier rejected {name}: {e}"));
         }

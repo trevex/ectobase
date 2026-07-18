@@ -1,12 +1,9 @@
 use aya_ebpf::{bindings::xdp_action, programs::XdpContext};
 use flowplane_common::{PortMeta, RouteLpmData6};
 use flowplane_core::encap::EncapParams;
-use flowplane_core::err::DpErr;
 
-use crate::arp_nd::try_arp_reply;
-use crate::coreimpl::CtxPkt;
 use crate::maps::{LOCAL, PORT_META, ROUTES6, UNDERLAY};
-use crate::parse::{write6, ETH_LEN, ETH_P_IP, IPV6_LEN};
+use crate::parse::{ETH_LEN, ETH_P_IP};
 
 /// What the per-program glue should do after the in-place egress pipeline runs.
 pub enum EgressVerdict {
@@ -20,9 +17,9 @@ pub enum EgressVerdict {
 }
 
 /// Run the in-place IPv4 egress pipeline (conntrack/firewall/vip/nat/meter/route) and decide what
-/// the caller's glue should do. Map-driven; shared by XDP `guest_tx` and tc `tc_guest_tx`. Mutates
-/// the packet in place but does NOT resize. Caller has already verified ethertype == ETH_P_IP and
-/// that ETH_LEN+20 bytes are present.
+/// the caller's glue should do. Map-driven; used by tc `tc_guest_tx`. Mutates the packet in place
+/// but does NOT resize. Caller has already verified ethertype == ETH_P_IP and that ETH_LEN+20
+/// bytes are present.
 #[inline(always)]
 pub fn forward_decision_v4(
     data: usize,
@@ -149,9 +146,9 @@ pub fn forward_decision_v4(
     }
 }
 
-/// IPv6-inner egress decision (route6 + local/encap). Map-driven; shared by XDP `v6_guest_tx` and
-/// tc. No NAT64 (caller runs that first on XDP), no resize. Caller verified ETH_LEN+IPV6_LEN present
-/// and ethertype==ETH_P_IPV6.
+/// IPv6-inner egress decision (route6 + local/encap). Map-driven; used by tc. No NAT64 (caller
+/// runs that first), no resize. Caller verified ETH_LEN+IPV6_LEN present and
+/// ethertype==ETH_P_IPV6.
 #[inline(always)]
 pub fn forward_decision_v6(
     data: usize,
@@ -193,101 +190,6 @@ pub fn forward_decision_v6(
         nexthop_ipv6: route.nexthop_ipv6,
         inner_proto: crate::parse::IPPROTO_IPV6,
     })
-}
-
-// Force-inline into the int-returning `guest_tx` entry so the DHCP `bpf_tail_call` below always
-// lives in a function the verifier sees as returning `int` (a `Result`-returning bpf-to-bpf
-// subprogram would trip "tail_call is only allowed in functions that return 'int'"). Without this
-// pin the tail-call site's inlining is at LLVM's whole-object discretion, so an unrelated code-size
-// change elsewhere (e.g. the ingress `ct_apply` core call) can flip `try_guest_tx` from inlined to
-// outlined and break the verifier.
-#[inline(always)]
-pub fn try_guest_tx(ctx: &XdpContext) -> Result<u32, DpErr> {
-    // Identify the port by its ingress ifindex.
-    let ifindex = unsafe { (*ctx.ctx).ingress_ifindex };
-    let meta = unsafe { PORT_META.get(&ifindex) }.ok_or(DpErr::NoRoute)?;
-
-    // Answer ARP for the gateway in-datapath.
-    if let Some(act) = try_arp_reply(ctx, meta) {
-        return Ok(act);
-    }
-
-    // Answer IPv6 Neighbor Discovery for the gateway in-datapath.
-    if let Some(act) = crate::arp_nd::try_nd_reply(ctx, meta) {
-        return Ok(act);
-    }
-
-    // DHCP (v4: IPv4/UDP dport 67, v6: IPv6/UDP dport 547) is handled by the separate `guest_dhcp`
-    // program via tail call, so its verifier cost does not stack onto this program's IPv4 forwarding
-    // path. Classification is port-only; `guest_dhcp` re-validates and answers DISCOVER/REQUEST (v4)
-    // and SOLICIT/REQUEST/CONFIRM (v6), returning XDP_PASS otherwise.
-    //
-    // NOTE: this changes one corner case versus the old inline path. Previously a 67/547 frame the
-    // responders did NOT answer (e.g. a v6 RENEW/RELEASE, or a v4 INFORM) fell through to the
-    // forwarder. Now such frames PASS. This is behaviour-neutral in practice — unanswered DHCP is
-    // broadcast/multicast (255.255.255.255, ff02::1:2), which misses the route lookup and PASSes
-    // there too — and arguably more correct (guest-originated DHCP is never overlay-forwarded). A
-    // genuine tail-call miss (slot unpopulated / depth limit) also falls through to PASS here.
-    if is_dhcp_request(ctx) {
-        let _ =
-            unsafe { crate::maps::GUEST_PROGS.tail_call(ctx, flowplane_common::GUEST_PROG_DHCP) };
-        return Ok(xdp_action::XDP_PASS);
-    }
-
-    // IPv6 inner frames take the v6 overlay path.
-    {
-        let d = ctx.data();
-        if d + 14 <= ctx.data_end() {
-            let et = u16::from_be(unsafe {
-                core::ptr::read_unaligned((d as *const u8).add(12) as *const u16)
-            });
-            if et == crate::parse::ETH_P_IPV6 {
-                return crate::v6::v6_guest_tx(ctx, meta);
-            }
-        }
-    }
-
-    let data = ctx.data();
-    let data_end = ctx.data_end();
-    if data + ETH_LEN + 20 > data_end {
-        return Ok(xdp_action::XDP_PASS);
-    }
-    let ethertype = u16::from_be(unsafe {
-        core::ptr::read_unaligned((data as *const u8).add(12) as *const u16)
-    });
-    if ethertype != ETH_P_IP {
-        return Ok(xdp_action::XDP_PASS);
-    }
-    match forward_decision_v4(ctx.data(), ctx.data_end(), ifindex, meta) {
-        EgressVerdict::Pass => Ok(xdp_action::XDP_PASS),
-        EgressVerdict::Drop => Ok(xdp_action::XDP_DROP),
-        EgressVerdict::Local {
-            tap_ifindex,
-            guest_mac,
-        } => {
-            if ctx.data() + ETH_LEN > ctx.data_end() {
-                return Ok(xdp_action::XDP_PASS);
-            }
-            let q = ctx.data() as *mut u8;
-            unsafe {
-                write6(q, &guest_mac); // dst = local guest MAC
-                write6(q.add(6), &crate::arp_nd::GW_MAC); // src = gateway MAC
-                                                          // ethertype stays ETH_P_IP
-            }
-            Ok(unsafe { aya_ebpf::helpers::bpf_redirect(tap_ifindex, 0) } as u32)
-        }
-        EgressVerdict::Encap(e) => {
-            if unsafe { aya_ebpf::helpers::bpf_xdp_adjust_head(ctx.ctx, -(IPV6_LEN as i32)) } != 0 {
-                return Err(DpErr::Bounds);
-            }
-            let mut pkt = CtxPkt { ctx };
-            if flowplane_core::encap::write_outer_v6(&mut pkt, &e) {
-                Ok(unsafe { aya_ebpf::helpers::bpf_redirect(e.uplink_ifindex, 0) } as u32)
-            } else {
-                Err(DpErr::Bounds)
-            }
-        }
-    }
 }
 
 /// True if the frame is a DHCP request a guest would send: IPv4/UDP to dport 67, or IPv6/UDP to

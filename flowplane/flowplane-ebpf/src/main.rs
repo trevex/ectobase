@@ -31,20 +31,6 @@ pub fn xdp_pass(_ctx: XdpContext) -> u32 {
 }
 
 #[xdp]
-pub fn guest_tx(ctx: XdpContext) -> u32 {
-    dbg::dlog!(&ctx, "guest_tx: ingress_ifindex={}", unsafe {
-        (*ctx.ctx).ingress_ifindex
-    });
-    match egress::try_guest_tx(&ctx) {
-        Ok(act) => {
-            dbg::dlog!(&ctx, "guest_tx: action={}", act);
-            act
-        }
-        Err(_) => xdp_action::XDP_PASS,
-    }
-}
-
-#[xdp]
 pub fn guest_dhcp(ctx: XdpContext) -> u32 {
     dbg::dlog!(&ctx, "guest_dhcp: tail-call entered");
     let act = egress::dhcp_handle(&ctx);
