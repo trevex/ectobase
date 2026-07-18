@@ -131,6 +131,10 @@ fn set_meter(node: &mut SimNode, total_bps: u64, total_burst: u64) {
             public_burst: 0,
             public_tokens: 0,
             public_last_ns: 0,
+            ingress_bps: 0,
+            ingress_burst: 0,
+            ingress_tokens: 0,
+            ingress_last_ns: 0,
         },
     );
 }

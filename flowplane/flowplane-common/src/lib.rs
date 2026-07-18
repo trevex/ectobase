@@ -181,9 +181,12 @@ pub struct RouteValue {
     pub _pad: [u8; 3],
 }
 
-/// Per-interface egress token buckets. `*_bps` are bytes/sec (0 = unlimited); `*_tokens`/`*_last_ns`
-/// are mutable runtime state refilled from bpf_ktime. `total` gates all egress; `public` gates
-/// south-north (external) egress.
+/// Per-interface QoS state. Three lanes:
+/// - Egress total (EDT SHAPING): `total_bps` = shaped rate (bytes/s, 0 = unlimited);
+///   `total_last_ns` = the EDT schedule cursor (`t_last`, ns). `total_burst`/`total_tokens` are
+///   UNUSED on the EDT path (no token bucket) and kept 0 for layout stability.
+/// - Egress public (token-bucket POLICING of external/NATed egress): `public_*`.
+/// - Ingress (token-bucket POLICING of traffic delivered to the guest): `ingress_*`.
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct MeterState {
@@ -195,6 +198,10 @@ pub struct MeterState {
     pub public_burst: u64,
     pub public_tokens: u64,
     pub public_last_ns: u64,
+    pub ingress_bps: u64,
+    pub ingress_burst: u64,
+    pub ingress_tokens: u64,
+    pub ingress_last_ns: u64,
 }
 
 /// This hypervisor's uplink + underlay gateway, written once into LOCAL[0] by the control plane.
@@ -780,8 +787,8 @@ mod tests {
 
     #[test]
     fn meter_state_layout() {
-        // 8 fields * 8 bytes each = 64 bytes.
-        assert_eq!(core::mem::size_of::<MeterState>(), 64);
+        // 12 fields * 8 bytes each = 96 bytes.
+        assert_eq!(core::mem::size_of::<MeterState>(), 96);
         assert_eq!(core::mem::align_of::<MeterState>(), 8);
     }
 

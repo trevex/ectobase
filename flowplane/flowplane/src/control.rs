@@ -677,6 +677,10 @@ impl Control {
             public_burst: (pb / 8).max(2000),
             public_tokens: pb / 8,
             public_last_ns: 0,
+            ingress_bps: 0,
+            ingress_burst: 0,
+            ingress_tokens: 0,
+            ingress_last_ns: 0,
         }
     }
 
