@@ -281,6 +281,107 @@ func TestReconcile_NoWriteWhenUnchanged(t *testing.T) {
 	}
 }
 
+func TestResolvePeerImports(t *testing.T) {
+	s := lbScheme(t)
+	// Two VPCs: blue (VNI 100) and green (VNI 200), both in "default".
+	blue := &netv1.VPC{ObjectMeta: metav1.ObjectMeta{Name: "blue", Namespace: "default"}, Status: netv1.VPCStatus{VNI: 100}}
+	green := &netv1.VPC{ObjectMeta: metav1.ObjectMeta{Name: "green", Namespace: "default"}, Status: netv1.VPCStatus{VNI: 200}}
+	// Reciprocal Ready peerings: blue→green exposes X, green→blue exposes Y.
+	blueToGreen := &netv1.VPCPeering{
+		ObjectMeta: metav1.ObjectMeta{Name: "blue-green", Namespace: "default"},
+		Spec: netv1.VPCPeeringSpec{
+			VPCRef:          netv1.LocalObjectReference{Name: "blue"},
+			PeerVPCRef:      netv1.VPCReference{Namespace: "default", Name: "green"},
+			ExposedPrefixes: []string{"10.0.0.0/24"}, // X: what blue exposes to green
+		},
+		Status: netv1.VPCPeeringStatus{State: netv1.VPCPeeringReady},
+	}
+	greenToBlue := &netv1.VPCPeering{
+		ObjectMeta: metav1.ObjectMeta{Name: "green-blue", Namespace: "default"},
+		Spec: netv1.VPCPeeringSpec{
+			VPCRef:          netv1.LocalObjectReference{Name: "green"},
+			PeerVPCRef:      netv1.VPCReference{Namespace: "default", Name: "blue"},
+			ExposedPrefixes: []string{"10.1.0.0/24"}, // Y: what green exposes to blue
+		},
+		Status: netv1.VPCPeeringStatus{State: netv1.VPCPeeringReady},
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(blue, green, blueToGreen, greenToBlue).Build()
+	r := &CompiledNICReconciler{Client: cl}
+
+	imports, err := r.resolvePeerImports(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(imports) != 2 {
+		t.Fatalf("resolvePeerImports = %d entries, want 2: %+v", len(imports), imports)
+	}
+	var blueImport *PeerImportSpec
+	for i := range imports {
+		if imports[i].VPCName == "blue" {
+			blueImport = &imports[i]
+		}
+	}
+	if blueImport == nil {
+		t.Fatalf("no import for LOCAL vpc blue: %+v", imports)
+	}
+	// blue's import = green's VNI (200), filtered by what green exposes to blue (Y = green→blue).
+	if blueImport.PeerVNI != 200 {
+		t.Fatalf("blue import PeerVNI = %d, want 200", blueImport.PeerVNI)
+	}
+	if len(blueImport.ImportPrefixes) != 1 || blueImport.ImportPrefixes[0] != "10.1.0.0/24" {
+		t.Fatalf("blue import ImportPrefixes = %v, want [10.1.0.0/24] (green→blue reciprocal)", blueImport.ImportPrefixes)
+	}
+}
+
+func TestResolvePeerImports_SkipsPendingAndUnallocated(t *testing.T) {
+	s := lbScheme(t)
+	blue := &netv1.VPC{ObjectMeta: metav1.ObjectMeta{Name: "blue", Namespace: "default"}, Status: netv1.VPCStatus{VNI: 100}}
+	green := &netv1.VPC{ObjectMeta: metav1.ObjectMeta{Name: "green", Namespace: "default"}, Status: netv1.VPCStatus{VNI: 200}}
+	// Pending peering: must be skipped.
+	pending := &netv1.VPCPeering{
+		ObjectMeta: metav1.ObjectMeta{Name: "blue-green", Namespace: "default"},
+		Spec: netv1.VPCPeeringSpec{
+			VPCRef:     netv1.LocalObjectReference{Name: "blue"},
+			PeerVPCRef: netv1.VPCReference{Namespace: "default", Name: "green"},
+		},
+		Status: netv1.VPCPeeringStatus{State: netv1.VPCPeeringPending},
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(blue, green, pending).Build()
+	r := &CompiledNICReconciler{Client: cl}
+	imports, err := r.resolvePeerImports(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(imports) != 0 {
+		t.Fatalf("resolvePeerImports = %+v, want none (peering Pending)", imports)
+	}
+}
+
+func TestNicsForPeering(t *testing.T) {
+	s := lbScheme(t)
+	blueNIC := &netv1.NetworkInterface{ObjectMeta: metav1.ObjectMeta{Name: "blue-0", Namespace: "default"}, Spec: netv1.NetworkInterfaceSpec{VPCRef: netv1.LocalObjectReference{Name: "blue"}}}
+	greenNIC := &netv1.NetworkInterface{ObjectMeta: metav1.ObjectMeta{Name: "green-0", Namespace: "default"}, Spec: netv1.NetworkInterfaceSpec{VPCRef: netv1.LocalObjectReference{Name: "green"}}}
+	redNIC := &netv1.NetworkInterface{ObjectMeta: metav1.ObjectMeta{Name: "red-0", Namespace: "default"}, Spec: netv1.NetworkInterfaceSpec{VPCRef: netv1.LocalObjectReference{Name: "red"}}}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(blueNIC, greenNIC, redNIC).Build()
+	r := &CompiledNICReconciler{Client: cl}
+	p := &netv1.VPCPeering{
+		ObjectMeta: metav1.ObjectMeta{Name: "blue-green", Namespace: "default"},
+		Spec: netv1.VPCPeeringSpec{
+			VPCRef:     netv1.LocalObjectReference{Name: "blue"},
+			PeerVPCRef: netv1.VPCReference{Namespace: "default", Name: "green"},
+		},
+	}
+	reqs := r.nicsForPeering(context.Background(), client.Object(p))
+	// Both sides (blue + green) enqueue; red must not.
+	got := map[string]bool{}
+	for _, req := range reqs {
+		got[req.Name] = true
+	}
+	if len(reqs) != 2 || !got["blue-0"] || !got["green-0"] {
+		t.Fatalf("nicsForPeering = %+v, want [blue-0 green-0]", reqs)
+	}
+}
+
 func TestNicsForLB(t *testing.T) {
 	s := lbScheme(t)
 	nic := &netv1.NetworkInterface{ObjectMeta: metav1.ObjectMeta{Name: "web-0", Namespace: "default", Labels: map[string]string{"app": "web"}}}
