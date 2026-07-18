@@ -213,11 +213,32 @@ pub fn attach_tc_clsact_ingress_link(
     prog.take_link(link_id).context("take tc link")
 }
 
+/// Ensure the uplink has an `fq` root qdisc so EDT `skb->tstamp` departure times are honored (the
+/// shaping mechanism). aya 0.13 exposes no qdisc API beyond clsact, so shell out to `tc`. `replace`
+/// is idempotent (creates or swaps the root qdisc). On a real multi-queue NIC, `mq` root + per-queue
+/// `fq` is preferable; `root fq` is correct for single-queue/veth and a safe default. A failure is
+/// logged but not fatal — shaping degrades to no pacing rather than dropping the datapath.
+pub fn ensure_fq_qdisc(iface: &str) {
+    match std::process::Command::new("tc")
+        .args(["qdisc", "replace", "dev", iface, "root", "fq"])
+        .status()
+    {
+        Ok(s) if s.success() => {}
+        Ok(s) => eprintln!(
+            "warning: `tc qdisc replace dev {iface} root fq` exited {s}; egress shaping disabled"
+        ),
+        Err(e) => eprintln!(
+            "warning: could not run tc to set fq on {iface} ({e}); egress shaping disabled"
+        ),
+    }
+}
+
 /// Load the eBPF object and attach `uplink_rx` to the named uplink interface. `pin_dir` is the
 /// bpffs `map_pin_path` for the load (debug `Load` command passes [`ephemeral_pin_dir`]).
 pub fn attach_uplink(iface: &str, pin_dir: &Path) -> anyhow::Result<Ebpf> {
     let mut ebpf = load_ebpf(pin_dir)?;
     attach_xdp(&mut ebpf, "uplink_rx", iface)?;
+    ensure_fq_qdisc(iface);
     Ok(ebpf)
 }
 

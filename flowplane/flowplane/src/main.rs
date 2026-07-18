@@ -585,6 +585,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 None => loader::attach_xdp(&mut ebpf, "uplink_rx", &uplink)?,
             }
+            loader::ensure_fq_qdisc(&uplink);
             // tc_guest_tx: pre-load once, then attach via clsact ingress for each guest.
             // Register GUEST_PROGS_TC (tc_guest_dhcp + tc_guest_nat64 tail calls) first, then
             // pre-load tc_guest_tx. Held in scope so the userspace map fd lives for the lifetime.

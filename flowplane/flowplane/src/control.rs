@@ -285,6 +285,7 @@ impl Control {
             loader::unpin_link(pin_dir, &format!("uplink-{uplink}"));
             loader::attach_xdp(&mut ebpf, "uplink_rx", uplink)?;
         }
+        loader::ensure_fq_qdisc(uplink);
         // Guest edge is tcx-only. Pre-load tc_guest_tx and register the tc DHCP/NAT64 tail-call
         // array (GUEST_PROGS_TC) once here; per-interface attach then only needs attach().
         let guest_progs = {
@@ -516,6 +517,7 @@ impl Control {
             loader::unpin_link(&pin_dir, &format!("wan-{wan_uplink}"));
             loader::attach_xdp(&mut g.ebpf, "wan_rx", wan_uplink)?;
         }
+        loader::ensure_fq_qdisc(wan_uplink);
         g.underlay.upsert(
             edge_underlay,
             flowplane_common::UnderlayValue {
@@ -554,6 +556,7 @@ impl Control {
             loader::unpin_link(&pin_dir, &format!("uplink-{iface}"));
             loader::attach_xdp_extra(&mut g.ebpf, "uplink_rx", iface)?;
         }
+        loader::ensure_fq_qdisc(iface);
         println!("uplink_rx attached to extra uplink {iface}");
         Ok(())
     }
