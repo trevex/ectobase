@@ -10,4 +10,12 @@ CLAB="${CLAB:-containerlab}"
 
 command -v "${CLAB%% *}" >/dev/null 2>&1 || { echo "clab-down: containerlab not found on PATH" >&2; exit 1; }
 
-exec ${CLAB} destroy --cleanup -t "${TOPO}" "$@"
+# Free leaked flowplane BPF pins BEFORE destroy (while the kind/clab node containers
+# still exist, so their per-node bpffs is swept too) — a pinned CONNTRACK map is
+# ~100-150 MB of kernel RAM and clab destroy alone never touches host-side pins.
+bash "${HERE}/bpf-cleanup.sh" || echo "clab-down: bpf-cleanup (pre-destroy) failed — continuing"
+
+${CLAB} destroy --cleanup -t "${TOPO}" "$@"
+
+# Host sweep again after destroy: catch anything the teardown respawned or left behind.
+HOST_ONLY=1 bash "${HERE}/bpf-cleanup.sh" || echo "clab-down: bpf-cleanup (post-destroy) failed"

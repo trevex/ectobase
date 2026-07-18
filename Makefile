@@ -131,6 +131,10 @@ scenario-peering: ## clab VPC-peering scenario: reachability + firewall two-step
 test-all: test e2e ha ## Run the full local test matrix (needs sudo)
 
 # --- housekeeping ----------------------------------------------------------
+.PHONY: bpf-clean
+bpf-clean: ## Free leaked flowplane BPF pins (host + kind/clab nodes); prevents conntrack-map OOM across clab cycles
+	./hack/bpf-cleanup.sh
+
 .PHONY: clean
 clean: ## Remove build artifacts
 	cargo clean

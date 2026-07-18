@@ -16,6 +16,11 @@ CLAB="${CLAB:-containerlab}"
 command -v "${CLAB%% *}" >/dev/null 2>&1 || { echo "clab-up: containerlab not found on PATH" >&2; exit 1; }
 command -v kind >/dev/null 2>&1 || { echo "clab-up: kind not found on PATH" >&2; exit 1; }
 
+# Defensive: clear leaked flowplane BPF pins from any prior crashed run before we
+# stand a new fabric up, so kernel memory doesn't compound across up/down cycles.
+# HOST_ONLY — a stale prior lab's containers are torn down by `deploy --reconfigure`.
+HOST_ONLY=1 bash "${HERE}/bpf-cleanup.sh" || echo "clab-up: bpf-cleanup (pre-deploy) failed — continuing"
+
 # The fabric nodes use the custom kind-node image (node-IP = pre-kubelet BGP /64).
 # Build it if missing, and render the per-node prefix mount paths to absolutes
 # (kind rejects relative extraMounts hostPaths).
