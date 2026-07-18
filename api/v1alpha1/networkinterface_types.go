@@ -18,6 +18,20 @@ type NetworkInterfaceSpec struct {
 	// NodeName is the node the interface is scheduled onto. Set by the scheduler.
 	// +optional
 	NodeName *string `json:"nodeName,omitempty" protobuf:"bytes,3,opt,name=nodeName"`
+	// Bandwidth caps egress throughput for this interface. Nil = unlimited.
+	// +optional
+	Bandwidth *InterfaceBandwidth `json:"bandwidth,omitempty" protobuf:"bytes,4,opt,name=bandwidth"`
+}
+
+// InterfaceBandwidth is the per-interface egress rate limit, programmed into the dataplane's
+// METER token-bucket via DataplaneNode/ConfigureMeter. A zero rate means unlimited for that lane.
+type InterfaceBandwidth struct {
+	// TotalMbps caps total egress in Mbit/s. 0 = unlimited.
+	// +optional
+	TotalMbps uint32 `json:"totalMbps,omitempty" protobuf:"varint,1,opt,name=totalMbps"`
+	// PublicMbps caps public (external/NATed) egress in Mbit/s. 0 = unlimited.
+	// +optional
+	PublicMbps uint32 `json:"publicMbps,omitempty" protobuf:"varint,2,opt,name=publicMbps"`
 }
 
 // NetworkInterfaceStatus is the observed state of a NetworkInterface.

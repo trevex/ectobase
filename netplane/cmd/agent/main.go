@@ -82,6 +82,9 @@ func main() {
 		if err := r.ReconcileLB(ctx); err != nil {
 			log.Printf("reconcile lb: %v", err)
 		}
+		if err := r.ReconcileMeter(ctx); err != nil {
+			log.Printf("reconcile meter: %v", err)
+		}
 		pubs, err := r.DesiredPublic(ctx)
 		if err != nil {
 			return agent.DesiredState{}, err
