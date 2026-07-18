@@ -42,6 +42,10 @@ func main() {
 		log.Fatalf("setup compilednic controller: %v", err)
 	}
 
+	if err := (&controllers.VPCPeeringReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup vpcpeering controller: %v", err)
+	}
+
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Fatalf("manager: %v", err)
 	}
