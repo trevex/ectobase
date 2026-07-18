@@ -22,12 +22,23 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
+// PeerImportSpec is a pre-resolved peering import for a specific LOCAL VPC (peerVNI + the peer's
+// exposed prefixes). The controller computes these from Ready VPCPeerings; Compile just filters by
+// the NIC's VPC.
+type PeerImportSpec struct {
+	VPCName        string // the LOCAL vpc this import applies to (matches nic.Spec.VPCRef.Name)
+	PeerVNI        int32
+	ImportPrefixes []string
+}
+
 // Compile lowers a NetworkInterface + the NetworkPolicies that select it into a CompiledNIC.
 //
 // It copies identity (name, nodeName, vni, underlayRoute, port, overlayIPs) from the NIC, then
 // translates each policy whose interfaceSelector matches the NIC's labels into CompiledFwRules.
+// peerings is a pre-resolved slice of PeerImportSpecs; only entries whose VPCName matches the
+// NIC's VPC are emitted as CompiledPeerImports.
 // The returned CompiledNIC has no Status set (caller fills that in if needed).
-func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy, lbs []netv1.LoadBalancer) netv1.CompiledNIC {
+func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy, lbs []netv1.LoadBalancer, peerings []PeerImportSpec) netv1.CompiledNIC {
 	nodeName := ""
 	if nic.Spec.NodeName != nil {
 		nodeName = *nic.Spec.NodeName
@@ -119,6 +130,16 @@ func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy, lbs []
 		compiled.Spec.LB = append(compiled.Spec.LB, netv1.CompiledLB{VIP: lb.Spec.VIP, Ports: ports})
 	}
 
+	for _, p := range peerings {
+		if p.VPCName != nic.Spec.VPCRef.Name {
+			continue
+		}
+		compiled.Spec.PeerImports = append(compiled.Spec.PeerImports, netv1.CompiledPeerImport{
+			PeerVNI:        p.PeerVNI,
+			ImportPrefixes: append([]string(nil), p.ImportPrefixes...),
+		})
+	}
+
 	return compiled
 }
 
@@ -140,7 +161,8 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.Client.List(ctx, &lbs, client.InNamespace(nic.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list loadbalancers: %w", err)
 	}
-	compiled := Compile(&nic, policies.Items, lbs.Items)
+	// TODO(peering): resolve Ready VPCPeerings — Task 4
+	compiled := Compile(&nic, policies.Items, lbs.Items, nil)
 	key := types.NamespacedName{Namespace: compiled.Namespace, Name: compiled.Name}
 	var existing netv1.CompiledNIC
 	err := r.Client.Get(ctx, key, &existing)
