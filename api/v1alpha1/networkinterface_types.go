@@ -18,20 +18,43 @@ type NetworkInterfaceSpec struct {
 	// NodeName is the node the interface is scheduled onto. Set by the scheduler.
 	// +optional
 	NodeName *string `json:"nodeName,omitempty" protobuf:"bytes,3,opt,name=nodeName"`
-	// Bandwidth caps egress throughput for this interface. Nil = unlimited.
+	// QoS caps/shapes throughput for this interface. Nil = unlimited.
 	// +optional
-	Bandwidth *InterfaceBandwidth `json:"bandwidth,omitempty" protobuf:"bytes,4,opt,name=bandwidth"`
+	QoS *InterfaceQoS `json:"qos,omitempty" protobuf:"bytes,4,opt,name=qos"`
 }
 
-// InterfaceBandwidth is the per-interface egress rate limit, programmed into the dataplane's
-// METER token-bucket via DataplaneNode/ConfigureMeter. A zero rate means unlimited for that lane.
-type InterfaceBandwidth struct {
-	// TotalMbps caps total egress in Mbit/s. 0 = unlimited.
+// InterfaceQoS is per-interface traffic control. Egress is EDT-shaped (smoothed) at the uplink fq
+// qdisc; ingress is token-bucket policed. Programmed into the dataplane via DataplaneNode/ConfigureQoS.
+type InterfaceQoS struct {
+	// Egress shapes outbound (VM->out) throughput.
 	// +optional
-	TotalMbps uint32 `json:"totalMbps,omitempty" protobuf:"varint,1,opt,name=totalMbps"`
-	// PublicMbps caps public (external/NATed) egress in Mbit/s. 0 = unlimited.
+	Egress *EgressQoS `json:"egress,omitempty" protobuf:"bytes,1,opt,name=egress"`
+	// Ingress polices inbound (out->VM) throughput.
 	// +optional
-	PublicMbps uint32 `json:"publicMbps,omitempty" protobuf:"varint,2,opt,name=publicMbps"`
+	Ingress *RateLimit `json:"ingress,omitempty" protobuf:"bytes,2,opt,name=ingress"`
+}
+
+// EgressQoS shapes total egress (EDT) with an optional external sub-cap.
+type EgressQoS struct {
+	// RateMbps is the EDT-shaped total egress rate in Mbit/s. 0 = unlimited.
+	// +optional
+	RateMbps uint32 `json:"rateMbps,omitempty" protobuf:"varint,1,opt,name=rateMbps"`
+	// BurstKB is an optional burst allowance in KB. Reserved (EDT ignores it in v1). 0 = default.
+	// +optional
+	BurstKB uint32 `json:"burstKB,omitempty" protobuf:"varint,2,opt,name=burstKB"`
+	// PublicMbps caps external/NATed egress in Mbit/s (policed). 0 = unlimited.
+	// +optional
+	PublicMbps uint32 `json:"publicMbps,omitempty" protobuf:"varint,3,opt,name=publicMbps"`
+}
+
+// RateLimit is a token-bucket policing cap.
+type RateLimit struct {
+	// RateMbps caps throughput in Mbit/s. 0 = unlimited.
+	// +optional
+	RateMbps uint32 `json:"rateMbps,omitempty" protobuf:"varint,1,opt,name=rateMbps"`
+	// BurstKB is an optional burst allowance in KB. Reserved (default burst in v1). 0 = default.
+	// +optional
+	BurstKB uint32 `json:"burstKB,omitempty" protobuf:"varint,2,opt,name=burstKB"`
 }
 
 // NetworkInterfaceStatus is the observed state of a NetworkInterface.
