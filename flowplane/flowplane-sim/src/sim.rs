@@ -38,6 +38,10 @@ pub struct SimNode {
     /// Controlled monotonic clock (ns) the `guest_tx` egress meter stamps `last_ns` from — models
     /// `bpf_ktime_get_ns()`. Defaults to 0; tests advance it to drive token-bucket refill.
     pub now: u64,
+    /// EDT departure timestamp (ns) recorded by the last `guest_tx` call that hit the `edt_egress`
+    /// shaping path. `None` when the interface has no egress cap (`total_bps == 0`) or no METER
+    /// entry. Tests can assert pacing intervals; wire bytes are unchanged (FQ pacing is kernel-side).
+    pub last_tstamp: Option<u64>,
 }
 
 /// Result of `host_uplink`: the delivery `Action` plus the resulting (decapped) frame bytes.
@@ -59,6 +63,7 @@ impl SimNode {
             local: Local::default(),
             src_ifindex: 0,
             now: 0,
+            last_tstamp: None,
         }
     }
 
@@ -69,6 +74,7 @@ impl SimNode {
             local,
             src_ifindex: 0,
             now: 0,
+            last_tstamp: None,
         }
     }
 
@@ -247,9 +253,10 @@ impl SimNode {
     ///   3. route lookup (`route4`) → Pass on miss;
     ///   4. network NAT SNAT (`snat_egress`) when the route is external;
     ///   5. conntrack create-on-miss (`ct_create_default`);
-    ///   6. rate metering (`meter_pass`): drop when the `METER[src_ifindex]` token bucket is
-    ///      exhausted; with no METER entry the bucket is unlimited (pass), preserving prior behavior.
-    ///      `now` comes from `self.now` (the controlled clock);
+    ///   6. rate metering: public-lane policing (`public_pass`, external only) + EDT egress shaping
+    ///      (`edt_egress`, records `self.last_tstamp`, no drop). Mirrors the eBPF split in
+    ///      `egress.rs` + `tc.rs`. No METER entry => unlimited (pass / no tstamp), preserving prior
+    ///      behavior. `now` comes from `self.now` (the controlled clock);
     ///   7. deliver decision (`deliver`): Local tap (inner-Eth rewrite) | Encap | Pass.
     ///
     /// Returns the delivery `Action` + the resulting frame bytes (encapped on the Encap path).
@@ -314,11 +321,15 @@ impl SimNode {
             }
         }
 
-        // 6. Rate metering (token bucket over METER[src_ifindex]). No entry => unlimited pass, so
-        // byte-parity fixtures (which install no METER) are unaffected. `frame_len` is the current
-        // packet length, as the eBPF path uses `data_end - data`. Mirrors `egress.rs:108-112`.
+        // 6. Egress metering — mirrors the eBPF split in egress.rs + tc.rs:
+        //    a) Public-lane policing (drop-on-exhaust, external only) — mirrors egress.rs `public_pass`.
+        //    b) EDT egress shaping (records departure stamp, no drop) — mirrors tc.rs `edt_stamp`.
+        //    The `total` token-bucket (`meter_pass`) is no longer called: the eBPF path migrated the
+        //    total lane to EDT shaping, so `meter_state()` sets `total_burst=0`/`total_tokens=0`
+        //    (no bucket); calling `meter_pass` would clamp tokens to 0 and drop all capped egress.
         let frame_len = pkt.len() as u64;
-        if !flowplane_core::meter::meter_pass(
+        // a) Public-lane policing (external egress only) — mirrors egress.rs.
+        if !flowplane_core::meter::public_pass(
             &mut self.maps,
             self.src_ifindex,
             frame_len,
@@ -330,6 +341,14 @@ impl SimNode {
                 pkt: pkt.into_bytes(),
             };
         }
+        // b) EDT egress shaping — mirrors tc.rs encap path. The sim records the departure stamp so
+        // tests can assert pacing; wire bytes are unchanged (FQ pacing is kernel-side).
+        self.last_tstamp = flowplane_core::meter::edt_egress(
+            &mut self.maps,
+            self.src_ifindex,
+            frame_len,
+            self.now,
+        );
 
         // 7. Deliver decision.
         match deliver(&self.maps, &route, meta, IPPROTO_IPIP) {

@@ -1,14 +1,17 @@
-//! Conformance tests for the guest-egress rate meter (per-interface token bucket).
+//! Conformance tests for the guest-egress rate meter.
 //!
-//! These drive the REAL `flowplane_core::meter::meter_pass` through the full `SimNode::guest_tx`
-//! compose (the SAME code the eBPF `egress::forward_decision_v4` calls) over in-memory
-//! `MemMaps`/`VecPkt`. Metering does not mutate packet bytes — it reads/refills/writes the
-//! `METER[src_ifindex]` bucket and returns a pass/drop verdict — so these assert on the delivery
-//! `Action` (Redirect on pass, Drop on exhaustion) and prove refill after the clock advances.
+//! These drive the REAL `flowplane_core::meter::{public_pass, edt_egress}` through the full
+//! `SimNode::guest_tx` compose (the SAME code path the eBPF `egress::forward_decision_v4` +
+//! `tc_guest_tx` call) over in-memory `MemMaps`/`VecPkt`. Metering does not mutate packet bytes —
+//! it reads/writes the `METER[src_ifindex]` state and returns a pass/drop verdict (public lane) or
+//! records a departure timestamp (EDT total lane) — so these assert on the delivery `Action`
+//! (Redirect on pass, Drop on public-lane exhaustion) and on `SimNode::last_tstamp` for EDT pacing.
 //!
-//! No METER entry => unlimited (pass), which is why the byte-parity fixtures (which install no
-//! METER) are unaffected. Here we install a low-burst entry and drive several packets at a fixed
-//! `now` so the bucket exhausts, then advance `SimNode::now` to prove refill.
+//! No METER entry => unlimited (pass / no tstamp), which is why the byte-parity fixtures (which
+//! install no METER) are unaffected. The eBPF path migrated the total lane from token-bucket
+//! policing to EDT shaping: packets are NEVER dropped by the total lane; instead, `edt_egress`
+//! records when the packet should depart (kernel FQ enforces pacing). Public-lane policing still
+//! drops external packets when the public bucket is exhausted.
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
@@ -119,17 +122,40 @@ fn deliver_node() -> SimNode {
 }
 
 /// Program a `total`-bucket METER entry (public bucket disabled) for SRC_IFINDEX.
+/// Under the new eBPF egress path, `total_bps` drives EDT shaping (no drop), not policing.
 fn set_meter(node: &mut SimNode, total_bps: u64, total_burst: u64) {
     node.maps.meter.insert(
         SRC_IFINDEX,
         MeterState {
             total_bps,
             total_burst,
-            total_tokens: total_burst, // start full
+            total_tokens: total_burst, // start full (legacy field; edt_egress uses total_last_ns)
             total_last_ns: 0,
             public_bps: 0,
             public_burst: 0,
             public_tokens: 0,
+            public_last_ns: 0,
+            ingress_bps: 0,
+            ingress_burst: 0,
+            ingress_tokens: 0,
+            ingress_last_ns: 0,
+        },
+    );
+}
+
+/// Program a `public`-bucket METER entry (total EDT rate also set; public bucket polices external
+/// egress) for SRC_IFINDEX. `public_bps/burst` drive token-bucket DROP on external packets.
+fn set_public_meter(node: &mut SimNode, total_bps: u64, public_bps: u64, public_burst: u64) {
+    node.maps.meter.insert(
+        SRC_IFINDEX,
+        MeterState {
+            total_bps,
+            total_burst: 0,
+            total_tokens: 0,
+            total_last_ns: 0,
+            public_bps,
+            public_burst,
+            public_tokens: public_burst, // start full
             public_last_ns: 0,
             ingress_bps: 0,
             ingress_burst: 0,
@@ -154,61 +180,182 @@ fn no_meter_entry_always_passes() {
     }
 }
 
-/// Token-bucket pass → exhaust → drop → refill, all at controlled timestamps through the real
-/// `meter_pass` inside `guest_tx`.
+/// EDT total-lane shaping: packets are NEVER dropped by the total lane; instead `edt_egress`
+/// advances the departure cursor and records a `last_tstamp`. Mirrors the eBPF `tc_guest_tx` path.
 ///
-/// Fixture: frame length is a fixed ~54 bytes; burst = 120 tokens (≈2 frames), bps = 60 B/s so a
-/// refill of one frame takes ~1 s. Start full (tokens = burst = 120) at now = 0:
-///   - packet 1 spends ~54 → ~66 left → PASS
-///   - packet 2 spends ~54 → ~12 left → PASS
-///   - packet 3 needs ~54 but only ~12 remain, no time elapsed (now still 0) → DROP
-///   - advance now by 2 s → refill 2·60 = 120 (clamped to burst 120) → packet 4 PASSES again.
+/// Fixture: total_bps = 1 frame/s. Three packets fired at now=0:
+///   - packet 1: idle cursor (total_last_ns=0 ≤ now=0) → departs AT now (0); cursor = 0 + airtime.
+///   - packet 2: cursor > now → departs AT cursor (back-to-back queueing); cursor advances again.
+///   - packet 3: same; all three PASS — EDT never drops.
+/// Advance now past the cursor → packet 4 departs at now (queue drained).
 #[test]
-fn meter_pass_exhaust_drop_then_refill() {
+fn edt_total_lane_shapes_not_drops() {
     let mut node = deliver_node();
 
-    // Measure the exact egress frame length so the bucket math is deterministic.
     let frame_len = guest_frame(1).len() as u64;
-    // burst holds 2 frames + a sliver; bps refills ~1 frame/sec.
-    let burst = frame_len * 2 + 10;
-    let bps = frame_len; // ≈1 frame worth of tokens per second
-    set_meter(&mut node, bps, burst);
+    // Rate = 1 frame/s → airtime = frame_len * 1e9 / frame_len = 1 s per packet.
+    set_meter(&mut node, frame_len, 0); // total_bps = frame_len B/s; burst field unused by EDT
 
     node.now = 0;
+
+    // Packet 1: idle cursor → departs at now=0.
     let out1 = node.guest_tx(&guest_frame(1), &port_meta());
     assert_eq!(
         out1.action,
         Action::Redirect(PEER_TAP),
-        "packet 1 must PASS (bucket full)"
+        "packet 1 must PASS — EDT never drops"
     );
+    assert_eq!(
+        node.last_tstamp,
+        Some(0),
+        "packet 1 departs at now=0 (idle cursor)"
+    );
+
+    // Packet 2: cursor is now at airtime; departs at the cursor (backlog).
     let out2 = node.guest_tx(&guest_frame(2), &port_meta());
     assert_eq!(
         out2.action,
         Action::Redirect(PEER_TAP),
-        "packet 2 must PASS (bucket still has ~1 frame)"
+        "packet 2 must PASS — EDT never drops"
     );
-    // Bucket now holds < 1 frame and no time has elapsed → the third frame is dropped.
+    let ts2 = node.last_tstamp.expect("EDT stamp must be set");
+    assert!(ts2 >= SEC, "packet 2 must be scheduled ≥1 s after packet 1");
+
+    // Packet 3: still at now=0, cursor further advanced — passes immediately.
     let out3 = node.guest_tx(&guest_frame(3), &port_meta());
     assert_eq!(
         out3.action,
-        Action::Drop,
-        "packet 3 must DROP (bucket exhausted, no refill)"
+        Action::Redirect(PEER_TAP),
+        "packet 3 must PASS — EDT never drops (confirms no total-lane policing)"
+    );
+    let ts3 = node.last_tstamp.expect("EDT stamp must be set");
+    assert!(
+        ts3 > ts2,
+        "packet 3 must depart after packet 2 (cursor advanced)"
     );
 
-    // Advance the clock so the bucket refills (≥1 frame worth), then a later frame passes again.
-    node.now = 2 * SEC;
+    // Advance now past the cursor → next packet departs at now (queue drained).
+    node.now = ts3 + 2 * SEC;
     let out4 = node.guest_tx(&guest_frame(4), &port_meta());
     assert_eq!(
         out4.action,
         Action::Redirect(PEER_TAP),
-        "packet 4 must PASS after the bucket refilled (now advanced 2 s)"
+        "packet 4 must PASS after clock advanced past the cursor"
+    );
+    assert_eq!(
+        node.last_tstamp,
+        Some(node.now),
+        "packet 4 departs at now (idle cursor after advance)"
     );
 
-    // The METER entry was written back with the updated last_ns (proves meter_update ran).
+    // The METER entry was written back with the updated cursor (proves meter_update ran).
     let m = node.maps.meter.get(&SRC_IFINDEX).copied().unwrap();
+    assert!(
+        m.total_last_ns > 0,
+        "meter state must be persisted with the last-seen cursor"
+    );
+}
+
+/// Public-lane policing: external packets are DROP'd when the public bucket is exhausted.
+/// Internal packets bypass the public lane and always pass. Mirrors `egress.rs:public_pass`.
+///
+/// Fixture: public_bps/burst sized for ~2 frames. After 2 external passes the bucket is exhausted
+/// and the next external packet drops. An internal packet with the same depleted state still passes.
+#[test]
+fn public_lane_exhaust_drop_then_pass_internal() {
+    // We need an external route to trigger is_ext=true. Use a separate node with an ext route.
+    let ext_ip: [u8; 4] = [8, 8, 8, 8];
+    let ext_nexthop: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xee, 0x01];
+
+    let mut node = SimNode::new();
+    node.src_ifindex = SRC_IFINDEX;
+
+    // `deliver()` reads `maps.local()` for the Encap path (uplink_ifindex + MACs).
+    // Set a non-zero uplink_ifindex so we get Redirect(UPLINK_IFINDEX), not Pass.
+    const UPLINK_IFINDEX: u32 = 5;
+    node.maps.local = Some(flowplane_common::Local {
+        uplink_ifindex: UPLINK_IFINDEX,
+        uplink_mac: [0xde; 6],
+        gateway_mac: [0xbe; 6],
+        underlay_ipv6: [0xfd; 16],
+    });
+
+    // External route (is_external=1) → triggers public-lane policing.
+    node.maps.add_route4(
+        VNI,
+        ext_ip,
+        flowplane_common::RouteValue {
+            nexthop_vni: 0,
+            nexthop_ipv6: ext_nexthop,
+            is_external: 1,
+            _pad: [0; 3],
+        },
+    );
+    // Internal peer route (is_external=0) → public lane is NOT checked.
+    node.maps.underlay.insert(
+        PEER_UNDERLAY,
+        flowplane_common::UnderlayValue {
+            vni: VNI,
+            tap_ifindex: PEER_TAP,
+            guest_mac: [0xcc; 6],
+            _pad: [0; 2],
+        },
+    );
+    node.maps.add_route4(
+        VNI,
+        PEER_IP,
+        flowplane_common::RouteValue {
+            nexthop_vni: 0,
+            nexthop_ipv6: PEER_UNDERLAY,
+            is_external: 0,
+            _pad: [0; 3],
+        },
+    );
+    allow(&mut node, SRC_IFINDEX, FW_DIR_EGRESS);
+    allow(&mut node, PEER_TAP, FW_DIR_INGRESS);
+
+    let frame_len = guest_frame(1).len() as u64;
+    // Public bucket holds ~2 frames; no total shaping configured (total_bps=0 → edt_egress no-op).
+    let public_burst = frame_len * 2 + 10;
+    set_public_meter(&mut node, 0, frame_len, public_burst);
+
+    node.now = 0;
+
+    // Build an external frame (GUEST_IP → ext_ip).
+    let ext_frame = |sport: u16| -> Vec<u8> {
+        let builder = etherparse::PacketBuilder::ethernet2([0xaa; 6], [0xbb; 6])
+            .ipv4(GUEST_IP, ext_ip, 64)
+            .tcp(sport, 80, 0, 1024);
+        let mut out = Vec::new();
+        builder.write(&mut out, &[]).unwrap();
+        out
+    };
+
+    let out1 = node.guest_tx(&ext_frame(1001), &port_meta());
     assert_eq!(
-        m.total_last_ns,
-        2 * SEC,
-        "meter state must be persisted with the last-seen timestamp"
+        out1.action,
+        Action::Redirect(UPLINK_IFINDEX),
+        "ext packet 1 must PASS (bucket full)"
+    );
+    let out2 = node.guest_tx(&ext_frame(1002), &port_meta());
+    assert_eq!(
+        out2.action,
+        Action::Redirect(UPLINK_IFINDEX),
+        "ext packet 2 must PASS (bucket ~1 frame remaining)"
+    );
+    // Bucket now < 1 frame, no time elapsed → external packet drops.
+    let out3 = node.guest_tx(&ext_frame(1003), &port_meta());
+    assert_eq!(
+        out3.action,
+        Action::Drop,
+        "ext packet 3 must DROP (public bucket exhausted)"
+    );
+
+    // Internal packet (to PEER_IP) with the same depleted public state → PASS (public not checked).
+    let out4 = node.guest_tx(&guest_frame(2001), &port_meta());
+    assert_eq!(
+        out4.action,
+        Action::Redirect(PEER_TAP),
+        "internal packet must PASS even when the public bucket is exhausted"
     );
 }
