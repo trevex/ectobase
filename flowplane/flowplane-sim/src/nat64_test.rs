@@ -380,3 +380,299 @@ fn non_nat64_dst_passes_through() {
         "no conntrack entry for a non-NAT64 frame"
     );
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// NAT64 INGRESS conformance (external IPv4 reply → guest IPv6 translation)
+//
+// These drive the REAL `flowplane_core::nat64::{nat64_ingress_parse, nat64_ingress_write}` via the
+// full `SimNode::uplink_nat64_ingress` compose that the eBPF `nat64_ingress` mirrors. An external
+// IPv4 reply — encapped IP-in-IPv6 as `[Eth][outerIPv6][innerIPv4][L4]`, inner dst = the SNAT'd
+// NAT_IP, inner src = the external server EXT_V4, L4 dst port = the SNAT'd nat_port — whose reverse
+// conntrack entry carries `CT_F_NAT64` + `CT_REWRITE_DST` is reverse-NAT'd (guest IPv4 + orig port
+// restored) then expanded back to `[Eth][innerIPv6][L4]`: inner IPv6 dst = the guest's IPv6, src =
+// `64:ff9b::EXT_V4`, TCP/UDP checksum re-based to the IPv6 pseudo-header (ICMPv4 echo-reply →
+// ICMPv6 echo-reply). Coverage: TCP + UDP + ICMP. PINNED literals + valid-checksum assertions.
+// ══════════════════════════════════════════════════════════════════════════════
+
+use flowplane_common::CtEntry;
+
+const IPPROTO_ICMPV6: u8 = 58;
+const TAP_IFINDEX: u32 = 9;
+const GUEST_MAC: [u8; 6] = [0x22; 6];
+/// The external server's underlay (outer IPv6 src of the reply).
+const SERVER_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xdd];
+
+/// The reverse (peer-independent) conntrack entry the egress allocator stored: restores the guest
+/// IPv4 + orig port, and flags the flow as NAT64 for the ingress expansion.
+fn rev_ct(orig_sport: u16) -> CtEntry {
+    CtEntry {
+        last_seen: 0,
+        xlate_ip: GUEST_IP,
+        xlate_port: orig_sport,
+        flags: CT_REWRITE_DST | CT_F_SRC_NAT | CT_F_NAT64,
+        tcp_state: 0,
+        fwall_action: 0,
+        _pad: [0; 7],
+    }
+}
+
+/// The `64:ff9b::EXT_V4` IPv6 src the ingress reconstructs from the reply's inner IPv4 src.
+fn nat64_src() -> [u8; 16] {
+    [
+        0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, EXT_V4[0], EXT_V4[1], EXT_V4[2], EXT_V4[3],
+    ]
+}
+
+/// Wrap an inner `[IPv4][L4]` reply in the outer `[Eth][IPv6]` IP-in-IPv6 encap the uplink receives:
+/// outer src = server underlay, outer dst = this node's underlay, next-header IPIP(4).
+fn encap_reply(inner: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(ETH_LEN + IPV6_LEN + inner.len());
+    // Outer Ethernet: dst=our uplink MAC, src=gateway MAC, ethertype IPv6.
+    out.extend_from_slice(&UPLINK_MAC);
+    out.extend_from_slice(&GATEWAY_MAC);
+    out.extend_from_slice(&0x86DDu16.to_be_bytes());
+    // Outer IPv6: v6, plen = inner len, next-header IPIP, hops 64.
+    out.push(0x60);
+    out.extend_from_slice(&[0, 0, 0]);
+    out.extend_from_slice(&(inner.len() as u16).to_be_bytes());
+    out.push(4); // IPPROTO_IPIP
+    out.push(64);
+    out.extend_from_slice(&SERVER_UNDERLAY);
+    out.extend_from_slice(&SELF_UNDERLAY);
+    out.extend_from_slice(inner);
+    out
+}
+
+/// Inner IPv4 reply `EXT_V4:DPORT → NAT_IP:nat_port` (pre-`ct_apply`, valid v4 checksums). Built with
+/// etherparse (dummy Ethernet), then the 14-byte Ethernet is stripped to leave `[IPv4][L4]`.
+fn inner_reply(proto: u8, nat_port: u16) -> Vec<u8> {
+    let builder = PacketBuilder::ethernet2([0; 6], [0; 6]).ipv4(EXT_V4, NAT_IP, 63);
+    let mut full = Vec::new();
+    match proto {
+        IPPROTO_TCP => builder
+            .tcp(DPORT, nat_port, 0, 1024)
+            .write(&mut full, &[0x01, 0x02, 0x03, 0x04])
+            .unwrap(),
+        IPPROTO_UDP => builder
+            .udp(DPORT, nat_port)
+            .write(&mut full, &[0xaa, 0xbb, 0xcc, 0xdd])
+            .unwrap(),
+        _ => unreachable!(),
+    }
+    full[ETH_LEN..].to_vec()
+}
+
+/// Verify the reconstructed guest IPv6 header (offsets in the `[Eth][IPv6][L4]` output frame).
+fn assert_ingress_ipv6(out: &[u8], next_hdr: u8, payload_len: usize) {
+    // Ethernet: dst = guest MAC, src = GW_MAC, ethertype IPv6.
+    assert_eq!(
+        &out[0..6],
+        &GUEST_MAC,
+        "guest-facing Ethernet dst = guest MAC"
+    );
+    assert_eq!(
+        &out[12..14],
+        &0x86DDu16.to_be_bytes(),
+        "guest-facing ethertype IPv6"
+    );
+    // IPv6 header at ETH_LEN.
+    assert_eq!(out[ETH_LEN] & 0xf0, 0x60, "IPv6 version 6");
+    assert_eq!(
+        be16(out, ETH_LEN + 4) as usize,
+        payload_len,
+        "IPv6 payload length = L4 length"
+    );
+    assert_eq!(out[ETH_LEN + 6], next_hdr, "IPv6 next-header");
+    assert_eq!(
+        out[ETH_LEN + 7],
+        63,
+        "IPv6 hop-limit copied from inner v4 TTL"
+    );
+    assert_eq!(
+        &out[ETH_LEN + 8..ETH_LEN + 24],
+        &nat64_src(),
+        "IPv6 src = 64:ff9b::EXT_V4"
+    );
+    assert_eq!(
+        &out[ETH_LEN + 24..ETH_LEN + 40],
+        &GUEST_IP6,
+        "IPv6 dst = guest IPv6"
+    );
+}
+
+/// Verify an IPv6 TCP/UDP checksum folds to 0 over its pseudo-header. `l4` is the absolute L4 offset;
+/// `l4_len` the L4 length. Faithful ones-complement sum over pseudo-header (src+dst+len+nexthdr) + L4.
+fn v6_l4_checksum_valid(
+    out: &[u8],
+    src6: &[u8; 16],
+    dst6: &[u8; 16],
+    nexthdr: u8,
+    l4: usize,
+    l4_len: usize,
+) -> bool {
+    let mut sum: u32 = 0;
+    for chunk in src6.chunks(2).chain(dst6.chunks(2)) {
+        sum += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+    }
+    sum += l4_len as u32; // upper-layer length (< 65536 → high word 0)
+    sum += nexthdr as u32;
+    let mut i = l4;
+    while i + 1 < l4 + l4_len {
+        sum += u16::from_be_bytes([out[i], out[i + 1]]) as u32;
+        i += 2;
+    }
+    if (l4_len & 1) == 1 {
+        sum += (out[l4 + l4_len - 1] as u32) << 8;
+    }
+    while (sum >> 16) != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    (sum as u16) == 0xffff
+}
+
+const OUT_L4: usize = ETH_LEN + IPV6_LEN;
+
+#[test]
+fn nat64_ingress_tcp_expands_to_ipv6() {
+    let node = node();
+    let nat_port = expected_nat_port(IPPROTO_TCP);
+    let inner = inner_reply(IPPROTO_TCP, nat_port);
+    let l4_len = inner.len() - 20; // 20 (TCP hdr) + 4 payload
+    let frame = encap_reply(&inner);
+
+    let out = node.uplink_nat64_ingress(&frame, TAP_IFINDEX, GUEST_MAC, GUEST_IP6, &rev_ct(SPORT));
+    assert_eq!(
+        out.action,
+        Action::Redirect(TAP_IFINDEX),
+        "TCP NAT64 reply delivered to the guest tap"
+    );
+    // Net -20 bytes (outer 54 + inner 20 → inner 40 headers): [Eth][IPv6][L4].
+    assert_eq!(
+        out.pkt.len(),
+        frame.len() - 20,
+        "NAT64 ingress is net -20 bytes"
+    );
+    assert_ingress_ipv6(&out.pkt, IPPROTO_TCP, l4_len);
+    // TCP src port unchanged (= server DPORT); dst port restored to the guest sport by ct_apply.
+    assert_eq!(be16(&out.pkt, OUT_L4), DPORT, "TCP src port = server port");
+    assert_eq!(
+        be16(&out.pkt, OUT_L4 + 2),
+        SPORT,
+        "TCP dst port restored to guest sport"
+    );
+    assert!(
+        v6_l4_checksum_valid(
+            &out.pkt,
+            &nat64_src(),
+            &GUEST_IP6,
+            IPPROTO_TCP,
+            OUT_L4,
+            l4_len
+        ),
+        "translated TCP checksum valid over the IPv6 pseudo-header"
+    );
+}
+
+#[test]
+fn nat64_ingress_udp_expands_to_ipv6() {
+    let node = node();
+    let nat_port = expected_nat_port(IPPROTO_UDP);
+    let inner = inner_reply(IPPROTO_UDP, nat_port);
+    let l4_len = inner.len() - 20; // 8 (UDP hdr) + 4 payload
+    let frame = encap_reply(&inner);
+
+    let out = node.uplink_nat64_ingress(&frame, TAP_IFINDEX, GUEST_MAC, GUEST_IP6, &rev_ct(SPORT));
+    assert_eq!(out.action, Action::Redirect(TAP_IFINDEX));
+    assert_eq!(out.pkt.len(), frame.len() - 20);
+    assert_ingress_ipv6(&out.pkt, IPPROTO_UDP, l4_len);
+    assert_eq!(be16(&out.pkt, OUT_L4), DPORT, "UDP src port = server port");
+    assert_eq!(
+        be16(&out.pkt, OUT_L4 + 2),
+        SPORT,
+        "UDP dst port restored to guest sport"
+    );
+    assert_ne!(
+        be16(&out.pkt, OUT_L4 + 6),
+        0,
+        "UDP checksum non-zero after v4→v6 translation"
+    );
+    assert!(
+        v6_l4_checksum_valid(
+            &out.pkt,
+            &nat64_src(),
+            &GUEST_IP6,
+            IPPROTO_UDP,
+            OUT_L4,
+            l4_len
+        ),
+        "translated UDP checksum valid over the IPv6 pseudo-header"
+    );
+}
+
+#[test]
+fn nat64_ingress_icmpv4_reply_becomes_icmpv6() {
+    let node = node();
+    // ICMP echo reply: id == nat_port (server echoes the SNAT'd id), seq == 1, 4-byte payload.
+    let icmp_id_nat = 0xB0C0u16; // the SNAT'd id the server echoed (any value; restored to SPORT)
+    let mut inner = Vec::new();
+    // Inner IPv4 header via etherparse (echo reply, type 0), then strip the Ethernet.
+    let builder = PacketBuilder::ethernet2([0; 6], [0; 6]).ipv4(EXT_V4, NAT_IP, 63);
+    builder
+        .icmpv4_echo_reply(icmp_id_nat, 1)
+        .write(&mut inner, &[0xde, 0xad, 0xbe, 0xef])
+        .unwrap();
+    let inner = inner[ETH_LEN..].to_vec();
+    let l4_len = inner.len() - 20; // 8 (echo hdr) + 4 payload
+    let frame = encap_reply(&inner);
+
+    // Reverse CT for ICMP restores the guest's original id (SPORT) via ct_apply's ICMP id rewrite.
+    let out = node.uplink_nat64_ingress(&frame, TAP_IFINDEX, GUEST_MAC, GUEST_IP6, &rev_ct(SPORT));
+    assert_eq!(out.action, Action::Redirect(TAP_IFINDEX));
+    assert_eq!(out.pkt.len(), frame.len() - 20);
+    assert_ingress_ipv6(&out.pkt, IPPROTO_ICMPV6, l4_len);
+    // ICMPv4 echo reply (type 0) → ICMPv6 echo reply (type 129), code 0.
+    assert_eq!(out.pkt[OUT_L4], 129, "ICMPv6 echo-reply type");
+    assert_eq!(out.pkt[OUT_L4 + 1], 0, "ICMPv6 code 0");
+    // id restored to the guest's original id (SPORT); seq unchanged.
+    assert_eq!(
+        be16(&out.pkt, OUT_L4 + 4),
+        SPORT,
+        "ICMPv6 id = restored guest id"
+    );
+    assert_eq!(be16(&out.pkt, OUT_L4 + 6), 1, "ICMPv6 seq unchanged");
+    // The ICMPv6 checksum is over the IPv6 pseudo-header + the 8-byte echo header (no payload sum in
+    // the eBPF helper — it computes over the 8-byte window). Fold pseudo + the 8-byte header to 0.
+    let mut sum: u32 = 0;
+    for chunk in nat64_src().chunks(2).chain(GUEST_IP6.chunks(2)) {
+        sum += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+    }
+    sum += 8u32; // upper-layer length used by the helper
+    sum += IPPROTO_ICMPV6 as u32;
+    let mut i = OUT_L4;
+    while i + 1 < OUT_L4 + 8 {
+        sum += u16::from_be_bytes([out.pkt[i], out.pkt[i + 1]]) as u32;
+        i += 2;
+    }
+    while (sum >> 16) != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    assert_eq!(
+        sum as u16, 0xffff,
+        "ICMPv6 echo-header checksum valid over pseudo-header"
+    );
+}
+
+/// A reply whose guest port has no NAT64 IPv6 (guest is IPv4-only → PORT_META `guest_ipv6` all-zero)
+/// falls through with `Pass` — the parse rejects the all-zero guest IPv6.
+#[test]
+fn nat64_ingress_ipv4_only_guest_passes() {
+    let node = node();
+    let nat_port = expected_nat_port(IPPROTO_TCP);
+    let frame = encap_reply(&inner_reply(IPPROTO_TCP, nat_port));
+    let out = node.uplink_nat64_ingress(&frame, TAP_IFINDEX, GUEST_MAC, [0u8; 16], &rev_ct(SPORT));
+    assert_eq!(
+        out.action,
+        Action::Pass,
+        "IPv4-only guest (no v6) falls through"
+    );
+}
