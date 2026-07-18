@@ -29,14 +29,14 @@ type recordingDP struct {
 	// natSrc/natSrcN record AddNatSource calls (local egress SNAT programming).
 	natSrc  map[string]natSrcCall // sourceIP -> last call
 	natSrcN map[string]int        // sourceIP -> call count
-	// meters/meterN record ConfigureMeter calls (per-interface egress bandwidth caps).
-	meters map[string]meterCall // interfaceID -> last call
-	meterN map[string]int       // interfaceID -> call count
+	// qos/qosN record ConfigureQoS calls (per-interface QoS lane configuration).
+	qos  map[string]qosCall // interfaceID -> last call
+	qosN map[string]int     // interfaceID -> call count
 }
 
-type meterCall struct {
-	iface                 string
-	totalMbps, publicMbps uint32
+type qosCall struct {
+	iface                          string
+	egressMbps, publicMbps, ingressMbps uint32
 }
 
 type fwCall struct {
@@ -64,8 +64,8 @@ func newRecordingDP() *recordingDP {
 		nbrNat: map[string]string{}, nbrNatWd: map[string]bool{},
 		fwInstalled: map[string]bool{},
 		lbBackends:  map[string][]string{},
-		natSrc:      map[string]natSrcCall{}, natSrcN: map[string]int{},
-		meters: map[string]meterCall{}, meterN: map[string]int{},
+		natSrc: map[string]natSrcCall{}, natSrcN: map[string]int{},
+		qos:    map[string]qosCall{}, qosN: map[string]int{},
 	}
 }
 
@@ -169,16 +169,16 @@ func (f *recordingDP) DelLbBackend(ctx context.Context, id, backendUnderlay stri
 	f.lbBackends[id] = cur
 	return nil
 }
-func (f *recordingDP) ConfigureMeter(_ context.Context, iface string, totalMbps, publicMbps uint32) error {
+func (f *recordingDP) ConfigureQoS(_ context.Context, iface string, egressMbps, publicMbps, ingressMbps uint32) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.meters[iface] = meterCall{iface: iface, totalMbps: totalMbps, publicMbps: publicMbps}
-	f.meterN[iface]++
+	f.qos[iface] = qosCall{iface: iface, egressMbps: egressMbps, publicMbps: publicMbps, ingressMbps: ingressMbps}
+	f.qosN[iface]++
 	return nil
 }
-func (f *recordingDP) getMeter(iface string) (meterCall, bool) {
+func (f *recordingDP) getQoS(iface string) (qosCall, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	v, ok := f.meters[iface]
+	v, ok := f.qos[iface]
 	return v, ok
 }
