@@ -1090,7 +1090,10 @@ async fn main() -> anyhow::Result<()> {
                 let tap = ifindex(ifname)?;
                 // Single-source the mbps→bps + burst derivation with the per-interface program
                 // path and the ConfigureMeter RPC.
-                meter_map.upsert(tap, control::Control::meter_state(total_mbps, public_mbps))?;
+                meter_map.upsert(
+                    tap,
+                    control::Control::meter_state(total_mbps, public_mbps, 0),
+                )?;
             }
 
             // DHCP_CONFIG: program server-wide DHCP options (MTU + DNS servers).

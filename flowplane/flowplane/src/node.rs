@@ -527,7 +527,7 @@ impl DataplaneNode for NodeService {
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
             // Resolve interface_id -> ifindex + program the METER map via the same control path
             // (and mbps->MeterState conversion) the --meter CLI uses. 0/0 = unlimited (clears).
-            attach.control.set_meter(&iface, total_mbps, public_mbps)
+            attach.control.set_qos(&iface, total_mbps, public_mbps, 0)
         })
         .await
         .map_err(|e| Status::internal(format!("configure_meter task panicked: {e}")))?

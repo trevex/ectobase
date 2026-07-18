@@ -619,25 +619,30 @@ impl Control {
         g.dhcp_meta.upsert(ifindex, m)
     }
 
-    /// Build a `MeterState` token bucket from total/public caps in Mbit/s. The mbps→bytes/s
-    /// conversion and burst derivation are the single source of truth shared by
-    /// `program_iface_maps`, the `--meter` CLI flag, and the `ConfigureMeter` RPC. Both rates
-    /// 0 = unlimited (`bps==0` is the datapath's pass sentinel).
-    pub fn meter_state(total_mbps: u64, public_mbps: u64) -> flowplane_common::MeterState {
-        let tb = total_mbps.saturating_mul(1_000_000) / 8;
-        let pb = public_mbps.saturating_mul(1_000_000) / 8;
+    /// Build a `MeterState` from per-lane caps in Mbit/s. Egress total is EDT-shaped: only
+    /// `total_bps` + the schedule cursor (`total_last_ns`, seeded 0) matter — no token bucket.
+    /// Public + ingress are token-bucket policers (burst = 1/8 s of rate, min 2000B). All 0 =>
+    /// unlimited. Single source of truth shared by program_iface_maps, the CLI, and ConfigureQoS.
+    pub fn meter_state(
+        egress_mbps: u64,
+        public_mbps: u64,
+        ingress_mbps: u64,
+    ) -> flowplane_common::MeterState {
+        let e = egress_mbps.saturating_mul(1_000_000) / 8;
+        let p = public_mbps.saturating_mul(1_000_000) / 8;
+        let i = ingress_mbps.saturating_mul(1_000_000) / 8;
         flowplane_common::MeterState {
-            total_bps: tb,
-            total_burst: (tb / 8).max(2000),
-            total_tokens: tb / 8,
+            total_bps: e,
+            total_burst: 0,
+            total_tokens: 0,
             total_last_ns: 0,
-            public_bps: pb,
-            public_burst: (pb / 8).max(2000),
-            public_tokens: pb / 8,
+            public_bps: p,
+            public_burst: (p / 8).max(2000),
+            public_tokens: p / 8,
             public_last_ns: 0,
-            ingress_bps: 0,
-            ingress_burst: 0,
-            ingress_tokens: 0,
+            ingress_bps: i,
+            ingress_burst: (i / 8).max(2000),
+            ingress_tokens: i / 8,
             ingress_last_ns: 0,
         }
     }
@@ -832,7 +837,7 @@ impl Control {
         }
         if total_mbps != 0 || public_mbps != 0 {
             g.meter
-                .upsert(tap, Self::meter_state(total_mbps, public_mbps))?;
+                .upsert(tap, Self::meter_state(total_mbps, public_mbps, 0))?;
         }
         // Restart journal (never read by the datapath): persist what a restart needs to rebuild
         // bookkeeping and re-attach the guest program. Lengths are guarded in create_interface, so
@@ -1737,29 +1742,23 @@ impl Control {
         }
     }
 
-    /// Program the egress bandwidth cap (METER token-bucket) for a locally-attached interface.
-    /// `total_mbps`/`public_mbps` are the caps in Mbit/s; both 0 = unlimited, which REMOVES the
-    /// meter entry (the datapath's `bps==0` pass also holds if the entry survives, but clearing
-    /// keeps the map tidy). Reuses `meter_state` so the mbps→bps + burst derivation matches the
-    /// `--meter` CLI and the per-interface program path exactly. Idempotent: re-configuring
-    /// replaces the state.
-    pub fn set_meter(
+    pub fn set_qos(
         &self,
         interface_id: &[u8],
-        total_mbps: u64,
+        egress_mbps: u64,
         public_mbps: u64,
+        ingress_mbps: u64,
     ) -> anyhow::Result<()> {
         let mut g = self.inner.lock();
         let tap = *g
             .by_ifindex
             .get(interface_id)
             .ok_or_else(|| anyhow::anyhow!("NO_VM: unknown interface"))?;
-        if total_mbps == 0 && public_mbps == 0 {
-            // Unlimited: drop any existing entry. Removing an absent entry is not an error.
+        if egress_mbps == 0 && public_mbps == 0 && ingress_mbps == 0 {
             let _ = g.meter.remove(&tap);
             Ok(())
         } else {
-            let state = Self::meter_state(total_mbps, public_mbps);
+            let state = Self::meter_state(egress_mbps, public_mbps, ingress_mbps);
             g.meter.upsert(tap, state)
         }
     }
@@ -2318,28 +2317,35 @@ mod tests {
         assert_eq!(hex_encode(b"rpod"), hex_encode(b"rpod"));
     }
 
-    /// The single-source mbps->MeterState conversion shared by the --meter CLI, the per-interface
-    /// program path, and the ConfigureMeter RPC. 1 Mbit/s = 125_000 bytes/s; burst = bps/8 floored
-    /// at 2000; tokens seed to the burst; last_ns starts at 0. 0 mbps = 0 bps (the datapath's pass
-    /// sentinel) with the 2000-byte burst floor.
+    /// Three-lane mbps->MeterState conversion: egress=EDT (no token bucket, burst=0),
+    /// public/ingress=token-bucket policers (burst = bps/8, min 2000B). 0 mbps = pass sentinel.
     #[test]
     fn meter_state_conversion() {
-        let m = Control::meter_state(100, 40);
+        let m = Control::meter_state(100, 40, 50);
         assert_eq!(m.total_bps, 100 * 1_000_000 / 8); // 12_500_000 B/s
         assert_eq!(m.public_bps, 40 * 1_000_000 / 8); // 5_000_000 B/s
-        assert_eq!(m.total_burst, (m.total_bps / 8).max(2000));
+        assert_eq!(m.ingress_bps, 50 * 1_000_000 / 8); // 6_250_000 B/s
+                                                       // EDT total: no token bucket
+        assert_eq!(m.total_burst, 0);
+        assert_eq!(m.total_tokens, 0);
+        // Public policer
         assert_eq!(m.public_burst, (m.public_bps / 8).max(2000));
-        assert_eq!(m.total_tokens, m.total_bps / 8);
         assert_eq!(m.public_tokens, m.public_bps / 8);
+        // Ingress policer
+        assert_eq!(m.ingress_burst, (m.ingress_bps / 8).max(2000));
+        assert_eq!(m.ingress_tokens, m.ingress_bps / 8);
         assert_eq!(m.total_last_ns, 0);
         assert_eq!(m.public_last_ns, 0);
+        assert_eq!(m.ingress_last_ns, 0);
 
-        // 0 mbps = unlimited sentinel (bps==0) with the burst floor.
-        let z = Control::meter_state(0, 0);
+        // 0 mbps = unlimited sentinel (bps==0).
+        let z = Control::meter_state(0, 0, 0);
         assert_eq!(z.total_bps, 0);
         assert_eq!(z.public_bps, 0);
-        assert_eq!(z.total_burst, 2000);
+        assert_eq!(z.ingress_bps, 0);
+        assert_eq!(z.total_burst, 0);
         assert_eq!(z.public_burst, 2000);
+        assert_eq!(z.ingress_burst, 2000);
     }
 
     /// Pure (no-BPF) check that an IFACE_META journal entry round-trips back to the interface_id,
