@@ -1,14 +1,17 @@
-//! Per-interface egress rate metering (token bucket), ported over the `Maps` trait so the SAME
-//! token-bucket logic runs in eBPF and natively. Faithful port of the eBPF `meter::{take, meter_pass}`.
+//! Per-interface rate metering — token-bucket policing and EDT shaping — ported over the `Maps`
+//! trait so the SAME logic runs in eBPF and natively.
 //!
-//! Metering does NOT mutate packet bytes — `meter_pass` reads/refills/writes the `METER` map entry
-//! for an interface and returns a pass/drop verdict. There are two buckets per interface: `total`
-//! (gates ALL egress) and `public` (gates south-north / external egress, checked only when
-//! `is_external`). No METER entry for the interface => unlimited (pass).
+//! `MeterState` has three lanes per interface:
+//! - **`total`** — gates ALL egress; being migrated from token-bucket policing ([`meter_pass`]) to
+//!   EDT shaping ([`edt_egress`]). `meter_pass` is kept for now and removed in a later task.
+//! - **`public`** — token-bucket POLICING of south-north / external egress ([`public_pass`],
+//!   checked only when `is_external`).
+//! - **`ingress`** — token-bucket POLICING of traffic delivered to the guest tap ([`ingress_pass`]).
 //!
-//! Time impurity: the eBPF `meter_pass` stamps `last_ns` from `bpf_ktime_get_ns()`. As with
-//! conntrack, `now: u64` is a parameter — the eBPF wrapper passes `now()`, the sim passes a
-//! controlled clock. `take()` itself is pure.
+//! No METER entry for the interface => unlimited (pass / send immediately).
+//!
+//! Time impurity: `now: u64` is always a parameter — the eBPF wrappers pass `bpf_ktime_get_ns()`,
+//! the sim passes a controlled clock. `take()` and `edt_departure()` are fully pure.
 
 use crate::maps::Maps;
 use flowplane_common::MeterState;
@@ -43,13 +46,109 @@ pub fn take(bps: u64, burst: u64, tokens: u64, last_ns: u64, now: u64, len: u64)
     }
 }
 
+/// Earliest-departure-time step for one packet on a shaped lane. Returns
+/// `(tstamp_ns, new_t_last)`. The packet may leave no earlier than `max(t_last, now)`; the schedule
+/// cursor then advances by the packet's airtime (`wire_len * 1e9 / rate_bps`). `rate_bps == 0` =>
+/// unlimited: send at `now`, cursor = `now`. Pure — no 128-bit ops (wire_len is bounded by the MTU,
+/// so `wire_len * 1e9` stays within u64). This is the shaping analog of `take` (which polices).
+#[inline(always)]
+pub fn edt_departure(rate_bps: u64, wire_len: u64, t_last: u64, now: u64) -> (u64, u64) {
+    if rate_bps == 0 {
+        return (now, now);
+    }
+    let delay = wire_len.saturating_mul(1_000_000_000) / rate_bps;
+    let t_sched = if t_last > now { t_last } else { now };
+    (t_sched, t_sched.saturating_add(delay))
+}
+
+/// Map-driven EDT egress step for `ifindex` sending `wire_len` bytes. Reads `METER[ifindex]`,
+/// advances the schedule cursor (`total_last_ns`) via [`edt_departure`] on the egress rate
+/// (`total_bps`), writes it back, and returns the packet's departure timestamp (ns). `None` = no
+/// egress shaping configured (no entry, or `total_bps == 0`) — caller sends immediately. The eBPF
+/// wrapper passes `bpf_ktime_get_ns()`; the sim passes a controlled clock.
+#[inline(always)]
+pub fn edt_egress<M: Maps>(maps: &mut M, ifindex: u32, wire_len: u64, now: u64) -> Option<u64> {
+    let mut m: MeterState = maps.meter_get(ifindex)?;
+    if m.total_bps == 0 {
+        return None;
+    }
+    let (tstamp, t_last) = edt_departure(m.total_bps, wire_len, m.total_last_ns, now);
+    m.total_last_ns = t_last;
+    maps.meter_update(ifindex, m);
+    Some(tstamp)
+}
+
+/// Token-bucket POLICE of the external-egress (public) lane. Only gates when `is_external`. `true` =
+/// pass, `false` = drop. No entry, or `public_bps == 0` => pass. Faithful reuse of [`take`].
+#[inline(always)]
+pub fn public_pass<M: Maps>(
+    maps: &mut M,
+    ifindex: u32,
+    len: u64,
+    is_external: bool,
+    now: u64,
+) -> bool {
+    if !is_external {
+        return true;
+    }
+    let mut m: MeterState = match maps.meter_get(ifindex) {
+        Some(m) => m,
+        None => return true,
+    };
+    if m.public_bps == 0 {
+        return true;
+    }
+    let (pass, tok) = take(
+        m.public_bps,
+        m.public_burst,
+        m.public_tokens,
+        m.public_last_ns,
+        now,
+        len,
+    );
+    m.public_tokens = tok;
+    m.public_last_ns = now;
+    maps.meter_update(ifindex, m);
+    pass
+}
+
+/// Token-bucket POLICE of the ingress lane (traffic delivered to the guest), keyed by the
+/// destination tap `ifindex`. `true` = pass, `false` = drop. No entry, or `ingress_bps == 0` =>
+/// pass. Faithful reuse of [`take`].
+#[inline(always)]
+pub fn ingress_pass<M: Maps>(maps: &mut M, ifindex: u32, len: u64, now: u64) -> bool {
+    let mut m: MeterState = match maps.meter_get(ifindex) {
+        Some(m) => m,
+        None => return true,
+    };
+    if m.ingress_bps == 0 {
+        return true;
+    }
+    let (pass, tok) = take(
+        m.ingress_bps,
+        m.ingress_burst,
+        m.ingress_tokens,
+        m.ingress_last_ns,
+        now,
+        len,
+    );
+    m.ingress_tokens = tok;
+    m.ingress_last_ns = now;
+    maps.meter_update(ifindex, m);
+    pass
+}
+
 /// Token-bucket rate check for `ifindex` sending a `len`-byte frame. Gates `total` always, `public`
 /// when `is_external`. `true` = pass, `false` = drop. No METER entry => unlimited (pass).
+///
+/// **Legacy two-bucket gate** (total + public). The `ingress` lane is not touched here. The `total`
+/// lane is being migrated to EDT shaping via [`edt_egress`]; `meter_pass` is kept for compatibility
+/// and will be removed in a later task once the eBPF/sim callers are updated.
 ///
 /// Faithful port of the eBPF `meter::meter_pass`: reads `METER[ifindex]`, refills+spends the total
 /// bucket (and the public bucket when external) via [`take`], stamps `*_last_ns = now`, and writes
 /// the updated state back. `now` is the current monotonic time (ns); the eBPF wrapper passes
-/// `now()`, the sim passes a controlled clock.
+/// `bpf_ktime_get_ns()`, the sim passes a controlled clock.
 #[inline(always)]
 pub fn meter_pass<M: Maps>(
     maps: &mut M,
@@ -157,5 +256,28 @@ mod tests {
         // tokens == len (no refill) => pass with exactly 0 left (>= boundary is inclusive).
         let (p, t) = take(1_000_000, 5000, 1000, 0, 0, 1000);
         assert_eq!((p, t), (true, 0));
+    }
+
+    #[test]
+    fn edt_unlimited_sends_now() {
+        // rate 0 => send immediately, cursor tracks now.
+        assert_eq!(super::edt_departure(0, 1500, 0, 12345), (12345, 12345));
+    }
+
+    #[test]
+    fn edt_idle_departs_now_and_reserves_airtime() {
+        // 1_000_000 B/s, 1500B => delay = 1500 * 1e9 / 1e6 = 1_500_000 ns.
+        // Idle (t_last=0 < now): departs at now, cursor advances to now + delay.
+        let (ts, t_last) = super::edt_departure(1_000_000, 1500, 0, 10_000_000);
+        assert_eq!(ts, 10_000_000);
+        assert_eq!(t_last, 11_500_000);
+    }
+
+    #[test]
+    fn edt_backlogged_queues_after_cursor() {
+        // Cursor ahead of now (backlog): packet departs at the cursor, not now.
+        let (ts, t_last) = super::edt_departure(1_000_000, 1500, 20_000_000, 10_000_000);
+        assert_eq!(ts, 20_000_000);
+        assert_eq!(t_last, 21_500_000);
     }
 }
