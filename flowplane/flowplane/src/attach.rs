@@ -111,20 +111,13 @@ impl AttachState {
         }
         // Primary overlay IPv4: first requested IPv4 (IPv6 requests are recorded but v4 is the
         // primary INTERFACES key for this path).
-        let ipv4 = requested_ips
-            .iter()
-            .find_map(|s| s.parse::<Ipv4Addr>().ok())
-            .map(|a| a.octets())
+        let ipv4 = primary_ipv4(requested_ips)
             .context("attach requires at least one IPv4 in requested_ips")?;
 
         // Primary overlay IPv6: first requested IPv6 (OPTIONAL — IPv4-only guests are valid, so this
         // defaults to all-zeros rather than bailing). Set into PortMeta.guest_ipv6, which the DHCPv6
         // responder (IA Address) and NAT64 require. Mirrors the bare-IP parse the v4 side uses.
-        let ipv6 = requested_ips
-            .iter()
-            .find_map(|s| s.parse::<Ipv6Addr>().ok())
-            .map(|a| a.octets())
-            .unwrap_or([0u8; 16]);
+        let ipv6 = primary_ipv6(requested_ips);
 
         // MAC: honour a caller-supplied MAC, else allocate one.
         let mac = if mac_req.is_empty() {
@@ -284,6 +277,25 @@ impl AttachState {
     }
 }
 
+/// First valid IPv4 address in `requested_ips`, as raw octets.  Returns `None` if none is present
+/// (caller should `.context("requires at least one IPv4")`).
+fn primary_ipv4(requested_ips: &[String]) -> Option<[u8; 4]> {
+    requested_ips
+        .iter()
+        .find_map(|s| s.parse::<Ipv4Addr>().ok())
+        .map(|a| a.octets())
+}
+
+/// First valid IPv6 address in `requested_ips`, as raw octets.  Returns `[0u8; 16]` when none is
+/// present — dual-stack is optional, so an IPv4-only guest is valid.
+fn primary_ipv6(requested_ips: &[String]) -> [u8; 16] {
+    requested_ips
+        .iter()
+        .find_map(|s| s.parse::<Ipv6Addr>().ok())
+        .map(|a| a.octets())
+        .unwrap_or([0u8; 16])
+}
+
 /// Run `ip`/other command in the root netns.
 fn run(args: &[&str]) -> anyhow::Result<()> {
     let out = Command::new(args[0])
@@ -367,5 +379,84 @@ mod tests {
     fn parse_mac_rejects_bad() {
         assert!(parse_mac("zz:00:00:00:00:00").is_err());
         assert!(parse_mac("02:00:00").is_err());
+    }
+
+    // ── primary_ipv4 / primary_ipv6 ──────────────────────────────────────────
+
+    fn strs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn requested_ips_v4_only() {
+        let ips = strs(&["10.1.0.7"]);
+        assert_eq!(primary_ipv4(&ips), Some([10, 1, 0, 7]));
+        assert_eq!(primary_ipv6(&ips), [0u8; 16]);
+    }
+
+    #[test]
+    fn requested_ips_dual_stack() {
+        let ips = strs(&["10.1.0.7", "2001:db8:1::7"]);
+        assert_eq!(primary_ipv4(&ips), Some([10, 1, 0, 7]));
+        // 2001:0db8:0001:0000:0000:0000:0000:0007
+        assert_eq!(
+            primary_ipv6(&ips),
+            [
+                0x20, 0x01, 0x0d, 0xb8, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x07
+            ]
+        );
+    }
+
+    #[test]
+    fn requested_ips_v6_only() {
+        let ips = strs(&["2001:db8::1"]);
+        assert_eq!(primary_ipv4(&ips), None);
+        // 2001:0db8:0000:0000:0000:0000:0000:0001
+        assert_eq!(
+            primary_ipv6(&ips),
+            [
+                0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x01
+            ]
+        );
+    }
+
+    #[test]
+    fn requested_ips_empty() {
+        let ips: Vec<String> = vec![];
+        assert_eq!(primary_ipv4(&ips), None);
+        assert_eq!(primary_ipv6(&ips), [0u8; 16]);
+    }
+
+    #[test]
+    fn requested_ips_malformed_skipped_first_valid_wins() {
+        // Garbage entries are skipped; the first parseable address of each family wins.
+        let ips = strs(&["garbage", "10.1.0.7", "::not-ip", "192.168.1.1"]);
+        assert_eq!(primary_ipv4(&ips), Some([10, 1, 0, 7]));
+        assert_eq!(primary_ipv6(&ips), [0u8; 16]);
+    }
+
+    #[test]
+    fn requested_ips_multiple_v6_first_wins() {
+        // When multiple valid IPv6 addresses are present, the FIRST one is picked (mirrors v4
+        // "first wins" convention — `find_map` stops at the first `Ok`).
+        let ips = strs(&["fd00::1", "2001:db8::2"]);
+        // fd00::1 = fd00:0000:...:0001
+        assert_eq!(
+            primary_ipv6(&ips),
+            [
+                0xfd, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x01
+            ]
+        );
+        // Ensure the second address is NOT returned.
+        assert_ne!(
+            primary_ipv6(&ips),
+            [
+                0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x02
+            ]
+        );
     }
 }
