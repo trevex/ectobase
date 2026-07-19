@@ -637,10 +637,18 @@ async fn main() -> anyhow::Result<()> {
             // pre-load tc_guest_tx. Held in scope so the userspace map fd lives for the lifetime.
             let _guest_progs = loader::register_guest_dhcp_tc(&mut ebpf)?;
             loader::load_program_tc(&mut ebpf, "tc_guest_tx")?;
+            // Attach the (pre-loaded) program to EACH guest device via the load-free link variant
+            // (self-loading `attach_tc_clsact_ingress` would re-load and collide — "already loaded" —
+            // on the 2nd guest). Hold the links for the process lifetime; dropping one detaches.
+            let mut _guest_tc_links = Vec::new();
             for g in guests.iter() {
                 let mut it = g.splitn(3, '=');
                 let ifname = it.next().context("--guest must be ifname=ipv4=mac")?;
-                loader::attach_tc_clsact_ingress(&mut ebpf, "tc_guest_tx", ifname)?;
+                _guest_tc_links.push(loader::attach_tc_clsact_ingress_link(
+                    &mut ebpf,
+                    "tc_guest_tx",
+                    ifname,
+                )?);
             }
 
             // Pass 2: open map wrappers (each calls take_map, consuming the map slot).
