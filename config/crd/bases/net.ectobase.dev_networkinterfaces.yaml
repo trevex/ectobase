@@ -48,6 +48,13 @@ spec:
                 items:
                   type: string
                 type: array
+              mac:
+                description: |-
+                  MAC is the interface's L2 address. REQUIRED for a KubeVirt VM (device_type
+                  pod-tap/tap): the datapath programs this as the guest MAC, and the VMI's
+                  spec.domain.devices.interfaces[].macAddress MUST be set to the same value so
+                  KubeVirt gives the VM's virtio NIC that MAC. Empty for containers (derived).
+                type: string
               nodeName:
                 description: NodeName is the node the interface is scheduled onto.
                   Set by the scheduler.

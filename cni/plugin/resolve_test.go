@@ -24,6 +24,7 @@ func TestResolve(t *testing.T) {
 		Spec: v1alpha1.NetworkInterfaceSpec{
 			VPCRef: v1alpha1.LocalObjectReference{Name: "prod"},
 			IPs:    []string{"10.0.0.1"},
+			MAC:    "52:54:00:00:00:aa",
 		},
 	}
 	vpc := &v1alpha1.VPC{
@@ -36,14 +37,17 @@ func TestResolve(t *testing.T) {
 		WithObjects(nic, vpc).
 		Build()
 
-	vni, ips, err := resolve(context.Background(), c, "default", "vm0")
+	res, err := resolve(context.Background(), c, "default", "vm0")
 	if err != nil {
 		t.Fatalf("resolve returned error: %v", err)
 	}
-	if vni != 100 {
-		t.Errorf("vni = %d, want 100", vni)
+	if res.VNI != 100 {
+		t.Errorf("vni = %d, want 100", res.VNI)
 	}
-	if len(ips) != 1 || ips[0] != "10.0.0.1" {
-		t.Errorf("ips = %v, want [10.0.0.1]", ips)
+	if len(res.IPs) != 1 || res.IPs[0] != "10.0.0.1" {
+		t.Errorf("ips = %v, want [10.0.0.1]", res.IPs)
+	}
+	if res.MAC != "52:54:00:00:00:aa" {
+		t.Errorf("mac = %q, want 52:54:00:00:00:aa", res.MAC)
 	}
 }

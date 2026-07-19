@@ -676,12 +676,16 @@ func (*DelFwRuleResponse) Descriptor() ([]byte, []int) {
 }
 
 type AttachInterfaceRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	InterfaceId   string                 `protobuf:"bytes,1,opt,name=interface_id,json=interfaceId,proto3" json:"interface_id,omitempty"` // stable id (e.g. VMI uid + iface name)
-	NetnsPath     string                 `protobuf:"bytes,2,opt,name=netns_path,json=netnsPath,proto3" json:"netns_path,omitempty"`       // target network namespace path
-	Vni           uint32                 `protobuf:"varint,3,opt,name=vni,proto3" json:"vni,omitempty"`
-	Mac           string                 `protobuf:"bytes,4,opt,name=mac,proto3" json:"mac,omitempty"`                                       // optional; allocated if empty
-	RequestedIps  []string               `protobuf:"bytes,5,rep,name=requested_ips,json=requestedIps,proto3" json:"requested_ips,omitempty"` // optional; allocated if empty
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	InterfaceId  string                 `protobuf:"bytes,1,opt,name=interface_id,json=interfaceId,proto3" json:"interface_id,omitempty"` // stable id (e.g. VMI uid + iface name)
+	NetnsPath    string                 `protobuf:"bytes,2,opt,name=netns_path,json=netnsPath,proto3" json:"netns_path,omitempty"`       // target network namespace path
+	Vni          uint32                 `protobuf:"varint,3,opt,name=vni,proto3" json:"vni,omitempty"`
+	Mac          string                 `protobuf:"bytes,4,opt,name=mac,proto3" json:"mac,omitempty"`                                       // optional; allocated if empty (REQUIRED for device_type=tap)
+	RequestedIps []string               `protobuf:"bytes,5,rep,name=requested_ips,json=requestedIps,proto3" json:"requested_ips,omitempty"` // optional; allocated if empty
+	DeviceType   string                 `protobuf:"bytes,6,opt,name=device_type,json=deviceType,proto3" json:"device_type,omitempty"`       // "veth" (default/empty; container, guest end in netns) | "tap" (VM: a
+	// single root-netns tap whose fd is handed to qemu) | "pod-tap" (VM,
+	// KubeVirt-compatible: tap in the pod netns spliced to a root-netns veth)
+	TapName       string `protobuf:"bytes,7,opt,name=tap_name,json=tapName,proto3" json:"tap_name,omitempty"` // exact device name for the tap (tap/pod-tap); empty = derive "tap-<id>".
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -749,6 +753,20 @@ func (x *AttachInterfaceRequest) GetRequestedIps() []string {
 		return x.RequestedIps
 	}
 	return nil
+}
+
+func (x *AttachInterfaceRequest) GetDeviceType() string {
+	if x != nil {
+		return x.DeviceType
+	}
+	return ""
+}
+
+func (x *AttachInterfaceRequest) GetTapName() string {
+	if x != nil {
+		return x.TapName
+	}
+	return ""
 }
 
 type AttachInterfaceResponse struct {
@@ -1939,14 +1957,17 @@ const file_dataplane_proto_rawDesc = "" +
 	"\x10DelFwRuleRequest\x12!\n" +
 	"\finterface_id\x18\x01 \x01(\tR\vinterfaceId\x12\x17\n" +
 	"\arule_id\x18\x02 \x01(\tR\x06ruleId\"\x13\n" +
-	"\x11DelFwRuleResponse\"\xa3\x01\n" +
+	"\x11DelFwRuleResponse\"\xdf\x01\n" +
 	"\x16AttachInterfaceRequest\x12!\n" +
 	"\finterface_id\x18\x01 \x01(\tR\vinterfaceId\x12\x1d\n" +
 	"\n" +
 	"netns_path\x18\x02 \x01(\tR\tnetnsPath\x12\x10\n" +
 	"\x03vni\x18\x03 \x01(\rR\x03vni\x12\x10\n" +
 	"\x03mac\x18\x04 \x01(\tR\x03mac\x12#\n" +
-	"\rrequested_ips\x18\x05 \x03(\tR\frequestedIps\"\x96\x01\n" +
+	"\rrequested_ips\x18\x05 \x03(\tR\frequestedIps\x12\x1f\n" +
+	"\vdevice_type\x18\x06 \x01(\tR\n" +
+	"deviceType\x12\x19\n" +
+	"\btap_name\x18\a \x01(\tR\atapName\"\x96\x01\n" +
 	"\x17AttachInterfaceResponse\x12\x16\n" +
 	"\x06ifname\x18\x01 \x01(\tR\x06ifname\x12\x10\n" +
 	"\x03ips\x18\x02 \x03(\tR\x03ips\x12\x10\n" +

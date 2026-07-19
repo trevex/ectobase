@@ -15,6 +15,12 @@ type NetworkInterfaceSpec struct {
 	// not allocate these.
 	// +optional
 	IPs []string `json:"ips,omitempty" protobuf:"bytes,2,rep,name=ips"`
+	// MAC is the interface's L2 address. REQUIRED for a KubeVirt VM (device_type
+	// pod-tap/tap): the datapath programs this as the guest MAC, and the VMI's
+	// spec.domain.devices.interfaces[].macAddress MUST be set to the same value so
+	// KubeVirt gives the VM's virtio NIC that MAC. Empty for containers (derived).
+	// +optional
+	MAC string `json:"mac,omitempty" protobuf:"bytes,5,opt,name=mac"`
 	// NodeName is the node the interface is scheduled onto. Set by the scheduler.
 	// +optional
 	NodeName *string `json:"nodeName,omitempty" protobuf:"bytes,3,opt,name=nodeName"`

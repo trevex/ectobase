@@ -38,6 +38,14 @@ type netConf struct {
 	Kubeconfig string `json:"kubeconfig,omitempty"`
 	// DataplaneAddr is the TCP address of the node-local flowplane DataplaneNode gRPC.
 	DataplaneAddr string `json:"dataplaneAddr,omitempty"`
+	// DeviceType selects the guest-edge device: "" / "veth" (container; default) or "pod-tap"
+	// (a KubeVirt VM — a tap in this pod netns spliced to a root-netns veth). Set in the NAD
+	// config of the KubeVirt network-binding plugin.
+	DeviceType string `json:"deviceType,omitempty"`
+	// TapName is the exact tap device name for device_type=pod-tap. KubeVirt's
+	// domainAttachmentType:tap opens the primary tap by the literal name "tap0", so the binding
+	// NAD sets tapName:"tap0". Empty = the dataplane derives one.
+	TapName string `json:"tapName,omitempty"`
 }
 
 func loadNetConf(stdin []byte) (*netConf, error) {
@@ -93,7 +101,7 @@ func cmdAdd(args *skel.CmdArgs) error {
 	if err != nil {
 		return err
 	}
-	vni, ips, err := resolve(ctx, cl, niNS, niName)
+	res, err := resolve(ctx, cl, niNS, niName)
 	if err != nil {
 		return err
 	}
@@ -109,8 +117,14 @@ func cmdAdd(args *skel.CmdArgs) error {
 	resp, err := attach(ctx, dp, &dataplanev1.AttachInterfaceRequest{
 		InterfaceId:  interfaceID,
 		NetnsPath:    args.Netns,
-		Vni:          vni,
-		RequestedIps: ips,
+		Vni:          res.VNI,
+		Mac:          res.MAC,
+		RequestedIps: res.IPs,
+		// For a KubeVirt VM the NAD sets deviceType=pod-tap + tapName=tap0: the dataplane
+		// creates the tap in THIS (launcher) pod netns spliced to a root-netns veth, and
+		// KubeVirt's domainAttachmentType:tap opens that tap by name for the VM's NIC.
+		DeviceType: conf.DeviceType,
+		TapName:    conf.TapName,
 	})
 	if err != nil {
 		return err
