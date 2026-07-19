@@ -12,15 +12,15 @@ import (
 // allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC +
 // NetworkPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.
 //
-// It deliberately does NOT carry the NIC's underlay /128: that is node-local state the dataplane
-// allocates at attach, and the agent obtains it from the local DataplaneNode (ListInterfaces) to
-// announce overlay routes with the correct node-local nexthop. Keeping node-local state out of this
-// central object avoids a compile->sync round-trip that would lag (and flap) the announced nexthop.
+// The source NetworkInterface is the CompiledNIC's OWNER (a controller ownerReference) and its name
+// is encoded in the object name — so the spec carries no NICRef. It also deliberately does NOT carry
+// the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent
+// obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the
+// correct node-local nexthop. Keeping node-local state out of this central object avoids a
+// compile->sync round-trip that would lag (and flap) the announced nexthop.
 type CompiledNICSpec struct {
 	// NodeName is the node this NIC is scheduled on.
 	NodeName string `json:"nodeName"`
-	// NICRef references the source NetworkInterface by name.
-	NICRef LocalObjectReference `json:"nicRef"`
 	// VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
 	// status.vni, falling back to its VPC's status.vni).
 	VNI int32 `json:"vni"`

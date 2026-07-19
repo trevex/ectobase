@@ -62,7 +62,6 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.NetworkPol
 		},
 		Spec: netv1.CompiledNICSpec{
 			NodeName:   nodeName,
-			NICRef:     netv1.LocalObjectReference{Name: nic.Name},
 			VNI:        vni,
 			Port:       port,
 			OverlayIPs: append([]string(nil), nic.Spec.IPs...),

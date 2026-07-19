@@ -22,7 +22,6 @@ func TestReconcileProgramsLocalNatSourceAndStagesAnnounce(t *testing.T) {
 	cnic.Namespace = "default"
 	cnic.Spec = netv1.CompiledNICSpec{
 		NodeName:   "nodeA",
-		NICRef:     netv1.LocalObjectReference{Name: "nic-a"},
 		VNI:        100,
 		OverlayIPs: []string{"10.0.0.1"},
 		NAT: []netv1.CompiledNATSource{

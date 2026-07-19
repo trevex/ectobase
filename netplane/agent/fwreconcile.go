@@ -18,6 +18,13 @@ func (r *Reconciler) ReconcileFirewall(ctx context.Context) error {
 	if r.dp == nil {
 		return nil
 	}
+	// The dataplane is the source of truth for which interface a NIC's overlay IP is attached to.
+	// Firewall rules are compiled per-NIC; add them to the CORRESPONDING real interface (resolved by
+	// overlay IP), NOT the NIC name — which need not equal the attach interface id.
+	ifaceByIP, err := r.interfaceIDByOverlayIP(ctx)
+	if err != nil {
+		return err
+	}
 	var list netv1.CompiledNICList
 	if err := r.client.List(ctx, &list); err != nil {
 		return fmt.Errorf("list compilednics: %w", err)
@@ -28,7 +35,16 @@ func (r *Reconciler) ReconcileFirewall(ctx context.Context) error {
 		if c.Spec.NodeName != r.nodeID {
 			continue
 		}
-		iface := c.Spec.NICRef.Name
+		iface := ""
+		for _, ip := range c.Spec.OverlayIPs {
+			if id, ok := ifaceByIP[ip]; ok {
+				iface = id
+				break
+			}
+		}
+		if iface == "" {
+			continue // NIC not attached locally yet; nothing to program until it is
+		}
 		rules := desired[iface]
 		if rules == nil {
 			rules = map[string]FwRule{}

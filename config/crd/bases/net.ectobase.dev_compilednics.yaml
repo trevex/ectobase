@@ -168,15 +168,6 @@ spec:
                   - sourceIP
                   type: object
                 type: array
-              nicRef:
-                description: NICRef references the source NetworkInterface by name.
-                properties:
-                  name:
-                    description: Name is the name of the referenced object.
-                    type: string
-                required:
-                - name
-                type: object
               nodeName:
                 description: NodeName is the node this NIC is scheduled on.
                 type: string
@@ -236,7 +227,6 @@ spec:
                 type: integer
             required:
             - firewall
-            - nicRef
             - nodeName
             - port
             - vni

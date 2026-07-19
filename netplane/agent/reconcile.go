@@ -220,6 +220,27 @@ func (r *Reconciler) underlayByOverlayIP(ctx context.Context) (map[string]string
 	return out, nil
 }
 
+// interfaceIDByOverlayIP asks the local dataplane for its attached interfaces and returns a map from
+// overlay IP to the REAL interface id the dataplane knows it by (the id the CNI attached with). Used
+// to target per-NIC config (firewall) at the actual fabric interface rather than the NIC's name,
+// which need not equal the attach interface id.
+func (r *Reconciler) interfaceIDByOverlayIP(ctx context.Context) (map[string]string, error) {
+	out := map[string]string{}
+	if r.dp == nil {
+		return out, nil
+	}
+	locals, err := r.dp.ListInterfaces(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list interfaces: %w", err)
+	}
+	for _, li := range locals {
+		for _, ip := range li.OverlayIPs {
+			out[ip] = li.InterfaceID
+		}
+	}
+	return out, nil
+}
+
 // hostPrefix turns an overlay IP into its host CIDR ("/32" for v4, "/128" for v6).
 func hostPrefix(ip string) (string, error) {
 	parsed := net.ParseIP(ip)

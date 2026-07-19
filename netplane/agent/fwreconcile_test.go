@@ -14,8 +14,8 @@ func TestReconcileFirewall_PushesRules(t *testing.T) {
 	c := &netv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "web-0-nic0", Namespace: "default"},
 		Spec: netv1.CompiledNICSpec{
-			NodeName: "nodeA",
-			NICRef:   netv1.LocalObjectReference{Name: "web-0-nic0"},
+			NodeName:   "nodeA",
+			OverlayIPs: []string{"10.0.0.20"},
 			Firewall: netv1.CompiledFirewall{
 				Ingress: []netv1.CompiledFwRule{{CIDR: "10.0.0.0/24", Proto: "TCP", Port: 443, Action: "Allow"}},
 				Egress:  []netv1.CompiledFwRule{{CIDR: "0.0.0.0/0", Action: "Allow"}},
@@ -28,6 +28,9 @@ func TestReconcileFirewall_PushesRules(t *testing.T) {
 	}
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(c).Build()
 	dp := newRecordingDP()
+	// The dataplane knows this NIC's overlay IP by a DIFFERENT interface id than the NIC name (as the
+	// CNI would attach it). The firewall must target that real id, resolved via ListInterfaces.
+	dp.ifaces = []LocalInterface{{InterfaceID: "podUID/eth0", Vni: 100, OverlayIPs: []string{"10.0.0.20"}, Underlay: "fd00::a"}}
 	r := &Reconciler{client: cl, nodeID: "nodeA", dp: dp}
 
 	if err := r.ReconcileFirewall(context.Background()); err != nil {
@@ -46,8 +49,8 @@ func TestReconcileFirewall_PushesRules(t *testing.T) {
 	if ing == nil {
 		t.Fatal("no ingress rule found")
 	}
-	if ing.iface != "web-0-nic0" {
-		t.Fatalf("ingress rule iface = %q, want web-0-nic0", ing.iface)
+	if ing.iface != "podUID/eth0" {
+		t.Fatalf("ingress rule iface = %q, want the real dataplane id podUID/eth0 (not the NIC name)", ing.iface)
 	}
 	// k8s ingress: the policy CIDR is the SOURCE (dst is any).
 	if ing.rule.SrcCIDR != "10.0.0.0/24" {
@@ -77,8 +80,8 @@ func TestReconcileFirewall_DeletesStaleRules(t *testing.T) {
 	cnic := &netv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "web-0-nic0", Namespace: "default"},
 		Spec: netv1.CompiledNICSpec{
-			NodeName: "nodeA",
-			NICRef:   netv1.LocalObjectReference{Name: "web-0-nic0"},
+			NodeName:   "nodeA",
+			OverlayIPs: []string{"10.0.0.20"},
 			Firewall: netv1.CompiledFirewall{
 				Ingress: []netv1.CompiledFwRule{
 					{CIDR: "10.0.0.0/24", Proto: "TCP", Port: 443, Action: "Allow"},
@@ -89,6 +92,7 @@ func TestReconcileFirewall_DeletesStaleRules(t *testing.T) {
 	}
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cnic).Build()
 	dp := newRecordingDP()
+	dp.ifaces = []LocalInterface{{InterfaceID: "podUID/eth0", Vni: 100, OverlayIPs: []string{"10.0.0.20"}, Underlay: "fd00::a"}}
 	r := &Reconciler{client: cl, nodeID: "nodeA", dp: dp}
 
 	if err := r.ReconcileFirewall(context.Background()); err != nil {
@@ -136,8 +140,8 @@ func TestReconcileFirewall_ConvergesOnRepeat(t *testing.T) {
 	cnic := &netv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "web-0-nic0", Namespace: "default"},
 		Spec: netv1.CompiledNICSpec{
-			NodeName: "nodeA",
-			NICRef:   netv1.LocalObjectReference{Name: "web-0-nic0"},
+			NodeName:   "nodeA",
+			OverlayIPs: []string{"10.0.0.20"},
 			Firewall: netv1.CompiledFirewall{
 				Ingress: []netv1.CompiledFwRule{{CIDR: "0.0.0.0/0", Proto: "TCP", Port: 443, Action: "Allow"}},
 				Egress:  []netv1.CompiledFwRule{{CIDR: "0.0.0.0/0", Action: "Allow"}},
@@ -146,6 +150,7 @@ func TestReconcileFirewall_ConvergesOnRepeat(t *testing.T) {
 	}
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cnic).Build()
 	dp := newRecordingDP() // rejects duplicate rule ids (models the real dataplane)
+	dp.ifaces = []LocalInterface{{InterfaceID: "podUID/eth0", Vni: 100, OverlayIPs: []string{"10.0.0.20"}, Underlay: "fd00::a"}}
 	r := &Reconciler{client: cl, nodeID: "nodeA", dp: dp}
 
 	for i := 0; i < 3; i++ {

@@ -22,7 +22,6 @@ func TestDesiredAnnouncesOnlyLocalCompiledNicNat(t *testing.T) {
 	localC.Namespace = "default"
 	localC.Spec = netv1.CompiledNICSpec{
 		NodeName:   "nodeA",
-		NICRef:     netv1.LocalObjectReference{Name: "nic-a"},
 		VNI:        100,
 		OverlayIPs: []string{"10.0.0.1"},
 		NAT:        []netv1.CompiledNATSource{{SourceIP: "10.0.0.1", NATIP: "1.2.3.4", PortMin: 1024, PortMax: 2048}},
@@ -33,7 +32,6 @@ func TestDesiredAnnouncesOnlyLocalCompiledNicNat(t *testing.T) {
 	remoteC.Namespace = "default"
 	remoteC.Spec = netv1.CompiledNICSpec{
 		NodeName:   "nodeB",
-		NICRef:     netv1.LocalObjectReference{Name: "nic-b"},
 		VNI:        100,
 		OverlayIPs: []string{"10.0.0.2"},
 		NAT:        []netv1.CompiledNATSource{{SourceIP: "10.0.0.2", NATIP: "1.2.3.4", PortMin: 2048, PortMax: 3072}},

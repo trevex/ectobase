@@ -25,7 +25,6 @@ func TestDesiredLB_JoinsUnderlayFromDataplane(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
 		Spec: netv1.CompiledNICSpec{
 			NodeName:   "nodeA",
-			NICRef:     netv1.LocalObjectReference{Name: "web-0"},
 			VNI:        100,
 			OverlayIPs: []string{"10.0.10.5"},
 			LB:         []netv1.CompiledLB{{VIP: "203.0.113.50", Ports: []netv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
@@ -55,7 +54,7 @@ func TestDesiredLB_SkipsWhenNoUnderlay(t *testing.T) {
 	cnic := &netv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
 		Spec: netv1.CompiledNICSpec{
-			NodeName: "nodeA", NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 100,
+			NodeName: "nodeA", VNI: 100,
 			OverlayIPs: []string{"10.0.10.5"},
 			LB:         []netv1.CompiledLB{{VIP: "203.0.113.50"}},
 		},
@@ -78,7 +77,7 @@ func TestDesired_EmitsVIPAnycastRoute(t *testing.T) {
 	cnic := &netv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
 		Spec: netv1.CompiledNICSpec{
-			NodeName: node, NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 100,
+			NodeName: node, VNI: 100,
 			OverlayIPs: []string{"10.0.0.20"},
 			LB:         []netv1.CompiledLB{{VIP: "203.0.113.50", Ports: []netv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
 		},
@@ -171,7 +170,7 @@ func TestDesiredPublic_EmitsLBVIP(t *testing.T) {
 	cnic := &netv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
 		Spec: netv1.CompiledNICSpec{
-			NodeName: node, NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 100,
+			NodeName: node, VNI: 100,
 			OverlayIPs: []string{"10.0.0.20"},
 			LB:         []netv1.CompiledLB{{VIP: "203.0.113.50"}},
 		},

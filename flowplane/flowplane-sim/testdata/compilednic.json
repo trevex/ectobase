@@ -7,9 +7,6 @@
   },
   "spec": {
     "nodeName": "node-1",
-    "nicRef": {
-      "name": "nic-frontend"
-    },
     "vni": 100,
     "port": {
       "type": "tap",

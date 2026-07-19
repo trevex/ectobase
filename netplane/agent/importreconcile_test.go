@@ -36,7 +36,7 @@ func TestDesiredEgressVNIs_NAT(t *testing.T) {
 	cnic := &netv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
 		Spec: netv1.CompiledNICSpec{
-			NodeName: node, NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 100,
+			NodeName: node, VNI: 100,
 			NAT: []netv1.CompiledNATSource{{SourceIP: "10.0.0.1", NATIP: "203.0.113.1", PortMin: 1024, PortMax: 2048}},
 		},
 	}
@@ -58,7 +58,7 @@ func TestDesiredEgressVNIs_LBBackend(t *testing.T) {
 	cnic := &netv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
 		Spec: netv1.CompiledNICSpec{
-			NodeName: node, NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 200,
+			NodeName: node, VNI: 200,
 			LB: []netv1.CompiledLB{{VIP: "203.0.113.5"}},
 		},
 	}
@@ -79,7 +79,7 @@ func TestDesiredEgressVNIs_NeitherIsEmpty(t *testing.T) {
 	// A local NIC with neither a NAT allocation nor LB membership needs no egress.
 	cnic := &netv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
-		Spec:       netv1.CompiledNICSpec{NodeName: node, NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 100},
+		Spec:       netv1.CompiledNICSpec{NodeName: node, VNI: 100},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
 	r := &Reconciler{client: cl, nodeID: node}
