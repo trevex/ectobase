@@ -33,6 +33,34 @@ pub(crate) fn mac_of(iface: &str) -> anyhow::Result<[u8; 6]> {
     parse_mac(s.trim())
 }
 
+/// Encap overhead subtracted from the underlay L3 MTU to get the guest L3 MTU: outer IPv6 (40).
+/// The outer Ethernet (14) is link framing, off the L3 MTU; the overlay is IP-in-IPv6 (a bare inner
+/// IP packet, no inner Ethernet / UDP / VXLAN on the wire), so 40 is the whole overhead.
+pub(crate) const ENCAP_OVERHEAD_V6: u32 = 40;
+
+/// Read `/sys/class/net/<iface>/mtu` (the interface's L3 MTU). Best-effort: `None` on any error.
+pub(crate) fn mtu_of(iface: &str) -> Option<u32> {
+    std::fs::read_to_string(format!("/sys/class/net/{iface}/mtu"))
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+}
+
+/// Node-wide guest MTU: the explicit override if set, else the smallest uplink MTU minus the encap
+/// overhead (so an encapped full-size guest frame still fits the underlay). One value feeds the veth
+/// link MTU, the pod route MTU (returned to the CNI), DHCPv4 option 26, and the IPv6 RA MTU option.
+/// Falls back to 1500 base if no uplink MTU is readable. Never returns above the underlay path.
+pub(crate) fn derive_guest_mtu(explicit: Option<u32>, uplinks: &[&str]) -> u16 {
+    if let Some(m) = explicit {
+        return m as u16;
+    }
+    let base = uplinks
+        .iter()
+        .filter_map(|u| mtu_of(u))
+        .min()
+        .unwrap_or(1500);
+    base.saturating_sub(ENCAP_OVERHEAD_V6).max(576) as u16
+}
+
 /// Parse `"aa:bb:cc:dd:ee:ff"` into 6 bytes.
 fn parse_mac(s: &str) -> anyhow::Result<[u8; 6]> {
     let mut out = [0u8; 6];
@@ -128,7 +156,13 @@ enum Cmd {
         /// Disable for a guaranteed fresh re-attach on every start.
         #[arg(long = "pin-links", default_value_t = true, action = clap::ArgAction::Set, env = "FLOWPLANE_PIN_LINKS")]
         pin_links: bool,
-        /// DHCP options (stored for sub-project 2b; accepted now to keep the ioiab arg list stable).
+        /// Guest MTU override. Unset = auto-derive from the smallest uplink MTU minus the encap
+        /// overhead (outer IPv6 = 40). One node-wide value drives the veth link MTU, the pod route
+        /// MTU (returned to the CNI), DHCPv4 opt-26, and the IPv6 RA MTU option.
+        #[arg(long = "guest-mtu")]
+        guest_mtu: Option<u32>,
+        /// Deprecated alias for --guest-mtu (was: server-wide DHCP opt-26). Superseded because the
+        /// same value now also drives the link/route MTU and the RA option, not just DHCP.
         #[arg(long = "dhcp-mtu")]
         dhcp_mtu: Option<u32>,
         #[arg(long = "dhcp-dns")]
@@ -360,6 +394,7 @@ async fn main() -> anyhow::Result<()> {
             conntrack_max,
             pin_dir,
             pin_links,
+            guest_mtu,
             dhcp_mtu,
             dhcp_dns,
             dhcpv6_dns,
@@ -424,7 +459,17 @@ async fn main() -> anyhow::Result<()> {
                 .iter()
                 .filter_map(|s| s.parse::<std::net::Ipv6Addr>().ok().map(|a| a.octets()))
                 .collect();
-            ctrl.set_dhcp_config(dhcp_mtu.unwrap_or(1500) as u16, &dns4, &dns6)
+            // One node-wide guest MTU: explicit --guest-mtu (or the deprecated --dhcp-mtu alias),
+            // else derived from the smallest uplink MTU minus encap overhead. Drives DHCPv4 opt-26
+            // here, and the veth link MTU + pod route MTU via AttachState below.
+            let uplinks: Vec<&str> = std::iter::once(uplink.as_str())
+                .chain(extra_uplink.iter().map(|s| s.as_str()))
+                .collect();
+            let guest_mtu = derive_guest_mtu(guest_mtu.or(dhcp_mtu), &uplinks);
+            println!(
+                "guest MTU = {guest_mtu} (uplinks {uplinks:?}, encap overhead {ENCAP_OVERHEAD_V6})"
+            );
+            ctrl.set_dhcp_config(guest_mtu, &dns4, &dns6)
                 .map_err(|e| anyhow::anyhow!(e))?;
             tokio::spawn(conntrack_gc::run(
                 ctrl.take_conntrack(),
@@ -459,6 +504,7 @@ async fn main() -> anyhow::Result<()> {
                 gateway_ipv4,
                 gateway_ipv6,
                 disable_guest_csum_offload,
+                guest_mtu,
             });
 
             // On adopt, finish restart recovery: the maps + bookkeeping survived (bring_up), but the

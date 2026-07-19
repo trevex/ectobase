@@ -119,6 +119,8 @@ message AttachInterfaceResponse {
   string mac = 3;
   string gateway = 4;
   string underlay_route = 5; // allocated underlay /128 the overlay encaps to
+  // NOTE: no MTU field — the dataplane sets the guest veth link MTU itself at attach (it owns the
+  // veth lifecycle), so the CNI never needs it. See attach.rs (guest_mtu) + docs/dataplane/kernel-xdp-tc.md.
 }
 
 message ListInterfacesRequest {}

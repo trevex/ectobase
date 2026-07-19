@@ -45,10 +45,12 @@ spec:
               allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC +
               NetworkPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.
 
-              It deliberately does NOT carry the NIC's underlay /128: that is node-local state the dataplane
-              allocates at attach, and the agent obtains it from the local DataplaneNode (ListInterfaces) to
-              announce overlay routes with the correct node-local nexthop. Keeping node-local state out of this
-              central object avoids a compile->sync round-trip that would lag (and flap) the announced nexthop.
+              The source NetworkInterface is the CompiledNIC's OWNER (a controller ownerReference) and its name
+              is encoded in the object name — so the spec carries no NICRef. It also deliberately does NOT carry
+              the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent
+              obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the
+              correct node-local nexthop. Keeping node-local state out of this central object avoids a
+              compile->sync round-trip that would lag (and flap) the announced nexthop.
             properties:
               firewall:
                 description: Firewall holds the compiled ingress and egress firewall

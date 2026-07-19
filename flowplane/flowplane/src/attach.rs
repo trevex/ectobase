@@ -47,6 +47,11 @@ pub struct AttachState {
     /// inner checksum in hardware after our encap, so we leave offload on there (avoids the guest-CPU
     /// checksum tax). See `uplink_finalizes_checksum` below for how this is decided.
     pub disable_guest_csum_offload: bool,
+    /// Node-wide guest MTU (derived from the uplink MTU minus encap overhead, or the --guest-mtu
+    /// override). The dataplane owns the veth lifecycle, so it sets this on both veth ends at attach
+    /// and enables PLPMTUD in the guest netns — the CNI needs no MTU knowledge. Since the link MTU is
+    /// already the tunnel-adjusted value, no separate pod route MTU (RTAX_MTU) is needed.
+    pub guest_mtu: u16,
 }
 
 /// Whether the fabric `uplink` can finalize a `CHECKSUM_PARTIAL` inner checksum in hardware. A real
@@ -236,6 +241,17 @@ impl AttachState {
         )
         .context("set guest veth mac")?;
         run_netns(netns_path, &["ip", "link", "set", guest_name, "up"]).context("guest veth up")?;
+        // Set the guest link MTU (node-wide value = underlay MTU - encap overhead). This is the
+        // authoritative, in-our-control way to bound a pod's frame size (Cilium sets the veth MTU
+        // directly rather than advertising it). A self-configuring VM ignores this and learns its
+        // MTU from DHCP opt-26 / the RA MTU option instead.
+        let mtu = self.guest_mtu.to_string();
+        run_netns(netns_path, &["ip", "link", "set", guest_name, "mtu", &mtu])
+            .context("set guest veth mtu")?;
+        // Enable TCP Packetization-Layer PMTUD (RFC 4821) in the guest netns so TCP discovers the
+        // path MTU itself, resilient to ICMP-blocking (the mechanism Cilium enables by default).
+        // Best-effort: a missing sysctl / read-only netns must not fail the attach.
+        let _ = run_netns(netns_path, &["sysctl", "-wq", "net.ipv4.tcp_mtu_probing=1"]);
         // Disable tx-checksum offload on the guest end — BUT ONLY when the uplink can't finalize
         // CHECKSUM_PARTIAL in hardware (software veth fabric, e.g. clab/kind). The guest stack
         // otherwise emits TCP/UDP with CHECKSUM_PARTIAL (a pseudo-header-only partial csum, meant to
@@ -255,6 +271,9 @@ impl AttachState {
         // veth kept its auto-generated MAC, local delivery would address the frame to that auto-MAC —
         // it reaches the peer netns but the guest iface (which has `mac`) drops it as not-for-me.
         run(&["ip", "link", "set", host, "address", &macs]).context("set host veth mac")?;
+        // Host end MTU must be >= the guest's so a full-size guest frame is never dropped on the tap
+        // before the datapath encaps it.
+        run(&["ip", "link", "set", host, "mtu", &mtu]).context("set host veth mtu")?;
         run(&["ip", "link", "set", host, "up"]).context("host veth up")?;
         Ok(())
     }

@@ -65,6 +65,37 @@ multi-buffer (`xdp.frags` / `BPF_F_XDP_HAS_FRAGS`) program.
 **How it bit us:** containerlab defaults veths to **MTU 9500**, so native silently fell back to generic
 everywhere. We set the fabric links to **MTU 3000** to get native (still well above the encap need).
 
+`uplink_rx` and `wan_rx` are declared `#[xdp(frags)]` (aya sets `BPF_F_XDP_HAS_FRAGS` at load) so
+native XDP *can* attach at jumbo MTU. This is safe because the datapath only touches front headers
+(all access is const-offset within the guaranteed linear head) and uses incremental delta checksums —
+it never reads the payload, which is what lives in the frags. The verifier is stricter for frags
+programs, so a stray past-`data_end` read would be rejected; the programs verify + stay byte-identical
+to the sim. Caveat: jumbo-native additionally needs the **RX NIC and the redirect target** to advertise
+scatter-gather (`NETDEV_XDP_ACT_RX_SG` / `NDO_XMIT_SG`); veth has it on recent kernels, real NICs vary.
+clab stays at MTU 3000 (native veth limit), so frags is exercised via the anchor test, not the clab
+datapath.
+
+## Guest MTU provisioning
+
+One node-wide guest MTU is derived at `serve`: `min(uplink MTU over --uplink/--extra-uplink) − 40`
+(outer IPv6; outer Eth is off-L3-MTU; the overlay is IP-in-IPv6 with no inner Eth/UDP/VXLAN, so 40 is
+the whole overhead — *less* than VXLAN's 50). Override with `--guest-mtu`. That single value drives:
+
+- **The veth link MTU** — set on both veth ends at attach (`attach.rs::setup_veth`). Because the
+  dataplane owns the veth lifecycle, it sets the MTU itself; the CNI needs no MTU knowledge, and since
+  the link MTU is already the tunnel-adjusted value, no separate route MTU (`RTAX_MTU`) is needed (this
+  differs from Cilium, which keeps the link at the device MTU and relies on route MTU — see memory
+  `cilium-mtu-model`).
+- **PLPMTUD** — `net.ipv4.tcp_mtu_probing=1` set in the guest netns at attach, so TCP self-discovers
+  the path MTU without relying on ICMP (Cilium's default).
+- **DHCPv4 option 26** — for self-configuring guests/VMs that run a DHCP client.
+- **The IPv6 RA MTU option** *(planned)* — for self-configuring IPv6 VMs (DHCPv6 has no MTU option;
+  MTU is RA-only in IPv6). The RA responder is the VM-facing follow-up.
+
+There is no ICMP "packet too big" generation in the datapath (even Cilium punts on this in native
+routing); correct provisioning + PLPMTUD covers the TCP case, and a guest that force-raises its own
+MTU past what we set is out of our control.
+
 ## XDP redirect into a veth: `-95/EOPNOTSUPP`, and why devmap
 
 An XDP program delivers a packet elsewhere with `bpf_redirect(ifindex, 0)` or
