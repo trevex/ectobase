@@ -30,7 +30,7 @@ UPLINK_PEER="dp-uplp"
 ADDR="127.0.0.1:1340"
 IFACE_ID="v0"
 ROOT_VETH="veth-v0"     # AttachState::host_veth_name("v0")
-POD_TAP="tap-v0"        # AttachState::tap_name("v0")
+POD_TAP="tap0"          # explicit tap_name (KubeVirt's GenerateTapDeviceName for a primary network)
 VNI=100
 OVERLAY_IP="10.0.0.10"
 VM_MAC="52:54:00:00:00:bb"
@@ -89,7 +89,7 @@ if rpc AttachInterface "$BAD" >/dev/null 2>&1; then fail "pod-tap with empty mac
 echo "  empty-mac pod-tap attach rejected (OK)"
 
 echo "== AttachInterface device_type=pod-tap =="
-REQ="{\"interface_id\":\"$IFACE_ID\",\"netns_path\":\"/var/run/netns/$NS\",\"vni\":$VNI,\"mac\":\"$VM_MAC\",\"requested_ips\":[\"$OVERLAY_IP\"],\"device_type\":\"pod-tap\"}"
+REQ="{\"interface_id\":\"$IFACE_ID\",\"netns_path\":\"/var/run/netns/$NS\",\"vni\":$VNI,\"mac\":\"$VM_MAC\",\"requested_ips\":[\"$OVERLAY_IP\"],\"device_type\":\"pod-tap\",\"tap_name\":\"$POD_TAP\"}"
 RESP="$(rpc AttachInterface "$REQ")" || { echo "grpcurl stderr:"; cat "$DP_LOG.rpc"; fail "AttachInterface(pod-tap) failed"; }
 echo "response: $RESP"
 

@@ -189,6 +189,7 @@ impl AttachState {
         mac_req: &str,
         requested_ips: &[String],
         device_type: DeviceType,
+        tap_name: &str,
     ) -> anyhow::Result<AttachOutcome> {
         if interface_id.is_empty() {
             bail!("interface_id is required");
@@ -223,23 +224,28 @@ impl AttachState {
             ipam.allocate().context("underlay /64 exhausted")?.octets()
         };
 
+        // The tap device name (for tap / pod-tap): the caller-supplied `tap_name` if set (KubeVirt's
+        // domainAttachmentType:tap opens the primary tap by the literal name "tap0"), else derive it.
+        let tap_dev = if tap_name.is_empty() {
+            Self::tap_name(interface_id)
+        } else {
+            tap_name.to_string()
+        };
         // The root-netns datapath device tc_guest_tx attaches to: a veth host end (its peer moves
         // into the pod netns) or a single tap (its fd is handed to qemu). `create_interface` runs
         // the identical datapath on either — the device type only changes how it's created here.
         // Veth + PodTap use a root-netns veth as the datapath device; Tap uses a root-netns tap.
         let device = match device_type {
             DeviceType::Veth | DeviceType::PodTap => Self::host_veth_name(interface_id),
-            DeviceType::Tap => Self::tap_name(interface_id),
+            DeviceType::Tap => tap_dev.clone(),
         };
         // Create + configure the device. If anything fails after creation, tear it down so we don't
         // leak. veth: create the pair + move the guest end into the netns. tap: a single root-netns
-        // device. pod-tap: the veth + a pod-netns tap wired by mirred (KubeVirt-compatible).
+        // device. pod-tap: the veth + a pod-netns tap (named `tap_dev`) wired by mirred (KubeVirt).
         let setup = match device_type {
             DeviceType::Veth => self.setup_veth(&device, interface_id, netns_path, mac),
             DeviceType::Tap => self.setup_tap(&device, mac),
-            DeviceType::PodTap => {
-                self.setup_pod_tap(&device, netns_path, &Self::tap_name(interface_id), mac)
-            }
+            DeviceType::PodTap => self.setup_pod_tap(&device, netns_path, &tap_dev, mac),
         };
         if let Err(e) = setup {
             let _ = run(&["ip", "link", "del", &device]);
@@ -290,9 +296,9 @@ impl AttachState {
         // interface); for a tap it's the root-netns tap the caller points qemu at (or opens for its fd).
         let ifname = match device_type {
             DeviceType::Veth => interface_id.to_string(),
-            DeviceType::Tap => device.clone(),
-            // The pod-netns tap qemu/libvirt opens (its name inside the target netns).
-            DeviceType::PodTap => Self::tap_name(interface_id),
+            // The tap the caller points qemu/libvirt at: root-netns (Tap, == device) or the
+            // pod-netns tap (PodTap). Both are `tap_dev` (the caller-supplied name, e.g. "tap0").
+            DeviceType::Tap | DeviceType::PodTap => tap_dev.clone(),
         };
         Ok(AttachOutcome {
             ifname,

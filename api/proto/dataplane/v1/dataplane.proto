@@ -115,6 +115,9 @@ message AttachInterfaceRequest {
   string device_type = 6;  // "veth" (default/empty; container, guest end in netns) | "tap" (VM: a
                            // single root-netns tap whose fd is handed to qemu) | "pod-tap" (VM,
                            // KubeVirt-compatible: tap in the pod netns spliced to a root-netns veth)
+  string tap_name = 7;     // exact device name for the tap (tap/pod-tap); empty = derive "tap-<id>".
+                           // KubeVirt's domainAttachmentType:tap opens the primary tap by the literal
+                           // name "tap0", so the binding CNI must pass tap_name="tap0".
 }
 message AttachInterfaceResponse {
   string ifname = 1;
