@@ -39,65 +39,73 @@ KubeVirt-internal DHCP** in the path.
 overlay IP + gateway + MTU from our responders, then passes the same connectivity a container endpoint
 does on the clab fabric.
 
-## 3. The netns topology decision (the crux — resolve first)
+## 3. Topology: a lean tap directly in our overlay (no veth/bridge stacking)
 
-**The delivery constraint.** `uplink_rx` runs in the **root netns** (the fabric uplink is there) and
-delivers overlay→guest via `GUEST_DEV.redirect(tap_ifindex)` to a **root-netns** ifindex.
-`bpf_redirect`/devmap **cannot target another netns**. A qemu tap lives in the **virt-launcher pod
-netns**. So a program can't just be put "on the pod-netns tap" and receive overlay traffic — the
-delivery hop must land on a root-netns device that spans into the pod netns (a veth), exactly as the
-container path already does. Three candidate topologies:
+**Principle (hard requirement).** The VM must live **directly** in our overlay — **one** tap in our
+datapath, **no** stacking a tap on a bridge on a veth like other CNI integrations. The virt-launcher
+pod's Cilium / cluster-pod network is **separate** (kubelet + health only); our overlay is the VM's
+primary NIC via Multus `default: true`, orthogonal to Cilium.
 
-- **Topology A — reuse the veth datapath + a pod-netns bridge (RECOMMENDED default).** Keep the
-  existing root-host-veth datapath unchanged (tc + devmap delivery). In the pod netns, a **bridge**
-  joins the guest-veth-end and the **VM tap**; qemu opens the tap. VM frames:
-  `qemu → tap → bridge → guest-veth → (veth span) → root-host-veth (tc_guest_tx responders) → overlay`.
-  This is KubeVirt bridge-binding's *topology* but with **our** bridge and **no KubeVirt DHCP**, so the
-  VM's DHCP/RA reach our responders. **Zero datapath change** — only new pod-netns plumbing (bridge +
-  tap + MAC) and the binding.
-- **Topology B — tc directly on the pod-netns tap.** Purer (no bridge) but requires solving cross-netns
-  overlay→tap delivery (a real datapath change: per-pod delivery, or `bpf_redirect` into the pod via a
-  spanning device anyway). Higher risk; **deferred**.
-- **Topology C — root-netns tap, fd passed to qemu.** qemu accepts an already-open tap fd (`-netdev
-  tap,fd=`), so the tap can live in the root netns (existing single-netns datapath works) while qemu
-  runs in the pod netns. Clean datapath, but **KubeVirt creates the tap in the launcher netns** (per
-  the binding model), so this needs a fully custom fd-passing binding — off the beaten path. Note as a
-  possible optimization.
+**The symmetry that makes it lean.** Containers already get a **root-netns host-veth** (its peer sits in
+the pod netns; our `tc_guest_tx` + `uplink_rx` devmap-delivery run on the root-netns end). A VM gets the
+exact analogue: a **root-netns host-tap** whose **fd is handed to qemu**. Both are single root-netns
+devices in the *same* datapath — no bridge, no second veth:
 
-**PIVOTAL OPEN QUESTION (resolve before building the binding):** does KubeVirt **`managedTap`** run its
-own internal DHCP (like core `bridge`), or does it let the guest DHCP against the network?
-- If `managedTap` does **NOT** run DHCP → `managedTap` builds the bridge+tap for us and our **existing
-  veth datapath serves the VM with zero custom binding** (Topology A for free).
-- If it **DOES** hijack DHCP → we need a **custom binding** (`domainAttachmentType: tap`) whose CNI
-  builds our own bridge+tap **without** DHCP (Topology A, our bridge).
-Resolve by reading `kubevirt/kubevirt` virt-handler/virt-launcher source for the managedTap path (PR
-#13024) — this decides whether the KubeVirt-integration slice is "config only" or "custom binding".
+```
+ container:  overlay ⇄ tc_guest_tx / uplink_rx on  root-netns host-veth  ⇄ (veth peer) ⇄ pod app
+ VM:         overlay ⇄ tc_guest_tx / uplink_rx on  root-netns host-TAP   ⇄ (tap fd)    ⇄ qemu/VM
+```
+
+- **Datapath unchanged and already proven.** `test/tap-vm-smoke.sh` boots a real qemu VM on a
+  root-netns tap with `tc_guest_tx` on it — that *is* this model. `AttachInterface` gains a device type
+  `veth|tap`; **tap** mode creates a root-netns tap (simpler than veth — no netns move, no peer), sets
+  the VM MAC + guest MTU, disables offloads (`ethtool -K … off`), attaches `tc_guest_tx`, programs the
+  maps. `uplink_rx` delivers to it via the same devmap path (the tap is a normal root-netns ifindex).
+- **Why not a pod-netns tap.** `uplink_rx` (root netns) delivers via devmap to a **root-netns** ifindex;
+  `bpf_redirect` can't cross netns and a tap has no veth-peer for `bpf_redirect_peer`. So a tap in the
+  *pod* netns could only receive overlay traffic by adding a veth (to span netns) **+** a bridge — the
+  stacking we reject. Keeping the tap in the **root netns** eliminates that entirely.
+- **`domainAttachmentType: tap`, never `managedTap`.** managedTap builds a **bridge + tap** (core-bridge
+  shape, likely DHCP-hijacking) — precisely the stacked, DHCP-shadowing anti-pattern. We use `tap`: we
+  create + own the tap (MAC/MTU), and the VM self-configures against our responders.
+
+**The one real integration question (spike this).** How the **root-netns tap fd reaches qemu** through
+the KubeVirt binding. qemu/libvirt accept a pre-opened tap fd (`-netdev tap,fd=,vhost=on,vhostfd=`); the
+flowplane node agent (root netns, hostNetwork DaemonSet) creates + owns the tap and must hand its fd to
+virt-launcher (pod netns) — via the binding plugin's sidecar/hooks + an `SCM_RIGHTS` pass over a shared
+socket, or a device-plugin-style hand-off. This replaces "build a bridge" as the KubeVirt-side work and
+is what keeps the datapath lean. **Fallback (only if fd-passing proves infeasible):** a pod-netns
+veth+bridge — the stacked model — which we adopt **only if forced**, never as the default.
 
 ## 4. Full scope (workstreams)
 
-1. **Pod-netns bridge + tap plumbing** (Topology A): create a bridge + tap in the pod netns, enslave
-   the guest-veth-end + tap, set the **VM MAC** on the tap/veth and the guest MTU, disable offloads
-   (cf. `tap-vm-smoke.sh` `ethtool -K … off` + the guest-veth csum-offload artifact). Lives in the
-   binding CNI (or the dataplane, if we extend `AttachInterface`).
+1. **Root-netns tap in `AttachInterface`**: `device_type = veth|tap`; tap mode creates a root-netns
+   tap (multi-queue + `vnet_hdr`), sets the **VM MAC** + guest MTU, disables offloads
+   (`ethtool -K … off`, cf. the guest-veth csum artifact), attaches `tc_guest_tx`, programs the maps —
+   `attach.rs` factors `setup_veth` → device-agnostic + `setup_tap`, reusing `Control::create_interface`.
+   No bridge, no second veth.
 2. **VM MAC threading**: CNI reads the VMI/pod MAC → `AttachInterface.mac`; `PORT_META.guest_mac` +
-   the veth/tap MAC must equal the VM MAC (`attach.rs` currently derives a MAC — must accept the
-   passed one for VMs).
-3. **KubeVirt binding plugin**: register in the `KubeVirt` CR
+   the tap MAC must equal the VM MAC (`attach.rs` currently derives a MAC — must accept the passed one
+   for `tap`).
+3. **Tap-fd hand-off to qemu** (the lean-keeping integration): the node agent owns the root-netns tap;
+   its fd reaches virt-launcher/qemu via the KubeVirt binding plugin (sidecar/hooks + `SCM_RIGHTS` over
+   a shared socket, or device-plugin hand-off). qemu uses `-netdev tap,fd=,vhost=on,vhostfd=`.
+4. **KubeVirt binding plugin**: register in the `KubeVirt` CR
    (`spec.configuration.network.binding.ectobase`) with `networkAttachmentDefinition` (our binding NAD)
-   + `domainAttachmentType: tap` (+ `migration.method: link-refresh`); our binding CNI runs in the pod
-   netns. (Or: plain `managedTap` if the DHCP question resolves favorably.)
-4. **Primary network**: Multus `default: true` (our CNI already is the default delegate). Genuine
-   primary-UDN is OVN-K-specific today — track as future alignment.
-5. **Performance**: vhost-net + `spec.domain.devices.networkInterfaceMultiqueue` (multi-queue tap);
+   + `domainAttachmentType: tap` (+ `migration.method: link-refresh`). Never `managedTap` (bridge+DHCP).
+5. **Primary network**: Multus `default: true` (our CNI already is the default delegate), keeping the
+   VM's primary NIC = our overlay, separate from the pod's Cilium network. Genuine primary-UDN is
+   OVN-K-specific today — future alignment.
+6. **Performance**: vhost-net + `spec.domain.devices.networkInterfaceMultiqueue` (multi-queue tap);
    validate tc/eBPF coexistence with the qemu tap fd + GSO/checksum offload.
-6. **Live migration**: `link-refresh`; recreate bridge+tap + re-attach on the destination, move the
+7. **Live migration**: `link-refresh`; recreate the tap + re-attach on the destination, move the
    underlay `/128`, re-`AttachInterface`/`Detach`, conntrack handling (tie into DecentralizedLiveMigration).
-7. **Lifecycle**: detach + release IPAM + delete bridge/tap on VMI stop/migrate.
+8. **Lifecycle**: detach + release IPAM + delete the tap on VMI stop/migrate.
 
 ## 5. Vertical slice (build first): a real VM self-configures off our dataplane
 
-Prove the **VM-facing datapath + all responders end-to-end with a real guest OS doing DHCP/SLAAC** — the
-actual unproven thing — and resolve the topology question, before any CNI/binding code. Two parts:
+Prove the **lean model end-to-end**: a real guest OS on a **root-netns tap** in our datapath,
+self-configuring via DHCP/SLAAC — before any CNI/binding code. Two parts:
 
 **5a. Real-VM DHCP self-config e2e (extend `test/tap-vm-smoke.sh`).** Today the smoke statically
 configures the VM and only gates on ARP. Extend it to a genuine e2e:
@@ -110,11 +118,13 @@ configures the VM and only gates on ARP. Extend it to a genuine e2e:
   real tap, DHCPv4/DHCPv6/RA/ARP/ND, the MTU path, and overlay forwarding — with a real guest.
 - Reuses the proven `bringup`/tap attach — **no new attach code required for 5a**.
 
-**5b. Topology spike (design gate, ~½ day).** Resolve §3's pivotal question: read the KubeVirt
-managedTap source to determine DHCP behaviour, and prototype the **Topology A** pod-netns bridge+tap by
-hand (`ip link add br0 type bridge`, enslave a veth-end + a tap, boot qemu on the tap) to confirm the
-VM reaches our responders through the bridge→veth→root-host-veth path. Output: a go/no-go on
-`managedTap` vs a custom binding, and a validated topology for slice 2.
+**5b. Tap-fd hand-off spike (the KubeVirt integration gate, ~1 day).** The lean model hinges on getting
+a **root-netns tap fd to qemu in the virt-launcher pod netns**. Spike it: with a tap in one netns and
+qemu in another, hand the fd across (`SCM_RIGHTS` over a unix socket) and boot qemu with
+`-netdev tap,fd=,vhost=on,vhostfd=`; confirm the VM runs on the cross-netns tap. Then map this onto
+KubeVirt's binding plugin (sidecar/hooks — how a binding passes an fd; how virt-launcher receives it).
+Output: a proven fd-hand-off mechanism (or, if infeasible, the documented fallback to the stacked
+veth+bridge). This — not a bridge — is the KubeVirt-side design gate.
 
 **Explicitly out of the slice:** the KubeVirt binding plugin + CR registration, Multus wiring, MAC
 threading through the CNI, vhost/multiqueue tuning, migration. Those are §6 follow-ons, unblocked by 5b.
@@ -149,22 +159,27 @@ threading through the CNI, vhost/multiqueue tuning, migration. Those are §6 fol
 `flowplane-ebpf/src/tc.rs` (`tc_guest_tx` dispatch); memory `kubevirt-vm-primary-network-tap`.
 
 **Do, in order:**
-1. **Slice 5b spike first** (cheap, unblocks everything): read KubeVirt managedTap source for the DHCP
-   question; hand-prototype the Topology A bridge+tap and confirm a VM reaches our responders. Decide
-   managedTap-vs-custom-binding.
-2. **Slice 5a**: extend `tap-vm-smoke.sh` to real DHCP self-config + a second endpoint + overlay ping
-   (no `/dev/kvm`-less CI — it's a host smoke). This is the datapath confidence gate.
-3. Then slice 2 (binding) per the 5b decision.
+1. **Slice 5a** (datapath confidence, no KubeVirt): extend `tap-vm-smoke.sh` to a real VM doing DHCP
+   self-config on a **root-netns tap** + a second endpoint + overlay ping. This is exactly the lean
+   model (host-tap in our datapath), so it directly validates the target — no new attach code.
+2. **Slice 5b** (the KubeVirt integration gate): spike the **root-netns tap fd → qemu** hand-off
+   (`SCM_RIGHTS` cross-netns + `-netdev tap,fd=`), then map it onto a KubeVirt binding plugin. Decides
+   the lean fd-passing path (fallback to stacked veth+bridge only if infeasible).
+3. Then `device_type=tap` in `AttachInterface` (§4.1) + slice 2 (the binding) per the 5b outcome.
 
 No half-finished code is in the tree — the next session starts from a clean, green `main`.
 
 ## 9. Open questions / risks
 
-- **`managedTap` DHCP behaviour** (§3) — the single decision that shapes the binding work.
+- **THE gate — does a root-netns tap work with KubeVirt's namespacing?** The lean model needs the tap
+  to live in the flowplane/root netns (for `uplink_rx` delivery) while qemu runs in the virt-launcher
+  **pod** netns. KubeVirt normally creates/opens the tap **in the launcher netns**. So we must verify:
+  can a binding plugin hand qemu a **foreign-netns (root) tap fd**, or does virt-launcher insist the
+  netdev be in its own netns? If a root-netns tap can't be plumbed through KubeVirt, lean-in-root-netns
+  fails and we fall back to the stacked pod-netns veth+bridge. **Resolve empirically first** (spike 5b +
+  KubeVirt source) — the whole topology choice hinges on it. **We do not assume it works.**
 - **tc + vhost-net + multiqueue** coexistence on the tap; GSO/checksum-offload on the tap (disable, per
   the smoke + the guest-veth artifact).
-- **VM MAC source** — explicit VMI `macAddress` vs KubeVirt copying the pod-interface MAC; our
-  tap/veth + `PORT_META` must match.
+- **VM MAC source** — explicit VMI `macAddress` vs KubeVirt copying the pod-interface MAC; our tap +
+  `PORT_META` must match.
 - **Migration** conntrack + underlay `/128` movement + dest re-attach ordering.
-- **Bridge in the path (Topology A)** adds a hop; acceptable (KubeVirt bridge binding does the same),
-  revisit with Topology B/C only if throughput demands it.
