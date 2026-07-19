@@ -30,21 +30,39 @@ pub enum DeviceType {
     /// Container: a veth pair whose guest end is moved into the target netns (the pod's `eth0`) and
     /// whose host end stays in the root netns as the datapath device.
     Veth,
-    /// VM: a single root-netns tap whose fd is handed to qemu. No netns move, no peer — symmetric
-    /// with the container host-veth. The VM's virtio NIC MAC MUST be supplied (local delivery
-    /// rewrites the frame dst to `guest_mac`, so a derived MAC would never match the VM).
+    /// VM (fd model): a single root-netns tap whose fd is handed to qemu. No netns move, no peer —
+    /// symmetric with the container host-veth. The VM's virtio NIC MAC MUST be supplied (local
+    /// delivery rewrites the frame dst to `guest_mac`, so a derived MAC would never match the VM).
     Tap,
+    /// VM (KubeVirt-compatible): the tap lives in the POD netns (virt-launcher opens it by name),
+    /// connected to a root-netns veth by `tc mirred`. The root-netns veth end is the unchanged
+    /// datapath device (`tc_guest_tx` + `uplink_rx` target), exactly like a container; the pod-netns
+    /// `mirred` splice replaces "the pod process on the veth peer". A point-to-point `mirred` splice
+    /// (NOT a bridge) is required: our gateway is presented at the guest's OWN MAC, so a bridge would
+    /// hairpin gateway-bound frames (dst == VM MAC) back to the VM instead of to the datapath. MAC
+    /// required (same reason as `Tap`).
+    PodTap,
 }
 
 impl DeviceType {
     /// Parse the `AttachInterface.device_type` proto field. Empty or `"veth"` → `Veth` (the default,
-    /// preserving container behavior); `"tap"` → `Tap`; anything else is an error.
+    /// preserving container behavior); `"tap"` → `Tap` (root-netns fd model); `"pod-tap"` → `PodTap`
+    /// (KubeVirt-compatible pod-netns tap); anything else is an error.
     pub fn parse(s: &str) -> anyhow::Result<Self> {
         match s {
             "" | "veth" => Ok(DeviceType::Veth),
             "tap" => Ok(DeviceType::Tap),
-            other => bail!("unknown device_type {other:?} (want \"veth\" or \"tap\")"),
+            "pod-tap" => Ok(DeviceType::PodTap),
+            other => {
+                bail!("unknown device_type {other:?} (want \"veth\", \"tap\", or \"pod-tap\")")
+            }
         }
+    }
+
+    /// Whether this device type requires an explicit VM MAC (local delivery rewrites the frame dst to
+    /// `guest_mac`, so a derived MAC would silently drop every inbound frame to the VM).
+    fn requires_mac(self) -> bool {
+        matches!(self, DeviceType::Tap | DeviceType::PodTap)
     }
 }
 
@@ -124,6 +142,17 @@ impl AttachState {
         }
     }
 
+    /// Pod-netns veth-peer name for the `PodTap` model — a stable short (`vp-<hash>`, 11 chars) name
+    /// distinct from both the root veth (`veth-<id>`) and the pod-netns tap (`tap-<id>`). It only
+    /// needs to be a valid, collision-free handle for the `mirred` splice inside the pod netns.
+    fn pod_peer_name(interface_id: &str) -> String {
+        let mut h: u32 = 2166136261;
+        for b in interface_id.as_bytes() {
+            h = (h ^ *b as u32).wrapping_mul(16777619);
+        }
+        format!("vp-{h:08x}")
+    }
+
     /// Reseed the underlay IPAM used-set from addresses recovered on restart (the surviving pinned
     /// UNDERLAY map), so a live guest's /128 is never handed out again after an flowplane restart —
     /// the reissue-a-live-/128 blackhole the review flagged. Called once, on adopt.
@@ -168,8 +197,8 @@ impl AttachState {
         // A tap serves a VM whose virtio NIC has a fixed MAC; local delivery rewrites the frame dst to
         // `guest_mac`, so the programmed MAC must equal the VM's — a derived one would silently drop
         // every inbound frame. Require it explicitly rather than deriving.
-        if device_type == DeviceType::Tap && mac_req.is_empty() {
-            bail!("device_type=tap requires an explicit mac (the VM NIC MAC)");
+        if device_type.requires_mac() && mac_req.is_empty() {
+            bail!("device_type={device_type:?} requires an explicit mac (the VM NIC MAC)");
         }
         // Primary overlay IPv4: first requested IPv4 (IPv6 requests are recorded but v4 is the
         // primary INTERFACES key for this path).
@@ -198,16 +227,20 @@ impl AttachState {
         // The root-netns datapath device tc_guest_tx attaches to: a veth host end (its peer moves
         // into the pod netns) or a single tap (its fd is handed to qemu). `create_interface` runs
         // the identical datapath on either — the device type only changes how it's created here.
+        // Veth + PodTap use a root-netns veth as the datapath device; Tap uses a root-netns tap.
         let device = match device_type {
-            DeviceType::Veth => Self::host_veth_name(interface_id),
+            DeviceType::Veth | DeviceType::PodTap => Self::host_veth_name(interface_id),
             DeviceType::Tap => Self::tap_name(interface_id),
         };
         // Create + configure the device. If anything fails after creation, tear it down so we don't
         // leak. veth: create the pair + move the guest end into the netns. tap: a single root-netns
-        // device, no netns move, no peer.
+        // device. pod-tap: the veth + a pod-netns tap wired by mirred (KubeVirt-compatible).
         let setup = match device_type {
             DeviceType::Veth => self.setup_veth(&device, interface_id, netns_path, mac),
             DeviceType::Tap => self.setup_tap(&device, mac),
+            DeviceType::PodTap => {
+                self.setup_pod_tap(&device, netns_path, &Self::tap_name(interface_id), mac)
+            }
         };
         if let Err(e) = setup {
             let _ = run(&["ip", "link", "del", &device]);
@@ -259,6 +292,8 @@ impl AttachState {
         let ifname = match device_type {
             DeviceType::Veth => interface_id.to_string(),
             DeviceType::Tap => device.clone(),
+            // The pod-netns tap qemu/libvirt opens (its name inside the target netns).
+            DeviceType::PodTap => Self::tap_name(interface_id),
         };
         Ok(AttachOutcome {
             ifname,
@@ -368,6 +403,96 @@ impl AttachState {
                 "ethtool", "-K", tap, "tso", "off", "gso", "off", "gro", "off", "lro", "off",
             ]);
         }
+        Ok(())
+    }
+
+    /// Create the KubeVirt-compatible pod-netns tap topology: a veth pair whose HOST end (`host`,
+    /// root netns) is the unchanged datapath device (`tc_guest_tx` + `uplink_rx` target, exactly like
+    /// a container), whose PEER moves into the pod netns, plus a `tap` in the pod netns that qemu
+    /// drives. The peer and tap are spliced point-to-point with `tc mirred` — NOT a Linux bridge: our
+    /// gateway is presented at the guest's OWN MAC, so a bridge would learn `VM_MAC` on the tap port
+    /// and hairpin gateway-bound frames back to the VM. `mirred` shovels every frame peer<->tap
+    /// unconditionally (no MAC learning), so gateway-bound frames reach `tc_guest_tx` on the root veth.
+    /// `Control::create_interface` later attaches the datapath to `host`, unchanged from the veth path.
+    fn setup_pod_tap(
+        &self,
+        host: &str,
+        netns_path: &str,
+        tap: &str,
+        mac: [u8; 6],
+    ) -> anyhow::Result<()> {
+        let _ = run(&["ip", "link", "del", host]);
+        // veth: host end in the root netns, peer created here then moved into the pod netns.
+        let peer = Self::pod_peer_name(host);
+        run(&[
+            "ip", "link", "add", host, "type", "veth", "peer", "name", &peer,
+        ])
+        .context("create pod-tap veth pair")?;
+        run(&["ip", "link", "set", &peer, "netns", netns_path])
+            .context("move peer into pod netns")?;
+
+        let mtu = self.guest_mtu.to_string();
+        // Pod-netns tap (what qemu/libvirt opens): vnet_hdr for vhost=on virtio; MTU + up. Its MAC is
+        // the host-side backend MAC (qemu's virtio NIC is given `mac` separately); the datapath's
+        // PortMeta.guest_mac == `mac`, and delivery to the VM works because mirred is unconditional.
+        run_netns(
+            netns_path,
+            &["ip", "tuntap", "add", "dev", tap, "mode", "tap", "vnet_hdr"],
+        )
+        .context("create pod-netns tap")?;
+        run_netns(
+            netns_path,
+            &["ip", "link", "set", tap, "address", &fmt_mac(mac)],
+        )
+        .context("set pod tap mac")?;
+        run_netns(netns_path, &["ip", "link", "set", tap, "mtu", &mtu]).context("pod tap mtu")?;
+        run_netns(netns_path, &["ip", "link", "set", tap, "up"]).context("pod tap up")?;
+        run_netns(netns_path, &["ip", "link", "set", &peer, "mtu", &mtu])
+            .context("pod peer mtu")?;
+        run_netns(netns_path, &["ip", "link", "set", &peer, "up"]).context("pod peer up")?;
+
+        // Point-to-point splice: clsact + a matchall `mirred` redirect each way (peer<->tap). No
+        // bridge → no MAC learning → no gateway-at-own-MAC hairpin.
+        run_netns(netns_path, &["tc", "qdisc", "add", "dev", tap, "clsact"])
+            .context("clsact on pod tap")?;
+        run_netns(netns_path, &["tc", "qdisc", "add", "dev", &peer, "clsact"])
+            .context("clsact on pod peer")?;
+        run_netns(
+            netns_path,
+            &[
+                "tc", "filter", "add", "dev", tap, "ingress", "matchall", "action", "mirred",
+                "egress", "redirect", "dev", &peer,
+            ],
+        )
+        .context("mirred tap->peer")?;
+        run_netns(
+            netns_path,
+            &[
+                "tc", "filter", "add", "dev", &peer, "ingress", "matchall", "action", "mirred",
+                "egress", "redirect", "dev", tap,
+            ],
+        )
+        .context("mirred peer->tap")?;
+
+        // Offloads off on a software-uplink fabric (same rationale as setup_veth/setup_tap).
+        if self.disable_guest_csum_offload {
+            for dev in [tap, peer.as_str()] {
+                let _ = run_netns(
+                    netns_path,
+                    &[
+                        "ethtool", "-K", dev, "tso", "off", "gso", "off", "gro", "off", "lro",
+                        "off",
+                    ],
+                );
+            }
+        }
+
+        // Root-netns host veth: the datapath device. MAC = guest_mac + MTU + up, like the container
+        // host end. (The mirred splice is MAC-agnostic, so the peer/tap MACs don't gate delivery.)
+        run(&["ip", "link", "set", host, "address", &fmt_mac(mac)])
+            .context("pod-tap host veth mac")?;
+        run(&["ip", "link", "set", host, "mtu", &mtu]).context("pod-tap host veth mtu")?;
+        run(&["ip", "link", "set", host, "up"]).context("pod-tap host veth up")?;
         Ok(())
     }
 
@@ -514,7 +639,28 @@ mod tests {
         assert_eq!(DeviceType::parse("").unwrap(), DeviceType::Veth);
         assert_eq!(DeviceType::parse("veth").unwrap(), DeviceType::Veth);
         assert_eq!(DeviceType::parse("tap").unwrap(), DeviceType::Tap);
+        assert_eq!(DeviceType::parse("pod-tap").unwrap(), DeviceType::PodTap);
         assert!(DeviceType::parse("bridge").is_err());
+    }
+
+    #[test]
+    fn device_type_requires_mac() {
+        // A VM's MAC must match the datapath's guest_mac; a container derives one.
+        assert!(!DeviceType::Veth.requires_mac());
+        assert!(DeviceType::Tap.requires_mac());
+        assert!(DeviceType::PodTap.requires_mac());
+    }
+
+    #[test]
+    fn pod_peer_name_fits_and_distinct() {
+        let p = AttachState::pod_peer_name("a-very-long-interface-id-way-over-ifnamsiz");
+        assert!(p.len() <= 15, "{p} exceeds IFNAMSIZ");
+        assert!(p.starts_with("vp-"));
+        // The three pod-tap devices for one id must all be distinct (peer, tap, root veth).
+        let id = "v0";
+        let peer = AttachState::pod_peer_name(id);
+        assert_ne!(peer, AttachState::tap_name(id));
+        assert_ne!(peer, AttachState::host_veth_name(id));
     }
 
     #[test]
