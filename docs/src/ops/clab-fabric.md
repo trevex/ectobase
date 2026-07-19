@@ -65,6 +65,127 @@ sudo -E bash test/scenario-restart.sh      # graceful datapath restart (crictl k
 hack/clab-down.sh      # destroy the fabric + kind clusters
 ```
 
+`kind` and `containerlab` are expected on `PATH` (commonly `~/go/bin`); the datapath tooling
+(`bpftool`, `bpftrace`, `tcpdump`, `xdp-tools`, `kubectl`) comes from the Nix devShell — run the
+scripts inside `nix develop` (or with the flake `PATH` exported). Passwordless `sudo` is assumed
+(clab, kind, and the netns/bpf inspection all need root); on NixOS the real setuid binary is
+`/run/wrappers/bin/sudo`.
+
+## XDP attach modes, MTU, and the per-edge pin namespace
+
+These three settings are load-bearing for the datapath on clab veths. They are **not** arbitrary —
+each encodes a containerlab-veth constraint that does not exist on real hardware.
+
+### Per-role XDP mode: nodes are generic, edges are native
+
+The loader prefers native/driver XDP and falls back to SKB/generic (`attach_xdp_mode`); setting
+`FLOWPLANE_SKB_MODE=1` forces generic. On clab the correct mode is **per role**:
+
+- **Compute nodes → generic/SKB** (`FLOWPLANE_SKB_MODE=1` in `config/deploy/flowplane.yaml`).
+  `uplink_rx` delivers to guests by XDP-redirecting into the guest veth (the `GUEST_DEV` devmap). On a
+  containerlab veth a **native** redirect into a veth fails with `-95`/`EOPNOTSUPP` (the veth
+  `ndo_xdp_xmit` peer requirement) — only the generic/SKB path delivers. Nodes never `XDP_PASS` to the
+  local stack, so native buys them nothing.
+- **WAN edges → native** (`FLOWPLANE_SKB_MODE` *unset* in `edge-xdp-wrapper.sh`). `edge_local_deliver`
+  decaps an egress packet then `XDP_PASS`es the inner IPv4 to VyOS. Under **generic** XDP the skb's
+  `skb->protocol` was set (to outer IPv6) *before* the program ran and is **not** re-derived after the
+  head-adjust, so the decapped IPv4 never reaches `ip_rcv_core`. **Native** rebuilds the skb on PASS →
+  `eth_type_trans` re-runs → protocol correct. The edge does no guest-veth redirect, so it dodges the
+  `EOPNOTSUPP` problem. (On real NICs native works for *both* roles — real drivers honor
+  `ndo_xdp_xmit` and rebuild the skb on PASS. The split is a clab-veth artifact.)
+
+Verify with `bpftool net show` in the node/edge netns: nodes show `generic`, edges show `driver`.
+Note the graceful-restart **adopt** path re-points the existing pinned link *without* changing attach
+mode — a plain DS rollout will **not** flip native↔generic. To force a fresh attach, clear the pins
+(`kubectl delete ds flowplane` → `rm -rf /sys/fs/bpf/flowplane*` on the node → re-apply).
+
+### Fabric MTU 3000 (so native can attach at all)
+
+containerlab defaults every veth to **MTU 9500**. Native/driver XDP on a veth requires **MTU ≤ ~3500**
+(a linear-buffer limit; larger needs `#[xdp(frags)]` multi-buffer support, an open follow-up). At 9500
+the native attach silently falls back to SKB. So every fabric link in `ipv6-fabric.clab.yml` sets
+`mtu: 3000` — comfortably above the encap need (outer IPv6 40 + a 1500-MTU guest's inner IP = 1540)
+and below the native limit. The dataplane code itself is MTU-agnostic; this is purely a harness knob.
+
+### Per-edge bpffs pin namespace (or the two edges collide)
+
+Both edge sidecars (`edge1-xdp`, `edge2-xdp`) are co-located on one host and **bind-mount the same
+host `/sys/fs/bpf`**. A shared pin dir would make them share one `LOCAL`/`INTERFACES`/`CONNTRACK` map
+set. `LOCAL` holds a single `uplink_mac`; the two edges have different eth1 MACs, so whichever seeds
+`LOCAL` last wins and the other edge's `edge_local_deliver` writes the **wrong** inner-eth dst MAC →
+the kernel drops the decapped packet as `PACKET_OTHERHOST` in `ip_rcv_core` → 100% N-S loss for any
+flow that ECMP-hashes to the losing edge. Fix: each edge pins to its **own** dir
+(`--pin-dir /sys/fs/bpf/flowplane-$EDGE_ID`, `EDGE_ID` set per-edge in the topology). In production
+the edges are separate hosts (separate bpffs) so this never arises. The in-cluster DaemonSet needs
+**no** such split: each node (kind node container / real machine) has its own bpffs and runs exactly
+one flowplane pod — verified (`k01-control-plane` and `k01-worker` have distinct bpffs superblocks).
+
+## End-to-end testing: deploy flow, multi-cluster kubeconfig, scenario isolation
+
+```bash
+# 1. fabric (destroys + recreates the whole lab; ports/MACs change every run)
+sudo -E env "PATH=$HOME/go/bin:$PATH" bash hack/clab-up.sh
+
+# 2. stack + cross-cluster overlay proof (deploys k01 central + k02 compute, brokered over the fabric)
+nix develop -c bash -c 'export PATH="$HOME/go/bin:$PATH"; bash hack/multicluster-e2e.sh'
+
+# 3. N-S scenarios (each is self-contained but NOT isolated from the others — see below)
+nix develop -c bash -c 'sudo -E env "PATH=$HOME/go/bin:$PATH" bash test/scenario-nat-egress.sh'
+nix develop -c bash -c 'sudo -E env "PATH=$HOME/go/bin:$PATH" bash test/scenario-lb-ingress.sh'
+```
+
+**Multi-cluster kubeconfig — be explicit, never reuse a fixed path.** Every `clab-up`/kind recreate
+assigns **new** api-server ports. `sudo kind get kubeconfig --name kNN > file` runs the `>` redirect
+as the *invoking user*: if `file` is a fixed path left **root-owned** by an earlier full-sudo run, the
+overwrite silently fails and the file keeps a **stale port** → every later `kubectl` fails with
+`connection refused`. Always write to a fresh `mktemp` file (user-owned) and, ideally, fail-fast with
+a `kubectl get --raw=/healthz` check right after capture. The N-S scenarios already use `mktemp`;
+`hack/multicluster-e2e.sh` was fixed to do the same. Confirm the port matches reality with
+`docker port k01-control-plane 6443`.
+
+**Scenarios contaminate each other.** They all reuse **VNI 100** and the **10.0.0.0/24** overlay and
+leave guests attached + routes on the reflector. Running them back-to-back collides on the `(vni, ip)`
+`INTERFACES` key and serves stale routes. **Between scenarios, clean both/all clusters:**
+
+```bash
+kubectl --kubeconfig <kc> delete vpc,networkinterface,loadbalancer,natgateway,networkpolicy,vpcpeering,compilednic --all -n default
+# detach every guest on every node (grpc DetachInterface) + `ip netns del <id>`
+```
+
+**Conntrack-map OOM.** Each flowplane instance pre-allocates a ~1M-entry `CONNTRACK` LRU (~100+MB of
+*kernel* RAM). Pins outlive the process, and host-run netns tests + crash-restarts leak them (this has
+reached tens of GB and OOM-killed the box). `hack/bpf-cleanup.sh` (a.k.a. `make bpf-clean`) sweeps the
+host + node pins, including the per-edge `flowplane-edge*` dirs; `clab-up.sh` runs it pre-deploy.
+
+## Debugging the datapath (XDP layer *and* kernel stack)
+
+`flowplane`'s datapath is XDP: `XDP_REDIRECT`/`TX`/`DROP` consume the packet **before** the AF_PACKET
+tap, so plain `tcpdump` shows nothing and a silently-failed redirect looks identical to "no packet".
+`hack/clab/bpf-trace.sh` gives kernel-global visibility across every clab netns at once (bpf prog IDs
+and tracepoints are global — one kernel backs all containers). Run it inside `nix develop`:
+
+| Command | Sees |
+|---------|------|
+| `bpf-trace.sh` | live `xdp:xdp_redirect{,_err}` / `devmap_xmit` / `xdp_exception` — a `REDIRECT ERR` or `err=-95` is the silently-dropped case tcpdump hides (this is how the node `EOPNOTSUPP` was found). |
+| `bpf-trace.sh dropmon` | **kernel-stack** drops after `XDP_PASS`: `skb:kfree_skb` aggregated by `(reason, skb->protocol, freeing-fn)`. This is the cilium-drop-monitor analog that found the edge `OTHERHOST` bug. |
+| `bpf-trace.sh legend` | prog-id → name map (annotate the streams). |
+| `bpf-trace.sh pcap <ctr> <if>` | `xdpdump` one interface — shows packets XDP *consumes* + the action. |
+| `bpf-trace.sh map <node> <MAP>` | dump + decode a flowplane state map (`UNDERLAY`/`CONNTRACK`/`NEIGHBOR_NAT`/…). |
+
+Worked example — the long-open N-S drop, cracked assumption-free:
+
+1. `bpf-trace.sh dropmon` during a failing `natpod` ping → `SKB_DROP_REASON_OTHERHOST, proto=2048
+   (IPv4), ip_rcv_core` at exactly the ping rate. This *overturned* a "stale skb->protocol" theory
+   (the protocol was correctly IPv4) and pointed straight at a wrong **destination MAC**.
+2. `bpftool map dump pinned /sys/fs/bpf/flowplane-edge1/LOCAL` → the stored `uplink_mac` did not match
+   the live `eth1` MAC → the shared-bpffs collision above.
+3. After the per-edge pin fix, `dropmon` moved to `NETFILTER_DROP` and the XDP tracer showed
+   `xdp_redirect_err err=-95` on the *node* → the per-role native/generic split above.
+
+Lesson: chained hypotheses (rp_filter, forwarding, protocol) all self-disproved; the `kfree_skb`
+drop-reason tracepoint + a `LOCAL` map dump gave ground truth in one shot. Reach for `dropmon` before
+theorizing about where a post-`XDP_PASS` packet died.
+
 ## The kind ↔ containerlab integration
 
 - **`k8s-kind` nodes** (`k01`/`k02`/`k03`) — containerlab owns the kind cluster lifecycle

@@ -22,8 +22,13 @@ export PATH="$HOME/go/bin:$PATH"
 
 REFLECTOR6="fd00:db8:0:1::1"            # k01 control-plane fabric loopback
 APISERVER6="https://[${REFLECTOR6}]:6443"
-K1=/tmp/k01.kubeconfig
-K2=/tmp/k02.kubeconfig
+# Per-run, USER-OWNED kubeconfig files. Do NOT use fixed /tmp paths: `sudo kind get kubeconfig > file`
+# runs the redirect as the invoking user, so if a fixed path is left ROOT-owned by an earlier full-sudo
+# run, the overwrite silently fails and kubectl then dials a STALE api-server port (the ports change
+# every `clab-up`/kind recreate). mktemp gives a fresh user-writable file each run; trap-clean on exit.
+K1=$(mktemp -t k01.kubeconfig.XXXXXX)
+K2=$(mktemp -t k02.kubeconfig.XXXXXX)
+trap 'rm -f "$K1" "$K2"' EXIT
 GRPCURL_IMG="fullstorydev/grpcurl:latest"
 PROTO_MNT="-v $(pwd)/api/proto:/proto:ro"
 XDP=ghcr.io/trevex/ectobase/flowplane:dev
@@ -34,6 +39,13 @@ say() { echo -e "\n=== $* ==="; }
 say "kubeconfigs"
 sudo kind get kubeconfig --name k01 > "$K1"
 sudo kind get kubeconfig --name k02 > "$K2"
+# Fail fast with a clear message if a kubeconfig points at a dead api-server (stale port etc.),
+# instead of letting every later kubectl fail with a cryptic connection-refused.
+for kc in "$K1:k01" "$K2:k02"; do
+  f="${kc%:*}"; name="${kc#*:}"
+  kubectl --kubeconfig "$f" get --raw='/healthz' >/dev/null 2>&1 \
+    || { echo "FATAL: cannot reach $name api-server ($(grep -oE 'server: .*' "$f")). Is the cluster up? Re-run hack/clab-up.sh." >&2; exit 1; }
+done
 kubectl --kubeconfig "$K1" get nodes -o name
 kubectl --kubeconfig "$K2" get nodes -o name
 

@@ -170,6 +170,11 @@ topology:
       kind: linux
       image: ghcr.io/trevex/ectobase/flowplane:dev
       network-mode: container:clab-xdp-ipv6-fabric-edge1
+      # EDGE_ID gives this sidecar its OWN bpffs pin namespace (/sys/fs/bpf/flowplane-edge1). Both
+      # edge sidecars are co-located on one host + bind-mount the same /sys/fs/bpf, so a shared pin
+      # dir collides their LOCAL/CONNTRACK maps (distinct eth1 MACs -> OTHERHOST drop). See wrapper.
+      env:
+        EDGE_ID: edge1
       # Give VyOS time to boot + clab to wire eth1/eth2; the wrapper additionally waits for the
       # interfaces + the ToR neighbour before serving. (A stages.create.wait-for the VyOS `healthy`
       # stage HANGS clab deploy — the healthy-stage never registers for the vyos kind — so a fixed
@@ -185,29 +190,50 @@ topology:
       kind: linux
       image: ghcr.io/trevex/ectobase/flowplane:dev
       network-mode: container:clab-xdp-ipv6-fabric-edge2
+      env:
+        EDGE_ID: edge2   # own bpffs pin namespace (/sys/fs/bpf/flowplane-edge2) — see edge1-xdp
       startup-delay: 25
       binds:
         - edge-xdp-wrapper.sh:/edge-xdp-wrapper.sh:ro
         - /sys/fs/bpf:/sys/fs/bpf
       entrypoint: "/bin/sh /edge-xdp-wrapper.sh"
 
+  # All fabric links are MTU 3000 (clab defaults veths to 9500). Native/driver XDP on a veth requires
+  # MTU <= ~3500 (a linear-buffer limit); at 9500 the loader silently falls back to SKB/generic. We
+  # prefer native everywhere on clab ("closer to real hardware"), and the edge REQUIRES native for its
+  # decap+XDP_PASS local-deliver (generic leaves skb->protocol stale). 3000 comfortably carries a
+  # 1500-MTU guest's encapped frame (outer IPv6 40 + inner IP 1500 = 1540) with headroom. The
+  # dataplane itself is MTU-agnostic; this is purely a harness knob to unlock native — jumbo on real
+  # hardware would use native+XDP-frags instead.
   links:
     # host uplinks to the ToR (unnumbered v6, link-local only). The kind node netns
     # receives eth1; the shared-netns FRR sidecar peers over it.
     - endpoints: ["k01-control-plane:eth1", "sw1:eth1"]
+      mtu: 3000
     - endpoints: ["k01-worker:eth1", "sw1:eth2"]
+      mtu: 3000
     - endpoints: ["k02-control-plane:eth1", "sw1:eth3"]
+      mtu: 3000
     # the gateway host (k03) is the 4th fabric host -> sw1:eth4 / sw2:eth4.
     - endpoints: ["k03-control-plane:eth1", "sw1:eth4"]
+      mtu: 3000
     # second uplink per node to sw2 (dual-homing)
     - endpoints: ["k01-control-plane:eth2", "sw2:eth1"]
+      mtu: 3000
     - endpoints: ["k01-worker:eth2", "sw2:eth2"]
+      mtu: 3000
     - endpoints: ["k02-control-plane:eth2", "sw2:eth3"]
+      mtu: 3000
     - endpoints: ["k03-control-plane:eth2", "sw2:eth4"]
+      mtu: 3000
     # --- WAN edge (HA): each VyOS edge single-homes to a distinct ToR (eth1) and faces the
     # clabwan host bridge on eth2 (the real internet). The flowplane sidecars share the edges' netns
     # (no links of their own). ---
     - endpoints: ["edge1:eth1", "sw1:eth5"]
+      mtu: 3000
     - endpoints: ["edge2:eth1", "sw2:eth5"]
+      mtu: 3000
     - endpoints: ["edge1:eth2", "clabwan:e1wan"]
+      mtu: 3000
     - endpoints: ["edge2:eth2", "clabwan:e2wan"]
+      mtu: 3000

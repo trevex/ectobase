@@ -17,6 +17,7 @@
 #   hack/clab/bpf-trace.sh -d 15           # trace for 15s then print a per-program summary
 #   hack/clab/bpf-trace.sh legend          # just print the prog-id/ifindex → name map
 #   hack/clab/bpf-trace.sh pcap <ctr> <if> # xdpdump one interface (sees XDP-consumed pkts + action)
+#   hack/clab/bpf-trace.sh dropmon [-d 10]  # kernel-STACK drops (post-XDP_PASS): reason x proto x fn
 #
 # Reading the output:
 #   REDIRECT ok   — a program redirected a packet (map-based, e.g. devmap) — success
@@ -58,6 +59,31 @@ case "${1:-trace}" in
     XDPDUMP=$(command -v xdpdump) || { echo "no xdpdump (run inside nix develop)" >&2; exit 1; }
     echo "== xdpdump $ctr:$ifc (Ctrl-C to stop) — shows packets entering XDP incl. those it consumes =="
     exec $SUDO nsenter -t "$(docker inspect -f '{{.State.Pid}}' "$ctr")" -n "$XDPDUMP" -i "$ifc" -x ;;
+  dropmon)
+    # Kernel-STACK drop visibility — the complement to the XDP-layer tracing below. When a program
+    # returns XDP_PASS the packet enters the normal netstack, where it can STILL be dropped (bad
+    # checksum, PACKET_OTHERHOST / wrong dst MAC, netfilter, no-route, …) and neither tcpdump nor the
+    # XDP tracepoints show why. skb:kfree_skb is kernel-global and carries the exact drop REASON enum
+    # + the freeing function, so one bpftrace observes every clab netns's stack drops at once. This is
+    # how the edge OTHERHOST bug was found: uplink_rx decapped fine (XDP ok) but edge_local_deliver
+    # wrote a stale dst MAC, so ip_rcv_core dropped it as SKB_DROP_REASON_OTHERHOST.
+    #   bpf-trace.sh dropmon        # live, Ctrl-C to print the (reason,proto,fn) histogram
+    #   bpf-trace.sh dropmon -d 10  # trace 10s then print
+    DUR2=0; [ "${2:-}" = "-d" ] && DUR2="${3:?-d needs seconds}"
+    BT=$(command -v bpftrace) || { echo "ERROR: bpftrace not found (run inside nix develop)" >&2; exit 1; }
+    BTD=$(mktemp --suffix=.bt)
+    # protocol is skb->protocol (host-order): 2048=IPv4(0x0800) 34525=IPv6(0x86dd) 2054=ARP(0x0806).
+    cat > "$BTD" <<'BT'
+tracepoint:skb:kfree_skb { @drops[args->reason, args->protocol, ksym(args->location)] = count(); }
+BT
+    [ "$DUR2" -gt 0 ] && echo "interval:s:$DUR2 { exit(); }" >> "$BTD"
+    echo "== tracing kernel-stack skb drops across ALL clab netns (reason x proto x freeing-fn) =="
+    echo "   proto: 2048=IPv4 34525=IPv6 2054=ARP.  Run the failing flow, then read which"
+    echo "   (reason, location) count matches your packet rate — that's where/why it dies."
+    [ "$DUR2" -gt 0 ] && echo "   (for ${DUR2}s)" || echo "   (Ctrl-C to stop + print)"
+    $SUDO "$BT" "$BTD"
+    rm -f "$BTD"
+    exit 0 ;;
   map)
     # Dump + DECODE a flowplane state map on one node. bpf map ids are global, so we resolve the
     # node's map from its uplink_rx prog (attached to the node's fabric uplink) and dump from the host.

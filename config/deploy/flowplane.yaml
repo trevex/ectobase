@@ -56,7 +56,13 @@ spec:
               echo "flowplane wrapper: uplink=$UPLINK gateway_mac=$GW_MAC extra=[$EXTRA]"
               exec flowplane serve --addr 127.0.0.1:1337 --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC" $EXTRA
           env:
-            # kind nodes have no native XDP; force generic/SKB mode.
+            # Compute nodes MUST run generic/SKB XDP on clab. uplink_rx delivers to guests by
+            # XDP-redirecting into the guest veth (GUEST_DEV devmap). On containerlab veths a NATIVE
+            # XDP redirect into a veth fails with -95/EOPNOTSUPP (the veth ndo_xdp_xmit peer
+            # requirement) — only the generic/SKB path delivers. Nodes never do XDP_PASS-to-stack, so
+            # they gain nothing from native. (The WAN edge is the opposite: it needs NATIVE for its
+            # decap+XDP_PASS local-deliver and does no guest-veth redirect — see edge-xdp-wrapper.sh.)
+            # On real hardware native works for both; this generic pin is a clab-veth constraint.
             - name: FLOWPLANE_SKB_MODE
               value: "1"
           # Readiness gates on the gRPC listener (127.0.0.1:1337), which flowplane opens

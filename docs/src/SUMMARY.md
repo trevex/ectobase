@@ -11,6 +11,7 @@
 # Dataplane (flowplane)
 
 - [Datapath programs](./dataplane/programs.md)
+- [XDP / tc / bpf kernel behaviour](./dataplane/kernel-xdp-tc.md)
 - [The pure-core seam (Pkt / Maps traits)](./dataplane/pure-core.md)
 - [BPF maps & state model](./dataplane/maps.md)
 - [The flowplane CLI](./dataplane/cli.md)

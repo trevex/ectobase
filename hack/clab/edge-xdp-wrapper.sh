@@ -3,11 +3,25 @@
 # netns (clab `network-mode: container:<edge>`), so it sees the edge's eth1 (fabric uplink) + eth2
 # (WAN / clabwan). Waits for both links + the fabric ToR neighbour (the "router" on eth1, learned
 # via the ToR's RA — sw{1,2}:eth5 have `no ipv6 nd suppress-ra`), then runs `serve --role edge`.
-# SKB/generic XDP (clab veths have no native XDP). Mirrors config/deploy/flowplane.yaml's wrapper.
+# Mirrors config/deploy/flowplane.yaml's wrapper.
+#
+# Native XDP: the loader prefers native (XdpFlags::default) and falls back to SKB. clab veths DO
+# support native XDP, but only at MTU <= ~3500 (a veth linear-buffer limit) — so the fabric links are
+# set to a sub-limit MTU in the topology (clab defaults to 9500, which forces SKB). Native is REQUIRED
+# on the edge: edge_local_deliver decaps then XDP_PASSes the inner IPv4 to VyOS, and only native
+# re-derives skb->protocol after the head-adjust (generic leaves it stale -> the packet is dropped
+# before the IP stack). So FLOWPLANE_SKB_MODE is deliberately NOT set here.
 set -e
 UPLINK=eth1          # fabric uplink (uplink_rx decaps egress here)
 WAN=eth2             # clabwan uplink (wan_rx re-encaps nat_ip returns here)
 UL=fd00:db8:0:9::e   # anycast edge underlay /128 (both edges; LOCAL + local-deliver key)
+# Per-edge bpffs pin namespace. BOTH edge sidecars are co-located on ONE host and bind-mount the same
+# host /sys/fs/bpf, so a shared pin dir makes them COLLIDE on the single LOCAL/INTERFACES/CONNTRACK
+# maps: LOCAL holds one uplink_mac, but each edge's eth1 has a distinct MAC, so the edge that seeded
+# LOCAL last wins and the other's edge_local_deliver writes the WRONG inner-eth dst MAC -> the kernel
+# drops it as PACKET_OTHERHOST. In real deployments the edges are separate hosts (separate bpffs) and
+# this is moot. EDGE_ID is injected per-edge by the clab topology.
+PIN_DIR="/sys/fs/bpf/flowplane-${EDGE_ID:-edge}"
 
 for i in $(seq 1 60); do
   ip link show "$UPLINK" >/dev/null 2>&1 && ip link show "$WAN" >/dev/null 2>&1 && break
@@ -23,8 +37,7 @@ for i in $(seq 1 60); do
 done
 [ -z "$GW_MAC" ] && { echo "FATAL: no fabric router neighbour on $UPLINK" >&2; exit 1; }
 
-echo "edge-xdp: uplink=$UPLINK wan=$WAN underlay=$UL gateway_mac=$GW_MAC"
-export FLOWPLANE_SKB_MODE=1
+echo "edge-xdp: uplink=$UPLINK wan=$WAN underlay=$UL gateway_mac=$GW_MAC pin_dir=$PIN_DIR"
 # Non-pinned XDP link attach on the edge. The edge attaches TWO XDP programs (uplink_rx on the
 # fabric uplink for egress decap + wan_rx on the WAN uplink for NAT-return re-encap). In SKB/generic
 # XDP mode, pinning the first link and then attaching the second XDP program silently DROPS the first
@@ -35,5 +48,5 @@ export FLOWPLANE_SKB_MODE=1
 # recreate (dead ifindex). See hack/bpf-cleanup.sh for the pin-leak sweep this pairs with.
 export FLOWPLANE_PIN_LINKS=false
 exec flowplane serve --addr 127.0.0.1:1337 --role edge \
-  --uplink "$UPLINK" --wan-uplink "$WAN" \
+  --uplink "$UPLINK" --wan-uplink "$WAN" --pin-dir "$PIN_DIR" \
   --local-underlay "$UL" --gateway 169.254.0.1 --gateway-mac "$GW_MAC"

@@ -8,6 +8,8 @@
 #   RAM per instance). Two pin locations leak:
 #     * /sys/fs/bpf/flowplane            persistent `serve` dir (maps + links/)
 #     * /sys/fs/bpf/flowplane-eph-<pid>  per-PID dir for bringup/tc-bringup/debug
+#     * /sys/fs/bpf/flowplane-edge<n>   per-edge `serve --role edge` dir (each
+#                                        co-located edge sidecar pins separately)
 #   A pinned map outlives the process that created it, and nothing sweeps these.
 #   Every host-run scenario (test/*.sh run ./target/debug/flowplane directly on
 #   the host) and every crash-restart leaves a full conntrack map behind. Over a
@@ -57,7 +59,9 @@ sweep_local_body() {
   if [ -d "$bpffs/flowplane" ]; then
     rm -rf "$bpffs/flowplane" && removed=$((removed + 1))
   fi
-  for d in "$bpffs"/flowplane-eph-*; do
+  # flowplane-eph-<pid> = per-PID bringup/debug dirs; flowplane-edge<n> = the per-edge serve dirs
+  # (each co-located edge sidecar pins to its own namespace so they don't collide on the host bpffs).
+  for d in "$bpffs"/flowplane-eph-* "$bpffs"/flowplane-edge*; do
     [ -e "$d" ] || continue
     rm -rf "$d" && removed=$((removed + 1))
   done
