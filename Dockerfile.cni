@@ -1,0 +1,22 @@
+# Container image for the flowplane CNI plugin + its node installer.
+#
+# The cni module has a replace to ../api, so the build context must include api/
+# and cni/. Built with GOWORK=off so the cni/go.mod replaces are used (not go.work).
+
+# --- builder ---------------------------------------------------------------
+FROM golang:1.26-bookworm AS builder
+WORKDIR /src
+COPY api ./api
+COPY cni ./cni
+RUN cd cni \
+    && CGO_ENABLED=0 GOWORK=off go build -o /out/flowplane-cni ./plugin
+
+# --- runtime ---------------------------------------------------------------
+# The installer DaemonSet runs this image: it copies the CNI binary onto the node's
+# /opt/cni/bin (hostPath) and writes the SA-token kubeconfig the CNI uses to read
+# pods + net.ectobase.dev CRDs, then idles so the DaemonSet pod stays Running.
+FROM debian:bookworm-slim
+COPY --from=builder /out/flowplane-cni /flowplane-cni
+COPY hack/cni-install.sh /cni-install.sh
+RUN chmod +x /cni-install.sh
+ENTRYPOINT ["/cni-install.sh"]

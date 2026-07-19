@@ -71,6 +71,11 @@ NETPLANE_IMAGE ?= ghcr.io/trevex/ectobase/netplane
 image-netplane: ## Build the netplane (reflector+agent) image
 	docker build $(if $(DOCKER_BUILD_NET),--network=$(DOCKER_BUILD_NET)) -f Dockerfile.netplane -t $(NETPLANE_IMAGE):$(TAG) .
 
+CNI_IMAGE ?= ghcr.io/trevex/ectobase/cni
+.PHONY: image-cni
+image-cni: ## Build the flowplane CNI plugin + installer image
+	docker build $(if $(DOCKER_BUILD_NET),--network=$(DOCKER_BUILD_NET)) -f Dockerfile.cni -t $(CNI_IMAGE):$(TAG) .
+
 KINDNODE_IMAGE ?= ghcr.io/trevex/ectobase/kind-node-fabric
 .PHONY: image-kindnode
 image-kindnode: ## Build the fabric kind-node image (node-IP = pre-kubelet BGP /64)

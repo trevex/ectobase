@@ -14,10 +14,15 @@ kubectl apply -f "https://github.com/kubevirt/kubevirt/releases/download/${KV}/k
 kubectl apply -f "https://github.com/kubevirt/kubevirt/releases/download/${KV}/kubevirt-cr.yaml"
 kubectl -n kubevirt wait kv/kubevirt --for=condition=Available --timeout=10m
 
-# kind has no KVM: emulation + register the managedTap binding
+# kind has no KVM: emulation. Register the `flowplane` network binding: domainAttachmentType=tap
+# (our CNI creates the tap in the launcher netns; NOT managedTap, which builds KubeVirt's own bridge
+# + hijacks DHCP) referencing our NAD (config/deploy/kubevirt-binding.yaml, applied with the stack).
+# NetworkBindingPlugins gate enables the binding-plugin infra.
 kubectl -n kubevirt patch kubevirt kubevirt --type=merge -p '{"spec":{"configuration":{
-  "developerConfiguration":{"useEmulation":true},
-  "network":{"binding":{"dataplane":{"domainAttachmentType":"managedTap"}}}}}}'
+  "developerConfiguration":{"useEmulation":true,"featureGates":["NetworkBindingPlugins"]},
+  "network":{"binding":{"flowplane":{
+    "domainAttachmentType":"tap",
+    "networkAttachmentDefinition":"ectobase-system/flowplane"}}}}}}'
 
 # CDI
 kubectl apply -f "https://github.com/kubevirt/containerized-data-importer/releases/download/${CDI}/cdi-operator.yaml"
