@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.20.1
   name: compilednics.net.ectobase.dev
 spec:
   group: net.ectobase.dev
@@ -40,10 +40,13 @@ spec:
             type: object
           spec:
             description: |-
-              CompiledNICSpec is the fully lowered, node-local NIC configuration bundle.
-              It captures everything the dataplane agent needs for a single NIC: identity,
-              underlay, firewall rules (resolved from NetworkPolicy selectors), and NAT block.
-              Dynamic routes learned via routebus are NOT included here.
+              CompiledNICSpec is the fully lowered, node-local NIC configuration bundle. It captures
+              everything the dataplane agent needs for a single NIC: identity, VNI, underlay, overlay IPs,
+              firewall rules (resolved from NetworkPolicy selectors), egress-SNAT sources, LB membership,
+              and peer imports. It is the SOLE per-NIC input the agent reads: given the set of CompiledNICs
+              scheduled to a node, the agent can derive every static route/NAT/firewall/LB/QoS it programs
+              and announces, without reading the source NetworkInterface, VPC, or NATGateway. Dynamic routes
+              learned via routebus are the only per-NIC state NOT captured here.
             properties:
               firewall:
                 description: Firewall holds the compiled ingress and egress firewall
@@ -133,24 +136,36 @@ spec:
                   type: object
                 type: array
               nat:
-                description: NAT holds NAT gateway config for this NIC, if any.
-                properties:
-                  natIP:
-                    description: NATIP is the public NAT IPv4 address.
-                    type: string
-                  portMax:
-                    description: PortMax is the end of the source-port range (inclusive).
-                    format: int32
-                    type: integer
-                  portMin:
-                    description: PortMin is the start of the source-port range (inclusive).
-                    format: int32
-                    type: integer
-                required:
-                - natIP
-                - portMax
-                - portMin
-                type: object
+                description: |-
+                  NAT lists the egress-SNAT sources for this NIC's overlay IPs — one entry per NATGateway
+                  allocation whose source is one of this NIC's IPs. Empty if the NIC's VPC has no NAT gateway.
+                items:
+                  description: |-
+                    CompiledNATSource is one egress-SNAT mapping: an overlay source IP SNATed onto a public NAT IP
+                    and source-port range. It corresponds to a single NATGateway allocation for one of the NIC's IPs.
+                  properties:
+                    natIP:
+                      description: NATIP is the public NAT IPv4 address.
+                      type: string
+                    portMax:
+                      description: PortMax is the end of the source-port range (inclusive).
+                      format: int32
+                      type: integer
+                    portMin:
+                      description: PortMin is the start of the source-port range (inclusive).
+                      format: int32
+                      type: integer
+                    sourceIP:
+                      description: SourceIP is the overlay IP being SNATed (one of
+                        the NIC's OverlayIPs).
+                      type: string
+                  required:
+                  - natIP
+                  - portMax
+                  - portMin
+                  - sourceIP
+                  type: object
+                type: array
               nicRef:
                 description: NICRef references the source NetworkInterface by name.
                 properties:
@@ -169,22 +184,24 @@ spec:
                   type: string
                 type: array
               peerImports:
-                description: PeerImports lists the prefixes imported from peered VPCs.
-                  Each entry carries the peer VNI and the prefixes visible through
-                  that peering. Optional; absent when no VPC peerings are active.
+                description: |-
+                  PeerImports lists peer VPCs whose routes this NIC imports (reachability only — grants NO
+                  firewall permission; that comes solely from NetworkPolicy). Populated from Ready VPCPeerings
+                  involving this NIC's VPC.
                 items:
-                  description: CompiledPeerImport is one set of prefixes imported
-                    from a peered VPC.
+                  description: CompiledPeerImport is one peer VPC's reachability import
+                    for a NIC.
                   properties:
                     importPrefixes:
-                      description: ImportPrefixes are the CIDR prefixes imported from
-                        the peer VPC.
+                      description: |-
+                        ImportPrefixes is the peer's exposedPrefixes: only peer routes within these CIDRs are
+                        imported (filter applied importer-side).
                       items:
                         type: string
                       type: array
                     peerVni:
-                      description: PeerVNI is the VXLAN network identifier of the
-                        peer VPC.
+                      description: PeerVNI is the peer VPC's VNI to subscribe to on
+                        routebus.
                       format: int32
                       type: integer
                   required:
@@ -209,9 +226,16 @@ spec:
                     - vf
                     type: string
                 type: object
+              underlayRoute:
+                description: |-
+                  UnderlayRoute is the NIC's allocated underlay /128 (copied from the source NetworkInterface's
+                  status.underlayRoute). It is the nexthop for this NIC's overlay host routes and the owner of
+                  its NAT blocks on the route bus. Empty until the NIC has been attached.
+                type: string
               vni:
-                description: VNI is the effective VXLAN network identifier for this
-                  NIC.
+                description: |-
+                  VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
+                  status.vni, falling back to its VPC's status.vni).
                 format: int32
                 type: integer
             required:

@@ -28,16 +28,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ "$(id -u)" -eq 0 ]; then SUDO=""; elif [ -x /run/wrappers/bin/sudo ]; then SUDO=/run/wrappers/bin/sudo; else SUDO=sudo; fi
 
-# Resolve a binary from a nix package's outputs (a package can have out/man/dev outputs;
-# --print-out-paths lists them all — pick the one that actually contains the binary).
-nix_bin() { # nix_bin <flakeref> <binname>
-  local ref="$1" bin="$2" p
-  for p in $(nix build "$ref" --no-link --print-out-paths 2>/dev/null); do
-    [ -x "$p/bin/$bin" ] && { echo "$p/bin/$bin"; return 0; }
-  done
-  return 1
-}
-
+# bpftool, xdpdump and bpftrace all come from the devShell; resolve absolute paths so they survive
+# the sudo/nsenter re-exec below. Run this script inside `nix develop`.
 # Container name filter for the clab fabric (kind nodes + clab nodes).
 CTR_RE='^(clab-xdp-ipv6-fabric-|k[0-9]+-(control-plane|worker))'
 
@@ -63,7 +55,7 @@ case "${1:-trace}" in
     exit 0 ;;
   pcap)
     ctr="${2:?usage: bpf-trace.sh pcap <container> <iface>}"; ifc="${3:?need iface}"
-    XDPDUMP=$(nix_bin nixpkgs#xdp-tools xdpdump)
+    XDPDUMP=$(command -v xdpdump) || { echo "no xdpdump (run inside nix develop)" >&2; exit 1; }
     echo "== xdpdump $ctr:$ifc (Ctrl-C to stop) — shows packets entering XDP incl. those it consumes =="
     exec $SUDO nsenter -t "$(docker inspect -f '{{.State.Pid}}' "$ctr")" -n "$XDPDUMP" -i "$ifc" -x ;;
   map)
@@ -71,7 +63,7 @@ case "${1:-trace}" in
     # node's map from its uplink_rx prog (attached to the node's fabric uplink) and dump from the host.
     node="${2:?usage: bpf-trace.sh map <node-container> [UNDERLAY|CONNTRACK|NAT_IPS|NEIGHBOR_NAT]}"
     want="${3:-UNDERLAY}"
-    BPFTOOL=$(nix_bin nixpkgs#bpftools bpftool) || { echo "no bpftool" >&2; exit 1; }
+    BPFTOOL=$(command -v bpftool) || { echo "no bpftool (run inside nix develop)" >&2; exit 1; }
     # prog id of uplink_rx on this node (from any fabric ethN carrying it)
     pid=$(docker exec "$node" sh -c 'for i in $(ls /sys/class/net|grep -E "^eth"); do ip -d link show $i 2>/dev/null|grep -oE "prog/xdp id [0-9]+ name uplink_rx"|grep -oE "[0-9]+"|head -1; done' 2>/dev/null | head -1)
     [ -z "$pid" ] && { echo "no uplink_rx prog on $node (is flowplane up there?)" >&2; exit 1; }
@@ -120,7 +112,7 @@ echo "$LEGEND" | awk '$1=="PROG"{printf "  prog %-5s = %s\n",$2,$3}' | sort -u
 # awk map file for annotating the live stream: "prog=<id>" → append (name)
 NAMEMAP=$(mktemp); echo "$LEGEND" | awk '$1=="PROG"{print $2, $3}' | sort -u > "$NAMEMAP"
 
-BT=$(nix_bin nixpkgs#bpftrace bpftrace) || { echo "ERROR: could not resolve bpftrace binary" >&2; exit 1; }
+BT=$(command -v bpftrace) || { echo "ERROR: bpftrace not found (run inside nix develop)" >&2; exit 1; }
 # Each tracepoint gets its OWN block (their arg structs differ — devmap_xmit has no prog_id).
 BTPROG=$(mktemp --suffix=.bt)
 cat > "$BTPROG" <<'BT'

@@ -22,7 +22,7 @@
 # PREREQ: fabric up (hack/clab-up.sh) + netplane stack on k01, running an image built from THIS
 # branch (make image TAG=dev && kind load docker-image ghcr.io/trevex/ectobase/flowplane:dev --name k01
 # && kubectl -n ectobase-system rollout restart ds/flowplane).
-#   sudo -E env "PATH=/run/wrappers/bin:$HOME/go/bin:/run/current-system/sw/bin:$PATH" bash test/scenario-restart.sh
+#   sudo -E env "PATH=$PATH" bash test/scenario-restart.sh
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
 

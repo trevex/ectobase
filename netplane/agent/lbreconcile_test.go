@@ -24,17 +24,14 @@ func TestDesiredLB_JoinsUnderlayFromNIC(t *testing.T) {
 	cnic := &netv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
 		Spec: netv1.CompiledNICSpec{
-			NodeName: "nodeA",
-			NICRef:   netv1.LocalObjectReference{Name: "web-0"},
-			VNI:      100,
-			LB:       []netv1.CompiledLB{{VIP: "203.0.113.50", Ports: []netv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
+			NodeName:      "nodeA",
+			NICRef:        netv1.LocalObjectReference{Name: "web-0"},
+			VNI:           100,
+			UnderlayRoute: "2001:db8::dd",
+			LB:            []netv1.CompiledLB{{VIP: "203.0.113.50", Ports: []netv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
 		},
 	}
-	nic := &netv1.NetworkInterface{
-		ObjectMeta: metav1.ObjectMeta{Name: "web-0", Namespace: "default"},
-		Status:     netv1.NetworkInterfaceStatus{UnderlayRoute: "2001:db8::dd"},
-	}
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic, nic).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
 	r := &Reconciler{client: cl, nodeID: "nodeA"}
 
 	got, err := r.desiredLB(context.Background())
@@ -85,7 +82,7 @@ func TestDesired_EmitsVIPAnycastRoute(t *testing.T) {
 	cnic := &netv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
 		Spec: netv1.CompiledNICSpec{
-			NodeName: node, NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 100,
+			NodeName: node, NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 100, UnderlayRoute: "2001:db8::dd",
 			LB: []netv1.CompiledLB{{VIP: "203.0.113.50", Ports: []netv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
 		},
 	}
@@ -179,7 +176,7 @@ func TestDesiredPublic_EmitsLBVIP(t *testing.T) {
 	cnic := &netv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
 		Spec: netv1.CompiledNICSpec{
-			NodeName: node, NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 100,
+			NodeName: node, NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 100, UnderlayRoute: "2001:db8::dd",
 			LB: []netv1.CompiledLB{{VIP: "203.0.113.50"}},
 		},
 	}

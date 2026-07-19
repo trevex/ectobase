@@ -12,7 +12,7 @@
 #     (Ingress-established flows get their egress replies for free via the reverse conntrack entry.)
 #
 # PREREQ: fabric up (hack/clab-up.sh) + netplane stack on k01. Needs root + kubectl + grpcurl image.
-#   sudo -E env "PATH=/run/wrappers/bin:$HOME/go/bin:/run/current-system/sw/bin:$PATH" bash test/scenario-nat-egress.sh
+#   sudo -E env "PATH=$PATH" bash test/scenario-nat-egress.sh
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
 

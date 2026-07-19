@@ -7,27 +7,37 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// CompiledNICSpec is the fully lowered, node-local NIC configuration bundle.
-// It captures everything the dataplane agent needs for a single NIC: identity,
-// underlay, firewall rules (resolved from NetworkPolicy selectors), and NAT block.
-// Dynamic routes learned via routebus are NOT included here.
+// CompiledNICSpec is the fully lowered, node-local NIC configuration bundle. It captures
+// everything the dataplane agent needs for a single NIC: identity, VNI, underlay, overlay IPs,
+// firewall rules (resolved from NetworkPolicy selectors), egress-SNAT sources, LB membership,
+// and peer imports. It is the SOLE per-NIC input the agent reads: given the set of CompiledNICs
+// scheduled to a node, the agent can derive every static route/NAT/firewall/LB/QoS it programs
+// and announces, without reading the source NetworkInterface, VPC, or NATGateway. Dynamic routes
+// learned via routebus are the only per-NIC state NOT captured here.
 type CompiledNICSpec struct {
 	// NodeName is the node this NIC is scheduled on.
 	NodeName string `json:"nodeName"`
 	// NICRef references the source NetworkInterface by name.
 	NICRef LocalObjectReference `json:"nicRef"`
-	// VNI is the effective VXLAN network identifier for this NIC.
+	// VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
+	// status.vni, falling back to its VPC's status.vni).
 	VNI int32 `json:"vni"`
 	// Port describes the dataplane port allocated for this interface.
 	Port PortStatus `json:"port"`
+	// UnderlayRoute is the NIC's allocated underlay /128 (copied from the source NetworkInterface's
+	// status.underlayRoute). It is the nexthop for this NIC's overlay host routes and the owner of
+	// its NAT blocks on the route bus. Empty until the NIC has been attached.
+	// +optional
+	UnderlayRoute string `json:"underlayRoute,omitempty"`
 	// OverlayIPs are the guest overlay IP addresses.
 	// +optional
 	OverlayIPs []string `json:"overlayIPs,omitempty"`
 	// Firewall holds the compiled ingress and egress firewall rules.
 	Firewall CompiledFirewall `json:"firewall"`
-	// NAT holds NAT gateway config for this NIC, if any.
+	// NAT lists the egress-SNAT sources for this NIC's overlay IPs — one entry per NATGateway
+	// allocation whose source is one of this NIC's IPs. Empty if the NIC's VPC has no NAT gateway.
 	// +optional
-	NAT *CompiledNAT `json:"nat,omitempty"`
+	NAT []CompiledNATSource `json:"nat,omitempty"`
 	// LB lists the load balancers this NIC is a backend of. Pure forwarding membership —
 	// it grants NO firewall permission (that comes solely from NetworkPolicy).
 	// +optional
@@ -63,8 +73,11 @@ type CompiledFwRule struct {
 	Action string `json:"action"`
 }
 
-// CompiledNAT holds the NAT gateway configuration for this NIC.
-type CompiledNAT struct {
+// CompiledNATSource is one egress-SNAT mapping: an overlay source IP SNATed onto a public NAT IP
+// and source-port range. It corresponds to a single NATGateway allocation for one of the NIC's IPs.
+type CompiledNATSource struct {
+	// SourceIP is the overlay IP being SNATed (one of the NIC's OverlayIPs).
+	SourceIP string `json:"sourceIP"`
 	// NATIP is the public NAT IPv4 address.
 	NATIP string `json:"natIP"`
 	// PortMin is the start of the source-port range (inclusive).

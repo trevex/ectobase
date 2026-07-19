@@ -39,7 +39,7 @@
 #       bpftool v7.1.0 is NOT used (see clab-container-datapath-gaps memory).
 #
 # PREREQ: fabric up (hack/clab-up.sh) + netplane stack deployed on k01 running THIS branch image.
-#   sudo -E env "PATH=/run/wrappers/bin:$HOME/go/bin:/run/current-system/sw/bin:$PATH" \
+#   sudo -E env "PATH=$PATH" \
 #       bash test/scenario-vpc-peering.sh
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT" || exit 1
@@ -96,10 +96,10 @@ PIN=/sys/fs/bpf/flowplane
 
 PROTO="$ROOT/api/proto"
 
-# Nix bpftool (v7.6.0) — the in-container bpftool v7.1.0 does NOT render map/tcx/XDP entries
-# reliably (clab-container-datapath-gaps note).  NEVER use in-container bpftool for map dumps.
-NIX_BPFTOOL=$(find /nix/store -name bpftool -type f 2>/dev/null | sort -t- -k3,3 -rV | head -1)
-NIX_BPFTOOL=${NIX_BPFTOOL:-bpftool}
+# The devShell bpftool (newer than the in-container one, which doesn't render map/tcx/XDP entries
+# reliably). It's docker-exec'd into the kind node below, which shares the host nix store, so the
+# absolute store path resolves inside the container too.
+NIX_BPFTOOL="$(command -v bpftool)"
 
 K1=$(mktemp /tmp/vpc-peering-kubeconfig.XXXXXX)
 trap 'rm -f "$K1"' EXIT

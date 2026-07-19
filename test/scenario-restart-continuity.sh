@@ -34,7 +34,7 @@
 # PREREQ: fabric up (hack/clab-up.sh) + netplane stack deployed on k01 running THIS branch image
 # (make image TAG=dev && kind load docker-image ghcr.io/trevex/ectobase/flowplane:dev --name k01
 # && kubectl -n ectobase-system rollout restart ds/flowplane). Needs root.
-#   sudo -E env "PATH=/run/wrappers/bin:$HOME/go/bin:/run/current-system/sw/bin:$PATH" bash test/scenario-restart-continuity.sh
+#   sudo -E env "PATH=$PATH" bash test/scenario-restart-continuity.sh
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT" || exit 1
 
@@ -60,11 +60,10 @@ UPLINK_IFACE=eth1
 UPLINK_PIN="$PIN/links/uplink-$UPLINK_IFACE"
 PROTO="$ROOT/api/proto"
 
-# Nix bpftool (v7.6.0) — the in-container bpftool v7.1.0 doesn't render tcx/XDP prog-ids.
-# Discovered and documented in clab-container-datapath-gaps: NEVER use in-container bpftool for
-# tcx/XDP prog-id checks; use this path via nsenter instead.
-NIX_BPFTOOL=$(find /nix/store -name bpftool -type f 2>/dev/null | sort -t- -k3,3 -rV | head -1)
-NIX_BPFTOOL=${NIX_BPFTOOL:-bpftool}   # fall back to PATH if nix store is absent
+# The devShell bpftool, run on the host and entered into the node's netns via nsenter. The
+# in-container bpftool (older) doesn't render tcx/XDP prog-ids reliably, so we NEVER exec bpftool
+# inside the container for these checks. Resolved to an absolute path so it survives the sudo below.
+NIX_BPFTOOL="$(command -v bpftool)"
 
 # ---------------------------------------------------------------------------
 # Helpers

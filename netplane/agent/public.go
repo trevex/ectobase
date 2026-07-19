@@ -26,7 +26,7 @@ type PublicPrefix struct {
 // the PublicPrefix channel. A WAN edge (edgeLoopback != "") announces one
 // EDGE_UNDERLAY record mapping its anycast datapath /128 (the underlay) to its
 // unique control-plane loopback (the owner). Non-edge nodes announce nothing.
-// NAT_IP records ride this channel in a later task.
+// Only EDGE_UNDERLAY records are announced today; the channel also carries NAT_IP records.
 func (r *Reconciler) DesiredPublic(ctx context.Context) ([]PublicPrefix, error) {
 	var recs []PublicPrefix
 	if r.edgeLoopback != "" {
@@ -60,8 +60,8 @@ func (r *Reconciler) DesiredPublic(ctx context.Context) ([]PublicPrefix, error) 
 
 // applyPublic handles a learned PublicPrefix update off the routebus. For
 // EDGE_UNDERLAY it records the anycast-underlay -> owner-loopback mapping in
-// learnedEdge (so a later task can pin the WAN return path to the specific edge
-// rather than ECMP'ing the anycast /128). Other kinds are not yet handled.
+// learnedEdge, which exists to pin the WAN return path to the specific edge that owns a flow
+// rather than ECMP'ing the anycast /128. Other kinds are not yet handled.
 func (b *Bus) applyPublic(ctx context.Context, pp *rbv1.PublicPrefix, op rbv1.RouteOp) {
 	if pp == nil {
 		return
@@ -104,7 +104,7 @@ func (b *Bus) applyPublic(ctx context.Context, pp *rbv1.PublicPrefix, op rbv1.Ro
 }
 
 // LearnedEdge returns a copy of the learned anycast-underlay -> owner-loopback
-// map so a later task can resolve the WAN edge return path.
+// map, used to resolve the WAN edge return path for a flow.
 func (b *Bus) LearnedEdge() map[string]string {
 	b.mu.Lock()
 	defer b.mu.Unlock()

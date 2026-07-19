@@ -54,7 +54,7 @@ pub static LB: HashMap<LbKey, LbValue> = HashMap::pinned(1024, 0);
 pub static MAGLEV: HashMap<MaglevKey, [u8; 16]> = HashMap::pinned(65536, 0);
 #[map]
 /// Unified conntrack. Sized to dpservice's DP_FLOW_TABLE_MAX order (LRU_HASH preallocates, ~80-100MB;
-/// memcg-accounted on kernels >= 5.11). Operators tune via the loader (a later task adds an env knob).
+/// memcg-accounted on kernels >= 5.11). The size is fixed at load time by the loader.
 pub static CONNTRACK: LruHashMap<CtKey, CtEntry> = LruHashMap::pinned(1_048_576, 0);
 #[map]
 pub static NAT: HashMap<NatKey, NatValue> = HashMap::pinned(1024, 0);

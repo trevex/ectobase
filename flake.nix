@@ -81,10 +81,14 @@
             pkgs.wasm-tools
             pkgs.mdbook
             pkgs.mdbook-mermaid
+            pkgs.kubernetes-controller-tools # controller-gen: regenerates deepcopy + CRDs (see `make generate`)
             # eBPF + gRPC + VM/e2e harness tooling. Everything the test scripts need is
             # provided here, so the scripts use bare tool names (no host-specific paths) and are
             # expected to run inside `nix develop` (the Makefile wraps them).
             pkgs.bpf-linker
+            pkgs.bpftools # provides `bpftool`; the clab harness runs it via nsenter or docker exec
+            pkgs.bpftrace # ad-hoc XDP/tc tracepoints for hack/clab/bpf-trace.sh
+            pkgs.xdp-tools # xdpdump, used by hack/clab/bpf-trace.sh
             pkgs.protobuf
             pkgs.grpcurl
             pkgs.qemu
@@ -94,6 +98,7 @@
             pkgs.bridge-utils
             pkgs.ethtool
             pkgs.tcpdump
+            pkgs.util-linux # nsenter, for entering container/netns namespaces from the harness
             pkgs.kubectl
             pkgs.socat
             pkgs.gnumake
@@ -105,5 +110,11 @@
           # Real in-process apiserver for controller-runtime envtest integration tests.
           KUBEBUILDER_ASSETS = "${kubebuilderAssets}/bin";
         };
+
+        # A fully-static iperf3 the QoS scenarios copy into a foreign (debian) kind node to
+        # measure egress pacing. A dynamically-linked devShell binary can't run inside that
+        # container, so this is the one sanctioned build-from-flake the harness needs — pinned
+        # to this repo's nixpkgs (via `nix build .#iperf3-static`), not the floating registry.
+        packages.iperf3-static = pkgs.pkgsStatic.iperf3;
       });
 }

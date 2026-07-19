@@ -31,14 +31,16 @@ type PeerImportSpec struct {
 	ImportPrefixes []string
 }
 
-// Compile lowers a NetworkInterface + the NetworkPolicies that select it into a CompiledNIC.
+// Compile lowers a NetworkInterface into a self-contained CompiledNIC — the sole per-NIC input the
+// dataplane agent reads (it never reads the source NetworkInterface, VPC, or NATGateway).
 //
-// It copies identity (name, nodeName, vni, underlayRoute, port, overlayIPs) from the NIC, then
-// translates each policy whose interfaceSelector matches the NIC's labels into CompiledFwRules.
-// peerings is a pre-resolved slice of PeerImportSpecs; only entries whose VPCName matches the
-// NIC's VPC are emitted as CompiledPeerImports.
-// The returned CompiledNIC has no Status set (caller fills that in if needed).
-func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy, lbs []netv1.LoadBalancer, peerings []PeerImportSpec) netv1.CompiledNIC {
+// It copies identity (name, nodeName, underlayRoute, port, overlayIPs) from the NIC and stamps the
+// caller-resolved vni; translates each policy whose interfaceSelector matches the NIC's labels into
+// CompiledFwRules; records LB membership and peer imports; and, for each overlay IP with a
+// NATGateway allocation (natBySource, keyed by source overlay IP), records a CompiledNATSource.
+// peerings is a pre-resolved slice of PeerImportSpecs; only entries whose VPCName matches the NIC's
+// VPC are emitted. The returned CompiledNIC has no Status set (caller fills that in if needed).
+func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.NetworkPolicy, lbs []netv1.LoadBalancer, peerings []PeerImportSpec, natBySource map[string]netv1.NATAllocation) netv1.CompiledNIC {
 	nodeName := ""
 	if nic.Spec.NodeName != nil {
 		nodeName = *nic.Spec.NodeName
@@ -59,12 +61,13 @@ func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy, lbs []
 			Namespace: nic.Namespace,
 		},
 		Spec: netv1.CompiledNICSpec{
-			NodeName:   nodeName,
-			NICRef:     netv1.LocalObjectReference{Name: nic.Name},
-			VNI:        nic.Status.VNI,
-			Port:       port,
-			OverlayIPs: append([]string(nil), nic.Spec.IPs...),
-			Firewall:   netv1.CompiledFirewall{},
+			NodeName:      nodeName,
+			NICRef:        netv1.LocalObjectReference{Name: nic.Name},
+			VNI:           vni,
+			Port:          port,
+			UnderlayRoute: nic.Status.UnderlayRoute,
+			OverlayIPs:    append([]string(nil), nic.Spec.IPs...),
+			Firewall:      netv1.CompiledFirewall{},
 		},
 	}
 
@@ -140,6 +143,19 @@ func Compile(nic *netv1.NetworkInterface, policies []netv1.NetworkPolicy, lbs []
 		})
 	}
 
+	// Egress SNAT: record a CompiledNATSource for every overlay IP a NATGateway has allocated a
+	// block to. Iterating over the NIC's IPs (not the map) keeps output order stable, so an
+	// unchanged NIC recompiles to an identical spec (no spurious CompiledNIC write / RV churn).
+	for _, ip := range nic.Spec.IPs {
+		a, ok := natBySource[ip]
+		if !ok {
+			continue
+		}
+		compiled.Spec.NAT = append(compiled.Spec.NAT, netv1.CompiledNATSource{
+			SourceIP: ip, NATIP: a.PublicIP, PortMin: a.PortMin, PortMax: a.PortMax,
+		})
+	}
+
 	return compiled
 }
 
@@ -194,6 +210,22 @@ func (r *CompiledNICReconciler) resolvePeerImports(ctx context.Context) ([]PeerI
 	return out, nil
 }
 
+// natAllocationsBySource indexes every NATGateway allocation in the namespace by its source overlay
+// IP. Compile uses it to stamp a NIC's egress-SNAT sources without the agent ever reading NATGateway.
+func (r *CompiledNICReconciler) natAllocationsBySource(ctx context.Context, namespace string) (map[string]netv1.NATAllocation, error) {
+	var gws netv1.NATGatewayList
+	if err := r.Client.List(ctx, &gws, client.InNamespace(namespace)); err != nil {
+		return nil, err
+	}
+	out := map[string]netv1.NATAllocation{}
+	for gi := range gws.Items {
+		for _, a := range gws.Items[gi].Status.Allocations {
+			out[a.Source] = a
+		}
+	}
+	return out, nil
+}
+
 // Reconcile fetches the NetworkInterface named by req and upserts its CompiledNIC.
 func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var nic netv1.NetworkInterface
@@ -212,7 +244,19 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("resolve peer imports: %w", err)
 	}
-	compiled := Compile(&nic, policies.Items, lbs.Items, peerImports)
+	// Resolve the effective VNI here (status.vni, else the VPC's status.vni) so the CompiledNIC is
+	// self-contained — the agent never has to resolve it from the NIC/VPC.
+	vni := nic.Status.VNI
+	if vni == 0 {
+		vni = r.vpcVNI(ctx, nic.Namespace, nic.Spec.VPCRef.Name)
+	}
+	// Gather every NATGateway allocation keyed by source overlay IP so Compile can stamp this NIC's
+	// egress-SNAT sources. Allocations for other NICs are simply not matched by Compile.
+	natBySource, err := r.natAllocationsBySource(ctx, nic.Namespace)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("gather nat allocations: %w", err)
+	}
+	compiled := Compile(&nic, vni, policies.Items, lbs.Items, peerImports, natBySource)
 	key := types.NamespacedName{Namespace: compiled.Namespace, Name: compiled.Name}
 	var existing netv1.CompiledNIC
 	err = r.Client.Get(ctx, key, &existing)
@@ -250,7 +294,62 @@ func (r *CompiledNICReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&netv1.LoadBalancer{}, handler.EnqueueRequestsFromMapFunc(r.nicsForLB),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&netv1.VPCPeering{}, handler.EnqueueRequestsFromMapFunc(r.nicsForPeering)).
+		// NATGateway allocations and VPC VNIs land in .status (no generation bump), so these watches
+		// use the default predicate (react to status updates) rather than GenerationChangedPredicate.
+		Watches(&netv1.NATGateway{}, handler.EnqueueRequestsFromMapFunc(r.nicsForNAT)).
+		Watches(&netv1.VPC{}, handler.EnqueueRequestsFromMapFunc(r.nicsForVPC)).
 		Complete(r)
+}
+
+// nicsForNAT maps a NATGateway event to reconcile requests for every NetworkInterface in the same
+// namespace that owns one of the gateway's allocation source IPs (so its CompiledNIC.NAT refreshes).
+func (r *CompiledNICReconciler) nicsForNAT(ctx context.Context, obj client.Object) []reconcile.Request {
+	gw, ok := obj.(*netv1.NATGateway)
+	if !ok {
+		return nil
+	}
+	sources := map[string]struct{}{}
+	for _, a := range gw.Status.Allocations {
+		sources[a.Source] = struct{}{}
+	}
+	var nics netv1.NetworkInterfaceList
+	if err := r.Client.List(ctx, &nics, client.InNamespace(gw.Namespace)); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range nics.Items {
+		for _, ip := range nics.Items[i].Spec.IPs {
+			if _, ok := sources[ip]; ok {
+				reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{
+					Namespace: nics.Items[i].Namespace, Name: nics.Items[i].Name,
+				}})
+				break
+			}
+		}
+	}
+	return reqs
+}
+
+// nicsForVPC maps a VPC event to reconcile requests for every NetworkInterface referencing it, so a
+// newly-allocated VPC VNI propagates into the CompiledNIC.VNI of its NICs.
+func (r *CompiledNICReconciler) nicsForVPC(ctx context.Context, obj client.Object) []reconcile.Request {
+	vpc, ok := obj.(*netv1.VPC)
+	if !ok {
+		return nil
+	}
+	var nics netv1.NetworkInterfaceList
+	if err := r.Client.List(ctx, &nics, client.InNamespace(vpc.Namespace)); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range nics.Items {
+		if nics.Items[i].Spec.VPCRef.Name == vpc.Name {
+			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{
+				Namespace: nics.Items[i].Namespace, Name: nics.Items[i].Name,
+			}})
+		}
+	}
+	return reqs
 }
 
 // nicsForPolicy maps a NetworkPolicy event to reconcile requests for every

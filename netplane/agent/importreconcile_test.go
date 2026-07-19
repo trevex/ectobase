@@ -27,17 +27,20 @@ func hasVNI(vs []uint32, v uint32) bool {
 	return false
 }
 
-func TestDesiredEgressVNIs_NATGateway(t *testing.T) {
+func TestDesiredEgressVNIs_NAT(t *testing.T) {
 	s := egScheme(t)
 	node := "nodeA"
-	vpc := &netv1.VPC{ObjectMeta: metav1.ObjectMeta{Name: "blue", Namespace: "default"}, Status: netv1.VPCStatus{VNI: 100}}
-	nic := &netv1.NetworkInterface{
-		ObjectMeta: metav1.ObjectMeta{Name: "web-0", Namespace: "default"},
-		Spec:       netv1.NetworkInterfaceSpec{VPCRef: netv1.LocalObjectReference{Name: "blue"}, NodeName: &node},
-		Status:     netv1.NetworkInterfaceStatus{VNI: 100},
+	// A local NIC with a NAT allocation (CompiledNIC.NAT non-empty) needs egress: the NATGateway
+	// reconciler allocates a block to every source in a gateway's VPC, so this stands in for
+	// "the NIC's VPC has a NATGateway and this node hosts a NIC in it".
+	cnic := &netv1.CompiledNIC{
+		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
+		Spec: netv1.CompiledNICSpec{
+			NodeName: node, NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 100,
+			NAT: []netv1.CompiledNATSource{{SourceIP: "10.0.0.1", NATIP: "203.0.113.1", PortMin: 1024, PortMax: 2048}},
+		},
 	}
-	gw := &netv1.NATGateway{ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "default"}, Spec: netv1.NATGatewaySpec{VPCRef: netv1.LocalObjectReference{Name: "blue"}}}
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(vpc, nic, gw).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
 	r := &Reconciler{client: cl, nodeID: node}
 
 	vnis, err := r.desiredEgressVNIs(context.Background())
@@ -45,7 +48,7 @@ func TestDesiredEgressVNIs_NATGateway(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !hasVNI(vnis, 100) {
-		t.Fatalf("VNI 100 (NATGateway-VPC, hosted here) must need egress, got %v", vnis)
+		t.Fatalf("VNI 100 (NIC has a NAT allocation) must need egress, got %v", vnis)
 	}
 }
 
@@ -73,19 +76,18 @@ func TestDesiredEgressVNIs_LBBackend(t *testing.T) {
 func TestDesiredEgressVNIs_NeitherIsEmpty(t *testing.T) {
 	s := egScheme(t)
 	node := "nodeA"
-	vpc := &netv1.VPC{ObjectMeta: metav1.ObjectMeta{Name: "blue", Namespace: "default"}, Status: netv1.VPCStatus{VNI: 100}}
-	nic := &netv1.NetworkInterface{
-		ObjectMeta: metav1.ObjectMeta{Name: "web-0", Namespace: "default"},
-		Spec:       netv1.NetworkInterfaceSpec{VPCRef: netv1.LocalObjectReference{Name: "blue"}, NodeName: &node},
-		Status:     netv1.NetworkInterfaceStatus{VNI: 100},
+	// A local NIC with neither a NAT allocation nor LB membership needs no egress.
+	cnic := &netv1.CompiledNIC{
+		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
+		Spec:       netv1.CompiledNICSpec{NodeName: node, NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 100},
 	}
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(vpc, nic).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
 	r := &Reconciler{client: cl, nodeID: node}
 	vnis, err := r.desiredEgressVNIs(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(vnis) != 0 {
-		t.Fatalf("no NATGateway + no LB backend => no egress VNIs, got %v", vnis)
+		t.Fatalf("no NAT + no LB backend => no egress VNIs, got %v", vnis)
 	}
 }

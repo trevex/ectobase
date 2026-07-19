@@ -17,28 +17,26 @@ func TestDesiredAnnouncesLocalInterfaces(t *testing.T) {
 	if err := netv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	vpc := &netv1.VPC{}
-	vpc.Name = "blue"
-	vpc.Namespace = "default"
-	vpc.Status.VNI = 100
-
-	local := &netv1.NetworkInterface{}
-	local.Name = "nic-a"
+	// The agent reads CompiledNICs only. A local CompiledNIC (nodeA) is announced; a remote one
+	// (nodeB) is not, and — since this node hosts nothing in the remote's VNI here — it happens to
+	// share VNI 100, so the subscription set is still {public, 100}.
+	local := &netv1.CompiledNIC{}
+	local.Name = "default-nic-a"
 	local.Namespace = "default"
-	local.Spec.VPCRef = netv1.LocalObjectReference{Name: "blue"}
-	local.Spec.NodeName = ptr("nodeA")
-	local.Spec.IPs = []string{"10.0.0.1"}
-	local.Status.VNI = 100
+	local.Spec = netv1.CompiledNICSpec{
+		NodeName: "nodeA", NICRef: netv1.LocalObjectReference{Name: "nic-a"}, VNI: 100,
+		OverlayIPs: []string{"10.0.0.1"},
+	}
 
-	remote := &netv1.NetworkInterface{}
-	remote.Name = "nic-b"
+	remote := &netv1.CompiledNIC{}
+	remote.Name = "default-nic-b"
 	remote.Namespace = "default"
-	remote.Spec.VPCRef = netv1.LocalObjectReference{Name: "blue"}
-	remote.Spec.NodeName = ptr("nodeB") // NOT ours
-	remote.Spec.IPs = []string{"10.0.0.2"}
-	remote.Status.VNI = 100
+	remote.Spec = netv1.CompiledNICSpec{
+		NodeName: "nodeB", NICRef: netv1.LocalObjectReference{Name: "nic-b"}, VNI: 100,
+		OverlayIPs: []string{"10.0.0.2"},
+	}
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(vpc, local, remote).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(local, remote).Build()
 	r := &Reconciler{client: c, nodeID: "nodeA", underlay: "fd00::a"}
 
 	subs, ann, _, _, _, err := r.Desired(context.Background())

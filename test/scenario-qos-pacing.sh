@@ -28,9 +28,9 @@
 #
 # PREREQ: fabric up (hack/clab-up.sh) + netplane stack on k01 built from THIS tree (the QoS code) +
 #   images kind-loaded. Needs root + kubectl + grpcurl image + socat (flake devShell). For [E], a
-#   static iperf3 is fetched via `nix build nixpkgs#pkgsStatic.iperf3` (portable across the host netns
-#   + the kind node); if that's unavailable [E] is skipped with a note.
-#   sudo -E env "PATH=/run/wrappers/bin:$HOME/go/bin:/run/current-system/sw/bin:$PATH" bash test/scenario-qos-pacing.sh
+#   static iperf3 is built via `nix build .#iperf3-static` (portable across the host netns + the
+#   kind node); if that's unavailable [E] is skipped with a note.
+#   sudo -E env "PATH=$PATH" bash test/scenario-qos-pacing.sh
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
 
@@ -55,9 +55,10 @@ xw() { sudo docker exec "$SRC_NODE" crictl ps 2>/dev/null | grep ' flowplane ' |
 IPERF3=""   # resolved host path to a portable (static) iperf3, if available
 stage_iperf3() {
   # A fully-static iperf3 runs unmodified in both the host netns sink AND the debian kind node.
-  # pkgsStatic.iperf3 has multiple outputs (bin + -man); pick the non-man store path.
+  # The `.#iperf3-static` flake output (pinned to this repo's nixpkgs) has multiple outputs
+  # (bin + -man); pick the non-man store path.
   local base
-  base=$(nix build --no-link --print-out-paths nixpkgs#pkgsStatic.iperf3 2>/dev/null | grep '/nix/store' | grep -v -- '-man' | head -1)
+  base=$(nix build --no-link --print-out-paths .#iperf3-static 2>/dev/null | grep '/nix/store' | grep -v -- '-man' | head -1)
   IPERF3="$base/bin/iperf3"
   [ -n "$base" ] && [ -x "$IPERF3" ] || { IPERF3=""; return 1; }
   sudo docker cp "$IPERF3" "$SRC_NODE":/iperf3 >/dev/null 2>&1 || return 1
@@ -201,7 +202,7 @@ if stage_iperf3; then
   sink_down
   echo "  [E] informational — assert on real hardware (clab veth EDT pacing is not yet proven)."
 else
-  echo "  iperf3 unavailable (nix build nixpkgs#pkgsStatic.iperf3 failed) — [E] skipped."
+  echo "  iperf3 unavailable (nix build .#iperf3-static failed) — [E] skipped."
   echo "  Datapath egress itself is proven by [D]. Precise pacing rate is a real-hardware measurement."
 fi
 

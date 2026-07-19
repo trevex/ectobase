@@ -9,7 +9,6 @@ import (
 
 	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -67,64 +66,52 @@ func NewReconciler(kubeconfig, nodeID string, deps Deps) (*Reconciler, error) {
 	}, nil
 }
 
-// Desired returns the VNIs to subscribe to, the local routes to announce, the
-// local egress-NAT blocks to announce, the egress VNIs, and the peering-import
-// map for this node, snapshotting the current NetworkInterface set. As a side
-// effect it programs local egress SNAT sources on the dataplane (idempotent:
+// Desired returns the VNIs to subscribe to, the local routes to announce, the local egress-NAT
+// blocks to announce, the egress VNIs, and the peering-import map for this node — derived SOLELY
+// from the CompiledNICs scheduled to this node (the agent reads no raw NetworkInterface, VPC, or
+// NATGateway). As a side effect it programs local egress SNAT sources on the dataplane (idempotent:
 // AddNatSource delete-then-adds).
 func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Route, announceNat []NatBlock, egressVNIs []uint32, peeringImports map[uint32][]PeerImport, err error) {
-	var nics netv1.NetworkInterfaceList
-	if err := r.client.List(ctx, &nics); err != nil {
-		return nil, nil, nil, nil, nil, fmt.Errorf("list networkinterfaces: %w", err)
+	var cnics netv1.CompiledNICList
+	if err := r.client.List(ctx, &cnics); err != nil {
+		return nil, nil, nil, nil, nil, fmt.Errorf("list compilednics: %w", err)
 	}
 	vniSet := map[uint32]struct{}{PublicVNI: {}} // always subscribe to the public VNI to learn defaults
-	for i := range nics.Items {
-		nic := &nics.Items[i]
-		vni, err := r.vniFor(ctx, nic)
-		if err != nil {
-			return nil, nil, nil, nil, nil, err
+	for i := range cnics.Items {
+		c := &cnics.Items[i]
+		if c.Spec.NodeName != r.nodeID || c.Spec.VNI == 0 {
+			continue // only program/announce NICs scheduled to THIS node with an allocated VNI
 		}
-		if vni == 0 {
-			continue // VPC not yet allocated a VNI; skip until it is
-		}
-		vniSet[vni] = struct{}{} // subscribe to every VNI we host, local or not
-		if nic.Spec.NodeName == nil || *nic.Spec.NodeName != r.nodeID {
-			continue // only announce interfaces scheduled to THIS node
-		}
-		// The route's nexthop is the ENDPOINT's own underlay /128 (the identity the
-		// attach path allocated and recorded in status.underlayRoute), NOT the node
-		// address: remote nodes encap to that /128 and the local node's UNDERLAY map
-		// resolves it to the endpoint's tap. Fall back to the node underlay only when
-		// the endpoint hasn't been attached yet (status.underlayRoute empty).
-		nexthop := nic.Status.UnderlayRoute
+		vni := uint32(c.Spec.VNI)
+		vniSet[vni] = struct{}{}
+		// The route nexthop / NAT-block owner is the NIC's own underlay /128 (remote nodes encap to
+		// it; the local UNDERLAY map resolves it to the tap). Fall back to the node underlay only
+		// when the NIC hasn't been attached yet (CompiledNIC.UnderlayRoute empty).
+		nexthop := c.Spec.UnderlayRoute
 		if nexthop == "" {
 			nexthop = r.underlay
 		}
-		for _, ip := range nic.Spec.IPs {
+		for _, ip := range c.Spec.OverlayIPs {
 			prefix, err := hostPrefix(ip)
 			if err != nil {
-				return nil, nil, nil, nil, nil, fmt.Errorf("nic %s/%s ip %q: %w", nic.Namespace, nic.Name, ip, err)
+				return nil, nil, nil, nil, nil, fmt.Errorf("compilednic %s/%s ip %q: %w", c.Namespace, c.Name, ip, err)
 			}
 			// Endpoint host routes are internal; egress-NAT default routes (external=true)
 			// are distributed separately by a controller.
 			announce = append(announce, Route{Vni: vni, Prefix: prefix, Nexthop: nexthop, External: false})
 		}
-	}
-
-	// Egress NAT: program the LOCAL SNAT sources for allocations whose source is a
-	// NIC on this node, and return the matching blocks for the caller to announce on
-	// the routebus (so peers learn the neighbor-nat return route to us).
-	srcs, blocks, err := DesiredNat(ctx, r.client, r.nodeID, r.underlay)
-	if err != nil {
-		return nil, nil, nil, nil, nil, err
-	}
-	for _, s := range srcs {
-		if r.dp == nil {
-			continue // no dataplane wired; skip programming (e.g. unit tests that only inspect returned blocks)
-		}
-		if err := r.dp.AddNatSource(ctx, s.Vni, s.SourceIP, s.NatIP, s.PortMin, s.PortMax); err != nil {
-			log.Printf("AddNatSource %s->%s vni=%d: %v", s.SourceIP, s.NatIP, s.Vni, err)
-			continue
+		// Egress SNAT: program each local source and announce its NAT block (owner = the NIC's
+		// underlay) so peers learn the neighbor-nat return route to us.
+		for _, src := range c.Spec.NAT {
+			if r.dp != nil {
+				if err := r.dp.AddNatSource(ctx, vni, src.SourceIP, src.NATIP, uint32(src.PortMin), uint32(src.PortMax)); err != nil {
+					log.Printf("AddNatSource %s->%s vni=%d: %v", src.SourceIP, src.NATIP, vni, err)
+				}
+			}
+			announceNat = append(announceNat, NatBlock{
+				Vni: vni, SourceIP: src.SourceIP, NatIP: src.NATIP,
+				PortMin: uint32(src.PortMin), PortMax: uint32(src.PortMax), OwnerUnderlay: nexthop,
+			})
 		}
 	}
 
@@ -182,20 +169,7 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 	}
 	sort.Slice(subs, func(i, j int) bool { return subs[i] < subs[j] })
 
-	return subs, announce, blocks, egressVNIs, peeringImports, nil
-}
-
-// vniFor resolves an interface's VNI: prefer status.vni, else the referenced VPC's status.vni.
-func (r *Reconciler) vniFor(ctx context.Context, nic *netv1.NetworkInterface) (uint32, error) {
-	if nic.Status.VNI != 0 {
-		return uint32(nic.Status.VNI), nil
-	}
-	var vpc netv1.VPC
-	key := types.NamespacedName{Namespace: nic.Namespace, Name: nic.Spec.VPCRef.Name}
-	if err := r.client.Get(ctx, key, &vpc); err != nil {
-		return 0, fmt.Errorf("get vpc %s: %w", key, err)
-	}
-	return uint32(vpc.Status.VNI), nil
+	return subs, announce, announceNat, egressVNIs, peeringImports, nil
 }
 
 // hostPrefix turns an overlay IP into its host CIDR ("/32" for v4, "/128" for v6).

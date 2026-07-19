@@ -9,7 +9,7 @@
 #
 # PREREQ: the fabric is up (hack/clab-up.sh) with the netplane stack loaded on k01 and the edge
 # flowplane sidecars running. Needs root (docker/netns) + kubectl + the fullstorydev/grpcurl image.
-#   sudo -E env "PATH=$HOME/go/bin:/run/current-system/sw/bin:$PATH" bash test/egress-fabric-e2e.sh
+#   sudo -E env "PATH=$PATH" bash test/egress-fabric-e2e.sh
 #
 # INTERIM: the EDGE side (NEIGHBOR_NAT + external default) is programmed via grpcurl here because
 # the edge agents can't yet broker to k01 (the anycast edge source has no unique control-plane
@@ -23,7 +23,7 @@ EDGE_UL="fd00:db8:0:9::e"; TARGET="1.1.1.1"
 E1=clab-xdp-ipv6-fabric-edge1; E2=clab-xdp-ipv6-fabric-edge2
 EX1=clab-xdp-ipv6-fabric-edge1-xdp   # the edge flowplane sidecar (clab-managed, shares E1's netns)
 K1=$(mktemp)   # fresh, root-owned (this script runs under sudo)
-PROTO=/home/nik/Development/ironcore-net-xdp/api/proto
+PROTO="$ROOT/api/proto"
 fail() { echo "FAIL: $*"; exit 1; }
 kc() { kubectl --kubeconfig "$K1" "$@"; }
 # grpc <node-container> <json> <Method>
@@ -31,7 +31,7 @@ grpc() { sudo docker run --rm --network "container:$1" -v "$PROTO":/proto:ro ful
   -plaintext -import-path /proto/dataplane/v1 -proto dataplane.proto -d "$2" 127.0.0.1:1337 "dataplane.v1.DataplaneNode/$3" 2>&1; }
 
 echo "== [0] kubeconfig + stack up =="
-sudo -E env "PATH=$HOME/go/bin:/run/current-system/sw/bin:$PATH" kind get kubeconfig --name k01 > "$K1" 2>/dev/null
+sudo -E env "PATH=$PATH" kind get kubeconfig --name k01 > "$K1" 2>/dev/null
 kc -n ectobase-system get ds flowplane >/dev/null 2>&1 || fail "netplane stack not deployed on k01 (apply config/crd + config/deploy)"
 
 echo "== [1] VPC + NATGateway + source NIC (CRDs) =="

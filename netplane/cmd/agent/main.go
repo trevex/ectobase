@@ -7,6 +7,8 @@ import (
 	"context"
 	"flag"
 	"log"
+	"os/signal"
+	"syscall"
 	"time"
 
 	dpv1 "github.com/trevex/ectobase/cni/gen/dataplanev1"
@@ -57,7 +59,9 @@ func main() {
 	defer rbConn.Close()
 	rb := rbv1.NewRouteBusClient(rbConn)
 
-	ctx := context.Background()
+	// SIGTERM/SIGINT cancel ctx so the bus session drains and Run returns; the loop below then exits.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 	r, err := agent.NewReconciler(*kubeconfig, *nodeID, agent.Deps{
 		Underlay:     *underlay,
 		Dataplane:    dp,
@@ -96,10 +100,15 @@ func main() {
 	// prune-on-EndOfRIB can remove routes that left the RIB while we were disconnected. On disconnect,
 	// retry (the reflector fast-withdrew our announcements; the next Run re-announces from scratch).
 	bus := agent.NewBus(*nodeID, *underlay, dp, *edgeLoopback != "")
-	for {
+	for ctx.Err() == nil {
 		if err := bus.Run(ctx, rb, reconcile); err != nil {
 			log.Printf("bus session ended: %v; reconnecting", err)
 		}
-		time.Sleep(time.Second)
+		// Back off before reconnecting, but wake immediately on shutdown.
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Second):
+		}
 	}
+	log.Print("shutdown signal received; agent exiting")
 }

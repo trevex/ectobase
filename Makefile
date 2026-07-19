@@ -23,6 +23,21 @@ build: ## Build the flowplane binary (host crates + the eBPF object via aya-buil
 release: ## Build the flowplane binary in release mode
 	cargo build -p flowplane --release
 
+.PHONY: docs
+docs: ## Build the mdbook documentation into docs/book
+	mdbook-mermaid install docs
+	mdbook build docs
+
+.PHONY: docs-serve
+docs-serve: ## Serve the mdbook docs locally with live reload
+	mdbook-mermaid install docs
+	mdbook serve docs
+
+.PHONY: generate
+generate: ## Regenerate deepcopy (zz_generated) + CRD manifests from api/v1alpha1 (controller-gen)
+	cd api && controller-gen object paths=./v1alpha1/...
+	cd api && controller-gen crd paths=./v1alpha1/... output:crd:artifacts:config=../config/crd/bases
+
 .PHONY: proto-go
 proto-go: ## Generate Go gRPC stubs for dataplane.v1 into cni/gen/dataplanev1
 	protoc -I api/proto/dataplane/v1 \

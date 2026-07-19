@@ -371,7 +371,8 @@ pub struct FwMeta {
 pub const DHCP_MAX_DNS: usize = 8;
 
 /// Tail-call indices into the `GUEST_PROGS_TC` program array (egress datapath split).
-/// `GUEST_PROG_DHCP` is used in Phase 1; IPV4/IPV6 are reserved for the Phase 2 split.
+/// `GUEST_PROG_DHCP` is currently the only dispatched program; IPV4/IPV6 are reserved for a future
+/// split of the egress datapath by L3 protocol.
 pub const GUEST_PROG_DHCP: u32 = 0;
 pub const GUEST_PROG_IPV4: u32 = 1;
 pub const GUEST_PROG_IPV6: u32 = 2;

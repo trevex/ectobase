@@ -62,7 +62,7 @@ func TestCompile_ProducesCompiledNIC(t *testing.T) {
 	nic := testNIC()
 	pol := testPolicy()
 
-	c := Compile(nic, []netv1.NetworkPolicy{pol}, nil, nil)
+	c := Compile(nic, nic.Status.VNI, []netv1.NetworkPolicy{pol}, nil, nil, nil)
 
 	if c.Spec.VNI != 100 {
 		t.Fatalf("VNI = %d, want 100", c.Spec.VNI)
@@ -96,7 +96,7 @@ func TestCompile_SelectorMismatch(t *testing.T) {
 	nic.Labels = map[string]string{"role": "backend"}
 	pol := testPolicy() // selects {role: frontend}
 
-	c := Compile(nic, []netv1.NetworkPolicy{pol}, nil, nil)
+	c := Compile(nic, nic.Status.VNI, []netv1.NetworkPolicy{pol}, nil, nil, nil)
 
 	// No policy selects this NIC, so it is unpolicied → gets the k8s default-allow-all rule.
 	if len(c.Spec.Firewall.Ingress) != 1 || c.Spec.Firewall.Ingress[0].CIDR != "0.0.0.0/0" || c.Spec.Firewall.Ingress[0].Action != "Allow" {
@@ -108,8 +108,8 @@ func TestCompile_SelectorMismatch(t *testing.T) {
 }
 
 func TestCompile_UnpoliciedGetsAllowAll(t *testing.T) {
-	nic := testNIC()                 // has labels that testPolicy() selects
-	c := Compile(nic, nil, nil, nil) // no policies
+	nic := testNIC()                                      // has labels that testPolicy() selects
+	c := Compile(nic, nic.Status.VNI, nil, nil, nil, nil) // no policies
 	if len(c.Spec.Firewall.Ingress) != 1 || c.Spec.Firewall.Ingress[0].Action != "Allow" ||
 		c.Spec.Firewall.Ingress[0].CIDR != "0.0.0.0/0" || c.Spec.Firewall.Ingress[0].Port != 0 {
 		t.Fatalf("expected one allow-all ingress rule, got %+v", c.Spec.Firewall.Ingress)
@@ -118,7 +118,7 @@ func TestCompile_UnpoliciedGetsAllowAll(t *testing.T) {
 		t.Fatalf("expected one allow-all egress rule, got %+v", c.Spec.Firewall.Egress)
 	}
 	// A policied NIC keeps ONLY its policy rules — no allow-all appended.
-	c2 := Compile(nic, []netv1.NetworkPolicy{testPolicy()}, nil, nil)
+	c2 := Compile(nic, nic.Status.VNI, []netv1.NetworkPolicy{testPolicy()}, nil, nil, nil)
 	for _, r := range c2.Spec.Firewall.Ingress {
 		if r.CIDR == "0.0.0.0/0" && r.Port == 0 && r.Proto == "" {
 			t.Fatalf("policied NIC must not get allow-all: %+v", c2.Spec.Firewall.Ingress)
@@ -130,7 +130,7 @@ func TestCompile_WritesFixture(t *testing.T) {
 	nic := testNIC()
 	pol := testPolicy()
 
-	c := Compile(nic, []netv1.NetworkPolicy{pol}, nil, nil)
+	c := Compile(nic, nic.Status.VNI, []netv1.NetworkPolicy{pol}, nil, nil, nil)
 
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
@@ -179,7 +179,7 @@ func TestCompile_LBSelectorMatch(t *testing.T) {
 			TargetSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
 		},
 	}
-	c := Compile(nic, nil, []netv1.LoadBalancer{lb}, nil)
+	c := Compile(nic, nic.Status.VNI, nil, []netv1.LoadBalancer{lb}, nil, nil)
 	if len(c.Spec.LB) != 1 {
 		t.Fatalf("want 1 CompiledLB, got %d", len(c.Spec.LB))
 	}
@@ -201,7 +201,7 @@ func TestCompile_LBRefMatch(t *testing.T) {
 			TargetRefs: []netv1.LocalObjectReference{{Name: "db-0"}},
 		},
 	}
-	c := Compile(nic, nil, []netv1.LoadBalancer{lb}, nil)
+	c := Compile(nic, nic.Status.VNI, nil, []netv1.LoadBalancer{lb}, nil, nil)
 	if len(c.Spec.LB) != 1 || c.Spec.LB[0].VIP != "2001:db8::1" {
 		t.Fatalf("ref match failed: %+v", c.Spec.LB)
 	}
@@ -216,7 +216,7 @@ func TestCompile_LBNoMatch(t *testing.T) {
 			TargetSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
 		},
 	}
-	c := Compile(nic, nil, []netv1.LoadBalancer{lb}, nil)
+	c := Compile(nic, nic.Status.VNI, nil, []netv1.LoadBalancer{lb}, nil, nil)
 	if len(c.Spec.LB) != 0 {
 		t.Fatalf("want 0 CompiledLB for non-matching NIC, got %d", len(c.Spec.LB))
 	}
@@ -228,7 +228,7 @@ func TestCompile_PeerImports(t *testing.T) {
 		{VPCName: nic.Spec.VPCRef.Name, PeerVNI: 200, ImportPrefixes: []string{"10.1.0.0/24"}},
 		{VPCName: "some-other-vpc", PeerVNI: 300, ImportPrefixes: []string{"10.9.0.0/24"}}, // different VPC — must be ignored
 	}
-	c := Compile(nic, nil, nil, peerings)
+	c := Compile(nic, nic.Status.VNI, nil, nil, peerings, nil)
 	if len(c.Spec.PeerImports) != 1 {
 		t.Fatalf("PeerImports = %d, want 1", len(c.Spec.PeerImports))
 	}
@@ -236,6 +236,27 @@ func TestCompile_PeerImports(t *testing.T) {
 		len(c.Spec.PeerImports[0].ImportPrefixes) != 1 ||
 		c.Spec.PeerImports[0].ImportPrefixes[0] != "10.1.0.0/24" {
 		t.Fatalf("unexpected PeerImports: %+v", c.Spec.PeerImports)
+	}
+}
+
+func TestCompile_NATFromAllocationsAndUnderlay(t *testing.T) {
+	nic := testNIC() // IP 10.0.0.10, VNI 100, status.underlayRoute 2001:db8:fefe::bb
+	natBySource := map[string]netv1.NATAllocation{
+		"10.0.0.10": {Source: "10.0.0.10", PublicIP: "203.0.113.7", PortMin: 1024, PortMax: 2047},
+		"10.9.9.9":  {Source: "10.9.9.9", PublicIP: "203.0.113.8", PortMin: 0, PortMax: 1023}, // other NIC — ignored
+	}
+	c := Compile(nic, nic.Status.VNI, nil, nil, nil, natBySource)
+
+	if len(c.Spec.NAT) != 1 {
+		t.Fatalf("want 1 CompiledNATSource (only the NIC's own IP), got %d: %+v", len(c.Spec.NAT), c.Spec.NAT)
+	}
+	src := c.Spec.NAT[0]
+	if src.SourceIP != "10.0.0.10" || src.NATIP != "203.0.113.7" || src.PortMin != 1024 || src.PortMax != 2047 {
+		t.Fatalf("bad CompiledNATSource: %+v", src)
+	}
+	// underlayRoute is copied from the source NIC's status so the CompiledNIC is self-contained.
+	if c.Spec.UnderlayRoute != "2001:db8:fefe::bb" {
+		t.Fatalf("UnderlayRoute = %q, want 2001:db8:fefe::bb", c.Spec.UnderlayRoute)
 	}
 }
 

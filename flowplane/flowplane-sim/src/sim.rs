@@ -7,8 +7,8 @@
 //!
 //! Scope: this harness models the LB-select + firewall + conntrack-create + decap/reforward tail.
 //! The `try_uplink_rx` branches gated on `lb_ul.is_none()` — NAT64 reply, neighbor-NAT reforward,
-//! ICMP-echo reply, and inner `dnat_ingress` — are NOT modeled (out of scope; separate follow-on
-//! slices per the spec). For LB packets those branches are skipped anyway.
+//! ICMP-echo reply, and inner `dnat_ingress` — are NOT modeled (out of scope for this LB-path
+//! harness). For LB packets those branches are skipped anyway.
 
 use flowplane_common::{
     Local, PortMeta, UnderlayValue, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS,
@@ -276,7 +276,7 @@ impl SimNode {
     ///      In the Encap arm ONLY, after `grow_head(IPV6_LEN)`/`write_outer_v6`, EDT egress shaping
     ///      (`edt_egress`, records `self.last_tstamp`, no drop, step 6b) is called using the
     ///      POST-encap `pkt.len()` — mirrors `tc.rs` `edt_stamp` after `adjust_room`. Local/Pass
-    ///      leave `last_tstamp` unchanged (same-node delivery is unshaped per spec).
+    ///      leave `last_tstamp` unchanged (EDT shaping applies only on the encap/uplink egress path).
     ///
     /// Returns the delivery `Action` + the resulting frame bytes (encapped on the Encap path).
     ///

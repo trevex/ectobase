@@ -45,7 +45,7 @@ pub struct AttachState {
     /// software veth (clab/kind) that advertises HW_CSUM but never finalizes CHECKSUM_PARTIAL, so
     /// the encapped inner L4 checksum would reach the wire partial/wrong. A real NIC finalizes the
     /// inner checksum in hardware after our encap, so we leave offload on there (avoids the guest-CPU
-    /// checksum tax). See docs/superpowers/specs/2026-07-16-guest-egress-inner-checksum-design.md.
+    /// checksum tax). See `uplink_finalizes_checksum` below for how this is decided.
     pub disable_guest_csum_offload: bool,
 }
 

@@ -8,8 +8,8 @@ import (
 	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 )
 
-// lbBacking is one (VIP, backend NIC) pairing this node hosts: the join of a CompiledNIC.LB entry
-// with the NIC's own node-local underlay /128 (from NetworkInterface.Status.UnderlayRoute).
+// lbBacking is one (VIP, backend NIC) pairing this node hosts: a CompiledNIC.LB entry together with
+// the NIC's own node-local underlay /128 (CompiledNIC.UnderlayRoute).
 type lbBacking struct {
 	VIP         string   // v4 or v6
 	Vni         uint32   // the backend NIC's VPC VNI (for the E/W anycast route)
@@ -17,22 +17,13 @@ type lbBacking struct {
 	Ports       []LbPort // service tuples (proto as IP protocol number)
 }
 
-// desiredLB lists the CompiledNICs scheduled to this node and joins each CompiledNIC.LB entry with
-// its NIC's node-local underlay /128 (from NetworkInterface.Status). A NIC without an allocated
-// underlay yet is skipped (nothing to announce until it is attached).
+// desiredLB lists the CompiledNICs scheduled to this node and, for each CompiledNIC.LB entry, emits
+// an lbBacking keyed on the NIC's underlay /128 (CompiledNIC.UnderlayRoute). A NIC without an
+// allocated underlay yet is skipped (nothing to announce until it is attached).
 func (r *Reconciler) desiredLB(ctx context.Context) ([]lbBacking, error) {
 	var cnics netv1.CompiledNICList
 	if err := r.client.List(ctx, &cnics); err != nil {
 		return nil, fmt.Errorf("list compilednics: %w", err)
-	}
-	var nics netv1.NetworkInterfaceList
-	if err := r.client.List(ctx, &nics); err != nil {
-		return nil, fmt.Errorf("list networkinterfaces: %w", err)
-	}
-	underlayByNIC := map[string]string{} // namespace/name -> underlay /128
-	for i := range nics.Items {
-		n := &nics.Items[i]
-		underlayByNIC[n.Namespace+"/"+n.Name] = n.Status.UnderlayRoute
 	}
 
 	var out []lbBacking
@@ -41,7 +32,7 @@ func (r *Reconciler) desiredLB(ctx context.Context) ([]lbBacking, error) {
 		if c.Spec.NodeName != r.nodeID || len(c.Spec.LB) == 0 {
 			continue
 		}
-		ul := underlayByNIC[c.Namespace+"/"+c.Spec.NICRef.Name]
+		ul := c.Spec.UnderlayRoute
 		if ul == "" {
 			continue // NIC not attached yet
 		}

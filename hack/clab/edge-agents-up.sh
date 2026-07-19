@@ -7,7 +7,7 @@
 # Prereq: the fabric is up with the netplane stack on k01, and each edge has a UNIQUE control-plane
 # loopback (fd00:db8:0:9::{1,2}) distinct from the anycast datapath /128 (fd00:db8:0:9::e) — see
 # hack/clab/vyos/edge{1,2}.boot — so replies from k01 return to the specific edge (not ECMP'd).
-#   sudo -E env "PATH=$HOME/go/bin:/run/current-system/sw/bin:$PATH" bash hack/clab/edge-agents-up.sh
+#   sudo -E env "PATH=$PATH" bash hack/clab/edge-agents-up.sh
 set -euo pipefail
 
 EDGE_UL="fd00:db8:0:9::e"          # anycast datapath underlay = the edge's identity for the records

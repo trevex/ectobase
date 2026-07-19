@@ -80,7 +80,7 @@ type Bus struct {
 	mu sync.Mutex
 	// learnedEdge maps an edge's anycast datapath /128 (address only) to its
 	// UNIQUE control-plane loopback, learned from EDGE_UNDERLAY PublicPrefix
-	// records. A later task reads it to pin the WAN return path to a specific edge.
+	// records. It is read to pin the WAN return path to the specific owning edge.
 	learnedEdge map[string]string
 
 	egressVNIs    []uint32          // local VNIs that import the public default(s); set each reconcile

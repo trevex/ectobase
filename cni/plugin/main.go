@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/containernetworking/cni/pkg/skel"
 	"github.com/containernetworking/cni/pkg/types"
@@ -76,7 +77,10 @@ func cmdAdd(args *skel.CmdArgs) error {
 		return fmt.Errorf("missing pod identity in CNI_ARGS (K8S_POD_NAMESPACE/K8S_POD_NAME)")
 	}
 
-	ctx := context.Background()
+	// Bound the whole ADD flow (two apiserver reads + the AttachInterface gRPC): a hung apiserver or
+	// unreachable dataplane must not stall pod sandbox creation indefinitely.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
 	// Read the pod to find which NetworkInterface CR it is bound to.
 	niNS, niName, err := resolvePodInterfaceRef(ctx, conf.Kubeconfig, pod.Namespace, pod.Name)
@@ -139,14 +143,16 @@ func cmdDel(args *skel.CmdArgs) error {
 	}
 	defer closeConn()
 
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	interfaceID := pod.UID + "/" + args.IfName
 	// Best-effort: ignore not-found / errors so DEL is idempotent.
-	_ = detach(context.Background(), dp, interfaceID)
+	_ = detach(ctx, dp, interfaceID)
 	return nil
 }
 
 func cmdCheck(args *skel.CmdArgs) error {
-	// CHECK is optional; treat as a no-op success for now.
+	// CHECK is optional; this plugin holds no per-interface state to validate, so it is a no-op success.
 	return nil
 }
 

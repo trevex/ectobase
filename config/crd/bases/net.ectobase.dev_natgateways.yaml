@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.20.1
   name: natgateways.net.ectobase.dev
 spec:
   group: net.ectobase.dev
@@ -45,9 +45,10 @@ spec:
             properties:
               edgeUnderlay:
                 description: |-
-                  EdgeUnderlay is the WAN-edge sidecar's underlay /128. The edge agent announces the external
-                  default route (0.0.0.0/0, and 64:ff9b::/96 for NAT64) toward this underlay so source
-                  hypervisors egress-SNAT + encap to the edge.
+                  EdgeUnderlay is DEPRECATED and IGNORED. The edge fleet self-advertises via
+                  EDGE_UNDERLAY: egress (0.0.0.0/0 and 64:ff9b::/96 for NAT64) is originated by
+                  any agent started with --edge-loopback, nexthop'd at that edge's own anycast
+                  underlay. Retained only to avoid a CRD breaking change; set nothing here.
                 type: string
               portsPerSource:
                 description: |-

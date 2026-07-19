@@ -334,7 +334,7 @@ fn edt_total_lane_shapes_not_drops() {
     );
     assert_eq!(
         node.last_tstamp, None,
-        "local delivery must NOT stamp EDT (same-node is unshaped per spec)"
+        "local delivery must NOT stamp EDT (same-node delivery is never shaped)"
     );
 }
 

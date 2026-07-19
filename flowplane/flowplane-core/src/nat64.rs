@@ -369,7 +369,7 @@ pub fn nat64_egress_parse<P: Pkt, M: Maps>(
     let l4 = ip6_off + IPV6_LEN;
     let (l4_proto_v4, sport, dport, old_l4_cksum_be): (u8, u16, u16, u16) = match nh {
         IPPROTO_ICMPV6 => {
-            // Only ICMPv6 echo request for now.
+            // Only ICMPv6 echo request is translated; other ICMPv6 types are not NAT64'd.
             if pkt.read_u8(l4)? != ICMPV6_ECHO_REQUEST {
                 return None;
             }

@@ -43,8 +43,7 @@ impl Interfaces {
 
     /// Snapshot every (key, value) — used at restart to rebuild in-memory bookkeeping from the
     /// surviving pinned map. Mirrors `Conntrack::entries`. (Wired in by Task 5's restart path.)
-    #[allow(dead_code)]
-    pub fn entries(&self) -> Vec<(IfaceKey, IfaceValue)> {
+    pub(crate) fn entries(&self) -> Vec<(IfaceKey, IfaceValue)> {
         self.map.iter().filter_map(|r| r.ok()).collect()
     }
 }
@@ -454,8 +453,7 @@ impl Underlay {
     /// Every underlay /128 currently programmed — used at restart to rebuild `UnderlayIpam`'s
     /// used-set (via `mark_used`) so a recovered live allocation is never reissued. (Wired in by
     /// Task 5's restart path.)
-    #[allow(dead_code)]
-    pub fn keys(&self) -> Vec<[u8; 16]> {
+    pub(crate) fn keys(&self) -> Vec<[u8; 16]> {
         self.map.keys().filter_map(|r| r.ok()).collect()
     }
 }
@@ -576,13 +574,6 @@ impl DhcpMetaMap {
                 .context("DHCP_META map missing")?,
         )?;
         Ok(Self { map })
-    }
-
-    #[allow(dead_code)] // sole caller was Control::set_dhcp_meta (was DPDKironcore-only)
-    pub fn upsert(&mut self, ifindex: u32, meta: DhcpMeta) -> anyhow::Result<()> {
-        self.map
-            .insert(ifindex, meta, 0)
-            .context("insert dhcp_meta")
     }
 
     pub fn remove(&mut self, ifindex: u32) -> anyhow::Result<()> {

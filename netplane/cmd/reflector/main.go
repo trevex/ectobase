@@ -3,16 +3,19 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"net"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/trevex/ectobase/netplane/gen/routebusv1"
 	"github.com/trevex/ectobase/netplane/reflector"
 	"github.com/trevex/ectobase/netplane/routebus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
-	"time"
 )
 
 func main() {
@@ -42,6 +45,17 @@ func main() {
 	}
 	srv := grpc.NewServer(opts...)
 	routebusv1.RegisterRouteBusServer(srv, reflector.NewServer(reflector.NewRIB()))
+
+	// On SIGTERM/SIGINT, GracefulStop drains in-flight sessions (agents see clean stream closes and
+	// fast-withdraw) instead of a hard kill.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		log.Print("shutdown signal received; draining reflector")
+		srv.GracefulStop()
+	}()
+
 	log.Printf("reflector listening on %s", *addr)
 	if err := srv.Serve(lis); err != nil {
 		log.Fatalf("serve: %v", err)

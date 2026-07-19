@@ -16,8 +16,8 @@
 # scenario-qos-pacing.sh for that lane).
 #
 # PREREQ: fabric up + netplane stack on k01 (images from THIS tree) + a static iperf3
-#   (nix build nixpkgs#pkgsStatic.iperf3). Needs root + kubectl + grpcurl image.
-#   sudo -E env "PATH=/run/wrappers/bin:$HOME/go/bin:/run/current-system/sw/bin:$PATH" bash test/scenario-qos-guest2guest.sh
+#   (nix build .#iperf3-static). Needs root + kubectl + grpcurl image.
+#   sudo -E env "PATH=$PATH" bash test/scenario-qos-guest2guest.sh
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
 
@@ -76,7 +76,7 @@ in_band() { awk "BEGIN{exit !($1>=$2*0.5 && $1<=$2*1.6)}"; }  # measured within 
 echo "== [0] kubeconfig + stack + iperf3 =="
 sudo -E env "PATH=$PATH" kind get kubeconfig --name k01 > "$K1" 2>/dev/null
 kc -n ectobase-system get ds flowplane >/dev/null 2>&1 || { echo "FAIL: stack not on k01"; exit 1; }
-IPERF3=$(cat /tmp/iperf3_bin.txt 2>/dev/null); [ -x "$IPERF3" ] || IPERF3=$(nix build --no-link --print-out-paths nixpkgs#pkgsStatic.iperf3 2>/dev/null | grep '/nix/store' | grep -v -- '-man' | head -1)/bin/iperf3
+IPERF3=$(cat /tmp/iperf3_bin.txt 2>/dev/null); [ -x "$IPERF3" ] || IPERF3=$(nix build --no-link --print-out-paths .#iperf3-static 2>/dev/null | grep '/nix/store' | grep -v -- '-man' | head -1)/bin/iperf3
 [ -x "$IPERF3" ] || { echo "FAIL: no static iperf3"; exit 1; }
 sudo docker cp "$IPERF3" "$NODE_A":/iperf3 >/dev/null 2>&1
 sudo docker cp "$IPERF3" "$NODE_B":/iperf3 >/dev/null 2>&1

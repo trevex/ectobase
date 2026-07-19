@@ -43,7 +43,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== build release binary =="
-nix develop --command cargo build --release -p flowplane
+cargo build --release -p flowplane
 BIN="$ROOT/target/release/flowplane"
 [[ -x "$BIN" ]] || { echo "FAIL: $BIN missing after build"; exit 1; }
 

@@ -73,7 +73,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== build flowplane =="
-nix develop --command cargo build -p flowplane || fail "cargo build failed"
+cargo build -p flowplane || fail "cargo build failed"
 BIN="$ROOT/target/debug/flowplane"
 [[ -x "$BIN" ]] || fail "$BIN missing after build"
 

@@ -15,28 +15,22 @@ func TestReconcileProgramsLocalNatSourceAndStagesAnnounce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	vpc := &netv1.VPC{}
-	vpc.Name = "blue"
-	vpc.Namespace = "default"
-	vpc.Status.VNI = 100
-
-	local := &netv1.NetworkInterface{}
-	local.Name = "nic-a"
-	local.Namespace = "default"
-	local.Spec.VPCRef = netv1.LocalObjectReference{Name: "blue"}
-	local.Spec.NodeName = ptr("nodeA")
-	local.Spec.IPs = []string{"10.0.0.1"}
-	local.Status.VNI = 100
-
-	gw := &netv1.NATGateway{}
-	gw.Name = "gw"
-	gw.Namespace = "default"
-	gw.Spec.VPCRef = netv1.LocalObjectReference{Name: "blue"}
-	gw.Status.Allocations = []netv1.NATAllocation{
-		{Source: "10.0.0.1", PublicIP: "203.0.113.1", PortMin: 1024, PortMax: 2048},
+	// The agent reads CompiledNICs only. A local CompiledNIC on nodeA with a NAT source is programmed
+	// and announced; its underlay is empty so the block owner falls back to the node underlay.
+	cnic := &netv1.CompiledNIC{}
+	cnic.Name = "default-nic-a"
+	cnic.Namespace = "default"
+	cnic.Spec = netv1.CompiledNICSpec{
+		NodeName:   "nodeA",
+		NICRef:     netv1.LocalObjectReference{Name: "nic-a"},
+		VNI:        100,
+		OverlayIPs: []string{"10.0.0.1"},
+		NAT: []netv1.CompiledNATSource{
+			{SourceIP: "10.0.0.1", NATIP: "203.0.113.1", PortMin: 1024, PortMax: 2048},
+		},
 	}
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(vpc, local, gw).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cnic).Build()
 	dp := newRecordingDP()
 	r := &Reconciler{client: c, nodeID: "nodeA", underlay: "fd00::a", dp: dp}
 
