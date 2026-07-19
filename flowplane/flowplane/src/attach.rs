@@ -22,6 +22,32 @@ use anyhow::{bail, Context};
 use crate::control::{Control, IfaceParams};
 use crate::underlay::UnderlayIpam;
 
+/// Guest-edge device backing an interface. Both run the SAME `tc_guest_tx` datapath on a single
+/// root-netns device (via `Control::create_interface`); they differ only in how that device is
+/// created and how the guest reaches it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DeviceType {
+    /// Container: a veth pair whose guest end is moved into the target netns (the pod's `eth0`) and
+    /// whose host end stays in the root netns as the datapath device.
+    Veth,
+    /// VM: a single root-netns tap whose fd is handed to qemu. No netns move, no peer — symmetric
+    /// with the container host-veth. The VM's virtio NIC MAC MUST be supplied (local delivery
+    /// rewrites the frame dst to `guest_mac`, so a derived MAC would never match the VM).
+    Tap,
+}
+
+impl DeviceType {
+    /// Parse the `AttachInterface.device_type` proto field. Empty or `"veth"` → `Veth` (the default,
+    /// preserving container behavior); `"tap"` → `Tap`; anything else is an error.
+    pub fn parse(s: &str) -> anyhow::Result<Self> {
+        match s {
+            "" | "veth" => Ok(DeviceType::Veth),
+            "tap" => Ok(DeviceType::Tap),
+            other => bail!("unknown device_type {other:?} (want \"veth\" or \"tap\")"),
+        }
+    }
+}
+
 /// Outcome of a successful attach, mapped 1:1 onto `AttachInterfaceResponse`.
 pub struct AttachOutcome {
     pub ifname: String,
@@ -82,6 +108,22 @@ impl AttachState {
         }
     }
 
+    /// Root-netns tap device name for an interface (the tap analogue of `host_veth_name`). A tap is a
+    /// single device with no `<host>p` peer suffix, so it may use the full IFNAMSIZ (15); longer ids
+    /// are hashed to a stable short name. qemu is pointed at this name (or handed its fd).
+    fn tap_name(interface_id: &str) -> String {
+        let candidate = format!("tap-{interface_id}");
+        if candidate.len() <= 15 {
+            candidate
+        } else {
+            let mut h: u32 = 2166136261;
+            for b in interface_id.as_bytes() {
+                h = (h ^ *b as u32).wrapping_mul(16777619);
+            }
+            format!("tap-{h:08x}")
+        }
+    }
+
     /// Reseed the underlay IPAM used-set from addresses recovered on restart (the surviving pinned
     /// UNDERLAY map), so a live guest's /128 is never handed out again after an flowplane restart —
     /// the reissue-a-live-/128 blackhole the review flagged. Called once, on adopt.
@@ -118,9 +160,16 @@ impl AttachState {
         vni: u32,
         mac_req: &str,
         requested_ips: &[String],
+        device_type: DeviceType,
     ) -> anyhow::Result<AttachOutcome> {
         if interface_id.is_empty() {
             bail!("interface_id is required");
+        }
+        // A tap serves a VM whose virtio NIC has a fixed MAC; local delivery rewrites the frame dst to
+        // `guest_mac`, so the programmed MAC must equal the VM's — a derived one would silently drop
+        // every inbound frame. Require it explicitly rather than deriving.
+        if device_type == DeviceType::Tap && mac_req.is_empty() {
+            bail!("device_type=tap requires an explicit mac (the VM NIC MAC)");
         }
         // Primary overlay IPv4: first requested IPv4 (IPv6 requests are recorded but v4 is the
         // primary INTERFACES key for this path).
@@ -146,23 +195,29 @@ impl AttachState {
             ipam.allocate().context("underlay /64 exhausted")?.octets()
         };
 
-        // The guest end keeps the requested interface_id as its in-netns name (the CNI expects a
-        // predictable ifname); the host end is our datapath tap.
-        let host = Self::host_veth_name(interface_id);
-        let guest_name = interface_id;
-
-        // Create the veth pair (host end named `host`, guest end temporarily `guest_name`), move
-        // the guest end into the target netns, name it, set its MAC + up. If anything fails after
-        // the veth is created, tear it down so we don't leak.
-        if let Err(e) = self.setup_veth(&host, guest_name, netns_path, mac) {
-            let _ = run(&["ip", "link", "del", &host]);
+        // The root-netns datapath device tc_guest_tx attaches to: a veth host end (its peer moves
+        // into the pod netns) or a single tap (its fd is handed to qemu). `create_interface` runs
+        // the identical datapath on either — the device type only changes how it's created here.
+        let device = match device_type {
+            DeviceType::Veth => Self::host_veth_name(interface_id),
+            DeviceType::Tap => Self::tap_name(interface_id),
+        };
+        // Create + configure the device. If anything fails after creation, tear it down so we don't
+        // leak. veth: create the pair + move the guest end into the netns. tap: a single root-netns
+        // device, no netns move, no peer.
+        let setup = match device_type {
+            DeviceType::Veth => self.setup_veth(&device, interface_id, netns_path, mac),
+            DeviceType::Tap => self.setup_tap(&device, mac),
+        };
+        if let Err(e) = setup {
+            let _ = run(&["ip", "link", "del", &device]);
             let mut ipam = self.ipam.lock();
             ipam.release(Ipv6Addr::from(underlay_ipv6));
             return Err(e);
         }
 
         // Delegate map-programming + datapath-attach to the legacy Control path (attaches
-        // tc_guest_tx to the HOST-side veth and programs PORT_META/INTERFACES/UNDERLAY).
+        // tc_guest_tx to the root-netns device and programs PORT_META/INTERFACES/UNDERLAY).
         let params = IfaceParams {
             vni,
             ipv4,
@@ -175,9 +230,9 @@ impl AttachState {
         };
         if let Err(e) = self
             .control
-            .create_interface(interface_id.as_bytes(), &host, params)
+            .create_interface(interface_id.as_bytes(), &device, params)
         {
-            let _ = run(&["ip", "link", "del", &host]);
+            let _ = run(&["ip", "link", "del", &device]);
             let mut ipam = self.ipam.lock();
             ipam.release(Ipv6Addr::from(underlay_ipv6));
             return Err(e).context("program datapath for interface");
@@ -192,15 +247,21 @@ impl AttachState {
             ),
             None => {
                 let _ = self.control.detach_interface(interface_id.as_bytes());
-                let _ = run(&["ip", "link", "del", &host]);
+                let _ = run(&["ip", "link", "del", &device]);
                 let mut ipam = self.ipam.lock();
                 ipam.release(Ipv6Addr::from(underlay_ipv6));
                 bail!("INTERFACES read-back failed after programming");
             }
         }
 
+        // `ifname` returned to the caller: for a veth it's the guest end inside the netns (the pod's
+        // interface); for a tap it's the root-netns tap the caller points qemu at (or opens for its fd).
+        let ifname = match device_type {
+            DeviceType::Veth => interface_id.to_string(),
+            DeviceType::Tap => device.clone(),
+        };
         Ok(AttachOutcome {
-            ifname: guest_name.to_string(),
+            ifname,
             ips: vec![Ipv4Addr::from(ipv4).to_string()],
             mac: fmt_mac(mac),
             gateway: Ipv4Addr::from(self.gateway_ipv4).to_string(),
@@ -278,6 +339,38 @@ impl AttachState {
         Ok(())
     }
 
+    /// Create + configure a root-netns tap for a VM: a single device (no netns move, no peer),
+    /// symmetric with the container host-veth. qemu drives it (by name, or by opening its fd).
+    /// `create_interface` attaches `tc_guest_tx` and programs the maps afterwards, exactly as for the
+    /// veth host end — so only device creation differs. Proven by `test/tap-vm-smoke.sh` (a real VM).
+    fn setup_tap(&self, tap: &str, mac: [u8; 6]) -> anyhow::Result<()> {
+        // Fresh start: remove any stale tap from a previous run.
+        let _ = run(&["ip", "link", "del", tap]);
+        // `vnet_hdr` so qemu's `vhost=on` virtio path works (matches the smoke tap). multi-queue is a
+        // perf follow-up: it needs a matching `queues=N` on qemu's `-netdev`, so keep single-queue here.
+        run(&["ip", "tuntap", "add", "dev", tap, "mode", "tap", "vnet_hdr"])
+            .context("create tap")?;
+        // The tap MAC is set to the VM's NIC MAC (the caller-supplied `mac`); PORT_META.guest_mac ==
+        // this, so a locally-delivered frame (dst rewritten to guest_mac) is accepted by the VM.
+        let macs = fmt_mac(mac);
+        run(&["ip", "link", "set", tap, "address", &macs]).context("set tap mac")?;
+        // Guest link MTU = node-wide tunnel-adjusted value (same source as the veth). A self-
+        // configuring VM learns its MTU from DHCP opt-26 / the RA MTU option; this bounds the tap.
+        let mtu = self.guest_mtu.to_string();
+        run(&["ip", "link", "set", tap, "mtu", &mtu]).context("set tap mtu")?;
+        run(&["ip", "link", "set", tap, "up"]).context("tap up")?;
+        // Disable offloads ONLY on a software-uplink fabric that can't finalize CHECKSUM_PARTIAL
+        // (clab/kind), same rationale as the veth end: our encap redirects to the uplink bypassing
+        // NIC checksum finalization, so the inner L4 csum would reach the wire partial. On a real NIC
+        // we keep offloads ON to preserve VM throughput (GSO/TSO through vhost-net). Best-effort.
+        if self.disable_guest_csum_offload {
+            let _ = run(&[
+                "ethtool", "-K", tap, "tso", "off", "gso", "off", "gro", "off", "lro", "off",
+            ]);
+        }
+        Ok(())
+    }
+
     /// Detach: remove the datapath programming (which also removes INTERFACES/UNDERLAY), delete the
     /// host-side veth (its guest peer disappears with it), and release the underlay /128.
     pub fn detach(&self, interface_id: &str) -> anyhow::Result<()> {
@@ -294,10 +387,12 @@ impl AttachState {
             .control
             .detach_interface(interface_id.as_bytes())
             .context("detach datapath");
-        let host = Self::host_veth_name(interface_id);
-        // Deleting the host end removes the veth pair (guest peer goes with it). Idempotent: an
-        // already-absent veth is fine, so the error is intentionally ignored.
-        let _ = run(&["ip", "link", "del", &host]);
+        // Delete the root-netns device. Detach only gets the interface_id (not the device type), so
+        // remove BOTH candidate names — a given id is only one type, so the other is a harmless no-op.
+        // Deleting a veth host end removes its pair (the netns peer goes with it); deleting a tap
+        // removes it outright. Idempotent: an already-absent device is fine, so errors are ignored.
+        let _ = run(&["ip", "link", "del", &Self::host_veth_name(interface_id)]);
+        let _ = run(&["ip", "link", "del", &Self::tap_name(interface_id)]);
         if let Some(ul) = underlay {
             self.ipam.lock().release(Ipv6Addr::from(ul));
         }
@@ -412,6 +507,32 @@ mod tests {
             "{n} should be the 13-char hashed form, not verbatim"
         );
         assert!(n.starts_with("veth-"));
+    }
+
+    #[test]
+    fn device_type_parse() {
+        assert_eq!(DeviceType::parse("").unwrap(), DeviceType::Veth);
+        assert_eq!(DeviceType::parse("veth").unwrap(), DeviceType::Veth);
+        assert_eq!(DeviceType::parse("tap").unwrap(), DeviceType::Tap);
+        assert!(DeviceType::parse("bridge").is_err());
+    }
+
+    #[test]
+    fn tap_name_short_passthrough_and_distinct_from_veth() {
+        assert_eq!(AttachState::tap_name("t0"), "tap-t0");
+        // A tap and a veth for the same id must never collide (both live in the root netns).
+        assert_ne!(
+            AttachState::tap_name("t0"),
+            AttachState::host_veth_name("t0")
+        );
+    }
+
+    #[test]
+    fn tap_name_long_is_hashed_and_fits_ifnamsiz() {
+        let n = AttachState::tap_name("a-very-long-interface-id-way-over-ifnamsiz");
+        // A tap has no +1 peer suffix, so the full IFNAMSIZ (15) is available.
+        assert!(n.len() <= 15, "{n} exceeds IFNAMSIZ");
+        assert!(n.starts_with("tap-"));
     }
 
     #[test]

@@ -49,6 +49,8 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
+        let device_type = crate::attach::DeviceType::parse(&r.device_type)
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
         // The datapath work shells out to `ip` and touches eBPF maps (blocking), so run it on the
         // blocking pool to keep the async reactor free.
         let outcome = tokio::task::spawn_blocking(move || {
@@ -58,6 +60,7 @@ impl DataplaneNode for NodeService {
                 r.vni,
                 &r.mac,
                 &r.requested_ips,
+                device_type,
             )
         })
         .await
@@ -704,6 +707,7 @@ mod tests {
                 vni: 100,
                 mac: String::new(),
                 requested_ips: vec!["10.0.0.10".into()],
+                device_type: String::new(),
             }))
             .await
             .unwrap_err();

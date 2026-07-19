@@ -110,8 +110,10 @@ message AttachInterfaceRequest {
   string interface_id = 1; // stable id (e.g. VMI uid + iface name)
   string netns_path = 2;   // target network namespace path
   uint32 vni = 3;
-  string mac = 4;          // optional; allocated if empty
+  string mac = 4;          // optional; allocated if empty (REQUIRED for device_type=tap)
   repeated string requested_ips = 5; // optional; allocated if empty
+  string device_type = 6;  // "veth" (default/empty; container, guest end in netns) | "tap"
+                           // (VM: a single root-netns tap whose fd is handed to qemu)
 }
 message AttachInterfaceResponse {
   string ifname = 1;
