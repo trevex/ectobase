@@ -26,15 +26,17 @@ PROTO_MNT="-v $(pwd)/api/proto:/proto:ro"
 KC=$(mktemp -t k01.kubeconfig.XXXXXX); trap 'rm -f "$KC"' EXIT
 say() { echo -e "\n=== $* ==="; }
 k() { kubectl --kubeconfig "$KC" "$@"; }
+# `kind` lives in ~/go/bin; plain `sudo` resets PATH and can't find it, so preserve PATH.
+KIND() { sudo env "PATH=$PATH" kind "$@"; }
 
 say "kubeconfig + reachability"
-sudo kind get kubeconfig --name "$CL" > "$KC"
+KIND get kubeconfig --name "$CL" > "$KC"
 k get --raw=/healthz >/dev/null || { echo "FATAL: $CL unreachable; run hack/clab-up.sh"; exit 1; }
 k get nodes -o name
 
 say "build + load images"
 make image image-netplane image-cni >/tmp/kv-build.log 2>&1 || { echo "image build failed"; tail -20 /tmp/kv-build.log; exit 1; }
-for img in "$XDP" "$NETPLANE" "$CNI"; do sudo kind load docker-image "$img" --name "$CL" 2>&1 | tail -1; done
+for img in "$XDP" "$NETPLANE" "$CNI"; do KIND load docker-image "$img" --name "$CL" 2>&1 | tail -1; done
 
 say "CRDs + stack (flowplane + agent + CNI installer)"
 k apply -k config/crd 2>&1 | tail -1
