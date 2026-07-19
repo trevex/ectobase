@@ -38,9 +38,8 @@ pub enum DeviceType {
     /// connected to a root-netns veth by `tc mirred`. The root-netns veth end is the unchanged
     /// datapath device (`tc_guest_tx` + `uplink_rx` target), exactly like a container; the pod-netns
     /// `mirred` splice replaces "the pod process on the veth peer". A point-to-point `mirred` splice
-    /// (NOT a bridge) is required: our gateway is presented at the guest's OWN MAC, so a bridge would
-    /// hairpin gateway-bound frames (dst == VM MAC) back to the VM instead of to the datapath. MAC
-    /// required (same reason as `Tap`).
+    /// (rather than a bridge) keeps it lean — no bridge MAC-learning / STP / unicast flooding, and it
+    /// forwards regardless of the L2 addressing. MAC required (same reason as `Tap`).
     PodTap,
 }
 
@@ -409,10 +408,10 @@ impl AttachState {
     /// Create the KubeVirt-compatible pod-netns tap topology: a veth pair whose HOST end (`host`,
     /// root netns) is the unchanged datapath device (`tc_guest_tx` + `uplink_rx` target, exactly like
     /// a container), whose PEER moves into the pod netns, plus a `tap` in the pod netns that qemu
-    /// drives. The peer and tap are spliced point-to-point with `tc mirred` — NOT a Linux bridge: our
-    /// gateway is presented at the guest's OWN MAC, so a bridge would learn `VM_MAC` on the tap port
-    /// and hairpin gateway-bound frames back to the VM. `mirred` shovels every frame peer<->tap
-    /// unconditionally (no MAC learning), so gateway-bound frames reach `tc_guest_tx` on the root veth.
+    /// drives. The peer and tap are spliced point-to-point with `tc mirred` — leaner than a Linux
+    /// bridge (no MAC-learning / STP / unicast flooding): `mirred` shovels every frame peer<->tap
+    /// unconditionally, so all guest egress (incl. gateway-bound frames to GW_MAC) reaches
+    /// `tc_guest_tx` on the root veth, and delivery reaches the VM, regardless of L2 addressing.
     /// `Control::create_interface` later attaches the datapath to `host`, unchanged from the veth path.
     fn setup_pod_tap(
         &self,

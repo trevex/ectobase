@@ -6,8 +6,8 @@
 # spliced by `tc mirred` to a ROOT-netns veth that carries our unchanged datapath. The VM
 #   (1) DHCP-self-configures its overlay IP + gateway + MTU from OUR DHCPv4 responder, and
 #   (2) pings a SECOND same-host endpoint over the overlay — through the mirred splice both ways.
-# This validates that a bridge-free pod-netns tap (attach.rs setup_pod_tap) works with our
-# gateway-at-own-MAC model (a bridge would hairpin gateway-bound frames; mirred does not).
+# This validates the bridge-free pod-netns tap (attach.rs setup_pod_tap): the mirred splice carries
+# the guest edge across the netns boundary with no bridge overhead (no MAC-learning/STP/flooding).
 #
 # Topology (single host, one VNI, dpservice link-local gateway 169.254.0.1):
 #
@@ -24,8 +24,9 @@
 #                  IP + opt-121 gateway + opt-26 MTU; and `ping 10.0.0.51` is 0% loss.
 #
 # CRUCIAL: the VM's virtio MAC (VM_MAC) == the guest_mac programmed for the ROOT veth vpr0 (local
-# delivery rewrites the frame dst to guest_mac). The mirred splice is point-to-point (no bridge), so
-# gateway-bound frames (dst == VM_MAC) reach tc_guest_tx on vpr0 instead of hairpinning to the VM.
+# delivery rewrites the frame dst to guest_mac). The gateway is advertised at the shared router MAC
+# GW_MAC (02:00:00:00:00:01), so gateway-bound guest frames are dst=GW_MAC; the mirred splice carries
+# them to tc_guest_tx on vpr0.
 #
 # Usage (from repo root, inside `nix develop`):
 #   ./test/tap-vm-smoke.sh up       create taps + peer netns + bringup + boot VM

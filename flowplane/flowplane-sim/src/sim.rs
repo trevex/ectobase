@@ -624,9 +624,10 @@ impl SimNode {
     pub fn guest_arp_nd(&self, frame: &[u8], meta: &PortMeta, ingress_ifindex: u32) -> SimOut {
         use flowplane_core::arp_nd::{arp_reply, nd_reply};
         let mut pkt = VecPkt::from_bytes(frame);
-        // Mirror the eBPF `try_guest_tx` head: ARP first, then ND.
-        if arp_reply(&mut pkt, meta.gateway_ipv4, meta.guest_mac)
-            || nd_reply(&mut pkt, meta.gateway_ipv6, meta.guest_mac)
+        // Mirror the eBPF `try_guest_tx` head: ARP first, then ND. The gateway is advertised at the
+        // shared virtual router MAC (GW_MAC), NOT the guest's own MAC — parity with the eBPF datapath.
+        if arp_reply(&mut pkt, meta.gateway_ipv4, GW_MAC)
+            || nd_reply(&mut pkt, meta.gateway_ipv6, GW_MAC)
         {
             return SimOut {
                 action: Action::Redirect(ingress_ifindex),

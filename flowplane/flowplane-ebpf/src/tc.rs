@@ -49,7 +49,11 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
             && flowplane_core::arp_nd::arp_reply(
                 &mut crate::coreimpl::RawPkt::new(ctx.data(), ctx.data_end()),
                 meta.gateway_ipv4,
-                meta.guest_mac,
+                // Advertise the gateway at the shared virtual router MAC (GW_MAC) — the SAME src MAC
+                // the datapath puts on every frame it delivers to a guest (uplink/local/nat64/dhcp).
+                // A distinct router MAC (not the guest's own) is the correct L2 gateway model and is
+                // agnostic to the guest-edge L2 topology (veth / tap / mirred / bridge all work).
+                crate::arp_nd::GW_MAC,
             )
         {
             return unsafe { bpf_redirect(ifindex, 0) as i32 };
@@ -84,7 +88,7 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
             && flowplane_core::arp_nd::nd_reply(
                 &mut crate::coreimpl::RawPkt::new(ctx.data(), ctx.data_end()),
                 meta.gateway_ipv6,
-                meta.guest_mac,
+                crate::arp_nd::GW_MAC, // gateway at the shared router MAC (see arp_reply above)
             )
         {
             return unsafe { bpf_redirect(ifindex, 0) as i32 };
@@ -114,7 +118,7 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
                 && flowplane_core::arp_nd::ra_reply(
                     &mut crate::coreimpl::RawPkt::new(ctx.data(), ctx.data_end()),
                     meta.gateway_ipv6,
-                    meta.guest_mac,
+                    crate::arp_nd::GW_MAC, // router advertised at the shared router MAC
                     mtu,
                 )
             {
