@@ -120,10 +120,33 @@ FP=$(sudo docker exec "$NODE" crictl ps --name flowplane -o json 2>/dev/null | g
 sudo docker exec "$NODE" crictl logs "$FP" 2>&1 | grep -iE "INTERFACES readback vni=100 ip=$VM_IP" | tail -2 || echo "  (no readback yet — see launcher pod events below)"
 k -n default describe pod "$POD" 2>/dev/null | grep -A6 Events: | tail -8 || true
 
+say "firewall allow for the VM + peer (datapath is deny-by-default; no CompiledNIC in this test)"
+# grpc helper against the node's flowplane; VM interface_id = <launcher-pod-uid>/<multus-ifname>,
+# discovered via ListInterfaces (matched on the overlay IP).
+DP() { sudo docker run --rm --network "container:$NODE" -v "$(pwd)/api/proto:/proto:ro" "$GRPCURL_IMG" \
+  -plaintext -import-path /proto/dataplane/v1 -proto dataplane.proto -d "$2" \
+  127.0.0.1:1337 "dataplane.v1.DataplaneNode/$1" 2>&1; }
+VM_ID=$(DP ListInterfaces '{}' | tr -d ' ",' | awk -F: '/interfaceId/{id=$2} /ipv4/{if($2=="'"$VM_IP"'")print id}' | head -1)
+echo "VM interface_id=$VM_ID"
+for pair in "$VM_ID vm" "peer peer"; do set -- $pair
+  DP AddFwRule "{\"interface_id\":\"$1\",\"rule_id\":\"$2-eg\",\"proto\":0,\"allow\":true,\"egress\":true}"  >/dev/null
+  DP AddFwRule "{\"interface_id\":\"$1\",\"rule_id\":\"$2-in\",\"proto\":0,\"allow\":true,\"egress\":false}" >/dev/null
+done
+
 say "wait for VMI Running, then ping the VM from the peer ($PEER_IP -> $VM_IP)"
 k -n default wait vmi/vm-a --for=jsonpath='{.status.phase}'=Running --timeout=180s 2>&1 | tail -1
-echo "give the guest ~90s to boot + DHCP under emulation..."
-sleep 90
-sudo docker exec "$NODE" ip netns exec peer ping -c 4 -W 3 "$VM_IP" 2>&1 | tail -5
-echo ""
-echo "=== if 0% loss above: a KubeVirt VM self-configured on the flowplane overlay via pod-tap ==="
+# kind nodes have no ping/tcpdump — stage a static busybox. The guest boots slowly under TCG emulation.
+CID=$(sudo docker create busybox:musl); sudo docker cp "$CID":/bin/busybox /tmp/busybox-musl >/dev/null 2>&1; sudo docker rm "$CID" >/dev/null
+sudo docker cp /tmp/busybox-musl "$NODE":/busybox
+echo "waiting for the guest to boot + DHCP-self-configure, then pinging (up to ~4m)..."
+for i in $(seq 1 20); do
+  out=$(sudo docker exec "$NODE" ip netns exec peer /busybox ping -c 3 -W 2 "$VM_IP" 2>&1)
+  echo "[$i] $(echo "$out" | grep -oE '[0-9]+% packet loss')"
+  if echo "$out" | grep -q ' 0% packet loss'; then
+    echo "$out" | grep -E 'bytes from|round-trip'
+    echo "=== PASS: a KubeVirt VM self-configured on the flowplane overlay (pod-tap) + is reachable ==="
+    exit 0
+  fi
+  sleep 12
+done
+echo "=== FAIL: no reply from the VM after boot window ==="; exit 1
