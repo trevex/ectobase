@@ -28,7 +28,7 @@ func TestResolve(t *testing.T) {
 		},
 	}
 	vpc := &v1alpha1.VPC{
-		ObjectMeta: metav1.ObjectMeta{Name: "prod"},
+		ObjectMeta: metav1.ObjectMeta{Name: "prod", Namespace: "default"},
 		Status:     v1alpha1.VPCStatus{VNI: 100},
 	}
 

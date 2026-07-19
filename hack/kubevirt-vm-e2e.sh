@@ -14,7 +14,10 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 export PATH="$HOME/go/bin:$PATH"
 
 CL=k01
-NODE=k01-control-plane
+# The VM's node: a WORKER (virt-handler only advertises the kvm/tun device plugins on untainted
+# nodes, so the launcher can't land on the tainted control-plane). The peer endpoint attaches here
+# too so the overlay ping uses the same-node local fast path.
+NODE=k01-worker
 XDP=ghcr.io/trevex/ectobase/flowplane:dev
 NETPLANE=ghcr.io/trevex/ectobase/netplane:dev
 CNI=ghcr.io/trevex/ectobase/cni:dev
@@ -84,6 +87,11 @@ metadata:
 spec:
   nodeSelector:
     kubernetes.io/hostname: $NODE
+  # $NODE is the control-plane node (where the peer + flowplane run); tolerate its taint.
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
   domain:
     devices:
       disks: [{name: cd, disk: {bus: virtio}}]

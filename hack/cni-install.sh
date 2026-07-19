@@ -19,7 +19,10 @@ install -m 0755 /flowplane-cni "${BIN_DIR}/flowplane-cni"
 # The CNI runs in the node host netns; the in-cluster API is reachable there via the
 # kubernetes ClusterIP (kube-proxy programs it on the host). The kubeconfig is fully
 # self-contained (CA + token inline) so it needs no files on the host besides itself.
-API="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}"
+# Bracket an IPv6 apiserver host so the URL parses (https://[fd00::1]:443, not fd00::1:443).
+APIHOST="${KUBERNETES_SERVICE_HOST}"
+case "$APIHOST" in *:*) APIHOST="[$APIHOST]" ;; esac
+API="https://${APIHOST}:${KUBERNETES_SERVICE_PORT}"
 CA_B64="$(base64 -w0 < ${SA}/ca.crt 2>/dev/null || base64 < ${SA}/ca.crt | tr -d '\n')"
 
 write_kubeconfig() {

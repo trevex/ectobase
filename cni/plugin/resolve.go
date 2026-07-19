@@ -34,9 +34,11 @@ func resolve(ctx context.Context, c client.Client, ns, name string) (resolved, e
 		return resolved{}, fmt.Errorf("NetworkInterface %s/%s has an empty vpcRef.name", ns, name)
 	}
 
+	// VPCRef is a same-namespace LocalObjectReference, and VPC is namespaced — get it in the
+	// NetworkInterface's namespace (a bare name would fail "empty namespace ... resource name").
 	var vpc v1alpha1.VPC
-	if err := c.Get(ctx, types.NamespacedName{Name: vpcName}, &vpc); err != nil {
-		return resolved{}, fmt.Errorf("get VPC %s: %w", vpcName, err)
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: vpcName}, &vpc); err != nil {
+		return resolved{}, fmt.Errorf("get VPC %s/%s: %w", ns, vpcName, err)
 	}
 
 	vni := vpc.Status.VNI

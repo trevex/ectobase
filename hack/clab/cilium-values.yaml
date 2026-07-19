@@ -18,6 +18,14 @@
 
 kubeProxyReplacement: true
 
+# Coexist with Multus (required for KubeVirt network-binding NADs). Cilium's default
+# cni.exclusive=true takes over /etc/cni/net.d exclusively — it renames Multus's
+# 00-multus.conf to 00-multus.conf.cilium_bak so Multus never runs and the binding NAD
+# is silently ignored (empty pod network-status). false keeps Multus the primary CNI
+# delegating to Cilium as its clusterNetwork.
+cni:
+  exclusive: false
+
 ipv4:
   enabled: false
 ipv6:
