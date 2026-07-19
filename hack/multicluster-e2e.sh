@@ -116,8 +116,8 @@ attach_endpoint() {
 }
 
 say "attach endpoints on both clusters' nodes"
-UL_A=$(attach_endpoint k01-control-plane ep-a 10.0.0.1); echo "k01 ep-a underlay=$UL_A"
-UL_C=$(attach_endpoint k02-control-plane ep-c 10.0.0.3); echo "k02 ep-c underlay=$UL_C"
+UL_A=$(attach_endpoint k01-control-plane nic-a 10.0.0.1); echo "k01 nic-a underlay=$UL_A"
+UL_C=$(attach_endpoint k02-control-plane nic-c 10.0.0.3); echo "k02 nic-c underlay=$UL_C"
 
 say "record allocated underlay /128s in the CRD status (agent announces these)"
 kubectl --kubeconfig "$K1" patch networkinterface nic-a --subresource=status --type=merge \
@@ -137,7 +137,7 @@ CID=$(sudo docker create busybox:musl); sudo docker cp "$CID":/bin/busybox /tmp/
 sudo docker cp /tmp/busybox-musl k01-control-plane:/busybox
 sudo docker cp /tmp/busybox-musl k02-control-plane:/busybox
 
-say "CROSS-CLUSTER OVERLAY PING: k01 ep-a 10.0.0.1  -->  k02 ep-c 10.0.0.3"
-sudo docker exec k01-control-plane ip netns exec ep-a /busybox ping -c 3 -W 2 10.0.0.3 2>&1 | tail -5
-say "reverse: k02 ep-c 10.0.0.3  -->  k01 ep-a 10.0.0.1"
-sudo docker exec k02-control-plane ip netns exec ep-c /busybox ping -c 3 -W 2 10.0.0.1 2>&1 | tail -5
+say "CROSS-CLUSTER OVERLAY PING: k01 nic-a 10.0.0.1  -->  k02 nic-c 10.0.0.3"
+sudo docker exec k01-control-plane ip netns exec nic-a /busybox ping -c 3 -W 2 10.0.0.3 2>&1 | tail -5
+say "reverse: k02 nic-c 10.0.0.3  -->  k01 nic-a 10.0.0.1"
+sudo docker exec k02-control-plane ip netns exec nic-c /busybox ping -c 3 -W 2 10.0.0.1 2>&1 | tail -5

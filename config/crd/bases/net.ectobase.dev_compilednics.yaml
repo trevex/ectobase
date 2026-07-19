@@ -40,13 +40,15 @@ spec:
             type: object
           spec:
             description: |-
-              CompiledNICSpec is the fully lowered, node-local NIC configuration bundle. It captures
-              everything the dataplane agent needs for a single NIC: identity, VNI, underlay, overlay IPs,
-              firewall rules (resolved from NetworkPolicy selectors), egress-SNAT sources, LB membership,
-              and peer imports. It is the SOLE per-NIC input the agent reads: given the set of CompiledNICs
-              scheduled to a node, the agent can derive every static route/NAT/firewall/LB/QoS it programs
-              and announces, without reading the source NetworkInterface, VPC, or NATGateway. Dynamic routes
-              learned via routebus are the only per-NIC state NOT captured here.
+              CompiledNICSpec is the fully lowered per-NIC STATIC POLICY the control plane hands to a node:
+              identity, VNI, overlay IPs, firewall rules (resolved from NetworkPolicy selectors), egress-SNAT
+              allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC +
+              NetworkPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.
+
+              It deliberately does NOT carry the NIC's underlay /128: that is node-local state the dataplane
+              allocates at attach, and the agent obtains it from the local DataplaneNode (ListInterfaces) to
+              announce overlay routes with the correct node-local nexthop. Keeping node-local state out of this
+              central object avoids a compile->sync round-trip that would lag (and flap) the announced nexthop.
             properties:
               firewall:
                 description: Firewall holds the compiled ingress and egress firewall
@@ -226,12 +228,6 @@ spec:
                     - vf
                     type: string
                 type: object
-              underlayRoute:
-                description: |-
-                  UnderlayRoute is the NIC's allocated underlay /128 (copied from the source NetworkInterface's
-                  status.underlayRoute). It is the nexthop for this NIC's overlay host routes and the owner of
-                  its NAT blocks on the route bus. Empty until the NIC has been attached.
-                type: string
               vni:
                 description: |-
                   VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's

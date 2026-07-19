@@ -90,6 +90,8 @@
             pkgs.bpftrace # ad-hoc XDP/tc tracepoints for hack/clab/bpf-trace.sh
             pkgs.xdp-tools # xdpdump, used by hack/clab/bpf-trace.sh
             pkgs.protobuf
+            pkgs.protoc-gen-go # `make proto-go` gRPC stub generation
+            pkgs.protoc-gen-go-grpc
             pkgs.grpcurl
             pkgs.qemu
             pkgs.libvirt

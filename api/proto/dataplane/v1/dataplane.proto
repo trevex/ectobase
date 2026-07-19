@@ -9,6 +9,11 @@ option go_package = "github.com/trevex/ectobase/cni/gen/dataplanev1;dataplanev1"
 service DataplaneNode {
   rpc AttachInterface(AttachInterfaceRequest) returns (AttachInterfaceResponse);
   rpc DetachInterface(DetachInterfaceRequest) returns (DetachInterfaceResponse);
+  // ListInterfaces returns every interface currently attached on this node, with its overlay
+  // identity (vni + IPs) and the node-local underlay /128 allocated to it at attach. The node-local
+  // agent uses this to announce overlay host routes with the correct node-local nexthop — the
+  // underlay is node-local state owned by the dataplane, not central config.
+  rpc ListInterfaces(ListInterfacesRequest) returns (ListInterfacesResponse);
   rpc ConfigureNetwork(ConfigureNetworkRequest) returns (ConfigureNetworkResponse);
   // AddRoute programs a single overlay route (vni, prefix -> nexthop underlay).
   // Idempotent: re-adding an existing (vni, prefix) replaces its nexthop.
@@ -114,6 +119,19 @@ message AttachInterfaceResponse {
   string mac = 3;
   string gateway = 4;
   string underlay_route = 5; // allocated underlay /128 the overlay encaps to
+}
+
+message ListInterfacesRequest {}
+message ListInterfacesResponse {
+  repeated InterfaceInfo interfaces = 1;
+}
+// InterfaceInfo is one locally-attached interface's overlay identity + node-local underlay.
+message InterfaceInfo {
+  string interface_id = 1;
+  uint32 vni = 2;
+  string ipv4 = 3;           // overlay IPv4 ("" if none)
+  string ipv6 = 4;           // overlay IPv6 ("" if none)
+  string underlay_route = 5; // node-local allocated underlay /128 (the overlay encaps to it)
 }
 
 message DetachInterfaceRequest { string interface_id = 1; }

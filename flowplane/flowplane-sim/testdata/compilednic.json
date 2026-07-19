@@ -15,7 +15,6 @@
       "type": "tap",
       "name": "dtapvf_0"
     },
-    "underlayRoute": "2001:db8:fefe::bb",
     "overlayIPs": [
       "10.0.0.10"
     ],

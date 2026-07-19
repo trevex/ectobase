@@ -32,6 +32,8 @@ type recordingDP struct {
 	// qos/qosN record ConfigureQoS calls (per-interface QoS lane configuration).
 	qos  map[string]qosCall // interfaceID -> last call
 	qosN map[string]int     // interfaceID -> call count
+	// ifaces is what ListInterfaces returns: the node-local attached interfaces + their underlays.
+	ifaces []LocalInterface
 }
 
 type qosCall struct {
@@ -181,4 +183,9 @@ func (f *recordingDP) getQoS(iface string) (qosCall, bool) {
 	defer f.mu.Unlock()
 	v, ok := f.qos[iface]
 	return v, ok
+}
+func (f *recordingDP) ListInterfaces(_ context.Context) ([]LocalInterface, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]LocalInterface(nil), f.ifaces...), nil
 }

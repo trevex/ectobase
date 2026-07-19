@@ -72,37 +72,61 @@ func NewReconciler(kubeconfig, nodeID string, deps Deps) (*Reconciler, error) {
 // NATGateway). As a side effect it programs local egress SNAT sources on the dataplane (idempotent:
 // AddNatSource delete-then-adds).
 func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Route, announceNat []NatBlock, egressVNIs []uint32, peeringImports map[uint32][]PeerImport, err error) {
+	// Node-local facts: the interfaces attached on this node and their underlay /128s come from the
+	// local dataplane (the underlay is node-local state the dataplane allocates, not central config).
+	// Overlay host routes announce from these; `ulByIP`/`vniByIP` index overlay IP -> node-local
+	// underlay/vni so central NAT and LB policy can be joined to the correct node-local nexthop.
+	var locals []LocalInterface
+	if r.dp != nil {
+		locals, err = r.dp.ListInterfaces(ctx)
+		if err != nil {
+			return nil, nil, nil, nil, nil, fmt.Errorf("list interfaces: %w", err)
+		}
+	}
+	vniSet := map[uint32]struct{}{PublicVNI: {}} // always subscribe to the public VNI to learn defaults
+	ulByIP := map[string]string{}
+	vniByIP := map[string]uint32{}
+	for li := range locals {
+		iface := &locals[li]
+		if iface.Vni == 0 {
+			continue
+		}
+		vniSet[iface.Vni] = struct{}{}
+		nexthop := iface.Underlay
+		if nexthop == "" {
+			nexthop = r.underlay // attached without an underlay yet; fall back to the node underlay
+		}
+		for _, ip := range iface.OverlayIPs {
+			ulByIP[ip] = nexthop
+			vniByIP[ip] = iface.Vni
+			prefix, err := hostPrefix(ip)
+			if err != nil {
+				return nil, nil, nil, nil, nil, fmt.Errorf("interface %s ip %q: %w", iface.InterfaceID, ip, err)
+			}
+			// Endpoint host routes are internal; egress-NAT default routes (external=true)
+			// are distributed separately by a controller.
+			announce = append(announce, Route{Vni: iface.Vni, Prefix: prefix, Nexthop: nexthop, External: false})
+		}
+	}
+
+	// Central egress-SNAT policy: each CompiledNIC.NAT allocation for a source attached on THIS node,
+	// joined to that source's node-local underlay. Program the local SNAT source and announce its NAT
+	// block (owner = the source's node-local underlay) so peers learn the neighbor-nat return route.
 	var cnics netv1.CompiledNICList
 	if err := r.client.List(ctx, &cnics); err != nil {
 		return nil, nil, nil, nil, nil, fmt.Errorf("list compilednics: %w", err)
 	}
-	vniSet := map[uint32]struct{}{PublicVNI: {}} // always subscribe to the public VNI to learn defaults
 	for i := range cnics.Items {
 		c := &cnics.Items[i]
-		if c.Spec.NodeName != r.nodeID || c.Spec.VNI == 0 {
-			continue // only program/announce NICs scheduled to THIS node with an allocated VNI
+		if c.Spec.NodeName != r.nodeID {
+			continue
 		}
-		vni := uint32(c.Spec.VNI)
-		vniSet[vni] = struct{}{}
-		// The route nexthop / NAT-block owner is the NIC's own underlay /128 (remote nodes encap to
-		// it; the local UNDERLAY map resolves it to the tap). Fall back to the node underlay only
-		// when the NIC hasn't been attached yet (CompiledNIC.UnderlayRoute empty).
-		nexthop := c.Spec.UnderlayRoute
-		if nexthop == "" {
-			nexthop = r.underlay
-		}
-		for _, ip := range c.Spec.OverlayIPs {
-			prefix, err := hostPrefix(ip)
-			if err != nil {
-				return nil, nil, nil, nil, nil, fmt.Errorf("compilednic %s/%s ip %q: %w", c.Namespace, c.Name, ip, err)
-			}
-			// Endpoint host routes are internal; egress-NAT default routes (external=true)
-			// are distributed separately by a controller.
-			announce = append(announce, Route{Vni: vni, Prefix: prefix, Nexthop: nexthop, External: false})
-		}
-		// Egress SNAT: program each local source and announce its NAT block (owner = the NIC's
-		// underlay) so peers learn the neighbor-nat return route to us.
 		for _, src := range c.Spec.NAT {
+			owner, ok := ulByIP[src.SourceIP]
+			vni := vniByIP[src.SourceIP]
+			if !ok || vni == 0 {
+				continue // source not attached locally yet; skip until ListInterfaces reports it
+			}
 			if r.dp != nil {
 				if err := r.dp.AddNatSource(ctx, vni, src.SourceIP, src.NATIP, uint32(src.PortMin), uint32(src.PortMax)); err != nil {
 					log.Printf("AddNatSource %s->%s vni=%d: %v", src.SourceIP, src.NATIP, vni, err)
@@ -110,7 +134,7 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 			}
 			announceNat = append(announceNat, NatBlock{
 				Vni: vni, SourceIP: src.SourceIP, NatIP: src.NATIP,
-				PortMin: uint32(src.PortMin), PortMax: uint32(src.PortMax), OwnerUnderlay: nexthop,
+				PortMin: uint32(src.PortMin), PortMax: uint32(src.PortMax), OwnerUnderlay: owner,
 			})
 		}
 	}
@@ -131,7 +155,7 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 	// LB backends: announce each backed VIP as an anycast overlay route (nexthop = this NIC's /128).
 	// Multiple backend NICs announcing the same VIP → the fabric ECMPs across them. This is the E/W
 	// load-balancer path; it reuses the plain route channel and needs no LB-specific datapath state.
-	lbs, err := r.desiredLB(ctx)
+	lbs, err := r.desiredLB(ctx, ulByIP)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
@@ -170,6 +194,30 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 	sort.Slice(subs, func(i, j int) bool { return subs[i] < subs[j] })
 
 	return subs, announce, announceNat, egressVNIs, peeringImports, nil
+}
+
+// underlayByOverlayIP asks the local dataplane for its attached interfaces and returns a map from
+// overlay IP to the node-local underlay /128 the dataplane allocated. Used to join central NAT/LB
+// policy (keyed by overlay IP) to the correct node-local nexthop without any central round-trip.
+func (r *Reconciler) underlayByOverlayIP(ctx context.Context) (map[string]string, error) {
+	out := map[string]string{}
+	if r.dp == nil {
+		return out, nil
+	}
+	locals, err := r.dp.ListInterfaces(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list interfaces: %w", err)
+	}
+	for _, li := range locals {
+		nexthop := li.Underlay
+		if nexthop == "" {
+			nexthop = r.underlay
+		}
+		for _, ip := range li.OverlayIPs {
+			out[ip] = nexthop
+		}
+	}
+	return out, nil
 }
 
 // hostPrefix turns an overlay IP into its host CIDR ("/32" for v4, "/128" for v6).

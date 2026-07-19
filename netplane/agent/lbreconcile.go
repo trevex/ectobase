@@ -9,7 +9,7 @@ import (
 )
 
 // lbBacking is one (VIP, backend NIC) pairing this node hosts: a CompiledNIC.LB entry together with
-// the NIC's own node-local underlay /128 (CompiledNIC.UnderlayRoute).
+// the backend NIC's own node-local underlay /128 (resolved from the local dataplane).
 type lbBacking struct {
 	VIP         string   // v4 or v6
 	Vni         uint32   // the backend NIC's VPC VNI (for the E/W anycast route)
@@ -18,9 +18,10 @@ type lbBacking struct {
 }
 
 // desiredLB lists the CompiledNICs scheduled to this node and, for each CompiledNIC.LB entry, emits
-// an lbBacking keyed on the NIC's underlay /128 (CompiledNIC.UnderlayRoute). A NIC without an
-// allocated underlay yet is skipped (nothing to announce until it is attached).
-func (r *Reconciler) desiredLB(ctx context.Context) ([]lbBacking, error) {
+// an lbBacking keyed on the backend NIC's node-local underlay /128 — resolved by joining the NIC's
+// overlay IPs to `ulByIP` (overlay IP -> underlay, from the local dataplane's attached interfaces).
+// A NIC whose overlay IP isn't attached locally yet is skipped (nothing to announce until it is).
+func (r *Reconciler) desiredLB(ctx context.Context, ulByIP map[string]string) ([]lbBacking, error) {
 	var cnics netv1.CompiledNICList
 	if err := r.client.List(ctx, &cnics); err != nil {
 		return nil, fmt.Errorf("list compilednics: %w", err)
@@ -32,9 +33,15 @@ func (r *Reconciler) desiredLB(ctx context.Context) ([]lbBacking, error) {
 		if c.Spec.NodeName != r.nodeID || len(c.Spec.LB) == 0 {
 			continue
 		}
-		ul := c.Spec.UnderlayRoute
+		ul := ""
+		for _, ip := range c.Spec.OverlayIPs {
+			if u, ok := ulByIP[ip]; ok {
+				ul = u
+				break
+			}
+		}
 		if ul == "" {
-			continue // NIC not attached yet
+			continue // backend NIC not attached locally yet
 		}
 		for _, lb := range c.Spec.LB {
 			ports := make([]LbPort, 0, len(lb.Ports))

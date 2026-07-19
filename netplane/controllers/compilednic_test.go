@@ -239,8 +239,8 @@ func TestCompile_PeerImports(t *testing.T) {
 	}
 }
 
-func TestCompile_NATFromAllocationsAndUnderlay(t *testing.T) {
-	nic := testNIC() // IP 10.0.0.10, VNI 100, status.underlayRoute 2001:db8:fefe::bb
+func TestCompile_NATFromAllocations(t *testing.T) {
+	nic := testNIC() // IP 10.0.0.10, VNI 100
 	natBySource := map[string]netv1.NATAllocation{
 		"10.0.0.10": {Source: "10.0.0.10", PublicIP: "203.0.113.7", PortMin: 1024, PortMax: 2047},
 		"10.9.9.9":  {Source: "10.9.9.9", PublicIP: "203.0.113.8", PortMin: 0, PortMax: 1023}, // other NIC — ignored
@@ -254,10 +254,9 @@ func TestCompile_NATFromAllocationsAndUnderlay(t *testing.T) {
 	if src.SourceIP != "10.0.0.10" || src.NATIP != "203.0.113.7" || src.PortMin != 1024 || src.PortMax != 2047 {
 		t.Fatalf("bad CompiledNATSource: %+v", src)
 	}
-	// underlayRoute is copied from the source NIC's status so the CompiledNIC is self-contained.
-	if c.Spec.UnderlayRoute != "2001:db8:fefe::bb" {
-		t.Fatalf("UnderlayRoute = %q, want 2001:db8:fefe::bb", c.Spec.UnderlayRoute)
-	}
+	// The underlay is NOT compiled into the spec — it is node-local state the agent resolves from
+	// the local dataplane. Confirm the compiler leaves it out.
+	_ = nic.Status.UnderlayRoute
 }
 
 func lbScheme(t *testing.T) *runtime.Scheme {

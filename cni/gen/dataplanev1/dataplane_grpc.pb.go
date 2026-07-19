@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	DataplaneNode_AttachInterface_FullMethodName     = "/dataplane.v1.DataplaneNode/AttachInterface"
 	DataplaneNode_DetachInterface_FullMethodName     = "/dataplane.v1.DataplaneNode/DetachInterface"
+	DataplaneNode_ListInterfaces_FullMethodName      = "/dataplane.v1.DataplaneNode/ListInterfaces"
 	DataplaneNode_ConfigureNetwork_FullMethodName    = "/dataplane.v1.DataplaneNode/ConfigureNetwork"
 	DataplaneNode_AddRoute_FullMethodName            = "/dataplane.v1.DataplaneNode/AddRoute"
 	DataplaneNode_WithdrawRoute_FullMethodName       = "/dataplane.v1.DataplaneNode/WithdrawRoute"
@@ -46,6 +47,11 @@ const (
 type DataplaneNodeClient interface {
 	AttachInterface(ctx context.Context, in *AttachInterfaceRequest, opts ...grpc.CallOption) (*AttachInterfaceResponse, error)
 	DetachInterface(ctx context.Context, in *DetachInterfaceRequest, opts ...grpc.CallOption) (*DetachInterfaceResponse, error)
+	// ListInterfaces returns every interface currently attached on this node, with its overlay
+	// identity (vni + IPs) and the node-local underlay /128 allocated to it at attach. The node-local
+	// agent uses this to announce overlay host routes with the correct node-local nexthop — the
+	// underlay is node-local state owned by the dataplane, not central config.
+	ListInterfaces(ctx context.Context, in *ListInterfacesRequest, opts ...grpc.CallOption) (*ListInterfacesResponse, error)
 	ConfigureNetwork(ctx context.Context, in *ConfigureNetworkRequest, opts ...grpc.CallOption) (*ConfigureNetworkResponse, error)
 	// AddRoute programs a single overlay route (vni, prefix -> nexthop underlay).
 	// Idempotent: re-adding an existing (vni, prefix) replaces its nexthop.
@@ -108,6 +114,16 @@ func (c *dataplaneNodeClient) DetachInterface(ctx context.Context, in *DetachInt
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DetachInterfaceResponse)
 	err := c.cc.Invoke(ctx, DataplaneNode_DetachInterface_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataplaneNodeClient) ListInterfaces(ctx context.Context, in *ListInterfacesRequest, opts ...grpc.CallOption) (*ListInterfacesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListInterfacesResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_ListInterfaces_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -263,6 +279,11 @@ func (c *dataplaneNodeClient) ConfigureQoS(ctx context.Context, in *ConfigureQoS
 type DataplaneNodeServer interface {
 	AttachInterface(context.Context, *AttachInterfaceRequest) (*AttachInterfaceResponse, error)
 	DetachInterface(context.Context, *DetachInterfaceRequest) (*DetachInterfaceResponse, error)
+	// ListInterfaces returns every interface currently attached on this node, with its overlay
+	// identity (vni + IPs) and the node-local underlay /128 allocated to it at attach. The node-local
+	// agent uses this to announce overlay host routes with the correct node-local nexthop — the
+	// underlay is node-local state owned by the dataplane, not central config.
+	ListInterfaces(context.Context, *ListInterfacesRequest) (*ListInterfacesResponse, error)
 	ConfigureNetwork(context.Context, *ConfigureNetworkRequest) (*ConfigureNetworkResponse, error)
 	// AddRoute programs a single overlay route (vni, prefix -> nexthop underlay).
 	// Idempotent: re-adding an existing (vni, prefix) replaces its nexthop.
@@ -316,6 +337,9 @@ func (UnimplementedDataplaneNodeServer) AttachInterface(context.Context, *Attach
 }
 func (UnimplementedDataplaneNodeServer) DetachInterface(context.Context, *DetachInterfaceRequest) (*DetachInterfaceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DetachInterface not implemented")
+}
+func (UnimplementedDataplaneNodeServer) ListInterfaces(context.Context, *ListInterfacesRequest) (*ListInterfacesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListInterfaces not implemented")
 }
 func (UnimplementedDataplaneNodeServer) ConfigureNetwork(context.Context, *ConfigureNetworkRequest) (*ConfigureNetworkResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ConfigureNetwork not implemented")
@@ -412,6 +436,24 @@ func _DataplaneNode_DetachInterface_Handler(srv interface{}, ctx context.Context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(DataplaneNodeServer).DetachInterface(ctx, req.(*DetachInterfaceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataplaneNode_ListInterfaces_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListInterfacesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneNodeServer).ListInterfaces(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneNode_ListInterfaces_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneNodeServer).ListInterfaces(ctx, req.(*ListInterfacesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -682,6 +724,10 @@ var DataplaneNode_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DetachInterface",
 			Handler:    _DataplaneNode_DetachInterface_Handler,
+		},
+		{
+			MethodName: "ListInterfaces",
+			Handler:    _DataplaneNode_ListInterfaces_Handler,
 		},
 		{
 			MethodName: "ConfigureNetwork",

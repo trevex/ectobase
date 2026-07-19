@@ -41,7 +41,9 @@ func TestDesiredAnnouncesOnlyLocalCompiledNicNat(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(localC, remoteC).Build()
 	dp := newRecordingDP()
-	r := &Reconciler{client: c, nodeID: "nodeA", underlay: "fd00::a", dp: dp}
+	// Only the local source (10.0.0.1) is attached on this node; the remote (10.0.0.2) is not.
+	dp.ifaces = []LocalInterface{{InterfaceID: "nic-a", Vni: 100, OverlayIPs: []string{"10.0.0.1"}, Underlay: "fd00::a"}}
+	r := &Reconciler{client: c, nodeID: "nodeA", underlay: "fd00::b", dp: dp}
 
 	_, _, blocks, _, _, err := r.Desired(context.Background())
 	if err != nil {

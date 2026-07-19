@@ -15,8 +15,8 @@ func TestReconcileProgramsLocalNatSourceAndStagesAnnounce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The agent reads CompiledNICs only. A local CompiledNIC on nodeA with a NAT source is programmed
-	// and announced; its underlay is empty so the block owner falls back to the node underlay.
+	// A local CompiledNIC on nodeA carries the central NAT allocation; the source's node-local
+	// underlay comes from the dataplane's attached-interface list and is used as the block owner.
 	cnic := &netv1.CompiledNIC{}
 	cnic.Name = "default-nic-a"
 	cnic.Namespace = "default"
@@ -32,7 +32,8 @@ func TestReconcileProgramsLocalNatSourceAndStagesAnnounce(t *testing.T) {
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cnic).Build()
 	dp := newRecordingDP()
-	r := &Reconciler{client: c, nodeID: "nodeA", underlay: "fd00::a", dp: dp}
+	dp.ifaces = []LocalInterface{{InterfaceID: "nic-a", Vni: 100, OverlayIPs: []string{"10.0.0.1"}, Underlay: "fd00::a"}}
+	r := &Reconciler{client: c, nodeID: "nodeA", underlay: "fd00::b", dp: dp}
 
 	_, _, blocks, _, _, err := r.Desired(context.Background())
 	if err != nil {

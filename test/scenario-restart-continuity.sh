@@ -95,10 +95,12 @@ bpftool_net_show_uplink() {
   sudo nsenter -t "$worker_pid" -n "$NIX_BPFTOOL" net show dev "$UPLINK_IFACE" 2>/dev/null
 }
 
-# Extract the XDP prog-id from bpftool net show output (format: "prog_id N" or "id N").
+# Extract the XDP prog-id from bpftool net show output. Different bpftool versions render the XDP
+# attachment differently ("prog_id N", "xdp id N", or "eth1(234) generic id N"), so match the common
+# "id N" tail rather than a version-specific prefix.
 uplink_prog_id() {
   bpftool_net_show_uplink \
-    | grep -oE 'prog_id [0-9]+|xdp.*id [0-9]+' \
+    | grep -oE 'id [0-9]+' \
     | grep -oE '[0-9]+' | head -1
 }
 

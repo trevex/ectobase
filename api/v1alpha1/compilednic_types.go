@@ -7,13 +7,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// CompiledNICSpec is the fully lowered, node-local NIC configuration bundle. It captures
-// everything the dataplane agent needs for a single NIC: identity, VNI, underlay, overlay IPs,
-// firewall rules (resolved from NetworkPolicy selectors), egress-SNAT sources, LB membership,
-// and peer imports. It is the SOLE per-NIC input the agent reads: given the set of CompiledNICs
-// scheduled to a node, the agent can derive every static route/NAT/firewall/LB/QoS it programs
-// and announces, without reading the source NetworkInterface, VPC, or NATGateway. Dynamic routes
-// learned via routebus are the only per-NIC state NOT captured here.
+// CompiledNICSpec is the fully lowered per-NIC STATIC POLICY the control plane hands to a node:
+// identity, VNI, overlay IPs, firewall rules (resolved from NetworkPolicy selectors), egress-SNAT
+// allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC +
+// NetworkPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.
+//
+// It deliberately does NOT carry the NIC's underlay /128: that is node-local state the dataplane
+// allocates at attach, and the agent obtains it from the local DataplaneNode (ListInterfaces) to
+// announce overlay routes with the correct node-local nexthop. Keeping node-local state out of this
+// central object avoids a compile->sync round-trip that would lag (and flap) the announced nexthop.
 type CompiledNICSpec struct {
 	// NodeName is the node this NIC is scheduled on.
 	NodeName string `json:"nodeName"`
@@ -24,11 +26,6 @@ type CompiledNICSpec struct {
 	VNI int32 `json:"vni"`
 	// Port describes the dataplane port allocated for this interface.
 	Port PortStatus `json:"port"`
-	// UnderlayRoute is the NIC's allocated underlay /128 (copied from the source NetworkInterface's
-	// status.underlayRoute). It is the nexthop for this NIC's overlay host routes and the owner of
-	// its NAT blocks on the route bus. Empty until the NIC has been attached.
-	// +optional
-	UnderlayRoute string `json:"underlayRoute,omitempty"`
 	// OverlayIPs are the guest overlay IP addresses.
 	// +optional
 	OverlayIPs []string `json:"overlayIPs,omitempty"`

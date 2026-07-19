@@ -19,22 +19,23 @@ func lbTestScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-func TestDesiredLB_JoinsUnderlayFromNIC(t *testing.T) {
+func TestDesiredLB_JoinsUnderlayFromDataplane(t *testing.T) {
 	s := lbTestScheme(t)
 	cnic := &netv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
 		Spec: netv1.CompiledNICSpec{
-			NodeName:      "nodeA",
-			NICRef:        netv1.LocalObjectReference{Name: "web-0"},
-			VNI:           100,
-			UnderlayRoute: "2001:db8::dd",
-			LB:            []netv1.CompiledLB{{VIP: "203.0.113.50", Ports: []netv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
+			NodeName:   "nodeA",
+			NICRef:     netv1.LocalObjectReference{Name: "web-0"},
+			VNI:        100,
+			OverlayIPs: []string{"10.0.10.5"},
+			LB:         []netv1.CompiledLB{{VIP: "203.0.113.50", Ports: []netv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
 	r := &Reconciler{client: cl, nodeID: "nodeA"}
 
-	got, err := r.desiredLB(context.Background())
+	// The backend NIC's overlay IP is attached locally with this node-local underlay.
+	got, err := r.desiredLB(context.Background(), map[string]string{"10.0.10.5": "2001:db8::dd"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,13 +56,14 @@ func TestDesiredLB_SkipsWhenNoUnderlay(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
 		Spec: netv1.CompiledNICSpec{
 			NodeName: "nodeA", NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 100,
-			LB: []netv1.CompiledLB{{VIP: "203.0.113.50"}},
+			OverlayIPs: []string{"10.0.10.5"},
+			LB:         []netv1.CompiledLB{{VIP: "203.0.113.50"}},
 		},
 	}
-	nic := &netv1.NetworkInterface{ObjectMeta: metav1.ObjectMeta{Name: "web-0", Namespace: "default"}}
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic, nic).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
 	r := &Reconciler{client: cl, nodeID: "nodeA"}
-	got, err := r.desiredLB(context.Background())
+	// Nothing attached locally (empty underlay index) → nothing to announce yet.
+	got, err := r.desiredLB(context.Background(), map[string]string{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,21 +75,18 @@ func TestDesiredLB_SkipsWhenNoUnderlay(t *testing.T) {
 func TestDesired_EmitsVIPAnycastRoute(t *testing.T) {
 	s := lbTestScheme(t)
 	node := "nodeA"
-	// VPC provides VNI resolution via vniFor: use a NIC whose Status.VNI is set so vniFor returns it.
-	nic := &netv1.NetworkInterface{
-		ObjectMeta: metav1.ObjectMeta{Name: "web-0", Namespace: "default"},
-		Spec:       netv1.NetworkInterfaceSpec{NodeName: &node, IPs: []string{"10.0.0.20"}},
-		Status:     netv1.NetworkInterfaceStatus{VNI: 100, UnderlayRoute: "2001:db8::dd"},
-	}
 	cnic := &netv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
 		Spec: netv1.CompiledNICSpec{
-			NodeName: node, NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 100, UnderlayRoute: "2001:db8::dd",
-			LB: []netv1.CompiledLB{{VIP: "203.0.113.50", Ports: []netv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
+			NodeName: node, NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 100,
+			OverlayIPs: []string{"10.0.0.20"},
+			LB:         []netv1.CompiledLB{{VIP: "203.0.113.50", Ports: []netv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
 		},
 	}
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(nic, cnic).Build()
-	r := &Reconciler{client: cl, nodeID: node, underlay: "2001:db8::dd"}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
+	dp := newRecordingDP()
+	dp.ifaces = []LocalInterface{{InterfaceID: "web-0", Vni: 100, OverlayIPs: []string{"10.0.0.20"}, Underlay: "2001:db8::dd"}}
+	r := &Reconciler{client: cl, nodeID: node, underlay: "2001:db8::dd", dp: dp}
 
 	_, announce, _, _, _, err := r.Desired(context.Background())
 	if err != nil {
@@ -169,19 +168,18 @@ func TestReconcileLB_NonEdgeNoop(t *testing.T) {
 func TestDesiredPublic_EmitsLBVIP(t *testing.T) {
 	s := lbTestScheme(t)
 	node := "nodeA"
-	nic := &netv1.NetworkInterface{
-		ObjectMeta: metav1.ObjectMeta{Name: "web-0", Namespace: "default"},
-		Status:     netv1.NetworkInterfaceStatus{VNI: 100, UnderlayRoute: "2001:db8::dd"},
-	}
 	cnic := &netv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
 		Spec: netv1.CompiledNICSpec{
-			NodeName: node, NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 100, UnderlayRoute: "2001:db8::dd",
-			LB: []netv1.CompiledLB{{VIP: "203.0.113.50"}},
+			NodeName: node, NICRef: netv1.LocalObjectReference{Name: "web-0"}, VNI: 100,
+			OverlayIPs: []string{"10.0.0.20"},
+			LB:         []netv1.CompiledLB{{VIP: "203.0.113.50"}},
 		},
 	}
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(nic, cnic).Build()
-	r := &Reconciler{client: cl, nodeID: node, underlay: "2001:db8::dd"}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
+	dp := newRecordingDP()
+	dp.ifaces = []LocalInterface{{InterfaceID: "web-0", Vni: 100, OverlayIPs: []string{"10.0.0.20"}, Underlay: "2001:db8::dd"}}
+	r := &Reconciler{client: cl, nodeID: node, underlay: "2001:db8::dd", dp: dp}
 
 	recs, err := r.DesiredPublic(context.Background())
 	if err != nil {

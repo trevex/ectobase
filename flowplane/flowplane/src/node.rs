@@ -13,7 +13,8 @@ use pb::{
     AttachInterfaceRequest, AttachInterfaceResponse, ConfigureNetworkRequest,
     ConfigureNetworkResponse, ConfigureQoSRequest, ConfigureQoSResponse, DelFwRuleRequest,
     DelFwRuleResponse, DelLbBackendRequest, DelLbBackendResponse, DelLbVipRequest,
-    DelLbVipResponse, DetachInterfaceRequest, DetachInterfaceResponse, WithdrawNatSourceRequest,
+    DelLbVipResponse, DetachInterfaceRequest, DetachInterfaceResponse, InterfaceInfo,
+    ListInterfacesRequest, ListInterfacesResponse, WithdrawNatSourceRequest,
     WithdrawNatSourceResponse, WithdrawNeighborNatRequest, WithdrawNeighborNatResponse,
     WithdrawRouteRequest, WithdrawRouteResponse,
 };
@@ -87,6 +88,39 @@ impl DataplaneNode for NodeService {
             .map_err(|e| Status::internal(format!("detach task panicked: {e}")))?
             .map_err(|e| Status::internal(e.to_string()))?;
         Ok(Response::new(DetachInterfaceResponse {}))
+    }
+
+    async fn list_interfaces(
+        &self,
+        _req: Request<ListInterfacesRequest>,
+    ) -> Result<Response<ListInterfacesResponse>, Status> {
+        let attach = self
+            .attach
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
+            .clone();
+        let rows = tokio::task::spawn_blocking(move || attach.control.list_interfaces())
+            .await
+            .map_err(|e| Status::internal(format!("list task panicked: {e}")))?;
+        let interfaces = rows
+            .into_iter()
+            .map(|(id, vni, ipv4, ipv6, underlay, _device)| InterfaceInfo {
+                interface_id: String::from_utf8_lossy(&id).into_owned(),
+                vni,
+                ipv4: if ipv4 == [0, 0, 0, 0] {
+                    String::new()
+                } else {
+                    std::net::Ipv4Addr::from(ipv4).to_string()
+                },
+                ipv6: if ipv6 == [0u8; 16] {
+                    String::new()
+                } else {
+                    std::net::Ipv6Addr::from(ipv6).to_string()
+                },
+                underlay_route: std::net::Ipv6Addr::from(underlay).to_string(),
+            })
+            .collect();
+        Ok(Response::new(ListInterfacesResponse { interfaces }))
     }
 
     async fn configure_network(

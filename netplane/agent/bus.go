@@ -43,6 +43,19 @@ type Dataplane interface {
 	// ConfigureQoS sets the per-interface QoS lanes: egressMbps is EDT-shaped, publicMbps and
 	// ingressMbps are policed. All 0 = unlimited (clears). Idempotent.
 	ConfigureQoS(ctx context.Context, interfaceID string, egressMbps, publicMbps, ingressMbps uint32) error
+	// ListInterfaces returns the interfaces currently attached on this node, each with its overlay
+	// identity and node-local underlay /128. The agent announces overlay routes from this (the
+	// underlay is node-local dataplane state, not central config).
+	ListInterfaces(ctx context.Context) ([]LocalInterface, error)
+}
+
+// LocalInterface is one interface attached on this node: its overlay identity (vni + IPs) and the
+// node-local underlay /128 the dataplane allocated to it. Reported by DataplaneNode.ListInterfaces.
+type LocalInterface struct {
+	InterfaceID string
+	Vni         uint32
+	OverlayIPs  []string // overlay IPv4 and/or IPv6
+	Underlay    string   // node-local allocated /128
 }
 
 // FwRule is one compiled firewall rule the agent installs on the dataplane.
@@ -677,4 +690,24 @@ func (d dpAdapter) ConfigureQoS(ctx context.Context, interfaceID string, egressM
 		InterfaceId: interfaceID, EgressMbps: egressMbps, PublicMbps: publicMbps, IngressMbps: ingressMbps,
 	})
 	return err
+}
+func (d dpAdapter) ListInterfaces(ctx context.Context) ([]LocalInterface, error) {
+	resp, err := d.c.ListInterfaces(ctx, &dpv1.ListInterfacesRequest{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]LocalInterface, 0, len(resp.GetInterfaces()))
+	for _, i := range resp.GetInterfaces() {
+		ips := make([]string, 0, 2)
+		if i.GetIpv4() != "" {
+			ips = append(ips, i.GetIpv4())
+		}
+		if i.GetIpv6() != "" {
+			ips = append(ips, i.GetIpv6())
+		}
+		out = append(out, LocalInterface{
+			InterfaceID: i.GetInterfaceId(), Vni: i.GetVni(), OverlayIPs: ips, Underlay: i.GetUnderlayRoute(),
+		})
+	}
+	return out, nil
 }

@@ -31,15 +31,15 @@ type PeerImportSpec struct {
 	ImportPrefixes []string
 }
 
-// Compile lowers a NetworkInterface into a self-contained CompiledNIC — the sole per-NIC input the
-// dataplane agent reads (it never reads the source NetworkInterface, VPC, or NATGateway).
+// Compile lowers a NetworkInterface into a CompiledNIC of per-NIC STATIC POLICY (the agent gets
+// node-local facts like the underlay from the local dataplane, not from here).
 //
-// It copies identity (name, nodeName, underlayRoute, port, overlayIPs) from the NIC and stamps the
-// caller-resolved vni; translates each policy whose interfaceSelector matches the NIC's labels into
-// CompiledFwRules; records LB membership and peer imports; and, for each overlay IP with a
-// NATGateway allocation (natBySource, keyed by source overlay IP), records a CompiledNATSource.
-// peerings is a pre-resolved slice of PeerImportSpecs; only entries whose VPCName matches the NIC's
-// VPC are emitted. The returned CompiledNIC has no Status set (caller fills that in if needed).
+// It copies identity (name, nodeName, port, overlayIPs) from the NIC and stamps the caller-resolved
+// vni; translates each policy whose interfaceSelector matches the NIC's labels into CompiledFwRules;
+// records LB membership and peer imports; and, for each overlay IP with a NATGateway allocation
+// (natBySource, keyed by source overlay IP), records a CompiledNATSource. peerings is a pre-resolved
+// slice of PeerImportSpecs; only entries whose VPCName matches the NIC's VPC are emitted. The
+// returned CompiledNIC has no Status set (caller fills that in if needed).
 func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.NetworkPolicy, lbs []netv1.LoadBalancer, peerings []PeerImportSpec, natBySource map[string]netv1.NATAllocation) netv1.CompiledNIC {
 	nodeName := ""
 	if nic.Spec.NodeName != nil {
@@ -61,13 +61,12 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.NetworkPol
 			Namespace: nic.Namespace,
 		},
 		Spec: netv1.CompiledNICSpec{
-			NodeName:      nodeName,
-			NICRef:        netv1.LocalObjectReference{Name: nic.Name},
-			VNI:           vni,
-			Port:          port,
-			UnderlayRoute: nic.Status.UnderlayRoute,
-			OverlayIPs:    append([]string(nil), nic.Spec.IPs...),
-			Firewall:      netv1.CompiledFirewall{},
+			NodeName:   nodeName,
+			NICRef:     netv1.LocalObjectReference{Name: nic.Name},
+			VNI:        vni,
+			Port:       port,
+			OverlayIPs: append([]string(nil), nic.Spec.IPs...),
+			Firewall:   netv1.CompiledFirewall{},
 		},
 	}
 

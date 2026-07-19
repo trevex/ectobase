@@ -60,11 +60,13 @@ pub fn uplink_finalizes_checksum(uplink: &str) -> bool {
 
 impl AttachState {
     /// Host-side veth name for an interface. Kept short and stable so detach can delete it and so
-    /// the datapath tap is discoverable. Kernel IFNAMSIZ is 15 chars, so we hash long ids.
+    /// the datapath tap is discoverable. Kernel IFNAMSIZ caps names at 15 chars, and `setup_veth`
+    /// derives the temporary peer name as `<host>p` (one char longer) — so the host name itself must
+    /// be <= 14 chars for the pair to create. Longer ids are hashed to a fixed 13-char name.
     fn host_veth_name(interface_id: &str) -> String {
-        // "veth-<id>" when it fits; otherwise a stable short hash to stay within IFNAMSIZ.
+        // "veth-<id>" when it (plus the +1 peer suffix) fits; otherwise a stable short hash.
         let candidate = format!("veth-{interface_id}");
-        if candidate.len() <= 15 {
+        if candidate.len() <= 14 {
             candidate
         } else {
             let mut h: u32 = 2166136261;
@@ -372,7 +374,24 @@ mod tests {
     #[test]
     fn host_veth_name_long_is_hashed_and_fits() {
         let n = AttachState::host_veth_name("a-very-long-interface-id-way-over-ifnamsiz");
-        assert!(n.len() <= 15, "{n} exceeds IFNAMSIZ");
+        // The host name PLUS the +1 peer suffix (`<host>p`) must fit IFNAMSIZ (15).
+        assert!(
+            n.len() <= 14,
+            "{n} leaves no room for the +1 veth peer suffix"
+        );
+        assert!(n.starts_with("veth-"));
+    }
+
+    #[test]
+    fn host_veth_name_15char_boundary_is_hashed() {
+        // "blue-guest" -> "veth-blue-guest" is exactly 15 chars; verbatim it would make a 16-char
+        // peer ("veth-blue-guestp") that exceeds IFNAMSIZ, so it must be hashed instead.
+        let n = AttachState::host_veth_name("blue-guest");
+        assert_eq!(
+            n.len(),
+            13,
+            "{n} should be the 13-char hashed form, not verbatim"
+        );
         assert!(n.starts_with("veth-"));
     }
 
