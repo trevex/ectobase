@@ -62,6 +62,14 @@ apiVersion: net.ectobase.dev/v1alpha1
 kind: NetworkInterface
 metadata: {name: nic-vm, namespace: default}
 spec: {vpcRef: {name: blue}, ips: ["$VM_IP"], mac: "$VM_MAC", nodeName: $NODE}
+---
+# The peer is also a real NetworkInterface so it gets a CompiledNIC (default allow-all firewall) via
+# the same policy path as the VM — no manual AddFwRule needed. Its dataplane attach is still grpcurl
+# below (the agent programs firewall/routes by overlay IP; it does not itself attach the datapath).
+apiVersion: net.ectobase.dev/v1alpha1
+kind: NetworkInterface
+metadata: {name: nic-peer, namespace: default}
+spec: {vpcRef: {name: blue}, ips: ["$PEER_IP"], nodeName: $NODE}
 EOF
 k patch vpc blue --subresource=status --type=merge -p '{"status":{"vni":100,"state":"Ready"}}'
 
@@ -120,18 +128,16 @@ FP=$(sudo docker exec "$NODE" crictl ps --name flowplane -o json 2>/dev/null | g
 sudo docker exec "$NODE" crictl logs "$FP" 2>&1 | grep -iE "INTERFACES readback vni=100 ip=$VM_IP" | tail -2 || echo "  (no readback yet — see launcher pod events below)"
 k -n default describe pod "$POD" 2>/dev/null | grep -A6 Events: | tail -8 || true
 
-say "firewall allow for the VM + peer (datapath is deny-by-default; no CompiledNIC in this test)"
-# grpc helper against the node's flowplane; VM interface_id = <launcher-pod-uid>/<multus-ifname>,
-# discovered via ListInterfaces (matched on the overlay IP).
-DP() { sudo docker run --rm --network "container:$NODE" -v "$(pwd)/api/proto:/proto:ro" "$GRPCURL_IMG" \
-  -plaintext -import-path /proto/dataplane/v1 -proto dataplane.proto -d "$2" \
-  127.0.0.1:1337 "dataplane.v1.DataplaneNode/$1" 2>&1; }
-VM_ID=$(DP ListInterfaces '{}' | tr -d ' ",' | awk -F: '/interfaceId/{id=$2} /ipv4/{if($2=="'"$VM_IP"'")print id}' | head -1)
-echo "VM interface_id=$VM_ID"
-for pair in "$VM_ID vm" "peer peer"; do set -- $pair
-  DP AddFwRule "{\"interface_id\":\"$1\",\"rule_id\":\"$2-eg\",\"proto\":0,\"allow\":true,\"egress\":true}"  >/dev/null
-  DP AddFwRule "{\"interface_id\":\"$1\",\"rule_id\":\"$2-in\",\"proto\":0,\"allow\":true,\"egress\":false}" >/dev/null
-done
+say "firewall via the real policy path (deny-by-default dataplane)"
+# Both endpoints are NetworkInterfaces, so the CompiledNICReconciler produced a CompiledNIC for each
+# with an ALLOW-ALL default (no NetworkPolicy selects them) and the netplane-agent's fwreconcile
+# programs FW_META, resolving the interface by overlay IP. Restart the agent so it reconciles AFTER
+# both interfaces are attached in the dataplane (avoids the attach-vs-reconcile race). To restrict
+# traffic, apply a NetworkPolicy with an interfaceSelector matching these NICs' labels.
+k -n default get compilednic default-nic-vm -o jsonpath='{.spec.firewall}{"\n"}' 2>/dev/null | sed 's/^/  nic-vm firewall: /'
+k -n ectobase-system rollout restart ds/netplane-agent 2>&1 | tail -1
+k -n ectobase-system rollout status ds/netplane-agent --timeout=90s 2>&1 | tail -1
+sleep 6
 
 say "wait for VMI Running, then ping the VM from the peer ($PEER_IP -> $VM_IP)"
 k -n default wait vmi/vm-a --for=jsonpath='{.status.phase}'=Running --timeout=180s 2>&1 | tail -1
