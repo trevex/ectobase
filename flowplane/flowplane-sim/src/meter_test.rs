@@ -198,8 +198,9 @@ fn no_meter_entry_always_passes() {
 ///   - packet 1: idle cursor (total_last_ns=0 ≤ now=0) → departs AT now (0); cursor = 0 + airtime.
 ///   - packet 2: cursor > now → departs AT cursor (back-to-back queueing); cursor advances again.
 ///   - packet 3: same; all three PASS — EDT never drops.
-/// Advance now past the cursor → packet 4 departs at now (queue drained).
-/// Optional: after a local delivery last_tstamp is None (local is unshaped).
+///
+/// Advance now past the cursor → packet 4 departs at now (queue drained). Optional: after a local
+/// delivery last_tstamp is None (local is unshaped).
 #[test]
 fn edt_total_lane_shapes_not_drops() {
     // Wire up an ENCAP route: ext_ip has no local UnderlayValue → deliver() returns Encap.
@@ -536,6 +537,7 @@ fn set_ingress_meter(node: &mut SimNode, ingress_bps: u64, ingress_burst: u64) {
 /// Fixture: ingress_burst sized for ~2 inner frames. Three encapped packets arrive at now=0:
 ///   - packets 1 and 2: within burst → Redirect(INGRESS_TAP);
 ///   - packet 3: bucket exhausted, no time elapsed → Drop.
+///
 /// No METER entry configured on the SENDING side (egress), confirming the ingress lane is independent.
 #[test]
 fn ingress_lane_exhaust_drop() {

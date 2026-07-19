@@ -61,18 +61,15 @@ impl Control {
         // LOCAL_DELIVER egress entry (attach_edge). So skip the write for vni==0.
         // tap_ifindex=0 and guest_mac=[0;6] because the LB VIP is anycast (no local tap).
         if result.is_ok() && vni != 0 {
-            result = g
-                .underlay
-                .upsert(
-                    lb_underlay,
-                    flowplane_common::UnderlayValue {
-                        vni,
-                        tap_ifindex: 0,
-                        guest_mac: [0; 6],
-                        _pad: [0; 2],
-                    },
-                )
-                .map_err(anyhow::Error::from);
+            result = g.underlay.upsert(
+                lb_underlay,
+                flowplane_common::UnderlayValue {
+                    vni,
+                    tap_ifindex: 0,
+                    guest_mac: [0; 6],
+                    _pad: [0; 2],
+                },
+            );
         }
         if let Err(e) = result {
             for key in &written {

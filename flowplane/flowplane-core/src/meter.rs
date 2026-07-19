@@ -186,7 +186,7 @@ mod tests {
         let (p2, t2) = take(1000, 1_000_000, 0, 0, 10 * SEC, 1000);
         assert_eq!((p2, t2), (true, 0));
         let (p3, _t3) = take(1000, 1_000_000, 0, 0, 10 * SEC, 1001);
-        assert_eq!(p3, false);
+        assert!(!p3);
     }
 
     #[test]

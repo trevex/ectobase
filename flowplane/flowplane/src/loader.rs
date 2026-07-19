@@ -475,7 +475,8 @@ mod tests {
             .map_pin_path(pin.path())
             .load(bytes)
             .expect("load ebpf object");
-        for name in ["uplink_rx"] {
+        {
+            let name = "uplink_rx";
             let prog: &mut Xdp = ebpf
                 .program_mut(name)
                 .unwrap_or_else(|| panic!("XDP program {name} missing"))

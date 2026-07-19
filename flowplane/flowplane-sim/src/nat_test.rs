@@ -220,7 +220,7 @@ fn snat_rewrites_src_ip_and_port_with_valid_checksums() {
          if this changed, the allocation algorithm changed — verify eBPF parity before updating EXPECTED_SPORT_A"
     );
     assert!(
-        rewritten_sport >= PORT_MIN_A && rewritten_sport < PORT_MAX_A,
+        (PORT_MIN_A..PORT_MAX_A).contains(&rewritten_sport),
         "rewritten sport must be within the assigned block [{PORT_MIN_A},{PORT_MAX_A})"
     );
 
@@ -273,12 +273,12 @@ fn snat_distinct_sources_map_to_distinct_blocks() {
         "A: src port must match golden constant EXPECTED_SPORT_A={EXPECTED_SPORT_A}"
     );
     assert!(
-        sport_nat_a >= PORT_MIN_A && sport_nat_a < PORT_MAX_A,
+        (PORT_MIN_A..PORT_MAX_A).contains(&sport_nat_a),
         "A: port {sport_nat_a} outside block A [{PORT_MIN_A},{PORT_MAX_A})"
     );
     // Must NOT be in block B.
     assert!(
-        sport_nat_a < PORT_MIN_B || sport_nat_a >= PORT_MAX_B,
+        !(PORT_MIN_B..PORT_MAX_B).contains(&sport_nat_a),
         "A: port {sport_nat_a} landed in block B [{PORT_MIN_B},{PORT_MAX_B}) — cross-assign!"
     );
 
@@ -301,12 +301,12 @@ fn snat_distinct_sources_map_to_distinct_blocks() {
         "B: src port must match golden constant EXPECTED_SPORT_B={EXPECTED_SPORT_B}"
     );
     assert!(
-        sport_nat_b >= PORT_MIN_B && sport_nat_b < PORT_MAX_B,
+        (PORT_MIN_B..PORT_MAX_B).contains(&sport_nat_b),
         "B: port {sport_nat_b} outside block B [{PORT_MIN_B},{PORT_MAX_B})"
     );
     // Must NOT be in block A.
     assert!(
-        sport_nat_b < PORT_MIN_A || sport_nat_b >= PORT_MAX_A,
+        !(PORT_MIN_A..PORT_MAX_A).contains(&sport_nat_b),
         "B: port {sport_nat_b} landed in block A [{PORT_MIN_A},{PORT_MAX_A}) — cross-assign!"
     );
 

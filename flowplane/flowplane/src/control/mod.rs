@@ -212,8 +212,14 @@ struct Inner {
     learned_macs: HashMap<Vec<u8>, [u8; 6]>,
 }
 
+/// `(interface_id, device)` pairs whose guest program must be re-attached after a graceful restart
+/// (their bpf-links died with the old process; the pinned maps survived).
+type ReattachList = Vec<(Vec<u8>, String)>;
+
 impl Control {
-    /// Load + attach uplink_rx, set LOCAL, take the map handles.
+    /// Load + attach uplink_rx, set LOCAL, take the map handles. The uplink identity + pinning policy
+    /// are all distinct one-shot init inputs, so this constructor takes them positionally.
+    #[allow(clippy::too_many_arguments)]
     pub fn bring_up(
         uplink: &str,
         uplink_ifindex: u32,
@@ -353,7 +359,7 @@ impl Control {
     ///     (their links died with the old process; the maps survived).
     ///   - `underlays`: every programmed underlay /128 (from the surviving UNDERLAY map) so the caller
     ///     can reseed `UnderlayIpam` and never reissue a live allocation.
-    fn rebuild_from_maps(g: &mut Inner) -> anyhow::Result<(Vec<(Vec<u8>, String)>, Vec<[u8; 16]>)> {
+    fn rebuild_from_maps(g: &mut Inner) -> anyhow::Result<(ReattachList, Vec<[u8; 16]>)> {
         let journal = g.iface_meta.entries();
         // Sanity cross-check: the journal should track the surviving INTERFACES map 1:1.
         let iface_count = g.ifaces.entries().len();
@@ -651,10 +657,10 @@ impl Control {
             .insert(tap)
             .context("register tap in GUEST_DEV")?;
         if let Err(e) = Self::program_iface_maps(&mut g, interface_id, device, tap, mac, &params) {
-            let _ = g.guest_dev.remove(tap); // unwind the GUEST_DEV write
-                                             // A non-pinned `link` drops here -> detaches. A pinned link is held by the bpffs pin, not
-                                             // by `link`, so explicitly unpin to detach the program and avoid leaking the pin — keeping
-                                             // the partial-failure rollback invariant (attach.rs deletes the veth + releases the /128).
+            g.guest_dev.remove(tap); // unwind the GUEST_DEV write
+                                     // A non-pinned `link` drops here -> detaches. A pinned link is held by the bpffs pin, not
+                                     // by `link`, so explicitly unpin to detach the program and avoid leaking the pin — keeping
+                                     // the partial-failure rollback invariant (attach.rs deletes the veth + releases the /128).
             if let GuestLink::Pinned(name) = &link {
                 let pd = g.pin_dir.clone();
                 loader::unpin_link(&pd, name);

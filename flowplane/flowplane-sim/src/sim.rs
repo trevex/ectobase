@@ -102,6 +102,7 @@ impl SimNode {
     ///   2. ingress firewall on the inner 5-tuple against the deliver tap (new-flow gate);
     ///   3. conntrack create-on-miss, **skipped for LB** (DSR, no ct — `ingress.rs:266`);
     ///   4. decap + inner-Ethernet rewrite.
+    ///
     /// Returns the final `Action` + the resulting frame bytes.
     pub fn uplink(
         &mut self,
@@ -190,6 +191,7 @@ impl SimNode {
     ///   2. CT lookup: if the entry has `CT_REWRITE_DST`, apply the reverse-DNAT translation
     ///      (`ct_apply`: inner dst IP -> guest, dst port -> orig sport, +IP/L4 checksums);
     ///   3. decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest.
+    ///
     /// Returns the delivery `Action` + resulting (decapped, reverse-DNAT'd) frame bytes.
     ///
     /// Scope: the `ct_touch` refresh, NAT64 v4->v6 expansion, neighbor-NAT reforward, and inner
@@ -504,8 +506,8 @@ impl SimNode {
 
     /// Host NAT64 INGRESS reply (`try_uplink_rx` → `nat64_ingress`): an external IPv4 reply arriving
     /// encapped IP-in-IPv6 as `[Eth][outerIPv6(40)][innerIPv4(20)][L4]`, whose reverse conntrack entry
-    /// (`rev` — keyed peer-independently on `(vni, 0, nat_ip, 0, nat_port)`, carrying `CT_REWRITE_DST`
-    /// + `CT_F_NAT64`) restores the guest IPv4 + orig L4 port. `meta` supplies the guest tap
+    /// (`rev` — keyed peer-independently on `(vni, 0, nat_ip, 0, nat_port)`, carrying `CT_REWRITE_DST` +
+    /// `CT_F_NAT64`) restores the guest IPv4 + orig L4 port. `meta` supplies the guest tap
     /// (`guest_mac`) plus the guest IPv6 (`guest_ipv6`). Composes the REAL core fns in the exact
     /// order and gates of the eBPF ingress dispatch:
     ///   1. `ct_apply(rev)`: rewrite the inner IPv4 dst (nat_ip→guest_ipv4) + L4 dst port
