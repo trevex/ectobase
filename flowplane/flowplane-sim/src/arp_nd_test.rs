@@ -11,7 +11,7 @@
 use flowplane_common::PortMeta;
 use flowplane_core::pkt::Action;
 
-use crate::SimNode;
+use crate::{SimNode, VecPkt};
 
 const VNI: u32 = 100;
 const GATEWAY_IPV4: [u8; 4] = [10, 0, 0, 1];
@@ -181,6 +181,91 @@ fn ns_becomes_neighbor_advertisement() {
         icmp6_checksum_ok(r),
         "ICMPv6 checksum verifies (folds to 0xffff)"
     );
+}
+
+/// A guest ICMPv6 Router Solicitation, padded to `RA_LEN` (86) to mimic the post-`change_tail`
+/// buffer the eBPF glue hands `ra_reply` (the RA is larger than the RS).
+fn rs_frame() -> Vec<u8> {
+    let mut f = vec![0u8; ETH_LEN + IPV6_LEN + 32];
+    f[0..6].copy_from_slice(&[0x33, 0x33, 0, 0, 0, 2]); // all-routers multicast dst MAC
+    f[6..12].copy_from_slice(&REQUESTER_MAC);
+    f[12..14].copy_from_slice(&ETH_P_IPV6.to_be_bytes());
+    let ip = ETH_LEN;
+    f[ip] = 0x60;
+    f[ip + 4..ip + 6].copy_from_slice(&8u16.to_be_bytes()); // RS payload length (pre-grow)
+    f[ip + 6] = IPPROTO_ICMPV6;
+    f[ip + 7] = 255;
+    f[ip + 8..ip + 24].copy_from_slice(&REQUESTER_IPV6); // src = requester link-local
+    f[ip + 24..ip + 40].copy_from_slice(&[0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]); // dst ff02::2
+    let ic = ETH_LEN + IPV6_LEN;
+    f[ic] = 133; // Router Solicitation
+    f
+}
+
+#[test]
+fn rs_becomes_router_advertisement() {
+    const MTU: u32 = 1460;
+    let mut pkt = VecPkt::from_bytes(&rs_frame());
+    let ok = flowplane_core::arp_nd::ra_reply(&mut pkt, GATEWAY_IPV6, GATEWAY_MAC, MTU);
+    assert!(ok, "RS is rewritten into an RA");
+
+    let r = pkt.bytes();
+    let ip = ETH_LEN;
+    let ic = ETH_LEN + IPV6_LEN;
+    // Ethernet: dst = requester, src = gateway (router) MAC.
+    assert_eq!(&r[0..6], &REQUESTER_MAC, "eth dst = requester");
+    assert_eq!(&r[6..12], &GATEWAY_MAC, "eth src = gateway MAC");
+    // IPv6: src = gateway (link-local), dst = requester; hop limit 255, payload length 32.
+    assert_eq!(&r[ip + 8..ip + 24], &GATEWAY_IPV6, "IPv6 src = gateway");
+    assert_eq!(
+        &r[ip + 24..ip + 40],
+        &REQUESTER_IPV6,
+        "IPv6 dst = requester"
+    );
+    assert_eq!(r[ip + 7], 255, "hop limit 255");
+    assert_eq!(
+        &r[ip + 4..ip + 6],
+        &32u16.to_be_bytes(),
+        "payload length 32"
+    );
+    // ICMPv6 Router Advertisement.
+    assert_eq!(r[ic], 134, "ICMPv6 type = Router Advertisement");
+    assert_eq!(r[ic + 1], 0, "code 0");
+    assert_eq!(
+        r[ic + 5] & 0x80,
+        0x80,
+        "Managed flag set (addressing via DHCPv6)"
+    );
+    assert_eq!(
+        &r[ic + 6..ic + 8],
+        &1800u16.to_be_bytes(),
+        "router lifetime 1800s (default router)"
+    );
+    // Source Link-Layer Address option: type 1, len 1, gateway MAC.
+    assert_eq!(r[ic + 16], 1, "option type = source LL addr");
+    assert_eq!(r[ic + 17], 1, "option len = 1 (8 bytes)");
+    assert_eq!(&r[ic + 18..ic + 24], &GATEWAY_MAC, "SLLA = gateway MAC");
+    // MTU option: type 5, len 1, reserved(2), MTU(4).
+    assert_eq!(r[ic + 24], 5, "option type = MTU");
+    assert_eq!(r[ic + 25], 1, "option len = 1 (8 bytes)");
+    assert_eq!(&r[ic + 28..ic + 32], &MTU.to_be_bytes(), "advertised MTU");
+    // Checksum: non-zero AND correct over the pseudo-header + RA message.
+    let cks = u16::from_be_bytes([r[ic + 2], r[ic + 3]]);
+    assert_ne!(cks, 0, "ICMPv6 checksum is non-zero");
+    assert!(
+        icmp6_checksum_ok(r),
+        "ICMPv6 checksum verifies (folds to 0xffff)"
+    );
+}
+
+#[test]
+fn non_rs_icmp6_is_not_an_ra() {
+    // An NS frame (type 135) is NOT an RS → ra_reply returns false, buffer untouched.
+    let mut pkt = VecPkt::from_bytes(&ns_frame());
+    let before = pkt.bytes().to_vec();
+    let ok = flowplane_core::arp_nd::ra_reply(&mut pkt, GATEWAY_IPV6, GATEWAY_MAC, 1460);
+    assert!(!ok, "an NS is not an RS");
+    assert_eq!(pkt.bytes(), &before[..], "non-RS frame unchanged");
 }
 
 #[test]

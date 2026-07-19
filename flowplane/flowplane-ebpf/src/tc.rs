@@ -89,6 +89,40 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
         {
             return unsafe { bpf_redirect(ifindex, 0) as i32 };
         }
+        // IPv6 Router Solicitation (ICMPv6 type 133) → reply with a Managed RA carrying the default
+        // gateway + the MTU option, so a self-configuring guest/VM gets a v6 default route + link MTU
+        // (DHCPv6 cannot carry MTU). The ND pull above made ETH+IPv6+ICMP-type present; peek the type
+        // cheaply, then GROW the skb to the (larger) RA size before writing the reply in place.
+        const RS_TYPE: u8 = flowplane_core::arp_nd::ND_RS;
+        let is_rs = ctx.data() + flowplane_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN + 1
+            <= ctx.data_end()
+            && unsafe {
+                let p = ctx.data() as *const u8;
+                *p.add(flowplane_common::arp_nd::ETH_LEN + 6)
+                    == flowplane_core::arp_nd::IPPROTO_ICMPV6
+                    && *p.add(flowplane_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN) == RS_TYPE
+            };
+        if is_rs {
+            // Read only the MTU field (not the whole DhcpConfig) to keep this off the heavy stack.
+            let mtu = crate::maps::DHCP_CONFIG
+                .get(0)
+                .map(|c| c.mtu)
+                .unwrap_or(1500) as u32;
+            if unsafe { bpf_skb_change_tail(ctx.skb.skb, flowplane_core::arp_nd::RA_LEN as u32, 0) }
+                == 0
+                && ctx.pull_data(flowplane_core::arp_nd::RA_LEN as u32).is_ok()
+                && flowplane_core::arp_nd::ra_reply(
+                    &mut crate::coreimpl::RawPkt::new(ctx.data(), ctx.data_end()),
+                    meta.gateway_ipv6,
+                    meta.guest_mac,
+                    mtu,
+                )
+            {
+                return unsafe { bpf_redirect(ifindex, 0) as i32 };
+            }
+            return TC_ACT_OK;
+        }
+
         // DHCPv6 (UDP dst 547) → tail-call the dedicated responder.
         if looks_like_dhcpv6(ctx.data(), ctx.data_end()) {
             let _ = unsafe { GUEST_PROGS_TC.tail_call(&ctx, flowplane_common::GUEST_PROG_DHCP) };

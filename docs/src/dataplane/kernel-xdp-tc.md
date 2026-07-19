@@ -89,8 +89,12 @@ the whole overhead — *less* than VXLAN's 50). Override with `--guest-mtu`. Tha
 - **PLPMTUD** — `net.ipv4.tcp_mtu_probing=1` set in the guest netns at attach, so TCP self-discovers
   the path MTU without relying on ICMP (Cilium's default).
 - **DHCPv4 option 26** — for self-configuring guests/VMs that run a DHCP client.
-- **The IPv6 RA MTU option** *(planned)* — for self-configuring IPv6 VMs (DHCPv6 has no MTU option;
-  MTU is RA-only in IPv6). The RA responder is the VM-facing follow-up.
+- **The IPv6 RA MTU option** — for self-configuring IPv6 VMs. DHCPv6 has no MTU option (MTU is RA-only
+  in IPv6), so the guest edge answers a Router Solicitation (ICMPv6 type 133) with a **Managed** Router
+  Advertisement (`ra_reply` in `flowplane-core/src/arp_nd.rs`, mirroring `nd_reply`): M-flag set +
+  router-lifetime + a Source-Link-Layer-Address option + the **MTU option (type 5)** carrying this
+  value. No SLAAC prefix (addressing stays with our DHCPv6 / control-plane IPAM). The eBPF glue grows
+  the skb (RA is larger than the RS) and redirects the reply back to the guest.
 
 There is no ICMP "packet too big" generation in the datapath (even Cilium punts on this in native
 routing); correct provisioning + PLPMTUD covers the TCP case, and a guest that force-raises its own
