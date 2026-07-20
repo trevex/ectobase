@@ -1321,6 +1321,7 @@ checksum = "e82e9f64c09f56aa7c80c3fa087997bd99a913f91d9c74d36cf5fd75dd5773e6"
 name = "nfkit"
 version = "0.1.0"
 dependencies = [
+ "arrayvec",
  "dpdk-sys",
 ]
 

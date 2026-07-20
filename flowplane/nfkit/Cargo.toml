@@ -5,4 +5,5 @@ edition = "2021"
 publish = false
 
 [dependencies]
+arrayvec = "0.7"
 dpdk-sys = { path = "../dpdk-sys" }
