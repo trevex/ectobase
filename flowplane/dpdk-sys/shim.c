@@ -18,3 +18,4 @@ uint8_t *nfkit_pktmbuf_prepend(struct rte_mbuf *m, uint16_t len) { return (uint8
 uint8_t *nfkit_pktmbuf_append(struct rte_mbuf *m, uint16_t len) { return (uint8_t *)rte_pktmbuf_append(m, len); }
 uint8_t *nfkit_pktmbuf_adj(struct rte_mbuf *m, uint16_t len) { return (uint8_t *)rte_pktmbuf_adj(m, len); }
 int nfkit_pktmbuf_trim(struct rte_mbuf *m, uint16_t len) { return rte_pktmbuf_trim(m, len); }
+uint64_t nfkit_rss_ip_hf(void) { return (uint64_t)RTE_ETH_RSS_IP; }

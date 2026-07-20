@@ -74,6 +74,12 @@ impl Mempool {
         NonNull::new(m).map(|p| unsafe { Mbuf::from_raw(p) })
     }
 
+    /// Raw pointer to the underlying `rte_mempool`. Only for crate-internal use (e.g. queue setup).
+    #[inline]
+    pub(crate) fn as_raw(&self) -> *mut dpdk_sys::rte_mempool {
+        self.raw.as_ptr()
+    }
+
     /// Number of free buffers currently available (for tests/observability).
     #[inline]
     #[must_use]
