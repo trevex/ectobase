@@ -10,11 +10,13 @@ Build a **DPDK version of flowplane** as a *conforming node role* of the existin
 
 **The key enabler (from research, grounded):** DPDK's `ethdev` abstraction + EAL `--vdev` lets one binary run on a real NIC, `net_af_xdp` (laptop), `net_tap`, or `net_pcap` (deterministic CI) selected **by config, zero code change** — which directly satisfies the "local debugging without a smartNIC" requirement.
 
+**The strategic payoff:** on mlx5 via `rte_flow` `RAW_DECAP`/`RAW_ENCAP` (transfer/E-Switch domain), the **custom IPv6+IPIP overlay hot path — decap the underlay and steer the inner packet straight to a VM/container VF, and encap on egress — runs entirely in hardware, CPU-bypassed.** The eBPF/XDP flowplane can never offload this (BPF isn't eSwitch-offloadable). This is the reason the DPDK version is worth building, not just a userspace port.
+
 ## 2. Goals / non-goals
 
 **Goals:** a highly-scalable run-to-completion DPDK dataplane with functional parity to eBPF flowplane; **peak performance via hardware offload** (established-flow eSwitch offload as the primary lever, plus symmetric RSS, checksum/TSO, `rte_flow`); one binary that runs on NIC / af_xdp / tap / pcap; container (memif) and VM (vhost-user) edges; maximum reuse of `flowplane-core` *without* blocking offload; and a **`nfkit` that is a genuinely safe, zero-cost abstraction** over DPDK.
 
-**Non-goals (now):** replacing the eBPF dataplane (both coexist on one fabric via the compatibility contract); HW encap-offload of our custom IPIP overlay (not offloadable — see §7); the Geneve migration (separate, parked); betting on DPDK's not-yet-merged upstream Rust crate (we converge toward it, don't depend on it).
+**Non-goals (now):** replacing the eBPF dataplane (both coexist on one fabric via the compatibility contract); the Geneve migration (separate, parked); betting on DPDK's not-yet-merged upstream Rust crate (we converge toward it, don't depend on it). Note: HW offload of the custom IPIP overlay hot path (decap+steer-to-VF) *is* in scope and is a headline goal — see §8, corrected from an earlier assumption.
 
 ## 3. Research grounding (truth, cited)
 
@@ -22,7 +24,8 @@ Build a **DPDK version of flowplane** as a *conforming node role* of the existin
 - **The Rust-DPDK framework layer is stale.** Live crates are young/narrow: `rust-dpdk-net` (a smoltcp stack), `dpdk-stdlib-rust` (best-designed safe wrapper, UDP-only, **no rte_flow**). None expose `rte_flow`. ([survey])
 - **Emerging official path:** DPDK upstream **`buildtools/rust` RFC (2025-04, Richardson/Intel + Etelson/NVIDIA)** — whole-DPDK-as-a-crate, bindgen + hand-written wrappers for `static inline` fast-path fns (`rte_eth_rx_burst` — bindgen can't emit it). Active, **not merged**; only `rte_eal_init/cleanup` wrapped. Track and converge; don't depend. ([inbox.dpdk.org RFC](https://inbox.dpdk.org/dev/20250408145838.2501034-1-bruce.richardson@intel.com/))
 - **`ethdev` + `--vdev` = write-once-run-anywhere** (testpmd proves it): real NIC / `net_af_xdp` / `net_tap` / `net_pcap` / `net_ring` by EAL args alone. ([doc.dpdk.org build_and_test, tap, af_xdp, pcap_ring])
-- **`mlx5` DOES inner-RSS over IP-in-IP** (supported inner list: "VXLAN, GRE, …, IP-in-IP, Geneve, GTP") → our IPv6+IPIP overlay **can** HW-spread on ConnectX at the inner 5-tuple. Fabric ECMP + HW encap-offload still want flow-label/UDP encap. ([doc.dpdk.org mlx5 23.11])
+- **`mlx5` DOES inner-RSS over IP-in-IP** (supported inner list: "VXLAN, GRE, …, IP-in-IP, Geneve, GTP") → our IPv6+IPIP overlay **can** HW-spread on ConnectX at the inner 5-tuple. ([doc.dpdk.org mlx5 25.11])
+- **`mlx5` `rte_flow` `RAW_DECAP`/`RAW_ENCAP` offload the custom IPv6+IPIP overlay** (protocol-agnostic byte templates; transfer/E-Switch domain; decap+`REPRESENTED_PORT`→VF is a single HW rule; CT/NAT chainable; inner RSS/checksum survive). The "only VXLAN/GRE/MPLS offloadable" belief is a *tc-flower* limit, not rte_flow. **This is the DPDK version's headline advantage over eBPF.** ([doc.dpdk.org mlx5 25.11 + flow_offload.html]; DOCA Flow does *not* expose the raw custom path — use the mlx5 PMD.)
 - **Run-to-completion + symmetric RSS → lock-free per-lcore state** is DPDK best practice for per-flow NFs, and maps 1:1 onto flowplane's per-CPU-map model. ([DPDK Writing Efficient Code; Toeplitz Hash Library])
 
 ## 4. Locked decisions
@@ -31,7 +34,7 @@ Build a **DPDK version of flowplane** as a *conforming node role* of the existin
 |---|---|
 | Layering | **Two layers:** `nfkit` (agnostic substrate) + `flowplane-dpdk`; `dpdk-sys` internal to `nfkit` |
 | Datapath | **4th `Pkt`/`Maps` backend**, conforming impl of the compatibility contract (same IPIP-in-IPv6 wire + CompiledNIC + routebus) |
-| Bindings | **Own `dpdk-sys`** (bindgen + C shim for inline fast-path) on DPDK **23.11/24.x LTS**, shaped to converge with the upstream RFC |
+| Bindings | **Own `dpdk-sys`** (bindgen + C shim for inline fast-path) on DPDK **25.11.2 LTS** (current), shaped to converge with the upstream RFC |
 | Edges | **All three** (uplink, memif container, vhost-user + tap VM) — in spec; implementation phased & gated |
 | Substrate name | **`nfkit`** (placeholder-ish, easily renamed) |
 | VM edge | **vhost-user (perf) + tap (universal/dev fallback)** |
@@ -43,7 +46,7 @@ Build a **DPDK version of flowplane** as a *conforming node role* of the existin
 ## 5. Crate architecture
 
 ```
-dpdk-sys        (internal to nfkit)  bindgen over DPDK 23.11 LTS public API + a small
+dpdk-sys        (internal to nfkit)  bindgen over DPDK 25.11.2 LTS public API + a small
                                      C shim exposing the static-inline hot path
                                      (rte_eth_rx_burst/tx_burst, rte_pktmbuf_*). FFI only.
    │
@@ -103,9 +106,17 @@ Each unit has one purpose and a testable interface: `nfkit` knows nothing about 
 |---|---|---|
 | **Stateless per-packet** (RX/TX checksum, TSO/GSO) | Backend-level, *not* a conflict | The `MbufPkt` backend sets mbuf `ol_flags` (`RTE_MBUF_F_TX_*_CKSUM`, TSO) instead of `flowplane-core` folding checksums in software. Same `Pkt` op → "mark for HW" on DPDK, "incremental fold" on eBPF. Faster on DPDK. |
 | **Flow steering / RSS** | Orthogonal | `nfkit`/`rte_flow` (symmetric Toeplitz) runs before the datapath; `flowplane-core` untouched. |
-| **Established-flow full offload** (eSwitch: decap/CT/NAT/count/mark) | **Complementary — the core is the brain** | `flowplane-core` processes the *first* packet and creates the state; a `flowplane-dpdk` **translation seam** turns that CT/NAT/LB decision into an `rte_flow` rule so subsequent packets bypass the CPU. Reuse *drives* offload; it is not bypassed. |
+| **Established-flow full offload** (eSwitch: **RAW_DECAP/RAW_ENCAP** + CT/NAT/count/mark + steer-to-representor) | **Complementary — the core is the brain** | `flowplane-core` processes the *first* packet and creates the state; a `flowplane-dpdk` **translation seam** turns that CT/NAT/LB decision into an `rte_flow` transfer rule so subsequent packets bypass the CPU. Reuse *drives* offload; it is not bypassed. |
 
-**Reuse does NOT block offload.** The only un-offloadable operations are our **custom IPIP encap** (only VXLAN/GRE/MPLS are HW-encap-offloadable) and **Maglev DSR** (not an eSwitch primitive) — a property of the wire/LB design, independent of code reuse. Those always run in software.
+**The overlay hot path IS hardware-offloadable on mlx5 via `rte_flow` — this is the headline capability and the strategic reason to build the DPDK version.** `RAW_DECAP`/`RAW_ENCAP` are protocol-agnostic byte-template actions (no VXLAN/GRE/MPLS assumption); the "only VXLAN/GRE/MPLS" limit is a *tc-flower `tunnel_key`* restriction, **not** an rte_flow/mlx5 one. The eBPF/XDP flowplane can *never* offload this (BPF isn't eSwitch-offloadable); the DPDK version can. Supported on ConnectX-5+ (so 6Dx/7/BlueField).
+
+- **Hot path (underlay → VM/container), CPU-bypassed:** one transfer rule — `match {outer dst = underlay IPv6, inner 5-tuple} → [CONNTRACK-validate, (optional NAT modify-header), RAW_DECAP(len=40), REPRESENTED_PORT → VF/SF]`.
+- **Egress (VM/container → wire):** `VF ingress → [RAW_ENCAP(<40B IPv6+IPIP template>), PORT → PF]`.
+- Inner RSS + checksum **survive** HW decap. CT chainable (ConnectX-6Dx+, HWS `dv_flow_en=2`). Insertion >1M flows/s under HWS.
+
+**What stays in software (small, and correct):** the *first packet* of each flow (miss → `flowplane-core` decides, then inserts the rule), rule insertion/eviction, and genuinely un-offloadable cases (variable-length IPv6 ext-header outer, decap-on-egress, decap-at-VF). **Maglev DSR:** the hash *selection* isn't an ASIC primitive, but once software picks the backend, the per-flow forward (match → RAW_ENCAP to backend → send) offloads like any established flow. **So reuse does not block offload, and neither does our custom encap.**
+
+**Design constraints (all fit our topology):** decap = **PF→VF only**, encap = **VF→PF only** (matches underlay→VM / VM→wire); RAW_DECAP needs the **exact outer length** (clean 40B IPv6, no shim); enabling IP-in-IP *matching* disables ICMP/MPLS matching in the same FW profile; **use the upstream mlx5 PMD `rte_flow` RAW_\*, not DOCA Flow** (DOCA Flow only exposes structured tunnel types, not the raw custom-IPIP path).
 
 ### 8.2 The scalar-vs-batched tension (honest)
 
@@ -154,7 +165,7 @@ flowplane-dpdk consumes the **same CompiledNIC + routebus**. Introduce a **map-p
 1. **`dpdk-sys` + `nfkit` core** — Eal/Vdev/Port/Mempool/Mbuf/Rx-Tx/LcoreRuntime + `net_pcap` & `net_af_xdp` backends; `PcapHarness`. Deliverable: an l2fwd-equivalent runs on NIC/af_xdp/pcap by config.
 2. **`MbufPkt` + `DpdkMaps` + uplink RTC datapath** — compose `flowplane-core`; **byte-parity vs sim via `net_pcap`**; a real-NIC pps number. **← HARD GATE**
 3. **Stateless offload + steering** — checksum/TSO via mbuf `ol_flags` in `MbufPkt`; symmetric-Toeplitz RSS; inner-RSS on mlx5; `rte_flow` builder in `nfkit`. Establish a per-lcore-scaling perf baseline.
-4. **Established-flow offload seam** — the CT/NAT/LB-decision → `rte_flow` rule translation (elephant flows to the eSwitch). *This is the peak-perf phase.* Measure offloaded-flow CPU.
+4. **Established-flow offload seam (the headline)** — `flowplane-core` first-packet decision → `rte_flow` transfer rule: `match {outer dst, inner tuple} → [CONNTRACK, NAT, RAW_DECAP(40), REPRESENTED_PORT→VF]` for underlay→VM/container, and `RAW_ENCAP → PORT` for the return. Requires the mlx5 PMD + HWS (`dv_flow_en=2`) + SR-IOV VFs/SFs. Measure offloaded-flow CPU (target ~0 for elephants). *This is why the DPDK version exists.*
 5. **Batch hot software stages** — profile the slow path; add burst parse + `rte_hash_lookup_bulk`/prefetch where hot, **byte-parity-guarded** against `flowplane-core`. Only what profiling justifies.
 6. **Container edge** — memif.
 7. **VM edge** — vhost-user + tap fallback.
@@ -174,4 +185,6 @@ Phases 3–8 start only after phase 2 proves byte-parity + an acceptable real-NI
 - **Scope:** "all edges" is large; the phase-2 gate + strict phase ordering is the control.
 - **Scalar-core vs DPDK-batch gap:** the verifier-shaped `flowplane-core` won't hit DPDK's per-packet peak on the software path. Mitigation = offload carries elephants (phase 4) + batch only measured-hot stages (phase 5), byte-parity-guarded. Accept the software slow-path is not SIMD-optimal by default.
 - **`nfkit` safety vs zero-cost:** the hard part is a safe `Mbuf` lifecycle (RX→process→TX-consumes / free) with no runtime overhead. Mitigation = ownership/move semantics + `!Send` type-state (compile-time), `#[inline]` hot path, `unsafe` confined + `// SAFETY`-documented. Validate zero-cost by inspecting codegen on the burst loop.
-- **Established-flow offload seam correctness:** the "CT/NAT decision → `rte_flow` rule" translation must stay consistent with the software path (a flow offloaded to HW must behave identically to one handled in software). Needs its own conformance tests + eviction/sync handling when state changes.
+- **Established-flow offload seam correctness:** the "first-packet decision → `rte_flow` rule" translation must behave identically to the software path. Needs its own conformance tests + eviction/sync when state changes. mlx5 constraints to honor: decap **PF→VF only** / encap **VF→PF only**; **exact 40B outer length** for RAW_DECAP; **IP-in-IP match disables ICMP/MPLS match** in the same FW profile (pick the profile deliberately); CONNTRACK needs ConnectX-6Dx+ and **HWS `dv_flow_en=2`** and can't co-exist with ASO meter/age in one rule.
+- **Offload requires SR-IOV VFs/SFs + a real ConnectX** — the headline hot path can't be validated on `net_pcap`/`af_xdp`/`tap` (they have no eSwitch). Software-path parity is validated everywhere; offload is validated only on ConnectX-6Dx/7/BlueField HW.
+- **DOCA Flow is NOT the surface** for the custom IPIP overlay — it only exposes structured tunnel types. Bind the upstream mlx5 PMD `rte_flow` RAW_* directly.
