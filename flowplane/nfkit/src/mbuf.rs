@@ -34,16 +34,15 @@ impl Mbuf {
         Mbuf { raw }
     }
 
-    // Used by TxQueue (M3) — suppress dead_code until that module lands.
-    #[allow(dead_code)]
+    /// Return the raw mbuf pointer without transferring ownership. Used by `TxQueue` to read
+    /// the pointer while building the burst array.
     #[inline]
     pub(crate) fn as_raw(&self) -> *mut dpdk_sys::rte_mbuf {
         self.raw.as_ptr()
     }
 
-    /// Give up ownership, returning the raw pointer WITHOUT freeing (DPDK now owns it).
-    // Used by TxQueue (M3) — suppress dead_code until that module lands.
-    #[allow(dead_code)]
+    /// Give up ownership, returning the raw pointer without freeing — used by `TxQueue` to hand
+    /// sent mbufs to DPDK (DPDK frees them after transmit).
     #[inline]
     pub(crate) fn into_raw(self) -> *mut dpdk_sys::rte_mbuf {
         let p = self.raw.as_ptr();

@@ -92,6 +92,11 @@ impl Port {
     /// (the handles are `!Send`).
     #[must_use]
     pub fn queue(&self, q: u16) -> (RxQueue, TxQueue) {
+        debug_assert!(
+            q < self.n_queues,
+            "queue index {q} out of range (n_queues={})",
+            self.n_queues
+        );
         (
             RxQueue {
                 port: self.id,
@@ -146,7 +151,9 @@ impl RxQueue {
             dpdk_sys::nfkit_eth_rx_burst(self.port, self.q, raw.as_mut_ptr(), cap as u16) as usize
         };
         for &p in raw.iter().take(n) {
-            // SAFETY: each returned pointer is a freshly-owned mbuf from the driver.
+            // SAFETY: nfkit_eth_rx_burst fills exactly raw[0..n] with independent, valid,
+            // non-null mbuf pointers (DPDK ethdev rx_burst contract), so new_unchecked +
+            // taking ownership is sound.
             out.push(unsafe { Mbuf::from_raw(std::ptr::NonNull::new_unchecked(p)) });
         }
         n
