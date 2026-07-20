@@ -9,7 +9,7 @@ const DPDK_VERSION: &str = "25.11.2";
 // SHA-256 of the tarball — verified in Task 4 Step 2.
 const DPDK_SHA256: &str = "418bfe3212640ee95a1cb10af6ed360cad2387686fe2721f8a3a9cd02d5ef4f2";
 // Only the PMDs we need — keeps the DPDK build small/fast.
-const DRIVERS: &str = "net/null,net/pcap,net/tap";
+const DRIVERS: &str = "net/null,net/pcap,net/tap,net/af_xdp";
 
 fn main() {
     // Escape hatch: a prebuilt DPDK prefix (nix/CI) skips the download+build entirely.
@@ -239,6 +239,37 @@ fn emit_dpdk_link_flags(prefix: &Path) {
     // libpcap: shared lib; libnl-genl is only needed for static libpcap (not available in devShell).
     for lib in &["pcap", "numa", "m", "dl", "pthread"] {
         println!("cargo:rustc-link-lib={lib}");
+    }
+
+    // --- af_xdp PMD runtime deps: libbpf + libxdp ---
+    // DPDK lists these in Requires.private (not Libs.private), so our custom pc parser misses them.
+    // When net/af_xdp is enabled we emit their link dirs + libs directly via pkg-config.
+    if DRIVERS.split(',').any(|d| d.trim() == "net/af_xdp") {
+        emit_pkgconfig_link_flags("libbpf");
+        emit_pkgconfig_link_flags("libxdp");
+    }
+}
+
+/// Emit rustc-link-search + rustc-link-lib directives for a pkg-config package.
+/// We parse `pkg-config --libs <pkg>` output (non-static: avoids the libelf/libnl issue)
+/// and emit -L as link-search and -l as link-lib directives.
+fn emit_pkgconfig_link_flags(pkg: &str) {
+    let out = Command::new("pkg-config")
+        .args(["--libs", pkg])
+        .output()
+        .unwrap_or_else(|e| panic!("pkg-config failed to start: {e}"));
+    assert!(
+        out.status.success(),
+        "pkg-config --libs {pkg} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let flags = String::from_utf8_lossy(&out.stdout);
+    for tok in flags.split_whitespace() {
+        if let Some(p) = tok.strip_prefix("-L") {
+            println!("cargo:rustc-link-search=native={p}");
+        } else if let Some(l) = tok.strip_prefix("-l") {
+            println!("cargo:rustc-link-lib={l}");
+        }
     }
 }
 

@@ -8,7 +8,13 @@ fn symbols_resolve() {
         std::os::raw::c_int,
         *mut *mut std::os::raw::c_char,
     ) -> std::os::raw::c_int = dpdk_sys::rte_eal_init;
-    // fn pointers are never null in Rust, so we just check that the symbol bound.
+    let prepend: unsafe extern "C" fn(*mut dpdk_sys::rte_mbuf, u16) -> *mut u8 =
+        dpdk_sys::nfkit_pktmbuf_prepend;
+    let mtod: unsafe extern "C" fn(*mut dpdk_sys::rte_mbuf) -> *mut u8 =
+        dpdk_sys::nfkit_pktmbuf_mtod;
+    // fn pointers are never null in Rust, so we just check that the symbols bound.
     let _ = rx;
     let _ = init;
+    let _ = prepend;
+    let _ = mtod;
 }
