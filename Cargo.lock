@@ -1323,6 +1323,8 @@ version = "0.1.0"
 dependencies = [
  "arrayvec",
  "dpdk-sys",
+ "flowplane-common",
+ "flowplane-core",
 ]
 
 [[package]]
