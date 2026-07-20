@@ -158,6 +158,11 @@ test-all: test e2e ha ## Run the full local test matrix (needs sudo)
 dpdk-check: ## Probe host DPDK capability (hugepages/IOMMU/NICs)
 	@hack/dpdk/check-host.sh
 
+.PHONY: dpdk-afxdp-loopback
+dpdk-afxdp-loopback: ## Run the af_xdp veth loopback e2e (needs sudo + hugepages)
+	cargo build -p nfkit --example l2fwd
+	sudo L2FWD_BIN=$(PWD)/target/debug/examples/l2fwd hack/dpdk/afxdp-loopback.sh
+
 .PHONY: bpf-clean
 bpf-clean: ## Free leaked flowplane BPF pins (host + kind/clab nodes); prevents conntrack-map OOM across clab cycles
 	./hack/bpf-cleanup.sh
