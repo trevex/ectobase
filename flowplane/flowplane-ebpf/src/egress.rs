@@ -188,5 +188,6 @@ pub fn forward_decision_v6(
         src_underlay: meta.underlay_ipv6,
         nexthop_ipv6: route.nexthop_ipv6,
         inner_proto: crate::parse::IPPROTO_IPV6,
+        flow_label: 0,
     })
 }

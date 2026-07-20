@@ -75,5 +75,6 @@ pub fn deliver<M: Maps>(maps: &M, route: &RouteValue, meta: &PortMeta, inner_pro
         src_underlay: meta.underlay_ipv6,
         nexthop_ipv6: route.nexthop_ipv6,
         inner_proto,
+        flow_label: 0,
     })
 }

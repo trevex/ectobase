@@ -108,6 +108,7 @@ fn encap_params() -> EncapParams {
         src_underlay: EDGE_UNDERLAY,
         nexthop_ipv6: HOST_UNDERLAY,
         inner_proto: 4, // IPPROTO_IPIP
+        flow_label: 0,
     }
 }
 

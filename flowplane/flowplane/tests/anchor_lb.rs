@@ -83,6 +83,7 @@ fn encapped_input() -> Vec<u8> {
             src_underlay: ORIGIN_UL,
             nexthop_ipv6: BACKEND_UL,
             inner_proto: 4, // IPPROTO_IPIP
+            flow_label: 0,
         },
     );
     // Outer IPv6 dst must be the backend underlay (uplink_rx keys UNDERLAY on it).

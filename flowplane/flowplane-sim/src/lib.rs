@@ -22,6 +22,8 @@ mod encap_test;
 #[cfg(test)]
 mod firewall_test;
 #[cfg(test)]
+mod flow_label_test;
+#[cfg(test)]
 mod lb_scenario_test;
 #[cfg(test)]
 mod lb_select_test;

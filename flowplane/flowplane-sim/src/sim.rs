@@ -491,6 +491,7 @@ impl SimNode {
             src_underlay: meta.underlay_ipv6,
             nexthop_ipv6: route.nexthop_ipv6,
             inner_proto: IPPROTO_IPIP,
+            flow_label: 0,
         };
         if !pkt.grow_head(IPV6_LEN) || !write_outer_v6(&mut pkt, &e) {
             return SimOut {
@@ -599,6 +600,7 @@ impl SimNode {
                     src_underlay: self.local.underlay_ipv6,
                     nexthop_ipv6: backend,
                     inner_proto, // 4 (IPIP) for v4 inner, 41 (IPPROTO_IPV6) for v6 inner
+                    flow_label: 0,
                 };
                 SimOut {
                     action: Action::Redirect(self.local.uplink_ifindex),
