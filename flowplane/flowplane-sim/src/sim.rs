@@ -330,20 +330,17 @@ impl SimNode {
     /// dispatches to. `ingress_ifindex` models the frame's arrival interface (the redirect target);
     /// the eBPF path uses `ctx.ingress_ifindex` (== 1 under `BPF_PROG_TEST_RUN`).
     pub fn guest_arp_nd(&self, frame: &[u8], meta: &PortMeta, ingress_ifindex: u32) -> SimOut {
-        use flowplane_core::arp_nd::{arp_reply, nd_reply};
         let mut pkt = VecPkt::from_bytes(frame);
-        // Mirror the eBPF `try_guest_tx` head: ARP first, then ND. The gateway is advertised at the
-        // shared virtual router MAC (GW_MAC), NOT the guest's own MAC — parity with the eBPF datapath.
-        if arp_reply(&mut pkt, meta.gateway_ipv4, GW_MAC)
-            || nd_reply(&mut pkt, meta.gateway_ipv6, GW_MAC)
-        {
-            return SimOut {
-                action: Action::Redirect(ingress_ifindex),
-                pkt: pkt.into_bytes(),
-            };
-        }
+        let action = flowplane_core::datapath::process_guest_arp_nd(
+            &mut pkt,
+            &flowplane_core::datapath::GuestArpNdIn {
+                gateway_ipv4: meta.gateway_ipv4,
+                gateway_ipv6: meta.gateway_ipv6,
+                ingress_ifindex,
+            },
+        );
         SimOut {
-            action: Action::Pass,
+            action,
             pkt: pkt.into_bytes(),
         }
     }

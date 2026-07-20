@@ -8,6 +8,7 @@ use flowplane_common::{
     Local, PortMeta, UnderlayValue, CT_REWRITE_DST, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS,
 };
 
+use crate::arp_nd::{arp_reply, nd_reply};
 use crate::conntrack::{ct_apply, ct_create_default, ct_key};
 use crate::egress::{deliver, route4, Deliver, IPPROTO_IPIP};
 use crate::encap::{reforward, write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
@@ -431,5 +432,23 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
             Action::Redirect(in_.local.uplink_ifindex)
         }
         None => Action::Pass,
+    }
+}
+
+/// Inputs for [`process_guest_arp_nd`]. Gateway is advertised at the shared router MAC `GW_MAC`.
+pub struct GuestArpNdIn {
+    pub gateway_ipv4: [u8; 4],
+    pub gateway_ipv6: [u8; 16],
+    pub ingress_ifindex: u32,
+}
+
+/// Guest-facing ARP/ND gateway responder, in place on `pkt`. Mirrors the eBPF `try_guest_tx` head:
+/// ARP request for the gateway → ARP reply, else ICMPv6 NS for the gateway → NA, both from `GW_MAC`;
+/// on a hit `Redirect(ingress_ifindex)`, else `Pass`.
+pub fn process_guest_arp_nd<P: Pkt>(pkt: &mut P, in_: &GuestArpNdIn) -> Action {
+    if arp_reply(pkt, in_.gateway_ipv4, GW_MAC) || nd_reply(pkt, in_.gateway_ipv6, GW_MAC) {
+        Action::Redirect(in_.ingress_ifindex)
+    } else {
+        Action::Pass
     }
 }
