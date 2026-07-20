@@ -5,6 +5,13 @@ use std::ptr::NonNull;
 
 /// A pool of packet mbufs. Freed on drop. Shareable across lcores via DPDK's per-lcore cache
 /// (the underlying `rte_mempool` is internally synchronized), so this is `Sync`.
+///
+/// # Safety invariant
+///
+/// Every `Mbuf` allocated from a `Mempool` must be dropped before the `Mempool` is dropped.
+/// Dropping the pool while mbufs from it are live is undefined behaviour (the mbufs' `Drop` frees
+/// into released pool memory). In practice a `Mempool` is created once at startup and lives for
+/// the whole run.
 pub struct Mempool {
     raw: NonNull<dpdk_sys::rte_mempool>,
 }
@@ -25,9 +32,16 @@ impl std::fmt::Display for MempoolError {
 
 impl std::error::Error for MempoolError {}
 
+// RTE_MBUF_DEFAULT_BUF_SIZE (2176) fits u16; assert the assumption at compile time.
+const _: () = assert!(dpdk_sys::RTE_MBUF_DEFAULT_BUF_SIZE <= u16::MAX as u32);
+
 impl Mempool {
-    /// Create a pktmbuf pool: `n` mbufs, `cache` per-lcore cache size, on NUMA `socket`.
-    pub fn new(name: &str, n: u32, cache: u32, socket: i32) -> Result<Mempool, MempoolError> {
+    /// Create a pktmbuf pool: `n` mbufs, `cache` per-lcore cache size, on NUMA `socket_id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MempoolError` if the pool cannot be created (see `rte_errno`).
+    pub fn new(name: &str, n: u32, cache: u32, socket_id: i32) -> Result<Mempool, MempoolError> {
         let cname = CString::new(name).map_err(|_| MempoolError)?;
         // SAFETY: name is a valid C string for the call; other args are plain scalars.
         let raw = unsafe {
@@ -37,7 +51,7 @@ impl Mempool {
                 cache,
                 0,
                 dpdk_sys::RTE_MBUF_DEFAULT_BUF_SIZE as u16,
-                socket,
+                socket_id,
             )
         };
         NonNull::new(raw)
@@ -46,6 +60,14 @@ impl Mempool {
     }
 
     /// Allocate one mbuf, or `None` if the pool is exhausted.
+    ///
+    /// Note: the returned `Mbuf` must be dropped before this `Mempool` is dropped; see the
+    /// [struct-level safety invariant](Mempool#safety-invariant).
+    ///
+    // TODO(nfkit-safe): consider a lifetime-bound Mbuf<'pool> once RxQueue/TxQueue lifetimes
+    // exist (M3) to enforce this at the type level.
+    #[inline]
+    #[must_use]
     pub fn alloc(&self) -> Option<Mbuf> {
         // SAFETY: self.raw is a live pool for the lifetime of &self.
         let m = unsafe { dpdk_sys::nfkit_pktmbuf_alloc(self.raw.as_ptr()) };
@@ -53,6 +75,8 @@ impl Mempool {
     }
 
     /// Number of free buffers currently available (for tests/observability).
+    #[inline]
+    #[must_use]
     pub fn avail_count(&self) -> u32 {
         // SAFETY: live pool.
         unsafe { dpdk_sys::rte_mempool_avail_count(self.raw.as_ptr()) }

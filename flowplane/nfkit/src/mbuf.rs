@@ -36,6 +36,7 @@ impl Mbuf {
 
     // Used by TxQueue (M3) — suppress dead_code until that module lands.
     #[allow(dead_code)]
+    #[inline]
     pub(crate) fn as_raw(&self) -> *mut dpdk_sys::rte_mbuf {
         self.raw.as_ptr()
     }
@@ -43,21 +44,34 @@ impl Mbuf {
     /// Give up ownership, returning the raw pointer WITHOUT freeing (DPDK now owns it).
     // Used by TxQueue (M3) — suppress dead_code until that module lands.
     #[allow(dead_code)]
+    #[inline]
     pub(crate) fn into_raw(self) -> *mut dpdk_sys::rte_mbuf {
         let p = self.raw.as_ptr();
         std::mem::forget(self);
         p
     }
 
+    #[inline]
+    #[must_use]
     pub fn len(&self) -> usize {
         // SAFETY: live mbuf.
         unsafe { dpdk_sys::nfkit_pktmbuf_data_len(self.raw.as_ptr()) as usize }
     }
 
+    #[inline]
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Return the packet data as a byte slice.
+    ///
+    /// # Safety
+    ///
+    /// The returned slice is invalidated by any subsequent `prepend`/`append`/`adjust`/`trim`
+    /// (they may move the data pointer); do not hold it across such calls.
+    #[inline]
+    #[must_use]
     pub fn data(&self) -> &[u8] {
         // SAFETY: mtod points into the mbuf dataroom for `data_len` bytes; borrow tied to &self.
         unsafe {
@@ -66,6 +80,13 @@ impl Mbuf {
         }
     }
 
+    /// Return the packet data as a mutable byte slice.
+    ///
+    /// # Safety
+    ///
+    /// The returned slice is invalidated by any subsequent `prepend`/`append`/`adjust`/`trim`
+    /// (they may move the data pointer); do not hold it across such calls.
+    #[inline]
     pub fn data_mut(&mut self) -> &mut [u8] {
         // SAFETY: exclusive &mut self; mtod + data_len bound the slice.
         unsafe {
@@ -75,6 +96,11 @@ impl Mbuf {
     }
 
     /// Grow head by `n` (into headroom); returns the new front `n` bytes. Err if no room.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MbufError` if `n` exceeds the available headroom.
+    #[inline]
     pub fn prepend(&mut self, n: u16) -> Result<&mut [u8], MbufError> {
         // SAFETY: DPDK bounds-checks headroom, returns NULL on overflow.
         let p = unsafe { dpdk_sys::nfkit_pktmbuf_prepend(self.raw.as_ptr(), n) };
@@ -85,6 +111,11 @@ impl Mbuf {
     }
 
     /// Grow tail by `n`; returns the new trailing `n` bytes. Err if no room.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MbufError` if `n` exceeds the available tailroom.
+    #[inline]
     pub fn append(&mut self, n: u16) -> Result<&mut [u8], MbufError> {
         // SAFETY: DPDK bounds-checks tailroom, returns NULL on overflow.
         let p = unsafe { dpdk_sys::nfkit_pktmbuf_append(self.raw.as_ptr(), n) };
@@ -95,6 +126,11 @@ impl Mbuf {
     }
 
     /// Strip `n` bytes from the head. Err if `n > len`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MbufError` if `n` exceeds the current data length.
+    #[inline]
     pub fn adjust(&mut self, n: u16) -> Result<(), MbufError> {
         // SAFETY: DPDK returns NULL if n > data_len.
         let p = unsafe { dpdk_sys::nfkit_pktmbuf_adj(self.raw.as_ptr(), n) };
@@ -106,6 +142,11 @@ impl Mbuf {
     }
 
     /// Strip `n` bytes from the tail. Err if `n > len`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MbufError` if `n` exceeds the current data length.
+    #[inline]
     pub fn trim(&mut self, n: u16) -> Result<(), MbufError> {
         // SAFETY: DPDK returns <0 if n > data_len.
         let rc = unsafe { dpdk_sys::nfkit_pktmbuf_trim(self.raw.as_ptr(), n) };
