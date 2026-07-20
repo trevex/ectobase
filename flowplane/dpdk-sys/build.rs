@@ -6,7 +6,6 @@ use std::{
 };
 
 const DPDK_VERSION: &str = "25.11.2";
-const DPDK_URL: &str = "https://fast.dpdk.org/rel/dpdk-25.11.2.tar.xz";
 // SHA-256 of the tarball — verified in Task 4 Step 2.
 const DPDK_SHA256: &str = "418bfe3212640ee95a1cb10af6ed360cad2387686fe2721f8a3a9cd02d5ef4f2";
 // Only the PMDs we need — keeps the DPDK build small/fast.
@@ -48,6 +47,7 @@ fn main() {
     // Pass all DPDK cflags (includes, -march, -include rte_config.h) so inline functions compile.
     let mut build = cc::Build::new();
     build.file("shim.c");
+    build.opt_level(2);
     for flag in &cflags {
         build.flag(flag);
     }
@@ -82,6 +82,8 @@ fn main() {
     println!("cargo:rerun-if-changed=shim.h");
     println!("cargo:rerun-if-changed=shim.c");
     println!("cargo:rerun-if-env-changed=DPDK_PREFIX");
+    println!("cargo:rerun-if-env-changed=DPDK_CACHE_DIR");
+    println!("cargo:rerun-if-env-changed=XDG_CACHE_HOME");
 }
 
 /// Download (once) + build (once) DPDK into a STABLE cache dir outside OUT_DIR, so `cargo clean`
@@ -100,7 +102,8 @@ fn build_dpdk_cached() -> PathBuf {
     }
 
     if !tarball.exists() {
-        download(DPDK_URL, &tarball);
+        let url = format!("https://fast.dpdk.org/rel/dpdk-{DPDK_VERSION}.tar.xz");
+        download(&url, &tarball);
     }
     verify_sha256(&tarball, DPDK_SHA256);
     if !srcdir.exists() {
@@ -118,6 +121,9 @@ fn build_dpdk_cached() -> PathBuf {
     // Install directly into the final prefix. DPDK embeds --prefix into the installed .pc files,
     // so an atomic tmp→rename approach would break pkg-config. Instead we use a sentinel
     // `.building` file: if it exists on entry, the previous build was interrupted — nuke and retry.
+    // NOTE: the sentinel guards against interrupted builds but there is no cross-process file lock,
+    // so two concurrent `cargo build -p dpdk-sys` could race the meson build (rare — dpdk-sys is
+    // not in default-members so this only happens if invoked explicitly in parallel).
     let sentinel = root.join(format!("install-{key}.building"));
     if sentinel.exists() {
         // Interrupted build — clean up and retry.
