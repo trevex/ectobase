@@ -14,7 +14,6 @@ use flowplane_common::{Local, PortMeta, UnderlayValue};
 use flowplane_core::encap::{write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
 use flowplane_core::maps::Maps;
 use flowplane_core::pkt::{Action, Pkt};
-use flowplane_core::uplink::GW_MAC;
 
 use crate::maps::MemMaps;
 use crate::pkt::VecPkt;
@@ -355,34 +354,18 @@ impl SimNode {
     /// fixed-layout reply. The reply's server MAC / assigned IP / gateway come from `meta`; MTU + DNS
     /// + host-name come from the node's `DHCP_CONFIG` / `DHCP_META[ingress_ifindex]`.
     pub fn guest_dhcp4(&self, frame: &[u8], meta: &PortMeta, ingress_ifindex: u32) -> SimOut {
-        use flowplane_core::dhcp;
         let mut pkt = VecPkt::from_bytes(frame);
-        let req = match dhcp::parse(&pkt) {
-            Some(r) => r,
-            None => {
-                return SimOut {
-                    action: Action::Pass,
-                    pkt: pkt.into_bytes(),
-                }
-            }
-        };
-        // Grow/shrink the frame to the constant reply length, as the eBPF glue does via adjust_tail.
-        pkt.set_tail(dhcp::REPLY_LEN);
-        let ok = dhcp::write(
+        let action = flowplane_core::datapath::process_guest_dhcp4(
             &mut pkt,
-            &req,
-            meta.guest_ipv4,
-            meta.gateway_ipv4,
-            GW_MAC,
             &self.maps,
-            ingress_ifindex,
+            &flowplane_core::datapath::GuestDhcp4In {
+                guest_ipv4: meta.guest_ipv4,
+                gateway_ipv4: meta.gateway_ipv4,
+                ingress_ifindex,
+            },
         );
         SimOut {
-            action: if ok {
-                Action::Redirect(ingress_ifindex)
-            } else {
-                Action::Pass
-            },
+            action,
             pkt: pkt.into_bytes(),
         }
     }
