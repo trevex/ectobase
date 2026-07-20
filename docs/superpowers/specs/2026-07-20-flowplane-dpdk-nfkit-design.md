@@ -127,6 +127,17 @@ Each unit has one purpose and a testable interface: `nfkit` knows nothing about 
 - **`flowplane-core` = correctness reference + first-packet/slow-path + un-offloadable flows** (custom encap, DSR, NAT64).
 - **Batch only the software slow-path stages profiling shows are hot** (burst parse, bulk CT lookup) as DPDK-native code *behind the same semantics*, **guarded by byte-parity against the core** (extends the `net_pcap` anchor). We never diverge from the reference; we only accelerate hot stages we've measured.
 
+### 8.3a Traffic shaping (EDT) & policing — a parity win
+
+flowplane's QoS is **EDT shaping** (stamp a departure time, pace it) + token-bucket **policing** on a separate lane. Both map onto DPDK, shaping HW-offloaded on mlx5:
+
+- **Shaping = HW EDT on mlx5 (`RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP` / "send scheduling").** The mbuf carries a departure timestamp (dynfield + `RTE_MBUF_DYNFLAG_TX_TIMESTAMP`); the NIC inserts a WAIT WQE and releases the packet at that time — the direct HW analogue of eBPF `bpf_skb_set_tstamp` + FQ, at ~0 CPU. **`flowplane-core::meter::edt_egress` is reused verbatim**; `MbufPkt` writes its output into the mbuf. CX-6Dx needs the `tx_pp` devarg (500 ns floor; tune `tx_skew`); CX-7+ native. Monitor `tx_pp_timestamp_*_errors`.
+- **Keep the interface EDT-centric.** On mlx5 the backend is a thin passthrough to send-scheduling. On **debug/non-mlx5 backends** (`af_xdp`/`tap`/`pcap`, which expose no HW pacing), `nfkit` provides a **software EDT calendar queue** that drains paced by the *same* `edt_egress` timestamps — one abstraction, HW-accelerated where available. (`rte_sched` HQoS is the rate/hierarchy alternative, but it diverges from our EDT stamps; the calendar queue preserves parity.)
+- **Policing lane = `rte_flow` meter (srTCM/trTCM), offloaded on mlx5** for drop/mark-on-exceed; software token bucket on debug backends.
+- **Do NOT use `rte_tm`** for the mlx5 path — mlx5 doesn't implement it (only ixgbe/i40e/ice/cnxk/dpaa2 do).
+
+This is notable: EDT shaping was the QoS *gap* for OVN/VPP/Geneve; on the DPDK version it is hardware-offloaded.
+
 ### 8.3 Offload enablement (best practices)
 
 - Enable RX/TX checksum, tunnel-aware TSO, symmetric-Toeplitz RSS; query `dev_info` and **degrade gracefully** so `net_pcap`/`tap`/`af_xdp` (no HW offload) run the *same* code.
@@ -164,7 +175,7 @@ flowplane-dpdk consumes the **same CompiledNIC + routebus**. Introduce a **map-p
 
 1. **`dpdk-sys` + `nfkit` core** — Eal/Vdev/Port/Mempool/Mbuf/Rx-Tx/LcoreRuntime + `net_pcap` & `net_af_xdp` backends; `PcapHarness`. Deliverable: an l2fwd-equivalent runs on NIC/af_xdp/pcap by config.
 2. **`MbufPkt` + `DpdkMaps` + uplink RTC datapath** — compose `flowplane-core`; **byte-parity vs sim via `net_pcap`**; a real-NIC pps number. **← HARD GATE**
-3. **Stateless offload + steering** — checksum/TSO via mbuf `ol_flags` in `MbufPkt`; symmetric-Toeplitz RSS; inner-RSS on mlx5; `rte_flow` builder in `nfkit`. Establish a per-lcore-scaling perf baseline.
+3. **Stateless offload + steering + QoS** — checksum/TSO via mbuf `ol_flags` in `MbufPkt`; symmetric-Toeplitz RSS; inner-RSS on mlx5; `rte_flow` builder in `nfkit`. **EDT shaping:** reuse `edt_egress` → mbuf timestamp → mlx5 send-scheduling (HW) / `nfkit` software EDT calendar queue (debug backends); policing via `rte_flow` meter (HW) / software token bucket. Establish a per-lcore-scaling perf baseline.
 4. **Established-flow offload seam (the headline)** — `flowplane-core` first-packet decision → `rte_flow` transfer rule: `match {outer dst, inner tuple} → [CONNTRACK, NAT, RAW_DECAP(40), REPRESENTED_PORT→VF]` for underlay→VM/container, and `RAW_ENCAP → PORT` for the return. Requires the mlx5 PMD + HWS (`dv_flow_en=2`) + SR-IOV VFs/SFs. Measure offloaded-flow CPU (target ~0 for elephants). *This is why the DPDK version exists.*
 5. **Batch hot software stages** — profile the slow path; add burst parse + `rte_hash_lookup_bulk`/prefetch where hot, **byte-parity-guarded** against `flowplane-core`. Only what profiling justifies.
 6. **Container edge** — memif.
