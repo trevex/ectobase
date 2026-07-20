@@ -11,13 +11,13 @@
 //! harness). For LB packets those branches are skipped anyway.
 
 use flowplane_common::{Local, PortMeta, UnderlayValue};
-use flowplane_core::conntrack::{ct_apply, ct_key};
+use flowplane_core::conntrack::ct_apply;
 use flowplane_core::egress::{route4, IPPROTO_IPIP};
 use flowplane_core::encap::{write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
 use flowplane_core::lb::{lb_select_forward, lb_select_forward_v6};
 use flowplane_core::maps::Maps;
 use flowplane_core::pkt::{Action, Pkt};
-use flowplane_core::uplink::{decap_and_rewrite, GW_MAC};
+use flowplane_core::uplink::GW_MAC;
 
 use crate::maps::MemMaps;
 use crate::pkt::VecPkt;
@@ -147,31 +147,16 @@ impl SimNode {
         u: UnderlayValue,
         guest_mac: [u8; 6],
     ) -> SimOut {
-        use flowplane_common::CT_REWRITE_DST;
-        use flowplane_core::conntrack::ct_apply;
-
-        let inner_off = ETH_LEN + IPV6_LEN;
         let mut pkt = VecPkt::from_bytes(encapped);
-
-        // 1. Build the inner 5-tuple key; NAT returns are demuxed peer-independently.
-        if let Some(mut key) = ct_key(&pkt, inner_off, vni) {
-            if self.maps.nat_ips.contains(&(vni, key.dst_ip)) {
-                key.src_ip = [0; 4];
-                key.src_port = 0;
-            }
-            // 2. Reverse-DNAT apply when the matched entry carries CT_REWRITE_DST.
-            if let Some(e) = self.maps.conntrack_get(&key) {
-                if e.flags & CT_REWRITE_DST != 0 {
-                    ct_apply(&mut pkt, inner_off, &e);
-                }
-            }
-        }
-
-        // 3. Decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest.
-        let action = match decap_and_rewrite(&mut pkt, u.tap_ifindex, guest_mac) {
-            Ok(a) => a,
-            Err(_) => Action::Drop,
-        };
+        let action = flowplane_core::datapath::process_uplink_nat_return(
+            &mut pkt,
+            &mut self.maps,
+            &flowplane_core::datapath::UplinkNatReturnIn {
+                vni,
+                tap_ifindex: u.tap_ifindex,
+                guest_mac,
+            },
+        );
         SimOut {
             action,
             pkt: pkt.into_bytes(),

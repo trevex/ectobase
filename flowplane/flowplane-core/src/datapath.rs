@@ -5,10 +5,10 @@
 //! runs under the sim, under the `BPF_PROG_TEST_RUN` anchor, and on DPDK mbufs.
 
 use flowplane_common::{
-    Local, PortMeta, UnderlayValue, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS,
+    Local, PortMeta, UnderlayValue, CT_REWRITE_DST, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS,
 };
 
-use crate::conntrack::{ct_create_default, ct_key};
+use crate::conntrack::{ct_apply, ct_create_default, ct_key};
 use crate::egress::{deliver, route4, Deliver, IPPROTO_IPIP};
 use crate::encap::{reforward, write_outer_v6, ETH_LEN, IPV6_LEN};
 use crate::firewall::fw_eval_dir;
@@ -258,5 +258,43 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
             action: Action::Pass,
             edt_tstamp,
         },
+    }
+}
+
+/// Inputs for [`process_uplink_nat_return`]. `u`'s base tap becomes the delivery ifindex.
+pub struct UplinkNatReturnIn {
+    pub vni: u32,
+    pub tap_ifindex: u32,
+    pub guest_mac: [u8; 6],
+}
+
+/// Host NAT reverse-DNAT return path, in place on `pkt`. Mirrors the eBPF `try_uplink_rx` NAT branch:
+/// build the inner 5-tuple key (demuxed peer-independently when the inner dst is a registered nat_ip);
+/// reverse-DNAT apply when the matched CT entry carries `CT_REWRITE_DST`; decap + inner-Eth rewrite.
+pub fn process_uplink_nat_return<P: Pkt, M: Maps>(
+    pkt: &mut P,
+    maps: &mut M,
+    in_: &UplinkNatReturnIn,
+) -> Action {
+    let inner_off = ETH_LEN + IPV6_LEN;
+
+    // 1. Build the inner 5-tuple key; NAT returns are demuxed peer-independently.
+    if let Some(mut key) = ct_key(&*pkt, inner_off, in_.vni) {
+        if maps.is_nat_ip(in_.vni, &key.dst_ip) {
+            key.src_ip = [0; 4];
+            key.src_port = 0;
+        }
+        // 2. Reverse-DNAT apply when the matched entry carries CT_REWRITE_DST.
+        if let Some(e) = maps.conntrack_get(&key) {
+            if e.flags & CT_REWRITE_DST != 0 {
+                ct_apply(pkt, inner_off, &e);
+            }
+        }
+    }
+
+    // 3. Decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest.
+    match decap_and_rewrite(pkt, in_.tap_ifindex, in_.guest_mac) {
+        Ok(a) => a,
+        Err(_) => Action::Drop,
     }
 }
