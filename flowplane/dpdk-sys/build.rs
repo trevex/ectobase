@@ -27,6 +27,11 @@ fn main() {
     // (all available as shared libs in the nix devShell).
     emit_dpdk_link_flags(&prefix);
 
+    // Expose the install prefix to downstream build scripts (e.g. nfkit) via DEP_DPDK_PREFIX.
+    // Downstream crates with `links = "dpdk"` metadata deps can read this as the env var
+    // DEP_DPDK_<KEY> where KEY is the uppercased key after "cargo:".
+    println!("cargo:prefix={}", prefix.display());
+
     // Include paths + compile flags for the shim (cc) and bindgen.
     // We read cflags directly from the libdpdk-libs.pc file to get -march=corei7,
     // -include rte_config.h etc., without invoking pkg-config --static (which hits
