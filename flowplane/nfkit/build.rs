@@ -51,7 +51,20 @@ fn emit_dpdk_link_flags(prefix: &Path) {
     }
 
     // System libs available as shared in the nix devShell.
-    for lib in &["pcap", "numa", "m", "dl", "pthread"] {
+    // We use rustc-link-arg (not rustc-link-lib) so the flags land in the final
+    // cc linker invocation for *all* targets compiled from this package (tests,
+    // examples, the rlib itself). rustc-link-lib is only reliable for the rlib;
+    // link-arg propagates to every downstream binary in the same package.
+    //
+    // bpf + xdp: needed by librte_net_af_xdp (whole-archive).
+    // pcap:      needed by librte_net_pcap (whole-archive).
+    // numa:      needed by librte_eal (whole-archive).
+    for lib in &["pcap", "bpf", "xdp", "numa"] {
+        println!("cargo:rustc-link-arg=-l{lib}");
+    }
+    // m / dl / pthread: also needed but already emitted by the Rust stdlib link
+    // line; listing them again as link-arg is harmless.
+    for lib in &["m", "dl", "pthread"] {
         println!("cargo:rustc-link-lib={lib}");
     }
 }
