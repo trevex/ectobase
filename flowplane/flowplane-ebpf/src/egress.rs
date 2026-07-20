@@ -19,6 +19,8 @@ pub enum EgressVerdict {
 /// locals get their own stack frame instead of piling onto `tc_guest_tx` (which is already at the
 /// 512-byte BPF stack limit). Takes `data`/`data_end` as scalars and reconstructs the packet window
 /// inside — no packet pointer crosses the call boundary, so the verifier re-derives bounds cleanly.
+/// The combined call-chain stack (tc_guest_tx + this frame) must stay under 512B, so
+/// `inner_flow_label` folds the 5-tuple incrementally rather than materializing address arrays.
 #[inline(never)]
 fn egress_flow_label(data: usize, data_end: usize, is_v6: bool) -> u32 {
     flowplane_core::parse::inner_flow_label(
