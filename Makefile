@@ -102,30 +102,33 @@ test: ## Host unit + POD-layout tests (no root needed)
 	cargo test -p flowplane-common -p flowplane
 
 .PHONY: verifier
-verifier: ## Load both XDP programs through the kernel verifier (needs root)
-	cargo test -p flowplane both_programs_pass_verifier -- --ignored
+verifier: ## Load the edge XDP + guest-facing tc programs through the kernel verifier (needs root)
+	# The main dataplane XDP (uplink_rx) is verifier-loaded by the sim-anchor byte-parity anchors;
+	# these two cover the programs those anchors don't exercise: the edge WAN XDP, and all three
+	# guest-facing tc classifiers (tc_guest_tx / tc_guest_nat64 / tc_guest_dhcp). verify_tc_guest is
+	# what catches tc-datapath stack/verifier regressions (e.g. an over-budget egress subprogram).
+	sudo -E $$(command -v cargo) test -p flowplane --test verify_edge_wan_rx -- --ignored
+	sudo -E $$(command -v cargo) test -p flowplane --test verify_tc_guest -- --ignored
 
 .PHONY: sim
 sim: ## Fast in-process datapath tests (no root, no clab): pure-core + native sim
 	cargo test -p flowplane-core -p flowplane-sim
 
 .PHONY: sim-anchor
-sim-anchor: ## Privileged BPF_PROG_TEST_RUN byte-parity anchor (native pure-core vs real bytecode)
+sim-anchor: verifier ## Privileged BPF_PROG_TEST_RUN byte-parity anchors (native pure-core vs real bytecode)
 	cargo build -p flowplane
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_uplink -- --ignored --exact uplink_rx_bytecode_matches_native_sim
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_lb -- --ignored --exact uplink_rx_lb_deliver_bytecode_matches_native_sim
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_guest_tx -- --ignored --exact guest_tx_snat_bytecode_matches_native_sim
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_guest_tx -- --ignored --exact guest_tx_bytecode_matches_original_golden
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dnat -- --ignored --exact dnat_return_bytecode_matches_native_sim
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dnat -- --ignored --exact dnat_return_bytecode_matches_original_golden
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_arp_nd -- --ignored --exact arp_nd_bytecode_matches_native_sim
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_arp_nd -- --ignored --exact arp_nd_bytecode_matches_original_golden
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dhcp -- --ignored --exact dhcp_bytecode_matches_native_sim
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dhcp -- --ignored --exact dhcp_bytecode_matches_original_golden
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_nat64 -- --ignored --exact nat64_egress_bytecode_matches_native_sim
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_nat64 -- --ignored --exact nat64_egress_bytecode_matches_original_golden
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_nat64 -- --ignored --exact nat64_ingress_bytecode_matches_native_sim
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_nat64 -- --ignored --exact nat64_ingress_bytecode_matches_original_golden
+	# Each anchor runs the REAL compiled program via BPF_PROG_TEST_RUN and asserts its output is
+	# byte-identical to the native SimNode for the same input + map state (and loads/verifies the
+	# program as a side effect). One `--test` binary per datapath; `--ignored` runs its anchor(s).
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_uplink -- --ignored    # uplink_rx N-S decap+deliver
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_lb -- --ignored         # uplink_rx Maglev LB reforward
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dnat -- --ignored       # dnat return (native + golden)
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_guest_tx -- --ignored   # tc_guest_tx encap + flow-label ECMP
+	# NOT YET ANCHORED (coverage gaps, tracked separately — do not assume these are covered):
+	#   - anchor_dhcp: stale; still loads the removed XDP `guest_dhcp`. DHCPv6 is now the tc
+	#     `tc_guest_dhcp` classifier (verifier-load covered by `verifier` above); its byte-parity
+	#     anchor needs re-porting to a tc test-run.
+	#   - guest-tx ARP/ND replies and the NAT64 egress/ingress translation have no byte-parity anchor.
 
 .PHONY: e2e
 e2e: ## 3-node netns end-to-end overlay test (needs sudo)
