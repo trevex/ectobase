@@ -15,6 +15,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=DEP_DPDK_PREFIX");
 }
 
+// NOTE: the DPDK link-flag emission here is kept in sync with dpdk-sys/build.rs
+// (a build-support crate would DRY this in a later milestone).
 fn emit_dpdk_link_flags(prefix: &Path) {
     let lib_dir = prefix.join("lib");
     let pc_dir = prefix.join("lib/pkgconfig");
