@@ -10,16 +10,12 @@
 //! ICMP-echo reply, and inner `dnat_ingress` — are NOT modeled (out of scope for this LB-path
 //! harness). For LB packets those branches are skipped anyway.
 
-use flowplane_common::{
-    Local, PortMeta, UnderlayValue, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS,
-};
-use flowplane_core::conntrack::{ct_apply, ct_create_default, ct_key};
-use flowplane_core::egress::{deliver, route4, Deliver, IPPROTO_IPIP};
+use flowplane_common::{Local, PortMeta, UnderlayValue};
+use flowplane_core::conntrack::{ct_apply, ct_key};
+use flowplane_core::egress::{route4, IPPROTO_IPIP};
 use flowplane_core::encap::{write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
-use flowplane_core::firewall::fw_eval_dir;
 use flowplane_core::lb::{lb_select_forward, lb_select_forward_v6};
 use flowplane_core::maps::Maps;
-use flowplane_core::nat::snat_egress;
 use flowplane_core::pkt::{Action, Pkt};
 use flowplane_core::uplink::{decap_and_rewrite, GW_MAC};
 
@@ -234,140 +230,20 @@ impl SimNode {
     /// the emitted bytes are unaffected; the interleaved un-ported steps (ct_apply/ct_touch, vip) are
     /// map/refresh-only on this fixture and do not change the emitted bytes.
     pub fn guest_tx(&mut self, frame: &[u8], meta: &PortMeta) -> SimOut {
-        // Reset the stamp so a Local/Pass verdict leaves last_tstamp = None (unshaped), matching
-        // the eBPF `tc_guest_tx` which only calls `edt_stamp` on the Encap arm.
-        self.last_tstamp = None;
-        let ip_off = ETH_LEN;
         let mut pkt = VecPkt::from_bytes(frame);
-
-        // 1. Conntrack miss → source egress firewall (deny-by-default). Fresh flow only.
-        let mut was_new = false;
-        if let Some(key) = ct_key(&pkt, ip_off, meta.vni) {
-            if self.maps.conntrack_get(&key).is_none() {
-                was_new = true;
-                // Egress firewall keyed on the SOURCE interface. The sim keys FW_META/FW_RULES on a
-                // synthetic ifindex == meta.vni's port; the fixture installs it under `src_ifindex`.
-                if fw_eval_dir(&pkt, &self.maps, ip_off, self.src_ifindex, FW_DIR_EGRESS)
-                    == FW_ACTION_DROP
-                {
-                    return SimOut {
-                        action: Action::Drop,
-                        pkt: pkt.into_bytes(),
-                    };
-                }
-            }
-        }
-
-        // 2. VIP snat/dnat: not modelled (no VIP maps → no-op in the eBPF path too).
-
-        // 3. Route lookup on the inner IPv4 dst.
-        let dst = match pkt.read_array::<4>(ip_off + 16) {
-            Some(d) => d,
-            None => {
-                return SimOut {
-                    action: Action::Pass,
-                    pkt: pkt.into_bytes(),
-                }
-            }
-        };
-        let route = match route4(&self.maps, meta.vni, &dst) {
-            Some(r) => r,
-            None => {
-                return SimOut {
-                    action: Action::Pass,
-                    pkt: pkt.into_bytes(),
-                }
-            }
-        };
-
-        // 4. Network NAT SNAT when the route is external.
-        let is_ext = route.is_external != 0;
-        snat_egress(&mut pkt, &mut self.maps, ip_off, meta.vni, is_ext, 0);
-
-        // 5. Track every flow (create-on-miss).
-        if let Some(key) = ct_key(&pkt, ip_off, meta.vni) {
-            if self.maps.conntrack_get(&key).is_none() {
-                ct_create_default(&pkt, &mut self.maps, ip_off, meta.vni, 0);
-            }
-        }
-
-        // 6. Egress metering — mirrors the eBPF split in egress.rs + tc.rs:
-        //    a) Public-lane policing (drop-on-exhaust, external only) — mirrors egress.rs `public_pass`.
-        //    b) EDT egress shaping — mirrors tc.rs `edt_stamp`, called ONLY in the Encap arm (step 7)
-        //       AFTER `grow_head(IPV6_LEN)` / `write_outer_v6`, using the POST-encap `pkt.len()`.
-        //       Same-node LOCAL delivery is unshaped (eBPF `tc_guest_tx` only stamps on the Encap
-        //       arm, after `adjust_room`). `last_tstamp` stays `None` for Local / Pass.
-        let frame_len = pkt.len() as u64;
-        // a) Public-lane policing (external egress only) — mirrors egress.rs.
-        if !flowplane_core::meter::public_pass(
+        let out = flowplane_core::datapath::process_guest_tx(
+            &mut pkt,
             &mut self.maps,
-            self.src_ifindex,
-            frame_len,
-            is_ext,
-            self.now,
-        ) {
-            return SimOut {
-                action: Action::Drop,
-                pkt: pkt.into_bytes(),
-            };
-        }
-
-        // 7. Deliver decision. Flow label from the (post-NAT) inner 5-tuple — same core helper the
-        // eBPF forward_decision_v4 runs, so the encapped bytes stay identical.
-        let flow_label = flowplane_core::parse::inner_flow_label(&pkt, ip_off, false);
-        match deliver(&self.maps, &route, meta, IPPROTO_IPIP, flow_label) {
-            Deliver::Local {
-                tap_ifindex,
-                guest_mac,
-            } => {
-                // Destination ingress firewall on NEW flows (same-node delivery).
-                if was_new
-                    && fw_eval_dir(&pkt, &self.maps, ip_off, tap_ifindex, FW_DIR_INGRESS)
-                        == FW_ACTION_DROP
-                {
-                    return SimOut {
-                        action: Action::Drop,
-                        pkt: pkt.into_bytes(),
-                    };
-                }
-                // Rewrite the inner Ethernet for the local guest: dst=guest MAC, src=GW_MAC,
-                // ethertype stays IPv4. Same-node delivery is unshaped — last_tstamp left as-is.
-                pkt.write_bytes(0, &guest_mac);
-                pkt.write_bytes(6, &GW_MAC);
-                SimOut {
-                    action: Action::Redirect(tap_ifindex),
-                    pkt: pkt.into_bytes(),
-                }
-            }
-            Deliver::Encap(e) => {
-                // Prepend 40 bytes (bpf_skb_adjust_room(+IPV6_LEN, MAC)) then write the outer
-                // Eth+IPv6, consuming the new 40 bytes + the 14-byte inner Ethernet, leaving the
-                // bare inner IPv4 — mirrors tc.rs `adjust_room` + `write_outer_v6`.
-                if !pkt.grow_head(IPV6_LEN) || !write_outer_v6(&mut pkt, &e) {
-                    return SimOut {
-                        action: Action::Drop,
-                        pkt: pkt.into_bytes(),
-                    };
-                }
-                // b) EDT egress shaping: stamp AFTER the frame has been grown to its wire length,
-                // using pkt.len() which is now the full post-encap length (inner + 40-byte outer
-                // IPv6 header) — mirrors tc.rs `ctx.len()` after `adjust_room`. Wire bytes are
-                // unchanged (FQ pacing is kernel-side); last_tstamp lets tests assert pacing.
-                self.last_tstamp = flowplane_core::meter::edt_egress(
-                    &mut self.maps,
-                    self.src_ifindex,
-                    pkt.len() as u64,
-                    self.now,
-                );
-                SimOut {
-                    action: Action::Redirect(e.uplink_ifindex),
-                    pkt: pkt.into_bytes(),
-                }
-            }
-            Deliver::Pass => SimOut {
-                action: Action::Pass,
-                pkt: pkt.into_bytes(),
+            &flowplane_core::datapath::GuestTxIn {
+                meta,
+                src_ifindex: self.src_ifindex,
+                now: self.now,
             },
+        );
+        self.last_tstamp = out.edt_tstamp;
+        SimOut {
+            action: out.action,
+            pkt: pkt.into_bytes(),
         }
     }
 
