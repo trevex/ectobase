@@ -45,3 +45,12 @@ Needs IOMMU + vfio (this host has both). Bind a spare NIC to `vfio-pci` with
 - No hugepages, no PCI, null port:  `-l 0 --no-huge -m 512 --no-pci --vdev net_null0 --file-prefix nfkit`
 - pcap replay/record:               `--vdev net_pcap0,rx_pcap=in.pcap,tx_pcap=out.pcap`
 - af_xdp on veth end `vv0`:         `--vdev net_af_xdp0,iface=vv0`
+
+## CI
+
+The DPDK crates are excluded from `default-members`, so normal CI is unaffected. A DPDK CI
+job runs inside `nix develop` with no special hardware:
+
+    cargo test -p dpdk-sys -p nfkit -- --test-threads=1
+
+This needs no hugepages (EAL runs with `--no-huge`) and no bound NIC (null/pcap vdevs).
