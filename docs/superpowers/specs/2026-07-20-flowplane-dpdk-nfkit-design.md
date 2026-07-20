@@ -12,7 +12,7 @@ Build a **DPDK version of flowplane** as a *conforming node role* of the existin
 
 ## 2. Goals / non-goals
 
-**Goals:** a highly-scalable run-to-completion DPDK dataplane with functional parity to eBPF flowplane; best-practice offload (symmetric RSS, checksum/TSO, `rte_flow`); one binary that runs on NIC / af_xdp / tap / pcap; container (memif) and VM (vhost-user) edges; maximum reuse of `flowplane-core`; a publishable, maintained `nfkit` substrate.
+**Goals:** a highly-scalable run-to-completion DPDK dataplane with functional parity to eBPF flowplane; **peak performance via hardware offload** (established-flow eSwitch offload as the primary lever, plus symmetric RSS, checksum/TSO, `rte_flow`); one binary that runs on NIC / af_xdp / tap / pcap; container (memif) and VM (vhost-user) edges; maximum reuse of `flowplane-core` *without* blocking offload; and a **`nfkit` that is a genuinely safe, zero-cost abstraction** over DPDK.
 
 **Non-goals (now):** replacing the eBPF dataplane (both coexist on one fabric via the compatibility contract); HW encap-offload of our custom IPIP overlay (not offloadable — see §7); the Geneve migration (separate, parked); betting on DPDK's not-yet-merged upstream Rust crate (we converge toward it, don't depend on it).
 
@@ -37,6 +37,8 @@ Build a **DPDK version of flowplane** as a *conforming node role* of the existin
 | VM edge | **vhost-user (perf) + tap (universal/dev fallback)** |
 | Phasing | Phases 3–6 **hard-gated** behind phase-2 parity + a real-NIC perf number |
 | Core model | Run-to-completion, one lcore per RX/TX queue, shared-nothing, symmetric RSS |
+| Perf strategy | **Offload-first, batch what's hot:** peak = eSwitch offload of established flows; `flowplane-core` = reference + slow path + un-offloadable flows; batch only measured-hot stages, byte-parity-guarded |
+| `nfkit` safety | **Safe, zero-cost abstraction is the primary goal:** `unsafe` confined to `dpdk-sys` + audited core; consumers write zero `unsafe`; safety via compile-time invariants (ownership/`!Send` type-state/RAII), not runtime checks |
 
 ## 5. Crate architecture
 
@@ -66,6 +68,17 @@ flowplane-dpdk  (binds flowplane-core to nfkit)
 
 Each unit has one purpose and a testable interface: `nfkit` knows nothing about overlays/VNIs; `flowplane-dpdk` knows nothing about DPDK ABI details (only `nfkit`'s safe API + `flowplane-core`).
 
+### 5.1 `nfkit` is a safe, zero-cost abstraction (primary design goal)
+
+`nfkit`'s reason to exist is **safe DPDK for Rust NFs with no runtime cost** — the gap dead Capsule and the young safe-wrapper crates leave open. Safety comes from **compile-time invariants, not runtime checks** (runtime checks on the per-packet hot path would defeat DPDK's purpose).
+
+- **`unsafe` is confined** to `dpdk-sys` + a thin, audited `nfkit` core. **Consumers of `nfkit` write zero `unsafe`.** Every `unsafe` block carries a `// SAFETY:` invariant.
+- **Mbuf ownership via RAII + move semantics:** an owned `Mbuf` frees on `Drop`; **`TxQueue::send` consumes the `Mbuf` (moves it)** so use-after-transmit and double-free are *compile errors*. Zero-copy header views borrow the `Mbuf` with a bound lifetime (no dangling).
+- **Type-state for the shared-nothing model:** per-lcore resources (`RxQueue`/`TxQueue`/per-lcore tables) are **`!Send`**, so handing a queue to the wrong lcore does not compile. Shared read-only resources (`Mempool`) are `Sync`.
+- **EAL as a once-only token:** `Eal::init()` returns a guard that gates port/mempool creation; the type system prevents use-before-init and re-init.
+- **Zero-cost:** burst `rx`/`tx`, mbuf data access, and the `MbufPkt` ops are `#[inline]` over the `dpdk-sys` shim; invariants are established once (at configure time), not re-checked per packet. `dpdk-stdlib-rust`'s `Port`/`Mbuf`/`Mempool`/`Queue` layering is the reference model.
+- **RAII resource ordering:** `Drop` order enforces stop-before-close for ports and EAL-outlives-everything (guard lifetimes), so teardown can't segfault.
+
 ## 6. The reuse crux — `Pkt`/`Maps` fourth backend
 
 - **`MbufPkt: Pkt`** over `rte_mbuf`: `grow_head`/`shrink_head` → `rte_pktmbuf_prepend`/`rte_pktmbuf_adjust`; `len`/`logical_len` → `data_len`/`pkt_len`; bounded reads/writes over the mbuf data pointer. **Single-segment mbufs** (dataroom sized for MTU + IPIP-in-IPv6 overhead); multi-segment/jumbo is a seg-aware follow-up (the mbuf-compatible `Pkt` frame model we already committed to).
@@ -80,11 +93,34 @@ Each unit has one purpose and a testable interface: `nfkit` knows nothing about 
 - Per-NUMA mempools; per-lcore mempool cache; 1 GB hugepages; `--socket-mem`; pinned lcores; NUMA-local RX/TX/state. Burst-oriented rx/tx.
 - Packet graph per lcore: `rx_burst → parse (outer IPv6? decap IPIP : native) → conntrack → firewall → nat/nat64 → lb(Maglev DSR) → encap (+flow label) → tx_burst`. Optionally expressed via `rte_graph` later; hand-rolled first.
 
-## 8. Offload strategy (DPDK best practices)
+## 8. Performance & offloading model
 
-- **Enable:** RX/TX checksum, tunnel-aware TSO, symmetric RSS. Query `dev_info` and degrade gracefully (so `net_pcap`/`tap`/`af_xdp` — which lack HW offload — still run the same code).
-- **`rte_flow`:** symmetric-RSS action + `MARK`; steering. Established-flow **offload seam** (future): decap/CT/NAT/count/mark on the mlx5 **E-Switch** for elephant flows; first-packet/slow-path stays in the RTC lcore. **Our custom IPIP encap is NOT HW-encap-offloadable** (only VXLAN/GRE/MPLS) → encap stays in software; CT/NAT/steer are offloadable. This is the same established-flow seam the CompiledNIC design anticipates.
-- **Fabric ECMP:** the outer IPv6 **flow label** (already implemented in `flowplane-core`) carries per-flow entropy for ToR ECMP without inner parsing.
+**Peak throughput comes from hardware offload, not from a fast software path** — even a perfect scalar/SIMD software datapath loses to the eSwitch carrying elephant flows at ~0 CPU. Strategy (locked): **offload-first, batch what's hot.**
+
+### 8.1 What reusing `flowplane-core` means for offload (three kinds, resolved)
+
+| Offload kind | Interaction with reuse | Handling |
+|---|---|---|
+| **Stateless per-packet** (RX/TX checksum, TSO/GSO) | Backend-level, *not* a conflict | The `MbufPkt` backend sets mbuf `ol_flags` (`RTE_MBUF_F_TX_*_CKSUM`, TSO) instead of `flowplane-core` folding checksums in software. Same `Pkt` op → "mark for HW" on DPDK, "incremental fold" on eBPF. Faster on DPDK. |
+| **Flow steering / RSS** | Orthogonal | `nfkit`/`rte_flow` (symmetric Toeplitz) runs before the datapath; `flowplane-core` untouched. |
+| **Established-flow full offload** (eSwitch: decap/CT/NAT/count/mark) | **Complementary — the core is the brain** | `flowplane-core` processes the *first* packet and creates the state; a `flowplane-dpdk` **translation seam** turns that CT/NAT/LB decision into an `rte_flow` rule so subsequent packets bypass the CPU. Reuse *drives* offload; it is not bypassed. |
+
+**Reuse does NOT block offload.** The only un-offloadable operations are our **custom IPIP encap** (only VXLAN/GRE/MPLS are HW-encap-offloadable) and **Maglev DSR** (not an eSwitch primitive) — a property of the wire/LB design, independent of code reuse. Those always run in software.
+
+### 8.2 The scalar-vs-batched tension (honest)
+
+`flowplane-core` is verifier-shaped: scalar, one-packet-at-a-time, unrolled loops, per-packet `Maps` calls. DPDK peak wants **bursts of 32 + prefetch + `rte_hash_lookup_bulk` + SIMD parse** — the biggest gap being per-packet hash lookups vs. bulk-lookup-with-prefetch to hide memory latency.
+
+**Resolution — offload-first, batch what's hot:**
+- **Peak = eSwitch offload** of established flows (§8.1 row 3).
+- **`flowplane-core` = correctness reference + first-packet/slow-path + un-offloadable flows** (custom encap, DSR, NAT64).
+- **Batch only the software slow-path stages profiling shows are hot** (burst parse, bulk CT lookup) as DPDK-native code *behind the same semantics*, **guarded by byte-parity against the core** (extends the `net_pcap` anchor). We never diverge from the reference; we only accelerate hot stages we've measured.
+
+### 8.3 Offload enablement (best practices)
+
+- Enable RX/TX checksum, tunnel-aware TSO, symmetric-Toeplitz RSS; query `dev_info` and **degrade gracefully** so `net_pcap`/`tap`/`af_xdp` (no HW offload) run the *same* code.
+- `rte_flow`: symmetric-RSS action + `MARK` + steering; the established-flow **offload seam** (decap/CT/NAT/count/mark on the mlx5 E-Switch) is a first-class phase, not an afterthought — it's where the perf is.
+- **Fabric ECMP:** the outer IPv6 **flow label** (already in `flowplane-core`) carries per-flow entropy for ToR ECMP without inner parsing.
 
 ## 9. Write-once, run-anywhere + two-tier testing
 
@@ -117,12 +153,14 @@ flowplane-dpdk consumes the **same CompiledNIC + routebus**. Introduce a **map-p
 
 1. **`dpdk-sys` + `nfkit` core** — Eal/Vdev/Port/Mempool/Mbuf/Rx-Tx/LcoreRuntime + `net_pcap` & `net_af_xdp` backends; `PcapHarness`. Deliverable: an l2fwd-equivalent runs on NIC/af_xdp/pcap by config.
 2. **`MbufPkt` + `DpdkMaps` + uplink RTC datapath** — compose `flowplane-core`; **byte-parity vs sim via `net_pcap`**; a real-NIC pps number. **← HARD GATE**
-3. **Offload** — symmetric RSS, checksum/TSO, `rte_flow` builder; inner-RSS on mlx5.
-4. **Container edge** — memif.
-5. **VM edge** — vhost-user + tap fallback.
-6. **Control-plane `DataplaneProgrammer`** — CompiledNIC/routebus → DpdkMaps/rte_flow; mixed-fabric validation.
+3. **Stateless offload + steering** — checksum/TSO via mbuf `ol_flags` in `MbufPkt`; symmetric-Toeplitz RSS; inner-RSS on mlx5; `rte_flow` builder in `nfkit`. Establish a per-lcore-scaling perf baseline.
+4. **Established-flow offload seam** — the CT/NAT/LB-decision → `rte_flow` rule translation (elephant flows to the eSwitch). *This is the peak-perf phase.* Measure offloaded-flow CPU.
+5. **Batch hot software stages** — profile the slow path; add burst parse + `rte_hash_lookup_bulk`/prefetch where hot, **byte-parity-guarded** against `flowplane-core`. Only what profiling justifies.
+6. **Container edge** — memif.
+7. **VM edge** — vhost-user + tap fallback.
+8. **Control-plane `DataplaneProgrammer`** — CompiledNIC/routebus → DpdkMaps/rte_flow; mixed-fabric validation.
 
-Phases 3–6 start only after phase 2 proves byte-parity + an acceptable real-NIC perf number.
+Phases 3–8 start only after phase 2 proves byte-parity + an acceptable real-NIC perf number.
 
 ## 13. Risks / open questions
 
@@ -134,3 +172,6 @@ Phases 3–6 start only after phase 2 proves byte-parity + an acceptable real-NI
 - **`nfkit` naming / open-sourcing** — placeholder; decide before publish.
 - **Symmetric RSS on non-mlx5 / vdev backends** — af_xdp/tap/pcap won't offer HW RSS; single-lcore or software steering in dev is acceptable (perf only matters on real NICs).
 - **Scope:** "all edges" is large; the phase-2 gate + strict phase ordering is the control.
+- **Scalar-core vs DPDK-batch gap:** the verifier-shaped `flowplane-core` won't hit DPDK's per-packet peak on the software path. Mitigation = offload carries elephants (phase 4) + batch only measured-hot stages (phase 5), byte-parity-guarded. Accept the software slow-path is not SIMD-optimal by default.
+- **`nfkit` safety vs zero-cost:** the hard part is a safe `Mbuf` lifecycle (RX→process→TX-consumes / free) with no runtime overhead. Mitigation = ownership/move semantics + `!Send` type-state (compile-time), `#[inline]` hot path, `unsafe` confined + `// SAFETY`-documented. Validate zero-cost by inspecting codegen on the burst loop.
+- **Established-flow offload seam correctness:** the "CT/NAT decision → `rte_flow` rule" translation must stay consistent with the software path (a flow offloaded to HW must behave identically to one handled in software). Needs its own conformance tests + eviction/sync handling when state changes.
