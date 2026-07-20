@@ -30,6 +30,16 @@ pub struct Route6Key {
     pub ipv6: [u8; 16],
 }
 
+/// Composite key for the NAT-IP set hash: (vni, ipv4). Mirrors `MemMaps.nat_ips` (a
+/// `HashSet<(u32, [u8; 4])>`); the value is a dummy `u8` since `rte_hash` needs a value type.
+#[derive(Copy, Clone)]
+#[repr(C)]
+struct NatIpKey {
+    vni: u32,
+    ipv4: [u8; 4],
+}
+const _: () = assert!(core::mem::size_of::<NatIpKey>() == 8); // no padding
+
 /// Key for maps keyed by a single `u32` ifindex / slot (underlay is [u8;16], handled separately).
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -78,6 +88,7 @@ pub struct DpdkMaps {
     lb: DpdkHash<LbKey, LbValue>,
     maglev: DpdkHash<MaglevKey, [u8; 16]>,
     nat: DpdkHash<NatKey, NatValue>,
+    nat_ips: DpdkHash<NatIpKey, u8>,
     route4: DpdkHash<Route4Key, RouteValue>,
     route6: DpdkHash<Route6Key, RouteValue>,
     dhcp_meta: DpdkHash<U32Key, DhcpMeta>,
@@ -100,6 +111,7 @@ impl DpdkMaps {
             lb: DpdkHash::new("dm_lb", CAP_STD, socket_id)?,
             maglev: DpdkHash::new("dm_maglev", CAP_STD, socket_id)?,
             nat: DpdkHash::new("dm_nat", CAP_STD, socket_id)?,
+            nat_ips: DpdkHash::new("dm_nat_ips", CAP_STD, socket_id)?,
             route4: DpdkHash::new("dm_route4", CAP_STD, socket_id)?,
             route6: DpdkHash::new("dm_route6", CAP_STD, socket_id)?,
             dhcp_meta: DpdkHash::new("dm_dhcp_meta", CAP_STD, socket_id)?,
@@ -154,6 +166,11 @@ impl DpdkMaps {
         self.nat.insert(&key, value);
     }
 
+    /// Register `(vni, ip)` as a public NAT IP (mirrors `MemMaps.nat_ips.insert`).
+    pub fn add_nat_ip(&mut self, vni: u32, ip: [u8; 4]) {
+        self.nat_ips.insert(&NatIpKey { vni, ipv4: ip }, 1);
+    }
+
     /// Set the server-wide DHCP config singleton.
     pub fn set_dhcp_config(&mut self, v: DhcpConfig) {
         self.dhcp_config = Some(v);
@@ -203,6 +220,10 @@ impl Maps for DpdkMaps {
 
     fn nat_get(&self, key: &NatKey) -> Option<NatValue> {
         self.nat.get(key)
+    }
+
+    fn is_nat_ip(&self, vni: u32, ip: &[u8; 4]) -> bool {
+        self.nat_ips.get(&NatIpKey { vni, ipv4: *ip }).is_some()
     }
 
     /// Exact-match (/32) IPv4 route lookup.  `DpdkMaps` stores only host routes so the LPM

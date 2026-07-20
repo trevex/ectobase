@@ -77,4 +77,11 @@ fn dpdk_maps_route_and_conntrack() {
         m.conntrack_get(&k2).is_none(),
         "conntrack miss (different key)"
     );
+
+    // is_nat_ip: add → hit; wrong vni/ip → miss.
+    assert!(!m.is_nat_ip(7, &[100, 64, 0, 1]));
+    m.add_nat_ip(7, [100, 64, 0, 1]);
+    assert!(m.is_nat_ip(7, &[100, 64, 0, 1]));
+    assert!(!m.is_nat_ip(8, &[100, 64, 0, 1]), "wrong vni misses");
+    assert!(!m.is_nat_ip(7, &[100, 64, 0, 2]), "wrong ip misses");
 }

@@ -2,7 +2,7 @@ use aya_ebpf::{helpers::bpf_xdp_adjust_head, programs::XdpContext};
 use flowplane_common::{
     CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
     MaglevKey, MeterState, NatKey, NatValue, RouteLpmData, RouteLpmData6, RouteValue,
-    UnderlayValue,
+    UnderlayValue, VipKey,
 };
 use flowplane_core::maps::Maps;
 use flowplane_core::pkt::Pkt;
@@ -47,6 +47,14 @@ impl Maps for GlobalMaps {
     #[inline(always)]
     fn nat_get(&self, key: &NatKey) -> Option<NatValue> {
         unsafe { crate::maps::NAT.get(key).copied() }
+    }
+    #[inline(always)]
+    fn is_nat_ip(&self, vni: u32, ip: &[u8; 4]) -> bool {
+        unsafe {
+            crate::maps::NAT_IPS
+                .get(&VipKey { vni, ipv4: *ip })
+                .is_some()
+        }
     }
     #[inline(always)]
     fn route4_get(&self, vni: u32, dst: &[u8; 4]) -> Option<RouteValue> {
