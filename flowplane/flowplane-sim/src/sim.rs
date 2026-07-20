@@ -11,7 +11,6 @@
 //! harness). For LB packets those branches are skipped anyway.
 
 use flowplane_common::{Local, PortMeta, UnderlayValue};
-use flowplane_core::conntrack::ct_apply;
 use flowplane_core::egress::{route4, IPPROTO_IPIP};
 use flowplane_core::encap::{write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
 use flowplane_core::lb::{lb_select_forward, lb_select_forward_v6};
@@ -339,44 +338,18 @@ impl SimNode {
         guest_ipv6: [u8; 16],
         rev: &flowplane_common::CtEntry,
     ) -> SimOut {
-        use flowplane_core::nat64::{nat64_ingress_parse, nat64_ingress_write};
-
-        let inner_off = ETH_LEN + IPV6_LEN;
-        let orig_sport = rev.xlate_port;
         let mut pkt = VecPkt::from_bytes(encapped);
-
-        // 1. Reverse conntrack apply: restore the guest IPv4 dst + orig L4 port (+ checksums).
-        ct_apply(&mut pkt, inner_off, rev);
-
-        // 2. Parse (IHL/proto/TTL/addrs/checksum + reconstructed 64:ff9b:: IPv6 src).
-        let xlate = match nat64_ingress_parse(&pkt, inner_off, guest_ipv6, guest_mac, orig_sport) {
-            Some(x) => x,
-            None => {
-                return SimOut {
-                    action: Action::Pass,
-                    pkt: pkt.into_bytes(),
-                }
-            }
-        };
-
-        // 3. Resize: shrink 20 bytes off the front (models adjust_head(+20)).
-        if !pkt.shrink_head(20) {
-            return SimOut {
-                action: Action::Drop,
-                pkt: pkt.into_bytes(),
-            };
-        }
-
-        // 4. Write: guest Ethernet + inner IPv6 header + L4 translation.
-        if !nat64_ingress_write(&mut pkt, ETH_LEN, GW_MAC, &xlate) {
-            return SimOut {
-                action: Action::Drop,
-                pkt: pkt.into_bytes(),
-            };
-        }
-
+        let action = flowplane_core::datapath::process_uplink_nat64_ingress(
+            &mut pkt,
+            &flowplane_core::datapath::UplinkNat64IngressIn {
+                tap_ifindex,
+                guest_mac,
+                guest_ipv6,
+                rev,
+            },
+        );
         SimOut {
-            action: Action::Redirect(tap_ifindex),
+            action,
             pkt: pkt.into_bytes(),
         }
     }

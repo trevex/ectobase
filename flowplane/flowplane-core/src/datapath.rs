@@ -15,6 +15,7 @@ use crate::firewall::fw_eval_dir;
 use crate::lb::lb_select_forward;
 use crate::maps::Maps;
 use crate::nat::snat_egress;
+use crate::nat64::{nat64_ingress_parse, nat64_ingress_write};
 use crate::pkt::{Action, Pkt};
 use crate::uplink::{decap_and_rewrite, GW_MAC};
 
@@ -297,4 +298,42 @@ pub fn process_uplink_nat_return<P: Pkt, M: Maps>(
         Ok(a) => a,
         Err(_) => Action::Drop,
     }
+}
+
+/// Inputs for [`process_uplink_nat64_ingress`]. `rev` is the reverse `CT_F_NAT64` conntrack entry the
+/// caller already resolved (restores the guest IPv4 dst + orig L4 port); this fn takes no `Maps`.
+pub struct UplinkNat64IngressIn<'a> {
+    pub tap_ifindex: u32,
+    pub guest_mac: [u8; 6],
+    pub guest_ipv6: [u8; 16],
+    pub rev: &'a flowplane_common::CtEntry,
+}
+
+/// Host NAT64 ingress reply path, in place on `pkt`. Mirrors the eBPF ingress `nat64_ingress`:
+/// reverse `ct_apply` → `nat64_ingress_parse` (Pass on miss) → `shrink_head(20)` → `nat64_ingress_write`.
+pub fn process_uplink_nat64_ingress<P: Pkt>(pkt: &mut P, in_: &UplinkNat64IngressIn) -> Action {
+    let inner_off = ETH_LEN + IPV6_LEN;
+    let orig_sport = in_.rev.xlate_port;
+
+    // 1. Reverse conntrack apply: restore the guest IPv4 dst + orig L4 port (+ checksums).
+    ct_apply(pkt, inner_off, in_.rev);
+
+    // 2. Parse (IHL/proto/TTL/addrs/checksum + reconstructed 64:ff9b:: IPv6 src).
+    let xlate =
+        match nat64_ingress_parse(&*pkt, inner_off, in_.guest_ipv6, in_.guest_mac, orig_sport) {
+            Some(x) => x,
+            None => return Action::Pass,
+        };
+
+    // 3. Resize: shrink 20 bytes off the front (models adjust_head(+20)).
+    if !pkt.shrink_head(20) {
+        return Action::Drop;
+    }
+
+    // 4. Write: guest Ethernet + inner IPv6 header + L4 translation.
+    if !nat64_ingress_write(pkt, ETH_LEN, GW_MAC, &xlate) {
+        return Action::Drop;
+    }
+
+    Action::Redirect(in_.tap_ifindex)
 }
