@@ -9,3 +9,7 @@ arrayvec = "0.7"
 dpdk-sys = { path = "../dpdk-sys" }
 flowplane-core = { path = "../flowplane-core" }
 flowplane-common = { path = "../flowplane-common" }
+
+[dev-dependencies]
+etherparse = "0.15"
+flowplane-sim = { path = "../flowplane-sim" }

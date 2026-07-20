@@ -15,7 +15,7 @@ use flowplane_common::{
 };
 use flowplane_core::conntrack::{ct_apply, ct_create_default, ct_key};
 use flowplane_core::egress::{deliver, route4, Deliver, IPPROTO_IPIP};
-use flowplane_core::encap::{reforward, write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
+use flowplane_core::encap::{write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
 use flowplane_core::firewall::fw_eval_dir;
 use flowplane_core::lb::{lb_select_forward, lb_select_forward_v6};
 use flowplane_core::maps::Maps;
@@ -112,69 +112,15 @@ impl SimNode {
         outer_dst: [u8; 16],
         local: &Local,
     ) -> SimOut {
-        let inner_off = ETH_LEN + IPV6_LEN;
         let mut pkt = VecPkt::from_bytes(encapped);
-
-        // 1. LB dispatch (mirror ingress.rs:135-157).
-        let lb_ul = lb_select_forward(&pkt, &self.maps, inner_off, vni);
-        let (tap, guest_mac, is_lb) = match lb_ul {
-            Some(bul) => match self.maps.underlay_get(&bul) {
-                Some(bu) => (bu.tap_ifindex, bu.guest_mac, true), // LB backend local
-                None => {
-                    // Remote backend: reforward the encapped frame, no decap.
-                    let action = reforward(&mut pkt, local, &outer_dst, &bul);
-                    return SimOut {
-                        action,
-                        pkt: pkt.into_bytes(),
-                    };
-                }
-            },
-            None => (u.tap_ifindex, u.guest_mac, false), // non-LB base
+        let in_ = flowplane_core::datapath::UplinkIn {
+            vni,
+            u,
+            outer_dst,
+            local,
+            now: self.now,
         };
-
-        // 2. Ingress firewall on NEW inbound flows against the deliver tap.
-        if let Some(key) = ct_key(&pkt, inner_off, vni) {
-            if self.maps.conntrack_get(&key).is_none()
-                && fw_eval_dir(&pkt, &self.maps, inner_off, tap, FW_DIR_INGRESS) == FW_ACTION_DROP
-            {
-                return SimOut {
-                    action: Action::Drop,
-                    pkt: pkt.into_bytes(),
-                };
-            }
-        }
-
-        // 3. Conntrack: create on miss, but ONLY for non-LB (LB is DSR — no ct, ingress.rs:266).
-        if !is_lb {
-            if let Some(key) = ct_key(&pkt, inner_off, vni) {
-                if self.maps.conntrack_get(&key).is_none() {
-                    ct_create_default(&pkt, &mut self.maps, inner_off, vni, 0);
-                }
-            }
-        }
-
-        // 4. Decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest.
-        let action = match decap_and_rewrite(&mut pkt, tap, guest_mac) {
-            Ok(a) => a,
-            Err(_) => Action::Drop,
-        };
-        if action == Action::Drop {
-            return SimOut {
-                action,
-                pkt: pkt.into_bytes(),
-            };
-        }
-
-        // 5. Ingress-lane policing (keyed by dest tap) — mirrors ingress.rs uplink_rx. Post-decap inner
-        // length is the frame delivered to the guest. No cap => pass.
-        let in_len = pkt.len() as u64;
-        if !flowplane_core::meter::ingress_pass(&mut self.maps, tap, in_len, self.now) {
-            return SimOut {
-                action: Action::Drop,
-                pkt: pkt.into_bytes(),
-            };
-        }
-
+        let action = flowplane_core::datapath::process_uplink(&mut pkt, &mut self.maps, &in_);
         SimOut {
             action,
             pkt: pkt.into_bytes(),
