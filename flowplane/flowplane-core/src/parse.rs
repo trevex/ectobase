@@ -78,6 +78,51 @@ pub fn hash_v6(src: &[u8; 16], dst: &[u8; 16], sport: u16, dport: u16, proto: u8
     h
 }
 
+/// Compute the 20-bit outer IPv6 flow label from an inner IP packet at `ip_off` (RFC 6438 fabric
+/// ECMP entropy). `is_v6` selects inner IPv6 vs IPv4 parsing. Returns 0 on out-of-bounds so a
+/// short/unparseable inner just yields "no ECMP hint" rather than dropping. Read via the `Pkt`
+/// trait so the eBPF datapath and the native sim compute an identical label for the same bytes.
+#[inline(always)]
+pub fn inner_flow_label<P: Pkt>(pkt: &P, ip_off: usize, is_v6: bool) -> u32 {
+    // Read only the address bytes directly (no full-header stack array) — this runs inlined into the
+    // already stack-heavy tc_guest_tx, so keep BPF-stack use minimal.
+    if is_v6 {
+        let src = match pkt.read_array::<16>(ip_off + 8) {
+            Some(a) => a,
+            None => return 0,
+        };
+        let dst = match pkt.read_array::<16>(ip_off + 24) {
+            Some(a) => a,
+            None => return 0,
+        };
+        let nexthdr = match pkt.read_u8(ip_off + 6) {
+            Some(b) => b,
+            None => return 0,
+        };
+        let (sport, dport) = match nexthdr {
+            IPPROTO_TCP | IPPROTO_UDP => (
+                pkt.read_u16_be(ip_off + 40).unwrap_or(0),
+                pkt.read_u16_be(ip_off + 42).unwrap_or(0),
+            ),
+            _ => (0, 0),
+        };
+        flow_label20(hash_v6(&src, &dst, sport, dport, nexthdr))
+    } else {
+        let src = match pkt.read_array::<4>(ip_off + 12) {
+            Some(a) => a,
+            None => return 0,
+        };
+        let dst = match pkt.read_array::<4>(ip_off + 16) {
+            Some(a) => a,
+            None => return 0,
+        };
+        // l4_ports handles IHL/proto; fall back to (proto,0,0) for non-TCP/UDP or OOB L4.
+        let proto = pkt.read_u8(ip_off + 9).unwrap_or(0);
+        let (proto, sport, dport) = l4_ports(pkt, ip_off).unwrap_or((proto, 0, 0));
+        flow_label20(hash5(&src, &dst, sport, dport, proto))
+    }
+}
+
 /// Fold a 32-bit flow hash into a 20-bit IPv6 flow label (RFC 6437/6438 tunnel entropy). XOR-folds
 /// the high 12 bits back in so high-entropy hashes don't collide on their low 20 bits, then masks
 /// to 20 bits so the value never bleeds into the IPv6 version/traffic-class nibble.

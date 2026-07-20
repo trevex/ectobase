@@ -15,6 +15,19 @@ pub enum EgressVerdict {
     Encap(EncapParams),
 }
 
+/// Compute the outer IPv6 flow label from the inner packet, as a NON-inlined BPF subprogram so its
+/// locals get their own stack frame instead of piling onto `tc_guest_tx` (which is already at the
+/// 512-byte BPF stack limit). Takes `data`/`data_end` as scalars and reconstructs the packet window
+/// inside — no packet pointer crosses the call boundary, so the verifier re-derives bounds cleanly.
+#[inline(never)]
+fn egress_flow_label(data: usize, data_end: usize, is_v6: bool) -> u32 {
+    flowplane_core::parse::inner_flow_label(
+        &crate::coreimpl::RawPkt::new(data, data_end),
+        ETH_LEN,
+        is_v6,
+    )
+}
+
 /// Run the in-place IPv4 egress pipeline (conntrack/firewall/vip/nat/meter/route) and decide what
 /// the caller's glue should do. Map-driven; used by tc `tc_guest_tx`. Mutates the packet in place
 /// but does NOT resize. Caller has already verified ethertype == ETH_P_IP and that ETH_LEN+20
@@ -112,11 +125,14 @@ pub fn forward_decision_v4(
     // anycast entries have tap_ifindex==0 and fall through to encap. Single-sourced in
     // `flowplane_core::egress::deliver` (the SAME decision the native SimNode runs). The dest ingress
     // firewall gate on the local path stays HERE in the wrapper — it needs `was_new` + the packet.
+    // Outer IPv6 flow label from the (post-NAT) inner 5-tuple, for RFC 6438 fabric ECMP.
+    let flow_label = egress_flow_label(data, data_end, false);
     match flowplane_core::egress::deliver(
         &crate::coreimpl::GlobalMaps,
         &route,
         meta,
         crate::parse::IPPROTO_IPIP,
+        flow_label,
     ) {
         flowplane_core::egress::Deliver::Local {
             tap_ifindex,
@@ -151,7 +167,7 @@ pub fn forward_decision_v4(
 #[inline(always)]
 pub fn forward_decision_v6(
     data: usize,
-    _data_end: usize,
+    data_end: usize,
     _ifindex: u32,
     meta: &PortMeta,
 ) -> EgressVerdict {
@@ -188,6 +204,6 @@ pub fn forward_decision_v6(
         src_underlay: meta.underlay_ipv6,
         nexthop_ipv6: route.nexthop_ipv6,
         inner_proto: crate::parse::IPPROTO_IPV6,
-        flow_label: 0,
+        flow_label: egress_flow_label(data, data_end, true),
     })
 }
