@@ -12,7 +12,6 @@
 
 use flowplane_common::{Local, PortMeta, UnderlayValue};
 use flowplane_core::encap::{write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
-use flowplane_core::lb::{lb_select_forward, lb_select_forward_v6};
 use flowplane_core::maps::Maps;
 use flowplane_core::pkt::{Action, Pkt};
 use flowplane_core::uplink::GW_MAC;
@@ -309,38 +308,15 @@ impl SimNode {
     /// runs the v6 core select (`inner_proto=41`/IPPROTO_IPV6). Returns the encapped frame (or the
     /// input on Pass).
     pub fn wan_rx(&self, plain: &[u8]) -> SimOut {
-        use flowplane_core::encap::ETH_LEN;
-        let ethertype = u16::from_be_bytes([
-            plain.get(12).copied().unwrap_or(0),
-            plain.get(13).copied().unwrap_or(0),
-        ]);
-        // v4 => IPIP; v6 => IPPROTO_IPV6. Select with the matching core fn, then share one encap.
-        let selected = match ethertype {
-            0x86DD => lb_select_forward_v6(&VecPkt::from_bytes(plain), &self.maps, ETH_LEN, 0)
-                .map(|b| (b, 41u8)),
-            _ => lb_select_forward(&VecPkt::from_bytes(plain), &self.maps, ETH_LEN, 0)
-                .map(|b| (b, 4u8)),
-        };
-        match selected {
-            Some((backend, inner_proto)) => {
-                let e = EncapParams {
-                    gateway_mac: self.local.gateway_mac,
-                    uplink_mac: self.local.uplink_mac,
-                    uplink_ifindex: self.local.uplink_ifindex,
-                    src_underlay: self.local.underlay_ipv6,
-                    nexthop_ipv6: backend,
-                    inner_proto, // 4 (IPIP) for v4 inner, 41 (IPPROTO_IPV6) for v6 inner
-                    flow_label: 0,
-                };
-                SimOut {
-                    action: Action::Redirect(self.local.uplink_ifindex),
-                    pkt: self.edge_encap(plain, e),
-                }
-            }
-            None => SimOut {
-                action: Action::Pass,
-                pkt: plain.to_vec(),
-            },
+        let mut pkt = VecPkt::from_bytes(plain);
+        let action = flowplane_core::datapath::process_wan_rx(
+            &mut pkt,
+            &self.maps,
+            &flowplane_core::datapath::WanRxIn { local: &self.local },
+        );
+        SimOut {
+            action,
+            pkt: pkt.into_bytes(),
         }
     }
 

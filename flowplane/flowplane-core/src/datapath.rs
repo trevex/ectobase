@@ -12,7 +12,7 @@ use crate::conntrack::{ct_apply, ct_create_default, ct_key};
 use crate::egress::{deliver, route4, Deliver, IPPROTO_IPIP};
 use crate::encap::{reforward, write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
 use crate::firewall::fw_eval_dir;
-use crate::lb::lb_select_forward;
+use crate::lb::{lb_select_forward, lb_select_forward_v6};
 use crate::maps::Maps;
 use crate::nat::snat_egress;
 use crate::nat64::{
@@ -394,4 +394,42 @@ pub fn process_guest_tx_nat64<P: Pkt, M: Maps>(
         return Action::Drop;
     }
     Action::Redirect(in_.local.uplink_ifindex)
+}
+
+/// Inputs for [`process_wan_rx`]. `local` supplies the outer MACs/ifindex + this node's underlay src.
+pub struct WanRxIn<'a> {
+    pub local: &'a flowplane_common::Local,
+}
+
+/// Edge WAN-VIP ingress, in place on `pkt`. Mirrors `ingress.rs::try_wan_rx` VIP branch: dispatch on
+/// ethertype (offset 12) — 0x86DD → v6 core select (`inner_proto = 41`), else v4 core select
+/// (`inner_proto = 4`); on a VIP hit, encap the inner packet IP-in-IPv6 toward the Maglev-selected
+/// backend (`grow_head(IPV6_LEN)` + `write_outer_v6`) → `Redirect(uplink_ifindex)`; else `Pass`.
+pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> Action {
+    let ethertype = match pkt.read_array::<2>(12) {
+        Some(b) => u16::from_be_bytes(b),
+        None => 0, // frame < 14 bytes → v4 branch (matches plain.get(..).unwrap_or(0))
+    };
+    let selected = match ethertype {
+        0x86DD => lb_select_forward_v6(&*pkt, maps, ETH_LEN, 0).map(|b| (b, 41u8)),
+        _ => lb_select_forward(&*pkt, maps, ETH_LEN, 0).map(|b| (b, 4u8)),
+    };
+    match selected {
+        Some((backend, inner_proto)) => {
+            let e = EncapParams {
+                gateway_mac: in_.local.gateway_mac,
+                uplink_mac: in_.local.uplink_mac,
+                uplink_ifindex: in_.local.uplink_ifindex,
+                src_underlay: in_.local.underlay_ipv6,
+                nexthop_ipv6: backend,
+                inner_proto,
+                flow_label: 0,
+            };
+            if !pkt.grow_head(IPV6_LEN) || !write_outer_v6(pkt, &e) {
+                return Action::Drop;
+            }
+            Action::Redirect(in_.local.uplink_ifindex)
+        }
+        None => Action::Pass,
+    }
 }
