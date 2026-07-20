@@ -476,6 +476,7 @@ fn ingress_encapped(sport: u16) -> Vec<u8> {
         src_underlay: EDGE_UNDERLAY_INGRESS,
         nexthop_ipv6: [0u8; 16], // outer IPv6 dst; resolved by host_uplink via UnderlayValue
         inner_proto: 4,          // IPPROTO_IPIP
+        flow_label: 0,
     };
     edge.edge_encap(&inner, e)
 }

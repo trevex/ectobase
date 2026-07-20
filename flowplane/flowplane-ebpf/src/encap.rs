@@ -30,6 +30,9 @@ fn write_encap_outer(
         src_underlay: *src_underlay,
         nexthop_ipv6: route.nexthop_ipv6,
         inner_proto,
+        // N-S return re-encap (edge wan_rx). Flow-label ECMP for this path is a follow-up; the
+        // inner 5-tuple is available in the wan_rx handler and would be threaded here.
+        flow_label: 0,
     };
     write_outer_v6(&mut CtxPkt { ctx }, &e)
 }

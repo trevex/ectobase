@@ -54,8 +54,18 @@ pub fn route6<M: Maps>(maps: &M, vni: u32, dst: &[u8; 16]) -> Option<RouteValue>
 ///
 /// The destination ingress-firewall gate on the v4 local path stays in the eBPF wrapper (it needs
 /// `was_new` + the packet), exactly as the wrapper still owns conntrack/vip/meter.
+///
+/// `flow_label` is the 20-bit outer IPv6 flow label (RFC 6438 fabric ECMP); the caller computes it
+/// from the inner flow via [`crate::parse::inner_flow_label`] so the eBPF and native paths carry an
+/// identical value.
 #[inline(always)]
-pub fn deliver<M: Maps>(maps: &M, route: &RouteValue, meta: &PortMeta, inner_proto: u8) -> Deliver {
+pub fn deliver<M: Maps>(
+    maps: &M,
+    route: &RouteValue,
+    meta: &PortMeta,
+    inner_proto: u8,
+    flow_label: u32,
+) -> Deliver {
     if let Some(u) = maps.underlay_get(&route.nexthop_ipv6) {
         if u.tap_ifindex != 0 {
             return Deliver::Local {
@@ -75,5 +85,6 @@ pub fn deliver<M: Maps>(maps: &M, route: &RouteValue, meta: &PortMeta, inner_pro
         src_underlay: meta.underlay_ipv6,
         nexthop_ipv6: route.nexthop_ipv6,
         inner_proto,
+        flow_label,
     })
 }

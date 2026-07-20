@@ -366,8 +366,10 @@ impl SimNode {
             };
         }
 
-        // 7. Deliver decision.
-        match deliver(&self.maps, &route, meta, IPPROTO_IPIP) {
+        // 7. Deliver decision. Flow label from the (post-NAT) inner 5-tuple — same core helper the
+        // eBPF forward_decision_v4 runs, so the encapped bytes stay identical.
+        let flow_label = flowplane_core::parse::inner_flow_label(&pkt, ip_off, false);
+        match deliver(&self.maps, &route, meta, IPPROTO_IPIP, flow_label) {
             Deliver::Local {
                 tap_ifindex,
                 guest_mac,
@@ -491,6 +493,7 @@ impl SimNode {
             src_underlay: meta.underlay_ipv6,
             nexthop_ipv6: route.nexthop_ipv6,
             inner_proto: IPPROTO_IPIP,
+            flow_label: 0,
         };
         if !pkt.grow_head(IPV6_LEN) || !write_outer_v6(&mut pkt, &e) {
             return SimOut {
@@ -599,6 +602,7 @@ impl SimNode {
                     src_underlay: self.local.underlay_ipv6,
                     nexthop_ipv6: backend,
                     inner_proto, // 4 (IPIP) for v4 inner, 41 (IPPROTO_IPV6) for v6 inner
+                    flow_label: 0,
                 };
                 SimOut {
                     action: Action::Redirect(self.local.uplink_ifindex),

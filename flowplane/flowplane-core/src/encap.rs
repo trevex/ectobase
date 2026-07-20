@@ -13,6 +13,9 @@ pub struct EncapParams {
     pub src_underlay: [u8; 16],
     pub nexthop_ipv6: [u8; 16],
     pub inner_proto: u8,
+    /// 20-bit IPv6 flow label written into the outer header for RFC 6438 fabric ECMP. Callers set
+    /// it from [`crate::parse::flow_label20`] of the inner flow hash; 0 = no ECMP hint.
+    pub flow_label: u32,
 }
 
 // Single-sourced in `flowplane_common::proto`; re-exported so `flowplane_core::encap::{ETH_LEN, ..}` holds.
@@ -37,7 +40,10 @@ pub fn write_outer_v6<P: Pkt>(pkt: &mut P, e: &EncapParams) -> bool {
     ok &= pkt.write_bytes(6, &e.uplink_mac);
     ok &= pkt.write_bytes(12, &ETH_P_IPV6.to_be_bytes());
     let ip = ETH_LEN;
-    ok &= pkt.write_bytes(ip, &[0x60, 0, 0, 0]);
+    // IPv6 first word: version(4b)=6, traffic-class(8b)=0, flow-label(20b). The 20-bit label carries
+    // per-flow entropy for RFC 6438 fabric ECMP; masked so it can't spill into the version/TC nibble.
+    let fl = e.flow_label & 0x000F_FFFF;
+    ok &= pkt.write_bytes(ip, &[0x60, (fl >> 16) as u8, (fl >> 8) as u8, fl as u8]);
     ok &= pkt.write_bytes(ip + 4, &inner_len.to_be_bytes());
     ok &= pkt.write_bytes(ip + 6, &[e.inner_proto, 64]); // [next_header, hop_limit=64]
     ok &= pkt.write_bytes(ip + 8, &e.src_underlay);
