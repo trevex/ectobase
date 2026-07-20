@@ -88,4 +88,29 @@ impl Pkt for MbufPkt<'_> {
         // SAFETY: DPDK returns NULL if delta > data_len. We propagate NULL → false.
         !unsafe { dpdk_sys::nfkit_pktmbuf_adj(self.raw, delta as u16) }.is_null()
     }
+
+    #[inline]
+    fn set_tail(&mut self, new_len: usize) -> bool {
+        let cur = self.data_len();
+        match new_len.cmp(&cur) {
+            core::cmp::Ordering::Greater => {
+                let delta = new_len - cur;
+                // SAFETY: append returns a pointer to `delta` new bytes within the (single-segment)
+                // dataroom, or NULL if there's no tailroom. Zero-fill them to match VecPkt::set_tail
+                // (buf.resize(_, 0)) — mbuf tailroom holds stale mempool bytes.
+                let p = unsafe { dpdk_sys::nfkit_pktmbuf_append(self.raw, delta as u16) };
+                if p.is_null() {
+                    return false;
+                }
+                unsafe { core::ptr::write_bytes(p, 0u8, delta) };
+                true
+            }
+            core::cmp::Ordering::Less => {
+                let delta = cur - new_len;
+                // SAFETY: trim removes `delta` bytes off the tail; returns 0 on success.
+                unsafe { dpdk_sys::nfkit_pktmbuf_trim(self.raw, delta as u16) == 0 }
+            }
+            core::cmp::Ordering::Equal => true,
+        }
+    }
 }
