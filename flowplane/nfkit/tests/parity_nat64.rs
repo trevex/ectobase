@@ -10,13 +10,18 @@
 //! sequentially (Task 4 appends the egress scenario here). Run with `--test-threads=1`.
 
 use etherparse::PacketBuilder;
-use flowplane_common::{CtEntry, CT_F_NAT64, CT_F_SRC_NAT, CT_REWRITE_DST};
-use flowplane_core::datapath::{process_uplink_nat64_ingress, UplinkNat64IngressIn};
+use flowplane_common::{
+    CtEntry, Local, NatKey, NatValue, PortMeta, RouteValue, CT_F_NAT64, CT_F_SRC_NAT,
+    CT_REWRITE_DST,
+};
+use flowplane_core::datapath::{
+    process_guest_tx_nat64, process_uplink_nat64_ingress, GuestTxNat64In, UplinkNat64IngressIn,
+};
 use flowplane_core::encap::{ETH_LEN, IPV6_LEN};
 use flowplane_core::parse::IPPROTO_TCP;
 use flowplane_core::pkt::{Action, Pkt};
-use flowplane_sim::VecPkt;
-use nfkit::{Eal, MbufPkt, Mempool};
+use flowplane_sim::{MemMaps, VecPkt};
+use nfkit::{DpdkMaps, Eal, MbufPkt, Mempool};
 
 // ── NAT64 ingress fixture (mirrors flowplane-sim/src/nat64_test.rs) ──────────
 const GUEST_IP: [u8; 4] = [10, 0, 0, 42];
@@ -104,6 +109,84 @@ fn run_sim(frame: &[u8], in_: &UplinkNat64IngressIn) -> (Vec<u8>, Action) {
     (vp.into_bytes(), action)
 }
 
+// ── NAT64 egress fixture (mirrors flowplane-sim/src/nat64_test.rs) ───────────
+const VNI: u32 = 300;
+const PORT_MIN: u16 = 20000;
+const PORT_MAX: u16 = 20512; // exclusive → range = 512
+const NEXTHOP_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xcc];
+const UPLINK_IFINDEX: u32 = 7;
+
+fn egress_local() -> Local {
+    Local {
+        uplink_ifindex: UPLINK_IFINDEX,
+        uplink_mac: UPLINK_MAC,
+        gateway_mac: GATEWAY_MAC,
+        underlay_ipv6: SELF_UNDERLAY,
+    }
+}
+
+fn egress_port_meta() -> PortMeta {
+    PortMeta {
+        vni: VNI,
+        guest_ipv4: GUEST_IP,
+        gateway_ipv4: [10, 0, 0, 1],
+        guest_mac: [0x22; 6],
+        _pad: [0; 2],
+        underlay_ipv6: SELF_UNDERLAY,
+        gateway_ipv6: [0; 16],
+        guest_ipv6: GUEST_IP6,
+    }
+}
+
+fn egress_route_value() -> RouteValue {
+    RouteValue {
+        nexthop_vni: VNI,
+        nexthop_ipv6: NEXTHOP_UNDERLAY,
+        is_external: 1,
+        _pad: [0; 3],
+    }
+}
+
+/// The NAT64-embedded IPv6 dst = `64:ff9b::EXT_V4`.
+fn nat64_dst() -> [u8; 16] {
+    [
+        0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, EXT_V4[0], EXT_V4[1], EXT_V4[2], EXT_V4[3],
+    ]
+}
+
+/// `[Eth][IPv6][UDP]` guest frame `GUEST_IP6:SPORT` → `64:ff9b::EXT_V4:DPORT` (non-empty payload).
+fn udp_frame() -> Vec<u8> {
+    let builder = PacketBuilder::ethernet2([0x22; 6], [0x11; 6])
+        .ipv6(GUEST_IP6, nat64_dst(), 64)
+        .udp(SPORT, DPORT);
+    let mut out = Vec::new();
+    builder.write(&mut out, &[0xaa, 0xbb, 0xcc, 0xdd]).unwrap();
+    out
+}
+
+/// Load `frame` into a fresh mbuf and run `process_guest_tx_nat64` over `MbufPkt` + `DpdkMaps`.
+fn run_dpdk_egress(
+    pool: &Mempool,
+    maps: &mut DpdkMaps,
+    frame: &[u8],
+    in_: &GuestTxNat64In,
+) -> (Vec<u8>, Action) {
+    let mut mb = pool.alloc().expect("alloc mbuf");
+    mb.append(frame.len() as u16).expect("append");
+    mb.data_mut().copy_from_slice(frame);
+    let mut mp = MbufPkt::new(&mut mb);
+    let action = process_guest_tx_nat64(&mut mp, maps, in_);
+    let out = mp_bytes(&mp);
+    (out, action)
+}
+
+/// Run `process_guest_tx_nat64` over `VecPkt` + `MemMaps`.
+fn run_sim_egress(maps: &mut MemMaps, frame: &[u8], in_: &GuestTxNat64In) -> (Vec<u8>, Action) {
+    let mut vp = VecPkt::from_bytes(frame);
+    let action = process_guest_tx_nat64(&mut vp, maps, in_);
+    (vp.into_bytes(), action)
+}
+
 /// The nat_port the egress allocator picks for the TCP 5-tuple — mirrors nat64_test.rs.
 fn expected_nat_port() -> u16 {
     use flowplane_core::parse::hash5;
@@ -161,6 +244,79 @@ fn dpdk_nat64_matches_sim() {
             &out_dpdk[12..14],
             &0x86DDu16.to_be_bytes(),
             "(ingress) ethertype IPv6"
+        );
+    }
+
+    // ───────────────── Scenario (egress): guest IPv6 → external IPv4, SNAT + encap ─────────────
+    // Exercises the port-allocation parity: both map impls start EMPTY and are populated
+    // IDENTICALLY, so the hash-probe source-port allocator lands on the same port on both sides.
+    // The FULL encapped output embeds the allocated port and exercises shrink_head + grow_head.
+    {
+        let frame = udp_frame();
+        let meta = egress_port_meta();
+        let local = egress_local();
+
+        // Populate MemMaps and DpdkMaps identically (both start empty).
+        let mut mem = MemMaps {
+            local: Some(local),
+            ..Default::default()
+        };
+        mem.nat.insert(
+            NatKey {
+                vni: VNI,
+                ipv4: GUEST_IP,
+            },
+            NatValue {
+                nat_ipv4: NAT_IP,
+                port_min: PORT_MIN,
+                port_max: PORT_MAX,
+            },
+        );
+        mem.add_route4(VNI, EXT_V4, egress_route_value());
+
+        let mut dpdk = DpdkMaps::new(0).expect("dpdk maps");
+        dpdk.set_local(local);
+        dpdk.add_nat(
+            NatKey {
+                vni: VNI,
+                ipv4: GUEST_IP,
+            },
+            NatValue {
+                nat_ipv4: NAT_IP,
+                port_min: PORT_MIN,
+                port_max: PORT_MAX,
+            },
+        );
+        dpdk.add_route4(VNI, EXT_V4, egress_route_value());
+
+        let in_ = GuestTxNat64In {
+            meta: &meta,
+            local: &local,
+        };
+
+        let (out_sim, a_sim) = run_sim_egress(&mut mem, &frame, &in_);
+        let (out_dpdk, a_dpdk) = run_dpdk_egress(&pool, &mut dpdk, &frame, &in_);
+
+        // POSITIVE redirect out the uplink (guards against a trivial both-drop/both-pass).
+        assert_eq!(
+            a_sim,
+            Action::Redirect(UPLINK_IFINDEX),
+            "(egress) sim: NAT64 egress encaps out the uplink"
+        );
+        assert_eq!(a_dpdk, a_sim, "(egress) action parity");
+        // Full encapped frame byte parity → proves identical allocated source port.
+        assert_eq!(out_dpdk, out_sim, "(egress) output frame byte parity");
+
+        // Sanity: outer IPv6 version nibble == 6; outer dst == route nexthop underlay.
+        assert_eq!(
+            out_dpdk[ETH_LEN] & 0xf0,
+            0x60,
+            "(egress) outer IPv6 version 6"
+        );
+        assert_eq!(
+            &out_dpdk[ETH_LEN + 24..ETH_LEN + 40],
+            &NEXTHOP_UNDERLAY,
+            "(egress) outer IPv6 dst = route nexthop underlay"
         );
     }
 }

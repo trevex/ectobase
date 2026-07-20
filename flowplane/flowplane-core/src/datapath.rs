@@ -10,12 +10,14 @@ use flowplane_common::{
 
 use crate::conntrack::{ct_apply, ct_create_default, ct_key};
 use crate::egress::{deliver, route4, Deliver, IPPROTO_IPIP};
-use crate::encap::{reforward, write_outer_v6, ETH_LEN, IPV6_LEN};
+use crate::encap::{reforward, write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
 use crate::firewall::fw_eval_dir;
 use crate::lb::lb_select_forward;
 use crate::maps::Maps;
 use crate::nat::snat_egress;
-use crate::nat64::{nat64_ingress_parse, nat64_ingress_write};
+use crate::nat64::{
+    nat64_egress_parse, nat64_egress_write, nat64_ingress_parse, nat64_ingress_write,
+};
 use crate::pkt::{Action, Pkt};
 use crate::uplink::{decap_and_rewrite, GW_MAC};
 
@@ -336,4 +338,60 @@ pub fn process_uplink_nat64_ingress<P: Pkt>(pkt: &mut P, in_: &UplinkNat64Ingres
     }
 
     Action::Redirect(in_.tap_ifindex)
+}
+
+/// Inputs for [`process_guest_tx_nat64`]. `local` supplies the outer MACs/ifindex for the encap;
+/// `meta` supplies the vni + guest IPv4 (NAT key) + underlay src.
+pub struct GuestTxNat64In<'a> {
+    pub meta: &'a flowplane_common::PortMeta,
+    pub local: &'a flowplane_common::Local,
+}
+
+/// Guest NAT64 egress path, in place on `pkt`. Mirrors the eBPF `nat64_egress`: parse (config +
+/// port-alloc + CT_F_NAT64 pins) → `shrink_head(20)` (v6→v4) → `nat64_egress_write` → route4 (Pass on
+/// miss) → `grow_head(IPV6_LEN)`+`write_outer_v6` encap toward the nexthop.
+pub fn process_guest_tx_nat64<P: Pkt, M: Maps>(
+    pkt: &mut P,
+    maps: &mut M,
+    in_: &GuestTxNat64In,
+) -> Action {
+    let ip6_off = ETH_LEN;
+
+    // 1. Parse (dst-prefix check + NAT config + port alloc + CT_F_NAT64 conntrack inserts).
+    let xlate = match nat64_egress_parse(&*pkt, maps, ip6_off, in_.meta.vni, in_.meta.guest_ipv4, 0)
+    {
+        Some(x) => x,
+        None => return Action::Pass,
+    };
+
+    // 2. Resize: shrink inner IPv6(40)→IPv4(20) via a 20-byte front drop (models adjust_head(+20)).
+    if !pkt.shrink_head(20) {
+        return Action::Drop;
+    }
+
+    // 3. Write: restore the Ethernet header + build the IPv4 header + translate the L4.
+    if !nat64_egress_write(pkt, ETH_LEN, true, &xlate) {
+        return Action::Drop;
+    }
+
+    // 4. Route lookup on the embedded IPv4 dst.
+    let route = match route4(&*maps, in_.meta.vni, &xlate.ipv4_dst) {
+        Some(r) => r,
+        None => return Action::Pass,
+    };
+
+    // 5. Encap IP-in-IPv6 toward the route nexthop (IPIP inner-proto).
+    let e = EncapParams {
+        gateway_mac: in_.local.gateway_mac,
+        uplink_mac: in_.local.uplink_mac,
+        uplink_ifindex: in_.local.uplink_ifindex,
+        src_underlay: in_.meta.underlay_ipv6,
+        nexthop_ipv6: route.nexthop_ipv6,
+        inner_proto: IPPROTO_IPIP,
+        flow_label: 0,
+    };
+    if !pkt.grow_head(IPV6_LEN) || !write_outer_v6(pkt, &e) {
+        return Action::Drop;
+    }
+    Action::Redirect(in_.local.uplink_ifindex)
 }

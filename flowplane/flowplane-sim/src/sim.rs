@@ -11,7 +11,6 @@
 //! harness). For LB packets those branches are skipped anyway.
 
 use flowplane_common::{Local, PortMeta, UnderlayValue};
-use flowplane_core::egress::{route4, IPPROTO_IPIP};
 use flowplane_core::encap::{write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
 use flowplane_core::lb::{lb_select_forward, lb_select_forward_v6};
 use flowplane_core::maps::Maps;
@@ -247,68 +246,17 @@ impl SimNode {
     /// Returns `Redirect(uplink_ifindex)` + the encapped `[OuterEth][OuterIPv6][IPv4][L4]` frame, or
     /// `Pass` when the frame is not a NAT64 packet / has no route. Byte-identical to the eBPF path.
     pub fn guest_tx_nat64(&mut self, frame: &[u8], meta: &PortMeta) -> SimOut {
-        use flowplane_core::nat64::{nat64_egress_parse, nat64_egress_write};
-
-        let ip6_off = ETH_LEN;
         let mut pkt = VecPkt::from_bytes(frame);
-
-        // 1. Parse (dst-prefix check + NAT config + port alloc + CT_F_NAT64 conntrack inserts).
-        let xlate =
-            match nat64_egress_parse(&pkt, &mut self.maps, ip6_off, meta.vni, meta.guest_ipv4, 0) {
-                Some(x) => x,
-                None => {
-                    return SimOut {
-                        action: Action::Pass,
-                        pkt: pkt.into_bytes(),
-                    }
-                }
-            };
-
-        // 2. Resize: shrink inner IPv6(40)→IPv4(20) via a 20-byte front drop (models adjust_head(+20)).
-        if !pkt.shrink_head(20) {
-            return SimOut {
-                action: Action::Drop,
-                pkt: pkt.into_bytes(),
-            };
-        }
-
-        // 3. Write: restore the Ethernet header + build the IPv4 header + translate the L4.
-        if !nat64_egress_write(&mut pkt, ETH_LEN, true, &xlate) {
-            return SimOut {
-                action: Action::Drop,
-                pkt: pkt.into_bytes(),
-            };
-        }
-
-        // 4. Route lookup on the embedded IPv4 dst.
-        let route = match route4(&self.maps, meta.vni, &xlate.ipv4_dst) {
-            Some(r) => r,
-            None => {
-                return SimOut {
-                    action: Action::Pass,
-                    pkt: pkt.into_bytes(),
-                }
-            }
-        };
-
-        // 5. Encap IP-in-IPv6 toward the route nexthop (IPIP inner-proto).
-        let e = EncapParams {
-            gateway_mac: self.local.gateway_mac,
-            uplink_mac: self.local.uplink_mac,
-            uplink_ifindex: self.local.uplink_ifindex,
-            src_underlay: meta.underlay_ipv6,
-            nexthop_ipv6: route.nexthop_ipv6,
-            inner_proto: IPPROTO_IPIP,
-            flow_label: 0,
-        };
-        if !pkt.grow_head(IPV6_LEN) || !write_outer_v6(&mut pkt, &e) {
-            return SimOut {
-                action: Action::Drop,
-                pkt: pkt.into_bytes(),
-            };
-        }
+        let action = flowplane_core::datapath::process_guest_tx_nat64(
+            &mut pkt,
+            &mut self.maps,
+            &flowplane_core::datapath::GuestTxNat64In {
+                meta,
+                local: &self.local,
+            },
+        );
         SimOut {
-            action: Action::Redirect(self.local.uplink_ifindex),
+            action,
             pkt: pkt.into_bytes(),
         }
     }
