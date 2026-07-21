@@ -15,8 +15,8 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule, Local, PortMeta, RouteValue, UnderlayValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
-    FW_DIR_INGRESS,
+    FwMeta, FwRule, Local, MeterState, PortMeta, RouteValue, UnderlayValue, FW_ACTION_ACCEPT,
+    FW_DIR_EGRESS, FW_DIR_INGRESS,
 };
 use flowplane_core::datapath::{process_guest_tx, GuestTxIn};
 use flowplane_core::encap::ETH_LEN;
@@ -325,5 +325,58 @@ fn dpdk_guest_tx_matches_sim() {
         assert_eq!(edt_dpdk, edt_sim, "(c) edt_tstamp parity");
         assert_eq!(out_dpdk, out_sim, "(c) dropped frame byte parity");
         assert_eq!(out_dpdk, frame, "(c) frame untouched before drop");
+    }
+
+    // ───────────── Scenario (d): metered ENCAP → non-None edt_tstamp parity ─────────────
+    // Same encap path as (a), but a METER entry with total_bps>0 and a FUTURE schedule cursor
+    // (total_last_ns=5000 > now=0) makes edt_egress return Some(t_sched=5000). public_bps=0 so the
+    // public lane doesn't police. Exercises DpdkMaps::meter_get/meter_update + edt_egress over rte_hash
+    // — the first non-None edt_tstamp DPDK-vs-sim parity (all of a/b/c were None).
+    {
+        let frame = guest_frame(EXT_DST, 443);
+        let route = RouteValue {
+            nexthop_vni: 0,
+            nexthop_ipv6: NEXTHOP_UL,
+            is_external: 1,
+            _pad: [0; 3],
+        };
+        let meter = MeterState {
+            total_bps: 1_000_000_000,
+            total_last_ns: 5000,
+            ..MeterState::default()
+        };
+
+        let mut sim = MemMaps::default();
+        sim.local = Some(node_local());
+        sim.add_route4(VNI, EXT_DST, route);
+        sim.fw_meta.insert(SRC_IFINDEX, egress_allow_meta());
+        sim.fw_rules.insert((SRC_IFINDEX, 0), egress_allow_rule());
+        sim.meter.insert(SRC_IFINDEX, meter);
+        let (out_sim, a_sim, edt_sim) = run_sim(&mut sim, &frame, &in_);
+
+        let mut dm = DpdkMaps::new(0).expect("DpdkMaps::new (d)");
+        dm.set_local(node_local());
+        dm.add_route4(VNI, EXT_DST, route);
+        dm.add_fw_meta(SRC_IFINDEX, egress_allow_meta());
+        dm.add_fw_rule(SRC_IFINDEX, 0, egress_allow_rule());
+        flowplane_core::maps::Maps::meter_update(&mut dm, SRC_IFINDEX, meter);
+        let (out_dpdk, a_dpdk, edt_dpdk) = run_dpdk(&pool, &mut dm, &frame, &in_);
+
+        assert_eq!(a_dpdk, a_sim, "(d) action parity");
+        assert_eq!(
+            a_sim,
+            Action::Redirect(UPLINK_IFINDEX),
+            "(d) encapped + redirected"
+        );
+        assert_eq!(edt_dpdk, edt_sim, "(d) edt_tstamp parity");
+        assert_eq!(
+            edt_sim,
+            Some(5000),
+            "(d) metered encap → deterministic edt = max(total_last_ns, now)"
+        );
+        assert_eq!(
+            out_dpdk, out_sim,
+            "(d) encapped frame byte parity (metering doesn't touch bytes)"
+        );
     }
 }
