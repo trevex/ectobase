@@ -26,6 +26,16 @@ Persist on NixOS (`configuration.nix`):
 
 hugetlbfs is already mounted at `/dev/hugepages` on this host.
 
+## af_xdp uplink datapath e2e (`dpdk-afxdp-datapath`)
+
+`cargo test -p nfkit --test afxdp_datapath` runs `uplink_fwd` on the af_xdp PMD over
+a real veth loopback and byte-compares the decapped delivery frame against the shared
+`process_uplink` sim output. Its harness (`hack/dpdk/afxdp-uplink.sh`) **self-manages
+hugepages**: it reserves `vm.nr_hugepages=1024` and restores the original value on exit
+via a `trap` (fires on success AND failure). It needs `sudo` (veth + af_xdp + hugepage
+reserve). Run it with `make dpdk-afxdp-datapath`. Unprivileged the script exits 77 and the
+test **auto-skips** (passes), so it stays green in normal CI.
+
 ## Building DPDK (dpdk-sys is self-contained)
 
 `dpdk-sys/build.rs` downloads the pinned DPDK release (`25.11.2`) and builds it with
