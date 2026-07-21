@@ -1327,6 +1327,7 @@ dependencies = [
  "flowplane-common",
  "flowplane-core",
  "flowplane-sim",
+ "libc",
 ]
 
 [[package]]

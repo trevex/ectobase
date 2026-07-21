@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 arrayvec = "0.7"
+libc = "0.2"
 dpdk-sys = { path = "../dpdk-sys" }
 flowplane-core = { path = "../flowplane-core" }
 flowplane-common = { path = "../flowplane-common" }
