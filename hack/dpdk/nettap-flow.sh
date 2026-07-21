@@ -65,9 +65,12 @@ done
 
 echo "----- app log -----" >&2; cat "$APP_LOG" >&2
 
-# Inspect the tc-flower filter net_tap installed on the backing tap. Check both the modern `ingress`
-# alias and the classic `parent ffff:` form.
-TC_OUT="$( { tc filter show dev "$IFACE" ingress 2>/dev/null; \
+# Inspect the tc-flower filter net_tap installed on the backing tap. net_tap attaches its flow
+# filters to the `multiq` root qdisc at `parent 1:` (NOT the ingress qdisc) — check that plus the
+# ingress/`parent ffff:` forms for robustness across DPDK/kernel versions.
+TC_OUT="$( { tc filter show dev "$IFACE" parent 1: 2>/dev/null; \
+             tc filter show dev "$IFACE" root 2>/dev/null; \
+             tc filter show dev "$IFACE" ingress 2>/dev/null; \
              tc filter show dev "$IFACE" parent ffff: 2>/dev/null; } )"
 echo "----- tc filter show dev $IFACE -----" >&2
 echo "$TC_OUT" >&2
@@ -76,11 +79,14 @@ if ! grep -q "flower" <<<"$TC_OUT"; then
   need_skip "no flower filter on $IFACE (missing kernel cls_flower or net_tap flow lowering)"
 fi
 
-# Assert the flower filter carries one of our match keys (the dst ip or dst port the app printed).
-if grep -Eq "10\.0\.0\.9|dst_port 443|dst_port 0x01bb" <<<"$TC_OUT"; then
-  echo "NETTAP FLOW OK (flower filter with matched key present on $IFACE)"
+# Assert the flower filter carries BOTH match keys the app programmed: the dst ip (in the CORRECT
+# byte order — 10.0.0.9, not the byte-reversed 9.0.0.10) AND the dst port. Requiring the exact ip
+# locks in the network-order fix in Match5Drop.
+if grep -q "dst_ip 10\.0\.0\.9" <<<"$TC_OUT" \
+   && grep -Eq "dst_port 443|dst_port 0x01bb" <<<"$TC_OUT"; then
+  echo "NETTAP FLOW OK (flower filter dst_ip 10.0.0.9 + dst_port 443 present on $IFACE)"
   exit 0
 fi
 
-echo "FAIL: flower filter present but no matched key (10.0.0.9 / dst_port 443) found" >&2
+echo "FAIL: flower filter present but missing the exact keys (dst_ip 10.0.0.9 + dst_port 443)" >&2
 exit 1

@@ -183,9 +183,11 @@ impl Match5Drop {
         let mut tcp_spec: Box<ffi::rte_flow_item_tcp> = Box::new(unsafe { std::mem::zeroed() });
         let mut tcp_mask: Box<ffi::rte_flow_item_tcp> = Box::new(unsafe { std::mem::zeroed() });
 
-        // dst_addr is rte_be32_t (u32, network byte order). Build from the network-order octets.
-        ipv4_spec.hdr.dst_addr = u32::from_be_bytes(dst_ip);
-        ipv4_mask.hdr.dst_addr = u32::from_be_bytes([0xff, 0xff, 0xff, 0xff]);
+        // dst_addr is rte_be32_t (network byte order). `from_ne_bytes` stores the octets [a,b,c,d]
+        // directly into memory = network order on any host. (from_be_bytes byte-reverses on LE —
+        // net_tap's tc-flower filter then showed 9.0.0.10 for 10.0.0.9; caught by the e2e.)
+        ipv4_spec.hdr.dst_addr = u32::from_ne_bytes(dst_ip);
+        ipv4_mask.hdr.dst_addr = u32::from_ne_bytes([0xff, 0xff, 0xff, 0xff]);
 
         // dst_port is rte_be16_t (u16, network byte order).
         tcp_spec.hdr.dst_port = dst_port.to_be();
