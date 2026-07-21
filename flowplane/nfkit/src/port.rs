@@ -51,6 +51,11 @@ impl Port {
                 // IP hash don't reject the configure call.
                 conf.rx_adv_conf.rss_conf.rss_hf =
                     dpdk_sys::nfkit_rss_ip_hf() & info.flow_type_rss_offloads;
+                // Symmetric-Toeplitz key: both flow directions hash to the same queue → same lcore
+                // (the per-lcore conntrack/nat model relies on this). SAFETY: the key is 'static.
+                conf.rx_adv_conf.rss_conf.rss_key =
+                    crate::rss::SYMMETRIC_RSS_KEY.as_ptr() as *mut u8;
+                conf.rx_adv_conf.rss_conf.rss_key_len = crate::rss::SYMMETRIC_RSS_KEY.len() as u8;
             }
             let rc = dpdk_sys::rte_eth_dev_configure(id, nq, nq, &conf);
             if rc != 0 {
