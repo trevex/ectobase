@@ -8,6 +8,11 @@ use flowplane_common::{
     MaglevKey, MeterState, NatKey, NatValue, RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Monotonic counter yielding a unique id per `DpdkMaps` instance so each instance's `rte_hash`
+/// tables get unique names (fixed names collide when two instances coexist — e.g. per-lcore state).
+static NEXT_INSTANCE: AtomicU32 = AtomicU32::new(0);
 
 // ── local key types ─────────────────────────────────────────────────────────
 
@@ -101,21 +106,22 @@ impl DpdkMaps {
     /// # Errors
     /// Returns `HashError` if any `rte_hash_create` call fails (name collision, OOM).
     pub fn new(socket_id: i32) -> Result<Self, HashError> {
+        let n = NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed);
         Ok(Self {
             local: None,
             dhcp_config: None,
-            conntrack: DpdkHash::new("dm_ct", CAP_CT, socket_id)?,
-            underlay: DpdkHash::new("dm_underlay", CAP_STD, socket_id)?,
-            fw_meta: DpdkHash::new("dm_fw_meta", CAP_STD, socket_id)?,
-            fw_rules: DpdkHash::new("dm_fw_rules", CAP_STD, socket_id)?,
-            lb: DpdkHash::new("dm_lb", CAP_STD, socket_id)?,
-            maglev: DpdkHash::new("dm_maglev", CAP_STD, socket_id)?,
-            nat: DpdkHash::new("dm_nat", CAP_STD, socket_id)?,
-            nat_ips: DpdkHash::new("dm_nat_ips", CAP_STD, socket_id)?,
-            route4: DpdkHash::new("dm_route4", CAP_STD, socket_id)?,
-            route6: DpdkHash::new("dm_route6", CAP_STD, socket_id)?,
-            dhcp_meta: DpdkHash::new("dm_dhcp_meta", CAP_STD, socket_id)?,
-            meter: DpdkHash::new("dm_meter", CAP_STD, socket_id)?,
+            conntrack: DpdkHash::new(&format!("dm_ct_{n}"), CAP_CT, socket_id)?,
+            underlay: DpdkHash::new(&format!("dm_ul_{n}"), CAP_STD, socket_id)?,
+            fw_meta: DpdkHash::new(&format!("dm_fm_{n}"), CAP_STD, socket_id)?,
+            fw_rules: DpdkHash::new(&format!("dm_fr_{n}"), CAP_STD, socket_id)?,
+            lb: DpdkHash::new(&format!("dm_lb_{n}"), CAP_STD, socket_id)?,
+            maglev: DpdkHash::new(&format!("dm_mg_{n}"), CAP_STD, socket_id)?,
+            nat: DpdkHash::new(&format!("dm_nat_{n}"), CAP_STD, socket_id)?,
+            nat_ips: DpdkHash::new(&format!("dm_ni_{n}"), CAP_STD, socket_id)?,
+            route4: DpdkHash::new(&format!("dm_r4_{n}"), CAP_STD, socket_id)?,
+            route6: DpdkHash::new(&format!("dm_r6_{n}"), CAP_STD, socket_id)?,
+            dhcp_meta: DpdkHash::new(&format!("dm_dm_{n}"), CAP_STD, socket_id)?,
+            meter: DpdkHash::new(&format!("dm_mt_{n}"), CAP_STD, socket_id)?,
         })
     }
 

@@ -84,4 +84,35 @@ fn dpdk_maps_route_and_conntrack() {
     assert!(m.is_nat_ip(7, &[100, 64, 0, 1]));
     assert!(!m.is_nat_ip(8, &[100, 64, 0, 1]), "wrong vni misses");
     assert!(!m.is_nat_ip(7, &[100, 64, 0, 2]), "wrong ip misses");
+
+    // Two DpdkMaps must coexist (per-lcore instantiation) — previously the fixed hash names collided.
+    let mut a = DpdkMaps::new(0).expect("maps A");
+    let mut b = DpdkMaps::new(0).expect("maps B"); // must NOT fail on a name clash
+    let ka = CtKey {
+        vni: 1,
+        src_ip: [10, 0, 0, 1],
+        dst_ip: [10, 0, 0, 2],
+        src_port: 1,
+        dst_port: 2,
+        proto: 6,
+        _pad: [0; 3],
+    };
+    let kb = CtKey {
+        vni: 9,
+        src_ip: [10, 0, 0, 9],
+        dst_ip: [10, 0, 0, 8],
+        src_port: 9,
+        dst_port: 8,
+        proto: 6,
+        _pad: [0; 3],
+    };
+    a.conntrack_insert(ka, CtEntry::default());
+    assert!(a.conntrack_get(&ka).is_some());
+    assert!(
+        b.conntrack_get(&ka).is_none(),
+        "A's flow must not appear in B (shared-nothing)"
+    );
+    b.conntrack_insert(kb, CtEntry::default());
+    assert!(b.conntrack_get(&kb).is_some());
+    assert!(a.conntrack_get(&kb).is_none());
 }
