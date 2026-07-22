@@ -250,4 +250,44 @@ fn dpdk_uplink_matches_sim() {
             "(b) outer IPv6 dst rewritten to backend"
         );
     }
+
+    // ───────────────── Scenario (c): ingress-firewall DENY-by-default → Drop ─────────────────
+    // Mirror (a) EXACTLY (same encapped frame + underlay), but install NO ingress allow rule. The
+    // base decap path performs the ingress firewall check; with no matching rule the deny-by-default
+    // posture drops the packet. Asserts the N-S ingress SECURITY boundary is enforced identically on
+    // the DPDK substrate (byte-parity: the frame is untouched before the drop).
+    {
+        let inner = inner_frame(EXT_IP, GUEST_IP, 443);
+        let frame = encap_to(&inner, HOST_UL);
+        let u = UnderlayValue {
+            vni: VNI,
+            tap_ifindex: TAP,
+            guest_mac: GUEST_MAC,
+            _pad: [0; 2],
+        };
+        let zl = zero_local();
+        let in_ = UplinkIn {
+            vni: VNI,
+            u,
+            outer_dst: HOST_UL,
+            local: &zl,
+            now: 0,
+        };
+
+        // sim reference — NO fw_meta / fw_rules installed → deny-by-default.
+        let mut sim = MemMaps::default();
+        let (out_sim, a_sim) = run_sim(&mut sim, &frame, &in_);
+
+        // dpdk under test — also NO fw rules.
+        let mut dm = DpdkMaps::new(0).expect("DpdkMaps::new (c)");
+        let (out_dpdk, a_dpdk) = run_dpdk(&pool, &mut dm, &frame, &in_);
+
+        assert_eq!(
+            a_sim,
+            Action::Drop,
+            "(c) sim: ingress deny-by-default drops"
+        );
+        assert_eq!(a_dpdk, a_sim, "(c) action parity (both Drop)");
+        assert_eq!(out_dpdk, out_sim, "(c) frame byte parity on the drop path");
+    }
 }

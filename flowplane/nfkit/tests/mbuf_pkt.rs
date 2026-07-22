@@ -62,4 +62,38 @@ fn mbufpkt_matches_vecpkt_ops() {
     assert!(p2.set_tail(4));
     assert_eq!(p2.len(), 4);
     assert_eq!(p2.read_array::<4>(0), Some([10, 11, 12, 13]));
+
+    // ── boundary false-returns through the Pkt trait (no panic, len unchanged) ──
+    // A small 8-byte mbuf has only a few KiB of tailroom/headroom. Asking to resize FAR beyond it
+    // (60000, still a valid u16 so the `as u16` cast is lossless) must return false via the mbuf
+    // append/prepend NULL guard (mbuf_pkt.rs is_null()), NOT panic or corrupt the packet.
+    let mut mb3 = pool.alloc().expect("alloc3");
+    let tail3 = mb3.append(8).unwrap();
+    tail3.copy_from_slice(&[20, 21, 22, 23, 24, 25, 26, 27]);
+    let mut p3 = MbufPkt::new(&mut mb3);
+    assert_eq!(p3.len(), 8);
+
+    // set_tail beyond tailroom → false, length untouched.
+    assert!(
+        !p3.set_tail(60000),
+        "set_tail(60000) must fail (beyond tailroom)"
+    );
+    assert_eq!(p3.len(), 8, "len unchanged after failed set_tail");
+    assert_eq!(
+        p3.read_array::<8>(0),
+        Some([20, 21, 22, 23, 24, 25, 26, 27]),
+        "payload intact after failed set_tail"
+    );
+
+    // grow_head beyond headroom → false, length untouched.
+    assert!(
+        !p3.grow_head(60000),
+        "grow_head(60000) must fail (beyond headroom)"
+    );
+    assert_eq!(p3.len(), 8, "len unchanged after failed grow_head");
+    assert_eq!(
+        p3.read_array::<8>(0),
+        Some([20, 21, 22, 23, 24, 25, 26, 27]),
+        "payload intact after failed grow_head"
+    );
 }

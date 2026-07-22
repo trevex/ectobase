@@ -61,4 +61,30 @@ fn pacer_releases_in_departure_order_and_fifo() {
     assert_eq!(due.iter().map(id_of).collect::<Vec<_>>(), vec![10, 11]);
     assert!(q.is_empty());
     assert_eq!(q.next_departure(), None);
+
+    // --- large-N ordering stress: ~100 mbufs enqueued in SHUFFLED edt order, all due at once ---
+    // Deterministic shuffle (no RNG): a coprime step (37) over the ring of 100 permutes 0..100 so
+    // consecutive enqueues have non-monotonic edts. Each mbuf's edt = (id+1)*10 (distinct, id-derivable
+    // so we can recover the expected edt from the released tag). After drain_due(u64::MAX) — every mbuf
+    // due — the released order must be by non-decreasing edt (i.e. released ids strictly ascending),
+    // proving departure ordering holds at scale for an all-due-at-once batch.
+    const N: u64 = 100;
+    let edt_of_id = |id: u8| (id as u64 + 1) * 10;
+    let mut r = EdtPacer::new();
+    let mut idx: u64 = 0;
+    for _ in 0..N {
+        idx = (idx + 37) % N; // coprime step → visits every 0..N exactly once, out of order
+        let id = idx as u8;
+        r.enqueue(tagged(&pool, id), edt_of_id(id));
+    }
+    assert_eq!(r.len() as u64, N);
+    let released = r.drain_due(u64::MAX);
+    assert_eq!(released.len() as u64, N, "all mbufs due at once");
+    let edts: Vec<u64> = released.iter().map(|mb| edt_of_id(id_of(mb))).collect();
+    assert!(
+        edts.windows(2).all(|w| w[0] <= w[1]),
+        "released in non-decreasing edt order at scale: {edts:?}"
+    );
+    assert!(r.is_empty());
+    assert_eq!(r.next_departure(), None);
 }
