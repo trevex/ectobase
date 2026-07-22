@@ -1,0 +1,252 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: compilednics.net.ectobase.dev
+spec:
+  group: net.ectobase.dev
+  names:
+    kind: CompiledNIC
+    listKind: CompiledNICList
+    plural: compilednics
+    singular: compilednic
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          CompiledNIC is a lowered, node-local bundle of all static per-NIC dataplane config.
+          It is produced by the Compile() function from a NetworkInterface + matching NetworkPolicies.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              CompiledNICSpec is the fully lowered per-NIC STATIC POLICY the control plane hands to a node:
+              identity, VNI, overlay IPs, firewall rules (resolved from NetworkPolicy selectors), egress-SNAT
+              allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC +
+              NetworkPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.
+
+              The source NetworkInterface is the CompiledNIC's OWNER (a controller ownerReference) and its name
+              is encoded in the object name — so the spec carries no NICRef. It also deliberately does NOT carry
+              the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent
+              obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the
+              correct node-local nexthop. Keeping node-local state out of this central object avoids a
+              compile->sync round-trip that would lag (and flap) the announced nexthop.
+            properties:
+              firewall:
+                description: Firewall holds the compiled ingress and egress firewall
+                  rules.
+                properties:
+                  egress:
+                    description: Egress is the ordered list of egress firewall rules.
+                    items:
+                      description: CompiledFwRule is a single compiled firewall rule
+                        (destination CIDR + proto + port + action).
+                      properties:
+                        action:
+                          description: 'Action is the rule action: "Allow" or "Deny".'
+                          type: string
+                        cidr:
+                          description: CIDR is the destination CIDR to match ("0.0.0.0/0"
+                            = any).
+                          type: string
+                        port:
+                          description: Port is the destination port (0 = any).
+                          format: int32
+                          type: integer
+                        proto:
+                          description: Proto is the IP protocol ("TCP", "UDP", "ICMP",
+                            or "" for any).
+                          type: string
+                      required:
+                      - action
+                      - cidr
+                      type: object
+                    type: array
+                  ingress:
+                    description: Ingress is the ordered list of ingress firewall rules.
+                    items:
+                      description: CompiledFwRule is a single compiled firewall rule
+                        (destination CIDR + proto + port + action).
+                      properties:
+                        action:
+                          description: 'Action is the rule action: "Allow" or "Deny".'
+                          type: string
+                        cidr:
+                          description: CIDR is the destination CIDR to match ("0.0.0.0/0"
+                            = any).
+                          type: string
+                        port:
+                          description: Port is the destination port (0 = any).
+                          format: int32
+                          type: integer
+                        proto:
+                          description: Proto is the IP protocol ("TCP", "UDP", "ICMP",
+                            or "" for any).
+                          type: string
+                      required:
+                      - action
+                      - cidr
+                      type: object
+                    type: array
+                type: object
+              lb:
+                description: |-
+                  LB lists the load balancers this NIC is a backend of. Pure forwarding membership —
+                  it grants NO firewall permission (that comes solely from NetworkPolicy).
+                items:
+                  description: 'CompiledLB is one load-balancer this NIC backs: the
+                    VIP (v4 or v6) and its service ports.'
+                  properties:
+                    ports:
+                      description: Ports are the LB service (port, proto) tuples.
+                      items:
+                        description: CompiledLBPort is one LB service tuple.
+                        properties:
+                          port:
+                            format: int32
+                            type: integer
+                          proto:
+                            type: string
+                        required:
+                        - port
+                        - proto
+                        type: object
+                      type: array
+                    vip:
+                      description: VIP is the load-balancer virtual IP (IPv4 or IPv6).
+                      type: string
+                  required:
+                  - vip
+                  type: object
+                type: array
+              nat:
+                description: |-
+                  NAT lists the egress-SNAT sources for this NIC's overlay IPs — one entry per NATGateway
+                  allocation whose source is one of this NIC's IPs. Empty if the NIC's VPC has no NAT gateway.
+                items:
+                  description: |-
+                    CompiledNATSource is one egress-SNAT mapping: an overlay source IP SNATed onto a public NAT IP
+                    and source-port range. It corresponds to a single NATGateway allocation for one of the NIC's IPs.
+                  properties:
+                    natIP:
+                      description: NATIP is the public NAT IPv4 address.
+                      type: string
+                    portMax:
+                      description: PortMax is the end of the source-port range (inclusive).
+                      format: int32
+                      type: integer
+                    portMin:
+                      description: PortMin is the start of the source-port range (inclusive).
+                      format: int32
+                      type: integer
+                    sourceIP:
+                      description: SourceIP is the overlay IP being SNATed (one of
+                        the NIC's OverlayIPs).
+                      type: string
+                  required:
+                  - natIP
+                  - portMax
+                  - portMin
+                  - sourceIP
+                  type: object
+                type: array
+              nodeName:
+                description: NodeName is the node this NIC is scheduled on.
+                type: string
+              overlayIPs:
+                description: OverlayIPs are the guest overlay IP addresses.
+                items:
+                  type: string
+                type: array
+              peerImports:
+                description: |-
+                  PeerImports lists peer VPCs whose routes this NIC imports (reachability only — grants NO
+                  firewall permission; that comes solely from NetworkPolicy). Populated from Ready VPCPeerings
+                  involving this NIC's VPC.
+                items:
+                  description: CompiledPeerImport is one peer VPC's reachability import
+                    for a NIC.
+                  properties:
+                    importPrefixes:
+                      description: |-
+                        ImportPrefixes is the peer's exposedPrefixes: only peer routes within these CIDRs are
+                        imported (filter applied importer-side).
+                      items:
+                        type: string
+                      type: array
+                    peerVni:
+                      description: PeerVNI is the peer VPC's VNI to subscribe to on
+                        routebus.
+                      format: int32
+                      type: integer
+                  required:
+                  - peerVni
+                  type: object
+                type: array
+              port:
+                description: Port describes the dataplane port allocated for this
+                  interface.
+                properties:
+                  name:
+                    description: Name is the host-side interface name (e.g. dtapvf_0)
+                      for tap ports.
+                    type: string
+                  pciAddress:
+                    description: PCIAddress is the PCI address for vf ports.
+                    type: string
+                  type:
+                    description: Type is the port type (e.g. tap or vf).
+                    enum:
+                    - tap
+                    - vf
+                    type: string
+                type: object
+              vni:
+                description: |-
+                  VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
+                  status.vni, falling back to its VPC's status.vni).
+                format: int32
+                type: integer
+            required:
+            - firewall
+            - nodeName
+            - port
+            - vni
+            type: object
+          status:
+            description: CompiledNICStatus is the observed state of a CompiledNIC.
+            properties:
+              generationApplied:
+                description: GenerationApplied is the ObjectMeta.Generation of the
+                  CompiledNIC last applied.
+                format: int64
+                type: integer
+              state:
+                description: State is the current lifecycle state (e.g. Applied, Pending).
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -37,6 +37,7 @@ docs-serve: ## Serve the mdbook docs locally with live reload
 generate: ## Regenerate deepcopy (zz_generated) + CRD manifests from api/v1alpha1 (controller-gen)
 	cd api && controller-gen object paths=./v1alpha1/...
 	cd api && controller-gen crd paths=./v1alpha1/... output:crd:artifacts:config=../config/crd/bases
+	./hack/sync-chart-crds.sh
 
 .PHONY: proto-go
 proto-go: ## Generate Go gRPC stubs for dataplane.v1 into cni/gen/dataplanev1
@@ -176,3 +177,11 @@ bpf-clean: ## Free leaked flowplane BPF pins (host + kind/clab nodes); prevents 
 clean: ## Remove build artifacts
 	cargo clean
 	rm -rf result
+
+.PHONY: chart-sync-crds
+chart-sync-crds: ## Vendor generated CRDs into the Helm chart.
+	./hack/sync-chart-crds.sh
+
+.PHONY: chart-test
+chart-test: ## Run the Helm chart golden + validation tests.
+	./deploy/charts/ectobase/tests/render.sh
