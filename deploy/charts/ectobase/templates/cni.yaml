@@ -1,0 +1,76 @@
+# The flowplane CNI plugin: an installer DaemonSet that drops the binary + a
+# SA-token kubeconfig onto every node, plus the RBAC the plugin uses (from the host
+# netns) to read the pod and its NetworkInterface/VPC. Multus invokes the binary by
+# name via the KubeVirt binding NAD (see kubevirt-binding.yaml).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: flowplane-cni
+  namespace: ectobase-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: flowplane-cni
+rules:
+  # Read the pod to find its net.ectobase.dev/network-interface annotation.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+  # Resolve {vni, ips, mac} from the NetworkInterface + its VPC.
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["networkinterfaces", "vpcs"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: flowplane-cni
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: flowplane-cni
+subjects:
+  - kind: ServiceAccount
+    name: flowplane-cni
+    namespace: ectobase-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: flowplane-cni-install
+  namespace: ectobase-system
+  labels:
+    app.kubernetes.io/name: flowplane-cni-install
+    app.kubernetes.io/part-of: netplane
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flowplane-cni-install
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: flowplane-cni-install
+        app.kubernetes.io/part-of: netplane
+    spec:
+      serviceAccountName: flowplane-cni
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: install
+          image: {{ .Values.images.cni }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: cnibin
+              mountPath: /host/opt/cni/bin
+            - name: cniconf
+              mountPath: /host/etc/cni/net.d
+      volumes:
+        - name: cnibin
+          hostPath:
+            path: /opt/cni/bin
+        - name: cniconf
+          hostPath:
+            path: /etc/cni/net.d
