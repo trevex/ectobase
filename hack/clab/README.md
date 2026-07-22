@@ -50,6 +50,9 @@ Prereqs: `containerlab`, `kind`, `docker`, root/sudo, the `dummy` kernel module,
 ```bash
 hack/clab-up.sh        # wan-up → clab deploy (--reconfigure, idempotent) → Cilium per cluster
 # deploy the netplane stack (agent + reflector + controller) + the flowplane DaemonSet on k01:
+# Helm (preferred): renders the same stack; dataplane=ebpf reproduces the kustomize manifests.
+helm upgrade --install ectobase deploy/charts/ectobase --namespace ectobase-system --create-namespace
+# Legacy kustomize (kept until the Helm chart passes a live clab smoke):
 kubectl apply -k config/deploy            # (namespace ectobase-system)
 hack/clab/edge-agents-up.sh               # start the WAN-edge flowplane sidecars + brokered agents
 
