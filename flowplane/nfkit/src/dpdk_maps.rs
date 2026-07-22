@@ -74,8 +74,10 @@ const _: () = assert!(std::mem::size_of::<NatKey>() == 8);
 
 // ── capacity constants ───────────────────────────────────────────────────────
 
-const CAP_CT: u32 = 65_536; // conntrack: high cardinality
-const CAP_STD: u32 = 4_096; // all other maps
+/// Default conntrack capacity: high cardinality (one entry per live flow).
+const CAP_CT: u32 = 65_536;
+/// Default capacity for all non-conntrack maps.
+const CAP_STD: u32 = 4_096;
 
 // ── DpdkMaps ─────────────────────────────────────────────────────────────────
 
@@ -110,27 +112,41 @@ pub struct DpdkMaps {
 }
 
 impl DpdkMaps {
-    /// Create all backing hashes on `socket_id`.
+    /// Create all backing hashes on `socket_id` with the default capacities
+    /// ([`CAP_CT`] for conntrack, [`CAP_STD`] for every other map).
     ///
     /// # Errors
     /// Returns `HashError` if any `rte_hash_create` call fails (name collision, OOM).
     pub fn new(socket_id: i32) -> Result<Self, HashError> {
+        Self::with_capacities(socket_id, CAP_CT, CAP_STD)
+    }
+
+    /// Create all backing hashes on `socket_id` with explicit capacities: `ct_cap` sizes the
+    /// conntrack (flow) table, `std_cap` sizes every other map (underlay/fw/lb/maglev/nat/
+    /// nat_ips/routes/dhcp/meter). [`new`] is `with_capacities(socket_id, CAP_CT, CAP_STD)`.
+    ///
+    /// Useful for tuning flow-table capacity per deployment, and for tests that need a small table
+    /// to exercise the saturation / restore-overflow paths deterministically.
+    ///
+    /// # Errors
+    /// Returns `HashError` if any `rte_hash_create` call fails (name collision, OOM).
+    pub fn with_capacities(socket_id: i32, ct_cap: u32, std_cap: u32) -> Result<Self, HashError> {
         let n = NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed);
         Ok(Self {
             local: None,
             dhcp_config: None,
-            conntrack: DpdkHash::new(&format!("dm_ct_{n}"), CAP_CT, socket_id)?,
-            underlay: DpdkHash::new(&format!("dm_ul_{n}"), CAP_STD, socket_id)?,
-            fw_meta: DpdkHash::new(&format!("dm_fm_{n}"), CAP_STD, socket_id)?,
-            fw_rules: DpdkHash::new(&format!("dm_fr_{n}"), CAP_STD, socket_id)?,
-            lb: DpdkHash::new(&format!("dm_lb_{n}"), CAP_STD, socket_id)?,
-            maglev: DpdkHash::new(&format!("dm_mg_{n}"), CAP_STD, socket_id)?,
-            nat: DpdkHash::new(&format!("dm_nat_{n}"), CAP_STD, socket_id)?,
-            nat_ips: DpdkHash::new(&format!("dm_ni_{n}"), CAP_STD, socket_id)?,
-            route4: DpdkHash::new(&format!("dm_r4_{n}"), CAP_STD, socket_id)?,
-            route6: DpdkHash::new(&format!("dm_r6_{n}"), CAP_STD, socket_id)?,
-            dhcp_meta: DpdkHash::new(&format!("dm_dm_{n}"), CAP_STD, socket_id)?,
-            meter: DpdkHash::new(&format!("dm_mt_{n}"), CAP_STD, socket_id)?,
+            conntrack: DpdkHash::new(&format!("dm_ct_{n}"), ct_cap, socket_id)?,
+            underlay: DpdkHash::new(&format!("dm_ul_{n}"), std_cap, socket_id)?,
+            fw_meta: DpdkHash::new(&format!("dm_fm_{n}"), std_cap, socket_id)?,
+            fw_rules: DpdkHash::new(&format!("dm_fr_{n}"), std_cap, socket_id)?,
+            lb: DpdkHash::new(&format!("dm_lb_{n}"), std_cap, socket_id)?,
+            maglev: DpdkHash::new(&format!("dm_mg_{n}"), std_cap, socket_id)?,
+            nat: DpdkHash::new(&format!("dm_nat_{n}"), std_cap, socket_id)?,
+            nat_ips: DpdkHash::new(&format!("dm_ni_{n}"), std_cap, socket_id)?,
+            route4: DpdkHash::new(&format!("dm_r4_{n}"), std_cap, socket_id)?,
+            route6: DpdkHash::new(&format!("dm_r6_{n}"), std_cap, socket_id)?,
+            dhcp_meta: DpdkHash::new(&format!("dm_dm_{n}"), std_cap, socket_id)?,
+            meter: DpdkHash::new(&format!("dm_mt_{n}"), std_cap, socket_id)?,
             dropped_ct_inserts: Cell::new(0),
             dropped_nat_inserts: Cell::new(0),
         })
