@@ -1,4 +1,5 @@
 //! Backend-agnostic control-plane programming shared by the eBPF and DPDK dataplanes.
+mod firewall;
 mod lb;
 pub mod maglev;
 #[cfg(feature = "mem-writer")]
@@ -28,6 +29,10 @@ pub struct ControlCore<W: MapWriter> {
     // `pub` (like `routes_shadow`) so the eBPF `detach_interface` VNI-reset can still purge
     // neighbor-NATs verbatim until that reset logic moves into the core (Task 7).
     pub neigh_nats: Vec<flowplane_common::NeighborNatEntry>,
+    // FIREWALL domain (Task 6): ifindex -> ordered (rule_id, rule) pairs. Drives the FW_RULES /
+    // FW_META reprogram. `pub` so the eBPF `detach_interface` can still drop an interface's shadow
+    // entry (matching the former `Inner.fw.remove(&tap)`) until that teardown moves into the core.
+    pub fw: std::collections::HashMap<u32, Vec<(Vec<u8>, flowplane_common::FwRule)>>,
 }
 
 impl<W: MapWriter> ControlCore<W> {
@@ -40,6 +45,7 @@ impl<W: MapWriter> ControlCore<W> {
             lbs: std::collections::HashMap::new(),
             next_table_id: 1,
             neigh_nats: Vec::new(),
+            fw: std::collections::HashMap::new(),
         }
     }
     /// Consume the core, returning the writer (used by the eBPF adapter on teardown).

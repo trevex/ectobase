@@ -4,7 +4,8 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::maps::{
-    Conntrack, Lb, Maglev, Nat, NatIps, NeighborNat, NeighborNatCount, Routes, Routes6, Underlay,
+    Conntrack, FwMetaMap, FwRules, Lb, Maglev, Nat, NatIps, NeighborNat, NeighborNatCount, Routes,
+    Routes6, Underlay,
 };
 use flowplane_common::{CtKey, NatKey, NatValue, NeighborNatEntry, RouteValue};
 use flowplane_control::{CtFlushScope, MapWriter};
@@ -22,6 +23,9 @@ pub struct AyaWriter {
     pub lb: Lb,
     pub maglev: Maglev,
     pub underlay: Underlay,
+    // FIREWALL domain (Task 6): per-interface rule slots + per-direction rule counts.
+    pub fw_rules: FwRules,
+    pub fw_meta: FwMetaMap,
     /// Shared conntrack handle (same Arc `Control` holds for the GC task); the NAT teardown flush
     /// scans+removes matching CONNTRACK entries here.
     pub conntrack: Arc<Mutex<Conntrack>>,
@@ -156,16 +160,16 @@ impl MapWriter for AyaWriter {
     }
     fn fw_rules_upsert(
         &mut self,
-        _k: flowplane_common::FwRuleKey,
-        _v: flowplane_common::FwRule,
+        k: flowplane_common::FwRuleKey,
+        v: flowplane_common::FwRule,
     ) -> anyhow::Result<()> {
-        unimplemented!("Task 6")
+        self.fw_rules.upsert(k, v)
     }
-    fn fw_rules_remove(&mut self, _k: &flowplane_common::FwRuleKey) -> anyhow::Result<()> {
-        unimplemented!("Task 6")
+    fn fw_rules_remove(&mut self, k: &flowplane_common::FwRuleKey) -> anyhow::Result<()> {
+        self.fw_rules.remove(k)
     }
-    fn fw_meta_upsert(&mut self, _i: u32, _v: flowplane_common::FwMeta) -> anyhow::Result<()> {
-        unimplemented!("Task 6")
+    fn fw_meta_upsert(&mut self, i: u32, v: flowplane_common::FwMeta) -> anyhow::Result<()> {
+        self.fw_meta.upsert(i, v)
     }
     fn meter_upsert(&mut self, _i: u32, _v: flowplane_common::MeterState) -> anyhow::Result<()> {
         unimplemented!("Task 7")

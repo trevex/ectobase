@@ -254,6 +254,7 @@ mod tests {
                 ipv4: [10, 0, 0, 2],
                 ipv6: [0u8; 16],
                 underlay: [1u8; 16],
+                ifindex: 1,
             },
         );
         let ul = c

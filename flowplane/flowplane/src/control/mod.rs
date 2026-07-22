@@ -6,8 +6,8 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use aya::Ebpf;
 use flowplane_common::{
-    FwRule, IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue, Local, NatKey, NeighborNatEntry,
-    PortMeta, RouteValue, VipKey, IFACE_DEV_MAX,
+    IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue, Local, NatKey, NeighborNatEntry, PortMeta,
+    RouteValue, VipKey, IFACE_DEV_MAX,
 };
 
 use crate::loader;
@@ -140,8 +140,6 @@ struct Inner {
     ifaces: Interfaces,
     core: ControlCore<AyaWriter>,
     vips: Vips,
-    fw_rules: FwRules,
-    fw_meta: FwMetaMap,
     meter: Meter,
     dhcp_config: DhcpConfigMap,
     dhcp_meta: DhcpMetaMap,
@@ -162,8 +160,6 @@ struct Inner {
     by_ifindex: HashMap<Vec<u8>, u32>,
     /// interface_id -> its underlay /128
     iface_underlay: HashMap<Vec<u8>, [u8; 16]>,
-    /// ifindex -> ordered (rule_id, rule) pairs
-    fw: HashMap<u32, Vec<(Vec<u8>, FwRule)>>,
     /// interface_id -> the owned guest datapath link (dropping it detaches the program).
     links: HashMap<Vec<u8>, GuestLink>,
     /// Shadow cache of learned guest MACs: interface_id -> guest_mac.
@@ -264,6 +260,8 @@ impl Control {
             lb,
             maglev,
             underlay,
+            fw_rules,
+            fw_meta,
             conntrack: Arc::clone(&conntrack),
         };
         let mut inner = Inner {
@@ -276,8 +274,6 @@ impl Control {
             ifaces,
             core: ControlCore::new(aya),
             vips,
-            fw_rules,
-            fw_meta,
             meter,
             dhcp_config,
             dhcp_meta,
@@ -289,7 +285,6 @@ impl Control {
             by_id: HashMap::new(),
             by_ifindex: HashMap::new(),
             iface_underlay: HashMap::new(),
-            fw: HashMap::new(),
             links: HashMap::new(),
             learned_macs: HashMap::new(),
         };
@@ -359,6 +354,7 @@ impl Control {
                     ipv4: rec.ipv4,
                     ipv6: rec.ipv6,
                     underlay: rec.underlay,
+                    ifindex: tap,
                 },
             );
             g.by_id.insert(id.clone(), rec);
@@ -664,6 +660,7 @@ impl Control {
                 ipv4,
                 ipv6,
                 underlay: underlay_ipv6,
+                ifindex: tap,
             },
         );
         Ok(())
@@ -823,7 +820,7 @@ impl Control {
         if rec.ipv6 != [0u8; 16] {
             let _ = g.core.writer_mut().route6_remove(rec.vni, rec.ipv6, 128);
         }
-        if let Some(rules) = g.fw.remove(&tap) {
+        if let Some(rules) = g.core.fw.remove(&tap) {
             drop(rules);
         }
         // Auto-reset VNI when the last local interface on it is removed:
