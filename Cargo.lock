@@ -716,6 +716,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "flowplane-control"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flowplane-common",
+ "flowplane-control",
+]
+
+[[package]]
 name = "flowplane-core"
 version = "0.1.0"
 dependencies = [

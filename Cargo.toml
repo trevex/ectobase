@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["flowplane/flowplane-common", "flowplane/flowplane-core", "flowplane/flowplane-ebpf", "flowplane/flowplane", "flowplane/flowplane-sim", "flowplane/dpdk-sys", "flowplane/nfkit"]
-default-members = ["flowplane/flowplane-common", "flowplane/flowplane-core", "flowplane/flowplane", "flowplane/flowplane-sim"]
+members = ["flowplane/flowplane-common", "flowplane/flowplane-control", "flowplane/flowplane-core", "flowplane/flowplane-ebpf", "flowplane/flowplane", "flowplane/flowplane-sim", "flowplane/dpdk-sys", "flowplane/nfkit"]
+default-members = ["flowplane/flowplane-common", "flowplane/flowplane-control", "flowplane/flowplane-core", "flowplane/flowplane", "flowplane/flowplane-sim"]
 
 [profile.release.package.flowplane-ebpf]
 debug = 2
