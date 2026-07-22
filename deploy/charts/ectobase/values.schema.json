@@ -9,6 +9,7 @@
     "imagePullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
     "uplink": { "type": "string", "minLength": 1 },
     "reflectorAddress": { "type": "string", "minLength": 1 },
+    "apiserverAddress": { "type": "string", "minLength": 1 },
     "installCRDs": { "type": "boolean" },
     "images": {
       "type": "object",
@@ -27,7 +28,7 @@
       "properties": {
         "lcores": { "type": "string", "minLength": 1 },
         "hugepages": { "type": "boolean" },
-        "hugepageSize": { "type": "string", "minLength": 1 },
+        "hugepageSize": { "type": "string", "enum": ["2Mi", "1Gi"] },
         "hugepageLimit": { "type": "string", "minLength": 1 },
         "vfioDevices": {
           "type": "array",

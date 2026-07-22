@@ -14,6 +14,8 @@ imagePullPolicy: IfNotPresent
 uplink: eth1
 # Fabric reflector address the agent dials.
 reflectorAddress: "[fd00:db8:0:1::1]:1338"
+# Control-plane API server the agent dials over the fabric (kubeconfig server URL).
+apiserverAddress: "https://[fd00:db8:0:1::1]:6443"
 
 # DPDK-only knobs (dataplane: dpdk).
 dpdk:

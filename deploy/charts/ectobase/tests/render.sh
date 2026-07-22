@@ -58,6 +58,12 @@ neg "dpdk+clab wide lcores"        --set dataplane=dpdk,env=clab,dpdk.lcores=0-3
 neg "dpdk+hw no hugepages"         --set dataplane=dpdk,env=hw,dpdk.hugepages=false
 neg "dpdk+hw no vfio"              --set dataplane=dpdk,env=hw,dpdk.hugepages=true
 
+# 4b) ebpf on hw: renders valid, and omits the clab-only FLOWPLANE_SKB_MODE env.
+helm template ectobase deploy/charts/ectobase --namespace ectobase-system -f "$DIR/values/ebpf-hw.yaml" >/dev/null 2>&1 \
+  && ok "ebpf-hw renders" || bad "ebpf-hw failed to render"
+render_show_only templates/dataplane-ebpf.yaml "$DIR/values/ebpf-hw.yaml" | grep -q "FLOWPLANE_SKB_MODE" \
+  && bad "ebpf-hw should omit FLOWPLANE_SKB_MODE" || ok "ebpf-hw omits FLOWPLANE_SKB_MODE"
+
 # 5) helm lint clean.
 helm lint deploy/charts/ectobase >/dev/null 2>&1 && ok "helm lint" || bad "helm lint"
 
