@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["dataplane", "env", "images", "uplink", "installCRDs"],
+  "properties": {
+    "dataplane": { "type": "string", "enum": ["ebpf", "dpdk"] },
+    "env": { "type": "string", "enum": ["clab", "hw"] },
+    "imagePullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+    "uplink": { "type": "string", "minLength": 1 },
+    "reflectorAddress": { "type": "string", "minLength": 1 },
+    "installCRDs": { "type": "boolean" },
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["flowplane", "flowplaneDpdk", "netplane", "cni"],
+      "properties": {
+        "flowplane": { "type": "string", "minLength": 1 },
+        "flowplaneDpdk": { "type": "string", "minLength": 1 },
+        "netplane": { "type": "string", "minLength": 1 },
+        "cni": { "type": "string", "minLength": 1 }
+      }
+    },
+    "dpdk": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "lcores": { "type": "string", "minLength": 1 },
+        "hugepages": { "type": "boolean" },
+        "hugepageSize": { "type": "string", "minLength": 1 },
+        "hugepageLimit": { "type": "string", "minLength": 1 },
+        "vfioDevices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "count"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "count": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    },
+    "blueGreen": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean" } }
+    }
+  }
+}

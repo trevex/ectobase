@@ -1,0 +1,5 @@
+dataplane: dpdk
+env: clab
+dpdk:
+  lcores: "0"
+  hugepages: false

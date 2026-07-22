@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ectobase
+description: ectobase netplane control plane + flowplane datapath (eBPF or DPDK)
+type: application
+version: 0.1.0
+appVersion: "dev"
