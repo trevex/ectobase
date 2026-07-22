@@ -127,8 +127,35 @@ blueGreen:
 - No `kustomize` removal until the chart is proven on the clab fabric (keep `config/deploy` until
   the chart passes a live smoke, then delete in the same PR that flips CI/scripts to `helm`).
 
+### 4.1 Input validation (fail loudly on misconfig)
+
+The chart must reject bad input with a clear error, not render a broken DaemonSet. Two layers:
+
+- **`values.schema.json` (JSON Schema, draft-07)** shipped beside `Chart.yaml`. Helm validates
+  `values` against it automatically on `install`/`upgrade`/`template`/`lint`. It enforces:
+  - types + `required` on every key the templates dereference;
+  - **enums**: `dataplane ∈ {ebpf, dpdk}`, `env ∈ {clab, hw}`;
+  - `additionalProperties: false` at each object level, so a typo'd key (e.g. `dataplan:`) is a hard
+    error instead of a silently-ignored default;
+  - formats/bounds where they exist (image strings non-empty, `hugepageSize` pattern, `lcores`
+    pattern).
+- **Cross-field / conditional guards.** Some rules span keys. Where draft-07 `if/then/else` +
+  `allOf` can express them, put them in the schema; where they'd be unreadable, use `{{- fail
+  "..." }}` in a `templates/_validate.tpl` partial included first. Rules:
+  - `dataplane: dpdk` **&&** `env: hw` ⇒ `dpdk.hugepages: true` **and** `dpdk.vfioDevices` non-empty
+    (a DPDK HW node with no hugepages / no device is a guaranteed boot failure — fail at render).
+  - `dataplane: dpdk` **&&** `env: clab` ⇒ `dpdk.lcores` must be a single lcore (`"0"`) — reject a
+    wide lcore set that would pin N busy cores per node on the shared host (§5).
+  - `blueGreen.enabled: true` ⇒ requires `dataplane: dpdk` (the operator/blue-green path is
+    DPDK-only; eBPF hot-swaps in place) — fail otherwise.
+
+Every failure message names the offending key, the allowed values, and *why* (one line). Validation
+is covered by negative `helm template` tests (each bad-input case asserts a non-zero exit + expected
+message) alongside the golden-file positive tests.
+
 **Testing:** `helm template` golden-file diff of the `ebpf` render vs the current manifest; `helm
-lint`; a live `helm install` on the clab kind fabric reproducing the current eBPF regression sweep.
+lint`; the negative validation cases above; a live `helm install` on the clab kind fabric
+reproducing the current eBPF regression sweep.
 
 ---
 
@@ -212,9 +239,12 @@ rollout policy (e.g. node selector, max-in-flight, drain timeout). A controller 
 
 **New `DataplaneNode` RPCs** (added to `api/proto/dataplane/v1/dataplane.proto`):
 
-- `WatchStatus` (**server-streaming**): pushes `DataplaneStatus { phase, generation, role }` where
-  `phase ∈ {Init, Ready, Active, Draining, Retiring}`. The agent subscribes on both ports for
-  event-driven cutover (§6.1).
+- `WatchStatus` (**server-streaming**): pushes
+  `DataplaneStatus { phase, generation, role, successor }` where
+  `phase ∈ {Init, Ready, Active, Draining, Retiring}` and `successor: Option<Endpoint>` is set on
+  the `Active` instance while a migration is being prepared (points at the green port). It is the
+  event that tells the agent to go configure the peer — see the FSM in §6.1. Purely event-driven;
+  the agent never polls.
 - `ExportState` / `ImportState`: flow-table snapshot handoff (`nfkit::snapshot`).
 - `Steer(active|drain)`: the steering flip + device-ownership handoff.
 
@@ -227,14 +257,26 @@ XDP in place). One proto serves both backends.
 The agent must not lose config writes across the flip, and must never try to make two instances
 co-own a host device. Design:
 
-- **Two well-known node-local ports.** The agent maintains channels to blue `:1337` and green
-  `:1338`. Steady state: only `:1337` is up; the `:1338` dial being down means "no second instance"
-  — not an error. Exactly two ports (blue/green); no N-way. Roles alternate each upgrade.
-- **Streamed status drives routing.** The agent holds a `WatchStatus` subscription to each live
-  port. It applies config to every **non-draining** live instance (so blue and green converge), and
-  treats the `Active` instance as primary for anything order-sensitive. During the brief flip window
-  it **parks new mutations (hold + backoff)** until an `Active`, configured instance is present,
-  then applies. Config mutations are CRD-driven and rare, so a sub-second park is invisible.
+- **Event-driven, never polling.** Two well-known node-local ports (blue `:1337` / green `:1338`;
+  exactly two, roles alternate each upgrade). The agent connects once and holds a `WatchStatus`
+  subscription; the *stream* tells it when to act. It dials **both** ports only at **cold start** and
+  during **self-heal** after an unexpected disconnect — bounded backoff-retry, never a steady-state
+  timer.
+- **Connection FSM** (guarantees "always connected"):
+  - `Bootstrapping` → dial `{1337,1338}` concurrently, adopt the `Active` responder as `primary` →
+    `Steady`.
+  - `Steady(primary)` → exactly one live subscription, no timers. Apply config to `primary`.
+  - On `primary.successor = :green` (operator spawned green) → `Preparing`: dial the peer, subscribe,
+    replay config onto the `Ready` peer (map-state only, below). Both subscriptions live, briefly.
+  - On `peer→Active && primary→Draining` → `Switching`: promote peer to primary, stop writing to the
+    old, keep it briefly for in-flight.
+  - On old `→Retiring`/stream close → `Steady(new primary)`, drop the old channel.
+  - Any unexpected close with no known peer → back to `Bootstrapping` (self-heal).
+  - `Draining`/`Retiring`/close is also the **reactive fallback** trigger to dial the peer if the
+    agent ever missed the `successor` hint (e.g. it reconnected mid-migration).
+- **Mutation parking.** During the brief `Switching` window the agent **parks new mutations (hold +
+  backoff)** until an `Active`, configured instance is present, then applies. Config mutations are
+  CRD-driven and rare, so a sub-second park is invisible.
 - **Config replay is map-state only — the critical split.** `AttachInterface` has two kinds of
   effect: (i) **re-derivable datapath map programming** (overlay→underlay, fw/lb/nat/route entries),
   which is idempotent and safe to apply to green while blue is live; and (ii) **host-device
