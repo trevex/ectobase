@@ -1,5 +1,6 @@
 //! Backend-agnostic control-plane programming shared by the eBPF and DPDK dataplanes.
 mod firewall;
+mod interface;
 mod lb;
 pub mod maglev;
 #[cfg(feature = "mem-writer")]
@@ -9,6 +10,7 @@ mod routes;
 pub mod shadow;
 pub mod writer;
 
+pub use interface::{meter_state, IfaceParams};
 pub use writer::{CtFlushScope, MapWriter};
 
 /// Backend-agnostic control-plane state + programming, generic over the map write surface.
@@ -67,5 +69,11 @@ impl<W: MapWriter> ControlCore<W> {
     }
     pub fn forget_iface_meta(&mut self, id: &[u8]) {
         self.ifaces_meta.remove(id);
+    }
+    /// The tap ifindex registered for an interface (0 if unknown). Used by the eBPF
+    /// `detach_interface` device path now `Inner.by_ifindex` is retired — `ifaces_meta` is the
+    /// single source of truth for the interface_id -> ifindex mapping.
+    pub fn iface_ifindex(&self, id: &[u8]) -> Option<u32> {
+        self.ifaces_meta.get(id).map(|m| m.ifindex)
     }
 }

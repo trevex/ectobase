@@ -1,8 +1,9 @@
 //! In-memory `MapWriter` for testing `ControlCore` without CAP_BPF or a live map.
 use crate::writer::{CtFlushScope, MapWriter};
 use flowplane_common::{
-    DhcpConfig, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatValue,
-    NeighborNatEntry, RouteValue, UnderlayValue,
+    DhcpConfig, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue, LbKey,
+    LbValue, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteValue,
+    UnderlayValue, VipKey,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -21,6 +22,13 @@ pub struct MemMapWriter {
     pub fw_meta: HashMap<u32, FwMeta>,
     pub meter: HashMap<u32, MeterState>,
     pub dhcp_config: Option<DhcpConfig>,
+    // INTERFACE domain (Task 7).
+    pub ports: HashMap<u32, PortMeta>,
+    pub ifaces: HashMap<IfaceKey, IfaceValue>,
+    // IfaceMetaKey is only Copy/Clone (not Hash), so key the fake by the padded id array.
+    pub iface_meta: HashMap<[u8; flowplane_common::IFACE_ID_MAX], IfaceMetaVal>,
+    pub dhcp_meta_removed: Vec<u32>,
+    pub vips: HashMap<VipKey, [u8; 4]>,
     pub ct_flushes: Vec<CtFlushScope>,
 }
 
@@ -130,6 +138,48 @@ impl MapWriter for MemMapWriter {
     fn dhcp_config_set(&mut self, c: &DhcpConfig) -> anyhow::Result<()> {
         self.dhcp_config = Some(*c);
         Ok(())
+    }
+    fn ports_upsert(&mut self, i: u32, m: PortMeta) -> anyhow::Result<()> {
+        self.ports.insert(i, m);
+        Ok(())
+    }
+    fn ports_remove(&mut self, i: u32) -> anyhow::Result<()> {
+        self.ports.remove(&i);
+        Ok(())
+    }
+    fn ifaces_upsert(&mut self, k: IfaceKey, v: IfaceValue) -> anyhow::Result<()> {
+        self.ifaces.insert(k, v);
+        Ok(())
+    }
+    fn ifaces_remove(&mut self, k: IfaceKey) -> anyhow::Result<()> {
+        self.ifaces.remove(&k);
+        Ok(())
+    }
+    fn ifaces_get(&self, k: &IfaceKey) -> Option<IfaceValue> {
+        self.ifaces.get(k).copied()
+    }
+    fn iface_meta_upsert(&mut self, k: IfaceMetaKey, v: IfaceMetaVal) -> anyhow::Result<()> {
+        self.iface_meta.insert(k.id, v);
+        Ok(())
+    }
+    fn iface_meta_remove(&mut self, k: &IfaceMetaKey) -> anyhow::Result<()> {
+        self.iface_meta.remove(&k.id);
+        Ok(())
+    }
+    fn dhcp_meta_remove(&mut self, i: u32) -> anyhow::Result<()> {
+        self.dhcp_meta_removed.push(i);
+        Ok(())
+    }
+    fn vips_upsert(&mut self, k: VipKey, v: [u8; 4]) -> anyhow::Result<()> {
+        self.vips.insert(k, v);
+        Ok(())
+    }
+    fn vips_remove(&mut self, k: &VipKey) -> anyhow::Result<()> {
+        self.vips.remove(k);
+        Ok(())
+    }
+    fn vips_get(&self, k: &VipKey) -> Option<[u8; 4]> {
+        self.vips.get(k).copied()
     }
     fn conntrack_flush(&mut self, s: CtFlushScope) -> anyhow::Result<()> {
         self.ct_flushes.push(s);

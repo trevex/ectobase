@@ -1,8 +1,9 @@
 //! The control-plane map write surface. eBPF (`AyaWriter`) and DPDK (`SharedConfigMaps`, B1b)
 //! each implement this; `ControlCore` programs maps only through it.
 use flowplane_common::{
-    DhcpConfig, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatValue,
-    NeighborNatEntry, RouteValue, UnderlayValue,
+    DhcpConfig, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue, LbKey,
+    LbValue, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteValue,
+    UnderlayValue, VipKey,
 };
 
 /// The set of conntrack entries a NAT teardown must invalidate. eBPF flushes matching CT map
@@ -55,5 +56,18 @@ pub trait MapWriter {
     fn meter_upsert(&mut self, ifindex: u32, val: MeterState) -> anyhow::Result<()>;
     fn meter_remove(&mut self, ifindex: &u32) -> anyhow::Result<()>;
     fn dhcp_config_set(&mut self, cfg: &DhcpConfig) -> anyhow::Result<()>;
+    // INTERFACE domain (Task 7): the per-interface programming maps `program_interface` writes and
+    // the VNI-purge / detach reconciliation reads.
+    fn ports_upsert(&mut self, ifindex: u32, meta: PortMeta) -> anyhow::Result<()>;
+    fn ports_remove(&mut self, ifindex: u32) -> anyhow::Result<()>;
+    fn ifaces_upsert(&mut self, key: IfaceKey, val: IfaceValue) -> anyhow::Result<()>;
+    fn ifaces_remove(&mut self, key: IfaceKey) -> anyhow::Result<()>;
+    fn ifaces_get(&self, key: &IfaceKey) -> Option<IfaceValue>;
+    fn iface_meta_upsert(&mut self, key: IfaceMetaKey, val: IfaceMetaVal) -> anyhow::Result<()>;
+    fn iface_meta_remove(&mut self, key: &IfaceMetaKey) -> anyhow::Result<()>;
+    fn dhcp_meta_remove(&mut self, ifindex: u32) -> anyhow::Result<()>;
+    fn vips_upsert(&mut self, key: VipKey, val: [u8; 4]) -> anyhow::Result<()>;
+    fn vips_remove(&mut self, key: &VipKey) -> anyhow::Result<()>;
+    fn vips_get(&self, key: &VipKey) -> Option<[u8; 4]>;
     fn conntrack_flush(&mut self, scope: CtFlushScope) -> anyhow::Result<()>;
 }

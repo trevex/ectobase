@@ -5,10 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use aya::Ebpf;
-use flowplane_common::{
-    IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue, Local, NatKey, NeighborNatEntry, PortMeta,
-    RouteValue, VipKey, IFACE_DEV_MAX,
-};
+use flowplane_common::{IfaceKey, IfaceMetaKey, IfaceMetaVal, Local, IFACE_DEV_MAX};
 
 use crate::loader;
 use crate::maps::{
@@ -136,15 +133,7 @@ struct Inner {
     /// ("fd is not pointing to valid bpf_map"), exactly like `_locals`/`_guest_progs`.
     _uplink_dev: UplinkDevMap,
     guest_dev: GuestDevMap,
-    ports: PortMetaMap,
-    ifaces: Interfaces,
     core: ControlCore<AyaWriter>,
-    vips: Vips,
-    meter: Meter,
-    dhcp_config: DhcpConfigMap,
-    dhcp_meta: DhcpMetaMap,
-    /// Restart journal: interface_id -> rebuild detail. Written on attach/detach; scanned on adopt.
-    iface_meta: IfaceMetaMap,
     /// Interfaces recovered by `rebuild_from_maps` on adopt: (interface_id, device) whose guest
     /// program must be re-attached by the caller (`Serve`). Empty on a fresh (non-adopt) bring-up.
     recovered: Vec<(Vec<u8>, String)>,
@@ -156,8 +145,6 @@ struct Inner {
     pin_dir: std::path::PathBuf,
     /// interface_id -> (vni, guest_ipv4, guest_ipv6, device, underlay)
     by_id: HashMap<Vec<u8>, IfaceRecord>,
-    /// interface_id -> ifindex
-    by_ifindex: HashMap<Vec<u8>, u32>,
     /// interface_id -> its underlay /128
     iface_underlay: HashMap<Vec<u8>, [u8; 16]>,
     /// interface_id -> the owned guest datapath link (dropping it detaches the program).
@@ -262,6 +249,13 @@ impl Control {
             underlay,
             fw_rules,
             fw_meta,
+            ports,
+            ifaces,
+            vips,
+            meter,
+            dhcp_config,
+            dhcp_meta,
+            iface_meta,
             conntrack: Arc::clone(&conntrack),
         };
         let mut inner = Inner {
@@ -270,20 +264,12 @@ impl Control {
             _locals: locals,
             _uplink_dev: uplink_dev,
             guest_dev,
-            ports,
-            ifaces,
             core: ControlCore::new(aya),
-            vips,
-            meter,
-            dhcp_config,
-            dhcp_meta,
-            iface_meta,
             recovered: Vec::new(),
             recovered_underlays: Vec::new(),
             pin_links,
             pin_dir: pin_dir.to_path_buf(),
             by_id: HashMap::new(),
-            by_ifindex: HashMap::new(),
             iface_underlay: HashMap::new(),
             links: HashMap::new(),
             learned_macs: HashMap::new(),
@@ -315,9 +301,9 @@ impl Control {
     ///   - `underlays`: every programmed underlay /128 (from the surviving UNDERLAY map) so the caller
     ///     can reseed `UnderlayIpam` and never reissue a live allocation.
     fn rebuild_from_maps(g: &mut Inner) -> anyhow::Result<(ReattachList, Vec<[u8; 16]>)> {
-        let journal = g.iface_meta.entries();
+        let journal = g.core.writer().iface_meta_entries();
         // Sanity cross-check: the journal should track the surviving INTERFACES map 1:1.
-        let iface_count = g.ifaces.entries().len();
+        let iface_count = g.core.writer().ifaces_count();
         if iface_count != journal.len() {
             eprintln!(
                 "adopt: WARNING IFACE_META has {} entries but INTERFACES has {} — journal drift",
@@ -358,7 +344,6 @@ impl Control {
                 },
             );
             g.by_id.insert(id.clone(), rec);
-            g.by_ifindex.insert(id.clone(), tap);
             g.iface_underlay.insert(id.clone(), v.underlay);
             // GUEST_DEV is pinned and keyed by ifindex; re-insert defensively in case ifindex drifted.
             let _ = g.guest_dev.insert(tap);
@@ -500,54 +485,25 @@ impl Control {
         Arc::clone(&self.conntrack)
     }
 
+    /// Set the guest DHCP config. Delegates to the backend-agnostic `ControlCore` (Task 7).
     pub fn set_dhcp_config(
         &self,
         mtu: u16,
         dns4: &[[u8; 4]],
         dns6: &[[u8; 16]],
     ) -> anyhow::Result<()> {
-        let mut cfg = flowplane_common::DhcpConfig {
-            mtu,
-            dns4_len: dns4.len().min(flowplane_common::DHCP_MAX_DNS) as u8,
-            dns6_len: dns6.len().min(flowplane_common::DHCP_MAX_DNS) as u8,
-            dns4: [[0; 4]; flowplane_common::DHCP_MAX_DNS],
-            dns6: [[0; 16]; flowplane_common::DHCP_MAX_DNS],
-        };
-        for (i, a) in dns4.iter().take(flowplane_common::DHCP_MAX_DNS).enumerate() {
-            cfg.dns4[i] = *a;
-        }
-        for (i, a) in dns6.iter().take(flowplane_common::DHCP_MAX_DNS).enumerate() {
-            cfg.dns6[i] = *a;
-        }
-        self.inner.lock().dhcp_config.set(&cfg)
+        self.inner.lock().core.set_dhcp_config(mtu, dns4, dns6)
     }
 
-    /// Build a `MeterState` from per-lane caps in Mbit/s. Egress total is EDT-shaped: only
-    /// `total_bps` + the schedule cursor (`total_last_ns`, seeded 0) matter — no token bucket.
-    /// Public + ingress are token-bucket policers (burst = 1/8 s of rate, min 2000B). All 0 =>
-    /// unlimited. Single source of truth shared by program_iface_maps, the CLI, and ConfigureQoS.
+    /// Build a `MeterState` from per-lane caps in Mbit/s. Thin re-export of the single source of
+    /// truth now living in `flowplane-control` (`flowplane_control::meter_state`); kept as a
+    /// `Control` associated fn so the CLI (`main.rs`) call site is unchanged.
     pub fn meter_state(
         egress_mbps: u64,
         public_mbps: u64,
         ingress_mbps: u64,
     ) -> flowplane_common::MeterState {
-        let e = egress_mbps.saturating_mul(1_000_000) / 8;
-        let p = public_mbps.saturating_mul(1_000_000) / 8;
-        let i = ingress_mbps.saturating_mul(1_000_000) / 8;
-        flowplane_common::MeterState {
-            total_bps: e,
-            total_burst: 0,
-            total_tokens: 0,
-            total_last_ns: 0,
-            public_bps: p,
-            public_burst: (p / 8).max(2000),
-            public_tokens: p / 8,
-            public_last_ns: 0,
-            ingress_bps: i,
-            ingress_burst: (i / 8).max(2000),
-            ingress_tokens: i / 8,
-            ingress_last_ns: 0,
-        }
+        flowplane_control::meter_state(egress_mbps, public_mbps, ingress_mbps)
     }
 
     /// Program a LOCAL interface: attach tc_guest_tx to its device, set PORT_META + INTERFACES +
@@ -624,7 +580,30 @@ impl Control {
         g.guest_dev
             .insert(tap)
             .context("register tap in GUEST_DEV")?;
-        if let Err(e) = Self::program_iface_maps(&mut g, interface_id, device, tap, mac, &params) {
+        // MAC learning persistence: prefer the shadow-cached learned MAC (populated by
+        // detach_interface) so a delete+recreate of the SAME interface preserves a datapath-learned
+        // MAC (e.g. a VM behind the tap using a self-set MAC) even though the BPF UNDERLAY entry is
+        // gone. Keyed by interface_id (NOT the underlay /128): a DIFFERENT interface reusing a freed
+        // underlay must NOT inherit the previous endpoint's MAC — it uses its own device MAC.
+        // Resolved here (device-side bookkeeping) and handed to the agnostic map programming.
+        let effective_mac = g.learned_macs.get(interface_id).copied().unwrap_or(mac);
+        // The MAP-programming half (PORT_META/INTERFACES/UNDERLAY/self-routes/METER/IFACE_META) moved
+        // into the backend-agnostic `ControlCore` (Task 7). `IfaceParams` carries the device-resolved
+        // `tap`/`effective_mac` so the write set/order is byte-identical to the former inline body.
+        if let Err(e) = g.core.program_interface(flowplane_control::IfaceParams {
+            interface_id: interface_id.to_vec(),
+            device: device.to_string(),
+            tap,
+            effective_mac,
+            vni,
+            ipv4,
+            ipv6,
+            gateway_ipv4: params.gateway_ipv4,
+            gateway_ipv6: params.gateway_ipv6,
+            underlay_ipv6,
+            total_mbps: params.total_mbps,
+            public_mbps: params.public_mbps,
+        }) {
             g.guest_dev.remove(tap); // unwind the GUEST_DEV write
                                      // A non-pinned `link` drops here -> detaches. A pinned link is held by the bpffs pin, not
                                      // by `link`, so explicitly unpin to detach the program and avoid leaking the pin — keeping
@@ -647,12 +626,11 @@ impl Control {
                 underlay: underlay_ipv6,
             },
         );
-        g.by_ifindex.insert(interface_id.to_vec(), tap);
         g.iface_underlay
             .insert(interface_id.to_vec(), underlay_ipv6);
-        // Mirror the agnostic interface metadata into the core so the NAT/LB conflict checks (which
-        // moved into ControlCore in Task 4) can read it. `by_id` stays authoritative on `Control`
-        // until Task 7.
+        // Mirror the agnostic interface metadata into the core so the NAT/LB/QoS conflict checks +
+        // the `set_qos` tap resolution can read it (also the sole ifindex source now `by_ifindex` is
+        // retired).
         g.core.register_iface_meta(
             interface_id.to_vec(),
             flowplane_control::shadow::IfaceMeta {
@@ -663,119 +641,6 @@ impl Control {
                 ifindex: tap,
             },
         );
-        Ok(())
-    }
-
-    /// Program PORT_META / INTERFACES / UNDERLAY / METER / local self-route for one interface.
-    fn program_iface_maps(
-        g: &mut Inner,
-        interface_id: &[u8],
-        device: &str,
-        tap: u32,
-        mac: [u8; 6],
-        params: &IfaceParams,
-    ) -> anyhow::Result<()> {
-        let IfaceParams {
-            vni,
-            ipv4,
-            ipv6,
-            gateway_ipv4,
-            gateway_ipv6,
-            underlay_ipv6,
-            total_mbps,
-            public_mbps,
-        } = *params;
-        // MAC learning persistence: prefer the shadow-cached learned MAC (populated by
-        // detach_interface) so a delete+recreate of the SAME interface preserves a datapath-learned
-        // MAC (e.g. a VM behind the tap using a self-set MAC) even though the BPF UNDERLAY entry is
-        // gone. Keyed by interface_id (NOT the underlay /128): a DIFFERENT interface reusing a freed
-        // underlay must NOT inherit the previous endpoint's MAC — it uses its own device MAC.
-        let effective_mac = g.learned_macs.get(interface_id).copied().unwrap_or(mac);
-        g.ports.upsert(
-            tap,
-            PortMeta {
-                vni,
-                guest_ipv4: ipv4,
-                gateway_ipv4,
-                guest_mac: effective_mac,
-                _pad: [0; 2],
-                underlay_ipv6,
-                gateway_ipv6,
-                guest_ipv6: ipv6,
-            },
-        )?;
-        g.ifaces.upsert(
-            IfaceKey::new(vni, ipv4),
-            IfaceValue {
-                tap_ifindex: tap,
-                is_local: 1,
-                underlay_ipv6,
-                guest_mac: effective_mac,
-                _pad: [0; 2],
-            },
-        )?;
-        g.core.writer_mut().underlay_upsert(
-            underlay_ipv6,
-            flowplane_common::UnderlayValue {
-                vni,
-                tap_ifindex: tap,
-                guest_mac: effective_mac,
-                _pad: [0; 2],
-            },
-        )?;
-        // Local self-route: a same-host guest reaches this interface by its overlay IP. Program a
-        // /32 (and /128 when dual-stack) route to this interface's OWN underlay so tc_guest_tx's
-        // LPM resolves a local destination to a local underlay, and the local fast path delivers it
-        // without a wire round-trip. These are NOT added to routes_shadow (not user-visible routes).
-        g.core.writer_mut().route_upsert(
-            vni,
-            ipv4,
-            32,
-            RouteValue {
-                nexthop_vni: vni,
-                nexthop_ipv6: underlay_ipv6,
-                is_external: 0,
-                _pad: [0; 3],
-            },
-        )?;
-        if ipv6 != [0u8; 16] {
-            g.core.writer_mut().route6_upsert(
-                vni,
-                ipv6,
-                128,
-                RouteValue {
-                    nexthop_vni: vni,
-                    nexthop_ipv6: underlay_ipv6,
-                    is_external: 0,
-                    _pad: [0; 3],
-                },
-            )?;
-        }
-        if total_mbps != 0 || public_mbps != 0 {
-            g.meter
-                .upsert(tap, Self::meter_state(total_mbps, public_mbps, 0))?;
-        }
-        // Restart journal (never read by the datapath): persist what a restart needs to rebuild
-        // bookkeeping and re-attach the guest program. Lengths are guarded in create_interface, so
-        // `from_id` is `Some` and the device fits.
-        if let Some(key) = IfaceMetaKey::from_id(interface_id) {
-            let n = device.len().min(IFACE_DEV_MAX);
-            let mut dev = [0u8; IFACE_DEV_MAX];
-            dev[..n].copy_from_slice(&device.as_bytes()[..n]);
-            g.iface_meta.upsert(
-                key,
-                IfaceMetaVal {
-                    vni,
-                    tap_ifindex: tap,
-                    ipv4,
-                    id_len: interface_id.len().min(flowplane_common::IFACE_ID_MAX) as u16,
-                    device_len: n as u16,
-                    ipv6,
-                    underlay: underlay_ipv6,
-                    device: dev,
-                },
-            )?;
-        }
         Ok(())
     }
 
@@ -790,22 +655,27 @@ impl Control {
             None => return Ok(false),
         };
         let vni = rec.vni;
+        // Resolve the tap ifindex from the core's agnostic mirror (formerly `Inner.by_ifindex`, now
+        // retired — `ifaces_meta` is the single source of truth). Read it BEFORE `forget_iface_meta`.
+        let tap = g.core.iface_ifindex(interface_id).unwrap_or(0);
         // Drop the core's agnostic mirror of this interface's metadata (registered in create_interface).
         g.core.forget_iface_meta(interface_id);
-        let tap = g.by_ifindex.remove(interface_id).unwrap_or(0);
         g.guest_dev.remove(tap);
         g.iface_underlay.remove(interface_id);
         // Drop the restart-journal entry so a later adopt does not resurrect a deleted interface.
         if let Some(k) = IfaceMetaKey::from_id(interface_id) {
-            let _ = g.iface_meta.remove(&k);
+            let _ = g.core.writer_mut().iface_meta_remove(&k);
         }
         // Dropping the link detaches the program from the device.
         if let Some(GuestLink::Pinned(name)) = g.links.remove(interface_id) {
             let pin_dir = g.pin_dir.clone();
             loader::unpin_link(&pin_dir, &name);
         }
-        let _ = g.ports.remove(tap);
-        let _ = g.ifaces.remove(IfaceKey::new(rec.vni, rec.ipv4));
+        let _ = g.core.writer_mut().ports_remove(tap);
+        let _ = g
+            .core
+            .writer_mut()
+            .ifaces_remove(IfaceKey::new(rec.vni, rec.ipv4));
         // Before removing the UNDERLAY entry, snapshot the currently-learned guest MAC
         // (the datapath may have updated it via DHCP/ARP MAC learning). This snapshot
         // survives the delete so that addinterface can restore the learned MAC.
@@ -813,9 +683,9 @@ impl Control {
             g.learned_macs.insert(interface_id.to_vec(), u.guest_mac);
         }
         let _ = g.core.writer_mut().underlay_remove(&rec.underlay);
-        let _ = g.meter.remove(&tap);
-        let _ = g.dhcp_meta.remove(tap);
-        // Remove the local self-route(s) programmed in program_iface_maps.
+        let _ = g.core.writer_mut().meter_remove(&tap);
+        let _ = g.core.writer_mut().dhcp_meta_remove(tap);
+        // Remove the local self-route(s) programmed by program_interface.
         let _ = g.core.writer_mut().route_remove(rec.vni, rec.ipv4, 32);
         if rec.ipv6 != [0u8; 16] {
             let _ = g.core.writer_mut().route6_remove(rec.vni, rec.ipv6, 128);
@@ -826,70 +696,12 @@ impl Control {
         // Auto-reset VNI when the last local interface on it is removed:
         // purge neighbor NATs (and orphaned VIP/NAT/route state) for that VNI. This matches
         // dpservice's async-deletion model where the VNI is implicitly reset on last-iface removal.
+        // The reconciliation itself moved into `ControlCore::purge_vni` (Task 7); Control keeps only
+        // the "is the VNI still in use?" decision (it reads `by_id`, which stays authoritative here).
         let vni_still_in_use =
             g.by_id.values().any(|r| r.vni == vni) || g.core.lbs.values().any(|lb| lb.vni == vni);
         if !vni_still_in_use {
-            // Purge neighbor NATs for this VNI. The neigh-NAT vec + maps moved into ControlCore
-            // (Task 4); this reset logic stays on `Control` until Task 7, so it reaches them via
-            // `g.core.neigh_nats` and `g.core.writer_mut()`.
-            let before = g.core.neigh_nats.len();
-            g.core.neigh_nats.retain(|e| e.vni != vni);
-            if g.core.neigh_nats.len() != before {
-                let n = g.core.neigh_nats.len() as u32;
-                let remaining: Vec<NeighborNatEntry> = g.core.neigh_nats.clone();
-                for (i, e) in remaining.iter().enumerate() {
-                    let _ = g.core.writer_mut().neigh_nat_upsert(i as u32, *e);
-                }
-                let _ = g.core.writer_mut().neigh_nat_count_set(n);
-            }
-            // Purge VIP entries for the removed interface's guest IP (and its reverse).
-            let maybe_vip = g.vips.get(&VipKey {
-                vni,
-                ipv4: rec.ipv4,
-            });
-            if let Some(vip) = maybe_vip {
-                let _ = g.vips.remove(&VipKey { vni, ipv4: vip });
-            }
-            let _ = g.vips.remove(&VipKey {
-                vni,
-                ipv4: rec.ipv4,
-            });
-            // Purge NAT config for the removed interface's guest IP.
-            let _ = g.core.writer_mut().nat_remove(&NatKey {
-                vni,
-                ipv4: rec.ipv4,
-            });
-            // Purge routes for this VNI (same as reset_vni).
-            let routes_to_del: Vec<([u8; 4], u32)> = g
-                .core
-                .routes_shadow
-                .iter()
-                .filter(|&&(v, _, _, _, _)| v == vni)
-                .map(|&(_, p, l, _, _)| (p, l))
-                .collect();
-            for (p, l) in &routes_to_del {
-                let _ = g.core.writer_mut().route_remove(vni, *p, *l);
-            }
-            g.core.routes_shadow.retain(|&(v, p, l, _, _)| {
-                !routes_to_del
-                    .iter()
-                    .any(|&(rp, rl)| v == vni && rp == p && rl == l)
-            });
-            let routes6_to_del: Vec<([u8; 16], u32)> = g
-                .core
-                .routes6_shadow
-                .iter()
-                .filter(|&&(v, _, _, _, _)| v == vni)
-                .map(|&(_, p, l, _, _)| (p, l))
-                .collect();
-            for (p, l) in &routes6_to_del {
-                let _ = g.core.writer_mut().route6_remove(vni, *p, *l);
-            }
-            g.core.routes6_shadow.retain(|&(v, p, l, _, _)| {
-                !routes6_to_del
-                    .iter()
-                    .any(|&(rp, rl)| v == vni && rp == p && rl == l)
-            });
+            g.core.purge_vni(vni, rec.ipv4)?;
         }
         Ok(true)
     }
@@ -907,8 +719,9 @@ impl Control {
     /// kernel map (a read-back that proves the program actually landed). Returns the tap ifindex.
     pub fn interface_readback(&self, vni: u32, ipv4: [u8; 4]) -> Option<u32> {
         let g = self.inner.lock();
-        g.ifaces
-            .get(&IfaceKey::new(vni, ipv4))
+        g.core
+            .writer()
+            .ifaces_get(&IfaceKey::new(vni, ipv4))
             .map(|v| v.tap_ifindex)
     }
 
@@ -937,18 +750,10 @@ impl Control {
         public_mbps: u64,
         ingress_mbps: u64,
     ) -> anyhow::Result<()> {
-        let mut g = self.inner.lock();
-        let tap = *g
-            .by_ifindex
-            .get(interface_id)
-            .ok_or_else(|| anyhow::anyhow!("NO_VM: unknown interface"))?;
-        if egress_mbps == 0 && public_mbps == 0 && ingress_mbps == 0 {
-            let _ = g.meter.remove(&tap);
-            Ok(())
-        } else {
-            let state = Self::meter_state(egress_mbps, public_mbps, ingress_mbps);
-            g.meter.upsert(tap, state)
-        }
+        self.inner
+            .lock()
+            .core
+            .set_qos(interface_id, egress_mbps, public_mbps, ingress_mbps)
     }
 }
 
@@ -962,36 +767,9 @@ mod tests {
         assert_eq!(hex_encode(b"rpod"), hex_encode(b"rpod"));
     }
 
-    /// Three-lane mbps->MeterState conversion: egress=EDT (no token bucket, burst=0),
-    /// public/ingress=token-bucket policers (burst = bps/8, min 2000B). 0 mbps = pass sentinel.
-    #[test]
-    fn meter_state_conversion() {
-        let m = Control::meter_state(100, 40, 50);
-        assert_eq!(m.total_bps, 100 * 1_000_000 / 8); // 12_500_000 B/s
-        assert_eq!(m.public_bps, 40 * 1_000_000 / 8); // 5_000_000 B/s
-        assert_eq!(m.ingress_bps, 50 * 1_000_000 / 8); // 6_250_000 B/s
-                                                       // EDT total: no token bucket
-        assert_eq!(m.total_burst, 0);
-        assert_eq!(m.total_tokens, 0);
-        // Public policer
-        assert_eq!(m.public_burst, (m.public_bps / 8).max(2000));
-        assert_eq!(m.public_tokens, m.public_bps / 8);
-        // Ingress policer
-        assert_eq!(m.ingress_burst, (m.ingress_bps / 8).max(2000));
-        assert_eq!(m.ingress_tokens, m.ingress_bps / 8);
-        assert_eq!(m.total_last_ns, 0);
-        assert_eq!(m.public_last_ns, 0);
-        assert_eq!(m.ingress_last_ns, 0);
-
-        // 0 mbps = unlimited sentinel (bps==0).
-        let z = Control::meter_state(0, 0, 0);
-        assert_eq!(z.total_bps, 0);
-        assert_eq!(z.public_bps, 0);
-        assert_eq!(z.ingress_bps, 0);
-        assert_eq!(z.total_burst, 0);
-        assert_eq!(z.public_burst, 2000);
-        assert_eq!(z.ingress_burst, 2000);
-    }
+    // NOTE: the `meter_state_conversion` assertion moved verbatim into `flowplane-control`
+    // (src/interface.rs) alongside the `meter_state` fn that now owns the math. It runs there
+    // without CAP_BPF.
 
     /// Pure (no-BPF) check that an IFACE_META journal entry round-trips back to the interface_id,
     /// device, and IfaceRecord the restart rebuild needs — the crux of the adopt path.

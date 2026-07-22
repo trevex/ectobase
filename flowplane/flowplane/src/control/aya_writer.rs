@@ -4,10 +4,14 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::maps::{
-    Conntrack, FwMetaMap, FwRules, Lb, Maglev, Nat, NatIps, NeighborNat, NeighborNatCount, Routes,
-    Routes6, Underlay,
+    Conntrack, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwRules, IfaceMetaMap, Interfaces, Lb,
+    Maglev, Meter, Nat, NatIps, NeighborNat, NeighborNatCount, PortMetaMap, Routes, Routes6,
+    Underlay, Vips,
 };
-use flowplane_common::{CtKey, NatKey, NatValue, NeighborNatEntry, RouteValue};
+use flowplane_common::{
+    CtKey, IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue, NatKey, NatValue, NeighborNatEntry,
+    PortMeta, RouteValue, VipKey,
+};
 use flowplane_control::{CtFlushScope, MapWriter};
 
 pub struct AyaWriter {
@@ -26,10 +30,19 @@ pub struct AyaWriter {
     // FIREWALL domain (Task 6): per-interface rule slots + per-direction rule counts.
     pub fw_rules: FwRules,
     pub fw_meta: FwMetaMap,
+    // INTERFACE + QoS + DHCP domain (Task 7): the last config maps, moved out of `Inner`. After
+    // this, `AyaWriter` owns ALL config maps and `Inner` holds only device/loader fields + `core`.
+    pub ports: PortMetaMap,
+    pub ifaces: Interfaces,
+    pub vips: Vips,
+    pub meter: Meter,
+    pub dhcp_config: DhcpConfigMap,
+    pub dhcp_meta: DhcpMetaMap,
+    /// Restart journal: interface_id -> rebuild detail. Written on attach/detach; scanned on adopt.
+    pub iface_meta: IfaceMetaMap,
     /// Shared conntrack handle (same Arc `Control` holds for the GC task); the NAT teardown flush
     /// scans+removes matching CONNTRACK entries here.
     pub conntrack: Arc<Mutex<Conntrack>>,
-    // Remaining config maps are migrated here in Tasks 6-7.
 }
 
 impl AyaWriter {
@@ -37,6 +50,17 @@ impl AyaWriter {
     /// Reaches the raw UNDERLAY map, which lives here now; not part of the `MapWriter` trait.
     pub fn underlay_keys(&self) -> Vec<[u8; 16]> {
         self.underlay.keys()
+    }
+
+    /// All `IFACE_META` restart-journal entries (adopt scan). Reaches the raw map, which lives here
+    /// now; not part of the `MapWriter` trait.
+    pub fn iface_meta_entries(&self) -> Vec<(IfaceMetaKey, IfaceMetaVal)> {
+        self.iface_meta.entries()
+    }
+
+    /// Count of live `INTERFACES` entries (adopt journal-drift cross-check).
+    pub fn ifaces_count(&self) -> usize {
+        self.ifaces.entries().len()
     }
 }
 
@@ -171,14 +195,47 @@ impl MapWriter for AyaWriter {
     fn fw_meta_upsert(&mut self, i: u32, v: flowplane_common::FwMeta) -> anyhow::Result<()> {
         self.fw_meta.upsert(i, v)
     }
-    fn meter_upsert(&mut self, _i: u32, _v: flowplane_common::MeterState) -> anyhow::Result<()> {
-        unimplemented!("Task 7")
+    fn meter_upsert(&mut self, i: u32, v: flowplane_common::MeterState) -> anyhow::Result<()> {
+        self.meter.upsert(i, v)
     }
-    fn meter_remove(&mut self, _i: &u32) -> anyhow::Result<()> {
-        unimplemented!("Task 7")
+    fn meter_remove(&mut self, i: &u32) -> anyhow::Result<()> {
+        self.meter.remove(i)
     }
-    fn dhcp_config_set(&mut self, _c: &flowplane_common::DhcpConfig) -> anyhow::Result<()> {
-        unimplemented!("Task 7")
+    fn dhcp_config_set(&mut self, c: &flowplane_common::DhcpConfig) -> anyhow::Result<()> {
+        self.dhcp_config.set(c)
+    }
+    fn ports_upsert(&mut self, i: u32, m: PortMeta) -> anyhow::Result<()> {
+        self.ports.upsert(i, m)
+    }
+    fn ports_remove(&mut self, i: u32) -> anyhow::Result<()> {
+        self.ports.remove(i)
+    }
+    fn ifaces_upsert(&mut self, k: IfaceKey, v: IfaceValue) -> anyhow::Result<()> {
+        self.ifaces.upsert(k, v)
+    }
+    fn ifaces_remove(&mut self, k: IfaceKey) -> anyhow::Result<()> {
+        self.ifaces.remove(k)
+    }
+    fn ifaces_get(&self, k: &IfaceKey) -> Option<IfaceValue> {
+        self.ifaces.get(k)
+    }
+    fn iface_meta_upsert(&mut self, k: IfaceMetaKey, v: IfaceMetaVal) -> anyhow::Result<()> {
+        self.iface_meta.upsert(k, v)
+    }
+    fn iface_meta_remove(&mut self, k: &IfaceMetaKey) -> anyhow::Result<()> {
+        self.iface_meta.remove(k)
+    }
+    fn dhcp_meta_remove(&mut self, i: u32) -> anyhow::Result<()> {
+        self.dhcp_meta.remove(i)
+    }
+    fn vips_upsert(&mut self, k: VipKey, v: [u8; 4]) -> anyhow::Result<()> {
+        self.vips.upsert(k, v)
+    }
+    fn vips_remove(&mut self, k: &VipKey) -> anyhow::Result<()> {
+        self.vips.remove(k)
+    }
+    fn vips_get(&self, k: &VipKey) -> Option<[u8; 4]> {
+        self.vips.get(k)
     }
     fn conntrack_flush(&mut self, s: CtFlushScope) -> anyhow::Result<()> {
         // Flush CT entries for this guest under the conntrack lock (a separate lock from the
