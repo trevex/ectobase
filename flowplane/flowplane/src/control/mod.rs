@@ -684,16 +684,13 @@ impl Control {
         if rec.ipv6 != [0u8; 16] {
             let _ = g.core.writer_mut().route6_remove(rec.vni, rec.ipv6, 128);
         }
-        if let Some(rules) = g.core.fw.remove(&tap) {
-            drop(rules);
-        }
+        g.core.remove_fw_rules(tap);
         // Auto-reset VNI when the last local interface on it is removed:
         // purge neighbor NATs (and orphaned VIP/NAT/route state) for that VNI. This matches
         // dpservice's async-deletion model where the VNI is implicitly reset on last-iface removal.
         // The reconciliation itself moved into `ControlCore::purge_vni` (Task 7); Control keeps only
         // the "is the VNI still in use?" decision (it reads `by_id`, which stays authoritative here).
-        let vni_still_in_use =
-            g.by_id.values().any(|r| r.vni == vni) || g.core.lbs.values().any(|lb| lb.vni == vni);
+        let vni_still_in_use = g.by_id.values().any(|r| r.vni == vni) || g.core.vni_has_lb(vni);
         if !vni_still_in_use {
             g.core.purge_vni(vni, rec.ipv4)?;
         }

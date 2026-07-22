@@ -9,6 +9,11 @@ use crate::{ControlCore, MapWriter};
 use flowplane_common::{LbKey, LbValue, MaglevKey};
 
 impl<W: MapWriter> ControlCore<W> {
+    /// Whether any registered load balancer still lives on `vni` (the eBPF `detach_interface`
+    /// VNI-reset half of the "is this VNI still in use?" decision).
+    pub fn vni_has_lb(&self, vni: u32) -> bool {
+        self.lbs.values().any(|lb| lb.vni == vni)
+    }
     /// Register a load balancer: allocate a Maglev table id and program the `LB` map for each
     /// (port, proto) service. Backends are added later via `add_lb_target`.
     pub fn create_lb(

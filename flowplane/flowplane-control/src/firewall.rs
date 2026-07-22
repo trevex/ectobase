@@ -9,6 +9,11 @@ use crate::{ControlCore, MapWriter};
 use flowplane_common::{FwMeta, FwRule, FwRuleKey, FW_DIR_EGRESS, FW_MAX_RULES};
 
 impl<W: MapWriter> ControlCore<W> {
+    /// Drop the firewall rule shadow for a detaching interface's ifindex (the discarded rules'
+    /// map slots are torn down with the interface). Matches the former `Inner.fw.remove(&tap)`.
+    pub fn remove_fw_rules(&mut self, ifindex: u32) {
+        self.fw.remove(&ifindex);
+    }
     /// Reprogram all firewall slots for one interface from the in-memory `fw` vec.
     fn fw_reprogram(&mut self, ifindex: u32) -> anyhow::Result<()> {
         let rules = self.fw.get(&ifindex).cloned().unwrap_or_default();
