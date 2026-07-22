@@ -39,9 +39,9 @@ pub struct Route6Key {
 /// `HashSet<(u32, [u8; 4])>`); the value is a dummy `u8` since `rte_hash` needs a value type.
 #[derive(Copy, Clone)]
 #[repr(C)]
-struct NatIpKey {
-    vni: u32,
-    ipv4: [u8; 4],
+pub struct NatIpKey {
+    pub vni: u32,
+    pub ipv4: [u8; 4],
 }
 const _: () = assert!(core::mem::size_of::<NatIpKey>() == 8); // no padding
 
@@ -185,6 +185,28 @@ impl DpdkMaps {
     /// Insert a per-interface DHCP meta entry.
     pub fn add_dhcp_meta(&mut self, ifindex: u32, value: DhcpMeta) {
         self.dhcp_meta.insert(&U32Key { v: ifindex }, value);
+    }
+
+    // ── flow-table iteration (snapshot export) ────────────────────────────────
+    // Only the FLOW tables (conntrack, nat, nat_ips) are iterable — they are the
+    // per-flow state a blue-green upgrade must carry across the binary swap. The
+    // config maps (routes/fw/lb/maglev/underlay/dhcp/meter) are re-derived from
+    // the control plane on the new instance and are deliberately not exposed here.
+
+    /// Visit every live conntrack `(CtKey, CtEntry)` entry (order unspecified).
+    pub fn conntrack_for_each(&self, f: impl FnMut(&CtKey, &CtEntry)) {
+        self.conntrack.for_each(f);
+    }
+
+    /// Visit every live NAT-config `(NatKey, NatValue)` entry (order unspecified).
+    pub fn nat_for_each(&self, f: impl FnMut(&NatKey, &NatValue)) {
+        self.nat.for_each(f);
+    }
+
+    /// Visit every registered NAT-IP `(NatIpKey, u8)` entry (order unspecified).
+    /// The value is the dummy `1` `rte_hash` needs; only the key carries meaning.
+    pub fn nat_ips_for_each(&self, f: impl FnMut(&NatIpKey, &u8)) {
+        self.nat_ips.for_each(f);
     }
 }
 
