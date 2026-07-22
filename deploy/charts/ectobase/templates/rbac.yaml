@@ -1,0 +1,120 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: netplane-agent
+  namespace: ectobase-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: netplane-agent
+rules:
+  # The agent watches VPCs, NetworkInterfaces, and NATGateways (and their status
+  # subresources) to derive desired route/NAT announcements + subscriptions for this
+  # node: NATGateway.Status.Allocations drive local egress SNAT (AddNatSource) + the
+  # external default route (DesiredNat/DesiredExternalRoutes).
+  - apiGroups: ["net.ectobase.dev"]
+    resources:
+      - vpcs
+      - vpcs/status
+      - networkinterfaces
+      - networkinterfaces/status
+      - natgateways
+      - natgateways/status
+      # The agent lists CompiledNICs (firewall + LB reconcile) and LoadBalancers
+      # (edge ReconcileLB -> AddLbVip) to program the dataplane.
+      - compilednics
+      - compilednics/status
+      - loadbalancers
+      - loadbalancers/status
+    verbs: ["get", "list", "watch"]
+  # The agent reports interface programming state back onto the NIC status.
+  - apiGroups: ["net.ectobase.dev"]
+    resources:
+      - networkinterfaces/status
+    verbs: ["update", "patch"]
+  # Node info (e.g. addresses/labels) may be needed for underlay inference.
+  - apiGroups: [""]
+    resources:
+      - nodes
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: netplane-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: netplane-agent
+subjects:
+  - kind: ServiceAccount
+    name: netplane-agent
+    namespace: ectobase-system
+---
+# The reflector holds no Kubernetes credentials in v1 (it only speaks the
+# routebus gRPC protocol to agents), so it gets a bare ServiceAccount.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: netplane-reflector
+  namespace: ectobase-system
+---
+# The controller reconciles NATGateway objects: it reads NetworkInterfaces to
+# compute allocations and writes NATGateway.Status.Allocations.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: netplane-controller
+  namespace: ectobase-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: netplane-controller
+rules:
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["natgateways"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["natgateways/status"]
+    verbs: ["get", "update"]
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["networkinterfaces"]
+    verbs: ["get", "list", "watch"]
+  # The CompiledNICReconciler reads NetworkInterfaces + NetworkPolicies + LoadBalancers
+  # and writes CompiledNIC objects (owned by the NIC) with their status.
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["networkpolicies", "loadbalancers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["compilednics"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["compilednics/status"]
+    verbs: ["get", "update", "patch"]
+  # The VPCPeeringReconciler evaluates mutual consent and writes VPCPeering.Status; the
+  # CompiledNICReconciler resolves Ready VPCPeerings (+ each peer VPC's VNI) into
+  # CompiledNIC.PeerImports and watches VPCPeering. Both need vpcs + vpcpeerings.
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["vpcs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["vpcpeerings"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["vpcpeerings/status"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: netplane-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: netplane-controller
+subjects:
+  - kind: ServiceAccount
+    name: netplane-controller
+    namespace: ectobase-system
