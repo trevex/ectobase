@@ -90,6 +90,13 @@ impl Control {
                 backends: Vec::new(),
             },
         );
+        // Mirror the agnostic subset into the core so the NAT preferred-underlay collision check
+        // (moved into ControlCore in Task 4) sees this LB's underlay. `Inner.lbs` stays
+        // authoritative on `Control` until Task 5.
+        g.core.register_lb(
+            id.to_vec(),
+            flowplane_control::shadow::LbEntry { lb_underlay },
+        );
         Ok(())
     }
 
@@ -163,6 +170,8 @@ impl Control {
             Some(e) => e,
             None => return Ok(false),
         };
+        // Drop the core's agnostic mirror (registered in create_lb).
+        g.core.forget_lb(id);
         let ip4 = entry.ip.last4();
         for &(port, proto) in &entry.ports {
             let _ = g.lb.remove(&LbKey {

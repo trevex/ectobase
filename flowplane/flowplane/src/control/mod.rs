@@ -16,6 +16,8 @@ use crate::maps::{
     Interfaces, Lb, LocalMap, Maglev, Meter, Nat, NatIps, NeighborNat, NeighborNatCount,
     PortMetaMap, Routes, Routes6, UplinkDevMap, Vips,
 };
+// `Nat`, `NatIps`, `NeighborNat`, `NeighborNatCount` are still opened in `bring_up`/the test ctor,
+// then moved into `AyaWriter` (they no longer live in `Inner`).
 
 // The `impl Control` blocks are split by domain into these child modules. Each is pure code
 // movement out of this file; they reach `Inner`'s private state via `super`.
@@ -140,6 +142,10 @@ impl LbIp {
 struct LbEntry {
     vni: u32,
     ip: LbIp,
+    /// Task 4 moved the sole reader (NAT preferred-underlay collision check) into `ControlCore.lbs`;
+    /// this field is now write-only in `Inner.lbs` (kept in sync via the create_lb mirror) until
+    /// Task 5 deletes `Inner.lbs` and moves the full LB domain into the core.
+    #[allow(dead_code)]
     lb_underlay: [u8; 16],
     ports: Vec<(u16, u8)>,
     table_id: u32,
@@ -173,14 +179,10 @@ struct Inner {
     vips: Vips,
     lb: Lb,
     maglev: Maglev,
-    nat: Nat,
     fw_rules: FwRules,
     fw_meta: FwMetaMap,
     underlay: crate::maps::Underlay,
     meter: Meter,
-    neigh_nat: NeighborNat,
-    neigh_nat_count: NeighborNatCount,
-    nat_ips: NatIps,
     dhcp_config: DhcpConfigMap,
     dhcp_meta: DhcpMetaMap,
     /// Restart journal: interface_id -> rebuild detail. Written on attach/detach; scanned on adopt.
@@ -194,8 +196,6 @@ struct Inner {
     pin_links: bool,
     /// Persistent pin dir for link pins; mirrors the map pin dir passed to load_ebpf.
     pin_dir: std::path::PathBuf,
-    /// In-memory neighbor NAT entries (drives the BPF map reprogram).
-    neigh_nats: Vec<NeighborNatEntry>,
     /// loadbalancer_id -> its LB state.
     lbs: HashMap<Vec<u8>, LbEntry>,
     next_table_id: u32,
@@ -297,7 +297,15 @@ impl Control {
         let dhcp_meta = DhcpMetaMap::open(&mut ebpf)?;
         let iface_meta = IfaceMetaMap::open(&mut ebpf)?;
         let conntrack = Arc::new(Mutex::new(Conntrack::open(&mut ebpf)?));
-        let aya = AyaWriter { routes, routes6 };
+        let aya = AyaWriter {
+            routes,
+            routes6,
+            nat,
+            nat_ips,
+            neigh_nat,
+            neigh_nat_count,
+            conntrack: Arc::clone(&conntrack),
+        };
         let mut inner = Inner {
             ebpf,
             _guest_progs: guest_progs,
@@ -310,14 +318,10 @@ impl Control {
             vips,
             lb,
             maglev,
-            nat,
             fw_rules,
             fw_meta,
             underlay,
             meter,
-            neigh_nat,
-            neigh_nat_count,
-            nat_ips,
             dhcp_config,
             dhcp_meta,
             iface_meta,
@@ -325,7 +329,6 @@ impl Control {
             recovered_underlays: Vec::new(),
             pin_links,
             pin_dir: pin_dir.to_path_buf(),
-            neigh_nats: Vec::new(),
             lbs: HashMap::new(),
             next_table_id: 1,
             by_id: HashMap::new(),
@@ -391,6 +394,18 @@ impl Control {
                     v.tap_ifindex
                 );
             }
+            // Mirror the agnostic subset into the core so post-adopt NAT/LB conflict checks (moved
+            // into ControlCore in Task 4) see the recovered interface, exactly as they saw `by_id`
+            // before the refactor.
+            g.core.register_iface_meta(
+                id.clone(),
+                flowplane_control::shadow::IfaceMeta {
+                    vni: rec.vni,
+                    ipv4: rec.ipv4,
+                    ipv6: rec.ipv6,
+                    underlay: rec.underlay,
+                },
+            );
             g.by_id.insert(id.clone(), rec);
             g.by_ifindex.insert(id.clone(), tap);
             g.iface_underlay.insert(id.clone(), v.underlay);
@@ -684,6 +699,18 @@ impl Control {
         g.by_ifindex.insert(interface_id.to_vec(), tap);
         g.iface_underlay
             .insert(interface_id.to_vec(), underlay_ipv6);
+        // Mirror the agnostic interface metadata into the core so the NAT/LB conflict checks (which
+        // moved into ControlCore in Task 4) can read it. `by_id` stays authoritative on `Control`
+        // until Task 7.
+        g.core.register_iface_meta(
+            interface_id.to_vec(),
+            flowplane_control::shadow::IfaceMeta {
+                vni,
+                ipv4,
+                ipv6,
+                underlay: underlay_ipv6,
+            },
+        );
         Ok(())
     }
 
@@ -811,6 +838,8 @@ impl Control {
             None => return Ok(false),
         };
         let vni = rec.vni;
+        // Drop the core's agnostic mirror of this interface's metadata (registered in create_interface).
+        g.core.forget_iface_meta(interface_id);
         let tap = g.by_ifindex.remove(interface_id).unwrap_or(0);
         g.guest_dev.remove(tap);
         g.iface_underlay.remove(interface_id);
@@ -848,16 +877,18 @@ impl Control {
         let vni_still_in_use =
             g.by_id.values().any(|r| r.vni == vni) || g.lbs.values().any(|lb| lb.vni == vni);
         if !vni_still_in_use {
-            // Purge neighbor NATs for this VNI.
-            let before = g.neigh_nats.len();
-            g.neigh_nats.retain(|e| e.vni != vni);
-            if g.neigh_nats.len() != before {
-                let n = g.neigh_nats.len() as u32;
-                let remaining: Vec<NeighborNatEntry> = g.neigh_nats.clone();
+            // Purge neighbor NATs for this VNI. The neigh-NAT vec + maps moved into ControlCore
+            // (Task 4); this reset logic stays on `Control` until Task 7, so it reaches them via
+            // `g.core.neigh_nats` and `g.core.writer_mut()`.
+            let before = g.core.neigh_nats.len();
+            g.core.neigh_nats.retain(|e| e.vni != vni);
+            if g.core.neigh_nats.len() != before {
+                let n = g.core.neigh_nats.len() as u32;
+                let remaining: Vec<NeighborNatEntry> = g.core.neigh_nats.clone();
                 for (i, e) in remaining.iter().enumerate() {
-                    let _ = g.neigh_nat.upsert(i as u32, *e);
+                    let _ = g.core.writer_mut().neigh_nat_upsert(i as u32, *e);
                 }
-                let _ = g.neigh_nat_count.set(n);
+                let _ = g.core.writer_mut().neigh_nat_count_set(n);
             }
             // Purge VIP entries for the removed interface's guest IP (and its reverse).
             let maybe_vip = g.vips.get(&VipKey {
@@ -872,7 +903,7 @@ impl Control {
                 ipv4: rec.ipv4,
             });
             // Purge NAT config for the removed interface's guest IP.
-            let _ = g.nat.remove(&NatKey {
+            let _ = g.core.writer_mut().nat_remove(&NatKey {
                 vni,
                 ipv4: rec.ipv4,
             });
@@ -1014,7 +1045,15 @@ impl Control {
         let dhcp_meta = DhcpMetaMap::open(&mut ebpf)?;
         let iface_meta = IfaceMetaMap::open(&mut ebpf)?;
         let conntrack = Arc::new(Mutex::new(Conntrack::open(&mut ebpf)?));
-        let aya = AyaWriter { routes, routes6 };
+        let aya = AyaWriter {
+            routes,
+            routes6,
+            nat,
+            nat_ips,
+            neigh_nat,
+            neigh_nat_count,
+            conntrack: Arc::clone(&conntrack),
+        };
         Ok(Self {
             inner: Mutex::new(Inner {
                 ebpf,
@@ -1028,14 +1067,10 @@ impl Control {
                 vips,
                 lb,
                 maglev,
-                nat,
                 fw_rules,
                 fw_meta,
                 underlay,
                 meter,
-                neigh_nat,
-                neigh_nat_count,
-                nat_ips,
                 dhcp_config,
                 dhcp_meta,
                 iface_meta,
@@ -1043,7 +1078,6 @@ impl Control {
                 recovered_underlays: Vec::new(),
                 pin_links: false,
                 pin_dir: std::path::PathBuf::from("/tmp"),
-                neigh_nats: Vec::new(),
                 lbs: HashMap::new(),
                 next_table_id: 1,
                 by_id: HashMap::new(),
