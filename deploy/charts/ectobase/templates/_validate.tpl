@@ -1,0 +1,20 @@
+{{- define "ectobase.validate" -}}
+{{- if and (eq .Values.dataplane "dpdk") (eq .Values.env "hw") -}}
+  {{- if not .Values.dpdk.hugepages -}}
+    {{- fail "invalid values: dpdk.hugepages must be true when dataplane=dpdk and env=hw (a DPDK HW node needs hugepages to boot). Set dpdk.hugepages: true." -}}
+  {{- end -}}
+  {{- if not .Values.dpdk.vfioDevices -}}
+    {{- fail "invalid values: dpdk.vfioDevices must list at least one device when dataplane=dpdk and env=hw. Set dpdk.vfioDevices: [{name: <resource>, count: <n>}]." -}}
+  {{- end -}}
+{{- end -}}
+{{- if and (eq .Values.dataplane "dpdk") (eq .Values.env "clab") -}}
+  {{- if ne .Values.dpdk.lcores "0" -}}
+    {{- fail "invalid values: dpdk.lcores must be \"0\" when dataplane=dpdk and env=clab (a single lcore, to avoid pinning busy poll-mode cores per node on the shared clab host). Set dpdk.lcores: \"0\"." -}}
+  {{- end -}}
+{{- end -}}
+{{- if .Values.blueGreen.enabled -}}
+  {{- if ne .Values.dataplane "dpdk" -}}
+    {{- fail "invalid values: blueGreen.enabled=true requires dataplane=dpdk (blue-green is DPDK-only; eBPF hot-swaps in place). Set dataplane: dpdk or blueGreen.enabled: false." -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
