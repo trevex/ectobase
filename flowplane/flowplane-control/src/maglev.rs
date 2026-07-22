@@ -1,4 +1,7 @@
-//! Maglev consistent-hashing lookup-table builder (userspace).
+//! Maglev consistent-hashing lookup-table builder (backend-agnostic).
+//!
+//! Moved verbatim out of the eBPF `flowplane/src/maglev.rs` (Task 5); it is pure (std-only, no
+//! aya deps) so it lives here and is called by `ControlCore`'s LB programming.
 pub const TABLE_SIZE: u32 = 1021; // prime
 
 /// A tiny FNV-1a over bytes (stable, no external deps), used for offset/skip seeds.

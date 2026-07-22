@@ -13,10 +13,43 @@ pub struct IfaceMeta {
     pub underlay: [u8; 16],
 }
 
-/// Registered load balancer (agnostic subset). For Task 4 the NAT preferred-underlay collision
-/// check only needs `lb_underlay`; the full backend/service state is moved here in Task 5.
-#[derive(Clone, Copy, Debug)]
+/// LB IP address (IPv4 or IPv6) at the gRPC/create boundary. Moved out of `control/mod.rs`
+/// (was `crate::control::LbIpBytes`); re-exported from there for call-site compatibility.
+pub enum LbIpBytes {
+    Ipv4([u8; 4]),
+    Ipv6([u8; 16]),
+}
+
+/// LB IP address stored in the shadow state (IPv4 or IPv6). Moved out of `control/mod.rs`.
+#[derive(Clone)]
+pub enum LbIp {
+    Ipv4([u8; 4]),
+    Ipv6([u8; 16]),
+}
+
+impl LbIp {
+    /// Return the last 4 bytes of the address for underlay derivation.
+    pub fn last4(&self) -> [u8; 4] {
+        match self {
+            LbIp::Ipv4(ip) => *ip,
+            LbIp::Ipv6(ip) => {
+                let mut b = [0u8; 4];
+                b.copy_from_slice(&ip[12..16]);
+                b
+            }
+        }
+    }
+}
+
+/// Registered load balancer: its Maglev table id, the (port,proto) services it answers, and the
+/// ordered backend list (drives the Maglev table). Keyed in `ControlCore.lbs` by the LB's id.
+/// Moved verbatim out of `control/mod.rs` (Task 5); the NAT preferred-underlay collision check
+/// reads `lb_underlay`.
 pub struct LbEntry {
+    pub vni: u32,
+    pub ip: LbIp,
     pub lb_underlay: [u8; 16],
-    // backends etc. added in Task 5
+    pub ports: Vec<(u16, u8)>,
+    pub table_id: u32,
+    pub backends: Vec<[u8; 16]>,
 }

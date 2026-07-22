@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::maps::{Conntrack, Nat, NatIps, NeighborNat, NeighborNatCount, Routes, Routes6};
+use crate::maps::{
+    Conntrack, Lb, Maglev, Nat, NatIps, NeighborNat, NeighborNatCount, Routes, Routes6, Underlay,
+};
 use flowplane_common::{CtKey, NatKey, NatValue, NeighborNatEntry, RouteValue};
 use flowplane_control::{CtFlushScope, MapWriter};
 
@@ -15,10 +17,23 @@ pub struct AyaWriter {
     pub nat_ips: NatIps,
     pub neigh_nat: NeighborNat,
     pub neigh_nat_count: NeighborNatCount,
+    // LB domain (Task 5): LB service map, Maglev table, and the UNDERLAY map (moved out of `Inner`;
+    // UNDERLAY is also read/written by the interface + edge paths via `core.writer_mut()`).
+    pub lb: Lb,
+    pub maglev: Maglev,
+    pub underlay: Underlay,
     /// Shared conntrack handle (same Arc `Control` holds for the GC task); the NAT teardown flush
     /// scans+removes matching CONNTRACK entries here.
     pub conntrack: Arc<Mutex<Conntrack>>,
-    // Remaining config maps are migrated here in Tasks 5-7.
+    // Remaining config maps are migrated here in Tasks 6-7.
+}
+
+impl AyaWriter {
+    /// Every underlay /128 currently programmed (restart adopt reseeds `UnderlayIpam` from these).
+    /// Reaches the raw UNDERLAY map, which lives here now; not part of the `MapWriter` trait.
+    pub fn underlay_keys(&self) -> Vec<[u8; 16]> {
+        self.underlay.keys()
+    }
 }
 
 /// Flush CONNTRACK entries whose egress 5-tuple originated from `(vni, guest_ip)`.
@@ -112,36 +127,32 @@ impl MapWriter for AyaWriter {
     }
     fn lb_upsert(
         &mut self,
-        _k: flowplane_common::LbKey,
-        _v: flowplane_common::LbValue,
+        k: flowplane_common::LbKey,
+        v: flowplane_common::LbValue,
     ) -> anyhow::Result<()> {
-        unimplemented!("Task 5")
+        self.lb.upsert(k, v)
     }
-    fn lb_remove(&mut self, _k: &flowplane_common::LbKey) -> anyhow::Result<()> {
-        unimplemented!("Task 5")
+    fn lb_remove(&mut self, k: &flowplane_common::LbKey) -> anyhow::Result<()> {
+        self.lb.remove(k)
     }
-    fn maglev_upsert(
-        &mut self,
-        _k: flowplane_common::MaglevKey,
-        _v: [u8; 16],
-    ) -> anyhow::Result<()> {
-        unimplemented!("Task 5")
+    fn maglev_upsert(&mut self, k: flowplane_common::MaglevKey, v: [u8; 16]) -> anyhow::Result<()> {
+        self.maglev.upsert(k, v)
     }
-    fn maglev_remove(&mut self, _k: &flowplane_common::MaglevKey) -> anyhow::Result<()> {
-        unimplemented!("Task 5")
+    fn maglev_remove(&mut self, k: &flowplane_common::MaglevKey) -> anyhow::Result<()> {
+        self.maglev.remove(k)
     }
     fn underlay_upsert(
         &mut self,
-        _k: [u8; 16],
-        _v: flowplane_common::UnderlayValue,
+        k: [u8; 16],
+        v: flowplane_common::UnderlayValue,
     ) -> anyhow::Result<()> {
-        unimplemented!("Task 5")
+        self.underlay.upsert(k, v)
     }
-    fn underlay_remove(&mut self, _k: &[u8; 16]) -> anyhow::Result<()> {
-        unimplemented!("Task 5")
+    fn underlay_remove(&mut self, k: &[u8; 16]) -> anyhow::Result<()> {
+        self.underlay.remove(k)
     }
-    fn underlay_get(&self, _k: &[u8; 16]) -> Option<flowplane_common::UnderlayValue> {
-        unimplemented!("Task 5")
+    fn underlay_get(&self, k: &[u8; 16]) -> Option<flowplane_common::UnderlayValue> {
+        self.underlay.get(k)
     }
     fn fw_rules_upsert(
         &mut self,
