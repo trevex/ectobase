@@ -8,6 +8,7 @@ license.workspace = true
 aya = { workspace = true }
 aya-log = { workspace = true }
 flowplane-common = { path = "../flowplane-common", features = ["user"] }
+flowplane-control = { path = "../flowplane-control" }
 flowplane-core = { path = "../flowplane-core" }
 tokio = { workspace = true }
 anyhow = { workspace = true }

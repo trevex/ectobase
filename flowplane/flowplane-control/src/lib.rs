@@ -12,8 +12,8 @@ pub use writer::{CtFlushScope, MapWriter};
 pub struct ControlCore<W: MapWriter> {
     pub(crate) w: W,
     // ROUTES domain (Task 2)
-    pub(crate) routes_shadow: Vec<shadow::RouteShadowV4>,
-    pub(crate) routes6_shadow: Vec<shadow::RouteShadowV6>,
+    pub routes_shadow: Vec<shadow::RouteShadowV4>,
+    pub routes6_shadow: Vec<shadow::RouteShadowV6>,
 }
 
 impl<W: MapWriter> ControlCore<W> {

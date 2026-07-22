@@ -19,10 +19,14 @@ use crate::maps::{
 
 // The `impl Control` blocks are split by domain into these child modules. Each is pure code
 // movement out of this file; they reach `Inner`'s private state via `super`.
+mod aya_writer;
 mod firewall;
 mod lb;
 mod nat;
 mod routes;
+
+use aya_writer::AyaWriter;
+use flowplane_control::{ControlCore, MapWriter};
 
 /// The owned link for a guest interface's attached datapath program. Dropping either variant
 /// detaches the program from the device. The guest edge is tcx-only (`tc_guest_tx`); the uplink
@@ -68,8 +72,11 @@ pub struct IfaceParams {
 // documents each column). Fields are described where each is produced/consumed.
 
 /// `(vni, prefix_ipv4, prefix_len, nexthop_vni, nexthop_underlay)` for list/delete_route.
+// Shadow now lives in ControlCore; these aliases remain for call-site compatibility (Tasks 4-7).
+#[allow(dead_code)]
 pub(crate) type RouteShadowV4 = (u32, [u8; 4], u32, u32, [u8; 16]);
 /// `(vni, prefix_ipv6, prefix_len, nexthop_vni, nexthop_underlay)` IPv6 routes shadow.
+#[allow(dead_code)]
 pub(crate) type RouteShadowV6 = (u32, [u8; 16], u32, u32, [u8; 16]);
 /// `(vni, ipv4, ipv6, underlay, device)` for a single interface.
 pub(crate) type InterfaceDetail = (u32, [u8; 4], [u8; 16], [u8; 16], String);
@@ -162,8 +169,7 @@ struct Inner {
     guest_dev: GuestDevMap,
     ports: PortMetaMap,
     ifaces: Interfaces,
-    routes: Routes,
-    routes6: Routes6,
+    core: ControlCore<AyaWriter>,
     vips: Vips,
     lb: Lb,
     maglev: Maglev,
@@ -203,8 +209,6 @@ struct Inner {
     fw: HashMap<u32, Vec<(Vec<u8>, FwRule)>>,
     /// interface_id -> the owned guest datapath link (dropping it detaches the program).
     links: HashMap<Vec<u8>, GuestLink>,
-    routes_shadow: Vec<RouteShadowV4>,
-    routes6_shadow: Vec<RouteShadowV6>,
     /// Shadow cache of learned guest MACs: interface_id -> guest_mac.
     /// Persists across delete+recreate of the SAME interface so the datapath keeps delivering to a
     /// datapath-learned MAC (e.g. a VM's self-set MAC) when it is reprogrammed. Keyed by
@@ -293,6 +297,7 @@ impl Control {
         let dhcp_meta = DhcpMetaMap::open(&mut ebpf)?;
         let iface_meta = IfaceMetaMap::open(&mut ebpf)?;
         let conntrack = Arc::new(Mutex::new(Conntrack::open(&mut ebpf)?));
+        let aya = AyaWriter { routes, routes6 };
         let mut inner = Inner {
             ebpf,
             _guest_progs: guest_progs,
@@ -301,8 +306,7 @@ impl Control {
             guest_dev,
             ports,
             ifaces,
-            routes,
-            routes6,
+            core: ControlCore::new(aya),
             vips,
             lb,
             maglev,
@@ -329,8 +333,6 @@ impl Control {
             iface_underlay: HashMap::new(),
             fw: HashMap::new(),
             links: HashMap::new(),
-            routes_shadow: Vec::new(),
-            routes6_shadow: Vec::new(),
             learned_macs: HashMap::new(),
         };
         // Restart adopt: the pinned state maps were reused by map_pin_path, so rebuild the in-memory
@@ -746,7 +748,7 @@ impl Control {
         // /32 (and /128 when dual-stack) route to this interface's OWN underlay so tc_guest_tx's
         // LPM resolves a local destination to a local underlay, and the local fast path delivers it
         // without a wire round-trip. These are NOT added to routes_shadow (not user-visible routes).
-        g.routes.upsert(
+        g.core.writer_mut().route_upsert(
             vni,
             ipv4,
             32,
@@ -758,7 +760,7 @@ impl Control {
             },
         )?;
         if ipv6 != [0u8; 16] {
-            g.routes6.upsert(
+            g.core.writer_mut().route6_upsert(
                 vni,
                 ipv6,
                 128,
@@ -833,9 +835,9 @@ impl Control {
         let _ = g.meter.remove(&tap);
         let _ = g.dhcp_meta.remove(tap);
         // Remove the local self-route(s) programmed in program_iface_maps.
-        let _ = g.routes.remove(rec.vni, rec.ipv4, 32);
+        let _ = g.core.writer_mut().route_remove(rec.vni, rec.ipv4, 32);
         if rec.ipv6 != [0u8; 16] {
-            let _ = g.routes6.remove(rec.vni, rec.ipv6, 128);
+            let _ = g.core.writer_mut().route6_remove(rec.vni, rec.ipv6, 128);
         }
         if let Some(rules) = g.fw.remove(&tap) {
             drop(rules);
@@ -876,29 +878,31 @@ impl Control {
             });
             // Purge routes for this VNI (same as reset_vni).
             let routes_to_del: Vec<([u8; 4], u32)> = g
+                .core
                 .routes_shadow
                 .iter()
                 .filter(|&&(v, _, _, _, _)| v == vni)
                 .map(|&(_, p, l, _, _)| (p, l))
                 .collect();
             for (p, l) in &routes_to_del {
-                let _ = g.routes.remove(vni, *p, *l);
+                let _ = g.core.writer_mut().route_remove(vni, *p, *l);
             }
-            g.routes_shadow.retain(|&(v, p, l, _, _)| {
+            g.core.routes_shadow.retain(|&(v, p, l, _, _)| {
                 !routes_to_del
                     .iter()
                     .any(|&(rp, rl)| v == vni && rp == p && rl == l)
             });
             let routes6_to_del: Vec<([u8; 16], u32)> = g
+                .core
                 .routes6_shadow
                 .iter()
                 .filter(|&&(v, _, _, _, _)| v == vni)
                 .map(|&(_, p, l, _, _)| (p, l))
                 .collect();
             for (p, l) in &routes6_to_del {
-                let _ = g.routes6.remove(vni, *p, *l);
+                let _ = g.core.writer_mut().route6_remove(vni, *p, *l);
             }
-            g.routes6_shadow.retain(|&(v, p, l, _, _)| {
+            g.core.routes6_shadow.retain(|&(v, p, l, _, _)| {
                 !routes6_to_del
                     .iter()
                     .any(|&(rp, rl)| v == vni && rp == p && rl == l)
@@ -1010,6 +1014,7 @@ impl Control {
         let dhcp_meta = DhcpMetaMap::open(&mut ebpf)?;
         let iface_meta = IfaceMetaMap::open(&mut ebpf)?;
         let conntrack = Arc::new(Mutex::new(Conntrack::open(&mut ebpf)?));
+        let aya = AyaWriter { routes, routes6 };
         Ok(Self {
             inner: Mutex::new(Inner {
                 ebpf,
@@ -1019,8 +1024,7 @@ impl Control {
                 guest_dev,
                 ports,
                 ifaces,
-                routes,
-                routes6,
+                core: ControlCore::new(aya),
                 vips,
                 lb,
                 maglev,
@@ -1047,8 +1051,6 @@ impl Control {
                 iface_underlay: HashMap::new(),
                 fw: HashMap::new(),
                 links: HashMap::new(),
-                routes_shadow: Vec::new(),
-                routes6_shadow: Vec::new(),
                 learned_macs: HashMap::new(),
             }),
             conntrack,

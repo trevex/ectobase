@@ -693,6 +693,7 @@ dependencies = [
  "env_logger",
  "etherparse",
  "flowplane-common",
+ "flowplane-control",
  "flowplane-core",
  "flowplane-ebpf",
  "flowplane-sim",
