@@ -47,10 +47,12 @@ loss. Blue-green removes both by running the new instance beside the old, handin
 | 6 | Naming | The deployable crate is **`flowplane-dpdk`** (on the `nfkit` substrate); *not* a bin inside `nfkit`. |
 | 7 | Doc/plan structure | **One umbrella design doc** (this); implement **thread A (Helm) first**, then B, then C. |
 
-**Key architectural invariant:** both datapaths speak the *same* `DataplaneNode` gRPC contract on
-`127.0.0.1:1337`. The agent therefore stays **dataplane-agnostic** — it dials the port and whichever
-datapath pod is scheduled on the node answers. Backend selection is purely a scheduling/render
-concern, never an agent concern.
+**Key architectural invariant:** both datapaths speak the *same* `DataplaneNode` gRPC contract. The
+agent therefore stays **dataplane-agnostic** — whichever datapath pod is scheduled on the node
+answers. Backend selection is purely a scheduling/render concern, never an agent concern. The one
+blue-green refinement (thread C, §6.1): the agent dials **two** well-known node-local ports (blue
+`127.0.0.1:1337`, green `127.0.0.1:1338`) and follows a streamed status phase to know which is
+`Active`. It never needs to know eBPF-vs-DPDK; it only follows the phase.
 
 ## 3. Architecture: three layers
 
@@ -186,23 +188,65 @@ HW, brief-gap on clab.
 **`DataplaneUpgrade` CRD** (cluster- or namespace-scoped): declares the target image/version and
 rollout policy (e.g. node selector, max-in-flight, drain timeout). A controller reconciles it.
 
-**Per-node upgrade sequence** (controller-driven, all over gRPC):
+**Per-node upgrade sequence** (controller-driven, gRPC; agent participates for config — see §6.1):
 
-1. Schedule a **green** Pod beside the DaemonSet **blue** pod on the same node. Green binds a
-   **second gRPC port** (e.g. `127.0.0.1:1338`) to dodge the `127.0.0.1:1337` bind conflict, and a
-   second datapath instance on the steering seam (see below).
-2. `blue.ExportState` → `green.ImportState` — carries conntrack/NAT/nat_ips via `nfkit::snapshot`
-   (versioned blob; refuses magic/version mismatch, caller falls back to accepting flow loss).
-   Config maps (routes/fw/lb/etc.) are re-derived on green from the control plane, not handed off.
-3. `green.Steer(active)` → `blue.Steer(drain)` — flip ingress to green.
-4. Await blue drain (existing flows quiesce or time out).
-5. Retire blue; green assumes the DaemonSet identity (the controller lets the DaemonSet reconverge
-   onto green, or promotes green in place — decided in C's plan).
+1. Schedule a **green** Pod beside the DaemonSet **blue** pod on the same node. Green binds the
+   **green gRPC port** (`127.0.0.1:1338`) — blue keeps `:1337` for its whole life, so there is no
+   socket handoff and no `SO_REUSEPORT` ambiguity. Green comes up `Init → Ready` with its datapath
+   loaded but **no host-device ownership** (it has not bound the uplink or any tap yet).
+2. **Config convergence (agent):** the agent, seeing green reach `Ready` on `:1338`, replays its
+   full desired *config* onto green — the re-derivable map state only (routes/fw/lb/nat + each
+   interface's overlay→underlay map entries). It does **not** re-run host-device side effects
+   (§6.1). Both blue and green now hold identical config; green still owns no devices.
+3. **Flow-state handoff (operator):** `blue.ExportState` → `green.ImportState` — conntrack/NAT/
+   nat_ips via `nfkit::snapshot` (versioned blob; refuses magic/version mismatch, caller falls back
+   to accepting flow loss).
+4. **Flip (operator):** `green.Steer(active)` → `blue.Steer(drain)`. This is where **device
+   ownership hands off**: blue releases the uplink (and taps), green binds them. HW does this
+   hitlessly via `rte_flow`/eSwitch; clab does it as a release/rebind (brief gap). Green transitions
+   `Ready → Active`, blue `Active → Draining`. The agent, watching the status stream, cuts its
+   primary over to `:1338`.
+5. Await blue drain (existing flows quiesce or time out) → `Retiring`; retire blue. Green assumes
+   the DaemonSet identity (DaemonSet reconverge vs in-place promotion — decided in C's plan). The
+   next upgrade runs green→blue, ports swapping roles.
 
 **New `DataplaneNode` RPCs** (added to `api/proto/dataplane/v1/dataplane.proto`):
-`ExportState`, `ImportState`, `Steer(active|drain)`. eBPF `flowplane` implements them as no-ops /
-`UNIMPLEMENTED` (it never blue-greens — it hot-swaps XDP in place). This keeps one proto for both
-backends.
+
+- `WatchStatus` (**server-streaming**): pushes `DataplaneStatus { phase, generation, role }` where
+  `phase ∈ {Init, Ready, Active, Draining, Retiring}`. The agent subscribes on both ports for
+  event-driven cutover (§6.1).
+- `ExportState` / `ImportState`: flow-table snapshot handoff (`nfkit::snapshot`).
+- `Steer(active|drain)`: the steering flip + device-ownership handoff.
+
+eBPF `flowplane` implements `WatchStatus` as a trivial always-`Active` stream and
+`ExportState`/`ImportState`/`Steer` as no-ops / `UNIMPLEMENTED` (it never blue-greens — it hot-swaps
+XDP in place). One proto serves both backends.
+
+### 6.1 Agent handoff (two-port + streamed status)
+
+The agent must not lose config writes across the flip, and must never try to make two instances
+co-own a host device. Design:
+
+- **Two well-known node-local ports.** The agent maintains channels to blue `:1337` and green
+  `:1338`. Steady state: only `:1337` is up; the `:1338` dial being down means "no second instance"
+  — not an error. Exactly two ports (blue/green); no N-way. Roles alternate each upgrade.
+- **Streamed status drives routing.** The agent holds a `WatchStatus` subscription to each live
+  port. It applies config to every **non-draining** live instance (so blue and green converge), and
+  treats the `Active` instance as primary for anything order-sensitive. During the brief flip window
+  it **parks new mutations (hold + backoff)** until an `Active`, configured instance is present,
+  then applies. Config mutations are CRD-driven and rare, so a sub-second park is invisible.
+- **Config replay is map-state only — the critical split.** `AttachInterface` has two kinds of
+  effect: (i) **re-derivable datapath map programming** (overlay→underlay, fw/lb/nat/route entries),
+  which is idempotent and safe to apply to green while blue is live; and (ii) **host-device
+  ownership** (binding the AF_XDP/NIC uplink, creating/owning guest taps), which **cannot** be
+  duplicated — two instances binding the same tap or the single clab veth uplink collide (EBUSY, and
+  the queue-bind constraint from §5). So the agent replays only (i) onto `Ready` green; (ii) is
+  handed off by the operator at `Steer` (step 4). This is the mechanism behind clab's brief-gap:
+  green cannot hold the uplink until blue releases it.
+
+**Responsibility split:** agent = config-map convergence (two-port, status-driven); operator =
+flow-state snapshot + steering flip + device-ownership handoff; `WatchStatus` = the shared
+coordination signal binding the two.
 
 **Steering-seam trait, two impls** (the phased split):
 
@@ -243,6 +287,13 @@ DPDK upgrades fall back to a plain DaemonSet rolling update (gap + flow loss —
   keeping `make generate` authoritative.
 - **[C]** How green assumes the DaemonSet identity after blue retires (DaemonSet reconverge vs
   in-place promotion).
+- **[C]** Config-ready handshake: how the operator knows the agent has finished replaying config
+  onto green before it runs `ExportState`/`Steer` (green exposes an attach-count / config-generation
+  the operator polls to match blue, vs an explicit agent signal). Avoid flipping onto a
+  half-configured green.
+- **[C]** Agent two-port channel lifecycle: `WatchStatus` reconnect/backoff, tolerating `:1338`
+  being down in steady state, and the atomic "primary switch" barrier (drain outbound-to-blue, then
+  switch) so late writes don't land on a draining instance.
 
 **Non-goals:** mixed eBPF/DPDK clusters (whole-cluster toggle only); zero-gap hitlessness on clab;
 removing kustomize before the Helm chart passes a live clab smoke; changing the agent (it stays
