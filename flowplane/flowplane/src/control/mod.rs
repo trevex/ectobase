@@ -65,17 +65,11 @@ pub struct IfaceParams {
     pub public_mbps: u64,
 }
 
-// Named shapes for the shadow records and gRPC list/get return rows, so the signatures below read
-// as `Vec<RouteRow>` rather than a bare six-tuple (keeps `clippy::type_complexity` quiet and
-// documents each column). Fields are described where each is produced/consumed.
+// Named shapes for the gRPC list/get return rows, so the signatures below read as
+// `Vec<InterfaceRow>` rather than a bare six-tuple (keeps `clippy::type_complexity` quiet and
+// documents each column). Fields are described where each is produced/consumed. The route shadow
+// aliases moved into `flowplane-control` (`shadow::RouteShadowV4/V6`) with the orchestration.
 
-/// `(vni, prefix_ipv4, prefix_len, nexthop_vni, nexthop_underlay)` for list/delete_route.
-// Shadow now lives in ControlCore; these aliases remain for call-site compatibility (Tasks 4-7).
-#[allow(dead_code)]
-pub(crate) type RouteShadowV4 = (u32, [u8; 4], u32, u32, [u8; 16]);
-/// `(vni, prefix_ipv6, prefix_len, nexthop_vni, nexthop_underlay)` IPv6 routes shadow.
-#[allow(dead_code)]
-pub(crate) type RouteShadowV6 = (u32, [u8; 16], u32, u32, [u8; 16]);
 /// `(vni, ipv4, ipv6, underlay, device)` for a single interface.
 pub(crate) type InterfaceDetail = (u32, [u8; 4], [u8; 16], [u8; 16], String);
 /// `(interface_id, vni, ipv4, ipv6, underlay, device)` row.
