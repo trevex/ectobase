@@ -8,6 +8,8 @@
 
 **Tech Stack:** Helm 3 (v3.19.1), Go templating, JSON Schema draft-07, bash + `diff` golden tests. No `yq`/`kubeconform` (not in devShell) — tests use `helm template --show-only` + `diff` only.
 
+**Testing note (important):** Helm renders resources **sorted by Kind**, so a multi-document template's concatenation order differs from the source file even when every resource is byte-identical. The equivalence guarantee is therefore **per-resource identical, order-independent** — not byte-identical concatenation. The `tests/lib.sh` helper `assert_docs_equal <template> <values> <source>` implements this (splits both sides into documents, hashes each normalized doc, compares the sorted sets). Use it for every render-vs-source check; `normalize` remains for single-document content-level diffs when debugging. `lib.sh` resolves `REPO`/`CHART` from the git top-level, so tests run from any CWD.
+
 **Scope note:** This is thread A of the umbrella spec `docs/superpowers/specs/2026-07-22-dpdk-dataplane-helm-blue-green-design.md`. It does NOT build `flowplane-dpdk` (thread B) or the blue-green operator (thread C). The `dataplane: dpdk` DaemonSet it renders references an image that does not exist yet — that is expected; the chart only needs to *render and validate*, not run, for DPDK until thread B lands. `config/deploy/` is NOT deleted here (blocked on a live clab smoke — see Task 9).
 
 ---
@@ -389,7 +391,7 @@ git commit -m "feat(chart): verbatim rbac, agent-kubeconfig, kubevirt-binding te
 
 - [ ] **Step 1: Write the failing test**
 
-Run: `bash -c 'source deploy/charts/ectobase/tests/lib.sh && for f in reflector controller agent cni; do diff <(render_show_only templates/$f.yaml tests/values/ebpf-clab.yaml | normalize) <(normalize < config/deploy/$f.yaml) && echo "$f OK"; done'`
+Run: `bash -c 'source deploy/charts/ectobase/tests/lib.sh && for f in reflector controller agent cni; do assert_docs_equal templates/$f.yaml tests/values/ebpf-clab.yaml config/deploy/$f.yaml && echo "$f OK"; done'`
 Expected: FAIL — `could not find template templates/reflector.yaml`.
 
 - [ ] **Step 2: Copy then templatize the image + reflector fields**
@@ -461,7 +463,7 @@ with:
 
 - [ ] **Step 3: Run tests to verify they pass**
 
-Run: `bash -c 'source deploy/charts/ectobase/tests/lib.sh && for f in reflector controller agent cni; do diff <(render_show_only templates/$f.yaml tests/values/ebpf-clab.yaml | normalize) <(normalize < config/deploy/$f.yaml) && echo "$f OK"; done'`
+Run: `bash -c 'source deploy/charts/ectobase/tests/lib.sh && for f in reflector controller agent cni; do assert_docs_equal templates/$f.yaml tests/values/ebpf-clab.yaml config/deploy/$f.yaml && echo "$f OK"; done'`
 Expected: PASS — `reflector OK`, `controller OK`, `agent OK`, `cni OK`, no diffs. (Defaults `images.netplane`, `images.cni`, `imagePullPolicy`, `reflectorAddress` reproduce the original literals.)
 
 - [ ] **Step 4: Commit**
@@ -483,7 +485,7 @@ git commit -m "feat(chart): templated reflector, controller, agent, cni"
 
 - [ ] **Step 1: Write the failing test**
 
-Run: `bash -c 'source deploy/charts/ectobase/tests/lib.sh && diff <(render_show_only templates/dataplane-ebpf.yaml tests/values/ebpf-clab.yaml | normalize) <(normalize < config/deploy/flowplane.yaml) && echo OK'`
+Run: `bash -c 'source deploy/charts/ectobase/tests/lib.sh && assert_docs_equal templates/dataplane-ebpf.yaml tests/values/ebpf-clab.yaml config/deploy/flowplane.yaml && echo OK'`
 Expected: FAIL — `could not find template templates/dataplane-ebpf.yaml`.
 
 - [ ] **Step 2: Create the gated, minimally-templated copy**
@@ -559,7 +561,7 @@ Leave everything else (the wrapper script, probes, mounts, volumes) byte-for-byt
 
 - [ ] **Step 3: Run tests to verify they pass**
 
-Run: `bash -c 'source deploy/charts/ectobase/tests/lib.sh && diff <(render_show_only templates/dataplane-ebpf.yaml tests/values/ebpf-clab.yaml | normalize) <(normalize < config/deploy/flowplane.yaml) && echo OK'`
+Run: `bash -c 'source deploy/charts/ectobase/tests/lib.sh && assert_docs_equal templates/dataplane-ebpf.yaml tests/values/ebpf-clab.yaml config/deploy/flowplane.yaml && echo OK'`
 Expected: PASS — prints `OK`, no diff (ebpf+clab reproduces `flowplane.yaml` exactly).
 
 Run: `bash -c 'source deploy/charts/ectobase/tests/lib.sh && render_show_only templates/dataplane-ebpf.yaml tests/values/dpdk-clab.yaml >/dev/null 2>&1 && echo "UNEXPECTED RENDER" || echo "NO_RENDER_OK"'`
@@ -867,8 +869,9 @@ declare -A MAP=(
 )
 for tpl in "${!MAP[@]}"; do
   src="config/deploy/${MAP[$tpl]}.yaml"
-  if diff <(render_show_only "templates/$tpl.yaml" "$DIR/values/ebpf-clab.yaml" | normalize) \
-          <(normalize < "$src") >/dev/null; then
+  # Order-independent per-resource comparison: helm sorts resources by Kind, so multi-doc
+  # templates (rbac, cni) render in a different order than the source file.
+  if assert_docs_equal "templates/$tpl.yaml" "$DIR/values/ebpf-clab.yaml" "$src" >/dev/null; then
     ok "ebpf render $tpl == $src"
   else
     bad "ebpf render $tpl != $src"
