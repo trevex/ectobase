@@ -87,4 +87,21 @@ fn pacer_releases_in_departure_order_and_fifo() {
     );
     assert!(r.is_empty());
     assert_eq!(r.next_departure(), None);
+
+    // --- drain_due_into appends to a REUSED buffer + preserves departure order ---
+    // Reuse one buffer across two drains: it must APPEND (not clear) and keep non-decreasing edt.
+    let mut s = EdtPacer::new();
+    s.enqueue(tagged(&pool, 5), 500); // out of order
+    s.enqueue(tagged(&pool, 4), 400);
+    s.enqueue(tagged(&pool, 6), 600);
+    let mut buf: Vec<nfkit::Mbuf> = Vec::new();
+    s.drain_due_into(400, &mut buf); // only edt 400 (id=4) due
+    assert_eq!(buf.iter().map(id_of).collect::<Vec<_>>(), vec![4]);
+    s.drain_due_into(u64::MAX, &mut buf); // remaining 500, 600 APPENDED to the same buffer
+    assert_eq!(
+        buf.iter().map(id_of).collect::<Vec<_>>(),
+        vec![4, 5, 6],
+        "drain_due_into appends to the reused buffer in departure order"
+    );
+    assert!(s.is_empty());
 }
