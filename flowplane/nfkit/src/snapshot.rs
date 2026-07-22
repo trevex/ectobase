@@ -136,11 +136,26 @@ pub fn serialize_maps(maps: &DpdkMaps) -> Vec<u8> {
 
 // ── restore ──────────────────────────────────────────────────────────────────
 
-/// Restore a blob produced by [`serialize_maps`] into a FRESH `DpdkMaps`, re-inserting every flow
-/// entry via the existing setters. Refuses a magic/version mismatch and bounds-checks every read.
+/// Restore a blob produced by [`serialize_maps`] into a `DpdkMaps`, re-inserting every flow entry
+/// via the existing setters. Refuses a magic/version mismatch and bounds-checks every read.
+///
+/// # Observability & determinism
+/// Every re-insert is checked for success (Task-1 made inserts observable via the per-table drop
+/// counters). If ANY entry fails to insert because a target table's capacity is exceeded, restore
+/// returns `Err(SnapshotError("capacity exceeded during restore"))` instead of silently
+/// over-reporting the blob's claimed counts in `RestoreStats`. On `Ok`, `RestoreStats` reflects the
+/// ACTUAL inserts, which equal the blob counts when the blob fits.
+///
+/// # Partial state on `Err`
+/// A capacity-exceeded (or truncated) restore leaves the target `maps` PARTIALLY populated — some
+/// entries preceding the failure were inserted. A failed handoff must be KNOWN, not silently
+/// partial: the caller MUST treat any `Err` as a failed restore, DISCARD the target `DpdkMaps`, and
+/// fall back (e.g. accept flow loss and rebuild from the control plane) rather than run on a
+/// half-restored table. Do not reuse `maps` after an `Err`.
 ///
 /// # Errors
 /// - `SnapshotError("bad magic")` / `SnapshotError("unsupported version")` on header mismatch.
+/// - `SnapshotError("capacity exceeded during restore")` if a target table fills mid-restore.
 /// - A `truncated: …` error if the blob ends mid-header, mid-count, or mid-entry.
 pub fn restore_maps(maps: &mut DpdkMaps, blob: &[u8]) -> Result<RestoreStats, SnapshotError> {
     // header — the magic occupies bytes 0..4, so parsing resumes at offset 4.
@@ -154,29 +169,44 @@ pub fn restore_maps(maps: &mut DpdkMaps, blob: &[u8]) -> Result<RestoreStats, Sn
         return Err(SnapshotError("unsupported version"));
     }
 
-    // conntrack
+    const CAP_EXCEEDED: SnapshotError = SnapshotError("capacity exceeded during restore");
+
+    // conntrack — `conntrack_insert` returns `()` (trait), so observe fullness via the drop counter
+    // delta around each insert. A non-zero delta means the flow table was full.
     let ct_n = read_count(blob, &mut off)?;
     for _ in 0..ct_n {
         let k = read_pod::<CtKey>(blob, &mut off)?;
         let v = read_pod::<CtEntry>(blob, &mut off)?;
+        let before = maps.dropped_conntrack_inserts();
         maps.conntrack_insert(k, v);
+        if maps.dropped_conntrack_inserts() != before {
+            return Err(CAP_EXCEEDED);
+        }
     }
 
-    // nat
+    // nat — `add_nat` bumps the nat drop counter on a full table; observe the delta.
     let nat_n = read_count(blob, &mut off)?;
     for _ in 0..nat_n {
         let k = read_pod::<NatKey>(blob, &mut off)?;
         let v = read_pod::<NatValue>(blob, &mut off)?;
+        let before = maps.dropped_nat_inserts();
         maps.add_nat(k, v);
+        if maps.dropped_nat_inserts() != before {
+            return Err(CAP_EXCEEDED);
+        }
     }
 
-    // nat_ips
+    // nat_ips — `add_nat_ip` shares the nat drop counter; same delta check.
     let ni_n = read_count(blob, &mut off)?;
     for _ in 0..ni_n {
         let k = read_pod::<NatIpKey>(blob, &mut off)?;
         // Consume the dummy value byte (bounds-checked) even though add_nat_ip re-derives it.
         let _v = read_pod::<u8>(blob, &mut off)?;
+        let before = maps.dropped_nat_inserts();
         maps.add_nat_ip(k.vni, k.ipv4);
+        if maps.dropped_nat_inserts() != before {
+            return Err(CAP_EXCEEDED);
+        }
     }
 
     Ok(RestoreStats {

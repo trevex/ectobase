@@ -343,4 +343,113 @@ fn snapshot_roundtrip_and_flow_continuity() {
         &DNAT_GUEST_IP,
         "restored flow: inner dst reverse-DNAT'd to guest IP"
     );
+
+    // ── Part 4: empty-maps round-trip (0/0/0) ────────────────────────────────
+    // A fresh DpdkMaps with no flow state must serialize to a blob that restores as an empty set:
+    // RestoreStats{0,0,0} and no entries visible via the *_for_each accessors.
+    let empty_src = DpdkMaps::new(0).expect("DpdkMaps::new empty_src");
+    let empty_blob = serialize_maps(&empty_src);
+    let mut empty_dst = DpdkMaps::new(0).expect("DpdkMaps::new empty_dst");
+    let empty_stats = restore_maps(&mut empty_dst, &empty_blob).expect("restore empty ok");
+    assert_eq!(
+        empty_stats,
+        RestoreStats {
+            conntrack: 0,
+            nat: 0,
+            nat_ips: 0,
+        },
+        "empty round-trip yields zero counts"
+    );
+    let (e_ct, e_nat, e_nips) = dump_all(&empty_dst);
+    assert!(
+        e_ct.is_empty() && e_nat.is_empty() && e_nips.is_empty(),
+        "empty round-trip leaves the target maps empty"
+    );
+
+    // ── Part 5: restore into a NON-empty map (warm standby) ──────────────────
+    // A warm-standby B already holds a flow of its own; restoring A's blob over it is
+    // last-writer-wins (overwrite is fine) and must NOT panic. All of A's entries must be present in
+    // B afterwards (B may additionally retain its pre-existing non-colliding entry).
+    let mut warm = DpdkMaps::new(0).expect("DpdkMaps::new warm");
+    warm.conntrack_insert(
+        CtKey {
+            vni: 555,
+            src_ip: [1, 2, 3, 4],
+            dst_ip: [5, 6, 7, 8],
+            src_port: 100,
+            dst_port: 200,
+            proto: 6,
+            _pad: [0; 3],
+        },
+        CtEntry {
+            last_seen: 7,
+            xlate_ip: [9, 9, 9, 9],
+            xlate_port: 300,
+            flags: CT_REWRITE_DST,
+            tcp_state: 0,
+            fwall_action: 0,
+            _pad: [0; 7],
+        },
+    );
+    // Restore A's blob over the warm standby (over-writes on collision, adds otherwise). No panic.
+    let warm_stats = restore_maps(&mut warm, &blob).expect("restore into non-empty ok");
+    assert_eq!(
+        warm_stats, stats,
+        "restore-into-nonempty reports A's counts"
+    );
+    // Every entry from A must be present in the warm map after the restore.
+    let (a_ct2, a_nat2, a_nips2) = dump_all(&a);
+    let (w_ct, w_nat, w_nips) = dump_all(&warm);
+    for e in &a_ct2 {
+        assert!(w_ct.contains(e), "A conntrack entry present in warm map");
+    }
+    for e in &a_nat2 {
+        assert!(w_nat.contains(e), "A nat entry present in warm map");
+    }
+    for e in &a_nips2 {
+        assert!(w_nips.contains(e), "A nat_ip entry present in warm map");
+    }
+
+    // ── Part 6: restore exceeding a tiny ct_cap → Err (observable, no panic) ──
+    // Build a blob with FAR more conntrack entries than a tiny ct_cap can hold (4000 distinct flows
+    // vs a table sized for 64 — well beyond any rte_hash local-cache slack), then restore into a
+    // DpdkMaps built with that tiny cap. Restore must deterministically return Err (capacity
+    // exceeded is observable), never silently over-report or panic.
+    let mut big = DpdkMaps::new(0).expect("DpdkMaps::new big");
+    for i in 0u32..4000 {
+        let b = i.to_le_bytes();
+        big.conntrack_insert(
+            CtKey {
+                vni: i,
+                src_ip: b,
+                dst_ip: [b[3], b[2], b[1], b[0]],
+                src_port: (i & 0xffff) as u16,
+                dst_port: ((i >> 3) & 0xffff) as u16,
+                proto: 6,
+                _pad: [0; 3],
+            },
+            CtEntry {
+                last_seen: i as u64,
+                xlate_ip: b,
+                xlate_port: (i & 0xffff) as u16,
+                flags: CT_REWRITE_DST,
+                tcp_state: 0,
+                fwall_action: 0,
+                _pad: [0; 7],
+            },
+        );
+    }
+    // `big` itself is sized generously (default caps) so it holds all 4000; its blob carries them.
+    let big_blob = serialize_maps(&big);
+    let mut tiny = DpdkMaps::with_capacities(0, 64, 4096).expect("DpdkMaps::with_capacities tiny");
+    let overflow = restore_maps(&mut tiny, &big_blob);
+    assert_eq!(
+        overflow,
+        Err(nfkit::SnapshotError("capacity exceeded during restore")),
+        "restore into a tiny ct_cap returns Err (observable capacity-exceeded), no panic"
+    );
+    assert!(
+        tiny.dropped_conntrack_inserts() > 0,
+        "the tiny conntrack table observably dropped at least one restore insert"
+    );
 }

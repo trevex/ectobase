@@ -10,6 +10,14 @@ use std::ptr::NonNull;
 #[derive(Debug)]
 pub struct HashError;
 
+impl std::fmt::Display for HashError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "rte_hash operation failed")
+    }
+}
+
+impl std::error::Error for HashError {}
+
 pub struct DpdkHash<K: Copy, V: Copy> {
     raw: NonNull<dpdk_sys::rte_hash>,
     slab: Vec<Option<V>>,
@@ -37,14 +45,36 @@ impl<K: Copy, V: Copy> DpdkHash<K, V> {
         })
     }
 
-    pub fn insert(&mut self, k: &K, v: V) {
+    /// Insert (or overwrite) key -> value. Returns `false` if the table is full
+    /// (`rte_hash_add_key` < 0); the value is then NOT stored. Deterministic: the value slab grows
+    /// on demand to fit whatever position `rte_hash` returns, so it can never index out of range
+    /// regardless of capacity alignment or the number of writers.
+    pub fn insert(&mut self, k: &K, v: V) -> bool {
         // SAFETY: k points to size_of::<K>() == key_len bytes; the hash copies the key.
         // rte_hash_add_key takes *const rte_hash and *const c_void (read-only access).
         let pos = unsafe {
             dpdk_sys::rte_hash_add_key(self.raw.as_ptr(), (k as *const K).cast::<c_void>())
         };
-        if pos >= 0 {
-            self.slab[pos as usize] = Some(v);
+        if pos < 0 {
+            return false; // table full (-ENOSPC) — observable to the caller
+        }
+        let idx = pos as usize;
+        if idx >= self.slab.len() {
+            self.slab.resize(idx + 1, None); // grow to fit; V: Copy, no pointers into slab
+        }
+        self.slab[idx] = Some(v);
+        true
+    }
+
+    /// Number of live entries, via `rte_hash_count`. Observability only.
+    #[must_use]
+    pub fn count(&self) -> usize {
+        // SAFETY: `self.raw` is a valid rte_hash handle; read-only count.
+        let n = unsafe { dpdk_sys::rte_hash_count(self.raw.as_ptr()) };
+        if n < 0 {
+            0
+        } else {
+            n as usize
         }
     }
 
@@ -89,7 +119,7 @@ impl<K: Copy, V: Copy> DpdkHash<K, V> {
             dpdk_sys::rte_hash_lookup(self.raw.as_ptr(), (k as *const K).cast::<c_void>())
         };
         if pos >= 0 {
-            self.slab[pos as usize]
+            self.slab.get(pos as usize).copied().flatten()
         } else {
             None
         }

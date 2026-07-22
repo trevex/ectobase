@@ -78,6 +78,10 @@ impl Pkt for MbufPkt<'_> {
 
     #[inline]
     fn grow_head(&mut self, delta: usize) -> bool {
+        debug_assert!(
+            delta <= u16::MAX as usize,
+            "single-segment delta exceeds u16"
+        );
         // SAFETY: DPDK bounds-checks available headroom and returns NULL on overflow.
         // We propagate NULL → false without dereferencing it.
         !unsafe { dpdk_sys::nfkit_pktmbuf_prepend(self.raw, delta as u16) }.is_null()
@@ -85,6 +89,10 @@ impl Pkt for MbufPkt<'_> {
 
     #[inline]
     fn shrink_head(&mut self, delta: usize) -> bool {
+        debug_assert!(
+            delta <= u16::MAX as usize,
+            "single-segment delta exceeds u16"
+        );
         // SAFETY: DPDK returns NULL if delta > data_len. We propagate NULL → false.
         !unsafe { dpdk_sys::nfkit_pktmbuf_adj(self.raw, delta as u16) }.is_null()
     }
@@ -95,6 +103,10 @@ impl Pkt for MbufPkt<'_> {
         match new_len.cmp(&cur) {
             core::cmp::Ordering::Greater => {
                 let delta = new_len - cur;
+                debug_assert!(
+                    delta <= u16::MAX as usize,
+                    "single-segment delta exceeds u16"
+                );
                 // SAFETY: append returns a pointer to `delta` new bytes within the (single-segment)
                 // dataroom, or NULL if there's no tailroom. Zero-fill them to match VecPkt::set_tail
                 // (buf.resize(_, 0)) — mbuf tailroom holds stale mempool bytes.
@@ -107,6 +119,10 @@ impl Pkt for MbufPkt<'_> {
             }
             core::cmp::Ordering::Less => {
                 let delta = cur - new_len;
+                debug_assert!(
+                    delta <= u16::MAX as usize,
+                    "single-segment delta exceeds u16"
+                );
                 // SAFETY: trim removes `delta` bytes off the tail; returns 0 on success.
                 unsafe { dpdk_sys::nfkit_pktmbuf_trim(self.raw, delta as u16) == 0 }
             }

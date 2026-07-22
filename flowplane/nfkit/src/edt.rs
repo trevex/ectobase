@@ -69,9 +69,10 @@ impl EdtPacer {
     pub fn next_departure(&self) -> Option<u64> {
         self.heap.peek().map(|s| s.edt)
     }
-    /// Remove and return every mbuf whose `edt <= now`, in (edt, seq) order.
-    pub fn drain_due(&mut self, now: u64) -> Vec<Mbuf> {
-        let mut out = Vec::new();
+    /// Append every mbuf whose `edt <= now` into `out`, in (edt, seq) order. Zero-alloc variant for
+    /// the hot pacing loop: the caller reuses one buffer across polls (nothing is cleared — mbufs
+    /// are appended after any existing contents).
+    pub fn drain_due_into(&mut self, now: u64, out: &mut Vec<Mbuf>) {
         while let Some(top) = self.heap.peek() {
             if top.edt <= now {
                 out.push(self.heap.pop().unwrap().mbuf);
@@ -79,6 +80,13 @@ impl EdtPacer {
                 break;
             }
         }
+    }
+
+    /// Remove and return every mbuf whose `edt <= now`, in (edt, seq) order. Convenience wrapper
+    /// over [`drain_due_into`](Self::drain_due_into) that allocates a fresh `Vec`.
+    pub fn drain_due(&mut self, now: u64) -> Vec<Mbuf> {
+        let mut out = Vec::new();
+        self.drain_due_into(now, &mut out);
         out
     }
 }

@@ -1,7 +1,7 @@
 //! Shared-nothing per-lcore state: N worker lcores each run `process_uplink` over their OWN DpdkMaps
 //! on an in-process batch of distinct flows. Asserts (a) each worker's decapped output is byte-
 //! identical to the sim, and (b) conntrack isolation — a worker's map holds ITS flows, none of the
-//! others'. Runs --no-huge, -l 0-2 (2 workers). Run with --test-threads=1.
+//! others'. Runs --no-huge, -l 0-4 (4 workers). Run with --test-threads=1.
 //!
 //! The base decap → local-deliver path of `process_uplink` (non-LB) DOES create conntrack
 //! (datapath.rs step 3: `ct_create_default` on miss), keyed via `ct_key` on the inner IPv4 5-tuple
@@ -16,7 +16,7 @@ use flowplane_core::datapath::{process_uplink, UplinkIn};
 use flowplane_core::maps::Maps;
 use flowplane_core::pkt::{Action, Pkt};
 use flowplane_sim::{MemMaps, SimNode, VecPkt};
-use nfkit::{DpdkMaps, Eal, LcoreRuntime, MbufPkt, Mempool};
+use nfkit::{worker_lcore_count, DpdkMaps, Eal, LcoreRuntime, MbufPkt, Mempool};
 use std::sync::Mutex;
 
 // ── addressing (copied verbatim from parity_uplink.rs) ───────────────────────
@@ -28,7 +28,7 @@ const DST_PORT: u16 = 443;
 const EDGE_UL: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xaa];
 const HOST_UL: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xbb];
 
-const N_WORKERS: u16 = 2;
+const N_WORKERS: u16 = 4;
 const FLOWS_PER_WORKER: u16 = 4;
 
 /// A full inner Ethernet frame `[Eth][IPv4][TCP]` src→dst on `dport`, TCP sport = 40000.
@@ -157,7 +157,7 @@ fn multilcore_per_lcore_state() {
     let _eal = Eal::init([
         "nfkit-test",
         "-l",
-        "0-2",
+        "0-4",
         "--no-huge",
         "-m",
         "512",
@@ -166,6 +166,14 @@ fn multilcore_per_lcore_state() {
         "nfkit_mlc",
     ])
     .expect("EAL init");
+    // N_WORKERS=4 needs ≥4 worker lcores (main + 4 = -l 0-4). Skip cleanly if the host is too small.
+    if worker_lcore_count() < N_WORKERS {
+        eprintln!(
+            "SKIP multilcore_per_lcore_state: need {N_WORKERS} worker lcores, have {}",
+            worker_lcore_count()
+        );
+        return;
+    }
     // rte_pktmbuf_alloc is MT-safe → one shared pool, workers alloc concurrently.
     let pool = Mempool::new("mlc_pool", 8191, 250, 0).expect("pool");
     let results: Vec<Mutex<WorkerOut>> = (0..N_WORKERS)
@@ -212,14 +220,16 @@ fn multilcore_per_lcore_state() {
                 out.outputs.push(bytes);
             }
         }
-        // Isolation snapshot: our flows present, the OTHER worker's flows absent.
-        let other = (q + 1) % N_WORKERS;
+        // Isolation snapshot: our flows present, EVERY other worker's flows absent (loop over ALL
+        // `other != q`, not just the neighbour — the shared-nothing proof must hold pairwise).
         for f in 0..FLOWS_PER_WORKER {
             if ct_present(&maps, q, f) {
                 out.own_ct_hits += 1;
             }
-            if ct_present(&maps, other, f) {
-                out.foreign_ct_hits += 1;
+            for other in 0..N_WORKERS {
+                if other != q && ct_present(&maps, other, f) {
+                    out.foreign_ct_hits += 1;
+                }
             }
         }
         *results[q as usize].lock().unwrap() = out;

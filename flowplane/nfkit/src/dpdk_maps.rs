@@ -8,6 +8,7 @@ use flowplane_common::{
     MaglevKey, MeterState, NatKey, NatValue, RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
+use std::cell::Cell;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Monotonic counter yielding a unique id per `DpdkMaps` instance so each instance's `rte_hash`
@@ -73,8 +74,10 @@ const _: () = assert!(std::mem::size_of::<NatKey>() == 8);
 
 // ── capacity constants ───────────────────────────────────────────────────────
 
-const CAP_CT: u32 = 65_536; // conntrack: high cardinality
-const CAP_STD: u32 = 4_096; // all other maps
+/// Default conntrack capacity: high cardinality (one entry per live flow).
+const CAP_CT: u32 = 65_536;
+/// Default capacity for all non-conntrack maps.
+const CAP_STD: u32 = 4_096;
 
 // ── DpdkMaps ─────────────────────────────────────────────────────────────────
 
@@ -98,43 +101,84 @@ pub struct DpdkMaps {
     route6: DpdkHash<Route6Key, RouteValue>,
     dhcp_meta: DpdkHash<U32Key, DhcpMeta>,
     meter: DpdkHash<U32Key, MeterState>,
+
+    // ── observability: flow-table insert drops on saturation ──────────────────
+    // `Maps::conntrack_insert`/`meter_update` return `()` (shared trait — cannot change), so a
+    // full flow table would otherwise drop silently. Count the drops here (nfkit-local) so callers
+    // can observe saturation. `Cell` (not atomic): `DpdkMaps` is per-lcore, shared-nothing, and
+    // mutated behind `&mut self` on the datapath — no cross-thread access.
+    dropped_ct_inserts: Cell<u64>,
+    dropped_nat_inserts: Cell<u64>,
 }
 
 impl DpdkMaps {
-    /// Create all backing hashes on `socket_id`.
+    /// Create all backing hashes on `socket_id` with the default capacities
+    /// ([`CAP_CT`] for conntrack, [`CAP_STD`] for every other map).
     ///
     /// # Errors
     /// Returns `HashError` if any `rte_hash_create` call fails (name collision, OOM).
     pub fn new(socket_id: i32) -> Result<Self, HashError> {
+        Self::with_capacities(socket_id, CAP_CT, CAP_STD)
+    }
+
+    /// Create all backing hashes on `socket_id` with explicit capacities: `ct_cap` sizes the
+    /// conntrack (flow) table, `std_cap` sizes every other map (underlay/fw/lb/maglev/nat/
+    /// nat_ips/routes/dhcp/meter). [`new`] is `with_capacities(socket_id, CAP_CT, CAP_STD)`.
+    ///
+    /// Useful for tuning flow-table capacity per deployment, and for tests that need a small table
+    /// to exercise the saturation / restore-overflow paths deterministically.
+    ///
+    /// # Errors
+    /// Returns `HashError` if any `rte_hash_create` call fails (name collision, OOM).
+    pub fn with_capacities(socket_id: i32, ct_cap: u32, std_cap: u32) -> Result<Self, HashError> {
         let n = NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed);
         Ok(Self {
             local: None,
             dhcp_config: None,
-            conntrack: DpdkHash::new(&format!("dm_ct_{n}"), CAP_CT, socket_id)?,
-            underlay: DpdkHash::new(&format!("dm_ul_{n}"), CAP_STD, socket_id)?,
-            fw_meta: DpdkHash::new(&format!("dm_fm_{n}"), CAP_STD, socket_id)?,
-            fw_rules: DpdkHash::new(&format!("dm_fr_{n}"), CAP_STD, socket_id)?,
-            lb: DpdkHash::new(&format!("dm_lb_{n}"), CAP_STD, socket_id)?,
-            maglev: DpdkHash::new(&format!("dm_mg_{n}"), CAP_STD, socket_id)?,
-            nat: DpdkHash::new(&format!("dm_nat_{n}"), CAP_STD, socket_id)?,
-            nat_ips: DpdkHash::new(&format!("dm_ni_{n}"), CAP_STD, socket_id)?,
-            route4: DpdkHash::new(&format!("dm_r4_{n}"), CAP_STD, socket_id)?,
-            route6: DpdkHash::new(&format!("dm_r6_{n}"), CAP_STD, socket_id)?,
-            dhcp_meta: DpdkHash::new(&format!("dm_dm_{n}"), CAP_STD, socket_id)?,
-            meter: DpdkHash::new(&format!("dm_mt_{n}"), CAP_STD, socket_id)?,
+            conntrack: DpdkHash::new(&format!("dm_ct_{n}"), ct_cap, socket_id)?,
+            underlay: DpdkHash::new(&format!("dm_ul_{n}"), std_cap, socket_id)?,
+            fw_meta: DpdkHash::new(&format!("dm_fm_{n}"), std_cap, socket_id)?,
+            fw_rules: DpdkHash::new(&format!("dm_fr_{n}"), std_cap, socket_id)?,
+            lb: DpdkHash::new(&format!("dm_lb_{n}"), std_cap, socket_id)?,
+            maglev: DpdkHash::new(&format!("dm_mg_{n}"), std_cap, socket_id)?,
+            nat: DpdkHash::new(&format!("dm_nat_{n}"), std_cap, socket_id)?,
+            nat_ips: DpdkHash::new(&format!("dm_ni_{n}"), std_cap, socket_id)?,
+            route4: DpdkHash::new(&format!("dm_r4_{n}"), std_cap, socket_id)?,
+            route6: DpdkHash::new(&format!("dm_r6_{n}"), std_cap, socket_id)?,
+            dhcp_meta: DpdkHash::new(&format!("dm_dm_{n}"), std_cap, socket_id)?,
+            meter: DpdkHash::new(&format!("dm_mt_{n}"), std_cap, socket_id)?,
+            dropped_ct_inserts: Cell::new(0),
+            dropped_nat_inserts: Cell::new(0),
         })
+    }
+
+    /// Number of conntrack inserts dropped because the conntrack table was full. `conntrack_insert`
+    /// (a `Maps` trait method) returns `()`, so this counter is the only way to observe conntrack
+    /// saturation. Monotonic per `DpdkMaps` instance.
+    #[must_use]
+    pub fn dropped_conntrack_inserts(&self) -> u64 {
+        self.dropped_ct_inserts.get()
+    }
+
+    /// Number of NAT-config inserts (`add_nat`/`add_nat_ip`) dropped because a NAT table was full.
+    /// A full NAT table is a real misconfiguration; counting it makes the drop observable.
+    #[must_use]
+    pub fn dropped_nat_inserts(&self) -> u64 {
+        self.dropped_nat_inserts.get()
     }
 
     // ── test-only population setters (mirror MemMaps public setters) ──────────
 
     /// Add an exact-host (/32) IPv4 route — mirrors `MemMaps::add_route4`.
     pub fn add_route4(&mut self, vni: u32, ipv4: [u8; 4], value: RouteValue) {
-        self.route4.insert(&Route4Key { vni, ipv4 }, value);
+        let ok = self.route4.insert(&Route4Key { vni, ipv4 }, value);
+        debug_assert!(ok, "route4 table full at populate time");
     }
 
     /// Add an exact-host (/128) IPv6 route — mirrors `MemMaps::add_route6`.
     pub fn add_route6(&mut self, vni: u32, ipv6: [u8; 16], value: RouteValue) {
-        self.route6.insert(&Route6Key { vni, ipv6 }, value);
+        let ok = self.route6.insert(&Route6Key { vni, ipv6 }, value);
+        debug_assert!(ok, "route6 table full at populate time");
     }
 
     /// Set the singleton `Local` — mirrors `MemMaps.local = Some(v)`.
@@ -144,37 +188,49 @@ impl DpdkMaps {
 
     /// Insert an underlay entry — mirrors `MemMaps.underlay.insert`.
     pub fn add_underlay(&mut self, addr: [u8; 16], value: UnderlayValue) {
-        self.underlay.insert(&Ipv6Key { addr }, value);
+        let ok = self.underlay.insert(&Ipv6Key { addr }, value);
+        debug_assert!(ok, "underlay table full at populate time");
     }
 
     /// Insert a firewall meta entry — mirrors `MemMaps.fw_meta.insert`.
     pub fn add_fw_meta(&mut self, ifindex: u32, value: FwMeta) {
-        self.fw_meta.insert(&U32Key { v: ifindex }, value);
+        let ok = self.fw_meta.insert(&U32Key { v: ifindex }, value);
+        debug_assert!(ok, "fw_meta table full at populate time");
     }
 
     /// Insert a firewall rule — mirrors `MemMaps.fw_rules.insert((ifindex, idx), rule)`.
     pub fn add_fw_rule(&mut self, ifindex: u32, idx: u32, rule: FwRule) {
-        self.fw_rules.insert(&FwRuleKey { ifindex, idx }, rule);
+        let ok = self.fw_rules.insert(&FwRuleKey { ifindex, idx }, rule);
+        debug_assert!(ok, "fw_rules table full at populate time");
     }
 
     /// Insert an LB entry.
     pub fn add_lb(&mut self, key: LbKey, value: LbValue) {
-        self.lb.insert(&key, value);
+        let ok = self.lb.insert(&key, value);
+        debug_assert!(ok, "lb table full at populate time");
     }
 
     /// Insert a Maglev slot.
     pub fn add_maglev(&mut self, key: MaglevKey, backend: [u8; 16]) {
-        self.maglev.insert(&key, backend);
+        let ok = self.maglev.insert(&key, backend);
+        debug_assert!(ok, "maglev table full at populate time");
     }
 
-    /// Insert a NAT config entry.
+    /// Insert a NAT config entry. A full NAT table is a real problem (not a populate-time
+    /// impossibility like the config maps), so a dropped insert is counted, not asserted.
     pub fn add_nat(&mut self, key: NatKey, value: NatValue) {
-        self.nat.insert(&key, value);
+        if !self.nat.insert(&key, value) {
+            self.dropped_nat_inserts
+                .set(self.dropped_nat_inserts.get() + 1);
+        }
     }
 
     /// Register `(vni, ip)` as a public NAT IP (mirrors `MemMaps.nat_ips.insert`).
     pub fn add_nat_ip(&mut self, vni: u32, ip: [u8; 4]) {
-        self.nat_ips.insert(&NatIpKey { vni, ipv4: ip }, 1);
+        if !self.nat_ips.insert(&NatIpKey { vni, ipv4: ip }, 1) {
+            self.dropped_nat_inserts
+                .set(self.dropped_nat_inserts.get() + 1);
+        }
     }
 
     /// Set the server-wide DHCP config singleton.
@@ -184,7 +240,8 @@ impl DpdkMaps {
 
     /// Insert a per-interface DHCP meta entry.
     pub fn add_dhcp_meta(&mut self, ifindex: u32, value: DhcpMeta) {
-        self.dhcp_meta.insert(&U32Key { v: ifindex }, value);
+        let ok = self.dhcp_meta.insert(&U32Key { v: ifindex }, value);
+        debug_assert!(ok, "dhcp_meta table full at populate time");
     }
 
     // ── flow-table iteration (snapshot export) ────────────────────────────────
@@ -235,7 +292,12 @@ impl Maps for DpdkMaps {
     }
 
     fn conntrack_insert(&mut self, key: CtKey, entry: CtEntry) {
-        self.conntrack.insert(&key, entry);
+        // Trait method returns `()`; a full conntrack table drops here. Count it so saturation is
+        // observable via `dropped_conntrack_inserts()`.
+        if !self.conntrack.insert(&key, entry) {
+            self.dropped_ct_inserts
+                .set(self.dropped_ct_inserts.get() + 1);
+        }
     }
 
     fn lb_get(&self, key: &LbKey) -> Option<LbValue> {
@@ -278,6 +340,10 @@ impl Maps for DpdkMaps {
     }
 
     fn meter_update(&mut self, ifindex: u32, state: MeterState) {
-        self.meter.insert(&U32Key { v: ifindex }, state);
+        // Meter state is keyed by a bounded ifindex set (one entry per interface); it should never
+        // fill. A dropped update just means the meter's rate state isn't advanced this call — not a
+        // correctness hazard — so ignore the bool (debug_assert to surface the impossible case).
+        let ok = self.meter.insert(&U32Key { v: ifindex }, state);
+        debug_assert!(ok, "meter table full (bounded by interface count)");
     }
 }

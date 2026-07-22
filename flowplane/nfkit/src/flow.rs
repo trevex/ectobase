@@ -240,8 +240,10 @@ pub struct RawDecap {
     conf: Box<ffi::rte_flow_action_raw_decap>,
     actions: [ffi::rte_flow_action; 2],
     // The conf's `data` pointer (may be null for a pure length-strip) points into this buffer.
+    // Boxed slice = address-stable storage held purely for liveness (underscore = read only through
+    // the raw `conf.data` pointer, which the compiler can't see).
     #[allow(dead_code)]
-    _data: Vec<u8>,
+    _data: Box<[u8]>,
 }
 
 impl RawDecap {
@@ -263,7 +265,7 @@ impl RawDecap {
         Self {
             conf,
             actions,
-            _data: Vec::new(),
+            _data: Box::new([]),
         }
     }
 
@@ -281,9 +283,10 @@ pub struct RawEncap {
     #[allow(dead_code)]
     conf: Box<ffi::rte_flow_action_raw_encap>,
     actions: [ffi::rte_flow_action; 2],
-    // `conf.data` points into this owned buffer; keep it alive + at a stable address.
+    // `conf.data` points into this owned buffer; keep it alive + at a stable address (underscore =
+    // held only for liveness, read through the raw `conf.data` pointer the compiler can't see).
     #[allow(dead_code)]
-    data: Box<[u8]>,
+    _data: Box<[u8]>,
 }
 
 impl RawEncap {
@@ -309,7 +312,7 @@ impl RawEncap {
         Self {
             conf,
             actions,
-            data: buf,
+            _data: buf,
         }
     }
 
