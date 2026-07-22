@@ -147,12 +147,32 @@ The readiness contract is identical to eBPF: the gRPC listener opens only after 
 
 ## 5. Open items (resolve in the plan)
 
-- **(a) Conntrack flush on NAT change is per-lcore now.** The eBPF `create_nat`/`delete_nat` flush
-  the (shared) conntrack map. With per-lcore conntrack, the tokio writer can't flush all lcores
-  directly. Design: a **shared "NAT generation" counter** (in `SharedConfigMaps`) bumped on NAT
-  change; each lcore stamps conntrack entries with the generation it saw and treats
-  older-generation entries as stale on lookup (lazy invalidation), avoiding cross-lcore writes.
-  `MapWriter::conntrack_flush` becomes "bump generation." Confirm this matches eBPF semantics.
+- **(a) Conntrack flush on NAT change is per-lcore now — RESOLVED (research-grounded).** The eBPF
+  `create_nat`/`delete_nat` flush the (shared) conntrack map. With per-lcore conntrack the tokio
+  writer must not reach into lcore-private tables. Chosen mechanism: **config-generation tag + lazy
+  re-validation at lookup**, leveraging the shared RCU config the lcores already read every packet.
+  - A process-global `AtomicU64 config_generation`; the single tokio writer bumps it (Release) as
+    part of the same RCU publish it does to `SharedConfigMaps` on any NAT/LB/route change.
+    `MapWriter::conntrack_flush(scope)` becomes "bump `config_generation`" (no cross-lcore writes).
+  - Each conntrack entry is stamped at creation with the generation it was resolved under (and the
+    rule/binding key it depends on).
+  - On the per-lcore datapath lookup, **before applying the cached decision**, if
+    `entry.gen != config_generation` the lcore re-validates the cached binding against
+    `SharedConfigMaps`: still valid → refresh the entry's gen (fast path, no rebind, that lcore's
+    own local write); binding gone/changed → drop or re-resolve. Because the check is
+    before-forward, the next packet on a stale flow never emits under a withdrawn binding — **zero
+    stale emission** for the security-sensitive NAT-source-withdrawal case, with no cross-lcore
+    writes and one-packet-bounded table lingering.
+  - Requires the decision be re-derivable from `SharedConfigMaps` (it is — that is what the config
+    tables are for) and the entry to carry its dependency key.
+  - **Why not explicit deletion?** dpservice sweeps its single shared flow table on config delete
+    (`dp_flow.c:440-513`); VPP nat44-ed walks every/owning per-worker session pool
+    (`nat44_ed.c:573-593`, `:1226`) — but VPP can only do that safely under its global API barrier
+    that stops all workers, which our tokio-writer model has no equivalent of. The generation-tag
+    path is the idiom that fits shared-nothing lcores + a shared RCU config (the Cilium
+    re-validation model). A per-lcore invalidate-ring drained at the loop top (VPP-style, adapted)
+    stays as a **future option only if eager table reclamation is ever needed** — not for
+    correctness.
 - **(b) Non-EAL tokio writer on an LF+RCU rte_hash.** Research flagged that the writer thread is a
   tokio thread, not an EAL lcore. QSBR tracks *readers*, so a single external writer is likely fine,
   but this needs the anchor test in §4 before we rely on it. Fallback if it isn't: keep the tokio
