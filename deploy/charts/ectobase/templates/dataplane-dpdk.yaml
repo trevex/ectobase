@@ -1,0 +1,121 @@
+{{- if eq .Values.dataplane "dpdk" }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: flowplane-dpdk
+  namespace: ectobase-system
+  labels:
+    app.kubernetes.io/name: flowplane
+    app.kubernetes.io/part-of: netplane
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flowplane
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: flowplane
+        app.kubernetes.io/part-of: netplane
+    spec:
+      # Same host-integration posture as the eBPF datapath: it programs the node datapath
+      # and serves the DataplaneNode gRPC on 127.0.0.1:1337, so the agent (dataplane-agnostic)
+      # dials it identically.
+      hostNetwork: true
+      hostPID: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: flowplane-dpdk
+          image: {{ .Values.images.flowplaneDpdk }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          # Discover the fabric router MAC on the uplink (same as the eBPF wrapper); the AF_XDP
+          # PMD binds the same kernel netdev, so kernel neighbour discovery still works on clab.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              UPLINK="{{ .Values.uplink }}"
+              for i in $(seq 1 30); do
+                GW_MAC=$(ip -6 neigh show dev "$UPLINK" | grep -m1 router | grep -o 'lladdr [0-9a-f:]*' | cut -d' ' -f2 || true)
+                [ -n "$GW_MAC" ] && break
+                echo "waiting for fabric router neighbour on $UPLINK ($i)"; sleep 1
+              done
+              if [ -z "$GW_MAC" ]; then echo "FATAL: no fabric router neighbour on $UPLINK" >&2; exit 1; fi
+              echo "flowplane-dpdk wrapper: uplink=$UPLINK gateway_mac=$GW_MAC"
+              exec flowplane-dpdk serve \
+                --addr 127.0.0.1:1337 \
+                --uplink "$UPLINK" \
+                --gateway 169.254.0.1 \
+                --gateway-mac "$GW_MAC" \
+                --lcores "{{ .Values.dpdk.lcores }}" \
+{{- if eq .Values.env "clab" }}
+                --backend af-xdp \
+                --no-huge
+{{- else }}
+                --backend nic
+{{- end }}
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "ss -ltn | grep -q '127.0.0.1:1337'"]
+            initialDelaySeconds: 2
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 40
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "ss -ltn | grep -q '127.0.0.1:1337'"]
+            initialDelaySeconds: 90
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          securityContext:
+            privileged: true
+{{- if .Values.dpdk.hugepages }}
+          resources:
+            limits:
+              hugepages-{{ .Values.dpdk.hugepageSize }}: {{ .Values.dpdk.hugepageLimit }}
+              memory: {{ .Values.dpdk.hugepageLimit }}
+{{- range .Values.dpdk.vfioDevices }}
+              {{ .name }}: {{ .count }}
+{{- end }}
+{{- end }}
+          volumeMounts:
+            - name: sys
+              mountPath: /sys
+              readOnly: true
+            - name: lib-modules
+              mountPath: /lib/modules
+              readOnly: true
+            - name: netns
+              mountPath: /var/run/netns
+              mountPropagation: Bidirectional
+{{- if eq .Values.env "hw" }}
+            - name: vfio
+              mountPath: /dev/vfio
+            - name: hugepages
+              mountPath: /dev/hugepages
+{{- end }}
+      volumes:
+        - name: sys
+          hostPath:
+            path: /sys
+            type: Directory
+        - name: lib-modules
+          hostPath:
+            path: /lib/modules
+            type: Directory
+        - name: netns
+          hostPath:
+            path: /var/run/netns
+            type: DirectoryOrCreate
+{{- if eq .Values.env "hw" }}
+        - name: vfio
+          hostPath:
+            path: /dev/vfio
+            type: Directory
+        - name: hugepages
+          emptyDir:
+            medium: HugePages
+{{- end }}
+{{- end }}
