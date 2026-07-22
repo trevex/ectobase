@@ -10,18 +10,10 @@
 //! ICMP-echo reply, and inner `dnat_ingress` — are NOT modeled (out of scope for this LB-path
 //! harness). For LB packets those branches are skipped anyway.
 
-use flowplane_common::{
-    Local, PortMeta, UnderlayValue, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS,
-};
-use flowplane_core::conntrack::{ct_apply, ct_create_default, ct_key};
-use flowplane_core::egress::{deliver, route4, Deliver, IPPROTO_IPIP};
-use flowplane_core::encap::{reforward, write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
-use flowplane_core::firewall::fw_eval_dir;
-use flowplane_core::lb::{lb_select_forward, lb_select_forward_v6};
+use flowplane_common::{Local, PortMeta, UnderlayValue};
+use flowplane_core::encap::{write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
 use flowplane_core::maps::Maps;
-use flowplane_core::nat::snat_egress;
 use flowplane_core::pkt::{Action, Pkt};
-use flowplane_core::uplink::{decap_and_rewrite, GW_MAC};
 
 use crate::maps::MemMaps;
 use crate::pkt::VecPkt;
@@ -112,69 +104,15 @@ impl SimNode {
         outer_dst: [u8; 16],
         local: &Local,
     ) -> SimOut {
-        let inner_off = ETH_LEN + IPV6_LEN;
         let mut pkt = VecPkt::from_bytes(encapped);
-
-        // 1. LB dispatch (mirror ingress.rs:135-157).
-        let lb_ul = lb_select_forward(&pkt, &self.maps, inner_off, vni);
-        let (tap, guest_mac, is_lb) = match lb_ul {
-            Some(bul) => match self.maps.underlay_get(&bul) {
-                Some(bu) => (bu.tap_ifindex, bu.guest_mac, true), // LB backend local
-                None => {
-                    // Remote backend: reforward the encapped frame, no decap.
-                    let action = reforward(&mut pkt, local, &outer_dst, &bul);
-                    return SimOut {
-                        action,
-                        pkt: pkt.into_bytes(),
-                    };
-                }
-            },
-            None => (u.tap_ifindex, u.guest_mac, false), // non-LB base
+        let in_ = flowplane_core::datapath::UplinkIn {
+            vni,
+            u,
+            outer_dst,
+            local,
+            now: self.now,
         };
-
-        // 2. Ingress firewall on NEW inbound flows against the deliver tap.
-        if let Some(key) = ct_key(&pkt, inner_off, vni) {
-            if self.maps.conntrack_get(&key).is_none()
-                && fw_eval_dir(&pkt, &self.maps, inner_off, tap, FW_DIR_INGRESS) == FW_ACTION_DROP
-            {
-                return SimOut {
-                    action: Action::Drop,
-                    pkt: pkt.into_bytes(),
-                };
-            }
-        }
-
-        // 3. Conntrack: create on miss, but ONLY for non-LB (LB is DSR — no ct, ingress.rs:266).
-        if !is_lb {
-            if let Some(key) = ct_key(&pkt, inner_off, vni) {
-                if self.maps.conntrack_get(&key).is_none() {
-                    ct_create_default(&pkt, &mut self.maps, inner_off, vni, 0);
-                }
-            }
-        }
-
-        // 4. Decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest.
-        let action = match decap_and_rewrite(&mut pkt, tap, guest_mac) {
-            Ok(a) => a,
-            Err(_) => Action::Drop,
-        };
-        if action == Action::Drop {
-            return SimOut {
-                action,
-                pkt: pkt.into_bytes(),
-            };
-        }
-
-        // 5. Ingress-lane policing (keyed by dest tap) — mirrors ingress.rs uplink_rx. Post-decap inner
-        // length is the frame delivered to the guest. No cap => pass.
-        let in_len = pkt.len() as u64;
-        if !flowplane_core::meter::ingress_pass(&mut self.maps, tap, in_len, self.now) {
-            return SimOut {
-                action: Action::Drop,
-                pkt: pkt.into_bytes(),
-            };
-        }
-
+        let action = flowplane_core::datapath::process_uplink(&mut pkt, &mut self.maps, &in_);
         SimOut {
             action,
             pkt: pkt.into_bytes(),
@@ -205,31 +143,16 @@ impl SimNode {
         u: UnderlayValue,
         guest_mac: [u8; 6],
     ) -> SimOut {
-        use flowplane_common::CT_REWRITE_DST;
-        use flowplane_core::conntrack::ct_apply;
-
-        let inner_off = ETH_LEN + IPV6_LEN;
         let mut pkt = VecPkt::from_bytes(encapped);
-
-        // 1. Build the inner 5-tuple key; NAT returns are demuxed peer-independently.
-        if let Some(mut key) = ct_key(&pkt, inner_off, vni) {
-            if self.maps.nat_ips.contains(&(vni, key.dst_ip)) {
-                key.src_ip = [0; 4];
-                key.src_port = 0;
-            }
-            // 2. Reverse-DNAT apply when the matched entry carries CT_REWRITE_DST.
-            if let Some(e) = self.maps.conntrack_get(&key) {
-                if e.flags & CT_REWRITE_DST != 0 {
-                    ct_apply(&mut pkt, inner_off, &e);
-                }
-            }
-        }
-
-        // 3. Decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest.
-        let action = match decap_and_rewrite(&mut pkt, u.tap_ifindex, guest_mac) {
-            Ok(a) => a,
-            Err(_) => Action::Drop,
-        };
+        let action = flowplane_core::datapath::process_uplink_nat_return(
+            &mut pkt,
+            &mut self.maps,
+            &flowplane_core::datapath::UplinkNatReturnIn {
+                vni,
+                tap_ifindex: u.tap_ifindex,
+                guest_mac,
+            },
+        );
         SimOut {
             action,
             pkt: pkt.into_bytes(),
@@ -288,140 +211,20 @@ impl SimNode {
     /// the emitted bytes are unaffected; the interleaved un-ported steps (ct_apply/ct_touch, vip) are
     /// map/refresh-only on this fixture and do not change the emitted bytes.
     pub fn guest_tx(&mut self, frame: &[u8], meta: &PortMeta) -> SimOut {
-        // Reset the stamp so a Local/Pass verdict leaves last_tstamp = None (unshaped), matching
-        // the eBPF `tc_guest_tx` which only calls `edt_stamp` on the Encap arm.
-        self.last_tstamp = None;
-        let ip_off = ETH_LEN;
         let mut pkt = VecPkt::from_bytes(frame);
-
-        // 1. Conntrack miss → source egress firewall (deny-by-default). Fresh flow only.
-        let mut was_new = false;
-        if let Some(key) = ct_key(&pkt, ip_off, meta.vni) {
-            if self.maps.conntrack_get(&key).is_none() {
-                was_new = true;
-                // Egress firewall keyed on the SOURCE interface. The sim keys FW_META/FW_RULES on a
-                // synthetic ifindex == meta.vni's port; the fixture installs it under `src_ifindex`.
-                if fw_eval_dir(&pkt, &self.maps, ip_off, self.src_ifindex, FW_DIR_EGRESS)
-                    == FW_ACTION_DROP
-                {
-                    return SimOut {
-                        action: Action::Drop,
-                        pkt: pkt.into_bytes(),
-                    };
-                }
-            }
-        }
-
-        // 2. VIP snat/dnat: not modelled (no VIP maps → no-op in the eBPF path too).
-
-        // 3. Route lookup on the inner IPv4 dst.
-        let dst = match pkt.read_array::<4>(ip_off + 16) {
-            Some(d) => d,
-            None => {
-                return SimOut {
-                    action: Action::Pass,
-                    pkt: pkt.into_bytes(),
-                }
-            }
-        };
-        let route = match route4(&self.maps, meta.vni, &dst) {
-            Some(r) => r,
-            None => {
-                return SimOut {
-                    action: Action::Pass,
-                    pkt: pkt.into_bytes(),
-                }
-            }
-        };
-
-        // 4. Network NAT SNAT when the route is external.
-        let is_ext = route.is_external != 0;
-        snat_egress(&mut pkt, &mut self.maps, ip_off, meta.vni, is_ext, 0);
-
-        // 5. Track every flow (create-on-miss).
-        if let Some(key) = ct_key(&pkt, ip_off, meta.vni) {
-            if self.maps.conntrack_get(&key).is_none() {
-                ct_create_default(&pkt, &mut self.maps, ip_off, meta.vni, 0);
-            }
-        }
-
-        // 6. Egress metering — mirrors the eBPF split in egress.rs + tc.rs:
-        //    a) Public-lane policing (drop-on-exhaust, external only) — mirrors egress.rs `public_pass`.
-        //    b) EDT egress shaping — mirrors tc.rs `edt_stamp`, called ONLY in the Encap arm (step 7)
-        //       AFTER `grow_head(IPV6_LEN)` / `write_outer_v6`, using the POST-encap `pkt.len()`.
-        //       Same-node LOCAL delivery is unshaped (eBPF `tc_guest_tx` only stamps on the Encap
-        //       arm, after `adjust_room`). `last_tstamp` stays `None` for Local / Pass.
-        let frame_len = pkt.len() as u64;
-        // a) Public-lane policing (external egress only) — mirrors egress.rs.
-        if !flowplane_core::meter::public_pass(
+        let out = flowplane_core::datapath::process_guest_tx(
+            &mut pkt,
             &mut self.maps,
-            self.src_ifindex,
-            frame_len,
-            is_ext,
-            self.now,
-        ) {
-            return SimOut {
-                action: Action::Drop,
-                pkt: pkt.into_bytes(),
-            };
-        }
-
-        // 7. Deliver decision. Flow label from the (post-NAT) inner 5-tuple — same core helper the
-        // eBPF forward_decision_v4 runs, so the encapped bytes stay identical.
-        let flow_label = flowplane_core::parse::inner_flow_label(&pkt, ip_off, false);
-        match deliver(&self.maps, &route, meta, IPPROTO_IPIP, flow_label) {
-            Deliver::Local {
-                tap_ifindex,
-                guest_mac,
-            } => {
-                // Destination ingress firewall on NEW flows (same-node delivery).
-                if was_new
-                    && fw_eval_dir(&pkt, &self.maps, ip_off, tap_ifindex, FW_DIR_INGRESS)
-                        == FW_ACTION_DROP
-                {
-                    return SimOut {
-                        action: Action::Drop,
-                        pkt: pkt.into_bytes(),
-                    };
-                }
-                // Rewrite the inner Ethernet for the local guest: dst=guest MAC, src=GW_MAC,
-                // ethertype stays IPv4. Same-node delivery is unshaped — last_tstamp left as-is.
-                pkt.write_bytes(0, &guest_mac);
-                pkt.write_bytes(6, &GW_MAC);
-                SimOut {
-                    action: Action::Redirect(tap_ifindex),
-                    pkt: pkt.into_bytes(),
-                }
-            }
-            Deliver::Encap(e) => {
-                // Prepend 40 bytes (bpf_skb_adjust_room(+IPV6_LEN, MAC)) then write the outer
-                // Eth+IPv6, consuming the new 40 bytes + the 14-byte inner Ethernet, leaving the
-                // bare inner IPv4 — mirrors tc.rs `adjust_room` + `write_outer_v6`.
-                if !pkt.grow_head(IPV6_LEN) || !write_outer_v6(&mut pkt, &e) {
-                    return SimOut {
-                        action: Action::Drop,
-                        pkt: pkt.into_bytes(),
-                    };
-                }
-                // b) EDT egress shaping: stamp AFTER the frame has been grown to its wire length,
-                // using pkt.len() which is now the full post-encap length (inner + 40-byte outer
-                // IPv6 header) — mirrors tc.rs `ctx.len()` after `adjust_room`. Wire bytes are
-                // unchanged (FQ pacing is kernel-side); last_tstamp lets tests assert pacing.
-                self.last_tstamp = flowplane_core::meter::edt_egress(
-                    &mut self.maps,
-                    self.src_ifindex,
-                    pkt.len() as u64,
-                    self.now,
-                );
-                SimOut {
-                    action: Action::Redirect(e.uplink_ifindex),
-                    pkt: pkt.into_bytes(),
-                }
-            }
-            Deliver::Pass => SimOut {
-                action: Action::Pass,
-                pkt: pkt.into_bytes(),
+            &flowplane_core::datapath::GuestTxIn {
+                meta,
+                src_ifindex: self.src_ifindex,
+                now: self.now,
             },
+        );
+        self.last_tstamp = out.edt_tstamp;
+        SimOut {
+            action: out.action,
+            pkt: pkt.into_bytes(),
         }
     }
 
@@ -441,68 +244,17 @@ impl SimNode {
     /// Returns `Redirect(uplink_ifindex)` + the encapped `[OuterEth][OuterIPv6][IPv4][L4]` frame, or
     /// `Pass` when the frame is not a NAT64 packet / has no route. Byte-identical to the eBPF path.
     pub fn guest_tx_nat64(&mut self, frame: &[u8], meta: &PortMeta) -> SimOut {
-        use flowplane_core::nat64::{nat64_egress_parse, nat64_egress_write};
-
-        let ip6_off = ETH_LEN;
         let mut pkt = VecPkt::from_bytes(frame);
-
-        // 1. Parse (dst-prefix check + NAT config + port alloc + CT_F_NAT64 conntrack inserts).
-        let xlate =
-            match nat64_egress_parse(&pkt, &mut self.maps, ip6_off, meta.vni, meta.guest_ipv4, 0) {
-                Some(x) => x,
-                None => {
-                    return SimOut {
-                        action: Action::Pass,
-                        pkt: pkt.into_bytes(),
-                    }
-                }
-            };
-
-        // 2. Resize: shrink inner IPv6(40)→IPv4(20) via a 20-byte front drop (models adjust_head(+20)).
-        if !pkt.shrink_head(20) {
-            return SimOut {
-                action: Action::Drop,
-                pkt: pkt.into_bytes(),
-            };
-        }
-
-        // 3. Write: restore the Ethernet header + build the IPv4 header + translate the L4.
-        if !nat64_egress_write(&mut pkt, ETH_LEN, true, &xlate) {
-            return SimOut {
-                action: Action::Drop,
-                pkt: pkt.into_bytes(),
-            };
-        }
-
-        // 4. Route lookup on the embedded IPv4 dst.
-        let route = match route4(&self.maps, meta.vni, &xlate.ipv4_dst) {
-            Some(r) => r,
-            None => {
-                return SimOut {
-                    action: Action::Pass,
-                    pkt: pkt.into_bytes(),
-                }
-            }
-        };
-
-        // 5. Encap IP-in-IPv6 toward the route nexthop (IPIP inner-proto).
-        let e = EncapParams {
-            gateway_mac: self.local.gateway_mac,
-            uplink_mac: self.local.uplink_mac,
-            uplink_ifindex: self.local.uplink_ifindex,
-            src_underlay: meta.underlay_ipv6,
-            nexthop_ipv6: route.nexthop_ipv6,
-            inner_proto: IPPROTO_IPIP,
-            flow_label: 0,
-        };
-        if !pkt.grow_head(IPV6_LEN) || !write_outer_v6(&mut pkt, &e) {
-            return SimOut {
-                action: Action::Drop,
-                pkt: pkt.into_bytes(),
-            };
-        }
+        let action = flowplane_core::datapath::process_guest_tx_nat64(
+            &mut pkt,
+            &mut self.maps,
+            &flowplane_core::datapath::GuestTxNat64In {
+                meta,
+                local: &self.local,
+            },
+        );
         SimOut {
-            action: Action::Redirect(self.local.uplink_ifindex),
+            action,
             pkt: pkt.into_bytes(),
         }
     }
@@ -532,44 +284,18 @@ impl SimNode {
         guest_ipv6: [u8; 16],
         rev: &flowplane_common::CtEntry,
     ) -> SimOut {
-        use flowplane_core::nat64::{nat64_ingress_parse, nat64_ingress_write};
-
-        let inner_off = ETH_LEN + IPV6_LEN;
-        let orig_sport = rev.xlate_port;
         let mut pkt = VecPkt::from_bytes(encapped);
-
-        // 1. Reverse conntrack apply: restore the guest IPv4 dst + orig L4 port (+ checksums).
-        ct_apply(&mut pkt, inner_off, rev);
-
-        // 2. Parse (IHL/proto/TTL/addrs/checksum + reconstructed 64:ff9b:: IPv6 src).
-        let xlate = match nat64_ingress_parse(&pkt, inner_off, guest_ipv6, guest_mac, orig_sport) {
-            Some(x) => x,
-            None => {
-                return SimOut {
-                    action: Action::Pass,
-                    pkt: pkt.into_bytes(),
-                }
-            }
-        };
-
-        // 3. Resize: shrink 20 bytes off the front (models adjust_head(+20)).
-        if !pkt.shrink_head(20) {
-            return SimOut {
-                action: Action::Drop,
-                pkt: pkt.into_bytes(),
-            };
-        }
-
-        // 4. Write: guest Ethernet + inner IPv6 header + L4 translation.
-        if !nat64_ingress_write(&mut pkt, ETH_LEN, GW_MAC, &xlate) {
-            return SimOut {
-                action: Action::Drop,
-                pkt: pkt.into_bytes(),
-            };
-        }
-
+        let action = flowplane_core::datapath::process_uplink_nat64_ingress(
+            &mut pkt,
+            &flowplane_core::datapath::UplinkNat64IngressIn {
+                tap_ifindex,
+                guest_mac,
+                guest_ipv6,
+                rev,
+            },
+        );
         SimOut {
-            action: Action::Redirect(tap_ifindex),
+            action,
             pkt: pkt.into_bytes(),
         }
     }
@@ -581,38 +307,15 @@ impl SimNode {
     /// runs the v6 core select (`inner_proto=41`/IPPROTO_IPV6). Returns the encapped frame (or the
     /// input on Pass).
     pub fn wan_rx(&self, plain: &[u8]) -> SimOut {
-        use flowplane_core::encap::ETH_LEN;
-        let ethertype = u16::from_be_bytes([
-            plain.get(12).copied().unwrap_or(0),
-            plain.get(13).copied().unwrap_or(0),
-        ]);
-        // v4 => IPIP; v6 => IPPROTO_IPV6. Select with the matching core fn, then share one encap.
-        let selected = match ethertype {
-            0x86DD => lb_select_forward_v6(&VecPkt::from_bytes(plain), &self.maps, ETH_LEN, 0)
-                .map(|b| (b, 41u8)),
-            _ => lb_select_forward(&VecPkt::from_bytes(plain), &self.maps, ETH_LEN, 0)
-                .map(|b| (b, 4u8)),
-        };
-        match selected {
-            Some((backend, inner_proto)) => {
-                let e = EncapParams {
-                    gateway_mac: self.local.gateway_mac,
-                    uplink_mac: self.local.uplink_mac,
-                    uplink_ifindex: self.local.uplink_ifindex,
-                    src_underlay: self.local.underlay_ipv6,
-                    nexthop_ipv6: backend,
-                    inner_proto, // 4 (IPIP) for v4 inner, 41 (IPPROTO_IPV6) for v6 inner
-                    flow_label: 0,
-                };
-                SimOut {
-                    action: Action::Redirect(self.local.uplink_ifindex),
-                    pkt: self.edge_encap(plain, e),
-                }
-            }
-            None => SimOut {
-                action: Action::Pass,
-                pkt: plain.to_vec(),
-            },
+        let mut pkt = VecPkt::from_bytes(plain);
+        let action = flowplane_core::datapath::process_wan_rx(
+            &mut pkt,
+            &self.maps,
+            &flowplane_core::datapath::WanRxIn { local: &self.local },
+        );
+        SimOut {
+            action,
+            pkt: pkt.into_bytes(),
         }
     }
 
@@ -626,20 +329,17 @@ impl SimNode {
     /// dispatches to. `ingress_ifindex` models the frame's arrival interface (the redirect target);
     /// the eBPF path uses `ctx.ingress_ifindex` (== 1 under `BPF_PROG_TEST_RUN`).
     pub fn guest_arp_nd(&self, frame: &[u8], meta: &PortMeta, ingress_ifindex: u32) -> SimOut {
-        use flowplane_core::arp_nd::{arp_reply, nd_reply};
         let mut pkt = VecPkt::from_bytes(frame);
-        // Mirror the eBPF `try_guest_tx` head: ARP first, then ND. The gateway is advertised at the
-        // shared virtual router MAC (GW_MAC), NOT the guest's own MAC — parity with the eBPF datapath.
-        if arp_reply(&mut pkt, meta.gateway_ipv4, GW_MAC)
-            || nd_reply(&mut pkt, meta.gateway_ipv6, GW_MAC)
-        {
-            return SimOut {
-                action: Action::Redirect(ingress_ifindex),
-                pkt: pkt.into_bytes(),
-            };
-        }
+        let action = flowplane_core::datapath::process_guest_arp_nd(
+            &mut pkt,
+            &flowplane_core::datapath::GuestArpNdIn {
+                gateway_ipv4: meta.gateway_ipv4,
+                gateway_ipv6: meta.gateway_ipv6,
+                ingress_ifindex,
+            },
+        );
         SimOut {
-            action: Action::Pass,
+            action,
             pkt: pkt.into_bytes(),
         }
     }
@@ -654,34 +354,18 @@ impl SimNode {
     /// fixed-layout reply. The reply's server MAC / assigned IP / gateway come from `meta`; MTU + DNS
     /// + host-name come from the node's `DHCP_CONFIG` / `DHCP_META[ingress_ifindex]`.
     pub fn guest_dhcp4(&self, frame: &[u8], meta: &PortMeta, ingress_ifindex: u32) -> SimOut {
-        use flowplane_core::dhcp;
         let mut pkt = VecPkt::from_bytes(frame);
-        let req = match dhcp::parse(&pkt) {
-            Some(r) => r,
-            None => {
-                return SimOut {
-                    action: Action::Pass,
-                    pkt: pkt.into_bytes(),
-                }
-            }
-        };
-        // Grow/shrink the frame to the constant reply length, as the eBPF glue does via adjust_tail.
-        pkt.set_tail(dhcp::REPLY_LEN);
-        let ok = dhcp::write(
+        let action = flowplane_core::datapath::process_guest_dhcp4(
             &mut pkt,
-            &req,
-            meta.guest_ipv4,
-            meta.gateway_ipv4,
-            GW_MAC,
             &self.maps,
-            ingress_ifindex,
+            &flowplane_core::datapath::GuestDhcp4In {
+                guest_ipv4: meta.guest_ipv4,
+                gateway_ipv4: meta.gateway_ipv4,
+                ingress_ifindex,
+            },
         );
         SimOut {
-            action: if ok {
-                Action::Redirect(ingress_ifindex)
-            } else {
-                Action::Pass
-            },
+            action,
             pkt: pkt.into_bytes(),
         }
     }

@@ -154,6 +154,20 @@ scenario-peering: ## clab VPC-peering scenario: reachability + firewall two-step
 test-all: test e2e ha ## Run the full local test matrix (needs sudo)
 
 # --- housekeeping ----------------------------------------------------------
+.PHONY: dpdk-check
+dpdk-check: ## Probe host DPDK capability (hugepages/IOMMU/NICs)
+	@hack/dpdk/check-host.sh
+
+.PHONY: dpdk-afxdp-loopback
+dpdk-afxdp-loopback: ## Run the af_xdp veth loopback e2e (needs sudo + hugepages)
+	cargo build -p nfkit --example l2fwd
+	sudo L2FWD_BIN=$(PWD)/target/debug/examples/l2fwd hack/dpdk/afxdp-loopback.sh
+
+.PHONY: dpdk-afxdp-datapath
+dpdk-afxdp-datapath: ## Run the af_xdp uplink datapath byte-parity e2e (needs sudo; self-manages hugepages)
+	sudo -E env "PATH=$$PATH" "LD_LIBRARY_PATH=$${LD_LIBRARY_PATH:-}" \
+		cargo test -p nfkit --test afxdp_datapath -- --test-threads=1 --nocapture
+
 .PHONY: bpf-clean
 bpf-clean: ## Free leaked flowplane BPF pins (host + kind/clab nodes); prevents conntrack-map OOM across clab cycles
 	./hack/bpf-cleanup.sh

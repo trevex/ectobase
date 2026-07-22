@@ -18,3 +18,4 @@ hack/clab/clab-*/
 
 # mdbook build output (regenerate with `make docs`)
 /docs/book
+flowplane/nfkit/tests/data/l2fwd_out.pcap

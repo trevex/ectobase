@@ -16,6 +16,10 @@ pub trait Maps {
     fn maglev_get(&self, key: &MaglevKey) -> Option<[u8; 16]>;
     /// Network-NAT config for a `(vni, guest-ipv4)` pair (`NAT` map).
     fn nat_get(&self, key: &NatKey) -> Option<NatValue>;
+    /// Is `(vni, ip)` a registered public NAT IP (the `NAT_IPS` set)? NAT returns are demuxed
+    /// peer-independently: when the inner dst is a registered nat_ip, the external src ip+port are
+    /// zeroed so the CT lookup hits the globally-unique `(vni,0,nat_ip,0,nat_port)` reverse entry.
+    fn is_nat_ip(&self, vni: u32, ip: &[u8; 4]) -> bool;
     /// Exact-match (`/32`) route lookup for an inner IPv4 dst in a VNI (`ROUTES` LPM trie, queried at
     /// prefix_len 64 = 32 VNI bits + 32 host bits — the same lookup the eBPF egress does).
     fn route4_get(&self, vni: u32, dst: &[u8; 4]) -> Option<RouteValue>;

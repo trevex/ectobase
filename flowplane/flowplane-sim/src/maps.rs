@@ -113,6 +113,9 @@ impl Maps for MemMaps {
     fn nat_get(&self, key: &NatKey) -> Option<NatValue> {
         self.nat.get(key).copied()
     }
+    fn is_nat_ip(&self, vni: u32, ip: &[u8; 4]) -> bool {
+        self.nat_ips.contains(&(vni, *ip))
+    }
     fn route4_get(&self, vni: u32, dst: &[u8; 4]) -> Option<RouteValue> {
         // Longest-prefix match over the stored routes for this VNI (mirrors the eBPF LPM trie).
         self.routes4
