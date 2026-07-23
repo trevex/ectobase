@@ -43,6 +43,7 @@ use flowplane_core::maps::Maps; // brings `underlay_get`/`local` method syntax i
 use flowplane_core::pkt::{Action, Pkt}; // `Pkt` brings `read_array` into scope on MbufPkt
 use nfkit::monotonic_ns;
 
+use crate::node::{pb, DpdkNodeService};
 use crate::writer::DpdkMapWriter;
 
 /// Byte offset of the outer IPv6 destination address within an encapped fabric frame:
@@ -187,8 +188,6 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     let ctrl = Arc::new(parking_lot::Mutex::new(ControlCore::new(
         DpdkMapWriter::new(shared.clone()),
     )));
-    // Silence the "unused until Task 9" warning while keeping the handle wired + documented.
-    let _ = &ctrl;
 
     // ── 6. Datapath workers on a dedicated OS thread ────────────────────────────
     // `for_each_worker` BLOCKS until every worker lcore joins, so it must run OFF the tokio thread.
@@ -241,11 +240,13 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
 
     let serve_result = tonic::transport::Server::builder()
         .add_service(health_service)
-        // Task 9: add the DataplaneNode service here —
-        //   `.add_service(DataplaneNodeServer::new(NodeService::new(ctrl.clone(), ...)))`
-        // The handlers lock `ctrl: Arc<Mutex<ControlCore<DpdkMapWriter>>>` (the sole writer) to
-        // program the shared config maps. Requires a build.rs proto compile (routebus/dataplane
-        // node .proto) to generate the server trait, mirroring flowplane's node::pb module.
+        // The DataplaneNode service. Its handlers lock `ctrl` (the sole writer) to drive the SAME
+        // `ControlCore` orchestration the eBPF binary runs; `shared` backs getter-based reads. The
+        // agnostic RPCs (routes/NAT/LB/fw/QoS) program the config maps; Attach/Detach program the
+        // agnostic half and return Unimplemented (the host-device step is B2). See `node.rs`.
+        .add_service(pb::dataplane_node_server::DataplaneNodeServer::new(
+            DpdkNodeService::new(ctrl.clone(), shared.clone()),
+        ))
         .serve_with_shutdown(addr, shutdown)
         .await;
 

@@ -4,5 +4,6 @@
 //! orchestration, but programs `nfkit::shared_config::SharedConfigMaps` (LF+RCU DPDK config tables)
 //! instead of eBPF aya maps. The seam is [`writer::DpdkMapWriter`], the DPDK `MapWriter`
 //! implementation — the counterpart to the eBPF `AyaWriter`.
+pub mod node;
 pub mod serve;
 pub mod writer;

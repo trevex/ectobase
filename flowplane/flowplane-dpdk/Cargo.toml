@@ -22,6 +22,11 @@ parking_lot = { workspace = true }
 # how nfkit links its own test/bin artifacts.
 dpdk-sys = { path = "../dpdk-sys" }
 
+[build-dependencies]
+# Compiles the dataplane .proto into the `DataplaneNode` server trait (Task 9), mirroring
+# flowplane's build.rs (server-only). Default `cargo build` is unaffected — this is a DPDK crate.
+tonic-build = "0.12"
+
 [[bin]]
 name = "flowplane-dpdk"
 path = "src/main.rs"

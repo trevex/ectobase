@@ -6,6 +6,18 @@
 use std::{env, fs, path::Path};
 
 fn main() {
+    // Compile the dataplane gRPC proto into the `DataplaneNode` server trait (Task 9). Mirrors the
+    // eBPF `flowplane/build.rs` proto step EXACTLY (same include paths, server-only) so the generated
+    // `dataplane.v1` module is the SAME server surface both binaries implement.
+    tonic_build::configure()
+        .build_client(false)
+        .compile_protos(
+            &["../../api/proto/dataplane/v1/dataplane.proto"],
+            &["../../api/proto/dataplane/v1"],
+        )
+        .expect("tonic-build compile dataplane protos");
+    println!("cargo:rerun-if-changed=../../api/proto/dataplane/v1");
+
     let prefix = env::var("DEP_DPDK_PREFIX").expect(
         "DEP_DPDK_PREFIX not set — dpdk-sys must emit `cargo:prefix=<path>` from its build.rs",
     );

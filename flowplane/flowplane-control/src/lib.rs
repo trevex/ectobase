@@ -69,4 +69,29 @@ impl<W: MapWriter> ControlCore<W> {
     pub fn iface_ifindex(&self, id: &[u8]) -> Option<u32> {
         self.ifaces_meta.get(id).map(|m| m.ifindex)
     }
+    /// Resolve a locally-registered interface id from `(vni, ipv4)`. The agnostic NAT RPCs identify a
+    /// source by its overlay (vni, ip), but `create_nat`/`delete_nat` are keyed by interface id;
+    /// `ifaces_meta` is the bridge. Returns the FIRST matching id. Mirrors the eBPF node service's
+    /// `find_interface_id` (which searches `Control::list_interfaces`) — the seam keeps that lookup
+    /// out of the per-backend handlers. Returns `None` if no local interface matches.
+    #[must_use]
+    pub fn find_iface_by_vni_ipv4(&self, vni: u32, ipv4: [u8; 4]) -> Option<Vec<u8>> {
+        self.ifaces_meta
+            .iter()
+            .find(|(_, m)| m.vni == vni && m.ipv4 == ipv4)
+            .map(|(id, _)| id.clone())
+    }
+    /// Snapshot the registered interface metadata as `(id, vni, ipv4, ipv6, underlay, ifindex)` rows.
+    /// Backs the `ListInterfaces` RPC on backends (like DPDK) that keep no separate device table —
+    /// `ifaces_meta` is the agnostic source of truth for the attached-interface set. The eBPF backend
+    /// has its own richer `Control::list_interfaces` (adds the resolved device); this exposes the
+    /// agnostic subset every backend shares.
+    #[must_use]
+    #[allow(clippy::type_complexity)]
+    pub fn iface_meta_rows(&self) -> Vec<(Vec<u8>, u32, [u8; 4], [u8; 16], [u8; 16], u32)> {
+        self.ifaces_meta
+            .iter()
+            .map(|(id, m)| (id.clone(), m.vni, m.ipv4, m.ipv6, m.underlay, m.ifindex))
+            .collect()
+    }
 }
