@@ -199,3 +199,23 @@ that build — a base image with a different DPDK version/PMD set would diverge 
 Real host-device attach (**B2**); Helm DaemonSet finalization + hugepage/`-l` finalization + live AF_XDP-on-
 fabric validation (**B3 remainder**); blue-green upgrade RPCs (**thread C**). This slice is the deployable-
 process + image foundation those build on.
+
+## 9. Known gaps / follow-ups (discovered during implementation)
+
+Beyond the planned non-goals, B1b implementation surfaced two narrow, documented gaps — each is
+*accepted*, not silently broken:
+
+- **Functional QoS/metering is deferred.** `SharedConfigMaps` (per the M8 model) keeps meter as per-lcore
+  FLOW state, so the control writer can't reach it — `MapWriter::meter_upsert`/`meter_remove` currently
+  just bump `config_generation` (the `ConfigureQoS` RPC is accepted but not enforced). Correct per-lcore
+  QoS needs `MeterState` split into shared-config (rate/burst) + per-lcore-runtime (tokens), with the
+  datapath re-deriving rate from shared config on a generation change (same mechanism as §5a conntrack).
+  Follow-up; orthogonal to forwarding parity. Parallel to the B2 device-attach stub: the config path is
+  wired, functional enforcement is a follow-up.
+- **NAT64 SNAT bindings are not generation-invalidated.** The §5a generation-tag recheck (Task 7) covers
+  `snat_egress` (the security-critical NAT-source-withdrawal path). `nat64_egress` stamps `gen=0`, so a
+  withdrawn NAT64 binding could emit stale on the DPDK path until GC. Same one-line pattern as the SNAT
+  fix (gate the cached arm on `gen`, stamp `cur_gen`); apply when NAT64 withdrawal is in scope.
+
+Neither blocks the B1b deliverable (two binaries, two images, forwarding + control-path byte-parity proven
+under multilcore). Both are captured so the offload/hardening phase can't accidentally rely on them.
