@@ -260,7 +260,8 @@ pub fn ct_create_default<P: Pkt, M: Maps>(
         flags: CT_F_DEFAULT,
         tcp_state: tcp,
         fwall_action: 0,
-        _pad: [0; 7],
+        gen_bytes: [0; 4],
+        _pad: [0; 3],
     };
     maps.conntrack_insert(key, e);
     // Pre-seed the reverse direction so return traffic is immediately recognised as established,

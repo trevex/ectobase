@@ -1,5 +1,6 @@
 #include <rte_ethdev.h>
 #include <rte_mbuf.h>
+#include <rte_rcu_qsbr.h>
 #include "shim.h"
 
 uint16_t nfkit_eth_rx_burst(uint16_t port, uint16_t qid, struct rte_mbuf **pkts, uint16_t nb) {
@@ -19,3 +20,9 @@ uint8_t *nfkit_pktmbuf_append(struct rte_mbuf *m, uint16_t len) { return (uint8_
 uint8_t *nfkit_pktmbuf_adj(struct rte_mbuf *m, uint16_t len) { return (uint8_t *)rte_pktmbuf_adj(m, len); }
 int nfkit_pktmbuf_trim(struct rte_mbuf *m, uint16_t len) { return rte_pktmbuf_trim(m, len); }
 uint64_t nfkit_rss_ip_hf(void) { return (uint64_t)RTE_ETH_RSS_IP; }
+
+size_t nfkit_rcu_qsbr_get_memsize(uint32_t m) { return rte_rcu_qsbr_get_memsize(m); }
+int    nfkit_rcu_qsbr_init(struct rte_rcu_qsbr *v, uint32_t m) { return rte_rcu_qsbr_init(v, m); }
+int    nfkit_rcu_qsbr_thread_register(struct rte_rcu_qsbr *v, unsigned int t) { return rte_rcu_qsbr_thread_register(v, t); }
+void   nfkit_rcu_qsbr_thread_online(struct rte_rcu_qsbr *v, unsigned int t) { rte_rcu_qsbr_thread_online(v, t); }
+void   nfkit_rcu_qsbr_quiescent(struct rte_rcu_qsbr *v, unsigned int t) { rte_rcu_qsbr_quiescent(v, t); }

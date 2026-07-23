@@ -59,7 +59,8 @@ fn dpdk_maps_route_and_conntrack() {
         flags: 0x01,
         tcp_state: 3,
         fwall_action: 1,
-        _pad: [0; 7],
+        gen_bytes: [0; 4],
+        _pad: [0; 3],
     };
     assert!(
         m.conntrack_get(&k).is_none(),

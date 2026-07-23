@@ -112,6 +112,29 @@ impl<K: Copy, V: Copy> DpdkHash<K, V> {
         }
     }
 
+    /// Delete `k` from the table. Returns `true` if the key was present and removed. We clear the
+    /// companion slab slot on success so a stale `V` can never be observed if the position is later
+    /// reused. This is the single-threaded per-lcore path (no concurrency); the concurrent
+    /// LF+RCU value-safe path lives in [`crate::RcuHash`].
+    ///
+    /// # Panics
+    /// Never; a negative return (`-ENOENT`/`-EINVAL`) yields `false`.
+    pub fn remove(&mut self, k: &K) -> bool {
+        // SAFETY: k points to size_of::<K>() == key_len bytes; rte_hash_del_key reads the key
+        // (read-only). This is the single-threaded per-lcore path. Returns the position removed
+        // (>=0) or a negative errno.
+        let pos = unsafe {
+            dpdk_sys::rte_hash_del_key(self.raw.as_ptr(), (k as *const K).cast::<c_void>())
+        };
+        if pos < 0 {
+            return false;
+        }
+        if let Some(slot) = self.slab.get_mut(pos as usize) {
+            *slot = None;
+        }
+        true
+    }
+
     #[must_use]
     pub fn get(&self, k: &K) -> Option<V> {
         // SAFETY: k points to key_len bytes; read-only lookup.

@@ -40,7 +40,8 @@ fn dnat_reverse_ct_entry() -> CtEntry {
         flags: CT_REWRITE_DST | CT_F_SRC_NAT,
         tcp_state: 0,
         fwall_action: 0,
-        _pad: [0; 7],
+        gen_bytes: [0; 4],
+        _pad: [0; 3],
     }
 }
 
@@ -178,7 +179,8 @@ fn snapshot_roundtrip_and_flow_continuity() {
             flags: CT_REWRITE_DST,
             tcp_state: 1,
             fwall_action: 0,
-            _pad: [0; 7],
+            gen_bytes: [0; 4],
+            _pad: [0; 3],
         },
     );
     a.conntrack_insert(dnat_reverse_ct_key(6), dnat_reverse_ct_entry());
@@ -199,7 +201,8 @@ fn snapshot_roundtrip_and_flow_continuity() {
             flags: CT_F_SRC_NAT,
             tcp_state: 0,
             fwall_action: 0,
-            _pad: [0; 7],
+            gen_bytes: [0; 4],
+            _pad: [0; 3],
         },
     );
     // nat config
@@ -388,7 +391,8 @@ fn snapshot_roundtrip_and_flow_continuity() {
             flags: CT_REWRITE_DST,
             tcp_state: 0,
             fwall_action: 0,
-            _pad: [0; 7],
+            gen_bytes: [0; 4],
+            _pad: [0; 3],
         },
     );
     // Restore A's blob over the warm standby (over-writes on collision, adds otherwise). No panic.
@@ -435,7 +439,8 @@ fn snapshot_roundtrip_and_flow_continuity() {
                 flags: CT_REWRITE_DST,
                 tcp_state: 0,
                 fwall_action: 0,
-                _pad: [0; 7],
+                gen_bytes: [0; 4],
+                _pad: [0; 3],
             },
         );
     }

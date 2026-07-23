@@ -733,6 +733,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "flowplane-dpdk"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "dpdk-sys",
+ "flowplane-common",
+ "flowplane-control",
+ "flowplane-core",
+ "nfkit",
+ "parking_lot",
+ "prost",
+ "tokio",
+ "tonic",
+ "tonic-build",
+ "tonic-health",
+]
+
+[[package]]
 name = "flowplane-ebpf"
 version = "0.1.0"
 dependencies = [
@@ -1335,7 +1354,9 @@ dependencies = [
  "dpdk-sys",
  "etherparse",
  "flowplane-common",
+ "flowplane-control",
  "flowplane-core",
+ "flowplane-dpdk",
  "flowplane-sim",
  "libc",
 ]

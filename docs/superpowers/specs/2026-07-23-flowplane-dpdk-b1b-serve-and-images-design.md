@@ -109,6 +109,30 @@ Mirrors `flowplane serve` structurally:
 
 Readiness contract identical to eBPF: the gRPC listener opening == "ready to AttachInterface".
 
+### 3.5 Constraint: lazy invalidation does NOT extend to hardware `rte_flow` offload
+
+The §5a generation-tag lazy conntrack invalidation is safe **only because the CPU re-validates the
+cached decision before forwarding** (the before-forward recheck is what gives zero stale emission on a
+withdrawn NAT source). That guarantee is structural: lazy invalidation requires a reader in the per-packet
+path. **Hardware `rte_flow` offload removes the CPU from that path** — the NIC applies the encap/NAT/action
+autonomously — so an offloaded flow can NEVER be lazily invalidated: bumping `config_generation` does
+nothing to an installed hardware rule, and the CPU-side recheck never runs for that flow. A withdrawn
+NAT/LB binding whose `rte_flow` rule is still installed would keep emitting under the dead binding — the
+exact stale-emission case §5a exists to prevent.
+
+**B1b is unaffected:** it installs NO per-flow `rte_flow` rules — software per-lcore conntrack only. The
+M10 `rte_flow` work is HW-gated (real ConnectX; software fallback otherwise) and offloads the static
+tunnel encap/decap keyed on the underlay, not per-NAT-source, so nothing hardware-side is tied to a NAT
+binding's lifetime. The generation-tag model (Task 7) is sound as scoped.
+
+**Constraint for the future offload phase (NOT this slice):** if per-flow NAT/LB actions are ever offloaded
+to `rte_flow`, the withdraw path MUST synchronously `rte_flow_destroy` the rule as part of the same
+operation that deletes the `SharedConfigMaps` entry and bumps the generation — and destroy the hardware
+rule *before* the binding is considered gone (the dangerous window is a live rule after a dead binding).
+Invalidation is then **two-tier**: generation-tag for software conntrack, eager teardown for hardware
+rules (the Cilium model — offloaded entries deleted eagerly on policy change; only software conntrack is
+GC/lazy). This is recorded so the offload phase cannot accidentally rely on lazy invalidation for HW state.
+
 ## 4. Container image: `Dockerfile.dpdk` + CI
 
 Multi-stage Debian, mirroring `Dockerfile` in shape, different toolchain (no LLVM-21/bpf-linker):
@@ -175,3 +199,23 @@ that build — a base image with a different DPDK version/PMD set would diverge 
 Real host-device attach (**B2**); Helm DaemonSet finalization + hugepage/`-l` finalization + live AF_XDP-on-
 fabric validation (**B3 remainder**); blue-green upgrade RPCs (**thread C**). This slice is the deployable-
 process + image foundation those build on.
+
+## 9. Known gaps / follow-ups (discovered during implementation)
+
+Beyond the planned non-goals, B1b implementation surfaced two narrow, documented gaps — each is
+*accepted*, not silently broken:
+
+- **Functional QoS/metering is deferred.** `SharedConfigMaps` (per the M8 model) keeps meter as per-lcore
+  FLOW state, so the control writer can't reach it — `MapWriter::meter_upsert`/`meter_remove` currently
+  just bump `config_generation` (the `ConfigureQoS` RPC is accepted but not enforced). Correct per-lcore
+  QoS needs `MeterState` split into shared-config (rate/burst) + per-lcore-runtime (tokens), with the
+  datapath re-deriving rate from shared config on a generation change (same mechanism as §5a conntrack).
+  Follow-up; orthogonal to forwarding parity. Parallel to the B2 device-attach stub: the config path is
+  wired, functional enforcement is a follow-up.
+- **NAT64 SNAT bindings are not generation-invalidated.** The §5a generation-tag recheck (Task 7) covers
+  `snat_egress` (the security-critical NAT-source-withdrawal path). `nat64_egress` stamps `gen=0`, so a
+  withdrawn NAT64 binding could emit stale on the DPDK path until GC. Same one-line pattern as the SNAT
+  fix (gate the cached arm on `gen`, stamp `cur_gen`); apply when NAT64 withdrawal is in scope.
+
+Neither blocks the B1b deliverable (two binaries, two images, forwarding + control-path byte-parity proven
+under multilcore). Both are captured so the offload/hardening phase can't accidentally rely on them.

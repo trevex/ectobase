@@ -71,8 +71,25 @@ pub fn snat_egress<P: Pkt, M: Maps>(
         proto,
         _pad: [0; 3],
     };
+    // §5a generation-tag invalidation: the config generation the CURRENT nat binding was resolved
+    // under. eBPF + sim return 0 (Maps trait default) → every stamped `gen` is 0 and the recheck
+    // below is a no-op, so their datapath is byte-identical. For the DPDK serve binary the writer
+    // bumps this on any NAT/LB/route withdrawal (conntrack_flush); a cached SNAT entry stamped under
+    // an older generation must NOT be reused blindly (the underlying binding may have changed).
+    // `CtEntry`'s generation stamp is a `[u8; 4]` accessed as a `u32` via `gen()`/`set_gen()` (stored
+    // byte-wise to keep the eBPF map value ABI at 24 bytes / align 8); the shared generation counter
+    // is a `u64`. Truncating to `u32` is sound — stamp and compare use the SAME low 32 bits, so a
+    // change is always detected (it only wraps after 2^32 withdrawals).
+    let cur_gen = maps.config_generation() as u32;
     let nat_port = match maps.conntrack_get(&fwd_key) {
-        Some(v) if v.flags & CT_F_SRC_NAT != 0 => v.xlate_port,
+        // Fast path: established SNAT flow whose cached allocation is still valid under the CURRENT
+        // generation. Reuse the allocated port with no re-derivation.
+        Some(v) if v.flags & CT_F_SRC_NAT != 0 && v.gen() == cur_gen => v.xlate_port,
+        // Stale-generation SNAT entry: the config moved since this port was allocated. Fall through
+        // to RE-DERIVE the allocation from the current `nat` binding (already re-fetched at the top of
+        // this fn via `nat_get`; a withdrawn binding returned `None` and we never reached here). This
+        // re-stamps the fwd/rev entries with `cur_gen`, so a changed nat_ipv4/port-range is picked up
+        // and the flow can never emit under the withdrawn/old binding.
         _ => {
             // Allocate: hash the flow to a start slot, linear-probe for a free reverse key.
             let start = (hash5(&src, &dst, sport, dport, proto) % range as u32) as u16;
@@ -104,7 +121,8 @@ pub fn snat_egress<P: Pkt, M: Maps>(
                             flags: CT_REWRITE_DST | CT_F_SRC_NAT,
                             tcp_state: 0,
                             fwall_action: 0,
-                            _pad: [0; 7],
+                            gen_bytes: cur_gen.to_ne_bytes(),
+                            _pad: [0; 3],
                         },
                     );
                     break;
@@ -120,7 +138,8 @@ pub fn snat_egress<P: Pkt, M: Maps>(
                     flags: CT_REWRITE_SRC | CT_F_SRC_NAT,
                     tcp_state: 0,
                     fwall_action: 0,
-                    _pad: [0; 7],
+                    gen_bytes: cur_gen.to_ne_bytes(),
+                    _pad: [0; 3],
                 },
             );
             chosen
