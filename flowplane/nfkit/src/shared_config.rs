@@ -201,22 +201,24 @@ pub struct SharedConfigMaps {
     dhcp_config: Option<DhcpConfig>,
     neigh_nat_count: u32,
 
-    // ── CONFIG tables (RcuHash; drop BEFORE the qsbr they reference) ──────────
-    route4: RcuHash<Route4Key, RouteValue>,
-    route6: RcuHash<Route6Key, RouteValue>,
-    nat: RcuHash<NatK, NatValue>,
-    nat_ips: RcuHash<NatIpK, u8>,
-    lb: RcuHash<LbK, LbValue>,
-    maglev: RcuHash<MaglevK, [u8; 16]>,
-    underlay: RcuHash<UnderlayK, UnderlayValue>,
-    fw_rules: RcuHash<FwRuleK, FwRule>,
-    fw_meta: RcuHash<FwMetaK, FwMeta>,
-    ifaces: RcuHash<IfaceK, IfaceValue>,
-    iface_meta: RcuHash<IfaceMetaK, IfaceMetaVal>,
-    ports: RcuHash<PortK, PortMeta>,
-    neigh_nat: RcuHash<NeighNatK, NeighborNatEntry>,
-    vips: RcuHash<VipK, [u8; 4]>,
-    dhcp_meta: RcuHash<DhcpMetaK, DhcpMeta>,
+    // ── CONFIG tables (ManuallyDrop<RcuHash>; drop BEFORE the qsbr they reference) ──────────
+    // ManuallyDrop prevents the compiler from auto-dropping these fields after Drop::drop returns.
+    // Drop::drop calls ManuallyDrop::drop on each table (= exactly once), then frees the QSBR.
+    route4: std::mem::ManuallyDrop<RcuHash<Route4Key, RouteValue>>,
+    route6: std::mem::ManuallyDrop<RcuHash<Route6Key, RouteValue>>,
+    nat: std::mem::ManuallyDrop<RcuHash<NatK, NatValue>>,
+    nat_ips: std::mem::ManuallyDrop<RcuHash<NatIpK, u8>>,
+    lb: std::mem::ManuallyDrop<RcuHash<LbK, LbValue>>,
+    maglev: std::mem::ManuallyDrop<RcuHash<MaglevK, [u8; 16]>>,
+    underlay: std::mem::ManuallyDrop<RcuHash<UnderlayK, UnderlayValue>>,
+    fw_rules: std::mem::ManuallyDrop<RcuHash<FwRuleK, FwRule>>,
+    fw_meta: std::mem::ManuallyDrop<RcuHash<FwMetaK, FwMeta>>,
+    ifaces: std::mem::ManuallyDrop<RcuHash<IfaceK, IfaceValue>>,
+    iface_meta: std::mem::ManuallyDrop<RcuHash<IfaceMetaK, IfaceMetaVal>>,
+    ports: std::mem::ManuallyDrop<RcuHash<PortK, PortMeta>>,
+    neigh_nat: std::mem::ManuallyDrop<RcuHash<NeighNatK, NeighborNatEntry>>,
+    vips: std::mem::ManuallyDrop<RcuHash<VipK, [u8; 4]>>,
+    dhcp_meta: std::mem::ManuallyDrop<RcuHash<DhcpMetaK, DhcpMeta>>,
 }
 
 impl SharedConfigMaps {
@@ -294,21 +296,21 @@ impl SharedConfigMaps {
             local: None,
             dhcp_config: None,
             neigh_nat_count: 0,
-            route4,
-            route6,
-            nat,
-            nat_ips,
-            lb,
-            maglev,
-            underlay,
-            fw_rules,
-            fw_meta,
-            ifaces,
-            iface_meta,
-            ports,
-            neigh_nat,
-            vips,
-            dhcp_meta,
+            route4: std::mem::ManuallyDrop::new(route4),
+            route6: std::mem::ManuallyDrop::new(route6),
+            nat: std::mem::ManuallyDrop::new(nat),
+            nat_ips: std::mem::ManuallyDrop::new(nat_ips),
+            lb: std::mem::ManuallyDrop::new(lb),
+            maglev: std::mem::ManuallyDrop::new(maglev),
+            underlay: std::mem::ManuallyDrop::new(underlay),
+            fw_rules: std::mem::ManuallyDrop::new(fw_rules),
+            fw_meta: std::mem::ManuallyDrop::new(fw_meta),
+            ifaces: std::mem::ManuallyDrop::new(ifaces),
+            iface_meta: std::mem::ManuallyDrop::new(iface_meta),
+            ports: std::mem::ManuallyDrop::new(ports),
+            neigh_nat: std::mem::ManuallyDrop::new(neigh_nat),
+            vips: std::mem::ManuallyDrop::new(vips),
+            dhcp_meta: std::mem::ManuallyDrop::new(dhcp_meta),
         })
     }
 
@@ -619,30 +621,35 @@ impl SharedConfigMaps {
 impl Drop for SharedConfigMaps {
     fn drop(&mut self) {
         // Order matters: every RcuHash references `self.qsbr` (its RCU DQ drains through it on
-        // `rte_hash_free`). Drop all tables FIRST (Rust drops named fields in declaration order —
-        // qsbr/qsbr_layout/counters are Copy/no-op; the RcuHash fields drop here, each freeing its
-        // rte_hash + flushing its defer queue), THEN free the QSBR. We drop the tables explicitly to
-        // make the ordering unmistakable, then dealloc the QSBR.
+        // `rte_hash_free`). Drop all tables FIRST, THEN free the QSBR.
         //
-        // SAFETY: `std::ptr::drop_in_place` on each table runs `RcuHash::drop` exactly once; after
-        // this, no table references `self.qsbr`, so the dealloc below is sound. Fields are never
-        // read again (we're in Drop).
+        // The fields are `ManuallyDrop<RcuHash<…>>`, so the Rust compiler does NOT auto-drop them
+        // after this `drop` body returns — this impl is the SOLE teardown. We call
+        // `ManuallyDrop::drop` on each field here (= `RcuHash::drop` exactly once per table,
+        // freeing its rte_hash and flushing its defer queue), then dealloc the QSBR. Without
+        // ManuallyDrop, plain fields would also be auto-dropped by the compiler after `drop`
+        // returns → double `rte_hash_free` + `rte_hash_free`'s defer-queue flush against an
+        // already-deallocated QSBR (use-after-free).
+        //
+        // SAFETY: each `ManuallyDrop::drop` is called exactly once (this is the sole Drop impl);
+        // no field is read or dropped again after this block. After all tables are dropped, no
+        // table references `self.qsbr`, so the dealloc below is sound.
         unsafe {
-            std::ptr::drop_in_place(&mut self.route4);
-            std::ptr::drop_in_place(&mut self.route6);
-            std::ptr::drop_in_place(&mut self.nat);
-            std::ptr::drop_in_place(&mut self.nat_ips);
-            std::ptr::drop_in_place(&mut self.lb);
-            std::ptr::drop_in_place(&mut self.maglev);
-            std::ptr::drop_in_place(&mut self.underlay);
-            std::ptr::drop_in_place(&mut self.fw_rules);
-            std::ptr::drop_in_place(&mut self.fw_meta);
-            std::ptr::drop_in_place(&mut self.ifaces);
-            std::ptr::drop_in_place(&mut self.iface_meta);
-            std::ptr::drop_in_place(&mut self.ports);
-            std::ptr::drop_in_place(&mut self.neigh_nat);
-            std::ptr::drop_in_place(&mut self.vips);
-            std::ptr::drop_in_place(&mut self.dhcp_meta);
+            std::mem::ManuallyDrop::drop(&mut self.route4);
+            std::mem::ManuallyDrop::drop(&mut self.route6);
+            std::mem::ManuallyDrop::drop(&mut self.nat);
+            std::mem::ManuallyDrop::drop(&mut self.nat_ips);
+            std::mem::ManuallyDrop::drop(&mut self.lb);
+            std::mem::ManuallyDrop::drop(&mut self.maglev);
+            std::mem::ManuallyDrop::drop(&mut self.underlay);
+            std::mem::ManuallyDrop::drop(&mut self.fw_rules);
+            std::mem::ManuallyDrop::drop(&mut self.fw_meta);
+            std::mem::ManuallyDrop::drop(&mut self.ifaces);
+            std::mem::ManuallyDrop::drop(&mut self.iface_meta);
+            std::mem::ManuallyDrop::drop(&mut self.ports);
+            std::mem::ManuallyDrop::drop(&mut self.neigh_nat);
+            std::mem::ManuallyDrop::drop(&mut self.vips);
+            std::mem::ManuallyDrop::drop(&mut self.dhcp_meta);
         }
         // SAFETY: all tables dropped above → qsbr unreferenced; same layout as the alloc in `new`.
         unsafe { std::alloc::dealloc(self.qsbr.cast::<u8>(), self.qsbr_layout) };
