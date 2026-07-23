@@ -38,9 +38,17 @@ use nfkit::{
 };
 
 use flowplane_control::ControlCore;
-// `flowplane_core::datapath::{process_uplink, UplinkIn}` are the Task-9 seam the worker loop drives
-// once outer-dst resolution lands — referenced in `worker_loop`'s doc comment, not yet called here.
+use flowplane_core::datapath::{process_uplink, UplinkIn};
+use flowplane_core::maps::Maps; // brings `underlay_get`/`local` method syntax into scope on ComposedMaps
+use flowplane_core::pkt::{Action, Pkt}; // `Pkt` brings `read_array` into scope on MbufPkt
+use nfkit::monotonic_ns;
+
 use crate::writer::DpdkMapWriter;
+
+/// Byte offset of the outer IPv6 destination address within an encapped fabric frame:
+/// `[OuterEth(14)][OuterIPv6 …dst@byte24…]`. The IPv6 dst occupies bytes 24..40 of the IPv6 header,
+/// i.e. `ETH_LEN(14) + 24`. Matches the parity tests (`out[ETH_LEN + 24..ETH_LEN + 40]`).
+const OUTER_V6_DST_OFF: usize = 14 + 24;
 
 /// Config-table capacity (entries) for the process-wide `SharedConfigMaps`. Matches the sizing the
 /// nfkit datapath tests use; the tables carry ~2× headroom internally (RCU reclaim slack).
@@ -257,12 +265,12 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
 /// then rx → `process_uplink` → tx until `stop` is set, reporting quiescence each iteration so the
 /// writer's RCU reclamation can make progress.
 ///
-/// NOTE (scaffold): this wires the rx → datapath → tx structure. The `UplinkIn` fields it feeds
-/// `process_uplink` (vni / underlay-value / outer_dst resolution from the packet's outer IPv6 dst,
-/// and the monotonic clock) are the Task-9 concern — the serve process can't be booted without a
-/// live NIC here, so the resolution logic is validated live later. Until then a worker that receives
-/// a packet resolves the outer dst from `LOCAL`/`UNDERLAY` (present once the control plane programs
-/// them); with no config + no NIC the loop simply idles on empty rx bursts.
+/// For each rx'd mbuf the loop mirrors the multilcore/afxdp datapath tests exactly: wrap the mbuf as
+/// [`MbufPkt`], read the outer IPv6 dst from the frame, resolve `UNDERLAY[outer_dst]` → the
+/// [`UplinkIn`] `u`/`vni`, then drive the SAME `flowplane_core::datapath::process_uplink` seam the
+/// sim/eBPF/DPDK parity tests drive. Forward verdicts (`Redirect`/`Pass`) queue the (mutated) mbuf
+/// for tx; `Drop` (or a frame with no resolvable underlay / no `LOCAL` programmed) frees the mbuf by
+/// letting it fall out of scope (`Mbuf`'s Drop returns it to the pool).
 fn worker_loop(q: u16, shared: &SharedConfigMaps, port: &Port, stop: &AtomicBool) {
     // Register as a QSBR reader so the writer's deferred RCU frees can reclaim past this lcore.
     let tok = shared.register_reader();
@@ -274,9 +282,9 @@ fn worker_loop(q: u16, shared: &SharedConfigMaps, port: &Port, stop: &AtomicBool
         }
     };
     // Deref the shared Arc to `&SharedConfigMaps` for the composed reader view (sound: `Sync`).
-    // Task 9 makes this `mut` (the `process_uplink` call takes `&mut composed` to mutate per-lcore
-    // conntrack); the scaffold only reads config through it, so it is immutable here.
-    let composed = ComposedMaps { cfg: shared, flow };
+    // `mut` because `process_uplink` takes `&mut composed` to mutate the per-lcore conntrack on the
+    // base decap path (`ct_create_default` on miss).
+    let mut composed = ComposedMaps { cfg: shared, flow };
 
     let (mut rx, mut tx) = port.queue(q);
     let mut rx_burst = MbufBurst::new();
@@ -290,35 +298,66 @@ fn worker_loop(q: u16, shared: &SharedConfigMaps, port: &Port, stop: &AtomicBool
             shared.report_quiescent(&tok);
             continue;
         }
-        for mut mbuf in rx_burst.drain(..) {
-            // ── Task-9 seam: outer-dst resolution → UplinkIn → process_uplink → tx ──────────────
-            // The control plane must have programmed LOCAL before any packet can be forwarded; with
-            // no config (or no NIC) we simply drop. Once LOCAL is present, the remaining Task-9 work
-            // is: read the outer IPv6 dst from the packet, `composed.cfg.underlay_get(&outer_dst)`
-            // to derive `vni`/`u`, stamp `now` from a monotonic clock, then:
-            //
-            //     let mut pkt = MbufPkt::new(&mut mbuf);
-            //     let in_ = UplinkIn { vni, u, outer_dst, local: &local, now };
-            //     match process_uplink(&mut pkt, &mut composed, &in_) {
-            //         Action::Redirect(_) | Action::Pass => tx_burst.push(mbuf),
-            //         _ => { /* mbuf drops (freed) at end of iteration */ }
-            //     }
-            //
-            // `process_uplink` is the SAME entry point the nfkit multilcore datapath test drives, so
-            // this backend runs byte-identical to the sim/eBPF once the resolution lands. Until then
-            // the mbuf is freed when it drops at the end of this iteration.
-            if composed.cfg.local().is_none() {
-                // No LOCAL programmed yet — nothing to forward against; mbuf drops (freed) below.
+        // `LOCAL` supplies the outer MACs/ifindex an LB remote `reforward` needs; it must be
+        // programmed by the control plane before any packet can be forwarded. Fetch it once per burst
+        // (owned copy; stable within a burst). With no `LOCAL` yet, drop the whole burst.
+        let local = match composed.cfg.local() {
+            Some(l) => l,
+            None => {
+                for _mbuf in rx_burst.drain(..) { /* freed on drop */ }
+                shared.report_quiescent(&tok);
                 continue;
             }
-            // Wrap the packet through the seam so the `Pkt` view is exercised even in the scaffold.
-            // The `MbufPkt` borrows `mbuf`; both are released at the end of this iteration (the mbuf
-            // is freed back to the pool by `Mbuf`'s Drop — nothing is queued for tx in the scaffold).
-            let _pkt = MbufPkt::new(&mut mbuf);
+        };
+        // Single monotonic-clock read per burst (the ingress-lane meter stamps `last_ns` from it —
+        // same CLOCK_MONOTONIC domain as the eBPF `bpf_ktime_get_ns`). Per-burst granularity is fine
+        // for policing.
+        let now = monotonic_ns();
+
+        for mut mbuf in rx_burst.drain(..) {
+            // Run the datapath in a block scoped to the `MbufPkt` borrow so that borrow ends (and the
+            // mbuf becomes movable onto the tx burst) before the verdict dispatch below.
+            let action = {
+                // Resolve the uplink input exactly as multilcore_datapath.rs / afxdp_datapath.rs do:
+                // read the outer IPv6 dst, look up `UNDERLAY[outer_dst]` → the delivery
+                // `UnderlayValue` (carrying vni + base tap). A frame whose outer dst isn't a
+                // locally-programmed underlay isn't destined here → `Drop`.
+                let mut pkt = MbufPkt::new(&mut mbuf);
+                match pkt.read_array::<16>(OUTER_V6_DST_OFF) {
+                    // runt / non-encapped frame → drop
+                    None => Action::Drop,
+                    Some(outer_dst) => match composed.underlay_get(&outer_dst) {
+                        // no local underlay for this dst → drop
+                        None => Action::Drop,
+                        Some(u) => {
+                            let in_ = UplinkIn {
+                                vni: u.vni,
+                                u,
+                                outer_dst,
+                                local: &local,
+                                now,
+                            };
+                            // The SAME `flowplane_core` entry point the sim/eBPF/DPDK parity tests
+                            // drive — this backend runs byte-identical to them.
+                            process_uplink(&mut pkt, &mut composed, &in_)
+                        }
+                    },
+                }
+            };
+            match action {
+                // Forward verdicts: queue the (mutated) mbuf for tx.
+                Action::Redirect(_) | Action::Pass => tx_burst.push(mbuf),
+                // Drop: let the mbuf fall out of scope → `Mbuf`'s Drop frees it back to the pool.
+                Action::Drop => {}
+            }
         }
-        // Flush anything queued for tx (empty in the scaffold until the datapath call above lands).
+        // Flush the forwarded mbufs. `tx` removes+frees only the SENT prefix, leaving any un-sent
+        // mbufs (tx-ring backpressure) in the burst. Drop those leftovers so the burst is empty for
+        // the next iteration — this both frees them (via `Mbuf`'s Drop) and keeps `tx_burst` bounded
+        // (its `push` above would otherwise overflow the fixed BURST capacity across iterations).
         if !tx_burst.is_empty() {
             tx.tx(&mut tx_burst);
+            tx_burst.clear();
         }
         shared.report_quiescent(&tok);
     }
