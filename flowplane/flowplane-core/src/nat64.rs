@@ -433,7 +433,8 @@ pub fn nat64_egress_parse<P: Pkt, M: Maps>(
                             flags: CT_REWRITE_DST | CT_F_SRC_NAT | CT_F_NAT64,
                             tcp_state: 0,
                             fwall_action: 0,
-                            _pad: [0; 7],
+                            gen_bytes: [0; 4],
+                            _pad: [0; 3],
                         },
                     );
                     break;
@@ -449,7 +450,8 @@ pub fn nat64_egress_parse<P: Pkt, M: Maps>(
                     flags: CT_REWRITE_SRC | CT_F_SRC_NAT | CT_F_NAT64,
                     tcp_state: 0,
                     fwall_action: 0,
-                    _pad: [0; 7],
+                    gen_bytes: [0; 4],
+                    _pad: [0; 3],
                 },
             );
             chosen

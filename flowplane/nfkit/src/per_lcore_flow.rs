@@ -193,6 +193,12 @@ impl Maps for ComposedMaps<'_> {
     fn meter_update(&mut self, ifindex: u32, state: MeterState) {
         self.flow.meter_update(ifindex, state);
     }
+
+    // §5a: the ONLY impl that overrides the `0` default — route the datapath's generation stamp +
+    // recheck to the process-wide config generation the control writer bumps on withdrawals.
+    fn config_generation(&self) -> u64 {
+        self.cfg.generation()
+    }
 }
 
 #[cfg(test)]
@@ -252,7 +258,8 @@ mod tests {
             flags: 0,
             tcp_state: 0,
             fwall_action: 0,
-            _pad: [0; 7],
+            gen_bytes: [0; 4],
+            _pad: [0; 3],
         };
         assert!(composed.conntrack_get(&key).is_none());
         composed.conntrack_insert(key, entry);
