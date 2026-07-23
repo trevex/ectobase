@@ -27,8 +27,13 @@
 //!    So there is NO need for a manual `rte_rcu_qsbr_synchronize`-before-free: wiring
 //!    `free_key_data_func = drop(Box::from_raw(V))` makes overwrite AND delete fully RCU-safe.
 //!
-//! SINGLE-WRITER MODEL: no `MULTI_WRITER_ADD`. `insert`/`remove` take `&mut self`; the datapath
-//! lcores hold only `&self` and call `get`/`for_each`.
+//! SINGLE-WRITER MODEL: no `MULTI_WRITER_ADD`. `insert`/`remove` take `&self` (interior mutation of
+//! the C-side rte_hash) but are SOUND ONLY under the single-writer convention — the caller
+//! guarantees writes are serialized (one writer at a time), while N datapath-lcore readers call
+//! `get`/`for_each` lock-free concurrently. `&self` (not `&mut self`) is deliberate so the hash can
+//! live behind an `Arc` shared with the reader lcores; the serialization is enforced downstream by
+//! the control thread holding the sole writer behind a `Mutex`. `RW_CONCURRENCY_LF` makes ONE
+//! writer + N lock-free readers safe; it does NOT make concurrent writers safe.
 //!
 //! ALL-ZERO KEY CONSTRAINT: DPDK's cuckoo hash reserves an internal dummy key-store slot at index 0
 //! and uses `0` for both `EMPTY_SLOT` and `NULL_SIGNATURE` (buckets are memset to zero). A key whose
@@ -117,7 +122,14 @@ impl<K: Copy, V: Copy> RcuHash<K, V> {
     /// is then NOT stored and the box we allocated is reclaimed immediately (no leak). On overwrite
     /// of an existing key, rte_hash RCU-defers the OLD value box's free (grace period), so a
     /// concurrent lock-free reader still holding the old pointer never sees freed memory.
-    pub fn insert(&mut self, k: &K, v: V) -> bool {
+    ///
+    /// # Single-writer invariant
+    /// Takes `&self` (interior mutation of the C-side rte_hash), but is SOUND ONLY under the
+    /// single-writer convention: the caller guarantees no two threads call `insert`/`remove`
+    /// concurrently. `RW_CONCURRENCY_LF` makes ONE writer + N lock-free readers safe; it does NOT
+    /// make concurrent writers safe. In this codebase the sole writer is the tokio control thread
+    /// (its `SharedConfigMaps`/`ControlCore` lives behind a `Mutex`); datapath lcores only `get`.
+    pub fn insert(&self, k: &K, v: V) -> bool {
         // All-zero keys alias DPDK's reserved dummy slot 0 and double-free under RCU auto-free (see
         // module doc). Catch violations in debug builds; release builds trust the caller.
         debug_assert!(
@@ -176,7 +188,11 @@ impl<K: Copy, V: Copy> RcuHash<K, V> {
     /// Delete `k`. Returns `true` if present and removed. rte_hash RCU-defers both the key-slot
     /// recycle AND the value box free (via `free_key_data_func`) until every registered reader has
     /// passed a grace period, so it is safe against concurrent lock-free readers.
-    pub fn remove(&mut self, k: &K) -> bool {
+    ///
+    /// # Single-writer invariant
+    /// Takes `&self` — see [`RcuHash::insert`]: sound ONLY under the single-writer convention
+    /// (one serialized writer + N lock-free readers); NOT safe against concurrent writers.
+    pub fn remove(&self, k: &K) -> bool {
         // SAFETY: k points to key_len bytes; rte_hash_del_key reads the key and, with
         // RW_CONCURRENCY_LF + internal RCU, is safe against concurrent lock-free readers.
         let pos = unsafe {

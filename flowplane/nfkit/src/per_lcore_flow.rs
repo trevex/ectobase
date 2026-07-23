@@ -222,7 +222,7 @@ mod tests {
 
         // Seed the SHARED config half BEFORE composing (ComposedMaps borrows it immutably): a /32
         // route the datapath getter should read back through the composed view.
-        let mut shared = SharedConfigMaps::new(0, 1024).expect("shared config");
+        let shared = SharedConfigMaps::new(0, 1024).expect("shared config");
         let rv = RouteValue {
             nexthop_vni: 7,
             nexthop_ipv6: [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xaa],

@@ -1,6 +1,7 @@
 //! [`SharedConfigMaps`] — the process-wide, single-writer CONFIG-map tables for the DPDK serve
 //! binary. One instance for the whole process: the tokio control thread is the SOLE writer
-//! (`&mut self`), and every datapath lcore holds a `&SharedConfigMaps` and reads it lock-free every
+//! (writer methods take `&self` but are single-writer only — see the SINGLE-WRITER MODEL note on
+//! the struct), and every datapath lcore holds a `&SharedConfigMaps` and reads it lock-free every
 //! packet. Each table is an [`RcuHash`] (lock-free reader + QSBR-RCU value reclamation, per the
 //! Task-3 gate); this instance owns the single QSBR variable all its tables share, plus an
 //! `AtomicU64` config generation the writer bumps on config changes (conntrack invalidation, spec
@@ -36,7 +37,7 @@
 //! so the hashed key bytes are fully initialized.
 
 use std::alloc::Layout;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use flowplane_common::{
     DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceMetaKey, IfaceMetaVal,
@@ -183,23 +184,34 @@ impl ReaderToken {
 
 /// Process-wide single-writer LF+RCU CONFIG tables + generation counter (see module doc).
 ///
-/// SINGLE-WRITER MODEL: all mutators take `&mut self` (the tokio control thread owns the `&mut`);
-/// datapath lcores hold `&self` and call the getters. This mirrors `RcuHash`'s own receiver split
-/// (`insert`/`remove` are `&mut`, `get`/`for_each` are `&`).
+/// SINGLE-WRITER MODEL: all mutators take `&self` (interior mutation via the C-side rte_hash /
+/// atomics), but are SOUND ONLY UNDER THE SINGLE-WRITER CONVENTION: the caller guarantees no
+/// concurrent writers. The sole writer is the tokio control thread — its `DpdkMapWriter` /
+/// `ControlCore` lives behind a `Mutex`, so writes are serialized — while N datapath lcores hold an
+/// `Arc<SharedConfigMaps>` and call ONLY the `&self` getters lock-free (RCU/QSBR). `&self` (rather
+/// than `&mut self`) is what lets an `Arc<SharedConfigMaps>` be shared across the writer thread and
+/// the reader lcores at once; `RcuHash`'s `RW_CONCURRENCY_LF` makes ONE writer + N lock-free readers
+/// safe but NOT concurrent writers, so the Mutex on the writer side is load-bearing.
 pub struct SharedConfigMaps {
     // ── QSBR (single, shared by every table; 64-byte aligned hand alloc) ──────
     qsbr: *mut dpdk_sys::rte_rcu_qsbr,
     qsbr_layout: Layout,
-    /// Next QSBR reader id to hand out (0..MAX_READERS). Single-writer bookkeeping.
-    next_reader: u32,
+    /// Next QSBR reader id to hand out (0..MAX_READERS). `AtomicU32` so `register_reader` can take
+    /// `&self` (each datapath lcore registers itself through the shared `Arc`); the fetch_add is the
+    /// single source of unique ids.
+    next_reader: AtomicU32,
 
     // ── config generation (writer bumps; readers/CT-invalidation observe) ─────
     config_generation: AtomicU64,
 
     // ── singletons (inline, not hashed) ──────────────────────────────────────
-    local: Option<Local>,
-    dhcp_config: Option<DhcpConfig>,
-    neigh_nat_count: u32,
+    // These are NOT in an RcuHash, so they carry their own interior mutability so the writer methods
+    // can take `&self` (single-writer convention, same as the tables). The two `Copy` Option
+    // singletons use an `RwLock` (single writer ⇒ read-locks never contend with each other and only
+    // rarely with the lone serialized writer); the count is a plain `AtomicU32`.
+    local: std::sync::RwLock<Option<Local>>,
+    dhcp_config: std::sync::RwLock<Option<DhcpConfig>>,
+    neigh_nat_count: AtomicU32,
 
     // ── CONFIG tables (ManuallyDrop<RcuHash>; drop BEFORE the qsbr they reference) ──────────
     // ManuallyDrop prevents the compiler from auto-dropping these fields after Drop::drop returns.
@@ -220,6 +232,21 @@ pub struct SharedConfigMaps {
     vips: std::mem::ManuallyDrop<RcuHash<VipK, [u8; 4]>>,
     dhcp_meta: std::mem::ManuallyDrop<RcuHash<DhcpMetaK, DhcpMeta>>,
 }
+
+// SAFETY: `SharedConfigMaps` holds a raw `*mut rte_rcu_qsbr` and (inside each `RcuHash`) raw
+// rte_hash pointers, which are not auto-`Send`/`Sync`. Implementing both by hand is sound because
+// the RCU concurrency contract is upheld by the caller, NOT by Rust aliasing rules:
+//   * WRITES are serialized — the sole writer (`ControlCore<DpdkMapWriter>`, owning an
+//     `Arc<SharedConfigMaps>`) lives behind a `Mutex` on the tokio control thread, so only one
+//     writer ever touches the tables at a time (`&self` writer methods, single-writer convention).
+//   * READS are lock-free and safe under `RW_CONCURRENCY_LF` + QSBR: each datapath lcore registers
+//     via `register_reader` and reports quiescence, so value boxes are RCU-reclaimed only past a
+//     grace period. Readers call ONLY the `&self` getters.
+// This is exactly the 1-writer/N-lock-free-reader model the §5b RCU anchor validated. It lets an
+// `Arc<SharedConfigMaps>` be shared across the tokio writer thread and the datapath lcore threads.
+// `Send`/`Sync` are NOT a license for concurrent WRITERS — that remains the caller's Mutex to guard.
+unsafe impl Send for SharedConfigMaps {}
+unsafe impl Sync for SharedConfigMaps {}
 
 impl SharedConfigMaps {
     /// Build all CONFIG tables on `socket_id`, each sized `entries * HEADROOM`, sharing one freshly
@@ -291,11 +318,11 @@ impl SharedConfigMaps {
         Ok(Self {
             qsbr,
             qsbr_layout,
-            next_reader: 0,
+            next_reader: AtomicU32::new(0),
             config_generation: AtomicU64::new(0),
-            local: None,
-            dhcp_config: None,
-            neigh_nat_count: 0,
+            local: std::sync::RwLock::new(None),
+            dhcp_config: std::sync::RwLock::new(None),
+            neigh_nat_count: AtomicU32::new(0),
             route4: std::mem::ManuallyDrop::new(route4),
             route6: std::mem::ManuallyDrop::new(route6),
             nat: std::mem::ManuallyDrop::new(nat),
@@ -337,13 +364,12 @@ impl SharedConfigMaps {
     /// process has more datapath lcores than the QSBR was sized for).
     ///
     /// [`report_quiescent`]: Self::report_quiescent
-    pub fn register_reader(&mut self) -> ReaderToken {
-        let id = self.next_reader;
+    pub fn register_reader(&self) -> ReaderToken {
+        let id = self.next_reader.fetch_add(1, Ordering::Relaxed);
         assert!(
             id < MAX_READERS,
             "SharedConfigMaps: more than MAX_READERS ({MAX_READERS}) reader threads registered"
         );
-        self.next_reader += 1;
         // SAFETY: id < MAX_READERS; qsbr initialized for MAX_READERS threads.
         let rc = unsafe { dpdk_sys::nfkit_rcu_qsbr_thread_register(self.qsbr, id) };
         assert_eq!(rc, 0, "qsbr thread_register failed for reader {id}");
@@ -364,36 +390,42 @@ impl SharedConfigMaps {
     // ── singleton setters/getters ───────────────────────────────────────────────
 
     /// Set the `LOCAL[0]` singleton (uplink + underlay gateway).
-    pub fn set_local(&mut self, v: Local) {
-        self.local = Some(v);
+    pub fn set_local(&self, v: Local) {
+        *self.local.write().expect("local RwLock poisoned") = Some(v);
     }
 
     /// Read the `LOCAL[0]` singleton.
     #[must_use]
     pub fn local(&self) -> Option<Local> {
-        self.local
+        *self.local.read().expect("local RwLock poisoned")
     }
 
     /// Set the server-wide DHCP config singleton (`DHCP_CONFIG[0]`).
-    pub fn set_dhcp_config(&mut self, cfg: DhcpConfig) {
-        self.dhcp_config = Some(cfg);
+    pub fn set_dhcp_config(&self, cfg: DhcpConfig) {
+        *self
+            .dhcp_config
+            .write()
+            .expect("dhcp_config RwLock poisoned") = Some(cfg);
     }
 
     /// Read the server-wide DHCP config singleton.
     #[must_use]
     pub fn dhcp_config(&self) -> Option<DhcpConfig> {
-        self.dhcp_config
+        *self
+            .dhcp_config
+            .read()
+            .expect("dhcp_config RwLock poisoned")
     }
 
     /// Set the neighbor-NAT active-slot count (bounds the datapath's neigh-nat scan).
-    pub fn set_neigh_nat_count(&mut self, count: u32) {
-        self.neigh_nat_count = count;
+    pub fn set_neigh_nat_count(&self, count: u32) {
+        self.neigh_nat_count.store(count, Ordering::Release);
     }
 
     /// Read the neighbor-NAT active-slot count.
     #[must_use]
     pub fn neigh_nat_count(&self) -> u32 {
-        self.neigh_nat_count
+        self.neigh_nat_count.load(Ordering::Acquire)
     }
 
     // ── WRITER side (names the DpdkMapWriter, Task 6, calls) ─────────────────────
@@ -402,141 +434,141 @@ impl SharedConfigMaps {
     // `-ENOSPC`. Names are `<table>_insert` / `<table>_remove` mirroring the DpdkMaps setters.
 
     /// Insert/overwrite a `/32` IPv4 route `(vni,ipv4)`. Returns false if the table is full.
-    pub fn route4_insert(&mut self, vni: u32, ipv4: [u8; 4], val: RouteValue) -> bool {
+    pub fn route4_insert(&self, vni: u32, ipv4: [u8; 4], val: RouteValue) -> bool {
         self.route4.insert(&Route4Key::new(vni, ipv4), val)
     }
     /// Remove a `/32` IPv4 route. Returns true if present.
-    pub fn route4_remove(&mut self, vni: u32, ipv4: [u8; 4]) -> bool {
+    pub fn route4_remove(&self, vni: u32, ipv4: [u8; 4]) -> bool {
         self.route4.remove(&Route4Key::new(vni, ipv4))
     }
 
     /// Insert/overwrite a `/128` IPv6 route `(vni,ipv6)`. Returns false if the table is full.
-    pub fn route6_insert(&mut self, vni: u32, ipv6: [u8; 16], val: RouteValue) -> bool {
+    pub fn route6_insert(&self, vni: u32, ipv6: [u8; 16], val: RouteValue) -> bool {
         self.route6.insert(&Route6Key::new(vni, ipv6), val)
     }
     /// Remove a `/128` IPv6 route. Returns true if present.
-    pub fn route6_remove(&mut self, vni: u32, ipv6: [u8; 16]) -> bool {
+    pub fn route6_remove(&self, vni: u32, ipv6: [u8; 16]) -> bool {
         self.route6.remove(&Route6Key::new(vni, ipv6))
     }
 
     /// Insert/overwrite a NAT-GW config entry. Returns false if the table is full.
-    pub fn nat_insert(&mut self, key: NatKey, val: NatValue) -> bool {
+    pub fn nat_insert(&self, key: NatKey, val: NatValue) -> bool {
         self.nat.insert(&NatK::new(key.vni, key.ipv4), val)
     }
     /// Remove a NAT-GW config entry. Returns true if present.
-    pub fn nat_remove(&mut self, key: &NatKey) -> bool {
+    pub fn nat_remove(&self, key: &NatKey) -> bool {
         self.nat.remove(&NatK::new(key.vni, key.ipv4))
     }
 
     /// Register `(vni,ip)` as a public NAT IP (value is a dummy `1`). Returns false if full.
-    pub fn nat_ips_insert(&mut self, vni: u32, ip: [u8; 4]) -> bool {
+    pub fn nat_ips_insert(&self, vni: u32, ip: [u8; 4]) -> bool {
         self.nat_ips.insert(&NatIpK::new(vni, ip), 1)
     }
     /// Deregister a public NAT IP. Returns true if present.
-    pub fn nat_ips_remove(&mut self, vni: u32, ip: [u8; 4]) -> bool {
+    pub fn nat_ips_remove(&self, vni: u32, ip: [u8; 4]) -> bool {
         self.nat_ips.remove(&NatIpK::new(vni, ip))
     }
 
     /// Insert/overwrite an LB service entry. Returns false if the table is full.
-    pub fn lb_insert(&mut self, key: LbKey, val: LbValue) -> bool {
+    pub fn lb_insert(&self, key: LbKey, val: LbValue) -> bool {
         self.lb
             .insert(&LbK::new(key.vni, key.ipv4, key.port, key.proto), val)
     }
     /// Remove an LB service entry. Returns true if present.
-    pub fn lb_remove(&mut self, key: &LbKey) -> bool {
+    pub fn lb_remove(&self, key: &LbKey) -> bool {
         self.lb
             .remove(&LbK::new(key.vni, key.ipv4, key.port, key.proto))
     }
 
     /// Insert/overwrite a Maglev slot → backend IPv6. Returns false if the table is full.
-    pub fn maglev_insert(&mut self, key: MaglevKey, backend: [u8; 16]) -> bool {
+    pub fn maglev_insert(&self, key: MaglevKey, backend: [u8; 16]) -> bool {
         self.maglev
             .insert(&MaglevK::new(key.table_id, key.slot), backend)
     }
     /// Remove a Maglev slot. Returns true if present.
-    pub fn maglev_remove(&mut self, key: &MaglevKey) -> bool {
+    pub fn maglev_remove(&self, key: &MaglevKey) -> bool {
         self.maglev.remove(&MaglevK::new(key.table_id, key.slot))
     }
 
     /// Insert/overwrite an underlay delivery entry (node IPv6 → vni/tap/mac). Returns false if full.
-    pub fn underlay_insert(&mut self, addr: [u8; 16], val: UnderlayValue) -> bool {
+    pub fn underlay_insert(&self, addr: [u8; 16], val: UnderlayValue) -> bool {
         self.underlay.insert(&UnderlayK::new(addr), val)
     }
     /// Remove an underlay entry. Returns true if present.
-    pub fn underlay_remove(&mut self, addr: &[u8; 16]) -> bool {
+    pub fn underlay_remove(&self, addr: &[u8; 16]) -> bool {
         self.underlay.remove(&UnderlayK::new(*addr))
     }
 
     /// Insert/overwrite a firewall rule slot `(ifindex,idx)`. Returns false if the table is full.
-    pub fn fw_rules_insert(&mut self, key: FwRuleKey, rule: FwRule) -> bool {
+    pub fn fw_rules_insert(&self, key: FwRuleKey, rule: FwRule) -> bool {
         self.fw_rules
             .insert(&FwRuleK::new(key.ifindex, key.idx), rule)
     }
     /// Remove a firewall rule slot. Returns true if present.
-    pub fn fw_rules_remove(&mut self, key: &FwRuleKey) -> bool {
+    pub fn fw_rules_remove(&self, key: &FwRuleKey) -> bool {
         self.fw_rules.remove(&FwRuleK::new(key.ifindex, key.idx))
     }
 
     /// Insert/overwrite per-interface firewall rule counts. Returns false if the table is full.
-    pub fn fw_meta_insert(&mut self, ifindex: u32, val: FwMeta) -> bool {
+    pub fn fw_meta_insert(&self, ifindex: u32, val: FwMeta) -> bool {
         self.fw_meta.insert(&FwMetaK::new(ifindex), val)
     }
     /// Remove per-interface firewall meta. Returns true if present.
-    pub fn fw_meta_remove(&mut self, ifindex: u32) -> bool {
+    pub fn fw_meta_remove(&self, ifindex: u32) -> bool {
         self.fw_meta.remove(&FwMetaK::new(ifindex))
     }
 
     /// Insert/overwrite an interfaces entry `(vni,ipv4)` → delivery info. Returns false if full.
-    pub fn ifaces_insert(&mut self, key: IfaceKey, val: IfaceValue) -> bool {
+    pub fn ifaces_insert(&self, key: IfaceKey, val: IfaceValue) -> bool {
         self.ifaces.insert(&IfaceK::new(key.vni, key.ipv4), val)
     }
     /// Remove an interfaces entry. Returns true if present.
-    pub fn ifaces_remove(&mut self, key: IfaceKey) -> bool {
+    pub fn ifaces_remove(&self, key: IfaceKey) -> bool {
         self.ifaces.remove(&IfaceK::new(key.vni, key.ipv4))
     }
 
     /// Insert/overwrite an `IFACE_META` restart-journal entry. Returns false if the table is full.
-    pub fn iface_meta_insert(&mut self, key: IfaceMetaKey, val: IfaceMetaVal) -> bool {
+    pub fn iface_meta_insert(&self, key: IfaceMetaKey, val: IfaceMetaVal) -> bool {
         self.iface_meta.insert(&IfaceMetaK::new(key.id), val)
     }
     /// Remove an `IFACE_META` journal entry. Returns true if present.
-    pub fn iface_meta_remove(&mut self, key: &IfaceMetaKey) -> bool {
+    pub fn iface_meta_remove(&self, key: &IfaceMetaKey) -> bool {
         self.iface_meta.remove(&IfaceMetaK::new(key.id))
     }
 
     /// Insert/overwrite per-port metadata keyed by tap ifindex. Returns false if the table is full.
-    pub fn ports_insert(&mut self, ifindex: u32, meta: PortMeta) -> bool {
+    pub fn ports_insert(&self, ifindex: u32, meta: PortMeta) -> bool {
         self.ports.insert(&PortK::new(ifindex), meta)
     }
     /// Remove per-port metadata. Returns true if present.
-    pub fn ports_remove(&mut self, ifindex: u32) -> bool {
+    pub fn ports_remove(&self, ifindex: u32) -> bool {
         self.ports.remove(&PortK::new(ifindex))
     }
 
     /// Insert/overwrite a neighbor-NAT slot. Returns false if the table is full.
-    pub fn neigh_nat_insert(&mut self, idx: u32, val: NeighborNatEntry) -> bool {
+    pub fn neigh_nat_insert(&self, idx: u32, val: NeighborNatEntry) -> bool {
         self.neigh_nat.insert(&NeighNatK::new(idx), val)
     }
     /// Remove a neighbor-NAT slot. Returns true if present.
-    pub fn neigh_nat_remove(&mut self, idx: u32) -> bool {
+    pub fn neigh_nat_remove(&self, idx: u32) -> bool {
         self.neigh_nat.remove(&NeighNatK::new(idx))
     }
 
     /// Insert/overwrite a VIP 1:1 mapping `(vni,ipv4)` → mapped IPv4. Returns false if full.
-    pub fn vips_insert(&mut self, key: VipKey, mapped: [u8; 4]) -> bool {
+    pub fn vips_insert(&self, key: VipKey, mapped: [u8; 4]) -> bool {
         self.vips.insert(&VipK::new(key.vni, key.ipv4), mapped)
     }
     /// Remove a VIP mapping. Returns true if present.
-    pub fn vips_remove(&mut self, key: &VipKey) -> bool {
+    pub fn vips_remove(&self, key: &VipKey) -> bool {
         self.vips.remove(&VipK::new(key.vni, key.ipv4))
     }
 
     /// Insert/overwrite per-interface DHCP meta. Returns false if the table is full.
-    pub fn dhcp_meta_insert(&mut self, ifindex: u32, val: DhcpMeta) -> bool {
+    pub fn dhcp_meta_insert(&self, ifindex: u32, val: DhcpMeta) -> bool {
         self.dhcp_meta.insert(&DhcpMetaK::new(ifindex), val)
     }
     /// Remove per-interface DHCP meta. Returns true if present.
-    pub fn dhcp_meta_remove(&mut self, ifindex: u32) -> bool {
+    pub fn dhcp_meta_remove(&self, ifindex: u32) -> bool {
         self.dhcp_meta.remove(&DhcpMetaK::new(ifindex))
     }
 
@@ -680,7 +712,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut sc = SharedConfigMaps::new(0, 1024).expect("shared config");
+        let sc = SharedConfigMaps::new(0, 1024).expect("shared config");
         assert_eq!(sc.generation(), 0);
         sc.bump_generation();
         assert_eq!(sc.generation(), 1);
