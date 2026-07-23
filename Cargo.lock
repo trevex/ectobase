@@ -1354,7 +1354,9 @@ dependencies = [
  "dpdk-sys",
  "etherparse",
  "flowplane-common",
+ "flowplane-control",
  "flowplane-core",
+ "flowplane-dpdk",
  "flowplane-sim",
  "libc",
 ]
