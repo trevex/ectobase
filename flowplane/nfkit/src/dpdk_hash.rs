@@ -158,6 +158,31 @@ impl<K: Copy, V: Copy> DpdkHash<K, V> {
         })
     }
 
+    /// Delete `k` from the table. Returns `true` if the key was present and removed. On an LF+RCU
+    /// hash (`new_lf_rcu`) with internal QSBR RCU attached, `rte_hash_del_key` defers key-slot
+    /// reclamation to the QSBR defer queue, so it is safe to call concurrently with lock-free
+    /// readers — the slot is not recycled until every registered reader has reported a quiescent
+    /// state past the deletion. We clear the companion slab slot on success so a stale `V` can never
+    /// be observed if the position is later reused.
+    ///
+    /// # Panics
+    /// Never; a negative return (`-ENOENT`/`-EINVAL`) yields `false`.
+    pub fn remove(&mut self, k: &K) -> bool {
+        // SAFETY: k points to size_of::<K>() == key_len bytes; rte_hash_del_key reads the key
+        // (read-only) and, with RW_CONCURRENCY_LF + internal RCU, is safe against concurrent
+        // lock-free readers. Returns the position removed (>=0) or a negative errno.
+        let pos = unsafe {
+            dpdk_sys::rte_hash_del_key(self.raw.as_ptr(), (k as *const K).cast::<c_void>())
+        };
+        if pos < 0 {
+            return false;
+        }
+        if let Some(slot) = self.slab.get_mut(pos as usize) {
+            *slot = None;
+        }
+        true
+    }
+
     #[must_use]
     pub fn get(&self, k: &K) -> Option<V> {
         // SAFETY: k points to key_len bytes; read-only lookup.
