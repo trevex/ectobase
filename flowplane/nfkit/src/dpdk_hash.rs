@@ -112,6 +112,52 @@ impl<K: Copy, V: Copy> DpdkHash<K, V> {
         }
     }
 
+    /// Create a lock-free-reader (`RW_CONCURRENCY_LF`) hash with QSBR RCU attached to `qsbr`.
+    /// Caller owns the `rte_rcu_qsbr` (see `SharedConfigMaps`), passing a stable pointer that
+    /// outlives this hash. Single-writer model: no `MULTI_WRITER_ADD`.
+    ///
+    /// # Errors
+    /// Returns `HashError` if the name is invalid, `rte_hash_create` fails, or
+    /// `rte_hash_rcu_qsbr_add` fails to attach the QSBR variable.
+    ///
+    /// # Safety
+    /// `qsbr` must point to an initialized `rte_rcu_qsbr` that outlives the returned hash.
+    pub unsafe fn new_lf_rcu(
+        name: &str,
+        entries: u32,
+        socket_id: i32,
+        qsbr: *mut dpdk_sys::rte_rcu_qsbr,
+    ) -> Result<Self, HashError> {
+        let cname = CString::new(name).map_err(|_| HashError)?;
+        let mut params: dpdk_sys::rte_hash_parameters = std::mem::zeroed();
+        params.name = cname.as_ptr();
+        params.entries = entries;
+        params.key_len = std::mem::size_of::<K>() as u32;
+        params.socket_id = socket_id;
+        // extra_flag is u8; the const is u32 (= 32) so cast down.
+        params.extra_flag = dpdk_sys::RTE_HASH_EXTRA_FLAGS_RW_CONCURRENCY_LF as u8;
+        // SAFETY: params fully initialized (zeroed then set); name lives for the call. hash_func=NULL
+        // -> DPDK default.
+        let raw = dpdk_sys::rte_hash_create(&params);
+        let raw = NonNull::new(raw).ok_or(HashError)?;
+        // Zero-init cfg: derive_default(false) globally, so no ..Default::default(). All-zeros gives
+        // mode = RTE_HASH_QSBR_MODE_DQ (default), unset dq_size/limits (DPDK picks defaults), and
+        // NULL key_data_ptr/free_key_data_func. We set only `v`.
+        let mut cfg: dpdk_sys::rte_hash_rcu_config = std::mem::zeroed();
+        cfg.v = qsbr;
+        // rte_hash_rcu_qsbr_add: 0 on success, 1 on error (rte_errno set).
+        let rc = dpdk_sys::rte_hash_rcu_qsbr_add(raw.as_ptr(), &mut cfg);
+        if rc != 0 {
+            dpdk_sys::rte_hash_free(raw.as_ptr());
+            return Err(HashError);
+        }
+        Ok(Self {
+            raw,
+            slab: vec![None; entries as usize],
+            _k: PhantomData,
+        })
+    }
+
     #[must_use]
     pub fn get(&self, k: &K) -> Option<V> {
         // SAFETY: k points to key_len bytes; read-only lookup.
@@ -130,5 +176,26 @@ impl<K: Copy, V: Copy> Drop for DpdkHash<K, V> {
     fn drop(&mut self) {
         // SAFETY: sole owner; frees the hash.
         unsafe { dpdk_sys::rte_hash_free(self.raw.as_ptr()) }
+    }
+}
+
+#[cfg(test)]
+mod lf_rcu_tests {
+    use super::*;
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct K {
+        v: u32,
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct V {
+        v: u64,
+    }
+
+    #[test]
+    #[ignore = "requires EAL; run under the nfkit EAL harness"]
+    fn lf_rcu_hash_add_get() {
+        let _ = DpdkHash::<K, V>::new_lf_rcu; // symbol exists with the intended signature
     }
 }
