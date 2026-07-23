@@ -8,6 +8,7 @@ mod flow;
 mod mbuf;
 mod mbuf_pkt;
 mod mempool;
+mod per_lcore_flow;
 mod port;
 mod rcu_hash;
 mod rss;
@@ -26,6 +27,7 @@ pub use flow::{
 pub use mbuf::{Mbuf, MbufBurst, MbufError, BURST};
 pub use mbuf_pkt::MbufPkt;
 pub use mempool::{Mempool, MempoolError};
+pub use per_lcore_flow::{ComposedMaps, PerLcoreFlowMaps};
 pub use port::{Port, PortError, RxQueue, TxQueue};
 pub use rcu_hash::RcuHash;
 pub use rss::{rss_queue, toeplitz_softrss, SYMMETRIC_RSS_KEY};
