@@ -1,0 +1,17 @@
+[package]
+name = "flowplane-control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+flowplane-common = { path = "../flowplane-common" }
+anyhow = { workspace = true }
+
+[features]
+# In-memory MapWriter for tests (this crate) and B1b bring-up. Off by default.
+mem-writer = []
+
+[dev-dependencies]
+flowplane-control = { path = ".", features = ["mem-writer"] }

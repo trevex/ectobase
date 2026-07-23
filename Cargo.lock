@@ -693,6 +693,7 @@ dependencies = [
  "env_logger",
  "etherparse",
  "flowplane-common",
+ "flowplane-control",
  "flowplane-core",
  "flowplane-ebpf",
  "flowplane-sim",
@@ -713,6 +714,15 @@ name = "flowplane-common"
 version = "0.1.0"
 dependencies = [
  "aya",
+]
+
+[[package]]
+name = "flowplane-control"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flowplane-common",
+ "flowplane-control",
 ]
 
 [[package]]

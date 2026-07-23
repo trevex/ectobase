@@ -7,7 +7,6 @@ mod attach;
 mod conntrack_gc;
 mod control;
 mod loader;
-mod maglev;
 mod maps;
 mod node;
 mod underlay;
@@ -892,7 +891,7 @@ async fn main() -> anyhow::Result<()> {
                     },
                     flowplane_common::LbValue {
                         table_id: tid,
-                        size: maglev::TABLE_SIZE,
+                        size: flowplane_control::maglev::TABLE_SIZE,
                     },
                 )?;
                 // Program the LB's own underlay /128 so ingress recognises LB-destined packets.
@@ -921,7 +920,7 @@ async fn main() -> anyhow::Result<()> {
                 if bes.is_empty() {
                     continue;
                 }
-                let table = maglev::build(bes);
+                let table = flowplane_control::maglev::build(bes);
                 for (slot, &bi) in table.iter().enumerate() {
                     maglev_map.upsert(
                         flowplane_common::MaglevKey {
