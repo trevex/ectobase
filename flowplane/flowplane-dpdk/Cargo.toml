@@ -1,0 +1,21 @@
+[package]
+name = "flowplane-dpdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+flowplane-common = { path = "../flowplane-common", features = ["user"] }
+flowplane-control = { path = "../flowplane-control" }
+flowplane-core = { path = "../flowplane-core" }
+nfkit = { path = "../nfkit" }
+anyhow = { workspace = true }
+# Direct dep on dpdk-sys (which has `links = "dpdk"`) so this crate's build.rs receives
+# `DEP_DPDK_PREFIX` and can re-emit the DPDK static link graph for the bin/test binaries. Mirrors
+# how nfkit links its own test/bin artifacts.
+dpdk-sys = { path = "../dpdk-sys" }
+
+[[bin]]
+name = "flowplane-dpdk"
+path = "src/main.rs"
