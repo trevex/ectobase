@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         meson ninja-build python3-pyelftools \
         libnuma-dev \
         clang libclang-dev llvm-dev \
-        libbpf-dev libxdp-dev \
+        libbpf-dev libxdp-dev libelf-dev \
         libpcap-dev \
         protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
@@ -49,25 +49,20 @@ ENV PATH=/root/.cargo/bin:${PATH}
 RUN curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
         | sh -s -- -y --default-toolchain none --profile minimal
 
-# Escape hatch mirroring dpdk-sys/build.rs: if DPDK_PREFIX is set, the multi-minute DPDK
-# download+build is skipped and the prebuilt prefix is linked instead. CI can point this at a
-# cached prefix (restored into the build context / a mounted cache) to save build time. Empty by
-# default -> build.rs builds DPDK from source.
-#
-# IMPORTANT: dpdk-sys/build.rs treats `env::var("DPDK_PREFIX")` succeeding (even with an EMPTY
-# value) as "use this prefix", so it would try to link a non-existent `""/lib/pkgconfig/libdpdk.pc`
-# and panic. We therefore must NOT export DPDK_PREFIX into the environment when it is empty — hence
-# the ARG is exported to ENV only inside the RUN below, and only when non-empty.
+# Escape hatch mirroring dpdk-sys/build.rs: if DPDK_PREFIX is set to a NON-EMPTY path, the
+# multi-minute DPDK download+build is skipped and the prebuilt prefix is linked instead. CI can
+# point this at a cached prefix (restored into the build context / a mounted cache) to save build
+# time. Empty (the default) -> build.rs builds DPDK from source. build.rs treats an empty value as
+# unset, so the `ARG DPDK_PREFIX=` default leaking into the env as "" is handled correctly there.
 ARG DPDK_PREFIX=
+ENV DPDK_PREFIX=${DPDK_PREFIX}
 
 WORKDIR /src
 COPY . .
 
-# Release build of just the DPDK host binary. dpdk-sys/build.rs builds DPDK from source (unless
-# DPDK_PREFIX is set) then flowplane-dpdk links it statically. DPDK_PREFIX is exported only when
-# the build-arg is non-empty (see the note above about the empty-string trap).
-RUN if [ -n "${DPDK_PREFIX}" ]; then export DPDK_PREFIX="${DPDK_PREFIX}"; fi \
-    && cargo build --release -p flowplane-dpdk \
+# Release build of just the DPDK host binary. dpdk-sys/build.rs builds DPDK from source (when
+# DPDK_PREFIX is empty/unset) then flowplane-dpdk links it statically.
+RUN cargo build --release -p flowplane-dpdk \
     && cp target/release/flowplane-dpdk /flowplane-dpdk \
     && strip /flowplane-dpdk
 

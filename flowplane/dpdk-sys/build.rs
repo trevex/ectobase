@@ -13,9 +13,12 @@ const DRIVERS: &str = "net/null,net/pcap,net/tap,net/af_xdp";
 
 fn main() {
     // Escape hatch: a prebuilt DPDK prefix (nix/CI) skips the download+build entirely.
+    // An EMPTY value is treated as unset (build from source): a Docker `ARG DPDK_PREFIX=` leaks
+    // into the build env as `Ok("")`, which would otherwise resolve to a relative `lib/…` prefix
+    // and fail with "libdpdk.pc missing" instead of building DPDK.
     let prefix = match env::var("DPDK_PREFIX") {
-        Ok(p) => PathBuf::from(p),
-        Err(_) => build_dpdk_cached(),
+        Ok(p) if !p.trim().is_empty() => PathBuf::from(p),
+        _ => build_dpdk_cached(),
     };
     let pc_dir = prefix.join("lib/pkgconfig");
 
@@ -144,6 +147,12 @@ fn build_dpdk_cached() -> PathBuf {
             build.to_str().unwrap(),
             srcdir.to_str().unwrap(),
             &format!("--prefix={}", prefix.display()),
+            // Pin libdir to `lib` on ALL platforms. Debian/Ubuntu meson defaults libdir to the
+            // multiarch `lib/x86_64-linux-gnu`, which would install libdpdk.pc + the static libs
+            // outside the `prefix/lib/pkgconfig` + `prefix/lib` paths this build script reads
+            // (they match on nix, which uses plain `lib`). Without this, the Debian container
+            // build panics "libdpdk.pc missing" even though DPDK built + installed successfully.
+            "--libdir=lib",
             "--default-library=static",
             "-Dplatform=generic", // portable, no -march=native
             "-Dtests=false",
@@ -247,7 +256,25 @@ fn emit_dpdk_link_flags(prefix: &Path) {
     if DRIVERS.split(',').any(|d| d.trim() == "net/af_xdp") {
         emit_pkgconfig_link_flags("libbpf");
         emit_pkgconfig_link_flags("libxdp");
+        // DPDK's `librte_bpf.a` references libelf's `elf_*` symbols IFF DPDK's meson found libelf
+        // at build time. On Debian, `libbpf-dev` pulls in `libelf-dev`, so DPDK compiles the ELF
+        // loader and the static link needs `-lelf`; on nix libelf is absent, so `librte_bpf.a` has
+        // no `elf_*` refs and needs nothing (and there is no `libelf.pc` to link against). The
+        // presence of `libelf.pc` correlates exactly with the need — emit it only when found, via
+        // pkg-config so its search path resolves on both distros.
+        if pkgconfig_exists("libelf") {
+            emit_pkgconfig_link_flags("libelf");
+        }
     }
+}
+
+/// True if pkg-config knows the package (used to conditionally emit an optional dep).
+fn pkgconfig_exists(pkg: &str) -> bool {
+    Command::new("pkg-config")
+        .args(["--exists", pkg])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// Emit rustc-link-search + rustc-link-lib directives for a pkg-config package.
