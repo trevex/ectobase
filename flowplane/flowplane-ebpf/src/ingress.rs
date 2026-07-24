@@ -245,20 +245,29 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
     }
 
     // Ingress firewall: enforce the DESTINATION interface's INGRESS rules on NEW inbound flows
-    // (established flows — including seeded returns — already have a conntrack entry, so they are
-    // allowed without re-evaluation). Runs on the post-LB/NAT-DNAT inner 5-tuple.
-    if let Some(key) = crate::conntrack::ct_key(ctx.data(), ctx.data_end(), ETH_LEN + IPV6_LEN, vni)
-    {
-        if unsafe { crate::maps::CONNTRACK.get(&key) }.is_none()
-            && flowplane_core::firewall::fw_eval_dir(
-                &crate::coreimpl::CtxPkt { ctx },
-                &crate::coreimpl::GlobalMaps,
-                ETH_LEN + IPV6_LEN,
-                tap_ifindex,
-                flowplane_common::FW_DIR_INGRESS,
-            ) == flowplane_common::FW_ACTION_DROP
+    // (established flows already have a conntrack entry, so they are allowed without re-evaluation).
+    // Runs on the post-LB-DNAT inner 5-tuple. SKIPPED for NAT returns (`nat_guest.is_some()`): a NAT
+    // return matched a peer-independent CT_REWRITE_DST reverse entry — it is the reply to a flow the
+    // guest itself initiated (already egress-firewalled), so it is established BY DEFINITION. The
+    // reverse-DNAT above rewrote the inner dst to the guest IP, so a fresh `ct_key` here would NOT
+    // find the peer-independent reverse entry (keyed `(vni,0,nat_ip,0,nat_port)`) and would wrongly
+    // deny-by-default. Mirrors `flowplane_core::process_uplink_nat_return` (no firewall) and the
+    // `nat_guest.is_none()` guards on the neighbor-NAT / conntrack-track blocks above/below.
+    if nat_guest.is_none() {
+        if let Some(key) =
+            crate::conntrack::ct_key(ctx.data(), ctx.data_end(), ETH_LEN + IPV6_LEN, vni)
         {
-            return Ok(xdp_action::XDP_DROP);
+            if unsafe { crate::maps::CONNTRACK.get(&key) }.is_none()
+                && flowplane_core::firewall::fw_eval_dir(
+                    &crate::coreimpl::CtxPkt { ctx },
+                    &crate::coreimpl::GlobalMaps,
+                    ETH_LEN + IPV6_LEN,
+                    tap_ifindex,
+                    flowplane_common::FW_DIR_INGRESS,
+                ) == flowplane_common::FW_ACTION_DROP
+            {
+                return Ok(xdp_action::XDP_DROP);
+            }
         }
     }
 

@@ -272,8 +272,6 @@ cmd_up() {
         --meter "gA-h=1:0" \
         --fw-rule "gA-h:eg:accept:icmp:0.0.0.0/0:0.0.0.0/0:*" \
         --fw-rule "gA-h:in:accept:icmp:10.0.0.6/32:0.0.0.0/0:*" \
-        --fw-rule "gA-h:in:accept:icmp:10.0.0.8/32:0.0.0.0/0:*" \
-        --fw-rule "gA-h:in:accept:icmp:10.0.0.9/32:0.0.0.0/0:*" \
         --fw-rule "gA2-h:eg:accept:icmp:0.0.0.0/0:0.0.0.0/0:*" \
         --fw-rule "gA2-h:in:accept:icmp:10.0.0.6/32:0.0.0.0/0:*" \
         --fw-rule "gC-h:eg:accept:icmp:0.0.0.0/0:0.0.0.0/0:*" \
