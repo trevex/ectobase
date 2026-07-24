@@ -34,6 +34,16 @@ TCPDUMP="$(command -v tcpdump || true)"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
+# Run the flowplane binary inside a netns WITH a bpffs mounted. `ip netns exec` unshares a fresh
+# mount namespace and remounts /sys on EVERY invocation, which shadows the host bpffs at
+# /sys/fs/bpf — and the binary pins its ephemeral maps to /sys/fs/bpf/flowplane-eph-<pid>. So the
+# bpffs must be mounted in the SAME exec as the binary (a mount from a prior exec does not persist).
+# Usage: nsbin <netns> <flowplane-subcommand> <args...>   (append & / >log as usual)
+nsbin() {
+    local ns="$1"; shift
+    sudo ip netns exec "$ns" sh -c 'mount -t bpf bpf /sys/fs/bpf 2>/dev/null || true; exec "$@"' _ "$BIN" "$@"
+}
+
 # ---------------------------------------------------------------------------
 cmd_up() {
     [[ -x "$BIN" ]] || die "binary not found at $BIN — run: cargo build -p flowplane"
@@ -215,21 +225,21 @@ cmd_up() {
     echo $! >> "$PIDFILE"
     sudo "$BIN" pass --iface uB-br &
     echo $! >> "$PIDFILE"
-    sudo ip netns exec guesta "$BIN" pass --iface gA &
+    nsbin guesta pass --iface gA &
     echo $! >> "$PIDFILE"
-    sudo ip netns exec guestb "$BIN" pass --iface gB &
+    nsbin guestb pass --iface gB &
     echo $! >> "$PIDFILE"
-    sudo ip netns exec guesta2 "$BIN" pass --iface gA2 &
+    nsbin guesta2 pass --iface gA2 &
     echo $! >> "$PIDFILE"
-    sudo ip netns exec extsrv "$BIN" pass --iface gE &
+    nsbin extsrv pass --iface gE &
     echo $! >> "$PIDFILE"
-    sudo ip netns exec guestc "$BIN" pass --iface gC &
+    nsbin guestc pass --iface gC &
     echo $! >> "$PIDFILE"
-    sudo ip netns exec guestd "$BIN" pass --iface gD &
+    nsbin guestd pass --iface gD &
     echo $! >> "$PIDFILE"
     sudo "$BIN" pass --iface uC-br &
     echo $! >> "$PIDFILE"
-    sudo ip netns exec extclient "$BIN" pass --iface gX &
+    nsbin extclient pass --iface gX &
     echo $! >> "$PIDFILE"
 
     sleep 1
@@ -239,7 +249,7 @@ cmd_up() {
 
     # hypa: two local guests (gA=10.0.0.5, gA2=10.0.0.7) + remote route to hypb guest (10.0.0.6)
     # --gateway-mac = peer uplink MAC (flat-L2 lab: the bridge forwards to UB_MAC directly)
-    sudo ip netns exec hypa "$BIN" bringup \
+    nsbin hypa bringup \
         --uplink uA \
         --local-underlay fd00::1 \
         --gateway 10.0.0.1 \
@@ -260,6 +270,13 @@ cmd_up() {
         --remote "10.0.0.9=fd00:c::9=0" \
         --external "10.0.0.9" \
         --meter "gA-h=1:0" \
+        --fw-rule "gA-h:eg:accept:icmp:0.0.0.0/0:0.0.0.0/0:*" \
+        --fw-rule "gA-h:in:accept:icmp:10.0.0.6/32:0.0.0.0/0:*" \
+        --fw-rule "gA-h:in:accept:icmp:10.0.0.8/32:0.0.0.0/0:*" \
+        --fw-rule "gA-h:in:accept:icmp:10.0.0.9/32:0.0.0.0/0:*" \
+        --fw-rule "gA2-h:eg:accept:icmp:0.0.0.0/0:0.0.0.0/0:*" \
+        --fw-rule "gA2-h:in:accept:icmp:10.0.0.6/32:0.0.0.0/0:*" \
+        --fw-rule "gC-h:eg:accept:icmp:0.0.0.0/0:0.0.0.0/0:*" \
         --remote "10.0.0.6=fd00:b::206=100" \
         --gateway6 "fd00:ff::1" \
         --guest6 "gA-h=fd00:ff::5=fd00:a::5=0" \
@@ -268,7 +285,7 @@ cmd_up() {
 
     # hypb: one local guest (gB=10.0.0.6) + remote routes to both hypa guests
     # --gateway-mac = peer uplink MAC (flat-L2 lab: the bridge forwards to UA_MAC directly)
-    sudo ip netns exec hypb "$BIN" bringup \
+    nsbin hypb bringup \
         --uplink uB \
         --local-underlay fd00::2 \
         --gateway 10.0.0.1 \
@@ -282,9 +299,14 @@ cmd_up() {
         --remote "10.0.0.200=fd00:a::200=0" \
         --remote "10.0.0.50=fd00:a::5=0" \
         --remote "10.0.0.5=fd00:a::205=100" \
-        --firewall-enforce true \
         --fw-rule "gB-h:in:accept:icmp:10.0.0.5/32:0.0.0.0/0:*" \
+        --fw-rule "gB-h:eg:accept:icmp:0.0.0.0/0:0.0.0.0/0:*" \
         --fw-rule "gB-h:in:drop:icmp:10.0.0.7/32:0.0.0.0/0:*" \
+        --fw-rule "gE-h:eg:accept:icmp:0.0.0.0/0:0.0.0.0/0:*" \
+        --fw-rule "gE-h:in:accept:icmp:10.0.0.6/32:0.0.0.0/0:*" \
+        --fw-rule "gE-h:in:accept:icmp:10.0.0.50/32:0.0.0.0/0:*" \
+        --fw-rule "gD-h:eg:accept:icmp:0.0.0.0/0:0.0.0.0/0:*" \
+        --fw-rule "gD-h:in:accept:icmp:10.0.0.5/32:0.0.0.0/0:*" \
         --underlay-marker "fd00:b::50:0" \
         --neigh-nat "10.0.0.50:20000:30000@fd00:a::5@0" \
         --gateway6 "fd00:ff::1" \
@@ -294,30 +316,31 @@ cmd_up() {
 
     # hypc: the external client's node. extclient(10.0.0.9) replies to the NAT IP 10.0.0.50, which
     # it routes to the hypb GATEWAY marker fd00:b::50 (NOT the owner hypa) — exercising neighbor-NAT.
-    sudo ip netns exec hypc "$BIN" bringup \
+    nsbin hypc bringup \
         --uplink uC \
         --local-underlay fd00::3 \
         --gateway 10.0.0.1 \
         --gateway-mac "ff:ff:ff:ff:ff:ff" \
         --guest "gX-h=10.0.0.9=${GX_MAC}=fd00:c::9=0" \
         --remote "10.0.0.50=fd00:b::50=0" \
-        --remote "10.0.0.5=fd00:a::5=0" &
+        --remote "10.0.0.5=fd00:a::5=0" \
+        --fw-rule "gX-h:eg:accept:icmp:0.0.0.0/0:0.0.0.0/0:*" \
+        --fw-rule "gX-h:in:accept:icmp:10.0.0.50/32:0.0.0.0/0:*" &
     echo $! >> "$PIDFILE"
 
     sleep 2
 
     # ---- verify XDP attachments ----
-    echo "=== XDP attachment verification ==="
-    echo "hypa gA-h (guest_tx):"
-    sudo ip netns exec hypa ip -d link show gA-h | grep -E 'xdp|prog' || echo "  WARNING: no xdp on gA-h"
-    echo "hypa gA2-h (guest_tx):"
-    sudo ip netns exec hypa ip -d link show gA2-h | grep -E 'xdp|prog' || echo "  WARNING: no xdp on gA2-h"
-    echo "hypa uA (uplink_rx):"
-    sudo ip netns exec hypa ip -d link show uA   | grep -E 'xdp|prog' || echo "  WARNING: no xdp on uA"
-    echo "hypb gB-h (guest_tx):"
-    sudo ip netns exec hypb ip -d link show gB-h | grep -E 'xdp|prog' || echo "  WARNING: no xdp on gB-h"
-    echo "hypb uB (uplink_rx):"
-    sudo ip netns exec hypb ip -d link show uB   | grep -E 'xdp|prog' || echo "  WARNING: no xdp on uB"
+    echo "=== datapath attachment verification ==="
+    # The guest edge is tcx now (tc_guest_tx tcx/ingress), NOT XDP — verify via bpftool net (needs a
+    # bpffs mounted in the same netns exec, like the binary). The uplink is XDP (uplink_rx).
+    check_tcx()  { sudo ip netns exec "$1" sh -c 'mount -t bpf bpf /sys/fs/bpf 2>/dev/null; bpftool net show dev '"$2"' 2>/dev/null' | grep -qE 'tc_guest_tx|tcx' && echo "  tcx guest_tx OK on $2" || echo "  WARNING: no tcx guest_tx on $2"; }
+    check_xdp()  { sudo ip netns exec "$1" ip -d link show "$2" | grep -qE 'xdp|prog' && echo "  xdp uplink_rx OK on $2" || echo "  WARNING: no xdp on $2"; }
+    check_tcx hypa gA-h
+    check_tcx hypa gA2-h
+    check_xdp hypa uA
+    check_tcx hypb gB-h
+    check_xdp hypb uB
 
     echo "=== UP complete ==="
 }
@@ -328,17 +351,18 @@ cmd_test() {
     sudo ip netns exec guesta ping -c 3 -W 2 10.0.0.6
     echo ""
 
-    echo "=== Test 2: DATAPATH ARP proof — 10.0.0.1 resolves to the datapath gateway MAC ==="
-    # dpservice-style virtual gateway: the datapath answers ARP for the gateway using the VF's OWN
-    # MAC (point-to-point L2). So guesta's neigh for 10.0.0.1 must show guesta's own gA MAC.
-    GA_OWN_MAC=$(sudo ip netns exec guesta cat /sys/class/net/gA/address)
+    echo "=== Test 2: DATAPATH ARP proof — 10.0.0.1 resolves to the distinct router GW_MAC ==="
+    # The datapath advertises the gateway at a DISTINCT router MAC (GW_MAC 02:00:00:00:00:01), NOT
+    # the guest's own VF MAC — the flowplane model diverged from dpservice here (see the
+    # feedback-not-a-dpservice change). So guesta's neigh for 10.0.0.1 must show that router MAC.
+    GW_MAC="02:00:00:00:00:01"
     sudo ip netns exec guesta ping -c1 -W1 10.0.0.6 >/dev/null 2>&1 || true  # trigger ARP
     NEIGH=$(sudo ip netns exec guesta ip neigh show 10.0.0.1)
     echo "  $NEIGH"
-    if echo "$NEIGH" | grep -qi "$GA_OWN_MAC"; then
-        echo "  ARP proof OK: datapath replied with the VF's own MAC ($GA_OWN_MAC)"
+    if echo "$NEIGH" | grep -qi "$GW_MAC"; then
+        echo "  ARP proof OK: datapath replied with the distinct router GW_MAC ($GW_MAC)"
     else
-        echo "  WARNING: expected lladdr $GA_OWN_MAC but got: $NEIGH"
+        echo "  WARNING: expected lladdr $GW_MAC but got: $NEIGH"
     fi
     echo ""
 
@@ -566,33 +590,43 @@ cmd_test() {
     fi
     echo ""
 
-    echo "=== Test 13: rate metering — guesta egress capped at 1 Mbps (flood drops, slow passes) ==="
-    # gA-h has a 1 Mbps total-egress token bucket (~125 KB/s). A fast flood of large packets exceeds
-    # it -> significant loss; a slow, small ping stays under the cap -> 0 loss.
-    FLOOD=$(sudo ip netns exec guesta ping -c 60 -i 0.003 -s 1400 -W 1 10.0.0.6 2>/dev/null \
-            | grep -oE '[0-9]+% packet loss' | grep -oE '^[0-9]+' || echo 100)
-    echo "  flood (60x1400B @ ~3ms): ${FLOOD}% loss"
-    sleep 1  # let the bucket refill
+    echo "=== Test 13: rate metering — guesta egress SHAPED to 1 Mbps (EDT paces, not policed) ==="
+    # gA-h has a 1 Mbps total-egress cap. The datapath SHAPES via EDT + the uplink FQ qdisc (it PACES
+    # packets by tx-timestamp), it does NOT police/drop — so the proof is throughput, not loss: a
+    # burst of N large packets is delayed so its effective rate is ~1 Mbps (a line-rate send would be
+    # near-instant). We send 300x1400B (420 KB); at 1 Mbps that takes ~3.4 s, at line rate <0.5 s.
+    START=$(date +%s%N)
+    sudo ip netns exec guesta ping -c 300 -i 0.001 -s 1400 -W 2 10.0.0.6 >/dev/null 2>&1 || true
+    END=$(date +%s%N)
+    ELAPSED_MS=$(( (END - START) / 1000000 ))
+    # 300 * (1400 + 28 IP/ICMP + 26 outer overhead) ~= 435 KB -> Mbps = bytes*8 / (ms*1000)
+    MBPS=$(( 300 * 1454 * 8 / (ELAPSED_MS * 1000 + 1) ))
+    echo "  300x1400B burst took ${ELAPSED_MS} ms -> ~${MBPS} Mbps effective"
+    sleep 1  # let the shaper drain
     if sudo ip netns exec guesta ping -c 3 -i 1 -W 2 10.0.0.6 >/dev/null 2>&1; then
         SLOW_OK=1
     else
         SLOW_OK=0
     fi
-    if [ "${FLOOD:-0}" -ge 20 ] && [ "$SLOW_OK" -eq 1 ]; then
-        echo "  rate metering OK: flood throttled (${FLOOD}% loss), slow traffic passed"
+    # Shaping proof: the burst was paced (took well over the ~0.5 s a line-rate send needs, and the
+    # effective rate is near the 1 Mbps cap — allow headroom to ~3 Mbps for FQ burst/horizon), and
+    # slow traffic under the cap passes cleanly.
+    if [ "$ELAPSED_MS" -ge 1500 ] && [ "$MBPS" -le 3 ] && [ "$SLOW_OK" -eq 1 ]; then
+        echo "  rate metering OK: egress shaped to ~1 Mbps (paced ${ELAPSED_MS} ms), slow traffic passed"
     else
-        echo "  WARNING: metering not behaving (flood loss=${FLOOD}%, slow_ok=${SLOW_OK})"
+        echo "  WARNING: metering not shaping (elapsed=${ELAPSED_MS} ms, ~${MBPS} Mbps, slow_ok=${SLOW_OK})"
     fi
     echo ""
 
-    echo "=== Test 14: IPv6 ND — guesta resolves the v6 gateway via the datapath (NA = VF's own MAC) ==="
-    # The datapath answers ICMPv6 NS for fd00:ff::1 with a Neighbor Advertisement carrying the VF's
-    # own MAC (dpservice-style virtual gateway). A v6 ping triggers ND; the neigh must then resolve.
-    GA_OWN_MAC=$(sudo ip netns exec guesta cat /sys/class/net/gA/address)
+    echo "=== Test 14: IPv6 ND — guesta resolves the v6 gateway via the datapath (NA = router GW_MAC) ==="
+    # The datapath answers ICMPv6 NS for fd00:ff::1 with a Neighbor Advertisement carrying the
+    # distinct router GW_MAC (02:00:00:00:00:01), the same virtual-gateway MAC it uses for ARP —
+    # NOT the guest's own VF MAC (the flowplane model diverged from dpservice; see Test 2).
+    GW_MAC="02:00:00:00:00:01"
     sudo ip netns exec guesta ping -6 -c 1 -W 2 fd00:ff::6 >/dev/null 2>&1 || true  # triggers ND
     NB=$(sudo ip netns exec guesta ip -6 neigh show fd00:ff::1 2>/dev/null)
-    if echo "$NB" | grep -qi "$GA_OWN_MAC"; then
-        echo "  ND proof OK: datapath answered NS for the v6 gateway with the VF's own MAC ($GA_OWN_MAC)"
+    if echo "$NB" | grep -qi "$GW_MAC"; then
+        echo "  ND proof OK: datapath answered NS for the v6 gateway with the router GW_MAC ($GW_MAC)"
     else
         echo "  WARNING: v6 gateway not resolved via datapath ND ($NB)"
     fi
