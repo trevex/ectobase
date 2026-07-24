@@ -159,6 +159,35 @@ impl SimNode {
         }
     }
 
+    /// Unified host `uplink_rx`: drives [`flowplane_core::datapath::process_uplink_rx`], the shared
+    /// entry that dispatches an established NAT return (inner dst a registered nat_ip with a matching
+    /// `CT_REWRITE_DST` reverse entry, not LB-claimed) to the reverse-DNAT path and everything else to
+    /// the LB + base path — the SAME base-vs-NAT-return decision the eBPF `try_uplink_rx` makes inline
+    /// and the DPDK serve loop drives. Use this (over [`SimNode::uplink`] / [`SimNode::uplink_nat_return`],
+    /// which force one branch) to exercise the dispatch itself.
+    pub fn uplink_rx(
+        &mut self,
+        encapped: &[u8],
+        vni: u32,
+        u: UnderlayValue,
+        outer_dst: [u8; 16],
+        local: &Local,
+    ) -> SimOut {
+        let mut pkt = VecPkt::from_bytes(encapped);
+        let in_ = flowplane_core::datapath::UplinkIn {
+            vni,
+            u,
+            outer_dst,
+            local,
+            now: self.now,
+        };
+        let action = flowplane_core::datapath::process_uplink_rx(&mut pkt, &mut self.maps, &in_);
+        SimOut {
+            action,
+            pkt: pkt.into_bytes(),
+        }
+    }
+
     /// Convenience wrapper for a plain non-LB delivery to `tap` (used by `ns_scenario_test`): builds
     /// a base `UnderlayValue` and delegates to [`SimNode::uplink`]. With no LB maps set,
     /// `lb_select_forward` returns None and the base path runs.

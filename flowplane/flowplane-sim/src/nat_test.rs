@@ -16,7 +16,7 @@
 use etherparse::PacketBuilder;
 use flowplane_common::{
     CtEntry, CtKey, FwMeta, FwRule, Local, NatKey, NatValue, PortMeta, RouteValue, UnderlayValue,
-    CT_F_SRC_NAT, CT_REWRITE_DST, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
+    CT_F_SRC_NAT, CT_REWRITE_DST, FW_ACTION_ACCEPT, FW_DIR_EGRESS, FW_DIR_INGRESS,
 };
 use flowplane_core::encap::{EncapParams, ETH_LEN, IPV6_LEN};
 use flowplane_core::pkt::Action;
@@ -800,5 +800,86 @@ fn dnat_return_udp_rewrites_dst_ip_and_port() {
     assert_eq!(
         src_ip, DNAT_EXT_IP,
         "inner src IP must remain EXT_IP (unchanged, UDP)"
+    );
+}
+
+/// A deny-by-default enforced ingress firewall on the guest tap: `ingress_count: 1` with one rule
+/// admitting a DIFFERENT dst (`192.0.2.1`, TEST-NET-1) — so the actual return (`EXT_IP -> NAT_IP`)
+/// never matches. If the return took the base path, `process_uplink`'s ingress firewall would DROP it.
+fn seed_deny_by_default_ingress_fw(node: &mut SimNode) {
+    node.maps.fw_meta.insert(
+        DNAT_TAP,
+        FwMeta {
+            ingress_count: 1,
+            egress_count: 0,
+        },
+    );
+    node.maps.fw_rules.insert(
+        (DNAT_TAP, 0),
+        FwRule {
+            src_ip: [0; 4],
+            src_mask: [0; 4],
+            dst_ip: [192, 0, 2, 1],
+            dst_mask: [255, 255, 255, 255],
+            src_port_min: 0,
+            src_port_max: 65535,
+            dst_port_min: 0,
+            dst_port_max: 65535,
+            icmp_type: 0xffff,
+            icmp_code: 0xffff,
+            proto: 0,
+            action: FW_ACTION_ACCEPT,
+            direction: FW_DIR_INGRESS,
+            enabled: 1,
+        },
+    );
+}
+
+/// (c) Unified dispatch + firewall-skip: a NAT return driven through the SHARED `SimNode::uplink_rx`
+/// entry (the same `flowplane_core::datapath::process_uplink_rx` the DPDK serve loop runs, mirroring
+/// the eBPF `try_uplink_rx` base-vs-NAT-return dispatch) must be reverse-DNAT'd + delivered EVEN under
+/// a deny-by-default ingress firewall on the guest tap.
+///
+/// This is the non-privileged twin of the eBPF `anchor_dnat` firewall guard, protecting the DPDK
+/// serve-loop dispatch fix: the serve loop previously called `process_uplink` unconditionally, which
+/// runs the ingress firewall on the un-DNAT'd `EXT_IP -> NAT_IP` tuple (deny-by-default DROP) and
+/// never reverse-DNATs the return. `process_uplink_rx` instead dispatches it to the NAT-return path.
+/// Two independent proofs it took that path: (1) it is delivered, not firewall-dropped; (2) the inner
+/// dst is reverse-DNAT'd to the guest (the base path never rewrites it).
+#[test]
+fn uplink_rx_dispatches_nat_return_past_deny_by_default_firewall() {
+    let encapped = dnat_tcp_encapped();
+    let mut node = dnat_host_node(6);
+    seed_deny_by_default_ingress_fw(&mut node);
+
+    let u = UnderlayValue {
+        vni: DNAT_VNI,
+        tap_ifindex: DNAT_TAP,
+        guest_mac: DNAT_GUEST_MAC,
+        _pad: [0; 2],
+    };
+    // `local` is unused on the NAT-return path but required by the unified entry's signature.
+    let local = Local {
+        uplink_ifindex: 7,
+        uplink_mac: [2; 6],
+        gateway_mac: [1; 6],
+        underlay_ipv6: HOST_UNDERLAY,
+    };
+    let out = node.uplink_rx(&encapped, DNAT_VNI, u, HOST_UNDERLAY, &local);
+
+    assert_eq!(
+        out.action,
+        Action::Redirect(DNAT_TAP),
+        "unified uplink_rx must reverse-DNAT + deliver the established NAT return, NOT firewall-drop \
+         it (regression: DPDK serve loop calling process_uplink unconditionally)"
+    );
+    let inner_ip_off = ETH_LEN;
+    let dst_ip: [u8; 4] = out.pkt[inner_ip_off + 16..inner_ip_off + 20]
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        dst_ip, DNAT_GUEST_IP,
+        "inner dst IP reverse-DNAT'd to the guest — proves uplink_rx dispatched to the NAT-return \
+         path, not the base path (which would leave dst == NAT_IP)"
     );
 }

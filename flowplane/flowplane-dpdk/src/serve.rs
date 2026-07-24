@@ -38,7 +38,7 @@ use nfkit::{
 };
 
 use flowplane_control::ControlCore;
-use flowplane_core::datapath::{process_uplink, UplinkIn};
+use flowplane_core::datapath::{process_uplink_rx, UplinkIn};
 use flowplane_core::maps::Maps; // brings `underlay_get`/`local` method syntax into scope on ComposedMaps
 use flowplane_core::pkt::{Action, Pkt}; // `Pkt` brings `read_array` into scope on MbufPkt
 use nfkit::monotonic_ns;
@@ -263,13 +263,13 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
 
 /// The per-lcore datapath poll loop for worker queue `q`. Modeled on
 /// `nfkit/tests/multilcore_datapath.rs`: build per-lcore flow state, compose with the shared config,
-/// then rx → `process_uplink` → tx until `stop` is set, reporting quiescence each iteration so the
+/// then rx → `process_uplink_rx` → tx until `stop` is set, reporting quiescence each iteration so the
 /// writer's RCU reclamation can make progress.
 ///
 /// For each rx'd mbuf the loop mirrors the multilcore/afxdp datapath tests exactly: wrap the mbuf as
 /// [`MbufPkt`], read the outer IPv6 dst from the frame, resolve `UNDERLAY[outer_dst]` → the
-/// [`UplinkIn`] `u`/`vni`, then drive the SAME `flowplane_core::datapath::process_uplink` seam the
-/// sim/eBPF/DPDK parity tests drive. Forward verdicts (`Redirect`/`Pass`) queue the (mutated) mbuf
+/// [`UplinkIn`] `u`/`vni`, then drive the SAME unified `flowplane_core::datapath::process_uplink_rx`
+/// seam the sim/eBPF/DPDK parity tests drive (base path + established NAT-return reverse-DNAT). Forward verdicts (`Redirect`/`Pass`) queue the (mutated) mbuf
 /// for tx; `Drop` (or a frame with no resolvable underlay / no `LOCAL` programmed) frees the mbuf by
 /// letting it fall out of scope (`Mbuf`'s Drop returns it to the pool).
 fn worker_loop(q: u16, shared: &SharedConfigMaps, port: &Port, stop: &AtomicBool) {
@@ -283,8 +283,8 @@ fn worker_loop(q: u16, shared: &SharedConfigMaps, port: &Port, stop: &AtomicBool
         }
     };
     // Deref the shared Arc to `&SharedConfigMaps` for the composed reader view (sound: `Sync`).
-    // `mut` because `process_uplink` takes `&mut composed` to mutate the per-lcore conntrack on the
-    // base decap path (`ct_create_default` on miss).
+    // `mut` because `process_uplink_rx` takes `&mut composed` to mutate the per-lcore conntrack on the
+    // base decap path (`ct_create_default` on miss) / NAT-return reverse-DNAT apply.
     let mut composed = ComposedMaps { cfg: shared, flow };
 
     let (mut rx, mut tx) = port.queue(q);
@@ -338,9 +338,11 @@ fn worker_loop(q: u16, shared: &SharedConfigMaps, port: &Port, stop: &AtomicBool
                                 local: &local,
                                 now,
                             };
-                            // The SAME `flowplane_core` entry point the sim/eBPF/DPDK parity tests
-                            // drive — this backend runs byte-identical to them.
-                            process_uplink(&mut pkt, &mut composed, &in_)
+                            // The SAME unified `flowplane_core` uplink entry the eBPF `try_uplink_rx`
+                            // mirrors: it dispatches established NAT returns to the reverse-DNAT path
+                            // and everything else to the LB+base path, so this backend runs
+                            // byte-identical to sim/eBPF for BOTH.
+                            process_uplink_rx(&mut pkt, &mut composed, &in_)
                         }
                     },
                 }

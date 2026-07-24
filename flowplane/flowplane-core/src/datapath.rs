@@ -5,7 +5,8 @@
 //! runs under the sim, under the `BPF_PROG_TEST_RUN` anchor, and on DPDK mbufs.
 
 use flowplane_common::{
-    Local, PortMeta, UnderlayValue, CT_REWRITE_DST, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS,
+    Local, PortMeta, UnderlayValue, CT_F_NAT64, CT_REWRITE_DST, FW_ACTION_DROP, FW_DIR_EGRESS,
+    FW_DIR_INGRESS,
 };
 
 use crate::arp_nd::{arp_reply, nd_reply};
@@ -302,6 +303,50 @@ pub fn process_uplink_nat_return<P: Pkt, M: Maps>(
         Ok(a) => a,
         Err(_) => Action::Drop,
     }
+}
+
+/// Unified host `uplink_rx` entry: makes the base-vs-NAT-return dispatch the eBPF `try_uplink_rx`
+/// makes inline (`nat_guest` gate, `ingress.rs:163-209`), in SHARED code, so a substrate backend (the
+/// DPDK serve loop) decides identically instead of re-implementing it. A frame that LB does not claim,
+/// whose inner dst is a registered nat_ip with a matching peer-independent `CT_REWRITE_DST` reverse
+/// entry, is an established NAT return → [`process_uplink_nat_return`] (reverse-DNAT + deliver, NO
+/// ingress firewall: it is the reply to a guest-initiated, already-egress-firewalled flow — see the
+/// `nat_guest.is_none()` guard at `ingress.rs:256`). Everything else takes the LB + base path
+/// ([`process_uplink`]).
+///
+/// NAT64 returns (`CT_F_NAT64`) need v4->v6 expansion ([`process_uplink_nat64_ingress`]), not the
+/// plain reverse-DNAT here; the DPDK serve loop does not model NAT64 yet, so those fall through to
+/// `process_uplink` (a tracked follow-up) rather than being mis-delivered as truncated IPv4.
+pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn) -> Action {
+    let inner_off = ETH_LEN + IPV6_LEN;
+
+    // NAT-return dispatch — gated on `lb_ul.is_none()` exactly as `try_uplink_rx` (an LB VIP is never
+    // itself a nat_ip, but keep the gate to mirror the eBPF ordering precisely).
+    if lb_select_forward(&*pkt, &*maps, inner_off, in_.vni).is_none() {
+        if let Some(mut key) = ct_key(&*pkt, inner_off, in_.vni) {
+            // Peer-independent demux: a registered nat_ip inner dst keys the
+            // `(vni,0,nat_ip,0,nat_port)` reverse entry the egress SNAT allocator stored.
+            if maps.is_nat_ip(in_.vni, &key.dst_ip) {
+                key.src_ip = [0; 4];
+                key.src_port = 0;
+            }
+            if let Some(e) = maps.conntrack_get(&key) {
+                if e.flags & CT_REWRITE_DST != 0 && e.flags & CT_F_NAT64 == 0 {
+                    return process_uplink_nat_return(
+                        pkt,
+                        maps,
+                        &UplinkNatReturnIn {
+                            vni: in_.vni,
+                            tap_ifindex: in_.u.tap_ifindex,
+                            guest_mac: in_.u.guest_mac,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    process_uplink(pkt, maps, in_)
 }
 
 /// Inputs for [`process_uplink_nat64_ingress`]. `rev` is the reverse `CT_F_NAT64` conntrack entry the
