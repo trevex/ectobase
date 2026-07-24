@@ -125,10 +125,9 @@ sim-anchor: verifier ## Privileged BPF_PROG_TEST_RUN byte-parity anchors (native
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_lb -- --ignored         # uplink_rx Maglev LB reforward
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dnat -- --ignored       # dnat return (native + golden)
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_guest_tx -- --ignored   # tc_guest_tx encap + flow-label ECMP
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dhcp -- --ignored       # tc_guest_dhcp DHCPv4 OFFER (native + golden)
 	# NOT YET ANCHORED (coverage gaps, tracked separately — do not assume these are covered):
-	#   - anchor_dhcp: stale; still loads the removed XDP `guest_dhcp`. DHCPv6 is now the tc
-	#     `tc_guest_dhcp` classifier (verifier-load covered by `verifier` above); its byte-parity
-	#     anchor needs re-porting to a tc test-run.
+	#   - tc_guest_dhcp DHCPv6 ADVERTISE/REPLY (only the DHCPv4 OFFER is byte-anchored above).
 	#   - guest-tx ARP/ND replies and the NAT64 egress/ingress translation have no byte-parity anchor.
 
 .PHONY: e2e

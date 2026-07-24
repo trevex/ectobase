@@ -1,42 +1,54 @@
 //! BPF_PROG_TEST_RUN byte-parity anchor for the guest-facing DHCPv4 responder that was extracted
-//! into `flowplane-core` (`dhcp::{parse, write}`, called by the eBPF `guest_dhcp` glue).
+//! into `flowplane-core` (`dhcp::{parse, write}`), now driven by the `tc_guest_dhcp` tc classifier.
 //!
-//! A guest sends a DHCPv4 DISCOVER (UDP dport 67). The `guest_dhcp` datapath parses it, resizes the
-//! frame to the fixed `REPLY_LEN`, builds the OFFER (assigned IP = the port's IPv4; virtual gateway =
-//! server identity; MTU/DNS/host-name from `DHCP_CONFIG`/`DHCP_META`), and reflects it back to the
-//! guest via `bpf_redirect(ingress_ifindex)` (== XDP_REDIRECT). The OFFER is a FIXED-LAYOUT response
-//! (constant length, constant option offsets), so every packet write is constant-offset — the same
-//! property that lets the extracted core cross the `Pkt` seam verifier-clean.
+//! A guest sends a DHCPv4 DISCOVER (UDP dport 67). The `tc_guest_dhcp` datapath parses it, grows the
+//! skb to the fixed `REPLY_LEN` (`bpf_skb_change_tail`), builds the OFFER (assigned IP = the port's
+//! IPv4; virtual gateway = server identity; MTU/DNS/host-name from `DHCP_CONFIG`/`DHCP_META`; reply
+//! source MAC = the router `GW_MAC`), and reflects it back to the guest via `bpf_redirect(ifindex)`
+//! (== `TC_ACT_REDIRECT`). The OFFER is a FIXED-LAYOUT response (constant length, constant option
+//! offsets), so every packet write is constant-offset — the same property that lets the extracted
+//! core cross the `Pkt` seam verifier-clean.
+//!
+//! # Why tc, not XDP
+//!
+//! The old XDP `guest_dhcp` entry point was removed when the guest edge went tcx-only; DHCPv4 (and
+//! DHCPv6) are now served by the `tc_guest_dhcp` `SchedClassifier` (tc.rs). So — like `anchor_guest_tx`
+//! — this test-run supplies a `struct __sk_buff` ctx with `ifindex` set to the loopback ifindex (1,
+//! always present), keys `PORT_META` / `DHCP_META` on it, and issues the raw `bpf(BPF_PROG_TEST_RUN)`
+//! syscall on the fd of aya's loaded `SchedClassifier` (aya 0.13.1 exposes no tc `test_run`).
 //!
 //! # Two independent checks (the second breaks a circularity)
 //!
-//! 1. `dhcp_bytecode_matches_native_sim` — loads the REAL compiled `guest_dhcp`, runs it on a DISCOVER
-//!    via `BPF_PROG_TEST_RUN`, and asserts the kernel output equals the native `flowplane-sim`
+//! 1. `dhcp_bytecode_matches_native_sim` — loads the REAL compiled `tc_guest_dhcp`, runs it on a
+//!    DISCOVER via `BPF_PROG_TEST_RUN`, and asserts the kernel output equals the native `flowplane-sim`
 //!    `SimNode::guest_dhcp4` for the same input + `PORT_META` + `DHCP_CONFIG` + `DHCP_META`. Because
-//!    the extraction made BOTH the production `guest_dhcp` and `SimNode::guest_dhcp4` call the SAME
+//!    BOTH the production `tc_guest_dhcp` glue and `SimNode::guest_dhcp4` call the SAME
 //!    `flowplane_core::dhcp::{parse, write}`, this cross-check alone would NOT catch a source-level
 //!    behavior change from the extraction — it would change both sides identically.
 //!
 //! 2. `dhcp_bytecode_matches_original_golden` — asserts the CURRENT compiled bytecode output equals
 //!    hardcoded GOLDEN bytes captured from the ORIGINAL, PRE-extraction `guest_dhcp` (HEAD `69000b8`,
 //!    when the DHCPv4 responder was the inline `flowplane_common::dhcp::{parse_dhcpv4_request,
-//!    write_dhcpv4_reply}` raw-pointer builder) via `BPF_PROG_TEST_RUN` on the identical fixture +
-//!    maps. This is INDEPENDENT of `SimNode` and so proves the rewired core is byte-faithful to the
-//!    deleted inline builder (full OFFER frame incl. the IPv4 header checksum).
+//!    write_dhcpv4_reply}` raw-pointer builder). This is INDEPENDENT of `SimNode` and so proves the
+//!    rewired core is byte-faithful to the deleted inline builder (full OFFER frame incl. the IPv4
+//!    header checksum). The OFFER frame is byte-identical across the XDP→tc move: both grow to
+//!    `REPLY_LEN` with zero-filled tail (XDP `adjust_tail` / tc `change_tail`) and write the same
+//!    `GW_MAC`-sourced OFFER via the shared core; only the transport (redirect return code) differs.
 //!
-//! Privileged: needs CAP_BPF + a kernel that supports XDP test-run. Run via `make sim-anchor`.
+//! Privileged: needs CAP_BPF + a kernel with tc test-run. Run via `make sim-anchor`.
 
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 
 use aya::maps::{Array as AyaArray, HashMap as AyaHashMap};
-use aya::programs::Xdp;
+use aya::programs::SchedClassifier;
 use aya::{Ebpf, EbpfLoader};
 use flowplane_common::{DhcpConfig, DhcpMeta, PortMeta, DHCP_MAX_DNS};
 use flowplane_core::pkt::Action;
 use flowplane_sim::SimNode;
 
-// BPF_PROG_TEST_RUN's synthetic xdp_md sets ingress_ifindex == 1, so `guest_dhcp` keys PORT_META /
-// DHCP_META on 1 AND `reflect` redirects to ifindex 1 (== the anchor's expected Redirect(1)).
+// The tc test-run's synthetic __sk_buff sets ingress_ifindex via the ctx we supply. We key PORT_META
+// / DHCP_META on 1 (loopback, always present) AND the reply redirects to ifindex 1 (== the anchor's
+// expected Redirect(1) / TC_ACT_REDIRECT).
 const SRC_IFINDEX: u32 = 1;
 const VNI: u32 = 100;
 const GUEST_IPV4: [u8; 4] = [10, 0, 0, 42];
@@ -119,10 +131,15 @@ fn discover_frame() -> Vec<u8> {
     f
 }
 
-// --- Raw BPF_PROG_TEST_RUN syscall ----------------------------------------------------------
+// --- Raw BPF_PROG_TEST_RUN syscall (with a __sk_buff ctx) --------------------------------------
 
 const BPF_PROG_TEST_RUN: libc::c_int = 10;
-const XDP_REDIRECT: u32 = 4;
+const TC_ACT_REDIRECT: u32 = 7;
+
+/// `sizeof(struct __sk_buff)` and `offsetof(ifindex)` on this kernel's stable UAPI (uapi/linux/bpf.h:
+/// `ifindex` is the 11th u32 → offset 40; the struct totals 192 bytes). Matches `anchor_guest_tx`.
+const SK_BUFF_SIZE: usize = 192;
+const SKB_IFINDEX_OFF: usize = 40;
 
 #[repr(C)]
 #[derive(Default)]
@@ -150,15 +167,24 @@ struct TestRunOut {
     data: Vec<u8>,
 }
 
+/// Issue `bpf(BPF_PROG_TEST_RUN)` on `prog_fd` with `input` as `data_in` and a `__sk_buff` ctx whose
+/// `ifindex` field is `SRC_IFINDEX`. The OFFER GROWS the frame to `REPLY_LEN` (> input) via
+/// `bpf_skb_change_tail`, so the output buffer is sized generously.
 fn bpf_prog_test_run(prog_fd: RawFd, input: &[u8]) -> std::io::Result<TestRunOut> {
-    // The OFFER GROWS the frame to REPLY_LEN (> input); size the output buffer generously.
     let mut out_buf = vec![0u8; REPLY_LEN + 256];
+    let mut ctx_in = [0u8; SK_BUFF_SIZE];
+    ctx_in[SKB_IFINDEX_OFF..SKB_IFINDEX_OFF + 4].copy_from_slice(&SRC_IFINDEX.to_ne_bytes());
+    let mut ctx_out = [0u8; SK_BUFF_SIZE];
     let mut attr = BpfAttrTest {
         prog_fd: prog_fd as u32,
         data_in: input.as_ptr() as u64,
         data_size_in: input.len() as u32,
         data_out: out_buf.as_mut_ptr() as u64,
         data_size_out: out_buf.len() as u32,
+        ctx_in: ctx_in.as_ptr() as u64,
+        ctx_size_in: ctx_in.len() as u32,
+        ctx_out: ctx_out.as_mut_ptr() as u64,
+        ctx_size_out: ctx_out.len() as u32,
         repeat: 1,
         ..Default::default()
     };
@@ -181,8 +207,8 @@ fn bpf_prog_test_run(prog_fd: RawFd, input: &[u8]) -> std::io::Result<TestRunOut
 }
 
 /// Load the compiled object, install PORT_META[1] / DHCP_CONFIG[0] / DHCP_META[1], and return the
-/// loaded `Ebpf` + the verified `guest_dhcp` fd (the DHCP responder is run directly here — it is a
-/// tail-call target in production, but `BPF_PROG_TEST_RUN` invokes it as a standalone XDP program).
+/// loaded `Ebpf` + the verified `tc_guest_dhcp` fd. In production this classifier is a tail-call
+/// target at `GUEST_PROG_DHCP`, but `BPF_PROG_TEST_RUN` invokes it as a standalone tc program.
 fn load_prog() -> (Ebpf, RawFd) {
     let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowplane-prog"));
     let pin = Box::leak(Box::new(
@@ -214,13 +240,13 @@ fn load_prog() -> (Ebpf, RawFd) {
             .expect("insert DHCP_META");
     }
 
-    let prog: &mut Xdp = ebpf
-        .program_mut("guest_dhcp")
-        .expect("guest_dhcp program present")
+    let prog: &mut SchedClassifier = ebpf
+        .program_mut("tc_guest_dhcp")
+        .expect("tc_guest_dhcp program present")
         .try_into()
-        .expect("guest_dhcp is an XDP program");
-    prog.load().expect("verify/load guest_dhcp");
-    let prog_fd = prog.fd().expect("guest_dhcp fd").as_fd().as_raw_fd();
+        .expect("tc_guest_dhcp is a SchedClassifier program");
+    prog.load().expect("verify/load tc_guest_dhcp");
+    let prog_fd = prog.fd().expect("tc_guest_dhcp fd").as_fd().as_raw_fd();
     (ebpf, prog_fd)
 }
 
@@ -235,7 +261,7 @@ fn sim_node() -> SimNode {
 // --- The anchor tests -----------------------------------------------------------------------
 
 #[test]
-#[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel)"]
+#[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel tc test-run)"]
 fn dhcp_bytecode_matches_native_sim() {
     let meta = port_meta();
     let node = sim_node();
@@ -251,10 +277,11 @@ fn dhcp_bytecode_matches_native_sim() {
 
     let (_ebpf, prog_fd) = load_prog();
     let out = bpf_prog_test_run(prog_fd, &frame)
-        .unwrap_or_else(|e| panic!("BPF_PROG_TEST_RUN on guest_dhcp failed: {e}"));
+        .unwrap_or_else(|e| panic!("BPF_PROG_TEST_RUN on tc_guest_dhcp failed: {e}"));
     assert_eq!(
-        out.retval, XDP_REDIRECT,
-        "native pure-core diverged from real bytecode: expected XDP_REDIRECT, got {}",
+        out.retval, TC_ACT_REDIRECT,
+        "native pure-core diverged from real bytecode: expected TC_ACT_REDIRECT ({TC_ACT_REDIRECT}), \
+         got {}",
         out.retval
     );
     assert_eq!(
@@ -268,7 +295,8 @@ fn dhcp_bytecode_matches_native_sim() {
 // Produced by running the ORIGINAL program (HEAD `69000b8`, when the DHCPv4 responder was the inline
 // `flowplane_common::dhcp::{parse_dhcpv4_request, write_dhcpv4_reply}` raw-pointer builder) via
 // BPF_PROG_TEST_RUN on the identical DISCOVER fixture + maps. Captured by a throwaway copy of this
-// test built at 69000b8 in a scratch worktree that dumped `out.data`.
+// test built at 69000b8 in a scratch worktree that dumped `out.data`. The OFFER frame is byte-stable
+// across the XDP→tc responder move (same core writer + same zero-filled grow to REPLY_LEN).
 
 #[rustfmt::skip]
 const OFFER_OUT: &[u8] = &[
@@ -302,14 +330,14 @@ const OFFER_OUT: &[u8] = &[
 ];
 
 #[test]
-#[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel)"]
+#[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel tc test-run)"]
 fn dhcp_bytecode_matches_original_golden() {
     let (_ebpf, prog_fd) = load_prog();
     let out = bpf_prog_test_run(prog_fd, &discover_frame())
-        .unwrap_or_else(|e| panic!("BPF_PROG_TEST_RUN on guest_dhcp failed: {e}"));
+        .unwrap_or_else(|e| panic!("BPF_PROG_TEST_RUN on tc_guest_dhcp failed: {e}"));
     assert_eq!(
-        out.retval, XDP_REDIRECT,
-        "expected XDP_REDIRECT, got action {}",
+        out.retval, TC_ACT_REDIRECT,
+        "expected TC_ACT_REDIRECT ({TC_ACT_REDIRECT}), got action {}",
         out.retval
     );
     assert_eq!(
