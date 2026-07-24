@@ -402,8 +402,15 @@ pub fn nat64_egress_parse<P: Pkt, M: Maps>(
         proto: l4_proto_v4,
         _pad: [0; 3],
     };
+    // §5a generation-tag invalidation (same pattern as `snat_egress`): reuse the cached NAT64
+    // allocation only if it was stamped under the CURRENT config generation; else fall through to
+    // RE-DERIVE from the current `nat` binding, so a withdrawn/changed nat_ipv4/port-range is picked
+    // up and the flow can never emit under the old binding. eBPF + sim return generation 0 (Maps
+    // default) → every stamp is 0 and this recheck is a no-op (byte-identical datapath); the DPDK
+    // serve writer bumps it on any NAT/route withdrawal (conntrack_flush).
+    let cur_gen = maps.config_generation() as u32;
     let nat_port = match maps.conntrack_get(&fwd_key) {
-        Some(v) if v.flags & CT_F_SRC_NAT != 0 => v.xlate_port,
+        Some(v) if v.flags & CT_F_SRC_NAT != 0 && v.gen() == cur_gen => v.xlate_port,
         _ => {
             let start = (hash5(&meta_guest_ipv4, &ipv4_dst, sport, dport, l4_proto_v4)
                 % range as u32) as u16;
@@ -433,7 +440,7 @@ pub fn nat64_egress_parse<P: Pkt, M: Maps>(
                             flags: CT_REWRITE_DST | CT_F_SRC_NAT | CT_F_NAT64,
                             tcp_state: 0,
                             fwall_action: 0,
-                            gen_bytes: [0; 4],
+                            gen_bytes: cur_gen.to_ne_bytes(),
                             _pad: [0; 3],
                         },
                     );
@@ -450,7 +457,7 @@ pub fn nat64_egress_parse<P: Pkt, M: Maps>(
                     flags: CT_REWRITE_SRC | CT_F_SRC_NAT | CT_F_NAT64,
                     tcp_state: 0,
                     fwall_action: 0,
-                    gen_bytes: [0; 4],
+                    gen_bytes: cur_gen.to_ne_bytes(),
                     _pad: [0; 3],
                 },
             );

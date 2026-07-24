@@ -14,7 +14,9 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{Local, NatKey, NatValue, PortMeta, RouteValue};
-use flowplane_core::datapath::{process_guest_tx, GuestTxIn};
+use flowplane_core::datapath::{
+    process_guest_tx, process_guest_tx_nat64, GuestTxIn, GuestTxNat64In,
+};
 use flowplane_core::maps::Maps;
 use flowplane_core::pkt::{Action, Pkt};
 use nfkit::{ComposedMaps, Eal, MbufPkt, Mempool, PerLcoreFlowMaps, SharedConfigMaps};
@@ -90,6 +92,56 @@ fn run(
     let mut mp = MbufPkt::new(&mut mb);
     let out = process_guest_tx(&mut mp, maps, in_);
     (mp_bytes(&mp), out.action)
+}
+
+// ── NAT64 egress fixture (a DISTINCT guest so its conntrack keys never collide with the SNAT flow) ──
+const NAT64_GUEST_V4: [u8; 4] = [10, 0, 2, 30]; // the NAT-key guest IPv4 (nat64 keys on guest_ipv4)
+const NAT64_GUEST_V6: [u8; 16] = [0x20, 0x01, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x30];
+
+/// The NAT64 well-known-prefix dst embedding `EXT_DST`: `64:ff9b::EXT_DST`.
+fn nat64_dst() -> [u8; 16] {
+    [
+        0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, EXT_DST[0], EXT_DST[1], EXT_DST[2],
+        EXT_DST[3],
+    ]
+}
+
+fn nat64_port_meta() -> PortMeta {
+    PortMeta {
+        vni: VNI,
+        guest_ipv4: NAT64_GUEST_V4,
+        gateway_ipv4: [10, 0, 0, 1],
+        guest_mac: GUEST_MAC,
+        _pad: [0; 2],
+        underlay_ipv6: SRC_UL,
+        gateway_ipv6: [0; 16],
+        guest_ipv6: NAT64_GUEST_V6,
+    }
+}
+
+/// A guest IPv6 frame `[Eth][IPv6][UDP]` `NAT64_GUEST_V6:sport → 64:ff9b::EXT_DST:443`.
+fn guest_frame_v6(sport: u16) -> Vec<u8> {
+    let b = PacketBuilder::ethernet2(GUEST_MAC, [0xbb; 6])
+        .ipv6(NAT64_GUEST_V6, nat64_dst(), 64)
+        .udp(sport, 443);
+    let mut out = Vec::new();
+    b.write(&mut out, &[0x01, 0x02, 0x03, 0x04]).unwrap();
+    out
+}
+
+/// Load a v6 `frame` into a fresh mbuf and run the NAT64 egress orchestrator.
+fn run_nat64(
+    pool: &Mempool,
+    maps: &mut ComposedMaps<'_>,
+    frame: &[u8],
+    in_: &GuestTxNat64In,
+) -> (Vec<u8>, Action) {
+    let mut mb = pool.alloc().expect("alloc mbuf");
+    mb.append(frame.len() as u16).expect("append");
+    mb.data_mut().copy_from_slice(frame);
+    let mut mp = MbufPkt::new(&mut mb);
+    let action = process_guest_tx_nat64(&mut mp, maps, in_);
+    (mp_bytes(&mp), action)
 }
 
 #[test]
@@ -296,5 +348,101 @@ fn withdrawn_nat_binding_not_emitted_after_generation_bump() {
     assert!(
         (RANGE_B.0..RANGE_B.1).contains(&sport3),
         "(4b) recheck re-derived the SNAT port {sport3} into the CURRENT RANGE_B {RANGE_B:?}"
+    );
+
+    // ── (5) NAT64 egress: the SAME generation recheck guards nat64_egress_parse's port allocation ──
+    // NAT64 stamps its fwd/rev CT_F_NAT64 entries with the config generation too (fixed to mirror the
+    // SNAT path). A rebind to a DISJOINT source-port range + generation bump must force re-derivation
+    // into the new range, never reuse the stale cached nat_port. A DISTINCT guest (NAT64_GUEST_V4/V6)
+    // keeps its conntrack keys from colliding with the SNAT flow above.
+    const N64_RANGE_A: (u16, u16) = (22000, 23000);
+    const N64_RANGE_B: (u16, u16) = (42000, 43000);
+    let n64_meta = nat64_port_meta();
+    let n64_local = node_local();
+    let n64_in = GuestTxNat64In {
+        meta: &n64_meta,
+        local: &n64_local,
+    };
+    let v6_frame = guest_frame_v6(12345);
+
+    // Establish under N64_RANGE_A (generation 4).
+    assert!(shared.nat_insert(
+        NatKey {
+            vni: VNI,
+            ipv4: NAT64_GUEST_V4,
+        },
+        NatValue {
+            nat_ipv4: NAT_IP,
+            port_min: N64_RANGE_A.0,
+            port_max: N64_RANGE_A.1,
+        },
+    ));
+    shared.bump_generation();
+    assert_eq!(maps.config_generation(), 4);
+    let (n0, na0) = run_nat64(&pool, &mut maps, &v6_frame, &n64_in);
+    assert_eq!(
+        na0,
+        Action::Redirect(UPLINK_IFINDEX),
+        "(5a) nat64 translated + encapped + forwarded"
+    );
+    assert_eq!(
+        &n0[INNER_IPV4_SRC_OFF..INNER_IPV4_SRC_OFF + 4],
+        &NAT_IP,
+        "(5a) inner src SNAT-rewritten to NAT_IP"
+    );
+    let n64_sport_a = u16::from_be_bytes([n0[UDP_SPORT_OFF], n0[UDP_SPORT_OFF + 1]]);
+    assert!(
+        (N64_RANGE_A.0..N64_RANGE_A.1).contains(&n64_sport_a),
+        "(5a) established nat64 port {n64_sport_a} within N64_RANGE_A {N64_RANGE_A:?}"
+    );
+    // Sanity: the fwd nat64 CT entry is stamped under the CURRENT generation (4) — not 0.
+    let n64_fwd = flowplane_common::CtKey {
+        vni: VNI,
+        src_ip: NAT64_GUEST_V4,
+        dst_ip: EXT_DST,
+        src_port: 12345,
+        dst_port: 443,
+        proto: 17,
+        _pad: [0; 3],
+    };
+    assert_eq!(
+        maps.conntrack_get(&n64_fwd)
+            .expect("(5a) nat64 fwd CT entry created")
+            .gen(),
+        4,
+        "(5a) nat64 CT entry stamped with the current generation (was hardcoded 0 before the fix)"
+    );
+
+    // Rebind the same guest to the DISJOINT N64_RANGE_B + bump (generation 5) = the config change.
+    assert!(shared.nat_insert(
+        NatKey {
+            vni: VNI,
+            ipv4: NAT64_GUEST_V4,
+        },
+        NatValue {
+            nat_ipv4: NAT_IP,
+            port_min: N64_RANGE_B.0,
+            port_max: N64_RANGE_B.1,
+        },
+    ));
+    shared.bump_generation();
+    assert_eq!(maps.config_generation(), 5);
+
+    // Same nat64 flow: cached CT stamped gen=4 != current gen=5 → recheck fires → the stale
+    // N64_RANGE_A port must NOT be reused; the emitted port must fall in the CURRENT N64_RANGE_B.
+    let (n1, na1) = run_nat64(&pool, &mut maps, &v6_frame, &n64_in);
+    assert_eq!(
+        na1,
+        Action::Redirect(UPLINK_IFINDEX),
+        "(5b) still forwarded"
+    );
+    let n64_sport_b = u16::from_be_bytes([n1[UDP_SPORT_OFF], n1[UDP_SPORT_OFF + 1]]);
+    assert!(
+        !(N64_RANGE_A.0..N64_RANGE_A.1).contains(&n64_sport_b),
+        "(5b) STALE-EMISSION BUG: nat64 reused the pre-rebind N64_RANGE_A port {n64_sport_b} after a generation bump"
+    );
+    assert!(
+        (N64_RANGE_B.0..N64_RANGE_B.1).contains(&n64_sport_b),
+        "(5b) nat64 recheck re-derived the port {n64_sport_b} into the CURRENT N64_RANGE_B {N64_RANGE_B:?}"
     );
 }
