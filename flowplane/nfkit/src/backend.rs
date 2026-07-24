@@ -16,11 +16,21 @@ pub enum Backend {
 }
 
 impl Backend {
-    /// Build the full EAL argv (argv[0] = `prog`). Software backends get `--no-huge`; vdev backends
-    /// get their `--vdev`. Port 0 is always the configured backend.
+    /// Build the full EAL argv (argv[0] = `prog`) with the default `-l 0-3` lcore range (main + 3
+    /// workers). Convenience for examples/tests; deployments should use [`Backend::eal_args_lcores`]
+    /// to size the lcore set to the host (e.g. clab/CI hosts with few CPUs).
     #[must_use]
     pub fn eal_args(&self, prog: &str) -> Vec<String> {
-        let mut v = vec![prog.to_string(), "-l".into(), "0-3".into()];
+        self.eal_args_lcores(prog, "0-3")
+    }
+
+    /// Build the full EAL argv (argv[0] = `prog`) with an explicit `-l` lcore list (`lcore_list` is
+    /// the raw DPDK `-l` value, e.g. `"0"`, `"0-1"`, `"2,4,6"`). Software backends get `--no-huge`;
+    /// vdev backends get their `--vdev`. Port 0 is always the configured backend. The main lcore is
+    /// the first in the list; the rest are datapath worker lcores.
+    #[must_use]
+    pub fn eal_args_lcores(&self, prog: &str, lcore_list: &str) -> Vec<String> {
+        let mut v = vec![prog.to_string(), "-l".into(), lcore_list.to_string()];
         match self {
             Backend::Nic { pci } => {
                 v.push("-a".into());

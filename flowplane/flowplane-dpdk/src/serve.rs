@@ -5,7 +5,9 @@
 //!
 //!   1. Parse [`ServeArgs`] (clap).
 //!   2. Map `--backend`/`--uplink`/`--queues` → [`nfkit::Backend`]; build the EAL argv via
-//!      `Backend::eal_args("flowplane-dpdk")` (+ `--no-huge` on request); `Eal::init(argv)`.
+//!      `Backend::eal_args_lcores("flowplane-dpdk", &lcore_list)` where the `-l` range is sized from
+//!      `--lcores` (or derived as `queues + 1`) so constrained hosts (clab/CI) can run few lcores;
+//!      `--queues` is clamped to the worker lcores available (+ `--no-huge` on request); `Eal::init`.
 //!   3. Mempool + [`nfkit::Port::configure`] (RSS symmetric-Toeplitz lives in port.rs already).
 //!   4. `Arc<SharedConfigMaps>` — the process-wide single-writer CONFIG tables.
 //!   5. `Arc<parking_lot::Mutex<ControlCore<DpdkMapWriter>>>` — the SINGLE serialized writer (the
@@ -104,12 +106,14 @@ pub struct ServeArgs {
     /// DPDK port backend.
     #[arg(long, value_enum, default_value_t = BackendKind::AfXdp)]
     pub backend: BackendKind,
-    /// Number of EAL lcores (main + workers). Currently informational; the EAL argv `-l` range is
-    /// built by `Backend::eal_args`. Kept for parity with the eBPF surface and future tuning.
-    #[arg(long, default_value_t = 4)]
-    pub lcores: u16,
+    /// Total EAL lcores (main + workers), used to build the EAL `-l 0-{lcores-1}` range. Unset =
+    /// derive `queues + 1` (one main lcore + one worker per queue), which fits constrained hosts
+    /// (clab/CI). Set explicitly to pin a specific count (must be `>= queues + 1`, else `queues` is
+    /// clamped to the available workers `lcores - 1`).
+    #[arg(long)]
+    pub lcores: Option<u16>,
     /// Number of rx/tx queues (= datapath worker lcores). Also the af-xdp `queue_count`.
-    #[arg(long, default_value_t = 4)]
+    #[arg(long, default_value_t = 1)]
     pub queues: u16,
     /// Run EAL under `--no-huge` (software backends / no-hugepage hosts). Software backends already
     /// force it via `Backend::eal_args`; this makes it explicit for af-xdp/nic on such hosts.
@@ -127,12 +131,29 @@ pub struct ServeArgs {
 }
 
 impl ServeArgs {
-    /// Map the parsed backend kind + uplink/queues into an [`nfkit::Backend`].
-    fn to_backend(&self) -> Backend {
+    /// Total EAL lcore count: the explicit `--lcores`, else `queues + 1` (one main + one worker per
+    /// queue). Floored at 2 so there is always at least a main lcore plus one datapath worker.
+    fn lcore_count(&self) -> u16 {
+        self.lcores.unwrap_or(self.queues + 1).max(2)
+    }
+
+    /// The DPDK `-l` lcore list: a contiguous `0-{lcore_count-1}` range (lcore 0 = main lcore).
+    fn eal_lcore_list(&self) -> String {
+        format!("0-{}", self.lcore_count() - 1)
+    }
+
+    /// Datapath worker lcores available = every lcore except the main one.
+    fn worker_lcores(&self) -> u16 {
+        self.lcore_count() - 1
+    }
+
+    /// Map the parsed backend kind + uplink into an [`nfkit::Backend`]. `queues` is the effective
+    /// (possibly clamped-to-worker-lcores) queue count — it drives the af-xdp `queue_count`.
+    fn to_backend(&self, queues: u16) -> Backend {
         match self.backend {
             BackendKind::AfXdp => Backend::AfXdp {
                 iface: self.uplink.clone(),
-                queues: self.queues,
+                queues,
             },
             BackendKind::Nic => Backend::Nic {
                 pci: self.uplink.clone(),
@@ -154,8 +175,20 @@ impl ServeArgs {
 /// hosts the tonic server on the calling (tokio) thread; the datapath runs on a dedicated OS thread.
 pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     // ── 2. EAL ────────────────────────────────────────────────────────────────
-    let backend = args.to_backend();
-    let mut eal_argv = backend.eal_args("flowplane-dpdk");
+    // Clamp the queue request to the datapath worker lcores available (lcores - 1): each worker
+    // runs on its own non-main lcore, so more queues than workers would leave queues unpolled (and
+    // trip `for_each_worker`'s assert). Under-provisioning lcores is a config choice, not an error.
+    let queues = args.queues.min(args.worker_lcores());
+    if queues < args.queues {
+        eprintln!(
+            "warning: --queues {} exceeds worker lcores {} (from --lcores {}); clamping to {queues}",
+            args.queues,
+            args.worker_lcores(),
+            args.lcore_count(),
+        );
+    }
+    let backend = args.to_backend(queues);
+    let mut eal_argv = backend.eal_args_lcores("flowplane-dpdk", &args.eal_lcore_list());
     // `--no-huge` is idempotent — software backends already appended it; adding it again for
     // af-xdp/nic when requested is harmless (DPDK dedups repeated EAL flags).
     if args.no_huge && !eal_argv.iter().any(|a| a == "--no-huge") {
@@ -170,7 +203,7 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     // One shared MT-safe pktmbuf pool (rte_pktmbuf_alloc is MT-safe; workers alloc concurrently).
     let pool = Mempool::new("fp_dpdk_pool", 8191, 250, SOCKET_ID)
         .map_err(|e| anyhow::anyhow!("mempool create failed: {e}"))?;
-    let port = Port::configure(0, args.queues, &pool)
+    let port = Port::configure(0, queues, &pool)
         .map_err(|e| anyhow::anyhow!("port configure failed: {e}"))?;
     let n_workers = port.n_queues();
     println!("port 0 up with {n_workers} queue(s)");
@@ -401,8 +434,56 @@ mod tests {
         ]);
         assert_eq!(a.addr, "127.0.0.1:1337");
         assert_eq!(a.backend, BackendKind::AfXdp);
-        assert_eq!(a.queues, 4);
-        assert_eq!(a.lcores, 4);
+        // Clab/CI-friendly defaults: 1 worker queue, lcores derived as queues + 1 (main + worker).
+        assert_eq!(a.queues, 1);
+        assert_eq!(a.lcores, None);
+        assert_eq!(a.lcore_count(), 2);
+        assert_eq!(a.eal_lcore_list(), "0-1");
+        assert_eq!(a.worker_lcores(), 1);
         assert!(!a.no_huge);
+    }
+
+    /// Explicit `--lcores` builds the `-l 0-{n-1}` range and sizes the worker pool.
+    #[test]
+    fn lcores_override_builds_eal_range() {
+        let a = ServeArgs::parse_from([
+            "flowplane-dpdk",
+            "--uplink",
+            "eth0",
+            "--gateway",
+            "169.254.0.1",
+            "--gateway-mac",
+            "02:00:00:00:00:01",
+            "--lcores",
+            "4",
+            "--queues",
+            "3",
+        ]);
+        assert_eq!(a.lcore_count(), 4);
+        assert_eq!(a.eal_lcore_list(), "0-3");
+        assert_eq!(a.worker_lcores(), 3); // 3 workers for 3 queues — consistent
+        assert_eq!(a.queues.min(a.worker_lcores()), 3); // no clamp
+    }
+
+    /// A queue request beyond the worker lcores is clamped to `lcores - 1` (each worker needs its
+    /// own non-main lcore); the default single-lcore-derivation never over-subscribes.
+    #[test]
+    fn queues_clamped_to_worker_lcores() {
+        let a = ServeArgs::parse_from([
+            "flowplane-dpdk",
+            "--uplink",
+            "eth0",
+            "--gateway",
+            "169.254.0.1",
+            "--gateway-mac",
+            "02:00:00:00:00:01",
+            "--lcores",
+            "2",
+            "--queues",
+            "8",
+        ]);
+        assert_eq!(a.worker_lcores(), 1);
+        assert_eq!(a.queues.min(a.worker_lcores()), 1); // 8 clamped to 1
+        assert_eq!(a.eal_lcore_list(), "0-1");
     }
 }
