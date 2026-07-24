@@ -161,6 +161,19 @@ fn allow_rule(proto: u8) -> FwRule {
     }
 }
 
+/// An ingress ALLOW rule that does NOT match the return flow — it admits a DIFFERENT dst
+/// (`192.0.2.1`, TEST-NET-1). With `FW_META.ingress_count = 1` this makes the ingress firewall
+/// ENFORCED-but-deny-by-default for the actual return (`EXT_IP -> GUEST_IP`): a fresh `ct_key` on the
+/// post-DNAT tuple finds no entry and no matching accept, so an UNGUARDED firewall would DROP it.
+/// Mirrors the live clab scenario (guest has ingress rules, none for its NAT return) that `df94251`
+/// fixed. `enabled: 1` so the firewall is genuinely active — not a no-op empty ruleset.
+fn nonmatching_ingress_rule() -> FwRule {
+    FwRule {
+        dst_ip: [192, 0, 2, 1],
+        ..allow_rule(0)
+    }
+}
+
 /// Build the encapped return input + the native (pure-core) expected `SimOut` for it. The native side
 /// seeds the identical reverse CT entry + NAT_IPS registration the eBPF maps get.
 fn build_input_and_native(frame: &[u8], proto: u8) -> (Vec<u8>, Action, Vec<u8>) {
@@ -187,6 +200,7 @@ fn build_input_and_native(frame: &[u8], proto: u8) -> (Vec<u8>, Action, Vec<u8>)
 
 const BPF_PROG_TEST_RUN: libc::c_int = 10;
 const XDP_REDIRECT: u32 = 4;
+const XDP_DROP: u32 = 1;
 
 #[repr(C)]
 #[derive(Default)]
@@ -246,11 +260,17 @@ fn bpf_prog_test_run(prog_fd: RawFd, input: &[u8]) -> std::io::Result<TestRunOut
 
 // --- Shared eBPF load + map population -------------------------------------------------------
 
+/// Load the compiled object with the default ingress-ALLOW rule admitting the post-DNAT return flow.
+fn load_prog(proto: u8) -> (Ebpf, RawFd) {
+    load_prog_with_rule(proto, allow_rule(proto))
+}
+
 /// Load the compiled object, populate every map `uplink_rx` reads on the NAT-return path:
 /// UNDERLAY[host_underlay] (base tap), CONNTRACK (the seeded reverse CT_REWRITE_DST entry), NAT_IPS
-/// (nat_ip registration for peer-independent demux), FW_META/FW_RULES (ingress allow on the post-DNAT
-/// flow), LOCAL. Returns the loaded `Ebpf` (kept alive by the caller) and the verified `uplink_rx` fd.
-fn load_prog(proto: u8) -> (Ebpf, RawFd) {
+/// (nat_ip registration for peer-independent demux), FW_META (`ingress_count: 1`, so the ingress
+/// firewall is ENFORCED deny-by-default) + FW_RULES[`ingress_rule`], LOCAL. Returns the loaded `Ebpf`
+/// (kept alive by the caller) and the verified `uplink_rx` fd.
+fn load_prog_with_rule(proto: u8, ingress_rule: FwRule) -> (Ebpf, RawFd) {
     let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowplane-prog"));
     let pin = Box::leak(Box::new(
         tempfile::Builder::new()
@@ -322,7 +342,7 @@ fn load_prog(proto: u8) -> (Ebpf, RawFd) {
                     ifindex: TAP,
                     idx: 0,
                 },
-                allow_rule(proto),
+                ingress_rule,
                 0,
             )
             .expect("insert FW_RULES");
@@ -480,4 +500,57 @@ fn dnat_return_bytecode_matches_original_golden() {
             v.name
         );
     }
+}
+
+/// Regression guard for `df94251`: a NAT return must NOT be dropped by a deny-by-default ingress
+/// firewall. A NAT return matches a peer-independent `CT_REWRITE_DST` reverse entry and has its inner
+/// dst reverse-DNAT'd to the guest; it is the reply to a flow the guest itself initiated (already
+/// egress-firewalled) → established BY DEFINITION. `uplink_rx` must therefore SKIP the ingress
+/// firewall for NAT returns (`nat_guest.is_some()`), matching `flowplane_core::process_uplink_nat_return`
+/// (which does no firewall) — otherwise a fresh post-DNAT `ct_key` finds no entry, hits deny-by-default,
+/// and the established return is wrongly `XDP_DROP`ped (the exact clab bug fixed at `df94251`).
+///
+/// This is the CI guard the byte-parity anchors above could NOT provide: they install a MATCHING
+/// ingress allow rule, so the return passed even with the pre-fix unconditional firewall; and the sim
+/// `uplink_nat_return` never evaluates the firewall at all. Here the firewall is enforced
+/// (`ingress_count: 1`) with a NON-matching rule, so ONLY the `nat_guest.is_none()` guard keeps the
+/// return alive. Pre-`df94251` this returned `XDP_DROP`; post-fix it reverse-DNATs + delivers.
+#[test]
+#[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel)"]
+fn nat_return_survives_deny_by_default_ingress_firewall() {
+    // TCP is representative — the firewall-skip guard is proto-independent (it gates the whole block).
+    let frame = tcp_return_frame();
+    let (encapped, native_action, native_pkt) = build_input_and_native(&frame, IPPROTO_TCP);
+    assert_eq!(
+        native_action,
+        Action::Redirect(TAP),
+        "sanity: native sim (no firewall) reverse-DNATs + delivers the return to the guest tap"
+    );
+
+    // Enforced ingress firewall (ingress_count: 1) whose only rule does NOT match this return.
+    let (_ebpf, prog_fd) = load_prog_with_rule(IPPROTO_TCP, nonmatching_ingress_rule());
+    let out = bpf_prog_test_run(prog_fd, &encapped)
+        .expect("BPF_PROG_TEST_RUN on uplink_rx (needs CAP_BPF + kernel test-run support)");
+
+    assert_ne!(
+        out.retval, XDP_DROP,
+        "REGRESSION (df94251): the ingress firewall dropped an established NAT return — uplink_rx \
+         must skip the firewall when nat_guest.is_some()"
+    );
+    assert_eq!(
+        out.retval, XDP_REDIRECT,
+        "NAT return must reverse-DNAT + deliver to the guest tap (XDP_REDIRECT {XDP_REDIRECT}), got {}",
+        out.retval
+    );
+    // Byte parity with the native return: the firewall skip must change ONLY pass/drop, never bytes.
+    assert_eq!(
+        out.data, native_pkt,
+        "NAT return delivered bytes diverged from the native sim reverse-DNAT output"
+    );
+    let inner_dst = ETH_LEN + 16;
+    assert_eq!(
+        &out.data[inner_dst..inner_dst + 4],
+        &GUEST_IP,
+        "inner dst IP reverse-DNAT'd to GUEST_IP"
+    );
 }
