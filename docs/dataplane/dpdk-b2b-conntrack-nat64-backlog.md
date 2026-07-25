@@ -1,16 +1,29 @@
 # DPDK B2b datapath backlog — conntrack + NAT64 gaps
 
-Status: **all three RESOLVED** (2026-07-25)
+Status: **all three RESOLVED** (2026-07-25); **#1 + #2 now END-TO-END reachable on
+the DPDK serve loop** since guest egress was wired in (2026-07-25, branch
+`feat/dpdk-guest-egress`). #3 (NAT64 ingress) stays latent pending NAT64 *egress*
+wiring (the first guest-egress slice is IPv4 SNAT only).
 
 These three findings came out of the 2026-07-25 datapath correctness sweep. All
-three were **latent** — not reachable on the shipping eBPF datapath, and not
-reachable on the DPDK `serve` loop *today* because it wires only uplink RX (guest
-egress, multi-queue guest egress, and NAT64 are not in the serve loop yet). They
-were fixed in the shared core + `nfkit` and validated in software (the in-process
-sim + a multi-lcore `--no-huge` EAL test) — **no ConnectX hardware was needed**;
-only the *rte_flow hardware-offload steering* alternative for #1 (which we did not
-take) would have. Each remains end-to-end latent on DPDK until the corresponding
-serve-loop wiring lands, but the datapath logic is now correct and covered.
+three were **latent when found** — not reachable on the shipping eBPF datapath, and
+not reachable on the DPDK `serve` loop *at the time* because it wired only uplink
+RX. They were fixed in the shared core + `nfkit` and validated in software (the
+in-process sim + a multi-lcore `--no-huge` EAL test) — **no ConnectX hardware was
+needed**; only the *rte_flow hardware-offload steering* alternative for #1 (which we
+did not take) would have.
+
+**Update (2026-07-25, `feat/dpdk-guest-egress`):** the DPDK serve loop now wires
+per-guest af_xdp guest egress (VF-style preallocated port pool → static poll set;
+worker polls each guest port → `process_guest_tx` → SNAT+encap → uplink tx). This
+lights up the previously-latent fixes: a guest's outbound SNAT now really seeds the
+peer-independent reverse entry into `shared_ct` on the serve datapath, and the WAN
+return really resolves it via `process_uplink_rx` — so **#1 and #2 are exercised
+end-to-end on DPDK, not just in the sim**. The real write→read handoff is proven by
+`nfkit/tests/guest_tx_nat_return_handoff.rs` (the REAL `process_guest_tx` write →
+the REAL `process_uplink_rx` reverse-DNAT read over one `ComposedMaps`). See the
+spec `docs/superpowers/specs/2026-07-25-dpdk-guest-egress-serve-loop-design.md` and
+plan `docs/superpowers/plans/2026-07-25-dpdk-guest-egress-first-slice.md`.
 
 The eBPF backend never had any of these gaps (single shared conntrack map;
 `ct_touch` on every hit; full NAT64 ingress path).
@@ -44,12 +57,22 @@ new inbound flow (firewall drop / no reverse-DNAT).
 the shared table; same-lcore still resolves; normal forward CT stays per-lcore
 isolated — the M8 isolation test still passes).
 
-**Remaining (latent):** true concurrent-writer stress would need a multi-threaded
-EAL test (the current test drives lcores sequentially); a GC/eviction sweep over
-`shared_ct` (via the added `shared_ct_for_each`/`_remove`) is not built yet; the
-whole path is end-to-end reachable only once guest egress is wired into serve with
-`n_queues > 1`. The rte_flow `MARK` hardware-steering alternative (needs ConnectX)
-was intentionally not taken — the shared-table software fix is correct without it.
+**End-to-end reachable (2026-07-25, `feat/dpdk-guest-egress`):** guest egress is now
+wired into the serve loop, so the reverse entry is really written by
+`process_guest_tx` on the serve datapath and read back by `process_uplink_rx` — the
+handoff is proven by `nfkit/tests/guest_tx_nat_return_handoff.rs` (real write → real
+read over one `ComposedMaps`), on top of the existing `multilcore_nat_return.rs`
+cross-lcore demux proof.
+
+**Remaining (follow-ups):** the first slice is SINGLE guest port + SINGLE worker
+(worker 0 owns the pool), so cross-lcore RSS demux is not yet exercised on the *live*
+serve loop — that needs guest egress with `n_queues > 1` and multi-worker guest-port
+partitioning (`multilcore_nat_return.rs` already proves the shared-table demux logic
+itself). True concurrent-writer stress still needs a multi-threaded EAL test (current
+tests drive lcores sequentially); a GC/eviction sweep over `shared_ct` (via
+`shared_ct_for_each`/`_remove`) is not built yet. The rte_flow `MARK` hardware-steering
+alternative (needs ConnectX) was intentionally not taken — the shared-table software
+fix is correct without it.
 
 ---
 
@@ -97,8 +120,12 @@ the unified dispatch), so sim tests passed while the DPDK path did not exercise 
 reverse CT and asserts the v6-expanded delivery (Redirect, ethertype 0x86DD, dst =
 guest overlay v6). Existing NAT64 byte-parity tests unchanged.
 
-**Remaining (latent):** end-to-end reachable only once DPDK guest egress seeds the
-`CT_F_NAT64` reverse entries in the serve loop.
+**Remaining (latent):** still not reachable on the live serve loop. The first
+guest-egress slice (`feat/dpdk-guest-egress`) wires only the IPv4 SNAT path
+(`process_guest_tx`), which seeds plain `CT_REWRITE_DST` reverse entries — NOT
+`CT_F_NAT64` ones. NAT64 ingress becomes end-to-end reachable once NAT64 *egress*
+(v6 guest → v4 external) is wired into the serve loop to seed the `CT_F_NAT64`
+reverse entries; the ingress dispatch itself is fixed + covered (sim) and ready.
 
 ---
 
