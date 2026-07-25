@@ -8,4 +8,7 @@ pub use netns::{configure_guest_netns, GuestNetConfig};
 pub use underlay::{
     infer_underlay_address, infer_underlay_prefix, read_host_ifaddrs, IfAddr, UnderlayIpam,
 };
-pub use veth::{create_preallocated_veth, create_veth_pair, delete_link, DeviceInfo, VethSpec};
+pub use veth::{
+    bind_preallocated_guest_end, create_preallocated_veth, create_veth_pair, delete_link,
+    unbind_preallocated_guest_end, DeviceInfo, VethSpec,
+};

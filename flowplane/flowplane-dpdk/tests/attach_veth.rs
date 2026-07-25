@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use flowplane_control::ControlCore;
-use flowplane_dpdk::attach_state::DpdkAttachState;
+use flowplane_dpdk::attach_state::{DpdkAttachState, GuestPortSlot};
 use flowplane_dpdk::node::{pb, DpdkNodeService};
 use flowplane_dpdk::writer::DpdkMapWriter;
 use nfkit::{Eal, SharedConfigMaps};
@@ -53,7 +53,8 @@ fn init_eal_once() {
     });
 }
 
-/// Build a `DpdkNodeService` wired to real `SharedConfigMaps` with a fixed underlay pool.
+/// Build a `DpdkNodeService` wired to real `SharedConfigMaps` with a fixed underlay pool. The guest
+/// pool is seeded EMPTY; privileged tests call [`seed_pool_slot`] to add a real preallocated slot.
 fn make_svc(shared: Arc<SharedConfigMaps>) -> (DpdkNodeService, Arc<DpdkAttachState>) {
     let ctrl = Arc::new(Mutex::new(ControlCore::new(DpdkMapWriter::new(
         shared.clone(),
@@ -70,6 +71,24 @@ fn make_svc(shared: Arc<SharedConfigMaps>) -> (DpdkNodeService, Arc<DpdkAttachSt
     (DpdkNodeService::new(ctrl, shared, attach.clone()), attach)
 }
 
+/// Create a REAL preallocated pool veth (`<host_ifname>` up in root netns, placeholder `<host>p` down)
+/// and push it into the attach state's guest pool as one idle slot. Needs CAP_NET_ADMIN. Returns the
+/// slot's resolved host ifindex. Mirrors what `serve.rs::run` builds at startup (Task 2). The caller
+/// must `flowplane_device::delete_link(host_ifname)` at the end of the test to clean up.
+fn seed_pool_slot(attach: &DpdkAttachState, host_ifname: &str, port_id: u16) -> u32 {
+    flowplane_device::delete_link(host_ifname);
+    let info =
+        flowplane_device::create_preallocated_veth(host_ifname, [0x02, 0, 0, 0, 0x0e, 0x00], 1450)
+            .expect("create preallocated pool veth (needs CAP_NET_ADMIN)");
+    attach.guest_pool.lock().unwrap().push(GuestPortSlot {
+        host_ifname: host_ifname.to_string(),
+        host_ifindex: info.host_ifindex,
+        port_id,
+        bound: None,
+    });
+    info.host_ifindex
+}
+
 /// Full attach + detach cycle with a real netns + veth. Needs CAP_NET_ADMIN + EAL.
 #[tokio::test]
 #[ignore = "privileged: needs CAP_NET_ADMIN (veth+netns) + EAL (--no-huge); run under sudo with --ignored --test-threads=1"]
@@ -77,6 +96,11 @@ async fn attach_veth_programs_maps_and_detach_removes_device() {
     init_eal_once();
     let shared = Arc::new(SharedConfigMaps::new(0, 1024).expect("SharedConfigMaps"));
     let (svc, attach_state) = make_svc(shared.clone());
+
+    // Seed ONE real preallocated pool slot (VF-style; what serve.rs builds at startup). Attach will
+    // ASSIGN this slot rather than create a fresh veth.
+    let slot_host = "fpgtest0";
+    let slot_ifindex = seed_pool_slot(&attach_state, slot_host, 1);
 
     // Make a throwaway netns.
     let ns = "fpveth-test-ns";
@@ -126,31 +150,60 @@ async fn attach_veth_programs_maps_and_detach_removes_device() {
         "underlay {underlay} must be in the second half of the /64"
     );
 
-    // The device registry must have an entry for this interface.
+    // The device registry must have an entry for this interface, pointing at the SLOT's device.
     let dev = {
         let reg = attach_state.registry.lock().unwrap();
         reg.get(iface_id.as_bytes()).cloned()
     };
     assert!(dev.is_some(), "registry must have an entry for {iface_id}");
     let dev = dev.unwrap();
-    assert!(dev.host_ifindex >= 2, "host ifindex must be real (>= 2)");
-    assert!(
-        dev.host_name.starts_with("veth-"),
-        "host_name must start with veth-"
+    assert_eq!(
+        dev.host_name, slot_host,
+        "registry host_name is the pool slot device"
+    );
+    assert_eq!(
+        dev.host_ifindex, slot_ifindex,
+        "registry host_ifindex matches the seeded slot"
     );
 
-    // The host-side veth must be visible in the root netns.
+    // The pool host-side veth must still be up in the root netns (attach only MOVES the guest-end).
     let ifindex_s = std::fs::read_to_string(format!("/sys/class/net/{}/ifindex", dev.host_name))
-        .expect("host veth exists in root netns");
+        .expect("pool host veth exists in root netns");
     let ifindex: u32 = ifindex_s.trim().parse().unwrap();
     assert_eq!(ifindex, dev.host_ifindex, "sysfs ifindex matches resolved");
 
-    // The guest-side veth must be visible inside the test netns.
+    // PortMeta must be programmed KEYED BY THE SLOT ifindex — the exact key the serve worker's
+    // `ports_get` uses to resolve this guest's identity.
+    assert!(
+        shared.ports_get(slot_ifindex).is_some(),
+        "PortMeta must be keyed by the pool slot ifindex"
+    );
+
+    // The slot must now be bound to this interface.
+    {
+        let pool = attach_state.guest_pool.lock().unwrap();
+        let slot = pool
+            .iter()
+            .find(|s| s.host_ifindex == slot_ifindex)
+            .unwrap();
+        assert_eq!(
+            slot.bound.as_deref(),
+            Some(iface_id),
+            "slot bound to the attached interface"
+        );
+    }
+
+    // The bound guest-end must be visible inside the test netns as `interface_id` (moved from the
+    // placeholder), and the placeholder `fpgtest0p` must be GONE from the root netns.
     let status = std::process::Command::new("ip")
         .args(["netns", "exec", ns, "ip", "link", "show", iface_id])
         .status()
         .expect("ip netns exec");
-    assert!(status.success(), "guest veth not found in netns");
+    assert!(status.success(), "bound guest-end not found in netns");
+    assert!(
+        std::fs::metadata(format!("/sys/class/net/{slot_host}p")).is_err(),
+        "placeholder peer must have moved out of the root netns"
+    );
 
     // ── Detach ────────────────────────────────────────────────────────────────
     let dresp = svc
@@ -169,13 +222,42 @@ async fn attach_veth_programs_maps_and_detach_removes_device() {
         );
     }
 
-    // The host-side veth must be gone from the root netns.
+    // The slot must be FREED (reusable) but the pool host veth must SURVIVE detach.
+    {
+        let pool = attach_state.guest_pool.lock().unwrap();
+        let slot = pool
+            .iter()
+            .find(|s| s.host_ifindex == slot_ifindex)
+            .unwrap();
+        assert!(slot.bound.is_none(), "slot freed after detach");
+    }
     assert!(
-        std::fs::metadata(format!("/sys/class/net/{}", dev.host_name)).is_err(),
-        "host veth must be deleted after detach"
+        std::fs::metadata(format!("/sys/class/net/{slot_host}")).is_ok(),
+        "pool host veth must SURVIVE detach (reused, not deleted)"
+    );
+
+    // The guest-end must be back in the ROOT netns as the placeholder `fpgtest0p`, NOT in the pod ns.
+    assert!(
+        std::fs::metadata(format!("/sys/class/net/{slot_host}p")).is_ok(),
+        "guest-end must be back in the root netns as the placeholder"
+    );
+    let gone = std::process::Command::new("ip")
+        .args(["netns", "exec", ns, "ip", "link", "show", iface_id])
+        .status()
+        .expect("ip netns exec");
+    assert!(
+        !gone.success(),
+        "bound guest-end must no longer be in the pod netns"
+    );
+
+    // PortMeta must be removed (freed slot must not retain the previous guest's identity).
+    assert!(
+        shared.ports_get(slot_ifindex).is_none(),
+        "PortMeta must be removed on detach so a reused slot has no stale identity"
     );
 
     // Cleanup.
+    flowplane_device::delete_link(slot_host);
     let _ = std::process::Command::new("ip")
         .args(["netns", "del", ns])
         .status();
@@ -190,6 +272,8 @@ async fn attach_veth_v6_only() {
     init_eal_once();
     let shared = Arc::new(SharedConfigMaps::new(0, 1024).expect("SharedConfigMaps"));
     let (svc, attach_state) = make_svc(shared.clone());
+    let slot_host = "fpgtest1";
+    seed_pool_slot(&attach_state, slot_host, 1);
 
     let ns = "fpveth-v6only-ns";
     let _ = std::process::Command::new("ip")
@@ -253,6 +337,7 @@ async fn attach_veth_v6_only() {
         let reg = attach_state.registry.lock().unwrap();
         assert!(reg.get(iface_id.as_bytes()).is_none());
     }
+    flowplane_device::delete_link(slot_host);
     let _ = std::process::Command::new("ip")
         .args(["netns", "del", ns])
         .status();
@@ -266,6 +351,8 @@ async fn attach_veth_dual_stack() {
     init_eal_once();
     let shared = Arc::new(SharedConfigMaps::new(0, 1024).expect("SharedConfigMaps"));
     let (svc, attach_state) = make_svc(shared.clone());
+    let slot_host = "fpgtest2";
+    seed_pool_slot(&attach_state, slot_host, 1);
 
     let ns = "fpveth-dual-ns";
     let _ = std::process::Command::new("ip")
@@ -327,6 +414,7 @@ async fn attach_veth_dual_stack() {
         let reg = attach_state.registry.lock().unwrap();
         assert!(reg.get(iface_id.as_bytes()).is_none());
     }
+    flowplane_device::delete_link(slot_host);
     let _ = std::process::Command::new("ip")
         .args(["netns", "del", ns])
         .status();
