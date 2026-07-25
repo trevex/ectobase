@@ -137,6 +137,8 @@ fn run_uplink_rx(pool: &Mempool, maps: &mut ComposedMaps, frame: &[u8]) -> (Vec<
             outer_dst: HOST_UNDERLAY,
             local: &local,
             now: 0,
+            // Plain (non-NAT64) NAT return: guest_ipv6 is only read on the CT_F_NAT64 branch.
+            guest_ipv6: [0; 16],
         },
     );
     let mut out = Vec::with_capacity(mp.len());

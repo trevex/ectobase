@@ -34,6 +34,9 @@ pub struct UplinkIn<'a> {
     pub outer_dst: [u8; 16],
     pub local: &'a Local,
     pub now: u64,
+    /// The guest's own overlay IPv6 (its `PortMeta.guest_ipv6`); used ONLY on the `CT_F_NAT64`
+    /// reverse-return path to reconstruct the reply's inner IPv6 dst ([`process_uplink_nat64_ingress`]).
+    pub guest_ipv6: [u8; 16],
 }
 
 /// Host uplink_rx for the LB + base path, operating in place on `pkt`. Mirrors `try_uplink_rx`:
@@ -322,9 +325,9 @@ pub fn process_uplink_nat_return<P: Pkt, M: Maps>(
 /// `nat_guest.is_none()` guard at `ingress.rs:256`). Everything else takes the LB + base path
 /// ([`process_uplink`]).
 ///
-/// NAT64 returns (`CT_F_NAT64`) need v4->v6 expansion ([`process_uplink_nat64_ingress`]), not the
-/// plain reverse-DNAT here; the DPDK serve loop does not model NAT64 yet, so those fall through to
-/// `process_uplink` (a tracked follow-up) rather than being mis-delivered as truncated IPv4.
+/// NAT64 returns (`CT_F_NAT64`) need v4->v6 expansion, not the plain reverse-DNAT: a matching
+/// `CT_F_NAT64 | CT_REWRITE_DST` reverse entry dispatches to [`process_uplink_nat64_ingress`]
+/// (restores the guest IPv4 dst, then expands back to the guest's overlay IPv6 via `in_.guest_ipv6`).
 pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn) -> Action {
     let inner_off = ETH_LEN + IPV6_LEN;
 
@@ -339,7 +342,19 @@ pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
                 key.src_port = 0;
             }
             if let Some(e) = maps.conntrack_get(&key) {
-                if e.flags & CT_REWRITE_DST != 0 && e.flags & CT_F_NAT64 == 0 {
+                if e.flags & CT_REWRITE_DST != 0 {
+                    if e.flags & CT_F_NAT64 != 0 {
+                        // NAT64 return: v4->v6 expansion, not plain reverse-DNAT.
+                        return process_uplink_nat64_ingress(
+                            pkt,
+                            &UplinkNat64IngressIn {
+                                tap_ifindex: in_.u.tap_ifindex,
+                                guest_mac: in_.u.guest_mac,
+                                guest_ipv6: in_.guest_ipv6,
+                                rev: &e,
+                            },
+                        );
+                    }
                     return process_uplink_nat_return(
                         pkt,
                         maps,

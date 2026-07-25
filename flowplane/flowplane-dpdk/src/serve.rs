@@ -419,12 +419,22 @@ fn worker_loop(q: u16, shared: &SharedConfigMaps, port: &Port, stop: &AtomicBool
                         // no local underlay for this dst → drop
                         None => Action::Drop,
                         Some(u) => {
+                            // guest_ipv6 is read only on the CT_F_NAT64 reverse-return branch (to
+                            // reconstruct the reply's inner IPv6 dst). Source it from the delivery
+                            // port's PortMeta by tap ifindex; absent (e.g. NAT-gateway node with no
+                            // local guest) → all-zero, and the NAT64 parse rejects it (Pass).
+                            let guest_ipv6 = composed
+                                .cfg
+                                .ports_get(u.tap_ifindex)
+                                .map(|m| m.guest_ipv6)
+                                .unwrap_or([0u8; 16]);
                             let in_ = UplinkIn {
                                 vni: u.vni,
                                 u,
                                 outer_dst,
                                 local: &local,
                                 now,
+                                guest_ipv6,
                             };
                             // The SAME unified `flowplane_core` uplink entry the eBPF `try_uplink_rx`
                             // mirrors: it dispatches established NAT returns to the reverse-DNAT path
