@@ -36,8 +36,8 @@ use anyhow::Context;
 use clap::{Parser, ValueEnum};
 use ipnet::Ipv6Net;
 use nfkit::{
-    Backend, ComposedMaps, Eal, LcoreRuntime, MbufBurst, MbufPkt, Mempool, PerLcoreFlowMaps, Port,
-    SharedConfigMaps,
+    Backend, ComposedMaps, Eal, LcoreRing, LcoreRuntime, MbufBurst, MbufPkt, Mempool,
+    PerLcoreFlowMaps, Port, SharedConfigMaps,
 };
 
 use flowplane_control::ControlCore;
@@ -389,6 +389,35 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         });
     }
 
+    // ── 3b. Guest↔guest local-delivery handoff: one LcoreRing per guest port ─────
+    // A same-node guest→guest flow's `process_guest_tx` returns `Redirect(dest_tap_ifindex)` (inner
+    // Eth already rewritten). The dest guest port may be OWNED BY A DIFFERENT WORKER (guest ports are
+    // partitioned round-robin across lcores, see `owns`), and a `TxQueue` is `!Send` — it is built on
+    // and serviced by exactly one lcore, so the source worker CANNOT tx out a port it doesn't own.
+    //
+    // Bridge that with a UNIFORM per-port MP/SC ring (nfkit `LcoreRing`): `rings[i]` is the inbox for
+    // `guest_ports[i]`. Any worker that decides a redirect to port `i` ENQUEUES the mbuf into
+    // `rings[i]` (multi-producer, `&self`); the ONE worker that owns port `i` DEQUEUES + tx's it out
+    // that port. This is uniform — even a same-worker dest goes through the ring (the round-trip is
+    // negligible and it avoids a `guest_qs` mutable-borrow-while-iterating problem). `LcoreRing` is
+    // `Send + Sync`, so `Arc<Vec<LcoreRing>>` crosses into the `Fn + Sync` `for_each_worker` closure.
+    //
+    // `ifindex_to_index` maps a redirect target ifindex → the parallel `rings`/`guest_ports` index, so
+    // any worker can resolve `Redirect(dest_tap_ifindex)` → the dest port's ring. A target that isn't
+    // a local guest port (not in the map) is dropped. Built once at startup; read-only thereafter.
+    let mut rings: Vec<LcoreRing> = Vec::with_capacity(guest_ports.len());
+    let mut ifindex_to_index: std::collections::HashMap<u32, usize> =
+        std::collections::HashMap::with_capacity(guest_ports.len());
+    for (i, gp) in guest_ports.iter().enumerate() {
+        // Unique EAL name per ring (like ports/hashes/mempools); power-of-two size (rte_ring req).
+        let ring = LcoreRing::new(&format!("fpgring{}", slots[i].port_id), 1024, SOCKET_ID)
+            .map_err(|e| anyhow::anyhow!("guest ring {} create failed: {e}", slots[i].port_id))?;
+        rings.push(ring);
+        ifindex_to_index.insert(gp.host_ifindex, i);
+    }
+    let rings = Arc::new(rings);
+    let ifindex_to_index = Arc::new(ifindex_to_index);
+
     // ── 4. Shared config maps (process-wide, single-writer) ─────────────────────
     let shared = Arc::new(
         SharedConfigMaps::new(SOCKET_ID, CONFIG_ENTRIES)
@@ -465,6 +494,11 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     let stop = Arc::new(AtomicBool::new(false));
     let shared_for_workers = shared.clone();
     let stop_w = stop.clone();
+    // The guest↔guest handoff rings + the ifindex→port-index resolver, cloned into the worker thread.
+    // Both are `Arc`-wrapped read-only shared state (rings are `Send + Sync`; the map is immutable),
+    // so they cross into the `Fn + Sync` `for_each_worker` closure below and every worker sees them.
+    let rings_w = rings.clone();
+    let ifx_to_ix_w = ifindex_to_index.clone();
     // Move the Port + Mempool into the worker thread: the rx/tx queue handles are `!Send` and must
     // be built ON each lcore, and the Port/pool must outlive every worker. `_eal` stays on the main
     // thread (the EAL guard is `!Send` and cleans up on process exit).
@@ -482,6 +516,10 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
             // ports live until the closure returns, and it is what the `Sync` closure below borrows.
             // Do not "simplify" it to `let _`.
             let guest_ports = guest_ports; // move into the thread; borrowed by the Sync closure below
+                                           // Move the handoff rings + resolver into the thread too; the Sync closure borrows them so
+                                           // every worker can enqueue to any port's ring and drain the rings for ports it owns.
+            let rings_w = rings_w;
+            let ifx_to_ix_w = ifx_to_ix_w;
             LcoreRuntime::for_each_worker(n_workers, |q| {
                 // Partition the preallocated guest ports round-robin across ALL worker lcores: worker
                 // `q` polls `guest_ports[i]` where `owns(i, q, n_workers)`. We pass the FULL slice plus
@@ -494,6 +532,8 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
                     &shared_for_workers,
                     &port,
                     &guest_ports,
+                    &rings_w,
+                    &ifx_to_ix_w,
                     &stop_w,
                 );
             });
@@ -589,22 +629,31 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
 /// the sending guest's `PortMeta` by the port's host veth ifindex (`ports_get`); an unbound pool port
 /// (no guest attached yet, Task 4 binds them) has no `PortMeta` → drop. The encap arm returns
 /// `Redirect(uplink_ifindex)`, so a redirect whose target is `LOCAL.uplink_ifindex` is queued onto
-/// the SAME uplink tx burst (encap→fabric out the uplink). A redirect to a guest tap (local
-/// guest↔guest) is out of this first slice's scope → dropped with a TODO; `Pass`/`Drop` free.
+/// the SAME uplink tx burst (encap→fabric out the uplink).
+///
+/// GUEST↔GUEST (Task 5): the `Deliver::Local` arm returns `Redirect(dest_tap_ifindex)` (inner Eth
+/// already rewritten for the dest guest). The dest port may be owned by a DIFFERENT worker, and a
+/// `TxQueue` is `!Send`, so the source worker cannot tx it directly. It instead resolves the target
+/// ifindex → its port index (`ifindex_to_index`) and ENQUEUEs the mbuf into that port's `LcoreRing`
+/// (multi-producer, uniform — even a same-worker dest). Each worker then DRAINS the rings for the
+/// ports IT owns and tx's the handed-off mbufs out that port's `TxQueue` (single-consumer). A redirect
+/// to a non-local-guest ifindex, or a full ring, drops. `Pass`/`Drop` free.
 ///
 /// Both blocks share one `now` + `LOCAL` read per iteration. Without `LOCAL` programmed there is no
 /// uplink identity (no outer MACs / uplink ifindex) → both blocks drop their bursts. Guest ports are
 /// polled EVERY iteration regardless of uplink rx count (no early `continue` on an idle uplink).
 ///
-/// NOTE (Task 5): each owned guest port's `TxQueue` is built here and kept (`_gtx`) but UNUSED in
-/// Task 3 — the fabric→guest return path (delivering decapped uplink traffic out the guest af_xdp
-/// port) is wired in Task 5 via exactly this reserved `TxQueue`.
+/// NOTE (Task 5): each owned guest port's `TxQueue` (`gtx`) is used by the ring-drain block to tx the
+/// guest↔guest frames handed off into that port's `LcoreRing` by any worker's guest rx block.
+#[allow(clippy::too_many_arguments)]
 fn worker_loop(
     q: u16,
     n_workers: u16,
     shared: &SharedConfigMaps,
     port: &Port,
     guest_ports: &[GuestPort],
+    rings: &[LcoreRing],
+    ifindex_to_index: &std::collections::HashMap<u32, usize>,
     stop: &AtomicBool,
 ) {
     // Register as a QSBR reader so the writer's deferred RCU frees can reclaim past this lcore.
@@ -630,19 +679,24 @@ fn worker_loop(
     // (see `owns`). We take the FULL slice and stride it here rather than receiving a pre-sliced
     // subset, because a strided subset is not a contiguous slice. A worker owning zero guest ports
     // ends up with an empty `guest_qs` → the guest block below loops over nothing.
-    let mut guest_qs: Vec<(u32, nfkit::RxQueue, nfkit::TxQueue)> = guest_ports
+    // Carry the port INDEX (`i`) alongside the ifindex + queues: the index is this port's slot in the
+    // parallel `rings` vec, so the ring-drain block below can drain exactly `rings[pi]` for each port
+    // this worker owns and tx it out that owned port's `TxQueue`.
+    let mut guest_qs: Vec<(usize, u32, nfkit::RxQueue, nfkit::TxQueue)> = guest_ports
         .iter()
         .enumerate()
         .filter(|(i, _)| owns(*i, q, n_workers))
-        .map(|(_, gp)| {
+        .map(|(i, gp)| {
             let (r, t) = gp.port.queue(0);
-            (gp.host_ifindex, r, t)
+            (i, gp.host_ifindex, r, t)
         })
         .collect();
 
     let mut rx_burst = MbufBurst::new();
     let mut tx_burst = MbufBurst::new();
     let mut guest_burst = MbufBurst::new();
+    // Reused each iteration to drain the guest↔guest handoff rings for the ports this worker owns.
+    let mut ring_burst = MbufBurst::new();
 
     while !stop.load(Ordering::Acquire) {
         // Single monotonic-clock + `LOCAL` read per iteration, shared by BOTH blocks (the meter
@@ -736,7 +790,7 @@ fn worker_loop(
         // Only meaningful with `LOCAL` programmed — the encapped frame egresses the uplink identified
         // by LOCAL. Without LOCAL there is no uplink identity, so poll+drain the guest ports (so their
         // rx rings don't back up) but drop everything.
-        for (host_ifindex, grx, _gtx) in guest_qs.iter_mut() {
+        for (_pi, host_ifindex, grx, _gtx) in guest_qs.iter_mut() {
             guest_burst.clear();
             grx.rx(&mut guest_burst);
             for mut mbuf in guest_burst.drain(..) {
@@ -805,8 +859,24 @@ fn worker_loop(
                         if tx_burst.try_push(mbuf).is_err() { /* full: dropped, freed on scope exit */
                         }
                     }
-                    // TODO(first-slice): guest↔guest local delivery not wired; drop.
-                    Action::Redirect(_) => {}
+                    // Guest↔guest same-node delivery: `process_guest_tx`'s `Deliver::Local` arm
+                    // returns `Redirect(dest_tap_ifindex)` with the inner Ethernet ALREADY rewritten
+                    // (dst = dest guest_mac, src = GW_MAC). The dest port may be owned by ANOTHER
+                    // worker and a `TxQueue` is `!Send`, so we cannot tx it here directly. Resolve the
+                    // target ifindex → its ring index and ENQUEUE (multi-producer) into that port's
+                    // ring; the worker that OWNS the dest port drains + tx's it (see the drain block
+                    // below). Uniform: enqueue even for a same-worker dest (no special case).
+                    Action::Redirect(ix) => {
+                        // Resolve the target ifindex → its ring index; a target that isn't a local
+                        // guest port (not in the resolver) falls through and drops.
+                        if let Some(pi) = ifindex_to_index.get(&ix).copied() {
+                            // Full ring → DROP (free the returned mbuf on scope exit); never spin in
+                            // the poll loop. A full ring means the dest port's owner is backpressured.
+                            if let Err(m) = rings[pi].enqueue(mbuf) {
+                                drop(m); // ring full: guest↔guest frame dropped
+                            }
+                        }
+                    }
                     // TODO: guest_tx Pass (no route / non-forwardable); no kernel behind the af_xdp
                     // guest port, so drop.
                     Action::Pass => {}
@@ -825,6 +895,28 @@ fn worker_loop(
             tx.tx(&mut tx_burst);
             tx_burst.clear();
         }
+
+        // ── RING DRAIN (guest↔guest delivery, owning worker only): tx handed-off mbufs. ───────────
+        // For each guest port THIS worker owns, drain its handoff ring (`rings[pi]`, single-consumer:
+        // only the owner dequeues) and tx each mbuf out that port's `TxQueue`. The mbuf was already
+        // fully processed by the SOURCE worker's `process_guest_tx` (inner Eth rewritten for the dest
+        // guest), so we tx it AS-IS — no reprocessing. Drain until a `dequeue_burst` returns 0
+        // (`dequeue_burst` caps at the burst's remaining capacity ≤ BURST, so a backed-up ring takes
+        // several passes). This runs EVERY iteration (even when this worker's own guest rx is idle) so
+        // cross-worker delivery is never starved by an idle owner.
+        for (pi, _ifx, _grx, gtx) in guest_qs.iter_mut() {
+            loop {
+                ring_burst.clear();
+                let n = rings[*pi].dequeue_burst(&mut ring_burst);
+                if n == 0 {
+                    break;
+                }
+                // tx frees only the SENT prefix; drop any leftover (tx-ring backpressure) via clear.
+                gtx.tx(&mut ring_burst);
+                ring_burst.clear();
+            }
+        }
+
         // Report quiescence EVERY iteration (incl. idle) so the writer's RCU reclaim can progress.
         shared.report_quiescent(&tok);
     }
