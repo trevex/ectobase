@@ -142,16 +142,18 @@ impl<W: MapWriter> ControlCore<W> {
                 guest_ipv6: ipv6,
             },
         )?;
-        self.w.ifaces_upsert(
-            IfaceKey::new(vni, ipv4),
-            IfaceValue {
-                tap_ifindex: tap,
-                is_local: 1,
-                underlay_ipv6,
-                guest_mac: effective_mac,
-                _pad: [0; 2],
-            },
-        )?;
+        if ipv4 != [0u8; 4] {
+            self.w.ifaces_upsert(
+                IfaceKey::new(vni, ipv4),
+                IfaceValue {
+                    tap_ifindex: tap,
+                    is_local: 1,
+                    underlay_ipv6,
+                    guest_mac: effective_mac,
+                    _pad: [0; 2],
+                },
+            )?;
+        }
         self.w.underlay_upsert(
             underlay_ipv6,
             flowplane_common::UnderlayValue {
@@ -165,17 +167,19 @@ impl<W: MapWriter> ControlCore<W> {
         // /32 (and /128 when dual-stack) route to this interface's OWN underlay so tc_guest_tx's
         // LPM resolves a local destination to a local underlay, and the local fast path delivers it
         // without a wire round-trip. These are NOT added to routes_shadow (not user-visible routes).
-        self.w.route_upsert(
-            vni,
-            ipv4,
-            32,
-            RouteValue {
-                nexthop_vni: vni,
-                nexthop_ipv6: underlay_ipv6,
-                is_external: 0,
-                _pad: [0; 3],
-            },
-        )?;
+        if ipv4 != [0u8; 4] {
+            self.w.route_upsert(
+                vni,
+                ipv4,
+                32,
+                RouteValue {
+                    nexthop_vni: vni,
+                    nexthop_ipv6: underlay_ipv6,
+                    is_external: 0,
+                    _pad: [0; 3],
+                },
+            )?;
+        }
         if ipv6 != [0u8; 16] {
             self.w.route6_upsert(
                 vni,
@@ -279,6 +283,96 @@ mod tests {
     use super::{meter_state, IfaceParams};
     use crate::{mem::MemMapWriter, shadow::IfaceMeta, ControlCore, MapWriter};
     use flowplane_common::{IfaceKey, NatKey, VipKey};
+
+    /// Build an `IfaceParams` with fixed ancillary fields; only `ipv4`/`ipv6` vary across the
+    /// family-conditional tests (vni=100, tap=42, effective_mac=[1..6]).
+    fn params(ipv4: [u8; 4], ipv6: [u8; 16]) -> IfaceParams {
+        IfaceParams {
+            interface_id: b"iftest".to_vec(),
+            device: "dtapvf_0".to_string(),
+            tap: 42,
+            effective_mac: [1, 2, 3, 4, 5, 6],
+            vni: 100,
+            ipv4,
+            ipv6,
+            gateway_ipv4: [10, 0, 0, 1],
+            gateway_ipv6: [0u8; 16],
+            underlay_ipv6: [0xfd; 16],
+            total_mbps: 0,
+            public_mbps: 0,
+        }
+    }
+
+    /// v6-only interface (ipv4=[0;4]): no bogus 0.0.0.0/32 route, no (vni,0.0.0.0) INTERFACES
+    /// entry; the v6 /128 self-route IS present.
+    #[test]
+    fn program_interface_v6_only_skips_v4_route_and_ifaces() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        let ipv6 = [0x20; 16];
+        c.program_interface(params([0u8; 4], ipv6)).unwrap();
+
+        // v6 self-route must be present.
+        assert!(
+            c.w.routes6.contains_key(&(100, ipv6, 128)),
+            "route6 /128 missing"
+        );
+        // No bogus v4 self-route for 0.0.0.0/32.
+        assert!(
+            !c.w.routes.contains_key(&(100, [0u8; 4], 32)),
+            "bogus 0.0.0.0/32 route must not be programmed"
+        );
+        // No bogus INTERFACES entry for (vni, 0.0.0.0).
+        assert!(
+            c.w.ifaces.get(&IfaceKey::new(100, [0u8; 4])).is_none(),
+            "bogus INTERFACES entry for 0.0.0.0 must not be programmed"
+        );
+    }
+
+    /// v4-only interface (ipv6=[0;16]): v4 /32 + INTERFACES present; route6 map empty.
+    #[test]
+    fn program_interface_v4_only_skips_v6_route() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        let ipv4 = [10, 0, 0, 2];
+        c.program_interface(params(ipv4, [0u8; 16])).unwrap();
+
+        // v4 self-route present.
+        assert!(
+            c.w.routes.contains_key(&(100, ipv4, 32)),
+            "route4 /32 missing"
+        );
+        // INTERFACES entry present.
+        assert!(
+            c.w.ifaces.get(&IfaceKey::new(100, ipv4)).is_some(),
+            "INTERFACES entry missing"
+        );
+        // No v6 route at all.
+        assert!(
+            c.w.routes6.is_empty(),
+            "route6 map must be empty for v4-only"
+        );
+    }
+
+    /// Dual-stack interface: both v4 /32 + INTERFACES and v6 /128 all present.
+    #[test]
+    fn program_interface_dual_programs_both() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        let ipv4 = [10, 0, 0, 3];
+        let ipv6 = [0x20; 16];
+        c.program_interface(params(ipv4, ipv6)).unwrap();
+
+        assert!(
+            c.w.routes.contains_key(&(100, ipv4, 32)),
+            "route4 /32 missing"
+        );
+        assert!(
+            c.w.ifaces.get(&IfaceKey::new(100, ipv4)).is_some(),
+            "INTERFACES entry missing"
+        );
+        assert!(
+            c.w.routes6.contains_key(&(100, ipv6, 128)),
+            "route6 /128 missing"
+        );
+    }
 
     /// Three-lane mbps->MeterState conversion: egress=EDT (no token bucket, burst=0),
     /// public/ingress=token-bucket policers (burst = bps/8, min 2000B). 0 mbps = pass sentinel.
