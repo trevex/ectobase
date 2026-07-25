@@ -10,9 +10,8 @@ pub mod pb {
 pub mod handlers;
 pub mod parse;
 
-// populated in Task 2/3
-// pub use parse::*;
-// pub use handlers::*;
+// pub use handlers::*; // populated in Task 3
+pub use parse::*;
 
 #[cfg(test)]
 mod tests {
