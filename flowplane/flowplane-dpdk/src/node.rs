@@ -206,6 +206,45 @@ impl DataplaneNode for DpdkNodeService {
             },
         );
 
+        // Deterministically configure the container's pod netns (overlay addr(s) + per-family
+        // default route). Off the tokio thread (shells out). On failure, roll the whole attach back
+        // (maps + veth + IPAM + registry) so no half-attached interface is left behind.
+        let cfg = flowplane_device::GuestNetConfig {
+            netns_path: r.netns_path.clone(),
+            guest_ifname: guest_name.clone(),
+            ipv4,
+            gateway_ipv4: attach.gateway_ipv4,
+            ipv6,
+            gateway_ipv6: attach.gateway_ipv6,
+        };
+        if let Err(e) =
+            tokio::task::spawn_blocking(move || flowplane_device::configure_guest_netns(&cfg))
+                .await
+                .map_err(|e| Status::internal(format!("guest-netns task panicked: {e}")))?
+        {
+            let id = r.interface_id.clone().into_bytes();
+            {
+                let mut core = self.ctrl.lock();
+                if let Some((vni, ip4)) = core
+                    .iface_meta_rows()
+                    .into_iter()
+                    .find(|(rid, ..)| rid.as_slice() == id.as_slice())
+                    .map(|(_, vni, ip4, ..)| (vni, ip4))
+                {
+                    let _ = core.purge_vni(vni, ip4);
+                }
+                core.forget_iface_meta(&id);
+            } // ctrl lock dropped before the subprocess below
+            flowplane_device::delete_link(&info.host_name);
+            attach
+                .ipam
+                .lock()
+                .unwrap()
+                .release(std::net::Ipv6Addr::from(underlay));
+            attach.forget(&id);
+            return Err(Status::internal(format!("configure guest netns: {e}")));
+        }
+
         // Build the response mirroring the eBPF `AttachOutcome` → `AttachInterfaceResponse` mapping
         // (flowplane/src/attach.rs + node.rs): ifname = guest name inside the netns (= interface_id
         // for Veth), ips = [overlay_ipv4], mac = "aa:bb:.." string, gateway = IPv4 gateway string,

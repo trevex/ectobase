@@ -302,6 +302,20 @@ impl AttachState {
             }
         }
 
+        // Configure the container's pod netns with the overlay addr(s) + per-family default routes.
+        // Veth only: containers don't self-config (no DHCP/RA on the veth model); VMs (Tap/PodTap)
+        // self-configure via DHCP/RA and must NOT be touched here.
+        if let DeviceType::Veth = device_type {
+            flowplane_device::configure_guest_netns(&flowplane_device::GuestNetConfig {
+                netns_path: netns_path.to_string(),
+                guest_ifname: interface_id.to_string(),
+                ipv4,
+                gateway_ipv4: self.gateway_ipv4,
+                ipv6,
+                gateway_ipv6: self.gateway_ipv6,
+            })?;
+        }
+
         // `ifname` returned to the caller: for a veth it's the guest end inside the netns (the pod's
         // interface); for a tap it's the root-netns tap the caller points qemu at (or opens for its fd).
         let ifname = match device_type {
