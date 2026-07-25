@@ -1,9 +1,9 @@
 //! The control-plane map write surface. eBPF (`AyaWriter`) and DPDK (`SharedConfigMaps`, B1b)
 //! each implement this; `ControlCore` programs maps only through it.
 use flowplane_common::{
-    DhcpConfig, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue, LbKey,
-    LbValue, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteValue,
-    UnderlayValue, VipKey,
+    DhcpConfig, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceMetaKey, IfaceMetaVal,
+    IfaceValue, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry,
+    PortMeta, RouteValue, UnderlayValue, VipKey,
 };
 
 /// The set of conntrack entries a NAT teardown must invalidate. eBPF flushes matching CT map
@@ -53,6 +53,18 @@ pub trait MapWriter {
     fn fw_rules_upsert(&mut self, key: FwRuleKey, val: FwRule) -> anyhow::Result<()>;
     fn fw_rules_remove(&mut self, key: &FwRuleKey) -> anyhow::Result<()>;
     fn fw_meta_upsert(&mut self, ifindex: u32, val: FwMeta) -> anyhow::Result<()>;
+    /// IPv6 firewall rule upsert (`FW_RULES6`). DEFAULT no-op — real backends override in tasks 7/9.
+    fn fw_rules6_upsert(&mut self, _key: FwRuleKey, _val: FwRule6) -> anyhow::Result<()> {
+        Ok(())
+    }
+    /// IPv6 firewall rule remove (`FW_RULES6`). DEFAULT no-op — real backends override in tasks 7/9.
+    fn fw_rules6_remove(&mut self, _key: &FwRuleKey) -> anyhow::Result<()> {
+        Ok(())
+    }
+    /// IPv6 firewall meta upsert (`FW_META6`). DEFAULT no-op — real backends override in tasks 7/9.
+    fn fw_meta6_upsert(&mut self, _ifindex: u32, _val: FwMeta) -> anyhow::Result<()> {
+        Ok(())
+    }
     fn meter_upsert(&mut self, ifindex: u32, val: MeterState) -> anyhow::Result<()>;
     fn meter_remove(&mut self, ifindex: &u32) -> anyhow::Result<()>;
     fn dhcp_config_set(&mut self, cfg: &DhcpConfig) -> anyhow::Result<()>;

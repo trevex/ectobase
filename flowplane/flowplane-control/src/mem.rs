@@ -1,9 +1,9 @@
 //! In-memory `MapWriter` for testing `ControlCore` without CAP_BPF or a live map.
 use crate::writer::{CtFlushScope, MapWriter};
 use flowplane_common::{
-    DhcpConfig, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue, LbKey,
-    LbValue, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteValue,
-    UnderlayValue, VipKey,
+    DhcpConfig, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceMetaKey, IfaceMetaVal,
+    IfaceValue, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry,
+    PortMeta, RouteValue, UnderlayValue, VipKey,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -20,6 +20,8 @@ pub struct MemMapWriter {
     pub underlay: HashMap<[u8; 16], UnderlayValue>,
     pub fw_rules: HashMap<FwRuleKey, FwRule>,
     pub fw_meta: HashMap<u32, FwMeta>,
+    pub fw_rules6: HashMap<FwRuleKey, FwRule6>,
+    pub fw_meta6: HashMap<u32, FwMeta>,
     pub meter: HashMap<u32, MeterState>,
     pub dhcp_config: Option<DhcpConfig>,
     // INTERFACE domain (Task 7).
@@ -125,6 +127,18 @@ impl MapWriter for MemMapWriter {
     }
     fn fw_meta_upsert(&mut self, i: u32, v: FwMeta) -> anyhow::Result<()> {
         self.fw_meta.insert(i, v);
+        Ok(())
+    }
+    fn fw_rules6_upsert(&mut self, k: FwRuleKey, v: FwRule6) -> anyhow::Result<()> {
+        self.fw_rules6.insert(k, v);
+        Ok(())
+    }
+    fn fw_rules6_remove(&mut self, k: &FwRuleKey) -> anyhow::Result<()> {
+        self.fw_rules6.remove(k);
+        Ok(())
+    }
+    fn fw_meta6_upsert(&mut self, i: u32, v: FwMeta) -> anyhow::Result<()> {
+        self.fw_meta6.insert(i, v);
         Ok(())
     }
     fn meter_upsert(&mut self, i: u32, v: MeterState) -> anyhow::Result<()> {

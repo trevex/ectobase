@@ -32,6 +32,9 @@ pub struct ControlCore<W: MapWriter> {
     // FW_META reprogram. The eBPF `detach_interface` drops an interface's shadow entry via
     // `remove_fw_rules`.
     pub(crate) fw: std::collections::HashMap<u32, Vec<(Vec<u8>, flowplane_common::FwRule)>>,
+    // FIREWALL v6 shadow: ifindex -> ordered (rule_id, rule) pairs. Drives the FW_RULES6 / FW_META6
+    // reprogram, mirroring `fw`.
+    pub(crate) fw6: std::collections::HashMap<u32, Vec<(Vec<u8>, flowplane_common::FwRule6)>>,
 }
 
 impl<W: MapWriter> ControlCore<W> {
@@ -45,6 +48,7 @@ impl<W: MapWriter> ControlCore<W> {
             next_table_id: 1,
             neigh_nats: Vec::new(),
             fw: std::collections::HashMap::new(),
+            fw6: std::collections::HashMap::new(),
         }
     }
     pub fn writer_mut(&mut self) -> &mut W {
