@@ -196,9 +196,10 @@ pub fn add_fw_rule<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::AddFwRuleRequest,
 ) -> Result<pb::AddFwRuleResponse, Status> {
+    use crate::parse::FwCidr;
     use flowplane_common::{FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS};
-    let (src_ip, src_mask) = parse_fw_cidr(&req.src_cidr).map_err(invalid)?;
-    let (dst_ip, dst_mask) = parse_fw_cidr(&req.dst_cidr).map_err(invalid)?;
+    let src = parse_fw_cidr(&req.src_cidr).map_err(invalid)?;
+    let dst = parse_fw_cidr(&req.dst_cidr).map_err(invalid)?;
     let proto = u8::try_from(req.proto).map_err(|_| Status::invalid_argument("proto > 255"))?;
     let dst_port_min = port_u16(req.dst_port_min).map_err(invalid)?;
     // dst_port_max of 0 means "unbounded" -> 65535 (0/0 = any port).
@@ -207,33 +208,72 @@ pub fn add_fw_rule<W: MapWriter>(
     } else {
         port_u16(req.dst_port_max).map_err(invalid)?
     };
-    let rule = flowplane_common::FwRule {
-        src_ip,
-        src_mask,
-        dst_ip,
-        dst_mask,
-        src_port_min: 0,
-        src_port_max: 65535,
-        dst_port_min,
-        dst_port_max,
-        icmp_type: 0xffff,
-        icmp_code: 0xffff,
-        proto,
-        action: if req.allow {
-            FW_ACTION_ACCEPT
-        } else {
-            FW_ACTION_DROP
-        },
-        direction: if req.egress {
-            FW_DIR_EGRESS
-        } else {
-            FW_DIR_INGRESS
-        },
-        enabled: 1,
+    let action = if req.allow {
+        FW_ACTION_ACCEPT
+    } else {
+        FW_ACTION_DROP
+    };
+    let direction = if req.egress {
+        FW_DIR_EGRESS
+    } else {
+        FW_DIR_INGRESS
     };
     let iface = req.interface_id.clone().into_bytes();
     let rule_id = req.rule_id.clone().into_bytes();
-    core.add_fw_rule(&iface, rule_id, rule).map_err(internal)?;
+    // v6 rule if EITHER side is v6; the wildcard opposite side is re-encoded in the same family.
+    if matches!(src, FwCidr::V6(..)) || matches!(dst, FwCidr::V6(..)) {
+        let (src_ip, src_mask) = match src {
+            FwCidr::V6(i, m) => (i, m),
+            FwCidr::V4(..) => ([0u8; 16], [0u8; 16]),
+        };
+        let (dst_ip, dst_mask) = match dst {
+            FwCidr::V6(i, m) => (i, m),
+            FwCidr::V4(..) => ([0u8; 16], [0u8; 16]),
+        };
+        let rule = flowplane_common::FwRule6 {
+            src_ip,
+            src_mask,
+            dst_ip,
+            dst_mask,
+            src_port_min: 0,
+            src_port_max: 65535,
+            dst_port_min,
+            dst_port_max,
+            icmp_type: 0xffff,
+            icmp_code: 0xffff,
+            proto,
+            action,
+            direction,
+            enabled: 1,
+        };
+        core.add_fw_rule6(&iface, rule_id, rule).map_err(internal)?;
+    } else {
+        let (src_ip, src_mask) = match src {
+            FwCidr::V4(i, m) => (i, m),
+            _ => unreachable!(),
+        };
+        let (dst_ip, dst_mask) = match dst {
+            FwCidr::V4(i, m) => (i, m),
+            _ => unreachable!(),
+        };
+        let rule = flowplane_common::FwRule {
+            src_ip,
+            src_mask,
+            dst_ip,
+            dst_mask,
+            src_port_min: 0,
+            src_port_max: 65535,
+            dst_port_min,
+            dst_port_max,
+            icmp_type: 0xffff,
+            icmp_code: 0xffff,
+            proto,
+            action,
+            direction,
+            enabled: 1,
+        };
+        core.add_fw_rule(&iface, rule_id, rule).map_err(internal)?;
+    }
     Ok(pb::AddFwRuleResponse {})
 }
 
@@ -345,6 +385,32 @@ mod tests {
             },
         );
         assert!(r.is_ok(), "fw rule: {r:?}");
+    }
+
+    #[test]
+    fn add_fw_rule_v6_programs_rules6() {
+        let mut c = core();
+        // register_iface programs ifindex 0; the v6 rule lands at (0, idx 0).
+        register_iface(&mut c, "if0", 100, [10, 0, 0, 5]);
+        add_fw_rule(
+            &mut c,
+            &pb::AddFwRuleRequest {
+                interface_id: "if0".into(),
+                rule_id: "r1".into(),
+                src_cidr: "::/0".into(),
+                dst_cidr: "2001:db8::1/128".into(),
+                proto: 6,
+                dst_port_min: 80,
+                dst_port_max: 80,
+                allow: true,
+                egress: false,
+            },
+        )
+        .unwrap();
+        assert!(c
+            .writer()
+            .fw_rules6
+            .contains_key(&flowplane_common::FwRuleKey { ifindex: 0, idx: 0 }));
     }
 
     #[test]
