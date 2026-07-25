@@ -16,12 +16,14 @@
 //! per-lcore FLOW state: conntrack/meter) is Task 5.
 //!
 //! ── TABLE SET (derived from writer.rs ∩ maps.rs ∩ dpdk_maps.rs) ───────────────────────────────
-//! The CONFIG half only. The FLOW half of `DpdkMaps` (conntrack, meter — mutated on the datapath)
-//! stays per-lcore and is NOT here. Union of "what `MapWriter` writes" and "what the datapath
-//! `Maps` reads":
+//! The CONFIG half only. The FLOW half of `DpdkMaps` (conntrack, plus the meter's per-packet token
+//! STATE — mutated on the datapath) stays per-lcore and is NOT here; only the meter RATE CONFIG
+//! (`meter_config`) lives here, composed with per-lcore tokens on read. Union of "what `MapWriter`
+//! writes" and "what the datapath `Maps` reads":
 //!   route4, route6, nat, nat_ips, lb, maglev, underlay, fw_rules, fw_meta,   (writer ∩ reader)
 //!   ifaces, iface_meta, ports, neigh_nat, vips,                              (writer-only, iface domain)
 //!   dhcp_meta (writer removes / reader reads),                              (reader ∩ writer)
+//!   meter_config (writer sets/clears QoS rate / reader reads per-iface rate), (reader ∩ writer)
 //!   + singletons: dhcp_config, local, neigh_nat_count.
 //!
 //! ── ALL-ZERO-KEY SAFETY (Task-3 constraint 2) ─────────────────────────────────────────────────
@@ -143,6 +145,8 @@ tagged_key!(NeighNatK, 13, { idx: u32 }, 3);
 tagged_key!(VipK, 14, { vni: u32, ipv4: [u8; 4] }, 3);
 // tag 15: dhcp-meta (ifindex).
 tagged_key!(DhcpMetaK, 15, { ifindex: u32 }, 3);
+// tag 16: meter config (ifindex).
+tagged_key!(MeterCfgK, 16, { ifindex: u32 }, 3);
 
 // Padding-free guarantees (uninitialized padding bytes would corrupt the hashed key).
 const _: () = assert!(std::mem::size_of::<Route4Key>() == 12);
@@ -160,6 +164,7 @@ const _: () = assert!(std::mem::size_of::<PortK>() == 8);
 const _: () = assert!(std::mem::size_of::<NeighNatK>() == 8);
 const _: () = assert!(std::mem::size_of::<VipK>() == 12);
 const _: () = assert!(std::mem::size_of::<DhcpMetaK>() == 8);
+const _: () = assert!(std::mem::size_of::<MeterCfgK>() == 8);
 
 // ── reader token ─────────────────────────────────────────────────────────────────────────────────
 
@@ -231,6 +236,7 @@ pub struct SharedConfigMaps {
     neigh_nat: std::mem::ManuallyDrop<RcuHash<NeighNatK, NeighborNatEntry>>,
     vips: std::mem::ManuallyDrop<RcuHash<VipK, [u8; 4]>>,
     dhcp_meta: std::mem::ManuallyDrop<RcuHash<DhcpMetaK, DhcpMeta>>,
+    meter_config: std::mem::ManuallyDrop<RcuHash<MeterCfgK, flowplane_common::MeterConfig>>,
 }
 
 // SAFETY: `SharedConfigMaps` holds a raw `*mut rte_rcu_qsbr` and (inside each `RcuHash`) raw
@@ -314,6 +320,7 @@ impl SharedConfigMaps {
         let neigh_nat = build!("nn");
         let vips = build!("vip");
         let dhcp_meta = build!("dm");
+        let meter_config = build!("mc");
 
         Ok(Self {
             qsbr,
@@ -338,6 +345,7 @@ impl SharedConfigMaps {
             neigh_nat: std::mem::ManuallyDrop::new(neigh_nat),
             vips: std::mem::ManuallyDrop::new(vips),
             dhcp_meta: std::mem::ManuallyDrop::new(dhcp_meta),
+            meter_config: std::mem::ManuallyDrop::new(meter_config),
         })
     }
 
@@ -518,6 +526,15 @@ impl SharedConfigMaps {
         self.fw_meta.remove(&FwMetaK::new(ifindex))
     }
 
+    /// Insert/overwrite a per-interface meter rate config. Returns false if the table is full.
+    pub fn meter_config_insert(&self, ifindex: u32, cfg: flowplane_common::MeterConfig) -> bool {
+        self.meter_config.insert(&MeterCfgK::new(ifindex), cfg)
+    }
+    /// Remove a per-interface meter rate config. Returns true if present.
+    pub fn meter_config_remove(&self, ifindex: u32) -> bool {
+        self.meter_config.remove(&MeterCfgK::new(ifindex))
+    }
+
     /// Insert/overwrite an interfaces entry `(vni,ipv4)` → delivery info. Returns false if full.
     pub fn ifaces_insert(&self, key: IfaceKey, val: IfaceValue) -> bool {
         self.ifaces.insert(&IfaceK::new(key.vni, key.ipv4), val)
@@ -648,6 +665,11 @@ impl SharedConfigMaps {
     pub fn dhcp_meta(&self, ifindex: u32) -> Option<DhcpMeta> {
         self.dhcp_meta.get(&DhcpMetaK::new(ifindex))
     }
+    /// Lock-free read of a per-interface meter rate config (None = no QoS configured).
+    #[must_use]
+    pub fn meter_config_get(&self, ifindex: u32) -> Option<flowplane_common::MeterConfig> {
+        self.meter_config.get(&MeterCfgK::new(ifindex))
+    }
 }
 
 impl Drop for SharedConfigMaps {
@@ -682,6 +704,7 @@ impl Drop for SharedConfigMaps {
             std::mem::ManuallyDrop::drop(&mut self.neigh_nat);
             std::mem::ManuallyDrop::drop(&mut self.vips);
             std::mem::ManuallyDrop::drop(&mut self.dhcp_meta);
+            std::mem::ManuallyDrop::drop(&mut self.meter_config);
         }
         // SAFETY: all tables dropped above → qsbr unreferenced; same layout as the alloc in `new`.
         unsafe { std::alloc::dealloc(self.qsbr.cast::<u8>(), self.qsbr_layout) };
