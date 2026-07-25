@@ -42,9 +42,9 @@ use std::alloc::Layout;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use flowplane_common::{
-    DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceMetaKey, IfaceMetaVal,
-    IfaceValue, LbKey, LbValue, Local, MaglevKey, NatKey, NatValue, NeighborNatEntry, PortMeta,
-    RouteValue, UnderlayValue, VipKey,
+    CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey,
+    IfaceMetaKey, IfaceMetaVal, IfaceValue, LbKey, LbValue, Local, MaglevKey, NatKey, NatValue,
+    NeighborNatEntry, PortMeta, RouteValue, UnderlayValue, VipKey,
 };
 
 use crate::rcu_hash::RcuHash;
@@ -245,6 +245,24 @@ pub struct SharedConfigMaps {
     vips: std::mem::ManuallyDrop<RcuHash<VipK, [u8; 4]>>,
     dhcp_meta: std::mem::ManuallyDrop<RcuHash<DhcpMetaK, DhcpMeta>>,
     meter_config: std::mem::ManuallyDrop<RcuHash<MeterCfgK, flowplane_common::MeterConfig>>,
+
+    // ── shared reverse-conntrack (the ONE multi-writer datapath table) ─────────────────────────
+    // NOT a CONFIG table: this holds the PEER-INDEPENDENT NAT/LB reverse conntrack entries
+    // (`(vni,0,nat_ip,0,nat_port)`, shape `src_ip==0 && src_port==0`) that a guest's SNAT/NAT64
+    // EGRESS creates. Those entries must be findable regardless of which lcore an external reply
+    // lands on: the uplink RSS steers a WAN reply by the OUTER/underlay headers, unrelated to the
+    // inner flow tuple the reverse entry was keyed under, so a per-lcore-only conntrack MISSES on a
+    // cross-lcore return (ingress-firewall drop / no reverse-DNAT — the bug fixed here).
+    //
+    // MULTI-WRITER: unlike every CONFIG table above (single control-thread writer), this table is
+    // written CONCURRENTLY by the datapath lcores (each lcore's guest-egress pins reverse entries)
+    // AND read lock-free by every lcore. `RcuHash`'s `RW_CONCURRENCY_LF` makes concurrent WRITERS as
+    // well as lock-free readers safe at the C level (DPDK's cuckoo-hash lock-free RW mode
+    // synchronizes writers internally; each `insert`'s value-box leak is per-call independent), so
+    // the `shared_ct_*` methods below are sound to call from multiple lcores at once — see their
+    // docs. Keyed on the FULL `CtKey` (VNI + 5-tuple) so a future shared LB reverse mapping can
+    // coexist; the reverse key is never all-zero (a public nat_ip is never `0.0.0.0`).
+    shared_ct: std::mem::ManuallyDrop<RcuHash<CtKey, CtEntry>>,
 }
 
 // SAFETY: `SharedConfigMaps` holds a raw `*mut rte_rcu_qsbr` and (inside each `RcuHash`) raw
@@ -331,6 +349,9 @@ impl SharedConfigMaps {
         let vips = build!("vip");
         let dhcp_meta = build!("dm");
         let meter_config = build!("mc");
+        // Shared reverse-conntrack: sized like the per-lcore conntrack tables (one entry per live
+        // NAT/LB reverse mapping); shares the same QSBR (× HEADROOM applied by `cap`, as above).
+        let shared_ct = build!("sct");
 
         Ok(Self {
             qsbr,
@@ -358,6 +379,7 @@ impl SharedConfigMaps {
             vips: std::mem::ManuallyDrop::new(vips),
             dhcp_meta: std::mem::ManuallyDrop::new(dhcp_meta),
             meter_config: std::mem::ManuallyDrop::new(meter_config),
+            shared_ct: std::mem::ManuallyDrop::new(shared_ct),
         })
     }
 
@@ -711,6 +733,40 @@ impl SharedConfigMaps {
     pub fn meter_config_get(&self, ifindex: u32) -> Option<flowplane_common::MeterConfig> {
         self.meter_config.get(&MeterCfgK::new(ifindex))
     }
+
+    // ── shared reverse-conntrack (MULTI-WRITER datapath table) ───────────────────
+    // See the `shared_ct` field doc: these are the ONLY methods on this type callable CONCURRENTLY
+    // from multiple datapath lcores (every other writer is the single control thread). Sound because
+    // `RcuHash`'s `RW_CONCURRENCY_LF` synchronizes concurrent writers internally and each insert's
+    // value-box handoff is per-call independent; readers stay lock-free + RCU-covered.
+
+    /// Lock-free read of a shared reverse-conntrack entry (the peer-independent NAT/LB reverse
+    /// mappings). `None` if absent. Safe concurrent with the datapath's own `shared_ct_insert`s.
+    #[must_use]
+    pub fn shared_ct_get(&self, key: &CtKey) -> Option<CtEntry> {
+        self.shared_ct.get(key)
+    }
+
+    /// Insert/overwrite a shared reverse-conntrack entry. Returns false if the table is full.
+    /// SAFE to call concurrently from multiple datapath lcores (multi-writer via `RW_CONCURRENCY_LF`
+    /// — unlike the single-writer CONFIG tables). The datapath routes ONLY peer-independent reverse
+    /// entries (`src_ip==0 && src_port==0`) here; a public nat_ip is never `0.0.0.0`, so the key is
+    /// never the all-zero pattern `RcuHash` forbids.
+    pub fn shared_ct_insert(&self, key: CtKey, entry: CtEntry) -> bool {
+        self.shared_ct.insert(&key, entry)
+    }
+
+    /// Remove a shared reverse-conntrack entry (control-plane conntrack flush / NAT withdrawal).
+    /// Returns true if present.
+    pub fn shared_ct_remove(&self, key: &CtKey) -> bool {
+        self.shared_ct.remove(key)
+    }
+
+    /// Visit every live shared reverse-conntrack entry (control-plane snapshot / GC). Not the
+    /// lock-free reader path.
+    pub fn shared_ct_for_each(&self, f: impl FnMut(&CtKey, &CtEntry)) {
+        self.shared_ct.for_each(f);
+    }
 }
 
 impl Drop for SharedConfigMaps {
@@ -748,6 +804,7 @@ impl Drop for SharedConfigMaps {
             std::mem::ManuallyDrop::drop(&mut self.vips);
             std::mem::ManuallyDrop::drop(&mut self.dhcp_meta);
             std::mem::ManuallyDrop::drop(&mut self.meter_config);
+            std::mem::ManuallyDrop::drop(&mut self.shared_ct);
         }
         // SAFETY: all tables dropped above → qsbr unreferenced; same layout as the alloc in `new`.
         unsafe { std::alloc::dealloc(self.qsbr.cast::<u8>(), self.qsbr_layout) };

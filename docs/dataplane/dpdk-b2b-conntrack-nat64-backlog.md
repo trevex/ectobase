@@ -16,7 +16,20 @@ called on every CT hit; full NAT64 ingress path).
 
 ---
 
-## 1. Per-lcore NAT/LB return demux misses under RSS steering (HIGH, architectural)
+## 1. Per-lcore NAT/LB return demux misses under RSS steering (HIGH, architectural) — FIXED
+
+**RESOLVED** (2026-07-25, branch `fix/dpdk-per-lcore-nat-return`): the peer-independent
+reverse entries (`src_ip==0 && src_port==0`, i.e. `(vni,0,nat_ip,0,nat_port)`)
+are now stored in a SHARED, multi-writer reverse-conntrack table
+(`SharedConfigMaps::shared_ct`, an `RcuHash` under `RW_CONCURRENCY_LF`), while
+regular forward CT stays per-lcore. `ComposedMaps::conntrack_get`/`_insert` route
+by key shape (`is_reverse_shape`), so a WAN reply resolves the reverse-DNAT on
+whichever lcore its outer-header RSS steered it to. Proven by
+`nfkit/tests/multilcore_nat_return.rs` (cross-lcore return resolves; same-lcore
+still resolves; normal forward CT stays per-lcore isolated). The original analysis
+is retained below for context.
+
+
 
 **Where:** `flowplane/nfkit/src/per_lcore_flow.rs` (`PerLcoreFlowMaps` — per-lcore
 shared-nothing conntrack), `flowplane/nfkit/src/rss.rs` / `port.rs` (RSS key +

@@ -39,6 +39,17 @@ use crate::{DpdkHash, HashError};
 /// Mirrors `DpdkMaps::NEXT_INSTANCE`.
 static NEXT_INSTANCE: AtomicU32 = AtomicU32::new(0);
 
+/// Is `key` a PEER-INDEPENDENT reverse conntrack entry (`(vni,0,nat_ip,0,nat_port)`)? These are the
+/// SNAT/NAT64 egress reverse mappings (and any LB reverse mapping): the external peer's src ip+port
+/// are zeroed so the key is globally unique per `nat_ip`. Detectable purely by shape
+/// (`src_ip==0 && src_port==0`), which no normal forward flow ever has (a real flow always carries a
+/// non-zero source). Used to route these entries to the SHARED reverse-conntrack table so a WAN
+/// reply resolves on whichever lcore its outer-header RSS steered it to (see [`ComposedMaps`]).
+#[inline]
+fn is_reverse_shape(key: &CtKey) -> bool {
+    key.src_ip == [0; 4] && key.src_port == 0
+}
+
 /// Conntrack capacity: one entry per live flow (matches `DpdkMaps::CAP_CT`).
 const CAP_CT: u32 = 65_536;
 /// Meter capacity: one entry per interface (matches `DpdkMaps::CAP_STD`).
@@ -96,9 +107,17 @@ impl PerLcoreFlowMaps {
         // Trait method returns `()`; a full conntrack table drops here. Count it so saturation is
         // observable via `dropped_conntrack_inserts()`.
         if !self.conntrack.insert(&key, entry) {
-            self.dropped_ct_inserts
-                .set(self.dropped_ct_inserts.get() + 1);
+            self.note_dropped_ct_insert();
         }
+    }
+
+    /// Bump the dropped-conntrack-insert counter. Also called by [`ComposedMaps::conntrack_insert`]
+    /// when a SHARED reverse-CT insert saturates, so shared-table saturation is observable through
+    /// the same per-lcore counter (a NAT/LB return whose reverse entry was dropped is a datapath
+    /// correctness hazard, exactly like a dropped forward entry).
+    pub(crate) fn note_dropped_ct_insert(&self) {
+        self.dropped_ct_inserts
+            .set(self.dropped_ct_inserts.get() + 1);
     }
 
     fn meter_get(&self, ifindex: u32) -> Option<MeterState> {
@@ -118,6 +137,14 @@ impl PerLcoreFlowMaps {
 /// per-lcore FLOW half (`flow`, owned). CONFIG getters delegate to [`SharedConfigMaps`]; FLOW
 /// getters/mutators delegate to [`PerLcoreFlowMaps`]. Each worker lcore constructs one of these,
 /// borrowing the single shared config for its lifetime and owning its own flow state.
+///
+/// CONNTRACK SPLIT: the FLOW half owns forward conntrack per-lcore (the hot path, shared-nothing),
+/// EXCEPT the peer-independent NAT/LB reverse entries (`(vni,0,nat_ip,0,nat_port)`, key shape
+/// `src_ip==0 && src_port==0`), which live in the SHARED multi-writer reverse-conntrack table on
+/// `cfg`. This is required for correctness: a WAN reply is RSS-steered to a lcore by its OUTER
+/// headers, unrelated to the inner flow tuple the reverse entry was keyed under, so a return can land
+/// on a DIFFERENT lcore than the egress that pinned the entry. `conntrack_get`/`conntrack_insert`
+/// route by [`is_reverse_shape`] so those entries resolve on any lcore.
 pub struct ComposedMaps<'a> {
     /// Process-wide CONFIG half, shared read-only across every datapath lcore.
     pub cfg: &'a SharedConfigMaps,
@@ -176,14 +203,37 @@ impl Maps for ComposedMaps<'_> {
         self.cfg.dhcp_meta(ifindex)
     }
 
-    // ── FLOW half → self.flow (per-lcore conntrack + meter) ──────────────────────
+    // ── FLOW half → self.flow (per-lcore conntrack + meter), EXCEPT peer-independent NAT/LB reverse
+    //    entries, which live in the SHARED reverse-conntrack table (self.cfg) ──────
 
     fn conntrack_get(&self, key: &CtKey) -> Option<CtEntry> {
-        self.flow.conntrack_get(key)
+        // A peer-independent reverse entry (SNAT/NAT64 egress pins `(vni,0,nat_ip,0,nat_port)`) must
+        // resolve on ANY lcore the WAN reply's outer-header RSS steers it to — so consult the SHARED
+        // table for a reverse-shape key. All other (forward, real-src) flows stay per-lcore (the hot
+        // path). The datapath zeroes src_ip/src_port before a NAT-return lookup (`datapath.rs`
+        // `process_uplink_rx`/`process_uplink_nat_return`), so a return demux lands here as a
+        // reverse-shape key and hits the shared table.
+        if is_reverse_shape(key) {
+            self.cfg.shared_ct_get(key)
+        } else {
+            self.flow.conntrack_get(key)
+        }
     }
 
     fn conntrack_insert(&mut self, key: CtKey, entry: CtEntry) {
-        self.flow.conntrack_insert(key, entry);
+        // Route the peer-independent reverse entries (the ONLY entries created with `src_ip==0 &&
+        // src_port==0` — `nat::snat_egress` / the LB reverse mapping) to the SHARED multi-writer
+        // table so any lcore's return demux can find them; every other (forward) entry stays
+        // per-lcore shared-nothing.
+        if is_reverse_shape(&key) {
+            // Multi-writer safe (RW_CONCURRENCY_LF). Drop-on-full is COUNTED (mirrors the per-lcore
+            // saturation counter) so a full shared reverse-CT table is observable.
+            if !self.cfg.shared_ct_insert(key, entry) {
+                self.flow.note_dropped_ct_insert();
+            }
+        } else {
+            self.flow.conntrack_insert(key, entry);
+        }
     }
 
     fn meter_get(&self, ifindex: u32) -> Option<MeterState> {
