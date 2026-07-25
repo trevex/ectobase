@@ -204,6 +204,36 @@ pub struct MeterState {
     pub ingress_last_ns: u64,
 }
 
+/// The rate-config half of [`MeterState`] (the six `*_bps`/`*_burst` fields), stored in the DPDK
+/// shared config table so `ConfigureQoS` can seed a per-interface rate that every lcore reads. The
+/// token/timestamp state (`*_tokens`/`*_last_ns`) stays per-lcore and is NOT part of this struct.
+/// DPDK-only: eBPF/sim keep the full `MeterState` in their single shared meter map.
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
+pub struct MeterConfig {
+    pub total_bps: u64,
+    pub total_burst: u64,
+    pub public_bps: u64,
+    pub public_burst: u64,
+    pub ingress_bps: u64,
+    pub ingress_burst: u64,
+}
+
+impl MeterConfig {
+    /// Extract the six rate-config fields from a full `MeterState` (drops the token/timestamp state).
+    #[must_use]
+    pub fn from_state(s: &MeterState) -> Self {
+        Self {
+            total_bps: s.total_bps,
+            total_burst: s.total_burst,
+            public_bps: s.public_bps,
+            public_burst: s.public_burst,
+            ingress_bps: s.ingress_bps,
+            ingress_burst: s.ingress_burst,
+        }
+    }
+}
+
 /// This hypervisor's uplink + underlay gateway, written once into LOCAL[0] by the control plane.
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
@@ -819,6 +849,38 @@ mod tests {
         // 12 fields * 8 bytes each = 96 bytes.
         assert_eq!(core::mem::size_of::<MeterState>(), 96);
         assert_eq!(core::mem::align_of::<MeterState>(), 8);
+    }
+
+    #[test]
+    fn meter_config_layout_and_extraction() {
+        // 6 × u64, no padding.
+        assert_eq!(core::mem::size_of::<MeterConfig>(), 48);
+        let state = MeterState {
+            total_bps: 1,
+            total_burst: 2,
+            total_tokens: 999, // state — must NOT be copied into MeterConfig
+            total_last_ns: 999,
+            public_bps: 3,
+            public_burst: 4,
+            public_tokens: 999,
+            public_last_ns: 999,
+            ingress_bps: 5,
+            ingress_burst: 6,
+            ingress_tokens: 999,
+            ingress_last_ns: 999,
+        };
+        let cfg = MeterConfig::from_state(&state);
+        assert_eq!(
+            cfg,
+            MeterConfig {
+                total_bps: 1,
+                total_burst: 2,
+                public_bps: 3,
+                public_burst: 4,
+                ingress_bps: 5,
+                ingress_burst: 6,
+            }
+        );
     }
 
     #[test]
