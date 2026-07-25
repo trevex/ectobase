@@ -21,6 +21,16 @@ pub trait Maps {
     }
     /// Firewall-only IPv6 conntrack insert (`CONNTRACK6` map). DEFAULT no-op — see [`Self::conntrack6_get`].
     fn conntrack6_insert(&mut self, _key: CtKey6, _entry: CtEntry) {}
+    /// IPv6 firewall meta (`FW_META6`). DEFAULT `None` — a backend without v6 fw wiring denies v6 by
+    /// default (see [`crate::firewall::fw_eval_dir6`]). Overridden by the sim `MemMaps`; the eBPF
+    /// `GlobalMaps` and DPDK `DpdkMaps` gain overrides in their later v6-firewall tasks.
+    fn fw_meta6(&self, _ifindex: u32) -> Option<FwMeta> {
+        None
+    }
+    /// IPv6 firewall rule slot (`FW_RULES6`). DEFAULT `None` — see [`Self::fw_meta6`].
+    fn fw_rule6(&self, _key: &FwRuleKey) -> Option<flowplane_common::FwRule6> {
+        None
+    }
     fn lb_get(&self, key: &LbKey) -> Option<LbValue>;
     fn maglev_get(&self, key: &MaglevKey) -> Option<[u8; 16]>;
     /// Network-NAT config for a `(vni, guest-ipv4)` pair (`NAT` map).
