@@ -98,15 +98,12 @@ impl DataplaneNode for DpdkNodeService {
         }
         let ipv4 = first_ipv4(&r.requested_ips);
         let ipv6 = first_ipv6(&r.requested_ips);
-        // Require an overlay IPv4 (matches the eBPF attach). This is NOT about the underlay (always
-        // IPv6); it reflects the current interface model: `program_interface` keys the INTERFACES
-        // local-delivery map on the overlay IPv4 and programs an unconditional /32 self-route, while
-        // IPv6 is an OPTIONAL secondary. So IPv4-only and dual-stack are supported; a true IPv6-only
-        // overlay is not yet representable in either backend (would need a v6-keyed INTERFACES — a
-        // separate cross-backend change). Reject rather than program a bogus 0.0.0.0 interface.
-        if ipv4 == [0u8; 4] {
+        // At least one overlay family is required; either may be absent (all-zeros). v4-only,
+        // v6-only, and dual-stack are all valid (the datapath delivery is route+UNDERLAY driven,
+        // family-agnostic; program_interface programs each present family's self-route).
+        if ipv4 == [0u8; 4] && ipv6 == [0u8; 16] {
             return Err(Status::invalid_argument(
-                "attach requires at least one overlay IPv4 (IPv6-only overlays not yet supported)",
+                "attach requires at least one overlay IP (IPv4 or IPv6) in requested_ips",
             ));
         }
         // MAC: honour a caller-supplied MAC, else derive a stable deterministic one (FNV-1a of
@@ -209,17 +206,70 @@ impl DataplaneNode for DpdkNodeService {
             },
         );
 
+        // Deterministically configure the container's pod netns (overlay addr(s) + per-family
+        // default route). Off the tokio thread (shells out). On failure, roll the whole attach back
+        // (maps + veth + IPAM + registry) so no half-attached interface is left behind.
+        let cfg = flowplane_device::GuestNetConfig {
+            netns_path: r.netns_path.clone(),
+            guest_ifname: guest_name.clone(),
+            ipv4,
+            gateway_ipv4: attach.gateway_ipv4,
+            ipv6,
+            gateway_ipv6: attach.gateway_ipv6,
+        };
+        if let Err(e) =
+            tokio::task::spawn_blocking(move || flowplane_device::configure_guest_netns(&cfg))
+                .await
+                .map_err(|e| Status::internal(format!("guest-netns task panicked: {e}")))?
+        {
+            let id = r.interface_id.clone().into_bytes();
+            {
+                let mut core = self.ctrl.lock();
+                if let Some((vni, ip4)) = core
+                    .iface_meta_rows()
+                    .into_iter()
+                    .find(|(rid, ..)| rid.as_slice() == id.as_slice())
+                    .map(|(_, vni, ip4, ..)| (vni, ip4))
+                {
+                    let _ = core.purge_vni(vni, ip4);
+                }
+                core.forget_iface_meta(&id);
+            } // ctrl lock dropped before the subprocess below
+            flowplane_device::delete_link(&info.host_name);
+            attach
+                .ipam
+                .lock()
+                .unwrap()
+                .release(std::net::Ipv6Addr::from(underlay));
+            attach.forget(&id);
+            return Err(Status::internal(format!("configure guest netns: {e}")));
+        }
+
         // Build the response mirroring the eBPF `AttachOutcome` → `AttachInterfaceResponse` mapping
         // (flowplane/src/attach.rs + node.rs): ifname = guest name inside the netns (= interface_id
         // for Veth), ips = [overlay_ipv4], mac = "aa:bb:.." string, gateway = IPv4 gateway string,
         // underlay_route = /128 as "xxxx::yyyy" string.
         Ok(Response::new(AttachInterfaceResponse {
             ifname: guest_name,
-            // Single resolved IPv4 (guaranteed present by the guard above) — identical shape to the
-            // eBPF attach response.
-            ips: vec![std::net::Ipv4Addr::from(ipv4).to_string()],
+            // Present overlay families (identical shape to the eBPF attach response): v4 then v6.
+            ips: {
+                let mut v = Vec::new();
+                if ipv4 != [0u8; 4] {
+                    v.push(std::net::Ipv4Addr::from(ipv4).to_string());
+                }
+                if ipv6 != [0u8; 16] {
+                    v.push(std::net::Ipv6Addr::from(ipv6).to_string());
+                }
+                v
+            },
             mac: fmt_mac(mac),
-            gateway: std::net::Ipv4Addr::from(attach.gateway_ipv4).to_string(),
+            // v4 gateway string, or empty for a v6-only overlay (this interface has no v4 addr,
+            // so the node's v4 gateway is meaningless to it) — mirrors the eBPF attach response.
+            gateway: if ipv4 == [0u8; 4] {
+                String::new()
+            } else {
+                std::net::Ipv4Addr::from(attach.gateway_ipv4).to_string()
+            },
             underlay_route: std::net::Ipv6Addr::from(underlay).to_string(),
         }))
     }

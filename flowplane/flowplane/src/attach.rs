@@ -201,15 +201,12 @@ impl AttachState {
         if device_type.requires_mac() && mac_req.is_empty() {
             bail!("device_type={device_type:?} requires an explicit mac (the VM NIC MAC)");
         }
-        // Primary overlay IPv4: first requested IPv4 (IPv6 requests are recorded but v4 is the
-        // primary INTERFACES key for this path).
-        let ipv4 = primary_ipv4(requested_ips)
-            .context("attach requires at least one IPv4 in requested_ips")?;
-
-        // Primary overlay IPv6: first requested IPv6 (OPTIONAL — IPv4-only guests are valid, so this
-        // defaults to all-zeros rather than bailing). Set into PortMeta.guest_ipv6, which the DHCPv6
-        // responder (IA Address) and NAT64 require. Mirrors the bare-IP parse the v4 side uses.
+        // Overlay IPs: at least ONE family is required; either may be absent (all-zeros).
+        let ipv4 = primary_ipv4(requested_ips).unwrap_or([0u8; 4]);
         let ipv6 = primary_ipv6(requested_ips);
+        if ipv4 == [0u8; 4] && ipv6 == [0u8; 16] {
+            bail!("attach requires at least one overlay IP (IPv4 or IPv6) in requested_ips");
+        }
 
         // MAC: honour a caller-supplied MAC, else derive a stable one from the interface_id (so a
         // detach+re-attach reuses the same MAC — see `mac_for`).
@@ -287,17 +284,45 @@ impl AttachState {
 
         // Read the INTERFACES entry back out of the live map to prove it landed, and log a
         // greppable confirmation (the netns e2e asserts on this line; no bpftool in the dev shell).
-        match self.control.interface_readback(vni, ipv4) {
-            Some(tap) => println!(
-                "INTERFACES readback vni={vni} ip={} -> tap_ifindex={tap}",
-                Ipv4Addr::from(ipv4)
-            ),
-            None => {
+        // A v6-only interface has no INTERFACES(v4) entry, so the read-back is only valid when ipv4
+        // is present.
+        if ipv4 != [0u8; 4] {
+            match self.control.interface_readback(vni, ipv4) {
+                Some(tap) => println!(
+                    "INTERFACES readback vni={vni} ip={} -> tap_ifindex={tap}",
+                    Ipv4Addr::from(ipv4)
+                ),
+                None => {
+                    let _ = self.control.detach_interface(interface_id.as_bytes());
+                    let _ = run(&["ip", "link", "del", &device]);
+                    let mut ipam = self.ipam.lock();
+                    ipam.release(Ipv6Addr::from(underlay_ipv6));
+                    bail!("INTERFACES read-back failed after programming");
+                }
+            }
+        }
+
+        // Configure the container's pod netns with the overlay addr(s) + per-family default routes.
+        // Veth only: containers don't self-config (no DHCP/RA on the veth model); VMs (Tap/PodTap)
+        // self-configure via DHCP/RA and must NOT be touched here.
+        if let DeviceType::Veth = device_type {
+            if let Err(e) =
+                flowplane_device::configure_guest_netns(&flowplane_device::GuestNetConfig {
+                    netns_path: netns_path.to_string(),
+                    guest_ifname: interface_id.to_string(),
+                    ipv4,
+                    gateway_ipv4: self.gateway_ipv4,
+                    ipv6,
+                    gateway_ipv6: self.gateway_ipv6,
+                })
+            {
+                // Roll back the programming + device + underlay we just claimed so a failed
+                // attach leaves no half-configured state (mirrors the read-back failure path).
                 let _ = self.control.detach_interface(interface_id.as_bytes());
                 let _ = run(&["ip", "link", "del", &device]);
                 let mut ipam = self.ipam.lock();
                 ipam.release(Ipv6Addr::from(underlay_ipv6));
-                bail!("INTERFACES read-back failed after programming");
+                return Err(e).context("configure guest netns");
             }
         }
 
@@ -311,9 +336,24 @@ impl AttachState {
         };
         Ok(AttachOutcome {
             ifname,
-            ips: vec![Ipv4Addr::from(ipv4).to_string()],
+            ips: {
+                let mut v = Vec::new();
+                if ipv4 != [0u8; 4] {
+                    v.push(Ipv4Addr::from(ipv4).to_string());
+                }
+                if ipv6 != [0u8; 16] {
+                    v.push(Ipv6Addr::from(ipv6).to_string());
+                }
+                v
+            },
             mac: fmt_mac(mac),
-            gateway: Ipv4Addr::from(self.gateway_ipv4).to_string(),
+            // v4 gateway string, or empty for a v6-only overlay (this interface has no v4 addr,
+            // so the node's v4 gateway is meaningless to it — don't hand back a bogus gateway).
+            gateway: if ipv4 == [0u8; 4] {
+                String::new()
+            } else {
+                Ipv4Addr::from(self.gateway_ipv4).to_string()
+            },
             underlay_route: Ipv6Addr::from(underlay_ipv6).to_string(),
         })
     }

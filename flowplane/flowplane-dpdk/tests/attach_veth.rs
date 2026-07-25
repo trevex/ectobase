@@ -180,6 +180,157 @@ async fn attach_veth_programs_maps_and_detach_removes_device() {
         .status();
 }
 
+/// v6-only overlay: attach with only an IPv6 requested. The response `ips` holds the v6 addr, and
+/// `gateway` is empty (no v4 gateway is meaningful for a v6-only interface). The guest netns gets
+/// the /128 v6 addr. Needs CAP_NET_ADMIN + EAL.
+#[tokio::test]
+#[ignore = "privileged: needs CAP_NET_ADMIN (veth+netns) + EAL (--no-huge); run under sudo with --ignored --test-threads=1"]
+async fn attach_veth_v6_only() {
+    init_eal_once();
+    let shared = Arc::new(SharedConfigMaps::new(0, 1024).expect("SharedConfigMaps"));
+    let (svc, attach_state) = make_svc(shared.clone());
+
+    let ns = "fpveth-v6only-ns";
+    let _ = std::process::Command::new("ip")
+        .args(["netns", "del", ns])
+        .status();
+    let ok = std::process::Command::new("ip")
+        .args(["netns", "add", ns])
+        .status()
+        .expect("ip netns add");
+    assert!(ok.success(), "ip netns add failed — need CAP_NET_ADMIN");
+    let netns_path = format!("/var/run/netns/{ns}");
+
+    let iface_id = "test-v6only";
+    let resp = svc
+        .attach_interface(Request::new(AttachInterfaceRequest {
+            interface_id: iface_id.into(),
+            netns_path: netns_path.clone(),
+            vni: 43,
+            mac: String::new(),
+            requested_ips: vec!["fd00:cafe::5".into()],
+            device_type: String::new(),
+            tap_name: String::new(),
+        }))
+        .await;
+    assert!(resp.is_ok(), "attach_interface (v6-only) failed: {resp:?}");
+    let r = resp.unwrap().into_inner();
+    assert_eq!(r.ips, vec!["fd00:cafe::5"], "ips = requested overlay IPv6");
+    assert_eq!(
+        r.gateway, "",
+        "v6-only: gateway must be empty (no v4 gateway)"
+    );
+
+    // The guest netns must have the v6 /128 addr and NO v4 default route.
+    let v6addr = std::process::Command::new("ip")
+        .args(["netns", "exec", ns, "ip", "-6", "addr", "show", iface_id])
+        .output()
+        .expect("ip -6 addr show");
+    assert!(
+        String::from_utf8_lossy(&v6addr.stdout).contains("fd00:cafe::5"),
+        "guest must have the v6 overlay addr"
+    );
+    let v4routes = std::process::Command::new("ip")
+        .args(["netns", "exec", ns, "ip", "-4", "route", "show"])
+        .output()
+        .expect("ip -4 route show");
+    assert!(
+        !String::from_utf8_lossy(&v4routes.stdout).contains("default"),
+        "v6-only must have NO v4 default route"
+    );
+
+    let dresp = svc
+        .detach_interface(Request::new(DetachInterfaceRequest {
+            interface_id: iface_id.into(),
+        }))
+        .await;
+    assert!(
+        dresp.is_ok(),
+        "detach_interface (v6-only) failed: {dresp:?}"
+    );
+    {
+        let reg = attach_state.registry.lock().unwrap();
+        assert!(reg.get(iface_id.as_bytes()).is_none());
+    }
+    let _ = std::process::Command::new("ip")
+        .args(["netns", "del", ns])
+        .status();
+}
+
+/// Dual-stack overlay: attach with both an IPv4 and an IPv6 requested. The response `ips` holds
+/// both (v4 then v6) and `gateway` is the v4 gateway. Needs CAP_NET_ADMIN + EAL.
+#[tokio::test]
+#[ignore = "privileged: needs CAP_NET_ADMIN (veth+netns) + EAL (--no-huge); run under sudo with --ignored --test-threads=1"]
+async fn attach_veth_dual_stack() {
+    init_eal_once();
+    let shared = Arc::new(SharedConfigMaps::new(0, 1024).expect("SharedConfigMaps"));
+    let (svc, attach_state) = make_svc(shared.clone());
+
+    let ns = "fpveth-dual-ns";
+    let _ = std::process::Command::new("ip")
+        .args(["netns", "del", ns])
+        .status();
+    let ok = std::process::Command::new("ip")
+        .args(["netns", "add", ns])
+        .status()
+        .expect("ip netns add");
+    assert!(ok.success(), "ip netns add failed — need CAP_NET_ADMIN");
+    let netns_path = format!("/var/run/netns/{ns}");
+
+    let iface_id = "test-dual";
+    let resp = svc
+        .attach_interface(Request::new(AttachInterfaceRequest {
+            interface_id: iface_id.into(),
+            netns_path: netns_path.clone(),
+            vni: 44,
+            mac: String::new(),
+            requested_ips: vec!["10.0.9.7".into(), "fd00:cafe::7".into()],
+            device_type: String::new(),
+            tap_name: String::new(),
+        }))
+        .await;
+    assert!(resp.is_ok(), "attach_interface (dual) failed: {resp:?}");
+    let r = resp.unwrap().into_inner();
+    assert_eq!(
+        r.ips,
+        vec!["10.0.9.7", "fd00:cafe::7"],
+        "ips = [v4, v6] in order"
+    );
+    assert_eq!(r.gateway, "169.254.0.1", "dual: gateway = v4 gateway");
+
+    // Guest netns must have both the v4 and v6 overlay addrs.
+    let v4addr = std::process::Command::new("ip")
+        .args(["netns", "exec", ns, "ip", "-4", "addr", "show", iface_id])
+        .output()
+        .expect("ip -4 addr show");
+    assert!(
+        String::from_utf8_lossy(&v4addr.stdout).contains("10.0.9.7"),
+        "guest must have the v4 overlay addr"
+    );
+    let v6addr = std::process::Command::new("ip")
+        .args(["netns", "exec", ns, "ip", "-6", "addr", "show", iface_id])
+        .output()
+        .expect("ip -6 addr show");
+    assert!(
+        String::from_utf8_lossy(&v6addr.stdout).contains("fd00:cafe::7"),
+        "guest must have the v6 overlay addr"
+    );
+
+    let dresp = svc
+        .detach_interface(Request::new(DetachInterfaceRequest {
+            interface_id: iface_id.into(),
+        }))
+        .await;
+    assert!(dresp.is_ok(), "detach_interface (dual) failed: {dresp:?}");
+    {
+        let reg = attach_state.registry.lock().unwrap();
+        assert!(reg.get(iface_id.as_bytes()).is_none());
+    }
+    let _ = std::process::Command::new("ip")
+        .args(["netns", "del", ns])
+        .status();
+}
+
 /// Non-veth device_type is rejected with InvalidArgument. No EAL needed (rejected before any work).
 #[tokio::test]
 #[ignore = "requires EAL --no-huge; run with -- --ignored --test-threads=1"]
