@@ -41,7 +41,10 @@ use nfkit::{
 };
 
 use flowplane_control::ControlCore;
-use flowplane_core::datapath::{process_guest_tx, process_uplink_rx, GuestTxIn, UplinkIn};
+use flowplane_core::datapath::{
+    process_guest_tx, process_guest_tx_nat64, process_uplink_rx, GuestTxIn, GuestTxNat64In,
+    UplinkIn,
+};
 use flowplane_core::maps::Maps; // brings `underlay_get`/`local` method syntax into scope on ComposedMaps
 use flowplane_core::pkt::{Action, Pkt}; // `Pkt` brings `read_array` into scope on MbufPkt
 use nfkit::monotonic_ns;
@@ -701,22 +704,35 @@ fn worker_loop(
             for mut mbuf in guest_burst.drain(..) {
                 let action = {
                     let mut pkt = MbufPkt::new(&mut mbuf);
-                    match &local {
-                        // No LOCAL → no uplink identity for the encap arm; drop.
-                        None => Action::Drop,
-                        // `ports_get` returns an OWNED `PortMeta` copy — bind it to `pm` so the
-                        // subsequent `&mut composed` borrow in `process_guest_tx` doesn't conflict
-                        // (mirrors the Task-1 test + the uplink block's `ports_get(..).map(..)`).
-                        Some(_) => match composed.cfg.ports_get(*host_ifindex) {
-                            // unbound pool port (no guest attached yet; Task 4 binds them) → drop.
-                            None => Action::Drop,
-                            Some(pm) => {
-                                // process_guest_tx's SNAT arm writes the reverse NAT/CT entry into
-                                // THIS lcore's per-lcore CT *and* the cross-lcore `shared_ct`. In the
-                                // first slice worker 0 owns all guest ports, but a NAT-return can
-                                // arrive on ANY uplink worker; `shared_ct` is the mechanism by which
-                                // that other worker's reverse-DNAT lookup finds this flow. This is the
-                                // model the future multi-worker guest-port partition relies on.
+                    // Branch on the inner frame's ethertype (offset 12): an IPv6 guest frame whose dst
+                    // is in the NAT64 well-known prefix runs the v6→v4 NAT64 egress; everything else is
+                    // the IPv4 SNAT+encap path. NOTE: native v6→v6 guest egress is NOT wired here — there
+                    // is no shared-core orchestrator for it yet; only NAT64 v6→v4 (0x86DD) is handled.
+                    let ethertype = pkt.read_array::<2>(12).map(u16::from_be_bytes);
+                    // `ports_get` returns an OWNED `PortMeta` copy — bind it to `pm` so the subsequent
+                    // `&mut composed` borrow in the datapath fn doesn't conflict (mirrors the handoff
+                    // test + the uplink block's `ports_get(..).map(..)`).
+                    match (&local, composed.cfg.ports_get(*host_ifindex)) {
+                        // process_guest_tx{,_nat64}'s SNAT arm writes the reverse NAT/CT entry into THIS
+                        // lcore's per-lcore CT *and* the cross-lcore `shared_ct`. In the first slice
+                        // worker 0 owns all guest ports, but a NAT-return can arrive on ANY uplink
+                        // worker; `shared_ct` is the mechanism by which that other worker's reverse-DNAT
+                        // (and NAT64 v6-expansion) lookup finds this flow. This is the model the future
+                        // multi-worker guest-port partition relies on.
+                        (Some(l), Some(pm)) => match ethertype {
+                            // NAT64 egress (v6 guest → v4 external): dispatches to the shared-core
+                            // process_guest_tx_nat64, seeding CT_F_NAT64 reverse entries so the NAT64
+                            // ingress return path is reachable. Returns Action directly (not GuestTxOut).
+                            Some(0x86DD) => process_guest_tx_nat64(
+                                &mut pkt,
+                                &mut composed,
+                                &GuestTxNat64In {
+                                    meta: &pm,
+                                    local: l,
+                                },
+                            ),
+                            // IPv4 SNAT + encap egress.
+                            _ => {
                                 process_guest_tx(
                                     &mut pkt,
                                     &mut composed,
@@ -729,6 +745,9 @@ fn worker_loop(
                                 .action
                             }
                         },
+                        // No LOCAL (no uplink identity for the encap arm) or unbound pool port (no guest
+                        // attached yet; Task 4 binds them) → drop.
+                        _ => Action::Drop,
                     }
                 };
                 // Route the verdict. The encap arm returns `Redirect(uplink_ifindex)`; the Local

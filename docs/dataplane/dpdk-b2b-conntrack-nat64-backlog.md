@@ -1,9 +1,11 @@
 # DPDK B2b datapath backlog — conntrack + NAT64 gaps
 
-Status: **all three RESOLVED** (2026-07-25); **#1 + #2 now END-TO-END reachable on
-the DPDK serve loop** since guest egress was wired in (2026-07-25, branch
-`feat/dpdk-guest-egress`). #3 (NAT64 ingress) stays latent pending NAT64 *egress*
-wiring (the first guest-egress slice is IPv4 SNAT only).
+Status: **all three RESOLVED + END-TO-END reachable on the DPDK serve loop**
+(2026-07-25). #1 + #2 became reachable when guest egress was wired in (branch
+`feat/dpdk-guest-egress`). #3 (NAT64 ingress) is now reachable too: NAT64 *egress*
+is wired via the worker's inner-ethertype branch (branch
+`feat/dpdk-guest-egress-followups`, Task 1), so `CT_F_NAT64` reverse entries are
+seeded on the live loop.
 
 These three findings came out of the 2026-07-25 datapath correctness sweep. All
 three were **latent when found** — not reachable on the shipping eBPF datapath, and
@@ -120,12 +122,23 @@ the unified dispatch), so sim tests passed while the DPDK path did not exercise 
 reverse CT and asserts the v6-expanded delivery (Redirect, ethertype 0x86DD, dst =
 guest overlay v6). Existing NAT64 byte-parity tests unchanged.
 
-**Remaining (latent):** still not reachable on the live serve loop. The first
-guest-egress slice (`feat/dpdk-guest-egress`) wires only the IPv4 SNAT path
-(`process_guest_tx`), which seeds plain `CT_REWRITE_DST` reverse entries — NOT
-`CT_F_NAT64` ones. NAT64 ingress becomes end-to-end reachable once NAT64 *egress*
-(v6 guest → v4 external) is wired into the serve loop to seed the `CT_F_NAT64`
-reverse entries; the ingress dispatch itself is fixed + covered (sim) and ready.
+**Remaining (latent): NOW WIRED — END-TO-END reachable.** NAT64 egress is wired
+into the serve loop (`feat/dpdk-guest-egress-followups`, Task 1): the worker guest
+block branches on the inner frame's ethertype (offset 12) — an IPv6 frame
+(`0x86DD`) dispatches to `process_guest_tx_nat64` (v6→v4 SNAT + translate + encap),
+while everything else stays on the IPv4 `process_guest_tx` SNAT path. NAT64 egress
+therefore seeds the `CT_F_NAT64 | CT_REWRITE_DST` reverse entries into `shared_ct`,
+so the NAT64 ingress return path (the fixed dispatch above) is now reachable on the
+live serve loop. Native v6→v6 guest egress is still NOT wired (no shared-core
+orchestrator for it yet); only NAT64 v6→v4 is.
+
+**Proven by** `nfkit/tests/guest_tx_nat64_handoff.rs`: over ONE `ComposedMaps` (the
+exact structure a serve worker holds), the real `process_guest_tx_nat64` WRITE
+seeds the discovered `CT_F_NAT64` reverse entry in `shared_ct`, then the real
+`process_uplink_rx` READ (uplink input resolved exactly as the worker does) resolves
+it and v4→v6-EXPANDS the reply to the guest tap (asserts `Redirect(guest_tap)`,
+inner ethertype `0x86DD`, inner IPv6 dst = guest overlay v6) — the NAT64 analogue of
+`guest_tx_nat_return_handoff.rs`.
 
 ---
 
