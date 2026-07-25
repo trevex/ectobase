@@ -502,8 +502,9 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         .add_service(health_service)
         // The DataplaneNode service. Its handlers lock `ctrl` (the sole writer) to drive the SAME
         // `ControlCore` orchestration the eBPF binary runs; `shared` backs getter-based reads. The
-        // agnostic RPCs (routes/NAT/LB/fw/QoS) program the config maps; Attach/Detach stand up the
-        // container veth device (B2a) — af_xdp bind + guest-traffic polling is B2b. See `node.rs`.
+        // agnostic RPCs (routes/NAT/LB/fw/QoS) program the config maps; Attach/Detach bind/release a
+        // preallocated per-guest af_xdp pool slot (guest-end → pod netns); the worker above polls each
+        // guest port → `process_guest_tx` → uplink (guest egress is wired). See `node.rs`.
         .add_service(pb::dataplane_node_server::DataplaneNodeServer::new(
             DpdkNodeService::new(ctrl.clone(), shared.clone(), attach_state.clone()),
         ))

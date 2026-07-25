@@ -88,6 +88,11 @@ pub fn mac_for(interface_id: &str) -> [u8; 6] {
 /// Host-side veth name for an interface. Transcribed verbatim from `flowplane/src/attach.rs`
 /// `AttachState::host_veth_name` so both backends produce the same root-netns device name.
 ///
+/// NOTE: with the VF-style preallocated af_xdp pool model, the DPDK backend no longer names host
+/// devices per-interface — pool host-ends are `fpg{i}` (see `serve.rs`), so this fn has no live
+/// caller in the DPDK attach path. It is retained (with its regression tests) as the eBPF-parity
+/// reference for the shared naming contract.
+///
 /// Kernel IFNAMSIZ caps names at 15 chars, and `flowplane_device::create_veth_pair` derives the
 /// temporary peer name as `<host>p` (one char longer) — so the host name itself must be <= 14
 /// chars for the pair to create. Longer ids are hashed to a fixed 13-char name.
