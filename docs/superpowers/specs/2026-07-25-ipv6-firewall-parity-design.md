@@ -63,6 +63,42 @@ minimal control-plane wiring so existing guests are not broken.
    families, in that direction. (This is the approved refinement: "only add
    default allow if both ipv4 and ipv6 rules are absent.")
 
+4. **Stateful v6 firewall via a parallel v6 conntrack.** The v4 firewall is
+   stateful: `fw_eval_dir` runs on an ingress packet only on a conntrack MISS
+   (`ingress.rs:256`), so replies to guest-initiated flows (whose reverse entry
+   the egress path pre-seeds, `ct_create_default:267-272`) are recognized as
+   established and bypass the ingress firewall. v6 today has **no conntrack**
+   (`ct_key` reads the inner IPv4). Wiring a stateless deny-by-default v6 ingress
+   firewall would drop all replies to guest-initiated v6 connections. So full
+   parity requires a **parallel v6 conntrack** (`CtKey6` + `CONNTRACK6`),
+   firewall-only (no NAT rewrite — v6 overlay does none): egress seeds
+   forward+reverse entries on a new allowed flow; ingress bypasses the firewall
+   on an established hit. LB-local v6 delivery stays **stateless** (no CT), like
+   the v4 LB path (`datapath.rs:74`) — LB is inbound-initiated, so per-packet
+   ingress eval is correct (DSR gotcha: operators write explicit VIP rules).
+
+## IPv6 conntrack (firewall-only)
+
+- **`flowplane-common`:** `CtKey6 { vni:u32, src_ip:[u8;16], dst_ip:[u8;16],
+  src_port:u16, dst_port:u16, proto:u8, _pad:[u8;3] }` (size 4+16+16+2+2+1+3 =
+  **44**; pin in the layout test). **Reuse `CtEntry`** as the `CONNTRACK6` value
+  — v6 sets only `last_seen`/`flags=CT_F_DEFAULT`/`tcp_state`, leaving the
+  xlate/gen fields zero, so `ct_touch`/`tcp_advance`/`timeout_ns` work unchanged.
+- **`flowplane-core/src/conntrack.rs`:** `ct_key6<P: Pkt>(pkt, ip_off, vni) ->
+  Option<CtKey6>` (v6 src@+8/dst@+24, L4@+40, ICMPv6=58 id-in-both-ports like the
+  v4 helper), `invert_key6(&CtKey6) -> CtKey6` (swap src/dst + ports), and
+  `ct_create_default6<P, M>(pkt, maps, ip_off, vni, now)` — a verbatim v6 mirror
+  of `ct_create_default` (`:242-273`) that inserts the forward entry + pre-seeds
+  the reverse (return traffic → established).
+- **`Maps` trait (`flowplane-core/src/maps.rs`):** `conntrack6_get(&CtKey6) ->
+  Option<CtEntry>` + `conntrack6_insert(CtKey6, CtEntry)`; implement in sim
+  `VecMaps` (new `conntrack6: HashMap<CtKey6, CtEntry>` field), eBPF `GlobalMaps`
+  (new `CONNTRACK6` BPF map), DPDK `DpdkMaps` (new per-lcore `conntrack6`
+  `DpdkHash`).
+- **`flowplane-ebpf`:** declare `CONNTRACK6: HashMap<CtKey6, CtEntry>` (mirror
+  `CONNTRACK` sizing); add `ct_key6(data, data_end, ip_off, vni)` +
+  `ct_touch6(...)` helpers mirroring `conntrack.rs:19/57`.
+
 ## The seam (single-source, testable)
 
 The firewall seam is the **evaluator**, not the whole v6 datapath. `fw_eval_dir`
@@ -121,15 +157,24 @@ today).
 - `maps.rs`: declare `FW_RULES6: HashMap<FwRuleKey, FwRule6>` and `FW_META6:
   HashMap<u32, FwMeta>` BPF maps (mirroring `FW_RULES`/`FW_META`); impl
   `fw_meta6`/`fw_rule6` on `GlobalMaps`.
-- `v6.rs` `v6_uplink_rx`: before delivering the decapped inner-v6 frame to the
-  guest tap, call `fw_eval_dir6(.., inner_off, tap_ifindex, FW_DIR_INGRESS)`;
-  on `FW_ACTION_DROP` return `XDP_DROP`. Mirror the v4 site (`ingress.rs:256-272`).
-  The LB-v6 backend-delivery branch is delivered to a local backend tap — apply
-  the same ingress eval there (mirroring the v4 LB local-delivery firewall at
-  `datapath.rs:64-71`).
-- `egress.rs` `forward_decision_v6`: before forwarding the guest's inner-v6
-  packet, call `fw_eval_dir6(.., ip_off, src_ifindex, FW_DIR_EGRESS)`; on DROP
-  return drop. Mirror `forward_decision_v4` (egress.rs:72).
+- `v6.rs` `v6_uplink_rx` **normal (non-LB) delivery** (the branch at v6.rs:148):
+  before the decap `adjust_head`, compute `ct_key6(.., ETH_LEN+IPV6_LEN, vni)`;
+  if `CONNTRACK6` **hits** → established → `ct_touch6` + skip firewall; if it
+  **misses** → `fw_eval_dir6(.., ETH_LEN+IPV6_LEN, u.tap_ifindex,
+  FW_DIR_INGRESS)`; on DROP return `XDP_DROP`, on ACCEPT seed the inbound entry
+  (`ct_create_default6`). Mirrors the v4 ingress firewall+track (`ingress.rs:256-290`).
+- `v6.rs` `v6_uplink_rx` **LB-local delivery** (the branch at v6.rs:111-132):
+  **stateless** — before the decap `adjust_head`, call `fw_eval_dir6(..,
+  ETH_LEN+IPV6_LEN, bu.tap_ifindex, FW_DIR_INGRESS)`; on DROP return `XDP_DROP`.
+  No conntrack (mirrors the v4 LB path which skips CT).
+- `egress.rs` `forward_decision_v6`: rename the unused `_ifindex` param to
+  `ifindex`; compute `ct_key6(data, data_end, ETH_LEN, meta.vni)`; if `CONNTRACK6`
+  **hits** → `ct_touch6` + skip firewall; if it **misses** → `fw_eval_dir6(..,
+  ETH_LEN, ifindex, FW_DIR_EGRESS)`; on DROP return `EgressVerdict::Drop`, on
+  ACCEPT seed forward+reverse (`ct_create_default6`) so the reply is established.
+  Mirrors `forward_decision_v4` conntrack+firewall (`egress.rs:60-84`). NOTE:
+  `forward_decision_v6` runs under **tc** for the guest edge; the eBPF `Pkt` there
+  is `RawPkt` (like the v4 egress site egress.rs:73), not `CtxPkt`.
 - **Verifier budget (primary risk).** 16-byte addr reads + the v6 selector grow
   the stack; the 512B combined-frame limit is real (bit the flow-label work).
   Keep `fw_eval_dir6` `#[inline(always)]`, scan one rule at a time (no rule
@@ -187,8 +232,14 @@ today).
    mask (prefix) match/miss; (e) direction isolation (an egress rule doesn't
    accept ingress); (f) proto/port/ICMPv6-type match. Mirror the existing v4
    cases.
-2. **`flowplane-common` layout test:** pin `size_of::<FwRule6>()` and assert the
-   v4 `FwRule`/`FwMeta` sizes are unchanged (regression guard).
+2. **`flowplane-common` layout test:** pin `size_of::<FwRule6>() == 80` and
+   `size_of::<CtKey6>() == 44`; assert the v4 `FwRule`(32)/`FwMeta`(8)/`CtKey`(20)
+   sizes are unchanged (regression guard).
+2b. **sim conntrack6 + established-bypass:** `ct_key6`/`invert_key6` round-trip
+   (forward keys, invert swaps src/dst+ports); `ct_create_default6` inserts
+   forward + reverse; a test asserting a v6 reply whose `ct_key6` hits the
+   pre-seeded reverse entry is treated as established (the datapath skips
+   `fw_eval_dir6`). Call the core fns directly with `VecPkt`/`VecMaps`.
 3. **`flowplane-node` `parse.rs`:** unit tests for v6 CIDR parsing (full /128,
    prefix /64, `::/0`, invalid, and v4 still works).
 4. **eBPF verifier anchor:** extend the privileged verifier/`sim-anchor` target
@@ -205,12 +256,15 @@ today).
 
 ## Scope boundaries (YAGNI)
 
-- **In:** `FwRule6`/`FW_RULES6`/`FW_META6`; `fw_eval_dir6` deny-by-default wired
-  into inner-v6 ingress + egress (+ LB-v6 local delivery); family-aware CIDR
-  parse + handler routing (both backends via `flowplane-node`); DPDK writer/map
-  parity; v6 default-allow emission gated on a fully-ruleless direction; tests +
-  verifier anchor.
-- **Out:** NAT/LB v6 *semantic* changes beyond firewalling the existing paths;
+- **In:** parallel v6 conntrack (`CtKey6`/`CONNTRACK6`, firewall-only, stateful
+  established-bypass); `FwRule6`/`FW_RULES6`/`FW_META6`; `fw_eval_dir6`
+  deny-by-default wired stateful into inner-v6 ingress + egress and stateless into
+  LB-v6 local delivery; family-aware CIDR parse + handler routing (both backends
+  via `flowplane-node`); DPDK writer/map parity; v6 default-allow emission gated
+  on a fully-ruleless direction; tests + verifier anchor.
+- **Out:** v6 conntrack NAT/rewrite (v6 overlay does no NAT — CONNTRACK6 is
+  firewall-only, xlate fields unused); NAT/LB v6 *semantic* changes beyond
+  firewalling the existing paths;
   IPv6 extension-header parsing (v4 path doesn't parse options either);
   ICMPv6-specific policy semantics beyond type/code (reuse v4 logic); the latent
   DPDK-B2b findings from the correctness sweep (per-lcore NAT-return CT miss;
