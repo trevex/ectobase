@@ -155,6 +155,25 @@ pub fn register_guest_dhcp_tc(ebpf: &mut Ebpf) -> anyhow::Result<ProgramArray<Ma
     progs
         .set(flowplane_common::GUEST_PROG_IPV6, fd, 0)
         .context("register tc_guest_nat64 in GUEST_PROGS_TC")?;
+
+    // IPv6 overlay egress tail-call target (slot GUEST_PROG_V6_FWD): tc_guest_tx tail-calls this for
+    // a non-ND/non-NAT64/non-DHCPv6 inner-IPv6 guest packet, giving the firewall + conntrack + route6
+    // + encap path its own stack budget (the v6 fw/ct structures overflow tc_guest_tx's 512B frame).
+    {
+        let prog: &mut SchedClassifier = ebpf
+            .program_mut("tc_guest_egress_v6")
+            .context("tc_guest_egress_v6 program missing")?
+            .try_into()?;
+        prog.load().context("verify tc_guest_egress_v6")?;
+    }
+    let prog: &SchedClassifier = ebpf
+        .program("tc_guest_egress_v6")
+        .context("tc_guest_egress_v6 program missing")?
+        .try_into()?;
+    let fd: &ProgramFd = prog.fd()?;
+    progs
+        .set(flowplane_common::GUEST_PROG_V6_FWD, fd, 0)
+        .context("register tc_guest_egress_v6 in GUEST_PROGS_TC")?;
     Ok(progs)
 }
 

@@ -133,72 +133,14 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
             return TC_ACT_OK;
         }
 
-        // Not ND → IPv6 inner overlay egress (route6 → local or encap, proto 41).
+        // Not ND → IPv6 inner overlay egress: TAIL-CALL the dedicated tc_guest_egress_v6 program.
+        // The firewall + conntrack + route6 + encap path can't run inline here — tc_guest_tx's own
+        // 448B frame plus the v6 fw/ct structures (FwRule6 80B, CtKey6 44B, CtEntry 24B) blow the
+        // BPF 512B combined-call stack budget. A tail-call gives it a fresh stack (like tc_guest_nat64).
         let _ = ctx.pull_data((flowplane_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN) as u32);
-        if ctx.data() + flowplane_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN > ctx.data_end()
-        {
-            return TC_ACT_OK;
-        }
-        match crate::egress::forward_decision_v6(ctx.data(), ctx.data_end(), ifindex, &meta) {
-            crate::egress::EgressVerdict::Pass => return TC_ACT_OK,
-            crate::egress::EgressVerdict::Drop => return TC_ACT_SHOT,
-            crate::egress::EgressVerdict::Local {
-                tap_ifindex,
-                guest_mac,
-            } => {
-                if ctx.data() + flowplane_common::arp_nd::ETH_LEN <= ctx.data_end() {
-                    let q = ctx.data() as *mut u8;
-                    unsafe {
-                        let g = guest_mac;
-                        let gw = crate::arp_nd::GW_MAC;
-                        let mut i = 0;
-                        while i < 6 {
-                            *q.add(i) = g[i];
-                            *q.add(6 + i) = gw[i];
-                            i += 1;
-                        }
-                        core::ptr::write_unaligned(q.add(12) as *mut u16, 0x86DDu16.to_be());
-                    }
-                    return unsafe { bpf_redirect(tap_ifindex, 0) as i32 };
-                }
-                return TC_ACT_OK;
-            }
-            crate::egress::EgressVerdict::Encap(e) => {
-                if ctx
-                    .adjust_room(crate::parse::IPV6_LEN as i32, BPF_ADJ_ROOM_MAC, 0)
-                    .is_err()
-                {
-                    return TC_ACT_OK;
-                }
-                if ctx
-                    .pull_data((flowplane_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN) as u32)
-                    .is_err()
-                {
-                    return TC_ACT_OK;
-                }
-                // adjust_room grew skb->len by IPV6_LEN; ctx.len() is now the full logical
-                // length. write_outer_v6 derives the outer payload from logical_len - ETH_LEN -
-                // IPV6_LEN, correct even when the inner sits in a paged frag.
-                let mut pkt =
-                    RawPkt::with_logical_len(ctx.data(), ctx.data_end(), ctx.len() as usize);
-                if flowplane_core::encap::write_outer_v6(&mut pkt, &e) {
-                    // EDT egress shaping: stamp the wire-length-derived departure time so the
-                    // uplink's fq qdisc paces this flow. `ctx.len()` is the full post-encap logical
-                    // length. No shaping configured => no stamp (send immediately).
-                    if let Some(ts) = crate::meter::edt_stamp(ifindex, ctx.len() as u64) {
-                        unsafe {
-                            aya_ebpf::helpers::gen::bpf_skb_set_tstamp(
-                                ctx.skb.skb as *mut _,
-                                ts,
-                                BPF_SKB_TSTAMP_DELIVERY_MONO,
-                            );
-                        }
-                    }
-                    return unsafe { bpf_redirect(e.uplink_ifindex, 0) as i32 };
-                }
-                return TC_ACT_SHOT;
-            }
-        }
+        let _ = unsafe { GUEST_PROGS_TC.tail_call(&ctx, flowplane_common::GUEST_PROG_V6_FWD) };
+        // tail_call only returns on failure (slot empty) → passthrough.
+        return TC_ACT_OK;
     }
 
     // DHCPv4 → tail-call the dedicated responder.
@@ -307,6 +249,80 @@ pub fn tc_guest_nat64(ctx: TcContext) -> i32 {
         Ok(Some(act)) => act,
         Ok(None) => TC_ACT_OK,
         Err(_) => TC_ACT_SHOT,
+    }
+}
+
+/// tc IPv6 overlay egress (tail-call target, slot GUEST_PROG_V6_FWD). Reached from `tc_guest_tx` for
+/// a non-ND / non-NAT64 / non-DHCPv6 inner-IPv6 guest packet. Running as its own program gives the
+/// egress firewall + conntrack + route6 + encap path a FRESH BPF stack budget (it overflows
+/// tc_guest_tx's 512B combined frame). Mirrors `tc_guest_nat64`. Falls through to passthrough on miss.
+#[classifier]
+pub fn tc_guest_egress_v6(ctx: TcContext) -> i32 {
+    let ifindex = unsafe { (*ctx.skb.skb).ifindex };
+    // Hold PORT_META by reference — copying the whole ~70-byte PortMeta onto this frame would eat
+    // into the budget the fw/ct call chain needs. `forward_decision_v6` takes `&PortMeta`.
+    let meta = match unsafe { PORT_META.get(&ifindex) } {
+        Some(m) => m,
+        None => return TC_ACT_OK,
+    };
+    if ctx.data() + flowplane_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN > ctx.data_end() {
+        return TC_ACT_OK;
+    }
+    // Firewall + conntrack + route6 all collapse into this program's single fresh frame (everything
+    // is #[inline(always)]); the tail-call gave us a full 512B budget, and the sequential fw/ct and
+    // route locals share stack slots — so what overflowed on top of tc_guest_tx now fits here.
+    match crate::egress::forward_decision_v6(ctx.data(), ctx.data_end(), ifindex, meta) {
+        crate::egress::EgressVerdict::Pass => TC_ACT_OK,
+        crate::egress::EgressVerdict::Drop => TC_ACT_SHOT,
+        crate::egress::EgressVerdict::Local {
+            tap_ifindex,
+            guest_mac,
+        } => {
+            if ctx.data() + flowplane_common::arp_nd::ETH_LEN <= ctx.data_end() {
+                let q = ctx.data() as *mut u8;
+                unsafe {
+                    let g = guest_mac;
+                    let gw = crate::arp_nd::GW_MAC;
+                    let mut i = 0;
+                    while i < 6 {
+                        *q.add(i) = g[i];
+                        *q.add(6 + i) = gw[i];
+                        i += 1;
+                    }
+                    core::ptr::write_unaligned(q.add(12) as *mut u16, 0x86DDu16.to_be());
+                }
+                return unsafe { bpf_redirect(tap_ifindex, 0) as i32 };
+            }
+            TC_ACT_OK
+        }
+        crate::egress::EgressVerdict::Encap(e) => {
+            if ctx
+                .adjust_room(crate::parse::IPV6_LEN as i32, BPF_ADJ_ROOM_MAC, 0)
+                .is_err()
+            {
+                return TC_ACT_OK;
+            }
+            if ctx
+                .pull_data((flowplane_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN) as u32)
+                .is_err()
+            {
+                return TC_ACT_OK;
+            }
+            let mut pkt = RawPkt::with_logical_len(ctx.data(), ctx.data_end(), ctx.len() as usize);
+            if flowplane_core::encap::write_outer_v6(&mut pkt, &e) {
+                if let Some(ts) = crate::meter::edt_stamp(ifindex, ctx.len() as u64) {
+                    unsafe {
+                        aya_ebpf::helpers::gen::bpf_skb_set_tstamp(
+                            ctx.skb.skb as *mut _,
+                            ts,
+                            BPF_SKB_TSTAMP_DELIVERY_MONO,
+                        );
+                    }
+                }
+                return unsafe { bpf_redirect(e.uplink_ifindex, 0) as i32 };
+            }
+            TC_ACT_SHOT
+        }
     }
 }
 

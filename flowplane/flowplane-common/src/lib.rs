@@ -459,11 +459,14 @@ pub struct FwMeta {
 pub const DHCP_MAX_DNS: usize = 8;
 
 /// Tail-call indices into the `GUEST_PROGS_TC` program array (egress datapath split).
-/// `GUEST_PROG_DHCP` is currently the only dispatched program; IPV4/IPV6 are reserved for a future
-/// split of the egress datapath by L3 protocol.
+/// `GUEST_PROG_DHCP` dispatches the DHCP responder; `GUEST_PROG_IPV6` the NAT64 egress path;
+/// `GUEST_PROG_V6_FWD` the IPv6 overlay egress (firewall + conntrack + route6 + encap), split out
+/// because the v6 firewall/conntrack structures overflow tc_guest_tx's 512B combined BPF stack.
+/// `GUEST_PROG_IPV4` stays reserved for a future v4 split.
 pub const GUEST_PROG_DHCP: u32 = 0;
 pub const GUEST_PROG_IPV4: u32 = 1;
 pub const GUEST_PROG_IPV6: u32 = 2;
+pub const GUEST_PROG_V6_FWD: u32 = 3;
 
 /// Server-wide DHCP config (DHCP_CONFIG[0]). Mirrors dpservice's --dhcp-mtu/--dhcp-dns/--dhcpv6-dns.
 #[repr(C)]
