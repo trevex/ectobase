@@ -63,6 +63,10 @@ fn csum16<P: Pkt>(mut sum: u32, pkt: &P, off: usize, len: usize) -> u16 {
 /// the 512-byte BPF stack limit.
 #[inline(always)]
 pub fn nd_reply<P: Pkt>(pkt: &mut P, gateway_ipv6: [u8; 16], reply_mac: [u8; 6]) -> bool {
+    // No v6 gateway configured (e.g. an IPv4-only interface) → never answer ND for `::`.
+    if gateway_ipv6 == [0u8; 16] {
+        return false;
+    }
     // One dominating bound: the whole NS/NA frame must be present before any access.
     if pkt.read_array::<2>(ETH_LEN + IPV6_LEN + 32 - 2).is_none() {
         return false;
@@ -159,6 +163,10 @@ pub fn nd_reply<P: Pkt>(pkt: &mut P, gateway_ipv6: [u8; 16], reply_mac: [u8; 6])
 /// same BPF-stack reason as [`nd_reply`].
 #[inline(always)]
 pub fn ra_reply<P: Pkt>(pkt: &mut P, gateway_ipv6: [u8; 16], reply_mac: [u8; 6], mtu: u32) -> bool {
+    // No v6 gateway configured (e.g. an IPv4-only interface) → never advertise a `::` router.
+    if gateway_ipv6 == [0u8; 16] {
+        return false;
+    }
     // One dominating bound: the whole RA frame must be present (the caller grew the skb to RA_LEN).
     if pkt.read_array::<2>(RA_LEN - 2).is_none() {
         return false;
@@ -242,6 +250,10 @@ pub fn ra_reply<P: Pkt>(pkt: &mut P, gateway_ipv6: [u8; 16], reply_mac: [u8; 6],
 /// same BPF-stack reason as [`nd_reply`].
 #[inline(always)]
 pub fn arp_reply<P: Pkt>(pkt: &mut P, gateway_ipv4: [u8; 4], reply_mac: [u8; 6]) -> bool {
+    // No v4 gateway configured (e.g. an IPv6-only interface) → never answer ARP for 0.0.0.0.
+    if gateway_ipv4 == [0u8; 4] {
+        return false;
+    }
     // One dominating bound: the whole ARP frame must be present before any access.
     if pkt.read_array::<2>(ETH_LEN + ARP_LEN - 2).is_none() {
         return false;
