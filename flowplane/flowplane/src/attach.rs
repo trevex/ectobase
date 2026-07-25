@@ -108,9 +108,10 @@ pub fn uplink_finalizes_checksum(uplink: &str) -> bool {
 
 impl AttachState {
     /// Host-side veth name for an interface. Kept short and stable so detach can delete it and so
-    /// the datapath tap is discoverable. Kernel IFNAMSIZ caps names at 15 chars, and `setup_veth`
-    /// derives the temporary peer name as `<host>p` (one char longer) — so the host name itself must
-    /// be <= 14 chars for the pair to create. Longer ids are hashed to a fixed 13-char name.
+    /// the datapath tap is discoverable. Kernel IFNAMSIZ caps names at 15 chars, and
+    /// `flowplane_device::create_veth_pair` derives the temporary peer name as `<host>p` (one char
+    /// longer) — so the host name itself must be <= 14 chars for the pair to create. Longer ids are
+    /// hashed to a fixed 13-char name.
     fn host_veth_name(interface_id: &str) -> String {
         // "veth-<id>" when it (plus the +1 peer suffix) fits; otherwise a stable short hash.
         let candidate = format!("veth-{interface_id}");
@@ -243,7 +244,15 @@ impl AttachState {
         // leak. veth: create the pair + move the guest end into the netns. tap: a single root-netns
         // device. pod-tap: the veth + a pod-netns tap (named `tap_dev`) wired by mirred (KubeVirt).
         let setup = match device_type {
-            DeviceType::Veth => self.setup_veth(&device, interface_id, netns_path, mac),
+            DeviceType::Veth => flowplane_device::create_veth_pair(&flowplane_device::VethSpec {
+                host_name: device.clone(),
+                guest_name: interface_id.to_string(),
+                netns_path: netns_path.to_string(),
+                mac,
+                mtu: self.guest_mtu as u32,
+                disable_csum_offload: self.disable_guest_csum_offload,
+            })
+            .map(|_dev| ()),
             DeviceType::Tap => self.setup_tap(&device, mac),
             DeviceType::PodTap => self.setup_pod_tap(&device, netns_path, &tap_dev, mac),
         };
@@ -307,76 +316,6 @@ impl AttachState {
             gateway: Ipv4Addr::from(self.gateway_ipv4).to_string(),
             underlay_route: Ipv6Addr::from(underlay_ipv6).to_string(),
         })
-    }
-
-    /// Create the veth pair and place/configure the guest end inside the target netns.
-    fn setup_veth(
-        &self,
-        host: &str,
-        guest_name: &str,
-        netns_path: &str,
-        mac: [u8; 6],
-    ) -> anyhow::Result<()> {
-        // Fresh start: remove any stale host-side veth from a previous run.
-        let _ = run(&["ip", "link", "del", host]);
-        // Temporary guest-end name in the root netns before we move it (must differ from host and
-        // be unique); derive it from the host name to avoid collisions.
-        let tmp_guest = format!("{host}p");
-        run(&[
-            "ip", "link", "add", host, "type", "veth", "peer", "name", &tmp_guest,
-        ])
-        .context("create veth pair")?;
-        // Move the guest end into the target netns (by path, e.g. /var/run/netns/<ns>).
-        run(&["ip", "link", "set", &tmp_guest, "netns", netns_path])
-            .context("move guest veth into netns")?;
-        // Inside the netns: rename to the requested guest name, set MAC, bring up.
-        let macs = fmt_mac(mac);
-        run_netns(
-            netns_path,
-            &["ip", "link", "set", &tmp_guest, "name", guest_name],
-        )
-        .context("rename guest veth")?;
-        run_netns(
-            netns_path,
-            &["ip", "link", "set", guest_name, "address", &macs],
-        )
-        .context("set guest veth mac")?;
-        run_netns(netns_path, &["ip", "link", "set", guest_name, "up"]).context("guest veth up")?;
-        // Set the guest link MTU (node-wide value = underlay MTU - encap overhead). This is the
-        // authoritative, in-our-control way to bound a pod's frame size (Cilium sets the veth MTU
-        // directly rather than advertising it). A self-configuring VM ignores this and learns its
-        // MTU from DHCP opt-26 / the RA MTU option instead.
-        let mtu = self.guest_mtu.to_string();
-        run_netns(netns_path, &["ip", "link", "set", guest_name, "mtu", &mtu])
-            .context("set guest veth mtu")?;
-        // Enable TCP Packetization-Layer PMTUD (RFC 4821) in the guest netns so TCP discovers the
-        // path MTU itself, resilient to ICMP-blocking (the mechanism Cilium enables by default).
-        // Best-effort: a missing sysctl / read-only netns must not fail the attach.
-        let _ = run_netns(netns_path, &["sysctl", "-wq", "net.ipv4.tcp_mtu_probing=1"]);
-        // Disable tx-checksum offload on the guest end — BUT ONLY when the uplink can't finalize
-        // CHECKSUM_PARTIAL in hardware (software veth fabric, e.g. clab/kind). The guest stack
-        // otherwise emits TCP/UDP with CHECKSUM_PARTIAL (a pseudo-header-only partial csum, meant to
-        // be finalized "by hardware"); our encap redirects to the uplink bypassing that finalization,
-        // so on a veth uplink the inner L4 checksum reaches the wire partial/wrong (ICMP is immune).
-        // On a real NIC the hardware finalizes it after encap, so we keep offload on there (avoids the
-        // guest-CPU checksum tax). Best-effort: don't fail attach if ethtool is unavailable.
-        if self.disable_guest_csum_offload {
-            let _ = run_netns(
-                netns_path,
-                &["ethtool", "-K", guest_name, "tx-checksum-ip-generic", "off"],
-            );
-        }
-        // Give the HOST end the SAME (guest) MAC, then bring it up. `create_interface` derives the
-        // datapath `guest_mac` from `mac_of(host)` (the "tap" it attaches the guest edge to), and the
-        // local fast path rewrites a locally-delivered frame's dst to that `guest_mac`. If the host
-        // veth kept its auto-generated MAC, local delivery would address the frame to that auto-MAC —
-        // it reaches the peer netns but the guest iface (which has `mac`) drops it as not-for-me.
-        run(&["ip", "link", "set", host, "address", &macs]).context("set host veth mac")?;
-        // Host end MTU must be >= the guest's so a full-size guest frame is never dropped on the tap
-        // before the datapath encaps it.
-        run(&["ip", "link", "set", host, "mtu", &mtu]).context("set host veth mtu")?;
-        run(&["ip", "link", "set", host, "up"]).context("host veth up")?;
-        Ok(())
     }
 
     /// Create + configure a root-netns tap for a VM: a single device (no netns move, no peer),
