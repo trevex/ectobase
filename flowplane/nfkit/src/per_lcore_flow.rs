@@ -187,7 +187,42 @@ impl Maps for ComposedMaps<'_> {
     }
 
     fn meter_get(&self, ifindex: u32) -> Option<MeterState> {
-        self.flow.meter_get(ifindex)
+        // Full-rate-per-lcore: overlay the SHARED rate config onto THIS lcore's token state. No
+        // shared config → no QoS configured → None (unlimited). On this lcore's first sight of the
+        // meter, seed each lane with a full bucket (tokens = burst); config changes self-correct
+        // because `take`/`edt_departure` clamp tokens to the (re-read) burst on the next packet.
+        let cfg = self.cfg.meter_config_get(ifindex)?;
+        let m = match self.flow.meter_get(ifindex) {
+            Some(s) => MeterState {
+                total_bps: cfg.total_bps,
+                total_burst: cfg.total_burst,
+                total_tokens: s.total_tokens,
+                total_last_ns: s.total_last_ns,
+                public_bps: cfg.public_bps,
+                public_burst: cfg.public_burst,
+                public_tokens: s.public_tokens,
+                public_last_ns: s.public_last_ns,
+                ingress_bps: cfg.ingress_bps,
+                ingress_burst: cfg.ingress_burst,
+                ingress_tokens: s.ingress_tokens,
+                ingress_last_ns: s.ingress_last_ns,
+            },
+            None => MeterState {
+                total_bps: cfg.total_bps,
+                total_burst: cfg.total_burst,
+                total_tokens: cfg.total_burst,
+                total_last_ns: 0,
+                public_bps: cfg.public_bps,
+                public_burst: cfg.public_burst,
+                public_tokens: cfg.public_burst,
+                public_last_ns: 0,
+                ingress_bps: cfg.ingress_bps,
+                ingress_burst: cfg.ingress_burst,
+                ingress_tokens: cfg.ingress_burst,
+                ingress_last_ns: 0,
+            },
+        };
+        Some(m)
     }
 
     fn meter_update(&mut self, ifindex: u32, state: MeterState) {
@@ -269,13 +304,35 @@ mod tests {
         assert_eq!(composed.route4_get(100, &[10, 0, 0, 1]), Some(rv));
         assert_eq!(composed.route4_get(100, &[10, 0, 0, 99]), None);
 
-        // (c) The meter mutator/getter round-trips through the per-lcore half.
+        // (c) The meter mutator/getter round-trips through the composed view.
+        // `meter_get` now requires a shared config entry (None = unlimited = no policing), so seed
+        // one first; the returned MeterState overlays the shared rate config onto the per-lcore
+        // token state.
+        let mc = flowplane_common::MeterConfig {
+            total_bps: 1_000_000,
+            total_burst: 50_000,
+            public_bps: 0,
+            public_burst: 0,
+            ingress_bps: 0,
+            ingress_burst: 0,
+        };
+        assert!(shared.meter_config_insert(42, mc));
+        // Before any meter_update the per-lcore slot is empty → seed with a full bucket.
+        let first_get = composed
+            .meter_get(42)
+            .expect("(c) Some after config insert");
+        assert_eq!(first_get.total_bps, 1_000_000);
+        assert_eq!(first_get.total_tokens, 50_000); // seeded = burst
+                                                    // After a meter_update the per-lcore tokens are stored and read back composed.
         let ms = MeterState {
             total_bps: 1_000_000,
+            total_burst: 50_000,
+            total_tokens: 12_345,
             ..Default::default()
         };
-        assert_eq!(composed.meter_get(42), None);
         composed.meter_update(42, ms);
-        assert_eq!(composed.meter_get(42), Some(ms));
+        let second_get = composed.meter_get(42).expect("(c) Some after meter_update");
+        assert_eq!(second_get.total_tokens, 12_345); // per-lcore tokens preserved
+        assert_eq!(second_get.total_bps, 1_000_000); // config rate from shared half
     }
 }
