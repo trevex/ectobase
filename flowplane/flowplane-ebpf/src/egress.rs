@@ -200,26 +200,17 @@ fn egress_fw_ct_v6(data: usize, data_end: usize, ifindex: u32, vni: u32) -> bool
     false
 }
 
-/// IPv6-inner egress decision (route6 + local/encap). Map-driven; used by tc. No NAT64 (caller
-/// runs that first), no resize. Caller verified ETH_LEN+IPV6_LEN present and
-/// ethertype==ETH_P_IPV6.
-#[inline(always)]
-pub fn forward_decision_v6(
-    data: usize,
-    data_end: usize,
-    ifindex: u32,
-    meta: &PortMeta,
-) -> EgressVerdict {
+/// Route6 lookup + deliver decision (local fast path / encap / pass) for the inner-v6 egress flow.
+/// Out-of-line (`#[inline(never)]`) so its route-lookup `Key<RouteLpmData6>` frame (~264B) does not
+/// coexist on the combined BPF stack with the `egress_fw_ct_v6` CtKey6/CtEntry frame (~336B): the
+/// two heavy frames are called SEQUENTIALLY from the thin `forward_decision_v6` dispatcher, so each
+/// is freed before the next (512B combined limit). Takes `data`/`data_end` as scalars and
+/// reconstructs the packet window inside — no packet pointer crosses the call boundary.
+#[inline(never)]
+fn route_decision_v6(data: usize, data_end: usize, meta: &PortMeta) -> EgressVerdict {
     let p = data as *const u8;
     // inner IPv6 dst at ETH_LEN + 24
     let dst = unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + 24) as *const [u8; 16]) };
-    // Stateful firewall + conntrack on the inner-v6 flow (mirrors the v4 egress site). Established
-    // flows (CT hit) skip the firewall; new flows are egress-firewalled then tracked. Kept in an
-    // out-of-line subprogram (`egress_fw_ct_v6`) so its CtKey6/CtEntry frame does not coexist on
-    // the combined BPF stack with the route-lookup Key<RouteLpmData6> below (512B limit).
-    if egress_fw_ct_v6(data, data_end, ifindex, meta.vni) {
-        return EgressVerdict::Drop;
-    }
     let route = match ROUTES6.get(&aya_ebpf::maps::lpm_trie::Key::new(
         160,
         RouteLpmData6 {
@@ -252,4 +243,27 @@ pub fn forward_decision_v6(
         inner_proto: crate::parse::IPPROTO_IPV6,
         flow_label: egress_flow_label(data, data_end, true),
     })
+}
+
+/// IPv6-inner egress decision (fw/ct + route6 + local/encap). Map-driven; used by tc. No NAT64
+/// (caller runs that first), no resize. Caller verified ETH_LEN+IPV6_LEN present and
+/// ethertype==ETH_P_IPV6.
+///
+/// THIN dispatcher: the two heavy stages — stateful firewall/conntrack (`egress_fw_ct_v6`, ~336B)
+/// and the route6 lookup + deliver (`route_decision_v6`, ~264B) — are each their own
+/// `#[inline(never)]` subprogram, called SEQUENTIALLY here. So neither of the big frames coexists
+/// with the other on the combined BPF stack (512B limit); this dispatcher itself carries no heavy
+/// locals. Established flows (CT hit) skip the firewall; new flows are egress-firewalled then
+/// tracked, then routed.
+#[inline(always)]
+pub fn forward_decision_v6(
+    data: usize,
+    data_end: usize,
+    ifindex: u32,
+    meta: &PortMeta,
+) -> EgressVerdict {
+    if egress_fw_ct_v6(data, data_end, ifindex, meta.vni) {
+        return EgressVerdict::Drop;
+    }
+    route_decision_v6(data, data_end, meta)
 }

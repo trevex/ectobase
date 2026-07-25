@@ -268,9 +268,12 @@ pub fn tc_guest_egress_v6(ctx: TcContext) -> i32 {
     if ctx.data() + flowplane_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN > ctx.data_end() {
         return TC_ACT_OK;
     }
-    // Firewall + conntrack + route6 all collapse into this program's single fresh frame (everything
-    // is #[inline(always)]); the tail-call gave us a full 512B budget, and the sequential fw/ct and
-    // route locals share stack slots — so what overflowed on top of tc_guest_tx now fits here.
+    // The tail-call gave this program a fresh 512B stack budget. `forward_decision_v6` is a thin
+    // #[inline(always)] dispatcher that calls the two heavy stages — firewall/conntrack
+    // (egress_fw_ct_v6) and route6+deliver (route_decision_v6) — as SEQUENTIAL #[inline(never)]
+    // subprograms, so their frames never coexist. The Encap-arm packet mutation is likewise split
+    // out (encap_v6_egress) so its EncapParams/RawPkt locals don't inflate THIS frame while the
+    // fw/ct subprogram is live on top of it — keeping the deepest chain under 512B.
     match crate::egress::forward_decision_v6(ctx.data(), ctx.data_end(), ifindex, meta) {
         crate::egress::EgressVerdict::Pass => TC_ACT_OK,
         crate::egress::EgressVerdict::Drop => TC_ACT_SHOT,
@@ -295,35 +298,44 @@ pub fn tc_guest_egress_v6(ctx: TcContext) -> i32 {
             }
             TC_ACT_OK
         }
-        crate::egress::EgressVerdict::Encap(e) => {
-            if ctx
-                .adjust_room(crate::parse::IPV6_LEN as i32, BPF_ADJ_ROOM_MAC, 0)
-                .is_err()
-            {
-                return TC_ACT_OK;
-            }
-            if ctx
-                .pull_data((flowplane_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN) as u32)
-                .is_err()
-            {
-                return TC_ACT_OK;
-            }
-            let mut pkt = RawPkt::with_logical_len(ctx.data(), ctx.data_end(), ctx.len() as usize);
-            if flowplane_core::encap::write_outer_v6(&mut pkt, &e) {
-                if let Some(ts) = crate::meter::edt_stamp(ifindex, ctx.len() as u64) {
-                    unsafe {
-                        aya_ebpf::helpers::gen::bpf_skb_set_tstamp(
-                            ctx.skb.skb as *mut _,
-                            ts,
-                            BPF_SKB_TSTAMP_DELIVERY_MONO,
-                        );
-                    }
-                }
-                return unsafe { bpf_redirect(e.uplink_ifindex, 0) as i32 };
-            }
-            TC_ACT_SHOT
-        }
+        crate::egress::EgressVerdict::Encap(e) => encap_v6_egress(&ctx, ifindex, &e),
     }
+}
+
+/// Resize + write the outer IPv6 header for an inner-v6 overlay egress packet, then EDT-stamp and
+/// redirect out the uplink. Out-of-line (`#[inline(never)]`) so its `EncapParams`/`RawPkt` locals
+/// get their own BPF stack frame instead of inflating `tc_guest_egress_v6`'s frame — that frame is
+/// held live across the `egress_fw_ct_v6` subprogram call, and the two must stay under the 512B
+/// combined stack limit. `ctx` is passed by reference (only skb helpers are called on it — no
+/// packet pointer is cast/stored across the boundary).
+#[inline(never)]
+fn encap_v6_egress(ctx: &TcContext, ifindex: u32, e: &flowplane_core::encap::EncapParams) -> i32 {
+    if ctx
+        .adjust_room(crate::parse::IPV6_LEN as i32, BPF_ADJ_ROOM_MAC, 0)
+        .is_err()
+    {
+        return TC_ACT_OK;
+    }
+    if ctx
+        .pull_data((flowplane_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN) as u32)
+        .is_err()
+    {
+        return TC_ACT_OK;
+    }
+    let mut pkt = RawPkt::with_logical_len(ctx.data(), ctx.data_end(), ctx.len() as usize);
+    if flowplane_core::encap::write_outer_v6(&mut pkt, e) {
+        if let Some(ts) = crate::meter::edt_stamp(ifindex, ctx.len() as u64) {
+            unsafe {
+                aya_ebpf::helpers::gen::bpf_skb_set_tstamp(
+                    ctx.skb.skb as *mut _,
+                    ts,
+                    BPF_SKB_TSTAMP_DELIVERY_MONO,
+                );
+            }
+        }
+        return unsafe { bpf_redirect(e.uplink_ifindex, 0) as i32 };
+    }
+    TC_ACT_SHOT
 }
 
 /// tc DHCP responder: build the OFFER/ACK into the (resized) skb and redirect it back to the guest.
