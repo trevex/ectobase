@@ -303,6 +303,19 @@ pub struct CtKey {
     pub _pad: [u8; 3],
 }
 
+/// IPv6 conntrack key (firewall-only). Mirror of `CtKey` with 16-byte addresses.
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+pub struct CtKey6 {
+    pub vni: u32,
+    pub src_ip: [u8; 16],
+    pub dst_ip: [u8; 16],
+    pub src_port: u16,
+    pub dst_port: u16,
+    pub proto: u8,
+    pub _pad: [u8; 3],
+}
+
 /// NAT-GW config key: (vni, local guest IPv4).
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
@@ -400,6 +413,27 @@ pub struct FwRule {
     pub src_mask: [u8; 4],
     pub dst_ip: [u8; 4],
     pub dst_mask: [u8; 4],
+    pub src_port_min: u16,
+    pub src_port_max: u16,
+    pub dst_port_min: u16,
+    pub dst_port_max: u16,
+    pub icmp_type: u16,
+    pub icmp_code: u16,
+    pub proto: u8,
+    pub action: u8,
+    pub direction: u8,
+    pub enabled: u8,
+}
+
+/// IPv6 firewall rule (fixed-size POD). Identical to `FwRule` but 16-byte addresses/masks.
+/// Programmed into the parallel `FW_RULES6` map; the v4 `FwRule`/`FW_RULES` are untouched.
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
+pub struct FwRule6 {
+    pub src_ip: [u8; 16],
+    pub src_mask: [u8; 16],
+    pub dst_ip: [u8; 16],
+    pub dst_mask: [u8; 16],
     pub src_port_min: u16,
     pub src_port_max: u16,
     pub dst_port_min: u16,
@@ -527,6 +561,58 @@ pub fn fw_rule_matches(r: &FwRule, s: &PacketSelectors) -> bool {
                 && dport <= r.dst_port_max
         }
         1 => {
+            (r.icmp_type == 0xffff || icmp_type == r.icmp_type)
+                && (r.icmp_code == 0xffff || icmp_code == r.icmp_code)
+        }
+        _ => true,
+    }
+}
+
+/// IPv6 packet selectors (16-byte addresses). Mirror of `PacketSelectors`.
+pub struct PacketSelectors6 {
+    pub src: [u8; 16],
+    pub dst: [u8; 16],
+    pub proto: u8,
+    pub sport: u16,
+    pub dport: u16,
+    pub icmp_type: u16,
+    pub icmp_code: u16,
+}
+
+/// Pure IPv6 firewall match. Mirror of `fw_rule_matches`; ICMPv6 uses proto 58.
+#[inline]
+pub fn fw_rule6_matches(r: &FwRule6, s: &PacketSelectors6) -> bool {
+    let PacketSelectors6 {
+        src,
+        dst,
+        proto,
+        sport,
+        dport,
+        icmp_type,
+        icmp_code,
+    } = *s;
+    if r.enabled == 0 {
+        return false;
+    }
+    if r.proto != 0 && r.proto != proto {
+        return false;
+    }
+    for i in 0..16 {
+        if src[i] & r.src_mask[i] != r.src_ip[i] & r.src_mask[i] {
+            return false;
+        }
+        if dst[i] & r.dst_mask[i] != r.dst_ip[i] & r.dst_mask[i] {
+            return false;
+        }
+    }
+    match proto {
+        6 | 17 => {
+            sport >= r.src_port_min
+                && sport <= r.src_port_max
+                && dport >= r.dst_port_min
+                && dport <= r.dst_port_max
+        }
+        58 => {
             (r.icmp_type == 0xffff || icmp_type == r.icmp_type)
                 && (r.icmp_code == 0xffff || icmp_code == r.icmp_code)
         }
@@ -842,6 +928,16 @@ mod tests {
         assert_eq!(core::mem::size_of::<FwRule>(), 32);
         // 4 (ingress_count) + 4 (egress_count) = 8.
         assert_eq!(core::mem::size_of::<FwMeta>(), 8);
+    }
+
+    #[test]
+    fn fw6_types_layout() {
+        assert_eq!(core::mem::size_of::<FwRule6>(), 80);
+        assert_eq!(core::mem::size_of::<CtKey6>(), 44);
+        // regression guard: v4 layouts unchanged
+        assert_eq!(core::mem::size_of::<FwRule>(), 32);
+        assert_eq!(core::mem::size_of::<FwMeta>(), 8);
+        assert_eq!(core::mem::size_of::<CtKey>(), 20);
     }
 
     #[test]
