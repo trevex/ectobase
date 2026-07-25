@@ -9,9 +9,9 @@ use flowplane_common::{IfaceKey, IfaceMetaKey, IfaceMetaVal, Local, IFACE_DEV_MA
 
 use crate::loader;
 use crate::maps::{
-    Conntrack, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwRules, GuestDevMap, IfaceMetaMap,
-    Interfaces, Lb, LocalMap, Maglev, Meter, Nat, NatIps, NeighborNat, NeighborNatCount,
-    PortMetaMap, Routes, Routes6, UplinkDevMap, Vips,
+    Conntrack, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwMetaMap6, FwRules, FwRules6, GuestDevMap,
+    IfaceMetaMap, Interfaces, Lb, LocalMap, Maglev, Meter, Nat, NatIps, NeighborNat,
+    NeighborNatCount, PortMetaMap, Routes, Routes6, UplinkDevMap, Vips,
 };
 // `Nat`, `NatIps`, `NeighborNat`, `NeighborNatCount` are still opened in `bring_up`/the test ctor,
 // then moved into `AyaWriter` (they no longer live in `Inner`).
@@ -217,6 +217,8 @@ impl Control {
         let nat = Nat::open(&mut ebpf)?;
         let fw_rules = FwRules::open(&mut ebpf)?;
         let fw_meta = FwMetaMap::open(&mut ebpf)?;
+        let fw_rules6 = FwRules6::open(&mut ebpf)?;
+        let fw_meta6 = FwMetaMap6::open(&mut ebpf)?;
         let underlay = crate::maps::Underlay::open(&mut ebpf)?;
         let meter = Meter::open(&mut ebpf)?;
         let neigh_nat = NeighborNat::open(&mut ebpf)?;
@@ -238,6 +240,8 @@ impl Control {
             underlay,
             fw_rules,
             fw_meta,
+            fw_rules6,
+            fw_meta6,
             ports,
             ifaces,
             vips,

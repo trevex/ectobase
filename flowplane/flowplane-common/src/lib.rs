@@ -672,7 +672,9 @@ mod user_impls {
     unsafe impl aya::Pod for CtEntry {}
     unsafe impl aya::Pod for FwRuleKey {}
     unsafe impl aya::Pod for FwRule {}
+    unsafe impl aya::Pod for FwRule6 {}
     unsafe impl aya::Pod for FwMeta {}
+    unsafe impl aya::Pod for CtKey6 {}
     unsafe impl aya::Pod for NeighborNatEntry {}
     unsafe impl aya::Pod for MeterState {}
     unsafe impl aya::Pod for DhcpConfig {}
