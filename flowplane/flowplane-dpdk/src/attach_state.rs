@@ -1,0 +1,199 @@
+//! DPDK host-device attach state: the underlay /128 IPAM + the registry of attached guest devices
+//! (what B2b will af_xdp-bind + poll). Guarded by a Mutex; the attach/detach handlers are the only
+//! writers.
+//!
+//! `mac_for` and `host_veth_name` are transcribed verbatim from `flowplane/src/attach.rs`
+//! (`AttachState::mac_for` / `AttachState::host_veth_name`) so both backends produce identical
+//! deterministic names/MACs for the same interface_id.
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use flowplane_device::UnderlayIpam;
+
+/// One attached container device (veth host end).
+#[derive(Clone, Debug)]
+pub struct AttachedDevice {
+    pub host_ifindex: u32,
+    pub host_name: String,
+    pub netns_path: String,
+}
+
+/// Process-wide attach state: underlay IPAM (seeded from the node /64) + the interface_id → device
+/// registry. B2b iterates `registry` to bind/poll each guest af_xdp port.
+pub struct DpdkAttachState {
+    pub ipam: Mutex<UnderlayIpam>,
+    pub registry: Mutex<HashMap<Vec<u8>, AttachedDevice>>,
+    /// Guest link MTU (underlay MTU - encap overhead) applied to created veths.
+    pub guest_mtu: u32,
+    /// Gateway addresses programmed into IfaceParams (overlay gateway the datapath answers for).
+    pub gateway_ipv4: [u8; 4],
+    pub gateway_ipv6: [u8; 16],
+}
+
+impl DpdkAttachState {
+    pub fn register(&self, id: Vec<u8>, dev: AttachedDevice) {
+        self.registry.lock().unwrap().insert(id, dev);
+    }
+
+    pub fn forget(&self, id: &[u8]) -> Option<AttachedDevice> {
+        self.registry.lock().unwrap().remove(id)
+    }
+}
+
+/// A locally-administered unicast MAC (02:xx:...) derived DETERMINISTICALLY from the
+/// `interface_id` (FNV-1a). Transcribed verbatim from `flowplane/src/attach.rs`
+/// `AttachState::mac_for` so both backends agree on the MAC for the same id.
+///
+/// Determinism is a correctness requirement: on detach the datapath's current guest MAC is cached
+/// in `learned_macs` (control.rs) so a detach+re-attach of the SAME interface preserves it; a
+/// per-attach counter would hand the re-created veth a NEW MAC while the maps kept the cached OLD
+/// one, so `uplink_rx` would deliver returns to the stale MAC and the guest would drop them.
+pub fn mac_for(interface_id: &str) -> [u8; 6] {
+    let mut h: u32 = 2166136261;
+    for b in interface_id.as_bytes() {
+        h = (h ^ *b as u32).wrapping_mul(16777619);
+    }
+    let s = h.to_be_bytes();
+    [0x02, 0x00, s[0], s[1], s[2], s[3]]
+}
+
+/// Host-side veth name for an interface. Transcribed verbatim from `flowplane/src/attach.rs`
+/// `AttachState::host_veth_name` so both backends produce the same root-netns device name.
+///
+/// Kernel IFNAMSIZ caps names at 15 chars, and `flowplane_device::create_veth_pair` derives the
+/// temporary peer name as `<host>p` (one char longer) — so the host name itself must be <= 14
+/// chars for the pair to create. Longer ids are hashed to a fixed 13-char name.
+pub fn host_veth_name(interface_id: &str) -> String {
+    // "veth-<id>" when it (plus the +1 peer suffix) fits; otherwise a stable short hash.
+    let candidate = format!("veth-{interface_id}");
+    if candidate.len() <= 14 {
+        candidate
+    } else {
+        let mut h: u32 = 2166136261;
+        for b in interface_id.as_bytes() {
+            h = (h ^ *b as u32).wrapping_mul(16777619);
+        }
+        format!("veth-{h:08x}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flowplane_device::UnderlayIpam;
+
+    fn make_state() -> DpdkAttachState {
+        let prefix: ipnet::Ipv6Net = "fd00:db8:0:1::/64".parse().unwrap();
+        DpdkAttachState {
+            ipam: Mutex::new(UnderlayIpam::new(prefix)),
+            registry: Mutex::new(HashMap::new()),
+            guest_mtu: 1400,
+            gateway_ipv4: [169, 254, 0, 1],
+            gateway_ipv6: [0u8; 16],
+        }
+    }
+
+    // ── mac_for ──────────────────────────────────────────────────────────────
+    #[test]
+    fn mac_for_is_deterministic() {
+        assert_eq!(mac_for("natpod"), mac_for("natpod"));
+    }
+
+    #[test]
+    fn mac_for_is_locally_administered_unicast() {
+        let m = mac_for("natpod");
+        // Locally-administered (bit 1 set) unicast (bit 0 clear).
+        assert_eq!(m[0] & 0x03, 0x02, "must be locally-administered unicast");
+    }
+
+    #[test]
+    fn mac_for_distinct_ids_distinct_macs() {
+        assert_ne!(mac_for("natpod"), mac_for("web"));
+        assert_ne!(mac_for("natpod"), mac_for("natpod2"));
+    }
+
+    #[test]
+    fn mac_for_matches_ebpf_known_value() {
+        // Regression: the FNV-1a fold must produce the SAME bytes as `AttachState::mac_for` in
+        // `flowplane/src/attach.rs`. Cross-check with a known input.
+        let ebpf = {
+            let mut h: u32 = 2166136261;
+            for b in "natpod".as_bytes() {
+                h = (h ^ *b as u32).wrapping_mul(16777619);
+            }
+            let s = h.to_be_bytes();
+            [0x02u8, 0x00, s[0], s[1], s[2], s[3]]
+        };
+        assert_eq!(mac_for("natpod"), ebpf);
+    }
+
+    // ── host_veth_name ───────────────────────────────────────────────────────
+    #[test]
+    fn host_veth_name_short_passthrough() {
+        assert_eq!(host_veth_name("t0"), "veth-t0");
+    }
+
+    #[test]
+    fn host_veth_name_long_is_hashed_and_fits() {
+        let n = host_veth_name("a-very-long-interface-id-way-over-ifnamsiz");
+        // The host name PLUS the +1 peer suffix must fit IFNAMSIZ (15).
+        assert!(
+            n.len() <= 14,
+            "{n} leaves no room for the +1 veth peer suffix"
+        );
+        assert!(n.starts_with("veth-"));
+    }
+
+    #[test]
+    fn host_veth_name_15char_boundary_is_hashed() {
+        // "blue-guest" → "veth-blue-guest" is exactly 15 chars; the peer ("veth-blue-guestp")
+        // would be 16 — exceeds IFNAMSIZ, so must be hashed.
+        let n = host_veth_name("blue-guest");
+        assert_eq!(n.len(), 13, "{n} should be the 13-char hashed form");
+        assert!(n.starts_with("veth-"));
+    }
+
+    #[test]
+    fn host_veth_name_matches_ebpf() {
+        // The hash algorithm must be identical to `AttachState::host_veth_name` (FNV-1a, same fold).
+        let id = "a-very-long-interface-id-way-over-ifnamsiz";
+        let ebpf = {
+            let mut h: u32 = 2166136261;
+            for b in id.as_bytes() {
+                h = (h ^ *b as u32).wrapping_mul(16777619);
+            }
+            format!("veth-{h:08x}")
+        };
+        assert_eq!(host_veth_name(id), ebpf);
+    }
+
+    // ── DpdkAttachState registry ─────────────────────────────────────────────
+    #[test]
+    fn register_and_forget() {
+        let state = make_state();
+        let id = b"iface0".to_vec();
+        let dev = AttachedDevice {
+            host_ifindex: 42,
+            host_name: "veth-iface0".into(),
+            netns_path: "/var/run/netns/ns0".into(),
+        };
+        state.register(id.clone(), dev);
+        let got = state.forget(&id);
+        assert!(got.is_some());
+        assert_eq!(got.unwrap().host_ifindex, 42);
+        // Second forget returns None.
+        assert!(state.forget(&id).is_none());
+    }
+
+    #[test]
+    fn ipam_allocates_from_second_half() {
+        let state = make_state();
+        let addr = state.ipam.lock().unwrap().allocate().unwrap();
+        // The second half of fd00:db8:0:1::/64 starts at fd00:db8:0:1:8000::
+        assert_eq!(
+            addr,
+            "fd00:db8:0:1:8000::".parse::<std::net::Ipv6Addr>().unwrap()
+        );
+    }
+}

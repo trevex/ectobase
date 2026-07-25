@@ -34,6 +34,15 @@ use flowplane_control::shadow::IfaceMeta;
 use flowplane_control::{ControlCore, IfaceParams};
 use flowplane_node::{first_ipv4, first_ipv6, parse_mac};
 
+/// Format a 6-byte MAC as `"aa:bb:cc:dd:ee:ff"` (lowercase, colon-separated). Mirrors
+/// `fmt_mac` in `flowplane/src/attach.rs` so the response MAC format is identical.
+fn fmt_mac(m: [u8; 6]) -> String {
+    format!(
+        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        m[0], m[1], m[2], m[3], m[4], m[5]
+    )
+}
+
 use crate::writer::DpdkMapWriter;
 
 pub use flowplane_node::pb;
@@ -54,6 +63,8 @@ pub struct DpdkNodeService {
     ctrl: Arc<Mutex<ControlCore<DpdkMapWriter>>>,
     #[allow(dead_code)] // held for symmetry + future getter-based reads (e.g. B2 device state)
     shared: Arc<SharedConfigMaps>,
+    /// B2a host-device attach state: underlay IPAM + the registry of active guest veths.
+    attach: Arc<crate::attach_state::DpdkAttachState>,
 }
 
 impl DpdkNodeService {
@@ -61,8 +72,13 @@ impl DpdkNodeService {
     pub fn new(
         ctrl: Arc<Mutex<ControlCore<DpdkMapWriter>>>,
         shared: Arc<SharedConfigMaps>,
+        attach: Arc<crate::attach_state::DpdkAttachState>,
     ) -> Self {
-        Self { ctrl, shared }
+        Self {
+            ctrl,
+            shared,
+            attach,
+        }
     }
 }
 
@@ -73,53 +89,139 @@ impl DataplaneNode for DpdkNodeService {
         req: Request<AttachInterfaceRequest>,
     ) -> Result<Response<AttachInterfaceResponse>, Status> {
         let r = req.into_inner();
-        // Program the AGNOSTIC map half so the config tables (PORT_META/INTERFACES/UNDERLAY/routes/
-        // IFACE_META) are populated + exercised by parity fixtures. The DPDK host-device step (tap/
-        // veth creation, real ifindex/MAC + underlay IPAM) is B2, so the device-derived fields the
-        // eBPF attach resolves are stubbed here: tap ifindex 0, the requested MAC as effective MAC,
-        // and a zero underlay when unset. A B2-complete attach re-runs this with real values
-        // (idempotent upserts overwrite), so this leaves no harmful orphan state.
+        // B2a supports the container/veth device_type only (Tap/PodTap are eBPF-only for now).
+        if !(r.device_type.is_empty() || r.device_type == "veth") {
+            return Err(Status::invalid_argument(format!(
+                "device_type {:?} not supported on DPDK yet (B2a = veth/container only)",
+                r.device_type
+            )));
+        }
         let ipv4 = first_ipv4(&r.requested_ips);
         let ipv6 = first_ipv6(&r.requested_ips);
-        let effective_mac = if r.mac.is_empty() {
-            [0u8; 6]
+        // Require an overlay IPv4 (matches the eBPF attach). This is NOT about the underlay (always
+        // IPv6); it reflects the current interface model: `program_interface` keys the INTERFACES
+        // local-delivery map on the overlay IPv4 and programs an unconditional /32 self-route, while
+        // IPv6 is an OPTIONAL secondary. So IPv4-only and dual-stack are supported; a true IPv6-only
+        // overlay is not yet representable in either backend (would need a v6-keyed INTERFACES — a
+        // separate cross-backend change). Reject rather than program a bogus 0.0.0.0 interface.
+        if ipv4 == [0u8; 4] {
+            return Err(Status::invalid_argument(
+                "attach requires at least one overlay IPv4 (IPv6-only overlays not yet supported)",
+            ));
+        }
+        // MAC: honour a caller-supplied MAC, else derive a stable deterministic one (FNV-1a of
+        // interface_id, same as the eBPF `AttachState::mac_for`).
+        let mac = if r.mac.is_empty() {
+            crate::attach_state::mac_for(&r.interface_id)
         } else {
             parse_mac(&r.mac).map_err(|e| Status::invalid_argument(e.to_string()))?
         };
+        // Deterministic host-side veth name (mirrors eBPF `AttachState::host_veth_name`).
+        let host_name = crate::attach_state::host_veth_name(&r.interface_id);
+        // Guest-side interface name inside the netns (mirrors eBPF: guest_name = interface_id).
+        let guest_name = r.interface_id.clone();
+
+        let attach = self.attach.clone();
+
+        // Underlay /128 from the node's /64 pool. Allocate before the device (rollback on error).
+        let underlay = {
+            let mut ipam = attach.ipam.lock().unwrap();
+            ipam.allocate()
+                .ok_or_else(|| Status::resource_exhausted("underlay /64 exhausted"))?
+                .octets()
+        };
+
+        // Create the veth pair off-thread (shells out to `ip`; must not block the tokio worker).
+        let spec = flowplane_device::VethSpec {
+            host_name: host_name.clone(),
+            guest_name: guest_name.clone(),
+            netns_path: r.netns_path.clone(),
+            mac,
+            mtu: attach.guest_mtu,
+            disable_csum_offload: false, // real NIC finalizes csum; clab detection is a follow-up
+        };
+        let info =
+            match tokio::task::spawn_blocking(move || flowplane_device::create_veth_pair(&spec))
+                .await
+                .map_err(|e| Status::internal(format!("attach task panicked: {e}")))?
+            {
+                Ok(info) => info,
+                Err(e) => {
+                    // Roll back the IPAM allocation so the /128 isn't leaked.
+                    attach
+                        .ipam
+                        .lock()
+                        .unwrap()
+                        .release(std::net::Ipv6Addr::from(underlay));
+                    return Err(Status::internal(format!("create veth: {e}")));
+                }
+            };
+
+        // Program the shared maps with REAL device-resolved values under the ctrl lock.
+        // The lock is taken, the sync ControlCore call runs, and the lock is DROPPED before any
+        // .await (parking_lot guards are not async-aware).
         {
             let mut core = self.ctrl.lock();
-            core.program_interface(IfaceParams {
+            if let Err(e) = core.program_interface(IfaceParams {
                 interface_id: r.interface_id.clone().into_bytes(),
-                device: String::new(),
-                tap: 0,
-                effective_mac,
+                device: info.host_name.clone(),
+                tap: info.host_ifindex,
+                effective_mac: info.mac,
                 vni: r.vni,
                 ipv4,
                 ipv6,
-                gateway_ipv4: [0u8; 4],
-                gateway_ipv6: [0u8; 16],
-                underlay_ipv6: [0u8; 16],
+                gateway_ipv4: attach.gateway_ipv4,
+                gateway_ipv6: attach.gateway_ipv6,
+                underlay_ipv6: underlay,
                 total_mbps: 0,
                 public_mbps: 0,
-            })
-            .map_err(|e| Status::internal(e.to_string()))?;
+            }) {
+                // Roll back: drop the ctrl lock FIRST, then delete the veth (best-effort, shells
+                // out) + release the IPAM slot — never block on a subprocess under the lock.
+                drop(core);
+                flowplane_device::delete_link(&info.host_name);
+                attach
+                    .ipam
+                    .lock()
+                    .unwrap()
+                    .release(std::net::Ipv6Addr::from(underlay));
+                return Err(Status::internal(e.to_string()));
+            }
             core.register_iface_meta(
                 r.interface_id.clone().into_bytes(),
                 IfaceMeta {
                     vni: r.vni,
                     ipv4,
                     ipv6,
-                    underlay: [0u8; 16],
-                    ifindex: 0,
+                    underlay,
+                    ifindex: info.host_ifindex,
                 },
             );
-        }
-        // The agnostic maps are programmed; the physical device does NOT exist yet. Signal
-        // Unimplemented rather than return a bogus AttachInterfaceResponse (B2 stands the tap/veth up
-        // and returns the real ifname/ips/underlay).
-        Err(Status::unimplemented(
-            "DPDK host-device attach is B2 (agnostic maps programmed)",
-        ))
+        } // ctrl lock dropped here
+
+        // Register the live device so detach can tear it down and B2b can af_xdp-bind it.
+        attach.register(
+            r.interface_id.clone().into_bytes(),
+            crate::attach_state::AttachedDevice {
+                host_ifindex: info.host_ifindex,
+                host_name: info.host_name.clone(),
+                netns_path: r.netns_path.clone(),
+            },
+        );
+
+        // Build the response mirroring the eBPF `AttachOutcome` → `AttachInterfaceResponse` mapping
+        // (flowplane/src/attach.rs + node.rs): ifname = guest name inside the netns (= interface_id
+        // for Veth), ips = [overlay_ipv4], mac = "aa:bb:.." string, gateway = IPv4 gateway string,
+        // underlay_route = /128 as "xxxx::yyyy" string.
+        Ok(Response::new(AttachInterfaceResponse {
+            ifname: guest_name,
+            // Single resolved IPv4 (guaranteed present by the guard above) — identical shape to the
+            // eBPF attach response.
+            ips: vec![std::net::Ipv4Addr::from(ipv4).to_string()],
+            mac: fmt_mac(mac),
+            gateway: std::net::Ipv4Addr::from(attach.gateway_ipv4).to_string(),
+            underlay_route: std::net::Ipv6Addr::from(underlay).to_string(),
+        }))
     }
 
     async fn detach_interface(
@@ -127,9 +229,18 @@ impl DataplaneNode for DpdkNodeService {
         req: Request<DetachInterfaceRequest>,
     ) -> Result<Response<DetachInterfaceResponse>, Status> {
         let id = req.into_inner().interface_id.into_bytes();
-        // Undo the agnostic map half: purge the interface's VNI state (neigh-NAT/VIP/NAT/routes for
-        // its guest IP) + drop its meta record. Symmetric with attach; the device teardown (tap/veth
-        // destroy) is B2. Purge is best-effort against whatever attach programmed.
+
+        // Snapshot the underlay /128 before the maps are purged (so we can release the IPAM slot).
+        let underlay_to_release = {
+            let core = self.ctrl.lock();
+            core.iface_meta_rows()
+                .into_iter()
+                .find(|(rid, ..)| rid.as_slice() == id.as_slice())
+                .map(|(_, _, _, _, ul, _)| ul)
+        };
+
+        // Undo the agnostic map half: purge the interface's VNI state + drop its meta record.
+        // Best-effort: run ALL reclaim steps regardless of a purge error.
         {
             let mut core = self.ctrl.lock();
             if let Some((vni, ipv4)) = core
@@ -138,15 +249,34 @@ impl DataplaneNode for DpdkNodeService {
                 .find(|(rid, ..)| rid.as_slice() == id.as_slice())
                 .map(|(_, vni, ipv4, ..)| (vni, ipv4))
             {
-                core.purge_vni(vni, ipv4)
-                    .map_err(|e| Status::internal(e.to_string()))?;
+                // Best-effort: a purge error must NOT short-circuit the remaining reclaim (meta
+                // drop, IPAM release, veth teardown), else the /128 leaks and the veth dangles.
+                let _ = core.purge_vni(vni, ipv4);
             }
             core.forget_iface_meta(&id);
+        } // ctrl lock dropped here
+
+        // Release the underlay /128 back to the IPAM pool.
+        if let Some(ul) = underlay_to_release {
+            if ul != [0u8; 16] {
+                self.attach
+                    .ipam
+                    .lock()
+                    .unwrap()
+                    .release(std::net::Ipv6Addr::from(ul));
+            }
         }
-        // Agnostic state torn down; the physical device teardown is B2.
-        Err(Status::unimplemented(
-            "DPDK host-device detach is B2 (agnostic maps purged)",
-        ))
+
+        // Tear down the host-side veth (its guest peer in the netns goes with it). Look up the
+        // registry entry for the device name; a missing entry (e.g. partial attach) is fine.
+        if let Some(dev) = self.attach.forget(&id) {
+            let host_name = dev.host_name.clone();
+            tokio::task::spawn_blocking(move || flowplane_device::delete_link(&host_name))
+                .await
+                .map_err(|e| Status::internal(format!("detach task panicked: {e}")))?;
+        }
+
+        Ok(Response::new(DetachInterfaceResponse {}))
     }
 
     async fn list_interfaces(
@@ -154,8 +284,8 @@ impl DataplaneNode for DpdkNodeService {
         _req: Request<ListInterfacesRequest>,
     ) -> Result<Response<ListInterfacesResponse>, Status> {
         // Read the agnostic interface-meta rows from ControlCore (the DPDK source of truth for the
-        // attached set). NOTE: on DPDK the underlay is B2 (not yet IPAM-allocated), so `underlay_route`
-        // renders as "::" until B2 wires real underlay allocation; vni + overlay IPs are populated.
+        // attached set). `underlay_route` is the IPAM-allocated /128 recorded at attach (B2a); it
+        // renders as "::" only for a row with no allocated underlay.
         let rows = self.ctrl.lock().iface_meta_rows();
         let interfaces = rows
             .into_iter()
@@ -371,7 +501,16 @@ mod tests {
         let ctrl = Arc::new(Mutex::new(ControlCore::new(DpdkMapWriter::new(
             shared.clone(),
         ))));
-        let svc = DpdkNodeService::new(ctrl.clone(), shared.clone());
+        // Stub attach state (no real underlay inference needed for this route test).
+        let prefix: ipnet::Ipv6Net = "fd00:db8:0:1::/64".parse().unwrap();
+        let attach = Arc::new(crate::attach_state::DpdkAttachState {
+            ipam: std::sync::Mutex::new(flowplane_device::UnderlayIpam::new(prefix)),
+            registry: std::sync::Mutex::new(std::collections::HashMap::new()),
+            guest_mtu: 1450,
+            gateway_ipv4: [169, 254, 0, 1],
+            gateway_ipv6: [0u8; 16],
+        });
+        let svc = DpdkNodeService::new(ctrl.clone(), shared.clone(), attach);
 
         let resp = svc
             .add_route(Request::new(pb::AddRouteRequest {

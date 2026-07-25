@@ -34,6 +34,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use clap::{Parser, ValueEnum};
+use ipnet::Ipv6Net;
 use nfkit::{
     Backend, ComposedMaps, Eal, LcoreRuntime, MbufBurst, MbufPkt, Mempool, PerLcoreFlowMaps, Port,
     SharedConfigMaps,
@@ -44,6 +45,8 @@ use flowplane_core::datapath::{process_uplink_rx, UplinkIn};
 use flowplane_core::maps::Maps; // brings `underlay_get`/`local` method syntax into scope on ComposedMaps
 use flowplane_core::pkt::{Action, Pkt}; // `Pkt` brings `read_array` into scope on MbufPkt
 use nfkit::monotonic_ns;
+
+use crate::attach_state::DpdkAttachState;
 
 use crate::node::{pb, DpdkNodeService};
 use crate::writer::DpdkMapWriter;
@@ -222,6 +225,58 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         DpdkMapWriter::new(shared.clone()),
     )));
 
+    // ── 5b. B2a attach state: underlay IPAM + device registry ─────────────────
+    // Seed `UnderlayIpam` from `--local-underlay` if set (parsed as a /64 to truncate to the
+    // network address), else infer from the host's interface addresses. The guest_mtu defaults to
+    // a sane 1450 (underlay MTU 1500 - 40-byte outer IPv6 - 8-byte encap header) when not set.
+    let underlay_prefix: Ipv6Net = match &args.local_underlay {
+        Some(s) => {
+            // Parse as a /128 host address + build the /64 network around it.
+            let ip: std::net::Ipv6Addr = s
+                .parse()
+                .with_context(|| format!("parse --local-underlay {s:?} as IPv6"))?;
+            Ipv6Net::new(ip, 64)
+                .map_err(|e| anyhow::anyhow!("build /64 from --local-underlay {s}: {e}"))?
+                .trunc()
+        }
+        None => flowplane_device::infer_underlay_prefix(&flowplane_device::read_host_ifaddrs()?)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "could not infer underlay /64 from host interfaces; set --local-underlay"
+                )
+            })?,
+    };
+    let gateway_ipv4: [u8; 4] = args
+        .gateway
+        .parse::<std::net::Ipv4Addr>()
+        .with_context(|| format!("parse --gateway {:?}", args.gateway))?
+        .octets();
+    let gateway_ipv6: [u8; 16] = args
+        .gateway6
+        .as_deref()
+        .map(|s| {
+            s.parse::<std::net::Ipv6Addr>()
+                .with_context(|| format!("parse --gateway6 {s:?}"))
+                .map(|a| a.octets())
+        })
+        .transpose()?
+        .unwrap_or([0u8; 16]);
+    /// Default guest MTU = 1500 (underlay) − 40 (outer IPv6 header) − 8 (encap overhead for
+    /// the Geneve-style encap) = 1452, but we use 1450 to round down safely.
+    const DEFAULT_GUEST_MTU: u32 = 1450;
+    let guest_mtu = args.guest_mtu.unwrap_or(DEFAULT_GUEST_MTU);
+    let attach_state = Arc::new(DpdkAttachState {
+        ipam: std::sync::Mutex::new(flowplane_device::UnderlayIpam::new(underlay_prefix)),
+        registry: std::sync::Mutex::new(std::collections::HashMap::new()),
+        guest_mtu,
+        gateway_ipv4,
+        gateway_ipv6,
+    });
+    println!(
+        "B2a attach state: underlay prefix={underlay_prefix}, gateway={}, guest_mtu={guest_mtu}",
+        args.gateway
+    );
+
     // ── 6. Datapath workers on a dedicated OS thread ────────────────────────────
     // `for_each_worker` BLOCKS until every worker lcore joins, so it must run OFF the tokio thread.
     // The workers read `shared` lock-free (deref the captured Arc to `&*shared`, sound because
@@ -275,10 +330,10 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         .add_service(health_service)
         // The DataplaneNode service. Its handlers lock `ctrl` (the sole writer) to drive the SAME
         // `ControlCore` orchestration the eBPF binary runs; `shared` backs getter-based reads. The
-        // agnostic RPCs (routes/NAT/LB/fw/QoS) program the config maps; Attach/Detach program the
-        // agnostic half and return Unimplemented (the host-device step is B2). See `node.rs`.
+        // agnostic RPCs (routes/NAT/LB/fw/QoS) program the config maps; Attach/Detach stand up the
+        // container veth device (B2a) — af_xdp bind + guest-traffic polling is B2b. See `node.rs`.
         .add_service(pb::dataplane_node_server::DataplaneNodeServer::new(
-            DpdkNodeService::new(ctrl.clone(), shared.clone()),
+            DpdkNodeService::new(ctrl.clone(), shared.clone(), attach_state.clone()),
         ))
         .serve_with_shutdown(addr, shutdown)
         .await;

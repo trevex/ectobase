@@ -7,9 +7,7 @@
 //!
 //! Inference is exposed via the `flowplane infer-underlay` subcommand (a root-free observability hook
 //! the containerlab IPv6-fabric e2e asserts on). The bringup path that CONSUMES the inferred /64 for
-//! IPAM lands in a follow-up task, so `UnderlayIpam` is still only exercised by unit tests; hence
-//! `allow(dead_code)` in non-test builds, mirroring the `maps.rs` convention for test-driven code.
-#![cfg_attr(not(test), allow(dead_code))]
+//! IPAM is wired by `flowplane-dpdk`'s `DpdkAttachState` and `flowplane`'s `AttachState`.
 use ipnet::Ipv6Net;
 use std::collections::BTreeSet;
 use std::net::Ipv6Addr;

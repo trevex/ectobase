@@ -6,4 +6,4 @@ license.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-ipnet = "2"
+ipnet = { workspace = true }

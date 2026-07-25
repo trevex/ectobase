@@ -9,7 +9,9 @@ publish = false
 flowplane-common = { path = "../flowplane-common", features = ["user"] }
 flowplane-control = { path = "../flowplane-control" }
 flowplane-core = { path = "../flowplane-core" }
+flowplane-device = { path = "../flowplane-device" }
 flowplane-node = { path = "../flowplane-node" }
+ipnet = { workspace = true }
 nfkit = { path = "../nfkit" }
 anyhow = { workspace = true }
 tokio = { workspace = true }
