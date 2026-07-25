@@ -77,6 +77,25 @@ struct GuestPort {
     host_ifindex: u32,
 }
 
+/// Round-robin ownership predicate: worker `q` owns the guest port at `port_index` iff
+/// `port_index % n_workers == q`. This partitions the preallocated guest af_xdp pool across ALL
+/// worker lcores (each guest port is polled by exactly one worker), so guest egress scales with the
+/// lcore count instead of pinning every guest to worker 0. It is the sole source of truth for the
+/// partition: used both by `worker_loop` to build its strided `guest_qs` and by the unit test below.
+/// Generalizes the first-slice default (1 guest port + 1 worker → `owns(0, 0, 1) == true`, every
+/// other worker owns none) rather than regressing it.
+///
+/// Cross-lcore model: per-lcore flow state stays shared-nothing (each worker has its own
+/// `PerLcoreFlowMaps` conntrack). When a guest egresses, its SNAT reverse entry lands in its OWNING
+/// lcore's per-lcore CT AND in the writer-owned `shared_ct`. The matching NAT return arrives on the
+/// uplink and is RSS-steered to a possibly DIFFERENT worker; that worker misses in its per-lcore CT
+/// and resolves the reverse-DNAT via `shared_ct` — the exact cross-lcore demux mechanism proven by
+/// `nfkit/tests/multilcore_nat_return.rs`. So partitioning guests across lcores is safe precisely
+/// because return demux never depends on which lcore owns the originating guest port.
+fn owns(port_index: usize, q: u16, n_workers: u16) -> bool {
+    port_index % n_workers as usize == q as usize
+}
+
 /// Default guest MTU = 1500 (underlay) − 40 (outer IPv6 header) − 8 (encap overhead for the
 /// Geneve-style encap) = 1452, but we use 1450 to round down safely. Used both for the preallocated
 /// guest veths (before EAL init) and the attach-state default.
@@ -464,10 +483,19 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
             // Do not "simplify" it to `let _`.
             let guest_ports = guest_ports; // move into the thread; borrowed by the Sync closure below
             LcoreRuntime::for_each_worker(n_workers, |q| {
-                // First slice: worker 0 owns ALL preallocated guest ports; other workers own none.
-                // (Multi-worker guest-port partitioning across lcores is a follow-up.)
-                let owned: &[GuestPort] = if q == 0 { &guest_ports } else { &[] };
-                worker_loop(q, &shared_for_workers, &port, owned, &stop_w);
+                // Partition the preallocated guest ports round-robin across ALL worker lcores: worker
+                // `q` polls `guest_ports[i]` where `owns(i, q, n_workers)`. We pass the FULL slice plus
+                // `(q, n_workers)` (a strided subset is not a contiguous slice, so `worker_loop`
+                // rebuilds it via the `owns` filter). A worker that owns zero guest ports just runs an
+                // empty guest block — identical to the old non-worker-0 path.
+                worker_loop(
+                    q,
+                    n_workers,
+                    &shared_for_workers,
+                    &port,
+                    &guest_ports,
+                    &stop_w,
+                );
             });
         })
         .context("spawn datapath worker thread")?;
@@ -554,7 +582,9 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
 /// mbuf onto the uplink tx burst; `Drop` (or a frame with no resolvable underlay) frees the mbuf by
 /// letting it fall out of scope (`Mbuf`'s Drop returns it to the pool).
 ///
-/// GUEST block (Task 3): for each owned guest port, rx its single queue and run the shared-core
+/// GUEST block (Task 3): worker `q` owns the STRIDED subset of `guest_ports` for which
+/// `owns(i, q, n_workers)` (round-robin by port index). For each owned guest port, rx its single
+/// queue and run the shared-core
 /// `process_guest_tx` (the exact seam Task 1's `guest_tx_datapath.rs` proves DPDK==sim on). Resolve
 /// the sending guest's `PortMeta` by the port's host veth ifindex (`ports_get`); an unbound pool port
 /// (no guest attached yet, Task 4 binds them) has no `PortMeta` → drop. The encap arm returns
@@ -571,6 +601,7 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
 /// port) is wired in Task 5 via exactly this reserved `TxQueue`.
 fn worker_loop(
     q: u16,
+    n_workers: u16,
     shared: &SharedConfigMaps,
     port: &Port,
     guest_ports: &[GuestPort],
@@ -594,9 +625,16 @@ fn worker_loop(
     // Build the guest rx/tx handles ONCE, here on this lcore (the queue handles are `!Send`, so they
     // must be constructed on the worker lcore, never moved in). Guest ports are single-queue (queue
     // 0). `_gtx` is the RESERVED fabric→guest return-path TxQueue (Task 5); Task 3 uses only `grx`.
+    //
+    // PARTITION: this worker owns the round-robin subset `{ guest_ports[i] : owns(i, q, n_workers) }`
+    // (see `owns`). We take the FULL slice and stride it here rather than receiving a pre-sliced
+    // subset, because a strided subset is not a contiguous slice. A worker owning zero guest ports
+    // ends up with an empty `guest_qs` → the guest block below loops over nothing.
     let mut guest_qs: Vec<(u32, nfkit::RxQueue, nfkit::TxQueue)> = guest_ports
         .iter()
-        .map(|gp| {
+        .enumerate()
+        .filter(|(i, _)| owns(*i, q, n_workers))
+        .map(|(_, gp)| {
             let (r, t) = gp.port.queue(0);
             (gp.host_ifindex, r, t)
         })
@@ -836,6 +874,41 @@ mod tests {
         assert_eq!(a.eal_lcore_list(), "0-1");
         assert_eq!(a.worker_lcores(), 1);
         assert!(!a.no_huge);
+    }
+
+    /// The round-robin guest-port partition predicate (`owns`): each guest port is owned by exactly
+    /// one worker (`i % n_workers`), the partition generalizes the first-slice 1-port/1-worker default
+    /// (`owns(0, 0, 1)`), and no port is owned by two workers.
+    #[test]
+    fn owns_partitions_guest_ports_round_robin() {
+        // n_workers = 2: even ports → w0, odd ports → w1.
+        assert!(owns(0, 0, 2));
+        assert!(!owns(0, 1, 2));
+        assert!(!owns(1, 0, 2));
+        assert!(owns(1, 1, 2));
+        assert!(owns(2, 0, 2));
+        assert!(!owns(2, 1, 2));
+        assert!(!owns(3, 0, 2));
+        assert!(owns(3, 1, 2));
+
+        // n_workers = 1 (first-slice default): every port → w0.
+        assert!(owns(0, 0, 1));
+        assert!(owns(1, 0, 1));
+        assert!(owns(42, 0, 1));
+
+        // n_workers = 3: 0→w0, 1→w1, 2→w2, 3→w0.
+        assert!(owns(0, 0, 3));
+        assert!(owns(1, 1, 3));
+        assert!(owns(2, 2, 3));
+        assert!(owns(3, 0, 3));
+
+        // Every port is owned by exactly one worker (no gaps, no overlaps).
+        for n_workers in 1u16..=4 {
+            for i in 0usize..16 {
+                let owners = (0..n_workers).filter(|q| owns(i, *q, n_workers)).count();
+                assert_eq!(owners, 1, "port {i} with {n_workers} workers");
+            }
+        }
     }
 
     /// `--guest-ports` parses to the requested count (VF-style preallocated per-guest af_xdp pool).
