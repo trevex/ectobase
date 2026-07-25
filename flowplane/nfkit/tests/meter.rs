@@ -202,4 +202,39 @@ fn meter_config_and_policing() {
             "(2c) with no meter config the public lane is unlimited (all pass)"
         );
     }
+
+    // ── (2d) EDT egress-shaping lane: a configured total_bps now yields a departure timestamp ──
+    // The `total` lane SHAPES (EDT) rather than polices. With no shared config it was unreachable
+    // (meter_get → None); now a configured total_bps composes through and `edt_egress` stamps a
+    // departure time on the encap arm (was always None). Exercises the third meter lane end-to-end.
+    assert!(sc.meter_config_insert(
+        SRC_IFINDEX,
+        MeterConfig {
+            total_bps: 1_000_000,
+            total_burst: 100_000,
+            public_bps: 0,
+            public_burst: 0,
+            ingress_bps: 0,
+            ingress_burst: 0,
+        },
+    ));
+    let flow4 = PerLcoreFlowMaps::new(0).expect("per-lcore flow 4");
+    let mut maps4 = ComposedMaps {
+        cfg: &sc,
+        flow: flow4,
+    };
+    let mut mb = pool.alloc().expect("alloc");
+    mb.append(frame.len() as u16).expect("append");
+    mb.data_mut().copy_from_slice(&frame);
+    let mut mp = MbufPkt::new(&mut mb);
+    let out = process_guest_tx(&mut mp, &mut maps4, &in_);
+    assert_eq!(
+        out.action,
+        Action::Redirect(UPLINK_IFINDEX),
+        "(2d) EDT-shaped frame is still forwarded"
+    );
+    assert!(
+        out.edt_tstamp.is_some(),
+        "(2d) EDT lane active (total_bps>0) → a departure timestamp is stamped (was None unconfigured)"
+    );
 }
