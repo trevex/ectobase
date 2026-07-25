@@ -142,6 +142,48 @@ inner ethertype `0x86DD`, inner IPv6 dst = guest overlay v6) — the NAT64 analo
 
 ---
 
+## 4. Dead guest pool slots (pod netns destroyed WITHOUT detach) — DETECTED + EXCLUDED (live recovery is a follow-up)
+
+**Fixed** (`feat/dpdk-guest-egress-followups`, Task 6). The DPDK attach model binds a
+PREALLOCATED guest af_xdp pool slot (`GuestPortSlot { host_ifname, host_ifindex,
+port_id, bound, dead }`): attach reserves a free slot and moves its placeholder
+guest-end into the pod netns; detach moves it back + frees the slot.
+
+**The hazard:** veth pairs die together. If a pod's netns is destroyed WITHOUT a
+preceding `DetachInterface`, the slot's guest-end vanishes and takes the host-end
+(`fpg{i}`, bound to the af_xdp ethdev port) with it — leaving the slot free
+(`bound.is_none()`) but its ethdev BROKEN. Previously attach could then hand out that
+DEAD slot → the new guest's traffic silently BLACKHOLED.
+
+**What this does:** dead slots are now DETECTED and EXCLUDED from the free pool.
+`flowplane_device::link_exists(host_ifname)` (a cheap sysfs `ifindex` stat) is the
+probe. On the attach reservation path (`node.rs::attach_interface`, under the
+`guest_pool` lock) a first pass marks any free-but-not-yet-dead slot whose host-end no
+longer exists as `dead = true`; the reserve then binds only a LIVE free slot
+(`bound.is_none() && !s.dead`). On detach (`node.rs::detach_interface`), after the
+best-effort unbind, the slot is freed (`bound = None`) only if its host-end still
+exists; if the host-end is GONE it is marked `dead = true` instead. A pool drained by
+dead slots therefore correctly surfaces as `resource_exhausted` ("increase
+--guest-ports") rather than binding a blackhole. All other detach reclaim (purge_vni,
+ports_remove, forget_iface_meta, IPAM release) stays unconditional/best-effort.
+
+**Tested:** `flowplane-dpdk/tests/attach_veth.rs`
+`attach_skips_dead_pool_slot_and_exhausts_when_only_dead_left` (privileged, `#[ignore]`):
+seeds TWO pool slots, attaches guest A (binds slot 0), `delete_link`s slot 0's HOST
+veth out from under it (simulating netns-destroyed — deleting the host-end kills its
+peer too), then attaches guest B and asserts it binds the LIVE slot 1 (NOT the dead
+slot 0), and finally that a third attach with only a dead slot free returns
+`resource_exhausted`. Plus a `flowplane_device::link_exists` unit test.
+
+**Remaining (follow-up): LIVE RECOVERY not implemented.** A dead slot is permanently
+excluded until the serve process restarts. Full recovery — recreate the veth +
+`rte_dev` hotplug detach/attach the af_xdp vdev + reconfigure the ethdev port — is the
+"real" fix but is deliberately deferred: the static-pool model avoids runtime device
+churn, and hotplug is the proper mechanism. Detection-and-exclude is the safe
+first step (never blackhole).
+
+---
+
 ## Cross-refs
 
 - DPDK per-lcore shared-nothing model: M8 (`design/flowplane-dpdk`).

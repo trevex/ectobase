@@ -307,6 +307,8 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
                     // ethdev port id: uplink = 0, guests = 1..=N (matches the vdev append order).
                     port_id: 1 + i,
                     bound: None,
+                    // Freshly-created pool veths are live; dead-slot detection happens lazily at attach.
+                    dead: false,
                 });
             }
             println!(

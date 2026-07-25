@@ -142,17 +142,42 @@ impl DataplaneNode for DpdkNodeService {
         // block returns an Option so the `guest_pool` guard is released at the block end — the
         // pool-exhausted IPAM release then happens OUTSIDE the pool lock (never nest the two locks;
         // every lock in this handler stays strictly non-overlapping).
+        //
+        // DEAD-SLOT DETECTION (netns-destroyed-without-detach): veth pairs die together. If a pod's
+        // netns was destroyed WITHOUT a preceding DetachInterface, the slot's guest-end vanished and
+        // took the host-end (`fpg{i}`, bound to the af_xdp ethdev port) with it — leaving the slot free
+        // (`bound.is_none()`) but its ethdev BROKEN. Binding such a slot would silently blackhole the
+        // new guest's traffic. So FIRST pass marks any free-but-not-yet-dead slot whose host-end no
+        // longer exists as `dead` (a quick sysfs stat — `link_exists` — is fine under this std Mutex;
+        // it does NOT block on a subprocess). THEN we reserve only a live free slot (`!s.dead`); dead
+        // slots are neither reused nor counted as free, so a pool drained by dead slots correctly
+        // surfaces as `resource_exhausted` below. LIVE RECOVERY (recreate the veth + rte_dev hotplug
+        // rebind the af_xdp vdev) is a documented follow-up — NOT done here.
         let reserved = {
             let mut pool = attach.guest_pool.lock().unwrap();
-            pool.iter_mut().find(|s| s.bound.is_none()).map(|slot| {
-                slot.bound = Some(r.interface_id.clone());
-                (
-                    slot.host_ifname.clone(),
-                    slot.host_ifindex,
-                    slot.port_id,
-                    format!("{}p", slot.host_ifname),
-                )
-            })
+            for s in pool.iter_mut() {
+                if s.bound.is_none() && !s.dead && !flowplane_device::link_exists(&s.host_ifname) {
+                    s.dead = true;
+                    eprintln!(
+                        "warn: guest af_xdp pool slot {} (port {}) is DEAD — host-end veth vanished \
+                         (pod netns destroyed without DetachInterface; veth pairs die together, so \
+                         the guest-end took the host-end + its ethdev down). Excluding from the free \
+                         pool; live recovery (recreate veth + rte_dev hotplug rebind) is a follow-up.",
+                        s.host_ifname, s.port_id
+                    );
+                }
+            }
+            pool.iter_mut()
+                .find(|s| s.bound.is_none() && !s.dead)
+                .map(|slot| {
+                    slot.bound = Some(r.interface_id.clone());
+                    (
+                        slot.host_ifname.clone(),
+                        slot.host_ifindex,
+                        slot.port_id,
+                        format!("{}p", slot.host_ifname),
+                    )
+                })
         }; // guest_pool guard dropped here
         let (slot_host_ifname, slot_host_ifindex, slot_port_id, placeholder_peer) = match reserved {
             Some(fields) => fields,
@@ -500,6 +525,14 @@ impl DataplaneNode for DpdkNodeService {
 
         // Free the pool slot for reuse — match by the slot's host ifindex (unique per slot). Prefer
         // the registry device's ifindex; fall back to the map-derived tap ifindex (e.g. registry miss).
+        //
+        // DEAD-SLOT BRANCH: after the best-effort unbind above, check whether the pool host-end still
+        // exists. Normally it survives detach (only the guest-end moved) → free the slot for reuse
+        // (`bound = None`, `dead` stays false). But if the pod's netns was destroyed WITHOUT this
+        // detach (veth pairs die together → the guest-end took the host-end + its ethdev down), the
+        // host-end is GONE: mark the slot `dead = true` instead of freeing it, so attach never binds a
+        // blackhole slot (it surfaces as `resource_exhausted` once the live pool drains). Live recovery
+        // (recreate the veth + rte_dev hotplug rebind) is a documented follow-up.
         let free_ifindex = dev.as_ref().map(|d| d.host_ifindex).or(tap_ifindex);
         if let Some(ifx) = free_ifindex {
             if let Some(slot) = self
@@ -510,7 +543,17 @@ impl DataplaneNode for DpdkNodeService {
                 .iter_mut()
                 .find(|s| s.host_ifindex == ifx)
             {
-                slot.bound = None;
+                if flowplane_device::link_exists(&slot.host_ifname) {
+                    slot.bound = None;
+                } else {
+                    slot.dead = true;
+                    eprintln!(
+                        "warn: guest af_xdp pool slot {} (port {}) is DEAD after detach — host-end \
+                         veth is gone (pod netns destroyed without detach; veth pairs die together). \
+                         Marking dead + excluding from the free pool; live recovery is a follow-up.",
+                        slot.host_ifname, slot.port_id
+                    );
+                }
             }
         }
 

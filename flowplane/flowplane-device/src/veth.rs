@@ -76,6 +76,17 @@ pub fn delete_link(name: &str) {
     let _ = run(&["ip", "link", "del", name]);
 }
 
+/// True iff a link named `name` currently exists in the root netns (a `/sys/class/net/<name>/ifindex`
+/// that reads). A cheap sysfs stat (no subprocess) — safe to call under a std Mutex.
+///
+/// Used by the DPDK dead-slot detection: a preallocated guest pool slot whose host-end veth has
+/// vanished (because the pod's netns was destroyed WITHOUT a preceding DetachInterface — veth pairs
+/// die together, so the guest-end taking the host-end with it) is DEAD and must be excluded from the
+/// free pool so attach never binds a blackhole slot.
+pub fn link_exists(name: &str) -> bool {
+    ifindex_of(name).is_ok()
+}
+
 /// Create + configure the veth pair, returning the resolved host device facts. Rolls back
 /// (`delete_link(host)`) on any step failure. The `ip` command sequence is transcribed verbatim
 /// from `attach.rs` `setup_veth`: create pair → move peer to netns → rename → guest mac/up/mtu
@@ -316,6 +327,16 @@ mod tests {
     fn ifindex_of_loopback_is_one() {
         // lo is ifindex 1 in every netns incl. the root — no privileges needed to read /sys.
         assert_eq!(ifindex_of("lo").unwrap(), 1);
+    }
+
+    #[test]
+    fn link_exists_true_for_lo_false_for_bogus() {
+        // A real link (loopback, present in every netns) → true; a name that cannot exist → false.
+        assert!(link_exists("lo"), "lo must exist");
+        assert!(
+            !link_exists("fp-no-such-link-xyz"),
+            "a bogus link must not exist"
+        );
     }
 
     #[test]
