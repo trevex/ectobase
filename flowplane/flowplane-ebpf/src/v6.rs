@@ -86,6 +86,65 @@ fn try_icmpv6_echo_reply(
     Some(unsafe { bpf_redirect(local.uplink_ifindex, 0) } as u32)
 }
 
+/// Stateless ingress firewall for the inner-v6 LB-local delivery path (no conntrack: DSR keeps the
+/// inner dst = VIP). Returns `true` if the packet must be dropped. Out-of-line (`#[inline(never)]`)
+/// so its firewall stack frame is freed before returning into the caller — keeps `try_uplink_rx`
+/// under the 512B combined BPF stack limit.
+#[inline(never)]
+fn ingress_fw_lb_v6(ctx: &XdpContext, tap_ifindex: u32) -> bool {
+    flowplane_core::firewall::fw_eval_dir6(
+        &crate::coreimpl::CtxPkt { ctx },
+        &crate::coreimpl::GlobalMaps,
+        ETH_LEN + IPV6_LEN,
+        tap_ifindex,
+        flowplane_common::FW_DIR_INGRESS,
+    ) == flowplane_common::FW_ACTION_DROP
+}
+
+/// Stateful firewall + conntrack for the inner-v6 normal (non-LB) ingress delivery path, applied
+/// pre-decap (inner v6 header at ETH_LEN + IPV6_LEN). Returns `true` if the packet must be dropped
+/// (deny-by-default on a new flow). Out-of-line (`#[inline(never)]`) so its CtKey6/CtEntry stack
+/// frame stays off the combined `try_uplink_rx` BPF stack (512B limit).
+#[inline(never)]
+fn ingress_fw_ct_v6(ctx: &XdpContext, tap_ifindex: u32, vni: u32) -> bool {
+    if let Some(key) =
+        crate::conntrack::ct_key6(ctx.data(), ctx.data_end(), ETH_LEN + IPV6_LEN, vni)
+    {
+        match unsafe { crate::maps::CONNTRACK6.get(&key) } {
+            Some(e) => {
+                let mut e = *e;
+                crate::conntrack::ct_touch6(
+                    ctx.data(),
+                    ctx.data_end(),
+                    ETH_LEN + IPV6_LEN,
+                    &key,
+                    &mut e,
+                );
+            }
+            None => {
+                if flowplane_core::firewall::fw_eval_dir6(
+                    &crate::coreimpl::CtxPkt { ctx },
+                    &crate::coreimpl::GlobalMaps,
+                    ETH_LEN + IPV6_LEN,
+                    tap_ifindex,
+                    flowplane_common::FW_DIR_INGRESS,
+                ) == flowplane_common::FW_ACTION_DROP
+                {
+                    return true;
+                }
+                flowplane_core::conntrack::ct_create_default6(
+                    &crate::coreimpl::CtxPkt { ctx },
+                    &mut crate::coreimpl::GlobalMaps,
+                    ETH_LEN + IPV6_LEN,
+                    vni,
+                    crate::conntrack::now(),
+                );
+            }
+        }
+    }
+    false
+}
+
 /// Ingress for an inner IPv6 frame (outer next-header 41): deliver by outer IPv6 dst, decap, write
 /// the inner Ethernet (Ethertype IPv6), redirect to the tap.
 #[inline(always)]
@@ -114,6 +173,12 @@ pub fn v6_uplink_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
                 // Local backend: decap and deliver to the backend VM's tap.
                 let guest_mac = bu.guest_mac;
                 let tap_ifindex = bu.tap_ifindex;
+                // Stateless ingress firewall for LB-local delivery (no conntrack: DSR keeps the
+                // inner dst = VIP, and LB flows are not CT-tracked on this path). Out-of-line so
+                // its firewall stack frame stays off the combined try_uplink_rx BPF stack (512B).
+                if ingress_fw_lb_v6(ctx, bu.tap_ifindex) {
+                    return Ok(xdp_action::XDP_DROP);
+                }
                 if unsafe { bpf_xdp_adjust_head(ctx.ctx, IPV6_LEN as i32) } != 0 {
                     return Err(DpErr::Bounds);
                 }
@@ -144,6 +209,13 @@ pub fn v6_uplink_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
             return Ok(act);
         }
         // Unknown packet for LB VNF: drop.
+        return Ok(xdp_action::XDP_DROP);
+    }
+    // Stateful firewall + conntrack on the inner-v6 flow before decap (mirrors the v4 uplink_rx
+    // site). Inner v6 header is at ETH_LEN + IPV6_LEN pre-decap; new flows are ingress-firewalled
+    // then tracked, established flows (CT hit) skip the firewall. Out-of-line so its CtKey6/CtEntry
+    // stack frame stays off the combined try_uplink_rx BPF stack (512B limit).
+    if ingress_fw_ct_v6(ctx, u.tap_ifindex, vni) {
         return Ok(xdp_action::XDP_DROP);
     }
     if unsafe { bpf_xdp_adjust_head(ctx.ctx, IPV6_LEN as i32) } != 0 {

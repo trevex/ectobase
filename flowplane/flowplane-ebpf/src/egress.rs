@@ -163,6 +163,43 @@ pub fn forward_decision_v4(
     }
 }
 
+/// Stateful firewall + conntrack for the inner-v6 egress flow. Returns `true` if the packet must be
+/// dropped (deny-by-default on a new flow). Out-of-line (`#[inline(never)]`) so its CtKey6/CtEntry
+/// stack frame is freed before the caller's route lookup runs — keeps `tc_guest_tx` under the 512B
+/// combined BPF stack limit (the v6 CT key alone is ~48B and would otherwise coexist with the
+/// route-lookup Key<RouteLpmData6>).
+#[inline(never)]
+fn egress_fw_ct_v6(data: usize, data_end: usize, ifindex: u32, vni: u32) -> bool {
+    if let Some(key) = crate::conntrack::ct_key6(data, data_end, ETH_LEN, vni) {
+        match unsafe { crate::maps::CONNTRACK6.get(&key) } {
+            Some(e) => {
+                let mut e = *e;
+                crate::conntrack::ct_touch6(data, data_end, ETH_LEN, &key, &mut e);
+            }
+            None => {
+                if flowplane_core::firewall::fw_eval_dir6(
+                    &crate::coreimpl::RawPkt::new(data, data_end),
+                    &crate::coreimpl::GlobalMaps,
+                    ETH_LEN,
+                    ifindex,
+                    flowplane_common::FW_DIR_EGRESS,
+                ) == flowplane_common::FW_ACTION_DROP
+                {
+                    return true;
+                }
+                flowplane_core::conntrack::ct_create_default6(
+                    &crate::coreimpl::RawPkt::new(data, data_end),
+                    &mut crate::coreimpl::GlobalMaps,
+                    ETH_LEN,
+                    vni,
+                    crate::conntrack::now(),
+                );
+            }
+        }
+    }
+    false
+}
+
 /// IPv6-inner egress decision (route6 + local/encap). Map-driven; used by tc. No NAT64 (caller
 /// runs that first), no resize. Caller verified ETH_LEN+IPV6_LEN present and
 /// ethertype==ETH_P_IPV6.
@@ -170,12 +207,19 @@ pub fn forward_decision_v4(
 pub fn forward_decision_v6(
     data: usize,
     data_end: usize,
-    _ifindex: u32,
+    ifindex: u32,
     meta: &PortMeta,
 ) -> EgressVerdict {
     let p = data as *const u8;
     // inner IPv6 dst at ETH_LEN + 24
     let dst = unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + 24) as *const [u8; 16]) };
+    // Stateful firewall + conntrack on the inner-v6 flow (mirrors the v4 egress site). Established
+    // flows (CT hit) skip the firewall; new flows are egress-firewalled then tracked. Kept in an
+    // out-of-line subprogram (`egress_fw_ct_v6`) so its CtKey6/CtEntry frame does not coexist on
+    // the combined BPF stack with the route-lookup Key<RouteLpmData6> below (512B limit).
+    if egress_fw_ct_v6(data, data_end, ifindex, meta.vni) {
+        return EgressVerdict::Drop;
+    }
     let route = match ROUTES6.get(&aya_ebpf::maps::lpm_trie::Key::new(
         160,
         RouteLpmData6 {
