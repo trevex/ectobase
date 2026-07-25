@@ -306,14 +306,24 @@ impl AttachState {
         // Veth only: containers don't self-config (no DHCP/RA on the veth model); VMs (Tap/PodTap)
         // self-configure via DHCP/RA and must NOT be touched here.
         if let DeviceType::Veth = device_type {
-            flowplane_device::configure_guest_netns(&flowplane_device::GuestNetConfig {
-                netns_path: netns_path.to_string(),
-                guest_ifname: interface_id.to_string(),
-                ipv4,
-                gateway_ipv4: self.gateway_ipv4,
-                ipv6,
-                gateway_ipv6: self.gateway_ipv6,
-            })?;
+            if let Err(e) =
+                flowplane_device::configure_guest_netns(&flowplane_device::GuestNetConfig {
+                    netns_path: netns_path.to_string(),
+                    guest_ifname: interface_id.to_string(),
+                    ipv4,
+                    gateway_ipv4: self.gateway_ipv4,
+                    ipv6,
+                    gateway_ipv6: self.gateway_ipv6,
+                })
+            {
+                // Roll back the programming + device + underlay we just claimed so a failed
+                // attach leaves no half-configured state (mirrors the read-back failure path).
+                let _ = self.control.detach_interface(interface_id.as_bytes());
+                let _ = run(&["ip", "link", "del", &device]);
+                let mut ipam = self.ipam.lock();
+                ipam.release(Ipv6Addr::from(underlay_ipv6));
+                return Err(e).context("configure guest netns");
+            }
         }
 
         // `ifname` returned to the caller: for a veth it's the guest end inside the netns (the pod's
@@ -337,7 +347,13 @@ impl AttachState {
                 v
             },
             mac: fmt_mac(mac),
-            gateway: Ipv4Addr::from(self.gateway_ipv4).to_string(),
+            // v4 gateway string, or empty for a v6-only overlay (this interface has no v4 addr,
+            // so the node's v4 gateway is meaningless to it — don't hand back a bogus gateway).
+            gateway: if ipv4 == [0u8; 4] {
+                String::new()
+            } else {
+                Ipv4Addr::from(self.gateway_ipv4).to_string()
+            },
             underlay_route: Ipv6Addr::from(underlay_ipv6).to_string(),
         })
     }

@@ -543,8 +543,10 @@ impl Control {
         if g.by_id.contains_key(interface_id) {
             anyhow::bail!("interface already exists");
         }
-        // Check that the (vni, ipv4) combination is not already in use (ROUTE_EXISTS).
-        if g.by_id.values().any(|r| r.vni == vni && r.ipv4 == ipv4) {
+        // Check that the (vni, ipv4) combination is not already in use (if non-zero).
+        // A zero ipv4 means an IPv6-only overlay; every such interface shares ipv4 == [0;4],
+        // so skip the check to avoid a bogus ROUTE_EXISTS collision on the second v6-only attach.
+        if ipv4 != [0u8; 4] && g.by_id.values().any(|r| r.vni == vni && r.ipv4 == ipv4) {
             anyhow::bail!("ROUTE_EXISTS: IP already in use in this VNI");
         }
         // Check that the (vni, ipv6) combination is not already in use (if non-zero).

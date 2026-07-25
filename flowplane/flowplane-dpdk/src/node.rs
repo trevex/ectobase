@@ -263,7 +263,13 @@ impl DataplaneNode for DpdkNodeService {
                 v
             },
             mac: fmt_mac(mac),
-            gateway: std::net::Ipv4Addr::from(attach.gateway_ipv4).to_string(),
+            // v4 gateway string, or empty for a v6-only overlay (this interface has no v4 addr,
+            // so the node's v4 gateway is meaningless to it) — mirrors the eBPF attach response.
+            gateway: if ipv4 == [0u8; 4] {
+                String::new()
+            } else {
+                std::net::Ipv4Addr::from(attach.gateway_ipv4).to_string()
+            },
             underlay_route: std::net::Ipv6Addr::from(underlay).to_string(),
         }))
     }

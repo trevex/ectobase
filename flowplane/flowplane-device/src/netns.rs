@@ -67,6 +67,18 @@ mod tests {
     use super::*;
     use crate::veth::run_netns;
 
+    /// Run `ip netns exec <ns> <args>` and return captured stdout (for assertions).
+    fn capture(netns_path: &str, args: &[&str]) -> String {
+        let ns = netns_path.rsplit('/').next().unwrap_or(netns_path);
+        let mut full = vec!["netns", "exec", ns, "ip"];
+        full.extend_from_slice(args);
+        let out = std::process::Command::new("ip")
+            .args(&full)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).to_string()
+    }
+
     fn mk_ns(ns: &str) -> String {
         let _ = crate::veth::delete_link("gnc-h0");
         let _ = std::process::Command::new("ip")
@@ -109,11 +121,20 @@ mod tests {
             gateway_ipv6: [0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
         })
         .unwrap();
-        // v6 addr present, v6 default route present, NO v4 addr.
-        run_netns(&path, &["ip", "-6", "addr", "show", "eth0"]).unwrap();
+        // v6 addr present, v6 default route present, NO v4 addr/default route.
+        let v6addr = capture(&path, &["-6", "addr", "show", "eth0"]);
+        assert!(
+            v6addr.contains("2001:db8"),
+            "v6 addr must be present: {v6addr}"
+        );
         assert!(
             run_netns(&path, &["ip", "-6", "route", "show", "default"]).is_ok(),
             "v6 default route must be present"
+        );
+        let v4routes = capture(&path, &["-4", "route", "show"]);
+        assert!(
+            !v4routes.contains("default"),
+            "v6-only must have NO v4 default route: {v4routes}"
         );
         let _ = std::process::Command::new("ip")
             .args(["netns", "del", ns])
@@ -134,7 +155,22 @@ mod tests {
             gateway_ipv6: [0; 16],
         })
         .unwrap();
-        run_netns(&path, &["ip", "route", "show", "default"]).unwrap();
+        // v4 addr + default route present, NO v6 addr/default route.
+        let v4addr = capture(&path, &["-4", "addr", "show", "eth0"]);
+        assert!(
+            v4addr.contains("10.0.0.5"),
+            "v4 addr must be present: {v4addr}"
+        );
+        let v4routes = capture(&path, &["-4", "route", "show", "default"]);
+        assert!(
+            v4routes.contains("default"),
+            "v4 default route must be present: {v4routes}"
+        );
+        let v6routes = capture(&path, &["-6", "route", "show", "default"]);
+        assert!(
+            !v6routes.contains("default"),
+            "v4-only must have NO v6 default route: {v6routes}"
+        );
         let _ = std::process::Command::new("ip")
             .args(["netns", "del", ns])
             .output();
