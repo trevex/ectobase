@@ -1,6 +1,8 @@
 #include <rte_ethdev.h>
 #include <rte_mbuf.h>
 #include <rte_rcu_qsbr.h>
+#include <rte_ring.h>
+#include <rte_errno.h>
 #include "shim.h"
 
 uint16_t nfkit_eth_rx_burst(uint16_t port, uint16_t qid, struct rte_mbuf **pkts, uint16_t nb) {
@@ -26,3 +28,14 @@ int    nfkit_rcu_qsbr_init(struct rte_rcu_qsbr *v, uint32_t m) { return rte_rcu_
 int    nfkit_rcu_qsbr_thread_register(struct rte_rcu_qsbr *v, unsigned int t) { return rte_rcu_qsbr_thread_register(v, t); }
 void   nfkit_rcu_qsbr_thread_online(struct rte_rcu_qsbr *v, unsigned int t) { rte_rcu_qsbr_thread_online(v, t); }
 void   nfkit_rcu_qsbr_quiescent(struct rte_rcu_qsbr *v, unsigned int t) { rte_rcu_qsbr_quiescent(v, t); }
+
+int nfkit_rte_errno(void) { return rte_errno; }
+struct rte_ring *nfkit_ring_create_scdeq(const char *name, unsigned count, int socket_id) {
+    return rte_ring_create(name, count, socket_id, RING_F_SC_DEQ); /* MP enqueue (default), SC dequeue */
+}
+unsigned nfkit_ring_mp_enqueue_bulk(struct rte_ring *r, void **objs, unsigned n) {
+    return rte_ring_mp_enqueue_bulk(r, objs, n, NULL); /* all-or-nothing: returns n on success, 0 if it won't all fit */
+}
+unsigned nfkit_ring_sc_dequeue_burst(struct rte_ring *r, void **objs, unsigned n) {
+    return rte_ring_sc_dequeue_burst(r, objs, n, NULL); /* up-to-n: returns however many were available */
+}

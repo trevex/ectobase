@@ -5,6 +5,7 @@ mod dpdk_maps;
 mod eal;
 mod edt;
 mod flow;
+mod lcore_ring;
 mod mbuf;
 mod mbuf_pkt;
 mod mempool;
@@ -24,6 +25,7 @@ pub use flow::{
     create as flow_create, ingress_attr, offload_mode, probe_raw_flow_offload,
     validate as flow_validate, FlowError, FlowRule, Match5Drop, OffloadMode, RawDecap, RawEncap,
 };
+pub use lcore_ring::{LcoreRing, RingError};
 pub use mbuf::{Mbuf, MbufBurst, MbufError, BURST};
 pub use mbuf_pkt::MbufPkt;
 pub use mempool::{Mempool, MempoolError};
