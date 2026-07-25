@@ -10,7 +10,7 @@ use flowplane_common::{
 };
 
 use crate::arp_nd::{arp_reply, nd_reply};
-use crate::conntrack::{ct_apply, ct_create_default, ct_key};
+use crate::conntrack::{ct_apply, ct_create_default, ct_key, ct_refresh};
 use crate::dhcp;
 use crate::egress::{deliver, route4, Deliver, IPPROTO_IPIP};
 use crate::encap::{reforward, write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
@@ -70,11 +70,14 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
         }
     }
 
-    // 3. Conntrack: create on miss, but ONLY for non-LB (LB is DSR — no ct, ingress.rs:266).
+    // 3. Conntrack: create on miss, refresh (last_seen + TCP state) on hit — but ONLY for non-LB
+    //    (LB is DSR — no ct, ingress.rs:266). Refresh mirrors the eBPF `ct_touch`; it is map-only
+    //    (never mutates the packet), so it is byte-parity-neutral.
     if !is_lb {
         if let Some(key) = ct_key(&*pkt, inner_off, in_.vni) {
-            if maps.conntrack_get(&key).is_none() {
-                ct_create_default(&*pkt, maps, inner_off, in_.vni, 0);
+            match maps.conntrack_get(&key) {
+                None => ct_create_default(&*pkt, maps, inner_off, in_.vni, in_.now),
+                Some(mut e) => ct_refresh(&*pkt, maps, inner_off, &key, &mut e, in_.now),
             }
         }
     }
@@ -122,12 +125,14 @@ pub struct GuestTxOut {
 /// full guest Ethernet frame `[InnerEth(14)][IPv4][L4]`. Composes the REAL core fns in the exact
 /// order + gates of the eBPF `egress::forward_decision_v4` for the byte-parity-relevant steps:
 ///   1. conntrack: on a NEW flow (miss) enforce the SOURCE egress firewall (deny-by-default);
-///      an established flow's CT_REWRITE_SRC translation + refresh (ct_apply/ct_touch) is NOT
-///      modelled here (separate slice) — the anchor + tests exercise fresh flows;
+///      an established flow's CT_REWRITE_SRC translation (ct_apply) is NOT modelled here (separate
+///      slice) — the anchor + tests exercise fresh flows. The last_seen/TCP-state refresh on a hit
+///      (ct_refresh, mirroring the eBPF ct_touch) IS applied in step 5 (map-only, byte-neutral);
 ///   2. VIP snat/dnat: NOT modelled (separate slice; anchor installs no VIP maps → no-op);
 ///   3. route lookup (`route4`) → Pass on miss;
 ///   4. network NAT SNAT (`snat_egress`) when the route is external;
-///   5. conntrack create-on-miss (`ct_create_default`);
+///   5. conntrack: create-on-miss (`ct_create_default`) / refresh-on-hit (`ct_refresh`, last_seen +
+///      TCP state — the eBPF `ct_touch`); both map-only, byte-neutral;
 ///   6. rate metering: public-lane policing (`public_pass`, external only, step 6a). Mirrors
 ///      `egress.rs`. No METER entry => unlimited (pass). `now` comes from `in_.now`;
 ///   7. deliver decision (`deliver`): Local tap (inner-Eth rewrite) | Encap | Pass.
@@ -141,8 +146,8 @@ pub struct GuestTxOut {
 /// NOTE (scope): only the fresh-flow / non-VIP path is composed here for the OUTPUT PACKET — that
 /// slice is byte-identical to the eBPF program and thus anchorable. Metering does not mutate packet
 /// bytes (it only reads/writes the METER map and returns a verdict), so with no METER entry the
-/// emitted bytes are unaffected; the interleaved un-ported steps (ct_apply/ct_touch, vip) are
-/// map/refresh-only on this fixture and do not change the emitted bytes.
+/// emitted bytes are unaffected; the interleaved un-ported step (ct_apply, vip) and the
+/// ct_refresh hit-path are map/refresh-only on this fixture and do not change the emitted bytes.
 pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestTxIn) -> GuestTxOut {
     // Reset the stamp so a Local/Pass verdict leaves edt_tstamp = None (unshaped), matching the
     // eBPF `tc_guest_tx` which only calls `edt_stamp` on the Encap arm.
@@ -192,10 +197,13 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
     let is_ext = route.is_external != 0;
     snat_egress(pkt, maps, ip_off, in_.meta.vni, is_ext, 0);
 
-    // 5. Track every flow (create-on-miss).
+    // 5. Track every flow: create-on-miss, refresh (last_seen + TCP state) on hit. Refresh mirrors
+    //    the eBPF `ct_touch`; it is map-only (never mutates the packet), so it is byte-parity-neutral.
+    //    Keyed on the POST-SNAT 5-tuple, exactly as the create path (and the reverse NAT entry).
     if let Some(key) = ct_key(&*pkt, ip_off, in_.meta.vni) {
-        if maps.conntrack_get(&key).is_none() {
-            ct_create_default(&*pkt, maps, ip_off, in_.meta.vni, 0);
+        match maps.conntrack_get(&key) {
+            None => ct_create_default(&*pkt, maps, ip_off, in_.meta.vni, in_.now),
+            Some(mut e) => ct_refresh(&*pkt, maps, ip_off, &key, &mut e, in_.now),
         }
     }
 

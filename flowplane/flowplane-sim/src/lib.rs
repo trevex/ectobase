@@ -18,6 +18,8 @@ mod conntrack_v6_test;
 #[cfg(test)]
 mod ct_apply_test;
 #[cfg(test)]
+mod ct_refresh_test;
+#[cfg(test)]
 mod dhcp_test;
 #[cfg(test)]
 mod encap_test;
