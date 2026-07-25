@@ -10,7 +10,7 @@
 //! tests share a single implementation. Mirrors dpservice (30 s default, 24 h established-TCP).
 
 use crate::maps::Maps;
-use crate::parse::{l4_ports, IPPROTO_ICMP, IPPROTO_TCP, IPPROTO_UDP};
+use crate::parse::{l4_ports, l4_ports_v6, IPPROTO_ICMP, IPPROTO_TCP, IPPROTO_UDP};
 use crate::pkt::Pkt;
 use flowplane_common::csum::{csum_replace2, csum_replace4};
 use flowplane_common::{
@@ -94,6 +94,41 @@ pub fn tcp_advance(state: u8, flags: u8) -> u8 {
 #[inline(always)]
 pub fn invert_key(k: &CtKey) -> CtKey {
     CtKey {
+        vni: k.vni,
+        src_ip: k.dst_ip,
+        dst_ip: k.src_ip,
+        src_port: k.dst_port,
+        dst_port: k.src_port,
+        proto: k.proto,
+        _pad: [0; 3],
+    }
+}
+
+/// Build the VNI-keyed IPv6 5-tuple key for the packet at `ip_off` (host-order ports; ICMPv6 id in
+/// both ports). Firewall-only v6 mirror of [`ct_key`]: reads the src/dst addresses from the fixed
+/// 40-byte IPv6 header (src @ +8, dst @ +24). Falls back to `(next-header, 0, 0)` when `l4_ports_v6`
+/// yields nothing (unrecognised next-header / truncated L4), so every v6 flow is still tracked.
+#[inline(always)]
+pub fn ct_key6<P: Pkt>(pkt: &P, ip_off: usize, vni: u32) -> Option<flowplane_common::CtKey6> {
+    let src = pkt.read_array::<16>(ip_off + 8)?;
+    let dst = pkt.read_array::<16>(ip_off + 24)?;
+    let (proto, sport, dport) =
+        l4_ports_v6(pkt, ip_off).unwrap_or((pkt.read_u8(ip_off + 6).unwrap_or(0), 0, 0));
+    Some(flowplane_common::CtKey6 {
+        vni,
+        src_ip: src,
+        dst_ip: dst,
+        src_port: sport,
+        dst_port: dport,
+        proto,
+        _pad: [0; 3],
+    })
+}
+
+/// Invert an IPv6 5-tuple key (swap src/dst addr + port) — the expected reverse-direction key.
+#[inline(always)]
+pub fn invert_key6(k: &flowplane_common::CtKey6) -> flowplane_common::CtKey6 {
+    flowplane_common::CtKey6 {
         vni: k.vni,
         src_ip: k.dst_ip,
         dst_ip: k.src_ip,
@@ -269,5 +304,52 @@ pub fn ct_create_default<P: Pkt, M: Maps>(
     let rev = invert_key(&key);
     if maps.conntrack_get(&rev).is_none() {
         maps.conntrack_insert(rev, e);
+    }
+}
+
+/// Read the TCP flags byte for an IPv6 packet at `ip_off`, or None if the next header is not TCP /
+/// out of bounds. v6 mirror of [`tcp_flags`]: the IPv6 header is a fixed 40 bytes (no options in the
+/// firewall path), so the L4 offset is the constant `ip_off + 40`; TCP flags are at TCP-header
+/// offset 13.
+#[inline(always)]
+fn tcp_flags_v6<P: Pkt>(pkt: &P, ip_off: usize) -> Option<u8> {
+    if pkt.read_u8(ip_off + 6) != Some(IPPROTO_TCP) {
+        return None;
+    }
+    pkt.read_u8(ip_off + 40 + 13)
+}
+
+/// Insert a no-translation DEFAULT IPv6 conntrack entry on conntrack-miss so every v6 flow is tracked
+/// (firewall + aging see it), pre-seeding the reverse direction. Firewall-only v6 mirror of
+/// [`ct_create_default`]; `now` is the current monotonic time (ns), 0 in the sim.
+#[inline(always)]
+pub fn ct_create_default6<P: Pkt, M: Maps>(
+    pkt: &P,
+    maps: &mut M,
+    ip_off: usize,
+    vni: u32,
+    now: u64,
+) {
+    let key = match ct_key6(pkt, ip_off, vni) {
+        Some(k) => k,
+        None => return,
+    };
+    let tcp = tcp_flags_v6(pkt, ip_off)
+        .map(|fl| tcp_advance(0, fl))
+        .unwrap_or(0);
+    let e = CtEntry {
+        last_seen: now,
+        xlate_ip: [0; 4],
+        xlate_port: 0,
+        flags: CT_F_DEFAULT,
+        tcp_state: tcp,
+        fwall_action: 0,
+        gen_bytes: [0; 4],
+        _pad: [0; 3],
+    };
+    maps.conntrack6_insert(key, e);
+    let rev = invert_key6(&key);
+    if maps.conntrack6_get(&rev).is_none() {
+        maps.conntrack6_insert(rev, e);
     }
 }

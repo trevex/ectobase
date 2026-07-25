@@ -14,6 +14,8 @@ mod arp_nd_test;
 #[cfg(test)]
 mod conntrack_test;
 #[cfg(test)]
+mod conntrack_v6_test;
+#[cfg(test)]
 mod ct_apply_test;
 #[cfg(test)]
 mod dhcp_test;
