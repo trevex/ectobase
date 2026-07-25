@@ -303,6 +303,19 @@ pub struct CtKey {
     pub _pad: [u8; 3],
 }
 
+/// IPv6 conntrack key (firewall-only). Mirror of `CtKey` with 16-byte addresses.
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+pub struct CtKey6 {
+    pub vni: u32,
+    pub src_ip: [u8; 16],
+    pub dst_ip: [u8; 16],
+    pub src_port: u16,
+    pub dst_port: u16,
+    pub proto: u8,
+    pub _pad: [u8; 3],
+}
+
 /// NAT-GW config key: (vni, local guest IPv4).
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
@@ -412,6 +425,27 @@ pub struct FwRule {
     pub enabled: u8,
 }
 
+/// IPv6 firewall rule (fixed-size POD). Identical to `FwRule` but 16-byte addresses/masks.
+/// Programmed into the parallel `FW_RULES6` map; the v4 `FwRule`/`FW_RULES` are untouched.
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
+pub struct FwRule6 {
+    pub src_ip: [u8; 16],
+    pub src_mask: [u8; 16],
+    pub dst_ip: [u8; 16],
+    pub dst_mask: [u8; 16],
+    pub src_port_min: u16,
+    pub src_port_max: u16,
+    pub dst_port_min: u16,
+    pub dst_port_max: u16,
+    pub icmp_type: u16,
+    pub icmp_code: u16,
+    pub proto: u8,
+    pub action: u8,
+    pub direction: u8,
+    pub enabled: u8,
+}
+
 /// Per-interface rule counts (so empty-direction => ACCEPT can be decided cheaply).
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
@@ -425,11 +459,21 @@ pub struct FwMeta {
 pub const DHCP_MAX_DNS: usize = 8;
 
 /// Tail-call indices into the `GUEST_PROGS_TC` program array (egress datapath split).
-/// `GUEST_PROG_DHCP` is currently the only dispatched program; IPV4/IPV6 are reserved for a future
-/// split of the egress datapath by L3 protocol.
+/// `GUEST_PROG_DHCP` dispatches the DHCP responder; `GUEST_PROG_IPV6` the NAT64 egress path;
+/// `GUEST_PROG_V6_FWD` the IPv6 overlay egress (firewall + conntrack + route6 + encap), split out
+/// because the v6 firewall/conntrack structures overflow tc_guest_tx's 512B combined BPF stack.
+/// `GUEST_PROG_IPV4` stays reserved for a future v4 split.
 pub const GUEST_PROG_DHCP: u32 = 0;
 pub const GUEST_PROG_IPV4: u32 = 1;
 pub const GUEST_PROG_IPV6: u32 = 2;
+pub const GUEST_PROG_V6_FWD: u32 = 3;
+
+/// Tail-call index into the `UPLINK_PROGS` **XDP** program array (ingress datapath split).
+/// `UPLINK_PROG_V6` dispatches the inner-IPv6 ingress path (`xdp_uplink_v6`), split out of
+/// `uplink_rx` because the v6 firewall/conntrack structures overflow the 512B combined BPF stack.
+/// XDP programs can only tail-call other XDP programs, so this lives in its own array (not the
+/// tc-only `GUEST_PROGS_TC`).
+pub const UPLINK_PROG_V6: u32 = 0;
 
 /// Server-wide DHCP config (DHCP_CONFIG[0]). Mirrors dpservice's --dhcp-mtu/--dhcp-dns/--dhcpv6-dns.
 #[repr(C)]
@@ -534,6 +578,58 @@ pub fn fw_rule_matches(r: &FwRule, s: &PacketSelectors) -> bool {
     }
 }
 
+/// IPv6 packet selectors (16-byte addresses). Mirror of `PacketSelectors`.
+pub struct PacketSelectors6 {
+    pub src: [u8; 16],
+    pub dst: [u8; 16],
+    pub proto: u8,
+    pub sport: u16,
+    pub dport: u16,
+    pub icmp_type: u16,
+    pub icmp_code: u16,
+}
+
+/// Pure IPv6 firewall match. Mirror of `fw_rule_matches`; ICMPv6 uses proto 58.
+#[inline]
+pub fn fw_rule6_matches(r: &FwRule6, s: &PacketSelectors6) -> bool {
+    let PacketSelectors6 {
+        src,
+        dst,
+        proto,
+        sport,
+        dport,
+        icmp_type,
+        icmp_code,
+    } = *s;
+    if r.enabled == 0 {
+        return false;
+    }
+    if r.proto != 0 && r.proto != proto {
+        return false;
+    }
+    for i in 0..16 {
+        if src[i] & r.src_mask[i] != r.src_ip[i] & r.src_mask[i] {
+            return false;
+        }
+        if dst[i] & r.dst_mask[i] != r.dst_ip[i] & r.dst_mask[i] {
+            return false;
+        }
+    }
+    match proto {
+        6 | 17 => {
+            sport >= r.src_port_min
+                && sport <= r.src_port_max
+                && dport >= r.dst_port_min
+                && dport <= r.dst_port_max
+        }
+        58 => {
+            (r.icmp_type == 0xffff || icmp_type == r.icmp_type)
+                && (r.icmp_code == 0xffff || icmp_code == r.icmp_code)
+        }
+        _ => true,
+    }
+}
+
 /// Single-entry `CONFIG` map: per-hypervisor datapath parameters for the PoC's
 /// CONFIG-driven single-peer overlay (one guest + one peer hypervisor). The XDP programs
 /// read entry 0; the control plane populates it. MACs/ifindexes are filled at e2e time.
@@ -586,7 +682,9 @@ mod user_impls {
     unsafe impl aya::Pod for CtEntry {}
     unsafe impl aya::Pod for FwRuleKey {}
     unsafe impl aya::Pod for FwRule {}
+    unsafe impl aya::Pod for FwRule6 {}
     unsafe impl aya::Pod for FwMeta {}
+    unsafe impl aya::Pod for CtKey6 {}
     unsafe impl aya::Pod for NeighborNatEntry {}
     unsafe impl aya::Pod for MeterState {}
     unsafe impl aya::Pod for DhcpConfig {}
@@ -842,6 +940,16 @@ mod tests {
         assert_eq!(core::mem::size_of::<FwRule>(), 32);
         // 4 (ingress_count) + 4 (egress_count) = 8.
         assert_eq!(core::mem::size_of::<FwMeta>(), 8);
+    }
+
+    #[test]
+    fn fw6_types_layout() {
+        assert_eq!(core::mem::size_of::<FwRule6>(), 80);
+        assert_eq!(core::mem::size_of::<CtKey6>(), 44);
+        // regression guard: v4 layouts unchanged
+        assert_eq!(core::mem::size_of::<FwRule>(), 32);
+        assert_eq!(core::mem::size_of::<FwMeta>(), 8);
+        assert_eq!(core::mem::size_of::<CtKey>(), 20);
     }
 
     #[test]

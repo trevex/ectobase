@@ -28,7 +28,12 @@ fn tc_guest_classifiers_load() {
 
     // Load (= verify) each guest-facing tc classifier into the kernel. Loading verifies the
     // instructions regardless of map contents, so no map population is needed.
-    for name in ["tc_guest_tx", "tc_guest_nat64", "tc_guest_dhcp"] {
+    for name in [
+        "tc_guest_tx",
+        "tc_guest_nat64",
+        "tc_guest_dhcp",
+        "tc_guest_egress_v6",
+    ] {
         let prog: &mut SchedClassifier = ebpf
             .program_mut(name)
             .unwrap_or_else(|| panic!("program {name} present"))

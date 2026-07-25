@@ -14,6 +14,8 @@ mod arp_nd_test;
 #[cfg(test)]
 mod conntrack_test;
 #[cfg(test)]
+mod conntrack_v6_test;
+#[cfg(test)]
 mod ct_apply_test;
 #[cfg(test)]
 mod dhcp_test;
@@ -35,6 +37,8 @@ mod nat64_test;
 mod nat_test;
 #[cfg(test)]
 mod ns_scenario_test;
+#[cfg(test)]
+mod parse_v6_test;
 #[cfg(test)]
 mod peering_test;
 #[cfg(test)]

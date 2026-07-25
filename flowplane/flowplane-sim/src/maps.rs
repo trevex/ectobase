@@ -1,5 +1,5 @@
 use flowplane_common::{
-    CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
+    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
     MaglevKey, MeterState, NatKey, NatValue, RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
@@ -31,7 +31,13 @@ pub struct MemMaps {
     pub underlay: HashMap<[u8; 16], UnderlayValue>,
     pub fw_meta: HashMap<u32, FwMeta>,
     pub fw_rules: HashMap<(u32, u32), FwRule>, // (ifindex, idx)
+    /// IPv6 firewall meta (`FW_META6`).
+    pub fw_meta6: HashMap<u32, FwMeta>,
+    /// IPv6 firewall rule slots (`FW_RULES6`), keyed `(ifindex, idx)`.
+    pub fw_rules6: HashMap<(u32, u32), flowplane_common::FwRule6>,
     pub conntrack: HashMap<CtKey, CtEntry>,
+    /// Firewall-only IPv6 conntrack (`CONNTRACK6` map).
+    pub conntrack6: HashMap<CtKey6, CtEntry>,
     pub lb: HashMap<LbKey, LbValue>,
     pub maglev: HashMap<MaglevKey, [u8; 16]>,
     pub nat: HashMap<NatKey, NatValue>,
@@ -103,6 +109,18 @@ impl Maps for MemMaps {
     }
     fn conntrack_insert(&mut self, key: CtKey, entry: CtEntry) {
         self.conntrack.insert(key, entry);
+    }
+    fn conntrack6_get(&self, key: &CtKey6) -> Option<CtEntry> {
+        self.conntrack6.get(key).copied()
+    }
+    fn conntrack6_insert(&mut self, key: CtKey6, entry: CtEntry) {
+        self.conntrack6.insert(key, entry);
+    }
+    fn fw_meta6(&self, ifindex: u32) -> Option<FwMeta> {
+        self.fw_meta6.get(&ifindex).copied()
+    }
+    fn fw_rule6(&self, key: &FwRuleKey) -> Option<flowplane_common::FwRule6> {
+        self.fw_rules6.get(&(key.ifindex, key.idx)).copied()
     }
     fn lb_get(&self, key: &LbKey) -> Option<LbValue> {
         self.lb.get(key).copied()

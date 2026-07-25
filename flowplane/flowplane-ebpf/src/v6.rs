@@ -17,14 +17,21 @@ const ICMPV6_ECHO_REPLY: u8 = 129;
 /// dst is a v6 LB VIP (no VM to respond). Rewrites the packet as an ICMPv6EchoReply and
 /// re-encaps it back out the uplink toward the original sender.
 /// Returns Some(xdp_action) if handled, None to fall through to normal processing.
-#[inline(always)]
+///
+/// Out-of-line (`#[inline(never)]`) so its rewrite/checksum locals get their own BPF stack frame
+/// instead of inflating `v6_uplink_rx`'s frame — that frame is held live across the heavy
+/// `ingress_fw_ct_v6` subprogram call, and the two must stay under the 512B combined stack limit.
+/// Takes `data`/`data_end` as SCALARS (not `&XdpContext`): passing the ctx across the bpf-to-bpf
+/// boundary makes the compiler hand the callee `pkt`/`pkt_end` pointers, and the bounds arithmetic
+/// here then trips the verifier's "R_ pointer arithmetic on pkt_end prohibited". The in-place
+/// rewrite works on `data as *mut u8`; the final `bpf_redirect` needs no ctx.
+#[inline(never)]
 fn try_icmpv6_echo_reply(
-    ctx: &XdpContext,
+    data: usize,
+    data_end: usize,
     outer_src: [u8; 16], // outer IPv6 src (sender's underlay)
     outer_dst: [u8; 16], // outer IPv6 dst (our LB underlay)
 ) -> Option<u32> {
-    let data = ctx.data();
-    let data_end = ctx.data_end();
     // Packet layout: ETH(14) + outer IPv6(40) + inner IPv6(40) + ICMPv6(at least 8).
     let inner_ip6_off = ETH_LEN + IPV6_LEN;
     let icmpv6_off = inner_ip6_off + IPV6_LEN;
@@ -86,6 +93,93 @@ fn try_icmpv6_echo_reply(
     Some(unsafe { bpf_redirect(local.uplink_ifindex, 0) } as u32)
 }
 
+/// Stateless ingress firewall for the inner-v6 LB-local delivery path (no conntrack: DSR keeps the
+/// inner dst = VIP). Returns `true` if the packet must be dropped. Out-of-line (`#[inline(never)]`)
+/// so its firewall stack frame is freed before returning into the caller — keeps `try_uplink_rx`
+/// under the 512B combined BPF stack limit.
+///
+/// Takes `data`/`data_end` as SCALARS and reconstructs the packet window inside via `RawPkt` — no
+/// `XdpContext`/pkt pointer crosses the bpf-to-bpf boundary (passing one and then deriving `pkt_end`
+/// in the callee trips the verifier's "R_ pointer arithmetic on pkt_end prohibited"). Mirrors the
+/// egress `egress_fw_ct_v6` shape.
+#[inline(never)]
+fn ingress_fw_lb_v6(data: usize, data_end: usize, tap_ifindex: u32) -> bool {
+    flowplane_core::firewall::fw_eval_dir6(
+        &crate::coreimpl::RawPkt::new(data, data_end),
+        &crate::coreimpl::GlobalMaps,
+        ETH_LEN + IPV6_LEN,
+        tap_ifindex,
+        flowplane_common::FW_DIR_INGRESS,
+    ) == flowplane_common::FW_ACTION_DROP
+}
+
+/// Stateful firewall + conntrack for the inner-v6 normal (non-LB) ingress delivery path, applied
+/// pre-decap (inner v6 header at ETH_LEN + IPV6_LEN). Returns `true` if the packet must be dropped
+/// (deny-by-default on a new flow). Out-of-line (`#[inline(never)]`) so its CtKey6/CtEntry stack
+/// frame stays off the combined `try_uplink_rx` BPF stack (512B limit).
+///
+/// Takes `data`/`data_end` as SCALARS and reconstructs the packet window inside via `RawPkt` — no
+/// `XdpContext`/pkt pointer crosses the bpf-to-bpf boundary (passing one and then deriving `pkt_end`
+/// in the callee trips the verifier's "R_ pointer arithmetic on pkt_end prohibited"). Mirrors the
+/// egress `egress_fw_ct_v6` shape.
+#[inline(never)]
+fn ingress_fw_ct_v6(data: usize, data_end: usize, tap_ifindex: u32, vni: u32) -> bool {
+    if let Some(key) = crate::conntrack::ct_key6(data, data_end, ETH_LEN + IPV6_LEN, vni) {
+        match unsafe { crate::maps::CONNTRACK6.get(&key) } {
+            Some(e) => {
+                let mut e = *e;
+                crate::conntrack::ct_touch6(data, data_end, ETH_LEN + IPV6_LEN, &key, &mut e);
+            }
+            None => {
+                if flowplane_core::firewall::fw_eval_dir6(
+                    &crate::coreimpl::RawPkt::new(data, data_end),
+                    &crate::coreimpl::GlobalMaps,
+                    ETH_LEN + IPV6_LEN,
+                    tap_ifindex,
+                    flowplane_common::FW_DIR_INGRESS,
+                ) == flowplane_common::FW_ACTION_DROP
+                {
+                    return true;
+                }
+                flowplane_core::conntrack::ct_create_default6(
+                    &crate::coreimpl::RawPkt::new(data, data_end),
+                    &mut crate::coreimpl::GlobalMaps,
+                    ETH_LEN + IPV6_LEN,
+                    vni,
+                    crate::conntrack::now(),
+                );
+            }
+        }
+    }
+    false
+}
+
+/// Decap an inner-IPv6-in-IPv6 frame (strip the 40B outer IPv6 via `adjust_head`), write the inner
+/// Ethernet header (dst=guest MAC, src=GW_MAC, ethertype=IPv6), and redirect to the tap. Shared by
+/// the LB-local and normal delivery arms.
+///
+/// Out-of-line (`#[inline(never)]`) so its post-`adjust_head` bounds-recheck + eth-write locals live
+/// in their own BPF stack frame rather than inflating `v6_uplink_rx`'s frame (which is held live
+/// across the `ingress_fw_ct_v6`/`ingress_fw_lb_v6` subprogram calls — 512B combined stack limit).
+#[inline(never)]
+fn decap_deliver_v6(ctx: &XdpContext, guest_mac: [u8; 6], tap_ifindex: u32) -> Result<u32, DpErr> {
+    if unsafe { bpf_xdp_adjust_head(ctx.ctx, IPV6_LEN as i32) } != 0 {
+        return Err(DpErr::Bounds);
+    }
+    let data = ctx.data();
+    let data_end = ctx.data_end();
+    if data + ETH_LEN > data_end {
+        return Err(DpErr::Bounds);
+    }
+    let q = data as *mut u8;
+    unsafe {
+        write6(q, &guest_mac);
+        write6(q.add(6), &GW_MAC);
+        core::ptr::write_unaligned(q.add(12) as *mut u16, ETH_P_IPV6.to_be());
+    }
+    Ok(unsafe { bpf_redirect(tap_ifindex, 0) } as u32)
+}
+
 /// Ingress for an inner IPv6 frame (outer next-header 41): deliver by outer IPv6 dst, decap, write
 /// the inner Ethernet (Ethertype IPv6), redirect to the tap.
 #[inline(always)]
@@ -114,21 +208,13 @@ pub fn v6_uplink_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
                 // Local backend: decap and deliver to the backend VM's tap.
                 let guest_mac = bu.guest_mac;
                 let tap_ifindex = bu.tap_ifindex;
-                if unsafe { bpf_xdp_adjust_head(ctx.ctx, IPV6_LEN as i32) } != 0 {
-                    return Err(DpErr::Bounds);
+                // Stateless ingress firewall for LB-local delivery (no conntrack: DSR keeps the
+                // inner dst = VIP, and LB flows are not CT-tracked on this path). Out-of-line so
+                // its firewall stack frame stays off the combined try_uplink_rx BPF stack (512B).
+                if ingress_fw_lb_v6(ctx.data(), ctx.data_end(), bu.tap_ifindex) {
+                    return Ok(xdp_action::XDP_DROP);
                 }
-                let data2 = ctx.data();
-                let data_end2 = ctx.data_end();
-                if data2 + ETH_LEN > data_end2 {
-                    return Err(DpErr::Bounds);
-                }
-                let q = data2 as *mut u8;
-                unsafe {
-                    write6(q, &guest_mac);
-                    write6(q.add(6), &GW_MAC);
-                    core::ptr::write_unaligned(q.add(12) as *mut u16, ETH_P_IPV6.to_be());
-                }
-                return Ok(unsafe { bpf_redirect(tap_ifindex, 0) } as u32);
+                return decap_deliver_v6(ctx, guest_mac, tap_ifindex);
             }
             None => {
                 // Remote backend: reforward without decap.
@@ -140,25 +226,18 @@ pub fn v6_uplink_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
     // No LB match — check for ICMPv6 echo request destined to an LB VIP (tap=0).
     // The LB VNF underlay has tap_ifindex=0; generate the reply in-place.
     if u.tap_ifindex == 0 {
-        if let Some(act) = try_icmpv6_echo_reply(ctx, outer_src, outer_dst) {
+        if let Some(act) = try_icmpv6_echo_reply(ctx.data(), ctx.data_end(), outer_src, outer_dst) {
             return Ok(act);
         }
         // Unknown packet for LB VNF: drop.
         return Ok(xdp_action::XDP_DROP);
     }
-    if unsafe { bpf_xdp_adjust_head(ctx.ctx, IPV6_LEN as i32) } != 0 {
-        return Err(DpErr::Bounds);
+    // Stateful firewall + conntrack on the inner-v6 flow before decap (mirrors the v4 uplink_rx
+    // site). Inner v6 header is at ETH_LEN + IPV6_LEN pre-decap; new flows are ingress-firewalled
+    // then tracked, established flows (CT hit) skip the firewall. Out-of-line so its CtKey6/CtEntry
+    // stack frame stays off the combined try_uplink_rx BPF stack (512B limit).
+    if ingress_fw_ct_v6(ctx.data(), ctx.data_end(), u.tap_ifindex, vni) {
+        return Ok(xdp_action::XDP_DROP);
     }
-    let data = ctx.data();
-    let data_end = ctx.data_end();
-    if data + ETH_LEN > data_end {
-        return Err(DpErr::Bounds);
-    }
-    let q = data as *mut u8;
-    unsafe {
-        write6(q, &u.guest_mac);
-        write6(q.add(6), &GW_MAC);
-        core::ptr::write_unaligned(q.add(12) as *mut u16, ETH_P_IPV6.to_be());
-    }
-    Ok(unsafe { bpf_redirect(u.tap_ifindex, 0) } as u32)
+    decap_deliver_v6(ctx, u.guest_mac, u.tap_ifindex)
 }

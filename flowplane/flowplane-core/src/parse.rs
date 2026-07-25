@@ -35,6 +35,27 @@ pub fn l4_ports<P: Pkt>(pkt: &P, ip_off: usize) -> Option<(u8, u16, u16)> {
     }
 }
 
+/// IPv6 variant of [`l4_ports`]: next header at `ip_off + 6`, L4 header at the fixed `ip_off + 40`
+/// (no extension-header parsing — mirrors the v4 fixed-offset access). ICMPv6 (58) mirrors the
+/// id into both ports like the v4 ICMP case.
+#[inline(always)]
+pub fn l4_ports_v6<P: Pkt>(pkt: &P, ip_off: usize) -> Option<(u8, u16, u16)> {
+    let nexthdr = pkt.read_u8(ip_off + 6)?;
+    let l4 = ip_off + 40;
+    match nexthdr {
+        IPPROTO_TCP | IPPROTO_UDP => {
+            let sp = pkt.read_u16_be(l4)?;
+            let dp = pkt.read_u16_be(l4 + 2)?;
+            Some((nexthdr, sp, dp))
+        }
+        58 => {
+            let id = pkt.read_u16_be(l4 + 4)?;
+            Some((nexthdr, id, id))
+        }
+        _ => None,
+    }
+}
+
 /// FNV-1a offset basis and prime, single-sourced so the array-based [`hash5`]/[`hash_v6`] and the
 /// streaming [`inner_flow_label`] fold produce byte-identical results (see `flow_label_test.rs`).
 const FNV_OFFSET: u32 = 2166136261;
@@ -202,4 +223,17 @@ pub fn icmp_type_code<P: Pkt>(pkt: &P, ip_off: usize) -> (u16, u16) {
         Some(b) => (b[0] as u16, b[1] as u16),
         None => (0, 0),
     }
+}
+
+/// IPv6 variant of [`icmp_type_code`]: ICMPv6 header at `ip_off + 40` when next header is 58.
+/// Returns `(0xffff, 0xffff)` if not ICMPv6 / out of bounds.
+#[inline(always)]
+pub fn icmp_type_code_v6<P: Pkt>(pkt: &P, ip_off: usize) -> (u16, u16) {
+    if pkt.read_u8(ip_off + 6) != Some(58) {
+        return (0xffff, 0xffff);
+    }
+    let l4 = ip_off + 40;
+    let t = pkt.read_u8(l4).map(u16::from).unwrap_or(0xffff);
+    let c = pkt.read_u8(l4 + 1).map(u16::from).unwrap_or(0xffff);
+    (t, c)
 }

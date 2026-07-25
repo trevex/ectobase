@@ -628,6 +628,10 @@ async fn main() -> anyhow::Result<()> {
                 }
                 None => loader::attach_xdp(&mut ebpf, "uplink_rx", &uplink)?,
             }
+            // Register the inner-v6 ingress tail-call target (xdp_uplink_v6) in UPLINK_PROGS so
+            // uplink_rx's IPPROTO_IPV6 tail-call resolves. Loaded but NOT attached (tail-call only).
+            // Held in scope so the userspace map fd lives for the datapath lifetime.
+            let _uplink_progs = loader::register_uplink_v6_xdp(&mut ebpf)?;
             loader::ensure_fq_qdisc(&uplink);
             // tc_guest_tx: pre-load once, then attach via clsact ingress for each guest.
             // Register GUEST_PROGS_TC (tc_guest_dhcp + tc_guest_nat64 tail calls) first, then

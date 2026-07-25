@@ -36,28 +36,46 @@ pub fn parse_prefix(cidr: &str) -> anyhow::Result<(bool, [u8; 16], u32)> {
     }
 }
 
-/// Parse an IPv4 firewall CIDR into `(ip, mask)`. Empty = "any" (0.0.0.0/0); bare address = /32.
-/// Verbatim from the eBPF node service.
-pub fn parse_fw_cidr(cidr: &str) -> anyhow::Result<([u8; 4], [u8; 4])> {
+/// A parsed firewall CIDR, family-tagged. IPv4 stores `(ip, mask)` as four octets each; IPv6 as
+/// sixteen octets each. The handler branches on the variant to build a `FwRule` or `FwRule6`.
+pub enum FwCidr {
+    V4([u8; 4], [u8; 4]),
+    V6([u8; 16], [u8; 16]),
+}
+
+/// Parse a firewall CIDR into a family-tagged `(ip, mask)`. Empty = "any" (v4 wildcard `0.0.0.0/0`);
+/// bare address = full-length prefix. Accepts both IPv4 and IPv6. Verbatim-derived from the eBPF
+/// node service, extended for v6.
+pub fn parse_fw_cidr(cidr: &str) -> anyhow::Result<FwCidr> {
     if cidr.is_empty() {
-        return Ok(([0u8; 4], [0u8; 4]));
+        // empty = v4 wildcard; caller re-encodes if the rule is v6
+        return Ok(FwCidr::V4([0u8; 4], [0u8; 4]));
     }
-    let (addr, len) = match cidr.split_once('/') {
-        Some((a, l)) => (
-            a,
-            l.parse::<u32>()
-                .map_err(|_| anyhow::anyhow!("bad prefix len in {cidr:?}"))?,
-        ),
-        None => (cidr, 32u32),
+    let (addr, len_str) = match cidr.split_once('/') {
+        Some((a, l)) => (a, Some(l)),
+        None => (cidr, None),
     };
-    if len > 32 {
-        anyhow::bail!("v4 prefix len {len} > 32 in {cidr:?}");
+    if let Ok(v4) = addr.parse::<std::net::Ipv4Addr>() {
+        let len: u32 = len_str.map(|l| l.parse()).transpose()?.unwrap_or(32);
+        if len > 32 {
+            anyhow::bail!("v4 prefix len {len} > 32 in {cidr:?}");
+        }
+        let mask: u32 = if len == 0 { 0 } else { u32::MAX << (32 - len) };
+        return Ok(FwCidr::V4(v4.octets(), mask.to_be_bytes()));
     }
-    let ip: std::net::Ipv4Addr = addr
+    let v6: std::net::Ipv6Addr = addr
         .parse()
-        .map_err(|_| anyhow::anyhow!("bad ipv4 address in {cidr:?}"))?;
-    let mask: u32 = if len == 0 { 0 } else { u32::MAX << (32 - len) };
-    Ok((ip.octets(), mask.to_be_bytes()))
+        .map_err(|_| anyhow::anyhow!("bad ip address in {cidr:?}"))?;
+    let len: u32 = len_str.map(|l| l.parse()).transpose()?.unwrap_or(128);
+    if len > 128 {
+        anyhow::bail!("v6 prefix len {len} > 128 in {cidr:?}");
+    }
+    let mask: u128 = if len == 0 {
+        0
+    } else {
+        u128::MAX << (128 - len)
+    };
+    Ok(FwCidr::V6(v6.octets(), mask.to_be_bytes()))
 }
 
 /// Parse an IPv6 nexthop underlay address into 16 bytes.
@@ -155,5 +173,23 @@ mod tests {
     fn parse_mac_ok_and_bad() {
         assert_eq!(parse_mac("02:00:00:00:00:01").unwrap(), [2, 0, 0, 0, 0, 1]);
         assert!(parse_mac("not-a-mac").is_err());
+    }
+
+    #[test]
+    fn parse_fw_cidr_v6() {
+        match parse_fw_cidr("2001:db8::/32").unwrap() {
+            FwCidr::V6(ip, mask) => {
+                assert_eq!(&ip[0..2], &[0x20, 0x01]);
+                assert_eq!(&mask[0..4], &[0xff, 0xff, 0xff, 0xff]);
+                assert_eq!(mask[4], 0x00);
+            }
+            _ => panic!("expected V6"),
+        }
+        assert!(matches!(
+            parse_fw_cidr("10.0.0.0/8").unwrap(),
+            FwCidr::V4(..)
+        ));
+        assert!(matches!(parse_fw_cidr("::/0").unwrap(), FwCidr::V6(_, m) if m == [0u8;16]));
+        assert!(parse_fw_cidr("2001:db8::/129").is_err());
     }
 }

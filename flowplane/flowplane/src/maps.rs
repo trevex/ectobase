@@ -5,10 +5,10 @@ use aya::maps::{
 };
 use aya::Ebpf;
 use flowplane_common::{
-    CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceMetaKey,
-    IfaceMetaVal, IfaceValue, InspectEntry, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey,
-    NatValue, NeighborNatEntry, PortMeta, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue,
-    VipKey,
+    CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey,
+    IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbKey, LbValue, Local, MaglevKey,
+    MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteLpmData, RouteLpmData6,
+    RouteValue, UnderlayValue, VipKey,
 };
 
 /// Typed handle over the `INTERFACES` BPF map (overlay (VNI, IPv4) -> delivery info).
@@ -424,6 +424,46 @@ impl FwMetaMap {
 
     pub fn upsert(&mut self, ifindex: u32, val: FwMeta) -> anyhow::Result<()> {
         self.map.insert(ifindex, val, 0).context("insert fw meta")
+    }
+}
+
+/// Typed handle over the `FW_RULES6` BPF map ((ifindex, slot) -> IPv6 rule). Mirror of [`FwRules`].
+pub struct FwRules6 {
+    map: HashMap<MapData, FwRuleKey, FwRule6>,
+}
+
+impl FwRules6 {
+    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
+        let map = HashMap::try_from(
+            ebpf.take_map("FW_RULES6")
+                .context("FW_RULES6 map missing")?,
+        )?;
+        Ok(Self { map })
+    }
+
+    pub fn upsert(&mut self, key: FwRuleKey, val: FwRule6) -> anyhow::Result<()> {
+        self.map.insert(key, val, 0).context("insert fw rule6")
+    }
+
+    pub fn remove(&mut self, key: &FwRuleKey) -> anyhow::Result<()> {
+        self.map.remove(key).context("remove fw rule6")
+    }
+}
+
+/// Typed handle over the `FW_META6` BPF map (ifindex -> per-direction rule counts). Mirror of
+/// [`FwMetaMap`].
+pub struct FwMetaMap6 {
+    map: HashMap<MapData, u32, FwMeta>,
+}
+
+impl FwMetaMap6 {
+    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
+        let map = HashMap::try_from(ebpf.take_map("FW_META6").context("FW_META6 map missing")?)?;
+        Ok(Self { map })
+    }
+
+    pub fn upsert(&mut self, ifindex: u32, val: FwMeta) -> anyhow::Result<()> {
+        self.map.insert(ifindex, val, 0).context("insert fw meta6")
     }
 }
 

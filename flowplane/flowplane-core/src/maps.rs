@@ -1,5 +1,5 @@
 use flowplane_common::{
-    CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
+    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
     MaglevKey, MeterState, NatKey, NatValue, RouteValue, UnderlayValue,
 };
 
@@ -12,6 +12,25 @@ pub trait Maps {
     fn fw_rule(&self, key: &FwRuleKey) -> Option<FwRule>;
     fn conntrack_get(&self, key: &CtKey) -> Option<CtEntry>;
     fn conntrack_insert(&mut self, key: CtKey, entry: CtEntry);
+    /// Firewall-only IPv6 conntrack lookup (`CONNTRACK6` map). DEFAULT `None`: backends that have not
+    /// wired the v6 firewall datapath (the eBPF `GlobalMaps` and DPDK `DpdkMaps` until their v6
+    /// tasks land) return `None`, so v6 conntrack is simply absent there. The sim `MemMaps` overrides
+    /// this with a real `HashMap`-backed store.
+    fn conntrack6_get(&self, _key: &CtKey6) -> Option<CtEntry> {
+        None
+    }
+    /// Firewall-only IPv6 conntrack insert (`CONNTRACK6` map). DEFAULT no-op — see [`Self::conntrack6_get`].
+    fn conntrack6_insert(&mut self, _key: CtKey6, _entry: CtEntry) {}
+    /// IPv6 firewall meta (`FW_META6`). DEFAULT `None` — a backend without v6 fw wiring denies v6 by
+    /// default (see [`crate::firewall::fw_eval_dir6`]). Overridden by the sim `MemMaps`; the eBPF
+    /// `GlobalMaps` and DPDK `DpdkMaps` gain overrides in their later v6-firewall tasks.
+    fn fw_meta6(&self, _ifindex: u32) -> Option<FwMeta> {
+        None
+    }
+    /// IPv6 firewall rule slot (`FW_RULES6`). DEFAULT `None` — see [`Self::fw_meta6`].
+    fn fw_rule6(&self, _key: &FwRuleKey) -> Option<flowplane_common::FwRule6> {
+        None
+    }
     fn lb_get(&self, key: &LbKey) -> Option<LbValue>;
     fn maglev_get(&self, key: &MaglevKey) -> Option<[u8; 16]>;
     /// Network-NAT config for a `(vni, guest-ipv4)` pair (`NAT` map).

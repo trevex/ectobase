@@ -3,10 +3,10 @@ use aya_ebpf::{
     maps::{lpm_trie::LpmTrie, Array, DevMap, DevMapHash, HashMap, LruHashMap, ProgramArray},
 };
 use flowplane_common::{
-    Config, CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceKey,
-    IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbKey, LbValue, Local, MaglevKey,
-    MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteLpmData, RouteLpmData6,
-    RouteValue, UnderlayValue, VipKey,
+    Config, CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey,
+    IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbKey, LbValue, Local,
+    MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteLpmData,
+    RouteLpmData6, RouteValue, UnderlayValue, VipKey,
 };
 
 #[map]
@@ -66,6 +66,15 @@ pub static NAT_IPS: HashMap<VipKey, u8> = HashMap::pinned(1024, 0);
 pub static FW_RULES: HashMap<FwRuleKey, FwRule> = HashMap::pinned(16384, 0);
 #[map]
 pub static FW_META: HashMap<u32, FwMeta> = HashMap::pinned(1024, 0);
+/// IPv6 firewall rule slots ((ifindex, slot) -> FwRule6). Mirror of `FW_RULES` with 16-byte prefixes.
+#[map]
+pub static FW_RULES6: HashMap<FwRuleKey, FwRule6> = HashMap::pinned(16384, 0);
+/// IPv6 firewall per-interface meta (ifindex -> per-direction rule counts). Mirror of `FW_META`.
+#[map]
+pub static FW_META6: HashMap<u32, FwMeta> = HashMap::pinned(1024, 0);
+/// IPv6 firewall-only conntrack (`CtKey6` -> `CtEntry`). Mirror of `CONNTRACK` (LRU, same cap/flags).
+#[map]
+pub static CONNTRACK6: LruHashMap<CtKey6, CtEntry> = LruHashMap::pinned(1_048_576, 0);
 #[map]
 pub static UNDERLAY: HashMap<[u8; 16], UnderlayValue> = HashMap::pinned(4096, 0);
 #[map]
@@ -84,3 +93,10 @@ pub static DHCP_META: HashMap<u32, DhcpMeta> = HashMap::pinned(1024, 0);
 /// loader with `tc_guest_dhcp` at `GUEST_PROG_DHCP`.
 #[map]
 pub static GUEST_PROGS_TC: ProgramArray = ProgramArray::with_max_entries(8, 0);
+
+/// Tail-call targets for the **XDP** uplink (ingress) split. XDP programs can only tail-call other
+/// XDP programs, so this is a separate array from the tc-only `GUEST_PROGS_TC`. Populated by the
+/// loader with `xdp_uplink_v6` at `UPLINK_PROG_V6`; `uplink_rx` tail-calls it for inner-IPv6 frames
+/// (the v6 firewall + conntrack overflow uplink_rx's 512B combined BPF stack).
+#[map]
+pub static UPLINK_PROGS: ProgramArray = ProgramArray::with_max_entries(4, 0);

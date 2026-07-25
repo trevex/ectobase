@@ -108,13 +108,9 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 				if r.CIDR != "10.0.0.0/24" || r.Proto != "TCP" || r.Port != 443 || r.Action != "Allow" {
 					return fmt.Errorf("ingress[0] = %+v, want CIDR=10.0.0.0/24 Proto=TCP Port=443 Action=Allow", r)
 				}
-				// Egress has no policy rules → allow-all materialized.
-				if len(c.Spec.Firewall.Egress) != 1 {
-					return fmt.Errorf("egress rules = %d, want 1 (allow-all)", len(c.Spec.Firewall.Egress))
-				}
-				e := c.Spec.Firewall.Egress[0]
-				if e.CIDR != "0.0.0.0/0" || e.Action != "Allow" {
-					return fmt.Errorf("egress[0] = %+v, want CIDR=0.0.0.0/0 Action=Allow", e)
+				// Egress has no policy rules → allow-all materialized for both families.
+				if len(c.Spec.Firewall.Egress) != 2 || !hasAllowCIDR(c.Spec.Firewall.Egress, "0.0.0.0/0") || !hasAllowCIDR(c.Spec.Firewall.Egress, "::/0") {
+					return fmt.Errorf("egress = %+v, want v4+v6 allow-all", c.Spec.Firewall.Egress)
 				}
 				return nil
 			})
@@ -133,11 +129,11 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 
 		eventually(t, 15*time.Second, func() error {
 			return checkCompiledNIC(ctx, direct, "default", "default-nic-backend", func(c *netv1.CompiledNIC) error {
-				if len(c.Spec.Firewall.Ingress) != 1 || c.Spec.Firewall.Ingress[0].CIDR != "0.0.0.0/0" || c.Spec.Firewall.Ingress[0].Action != "Allow" {
-					return fmt.Errorf("ingress = %+v, want [allow-all]", c.Spec.Firewall.Ingress)
+				if len(c.Spec.Firewall.Ingress) != 2 || !hasAllowCIDR(c.Spec.Firewall.Ingress, "0.0.0.0/0") || !hasAllowCIDR(c.Spec.Firewall.Ingress, "::/0") {
+					return fmt.Errorf("ingress = %+v, want v4+v6 allow-all", c.Spec.Firewall.Ingress)
 				}
-				if len(c.Spec.Firewall.Egress) != 1 || c.Spec.Firewall.Egress[0].CIDR != "0.0.0.0/0" || c.Spec.Firewall.Egress[0].Action != "Allow" {
-					return fmt.Errorf("egress = %+v, want [allow-all]", c.Spec.Firewall.Egress)
+				if len(c.Spec.Firewall.Egress) != 2 || !hasAllowCIDR(c.Spec.Firewall.Egress, "0.0.0.0/0") || !hasAllowCIDR(c.Spec.Firewall.Egress, "::/0") {
+					return fmt.Errorf("egress = %+v, want v4+v6 allow-all", c.Spec.Firewall.Egress)
 				}
 				return nil
 			})

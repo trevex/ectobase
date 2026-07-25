@@ -9,9 +9,9 @@ use flowplane_common::{IfaceKey, IfaceMetaKey, IfaceMetaVal, Local, IFACE_DEV_MA
 
 use crate::loader;
 use crate::maps::{
-    Conntrack, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwRules, GuestDevMap, IfaceMetaMap,
-    Interfaces, Lb, LocalMap, Maglev, Meter, Nat, NatIps, NeighborNat, NeighborNatCount,
-    PortMetaMap, Routes, Routes6, UplinkDevMap, Vips,
+    Conntrack, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwMetaMap6, FwRules, FwRules6, GuestDevMap,
+    IfaceMetaMap, Interfaces, Lb, LocalMap, Maglev, Meter, Nat, NatIps, NeighborNat,
+    NeighborNatCount, PortMetaMap, Routes, Routes6, UplinkDevMap, Vips,
 };
 // `Nat`, `NatIps`, `NeighborNat`, `NeighborNatCount` are still opened in `bring_up`/the test ctor,
 // then moved into `AyaWriter` (they no longer live in `Inner`).
@@ -116,6 +116,10 @@ struct Inner {
     /// tail-call slots so `tc_guest_tx`'s tail calls resolve. Kept alive here for the datapath's
     /// lifetime; dropping it would close the userspace map fd.
     _guest_progs: aya::maps::ProgramArray<aya::maps::MapData>,
+    /// Owned `UPLINK_PROGS` program array handle. Holds the `xdp_uplink_v6` tail-call slot so
+    /// `uplink_rx`'s inner-IPv6 tail call resolves (else it fails open to XDP_PASS and inner-v6
+    /// overlay ingress is dropped). Kept alive here for the datapath's lifetime like `_guest_progs`.
+    _uplink_progs: aya::maps::ProgramArray<aya::maps::MapData>,
     _locals: LocalMap,
     /// Owned `UPLINK_DEV` devmap handle. wan_rx is loaded LATER (attach_edge), so this handle MUST
     /// stay alive here — dropping it after set() closes the map fd and wan_rx then fails to verify
@@ -194,6 +198,9 @@ impl Control {
             loader::load_program_tc(&mut ebpf, "tc_guest_tx")?;
             progs
         };
+        // Register the inner-IPv6 uplink tail-call target (xdp_uplink_v6) so uplink_rx's v6 tail
+        // call resolves; without this the daemon fails open to XDP_PASS on inner-v6 ingress.
+        let uplink_progs = loader::register_uplink_v6_xdp(&mut ebpf)?;
         let mut locals = LocalMap::open(&mut ebpf)?;
         locals.set(&Local {
             uplink_ifindex,
@@ -217,6 +224,8 @@ impl Control {
         let nat = Nat::open(&mut ebpf)?;
         let fw_rules = FwRules::open(&mut ebpf)?;
         let fw_meta = FwMetaMap::open(&mut ebpf)?;
+        let fw_rules6 = FwRules6::open(&mut ebpf)?;
+        let fw_meta6 = FwMetaMap6::open(&mut ebpf)?;
         let underlay = crate::maps::Underlay::open(&mut ebpf)?;
         let meter = Meter::open(&mut ebpf)?;
         let neigh_nat = NeighborNat::open(&mut ebpf)?;
@@ -238,6 +247,8 @@ impl Control {
             underlay,
             fw_rules,
             fw_meta,
+            fw_rules6,
+            fw_meta6,
             ports,
             ifaces,
             vips,
@@ -250,6 +261,7 @@ impl Control {
         let mut inner = Inner {
             ebpf,
             _guest_progs: guest_progs,
+            _uplink_progs: uplink_progs,
             _locals: locals,
             _uplink_dev: uplink_dev,
             guest_dev,

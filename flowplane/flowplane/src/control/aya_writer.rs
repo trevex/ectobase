@@ -4,9 +4,9 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::maps::{
-    Conntrack, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwRules, IfaceMetaMap, Interfaces, Lb,
-    Maglev, Meter, Nat, NatIps, NeighborNat, NeighborNatCount, PortMetaMap, Routes, Routes6,
-    Underlay, Vips,
+    Conntrack, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwMetaMap6, FwRules, FwRules6, IfaceMetaMap,
+    Interfaces, Lb, Maglev, Meter, Nat, NatIps, NeighborNat, NeighborNatCount, PortMetaMap, Routes,
+    Routes6, Underlay, Vips,
 };
 use flowplane_common::{
     CtKey, IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue, NatKey, NatValue, NeighborNatEntry,
@@ -30,6 +30,9 @@ pub struct AyaWriter {
     // FIREWALL domain (Task 6): per-interface rule slots + per-direction rule counts.
     pub fw_rules: FwRules,
     pub fw_meta: FwMetaMap,
+    // IPv6 FIREWALL domain: v6 rule slots + per-direction rule counts (FW_RULES6 / FW_META6).
+    pub fw_rules6: FwRules6,
+    pub fw_meta6: FwMetaMap6,
     // INTERFACE + QoS + DHCP domain (Task 7): the last config maps, moved out of `Inner`. After
     // this, `AyaWriter` owns ALL config maps and `Inner` holds only device/loader fields + `core`.
     pub ports: PortMetaMap,
@@ -194,6 +197,19 @@ impl MapWriter for AyaWriter {
     }
     fn fw_meta_upsert(&mut self, i: u32, v: flowplane_common::FwMeta) -> anyhow::Result<()> {
         self.fw_meta.upsert(i, v)
+    }
+    fn fw_rules6_upsert(
+        &mut self,
+        k: flowplane_common::FwRuleKey,
+        v: flowplane_common::FwRule6,
+    ) -> anyhow::Result<()> {
+        self.fw_rules6.upsert(k, v)
+    }
+    fn fw_rules6_remove(&mut self, k: &flowplane_common::FwRuleKey) -> anyhow::Result<()> {
+        self.fw_rules6.remove(k)
+    }
+    fn fw_meta6_upsert(&mut self, i: u32, v: flowplane_common::FwMeta) -> anyhow::Result<()> {
+        self.fw_meta6.upsert(i, v)
     }
     fn meter_upsert(&mut self, i: u32, v: flowplane_common::MeterState) -> anyhow::Result<()> {
         self.meter.upsert(i, v)

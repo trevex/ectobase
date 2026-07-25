@@ -37,6 +37,22 @@ impl Maps for GlobalMaps {
         let _ = crate::maps::CONNTRACK.insert(&key, &entry, 0);
     }
     #[inline(always)]
+    fn fw_meta6(&self, ifindex: u32) -> Option<FwMeta> {
+        unsafe { crate::maps::FW_META6.get(&ifindex).copied() }
+    }
+    #[inline(always)]
+    fn fw_rule6(&self, key: &FwRuleKey) -> Option<flowplane_common::FwRule6> {
+        unsafe { crate::maps::FW_RULES6.get(key).copied() }
+    }
+    #[inline(always)]
+    fn conntrack6_get(&self, key: &flowplane_common::CtKey6) -> Option<CtEntry> {
+        unsafe { crate::maps::CONNTRACK6.get(key).copied() }
+    }
+    #[inline(always)]
+    fn conntrack6_insert(&mut self, key: flowplane_common::CtKey6, entry: CtEntry) {
+        let _ = crate::maps::CONNTRACK6.insert(&key, &entry, 0);
+    }
+    #[inline(always)]
     fn lb_get(&self, key: &LbKey) -> Option<LbValue> {
         unsafe { crate::maps::LB.get(key).copied() }
     }

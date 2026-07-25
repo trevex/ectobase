@@ -260,7 +260,45 @@ fn uplink_rx_bytecode_matches_native_sim() {
             .expect("write LOCAL[0]");
     }
 
-    // 3. Load (verify) the uplink_rx program and get its kernel fd.
+    // 3. Verifier gate + tail-call wiring for the inner-v6 ingress target. The inner-IPv6 ingress
+    // path was split out of uplink_rx into `xdp_uplink_v6` (fresh BPF stack) because the v6 firewall
+    // + conntrack frames overflowed uplink_rx's 512B combined stack. This anchor's byte-parity
+    // fixture is v4 (so it doesn't traverse the tail-call), but we still LOAD xdp_uplink_v6 here so
+    // the kernel verifier accepts it — a v6 stack regression is caught by CI's `--ignored` anchor
+    // run. Then register it into UPLINK_PROGS[UPLINK_PROG_V6] so uplink_rx's tail-call resolves (the
+    // kernel executes tail calls under BPF_PROG_TEST_RUN, so the slot must be populated).
+    {
+        let vprog: &mut Xdp = ebpf
+            .program_mut("xdp_uplink_v6")
+            .expect("xdp_uplink_v6 program present")
+            .try_into()
+            .expect("xdp_uplink_v6 is an XDP program");
+        vprog
+            .load()
+            .expect("verify/load xdp_uplink_v6 (v6 ingress must pass the verifier < 512B)");
+    }
+    // Take the map out of ebpf FIRST (owned handle), then borrow the program fd immutably, then set
+    // — mirrors `loader::register_uplink_v6_xdp` and keeps the borrows sequential. Bound for the rest
+    // of the test so its userspace fd (and the populated slot) outlives the BPF_PROG_TEST_RUN below.
+    let _uplink_progs: aya::maps::ProgramArray<_> = {
+        use aya::programs::ProgramFd;
+        let mut uplink_progs: aya::maps::ProgramArray<_> = aya::maps::ProgramArray::try_from(
+            ebpf.take_map("UPLINK_PROGS").expect("UPLINK_PROGS map"),
+        )
+        .expect("UPLINK_PROGS as ProgramArray");
+        let vprog: &Xdp = ebpf
+            .program("xdp_uplink_v6")
+            .expect("xdp_uplink_v6 program present")
+            .try_into()
+            .expect("xdp_uplink_v6 is an XDP program");
+        let vfd: &ProgramFd = vprog.fd().expect("xdp_uplink_v6 fd");
+        uplink_progs
+            .set(flowplane_common::UPLINK_PROG_V6, vfd, 0)
+            .expect("register xdp_uplink_v6 in UPLINK_PROGS[UPLINK_PROG_V6]");
+        uplink_progs
+    };
+
+    // 4. Load (verify) the uplink_rx program and get its kernel fd.
     let prog: &mut Xdp = ebpf
         .program_mut("uplink_rx")
         .expect("uplink_rx program present")
