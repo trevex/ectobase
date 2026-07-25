@@ -93,3 +93,10 @@ pub static DHCP_META: HashMap<u32, DhcpMeta> = HashMap::pinned(1024, 0);
 /// loader with `tc_guest_dhcp` at `GUEST_PROG_DHCP`.
 #[map]
 pub static GUEST_PROGS_TC: ProgramArray = ProgramArray::with_max_entries(8, 0);
+
+/// Tail-call targets for the **XDP** uplink (ingress) split. XDP programs can only tail-call other
+/// XDP programs, so this is a separate array from the tc-only `GUEST_PROGS_TC`. Populated by the
+/// loader with `xdp_uplink_v6` at `UPLINK_PROG_V6`; `uplink_rx` tail-calls it for inner-IPv6 frames
+/// (the v6 firewall + conntrack overflow uplink_rx's 512B combined BPF stack).
+#[map]
+pub static UPLINK_PROGS: ProgramArray = ProgramArray::with_max_entries(4, 0);

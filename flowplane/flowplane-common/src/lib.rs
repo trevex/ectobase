@@ -468,6 +468,13 @@ pub const GUEST_PROG_IPV4: u32 = 1;
 pub const GUEST_PROG_IPV6: u32 = 2;
 pub const GUEST_PROG_V6_FWD: u32 = 3;
 
+/// Tail-call index into the `UPLINK_PROGS` **XDP** program array (ingress datapath split).
+/// `UPLINK_PROG_V6` dispatches the inner-IPv6 ingress path (`xdp_uplink_v6`), split out of
+/// `uplink_rx` because the v6 firewall/conntrack structures overflow the 512B combined BPF stack.
+/// XDP programs can only tail-call other XDP programs, so this lives in its own array (not the
+/// tc-only `GUEST_PROGS_TC`).
+pub const UPLINK_PROG_V6: u32 = 0;
+
 /// Server-wide DHCP config (DHCP_CONFIG[0]). Mirrors dpservice's --dhcp-mtu/--dhcp-dns/--dhcpv6-dns.
 #[repr(C)]
 #[derive(Copy, Clone)]

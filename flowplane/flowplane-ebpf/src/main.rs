@@ -46,6 +46,20 @@ pub fn uplink_rx(ctx: XdpContext) -> u32 {
     }
 }
 
+/// Inner-IPv6 ingress tail-call target: `uplink_rx` tail-calls this (via `UPLINK_PROGS`) for an
+/// encapped frame whose inner is IPv6 (outer next-header 41). The tail-call RESETS the BPF stack,
+/// giving the v6 firewall + conntrack path a fresh 512B budget — inline in `uplink_rx` its
+/// CtKey6/CtEntry/FwRule6 frames overflowed the combined stack on top of uplink_rx's own 408B.
+/// Loaded by the daemon but NOT attached to an interface (it is only ever reached via tail-call).
+/// `#[xdp(frags)]` matches `uplink_rx` (the frags flag must be consistent across a tail call).
+#[xdp(frags)]
+pub fn xdp_uplink_v6(ctx: XdpContext) -> u32 {
+    match v6::v6_uplink_rx(&ctx) {
+        Ok(act) => act,
+        Err(_) => xdp_action::XDP_PASS,
+    }
+}
+
 /// WAN-edge return path: attached to the WAN uplink by `serve --role edge`. Encaps internet
 /// return traffic destined to a `nat_ip` back toward the owning hypervisor over the fabric.
 #[xdp(frags)]

@@ -113,7 +113,17 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
     }
     let nexthdr = unsafe { *p.add(ETH_LEN + 6) };
     if nexthdr == crate::parse::IPPROTO_IPV6 {
-        return crate::v6::v6_uplink_rx(ctx);
+        // Inner is IPv6: TAIL-CALL the dedicated xdp_uplink_v6 program (fresh 512B stack). The v6
+        // firewall + conntrack (CtKey6/CtEntry/FwRule6) overflow uplink_rx's own 408B frame when run
+        // inline. The tail-call RESETS the stack; xdp_uplink_v6 runs the v6 path with its own budget.
+        // We deliberately do NOT fall back to an inline `v6_uplink_rx(ctx)` here: a static call would
+        // pull the v6 fw/ct frames back onto uplink_rx's combined stack (the verifier sums all
+        // statically-reachable calls, tail-call reset notwithstanding) — the very overflow this split
+        // fixes. Mirrors the tc egress split (tc.rs), which likewise passes-through on tail-call miss.
+        let _ =
+            unsafe { crate::maps::UPLINK_PROGS.tail_call(ctx, flowplane_common::UPLINK_PROG_V6) };
+        // tail_call only returns on failure (slot empty / not registered) → passthrough.
+        return Ok(xdp_action::XDP_PASS);
     }
     if nexthdr != IPPROTO_IPIP {
         return Ok(xdp_action::XDP_PASS);

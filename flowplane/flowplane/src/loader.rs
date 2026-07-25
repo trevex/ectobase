@@ -177,6 +177,33 @@ pub fn register_guest_dhcp_tc(ebpf: &mut Ebpf) -> anyhow::Result<ProgramArray<Ma
     Ok(progs)
 }
 
+/// Load `xdp_uplink_v6` and register it in `UPLINK_PROGS[UPLINK_PROG_V6]` so `uplink_rx`'s inner-v6
+/// tail-call resolves. `xdp_uplink_v6` is a tail-call TARGET — it is loaded (verified) but NOT
+/// attached to an interface; it only ever runs via `uplink_rx`'s tail-call. The returned
+/// `ProgramArray` MUST be held in scope by the caller for the datapath's lifetime.
+pub fn register_uplink_v6_xdp(ebpf: &mut Ebpf) -> anyhow::Result<ProgramArray<MapData>> {
+    {
+        let prog: &mut Xdp = ebpf
+            .program_mut("xdp_uplink_v6")
+            .context("xdp_uplink_v6 program missing")?
+            .try_into()?;
+        prog.load().context("verify xdp_uplink_v6")?;
+    }
+    let mut progs: ProgramArray<_> = ebpf
+        .take_map("UPLINK_PROGS")
+        .context("UPLINK_PROGS map missing")?
+        .try_into()?;
+    let prog: &Xdp = ebpf
+        .program("xdp_uplink_v6")
+        .context("xdp_uplink_v6 program missing")?
+        .try_into()?;
+    let fd: &ProgramFd = prog.fd()?;
+    progs
+        .set(flowplane_common::UPLINK_PROG_V6, fd, 0)
+        .context("register xdp_uplink_v6 in UPLINK_PROGS")?;
+    Ok(progs)
+}
+
 /// Attach an XDP program: force SKB/generic when `FLOWPLANE_SKB_MODE` is set (veth uplinks — e.g.
 /// containerlab/kind fabric links — do not support native XDP), else prefer native and fall back
 /// to SKB. Shared by the uplink attach paths.
