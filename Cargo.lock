@@ -742,12 +742,12 @@ dependencies = [
  "flowplane-common",
  "flowplane-control",
  "flowplane-core",
+ "flowplane-node",
  "nfkit",
  "parking_lot",
  "prost",
  "tokio",
  "tonic",
- "tonic-build",
  "tonic-health",
 ]
 

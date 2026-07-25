@@ -3,21 +3,13 @@
 //! Identical in effect to `nfkit/build.rs`: dpdk-sys emits `cargo:prefix=<path>` (readable as
 //! `DEP_DPDK_PREFIX` by direct dependents); we re-parse the same `.pc` files and re-emit the full
 //! static link graph. A build-support crate would DRY this with nfkit/dpdk-sys in a later milestone.
+//!
+//! Proto compilation is NOT done here — flowplane-node compiles the dataplane proto and re-exports
+//! the generated types as `flowplane_node::pb`; flowplane-dpdk depends on flowplane-node and uses
+//! that re-export directly.
 use std::{env, fs, path::Path};
 
 fn main() {
-    // Compile the dataplane gRPC proto into the `DataplaneNode` server trait (Task 9). Mirrors the
-    // eBPF `flowplane/build.rs` proto step EXACTLY (same include paths, server-only) so the generated
-    // `dataplane.v1` module is the SAME server surface both binaries implement.
-    tonic_build::configure()
-        .build_client(false)
-        .compile_protos(
-            &["../../api/proto/dataplane/v1/dataplane.proto"],
-            &["../../api/proto/dataplane/v1"],
-        )
-        .expect("tonic-build compile dataplane protos");
-    println!("cargo:rerun-if-changed=../../api/proto/dataplane/v1");
-
     let prefix = env::var("DEP_DPDK_PREFIX").expect(
         "DEP_DPDK_PREFIX not set — dpdk-sys must emit `cargo:prefix=<path>` from its build.rs",
     );

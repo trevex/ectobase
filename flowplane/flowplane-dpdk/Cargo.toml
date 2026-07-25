@@ -9,6 +9,7 @@ publish = false
 flowplane-common = { path = "../flowplane-common", features = ["user"] }
 flowplane-control = { path = "../flowplane-control" }
 flowplane-core = { path = "../flowplane-core" }
+flowplane-node = { path = "../flowplane-node" }
 nfkit = { path = "../nfkit" }
 anyhow = { workspace = true }
 tokio = { workspace = true }
@@ -23,9 +24,7 @@ parking_lot = { workspace = true }
 dpdk-sys = { path = "../dpdk-sys" }
 
 [build-dependencies]
-# Compiles the dataplane .proto into the `DataplaneNode` server trait (Task 9), mirroring
-# flowplane's build.rs (server-only). Default `cargo build` is unaffected — this is a DPDK crate.
-tonic-build = "0.12"
+# tonic-build removed: flowplane-node compiles the proto; flowplane-dpdk re-exports pb from there.
 
 [[bin]]
 name = "flowplane-dpdk"

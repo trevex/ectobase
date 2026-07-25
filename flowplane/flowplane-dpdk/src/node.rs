@@ -30,27 +30,22 @@ use nfkit::SharedConfigMaps;
 use parking_lot::Mutex;
 use tonic::{Request, Response, Status};
 
-use flowplane_control::shadow::{IfaceMeta, LbIpBytes};
+use flowplane_control::shadow::IfaceMeta;
 use flowplane_control::{ControlCore, IfaceParams};
+use flowplane_node::{first_ipv4, first_ipv6, parse_mac};
 
 use crate::writer::DpdkMapWriter;
 
-pub mod pb {
-    tonic::include_proto!("dataplane.v1");
-}
+pub use flowplane_node::pb;
 use pb::dataplane_node_server::DataplaneNode;
 use pb::{
-    AddFwRuleRequest, AddFwRuleResponse, AddLbBackendRequest, AddLbBackendResponse,
-    AddLbVipRequest, AddLbVipResponse, AddNatSourceRequest, AddNatSourceResponse,
-    AddNeighborNatRequest, AddNeighborNatResponse, AddRouteRequest, AddRouteResponse,
     AttachInterfaceRequest, AttachInterfaceResponse, ConfigureNetworkRequest,
-    ConfigureNetworkResponse, ConfigureQoSRequest, ConfigureQoSResponse, DelFwRuleRequest,
-    DelFwRuleResponse, DelLbBackendRequest, DelLbBackendResponse, DelLbVipRequest,
-    DelLbVipResponse, DetachInterfaceRequest, DetachInterfaceResponse, InterfaceInfo,
-    ListInterfacesRequest, ListInterfacesResponse, WithdrawNatSourceRequest,
-    WithdrawNatSourceResponse, WithdrawNeighborNatRequest, WithdrawNeighborNatResponse,
-    WithdrawRouteRequest, WithdrawRouteResponse,
+    ConfigureNetworkResponse, DetachInterfaceRequest, DetachInterfaceResponse, InterfaceInfo,
+    ListInterfacesRequest, ListInterfacesResponse,
 };
+// The 13 agnostic RPC request/response types are resolved through flowplane_node::pb via the `use
+// flowplane_node::pb` re-export above; no explicit imports needed for those types because their
+// handler bodies use flowplane_node::{add_route, …} which references them internally.
 
 /// The DPDK `DataplaneNode` gRPC service. Owns the single serialized `ControlCore` writer (behind a
 /// `Mutex`) plus a read handle on the shared config maps (for getter-based reads that don't route
@@ -194,426 +189,159 @@ impl DataplaneNode for DpdkNodeService {
 
     async fn add_route(
         &self,
-        req: Request<AddRouteRequest>,
-    ) -> Result<Response<AddRouteResponse>, Status> {
+        req: Request<pb::AddRouteRequest>,
+    ) -> Result<Response<pb::AddRouteResponse>, Status> {
         let r = req.into_inner();
-        let (is_v6, bytes, len) =
-            parse_prefix(&r.prefix).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let nexthop = parse_nexthop6(&r.nexthop_underlay)
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let vni = r.vni;
-        let external = r.external;
-        {
+        let resp = {
             let mut core = self.ctrl.lock();
-            // Idempotent: drop any existing (vni, prefix) so a re-announce or moved prefix replaces
-            // the nexthop instead of hitting ROUTE_EXISTS (identical to the eBPF handler).
-            let res: anyhow::Result<()> = if is_v6 {
-                core.delete_route6(vni, bytes, len)
-                    .and_then(|_| core.create_route6(vni, bytes, len, nexthop, vni, external))
-            } else {
-                let mut v4 = [0u8; 4];
-                v4.copy_from_slice(&bytes[..4]);
-                core.delete_route(vni, v4, len)
-                    .and_then(|_| core.create_route(vni, v4, len, nexthop, vni, external))
-            };
-            res.map_err(|e| Status::internal(e.to_string()))?;
-        }
-        Ok(Response::new(AddRouteResponse {}))
+            flowplane_node::add_route(&mut core, &r)?
+        };
+        Ok(Response::new(resp))
     }
 
     async fn withdraw_route(
         &self,
-        req: Request<WithdrawRouteRequest>,
-    ) -> Result<Response<WithdrawRouteResponse>, Status> {
+        req: Request<pb::WithdrawRouteRequest>,
+    ) -> Result<Response<pb::WithdrawRouteResponse>, Status> {
         let r = req.into_inner();
-        let (is_v6, bytes, len) =
-            parse_prefix(&r.prefix).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let vni = r.vni;
-        {
+        let resp = {
             let mut core = self.ctrl.lock();
-            let res: anyhow::Result<()> = if is_v6 {
-                core.delete_route6(vni, bytes, len).map(|_| ())
-            } else {
-                let mut v4 = [0u8; 4];
-                v4.copy_from_slice(&bytes[..4]);
-                core.delete_route(vni, v4, len).map(|_| ())
-            };
-            res.map_err(|e| Status::internal(e.to_string()))?;
-        }
-        Ok(Response::new(WithdrawRouteResponse {}))
+            flowplane_node::withdraw_route(&mut core, &r)?
+        };
+        Ok(Response::new(resp))
     }
 
     async fn add_nat_source(
         &self,
-        req: Request<AddNatSourceRequest>,
-    ) -> Result<Response<AddNatSourceResponse>, Status> {
+        req: Request<pb::AddNatSourceRequest>,
+    ) -> Result<Response<pb::AddNatSourceResponse>, Status> {
         let r = req.into_inner();
-        let source =
-            parse_ipv4(&r.source_ip).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let nat_ip = parse_ipv4(&r.nat_ip).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let port_min = port_u16(r.port_min).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let port_max = port_u16(r.port_max).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let vni = r.vni;
-        {
+        let resp = {
             let mut core = self.ctrl.lock();
-            // Resolve (vni, source) -> interface id via the ControlCore accessor (the eBPF handler's
-            // `find_interface_id` seam), then delete-then-create NAT idempotently.
-            let id = core.find_iface_by_vni_ipv4(vni, source).ok_or_else(|| {
-                Status::internal(format!(
-                    "NO_VM: no local interface for vni={vni} ip={}",
-                    std::net::Ipv4Addr::from(source)
-                ))
-            })?;
-            let res: anyhow::Result<()> = core.delete_nat(&id).and_then(|_| {
-                core.create_nat(&id, nat_ip, port_min, port_max, None)
-                    .map(|_| ())
-            });
-            res.map_err(|e| Status::internal(e.to_string()))?;
-        }
-        Ok(Response::new(AddNatSourceResponse {}))
+            flowplane_node::add_nat_source(&mut core, &r)?
+        };
+        Ok(Response::new(resp))
     }
 
     async fn withdraw_nat_source(
         &self,
-        req: Request<WithdrawNatSourceRequest>,
-    ) -> Result<Response<WithdrawNatSourceResponse>, Status> {
+        req: Request<pb::WithdrawNatSourceRequest>,
+    ) -> Result<Response<pb::WithdrawNatSourceResponse>, Status> {
         let r = req.into_inner();
-        let source =
-            parse_ipv4(&r.source_ip).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let vni = r.vni;
-        {
+        let resp = {
             let mut core = self.ctrl.lock();
-            // Removing an absent source is not an error (mirror the eBPF handler): if the interface is
-            // gone or has no NAT, treat it as already withdrawn.
-            if let Some(id) = core.find_iface_by_vni_ipv4(vni, source) {
-                core.delete_nat(&id)
-                    .map_err(|e| Status::internal(e.to_string()))?;
-            }
-        }
-        Ok(Response::new(WithdrawNatSourceResponse {}))
+            flowplane_node::withdraw_nat_source(&mut core, &r)?
+        };
+        Ok(Response::new(resp))
     }
 
     async fn add_neighbor_nat(
         &self,
-        req: Request<AddNeighborNatRequest>,
-    ) -> Result<Response<AddNeighborNatResponse>, Status> {
+        req: Request<pb::AddNeighborNatRequest>,
+    ) -> Result<Response<pb::AddNeighborNatResponse>, Status> {
         let r = req.into_inner();
-        let nat_ip = parse_ipv4(&r.nat_ip).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let owner = parse_nexthop6(&r.owner_underlay)
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let port_min = port_u16(r.port_min).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let port_max = port_u16(r.port_max).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let vni = r.vni;
-        {
+        let resp = {
             let mut core = self.ctrl.lock();
-            // Idempotent: drop any existing entry for this (vni, nat_ip, ports) first so a re-announce
-            // replaces the owner underlay.
-            let res: anyhow::Result<()> = core
-                .del_neighbor_nat(vni, nat_ip, port_min, port_max)
-                .and_then(|_| core.add_neighbor_nat(vni, nat_ip, port_min, port_max, owner));
-            res.map_err(|e| Status::internal(e.to_string()))?;
-        }
-        Ok(Response::new(AddNeighborNatResponse {}))
+            flowplane_node::add_neighbor_nat(&mut core, &r)?
+        };
+        Ok(Response::new(resp))
     }
 
     async fn withdraw_neighbor_nat(
         &self,
-        req: Request<WithdrawNeighborNatRequest>,
-    ) -> Result<Response<WithdrawNeighborNatResponse>, Status> {
+        req: Request<pb::WithdrawNeighborNatRequest>,
+    ) -> Result<Response<pb::WithdrawNeighborNatResponse>, Status> {
         let r = req.into_inner();
-        let nat_ip = parse_ipv4(&r.nat_ip).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let port_min = port_u16(r.port_min).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let port_max = port_u16(r.port_max).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let vni = r.vni;
-        {
+        let resp = {
             let mut core = self.ctrl.lock();
-            // Removing an absent entry is not an error (del_neighbor_nat returns Ok(false)).
-            core.del_neighbor_nat(vni, nat_ip, port_min, port_max)
-                .map_err(|e| Status::internal(e.to_string()))?;
-        }
-        Ok(Response::new(WithdrawNeighborNatResponse {}))
+            flowplane_node::withdraw_neighbor_nat(&mut core, &r)?
+        };
+        Ok(Response::new(resp))
     }
 
     async fn add_lb_vip(
         &self,
-        req: Request<AddLbVipRequest>,
-    ) -> Result<Response<AddLbVipResponse>, Status> {
+        req: Request<pb::AddLbVipRequest>,
+    ) -> Result<Response<pb::AddLbVipResponse>, Status> {
         let r = req.into_inner();
-        let lb_ip: LbIpBytes = match r.vip.parse::<std::net::IpAddr>() {
-            Ok(std::net::IpAddr::V4(a)) => LbIpBytes::Ipv4(a.octets()),
-            Ok(std::net::IpAddr::V6(a)) => LbIpBytes::Ipv6(a.octets()),
-            Err(e) => {
-                return Err(Status::invalid_argument(format!(
-                    "invalid vip {:?}: {e}",
-                    r.vip
-                )))
-            }
-        };
-        let lb_underlay =
-            parse_nexthop6(&r.lb_underlay).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        // (port, proto) services: proto is the IP protocol number (6=TCP, 17=UDP, 1=ICMP).
-        let ports: Vec<(u16, u8)> = r
-            .ports
-            .iter()
-            .map(|pp| -> anyhow::Result<(u16, u8)> {
-                let port = port_u16(pp.port)?;
-                let proto = u8::try_from(pp.proto)
-                    .map_err(|_| anyhow::anyhow!("proto {} > 255", pp.proto))?;
-                Ok((port, proto))
-            })
-            .collect::<anyhow::Result<_>>()
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let id = r.id.into_bytes();
-        let vni = r.vni;
-        {
+        let resp = {
             let mut core = self.ctrl.lock();
-            core.create_lb(&id, vni, lb_ip, lb_underlay, ports)
-                .map_err(|e| Status::internal(e.to_string()))?;
-        }
-        Ok(Response::new(AddLbVipResponse {}))
+            flowplane_node::add_lb_vip(&mut core, &r)?
+        };
+        Ok(Response::new(resp))
     }
 
     async fn add_lb_backend(
         &self,
-        req: Request<AddLbBackendRequest>,
-    ) -> Result<Response<AddLbBackendResponse>, Status> {
+        req: Request<pb::AddLbBackendRequest>,
+    ) -> Result<Response<pb::AddLbBackendResponse>, Status> {
         let r = req.into_inner();
-        let backend = parse_nexthop6(&r.backend_underlay)
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let id = r.id.into_bytes();
-        {
+        let resp = {
             let mut core = self.ctrl.lock();
-            core.add_lb_target(&id, backend)
-                .map_err(|e| Status::internal(e.to_string()))?;
-        }
-        Ok(Response::new(AddLbBackendResponse {}))
+            flowplane_node::add_lb_backend(&mut core, &r)?
+        };
+        Ok(Response::new(resp))
     }
 
     async fn del_lb_vip(
         &self,
-        req: Request<DelLbVipRequest>,
-    ) -> Result<Response<DelLbVipResponse>, Status> {
-        let id = req.into_inner().id.into_bytes();
-        {
+        req: Request<pb::DelLbVipRequest>,
+    ) -> Result<Response<pb::DelLbVipResponse>, Status> {
+        let r = req.into_inner();
+        let resp = {
             let mut core = self.ctrl.lock();
-            core.delete_lb(&id)
-                .map_err(|e| Status::internal(e.to_string()))?;
-        }
-        Ok(Response::new(DelLbVipResponse {}))
+            flowplane_node::del_lb_vip(&mut core, &r)?
+        };
+        Ok(Response::new(resp))
     }
 
     async fn del_lb_backend(
         &self,
-        req: Request<DelLbBackendRequest>,
-    ) -> Result<Response<DelLbBackendResponse>, Status> {
+        req: Request<pb::DelLbBackendRequest>,
+    ) -> Result<Response<pb::DelLbBackendResponse>, Status> {
         let r = req.into_inner();
-        let backend = parse_nexthop6(&r.backend_underlay)
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let id = r.id.into_bytes();
-        {
+        let resp = {
             let mut core = self.ctrl.lock();
-            core.del_lb_target(&id, backend)
-                .map_err(|e| Status::internal(e.to_string()))?;
-        }
-        Ok(Response::new(DelLbBackendResponse {}))
+            flowplane_node::del_lb_backend(&mut core, &r)?
+        };
+        Ok(Response::new(resp))
     }
 
     async fn add_fw_rule(
         &self,
-        req: Request<AddFwRuleRequest>,
-    ) -> Result<Response<AddFwRuleResponse>, Status> {
-        use flowplane_common::{FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS};
+        req: Request<pb::AddFwRuleRequest>,
+    ) -> Result<Response<pb::AddFwRuleResponse>, Status> {
         let r = req.into_inner();
-        let (src_ip, src_mask) =
-            parse_fw_cidr(&r.src_cidr).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let (dst_ip, dst_mask) =
-            parse_fw_cidr(&r.dst_cidr).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let proto = u8::try_from(r.proto).map_err(|_| Status::invalid_argument("proto > 255"))?;
-        let dst_port_min =
-            port_u16(r.dst_port_min).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        // dst_port_max of 0 means "unbounded" -> 65535 (0/0 = any port).
-        let dst_port_max = if r.dst_port_max == 0 {
-            65535u16
-        } else {
-            port_u16(r.dst_port_max).map_err(|e| Status::invalid_argument(e.to_string()))?
-        };
-        let rule = flowplane_common::FwRule {
-            src_ip,
-            src_mask,
-            dst_ip,
-            dst_mask,
-            src_port_min: 0,
-            src_port_max: 65535,
-            dst_port_min,
-            dst_port_max,
-            icmp_type: 0xffff,
-            icmp_code: 0xffff,
-            proto,
-            action: if r.allow {
-                FW_ACTION_ACCEPT
-            } else {
-                FW_ACTION_DROP
-            },
-            direction: if r.egress {
-                FW_DIR_EGRESS
-            } else {
-                FW_DIR_INGRESS
-            },
-            enabled: 1,
-        };
-        let iface = r.interface_id.into_bytes();
-        let rule_id = r.rule_id.into_bytes();
-        {
+        let resp = {
             let mut core = self.ctrl.lock();
-            core.add_fw_rule(&iface, rule_id, rule)
-                .map_err(|e| Status::internal(e.to_string()))?;
-        }
-        Ok(Response::new(AddFwRuleResponse {}))
+            flowplane_node::add_fw_rule(&mut core, &r)?
+        };
+        Ok(Response::new(resp))
     }
 
     async fn del_fw_rule(
         &self,
-        req: Request<DelFwRuleRequest>,
-    ) -> Result<Response<DelFwRuleResponse>, Status> {
+        req: Request<pb::DelFwRuleRequest>,
+    ) -> Result<Response<pb::DelFwRuleResponse>, Status> {
         let r = req.into_inner();
-        let iface = r.interface_id.into_bytes();
-        let rule_id = r.rule_id.into_bytes();
-        {
+        let resp = {
             let mut core = self.ctrl.lock();
-            core.del_fw_rule(&iface, &rule_id)
-                .map_err(|e| Status::internal(e.to_string()))?;
-        }
-        Ok(Response::new(DelFwRuleResponse {}))
+            flowplane_node::del_fw_rule(&mut core, &r)?
+        };
+        Ok(Response::new(resp))
     }
 
     async fn configure_qo_s(
         &self,
-        req: Request<ConfigureQoSRequest>,
-    ) -> Result<Response<ConfigureQoSResponse>, Status> {
+        req: Request<pb::ConfigureQoSRequest>,
+    ) -> Result<Response<pb::ConfigureQoSResponse>, Status> {
         let r = req.into_inner();
-        let iface = r.interface_id.into_bytes();
-        let egress_mbps = r.egress_mbps as u64;
-        let public_mbps = r.public_mbps as u64;
-        let ingress_mbps = r.ingress_mbps as u64;
-        {
+        let resp = {
             let mut core = self.ctrl.lock();
-            core.set_qos(&iface, egress_mbps, public_mbps, ingress_mbps)
-                .map_err(|e| Status::internal(e.to_string()))?;
-        }
-        Ok(Response::new(ConfigureQoSResponse {}))
+            flowplane_node::configure_qos(&mut core, &r)?
+        };
+        Ok(Response::new(resp))
     }
-}
-
-/// First IPv4 in a `requested_ips` list, or `0.0.0.0` if none. The CNI passes overlay IPs as
-/// strings; the DPDK attach programs the v4/v6 it finds (IPAM of unset IPs is B2).
-fn first_ipv4(ips: &[String]) -> [u8; 4] {
-    ips.iter()
-        .filter_map(|s| s.parse::<std::net::Ipv4Addr>().ok())
-        .map(|a| a.octets())
-        .next()
-        .unwrap_or([0u8; 4])
-}
-
-/// First IPv6 in a `requested_ips` list, or the all-zero address if none.
-fn first_ipv6(ips: &[String]) -> [u8; 16] {
-    ips.iter()
-        .filter_map(|s| s.parse::<std::net::Ipv6Addr>().ok())
-        .map(|a| a.octets())
-        .next()
-        .unwrap_or([0u8; 16])
-}
-
-/// Parse a `xx:xx:xx:xx:xx:xx` MAC into 6 bytes.
-fn parse_mac(s: &str) -> anyhow::Result<[u8; 6]> {
-    let mut out = [0u8; 6];
-    let mut n = 0;
-    for (i, part) in s.split(':').enumerate() {
-        if i >= 6 {
-            anyhow::bail!("bad mac {s:?}: too many octets");
-        }
-        out[i] = u8::from_str_radix(part, 16)
-            .map_err(|_| anyhow::anyhow!("bad mac octet {part:?} in {s:?}"))?;
-        n += 1;
-    }
-    if n != 6 {
-        anyhow::bail!("bad mac {s:?}: expected 6 octets, got {n}");
-    }
-    Ok(out)
-}
-
-/// Parse a CIDR string into (is_v6, 16-byte address buffer, prefix_len). For IPv4 the four octets
-/// are left-aligned in the buffer (bytes[0..4]). Verbatim from the eBPF node service.
-fn parse_prefix(cidr: &str) -> anyhow::Result<(bool, [u8; 16], u32)> {
-    use std::net::IpAddr;
-    let (addr, len) = cidr
-        .split_once('/')
-        .ok_or_else(|| anyhow::anyhow!("prefix {cidr:?} missing /len"))?;
-    let len: u32 = len
-        .parse()
-        .map_err(|_| anyhow::anyhow!("bad prefix len in {cidr:?}"))?;
-    let ip: IpAddr = addr
-        .parse()
-        .map_err(|_| anyhow::anyhow!("bad address in {cidr:?}"))?;
-    let mut buf = [0u8; 16];
-    match ip {
-        IpAddr::V4(a) => {
-            if len > 32 {
-                anyhow::bail!("v4 prefix len {len} > 32 in {cidr:?}");
-            }
-            buf[..4].copy_from_slice(&a.octets());
-            Ok((false, buf, len))
-        }
-        IpAddr::V6(a) => {
-            if len > 128 {
-                anyhow::bail!("v6 prefix len {len} > 128 in {cidr:?}");
-            }
-            buf.copy_from_slice(&a.octets());
-            Ok((true, buf, len))
-        }
-    }
-}
-
-/// Parse an IPv4 firewall CIDR into `(ip, mask)`. Empty = "any" (0.0.0.0/0); bare address = /32.
-/// Verbatim from the eBPF node service.
-fn parse_fw_cidr(cidr: &str) -> anyhow::Result<([u8; 4], [u8; 4])> {
-    if cidr.is_empty() {
-        return Ok(([0u8; 4], [0u8; 4]));
-    }
-    let (addr, len) = match cidr.split_once('/') {
-        Some((a, l)) => (
-            a,
-            l.parse::<u32>()
-                .map_err(|_| anyhow::anyhow!("bad prefix len in {cidr:?}"))?,
-        ),
-        None => (cidr, 32u32),
-    };
-    if len > 32 {
-        anyhow::bail!("v4 prefix len {len} > 32 in {cidr:?}");
-    }
-    let ip: std::net::Ipv4Addr = addr
-        .parse()
-        .map_err(|_| anyhow::anyhow!("bad ipv4 address in {cidr:?}"))?;
-    let mask: u32 = if len == 0 { 0 } else { u32::MAX << (32 - len) };
-    Ok((ip.octets(), mask.to_be_bytes()))
-}
-
-/// Parse an IPv6 nexthop underlay address into 16 bytes.
-fn parse_nexthop6(s: &str) -> anyhow::Result<[u8; 16]> {
-    let a: std::net::Ipv6Addr = s
-        .parse()
-        .map_err(|_| anyhow::anyhow!("bad nexthop underlay ipv6 {s:?}"))?;
-    Ok(a.octets())
-}
-
-/// Parse an IPv4 address string into its four octets.
-fn parse_ipv4(s: &str) -> anyhow::Result<[u8; 4]> {
-    let a: std::net::Ipv4Addr = s.parse().map_err(|_| anyhow::anyhow!("bad ipv4 {s:?}"))?;
-    Ok(a.octets())
-}
-
-/// Narrow a proto `uint32` port into a `u16`, rejecting out-of-range values.
-fn port_u16(p: u32) -> anyhow::Result<u16> {
-    u16::try_from(p).map_err(|_| anyhow::anyhow!("port {p} out of range (0..=65535)"))
 }
 
 #[cfg(test)]
@@ -639,14 +367,14 @@ mod tests {
             .copied(),
         )
         .unwrap();
-        let shared = Arc::new(SharedConfigMaps::new(0, 1024).unwrap());
+        let shared = Arc::new(nfkit::SharedConfigMaps::new(0, 1024).unwrap());
         let ctrl = Arc::new(Mutex::new(ControlCore::new(DpdkMapWriter::new(
             shared.clone(),
         ))));
         let svc = DpdkNodeService::new(ctrl.clone(), shared.clone());
 
         let resp = svc
-            .add_route(Request::new(AddRouteRequest {
+            .add_route(Request::new(pb::AddRouteRequest {
                 vni: 7,
                 prefix: "10.0.0.1/32".into(),
                 nexthop_underlay: "2001::aa".into(),
