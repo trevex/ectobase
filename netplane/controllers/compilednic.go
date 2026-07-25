@@ -108,12 +108,16 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.NetworkPol
 	// k8s default-allow is PER DIRECTION: a direction with no compiled rules is not governed by any
 	// policy, so materialize an explicit allow-all for it (the dataplane is deny-by-default, so an
 	// empty direction would otherwise drop). A direction that a policy governs keeps only its rules.
-	allowAll := netv1.CompiledFwRule{CIDR: "0.0.0.0/0", Action: "Allow"} // Proto "" = any, Port 0 = any
+	// Emit BOTH families: the dataplane enforces v4 AND v6 firewalling, so a ruleless direction
+	// needs a v6 default-allow (::/0) alongside the v4 one (0.0.0.0/0) or v6-only/dual-stack
+	// guests would be dropped by deny-by-default. Proto "" = any, Port 0 = any.
+	allowAll4 := netv1.CompiledFwRule{CIDR: "0.0.0.0/0", Action: "Allow"}
+	allowAll6 := netv1.CompiledFwRule{CIDR: "::/0", Action: "Allow"}
 	if len(compiled.Spec.Firewall.Ingress) == 0 {
-		compiled.Spec.Firewall.Ingress = append(compiled.Spec.Firewall.Ingress, allowAll)
+		compiled.Spec.Firewall.Ingress = append(compiled.Spec.Firewall.Ingress, allowAll4, allowAll6)
 	}
 	if len(compiled.Spec.Firewall.Egress) == 0 {
-		compiled.Spec.Firewall.Egress = append(compiled.Spec.Firewall.Egress, allowAll)
+		compiled.Spec.Firewall.Egress = append(compiled.Spec.Firewall.Egress, allowAll4, allowAll6)
 	}
 
 	// LB membership: for each LoadBalancer whose selector matches this NIC's labels or whose

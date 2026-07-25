@@ -98,24 +98,24 @@ func TestCompile_SelectorMismatch(t *testing.T) {
 
 	c := Compile(nic, nic.Status.VNI, []netv1.NetworkPolicy{pol}, nil, nil, nil)
 
-	// No policy selects this NIC, so it is unpolicied → gets the k8s default-allow-all rule.
-	if len(c.Spec.Firewall.Ingress) != 1 || c.Spec.Firewall.Ingress[0].CIDR != "0.0.0.0/0" || c.Spec.Firewall.Ingress[0].Action != "Allow" {
-		t.Fatalf("expected one allow-all ingress rule for non-matching selector, got %+v", c.Spec.Firewall.Ingress)
+	// No policy selects this NIC, so it is unpolicied → gets the k8s default-allow-all rules
+	// (both v4 and v6 families) in each direction.
+	if len(c.Spec.Firewall.Ingress) != 2 || !hasAllowCIDR(c.Spec.Firewall.Ingress, "0.0.0.0/0") || !hasAllowCIDR(c.Spec.Firewall.Ingress, "::/0") {
+		t.Fatalf("expected v4+v6 allow-all ingress rules for non-matching selector, got %+v", c.Spec.Firewall.Ingress)
 	}
-	if len(c.Spec.Firewall.Egress) != 1 || c.Spec.Firewall.Egress[0].Action != "Allow" {
-		t.Fatalf("expected one allow-all egress rule for non-matching selector, got %+v", c.Spec.Firewall.Egress)
+	if len(c.Spec.Firewall.Egress) != 2 || !hasAllowCIDR(c.Spec.Firewall.Egress, "0.0.0.0/0") || !hasAllowCIDR(c.Spec.Firewall.Egress, "::/0") {
+		t.Fatalf("expected v4+v6 allow-all egress rules for non-matching selector, got %+v", c.Spec.Firewall.Egress)
 	}
 }
 
 func TestCompile_UnpoliciedGetsAllowAll(t *testing.T) {
 	nic := testNIC()                                      // has labels that testPolicy() selects
 	c := Compile(nic, nic.Status.VNI, nil, nil, nil, nil) // no policies
-	if len(c.Spec.Firewall.Ingress) != 1 || c.Spec.Firewall.Ingress[0].Action != "Allow" ||
-		c.Spec.Firewall.Ingress[0].CIDR != "0.0.0.0/0" || c.Spec.Firewall.Ingress[0].Port != 0 {
-		t.Fatalf("expected one allow-all ingress rule, got %+v", c.Spec.Firewall.Ingress)
+	if len(c.Spec.Firewall.Ingress) != 2 || !hasAllowCIDR(c.Spec.Firewall.Ingress, "0.0.0.0/0") || !hasAllowCIDR(c.Spec.Firewall.Ingress, "::/0") {
+		t.Fatalf("expected v4+v6 allow-all ingress rules, got %+v", c.Spec.Firewall.Ingress)
 	}
-	if len(c.Spec.Firewall.Egress) != 1 || c.Spec.Firewall.Egress[0].Action != "Allow" {
-		t.Fatalf("expected one allow-all egress rule, got %+v", c.Spec.Firewall.Egress)
+	if len(c.Spec.Firewall.Egress) != 2 || !hasAllowCIDR(c.Spec.Firewall.Egress, "0.0.0.0/0") || !hasAllowCIDR(c.Spec.Firewall.Egress, "::/0") {
+		t.Fatalf("expected v4+v6 allow-all egress rules, got %+v", c.Spec.Firewall.Egress)
 	}
 	// A policied NIC keeps ONLY its policy rules — no allow-all appended.
 	c2 := Compile(nic, nic.Status.VNI, []netv1.NetworkPolicy{testPolicy()}, nil, nil, nil)
@@ -123,6 +123,51 @@ func TestCompile_UnpoliciedGetsAllowAll(t *testing.T) {
 		if r.CIDR == "0.0.0.0/0" && r.Port == 0 && r.Proto == "" {
 			t.Fatalf("policied NIC must not get allow-all: %+v", c2.Spec.Firewall.Ingress)
 		}
+	}
+}
+
+// hasCIDR reports whether the rule list contains an Allow rule for the given CIDR.
+func hasAllowCIDR(rules []netv1.CompiledFwRule, cidr string) bool {
+	for _, r := range rules {
+		if r.CIDR == cidr && r.Action == "Allow" {
+			return true
+		}
+	}
+	return false
+}
+
+// TestCompile_RulelessGetsBothFamilies asserts that a ruleless direction gets BOTH a v4
+// (0.0.0.0/0) and a v6 (::/0) default-allow, while a direction with an explicit rule gets
+// NEITHER default-allow injected. The dataplane now enforces IPv6 firewalling, so a v4-only
+// default-allow would drop v6-only/dual-stack guests on an unpolicied direction.
+func TestCompile_RulelessGetsBothFamilies(t *testing.T) {
+	// Ruleless NIC → both directions get both families.
+	nic := testNIC()
+	c := Compile(nic, nic.Status.VNI, nil, nil, nil, nil) // no policies
+	for _, dir := range []struct {
+		name  string
+		rules []netv1.CompiledFwRule
+	}{
+		{"ingress", c.Spec.Firewall.Ingress},
+		{"egress", c.Spec.Firewall.Egress},
+	} {
+		if !hasAllowCIDR(dir.rules, "0.0.0.0/0") {
+			t.Fatalf("%s: missing 0.0.0.0/0 allow-all, got %+v", dir.name, dir.rules)
+		}
+		if !hasAllowCIDR(dir.rules, "::/0") {
+			t.Fatalf("%s: missing ::/0 allow-all, got %+v", dir.name, dir.rules)
+		}
+	}
+
+	// A direction WITH an explicit rule gets NEITHER default-allow. testPolicy() sets only
+	// ingress, so ingress is governed (no injection) while egress remains ruleless.
+	c2 := Compile(nic, nic.Status.VNI, []netv1.NetworkPolicy{testPolicy()}, nil, nil, nil)
+	if hasAllowCIDR(c2.Spec.Firewall.Ingress, "0.0.0.0/0") || hasAllowCIDR(c2.Spec.Firewall.Ingress, "::/0") {
+		t.Fatalf("policied ingress must not get any default-allow: %+v", c2.Spec.Firewall.Ingress)
+	}
+	// Egress is still ruleless → still gets both families.
+	if !hasAllowCIDR(c2.Spec.Firewall.Egress, "0.0.0.0/0") || !hasAllowCIDR(c2.Spec.Firewall.Egress, "::/0") {
+		t.Fatalf("ruleless egress must get both default-allow families: %+v", c2.Spec.Firewall.Egress)
 	}
 }
 
