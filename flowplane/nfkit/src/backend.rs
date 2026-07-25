@@ -62,6 +62,41 @@ impl Backend {
     }
 }
 
+impl Backend {
+    /// Like [`Backend::eal_args_lcores`], but for the AF_XDP backend ALSO appends one
+    /// `--vdev net_af_xdp{1+i},iface={guest_ifaces[i]},start_queue=0,queue_count=1` per guest iface.
+    ///
+    /// This is the "per-guest af_xdp port" model (VF-style): the uplink is `net_af_xdp0` (ethdev
+    /// port 0) and each preallocated guest veth is `net_af_xdp1..N` (ethdev ports 1..=N). The
+    /// de-risk test `nfkit/tests/multi_afxdp_port.rs` proves multiple af_xdp vdevs coexist in one
+    /// EAL. Guest ports are single-queue (`queue_count=1`) — one guest = one flow of egress traffic.
+    ///
+    /// Guest ports are ONLY meaningful for the AfXdp backend; for every other backend `guest_ifaces`
+    /// is ignored and this is identical to [`Backend::eal_args_lcores`] (the caller restricts the
+    /// guest-port pool to AfXdp).
+    #[must_use]
+    pub fn eal_args_lcores_with_guest_ifaces(
+        &self,
+        prog: &str,
+        lcore_list: &str,
+        guest_ifaces: &[String],
+    ) -> Vec<String> {
+        let mut v = self.eal_args_lcores(prog, lcore_list);
+        if let Backend::AfXdp { .. } = self {
+            // Uplink took net_af_xdp0; guest ports start at index 1 so ethdev port ids line up
+            // (port 0 = uplink, port 1+i = guest i).
+            for (i, iface) in guest_ifaces.iter().enumerate() {
+                v.push("--vdev".into());
+                v.push(format!(
+                    "net_af_xdp{},iface={iface},start_queue=0,queue_count=1",
+                    i + 1
+                ));
+            }
+        }
+        v
+    }
+}
+
 fn push_soft(v: &mut Vec<String>) {
     v.push("--no-huge".into());
     v.push("-m".into());

@@ -11,6 +11,27 @@ use std::sync::Mutex;
 
 use flowplane_device::UnderlayIpam;
 
+/// One PREALLOCATED guest af_xdp port slot (VF-style). The serve process creates N guest veth pairs
+/// BEFORE EAL init (so they can be passed as `--vdev=net_af_xdp<i>,iface=<host_ifname>`), giving a
+/// STATIC poll set. Each slot maps to ethdev port id `port_id` (uplink = 0, guests = 1..=N).
+///
+/// Consumed by later tasks: Task 3 polls each slot's guest port in the worker loop; Task 4's
+/// AttachInterface binds a free slot to an interface (moving the guest veth end into the pod netns +
+/// recording the interface_id in `bound`). For THIS task (Task 2) the slot only records the
+/// preallocated host device + its ethdev port id; `bound` is always `None`.
+#[derive(Clone, Debug)]
+pub struct GuestPortSlot {
+    /// Host-end (root-netns) veth device name of the preallocated pair, e.g. `fpg0`.
+    pub host_ifname: String,
+    /// Resolved host-end ifindex (from `create_veth_pair`).
+    pub host_ifindex: u32,
+    /// The DPDK ethdev port id this slot's af_xdp vdev probed as (1..=N; uplink is 0).
+    pub port_id: u16,
+    /// Interface id bound to this slot, or `None` if free. Placeholder type for Task 2 — Task 4
+    /// finalizes the binding (it may carry more than the id).
+    pub bound: Option<String>,
+}
+
 /// One attached container device (veth host end).
 #[derive(Clone, Debug)]
 pub struct AttachedDevice {
@@ -29,6 +50,12 @@ pub struct DpdkAttachState {
     /// Gateway addresses programmed into IfaceParams (overlay gateway the datapath answers for).
     pub gateway_ipv4: [u8; 4],
     pub gateway_ipv6: [u8; 16],
+    /// The PREALLOCATED per-guest af_xdp port pool (VF-style), built at serve startup BEFORE EAL init
+    /// (see `serve.rs::run`). A STATIC poll set: Task 3 polls each slot's `port_id` in the worker
+    /// loop; Task 4's AttachInterface locks this to bind a free slot (`bound = Some(..)`) to an
+    /// interface (moving the placeholder guest-end veth into the pod netns) and release it on detach.
+    /// Empty for non-af-xdp backends (per-guest ports are af-xdp-only in this slice).
+    pub guest_pool: Mutex<Vec<GuestPortSlot>>,
 }
 
 impl DpdkAttachState {
@@ -91,6 +118,7 @@ mod tests {
             guest_mtu: 1400,
             gateway_ipv4: [169, 254, 0, 1],
             gateway_ipv6: [0u8; 16],
+            guest_pool: Mutex::new(Vec::new()),
         }
     }
 

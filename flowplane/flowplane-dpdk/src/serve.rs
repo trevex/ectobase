@@ -46,7 +46,7 @@ use flowplane_core::maps::Maps; // brings `underlay_get`/`local` method syntax i
 use flowplane_core::pkt::{Action, Pkt}; // `Pkt` brings `read_array` into scope on MbufPkt
 use nfkit::monotonic_ns;
 
-use crate::attach_state::DpdkAttachState;
+use crate::attach_state::{DpdkAttachState, GuestPortSlot};
 
 use crate::node::{pb, DpdkNodeService};
 use crate::writer::DpdkMapWriter;
@@ -63,6 +63,11 @@ const CONFIG_ENTRIES: u32 = 4096;
 /// NUMA socket the maps + mempool are allocated on. Single-socket assumption for the scaffold; a
 /// real multi-socket deployment would derive this per-port (Task 9+).
 const SOCKET_ID: i32 = 0;
+
+/// Default guest MTU = 1500 (underlay) − 40 (outer IPv6 header) − 8 (encap overhead for the
+/// Geneve-style encap) = 1452, but we use 1450 to round down safely. Used both for the preallocated
+/// guest veths (before EAL init) and the attach-state default.
+const DEFAULT_GUEST_MTU: u32 = 1450;
 
 /// Which nfkit port backend the datapath runs on. Mirrors [`nfkit::Backend`] minus its
 /// backend-specific fields (those are derived from `--uplink`/`--queues`).
@@ -131,6 +136,12 @@ pub struct ServeArgs {
     /// Guest MTU override. Unset = derive from the uplink MTU minus encap overhead (Task 9).
     #[arg(long = "guest-mtu")]
     pub guest_mtu: Option<u32>,
+    /// Number of PREALLOCATED per-guest af_xdp ports (VF-style). The serve process creates this many
+    /// guest veth pairs BEFORE EAL init and passes each as an extra `--vdev=net_af_xdp<i>`, giving a
+    /// STATIC poll set that AttachInterface (Task 4) later binds to guests. First slice: 1. Only
+    /// meaningful for the af-xdp backend (ignored/skipped otherwise).
+    #[arg(long = "guest-ports", default_value_t = 1)]
+    pub guest_ports: u16,
 }
 
 impl ServeArgs {
@@ -148,6 +159,13 @@ impl ServeArgs {
     /// Datapath worker lcores available = every lcore except the main one.
     fn worker_lcores(&self) -> u16 {
         self.lcore_count() - 1
+    }
+
+    /// First-slice preallocated-pool cap: `--guest-ports` must be `<= 256`. Beyond that the
+    /// placeholder MAC's last octet (`i as u8`) and the `1 + i` port_id would alias/overflow (see
+    /// the guard in `run`). Pure predicate so the cap can be unit-tested without EAL.
+    fn guest_pool_cap_ok(&self) -> bool {
+        self.guest_ports <= 256
     }
 
     /// Map the parsed backend kind + uplink into an [`nfkit::Backend`]. `queues` is the effective
@@ -191,7 +209,98 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         );
     }
     let backend = args.to_backend(queues);
-    let mut eal_argv = backend.eal_args_lcores("flowplane-dpdk", &args.eal_lcore_list());
+
+    // ── 2a. PREALLOCATE the per-guest af_xdp port pool BEFORE EAL init ───────────
+    // VF-style static poll set: create `--guest-ports` guest veth pairs NOW (in the root netns) so
+    // each host end can be handed to EAL as an extra `--vdev=net_af_xdp<i>,iface=<host_ifname>`. The
+    // multi_afxdp_port de-risk test (nfkit @cd1b7ed) proved two af_xdp vdevs coexist as ethdev ports
+    // 0 and 1 in one EAL; here the uplink is port 0 and the guests are ports 1..=N.
+    //
+    // Only the af-xdp backend gets per-guest ports in this slice — the other backends have no netdev
+    // to bind a per-guest af_xdp vdev to, so we build an EMPTY pool and note it. `guest_mtu` is the
+    // guest link MTU (underlay MTU - encap overhead); we need it HERE for the veths, and it has no
+    // EAL dependency, so compute it once up front and reuse it for the attach state below.
+    //
+    // The guest-end of each pair (`<host_ifname>p`, the create_veth_pair peer convention) stays a
+    // root-netns PLACEHOLDER until Task 4's AttachInterface moves it into the pod netns; the MAC set
+    // here is a deterministic placeholder (the real guest MAC is programmed at attach). `bound` is
+    // `None` for every slot (Task 4 binds them).
+    let guest_mtu = args.guest_mtu.unwrap_or(DEFAULT_GUEST_MTU);
+    let slots: Vec<GuestPortSlot> = match args.backend {
+        BackendKind::AfXdp => {
+            // First-slice pool cap. The placeholder MAC's last octet is `i as u8` and the ethdev
+            // `port_id` is `1 + i`, so a pool larger than 256 would (a) ALIAS the placeholder MAC
+            // (slots 0 and 256 both get `…:00`, a silent duplicate) and (b) risk `1 + i` overflowing
+            // near `u16::MAX`. The real multi-guest scaling (unique MAC scheme + wider port range)
+            // is a later task; enforce the cap at runtime here so the aliasing can never happen
+            // silently. Only reached for the af-xdp backend, i.e. when a pool is actually built.
+            if !args.guest_pool_cap_ok() {
+                anyhow::bail!(
+                    "--guest-ports {} exceeds the first-slice pool cap of 256 (placeholder MAC \
+                     octet + port_id would alias/overflow); larger pools are a later multi-guest task",
+                    args.guest_ports
+                );
+            }
+            let mut slots = Vec::with_capacity(args.guest_ports as usize);
+            // Track host ifnames we've already created so ANY failure below (this loop OR the guest
+            // ethdev-configure loop) can tear them down before returning — otherwise a mid-pool
+            // failure would leak the veths already on the host (e.g. `fpg0`/`fpg1` if slot 2 fails).
+            let mut created: Vec<String> = Vec::with_capacity(args.guest_ports as usize);
+            for i in 0..args.guest_ports {
+                let host_ifname = format!("fpg{i}");
+                // Deterministic placeholder MAC: 02:00:00:00:0e:<i>. Not datapath-significant yet —
+                // the real guest MAC is programmed at attach (Task 4).
+                let mac = [0x02, 0x00, 0x00, 0x00, 0x0e, i as u8];
+                let dev = match flowplane_device::create_preallocated_veth(
+                    &host_ifname,
+                    mac,
+                    guest_mtu,
+                ) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        // Roll back every veth created so far, mirroring create_preallocated_veth's
+                        // own rollback style, then propagate the error.
+                        for h in &created {
+                            flowplane_device::delete_link(h);
+                        }
+                        return Err(e).with_context(|| {
+                            format!("create preallocated guest veth {host_ifname} (slot {i})")
+                        });
+                    }
+                };
+                created.push(dev.host_name.clone());
+                slots.push(GuestPortSlot {
+                    host_ifname: dev.host_name,
+                    host_ifindex: dev.host_ifindex,
+                    // ethdev port id: uplink = 0, guests = 1..=N (matches the vdev append order).
+                    port_id: 1 + i,
+                    bound: None,
+                });
+            }
+            println!(
+                "preallocated {} guest af_xdp port(s): {:?}",
+                slots.len(),
+                slots.iter().map(|s| &s.host_ifname).collect::<Vec<_>>()
+            );
+            slots
+        }
+        other => {
+            println!(
+                "backend {other:?}: per-guest af_xdp ports are af-xdp-only in this slice; \
+                 skipping the preallocated pool (--guest-ports ignored)"
+            );
+            Vec::new()
+        }
+    };
+
+    // Build the EAL argv WITH the per-guest af_xdp vdevs (identical to `eal_args_lcores` for an empty
+    // guest-iface list, so non-af-xdp backends are unaffected).
+    let guest_ifaces: Vec<String> = slots.iter().map(|s| s.host_ifname.clone()).collect();
+    let mut eal_argv = backend.eal_args_lcores_with_guest_ifaces(
+        "flowplane-dpdk",
+        &args.eal_lcore_list(),
+        &guest_ifaces,
+    );
     // `--no-huge` is idempotent — software backends already appended it; adding it again for
     // af-xdp/nic when requested is harmless (DPDK dedups repeated EAL flags).
     if args.no_huge && !eal_argv.iter().any(|a| a == "--no-huge") {
@@ -210,6 +319,39 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("port configure failed: {e}"))?;
     let n_workers = port.n_queues();
     println!("port 0 up with {n_workers} queue(s)");
+
+    // Configure each PREALLOCATED guest port (ethdev ids 1..=N). Single queue per guest port (the
+    // af_xdp vdev was probed with queue_count=1). These `Port`s MUST outlive the datapath — a `Port`
+    // Drop stops+closes the ethdev — so they are moved into the worker thread below. Task 3 wires the
+    // per-guest rx/tx polling; for now they are just held live.
+    let mut guest_ports: Vec<Port> = Vec::with_capacity(slots.len());
+    for slot in &slots {
+        let gp = match Port::configure(slot.port_id, 1, &pool) {
+            Ok(gp) => gp,
+            Err(e) => {
+                // A guest ethdev-configure failure leaves the already-created host veths (all of
+                // `slots`) on the host — tear them ALL down before returning so a partial startup
+                // doesn't leak. Drop the guest `Port`s configured so far first (their ethdev close
+                // must precede deleting the underlying links).
+                drop(guest_ports);
+                for s in &slots {
+                    flowplane_device::delete_link(&s.host_ifname);
+                }
+                return Err(anyhow::anyhow!(
+                    "guest port {} ({}) configure failed: {e}",
+                    slot.port_id,
+                    slot.host_ifname
+                ));
+            }
+        };
+        println!(
+            "guest port {} ({}) up with {} queue(s)",
+            slot.port_id,
+            slot.host_ifname,
+            gp.n_queues()
+        );
+        guest_ports.push(gp);
+    }
 
     // ── 4. Shared config maps (process-wide, single-writer) ─────────────────────
     let shared = Arc::new(
@@ -261,19 +403,21 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         })
         .transpose()?
         .unwrap_or([0u8; 16]);
-    /// Default guest MTU = 1500 (underlay) − 40 (outer IPv6 header) − 8 (encap overhead for
-    /// the Geneve-style encap) = 1452, but we use 1450 to round down safely.
-    const DEFAULT_GUEST_MTU: u32 = 1450;
-    let guest_mtu = args.guest_mtu.unwrap_or(DEFAULT_GUEST_MTU);
+    // `guest_mtu` was computed up front (before EAL init) for the preallocated guest veths; reuse it.
+    // The preallocated `slots` move into `guest_pool` (behind a Mutex) so Task 4's AttachInterface can
+    // bind/release them; the guest `Port`s themselves are held live by the worker thread (below).
+    let guest_pool_len = slots.len();
     let attach_state = Arc::new(DpdkAttachState {
         ipam: std::sync::Mutex::new(flowplane_device::UnderlayIpam::new(underlay_prefix)),
         registry: std::sync::Mutex::new(std::collections::HashMap::new()),
         guest_mtu,
         gateway_ipv4,
         gateway_ipv6,
+        guest_pool: std::sync::Mutex::new(slots),
     });
     println!(
-        "B2a attach state: underlay prefix={underlay_prefix}, gateway={}, guest_mtu={guest_mtu}",
+        "B2a attach state: underlay prefix={underlay_prefix}, gateway={}, guest_mtu={guest_mtu}, \
+         guest_pool={guest_pool_len} slot(s)",
         args.gateway
     );
 
@@ -291,6 +435,17 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     let workers = std::thread::Builder::new()
         .name("fp-dpdk-datapath".into())
         .spawn(move || {
+            // Hold the preallocated guest `Port`s alive for the lifetime of the datapath thread: a
+            // `Port` Drop stops+closes its ethdev, so they must outlive the workers. Task 3 wires the
+            // per-guest rx/tx polling into `worker_loop`; for now they are just kept live (bound to a
+            // live variable so they aren't dropped early).
+            //
+            // NOTE: the binding MUST be a NAMED `_guest_ports`, not a bare `let _ = guest_ports;`.
+            // A bare underscore is NOT a binding — it drops the value IMMEDIATELY at that statement,
+            // which here would close every guest ethdev before the workers even start (Vec<Port> Drop
+            // → per-Port ethdev stop+close). The named `_guest_ports` keeps them live until the
+            // closure returns. This binding is load-bearing; do not "simplify" it to `let _`.
+            let _guest_ports = guest_ports;
             LcoreRuntime::for_each_worker(n_workers, |q| {
                 worker_loop(q, &shared_for_workers, &port, &stop_w);
             });
@@ -345,6 +500,22 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     if let Err(e) = workers.join() {
         eprintln!("datapath worker thread panicked on shutdown: {e:?}");
     }
+
+    // Delete the PREALLOCATED guest veths created at startup. They are host-side links that would
+    // otherwise leak across restarts (a restart only masks this by first deleting stale same-named
+    // links). We do this AFTER `workers.join()` for a deliberate ORDERING reason: the guest `Port`s
+    // (whose Drop runs `rte_eth_dev_close`) live inside the worker-thread closure and are dropped
+    // when that closure returns — i.e. BEFORE `workers.join()` completes. So by the time we reach
+    // here every guest ethdev is already closed, and deleting the underlying netdev is safe (ethdev
+    // close precedes link delete, never the reverse). Reading the ifnames from `attach_state` (not a
+    // captured Vec) keeps this correct even after Task 4 mutates the pool at runtime.
+    {
+        let pool = attach_state.guest_pool.lock().unwrap();
+        for slot in pool.iter() {
+            flowplane_device::delete_link(&slot.host_ifname);
+        }
+    }
+
     serve_result.context("gRPC server error")?;
     Ok(())
 }
@@ -499,6 +670,8 @@ mod tests {
         ]);
         assert_eq!(a.addr, "127.0.0.1:1337");
         assert_eq!(a.backend, BackendKind::AfXdp);
+        // First slice: one preallocated per-guest af_xdp port by default.
+        assert_eq!(a.guest_ports, 1);
         // Clab/CI-friendly defaults: 1 worker queue, lcores derived as queues + 1 (main + worker).
         assert_eq!(a.queues, 1);
         assert_eq!(a.lcores, None);
@@ -506,6 +679,46 @@ mod tests {
         assert_eq!(a.eal_lcore_list(), "0-1");
         assert_eq!(a.worker_lcores(), 1);
         assert!(!a.no_huge);
+    }
+
+    /// `--guest-ports` parses to the requested count (VF-style preallocated per-guest af_xdp pool).
+    #[test]
+    fn guest_ports_parses_explicit_value() {
+        let a = ServeArgs::parse_from([
+            "flowplane-dpdk",
+            "--uplink",
+            "eth0",
+            "--gateway",
+            "169.254.0.1",
+            "--gateway-mac",
+            "02:00:00:00:00:01",
+            "--guest-ports",
+            "4",
+        ]);
+        assert_eq!(a.guest_ports, 4);
+    }
+
+    /// The first-slice pool cap predicate: `<=256` OK, `>256` rejected (guards the placeholder-MAC
+    /// aliasing / port_id overflow). Mirrors the `anyhow::bail!` guard in `run`.
+    #[test]
+    fn guest_pool_cap_predicate() {
+        let mk = |n: &str| {
+            ServeArgs::parse_from([
+                "flowplane-dpdk",
+                "--uplink",
+                "eth0",
+                "--gateway",
+                "169.254.0.1",
+                "--gateway-mac",
+                "02:00:00:00:00:01",
+                "--guest-ports",
+                n,
+            ])
+        };
+        assert!(mk("1").guest_pool_cap_ok());
+        assert!(mk("256").guest_pool_cap_ok()); // boundary OK
+        assert!(!mk("257").guest_pool_cap_ok()); // first aliasing value rejected
+        assert!(!mk("65535").guest_pool_cap_ok());
     }
 
     /// Explicit `--lcores` builds the `-l 0-{n-1}` range and sizes the worker pool.

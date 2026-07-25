@@ -160,6 +160,50 @@ pub fn create_veth_pair(spec: &VethSpec) -> Result<DeviceInfo> {
     }
 }
 
+/// Create a veth pair with BOTH ends in the root netns (host-end up, mac/mtu set) for the
+/// preallocated per-guest af_xdp port pool. The guest-end (`<host_name>p`, the [`create_veth_pair`]
+/// tmp-guest convention) stays a root-netns placeholder until AttachInterface moves it into the pod
+/// netns. Returns the resolved host [`DeviceInfo`]. Rolls back (delete host) on failure.
+///
+/// This is the preallocation sibling of [`create_veth_pair`]: the `ip` sequence is modeled on it but
+/// WITHOUT the netns move/rename (`ip link add <host> type veth peer name <host>p` → set host
+/// mac/mtu/up → leave the peer down in the root netns → resolve host ifindex). The peer name
+/// convention `<host>p` is preserved so AttachInterface knows where to find the placeholder guest end.
+pub fn create_preallocated_veth(host_name: &str, mac: [u8; 6], mtu: u32) -> Result<DeviceInfo> {
+    // Fresh start: remove any stale host-side veth from a previous run (deletes the peer too).
+    delete_link(host_name);
+    // Temporary/placeholder guest-end name in the root netns — same `<host>p` convention as
+    // `create_veth_pair`'s `tmp_guest` so AttachInterface can locate + move it later.
+    let tmp_guest = format!("{host_name}p");
+    let macs = fmt_mac(mac);
+    let mtu = mtu.to_string();
+
+    let result = (|| -> Result<u32> {
+        run(&[
+            "ip", "link", "add", host_name, "type", "veth", "peer", "name", &tmp_guest,
+        ])
+        .context("create preallocated veth pair")?;
+        // Give the HOST end the placeholder MAC (the real guest MAC is programmed at attach), then
+        // bring it up. The peer stays down in the root netns as a placeholder.
+        run(&["ip", "link", "set", host_name, "address", &macs]).context("set host veth mac")?;
+        run(&["ip", "link", "set", host_name, "mtu", &mtu]).context("set host veth mtu")?;
+        run(&["ip", "link", "set", host_name, "up"]).context("host veth up")?;
+        ifindex_of(host_name)
+    })();
+
+    match result {
+        Ok(host_ifindex) => Ok(DeviceInfo {
+            host_ifindex,
+            host_name: host_name.to_string(),
+            mac,
+        }),
+        Err(e) => {
+            delete_link(host_name);
+            Err(e)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +245,25 @@ mod tests {
         // cleanup
         delete_link("fpdev-h0");
         let _ = run(&["ip", "netns", "del", ns]);
+    }
+
+    #[test]
+    #[ignore = "privileged: creates a root-netns veth pair (needs CAP_NET_ADMIN); run under sudo"]
+    fn create_preallocated_veth_leaves_peer_in_root_netns() {
+        let host = "fpdev-pg0";
+        delete_link(host);
+        let info =
+            create_preallocated_veth(host, [0x02, 0, 0, 0, 0x0e, 0x00], 1450).expect("create");
+        assert!(info.host_ifindex >= 2, "resolved a real host ifindex");
+        assert_eq!(info.host_name, host);
+        // Host end present in the root netns.
+        assert!(ifindex_of(host).is_ok(), "host end present");
+        // The placeholder guest end (`<host>p`) is ALSO present in the root netns (not moved away).
+        assert!(
+            ifindex_of(&format!("{host}p")).is_ok(),
+            "peer stays in root netns"
+        );
+        // cleanup (deletes the peer too)
+        delete_link(host);
     }
 }

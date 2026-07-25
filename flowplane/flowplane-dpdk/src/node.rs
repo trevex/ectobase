@@ -559,6 +559,7 @@ mod tests {
             guest_mtu: 1450,
             gateway_ipv4: [169, 254, 0, 1],
             gateway_ipv6: [0u8; 16],
+            guest_pool: std::sync::Mutex::new(Vec::new()),
         });
         let svc = DpdkNodeService::new(ctrl.clone(), shared.clone(), attach);
 
