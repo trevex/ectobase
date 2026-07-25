@@ -663,6 +663,88 @@ fn nat64_ingress_icmpv4_reply_becomes_icmpv6() {
     );
 }
 
+/// Unified dispatch: a NAT64 return driven through the SHARED `SimNode::uplink_rx` entry (the same
+/// `flowplane_core::datapath::process_uplink_rx` the DPDK serve loop runs, mirroring the eBPF
+/// `try_uplink_rx` base-vs-NAT-return dispatch) whose reverse conntrack entry carries `CT_F_NAT64 |
+/// CT_REWRITE_DST` must be v4→v6-EXPANDED via `process_uplink_nat64_ingress`, NOT delivered as a
+/// bare truncated IPv4 packet via the plain base path.
+///
+/// This protects the dispatch-gap fix: `process_uplink_rx` previously restricted its NAT-return
+/// branch to `CT_F_NAT64 == 0`, so NAT64 reverse entries fell through to `process_uplink` and the
+/// reply was mis-delivered as a raw IPv4 frame instead of being expanded back to the guest's IPv6.
+/// Two proofs it took the NAT64 path: (1) `Action::Redirect(tap)`; (2) the delivered frame is IPv6
+/// (ethertype 0x86DD, IPv6 dst == the guest's overlay IPv6 plumbed via `UplinkIn.guest_ipv6`) — the
+/// base path would leave it IPv4.
+#[test]
+fn uplink_rx_dispatches_nat64_return_to_v6_expansion() {
+    let mut node = node();
+    // Register NAT_IP so the peer-independent reverse-CT demux keys (vni,0,NAT_IP,0,nat_port).
+    node.maps.nat_ips.insert((VNI, NAT_IP));
+    let nat_port = expected_nat_port(IPPROTO_TCP);
+    // Seed the reverse CT_F_NAT64 entry the egress allocator would have stored.
+    node.maps.conntrack.insert(
+        CtKey {
+            vni: VNI,
+            src_ip: [0; 4],
+            dst_ip: NAT_IP,
+            src_port: 0,
+            dst_port: nat_port,
+            proto: IPPROTO_TCP,
+            _pad: [0; 3],
+        },
+        rev_ct(SPORT),
+    );
+    // Seed UNDERLAY[SELF_UNDERLAY] so the delivery tap + guest MAC resolve.
+    node.maps.underlay.insert(
+        SELF_UNDERLAY,
+        flowplane_common::UnderlayValue {
+            vni: VNI,
+            tap_ifindex: TAP_IFINDEX,
+            guest_mac: GUEST_MAC,
+            _pad: [0; 2],
+        },
+    );
+
+    let inner = inner_reply(IPPROTO_TCP, nat_port);
+    let l4_len = inner.len() - 20;
+    let frame = encap_reply(&inner);
+
+    let u = flowplane_common::UnderlayValue {
+        vni: VNI,
+        tap_ifindex: TAP_IFINDEX,
+        guest_mac: GUEST_MAC,
+        _pad: [0; 2],
+    };
+    // Drive the UNIFIED dispatch (NOT SimNode::uplink_nat64_ingress directly), with the guest's
+    // overlay IPv6 plumbed through UplinkIn.
+    let out = node.uplink_rx(&frame, VNI, u, SELF_UNDERLAY, &local(), GUEST_IP6);
+
+    assert_eq!(
+        out.action,
+        Action::Redirect(TAP_IFINDEX),
+        "unified uplink_rx must v4→v6-expand the CT_F_NAT64 return and deliver it to the guest tap \
+         (regression: dispatched to process_uplink → raw truncated IPv4)"
+    );
+    // Net -20 bytes: the NAT64 v4→v6 expansion (outer 54 + inner 20 → inner 40 headers).
+    assert_eq!(
+        out.pkt.len(),
+        frame.len() - 20,
+        "NAT64 ingress is net -20 bytes (proves the v6-expansion path, not plain decap)"
+    );
+    // The delivered frame is IPv6 with dst = the guest's overlay IPv6 — NOT a bare IPv4 packet.
+    assert_eq!(
+        &out.pkt[12..14],
+        &0x86DDu16.to_be_bytes(),
+        "delivered frame is IPv6 (dispatched to the NAT64 v6-expansion path)"
+    );
+    assert_ingress_ipv6(&out.pkt, IPPROTO_TCP, l4_len);
+    assert_eq!(
+        &out.pkt[ETH_LEN + 24..ETH_LEN + 40],
+        &GUEST_IP6,
+        "IPv6 dst reconstructed to the guest's overlay IPv6 from UplinkIn.guest_ipv6"
+    );
+}
+
 /// A reply whose guest port has no NAT64 IPv6 (guest is IPv4-only → PORT_META `guest_ipv6` all-zero)
 /// falls through with `Pass` — the parse rejects the all-zero guest IPv6.
 #[test]

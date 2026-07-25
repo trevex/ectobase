@@ -267,6 +267,31 @@ fn tcp_flags<P: Pkt>(pkt: &P, ip_off: usize) -> Option<u8> {
     pkt.read_u8(l4 + 13)
 }
 
+/// Refresh a matched IPv4 conntrack entry on a HIT: bump `last_seen = now` and advance `tcp_state`
+/// from the packet's TCP flags (TCP only). Faithful port of the eBPF `conntrack::ct_touch`
+/// (ebpf/conntrack.rs:57), generic over `Pkt`/`Maps`. Named `ct_refresh` to avoid clashing with the
+/// eBPF `ct_touch` (which re-exports `tcp_advance` from here).
+///
+/// This ONLY writes the conntrack map (last_seen + tcp_state); it never mutates the packet, so it is
+/// byte-parity-neutral. Without it an established TCP flow keeps `tcp_state = 0` forever, so
+/// `timeout_ns` returns the 30 s idle timeout instead of the 24 h ESTABLISHED timeout and the GC
+/// evicts active NAT'd flows after 30 s.
+#[inline(always)]
+pub fn ct_refresh<P: Pkt, M: Maps>(
+    pkt: &P,
+    maps: &mut M,
+    ip_off: usize,
+    key: &CtKey,
+    e: &mut CtEntry,
+    now: u64,
+) {
+    e.last_seen = now;
+    if let Some(fl) = tcp_flags(pkt, ip_off) {
+        e.tcp_state = tcp_advance(e.tcp_state, fl);
+    }
+    maps.conntrack_insert(*key, *e);
+}
+
 /// Insert a no-translation DEFAULT conntrack entry for a flow on conntrack-miss, so every flow is
 /// tracked (firewall + aging see it). Records last_seen + initial TCP state. Also pre-seeds the
 /// reverse-direction entry so return traffic is immediately recognised as established.
@@ -352,4 +377,23 @@ pub fn ct_create_default6<P: Pkt, M: Maps>(
     if maps.conntrack6_get(&rev).is_none() {
         maps.conntrack6_insert(rev, e);
     }
+}
+
+/// Refresh a matched IPv6 conntrack entry on a HIT: bump `last_seen = now` and advance `tcp_state`
+/// from the packet's TCP flags (TCP only). v6 mirror of [`ct_refresh`] / the eBPF `ct_touch6`
+/// (ebpf/conntrack.rs:145). Map-only; never mutates the packet.
+#[inline(always)]
+pub fn ct_refresh6<P: Pkt, M: Maps>(
+    pkt: &P,
+    maps: &mut M,
+    ip_off: usize,
+    key: &flowplane_common::CtKey6,
+    e: &mut CtEntry,
+    now: u64,
+) {
+    e.last_seen = now;
+    if let Some(fl) = tcp_flags_v6(pkt, ip_off) {
+        e.tcp_state = tcp_advance(e.tcp_state, fl);
+    }
+    maps.conntrack6_insert(*key, *e);
 }

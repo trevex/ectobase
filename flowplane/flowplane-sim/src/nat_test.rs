@@ -865,7 +865,8 @@ fn uplink_rx_dispatches_nat_return_past_deny_by_default_firewall() {
         gateway_mac: [1; 6],
         underlay_ipv6: HOST_UNDERLAY,
     };
-    let out = node.uplink_rx(&encapped, DNAT_VNI, u, HOST_UNDERLAY, &local);
+    // Plain (non-NAT64) NAT return: guest_ipv6 is only read on the CT_F_NAT64 branch.
+    let out = node.uplink_rx(&encapped, DNAT_VNI, u, HOST_UNDERLAY, &local, [0; 16]);
 
     assert_eq!(
         out.action,

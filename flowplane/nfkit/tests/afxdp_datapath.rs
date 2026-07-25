@@ -159,6 +159,7 @@ fn afxdp_datapath_uplink_matches_sim() {
             outer_dst: HOST_UL,
             local: &zl,
             now: 0,
+            guest_ipv6: [0; 16],
         },
     );
     assert_eq!(sim_action, Action::Redirect(TAP));

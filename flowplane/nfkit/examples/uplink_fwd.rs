@@ -104,6 +104,7 @@ fn main() {
             outer_dst: HOST_UL,
             local: &zero_local,
             now: 0,
+            guest_ipv6: [0; 16],
         };
 
         let mut rx_burst = MbufBurst::new();

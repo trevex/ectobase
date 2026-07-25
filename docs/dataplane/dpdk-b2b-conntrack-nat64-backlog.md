@@ -1,0 +1,110 @@
+# DPDK B2b datapath backlog — conntrack + NAT64 gaps
+
+Status: **all three RESOLVED** (2026-07-25)
+
+These three findings came out of the 2026-07-25 datapath correctness sweep. All
+three were **latent** — not reachable on the shipping eBPF datapath, and not
+reachable on the DPDK `serve` loop *today* because it wires only uplink RX (guest
+egress, multi-queue guest egress, and NAT64 are not in the serve loop yet). They
+were fixed in the shared core + `nfkit` and validated in software (the in-process
+sim + a multi-lcore `--no-huge` EAL test) — **no ConnectX hardware was needed**;
+only the *rte_flow hardware-offload steering* alternative for #1 (which we did not
+take) would have. Each remains end-to-end latent on DPDK until the corresponding
+serve-loop wiring lands, but the datapath logic is now correct and covered.
+
+The eBPF backend never had any of these gaps (single shared conntrack map;
+`ct_touch` on every hit; full NAT64 ingress path).
+
+---
+
+## 1. Per-lcore NAT/LB return demux misses under RSS steering — RESOLVED
+
+**Fixed** (`9270fb3` + `6bd68fc`). The peer-independent reverse entries
+(`src_ip==0 && src_port==0`, i.e. `(vni,0,nat_ip,0,nat_port)`) now live in a
+SHARED reverse-conntrack table `SharedConfigMaps::shared_ct` (an `RcuHash<CtKey,
+CtEntry>`), while regular forward CT stays per-lcore. `ComposedMaps` routes
+conntrack by key shape (`is_reverse_shape`), so a WAN reply resolves the
+reverse-DNAT on whichever lcore its outer-header RSS steered it to.
+
+**Concurrency (review fix `6bd68fc`):** `RcuHash` is SINGLE-WRITER
+(`rcu_hash.rs:30` — `RW_CONCURRENCY_LF` gives ONE writer + N lock-free readers, NOT
+concurrent writers). The datapath writes `shared_ct` from every lcore, so the
+per-new-flow writes (`shared_ct_insert`/`_remove`) are serialized behind a
+`std::sync::Mutex` (RcuHash's documented "sole writer behind a Mutex" model);
+reads (`shared_ct_get`) stay lock-free + RCU-covered. The write is off the
+per-packet hot path (NAT/LB reverse entries are created once per new flow).
+
+**Root cause (for context):** DPDK conntrack is per-lcore shared-nothing; a
+SNAT/NAT64 egress installed the reverse entry on the guest-egress lcore, but the
+WAN reply is RSS-steered by OUTER/underlay headers — unrelated to the inner tuple —
+so it often landed on a different lcore → `conntrack_get(rev)` miss → treated as a
+new inbound flow (firewall drop / no reverse-DNAT).
+
+**Tested:** `nfkit/tests/multilcore_nat_return.rs` (cross-lcore return resolves via
+the shared table; same-lcore still resolves; normal forward CT stays per-lcore
+isolated — the M8 isolation test still passes).
+
+**Remaining (latent):** true concurrent-writer stress would need a multi-threaded
+EAL test (the current test drives lcores sequentially); a GC/eviction sweep over
+`shared_ct` (via the added `shared_ct_for_each`/`_remove`) is not built yet; the
+whole path is end-to-end reachable only once guest egress is wired into serve with
+`n_queues > 1`. The rte_flow `MARK` hardware-steering alternative (needs ConnectX)
+was intentionally not taken — the shared-table software fix is correct without it.
+
+---
+
+## 2. `ct_touch` (last_seen / TCP-state refresh) not in the shared-core seam — RESOLVED
+
+**Fixed** (`74fd95a`). Added `ct_refresh`/`ct_refresh6` to
+`flowplane-core/src/conntrack.rs` (generic over `Pkt`/`Maps`, faithful ports of the
+eBPF `ct_touch`/`ct_touch6`: bump `last_seen = now`, advance `tcp_state`). The
+`datapath.rs` `process_uplink` + `process_guest_tx` conntrack sites now **refresh
+on a hit** (`ct_refresh`) and **create with the real `now`** on a miss (the calls
+had hardcoded `now = 0`). Map-only — emitted packet bytes are unchanged, so the
+byte-parity anchors stay valid. eBPF is unaffected (it uses its own ingress/egress,
+not these `process_*` fns, so no double-refresh).
+
+**Root cause (for context):** `ct_touch` was eBPF-only; the shared orchestrators
+(sim + DPDK) only created entries, never refreshed, and created them with `now=0`,
+so an established TCP conntrack kept `tcp_state=0` forever → the 30s idle timeout
+never became the 24h ESTABLISHED timeout → a GC would evict active NAT'd flows at
+30s and free/reuse the SNAT port mid-flow.
+
+**Tested:** `flowplane-sim/src/ct_refresh_test.rs` — an established TCP flow whose
+second packet arrives at `now+40s` keeps its entry (24h timeout), plus a
+`ct_refresh` unit test (NEW_SYN + ACK → ESTABLISHED).
+
+---
+
+## 3. NAT64 ingress (v4→v6 reply) unreachable on the DPDK serve loop — RESOLVED
+
+**Fixed** (`8e336a8`). Added `guest_ipv6: [u8;16]` to `UplinkIn` (the guest's own
+overlay v6, needed to reconstruct the reply's IPv6 dst; the `Maps` trait has no
+`port_meta` accessor). `process_uplink_rx` now dispatches a `CT_REWRITE_DST`
+reverse hit carrying `CT_F_NAT64` to `process_uplink_nat64_ingress` (v4→v6
+expansion) instead of falling through to plain IPv4 delivery. The DPDK `serve.rs`
+caller sources `guest_ipv6` via a real `SharedConfigMaps::ports_get(ifindex)`
+lookup.
+
+**Root cause (for context):** the unified dispatch fired only for
+`CT_F_NAT64 == 0`; NAT64 reverse entries fell through and were delivered as bare
+truncated IPv4. The sim reached `process_uplink_nat64_ingress` directly (bypassing
+the unified dispatch), so sim tests passed while the DPDK path did not exercise it.
+
+**Tested:** `flowplane-sim/src/nat64_test.rs`
+`uplink_rx_dispatches_nat64_return_to_v6_expansion` drives the unified
+`process_uplink_rx` (not the direct fn) with a `CT_F_NAT64 | CT_REWRITE_DST`
+reverse CT and asserts the v6-expanded delivery (Redirect, ethertype 0x86DD, dst =
+guest overlay v6). Existing NAT64 byte-parity tests unchanged.
+
+**Remaining (latent):** end-to-end reachable only once DPDK guest egress seeds the
+`CT_F_NAT64` reverse entries in the serve loop.
+
+---
+
+## Cross-refs
+
+- DPDK per-lcore shared-nothing model: M8 (`design/flowplane-dpdk`).
+- Externalized conntrack for upgrades: M11 hitless-upgrade slice (the shared_ct
+  table + `for_each`/`remove` are a step toward it).
+- None of these affect the eBPF datapath or the sim byte-parity guarantees.

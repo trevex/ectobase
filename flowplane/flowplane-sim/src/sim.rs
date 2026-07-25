@@ -111,6 +111,8 @@ impl SimNode {
             outer_dst,
             local,
             now: self.now,
+            // Base path (never NAT64); guest_ipv6 is only read on the CT_F_NAT64 return branch.
+            guest_ipv6: [0; 16],
         };
         let action = flowplane_core::datapath::process_uplink(&mut pkt, &mut self.maps, &in_);
         SimOut {
@@ -164,7 +166,9 @@ impl SimNode {
     /// `CT_REWRITE_DST` reverse entry, not LB-claimed) to the reverse-DNAT path and everything else to
     /// the LB + base path — the SAME base-vs-NAT-return decision the eBPF `try_uplink_rx` makes inline
     /// and the DPDK serve loop drives. Use this (over [`SimNode::uplink`] / [`SimNode::uplink_nat_return`],
-    /// which force one branch) to exercise the dispatch itself.
+    /// which force one branch) to exercise the dispatch itself. A `CT_F_NAT64` reverse hit dispatches to
+    /// the v4→v6 expansion path, which reconstructs the reply's inner IPv6 dst from `guest_ipv6` (the
+    /// guest's own overlay IPv6); it is unread on all other branches.
     pub fn uplink_rx(
         &mut self,
         encapped: &[u8],
@@ -172,6 +176,7 @@ impl SimNode {
         u: UnderlayValue,
         outer_dst: [u8; 16],
         local: &Local,
+        guest_ipv6: [u8; 16],
     ) -> SimOut {
         let mut pkt = VecPkt::from_bytes(encapped);
         let in_ = flowplane_core::datapath::UplinkIn {
@@ -180,6 +185,7 @@ impl SimNode {
             outer_dst,
             local,
             now: self.now,
+            guest_ipv6,
         };
         let action = flowplane_core::datapath::process_uplink_rx(&mut pkt, &mut self.maps, &in_);
         SimOut {

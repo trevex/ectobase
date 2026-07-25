@@ -155,6 +155,7 @@ fn datapath_pcap_uplink_matches_sim() {
         outer_dst: HOST_UL,
         local: &zl,
         now: 0,
+        guest_ipv6: [0; 16],
     };
     let mut sim = MemMaps::default();
     sim.fw_meta.insert(TAP, allow_meta());

@@ -163,6 +163,7 @@ fn sim_uplink(src: [u8; 4]) -> Vec<u8> {
             outer_dst: HOST_UL,
             local: &zl,
             now: 0,
+            guest_ipv6: [0; 16],
         },
     );
     assert_eq!(a, Action::Redirect(TAP));
@@ -243,6 +244,7 @@ fn multilcore_config_via_writer_parity_and_isolation() {
                     outer_dst: HOST_UL,
                     local: &zl,
                     now: 0,
+                    guest_ipv6: [0; 16],
                 },
             );
             // Record output bytes — do NOT assert here (a worker panic ABORTS the process).

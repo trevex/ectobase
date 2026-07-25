@@ -167,6 +167,7 @@ fn dpdk_uplink_matches_sim() {
             outer_dst: HOST_UL,
             local: &zl,
             now: 0,
+            guest_ipv6: [0; 16],
         };
 
         // sim reference
@@ -206,6 +207,7 @@ fn dpdk_uplink_matches_sim() {
             outer_dst: HOST_UL,
             local: &local,
             now: 0,
+            guest_ipv6: [0; 16],
         };
 
         let lb_key = LbKey {
@@ -272,6 +274,7 @@ fn dpdk_uplink_matches_sim() {
             outer_dst: HOST_UL,
             local: &zl,
             now: 0,
+            guest_ipv6: [0; 16],
         };
 
         // sim reference — NO fw_meta / fw_rules installed → deny-by-default.
