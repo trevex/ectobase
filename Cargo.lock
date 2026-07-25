@@ -764,6 +764,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "flowplane-node"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flowplane-common",
+ "flowplane-control",
+ "prost",
+ "tonic",
+ "tonic-build",
+]
+
+[[package]]
 name = "flowplane-sim"
 version = "0.1.0"
 dependencies = [
