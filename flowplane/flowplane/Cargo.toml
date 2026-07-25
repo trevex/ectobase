@@ -11,6 +11,7 @@ flowplane-common = { path = "../flowplane-common", features = ["user"] }
 flowplane-control = { path = "../flowplane-control" }
 flowplane-core = { path = "../flowplane-core" }
 flowplane-node = { path = "../flowplane-node" }
+flowplane-device = { path = "../flowplane-device" }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 parking_lot = { workspace = true }

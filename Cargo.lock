@@ -695,6 +695,7 @@ dependencies = [
  "flowplane-common",
  "flowplane-control",
  "flowplane-core",
+ "flowplane-device",
  "flowplane-ebpf",
  "flowplane-node",
  "flowplane-sim",
@@ -730,6 +731,14 @@ name = "flowplane-core"
 version = "0.1.0"
 dependencies = [
  "flowplane-common",
+]
+
+[[package]]
+name = "flowplane-device"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ipnet",
 ]
 
 [[package]]

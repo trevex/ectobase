@@ -9,8 +9,6 @@ mod control;
 mod loader;
 mod maps;
 mod node;
-mod underlay;
-
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 
@@ -349,8 +347,8 @@ fn resolve_underlay_ipv6(flag: Option<&str>) -> anyhow::Result<[u8; 16]> {
             }
         }
     }
-    let addrs = underlay::read_host_ifaddrs()?;
-    if let Some(a) = underlay::infer_underlay_address(&addrs) {
+    let addrs = flowplane_device::read_host_ifaddrs()?;
+    if let Some(a) = flowplane_device::infer_underlay_address(&addrs) {
         println!("underlay: inferred fabric-loopback {a}");
         return Ok(a.octets());
     }
@@ -375,8 +373,8 @@ async fn main() -> anyhow::Result<()> {
         Cmd::InferUnderlay => {
             // Pure, root-free observability hook for the containerlab IPv6-fabric e2e: read the
             // host ifaddrs and print the inferred underlay /64 in a stable, greppable form.
-            let addrs = underlay::read_host_ifaddrs()?;
-            let prefix = underlay::infer_underlay_prefix(&addrs)
+            let addrs = flowplane_device::read_host_ifaddrs()?;
+            let prefix = flowplane_device::infer_underlay_prefix(&addrs)
                 .context("no global-unicast IPv6 address found to infer underlay /64")?;
             println!("inferred underlay prefix: {prefix}");
         }
@@ -486,7 +484,7 @@ async fn main() -> anyhow::Result<()> {
                     .context("build underlay /64 from resolved underlay")?
                     .trunc();
                 println!("DataplaneNode: underlay pool = {pool}");
-                underlay::UnderlayIpam::new(pool)
+                flowplane_device::UnderlayIpam::new(pool)
             };
             // Disable guest tx-checksum offload at attach ONLY on a software-veth uplink (clab/kind),
             // which can't finalize CHECKSUM_PARTIAL; a real NIC finalizes the inner checksum in HW.

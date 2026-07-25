@@ -20,7 +20,7 @@ use std::sync::Arc;
 use anyhow::{bail, Context};
 
 use crate::control::{Control, IfaceParams};
-use crate::underlay::UnderlayIpam;
+use flowplane_device::UnderlayIpam;
 
 /// Guest-edge device backing an interface. Both run the SAME `tc_guest_tx` datapath on a single
 /// root-netns device (via `Control::create_interface`); they differ only in how that device is
