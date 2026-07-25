@@ -1,0 +1,205 @@
+//! Container guest-edge device lifecycle: create a veth pair, move the guest end into the pod
+//! netns, configure both ends, and resolve the host ifindex. Extracted verbatim from the eBPF
+//! `attach.rs` veth path so both backends share ONE implementation (no drift).
+
+use anyhow::{bail, Context, Result};
+use std::process::Command;
+
+/// What the caller wants stood up.
+pub struct VethSpec {
+    /// Host-side (root-netns) datapath device name, e.g. `veth-<id>`.
+    pub host_name: String,
+    /// Guest-side interface name inside the netns (the pod's eth0), e.g. `eth0`.
+    pub guest_name: String,
+    /// Target netns path, e.g. `/var/run/netns/<ns>`.
+    pub netns_path: String,
+    /// MAC applied to BOTH ends (see attach.rs rationale: local delivery addresses guest_mac).
+    pub mac: [u8; 6],
+    /// Guest + host link MTU (underlay MTU - encap overhead).
+    pub mtu: u32,
+    /// Disable guest tx-checksum offload (software-veth fabric only; see attach.rs).
+    pub disable_csum_offload: bool,
+}
+
+/// Resolved device facts the caller programs into the maps + returns to the CNI.
+pub struct DeviceInfo {
+    pub host_ifindex: u32,
+    pub host_name: String,
+    pub mac: [u8; 6],
+}
+
+/// Verbatim from attach.rs `fn fmt_mac`.
+fn fmt_mac(m: [u8; 6]) -> String {
+    format!(
+        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        m[0], m[1], m[2], m[3], m[4], m[5]
+    )
+}
+
+/// Run `ip`/other command in the root netns. Verbatim from attach.rs `fn run`.
+pub(crate) fn run(args: &[&str]) -> Result<()> {
+    let out = Command::new(args[0])
+        .args(&args[1..])
+        .output()
+        .with_context(|| format!("spawn {args:?}"))?;
+    if !out.status.success() {
+        bail!(
+            "command {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Run a command inside the netns identified by `netns_path` via `ip netns exec <name>`.
+/// `netns_path` is a path like `/var/run/netns/<name>`; we extract `<name>` for `ip netns exec`.
+/// Verbatim from attach.rs `fn run_netns`.
+pub(crate) fn run_netns(netns_path: &str, args: &[&str]) -> Result<()> {
+    let ns = netns_path.rsplit('/').next().unwrap_or(netns_path);
+    let mut full = vec!["ip", "netns", "exec", ns];
+    full.extend_from_slice(args);
+    run(&full)
+}
+
+/// Read `/sys/class/net/<name>/ifindex` to resolve the host interface index.
+fn ifindex_of(name: &str) -> Result<u32> {
+    let s = std::fs::read_to_string(format!("/sys/class/net/{name}/ifindex"))
+        .with_context(|| format!("read ifindex of {name}"))?;
+    s.trim()
+        .parse()
+        .with_context(|| format!("parse ifindex of {name}: {s:?}"))
+}
+
+/// Idempotent `ip link del <name>` (ignores errors / "not found").
+pub fn delete_link(name: &str) {
+    let _ = run(&["ip", "link", "del", name]);
+}
+
+/// Create + configure the veth pair, returning the resolved host device facts. Rolls back
+/// (`delete_link(host)`) on any step failure. The `ip` command sequence is transcribed verbatim
+/// from `attach.rs` `setup_veth`: create pair → move peer to netns → rename → guest mac/up/mtu
+/// → tcp_mtu_probing best-effort → optional ethtool csum-off → host mac/mtu/up.
+pub fn create_veth_pair(spec: &VethSpec) -> Result<DeviceInfo> {
+    // Fresh start: remove any stale host-side veth from a previous run.
+    let _ = run(&["ip", "link", "del", &spec.host_name]);
+    let host = &spec.host_name;
+    // Temporary guest-end name in the root netns before we move it (must differ from host and
+    // be unique); derive it from the host name to avoid collisions.
+    let tmp_guest = format!("{host}p");
+    let macs = fmt_mac(spec.mac);
+    let mtu = spec.mtu.to_string();
+
+    let result = (|| -> Result<u32> {
+        run(&[
+            "ip", "link", "add", host, "type", "veth", "peer", "name", &tmp_guest,
+        ])
+        .context("create veth pair")?;
+        // Move the guest end into the target netns (by path, e.g. /var/run/netns/<ns>).
+        run(&["ip", "link", "set", &tmp_guest, "netns", &spec.netns_path])
+            .context("move guest veth into netns")?;
+        // Inside the netns: rename to the requested guest name, set MAC, bring up.
+        run_netns(
+            &spec.netns_path,
+            &["ip", "link", "set", &tmp_guest, "name", &spec.guest_name],
+        )
+        .context("rename guest veth")?;
+        run_netns(
+            &spec.netns_path,
+            &["ip", "link", "set", &spec.guest_name, "address", &macs],
+        )
+        .context("set guest veth mac")?;
+        run_netns(
+            &spec.netns_path,
+            &["ip", "link", "set", &spec.guest_name, "up"],
+        )
+        .context("guest veth up")?;
+        // Set the guest link MTU (node-wide value = underlay MTU - encap overhead).
+        run_netns(
+            &spec.netns_path,
+            &["ip", "link", "set", &spec.guest_name, "mtu", &mtu],
+        )
+        .context("set guest veth mtu")?;
+        // Enable TCP Packetization-Layer PMTUD (RFC 4821) in the guest netns — best-effort.
+        let _ = run_netns(
+            &spec.netns_path,
+            &["sysctl", "-wq", "net.ipv4.tcp_mtu_probing=1"],
+        );
+        // Disable tx-checksum offload on the guest end — only when the uplink can't finalize
+        // CHECKSUM_PARTIAL in hardware (software veth fabric). Best-effort.
+        if spec.disable_csum_offload {
+            let _ = run_netns(
+                &spec.netns_path,
+                &[
+                    "ethtool",
+                    "-K",
+                    &spec.guest_name,
+                    "tx-checksum-ip-generic",
+                    "off",
+                ],
+            );
+        }
+        // Give the HOST end the SAME (guest) MAC, then bring it up.
+        run(&["ip", "link", "set", host, "address", &macs]).context("set host veth mac")?;
+        // Host end MTU must be >= the guest's so a full-size guest frame is never dropped.
+        run(&["ip", "link", "set", host, "mtu", &mtu]).context("set host veth mtu")?;
+        run(&["ip", "link", "set", host, "up"]).context("host veth up")?;
+        ifindex_of(host)
+    })();
+
+    match result {
+        Ok(host_ifindex) => Ok(DeviceInfo {
+            host_ifindex,
+            host_name: spec.host_name.clone(),
+            mac: spec.mac,
+        }),
+        Err(e) => {
+            delete_link(host);
+            Err(e)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fmt_mac_lowercases_colon_separated() {
+        assert_eq!(fmt_mac([0x02, 0, 0, 0, 0, 0x01]), "02:00:00:00:00:01");
+    }
+
+    #[test]
+    fn ifindex_of_loopback_is_one() {
+        // lo is ifindex 1 in every netns incl. the root — no privileges needed to read /sys.
+        assert_eq!(ifindex_of("lo").unwrap(), 1);
+    }
+
+    #[test]
+    #[ignore = "privileged: creates a veth pair + netns (needs CAP_NET_ADMIN); run under sudo"]
+    fn create_veth_pair_stands_up_a_container_device() {
+        // Make a throwaway netns.
+        let ns = "fpdev-test-ns";
+        let _ = run(&["ip", "netns", "del", ns]);
+        run(&["ip", "netns", "add", ns]).unwrap();
+        let netns_path = format!("/var/run/netns/{ns}");
+        let spec = VethSpec {
+            host_name: "fpdev-h0".into(),
+            guest_name: "eth0".into(),
+            netns_path: netns_path.clone(),
+            mac: [0x02, 0, 0, 0, 0, 0x77],
+            mtu: 1400,
+            disable_csum_offload: false,
+        };
+        let info = create_veth_pair(&spec).expect("create veth");
+        assert!(info.host_ifindex >= 2, "resolved a real host ifindex");
+        assert_eq!(info.mac, spec.mac);
+        // host end exists in root netns
+        assert!(ifindex_of("fpdev-h0").is_ok(), "host end present");
+        // guest end present in the netns with the requested name
+        run_netns(&netns_path, &["ip", "link", "show", "eth0"]).expect("guest end in netns");
+        // cleanup
+        delete_link("fpdev-h0");
+        let _ = run(&["ip", "netns", "del", ns]);
+    }
+}
