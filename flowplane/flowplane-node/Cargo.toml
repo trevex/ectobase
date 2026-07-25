@@ -12,5 +12,8 @@ tonic = { workspace = true }
 prost = { workspace = true }
 anyhow = { workspace = true }
 
+[dev-dependencies]
+flowplane-control = { path = "../flowplane-control", features = ["mem-writer"] }
+
 [build-dependencies]
 tonic-build = "0.12"
