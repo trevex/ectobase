@@ -98,15 +98,12 @@ impl DataplaneNode for DpdkNodeService {
         }
         let ipv4 = first_ipv4(&r.requested_ips);
         let ipv6 = first_ipv6(&r.requested_ips);
-        // Require an overlay IPv4 (matches the eBPF attach). This is NOT about the underlay (always
-        // IPv6); it reflects the current interface model: `program_interface` keys the INTERFACES
-        // local-delivery map on the overlay IPv4 and programs an unconditional /32 self-route, while
-        // IPv6 is an OPTIONAL secondary. So IPv4-only and dual-stack are supported; a true IPv6-only
-        // overlay is not yet representable in either backend (would need a v6-keyed INTERFACES — a
-        // separate cross-backend change). Reject rather than program a bogus 0.0.0.0 interface.
-        if ipv4 == [0u8; 4] {
+        // At least one overlay family is required; either may be absent (all-zeros). v4-only,
+        // v6-only, and dual-stack are all valid (the datapath delivery is route+UNDERLAY driven,
+        // family-agnostic; program_interface programs each present family's self-route).
+        if ipv4 == [0u8; 4] && ipv6 == [0u8; 16] {
             return Err(Status::invalid_argument(
-                "attach requires at least one overlay IPv4 (IPv6-only overlays not yet supported)",
+                "attach requires at least one overlay IP (IPv4 or IPv6) in requested_ips",
             ));
         }
         // MAC: honour a caller-supplied MAC, else derive a stable deterministic one (FNV-1a of
@@ -215,9 +212,17 @@ impl DataplaneNode for DpdkNodeService {
         // underlay_route = /128 as "xxxx::yyyy" string.
         Ok(Response::new(AttachInterfaceResponse {
             ifname: guest_name,
-            // Single resolved IPv4 (guaranteed present by the guard above) — identical shape to the
-            // eBPF attach response.
-            ips: vec![std::net::Ipv4Addr::from(ipv4).to_string()],
+            // Present overlay families (identical shape to the eBPF attach response): v4 then v6.
+            ips: {
+                let mut v = Vec::new();
+                if ipv4 != [0u8; 4] {
+                    v.push(std::net::Ipv4Addr::from(ipv4).to_string());
+                }
+                if ipv6 != [0u8; 16] {
+                    v.push(std::net::Ipv6Addr::from(ipv6).to_string());
+                }
+                v
+            },
             mac: fmt_mac(mac),
             gateway: std::net::Ipv4Addr::from(attach.gateway_ipv4).to_string(),
             underlay_route: std::net::Ipv6Addr::from(underlay).to_string(),
