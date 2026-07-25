@@ -30,9 +30,9 @@
 use std::sync::Arc;
 
 use flowplane_common::{
-    DhcpConfig, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue, LbKey,
-    LbValue, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteValue,
-    UnderlayValue, VipKey,
+    DhcpConfig, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceMetaKey, IfaceMetaVal,
+    IfaceValue, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry,
+    PortMeta, RouteValue, UnderlayValue, VipKey,
 };
 use flowplane_control::{CtFlushScope, MapWriter};
 use nfkit::SharedConfigMaps;
@@ -164,6 +164,16 @@ impl MapWriter for DpdkMapWriter {
     }
     fn fw_meta_upsert(&mut self, ifindex: u32, val: FwMeta) -> anyhow::Result<()> {
         insert_ok(self.sc.fw_meta_insert(ifindex, val), "fw_meta")
+    }
+    fn fw_rules6_upsert(&mut self, key: FwRuleKey, val: FwRule6) -> anyhow::Result<()> {
+        insert_ok(self.sc.fw_rules6_insert(key, val), "fw_rules6")
+    }
+    fn fw_rules6_remove(&mut self, key: &FwRuleKey) -> anyhow::Result<()> {
+        self.sc.fw_rules6_remove(key);
+        Ok(())
+    }
+    fn fw_meta6_upsert(&mut self, ifindex: u32, val: FwMeta) -> anyhow::Result<()> {
+        insert_ok(self.sc.fw_meta6_insert(ifindex, val), "fw_meta6")
     }
 
     // ── METER ────────────────────────────────────────────────────────────────

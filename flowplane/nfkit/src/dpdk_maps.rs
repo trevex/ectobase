@@ -4,8 +4,8 @@
 
 use crate::{DpdkHash, HashError};
 use flowplane_common::{
-    CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
-    MaglevKey, MeterState, NatKey, NatValue, RouteValue, UnderlayValue,
+    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey, LbKey,
+    LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
 use std::cell::Cell;
@@ -67,7 +67,9 @@ const _: () = assert!(std::mem::size_of::<U32Key>() == 4);
 const _: () = assert!(std::mem::size_of::<Ipv6Key>() == 16);
 // flowplane-common key structs already verified in their own tests; spot-check here too.
 const _: () = assert!(std::mem::size_of::<CtKey>() == 20);
+const _: () = assert!(std::mem::size_of::<CtKey6>() == 44);
 const _: () = assert!(std::mem::size_of::<FwRuleKey>() == 8);
+const _: () = assert!(std::mem::size_of::<FwRule6>() == 80);
 const _: () = assert!(std::mem::size_of::<LbKey>() == 12);
 const _: () = assert!(std::mem::size_of::<MaglevKey>() == 8);
 const _: () = assert!(std::mem::size_of::<NatKey>() == 8);
@@ -90,9 +92,12 @@ pub struct DpdkMaps {
 
     // Per-key hashes.
     conntrack: DpdkHash<CtKey, CtEntry>,
+    conntrack6: DpdkHash<CtKey6, CtEntry>,
     underlay: DpdkHash<Ipv6Key, UnderlayValue>,
     fw_meta: DpdkHash<U32Key, FwMeta>,
     fw_rules: DpdkHash<FwRuleKey, FwRule>,
+    fw_meta6: DpdkHash<U32Key, FwMeta>,
+    fw_rules6: DpdkHash<FwRuleKey, FwRule6>,
     lb: DpdkHash<LbKey, LbValue>,
     maglev: DpdkHash<MaglevKey, [u8; 16]>,
     nat: DpdkHash<NatKey, NatValue>,
@@ -136,9 +141,12 @@ impl DpdkMaps {
             local: None,
             dhcp_config: None,
             conntrack: DpdkHash::new(&format!("dm_ct_{n}"), ct_cap, socket_id)?,
+            conntrack6: DpdkHash::new(&format!("dm_ct6_{n}"), ct_cap, socket_id)?,
             underlay: DpdkHash::new(&format!("dm_ul_{n}"), std_cap, socket_id)?,
             fw_meta: DpdkHash::new(&format!("dm_fm_{n}"), std_cap, socket_id)?,
             fw_rules: DpdkHash::new(&format!("dm_fr_{n}"), std_cap, socket_id)?,
+            fw_meta6: DpdkHash::new(&format!("dm_fm6_{n}"), std_cap, socket_id)?,
+            fw_rules6: DpdkHash::new(&format!("dm_fr6_{n}"), std_cap, socket_id)?,
             lb: DpdkHash::new(&format!("dm_lb_{n}"), std_cap, socket_id)?,
             maglev: DpdkHash::new(&format!("dm_mg_{n}"), std_cap, socket_id)?,
             nat: DpdkHash::new(&format!("dm_nat_{n}"), std_cap, socket_id)?,
@@ -202,6 +210,18 @@ impl DpdkMaps {
     pub fn add_fw_rule(&mut self, ifindex: u32, idx: u32, rule: FwRule) {
         let ok = self.fw_rules.insert(&FwRuleKey { ifindex, idx }, rule);
         debug_assert!(ok, "fw_rules table full at populate time");
+    }
+
+    /// Insert an IPv6 firewall meta entry — mirrors `add_fw_meta` for the `FW_META6` table.
+    pub fn add_fw_meta6(&mut self, ifindex: u32, value: FwMeta) {
+        let ok = self.fw_meta6.insert(&U32Key { v: ifindex }, value);
+        debug_assert!(ok, "fw_meta6 table full at populate time");
+    }
+
+    /// Insert an IPv6 firewall rule — mirrors `add_fw_rule` for the `FW_RULES6` table.
+    pub fn add_fw_rule6(&mut self, ifindex: u32, idx: u32, rule: FwRule6) {
+        let ok = self.fw_rules6.insert(&FwRuleKey { ifindex, idx }, rule);
+        debug_assert!(ok, "fw_rules6 table full at populate time");
     }
 
     /// Insert an LB entry.
@@ -295,6 +315,29 @@ impl Maps for DpdkMaps {
         // Trait method returns `()`; a full conntrack table drops here. Count it so saturation is
         // observable via `dropped_conntrack_inserts()`.
         if !self.conntrack.insert(&key, entry) {
+            self.dropped_ct_inserts
+                .set(self.dropped_ct_inserts.get() + 1);
+        }
+    }
+
+    // ── IPv6 firewall / conntrack (parity with the v4 fw/ct methods above) ────
+    fn fw_meta6(&self, ifindex: u32) -> Option<FwMeta> {
+        self.fw_meta6.get(&U32Key { v: ifindex })
+    }
+
+    /// Mirror `fw_rule`: key on `(key.ifindex, key.idx)` in the `FW_RULES6` table.
+    fn fw_rule6(&self, key: &FwRuleKey) -> Option<FwRule6> {
+        self.fw_rules6.get(key)
+    }
+
+    fn conntrack6_get(&self, key: &CtKey6) -> Option<CtEntry> {
+        self.conntrack6.get(key)
+    }
+
+    fn conntrack6_insert(&mut self, key: CtKey6, entry: CtEntry) {
+        // Same as v4 `conntrack_insert`: a full v6 conntrack table drops here; count it so
+        // saturation is observable via `dropped_conntrack_inserts()`.
+        if !self.conntrack6.insert(&key, entry) {
             self.dropped_ct_inserts
                 .set(self.dropped_ct_inserts.get() + 1);
         }

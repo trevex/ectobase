@@ -42,7 +42,7 @@ use std::alloc::Layout;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use flowplane_common::{
-    DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceMetaKey, IfaceMetaVal,
+    DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceMetaKey, IfaceMetaVal,
     IfaceValue, LbKey, LbValue, Local, MaglevKey, NatKey, NatValue, NeighborNatEntry, PortMeta,
     RouteValue, UnderlayValue, VipKey,
 };
@@ -147,6 +147,10 @@ tagged_key!(VipK, 14, { vni: u32, ipv4: [u8; 4] }, 3);
 tagged_key!(DhcpMetaK, 15, { ifindex: u32 }, 3);
 // tag 16: meter config (ifindex).
 tagged_key!(MeterCfgK, 16, { ifindex: u32 }, 3);
+// tag 17: fw rule6 (ifindex,idx). Parallel v6 firewall rule table.
+tagged_key!(FwRule6K, 17, { ifindex: u32, idx: u32 }, 3);
+// tag 18: fw meta6 (ifindex). Parallel v6 firewall meta table.
+tagged_key!(FwMeta6K, 18, { ifindex: u32 }, 3);
 
 // Padding-free guarantees (uninitialized padding bytes would corrupt the hashed key).
 const _: () = assert!(std::mem::size_of::<Route4Key>() == 12);
@@ -165,6 +169,8 @@ const _: () = assert!(std::mem::size_of::<NeighNatK>() == 8);
 const _: () = assert!(std::mem::size_of::<VipK>() == 12);
 const _: () = assert!(std::mem::size_of::<DhcpMetaK>() == 8);
 const _: () = assert!(std::mem::size_of::<MeterCfgK>() == 8);
+const _: () = assert!(std::mem::size_of::<FwRule6K>() == 12);
+const _: () = assert!(std::mem::size_of::<FwMeta6K>() == 8);
 
 // ── reader token ─────────────────────────────────────────────────────────────────────────────────
 
@@ -230,6 +236,8 @@ pub struct SharedConfigMaps {
     underlay: std::mem::ManuallyDrop<RcuHash<UnderlayK, UnderlayValue>>,
     fw_rules: std::mem::ManuallyDrop<RcuHash<FwRuleK, FwRule>>,
     fw_meta: std::mem::ManuallyDrop<RcuHash<FwMetaK, FwMeta>>,
+    fw_rules6: std::mem::ManuallyDrop<RcuHash<FwRule6K, FwRule6>>,
+    fw_meta6: std::mem::ManuallyDrop<RcuHash<FwMeta6K, FwMeta>>,
     ifaces: std::mem::ManuallyDrop<RcuHash<IfaceK, IfaceValue>>,
     iface_meta: std::mem::ManuallyDrop<RcuHash<IfaceMetaK, IfaceMetaVal>>,
     ports: std::mem::ManuallyDrop<RcuHash<PortK, PortMeta>>,
@@ -314,6 +322,8 @@ impl SharedConfigMaps {
         let underlay = build!("ul");
         let fw_rules = build!("fr");
         let fw_meta = build!("fm");
+        let fw_rules6 = build!("fr6");
+        let fw_meta6 = build!("fm6");
         let ifaces = build!("if");
         let iface_meta = build!("im");
         let ports = build!("pt");
@@ -339,6 +349,8 @@ impl SharedConfigMaps {
             underlay: std::mem::ManuallyDrop::new(underlay),
             fw_rules: std::mem::ManuallyDrop::new(fw_rules),
             fw_meta: std::mem::ManuallyDrop::new(fw_meta),
+            fw_rules6: std::mem::ManuallyDrop::new(fw_rules6),
+            fw_meta6: std::mem::ManuallyDrop::new(fw_meta6),
             ifaces: std::mem::ManuallyDrop::new(ifaces),
             iface_meta: std::mem::ManuallyDrop::new(iface_meta),
             ports: std::mem::ManuallyDrop::new(ports),
@@ -526,6 +538,25 @@ impl SharedConfigMaps {
         self.fw_meta.remove(&FwMetaK::new(ifindex))
     }
 
+    /// Insert/overwrite an IPv6 firewall rule slot `(ifindex,idx)`. Returns false if the table is full.
+    pub fn fw_rules6_insert(&self, key: FwRuleKey, rule: FwRule6) -> bool {
+        self.fw_rules6
+            .insert(&FwRule6K::new(key.ifindex, key.idx), rule)
+    }
+    /// Remove an IPv6 firewall rule slot. Returns true if present.
+    pub fn fw_rules6_remove(&self, key: &FwRuleKey) -> bool {
+        self.fw_rules6.remove(&FwRule6K::new(key.ifindex, key.idx))
+    }
+
+    /// Insert/overwrite per-interface IPv6 firewall rule counts. Returns false if the table is full.
+    pub fn fw_meta6_insert(&self, ifindex: u32, val: FwMeta) -> bool {
+        self.fw_meta6.insert(&FwMeta6K::new(ifindex), val)
+    }
+    /// Remove per-interface IPv6 firewall meta. Returns true if present.
+    pub fn fw_meta6_remove(&self, ifindex: u32) -> bool {
+        self.fw_meta6.remove(&FwMeta6K::new(ifindex))
+    }
+
     /// Insert/overwrite a per-interface meter rate config. Returns false if the table is full.
     pub fn meter_config_insert(&self, ifindex: u32, cfg: flowplane_common::MeterConfig) -> bool {
         self.meter_config.insert(&MeterCfgK::new(ifindex), cfg)
@@ -640,6 +671,16 @@ impl SharedConfigMaps {
     pub fn fw_meta(&self, ifindex: u32) -> Option<FwMeta> {
         self.fw_meta.get(&FwMetaK::new(ifindex))
     }
+    /// IPv6 firewall rule slot lookup (matches `Maps::fw_rule6`).
+    #[must_use]
+    pub fn fw_rule6(&self, key: &FwRuleKey) -> Option<FwRule6> {
+        self.fw_rules6.get(&FwRule6K::new(key.ifindex, key.idx))
+    }
+    /// Per-interface IPv6 firewall meta lookup (matches `Maps::fw_meta6`).
+    #[must_use]
+    pub fn fw_meta6(&self, ifindex: u32) -> Option<FwMeta> {
+        self.fw_meta6.get(&FwMeta6K::new(ifindex))
+    }
     /// Interfaces entry lookup. Also used by the writer's VNI-purge / detach reconciliation.
     #[must_use]
     pub fn ifaces_get(&self, key: &IfaceKey) -> Option<IfaceValue> {
@@ -698,6 +739,8 @@ impl Drop for SharedConfigMaps {
             std::mem::ManuallyDrop::drop(&mut self.underlay);
             std::mem::ManuallyDrop::drop(&mut self.fw_rules);
             std::mem::ManuallyDrop::drop(&mut self.fw_meta);
+            std::mem::ManuallyDrop::drop(&mut self.fw_rules6);
+            std::mem::ManuallyDrop::drop(&mut self.fw_meta6);
             std::mem::ManuallyDrop::drop(&mut self.ifaces);
             std::mem::ManuallyDrop::drop(&mut self.iface_meta);
             std::mem::ManuallyDrop::drop(&mut self.ports);
