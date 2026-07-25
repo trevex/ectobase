@@ -41,12 +41,12 @@ use nfkit::{
 };
 
 use flowplane_control::ControlCore;
-use flowplane_core::datapath::{process_uplink_rx, UplinkIn};
+use flowplane_core::datapath::{process_guest_tx, process_uplink_rx, GuestTxIn, UplinkIn};
 use flowplane_core::maps::Maps; // brings `underlay_get`/`local` method syntax into scope on ComposedMaps
 use flowplane_core::pkt::{Action, Pkt}; // `Pkt` brings `read_array` into scope on MbufPkt
 use nfkit::monotonic_ns;
 
-use crate::attach_state::DpdkAttachState;
+use crate::attach_state::{DpdkAttachState, GuestPortSlot};
 
 use crate::node::{pb, DpdkNodeService};
 use crate::writer::DpdkMapWriter;
@@ -63,6 +63,21 @@ const CONFIG_ENTRIES: u32 = 4096;
 /// NUMA socket the maps + mempool are allocated on. Single-socket assumption for the scaffold; a
 /// real multi-socket deployment would derive this per-port (Task 9+).
 const SOCKET_ID: i32 = 0;
+
+/// A preallocated guest af_xdp port owned by a worker: the ethdev `Port` plus the host veth
+/// ifindex its `PortMeta` is keyed by (`ports_get(host_ifindex)`). Built in `run` (pairing each
+/// configured guest `Port` with its `GuestPortSlot.host_ifindex`), moved into the datapath thread,
+/// and borrowed by `worker_loop`. `Send + Sync` (Port = `{id:u16,n_queues:u16}` + a Sync u32), so a
+/// `&[GuestPort]` can cross into the `for_each_worker` `Fn + Sync` closure.
+struct GuestPort {
+    port: Port,
+    host_ifindex: u32,
+}
+
+/// Default guest MTU = 1500 (underlay) − 40 (outer IPv6 header) − 8 (encap overhead for the
+/// Geneve-style encap) = 1452, but we use 1450 to round down safely. Used both for the preallocated
+/// guest veths (before EAL init) and the attach-state default.
+const DEFAULT_GUEST_MTU: u32 = 1450;
 
 /// Which nfkit port backend the datapath runs on. Mirrors [`nfkit::Backend`] minus its
 /// backend-specific fields (those are derived from `--uplink`/`--queues`).
@@ -131,6 +146,12 @@ pub struct ServeArgs {
     /// Guest MTU override. Unset = derive from the uplink MTU minus encap overhead (Task 9).
     #[arg(long = "guest-mtu")]
     pub guest_mtu: Option<u32>,
+    /// Number of PREALLOCATED per-guest af_xdp ports (VF-style). The serve process creates this many
+    /// guest veth pairs BEFORE EAL init and passes each as an extra `--vdev=net_af_xdp<i>`, giving a
+    /// STATIC poll set that AttachInterface (Task 4) later binds to guests. First slice: 1. Only
+    /// meaningful for the af-xdp backend (ignored/skipped otherwise).
+    #[arg(long = "guest-ports", default_value_t = 1)]
+    pub guest_ports: u16,
 }
 
 impl ServeArgs {
@@ -148,6 +169,13 @@ impl ServeArgs {
     /// Datapath worker lcores available = every lcore except the main one.
     fn worker_lcores(&self) -> u16 {
         self.lcore_count() - 1
+    }
+
+    /// First-slice preallocated-pool cap: `--guest-ports` must be `<= 256`. Beyond that the
+    /// placeholder MAC's last octet (`i as u8`) and the `1 + i` port_id would alias/overflow (see
+    /// the guard in `run`). Pure predicate so the cap can be unit-tested without EAL.
+    fn guest_pool_cap_ok(&self) -> bool {
+        self.guest_ports <= 256
     }
 
     /// Map the parsed backend kind + uplink into an [`nfkit::Backend`]. `queues` is the effective
@@ -191,7 +219,98 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         );
     }
     let backend = args.to_backend(queues);
-    let mut eal_argv = backend.eal_args_lcores("flowplane-dpdk", &args.eal_lcore_list());
+
+    // ── 2a. PREALLOCATE the per-guest af_xdp port pool BEFORE EAL init ───────────
+    // VF-style static poll set: create `--guest-ports` guest veth pairs NOW (in the root netns) so
+    // each host end can be handed to EAL as an extra `--vdev=net_af_xdp<i>,iface=<host_ifname>`. The
+    // multi_afxdp_port de-risk test (nfkit @cd1b7ed) proved two af_xdp vdevs coexist as ethdev ports
+    // 0 and 1 in one EAL; here the uplink is port 0 and the guests are ports 1..=N.
+    //
+    // Only the af-xdp backend gets per-guest ports in this slice — the other backends have no netdev
+    // to bind a per-guest af_xdp vdev to, so we build an EMPTY pool and note it. `guest_mtu` is the
+    // guest link MTU (underlay MTU - encap overhead); we need it HERE for the veths, and it has no
+    // EAL dependency, so compute it once up front and reuse it for the attach state below.
+    //
+    // The guest-end of each pair (`<host_ifname>p`, the create_veth_pair peer convention) stays a
+    // root-netns PLACEHOLDER until Task 4's AttachInterface moves it into the pod netns; the MAC set
+    // here is a deterministic placeholder (the real guest MAC is programmed at attach). `bound` is
+    // `None` for every slot (Task 4 binds them).
+    let guest_mtu = args.guest_mtu.unwrap_or(DEFAULT_GUEST_MTU);
+    let slots: Vec<GuestPortSlot> = match args.backend {
+        BackendKind::AfXdp => {
+            // First-slice pool cap. The placeholder MAC's last octet is `i as u8` and the ethdev
+            // `port_id` is `1 + i`, so a pool larger than 256 would (a) ALIAS the placeholder MAC
+            // (slots 0 and 256 both get `…:00`, a silent duplicate) and (b) risk `1 + i` overflowing
+            // near `u16::MAX`. The real multi-guest scaling (unique MAC scheme + wider port range)
+            // is a later task; enforce the cap at runtime here so the aliasing can never happen
+            // silently. Only reached for the af-xdp backend, i.e. when a pool is actually built.
+            if !args.guest_pool_cap_ok() {
+                anyhow::bail!(
+                    "--guest-ports {} exceeds the first-slice pool cap of 256 (placeholder MAC \
+                     octet + port_id would alias/overflow); larger pools are a later multi-guest task",
+                    args.guest_ports
+                );
+            }
+            let mut slots = Vec::with_capacity(args.guest_ports as usize);
+            // Track host ifnames we've already created so ANY failure below (this loop OR the guest
+            // ethdev-configure loop) can tear them down before returning — otherwise a mid-pool
+            // failure would leak the veths already on the host (e.g. `fpg0`/`fpg1` if slot 2 fails).
+            let mut created: Vec<String> = Vec::with_capacity(args.guest_ports as usize);
+            for i in 0..args.guest_ports {
+                let host_ifname = format!("fpg{i}");
+                // Deterministic placeholder MAC: 02:00:00:00:0e:<i>. Not datapath-significant yet —
+                // the real guest MAC is programmed at attach (Task 4).
+                let mac = [0x02, 0x00, 0x00, 0x00, 0x0e, i as u8];
+                let dev = match flowplane_device::create_preallocated_veth(
+                    &host_ifname,
+                    mac,
+                    guest_mtu,
+                ) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        // Roll back every veth created so far, mirroring create_preallocated_veth's
+                        // own rollback style, then propagate the error.
+                        for h in &created {
+                            flowplane_device::delete_link(h);
+                        }
+                        return Err(e).with_context(|| {
+                            format!("create preallocated guest veth {host_ifname} (slot {i})")
+                        });
+                    }
+                };
+                created.push(dev.host_name.clone());
+                slots.push(GuestPortSlot {
+                    host_ifname: dev.host_name,
+                    host_ifindex: dev.host_ifindex,
+                    // ethdev port id: uplink = 0, guests = 1..=N (matches the vdev append order).
+                    port_id: 1 + i,
+                    bound: None,
+                });
+            }
+            println!(
+                "preallocated {} guest af_xdp port(s): {:?}",
+                slots.len(),
+                slots.iter().map(|s| &s.host_ifname).collect::<Vec<_>>()
+            );
+            slots
+        }
+        other => {
+            println!(
+                "backend {other:?}: per-guest af_xdp ports are af-xdp-only in this slice; \
+                 skipping the preallocated pool (--guest-ports ignored)"
+            );
+            Vec::new()
+        }
+    };
+
+    // Build the EAL argv WITH the per-guest af_xdp vdevs (identical to `eal_args_lcores` for an empty
+    // guest-iface list, so non-af-xdp backends are unaffected).
+    let guest_ifaces: Vec<String> = slots.iter().map(|s| s.host_ifname.clone()).collect();
+    let mut eal_argv = backend.eal_args_lcores_with_guest_ifaces(
+        "flowplane-dpdk",
+        &args.eal_lcore_list(),
+        &guest_ifaces,
+    );
     // `--no-huge` is idempotent — software backends already appended it; adding it again for
     // af-xdp/nic when requested is harmless (DPDK dedups repeated EAL flags).
     if args.no_huge && !eal_argv.iter().any(|a| a == "--no-huge") {
@@ -210,6 +329,43 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("port configure failed: {e}"))?;
     let n_workers = port.n_queues();
     println!("port 0 up with {n_workers} queue(s)");
+
+    // Configure each PREALLOCATED guest port (ethdev ids 1..=N). Single queue per guest port (the
+    // af_xdp vdev was probed with queue_count=1). Each configured `Port` is paired with its host
+    // veth ifindex (the key `ports_get` uses to resolve the guest's `PortMeta` in `worker_loop`).
+    // These `GuestPort`s MUST outlive the datapath — a `Port` Drop stops+closes the ethdev — so they
+    // are moved into the worker thread below, where Task 3 polls their rx queue → `process_guest_tx`.
+    let mut guest_ports: Vec<GuestPort> = Vec::with_capacity(slots.len());
+    for slot in &slots {
+        let gp = match Port::configure(slot.port_id, 1, &pool) {
+            Ok(gp) => gp,
+            Err(e) => {
+                // A guest ethdev-configure failure leaves the already-created host veths (all of
+                // `slots`) on the host — tear them ALL down before returning so a partial startup
+                // doesn't leak. Drop the guest `GuestPort`s configured so far first (their inner
+                // `Port` Drop = ethdev close, which must precede deleting the underlying links).
+                drop(guest_ports);
+                for s in &slots {
+                    flowplane_device::delete_link(&s.host_ifname);
+                }
+                return Err(anyhow::anyhow!(
+                    "guest port {} ({}) configure failed: {e}",
+                    slot.port_id,
+                    slot.host_ifname
+                ));
+            }
+        };
+        println!(
+            "guest port {} ({}) up with {} queue(s)",
+            slot.port_id,
+            slot.host_ifname,
+            gp.n_queues()
+        );
+        guest_ports.push(GuestPort {
+            port: gp,
+            host_ifindex: slot.host_ifindex,
+        });
+    }
 
     // ── 4. Shared config maps (process-wide, single-writer) ─────────────────────
     let shared = Arc::new(
@@ -261,19 +417,21 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         })
         .transpose()?
         .unwrap_or([0u8; 16]);
-    /// Default guest MTU = 1500 (underlay) − 40 (outer IPv6 header) − 8 (encap overhead for
-    /// the Geneve-style encap) = 1452, but we use 1450 to round down safely.
-    const DEFAULT_GUEST_MTU: u32 = 1450;
-    let guest_mtu = args.guest_mtu.unwrap_or(DEFAULT_GUEST_MTU);
+    // `guest_mtu` was computed up front (before EAL init) for the preallocated guest veths; reuse it.
+    // The preallocated `slots` move into `guest_pool` (behind a Mutex) so Task 4's AttachInterface can
+    // bind/release them; the guest `Port`s themselves are held live by the worker thread (below).
+    let guest_pool_len = slots.len();
     let attach_state = Arc::new(DpdkAttachState {
         ipam: std::sync::Mutex::new(flowplane_device::UnderlayIpam::new(underlay_prefix)),
         registry: std::sync::Mutex::new(std::collections::HashMap::new()),
         guest_mtu,
         gateway_ipv4,
         gateway_ipv6,
+        guest_pool: std::sync::Mutex::new(slots),
     });
     println!(
-        "B2a attach state: underlay prefix={underlay_prefix}, gateway={}, guest_mtu={guest_mtu}",
+        "B2a attach state: underlay prefix={underlay_prefix}, gateway={}, guest_mtu={guest_mtu}, \
+         guest_pool={guest_pool_len} slot(s)",
         args.gateway
     );
 
@@ -291,8 +449,22 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     let workers = std::thread::Builder::new()
         .name("fp-dpdk-datapath".into())
         .spawn(move || {
+            // Hold the preallocated guest `GuestPort`s alive for the lifetime of the datapath thread
+            // AND lend them (by reference) to the workers so worker 0 polls its guest rx queue. A
+            // `Port` Drop stops+closes its ethdev, so they must outlive every worker.
+            //
+            // NOTE: the binding MUST be a NAMED `guest_ports`, not a bare `let _ = guest_ports;`.
+            // A bare underscore is NOT a binding — it drops the value IMMEDIATELY at that statement,
+            // which here would close every guest ethdev before the workers even start (Vec<GuestPort>
+            // Drop → per-Port ethdev stop+close). This binding is load-bearing: it keeps the guest
+            // ports live until the closure returns, and it is what the `Sync` closure below borrows.
+            // Do not "simplify" it to `let _`.
+            let guest_ports = guest_ports; // move into the thread; borrowed by the Sync closure below
             LcoreRuntime::for_each_worker(n_workers, |q| {
-                worker_loop(q, &shared_for_workers, &port, &stop_w);
+                // First slice: worker 0 owns ALL preallocated guest ports; other workers own none.
+                // (Multi-worker guest-port partitioning across lcores is a follow-up.)
+                let owned: &[GuestPort] = if q == 0 { &guest_ports } else { &[] };
+                worker_loop(q, &shared_for_workers, &port, owned, &stop_w);
             });
         })
         .context("spawn datapath worker thread")?;
@@ -330,8 +502,9 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         .add_service(health_service)
         // The DataplaneNode service. Its handlers lock `ctrl` (the sole writer) to drive the SAME
         // `ControlCore` orchestration the eBPF binary runs; `shared` backs getter-based reads. The
-        // agnostic RPCs (routes/NAT/LB/fw/QoS) program the config maps; Attach/Detach stand up the
-        // container veth device (B2a) — af_xdp bind + guest-traffic polling is B2b. See `node.rs`.
+        // agnostic RPCs (routes/NAT/LB/fw/QoS) program the config maps; Attach/Detach bind/release a
+        // preallocated per-guest af_xdp pool slot (guest-end → pod netns); the worker above polls each
+        // guest port → `process_guest_tx` → uplink (guest egress is wired). See `node.rs`.
         .add_service(pb::dataplane_node_server::DataplaneNodeServer::new(
             DpdkNodeService::new(ctrl.clone(), shared.clone(), attach_state.clone()),
         ))
@@ -345,22 +518,61 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     if let Err(e) = workers.join() {
         eprintln!("datapath worker thread panicked on shutdown: {e:?}");
     }
+
+    // Delete the PREALLOCATED guest veths created at startup. They are host-side links that would
+    // otherwise leak across restarts (a restart only masks this by first deleting stale same-named
+    // links). We do this AFTER `workers.join()` for a deliberate ORDERING reason: the guest `Port`s
+    // (whose Drop runs `rte_eth_dev_close`) live inside the worker-thread closure and are dropped
+    // when that closure returns — i.e. BEFORE `workers.join()` completes. So by the time we reach
+    // here every guest ethdev is already closed, and deleting the underlying netdev is safe (ethdev
+    // close precedes link delete, never the reverse). Reading the ifnames from `attach_state` (not a
+    // captured Vec) keeps this correct even after Task 4 mutates the pool at runtime.
+    {
+        let pool = attach_state.guest_pool.lock().unwrap();
+        for slot in pool.iter() {
+            flowplane_device::delete_link(&slot.host_ifname);
+        }
+    }
+
     serve_result.context("gRPC server error")?;
     Ok(())
 }
 
 /// The per-lcore datapath poll loop for worker queue `q`. Modeled on
 /// `nfkit/tests/multilcore_datapath.rs`: build per-lcore flow state, compose with the shared config,
-/// then rx → `process_uplink_rx` → tx until `stop` is set, reporting quiescence each iteration so the
-/// writer's RCU reclamation can make progress.
+/// then poll BOTH the uplink (fabric→guest, `process_uplink_rx`) and any owned guest af_xdp ports
+/// (guest→fabric, `process_guest_tx`) each iteration until `stop` is set, reporting quiescence each
+/// iteration so the writer's RCU reclamation can make progress.
 ///
-/// For each rx'd mbuf the loop mirrors the multilcore/afxdp datapath tests exactly: wrap the mbuf as
-/// [`MbufPkt`], read the outer IPv6 dst from the frame, resolve `UNDERLAY[outer_dst]` → the
-/// [`UplinkIn`] `u`/`vni`, then drive the SAME unified `flowplane_core::datapath::process_uplink_rx`
-/// seam the sim/eBPF/DPDK parity tests drive (base path + established NAT-return reverse-DNAT). Forward verdicts (`Redirect`/`Pass`) queue the (mutated) mbuf
-/// for tx; `Drop` (or a frame with no resolvable underlay / no `LOCAL` programmed) frees the mbuf by
+/// UPLINK block: for each rx'd mbuf, wrap it as [`MbufPkt`], read the outer IPv6 dst from the frame,
+/// resolve `UNDERLAY[outer_dst]` → the [`UplinkIn`] `u`/`vni`, then drive the SAME unified
+/// `flowplane_core::datapath::process_uplink_rx` seam the sim/eBPF/DPDK parity tests drive (base path
+/// plus established NAT-return reverse-DNAT). Forward verdicts (`Redirect`/`Pass`) queue the (mutated)
+/// mbuf onto the uplink tx burst; `Drop` (or a frame with no resolvable underlay) frees the mbuf by
 /// letting it fall out of scope (`Mbuf`'s Drop returns it to the pool).
-fn worker_loop(q: u16, shared: &SharedConfigMaps, port: &Port, stop: &AtomicBool) {
+///
+/// GUEST block (Task 3): for each owned guest port, rx its single queue and run the shared-core
+/// `process_guest_tx` (the exact seam Task 1's `guest_tx_datapath.rs` proves DPDK==sim on). Resolve
+/// the sending guest's `PortMeta` by the port's host veth ifindex (`ports_get`); an unbound pool port
+/// (no guest attached yet, Task 4 binds them) has no `PortMeta` → drop. The encap arm returns
+/// `Redirect(uplink_ifindex)`, so a redirect whose target is `LOCAL.uplink_ifindex` is queued onto
+/// the SAME uplink tx burst (encap→fabric out the uplink). A redirect to a guest tap (local
+/// guest↔guest) is out of this first slice's scope → dropped with a TODO; `Pass`/`Drop` free.
+///
+/// Both blocks share one `now` + `LOCAL` read per iteration. Without `LOCAL` programmed there is no
+/// uplink identity (no outer MACs / uplink ifindex) → both blocks drop their bursts. Guest ports are
+/// polled EVERY iteration regardless of uplink rx count (no early `continue` on an idle uplink).
+///
+/// NOTE (Task 5): each owned guest port's `TxQueue` is built here and kept (`_gtx`) but UNUSED in
+/// Task 3 — the fabric→guest return path (delivering decapped uplink traffic out the guest af_xdp
+/// port) is wired in Task 5 via exactly this reserved `TxQueue`.
+fn worker_loop(
+    q: u16,
+    shared: &SharedConfigMaps,
+    port: &Port,
+    guest_ports: &[GuestPort],
+    stop: &AtomicBool,
+) {
     // Register as a QSBR reader so the writer's deferred RCU frees can reclaim past this lcore.
     let tok = shared.register_reader();
     let flow = match PerLcoreFlowMaps::new(SOCKET_ID) {
@@ -376,90 +588,187 @@ fn worker_loop(q: u16, shared: &SharedConfigMaps, port: &Port, stop: &AtomicBool
     let mut composed = ComposedMaps { cfg: shared, flow };
 
     let (mut rx, mut tx) = port.queue(q);
+    // Build the guest rx/tx handles ONCE, here on this lcore (the queue handles are `!Send`, so they
+    // must be constructed on the worker lcore, never moved in). Guest ports are single-queue (queue
+    // 0). `_gtx` is the RESERVED fabric→guest return-path TxQueue (Task 5); Task 3 uses only `grx`.
+    let mut guest_qs: Vec<(u32, nfkit::RxQueue, nfkit::TxQueue)> = guest_ports
+        .iter()
+        .map(|gp| {
+            let (r, t) = gp.port.queue(0);
+            (gp.host_ifindex, r, t)
+        })
+        .collect();
+
     let mut rx_burst = MbufBurst::new();
     let mut tx_burst = MbufBurst::new();
+    let mut guest_burst = MbufBurst::new();
 
     while !stop.load(Ordering::Acquire) {
+        // Single monotonic-clock + `LOCAL` read per iteration, shared by BOTH blocks (the meter
+        // stamps `last_ns` from `now`, same CLOCK_MONOTONIC domain as the eBPF `bpf_ktime_get_ns`;
+        // per-iteration granularity is fine for policing). `LOCAL` supplies the outer MACs + uplink
+        // ifindex the encap/reforward paths need; it must be programmed by the control plane before
+        // any packet can be forwarded. With no `LOCAL` yet, both blocks drop their bursts.
+        let now = monotonic_ns();
+        let local = composed.cfg.local();
+
+        // ── UPLINK block (fabric → guest): rx the uplink, run process_uplink_rx. ──────────────────
         rx_burst.clear();
         let n = rx.rx(&mut rx_burst);
-        if n == 0 {
-            // Empty poll: still report quiescence so the writer isn't blocked, then spin.
-            shared.report_quiescent(&tok);
-            continue;
-        }
-        // `LOCAL` supplies the outer MACs/ifindex an LB remote `reforward` needs; it must be
-        // programmed by the control plane before any packet can be forwarded. Fetch it once per burst
-        // (owned copy; stable within a burst). With no `LOCAL` yet, drop the whole burst.
-        let local = match composed.cfg.local() {
-            Some(l) => l,
-            None => {
-                for _mbuf in rx_burst.drain(..) { /* freed on drop */ }
-                shared.report_quiescent(&tok);
-                continue;
-            }
-        };
-        // Single monotonic-clock read per burst (the ingress-lane meter stamps `last_ns` from it —
-        // same CLOCK_MONOTONIC domain as the eBPF `bpf_ktime_get_ns`). Per-burst granularity is fine
-        // for policing.
-        let now = monotonic_ns();
-
-        for mut mbuf in rx_burst.drain(..) {
-            // Run the datapath in a block scoped to the `MbufPkt` borrow so that borrow ends (and the
-            // mbuf becomes movable onto the tx burst) before the verdict dispatch below.
-            let action = {
-                // Resolve the uplink input exactly as multilcore_datapath.rs / afxdp_datapath.rs do:
-                // read the outer IPv6 dst, look up `UNDERLAY[outer_dst]` → the delivery
-                // `UnderlayValue` (carrying vni + base tap). A frame whose outer dst isn't a
-                // locally-programmed underlay isn't destined here → `Drop`.
-                let mut pkt = MbufPkt::new(&mut mbuf);
-                match pkt.read_array::<16>(OUTER_V6_DST_OFF) {
-                    // runt / non-encapped frame → drop
-                    None => Action::Drop,
-                    Some(outer_dst) => match composed.underlay_get(&outer_dst) {
-                        // no local underlay for this dst → drop
-                        None => Action::Drop,
-                        Some(u) => {
-                            // guest_ipv6 is read only on the CT_F_NAT64 reverse-return branch (to
-                            // reconstruct the reply's inner IPv6 dst). Source it from the delivery
-                            // port's PortMeta by tap ifindex; absent (e.g. NAT-gateway node with no
-                            // local guest) → all-zero, and the NAT64 parse rejects it (Pass).
-                            let guest_ipv6 = composed
-                                .cfg
-                                .ports_get(u.tap_ifindex)
-                                .map(|m| m.guest_ipv6)
-                                .unwrap_or([0u8; 16]);
-                            let in_ = UplinkIn {
-                                vni: u.vni,
-                                u,
-                                outer_dst,
-                                local: &local,
-                                now,
-                                guest_ipv6,
-                            };
-                            // The SAME unified `flowplane_core` uplink entry the eBPF `try_uplink_rx`
-                            // mirrors: it dispatches established NAT returns to the reverse-DNAT path
-                            // and everything else to the LB+base path, so this backend runs
-                            // byte-identical to sim/eBPF for BOTH.
-                            process_uplink_rx(&mut pkt, &mut composed, &in_)
-                        }
-                    },
+        if n > 0 {
+            match &local {
+                // No LOCAL programmed → no uplink identity; drop the whole burst.
+                None => {
+                    for _mbuf in rx_burst.drain(..) { /* freed on drop */ }
                 }
-            };
-            match action {
-                // Forward verdicts: queue the (mutated) mbuf for tx.
-                Action::Redirect(_) | Action::Pass => tx_burst.push(mbuf),
-                // Drop: let the mbuf fall out of scope → `Mbuf`'s Drop frees it back to the pool.
-                Action::Drop => {}
+                Some(local) => {
+                    for mut mbuf in rx_burst.drain(..) {
+                        // Run the datapath in a block scoped to the `MbufPkt` borrow so that borrow
+                        // ends (and the mbuf becomes movable onto the tx burst) before dispatch.
+                        let action = {
+                            // Resolve the uplink input exactly as multilcore_datapath.rs /
+                            // afxdp_datapath.rs do: read the outer IPv6 dst, look up
+                            // `UNDERLAY[outer_dst]` → the delivery `UnderlayValue` (carrying vni +
+                            // base tap). A frame whose outer dst isn't a locally-programmed underlay
+                            // isn't destined here → `Drop`.
+                            let mut pkt = MbufPkt::new(&mut mbuf);
+                            match pkt.read_array::<16>(OUTER_V6_DST_OFF) {
+                                // runt / non-encapped frame → drop
+                                None => Action::Drop,
+                                Some(outer_dst) => match composed.underlay_get(&outer_dst) {
+                                    // no local underlay for this dst → drop
+                                    None => Action::Drop,
+                                    Some(u) => {
+                                        // guest_ipv6 is read only on the CT_F_NAT64 reverse-return
+                                        // branch (to reconstruct the reply's inner IPv6 dst). Source
+                                        // it from the delivery port's PortMeta by tap ifindex; absent
+                                        // (e.g. NAT-gateway node with no local guest) → all-zero, and
+                                        // the NAT64 parse rejects it (Pass).
+                                        let guest_ipv6 = composed
+                                            .cfg
+                                            .ports_get(u.tap_ifindex)
+                                            .map(|m| m.guest_ipv6)
+                                            .unwrap_or([0u8; 16]);
+                                        let in_ = UplinkIn {
+                                            vni: u.vni,
+                                            u,
+                                            outer_dst,
+                                            local,
+                                            now,
+                                            guest_ipv6,
+                                        };
+                                        // The SAME unified `flowplane_core` uplink entry the eBPF
+                                        // `try_uplink_rx` mirrors: it dispatches established NAT
+                                        // returns to the reverse-DNAT path and everything else to the
+                                        // LB+base path, so this backend runs byte-identical to
+                                        // sim/eBPF for BOTH.
+                                        process_uplink_rx(&mut pkt, &mut composed, &in_)
+                                    }
+                                },
+                            }
+                        };
+                        match action {
+                            // Forward verdicts: queue the (mutated) mbuf for tx.
+                            Action::Redirect(_) | Action::Pass => tx_burst.push(mbuf),
+                            // Drop: let the mbuf fall out of scope → `Mbuf`'s Drop frees it.
+                            Action::Drop => {}
+                        }
+                    }
+                }
             }
         }
-        // Flush the forwarded mbufs. `tx` removes+frees only the SENT prefix, leaving any un-sent
-        // mbufs (tx-ring backpressure) in the burst. Drop those leftovers so the burst is empty for
-        // the next iteration — this both frees them (via `Mbuf`'s Drop) and keeps `tx_burst` bounded
-        // (its `push` above would otherwise overflow the fixed BURST capacity across iterations).
+
+        // ── Mid-loop flush: drain the uplink-forwarded burst BEFORE the guest block runs. ─────────
+        // Both the uplink block above and the guest block below forward onto the SAME `tx_burst`. The
+        // uplink block can fill it to the full BURST capacity in a single iteration (every rx'd frame
+        // a Redirect/Pass), which would leave NO room for the guest block's encap-arm pushes and make
+        // the next `tx_burst.push` overflow the fixed-capacity ArrayVec (a PANIC). Draining here keeps
+        // room for the guest pushes and prevents a within-iteration overflow. This is NOT a full
+        // guarantee on its own — a saturated tx ring can leave backpressure leftovers in `tx_burst`
+        // (the `tx` below frees only the SENT prefix), so the guest push is ALSO made overflow-safe.
         if !tx_burst.is_empty() {
             tx.tx(&mut tx_burst);
             tx_burst.clear();
         }
+
+        // ── GUEST block (guest → fabric, Task 3): rx each owned guest port, run process_guest_tx. ──
+        // Only meaningful with `LOCAL` programmed — the encapped frame egresses the uplink identified
+        // by LOCAL. Without LOCAL there is no uplink identity, so poll+drain the guest ports (so their
+        // rx rings don't back up) but drop everything.
+        for (host_ifindex, grx, _gtx) in guest_qs.iter_mut() {
+            guest_burst.clear();
+            grx.rx(&mut guest_burst);
+            for mut mbuf in guest_burst.drain(..) {
+                let action = {
+                    let mut pkt = MbufPkt::new(&mut mbuf);
+                    match &local {
+                        // No LOCAL → no uplink identity for the encap arm; drop.
+                        None => Action::Drop,
+                        // `ports_get` returns an OWNED `PortMeta` copy — bind it to `pm` so the
+                        // subsequent `&mut composed` borrow in `process_guest_tx` doesn't conflict
+                        // (mirrors the Task-1 test + the uplink block's `ports_get(..).map(..)`).
+                        Some(_) => match composed.cfg.ports_get(*host_ifindex) {
+                            // unbound pool port (no guest attached yet; Task 4 binds them) → drop.
+                            None => Action::Drop,
+                            Some(pm) => {
+                                // process_guest_tx's SNAT arm writes the reverse NAT/CT entry into
+                                // THIS lcore's per-lcore CT *and* the cross-lcore `shared_ct`. In the
+                                // first slice worker 0 owns all guest ports, but a NAT-return can
+                                // arrive on ANY uplink worker; `shared_ct` is the mechanism by which
+                                // that other worker's reverse-DNAT lookup finds this flow. This is the
+                                // model the future multi-worker guest-port partition relies on.
+                                process_guest_tx(
+                                    &mut pkt,
+                                    &mut composed,
+                                    &GuestTxIn {
+                                        meta: &pm,
+                                        src_ifindex: *host_ifindex,
+                                        now,
+                                    },
+                                )
+                                .action
+                            }
+                        },
+                    }
+                };
+                // Route the verdict. The encap arm returns `Redirect(uplink_ifindex)`; the Local
+                // guest↔guest arm returns `Redirect(tap_ifindex)`.
+                match action {
+                    Action::Redirect(ix)
+                        if Some(ix) == local.as_ref().map(|l| l.uplink_ifindex) =>
+                    {
+                        // Encap → fabric: queue onto the SAME uplink tx burst (out the uplink). Use
+                        // `try_push`, not `push`: even after the mid-loop flush above, tx-ring
+                        // backpressure can leave `tx_burst` near-full (the flush frees only the SENT
+                        // prefix) while guest frames keep arriving (guest_burst holds up to BURST, and
+                        // multiple guest ports iterate onto the one burst). A full `tx_burst` therefore
+                        // DROPS the guest frame (returned `Err` mbuf freed on scope exit) rather than
+                        // panicking — guest egress is lossy under sustained tx backpressure, which is
+                        // correct PMD behavior (the fabric is the bottleneck, not a bug).
+                        if tx_burst.try_push(mbuf).is_err() { /* full: dropped, freed on scope exit */
+                        }
+                    }
+                    // TODO(first-slice): guest↔guest local delivery not wired; drop.
+                    Action::Redirect(_) => {}
+                    // TODO: guest_tx Pass (no route / non-forwardable); no kernel behind the af_xdp
+                    // guest port, so drop.
+                    Action::Pass => {}
+                    // Drop: let the mbuf fall out of scope → `Mbuf`'s Drop frees it.
+                    Action::Drop => {}
+                }
+            }
+        }
+
+        // ── Flush the forwarded mbufs (uplink + guest-encap) out the uplink tx queue. ─────────────
+        // `tx` removes+frees only the SENT prefix, leaving any un-sent mbufs (tx-ring backpressure)
+        // in the burst. Drop those leftovers so the burst is empty for the next iteration — this both
+        // frees them (via `Mbuf`'s Drop) and keeps `tx_burst` bounded (its `push` above would
+        // otherwise overflow the fixed BURST capacity across iterations).
+        if !tx_burst.is_empty() {
+            tx.tx(&mut tx_burst);
+            tx_burst.clear();
+        }
+        // Report quiescence EVERY iteration (incl. idle) so the writer's RCU reclaim can progress.
         shared.report_quiescent(&tok);
     }
 }
@@ -499,6 +808,8 @@ mod tests {
         ]);
         assert_eq!(a.addr, "127.0.0.1:1337");
         assert_eq!(a.backend, BackendKind::AfXdp);
+        // First slice: one preallocated per-guest af_xdp port by default.
+        assert_eq!(a.guest_ports, 1);
         // Clab/CI-friendly defaults: 1 worker queue, lcores derived as queues + 1 (main + worker).
         assert_eq!(a.queues, 1);
         assert_eq!(a.lcores, None);
@@ -506,6 +817,46 @@ mod tests {
         assert_eq!(a.eal_lcore_list(), "0-1");
         assert_eq!(a.worker_lcores(), 1);
         assert!(!a.no_huge);
+    }
+
+    /// `--guest-ports` parses to the requested count (VF-style preallocated per-guest af_xdp pool).
+    #[test]
+    fn guest_ports_parses_explicit_value() {
+        let a = ServeArgs::parse_from([
+            "flowplane-dpdk",
+            "--uplink",
+            "eth0",
+            "--gateway",
+            "169.254.0.1",
+            "--gateway-mac",
+            "02:00:00:00:00:01",
+            "--guest-ports",
+            "4",
+        ]);
+        assert_eq!(a.guest_ports, 4);
+    }
+
+    /// The first-slice pool cap predicate: `<=256` OK, `>256` rejected (guards the placeholder-MAC
+    /// aliasing / port_id overflow). Mirrors the `anyhow::bail!` guard in `run`.
+    #[test]
+    fn guest_pool_cap_predicate() {
+        let mk = |n: &str| {
+            ServeArgs::parse_from([
+                "flowplane-dpdk",
+                "--uplink",
+                "eth0",
+                "--gateway",
+                "169.254.0.1",
+                "--gateway-mac",
+                "02:00:00:00:00:01",
+                "--guest-ports",
+                n,
+            ])
+        };
+        assert!(mk("1").guest_pool_cap_ok());
+        assert!(mk("256").guest_pool_cap_ok()); // boundary OK
+        assert!(!mk("257").guest_pool_cap_ok()); // first aliasing value rejected
+        assert!(!mk("65535").guest_pool_cap_ok());
     }
 
     /// Explicit `--lcores` builds the `-l 0-{n-1}` range and sizes the worker pool.

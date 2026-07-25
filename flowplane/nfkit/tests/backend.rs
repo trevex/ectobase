@@ -43,3 +43,49 @@ fn eal_args_lcores_sets_explicit_l_range() {
     assert!(single.iter().any(|a| a == "net_null0"));
     assert!(single.iter().any(|a| a == "--no-huge"));
 }
+
+/// `eal_args_lcores_with_guest_ifaces` appends one `net_af_xdp{1+i}` vdev per guest iface for the
+/// AfXdp backend, indexed after the uplink (net_af_xdp0). This is the per-guest af_xdp port model.
+#[test]
+fn guest_ifaces_append_indexed_afxdp_vdevs() {
+    let b = Backend::AfXdp {
+        iface: "uplink0".into(),
+        queues: 2,
+    };
+    let guests = vec!["vethg0".to_string(), "vethg1".to_string()];
+    let args = b.eal_args_lcores_with_guest_ifaces("nfkit", "0-3", &guests);
+    // Uplink is net_af_xdp0.
+    assert!(
+        args.iter()
+            .any(|a| a.starts_with("net_af_xdp0,iface=uplink0")),
+        "uplink vdev present: {args:?}"
+    );
+    // Guest 0 -> net_af_xdp1, guest 1 -> net_af_xdp2 (offset by the uplink).
+    assert!(
+        args.iter()
+            .any(|a| a.starts_with("net_af_xdp1,iface=vethg0")),
+        "guest 0 vdev present: {args:?}"
+    );
+    assert!(
+        args.iter()
+            .any(|a| a.starts_with("net_af_xdp2,iface=vethg1")),
+        "guest 1 vdev present: {args:?}"
+    );
+    // Each guest port is single-queue.
+    assert!(args
+        .iter()
+        .any(|a| a == "net_af_xdp1,iface=vethg0,start_queue=0,queue_count=1"));
+}
+
+/// For non-AfXdp backends, guest ifaces are ignored (guest af_xdp ports are AfXdp-only).
+#[test]
+fn guest_ifaces_ignored_for_non_afxdp() {
+    let b = Backend::Null;
+    let guests = vec!["vethg0".to_string()];
+    let with = b.eal_args_lcores_with_guest_ifaces("nfkit", "0-1", &guests);
+    let without = b.eal_args_lcores("nfkit", "0-1");
+    assert_eq!(
+        with, without,
+        "guest ifaces must not alter a non-AfXdp argv"
+    );
+}
