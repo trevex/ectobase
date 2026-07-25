@@ -20,14 +20,13 @@
 //! returns `false` when the key is ABSENT; matching `AyaWriter` (whose aya `remove` treats a missing
 //! key as success and returns `Ok(())`), a remove-of-absent is NOT an error → `Ok(())`.
 //!
-//! ── meter gap (Task 9) ─────────────────────────────────────────────────────────────────────────
-//! `SharedConfigMaps` has NO meter table: in the DPDK datapath the meter (`MeterState`) is per-lcore
-//! FLOW state (token buckets / EDT cursors mutated per-packet), not a shared config table (Task 4
-//! deliberately excluded it). eBPF instead shares one meter map whose config fields the control
-//! plane seeds. So `meter_upsert`/`meter_remove` have no config-map target here; they bump the
-//! config generation (the same generation-based signal the datapath already observes) so lcores can
-//! re-derive their per-lcore meter config, and flag the real distribution mechanism as a Task-9
-//! concern. See the method docs.
+//! ── meter config table ─────────────────────────────────────────────────────────────────────────
+//! `SharedConfigMaps` carries a `meter_config` table (keyed by ifindex) that stores the rate-config
+//! half of `MeterState` (the six `*_bps`/`*_burst` fields). `meter_upsert` extracts those fields
+//! via `MeterConfig::from_state` and writes them into the shared table so every datapath lcore reads
+//! the same per-interface rate on the next packet. The token/timestamp state (`*_tokens`/`*_last_ns`)
+//! stays per-lcore and is not part of this shared config. The generation bump is kept for consistency
+//! but is no longer load-bearing for the meter (config is read fresh per packet).
 use std::sync::Arc;
 
 use flowplane_common::{
@@ -167,16 +166,23 @@ impl MapWriter for DpdkMapWriter {
         insert_ok(self.sc.fw_meta_insert(ifindex, val), "fw_meta")
     }
 
-    // ── METER (Task-9 gap: no config-map target — see module doc) ────────────
-    /// No `SharedConfigMaps` meter table exists (meter is per-lcore FLOW state in the DPDK model).
-    /// Bump the config generation so datapath lcores can re-derive their per-lcore meter config; the
-    /// concrete QoS-rate distribution to lcores is a Task-9 concern.
-    fn meter_upsert(&mut self, _ifindex: u32, _val: MeterState) -> anyhow::Result<()> {
+    // ── METER ────────────────────────────────────────────────────────────────
+    /// Write the rate-config half of `val` into the shared meter-config table so every datapath
+    /// lcore reads the SAME per-interface rate (full-rate-per-lcore: each lcore enforces the full
+    /// cap independently — aggregate across N RSS lcores can reach N× the cap, a documented
+    /// limitation). The token/timestamp state stays per-lcore. The generation bump is kept for
+    /// consistency but is no longer load-bearing for the meter (config is read fresh per packet).
+    fn meter_upsert(&mut self, ifindex: u32, val: MeterState) -> anyhow::Result<()> {
+        let ok = self
+            .sc
+            .meter_config_insert(ifindex, flowplane_common::MeterConfig::from_state(&val));
+        anyhow::ensure!(ok, "meter-config table full for ifindex {ifindex}");
         self.sc.bump_generation();
         Ok(())
     }
-    /// See [`Self::meter_upsert`]: no config-map target; bump generation, no error.
-    fn meter_remove(&mut self, _ifindex: &u32) -> anyhow::Result<()> {
+    /// Remove the interface's shared meter config (rate no longer enforced). Bump generation.
+    fn meter_remove(&mut self, ifindex: &u32) -> anyhow::Result<()> {
+        self.sc.meter_config_remove(*ifindex);
         self.sc.bump_generation();
         Ok(())
     }
