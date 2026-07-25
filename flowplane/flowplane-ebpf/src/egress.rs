@@ -163,13 +163,26 @@ pub fn forward_decision_v4(
     }
 }
 
-/// Stateful firewall + conntrack for the inner-v6 egress flow. Returns `true` if the packet must be
-/// dropped (deny-by-default on a new flow). Out-of-line (`#[inline(never)]`) so its CtKey6/CtEntry
-/// stack frame is freed before the caller's route lookup runs — keeps `tc_guest_tx` under the 512B
-/// combined BPF stack limit (the v6 CT key alone is ~48B and would otherwise coexist with the
-/// route-lookup Key<RouteLpmData6>).
+/// Result of the inner-v6 egress firewall/conntrack stage: either DROP the packet, or PASS it on
+/// (carrying whether this was a NEW flow — a conntrack MISS). `was_new` is needed downstream so the
+/// local fast path can enforce the DESTINATION's ingress firewall on new flows only (mirroring the
+/// v4 `forward_decision_v4` Local arm); established flows (CT hit, incl. the pre-seeded reverse
+/// entry for a same-node reply) skip both egress and dest-ingress firewalls. `#[repr(u8)]` so it is
+/// a single scalar across the bpf-to-bpf call boundary (verifier-friendly, no stack traffic).
+#[repr(u8)]
+pub enum EgressFwCt {
+    Drop,
+    Pass { was_new: bool },
+}
+
+/// Stateful firewall + conntrack for the inner-v6 egress flow. Returns `EgressFwCt::Drop` if the
+/// packet must be dropped (deny-by-default on a new flow), else `EgressFwCt::Pass { was_new }` where
+/// `was_new` is true iff this was a conntrack MISS. Out-of-line (`#[inline(never)]`) so its
+/// CtKey6/CtEntry stack frame is freed before the caller's route lookup runs — keeps `tc_guest_tx`
+/// under the 512B combined BPF stack limit (the v6 CT key alone is ~48B and would otherwise coexist
+/// with the route-lookup Key<RouteLpmData6>).
 #[inline(never)]
-fn egress_fw_ct_v6(data: usize, data_end: usize, ifindex: u32, vni: u32) -> bool {
+fn egress_fw_ct_v6(data: usize, data_end: usize, ifindex: u32, vni: u32) -> EgressFwCt {
     if let Some(key) = crate::conntrack::ct_key6(data, data_end, ETH_LEN, vni) {
         match unsafe { crate::maps::CONNTRACK6.get(&key) } {
             Some(e) => {
@@ -185,7 +198,7 @@ fn egress_fw_ct_v6(data: usize, data_end: usize, ifindex: u32, vni: u32) -> bool
                     flowplane_common::FW_DIR_EGRESS,
                 ) == flowplane_common::FW_ACTION_DROP
                 {
-                    return true;
+                    return EgressFwCt::Drop;
                 }
                 flowplane_core::conntrack::ct_create_default6(
                     &crate::coreimpl::RawPkt::new(data, data_end),
@@ -194,10 +207,30 @@ fn egress_fw_ct_v6(data: usize, data_end: usize, ifindex: u32, vni: u32) -> bool
                     vni,
                     crate::conntrack::now(),
                 );
+                return EgressFwCt::Pass { was_new: true };
             }
         }
     }
-    false
+    EgressFwCt::Pass { was_new: false }
+}
+
+/// Destination INGRESS firewall for the v6 same-node local fast path. On a NEW egress flow delivered
+/// to a SAME-NODE guest, the cross-node `uplink_rx` ingress path is skipped, so the destination's
+/// ingress policy must be enforced HERE — mirroring the v4 `forward_decision_v4` Local arm exactly.
+/// Deny-by-default: with no matching ingress rule, `fw_eval_dir6` returns DROP. Returns `true` iff
+/// the packet must be dropped. Out-of-line (`#[inline(never)]`) with SCALAR `data`/`data_end` args
+/// (RawPkt reconstructed inside) so its FwRule6/selector frame (~160B) is a SEPARATE, sequentially
+/// allocated frame — never coexisting with `route_decision_v6`'s route-lookup Key frame on the
+/// combined 512B BPF stack.
+#[inline(never)]
+fn dest_ingress_fw_v6(data: usize, data_end: usize, tap_ifindex: u32) -> bool {
+    flowplane_core::firewall::fw_eval_dir6(
+        &crate::coreimpl::RawPkt::new(data, data_end),
+        &crate::coreimpl::GlobalMaps,
+        ETH_LEN,
+        tap_ifindex,
+        flowplane_common::FW_DIR_INGRESS,
+    ) == flowplane_common::FW_ACTION_DROP
 }
 
 /// Route6 lookup + deliver decision (local fast path / encap / pass) for the inner-v6 egress flow.
@@ -262,8 +295,22 @@ pub fn forward_decision_v6(
     ifindex: u32,
     meta: &PortMeta,
 ) -> EgressVerdict {
-    if egress_fw_ct_v6(data, data_end, ifindex, meta.vni) {
-        return EgressVerdict::Drop;
+    // Stage 1: egress firewall + conntrack. Carries `was_new` (CT miss) up to the local fast path.
+    let was_new = match egress_fw_ct_v6(data, data_end, ifindex, meta.vni) {
+        EgressFwCt::Drop => return EgressVerdict::Drop,
+        EgressFwCt::Pass { was_new } => was_new,
+    };
+    // Stage 2: route6 + deliver decision (its own sequential frame — freed before stage 3).
+    let verdict = route_decision_v6(data, data_end, meta);
+    // Stage 3: on a NEW flow delivered to a SAME-NODE guest, enforce the DESTINATION's ingress
+    // firewall (uplink_rx is bypassed for same-node traffic). Deny-by-default. Mirrors the v4
+    // `forward_decision_v4` Local arm. Established flows (was_new==false, incl. the pre-seeded
+    // reverse entry for a same-node reply) skip this. `dest_ingress_fw_v6` is its own sequential
+    // #[inline(never)] frame so its FwRule6 locals never coexist with stage 2's route-lookup frame.
+    if let EgressVerdict::Local { tap_ifindex, .. } = verdict {
+        if was_new && dest_ingress_fw_v6(data, data_end, tap_ifindex) {
+            return EgressVerdict::Drop;
+        }
     }
-    route_decision_v6(data, data_end, meta)
+    verdict
 }
