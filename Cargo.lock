@@ -696,6 +696,7 @@ dependencies = [
  "flowplane-control",
  "flowplane-core",
  "flowplane-ebpf",
+ "flowplane-node",
  "flowplane-sim",
  "ipnet",
  "libc",
@@ -704,7 +705,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tonic",
- "tonic-build",
  "tonic-health",
  "uuid",
 ]

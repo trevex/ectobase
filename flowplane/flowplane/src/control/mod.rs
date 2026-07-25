@@ -47,11 +47,6 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
-/// LB IP address (IPv4 or IPv6) for create/get LB operations. The LB domain moved into
-/// `flowplane-control` (Task 5); re-exported here so `node.rs`'s `crate::control::LbIpBytes`
-/// call sites are unchanged.
-pub use flowplane_control::shadow::LbIpBytes;
-
 /// Per-interface addressing + rate-limit parameters for `create_interface` / `program_iface_maps`.
 /// Bundled into one struct so the programming path doesn't thread ten positional arguments.
 pub struct IfaceParams {
@@ -479,6 +474,14 @@ impl Control {
         Arc::clone(&self.conntrack)
     }
 
+    /// Run `f` with an exclusive `&mut` borrow of the inner `ControlCore` under the `Inner` lock.
+    /// Lets the shared `flowplane-node` handler fns drive the same ControlCore the per-domain
+    /// `Control` methods use, without duplicating their parse/marshalling.
+    pub fn with_core<R>(&self, f: impl FnOnce(&mut ControlCore<AyaWriter>) -> R) -> R {
+        let mut g = self.inner.lock();
+        f(&mut g.core)
+    }
+
     /// Set the guest DHCP config. Delegates to the backend-agnostic `ControlCore` (Task 7).
     pub fn set_dhcp_config(
         &self,
@@ -732,19 +735,6 @@ impl Control {
                 )
             })
             .collect()
-    }
-
-    pub fn set_qos(
-        &self,
-        interface_id: &[u8],
-        egress_mbps: u64,
-        public_mbps: u64,
-        ingress_mbps: u64,
-    ) -> anyhow::Result<()> {
-        self.inner
-            .lock()
-            .core
-            .set_qos(interface_id, egress_mbps, public_mbps, ingress_mbps)
     }
 }
 
