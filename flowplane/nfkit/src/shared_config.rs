@@ -246,7 +246,7 @@ pub struct SharedConfigMaps {
     dhcp_meta: std::mem::ManuallyDrop<RcuHash<DhcpMetaK, DhcpMeta>>,
     meter_config: std::mem::ManuallyDrop<RcuHash<MeterCfgK, flowplane_common::MeterConfig>>,
 
-    // ── shared reverse-conntrack (the ONE multi-writer datapath table) ─────────────────────────
+    // ── shared reverse-conntrack (the ONE lcore-written datapath table; writes serialized) ──────
     // NOT a CONFIG table: this holds the PEER-INDEPENDENT NAT/LB reverse conntrack entries
     // (`(vni,0,nat_ip,0,nat_port)`, shape `src_ip==0 && src_port==0`) that a guest's SNAT/NAT64
     // EGRESS creates. Those entries must be findable regardless of which lcore an external reply
@@ -254,15 +254,23 @@ pub struct SharedConfigMaps {
     // inner flow tuple the reverse entry was keyed under, so a per-lcore-only conntrack MISSES on a
     // cross-lcore return (ingress-firewall drop / no reverse-DNAT — the bug fixed here).
     //
-    // MULTI-WRITER: unlike every CONFIG table above (single control-thread writer), this table is
-    // written CONCURRENTLY by the datapath lcores (each lcore's guest-egress pins reverse entries)
-    // AND read lock-free by every lcore. `RcuHash`'s `RW_CONCURRENCY_LF` makes concurrent WRITERS as
-    // well as lock-free readers safe at the C level (DPDK's cuckoo-hash lock-free RW mode
-    // synchronizes writers internally; each `insert`'s value-box leak is per-call independent), so
-    // the `shared_ct_*` methods below are sound to call from multiple lcores at once — see their
-    // docs. Keyed on the FULL `CtKey` (VNI + 5-tuple) so a future shared LB reverse mapping can
-    // coexist; the reverse key is never all-zero (a public nat_ip is never `0.0.0.0`).
+    // WRITTEN FROM MANY LCORES, BUT SERIALIZED: unlike every CONFIG table above (single control-thread
+    // writer), this table is written from the datapath lcores (each lcore's guest-egress pins reverse
+    // entries on a NEW flow) AND read lock-free by every lcore. `RcuHash` is SINGLE-WRITER only:
+    // `RW_CONCURRENCY_LF` makes ONE writer + N lock-free readers safe, but does NOT make concurrent
+    // writers safe (rcu_hash.rs:30-36 — no `MULTI_WRITER_ADD`; concurrent `rte_hash_add_key`/`del_key`
+    // corrupt the table). We therefore SERIALIZE the write path behind `shared_ct_write` (below) so at
+    // most one lcore mutates the rte_hash at a time (satisfying the single-writer model), while reads
+    // stay lock-free + RCU-covered. This is not on the per-packet hot path: reverse entries are pinned
+    // per-NEW-flow (SNAT/NAT64 egress first packet), not per packet. Keyed on the FULL `CtKey`
+    // (VNI + 5-tuple) so a future shared LB reverse mapping can coexist; the reverse key is never
+    // all-zero (a public nat_ip is never `0.0.0.0`).
     shared_ct: std::mem::ManuallyDrop<RcuHash<CtKey, CtEntry>>,
+    /// Serializes `shared_ct` WRITES (insert/remove) across datapath lcores. Holds `()`; only the
+    /// write path acquires it. `RcuHash` is single-writer (rcu_hash.rs:30-36), so concurrent writers
+    /// from different lcores would race the rte_hash — this Mutex makes at most one writer active at a
+    /// time. Reads (`shared_ct_get`/`shared_ct_for_each`) do NOT take it (lock-free / RCU-covered).
+    shared_ct_write: std::sync::Mutex<()>,
 }
 
 // SAFETY: `SharedConfigMaps` holds a raw `*mut rte_rcu_qsbr` and (inside each `RcuHash`) raw
@@ -380,6 +388,7 @@ impl SharedConfigMaps {
             dhcp_meta: std::mem::ManuallyDrop::new(dhcp_meta),
             meter_config: std::mem::ManuallyDrop::new(meter_config),
             shared_ct: std::mem::ManuallyDrop::new(shared_ct),
+            shared_ct_write: std::sync::Mutex::new(()),
         })
     }
 
@@ -734,31 +743,41 @@ impl SharedConfigMaps {
         self.meter_config.get(&MeterCfgK::new(ifindex))
     }
 
-    // ── shared reverse-conntrack (MULTI-WRITER datapath table) ───────────────────
-    // See the `shared_ct` field doc: these are the ONLY methods on this type callable CONCURRENTLY
-    // from multiple datapath lcores (every other writer is the single control thread). Sound because
-    // `RcuHash`'s `RW_CONCURRENCY_LF` synchronizes concurrent writers internally and each insert's
-    // value-box handoff is per-call independent; readers stay lock-free + RCU-covered.
+    // ── shared reverse-conntrack (written from many lcores, WRITES serialized) ───
+    // See the `shared_ct` field doc: these are the ONLY writer methods on this type that datapath
+    // lcores call directly (every other writer is the single control thread). `RcuHash` is
+    // single-writer (rcu_hash.rs:30-36: `RW_CONCURRENCY_LF` gives ONE writer + N lock-free readers,
+    // NOT concurrent writers), so the WRITE path (`insert`/`remove`) is serialized behind the
+    // `shared_ct_write` Mutex — at most one lcore mutates the rte_hash at a time. Reads
+    // (`shared_ct_get`/`shared_ct_for_each`) stay lock-free + RCU-covered and do NOT take the lock.
 
     /// Lock-free read of a shared reverse-conntrack entry (the peer-independent NAT/LB reverse
-    /// mappings). `None` if absent. Safe concurrent with the datapath's own `shared_ct_insert`s.
+    /// mappings). `None` if absent. Does NOT take the write lock; RCU-covered, so it is safe
+    /// concurrent with the datapath's own (serialized) `shared_ct_insert`s / `shared_ct_remove`s.
     #[must_use]
     pub fn shared_ct_get(&self, key: &CtKey) -> Option<CtEntry> {
         self.shared_ct.get(key)
     }
 
     /// Insert/overwrite a shared reverse-conntrack entry. Returns false if the table is full.
-    /// SAFE to call concurrently from multiple datapath lcores (multi-writer via `RW_CONCURRENCY_LF`
-    /// — unlike the single-writer CONFIG tables). The datapath routes ONLY peer-independent reverse
-    /// entries (`src_ip==0 && src_port==0`) here; a public nat_ip is never `0.0.0.0`, so the key is
-    /// never the all-zero pattern `RcuHash` forbids.
+    /// Callable from any datapath lcore: the write is SERIALIZED behind `shared_ct_write` because
+    /// `RcuHash` is single-writer (rcu_hash.rs:30-36) — concurrent `rte_hash_add_key` from different
+    /// lcores would race/corrupt the table. This is per-NEW-flow (SNAT/NAT64 egress first packet),
+    /// not per-packet, so the lock is off the hot path. The datapath routes ONLY peer-independent
+    /// reverse entries (`src_ip==0 && src_port==0`) here; a public nat_ip is never `0.0.0.0`, so the
+    /// key is never the all-zero pattern `RcuHash` forbids.
     pub fn shared_ct_insert(&self, key: CtKey, entry: CtEntry) -> bool {
+        // Serialize writers: RcuHash is single-writer (rcu_hash.rs:30). Reads stay lock-free.
+        let _w = self.shared_ct_write.lock().unwrap();
         self.shared_ct.insert(&key, entry)
     }
 
     /// Remove a shared reverse-conntrack entry (control-plane conntrack flush / NAT withdrawal).
-    /// Returns true if present.
+    /// Returns true if present. Write is SERIALIZED behind `shared_ct_write` (single-writer `RcuHash`,
+    /// rcu_hash.rs:30) so it cannot race a concurrent `shared_ct_insert` from another lcore.
     pub fn shared_ct_remove(&self, key: &CtKey) -> bool {
+        // Serialize writers: RcuHash is single-writer (rcu_hash.rs:30). Reads stay lock-free.
+        let _w = self.shared_ct_write.lock().unwrap();
         self.shared_ct.remove(key)
     }
 
