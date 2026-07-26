@@ -50,7 +50,7 @@ use flowplane_core::pkt::{Action, Pkt}; // `Pkt` brings `read_array` into scope 
 use nfkit::monotonic_ns;
 
 use crate::attach_state::{DpdkAttachState, GuestPortSlot};
-use crate::port_backend::{GuestPortBackend, VethBackend};
+use crate::port_backend::{GuestPortBackend, TapBackend, VethBackend};
 
 use crate::node::{pb, DpdkNodeService};
 use crate::writer::DpdkMapWriter;
@@ -318,6 +318,17 @@ pub enum BackendKind {
     Null,
 }
 
+/// Which guest-port pool backend the serve process uses (one kind per process). Selects the
+/// concrete [`GuestPortBackend`] built at startup; everything downstream (prealloc → af_xdp bind →
+/// attach/detach/worker) is backend-agnostic, so a tap netdev name binds identically to a veth name.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum GuestBackendKind {
+    /// veth pairs (containers) — the guest-end moves into the pod netns.
+    Veth,
+    /// persistent taps (VMs) — af_xdp binds the tap netdev, qemu holds the fd.
+    Tap,
+}
+
 /// `flowplane-dpdk serve` arguments. The datapath-relevant surface of the eBPF `flowplane serve`
 /// command, minus eBPF/pinning/edge-role specifics (the DPDK datapath has no bpffs pins or XDP
 /// attach; a DPDK port replaces the uplink netdev).
@@ -347,6 +358,9 @@ pub struct ServeArgs {
     /// DPDK port backend.
     #[arg(long, value_enum, default_value_t = BackendKind::AfXdp)]
     pub backend: BackendKind,
+    /// Guest-port pool backend: `veth` (containers) or `tap` (VMs). One kind per serve process.
+    #[arg(long = "guest-backend", value_enum, default_value_t = GuestBackendKind::Veth)]
+    pub guest_backend: GuestBackendKind,
     /// Total EAL lcores (main + workers), used to build the EAL `-l 0-{lcores-1}` range. Unset =
     /// derive `queues + 1` (one main lcore + one worker per queue), which fits constrained hosts
     /// (clab/CI). Set explicitly to pin a specific count (must be `>= queues + 1`, else `queues` is
@@ -511,10 +525,17 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
 
     // The backend-agnostic guest-port pool lifecycle. Constructed ONCE and shared: it drives the
     // §2a preallocation here and is stored (cloned) in `DpdkAttachState` so attach/detach route
-    // their assign/release/is_alive/recover device ops through the SAME instance. Veth today
-    // (containers); tap/vf are documented seams (see `port_backend.rs`). Carries `guest_mtu` so
-    // dead-slot recovery recreates the veth at the same link MTU as preallocation.
-    let port_backend: Arc<dyn GuestPortBackend> = Arc::new(VethBackend { mtu: guest_mtu });
+    // their assign/release/is_alive/recover device ops through the SAME instance. `--guest-backend`
+    // selects the kind at startup (one per process): veth (containers) or tap (VMs). Carries
+    // `guest_mtu` so dead-slot recovery recreates the port at the same link MTU as preallocation.
+    //
+    // Everything downstream is unchanged by the choice: `port_backend.preallocate(i, guest_mtu)`
+    // returns `fpgtap{i}` names fed to `eal_args_lcores_with_guest_ifaces` → attach/detach/worker,
+    // and a tap netdev name binds an af_xdp vdev identically to a veth name.
+    let port_backend: Arc<dyn GuestPortBackend> = match args.guest_backend {
+        GuestBackendKind::Veth => Arc::new(VethBackend { mtu: guest_mtu }),
+        GuestBackendKind::Tap => Arc::new(TapBackend { mtu: guest_mtu }),
+    };
 
     // ── 2a. PREALLOCATE the per-guest af_xdp port pool BEFORE EAL init ───────────
     // VF-style static poll set: create `--guest-ports` guest veth pairs NOW (in the root netns) so
@@ -1505,6 +1526,33 @@ mod tests {
         assert_eq!(a.eal_lcore_list(), "0-1");
         assert_eq!(a.worker_lcores(), 1);
         assert!(!a.no_huge);
+        // Default guest-port pool backend is veth — no behavior change for existing veth deploys.
+        assert_eq!(a.guest_backend, GuestBackendKind::Veth);
+    }
+
+    /// `--guest-backend` selects the pool backend kind at startup: `tap` → `Tap`, `veth` → `Veth`,
+    /// and omitting the arg defaults to `Veth` (so existing container deploys are unaffected).
+    #[test]
+    fn serve_args_guest_backend() {
+        let base = [
+            "flowplane-dpdk",
+            "--uplink",
+            "eth0",
+            "--gateway",
+            "169.254.0.1",
+            "--gateway-mac",
+            "02:00:00:00:00:01",
+        ];
+
+        let tap = ServeArgs::parse_from(base.iter().copied().chain(["--guest-backend", "tap"]));
+        assert_eq!(tap.guest_backend, GuestBackendKind::Tap);
+
+        let veth = ServeArgs::parse_from(base.iter().copied().chain(["--guest-backend", "veth"]));
+        assert_eq!(veth.guest_backend, GuestBackendKind::Veth);
+
+        // Arg omitted → default.
+        let def = ServeArgs::parse_from(base);
+        assert_eq!(def.guest_backend, GuestBackendKind::Veth);
     }
 
     /// The round-robin guest-port partition predicate (`owns`): each guest port is owned by exactly
