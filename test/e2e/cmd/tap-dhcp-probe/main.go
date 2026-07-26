@@ -2,7 +2,7 @@
 // DHCP/ARP/ND responder and the encap gates over a raw tap fd, with the SAME CLI flags,
 // stdout markers, and exit codes as the Python original (consumers grep the output and
 // check the exit code). Pure-Go/cgo-free: gopacket for framing, insomniacslk/dhcp for the
-// DHCP messages, x/sys/unix for the tap ioctl, afpacket for veth sniffing.
+// DHCP messages, x/sys/unix for the tap ioctl and AF_PACKET raw sockets for veth sniffing.
 package main
 
 import (

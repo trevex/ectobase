@@ -83,7 +83,7 @@ cat "$DP_LOG" || true
 echo "== send DHCP DISCOVER on $TAP (client MAC $GUEST_MAC), expect OFFER for $GUEST_IP =="
 # Build the pure-Go probe (replaces the scapy python probe) once; PROBE is the binary consumers run.
 PROBE="${ROOT}/test/e2e/tap-dhcp-probe.bin"
-( cd "${ROOT}/test/e2e" && go build -o "$PROBE" ./cmd/tap-dhcp-probe )
+( cd "${ROOT}/test/e2e" && CGO_ENABLED=0 go build -o "$PROBE" ./cmd/tap-dhcp-probe )
 set +e
 sudo ip netns exec "$NS" "$PROBE" \
     --client-only --tap "$TAP" --client-mac "$GUEST_MAC" --expect-ip "$GUEST_IP" --timeout 4

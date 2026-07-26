@@ -1,63 +1,108 @@
 package main
 
+// Pure-Go AF_PACKET raw socket implementation for sniffing and injecting Ethernet frames.
+// This replaces the gopacket/afpacket import (which requires cgo) with direct
+// golang.org/x/sys/unix syscalls, making the binary fully cgo-free so that
+// CGO_ENABLED=0 go build produces a static binary that runs inside kind nodes
+// (Ubuntu-based) without a /nix/store glibc interpreter.
+//
+// gopacket and gopacket/layers are still used — they are pure Go — only for
+// parsing frames, not for capture/inject.
+
 import (
+	"net"
 	"time"
 
 	"github.com/google/gopacket"
-	"github.com/google/gopacket/afpacket"
 	"github.com/google/gopacket/layers"
+	"golang.org/x/sys/unix"
 )
 
-// injectAF sends frame on iface using a fresh AF_PACKET TPacket handle.
-// Opening a new handle per call is acceptable for the low frame counts used in lb-distribute probes.
+// htons converts a uint16 from host byte order to network (big-endian) byte order.
+func htons(v uint16) uint16 { return v<<8 | v>>8 }
+
+// injectAF sends frame on iface using a fresh AF_PACKET raw socket.
+// Opening a new socket per call is acceptable for the low frame counts used in probes.
 func injectAF(iface string, frame []byte) error {
-	h, err := afpacket.NewTPacket(
-		afpacket.OptInterface(iface),
-		afpacket.OptPollTimeout(200*time.Millisecond),
-	)
+	iff, err := net.InterfaceByName(iface)
 	if err != nil {
 		return err
 	}
-	defer h.Close()
-	return h.WritePacketData(frame)
+	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW, int(htons(unix.ETH_P_ALL)))
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	addr := &unix.SockaddrLinklayer{
+		Ifindex: iff.Index,
+	}
+	return unix.Sendto(fd, frame, 0, addr)
 }
 
-// sniffIPv6 opens an afpacket handle on iface, pre-arms (the caller injects AFTER this returns,
-// via the inject callback which runs after a short settle), and collects frames that decode to an
-// outer IPv6 layer until want(pkt) is satisfied or timeout. Returns all IPv6-bearing frames seen.
-// The pre-arm + 500ms settle mirror the Python AsyncSniffer.start()+sleep(0.5) so the injected
-// frame is not missed.
+// sniffIPv6 opens an AF_PACKET raw socket on iface, waits 500ms for the socket to arm,
+// calls inject() to send probe frames, then reads frames until want(pkt) is satisfied or
+// timeout elapses. Returns all captured frames that carry an outer IPv6 layer.
+//
+// The 500ms settle mirrors the Python AsyncSniffer.start()+sleep(0.5) pattern so injected
+// frames are not missed due to a race between socket open and packet arrival.
 func sniffIPv6(iface string, timeout time.Duration, inject func() error, want func(pkt gopacket.Packet) bool) ([]gopacket.Packet, error) {
-	h, err := afpacket.NewTPacket(
-		afpacket.OptInterface(iface),
-		afpacket.OptPollTimeout(200*time.Millisecond),
-	)
+	iff, err := net.InterfaceByName(iface)
 	if err != nil {
 		return nil, err
 	}
-	defer h.Close()
-	time.Sleep(500 * time.Millisecond) // let the ring arm
+
+	// Open a raw socket for all Ethernet frames on the given interface.
+	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW, int(htons(unix.ETH_P_ALL)))
+	if err != nil {
+		return nil, err
+	}
+	defer unix.Close(fd)
+
+	if err := unix.Bind(fd, &unix.SockaddrLinklayer{
+		Protocol: htons(unix.ETH_P_ALL),
+		Ifindex:  iff.Index,
+	}); err != nil {
+		return nil, err
+	}
+
+	// Set a 200ms receive timeout so the read loop wakes up periodically to
+	// re-check the deadline rather than blocking indefinitely.
+	tv := &unix.Timeval{Sec: 0, Usec: 200000}
+	if err := unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, tv); err != nil {
+		return nil, err
+	}
+
+	// Allow the kernel to arm the socket before we inject.
+	time.Sleep(500 * time.Millisecond)
+
 	if err := inject(); err != nil {
 		return nil, err
 	}
+
+	buf := make([]byte, 65536)
 	var got []gopacket.Packet
 	deadline := time.Now().Add(timeout)
-	src := gopacket.NewPacketSource(h, layers.LayerTypeEthernet)
-	src.NoCopy = true
-	packets := src.Packets()
+
 	for time.Now().Before(deadline) {
-		select {
-		case p := <-packets:
-			if p == nil {
+		n, _, err := unix.Recvfrom(fd, buf, 0)
+		if err != nil {
+			// EAGAIN / EWOULDBLOCK = SO_RCVTIMEO expired with no packet; keep looping.
+			if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
 				continue
 			}
-			if p.Layer(layers.LayerTypeIPv6) != nil {
-				got = append(got, p)
-				if want(p) {
-					return got, nil
-				}
-			}
-		case <-time.After(200 * time.Millisecond):
+			// Any other recv error is fatal.
+			return got, err
+		}
+		if n == 0 {
+			continue
+		}
+		pkt := gopacket.NewPacket(buf[:n], layers.LayerTypeEthernet, gopacket.NoCopy)
+		if pkt.Layer(layers.LayerTypeIPv6) == nil {
+			continue
+		}
+		got = append(got, pkt)
+		if want(pkt) {
+			return got, nil
 		}
 	}
 	return got, nil

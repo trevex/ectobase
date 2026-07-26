@@ -91,7 +91,7 @@ cat "$DP_LOG" || true
 echo "== send inner IPv4 on $TAP, capture ENCAPPED frame on $PEER =="
 # Build the pure-Go probe (replaces the scapy python probe) once; PROBE is the binary consumers run.
 PROBE="${ROOT}/test/e2e/tap-dhcp-probe.bin"
-( cd "${ROOT}/test/e2e" && go build -o "$PROBE" ./cmd/tap-dhcp-probe )
+( cd "${ROOT}/test/e2e" && CGO_ENABLED=0 go build -o "$PROBE" ./cmd/tap-dhcp-probe )
 set +e
 sudo ip netns exec "$NS" "$PROBE" \
     --egress --tap "$TAP" --peer "$PEER" --timeout 5

@@ -12,7 +12,7 @@ cargo build -p flowplane >/dev/null 2>&1
 
 # Build the pure-Go probe (replaces the scapy python probe) once; PROBE is the binary consumers run.
 PROBE="${ROOT}/test/e2e/tap-dhcp-probe.bin"
-( cd "${ROOT}/test/e2e" && go build -o "$PROBE" ./cmd/tap-dhcp-probe )
+( cd "${ROOT}/test/e2e" && CGO_ENABLED=0 go build -o "$PROBE" ./cmd/tap-dhcp-probe )
 
 # Clean any leftovers from a prior aborted run.
 sudo pkill -f 'flowplane bringup --uplink dhu0' 2>/dev/null || true
