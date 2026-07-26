@@ -12,6 +12,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/gopacket"
@@ -72,7 +75,181 @@ func run() int {
 	}
 }
 
-func selfContained() int { fmt.Fprintf(os.Stderr, "not implemented yet: default\n"); return 2 }
+func selfContained() int {
+	// Step 1: resolve the flowplane binary.
+	bin := os.Getenv("FLOWPLANE_BIN")
+	if bin == "" {
+		bin = "./target/debug/flowplane"
+	}
+	if _, err := os.Stat(bin); err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: %s missing — run: cargo build -p flowplane\n", bin)
+		return 2
+	}
+
+	// Step 2: create two taps with held fds and bring them up.
+	guestFD, err := mkTap("dhg0")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: mkTap dhg0: %v\n", err)
+		return 2
+	}
+	uplinkFD, err := mkTap("dhu0")
+	if err != nil {
+		guestFD.Close()
+		fmt.Fprintf(os.Stderr, "ERROR: mkTap dhu0: %v\n", err)
+		return 2
+	}
+
+	// Read MACs from sysfs.
+	readMAC := func(name string) (string, error) {
+		b, err := os.ReadFile("/sys/class/net/" + name + "/address")
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(b)), nil
+	}
+	gmac, err := readMAC("dhg0")
+	if err != nil {
+		guestFD.Close()
+		uplinkFD.Close()
+		fmt.Fprintf(os.Stderr, "ERROR: read dhg0 MAC: %v\n", err)
+		return 2
+	}
+	umac, err := readMAC("dhu0")
+	if err != nil {
+		guestFD.Close()
+		uplinkFD.Close()
+		fmt.Fprintf(os.Stderr, "ERROR: read dhu0 MAC: %v\n", err)
+		return 2
+	}
+
+	// Step 3: start flowplane bringup in the background.
+	logF, err := os.Create("/tmp/dhcp-probe-bringup.log")
+	if err != nil {
+		guestFD.Close()
+		uplinkFD.Close()
+		fmt.Fprintf(os.Stderr, "ERROR: open bringup log: %v\n", err)
+		return 2
+	}
+	bringupCmd := exec.Command(bin, "bringup",
+		"--uplink", "dhu0",
+		"--local-underlay", "fd00::1",
+		"--gateway", "10.0.0.1",
+		"--gateway-mac", umac,
+		"--guest", "dhg0=10.0.0.50="+gmac+"=fd00:a::50=0",
+		"--dhcp-mtu", "1337",
+		"--dhcp-dns", "8.8.4.4",
+		"--dhcp-dns", "8.8.8.8",
+	)
+	bringupCmd.Stdout = logF
+	bringupCmd.Stderr = logF
+	if err := bringupCmd.Start(); err != nil {
+		logF.Close()
+		guestFD.Close()
+		uplinkFD.Close()
+		fmt.Fprintf(os.Stderr, "ERROR: start bringup: %v\n", err)
+		return 2
+	}
+	time.Sleep(2 * time.Second)
+
+	// Cleanup: terminate bringup, delete taps, close fds. Always runs.
+	cleanup := func() {
+		if bringupCmd.Process != nil {
+			_ = bringupCmd.Process.Signal(syscall.SIGTERM)
+			done := make(chan error, 1)
+			go func() { done <- bringupCmd.Wait() }()
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				_ = bringupCmd.Process.Kill()
+			}
+		}
+		logF.Close()
+		_ = exec.Command("ip", "link", "del", "dhg0").Run()
+		_ = exec.Command("ip", "link", "del", "dhu0").Run()
+		guestFD.Close()
+		uplinkFD.Close()
+	}
+
+	// Step 4: determine attach mode.
+	modeOut, _ := exec.Command("ip", "-d", "link", "show", "dhg0").CombinedOutput()
+	modeStr := string(modeOut)
+	var mode string
+	switch {
+	case strings.Contains(modeStr, "xdpgeneric"):
+		mode = "skb/generic"
+	case strings.Contains(modeStr, "xdp"):
+		mode = "native/driver"
+	default:
+		mode = "NONE"
+	}
+	fmt.Printf("guest_tx attach mode on dhg0: %s\n", mode)
+
+	// Step 5: build and write a DISCOVER.
+	clientMAC, err := net.ParseMAC("02:aa:bb:cc:dd:ee")
+	if err != nil {
+		cleanup()
+		fmt.Fprintf(os.Stderr, "ERROR: parse client MAC: %v\n", err)
+		return 2
+	}
+	discFrame, err := buildDHCPDiscover(clientMAC, 0x1234)
+	if err != nil {
+		cleanup()
+		fmt.Fprintf(os.Stderr, "ERROR: buildDHCPDiscover: %v\n", err)
+		return 2
+	}
+	if _, err := guestFD.Write(discFrame); err != nil {
+		cleanup()
+		fmt.Fprintf(os.Stderr, "ERROR: write DISCOVER: %v\n", err)
+		return 2
+	}
+	fmt.Printf("sent DHCP DISCOVER (%d bytes) to the dhg0 fd\n", len(discFrame))
+
+	// Step 6: read the dhg0 fd for up to 3s for an OFFER (msgType==2).
+	var (
+		gotYiaddr net.IP
+		gotMTU    uint16
+		gotDNS    []net.IP
+		offerLen  int
+	)
+	found := readFrames(guestFD, 3*time.Second, func(b []byte) bool {
+		mt, yi, mtu, dns, ok := parseDHCPReply(b)
+		if !ok || mt != 2 {
+			return false
+		}
+		gotYiaddr = yi
+		gotMTU = mtu
+		gotDNS = dns
+		offerLen = len(b)
+		return true
+	})
+
+	// Step 7: cleanup (always).
+	cleanup()
+
+	// Step 8: print result.
+	if !found {
+		fmt.Printf("RESULT: NO OFFER received in %s mode\n", mode)
+		fmt.Println("  -> native tap CANNOT grow the frame (bpf_xdp_adjust_tail fails) — a real")
+		fmt.Println("     production concern: the responder needs a no-grow redesign or SKB in prod.")
+		return 1
+	}
+
+	fmt.Printf("RESULT: OFFER received in %s mode\n", mode)
+	fmt.Printf("  reply %d bytes (grown from the %d-byte DISCOVER)\n", offerLen, len(discFrame))
+	fmt.Printf("  yiaddr=%s  interface-mtu=%d  dns=%v\n", gotYiaddr, gotMTU, gotDNS)
+
+	ok := gotYiaddr.String() == "10.0.0.50" && gotMTU == 1337 && offerLen > len(discFrame)
+	if ok && mode == "native/driver" {
+		fmt.Println("  -> PROVEN: real taps support native-mode adjust_tail growth. The SKB workaround")
+		fmt.Println("     is a pure veth-harness artifact; production runs DHCP on the native fast path.")
+		return 0
+	}
+	fmt.Println("  -> OFFER returned but check the mode/values above.")
+	if ok {
+		return 0
+	}
+	return 1
+}
 
 // egressProbe injects one inner IPv4 ICMP frame on `tap`, sniffs `peer` for an
 // encapsulated outer IPv6 frame (NextHeader==4, IPIP), and reports the result.

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"time"
 	"unsafe"
 
@@ -33,6 +34,22 @@ func openTapQueue(name string) (*os.File, error) {
 		f.Close()
 		return nil, fmt.Errorf("TUNSETIFF %s: %v", name, e)
 	}
+	return f, nil
+}
+
+// mkTap creates+opens a tap netdev (held fd, raw ethernet), brings it up, and best-effort
+// disables offloads so the kernel doesn't coalesce/segment frames and confuse XDP.
+func mkTap(name string) (*os.File, error) {
+	f, err := openTapQueue(name) // same TUNSETIFF(IFF_TAP|IFF_NO_PI); creates the dev if absent
+	if err != nil {
+		return nil, err
+	}
+	if out, err := exec.Command("ip", "link", "set", name, "up").CombinedOutput(); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("ip link set %s up: %v (%s)", name, err, out)
+	}
+	// ethtool may be absent; a single written DHCP frame is not coalesced anyway, so ignore errors.
+	_ = exec.Command("ethtool", "-K", name, "gro", "off", "tso", "off", "gso", "off").Run()
 	return f, nil
 }
 
