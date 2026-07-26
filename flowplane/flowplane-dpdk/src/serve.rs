@@ -508,8 +508,9 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         .name("fp-dpdk-datapath".into())
         .spawn(move || {
             // Hold the preallocated guest `GuestPort`s alive for the lifetime of the datapath thread
-            // AND lend them (by reference) to the workers so worker 0 polls its guest rx queue. A
-            // `Port` Drop stops+closes its ethdev, so they must outlive every worker.
+            // AND lend them (by reference) to every worker, each of which polls the round-robin subset
+            // of guest rx queues it owns (see `owns`). A `Port` Drop stops+closes its ethdev, so they
+            // must outlive every worker.
             //
             // NOTE: the binding MUST be a NAMED `guest_ports`, not a bare `let _ = guest_ports;`.
             // A bare underscore is NOT a binding — it drops the value IMMEDIATELY at that statement,
@@ -808,11 +809,12 @@ fn worker_loop(
                     // test + the uplink block's `ports_get(..).map(..)`).
                     match (&local, composed.cfg.ports_get(*host_ifindex)) {
                         // process_guest_tx{,_nat64}'s SNAT arm writes the reverse NAT/CT entry into THIS
-                        // lcore's per-lcore CT *and* the cross-lcore `shared_ct`. In the first slice
-                        // worker 0 owns all guest ports, but a NAT-return can arrive on ANY uplink
-                        // worker; `shared_ct` is the mechanism by which that other worker's reverse-DNAT
-                        // (and NAT64 v6-expansion) lookup finds this flow. This is the model the future
-                        // multi-worker guest-port partition relies on.
+                        // lcore's per-lcore CT *and* the cross-lcore `shared_ct`. Guest ports are
+                        // partitioned round-robin across workers (see `owns`), so a guest egresses on
+                        // its OWNING worker, but the NAT-return can arrive on ANY uplink worker;
+                        // `shared_ct` is the mechanism by which that other worker's reverse-DNAT (and
+                        // NAT64 v6-expansion) lookup finds this flow. This is exactly why partitioning
+                        // guests across lcores is safe — return demux never depends on the owning lcore.
                         (Some(l), Some(pm)) => match ethertype {
                             // NAT64 egress (v6 guest → v4 external): dispatches to the shared-core
                             // process_guest_tx_nat64, seeding CT_F_NAT64 reverse entries so the NAT64
