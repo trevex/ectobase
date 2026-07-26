@@ -74,9 +74,11 @@ demux this fix exists for now runs on the live serve loop, not just the sim. Con
 multi-lcore writer safety is proven by `nfkit/tests/shared_ct_concurrent_writers.rs` (Task 2:
 N lcores × K disjoint inserts through the single-writer `Mutex`, zero torn reads / dup / loss).
 
-**Remaining (follow-ups):** a GC/eviction sweep over `shared_ct` (via `shared_ct_for_each`/`_remove`)
-is not built yet. The rte_flow `MARK` hardware-steering alternative (needs ConnectX) was
-intentionally not taken — the shared-table software fix is correct without it.
+**Remaining (follow-ups):** the GC/eviction sweep over `shared_ct` IS built (G4:
+`shared_ct_sweep_expired`, run by worker-0 at ~1Hz, reusing the core expiry predicate — see the
+Hardening section below), so expired reverse entries no longer accumulate. The only thing NOT taken
+is the rte_flow `MARK` hardware-steering alternative (needs ConnectX) — intentionally so: the
+shared-table software fix is correct without it.
 
 ---
 
@@ -238,11 +240,15 @@ wiring for the KubeVirt path); mixed veth+tap pools in one process.
    a v6-native same-node `Deliver::Local` path isn't wired into the worker yet.
 3. **Live worker-rebuild-under-traffic e2e for G3** — the control-level recover is proven
    (attach_veth); killing+recovering a slot mid-serve-run is a serve_e2e follow-on.
-4. **`/0` (non-/32) route validation** — the v4 route table is exact-match; the control plane
-   silently accepts a prefix it can't honor (never matches → silent Pass). Add a validation
-   error or LPM support.
-5. **Startup teardown after worker spawn** — a `?` after `guard.disarm()` (e.g. `--addr`
-   parse) returns before the shutdown block, leaking workers/veths (pre-existing; startup-only).
+4. **`/0` (non-/32) route validation** — FIXED: `route_upsert`/`route6_upsert` now `bail!` on a
+   non-host prefix (exact-match table → a non-`/32`(v4)/`/128`(v6) prefix never matches → silent
+   Pass), so the control plane sees a clear error instead of silently accepting it. LPM support is
+   still the alternative if wildcard routes are ever needed.
+5. **Startup teardown after worker spawn** — FIXED: `--addr` is now parsed UP-FRONT (top of `run`),
+   before any pool device is created or worker spawned, so a bad `--addr` can't leak
+   workers/veths. The StartupGuard covers prealloc→spawn, and nothing fallible now runs between
+   `guard.disarm()` and the shutdown block except the tonic serve — whose error routes through
+   `serve_result` (handled AFTER the teardown), not an early `?`.
 6. rte_flow / ConnectX perf phase; M11 hitless-upgrade orchestration (hardware-gated).
 
 ## Cross-refs
