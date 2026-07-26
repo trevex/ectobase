@@ -196,9 +196,15 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
         }
     };
 
-    // 4. Network NAT SNAT when the route is external.
+    // 4. Network NAT SNAT when the route is external. Pass the REAL `now` (not 0): `snat_egress`
+    // stamps the peer-independent reverse conntrack entry's `last_seen` from it, and the return path's
+    // idle-timeout GC (`shared_ct_sweep_expired` → `ct_is_expired = now - last_seen > timeout`) would
+    // otherwise treat a `last_seen == 0` entry as expired the instant a real monotonic clock sweeps it
+    // — silently evicting every SNAT reverse entry and breaking NAT-return. Mirrors the eBPF path,
+    // which already passes `conntrack::now()` here (egress.rs); tests using `now: 0` are unaffected
+    // (they stamp 0 and never sweep with a real clock).
     let is_ext = route.is_external != 0;
-    snat_egress(pkt, maps, ip_off, in_.meta.vni, is_ext, 0);
+    snat_egress(pkt, maps, ip_off, in_.meta.vni, is_ext, in_.now);
 
     // 5. Track every flow: create-on-miss, refresh (last_seen + TCP state) on hit. Refresh mirrors
     //    the eBPF `ct_touch`; it is map-only (never mutates the packet), so it is byte-parity-neutral.

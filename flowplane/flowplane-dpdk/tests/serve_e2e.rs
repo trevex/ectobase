@@ -13,20 +13,11 @@
 //!
 //! Run: sudo -E $(command -v cargo) test -p flowplane-dpdk --test serve_e2e -- --test-threads=1 --nocapture
 //!
-//! ── KNOWN BLOCKER (discovered wiring this e2e; needs its own task/review) ──────────────────────────
-//! The `flowplane-dpdk serve` process NEVER programs the process-wide `LOCAL` config entry (uplink
-//! identity: `uplink_ifindex` / `uplink_mac` / `gateway_mac` / underlay). `SharedConfigMaps::set_local`
-//! is called only in nfkit tests, never in `serve.rs`. Without `LOCAL`, `worker_loop` drops EVERY
-//! guest-egress AND uplink burst ("No LOCAL programmed → no uplink identity; drop the whole burst" /
-//! "Without LOCAL there is no uplink identity, so poll+drain … drop everything"), so the datapath is
-//! inert even though attach/route/NAT/firewall program correctly and the af_xdp transport delivers
-//! frames to the guest socket (verified: guest-injected frames increment the guest port's RX counter).
-//! The eBPF sibling programs LOCAL at `ControlCore::bring_up` from the `--uplink` netdev's ifindex+MAC
-//! plus `--gateway-mac`/`--local-underlay` — all inputs the DPDK serve ALSO parses; the fix is a
-//! `shared.set_local(Local { uplink_ifindex, uplink_mac, gateway_mac, underlay_ipv6 })` after the
-//! uplink `Port::configure`. Fixing serve logic is OUT OF SCOPE for this test-only task (per its
-//! constraints) → reported for a follow-on. Until then this test SKIPS/FAILS at part (a) under sudo;
-//! the harness + client + wrapper are complete and pass (a)+(b) the moment serve programs LOCAL.
+//! `flowplane-dpdk serve` programs the process-wide `LOCAL` config entry (uplink identity:
+//! `uplink_ifindex` / `uplink_mac` / `gateway_mac` / `underlay_ipv6`) at startup — resolved from the
+//! `--uplink` netdev's sysfs ifindex+MAC plus `--gateway-mac` / `--local-underlay` — so `worker_loop`
+//! has the uplink identity it needs and (a)+(b) pass over real af_xdp transport. (Before that fix the
+//! serve datapath was inert: LOCAL was `None`, so every uplink and guest-egress burst was dropped.)
 
 /// Repo root (workspace) from this crate's manifest dir: `<root>/flowplane/flowplane-dpdk` → `<root>`.
 fn repo_root() -> String {

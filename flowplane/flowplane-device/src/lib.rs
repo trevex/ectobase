@@ -10,5 +10,5 @@ pub use underlay::{
 };
 pub use veth::{
     bind_preallocated_guest_end, create_preallocated_veth, create_veth_pair, delete_link,
-    link_exists, unbind_preallocated_guest_end, DeviceInfo, VethSpec,
+    ifindex_of, link_exists, mac_of, unbind_preallocated_guest_end, DeviceInfo, VethSpec,
 };

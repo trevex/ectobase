@@ -123,9 +123,16 @@ done
 sleep 2
 
 # ── program the datapath over gRPC ────────────────────────────────────────────────────────────────
-# External default route (SNAT arm) + attach guest A, THEN NAT source (needs the iface attached →
-# find_iface_by_vni_ipv4) + egress-allow firewall keyed by the attached interface_id.
-"$CLIENT_BIN" route --addr "$GRPC" --vni "$VNI" --prefix "0.0.0.0/0" --nexthop "$NEXTHOP_UL" --external
+# External route for the exact destination (SNAT arm) + attach guest A, THEN NAT source (needs the
+# iface attached → find_iface_by_vni_ipv4) + egress-allow firewall keyed by the attached interface_id.
+#
+# The route table is EXACT-match /32 on BOTH backends (eBPF + DPDK `route4_insert`/`route4_get` key on
+# the full 4-byte address; the control-plane drops prefix_len for v4 — see `DpdkMapWriter::route_upsert`
+# / the eBPF ROUTES map). A `0.0.0.0/0` prefix therefore inserts key `(vni, 0.0.0.0)` and NEVER matches
+# a real destination → `process_guest_tx` returns `Pass` (route miss) and nothing egresses. Program the
+# EXACT external dst `$EXT_DST/32`, mirroring the proven nfkit `guest_tx_datapath.rs` fixture
+# (`add_route4(VNI, EXT_DST, ..)`).
+"$CLIENT_BIN" route --addr "$GRPC" --vni "$VNI" --prefix "$EXT_DST/32" --nexthop "$NEXTHOP_UL" --external
 
 IFACE_A=ge2eA
 ATT_A="$("$CLIENT_BIN" attach --addr "$GRPC" --iface "$IFACE_A" --netns "/var/run/netns/$NS_A" --vni "$VNI" --ip "$GUEST_IP")"
@@ -220,8 +227,7 @@ snf = AsyncSniffer(iface="{a_if}", timeout=12,
                    lfilter=lambda p: p.haslayer(IP) and p.haslayer(TCP)
                                      and p[IP].dst == "{guest_ip}" and p[TCP].dport == {sport})
 snf.start(); time.sleep(0.5)
-import os
-# wait for a marker file to know the injector has begun, but simplest: just sniff for the window.
+# just sniff for the window (the injector runs during it).
 time.sleep(11.5)
 res = snf.stop()
 n = len(res or [])

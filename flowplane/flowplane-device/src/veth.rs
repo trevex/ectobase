@@ -63,12 +63,35 @@ pub(crate) fn run_netns(netns_path: &str, args: &[&str]) -> Result<()> {
 }
 
 /// Read `/sys/class/net/<name>/ifindex` to resolve the host interface index.
-fn ifindex_of(name: &str) -> Result<u32> {
+pub fn ifindex_of(name: &str) -> Result<u32> {
     let s = std::fs::read_to_string(format!("/sys/class/net/{name}/ifindex"))
         .with_context(|| format!("read ifindex of {name}"))?;
     s.trim()
         .parse()
         .with_context(|| format!("parse ifindex of {name}: {s:?}"))
+}
+
+/// Read `/sys/class/net/<name>/address` and parse the colon-separated hex MAC ("aa:bb:cc:dd:ee:ff")
+/// into a `[u8; 6]`. Used by `flowplane-dpdk serve` to resolve the `--uplink` netdev's MAC for the
+/// `LOCAL` config entry (outer eth SRC on encapped frames), mirroring the eBPF agent's bring-up.
+pub fn mac_of(name: &str) -> Result<[u8; 6]> {
+    let s = std::fs::read_to_string(format!("/sys/class/net/{name}/address"))
+        .with_context(|| format!("read MAC of {name}"))?;
+    let s = s.trim();
+    let mut mac = [0u8; 6];
+    let mut n = 0usize;
+    for (i, part) in s.split(':').enumerate() {
+        if i >= 6 {
+            anyhow::bail!("MAC of {name} has more than 6 octets: {s:?}");
+        }
+        mac[i] = u8::from_str_radix(part, 16)
+            .with_context(|| format!("parse MAC octet {part:?} of {name} ({s:?})"))?;
+        n = i + 1;
+    }
+    if n != 6 {
+        anyhow::bail!("MAC of {name} has {n} octets, expected 6: {s:?}");
+    }
+    Ok(mac)
 }
 
 /// Idempotent `ip link del <name>` (ignores errors / "not found").
@@ -327,6 +350,12 @@ mod tests {
     fn ifindex_of_loopback_is_one() {
         // lo is ifindex 1 in every netns incl. the root — no privileges needed to read /sys.
         assert_eq!(ifindex_of("lo").unwrap(), 1);
+    }
+
+    #[test]
+    fn mac_of_loopback_is_all_zero() {
+        // lo's /sys address is 00:00:00:00:00:00 in every netns — no privileges needed to read /sys.
+        assert_eq!(mac_of("lo").unwrap(), [0u8; 6]);
     }
 
     #[test]

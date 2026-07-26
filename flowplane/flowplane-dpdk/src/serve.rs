@@ -277,6 +277,14 @@ impl Drop for StartupGuard {
     }
 }
 
+/// Format a 6-byte MAC as `aa:bb:cc:dd:ee:ff` for startup log lines.
+fn fmt_mac(mac: &[u8; 6]) -> String {
+    format!(
+        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    )
+}
+
 /// Run the DPDK serve process (see the module doc for the full structure). This is `async` and
 /// hosts the tonic server on the calling (tokio) thread; the datapath runs on a dedicated OS thread.
 pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
@@ -471,6 +479,74 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("SharedConfigMaps::new failed: {e}"))?,
     );
 
+    // Resolve BOTH the node's underlay HOST address (the /128 — this node's fabric-src, written into
+    // LOCAL as `underlay_ipv6`, the outer IPv6 SRC on encapped frames) and the /64 network prefix
+    // (seeds `UnderlayIpam` in §5b). `--local-underlay` is a host address; the prefix is its /64. When
+    // unset, both are inferred from the host interfaces (address, then its /64) so they stay consistent.
+    let underlay_addr: std::net::Ipv6Addr = match &args.local_underlay {
+        Some(s) => s
+            .parse()
+            .with_context(|| format!("parse --local-underlay {s:?} as IPv6"))?,
+        None => flowplane_device::infer_underlay_address(&flowplane_device::read_host_ifaddrs()?)
+            .ok_or_else(|| {
+            anyhow::anyhow!(
+                "could not infer underlay address from host interfaces; set --local-underlay"
+            )
+        })?,
+    };
+    let underlay_prefix: Ipv6Net = Ipv6Net::new(underlay_addr, 64)
+        .map_err(|e| anyhow::anyhow!("build /64 from underlay address {underlay_addr}: {e}"))?
+        .trunc();
+
+    // ── 4a. Program LOCAL (uplink identity) ─────────────────────────────────────
+    // The eBPF sibling writes this at bring-up (`flowplane/src/control/mod.rs`): without it the
+    // `worker_loop` has no uplink identity (outer MACs + uplink ifindex) and DROPS EVERY uplink and
+    // guest-egress burst by design. Program it ONCE, here, after `shared` exists and the uplink `Port`
+    // is configured — the fix for the "datapath is inert" bug.
+    //
+    // Fields:
+    //   • gateway_mac  — `--gateway-mac`, the underlay next-hop (outer eth DST for all encap).
+    //   • underlay_ipv6 — this node's underlay HOST address (the /128), outer IPv6 SRC on encap.
+    //   • uplink_ifindex/uplink_mac — the `--uplink` netdev's real ifindex + MAC. For af-xdp/tap the
+    //     uplink IS a kernel netdev (`args.uplink`), so resolve from sysfs; the encap arm returns
+    //     `Redirect(uplink_ifindex)` and `worker_loop` routes it to the uplink tx only when it matches
+    //     LOCAL.uplink_ifindex, so a consistent non-zero value is what matters (real ifindex keeps the
+    //     outer frame fabric-correct + matches eBPF). For nic/pcap/null there is no host netdev →
+    //     best-effort sentinel (ifindex = uplink ethdev port 0's id + 1 = 1, non-zero; mac = zeros).
+    let gateway_mac = flowplane_node::parse_mac(&args.gateway_mac)
+        .with_context(|| format!("parse --gateway-mac {:?}", args.gateway_mac))?;
+    let (uplink_ifindex, uplink_mac) = match args.backend {
+        BackendKind::AfXdp | BackendKind::Tap => {
+            let ifindex = flowplane_device::ifindex_of(&args.uplink)
+                .with_context(|| format!("resolve --uplink {:?} ifindex for LOCAL", args.uplink))?;
+            let mac = flowplane_device::mac_of(&args.uplink)
+                .with_context(|| format!("resolve --uplink {:?} MAC for LOCAL", args.uplink))?;
+            (ifindex, mac)
+        }
+        other => {
+            // No host netdev to read (nic = PCI addr, pcap = file, null = nothing). LOCAL is
+            // best-effort: a non-zero sentinel ifindex keeps the encap-redirect path self-consistent,
+            // and the outer eth SRC is zeros. Guest egress is af-xdp-focused, so do NOT fail startup.
+            eprintln!(
+                "warning: backend {other:?} has no host uplink netdev; LOCAL uplink identity is \
+                 best-effort (ifindex=1 sentinel, uplink_mac=00:00:..)"
+            );
+            (1u32, [0u8; 6])
+        }
+    };
+    shared.set_local(flowplane_common::Local {
+        uplink_ifindex,
+        uplink_mac,
+        gateway_mac,
+        underlay_ipv6: underlay_addr.octets(),
+    });
+    println!(
+        "LOCAL programmed: uplink_ifindex={uplink_ifindex}, uplink_mac={}, gateway_mac={}, \
+         underlay_ipv6={underlay_addr}",
+        fmt_mac(&uplink_mac),
+        fmt_mac(&gateway_mac),
+    );
+
     // ── 5. The SINGLE writer: ControlCore<DpdkMapWriter> behind a Mutex ─────────
     // The Mutex enforces single-writer over the `&self` SharedConfigMaps writes (soundness of the
     // LF+RCU tables rests on exactly one writer). Task 9's DataplaneNode service takes handlers that
@@ -480,26 +556,9 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     )));
 
     // ── 5b. B2a attach state: underlay IPAM + device registry ─────────────────
-    // Seed `UnderlayIpam` from `--local-underlay` if set (parsed as a /64 to truncate to the
-    // network address), else infer from the host's interface addresses. The guest_mtu defaults to
-    // a sane 1450 (underlay MTU 1500 - 40-byte outer IPv6 - 8-byte encap header) when not set.
-    let underlay_prefix: Ipv6Net = match &args.local_underlay {
-        Some(s) => {
-            // Parse as a /128 host address + build the /64 network around it.
-            let ip: std::net::Ipv6Addr = s
-                .parse()
-                .with_context(|| format!("parse --local-underlay {s:?} as IPv6"))?;
-            Ipv6Net::new(ip, 64)
-                .map_err(|e| anyhow::anyhow!("build /64 from --local-underlay {s}: {e}"))?
-                .trunc()
-        }
-        None => flowplane_device::infer_underlay_prefix(&flowplane_device::read_host_ifaddrs()?)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "could not infer underlay /64 from host interfaces; set --local-underlay"
-                )
-            })?,
-    };
+    // `underlay_prefix` (the /64 that seeds `UnderlayIpam`) was resolved with `underlay_addr` up front
+    // (§4a needs the host address for LOCAL). The guest_mtu defaults to a sane 1450 (underlay MTU 1500
+    // - 40-byte outer IPv6 - 8-byte encap header) when not set.
     let gateway_ipv4: [u8; 4] = args
         .gateway
         .parse::<std::net::Ipv4Addr>()
@@ -838,7 +897,22 @@ fn worker_loop(
                             }
                         };
                         match action {
-                            // Forward verdicts: queue the (mutated) mbuf for tx.
+                            // Fabric → guest delivery (decap + reverse-DNAT / LB / base): the uplink
+                            // entry returns `Redirect(guest_tap_ifindex)`. That target is a LOCAL guest
+                            // af_xdp port that may be owned by ANOTHER worker (and `TxQueue` is `!Send`),
+                            // so it MUST go through the per-port handoff ring — the SAME mechanism the
+                            // guest↔guest local-delivery path uses. The owning worker drains the ring and
+                            // tx's it out the guest port (see the RING DRAIN block below). Without this,
+                            // the decapped return was pushed onto the UPLINK tx burst and sent back out
+                            // the fabric instead of down to the guest (the "NAT-return not delivered" bug).
+                            Action::Redirect(ix) if ifindex_to_index.contains_key(&ix) => {
+                                let pi = ifindex_to_index[&ix];
+                                if let Err(m) = rings[pi].enqueue(mbuf) {
+                                    drop(m); // ring full: return frame dropped (dest port backpressured)
+                                }
+                            }
+                            // Any other forward verdict (a redirect NOT to a local guest port — e.g.
+                            // reforward-to-fabric — or `Pass`) egresses the uplink tx burst as before.
                             Action::Redirect(_) | Action::Pass => tx_burst.push(mbuf),
                             // Drop: let the mbuf fall out of scope → `Mbuf`'s Drop frees it.
                             Action::Drop => {}
