@@ -7,9 +7,11 @@
 //! deterministic names/MACs for the same interface_id.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use flowplane_device::UnderlayIpam;
+
+use crate::port_backend::GuestPortBackend;
 
 /// One PREALLOCATED guest af_xdp port slot (VF-style). The serve process creates N guest veth pairs
 /// BEFORE EAL init (so they can be passed as `--vdev=net_af_xdp<i>,iface=<host_ifname>`), giving a
@@ -66,6 +68,11 @@ pub struct DpdkAttachState {
     /// interface (moving the placeholder guest-end veth into the pod netns) and release it on detach.
     /// Empty for non-af-xdp backends (per-guest ports are af-xdp-only in this slice).
     pub guest_pool: Mutex<Vec<GuestPortSlot>>,
+    /// The backend-agnostic guest-port pool lifecycle (device mechanics only). Attach/detach call
+    /// `assign`/`release`/`is_alive` on this instead of the raw `flowplane_device` veth ops, so the
+    /// handlers stay device-kind-agnostic (veth today; tap/vf are documented seams). `Arc<dyn ...>`
+    /// so it clones cheaply into the `spawn_blocking` closures that shell out to `ip`.
+    pub backend: Arc<dyn GuestPortBackend>,
 }
 
 impl DpdkAttachState {
@@ -134,6 +141,7 @@ mod tests {
             gateway_ipv4: [169, 254, 0, 1],
             gateway_ipv6: [0u8; 16],
             guest_pool: Mutex::new(Vec::new()),
+            backend: Arc::new(crate::port_backend::VethBackend),
         }
     }
 

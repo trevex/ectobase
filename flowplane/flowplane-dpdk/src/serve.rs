@@ -50,6 +50,7 @@ use flowplane_core::pkt::{Action, Pkt}; // `Pkt` brings `read_array` into scope 
 use nfkit::monotonic_ns;
 
 use crate::attach_state::{DpdkAttachState, GuestPortSlot};
+use crate::port_backend::{GuestPortBackend, VethBackend};
 
 use crate::node::{pb, DpdkNodeService};
 use crate::writer::DpdkMapWriter;
@@ -242,6 +243,12 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     }
     let backend = args.to_backend(queues);
 
+    // The backend-agnostic guest-port pool lifecycle. Constructed ONCE and shared: it drives the
+    // §2a preallocation here and is stored (cloned) in `DpdkAttachState` so attach/detach route
+    // their assign/release/is_alive device ops through the SAME instance. Veth today (containers);
+    // tap/vf are documented seams (see `port_backend.rs`).
+    let port_backend: Arc<dyn GuestPortBackend> = Arc::new(VethBackend);
+
     // ── 2a. PREALLOCATE the per-guest af_xdp port pool BEFORE EAL init ───────────
     // VF-style static poll set: create `--guest-ports` guest veth pairs NOW (in the root netns) so
     // each host end can be handed to EAL as an extra `--vdev=net_af_xdp<i>,iface=<host_ifname>`. The
@@ -279,35 +286,31 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
             // failure would leak the veths already on the host (e.g. `fpg0`/`fpg1` if slot 2 fails).
             let mut created: Vec<String> = Vec::with_capacity(args.guest_ports as usize);
             for i in 0..args.guest_ports {
-                let host_ifname = format!("fpg{i}");
-                // Deterministic placeholder MAC: 02:00:00:00:0e:<i>. Not datapath-significant yet —
-                // the real guest MAC is programmed at attach (Task 4).
-                let mac = [0x02, 0x00, 0x00, 0x00, 0x0e, i as u8];
-                let dev = match flowplane_device::create_preallocated_veth(
-                    &host_ifname,
-                    mac,
-                    guest_mtu,
-                ) {
+                // Route preallocation through the backend (device mechanics: create `fpg{i}` with the
+                // deterministic placeholder MAC — the backend owns the naming/MAC scheme). Not
+                // datapath-significant yet; the real guest MAC is programmed at attach (Task 4).
+                let dev = match port_backend.preallocate(i, guest_mtu) {
                     Ok(d) => d,
                     Err(e) => {
-                        // Roll back every veth created so far, mirroring create_preallocated_veth's
-                        // own rollback style, then propagate the error.
+                        // Roll back every device created so far via the backend's teardown, mirroring
+                        // preallocate's own rollback style, then propagate the error. (Task 2/G5
+                        // replaces this hand-rolled rollback with a RAII guard; left as-is here.)
                         for h in &created {
-                            flowplane_device::delete_link(h);
+                            port_backend.teardown(h);
                         }
                         return Err(e).with_context(|| {
-                            format!("create preallocated guest veth {host_ifname} (slot {i})")
+                            format!("create preallocated guest device fpg{i} (slot {i})")
                         });
                     }
                 };
-                created.push(dev.host_name.clone());
+                created.push(dev.host_ifname.clone());
                 slots.push(GuestPortSlot {
-                    host_ifname: dev.host_name,
+                    host_ifname: dev.host_ifname,
                     host_ifindex: dev.host_ifindex,
                     // ethdev port id: uplink = 0, guests = 1..=N (matches the vdev append order).
                     port_id: 1 + i,
                     bound: None,
-                    // Freshly-created pool veths are live; dead-slot detection happens lazily at attach.
+                    // Freshly-created pool devices are live; dead-slot detection happens lazily at attach.
                     dead: false,
                 });
             }
@@ -481,6 +484,9 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         gateway_ipv4,
         gateway_ipv6,
         guest_pool: std::sync::Mutex::new(slots),
+        // Share the SAME backend instance §2a preallocated with — attach/detach route their
+        // assign/release/is_alive device ops through it (Task 4 call sites in node.rs).
+        backend: port_backend.clone(),
     });
     println!(
         "B2a attach state: underlay prefix={underlay_prefix}, gateway={}, guest_mtu={guest_mtu}, \

@@ -67,6 +67,7 @@ fn make_svc(shared: Arc<SharedConfigMaps>) -> (DpdkNodeService, Arc<DpdkAttachSt
         gateway_ipv4: [169, 254, 0, 1],
         gateway_ipv6: [0u8; 16],
         guest_pool: std::sync::Mutex::new(Vec::new()),
+        backend: Arc::new(flowplane_dpdk::port_backend::VethBackend),
     });
     (DpdkNodeService::new(ctrl, shared, attach.clone()), attach)
 }

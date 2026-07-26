@@ -156,7 +156,7 @@ impl DataplaneNode for DpdkNodeService {
         let reserved = {
             let mut pool = attach.guest_pool.lock().unwrap();
             for s in pool.iter_mut() {
-                if s.bound.is_none() && !s.dead && !flowplane_device::link_exists(&s.host_ifname) {
+                if s.bound.is_none() && !s.dead && !attach.backend.is_alive(s) {
                     s.dead = true;
                     eprintln!(
                         "warn: guest af_xdp pool slot {} (port {}) is DEAD — host-end veth vanished \
@@ -171,15 +171,13 @@ impl DataplaneNode for DpdkNodeService {
                 .find(|s| s.bound.is_none() && !s.dead)
                 .map(|slot| {
                     slot.bound = Some(r.interface_id.clone());
-                    (
-                        slot.host_ifname.clone(),
-                        slot.host_ifindex,
-                        slot.port_id,
-                        format!("{}p", slot.host_ifname),
-                    )
+                    // The backend derives the placeholder peer (`<host_ifname>p`) itself from
+                    // host_ifname, so the assign/release call sites only need the name; host_ifindex
+                    // is the map/registry/free-slot key.
+                    (slot.host_ifname.clone(), slot.host_ifindex)
                 })
         }; // guest_pool guard dropped here
-        let (slot_host_ifname, slot_host_ifindex, slot_port_id, placeholder_peer) = match reserved {
+        let (slot_host_ifname, slot_host_ifindex) = match reserved {
             Some(fields) => fields,
             None => {
                 // No free slot: release IPAM (nothing else reserved yet) + resource_exhausted. The
@@ -194,7 +192,6 @@ impl DataplaneNode for DpdkNodeService {
                 ));
             }
         };
-        let _ = slot_port_id; // recorded on the slot; not needed further in the attach path.
 
         // Helper to free the reserved slot on any rollback path below.
         let free_slot = |attach: &crate::attach_state::DpdkAttachState| {
@@ -209,22 +206,22 @@ impl DataplaneNode for DpdkNodeService {
             }
         };
 
-        // Move the reserved slot's placeholder guest-end into the pod netns off-thread (shells out to
-        // `ip`; must not block the tokio worker). The host-end stays put on the af_xdp ethdev port.
+        // Move the reserved slot's guest-end into the pod netns off-thread (shells out to `ip`; must
+        // not block the tokio worker). The host-end stays put on the af_xdp ethdev port. Routed
+        // through the backend's `assign` (device mechanics only); we capture an `Arc<dyn
+        // GuestPortBackend>` clone (it is `Send + Sync`) rather than borrowing `attach` into the
+        // closure. The backend derives the placeholder peer from `host_ifname`, so we hand it just
+        // that name (the only identity `assign` needs).
         {
-            let placeholder_peer_task = placeholder_peer.clone();
-            let netns_path = r.netns_path.clone();
-            let guest_name_task = guest_name.clone();
+            let backend = attach.backend.clone();
+            let host_ifname = slot_host_ifname.clone();
+            let target = crate::port_backend::AssignTarget {
+                netns_path: r.netns_path.clone(),
+                guest_ifname: guest_name.clone(),
+            };
             let guest_mtu = attach.guest_mtu;
             let join = tokio::task::spawn_blocking(move || {
-                flowplane_device::bind_preallocated_guest_end(
-                    &placeholder_peer_task,
-                    &netns_path,
-                    &guest_name_task,
-                    mac,
-                    guest_mtu,
-                    false, // real NIC finalizes csum; clab detection is a follow-up
-                )
+                backend.assign(&host_ifname, &target, mac, guest_mtu)
             })
             .await;
             // Route BOTH the returned-Err (bind failed) AND the JoinError (bind task PANICKED) through
@@ -240,18 +237,17 @@ impl DataplaneNode for DpdkNodeService {
             if let Some((msg, panicked)) = failed {
                 if panicked {
                     // A panic MID-bind could have moved the guest-end into the pod netns before
-                    // dying; best-effort-restore the placeholder to the root netns.
-                    let placeholder_peer = placeholder_peer.clone();
-                    let netns_path = r.netns_path.clone();
-                    let guest_name = guest_name.clone();
-                    let _ = tokio::task::spawn_blocking(move || {
-                        flowplane_device::unbind_preallocated_guest_end(
-                            &netns_path,
-                            &guest_name,
-                            &placeholder_peer,
-                        )
-                    })
-                    .await;
+                    // dying; best-effort-restore the placeholder to the root netns via the backend's
+                    // `release` (device mechanics; derives the placeholder peer from `host_ifname`).
+                    let backend = attach.backend.clone();
+                    let host_ifname = slot_host_ifname.clone();
+                    let target = crate::port_backend::AssignTarget {
+                        netns_path: r.netns_path.clone(),
+                        guest_ifname: guest_name.clone(),
+                    };
+                    let _ =
+                        tokio::task::spawn_blocking(move || backend.release(&host_ifname, &target))
+                            .await;
                 }
                 free_slot(&attach);
                 attach
@@ -304,17 +300,14 @@ impl DataplaneNode for DpdkNodeService {
             // Roll back (lock already dropped): move the guest-end back (best-effort, shells out) +
             // free the slot + release IPAM. The pool veth SURVIVES (owned by serve startup/shutdown).
             {
-                let placeholder_peer = placeholder_peer.clone();
-                let netns_path = r.netns_path.clone();
-                let guest_name = guest_name.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    flowplane_device::unbind_preallocated_guest_end(
-                        &netns_path,
-                        &guest_name,
-                        &placeholder_peer,
-                    )
-                })
-                .await;
+                let backend = attach.backend.clone();
+                let host_ifname = slot_host_ifname.clone();
+                let target = crate::port_backend::AssignTarget {
+                    netns_path: r.netns_path.clone(),
+                    guest_ifname: guest_name.clone(),
+                };
+                let _ = tokio::task::spawn_blocking(move || backend.release(&host_ifname, &target))
+                    .await;
             }
             free_slot(&attach);
             attach
@@ -380,17 +373,14 @@ impl DataplaneNode for DpdkNodeService {
             } // ctrl lock dropped before the subprocess below
               // Move the guest-end back to the root netns (best-effort) — the pool veth SURVIVES.
             {
-                let placeholder_peer = placeholder_peer.clone();
-                let netns_path = r.netns_path.clone();
-                let guest_name = guest_name.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    flowplane_device::unbind_preallocated_guest_end(
-                        &netns_path,
-                        &guest_name,
-                        &placeholder_peer,
-                    )
-                })
-                .await;
+                let backend = attach.backend.clone();
+                let host_ifname = slot_host_ifname.clone();
+                let target = crate::port_backend::AssignTarget {
+                    netns_path: r.netns_path.clone(),
+                    guest_ifname: guest_name.clone(),
+                };
+                let _ = tokio::task::spawn_blocking(move || backend.release(&host_ifname, &target))
+                    .await;
             }
             free_slot(&attach);
             attach
@@ -505,20 +495,21 @@ impl DataplaneNode for DpdkNodeService {
         // hardening"), NOT implemented here.
         let dev = self.attach.forget(&id);
         if let Some(dev) = &dev {
-            let netns_path = dev.netns_path.clone();
-            let placeholder_peer = format!("{}p", dev.host_name);
-            let guest_name = String::from_utf8_lossy(&id).into_owned();
+            let backend = self.attach.backend.clone();
+            // The backend derives the placeholder peer from host_ifname; pass the registry device's
+            // host_name (the only identity `release` needs).
+            let host_ifname = dev.host_name.clone();
+            let target = crate::port_backend::AssignTarget {
+                netns_path: dev.netns_path.clone(),
+                guest_ifname: String::from_utf8_lossy(&id).into_owned(),
+            };
             // Drop the JoinError: a `?` here would return BEFORE the slot-free below, leaking the
             // pool slot (bound=Some) while the registry entry is already gone. Detach runs ALL
-            // reclaim steps regardless — the unbind is already best-effort/always-Ok internally, so
+            // reclaim steps regardless — `release` is already best-effort/always-Ok internally, so
             // even a task panic must not stop us from freeing the slot for reuse.
             let _ = tokio::task::spawn_blocking(move || {
-                // Best-effort: always Ok (see unbind_preallocated_guest_end).
-                let _ = flowplane_device::unbind_preallocated_guest_end(
-                    &netns_path,
-                    &guest_name,
-                    &placeholder_peer,
-                );
+                // Best-effort: always Ok (see VethBackend::release / unbind_preallocated_guest_end).
+                backend.release(&host_ifname, &target);
             })
             .await;
         }
@@ -543,7 +534,7 @@ impl DataplaneNode for DpdkNodeService {
                 .iter_mut()
                 .find(|s| s.host_ifindex == ifx)
             {
-                if flowplane_device::link_exists(&slot.host_ifname) {
+                if self.attach.backend.is_alive(slot) {
                     slot.bound = None;
                 } else {
                     slot.dead = true;
@@ -791,6 +782,7 @@ mod tests {
             gateway_ipv4: [169, 254, 0, 1],
             gateway_ipv6: [0u8; 16],
             guest_pool: std::sync::Mutex::new(Vec::new()),
+            backend: Arc::new(crate::port_backend::VethBackend),
         });
         let svc = DpdkNodeService::new(ctrl.clone(), shared.clone(), attach);
 
