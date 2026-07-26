@@ -215,9 +215,25 @@ lifecycle seam (veth impl; tap/VF are documented seams). Spec/plan:
   generation; the owning worker rebuilds its `!Send` rx/tx handles on-lcore on the bump (the
   one sanctioned mutation to the static poll set). Hotplug de-risk gate proven on this host.
 
-### Remaining follow-ups (after hardening)
-1. **TapBackend (VMs)** + **VfBackend (SR-IOV real NIC)** datapath impls — only the
-   `GuestPortBackend` trait seam exists (tap is the likely-next; VF is hardware-gated).
+### TapBackend (VMs) — DATAPATH SLICE DONE (`feat/dpdk-tap-backend`, 2026-07-26)
+
+`TapBackend` implements the `GuestPortBackend` seam for VMs: af_xdp binds the tap's kernel
+netdev (pool port, serve netns); qemu holds the char-device fd (guest edge). More VF-like than
+veth — a persistent tap survives the VM, so `recover()` is a near-no-op (no hotplug). Selected
+via `--guest-backend veth|tap`. Spec/plan: `docs/superpowers/specs+plans/2026-07-26-dpdk-tap-backend-datapath-slice*`.
+De-risk gate proved af_xdp binds a tap netdev + fd round-trips (`nfkit/tests/afxdp_tap.rs`);
+`flowplane-device` tap helpers (`create_persistent_tap`/`open_tap_fd`/`delete_tap`); the datapath
+proof `nfkit/tests/tap_guest_datapath.rs` runs the REAL `process_guest_tx` over af_xdp-on-tap
+driven by a raw `/dev/net/tun` fd (guest→fabric encap + return-transport to the fd). Datapath is
+backend-agnostic (keys on the pool host ifindex). **Deferred:** the KubeVirt binding-plugin
+(`domainAttachmentType=tap`) + CNI/Multus wiring + real fd-handoff-to-qemu-in-a-pod-netns +
+real-qemu e2e; `attach_interface` still rejects an explicit `device_type="tap"` RPC (control-plane
+wiring for the KubeVirt path); mixed veth+tap pools in one process.
+
+### Remaining follow-ups (after hardening + tap slice)
+1. **VfBackend (SR-IOV real NIC)** datapath impl — only the `GuestPortBackend` trait seam exists
+   (hardware-gated). The **KubeVirt control-plane wiring for TapBackend** (binding plugin + CNI +
+   fd-handoff + real-qemu e2e) is the next tap increment.
 2. **Native v6→v6 guest↔guest local delivery** — the worker delivers v4 `Deliver::Local`;
    a v6-native same-node `Deliver::Local` path isn't wired into the worker yet.
 3. **Live worker-rebuild-under-traffic e2e for G3** — the control-level recover is proven
