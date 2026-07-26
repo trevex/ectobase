@@ -69,19 +69,34 @@ fn insert_ok(ok: bool, table: &str) -> anyhow::Result<()> {
 
 impl MapWriter for DpdkMapWriter {
     // ── ROUTES ───────────────────────────────────────────────────────────────
-    // `prefix_len` is DROPPED: `SharedConfigMaps` stores exact `/32`(v4) / `/128`(v6) host keys,
-    // the same exact-match model as the DPDK/eBPF route maps (AyaWriter forwards prefix to the aya
-    // Routes wrapper, but the underlying map key is the host address only — the datapath does an
-    // exact lookup). So dropping it here is byte-compatible with the eBPF key.
+    // `prefix_len` is VALIDATED to be a host route (`/32` v4, `/128` v6): `SharedConfigMaps` stores
+    // exact host keys, the same exact-match model as the DPDK/eBPF route maps (AyaWriter forwards
+    // prefix to the aya Routes wrapper, but the underlying map key is the host address only — the
+    // datapath does an exact lookup). A NON-host prefix (e.g. a `/0` default route) would silently
+    // collapse into a host key that never matches → silent Pass, so we REJECT it up-front here
+    // rather than drop the prefix. (Removal is by host key, so `route_remove`/`route6_remove` still
+    // ignore `prefix_len`.)
     fn route_upsert(
         &mut self,
         vni: u32,
         ipv4: [u8; 4],
-        _prefix_len: u32,
+        prefix_len: u32,
         val: RouteValue,
     ) -> anyhow::Result<()> {
+        if prefix_len != 32 {
+            anyhow::bail!(
+                "DPDK route table is exact-match (/32 host routes only); got /{prefix_len} for \
+                 {}.{}.{}.{} — non-host prefixes (e.g. a /0 default route) never match. Use \
+                 per-dest /32 routes or add LPM.",
+                ipv4[0],
+                ipv4[1],
+                ipv4[2],
+                ipv4[3]
+            );
+        }
         insert_ok(self.sc.route4_insert(vni, ipv4, val), "route4")
     }
+    // Removal is by host key — `prefix_len` is not part of the key, so it is ignored here.
     fn route_remove(&mut self, vni: u32, ipv4: [u8; 4], _prefix_len: u32) -> anyhow::Result<()> {
         self.sc.route4_remove(vni, ipv4);
         Ok(())
@@ -90,11 +105,19 @@ impl MapWriter for DpdkMapWriter {
         &mut self,
         vni: u32,
         ipv6: [u8; 16],
-        _prefix_len: u32,
+        prefix_len: u32,
         val: RouteValue,
     ) -> anyhow::Result<()> {
+        if prefix_len != 128 {
+            anyhow::bail!(
+                "DPDK route table is exact-match (/128 host routes only); got /{prefix_len} — \
+                 non-host prefixes (e.g. a /0 default route) never match. Use per-dest /128 routes \
+                 or add LPM."
+            );
+        }
         insert_ok(self.sc.route6_insert(vni, ipv6, val), "route6")
     }
+    // Removal is by host key — `prefix_len` is not part of the key, so it is ignored here.
     fn route6_remove(&mut self, vni: u32, ipv6: [u8; 16], _prefix_len: u32) -> anyhow::Result<()> {
         self.sc.route6_remove(vni, ipv6);
         Ok(())
@@ -290,7 +313,15 @@ mod tests {
             is_external: 0,
             _pad: [0; 3],
         };
+        // Host route (/32) is accepted.
         w.route_upsert(7, [10, 0, 0, 1], 32, rv).unwrap();
+        // Exact-match table: a NON-host prefix is REJECTED loudly (would otherwise collapse into a
+        // host key that never matches → silent Pass).
+        assert!(w.route_upsert(7, [10, 0, 0, 1], 24, rv).is_err());
+        // v6 host route (/128) is accepted; a non-host v6 prefix is rejected.
+        let ip6 = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01];
+        w.route6_upsert(7, ip6, 128, rv).unwrap();
+        assert!(w.route6_upsert(7, ip6, 64, rv).is_err());
         w.conntrack_flush(CtFlushScope {
             vni: 7,
             guest_ip: [10, 0, 0, 1],

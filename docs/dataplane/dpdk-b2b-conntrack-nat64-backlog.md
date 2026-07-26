@@ -74,9 +74,11 @@ demux this fix exists for now runs on the live serve loop, not just the sim. Con
 multi-lcore writer safety is proven by `nfkit/tests/shared_ct_concurrent_writers.rs` (Task 2:
 N lcores × K disjoint inserts through the single-writer `Mutex`, zero torn reads / dup / loss).
 
-**Remaining (follow-ups):** a GC/eviction sweep over `shared_ct` (via `shared_ct_for_each`/`_remove`)
-is not built yet. The rte_flow `MARK` hardware-steering alternative (needs ConnectX) was
-intentionally not taken — the shared-table software fix is correct without it.
+**Remaining (follow-ups):** the GC/eviction sweep over `shared_ct` IS built (G4:
+`shared_ct_sweep_expired`, run by worker-0 at ~1Hz, reusing the core expiry predicate — see the
+Hardening section below), so expired reverse entries no longer accumulate. The only thing NOT taken
+is the rte_flow `MARK` hardware-steering alternative (needs ConnectX) — intentionally so: the
+shared-table software fix is correct without it.
 
 ---
 
@@ -234,15 +236,26 @@ wiring for the KubeVirt path); mixed veth+tap pools in one process.
 1. **VfBackend (SR-IOV real NIC)** datapath impl — only the `GuestPortBackend` trait seam exists
    (hardware-gated). The **KubeVirt control-plane wiring for TapBackend** (binding plugin + CNI +
    fd-handoff + real-qemu e2e) is the next tap increment.
-2. **Native v6→v6 guest↔guest local delivery** — the worker delivers v4 `Deliver::Local`;
-   a v6-native same-node `Deliver::Local` path isn't wired into the worker yet.
+2. **Native v6→v6 guest↔guest local delivery** — VERIFIED WORKING (2026-07-26). No fix was
+   needed: `process_guest_tx_v6`'s `Deliver::Local` arm already returns
+   `Redirect(dest_tap_ifindex)` with the inner Eth rewritten (dst=guest_mac, src=GW_MAC, ethertype
+   left at 0x86DD/IPv6, no encap), and the worker's guest↔guest routing
+   (`Redirect(ix != uplink) → rings[ifindex_to_index[ix]]`) is ETHERTYPE-AGNOSTIC — so a v6-native
+   same-node `Deliver::Local` composes with the ring handoff exactly as the v4 one does. Proven by
+   `nfkit/tests/guest_local_delivery_v6.rs` (INTERNAL v6 route + dest PortMeta → real
+   `process_guest_tx_v6` asserts `Redirect(DEST_TAP)` + inner-Eth rewrite + unchanged length/IPv6
+   payload, then `LcoreRing` enqueue→dequeue asserts byte-identical delivery).
 3. **Live worker-rebuild-under-traffic e2e for G3** — the control-level recover is proven
    (attach_veth); killing+recovering a slot mid-serve-run is a serve_e2e follow-on.
-4. **`/0` (non-/32) route validation** — the v4 route table is exact-match; the control plane
-   silently accepts a prefix it can't honor (never matches → silent Pass). Add a validation
-   error or LPM support.
-5. **Startup teardown after worker spawn** — a `?` after `guard.disarm()` (e.g. `--addr`
-   parse) returns before the shutdown block, leaking workers/veths (pre-existing; startup-only).
+4. **`/0` (non-/32) route validation** — FIXED: `route_upsert`/`route6_upsert` now `bail!` on a
+   non-host prefix (exact-match table → a non-`/32`(v4)/`/128`(v6) prefix never matches → silent
+   Pass), so the control plane sees a clear error instead of silently accepting it. LPM support is
+   still the alternative if wildcard routes are ever needed.
+5. **Startup teardown after worker spawn** — FIXED: `--addr` is now parsed UP-FRONT (top of `run`),
+   before any pool device is created or worker spawned, so a bad `--addr` can't leak
+   workers/veths. The StartupGuard covers prealloc→spawn, and nothing fallible now runs between
+   `guard.disarm()` and the shutdown block except the tonic serve — whose error routes through
+   `serve_result` (handled AFTER the teardown), not an early `?`.
 6. rte_flow / ConnectX perf phase; M11 hitless-upgrade orchestration (hardware-gated).
 
 ## Cross-refs

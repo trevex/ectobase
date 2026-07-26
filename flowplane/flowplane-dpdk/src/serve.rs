@@ -502,6 +502,12 @@ fn fmt_mac(mac: &[u8; 6]) -> String {
 /// Run the DPDK serve process (see the module doc for the full structure). This is `async` and
 /// hosts the tonic server on the calling (tokio) thread; the datapath runs on a dedicated OS thread.
 pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
+    // Parse the listen address UP-FRONT, before any pool device is created or any worker is spawned,
+    // so a bad `--addr` fails here and CANNOT leak a spawned worker thread or a preallocated pool
+    // device (the teardown for those runs only AFTER the workers join, past the disarmed
+    // StartupGuard). `addr` stays in scope for `serve_with_shutdown(addr, ...)` below.
+    let addr: std::net::SocketAddr = args.addr.parse().context("parse --addr")?;
+
     // ── 2. EAL ────────────────────────────────────────────────────────────────
     // Clamp the queue request to the datapath worker lcores available (lcores - 1): each worker
     // runs on its own non-main lcore, so more queues than workers would leave queues unpolled (and
@@ -921,7 +927,8 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         .set_service_status("", tonic_health::ServingStatus::Serving)
         .await;
 
-    let addr = args.addr.parse().context("parse --addr")?;
+    // `addr` was parsed up-front (see the top of `run`) so a bad `--addr` fails before any worker or
+    // pool device exists; here we just use it.
     println!("serving flowplane-dpdk DataplaneNode on {addr}");
 
     // Graceful shutdown: stop the server on SIGINT (ctrl-c) or SIGTERM (kubelet/`docker stop`).
