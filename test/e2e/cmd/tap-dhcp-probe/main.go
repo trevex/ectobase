@@ -625,7 +625,7 @@ func lbDistributeProbe(iface, lbUnderlay, be1, be2, vip string, count int, to ti
 	be1IP, be2IP := net.ParseIP(be1), net.ParseIP(be2)
 	seen := map[string]bool{}
 	inject := func() error {
-		for i := 0; i < count; i++ {
+		for i := range count {
 			frame, err := buildLbProbeFrame(i, lbUnderlay, vip)
 			if err != nil {
 				return err
