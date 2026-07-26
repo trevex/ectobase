@@ -225,6 +225,58 @@ impl ServeArgs {
     }
 }
 
+/// RAII rollback guard for the PREALLOCATED pool host devices during serve STARTUP. It exists to
+/// close a startup-only leak window: `run` creates the guest veths (`fpg{i}`) via
+/// `port_backend.preallocate` BEFORE any of the later fallible startup calls (EAL/mempool/`Port::
+/// configure`/`LcoreRing::new`/`SharedConfigMaps::new`/`ControlCore`/`DpdkAttachState`/the worker
+/// `.spawn`). Any `?`-return from one of those would otherwise leave the already-created veths on the
+/// host — nothing has taken ownership of teardown yet (the worker thread owns shutdown teardown, and
+/// it isn't running).
+///
+/// The guard is ARMED as devices are created (`track` after each `preallocate`) and covers EVERY `?`
+/// through the worker spawn: on Drop-while-armed it tears down every tracked host device via the
+/// backend. Once `.spawn(...)` succeeds — the closure has moved the guest `Port`s/rings in and will
+/// tear the pool down on shutdown — the guard is `disarm()`ed so the HAPPY path does NOT touch the
+/// devices (no double-teardown; behavior identical to before this guard).
+///
+/// It holds an `Arc<dyn GuestPortBackend>` (a clone of the serve loop's `port_backend`), NOT a `&`,
+/// so tracking is independent of where the `slots`/`Arc` later move (into `guest_pool`/the thread) —
+/// moving those does not disturb the guard. It tracks host_ifnames (cheap `String` clones) only.
+struct StartupGuard {
+    backend: Arc<dyn GuestPortBackend>,
+    host_ifnames: Vec<String>,
+    armed: bool,
+}
+
+impl StartupGuard {
+    fn new(backend: Arc<dyn GuestPortBackend>) -> Self {
+        Self {
+            backend,
+            host_ifnames: Vec::new(),
+            armed: true,
+        }
+    }
+    /// Record a just-created pool host device so a mid-startup failure tears it down.
+    fn track(&mut self, host_ifname: String) {
+        self.host_ifnames.push(host_ifname);
+    }
+    /// Ownership of pool teardown has passed to the worker thread — stop tearing down on Drop.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StartupGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            // Tear down in creation order (idempotent/best-effort per the backend contract).
+            for h in &self.host_ifnames {
+                self.backend.teardown(h);
+            }
+        }
+    }
+}
+
 /// Run the DPDK serve process (see the module doc for the full structure). This is `async` and
 /// hosts the tonic server on the calling (tokio) thread; the datapath runs on a dedicated OS thread.
 pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
@@ -265,6 +317,12 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     // here is a deterministic placeholder (the real guest MAC is programmed at attach). `bound` is
     // `None` for every slot (Task 4 binds them).
     let guest_mtu = args.guest_mtu.unwrap_or(DEFAULT_GUEST_MTU);
+    // RAII startup-rollback guard, ARMED here and kept in scope across EVERY `?` from prealloc through
+    // the worker `.spawn` below. As each pool device is created we `track` it; any early return drops
+    // the guard and tears down what was created so far. We `disarm()` only AFTER the worker thread
+    // takes ownership (it tears the pool down on shutdown). Holds an `Arc` clone of the backend so it
+    // is independent of the `slots`/backend-`Arc` moves that happen later in startup.
+    let mut guard = StartupGuard::new(port_backend.clone());
     let slots: Vec<GuestPortSlot> = match args.backend {
         BackendKind::AfXdp => {
             // First-slice pool cap. The placeholder MAC's last octet is `i as u8` and the ethdev
@@ -281,29 +339,19 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
                 );
             }
             let mut slots = Vec::with_capacity(args.guest_ports as usize);
-            // Track host ifnames we've already created so ANY failure below (this loop OR the guest
-            // ethdev-configure loop) can tear them down before returning — otherwise a mid-pool
-            // failure would leak the veths already on the host (e.g. `fpg0`/`fpg1` if slot 2 fails).
-            let mut created: Vec<String> = Vec::with_capacity(args.guest_ports as usize);
             for i in 0..args.guest_ports {
                 // Route preallocation through the backend (device mechanics: create `fpg{i}` with the
                 // deterministic placeholder MAC — the backend owns the naming/MAC scheme). Not
                 // datapath-significant yet; the real guest MAC is programmed at attach (Task 4).
-                let dev = match port_backend.preallocate(i, guest_mtu) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        // Roll back every device created so far via the backend's teardown, mirroring
-                        // preallocate's own rollback style, then propagate the error. (Task 2/G5
-                        // replaces this hand-rolled rollback with a RAII guard; left as-is here.)
-                        for h in &created {
-                            port_backend.teardown(h);
-                        }
-                        return Err(e).with_context(|| {
-                            format!("create preallocated guest device fpg{i} (slot {i})")
-                        });
-                    }
-                };
-                created.push(dev.host_ifname.clone());
+                //
+                // On failure the `?`-return drops `guard`, tearing down every device tracked so far —
+                // the RAII guard now covers prealloc failures too (no hand-rolled per-slot rollback).
+                let dev = port_backend.preallocate(i, guest_mtu).with_context(|| {
+                    format!("create preallocated guest device fpg{i} (slot {i})")
+                })?;
+                // Track BEFORE building the slot: the device is on the host now, so it must be torn
+                // down on any later early return.
+                guard.track(dev.host_ifname.clone());
                 slots.push(GuestPortSlot {
                     host_ifname: dev.host_ifname,
                     host_ifindex: dev.host_ifindex,
@@ -364,24 +412,18 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     // are moved into the worker thread below, where Task 3 polls their rx queue → `process_guest_tx`.
     let mut guest_ports: Vec<GuestPort> = Vec::with_capacity(slots.len());
     for slot in &slots {
-        let gp = match Port::configure(slot.port_id, 1, &pool) {
-            Ok(gp) => gp,
-            Err(e) => {
-                // A guest ethdev-configure failure leaves the already-created host veths (all of
-                // `slots`) on the host — tear them ALL down before returning so a partial startup
-                // doesn't leak. Drop the guest `GuestPort`s configured so far first (their inner
-                // `Port` Drop = ethdev close, which must precede deleting the underlying links).
-                drop(guest_ports);
-                for s in &slots {
-                    flowplane_device::delete_link(&s.host_ifname);
-                }
-                return Err(anyhow::anyhow!(
-                    "guest port {} ({}) configure failed: {e}",
-                    slot.port_id,
-                    slot.host_ifname
-                ));
-            }
-        };
+        // A guest ethdev-configure failure leaves the already-created host veths on the host; the
+        // `?`-return drops `guest_ports` FIRST (declared after `guard` → drops before it in reverse
+        // order — its inner `Port` Drop = ethdev close, which must precede deleting the links) and
+        // THEN drops `guard`, which tears the tracked veths down. Ordering (ethdev close → link
+        // delete) is thus preserved by the drop order, matching the old hand-rolled rollback.
+        let gp = Port::configure(slot.port_id, 1, &pool).map_err(|e| {
+            anyhow::anyhow!(
+                "guest port {} ({}) configure failed: {e}",
+                slot.port_id,
+                slot.host_ifname
+            )
+        })?;
         println!(
             "guest port {} ({}) up with {} queue(s)",
             slot.port_id,
@@ -548,6 +590,12 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
             });
         })
         .context("spawn datapath worker thread")?;
+
+    // The worker thread is up and OWNS the guest `Port`s/rings (it tears the pool down on shutdown,
+    // see the `attach_state.guest_pool` delete after `workers.join()`). Disarm the startup guard so
+    // the HAPPY path does NOT tear the devices down (no double-teardown; behavior identical to before
+    // the guard). Every fallible startup call from prealloc to here was covered by the armed guard.
+    guard.disarm();
 
     // ── 7. tokio + tonic health (Serving AFTER the datapath thread is up) ───────
     // Readiness contract (mirrors eBPF): the health service reports Serving only once the datapath
@@ -935,6 +983,80 @@ fn worker_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::port_backend::{AssignTarget, HostDevice};
+    use std::sync::Mutex;
+
+    /// A no-EAL fake `GuestPortBackend` that RECORDS `teardown` calls (name + order) so the
+    /// `StartupGuard` Drop behavior can be asserted without creating real veths. Every device-mechanics
+    /// method except `teardown` is `unimplemented!()` — the guard only ever calls `teardown` on Drop.
+    /// The record is `Arc<Mutex<Vec<String>>>` so the fake stays `Send + Sync` (trait bound) and the
+    /// test can inspect it after the guard drops.
+    struct RecordingBackend {
+        torn_down: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl GuestPortBackend for RecordingBackend {
+        fn preallocate(&self, _index: u16, _mtu: u32) -> anyhow::Result<HostDevice> {
+            unimplemented!("not exercised by the StartupGuard tests")
+        }
+        fn assign(
+            &self,
+            _host_ifname: &str,
+            _target: &AssignTarget,
+            _mac: [u8; 6],
+            _mtu: u32,
+        ) -> anyhow::Result<()> {
+            unimplemented!("not exercised by the StartupGuard tests")
+        }
+        fn release(&self, _host_ifname: &str, _target: &AssignTarget) {
+            unimplemented!("not exercised by the StartupGuard tests")
+        }
+        fn is_alive(&self, _slot: &GuestPortSlot) -> bool {
+            unimplemented!("not exercised by the StartupGuard tests")
+        }
+        fn recover(&self, _slot: &mut GuestPortSlot, _pool_port_id: u16) -> anyhow::Result<u32> {
+            unimplemented!("not exercised by the StartupGuard tests")
+        }
+        fn teardown(&self, host_ifname: &str) {
+            self.torn_down.lock().unwrap().push(host_ifname.to_string());
+        }
+    }
+
+    /// An ARMED guard tears down every tracked host device on Drop, in creation order — the
+    /// mid-startup leak fix. Simulates a `?`-return before the worker spawn (guard never disarmed).
+    #[test]
+    fn startup_guard_armed_tears_down_tracked_in_order() {
+        let torn_down = Arc::new(Mutex::new(Vec::new()));
+        let backend: Arc<dyn GuestPortBackend> = Arc::new(RecordingBackend {
+            torn_down: torn_down.clone(),
+        });
+        {
+            let mut guard = StartupGuard::new(backend);
+            guard.track("a".into());
+            guard.track("b".into());
+            guard.track("c".into());
+            // drop here (armed) → teardown a, b, c
+        }
+        assert_eq!(*torn_down.lock().unwrap(), vec!["a", "b", "c"]);
+    }
+
+    /// A DISARMED guard tears NOTHING down on Drop — the happy path where the worker thread has taken
+    /// ownership of the pool. This is what keeps the successful-startup path byte-identical.
+    #[test]
+    fn startup_guard_disarmed_tears_down_nothing() {
+        let torn_down = Arc::new(Mutex::new(Vec::new()));
+        let backend: Arc<dyn GuestPortBackend> = Arc::new(RecordingBackend {
+            torn_down: torn_down.clone(),
+        });
+        {
+            let mut guard = StartupGuard::new(backend);
+            guard.track("a".into());
+            guard.track("b".into());
+            guard.disarm();
+            // drop here (disarmed) → no teardown
+        }
+        assert!(torn_down.lock().unwrap().is_empty());
+    }
 
     #[test]
     fn serve_args_parse_minimal() {
