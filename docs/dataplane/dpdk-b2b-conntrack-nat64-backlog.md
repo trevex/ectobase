@@ -1,9 +1,11 @@
 # DPDK B2b datapath backlog — conntrack + NAT64 gaps
 
-Status: **all three RESOLVED** (2026-07-25); **#1 + #2 now END-TO-END reachable on
-the DPDK serve loop** since guest egress was wired in (2026-07-25, branch
-`feat/dpdk-guest-egress`). #3 (NAT64 ingress) stays latent pending NAT64 *egress*
-wiring (the first guest-egress slice is IPv4 SNAT only).
+Status: **all three RESOLVED + END-TO-END reachable on the DPDK serve loop**
+(2026-07-25). #1 + #2 became reachable when guest egress was wired in (branch
+`feat/dpdk-guest-egress`). #3 (NAT64 ingress) is now reachable too: NAT64 *egress*
+is wired via the worker's inner-ethertype branch (branch
+`feat/dpdk-guest-egress-followups`, Task 1), so `CT_F_NAT64` reverse entries are
+seeded on the live loop.
 
 These three findings came out of the 2026-07-25 datapath correctness sweep. All
 three were **latent when found** — not reachable on the shipping eBPF datapath, and
@@ -64,15 +66,17 @@ handoff is proven by `nfkit/tests/guest_tx_nat_return_handoff.rs` (real write �
 read over one `ComposedMaps`), on top of the existing `multilcore_nat_return.rs`
 cross-lcore demux proof.
 
-**Remaining (follow-ups):** the first slice is SINGLE guest port + SINGLE worker
-(worker 0 owns the pool), so cross-lcore RSS demux is not yet exercised on the *live*
-serve loop — that needs guest egress with `n_queues > 1` and multi-worker guest-port
-partitioning (`multilcore_nat_return.rs` already proves the shared-table demux logic
-itself). True concurrent-writer stress still needs a multi-threaded EAL test (current
-tests drive lcores sequentially); a GC/eviction sweep over `shared_ct` (via
-`shared_ct_for_each`/`_remove`) is not built yet. The rte_flow `MARK` hardware-steering
-alternative (needs ConnectX) was intentionally not taken — the shared-table software
-fix is correct without it.
+**Now exercised cross-lcore on the live loop (2026-07-25, `feat/dpdk-guest-egress-followups`):**
+guest ports are partitioned round-robin across ALL worker lcores (Task 3, `owns(i,q,n_workers)`),
+so a guest's SNAT reverse entry lands in its owning lcore's per-lcore CT + `shared_ct`, and a
+WAN return RSS-steered to a *different* uplink worker resolves via `shared_ct` — the cross-lcore
+demux this fix exists for now runs on the live serve loop, not just the sim. Concurrent
+multi-lcore writer safety is proven by `nfkit/tests/shared_ct_concurrent_writers.rs` (Task 2:
+N lcores × K disjoint inserts through the single-writer `Mutex`, zero torn reads / dup / loss).
+
+**Remaining (follow-ups):** a GC/eviction sweep over `shared_ct` (via `shared_ct_for_each`/`_remove`)
+is not built yet. The rte_flow `MARK` hardware-steering alternative (needs ConnectX) was
+intentionally not taken — the shared-table software fix is correct without it.
 
 ---
 
@@ -120,14 +124,93 @@ the unified dispatch), so sim tests passed while the DPDK path did not exercise 
 reverse CT and asserts the v6-expanded delivery (Redirect, ethertype 0x86DD, dst =
 guest overlay v6). Existing NAT64 byte-parity tests unchanged.
 
-**Remaining (latent):** still not reachable on the live serve loop. The first
-guest-egress slice (`feat/dpdk-guest-egress`) wires only the IPv4 SNAT path
-(`process_guest_tx`), which seeds plain `CT_REWRITE_DST` reverse entries — NOT
-`CT_F_NAT64` ones. NAT64 ingress becomes end-to-end reachable once NAT64 *egress*
-(v6 guest → v4 external) is wired into the serve loop to seed the `CT_F_NAT64`
-reverse entries; the ingress dispatch itself is fixed + covered (sim) and ready.
+**Remaining (latent): NOW WIRED — END-TO-END reachable.** NAT64 egress is wired
+into the serve loop (`feat/dpdk-guest-egress-followups`, Task 1): the worker guest
+block branches on the inner frame's ethertype (offset 12) — an IPv6 frame
+(`0x86DD`) dispatches to `process_guest_tx_nat64` (v6→v4 SNAT + translate + encap),
+while everything else stays on the IPv4 `process_guest_tx` SNAT path. NAT64 egress
+therefore seeds the `CT_F_NAT64 | CT_REWRITE_DST` reverse entries into `shared_ct`,
+so the NAT64 ingress return path (the fixed dispatch above) is now reachable on the
+live serve loop. Native v6→v6 guest egress is still NOT wired (no shared-core
+orchestrator for it yet); only NAT64 v6→v4 is.
+
+**Proven by** `nfkit/tests/guest_tx_nat64_handoff.rs`: over ONE `ComposedMaps` (the
+exact structure a serve worker holds), the real `process_guest_tx_nat64` WRITE
+seeds the discovered `CT_F_NAT64` reverse entry in `shared_ct`, then the real
+`process_uplink_rx` READ (uplink input resolved exactly as the worker does) resolves
+it and v4→v6-EXPANDS the reply to the guest tap (asserts `Redirect(guest_tap)`,
+inner ethertype `0x86DD`, inner IPv6 dst = guest overlay v6) — the NAT64 analogue of
+`guest_tx_nat_return_handoff.rs`.
 
 ---
+
+## 4. Dead guest pool slots (pod netns destroyed WITHOUT detach) — DETECTED + EXCLUDED (live recovery is a follow-up)
+
+**Fixed** (`feat/dpdk-guest-egress-followups`, Task 6). The DPDK attach model binds a
+PREALLOCATED guest af_xdp pool slot (`GuestPortSlot { host_ifname, host_ifindex,
+port_id, bound, dead }`): attach reserves a free slot and moves its placeholder
+guest-end into the pod netns; detach moves it back + frees the slot.
+
+**The hazard:** veth pairs die together. If a pod's netns is destroyed WITHOUT a
+preceding `DetachInterface`, the slot's guest-end vanishes and takes the host-end
+(`fpg{i}`, bound to the af_xdp ethdev port) with it — leaving the slot free
+(`bound.is_none()`) but its ethdev BROKEN. Previously attach could then hand out that
+DEAD slot → the new guest's traffic silently BLACKHOLED.
+
+**What this does:** dead slots are now DETECTED and EXCLUDED from the free pool.
+`flowplane_device::link_exists(host_ifname)` (a cheap sysfs `ifindex` stat) is the
+probe. On the attach reservation path (`node.rs::attach_interface`, under the
+`guest_pool` lock) a first pass marks any free-but-not-yet-dead slot whose host-end no
+longer exists as `dead = true`; the reserve then binds only a LIVE free slot
+(`bound.is_none() && !s.dead`). On detach (`node.rs::detach_interface`), after the
+best-effort unbind, the slot is freed (`bound = None`) only if its host-end still
+exists; if the host-end is GONE it is marked `dead = true` instead. A pool drained by
+dead slots therefore correctly surfaces as `resource_exhausted` ("increase
+--guest-ports") rather than binding a blackhole. All other detach reclaim (purge_vni,
+ports_remove, forget_iface_meta, IPAM release) stays unconditional/best-effort.
+
+**Tested:** `flowplane-dpdk/tests/attach_veth.rs`
+`attach_skips_dead_pool_slot_and_exhausts_when_only_dead_left` (privileged, `#[ignore]`):
+seeds TWO pool slots, attaches guest A (binds slot 0), `delete_link`s slot 0's HOST
+veth out from under it (simulating netns-destroyed — deleting the host-end kills its
+peer too), then attaches guest B and asserts it binds the LIVE slot 1 (NOT the dead
+slot 0), and finally that a third attach with only a dead slot free returns
+`resource_exhausted`. Plus a `flowplane_device::link_exists` unit test.
+
+**Remaining (follow-up): LIVE RECOVERY not implemented.** A dead slot is permanently
+excluded until the serve process restarts. Full recovery — recreate the veth +
+`rte_dev` hotplug detach/attach the af_xdp vdev + reconfigure the ethdev port — is the
+"real" fix but is deliberately deferred: the static-pool model avoids runtime device
+churn, and hotplug is the proper mechanism. Detection-and-exclude is the safe
+first step (never blackhole).
+
+---
+
+## Open follow-ups (DPDK guest-egress, after `feat/dpdk-guest-egress-followups`)
+
+The four gaps above are resolved + end-to-end reachable, and multi-worker partitioning,
+guest↔guest same-node delivery, NAT64 egress, and dead-slot exclusion are all wired
+(`feat/dpdk-guest-egress-followups`). What remains, in rough priority order:
+
+1. **Full-serve af_xdp e2e** — bring up `flowplane-dpdk serve` + preallocated guest ports
+   + gRPC attach + bidirectional packet injection over REAL af_xdp (incl. a two-lcore
+   two-guest guest↔guest delivery). Each datapath seam is independently proven (the handoff
+   tests, `afxdp_datapath.rs`, `attach_veth.rs`, `guest_local_delivery.rs`, `lcore_ring.rs`);
+   the only unproven layer is real-transport polling/timing under the live partition.
+2. **Native v6→v6 guest egress** — the worker guest block dispatches IPv4 (`process_guest_tx`)
+   and NAT64 v6→v4 (`process_guest_tx_nat64`); a native v6→v6 encap path has NO shared-core
+   orchestrator yet, so a v6-native `Deliver::Local`/encap is never produced. Core gap, not
+   serve wiring.
+3. **DPDK-hotplug live dead-slot recovery** — recreate the veth + `rte_dev` hotplug
+   detach/attach the af_xdp vdev + reconfigure the ethdev port, so a slot killed by a
+   netns-destroyed-without-detach recovers without a serve restart (today: detected + excluded).
+4. **`shared_ct` GC/eviction sweep** — periodic reclaim of stale reverse entries via
+   `shared_ct_for_each`/`_remove` (the primitives exist; the sweep does not).
+5. **Startup-rollback consistency** — the serve `run()` startup sequence tears down created
+   guest veths on a guest-port *configure* failure, but a later fallible startup call
+   (`LcoreRing::new`, `SharedConfigMaps::new`) `?`-returns without that teardown, leaking the
+   already-created veths on a rare startup failure. Wrap the whole startup in teardown-on-error
+   for consistency (startup-only, rare).
 
 ## Cross-refs
 

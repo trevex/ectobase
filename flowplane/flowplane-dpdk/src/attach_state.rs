@@ -30,6 +30,16 @@ pub struct GuestPortSlot {
     /// Interface id bound to this slot, or `None` if free. Placeholder type for Task 2 — Task 4
     /// finalizes the binding (it may carry more than the id).
     pub bound: Option<String>,
+    /// `true` once this slot's host-end veth (`host_ifname`) has been detected GONE — the pod's netns
+    /// was destroyed WITHOUT a preceding DetachInterface, so the guest-end vanished and took the
+    /// host-end (bound to the af_xdp ethdev port) with it (veth pairs die together). A dead slot is
+    /// EXCLUDED from the free pool: attach never binds it (that would silently blackhole guest
+    /// traffic), so a pool drained by dead slots correctly surfaces as `resource_exhausted`.
+    ///
+    /// LIVE RECOVERY (recreate the veth + `rte_dev` hotplug detach/attach the af_xdp vdev + reconfigure
+    /// the ethdev port) is a documented further follow-up; the static-pool model deliberately avoids
+    /// runtime device churn, and hotplug is the "real" fix. Defaults to `false` at preallocation.
+    pub dead: bool,
 }
 
 /// One attached container device (veth host end).

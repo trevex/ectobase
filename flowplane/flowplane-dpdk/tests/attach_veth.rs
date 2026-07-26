@@ -85,6 +85,7 @@ fn seed_pool_slot(attach: &DpdkAttachState, host_ifname: &str, port_id: u16) -> 
         host_ifindex: info.host_ifindex,
         port_id,
         bound: None,
+        dead: false,
     });
     info.host_ifindex
 }
@@ -418,6 +419,177 @@ async fn attach_veth_dual_stack() {
     let _ = std::process::Command::new("ip")
         .args(["netns", "del", ns])
         .status();
+}
+
+/// DEAD-SLOT DETECTION (netns-destroyed-without-detach): a free-but-dead pool slot must be EXCLUDED
+/// from attach so guest traffic never blackholes. Seeds TWO real pool slots, attaches guest A (binds
+/// slot 0), then deletes slot 0's HOST veth out from under it (simulating the pod-netns-destroyed
+/// case — deleting the host-end kills its peer too, exactly as when a netns is torn down without a
+/// preceding DetachInterface). A SECOND attach must skip the now-dead slot 0 and bind the LIVE slot 1.
+/// Finally, with only a dead slot left free, a third attach must return `resource_exhausted`.
+/// Needs CAP_NET_ADMIN + EAL.
+#[tokio::test]
+#[ignore = "privileged: needs CAP_NET_ADMIN (veth+netns) + EAL (--no-huge); run under sudo with --ignored --test-threads=1"]
+async fn attach_skips_dead_pool_slot_and_exhausts_when_only_dead_left() {
+    init_eal_once();
+    let shared = Arc::new(SharedConfigMaps::new(0, 1024).expect("SharedConfigMaps"));
+    let (svc, attach_state) = make_svc(shared.clone());
+
+    // Seed TWO real preallocated pool slots (what serve.rs builds at startup).
+    let slot0_host = "fpgtest0";
+    let slot1_host = "fpgtest1";
+    let slot0_ifindex = seed_pool_slot(&attach_state, slot0_host, 1);
+    let slot1_ifindex = seed_pool_slot(&attach_state, slot1_host, 2);
+
+    // Two throwaway netns (one per guest).
+    let ns_a = "fpdead-a-ns";
+    let ns_b = "fpdead-b-ns";
+    for ns in [ns_a, ns_b] {
+        let _ = std::process::Command::new("ip")
+            .args(["netns", "del", ns])
+            .status();
+        let ok = std::process::Command::new("ip")
+            .args(["netns", "add", ns])
+            .status()
+            .expect("ip netns add");
+        assert!(ok.success(), "ip netns add failed — need CAP_NET_ADMIN");
+    }
+    let netns_a = format!("/var/run/netns/{ns_a}");
+    let netns_b = format!("/var/run/netns/{ns_b}");
+
+    // ── Attach guest A: binds the first free live slot (slot 0). ────────────────
+    let iface_a = "dead-a";
+    let resp_a = svc
+        .attach_interface(Request::new(AttachInterfaceRequest {
+            interface_id: iface_a.into(),
+            netns_path: netns_a.clone(),
+            vni: 50,
+            mac: String::new(),
+            requested_ips: vec!["10.0.9.10".into()],
+            device_type: String::new(),
+            tap_name: String::new(),
+        }))
+        .await;
+    assert!(resp_a.is_ok(), "attach A failed: {resp_a:?}");
+    // Guest A must have bound slot 0.
+    {
+        let reg = attach_state.registry.lock().unwrap();
+        let dev = reg.get(iface_a.as_bytes()).expect("registry entry for A");
+        assert_eq!(dev.host_ifindex, slot0_ifindex, "A binds slot 0");
+    }
+
+    // ── Simulate pod-netns-destroyed-without-detach: delete slot 0's HOST veth. ──
+    // Deleting the host-end also kills its peer (the guest-end inside ns_a) — the exact state left
+    // behind when a netns is torn down without a preceding DetachInterface.
+    flowplane_device::delete_link(slot0_host);
+    assert!(
+        !flowplane_device::link_exists(slot0_host),
+        "slot 0 host veth must be gone after delete_link"
+    );
+
+    // Now DetachInterface for A (the CNI does eventually call detach). With A's host-end gone, the
+    // detach dead-branch must mark slot 0 DEAD instead of freeing it for reuse — so slot 0 is now
+    // free-but-dead and MUST be excluded from the free pool.
+    let dresp_a = svc
+        .detach_interface(Request::new(DetachInterfaceRequest {
+            interface_id: iface_a.into(),
+        }))
+        .await;
+    assert!(
+        dresp_a.is_ok(),
+        "detach A must succeed (best-effort): {dresp_a:?}"
+    );
+    {
+        let pool = attach_state.guest_pool.lock().unwrap();
+        let s0 = pool
+            .iter()
+            .find(|s| s.host_ifindex == slot0_ifindex)
+            .expect("slot 0 still present");
+        // Detach marks the slot DEAD instead of freeing it (`bound` stays `Some`) — the plan's
+        // "mark dead=true INSTEAD of freeing (bound=None)". Either way `dead=true` excludes it.
+        assert!(
+            s0.dead,
+            "detach must mark slot 0 DEAD (host-end gone), not free it"
+        );
+    }
+
+    // ── Attach guest B: must SKIP the dead slot 0 and bind the LIVE slot 1. ──
+    let iface_b = "dead-b";
+    let resp_b = svc
+        .attach_interface(Request::new(AttachInterfaceRequest {
+            interface_id: iface_b.into(),
+            netns_path: netns_b.clone(),
+            vni: 51,
+            mac: String::new(),
+            requested_ips: vec!["10.0.9.11".into()],
+            device_type: String::new(),
+            tap_name: String::new(),
+        }))
+        .await;
+    assert!(resp_b.is_ok(), "attach B failed: {resp_b:?}");
+    {
+        let reg = attach_state.registry.lock().unwrap();
+        let dev = reg.get(iface_b.as_bytes()).expect("registry entry for B");
+        assert_eq!(
+            dev.host_ifindex, slot1_ifindex,
+            "B must bind the LIVE slot 1, NOT the dead slot 0"
+        );
+        assert_eq!(dev.host_name, slot1_host, "B's host_ifname == slot 1");
+    }
+    // Slot 0 must still be dead and must NOT have been bound to B (attach excluded it).
+    {
+        let pool = attach_state.guest_pool.lock().unwrap();
+        let s0 = pool
+            .iter()
+            .find(|s| s.host_ifindex == slot0_ifindex)
+            .expect("slot 0 still present");
+        assert!(s0.dead, "slot 0 must stay marked dead");
+        assert!(
+            s0.bound.as_deref() != Some(iface_b),
+            "dead slot 0 must not have been bound to B"
+        );
+    }
+
+    // ── With only a dead slot free (slot 1 now bound to B), a third attach must exhaust. ──
+    let ns_c = "fpdead-c-ns";
+    let _ = std::process::Command::new("ip")
+        .args(["netns", "del", ns_c])
+        .status();
+    let ok = std::process::Command::new("ip")
+        .args(["netns", "add", ns_c])
+        .status()
+        .expect("ip netns add");
+    assert!(ok.success());
+    let netns_c = format!("/var/run/netns/{ns_c}");
+    let resp_c = svc
+        .attach_interface(Request::new(AttachInterfaceRequest {
+            interface_id: "dead-c".into(),
+            netns_path: netns_c.clone(),
+            vni: 52,
+            mac: String::new(),
+            requested_ips: vec!["10.0.9.12".into()],
+            device_type: String::new(),
+            tap_name: String::new(),
+        }))
+        .await;
+    assert!(
+        resp_c.is_err(),
+        "attach C must fail (only a dead slot free)"
+    );
+    assert_eq!(
+        resp_c.unwrap_err().code(),
+        tonic::Code::ResourceExhausted,
+        "attach C must be resource_exhausted (dead slot excluded from the free pool)"
+    );
+
+    // Cleanup: slot 0's veth is already gone; delete slot 1's + the netns.
+    flowplane_device::delete_link(slot0_host);
+    flowplane_device::delete_link(slot1_host);
+    for ns in [ns_a, ns_b, ns_c] {
+        let _ = std::process::Command::new("ip")
+            .args(["netns", "del", ns])
+            .status();
+    }
 }
 
 /// Non-veth device_type is rejected with InvalidArgument. No EAL needed (rejected before any work).
