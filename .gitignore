@@ -26,3 +26,6 @@ test/e2e/fixtures/multicluster/agent-overlay/patch.reflector.yaml
 # kubevirt-vm-e2e.sh renders these from *.tmpl (named-placeholder substitution at run time)
 test/e2e/fixtures/kubevirt/vpc-nics.yaml
 test/e2e/fixtures/kubevirt/vmi.yaml
+
+# Go tap-dhcp-probe binary built by test/tap-dhcp-probe.sh + tc-*-netns.sh scripts
+test/e2e/tap-dhcp-probe.bin
