@@ -12,6 +12,13 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env.sh"
+
+# Resolve external tools to ABSOLUTE paths ONCE (PATH-robust; see hack/clab-up.sh).
+KIND="$(command -v kind)"       ; : "${KIND:?kind not found on PATH — run inside 'nix develop'}"
+DOCKER="$(command -v docker)"   ; : "${DOCKER:?docker not found on PATH}"
+HELM="$(command -v helm)"       ; : "${HELM:?helm not found on PATH — run inside 'nix develop'}"
+KUBECTL="$(command -v kubectl)" ; : "${KUBECTL:?kubectl not found on PATH — run inside 'nix develop'}"
+
 CLUSTER="${1:?usage: cilium-up.sh <kind-cluster-name> [control-plane-container]}"
 CP="${2:-${CLUSTER}-control-plane}"
 # CILIUM_VERSION (default in hack/clab/env.sh): 1.20+ is required on nftables-only host kernels (no
@@ -21,28 +28,28 @@ CP="${2:-${CLUSTER}-control-plane}"
 VALUES="${HERE}/cilium-values.yaml"
 
 KC="$(mktemp)"; trap 'rm -f "$KC"' EXIT
-kind get kubeconfig --name "$CLUSTER" > "$KC"
+"$KIND" get kubeconfig --name "$CLUSTER" > "$KC"
 export KUBECONFIG="$KC"
 
 # With kube-proxy replaced there is no ClusterIP to bootstrap against, so the agents must
 # reach the API server directly. Use the control-plane container's kind-network IPv6 (kubeadm
 # advertises the API server there); it is reachable from every node over the kind docker net.
-API_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.GlobalIPv6Address}} {{end}}' "$CP" 2>/dev/null | tr ' ' '\n' | grep -m1 . || true)"
+API_IP="$("$DOCKER" inspect -f '{{range .NetworkSettings.Networks}}{{.GlobalIPv6Address}} {{end}}' "$CP" 2>/dev/null | tr ' ' '\n' | grep -m1 . || true)"
 [ -n "$API_IP" ] || { echo "cilium-up: could not resolve API server IPv6 for $CP" >&2; exit 1; }
 
 # clab returns as soon as `kind create` finishes (deploy wait 0s); give the API a moment.
-for _ in $(seq 1 60); do kubectl get --raw='/healthz' >/dev/null 2>&1 && break; sleep 2; done
+for _ in $(seq 1 60); do "$KUBECTL" get --raw='/healthz' >/dev/null 2>&1 && break; sleep 2; done
 
-helm repo add cilium https://helm.cilium.io >/dev/null 2>&1 || true
-helm repo update cilium >/dev/null 2>&1 || true
+"$HELM" repo add cilium https://helm.cilium.io >/dev/null 2>&1 || true
+"$HELM" repo update cilium >/dev/null 2>&1 || true
 
 echo "cilium-up: installing Cilium ${CILIUM_VERSION} on ${CLUSTER} (API [${API_IP}]:6443)"
-helm upgrade --install cilium cilium/cilium \
+"$HELM" upgrade --install cilium cilium/cilium \
   --version "$CILIUM_VERSION" --namespace kube-system \
   -f "$VALUES" \
   --set k8sServiceHost="$API_IP" --set k8sServicePort=6443 \
   --wait --timeout 180s
 
 echo "cilium-up: waiting for nodes Ready (${CLUSTER})..."
-kubectl wait --for=condition=Ready nodes --all --timeout=180s
+"$KUBECTL" wait --for=condition=Ready nodes --all --timeout=180s
 echo "cilium-up: ${CLUSTER} ready"

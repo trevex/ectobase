@@ -12,10 +12,12 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/clab/env.sh"
 TOPO="${HERE}/clab/ipv6-fabric.clab.yml"
-CLAB="${CLAB:-containerlab}"
 
-command -v "${CLAB%% *}" >/dev/null 2>&1 || { echo "clab-up: containerlab not found on PATH" >&2; exit 1; }
-command -v kind >/dev/null 2>&1 || { echo "clab-up: kind not found on PATH" >&2; exit 1; }
+# Resolve external tools to ABSOLUTE paths ONCE, so invocations run the real binary
+# regardless of PATH quirks (NixOS root secure_path drops nix-provided tools).
+CLAB="$(command -v "${CLAB:-containerlab}")"; : "${CLAB:?containerlab not found on PATH — run inside 'nix develop'}"
+KIND="$(command -v kind)"                   ; : "${KIND:?kind not found on PATH — run inside 'nix develop'}"
+DOCKER="$(command -v docker)"               ; : "${DOCKER:?docker not found on PATH}"
 
 # Defensive: clear leaked flowplane BPF pins from any prior crashed run before we
 # stand a new fabric up, so kernel memory doesn't compound across up/down cycles.
@@ -26,7 +28,7 @@ HOST_ONLY=1 bash "${HERE}/bpf-cleanup.sh" || echo "clab-up: bpf-cleanup (pre-dep
 # Build it if missing, and render the per-node prefix mount paths to absolutes
 # (kind rejects relative extraMounts hostPaths).
 REPO="$(cd "${HERE}/.." && pwd)"
-if ! docker image inspect "${CLAB_IMAGE_KINDNODE}" >/dev/null 2>&1; then
+if ! "$DOCKER" image inspect "${CLAB_IMAGE_KINDNODE}" >/dev/null 2>&1; then
   make -C "${REPO}" image-kindnode
 fi
 PREFIX_DIR="${HERE}/clab/prefixes"
@@ -59,7 +61,7 @@ sysctl -w net.bridge.bridge-nf-call-ip6tables=0 >/dev/null 2>&1 \
 # input/output error") and clab loops FOREVER. So when stdout is not a TTY, run the deploy under
 # script(1) to give it a pty. (Interactive runs already have one and take the direct path.)
 if [ -t 1 ]; then
-  ${CLAB} deploy --reconfigure -t "${TOPO}" "$@"
+  "${CLAB}" deploy --reconfigure -t "${TOPO}" "$@"
 else
   script -qefc "${CLAB} deploy --reconfigure -t ${TOPO} $*" /dev/null
 fi
