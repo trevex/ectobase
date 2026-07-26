@@ -56,10 +56,14 @@ func TestLbDistributeSmoke(t *testing.T) {
 		}
 	}
 
+	// node + grpcAddr come from env.go (mirrors hack/clab/env.sh); VIP params below
+	// are LB-smoke-specific (no env.sh equivalent).
+	var (
+		node     = WorkerNode
+		grpcAddr = DefaultDataplaneAddr
+	)
 	const (
-		node     = "k01-worker"
-		grpcAddr = "127.0.0.1:1337"
-		vni      = uint32(0) // VNI 0 = WAN edge (no VNI encap)
+		vni = uint32(0) // VNI 0 = WAN edge (no VNI encap)
 
 		// VIP parameters.
 		lbID        = "lb-smoke0"
@@ -273,10 +277,13 @@ func TestDhcpLeaseSmoke(t *testing.T) {
 		}
 	}
 
+	// node + grpcAddr come from env.go (mirrors hack/clab/env.sh); the DHCP-smoke
+	// scenario params below have no env.sh equivalent.
+	var (
+		node     = WorkerNode
+		grpcAddr = DefaultDataplaneAddr
+	)
 	const (
-		node     = "k01-worker"
-		grpcAddr = "127.0.0.1:1337"
-
 		vni       = uint32(300)
 		guestID   = "dhcpsmoke0"
 		guestIP   = "10.1.0.7"

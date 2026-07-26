@@ -1,0 +1,6 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The VPC + NetworkInterface CRs for the multicluster e2e (applied to k01/central).
+resources:
+  - vpc-nics.yaml

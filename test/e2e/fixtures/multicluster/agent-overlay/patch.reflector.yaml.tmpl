@@ -1,0 +1,13 @@
+# Template for the JSON6902 patch that overrides ONLY the netplane-agent's
+# --reflector arg (args index 2) with the fabric reflector from hack/clab/env.sh.
+# hack/multicluster-e2e.sh renders this to patch.reflector.yaml via envsubst
+# (restricted to the reflector addr + port vars) before `kubectl kustomize`.
+# The rendered file is gitignored.
+#
+# args index 2 == the "--reflector=..." entry in config/deploy/agent.yaml's
+# container[0].args (0=--node-id, 1=--underlay, 2=--reflector, ...). Replacing a
+# single indexed element is the kustomize-idiomatic way to target one arg without
+# regex-matching YAML content.
+- op: replace
+  path: /spec/template/spec/containers/0/args/2
+  value: '--reflector=[${CLAB_FABRIC_REFLECTOR6}]:${CLAB_REFLECTOR_PORT}'

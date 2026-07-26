@@ -35,10 +35,15 @@ func TestUnderlayInferenceOnFabric(t *testing.T) {
 
 	// The kind node container clab attaches (see ipv6-fabric.clab.yml) and the /64
 	// its dummy0 carries. flowplane must infer exactly this /64.
+	// kindNode + xdpImage come from env.go (mirrors hack/clab/env.sh). wantPrefix is
+	// the /64 the fabric topology puts on dummy0 (FabricReflector6's /64); it is a
+	// topology fact, not an env.sh knob, so it stays local.
+	var (
+		kindNode = NodeA          // k01-control-plane
+		xdpImage = ImageFlowplane // ghcr.io/trevex/ectobase/flowplane:dev
+	)
 	const (
-		kindNode       = "k01-control-plane"
 		wantPrefix     = "fd00:db8:0:1::/64"
-		xdpImage       = "ghcr.io/trevex/ectobase/flowplane:dev"
 		deployTimeout  = 15 * time.Minute
 		commandTimeout = 5 * time.Minute
 	)

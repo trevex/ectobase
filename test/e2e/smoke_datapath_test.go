@@ -38,18 +38,22 @@ func TestNatEgressSmoke(t *testing.T) {
 		}
 	}
 
-	const (
+	// node + grpcAddr come from env.go (mirrors hack/clab/env.sh). The nat-egress
+	// scenario params below (vni 200, guestIP, natIP, ports) are smoke-specific and
+	// have no env.sh equivalent, so they stay local.
+	var (
 		// The worker node is the "hypervisor" that runs flowplane and hosts the guest.
-		node = "k01-worker"
-
+		node     = WorkerNode
+		grpcAddr = DefaultDataplaneAddr
+	)
+	const (
 		// Overlay/VPC parameters.
-		vni      = uint32(200)
-		guestID  = "natsmoke0"
-		guestIP  = "10.1.0.5"
-		natIP    = "203.0.113.5"
-		portMin  = uint32(1024)
-		portMax  = uint32(2047)
-		grpcAddr = "127.0.0.1:1337"
+		vni     = uint32(200)
+		guestID = "natsmoke0"
+		guestIP = "10.1.0.5"
+		natIP   = "203.0.113.5"
+		portMin = uint32(1024)
+		portMax = uint32(2047)
 
 		// External default route nexthop: the WAN-edge underlay /128 (edge1 in the
 		// ipv6-fabric topology). uplink_rx on the worker decaps returns from this nexthop.

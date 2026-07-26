@@ -1,0 +1,18 @@
+# Multicluster e2e fixtures — the VPC + NetworkInterface CRs formerly inlined as a
+# heredoc in hack/multicluster-e2e.sh. Applied to k01 (central) via `apply -k`.
+#   VPC blue (vni 100); nic-a=10.0.0.1 on k01-control-plane, nic-c=10.0.0.3 on k02-control-plane.
+# Kept byte-equivalent (same names/vni/ips/nodeNames) to the former heredoc.
+apiVersion: net.ectobase.dev/v1alpha1
+kind: VPC
+metadata: {name: blue, namespace: default}
+spec: {vni: 100}
+---
+apiVersion: net.ectobase.dev/v1alpha1
+kind: NetworkInterface
+metadata: {name: nic-a, namespace: default}
+spec: {vpcRef: {name: blue}, ips: ["10.0.0.1"], nodeName: k01-control-plane}
+---
+apiVersion: net.ectobase.dev/v1alpha1
+kind: NetworkInterface
+metadata: {name: nic-c, namespace: default}
+spec: {vpcRef: {name: blue}, ips: ["10.0.0.3"], nodeName: k02-control-plane}

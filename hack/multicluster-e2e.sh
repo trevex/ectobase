@@ -16,11 +16,19 @@
 #
 # Prereqs: the two-cluster fabric is up (sudo ./hack/clab-up.sh), and the images
 # ghcr.io/trevex/ectobase/{flowplane,netplane}:dev are built. Run from the repo root.
-set -uo pipefail
+set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/clab/env.sh"
 export PATH="$HOME/go/bin:$PATH"
 
-REFLECTOR6="fd00:db8:0:1::1"            # k01 control-plane fabric loopback
+# Resolve external tools to ABSOLUTE paths ONCE, so `sudo "$TOOL"` runs the real
+# binary regardless of root's secure_path (NixOS drops nix-provided tools from root's
+# PATH). No sudo passthrough shim needed.
+KIND="$(command -v kind)"       ; : "${KIND:?kind not found on PATH — run inside 'nix develop'}"
+DOCKER="$(command -v docker)"   ; : "${DOCKER:?docker not found on PATH}"
+KUBECTL="$(command -v kubectl)" ; : "${KUBECTL:?kubectl not found on PATH — run inside 'nix develop'}"
+
+REFLECTOR6="${CLAB_FABRIC_REFLECTOR6}"  # k01 control-plane fabric loopback (default in hack/clab/env.sh)
 APISERVER6="https://[${REFLECTOR6}]:6443"
 # Per-run, USER-OWNED kubeconfig files. Do NOT use fixed /tmp paths: `sudo kind get kubeconfig > file`
 # runs the redirect as the invoking user, so if a fixed path is left ROOT-owned by an earlier full-sudo
@@ -31,46 +39,64 @@ K2=$(mktemp -t k02.kubeconfig.XXXXXX)
 trap 'rm -f "$K1" "$K2"' EXIT
 GRPCURL_IMG="fullstorydev/grpcurl:latest"
 PROTO_MNT="-v $(pwd)/api/proto:/proto:ro"
-XDP=ghcr.io/trevex/ectobase/flowplane:dev
-NETPLANE=ghcr.io/trevex/ectobase/netplane:dev
+XDP="${CLAB_IMAGE_FLOWPLANE}"
+NETPLANE="${CLAB_IMAGE_NETPLANE}"
 
 say() { echo -e "\n=== $* ==="; }
 
+say "preflight: required container images present locally"
+# Fail LOUDLY here rather than during `kind load` if the :dev images were never built.
+# We do NOT auto-build — the caller must build them first (flowplane=`make image TAG=dev`,
+# netplane=`make image-netplane TAG=dev`).
+for img in "$XDP" "$NETPLANE"; do
+  "$DOCKER" image inspect "$img" >/dev/null 2>&1 \
+    || { echo "ERROR: image $img not found — build it first ('make image TAG=dev' for flowplane, 'make image-netplane TAG=dev' for netplane)" >&2; exit 1; }
+done
+
 say "kubeconfigs"
-sudo kind get kubeconfig --name k01 > "$K1"
-sudo kind get kubeconfig --name k02 > "$K2"
+sudo "$KIND" get kubeconfig --name "$CLAB_KIND_CENTRAL" > "$K1"
+sudo "$KIND" get kubeconfig --name "$CLAB_KIND_COMPUTE" > "$K2"
 # Fail fast with a clear message if a kubeconfig points at a dead api-server (stale port etc.),
 # instead of letting every later kubectl fail with a cryptic connection-refused.
-for kc in "$K1:k01" "$K2:k02"; do
+for kc in "$K1:$CLAB_KIND_CENTRAL" "$K2:$CLAB_KIND_COMPUTE"; do
   f="${kc%:*}"; name="${kc#*:}"
-  kubectl --kubeconfig "$f" get --raw='/healthz' >/dev/null 2>&1 \
+  "$KUBECTL" --kubeconfig "$f" get --raw='/healthz' >/dev/null 2>&1 \
     || { echo "FATAL: cannot reach $name api-server ($(grep -oE 'server: .*' "$f")). Is the cluster up? Re-run hack/clab-up.sh." >&2; exit 1; }
 done
-kubectl --kubeconfig "$K1" get nodes -o name
-kubectl --kubeconfig "$K2" get nodes -o name
+"$KUBECTL" --kubeconfig "$K1" get nodes -o name
+"$KUBECTL" --kubeconfig "$K2" get nodes -o name
 
 say "load images into both clusters"
-for c in k01 k02; do
-  sudo kind load docker-image "$XDP" --name "$c" 2>&1 | tail -1
-  sudo kind load docker-image "$NETPLANE" --name "$c" 2>&1 | tail -1
+for c in "$CLAB_KIND_CENTRAL" "$CLAB_KIND_COMPUTE"; do
+  sudo "$KIND" load docker-image "$XDP" --name "$c" 2>&1 | tail -1
+  sudo "$KIND" load docker-image "$NETPLANE" --name "$c" 2>&1 | tail -1
 done
 
 say "k01 (central): CRDs + full stack (reflector + flowplane + agent)"
-kubectl --kubeconfig "$K1" apply -k config/crd 2>&1 | tail -1
-kubectl --kubeconfig "$K1" apply -k config/deploy 2>&1 | grep -E 'created|configured|unchanged' | tail -6
+"$KUBECTL" --kubeconfig "$K1" apply -k config/crd 2>&1 | tail -1
+# apply MUST abort on failure (-e via pipefail on the apply exit), but the grep is only for
+# display — guard it with `|| true` so a good apply whose output doesn't match the filter
+# (or is empty) does not false-abort the run.
+"$KUBECTL" --kubeconfig "$K1" apply -k config/deploy 2>&1 | { grep -E 'created|configured|unchanged' || true; } | tail -6
 
 say "mint a k01 token for the k02 agent (cross-cluster brokering)"
-kubectl --kubeconfig "$K1" -n ectobase-system create serviceaccount netplane-agent 2>/dev/null || true
-TOKEN=$(kubectl --kubeconfig "$K1" -n ectobase-system create token netplane-agent --duration=8760h)
-[ -n "$TOKEN" ] && echo "token minted (${#TOKEN} chars)"
+"$KUBECTL" --kubeconfig "$K1" -n ectobase-system create serviceaccount netplane-agent 2>/dev/null || true
+TOKEN=$("$KUBECTL" --kubeconfig "$K1" -n ectobase-system create token netplane-agent --duration=8760h)
+[ -n "$TOKEN" ] || { echo "FATAL: failed to mint k01 token for the k02 agent" >&2; exit 1; }
+echo "token minted (${#TOKEN} chars)"
 
 say "k02 (compute): namespace + flowplane DS + agent (points at k01 central over the fabric)"
-kubectl --kubeconfig "$K2" apply -f config/deploy/namespace.yaml
-kubectl --kubeconfig "$K2" apply -f config/deploy/rbac.yaml
-kubectl --kubeconfig "$K2" apply -f config/deploy/flowplane.yaml
+"$KUBECTL" --kubeconfig "$K2" apply -f config/deploy/namespace.yaml
+"$KUBECTL" --kubeconfig "$K2" apply -f config/deploy/rbac.yaml
+"$KUBECTL" --kubeconfig "$K2" apply -f config/deploy/flowplane.yaml
 # k02 agent kubeconfig: explicit k01 token (not the local SA), server = k01 API on the fabric.
-kubectl --kubeconfig "$K2" -n ectobase-system create configmap netplane-agent-kubeconfig \
-  --from-literal=kubeconfig="apiVersion: v1
+# The kubeconfig CONTENT is runtime-generated (per-run k01 token + fabric apiserver addr), so it
+# is materialised in a temp file and loaded via --from-file — that's data-from-a-file, not an inline
+# manifest, which is acceptable (the heredoc-removal target is the STATIC CR/agent YAML, done below).
+KCFG=$(mktemp -t netplane-agent.kubeconfig.XXXXXX)
+trap 'rm -f "$K1" "$K2" "$KCFG"' EXIT
+cat > "$KCFG" <<EOF
+apiVersion: v1
 kind: Config
 clusters:
   - name: central
@@ -85,71 +111,91 @@ contexts:
   - name: central
     context: {cluster: central, user: sa}
 current-context: central
-" --dry-run=client -o yaml | kubectl --kubeconfig "$K2" apply -f -
-# k02 agent DS: same image, reflector on the fabric, kubeconfig = the central one above.
-sed -e 's#\(--reflector=\).*#\1[fd00:db8:0:1::1]:1338"#' config/deploy/agent.yaml \
-  | kubectl --kubeconfig "$K2" apply -f -
-kubectl --kubeconfig "$K2" -n ectobase-system rollout status ds/flowplane --timeout=90s 2>&1 | tail -1
+EOF
+"$KUBECTL" --kubeconfig "$K2" -n ectobase-system create configmap netplane-agent-kubeconfig \
+  --from-file=kubeconfig="$KCFG" --dry-run=client -o yaml | "$KUBECTL" --kubeconfig "$K2" apply -f -
+# k02 agent DS: same image, reflector on the fabric, kubeconfig = the central one above. The
+# reflector override lives in an all-kustomize overlay (test/e2e/fixtures/multicluster/agent-overlay,
+# a JSON6902 replace on the --reflector args index — no regex-on-YAML). The reflector addr comes from
+# env.sh at run time, so the patch is rendered from a .tmpl via envsubst (restricted to the two vars) first. We render
+# via `kubectl kustomize | apply -f -` (not `apply -k`): the overlay references the shared base
+# config/deploy/agent.yaml which lives OUTSIDE the overlay dir, so it needs --load-restrictor
+# LoadRestrictionsNone, a flag `kubectl apply -k` does not accept but `kubectl kustomize` does. This
+# keeps agent.yaml the single source of truth (no copy/drift).
+AGENT_OVERLAY="test/e2e/fixtures/multicluster/agent-overlay"
+envsubst '${CLAB_FABRIC_REFLECTOR6} ${CLAB_REFLECTOR_PORT}' \
+    < "$AGENT_OVERLAY/patch.reflector.yaml.tmpl" > "$AGENT_OVERLAY/patch.reflector.yaml"
+"$KUBECTL" kustomize --load-restrictor LoadRestrictionsNone "$AGENT_OVERLAY" \
+  | "$KUBECTL" --kubeconfig "$K2" apply -f -
+"$KUBECTL" --kubeconfig "$K2" -n ectobase-system rollout status ds/flowplane --timeout=90s 2>&1 | tail -1
 
 say "VPC + NetworkInterfaces in k01 (central): 10.0.0.1 on k01-cp, 10.0.0.3 on k02-cp"
-kubectl --kubeconfig "$K1" apply -f - <<'EOF'
-apiVersion: net.ectobase.dev/v1alpha1
-kind: VPC
-metadata: {name: blue, namespace: default}
-spec: {vni: 100}
----
-apiVersion: net.ectobase.dev/v1alpha1
-kind: NetworkInterface
-metadata: {name: nic-a, namespace: default}
-spec: {vpcRef: {name: blue}, ips: ["10.0.0.1"], nodeName: k01-control-plane}
----
-apiVersion: net.ectobase.dev/v1alpha1
-kind: NetworkInterface
-metadata: {name: nic-c, namespace: default}
-spec: {vpcRef: {name: blue}, ips: ["10.0.0.3"], nodeName: k02-control-plane}
-EOF
-kubectl --kubeconfig "$K1" patch vpc blue --subresource=status --type=merge -p '{"status":{"vni":100,"state":"Ready"}}'
+# The VPC + NetworkInterface CRs live in an all-kustomize fixture (was an inline heredoc).
+"$KUBECTL" --kubeconfig "$K1" apply -k test/e2e/fixtures/multicluster/
+"$KUBECTL" --kubeconfig "$K1" patch vpc blue --subresource=status --type=merge -p '{"status":{"vni":100,"state":"Ready"}}'
 
 # attach_endpoint <node-container> <iface-id> <overlay-ip>  -> prints allocated underlay /128
 attach_endpoint() {
   local node="$1" id="$2" ip="$3"
-  sudo docker exec "$node" ip netns add "$id" 2>/dev/null || true
+  sudo "$DOCKER" exec "$node" ip netns add "$id" 2>/dev/null || true
   local out ul
-  out=$(sudo docker run --rm --network "container:$node" $PROTO_MNT "$GRPCURL_IMG" -plaintext \
+  out=$(sudo "$DOCKER" run --rm --network "container:$node" $PROTO_MNT "$GRPCURL_IMG" -plaintext \
     -import-path /proto/dataplane/v1 -proto dataplane.proto \
-    -d "{\"interface_id\":\"$id\",\"netns_path\":\"/var/run/netns/$id\",\"vni\":100,\"requested_ips\":[\"$ip\"]}" \
-    127.0.0.1:1337 dataplane.v1.DataplaneNode/AttachInterface 2>&1)
-  ul=$(echo "$out" | grep -o 'fd00:[0-9a-f:]*' | head -1)
-  # dpservice-model addressing inside the endpoint netns
-  sudo docker exec "$node" sh -c "ip netns exec $id ip addr add $ip/32 dev $id; \
+    -d "{\"interface_id\":\"$id\",\"netns_path\":\"/var/run/netns/$id\",\"vni\":${CLAB_VNI},\"requested_ips\":[\"$ip\"]}" \
+    "127.0.0.1:${CLAB_DATAPLANE_PORT}" dataplane.v1.DataplaneNode/AttachInterface 2>&1)
+  # grep may find nothing on a transient/failed attach; don't let -e abort here — the
+  # empty underlay is surfaced later (the CRD patch + ping are the real arbiters).
+  ul=$(echo "$out" | grep -o 'fd00:[0-9a-f:]*' | head -1 || true)
+  # dpservice-model addressing inside the endpoint netns (best-effort: addr/route may
+  # already exist on a re-run).
+  sudo "$DOCKER" exec "$node" sh -c "ip netns exec $id ip addr add $ip/32 dev $id; \
     ip netns exec $id ip route add 169.254.0.1/32 dev $id; \
-    ip netns exec $id ip route add default via 169.254.0.1 dev $id" 2>/dev/null
+    ip netns exec $id ip route add default via 169.254.0.1 dev $id" 2>/dev/null || true
   echo "$ul"
 }
 
 say "attach endpoints on both clusters' nodes"
-UL_A=$(attach_endpoint k01-control-plane nic-a 10.0.0.1); echo "k01 nic-a underlay=$UL_A"
-UL_C=$(attach_endpoint k02-control-plane nic-c 10.0.0.3); echo "k02 nic-c underlay=$UL_C"
+UL_A=$(attach_endpoint "$CLAB_NODE_A" nic-a "$CLAB_OVERLAY_IP_A"); echo "$CLAB_NODE_A nic-a underlay=$UL_A"
+UL_C=$(attach_endpoint "$CLAB_NODE_C" nic-c "$CLAB_OVERLAY_IP_C"); echo "$CLAB_NODE_C nic-c underlay=$UL_C"
 
 say "record allocated underlay /128s in the CRD status (agent announces these)"
-kubectl --kubeconfig "$K1" patch networkinterface nic-a --subresource=status --type=merge \
-  -p "{\"status\":{\"vni\":100,\"underlayRoute\":\"$UL_A\",\"state\":\"Ready\"}}"
-kubectl --kubeconfig "$K1" patch networkinterface nic-c --subresource=status --type=merge \
-  -p "{\"status\":{\"vni\":100,\"underlayRoute\":\"$UL_C\",\"state\":\"Ready\"}}"
-kubectl --kubeconfig "$K1" -n ectobase-system rollout restart ds/netplane-agent
-kubectl --kubeconfig "$K2" -n ectobase-system rollout restart ds/netplane-agent
+"$KUBECTL" --kubeconfig "$K1" patch networkinterface nic-a --subresource=status --type=merge \
+  -p "{\"status\":{\"vni\":${CLAB_VNI},\"underlayRoute\":\"$UL_A\",\"state\":\"Ready\"}}"
+"$KUBECTL" --kubeconfig "$K1" patch networkinterface nic-c --subresource=status --type=merge \
+  -p "{\"status\":{\"vni\":${CLAB_VNI},\"underlayRoute\":\"$UL_C\",\"state\":\"Ready\"}}"
+"$KUBECTL" --kubeconfig "$K1" -n ectobase-system rollout restart ds/netplane-agent
+"$KUBECTL" --kubeconfig "$K2" -n ectobase-system rollout restart ds/netplane-agent
 sleep 18
 
 say "routes learned cross-cluster? (k02's flowplane should have 10.0.0.1 via k01's underlay)"
-K2X=$(sudo docker exec k02-control-plane crictl ps --name flowplane -o json 2>/dev/null | grep -o '"id": "[a-f0-9]*"' | head -1 | cut -d'"' -f4)
-sudo docker exec k02-control-plane crictl logs "$K2X" 2>&1 | grep -i ROUTE | tail -4
+# Informational only: crictl/grep may legitimately return empty mid-convergence, so don't
+# let -e abort — the ping below is the arbiter of cross-cluster route distribution.
+K2X=$(sudo "$DOCKER" exec "$CLAB_NODE_C" crictl ps --name flowplane -o json 2>/dev/null | grep -o '"id": "[a-f0-9]*"' | head -1 | cut -d'"' -f4 || true)
+if [ -n "$K2X" ]; then
+  sudo "$DOCKER" exec "$CLAB_NODE_C" crictl logs "$K2X" 2>&1 | grep -i ROUTE | tail -4 || true
+fi
 
 say "stage busybox (musl) for ping"
-CID=$(sudo docker create busybox:musl); sudo docker cp "$CID":/bin/busybox /tmp/busybox-musl >/dev/null; sudo docker rm "$CID" >/dev/null
-sudo docker cp /tmp/busybox-musl k01-control-plane:/busybox
-sudo docker cp /tmp/busybox-musl k02-control-plane:/busybox
+BUSYBOX="$(mktemp -t busybox-musl.XXXXXX)"
+trap 'rm -f "$K1" "$K2" "$KCFG" "$BUSYBOX"' EXIT
+CID=$(sudo "$DOCKER" create busybox:musl); sudo "$DOCKER" cp "$CID":/bin/busybox "$BUSYBOX" >/dev/null; sudo "$DOCKER" rm "$CID" >/dev/null
+sudo "$DOCKER" cp "$BUSYBOX" "$CLAB_NODE_A":/busybox
+sudo "$DOCKER" cp "$BUSYBOX" "$CLAB_NODE_C":/busybox
 
-say "CROSS-CLUSTER OVERLAY PING: k01 nic-a 10.0.0.1  -->  k02 nic-c 10.0.0.3"
-sudo docker exec k01-control-plane ip netns exec nic-a /busybox ping -c 3 -W 2 10.0.0.3 2>&1 | tail -5
-say "reverse: k02 nic-c 10.0.0.3  -->  k01 nic-a 10.0.0.1"
-sudo docker exec k02-control-plane ip netns exec nic-c /busybox ping -c 3 -W 2 10.0.0.1 2>&1 | tail -5
+# The pings are the FINAL arbiter. A dropped packet makes ping exit non-zero, so we must
+# NOT let -e abort mid-ping — capture the exit explicitly and assert at the end. `set -e`
+# is suppressed for the two ping invocations only (the `if` guard), then re-asserted by the
+# explicit fail/exit below so a real connectivity failure is LOUD.
+say "CROSS-CLUSTER OVERLAY PING: $CLAB_NODE_A nic-a $CLAB_OVERLAY_IP_A  -->  $CLAB_NODE_C nic-c $CLAB_OVERLAY_IP_C"
+fwd_ok=0
+if sudo "$DOCKER" exec "$CLAB_NODE_A" ip netns exec nic-a /busybox ping -c 3 -W 2 "$CLAB_OVERLAY_IP_C" 2>&1 | tail -5; then fwd_ok=1; fi
+say "reverse: $CLAB_NODE_C nic-c $CLAB_OVERLAY_IP_C  -->  $CLAB_NODE_A nic-a $CLAB_OVERLAY_IP_A"
+rev_ok=0
+if sudo "$DOCKER" exec "$CLAB_NODE_C" ip netns exec nic-c /busybox ping -c 3 -W 2 "$CLAB_OVERLAY_IP_A" 2>&1 | tail -5; then rev_ok=1; fi
+
+if [ "$fwd_ok" = 1 ] && [ "$rev_ok" = 1 ]; then
+  say "PASS: cross-cluster overlay connectivity works in both directions"
+else
+  echo "FATAL: cross-cluster overlay ping FAILED (forward=$fwd_ok reverse=$rev_ok)" >&2
+  exit 1
+fi
