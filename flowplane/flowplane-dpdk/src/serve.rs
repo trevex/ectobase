@@ -755,6 +755,10 @@ fn worker_loop(
     // Reused each iteration to drain the guest↔guest handoff rings for the ports this worker owns.
     let mut ring_burst = MbufBurst::new();
 
+    // Last time (monotonic ns) this worker ran the shared_ct idle-timeout GC sweep. Only worker 0
+    // sweeps (see the throttle below), so this stays 0 on every other worker.
+    let mut last_gc_ns: u64 = 0;
+
     while !stop.load(Ordering::Acquire) {
         // Single monotonic-clock + `LOCAL` read per iteration, shared by BOTH blocks (the meter
         // stamps `last_ns` from `now`, same CLOCK_MONOTONIC domain as the eBPF `bpf_ktime_get_ns`;
@@ -763,6 +767,20 @@ fn worker_loop(
         // any packet can be forwarded. With no `LOCAL` yet, both blocks drop their bursts.
         let now = monotonic_ns();
         let local = composed.cfg.local();
+
+        // ── shared_ct idle-timeout GC (worker 0 only, throttled to ~1 Hz) ───────────────────────────
+        // The peer-independent reverse conntrack entries a guest's SNAT/NAT64 egress pins into
+        // `shared_ct` are never otherwise reclaimed → a long-running node LEAKS them as flows end.
+        // Sweep them on their state-dependent idle timeout (eBPF CT model: 30 s NEW/SYN, 24 h
+        // ESTABLISHED — the exact `flowplane_core::conntrack` thresholds; see
+        // `SharedConfigMaps::shared_ct_sweep_expired`). Only worker 0 sweeps: a SINGLE sweeper is
+        // enough (removes are Mutex-serialized regardless, so extra sweepers would just contend the
+        // write lock). Reuses the per-burst `now` — no new timer/clock. Off the per-packet path:
+        // capped at one walk per second.
+        if q == 0 && now.saturating_sub(last_gc_ns) > 1_000_000_000 {
+            composed.cfg.shared_ct_sweep_expired(now);
+            last_gc_ns = now;
+        }
 
         // ── UPLINK block (fabric → guest): rx the uplink, run process_uplink_rx. ──────────────────
         rx_burst.clear();
