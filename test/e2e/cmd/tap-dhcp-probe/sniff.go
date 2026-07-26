@@ -8,6 +8,20 @@ import (
 	"github.com/google/gopacket/layers"
 )
 
+// injectAF sends frame on iface using a fresh AF_PACKET TPacket handle.
+// Opening a new handle per call is acceptable for the low frame counts used in lb-distribute probes.
+func injectAF(iface string, frame []byte) error {
+	h, err := afpacket.NewTPacket(
+		afpacket.OptInterface(iface),
+		afpacket.OptPollTimeout(200*time.Millisecond),
+	)
+	if err != nil {
+		return err
+	}
+	defer h.Close()
+	return h.WritePacketData(frame)
+}
+
 // sniffIPv6 opens an afpacket handle on iface, pre-arms (the caller injects AFTER this returns,
 // via the inject callback which runs after a short settle), and collects frames that decode to an
 // outer IPv6 layer until want(pkt) is satisfied or timeout. Returns all IPv6-bearing frames seen.
