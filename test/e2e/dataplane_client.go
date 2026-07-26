@@ -22,7 +22,8 @@ import (
 
 // DefaultDataplaneAddr is the address flowplane serve listens on. All existing
 // e2e tests use this value when starting flowplane inside a clab/kind node.
-const DefaultDataplaneAddr = "127.0.0.1:1337"
+// The port is the mirrored DataplanePort (see env.go — matches hack/clab/env.sh).
+var DefaultDataplaneAddr = DataplaneAddrFromEnv()
 
 // dataplaneClient wraps the generated DataplaneNodeClient with the RPCs the
 // smoke tests exercise. Add pass-throughs here as Tasks 2.2/2.3 need them.

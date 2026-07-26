@@ -18,15 +18,20 @@ func TestCrossNodeOverlayPing(t *testing.T) {
 			t.Skipf("%s not installed", bin)
 		}
 	}
+	// Shared fabric constants come from env.go (mirrors hack/clab/env.sh); only the
+	// test-local underlay nexthops + ipB have no env.sh equivalent.
+	var (
+		cp       = NodeA      // k01-control-plane
+		wk       = WorkerNode // k01-worker
+		vni      = fmt.Sprint(FabricVNI)
+		ipA      = OverlayIPA
+		grpcAddr = DefaultDataplaneAddr
+	)
 	const (
-		cp   = "k01-control-plane"
-		wk   = "k01-worker"
-		vni  = "100"
-		ipA  = "10.0.0.1"
-		ipB  = "10.0.0.2"
-		nhA  = "fd00:db8:0:1::a" // control-plane endpoint underlay (within cp's /64)
-		nhB  = "fd00:db8:0:2::a" // worker endpoint underlay (within wk's /64)
-		grpcAddr      = "127.0.0.1:1337"
+		ipB = "10.0.0.2"
+		nhA = "fd00:db8:0:1::a" // control-plane endpoint underlay (within cp's /64)
+		nhB = "fd00:db8:0:2::a" // worker endpoint underlay (within wk's /64)
+
 		deployTimeout = 15 * time.Minute
 		cmdTimeout    = 5 * time.Minute
 	)
