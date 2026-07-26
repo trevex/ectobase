@@ -26,8 +26,8 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use flowplane_common::{
-    CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
-    MaglevKey, MeterState, NatKey, NatValue, RouteValue, UnderlayValue,
+    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey, LbKey,
+    LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
 
@@ -67,6 +67,12 @@ const _: () = assert!(std::mem::size_of::<U32Key>() == 4);
 /// one worker lcore; single-threaded (no concurrency), so plain [`DpdkHash`] not [`crate::RcuHash`].
 pub struct PerLcoreFlowMaps {
     conntrack: DpdkHash<CtKey, CtEntry>,
+    /// Firewall-only IPv6 conntrack (native v6→v6 egress track). Per-lcore, shared-nothing: unlike v4
+    /// there is NO peer-independent reverse-NAT entry for v6 (the v6 path does firewall-track only, no
+    /// SNAT/NAT64 reverse pin), so every v6 flow — forward AND the pre-seeded reverse — stays on its
+    /// owning lcore. A v6 guest egresses on its OWNING worker; the established-return bypass is served
+    /// from that same lcore's table.
+    conntrack6: DpdkHash<CtKey6, CtEntry>,
     meter: DpdkHash<U32Key, MeterState>,
 
     /// Conntrack inserts dropped on saturation. `conntrack_insert` returns `()`, so this counter is
@@ -85,6 +91,7 @@ impl PerLcoreFlowMaps {
         let n = NEXT_INSTANCE.fetch_add(1, Ordering::Relaxed);
         Ok(Self {
             conntrack: DpdkHash::new(&format!("plf_ct_{n}"), CAP_CT, socket_id)?,
+            conntrack6: DpdkHash::new(&format!("plf_ct6_{n}"), CAP_CT, socket_id)?,
             meter: DpdkHash::new(&format!("plf_mt_{n}"), CAP_STD, socket_id)?,
             dropped_ct_inserts: Cell::new(0),
         })
@@ -118,6 +125,18 @@ impl PerLcoreFlowMaps {
     pub(crate) fn note_dropped_ct_insert(&self) {
         self.dropped_ct_inserts
             .set(self.dropped_ct_inserts.get() + 1);
+    }
+
+    fn conntrack6_get(&self, key: &CtKey6) -> Option<CtEntry> {
+        self.conntrack6.get(key)
+    }
+
+    fn conntrack6_insert(&mut self, key: CtKey6, entry: CtEntry) {
+        // Same saturation accounting as the v4 conntrack: a full table drops silently; count it so
+        // saturation is observable via `dropped_conntrack_inserts()`.
+        if !self.conntrack6.insert(&key, entry) {
+            self.note_dropped_ct_insert();
+        }
     }
 
     fn meter_get(&self, ifindex: u32) -> Option<MeterState> {
@@ -169,6 +188,14 @@ impl Maps for ComposedMaps<'_> {
 
     fn fw_rule(&self, key: &FwRuleKey) -> Option<FwRule> {
         self.cfg.fw_rule(key)
+    }
+
+    fn fw_meta6(&self, ifindex: u32) -> Option<FwMeta> {
+        self.cfg.fw_meta6(ifindex)
+    }
+
+    fn fw_rule6(&self, key: &FwRuleKey) -> Option<FwRule6> {
+        self.cfg.fw_rule6(key)
     }
 
     fn lb_get(&self, key: &LbKey) -> Option<LbValue> {
@@ -234,6 +261,17 @@ impl Maps for ComposedMaps<'_> {
         } else {
             self.flow.conntrack_insert(key, entry);
         }
+    }
+
+    fn conntrack6_get(&self, key: &CtKey6) -> Option<CtEntry> {
+        // Firewall-only v6 conntrack is per-lcore shared-nothing: there is NO peer-independent
+        // reverse-NAT entry for v6 (native v6→v6 does firewall-track only, no SNAT/NAT64 reverse
+        // pin), so unlike the v4 path there is no reverse-shape demux to the shared table.
+        self.flow.conntrack6_get(key)
+    }
+
+    fn conntrack6_insert(&mut self, key: CtKey6, entry: CtEntry) {
+        self.flow.conntrack6_insert(key, entry);
     }
 
     fn meter_get(&self, ifindex: u32) -> Option<MeterState> {

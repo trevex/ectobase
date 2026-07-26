@@ -12,7 +12,9 @@ use flowplane_common::{
 use crate::arp_nd::{arp_reply, nd_reply};
 use crate::conntrack::{ct_apply, ct_create_default, ct_key, ct_refresh};
 use crate::dhcp;
-use crate::egress::{deliver, route4, Deliver, IPPROTO_IPIP};
+use crate::egress::{
+    deliver, egress_fw_ct6, route4, route_decision6, Deliver, EgressFwCt6, IPPROTO_IPIP,
+};
 use crate::encap::{reforward, write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
 use crate::firewall::fw_eval_dir;
 use crate::lb::{lb_select_forward, lb_select_forward_v6};
@@ -271,6 +273,105 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
             // using pkt.len() which is now the full post-encap length (inner + 40-byte outer
             // IPv6 header) — mirrors tc.rs `ctx.len()` after `adjust_room`. Wire bytes are
             // unchanged (FQ pacing is kernel-side); edt_tstamp lets tests assert pacing.
+            edt_tstamp = crate::meter::edt_egress(maps, in_.src_ifindex, pkt.len() as u64, in_.now);
+            GuestTxOut {
+                action: Action::Redirect(e.uplink_ifindex),
+                edt_tstamp,
+            }
+        }
+        Deliver::Pass => GuestTxOut {
+            action: Action::Pass,
+            edt_tstamp,
+        },
+    }
+}
+
+/// Guest egress (`guest_tx`) for the NATIVE IPv6→IPv6 forwarding path, operating in place on `pkt`.
+/// `pkt` is a full guest Ethernet frame `[InnerEth(14)][IPv6(40)][L4]` whose dst is NOT in the NAT64
+/// prefix (the caller runs [`process_guest_tx_nat64`] first for `64:ff9b::/96` dsts). Composes the
+/// two SHARED core stages the eBPF `egress::forward_decision_v6` delegates to, in its exact order +
+/// gates:
+///   1. egress firewall + firewall-only v6 conntrack ([`egress_fw_ct6`]): deny-by-default on a fresh
+///      flow (CT miss → `fw_eval_dir6` DROP), else track (`ct_create_default6`) / refresh
+///      (`ct_refresh6`); carries `was_new` (CT miss) up to the local fast path;
+///   2. route6 + deliver ([`route_decision6`]): `route6` → Pass on miss, else `deliver` →
+///      Local / Encap / Pass. The flow label is folded from the (immutable, no-SNAT) inner v6
+///      5-tuple, matching the eBPF `egress_flow_label(.., is_v6 = true)`;
+///   3. on `Deliver::Local` to a SAME-NODE guest, enforce the DESTINATION's ingress firewall on NEW
+///      flows only (`fw_eval_dir6` INGRESS, deny-by-default) — mirrors the v4 [`process_guest_tx`]
+///      Local arm (the cross-node `uplink_rx` ingress path is bypassed for same-node delivery).
+///
+/// Verdict mapping (mirrors [`process_guest_tx`], with the v6 differences called out):
+///   - `Deliver::Encap(e)` → `grow_head(IPV6_LEN)` + `write_outer_v6` with **`inner_proto =
+///     IPPROTO_IPV6` (41 — IPv6-in-IPv6), NOT `IPPROTO_IPIP` (4)** as the v4 path uses — this is the
+///     ONLY byte difference from the v4 encap arm — then EDT egress shaping (`edt_egress`, records
+///     `edt_tstamp`) using the POST-encap `pkt.len()` → `Redirect(e.uplink_ifindex)`;
+///   - `Deliver::Local { tap_ifindex, guest_mac }` → inner-Eth rewrite (dst = guest_mac, src =
+///     GW_MAC, ethertype stays IPv6) → `Redirect(tap_ifindex)`, unshaped (`edt_tstamp = None`);
+///   - `Deliver::Pass` → `Action::Pass`.
+///
+/// SCOPE: native v6→v6 ONLY. There is NO NAT64 here (v6→v4 lives in [`process_guest_tx_nat64`]) and
+/// no VIP/network-NAT (v6 firewall + conntrack6 only, matching the eBPF v6 path). Returns the
+/// delivery `Action` + the EDT timestamp, having mutated `pkt` in place.
+pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
+    pkt: &mut P,
+    maps: &mut M,
+    in_: &GuestTxIn,
+) -> GuestTxOut {
+    let mut edt_tstamp: Option<u64> = None;
+    let ip_off = ETH_LEN;
+
+    // Stage 1: egress firewall + firewall-only v6 conntrack (deny-by-default on a fresh flow).
+    let was_new = match egress_fw_ct6(&*pkt, maps, ip_off, in_.src_ifindex, in_.meta.vni, in_.now) {
+        EgressFwCt6::Drop => {
+            return GuestTxOut {
+                action: Action::Drop,
+                edt_tstamp,
+            }
+        }
+        EgressFwCt6::Pass { was_new } => was_new,
+    };
+
+    // Stage 2: route6 + deliver. Flow label from the (SNAT-free) inner v6 5-tuple — the SAME core
+    // helper the eBPF forward_decision_v6 runs (is_v6 = true), so the encapped bytes stay identical.
+    let flow_label = crate::parse::inner_flow_label(&*pkt, ip_off, true);
+    match route_decision6(&*pkt, &*maps, in_.meta, flow_label) {
+        Deliver::Local {
+            tap_ifindex,
+            guest_mac,
+        } => {
+            // Stage 3: destination ingress firewall on NEW flows (same-node delivery). Deny-by-default.
+            // v6 evaluator (fw_eval_dir6 / FW_META6) — mirrors the eBPF dest_ingress_fw_v6.
+            if was_new
+                && crate::firewall::fw_eval_dir6(&*pkt, &*maps, ip_off, tap_ifindex, FW_DIR_INGRESS)
+                    == FW_ACTION_DROP
+            {
+                return GuestTxOut {
+                    action: Action::Drop,
+                    edt_tstamp,
+                };
+            }
+            // Rewrite the inner Ethernet for the local guest: dst=guest MAC, src=GW_MAC; the
+            // ethertype stays IPv6 (0x86DD) — the frame was already v6, so it is left untouched
+            // (mirrors the eBPF tc_guest_egress_v6 Local arm, which rewrites the two MACs).
+            pkt.write_bytes(0, &guest_mac);
+            pkt.write_bytes(6, &GW_MAC);
+            GuestTxOut {
+                action: Action::Redirect(tap_ifindex),
+                edt_tstamp,
+            }
+        }
+        Deliver::Encap(e) => {
+            // Prepend 40 bytes then write the outer Eth+IPv6 (inner_proto = IPPROTO_IPV6/41 — the
+            // v6-in-v6 difference from the v4 IPIP/4 path — `route_decision6` set `e.inner_proto =
+            // IPPROTO_IPV6`), consuming the new 40 bytes + the 14-byte inner Ethernet, leaving the
+            // bare inner IPv6 — mirrors tc.rs adjust_room + write_outer_v6.
+            if !pkt.grow_head(IPV6_LEN) || !write_outer_v6(pkt, &e) {
+                return GuestTxOut {
+                    action: Action::Drop,
+                    edt_tstamp,
+                };
+            }
             edt_tstamp = crate::meter::edt_egress(maps, in_.src_ifindex, pkt.len() as u64, in_.now);
             GuestTxOut {
                 action: Action::Redirect(e.uplink_ifindex),

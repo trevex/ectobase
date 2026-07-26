@@ -42,8 +42,8 @@ use nfkit::{
 
 use flowplane_control::ControlCore;
 use flowplane_core::datapath::{
-    process_guest_tx, process_guest_tx_nat64, process_uplink_rx, GuestTxIn, GuestTxNat64In,
-    UplinkIn,
+    process_guest_tx, process_guest_tx_nat64, process_guest_tx_v6, process_uplink_rx, GuestTxIn,
+    GuestTxNat64In, UplinkIn,
 };
 use flowplane_core::maps::Maps; // brings `underlay_get`/`local` method syntax into scope on ComposedMaps
 use flowplane_core::pkt::{Action, Pkt}; // `Pkt` brings `read_array` into scope on MbufPkt
@@ -945,10 +945,10 @@ fn worker_loop(
             for mut mbuf in guest_burst.drain(..) {
                 let action = {
                     let mut pkt = MbufPkt::new(&mut mbuf);
-                    // Branch on the inner frame's ethertype (offset 12): an IPv6 guest frame whose dst
-                    // is in the NAT64 well-known prefix runs the v6→v4 NAT64 egress; everything else is
-                    // the IPv4 SNAT+encap path. NOTE: native v6→v6 guest egress is NOT wired here — there
-                    // is no shared-core orchestrator for it yet; only NAT64 v6→v4 (0x86DD) is handled.
+                    // Branch on the inner frame's ethertype (offset 12): an IPv6 guest frame first
+                    // tries NAT64 v6→v4 (dst in 64:ff9b::/96); a NON-NAT64 v6 dst falls through to the
+                    // NATIVE v6→v6 egress (process_guest_tx_v6 — v6 firewall + conntrack6 + route6 +
+                    // IPv6-in-IPv6 encap). Everything else is the IPv4 SNAT+encap path.
                     let ethertype = pkt.read_array::<2>(12).map(u16::from_be_bytes);
                     // `ports_get` returns an OWNED `PortMeta` copy — bind it to `pm` so the subsequent
                     // `&mut composed` borrow in the datapath fn doesn't conflict (mirrors the handoff
@@ -962,17 +962,39 @@ fn worker_loop(
                         // NAT64 v6-expansion) lookup finds this flow. This is exactly why partitioning
                         // guests across lcores is safe — return demux never depends on the owning lcore.
                         (Some(l), Some(pm)) => match ethertype {
-                            // NAT64 egress (v6 guest → v4 external): dispatches to the shared-core
-                            // process_guest_tx_nat64, seeding CT_F_NAT64 reverse entries so the NAT64
-                            // ingress return path is reachable. Returns Action directly (not GuestTxOut).
-                            Some(0x86DD) => process_guest_tx_nat64(
-                                &mut pkt,
-                                &mut composed,
-                                &GuestTxNat64In {
-                                    meta: &pm,
-                                    local: l,
-                                },
-                            ),
+                            // IPv6 guest egress: NAT64 v6→v4 FIRST (dst in 64:ff9b::/96), else the
+                            // NATIVE v6→v6 path. `process_guest_tx_nat64` returns `Action::Pass` for a
+                            // NON-NAT64 dst — and it does so at `nat64_egress_parse`'s `is_nat64_addr`
+                            // gate BEFORE any `shrink_head`/write, so the frame is UNMUTATED when it
+                            // Passes (verified against nat64.rs). We can therefore fall through and run
+                            // `process_guest_tx_v6` on the SAME frame: v6 firewall + conntrack6 +
+                            // route6 + IPv6-in-IPv6 encap (inner-proto 41). This lights up v6
+                            // deny-by-default firewall + conntrack6 on the DPDK serve loop.
+                            Some(0x86DD) => {
+                                let nat64 = process_guest_tx_nat64(
+                                    &mut pkt,
+                                    &mut composed,
+                                    &GuestTxNat64In {
+                                        meta: &pm,
+                                        local: l,
+                                    },
+                                );
+                                match nat64 {
+                                    Action::Pass => {
+                                        process_guest_tx_v6(
+                                            &mut pkt,
+                                            &mut composed,
+                                            &GuestTxIn {
+                                                meta: &pm,
+                                                src_ifindex: *host_ifindex,
+                                                now,
+                                            },
+                                        )
+                                        .action
+                                    }
+                                    other => other,
+                                }
+                            }
                             // IPv4 SNAT + encap egress.
                             _ => {
                                 process_guest_tx(

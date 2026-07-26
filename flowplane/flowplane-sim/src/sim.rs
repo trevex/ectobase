@@ -294,6 +294,35 @@ impl SimNode {
         }
     }
 
+    /// Guest egress (`tc_guest_egress_v6` → `forward_decision_v6`) for the NATIVE IPv6→IPv6 forwarding
+    /// path. `frame` is a full guest Ethernet frame `[InnerEth(14)][IPv6(40)][L4]` whose dst is NOT in
+    /// the NAT64 prefix; `meta` is the sending port's `PortMeta`. Composes the REAL shared core stages
+    /// (`egress_fw_ct6` + `route_decision6`) the eBPF `forward_decision_v6` delegates to, via
+    /// [`flowplane_core::datapath::process_guest_tx_v6`]:
+    ///   1. egress firewall + firewall-only v6 conntrack (deny-by-default on a fresh flow);
+    ///   2. route6 + deliver → Local tap (inner-Eth rewrite) | Encap (outer IPv6, inner-proto 41 —
+    ///      IPv6-in-IPv6) | Pass;
+    ///   3. dest ingress firewall on a NEW same-node Local flow (deny-by-default).
+    /// Returns `Redirect(uplink_ifindex)` + the encapped `[OuterEth][OuterIPv6][innerIPv6][L4]` frame
+    /// on the encap arm. Byte-identical to the eBPF path.
+    pub fn guest_tx_v6(&mut self, frame: &[u8], meta: &PortMeta) -> SimOut {
+        let mut pkt = VecPkt::from_bytes(frame);
+        let out = flowplane_core::datapath::process_guest_tx_v6(
+            &mut pkt,
+            &mut self.maps,
+            &flowplane_core::datapath::GuestTxIn {
+                meta,
+                src_ifindex: self.src_ifindex,
+                now: self.now,
+            },
+        );
+        self.last_tstamp = out.edt_tstamp;
+        SimOut {
+            action: out.action,
+            pkt: pkt.into_bytes(),
+        }
+    }
+
     /// Host NAT64 INGRESS reply (`try_uplink_rx` → `nat64_ingress`): an external IPv4 reply arriving
     /// encapped IP-in-IPv6 as `[Eth][outerIPv6(40)][innerIPv4(20)][L4]`, whose reverse conntrack entry
     /// (`rev` — keyed peer-independently on `(vni, 0, nat_ip, 0, nat_port)`, carrying `CT_REWRITE_DST` +
