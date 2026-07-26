@@ -19,3 +19,6 @@ flowplane-sim = { path = "../flowplane-sim" }
 # a dev-dependency cycle (only needed to build nfkit's tests, not the lib) — cargo allows it.
 flowplane-control = { path = "../flowplane-control" }
 flowplane-dpdk = { path = "../flowplane-dpdk" }
+# tap-backed guest datapath test (tests/tap_guest_datapath.rs): create a persistent tap + open its
+# guest-facing fd (the qemu analogue) to drive process_guest_tx over af_xdp-on-tap.
+flowplane-device = { path = "../flowplane-device" }

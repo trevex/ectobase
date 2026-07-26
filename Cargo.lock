@@ -1380,6 +1380,7 @@ dependencies = [
  "flowplane-common",
  "flowplane-control",
  "flowplane-core",
+ "flowplane-device",
  "flowplane-dpdk",
  "flowplane-sim",
  "libc",
