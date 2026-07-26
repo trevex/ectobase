@@ -102,6 +102,11 @@
             pkgs.tcpdump
             pkgs.util-linux # nsenter, for entering container/netns namespaces from the harness
             pkgs.kubectl
+            # clab fabric tooling — so hack/clab-up.sh + `go test ./test/e2e/...` work in a plain
+            # `nix develop` (Cilium installs via the pinned helm chart — no cilium-cli needed).
+            pkgs.kind
+            pkgs.containerlab
+            pkgs.kubernetes-helm
             pkgs.socat
             pkgs.gnumake
             pythonEnv
