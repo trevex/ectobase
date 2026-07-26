@@ -1,7 +1,7 @@
 # ironcore-net-xdp — common workflows.
 #
 # Run these from inside the flake devShell (`nix develop`), which provides all tooling — the Rust
-# toolchain (rustup), bpf-linker, protobuf, python3+scapy+pytest, qemu,
+# toolchain (rustup), bpf-linker, protobuf, python3 (DPDK pyelftools), qemu,
 # iproute2, ethtool, tcpdump. The targets use bare tool names; there are no host-specific paths.
 #
 # The e2e / ha / tap targets need passwordless sudo (XDP attach, netns, raw sockets);

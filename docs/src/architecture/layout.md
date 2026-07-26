@@ -17,7 +17,7 @@ CNI plugin, the CRD API, Kubernetes manifests, and the lab/test harnesses.
 | `docs/` | This mdBook (`docs/src/`) plus the design-spec/plan archive (`docs/superpowers/`). |
 
 The Nix flake (`flake.nix`) provides the entire toolchain — pinned Rust, `bpf-linker`,
-`protobuf`, Go, `kind`/`containerlab`, `python3`+`scapy`+`pytest`, `qemu`, `bpftool`, and
+`protobuf`, Go, `kind`/`containerlab`, `python3` (DPDK build's pyelftools), `qemu`, `bpftool`, and
 friends. `make` (from inside `nix develop`) is the entry point for all build/test/lab
 targets. See [Getting started](../ops/getting-started.md).
 

@@ -24,10 +24,6 @@
         # reading cni/go.mod is representative (there is no fromGoWork).
         go = pkgs.go-bin.fromGoMod ./cni/go.mod;
 
-        # Python with the packages the test harnesses need (scapy for packet crafting, pytest for
-        # integration tests). Reused across the devShell and any script run via `nix develop`.
-        pythonEnv = pkgs.python3.withPackages (ps: with ps; [ scapy pytest ]);
-
         # controller-runtime envtest assets: a directory holding exactly the three binaries
         # envtest.Environment starts a real in-process apiserver from (kube-apiserver + etcd + kubectl),
         # exported via KUBEBUILDER_ASSETS. Lets `go test` spin a real apiserver for controller
@@ -110,7 +106,6 @@
             pkgs.gettext # provides envsubst for the clab fixture/kind-config templating
             pkgs.socat
             pkgs.gnumake
-            pythonEnv
             # DPDK build toolchain — dpdk-sys/build.rs downloads the pinned DPDK release and
             # builds it with meson/ninja (static). These are the DPDK build + link deps and
             # bindgen's clang. No prebuilt pkgs.dpdk — we compile our own pinned version.
@@ -118,7 +113,7 @@
             pkgs.ninja
             pkgs.pkg-config
             pkgs.clang                        # bindgen front-end
-            pkgs.python3Packages.pyelftools   # required by the DPDK build
+            pkgs.python3Packages.pyelftools   # required by the DPDK build — only python3 dep; pulls python3 transitively
             pkgs.numactl                      # libnuma (DPDK dep)
             pkgs.libpcap                      # net_pcap PMD
             pkgs.libbpf                       # net_af_xdp PMD (Milestone 2)
