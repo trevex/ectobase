@@ -16,7 +16,7 @@
 #
 # Prereqs: the two-cluster fabric is up (sudo ./hack/clab-up.sh), and the images
 # ghcr.io/trevex/ectobase/{flowplane,netplane}:dev are built. Run from the repo root.
-set -uo pipefail
+set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/clab/env.sh"
 export PATH="$HOME/go/bin:$PATH"
@@ -44,6 +44,15 @@ NETPLANE="${CLAB_IMAGE_NETPLANE}"
 
 say() { echo -e "\n=== $* ==="; }
 
+say "preflight: required container images present locally"
+# Fail LOUDLY here rather than during `kind load` if the :dev images were never built.
+# We do NOT auto-build — the caller must build them first (flowplane=`make image TAG=dev`,
+# netplane=`make image-netplane TAG=dev`).
+for img in "$XDP" "$NETPLANE"; do
+  "$DOCKER" image inspect "$img" >/dev/null 2>&1 \
+    || { echo "ERROR: image $img not found — build it first ('make image TAG=dev' for flowplane, 'make image-netplane TAG=dev' for netplane)" >&2; exit 1; }
+done
+
 say "kubeconfigs"
 sudo "$KIND" get kubeconfig --name "$CLAB_KIND_CENTRAL" > "$K1"
 sudo "$KIND" get kubeconfig --name "$CLAB_KIND_COMPUTE" > "$K2"
@@ -65,12 +74,16 @@ done
 
 say "k01 (central): CRDs + full stack (reflector + flowplane + agent)"
 "$KUBECTL" --kubeconfig "$K1" apply -k config/crd 2>&1 | tail -1
-"$KUBECTL" --kubeconfig "$K1" apply -k config/deploy 2>&1 | grep -E 'created|configured|unchanged' | tail -6
+# apply MUST abort on failure (-e via pipefail on the apply exit), but the grep is only for
+# display — guard it with `|| true` so a good apply whose output doesn't match the filter
+# (or is empty) does not false-abort the run.
+"$KUBECTL" --kubeconfig "$K1" apply -k config/deploy 2>&1 | { grep -E 'created|configured|unchanged' || true; } | tail -6
 
 say "mint a k01 token for the k02 agent (cross-cluster brokering)"
 "$KUBECTL" --kubeconfig "$K1" -n ectobase-system create serviceaccount netplane-agent 2>/dev/null || true
 TOKEN=$("$KUBECTL" --kubeconfig "$K1" -n ectobase-system create token netplane-agent --duration=8760h)
-[ -n "$TOKEN" ] && echo "token minted (${#TOKEN} chars)"
+[ -n "$TOKEN" ] || { echo "FATAL: failed to mint k01 token for the k02 agent" >&2; exit 1; }
+echo "token minted (${#TOKEN} chars)"
 
 say "k02 (compute): namespace + flowplane DS + agent (points at k01 central over the fabric)"
 "$KUBECTL" --kubeconfig "$K2" apply -f config/deploy/namespace.yaml
@@ -130,11 +143,14 @@ attach_endpoint() {
     -import-path /proto/dataplane/v1 -proto dataplane.proto \
     -d "{\"interface_id\":\"$id\",\"netns_path\":\"/var/run/netns/$id\",\"vni\":${CLAB_VNI},\"requested_ips\":[\"$ip\"]}" \
     "127.0.0.1:${CLAB_DATAPLANE_PORT}" dataplane.v1.DataplaneNode/AttachInterface 2>&1)
-  ul=$(echo "$out" | grep -o 'fd00:[0-9a-f:]*' | head -1)
-  # dpservice-model addressing inside the endpoint netns
+  # grep may find nothing on a transient/failed attach; don't let -e abort here — the
+  # empty underlay is surfaced later (the CRD patch + ping are the real arbiters).
+  ul=$(echo "$out" | grep -o 'fd00:[0-9a-f:]*' | head -1 || true)
+  # dpservice-model addressing inside the endpoint netns (best-effort: addr/route may
+  # already exist on a re-run).
   sudo "$DOCKER" exec "$node" sh -c "ip netns exec $id ip addr add $ip/32 dev $id; \
     ip netns exec $id ip route add 169.254.0.1/32 dev $id; \
-    ip netns exec $id ip route add default via 169.254.0.1 dev $id" 2>/dev/null
+    ip netns exec $id ip route add default via 169.254.0.1 dev $id" 2>/dev/null || true
   echo "$ul"
 }
 
@@ -152,15 +168,34 @@ say "record allocated underlay /128s in the CRD status (agent announces these)"
 sleep 18
 
 say "routes learned cross-cluster? (k02's flowplane should have 10.0.0.1 via k01's underlay)"
-K2X=$(sudo "$DOCKER" exec "$CLAB_NODE_C" crictl ps --name flowplane -o json 2>/dev/null | grep -o '"id": "[a-f0-9]*"' | head -1 | cut -d'"' -f4)
-sudo "$DOCKER" exec "$CLAB_NODE_C" crictl logs "$K2X" 2>&1 | grep -i ROUTE | tail -4
+# Informational only: crictl/grep may legitimately return empty mid-convergence, so don't
+# let -e abort — the ping below is the arbiter of cross-cluster route distribution.
+K2X=$(sudo "$DOCKER" exec "$CLAB_NODE_C" crictl ps --name flowplane -o json 2>/dev/null | grep -o '"id": "[a-f0-9]*"' | head -1 | cut -d'"' -f4 || true)
+if [ -n "$K2X" ]; then
+  sudo "$DOCKER" exec "$CLAB_NODE_C" crictl logs "$K2X" 2>&1 | grep -i ROUTE | tail -4 || true
+fi
 
 say "stage busybox (musl) for ping"
-CID=$(sudo "$DOCKER" create busybox:musl); sudo "$DOCKER" cp "$CID":/bin/busybox /tmp/busybox-musl >/dev/null; sudo "$DOCKER" rm "$CID" >/dev/null
-sudo "$DOCKER" cp /tmp/busybox-musl "$CLAB_NODE_A":/busybox
-sudo "$DOCKER" cp /tmp/busybox-musl "$CLAB_NODE_C":/busybox
+BUSYBOX="$(mktemp -t busybox-musl.XXXXXX)"
+trap 'rm -f "$K1" "$K2" "$KCFG" "$BUSYBOX"' EXIT
+CID=$(sudo "$DOCKER" create busybox:musl); sudo "$DOCKER" cp "$CID":/bin/busybox "$BUSYBOX" >/dev/null; sudo "$DOCKER" rm "$CID" >/dev/null
+sudo "$DOCKER" cp "$BUSYBOX" "$CLAB_NODE_A":/busybox
+sudo "$DOCKER" cp "$BUSYBOX" "$CLAB_NODE_C":/busybox
 
+# The pings are the FINAL arbiter. A dropped packet makes ping exit non-zero, so we must
+# NOT let -e abort mid-ping — capture the exit explicitly and assert at the end. `set -e`
+# is suppressed for the two ping invocations only (the `if` guard), then re-asserted by the
+# explicit fail/exit below so a real connectivity failure is LOUD.
 say "CROSS-CLUSTER OVERLAY PING: $CLAB_NODE_A nic-a $CLAB_OVERLAY_IP_A  -->  $CLAB_NODE_C nic-c $CLAB_OVERLAY_IP_C"
-sudo "$DOCKER" exec "$CLAB_NODE_A" ip netns exec nic-a /busybox ping -c 3 -W 2 "$CLAB_OVERLAY_IP_C" 2>&1 | tail -5
+fwd_ok=0
+if sudo "$DOCKER" exec "$CLAB_NODE_A" ip netns exec nic-a /busybox ping -c 3 -W 2 "$CLAB_OVERLAY_IP_C" 2>&1 | tail -5; then fwd_ok=1; fi
 say "reverse: $CLAB_NODE_C nic-c $CLAB_OVERLAY_IP_C  -->  $CLAB_NODE_A nic-a $CLAB_OVERLAY_IP_A"
-sudo "$DOCKER" exec "$CLAB_NODE_C" ip netns exec nic-c /busybox ping -c 3 -W 2 "$CLAB_OVERLAY_IP_A" 2>&1 | tail -5
+rev_ok=0
+if sudo "$DOCKER" exec "$CLAB_NODE_C" ip netns exec nic-c /busybox ping -c 3 -W 2 "$CLAB_OVERLAY_IP_A" 2>&1 | tail -5; then rev_ok=1; fi
+
+if [ "$fwd_ok" = 1 ] && [ "$rev_ok" = 1 ]; then
+  say "PASS: cross-cluster overlay connectivity works in both directions"
+else
+  echo "FATAL: cross-cluster overlay ping FAILED (forward=$fwd_ok reverse=$rev_ok)" >&2
+  exit 1
+fi
