@@ -6,5 +6,6 @@
 //! implementation — the counterpart to the eBPF `AyaWriter`.
 pub mod attach_state;
 pub mod node;
+pub mod port_backend;
 pub mod serve;
 pub mod writer;

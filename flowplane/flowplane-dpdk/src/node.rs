@@ -150,19 +150,20 @@ impl DataplaneNode for DpdkNodeService {
         // new guest's traffic. So FIRST pass marks any free-but-not-yet-dead slot whose host-end no
         // longer exists as `dead` (a quick sysfs stat — `link_exists` — is fine under this std Mutex;
         // it does NOT block on a subprocess). THEN we reserve only a live free slot (`!s.dead`); dead
-        // slots are neither reused nor counted as free, so a pool drained by dead slots correctly
-        // surfaces as `resource_exhausted` below. LIVE RECOVERY (recreate the veth + rte_dev hotplug
-        // rebind the af_xdp vdev) is a documented follow-up — NOT done here.
+        // slots are neither reused nor counted as free. When the pool is drained by dead slots, the
+        // `None` arm below attempts LIVE RECOVERY of one dead slot (recreate the veth + rte_dev
+        // hotplug-rebind the af_xdp vdev via `RecoverHandle`/`VethBackend::recover`) before falling
+        // back to `resource_exhausted`.
         let reserved = {
             let mut pool = attach.guest_pool.lock().unwrap();
             for s in pool.iter_mut() {
-                if s.bound.is_none() && !s.dead && !flowplane_device::link_exists(&s.host_ifname) {
+                if s.bound.is_none() && !s.dead && !attach.backend.is_alive(s) {
                     s.dead = true;
                     eprintln!(
                         "warn: guest af_xdp pool slot {} (port {}) is DEAD — host-end veth vanished \
                          (pod netns destroyed without DetachInterface; veth pairs die together, so \
                          the guest-end took the host-end + its ethdev down). Excluding from the free \
-                         pool; live recovery (recreate veth + rte_dev hotplug rebind) is a follow-up.",
+                         pool; the None arm below will attempt live recovery of a dead slot.",
                         s.host_ifname, s.port_id
                     );
                 }
@@ -171,30 +172,103 @@ impl DataplaneNode for DpdkNodeService {
                 .find(|s| s.bound.is_none() && !s.dead)
                 .map(|slot| {
                     slot.bound = Some(r.interface_id.clone());
-                    (
-                        slot.host_ifname.clone(),
-                        slot.host_ifindex,
-                        slot.port_id,
-                        format!("{}p", slot.host_ifname),
-                    )
+                    // The backend derives the placeholder peer (`<host_ifname>p`) itself from
+                    // host_ifname, so the assign/release call sites only need the name; host_ifindex
+                    // is the map/registry/free-slot key.
+                    (slot.host_ifname.clone(), slot.host_ifindex)
                 })
         }; // guest_pool guard dropped here
-        let (slot_host_ifname, slot_host_ifindex, slot_port_id, placeholder_peer) = match reserved {
+        let (slot_host_ifname, slot_host_ifindex) = match reserved {
             Some(fields) => fields,
             None => {
-                // No free slot: release IPAM (nothing else reserved yet) + resource_exhausted. The
-                // pool guard is already dropped, so this ipam.lock() never nests inside it.
-                attach
-                    .ipam
+                // No free LIVE slot. Before giving up, try DEAD-SLOT LIVE RECOVERY (G3/Task 6): if a
+                // dead slot exists AND the serve loop wired a `RecoverHandle`, recreate ONE dead slot's
+                // veth + hot-rebind its af_xdp ethdev off-thread, then bind the recovered slot. This
+                // reclaims a slot lost to a pod-netns-destroyed-without-detach without a serve restart.
+                //
+                // Pick one dead slot's identity under the pool lock (port_id → the datapath array index
+                // `port_id - 1`, since guests are ethdev ports 1..=N built in order). Drop the lock
+                // before the (blocking) recovery — never hold the std pool Mutex across `.await`.
+                // A dead slot is recoverable regardless of its `bound` field: detach's dead-branch marks
+                // `dead = true` but LEAVES `bound = Some(<old iface>)` (the stale binding of the guest
+                // whose netns was destroyed). So match purely on `dead` — recovery clears both dead and
+                // rebinds it to the NEW interface below.
+                let dead = attach
+                    .guest_pool
                     .lock()
                     .unwrap()
-                    .release(std::net::Ipv6Addr::from(underlay));
-                return Err(Status::resource_exhausted(
-                    "guest af_xdp port pool exhausted (increase --guest-ports)",
-                ));
+                    .iter()
+                    .find(|s| s.dead)
+                    .map(|s| s.port_id);
+                let recover_handle = attach.recover.get().cloned();
+                match (dead, recover_handle) {
+                    (Some(pool_port_id), Some(handle)) => {
+                        // Run recovery on a blocking thread (it shells out to `ip` + calls blocking
+                        // DPDK FFI); it must NOT run on the tokio worker or a datapath lcore. The
+                        // `RecoverHandle` is `Send + Sync`; `attach` is `Arc`, cloned in.
+                        let attach_for_recover = attach.clone();
+                        let port_index = (pool_port_id.saturating_sub(1)) as usize;
+                        let recovered = tokio::task::spawn_blocking(move || {
+                            handle.recover_slot(&attach_for_recover, port_index, pool_port_id)
+                        })
+                        .await;
+                        let recovered_ok = matches!(&recovered, Ok(Ok(_)));
+                        if let Ok(Err(e)) = &recovered {
+                            eprintln!("dead-slot recovery for port {pool_port_id} failed: {e}");
+                        } else if let Err(e) = &recovered {
+                            eprintln!(
+                                "dead-slot recovery task panicked (port {pool_port_id}): {e}"
+                            );
+                        }
+                        // On success the slot is now live (`dead = false`, new host_ifindex). Reserve
+                        // it (by port_id) under the pool lock. On any failure fall through to exhausted.
+                        // `recover_slot` cleared `dead` + gave the slot a new host_ifindex, but did NOT
+                        // touch `bound` (which may hold the stale old binding). Reserve it by port_id +
+                        // `!dead` (recovery succeeded) and OVERWRITE `bound` with the new interface.
+                        let reserved_after = if recovered_ok {
+                            attach
+                                .guest_pool
+                                .lock()
+                                .unwrap()
+                                .iter_mut()
+                                .find(|s| s.port_id == pool_port_id && !s.dead)
+                                .map(|slot| {
+                                    slot.bound = Some(r.interface_id.clone());
+                                    (slot.host_ifname.clone(), slot.host_ifindex)
+                                })
+                        } else {
+                            None
+                        };
+                        match reserved_after {
+                            Some(fields) => fields,
+                            None => {
+                                attach
+                                    .ipam
+                                    .lock()
+                                    .unwrap()
+                                    .release(std::net::Ipv6Addr::from(underlay));
+                                return Err(Status::resource_exhausted(
+                                    "guest af_xdp port pool exhausted (dead-slot recovery failed)",
+                                ));
+                            }
+                        }
+                    }
+                    _ => {
+                        // No dead slot to recover (or no RecoverHandle wired — e.g. unit tests): release
+                        // IPAM (nothing else reserved yet) + resource_exhausted. The pool guard is
+                        // already dropped, so this ipam.lock() never nests inside it.
+                        attach
+                            .ipam
+                            .lock()
+                            .unwrap()
+                            .release(std::net::Ipv6Addr::from(underlay));
+                        return Err(Status::resource_exhausted(
+                            "guest af_xdp port pool exhausted (increase --guest-ports)",
+                        ));
+                    }
+                }
             }
         };
-        let _ = slot_port_id; // recorded on the slot; not needed further in the attach path.
 
         // Helper to free the reserved slot on any rollback path below.
         let free_slot = |attach: &crate::attach_state::DpdkAttachState| {
@@ -209,22 +283,22 @@ impl DataplaneNode for DpdkNodeService {
             }
         };
 
-        // Move the reserved slot's placeholder guest-end into the pod netns off-thread (shells out to
-        // `ip`; must not block the tokio worker). The host-end stays put on the af_xdp ethdev port.
+        // Move the reserved slot's guest-end into the pod netns off-thread (shells out to `ip`; must
+        // not block the tokio worker). The host-end stays put on the af_xdp ethdev port. Routed
+        // through the backend's `assign` (device mechanics only); we capture an `Arc<dyn
+        // GuestPortBackend>` clone (it is `Send + Sync`) rather than borrowing `attach` into the
+        // closure. The backend derives the placeholder peer from `host_ifname`, so we hand it just
+        // that name (the only identity `assign` needs).
         {
-            let placeholder_peer_task = placeholder_peer.clone();
-            let netns_path = r.netns_path.clone();
-            let guest_name_task = guest_name.clone();
+            let backend = attach.backend.clone();
+            let host_ifname = slot_host_ifname.clone();
+            let target = crate::port_backend::AssignTarget {
+                netns_path: r.netns_path.clone(),
+                guest_ifname: guest_name.clone(),
+            };
             let guest_mtu = attach.guest_mtu;
             let join = tokio::task::spawn_blocking(move || {
-                flowplane_device::bind_preallocated_guest_end(
-                    &placeholder_peer_task,
-                    &netns_path,
-                    &guest_name_task,
-                    mac,
-                    guest_mtu,
-                    false, // real NIC finalizes csum; clab detection is a follow-up
-                )
+                backend.assign(&host_ifname, &target, mac, guest_mtu)
             })
             .await;
             // Route BOTH the returned-Err (bind failed) AND the JoinError (bind task PANICKED) through
@@ -240,18 +314,17 @@ impl DataplaneNode for DpdkNodeService {
             if let Some((msg, panicked)) = failed {
                 if panicked {
                     // A panic MID-bind could have moved the guest-end into the pod netns before
-                    // dying; best-effort-restore the placeholder to the root netns.
-                    let placeholder_peer = placeholder_peer.clone();
-                    let netns_path = r.netns_path.clone();
-                    let guest_name = guest_name.clone();
-                    let _ = tokio::task::spawn_blocking(move || {
-                        flowplane_device::unbind_preallocated_guest_end(
-                            &netns_path,
-                            &guest_name,
-                            &placeholder_peer,
-                        )
-                    })
-                    .await;
+                    // dying; best-effort-restore the placeholder to the root netns via the backend's
+                    // `release` (device mechanics; derives the placeholder peer from `host_ifname`).
+                    let backend = attach.backend.clone();
+                    let host_ifname = slot_host_ifname.clone();
+                    let target = crate::port_backend::AssignTarget {
+                        netns_path: r.netns_path.clone(),
+                        guest_ifname: guest_name.clone(),
+                    };
+                    let _ =
+                        tokio::task::spawn_blocking(move || backend.release(&host_ifname, &target))
+                            .await;
                 }
                 free_slot(&attach);
                 attach
@@ -304,17 +377,14 @@ impl DataplaneNode for DpdkNodeService {
             // Roll back (lock already dropped): move the guest-end back (best-effort, shells out) +
             // free the slot + release IPAM. The pool veth SURVIVES (owned by serve startup/shutdown).
             {
-                let placeholder_peer = placeholder_peer.clone();
-                let netns_path = r.netns_path.clone();
-                let guest_name = guest_name.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    flowplane_device::unbind_preallocated_guest_end(
-                        &netns_path,
-                        &guest_name,
-                        &placeholder_peer,
-                    )
-                })
-                .await;
+                let backend = attach.backend.clone();
+                let host_ifname = slot_host_ifname.clone();
+                let target = crate::port_backend::AssignTarget {
+                    netns_path: r.netns_path.clone(),
+                    guest_ifname: guest_name.clone(),
+                };
+                let _ = tokio::task::spawn_blocking(move || backend.release(&host_ifname, &target))
+                    .await;
             }
             free_slot(&attach);
             attach
@@ -380,17 +450,14 @@ impl DataplaneNode for DpdkNodeService {
             } // ctrl lock dropped before the subprocess below
               // Move the guest-end back to the root netns (best-effort) — the pool veth SURVIVES.
             {
-                let placeholder_peer = placeholder_peer.clone();
-                let netns_path = r.netns_path.clone();
-                let guest_name = guest_name.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    flowplane_device::unbind_preallocated_guest_end(
-                        &netns_path,
-                        &guest_name,
-                        &placeholder_peer,
-                    )
-                })
-                .await;
+                let backend = attach.backend.clone();
+                let host_ifname = slot_host_ifname.clone();
+                let target = crate::port_backend::AssignTarget {
+                    netns_path: r.netns_path.clone(),
+                    guest_ifname: guest_name.clone(),
+                };
+                let _ = tokio::task::spawn_blocking(move || backend.release(&host_ifname, &target))
+                    .await;
             }
             free_slot(&attach);
             attach
@@ -500,25 +567,26 @@ impl DataplaneNode for DpdkNodeService {
         // CAVEAT (documented first-slice limitation): veth pairs die together. If a pod's netns is
         // destroyed WITHOUT a preceding DetachInterface, the guest-end vanishes and takes the host-end
         // (`fpg{i}`, bound to the af_xdp ethdev port) with it — breaking that pool slot until serve
-        // restart. The happy path assumes explicit detach-before-netns-destruction; robust dead-slot
-        // reclaim (detect + recreate the veth + rebind the ethdev) is a follow-up ("detach/reuse
-        // hardening"), NOT implemented here.
+        // restart UNLESS recovered. The happy path assumes explicit detach-before-netns-destruction;
+        // otherwise the slot is marked `dead` here and LIVE-RECOVERED at the next attach that needs it
+        // (recreate the veth + rte_dev hotplug-rebind the ethdev — see the `None` arm of attach).
         let dev = self.attach.forget(&id);
         if let Some(dev) = &dev {
-            let netns_path = dev.netns_path.clone();
-            let placeholder_peer = format!("{}p", dev.host_name);
-            let guest_name = String::from_utf8_lossy(&id).into_owned();
+            let backend = self.attach.backend.clone();
+            // The backend derives the placeholder peer from host_ifname; pass the registry device's
+            // host_name (the only identity `release` needs).
+            let host_ifname = dev.host_name.clone();
+            let target = crate::port_backend::AssignTarget {
+                netns_path: dev.netns_path.clone(),
+                guest_ifname: String::from_utf8_lossy(&id).into_owned(),
+            };
             // Drop the JoinError: a `?` here would return BEFORE the slot-free below, leaking the
             // pool slot (bound=Some) while the registry entry is already gone. Detach runs ALL
-            // reclaim steps regardless — the unbind is already best-effort/always-Ok internally, so
+            // reclaim steps regardless — `release` is already best-effort/always-Ok internally, so
             // even a task panic must not stop us from freeing the slot for reuse.
             let _ = tokio::task::spawn_blocking(move || {
-                // Best-effort: always Ok (see unbind_preallocated_guest_end).
-                let _ = flowplane_device::unbind_preallocated_guest_end(
-                    &netns_path,
-                    &guest_name,
-                    &placeholder_peer,
-                );
+                // Best-effort: always Ok (see VethBackend::release / unbind_preallocated_guest_end).
+                backend.release(&host_ifname, &target);
             })
             .await;
         }
@@ -531,8 +599,8 @@ impl DataplaneNode for DpdkNodeService {
         // (`bound = None`, `dead` stays false). But if the pod's netns was destroyed WITHOUT this
         // detach (veth pairs die together → the guest-end took the host-end + its ethdev down), the
         // host-end is GONE: mark the slot `dead = true` instead of freeing it, so attach never binds a
-        // blackhole slot (it surfaces as `resource_exhausted` once the live pool drains). Live recovery
-        // (recreate the veth + rte_dev hotplug rebind) is a documented follow-up.
+        // blackhole slot. A later attach that would otherwise `resource_exhaust` LIVE-RECOVERS a dead
+        // slot (recreate the veth + rte_dev hotplug-rebind the ethdev — see the `None` arm of attach).
         let free_ifindex = dev.as_ref().map(|d| d.host_ifindex).or(tap_ifindex);
         if let Some(ifx) = free_ifindex {
             if let Some(slot) = self
@@ -543,14 +611,14 @@ impl DataplaneNode for DpdkNodeService {
                 .iter_mut()
                 .find(|s| s.host_ifindex == ifx)
             {
-                if flowplane_device::link_exists(&slot.host_ifname) {
+                if self.attach.backend.is_alive(slot) {
                     slot.bound = None;
                 } else {
                     slot.dead = true;
                     eprintln!(
                         "warn: guest af_xdp pool slot {} (port {}) is DEAD after detach — host-end \
                          veth is gone (pod netns destroyed without detach; veth pairs die together). \
-                         Marking dead + excluding from the free pool; live recovery is a follow-up.",
+                         Marking dead; a later attach will live-recover it.",
                         slot.host_ifname, slot.port_id
                     );
                 }
@@ -791,6 +859,8 @@ mod tests {
             gateway_ipv4: [169, 254, 0, 1],
             gateway_ipv6: [0u8; 16],
             guest_pool: std::sync::Mutex::new(Vec::new()),
+            backend: Arc::new(crate::port_backend::VethBackend { mtu: 1450 }),
+            recover: std::sync::OnceLock::new(),
         });
         let svc = DpdkNodeService::new(ctrl.clone(), shared.clone(), attach);
 

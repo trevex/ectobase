@@ -67,6 +67,8 @@ fn make_svc(shared: Arc<SharedConfigMaps>) -> (DpdkNodeService, Arc<DpdkAttachSt
         gateway_ipv4: [169, 254, 0, 1],
         gateway_ipv6: [0u8; 16],
         guest_pool: std::sync::Mutex::new(Vec::new()),
+        backend: Arc::new(flowplane_dpdk::port_backend::VethBackend { mtu: 1400 }),
+        recover: std::sync::OnceLock::new(),
     });
     (DpdkNodeService::new(ctrl, shared, attach.clone()), attach)
 }
@@ -86,6 +88,7 @@ fn seed_pool_slot(attach: &DpdkAttachState, host_ifname: &str, port_id: u16) -> 
         port_id,
         bound: None,
         dead: false,
+        generation: 0,
     });
     info.host_ifindex
 }
@@ -586,6 +589,182 @@ async fn attach_skips_dead_pool_slot_and_exhausts_when_only_dead_left() {
     flowplane_device::delete_link(slot0_host);
     flowplane_device::delete_link(slot1_host);
     for ns in [ns_a, ns_b, ns_c] {
+        let _ = std::process::Command::new("ip")
+            .args(["netns", "del", ns])
+            .status();
+    }
+}
+
+/// DEAD-SLOT LIVE RECOVERY (G3/Task 6), CONTROL LEVEL: prove the sanctioned recovery mutation
+/// end-to-end on the control thread. Seeds ONE real pool slot with a live af_xdp ethdev (hotplug-add
+/// its vdev + `Port::configure`), wires a `RecoverHandle` into the attach state, attaches guest A
+/// (binds the slot), then deletes the slot's HOST veth (ungraceful pod-netns-destroyed teardown) and
+/// detaches A (which marks the slot DEAD). A SECOND attach finds only the dead slot free and TRIGGERS
+/// RECOVERY: `recover_slot` recreates the veth, hot-rebinds the af_xdp vdev, `Port::configure`s it,
+/// swaps it into the shared cell, bumps the generation, and binds the recovered slot to guest B.
+///
+/// Asserts: recovery gave the slot a NEW host ifindex, cleared `dead`, bumped BOTH the durable slot
+/// generation AND the cross-thread `generations[0]` atomic, the vdev is live again (`port_by_name`
+/// resolves), and guest B is bound to the recovered slot. This proves the WHOLE control-level path
+/// (device recreate + hotplug rebind + Port swap + generation handshake WRITER side). The live
+/// WORKER-side rebuild under traffic (a running serve loop observing the bump + rebuilding its !Send
+/// queue handles) is a follow-on to be covered by extending `serve_e2e`; the worker rebuild helper
+/// (`rebuild_guest_qs_entry`) is exercised on-lcore there. Needs CAP_NET_ADMIN + EAL.
+#[tokio::test]
+#[ignore = "privileged: needs CAP_NET_ADMIN (veth+netns) + EAL + af_xdp hotplug; run under sudo with --ignored --test-threads=1"]
+async fn dead_slot_live_recovery_recreates_and_rebinds() {
+    use nfkit::{hotplug_remove, port_by_name, Mempool, Port};
+
+    init_eal_once();
+    let shared = Arc::new(SharedConfigMaps::new(0, 1024).expect("SharedConfigMaps"));
+    let (svc, attach_state) = make_svc(shared.clone());
+
+    // ── Seed ONE real pool slot with a LIVE af_xdp ethdev ───────────────────────
+    // Unique names so this test doesn't collide with the other attach_veth cases (shared EAL/process).
+    let slot_host = "fpgrec0";
+    let vdev = "net_af_xdp1"; // matches recover's `net_af_xdp{port_id}` for port_id = 1
+    let port_id: u16 = 1;
+    // Best-effort clean any stale vdev from a previous aborted run before seeding.
+    let _ = hotplug_remove("vdev", vdev);
+    let slot_ifindex = seed_pool_slot(&attach_state, slot_host, port_id);
+
+    // Hotplug-add the af_xdp vdev against the seeded host veth + configure its ethdev Port.
+    let devargs = format!("iface={slot_host},start_queue=0,queue_count=1");
+    nfkit::hotplug_add("vdev", vdev, &devargs).expect("hotplug_add the seed af_xdp vdev");
+    let ethdev_id = port_by_name(vdev).expect("resolve seed ethdev port id");
+    let pool = Arc::new(Mempool::new("rec_pool", 8191, 250, 0).expect("mempool"));
+    let seed_port = Port::configure(ethdev_id, 1, &pool).expect("configure seed af_xdp port");
+
+    // Wire a RecoverHandle over a single-port GuestDatapath (test seam) into the attach state so the
+    // attach path can trigger recovery.
+    let handle =
+        flowplane_dpdk::serve::RecoverHandle::for_test_single_port(pool, seed_port, slot_ifindex);
+    attach_state
+        .recover
+        .set(handle.clone())
+        .ok()
+        .expect("recover handle set once");
+
+    // Two throwaway netns.
+    let ns_a = "fprec-a-ns";
+    let ns_b = "fprec-b-ns";
+    for ns in [ns_a, ns_b] {
+        let _ = std::process::Command::new("ip")
+            .args(["netns", "del", ns])
+            .status();
+        let ok = std::process::Command::new("ip")
+            .args(["netns", "add", ns])
+            .status()
+            .expect("ip netns add");
+        assert!(ok.success(), "ip netns add failed — need CAP_NET_ADMIN");
+    }
+    let netns_a = format!("/var/run/netns/{ns_a}");
+    let netns_b = format!("/var/run/netns/{ns_b}");
+
+    // ── Attach guest A → binds the (only) live slot. ────────────────────────────
+    let resp_a = svc
+        .attach_interface(Request::new(AttachInterfaceRequest {
+            interface_id: "rec-a".into(),
+            netns_path: netns_a.clone(),
+            vni: 60,
+            mac: String::new(),
+            requested_ips: vec!["10.0.9.20".into()],
+            device_type: String::new(),
+            tap_name: String::new(),
+        }))
+        .await;
+    assert!(resp_a.is_ok(), "attach A failed: {resp_a:?}");
+
+    // ── Ungraceful teardown: delete the slot's host veth, then detach A. ─────────
+    // Deleting the host-end kills its peer (the guest-end in ns_a), reproducing the
+    // pod-netns-destroyed-without-detach state; the subsequent detach marks the slot DEAD.
+    flowplane_device::delete_link(slot_host);
+    assert!(
+        !flowplane_device::link_exists(slot_host),
+        "slot host veth gone after delete"
+    );
+    let dresp_a = svc
+        .detach_interface(Request::new(DetachInterfaceRequest {
+            interface_id: "rec-a".into(),
+        }))
+        .await;
+    assert!(
+        dresp_a.is_ok(),
+        "detach A (best-effort) failed: {dresp_a:?}"
+    );
+    {
+        let pool = attach_state.guest_pool.lock().unwrap();
+        let s = pool.iter().find(|s| s.port_id == port_id).unwrap();
+        assert!(s.dead, "slot must be marked DEAD after ungraceful teardown");
+    }
+    let gen_before = handle.generation_for_test(0);
+
+    // ── Attach guest B → only a dead slot free → TRIGGERS RECOVERY, binds it. ────
+    let resp_b = svc
+        .attach_interface(Request::new(AttachInterfaceRequest {
+            interface_id: "rec-b".into(),
+            netns_path: netns_b.clone(),
+            vni: 61,
+            mac: String::new(),
+            requested_ips: vec!["10.0.9.21".into()],
+            device_type: String::new(),
+            tap_name: String::new(),
+        }))
+        .await;
+    assert!(
+        resp_b.is_ok(),
+        "attach B must SUCCEED via dead-slot recovery: {resp_b:?}"
+    );
+
+    // The slot must now be recovered: NOT dead, NEW host ifindex, bound to B, generation bumped.
+    let new_ifindex = {
+        let pool = attach_state.guest_pool.lock().unwrap();
+        let s = pool.iter().find(|s| s.port_id == port_id).unwrap();
+        assert!(!s.dead, "recovered slot must no longer be dead");
+        assert_eq!(
+            s.bound.as_deref(),
+            Some("rec-b"),
+            "recovered slot bound to B"
+        );
+        assert_ne!(
+            s.host_ifindex, slot_ifindex,
+            "recovery must give the slot a NEW host ifindex"
+        );
+        assert!(s.generation >= 1, "durable slot generation must be bumped");
+        s.host_ifindex
+    };
+    // Cross-thread generation atomic bumped (the worker's rebuild trigger).
+    assert!(
+        handle.generation_for_test(0) > gen_before,
+        "cross-thread generations[0] must be bumped by recovery"
+    );
+    // The recovered host veth is live again + the vdev resolves to an ethdev port.
+    assert!(
+        flowplane_device::link_exists(slot_host),
+        "recovered host veth must be live"
+    );
+    assert!(
+        port_by_name(vdev).is_ok(),
+        "recovered af_xdp vdev must resolve to an ethdev port"
+    );
+    // PortMeta for B is keyed by the NEW slot ifindex (recovery updated host_ifindex before attach
+    // programmed PortMeta).
+    assert!(
+        shared.ports_get(new_ifindex).is_some(),
+        "PortMeta must be keyed by the recovered slot's new ifindex"
+    );
+
+    // ── Cleanup ─────────────────────────────────────────────────────────────────
+    // Drop the RecoverHandle's Port (via the datapath) is process-lifetime; just close the vdev +
+    // veth. Detach B first so its guest-end returns to root netns, then tear down.
+    let _ = svc
+        .detach_interface(Request::new(DetachInterfaceRequest {
+            interface_id: "rec-b".into(),
+        }))
+        .await;
+    let _ = hotplug_remove("vdev", vdev);
+    flowplane_device::delete_link(slot_host);
+    for ns in [ns_a, ns_b] {
         let _ = std::process::Command::new("ip")
             .args(["netns", "del", ns])
             .status();

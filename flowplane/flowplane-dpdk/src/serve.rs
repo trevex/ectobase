@@ -29,7 +29,7 @@
 //! gRPC service (Task 9) via the same `Arc<Mutex<ControlCore>>`. Workers NEVER get a writer.
 #![allow(clippy::result_large_err)]
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -42,14 +42,15 @@ use nfkit::{
 
 use flowplane_control::ControlCore;
 use flowplane_core::datapath::{
-    process_guest_tx, process_guest_tx_nat64, process_uplink_rx, GuestTxIn, GuestTxNat64In,
-    UplinkIn,
+    process_guest_tx, process_guest_tx_nat64, process_guest_tx_v6, process_uplink_rx, GuestTxIn,
+    GuestTxNat64In, UplinkIn,
 };
 use flowplane_core::maps::Maps; // brings `underlay_get`/`local` method syntax into scope on ComposedMaps
 use flowplane_core::pkt::{Action, Pkt}; // `Pkt` brings `read_array` into scope on MbufPkt
 use nfkit::monotonic_ns;
 
 use crate::attach_state::{DpdkAttachState, GuestPortSlot};
+use crate::port_backend::{GuestPortBackend, VethBackend};
 
 use crate::node::{pb, DpdkNodeService};
 use crate::writer::DpdkMapWriter;
@@ -67,11 +68,12 @@ const CONFIG_ENTRIES: u32 = 4096;
 /// real multi-socket deployment would derive this per-port (Task 9+).
 const SOCKET_ID: i32 = 0;
 
-/// A preallocated guest af_xdp port owned by a worker: the ethdev `Port` plus the host veth
-/// ifindex its `PortMeta` is keyed by (`ports_get(host_ifindex)`). Built in `run` (pairing each
-/// configured guest `Port` with its `GuestPortSlot.host_ifindex`), moved into the datapath thread,
-/// and borrowed by `worker_loop`. `Send + Sync` (Port = `{id:u16,n_queues:u16}` + a Sync u32), so a
-/// `&[GuestPort]` can cross into the `for_each_worker` `Fn + Sync` closure.
+/// A preallocated guest af_xdp port during STARTUP BUILD only: the configured ethdev `Port` plus the
+/// host veth ifindex its `PortMeta` is keyed by (`ports_get(host_ifindex)`). Built in `run` (pairing
+/// each configured guest `Port` with its `GuestPortSlot.host_ifindex`), then decomposed into the
+/// shared `GuestDatapath` (the `Port` moves into a `Mutex<Option<Port>>` cell; the ifindex seeds the
+/// redirect resolver). Not held past that — the datapath owns the Ports thereafter (so recovery can
+/// swap them). Kept as a small named pairing to make the ring/resolver build readable.
 struct GuestPort {
     port: Port,
     host_ifindex: u32,
@@ -94,6 +96,205 @@ struct GuestPort {
 /// because return demux never depends on which lcore owns the originating guest port.
 fn owns(port_index: usize, q: u16, n_workers: u16) -> bool {
     port_index % n_workers as usize == q as usize
+}
+
+/// The cross-thread guest-port datapath state shared between the control plane (recovery) and the
+/// datapath workers. It is the machinery of the GENERATION HANDSHAKE that makes dead-slot live
+/// recovery sound without ever moving a `!Send` queue handle across threads:
+///
+///   • `ports[pi]` — the ethdev `Port` for guest port index `pi`, behind a `Mutex` so the CONTROL
+///     thread can SWAP in a freshly `Port::configure`d one during recovery while a WORKER holds it
+///     only briefly to (re)derive its `!Send` `(RxQueue, TxQueue)` handles ON ITS OWN LCORE. `Port`
+///     is `{id,n_queues}` (auto `Send + Sync`); the `Mutex` is uncontended except during a rare
+///     recover swap. NOTE: the queue HANDLES are built on-lcore from the `Port` and NEVER cross a
+///     thread — only the `Port` (plain scalars) is shared.
+///   • `generations[pi]` — bumped (Release) by the control thread AFTER it swaps `ports[pi]`. Each
+///     owning worker caches the last-seen value and, on a mismatch (Acquire), rebuilds its cached
+///     queue handles for `pi` against the swapped-in `Port` + the pool slot's new `host_ifindex`.
+///   • `ifindex_to_index` — the redirect resolver (`Redirect(ifindex)` → guest port index → ring).
+///     A slot's `host_ifindex` CHANGES on recovery (new veth), so this map is behind an `RwLock`:
+///     the control path updates the entry (old→remove, new→insert) atomically with the generation
+///     bump; workers take a cheap read lock per redirect (writes are rare recovery events).
+///
+/// `Send + Sync` (all fields are), so it crosses into the `Fn + Sync` `for_each_worker` closure and
+/// is also cloned into `RecoverHandle` for the control-plane recovery path.
+struct GuestDatapath {
+    /// One `Mutex<Option<Port>>` per guest port index (uplink = port 0 is separate). `Some` while the
+    /// port is live; SWAPPED (`*cell = Some(new)`) on recovery; `take()`n at shutdown to DROP the
+    /// ethdev (stop+close) BEFORE the pool veths are deleted (preserving the ethdev-close-before-
+    /// link-delete ordering even though the `Port` no longer lives in the worker-thread scope). A
+    /// `None` cell means "no live port" — the worker skips it (only transiently possible at shutdown).
+    ports: Vec<parking_lot::Mutex<Option<Port>>>,
+    /// Per-port-index generation, bumped by the control recovery path; read by the owning worker.
+    generations: Vec<AtomicU32>,
+    /// Redirect-target ifindex → guest port index. Mutated on recovery (ifindex changes with the
+    /// recreated veth); read per redirect by the workers. `RwLock` keeps recovery writes rare + the
+    /// read path cheap/uncontended.
+    ifindex_to_index: parking_lot::RwLock<std::collections::HashMap<u32, usize>>,
+}
+
+/// Control-plane handle for dead-slot LIVE RECOVERY, reachable from the attach path (node.rs). Holds
+/// only what the recovery orchestration needs and NOTHING `!Send`: the shared `Mempool` (to
+/// `Port::configure` the re-added ethdev) and the `GuestDatapath` (to swap the new `Port` + bump the
+/// generation + update the redirect map). The pool slots + backend are passed IN by the caller
+/// (`&DpdkAttachState`) rather than held here — that avoids an `Arc` cycle (`DpdkAttachState` stores
+/// this handle) and keeps ownership one-directional.
+///
+/// ── WHO DOES `Port::configure` (the Step-5 crux) ────────────────────────────────────────────────
+/// The CONTROL thread does it — NOT the worker-on-bump. This is sound (and the cleanest split)
+/// precisely because both `Port` (`{id:u16,n_queues:u16}`, auto `Send + Sync`) and `Mempool`
+/// (explicitly `Send + Sync` — an internally-synchronized `rte_mempool`) can safely cross to the
+/// control thread. So the control path does the WHOLE `Send` sequence off-lcore — veth recreate +
+/// hotplug (`VethBackend::recover`) → `port_by_name` → `Port::configure` → swap into `ports[pi]` →
+/// update `ifindex_to_index` → bump `generations[pi]` — and the worker's ONLY job on the bump is to
+/// rebuild its `!Send` `(RxQueue, TxQueue)` handles on its own lcore. No `!Send` value ever crosses
+/// a thread; the worker never runs fallible FFI mid-poll.
+#[derive(Clone)]
+pub struct RecoverHandle {
+    pool: Arc<Mempool>,
+    datapath: Arc<GuestDatapath>,
+}
+
+impl RecoverHandle {
+    /// Recover ONE dead guest-port slot (identified by its guest port INDEX `port_index` in the
+    /// static poll set + its ethdev `pool_port_id`) end-to-end. Runs entirely on the CONTROL thread
+    /// (the caller wraps it in `spawn_blocking` — it shells out to `ip` + calls blocking DPDK FFI);
+    /// it must NEVER run on a datapath lcore.
+    ///
+    /// Steps: (1) `backend.recover` recreates the veth + hot-rebinds the af_xdp vdev + updates the
+    /// pool slot's `host_ifindex`/clears `dead` (device mechanics); (2) re-resolve the re-added
+    /// ethdev's ACTUAL port id via `port_by_name` (DPDK assigns the lowest free id — do NOT assume it
+    /// equals `pool_port_id`); (3) `Port::configure` it; (4) update `ifindex_to_index` (old ifindex →
+    /// new) + bump the slot's durable `generation`; (5) swap the new `Port` into `datapath.ports[..]`
+    /// and bump `generations[..]` (Release) so the owning worker rebuilds its queue handles on-lcore.
+    ///
+    /// `attach` supplies the pool slots + the device backend (passed in to avoid an `Arc` cycle).
+    /// Returns the NEW host ifindex on success.
+    pub fn recover_slot(
+        &self,
+        attach: &DpdkAttachState,
+        port_index: usize,
+        pool_port_id: u16,
+    ) -> anyhow::Result<u32> {
+        // (0) CLOSE the dead slot's stale ethdev FIRST. Its backing veth is gone, but the `Port`
+        // object still lives in the shared cell — and a LIVE ethdev cannot be hot-removed (the af_xdp
+        // PMD refuses `rte_eal_hotplug_remove` on a started device, exactly as the nfkit hotplug
+        // de-risk test drops the Port before removing). `take()` the cell → the `Port` drops → ethdev
+        // stop+close, so `backend.recover`'s `hotplug_remove` below can succeed. Do this BEFORE the
+        // device mechanics. (The bump published later re-derives the worker's handles from the new
+        // Port; between here and the swap the worker sees a `None` cell and simply skips the port —
+        // acceptable for a dead port that wasn't forwarding anyway.)
+        let _ = self.datapath.ports[port_index].lock().take();
+
+        // (1) Device mechanics + slot update under the pool lock (mutating the pooled slot in place so
+        // the attach path sees the recovered slot). We hold the std pool Mutex only across the (Send)
+        // device work; no await, no datapath-lcore work here.
+        let (old_ifindex, new_ifindex) = {
+            let mut pool = attach.guest_pool.lock().unwrap();
+            let slot = pool
+                .iter_mut()
+                .find(|s| s.port_id == pool_port_id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("recover: no pool slot for port_id {pool_port_id}")
+                })?;
+            let old = slot.host_ifindex;
+            let new = attach.backend.recover(slot, pool_port_id)?;
+            // Bump the DURABLE per-slot generation (survives attach/detach; the cross-thread signal
+            // is the parallel atomic bumped in step (5)).
+            slot.generation = slot.generation.wrapping_add(1);
+            (old, new)
+        };
+
+        // (2) Re-resolve the re-added ethdev's actual port id by device name (NOT assumed == pool_port_id).
+        let vdev = format!("net_af_xdp{pool_port_id}");
+        let ethdev_id = nfkit::port_by_name(&vdev)
+            .map_err(|e| anyhow::anyhow!("recover: resolve re-added ethdev {vdev}: {e}"))?;
+        // (3) Configure the re-added ethdev (single queue — the af_xdp vdev is queue_count=1).
+        let new_port = Port::configure(ethdev_id, 1, &self.pool)
+            .map_err(|e| anyhow::anyhow!("recover: Port::configure({ethdev_id}) failed: {e}"))?;
+
+        // (4) Update the redirect resolver: the recovered slot's ifindex CHANGED, so remove the stale
+        // mapping + insert the new one → the same port index. (5) Swap the Port into the shared cell
+        // and bump the generation so the OWNING worker rebuilds its !Send queue handles on-lcore.
+        {
+            let mut map = self.datapath.ifindex_to_index.write();
+            map.remove(&old_ifindex);
+            map.insert(new_ifindex, port_index);
+        }
+        // Swap in the new Port (the cell was emptied in step 0, so this just installs the fresh one).
+        *self.datapath.ports[port_index].lock() = Some(new_port);
+        // Release ordering: pairs with the worker's Acquire load — the swapped Port + updated map are
+        // published BEFORE the generation bump the worker observes.
+        self.datapath.generations[port_index].fetch_add(1, Ordering::Release);
+        Ok(new_ifindex)
+    }
+
+    /// TEST-ONLY constructor: build a `RecoverHandle` over a single guest-port `GuestDatapath` seeded
+    /// with an already-configured `Port` at index 0 (host ifindex `host_ifindex`). Lets the privileged
+    /// `attach_veth` recover test drive the full control-level recovery (`recover_slot`) — which needs
+    /// the private `GuestDatapath` — without spinning up the whole serve loop. `#[doc(hidden)]`: not a
+    /// public API, only a test seam.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn for_test_single_port(pool: Arc<Mempool>, port: Port, host_ifindex: u32) -> Self {
+        let mut map = std::collections::HashMap::new();
+        map.insert(host_ifindex, 0usize);
+        RecoverHandle {
+            pool,
+            datapath: Arc::new(GuestDatapath {
+                ports: vec![parking_lot::Mutex::new(Some(port))],
+                generations: vec![AtomicU32::new(0)],
+                ifindex_to_index: parking_lot::RwLock::new(map),
+            }),
+        }
+    }
+
+    /// TEST-ONLY: the current generation for guest port index `pi` (proves recovery bumped it).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn generation_for_test(&self, pi: usize) -> u32 {
+        self.datapath.generations[pi].load(Ordering::Acquire)
+    }
+}
+
+/// Rebuild ONE worker `guest_qs` entry from the shared `GuestDatapath` after a generation bump —
+/// the WORKER side of the recovery handshake, factored out so it is unit-testable without a live
+/// datapath. Runs ON the worker's lcore: it locks `datapath.ports[pi]` only briefly to derive fresh
+/// `!Send` `(RxQueue, TxQueue)` handles (which stay on THIS lcore, never cross a thread), re-reads
+/// the slot's current `host_ifindex` from the pool, and updates the entry + the cached generation.
+///
+/// `entry` is `(port_index, host_ifindex, RxQueue, TxQueue)` — the same tuple `worker_loop` builds.
+/// Returns the observed generation so the caller can update its `cached[..]`. If the shared cell is
+/// `None` (a transient shutdown state — the Port was `take()`n), the entry is left untouched and the
+/// current generation is still returned (so the worker doesn't re-attempt every iteration; it is
+/// about to exit on `stop` anyway).
+fn rebuild_guest_qs_entry(
+    datapath: &GuestDatapath,
+    attach: &DpdkAttachState,
+    entry: &mut (usize, u32, nfkit::RxQueue, nfkit::TxQueue),
+) -> u32 {
+    let pi = entry.0;
+    // Observe the generation with Acquire so the swapped Port + updated map (published Release in
+    // `recover_slot`) are visible before we read them.
+    let gen = datapath.generations[pi].load(Ordering::Acquire);
+    // Re-read the slot's CURRENT host_ifindex (recovery gave it a new veth → new ifindex). Match by
+    // port_id: guest port index `pi` maps to ethdev port_id `pi + 1` (uplink = 0, guests = 1..=N).
+    let new_ifindex = {
+        let pool = attach.guest_pool.lock().unwrap();
+        pool.iter()
+            .find(|s| s.port_id == (pi as u16 + 1))
+            .map(|s| s.host_ifindex)
+            .unwrap_or(entry.1)
+    };
+    // Lock the shared Port ONLY to derive the fresh queue handles on THIS lcore (the handles stay on
+    // this lcore, never cross a thread). A `None` cell = shutdown teardown → leave the entry as-is.
+    if let Some(port) = datapath.ports[pi].lock().as_ref() {
+        let (r, t) = port.queue(0);
+        entry.1 = new_ifindex;
+        entry.2 = r;
+        entry.3 = t;
+    }
+    gen
 }
 
 /// Default guest MTU = 1500 (underlay) − 40 (outer IPv6 header) − 8 (encap overhead for the
@@ -224,6 +425,66 @@ impl ServeArgs {
     }
 }
 
+/// RAII rollback guard for the PREALLOCATED pool host devices during serve STARTUP. It exists to
+/// close a startup-only leak window: `run` creates the guest veths (`fpg{i}`) via
+/// `port_backend.preallocate` BEFORE any of the later fallible startup calls (EAL/mempool/`Port::
+/// configure`/`LcoreRing::new`/`SharedConfigMaps::new`/`ControlCore`/`DpdkAttachState`/the worker
+/// `.spawn`). Any `?`-return from one of those would otherwise leave the already-created veths on the
+/// host — nothing has taken ownership of teardown yet (the worker thread owns shutdown teardown, and
+/// it isn't running).
+///
+/// The guard is ARMED as devices are created (`track` after each `preallocate`) and covers EVERY `?`
+/// through the worker spawn: on Drop-while-armed it tears down every tracked host device via the
+/// backend. Once `.spawn(...)` succeeds — the closure has moved the guest `Port`s/rings in and will
+/// tear the pool down on shutdown — the guard is `disarm()`ed so the HAPPY path does NOT touch the
+/// devices (no double-teardown; behavior identical to before this guard).
+///
+/// It holds an `Arc<dyn GuestPortBackend>` (a clone of the serve loop's `port_backend`), NOT a `&`,
+/// so tracking is independent of where the `slots`/`Arc` later move (into `guest_pool`/the thread) —
+/// moving those does not disturb the guard. It tracks host_ifnames (cheap `String` clones) only.
+struct StartupGuard {
+    backend: Arc<dyn GuestPortBackend>,
+    host_ifnames: Vec<String>,
+    armed: bool,
+}
+
+impl StartupGuard {
+    fn new(backend: Arc<dyn GuestPortBackend>) -> Self {
+        Self {
+            backend,
+            host_ifnames: Vec::new(),
+            armed: true,
+        }
+    }
+    /// Record a just-created pool host device so a mid-startup failure tears it down.
+    fn track(&mut self, host_ifname: String) {
+        self.host_ifnames.push(host_ifname);
+    }
+    /// Ownership of pool teardown has passed to the worker thread — stop tearing down on Drop.
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StartupGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            // Tear down in creation order (idempotent/best-effort per the backend contract).
+            for h in &self.host_ifnames {
+                self.backend.teardown(h);
+            }
+        }
+    }
+}
+
+/// Format a 6-byte MAC as `aa:bb:cc:dd:ee:ff` for startup log lines.
+fn fmt_mac(mac: &[u8; 6]) -> String {
+    format!(
+        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+    )
+}
+
 /// Run the DPDK serve process (see the module doc for the full structure). This is `async` and
 /// hosts the tonic server on the calling (tokio) thread; the datapath runs on a dedicated OS thread.
 pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
@@ -242,6 +503,19 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     }
     let backend = args.to_backend(queues);
 
+    // The guest link MTU (underlay MTU - encap overhead). Computed up front (no EAL dependency): the
+    // §2a preallocation veths need it, the attach state below reuses it, AND the backend captures it
+    // so `recover` can recreate a dead slot's veth at the identical MTU. Kept BEFORE the backend
+    // construction so it can be threaded into `VethBackend { mtu }`.
+    let guest_mtu = args.guest_mtu.unwrap_or(DEFAULT_GUEST_MTU);
+
+    // The backend-agnostic guest-port pool lifecycle. Constructed ONCE and shared: it drives the
+    // §2a preallocation here and is stored (cloned) in `DpdkAttachState` so attach/detach route
+    // their assign/release/is_alive/recover device ops through the SAME instance. Veth today
+    // (containers); tap/vf are documented seams (see `port_backend.rs`). Carries `guest_mtu` so
+    // dead-slot recovery recreates the veth at the same link MTU as preallocation.
+    let port_backend: Arc<dyn GuestPortBackend> = Arc::new(VethBackend { mtu: guest_mtu });
+
     // ── 2a. PREALLOCATE the per-guest af_xdp port pool BEFORE EAL init ───────────
     // VF-style static poll set: create `--guest-ports` guest veth pairs NOW (in the root netns) so
     // each host end can be handed to EAL as an extra `--vdev=net_af_xdp<i>,iface=<host_ifname>`. The
@@ -256,8 +530,13 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     // The guest-end of each pair (`<host_ifname>p`, the create_veth_pair peer convention) stays a
     // root-netns PLACEHOLDER until Task 4's AttachInterface moves it into the pod netns; the MAC set
     // here is a deterministic placeholder (the real guest MAC is programmed at attach). `bound` is
-    // `None` for every slot (Task 4 binds them).
-    let guest_mtu = args.guest_mtu.unwrap_or(DEFAULT_GUEST_MTU);
+    // `None` for every slot (Task 4 binds them). `guest_mtu` was computed above (before the backend).
+    // RAII startup-rollback guard, ARMED here and kept in scope across EVERY `?` from prealloc through
+    // the worker `.spawn` below. As each pool device is created we `track` it; any early return drops
+    // the guard and tears down what was created so far. We `disarm()` only AFTER the worker thread
+    // takes ownership (it tears the pool down on shutdown). Holds an `Arc` clone of the backend so it
+    // is independent of the `slots`/backend-`Arc` moves that happen later in startup.
+    let mut guard = StartupGuard::new(port_backend.clone());
     let slots: Vec<GuestPortSlot> = match args.backend {
         BackendKind::AfXdp => {
             // First-slice pool cap. The placeholder MAC's last octet is `i as u8` and the ethdev
@@ -274,41 +553,30 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
                 );
             }
             let mut slots = Vec::with_capacity(args.guest_ports as usize);
-            // Track host ifnames we've already created so ANY failure below (this loop OR the guest
-            // ethdev-configure loop) can tear them down before returning — otherwise a mid-pool
-            // failure would leak the veths already on the host (e.g. `fpg0`/`fpg1` if slot 2 fails).
-            let mut created: Vec<String> = Vec::with_capacity(args.guest_ports as usize);
             for i in 0..args.guest_ports {
-                let host_ifname = format!("fpg{i}");
-                // Deterministic placeholder MAC: 02:00:00:00:0e:<i>. Not datapath-significant yet —
-                // the real guest MAC is programmed at attach (Task 4).
-                let mac = [0x02, 0x00, 0x00, 0x00, 0x0e, i as u8];
-                let dev = match flowplane_device::create_preallocated_veth(
-                    &host_ifname,
-                    mac,
-                    guest_mtu,
-                ) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        // Roll back every veth created so far, mirroring create_preallocated_veth's
-                        // own rollback style, then propagate the error.
-                        for h in &created {
-                            flowplane_device::delete_link(h);
-                        }
-                        return Err(e).with_context(|| {
-                            format!("create preallocated guest veth {host_ifname} (slot {i})")
-                        });
-                    }
-                };
-                created.push(dev.host_name.clone());
+                // Route preallocation through the backend (device mechanics: create `fpg{i}` with the
+                // deterministic placeholder MAC — the backend owns the naming/MAC scheme). Not
+                // datapath-significant yet; the real guest MAC is programmed at attach (Task 4).
+                //
+                // On failure the `?`-return drops `guard`, tearing down every device tracked so far —
+                // the RAII guard now covers prealloc failures too (no hand-rolled per-slot rollback).
+                let dev = port_backend.preallocate(i, guest_mtu).with_context(|| {
+                    format!("create preallocated guest device fpg{i} (slot {i})")
+                })?;
+                // Track BEFORE building the slot: the device is on the host now, so it must be torn
+                // down on any later early return.
+                guard.track(dev.host_ifname.clone());
                 slots.push(GuestPortSlot {
-                    host_ifname: dev.host_name,
+                    host_ifname: dev.host_ifname,
                     host_ifindex: dev.host_ifindex,
                     // ethdev port id: uplink = 0, guests = 1..=N (matches the vdev append order).
                     port_id: 1 + i,
                     bound: None,
-                    // Freshly-created pool veths are live; dead-slot detection happens lazily at attach.
+                    // Freshly-created pool devices are live; dead-slot detection happens lazily at attach.
                     dead: false,
+                    // No recovery has run yet — generation starts at 0 (matches the parallel
+                    // `generations` atomic seeded to 0 below; a bump means "worker, rebuild me").
+                    generation: 0,
                 });
             }
             println!(
@@ -347,8 +615,13 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
 
     // ── 3. Mempool + Port ──────────────────────────────────────────────────────
     // One shared MT-safe pktmbuf pool (rte_pktmbuf_alloc is MT-safe; workers alloc concurrently).
-    let pool = Mempool::new("fp_dpdk_pool", 8191, 250, SOCKET_ID)
-        .map_err(|e| anyhow::anyhow!("mempool create failed: {e}"))?;
+    // `Arc` because dead-slot recovery on the CONTROL thread needs it to `Port::configure` the
+    // re-added ethdev (see `RecoverHandle`): `Mempool` is `Send + Sync` (internally-synchronized
+    // rte_mempool), so sharing it across the control + worker threads is sound.
+    let pool = Arc::new(
+        Mempool::new("fp_dpdk_pool", 8191, 250, SOCKET_ID)
+            .map_err(|e| anyhow::anyhow!("mempool create failed: {e}"))?,
+    );
     let port = Port::configure(0, queues, &pool)
         .map_err(|e| anyhow::anyhow!("port configure failed: {e}"))?;
     let n_workers = port.n_queues();
@@ -361,24 +634,18 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     // are moved into the worker thread below, where Task 3 polls their rx queue → `process_guest_tx`.
     let mut guest_ports: Vec<GuestPort> = Vec::with_capacity(slots.len());
     for slot in &slots {
-        let gp = match Port::configure(slot.port_id, 1, &pool) {
-            Ok(gp) => gp,
-            Err(e) => {
-                // A guest ethdev-configure failure leaves the already-created host veths (all of
-                // `slots`) on the host — tear them ALL down before returning so a partial startup
-                // doesn't leak. Drop the guest `GuestPort`s configured so far first (their inner
-                // `Port` Drop = ethdev close, which must precede deleting the underlying links).
-                drop(guest_ports);
-                for s in &slots {
-                    flowplane_device::delete_link(&s.host_ifname);
-                }
-                return Err(anyhow::anyhow!(
-                    "guest port {} ({}) configure failed: {e}",
-                    slot.port_id,
-                    slot.host_ifname
-                ));
-            }
-        };
+        // A guest ethdev-configure failure leaves the already-created host veths on the host; the
+        // `?`-return drops `guest_ports` FIRST (declared after `guard` → drops before it in reverse
+        // order — its inner `Port` Drop = ethdev close, which must precede deleting the links) and
+        // THEN drops `guard`, which tears the tracked veths down. Ordering (ethdev close → link
+        // delete) is thus preserved by the drop order, matching the old hand-rolled rollback.
+        let gp = Port::configure(slot.port_id, 1, &pool).map_err(|e| {
+            anyhow::anyhow!(
+                "guest port {} ({}) configure failed: {e}",
+                slot.port_id,
+                slot.host_ifname
+            )
+        })?;
         println!(
             "guest port {} ({}) up with {} queue(s)",
             slot.port_id,
@@ -418,12 +685,95 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         ifindex_to_index.insert(gp.host_ifindex, i);
     }
     let rings = Arc::new(rings);
-    let ifindex_to_index = Arc::new(ifindex_to_index);
+
+    // ── 3c. GuestDatapath: the shared Port cells + generation handshake (G3 recovery) ──────────────
+    // Move each configured guest `Port` into a per-index `Mutex<Option<Port>>` cell so the CONTROL
+    // thread can SWAP a recovered Port in (dead-slot recovery) while a worker holds the cell only
+    // briefly to (re)derive its `!Send` queue handles on-lcore. `generations[pi]` starts at 0 (matches
+    // each slot's durable `generation`); the redirect resolver goes behind an `RwLock` because a
+    // recovered slot's ifindex CHANGES (new veth) and recovery updates the map in lock-step with the
+    // generation bump. This is the ONE sanctioned mutation to the otherwise-static poll set.
+    let datapath = Arc::new(GuestDatapath {
+        ports: guest_ports
+            .into_iter()
+            .map(|gp| parking_lot::Mutex::new(Some(gp.port)))
+            .collect(),
+        generations: (0..rings.len()).map(|_| AtomicU32::new(0)).collect(),
+        ifindex_to_index: parking_lot::RwLock::new(ifindex_to_index),
+    });
 
     // ── 4. Shared config maps (process-wide, single-writer) ─────────────────────
     let shared = Arc::new(
         SharedConfigMaps::new(SOCKET_ID, CONFIG_ENTRIES)
             .map_err(|e| anyhow::anyhow!("SharedConfigMaps::new failed: {e}"))?,
+    );
+
+    // Resolve BOTH the node's underlay HOST address (the /128 — this node's fabric-src, written into
+    // LOCAL as `underlay_ipv6`, the outer IPv6 SRC on encapped frames) and the /64 network prefix
+    // (seeds `UnderlayIpam` in §5b). `--local-underlay` is a host address; the prefix is its /64. When
+    // unset, both are inferred from the host interfaces (address, then its /64) so they stay consistent.
+    let underlay_addr: std::net::Ipv6Addr = match &args.local_underlay {
+        Some(s) => s
+            .parse()
+            .with_context(|| format!("parse --local-underlay {s:?} as IPv6"))?,
+        None => flowplane_device::infer_underlay_address(&flowplane_device::read_host_ifaddrs()?)
+            .ok_or_else(|| {
+            anyhow::anyhow!(
+                "could not infer underlay address from host interfaces; set --local-underlay"
+            )
+        })?,
+    };
+    let underlay_prefix: Ipv6Net = Ipv6Net::new(underlay_addr, 64)
+        .map_err(|e| anyhow::anyhow!("build /64 from underlay address {underlay_addr}: {e}"))?
+        .trunc();
+
+    // ── 4a. Program LOCAL (uplink identity) ─────────────────────────────────────
+    // The eBPF sibling writes this at bring-up (`flowplane/src/control/mod.rs`): without it the
+    // `worker_loop` has no uplink identity (outer MACs + uplink ifindex) and DROPS EVERY uplink and
+    // guest-egress burst by design. Program it ONCE, here, after `shared` exists and the uplink `Port`
+    // is configured — the fix for the "datapath is inert" bug.
+    //
+    // Fields:
+    //   • gateway_mac  — `--gateway-mac`, the underlay next-hop (outer eth DST for all encap).
+    //   • underlay_ipv6 — this node's underlay HOST address (the /128), outer IPv6 SRC on encap.
+    //   • uplink_ifindex/uplink_mac — the `--uplink` netdev's real ifindex + MAC. For af-xdp/tap the
+    //     uplink IS a kernel netdev (`args.uplink`), so resolve from sysfs; the encap arm returns
+    //     `Redirect(uplink_ifindex)` and `worker_loop` routes it to the uplink tx only when it matches
+    //     LOCAL.uplink_ifindex, so a consistent non-zero value is what matters (real ifindex keeps the
+    //     outer frame fabric-correct + matches eBPF). For nic/pcap/null there is no host netdev →
+    //     best-effort sentinel (ifindex = uplink ethdev port 0's id + 1 = 1, non-zero; mac = zeros).
+    let gateway_mac = flowplane_node::parse_mac(&args.gateway_mac)
+        .with_context(|| format!("parse --gateway-mac {:?}", args.gateway_mac))?;
+    let (uplink_ifindex, uplink_mac) = match args.backend {
+        BackendKind::AfXdp | BackendKind::Tap => {
+            let ifindex = flowplane_device::ifindex_of(&args.uplink)
+                .with_context(|| format!("resolve --uplink {:?} ifindex for LOCAL", args.uplink))?;
+            let mac = flowplane_device::mac_of(&args.uplink)
+                .with_context(|| format!("resolve --uplink {:?} MAC for LOCAL", args.uplink))?;
+            (ifindex, mac)
+        }
+        other => {
+            // No host netdev to read (nic = PCI addr, pcap = file, null = nothing). LOCAL is
+            // best-effort: a non-zero sentinel ifindex keeps the encap-redirect path self-consistent,
+            // and the outer eth SRC is zeros. Guest egress is af-xdp-focused, so do NOT fail startup.
+            eprintln!(
+                "warning: backend {other:?} has no host uplink netdev; LOCAL uplink identity is \
+                 best-effort (ifindex=1 sentinel, uplink_mac=00:00:..)"
+            );
+            (1u32, [0u8; 6])
+        }
+    };
+    shared.set_local(flowplane_common::Local {
+        uplink_ifindex,
+        uplink_mac,
+        gateway_mac,
+        underlay_ipv6: underlay_addr.octets(),
+    });
+    println!(
+        "LOCAL programmed: uplink_ifindex={uplink_ifindex}, uplink_mac={}, gateway_mac={}, \
+         underlay_ipv6={underlay_addr}",
+        fmt_mac(&uplink_mac),
+        fmt_mac(&gateway_mac),
     );
 
     // ── 5. The SINGLE writer: ControlCore<DpdkMapWriter> behind a Mutex ─────────
@@ -435,26 +785,9 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     )));
 
     // ── 5b. B2a attach state: underlay IPAM + device registry ─────────────────
-    // Seed `UnderlayIpam` from `--local-underlay` if set (parsed as a /64 to truncate to the
-    // network address), else infer from the host's interface addresses. The guest_mtu defaults to
-    // a sane 1450 (underlay MTU 1500 - 40-byte outer IPv6 - 8-byte encap header) when not set.
-    let underlay_prefix: Ipv6Net = match &args.local_underlay {
-        Some(s) => {
-            // Parse as a /128 host address + build the /64 network around it.
-            let ip: std::net::Ipv6Addr = s
-                .parse()
-                .with_context(|| format!("parse --local-underlay {s:?} as IPv6"))?;
-            Ipv6Net::new(ip, 64)
-                .map_err(|e| anyhow::anyhow!("build /64 from --local-underlay {s}: {e}"))?
-                .trunc()
-        }
-        None => flowplane_device::infer_underlay_prefix(&flowplane_device::read_host_ifaddrs()?)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "could not infer underlay /64 from host interfaces; set --local-underlay"
-                )
-            })?,
-    };
+    // `underlay_prefix` (the /64 that seeds `UnderlayIpam`) was resolved with `underlay_addr` up front
+    // (§4a needs the host address for LOCAL). The guest_mtu defaults to a sane 1450 (underlay MTU 1500
+    // - 40-byte outer IPv6 - 8-byte encap header) when not set.
     let gateway_ipv4: [u8; 4] = args
         .gateway
         .parse::<std::net::Ipv4Addr>()
@@ -481,6 +814,20 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         gateway_ipv4,
         gateway_ipv6,
         guest_pool: std::sync::Mutex::new(slots),
+        // Share the SAME backend instance §2a preallocated with — attach/detach route their
+        // assign/release/is_alive/recover device ops through it (Task 4 call sites in node.rs).
+        backend: port_backend.clone(),
+        // Set just below, once the datapath + Mempool Arcs exist (they build the RecoverHandle).
+        recover: std::sync::OnceLock::new(),
+    });
+
+    // Wire the dead-slot LIVE RECOVERY handle into the attach state (G3/Task 6). The handle carries
+    // the shared `Mempool` + the `GuestDatapath` generation-handshake state; the attach path
+    // (`node.rs`) reads it to recover a dead slot when no free live slot remains. Set ONCE, before the
+    // gRPC server (hence any attach) can run. Ignore the (impossible) re-set error.
+    let _ = attach_state.recover.set(RecoverHandle {
+        pool: pool.clone(),
+        datapath: datapath.clone(),
     });
     println!(
         "B2a attach state: underlay prefix={underlay_prefix}, gateway={}, guest_mtu={guest_mtu}, \
@@ -496,52 +843,54 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     let stop = Arc::new(AtomicBool::new(false));
     let shared_for_workers = shared.clone();
     let stop_w = stop.clone();
-    // The guest↔guest handoff rings + the ifindex→port-index resolver, cloned into the worker thread.
-    // Both are `Arc`-wrapped read-only shared state (rings are `Send + Sync`; the map is immutable),
-    // so they cross into the `Fn + Sync` `for_each_worker` closure below and every worker sees them.
+    // The guest↔guest handoff rings, cloned into the worker thread (`Send + Sync`).
     let rings_w = rings.clone();
-    let ifx_to_ix_w = ifindex_to_index.clone();
-    // Move the Port + Mempool into the worker thread: the rx/tx queue handles are `!Send` and must
-    // be built ON each lcore, and the Port/pool must outlive every worker. `_eal` stays on the main
-    // thread (the EAL guard is `!Send` and cleans up on process exit).
+    // The GuestDatapath (shared Port cells + generation handshake + redirect resolver) and the attach
+    // state (the pool slots — the worker re-reads a recovered slot's ifindex from here on a generation
+    // bump). Both `Arc`-wrapped `Send + Sync`, so they cross into the `Fn + Sync` closure below.
+    let datapath_w = datapath.clone();
+    let attach_w = attach_state.clone();
+    // Move the uplink Port + Mempool into the worker thread: the rx/tx queue handles are `!Send` and
+    // must be built ON each lcore, and the Port/pool must outlive every worker. `_eal` stays on the
+    // main thread (the EAL guard is `!Send` and cleans up on process exit).
+    let pool_w = pool.clone();
     let workers = std::thread::Builder::new()
         .name("fp-dpdk-datapath".into())
         .spawn(move || {
-            // Hold the preallocated guest `GuestPort`s alive for the lifetime of the datapath thread
-            // AND lend them (by reference) to every worker, each of which polls the round-robin subset
-            // of guest rx queues it owns (see `owns`). A `Port` Drop stops+closes its ethdev, so they
-            // must outlive every worker.
-            //
-            // NOTE: the binding MUST be a NAMED `guest_ports`, not a bare `let _ = guest_ports;`.
-            // A bare underscore is NOT a binding — it drops the value IMMEDIATELY at that statement,
-            // which here would close every guest ethdev before the workers even start (Vec<GuestPort>
-            // Drop → per-Port ethdev stop+close). This binding is load-bearing: it keeps the guest
-            // ports live until the closure returns, and it is what the `Sync` closure below borrows.
-            // Do not "simplify" it to `let _`.
-            let guest_ports = guest_ports; // move into the thread; borrowed by the Sync closure below
-                                           // Move the handoff rings + resolver into the thread too; the Sync closure borrows them so
-                                           // every worker can enqueue to any port's ring and drain the rings for ports it owns.
+            // The guest `Port`s now live in `datapath.ports` (shared `Mutex<Option<Port>>` cells so
+            // recovery can swap them). The worker borrows the `Arc<GuestDatapath>`; a worker derives
+            // its `!Send` queue handles on-lcore from the cells it owns and rebuilds them on a
+            // generation bump. Ethdev close now happens at shutdown via `datapath.ports[..].take()`
+            // (see the shutdown block) or on the recovery swap, NOT when this closure returns.
             let rings_w = rings_w;
-            let ifx_to_ix_w = ifx_to_ix_w;
+            let datapath_w = datapath_w;
+            let attach_w = attach_w;
+            let pool_w = pool_w; // keep the pool alive for the worker thread's lifetime
+            let _ = &pool_w;
             LcoreRuntime::for_each_worker(n_workers, |q| {
                 // Partition the preallocated guest ports round-robin across ALL worker lcores: worker
-                // `q` polls `guest_ports[i]` where `owns(i, q, n_workers)`. We pass the FULL slice plus
-                // `(q, n_workers)` (a strided subset is not a contiguous slice, so `worker_loop`
-                // rebuilds it via the `owns` filter). A worker that owns zero guest ports just runs an
-                // empty guest block — identical to the old non-worker-0 path.
+                // `q` polls guest port index `i` where `owns(i, q, n_workers)`. `worker_loop` rebuilds
+                // its strided `guest_qs` via the `owns` filter over `datapath.ports`. A worker that
+                // owns zero guest ports just runs an empty guest block.
                 worker_loop(
                     q,
                     n_workers,
                     &shared_for_workers,
                     &port,
-                    &guest_ports,
+                    &datapath_w,
+                    &attach_w,
                     &rings_w,
-                    &ifx_to_ix_w,
                     &stop_w,
                 );
             });
         })
         .context("spawn datapath worker thread")?;
+
+    // The worker thread is up and OWNS the guest `Port`s/rings (it tears the pool down on shutdown,
+    // see the `attach_state.guest_pool` delete after `workers.join()`). Disarm the startup guard so
+    // the HAPPY path does NOT tear the devices down (no double-teardown; behavior identical to before
+    // the guard). Every fallible startup call from prealloc to here was covered by the armed guard.
+    guard.disarm();
 
     // ── 7. tokio + tonic health (Serving AFTER the datapath thread is up) ───────
     // Readiness contract (mirrors eBPF): the health service reports Serving only once the datapath
@@ -593,14 +942,22 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         eprintln!("datapath worker thread panicked on shutdown: {e:?}");
     }
 
+    // Close every guest ethdev BEFORE deleting its backing veth (the ethdev-close-before-link-delete
+    // ordering the pre-G3 code got from the guest `Port`s dropping when the worker closure returned).
+    // With G3 the guest `Port`s live in `datapath.ports` (shared cells so recovery can swap them), so
+    // they do NOT drop at `workers.join()`. Explicitly `take()` each cell here — the `Option<Port>`
+    // → `None` transition runs `rte_eth_dev_stop`/`close`. The workers are already joined, so no
+    // worker will observe the `None` (and even if the timing raced, `rebuild_guest_qs_entry` skips a
+    // `None` cell). This restores the ordering guarantee: every ethdev is closed before we delete the
+    // underlying netdev below.
+    for cell in &datapath.ports {
+        let _ = cell.lock().take(); // drop the Port → ethdev stop+close
+    }
+
     // Delete the PREALLOCATED guest veths created at startup. They are host-side links that would
     // otherwise leak across restarts (a restart only masks this by first deleting stale same-named
-    // links). We do this AFTER `workers.join()` for a deliberate ORDERING reason: the guest `Port`s
-    // (whose Drop runs `rte_eth_dev_close`) live inside the worker-thread closure and are dropped
-    // when that closure returns — i.e. BEFORE `workers.join()` completes. So by the time we reach
-    // here every guest ethdev is already closed, and deleting the underlying netdev is safe (ethdev
-    // close precedes link delete, never the reverse). Reading the ifnames from `attach_state` (not a
-    // captured Vec) keeps this correct even after Task 4 mutates the pool at runtime.
+    // links). Ethdev close (above) precedes this link delete. Reading the ifnames from `attach_state`
+    // (not a captured Vec) keeps this correct even after attach/recovery mutates the pool at runtime.
     {
         let pool = attach_state.guest_pool.lock().unwrap();
         for slot in pool.iter() {
@@ -654,9 +1011,9 @@ fn worker_loop(
     n_workers: u16,
     shared: &SharedConfigMaps,
     port: &Port,
-    guest_ports: &[GuestPort],
+    datapath: &GuestDatapath,
+    attach: &DpdkAttachState,
     rings: &[LcoreRing],
-    ifindex_to_index: &std::collections::HashMap<u32, usize>,
     stop: &AtomicBool,
 ) {
     // Register as a QSBR reader so the writer's deferred RCU frees can reclaim past this lcore.
@@ -675,24 +1032,43 @@ fn worker_loop(
 
     let (mut rx, mut tx) = port.queue(q);
     // Build the guest rx/tx handles ONCE, here on this lcore (the queue handles are `!Send`, so they
-    // must be constructed on the worker lcore, never moved in). Guest ports are single-queue (queue
-    // 0). `_gtx` is the RESERVED fabric→guest return-path TxQueue (Task 5); Task 3 uses only `grx`.
+    // must be constructed on the worker lcore, never moved in). Guest ports are single-queue (queue 0).
     //
-    // PARTITION: this worker owns the round-robin subset `{ guest_ports[i] : owns(i, q, n_workers) }`
-    // (see `owns`). We take the FULL slice and stride it here rather than receiving a pre-sliced
-    // subset, because a strided subset is not a contiguous slice. A worker owning zero guest ports
-    // ends up with an empty `guest_qs` → the guest block below loops over nothing.
+    // PARTITION: this worker owns the round-robin subset `{ port_index i : owns(i, q, n_workers) }`
+    // (see `owns`). We iterate the shared `datapath.ports` cells, filter to the owned ones, and derive
+    // each owned port's queue handles from its `Mutex<Option<Port>>` cell. A worker owning zero guest
+    // ports ends up with an empty `guest_qs` → the guest block below loops over nothing.
     // Carry the port INDEX (`i`) alongside the ifindex + queues: the index is this port's slot in the
-    // parallel `rings` vec, so the ring-drain block below can drain exactly `rings[pi]` for each port
-    // this worker owns and tx it out that owned port's `TxQueue`.
-    let mut guest_qs: Vec<(usize, u32, nfkit::RxQueue, nfkit::TxQueue)> = guest_ports
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| owns(*i, q, n_workers))
-        .map(|(i, gp)| {
-            let (r, t) = gp.port.queue(0);
-            (i, gp.host_ifindex, r, t)
+    // parallel `rings`/`datapath.ports`/`generations` vecs, so the ring-drain block below can drain
+    // exactly `rings[pi]` for each owned port and the recovery rebuild can re-derive handles for it.
+    // The initial `host_ifindex` is read from the pool slot for port index `i` (port_id = i + 1).
+    let mut guest_qs: Vec<(usize, u32, nfkit::RxQueue, nfkit::TxQueue)> = (0..datapath.ports.len())
+        .filter(|i| owns(*i, q, n_workers))
+        .filter_map(|i| {
+            let host_ifindex = {
+                let pool = attach.guest_pool.lock().unwrap();
+                pool.iter()
+                    .find(|s| s.port_id == (i as u16 + 1))
+                    .map(|s| s.host_ifindex)
+                    .unwrap_or(0)
+            };
+            // Derive the `!Send` handles on THIS lcore from the shared Port cell. A `None` cell can
+            // only occur during shutdown teardown — skip it (the worker is exiting anyway).
+            datapath.ports[i]
+                .lock()
+                .as_ref()
+                .map(|p| p.queue(0))
+                .map(|(r, t)| (i, host_ifindex, r, t))
         })
+        .collect();
+    // The GENERATION HANDSHAKE reader side: cache the last-seen generation for each owned port index
+    // (parallel to `guest_qs`), seeded from the current atomic. On a mismatch at the top of the poll
+    // loop the worker rebuilds that port's `guest_qs` entry on-lcore (`rebuild_guest_qs_entry`) — the
+    // ONE sanctioned mutation to the static poll set. Control never touches the worker's `!Send`
+    // handles; it only swaps the shared `Port` + bumps the generation.
+    let mut cached_gen: Vec<u32> = guest_qs
+        .iter()
+        .map(|(pi, ..)| datapath.generations[*pi].load(Ordering::Acquire))
         .collect();
 
     let mut rx_burst = MbufBurst::new();
@@ -700,6 +1076,10 @@ fn worker_loop(
     let mut guest_burst = MbufBurst::new();
     // Reused each iteration to drain the guest↔guest handoff rings for the ports this worker owns.
     let mut ring_burst = MbufBurst::new();
+
+    // Last time (monotonic ns) this worker ran the shared_ct idle-timeout GC sweep. Only worker 0
+    // sweeps (see the throttle below), so this stays 0 on every other worker.
+    let mut last_gc_ns: u64 = 0;
 
     while !stop.load(Ordering::Acquire) {
         // Single monotonic-clock + `LOCAL` read per iteration, shared by BOTH blocks (the meter
@@ -709,6 +1089,34 @@ fn worker_loop(
         // any packet can be forwarded. With no `LOCAL` yet, both blocks drop their bursts.
         let now = monotonic_ns();
         let local = composed.cfg.local();
+
+        // ── GENERATION HANDSHAKE (dead-slot live recovery): rebuild owned ports whose gen bumped. ────
+        // The control thread (RecoverHandle::recover_slot) recreates a dead slot's veth + af_xdp
+        // ethdev, `Port::configure`s it, swaps it into `datapath.ports[pi]`, updates the redirect map,
+        // and bumps `generations[pi]` (Release). Here, ON THIS LCORE, each owned entry whose atomic no
+        // longer matches its cached value rebuilds its `!Send` `(RxQueue, TxQueue)` handles against the
+        // freshly-swapped `Port` + re-reads the recovered slot's new `host_ifindex`. This is the ONE
+        // sanctioned mutation to the otherwise-static poll set; the worker never touches control state.
+        for (entry, cg) in guest_qs.iter_mut().zip(cached_gen.iter_mut()) {
+            let pi = entry.0;
+            if datapath.generations[pi].load(Ordering::Acquire) != *cg {
+                *cg = rebuild_guest_qs_entry(datapath, attach, entry);
+            }
+        }
+
+        // ── shared_ct idle-timeout GC (worker 0 only, throttled to ~1 Hz) ───────────────────────────
+        // The peer-independent reverse conntrack entries a guest's SNAT/NAT64 egress pins into
+        // `shared_ct` are never otherwise reclaimed → a long-running node LEAKS them as flows end.
+        // Sweep them on their state-dependent idle timeout (eBPF CT model: 30 s NEW/SYN, 24 h
+        // ESTABLISHED — the exact `flowplane_core::conntrack` thresholds; see
+        // `SharedConfigMaps::shared_ct_sweep_expired`). Only worker 0 sweeps: a SINGLE sweeper is
+        // enough (removes are Mutex-serialized regardless, so extra sweepers would just contend the
+        // write lock). Reuses the per-burst `now` — no new timer/clock. Off the per-packet path:
+        // capped at one walk per second.
+        if q == 0 && now.saturating_sub(last_gc_ns) > 1_000_000_000 {
+            composed.cfg.shared_ct_sweep_expired(now);
+            last_gc_ns = now;
+        }
 
         // ── UPLINK block (fabric → guest): rx the uplink, run process_uplink_rx. ──────────────────
         rx_burst.clear();
@@ -765,8 +1173,31 @@ fn worker_loop(
                                 },
                             }
                         };
+                        // Resolve a `Redirect` target ifindex → its guest port index ONCE via the
+                        // shared redirect resolver (behind an `RwLock` because recovery re-keys it when
+                        // a slot's ifindex changes). Cheap read lock; writes are rare recovery events.
+                        let redirect_pi = if let Action::Redirect(ix) = action {
+                            datapath.ifindex_to_index.read().get(&ix).copied()
+                        } else {
+                            None
+                        };
                         match action {
-                            // Forward verdicts: queue the (mutated) mbuf for tx.
+                            // Fabric → guest delivery (decap + reverse-DNAT / LB / base): the uplink
+                            // entry returns `Redirect(guest_tap_ifindex)`. That target is a LOCAL guest
+                            // af_xdp port that may be owned by ANOTHER worker (and `TxQueue` is `!Send`),
+                            // so it MUST go through the per-port handoff ring — the SAME mechanism the
+                            // guest↔guest local-delivery path uses. The owning worker drains the ring and
+                            // tx's it out the guest port (see the RING DRAIN block below). Without this,
+                            // the decapped return was pushed onto the UPLINK tx burst and sent back out
+                            // the fabric instead of down to the guest (the "NAT-return not delivered" bug).
+                            Action::Redirect(_) if redirect_pi.is_some() => {
+                                let pi = redirect_pi.unwrap();
+                                if let Err(m) = rings[pi].enqueue(mbuf) {
+                                    drop(m); // ring full: return frame dropped (dest port backpressured)
+                                }
+                            }
+                            // Any other forward verdict (a redirect NOT to a local guest port — e.g.
+                            // reforward-to-fabric — or `Pass`) egresses the uplink tx burst as before.
                             Action::Redirect(_) | Action::Pass => tx_burst.push(mbuf),
                             // Drop: let the mbuf fall out of scope → `Mbuf`'s Drop frees it.
                             Action::Drop => {}
@@ -799,10 +1230,10 @@ fn worker_loop(
             for mut mbuf in guest_burst.drain(..) {
                 let action = {
                     let mut pkt = MbufPkt::new(&mut mbuf);
-                    // Branch on the inner frame's ethertype (offset 12): an IPv6 guest frame whose dst
-                    // is in the NAT64 well-known prefix runs the v6→v4 NAT64 egress; everything else is
-                    // the IPv4 SNAT+encap path. NOTE: native v6→v6 guest egress is NOT wired here — there
-                    // is no shared-core orchestrator for it yet; only NAT64 v6→v4 (0x86DD) is handled.
+                    // Branch on the inner frame's ethertype (offset 12): an IPv6 guest frame first
+                    // tries NAT64 v6→v4 (dst in 64:ff9b::/96); a NON-NAT64 v6 dst falls through to the
+                    // NATIVE v6→v6 egress (process_guest_tx_v6 — v6 firewall + conntrack6 + route6 +
+                    // IPv6-in-IPv6 encap). Everything else is the IPv4 SNAT+encap path.
                     let ethertype = pkt.read_array::<2>(12).map(u16::from_be_bytes);
                     // `ports_get` returns an OWNED `PortMeta` copy — bind it to `pm` so the subsequent
                     // `&mut composed` borrow in the datapath fn doesn't conflict (mirrors the handoff
@@ -816,17 +1247,39 @@ fn worker_loop(
                         // NAT64 v6-expansion) lookup finds this flow. This is exactly why partitioning
                         // guests across lcores is safe — return demux never depends on the owning lcore.
                         (Some(l), Some(pm)) => match ethertype {
-                            // NAT64 egress (v6 guest → v4 external): dispatches to the shared-core
-                            // process_guest_tx_nat64, seeding CT_F_NAT64 reverse entries so the NAT64
-                            // ingress return path is reachable. Returns Action directly (not GuestTxOut).
-                            Some(0x86DD) => process_guest_tx_nat64(
-                                &mut pkt,
-                                &mut composed,
-                                &GuestTxNat64In {
-                                    meta: &pm,
-                                    local: l,
-                                },
-                            ),
+                            // IPv6 guest egress: NAT64 v6→v4 FIRST (dst in 64:ff9b::/96), else the
+                            // NATIVE v6→v6 path. `process_guest_tx_nat64` returns `Action::Pass` for a
+                            // NON-NAT64 dst — and it does so at `nat64_egress_parse`'s `is_nat64_addr`
+                            // gate BEFORE any `shrink_head`/write, so the frame is UNMUTATED when it
+                            // Passes (verified against nat64.rs). We can therefore fall through and run
+                            // `process_guest_tx_v6` on the SAME frame: v6 firewall + conntrack6 +
+                            // route6 + IPv6-in-IPv6 encap (inner-proto 41). This lights up v6
+                            // deny-by-default firewall + conntrack6 on the DPDK serve loop.
+                            Some(0x86DD) => {
+                                let nat64 = process_guest_tx_nat64(
+                                    &mut pkt,
+                                    &mut composed,
+                                    &GuestTxNat64In {
+                                        meta: &pm,
+                                        local: l,
+                                    },
+                                );
+                                match nat64 {
+                                    Action::Pass => {
+                                        process_guest_tx_v6(
+                                            &mut pkt,
+                                            &mut composed,
+                                            &GuestTxIn {
+                                                meta: &pm,
+                                                src_ifindex: *host_ifindex,
+                                                now,
+                                            },
+                                        )
+                                        .action
+                                    }
+                                    other => other,
+                                }
+                            }
                             // IPv4 SNAT + encap egress.
                             _ => {
                                 process_guest_tx(
@@ -871,9 +1324,11 @@ fn worker_loop(
                     // ring; the worker that OWNS the dest port drains + tx's it (see the drain block
                     // below). Uniform: enqueue even for a same-worker dest (no special case).
                     Action::Redirect(ix) => {
-                        // Resolve the target ifindex → its ring index; a target that isn't a local
+                        // Resolve the target ifindex → its ring index via the shared redirect resolver
+                        // (RwLock; recovery re-keys it on ifindex change). A target that isn't a local
                         // guest port (not in the resolver) falls through and drops.
-                        if let Some(pi) = ifindex_to_index.get(&ix).copied() {
+                        let pi = datapath.ifindex_to_index.read().get(&ix).copied();
+                        if let Some(pi) = pi {
                             // Full ring → DROP (free the returned mbuf on scope exit); never spin in
                             // the poll loop. A full ring means the dest port's owner is backpressured.
                             if let Err(m) = rings[pi].enqueue(mbuf) {
@@ -929,6 +1384,80 @@ fn worker_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::port_backend::{AssignTarget, HostDevice};
+    use std::sync::Mutex;
+
+    /// A no-EAL fake `GuestPortBackend` that RECORDS `teardown` calls (name + order) so the
+    /// `StartupGuard` Drop behavior can be asserted without creating real veths. Every device-mechanics
+    /// method except `teardown` is `unimplemented!()` — the guard only ever calls `teardown` on Drop.
+    /// The record is `Arc<Mutex<Vec<String>>>` so the fake stays `Send + Sync` (trait bound) and the
+    /// test can inspect it after the guard drops.
+    struct RecordingBackend {
+        torn_down: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl GuestPortBackend for RecordingBackend {
+        fn preallocate(&self, _index: u16, _mtu: u32) -> anyhow::Result<HostDevice> {
+            unimplemented!("not exercised by the StartupGuard tests")
+        }
+        fn assign(
+            &self,
+            _host_ifname: &str,
+            _target: &AssignTarget,
+            _mac: [u8; 6],
+            _mtu: u32,
+        ) -> anyhow::Result<()> {
+            unimplemented!("not exercised by the StartupGuard tests")
+        }
+        fn release(&self, _host_ifname: &str, _target: &AssignTarget) {
+            unimplemented!("not exercised by the StartupGuard tests")
+        }
+        fn is_alive(&self, _slot: &GuestPortSlot) -> bool {
+            unimplemented!("not exercised by the StartupGuard tests")
+        }
+        fn recover(&self, _slot: &mut GuestPortSlot, _pool_port_id: u16) -> anyhow::Result<u32> {
+            unimplemented!("not exercised by the StartupGuard tests")
+        }
+        fn teardown(&self, host_ifname: &str) {
+            self.torn_down.lock().unwrap().push(host_ifname.to_string());
+        }
+    }
+
+    /// An ARMED guard tears down every tracked host device on Drop, in creation order — the
+    /// mid-startup leak fix. Simulates a `?`-return before the worker spawn (guard never disarmed).
+    #[test]
+    fn startup_guard_armed_tears_down_tracked_in_order() {
+        let torn_down = Arc::new(Mutex::new(Vec::new()));
+        let backend: Arc<dyn GuestPortBackend> = Arc::new(RecordingBackend {
+            torn_down: torn_down.clone(),
+        });
+        {
+            let mut guard = StartupGuard::new(backend);
+            guard.track("a".into());
+            guard.track("b".into());
+            guard.track("c".into());
+            // drop here (armed) → teardown a, b, c
+        }
+        assert_eq!(*torn_down.lock().unwrap(), vec!["a", "b", "c"]);
+    }
+
+    /// A DISARMED guard tears NOTHING down on Drop — the happy path where the worker thread has taken
+    /// ownership of the pool. This is what keeps the successful-startup path byte-identical.
+    #[test]
+    fn startup_guard_disarmed_tears_down_nothing() {
+        let torn_down = Arc::new(Mutex::new(Vec::new()));
+        let backend: Arc<dyn GuestPortBackend> = Arc::new(RecordingBackend {
+            torn_down: torn_down.clone(),
+        });
+        {
+            let mut guard = StartupGuard::new(backend);
+            guard.track("a".into());
+            guard.track("b".into());
+            guard.disarm();
+            // drop here (disarmed) → no teardown
+        }
+        assert!(torn_down.lock().unwrap().is_empty());
+    }
 
     #[test]
     fn serve_args_parse_minimal() {

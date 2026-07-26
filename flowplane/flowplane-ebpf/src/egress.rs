@@ -1,7 +1,6 @@
-use flowplane_common::{PortMeta, RouteLpmData6};
+use flowplane_common::PortMeta;
 use flowplane_core::encap::EncapParams;
 
-use crate::maps::{LOCAL, ROUTES6, UNDERLAY};
 use crate::parse::ETH_LEN;
 
 /// What the per-program glue should do after the in-place egress pipeline runs.
@@ -183,35 +182,22 @@ pub enum EgressFwCt {
 /// with the route-lookup Key<RouteLpmData6>).
 #[inline(never)]
 fn egress_fw_ct_v6(data: usize, data_end: usize, ifindex: u32, vni: u32) -> EgressFwCt {
-    if let Some(key) = crate::conntrack::ct_key6(data, data_end, ETH_LEN, vni) {
-        match unsafe { crate::maps::CONNTRACK6.get(&key) } {
-            Some(e) => {
-                let mut e = *e;
-                crate::conntrack::ct_touch6(data, data_end, ETH_LEN, &key, &mut e);
-            }
-            None => {
-                if flowplane_core::firewall::fw_eval_dir6(
-                    &crate::coreimpl::RawPkt::new(data, data_end),
-                    &crate::coreimpl::GlobalMaps,
-                    ETH_LEN,
-                    ifindex,
-                    flowplane_common::FW_DIR_EGRESS,
-                ) == flowplane_common::FW_ACTION_DROP
-                {
-                    return EgressFwCt::Drop;
-                }
-                flowplane_core::conntrack::ct_create_default6(
-                    &crate::coreimpl::RawPkt::new(data, data_end),
-                    &mut crate::coreimpl::GlobalMaps,
-                    ETH_LEN,
-                    vni,
-                    crate::conntrack::now(),
-                );
-                return EgressFwCt::Pass { was_new: true };
-            }
-        }
+    // Seam-not-duplicate: delegate to the SHARED core stage (`flowplane_core::egress::egress_fw_ct6`)
+    // — the SAME code the native SimNode + DPDK `process_guest_tx_v6` run. This wrapper stays a
+    // `#[inline(never)]` subprogram so the core stage's CtKey6/CtEntry locals get their own BPF stack
+    // frame (freed before `route_decision_v6`'s route-lookup frame). Reconstruct the packet window
+    // inside (scalar data/data_end args — no packet pointer crosses the call boundary).
+    match flowplane_core::egress::egress_fw_ct6(
+        &crate::coreimpl::RawPkt::new(data, data_end),
+        &mut crate::coreimpl::GlobalMaps,
+        ETH_LEN,
+        ifindex,
+        vni,
+        crate::conntrack::now(),
+    ) {
+        flowplane_core::egress::EgressFwCt6::Drop => EgressFwCt::Drop,
+        flowplane_core::egress::EgressFwCt6::Pass { was_new } => EgressFwCt::Pass { was_new },
     }
-    EgressFwCt::Pass { was_new: false }
 }
 
 /// Destination INGRESS firewall for the v6 same-node local fast path. On a NEW egress flow delivered
@@ -241,41 +227,32 @@ fn dest_ingress_fw_v6(data: usize, data_end: usize, tap_ifindex: u32) -> bool {
 /// reconstructs the packet window inside — no packet pointer crosses the call boundary.
 #[inline(never)]
 fn route_decision_v6(data: usize, data_end: usize, meta: &PortMeta) -> EgressVerdict {
-    let p = data as *const u8;
-    // inner IPv6 dst at ETH_LEN + 24
-    let dst = unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + 24) as *const [u8; 16]) };
-    let route = match ROUTES6.get(&aya_ebpf::maps::lpm_trie::Key::new(
-        160,
-        RouteLpmData6 {
-            vni: meta.vni.to_be_bytes(),
-            ipv6: dst,
+    // Seam-not-duplicate: delegate to the SHARED core stage (`flowplane_core::egress::route_decision6`
+    // = `route6` + `deliver`, `inner_proto = IPPROTO_IPV6`) — the SAME code the native SimNode + DPDK
+    // `process_guest_tx_v6` run. GlobalMaps' `route6_get`/`underlay_get`/`local()` compile to the
+    // same `ROUTES6`/`UNDERLAY`/`LOCAL[0]` accesses this wrapper used before, so the byte-relevant
+    // decision is unchanged. This wrapper stays a `#[inline(never)]` subprogram so the core stage's
+    // route-lookup `Key<RouteLpmData6>` frame gets its own BPF stack frame, sequential to (never
+    // coexisting with) `egress_fw_ct_v6`'s CtKey6 frame (512B combined limit). The outer flow label
+    // is computed here (out-of-line via `egress_flow_label`) and passed in, so no address arrays land
+    // on this frame.
+    let flow_label = egress_flow_label(data, data_end, true);
+    match flowplane_core::egress::route_decision6(
+        &crate::coreimpl::RawPkt::new(data, data_end),
+        &crate::coreimpl::GlobalMaps,
+        meta,
+        flow_label,
+    ) {
+        flowplane_core::egress::Deliver::Local {
+            tap_ifindex,
+            guest_mac,
+        } => EgressVerdict::Local {
+            tap_ifindex,
+            guest_mac,
         },
-    )) {
-        Some(r) => r,
-        None => return EgressVerdict::Pass,
-    };
-    // Local fast path: if the nexthop underlay is a LOCAL interface, deliver straight to that tap.
-    if let Some(u) = unsafe { UNDERLAY.get(&route.nexthop_ipv6) } {
-        if u.tap_ifindex != 0 {
-            return EgressVerdict::Local {
-                tap_ifindex: u.tap_ifindex,
-                guest_mac: u.guest_mac,
-            };
-        }
+        flowplane_core::egress::Deliver::Encap(e) => EgressVerdict::Encap(e),
+        flowplane_core::egress::Deliver::Pass => EgressVerdict::Pass,
     }
-    let local = match LOCAL.get(0) {
-        Some(l) => l,
-        None => return EgressVerdict::Pass,
-    };
-    EgressVerdict::Encap(EncapParams {
-        gateway_mac: local.gateway_mac,
-        uplink_mac: local.uplink_mac,
-        uplink_ifindex: local.uplink_ifindex,
-        src_underlay: meta.underlay_ipv6,
-        nexthop_ipv6: route.nexthop_ipv6,
-        inner_proto: crate::parse::IPPROTO_IPV6,
-        flow_label: egress_flow_label(data, data_end, true),
-    })
 }
 
 /// IPv6-inner egress decision (fw/ct + route6 + local/encap). Map-driven; used by tc. No NAT64

@@ -786,6 +786,43 @@ impl SharedConfigMaps {
     pub fn shared_ct_for_each(&self, f: impl FnMut(&CtKey, &CtEntry)) {
         self.shared_ct.for_each(f);
     }
+
+    /// Evict `shared_ct` reverse entries idle past their state-dependent timeout, reclaiming the
+    /// leak a long-running node would otherwise accrue (SNAT/NAT64 egress pins a reverse entry per
+    /// NEW flow; nothing else ever removes them). Returns the count evicted.
+    ///
+    /// TIMEOUT MODEL: identical to the eBPF/sim GC — this calls
+    /// [`flowplane_core::conntrack::ct_is_expired`], which uses the SAME
+    /// `DEFAULT_TIMEOUT_NS` (30 s, NEW/SYN/other) vs `TCP_ESTABLISHED_TIMEOUT_NS` (24 h, when
+    /// `tcp_state == TCP_ESTABLISHED`) constants the datapath's own aging uses. `now` and the
+    /// entries' `last_seen` are both kernel-monotonic NANOSECONDS; expiry is
+    /// `now.saturating_sub(last_seen) > timeout_ns(entry)`. No magic numbers here — the thresholds
+    /// live in `flowplane-core`.
+    ///
+    /// CONCURRENCY: runs OFF the per-packet path (the serve loop throttles it to ~1 Hz on a single
+    /// worker). Removes go through the single-writer `shared_ct_write` Mutex, exactly like every
+    /// other `shared_ct` write. COLLECT-THEN-REMOVE: we first snapshot the expired keys under
+    /// `shared_ct_for_each`, THEN remove them — we NEVER mutate the `RcuHash` mid-`for_each`
+    /// (iterating while removing would be a use-after / skip hazard on the underlying rte_hash).
+    pub fn shared_ct_sweep_expired(&self, now: u64) -> usize {
+        // Phase 1: collect expired keys (read-only walk; no write lock held).
+        let mut expired: Vec<CtKey> = Vec::new();
+        self.shared_ct_for_each(|k, e| {
+            if flowplane_core::conntrack::ct_is_expired(e, now) {
+                expired.push(*k);
+            }
+        });
+        // Phase 2: remove them (each `shared_ct_remove` takes the single-writer Mutex). Count only
+        // the removes that actually found a live entry (a concurrent writer could, in principle,
+        // have removed one first).
+        let mut n = 0;
+        for k in &expired {
+            if self.shared_ct_remove(k) {
+                n += 1;
+            }
+        }
+        n
+    }
 }
 
 impl Drop for SharedConfigMaps {
