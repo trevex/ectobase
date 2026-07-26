@@ -10,6 +10,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/clab/env.sh"
 TOPO="${HERE}/clab/ipv6-fabric.clab.yml"
 CLAB="${CLAB:-containerlab}"
 
@@ -25,7 +26,7 @@ HOST_ONLY=1 bash "${HERE}/bpf-cleanup.sh" || echo "clab-up: bpf-cleanup (pre-dep
 # Build it if missing, and render the per-node prefix mount paths to absolutes
 # (kind rejects relative extraMounts hostPaths).
 REPO="$(cd "${HERE}/.." && pwd)"
-if ! docker image inspect ghcr.io/trevex/ectobase/kind-node-fabric:dev >/dev/null 2>&1; then
+if ! docker image inspect "${CLAB_IMAGE_KINDNODE}" >/dev/null 2>&1; then
   make -C "${REPO}" image-kindnode
 fi
 PREFIX_DIR="${HERE}/clab/prefixes"

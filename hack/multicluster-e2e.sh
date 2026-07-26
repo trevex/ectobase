@@ -18,9 +18,10 @@
 # ghcr.io/trevex/ectobase/{flowplane,netplane}:dev are built. Run from the repo root.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/clab/env.sh"
 export PATH="$HOME/go/bin:$PATH"
 
-REFLECTOR6="fd00:db8:0:1::1"            # k01 control-plane fabric loopback
+REFLECTOR6="${CLAB_FABRIC_REFLECTOR6}"  # k01 control-plane fabric loopback (default in hack/clab/env.sh)
 APISERVER6="https://[${REFLECTOR6}]:6443"
 # Per-run, USER-OWNED kubeconfig files. Do NOT use fixed /tmp paths: `sudo kind get kubeconfig > file`
 # runs the redirect as the invoking user, so if a fixed path is left ROOT-owned by an earlier full-sudo
@@ -31,17 +32,17 @@ K2=$(mktemp -t k02.kubeconfig.XXXXXX)
 trap 'rm -f "$K1" "$K2"' EXIT
 GRPCURL_IMG="fullstorydev/grpcurl:latest"
 PROTO_MNT="-v $(pwd)/api/proto:/proto:ro"
-XDP=ghcr.io/trevex/ectobase/flowplane:dev
-NETPLANE=ghcr.io/trevex/ectobase/netplane:dev
+XDP="${CLAB_IMAGE_FLOWPLANE}"
+NETPLANE="${CLAB_IMAGE_NETPLANE}"
 
 say() { echo -e "\n=== $* ==="; }
 
 say "kubeconfigs"
-sudo kind get kubeconfig --name k01 > "$K1"
-sudo kind get kubeconfig --name k02 > "$K2"
+sudo kind get kubeconfig --name "$CLAB_KIND_CENTRAL" > "$K1"
+sudo kind get kubeconfig --name "$CLAB_KIND_COMPUTE" > "$K2"
 # Fail fast with a clear message if a kubeconfig points at a dead api-server (stale port etc.),
 # instead of letting every later kubectl fail with a cryptic connection-refused.
-for kc in "$K1:k01" "$K2:k02"; do
+for kc in "$K1:$CLAB_KIND_CENTRAL" "$K2:$CLAB_KIND_COMPUTE"; do
   f="${kc%:*}"; name="${kc#*:}"
   kubectl --kubeconfig "$f" get --raw='/healthz' >/dev/null 2>&1 \
     || { echo "FATAL: cannot reach $name api-server ($(grep -oE 'server: .*' "$f")). Is the cluster up? Re-run hack/clab-up.sh." >&2; exit 1; }
@@ -50,7 +51,7 @@ kubectl --kubeconfig "$K1" get nodes -o name
 kubectl --kubeconfig "$K2" get nodes -o name
 
 say "load images into both clusters"
-for c in k01 k02; do
+for c in "$CLAB_KIND_CENTRAL" "$CLAB_KIND_COMPUTE"; do
   sudo kind load docker-image "$XDP" --name "$c" 2>&1 | tail -1
   sudo kind load docker-image "$NETPLANE" --name "$c" 2>&1 | tail -1
 done
@@ -87,7 +88,7 @@ contexts:
 current-context: central
 " --dry-run=client -o yaml | kubectl --kubeconfig "$K2" apply -f -
 # k02 agent DS: same image, reflector on the fabric, kubeconfig = the central one above.
-sed -e 's#\(--reflector=\).*#\1[fd00:db8:0:1::1]:1338"#' config/deploy/agent.yaml \
+sed -e "s#\\(--reflector=\\).*#\\1[${CLAB_FABRIC_REFLECTOR6}]:${CLAB_REFLECTOR_PORT}\"#" config/deploy/agent.yaml \
   | kubectl --kubeconfig "$K2" apply -f -
 kubectl --kubeconfig "$K2" -n ectobase-system rollout status ds/flowplane --timeout=90s 2>&1 | tail -1
 
@@ -117,8 +118,8 @@ attach_endpoint() {
   local out ul
   out=$(sudo docker run --rm --network "container:$node" $PROTO_MNT "$GRPCURL_IMG" -plaintext \
     -import-path /proto/dataplane/v1 -proto dataplane.proto \
-    -d "{\"interface_id\":\"$id\",\"netns_path\":\"/var/run/netns/$id\",\"vni\":100,\"requested_ips\":[\"$ip\"]}" \
-    127.0.0.1:1337 dataplane.v1.DataplaneNode/AttachInterface 2>&1)
+    -d "{\"interface_id\":\"$id\",\"netns_path\":\"/var/run/netns/$id\",\"vni\":${CLAB_VNI},\"requested_ips\":[\"$ip\"]}" \
+    "127.0.0.1:${CLAB_DATAPLANE_PORT}" dataplane.v1.DataplaneNode/AttachInterface 2>&1)
   ul=$(echo "$out" | grep -o 'fd00:[0-9a-f:]*' | head -1)
   # dpservice-model addressing inside the endpoint netns
   sudo docker exec "$node" sh -c "ip netns exec $id ip addr add $ip/32 dev $id; \
@@ -128,28 +129,28 @@ attach_endpoint() {
 }
 
 say "attach endpoints on both clusters' nodes"
-UL_A=$(attach_endpoint k01-control-plane nic-a 10.0.0.1); echo "k01 nic-a underlay=$UL_A"
-UL_C=$(attach_endpoint k02-control-plane nic-c 10.0.0.3); echo "k02 nic-c underlay=$UL_C"
+UL_A=$(attach_endpoint "$CLAB_NODE_A" nic-a "$CLAB_OVERLAY_IP_A"); echo "$CLAB_NODE_A nic-a underlay=$UL_A"
+UL_C=$(attach_endpoint "$CLAB_NODE_C" nic-c "$CLAB_OVERLAY_IP_C"); echo "$CLAB_NODE_C nic-c underlay=$UL_C"
 
 say "record allocated underlay /128s in the CRD status (agent announces these)"
 kubectl --kubeconfig "$K1" patch networkinterface nic-a --subresource=status --type=merge \
-  -p "{\"status\":{\"vni\":100,\"underlayRoute\":\"$UL_A\",\"state\":\"Ready\"}}"
+  -p "{\"status\":{\"vni\":${CLAB_VNI},\"underlayRoute\":\"$UL_A\",\"state\":\"Ready\"}}"
 kubectl --kubeconfig "$K1" patch networkinterface nic-c --subresource=status --type=merge \
-  -p "{\"status\":{\"vni\":100,\"underlayRoute\":\"$UL_C\",\"state\":\"Ready\"}}"
+  -p "{\"status\":{\"vni\":${CLAB_VNI},\"underlayRoute\":\"$UL_C\",\"state\":\"Ready\"}}"
 kubectl --kubeconfig "$K1" -n ectobase-system rollout restart ds/netplane-agent
 kubectl --kubeconfig "$K2" -n ectobase-system rollout restart ds/netplane-agent
 sleep 18
 
 say "routes learned cross-cluster? (k02's flowplane should have 10.0.0.1 via k01's underlay)"
-K2X=$(sudo docker exec k02-control-plane crictl ps --name flowplane -o json 2>/dev/null | grep -o '"id": "[a-f0-9]*"' | head -1 | cut -d'"' -f4)
-sudo docker exec k02-control-plane crictl logs "$K2X" 2>&1 | grep -i ROUTE | tail -4
+K2X=$(sudo docker exec "$CLAB_NODE_C" crictl ps --name flowplane -o json 2>/dev/null | grep -o '"id": "[a-f0-9]*"' | head -1 | cut -d'"' -f4)
+sudo docker exec "$CLAB_NODE_C" crictl logs "$K2X" 2>&1 | grep -i ROUTE | tail -4
 
 say "stage busybox (musl) for ping"
 CID=$(sudo docker create busybox:musl); sudo docker cp "$CID":/bin/busybox /tmp/busybox-musl >/dev/null; sudo docker rm "$CID" >/dev/null
-sudo docker cp /tmp/busybox-musl k01-control-plane:/busybox
-sudo docker cp /tmp/busybox-musl k02-control-plane:/busybox
+sudo docker cp /tmp/busybox-musl "$CLAB_NODE_A":/busybox
+sudo docker cp /tmp/busybox-musl "$CLAB_NODE_C":/busybox
 
-say "CROSS-CLUSTER OVERLAY PING: k01 nic-a 10.0.0.1  -->  k02 nic-c 10.0.0.3"
-sudo docker exec k01-control-plane ip netns exec nic-a /busybox ping -c 3 -W 2 10.0.0.3 2>&1 | tail -5
-say "reverse: k02 nic-c 10.0.0.3  -->  k01 nic-a 10.0.0.1"
-sudo docker exec k02-control-plane ip netns exec nic-c /busybox ping -c 3 -W 2 10.0.0.1 2>&1 | tail -5
+say "CROSS-CLUSTER OVERLAY PING: $CLAB_NODE_A nic-a $CLAB_OVERLAY_IP_A  -->  $CLAB_NODE_C nic-c $CLAB_OVERLAY_IP_C"
+sudo docker exec "$CLAB_NODE_A" ip netns exec nic-a /busybox ping -c 3 -W 2 "$CLAB_OVERLAY_IP_C" 2>&1 | tail -5
+say "reverse: $CLAB_NODE_C nic-c $CLAB_OVERLAY_IP_C  -->  $CLAB_NODE_A nic-a $CLAB_OVERLAY_IP_A"
+sudo docker exec "$CLAB_NODE_C" ip netns exec nic-c /busybox ping -c 3 -W 2 "$CLAB_OVERLAY_IP_A" 2>&1 | tail -5
