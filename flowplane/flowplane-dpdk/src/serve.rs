@@ -1400,6 +1400,12 @@ mod tests {
         fn preallocate(&self, _index: u16, _mtu: u32) -> anyhow::Result<HostDevice> {
             unimplemented!("not exercised by the StartupGuard tests")
         }
+        fn assign_target(&self, netns_path: String, guest_ifname: String) -> AssignTarget {
+            AssignTarget::Veth {
+                netns_path,
+                guest_ifname,
+            }
+        }
         fn assign(
             &self,
             _host_ifname: &str,

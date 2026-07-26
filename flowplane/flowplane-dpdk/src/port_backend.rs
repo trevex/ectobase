@@ -12,21 +12,33 @@
 //! are the SAME for all three — only the underlying device mechanics differ — so a single
 //! [`GuestPortBackend`] trait fronts them and the serve/attach/detach paths stay backend-agnostic.
 //!
-//! ── SEAMS (NOT built here) ─────────────────────────────────────────────────────────────────────
-//! `TapBackend` (VM/KubeVirt guests, `preallocate` = create a kernel TAP, `assign`/`release` = hand
-//! the tap fd to qemu) and `VfBackend` (real ConnectX SR-IOV, `preallocate` = a PF-hosted VF,
-//! `assign`/`release` = re-home the VF representor between PF and pod) are documented FOLLOW-UP seams.
-//! Do NOT create their structs until their tasks land — this module ships ONLY the trait + the
-//! `VethBackend` impl (the behavior-preserving refactor of the existing veth pool mechanics).
+//! ── SEAMS (partially built) ────────────────────────────────────────────────────────────────────
+//! `TapBackend` (VM/KubeVirt guests, `preallocate` = create a persistent kernel TAP netdev,
+//! `assign`/`release` = no-ops beyond the target kind assertion — qemu holds the guest-facing fd) is
+//! implemented here alongside `VethBackend`. `VfBackend` (real ConnectX SR-IOV, `preallocate` = a
+//! PF-hosted VF, `assign`/`release` = re-home the VF representor between PF and pod) remains a
+//! documented FOLLOW-UP seam — do NOT create its struct until its task lands.
 use anyhow::Result;
 
 use crate::attach_state::GuestPortSlot;
 
-/// The consumer of an assigned guest-facing device: the pod's netns + the in-netns interface name.
-/// For veth/vf this is the pod netns path + the guest ifname (the guest's `eth0`-equivalent).
-pub struct AssignTarget {
-    pub netns_path: String,
-    pub guest_ifname: String,
+/// The consumer of an assigned guest-facing device, made TYPE-DISTINCT per device kind so a backend
+/// can never be handed a target it can't service. `Veth` carries the pod netns path (the guest-end
+/// veth moves INTO it) + the in-netns guest ifname; `Tap` carries only the guest ifname because the
+/// tap netdev STAYS in the serve netns (qemu holds the guest-facing fd — there is no netns move).
+///
+/// The right variant is built by [`GuestPortBackend::assign_target`] so callers (node.rs) stay
+/// backend-agnostic: they hand the raw attach inputs (netns_path + guest_ifname) to the backend and
+/// get back the variant that backend's `assign`/`release` expect.
+pub enum AssignTarget {
+    /// Container/veth consumer: the guest-end veth is moved into `netns_path` as `guest_ifname`.
+    Veth {
+        netns_path: String,
+        guest_ifname: String,
+    },
+    /// VM/tap consumer: no netns — the tap netdev stays in the serve netns; qemu holds the fd. Only
+    /// the guest ifname is carried (for symmetry/logging); there is no bind/unbind of the netdev.
+    Tap { guest_ifname: String },
 }
 
 /// A preallocated pool HOST device: the netdev name (for `--vdev=net_af_xdp<n>,iface=<name>`) + its
@@ -45,6 +57,10 @@ pub trait GuestPortBackend: Send + Sync {
     /// Create the pool HOST device for slot `index` BEFORE EAL init; returns the netdev name (for
     /// `--vdev=net_af_xdp<n>,iface=<name>`) + resolved ifindex.
     fn preallocate(&self, index: u16, mtu: u32) -> Result<HostDevice>;
+    /// Build the backend-appropriate [`AssignTarget`] from the raw attach inputs (keeps callers
+    /// agnostic — node.rs never picks the variant). Veth → `AssignTarget::Veth`, tap → `Tap` (which
+    /// discards `netns_path`).
+    fn assign_target(&self, netns_path: String, guest_ifname: String) -> AssignTarget;
     /// Assign the guest-facing device (derived from `host_ifname`) into the consumer (pod netns for
     /// veth/vf).
     fn assign(
@@ -91,28 +107,57 @@ impl GuestPortBackend for VethBackend {
         })
     }
 
+    fn assign_target(&self, netns_path: String, guest_ifname: String) -> AssignTarget {
+        AssignTarget::Veth {
+            netns_path,
+            guest_ifname,
+        }
+    }
+
     fn assign(&self, host_ifname: &str, t: &AssignTarget, mac: [u8; 6], mtu: u32) -> Result<()> {
-        // The placeholder guest-end lives in the root netns as `<host_ifname>p` (the
-        // create_preallocated_veth convention); move it into the pod netns as `guest_ifname`.
-        // `false` = don't disable csum offload (real NIC finalizes csum; clab detection is a
-        // follow-up — identical to the value serve/node passed inline).
-        let peer = format!("{host_ifname}p");
-        flowplane_device::bind_preallocated_guest_end(
-            &peer,
-            &t.netns_path,
-            &t.guest_ifname,
-            mac,
-            mtu,
-            false,
-        )
+        // Only a Veth target is valid here — `assign_target` guarantees it, but the enum makes a
+        // mismatched kind a hard programmer error rather than a silent wrong-path.
+        match t {
+            AssignTarget::Veth {
+                netns_path,
+                guest_ifname,
+            } => {
+                // The placeholder guest-end lives in the root netns as `<host_ifname>p` (the
+                // create_preallocated_veth convention); move it into the pod netns as `guest_ifname`.
+                // `false` = don't disable csum offload (real NIC finalizes csum; clab detection is a
+                // follow-up — identical to the value serve/node passed inline).
+                let peer = format!("{host_ifname}p");
+                flowplane_device::bind_preallocated_guest_end(
+                    &peer,
+                    netns_path,
+                    guest_ifname,
+                    mac,
+                    mtu,
+                    false,
+                )
+            }
+            AssignTarget::Tap { .. } => unreachable!("VethBackend received a Tap target"),
+        }
     }
 
     fn release(&self, host_ifname: &str, t: &AssignTarget) {
-        // Move the guest-end back to the root netns as the placeholder `<host_ifname>p`. Best-effort
-        // (always Ok internally): a destroyed pod netns is a documented first-slice limitation.
-        let peer = format!("{host_ifname}p");
-        let _ =
-            flowplane_device::unbind_preallocated_guest_end(&t.netns_path, &t.guest_ifname, &peer);
+        match t {
+            AssignTarget::Veth {
+                netns_path,
+                guest_ifname,
+            } => {
+                // Move the guest-end back to the root netns as the placeholder `<host_ifname>p`.
+                // Best-effort (always Ok internally): a destroyed pod netns is a documented
+                // first-slice limitation.
+                let peer = format!("{host_ifname}p");
+                let _ = flowplane_device::unbind_preallocated_guest_end(
+                    netns_path,
+                    guest_ifname,
+                    &peer,
+                );
+            }
+            AssignTarget::Tap { .. } => unreachable!("VethBackend received a Tap target"),
+        }
     }
 
     fn is_alive(&self, slot: &GuestPortSlot) -> bool {
@@ -171,5 +216,92 @@ impl GuestPortBackend for VethBackend {
         // Idempotent host-device delete (deletes the peer too). Used by startup rollback (G5) +
         // shutdown. Best-effort — `delete_link` ignores a missing link.
         flowplane_device::delete_link(host_ifname);
+    }
+}
+
+/// The VM/KubeVirt guest-port backend: preallocated pool devices are PERSISTENT kernel TAP netdevs
+/// (`fpgtap{i}`), each up in the serve netns + bound to its af_xdp ethdev port. Unlike veth there is
+/// NO netns move at attach — the tap netdev stays put and the guest-facing fd is opened by qemu (or a
+/// test) via [`flowplane_device::open_tap_fd`], NOT by this backend. This makes tap MORE VF-like than
+/// veth: the persistent tap SURVIVES the VM (it is destroyed only at serve teardown), so `assign`
+/// /`release` are near-no-ops and `recover` rarely has anything to do (contrast `VethBackend::recover`,
+/// which hotplug-rebinds a veth pair that died together with the pod netns).
+///
+/// `mtu` is the guest link MTU (underlay MTU − encap overhead) — the SAME value `serve.rs` uses at
+/// preallocation. `recover` needs it to recreate the tap with the identical link MTU on the (rare)
+/// path where the netdev somehow vanished.
+///
+/// NOTE (slice scope): the real qemu fd-handoff (open the tap fd → pass it to the VM) is the deferred
+/// KubeVirt attach path. This backend only owns the pool netdev lifecycle; `assign` is a no-op beyond
+/// asserting the target kind.
+pub struct TapBackend {
+    pub mtu: u32,
+}
+
+impl GuestPortBackend for TapBackend {
+    fn preallocate(&self, index: u16, mtu: u32) -> Result<HostDevice> {
+        let host = format!("fpgtap{index}");
+        // Deterministic placeholder MAC. The 0x0f family byte distinguishes the tap pool from the
+        // veth pool (which uses 0x0e) so the two pools never collide on a MAC in the same netns. Not
+        // datapath-significant — the real guest MAC is programmed at attach.
+        let mac = [0x02, 0x00, 0x00, 0x00, 0x0f, index as u8];
+        let d = flowplane_device::create_persistent_tap(&host, mac, mtu)?;
+        Ok(HostDevice {
+            host_ifname: d.host_name,
+            host_ifindex: d.host_ifindex,
+        })
+    }
+
+    fn assign_target(&self, _netns_path: String, guest_ifname: String) -> AssignTarget {
+        // Tap has no netns move — drop `netns_path`, keep only the guest ifname.
+        AssignTarget::Tap { guest_ifname }
+    }
+
+    fn assign(
+        &self,
+        _host_ifname: &str,
+        target: &AssignTarget,
+        _mac: [u8; 6],
+        _mtu: u32,
+    ) -> Result<()> {
+        // The tap netdev already exists + is up (preallocate). The guest-facing fd is opened by the VM
+        // (qemu) / the test via `flowplane_device::open_tap_fd(host_ifname)`, NOT here — so assign is a
+        // no-op for the slice beyond asserting the target kind. (The real qemu fd-handoff is the
+        // deferred KubeVirt path.)
+        match target {
+            AssignTarget::Tap { .. } => Ok(()),
+            AssignTarget::Veth { .. } => unreachable!("TapBackend received a Veth target"),
+        }
+    }
+
+    fn release(&self, _host_ifname: &str, _target: &AssignTarget) {
+        // The persistent tap survives the VM; qemu owns closing the guest-facing fd. Nothing to undo.
+    }
+
+    fn is_alive(&self, slot: &GuestPortSlot) -> bool {
+        // Cheap sysfs stat (no subprocess) — same shape as VethBackend.
+        flowplane_device::link_exists(&slot.host_ifname)
+    }
+
+    /// Persistent tap SURVIVES the VM → near-no-op. Only recreate it on the (rare) path where the
+    /// netdev somehow vanished; there is no vdev hotplug churn (contrast `VethBackend::recover`).
+    fn recover(&self, slot: &mut GuestPortSlot, pool_port_id: u16) -> Result<u32> {
+        if !flowplane_device::link_exists(&slot.host_ifname) {
+            // Recreate with the SAME deterministic placeholder MAC scheme preallocation used
+            // (02:00:00:00:0f:<i>, i = pool_port_id − 1 since uplink = port 0, guests = 1..=N).
+            let d = flowplane_device::create_persistent_tap(
+                &slot.host_ifname,
+                [0x02, 0, 0, 0, 0x0f, (pool_port_id.saturating_sub(1)) as u8],
+                self.mtu,
+            )?;
+            slot.host_ifindex = d.host_ifindex;
+        }
+        slot.dead = false;
+        Ok(slot.host_ifindex)
+    }
+
+    fn teardown(&self, host_ifname: &str) {
+        // Idempotent tap delete. Startup rollback + shutdown. Best-effort.
+        flowplane_device::delete_tap(host_ifname);
     }
 }

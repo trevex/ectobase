@@ -292,10 +292,9 @@ impl DataplaneNode for DpdkNodeService {
         {
             let backend = attach.backend.clone();
             let host_ifname = slot_host_ifname.clone();
-            let target = crate::port_backend::AssignTarget {
-                netns_path: r.netns_path.clone(),
-                guest_ifname: guest_name.clone(),
-            };
+            // Let the backend pick the target variant (veth → Veth, tap → Tap) so this path stays
+            // backend-agnostic.
+            let target = backend.assign_target(r.netns_path.clone(), guest_name.clone());
             let guest_mtu = attach.guest_mtu;
             let join = tokio::task::spawn_blocking(move || {
                 backend.assign(&host_ifname, &target, mac, guest_mtu)
@@ -318,10 +317,7 @@ impl DataplaneNode for DpdkNodeService {
                     // `release` (device mechanics; derives the placeholder peer from `host_ifname`).
                     let backend = attach.backend.clone();
                     let host_ifname = slot_host_ifname.clone();
-                    let target = crate::port_backend::AssignTarget {
-                        netns_path: r.netns_path.clone(),
-                        guest_ifname: guest_name.clone(),
-                    };
+                    let target = backend.assign_target(r.netns_path.clone(), guest_name.clone());
                     let _ =
                         tokio::task::spawn_blocking(move || backend.release(&host_ifname, &target))
                             .await;
@@ -379,10 +375,7 @@ impl DataplaneNode for DpdkNodeService {
             {
                 let backend = attach.backend.clone();
                 let host_ifname = slot_host_ifname.clone();
-                let target = crate::port_backend::AssignTarget {
-                    netns_path: r.netns_path.clone(),
-                    guest_ifname: guest_name.clone(),
-                };
+                let target = backend.assign_target(r.netns_path.clone(), guest_name.clone());
                 let _ = tokio::task::spawn_blocking(move || backend.release(&host_ifname, &target))
                     .await;
             }
@@ -452,10 +445,7 @@ impl DataplaneNode for DpdkNodeService {
             {
                 let backend = attach.backend.clone();
                 let host_ifname = slot_host_ifname.clone();
-                let target = crate::port_backend::AssignTarget {
-                    netns_path: r.netns_path.clone(),
-                    guest_ifname: guest_name.clone(),
-                };
+                let target = backend.assign_target(r.netns_path.clone(), guest_name.clone());
                 let _ = tokio::task::spawn_blocking(move || backend.release(&host_ifname, &target))
                     .await;
             }
@@ -576,10 +566,10 @@ impl DataplaneNode for DpdkNodeService {
             // The backend derives the placeholder peer from host_ifname; pass the registry device's
             // host_name (the only identity `release` needs).
             let host_ifname = dev.host_name.clone();
-            let target = crate::port_backend::AssignTarget {
-                netns_path: dev.netns_path.clone(),
-                guest_ifname: String::from_utf8_lossy(&id).into_owned(),
-            };
+            let target = backend.assign_target(
+                dev.netns_path.clone(),
+                String::from_utf8_lossy(&id).into_owned(),
+            );
             // Drop the JoinError: a `?` here would return BEFORE the slot-free below, leaking the
             // pool slot (bound=Some) while the registry entry is already gone. Detach runs ALL
             // reclaim steps regardless — `release` is already best-effort/always-Ok internally, so
