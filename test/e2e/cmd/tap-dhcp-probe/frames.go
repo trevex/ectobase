@@ -475,6 +475,77 @@ func buildDHCPv6Advertise(clientMAC net.HardwareAddr, ia net.IP, echoDUID []byte
 	return buf.Bytes(), nil
 }
 
+// buildInnerIPv4ICMP builds an Ethernet/IPv4/ICMPv4 echo-request frame
+// representing a guest egress packet: 10.0.0.1 → 10.0.0.2.
+func buildInnerIPv4ICMP() ([]byte, error) {
+	srcMAC := net.HardwareAddr{0x52, 0x54, 0x00, 0x00, 0x00, 0x01}
+	dstMAC := net.HardwareAddr{0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa}
+
+	eth := &layers.Ethernet{
+		SrcMAC:       srcMAC,
+		DstMAC:       dstMAC,
+		EthernetType: layers.EthernetTypeIPv4,
+	}
+	ip := &layers.IPv4{
+		Version:  4,
+		TTL:      64,
+		Protocol: layers.IPProtocolICMPv4,
+		SrcIP:    net.IPv4(10, 0, 0, 1),
+		DstIP:    net.IPv4(10, 0, 0, 2),
+	}
+	icmp := &layers.ICMPv4{
+		TypeCode: layers.CreateICMPv4TypeCode(layers.ICMPv4TypeEchoRequest, 0),
+	}
+
+	buf := gopacket.NewSerializeBuffer()
+	if err := gopacket.SerializeLayers(buf, serializeOpts, eth, ip, icmp); err != nil {
+		return nil, fmt.Errorf("serialize inner ipv4 icmp: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// buildInnerIPv6ICMP6 builds an Ethernet/IPv6/ICMPv6 echo-request frame
+// representing a guest egress IPv6 packet: src → dst.
+func buildInnerIPv6ICMP6(src, dst string) ([]byte, error) {
+	srcMAC := net.HardwareAddr{0x52, 0x54, 0x00, 0x00, 0x00, 0x01}
+	dstMAC := net.HardwareAddr{0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa}
+
+	srcIP := net.ParseIP(src)
+	dstIP := net.ParseIP(dst)
+	if srcIP == nil || dstIP == nil {
+		return nil, fmt.Errorf("invalid src/dst IP: %q %q", src, dst)
+	}
+
+	eth := &layers.Ethernet{
+		SrcMAC:       srcMAC,
+		DstMAC:       dstMAC,
+		EthernetType: layers.EthernetTypeIPv6,
+	}
+	ip6 := &layers.IPv6{
+		Version:    6,
+		HopLimit:   64,
+		NextHeader: layers.IPProtocolICMPv6,
+		SrcIP:      srcIP,
+		DstIP:      dstIP,
+	}
+	icmp := &layers.ICMPv6{
+		TypeCode: layers.CreateICMPv6TypeCode(layers.ICMPv6TypeEchoRequest, 0),
+	}
+	if err := icmp.SetNetworkLayerForChecksum(ip6); err != nil {
+		return nil, fmt.Errorf("icmpv6 checksum setup: %w", err)
+	}
+	echo := &layers.ICMPv6Echo{
+		Identifier: 1,
+		SeqNumber:  1,
+	}
+
+	buf := gopacket.NewSerializeBuffer()
+	if err := gopacket.SerializeLayers(buf, serializeOpts, eth, ip6, icmp, echo); err != nil {
+		return nil, fmt.Errorf("serialize inner ipv6 icmpv6: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
 // parseDHCPv6Reply decodes an Ethernet/IPv6/UDP/DHCPv6 frame.
 // Returns the IA_NA address, echoed client ID bytes, and ok=true for Advertise or Reply.
 func parseDHCPv6Reply(frame []byte) (iaAddr net.IP, echoedClientID []byte, ok bool) {

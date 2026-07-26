@@ -13,6 +13,9 @@ import (
 	"net"
 	"os"
 	"time"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 )
 
 func main() { os.Exit(run()) }
@@ -69,14 +72,202 @@ func run() int {
 	}
 }
 
-// Stubs — replaced in later tasks. Each returns 2 (usage/not-implemented) for now.
-func egressProbe(tap, peer string, to time.Duration) int { return notImpl("egress") }
-func egress6Probe(tap, peer, g6, d6, nh6, gul string, to time.Duration) int {
-	return notImpl("egress6")
-}
-func selfContained() int { return notImpl("default") }
+func selfContained() int { fmt.Fprintf(os.Stderr, "not implemented yet: default\n"); return 2 }
 
-func notImpl(mode string) int { fmt.Fprintf(os.Stderr, "not implemented yet: %s\n", mode); return 2 }
+// egressProbe injects one inner IPv4 ICMP frame on `tap`, sniffs `peer` for an
+// encapsulated outer IPv6 frame (NextHeader==4, IPIP), and reports the result.
+func egressProbe(tap, peer string, to time.Duration) int {
+	f, err := openTapQueue(tap)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: openTapQueue %s: %v\n", tap, err)
+		return 2
+	}
+	defer f.Close()
+
+	inner, err := buildInnerIPv4ICMP()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: buildInnerIPv4ICMP: %v\n", err)
+		return 2
+	}
+
+	wantSrc := net.ParseIP("fc00:1::1")
+	wantDst := net.ParseIP("fc00:2::2")
+
+	matched := false
+	want := func(pkt gopacket.Packet) bool {
+		var v6s []*layers.IPv6
+		for _, l := range pkt.Layers() {
+			if v, ok := l.(*layers.IPv6); ok {
+				v6s = append(v6s, v)
+			}
+		}
+		if len(v6s) == 0 {
+			return false
+		}
+		outer := v6s[0]
+		if outer.NextHeader == layers.IPProtocolIPv4 &&
+			outer.SrcIP.Equal(wantSrc) &&
+			outer.DstIP.Equal(wantDst) {
+			innerIP, _ := pkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+			if innerIP != nil &&
+				innerIP.SrcIP.Equal(net.IPv4(10, 0, 0, 1)) &&
+				innerIP.DstIP.Equal(net.IPv4(10, 0, 0, 2)) {
+				matched = true
+				return true
+			}
+		}
+		return false
+	}
+
+	inject := func() error {
+		if _, err := f.Write(inner); err != nil {
+			return fmt.Errorf("write inner: %w", err)
+		}
+		fmt.Printf("sent inner IPv4 ICMP (%d bytes) 10.0.0.1->10.0.0.2 on %s\n", len(inner), tap)
+		return nil
+	}
+
+	pkts, err := sniffIPv6(peer, to, inject, want)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: sniffIPv6 on %s: %v\n", peer, err)
+		return 1
+	}
+
+	if len(pkts) == 0 {
+		fmt.Printf("RESULT: NO IPv6 frame captured on %s within %.0fs\n", peer, to.Seconds())
+		return 1
+	}
+
+	for _, p := range pkts {
+		fmt.Printf("captured %d bytes on %s: %s\n", len(p.Data()), peer, hex.EncodeToString(p.Data()))
+		var v6s []*layers.IPv6
+		for _, l := range p.Layers() {
+			if v, ok := l.(*layers.IPv6); ok {
+				v6s = append(v6s, v)
+			}
+		}
+		if len(v6s) > 0 {
+			outer := v6s[0]
+			innerIPLayer := p.Layer(layers.LayerTypeIPv4)
+			innerIP, _ := innerIPLayer.(*layers.IPv4)
+			var innerSrc, innerDst string
+			if innerIP != nil {
+				innerSrc = innerIP.SrcIP.String()
+				innerDst = innerIP.DstIP.String()
+			} else {
+				innerSrc = "?"
+				innerDst = "?"
+			}
+			fmt.Printf("  outer IPv6: nh=%d src=%s dst=%s (want nh=4 src=fc00:1::1 dst=fc00:2::2)\n",
+				outer.NextHeader, outer.SrcIP, outer.DstIP)
+			fmt.Printf("  inner IP: src=%s dst=%s (want 10.0.0.1->10.0.0.2)\n", innerSrc, innerDst)
+		}
+	}
+
+	if matched {
+		fmt.Println("ENCAP OK")
+		return 0
+	}
+	fmt.Printf("RESULT: captured frame(s) not correctly encapsulated (see hex above)\n")
+	return 1
+}
+
+// egress6Probe injects one inner IPv6 ICMPv6 frame on `tap`, sniffs `peer` for an
+// encapsulated outer IPv6 frame (NextHeader==41, IPv6-in-IPv6), and reports the result.
+func egress6Probe(tap, peer, g6, d6, nh6, gul string, to time.Duration) int {
+	f, err := openTapQueue(tap)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: openTapQueue %s: %v\n", tap, err)
+		return 2
+	}
+	defer f.Close()
+
+	inner, err := buildInnerIPv6ICMP6(g6, d6)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: buildInnerIPv6ICMP6: %v\n", err)
+		return 2
+	}
+
+	wantSrc := net.ParseIP(gul)
+	wantDst := net.ParseIP(nh6)
+	wantInnerDst := net.ParseIP(d6)
+
+	if wantSrc == nil || wantDst == nil || wantInnerDst == nil {
+		fmt.Fprintf(os.Stderr, "ERROR: invalid IP arg (guest-underlay=%s nexthop6=%s dst6=%s)\n", gul, nh6, d6)
+		return 2
+	}
+
+	matched := false
+	want := func(pkt gopacket.Packet) bool {
+		var v6s []*layers.IPv6
+		for _, l := range pkt.Layers() {
+			if v, ok := l.(*layers.IPv6); ok {
+				v6s = append(v6s, v)
+			}
+		}
+		if len(v6s) < 2 {
+			return false
+		}
+		outer := v6s[0]
+		innerV6 := v6s[1]
+		if outer.NextHeader == layers.IPProtocolIPv6 &&
+			outer.SrcIP.Equal(wantSrc) &&
+			outer.DstIP.Equal(wantDst) &&
+			innerV6.DstIP.Equal(wantInnerDst) {
+			matched = true
+			return true
+		}
+		return false
+	}
+
+	inject := func() error {
+		if _, err := f.Write(inner); err != nil {
+			return fmt.Errorf("write inner: %w", err)
+		}
+		fmt.Printf("sent inner IPv6 ICMPv6 (%d bytes) %s->%s on %s\n", len(inner), g6, d6, tap)
+		return nil
+	}
+
+	pkts, err := sniffIPv6(peer, to, inject, want)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: sniffIPv6 on %s: %v\n", peer, err)
+		return 1
+	}
+
+	if len(pkts) == 0 {
+		fmt.Printf("RESULT: NO IPv6 frame captured on %s within %.0fs\n", peer, to.Seconds())
+		return 1
+	}
+
+	for _, p := range pkts {
+		fmt.Printf("captured %d bytes on %s: %s\n", len(p.Data()), peer, hex.EncodeToString(p.Data()))
+		var v6s []*layers.IPv6
+		for _, l := range p.Layers() {
+			if v, ok := l.(*layers.IPv6); ok {
+				v6s = append(v6s, v)
+			}
+		}
+		if len(v6s) > 0 {
+			outer := v6s[0]
+			var innerDst string
+			if len(v6s) > 1 {
+				innerDst = v6s[1].DstIP.String()
+			} else {
+				innerDst = "?"
+			}
+			fmt.Printf("  outer IPv6: nh=%d src=%s dst=%s (want nh=41 src=%s dst=%s)\n",
+				outer.NextHeader, outer.SrcIP, outer.DstIP, gul, nh6)
+			fmt.Printf("  inner IPv6 dst=%s (want %s)\n", innerDst, d6)
+		}
+	}
+
+	if matched {
+		fmt.Println("ENCAP6 OK")
+		return 0
+	}
+	fmt.Printf("RESULT: captured frame(s) not correctly v6-encapsulated (see hex above)\n")
+	return 1
+}
 
 func clientOnlyDHCP(tap, mac, expectIP string, to time.Duration) int {
 	hw, err := net.ParseMAC(mac)

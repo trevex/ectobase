@@ -3,6 +3,9 @@ package main
 import (
 	"net"
 	"testing"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
 )
 
 func mustMAC(t *testing.T, s string) net.HardwareAddr {
@@ -90,6 +93,30 @@ func TestEUI64LinkLocal(t *testing.T) {
 	want := "fe80::5054:ff:fe00:1"
 	if got.String() != want {
 		t.Fatalf("eui64: got %s want %s", got, want)
+	}
+}
+
+func TestInnerIPv4Parses(t *testing.T) {
+	f, err := buildInnerIPv4ICMP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := gopacket.NewPacket(f, layers.LayerTypeEthernet, gopacket.Default)
+	ip, _ := p.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+	if ip == nil || !ip.SrcIP.Equal(net.IPv4(10, 0, 0, 1)) || !ip.DstIP.Equal(net.IPv4(10, 0, 0, 2)) {
+		t.Fatalf("inner v4 wrong: %v", ip)
+	}
+}
+
+func TestInnerIPv6Parses(t *testing.T) {
+	f, err := buildInnerIPv6ICMP6("2001:db8:1::1", "2001:db8:2::2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := gopacket.NewPacket(f, layers.LayerTypeEthernet, gopacket.Default)
+	ip, _ := p.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
+	if ip == nil || !ip.DstIP.Equal(net.ParseIP("2001:db8:2::2")) {
+		t.Fatalf("inner v6 wrong: %v", ip)
 	}
 }
 
