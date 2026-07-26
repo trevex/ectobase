@@ -20,14 +20,12 @@ kind get kubeconfig --name k01 > "$K1" 2>/dev/null
 kubectl --kubeconfig "$K1" -n ectobase-system create serviceaccount netplane-agent 2>/dev/null || true
 TOKEN=$(kubectl --kubeconfig "$K1" -n ectobase-system create token netplane-agent --duration=8760h)
 KC=$(mktemp)
-cat > "$KC" <<EOF
-apiVersion: v1
-kind: Config
-clusters: [{name: c, cluster: {server: "$APISERVER", insecure-skip-tls-verify: true}}]
-users: [{name: u, user: {token: "$TOKEN"}}]
-contexts: [{name: c, context: {cluster: c, user: u}}]
-current-context: c
-EOF
+# Kubeconfig template extracted from an inline heredoc into test/e2e/fixtures/edge/kubeconfig.yaml.tmpl.
+# Rendered via named-placeholder substitution (envsubst-compatible ${VAR}; sed on placeholders, not
+# YAML structure) — mounted read-only into each edge agent container below. Task 6 adds envsubst to
+# the devShell, after which this can become `envsubst < ... > "$KC"`.
+FIXTURE="$(dirname "${BASH_SOURCE[0]}")/../../test/e2e/fixtures/edge/kubeconfig.yaml.tmpl"
+sed -e "s#\${APISERVER}#${APISERVER}#g" -e "s#\${TOKEN}#${TOKEN}#g" "$FIXTURE" > "$KC"
 
 for e in edge1 edge2; do
   # Each edge's UNIQUE control-plane loopback (on VyOS dum0, see vyos/edge{1,2}.boot):

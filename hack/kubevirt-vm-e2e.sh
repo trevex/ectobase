@@ -26,9 +26,21 @@ PEER_IP=10.0.0.51
 GRPCURL_IMG=fullstorydev/grpcurl:latest
 PROTO_MNT="-v $(pwd)/api/proto:/proto:ro"
 
-KC=$(mktemp -t k01.kubeconfig.XXXXXX); trap 'rm -f "$KC"' EXIT
+KC=$(mktemp -t k01.kubeconfig.XXXXXX)
+# The two KubeVirt manifests are rendered from test/e2e/fixtures/kubevirt/*.tmpl to these gitignored
+# files (was two inline heredocs). Rendered outputs live next to the fixtures so `apply -f` finds them.
+VPCNICS_YAML="test/e2e/fixtures/kubevirt/vpc-nics.yaml"
+VMI_YAML="test/e2e/fixtures/kubevirt/vmi.yaml"
+trap 'rm -f "$KC" "$VPCNICS_YAML" "$VMI_YAML"' EXIT
 say() { echo -e "\n=== $* ==="; }
 k() { kubectl --kubeconfig "$KC" "$@"; }
+# Render a fixture .tmpl to a file via named-placeholder substitution ($VM_IP/$VM_MAC/$PEER_IP/$NODE).
+# envsubst-compatible ${VAR} syntax; sed on named placeholders (not YAML structure). Task 6 adds
+# envsubst to the devShell — this can become `envsubst < "$1" > "$2"` once it's on PATH.
+render_fixture() {
+  sed -e "s#\${VM_IP}#${VM_IP}#g" -e "s#\${VM_MAC}#${VM_MAC}#g" \
+      -e "s#\${PEER_IP}#${PEER_IP}#g" -e "s#\${NODE}#${NODE}#g" "$1" > "$2"
+}
 # `kind` lives in ~/go/bin; plain `sudo` resets PATH and can't find it, so preserve PATH.
 KIND() { sudo env "PATH=$PATH" kind "$@"; }
 
@@ -52,25 +64,10 @@ KUBECONFIG="$KC" bash hack/install-stack.sh
 k apply -f config/deploy/kubevirt-binding.yaml
 
 say "VPC + NetworkInterface (mac threaded) for the VM"
-k apply -f - <<EOF
-apiVersion: net.ectobase.dev/v1alpha1
-kind: VPC
-metadata: {name: blue, namespace: default}
-spec: {vni: 100}
----
-apiVersion: net.ectobase.dev/v1alpha1
-kind: NetworkInterface
-metadata: {name: nic-vm, namespace: default}
-spec: {vpcRef: {name: blue}, ips: ["$VM_IP"], mac: "$VM_MAC", nodeName: $NODE}
----
-# The peer is also a real NetworkInterface so it gets a CompiledNIC (default allow-all firewall) via
-# the same policy path as the VM — no manual AddFwRule needed. Its dataplane attach is still grpcurl
-# below (the agent programs firewall/routes by overlay IP; it does not itself attach the datapath).
-apiVersion: net.ectobase.dev/v1alpha1
-kind: NetworkInterface
-metadata: {name: nic-peer, namespace: default}
-spec: {vpcRef: {name: blue}, ips: ["$PEER_IP"], nodeName: $NODE}
-EOF
+# Manifests live in test/e2e/fixtures/kubevirt/*.tmpl (extracted from inline heredocs); rendered
+# via named-placeholder substitution (envsubst-compatible ${VAR} syntax) to a gitignored file.
+render_fixture "test/e2e/fixtures/kubevirt/vpc-nics.yaml.tmpl" "$VPCNICS_YAML"
+k apply -f "$VPCNICS_YAML" 2>&1 | tail -3
 k patch vpc blue --subresource=status --type=merge -p '{"status":{"vni":100,"state":"Ready"}}'
 
 say "attach a peer endpoint on $NODE (the VM's ping target, same VNI)"
@@ -84,37 +81,8 @@ sudo docker exec "$NODE" sh -c "ip netns exec peer ip addr add $PEER_IP/32 dev p
   ip netns exec peer ip route add default via 169.254.0.1 dev peer" 2>/dev/null || true
 
 say "VMI on the overlay (binding=flowplane, mac=$VM_MAC, pinned to $NODE)"
-k apply -f - <<EOF
-apiVersion: kubevirt.io/v1
-kind: VirtualMachineInstance
-metadata:
-  name: vm-a
-  namespace: default
-  annotations:
-    net.ectobase.dev/network-interface: default/nic-vm
-spec:
-  nodeSelector:
-    kubernetes.io/hostname: $NODE
-  # $NODE is the control-plane node (where the peer + flowplane run); tolerate its taint.
-  tolerations:
-    - key: node-role.kubernetes.io/control-plane
-      operator: Exists
-      effect: NoSchedule
-  domain:
-    devices:
-      disks: [{name: cd, disk: {bus: virtio}}]
-      interfaces:
-        - name: ovl
-          binding: {name: flowplane}
-          macAddress: "$VM_MAC"
-    resources: {requests: {memory: 512Mi}}
-  networks:
-    - name: ovl
-      pod: {}
-  volumes:
-    - name: cd
-      containerDisk: {image: quay.io/kubevirt/cirros-container-disk-demo}
-EOF
+render_fixture "test/e2e/fixtures/kubevirt/vmi.yaml.tmpl" "$VMI_YAML"
+k apply -f "$VMI_YAML" 2>&1 | tail -1
 
 say "wait for the virt-launcher pod + the CNI/binding attach (tap0 in launcher netns)"
 for _ in $(seq 1 60); do

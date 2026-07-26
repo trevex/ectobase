@@ -1,0 +1,29 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachineInstance
+metadata:
+  name: vm-a
+  namespace: default
+  annotations:
+    net.ectobase.dev/network-interface: default/nic-vm
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: ${NODE}
+  # ${NODE} is the control-plane node (where the peer + flowplane run); tolerate its taint.
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+  domain:
+    devices:
+      disks: [{name: cd, disk: {bus: virtio}}]
+      interfaces:
+        - name: ovl
+          binding: {name: flowplane}
+          macAddress: "${VM_MAC}"
+    resources: {requests: {memory: 512Mi}}
+  networks:
+    - name: ovl
+      pod: {}
+  volumes:
+    - name: cd
+      containerDisk: {image: quay.io/kubevirt/cirros-container-disk-demo}
