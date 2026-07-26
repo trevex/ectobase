@@ -975,14 +975,16 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         let _ = cell.lock().take(); // drop the Port → ethdev stop+close
     }
 
-    // Delete the PREALLOCATED guest veths created at startup. They are host-side links that would
-    // otherwise leak across restarts (a restart only masks this by first deleting stale same-named
-    // links). Ethdev close (above) precedes this link delete. Reading the ifnames from `attach_state`
-    // (not a captured Vec) keeps this correct even after attach/recovery mutates the pool at runtime.
+    // Delete the PREALLOCATED guest host devices created at startup. They would otherwise leak across
+    // restarts (a restart only masks this by first deleting stale same-named devices). Ethdev close
+    // (above) precedes this device delete. Route through `backend.teardown` (NOT a hardcoded
+    // `delete_link`) so each backend runs its own teardown mechanic — veth: `ip link del`; tap:
+    // `ip tuntap del`. Reading the ifnames from `attach_state` (not a captured Vec) keeps this correct
+    // even after attach/recovery mutates the pool at runtime.
     {
         let pool = attach_state.guest_pool.lock().unwrap();
         for slot in pool.iter() {
-            flowplane_device::delete_link(&slot.host_ifname);
+            attach_state.backend.teardown(&slot.host_ifname);
         }
     }
 
