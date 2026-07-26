@@ -186,31 +186,48 @@ first step (never blackhole).
 
 ---
 
-## Open follow-ups (DPDK guest-egress, after `feat/dpdk-guest-egress-followups`)
+## Hardening — DONE (`feat/dpdk-guest-egress-hardening`, 2026-07-26)
 
-The four gaps above are resolved + end-to-end reachable, and multi-worker partitioning,
-guest↔guest same-node delivery, NAT64 egress, and dead-slot exclusion are all wired
-(`feat/dpdk-guest-egress-followups`). What remains, in rough priority order:
+All five open follow-ups are RESOLVED, unified behind a backend-agnostic `GuestPortBackend`
+lifecycle seam (veth impl; tap/VF are documented seams). Spec/plan:
+`docs/superpowers/specs/2026-07-26-dpdk-guest-egress-hardening-design.md` +
+`docs/superpowers/plans/2026-07-26-dpdk-guest-egress-hardening.md`.
 
-1. **Full-serve af_xdp e2e** — bring up `flowplane-dpdk serve` + preallocated guest ports
-   + gRPC attach + bidirectional packet injection over REAL af_xdp (incl. a two-lcore
-   two-guest guest↔guest delivery). Each datapath seam is independently proven (the handoff
-   tests, `afxdp_datapath.rs`, `attach_veth.rs`, `guest_local_delivery.rs`, `lcore_ring.rs`);
-   the only unproven layer is real-transport polling/timing under the live partition.
-2. **Native v6→v6 guest egress** — the worker guest block dispatches IPv4 (`process_guest_tx`)
-   and NAT64 v6→v4 (`process_guest_tx_nat64`); a native v6→v6 encap path has NO shared-core
-   orchestrator yet, so a v6-native `Deliver::Local`/encap is never produced. Core gap, not
-   serve wiring.
-3. **DPDK-hotplug live dead-slot recovery** — recreate the veth + `rte_dev` hotplug
-   detach/attach the af_xdp vdev + reconfigure the ethdev port, so a slot killed by a
-   netns-destroyed-without-detach recovers without a serve restart (today: detected + excluded).
-4. **`shared_ct` GC/eviction sweep** — periodic reclaim of stale reverse entries via
-   `shared_ct_for_each`/`_remove` (the primitives exist; the sweep does not).
-5. **Startup-rollback consistency** — the serve `run()` startup sequence tears down created
-   guest veths on a guest-port *configure* failure, but a later fallible startup call
-   (`LcoreRing::new`, `SharedConfigMaps::new`) `?`-returns without that teardown, leaking the
-   already-created veths on a rare startup failure. Wrap the whole startup in teardown-on-error
-   for consistency (startup-only, rare).
+- **G5 startup-rollback** — RAII `StartupGuard` tears down preallocated pool devices on any
+  early return before the worker spawn; disarmed once workers own the ports.
+- **G4 `shared_ct` GC** — worker-0 ~1Hz `shared_ct_sweep_expired(now)` reusing the core
+  `ct_is_expired` (30s NEW / 24h ESTABLISHED); off the hot path, single-writer Mutex removes.
+- **G1 full-serve af_xdp e2e** — `hack/dpdk/serve-e2e.sh` + `tests/serve_e2e.rs` launch the REAL
+  serve on af_xdp, gRPC-attach, and prove guest→fabric encap + NAT-return over real transport.
+  It UNCOVERED that the serve datapath was totally inert (never programmed `LOCAL`) — fixed,
+  plus 3 more it surfaced (uplink NAT-return mis-routed to the fabric; `process_guest_tx`
+  `snat_egress(..,0)` → GC evicted the reverse entry instantly; `/0` route never matched an
+  exact-/32 table). See [[dpdk-guest-egress-serve-loop]] memory for the full four-bug writeup.
+- **G2 native v6→v6 egress** — extracted the eBPF v6 egress stages into shared core
+  (`egress_fw_ct6`/`route_decision6` + `datapath::process_guest_tx_v6`, inner-proto 41); eBPF
+  re-pointed at the seam (BPF verifier anchor PASSES, 512B stack held); worker dispatches
+  `0x86DD` → NAT64 else native v6. Lights up v6 deny-by-default fw + `conntrack6` on the loop
+  (also incidentally closed the ct_touch6 seam). Fixed: `ComposedMaps` was defaulting v6
+  fw/conntrack6 to deny-all/no-op.
+- **G3 dead-slot live recovery** — `rte_eal_hotplug_add/remove` FFI + `VethBackend::recover`
+  (recreate veth + hotplug-rebind the af_xdp ethdev); control thread does all `Send` work
+  off-lcore + swaps the new `Port` into a `Mutex<Option<Port>>` cell + bumps an atomic
+  generation; the owning worker rebuilds its `!Send` rx/tx handles on-lcore on the bump (the
+  one sanctioned mutation to the static poll set). Hotplug de-risk gate proven on this host.
+
+### Remaining follow-ups (after hardening)
+1. **TapBackend (VMs)** + **VfBackend (SR-IOV real NIC)** datapath impls — only the
+   `GuestPortBackend` trait seam exists (tap is the likely-next; VF is hardware-gated).
+2. **Native v6→v6 guest↔guest local delivery** — the worker delivers v4 `Deliver::Local`;
+   a v6-native same-node `Deliver::Local` path isn't wired into the worker yet.
+3. **Live worker-rebuild-under-traffic e2e for G3** — the control-level recover is proven
+   (attach_veth); killing+recovering a slot mid-serve-run is a serve_e2e follow-on.
+4. **`/0` (non-/32) route validation** — the v4 route table is exact-match; the control plane
+   silently accepts a prefix it can't honor (never matches → silent Pass). Add a validation
+   error or LPM support.
+5. **Startup teardown after worker spawn** — a `?` after `guard.disarm()` (e.g. `--addr`
+   parse) returns before the shutdown block, leaking workers/veths (pre-existing; startup-only).
+6. rte_flow / ConnectX perf phase; M11 hitless-upgrade orchestration (hardware-gated).
 
 ## Cross-refs
 
