@@ -180,16 +180,92 @@ impl DataplaneNode for DpdkNodeService {
         let (slot_host_ifname, slot_host_ifindex) = match reserved {
             Some(fields) => fields,
             None => {
-                // No free slot: release IPAM (nothing else reserved yet) + resource_exhausted. The
-                // pool guard is already dropped, so this ipam.lock() never nests inside it.
-                attach
-                    .ipam
+                // No free LIVE slot. Before giving up, try DEAD-SLOT LIVE RECOVERY (G3/Task 6): if a
+                // dead slot exists AND the serve loop wired a `RecoverHandle`, recreate ONE dead slot's
+                // veth + hot-rebind its af_xdp ethdev off-thread, then bind the recovered slot. This
+                // reclaims a slot lost to a pod-netns-destroyed-without-detach without a serve restart.
+                //
+                // Pick one dead slot's identity under the pool lock (port_id → the datapath array index
+                // `port_id - 1`, since guests are ethdev ports 1..=N built in order). Drop the lock
+                // before the (blocking) recovery — never hold the std pool Mutex across `.await`.
+                // A dead slot is recoverable regardless of its `bound` field: detach's dead-branch marks
+                // `dead = true` but LEAVES `bound = Some(<old iface>)` (the stale binding of the guest
+                // whose netns was destroyed). So match purely on `dead` — recovery clears both dead and
+                // rebinds it to the NEW interface below.
+                let dead = attach
+                    .guest_pool
                     .lock()
                     .unwrap()
-                    .release(std::net::Ipv6Addr::from(underlay));
-                return Err(Status::resource_exhausted(
-                    "guest af_xdp port pool exhausted (increase --guest-ports)",
-                ));
+                    .iter()
+                    .find(|s| s.dead)
+                    .map(|s| s.port_id);
+                let recover_handle = attach.recover.get().cloned();
+                match (dead, recover_handle) {
+                    (Some(pool_port_id), Some(handle)) => {
+                        // Run recovery on a blocking thread (it shells out to `ip` + calls blocking
+                        // DPDK FFI); it must NOT run on the tokio worker or a datapath lcore. The
+                        // `RecoverHandle` is `Send + Sync`; `attach` is `Arc`, cloned in.
+                        let attach_for_recover = attach.clone();
+                        let port_index = (pool_port_id.saturating_sub(1)) as usize;
+                        let recovered = tokio::task::spawn_blocking(move || {
+                            handle.recover_slot(&attach_for_recover, port_index, pool_port_id)
+                        })
+                        .await;
+                        let recovered_ok = matches!(&recovered, Ok(Ok(_)));
+                        if let Ok(Err(e)) = &recovered {
+                            eprintln!("dead-slot recovery for port {pool_port_id} failed: {e}");
+                        } else if let Err(e) = &recovered {
+                            eprintln!(
+                                "dead-slot recovery task panicked (port {pool_port_id}): {e}"
+                            );
+                        }
+                        // On success the slot is now live (`dead = false`, new host_ifindex). Reserve
+                        // it (by port_id) under the pool lock. On any failure fall through to exhausted.
+                        // `recover_slot` cleared `dead` + gave the slot a new host_ifindex, but did NOT
+                        // touch `bound` (which may hold the stale old binding). Reserve it by port_id +
+                        // `!dead` (recovery succeeded) and OVERWRITE `bound` with the new interface.
+                        let reserved_after = if recovered_ok {
+                            attach
+                                .guest_pool
+                                .lock()
+                                .unwrap()
+                                .iter_mut()
+                                .find(|s| s.port_id == pool_port_id && !s.dead)
+                                .map(|slot| {
+                                    slot.bound = Some(r.interface_id.clone());
+                                    (slot.host_ifname.clone(), slot.host_ifindex)
+                                })
+                        } else {
+                            None
+                        };
+                        match reserved_after {
+                            Some(fields) => fields,
+                            None => {
+                                attach
+                                    .ipam
+                                    .lock()
+                                    .unwrap()
+                                    .release(std::net::Ipv6Addr::from(underlay));
+                                return Err(Status::resource_exhausted(
+                                    "guest af_xdp port pool exhausted (dead-slot recovery failed)",
+                                ));
+                            }
+                        }
+                    }
+                    _ => {
+                        // No dead slot to recover (or no RecoverHandle wired — e.g. unit tests): release
+                        // IPAM (nothing else reserved yet) + resource_exhausted. The pool guard is
+                        // already dropped, so this ipam.lock() never nests inside it.
+                        attach
+                            .ipam
+                            .lock()
+                            .unwrap()
+                            .release(std::net::Ipv6Addr::from(underlay));
+                        return Err(Status::resource_exhausted(
+                            "guest af_xdp port pool exhausted (increase --guest-ports)",
+                        ));
+                    }
+                }
             }
         };
 
@@ -782,7 +858,8 @@ mod tests {
             gateway_ipv4: [169, 254, 0, 1],
             gateway_ipv6: [0u8; 16],
             guest_pool: std::sync::Mutex::new(Vec::new()),
-            backend: Arc::new(crate::port_backend::VethBackend),
+            backend: Arc::new(crate::port_backend::VethBackend { mtu: 1450 }),
+            recover: std::sync::OnceLock::new(),
         });
         let svc = DpdkNodeService::new(ctrl.clone(), shared.clone(), attach);
 

@@ -69,7 +69,13 @@ pub trait GuestPortBackend: Send + Sync {
 /// up + bound to the af_xdp ethdev port, `fpg{i}p` placeholder guest-end parked in the root netns).
 /// `assign` moves the placeholder guest-end into the pod netns; `release` moves it back. Wraps the
 /// existing `flowplane_device` veth ops 1:1 — a pure refactor of the mechanics already in serve/node.
-pub struct VethBackend;
+///
+/// `mtu` is the guest link MTU (underlay MTU − encap overhead) — the SAME value `serve.rs` uses at
+/// preallocation. `recover` needs it to recreate the veth with the identical link MTU the original
+/// pool device had, so a recovered slot's guest link is indistinguishable from a fresh one.
+pub struct VethBackend {
+    pub mtu: u32,
+}
 
 impl GuestPortBackend for VethBackend {
     fn preallocate(&self, index: u16, mtu: u32) -> Result<HostDevice> {
@@ -115,10 +121,50 @@ impl GuestPortBackend for VethBackend {
         flowplane_device::link_exists(&slot.host_ifname)
     }
 
-    fn recover(&self, _slot: &mut GuestPortSlot, _pool_port_id: u16) -> Result<u32> {
-        // Live dead-slot recovery (recreate the veth + rte_dev hotplug rebind the af_xdp vdev +
-        // reconfigure the ethdev port) is G3 (Task 6). Not wired here.
-        anyhow::bail!("VethBackend::recover not implemented until G3 (Task 6)")
+    /// Live dead-slot recovery, DEVICE-MECHANICS HALF ONLY. Recreates the dead slot's veth pair and
+    /// hot-rebinds its af_xdp vdev against the new host-end, then updates the slot's `host_ifindex` +
+    /// clears `dead`. Returns the NEW host ifindex.
+    ///
+    /// ── SPLIT OF RESPONSIBILITY (deliberate) ────────────────────────────────────────────────────
+    /// `recover` does the `Send` control-plane device work: `delete_link` the stale remnant, recreate
+    /// the veth (same placeholder-MAC scheme), hot-REMOVE the (possibly-already-gone) dead vdev, and
+    /// hot-ADD it against the fresh host-end. It does NOT `Port::configure` the re-added ethdev — that
+    /// needs a `&Mempool` and must produce a `Port` to SWAP into the worker's shared cell + bump the
+    /// generation, all of which is control-path orchestration that lives in `serve.rs` (see
+    /// `serve::RecoverHandle::recover_slot`). The re-added ethdev's actual port id is NOT assumed to
+    /// equal `pool_port_id` (DPDK assigns the lowest FREE id after the dead port closed); the caller
+    /// re-resolves it via `nfkit::port_by_name`. This keeps `recover` free of the mempool/Port/worker
+    /// coupling and testable at the pure device-mechanics level.
+    fn recover(&self, slot: &mut GuestPortSlot, pool_port_id: u16) -> Result<u32> {
+        // Delete any stale remnant of the dead pair (the host-end may linger even after the guest-end
+        // vanished, or a prior partial recovery may have left one) so `create_preallocated_veth` gets
+        // a clean name. Best-effort/idempotent (ignores a missing link).
+        flowplane_device::delete_link(&slot.host_ifname);
+        // Recreate the veth with the SAME deterministic placeholder MAC scheme preallocation used
+        // (02:00:00:00:0e:<i>, where `i = pool_port_id - 1` since uplink = port 0, guests = 1..=N),
+        // at the guest link MTU. The real guest MAC is (re)programmed at the next attach.
+        let dev = flowplane_device::create_preallocated_veth(
+            &slot.host_ifname,
+            [0x02, 0, 0, 0, 0x0e, (pool_port_id.saturating_sub(1)) as u8],
+            self.mtu,
+        )?;
+        // Hot-remove the dead vdev first (best-effort — a fully-torn-down vdev may already be gone,
+        // in which case remove errors harmlessly), then hot-add it against the fresh host-end. The
+        // vdev device name is stable across recovery (`net_af_xdp<pool_port_id>`); only the backing
+        // netdev + the resulting ethdev port id change.
+        let vdev = format!("net_af_xdp{pool_port_id}");
+        let _ = nfkit::hotplug_remove("vdev", &vdev);
+        nfkit::hotplug_add(
+            "vdev",
+            &vdev,
+            &format!("iface={},start_queue=0,queue_count=1", slot.host_ifname),
+        )?;
+        // Update the slot: new host ifindex (PortMeta/registry/free-slot key) + no longer dead. The
+        // caller re-resolves the ethdev port id (via `port_by_name`), `Port::configure`s it, swaps it
+        // into the worker's shared cell, and bumps the generation — NONE of which happens here.
+        slot.host_ifindex = dev.host_ifindex;
+        slot.dead = false;
+        Ok(dev.host_ifindex)
     }
 
     fn teardown(&self, host_ifname: &str) {

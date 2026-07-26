@@ -39,9 +39,20 @@ pub struct GuestPortSlot {
     /// traffic), so a pool drained by dead slots correctly surfaces as `resource_exhausted`.
     ///
     /// LIVE RECOVERY (recreate the veth + `rte_dev` hotplug detach/attach the af_xdp vdev + reconfigure
-    /// the ethdev port) is a documented further follow-up; the static-pool model deliberately avoids
-    /// runtime device churn, and hotplug is the "real" fix. Defaults to `false` at preallocation.
+    /// the ethdev port) is wired by G3 (Task 6): `port_backend::VethBackend::recover` recreates the
+    /// veth + re-adds the vdev, the control path `Port::configure`s the re-added ethdev + swaps it into
+    /// the worker's shared `Port` cell, and the worker rebuilds its `!Send` queue handles when it sees
+    /// this slot's `generation` bump. Defaults to `false` at preallocation.
     pub dead: bool,
+    /// Generation counter for THIS slot's `host_ifindex`, bumped by the control-plane recovery path
+    /// each time the slot's underlying veth + af_xdp ethdev are recreated (dead-slot live recovery).
+    /// It is the WRITER side of a generation handshake: the datapath worker that owns this slot's
+    /// port caches the last-seen generation and, on a mismatch, rebuilds its `!Send`
+    /// `RxQueue`/`TxQueue` handles ON ITS OWN LCORE against the freshly-swapped `Port` (see
+    /// `serve.rs::worker_loop`). This is the ONE sanctioned mutation to the otherwise-static poll set.
+    /// The pool-slot copy here is the DURABLE record (survives across attach/detach); the parallel
+    /// `Arc<Vec<AtomicU32>>` in serve is the cross-thread SIGNAL. Defaults to 0 at preallocation.
+    pub generation: u32,
 }
 
 /// One attached container device (veth host end).
@@ -69,10 +80,18 @@ pub struct DpdkAttachState {
     /// Empty for non-af-xdp backends (per-guest ports are af-xdp-only in this slice).
     pub guest_pool: Mutex<Vec<GuestPortSlot>>,
     /// The backend-agnostic guest-port pool lifecycle (device mechanics only). Attach/detach call
-    /// `assign`/`release`/`is_alive` on this instead of the raw `flowplane_device` veth ops, so the
-    /// handlers stay device-kind-agnostic (veth today; tap/vf are documented seams). `Arc<dyn ...>`
-    /// so it clones cheaply into the `spawn_blocking` closures that shell out to `ip`.
+    /// `assign`/`release`/`is_alive`/`recover` on this instead of the raw `flowplane_device` veth ops,
+    /// so the handlers stay device-kind-agnostic (veth today; tap/vf are documented seams).
+    /// `Arc<dyn ...>` so it clones cheaply into the `spawn_blocking` closures that shell out to `ip`.
     pub backend: Arc<dyn GuestPortBackend>,
+    /// Control-plane handle for dead-slot LIVE RECOVERY (G3/Task 6). Set ONCE by `serve.rs::run` after
+    /// the datapath thread is spawned (the handle carries the shared `Mempool` + the `GuestDatapath`
+    /// generation-handshake state, both of which are built alongside the workers). The attach path
+    /// (`node.rs`) uses it to recover a dead slot when no free live slot remains. `OnceLock` because
+    /// it is set exactly once at startup and only read thereafter; `None`/unset in unit tests + on
+    /// non-serve construction (recovery is then simply unavailable — attach falls back to
+    /// `resource_exhausted`, the pre-G3 behavior).
+    pub recover: std::sync::OnceLock<crate::serve::RecoverHandle>,
 }
 
 impl DpdkAttachState {
@@ -141,7 +160,8 @@ mod tests {
             gateway_ipv4: [169, 254, 0, 1],
             gateway_ipv6: [0u8; 16],
             guest_pool: Mutex::new(Vec::new()),
-            backend: Arc::new(crate::port_backend::VethBackend),
+            backend: Arc::new(crate::port_backend::VethBackend { mtu: 1400 }),
+            recover: std::sync::OnceLock::new(),
         }
     }
 
