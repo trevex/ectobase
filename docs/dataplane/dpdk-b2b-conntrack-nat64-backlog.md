@@ -66,15 +66,17 @@ handoff is proven by `nfkit/tests/guest_tx_nat_return_handoff.rs` (real write �
 read over one `ComposedMaps`), on top of the existing `multilcore_nat_return.rs`
 cross-lcore demux proof.
 
-**Remaining (follow-ups):** the first slice is SINGLE guest port + SINGLE worker
-(worker 0 owns the pool), so cross-lcore RSS demux is not yet exercised on the *live*
-serve loop — that needs guest egress with `n_queues > 1` and multi-worker guest-port
-partitioning (`multilcore_nat_return.rs` already proves the shared-table demux logic
-itself). True concurrent-writer stress still needs a multi-threaded EAL test (current
-tests drive lcores sequentially); a GC/eviction sweep over `shared_ct` (via
-`shared_ct_for_each`/`_remove`) is not built yet. The rte_flow `MARK` hardware-steering
-alternative (needs ConnectX) was intentionally not taken — the shared-table software
-fix is correct without it.
+**Now exercised cross-lcore on the live loop (2026-07-25, `feat/dpdk-guest-egress-followups`):**
+guest ports are partitioned round-robin across ALL worker lcores (Task 3, `owns(i,q,n_workers)`),
+so a guest's SNAT reverse entry lands in its owning lcore's per-lcore CT + `shared_ct`, and a
+WAN return RSS-steered to a *different* uplink worker resolves via `shared_ct` — the cross-lcore
+demux this fix exists for now runs on the live serve loop, not just the sim. Concurrent
+multi-lcore writer safety is proven by `nfkit/tests/shared_ct_concurrent_writers.rs` (Task 2:
+N lcores × K disjoint inserts through the single-writer `Mutex`, zero torn reads / dup / loss).
+
+**Remaining (follow-ups):** a GC/eviction sweep over `shared_ct` (via `shared_ct_for_each`/`_remove`)
+is not built yet. The rte_flow `MARK` hardware-steering alternative (needs ConnectX) was
+intentionally not taken — the shared-table software fix is correct without it.
 
 ---
 
@@ -183,6 +185,32 @@ churn, and hotplug is the proper mechanism. Detection-and-exclude is the safe
 first step (never blackhole).
 
 ---
+
+## Open follow-ups (DPDK guest-egress, after `feat/dpdk-guest-egress-followups`)
+
+The four gaps above are resolved + end-to-end reachable, and multi-worker partitioning,
+guest↔guest same-node delivery, NAT64 egress, and dead-slot exclusion are all wired
+(`feat/dpdk-guest-egress-followups`). What remains, in rough priority order:
+
+1. **Full-serve af_xdp e2e** — bring up `flowplane-dpdk serve` + preallocated guest ports
+   + gRPC attach + bidirectional packet injection over REAL af_xdp (incl. a two-lcore
+   two-guest guest↔guest delivery). Each datapath seam is independently proven (the handoff
+   tests, `afxdp_datapath.rs`, `attach_veth.rs`, `guest_local_delivery.rs`, `lcore_ring.rs`);
+   the only unproven layer is real-transport polling/timing under the live partition.
+2. **Native v6→v6 guest egress** — the worker guest block dispatches IPv4 (`process_guest_tx`)
+   and NAT64 v6→v4 (`process_guest_tx_nat64`); a native v6→v6 encap path has NO shared-core
+   orchestrator yet, so a v6-native `Deliver::Local`/encap is never produced. Core gap, not
+   serve wiring.
+3. **DPDK-hotplug live dead-slot recovery** — recreate the veth + `rte_dev` hotplug
+   detach/attach the af_xdp vdev + reconfigure the ethdev port, so a slot killed by a
+   netns-destroyed-without-detach recovers without a serve restart (today: detected + excluded).
+4. **`shared_ct` GC/eviction sweep** — periodic reclaim of stale reverse entries via
+   `shared_ct_for_each`/`_remove` (the primitives exist; the sweep does not).
+5. **Startup-rollback consistency** — the serve `run()` startup sequence tears down created
+   guest veths on a guest-port *configure* failure, but a later fallible startup call
+   (`LcoreRing::new`, `SharedConfigMaps::new`) `?`-returns without that teardown, leaking the
+   already-created veths on a rare startup failure. Wrap the whole startup in teardown-on-error
+   for consistency (startup-only, rare).
 
 ## Cross-refs
 
