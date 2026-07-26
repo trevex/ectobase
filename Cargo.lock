@@ -739,6 +739,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ipnet",
+ "libc",
 ]
 
 [[package]]
@@ -1379,6 +1380,7 @@ dependencies = [
  "flowplane-common",
  "flowplane-control",
  "flowplane-core",
+ "flowplane-device",
  "flowplane-dpdk",
  "flowplane-sim",
  "libc",

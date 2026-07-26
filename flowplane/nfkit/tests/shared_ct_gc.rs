@@ -13,6 +13,7 @@
 //!     (`TCP_ESTABLISHED_TIMEOUT_NS`)
 //!   * everything else (NEW/SYN, etc.)                            → 30 s idle timeout
 //!     (`DEFAULT_TIMEOUT_NS`)
+//!
 //! Timeouts are in NANOSECONDS; `last_seen` is in nanoseconds; expiry is
 //! `now.saturating_sub(last_seen) > timeout` (exactly `flowplane_core::conntrack::ct_is_expired`).
 //!

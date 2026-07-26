@@ -7,19 +7,23 @@
 //! orchestration is single-source: handlers NEVER reimplement route/nat/lb/fw logic, they call the
 //! ControlCore method 1:1 with the eBPF handler (the [[seam-not-duplicate-for-tests]] invariant).
 //!
-//! ── ATTACH/DETACH (VF-style preallocated af_xdp pool) ──────────────────────────────────────────
-//! `AttachInterface` stands up a real container interface by ASSIGNING a preallocated per-guest
-//! af_xdp port slot (the DPDK serve loop creates N guest veth pairs before EAL init — `fpg{i}`,
-//! host-end bound to an ethdev port, giving a STATIC poll set; see `serve.rs`). Attach reserves a
-//! free slot, moves ITS placeholder guest-end (`fpg{i}p`) into the pod netns, programs the config
-//! maps (`PortMeta` keyed by the SLOT's host ifindex — the exact key the serve worker's `ports_get`
-//! uses), IPAMs the underlay /128, configures the pod netns, and returns a real
-//! `AttachInterfaceResponse`. This is a deliberate DIVERGENCE from the eBPF create-on-attach model:
-//! the host-end veth never moves (so the af_xdp binding stays live) and the pool veth SURVIVES
-//! detach for reuse. `DetachInterface` purges the agnostic map half (VNI state + `ports_remove` the
-//! PortMeta + IfaceMeta), moves the guest-end back to the root netns as the placeholder, releases
-//! the /128, and frees the slot. Every attach failure path rolls back fully (unbind + free slot +
-//! release IPAM + purge). See the per-method comments + `serve.rs` for the pool lifecycle.
+//! ── ATTACH/DETACH (VF-style preallocated af_xdp pool, backend-agnostic) ─────────────────────────
+//! `AttachInterface` stands up a real guest interface by ASSIGNING a preallocated per-guest af_xdp
+//! port slot. The DPDK serve loop preallocates N pool host devices before EAL init (`fpg{i}` veths
+//! for the veth backend, `fpgtap{i}` taps for the tap/VM backend — selected by `--guest-backend`),
+//! each bound to an ethdev port, giving a STATIC poll set (see `serve.rs`). All device mechanics go
+//! through the `GuestPortBackend` seam (`port_backend.rs`) so this path is backend-agnostic — it
+//! names no device kind. Attach reserves a free slot, `backend.assign`s it to the consumer (veth:
+//! move the guest-end into the pod netns; tap: the qemu fd handoff — a no-op in the datapath slice),
+//! programs the config maps (`PortMeta` keyed by the SLOT's host ifindex — the exact key the serve
+//! worker's `ports_get` uses), IPAMs the underlay /128, and returns a real `AttachInterfaceResponse`.
+//! A deliberate DIVERGENCE from the eBPF create-on-attach model: the pool host device never moves (so
+//! the af_xdp binding stays live) and SURVIVES detach for reuse. `DetachInterface` purges the
+//! agnostic map half (VNI state + `ports_remove` the PortMeta + IfaceMeta), `backend.release`s the
+//! slot, releases the /128, and frees the slot. Every attach failure path rolls back fully. NOTE the
+//! `device_type="tap"` RPC is still rejected below — the KubeVirt control-plane wiring (binding
+//! plugin + fd handoff) is a deferred follow-up; the tap DATAPATH is proven via `--guest-backend tap`
+//! + the tap datapath tests. See the per-method comments + `serve.rs` for the pool lifecycle.
 //!
 //! ── LOCKING ────────────────────────────────────────────────────────────────────────────────────
 //! `ctrl` is a `parking_lot::Mutex<ControlCore<DpdkMapWriter>>` — the process's SOLE writer. Handlers
@@ -292,10 +296,9 @@ impl DataplaneNode for DpdkNodeService {
         {
             let backend = attach.backend.clone();
             let host_ifname = slot_host_ifname.clone();
-            let target = crate::port_backend::AssignTarget {
-                netns_path: r.netns_path.clone(),
-                guest_ifname: guest_name.clone(),
-            };
+            // Let the backend pick the target variant (veth → Veth, tap → Tap) so this path stays
+            // backend-agnostic.
+            let target = backend.assign_target(r.netns_path.clone(), guest_name.clone());
             let guest_mtu = attach.guest_mtu;
             let join = tokio::task::spawn_blocking(move || {
                 backend.assign(&host_ifname, &target, mac, guest_mtu)
@@ -318,10 +321,7 @@ impl DataplaneNode for DpdkNodeService {
                     // `release` (device mechanics; derives the placeholder peer from `host_ifname`).
                     let backend = attach.backend.clone();
                     let host_ifname = slot_host_ifname.clone();
-                    let target = crate::port_backend::AssignTarget {
-                        netns_path: r.netns_path.clone(),
-                        guest_ifname: guest_name.clone(),
-                    };
+                    let target = backend.assign_target(r.netns_path.clone(), guest_name.clone());
                     let _ =
                         tokio::task::spawn_blocking(move || backend.release(&host_ifname, &target))
                             .await;
@@ -379,10 +379,7 @@ impl DataplaneNode for DpdkNodeService {
             {
                 let backend = attach.backend.clone();
                 let host_ifname = slot_host_ifname.clone();
-                let target = crate::port_backend::AssignTarget {
-                    netns_path: r.netns_path.clone(),
-                    guest_ifname: guest_name.clone(),
-                };
+                let target = backend.assign_target(r.netns_path.clone(), guest_name.clone());
                 let _ = tokio::task::spawn_blocking(move || backend.release(&host_ifname, &target))
                     .await;
             }
@@ -452,10 +449,7 @@ impl DataplaneNode for DpdkNodeService {
             {
                 let backend = attach.backend.clone();
                 let host_ifname = slot_host_ifname.clone();
-                let target = crate::port_backend::AssignTarget {
-                    netns_path: r.netns_path.clone(),
-                    guest_ifname: guest_name.clone(),
-                };
+                let target = backend.assign_target(r.netns_path.clone(), guest_name.clone());
                 let _ = tokio::task::spawn_blocking(move || backend.release(&host_ifname, &target))
                     .await;
             }
@@ -576,10 +570,10 @@ impl DataplaneNode for DpdkNodeService {
             // The backend derives the placeholder peer from host_ifname; pass the registry device's
             // host_name (the only identity `release` needs).
             let host_ifname = dev.host_name.clone();
-            let target = crate::port_backend::AssignTarget {
-                netns_path: dev.netns_path.clone(),
-                guest_ifname: String::from_utf8_lossy(&id).into_owned(),
-            };
+            let target = backend.assign_target(
+                dev.netns_path.clone(),
+                String::from_utf8_lossy(&id).into_owned(),
+            );
             // Drop the JoinError: a `?` here would return BEFORE the slot-free below, leaking the
             // pool slot (bound=Some) while the registry entry is already gone. Detach runs ALL
             // reclaim steps regardless — `release` is already best-effort/always-Ok internally, so

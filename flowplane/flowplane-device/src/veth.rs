@@ -29,7 +29,7 @@ pub struct DeviceInfo {
 }
 
 /// Verbatim from attach.rs `fn fmt_mac`.
-fn fmt_mac(m: [u8; 6]) -> String {
+pub(crate) fn fmt_mac(m: [u8; 6]) -> String {
     format!(
         "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
         m[0], m[1], m[2], m[3], m[4], m[5]
