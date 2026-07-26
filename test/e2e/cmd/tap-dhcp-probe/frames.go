@@ -198,7 +198,7 @@ func buildARPRequest(srcMAC net.HardwareAddr, srcIP, targetIP net.IP) ([]byte, e
 		Protocol:          layers.EthernetTypeIPv4,
 		HwAddressSize:     6,
 		ProtAddressSize:   4,
-		Operation:         1, // request
+		Operation:         layers.ARPRequest,
 		SourceHwAddress:   srcMAC,
 		SourceProtAddress: srcIP.To4(),
 		DstHwAddress:      zeroMAC,
@@ -224,7 +224,7 @@ func buildARPReply(hwsrc net.HardwareAddr, psrc net.IP) ([]byte, error) {
 		Protocol:          layers.EthernetTypeIPv4,
 		HwAddressSize:     6,
 		ProtAddressSize:   4,
-		Operation:         2, // reply
+		Operation:         layers.ARPReply,
 		SourceHwAddress:   hwsrc,
 		SourceProtAddress: psrc.To4(),
 		DstHwAddress:      zeroMAC,
@@ -300,7 +300,7 @@ func buildNA(clientMAC net.HardwareAddr, target net.IP) ([]byte, error) {
 
 	eth := &layers.Ethernet{
 		SrcMAC:       clientMAC,
-		DstMAC:       broadcastMAC,
+		DstMAC:       net.HardwareAddr{0x33, 0x33, 0x00, 0x00, 0x00, 0x01},
 		EthernetType: layers.EthernetTypeIPv6,
 	}
 	ip6 := &layers.IPv6{
@@ -317,6 +317,7 @@ func buildNA(clientMAC net.HardwareAddr, target net.IP) ([]byte, error) {
 		return nil, fmt.Errorf("icmpv6 checksum setup: %w", err)
 	}
 	na := &layers.ICMPv6NeighborAdvertisement{
+		Flags:         0x20, // Override bit (RFC 4861)
 		TargetAddress: target,
 		Options: layers.ICMPv6Options{
 			{
