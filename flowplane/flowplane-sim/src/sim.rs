@@ -300,9 +300,9 @@ impl SimNode {
     /// (`egress_fw_ct6` + `route_decision6`) the eBPF `forward_decision_v6` delegates to, via
     /// [`flowplane_core::datapath::process_guest_tx_v6`]:
     ///   1. egress firewall + firewall-only v6 conntrack (deny-by-default on a fresh flow);
-    ///   2. route6 + deliver → Local tap (inner-Eth rewrite) | Encap (outer IPv6, inner-proto 41 —
-    ///      IPv6-in-IPv6) | Pass;
+    ///   2. route6 + deliver → Local tap (inner-Eth rewrite) | Encap (outer IPv6, inner-proto 41, IPv6-in-IPv6) | Pass;
     ///   3. dest ingress firewall on a NEW same-node Local flow (deny-by-default).
+    ///
     /// Returns `Redirect(uplink_ifindex)` + the encapped `[OuterEth][OuterIPv6][innerIPv6][L4]` frame
     /// on the encap arm. Byte-identical to the eBPF path.
     pub fn guest_tx_v6(&mut self, frame: &[u8], meta: &PortMeta) -> SimOut {

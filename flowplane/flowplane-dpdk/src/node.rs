@@ -150,9 +150,10 @@ impl DataplaneNode for DpdkNodeService {
         // new guest's traffic. So FIRST pass marks any free-but-not-yet-dead slot whose host-end no
         // longer exists as `dead` (a quick sysfs stat — `link_exists` — is fine under this std Mutex;
         // it does NOT block on a subprocess). THEN we reserve only a live free slot (`!s.dead`); dead
-        // slots are neither reused nor counted as free, so a pool drained by dead slots correctly
-        // surfaces as `resource_exhausted` below. LIVE RECOVERY (recreate the veth + rte_dev hotplug
-        // rebind the af_xdp vdev) is a documented follow-up — NOT done here.
+        // slots are neither reused nor counted as free. When the pool is drained by dead slots, the
+        // `None` arm below attempts LIVE RECOVERY of one dead slot (recreate the veth + rte_dev
+        // hotplug-rebind the af_xdp vdev via `RecoverHandle`/`VethBackend::recover`) before falling
+        // back to `resource_exhausted`.
         let reserved = {
             let mut pool = attach.guest_pool.lock().unwrap();
             for s in pool.iter_mut() {
@@ -162,7 +163,7 @@ impl DataplaneNode for DpdkNodeService {
                         "warn: guest af_xdp pool slot {} (port {}) is DEAD — host-end veth vanished \
                          (pod netns destroyed without DetachInterface; veth pairs die together, so \
                          the guest-end took the host-end + its ethdev down). Excluding from the free \
-                         pool; live recovery (recreate veth + rte_dev hotplug rebind) is a follow-up.",
+                         pool; the None arm below will attempt live recovery of a dead slot.",
                         s.host_ifname, s.port_id
                     );
                 }
@@ -566,9 +567,9 @@ impl DataplaneNode for DpdkNodeService {
         // CAVEAT (documented first-slice limitation): veth pairs die together. If a pod's netns is
         // destroyed WITHOUT a preceding DetachInterface, the guest-end vanishes and takes the host-end
         // (`fpg{i}`, bound to the af_xdp ethdev port) with it — breaking that pool slot until serve
-        // restart. The happy path assumes explicit detach-before-netns-destruction; robust dead-slot
-        // reclaim (detect + recreate the veth + rebind the ethdev) is a follow-up ("detach/reuse
-        // hardening"), NOT implemented here.
+        // restart UNLESS recovered. The happy path assumes explicit detach-before-netns-destruction;
+        // otherwise the slot is marked `dead` here and LIVE-RECOVERED at the next attach that needs it
+        // (recreate the veth + rte_dev hotplug-rebind the ethdev — see the `None` arm of attach).
         let dev = self.attach.forget(&id);
         if let Some(dev) = &dev {
             let backend = self.attach.backend.clone();
@@ -598,8 +599,8 @@ impl DataplaneNode for DpdkNodeService {
         // (`bound = None`, `dead` stays false). But if the pod's netns was destroyed WITHOUT this
         // detach (veth pairs die together → the guest-end took the host-end + its ethdev down), the
         // host-end is GONE: mark the slot `dead = true` instead of freeing it, so attach never binds a
-        // blackhole slot (it surfaces as `resource_exhausted` once the live pool drains). Live recovery
-        // (recreate the veth + rte_dev hotplug rebind) is a documented follow-up.
+        // blackhole slot. A later attach that would otherwise `resource_exhaust` LIVE-RECOVERS a dead
+        // slot (recreate the veth + rte_dev hotplug-rebind the ethdev — see the `None` arm of attach).
         let free_ifindex = dev.as_ref().map(|d| d.host_ifindex).or(tap_ifindex);
         if let Some(ifx) = free_ifindex {
             if let Some(slot) = self
@@ -617,7 +618,7 @@ impl DataplaneNode for DpdkNodeService {
                     eprintln!(
                         "warn: guest af_xdp pool slot {} (port {}) is DEAD after detach — host-end \
                          veth is gone (pod netns destroyed without detach; veth pairs die together). \
-                         Marking dead + excluding from the free pool; live recovery is a follow-up.",
+                         Marking dead; a later attach will live-recover it.",
                         slot.host_ifname, slot.port_id
                     );
                 }
