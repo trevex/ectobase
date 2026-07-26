@@ -236,8 +236,15 @@ wiring for the KubeVirt path); mixed veth+tap pools in one process.
 1. **VfBackend (SR-IOV real NIC)** datapath impl — only the `GuestPortBackend` trait seam exists
    (hardware-gated). The **KubeVirt control-plane wiring for TapBackend** (binding plugin + CNI +
    fd-handoff + real-qemu e2e) is the next tap increment.
-2. **Native v6→v6 guest↔guest local delivery** — the worker delivers v4 `Deliver::Local`;
-   a v6-native same-node `Deliver::Local` path isn't wired into the worker yet.
+2. **Native v6→v6 guest↔guest local delivery** — VERIFIED WORKING (2026-07-26). No fix was
+   needed: `process_guest_tx_v6`'s `Deliver::Local` arm already returns
+   `Redirect(dest_tap_ifindex)` with the inner Eth rewritten (dst=guest_mac, src=GW_MAC, ethertype
+   left at 0x86DD/IPv6, no encap), and the worker's guest↔guest routing
+   (`Redirect(ix != uplink) → rings[ifindex_to_index[ix]]`) is ETHERTYPE-AGNOSTIC — so a v6-native
+   same-node `Deliver::Local` composes with the ring handoff exactly as the v4 one does. Proven by
+   `nfkit/tests/guest_local_delivery_v6.rs` (INTERNAL v6 route + dest PortMeta → real
+   `process_guest_tx_v6` asserts `Redirect(DEST_TAP)` + inner-Eth rewrite + unchanged length/IPv6
+   payload, then `LcoreRing` enqueue→dequeue asserts byte-identical delivery).
 3. **Live worker-rebuild-under-traffic e2e for G3** — the control-level recover is proven
    (attach_veth); killing+recovering a slot mid-serve-run is a serve_e2e follow-on.
 4. **`/0` (non-/32) route validation** — FIXED: `route_upsert`/`route6_upsert` now `bail!` on a
