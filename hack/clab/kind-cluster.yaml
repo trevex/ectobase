@@ -22,18 +22,18 @@ nodes:
   - role: control-plane
     image: ghcr.io/trevex/ectobase/kind-node-fabric:dev
     extraMounts:
-      - hostPath: PREFIX_DIR/k01-control-plane.prefix
+      - hostPath: ${CLAB_PREFIX_DIR}/k01-control-plane.prefix
         containerPath: /etc/fabric/prefix
         readOnly: true
-      - hostPath: PREFIX_DIR/uplinks
+      - hostPath: ${CLAB_PREFIX_DIR}/uplinks
         containerPath: /etc/fabric/uplinks
         readOnly: true
   - role: worker
     image: ghcr.io/trevex/ectobase/kind-node-fabric:dev
     extraMounts:
-      - hostPath: PREFIX_DIR/k01-worker.prefix
+      - hostPath: ${CLAB_PREFIX_DIR}/k01-worker.prefix
         containerPath: /etc/fabric/prefix
         readOnly: true
-      - hostPath: PREFIX_DIR/uplinks
+      - hostPath: ${CLAB_PREFIX_DIR}/uplinks
         containerPath: /etc/fabric/uplinks
         readOnly: true

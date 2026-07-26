@@ -104,15 +104,14 @@ EOF
 # k02 agent DS: same image, reflector on the fabric, kubeconfig = the central one above. The
 # reflector override lives in an all-kustomize overlay (test/e2e/fixtures/multicluster/agent-overlay,
 # a JSON6902 replace on the --reflector args index — no regex-on-YAML). The reflector addr comes from
-# env.sh at run time, so the patch is rendered from a .tmpl (placeholder substitution) first. We render
+# env.sh at run time, so the patch is rendered from a .tmpl via envsubst (restricted to the two vars) first. We render
 # via `kubectl kustomize | apply -f -` (not `apply -k`): the overlay references the shared base
 # config/deploy/agent.yaml which lives OUTSIDE the overlay dir, so it needs --load-restrictor
 # LoadRestrictionsNone, a flag `kubectl apply -k` does not accept but `kubectl kustomize` does. This
 # keeps agent.yaml the single source of truth (no copy/drift).
 AGENT_OVERLAY="test/e2e/fixtures/multicluster/agent-overlay"
-sed -e "s#\${CLAB_FABRIC_REFLECTOR6}#${CLAB_FABRIC_REFLECTOR6}#g" \
-    -e "s#\${CLAB_REFLECTOR_PORT}#${CLAB_REFLECTOR_PORT}#g" \
-    "$AGENT_OVERLAY/patch.reflector.yaml.tmpl" > "$AGENT_OVERLAY/patch.reflector.yaml"
+envsubst '${CLAB_FABRIC_REFLECTOR6} ${CLAB_REFLECTOR_PORT}' \
+    < "$AGENT_OVERLAY/patch.reflector.yaml.tmpl" > "$AGENT_OVERLAY/patch.reflector.yaml"
 "$KUBECTL" kustomize --load-restrictor LoadRestrictionsNone "$AGENT_OVERLAY" \
   | "$KUBECTL" --kubeconfig "$K2" apply -f -
 "$KUBECTL" --kubeconfig "$K2" -n ectobase-system rollout status ds/flowplane --timeout=90s 2>&1 | tail -1

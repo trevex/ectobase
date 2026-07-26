@@ -34,12 +34,12 @@ VMI_YAML="test/e2e/fixtures/kubevirt/vmi.yaml"
 trap 'rm -f "$KC" "$VPCNICS_YAML" "$VMI_YAML"' EXIT
 say() { echo -e "\n=== $* ==="; }
 k() { kubectl --kubeconfig "$KC" "$@"; }
-# Render a fixture .tmpl to a file via named-placeholder substitution ($VM_IP/$VM_MAC/$PEER_IP/$NODE).
-# envsubst-compatible ${VAR} syntax; sed on named placeholders (not YAML structure). Task 6 adds
-# envsubst to the devShell — this can become `envsubst < "$1" > "$2"` once it's on PATH.
+# Render a fixture .tmpl to a file via envsubst (gettext, in the devShell), RESTRICTED to exactly
+# the vars each template uses ($VM_IP/$VM_MAC/$PEER_IP/$NODE) so nothing else `$`-looking in the
+# YAML is expanded. envsubst reads from the environment, so export the vars for the render subshell.
 render_fixture() {
-  sed -e "s#\${VM_IP}#${VM_IP}#g" -e "s#\${VM_MAC}#${VM_MAC}#g" \
-      -e "s#\${PEER_IP}#${PEER_IP}#g" -e "s#\${NODE}#${NODE}#g" "$1" > "$2"
+  VM_IP="$VM_IP" VM_MAC="$VM_MAC" PEER_IP="$PEER_IP" NODE="$NODE" \
+    envsubst '${VM_IP} ${VM_MAC} ${PEER_IP} ${NODE}' < "$1" > "$2"
 }
 # `kind` lives in ~/go/bin; plain `sudo` resets PATH and can't find it, so preserve PATH.
 KIND() { sudo env "PATH=$PATH" kind "$@"; }
@@ -65,7 +65,7 @@ k apply -f config/deploy/kubevirt-binding.yaml
 
 say "VPC + NetworkInterface (mac threaded) for the VM"
 # Manifests live in test/e2e/fixtures/kubevirt/*.tmpl (extracted from inline heredocs); rendered
-# via named-placeholder substitution (envsubst-compatible ${VAR} syntax) to a gitignored file.
+# via envsubst (restricted to the template's vars) to a gitignored file.
 render_fixture "test/e2e/fixtures/kubevirt/vpc-nics.yaml.tmpl" "$VPCNICS_YAML"
 k apply -f "$VPCNICS_YAML" 2>&1 | tail -3
 k patch vpc blue --subresource=status --type=merge -p '{"status":{"vni":100,"state":"Ready"}}'

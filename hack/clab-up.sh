@@ -31,9 +31,11 @@ REPO="$(cd "${HERE}/.." && pwd)"
 if ! "$DOCKER" image inspect "${CLAB_IMAGE_KINDNODE}" >/dev/null 2>&1; then
   make -C "${REPO}" image-kindnode
 fi
-PREFIX_DIR="${HERE}/clab/prefixes"
+# envsubst (gettext, in the devShell) renders the kind configs' extraMounts hostPaths. Restrict
+# to ONLY ${CLAB_PREFIX_DIR} so nothing else `$`-looking in the kind YAML is accidentally expanded.
+export CLAB_PREFIX_DIR="${HERE}/clab/prefixes"
 for f in "${HERE}/clab/kind-cluster.yaml" "${HERE}/clab/kind-cluster-k02.yaml" "${HERE}/clab/kind-cluster-k03.yaml"; do
-  sed "s#PREFIX_DIR#${PREFIX_DIR}#g" "$f" > "${f}.gen"
+  envsubst '${CLAB_PREFIX_DIR}' < "$f" > "${f}.gen"
 done
 
 # The WAN edge attaches to the `clabwan` host bridge (a clab `bridge`-kind node references a

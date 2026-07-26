@@ -107,6 +107,7 @@
             pkgs.kind
             pkgs.containerlab
             pkgs.kubernetes-helm
+            pkgs.gettext # provides envsubst for the clab fixture/kind-config templating
             pkgs.socat
             pkgs.gnumake
             pythonEnv
