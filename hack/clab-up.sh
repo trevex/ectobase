@@ -40,7 +40,8 @@ done
 
 # The WAN edge attaches to the `clabwan` host bridge (a clab `bridge`-kind node references a
 # pre-existing host bridge). Create it + the nat_ip masquerade before deploy. Idempotent.
-bash "${HERE}/clab/wan-up.sh"
+# Self-sudo: wan-up.sh does `ip link`/`iptables`/`sysctl` (root; system tools in root's secure_path).
+${CLAB_SUDO} bash "${HERE}/clab/wan-up.sh"
 
 # Let the kind clusters' nodes reach each other over the `kind` docker bridge (IPv6). With
 # br_netfilter loaded, `bridge-nf-call-ip6tables=1` makes even SAME-BRIDGE (L2-bridged) frames
@@ -50,8 +51,8 @@ bash "${HERE}/clab/wan-up.sh"
 # is silently dropped, so the worker can't reach the API server and its CNI/kubelet never go Ready
 # (this was the "flaky boot-race"). Turning the sysctl off makes bridged frames bypass ip6tables
 # entirely — routed WAN egress still hits FORWARD and clab's rules, so nothing else regresses.
-sysctl -w net.bridge.bridge-nf-call-ip6tables=0 >/dev/null 2>&1 \
-  || { modprobe br_netfilter 2>/dev/null && sysctl -w net.bridge.bridge-nf-call-ip6tables=0 >/dev/null 2>&1; } \
+${CLAB_SUDO} sysctl -w net.bridge.bridge-nf-call-ip6tables=0 >/dev/null 2>&1 \
+  || { ${CLAB_SUDO} modprobe br_netfilter 2>/dev/null && ${CLAB_SUDO} sysctl -w net.bridge.bridge-nf-call-ip6tables=0 >/dev/null 2>&1; } \
   || echo "clab-up: warning: could not clear bridge-nf-call-ip6tables (inter-node kind IPv6 may drop)"
 
 # --reconfigure makes re-runs idempotent (destroy+deploy the same-named lab).
@@ -63,9 +64,9 @@ sysctl -w net.bridge.bridge-nf-call-ip6tables=0 >/dev/null 2>&1 \
 # input/output error") and clab loops FOREVER. So when stdout is not a TTY, run the deploy under
 # script(1) to give it a pty. (Interactive runs already have one and take the direct path.)
 if [ -t 1 ]; then
-  "${CLAB}" deploy --reconfigure -t "${TOPO}" "$@"
+  ${CLAB_SUDO} "${CLAB}" deploy --reconfigure -t "${TOPO}" "$@"
 else
-  script -qefc "${CLAB} deploy --reconfigure -t ${TOPO} $*" /dev/null
+  ${CLAB_SUDO} script -qefc "${CLAB} deploy --reconfigure -t ${TOPO} $*" /dev/null
 fi
 
 # Install the CNI (Cilium, tunnel mode) on each kind cluster — this is what brings the nodes

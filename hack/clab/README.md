@@ -44,10 +44,23 @@ North-South load balancing, and graceful datapath restart.
 
 ## Bring it up
 
-Prereqs: `containerlab`, `kind`, `docker`, root/sudo, the `dummy` kernel module, and the images built
-(`make image` + `make image-netplane` + `make image-kindnode` at the repo root).
+Prereqs — all provided by the default dev shell, so just run everything inside **`nix develop`**:
+
+- `containerlab`, `kind`, `kubernetes-helm`, `docker`, `kubectl`, `envsubst` (gettext) — all in the
+  default devShell (`flake.nix`); no `nix shell nixpkgs#…` or manual installs.
+- The invoking **user** must be in the `docker` group and have **passwordless `sudo`**. The scripts
+  run as your user and self-sudo ONLY the privileged bits (containerlab, `sysctl`, `iptables`, the
+  host bpffs sweep) via `CLAB_SUDO` from `env.sh` — docker/kind/kubectl/helm run as you (your
+  kubeconfig, your docker socket). No `sudo -E bash …` wrapper, no PATH shims.
+- The `dummy` kernel module, and the images built (`make image` + `make image-netplane` +
+  `make image-kindnode` at the repo root — `clab-up.sh` auto-builds the kind-node image if missing;
+  `multicluster-e2e.sh` preflights the flowplane/netplane `:dev` images and fails loudly if absent).
+
+All constants (fabric/overlay IPs, VNI, ports, `:dev` image refs, cluster/node names,
+`CILIUM_VERSION`) live once in `env.sh`, sourced by every script and mirrored in `test/e2e/env.go`.
 
 ```bash
+nix develop            # everything below runs inside the default dev shell
 hack/clab-up.sh        # wan-up → clab deploy (--reconfigure, idempotent) → Cilium per cluster
 # deploy the netplane stack (agent + reflector + controller) + the flowplane DaemonSet on k01:
 # Helm (preferred): renders the same stack; dataplane=ebpf reproduces the kustomize manifests.
@@ -55,6 +68,11 @@ helm upgrade --install ectobase deploy/charts/ectobase --namespace ectobase-syst
 # Legacy kustomize (kept until the Helm chart passes a live clab smoke):
 kubectl apply -k config/deploy            # (namespace ectobase-system)
 hack/clab/edge-agents-up.sh               # start the WAN-edge flowplane sidecars + brokered agents
+
+# end-to-end cross-cluster proof: deploys the stack across k01+k02 and asserts a k01<->k02
+# overlay ping in BOTH directions (self-contained; applies the test/e2e/fixtures/multicluster
+# kustomize scenario). This is the primary "does route distribution work" gate.
+hack/multicluster-e2e.sh
 
 # sanity: fabric addressing + BGP/BFD
 docker exec k01-control-plane ip -6 -o addr show dev dummy0   # fd00:db8:0:1::1/64
