@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The k02 (compute) agent DaemonSet: the shared base agent.yaml with ONLY its
+# --reflector arg overridden to the fabric reflector. Formerly a `sed` on agent.yaml
+# piped to apply; now a JSON6902 patch targeting the specific args index (no regex).
+resources:
+  - ../../../../../config/deploy/agent.yaml
+
+patches:
+  - target:
+      group: apps
+      version: v1
+      kind: DaemonSet
+      name: netplane-agent
+    # Rendered from patch.reflector.yaml.tmpl by hack/multicluster-e2e.sh (gitignored).
+    path: patch.reflector.yaml

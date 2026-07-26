@@ -19,3 +19,6 @@ hack/clab/clab-*/
 # mdbook build output (regenerate with `make docs`)
 /docs/book
 flowplane/nfkit/tests/data/l2fwd_out.pcap
+
+# multicluster-e2e.sh renders this from patch.reflector.yaml.tmpl (env-substituted at run time)
+test/e2e/fixtures/multicluster/agent-overlay/patch.reflector.yaml

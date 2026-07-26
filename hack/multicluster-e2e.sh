@@ -77,8 +77,13 @@ say "k02 (compute): namespace + flowplane DS + agent (points at k01 central over
 "$KUBECTL" --kubeconfig "$K2" apply -f config/deploy/rbac.yaml
 "$KUBECTL" --kubeconfig "$K2" apply -f config/deploy/flowplane.yaml
 # k02 agent kubeconfig: explicit k01 token (not the local SA), server = k01 API on the fabric.
-"$KUBECTL" --kubeconfig "$K2" -n ectobase-system create configmap netplane-agent-kubeconfig \
-  --from-literal=kubeconfig="apiVersion: v1
+# The kubeconfig CONTENT is runtime-generated (per-run k01 token + fabric apiserver addr), so it
+# is materialised in a temp file and loaded via --from-file — that's data-from-a-file, not an inline
+# manifest, which is acceptable (the heredoc-removal target is the STATIC CR/agent YAML, done below).
+KCFG=$(mktemp -t netplane-agent.kubeconfig.XXXXXX)
+trap 'rm -f "$K1" "$K2" "$KCFG"' EXIT
+cat > "$KCFG" <<EOF
+apiVersion: v1
 kind: Config
 clusters:
   - name: central
@@ -93,29 +98,28 @@ contexts:
   - name: central
     context: {cluster: central, user: sa}
 current-context: central
-" --dry-run=client -o yaml | "$KUBECTL" --kubeconfig "$K2" apply -f -
-# k02 agent DS: same image, reflector on the fabric, kubeconfig = the central one above.
-sed -e "s#\\(--reflector=\\).*#\\1[${CLAB_FABRIC_REFLECTOR6}]:${CLAB_REFLECTOR_PORT}\"#" config/deploy/agent.yaml \
+EOF
+"$KUBECTL" --kubeconfig "$K2" -n ectobase-system create configmap netplane-agent-kubeconfig \
+  --from-file=kubeconfig="$KCFG" --dry-run=client -o yaml | "$KUBECTL" --kubeconfig "$K2" apply -f -
+# k02 agent DS: same image, reflector on the fabric, kubeconfig = the central one above. The
+# reflector override lives in an all-kustomize overlay (test/e2e/fixtures/multicluster/agent-overlay,
+# a JSON6902 replace on the --reflector args index — no regex-on-YAML). The reflector addr comes from
+# env.sh at run time, so the patch is rendered from a .tmpl (placeholder substitution) first. We render
+# via `kubectl kustomize | apply -f -` (not `apply -k`): the overlay references the shared base
+# config/deploy/agent.yaml which lives OUTSIDE the overlay dir, so it needs --load-restrictor
+# LoadRestrictionsNone, a flag `kubectl apply -k` does not accept but `kubectl kustomize` does. This
+# keeps agent.yaml the single source of truth (no copy/drift).
+AGENT_OVERLAY="test/e2e/fixtures/multicluster/agent-overlay"
+sed -e "s#\${CLAB_FABRIC_REFLECTOR6}#${CLAB_FABRIC_REFLECTOR6}#g" \
+    -e "s#\${CLAB_REFLECTOR_PORT}#${CLAB_REFLECTOR_PORT}#g" \
+    "$AGENT_OVERLAY/patch.reflector.yaml.tmpl" > "$AGENT_OVERLAY/patch.reflector.yaml"
+"$KUBECTL" kustomize --load-restrictor LoadRestrictionsNone "$AGENT_OVERLAY" \
   | "$KUBECTL" --kubeconfig "$K2" apply -f -
 "$KUBECTL" --kubeconfig "$K2" -n ectobase-system rollout status ds/flowplane --timeout=90s 2>&1 | tail -1
 
 say "VPC + NetworkInterfaces in k01 (central): 10.0.0.1 on k01-cp, 10.0.0.3 on k02-cp"
-"$KUBECTL" --kubeconfig "$K1" apply -f - <<'EOF'
-apiVersion: net.ectobase.dev/v1alpha1
-kind: VPC
-metadata: {name: blue, namespace: default}
-spec: {vni: 100}
----
-apiVersion: net.ectobase.dev/v1alpha1
-kind: NetworkInterface
-metadata: {name: nic-a, namespace: default}
-spec: {vpcRef: {name: blue}, ips: ["10.0.0.1"], nodeName: k01-control-plane}
----
-apiVersion: net.ectobase.dev/v1alpha1
-kind: NetworkInterface
-metadata: {name: nic-c, namespace: default}
-spec: {vpcRef: {name: blue}, ips: ["10.0.0.3"], nodeName: k02-control-plane}
-EOF
+# The VPC + NetworkInterface CRs live in an all-kustomize fixture (was an inline heredoc).
+"$KUBECTL" --kubeconfig "$K1" apply -k test/e2e/fixtures/multicluster/
 "$KUBECTL" --kubeconfig "$K1" patch vpc blue --subresource=status --type=merge -p '{"status":{"vni":100,"state":"Ready"}}'
 
 # attach_endpoint <node-container> <iface-id> <overlay-ip>  -> prints allocated underlay /128
