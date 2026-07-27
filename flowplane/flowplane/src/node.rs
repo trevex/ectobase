@@ -8,6 +8,7 @@ use pb::{
     AttachInterfaceRequest, AttachInterfaceResponse, ConfigureNetworkRequest,
     ConfigureNetworkResponse, ConfigureQoSRequest, ConfigureQoSResponse, DetachInterfaceRequest,
     DetachInterfaceResponse, InterfaceInfo, ListInterfacesRequest, ListInterfacesResponse,
+    ReplaceInterfaceFirewallRequest, ReplaceInterfaceFirewallResponse,
 };
 
 use crate::attach::AttachState;
@@ -443,6 +444,15 @@ impl DataplaneNode for NodeService {
         .map_err(|e| Status::internal(format!("del_fw_rule task panicked: {e}")))??;
         println!("FW rule del iface={log_iface} id={log_rule_id}");
         Ok(Response::new(resp))
+    }
+
+    async fn replace_interface_firewall(
+        &self,
+        _req: Request<ReplaceInterfaceFirewallRequest>,
+    ) -> Result<Response<ReplaceInterfaceFirewallResponse>, Status> {
+        Err(Status::unimplemented(
+            "replace_interface_firewall not yet implemented",
+        ))
     }
 
     async fn configure_qo_s(
