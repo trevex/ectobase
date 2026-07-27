@@ -22,6 +22,13 @@ need_skip() { echo "SKIP: $1" >&2; exit 77; }
 : "${SERVE_BIN:?set SERVE_BIN to the built flowplane-dpdk binary}"
 : "${CLIENT_BIN:?set CLIENT_BIN to the built attach_client example}"
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# Build netprobe (pure-Go, cgo-free injector+sniffer).
+NETPROBE="${ROOT}/test/e2e/netprobe.bin"
+( cd "${ROOT}/test/e2e" && CGO_ENABLED=0 go build -o "$NETPROBE" ./cmd/netprobe ) \
+  || { echo "failed to build netprobe" >&2; exit 1; }
+
 # ── addressing (mirrors nfkit/tests/guest_tx_nat_return_handoff.rs) ────────────────────────────────
 VNI=100
 GUEST_IP=10.0.2.20
@@ -48,13 +55,16 @@ UPL0=fpul0; UPL1=fpul1   # uplink veth pair (serve binds UPL0 to af_xdp ethdev 0
 NS_A=fpe2e-nsA
 NS_B=fpe2e-nsB
 SERVE_PID=0
+SNIFF_PID=0
 SERVE_LOG="$(mktemp -t fp-serve-e2e.XXXXXX.log)"
+SNIFF_OUT="$(mktemp -t fp-serve-e2e-sniff.XXXXXX.out)"
 ORIG_HP="$(cat /proc/sys/vm/nr_hugepages)"
 
 cleanup() {
   # Kill serve FIRST (it busy-polls + would wedge on our pipe if orphaned), then restore hugepages,
   # then delete the uplink veth + both netns. serve deletes its own preallocated fpg{i} veths on exit.
   kill -TERM "$SERVE_PID" 2>/dev/null || true
+  kill -TERM "$SNIFF_PID" 2>/dev/null || true
   for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$SERVE_PID" 2>/dev/null || break; sleep 0.3; done
   kill -9 "$SERVE_PID" 2>/dev/null || true
   sysctl -qw vm.nr_hugepages="$ORIG_HP" 2>/dev/null || true
@@ -64,6 +74,7 @@ cleanup() {
   # Best-effort: clean any leftover preallocated pool veths if serve died mid-startup.
   ip link del fpg0 2>/dev/null || true
   ip link del fpg1 2>/dev/null || true
+  rm -f "$SNIFF_OUT"
   echo "── serve log tail ──" >&2
   tail -30 "$SERVE_LOG" >&2 || true
 }
@@ -151,114 +162,101 @@ echo "guest A: ifname=$A_IFNAME mac=$A_MAC underlay=$A_UNDERLAY"
 # Bring the guest-end up inside nsA (serve moved the placeholder in as $A_IFNAME; ensure it is up).
 ip netns exec "$NS_A" ip link set "$A_IFNAME" up 2>/dev/null || true
 
-# ── part (a)+(b): guest→fabric egress + NAT-return delivery ─────────────────────────────────────────
-export A_IFNAME A_MAC A_UNDERLAY NS_A VNI GUEST_IP EXT_DST NAT_IP NAT_PORT_MIN NAT_PORT_MAX SPORT DPORT GATEWAY_MAC
-python3 - <<'PY'
-import os, sys, time
-from scapy.all import (Ether, IP, IPv6, TCP, sendp, AsyncSniffer, conf)
-conf.verb = 0
+# ── part (a): guest→fabric egress + SNAT port-range assertion ────────────────────────────────────────
+# TX is inside NS_A; RX (fpul1) is in the root netns — cross-netns split:
+#   1. Start sniff-only (--count 0) on fpul1 in the ROOT netns (background).
+#   2. Inject the guest frame inside NS_A via a separate "send" invocation.
+#   3. Wait for the sniffer; read its output (it prints the extracted SNAT'd sport).
+echo "── part (a): guest→fabric egress ──"
+"$NETPROBE" send-sniff \
+  --count 0 \
+  --rx-iface "$UPL1" \
+  --rx-outer-ipv6 \
+  --rx-inner-ip-dst "$EXT_DST" \
+  --rx-l4 tcp \
+  --want-outer-ipv6-nh 4 \
+  --extract inner-tcp-sport \
+  --sport-range "${NAT_PORT_MIN}-${NAT_PORT_MAX}" \
+  --count-min 1 \
+  --timeout 14 \
+  >"$SNIFF_OUT" 2>&1 &
+SNIFF_PID=$!
 
-a_if   = os.environ["A_IFNAME"]
-a_mac  = os.environ["A_MAC"]
-a_ul   = os.environ["A_UNDERLAY"]
-ns_a   = os.environ["NS_A"]
-guest_ip = os.environ["GUEST_IP"]
-ext_dst  = os.environ["EXT_DST"]
-nat_ip   = os.environ["NAT_IP"]
-pmin = int(os.environ["NAT_PORT_MIN"]); pmax = int(os.environ["NAT_PORT_MAX"])
-sport = int(os.environ["SPORT"]); dport = int(os.environ["DPORT"])
-gw_mac = os.environ["GATEWAY_MAC"]
+# Allow the sniffer to arm (mirrors the original 0.5 s sleep before injection).
+sleep 0.7
 
-# scapy runs in the ROOT netns; the guest veth is inside nsA. Use `ip netns exec` for the guest side
-# by re-invoking scapy? Simpler: sniff/inject on the guest-end via a netns-scoped socket. scapy has no
-# builtin netns switch, so we shell into the netns for the guest-side send/sniff using a helper.
-import subprocess, tempfile
+ip netns exec "$NS_A" "$NETPROBE" send \
+  --iface "$A_IFNAME" \
+  --eth-src "$A_MAC" \
+  --eth-dst "$GATEWAY_MAC" \
+  --ip-src "$GUEST_IP" \
+  --ip-dst "$EXT_DST" \
+  --l4 tcp \
+  --sport "$SPORT" \
+  --dport "$DPORT" \
+  --payload hello-egress \
+  --count 10 \
+  --interval-ms 200
 
-# ---- helper that runs a small scapy snippet INSIDE nsA ----
-def run_in_ns(ns, snippet, env=None):
-    e = dict(os.environ)
-    if env: e.update(env)
-    return subprocess.run(["ip","netns","exec",ns,sys.executable,"-c",snippet],
-                          capture_output=True, text=True, env=e)
+wait "$SNIFF_PID"; SNIFF_RC=$?; SNIFF_PID=0
+if [ "$SNIFF_RC" -ne 0 ]; then
+  echo "PART A FAIL: no encapped egress captured on $UPL1 (or SNAT port out of range)" >&2
+  cat "$SNIFF_OUT" >&2
+  exit 1
+fi
+# Extract the SNAT'd sport from the sniffer output line (e.g. "OK: captured 1 frame(s); inner-tcp-sport=20042").
+NAT_PORT="$(grep -oE 'inner-tcp-sport=[0-9]+' "$SNIFF_OUT" | head -1 | cut -d= -f2)"
+[ -n "$NAT_PORT" ] || { echo "PART A FAIL: could not extract nat_port from sniffer output" >&2; cat "$SNIFF_OUT" >&2; exit 1; }
+echo "PART A OK: encapped egress captured; SNAT nat_ip=$NAT_IP nat_port=$NAT_PORT"
+cat "$SNIFF_OUT"
 
-# ── (a) guest→fabric: sniff the encapped egress on UPL1 (root ns) while injecting the guest frame
-#     inside nsA. The egress is IPv6(nh=4)/IP(dst=EXT_DST). Capture it + read the SNAT'd source port. ─
-snf = AsyncSniffer(iface="fpul1", timeout=12,
-                   lfilter=lambda p: p.haslayer(IPv6) and p.haslayer(IP)
-                                     and p[IP].dst == ext_dst and p[IP].src == nat_ip)
-snf.start(); time.sleep(0.5)
+# ── part (b): NAT-return delivery ────────────────────────────────────────────────────────────────────
+# TX is on fpul1 in the root netns; RX is inside NS_A — cross-netns split:
+#   1. Start sniff-only (--count 0) inside NS_A (background).
+#   2. Inject the encapped return on fpul1 in the root netns.
+#   3. Wait; assert at least 1 candidate frame arrived.
+echo "── part (b): NAT-return delivery ──"
+# The encapped return is an IP-in-IPv6 frame: outer IPv6 (dst=A_UNDERLAY, nh=4) / inner IPv4 (dst=NAT_IP).
+# We sniff inside NS_A for a plain inner IPv4 TCP arriving at GUEST_IP (after decap+DNAT reversal).
+ip netns exec "$NS_A" "$NETPROBE" send-sniff \
+  --count 0 \
+  --rx-iface "$A_IFNAME" \
+  --rx-inner-ip-dst "$GUEST_IP" \
+  --rx-l4 tcp \
+  --count-min 1 \
+  --timeout 14 \
+  >"$SNIFF_OUT" 2>&1 &
+SNIFF_PID=$!
 
-# inner guest frame: Eth(guest_mac -> gw_mac)/IP(guest_ip->ext_dst)/TCP(sport->dport)
-inject_a = f'''
-import time
-from scapy.all import Ether, IP, TCP, sendp, conf
-conf.verb=0
-f = Ether(src="{a_mac}", dst="{gw_mac}")/IP(src="{guest_ip}", dst="{ext_dst}")/TCP(sport={sport}, dport={dport})/b"hello-egress"
-for _ in range(10):
-    sendp(f, iface="{a_if}", verbose=0)
-    time.sleep(0.2)
-'''
-r = run_in_ns(ns_a, inject_a)
-if r.returncode != 0:
-    print("inject A (guest egress) failed:\n"+r.stderr, file=sys.stderr); sys.exit(1)
+sleep 1.0  # let the in-ns sniffer arm
 
-res = snf.stop()
-egress = [p for p in (res or [])]
-if not egress:
-    print("PART A FAIL: no encapped egress captured on fpul1", file=sys.stderr); sys.exit(1)
-# read the SNAT'd source port from the inner IP/TCP of the first matching egress frame
-pkt = egress[0]
-inner = pkt[IP]
-nat_port = inner[TCP].sport
-if not (pmin <= nat_port <= pmax):
-    print(f"PART A FAIL: SNAT sport {nat_port} outside range [{pmin},{pmax}]", file=sys.stderr); sys.exit(1)
-# outer must be IPv6, next-header 4 (IPIP), and inner dst == EXT_DST (already filtered)
-if pkt[IPv6].nh != 4:
-    print(f"PART A FAIL: outer IPv6 next-header {pkt[IPv6].nh} != 4 (IPIP)", file=sys.stderr); sys.exit(1)
-print(f"PART A OK: encapped egress captured ({len(egress)} frame(s)); SNAT nat_ip={inner.src} nat_port={nat_port}; outer dst={pkt[IPv6].dst}")
+# encapped return: outer IPv6(src=NEXTHOP_UL, dst=A_UNDERLAY, nh=4) / inner IPv4(src=EXT_DST, dst=NAT_IP)
+# TCP(sport=DPORT, dport=NAT_PORT).  Uses --encap ipip so netprobe builds the IP-in-IPv6 outer.
+"$NETPROBE" send \
+  --iface "$UPL1" \
+  --eth-src "$GATEWAY_MAC" \
+  --eth-dst "$A_MAC" \
+  --encap ipip \
+  --outer-ipv6-src "$NEXTHOP_UL" \
+  --outer-ipv6-dst "$A_UNDERLAY" \
+  --ip-src "$EXT_DST" \
+  --ip-dst "$NAT_IP" \
+  --l4 tcp \
+  --sport "$DPORT" \
+  --dport "$NAT_PORT" \
+  --payload hello-return \
+  --count 10 \
+  --interval-ms 200
 
-# ── (b) NAT-return: inject the encapped return on UPL1 (outer dst = A's allocated underlay), sniff the
-#     reverse-DNAT'd delivery inside nsA on the guest-end (inner dst=guest_ip, dport=orig sport). ────
-sniff_b = f'''
-import time, sys
-from scapy.all import Ether, IP, TCP, AsyncSniffer, conf
-conf.verb=0
-snf = AsyncSniffer(iface="{a_if}", timeout=12,
-                   lfilter=lambda p: p.haslayer(IP) and p.haslayer(TCP)
-                                     and p[IP].dst == "{guest_ip}" and p[TCP].dport == {sport})
-snf.start(); time.sleep(0.5)
-# just sniff for the window (the injector runs during it).
-time.sleep(11.5)
-res = snf.stop()
-n = len(res or [])
-print(f"NS_SNIFF_COUNT={{n}}")
-sys.exit(0 if n >= 1 else 3)
-'''
-# start the in-ns sniffer in the background
-import threading
-holder = {}
-def _sniff_thread():
-    holder["res"] = run_in_ns(ns_a, sniff_b)
-th = threading.Thread(target=_sniff_thread); th.start()
-time.sleep(1.0)  # let the in-ns sniffer arm
-
-# encapped return: Ether/IPv6(dst=A_UNDERLAY, nh=4)/IP(src=EXT_DST, dst=NAT_IP)/TCP(sport=DPORT, dport=nat_port)
-ret = (Ether(src=gw_mac, dst=a_mac)/IPv6(src="2001:db8::1", dst=a_ul, nh=4)
-       /IP(src=ext_dst, dst=nat_ip)/TCP(sport=dport, dport=nat_port)/b"hello-return")
-for _ in range(10):
-    sendp(ret, iface="fpul1", verbose=0)
-    time.sleep(0.2)
-
-th.join()
-rb = holder.get("res")
-if rb is None or rb.returncode != 0:
-    print("PART B FAIL: NAT-return not delivered to the guest", file=sys.stderr)
-    if rb is not None:
-        print(rb.stdout, file=sys.stderr); print(rb.stderr, file=sys.stderr)
-    sys.exit(1)
-print("PART B OK: NAT-return decapped + reverse-DNAT'd + delivered to the guest")
-print("SERVE_E2E_AB_OK")
-PY
+wait "$SNIFF_PID"; SNIFF_RC=$?; SNIFF_PID=0
+if [ "$SNIFF_RC" -ne 0 ]; then
+  echo "PART B FAIL: NAT-return not delivered to the guest" >&2
+  cat "$SNIFF_OUT" >&2
+  exit 1
+fi
+echo "PART B OK: NAT-return decapped + reverse-DNAT'd + delivered to the guest"
+cat "$SNIFF_OUT"
+echo "SERVE_E2E_AB_OK"
 
 # ── part (c) [stretch]: guest-A → guest-B same-node delivery via LcoreRing ──────────────────────────
 if [ "${SERVE_E2E_GUEST2GUEST:-0}" = "1" ]; then
@@ -275,53 +273,43 @@ if [ "${SERVE_E2E_GUEST2GUEST:-0}" = "1" ]; then
   # ingress allow on B so the delivery isn't firewall-dropped.
   "$CLIENT_BIN" fw --addr "$GRPC" --iface "$IFACE_B" --rule-id ingress-allow --src-cidr 0.0.0.0/0 --dst-cidr "$GUEST_B_IP/32" --proto 6 --dport-min 0 --dport-max 65535 --allow
 
-  export A_IFNAME A_MAC B_IFNAME B_MAC NS_A NS_B GUEST_IP GUEST_B_IP GATEWAY_MAC
-  if python3 - <<'PY'
-import os, sys, time, subprocess, threading
-a_if=os.environ["A_IFNAME"]; a_mac=os.environ["A_MAC"]
-b_if=os.environ["B_IFNAME"]; b_mac=os.environ["B_MAC"]
-ns_a=os.environ["NS_A"]; ns_b=os.environ["NS_B"]
-guest_ip=os.environ["GUEST_IP"]; guest_b=os.environ["GUEST_B_IP"]; gw_mac=os.environ["GATEWAY_MAC"]
+  echo "── part (c): guest-A → guest-B (LcoreRing) ──"
+  # TX inside NS_A; RX inside NS_B — cross-netns split (same pattern as A+B).
+  ip netns exec "$NS_B" "$NETPROBE" send-sniff \
+    --count 0 \
+    --rx-iface "$B_IFNAME" \
+    --rx-inner-ip-src "$GUEST_IP" \
+    --rx-inner-ip-dst "$GUEST_B_IP" \
+    --rx-l4 tcp \
+    --count-min 1 \
+    --timeout 14 \
+    >"$SNIFF_OUT" 2>&1 &
+  SNIFF_PID=$!
 
-def run_in_ns(ns, snippet):
-    return subprocess.run(["ip","netns","exec",ns,sys.executable,"-c",snippet],
-                          capture_output=True, text=True, env=dict(os.environ))
+  sleep 1.0
 
-sniff_b = f'''
-import time, sys
-from scapy.all import IP, TCP, AsyncSniffer, conf
-conf.verb=0
-snf=AsyncSniffer(iface="{b_if}", timeout=12,
-                 lfilter=lambda p: p.haslayer(IP) and p[IP].dst=="{guest_b}" and p[IP].src=="{guest_ip}")
-snf.start(); time.sleep(0.5); time.sleep(11.0)
-res=snf.stop(); n=len(res or []); print(f"C_COUNT={{n}}"); sys.exit(0 if n>=1 else 3)
-'''
-holder={}
-def _t(): holder["res"]=run_in_ns(ns_b, sniff_b)
-th=threading.Thread(target=_t); th.start(); time.sleep(1.0)
+  ip netns exec "$NS_A" "$NETPROBE" send \
+    --iface "$A_IFNAME" \
+    --eth-src "$A_MAC" \
+    --eth-dst "$GATEWAY_MAC" \
+    --ip-src "$GUEST_IP" \
+    --ip-dst "$GUEST_B_IP" \
+    --l4 tcp \
+    --sport 23456 \
+    --dport 80 \
+    --payload a2b \
+    --count 12 \
+    --interval-ms 200
 
-inject=f'''
-import time
-from scapy.all import Ether, IP, TCP, sendp, conf
-conf.verb=0
-f=Ether(src="{a_mac}", dst="{gw_mac}")/IP(src="{guest_ip}", dst="{guest_b}")/TCP(sport=23456, dport=80)/b"a2b"
-for _ in range(12):
-    sendp(f, iface="{a_if}", verbose=0); time.sleep(0.2)
-'''
-r=run_in_ns(ns_a, inject)
-if r.returncode!=0:
-    print("inject A->B failed:\n"+r.stderr, file=sys.stderr); sys.exit(1)
-th.join(); rb=holder.get("res")
-if rb is None or rb.returncode!=0:
-    print("PART C FAIL (stretch): guest-A->guest-B not delivered", file=sys.stderr)
-    if rb is not None: print(rb.stdout, file=sys.stderr); print(rb.stderr, file=sys.stderr)
-    sys.exit(3)
-print("PART C OK: guest-A -> guest-B delivered cross-lcore")
-PY
-  then
-    echo "SERVE_E2E_C_OK"
-  else
+  wait "$SNIFF_PID"; SNIFF_RC=$?; SNIFF_PID=0
+  if [ "$SNIFF_RC" -ne 0 ]; then
+    echo "PART C FAIL (stretch): guest-A->guest-B not delivered" >&2
+    cat "$SNIFF_OUT" >&2
     echo "PART C (stretch) did not pass — not blocking (a)+(b)" >&2
+  else
+    echo "PART C OK: guest-A -> guest-B delivered cross-lcore"
+    cat "$SNIFF_OUT"
+    echo "SERVE_E2E_C_OK"
   fi
 fi
 

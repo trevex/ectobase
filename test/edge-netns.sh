@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test/edge-netns.sh — WAN-edge datapath harness (D7). Proves the `flowplane serve --role edge`
 # sidecar forwards BOTH directions of North-South egress WITHOUT the fabric/k8s, using pure
-# veth/netns + crafted packets (scapy) + capture (tcpdump).
+# veth/netns + crafted packets (netprobe) + capture (tcpdump).
 #
 # The edge = VyOS + an flowplane sidecar sharing a netns. Here `edge` netns stands in for that shared
 # netns: `fab` is the fabric-facing uplink (uplink_rx) and `wan` is the WAN-facing uplink (wan_rx).
@@ -21,7 +21,7 @@
 #   XDP_PASSes the inner IPv4 to the local kernel, which routes/masquerades it out `wan`. Asserted
 #   by capturing the inner IPv4 (dst=<internet>) on wanp-eth.
 #
-# Run inside the flake devShell; needs sudo for netns/eBPF/scapy:
+# Run inside the flake devShell; needs sudo for netns/eBPF/netprobe:
 #   nix develop --command sh -c 'sudo env "PATH=$PATH" bash test/edge-netns.sh'
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; cd "$ROOT"
@@ -147,13 +147,16 @@ WAN_MAC="$(ip netns exec "$EDGE_NS" cat /sys/class/net/"$WAN"/address)"
 ip netns exec "$FAB_NS" tcpdump -i "$FABP" -w "$RET_PCAP" -c 1 -U "ip6 dst $OWNER_UL" >/dev/null 2>&1 &
 TCPDUMP_PID=$!
 sleep 0.8
-ip netns exec "$WAN_NS" python3 - "$WANP" "$WAN_MAC" "$EXT_RET" "$NAT_IP" "$DPORT" <<'PY'
-import sys
-from scapy.all import Ether, IP, TCP, sendp
-iface, dmac, src, dst, dport = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
-pkt = Ether(dst=dmac)/IP(src=src, dst=dst)/TCP(sport=80, dport=dport, flags="A")/b"return"
-sendp(pkt, iface=iface, count=3, verbose=False)
-PY
+ip netns exec "$WAN_NS" "$NETPROBE" send \
+  --iface "$WANP" \
+  --eth-dst "$WAN_MAC" \
+  --ip-src "$EXT_RET" \
+  --ip-dst "$NAT_IP" \
+  --l4 tcp \
+  --sport 80 \
+  --dport "$DPORT" \
+  --payload return \
+  --count 3
 sleep 0.8
 kill -9 "$TCPDUMP_PID" 2>/dev/null; wait "$TCPDUMP_PID" 2>/dev/null; TCPDUMP_PID=""
 
@@ -169,15 +172,19 @@ echo "== EGRESS: capture on $WANP, inject IP-in-IPv6 egress on $FABP =="
 ip netns exec "$WAN_NS" tcpdump -i "$WANP" -w "$EGR_PCAP" -c 1 -U "ip dst $EXT_DST" >/dev/null 2>&1 &
 TCPDUMP_PID=$!
 sleep 0.8
-ip netns exec "$FAB_NS" python3 - "$FABP" "$FAB_MAC" "$OWNER_UL" "$EDGE_UL" "$NAT_IP" "$EXT_DST" <<'PY'
-import sys
-from scapy.all import Ether, IPv6, IP, TCP, sendp
-iface, dmac, outer_src, outer_dst, nat_ip, ext_dst = sys.argv[1:7]
-# IP-in-IPv6: outer IPv6 nh=4 (IPPROTO_IPIP) carrying the inner IPv4 directly (no inner eth).
-pkt = (Ether(dst=dmac)/IPv6(src=outer_src, dst=outer_dst, nh=4)
-       /IP(src=nat_ip, dst=ext_dst)/TCP(sport=1500, dport=80, flags="A")/b"egress")
-sendp(pkt, iface=iface, count=3, verbose=False)
-PY
+ip netns exec "$FAB_NS" "$NETPROBE" send \
+  --iface "$FABP" \
+  --eth-dst "$FAB_MAC" \
+  --encap ipip \
+  --outer-ipv6-src "$OWNER_UL" \
+  --outer-ipv6-dst "$EDGE_UL" \
+  --ip-src "$NAT_IP" \
+  --ip-dst "$EXT_DST" \
+  --l4 tcp \
+  --sport 1500 \
+  --dport 80 \
+  --payload egress \
+  --count 3
 sleep 0.8
 kill -9 "$TCPDUMP_PID" 2>/dev/null; wait "$TCPDUMP_PID" 2>/dev/null; TCPDUMP_PID=""
 

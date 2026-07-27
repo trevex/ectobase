@@ -20,6 +20,8 @@ func run(args []string) int {
 		return pcapVerify(args[1:])
 	case "send":
 		return sendCmd(args[1:])
+	case "send-sniff":
+		return sendSniff(args[1:])
 	case "pcap-replay":
 		return pcapReplay(args[1:])
 	default:
