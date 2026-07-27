@@ -18,6 +18,10 @@ func run(args []string) int {
 	switch args[0] {
 	case "pcap-verify":
 		return pcapVerify(args[1:])
+	case "send":
+		return sendCmd(args[1:])
+	case "pcap-replay":
+		return pcapReplay(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", args[0])
 		return 2
