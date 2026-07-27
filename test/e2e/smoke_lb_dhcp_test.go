@@ -69,6 +69,17 @@ func buildProbeBinary(t *testing.T) string {
 // 10 distinct flow keys across 2 backends at least one packet will hit each backend
 // (the probability of ALL 10 landing on one backend is 2^-9 < 0.2%).
 func TestLbDistributeSmoke(t *testing.T) {
+	// SKIPPED: faithful LB-distribution coverage needs the full N-S WAN path — a WAN client
+	// on clabwan whose SYN reaches the edge sidecar's vip_rx (eth2 ingress), Maglev-selects a
+	// backend, and encaps out the fabric. That path is CRD/agent/VyOS-route-driven (see the
+	// N-S WAN-edge notes) and is exercised end-to-end by test/scenario-lb-ingress.sh, which is
+	// the real, maintained LB coverage. This Go smoke was a rotted in-node-`flowplane serve`
+	// approximation; rather than duplicate the finicky N-S WAN datapath here, use the scenario
+	// script. (The Go probe/netprobe rewire below is kept for when this is reworked to drive
+	// the real edge sidecar's gRPC + a clabwan WAN-client injection.)
+	t.Skip("LB distribution is covered by test/scenario-lb-ingress.sh (full N-S WAN path); " +
+		"this Go smoke needs a WAN-client-into-edge-vip_rx rework — see the comment above")
+
 	for _, bin := range []string{"containerlab", "kind", "docker"} {
 		if _, err := exec.LookPath(bin); err != nil {
 			t.Skipf("lb-distribute smoke requires clab fabric host: %s not installed", bin)
