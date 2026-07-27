@@ -14,6 +14,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	// registers --kubeconfig flag to flag.CommandLine via init().
 	_ "sigs.k8s.io/controller-runtime/pkg/client/config"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
 
 func main() {
@@ -29,7 +30,13 @@ func main() {
 		log.Fatalf("get config: %v", err)
 	}
 
-	mgr, err := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme})
+	// Disable the metrics server: the controller runs hostNetwork (see config/deploy/controller.yaml),
+	// so a default :8080 listener collides on rolling restart (new pod can't bind while the old holds
+	// it) → crashloop. Nothing scrapes it in this deployment; "0" turns it off.
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+		Scheme:  scheme,
+		Metrics: metricsserver.Options{BindAddress: "0"},
+	})
 	if err != nil {
 		log.Fatalf("new manager: %v", err)
 	}

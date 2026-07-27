@@ -8,6 +8,10 @@ metadata:
     app.kubernetes.io/part-of: netplane
 spec:
   replicas: 1
+  # hostNetwork singleton: never surge two pods (they'd collide on host ports). Recreate ensures the
+  # old pod is torn down before the new one starts on rollout.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: netplane-controller
