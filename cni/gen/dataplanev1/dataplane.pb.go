@@ -675,6 +675,197 @@ func (*DelFwRuleResponse) Descriptor() ([]byte, []int) {
 	return file_dataplane_proto_rawDescGZIP(), []int{12}
 }
 
+// FwRuleSpec is one firewall rule inside a ReplaceInterfaceFirewall set. Same fields as
+// AddFwRuleRequest minus interface_id (carried once on the parent). The rule's address family is
+// inferred from the CIDRs (a v6 CIDR on either side makes it a v6 rule), exactly like AddFwRule.
+type FwRuleSpec struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RuleId        string                 `protobuf:"bytes,1,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`                // stable rule id (debug/telemetry; slot order = position in the list)
+	SrcCidr       string                 `protobuf:"bytes,2,opt,name=src_cidr,json=srcCidr,proto3" json:"src_cidr,omitempty"`             // source CIDR ("0.0.0.0/0"/"::/0"/empty = any)
+	DstCidr       string                 `protobuf:"bytes,3,opt,name=dst_cidr,json=dstCidr,proto3" json:"dst_cidr,omitempty"`             // destination CIDR; empty = any
+	Proto         uint32                 `protobuf:"varint,4,opt,name=proto,proto3" json:"proto,omitempty"`                               // IP protocol number (6=TCP, 17=UDP, 1=ICMP); 0 = any
+	DstPortMin    uint32                 `protobuf:"varint,5,opt,name=dst_port_min,json=dstPortMin,proto3" json:"dst_port_min,omitempty"` // inclusive destination-port range low
+	DstPortMax    uint32                 `protobuf:"varint,6,opt,name=dst_port_max,json=dstPortMax,proto3" json:"dst_port_max,omitempty"` // inclusive destination-port range high; 0 => treated as 65535
+	Allow         bool                   `protobuf:"varint,7,opt,name=allow,proto3" json:"allow,omitempty"`                               // true = accept, false = drop
+	Egress        bool                   `protobuf:"varint,8,opt,name=egress,proto3" json:"egress,omitempty"`                             // true = egress rule, false = ingress rule
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FwRuleSpec) Reset() {
+	*x = FwRuleSpec{}
+	mi := &file_dataplane_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FwRuleSpec) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FwRuleSpec) ProtoMessage() {}
+
+func (x *FwRuleSpec) ProtoReflect() protoreflect.Message {
+	mi := &file_dataplane_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FwRuleSpec.ProtoReflect.Descriptor instead.
+func (*FwRuleSpec) Descriptor() ([]byte, []int) {
+	return file_dataplane_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *FwRuleSpec) GetRuleId() string {
+	if x != nil {
+		return x.RuleId
+	}
+	return ""
+}
+
+func (x *FwRuleSpec) GetSrcCidr() string {
+	if x != nil {
+		return x.SrcCidr
+	}
+	return ""
+}
+
+func (x *FwRuleSpec) GetDstCidr() string {
+	if x != nil {
+		return x.DstCidr
+	}
+	return ""
+}
+
+func (x *FwRuleSpec) GetProto() uint32 {
+	if x != nil {
+		return x.Proto
+	}
+	return 0
+}
+
+func (x *FwRuleSpec) GetDstPortMin() uint32 {
+	if x != nil {
+		return x.DstPortMin
+	}
+	return 0
+}
+
+func (x *FwRuleSpec) GetDstPortMax() uint32 {
+	if x != nil {
+		return x.DstPortMax
+	}
+	return 0
+}
+
+func (x *FwRuleSpec) GetAllow() bool {
+	if x != nil {
+		return x.Allow
+	}
+	return false
+}
+
+func (x *FwRuleSpec) GetEgress() bool {
+	if x != nil {
+		return x.Egress
+	}
+	return false
+}
+
+type ReplaceInterfaceFirewallRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InterfaceId   string                 `protobuf:"bytes,1,opt,name=interface_id,json=interfaceId,proto3" json:"interface_id,omitempty"` // target interface (as in AttachInterface)
+	Rules         []*FwRuleSpec          `protobuf:"bytes,2,rep,name=rules,proto3" json:"rules,omitempty"`                                // the COMPLETE desired rule set; empty clears all rules
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReplaceInterfaceFirewallRequest) Reset() {
+	*x = ReplaceInterfaceFirewallRequest{}
+	mi := &file_dataplane_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReplaceInterfaceFirewallRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReplaceInterfaceFirewallRequest) ProtoMessage() {}
+
+func (x *ReplaceInterfaceFirewallRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_dataplane_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReplaceInterfaceFirewallRequest.ProtoReflect.Descriptor instead.
+func (*ReplaceInterfaceFirewallRequest) Descriptor() ([]byte, []int) {
+	return file_dataplane_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ReplaceInterfaceFirewallRequest) GetInterfaceId() string {
+	if x != nil {
+		return x.InterfaceId
+	}
+	return ""
+}
+
+func (x *ReplaceInterfaceFirewallRequest) GetRules() []*FwRuleSpec {
+	if x != nil {
+		return x.Rules
+	}
+	return nil
+}
+
+type ReplaceInterfaceFirewallResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReplaceInterfaceFirewallResponse) Reset() {
+	*x = ReplaceInterfaceFirewallResponse{}
+	mi := &file_dataplane_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReplaceInterfaceFirewallResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReplaceInterfaceFirewallResponse) ProtoMessage() {}
+
+func (x *ReplaceInterfaceFirewallResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_dataplane_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReplaceInterfaceFirewallResponse.ProtoReflect.Descriptor instead.
+func (*ReplaceInterfaceFirewallResponse) Descriptor() ([]byte, []int) {
+	return file_dataplane_proto_rawDescGZIP(), []int{15}
+}
+
 type AttachInterfaceRequest struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	InterfaceId  string                 `protobuf:"bytes,1,opt,name=interface_id,json=interfaceId,proto3" json:"interface_id,omitempty"` // stable id (e.g. VMI uid + iface name)
@@ -692,7 +883,7 @@ type AttachInterfaceRequest struct {
 
 func (x *AttachInterfaceRequest) Reset() {
 	*x = AttachInterfaceRequest{}
-	mi := &file_dataplane_proto_msgTypes[13]
+	mi := &file_dataplane_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -704,7 +895,7 @@ func (x *AttachInterfaceRequest) String() string {
 func (*AttachInterfaceRequest) ProtoMessage() {}
 
 func (x *AttachInterfaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[13]
+	mi := &file_dataplane_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -717,7 +908,7 @@ func (x *AttachInterfaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachInterfaceRequest.ProtoReflect.Descriptor instead.
 func (*AttachInterfaceRequest) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{13}
+	return file_dataplane_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *AttachInterfaceRequest) GetInterfaceId() string {
@@ -782,7 +973,7 @@ type AttachInterfaceResponse struct {
 
 func (x *AttachInterfaceResponse) Reset() {
 	*x = AttachInterfaceResponse{}
-	mi := &file_dataplane_proto_msgTypes[14]
+	mi := &file_dataplane_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -794,7 +985,7 @@ func (x *AttachInterfaceResponse) String() string {
 func (*AttachInterfaceResponse) ProtoMessage() {}
 
 func (x *AttachInterfaceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[14]
+	mi := &file_dataplane_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -807,7 +998,7 @@ func (x *AttachInterfaceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachInterfaceResponse.ProtoReflect.Descriptor instead.
 func (*AttachInterfaceResponse) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{14}
+	return file_dataplane_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *AttachInterfaceResponse) GetIfname() string {
@@ -853,7 +1044,7 @@ type ListInterfacesRequest struct {
 
 func (x *ListInterfacesRequest) Reset() {
 	*x = ListInterfacesRequest{}
-	mi := &file_dataplane_proto_msgTypes[15]
+	mi := &file_dataplane_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -865,7 +1056,7 @@ func (x *ListInterfacesRequest) String() string {
 func (*ListInterfacesRequest) ProtoMessage() {}
 
 func (x *ListInterfacesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[15]
+	mi := &file_dataplane_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -878,7 +1069,7 @@ func (x *ListInterfacesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListInterfacesRequest.ProtoReflect.Descriptor instead.
 func (*ListInterfacesRequest) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{15}
+	return file_dataplane_proto_rawDescGZIP(), []int{18}
 }
 
 type ListInterfacesResponse struct {
@@ -890,7 +1081,7 @@ type ListInterfacesResponse struct {
 
 func (x *ListInterfacesResponse) Reset() {
 	*x = ListInterfacesResponse{}
-	mi := &file_dataplane_proto_msgTypes[16]
+	mi := &file_dataplane_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -902,7 +1093,7 @@ func (x *ListInterfacesResponse) String() string {
 func (*ListInterfacesResponse) ProtoMessage() {}
 
 func (x *ListInterfacesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[16]
+	mi := &file_dataplane_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -915,7 +1106,7 @@ func (x *ListInterfacesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListInterfacesResponse.ProtoReflect.Descriptor instead.
 func (*ListInterfacesResponse) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{16}
+	return file_dataplane_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ListInterfacesResponse) GetInterfaces() []*InterfaceInfo {
@@ -939,7 +1130,7 @@ type InterfaceInfo struct {
 
 func (x *InterfaceInfo) Reset() {
 	*x = InterfaceInfo{}
-	mi := &file_dataplane_proto_msgTypes[17]
+	mi := &file_dataplane_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -951,7 +1142,7 @@ func (x *InterfaceInfo) String() string {
 func (*InterfaceInfo) ProtoMessage() {}
 
 func (x *InterfaceInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[17]
+	mi := &file_dataplane_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -964,7 +1155,7 @@ func (x *InterfaceInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InterfaceInfo.ProtoReflect.Descriptor instead.
 func (*InterfaceInfo) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{17}
+	return file_dataplane_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *InterfaceInfo) GetInterfaceId() string {
@@ -1011,7 +1202,7 @@ type DetachInterfaceRequest struct {
 
 func (x *DetachInterfaceRequest) Reset() {
 	*x = DetachInterfaceRequest{}
-	mi := &file_dataplane_proto_msgTypes[18]
+	mi := &file_dataplane_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1023,7 +1214,7 @@ func (x *DetachInterfaceRequest) String() string {
 func (*DetachInterfaceRequest) ProtoMessage() {}
 
 func (x *DetachInterfaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[18]
+	mi := &file_dataplane_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1036,7 +1227,7 @@ func (x *DetachInterfaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DetachInterfaceRequest.ProtoReflect.Descriptor instead.
 func (*DetachInterfaceRequest) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{18}
+	return file_dataplane_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *DetachInterfaceRequest) GetInterfaceId() string {
@@ -1054,7 +1245,7 @@ type DetachInterfaceResponse struct {
 
 func (x *DetachInterfaceResponse) Reset() {
 	*x = DetachInterfaceResponse{}
-	mi := &file_dataplane_proto_msgTypes[19]
+	mi := &file_dataplane_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1066,7 +1257,7 @@ func (x *DetachInterfaceResponse) String() string {
 func (*DetachInterfaceResponse) ProtoMessage() {}
 
 func (x *DetachInterfaceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[19]
+	mi := &file_dataplane_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1079,7 +1270,7 @@ func (x *DetachInterfaceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DetachInterfaceResponse.ProtoReflect.Descriptor instead.
 func (*DetachInterfaceResponse) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{19}
+	return file_dataplane_proto_rawDescGZIP(), []int{22}
 }
 
 type ConfigureNetworkRequest struct {
@@ -1094,7 +1285,7 @@ type ConfigureNetworkRequest struct {
 
 func (x *ConfigureNetworkRequest) Reset() {
 	*x = ConfigureNetworkRequest{}
-	mi := &file_dataplane_proto_msgTypes[20]
+	mi := &file_dataplane_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1106,7 +1297,7 @@ func (x *ConfigureNetworkRequest) String() string {
 func (*ConfigureNetworkRequest) ProtoMessage() {}
 
 func (x *ConfigureNetworkRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[20]
+	mi := &file_dataplane_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1119,7 +1310,7 @@ func (x *ConfigureNetworkRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigureNetworkRequest.ProtoReflect.Descriptor instead.
 func (*ConfigureNetworkRequest) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{20}
+	return file_dataplane_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ConfigureNetworkRequest) GetVni() uint32 {
@@ -1158,7 +1349,7 @@ type ConfigureNetworkResponse struct {
 
 func (x *ConfigureNetworkResponse) Reset() {
 	*x = ConfigureNetworkResponse{}
-	mi := &file_dataplane_proto_msgTypes[21]
+	mi := &file_dataplane_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1170,7 +1361,7 @@ func (x *ConfigureNetworkResponse) String() string {
 func (*ConfigureNetworkResponse) ProtoMessage() {}
 
 func (x *ConfigureNetworkResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[21]
+	mi := &file_dataplane_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1183,7 +1374,7 @@ func (x *ConfigureNetworkResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigureNetworkResponse.ProtoReflect.Descriptor instead.
 func (*ConfigureNetworkResponse) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{21}
+	return file_dataplane_proto_rawDescGZIP(), []int{24}
 }
 
 type AddRouteRequest struct {
@@ -1198,7 +1389,7 @@ type AddRouteRequest struct {
 
 func (x *AddRouteRequest) Reset() {
 	*x = AddRouteRequest{}
-	mi := &file_dataplane_proto_msgTypes[22]
+	mi := &file_dataplane_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1210,7 +1401,7 @@ func (x *AddRouteRequest) String() string {
 func (*AddRouteRequest) ProtoMessage() {}
 
 func (x *AddRouteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[22]
+	mi := &file_dataplane_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1223,7 +1414,7 @@ func (x *AddRouteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddRouteRequest.ProtoReflect.Descriptor instead.
 func (*AddRouteRequest) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{22}
+	return file_dataplane_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *AddRouteRequest) GetVni() uint32 {
@@ -1262,7 +1453,7 @@ type AddRouteResponse struct {
 
 func (x *AddRouteResponse) Reset() {
 	*x = AddRouteResponse{}
-	mi := &file_dataplane_proto_msgTypes[23]
+	mi := &file_dataplane_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1274,7 +1465,7 @@ func (x *AddRouteResponse) String() string {
 func (*AddRouteResponse) ProtoMessage() {}
 
 func (x *AddRouteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[23]
+	mi := &file_dataplane_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1287,7 +1478,7 @@ func (x *AddRouteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddRouteResponse.ProtoReflect.Descriptor instead.
 func (*AddRouteResponse) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{23}
+	return file_dataplane_proto_rawDescGZIP(), []int{26}
 }
 
 type WithdrawRouteRequest struct {
@@ -1300,7 +1491,7 @@ type WithdrawRouteRequest struct {
 
 func (x *WithdrawRouteRequest) Reset() {
 	*x = WithdrawRouteRequest{}
-	mi := &file_dataplane_proto_msgTypes[24]
+	mi := &file_dataplane_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1312,7 +1503,7 @@ func (x *WithdrawRouteRequest) String() string {
 func (*WithdrawRouteRequest) ProtoMessage() {}
 
 func (x *WithdrawRouteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[24]
+	mi := &file_dataplane_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1325,7 +1516,7 @@ func (x *WithdrawRouteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WithdrawRouteRequest.ProtoReflect.Descriptor instead.
 func (*WithdrawRouteRequest) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{24}
+	return file_dataplane_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *WithdrawRouteRequest) GetVni() uint32 {
@@ -1350,7 +1541,7 @@ type WithdrawRouteResponse struct {
 
 func (x *WithdrawRouteResponse) Reset() {
 	*x = WithdrawRouteResponse{}
-	mi := &file_dataplane_proto_msgTypes[25]
+	mi := &file_dataplane_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1362,7 +1553,7 @@ func (x *WithdrawRouteResponse) String() string {
 func (*WithdrawRouteResponse) ProtoMessage() {}
 
 func (x *WithdrawRouteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[25]
+	mi := &file_dataplane_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1375,7 +1566,7 @@ func (x *WithdrawRouteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WithdrawRouteResponse.ProtoReflect.Descriptor instead.
 func (*WithdrawRouteResponse) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{25}
+	return file_dataplane_proto_rawDescGZIP(), []int{28}
 }
 
 type AddNatSourceRequest struct {
@@ -1391,7 +1582,7 @@ type AddNatSourceRequest struct {
 
 func (x *AddNatSourceRequest) Reset() {
 	*x = AddNatSourceRequest{}
-	mi := &file_dataplane_proto_msgTypes[26]
+	mi := &file_dataplane_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1403,7 +1594,7 @@ func (x *AddNatSourceRequest) String() string {
 func (*AddNatSourceRequest) ProtoMessage() {}
 
 func (x *AddNatSourceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[26]
+	mi := &file_dataplane_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1416,7 +1607,7 @@ func (x *AddNatSourceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddNatSourceRequest.ProtoReflect.Descriptor instead.
 func (*AddNatSourceRequest) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{26}
+	return file_dataplane_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *AddNatSourceRequest) GetVni() uint32 {
@@ -1462,7 +1653,7 @@ type AddNatSourceResponse struct {
 
 func (x *AddNatSourceResponse) Reset() {
 	*x = AddNatSourceResponse{}
-	mi := &file_dataplane_proto_msgTypes[27]
+	mi := &file_dataplane_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1474,7 +1665,7 @@ func (x *AddNatSourceResponse) String() string {
 func (*AddNatSourceResponse) ProtoMessage() {}
 
 func (x *AddNatSourceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[27]
+	mi := &file_dataplane_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1487,7 +1678,7 @@ func (x *AddNatSourceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddNatSourceResponse.ProtoReflect.Descriptor instead.
 func (*AddNatSourceResponse) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{27}
+	return file_dataplane_proto_rawDescGZIP(), []int{30}
 }
 
 type WithdrawNatSourceRequest struct {
@@ -1500,7 +1691,7 @@ type WithdrawNatSourceRequest struct {
 
 func (x *WithdrawNatSourceRequest) Reset() {
 	*x = WithdrawNatSourceRequest{}
-	mi := &file_dataplane_proto_msgTypes[28]
+	mi := &file_dataplane_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1512,7 +1703,7 @@ func (x *WithdrawNatSourceRequest) String() string {
 func (*WithdrawNatSourceRequest) ProtoMessage() {}
 
 func (x *WithdrawNatSourceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[28]
+	mi := &file_dataplane_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1525,7 +1716,7 @@ func (x *WithdrawNatSourceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WithdrawNatSourceRequest.ProtoReflect.Descriptor instead.
 func (*WithdrawNatSourceRequest) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{28}
+	return file_dataplane_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *WithdrawNatSourceRequest) GetVni() uint32 {
@@ -1550,7 +1741,7 @@ type WithdrawNatSourceResponse struct {
 
 func (x *WithdrawNatSourceResponse) Reset() {
 	*x = WithdrawNatSourceResponse{}
-	mi := &file_dataplane_proto_msgTypes[29]
+	mi := &file_dataplane_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1562,7 +1753,7 @@ func (x *WithdrawNatSourceResponse) String() string {
 func (*WithdrawNatSourceResponse) ProtoMessage() {}
 
 func (x *WithdrawNatSourceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[29]
+	mi := &file_dataplane_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1575,7 +1766,7 @@ func (x *WithdrawNatSourceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WithdrawNatSourceResponse.ProtoReflect.Descriptor instead.
 func (*WithdrawNatSourceResponse) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{29}
+	return file_dataplane_proto_rawDescGZIP(), []int{32}
 }
 
 type AddNeighborNatRequest struct {
@@ -1591,7 +1782,7 @@ type AddNeighborNatRequest struct {
 
 func (x *AddNeighborNatRequest) Reset() {
 	*x = AddNeighborNatRequest{}
-	mi := &file_dataplane_proto_msgTypes[30]
+	mi := &file_dataplane_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1603,7 +1794,7 @@ func (x *AddNeighborNatRequest) String() string {
 func (*AddNeighborNatRequest) ProtoMessage() {}
 
 func (x *AddNeighborNatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[30]
+	mi := &file_dataplane_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1616,7 +1807,7 @@ func (x *AddNeighborNatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddNeighborNatRequest.ProtoReflect.Descriptor instead.
 func (*AddNeighborNatRequest) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{30}
+	return file_dataplane_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *AddNeighborNatRequest) GetNatIp() string {
@@ -1662,7 +1853,7 @@ type AddNeighborNatResponse struct {
 
 func (x *AddNeighborNatResponse) Reset() {
 	*x = AddNeighborNatResponse{}
-	mi := &file_dataplane_proto_msgTypes[31]
+	mi := &file_dataplane_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1674,7 +1865,7 @@ func (x *AddNeighborNatResponse) String() string {
 func (*AddNeighborNatResponse) ProtoMessage() {}
 
 func (x *AddNeighborNatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[31]
+	mi := &file_dataplane_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1687,7 +1878,7 @@ func (x *AddNeighborNatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddNeighborNatResponse.ProtoReflect.Descriptor instead.
 func (*AddNeighborNatResponse) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{31}
+	return file_dataplane_proto_rawDescGZIP(), []int{34}
 }
 
 type WithdrawNeighborNatRequest struct {
@@ -1702,7 +1893,7 @@ type WithdrawNeighborNatRequest struct {
 
 func (x *WithdrawNeighborNatRequest) Reset() {
 	*x = WithdrawNeighborNatRequest{}
-	mi := &file_dataplane_proto_msgTypes[32]
+	mi := &file_dataplane_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1714,7 +1905,7 @@ func (x *WithdrawNeighborNatRequest) String() string {
 func (*WithdrawNeighborNatRequest) ProtoMessage() {}
 
 func (x *WithdrawNeighborNatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[32]
+	mi := &file_dataplane_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1727,7 +1918,7 @@ func (x *WithdrawNeighborNatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WithdrawNeighborNatRequest.ProtoReflect.Descriptor instead.
 func (*WithdrawNeighborNatRequest) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{32}
+	return file_dataplane_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *WithdrawNeighborNatRequest) GetNatIp() string {
@@ -1766,7 +1957,7 @@ type WithdrawNeighborNatResponse struct {
 
 func (x *WithdrawNeighborNatResponse) Reset() {
 	*x = WithdrawNeighborNatResponse{}
-	mi := &file_dataplane_proto_msgTypes[33]
+	mi := &file_dataplane_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1778,7 +1969,7 @@ func (x *WithdrawNeighborNatResponse) String() string {
 func (*WithdrawNeighborNatResponse) ProtoMessage() {}
 
 func (x *WithdrawNeighborNatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[33]
+	mi := &file_dataplane_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1791,7 +1982,7 @@ func (x *WithdrawNeighborNatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WithdrawNeighborNatResponse.ProtoReflect.Descriptor instead.
 func (*WithdrawNeighborNatResponse) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{33}
+	return file_dataplane_proto_rawDescGZIP(), []int{36}
 }
 
 type ConfigureQoSRequest struct {
@@ -1808,7 +1999,7 @@ type ConfigureQoSRequest struct {
 
 func (x *ConfigureQoSRequest) Reset() {
 	*x = ConfigureQoSRequest{}
-	mi := &file_dataplane_proto_msgTypes[34]
+	mi := &file_dataplane_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1820,7 +2011,7 @@ func (x *ConfigureQoSRequest) String() string {
 func (*ConfigureQoSRequest) ProtoMessage() {}
 
 func (x *ConfigureQoSRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[34]
+	mi := &file_dataplane_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1833,7 +2024,7 @@ func (x *ConfigureQoSRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigureQoSRequest.ProtoReflect.Descriptor instead.
 func (*ConfigureQoSRequest) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{34}
+	return file_dataplane_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ConfigureQoSRequest) GetInterfaceId() string {
@@ -1886,7 +2077,7 @@ type ConfigureQoSResponse struct {
 
 func (x *ConfigureQoSResponse) Reset() {
 	*x = ConfigureQoSResponse{}
-	mi := &file_dataplane_proto_msgTypes[35]
+	mi := &file_dataplane_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1898,7 +2089,7 @@ func (x *ConfigureQoSResponse) String() string {
 func (*ConfigureQoSResponse) ProtoMessage() {}
 
 func (x *ConfigureQoSResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_dataplane_proto_msgTypes[35]
+	mi := &file_dataplane_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1911,7 +2102,7 @@ func (x *ConfigureQoSResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigureQoSResponse.ProtoReflect.Descriptor instead.
 func (*ConfigureQoSResponse) Descriptor() ([]byte, []int) {
-	return file_dataplane_proto_rawDescGZIP(), []int{35}
+	return file_dataplane_proto_rawDescGZIP(), []int{38}
 }
 
 var File_dataplane_proto protoreflect.FileDescriptor
@@ -1957,7 +2148,23 @@ const file_dataplane_proto_rawDesc = "" +
 	"\x10DelFwRuleRequest\x12!\n" +
 	"\finterface_id\x18\x01 \x01(\tR\vinterfaceId\x12\x17\n" +
 	"\arule_id\x18\x02 \x01(\tR\x06ruleId\"\x13\n" +
-	"\x11DelFwRuleResponse\"\xdf\x01\n" +
+	"\x11DelFwRuleResponse\"\xe3\x01\n" +
+	"\n" +
+	"FwRuleSpec\x12\x17\n" +
+	"\arule_id\x18\x01 \x01(\tR\x06ruleId\x12\x19\n" +
+	"\bsrc_cidr\x18\x02 \x01(\tR\asrcCidr\x12\x19\n" +
+	"\bdst_cidr\x18\x03 \x01(\tR\adstCidr\x12\x14\n" +
+	"\x05proto\x18\x04 \x01(\rR\x05proto\x12 \n" +
+	"\fdst_port_min\x18\x05 \x01(\rR\n" +
+	"dstPortMin\x12 \n" +
+	"\fdst_port_max\x18\x06 \x01(\rR\n" +
+	"dstPortMax\x12\x14\n" +
+	"\x05allow\x18\a \x01(\bR\x05allow\x12\x16\n" +
+	"\x06egress\x18\b \x01(\bR\x06egress\"t\n" +
+	"\x1fReplaceInterfaceFirewallRequest\x12!\n" +
+	"\finterface_id\x18\x01 \x01(\tR\vinterfaceId\x12.\n" +
+	"\x05rules\x18\x02 \x03(\v2\x18.dataplane.v1.FwRuleSpecR\x05rules\"\"\n" +
+	" ReplaceInterfaceFirewallResponse\"\xdf\x01\n" +
 	"\x16AttachInterfaceRequest\x12!\n" +
 	"\finterface_id\x18\x01 \x01(\tR\vinterfaceId\x12\x1d\n" +
 	"\n" +
@@ -2037,7 +2244,7 @@ const file_dataplane_proto_rawDesc = "" +
 	"\fingress_mbps\x18\x04 \x01(\rR\vingressMbps\x12&\n" +
 	"\x0fegress_burst_kb\x18\x05 \x01(\rR\regressBurstKb\x12(\n" +
 	"\x10ingress_burst_kb\x18\x06 \x01(\rR\x0eingressBurstKb\"\x16\n" +
-	"\x14ConfigureQoSResponse2\xf1\v\n" +
+	"\x14ConfigureQoSResponse2\xec\f\n" +
 	"\rDataplaneNode\x12^\n" +
 	"\x0fAttachInterface\x12$.dataplane.v1.AttachInterfaceRequest\x1a%.dataplane.v1.AttachInterfaceResponse\x12^\n" +
 	"\x0fDetachInterface\x12$.dataplane.v1.DetachInterfaceRequest\x1a%.dataplane.v1.DetachInterfaceResponse\x12[\n" +
@@ -2054,7 +2261,8 @@ const file_dataplane_proto_rawDesc = "" +
 	"\bDelLbVip\x12\x1d.dataplane.v1.DelLbVipRequest\x1a\x1e.dataplane.v1.DelLbVipResponse\x12U\n" +
 	"\fDelLbBackend\x12!.dataplane.v1.DelLbBackendRequest\x1a\".dataplane.v1.DelLbBackendResponse\x12L\n" +
 	"\tAddFwRule\x12\x1e.dataplane.v1.AddFwRuleRequest\x1a\x1f.dataplane.v1.AddFwRuleResponse\x12L\n" +
-	"\tDelFwRule\x12\x1e.dataplane.v1.DelFwRuleRequest\x1a\x1f.dataplane.v1.DelFwRuleResponse\x12U\n" +
+	"\tDelFwRule\x12\x1e.dataplane.v1.DelFwRuleRequest\x1a\x1f.dataplane.v1.DelFwRuleResponse\x12y\n" +
+	"\x18ReplaceInterfaceFirewall\x12-.dataplane.v1.ReplaceInterfaceFirewallRequest\x1a..dataplane.v1.ReplaceInterfaceFirewallResponse\x12U\n" +
 	"\fConfigureQoS\x12!.dataplane.v1.ConfigureQoSRequest\x1a\".dataplane.v1.ConfigureQoSResponseB<Z:github.com/trevex/ectobase/cni/gen/dataplanev1;dataplanev1b\x06proto3"
 
 var (
@@ -2069,87 +2277,93 @@ func file_dataplane_proto_rawDescGZIP() []byte {
 	return file_dataplane_proto_rawDescData
 }
 
-var file_dataplane_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
+var file_dataplane_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
 var file_dataplane_proto_goTypes = []any{
-	(*PortProto)(nil),                   // 0: dataplane.v1.PortProto
-	(*AddLbVipRequest)(nil),             // 1: dataplane.v1.AddLbVipRequest
-	(*AddLbVipResponse)(nil),            // 2: dataplane.v1.AddLbVipResponse
-	(*AddLbBackendRequest)(nil),         // 3: dataplane.v1.AddLbBackendRequest
-	(*AddLbBackendResponse)(nil),        // 4: dataplane.v1.AddLbBackendResponse
-	(*DelLbVipRequest)(nil),             // 5: dataplane.v1.DelLbVipRequest
-	(*DelLbVipResponse)(nil),            // 6: dataplane.v1.DelLbVipResponse
-	(*DelLbBackendRequest)(nil),         // 7: dataplane.v1.DelLbBackendRequest
-	(*DelLbBackendResponse)(nil),        // 8: dataplane.v1.DelLbBackendResponse
-	(*AddFwRuleRequest)(nil),            // 9: dataplane.v1.AddFwRuleRequest
-	(*AddFwRuleResponse)(nil),           // 10: dataplane.v1.AddFwRuleResponse
-	(*DelFwRuleRequest)(nil),            // 11: dataplane.v1.DelFwRuleRequest
-	(*DelFwRuleResponse)(nil),           // 12: dataplane.v1.DelFwRuleResponse
-	(*AttachInterfaceRequest)(nil),      // 13: dataplane.v1.AttachInterfaceRequest
-	(*AttachInterfaceResponse)(nil),     // 14: dataplane.v1.AttachInterfaceResponse
-	(*ListInterfacesRequest)(nil),       // 15: dataplane.v1.ListInterfacesRequest
-	(*ListInterfacesResponse)(nil),      // 16: dataplane.v1.ListInterfacesResponse
-	(*InterfaceInfo)(nil),               // 17: dataplane.v1.InterfaceInfo
-	(*DetachInterfaceRequest)(nil),      // 18: dataplane.v1.DetachInterfaceRequest
-	(*DetachInterfaceResponse)(nil),     // 19: dataplane.v1.DetachInterfaceResponse
-	(*ConfigureNetworkRequest)(nil),     // 20: dataplane.v1.ConfigureNetworkRequest
-	(*ConfigureNetworkResponse)(nil),    // 21: dataplane.v1.ConfigureNetworkResponse
-	(*AddRouteRequest)(nil),             // 22: dataplane.v1.AddRouteRequest
-	(*AddRouteResponse)(nil),            // 23: dataplane.v1.AddRouteResponse
-	(*WithdrawRouteRequest)(nil),        // 24: dataplane.v1.WithdrawRouteRequest
-	(*WithdrawRouteResponse)(nil),       // 25: dataplane.v1.WithdrawRouteResponse
-	(*AddNatSourceRequest)(nil),         // 26: dataplane.v1.AddNatSourceRequest
-	(*AddNatSourceResponse)(nil),        // 27: dataplane.v1.AddNatSourceResponse
-	(*WithdrawNatSourceRequest)(nil),    // 28: dataplane.v1.WithdrawNatSourceRequest
-	(*WithdrawNatSourceResponse)(nil),   // 29: dataplane.v1.WithdrawNatSourceResponse
-	(*AddNeighborNatRequest)(nil),       // 30: dataplane.v1.AddNeighborNatRequest
-	(*AddNeighborNatResponse)(nil),      // 31: dataplane.v1.AddNeighborNatResponse
-	(*WithdrawNeighborNatRequest)(nil),  // 32: dataplane.v1.WithdrawNeighborNatRequest
-	(*WithdrawNeighborNatResponse)(nil), // 33: dataplane.v1.WithdrawNeighborNatResponse
-	(*ConfigureQoSRequest)(nil),         // 34: dataplane.v1.ConfigureQoSRequest
-	(*ConfigureQoSResponse)(nil),        // 35: dataplane.v1.ConfigureQoSResponse
+	(*PortProto)(nil),                        // 0: dataplane.v1.PortProto
+	(*AddLbVipRequest)(nil),                  // 1: dataplane.v1.AddLbVipRequest
+	(*AddLbVipResponse)(nil),                 // 2: dataplane.v1.AddLbVipResponse
+	(*AddLbBackendRequest)(nil),              // 3: dataplane.v1.AddLbBackendRequest
+	(*AddLbBackendResponse)(nil),             // 4: dataplane.v1.AddLbBackendResponse
+	(*DelLbVipRequest)(nil),                  // 5: dataplane.v1.DelLbVipRequest
+	(*DelLbVipResponse)(nil),                 // 6: dataplane.v1.DelLbVipResponse
+	(*DelLbBackendRequest)(nil),              // 7: dataplane.v1.DelLbBackendRequest
+	(*DelLbBackendResponse)(nil),             // 8: dataplane.v1.DelLbBackendResponse
+	(*AddFwRuleRequest)(nil),                 // 9: dataplane.v1.AddFwRuleRequest
+	(*AddFwRuleResponse)(nil),                // 10: dataplane.v1.AddFwRuleResponse
+	(*DelFwRuleRequest)(nil),                 // 11: dataplane.v1.DelFwRuleRequest
+	(*DelFwRuleResponse)(nil),                // 12: dataplane.v1.DelFwRuleResponse
+	(*FwRuleSpec)(nil),                       // 13: dataplane.v1.FwRuleSpec
+	(*ReplaceInterfaceFirewallRequest)(nil),  // 14: dataplane.v1.ReplaceInterfaceFirewallRequest
+	(*ReplaceInterfaceFirewallResponse)(nil), // 15: dataplane.v1.ReplaceInterfaceFirewallResponse
+	(*AttachInterfaceRequest)(nil),           // 16: dataplane.v1.AttachInterfaceRequest
+	(*AttachInterfaceResponse)(nil),          // 17: dataplane.v1.AttachInterfaceResponse
+	(*ListInterfacesRequest)(nil),            // 18: dataplane.v1.ListInterfacesRequest
+	(*ListInterfacesResponse)(nil),           // 19: dataplane.v1.ListInterfacesResponse
+	(*InterfaceInfo)(nil),                    // 20: dataplane.v1.InterfaceInfo
+	(*DetachInterfaceRequest)(nil),           // 21: dataplane.v1.DetachInterfaceRequest
+	(*DetachInterfaceResponse)(nil),          // 22: dataplane.v1.DetachInterfaceResponse
+	(*ConfigureNetworkRequest)(nil),          // 23: dataplane.v1.ConfigureNetworkRequest
+	(*ConfigureNetworkResponse)(nil),         // 24: dataplane.v1.ConfigureNetworkResponse
+	(*AddRouteRequest)(nil),                  // 25: dataplane.v1.AddRouteRequest
+	(*AddRouteResponse)(nil),                 // 26: dataplane.v1.AddRouteResponse
+	(*WithdrawRouteRequest)(nil),             // 27: dataplane.v1.WithdrawRouteRequest
+	(*WithdrawRouteResponse)(nil),            // 28: dataplane.v1.WithdrawRouteResponse
+	(*AddNatSourceRequest)(nil),              // 29: dataplane.v1.AddNatSourceRequest
+	(*AddNatSourceResponse)(nil),             // 30: dataplane.v1.AddNatSourceResponse
+	(*WithdrawNatSourceRequest)(nil),         // 31: dataplane.v1.WithdrawNatSourceRequest
+	(*WithdrawNatSourceResponse)(nil),        // 32: dataplane.v1.WithdrawNatSourceResponse
+	(*AddNeighborNatRequest)(nil),            // 33: dataplane.v1.AddNeighborNatRequest
+	(*AddNeighborNatResponse)(nil),           // 34: dataplane.v1.AddNeighborNatResponse
+	(*WithdrawNeighborNatRequest)(nil),       // 35: dataplane.v1.WithdrawNeighborNatRequest
+	(*WithdrawNeighborNatResponse)(nil),      // 36: dataplane.v1.WithdrawNeighborNatResponse
+	(*ConfigureQoSRequest)(nil),              // 37: dataplane.v1.ConfigureQoSRequest
+	(*ConfigureQoSResponse)(nil),             // 38: dataplane.v1.ConfigureQoSResponse
 }
 var file_dataplane_proto_depIdxs = []int32{
 	0,  // 0: dataplane.v1.AddLbVipRequest.ports:type_name -> dataplane.v1.PortProto
-	17, // 1: dataplane.v1.ListInterfacesResponse.interfaces:type_name -> dataplane.v1.InterfaceInfo
-	13, // 2: dataplane.v1.DataplaneNode.AttachInterface:input_type -> dataplane.v1.AttachInterfaceRequest
-	18, // 3: dataplane.v1.DataplaneNode.DetachInterface:input_type -> dataplane.v1.DetachInterfaceRequest
-	15, // 4: dataplane.v1.DataplaneNode.ListInterfaces:input_type -> dataplane.v1.ListInterfacesRequest
-	20, // 5: dataplane.v1.DataplaneNode.ConfigureNetwork:input_type -> dataplane.v1.ConfigureNetworkRequest
-	22, // 6: dataplane.v1.DataplaneNode.AddRoute:input_type -> dataplane.v1.AddRouteRequest
-	24, // 7: dataplane.v1.DataplaneNode.WithdrawRoute:input_type -> dataplane.v1.WithdrawRouteRequest
-	26, // 8: dataplane.v1.DataplaneNode.AddNatSource:input_type -> dataplane.v1.AddNatSourceRequest
-	28, // 9: dataplane.v1.DataplaneNode.WithdrawNatSource:input_type -> dataplane.v1.WithdrawNatSourceRequest
-	30, // 10: dataplane.v1.DataplaneNode.AddNeighborNat:input_type -> dataplane.v1.AddNeighborNatRequest
-	32, // 11: dataplane.v1.DataplaneNode.WithdrawNeighborNat:input_type -> dataplane.v1.WithdrawNeighborNatRequest
-	1,  // 12: dataplane.v1.DataplaneNode.AddLbVip:input_type -> dataplane.v1.AddLbVipRequest
-	3,  // 13: dataplane.v1.DataplaneNode.AddLbBackend:input_type -> dataplane.v1.AddLbBackendRequest
-	5,  // 14: dataplane.v1.DataplaneNode.DelLbVip:input_type -> dataplane.v1.DelLbVipRequest
-	7,  // 15: dataplane.v1.DataplaneNode.DelLbBackend:input_type -> dataplane.v1.DelLbBackendRequest
-	9,  // 16: dataplane.v1.DataplaneNode.AddFwRule:input_type -> dataplane.v1.AddFwRuleRequest
-	11, // 17: dataplane.v1.DataplaneNode.DelFwRule:input_type -> dataplane.v1.DelFwRuleRequest
-	34, // 18: dataplane.v1.DataplaneNode.ConfigureQoS:input_type -> dataplane.v1.ConfigureQoSRequest
-	14, // 19: dataplane.v1.DataplaneNode.AttachInterface:output_type -> dataplane.v1.AttachInterfaceResponse
-	19, // 20: dataplane.v1.DataplaneNode.DetachInterface:output_type -> dataplane.v1.DetachInterfaceResponse
-	16, // 21: dataplane.v1.DataplaneNode.ListInterfaces:output_type -> dataplane.v1.ListInterfacesResponse
-	21, // 22: dataplane.v1.DataplaneNode.ConfigureNetwork:output_type -> dataplane.v1.ConfigureNetworkResponse
-	23, // 23: dataplane.v1.DataplaneNode.AddRoute:output_type -> dataplane.v1.AddRouteResponse
-	25, // 24: dataplane.v1.DataplaneNode.WithdrawRoute:output_type -> dataplane.v1.WithdrawRouteResponse
-	27, // 25: dataplane.v1.DataplaneNode.AddNatSource:output_type -> dataplane.v1.AddNatSourceResponse
-	29, // 26: dataplane.v1.DataplaneNode.WithdrawNatSource:output_type -> dataplane.v1.WithdrawNatSourceResponse
-	31, // 27: dataplane.v1.DataplaneNode.AddNeighborNat:output_type -> dataplane.v1.AddNeighborNatResponse
-	33, // 28: dataplane.v1.DataplaneNode.WithdrawNeighborNat:output_type -> dataplane.v1.WithdrawNeighborNatResponse
-	2,  // 29: dataplane.v1.DataplaneNode.AddLbVip:output_type -> dataplane.v1.AddLbVipResponse
-	4,  // 30: dataplane.v1.DataplaneNode.AddLbBackend:output_type -> dataplane.v1.AddLbBackendResponse
-	6,  // 31: dataplane.v1.DataplaneNode.DelLbVip:output_type -> dataplane.v1.DelLbVipResponse
-	8,  // 32: dataplane.v1.DataplaneNode.DelLbBackend:output_type -> dataplane.v1.DelLbBackendResponse
-	10, // 33: dataplane.v1.DataplaneNode.AddFwRule:output_type -> dataplane.v1.AddFwRuleResponse
-	12, // 34: dataplane.v1.DataplaneNode.DelFwRule:output_type -> dataplane.v1.DelFwRuleResponse
-	35, // 35: dataplane.v1.DataplaneNode.ConfigureQoS:output_type -> dataplane.v1.ConfigureQoSResponse
-	19, // [19:36] is the sub-list for method output_type
-	2,  // [2:19] is the sub-list for method input_type
-	2,  // [2:2] is the sub-list for extension type_name
-	2,  // [2:2] is the sub-list for extension extendee
-	0,  // [0:2] is the sub-list for field type_name
+	13, // 1: dataplane.v1.ReplaceInterfaceFirewallRequest.rules:type_name -> dataplane.v1.FwRuleSpec
+	20, // 2: dataplane.v1.ListInterfacesResponse.interfaces:type_name -> dataplane.v1.InterfaceInfo
+	16, // 3: dataplane.v1.DataplaneNode.AttachInterface:input_type -> dataplane.v1.AttachInterfaceRequest
+	21, // 4: dataplane.v1.DataplaneNode.DetachInterface:input_type -> dataplane.v1.DetachInterfaceRequest
+	18, // 5: dataplane.v1.DataplaneNode.ListInterfaces:input_type -> dataplane.v1.ListInterfacesRequest
+	23, // 6: dataplane.v1.DataplaneNode.ConfigureNetwork:input_type -> dataplane.v1.ConfigureNetworkRequest
+	25, // 7: dataplane.v1.DataplaneNode.AddRoute:input_type -> dataplane.v1.AddRouteRequest
+	27, // 8: dataplane.v1.DataplaneNode.WithdrawRoute:input_type -> dataplane.v1.WithdrawRouteRequest
+	29, // 9: dataplane.v1.DataplaneNode.AddNatSource:input_type -> dataplane.v1.AddNatSourceRequest
+	31, // 10: dataplane.v1.DataplaneNode.WithdrawNatSource:input_type -> dataplane.v1.WithdrawNatSourceRequest
+	33, // 11: dataplane.v1.DataplaneNode.AddNeighborNat:input_type -> dataplane.v1.AddNeighborNatRequest
+	35, // 12: dataplane.v1.DataplaneNode.WithdrawNeighborNat:input_type -> dataplane.v1.WithdrawNeighborNatRequest
+	1,  // 13: dataplane.v1.DataplaneNode.AddLbVip:input_type -> dataplane.v1.AddLbVipRequest
+	3,  // 14: dataplane.v1.DataplaneNode.AddLbBackend:input_type -> dataplane.v1.AddLbBackendRequest
+	5,  // 15: dataplane.v1.DataplaneNode.DelLbVip:input_type -> dataplane.v1.DelLbVipRequest
+	7,  // 16: dataplane.v1.DataplaneNode.DelLbBackend:input_type -> dataplane.v1.DelLbBackendRequest
+	9,  // 17: dataplane.v1.DataplaneNode.AddFwRule:input_type -> dataplane.v1.AddFwRuleRequest
+	11, // 18: dataplane.v1.DataplaneNode.DelFwRule:input_type -> dataplane.v1.DelFwRuleRequest
+	14, // 19: dataplane.v1.DataplaneNode.ReplaceInterfaceFirewall:input_type -> dataplane.v1.ReplaceInterfaceFirewallRequest
+	37, // 20: dataplane.v1.DataplaneNode.ConfigureQoS:input_type -> dataplane.v1.ConfigureQoSRequest
+	17, // 21: dataplane.v1.DataplaneNode.AttachInterface:output_type -> dataplane.v1.AttachInterfaceResponse
+	22, // 22: dataplane.v1.DataplaneNode.DetachInterface:output_type -> dataplane.v1.DetachInterfaceResponse
+	19, // 23: dataplane.v1.DataplaneNode.ListInterfaces:output_type -> dataplane.v1.ListInterfacesResponse
+	24, // 24: dataplane.v1.DataplaneNode.ConfigureNetwork:output_type -> dataplane.v1.ConfigureNetworkResponse
+	26, // 25: dataplane.v1.DataplaneNode.AddRoute:output_type -> dataplane.v1.AddRouteResponse
+	28, // 26: dataplane.v1.DataplaneNode.WithdrawRoute:output_type -> dataplane.v1.WithdrawRouteResponse
+	30, // 27: dataplane.v1.DataplaneNode.AddNatSource:output_type -> dataplane.v1.AddNatSourceResponse
+	32, // 28: dataplane.v1.DataplaneNode.WithdrawNatSource:output_type -> dataplane.v1.WithdrawNatSourceResponse
+	34, // 29: dataplane.v1.DataplaneNode.AddNeighborNat:output_type -> dataplane.v1.AddNeighborNatResponse
+	36, // 30: dataplane.v1.DataplaneNode.WithdrawNeighborNat:output_type -> dataplane.v1.WithdrawNeighborNatResponse
+	2,  // 31: dataplane.v1.DataplaneNode.AddLbVip:output_type -> dataplane.v1.AddLbVipResponse
+	4,  // 32: dataplane.v1.DataplaneNode.AddLbBackend:output_type -> dataplane.v1.AddLbBackendResponse
+	6,  // 33: dataplane.v1.DataplaneNode.DelLbVip:output_type -> dataplane.v1.DelLbVipResponse
+	8,  // 34: dataplane.v1.DataplaneNode.DelLbBackend:output_type -> dataplane.v1.DelLbBackendResponse
+	10, // 35: dataplane.v1.DataplaneNode.AddFwRule:output_type -> dataplane.v1.AddFwRuleResponse
+	12, // 36: dataplane.v1.DataplaneNode.DelFwRule:output_type -> dataplane.v1.DelFwRuleResponse
+	15, // 37: dataplane.v1.DataplaneNode.ReplaceInterfaceFirewall:output_type -> dataplane.v1.ReplaceInterfaceFirewallResponse
+	38, // 38: dataplane.v1.DataplaneNode.ConfigureQoS:output_type -> dataplane.v1.ConfigureQoSResponse
+	21, // [21:39] is the sub-list for method output_type
+	3,  // [3:21] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_dataplane_proto_init() }
@@ -2163,7 +2377,7 @@ func file_dataplane_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_dataplane_proto_rawDesc), len(file_dataplane_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   36,
+			NumMessages:   39,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

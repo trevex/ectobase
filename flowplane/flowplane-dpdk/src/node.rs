@@ -804,6 +804,18 @@ impl DataplaneNode for DpdkNodeService {
         Ok(Response::new(resp))
     }
 
+    async fn replace_interface_firewall(
+        &self,
+        req: Request<pb::ReplaceInterfaceFirewallRequest>,
+    ) -> Result<Response<pb::ReplaceInterfaceFirewallResponse>, Status> {
+        let r = req.into_inner();
+        let resp = {
+            let mut core = self.ctrl.lock();
+            flowplane_node::replace_interface_firewall(&mut core, &r)?
+        };
+        Ok(Response::new(resp))
+    }
+
     async fn configure_qo_s(
         &self,
         req: Request<pb::ConfigureQoSRequest>,

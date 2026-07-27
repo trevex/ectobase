@@ -8,6 +8,7 @@ use pb::{
     AttachInterfaceRequest, AttachInterfaceResponse, ConfigureNetworkRequest,
     ConfigureNetworkResponse, ConfigureQoSRequest, ConfigureQoSResponse, DetachInterfaceRequest,
     DetachInterfaceResponse, InterfaceInfo, ListInterfacesRequest, ListInterfacesResponse,
+    ReplaceInterfaceFirewallRequest, ReplaceInterfaceFirewallResponse,
 };
 
 use crate::attach::AttachState;
@@ -442,6 +443,30 @@ impl DataplaneNode for NodeService {
         .await
         .map_err(|e| Status::internal(format!("del_fw_rule task panicked: {e}")))??;
         println!("FW rule del iface={log_iface} id={log_rule_id}");
+        Ok(Response::new(resp))
+    }
+
+    async fn replace_interface_firewall(
+        &self,
+        req: Request<ReplaceInterfaceFirewallRequest>,
+    ) -> Result<Response<ReplaceInterfaceFirewallResponse>, Status> {
+        let attach = self
+            .attach
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
+            .clone();
+        let r = req.into_inner();
+        let (log_iface, log_n) = (r.interface_id.clone(), r.rules.len());
+        let resp = tokio::task::spawn_blocking(move || {
+            attach
+                .control
+                .with_core(|c| flowplane_node::replace_interface_firewall(c, &r))
+        })
+        .await
+        .map_err(|e| {
+            Status::internal(format!("replace_interface_firewall task panicked: {e}"))
+        })??;
+        println!("FW replace iface={log_iface} rules={log_n}");
         Ok(Response::new(resp))
     }
 

@@ -192,35 +192,45 @@ pub fn del_lb_backend<W: MapWriter>(
     Ok(pb::DelLbBackendResponse {})
 }
 
-pub fn add_fw_rule<W: MapWriter>(
-    core: &mut ControlCore<W>,
-    req: &pb::AddFwRuleRequest,
-) -> Result<pb::AddFwRuleResponse, Status> {
+/// One parsed firewall rule, family-tagged. The address family is inferred from the CIDRs: a v6
+/// CIDR on either side makes it a v6 rule (the wildcard opposite side is re-encoded in-family).
+enum ParsedFwRule {
+    V4(flowplane_common::FwRule),
+    V6(flowplane_common::FwRule6),
+}
+
+/// Parse the wire fields of one firewall rule into a family-tagged `ParsedFwRule`. Shared by
+/// `add_fw_rule` and `replace_interface_firewall` so both encode rules identically.
+fn parse_fw_rule_fields(
+    src_cidr: &str,
+    dst_cidr: &str,
+    proto: u32,
+    dst_port_min: u32,
+    dst_port_max: u32,
+    allow: bool,
+    egress: bool,
+) -> Result<ParsedFwRule, Status> {
     use crate::parse::FwCidr;
     use flowplane_common::{FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS};
-    let src = parse_fw_cidr(&req.src_cidr).map_err(invalid)?;
-    let dst = parse_fw_cidr(&req.dst_cidr).map_err(invalid)?;
-    let proto = u8::try_from(req.proto).map_err(|_| Status::invalid_argument("proto > 255"))?;
-    let dst_port_min = port_u16(req.dst_port_min).map_err(invalid)?;
-    // dst_port_max of 0 means "unbounded" -> 65535 (0/0 = any port).
-    let dst_port_max = if req.dst_port_max == 0 {
+    let src = parse_fw_cidr(src_cidr).map_err(invalid)?;
+    let dst = parse_fw_cidr(dst_cidr).map_err(invalid)?;
+    let proto = u8::try_from(proto).map_err(|_| Status::invalid_argument("proto > 255"))?;
+    let dst_port_min = port_u16(dst_port_min).map_err(invalid)?;
+    let dst_port_max = if dst_port_max == 0 {
         65535u16
     } else {
-        port_u16(req.dst_port_max).map_err(invalid)?
+        port_u16(dst_port_max).map_err(invalid)?
     };
-    let action = if req.allow {
+    let action = if allow {
         FW_ACTION_ACCEPT
     } else {
         FW_ACTION_DROP
     };
-    let direction = if req.egress {
+    let direction = if egress {
         FW_DIR_EGRESS
     } else {
         FW_DIR_INGRESS
     };
-    let iface = req.interface_id.clone().into_bytes();
-    let rule_id = req.rule_id.clone().into_bytes();
-    // v6 rule if EITHER side is v6; the wildcard opposite side is re-encoded in the same family.
     if matches!(src, FwCidr::V6(..)) || matches!(dst, FwCidr::V6(..)) {
         let (src_ip, src_mask) = match src {
             FwCidr::V6(i, m) => (i, m),
@@ -230,7 +240,7 @@ pub fn add_fw_rule<W: MapWriter>(
             FwCidr::V6(i, m) => (i, m),
             FwCidr::V4(..) => ([0u8; 16], [0u8; 16]),
         };
-        let rule = flowplane_common::FwRule6 {
+        Ok(ParsedFwRule::V6(flowplane_common::FwRule6 {
             src_ip,
             src_mask,
             dst_ip,
@@ -245,8 +255,7 @@ pub fn add_fw_rule<W: MapWriter>(
             action,
             direction,
             enabled: 1,
-        };
-        core.add_fw_rule6(&iface, rule_id, rule).map_err(internal)?;
+        }))
     } else {
         let (src_ip, src_mask) = match src {
             FwCidr::V4(i, m) => (i, m),
@@ -256,7 +265,7 @@ pub fn add_fw_rule<W: MapWriter>(
             FwCidr::V4(i, m) => (i, m),
             _ => unreachable!(),
         };
-        let rule = flowplane_common::FwRule {
+        Ok(ParsedFwRule::V4(flowplane_common::FwRule {
             src_ip,
             src_mask,
             dst_ip,
@@ -271,10 +280,59 @@ pub fn add_fw_rule<W: MapWriter>(
             action,
             direction,
             enabled: 1,
-        };
-        core.add_fw_rule(&iface, rule_id, rule).map_err(internal)?;
+        }))
     }
+}
+
+pub fn add_fw_rule<W: MapWriter>(
+    core: &mut ControlCore<W>,
+    req: &pb::AddFwRuleRequest,
+) -> Result<pb::AddFwRuleResponse, Status> {
+    let iface = req.interface_id.clone().into_bytes();
+    let rule_id = req.rule_id.clone().into_bytes();
+    match parse_fw_rule_fields(
+        &req.src_cidr,
+        &req.dst_cidr,
+        req.proto,
+        req.dst_port_min,
+        req.dst_port_max,
+        req.allow,
+        req.egress,
+    )? {
+        ParsedFwRule::V6(rule) => core.add_fw_rule6(&iface, rule_id, rule).map_err(internal)?,
+        ParsedFwRule::V4(rule) => core.add_fw_rule(&iface, rule_id, rule).map_err(internal)?,
+    };
     Ok(pb::AddFwRuleResponse {})
+}
+
+/// Replace an interface's ENTIRE firewall rule set with `req.rules` (ingress + egress, v4 + v6),
+/// clearing any prior rules. Splits the flat list into per-family slot-ordered vecs and calls the
+/// declarative core primitives; both families are replaced (an absent family is cleared).
+pub fn replace_interface_firewall<W: MapWriter>(
+    core: &mut ControlCore<W>,
+    req: &pb::ReplaceInterfaceFirewallRequest,
+) -> Result<pb::ReplaceInterfaceFirewallResponse, Status> {
+    let iface = req.interface_id.clone().into_bytes();
+    let mut v4: Vec<(Vec<u8>, flowplane_common::FwRule)> = Vec::new();
+    let mut v6: Vec<(Vec<u8>, flowplane_common::FwRule6)> = Vec::new();
+    for spec in &req.rules {
+        let id = spec.rule_id.clone().into_bytes();
+        match parse_fw_rule_fields(
+            &spec.src_cidr,
+            &spec.dst_cidr,
+            spec.proto,
+            spec.dst_port_min,
+            spec.dst_port_max,
+            spec.allow,
+            spec.egress,
+        )? {
+            ParsedFwRule::V4(rule) => v4.push((id, rule)),
+            ParsedFwRule::V6(rule) => v6.push((id, rule)),
+        }
+    }
+    core.replace_fw_rules(&iface, v4).map_err(internal)?;
+    core.replace_fw_rules6(&iface, v6).map_err(internal)?;
+    Ok(pb::ReplaceInterfaceFirewallResponse {})
 }
 
 pub fn del_fw_rule<W: MapWriter>(
@@ -446,5 +504,67 @@ mod tests {
             },
         );
         assert!(r.is_ok(), "neighbor nat: {r:?}");
+    }
+
+    #[test]
+    fn replace_interface_firewall_sets_full_set_and_clears() {
+        let mut c = core();
+        register_iface(&mut c, "if0", 5, [10, 0, 0, 2]);
+        // Replace with one v4 ingress deny + one v6 ingress allow.
+        replace_interface_firewall(
+            &mut c,
+            &pb::ReplaceInterfaceFirewallRequest {
+                interface_id: "if0".into(),
+                rules: vec![
+                    pb::FwRuleSpec {
+                        rule_id: "fw-in-0".into(),
+                        src_cidr: "0.0.0.0/0".into(),
+                        dst_cidr: "".into(),
+                        proto: 0,
+                        dst_port_min: 0,
+                        dst_port_max: 0,
+                        allow: false,
+                        egress: false,
+                    },
+                    pb::FwRuleSpec {
+                        rule_id: "fw-in-1".into(),
+                        src_cidr: "::/0".into(),
+                        dst_cidr: "".into(),
+                        proto: 0,
+                        dst_port_min: 0,
+                        dst_port_max: 0,
+                        allow: true,
+                        egress: false,
+                    },
+                ],
+            },
+        )
+        .unwrap();
+        // v4 slot 0 and v6 slot 0 are programmed.
+        assert!(c
+            .writer()
+            .fw_rules
+            .contains_key(&flowplane_common::FwRuleKey { ifindex: 0, idx: 0 }));
+        assert!(c
+            .writer()
+            .fw_rules6
+            .contains_key(&flowplane_common::FwRuleKey { ifindex: 0, idx: 0 }));
+        // Empty replace clears both families.
+        replace_interface_firewall(
+            &mut c,
+            &pb::ReplaceInterfaceFirewallRequest {
+                interface_id: "if0".into(),
+                rules: vec![],
+            },
+        )
+        .unwrap();
+        assert!(!c
+            .writer()
+            .fw_rules
+            .contains_key(&flowplane_common::FwRuleKey { ifindex: 0, idx: 0 }));
+        assert!(!c
+            .writer()
+            .fw_rules6
+            .contains_key(&flowplane_common::FwRuleKey { ifindex: 0, idx: 0 }));
     }
 }

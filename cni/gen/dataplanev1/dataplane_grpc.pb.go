@@ -19,23 +19,24 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	DataplaneNode_AttachInterface_FullMethodName     = "/dataplane.v1.DataplaneNode/AttachInterface"
-	DataplaneNode_DetachInterface_FullMethodName     = "/dataplane.v1.DataplaneNode/DetachInterface"
-	DataplaneNode_ListInterfaces_FullMethodName      = "/dataplane.v1.DataplaneNode/ListInterfaces"
-	DataplaneNode_ConfigureNetwork_FullMethodName    = "/dataplane.v1.DataplaneNode/ConfigureNetwork"
-	DataplaneNode_AddRoute_FullMethodName            = "/dataplane.v1.DataplaneNode/AddRoute"
-	DataplaneNode_WithdrawRoute_FullMethodName       = "/dataplane.v1.DataplaneNode/WithdrawRoute"
-	DataplaneNode_AddNatSource_FullMethodName        = "/dataplane.v1.DataplaneNode/AddNatSource"
-	DataplaneNode_WithdrawNatSource_FullMethodName   = "/dataplane.v1.DataplaneNode/WithdrawNatSource"
-	DataplaneNode_AddNeighborNat_FullMethodName      = "/dataplane.v1.DataplaneNode/AddNeighborNat"
-	DataplaneNode_WithdrawNeighborNat_FullMethodName = "/dataplane.v1.DataplaneNode/WithdrawNeighborNat"
-	DataplaneNode_AddLbVip_FullMethodName            = "/dataplane.v1.DataplaneNode/AddLbVip"
-	DataplaneNode_AddLbBackend_FullMethodName        = "/dataplane.v1.DataplaneNode/AddLbBackend"
-	DataplaneNode_DelLbVip_FullMethodName            = "/dataplane.v1.DataplaneNode/DelLbVip"
-	DataplaneNode_DelLbBackend_FullMethodName        = "/dataplane.v1.DataplaneNode/DelLbBackend"
-	DataplaneNode_AddFwRule_FullMethodName           = "/dataplane.v1.DataplaneNode/AddFwRule"
-	DataplaneNode_DelFwRule_FullMethodName           = "/dataplane.v1.DataplaneNode/DelFwRule"
-	DataplaneNode_ConfigureQoS_FullMethodName        = "/dataplane.v1.DataplaneNode/ConfigureQoS"
+	DataplaneNode_AttachInterface_FullMethodName          = "/dataplane.v1.DataplaneNode/AttachInterface"
+	DataplaneNode_DetachInterface_FullMethodName          = "/dataplane.v1.DataplaneNode/DetachInterface"
+	DataplaneNode_ListInterfaces_FullMethodName           = "/dataplane.v1.DataplaneNode/ListInterfaces"
+	DataplaneNode_ConfigureNetwork_FullMethodName         = "/dataplane.v1.DataplaneNode/ConfigureNetwork"
+	DataplaneNode_AddRoute_FullMethodName                 = "/dataplane.v1.DataplaneNode/AddRoute"
+	DataplaneNode_WithdrawRoute_FullMethodName            = "/dataplane.v1.DataplaneNode/WithdrawRoute"
+	DataplaneNode_AddNatSource_FullMethodName             = "/dataplane.v1.DataplaneNode/AddNatSource"
+	DataplaneNode_WithdrawNatSource_FullMethodName        = "/dataplane.v1.DataplaneNode/WithdrawNatSource"
+	DataplaneNode_AddNeighborNat_FullMethodName           = "/dataplane.v1.DataplaneNode/AddNeighborNat"
+	DataplaneNode_WithdrawNeighborNat_FullMethodName      = "/dataplane.v1.DataplaneNode/WithdrawNeighborNat"
+	DataplaneNode_AddLbVip_FullMethodName                 = "/dataplane.v1.DataplaneNode/AddLbVip"
+	DataplaneNode_AddLbBackend_FullMethodName             = "/dataplane.v1.DataplaneNode/AddLbBackend"
+	DataplaneNode_DelLbVip_FullMethodName                 = "/dataplane.v1.DataplaneNode/DelLbVip"
+	DataplaneNode_DelLbBackend_FullMethodName             = "/dataplane.v1.DataplaneNode/DelLbBackend"
+	DataplaneNode_AddFwRule_FullMethodName                = "/dataplane.v1.DataplaneNode/AddFwRule"
+	DataplaneNode_DelFwRule_FullMethodName                = "/dataplane.v1.DataplaneNode/DelFwRule"
+	DataplaneNode_ReplaceInterfaceFirewall_FullMethodName = "/dataplane.v1.DataplaneNode/ReplaceInterfaceFirewall"
+	DataplaneNode_ConfigureQoS_FullMethodName             = "/dataplane.v1.DataplaneNode/ConfigureQoS"
 )
 
 // DataplaneNodeClient is the client API for DataplaneNode service.
@@ -87,6 +88,11 @@ type DataplaneNodeClient interface {
 	AddFwRule(ctx context.Context, in *AddFwRuleRequest, opts ...grpc.CallOption) (*AddFwRuleResponse, error)
 	// DelFwRule removes a per-interface firewall rule by id.
 	DelFwRule(ctx context.Context, in *DelFwRuleRequest, opts ...grpc.CallOption) (*DelFwRuleResponse, error)
+	// ReplaceInterfaceFirewall atomically replaces an interface's ENTIRE firewall rule set
+	// (ingress + egress, v4 + v6) with the supplied rules, clearing any prior rules. This is the
+	// declarative, restart-safe primitive the node agent uses: it pushes the complete desired set
+	// each reconcile, so a stale rule can never survive an agent restart or an in-place policy change.
+	ReplaceInterfaceFirewall(ctx context.Context, in *ReplaceInterfaceFirewallRequest, opts ...grpc.CallOption) (*ReplaceInterfaceFirewallResponse, error)
 	// ConfigureQoS sets (or clears) the per-interface QoS lanes. egress_mbps is EDT-shaped; public and
 	// ingress are token-bucket policed. All 0 = unlimited (clears the entry). Idempotent.
 	ConfigureQoS(ctx context.Context, in *ConfigureQoSRequest, opts ...grpc.CallOption) (*ConfigureQoSResponse, error)
@@ -260,6 +266,16 @@ func (c *dataplaneNodeClient) DelFwRule(ctx context.Context, in *DelFwRuleReques
 	return out, nil
 }
 
+func (c *dataplaneNodeClient) ReplaceInterfaceFirewall(ctx context.Context, in *ReplaceInterfaceFirewallRequest, opts ...grpc.CallOption) (*ReplaceInterfaceFirewallResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReplaceInterfaceFirewallResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_ReplaceInterfaceFirewall_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *dataplaneNodeClient) ConfigureQoS(ctx context.Context, in *ConfigureQoSRequest, opts ...grpc.CallOption) (*ConfigureQoSResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ConfigureQoSResponse)
@@ -319,6 +335,11 @@ type DataplaneNodeServer interface {
 	AddFwRule(context.Context, *AddFwRuleRequest) (*AddFwRuleResponse, error)
 	// DelFwRule removes a per-interface firewall rule by id.
 	DelFwRule(context.Context, *DelFwRuleRequest) (*DelFwRuleResponse, error)
+	// ReplaceInterfaceFirewall atomically replaces an interface's ENTIRE firewall rule set
+	// (ingress + egress, v4 + v6) with the supplied rules, clearing any prior rules. This is the
+	// declarative, restart-safe primitive the node agent uses: it pushes the complete desired set
+	// each reconcile, so a stale rule can never survive an agent restart or an in-place policy change.
+	ReplaceInterfaceFirewall(context.Context, *ReplaceInterfaceFirewallRequest) (*ReplaceInterfaceFirewallResponse, error)
 	// ConfigureQoS sets (or clears) the per-interface QoS lanes. egress_mbps is EDT-shaped; public and
 	// ingress are token-bucket policed. All 0 = unlimited (clears the entry). Idempotent.
 	ConfigureQoS(context.Context, *ConfigureQoSRequest) (*ConfigureQoSResponse, error)
@@ -379,6 +400,9 @@ func (UnimplementedDataplaneNodeServer) AddFwRule(context.Context, *AddFwRuleReq
 }
 func (UnimplementedDataplaneNodeServer) DelFwRule(context.Context, *DelFwRuleRequest) (*DelFwRuleResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DelFwRule not implemented")
+}
+func (UnimplementedDataplaneNodeServer) ReplaceInterfaceFirewall(context.Context, *ReplaceInterfaceFirewallRequest) (*ReplaceInterfaceFirewallResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReplaceInterfaceFirewall not implemented")
 }
 func (UnimplementedDataplaneNodeServer) ConfigureQoS(context.Context, *ConfigureQoSRequest) (*ConfigureQoSResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ConfigureQoS not implemented")
@@ -692,6 +716,24 @@ func _DataplaneNode_DelFwRule_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DataplaneNode_ReplaceInterfaceFirewall_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReplaceInterfaceFirewallRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataplaneNodeServer).ReplaceInterfaceFirewall(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataplaneNode_ReplaceInterfaceFirewall_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataplaneNodeServer).ReplaceInterfaceFirewall(ctx, req.(*ReplaceInterfaceFirewallRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DataplaneNode_ConfigureQoS_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ConfigureQoSRequest)
 	if err := dec(in); err != nil {
@@ -780,6 +822,10 @@ var DataplaneNode_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DelFwRule",
 			Handler:    _DataplaneNode_DelFwRule_Handler,
+		},
+		{
+			MethodName: "ReplaceInterfaceFirewall",
+			Handler:    _DataplaneNode_ReplaceInterfaceFirewall_Handler,
 		},
 		{
 			MethodName: "ConfigureQoS",
