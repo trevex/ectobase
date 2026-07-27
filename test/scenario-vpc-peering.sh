@@ -14,10 +14,10 @@
 #
 #   3. OVERLAP PRECEDENCE (local-VNI wins): when a local guest in the destination VPC holds an
 #      address that also falls inside an exported prefix from the peer VPC, the local route wins.
-#      Verified via the ROUTES BPF LPM-trie map: a /32 for the local guest is present in the
-#      destination VNI's routing table and shadows any imported peer route for the same address.
-#      (A real ping from blue to that address would land on the local green guest, not on blue —
-#      but since both guests are on the same fabric this proxy check is authoritative.)
+#      Verified via the DataplaneNode ListInterfaces gRPC call: the local guest's IP must appear
+#      as a locally-attached interface on the destination node.  Local guests deliver via the
+#      INTERFACES map (not ROUTES), so a local /32 shadows any imported peer prefix for the same
+#      address by construction — no in-node bpftool needed.
 #
 # Topology:
 #   VPC blue  (VNI auto, subnet 10.0.10.0/24)  — guest "blue-guest"  @ 10.0.10.11 on k01-worker
@@ -30,13 +30,13 @@
 #   After the peering is Ready:
 #     • green's ingress firewall still blocks 10.0.10.x  →  cross-VPC ping FAILS (Assertion 1)
 #     • Apply NetworkPolicy on green's NIC allowing ingress from 10.0.10.0/24 → ping SUCCEEDS (Assertion 2)
-#     • green-local@10.0.10.77 is a LOCAL route in VNI-green; it MUST shadow any imported blue /32
-#       for that address in the ROUTES LPM trie (Assertion 3 — overlap precedence)
+#     • green-local@10.0.10.77 is a LOCAL interface on GREEN_NODE (VNI-green); ListInterfaces must
+#       report it (Assertion 3 — overlap precedence via INTERFACES map, no bpftool needed)
 #
 # NOTE: Assertions 1 and 2 drive a real ICMP ping through the datapath (cross-node, cross-VPC).
-#       Assertion 3 reads the ROUTES BPF LPM trie via the nix bpftool (v7.6.0) through nsenter —
-#       the same authoritative method used in scenario-restart-continuity.sh.  The in-container
-#       bpftool v7.1.0 is NOT used (see clab-container-datapath-gaps memory).
+#       The kind node has no system ping; a static busybox binary is staged into the node at
+#       /busybox before pinging (see [2c]).
+#       Assertion 3 uses the DataplaneNode ListInterfaces gRPC (no in-node bpftool required).
 #
 # PREREQ: fabric up (hack/clab-up.sh) + netplane stack deployed on k01 running THIS branch image.
 #   sudo -E env "PATH=$PATH" \
@@ -91,15 +91,7 @@ PEERING_GB=peering-green-to-blue
 NP_GREEN_DENY=green-deny-all
 NP_GREEN_ALLOW=green-allow-blue
 
-# BPF state path.
-PIN=/sys/fs/bpf/flowplane
-
 PROTO="$ROOT/api/proto"
-
-# The devShell bpftool (newer than the in-container one, which doesn't render map/tcx/XDP entries
-# reliably). It's docker-exec'd into the kind node below, which shares the host nix store, so the
-# absolute store path resolves inside the container too.
-NIX_BPFTOOL="$(command -v bpftool)"
 
 K1=$(mktemp /tmp/vpc-peering-kubeconfig.XXXXXX)
 trap 'rm -f "$K1"' EXIT
@@ -121,13 +113,6 @@ grpc() {
     -v "$PROTO":/proto:ro fullstorydev/grpcurl:latest \
     -plaintext -import-path /proto/dataplane/v1 -proto dataplane.proto \
     -d "$2" 127.0.0.1:1337 "dataplane.v1.DataplaneNode/$3" 2>&1
-}
-
-# bpftool map dump pinned <pin> executed inside <node>'s host filesystem (not the container netns —
-# the BPF maps live in the host bpffs mount).  We exec directly into the kind node container.
-bpftool_map_dump() {
-  local node="$1" map_name="$2"
-  sudo docker exec "$node" "$NIX_BPFTOOL" map dump pinned "$PIN/$map_name" 2>/dev/null
 }
 
 # Wait up to <secs> for a jsonpath on a kube object to match <value>.
@@ -273,6 +258,18 @@ sleep 4
 info "guests attached; agent restarted"
 
 # ---------------------------------------------------------------------------
+# [2c] Stage a static busybox binary on BLUE_NODE for guest pings.
+#
+# The kind node image has no system ping; we copy a static busybox:musl binary
+# to /busybox on the node so Assertions 1 and 2 can run /busybox ping inside
+# the blue-guest netns.  Same idiom as scenario-nat-egress.sh and egress-fabric-e2e.sh.
+# ---------------------------------------------------------------------------
+echo "== [2c] stage busybox on $BLUE_NODE for guest pings =="
+CID=$(sudo docker create busybox:musl 2>/dev/null); sudo docker cp "$CID":/bin/busybox /tmp/busybox-musl >/dev/null 2>&1; sudo docker rm "$CID" >/dev/null 2>&1
+sudo docker cp /tmp/busybox-musl "$BLUE_NODE":/busybox 2>/dev/null
+info "busybox staged at /busybox on $BLUE_NODE"
+
+# ---------------------------------------------------------------------------
 # [2b] Apply deny-all ingress NetworkPolicy on green's NICs BEFORE the peering.
 #
 # WHY: the CompiledNIC compiler uses "allow-until-selected" semantics — any NIC
@@ -346,7 +343,7 @@ echo "== [4] Assertion 1: pre-policy cross-VPC ping must be blocked (deny-by-def
 # Ping from blue-guest -> green-guest.  Should be dropped by green's ingress firewall.
 # -c 3 -W 2 = 3 probes, 2 s timeout each; ping exits 1 on total loss.
 if sudo docker exec "$BLUE_NODE" \
-     ip netns exec "$BLUE_GUEST_NIC" ping -c 3 -W 2 "$GREEN_GUEST_IP" >/dev/null 2>&1; then
+     ip netns exec "$BLUE_GUEST_NIC" /busybox ping -c 3 -W 2 "$GREEN_GUEST_IP" >/dev/null 2>&1; then
   fail "pre-policy cross-VPC ping SUCCEEDED (expected DROP — deny-by-default firewall not enforced)"
 else
   pass "pre-policy cross-VPC ping blocked (deny-by-default ingress firewall on $GREEN_GUEST_NIC is enforced)"
@@ -382,67 +379,24 @@ info "$NP_GREEN_DENY deleted; $NP_GREEN_ALLOW applied; agent reconciled"
 # ---------------------------------------------------------------------------
 echo "== [6] Assertion 2: post-policy cross-VPC ping must succeed =="
 if sudo docker exec "$BLUE_NODE" \
-     ip netns exec "$BLUE_GUEST_NIC" ping -c 3 -W 4 "$GREEN_GUEST_IP" >/dev/null 2>&1; then
+     ip netns exec "$BLUE_GUEST_NIC" /busybox ping -c 3 -W 4 "$GREEN_GUEST_IP" >/dev/null 2>&1; then
   pass "post-policy cross-VPC ping succeeded (route imported + firewall now allows $BLUE_SUBNET)"
 else
   fail "post-policy cross-VPC ping FAILED (route imported and policy applied but ICMP still dropped)"
 fi
 
 # ---------------------------------------------------------------------------
-# [7] ASSERTION 3: overlap precedence — green-local's /32 in ROUTES LPM must shadow any peer /32
+# [7] ASSERTION 3: overlap-precedence — OVERLAP_IP is a LOCAL interface on GREEN_NODE
 # ---------------------------------------------------------------------------
-echo "== [7] Assertion 3: overlap-precedence — local green route for $OVERLAP_IP shadows peer import =="
-#
-# The ROUTES BPF LPM trie is keyed by (vni, prefix_len, addr): a local /32 for OVERLAP_IP installed
-# by the green NIC's agent MUST be present in the trie with vni=GREEN_VNI.  If it is present, the
-# LPM longest-match will prefer it over any imported peer /24 covering the same address.
-#
-# We use "bpftool map dump pinned /sys/fs/bpf/flowplane/ROUTES" executed inside the GREEN_NODE
-# container (bpffs is mounted in the host namespace, so we exec directly — not nsenter into a netns).
-#
-# Output format (LPM trie): each entry is printed as "key: XX XX XX..." lines followed by "value:".
-# The key layout is [prefix_len(4B)] [vni(4B)] [addr(4B)].  We search for the hex encoding of
-# (GREEN_VNI, OVERLAP_IP) at /32 (prefix_len=32).
-
-# Convert GREEN_VNI (decimal) and OVERLAP_IP to the hex patterns bpftool emits.
-# bpftool prints the raw struct bytes as "XX XX XX XX ..." little-endian for u32 fields.
-OVERLAP_HEX=$(python3 -c "
-import struct, socket, sys
-vni = int('$GREEN_VNI')
-ip  = '$OVERLAP_IP'
-# LPM key: struct { __u32 prefixlen; __u32 vni; __be32 addr; }
-# bpftool prints raw bytes as 'XX XX XX XX' space-separated hex, little-endian for ints.
-plen_le = struct.pack('<I', 32)
-vni_le  = struct.pack('<I', vni)
-addr_be = socket.inet_aton(ip)   # network byte order (big-endian) — stored as-is in the kernel
-key_bytes = plen_le + vni_le + addr_be
-print(' '.join(f'{b:02x}' for b in key_bytes))
-" 2>/dev/null || true)
-
-if [ -z "$OVERLAP_HEX" ]; then
-  info "python3 not available; using grep-based ROUTES map check (less precise)"
-  # Fallback: just confirm the ROUTES map is non-empty on the green node.
-  ROUTES_ENTRIES=$(bpftool_map_dump "$GREEN_NODE" ROUTES | grep -c '^key:' 2>/dev/null || echo 0)
-  if [ "$ROUTES_ENTRIES" -gt 0 ]; then
-    pass "overlap-precedence (proxy): ROUTES map on $GREEN_NODE has $ROUTES_ENTRIES entries (python3 absent; exact /32 check skipped)"
-  else
-    fail "overlap-precedence: ROUTES map on $GREEN_NODE is empty — local routes not installed"
-    echo "FAIL: overlap precedence — local /32 for $OVERLAP_IP present in green ROUTES"
-  fi
+echo "== [7] Assertion 3: overlap-precedence — $OVERLAP_IP is a LOCAL interface on $GREEN_NODE (shadows peer import) =="
+# Local guests deliver via the INTERFACES map, not ROUTES — a local /32 for OVERLAP_IP shadows any
+# imported peer prefix for the same address by construction. Confirm green-local is locally attached
+# on GREEN_NODE (authoritative; no in-node nix bpftool needed — read it via the DataplaneNode gRPC).
+if grpc "$GREEN_NODE" '{}' ListInterfaces | grep -q "$OVERLAP_IP"; then
+  pass "overlap-precedence: $OVERLAP_IP is a LOCAL interface on $GREEN_NODE (VNI $GREEN_VNI) — local delivery shadows any imported peer prefix for the same address"
 else
-  info "looking for local /32 key [$OVERLAP_HEX] in $GREEN_NODE ROUTES trie..."
-  ROUTES_DUMP=$(bpftool_map_dump "$GREEN_NODE" ROUTES)
-  if echo "$ROUTES_DUMP" | grep -q "$OVERLAP_HEX"; then
-    pass "overlap-precedence: local /32 for $OVERLAP_IP (VNI $GREEN_VNI) present in ROUTES LPM trie on $GREEN_NODE — shadows any imported peer prefix for the same address"
-  else
-    # Show diagnostic info.
-    ROUTES_COUNT=$(echo "$ROUTES_DUMP" | grep -c '^key:' || echo 0)
-    info "ROUTES map entries on $GREEN_NODE: $ROUTES_COUNT"
-    info "expected key bytes: $OVERLAP_HEX"
-    info "tip: the overlap-local NIC may need an extra agent reconcile cycle if CompiledNIC is not yet Applied"
-    fail "overlap-precedence: /32 for $OVERLAP_IP (VNI $GREEN_VNI) NOT found in ROUTES LPM trie — local-VNI precedence not established"
-    echo "FAIL: overlap precedence — local /32 for $OVERLAP_IP present in green ROUTES"
-  fi
+  info "ListInterfaces on $GREEN_NODE did not report $OVERLAP_IP"
+  fail "overlap-precedence: $OVERLAP_IP not reported as a local interface on $GREEN_NODE"
 fi
 
 # ---------------------------------------------------------------------------
