@@ -357,7 +357,10 @@ fi
 # would introduce rule-ordering ambiguity; replacing it avoids that entirely.
 # ---------------------------------------------------------------------------
 echo "== [5] delete $NP_GREEN_DENY; apply $NP_GREEN_ALLOW ($BLUE_SUBNET ingress on green) =="
-kc delete networkpolicy "$NP_GREEN_DENY" >/dev/null 2>&1 || true
+# Fully-qualify the resource: the cluster also has core networkpolicies.networking.k8s.io (and
+# cilium's), so a bare "networkpolicy" is AMBIGUOUS and kubectl resolves it to the core group —
+# silently deleting nothing and leaving the ectobase deny alive to shadow the allow (deny-by-index).
+kc delete networkpolicies.net.ectobase.dev "$NP_GREEN_DENY" >/dev/null 2>&1 || true
 cat <<YAML | kc apply -f - >/dev/null || { echo "FAIL: apply NetworkPolicy"; exit 1; }
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NetworkPolicy
@@ -403,7 +406,7 @@ fi
 # [8] Cleanup
 # ---------------------------------------------------------------------------
 echo "== [8] cleanup =="
-kc delete networkpolicy "$NP_GREEN_DENY"  "$NP_GREEN_ALLOW"  >/dev/null 2>&1 || true
+kc delete networkpolicies.net.ectobase.dev "$NP_GREEN_DENY"  "$NP_GREEN_ALLOW"  >/dev/null 2>&1 || true
 kc delete vpcpeering    "$PEERING_BG" "$PEERING_GB"          >/dev/null 2>&1 || true
 kc delete networkinterface "$BLUE_GUEST_NIC" "$GREEN_GUEST_NIC" "$OVERLAP_NIC" >/dev/null 2>&1 || true
 kc delete vpc "$BLUE_VPC" "$GREEN_VPC"                       >/dev/null 2>&1 || true
