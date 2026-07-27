@@ -28,8 +28,15 @@ type Dataplane interface {
 	AddNeighborNat(ctx context.Context, natIp string, min, max uint32, ownerUnderlay string, vni uint32) error
 	WithdrawNeighborNat(ctx context.Context, natIp string, min, max uint32, vni uint32) error
 	// AddFwRule programs a single per-interface firewall rule (ingress or egress).
+	//
+	// Deprecated: the agent programs firewall rules via ReplaceInterfaceFirewall (declarative,
+	// restart-safe). Do NOT use the imperative Add/DelFwRule path from a reconciler — it depends on
+	// in-memory diff state that is lost on restart, which reintroduces the stale-rule shadowing bug
+	// (a stale deny surviving a deny→allow swap across a restart). Kept only for the raw gRPC surface.
 	AddFwRule(ctx context.Context, interfaceID, ruleID string, r FwRule) error
 	// DelFwRule removes a per-interface firewall rule by id.
+	//
+	// Deprecated: see AddFwRule — prefer ReplaceInterfaceFirewall.
 	DelFwRule(ctx context.Context, interfaceID, ruleID string) error
 	// ReplaceInterfaceFirewall replaces an interface's ENTIRE firewall rule set (ingress+egress,
 	// v4+v6) in one call. Declarative + restart-safe: the agent pushes the full desired set every

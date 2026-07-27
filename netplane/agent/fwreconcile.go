@@ -10,10 +10,14 @@ import (
 
 // ReconcileFirewall programs the firewall rules of every CompiledNIC scheduled to this node onto
 // the dataplane. It is DECLARATIVE and restart-safe: for each locally-attached interface it computes
-// the complete desired rule set (ingress rules first, then egress, in CompiledNIC order) and calls
-// ReplaceInterfaceFirewall, which sets the interface's whole rule set at once. There is no in-memory
-// diff to lose on restart, so an in-place policy change (or an agent restart mid-swap) always
-// converges — no stale rule can survive to shadow the intended one.
+// the complete desired rule set (ingress rules first, then egress, in the CompiledNIC's Ingress/
+// Egress slice order) and calls ReplaceInterfaceFirewall, which sets the interface's whole rule set
+// at once. There is no in-memory diff to lose on restart, so an in-place policy change (or an agent
+// restart mid-swap) always converges — no stale rule can survive to shadow the intended one.
+//
+// Rules for interfaces that are no longer attached locally are NOT touched here: the dataplane
+// clears an interface's firewall rules as part of DetachInterface (see remove_fw_rules), so orphan
+// cleanup is owned by detach, not by this reconciler.
 func (r *Reconciler) ReconcileFirewall(ctx context.Context) error {
 	if r.dp == nil {
 		return nil
