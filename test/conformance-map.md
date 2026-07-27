@@ -210,10 +210,9 @@ not applicable to the ectobase architecture.
 **NONE.**
 
 All applicable Python tests have a named native destination (sim test, byte-parity
-anchor, or Go e2e smoke). The one non-sim item is DHCPv6, which is explicitly deferred
-to Task 2.3 (goscapy live smoke) with a clear block on Phase 3 deletion until that task
-is implemented.
+anchor, or Go e2e smoke). The DHCPv6 conformance path is now the Go probe
+(`test/e2e/cmd/tap-dhcp-probe`) exercised by `TestDhcpLeaseSmoke`; the Python probe
+(`test/tap-dhcp-probe.py`) has been removed.
 
-Phase 3 deletion of `test/conformance/` is safe for all applicable tests except DHCPv6.
-The DHCPv6 Python test (`test_dhcpv6.py`) must remain (or the goscapy smoke must be
-implemented) before Phase 3 is declared complete.
+Phase 3 deletion of `test/conformance/` is safe for all applicable tests including DHCPv6,
+which is now covered by the Go probe (`TestDhcpLeaseSmoke`).

@@ -13,7 +13,7 @@
 # If the eBPF VERIFIER rejects a program, the load error lands in the datapath log (captured
 # below); this script surfaces it and exits 1 so the controller can read the verifier output.
 #
-# Run inside the flake devShell (provides cargo + python3/scapy):
+# Run inside the flake devShell (provides cargo + go):
 #   chmod +x test/tc-dhcp-netns.sh
 #   nix develop --command ./test/tc-dhcp-netns.sh
 set -euo pipefail
@@ -81,9 +81,11 @@ echo "datapath alive (pid $DP_PID); bringup log so far:"
 cat "$DP_LOG" || true
 
 echo "== send DHCP DISCOVER on $TAP (client MAC $GUEST_MAC), expect OFFER for $GUEST_IP =="
-PYBIN="$(command -v python3)"
+# Build the pure-Go probe (replaces the scapy python probe) once; PROBE is the binary consumers run.
+PROBE="${ROOT}/test/e2e/tap-dhcp-probe.bin"
+( cd "${ROOT}/test/e2e" && CGO_ENABLED=0 go build -o "$PROBE" ./cmd/tap-dhcp-probe )
 set +e
-sudo ip netns exec "$NS" "$PYBIN" "$ROOT/test/tap-dhcp-probe.py" \
+sudo ip netns exec "$NS" "$PROBE" \
     --client-only --tap "$TAP" --client-mac "$GUEST_MAC" --expect-ip "$GUEST_IP" --timeout 4
 RC=$?
 set -e
@@ -99,7 +101,7 @@ echo "DHCP OFFER OK"
 
 echo "== send ARP who-has $GUEST_IP on $TAP, expect reply from $GUEST_MAC =="
 set +e
-sudo ip netns exec "$NS" "$PYBIN" "$ROOT/test/tap-dhcp-probe.py" \
+sudo ip netns exec "$NS" "$PROBE" \
     --client-only --probe arp --tap "$TAP" --client-mac "$GUEST_MAC" \
     --expect-ip "$GUEST_IP" --timeout 4
 RC=$?
@@ -114,7 +116,7 @@ fi
 
 echo "== send ICMPv6 NS for fe80::1 on $TAP, expect NA with target-LL $GUEST_MAC =="
 set +e
-sudo ip netns exec "$NS" "$PYBIN" "$ROOT/test/tap-dhcp-probe.py" \
+sudo ip netns exec "$NS" "$PROBE" \
     --client-only --probe nd --tap "$TAP" --client-mac "$GUEST_MAC" \
     --gateway6 fe80::1 --timeout 4
 RC=$?
@@ -129,7 +131,7 @@ fi
 
 echo "== send DHCPv6 SOLICIT on $TAP (client MAC $GUEST_MAC), expect ADVERTISE for 2001:db8:1::1 =="
 set +e
-sudo ip netns exec "$NS" "$PYBIN" "$ROOT/test/tap-dhcp-probe.py" \
+sudo ip netns exec "$NS" "$PROBE" \
     --client-only --probe dhcpv6 --tap "$TAP" --client-mac "$GUEST_MAC" \
     --guest6 2001:db8:1::1 --timeout 4
 RC=$?

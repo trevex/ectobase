@@ -57,7 +57,7 @@ ectobase is two planes — the `flowplane` datapath and the `netplane` control p
 
 ## Getting started
 
-Everything is provided by the Nix flake — Rust (pinned in `rust-toolchain.toml`), `bpf-linker`, `protobuf`, Go, `kind`/`containerlab`, `python3`+`scapy`+`pytest`, plus `qemu`, `iproute2`, `bpftool`, `tcpdump`, etc.
+Everything is provided by the Nix flake — Rust (pinned in `rust-toolchain.toml`), `bpf-linker`, `protobuf`, Go, `kind`/`containerlab`, `python3` (for the DPDK build's pyelftools), plus `qemu`, `iproute2`, `bpftool`, `tcpdump`, etc.
 
 ```sh
 nix develop            # enter the dev shell (all targets assume you are inside it)

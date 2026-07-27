@@ -18,7 +18,7 @@
 #
 # PASS -> "ENCAP OK" from the probe, exit 0. Else dumps captured hex + datapath log, exit 1.
 #
-# Run inside the flake devShell (cargo + python3/scapy):
+# Run inside the flake devShell (cargo + go):
 #   nix develop --command ./test/tc-egress-netns.sh
 set -euo pipefail
 
@@ -89,9 +89,11 @@ echo "datapath alive (pid $DP_PID); bringup log so far:"
 cat "$DP_LOG" || true
 
 echo "== send inner IPv4 on $TAP, capture ENCAPPED frame on $PEER =="
-PYBIN="$(command -v python3)"
+# Build the pure-Go probe (replaces the scapy python probe) once; PROBE is the binary consumers run.
+PROBE="${ROOT}/test/e2e/tap-dhcp-probe.bin"
+( cd "${ROOT}/test/e2e" && CGO_ENABLED=0 go build -o "$PROBE" ./cmd/tap-dhcp-probe )
 set +e
-sudo ip netns exec "$NS" "$PYBIN" "$ROOT/test/tap-dhcp-probe.py" \
+sudo ip netns exec "$NS" "$PROBE" \
     --egress --tap "$TAP" --peer "$PEER" --timeout 5
 RC=$?
 set -e
@@ -106,7 +108,7 @@ fi
 
 echo "== send inner IPv6 on $TAP, capture ENCAPPED v6 frame on $PEER =="
 set +e
-sudo ip netns exec "$NS" "$PYBIN" "$ROOT/test/tap-dhcp-probe.py" \
+sudo ip netns exec "$NS" "$PROBE" \
     --egress6 --tap "$TAP" --peer "$PEER" \
     --guest6 2001:db8:1::1 --dst6 2001:db8:2::2 \
     --nexthop6 fc00:2::2 --guest-underlay fc00:1::1 --timeout 5

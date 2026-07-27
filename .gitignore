@@ -26,3 +26,8 @@ test/e2e/fixtures/multicluster/agent-overlay/patch.reflector.yaml
 # kubevirt-vm-e2e.sh renders these from *.tmpl (named-placeholder substitution at run time)
 test/e2e/fixtures/kubevirt/vpc-nics.yaml
 test/e2e/fixtures/kubevirt/vmi.yaml
+
+# Go binaries built by go build ./cmd/... in test/e2e (artifact, not source)
+test/e2e/tap-dhcp-probe.bin
+test/e2e/tap-dhcp-probe
+test/e2e/netprobe

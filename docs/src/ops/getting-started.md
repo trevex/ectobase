@@ -23,7 +23,7 @@ make            # list every target with its one-line description
 - **`kind`, `containerlab`, `kubectl`** — the integration fabric.
 - **`qemu`, `libvirt`, `OVMF`, `iproute2`, `bridge-utils`, `ethtool`, `tcpdump`** — VM boot and
   netns e2e harnesses.
-- **`python3` + `scapy` + `pytest`** — packet crafting for the scenario/goscapy tests.
+- **`python3`** — present for the DPDK build's pyelftools; packet crafting is now the Go probe (`test/e2e/cmd/tap-dhcp-probe`).
 - **`mdbook` + `mdbook-mermaid`** — this documentation.
 - **`KUBEBUILDER_ASSETS`** — a real in-process apiserver for the controller-runtime envtest
   integration tests.

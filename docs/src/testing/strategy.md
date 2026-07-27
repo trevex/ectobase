@@ -52,7 +52,7 @@ function itself is shared, not duplicated.
 
 When the verifier blocks the seam — i.e. the shared core cannot be expressed within
 the eBPF verifier's constraints — the correct move is **not** to fork the core, but to
-move the assertion up a level (e.g. to a Go/scapy live test) so the tested code is
+move the assertion up a level (e.g. to a Go live test) so the tested code is
 still the code that ships.
 
 ## Why DHCPv6 stays in eBPF
