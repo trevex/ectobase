@@ -59,7 +59,7 @@ func pcapReplay(args []string) int {
 	// replayAll sends all frames --repeat times with --repeat-interval-ms between rounds.
 	replayAll := func() error {
 		rpt := max(*repeat, 1)
-		for r := 0; r < rpt; r++ {
+		for r := range rpt {
 			for _, data := range frames {
 				if err := netpkt.Send(*iface, data); err != nil {
 					return err
