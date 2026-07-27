@@ -27,5 +27,7 @@ test/e2e/fixtures/multicluster/agent-overlay/patch.reflector.yaml
 test/e2e/fixtures/kubevirt/vpc-nics.yaml
 test/e2e/fixtures/kubevirt/vmi.yaml
 
-# Go tap-dhcp-probe binary built by test/tap-dhcp-probe.sh + tc-*-netns.sh scripts
+# Go binaries built by go build ./cmd/... in test/e2e (artifact, not source)
 test/e2e/tap-dhcp-probe.bin
+test/e2e/tap-dhcp-probe
+test/e2e/netprobe
