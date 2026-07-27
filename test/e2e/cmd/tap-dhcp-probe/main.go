@@ -13,7 +13,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -40,24 +39,12 @@ func run() int {
 	expectIP := flag.String("expect-ip", "10.0.0.1", "expected yiaddr / ARP psrc")
 	gateway6 := flag.String("gateway6", "fe80::1", "ND gateway target (nd probe)")
 	timeout := flag.Float64("timeout", 3.0, "seconds")
-	lbDistribute := flag.Bool("lb-distribute", false, "LB traffic-distribution probe: send N ICMP probes toward lb-underlay, assert both backends appear in outer-dst")
-	iface := flag.String("iface", "", "netdev for lb-distribute TX+RX, or AF_PACKET alternative to --tap for client-only probes")
-	lbUnderlay := flag.String("lb-underlay", "", "outer IPv6 dst (LB underlay) for lb-distribute")
-	be1 := flag.String("be1", "", "first backend underlay IPv6 for lb-distribute")
-	be2 := flag.String("be2", "", "second backend underlay IPv6 for lb-distribute")
-	vip := flag.String("vip", "", "inner IPv4 VIP dst for lb-distribute")
-	count := flag.Int("count", 10, "number of probe frames to send in lb-distribute")
+	iface := flag.String("iface", "", "AF_PACKET alternative to --tap for client-only probes")
 	flag.Parse()
 
 	to := time.Duration(*timeout * float64(time.Second))
 
 	switch {
-	case *lbDistribute:
-		if *iface == "" || *lbUnderlay == "" || *be1 == "" || *be2 == "" || *vip == "" {
-			fmt.Fprintln(os.Stderr, "ERROR: --lb-distribute requires --iface --lb-underlay --be1 --be2 --vip")
-			return 2
-		}
-		return lbDistributeProbe(*iface, *lbUnderlay, *be1, *be2, *vip, *count, to)
 	case *egress:
 		if *tap == "" || *peer == "" {
 			fmt.Fprintln(os.Stderr, "ERROR: --egress requires --tap and --peer")
@@ -645,57 +632,6 @@ func ndProbe(tapDev, ifaceDev, mac, gw6 string, to time.Duration) int {
 	}
 	fmt.Println("ND NA OK")
 	return 0
-}
-
-// lbDistributeProbe sends count IPv6-encapsulated ICMP probe frames toward lbUnderlay (varying
-// the outer IPv6 src to vary the Maglev hash), sniffs re-encapped frames on the same iface, and
-// asserts that BOTH backend underlays (be1, be2) appear as captured outer-dst.
-// Prints DISTRIBUTION_OK or DISTRIBUTION_FAIL and returns 0/1 accordingly.
-func lbDistributeProbe(iface, lbUnderlay, be1, be2, vip string, count int, to time.Duration) int {
-	be1IP, be2IP := net.ParseIP(be1), net.ParseIP(be2)
-	seen := map[string]bool{}
-	inject := func() error {
-		for i := range count {
-			frame, err := buildLbProbeFrame(i, lbUnderlay, vip)
-			if err != nil {
-				return err
-			}
-			if err := injectAF(iface, frame); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	want := func(p gopacket.Packet) bool {
-		ip6, _ := p.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
-		if ip6 == nil {
-			return false
-		}
-		if ip6.DstIP.Equal(be1IP) || ip6.DstIP.Equal(be2IP) {
-			seen[ip6.DstIP.String()] = true
-		}
-		return seen[be1IP.String()] && seen[be2IP.String()]
-	}
-	if _, err := sniffIPv6(iface, to, inject, want); err != nil {
-		fmt.Fprintln(os.Stderr, "sniff error:", err)
-		return 2
-	}
-	if seen[be1IP.String()] && seen[be2IP.String()] {
-		fmt.Printf("DISTRIBUTION_OK: both backends seen in captured outer-dst: %v\n", keysOf(seen))
-		return 0
-	}
-	fmt.Printf("DISTRIBUTION_FAIL: backends not all seen; seen: %v (want %s,%s)\n", keysOf(seen), be1, be2)
-	return 1
-}
-
-// keysOf returns the sorted keys of a map[string]bool.
-func keysOf(m map[string]bool) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 func dhcpv6Probe(tapDev, ifaceDev, mac, expectIP string, to time.Duration) int {

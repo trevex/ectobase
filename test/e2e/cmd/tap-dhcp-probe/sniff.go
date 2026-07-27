@@ -21,24 +21,6 @@ import (
 // htons converts a uint16 from host byte order to network (big-endian) byte order.
 func htons(v uint16) uint16 { return v<<8 | v>>8 }
 
-// injectAF sends frame on iface using a fresh AF_PACKET raw socket.
-// Opening a new socket per call is acceptable for the low frame counts used in probes.
-func injectAF(iface string, frame []byte) error {
-	iff, err := net.InterfaceByName(iface)
-	if err != nil {
-		return err
-	}
-	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW, int(htons(unix.ETH_P_ALL)))
-	if err != nil {
-		return err
-	}
-	defer unix.Close(fd)
-	addr := &unix.SockaddrLinklayer{
-		Ifindex: iff.Index,
-	}
-	return unix.Sendto(fd, frame, 0, addr)
-}
-
 // sniffIPv6 opens an AF_PACKET raw socket on iface, waits 500ms for the socket to arm,
 // calls inject() to send probe frames, then reads frames until want(pkt) is satisfied or
 // timeout elapses. Returns all captured frames that carry an outer IPv6 layer.

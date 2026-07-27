@@ -120,22 +120,6 @@ func TestInnerIPv6Parses(t *testing.T) {
 	}
 }
 
-func TestLbProbeFrameParses(t *testing.T) {
-	f, err := buildLbProbeFrame(3, "fd00:db8:2::5", "203.0.113.9")
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := gopacket.NewPacket(f, layers.LayerTypeEthernet, gopacket.Default)
-	ip6, _ := p.Layer(layers.LayerTypeIPv6).(*layers.IPv6)
-	if ip6 == nil || !ip6.DstIP.Equal(net.ParseIP("fd00:db8:2::5")) {
-		t.Fatalf("outer v6 dst wrong: %v", ip6)
-	}
-	ip4, _ := p.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
-	if ip4 == nil || !ip4.DstIP.Equal(net.ParseIP("203.0.113.9")) {
-		t.Fatalf("inner v4 dst wrong: %v", ip4)
-	}
-}
-
 func TestDHCPv6SolicitAdvertiseRoundTrip(t *testing.T) {
 	mac := mustMAC(t, "52:54:00:00:00:01")
 	sol, duid, err := buildDHCPv6Solicit(mac)

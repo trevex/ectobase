@@ -475,64 +475,6 @@ func buildDHCPv6Advertise(clientMAC net.HardwareAddr, ia net.IP, echoDUID []byte
 	return buf.Bytes(), nil
 }
 
-// buildLbProbeFrame builds an Ethernet/IPv6(outer)/IPv4(inner)/ICMPv4 probe frame for the
-// lb-distribute mode. The outer IPv6 src varies per probe index (fd00:db8:9::<i+1>) so that
-// different probes hash to different Maglev backends. The outer IPv6 dst is lbUnderlay; the
-// inner IPv4 dst is vip (inner src fixed at 198.51.100.1). This mirrors the scapy
-//
-//	Ether()/IPv6(src=fd00:db8:9::<i+1>, dst=lbUnderlay)/IP(dst=vip, src=198.51.100.1)/ICMP(type=8,id=i,seq=i)
-func buildLbProbeFrame(i int, lbUnderlay, vip string) ([]byte, error) {
-	srcMAC := net.HardwareAddr{0x52, 0x54, 0x00, 0x00, 0x00, 0x01}
-	dstMAC := net.HardwareAddr{0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa}
-
-	outerSrcIP := net.ParseIP(fmt.Sprintf("fd00:db8:9::%x", i+1))
-	outerDstIP := net.ParseIP(lbUnderlay)
-	if outerSrcIP == nil || outerDstIP == nil {
-		return nil, fmt.Errorf("buildLbProbeFrame: invalid IPs (i=%d lbUnderlay=%q)", i, lbUnderlay)
-	}
-
-	innerDstIP := net.ParseIP(vip)
-	if innerDstIP == nil {
-		return nil, fmt.Errorf("buildLbProbeFrame: invalid vip %q", vip)
-	}
-	innerDst4 := innerDstIP.To4()
-	if innerDst4 == nil {
-		return nil, fmt.Errorf("buildLbProbeFrame: vip %q is not IPv4", vip)
-	}
-
-	eth := &layers.Ethernet{
-		SrcMAC:       srcMAC,
-		DstMAC:       dstMAC,
-		EthernetType: layers.EthernetTypeIPv6,
-	}
-	// IPv4-in-IPv6: NextHeader = IPProtocolIPv4 (value 4).
-	ip6 := &layers.IPv6{
-		Version:    6,
-		HopLimit:   64,
-		NextHeader: layers.IPProtocolIPv4,
-		SrcIP:      outerSrcIP,
-		DstIP:      outerDstIP,
-	}
-	ip4 := &layers.IPv4{
-		Version:  4,
-		TTL:      64,
-		Protocol: layers.IPProtocolICMPv4,
-		SrcIP:    net.IPv4(198, 51, 100, 1),
-		DstIP:    innerDst4,
-	}
-	icmp := &layers.ICMPv4{
-		TypeCode: layers.CreateICMPv4TypeCode(layers.ICMPv4TypeEchoRequest, 0),
-		Id:       uint16(i),
-		Seq:      uint16(i),
-	}
-
-	buf := gopacket.NewSerializeBuffer()
-	if err := gopacket.SerializeLayers(buf, serializeOpts, eth, ip6, ip4, icmp); err != nil {
-		return nil, fmt.Errorf("serialize lb probe frame: %w", err)
-	}
-	return buf.Bytes(), nil
-}
-
 // buildInnerIPv4ICMP builds an Ethernet/IPv4/ICMPv4 echo-request frame
 // representing a guest egress packet: 10.0.0.1 → 10.0.0.2.
 func buildInnerIPv4ICMP() ([]byte, error) {
