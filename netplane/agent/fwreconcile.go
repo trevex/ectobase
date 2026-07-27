@@ -15,9 +15,11 @@ import (
 // at once. There is no in-memory diff to lose on restart, so an in-place policy change (or an agent
 // restart mid-swap) always converges — no stale rule can survive to shadow the intended one.
 //
-// Rules for interfaces that are no longer attached locally are NOT touched here: the dataplane
-// clears an interface's firewall rules as part of DetachInterface (see remove_fw_rules), so orphan
-// cleanup is owned by detach, not by this reconciler.
+// This reconciler only programs interfaces that are currently attached locally AND whose CompiledNIC
+// is scheduled here; it never issues a delete. Cleanup of an interface's rules is owned by the
+// dataplane's DetachInterface (see remove_fw_rules). So a NIC that is de-scheduled from this node
+// while its interface is still attached keeps its last-programmed rules until the detach that a
+// de-schedule drives actually fires — a narrow teardown window, bounded by deny-by-default.
 func (r *Reconciler) ReconcileFirewall(ctx context.Context) error {
 	if r.dp == nil {
 		return nil
