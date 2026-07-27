@@ -804,6 +804,15 @@ impl DataplaneNode for DpdkNodeService {
         Ok(Response::new(resp))
     }
 
+    async fn replace_interface_firewall(
+        &self,
+        _req: Request<pb::ReplaceInterfaceFirewallRequest>,
+    ) -> Result<Response<pb::ReplaceInterfaceFirewallResponse>, Status> {
+        Err(Status::unimplemented(
+            "replace_interface_firewall not yet implemented",
+        ))
+    }
+
     async fn configure_qo_s(
         &self,
         req: Request<pb::ConfigureQoSRequest>,
