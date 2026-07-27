@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"github.com/trevex/ectobase/test/e2e/internal/netpkt"
 )
 
 func main() { os.Exit(run()) }
@@ -40,7 +41,7 @@ func run() int {
 	gateway6 := flag.String("gateway6", "fe80::1", "ND gateway target (nd probe)")
 	timeout := flag.Float64("timeout", 3.0, "seconds")
 	lbDistribute := flag.Bool("lb-distribute", false, "LB traffic-distribution probe: send N ICMP probes toward lb-underlay, assert both backends appear in outer-dst")
-	iface := flag.String("iface", "eth1", "interface for lb-distribute TX+RX")
+	iface := flag.String("iface", "", "netdev for lb-distribute TX+RX, or AF_PACKET alternative to --tap for client-only probes")
 	lbUnderlay := flag.String("lb-underlay", "", "outer IPv6 dst (LB underlay) for lb-distribute")
 	be1 := flag.String("be1", "", "first backend underlay IPv6 for lb-distribute")
 	be2 := flag.String("be2", "", "second backend underlay IPv6 for lb-distribute")
@@ -70,19 +71,19 @@ func run() int {
 		}
 		return egress6Probe(*tap, *peer, *guest6, *dst6, *nexthop6, *guestUnderlay, to)
 	case *clientOnly:
-		if *tap == "" {
-			fmt.Fprintln(os.Stderr, "ERROR: --client-only requires --tap")
+		if *tap == "" && *iface == "" {
+			fmt.Fprintln(os.Stderr, "ERROR: --client-only requires --tap or --iface")
 			return 2
 		}
 		switch *probe {
 		case "arp":
-			return arpProbe(*tap, *clientMAC, *expectIP, to)
+			return arpProbe(*tap, *iface, *clientMAC, *expectIP, to)
 		case "nd":
-			return ndProbe(*tap, *clientMAC, *gateway6, to)
+			return ndProbe(*tap, *iface, *clientMAC, *gateway6, to)
 		case "dhcpv6":
-			return dhcpv6Probe(*tap, *clientMAC, *guest6, to)
+			return dhcpv6Probe(*tap, *iface, *clientMAC, *guest6, to)
 		default:
-			return clientOnlyDHCP(*tap, *clientMAC, *expectIP, to)
+			return clientOnlyDHCP(*tap, *iface, *clientMAC, *expectIP, to)
 		}
 	default:
 		return selfContained()
@@ -460,29 +461,58 @@ func egress6Probe(tap, peer, g6, d6, nh6, gul string, to time.Duration) int {
 	return 1
 }
 
-func clientOnlyDHCP(tap, mac, expectIP string, to time.Duration) int {
+// exchange sends req on the wire and delivers each received raw frame to match() until
+// match returns true or the deadline passes. Returns (true, nil) if match accepted a frame.
+//
+// When tapDev != "" the tap-fd backend is used: openTapQueue + write + readFrames.
+// When ifaceDev != "" the AF_PACKET backend is used: netpkt.Sniff with the send in the
+// arm callback so the RX socket is armed before the frame goes out.
+func exchange(tapDev, ifaceDev string, req []byte, to time.Duration, match func([]byte) bool) (bool, error) {
+	if tapDev != "" {
+		f, err := openTapQueue(tapDev)
+		if err != nil {
+			return false, fmt.Errorf("openTapQueue %s: %w", tapDev, err)
+		}
+		defer f.Close()
+		if _, err := f.Write(req); err != nil {
+			return false, fmt.Errorf("write to tap: %w", err)
+		}
+		return readFrames(f, to, match), nil
+	}
+
+	// AF_PACKET path via netpkt.
+	matched := false
+	matchPkt := func(p gopacket.Packet) bool {
+		if match(p.Data()) {
+			matched = true
+			return true
+		}
+		return false
+	}
+	arm := func() error { return netpkt.Send(ifaceDev, req) }
+	if _, err := netpkt.Sniff(ifaceDev, to, arm, matchPkt); err != nil {
+		return false, fmt.Errorf("netpkt.Sniff %s: %w", ifaceDev, err)
+	}
+	return matched, nil
+}
+
+func clientOnlyDHCP(tapDev, ifaceDev, mac, expectIP string, to time.Duration) int {
 	hw, err := net.ParseMAC(mac)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: invalid MAC %q: %v\n", mac, err)
 		return 2
 	}
-	f, err := openTapQueue(tap)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: openTapQueue %s: %v\n", tap, err)
-		return 2
-	}
-	defer f.Close()
 
 	frame, err := buildDHCPDiscover(hw, 0x1234)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: buildDHCPDiscover: %v\n", err)
 		return 2
 	}
-	if _, err := f.Write(frame); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: write discover: %v\n", err)
-		return 2
+	dev := tapDev
+	if dev == "" {
+		dev = ifaceDev
 	}
-	fmt.Printf("sent DHCP DISCOVER (%d bytes) from %s to tap %s\n", len(frame), mac, tap)
+	fmt.Printf("sent DHCP DISCOVER (%d bytes) from %s to %s\n", len(frame), mac, dev)
 
 	var (
 		gotYiaddr net.IP
@@ -490,7 +520,7 @@ func clientOnlyDHCP(tap, mac, expectIP string, to time.Duration) int {
 		gotDNS    []net.IP
 		gotLen    int
 	)
-	found := readFrames(f, to, func(b []byte) bool {
+	found, err := exchange(tapDev, ifaceDev, frame, to, func(b []byte) bool {
 		mt, yi, mtu, dns, ok := parseDHCPReply(b)
 		if !ok || mt != 2 {
 			return false
@@ -501,8 +531,12 @@ func clientOnlyDHCP(tap, mac, expectIP string, to time.Duration) int {
 		gotLen = len(b)
 		return true
 	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: exchange: %v\n", err)
+		return 2
+	}
 	if !found {
-		fmt.Printf("RESULT: NO OFFER received on %s within %.0fs\n", tap, to.Seconds())
+		fmt.Printf("RESULT: NO OFFER received on %s within %.0fs\n", dev, to.Seconds())
 		return 1
 	}
 	fmt.Printf("RESULT: OFFER received — yiaddr=%s dns=%v mtu=%d (%d bytes)\n",
@@ -514,36 +548,30 @@ func clientOnlyDHCP(tap, mac, expectIP string, to time.Duration) int {
 	return 0
 }
 
-func arpProbe(tap, mac, expectIP string, to time.Duration) int {
+func arpProbe(tapDev, ifaceDev, mac, expectIP string, to time.Duration) int {
 	hw, err := net.ParseMAC(mac)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: invalid MAC %q: %v\n", mac, err)
 		return 2
 	}
-	f, err := openTapQueue(tap)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: openTapQueue %s: %v\n", tap, err)
-		return 2
-	}
-	defer f.Close()
 
 	frame, err := buildARPRequest(hw, net.IPv4(10, 0, 0, 2), net.ParseIP(expectIP))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: buildARPRequest: %v\n", err)
 		return 2
 	}
-	if _, err := f.Write(frame); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: write arp: %v\n", err)
-		return 2
+	dev := tapDev
+	if dev == "" {
+		dev = ifaceDev
 	}
-	fmt.Printf("sent ARP who-has %s (%d bytes) from %s on %s\n", expectIP, len(frame), mac, tap)
+	fmt.Printf("sent ARP who-has %s (%d bytes) from %s on %s\n", expectIP, len(frame), mac, dev)
 
 	var (
 		gotOp   uint16
 		gotPsrc net.IP
 		gotHW   net.HardwareAddr
 	)
-	found := readFrames(f, to, func(b []byte) bool {
+	found, err := exchange(tapDev, ifaceDev, frame, to, func(b []byte) bool {
 		op, psrc, hwsrc, ok := parseARP(b)
 		if !ok || op != 2 {
 			return false
@@ -553,8 +581,12 @@ func arpProbe(tap, mac, expectIP string, to time.Duration) int {
 		gotHW = hwsrc
 		return true
 	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: exchange: %v\n", err)
+		return 2
+	}
 	if !found {
-		fmt.Printf("RESULT: NO ARP reply on %s within %.0fs\n", tap, to.Seconds())
+		fmt.Printf("RESULT: NO ARP reply on %s within %.0fs\n", dev, to.Seconds())
 		return 1
 	}
 	fmt.Printf("got ARP reply: op=%d psrc=%s hwsrc=%s\n", gotOp, gotPsrc, gotHW)
@@ -567,35 +599,29 @@ func arpProbe(tap, mac, expectIP string, to time.Duration) int {
 	return 0
 }
 
-func ndProbe(tap, mac, gw6 string, to time.Duration) int {
+func ndProbe(tapDev, ifaceDev, mac, gw6 string, to time.Duration) int {
 	hw, err := net.ParseMAC(mac)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: invalid MAC %q: %v\n", mac, err)
 		return 2
 	}
-	f, err := openTapQueue(tap)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: openTapQueue %s: %v\n", tap, err)
-		return 2
-	}
-	defer f.Close()
 
 	frame, err := buildNS(hw, net.ParseIP(gw6))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: buildNS: %v\n", err)
 		return 2
 	}
-	if _, err := f.Write(frame); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: write ns: %v\n", err)
-		return 2
+	dev := tapDev
+	if dev == "" {
+		dev = ifaceDev
 	}
-	fmt.Printf("sent ICMPv6 NS for %s (%d bytes) from %s on %s\n", gw6, len(frame), mac, tap)
+	fmt.Printf("sent ICMPv6 NS for %s (%d bytes) from %s on %s\n", gw6, len(frame), mac, dev)
 
 	var (
 		gotTgt   net.IP
 		gotDstLL net.HardwareAddr
 	)
-	found := readFrames(f, to, func(b []byte) bool {
+	found, err := exchange(tapDev, ifaceDev, frame, to, func(b []byte) bool {
 		tgt, dstLL, ok := parseNA(b)
 		if !ok {
 			return false
@@ -604,8 +630,12 @@ func ndProbe(tap, mac, gw6 string, to time.Duration) int {
 		gotDstLL = dstLL
 		return true
 	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: exchange: %v\n", err)
+		return 2
+	}
 	if !found {
-		fmt.Printf("RESULT: NO ICMPv6 NA on %s within %.0fs\n", tap, to.Seconds())
+		fmt.Printf("RESULT: NO ICMPv6 NA on %s within %.0fs\n", dev, to.Seconds())
 		return 1
 	}
 	fmt.Printf("got ICMPv6 NA: tgt=%s dst-lladdr=%s\n", gotTgt, gotDstLL)
@@ -668,30 +698,24 @@ func keysOf(m map[string]bool) []string {
 	return keys
 }
 
-func dhcpv6Probe(tap, mac, expectIP string, to time.Duration) int {
+func dhcpv6Probe(tapDev, ifaceDev, mac, expectIP string, to time.Duration) int {
 	hw, err := net.ParseMAC(mac)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: invalid MAC %q: %v\n", mac, err)
 		return 2
 	}
-	f, err := openTapQueue(tap)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: openTapQueue %s: %v\n", tap, err)
-		return 2
-	}
-	defer f.Close()
 
 	sol, duid, err := buildDHCPv6Solicit(hw)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: buildDHCPv6Solicit: %v\n", err)
 		return 2
 	}
-	if _, err := f.Write(sol); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: write solicit: %v\n", err)
-		return 2
+	dev := tapDev
+	if dev == "" {
+		dev = ifaceDev
 	}
 	fmt.Printf("sent DHCPv6 SOLICIT (%d bytes) from %s on %s, DUID=%s\n",
-		len(sol), mac, tap, hex.EncodeToString(duid))
+		len(sol), mac, dev, hex.EncodeToString(duid))
 
 	wantDUID := duid
 	if len(wantDUID) > 10 {
@@ -702,7 +726,7 @@ func dhcpv6Probe(tap, mac, expectIP string, to time.Duration) int {
 		gotIA     net.IP
 		gotEchoed []byte
 	)
-	found := readFrames(f, to, func(b []byte) bool {
+	found, err := exchange(tapDev, ifaceDev, sol, to, func(b []byte) bool {
 		ia, echoed, ok := parseDHCPv6Reply(b)
 		if !ok {
 			return false
@@ -711,8 +735,12 @@ func dhcpv6Probe(tap, mac, expectIP string, to time.Duration) int {
 		gotEchoed = echoed
 		return true
 	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: exchange: %v\n", err)
+		return 2
+	}
 	if !found {
-		fmt.Printf("RESULT: NO DHCP6 ADVERTISE/REPLY on %s within %.0fs\n", tap, to.Seconds())
+		fmt.Printf("RESULT: NO DHCP6 ADVERTISE/REPLY on %s within %.0fs\n", dev, to.Seconds())
 		return 1
 	}
 	fmt.Printf("got DHCP6 reply: ia_addr=%s echoed_clientid=%s\n",
