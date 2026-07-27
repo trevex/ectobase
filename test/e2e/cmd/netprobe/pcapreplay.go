@@ -58,10 +58,7 @@ func pcapReplay(args []string) int {
 
 	// replayAll sends all frames --repeat times with --repeat-interval-ms between rounds.
 	replayAll := func() error {
-		rpt := *repeat
-		if rpt < 1 {
-			rpt = 1
-		}
+		rpt := max(*repeat, 1)
 		for r := 0; r < rpt; r++ {
 			for _, data := range frames {
 				if err := netpkt.Send(*iface, data); err != nil {
@@ -81,10 +78,7 @@ func pcapReplay(args []string) int {
 			fmt.Fprintf(os.Stderr, "pcap-replay: send: %v\n", err)
 			return 1
 		}
-		rpt := *repeat
-		if rpt < 1 {
-			rpt = 1
-		}
+		rpt := max(*repeat, 1)
 		fmt.Printf("replayed %d frame(s) from %s on %s\n", len(frames)*rpt, *inPath, *iface)
 		return 0
 	}
