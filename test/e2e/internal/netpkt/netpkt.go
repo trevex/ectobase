@@ -55,7 +55,9 @@ func Sniff(iface string, timeout time.Duration, arm func() error, match func(gop
 
 	// Set a 200ms receive timeout so the read loop wakes up periodically to
 	// re-check the deadline rather than blocking indefinitely.
-	_ = unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &unix.Timeval{Sec: 0, Usec: 200000})
+	if err := unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &unix.Timeval{Sec: 0, Usec: 200000}); err != nil {
+		return nil, fmt.Errorf("set SO_RCVTIMEO: %w", err)
+	}
 
 	// Allow the kernel to arm the socket before we inject.
 	time.Sleep(500 * time.Millisecond)
@@ -74,9 +76,7 @@ func Sniff(iface string, timeout time.Duration, arm func() error, match func(gop
 		n, _, err := unix.Recvfrom(fd, buf, 0)
 		if err != nil {
 			// EAGAIN / EWOULDBLOCK = SO_RCVTIMEO expired with no packet; keep looping.
-			if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
-				continue
-			}
+			// Any other recv error: also continue (non-fatal for the sniff loop).
 			continue
 		}
 		if n <= 0 {

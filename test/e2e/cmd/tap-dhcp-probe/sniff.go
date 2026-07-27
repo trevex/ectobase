@@ -96,7 +96,7 @@ func sniffIPv6(iface string, timeout time.Duration, inject func() error, want fu
 		if n == 0 {
 			continue
 		}
-		pkt := gopacket.NewPacket(buf[:n], layers.LayerTypeEthernet, gopacket.NoCopy)
+		pkt := gopacket.NewPacket(append([]byte(nil), buf[:n]...), layers.LayerTypeEthernet, gopacket.Default)
 		if pkt.Layer(layers.LayerTypeIPv6) == nil {
 			continue
 		}

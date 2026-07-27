@@ -319,9 +319,14 @@ func craftFrame(ethSrcStr, ethDstStr, ipSrcStr, ipDstStr string, isIPv6 bool, l4
 			DstIP:      outerDst,
 		}
 		innerV4 := &layers.IPv4{
-			Version:  4,
-			TTL:      64,
-			Protocol: layers.IPProtocolTCP,
+			Version: 4,
+			TTL:     64,
+		}
+		switch l4Proto {
+		case "udp":
+			innerV4.Protocol = layers.IPProtocolUDP
+		default: // tcp or none
+			innerV4.Protocol = layers.IPProtocolTCP
 		}
 		if ipSrcStr != "" {
 			innerV4.SrcIP = net.ParseIP(ipSrcStr)
