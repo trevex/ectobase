@@ -62,6 +62,11 @@ echo "== build flowplane =="
 cargo build -p flowplane 2>&1 | tail -1
 [ -x "$BIN" ] || fail "$BIN missing after build"
 
+echo "== build netprobe (pure-Go pcap verifier) =="
+NETPROBE="${ROOT}/test/e2e/netprobe.bin"
+( cd "${ROOT}/test/e2e" && CGO_ENABLED=0 go build -o "$NETPROBE" ./cmd/netprobe ) \
+  || fail "failed to build netprobe"
+
 echo "== netns: $EDGE_NS (sidecar), $FAB_NS (owner hv), $WAN_NS (internet/WAN) =="
 for ns in "$EDGE_NS" "$FAB_NS" "$WAN_NS"; do
   ip netns del "$ns" 2>/dev/null
@@ -152,20 +157,11 @@ PY
 sleep 0.8
 kill -9 "$TCPDUMP_PID" 2>/dev/null; wait "$TCPDUMP_PID" 2>/dev/null; TCPDUMP_PID=""
 
-python3 - "$RET_PCAP" "$OWNER_UL" "$NAT_IP" <<'PY' || fail "RETURN not encapped to owner (see above)"
-import sys
-from scapy.all import rdpcap, IPv6, IP
-pcap, owner, nat_ip = sys.argv[1], sys.argv[2], sys.argv[3]
-pkts = rdpcap(pcap)
-for p in pkts:
-    if IPv6 in p and p[IPv6].dst == owner and p[IPv6].nh == 4 and IP in p and p[IP].dst == nat_ip:
-        print(f"PASS: RETURN encapped IP-in-IPv6 -> {owner} (inner dst={nat_ip})")
-        sys.exit(0)
-print(f"no encapped return to {owner} in {len(pkts)} captured pkt(s)")
-for p in pkts:
-    print("  ", p.summary())
-sys.exit(1)
-PY
+"$NETPROBE" pcap-verify --pcap "$RET_PCAP" \
+  --want-outer-ipv6-dst "$OWNER_UL" \
+  --want-outer-ipv6-nh 4 \
+  --want-inner-ip-dst "$NAT_IP" \
+  || fail "RETURN not encapped to owner (see above)"
 
 # ---------------------------------------------------------------------------
 # EGRESS: fabric -> WAN. Capture inner IPv4 on wanp-eth, inject encapped egress on fabp-eth.
@@ -185,19 +181,10 @@ PY
 sleep 0.8
 kill -9 "$TCPDUMP_PID" 2>/dev/null; wait "$TCPDUMP_PID" 2>/dev/null; TCPDUMP_PID=""
 
-python3 - "$EGR_PCAP" "$NAT_IP" "$EXT_DST" <<'PY' || fail "EGRESS inner IPv4 did not reach the WAN (decap/local-deliver broken)"
-import sys
-from scapy.all import rdpcap, IP, IPv6
-pcap, nat_ip, ext_dst = sys.argv[1], sys.argv[2], sys.argv[3]
-pkts = rdpcap(pcap)
-for p in pkts:
-    if IP in p and IPv6 not in p and p[IP].src == nat_ip and p[IP].dst == ext_dst:
-        print(f"PASS: EGRESS decapped inner IPv4 {nat_ip} -> {ext_dst} reached the WAN uplink")
-        sys.exit(0)
-print(f"no decapped egress {nat_ip}->{ext_dst} in {len(pkts)} captured pkt(s)")
-for p in pkts:
-    print("  ", p.summary())
-sys.exit(1)
-PY
+"$NETPROBE" pcap-verify --pcap "$EGR_PCAP" \
+  --want-inner-ip-src "$NAT_IP" \
+  --want-inner-ip-dst "$EXT_DST" \
+  --want-no-ipv6 \
+  || fail "EGRESS inner IPv4 did not reach the WAN (decap/local-deliver broken)"
 
 echo "PASS: WAN-edge datapath forwards egress + return both ways"

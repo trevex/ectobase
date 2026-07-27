@@ -26,19 +26,34 @@ fn l2fwd_pcap_swaps_macs() {
         .expect("run l2fwd");
     assert!(status.success(), "l2fwd exited non-zero");
 
-    // Verify with scapy: each out frame's dst==in src and src==in dst.
-    let py = format!(
-        r#"from scapy.all import rdpcap
-i=rdpcap("{input}"); o=rdpcap("{out}")
-assert len(o)==len(i)==4, (len(i),len(o))
-for a,b in zip(i,o):
-    assert b.dst==a.src and b.src==a.dst, (a.summary(),b.summary())
-print("OK")"#
-    );
-    let s = Command::new("python3")
-        .arg("-c")
-        .arg(&py)
+    // Verify with the pure-Go netprobe tool (no scapy): each out frame's dst==in src and src==in dst.
+    let netprobe = if let Ok(bin) = std::env::var("NETPROBE_BIN") {
+        bin
+    } else {
+        // Build netprobe once into a temp location.
+        let tmp = std::env::temp_dir().join("netprobe");
+        let e2e_dir = format!("{root}/test/e2e");
+        let b = Command::new("go")
+            .args(["build", "-o", tmp.to_str().unwrap(), "./cmd/netprobe"])
+            .current_dir(&e2e_dir)
+            .env("CGO_ENABLED", "0")
+            .status()
+            .expect("build netprobe");
+        assert!(b.success(), "failed to build netprobe");
+        tmp.to_str().unwrap().to_owned()
+    };
+    let s = Command::new(&netprobe)
+        .args([
+            "pcap-verify",
+            "--in",
+            &input,
+            "--out",
+            &out,
+            "--mac-swap",
+            "--count",
+            "4",
+        ])
         .status()
-        .expect("scapy verify");
+        .expect("run netprobe pcap-verify");
     assert!(s.success(), "MAC-swap verification failed");
 }
