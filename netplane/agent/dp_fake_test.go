@@ -19,6 +19,9 @@ type recordingDP struct {
 	nbrNatWd map[string]bool
 	fwAdds   []fwCall
 	fwDels   []struct{ iface, ruleID string }
+	// fwReplace records the LAST ReplaceInterfaceFirewall call per interface (the full desired set),
+	// modelling the real dataplane where a replace overwrites the interface's entire rule set.
+	fwReplace map[string][]FwRuleWithID
 	// fwInstalled models the real dataplane: a rule id is unique per interface, and AddFwRule on an
 	// existing id fails (ALREADY_EXISTS) — so a correct reconcile must NOT re-add unchanged rules.
 	fwInstalled map[string]bool
@@ -65,6 +68,7 @@ func newRecordingDP() *recordingDP {
 		added: map[string]string{}, external: map[string]bool{}, withdrew: map[string]bool{},
 		nbrNat: map[string]string{}, nbrNatWd: map[string]bool{},
 		fwInstalled: map[string]bool{},
+		fwReplace:   map[string][]FwRuleWithID{},
 		lbBackends:  map[string][]string{},
 		natSrc:      map[string]natSrcCall{}, natSrcN: map[string]int{},
 		qos: map[string]qosCall{}, qosN: map[string]int{},
@@ -125,6 +129,22 @@ func (f *recordingDP) DelFwRule(_ context.Context, iface, ruleID string) error {
 	defer f.mu.Unlock()
 	delete(f.fwInstalled, iface+"|"+ruleID)
 	f.fwDels = append(f.fwDels, struct{ iface, ruleID string }{iface, ruleID})
+	return nil
+}
+func (f *recordingDP) ReplaceInterfaceFirewall(_ context.Context, iface string, rules []FwRuleWithID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Overwrite: the whole set for this interface becomes exactly `rules` (clears prior on empty).
+	f.fwReplace[iface] = append([]FwRuleWithID(nil), rules...)
+	// Keep fwInstalled consistent with a wholesale replace so any cross-checks stay accurate.
+	for k := range f.fwInstalled {
+		if len(k) > len(iface) && k[:len(iface)+1] == iface+"|" {
+			delete(f.fwInstalled, k)
+		}
+	}
+	for _, rr := range rules {
+		f.fwInstalled[iface+"|"+rr.ID] = true
+	}
 	return nil
 }
 func (f *recordingDP) WithdrawRoute(_ context.Context, vni uint32, prefix string) error {

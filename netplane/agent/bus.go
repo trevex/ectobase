@@ -31,6 +31,10 @@ type Dataplane interface {
 	AddFwRule(ctx context.Context, interfaceID, ruleID string, r FwRule) error
 	// DelFwRule removes a per-interface firewall rule by id.
 	DelFwRule(ctx context.Context, interfaceID, ruleID string) error
+	// ReplaceInterfaceFirewall replaces an interface's ENTIRE firewall rule set (ingress+egress,
+	// v4+v6) in one call. Declarative + restart-safe: the agent pushes the full desired set every
+	// reconcile, so a stale dataplane rule never survives an agent restart or in-place policy change.
+	ReplaceInterfaceFirewall(ctx context.Context, interfaceID string, rules []FwRuleWithID) error
 	// AddLbVip registers a load balancer VIP (id == VIP). vni is the WAN/public VNI (0 at the edge);
 	// lbUnderlay is the edge's own anycast underlay (unused-but-required for vni==0).
 	AddLbVip(ctx context.Context, id string, vni uint32, vip, lbUnderlay string, ports []LbPort) error
@@ -67,6 +71,13 @@ type FwRule struct {
 	DstPortMax uint32
 	Allow      bool // true = accept, false = drop
 	Egress     bool // true = egress rule, false = ingress
+}
+
+// FwRuleWithID pairs a stable rule id (slot order = list position) with a rule, for
+// ReplaceInterfaceFirewall.
+type FwRuleWithID struct {
+	ID   string
+	Rule FwRule
 }
 
 // LbPort is one LB service tuple for AddLbVip. Proto is the IP protocol number (6=TCP, 17=UDP).
@@ -663,6 +674,26 @@ func (d dpAdapter) AddFwRule(ctx context.Context, interfaceID, ruleID string, r 
 }
 func (d dpAdapter) DelFwRule(ctx context.Context, interfaceID, ruleID string) error {
 	_, err := d.c.DelFwRule(ctx, &dpv1.DelFwRuleRequest{InterfaceId: interfaceID, RuleId: ruleID})
+	return err
+}
+func (d dpAdapter) ReplaceInterfaceFirewall(ctx context.Context, interfaceID string, rules []FwRuleWithID) error {
+	specs := make([]*dpv1.FwRuleSpec, 0, len(rules))
+	for _, rr := range rules {
+		specs = append(specs, &dpv1.FwRuleSpec{
+			RuleId:     rr.ID,
+			SrcCidr:    rr.Rule.SrcCIDR,
+			DstCidr:    rr.Rule.DstCIDR,
+			Proto:      rr.Rule.Proto,
+			DstPortMin: rr.Rule.DstPortMin,
+			DstPortMax: rr.Rule.DstPortMax,
+			Allow:      rr.Rule.Allow,
+			Egress:     rr.Rule.Egress,
+		})
+	}
+	_, err := d.c.ReplaceInterfaceFirewall(ctx, &dpv1.ReplaceInterfaceFirewallRequest{
+		InterfaceId: interfaceID,
+		Rules:       specs,
+	})
 	return err
 }
 func (d dpAdapter) AddLbVip(ctx context.Context, id string, vni uint32, vip, lbUnderlay string, ports []LbPort) error {
