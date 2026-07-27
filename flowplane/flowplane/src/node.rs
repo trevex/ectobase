@@ -448,11 +448,26 @@ impl DataplaneNode for NodeService {
 
     async fn replace_interface_firewall(
         &self,
-        _req: Request<ReplaceInterfaceFirewallRequest>,
+        req: Request<ReplaceInterfaceFirewallRequest>,
     ) -> Result<Response<ReplaceInterfaceFirewallResponse>, Status> {
-        Err(Status::unimplemented(
-            "replace_interface_firewall not yet implemented",
-        ))
+        let attach = self
+            .attach
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
+            .clone();
+        let r = req.into_inner();
+        let (log_iface, log_n) = (r.interface_id.clone(), r.rules.len());
+        let resp = tokio::task::spawn_blocking(move || {
+            attach
+                .control
+                .with_core(|c| flowplane_node::replace_interface_firewall(c, &r))
+        })
+        .await
+        .map_err(|e| {
+            Status::internal(format!("replace_interface_firewall task panicked: {e}"))
+        })??;
+        println!("FW replace iface={log_iface} rules={log_n}");
+        Ok(Response::new(resp))
     }
 
     async fn configure_qo_s(

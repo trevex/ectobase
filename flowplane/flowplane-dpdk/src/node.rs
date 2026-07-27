@@ -806,11 +806,14 @@ impl DataplaneNode for DpdkNodeService {
 
     async fn replace_interface_firewall(
         &self,
-        _req: Request<pb::ReplaceInterfaceFirewallRequest>,
+        req: Request<pb::ReplaceInterfaceFirewallRequest>,
     ) -> Result<Response<pb::ReplaceInterfaceFirewallResponse>, Status> {
-        Err(Status::unimplemented(
-            "replace_interface_firewall not yet implemented",
-        ))
+        let r = req.into_inner();
+        let resp = {
+            let mut core = self.ctrl.lock();
+            flowplane_node::replace_interface_firewall(&mut core, &r)?
+        };
+        Ok(Response::new(resp))
     }
 
     async fn configure_qo_s(
