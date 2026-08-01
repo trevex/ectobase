@@ -47,8 +47,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&LoadBalancerList{},
 		&NATGateway{},
 		&NATGatewayList{},
-		&VirtualIP{},
-		&VirtualIPList{},
+		&FloatingIP{},
+		&FloatingIPList{},
 		&CompiledNIC{},
 		&CompiledNICList{},
 	)

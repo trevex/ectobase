@@ -21,7 +21,7 @@ node owns — is decided in `netplane` and pushed into BPF maps.
 ```mermaid
 flowchart TB
     subgraph cp["netplane (Go, Kubernetes)"]
-        crds["CRDs<br/>VPC · NetworkInterface · NetworkPolicy<br/>NATGateway · VirtualIP · LoadBalancer · VPCPeering"]
+        crds["CRDs<br/>VPC · NetworkInterface · NetworkPolicy<br/>NATGateway · FloatingIP · LoadBalancer · VPCPeering"]
         controller["controller<br/>(CompiledNIC / NATGateway reconcilers)"]
         reflector["reflector<br/>(central route bus broker)"]
         crds --> controller

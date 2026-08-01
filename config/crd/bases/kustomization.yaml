@@ -8,5 +8,5 @@ resources:
   - net.ectobase.dev_loadbalancers.yaml
   - net.ectobase.dev_natgateways.yaml
   - net.ectobase.dev_networkpolicies.yaml
-  - net.ectobase.dev_virtualips.yaml
+  - net.ectobase.dev_floatingips.yaml
   - net.ectobase.dev_vpcpeerings.yaml

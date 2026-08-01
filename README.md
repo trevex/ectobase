@@ -26,7 +26,7 @@ ectobase is two planes — the `flowplane` datapath and the `netplane` control p
 - **controller** (central) — controller-runtime reconcilers: the **NATGateway** port-block allocator and the **CompiledNIC** compiler that lowers `NetworkInterface` + `NetworkPolicy` into per-NIC firewall rules the agent programs.
 - **CNI** (`cni/`) — on pod ADD, resolves the pod's overlay VNI/IPs from the CRDs and calls the node's DataplaneNode gRPC (`AttachInterface`) to create the veth + program the datapath.
 
-**CRD API** (`net.ectobase.dev/v1alpha1`, in `api/`): `VPC`, `NetworkInterface`, `NetworkPolicy`, `NATGateway`, `VirtualIP`, `LoadBalancer`, `VPCPeering`, plus the controller-written `CompiledNIC`/`CompiledFirewall`/`CompiledNAT`/`CompiledLB`.
+**CRD API** (`net.ectobase.dev/v1alpha1`, in `api/`): `VPC`, `NetworkInterface`, `NetworkPolicy`, `NATGateway`, `FloatingIP`, `LoadBalancer`, `VPCPeering`, plus the controller-written `CompiledNIC`/`CompiledFirewall`/`CompiledNAT`/`CompiledLB`.
 
 ## Repository layout
 

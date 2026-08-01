@@ -13,7 +13,7 @@ The stack has two planes:
   per-node gRPC surface (`DataplaneNode`) that the control plane programs.
 - **netplane** — the Kubernetes **control plane**. Go, built on controller-runtime. It turns a small
   set of user-facing CRDs (`VPC`, `NetworkInterface`, `NetworkPolicy`, `LoadBalancer`, `NATGateway`,
-  `VirtualIP`, `VPCPeering`) into concrete per-NIC dataplane configuration and distributes overlay
+  `FloatingIP`, `VPCPeering`) into concrete per-NIC dataplane configuration and distributes overlay
   routes between nodes over a custom **route bus**.
 
 A [CNI plugin](./controlplane/cni.md) wires pods and VM launcher pods into the dataplane at sandbox

@@ -131,9 +131,9 @@ The `spec.edgeUnderlay` field is deprecated and ignored: the edge fleet
 self-advertises the egress default (and `64:ff9b::/96` for NAT64) via `EDGE_UNDERLAY`
 public records over the route bus. See [NAT gateway](../features/nat.md).
 
-### VirtualIP
+### FloatingIP
 
-A floating/movable virtual IP. Currently a scaffold type (`virtualip_types.go`) —
+A floating/movable virtual IP. Currently a scaffold type (`floatingip_types.go`) —
 registered in the API surface with empty spec/status.
 
 ### VPCPeering
