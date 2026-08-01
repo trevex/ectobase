@@ -4,7 +4,7 @@ The user-facing CRDs describe *intent* with selectors, references, and cross-obj
 convenient to author, but not what a per-node agent wants to consume. The **`CompiledNIC`** object is
 the lowered form: for each `NetworkInterface`, a single self-contained bundle of everything the
 dataplane needs for that interface. The node agent reads **only** `CompiledNIC` objects — never the
-raw `NetworkInterface`, `VPC`, `NetworkPolicy`, `LoadBalancer`, or `NATGateway`.
+raw `NetworkInterface`, `VPC`, `FirewallPolicy`, `LoadBalancer`, or `NATGateway`.
 
 This is deliberate. Keeping the agent's input to one object type per interface:
 
@@ -24,7 +24,7 @@ This is deliberate. Keeping the agent's input to one object type per interface:
 | `port` | the allocated dataplane port (tap / VF) |
 | `underlayRoute` | the NIC's allocated underlay `/128` (copied from the NIC's `status.underlayRoute`) |
 | `overlayIPs` | the guest overlay IP addresses |
-| `firewall` | compiled ingress/egress rules (from matching `NetworkPolicy` objects) |
+| `firewall` | compiled ingress/egress rules (from matching `FirewallPolicy` objects) |
 | `nat` | a list of `CompiledNATSource{sourceIP, natIP, portMin, portMax}` — one per allocated overlay IP |
 | `lb` | the load balancers this NIC backs (forwarding membership only) |
 | `peerImports` | peer VPC VNIs + import prefixes (from Ready `VPCPeering`s) |
@@ -41,7 +41,7 @@ everything that feeds a NIC's compiled form, and upserts one `CompiledNIC` per N
 ```mermaid
 flowchart TD
     NI["NetworkInterface"] --> C["Compile()"]
-    NP["NetworkPolicy<br/>(selector match)"] --> C
+    NP["FirewallPolicy<br/>(selector match)"] --> C
     LB["LoadBalancer<br/>(selector / ref match)"] --> C
     VP["VPCPeering<br/>(Ready, reciprocal)"] --> C
     NG["NATGateway<br/>(Status.Allocations)"] --> C
@@ -57,7 +57,7 @@ flowchart TD
 - **UnderlayRoute** is copied from the NIC's `status.underlayRoute`. (Nothing in the Go code writes
   that status field yet — the attach path is its intended writer; the compiler simply copies whatever
   is present, and the agent falls back to the node underlay while it is empty.)
-- **Firewall**: each `NetworkPolicy` whose `interfaceSelector` matches the NIC's labels contributes
+- **Firewall**: each `FirewallPolicy` whose `interfaceSelector` matches the NIC's labels contributes
   `CompiledFwRule`s. An unpolicied NIC gets a single allow-all rule; a policied NIC gets *only* its
   policy rules (deny-by-default for everything else). See [Distributed firewall](../features/firewall.md).
 - **NAT**: for each of the NIC's overlay IPs that a `NATGateway` has allocated a block to (looked up
@@ -66,7 +66,7 @@ flowchart TD
 - **LB** and **PeerImports** are resolved from matching `LoadBalancer`s and Ready `VPCPeering`s.
 
 The reconciler watches `NATGateway` and `VPC` with the default predicate (their relevant changes land
-in `.status`, which does not bump `.metadata.generation`), and watches `NetworkPolicy`/`LoadBalancer`
+in `.status`, which does not bump `.metadata.generation`), and watches `FirewallPolicy`/`LoadBalancer`
 by generation. A no-op recompile (identical spec) writes nothing, avoiding resourceVersion churn.
 
 ## How the agent consumes it

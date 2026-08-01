@@ -39,15 +39,15 @@ func testNIC() *netv1.NetworkInterface {
 	return nic
 }
 
-// testPolicy builds a NetworkPolicy that selects {role: frontend} and allows TCP:443 from 10.0.0.0/24.
-func testPolicy() netv1.NetworkPolicy {
-	pol := netv1.NetworkPolicy{}
+// testPolicy builds a FirewallPolicy that selects {role: frontend} and allows TCP:443 from 10.0.0.0/24.
+func testPolicy() netv1.FirewallPolicy {
+	pol := netv1.FirewallPolicy{}
 	pol.Name = "allow-https"
 	pol.Namespace = "default"
 	pol.Spec.InterfaceSelector = &metav1.LabelSelector{
 		MatchLabels: map[string]string{"role": "frontend"},
 	}
-	pol.Spec.Ingress = []netv1.NetworkPolicyRule{
+	pol.Spec.Ingress = []netv1.FirewallPolicyRule{
 		{
 			CIDR:   "10.0.0.0/24",
 			Proto:  "TCP",
@@ -62,7 +62,7 @@ func TestCompile_ProducesCompiledNIC(t *testing.T) {
 	nic := testNIC()
 	pol := testPolicy()
 
-	c := Compile(nic, nic.Status.VNI, []netv1.NetworkPolicy{pol}, nil, nil, nil)
+	c := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{pol}, nil, nil, nil)
 
 	if c.Spec.VNI != 100 {
 		t.Fatalf("VNI = %d, want 100", c.Spec.VNI)
@@ -96,7 +96,7 @@ func TestCompile_SelectorMismatch(t *testing.T) {
 	nic.Labels = map[string]string{"role": "backend"}
 	pol := testPolicy() // selects {role: frontend}
 
-	c := Compile(nic, nic.Status.VNI, []netv1.NetworkPolicy{pol}, nil, nil, nil)
+	c := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{pol}, nil, nil, nil)
 
 	// No policy selects this NIC, so it is unpolicied → gets the k8s default-allow-all rules
 	// (both v4 and v6 families) in each direction.
@@ -118,7 +118,7 @@ func TestCompile_UnpoliciedGetsAllowAll(t *testing.T) {
 		t.Fatalf("expected v4+v6 allow-all egress rules, got %+v", c.Spec.Firewall.Egress)
 	}
 	// A policied NIC keeps ONLY its policy rules — no allow-all appended.
-	c2 := Compile(nic, nic.Status.VNI, []netv1.NetworkPolicy{testPolicy()}, nil, nil, nil)
+	c2 := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{testPolicy()}, nil, nil, nil)
 	for _, r := range c2.Spec.Firewall.Ingress {
 		if r.CIDR == "0.0.0.0/0" && r.Port == 0 && r.Proto == "" {
 			t.Fatalf("policied NIC must not get allow-all: %+v", c2.Spec.Firewall.Ingress)
@@ -161,7 +161,7 @@ func TestCompile_RulelessGetsBothFamilies(t *testing.T) {
 
 	// A direction WITH an explicit rule gets NEITHER default-allow. testPolicy() sets only
 	// ingress, so ingress is governed (no injection) while egress remains ruleless.
-	c2 := Compile(nic, nic.Status.VNI, []netv1.NetworkPolicy{testPolicy()}, nil, nil, nil)
+	c2 := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{testPolicy()}, nil, nil, nil)
 	if hasAllowCIDR(c2.Spec.Firewall.Ingress, "0.0.0.0/0") || hasAllowCIDR(c2.Spec.Firewall.Ingress, "::/0") {
 		t.Fatalf("policied ingress must not get any default-allow: %+v", c2.Spec.Firewall.Ingress)
 	}
@@ -175,7 +175,7 @@ func TestCompile_WritesFixture(t *testing.T) {
 	nic := testNIC()
 	pol := testPolicy()
 
-	c := Compile(nic, nic.Status.VNI, []netv1.NetworkPolicy{pol}, nil, nil, nil)
+	c := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{pol}, nil, nil, nil)
 
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {

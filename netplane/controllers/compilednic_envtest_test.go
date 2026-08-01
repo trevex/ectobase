@@ -86,14 +86,14 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 		nic.Spec.NodeName = &nodeName
 		mustCreate(ctx, t, direct, nic)
 
-		// Create a matching NetworkPolicy with one ingress Allow rule.
-		pol := &netv1.NetworkPolicy{}
+		// Create a matching FirewallPolicy with one ingress Allow rule.
+		pol := &netv1.FirewallPolicy{}
 		pol.Name = "allow-https"
 		pol.Namespace = "default"
 		pol.Spec.InterfaceSelector = &metav1.LabelSelector{
 			MatchLabels: map[string]string{"role": "frontend"},
 		}
-		pol.Spec.Ingress = []netv1.NetworkPolicyRule{
+		pol.Spec.Ingress = []netv1.FirewallPolicyRule{
 			{CIDR: "10.0.0.0/24", Proto: "TCP", Port: 443, Action: "Allow"},
 		}
 		mustCreate(ctx, t, direct, pol)
@@ -150,7 +150,7 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 }
 
 // TestCompiledNICControllerEnvtest_DeletedPolicyClearsRule proves — on a clean in-process apiserver
-// (zero live pollution) — that DELETING a NetworkPolicy CLEARS its rule from the CompiledNIC. It:
+// (zero live pollution) — that DELETING a FirewallPolicy CLEARS its rule from the CompiledNIC. It:
 //   - creates a NIC labeled {side: green},
 //   - applies a policy selecting side=green with an ingress Deny of 0.0.0.0/0,
 //   - waits until the CompiledNIC's Ingress contains that Deny,
@@ -160,7 +160,7 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 //
 // This settles a prior claim (from a heavily-polluted, long-running controller pod) that the
 // controller ACCUMULATES rules from deleted policies. The controller's Reconcile Lists policies fresh
-// and REPLACES existing.Spec, and the NetworkPolicy Delete event re-enqueues affected NICs
+// and REPLACES existing.Spec, and the FirewallPolicy Delete event re-enqueues affected NICs
 // (GenerationChangedPredicate only overrides Update, so Delete passes) — so the rule should clear.
 //
 // Skips cleanly when KUBEBUILDER_ASSETS is unset (i.e. outside the nix devShell).
@@ -223,14 +223,14 @@ func TestCompiledNICControllerEnvtest_DeletedPolicyClearsRule(t *testing.T) {
 	nic.Spec.NodeName = &nodeName
 	mustCreate(ctx, t, direct, nic)
 
-	// A NetworkPolicy selecting side=green with one ingress Deny of 0.0.0.0/0.
-	pol := &netv1.NetworkPolicy{}
+	// A FirewallPolicy selecting side=green with one ingress Deny of 0.0.0.0/0.
+	pol := &netv1.FirewallPolicy{}
 	pol.Name = "deny-all-green"
 	pol.Namespace = "default"
 	pol.Spec.InterfaceSelector = &metav1.LabelSelector{
 		MatchLabels: map[string]string{"side": "green"},
 	}
-	pol.Spec.Ingress = []netv1.NetworkPolicyRule{
+	pol.Spec.Ingress = []netv1.FirewallPolicyRule{
 		{CIDR: "0.0.0.0/0", Action: "Deny"},
 	}
 	mustCreate(ctx, t, direct, pol)

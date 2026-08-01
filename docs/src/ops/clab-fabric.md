@@ -148,7 +148,7 @@ leave guests attached + routes on the reflector. Running them back-to-back colli
 `INTERFACES` key and serves stale routes. **Between scenarios, clean both/all clusters:**
 
 ```bash
-kubectl --kubeconfig <kc> delete vpc,networkinterface,loadbalancer,natgateway,networkpolicy,vpcpeering,compilednic --all -n default
+kubectl --kubeconfig <kc> delete vpc,networkinterface,loadbalancer,natgateway,firewallpolicy,vpcpeering,compilednic --all -n default
 # detach every guest on every node (grpc DetachInterface) + `ip netns del <id>`
 ```
 

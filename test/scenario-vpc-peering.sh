@@ -5,10 +5,10 @@
 #
 #   1. DENY-BY-DEFAULT (two-step): a mutual-consent VPCPeering pair imports routes between VPCs, but
 #      the ingress firewall on the destination NIC is still DENY-BY-DEFAULT. A cross-VPC ping MUST
-#      FAIL until an explicit NetworkPolicy allows the peer CIDR. The route import is reachability
+#      FAIL until an explicit FirewallPolicy allows the peer CIDR. The route import is reachability
 #      only — it grants no firewall permission. (This is the deliberate two-step.)
 #
-#   2. REACHABILITY + POLICY: once a NetworkPolicy ingress-allows the peer CIDR on the destination
+#   2. REACHABILITY + POLICY: once a FirewallPolicy ingress-allows the peer CIDR on the destination
 #      NIC, the cross-VPC ping MUST SUCCEED. The route was already imported; the firewall now
 #      permits it.
 #
@@ -29,7 +29,7 @@
 #
 #   After the peering is Ready:
 #     • green's ingress firewall still blocks 10.0.10.x  →  cross-VPC ping FAILS (Assertion 1)
-#     • Apply NetworkPolicy on green's NIC allowing ingress from 10.0.10.0/24 → ping SUCCEEDS (Assertion 2)
+#     • Apply FirewallPolicy on green's NIC allowing ingress from 10.0.10.0/24 → ping SUCCEEDS (Assertion 2)
 #     • green-local@10.0.10.77 is a LOCAL interface on GREEN_NODE (VNI-green); ListInterfaces must
 #       report it (Assertion 3 — overlap precedence via INTERFACES map, no bpftool needed)
 #
@@ -87,7 +87,7 @@ OVERLAP_IP=10.0.10.77
 PEERING_BG=peering-blue-to-green
 PEERING_GB=peering-green-to-blue
 
-# NetworkPolicy names.
+# FirewallPolicy names.
 NP_GREEN_DENY=green-deny-all
 NP_GREEN_ALLOW=green-allow-blue
 
@@ -270,10 +270,10 @@ sudo docker cp /tmp/busybox-musl "$BLUE_NODE":/busybox 2>/dev/null
 info "busybox staged at /busybox on $BLUE_NODE"
 
 # ---------------------------------------------------------------------------
-# [2b] Apply deny-all ingress NetworkPolicy on green's NICs BEFORE the peering.
+# [2b] Apply deny-all ingress FirewallPolicy on green's NICs BEFORE the peering.
 #
 # WHY: the CompiledNIC compiler uses "allow-until-selected" semantics — any NIC
-# that no NetworkPolicy selects gets an implicit allow-all ingress fallback rule.
+# that no FirewallPolicy selects gets an implicit allow-all ingress fallback rule.
 # Without an explicit selecting policy, Assertion 1 (deny-by-default) would always
 # fail because the firewall would permit the peered ping.  Applying this deny-all
 # first causes the compiler to emit a real deny rule (the direction is no longer
@@ -282,7 +282,7 @@ info "busybox staged at /busybox on $BLUE_NODE"
 echo "== [2b] apply deny-all ingress policy on green NICs (suppress allow-until-selected default) =="
 cat <<YAML | kc apply -f - >/dev/null || { echo "FAIL: apply $NP_GREEN_DENY"; exit 1; }
 apiVersion: net.ectobase.dev/v1alpha1
-kind: NetworkPolicy
+kind: FirewallPolicy
 metadata: {name: $NP_GREEN_DENY, namespace: default}
 spec:
   interfaceSelector: {matchLabels: {side: green}}
@@ -357,13 +357,11 @@ fi
 # would introduce rule-ordering ambiguity; replacing it avoids that entirely.
 # ---------------------------------------------------------------------------
 echo "== [5] delete $NP_GREEN_DENY; apply $NP_GREEN_ALLOW ($BLUE_SUBNET ingress on green) =="
-# Fully-qualify the resource: the cluster also has core networkpolicies.networking.k8s.io (and
-# cilium's), so a bare "networkpolicy" is AMBIGUOUS and kubectl resolves it to the core group —
-# silently deleting nothing and leaving the ectobase deny alive to shadow the allow (deny-by-index).
-kc delete networkpolicies.net.ectobase.dev "$NP_GREEN_DENY" >/dev/null 2>&1 || true
-cat <<YAML | kc apply -f - >/dev/null || { echo "FAIL: apply NetworkPolicy"; exit 1; }
+# firewallpolicy is an unambiguous resource name (no core-k8s collision), so a bare delete works.
+kc delete firewallpolicy "$NP_GREEN_DENY" >/dev/null 2>&1 || true
+cat <<YAML | kc apply -f - >/dev/null || { echo "FAIL: apply FirewallPolicy"; exit 1; }
 apiVersion: net.ectobase.dev/v1alpha1
-kind: NetworkPolicy
+kind: FirewallPolicy
 metadata: {name: $NP_GREEN_ALLOW, namespace: default}
 spec:
   interfaceSelector: {matchLabels: {side: green}}
@@ -406,7 +404,7 @@ fi
 # [8] Cleanup
 # ---------------------------------------------------------------------------
 echo "== [8] cleanup =="
-kc delete networkpolicies.net.ectobase.dev "$NP_GREEN_DENY"  "$NP_GREEN_ALLOW"  >/dev/null 2>&1 || true
+kc delete firewallpolicy "$NP_GREEN_DENY"  "$NP_GREEN_ALLOW"  >/dev/null 2>&1 || true
 kc delete vpcpeering    "$PEERING_BG" "$PEERING_GB"          >/dev/null 2>&1 || true
 kc delete networkinterface "$BLUE_GUEST_NIC" "$GREEN_GUEST_NIC" "$OVERLAP_NIC" >/dev/null 2>&1 || true
 kc delete vpc "$BLUE_VPC" "$GREEN_VPC"                       >/dev/null 2>&1 || true

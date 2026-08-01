@@ -15,7 +15,7 @@ The design leans on a few deliberate choices:
   responsibility. (The underlay `/128` per NIC *is* platform-allocated.)
 - **VNI as a central-allocated global space.** A `VPC` gets a VXLAN network
   identifier from a single global pool, either pinned or auto-allocated.
-- **Selector/ref-based attachment.** `NetworkPolicy`, `LoadBalancer`, and
+- **Selector/ref-based attachment.** `FirewallPolicy`, `LoadBalancer`, and
   `VPCPeering` select or reference NICs rather than being fields on them, which keeps
   the NIC stable as policy changes.
 
@@ -23,7 +23,7 @@ The design leans on a few deliberate choices:
 flowchart TB
     vpc["VPC<br/>(VNI, default firewall posture)"]
     ni["NetworkInterface<br/>(VPCRef, IPs, QoS)"]
-    np["NetworkPolicy<br/>(interfaceSelector, ingress/egress)"]
+    np["FirewallPolicy<br/>(interfaceSelector, ingress/egress)"]
     lb["LoadBalancer<br/>(VIP, ports, targets)"]
     nat["NATGateway<br/>(VPCRef, publicIPs)"]
     vp["VPCPeering<br/>(vpcRef, peerVpcRef, exposedPrefixes)"]
@@ -83,16 +83,16 @@ qdisc, with an optional policed `publicMbps` sub-cap for external/NATed traffic)
 token-bucket-policed **ingress** rate. All programmed via `DataplaneNode.ConfigureQoS`.
 See [QoS: EDT shaping & policing](../features/qos.md).
 
-### NetworkPolicy
+### FirewallPolicy
 
-Selector-based distributed firewall rules (`networkpolicy_types.go`).
+Selector-based distributed firewall rules (`firewallpolicy_types.go`).
 
 | Field | Meaning |
 |---|---|
 | `spec.interfaceSelector` | Label selector choosing the NICs this policy applies to. |
-| `spec.ingress` / `spec.egress` | Ordered lists of `NetworkPolicyRule`. |
+| `spec.ingress` / `spec.egress` | Ordered lists of `FirewallPolicyRule`. |
 
-Each `NetworkPolicyRule` is `{cidr, proto, port, action}`, where `cidr` is the source
+Each `FirewallPolicyRule` is `{cidr, proto, port, action}`, where `cidr` is the source
 (ingress) or destination (egress) match, `proto` is `TCP`/`UDP`/`ICMP`/`""`(any), and
 `action` is `Allow` or `Deny`. The datapath is deny-by-default; the compiler
 materializes k8s "open-until-selected" as an explicit allow-all for any NIC no policy
@@ -131,9 +131,9 @@ The `spec.edgeUnderlay` field is deprecated and ignored: the edge fleet
 self-advertises the egress default (and `64:ff9b::/96` for NAT64) via `EDGE_UNDERLAY`
 public records over the route bus. See [NAT gateway](../features/nat.md).
 
-### VirtualIP
+### FloatingIP
 
-A floating/movable virtual IP. Currently a scaffold type (`virtualip_types.go`) —
+A floating/movable virtual IP. Currently a scaffold type (`floatingip_types.go`) —
 registered in the API surface with empty spec/status.
 
 ### VPCPeering
@@ -148,7 +148,7 @@ One direction of a mutual-consent peering between two VPCs (`vpcpeering_types.go
 | `status.state` | `Pending` (awaiting the reciprocal), `Ready` (both sides consent), or `Invalid`. |
 
 A peering is **reachability only** — it never grants firewall permission (that comes
-solely from `NetworkPolicy`, a deliberate two-step). A mutual peering requires a
+solely from `FirewallPolicy`, a deliberate two-step). A mutual peering requires a
 reciprocal pair (A→B and B→A). See [VPC peering](../features/vpc-peering.md).
 
 ## The internal type: CompiledNIC
@@ -161,7 +161,7 @@ NIC except the dynamic routes learned over the route bus. It is written by contr
 `CompiledNICSpec` carries:
 
 - `nodeName`, `nicRef`, `vni`, `port`, `overlayIPs` — identity and placement;
-- `firewall` — the resolved ingress/egress rules (from selected `NetworkPolicy`s,
+- `firewall` — the resolved ingress/egress rules (from selected `FirewallPolicy`s,
   plus the materialized default posture);
 - `nat` — the `(natIP, portMin, portMax)` block for this NIC, if any;
 - `lb` — the VIPs (and ports) this NIC backs (forwarding membership only, no firewall

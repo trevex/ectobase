@@ -4,20 +4,22 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: virtualips.net.ectobase.dev
+  name: floatingips.net.ectobase.dev
 spec:
   group: net.ectobase.dev
   names:
-    kind: VirtualIP
-    listKind: VirtualIPList
-    plural: virtualips
-    singular: virtualip
+    kind: FloatingIP
+    listKind: FloatingIPList
+    plural: floatingips
+    shortNames:
+    - fip
+    singular: floatingip
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: VirtualIP is a scaffold-only resource. Floating/movable virtual
+        description: FloatingIP is a scaffold-only resource. Floating/movable virtual
           IP (§3.7).
         properties:
           apiVersion:
@@ -39,14 +41,14 @@ spec:
             type: object
           spec:
             description: |-
-              VirtualIPSpec is the desired state of a VirtualIP.
+              FloatingIPSpec is the desired state of a FloatingIP.
 
               SCAFFOLD ONLY: intentionally empty. Floating/movable virtual IP (§3.7).
               Fleshed out in a later plan (YAGNI here).
             type: object
           status:
             description: |-
-              VirtualIPStatus is the observed state of a VirtualIP.
+              FloatingIPStatus is the observed state of a FloatingIP.
 
               SCAFFOLD ONLY: intentionally empty.
             type: object

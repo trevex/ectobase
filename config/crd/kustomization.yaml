@@ -7,8 +7,8 @@ resources:
 - bases/net.ectobase.dev_vpcs.yaml
 - bases/net.ectobase.dev_networkinterfaces.yaml
 - bases/net.ectobase.dev_vpcpeerings.yaml
-- bases/net.ectobase.dev_networkpolicies.yaml
+- bases/net.ectobase.dev_firewallpolicies.yaml
 - bases/net.ectobase.dev_loadbalancers.yaml
 - bases/net.ectobase.dev_natgateways.yaml
-- bases/net.ectobase.dev_virtualips.yaml
+- bases/net.ectobase.dev_floatingips.yaml
 - bases/net.ectobase.dev_compilednics.yaml

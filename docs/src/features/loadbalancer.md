@@ -67,10 +67,10 @@ the chosen backend's node, still VIP-addressed.
 Because DSR keeps `inner dst = VIP`, the backend's **ingress firewall** evaluates the packet
 with `dst = VIP` — not the backend's overlay IP. The firewall is
 [deny-by-default](firewall.md), and **LB membership generates no firewall rule**. So a
-`NetworkPolicy` that allows traffic to the backend's own overlay IP does **not** cover its
+`FirewallPolicy` that allows traffic to the backend's own overlay IP does **not** cover its
 LB traffic, and deny-by-default drops it.
 
-The fix is an **explicit `VIP:port` allow rule** in the backend's ingress `NetworkPolicy`.
+The fix is an **explicit `VIP:port` allow rule** in the backend's ingress `FirewallPolicy`.
 This must be authored as policy; the LB never creates it. This is the same "reachability is
 not permission" split as the rest of the firewall: being an LB backend makes you reachable
 at the VIP, but only an explicit rule admits the traffic. (This exact failure — "LB packets
@@ -113,7 +113,7 @@ datapath: lb_select_forward — maglev select backend /128
 
 - **CRD → compiler.** `Compile()` records LB membership on each matched backend NIC's
   `CompiledNIC.Spec.LB`. This is forwarding membership only; permission still comes solely
-  from `NetworkPolicy`.
+  from `FirewallPolicy`.
 - **Compiler → agent.** Backend nodes announce the VIP as an anycast route (E/W) and publish
   an `LB_VIP` record; the edge programs the maglev VIP (N/S) and learns backends from those
   records.

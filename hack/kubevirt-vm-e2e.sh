@@ -98,10 +98,10 @@ k -n default describe pod "$POD" 2>/dev/null | grep -A6 Events: | tail -8 || tru
 
 say "firewall via the real policy path (deny-by-default dataplane)"
 # Both endpoints are NetworkInterfaces, so the CompiledNICReconciler produced a CompiledNIC for each
-# with an ALLOW-ALL default (no NetworkPolicy selects them) and the netplane-agent's fwreconcile
+# with an ALLOW-ALL default (no FirewallPolicy selects them) and the netplane-agent's fwreconcile
 # programs FW_META, resolving the interface by overlay IP. Restart the agent so it reconciles AFTER
 # both interfaces are attached in the dataplane (avoids the attach-vs-reconcile race). To restrict
-# traffic, apply a NetworkPolicy with an interfaceSelector matching these NICs' labels.
+# traffic, apply a FirewallPolicy with an interfaceSelector matching these NICs' labels.
 k -n default get compilednic default-nic-vm -o jsonpath='{.spec.firewall}{"\n"}' 2>/dev/null | sed 's/^/  nic-vm firewall: /'
 k -n ectobase-system rollout restart ds/netplane-agent 2>&1 | tail -1
 k -n ectobase-system rollout status ds/netplane-agent --timeout=90s 2>&1 | tail -1

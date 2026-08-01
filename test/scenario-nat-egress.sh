@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # test/scenario-nat-egress.sh — Scenario B: a container in a PRIVATE VPC egresses to an external
 # HTTP server through its own hypervisor's distributed SNAT + the HA VyOS WAN edge, gated by an
-# explicit EGRESS NetworkPolicy (egress-initiated traffic is deny-by-default; the policy grants it).
+# explicit EGRESS FirewallPolicy (egress-initiated traffic is deny-by-default; the policy grants it).
 #
 # Correct-wiring notes learned the hard way:
 #   * The datapath firewall is DENY-BY-DEFAULT. The agent programs a NIC's firewall keyed by the
 #     NIC's NAME (CompiledNIC.NICRef.Name → AddFwRule iface=<name>). So the dataplane interface MUST
 #     be attached with interface_id == the NetworkInterface's metadata.name, or the agent's rules
 #     never reach the attached interface and the datapath drops everything.
-#   * Egress-INITIATED flows (this pod curling out) need an explicit egress-allow NetworkPolicy.
+#   * Egress-INITIATED flows (this pod curling out) need an explicit egress-allow FirewallPolicy.
 #     (Ingress-established flows get their egress replies for free via the reverse conntrack entry.)
 #
 # PREREQ: fabric up (hack/clab-up.sh) + netplane stack on k01. Needs root + kubectl + grpcurl image.
@@ -30,7 +30,7 @@ echo "== [0] kubeconfig + stack =="
 sudo -E env "PATH=$PATH" kind get kubeconfig --name k01 > "$K1" 2>/dev/null
 kc -n ectobase-system get ds flowplane >/dev/null 2>&1 || fail "netplane stack not deployed on k01"
 
-echo "== [1] CRDs: VPC + private NIC + NATGateway + EGRESS NetworkPolicy =="
+echo "== [1] CRDs: VPC + private NIC + NATGateway + EGRESS FirewallPolicy =="
 cat <<YAML | kc apply -f - >/dev/null || fail "apply CRs"
 apiVersion: net.ectobase.dev/v1alpha1
 kind: VPC
@@ -48,7 +48,7 @@ metadata: {name: egress-gw, namespace: default}
 spec: {vpcRef: {name: blue}, publicIPs: [$NAT_IP], portsPerSource: 1024}
 ---
 apiVersion: net.ectobase.dev/v1alpha1
-kind: NetworkPolicy
+kind: FirewallPolicy
 metadata: {name: natpod-egress, namespace: default}
 spec:
   interfaceSelector: {matchLabels: {app: natpod}}
@@ -79,7 +79,7 @@ kc patch networkinterface "$NIC" --subresource=status --type=merge -p "{\"status
 kc -n ectobase-system rollout restart ds/netplane-agent >/dev/null 2>&1
 kc -n ectobase-system rollout status ds/netplane-agent --timeout=60s >/dev/null 2>&1
 
-echo "== [4] agent programs local SNAT + EGRESS firewall (from the NetworkPolicy) =="
+echo "== [4] agent programs local SNAT + EGRESS firewall (from the FirewallPolicy) =="
 XW=""
 for _ in $(seq 1 40); do
   XW=$(sudo docker exec "$SRC_NODE" crictl ps 2>/dev/null | grep ' flowplane ' | awk '{print $1}' | head -1)

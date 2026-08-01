@@ -7,7 +7,7 @@
 #
 # Wiring notes (fully CRD/bus-driven — no manual dataplane calls):
 #   * Backend attaches with interface_id == NIC name ("web") so the agent's firewall (from the
-#     INGRESS NetworkPolicy) reaches the attached interface (deny-by-default otherwise).
+#     INGRESS FirewallPolicy) reaches the attached interface (deny-by-default otherwise).
 #   * Edge learns the VIP from the LoadBalancer CRD (agent ReconcileLB -> AddLbVip).
 #   * Backend registration on the edge (AddLbBackend) rides PUBLIC_KIND_LB_VIP over routebus: the
 #     backend node's agent DesiredPublic announces one LB_VIP record (owner = the NIC's underlay
@@ -32,7 +32,7 @@ echo "== [0] kubeconfig + stack =="
 sudo -E env "PATH=$PATH" kind get kubeconfig --name k01 > "$K1" 2>/dev/null
 kc -n ectobase-system get ds flowplane >/dev/null 2>&1 || fail "netplane stack not deployed on k01"
 
-echo "== [1] CRDs: VPC + backend NIC + LoadBalancer + INGRESS NetworkPolicy (:80) =="
+echo "== [1] CRDs: VPC + backend NIC + LoadBalancer + INGRESS FirewallPolicy (:80) =="
 cat <<YAML | kc apply -f - >/dev/null || fail "apply CRs"
 apiVersion: net.ectobase.dev/v1alpha1
 kind: VPC
@@ -53,7 +53,7 @@ spec:
   targetRefs: [{name: $NIC}]
 ---
 apiVersion: net.ectobase.dev/v1alpha1
-kind: NetworkPolicy
+kind: FirewallPolicy
 metadata: {name: web-ingress, namespace: default}
 spec:
   interfaceSelector: {matchLabels: {app: web}}

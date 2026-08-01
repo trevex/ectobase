@@ -82,10 +82,10 @@ rules:
   - apiGroups: ["net.ectobase.dev"]
     resources: ["networkinterfaces"]
     verbs: ["get", "list", "watch"]
-  # The CompiledNICReconciler reads NetworkInterfaces + NetworkPolicies + LoadBalancers
+  # The CompiledNICReconciler reads NetworkInterfaces + FirewallPolicies + LoadBalancers
   # and writes CompiledNIC objects (owned by the NIC) with their status.
   - apiGroups: ["net.ectobase.dev"]
-    resources: ["networkpolicies", "loadbalancers"]
+    resources: ["firewallpolicies", "loadbalancers"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["net.ectobase.dev"]
     resources: ["compilednics"]
