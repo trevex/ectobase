@@ -68,7 +68,7 @@ func (r *Reconciler) ReconcileFirewall(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// compiledToFw lowers a CompiledFwRule to the dataplane FwRule. k8s NetworkPolicy semantics: an
+// compiledToFw lowers a CompiledFwRule to the dataplane FwRule. k8s NetworkPolicy-style semantics: an
 // INGRESS rule's peer CIDR is the SOURCE (who may reach us) and an EGRESS rule's is the DESTINATION;
 // the port is always the destination port. (An allow-all `0.0.0.0/0` is symmetric either way.)
 func compiledToFw(cr netv1.CompiledFwRule, egress bool) FwRule {

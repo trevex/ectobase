@@ -40,7 +40,7 @@ type PeerImportSpec struct {
 // (natBySource, keyed by source overlay IP), records a CompiledNATSource. peerings is a pre-resolved
 // slice of PeerImportSpecs; only entries whose VPCName matches the NIC's VPC are emitted. The
 // returned CompiledNIC has no Status set (caller fills that in if needed).
-func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.NetworkPolicy, lbs []netv1.LoadBalancer, peerings []PeerImportSpec, natBySource map[string]netv1.NATAllocation) netv1.CompiledNIC {
+func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPolicy, lbs []netv1.LoadBalancer, peerings []PeerImportSpec, natBySource map[string]netv1.NATAllocation) netv1.CompiledNIC {
 	nodeName := ""
 	if nic.Spec.NodeName != nil {
 		nodeName = *nic.Spec.NodeName
@@ -122,7 +122,7 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.NetworkPol
 
 	// LB membership: for each LoadBalancer whose selector matches this NIC's labels or whose
 	// TargetRefs name it, record a CompiledLB. This is forwarding membership ONLY — it adds no
-	// firewall rule (permission comes solely from NetworkPolicy).
+	// firewall rule (permission comes solely from FirewallPolicy).
 	for i := range lbs {
 		lb := &lbs[i]
 		if !lbMatchesNIC(lb, nic, nicLabels) {
@@ -234,9 +234,9 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.Client.Get(ctx, req.NamespacedName, &nic); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	var policies netv1.NetworkPolicyList
+	var policies netv1.FirewallPolicyList
 	if err := r.Client.List(ctx, &policies, client.InNamespace(nic.Namespace)); err != nil {
-		return ctrl.Result{}, fmt.Errorf("list networkpolicies: %w", err)
+		return ctrl.Result{}, fmt.Errorf("list firewallpolicies: %w", err)
 	}
 	var lbs netv1.LoadBalancerList
 	if err := r.Client.List(ctx, &lbs, client.InNamespace(nic.Namespace)); err != nil {
@@ -286,12 +286,12 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 // SetupWithManager registers the CompiledNICReconciler with the controller-runtime Manager.
 // It watches NetworkInterfaces directly (Owns their CompiledNICs) and re-enqueues NICs
-// whenever a matching NetworkPolicy changes.
+// whenever a matching FirewallPolicy changes.
 func (r *CompiledNICReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&netv1.NetworkInterface{}).
 		Owns(&netv1.CompiledNIC{}).
-		Watches(&netv1.NetworkPolicy{}, handler.EnqueueRequestsFromMapFunc(r.nicsForPolicy),
+		Watches(&netv1.FirewallPolicy{}, handler.EnqueueRequestsFromMapFunc(r.nicsForFirewallPolicy),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&netv1.LoadBalancer{}, handler.EnqueueRequestsFromMapFunc(r.nicsForLB),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
@@ -354,10 +354,10 @@ func (r *CompiledNICReconciler) nicsForVPC(ctx context.Context, obj client.Objec
 	return reqs
 }
 
-// nicsForPolicy maps a NetworkPolicy event to reconcile requests for every
+// nicsForFirewallPolicy maps a FirewallPolicy event to reconcile requests for every
 // NetworkInterface in the same namespace whose labels match the policy's InterfaceSelector.
-func (r *CompiledNICReconciler) nicsForPolicy(ctx context.Context, obj client.Object) []reconcile.Request {
-	pol, ok := obj.(*netv1.NetworkPolicy)
+func (r *CompiledNICReconciler) nicsForFirewallPolicy(ctx context.Context, obj client.Object) []reconcile.Request {
+	pol, ok := obj.(*netv1.FirewallPolicy)
 	if !ok || pol.Spec.InterfaceSelector == nil {
 		return nil
 	}

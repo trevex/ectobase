@@ -4,20 +4,22 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: networkpolicies.net.ectobase.dev
+  name: firewallpolicies.net.ectobase.dev
 spec:
   group: net.ectobase.dev
   names:
-    kind: NetworkPolicy
-    listKind: NetworkPolicyList
-    plural: networkpolicies
-    singular: networkpolicy
+    kind: FirewallPolicy
+    listKind: FirewallPolicyList
+    plural: firewallpolicies
+    shortNames:
+    - fwpol
+    singular: firewallpolicy
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: NetworkPolicy is a scaffold-only resource. Selector-based distributed
+        description: FirewallPolicy is a scaffold-only resource. Selector-based distributed
           firewall (§3.4).
         properties:
           apiVersion:
@@ -38,14 +40,14 @@ spec:
           metadata:
             type: object
           spec:
-            description: NetworkPolicySpec is the desired state of a NetworkPolicy.
+            description: FirewallPolicySpec is the desired state of a FirewallPolicy.
             properties:
               egress:
                 description: Egress is the ordered list of egress rules to apply to
                   selected interfaces.
                 items:
-                  description: NetworkPolicyRule is a single allow/deny rule for ingress
-                    or egress traffic.
+                  description: FirewallPolicyRule is a single allow/deny rule for
+                    ingress or egress traffic.
                   properties:
                     action:
                       description: Action is "Allow" or "Deny".
@@ -72,8 +74,8 @@ spec:
                 description: Ingress is the ordered list of ingress rules to apply
                   to selected interfaces.
                 items:
-                  description: NetworkPolicyRule is a single allow/deny rule for ingress
-                    or egress traffic.
+                  description: FirewallPolicyRule is a single allow/deny rule for
+                    ingress or egress traffic.
                   properties:
                     action:
                       description: Action is "Allow" or "Deny".
@@ -146,7 +148,7 @@ spec:
             type: object
           status:
             description: |-
-              NetworkPolicyStatus is the observed state of a NetworkPolicy.
+              FirewallPolicyStatus is the observed state of a FirewallPolicy.
 
               SCAFFOLD ONLY: intentionally empty.
             type: object

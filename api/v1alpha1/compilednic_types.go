@@ -8,9 +8,9 @@ import (
 )
 
 // CompiledNICSpec is the fully lowered per-NIC STATIC POLICY the control plane hands to a node:
-// identity, VNI, overlay IPs, firewall rules (resolved from NetworkPolicy selectors), egress-SNAT
+// identity, VNI, overlay IPs, firewall rules (resolved from FirewallPolicy selectors), egress-SNAT
 // allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC +
-// NetworkPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.
+// FirewallPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.
 //
 // The source NetworkInterface is the CompiledNIC's OWNER (a controller ownerReference) and its name
 // is encoded in the object name — so the spec carries no NICRef. It also deliberately does NOT carry
@@ -36,11 +36,11 @@ type CompiledNICSpec struct {
 	// +optional
 	NAT []CompiledNATSource `json:"nat,omitempty"`
 	// LB lists the load balancers this NIC is a backend of. Pure forwarding membership —
-	// it grants NO firewall permission (that comes solely from NetworkPolicy).
+	// it grants NO firewall permission (that comes solely from FirewallPolicy).
 	// +optional
 	LB []CompiledLB `json:"lb,omitempty"`
 	// PeerImports lists peer VPCs whose routes this NIC imports (reachability only — grants NO
-	// firewall permission; that comes solely from NetworkPolicy). Populated from Ready VPCPeerings
+	// firewall permission; that comes solely from FirewallPolicy). Populated from Ready VPCPeerings
 	// involving this NIC's VPC.
 	// +optional
 	PeerImports []CompiledPeerImport `json:"peerImports,omitempty"`
