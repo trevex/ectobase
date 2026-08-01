@@ -21,7 +21,7 @@ node owns — is decided in `netplane` and pushed into BPF maps.
 ```mermaid
 flowchart TB
     subgraph cp["netplane (Go, Kubernetes)"]
-        crds["CRDs<br/>VPC · NetworkInterface · NetworkPolicy<br/>NATGateway · FloatingIP · LoadBalancer · VPCPeering"]
+        crds["CRDs<br/>VPC · NetworkInterface · FirewallPolicy<br/>NATGateway · FloatingIP · LoadBalancer · VPCPeering"]
         controller["controller<br/>(CompiledNIC / NATGateway reconcilers)"]
         reflector["reflector<br/>(central route bus broker)"]
         crds --> controller
@@ -60,7 +60,7 @@ The control plane splits into three long-running components:
 - **reflector** (central) — the route broker described above.
 - **controller** (central) — controller-runtime reconcilers that lower high-level CRDs
   into per-node work: the **NATGateway** port-block allocator and the **CompiledNIC**
-  compiler that resolves `NetworkInterface` + `NetworkPolicy` into concrete per-NIC
+  compiler that resolves `NetworkInterface` + `FirewallPolicy` into concrete per-NIC
   firewall rules, NAT blocks, and routes for the agent to program. See
   [Compilers](../controlplane/compilers.md).
 

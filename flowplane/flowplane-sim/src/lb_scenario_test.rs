@@ -458,7 +458,7 @@ fn ew_lb_anycast_dropped_without_policy() {
     assert_eq!(
         t.outcome,
         Outcome::Dropped { node: "hostB" },
-        "LB delivery must be dropped when no NetworkPolicy admits the source"
+        "LB delivery must be dropped when no FirewallPolicy admits the source"
     );
 }
 

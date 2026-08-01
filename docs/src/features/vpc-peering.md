@@ -15,7 +15,7 @@ Two properties define the feature:
   underlay `/128`, not from anything carried in the packet, so a route imported under VNI-A that
   points at a VNI-B guest's underlay Just Works.
 - **Security is orthogonal.** Peering grants *reachability only*. The deny-by-default ingress
-  [firewall](./firewall.md) still drops cross-VPC traffic until a `NetworkPolicy` explicitly
+  [firewall](./firewall.md) still drops cross-VPC traffic until a `FirewallPolicy` explicitly
   allows the peer's CIDRs. Reachability without policy means no connectivity — a deliberate
   two-step, mirroring how LB membership never generates firewall rules.
 
@@ -137,12 +137,12 @@ unioned deterministically), and:
    now *hits* the imported route → encap to the A-guest's underlay → A's node underlay-derives
    VNI-A → delivers to the A guest.
 5. **Return is symmetric** (A imports B's exposed prefixes) — but the destination NIC's
-   deny-by-default ingress firewall drops it **until a `NetworkPolicy` allows the peer's CIDR**.
+   deny-by-default ingress firewall drops it **until a `FirewallPolicy` allows the peer's CIDR**.
 
 ## Scope
 
 - **No datapath / route-bus protocol change.** Peering is control-plane only.
-- **No firewall coupling.** Peering never grants firewall permission; `NetworkPolicy` is the sole
+- **No firewall coupling.** Peering never grants firewall permission; `FirewallPolicy` is the sole
   security gate.
 - **No overlap rejection.** Overlapping guest ranges are allowed; own-VNI routes win.
 - **No transitive peering.** `A↔B` and `B↔C` do not make `A↔C` reachable; each peering is an
@@ -150,5 +150,5 @@ unioned deterministically), and:
 - **No aggregate-CIDR advertising change.** The route bus keeps advertising per-guest host routes;
   `exposedPrefixes` filters them importer-side.
 
-The forgotten-`NetworkPolicy` footgun (reachability without policy = silent no-connectivity) is
+The forgotten-`FirewallPolicy` footgun (reachability without policy = silent no-connectivity) is
 deliberate; `VPCPeering` status surfaces that policy is still required.

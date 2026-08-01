@@ -23,10 +23,10 @@ ectobase is two planes — the `flowplane` datapath and the `netplane` control p
 
 - **agent** (per node) — reconciles the node's `NetworkInterface`s, programs the local dataplane over the **DataplaneNode gRPC** (`127.0.0.1:1337`), and announces/learns overlay routes, NAT blocks, and edge identities over the **route bus**.
 - **reflector** (central) — a route broker: agents open a bidi `RouteBus` stream and it reflects per-VNI routes (and NAT/public records) between nodes. This is the overlay's routing distribution (custom, not BGP; BGP is used only for the WAN-edge announcement).
-- **controller** (central) — controller-runtime reconcilers: the **NATGateway** port-block allocator and the **CompiledNIC** compiler that lowers `NetworkInterface` + `NetworkPolicy` into per-NIC firewall rules the agent programs.
+- **controller** (central) — controller-runtime reconcilers: the **NATGateway** port-block allocator and the **CompiledNIC** compiler that lowers `NetworkInterface` + `FirewallPolicy` into per-NIC firewall rules the agent programs.
 - **CNI** (`cni/`) — on pod ADD, resolves the pod's overlay VNI/IPs from the CRDs and calls the node's DataplaneNode gRPC (`AttachInterface`) to create the veth + program the datapath.
 
-**CRD API** (`net.ectobase.dev/v1alpha1`, in `api/`): `VPC`, `NetworkInterface`, `NetworkPolicy`, `NATGateway`, `FloatingIP`, `LoadBalancer`, `VPCPeering`, plus the controller-written `CompiledNIC`/`CompiledFirewall`/`CompiledNAT`/`CompiledLB`.
+**CRD API** (`net.ectobase.dev/v1alpha1`, in `api/`): `VPC`, `NetworkInterface`, `FirewallPolicy`, `NATGateway`, `FloatingIP`, `LoadBalancer`, `VPCPeering`, plus the controller-written `CompiledNIC`/`CompiledFirewall`/`CompiledNAT`/`CompiledLB`.
 
 ## Repository layout
 
@@ -96,7 +96,7 @@ hack/clab-down.sh
 
 ## Distributed firewall
 
-The distributed firewall is **always-on deny-by-default**: `fw_eval_dir` accepts a packet only on an explicit matching allow rule. The control plane materializes k8s default-allow explicitly — `Compile()` emits a per-direction allow-all for any NIC no `NetworkPolicy` selects. A **compiler controller** (`CompiledNICReconciler`) writes one `CompiledNIC` per `NetworkInterface`; the **node agent** installs its rules on the dataplane via `AddFwRule` during each reconcile loop (`ReconcileFirewall`). See [`docs/superpowers/specs/2026-07-15-compilednic-firewall-pipeline-design.md`](docs/superpowers/specs/2026-07-15-compilednic-firewall-pipeline-design.md) for the full design.
+The distributed firewall is **always-on deny-by-default**: `fw_eval_dir` accepts a packet only on an explicit matching allow rule. The control plane materializes k8s default-allow explicitly — `Compile()` emits a per-direction allow-all for any NIC no `FirewallPolicy` selects. A **compiler controller** (`CompiledNICReconciler`) writes one `CompiledNIC` per `NetworkInterface`; the **node agent** installs its rules on the dataplane via `AddFwRule` during each reconcile loop (`ReconcileFirewall`). See [`docs/superpowers/specs/2026-07-15-compilednic-firewall-pipeline-design.md`](docs/superpowers/specs/2026-07-15-compilednic-firewall-pipeline-design.md) for the full design.
 
 ## Synthetic datapath testing
 

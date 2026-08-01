@@ -105,7 +105,7 @@ firewall permission to send to it. The [distributed firewall](firewall.md) is
 deny-by-default and evaluated independently: a packet is forwarded only if a route exists
 **and** an explicit allow rule matches. This two-step split is what lets, for example, a
 peered VPC's routes be imported for reachability while traffic still requires an explicit
-`NetworkPolicy` to be admitted.
+`FirewallPolicy` to be admitted.
 
 ## How it's wired
 

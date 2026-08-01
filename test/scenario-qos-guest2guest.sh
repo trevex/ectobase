@@ -82,7 +82,7 @@ sudo docker cp "$IPERF3" "$NODE_A":/iperf3 >/dev/null 2>&1
 sudo docker cp "$IPERF3" "$NODE_B":/iperf3 >/dev/null 2>&1
 echo "  iperf3 staged into both nodes"
 
-echo "== [1] CRDs: VPC + 2 cross-node NICs + allow-VPC NetworkPolicy (both dirs) =="
+echo "== [1] CRDs: VPC + 2 cross-node NICs + allow-VPC FirewallPolicy (both dirs) =="
 cat <<YAML | kc apply -f - >/dev/null || { echo "FAIL: apply CRs"; exit 1; }
 apiVersion: net.ectobase.dev/v1alpha1
 kind: VPC
@@ -100,7 +100,7 @@ metadata: {name: $NIC_B, namespace: default, labels: {app: qosg2g}}
 spec: {vpcRef: {name: blue}, ips: [$IP_B], nodeName: $NODE_B, qos: {egress: {rateMbps: 0, publicMbps: 0}, ingress: {rateMbps: 0}}}
 ---
 apiVersion: net.ectobase.dev/v1alpha1
-kind: NetworkPolicy
+kind: FirewallPolicy
 metadata: {name: qosg2g-allow, namespace: default}
 spec:
   interfaceSelector: {matchLabels: {app: qosg2g}}

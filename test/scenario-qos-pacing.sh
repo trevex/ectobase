@@ -116,7 +116,7 @@ if kc -n ectobase-system rollout status ds/flowplane --timeout=90s >/dev/null 2>
 else
   fail "[C] flowplane not Ready — check logs for 'combined stack size ... Too large' (BPF verifier)"; fi
 
-echo "== [1] CRDs: VPC + NIC (spec.qos egress=$CAP_MBPS) + NATGateway + EGRESS NetworkPolicy =="
+echo "== [1] CRDs: VPC + NIC (spec.qos egress=$CAP_MBPS) + NATGateway + EGRESS FirewallPolicy =="
 cat <<YAML | kc apply -f - >/dev/null || { echo "FAIL: apply CRs"; exit 1; }
 apiVersion: net.ectobase.dev/v1alpha1
 kind: VPC
@@ -138,7 +138,7 @@ metadata: {name: egress-gw, namespace: default}
 spec: {vpcRef: {name: blue}, publicIPs: [$NAT_IP], portsPerSource: 1024}
 ---
 apiVersion: net.ectobase.dev/v1alpha1
-kind: NetworkPolicy
+kind: FirewallPolicy
 metadata: {name: qospod-egress, namespace: default}
 spec:
   interfaceSelector: {matchLabels: {app: qospod}}

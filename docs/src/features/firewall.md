@@ -2,7 +2,7 @@
 
 `flowplane`'s firewall is **always-on and deny-by-default**. It is enforced in the
 datapath on every guest interface, in both directions, and derives entirely from
-`NetworkPolicy` intent lowered by the control plane. There is no "firewall off" mode: a
+`FirewallPolicy` intent lowered by the control plane. There is no "firewall off" mode: a
 packet is forwarded only when an explicit allow rule matches it.
 
 ## Deny-by-default
@@ -36,25 +36,25 @@ Each rule matches on the packet's 5-tuple selectors (`src`, `dst`, `proto`, `spo
 `dport`) plus ICMP type/code. Rules are scanned in order; the first matching rule's action
 wins.
 
-## From NetworkPolicy to datapath
+## From FirewallPolicy to datapath
 
-`NetworkPolicy` is a Kubernetes-native intent object with an `interfaceSelector` and
+`FirewallPolicy` is a Kubernetes-native intent object with an `interfaceSelector` and
 ordered `ingress` / `egress` rule lists (each rule a `{CIDR, Proto, Port, Action}`). The
 control plane compiles it into per-NIC rules the agent programs into BPF maps.
 
-### The compiler: NetworkPolicy → CompiledNIC.Firewall
+### The compiler: FirewallPolicy → CompiledNIC.Firewall
 
 The `CompiledNICReconciler` produces one `CompiledNIC` per `NetworkInterface`. Its
 `Compile()` function:
 
-1. For every `NetworkPolicy` whose `interfaceSelector` matches the NIC's labels, translates
+1. For every `FirewallPolicy` whose `interfaceSelector` matches the NIC's labels, translates
    its ingress and egress rules into `CompiledFwRule`s on
    `CompiledNIC.Spec.Firewall.{Ingress,Egress}`.
 2. **Materializes k8s default-allow per direction.** k8s semantics are "a NIC no policy
    selects is fully open" — but the datapath is deny-by-default, so an empty direction
    would drop everything. `Compile()` therefore emits an explicit allow-all
    (`0.0.0.0/0`, any proto, any port, `Allow`) for **any direction that ends up with no
-   rules**. A direction a policy *does* govern keeps only that policy's rules.
+   rules**. A direction a `FirewallPolicy` *does* govern keeps only that policy's rules.
 
 The direction that a peer CIDR describes follows k8s semantics, applied by the agent when
 it lowers each `CompiledFwRule`:
@@ -85,10 +85,10 @@ permission.** These are two independent gates a packet must pass:
 1. **Reachability** — is there an overlay [route](routing-vni.md) to the destination? Routes
    are distributed by the route bus and may enter a tenant's table via VPC peering imports.
 2. **Permission** — does an explicit allow rule admit the packet? This comes **solely** from
-   `NetworkPolicy`.
+   `FirewallPolicy`.
 
 So importing a [peered VPC](vpc-peering.md)'s prefixes makes those destinations reachable
-but does **not** by itself let any traffic flow — a matching `NetworkPolicy` is still
+but does **not** by itself let any traffic flow — a matching `FirewallPolicy` is still
 required. Likewise, [load-balancer](loadbalancer.md) membership is pure forwarding data: a
 NIC being an LB backend adds **no** firewall rule. This is why LB traffic can be silently
 dropped if only the backend's own overlay IP is allowed (see the DSR gotcha below).
@@ -98,7 +98,7 @@ dropped if only the backend's own overlay IP is allowed (see the DSR gotcha belo
 Load balancing uses **direct server return**: the inner destination address stays the VIP
 all the way to the backend (see [Load balancing](loadbalancer.md)). The backend's ingress
 firewall therefore sees `dst = VIP`, **not** the backend's own overlay IP. A
-`NetworkPolicy` written for the backend's overlay IP will not match LB-delivered traffic —
+`FirewallPolicy` written for the backend's overlay IP will not match LB-delivered traffic —
 deny-by-default then drops it. The fix is an **explicit `VIP:port` allow rule** in the
 backend's ingress policy. LB membership never generates this rule; it must be authored as
 policy.
@@ -106,7 +106,7 @@ policy.
 ## How it's wired
 
 ```
-NetworkPolicy { interfaceSelector, ingress[], egress[] }
+FirewallPolicy { interfaceSelector, ingress[], egress[] }
         │  CompiledNICReconciler.Compile()
         │    · match selector → NIC labels
         │    · translate ingress/egress rules
@@ -124,11 +124,11 @@ BPF fw maps (fw_meta + rule table, keyed by ifindex)
 datapath: fw_eval_dir(pkt, ifindex, dir) → ACCEPT only on explicit match, else DROP
 ```
 
-- **CRD → compiler.** `NetworkPolicy` selectors resolve to concrete rules per NIC;
+- **CRD → compiler.** `FirewallPolicy` selectors resolve to concrete rules per NIC;
   unpolicied directions get an explicit allow-all so the deny-by-default datapath stays
   permissive where k8s intends.
 - **Compiler → agent.** The agent reads only `CompiledNIC.Spec.Firewall` — never the raw
-  `NetworkPolicy` — and diffs it against what it has already installed.
+  `FirewallPolicy` — and diffs it against what it has already installed.
 - **Agent → dataplane.** Rules are written per interface and evaluated in both directions
   by `fw_eval_dir` on every guest ingress and egress.
 

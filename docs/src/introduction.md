@@ -12,7 +12,7 @@ The stack has two planes:
   IP-in-IPv6 overlay. It is deliberately *dumb*: it holds no policy of its own and exposes a small
   per-node gRPC surface (`DataplaneNode`) that the control plane programs.
 - **netplane** — the Kubernetes **control plane**. Go, built on controller-runtime. It turns a small
-  set of user-facing CRDs (`VPC`, `NetworkInterface`, `NetworkPolicy`, `LoadBalancer`, `NATGateway`,
+  set of user-facing CRDs (`VPC`, `NetworkInterface`, `FirewallPolicy`, `LoadBalancer`, `NATGateway`,
   `FloatingIP`, `VPCPeering`) into concrete per-NIC dataplane configuration and distributes overlay
   routes between nodes over a custom **route bus**.
 
@@ -24,7 +24,7 @@ creation time.
 ```mermaid
 flowchart LR
     subgraph central["Central cluster"]
-        crds["User CRDs<br/>(VPC, NetworkInterface,<br/>NetworkPolicy, LB, NATGateway…)"]
+        crds["User CRDs<br/>(VPC, NetworkInterface,<br/>FirewallPolicy, LB, NATGateway…)"]
         ctrl["Controllers<br/>(compile → CompiledNIC)"]
         refl["Reflector<br/>(route bus RIB)"]
         crds --> ctrl
