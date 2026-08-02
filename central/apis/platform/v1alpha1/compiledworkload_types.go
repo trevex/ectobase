@@ -25,6 +25,9 @@ type CompiledWorkloadStatus struct {
 // +genclient
 // +genclient:nonNamespaced
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:resource:scope=Cluster
 
 // CompiledWorkload is a compiled workload bound to a cluster.
 type CompiledWorkload struct {
@@ -36,6 +39,7 @@ type CompiledWorkload struct {
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
+// +kubebuilder:object:root=true
 
 // CompiledWorkloadList is a list of CompiledWorkload objects.
 type CompiledWorkloadList struct {
