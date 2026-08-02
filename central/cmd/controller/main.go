@@ -10,6 +10,7 @@ package main
 import (
 	"flag"
 	"log"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -49,7 +50,7 @@ func main() {
 		log.Fatalf("new manager: %v", err)
 	}
 
-	if err := (&clusterpool.Reconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+	if err := (&clusterpool.Reconciler{Client: mgr.GetClient(), HealthStale: 30 * time.Second}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup clusterpool controller: %v", err)
 	}
 
