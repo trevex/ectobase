@@ -16,6 +16,10 @@ type VirtualMachineSpec struct {
 	InterfaceRefs []LocalObjectReference
 	// Resources is the compute resource request/limit for this workload.
 	Resources corev1.ResourceRequirements
+	// Image is the containerDisk image the VM boots from.
+	Image string
+	// RunStrategy is the KubeVirt run strategy.
+	RunStrategy string
 	// PoolSelector, if set, restricts scheduling to ClusterPools whose labels match.
 	PoolSelector *metav1.LabelSelector
 }

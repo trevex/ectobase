@@ -50,6 +50,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&VPCPeeringList{},
 		&CompiledNIC{},
 		&CompiledNICList{},
+		&CompiledVM{},
+		&CompiledVMList{},
 		&VirtualMachine{},
 		&VirtualMachineList{},
 	)

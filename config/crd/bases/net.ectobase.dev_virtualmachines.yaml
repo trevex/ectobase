@@ -38,17 +38,21 @@ spec:
             type: object
           spec:
             description: |-
-              VirtualMachineSpec defines the desired state of a VirtualMachine.
-
-              In Phase 1b the VirtualMachine is a PLACEMENT ANCHOR only: it names the
-              cluster the workload is bound to and the NetworkInterfaces it owns. The
-              compiler propagates ClusterName (and a workload=<name> label) onto the
-              CompiledNICs of the referenced interfaces. VMI/volume lifecycle is a later phase.
+              VirtualMachineSpec defines the desired state of a VirtualMachine: the cluster
+              binding (placement anchor), the NetworkInterfaces it owns, its compute resources,
+              and — since Phase 4 — its boot intent (containerDisk Image + RunStrategy). The
+              compiler propagates ClusterName (and a workload=<name> label) onto the CompiledNICs
+              of the referenced interfaces and onto a CompiledVM. Ceph-backed volume lifecycle
+              is a later phase.
             properties:
               clusterName:
                 description: |-
                   ClusterName is the cluster this workload is bound to. Set manually or by
                   the compiler default in Phase 1b; the Phase-3 scheduler writes it later.
+                type: string
+              image:
+                description: Image is the containerDisk image the VM boots from (e.g.
+                  quay.io/containerdisks/fedora:41).
                 type: string
               interfaceRefs:
                 description: InterfaceRefs names the NetworkInterfaces (same namespace)
@@ -172,6 +176,11 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
+              runStrategy:
+                description: |-
+                  RunStrategy is the KubeVirt run strategy (Always, RerunOnFailure, Manual, Halted).
+                  Empty defaults to RerunOnFailure (Tier-1 local restart on node death).
+                type: string
             type: object
           status:
             description: VirtualMachineStatus defines the observed state of a VirtualMachine.

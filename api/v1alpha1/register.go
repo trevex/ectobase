@@ -51,6 +51,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&FloatingIPList{},
 		&CompiledNIC{},
 		&CompiledNICList{},
+		&CompiledVM{},
+		&CompiledVMList{},
 		&VirtualMachine{},
 		&VirtualMachineList{},
 	)

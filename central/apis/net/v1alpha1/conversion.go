@@ -229,6 +229,28 @@ func RegisterConversions(s *runtime.Scheme) error {
 		return err
 	}
 
+	// --- CompiledVM ---
+	if err := s.AddGeneratedConversionFunc((*CompiledVM)(nil), (*net.CompiledVM)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_CompiledVM_To_net_CompiledVM(a.(*CompiledVM), b.(*net.CompiledVM), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.CompiledVM)(nil), (*CompiledVM)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_CompiledVM_To_v1alpha1_CompiledVM(a.(*net.CompiledVM), b.(*CompiledVM), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*CompiledVMList)(nil), (*net.CompiledVMList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_CompiledVMList_To_net_CompiledVMList(a.(*CompiledVMList), b.(*net.CompiledVMList), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.CompiledVMList)(nil), (*CompiledVMList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_CompiledVMList_To_v1alpha1_CompiledVMList(a.(*net.CompiledVMList), b.(*CompiledVMList), scope)
+	}); err != nil {
+		return err
+	}
+
 	// --- VirtualMachine ---
 	if err := s.AddGeneratedConversionFunc((*VirtualMachine)(nil), (*net.VirtualMachine)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_v1alpha1_VirtualMachine_To_net_VirtualMachine(a.(*VirtualMachine), b.(*net.VirtualMachine), scope)
@@ -1392,6 +1414,122 @@ func Convert_net_CompiledNICStatus_To_v1alpha1_CompiledNICStatus(in *net.Compile
 	return nil
 }
 
+// ============================ CompiledVM ============================
+
+// Convert_v1alpha1_CompiledVM_To_net_CompiledVM converts a versioned CompiledVM to internal.
+func Convert_v1alpha1_CompiledVM_To_net_CompiledVM(in *CompiledVM, out *net.CompiledVM, s conversion.Scope) error {
+	out.ObjectMeta = in.ObjectMeta
+	if err := Convert_v1alpha1_CompiledVMSpec_To_net_CompiledVMSpec(&in.Spec, &out.Spec, s); err != nil {
+		return err
+	}
+	return Convert_v1alpha1_CompiledVMStatus_To_net_CompiledVMStatus(&in.Status, &out.Status, s)
+}
+
+// Convert_net_CompiledVM_To_v1alpha1_CompiledVM converts an internal CompiledVM to versioned.
+func Convert_net_CompiledVM_To_v1alpha1_CompiledVM(in *net.CompiledVM, out *CompiledVM, s conversion.Scope) error {
+	out.ObjectMeta = in.ObjectMeta
+	if err := Convert_net_CompiledVMSpec_To_v1alpha1_CompiledVMSpec(&in.Spec, &out.Spec, s); err != nil {
+		return err
+	}
+	return Convert_net_CompiledVMStatus_To_v1alpha1_CompiledVMStatus(&in.Status, &out.Status, s)
+}
+
+// Convert_v1alpha1_CompiledVMList_To_net_CompiledVMList converts a versioned list to internal.
+func Convert_v1alpha1_CompiledVMList_To_net_CompiledVMList(in *CompiledVMList, out *net.CompiledVMList, s conversion.Scope) error {
+	out.ListMeta = in.ListMeta
+	if in.Items != nil {
+		out.Items = make([]net.CompiledVM, len(in.Items))
+		for i := range in.Items {
+			if err := Convert_v1alpha1_CompiledVM_To_net_CompiledVM(&in.Items[i], &out.Items[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
+	return nil
+}
+
+// Convert_net_CompiledVMList_To_v1alpha1_CompiledVMList converts an internal list to versioned.
+func Convert_net_CompiledVMList_To_v1alpha1_CompiledVMList(in *net.CompiledVMList, out *CompiledVMList, s conversion.Scope) error {
+	out.ListMeta = in.ListMeta
+	if in.Items != nil {
+		out.Items = make([]CompiledVM, len(in.Items))
+		for i := range in.Items {
+			if err := Convert_net_CompiledVM_To_v1alpha1_CompiledVM(&in.Items[i], &out.Items[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
+	return nil
+}
+
+// Convert_v1alpha1_CompiledVMSpec_To_net_CompiledVMSpec converts a versioned spec to internal.
+func Convert_v1alpha1_CompiledVMSpec_To_net_CompiledVMSpec(in *CompiledVMSpec, out *net.CompiledVMSpec, s conversion.Scope) error {
+	out.ClusterName = in.ClusterName
+	out.Image = in.Image
+	out.Resources = *in.Resources.DeepCopy()
+	out.RunStrategy = in.RunStrategy
+	if in.Interfaces != nil {
+		out.Interfaces = make([]net.CompiledVMInterface, len(in.Interfaces))
+		for i := range in.Interfaces {
+			if err := Convert_v1alpha1_CompiledVMInterface_To_net_CompiledVMInterface(&in.Interfaces[i], &out.Interfaces[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Interfaces = nil
+	}
+	return nil
+}
+
+// Convert_net_CompiledVMSpec_To_v1alpha1_CompiledVMSpec converts an internal spec to versioned.
+func Convert_net_CompiledVMSpec_To_v1alpha1_CompiledVMSpec(in *net.CompiledVMSpec, out *CompiledVMSpec, s conversion.Scope) error {
+	out.ClusterName = in.ClusterName
+	out.Image = in.Image
+	out.Resources = *in.Resources.DeepCopy()
+	out.RunStrategy = in.RunStrategy
+	if in.Interfaces != nil {
+		out.Interfaces = make([]CompiledVMInterface, len(in.Interfaces))
+		for i := range in.Interfaces {
+			if err := Convert_net_CompiledVMInterface_To_v1alpha1_CompiledVMInterface(&in.Interfaces[i], &out.Interfaces[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Interfaces = nil
+	}
+	return nil
+}
+
+// Convert_v1alpha1_CompiledVMInterface_To_net_CompiledVMInterface converts a versioned interface to internal.
+func Convert_v1alpha1_CompiledVMInterface_To_net_CompiledVMInterface(in *CompiledVMInterface, out *net.CompiledVMInterface, _ conversion.Scope) error {
+	out.MAC = in.MAC
+	out.NetworkName = in.NetworkName
+	return nil
+}
+
+// Convert_net_CompiledVMInterface_To_v1alpha1_CompiledVMInterface converts an internal interface to versioned.
+func Convert_net_CompiledVMInterface_To_v1alpha1_CompiledVMInterface(in *net.CompiledVMInterface, out *CompiledVMInterface, _ conversion.Scope) error {
+	out.MAC = in.MAC
+	out.NetworkName = in.NetworkName
+	return nil
+}
+
+// Convert_v1alpha1_CompiledVMStatus_To_net_CompiledVMStatus converts a versioned status to internal.
+func Convert_v1alpha1_CompiledVMStatus_To_net_CompiledVMStatus(in *CompiledVMStatus, out *net.CompiledVMStatus, _ conversion.Scope) error {
+	out.State = in.State
+	return nil
+}
+
+// Convert_net_CompiledVMStatus_To_v1alpha1_CompiledVMStatus converts an internal status to versioned.
+func Convert_net_CompiledVMStatus_To_v1alpha1_CompiledVMStatus(in *net.CompiledVMStatus, out *CompiledVMStatus, _ conversion.Scope) error {
+	out.State = in.State
+	return nil
+}
+
 // ============================ VirtualMachine ============================
 
 // Convert_v1alpha1_VirtualMachine_To_net_VirtualMachine converts a versioned VirtualMachine to internal.
@@ -1458,6 +1596,8 @@ func Convert_v1alpha1_VirtualMachineSpec_To_net_VirtualMachineSpec(in *VirtualMa
 		out.InterfaceRefs = nil
 	}
 	out.Resources = *in.Resources.DeepCopy()
+	out.Image = in.Image
+	out.RunStrategy = in.RunStrategy
 	if in.PoolSelector != nil {
 		out.PoolSelector = in.PoolSelector.DeepCopy()
 	} else {
@@ -1480,6 +1620,8 @@ func Convert_net_VirtualMachineSpec_To_v1alpha1_VirtualMachineSpec(in *net.Virtu
 		out.InterfaceRefs = nil
 	}
 	out.Resources = *in.Resources.DeepCopy()
+	out.Image = in.Image
+	out.RunStrategy = in.RunStrategy
 	if in.PoolSelector != nil {
 		out.PoolSelector = in.PoolSelector.DeepCopy()
 	} else {

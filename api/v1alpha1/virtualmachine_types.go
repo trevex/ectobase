@@ -8,12 +8,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// VirtualMachineSpec defines the desired state of a VirtualMachine.
-//
-// In Phase 1b the VirtualMachine is a PLACEMENT ANCHOR only: it names the
-// cluster the workload is bound to and the NetworkInterfaces it owns. The
-// compiler propagates ClusterName (and a workload=<name> label) onto the
-// CompiledNICs of the referenced interfaces. VMI/volume lifecycle is a later phase.
+// VirtualMachineSpec defines the desired state of a VirtualMachine: the cluster
+// binding (placement anchor), the NetworkInterfaces it owns, its compute resources,
+// and — since Phase 4 — its boot intent (containerDisk Image + RunStrategy). The
+// compiler propagates ClusterName (and a workload=<name> label) onto the CompiledNICs
+// of the referenced interfaces and onto a CompiledVM. Ceph-backed volume lifecycle
+// is a later phase.
 type VirtualMachineSpec struct {
 	// ClusterName is the cluster this workload is bound to. Set manually or by
 	// the compiler default in Phase 1b; the Phase-3 scheduler writes it later.
@@ -26,6 +26,13 @@ type VirtualMachineSpec struct {
 	// Requests is used for scheduling capacity fit; Limits is carried for parity.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+	// Image is the containerDisk image the VM boots from (e.g. quay.io/containerdisks/fedora:41).
+	// +optional
+	Image string `json:"image,omitempty"`
+	// RunStrategy is the KubeVirt run strategy (Always, RerunOnFailure, Manual, Halted).
+	// Empty defaults to RerunOnFailure (Tier-1 local restart on node death).
+	// +optional
+	RunStrategy string `json:"runStrategy,omitempty"`
 	// PoolSelector, if set, restricts scheduling to ClusterPools whose labels match.
 	// +optional
 	PoolSelector *metav1.LabelSelector `json:"poolSelector,omitempty"`
