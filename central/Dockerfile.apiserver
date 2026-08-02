@@ -1,0 +1,16 @@
+# Copyright 2026 ectobase contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Minimal runtime image for the central aggregated apiserver. The binary is
+# built on the host (see central/hack/smoke.sh) rather than inside the image,
+# because central/go.mod carries a local `replace go.opendefense.cloud/kit =>
+# /home/nik/Development/apiserver-kit` that points OUTSIDE the module tree and so
+# is not reachable from a Docker build context. Once apiserver-kit is published
+# at a fixed version (drop the replace), this can become a standard multi-stage
+# `FROM golang ... go build` image.
+#
+# Expects: a statically linked `central-apiserver` binary next to this file.
+FROM gcr.io/distroless/static:nonroot
+COPY central-apiserver /usr/local/bin/central-apiserver
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/central-apiserver"]

@@ -1,0 +1,68 @@
+# Copyright 2026 ectobase contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The central controller: a controller-runtime manager running the ClusterPool
+# reconciler against the aggregated apiserver (via in-cluster config). It needs
+# RBAC to watch/get/list ClusterPools and update their status subresource.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: central-controller
+  namespace: system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: central-controller
+rules:
+  - apiGroups: ["platform.ectobase.dev"]
+    resources: ["clusterpools"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["platform.ectobase.dev"]
+    resources: ["clusterpools/status"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: central-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: central-controller
+subjects:
+  - kind: ServiceAccount
+    name: central-controller
+    namespace: system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: central-controller
+  namespace: system
+  labels:
+    app: central-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: central-controller
+  template:
+    metadata:
+      labels:
+        app: central-controller
+    spec:
+      serviceAccountName: central-controller
+      containers:
+        - name: controller
+          image: ghcr.io/trevex/ectobase/central-controller:dev
+          args: []
+          env:
+            # client-go's WatchListClient uses SendInitialEvents=true streaming
+            # list-watches that this aggregated apiserver (older apiserver libs)
+            # does not support, leaving the informer stuck with no initial LIST
+            # (workers start but no events ever arrive). Disable it so the cache
+            # falls back to a plain LIST+WATCH.
+            - name: KUBE_FEATURE_WatchListClient
+              value: "false"

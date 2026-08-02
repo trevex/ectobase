@@ -1,7 +1,8 @@
-go 1.26.0
+go 1.26.4
 
 use (
 	./api
+	./central
 	./cni
 	./netplane
 	./test/e2e

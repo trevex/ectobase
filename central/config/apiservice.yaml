@@ -1,0 +1,22 @@
+# Copyright 2026 ectobase contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Registers the aggregated group v1alpha1.platform.ectobase.dev with the host
+# kube-apiserver, pointing at the in-cluster apiserver-service. insecureSkipTLSVerify
+# is used because the serving cert is self-signed/ephemeral (see apiserver.yaml) —
+# fine for dev/smoke, replace with a caBundle in production.
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.platform.ectobase.dev
+spec:
+  group: platform.ectobase.dev
+  version: v1alpha1
+  service:
+    namespace: system
+    name: apiserver-service
+    port: 443
+  insecureSkipTLSVerify: true
+  groupPriorityMinimum: 2000
+  versionPriority: 100
