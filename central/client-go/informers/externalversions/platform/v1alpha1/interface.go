@@ -10,6 +10,8 @@ import (
 type Interface interface {
 	// ClusterPools returns a ClusterPoolInformer.
 	ClusterPools() ClusterPoolInformer
+	// CompiledWorkloads returns a CompiledWorkloadInformer.
+	CompiledWorkloads() CompiledWorkloadInformer
 }
 
 type version struct {
@@ -26,4 +28,9 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 // ClusterPools returns a ClusterPoolInformer.
 func (v *version) ClusterPools() ClusterPoolInformer {
 	return &clusterPoolInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
+}
+
+// CompiledWorkloads returns a CompiledWorkloadInformer.
+func (v *version) CompiledWorkloads() CompiledWorkloadInformer {
+	return &compiledWorkloadInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }

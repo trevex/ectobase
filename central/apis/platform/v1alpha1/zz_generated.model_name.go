@@ -24,3 +24,23 @@ func (in ClusterPoolSpec) OpenAPIModelName() string {
 func (in ClusterPoolStatus) OpenAPIModelName() string {
 	return "dev.ectobase.platform.v1alpha1.ClusterPoolStatus"
 }
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in CompiledWorkload) OpenAPIModelName() string {
+	return "dev.ectobase.platform.v1alpha1.CompiledWorkload"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in CompiledWorkloadList) OpenAPIModelName() string {
+	return "dev.ectobase.platform.v1alpha1.CompiledWorkloadList"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in CompiledWorkloadSpec) OpenAPIModelName() string {
+	return "dev.ectobase.platform.v1alpha1.CompiledWorkloadSpec"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in CompiledWorkloadStatus) OpenAPIModelName() string {
+	return "dev.ectobase.platform.v1alpha1.CompiledWorkloadStatus"
+}

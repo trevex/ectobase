@@ -47,6 +47,7 @@ func main() {
 		WithComponentName(componentName).
 		WithOpenAPIDefinitions(componentName, "v0.1.0", openapi.GetOpenAPIDefinitions).
 		With(apiserver.Resource(&platform.ClusterPool{}, v1alpha1.SchemeGroupVersion)).
+		With(apiserver.Resource(&platform.CompiledWorkload{}, v1alpha1.SchemeGroupVersion)).
 		Execute()
 	os.Exit(code)
 }
