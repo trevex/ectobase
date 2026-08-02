@@ -271,3 +271,67 @@ func TestCompiledNIC_SpecClusterNameSelector(t *testing.T) {
 		t.Fatalf("List(spec.clusterName=c1): expected ClusterName=c1, got %q", list.Items[0].Spec.ClusterName)
 	}
 }
+
+// TestCompiledVM_SpecClusterNameSelector proves the CompiledVM spec.clusterName
+// field selector is served (mirror of the CompiledNIC selector test) and that a
+// basic create/get round-trip preserves the boot image: two CompiledVMs (c1, c2)
+// are created and a List filtered by spec.clusterName=c1 must return exactly the
+// c1 one. This is the selector the per-cluster broker's SyncCompiledVMs relies on.
+func TestCompiledVM_SpecClusterNameSelector(t *testing.T) {
+	c, ctx := startNetEnv(t)
+
+	newVM := func(cluster string) *netv1.CompiledVM {
+		return &netv1.CompiledVM{
+			ObjectMeta: metav1.ObjectMeta{
+				GenerateName: "cvm-" + cluster + "-",
+				Namespace:    "default",
+			},
+			Spec: netv1.CompiledVMSpec{
+				ClusterName: cluster,
+				Image:       "fedora",
+				RunStrategy: "RerunOnFailure",
+				Interfaces:  []netv1.CompiledVMInterface{{MAC: "02:00:00:00:00:01", NetworkName: "flowplane-overlay"}},
+			},
+		}
+	}
+
+	a := newVM("c1")
+	if err := c.Create(ctx, a); err != nil {
+		t.Fatalf("Create a: %v", err)
+	}
+	b := newVM("c2")
+	if err := c.Create(ctx, b); err != nil {
+		t.Fatalf("Create b: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = c.Delete(ctx, a)
+		_ = c.Delete(ctx, b)
+	})
+
+	// Basic create/get round-trip: Image survives the internal<->versioned conversion.
+	gotA := &netv1.CompiledVM{}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(a), gotA); err != nil {
+		t.Fatalf("Get a: %v", err)
+	}
+	if gotA.Spec.Image != "fedora" {
+		t.Fatalf("Get a: expected Image=fedora, got %q", gotA.Spec.Image)
+	}
+
+	list := &netv1.CompiledVMList{}
+	if err := c.List(ctx, list, client.InNamespace("default"), client.MatchingFields{"spec.clusterName": "c1"}); err != nil {
+		t.Fatalf("List(spec.clusterName=c1): %v", err)
+	}
+	if len(list.Items) != 1 {
+		names := make([]string, len(list.Items))
+		for i := range list.Items {
+			names[i] = list.Items[i].Name
+		}
+		t.Fatalf("List(spec.clusterName=c1): expected exactly 1 item, got %d: %v", len(list.Items), names)
+	}
+	if list.Items[0].Name != a.Name {
+		t.Fatalf("List(spec.clusterName=c1): expected %q, got %q", a.Name, list.Items[0].Name)
+	}
+	if list.Items[0].Spec.ClusterName != "c1" {
+		t.Fatalf("List(spec.clusterName=c1): expected ClusterName=c1, got %q", list.Items[0].Spec.ClusterName)
+	}
+}
