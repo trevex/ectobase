@@ -3,6 +3,7 @@ module github.com/trevex/ectobase/central
 go 1.26.4
 
 require (
+	github.com/trevex/ectobase/api v0.0.0-00010101000000-000000000000
 	go.opendefense.cloud/kit v0.3.4
 	k8s.io/api v0.36.2
 	k8s.io/apimachinery v0.36.2
@@ -128,3 +129,5 @@ require (
 )
 
 replace go.opendefense.cloud/kit => /home/nik/Development/apiserver-kit
+
+replace github.com/trevex/ectobase/api => ../api

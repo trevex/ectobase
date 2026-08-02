@@ -12,6 +12,9 @@ import (
 
 	"go.opendefense.cloud/kit/apiserver"
 
+	netv1 "github.com/trevex/ectobase/api/v1alpha1"
+	netapi "github.com/trevex/ectobase/central/apis/net"
+	netinstall "github.com/trevex/ectobase/central/apis/net/install"
 	"github.com/trevex/ectobase/central/apis/platform"
 	"github.com/trevex/ectobase/central/apis/platform/install"
 	"github.com/trevex/ectobase/central/apis/platform/v1alpha1"
@@ -26,6 +29,7 @@ var scheme = runtime.NewScheme()
 
 func init() {
 	install.Install(scheme)
+	netinstall.Install(scheme)
 
 	// we need to add the options to empty v1
 	// TODO: fix the server code to avoid this
@@ -48,6 +52,7 @@ func main() {
 		WithOpenAPIDefinitions(componentName, "v0.1.0", openapi.GetOpenAPIDefinitions).
 		With(apiserver.Resource(&platform.ClusterPool{}, v1alpha1.SchemeGroupVersion)).
 		With(apiserver.Resource(&platform.CompiledWorkload{}, v1alpha1.SchemeGroupVersion)).
+		With(apiserver.Resource(&netapi.VPC{}, netv1.SchemeGroupVersion)).
 		Execute()
 	os.Exit(code)
 }
