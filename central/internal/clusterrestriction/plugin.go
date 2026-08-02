@@ -7,8 +7,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/admission"
 )
@@ -51,17 +51,9 @@ func (p *plugin) Validate(_ context.Context, a admission.Attributes, _ admission
 }
 
 // setsClusterName reports whether the write introduces or changes spec.clusterName.
-// It reads spec.clusterName generically (works for typed or unstructured objects)
-// so it is robust across VirtualMachine, CompiledNIC and CompiledWorkload. Objects
-// without a spec.clusterName (e.g. VPC, ClusterPool) always report false.
-//
-// A ToUnstructured conversion error yields "" (fail open), which is safe here — NOT
-// a bypass primitive: admission runs post-decode, so the object is already a valid,
-// storable API type, and the same reflective JSON machinery serializes it to etcd.
-// An object that fails ToUnstructured on spec therefore cannot persist a
-// spec.clusterName either. Fail-closed would be strictly worse: it would deny every
-// broker write of any (future) type that can't round-trip, breaking the broker's own
-// pool-status heartbeat — a real availability regression against an unreachable risk.
+// It reads the Spec.ClusterName field generically so it is robust across
+// VirtualMachine, CompiledNIC and CompiledWorkload. Objects without such a field
+// (e.g. VPC, ClusterPool) always report false.
 func setsClusterName(a admission.Attributes) bool {
 	newVal := clusterNameOf(a.GetObject())
 	switch a.GetOperation() {
@@ -74,19 +66,36 @@ func setsClusterName(a admission.Attributes) bool {
 	}
 }
 
-// clusterNameOf extracts spec.clusterName from an arbitrary runtime.Object,
-// returning "" when absent or on any conversion error.
+// clusterNameOf extracts Spec.ClusterName from an arbitrary runtime.Object via
+// reflection on the Go field, returning "" when the field is absent.
+//
+// Reflection (not ToUnstructured + json path) is deliberate and load-bearing for
+// the security guarantee: the aggregated apiserver hands admission the INTERNAL
+// object (central/apis/net.VirtualMachine etc.), whose structs carry NO json tags,
+// so ToUnstructured would key the map by Go field names ("Spec"/"ClusterName") and a
+// "spec.clusterName" lookup would silently miss — failing the guard open. Reflecting
+// on the Go field name works for both the internal and versioned representations.
 func clusterNameOf(obj runtime.Object) string {
 	if obj == nil {
 		return ""
 	}
-	m, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
-	if err != nil {
+	v := reflect.ValueOf(obj)
+	if v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			return ""
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
 		return ""
 	}
-	v, _, err := unstructured.NestedString(m, "spec", "clusterName")
-	if err != nil {
+	spec := v.FieldByName("Spec")
+	if !spec.IsValid() || spec.Kind() != reflect.Struct {
 		return ""
 	}
-	return v
+	cn := spec.FieldByName("ClusterName")
+	if !cn.IsValid() || cn.Kind() != reflect.String {
+		return ""
+	}
+	return cn.String()
 }
