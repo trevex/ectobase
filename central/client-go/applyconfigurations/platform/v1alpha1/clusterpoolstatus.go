@@ -3,6 +3,7 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
 )
 
@@ -15,6 +16,10 @@ type ClusterPoolStatusApplyConfiguration struct {
 	Phase *string `json:"phase,omitempty"`
 	// Conditions represent the latest available observations of the ClusterPool's state.
 	Conditions []v1.ConditionApplyConfiguration `json:"conditions,omitempty"`
+	// Allocatable is the schedulable capacity the broker reports for this pool.
+	Allocatable *corev1.ResourceList `json:"allocatable,omitempty"`
+	// Lease is the broker heartbeat; a stale RenewTime drives Phase to Unknown.
+	Lease *ClusterPoolLeaseApplyConfiguration `json:"lease,omitempty"`
 }
 
 // ClusterPoolStatusApplyConfiguration constructs a declarative configuration of the ClusterPoolStatus type for use with
@@ -41,5 +46,21 @@ func (b *ClusterPoolStatusApplyConfiguration) WithConditions(values ...*v1.Condi
 		}
 		b.Conditions = append(b.Conditions, *values[i])
 	}
+	return b
+}
+
+// WithAllocatable sets the Allocatable field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Allocatable field is set to the value of the last call.
+func (b *ClusterPoolStatusApplyConfiguration) WithAllocatable(value corev1.ResourceList) *ClusterPoolStatusApplyConfiguration {
+	b.Allocatable = &value
+	return b
+}
+
+// WithLease sets the Lease field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Lease field is set to the value of the last call.
+func (b *ClusterPoolStatusApplyConfiguration) WithLease(value *ClusterPoolLeaseApplyConfiguration) *ClusterPoolStatusApplyConfiguration {
+	b.Lease = value
 	return b
 }

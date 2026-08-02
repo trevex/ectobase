@@ -11,6 +11,11 @@ func (in ClusterPool) OpenAPIModelName() string {
 }
 
 // OpenAPIModelName returns the OpenAPI model name for this type.
+func (in ClusterPoolLease) OpenAPIModelName() string {
+	return "dev.ectobase.platform.v1alpha1.ClusterPoolLease"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
 func (in ClusterPoolList) OpenAPIModelName() string {
 	return "dev.ectobase.platform.v1alpha1.ClusterPoolList"
 }

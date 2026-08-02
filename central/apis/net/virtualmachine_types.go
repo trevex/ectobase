@@ -4,6 +4,7 @@
 package net
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -13,12 +14,18 @@ type VirtualMachineSpec struct {
 	ClusterName string
 	// InterfaceRefs names the NetworkInterfaces (same namespace) this VM owns.
 	InterfaceRefs []LocalObjectReference
+	// Resources is the compute resource request/limit for this workload.
+	Resources corev1.ResourceRequirements
+	// PoolSelector, if set, restricts scheduling to ClusterPools whose labels match.
+	PoolSelector *metav1.LabelSelector
 }
 
 // VirtualMachineStatus defines the observed state of a VirtualMachine.
 type VirtualMachineStatus struct {
 	// Phase is the current lifecycle phase of the VirtualMachine.
 	Phase string
+	// Conditions capture scheduling/failover observations.
+	Conditions []metav1.Condition
 }
 
 // +genclient
