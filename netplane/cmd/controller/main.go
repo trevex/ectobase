@@ -7,10 +7,13 @@ package main
 import (
 	"flag"
 	"log"
+	"os"
 
 	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 	"github.com/trevex/ectobase/netplane/controllers"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	// registers --kubeconfig flag to flag.CommandLine via init().
 	_ "sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -18,6 +21,17 @@ import (
 )
 
 func main() {
+	// CRITICAL: disable client-go streaming list-watch before any client/manager construction.
+	// This controller now targets the central aggregated apiserver, which does not support the
+	// client-go WatchList; without this flag the informer stalls silently and no events are delivered.
+	os.Setenv("KUBE_FEATURE_WatchListClient", "false") //nolint:errcheck
+
+	var (
+		centralKubeconfig string
+		clusterName       string
+	)
+	flag.StringVar(&centralKubeconfig, "central-kubeconfig", "", "Path to the central aggregated-apiserver kubeconfig (falls back to in-cluster/KUBECONFIG when empty).")
+	flag.StringVar(&clusterName, "cluster-name", "", "Default cluster binding stamped onto CompiledNICs whose NIC has no owning VirtualMachine.")
 	flag.Parse()
 
 	scheme := runtime.NewScheme()
@@ -25,7 +39,15 @@ func main() {
 		log.Fatalf("add scheme: %v", err)
 	}
 
-	cfg, err := ctrl.GetConfig()
+	// Build the rest.Config from --central-kubeconfig if given, else fall back to the
+	// controller-runtime default (in-cluster, then --kubeconfig / KUBECONFIG).
+	var cfg *rest.Config
+	var err error
+	if centralKubeconfig != "" {
+		cfg, err = clientcmd.BuildConfigFromFlags("", centralKubeconfig)
+	} else {
+		cfg, err = ctrl.GetConfig()
+	}
 	if err != nil {
 		log.Fatalf("get config: %v", err)
 	}
@@ -45,7 +67,7 @@ func main() {
 		log.Fatalf("setup natgateway controller: %v", err)
 	}
 
-	if err := (&controllers.CompiledNICReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+	if err := (&controllers.CompiledNICReconciler{Client: mgr.GetClient(), DefaultClusterName: clusterName}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup compilednic controller: %v", err)
 	}
 

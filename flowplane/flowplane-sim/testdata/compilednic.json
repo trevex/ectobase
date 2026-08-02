@@ -6,6 +6,7 @@
     "namespace": "default"
   },
   "spec": {
+    "clusterName": "test",
     "nodeName": "node-1",
     "vni": 100,
     "port": {

@@ -31,6 +31,29 @@ type PeerImportSpec struct {
 	ImportPrefixes []string
 }
 
+// Placement is the cluster binding for a compiled object, resolved from the
+// owning VirtualMachine (or the compiler default for NICs with no owning VM).
+type Placement struct {
+	ClusterName string
+	WorkloadID  string // owning VM name; "" when defaulted (no workload label)
+}
+
+// resolvePlacement finds the VirtualMachine (same namespace) that owns nic via
+// its spec.interfaceRefs and returns its placement; falls back to the default
+// cluster name with no workload id when no VM owns the NIC. A NIC has one owning
+// VM by construction; if several reference it (an invalid config), the first in
+// list order wins.
+func resolvePlacement(nic *netv1.NetworkInterface, vms []netv1.VirtualMachine, defaultCluster string) Placement {
+	for i := range vms {
+		for _, ref := range vms[i].Spec.InterfaceRefs {
+			if ref.Name == nic.Name {
+				return Placement{ClusterName: vms[i].Spec.ClusterName, WorkloadID: vms[i].Name}
+			}
+		}
+	}
+	return Placement{ClusterName: defaultCluster}
+}
+
 // Compile lowers a NetworkInterface into a CompiledNIC of per-NIC STATIC POLICY (the agent gets
 // node-local facts like the underlay from the local dataplane, not from here).
 //
@@ -40,7 +63,7 @@ type PeerImportSpec struct {
 // (natBySource, keyed by source overlay IP), records a CompiledNATSource. peerings is a pre-resolved
 // slice of PeerImportSpecs; only entries whose VPCName matches the NIC's VPC are emitted. The
 // returned CompiledNIC has no Status set (caller fills that in if needed).
-func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPolicy, lbs []netv1.LoadBalancer, peerings []PeerImportSpec, natBySource map[string]netv1.NATAllocation) netv1.CompiledNIC {
+func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPolicy, lbs []netv1.LoadBalancer, peerings []PeerImportSpec, natBySource map[string]netv1.NATAllocation, placement Placement) netv1.CompiledNIC {
 	nodeName := ""
 	if nic.Spec.NodeName != nil {
 		nodeName = *nic.Spec.NodeName
@@ -158,12 +181,25 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 		})
 	}
 
+	compiled.Spec.ClusterName = placement.ClusterName
+	if placement.WorkloadID != "" {
+		if compiled.Labels == nil {
+			compiled.Labels = map[string]string{}
+		}
+		compiled.Labels["workload"] = placement.WorkloadID
+	}
+
 	return compiled
 }
 
 // CompiledNICReconciler watches NetworkInterfaces and NetworkPolicies, then
 // writes (create/update) CompiledNIC objects by calling Compile().
-type CompiledNICReconciler struct{ Client client.Client }
+type CompiledNICReconciler struct {
+	Client client.Client
+	// DefaultClusterName is the cluster binding stamped onto CompiledNICs whose NIC has no owning
+	// VirtualMachine (spec.interfaceRefs). NICs owned by a VM inherit the VM's spec.clusterName instead.
+	DefaultClusterName string
+}
 
 // vpcVNI resolves a VPC's effective VNI from its status.vni, returning 0 if the VPC is
 // not found or has no VNI allocated yet. (The agent has an equivalent vpcVNIFor helper,
@@ -258,7 +294,13 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("gather nat allocations: %w", err)
 	}
-	compiled := Compile(&nic, vni, policies.Items, lbs.Items, peerImports, natBySource)
+	// Resolve placement (cluster binding) from the owning VirtualMachine, if any, else the default.
+	var vms netv1.VirtualMachineList
+	if err := r.Client.List(ctx, &vms, client.InNamespace(nic.Namespace)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list virtualmachines: %w", err)
+	}
+	placement := resolvePlacement(&nic, vms.Items, r.DefaultClusterName)
+	compiled := Compile(&nic, vni, policies.Items, lbs.Items, peerImports, natBySource, placement)
 	key := types.NamespacedName{Namespace: compiled.Namespace, Name: compiled.Name}
 	var existing netv1.CompiledNIC
 	err = r.Client.Get(ctx, key, &existing)
@@ -273,10 +315,16 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	case err != nil:
 		return ctrl.Result{}, err
 	default:
-		if reflect.DeepEqual(existing.Spec, compiled.Spec) {
+		// The workload label lives in ObjectMeta (not Spec), so DeepEqual on Spec alone would miss a
+		// placement change that only re-stamps the label (e.g. a NIC gaining/losing an owning VM).
+		if reflect.DeepEqual(existing.Spec, compiled.Spec) && existing.Labels["workload"] == compiled.Labels["workload"] {
 			return ctrl.Result{}, nil // unchanged: no write, no resourceVersion churn
 		}
 		existing.Spec = compiled.Spec
+		if existing.Labels == nil {
+			existing.Labels = map[string]string{}
+		}
+		existing.Labels["workload"] = compiled.Labels["workload"]
 		if err := r.Client.Update(ctx, &existing); err != nil {
 			return ctrl.Result{}, fmt.Errorf("update compilednic: %w", err)
 		}
@@ -300,6 +348,9 @@ func (r *CompiledNICReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// use the default predicate (react to status updates) rather than GenerationChangedPredicate.
 		Watches(&netv1.NATGateway{}, handler.EnqueueRequestsFromMapFunc(r.nicsForNAT)).
 		Watches(&netv1.VPC{}, handler.EnqueueRequestsFromMapFunc(r.nicsForVPC)).
+		// A VirtualMachine's spec.clusterName (placement) is stamped onto its NICs' CompiledNICs, so
+		// re-enqueue the owned NICs when the VM changes.
+		Watches(&netv1.VirtualMachine{}, handler.EnqueueRequestsFromMapFunc(r.nicsForVM)).
 		Complete(r)
 }
 
@@ -328,6 +379,20 @@ func (r *CompiledNICReconciler) nicsForNAT(ctx context.Context, obj client.Objec
 				break
 			}
 		}
+	}
+	return reqs
+}
+
+// nicsForVM maps a VirtualMachine event to reconcile requests for each NetworkInterface it owns
+// (via spec.interfaceRefs), so a placement (spec.clusterName) change re-stamps their CompiledNICs.
+func (r *CompiledNICReconciler) nicsForVM(ctx context.Context, obj client.Object) []reconcile.Request {
+	vm, ok := obj.(*netv1.VirtualMachine)
+	if !ok {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for _, ref := range vm.Spec.InterfaceRefs {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: vm.Namespace, Name: ref.Name}})
 	}
 	return reqs
 }
