@@ -139,3 +139,84 @@ func TestClusterPool_CRUDAndWatch(t *testing.T) {
 		t.Fatalf("Delete: %v", err)
 	}
 }
+
+// TestClusterPool_SpecFieldSelector proves the selectable spec.region field
+// selector: two pools (eu, us) are created and a List filtered by
+// spec.region=eu must return exactly the eu pool.
+func TestClusterPool_SpecFieldSelector(t *testing.T) {
+	t.Setenv("GOWORK", "off")
+
+	scheme := runtime.NewScheme()
+	install.Install(scheme)
+	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register apiregistration scheme: %v", err)
+	}
+
+	env, err := kitenvtest.NewEnvironment(
+		"github.com/trevex/ectobase/central/cmd/apiserver",
+		nil,
+		[]string{filepath.Join(".", "fixtures")},
+	)
+	if err != nil {
+		t.Fatalf("NewEnvironment: %v", err)
+	}
+
+	if _, err := env.Start(scheme, os.Stderr); err != nil {
+		t.Fatalf("env.Start: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := env.Stop(); err != nil {
+			t.Errorf("env.Stop: %v", err)
+		}
+	})
+
+	if err := env.WaitUntilReadyWithTimeout(apiServiceTimeout); err != nil {
+		t.Fatalf("WaitUntilReadyWithTimeout: %v", err)
+	}
+
+	c, err := client.New(env.GetRESTConfig(), client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatalf("New client: %v", err)
+	}
+
+	ctx := kitenvtest.Context()
+
+	// --- Create a{region:eu}, b{region:us}. ---
+	a := &v1alpha1.ClusterPool{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "sel-eu-"},
+		Spec:       v1alpha1.ClusterPoolSpec{Region: "eu"},
+	}
+	if err := c.Create(ctx, a); err != nil {
+		t.Fatalf("Create a: %v", err)
+	}
+	b := &v1alpha1.ClusterPool{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "sel-us-"},
+		Spec:       v1alpha1.ClusterPoolSpec{Region: "us"},
+	}
+	if err := c.Create(ctx, b); err != nil {
+		t.Fatalf("Create b: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = c.Delete(ctx, a)
+		_ = c.Delete(ctx, b)
+	})
+
+	// --- List filtered by spec.region=eu must return exactly [a]. ---
+	list := &v1alpha1.ClusterPoolList{}
+	if err := c.List(ctx, list, client.MatchingFields{"spec.region": "eu"}); err != nil {
+		t.Fatalf("List(spec.region=eu): %v", err)
+	}
+	if len(list.Items) != 1 {
+		names := make([]string, len(list.Items))
+		for i := range list.Items {
+			names[i] = list.Items[i].Name
+		}
+		t.Fatalf("List(spec.region=eu): expected exactly 1 item, got %d: %v", len(list.Items), names)
+	}
+	if list.Items[0].Name != a.Name {
+		t.Fatalf("List(spec.region=eu): expected %q, got %q", a.Name, list.Items[0].Name)
+	}
+	if list.Items[0].Spec.Region != "eu" {
+		t.Fatalf("List(spec.region=eu): expected Region=eu, got %q", list.Items[0].Spec.Region)
+	}
+}
