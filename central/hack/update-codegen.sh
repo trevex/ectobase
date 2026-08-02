@@ -38,6 +38,7 @@ kube::codegen::gen_openapi \
     --output-model-name-file "zz_generated.model_name.go" \
     --boilerplate "${PROJECT_DIR}/hack/boilerplate.go.txt" \
     --extra-pkgs "k8s.io/api/core/v1" \
+    --extra-pkgs "github.com/trevex/ectobase/api/v1alpha1" \
     "${PROJECT_DIR}/apis"
 
 kube::codegen::gen_client \

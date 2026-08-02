@@ -62,7 +62,7 @@ func TestCompile_ProducesCompiledNIC(t *testing.T) {
 	nic := testNIC()
 	pol := testPolicy()
 
-	c := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{pol}, nil, nil, nil)
+	c := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{pol}, nil, nil, nil, Placement{ClusterName: "test"})
 
 	if c.Spec.VNI != 100 {
 		t.Fatalf("VNI = %d, want 100", c.Spec.VNI)
@@ -96,7 +96,7 @@ func TestCompile_SelectorMismatch(t *testing.T) {
 	nic.Labels = map[string]string{"role": "backend"}
 	pol := testPolicy() // selects {role: frontend}
 
-	c := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{pol}, nil, nil, nil)
+	c := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{pol}, nil, nil, nil, Placement{ClusterName: "test"})
 
 	// No policy selects this NIC, so it is unpolicied → gets the k8s default-allow-all rules
 	// (both v4 and v6 families) in each direction.
@@ -110,7 +110,7 @@ func TestCompile_SelectorMismatch(t *testing.T) {
 
 func TestCompile_UnpoliciedGetsAllowAll(t *testing.T) {
 	nic := testNIC()                                      // has labels that testPolicy() selects
-	c := Compile(nic, nic.Status.VNI, nil, nil, nil, nil) // no policies
+	c := Compile(nic, nic.Status.VNI, nil, nil, nil, nil, Placement{ClusterName: "test"}) // no policies
 	if len(c.Spec.Firewall.Ingress) != 2 || !hasAllowCIDR(c.Spec.Firewall.Ingress, "0.0.0.0/0") || !hasAllowCIDR(c.Spec.Firewall.Ingress, "::/0") {
 		t.Fatalf("expected v4+v6 allow-all ingress rules, got %+v", c.Spec.Firewall.Ingress)
 	}
@@ -118,7 +118,7 @@ func TestCompile_UnpoliciedGetsAllowAll(t *testing.T) {
 		t.Fatalf("expected v4+v6 allow-all egress rules, got %+v", c.Spec.Firewall.Egress)
 	}
 	// A policied NIC keeps ONLY its policy rules — no allow-all appended.
-	c2 := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{testPolicy()}, nil, nil, nil)
+	c2 := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{testPolicy()}, nil, nil, nil, Placement{ClusterName: "test"})
 	for _, r := range c2.Spec.Firewall.Ingress {
 		if r.CIDR == "0.0.0.0/0" && r.Port == 0 && r.Proto == "" {
 			t.Fatalf("policied NIC must not get allow-all: %+v", c2.Spec.Firewall.Ingress)
@@ -143,7 +143,7 @@ func hasAllowCIDR(rules []netv1.CompiledFwRule, cidr string) bool {
 func TestCompile_RulelessGetsBothFamilies(t *testing.T) {
 	// Ruleless NIC → both directions get both families.
 	nic := testNIC()
-	c := Compile(nic, nic.Status.VNI, nil, nil, nil, nil) // no policies
+	c := Compile(nic, nic.Status.VNI, nil, nil, nil, nil, Placement{ClusterName: "test"}) // no policies
 	for _, dir := range []struct {
 		name  string
 		rules []netv1.CompiledFwRule
@@ -161,7 +161,7 @@ func TestCompile_RulelessGetsBothFamilies(t *testing.T) {
 
 	// A direction WITH an explicit rule gets NEITHER default-allow. testPolicy() sets only
 	// ingress, so ingress is governed (no injection) while egress remains ruleless.
-	c2 := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{testPolicy()}, nil, nil, nil)
+	c2 := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{testPolicy()}, nil, nil, nil, Placement{ClusterName: "test"})
 	if hasAllowCIDR(c2.Spec.Firewall.Ingress, "0.0.0.0/0") || hasAllowCIDR(c2.Spec.Firewall.Ingress, "::/0") {
 		t.Fatalf("policied ingress must not get any default-allow: %+v", c2.Spec.Firewall.Ingress)
 	}
@@ -175,7 +175,7 @@ func TestCompile_WritesFixture(t *testing.T) {
 	nic := testNIC()
 	pol := testPolicy()
 
-	c := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{pol}, nil, nil, nil)
+	c := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{pol}, nil, nil, nil, Placement{ClusterName: "test"})
 
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
@@ -224,7 +224,7 @@ func TestCompile_LBSelectorMatch(t *testing.T) {
 			TargetSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
 		},
 	}
-	c := Compile(nic, nic.Status.VNI, nil, []netv1.LoadBalancer{lb}, nil, nil)
+	c := Compile(nic, nic.Status.VNI, nil, []netv1.LoadBalancer{lb}, nil, nil, Placement{ClusterName: "test"})
 	if len(c.Spec.LB) != 1 {
 		t.Fatalf("want 1 CompiledLB, got %d", len(c.Spec.LB))
 	}
@@ -246,7 +246,7 @@ func TestCompile_LBRefMatch(t *testing.T) {
 			TargetRefs: []netv1.LocalObjectReference{{Name: "db-0"}},
 		},
 	}
-	c := Compile(nic, nic.Status.VNI, nil, []netv1.LoadBalancer{lb}, nil, nil)
+	c := Compile(nic, nic.Status.VNI, nil, []netv1.LoadBalancer{lb}, nil, nil, Placement{ClusterName: "test"})
 	if len(c.Spec.LB) != 1 || c.Spec.LB[0].VIP != "2001:db8::1" {
 		t.Fatalf("ref match failed: %+v", c.Spec.LB)
 	}
@@ -261,7 +261,7 @@ func TestCompile_LBNoMatch(t *testing.T) {
 			TargetSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
 		},
 	}
-	c := Compile(nic, nic.Status.VNI, nil, []netv1.LoadBalancer{lb}, nil, nil)
+	c := Compile(nic, nic.Status.VNI, nil, []netv1.LoadBalancer{lb}, nil, nil, Placement{ClusterName: "test"})
 	if len(c.Spec.LB) != 0 {
 		t.Fatalf("want 0 CompiledLB for non-matching NIC, got %d", len(c.Spec.LB))
 	}
@@ -273,7 +273,7 @@ func TestCompile_PeerImports(t *testing.T) {
 		{VPCName: nic.Spec.VPCRef.Name, PeerVNI: 200, ImportPrefixes: []string{"10.1.0.0/24"}},
 		{VPCName: "some-other-vpc", PeerVNI: 300, ImportPrefixes: []string{"10.9.0.0/24"}}, // different VPC — must be ignored
 	}
-	c := Compile(nic, nic.Status.VNI, nil, nil, peerings, nil)
+	c := Compile(nic, nic.Status.VNI, nil, nil, peerings, nil, Placement{ClusterName: "test"})
 	if len(c.Spec.PeerImports) != 1 {
 		t.Fatalf("PeerImports = %d, want 1", len(c.Spec.PeerImports))
 	}
@@ -290,7 +290,7 @@ func TestCompile_NATFromAllocations(t *testing.T) {
 		"10.0.0.10": {Source: "10.0.0.10", PublicIP: "203.0.113.7", PortMin: 1024, PortMax: 2047},
 		"10.9.9.9":  {Source: "10.9.9.9", PublicIP: "203.0.113.8", PortMin: 0, PortMax: 1023}, // other NIC — ignored
 	}
-	c := Compile(nic, nic.Status.VNI, nil, nil, nil, natBySource)
+	c := Compile(nic, nic.Status.VNI, nil, nil, nil, natBySource, Placement{ClusterName: "test"})
 
 	if len(c.Spec.NAT) != 1 {
 		t.Fatalf("want 1 CompiledNATSource (only the NIC's own IP), got %d: %+v", len(c.Spec.NAT), c.Spec.NAT)
@@ -302,6 +302,34 @@ func TestCompile_NATFromAllocations(t *testing.T) {
 	// The underlay is NOT compiled into the spec — it is node-local state the agent resolves from
 	// the local dataplane. Confirm the compiler leaves it out.
 	_ = nic.Status.UnderlayRoute
+}
+
+func TestResolvePlacement(t *testing.T) {
+	nic := &netv1.NetworkInterface{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "nic-a"}}
+	vms := []netv1.VirtualMachine{{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "vm1"},
+		Spec:       netv1.VirtualMachineSpec{ClusterName: "edge1", InterfaceRefs: []netv1.LocalObjectReference{{Name: "nic-a"}}},
+	}}
+	got := resolvePlacement(nic, vms, "default-cluster")
+	if got.ClusterName != "edge1" || got.WorkloadID != "vm1" {
+		t.Fatalf("owned NIC: got %+v", got)
+	}
+	orphan := &netv1.NetworkInterface{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "nic-x"}}
+	got = resolvePlacement(orphan, vms, "default-cluster")
+	if got.ClusterName != "default-cluster" || got.WorkloadID != "" {
+		t.Fatalf("orphan NIC: got %+v", got)
+	}
+}
+
+func TestCompile_StampsPlacement(t *testing.T) {
+	nic := &netv1.NetworkInterface{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "nic-a"}, Spec: netv1.NetworkInterfaceSpec{IPs: []string{"10.0.0.1"}}}
+	c := Compile(nic, 100, nil, nil, nil, nil, Placement{ClusterName: "edge1", WorkloadID: "vm1"})
+	if c.Spec.ClusterName != "edge1" {
+		t.Fatalf("clusterName not stamped: %q", c.Spec.ClusterName)
+	}
+	if c.Labels["workload"] != "vm1" {
+		t.Fatalf("workload label not stamped: %v", c.Labels)
+	}
 }
 
 func lbScheme(t *testing.T) *runtime.Scheme {

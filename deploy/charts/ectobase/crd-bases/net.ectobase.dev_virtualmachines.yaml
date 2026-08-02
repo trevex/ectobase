@@ -1,0 +1,79 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: virtualmachines.net.ectobase.dev
+spec:
+  group: net.ectobase.dev
+  names:
+    kind: VirtualMachine
+    listKind: VirtualMachineList
+    plural: virtualmachines
+    singular: virtualmachine
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: VirtualMachine is the placement anchor for a workload.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              VirtualMachineSpec defines the desired state of a VirtualMachine.
+
+              In Phase 1b the VirtualMachine is a PLACEMENT ANCHOR only: it names the
+              cluster the workload is bound to and the NetworkInterfaces it owns. The
+              compiler propagates ClusterName (and a workload=<name> label) onto the
+              CompiledNICs of the referenced interfaces. VMI/volume lifecycle is a later phase.
+            properties:
+              clusterName:
+                description: |-
+                  ClusterName is the cluster this workload is bound to. Set manually or by
+                  the compiler default in Phase 1b; the Phase-3 scheduler writes it later.
+                type: string
+              interfaceRefs:
+                description: InterfaceRefs names the NetworkInterfaces (same namespace)
+                  this VM owns.
+                items:
+                  description: LocalObjectReference references an object by name within
+                    the same namespace.
+                  properties:
+                    name:
+                      description: Name is the name of the referenced object.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+            type: object
+          status:
+            description: VirtualMachineStatus defines the observed state of a VirtualMachine.
+            properties:
+              phase:
+                description: Phase is the current lifecycle phase of the VirtualMachine.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

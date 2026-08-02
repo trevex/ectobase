@@ -1,7 +1,7 @@
 // Copyright 2026 ectobase contributors
 // SPDX-License-Identifier: Apache-2.0
 
-// Command broker runs the per-cluster broker: it watches CompiledWorkload objects
+// Command broker runs the per-cluster broker: it watches CompiledNIC objects
 // in the CENTRAL aggregated apiserver (filtered by spec.clusterName) and
 // set-reconciles them onto a DOWNSTREAM cluster's apiserver.
 //
@@ -28,8 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	platforminstall "github.com/trevex/ectobase/central/apis/platform/install"
-	"github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 	"github.com/trevex/ectobase/central/internal/broker"
 )
 
@@ -55,9 +54,11 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
-	// Build scheme: platform types + meta group (aggregated apiserver has no core-v1).
+	// Build scheme: net.ectobase.dev types + meta group (aggregated apiserver has no core-v1).
 	scheme := runtime.NewScheme()
-	platforminstall.Install(scheme)
+	if err := netv1.AddToScheme(scheme); err != nil {
+		log.Fatalf("register net.ectobase.dev scheme: %v", err)
+	}
 	metav1.AddToGroupVersion(scheme, schema.GroupVersion{Version: "v1"})
 
 	// Central rest.Config — from --central-kubeconfig if given, else in-cluster/KUBECONFIG.
@@ -84,7 +85,7 @@ func main() {
 		Metrics: metricsserver.Options{BindAddress: "0"},
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
-				&v1alpha1.CompiledWorkload{}: {
+				&netv1.CompiledNIC{}: {
 					Field: fields.OneTermEqualSelector("spec.clusterName", clusterName),
 				},
 			},
@@ -94,7 +95,7 @@ func main() {
 		log.Fatalf("new manager: %v", err)
 	}
 
-	// Reconciler: on any CompiledWorkload event, trigger a full set-reconcile.
+	// Reconciler: on any CompiledNIC event, trigger a full set-reconcile.
 	// A full resync per event is correct here: SyncOnce is declarative + idempotent
 	// (derives both desired and current sets live; no in-memory diff state).
 	// The central client comes from the manager so it reads through the cache.
@@ -104,7 +105,7 @@ func main() {
 		clusterName: clusterName,
 	}
 	if err := ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.CompiledWorkload{}).
+		For(&netv1.CompiledNIC{}).
 		Complete(r); err != nil {
 		log.Fatalf("setup broker controller: %v", err)
 	}
@@ -115,7 +116,7 @@ func main() {
 }
 
 // brokerReconciler wraps the broker engine so it satisfies reconcile.Reconciler.
-// It holds no per-object state: every CompiledWorkload event triggers a full
+// It holds no per-object state: every CompiledNIC event triggers a full
 // SyncOnce (declarative set-reconcile; idempotent and restart-safe).
 type brokerReconciler struct {
 	central     client.Client

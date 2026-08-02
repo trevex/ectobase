@@ -19,6 +19,12 @@ import (
 // correct node-local nexthop. Keeping node-local state out of this central object avoids a
 // compile->sync round-trip that would lag (and flap) the announced nexthop.
 type CompiledNICSpec struct {
+	// ClusterName is the cluster this compiled NIC is bound to (the pod->node
+	// binding). Set by the compiler from the owning VirtualMachine's placement,
+	// or the compiler's --cluster-name default for NICs with no owning VM.
+	// The per-cluster broker selects on this field.
+	// +optional
+	ClusterName string `json:"clusterName,omitempty"`
 	// NodeName is the node this NIC is scheduled on.
 	NodeName string `json:"nodeName"`
 	// VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's

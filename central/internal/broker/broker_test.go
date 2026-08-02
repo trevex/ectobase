@@ -12,51 +12,65 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	platforminstall "github.com/trevex/ectobase/central/apis/platform/install"
-	v1alpha1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 )
 
-func newScheme(t *testing.T) *runtime.Scheme {
-	t.Helper()
+// TestSync_NamespacedCreateUpdateGC drives the set-reconcile over the REAL,
+// namespaced CompiledNIC across TWO namespaces: create, update (drift),
+// GC (extra), and bounded-by-clusterName (c2 must not cross).
+func TestSync_NamespacedCreateUpdateGC(t *testing.T) {
 	s := runtime.NewScheme()
-	platforminstall.Install(s)
-	return s
-}
-
-func wl(name, cn, payload string) *v1alpha1.CompiledWorkload {
-	return &v1alpha1.CompiledWorkload{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec:       v1alpha1.CompiledWorkloadSpec{ClusterName: cn, Payload: payload},
+	if err := netv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestSync_CreatesUpdatesDeletes(t *testing.T) {
-	s := newScheme(t)
-	idx := func(o client.Object) []string { return []string{o.(*v1alpha1.CompiledWorkload).Spec.ClusterName} }
+	wl := func(ns, name, cn, node string) *netv1.CompiledNIC {
+		return &netv1.CompiledNIC{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+			Spec:       netv1.CompiledNICSpec{ClusterName: cn, NodeName: node},
+		}
+	}
+	idx := func(o client.Object) []string { return []string{o.(*netv1.CompiledNIC).Spec.ClusterName} }
 	central := fake.NewClientBuilder().WithScheme(s).
-		WithIndex(&v1alpha1.CompiledWorkload{}, "spec.clusterName", idx).
-		WithObjects(wl("a", "c1", "x"), wl("b", "c2", "y")).Build()
+		WithIndex(&netv1.CompiledNIC{}, "spec.clusterName", idx).
+		WithObjects(wl("ns1", "a", "c1", "n1"), wl("ns2", "b", "c1", "n2"), wl("ns1", "c", "c2", "n3")).Build()
 	downstream := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(wl("stale", "c1", "old"), wl("a", "c1", "OLD")).Build()
+		WithObjects(wl("ns1", "stale", "c1", "old"), wl("ns1", "a", "c1", "OLD")).Build()
 
 	b := &Broker{Central: central, Downstream: downstream, ClusterName: "c1"}
 	if err := b.SyncOnce(context.Background()); err != nil {
-		t.Fatalf("SyncOnce: %v", err)
+		t.Fatal(err)
 	}
-	list := &v1alpha1.CompiledWorkloadList{}
+
+	list := &netv1.CompiledNICList{}
 	if err := downstream.List(context.Background(), list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Items) != 1 || list.Items[0].Name != "a" || list.Items[0].Spec.Payload != "x" {
-		t.Fatalf("want exactly [a(payload=x)], got %+v", list.Items)
+	// exactly {ns1/a(node n1), ns2/b(node n2)}: c is c2 (bounded out), ns1/stale GC'd, ns1/a updated OLD->n1.
+	if len(list.Items) != 2 {
+		t.Fatalf("want 2 items, got %d: %+v", len(list.Items), list.Items)
+	}
+	got := map[string]string{}
+	for _, it := range list.Items {
+		got[it.Namespace+"/"+it.Name] = it.Spec.NodeName
+	}
+	if got["ns1/a"] != "n1" || got["ns2/b"] != "n2" {
+		t.Fatalf("unexpected downstream set: %+v", got)
+	}
+	if _, ok := got["ns1/stale"]; ok {
+		t.Fatalf("stale not GC'd: %+v", got)
+	}
+	if _, ok := got["ns1/c"]; ok {
+		t.Fatalf("c2 object crossed the boundary: %+v", got)
 	}
 
-	// Idempotent: a second sync is a no-op (still exactly [a(x)]).
+	// Idempotent: a second sync is a no-op (still exactly 2 items).
 	if err := b.SyncOnce(context.Background()); err != nil {
 		t.Fatalf("second SyncOnce: %v", err)
 	}
-	_ = downstream.List(context.Background(), list)
-	if len(list.Items) != 1 {
+	if err := downstream.List(context.Background(), list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 2 {
 		t.Fatalf("second sync not idempotent: %+v", list.Items)
 	}
 }
