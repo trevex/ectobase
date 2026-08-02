@@ -18,6 +18,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 	// Group=platform.ectobase.dev, Version=v1alpha1
 	case v1alpha1.SchemeGroupVersion.WithKind("ClusterPool"):
 		return &platformv1alpha1.ClusterPoolApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ClusterPoolLease"):
+		return &platformv1alpha1.ClusterPoolLeaseApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ClusterPoolSpec"):
 		return &platformv1alpha1.ClusterPoolSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("ClusterPoolStatus"):

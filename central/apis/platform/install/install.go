@@ -17,3 +17,10 @@ func Install(scheme *runtime.Scheme) {
 	utilruntime.Must(v1alpha1.AddToScheme(scheme))
 	utilruntime.Must(scheme.SetVersionPriority(v1alpha1.SchemeGroupVersion))
 }
+
+// AddToScheme is a convenience wrapper around Install for callers that expect
+// the standard func(scheme *runtime.Scheme) error signature.
+func AddToScheme(scheme *runtime.Scheme) error {
+	Install(scheme)
+	return nil
+}

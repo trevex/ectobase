@@ -19,6 +19,7 @@ import (
 	"github.com/trevex/ectobase/central/apis/platform/install"
 	"github.com/trevex/ectobase/central/apis/platform/v1alpha1"
 	"github.com/trevex/ectobase/central/client-go/openapi"
+	"github.com/trevex/ectobase/central/internal/clusterrestriction"
 )
 
 const (
@@ -50,6 +51,10 @@ func main() {
 	code := apiserver.NewBuilder(scheme).
 		WithComponentName(componentName).
 		WithOpenAPIDefinitions(componentName, "v0.1.0", openapi.GetOpenAPIDefinitions).
+		// Thin ClusterRestriction: a broker (ectobase:cluster:<name>) may write only
+		// its own ClusterPool status and may never set spec.clusterName. Enabled by
+		// default; Phase-1 disables MutatingAdmissionPolicy/ValidatingAdmissionPolicy.
+		WithAdmissionPlugin(clusterrestriction.PluginName, clusterrestriction.Register).
 		With(apiserver.Resource(&platform.ClusterPool{}, v1alpha1.SchemeGroupVersion)).
 		With(apiserver.Resource(&platform.CompiledWorkload{}, v1alpha1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.VPC{}, netv1.SchemeGroupVersion)).

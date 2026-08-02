@@ -4,6 +4,7 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -21,12 +22,26 @@ type VirtualMachineSpec struct {
 	// InterfaceRefs names the NetworkInterfaces (same namespace) this VM owns.
 	// +optional
 	InterfaceRefs []LocalObjectReference `json:"interfaceRefs,omitempty"`
+	// Resources is the compute resource request/limit for this workload. Only
+	// Requests is used for scheduling capacity fit; Limits is carried for parity.
+	// +optional
+	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+	// PoolSelector, if set, restricts scheduling to ClusterPools whose labels match.
+	// +optional
+	PoolSelector *metav1.LabelSelector `json:"poolSelector,omitempty"`
 }
 
 // VirtualMachineStatus defines the observed state of a VirtualMachine.
 type VirtualMachineStatus struct {
 	// Phase is the current lifecycle phase of the VirtualMachine.
 	Phase string `json:"phase,omitempty"`
+	// Conditions capture scheduling/failover observations (Scheduled, Unschedulable, FailoverBlocked).
+	// +optional
+	// +patchMergeKey=type
+	// +patchStrategy=merge
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 
 // +genclient

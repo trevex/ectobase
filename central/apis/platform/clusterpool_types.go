@@ -4,6 +4,7 @@
 package platform
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -21,6 +22,18 @@ type ClusterPoolStatus struct {
 	Phase string
 	// Conditions represent the latest available observations of the ClusterPool's state.
 	Conditions []metav1.Condition
+	// Allocatable is the schedulable capacity the broker reports for this pool.
+	Allocatable corev1.ResourceList
+	// Lease is the broker heartbeat; a stale RenewTime drives Phase to Unknown.
+	Lease *ClusterPoolLease
+}
+
+// ClusterPoolLease is the broker's heartbeat on a ClusterPool.
+type ClusterPoolLease struct {
+	// HolderIdentity is the broker instance currently reporting for this pool.
+	HolderIdentity string
+	// RenewTime is when the holder last renewed the lease.
+	RenewTime *metav1.MicroTime
 }
 
 // +genclient

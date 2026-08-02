@@ -20,6 +20,7 @@
 package v1alpha1
 
 import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	conversion "k8s.io/apimachinery/pkg/conversion"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 
@@ -1456,6 +1457,12 @@ func Convert_v1alpha1_VirtualMachineSpec_To_net_VirtualMachineSpec(in *VirtualMa
 	} else {
 		out.InterfaceRefs = nil
 	}
+	out.Resources = *in.Resources.DeepCopy()
+	if in.PoolSelector != nil {
+		out.PoolSelector = in.PoolSelector.DeepCopy()
+	} else {
+		out.PoolSelector = nil
+	}
 	return nil
 }
 
@@ -1472,17 +1479,35 @@ func Convert_net_VirtualMachineSpec_To_v1alpha1_VirtualMachineSpec(in *net.Virtu
 	} else {
 		out.InterfaceRefs = nil
 	}
+	out.Resources = *in.Resources.DeepCopy()
+	if in.PoolSelector != nil {
+		out.PoolSelector = in.PoolSelector.DeepCopy()
+	} else {
+		out.PoolSelector = nil
+	}
 	return nil
 }
 
 // Convert_v1alpha1_VirtualMachineStatus_To_net_VirtualMachineStatus converts a versioned status to internal.
 func Convert_v1alpha1_VirtualMachineStatus_To_net_VirtualMachineStatus(in *VirtualMachineStatus, out *net.VirtualMachineStatus, _ conversion.Scope) error {
 	out.Phase = in.Phase
+	if in.Conditions != nil {
+		out.Conditions = make([]metav1.Condition, len(in.Conditions))
+		copy(out.Conditions, in.Conditions)
+	} else {
+		out.Conditions = nil
+	}
 	return nil
 }
 
 // Convert_net_VirtualMachineStatus_To_v1alpha1_VirtualMachineStatus converts an internal status to versioned.
 func Convert_net_VirtualMachineStatus_To_v1alpha1_VirtualMachineStatus(in *net.VirtualMachineStatus, out *VirtualMachineStatus, _ conversion.Scope) error {
 	out.Phase = in.Phase
+	if in.Conditions != nil {
+		out.Conditions = make([]metav1.Condition, len(in.Conditions))
+		copy(out.Conditions, in.Conditions)
+	} else {
+		out.Conditions = nil
+	}
 	return nil
 }

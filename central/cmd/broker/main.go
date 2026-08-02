@@ -14,9 +14,12 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,6 +32,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	netv1 "github.com/trevex/ectobase/api/v1alpha1"
+	platforminstall "github.com/trevex/ectobase/central/apis/platform/install"
 	"github.com/trevex/ectobase/central/internal/broker"
 )
 
@@ -54,10 +58,17 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
-	// Build scheme: net.ectobase.dev types + meta group (aggregated apiserver has no core-v1).
+	// Build scheme covering all three groups the broker touches:
+	//   - net.ectobase.dev  (CompiledNIC sync, on central),
+	//   - platform.ectobase.dev (ClusterPool lease/capacity heartbeat, on central),
+	//   - core/v1 (downstream Node list for capacity reporting).
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {
 		log.Fatalf("register net.ectobase.dev scheme: %v", err)
+	}
+	platforminstall.Install(scheme)
+	if err := corev1.AddToScheme(scheme); err != nil {
+		log.Fatalf("register corev1 scheme: %v", err)
 	}
 	metav1.AddToGroupVersion(scheme, schema.GroupVersion{Version: "v1"})
 
@@ -110,9 +121,66 @@ func main() {
 		log.Fatalf("setup broker controller: %v", err)
 	}
 
+	// Heartbeater: renew the ClusterPool lease + report node capacity every 10s.
+	holderIdentity, err := os.Hostname()
+	if err != nil {
+		holderIdentity = clusterName
+	}
+	hb := &broker.Heartbeater{
+		Central:        mgr.GetClient(),
+		PoolName:       clusterName,
+		HolderIdentity: holderIdentity,
+		Reporter:       &nodeCapacityReporter{downstream: downstreamClient},
+		Interval:       10 * time.Second,
+	}
+	if err := mgr.Add(hb); err != nil {
+		log.Fatalf("add heartbeater runnable: %v", err)
+	}
+
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Fatalf("manager: %v", err)
 	}
+}
+
+// nodeCapacityReporter sums Status.Allocatable over all Ready downstream nodes.
+type nodeCapacityReporter struct {
+	downstream client.Client
+}
+
+// Report lists downstream nodes and sums Allocatable resources over Ready nodes only.
+func (r *nodeCapacityReporter) Report(ctx context.Context) (corev1.ResourceList, error) {
+	nodes := &corev1.NodeList{}
+	if err := r.downstream.List(ctx, nodes); err != nil {
+		return nil, fmt.Errorf("list nodes: %w", err)
+	}
+	total := corev1.ResourceList{}
+	for i := range nodes.Items {
+		node := &nodes.Items[i]
+		if !nodeIsReady(node) {
+			continue
+		}
+		for name, qty := range node.Status.Allocatable {
+			if existing, ok := total[name]; ok {
+				existing.Add(qty)
+				total[name] = existing
+			} else {
+				// Copy the quantity so we don't hold a reference into the node list.
+				copied := qty.DeepCopy()
+				total[name] = copied
+			}
+		}
+	}
+	return total, nil
+}
+
+// nodeIsReady returns true when the node has a Ready condition with Status True.
+func nodeIsReady(node *corev1.Node) bool {
+	for _, cond := range node.Status.Conditions {
+		if cond.Type == corev1.NodeReady {
+			return cond.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 // brokerReconciler wraps the broker engine so it satisfies reconcile.Reconciler.

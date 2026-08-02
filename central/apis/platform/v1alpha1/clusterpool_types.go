@@ -4,6 +4,7 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -26,6 +27,23 @@ type ClusterPoolStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,2,rep,name=conditions"`
+	// Allocatable is the schedulable capacity the broker reports for this pool.
+	// +optional
+	Allocatable corev1.ResourceList `json:"allocatable,omitempty" protobuf:"bytes,3,rep,name=allocatable,casttype=k8s.io/api/core/v1.ResourceList,castkey=k8s.io/api/core/v1.ResourceName"`
+	// Lease is the broker heartbeat; a stale RenewTime drives Phase to Unknown.
+	// +optional
+	Lease *ClusterPoolLease `json:"lease,omitempty" protobuf:"bytes,4,opt,name=lease"`
+}
+
+// ClusterPoolLease is the broker's heartbeat on a ClusterPool: the identity
+// holding it and when it was last renewed. Stale RenewTime => the pool is Unknown.
+type ClusterPoolLease struct {
+	// HolderIdentity is the broker instance currently reporting for this pool.
+	// +optional
+	HolderIdentity string `json:"holderIdentity,omitempty" protobuf:"bytes,1,opt,name=holderIdentity"`
+	// RenewTime is when the holder last renewed the lease.
+	// +optional
+	RenewTime *metav1.MicroTime `json:"renewTime,omitempty" protobuf:"bytes,2,opt,name=renewTime"`
 }
 
 // +genclient

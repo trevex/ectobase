@@ -70,6 +70,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/trevex/ectobase/api/v1alpha1.VirtualMachineSpec":     schema_trevex_ectobase_api_v1alpha1_VirtualMachineSpec(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.VirtualMachineStatus":   schema_trevex_ectobase_api_v1alpha1_VirtualMachineStatus(ref),
 		v1alpha1.ClusterPool{}.OpenAPIModelName():                        schema_central_apis_platform_v1alpha1_ClusterPool(ref),
+		v1alpha1.ClusterPoolLease{}.OpenAPIModelName():                   schema_central_apis_platform_v1alpha1_ClusterPoolLease(ref),
 		v1alpha1.ClusterPoolList{}.OpenAPIModelName():                    schema_central_apis_platform_v1alpha1_ClusterPoolList(ref),
 		v1alpha1.ClusterPoolSpec{}.OpenAPIModelName():                    schema_central_apis_platform_v1alpha1_ClusterPoolSpec(ref),
 		v1alpha1.ClusterPoolStatus{}.OpenAPIModelName():                  schema_central_apis_platform_v1alpha1_ClusterPoolStatus(ref),
@@ -2403,11 +2404,24 @@ func schema_trevex_ectobase_api_v1alpha1_VirtualMachineSpec(ref common.Reference
 							},
 						},
 					},
+					"resources": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Resources is the compute resource request/limit for this workload. Only Requests is used for scheduling capacity fit; Limits is carried for parity.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(v1.ResourceRequirements{}.OpenAPIModelName()),
+						},
+					},
+					"poolSelector": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PoolSelector, if set, restricts scheduling to ClusterPools whose labels match.",
+							Ref:         ref(metav1.LabelSelector{}.OpenAPIModelName()),
+						},
+					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference"},
+			"github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference", v1.ResourceRequirements{}.OpenAPIModelName(), metav1.LabelSelector{}.OpenAPIModelName()},
 	}
 }
 
@@ -2425,9 +2439,35 @@ func schema_trevex_ectobase_api_v1alpha1_VirtualMachineStatus(ref common.Referen
 							Format:      "",
 						},
 					},
+					"conditions": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-map-keys": []interface{}{
+									"type",
+								},
+								"x-kubernetes-list-type":       "map",
+								"x-kubernetes-patch-merge-key": "type",
+								"x-kubernetes-patch-strategy":  "merge",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "Conditions capture scheduling/failover observations (Scheduled, Unschedulable, FailoverBlocked).",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(metav1.Condition{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},
+		Dependencies: []string{
+			metav1.Condition{}.OpenAPIModelName()},
 	}
 }
 
@@ -2475,6 +2515,34 @@ func schema_central_apis_platform_v1alpha1_ClusterPool(ref common.ReferenceCallb
 		},
 		Dependencies: []string{
 			v1alpha1.ClusterPoolSpec{}.OpenAPIModelName(), v1alpha1.ClusterPoolStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_central_apis_platform_v1alpha1_ClusterPoolLease(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ClusterPoolLease is the broker's heartbeat on a ClusterPool: the identity holding it and when it was last renewed. Stale RenewTime => the pool is Unknown.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"holderIdentity": {
+						SchemaProps: spec.SchemaProps{
+							Description: "HolderIdentity is the broker instance currently reporting for this pool.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"renewTime": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RenewTime is when the holder last renewed the lease.",
+							Ref:         ref(metav1.MicroTime{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			metav1.MicroTime{}.OpenAPIModelName()},
 	}
 }
 
@@ -2592,11 +2660,31 @@ func schema_central_apis_platform_v1alpha1_ClusterPoolStatus(ref common.Referenc
 							},
 						},
 					},
+					"allocatable": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Allocatable is the schedulable capacity the broker reports for this pool.",
+							Type:        []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Ref: ref(resource.Quantity{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+					"lease": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Lease is the broker heartbeat; a stale RenewTime drives Phase to Unknown.",
+							Ref:         ref(v1alpha1.ClusterPoolLease{}.OpenAPIModelName()),
+						},
+					},
 				},
 			},
 		},
 		Dependencies: []string{
-			metav1.Condition{}.OpenAPIModelName()},
+			v1alpha1.ClusterPoolLease{}.OpenAPIModelName(), resource.Quantity{}.OpenAPIModelName(), metav1.Condition{}.OpenAPIModelName()},
 	}
 }
 
