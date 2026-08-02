@@ -51,6 +51,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&FloatingIPList{},
 		&CompiledNIC{},
 		&CompiledNICList{},
+		&VirtualMachine{},
+		&VirtualMachineList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil
