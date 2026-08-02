@@ -53,6 +53,14 @@ func main() {
 		With(apiserver.Resource(&platform.ClusterPool{}, v1alpha1.SchemeGroupVersion)).
 		With(apiserver.Resource(&platform.CompiledWorkload{}, v1alpha1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.VPC{}, netv1.SchemeGroupVersion)).
+		With(apiserver.Resource(&netapi.NetworkInterface{}, netv1.SchemeGroupVersion)).
+		With(apiserver.Resource(&netapi.FirewallPolicy{}, netv1.SchemeGroupVersion)).
+		With(apiserver.Resource(&netapi.FloatingIP{}, netv1.SchemeGroupVersion)).
+		With(apiserver.Resource(&netapi.LoadBalancer{}, netv1.SchemeGroupVersion)).
+		With(apiserver.Resource(&netapi.NATGateway{}, netv1.SchemeGroupVersion)).
+		With(apiserver.Resource(&netapi.VPCPeering{}, netv1.SchemeGroupVersion)).
+		With(apiserver.Resource(&netapi.CompiledNIC{}, netv1.SchemeGroupVersion)).
+		With(apiserver.Resource(&netapi.VirtualMachine{}, netv1.SchemeGroupVersion)).
 		Execute()
 	os.Exit(code)
 }

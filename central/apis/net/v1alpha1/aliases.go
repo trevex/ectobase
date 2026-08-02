@@ -20,6 +20,61 @@ type (
 	VPCList   = netv1.VPCList
 	VPCSpec   = netv1.VPCSpec
 	VPCStatus = netv1.VPCStatus
+
+	NetworkInterface       = netv1.NetworkInterface
+	NetworkInterfaceList   = netv1.NetworkInterfaceList
+	NetworkInterfaceSpec   = netv1.NetworkInterfaceSpec
+	NetworkInterfaceStatus = netv1.NetworkInterfaceStatus
+	InterfaceQoS           = netv1.InterfaceQoS
+	EgressQoS              = netv1.EgressQoS
+	RateLimit              = netv1.RateLimit
+	PortStatus             = netv1.PortStatus
+	LocalObjectReference   = netv1.LocalObjectReference
+
+	FirewallPolicy       = netv1.FirewallPolicy
+	FirewallPolicyList   = netv1.FirewallPolicyList
+	FirewallPolicySpec   = netv1.FirewallPolicySpec
+	FirewallPolicyStatus = netv1.FirewallPolicyStatus
+	FirewallPolicyRule   = netv1.FirewallPolicyRule
+
+	FloatingIP       = netv1.FloatingIP
+	FloatingIPList   = netv1.FloatingIPList
+	FloatingIPSpec   = netv1.FloatingIPSpec
+	FloatingIPStatus = netv1.FloatingIPStatus
+
+	LoadBalancer       = netv1.LoadBalancer
+	LoadBalancerList   = netv1.LoadBalancerList
+	LoadBalancerSpec   = netv1.LoadBalancerSpec
+	LoadBalancerStatus = netv1.LoadBalancerStatus
+	LoadBalancerPort   = netv1.LoadBalancerPort
+
+	NATGateway       = netv1.NATGateway
+	NATGatewayList   = netv1.NATGatewayList
+	NATGatewaySpec   = netv1.NATGatewaySpec
+	NATGatewayStatus = netv1.NATGatewayStatus
+	NATAllocation    = netv1.NATAllocation
+
+	VPCPeering       = netv1.VPCPeering
+	VPCPeeringList   = netv1.VPCPeeringList
+	VPCPeeringSpec   = netv1.VPCPeeringSpec
+	VPCPeeringStatus = netv1.VPCPeeringStatus
+	VPCReference     = netv1.VPCReference
+
+	CompiledNIC        = netv1.CompiledNIC
+	CompiledNICList    = netv1.CompiledNICList
+	CompiledNICSpec    = netv1.CompiledNICSpec
+	CompiledNICStatus  = netv1.CompiledNICStatus
+	CompiledFirewall   = netv1.CompiledFirewall
+	CompiledFwRule     = netv1.CompiledFwRule
+	CompiledNATSource  = netv1.CompiledNATSource
+	CompiledLB         = netv1.CompiledLB
+	CompiledLBPort     = netv1.CompiledLBPort
+	CompiledPeerImport = netv1.CompiledPeerImport
+
+	VirtualMachine       = netv1.VirtualMachine
+	VirtualMachineList   = netv1.VirtualMachineList
+	VirtualMachineSpec   = netv1.VirtualMachineSpec
+	VirtualMachineStatus = netv1.VirtualMachineStatus
 )
 
 // GroupName is the API group name for these objects.
@@ -48,6 +103,22 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&VPC{},
 		&VPCList{},
+		&NetworkInterface{},
+		&NetworkInterfaceList{},
+		&FirewallPolicy{},
+		&FirewallPolicyList{},
+		&FloatingIP{},
+		&FloatingIPList{},
+		&LoadBalancer{},
+		&LoadBalancerList{},
+		&NATGateway{},
+		&NATGatewayList{},
+		&VPCPeering{},
+		&VPCPeeringList{},
+		&CompiledNIC{},
+		&CompiledNICList{},
+		&VirtualMachine{},
+		&VirtualMachineList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil

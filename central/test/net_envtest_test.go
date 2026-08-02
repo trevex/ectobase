@@ -4,6 +4,7 @@
 package test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -125,5 +126,148 @@ func TestVPC_CRUD(t *testing.T) {
 	// --- Delete (cleanup / exercise delete path). ---
 	if err := c.Delete(ctx, vpc); err != nil {
 		t.Fatalf("Delete: %v", err)
+	}
+}
+
+// startNetEnv boots the aggregated apiserver serving both the platform and net
+// groups and returns a controller-runtime client for it.
+func startNetEnv(t *testing.T) (client.Client, context.Context) {
+	t.Helper()
+	t.Setenv("GOWORK", "off")
+
+	scheme := runtime.NewScheme()
+	platforminstall.Install(scheme)
+	netinstall.Install(scheme)
+	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register apiregistration scheme: %v", err)
+	}
+
+	env, err := kitenvtest.NewEnvironment(
+		"github.com/trevex/ectobase/central/cmd/apiserver",
+		nil,
+		[]string{filepath.Join(".", "fixtures")},
+	)
+	if err != nil {
+		t.Fatalf("NewEnvironment: %v", err)
+	}
+	if _, err := env.Start(scheme, os.Stderr); err != nil {
+		t.Fatalf("env.Start: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := env.Stop(); err != nil {
+			t.Errorf("env.Stop: %v", err)
+		}
+	})
+	if err := env.WaitUntilReadyWithTimeout(apiServiceTimeout); err != nil {
+		t.Fatalf("WaitUntilReadyWithTimeout: %v", err)
+	}
+
+	c, err := client.New(env.GetRESTConfig(), client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatalf("New client: %v", err)
+	}
+	return c, kitenvtest.Context()
+}
+
+// TestNetworkInterface_CRUD proves a second net type (NetworkInterface) is served
+// by the aggregated apiserver: a namespaced NetworkInterface is created and read
+// back, and a couple of its spec fields survive the internal<->versioned
+// conversion round-trip.
+func TestNetworkInterface_CRUD(t *testing.T) {
+	c, ctx := startNetEnv(t)
+
+	nodeName := "node-a"
+	nic := &netv1.NetworkInterface{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "test-nic-",
+			Namespace:    "default",
+		},
+		Spec: netv1.NetworkInterfaceSpec{
+			VPCRef:   netv1.LocalObjectReference{Name: "vpc-1"},
+			IPs:      []string{"10.0.0.5", "fd00::5"},
+			MAC:      "aa:bb:cc:dd:ee:ff",
+			NodeName: &nodeName,
+		},
+	}
+	if err := c.Create(ctx, nic); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if nic.Name == "" {
+		t.Fatalf("Create: expected generated name, got empty")
+	}
+
+	got := &netv1.NetworkInterface{}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(nic), got); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Spec.VPCRef.Name != "vpc-1" {
+		t.Fatalf("Get: expected VPCRef.Name=vpc-1, got %q", got.Spec.VPCRef.Name)
+	}
+	if len(got.Spec.IPs) != 2 || got.Spec.IPs[0] != "10.0.0.5" || got.Spec.IPs[1] != "fd00::5" {
+		t.Fatalf("Get: expected IPs=[10.0.0.5 fd00::5], got %v", got.Spec.IPs)
+	}
+	if got.Spec.MAC != "aa:bb:cc:dd:ee:ff" {
+		t.Fatalf("Get: expected MAC preserved, got %q", got.Spec.MAC)
+	}
+	if got.Spec.NodeName == nil || *got.Spec.NodeName != "node-a" {
+		t.Fatalf("Get: expected NodeName=node-a, got %v", got.Spec.NodeName)
+	}
+
+	if err := c.Delete(ctx, nic); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+}
+
+// TestCompiledNIC_SpecClusterNameSelector proves the CompiledNIC spec.clusterName
+// field selector is served and bounded: two CompiledNICs (c1, c2) are created and
+// a List filtered by spec.clusterName=c1 must return exactly the c1 one. This is
+// the selector the per-cluster broker relies on.
+func TestCompiledNIC_SpecClusterNameSelector(t *testing.T) {
+	c, ctx := startNetEnv(t)
+
+	newNIC := func(cluster string) *netv1.CompiledNIC {
+		return &netv1.CompiledNIC{
+			ObjectMeta: metav1.ObjectMeta{
+				GenerateName: "cnic-" + cluster + "-",
+				Namespace:    "default",
+			},
+			Spec: netv1.CompiledNICSpec{
+				ClusterName: cluster,
+				NodeName:    "node-" + cluster,
+				VNI:         1000,
+				Port:        netv1.PortStatus{Type: netv1.PortTypeTap, Name: "dtapvf_0"},
+			},
+		}
+	}
+
+	a := newNIC("c1")
+	if err := c.Create(ctx, a); err != nil {
+		t.Fatalf("Create a: %v", err)
+	}
+	b := newNIC("c2")
+	if err := c.Create(ctx, b); err != nil {
+		t.Fatalf("Create b: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = c.Delete(ctx, a)
+		_ = c.Delete(ctx, b)
+	})
+
+	list := &netv1.CompiledNICList{}
+	if err := c.List(ctx, list, client.InNamespace("default"), client.MatchingFields{"spec.clusterName": "c1"}); err != nil {
+		t.Fatalf("List(spec.clusterName=c1): %v", err)
+	}
+	if len(list.Items) != 1 {
+		names := make([]string, len(list.Items))
+		for i := range list.Items {
+			names[i] = list.Items[i].Name
+		}
+		t.Fatalf("List(spec.clusterName=c1): expected exactly 1 item, got %d: %v", len(list.Items), names)
+	}
+	if list.Items[0].Name != a.Name {
+		t.Fatalf("List(spec.clusterName=c1): expected %q, got %q", a.Name, list.Items[0].Name)
+	}
+	if list.Items[0].Spec.ClusterName != "c1" {
+		t.Fatalf("List(spec.clusterName=c1): expected ClusterName=c1, got %q", list.Items[0].Spec.ClusterName)
 	}
 }

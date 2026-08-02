@@ -7,16 +7,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// VPCPolicy is the default firewall posture of a VPC.
-type VPCPolicy string
-
-const (
-	// VPCPolicyAllow keeps k8s semantics: interfaces are open until selected by a policy.
-	VPCPolicyAllow VPCPolicy = "Allow"
-	// VPCPolicyDeny makes the VPC default-deny: traffic is dropped unless explicitly allowed.
-	VPCPolicyDeny VPCPolicy = "Deny"
-)
-
 // VPCSpec is the desired state of a VPC (an isolation domain / overlay network).
 type VPCSpec struct {
 	// VNI optionally pins the VXLAN network identifier. When nil or 0, the VNI is

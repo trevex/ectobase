@@ -36,6 +36,22 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&VPC{},
 		&VPCList{},
+		&NetworkInterface{},
+		&NetworkInterfaceList{},
+		&FirewallPolicy{},
+		&FirewallPolicyList{},
+		&FloatingIP{},
+		&FloatingIPList{},
+		&LoadBalancer{},
+		&LoadBalancerList{},
+		&NATGateway{},
+		&NATGatewayList{},
+		&VPCPeering{},
+		&VPCPeeringList{},
+		&CompiledNIC{},
+		&CompiledNICList{},
+		&VirtualMachine{},
+		&VirtualMachineList{},
 	)
 
 	return nil

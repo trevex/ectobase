@@ -16,5 +16,26 @@ var Funcs = func(codecs runtimeserializer.CodecFactory) []any {
 		func(s *net.VPCSpec, c randfill.Continue) {
 			c.FillNoCustom(s) // fuzz self without calling this function again
 		},
+		func(s *net.NetworkInterfaceSpec, c randfill.Continue) {
+			c.FillNoCustom(s)
+		},
+		func(s *net.FirewallPolicySpec, c randfill.Continue) {
+			c.FillNoCustom(s)
+		},
+		func(s *net.LoadBalancerSpec, c randfill.Continue) {
+			c.FillNoCustom(s)
+		},
+		func(s *net.NATGatewaySpec, c randfill.Continue) {
+			c.FillNoCustom(s)
+		},
+		func(s *net.VPCPeeringSpec, c randfill.Continue) {
+			c.FillNoCustom(s)
+		},
+		func(s *net.CompiledNICSpec, c randfill.Continue) {
+			c.FillNoCustom(s)
+		},
+		func(s *net.VirtualMachineSpec, c randfill.Continue) {
+			c.FillNoCustom(s)
+		},
 	}
 }
