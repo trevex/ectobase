@@ -81,9 +81,13 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 ## Task 2: `ClusterPool` API types + scheme + codegen
 
+> **⚠ Task-1 finding (authoritative — overrides the sub-steps below where they differ):** apiserver-kit requires the full **sample-apiserver layout**: an **internal** types package `central/apis/platform` (with the `resource.Object` method impls — `GetObjectMeta`/`NamespaceScoped`/`New`/`NewList`/`GetGroupResource`, and `CopyStatusTo` for the status subresource) **plus** a **versioned** package `central/apis/platform/v1alpha1`, an `install/`, `register.go` (internal + versioned), a `fuzzer/`, and an `install/roundtrip_test.go`. Codegen is driven by **`kube::codegen`** (sourced from `k8s.io/code-generator`'s `kube_codegen.sh`), not raw `deepcopy-gen`/`openapi-gen`. **Replicate the shipped example verbatim, adapted:** `$KIT/example/api/foo` (where `KIT=$(go list -m -f '{{.Dir}}' go.opendefense.cloud/kit)`) is the template for the API tree, and `$KIT/example/hack/update-codegen.sh` (+ its `boilerplate.go.txt`, `use-local-modules.sh` openapi-gen workaround) is the template for `central/hack/update-codegen.sh`. Model `ClusterPool` on `foo.ClusterBar` (cluster-scoped: `NamespaceScoped() → false`). The `WithOpenAPIDefinitions` arg comes from the generated `central/client-go/openapi` package (like the example's `example/client-go/openapi`), NOT the v1alpha1 package. The sub-steps below give the type shapes + intent; use the example for the exact codegen wiring.
+
 **Files:**
-- Create: `central/apis/platform/v1alpha1/types.go`, `register.go`; `central/apis/platform/install/install.go`
-- Generate: `central/apis/platform/v1alpha1/zz_generated.deepcopy.go`, `.../zz_generated.openapi.go`
+- Create (internal): `central/apis/platform/types.go` (or `clusterpool_types.go`), `clusterpool_rest.go` (resource.Object impls), `register.go`, `doc.go`, `fuzzer/fuzzer.go`, `install/install.go`, `install/roundtrip_test.go`
+- Create (versioned): `central/apis/platform/v1alpha1/types.go`, `register.go`, `defaults.go`, `doc.go`
+- Create: `central/hack/update-codegen.sh` (modeled on `$KIT/example/hack/update-codegen.sh`), `central/hack/boilerplate.go.txt`
+- Generate (via kube::codegen): internal + versioned `zz_generated.deepcopy.go`, versioned `zz_generated.conversion.go`, `zz_generated.defaults.go`, `zz_generated.model_name.go`, and `central/client-go/{openapi,clientset,listers,informers,applyconfigurations}`
 
 - [ ] **Step 1: Define the `ClusterPool` types.** Create `central/apis/platform/v1alpha1/types.go`. `ClusterPool` is an attached cluster as a schedulable capacity domain (the "node" in the pod→node model). Include a `Region` spec field now purely to **prove selectable spec fields** in Task 5 (it is a realistic field; the binding `spec.clusterName` lands on compiled objects in a later phase).
 
@@ -284,8 +288,9 @@ import (
 
 	"go.opendefense.cloud/kit/apiserver"
 	platforminstall "github.com/trevex/ectobase/central/apis/platform/install"
+	platform "github.com/trevex/ectobase/central/apis/platform"            // INTERNAL type (passed to Resource)
 	v1alpha1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
-	openapi "github.com/trevex/ectobase/central/apis/platform/v1alpha1" // zz_generated.openapi.go: GetOpenAPIDefinitions
+	openapi "github.com/trevex/ectobase/central/client-go/openapi"          // generated: GetOpenAPIDefinitions
 )
 
 func newScheme() *runtime.Scheme {
@@ -300,7 +305,7 @@ func main() {
 	code := apiserver.NewBuilder(scheme).
 		WithComponentName("central-apiserver").
 		WithGroupVersions(v1alpha1.SchemeGroupVersion).
-		With(apiserver.Resource(&v1alpha1.ClusterPool{}, v1alpha1.SchemeGroupVersion)).
+		With(apiserver.Resource(&platform.ClusterPool{}, v1alpha1.SchemeGroupVersion)). // INTERNAL type, versioned GV (see example: Resource(&foo.Bar{}, v1alpha1.SchemeGroupVersion))
 		WithOpenAPIDefinitions("central", "v0.1.0", openapi.GetOpenAPIDefinitions).
 		Execute()
 	os.Exit(code)
