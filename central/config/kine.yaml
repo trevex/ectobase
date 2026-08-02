@@ -1,0 +1,105 @@
+# Copyright 2026 ectobase contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Postgres + kine (etcd-v3 shim) for the central aggregated apiserver's storage.
+# Mirrors central/hack/kine-up.sh (rancher/kine over Postgres). kine exposes an
+# etcd-v3 gRPC endpoint on :2379 that the apiserver talks to via --etcd-servers.
+# Storage here is ephemeral (emptyDir) — this is a dev/smoke manifest, not HA.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: system
+spec:
+  selector:
+    app: central-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: system
+  labels:
+    app: central-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: central-postgres
+  template:
+    metadata:
+      labels:
+        app: central-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          env:
+            - name: POSTGRES_PASSWORD
+              value: kine
+            - name: POSTGRES_DB
+              value: kine
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kine
+  namespace: system
+spec:
+  selector:
+    app: central-kine
+  ports:
+    - name: etcd
+      port: 2379
+      targetPort: 2379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kine
+  namespace: system
+  labels:
+    app: central-kine
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: central-kine
+  template:
+    metadata:
+      labels:
+        app: central-kine
+    spec:
+      containers:
+        - name: kine
+          image: rancher/kine:v0.13.0
+          args:
+            - "--endpoint=postgres://postgres:kine@postgres:5432/kine?sslmode=disable"
+            - "--listen-address=0.0.0.0:2379"
+          ports:
+            - containerPort: 2379
+          readinessProbe:
+            tcpSocket:
+              port: 2379
+            initialDelaySeconds: 5
+            periodSeconds: 5
