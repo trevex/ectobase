@@ -147,6 +147,28 @@ func TestBroker_Loopback(t *testing.T) {
 		return keys
 	}
 
+	// downVMKeys returns the current downstream CompiledVM "namespace/name" keys.
+	downVMKeys := func() []string {
+		t.Helper()
+		list := &netv1.CompiledVMList{}
+		if err := downstreamClient.List(ctx, list); err != nil {
+			t.Fatalf("downstream VM List: %v", err)
+		}
+		keys := make([]string, len(list.Items))
+		for i := range list.Items {
+			keys[i] = list.Items[i].Namespace + "/" + list.Items[i].Name
+		}
+		return keys
+	}
+
+	// newVM constructs a minimal CompiledVM bound to a cluster.
+	newVM := func(name, cluster, image string) *netv1.CompiledVM {
+		return &netv1.CompiledVM{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+			Spec:       netv1.CompiledVMSpec{ClusterName: cluster, Image: image},
+		}
+	}
+
 	// ================================================================
 	// (a) BOUNDED PULL: c2 must never cross into a c1-bound downstream.
 	// ================================================================
@@ -237,4 +259,94 @@ func TestBroker_Loopback(t *testing.T) {
 		t.Fatalf("(d) partition-survive: expected downstream=[%s/nic-c] after central outage, got %v", ns, keys)
 	}
 	t.Logf("(d) partition-survive: PASS (downstream=[%s/nic-c] survives central outage)", ns)
+
+	// Restart central so we can run the CompiledVM assertions.
+	centralEnv2, err := kitenvtest.NewEnvironment(
+		"github.com/trevex/ectobase/central/cmd/apiserver",
+		nil,
+		[]string{filepath.Join(".", "fixtures")},
+	)
+	if err != nil {
+		t.Fatalf("(e) central NewEnvironment restart: %v", err)
+	}
+	if _, err := centralEnv2.Start(scheme, os.Stderr); err != nil {
+		t.Fatalf("(e) central env2.Start: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := centralEnv2.Stop(); err != nil {
+			t.Errorf("central env2.Stop: %v", err)
+		}
+	})
+	if err := centralEnv2.WaitUntilReadyWithTimeout(apiServiceTimeout); err != nil {
+		t.Fatalf("(e) central env2 WaitUntilReadyWithTimeout: %v", err)
+	}
+	centralClient2, err := client.New(centralEnv2.GetRESTConfig(), client.Options{Scheme: scheme})
+	if err != nil {
+		t.Fatalf("(e) central2 client.New: %v", err)
+	}
+	b2 := &broker.Broker{
+		Central:     centralClient2,
+		Downstream:  downstreamClient,
+		ClusterName: "c1",
+	}
+
+	// ================================================================
+	// (e) CompiledVM: bounded pull, update, GC.
+	// ================================================================
+	if err := centralClient2.Create(ctx, newVM("vm-a", "c1", "fedora")); err != nil {
+		t.Fatalf("(e) central Create vm-a: %v", err)
+	}
+	if err := centralClient2.Create(ctx, newVM("vm-b", "c2", "ubuntu")); err != nil {
+		t.Fatalf("(e) central Create vm-b (c2): %v", err)
+	}
+
+	if err := b2.SyncCompiledVMs(ctx); err != nil {
+		t.Fatalf("(e) SyncCompiledVMs: %v", err)
+	}
+	vmKeys := downVMKeys()
+	if len(vmKeys) != 1 || vmKeys[0] != ns+"/vm-a" {
+		t.Fatalf("(e) bounded pull: expected downstream=[%s/vm-a], got %v", ns, vmKeys)
+	}
+	gotVM := &netv1.CompiledVM{}
+	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm-a"}, gotVM); err != nil {
+		t.Fatalf("(e) downstream Get vm-a: %v", err)
+	}
+	if gotVM.Spec.Image != "fedora" {
+		t.Fatalf("(e) expected vm-a image=fedora, got %q", gotVM.Spec.Image)
+	}
+	t.Logf("(e) CompiledVM bounded pull: PASS (downstream=[%s/vm-a], c2 excluded)", ns)
+
+	// Update vm-a image central->downstream.
+	curVM := &netv1.CompiledVM{}
+	if err := centralClient2.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm-a"}, curVM); err != nil {
+		t.Fatalf("(e) central Get vm-a: %v", err)
+	}
+	curVM.Spec.Image = "fedora-updated"
+	if err := centralClient2.Update(ctx, curVM); err != nil {
+		t.Fatalf("(e) central Update vm-a: %v", err)
+	}
+	if err := b2.SyncCompiledVMs(ctx); err != nil {
+		t.Fatalf("(e) SyncCompiledVMs after update: %v", err)
+	}
+	gotVM = &netv1.CompiledVM{}
+	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm-a"}, gotVM); err != nil {
+		t.Fatalf("(e) downstream Get vm-a after update: %v", err)
+	}
+	if gotVM.Spec.Image != "fedora-updated" {
+		t.Fatalf("(e) update: expected vm-a image=fedora-updated, got %q", gotVM.Spec.Image)
+	}
+	t.Log("(e) CompiledVM update: PASS (downstream vm-a image=fedora-updated)")
+
+	// GC: delete central vm-a, downstream should be empty.
+	delVM := &netv1.CompiledVM{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "vm-a"}}
+	if err := centralClient2.Delete(ctx, delVM); err != nil {
+		t.Fatalf("(e) central Delete vm-a: %v", err)
+	}
+	if err := b2.SyncCompiledVMs(ctx); err != nil {
+		t.Fatalf("(e) SyncCompiledVMs after delete: %v", err)
+	}
+	if vmKeys := downVMKeys(); len(vmKeys) != 0 {
+		t.Fatalf("(e) gc: expected empty downstream VMs, got %v", vmKeys)
+	}
+	t.Log("(e) CompiledVM GC: PASS (downstream VMs empty)")
 }

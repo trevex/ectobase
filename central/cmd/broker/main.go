@@ -1,9 +1,9 @@
 // Copyright 2026 ectobase contributors
 // SPDX-License-Identifier: Apache-2.0
 
-// Command broker runs the per-cluster broker: it watches CompiledNIC objects
-// in the CENTRAL aggregated apiserver (filtered by spec.clusterName) and
-// set-reconciles them onto a DOWNSTREAM cluster's apiserver.
+// Command broker runs the per-cluster broker: it watches the compiled objects
+// (CompiledNIC, CompiledVM) in the CENTRAL aggregated apiserver (filtered by
+// spec.clusterName) and set-reconciles them onto a DOWNSTREAM cluster's apiserver.
 //
 // Required env: KUBE_FEATURE_WatchListClient=false (set unconditionally below).
 // The aggregated apiserver does not support the client-go streaming list-watch;
@@ -59,7 +59,7 @@ func main() {
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
 	// Build scheme covering all three groups the broker touches:
-	//   - net.ectobase.dev  (CompiledNIC sync, on central),
+	//   - net.ectobase.dev  (CompiledNIC + CompiledVM sync, on central),
 	//   - platform.ectobase.dev (ClusterPool lease/capacity heartbeat, on central),
 	//   - core/v1 (downstream Node list for capacity reporting).
 	scheme := runtime.NewScheme()
@@ -99,6 +99,9 @@ func main() {
 				&netv1.CompiledNIC{}: {
 					Field: fields.OneTermEqualSelector("spec.clusterName", clusterName),
 				},
+				&netv1.CompiledVM{}: {
+					Field: fields.OneTermEqualSelector("spec.clusterName", clusterName),
+				},
 			},
 		},
 	})
@@ -106,9 +109,9 @@ func main() {
 		log.Fatalf("new manager: %v", err)
 	}
 
-	// Reconciler: on any CompiledNIC event, trigger a full set-reconcile.
-	// A full resync per event is correct here: SyncOnce is declarative + idempotent
-	// (derives both desired and current sets live; no in-memory diff state).
+	// Reconciler: on any CompiledNIC OR CompiledVM event, trigger a full set-reconcile
+	// of BOTH types. A full resync per event is correct here: the syncs are declarative +
+	// idempotent (derive both desired and current sets live; no in-memory diff state).
 	// The central client comes from the manager so it reads through the cache.
 	r := &brokerReconciler{
 		central:     mgr.GetClient(),
@@ -119,6 +122,12 @@ func main() {
 		For(&netv1.CompiledNIC{}).
 		Complete(r); err != nil {
 		log.Fatalf("setup broker controller: %v", err)
+	}
+	if err := ctrl.NewControllerManagedBy(mgr).
+		Named("compiledvm").
+		For(&netv1.CompiledVM{}).
+		Complete(r); err != nil {
+		log.Fatalf("setup compiledvm broker controller: %v", err)
 	}
 
 	// Heartbeater: renew the ClusterPool lease + report node capacity every 10s.
@@ -184,8 +193,8 @@ func nodeIsReady(node *corev1.Node) bool {
 }
 
 // brokerReconciler wraps the broker engine so it satisfies reconcile.Reconciler.
-// It holds no per-object state: every CompiledNIC event triggers a full
-// SyncOnce (declarative set-reconcile; idempotent and restart-safe).
+// It holds no per-object state: every CompiledNIC or CompiledVM event triggers a full
+// SyncOnce + SyncCompiledVMs (declarative set-reconcile; idempotent and restart-safe).
 type brokerReconciler struct {
 	central     client.Client
 	downstream  client.Client
@@ -199,6 +208,9 @@ func (r *brokerReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.
 		ClusterName: r.clusterName,
 	}
 	if err := b.SyncOnce(ctx); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := b.SyncCompiledVMs(ctx); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil

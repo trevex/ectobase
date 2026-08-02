@@ -74,3 +74,47 @@ func TestSync_NamespacedCreateUpdateGC(t *testing.T) {
 		t.Fatalf("second sync not idempotent: %+v", list.Items)
 	}
 }
+
+func TestSyncCompiledVMs_NamespacedCreateUpdateGC(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := netv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	vm := func(ns, name, cn, img string) *netv1.CompiledVM {
+		return &netv1.CompiledVM{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: netv1.CompiledVMSpec{ClusterName: cn, Image: img}}
+	}
+	idx := func(o client.Object) []string { return []string{o.(*netv1.CompiledVM).Spec.ClusterName} }
+	central := fake.NewClientBuilder().WithScheme(s).
+		WithIndex(&netv1.CompiledVM{}, "spec.clusterName", idx).
+		WithObjects(vm("ns1", "a", "c1", "fedora"), vm("ns1", "b", "c2", "x")).Build()
+	downstream := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(vm("ns1", "stale", "c1", "old"), vm("ns1", "a", "c1", "OLD")).Build()
+
+	b := &Broker{Central: central, Downstream: downstream, ClusterName: "c1"}
+	if err := b.SyncCompiledVMs(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	list := &netv1.CompiledVMList{}
+	if err := downstream.List(context.Background(), list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("want 1 (a), got %d: %+v", len(list.Items), list.Items)
+	}
+	if list.Items[0].Name != "a" || list.Items[0].Spec.Image != "fedora" {
+		t.Fatalf("want a(fedora), got %+v", list.Items[0])
+	}
+
+	// Idempotency: a second sync of the converged set is a no-op (no create/update/delete).
+	if err := b.SyncCompiledVMs(context.Background()); err != nil {
+		t.Fatalf("second sync: %v", err)
+	}
+	list2 := &netv1.CompiledVMList{}
+	if err := downstream.List(context.Background(), list2); err != nil {
+		t.Fatal(err)
+	}
+	if len(list2.Items) != 1 || list2.Items[0].Name != "a" || list2.Items[0].Spec.Image != "fedora" {
+		t.Fatalf("idempotency: set drifted on re-sync: %+v", list2.Items)
+	}
+}
