@@ -25,6 +25,7 @@ import (
 	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 	"github.com/trevex/ectobase/central/apis/platform/install"
 	"github.com/trevex/ectobase/central/internal/clusterpool"
+	"github.com/trevex/ectobase/central/internal/failover"
 	"github.com/trevex/ectobase/central/internal/scheduler"
 )
 
@@ -70,6 +71,15 @@ func main() {
 
 	if err := (&scheduler.Reconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup scheduler controller: %v", err)
+	}
+
+	// Tier-2 failover: threshold (2m) is deliberately > pool-health's 30s
+	// HealthStale — a pool must be Unknown for a while before a destructive
+	// rebind. DenyFencer is the default so Tier-2 fails safe until Phase-4
+	// storage/network fence actuators exist. Both scheduler + failover watch
+	// ClusterPool; independent controllers on the same manager is fine.
+	if err := (&failover.Reconciler{Client: mgr.GetClient(), Fencer: failover.DenyFencer{}, FailoverThreshold: 2 * time.Minute}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup failover controller: %v", err)
 	}
 
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
