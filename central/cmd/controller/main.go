@@ -10,6 +10,7 @@ package main
 import (
 	"flag"
 	"log"
+	"os"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,17 +22,30 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 	"github.com/trevex/ectobase/central/apis/platform/install"
 	"github.com/trevex/ectobase/central/internal/clusterpool"
+	"github.com/trevex/ectobase/central/internal/scheduler"
 )
 
 func main() {
+	// CRITICAL: disable client-go streaming list-watch before any client/manager
+	// construction. The aggregated apiserver does not support WatchList; without
+	// this the scheduler/clusterpool informers stall silently and no events are
+	// delivered. The Deployment manifest carries this in its env stanza too.
+	os.Setenv("KUBE_FEATURE_WatchListClient", "false") //nolint:errcheck
+
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
 	scheme := runtime.NewScheme()
 	install.Install(scheme)
+	// The scheduler reads VirtualMachine (net) + ClusterPool (platform), so both
+	// groups must be present on the manager scheme.
+	if err := netv1.AddToScheme(scheme); err != nil {
+		log.Fatalf("register net.ectobase.dev scheme: %v", err)
+	}
 	// The aggregated group has no core-v1; register the meta options group so the
 	// client can encode List/Watch/Status requests.
 	metav1.AddToGroupVersion(scheme, schema.GroupVersion{Version: "v1"})
@@ -52,6 +66,10 @@ func main() {
 
 	if err := (&clusterpool.Reconciler{Client: mgr.GetClient(), HealthStale: 30 * time.Second}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup clusterpool controller: %v", err)
+	}
+
+	if err := (&scheduler.Reconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup scheduler controller: %v", err)
 	}
 
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
