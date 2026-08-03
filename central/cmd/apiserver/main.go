@@ -66,6 +66,8 @@ func main() {
 		With(apiserver.Resource(&netapi.VPCPeering{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.CompiledNIC{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.CompiledVM{}, netv1.SchemeGroupVersion)).
+		With(apiserver.Resource(&netapi.Volume{}, netv1.SchemeGroupVersion)).
+		With(apiserver.Resource(&netapi.CompiledVolumeAttachment{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.VirtualMachine{}, netv1.SchemeGroupVersion)).
 		Execute()
 	os.Exit(code)

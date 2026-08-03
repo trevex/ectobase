@@ -14,6 +14,8 @@ type VirtualMachineSpec struct {
 	ClusterName string
 	// InterfaceRefs names the NetworkInterfaces (same namespace) this VM owns.
 	InterfaceRefs []LocalObjectReference
+	// VolumeRefs names the Volumes (same namespace) this VM attaches.
+	VolumeRefs []LocalObjectReference
 	// Resources is the compute resource request/limit for this workload.
 	Resources corev1.ResourceRequirements
 	// Image is the containerDisk image the VM boots from.

@@ -251,6 +251,50 @@ func RegisterConversions(s *runtime.Scheme) error {
 		return err
 	}
 
+	// --- Volume ---
+	if err := s.AddGeneratedConversionFunc((*Volume)(nil), (*net.Volume)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_Volume_To_net_Volume(a.(*Volume), b.(*net.Volume), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.Volume)(nil), (*Volume)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_Volume_To_v1alpha1_Volume(a.(*net.Volume), b.(*Volume), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*VolumeList)(nil), (*net.VolumeList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_VolumeList_To_net_VolumeList(a.(*VolumeList), b.(*net.VolumeList), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.VolumeList)(nil), (*VolumeList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_VolumeList_To_v1alpha1_VolumeList(a.(*net.VolumeList), b.(*VolumeList), scope)
+	}); err != nil {
+		return err
+	}
+
+	// --- CompiledVolumeAttachment ---
+	if err := s.AddGeneratedConversionFunc((*CompiledVolumeAttachment)(nil), (*net.CompiledVolumeAttachment)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_CompiledVolumeAttachment_To_net_CompiledVolumeAttachment(a.(*CompiledVolumeAttachment), b.(*net.CompiledVolumeAttachment), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.CompiledVolumeAttachment)(nil), (*CompiledVolumeAttachment)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_CompiledVolumeAttachment_To_v1alpha1_CompiledVolumeAttachment(a.(*net.CompiledVolumeAttachment), b.(*CompiledVolumeAttachment), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*CompiledVolumeAttachmentList)(nil), (*net.CompiledVolumeAttachmentList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_CompiledVolumeAttachmentList_To_net_CompiledVolumeAttachmentList(a.(*CompiledVolumeAttachmentList), b.(*net.CompiledVolumeAttachmentList), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.CompiledVolumeAttachmentList)(nil), (*CompiledVolumeAttachmentList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_CompiledVolumeAttachmentList_To_v1alpha1_CompiledVolumeAttachmentList(a.(*net.CompiledVolumeAttachmentList), b.(*CompiledVolumeAttachmentList), scope)
+	}); err != nil {
+		return err
+	}
+
 	// --- VirtualMachine ---
 	if err := s.AddGeneratedConversionFunc((*VirtualMachine)(nil), (*net.VirtualMachine)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_v1alpha1_VirtualMachine_To_net_VirtualMachine(a.(*VirtualMachine), b.(*net.VirtualMachine), scope)
@@ -1530,6 +1574,170 @@ func Convert_net_CompiledVMStatus_To_v1alpha1_CompiledVMStatus(in *net.CompiledV
 	return nil
 }
 
+// ============================ Volume ============================
+
+// Convert_v1alpha1_Volume_To_net_Volume converts a versioned Volume to internal.
+func Convert_v1alpha1_Volume_To_net_Volume(in *Volume, out *net.Volume, s conversion.Scope) error {
+	out.ObjectMeta = in.ObjectMeta
+	if err := Convert_v1alpha1_VolumeSpec_To_net_VolumeSpec(&in.Spec, &out.Spec, s); err != nil {
+		return err
+	}
+	return Convert_v1alpha1_VolumeStatus_To_net_VolumeStatus(&in.Status, &out.Status, s)
+}
+
+// Convert_net_Volume_To_v1alpha1_Volume converts an internal Volume to versioned.
+func Convert_net_Volume_To_v1alpha1_Volume(in *net.Volume, out *Volume, s conversion.Scope) error {
+	out.ObjectMeta = in.ObjectMeta
+	if err := Convert_net_VolumeSpec_To_v1alpha1_VolumeSpec(&in.Spec, &out.Spec, s); err != nil {
+		return err
+	}
+	return Convert_net_VolumeStatus_To_v1alpha1_VolumeStatus(&in.Status, &out.Status, s)
+}
+
+// Convert_v1alpha1_VolumeList_To_net_VolumeList converts a versioned list to internal.
+func Convert_v1alpha1_VolumeList_To_net_VolumeList(in *VolumeList, out *net.VolumeList, s conversion.Scope) error {
+	out.ListMeta = in.ListMeta
+	if in.Items != nil {
+		out.Items = make([]net.Volume, len(in.Items))
+		for i := range in.Items {
+			if err := Convert_v1alpha1_Volume_To_net_Volume(&in.Items[i], &out.Items[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
+	return nil
+}
+
+// Convert_net_VolumeList_To_v1alpha1_VolumeList converts an internal list to versioned.
+func Convert_net_VolumeList_To_v1alpha1_VolumeList(in *net.VolumeList, out *VolumeList, s conversion.Scope) error {
+	out.ListMeta = in.ListMeta
+	if in.Items != nil {
+		out.Items = make([]Volume, len(in.Items))
+		for i := range in.Items {
+			if err := Convert_net_Volume_To_v1alpha1_Volume(&in.Items[i], &out.Items[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
+	return nil
+}
+
+// Convert_v1alpha1_VolumeSpec_To_net_VolumeSpec converts a versioned spec to internal.
+func Convert_v1alpha1_VolumeSpec_To_net_VolumeSpec(in *VolumeSpec, out *net.VolumeSpec, _ conversion.Scope) error {
+	out.Size = in.Size.DeepCopy()
+	out.StorageClass = in.StorageClass
+	out.BootImage = in.BootImage
+	return nil
+}
+
+// Convert_net_VolumeSpec_To_v1alpha1_VolumeSpec converts an internal spec to versioned.
+func Convert_net_VolumeSpec_To_v1alpha1_VolumeSpec(in *net.VolumeSpec, out *VolumeSpec, _ conversion.Scope) error {
+	out.Size = in.Size.DeepCopy()
+	out.StorageClass = in.StorageClass
+	out.BootImage = in.BootImage
+	return nil
+}
+
+// Convert_v1alpha1_VolumeStatus_To_net_VolumeStatus converts a versioned status to internal.
+func Convert_v1alpha1_VolumeStatus_To_net_VolumeStatus(in *VolumeStatus, out *net.VolumeStatus, _ conversion.Scope) error {
+	out.Phase = in.Phase
+	return nil
+}
+
+// Convert_net_VolumeStatus_To_v1alpha1_VolumeStatus converts an internal status to versioned.
+func Convert_net_VolumeStatus_To_v1alpha1_VolumeStatus(in *net.VolumeStatus, out *VolumeStatus, _ conversion.Scope) error {
+	out.Phase = in.Phase
+	return nil
+}
+
+// ============================ CompiledVolumeAttachment ============================
+
+// Convert_v1alpha1_CompiledVolumeAttachment_To_net_CompiledVolumeAttachment converts a versioned CompiledVolumeAttachment to internal.
+func Convert_v1alpha1_CompiledVolumeAttachment_To_net_CompiledVolumeAttachment(in *CompiledVolumeAttachment, out *net.CompiledVolumeAttachment, s conversion.Scope) error {
+	out.ObjectMeta = in.ObjectMeta
+	if err := Convert_v1alpha1_CompiledVolumeAttachmentSpec_To_net_CompiledVolumeAttachmentSpec(&in.Spec, &out.Spec, s); err != nil {
+		return err
+	}
+	return Convert_v1alpha1_CompiledVolumeAttachmentStatus_To_net_CompiledVolumeAttachmentStatus(&in.Status, &out.Status, s)
+}
+
+// Convert_net_CompiledVolumeAttachment_To_v1alpha1_CompiledVolumeAttachment converts an internal CompiledVolumeAttachment to versioned.
+func Convert_net_CompiledVolumeAttachment_To_v1alpha1_CompiledVolumeAttachment(in *net.CompiledVolumeAttachment, out *CompiledVolumeAttachment, s conversion.Scope) error {
+	out.ObjectMeta = in.ObjectMeta
+	if err := Convert_net_CompiledVolumeAttachmentSpec_To_v1alpha1_CompiledVolumeAttachmentSpec(&in.Spec, &out.Spec, s); err != nil {
+		return err
+	}
+	return Convert_net_CompiledVolumeAttachmentStatus_To_v1alpha1_CompiledVolumeAttachmentStatus(&in.Status, &out.Status, s)
+}
+
+// Convert_v1alpha1_CompiledVolumeAttachmentList_To_net_CompiledVolumeAttachmentList converts a versioned list to internal.
+func Convert_v1alpha1_CompiledVolumeAttachmentList_To_net_CompiledVolumeAttachmentList(in *CompiledVolumeAttachmentList, out *net.CompiledVolumeAttachmentList, s conversion.Scope) error {
+	out.ListMeta = in.ListMeta
+	if in.Items != nil {
+		out.Items = make([]net.CompiledVolumeAttachment, len(in.Items))
+		for i := range in.Items {
+			if err := Convert_v1alpha1_CompiledVolumeAttachment_To_net_CompiledVolumeAttachment(&in.Items[i], &out.Items[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
+	return nil
+}
+
+// Convert_net_CompiledVolumeAttachmentList_To_v1alpha1_CompiledVolumeAttachmentList converts an internal list to versioned.
+func Convert_net_CompiledVolumeAttachmentList_To_v1alpha1_CompiledVolumeAttachmentList(in *net.CompiledVolumeAttachmentList, out *CompiledVolumeAttachmentList, s conversion.Scope) error {
+	out.ListMeta = in.ListMeta
+	if in.Items != nil {
+		out.Items = make([]CompiledVolumeAttachment, len(in.Items))
+		for i := range in.Items {
+			if err := Convert_net_CompiledVolumeAttachment_To_v1alpha1_CompiledVolumeAttachment(&in.Items[i], &out.Items[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
+	return nil
+}
+
+// Convert_v1alpha1_CompiledVolumeAttachmentSpec_To_net_CompiledVolumeAttachmentSpec converts a versioned spec to internal.
+func Convert_v1alpha1_CompiledVolumeAttachmentSpec_To_net_CompiledVolumeAttachmentSpec(in *CompiledVolumeAttachmentSpec, out *net.CompiledVolumeAttachmentSpec, _ conversion.Scope) error {
+	out.ClusterName = in.ClusterName
+	out.Size = in.Size.DeepCopy()
+	out.StorageClass = in.StorageClass
+	out.BootImage = in.BootImage
+	out.Boot = in.Boot
+	return nil
+}
+
+// Convert_net_CompiledVolumeAttachmentSpec_To_v1alpha1_CompiledVolumeAttachmentSpec converts an internal spec to versioned.
+func Convert_net_CompiledVolumeAttachmentSpec_To_v1alpha1_CompiledVolumeAttachmentSpec(in *net.CompiledVolumeAttachmentSpec, out *CompiledVolumeAttachmentSpec, _ conversion.Scope) error {
+	out.ClusterName = in.ClusterName
+	out.Size = in.Size.DeepCopy()
+	out.StorageClass = in.StorageClass
+	out.BootImage = in.BootImage
+	out.Boot = in.Boot
+	return nil
+}
+
+// Convert_v1alpha1_CompiledVolumeAttachmentStatus_To_net_CompiledVolumeAttachmentStatus converts a versioned status to internal.
+func Convert_v1alpha1_CompiledVolumeAttachmentStatus_To_net_CompiledVolumeAttachmentStatus(in *CompiledVolumeAttachmentStatus, out *net.CompiledVolumeAttachmentStatus, _ conversion.Scope) error {
+	out.State = in.State
+	return nil
+}
+
+// Convert_net_CompiledVolumeAttachmentStatus_To_v1alpha1_CompiledVolumeAttachmentStatus converts an internal status to versioned.
+func Convert_net_CompiledVolumeAttachmentStatus_To_v1alpha1_CompiledVolumeAttachmentStatus(in *net.CompiledVolumeAttachmentStatus, out *CompiledVolumeAttachmentStatus, _ conversion.Scope) error {
+	out.State = in.State
+	return nil
+}
+
 // ============================ VirtualMachine ============================
 
 // Convert_v1alpha1_VirtualMachine_To_net_VirtualMachine converts a versioned VirtualMachine to internal.
@@ -1595,6 +1803,16 @@ func Convert_v1alpha1_VirtualMachineSpec_To_net_VirtualMachineSpec(in *VirtualMa
 	} else {
 		out.InterfaceRefs = nil
 	}
+	if in.VolumeRefs != nil {
+		out.VolumeRefs = make([]net.LocalObjectReference, len(in.VolumeRefs))
+		for i := range in.VolumeRefs {
+			if err := Convert_v1alpha1_LocalObjectReference_To_net_LocalObjectReference(&in.VolumeRefs[i], &out.VolumeRefs[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.VolumeRefs = nil
+	}
 	out.Resources = *in.Resources.DeepCopy()
 	out.Image = in.Image
 	out.RunStrategy = in.RunStrategy
@@ -1618,6 +1836,16 @@ func Convert_net_VirtualMachineSpec_To_v1alpha1_VirtualMachineSpec(in *net.Virtu
 		}
 	} else {
 		out.InterfaceRefs = nil
+	}
+	if in.VolumeRefs != nil {
+		out.VolumeRefs = make([]LocalObjectReference, len(in.VolumeRefs))
+		for i := range in.VolumeRefs {
+			if err := Convert_net_LocalObjectReference_To_v1alpha1_LocalObjectReference(&in.VolumeRefs[i], &out.VolumeRefs[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.VolumeRefs = nil
 	}
 	out.Resources = *in.Resources.DeepCopy()
 	out.Image = in.Image

@@ -161,11 +161,33 @@ func TestBroker_Loopback(t *testing.T) {
 		return keys
 	}
 
+	// downAttKeys returns the current downstream CompiledVolumeAttachment "namespace/name" keys.
+	downAttKeys := func() []string {
+		t.Helper()
+		list := &netv1.CompiledVolumeAttachmentList{}
+		if err := downstreamClient.List(ctx, list); err != nil {
+			t.Fatalf("downstream Att List: %v", err)
+		}
+		keys := make([]string, len(list.Items))
+		for i := range list.Items {
+			keys[i] = list.Items[i].Namespace + "/" + list.Items[i].Name
+		}
+		return keys
+	}
+
 	// newVM constructs a minimal CompiledVM bound to a cluster.
 	newVM := func(name, cluster, image string) *netv1.CompiledVM {
 		return &netv1.CompiledVM{
 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
 			Spec:       netv1.CompiledVMSpec{ClusterName: cluster, Image: image},
+		}
+	}
+
+	// newAtt constructs a minimal CompiledVolumeAttachment bound to a cluster.
+	newAtt := func(name, cluster, bootImage string) *netv1.CompiledVolumeAttachment {
+		return &netv1.CompiledVolumeAttachment{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+			Spec:       netv1.CompiledVolumeAttachmentSpec{ClusterName: cluster, BootImage: bootImage},
 		}
 	}
 
@@ -349,4 +371,64 @@ func TestBroker_Loopback(t *testing.T) {
 		t.Fatalf("(e) gc: expected empty downstream VMs, got %v", vmKeys)
 	}
 	t.Log("(e) CompiledVM GC: PASS (downstream VMs empty)")
+
+	// ================================================================
+	// (f) CompiledVolumeAttachment: bounded pull, update, GC.
+	// ================================================================
+	if err := centralClient2.Create(ctx, newAtt("att-a", "c1", "fedora")); err != nil {
+		t.Fatalf("(f) central Create att-a: %v", err)
+	}
+	if err := centralClient2.Create(ctx, newAtt("att-b", "c2", "ubuntu")); err != nil {
+		t.Fatalf("(f) central Create att-b (c2): %v", err)
+	}
+
+	if err := b2.SyncCompiledVolumeAttachments(ctx); err != nil {
+		t.Fatalf("(f) SyncCompiledVolumeAttachments: %v", err)
+	}
+	attKeys := downAttKeys()
+	if len(attKeys) != 1 || attKeys[0] != ns+"/att-a" {
+		t.Fatalf("(f) bounded pull: expected downstream=[%s/att-a], got %v", ns, attKeys)
+	}
+	gotAtt := &netv1.CompiledVolumeAttachment{}
+	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "att-a"}, gotAtt); err != nil {
+		t.Fatalf("(f) downstream Get att-a: %v", err)
+	}
+	if gotAtt.Spec.BootImage != "fedora" {
+		t.Fatalf("(f) expected att-a bootImage=fedora, got %q", gotAtt.Spec.BootImage)
+	}
+	t.Logf("(f) CompiledVolumeAttachment bounded pull: PASS (downstream=[%s/att-a], c2 excluded)", ns)
+
+	// Update att-a bootImage central->downstream.
+	curAtt := &netv1.CompiledVolumeAttachment{}
+	if err := centralClient2.Get(ctx, client.ObjectKey{Namespace: ns, Name: "att-a"}, curAtt); err != nil {
+		t.Fatalf("(f) central Get att-a: %v", err)
+	}
+	curAtt.Spec.BootImage = "fedora-updated"
+	if err := centralClient2.Update(ctx, curAtt); err != nil {
+		t.Fatalf("(f) central Update att-a: %v", err)
+	}
+	if err := b2.SyncCompiledVolumeAttachments(ctx); err != nil {
+		t.Fatalf("(f) SyncCompiledVolumeAttachments after update: %v", err)
+	}
+	gotAtt = &netv1.CompiledVolumeAttachment{}
+	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "att-a"}, gotAtt); err != nil {
+		t.Fatalf("(f) downstream Get att-a after update: %v", err)
+	}
+	if gotAtt.Spec.BootImage != "fedora-updated" {
+		t.Fatalf("(f) update: expected att-a bootImage=fedora-updated, got %q", gotAtt.Spec.BootImage)
+	}
+	t.Log("(f) CompiledVolumeAttachment update: PASS (downstream att-a bootImage=fedora-updated)")
+
+	// GC: delete central att-a, downstream should be empty.
+	delAtt := &netv1.CompiledVolumeAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "att-a"}}
+	if err := centralClient2.Delete(ctx, delAtt); err != nil {
+		t.Fatalf("(f) central Delete att-a: %v", err)
+	}
+	if err := b2.SyncCompiledVolumeAttachments(ctx); err != nil {
+		t.Fatalf("(f) SyncCompiledVolumeAttachments after delete: %v", err)
+	}
+	if attKeys := downAttKeys(); len(attKeys) != 0 {
+		t.Fatalf("(f) gc: expected empty downstream attachments, got %v", attKeys)
+	}
+	t.Log("(f) CompiledVolumeAttachment GC: PASS (downstream attachments empty)")
 }

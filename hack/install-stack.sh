@@ -28,3 +28,8 @@ kubectl -n kubevirt patch kubevirt kubevirt --type=merge -p '{"spec":{"configura
 kubectl apply -f "https://github.com/kubevirt/containerized-data-importer/releases/download/${CDI}/cdi-operator.yaml"
 kubectl apply -f "https://github.com/kubevirt/containerized-data-importer/releases/download/${CDI}/cdi-cr.yaml"
 kubectl -n cdi wait cdi/cdi --for=condition=Available --timeout=10m
+
+# Optional: minimal Rook Ceph storage backend (dev only). Off by default (slow on kind).
+if [ "${INSTALL_ROOK:-}" = "1" ]; then
+  bash "$(dirname "$0")/rook-ceph-up.sh"
+fi

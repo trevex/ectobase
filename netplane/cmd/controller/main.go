@@ -77,6 +77,10 @@ func main() {
 		log.Fatalf("setup compiledvm controller: %v", err)
 	}
 
+	if err := (&controllers.CompiledVolumeAttachmentReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup compiledvolumeattachment controller: %v", err)
+	}
+
 	if err := (&controllers.VPCPeeringReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup vpcpeering controller: %v", err)
 	}

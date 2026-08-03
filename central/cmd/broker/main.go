@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Command broker runs the per-cluster broker: it watches the compiled objects
-// (CompiledNIC, CompiledVM) in the CENTRAL aggregated apiserver (filtered by
-// spec.clusterName) and set-reconciles them onto a DOWNSTREAM cluster's apiserver.
+// (CompiledNIC, CompiledVM, CompiledVolumeAttachment) in the CENTRAL aggregated
+// apiserver (filtered by spec.clusterName) and set-reconciles them onto a
+// DOWNSTREAM cluster's apiserver.
 //
 // Required env: KUBE_FEATURE_WatchListClient=false (set unconditionally below).
 // The aggregated apiserver does not support the client-go streaming list-watch;
@@ -102,6 +103,9 @@ func main() {
 				&netv1.CompiledVM{}: {
 					Field: fields.OneTermEqualSelector("spec.clusterName", clusterName),
 				},
+				&netv1.CompiledVolumeAttachment{}: {
+					Field: fields.OneTermEqualSelector("spec.clusterName", clusterName),
+				},
 			},
 		},
 	})
@@ -128,6 +132,12 @@ func main() {
 		For(&netv1.CompiledVM{}).
 		Complete(r); err != nil {
 		log.Fatalf("setup compiledvm broker controller: %v", err)
+	}
+	if err := ctrl.NewControllerManagedBy(mgr).
+		Named("compiledvolumeattachment").
+		For(&netv1.CompiledVolumeAttachment{}).
+		Complete(r); err != nil {
+		log.Fatalf("setup compiledvolumeattachment broker controller: %v", err)
 	}
 
 	// Heartbeater: renew the ClusterPool lease + report node capacity every 10s.
@@ -193,8 +203,9 @@ func nodeIsReady(node *corev1.Node) bool {
 }
 
 // brokerReconciler wraps the broker engine so it satisfies reconcile.Reconciler.
-// It holds no per-object state: every CompiledNIC or CompiledVM event triggers a full
-// SyncOnce + SyncCompiledVMs (declarative set-reconcile; idempotent and restart-safe).
+// It holds no per-object state: every CompiledNIC, CompiledVM, or
+// CompiledVolumeAttachment event triggers a full SyncOnce + SyncCompiledVMs +
+// SyncCompiledVolumeAttachments (declarative set-reconcile; idempotent and restart-safe).
 type brokerReconciler struct {
 	central     client.Client
 	downstream  client.Client
@@ -211,6 +222,9 @@ func (r *brokerReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.
 		return ctrl.Result{}, err
 	}
 	if err := b.SyncCompiledVMs(ctx); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := b.SyncCompiledVolumeAttachments(ctx); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
