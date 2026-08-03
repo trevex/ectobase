@@ -15,8 +15,9 @@ import (
 )
 
 // Broker is the per-cluster set-reconcile engine: it makes the downstream compiled
-// objects (CompiledNIC via SyncOnce, CompiledVM via SyncCompiledVMs, ...) exactly
-// match the central objects bound to ClusterName (spec.clusterName), per-type.
+// objects (CompiledNIC via SyncOnce, CompiledVM via SyncCompiledVMs,
+// CompiledVolumeAttachment via SyncCompiledVolumeAttachments) exactly match the
+// central objects bound to ClusterName (spec.clusterName), per-type.
 type Broker struct {
 	Central     client.Client
 	Downstream  client.Client
@@ -88,6 +89,9 @@ func (b *Broker) SyncOnce(ctx context.Context) error {
 // keyVM identifies a namespaced CompiledVM as "namespace/name".
 func keyVM(o *netv1.CompiledVM) string { return o.Namespace + "/" + o.Name }
 
+// keyAtt identifies a namespaced CompiledVolumeAttachment as "namespace/name".
+func keyAtt(o *netv1.CompiledVolumeAttachment) string { return o.Namespace + "/" + o.Name }
+
 // SyncCompiledVMs is the CompiledVM twin of SyncOnce: declarative set-reconcile of
 // CompiledVMs bound to ClusterName, central->downstream (create/update/delete).
 func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
@@ -131,6 +135,54 @@ func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 		local.Spec = w.Spec
 		if err := b.Downstream.Create(ctx, local); err != nil {
 			return fmt.Errorf("create vm %s: %w", k, err)
+		}
+	}
+	return nil
+}
+
+// SyncCompiledVolumeAttachments is the CompiledVolumeAttachment twin of SyncOnce:
+// declarative set-reconcile of attachments bound to ClusterName, central->downstream.
+func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
+	desired := &netv1.CompiledVolumeAttachmentList{}
+	if err := b.Central.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
+		return fmt.Errorf("list central attachments: %w", err)
+	}
+	want := make(map[string]netv1.CompiledVolumeAttachment, len(desired.Items))
+	for _, o := range desired.Items {
+		want[keyAtt(&o)] = o
+	}
+	have := &netv1.CompiledVolumeAttachmentList{}
+	if err := b.Downstream.List(ctx, have); err != nil {
+		return fmt.Errorf("list downstream attachments: %w", err)
+	}
+	haveKeys := make(map[string]bool, len(have.Items))
+	for i := range have.Items {
+		cur := &have.Items[i]
+		haveKeys[keyAtt(cur)] = true
+		w, ok := want[keyAtt(cur)]
+		if !ok {
+			if err := b.Downstream.Delete(ctx, cur); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("gc attachment %s: %w", keyAtt(cur), err)
+			}
+			continue
+		}
+		if !equality.Semantic.DeepEqual(cur.Spec, w.Spec) {
+			cur.Spec = w.Spec
+			if err := b.Downstream.Update(ctx, cur); err != nil {
+				return fmt.Errorf("update attachment %s: %w", keyAtt(cur), err)
+			}
+		}
+	}
+	for k, w := range want {
+		if haveKeys[k] {
+			continue
+		}
+		local := &netv1.CompiledVolumeAttachment{}
+		local.Namespace = w.Namespace
+		local.Name = w.Name
+		local.Spec = w.Spec
+		if err := b.Downstream.Create(ctx, local); err != nil {
+			return fmt.Errorf("create attachment %s: %w", k, err)
 		}
 	}
 	return nil

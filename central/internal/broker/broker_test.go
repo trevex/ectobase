@@ -118,3 +118,27 @@ func TestSyncCompiledVMs_NamespacedCreateUpdateGC(t *testing.T) {
 		t.Fatalf("idempotency: set drifted on re-sync: %+v", list2.Items)
 	}
 }
+
+func TestSyncCompiledVolumeAttachments_NamespacedCreateUpdateGC(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := netv1.AddToScheme(s); err != nil { t.Fatal(err) }
+	att := func(ns, name, cn, img string) *netv1.CompiledVolumeAttachment {
+		return &netv1.CompiledVolumeAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: netv1.CompiledVolumeAttachmentSpec{ClusterName: cn, BootImage: img}}
+	}
+	idx := func(o client.Object) []string { return []string{o.(*netv1.CompiledVolumeAttachment).Spec.ClusterName} }
+	central := fake.NewClientBuilder().WithScheme(s).
+		WithIndex(&netv1.CompiledVolumeAttachment{}, "spec.clusterName", idx).
+		WithObjects(att("ns1", "a", "c1", "fedora"), att("ns1", "b", "c2", "x")).Build()
+	downstream := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(att("ns1", "stale", "c1", "old"), att("ns1", "a", "c1", "OLD")).Build()
+
+	b := &Broker{Central: central, Downstream: downstream, ClusterName: "c1"}
+	if err := b.SyncCompiledVolumeAttachments(context.Background()); err != nil { t.Fatal(err) }
+
+	list := &netv1.CompiledVolumeAttachmentList{}
+	if err := downstream.List(context.Background(), list); err != nil { t.Fatal(err) }
+	if len(list.Items) != 1 || list.Items[0].Name != "a" || list.Items[0].Spec.BootImage != "fedora" {
+		t.Fatalf("want [a(fedora)], got %+v", list.Items)
+	}
+	if err := b.SyncCompiledVolumeAttachments(context.Background()); err != nil { t.Fatalf("second sync: %v", err) }
+}
