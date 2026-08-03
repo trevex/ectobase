@@ -38,8 +38,11 @@ echo "== Node Health Check operator ${NHC_VERSION} =="
 kubectl apply -k "github.com/medik8s/node-healthcheck-operator/config/default?ref=${NHC_VERSION}"
 
 echo "== waiting for operator deployments to become available =="
-kubectl -n "${SNR_NAMESPACE}" rollout status deploy --timeout=5m || true
-kubectl -n "${NHC_NAMESPACE}" rollout status deploy --timeout=5m || true
+kubectl -n "${SNR_NAMESPACE}" rollout status deploy --timeout=5m \
+  || echo "   WARN: no ready deploy in ${SNR_NAMESPACE} (override SNR_NAMESPACE if it differs)"
+# NHC's install namespace is upstream-dependent and may not be the default; warn (don't fail) if absent.
+kubectl -n "${NHC_NAMESPACE}" rollout status deploy --timeout=5m \
+  || echo "   WARN: no ready deploy in ${NHC_NAMESPACE}; NHC namespace is upstream-dependent — run 'kubectl get deploy -A | grep -i health' and set NHC_NAMESPACE"
 
 echo "== medik8s operators applied. Enable Tier-1 on a pool with:"
 echo "   helm upgrade ectobase deploy/charts/ectobase --set tier1Failover.enabled=true"
