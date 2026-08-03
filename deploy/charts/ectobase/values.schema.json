@@ -48,6 +48,29 @@
       "type": "object",
       "additionalProperties": false,
       "properties": { "enabled": { "type": "boolean" } }
+    },
+    "tier1Failover": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "snrNamespace": { "type": "string", "minLength": 1 },
+        "nodeSelector": { "type": "object" },
+        "unhealthyThreshold": { "type": "string", "minLength": 1 },
+        "minHealthy": { "type": "string", "minLength": 1 },
+        "remediationStrategy": {
+          "type": "string",
+          "enum": ["Automatic", "ResourceDeletion", "OutOfServiceTaint"]
+        },
+        "watchdog": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "device": { "type": "string" }
+          }
+        }
+      }
     }
   }
 }

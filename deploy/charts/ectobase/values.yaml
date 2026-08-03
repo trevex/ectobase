@@ -31,3 +31,20 @@ installCRDs: true
 # Blue-green operator (thread C). Off until it lands; requires dataplane: dpdk.
 blueGreen:
   enabled: false
+
+# Tier-1 autonomous local failover (medik8s NHC + SNR). Pool-local capability;
+# opt-in. When enabled, the chart renders a NodeHealthCheck + SelfNodeRemediationTemplate
+# (and a SelfNodeRemediationConfig only when a hardware watchdog is requested).
+tier1Failover:
+  enabled: false                          # opt-in per pool; renders nothing when false
+  snrNamespace: self-node-remediation     # where the SNR operator (+ our Template/Config) live
+  nodeSelector:                           # LabelSelector of nodes NHC watches
+    matchExpressions:
+      - key: node-role.kubernetes.io/control-plane
+        operator: DoesNotExist
+  unhealthyThreshold: 60s                 # Node Ready=Unknown/False duration before remediation
+  minHealthy: "51%"                       # NHC guard: never remediate below this healthy quorum
+  remediationStrategy: OutOfServiceTaint  # SNR enum: Automatic | ResourceDeletion | OutOfServiceTaint
+  watchdog:
+    enabled: false                        # dev/kind: software reboot. prod true = hardware watchdog
+    device: /dev/watchdog                 # watchdogFilePath on SelfNodeRemediationConfig (when enabled)
