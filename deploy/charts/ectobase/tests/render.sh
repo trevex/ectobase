@@ -31,9 +31,9 @@ for tpl in "${!MAP[@]}"; do
   fi
 done
 
-# 2) CRDs: 8 with installCRDs, 0 without.
+# 2) CRDs: 12 with installCRDs, 0 without. (Count tracks crd-bases/*.yaml — bump when net types are added.)
 n=$(render_show_only templates/crds.yaml "$DIR/values/ebpf-clab.yaml" | grep -c "kind: CustomResourceDefinition")
-[ "$n" = "8" ] && ok "installCRDs renders 8 CRDs" || bad "installCRDs rendered $n CRDs (want 8)"
+[ "$n" = "12" ] && ok "installCRDs renders 12 CRDs" || bad "installCRDs rendered $n CRDs (want 12)"
 
 # 3) DPDK renders under dpdk, not under ebpf.
 render_show_only templates/dataplane-dpdk.yaml "$DIR/values/dpdk-clab.yaml" | grep -q "flowplane-dpdk serve" \
@@ -63,6 +63,41 @@ helm template ectobase deploy/charts/ectobase --namespace ectobase-system -f "$D
   && ok "ebpf-hw renders" || bad "ebpf-hw failed to render"
 render_show_only templates/dataplane-ebpf.yaml "$DIR/values/ebpf-hw.yaml" | grep -q "FLOWPLANE_SKB_MODE" \
   && bad "ebpf-hw should omit FLOWPLANE_SKB_MODE" || ok "ebpf-hw omits FLOWPLANE_SKB_MODE"
+
+# 6) Tier-1 failover: schema accepts the block (default disabled renders + lints).
+helm template ectobase deploy/charts/ectobase --namespace ectobase-system \
+  --set tier1Failover.enabled=true >/dev/null 2>&1 \
+  && ok "tier1Failover block accepted by schema" || bad "tier1Failover block rejected by schema"
+
+# 6a) Negative schema cases must FAIL helm template.
+neg "tier1 unknown key"           --set tier1Failover.enabled=true,tier1Failover.bogus=1
+neg "tier1 bad remediationStrategy" --set tier1Failover.enabled=true,tier1Failover.remediationStrategy=Bogus
+
+# 7) NodeHealthCheck: absent when disabled, present + wired when enabled.
+render_show_only templates/tier1/nodehealthcheck.yaml "$DIR/values/ebpf-clab.yaml" >/dev/null 2>&1 \
+  && bad "NodeHealthCheck rendered while tier1 disabled" || ok "NodeHealthCheck absent when disabled"
+
+nhc=$(render_show_only templates/tier1/nodehealthcheck.yaml "$DIR/values/tier1-on.yaml")
+echo "$nhc" | grep -q "kind: NodeHealthCheck"                       && ok "NHC kind" || bad "NHC kind"
+echo "$nhc" | grep -q "apiVersion: remediation.medik8s.io/v1alpha1" && ok "NHC apiVersion" || bad "NHC apiVersion"
+echo "$nhc" | grep -q 'minHealthy: "51%"'                           && ok "NHC minHealthy" || bad "NHC minHealthy"
+echo "$nhc" | grep -q "duration: 60s"                               && ok "NHC threshold->duration" || bad "NHC threshold->duration"
+echo "$nhc" | grep -q "kind: SelfNodeRemediationTemplate"           && ok "NHC remediationTemplate kind" || bad "NHC remediationTemplate kind"
+echo "$nhc" | grep -q "namespace: self-node-remediation"            && ok "NHC remediationTemplate ns" || bad "NHC remediationTemplate ns"
+
+# 8) SelfNodeRemediationTemplate: strategy wired; Config only under watchdog.enabled.
+snrt=$(render_show_only templates/tier1/selfnoderemediation.yaml "$DIR/values/tier1-on.yaml")
+echo "$snrt" | grep -q "kind: SelfNodeRemediationTemplate"     && ok "SNRT kind" || bad "SNRT kind"
+echo "$snrt" | grep -q "remediationStrategy: OutOfServiceTaint" && ok "SNRT strategy" || bad "SNRT strategy"
+echo "$snrt" | grep -q "kind: SelfNodeRemediationConfig"        && bad "SNRConfig rendered without watchdog" || ok "SNRConfig absent without watchdog"
+
+snrw=$(render_show_only templates/tier1/selfnoderemediation.yaml "$DIR/values/tier1-watchdog.yaml")
+echo "$snrw" | grep -q "kind: SelfNodeRemediationConfig"        && ok "SNRConfig present with watchdog" || bad "SNRConfig present with watchdog"
+echo "$snrw" | grep -q "watchdogFilePath: /dev/watchdog"        && ok "SNRConfig watchdogFilePath" || bad "SNRConfig watchdogFilePath"
+echo "$snrw" | grep -q "name: self-node-remediation-config"     && ok "SNRConfig singleton name" || bad "SNRConfig singleton name"
+
+# 8a) watchdog.enabled without a device must FAIL helm template.
+neg "watchdog without device" --set tier1Failover.enabled=true,tier1Failover.watchdog.enabled=true,tier1Failover.watchdog.device=
 
 # 5) helm lint clean.
 helm lint deploy/charts/ectobase >/dev/null 2>&1 && ok "helm lint" || bad "helm lint"

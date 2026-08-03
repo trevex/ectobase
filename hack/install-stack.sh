@@ -33,3 +33,8 @@ kubectl -n cdi wait cdi/cdi --for=condition=Available --timeout=10m
 if [ "${INSTALL_ROOK:-}" = "1" ]; then
   bash "$(dirname "$0")/rook-ceph-up.sh"
 fi
+
+# Optional: medik8s NHC + SNR operators for Tier-1 autonomous local failover (dev only).
+if [ "${INSTALL_MEDIK8S:-}" = "1" ]; then
+  bash "$(dirname "$0")/medik8s-up.sh"
+fi
