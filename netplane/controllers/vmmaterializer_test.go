@@ -90,7 +90,7 @@ func TestBuildVM(t *testing.T) {
 			Interfaces:  []netv1.CompiledVMInterface{{MAC: "02:00:00:00:00:01", NetworkName: "flowplane-overlay"}},
 		},
 	}
-	vm := buildVM(cvm)
+	vm := buildVM(cvm, nil)
 	if vm.Name != "ns-vm1" || vm.Namespace != "ns" {
 		t.Fatalf("meta: %s/%s", vm.Namespace, vm.Name)
 	}
@@ -111,6 +111,37 @@ func TestBuildVM(t *testing.T) {
 	}
 	if vm.Spec.Template.Spec.Domain.Resources.Requests.Memory().Cmp(resource.MustParse("1Gi")) != 0 {
 		t.Fatalf("mem")
+	}
+}
+
+func TestBuildVM_FromDataVolumes(t *testing.T) {
+	cvm := &netv1.CompiledVM{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "ns-vm1", Labels: map[string]string{"workload": "vm1"}},
+		Spec: netv1.CompiledVMSpec{Image: "ignored-when-volumes", RunStrategy: "RerunOnFailure"}}
+	atts := []netv1.CompiledVolumeAttachment{
+		{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "vm1-data"}, Spec: netv1.CompiledVolumeAttachmentSpec{Boot: false}},
+		{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "vm1-boot"}, Spec: netv1.CompiledVolumeAttachmentSpec{Boot: true}},
+	}
+	vm := buildVM(cvm, atts)
+	vols := vm.Spec.Template.Spec.Volumes
+	if len(vols) != 2 {
+		t.Fatalf("want 2 volumes, got %+v", vols)
+	}
+	// boot disk first, referencing its DataVolume; no containerDisk.
+	if vols[0].DataVolume == nil || vols[0].DataVolume.Name != "vm1-boot" {
+		t.Fatalf("boot vol first: %+v", vols)
+	}
+	if vols[1].DataVolume == nil || vols[1].DataVolume.Name != "vm1-data" {
+		t.Fatalf("data vol: %+v", vols)
+	}
+	for _, v := range vols {
+		if v.ContainerDisk != nil {
+			t.Fatalf("no containerDisk when volumes present: %+v", vols)
+		}
+	}
+	// disks must pair with the volumes by name.
+	disks := vm.Spec.Template.Spec.Domain.Devices.Disks
+	if len(disks) != 2 || disks[0].Name != "vm1-boot" || disks[1].Name != "vm1-data" {
+		t.Fatalf("disks: %+v", disks)
 	}
 }
 
