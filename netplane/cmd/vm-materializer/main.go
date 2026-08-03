@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	kubevirtv1 "kubevirt.io/api/core/v1"
+	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	// blank import registers the --kubeconfig flag on flag.CommandLine via init().
 	_ "sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -30,6 +31,9 @@ func main() {
 	}
 	if err := kubevirtv1.AddToScheme(scheme); err != nil {
 		log.Fatalf("add kubevirt scheme: %v", err)
+	}
+	if err := cdiv1.AddToScheme(scheme); err != nil {
+		log.Fatalf("add cdi scheme: %v", err)
 	}
 	metav1.AddToGroupVersion(scheme, schema.GroupVersion{Version: "v1"})
 
@@ -50,6 +54,10 @@ func main() {
 
 	if err := (&controllers.VMMaterializerReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup vm-materializer controller: %v", err)
+	}
+
+	if err := (&controllers.VolumeMaterializerReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup volume-materializer controller: %v", err)
 	}
 
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
