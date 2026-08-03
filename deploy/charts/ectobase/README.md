@@ -19,17 +19,17 @@ helm upgrade --install ectobase deploy/charts/ectobase \
   --namespace ectobase-system --set tier1Failover.enabled=true
 ```
 
-**Key values:**
-- `remediationStrategy` (`Automatic|ResourceDeletion|OutOfServiceTaint`, default
+**Key values** (all under `tier1Failover.`, e.g. `--set tier1Failover.remediationStrategy=...`):
+- `tier1Failover.remediationStrategy` (`Automatic|ResourceDeletion|OutOfServiceTaint`, default
   `OutOfServiceTaint`): `OutOfServiceTaint` applies the k8s `node.kubernetes.io/out-of-service`
   taint so pods are force-deleted and RWO volumes (Ceph RBD boot disks) force-detach and
   reattach on the surviving node. Requires Kubernetes ≥ 1.28.
-- `watchdog.enabled` (default `false`): `false` uses SNR's software-reboot path (dev/kind,
-  no `/dev/watchdog`); `true` arms the hardware watchdog for a hard split-brain guarantee
-  (prod) and renders a `SelfNodeRemediationConfig` — install the operators first so it
-  adopts the chart-provided singleton.
-- `minHealthy` (default `"51%"`): NHC refuses to remediate below this healthy quorum,
-  preventing a network blip from cascading into a pool-wide fence storm.
+- `tier1Failover.watchdog.enabled` (default `false`): `false` uses SNR's software-reboot path
+  (dev/kind, no `/dev/watchdog`); `true` arms the hardware watchdog for a hard split-brain
+  guarantee (prod) and renders a `SelfNodeRemediationConfig` — install the operators first so
+  it adopts the chart-provided singleton.
+- `tier1Failover.minHealthy` (default `"51%"`): NHC refuses to remediate below this healthy
+  quorum, preventing a network blip from cascading into a pool-wide fence storm.
 
 **Caveat:** with `watchdog.enabled=false`, remediation is timeout-based (not a hard fence);
 `watchdog.enabled=true` is the hardening answer. Validate end-to-end with
