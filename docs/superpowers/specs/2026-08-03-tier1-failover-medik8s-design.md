@@ -47,7 +47,7 @@ Wiring + config + thin glue. Everything Phase 5a adds is a **pool-local deployme
 ### 4.1 Helm chart (`deploy/charts/ectobase/`)
 
 - `templates/tier1/nodehealthcheck.yaml` — a medik8s `NodeHealthCheck` CR selecting compute nodes (`.Values.tier1Failover.nodeSelector`), with unhealthy-condition rules (`Ready` in `{Unknown,False}` for `.Values.tier1Failover.unhealthyThreshold`) and `minHealthy` guard, pointing at the SNR remediation template.
-- `templates/tier1/selfnoderemediation.yaml` — `SelfNodeRemediationConfig` + `SelfNodeRemediationTemplate`, with `remediationStrategy` driven by `.Values.tier1Failover.fencingStrategy`.
+- `templates/tier1/selfnoderemediation.yaml` — `SelfNodeRemediationConfig` (watchdog vs software reboot, from `.Values.tier1Failover.watchdog`) + `SelfNodeRemediationTemplate` (`remediationStrategy` from `.Values.tier1Failover.remediationStrategy`).
 - Both files wrapped in `{{- if .Values.tier1Failover.enabled }}` so pools that don't opt in (or lack medik8s) render nothing.
 - `templates/_validate.tpl` — extend the existing `ectobase.validate` helper with the Tier-1 guards (§6).
 - `values.yaml` — new `tier1Failover` block (§5); `values.schema.json` (whatever enforces unknown-key rejection) extended to accept it.
@@ -65,30 +65,32 @@ Wiring + config + thin glue. Everything Phase 5a adds is a **pool-local deployme
 
 ## 5. Values surface
 
+medik8s models two **orthogonal** knobs, so the chart exposes two fields (not one fake enum). The `remediationStrategy` (workload cleanup, on `SelfNodeRemediationTemplate`) and the watchdog (reboot mechanism, on `SelfNodeRemediationConfig`) are independent.
+
 ```yaml
 tier1Failover:
-  enabled: false                      # opt-in per pool; renders nothing when false
-  nodeSelector:                       # which nodes NHC watches (compute nodes)
-    matchExpressions: []              # default: all worker nodes
-  unhealthyThreshold: 60s             # Node Ready=Unknown/False duration before remediation
-  minHealthy: "51%"                   # NHC guard: never remediate if too few nodes healthy
-  fencingStrategy: OutOfServiceTaint  # dev default; or "WatchdogReboot" (PascalCase, k8s enum style)
+  enabled: false                       # opt-in per pool; renders nothing when false
+  snrNamespace: self-node-remediation  # where the SNR operator (+ our Template/Config) live
+  nodeSelector:                        # which nodes NHC watches (compute nodes)
+    matchExpressions: []               # default: all worker nodes
+  unhealthyThreshold: 60s              # Node Ready=Unknown/False duration before remediation
+  minHealthy: "51%"                    # NHC guard: never remediate if too few nodes healthy
+  remediationStrategy: OutOfServiceTaint  # real SNR enum: Automatic | ResourceDeletion | OutOfServiceTaint
   watchdog:
-    device: /dev/watchdog             # only used when fencingStrategy=WatchdogReboot
+    enabled: false                     # dev/kind: software reboot. prod: true → hardware watchdog hard-fence
+    device: /dev/watchdog              # watchdogFilePath on SelfNodeRemediationConfig (used when enabled)
 ```
 
-The toggle maps to SNR's `remediationStrategy`:
-
-- **`OutOfServiceTaint`** (dev default) → SNR applies the k8s-native `node.kubernetes.io/out-of-service` taint after the safe timeout → k8s force-deletes VMIs **and force-detaches volumes** (RWO RBD reattaches). No watchdog needed → works in kind. Timeout-based safety (no hard reboot guarantee).
-- **`WatchdogReboot`** → SNR uses the hardware/softdog watchdog for a hard split-brain guarantee before reschedule. Prod-hardening path; the live e2e branches/skips when no watchdog device exists.
+- **`remediationStrategy`** → `SelfNodeRemediationTemplate.spec.template.spec.remediationStrategy`. Default **`OutOfServiceTaint`**: SNR places the k8s-native `node.kubernetes.io/out-of-service` taint on the fenced node → the kube-controller-manager **force-deletes the VMI and force-detaches its volumes** (RWO RBD reattaches on a surviving node without the ~6-minute detach timeout). `ResourceDeletion`/`Automatic` are accepted but `OutOfServiceTaint` is what the RWO-RBD boot-disk case needs. The Non-Graceful-Node-Shutdown taint is **GA in Kubernetes ≥1.28** (a documented prerequisite).
+- **`watchdog.enabled`** → the `SelfNodeRemediationConfig` singleton is a per-operator object the SNR operator auto-creates with a software-reboot default. To avoid a Helm-vs-operator ownership fight, the chart renders a `SelfNodeRemediationConfig` (name `self-node-remediation-config`, namespace `snrNamespace`) **only when `watchdog.enabled=true`** — setting `watchdogFilePath: <device>`. When `false` (dev/kind default) the chart renders **no** Config and the operator's own software-reboot default stands (no `/dev/watchdog` needed). Every strategy still fences via this reboot mechanism; the watchdog only strengthens the guarantee. (Prod ordering caveat: install the operators first; the operator adopts the chart-provided singleton — the live e2e removes any auto-created one before applying.)
 
 `minHealthy` is the pool-local fail-safe: NHC refuses to remediate when the pool would drop below the healthy quorum, so a network blip cannot cascade into a pool-wide fence storm.
 
-## 6. Validation guards (chart-lint, `ectobase.validate`)
+## 6. Validation guards (chart-lint, `ectobase.validate` + `values.schema.json`)
 
-- `fencingStrategy` must be one of `{OutOfServiceTaint, WatchdogReboot}` — else `fail` with a clear message.
-- `fencingStrategy=WatchdogReboot` requires `watchdog.device` — else `fail`.
-- (Schema) unknown keys under `tier1Failover` rejected, consistent with the existing unknown-key rejection.
+- `remediationStrategy` must be one of `{Automatic, ResourceDeletion, OutOfServiceTaint}` — enforced by `values.schema.json` enum (the SNR CRD's own enum) and surfaced early.
+- `watchdog.enabled=true` requires a non-empty `watchdog.device` — else `ectobase.validate` `fail`s with a clear message.
+- (Schema) unknown keys under `tier1Failover` rejected via `additionalProperties: false`, consistent with the existing schema.
 
 ## 7. Testing
 
@@ -97,9 +99,9 @@ The toggle maps to SNR's `remediationStrategy`:
 Deterministic, no cluster required — the merge gate:
 
 1. `tier1Failover.enabled=false` → **zero** Tier-1 manifests (opt-in proven; grep for `kind: NodeHealthCheck` / `kind: SelfNodeRemediation*` yields 0).
-2. `enabled=true, fencingStrategy=OutOfServiceTaint` → `NodeHealthCheck` + `SelfNodeRemediationConfig`/`Template` render; SNR `remediationStrategy` == `OutOfServiceTaint`; `unhealthyThreshold`/`minHealthy`/`nodeSelector` wired through.
-3. `enabled=true, fencingStrategy=WatchdogReboot` → SNR strategy == watchdog; `watchdog.device` mounted.
-4. Negative (`neg` helper): `WatchdogReboot` without `watchdog.device` → `helm template` fails; unknown `fencingStrategy` → fails.
+2. `enabled=true` (defaults) → `NodeHealthCheck` + `SelfNodeRemediationConfig` + `SelfNodeRemediationTemplate` render; Template `remediationStrategy` == `OutOfServiceTaint`; NHC `minHealthy`/`unhealthyConditions[].duration`(from `unhealthyThreshold`)/`selector` wired through; NHC `remediationTemplate` references the Template by the right group/kind/name/namespace.
+3. `enabled=true, watchdog.enabled=true` → a `SelfNodeRemediationConfig` renders with `spec.watchdogFilePath` == `watchdog.device` in `snrNamespace`; `watchdog.enabled=false` (default) → **no** `SelfNodeRemediationConfig` rendered (operator default stands).
+4. Negative (`neg` helper): `watchdog.enabled=true` with empty `watchdog.device` → `helm template` fails; `remediationStrategy=Bogus` → fails (schema enum); unknown key under `tier1Failover` → fails.
 5. `helm lint` stays clean.
 
 ### 7.2 Best-effort live script (`hack/tier1-failover-e2e.sh`)
@@ -121,6 +123,6 @@ The real proof, run manually on a dev fabric (not CI-wired):
 ## 9. Deferred / open
 
 - Upward per-VM Tier-1 status propagation ("informed when reachable") — its own later phase.
-- Watchdog on kind (softdog) is finicky; `WatchdogReboot` is validated via chart-render only until a HW/softdog-capable lab exists.
-- `OutOfServiceTaint` split-brain caveat for RWO: timeout-based, not a hard fence — documented; `WatchdogReboot` is the hardening answer.
-- Pinned medik8s operator versions in `hack/medik8s-up.sh` to be fixed at implementation time (latest stable NHC + SNR).
+- Watchdog on kind (softdog) is finicky; `watchdog.enabled=true` is validated via chart-render only until a HW/softdog-capable lab exists.
+- `OutOfServiceTaint` split-brain caveat for RWO: timeout-based, not a hard fence — documented; `watchdog.enabled=true` is the hardening answer.
+- medik8s ships no plain `install.yaml`; `hack/medik8s-up.sh` installs via remote kustomize (`kubectl apply -k github.com/medik8s/<op>/config/default?ref=<tag>`), pinned SNR **v0.13.0** / NHC **v0.12.0** (overridable via env). NHC group `remediation.medik8s.io/v1alpha1`; SNR group `self-node-remediation.medik8s.io/v1alpha1` (default namespace `self-node-remediation`).
