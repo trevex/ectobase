@@ -71,6 +71,12 @@ type (
 	CompiledLBPort     = netv1.CompiledLBPort
 	CompiledPeerImport = netv1.CompiledPeerImport
 
+	CompiledVM          = netv1.CompiledVM
+	CompiledVMList      = netv1.CompiledVMList
+	CompiledVMSpec      = netv1.CompiledVMSpec
+	CompiledVMInterface = netv1.CompiledVMInterface
+	CompiledVMStatus    = netv1.CompiledVMStatus
+
 	VirtualMachine       = netv1.VirtualMachine
 	VirtualMachineList   = netv1.VirtualMachineList
 	VirtualMachineSpec   = netv1.VirtualMachineSpec
@@ -117,6 +123,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&VPCPeeringList{},
 		&CompiledNIC{},
 		&CompiledNICList{},
+		&CompiledVM{},
+		&CompiledVMList{},
 		&VirtualMachine{},
 		&VirtualMachineList{},
 	)

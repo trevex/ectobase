@@ -29,9 +29,11 @@ func main() {
 	var (
 		centralKubeconfig string
 		clusterName       string
+		networkName       string
 	)
 	flag.StringVar(&centralKubeconfig, "central-kubeconfig", "", "Path to the central aggregated-apiserver kubeconfig (falls back to in-cluster/KUBECONFIG when empty).")
 	flag.StringVar(&clusterName, "cluster-name", "", "Default cluster binding stamped onto CompiledNICs whose NIC has no owning VirtualMachine.")
+	flag.StringVar(&networkName, "network-name", "flowplane-overlay", "Multus NetworkAttachmentDefinition name for the flowplane overlay binding stamped onto CompiledVMs.")
 	flag.Parse()
 
 	scheme := runtime.NewScheme()
@@ -69,6 +71,10 @@ func main() {
 
 	if err := (&controllers.CompiledNICReconciler{Client: mgr.GetClient(), DefaultClusterName: clusterName}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup compilednic controller: %v", err)
+	}
+
+	if err := (&controllers.CompiledVMReconciler{Client: mgr.GetClient(), NetworkName: networkName}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup compiledvm controller: %v", err)
 	}
 
 	if err := (&controllers.VPCPeeringReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {

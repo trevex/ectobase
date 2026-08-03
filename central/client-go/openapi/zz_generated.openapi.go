@@ -28,6 +28,11 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/trevex/ectobase/api/v1alpha1.CompiledNICSpec":        schema_trevex_ectobase_api_v1alpha1_CompiledNICSpec(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.CompiledNICStatus":      schema_trevex_ectobase_api_v1alpha1_CompiledNICStatus(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.CompiledPeerImport":     schema_trevex_ectobase_api_v1alpha1_CompiledPeerImport(ref),
+		"github.com/trevex/ectobase/api/v1alpha1.CompiledVM":             schema_trevex_ectobase_api_v1alpha1_CompiledVM(ref),
+		"github.com/trevex/ectobase/api/v1alpha1.CompiledVMInterface":    schema_trevex_ectobase_api_v1alpha1_CompiledVMInterface(ref),
+		"github.com/trevex/ectobase/api/v1alpha1.CompiledVMList":         schema_trevex_ectobase_api_v1alpha1_CompiledVMList(ref),
+		"github.com/trevex/ectobase/api/v1alpha1.CompiledVMSpec":         schema_trevex_ectobase_api_v1alpha1_CompiledVMSpec(ref),
+		"github.com/trevex/ectobase/api/v1alpha1.CompiledVMStatus":       schema_trevex_ectobase_api_v1alpha1_CompiledVMStatus(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.EgressQoS":              schema_trevex_ectobase_api_v1alpha1_EgressQoS(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.FirewallPolicy":         schema_trevex_ectobase_api_v1alpha1_FirewallPolicy(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.FirewallPolicyList":     schema_trevex_ectobase_api_v1alpha1_FirewallPolicyList(ref),
@@ -840,6 +845,206 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledPeerImport(ref common.Reference
 					},
 				},
 				Required: []string{"peerVni"},
+			},
+		},
+	}
+}
+
+func schema_trevex_ectobase_api_v1alpha1_CompiledVM(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CompiledVM is the lowered boot intent for a scheduled VirtualMachine.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledVMSpec"),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledVMStatus"),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/trevex/ectobase/api/v1alpha1.CompiledVMSpec", "github.com/trevex/ectobase/api/v1alpha1.CompiledVMStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_trevex_ectobase_api_v1alpha1_CompiledVMInterface(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CompiledVMInterface is a resolved overlay interface for a VM: the pinned MAC and the multus network (NetworkAttachmentDefinition) name for the flowplane binding.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"mac": {
+						SchemaProps: spec.SchemaProps{
+							Description: "MAC is the pinned L2 address (from the NetworkInterface).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"networkName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "NetworkName is the multus NetworkAttachmentDefinition name for the overlay binding.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_trevex_ectobase_api_v1alpha1_CompiledVMList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CompiledVMList is a list of CompiledVM objects.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledVM"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/trevex/ectobase/api/v1alpha1.CompiledVM", metav1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_trevex_ectobase_api_v1alpha1_CompiledVMSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CompiledVMSpec is the fully lowered, ready-to-materialize boot intent for a VM: the containerDisk image, compute resources, run strategy, the cluster binding, and the per-interface MAC + overlay network name. A downstream materializer turns this into a kubevirt.io/v1.VirtualMachine.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"clusterName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ClusterName is the cluster this compiled VM is bound to (the pod->node binding). The per-cluster broker selects on this field.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"image": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Image is the containerDisk image to boot from.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"resources": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Resources is the compute request/limit; maps to the KubeVirt domain resources.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(v1.ResourceRequirements{}.OpenAPIModelName()),
+						},
+					},
+					"runStrategy": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RunStrategy is the KubeVirt run strategy (defaulted upstream by the compiler).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"interfaces": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Interfaces are the VM's overlay interfaces (one per owned NetworkInterface).",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledVMInterface"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/trevex/ectobase/api/v1alpha1.CompiledVMInterface", v1.ResourceRequirements{}.OpenAPIModelName()},
+	}
+}
+
+func schema_trevex_ectobase_api_v1alpha1_CompiledVMStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CompiledVMStatus is the observed state of a CompiledVM.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"state": {
+						SchemaProps: spec.SchemaProps{
+							Description: "State is the materialization state (e.g. Applied, Pending).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
 			},
 		},
 	}
@@ -2409,6 +2614,20 @@ func schema_trevex_ectobase_api_v1alpha1_VirtualMachineSpec(ref common.Reference
 							Description: "Resources is the compute resource request/limit for this workload. Only Requests is used for scheduling capacity fit; Limits is carried for parity.",
 							Default:     map[string]interface{}{},
 							Ref:         ref(v1.ResourceRequirements{}.OpenAPIModelName()),
+						},
+					},
+					"image": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Image is the containerDisk image the VM boots from (e.g. quay.io/containerdisks/fedora:41).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"runStrategy": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RunStrategy is the KubeVirt run strategy (Always, RerunOnFailure, Manual, Halted). Empty defaults to RerunOnFailure (Tier-1 local restart on node death).",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 					"poolSelector": {
