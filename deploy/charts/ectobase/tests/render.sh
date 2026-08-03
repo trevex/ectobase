@@ -73,6 +73,18 @@ helm template ectobase deploy/charts/ectobase --namespace ectobase-system \
 neg "tier1 unknown key"           --set tier1Failover.enabled=true,tier1Failover.bogus=1
 neg "tier1 bad remediationStrategy" --set tier1Failover.enabled=true,tier1Failover.remediationStrategy=Bogus
 
+# 7) NodeHealthCheck: absent when disabled, present + wired when enabled.
+render_show_only templates/tier1/nodehealthcheck.yaml "$DIR/values/ebpf-clab.yaml" >/dev/null 2>&1 \
+  && bad "NodeHealthCheck rendered while tier1 disabled" || ok "NodeHealthCheck absent when disabled"
+
+nhc=$(render_show_only templates/tier1/nodehealthcheck.yaml "$DIR/values/tier1-on.yaml")
+echo "$nhc" | grep -q "kind: NodeHealthCheck"                       && ok "NHC kind" || bad "NHC kind"
+echo "$nhc" | grep -q "apiVersion: remediation.medik8s.io/v1alpha1" && ok "NHC apiVersion" || bad "NHC apiVersion"
+echo "$nhc" | grep -q 'minHealthy: "51%"'                           && ok "NHC minHealthy" || bad "NHC minHealthy"
+echo "$nhc" | grep -q "duration: 60s"                               && ok "NHC threshold->duration" || bad "NHC threshold->duration"
+echo "$nhc" | grep -q "kind: SelfNodeRemediationTemplate"           && ok "NHC remediationTemplate kind" || bad "NHC remediationTemplate kind"
+echo "$nhc" | grep -q "namespace: self-node-remediation"            && ok "NHC remediationTemplate ns" || bad "NHC remediationTemplate ns"
+
 # 5) helm lint clean.
 helm lint deploy/charts/ectobase >/dev/null 2>&1 && ok "helm lint" || bad "helm lint"
 
