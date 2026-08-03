@@ -181,6 +181,22 @@ spec:
                   RunStrategy is the KubeVirt run strategy (Always, RerunOnFailure, Manual, Halted).
                   Empty defaults to RerunOnFailure (Tier-1 local restart on node death).
                 type: string
+              volumeRefs:
+                description: |-
+                  VolumeRefs names the Volumes (same namespace) this VM attaches. A referenced
+                  Volume with a BootImage is the boot disk; others are data disks. When empty the
+                  VM boots ephemerally from Image (containerDisk).
+                items:
+                  description: LocalObjectReference references an object by name within
+                    the same namespace.
+                  properties:
+                    name:
+                      description: Name is the name of the referenced object.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
             type: object
           status:
             description: VirtualMachineStatus defines the observed state of a VirtualMachine.

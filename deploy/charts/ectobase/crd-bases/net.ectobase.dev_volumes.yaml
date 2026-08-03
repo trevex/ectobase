@@ -1,0 +1,72 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: volumes.net.ectobase.dev
+spec:
+  group: net.ectobase.dev
+  names:
+    kind: Volume
+    listKind: VolumeList
+    plural: volumes
+    singular: volume
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Volume is a persistent RBD-backed disk referenced by a VirtualMachine.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: VolumeSpec defines a persistent RBD-backed disk for a VM.
+            properties:
+              bootImage:
+                description: |-
+                  BootImage, if set, is a containerDisk/registry image imported into the disk
+                  (making it bootable). Empty leaves a blank data disk of Size.
+                type: string
+              size:
+                anyOf:
+                - type: integer
+                - type: string
+                description: Size is the requested disk size (e.g. 10Gi).
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              storageClass:
+                description: StorageClass is the ceph-csi RBD StorageClass; empty
+                  uses the cluster default.
+                type: string
+            required:
+            - size
+            type: object
+          status:
+            description: VolumeStatus is the observed state of a Volume.
+            properties:
+              phase:
+                description: Phase is the current lifecycle phase of the Volume.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

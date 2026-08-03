@@ -53,6 +53,10 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&CompiledNICList{},
 		&CompiledVM{},
 		&CompiledVMList{},
+		&Volume{},
+		&VolumeList{},
+		&CompiledVolumeAttachment{},
+		&CompiledVolumeAttachmentList{},
 		&VirtualMachine{},
 		&VirtualMachineList{},
 	)

@@ -22,6 +22,11 @@ type VirtualMachineSpec struct {
 	// InterfaceRefs names the NetworkInterfaces (same namespace) this VM owns.
 	// +optional
 	InterfaceRefs []LocalObjectReference `json:"interfaceRefs,omitempty"`
+	// VolumeRefs names the Volumes (same namespace) this VM attaches. A referenced
+	// Volume with a BootImage is the boot disk; others are data disks. When empty the
+	// VM boots ephemerally from Image (containerDisk).
+	// +optional
+	VolumeRefs []LocalObjectReference `json:"volumeRefs,omitempty"`
 	// Resources is the compute resource request/limit for this workload. Only
 	// Requests is used for scheduling capacity fit; Limits is carried for parity.
 	// +optional

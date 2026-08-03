@@ -77,6 +77,16 @@ type (
 	CompiledVMInterface = netv1.CompiledVMInterface
 	CompiledVMStatus    = netv1.CompiledVMStatus
 
+	Volume       = netv1.Volume
+	VolumeList   = netv1.VolumeList
+	VolumeSpec   = netv1.VolumeSpec
+	VolumeStatus = netv1.VolumeStatus
+
+	CompiledVolumeAttachment       = netv1.CompiledVolumeAttachment
+	CompiledVolumeAttachmentList   = netv1.CompiledVolumeAttachmentList
+	CompiledVolumeAttachmentSpec   = netv1.CompiledVolumeAttachmentSpec
+	CompiledVolumeAttachmentStatus = netv1.CompiledVolumeAttachmentStatus
+
 	VirtualMachine       = netv1.VirtualMachine
 	VirtualMachineList   = netv1.VirtualMachineList
 	VirtualMachineSpec   = netv1.VirtualMachineSpec
@@ -125,6 +135,10 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&CompiledNICList{},
 		&CompiledVM{},
 		&CompiledVMList{},
+		&Volume{},
+		&VolumeList{},
+		&CompiledVolumeAttachment{},
+		&CompiledVolumeAttachmentList{},
 		&VirtualMachine{},
 		&VirtualMachineList{},
 	)
