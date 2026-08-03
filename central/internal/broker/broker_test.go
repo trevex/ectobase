@@ -142,3 +142,36 @@ func TestSyncCompiledVolumeAttachments_NamespacedCreateUpdateGC(t *testing.T) {
 	}
 	if err := b.SyncCompiledVolumeAttachments(context.Background()); err != nil { t.Fatalf("second sync: %v", err) }
 }
+
+// TestSync_PropagatesLabels guards the load-bearing workload-label propagation: the
+// downstream vm-materializer joins a VM to its volume attachments by the workload
+// label, so the broker must mirror labels (not just spec) central->downstream.
+func TestSync_PropagatesLabels(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := netv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	att := &netv1.CompiledVolumeAttachment{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "vm1-boot", Labels: map[string]string{"workload": "vm1"}},
+		Spec:       netv1.CompiledVolumeAttachmentSpec{ClusterName: "c1"},
+	}
+	idx := func(o client.Object) []string {
+		return []string{o.(*netv1.CompiledVolumeAttachment).Spec.ClusterName}
+	}
+	central := fake.NewClientBuilder().WithScheme(s).
+		WithIndex(&netv1.CompiledVolumeAttachment{}, "spec.clusterName", idx).
+		WithObjects(att).Build()
+	downstream := fake.NewClientBuilder().WithScheme(s).Build()
+
+	b := &Broker{Central: central, Downstream: downstream, ClusterName: "c1"}
+	if err := b.SyncCompiledVolumeAttachments(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := &netv1.CompiledVolumeAttachment{}
+	if err := downstream.Get(context.Background(), client.ObjectKey{Namespace: "ns1", Name: "vm1-boot"}, got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Labels["workload"] != "vm1" {
+		t.Fatalf("workload label not propagated downstream: %v", got.Labels)
+	}
+}

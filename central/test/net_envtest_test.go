@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	apiregistrationv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
@@ -254,6 +255,105 @@ func TestCompiledNIC_SpecClusterNameSelector(t *testing.T) {
 	})
 
 	list := &netv1.CompiledNICList{}
+	if err := c.List(ctx, list, client.InNamespace("default"), client.MatchingFields{"spec.clusterName": "c1"}); err != nil {
+		t.Fatalf("List(spec.clusterName=c1): %v", err)
+	}
+	if len(list.Items) != 1 {
+		names := make([]string, len(list.Items))
+		for i := range list.Items {
+			names[i] = list.Items[i].Name
+		}
+		t.Fatalf("List(spec.clusterName=c1): expected exactly 1 item, got %d: %v", len(list.Items), names)
+	}
+	if list.Items[0].Name != a.Name {
+		t.Fatalf("List(spec.clusterName=c1): expected %q, got %q", a.Name, list.Items[0].Name)
+	}
+	if list.Items[0].Spec.ClusterName != "c1" {
+		t.Fatalf("List(spec.clusterName=c1): expected ClusterName=c1, got %q", list.Items[0].Spec.ClusterName)
+	}
+}
+
+// TestVolume_CRUD proves the Volume net type is served by the aggregated apiserver:
+// a namespaced Volume is created and read back, and its Size (a resource.Quantity)
+// + BootImage survive the internal<->versioned conversion round-trip. These are the
+// fields the CompiledVolumeAttachment compiler carries down into a CDI DataVolume.
+func TestVolume_CRUD(t *testing.T) {
+	c, ctx := startNetEnv(t)
+
+	vol := &netv1.Volume{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "test-vol-",
+			Namespace:    "default",
+		},
+		Spec: netv1.VolumeSpec{
+			Size:         resource.MustParse("10Gi"),
+			StorageClass: "ceph-rbd",
+			BootImage:    "quay.io/containerdisks/fedora:41",
+		},
+	}
+	if err := c.Create(ctx, vol); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if vol.Name == "" {
+		t.Fatalf("Create: expected generated name, got empty")
+	}
+	t.Cleanup(func() { _ = c.Delete(ctx, vol) })
+
+	got := &netv1.Volume{}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(vol), got); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	want := resource.MustParse("10Gi")
+	if got.Spec.Size.Cmp(want) != 0 {
+		t.Fatalf("Get: expected Size=10Gi, got %s", got.Spec.Size.String())
+	}
+	if got.Spec.BootImage != "quay.io/containerdisks/fedora:41" {
+		t.Fatalf("Get: expected BootImage=quay.io/containerdisks/fedora:41, got %q", got.Spec.BootImage)
+	}
+	if got.Spec.StorageClass != "ceph-rbd" {
+		t.Fatalf("Get: expected StorageClass=ceph-rbd, got %q", got.Spec.StorageClass)
+	}
+}
+
+// TestCompiledVolumeAttachment_SpecClusterNameSelector proves the
+// CompiledVolumeAttachment spec.clusterName field selector is served and bounded
+// (mirror of the CompiledVM/CompiledNIC selector tests): two attachments (c1, c2)
+// are created and a List filtered by spec.clusterName=c1 must return exactly the c1
+// one. This is the selector the per-cluster broker's SyncCompiledVolumeAttachments
+// relies on.
+func TestCompiledVolumeAttachment_SpecClusterNameSelector(t *testing.T) {
+	c, ctx := startNetEnv(t)
+
+	newCVA := func(cluster string) *netv1.CompiledVolumeAttachment {
+		return &netv1.CompiledVolumeAttachment{
+			ObjectMeta: metav1.ObjectMeta{
+				GenerateName: "cva-" + cluster + "-",
+				Namespace:    "default",
+			},
+			Spec: netv1.CompiledVolumeAttachmentSpec{
+				ClusterName:  cluster,
+				Size:         resource.MustParse("10Gi"),
+				StorageClass: "ceph-rbd",
+				BootImage:    "quay.io/containerdisks/fedora:41",
+				Boot:         true,
+			},
+		}
+	}
+
+	a := newCVA("c1")
+	if err := c.Create(ctx, a); err != nil {
+		t.Fatalf("Create a: %v", err)
+	}
+	b := newCVA("c2")
+	if err := c.Create(ctx, b); err != nil {
+		t.Fatalf("Create b: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = c.Delete(ctx, a)
+		_ = c.Delete(ctx, b)
+	})
+
+	list := &netv1.CompiledVolumeAttachmentList{}
 	if err := c.List(ctx, list, client.InNamespace("default"), client.MatchingFields{"spec.clusterName": "c1"}); err != nil {
 		t.Fatalf("List(spec.clusterName=c1): %v", err)
 	}

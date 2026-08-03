@@ -6,6 +6,7 @@ package broker
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -17,7 +18,9 @@ import (
 // Broker is the per-cluster set-reconcile engine: it makes the downstream compiled
 // objects (CompiledNIC via SyncOnce, CompiledVM via SyncCompiledVMs,
 // CompiledVolumeAttachment via SyncCompiledVolumeAttachments) exactly match the
-// central objects bound to ClusterName (spec.clusterName), per-type.
+// central objects bound to ClusterName (spec.clusterName), per-type. Both spec AND
+// labels are mirrored: the `workload` label is load-bearing downstream (the
+// vm-materializer joins a VM to its volume attachments by it).
 type Broker struct {
 	Central     client.Client
 	Downstream  client.Client
@@ -60,10 +63,11 @@ func (b *Broker) SyncOnce(ctx context.Context) error {
 			}
 			continue
 		}
-		// In desired set — update if spec has drifted. Spec has slices, so use a
+		// In desired set — update if spec OR labels drifted. Spec has slices, so use a
 		// semantic deep-equal (NOT ==, which does not compile on struct-with-slice).
-		if !equality.Semantic.DeepEqual(cur.Spec, w.Spec) {
+		if !equality.Semantic.DeepEqual(cur.Spec, w.Spec) || !maps.Equal(cur.Labels, w.Labels) {
 			cur.Spec = w.Spec
+			cur.Labels = maps.Clone(w.Labels)
 			if err := b.Downstream.Update(ctx, cur); err != nil {
 				return fmt.Errorf("update %s: %w", key(cur), err)
 			}
@@ -79,6 +83,7 @@ func (b *Broker) SyncOnce(ctx context.Context) error {
 		local.Namespace = w.Namespace
 		local.Name = w.Name
 		local.Spec = w.Spec
+		local.Labels = maps.Clone(w.Labels)
 		if err := b.Downstream.Create(ctx, local); err != nil {
 			return fmt.Errorf("create %s: %w", k, err)
 		}
@@ -118,8 +123,9 @@ func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 			}
 			continue
 		}
-		if !equality.Semantic.DeepEqual(cur.Spec, w.Spec) {
+		if !equality.Semantic.DeepEqual(cur.Spec, w.Spec) || !maps.Equal(cur.Labels, w.Labels) {
 			cur.Spec = w.Spec
+			cur.Labels = maps.Clone(w.Labels)
 			if err := b.Downstream.Update(ctx, cur); err != nil {
 				return fmt.Errorf("update vm %s: %w", keyVM(cur), err)
 			}
@@ -133,6 +139,7 @@ func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 		local.Namespace = w.Namespace
 		local.Name = w.Name
 		local.Spec = w.Spec
+		local.Labels = maps.Clone(w.Labels)
 		if err := b.Downstream.Create(ctx, local); err != nil {
 			return fmt.Errorf("create vm %s: %w", k, err)
 		}
@@ -166,8 +173,9 @@ func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 			}
 			continue
 		}
-		if !equality.Semantic.DeepEqual(cur.Spec, w.Spec) {
+		if !equality.Semantic.DeepEqual(cur.Spec, w.Spec) || !maps.Equal(cur.Labels, w.Labels) {
 			cur.Spec = w.Spec
+			cur.Labels = maps.Clone(w.Labels)
 			if err := b.Downstream.Update(ctx, cur); err != nil {
 				return fmt.Errorf("update attachment %s: %w", keyAtt(cur), err)
 			}
@@ -181,6 +189,7 @@ func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 		local.Namespace = w.Namespace
 		local.Name = w.Name
 		local.Spec = w.Spec
+		local.Labels = maps.Clone(w.Labels)
 		if err := b.Downstream.Create(ctx, local); err != nil {
 			return fmt.Errorf("create attachment %s: %w", k, err)
 		}
