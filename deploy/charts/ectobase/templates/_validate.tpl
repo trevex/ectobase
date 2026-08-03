@@ -17,4 +17,9 @@
     {{- fail "invalid values: blueGreen.enabled=true requires dataplane=dpdk (blue-green is DPDK-only; eBPF hot-swaps in place). Set dataplane: dpdk or blueGreen.enabled: false." -}}
   {{- end -}}
 {{- end -}}
+{{- if .Values.tier1Failover.enabled -}}
+  {{- if and .Values.tier1Failover.watchdog.enabled (not .Values.tier1Failover.watchdog.device) -}}
+    {{- fail "invalid values: tier1Failover.watchdog.enabled=true requires tier1Failover.watchdog.device (e.g. /dev/watchdog). Set tier1Failover.watchdog.device or set watchdog.enabled: false." -}}
+  {{- end -}}
+{{- end -}}
 {{- end -}}

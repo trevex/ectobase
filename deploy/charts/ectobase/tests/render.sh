@@ -85,6 +85,20 @@ echo "$nhc" | grep -q "duration: 60s"                               && ok "NHC t
 echo "$nhc" | grep -q "kind: SelfNodeRemediationTemplate"           && ok "NHC remediationTemplate kind" || bad "NHC remediationTemplate kind"
 echo "$nhc" | grep -q "namespace: self-node-remediation"            && ok "NHC remediationTemplate ns" || bad "NHC remediationTemplate ns"
 
+# 8) SelfNodeRemediationTemplate: strategy wired; Config only under watchdog.enabled.
+snrt=$(render_show_only templates/tier1/selfnoderemediation.yaml "$DIR/values/tier1-on.yaml")
+echo "$snrt" | grep -q "kind: SelfNodeRemediationTemplate"     && ok "SNRT kind" || bad "SNRT kind"
+echo "$snrt" | grep -q "remediationStrategy: OutOfServiceTaint" && ok "SNRT strategy" || bad "SNRT strategy"
+echo "$snrt" | grep -q "kind: SelfNodeRemediationConfig"        && bad "SNRConfig rendered without watchdog" || ok "SNRConfig absent without watchdog"
+
+snrw=$(render_show_only templates/tier1/selfnoderemediation.yaml "$DIR/values/tier1-watchdog.yaml")
+echo "$snrw" | grep -q "kind: SelfNodeRemediationConfig"        && ok "SNRConfig present with watchdog" || bad "SNRConfig present with watchdog"
+echo "$snrw" | grep -q "watchdogFilePath: /dev/watchdog"        && ok "SNRConfig watchdogFilePath" || bad "SNRConfig watchdogFilePath"
+echo "$snrw" | grep -q "name: self-node-remediation-config"     && ok "SNRConfig singleton name" || bad "SNRConfig singleton name"
+
+# 8a) watchdog.enabled without a device must FAIL helm template.
+neg "watchdog without device" --set tier1Failover.enabled=true,tier1Failover.watchdog.enabled=true,tier1Failover.watchdog.device=
+
 # 5) helm lint clean.
 helm lint deploy/charts/ectobase >/dev/null 2>&1 && ok "helm lint" || bad "helm lint"
 
