@@ -125,3 +125,28 @@ func TestFailover_ReleaseDrained_HoldsOnReleaseError(t *testing.T) {
 		t.Fatalf("release-failed /64 must be HELD, got %v", got.Status.FencedPrefixes)
 	}
 }
+
+func TestFailover_MultiPrefix_PartialBarrier_TracksAppliedFence(t *testing.T) {
+	scheme := testScheme(t)
+	lost := lostPoolObj("A", "2001:db8:0:1::/64", "2001:db8:0:2::/64")
+	vm := vmOn("vm1", "A")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(lost, readyPoolObj("B"), vm).WithStatusSubresource(vm, lost).Build()
+	// Storage confirms; network fails -> on the FIRST /64, storage is applied+tracked, then network errors.
+	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: denyFencer{errors.New("no overlay")}, FailoverThreshold: time.Minute}
+
+	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	// VM must NOT rebind (barrier blocked).
+	got := &netv1.VirtualMachine{}
+	_ = c.Get(context.Background(), key("vm1"), got)
+	if got.Spec.ClusterName != "A" {
+		t.Fatalf("must NOT rebind on partial barrier, got %q", got.Spec.ClusterName)
+	}
+	// The already-applied storage fence (first /64) must be tracked in FencedPrefixes.
+	gp := &platformv1.ClusterPool{}
+	_ = c.Get(context.Background(), key("A"), gp)
+	if len(gp.Status.FencedPrefixes) != 1 || gp.Status.FencedPrefixes[0] != "2001:db8:0:1::/64" {
+		t.Fatalf("already-applied fence must be tracked for later release, got %v", gp.Status.FencedPrefixes)
+	}
+}
