@@ -39,7 +39,7 @@ func TestPartition_WholePoolFence_CutsBothBackends(t *testing.T) {
 	nf.SetName(fenceName(prefix))
 	_ = unstructured.SetNestedField(nf.Object, "Succeeded", "status", "result")
 	c := fake.NewClientBuilder().WithObjects(nf).Build()
-	sf := NewStorageFencer(c, "rbd.csi.ceph.com", client.ObjectKey{Name: "s", Namespace: "ceph"})
+	sf := NewStorageFencer(c, "rbd.csi.ceph.com", "", client.ObjectKey{Name: "s", Namespace: "ceph"})
 	if err := sf.Fence(context.Background(), prefix); err != nil {
 		t.Fatalf("storage fence must confirm active: %v", err)
 	}

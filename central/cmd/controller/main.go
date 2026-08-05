@@ -43,6 +43,7 @@ func main() {
 
 	reflectorAdmin := flag.String("reflector-admin", "", "reflector RouteBusAdmin gRPC address (network fence); empty => DenyFencer")
 	csiDriver := flag.String("csi-driver", "rbd.csi.ceph.com", "CSI driver for NetworkFence")
+	csiClusterID := flag.String("csi-cluster-id", "", "Ceph clusterID (fsid) written to NetworkFence spec.parameters.clusterID; required against a real ceph-csi driver")
 	csiSecretName := flag.String("csi-secret-name", "rook-csi-rbd-provisioner", "NetworkFence provisioner secret name")
 	csiSecretNS := flag.String("csi-secret-namespace", "rook-ceph", "NetworkFence provisioner secret namespace")
 
@@ -92,7 +93,7 @@ func main() {
 	// (a cluster without csi-addons just errors on Fence → the barrier blocks →
 	// fail-safe). The network fencer defaults to DenyFencer (fail-safe) and is
 	// wired to the real reflector RouteBusAdmin only when -reflector-admin is set.
-	var storageF failover.PrefixFencer = fence.NewStorageFencer(mgr.GetClient(), *csiDriver, client.ObjectKey{Name: *csiSecretName, Namespace: *csiSecretNS})
+	var storageF failover.PrefixFencer = fence.NewStorageFencer(mgr.GetClient(), *csiDriver, *csiClusterID, client.ObjectKey{Name: *csiSecretName, Namespace: *csiSecretNS})
 	var networkF failover.PrefixFencer = failover.DenyFencer{}
 	if *reflectorAdmin != "" {
 		conn, derr := grpc.NewClient(*reflectorAdmin, grpc.WithTransportCredentials(insecure.NewCredentials()))

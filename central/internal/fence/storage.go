@@ -27,14 +27,18 @@ var _ failover.PrefixFencer = (*StorageFencer)(nil)
 // status.result==Succeeded. It writes to an injected client (the Ceph-management
 // cluster; the same cluster in the single-cluster lab).
 type StorageFencer struct {
-	c      client.Client
-	driver string
-	secret client.ObjectKey
+	c         client.Client
+	driver    string
+	clusterID string
+	secret    client.ObjectKey
 }
 
-// NewStorageFencer wraps the management-cluster client + the CSI driver + provisioner secret.
-func NewStorageFencer(c client.Client, driver string, secret client.ObjectKey) *StorageFencer {
-	return &StorageFencer{c: c, driver: driver, secret: secret}
+// NewStorageFencer wraps the management-cluster client + the CSI driver + the Ceph clusterID
+// (fsid) + provisioner secret. clusterID is written to spec.parameters.clusterID: the ceph-csi
+// NetworkFence RPC rejects a fence with "missing or empty clusterID", so it is required against a
+// real driver (an empty clusterID is accepted for the fake-client envtests, which never dial ceph).
+func NewStorageFencer(c client.Client, driver, clusterID string, secret client.ObjectKey) *StorageFencer {
+	return &StorageFencer{c: c, driver: driver, clusterID: clusterID, secret: secret}
 }
 
 func fenceName(prefix string) string {
@@ -51,6 +55,11 @@ func (f *StorageFencer) obj(prefix, state string) *unstructured.Unstructured {
 	_ = unstructured.SetNestedStringSlice(u.Object, []string{prefix}, "spec", "cidrs")
 	_ = unstructured.SetNestedField(u.Object, f.secret.Name, "spec", "secret", "name")
 	_ = unstructured.SetNestedField(u.Object, f.secret.Namespace, "spec", "secret", "namespace")
+	// The ceph-csi NetworkFence RPC reads clusterID (the ceph fsid) from spec.parameters to select
+	// the mon set to blocklist against; omitted only in the fake-client tests (never dials a driver).
+	if f.clusterID != "" {
+		_ = unstructured.SetNestedStringMap(u.Object, map[string]string{"clusterID": f.clusterID}, "spec", "parameters")
+	}
 	return u
 }
 

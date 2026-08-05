@@ -60,6 +60,11 @@ spec:
           args:
             - "-reflector-admin=[fd00:db8:0:1::1]:1338"
             - "-csi-driver=rbd.csi.ceph.com"
+            # The ceph fsid (clusterID) is per-deploy (ceph-demo-up.sh emits it), so it cannot be
+            # baked in; the tier2 live deploy patches this arg with the real fsid. Empty here =>
+            # NetworkFence spec.parameters.clusterID omitted => the ceph-csi driver rejects the fence
+            # ("missing or empty clusterID"). MUST be set to the fsid for the storage fence to succeed.
+            - "-csi-cluster-id="
             - "-csi-secret-name=csi-rbd-secret"
             - "-csi-secret-namespace=ceph-csi"
           env:
