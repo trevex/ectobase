@@ -21,13 +21,13 @@ import (
 	"github.com/trevex/ectobase/central/internal/failover"
 )
 
-// confirmingFencer confirms both fences (storage + network) — the happy path
-// that lets the fence-gated failover reach the re-bind. Contrast with
+// confirmingFencer confirms every fence (storage + network) for any /64 — the
+// happy path that lets the fence-gated failover reach the re-bind. Contrast with
 // failover.DenyFencer, which refuses both (fail-safe).
 type confirmingFencer struct{}
 
-func (confirmingFencer) FenceStorage(context.Context, *netv1.VirtualMachine) error { return nil }
-func (confirmingFencer) FenceNetwork(context.Context, *netv1.VirtualMachine) error { return nil }
+func (confirmingFencer) Fence(context.Context, string) error   { return nil }
+func (confirmingFencer) Release(context.Context, string) error { return nil }
 
 // TestFailover_RebindsOffLostPool proves Tier-2 fence-gated failover against the
 // REAL kit aggregated apiserver:
@@ -53,6 +53,7 @@ func TestFailover_RebindsOffLostPool(t *testing.T) {
 	}
 	cur1.Status.Phase = clusterpool.PhaseUnknown
 	cur1.Status.Lease = &platformv1.ClusterPoolLease{HolderIdentity: "b1", RenewTime: &stale}
+	cur1.Status.NodePrefixes = []string{"2001:db8:0:1::/64"}
 	if err := c.Status().Update(ctx, cur1); err != nil {
 		t.Fatalf("status update pool c1: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestFailover_RebindsOffLostPool(t *testing.T) {
 	reqC1 := ctrl.Request{NamespacedName: client.ObjectKey{Name: "c1"}}
 
 	t.Run("confirming fencer rebinds to c2", func(t *testing.T) {
-		r := &failover.Reconciler{Client: c, Fencer: confirmingFencer{}, FailoverThreshold: time.Minute}
+		r := &failover.Reconciler{Client: c, StorageFencer: confirmingFencer{}, NetworkFencer: confirmingFencer{}, FailoverThreshold: time.Minute}
 		if _, err := r.Reconcile(ctx, reqC1); err != nil {
 			t.Fatalf("failover Reconcile: %v", err)
 		}
@@ -114,7 +115,7 @@ func TestFailover_RebindsOffLostPool(t *testing.T) {
 			t.Fatalf("re-bind vm1 to c1: %v", err)
 		}
 
-		r := &failover.Reconciler{Client: c, Fencer: failover.DenyFencer{}, FailoverThreshold: time.Minute}
+		r := &failover.Reconciler{Client: c, StorageFencer: failover.DenyFencer{}, NetworkFencer: failover.DenyFencer{}, FailoverThreshold: time.Minute}
 		if _, err := r.Reconcile(ctx, reqC1); err != nil {
 			t.Fatalf("failover Reconcile (deny): %v", err)
 		}

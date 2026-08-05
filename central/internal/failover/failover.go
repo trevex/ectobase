@@ -23,90 +23,170 @@ import (
 	"github.com/trevex/ectobase/central/internal/scheduler"
 )
 
-// Fencer externally excludes a lost instance from storage + network so a VM can
-// be safely restarted elsewhere. Phase 3 ships DenyFencer (fail-safe) + tests;
-// real Ceph/overlay actuators are Phase 4+.
-type Fencer interface {
-	FenceStorage(ctx context.Context, vm *netv1.VirtualMachine) error
-	FenceNetwork(ctx context.Context, vm *netv1.VirtualMachine) error
+// PrefixFencer applies/releases ONE fence backend (storage or network) for a single
+// node /64. Fence must be idempotent and return nil ONLY when the fence is confirmed
+// ACTIVE; Release returns nil only when the fence is confirmed removed.
+type PrefixFencer interface {
+	Fence(ctx context.Context, prefix string) error
+	Release(ctx context.Context, prefix string) error
 }
 
 // DenyFencer refuses to confirm any fence; wiring it means Tier-2 always fails safe.
 type DenyFencer struct{}
 
-func (DenyFencer) FenceStorage(context.Context, *netv1.VirtualMachine) error {
-	return fmt.Errorf("no storage fence actuator configured")
-}
-func (DenyFencer) FenceNetwork(context.Context, *netv1.VirtualMachine) error {
-	return fmt.Errorf("no network fence actuator configured")
-}
+func (DenyFencer) Fence(context.Context, string) error   { return fmt.Errorf("no fence actuator configured") }
+func (DenyFencer) Release(context.Context, string) error { return fmt.Errorf("no fence actuator configured") }
 
 // Reconciler runs Tier-2 fence-gated failover for VMs bound to a lost pool.
 type Reconciler struct {
 	Client            client.Client
-	Fencer            Fencer
+	StorageFencer     PrefixFencer
+	NetworkFencer     PrefixFencer
 	FailoverThreshold time.Duration
 }
 
-func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *Reconciler) Reconcile(ctx context.Context, rq ctrl.Request) (ctrl.Result, error) {
 	var pool platformv1.ClusterPool
-	if err := r.Client.Get(ctx, req.NamespacedName, &pool); err != nil {
+	if err := r.Client.Get(ctx, rq.NamespacedName, &pool); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	// Recovery path: release fences for /64s the broker has confirmed drained.
+	if err := r.releaseDrained(ctx, &pool); err != nil {
+		return ctrl.Result{}, err
 	}
 	if !poolLost(&pool, time.Now(), r.FailoverThreshold) {
 		return ctrl.Result{RequeueAfter: r.FailoverThreshold}, nil
 	}
+	// Whole-pool fence: every /64 must confirm BOTH fences active (barrier) before
+	// any re-bind. A pool with no reported /64s cannot be safely fenced -> block.
+	if len(pool.Status.NodePrefixes) == 0 {
+		return ctrl.Result{RequeueAfter: r.FailoverThreshold}, r.blockPoolVMs(ctx, pool.Name, "no NodePrefixes reported; cannot fence")
+	}
+	var fenced []string
+	for _, p := range pool.Status.NodePrefixes {
+		if err := r.StorageFencer.Fence(ctx, p); err != nil {
+			return ctrl.Result{RequeueAfter: r.FailoverThreshold}, r.blockPoolVMs(ctx, pool.Name, "storage fence unconfirmed for "+p+": "+err.Error())
+		}
+		if err := r.NetworkFencer.Fence(ctx, p); err != nil {
+			return ctrl.Result{RequeueAfter: r.FailoverThreshold}, r.blockPoolVMs(ctx, pool.Name, "network fence unconfirmed for "+p+": "+err.Error())
+		}
+		fenced = append(fenced, p)
+	}
+	if err := r.setFencedPrefixes(ctx, &pool, fenced); err != nil {
+		return ctrl.Result{}, err
+	}
+	// All /64s fenced active -> schedule + sticky re-bind the whole batch.
+	return ctrl.Result{RequeueAfter: r.FailoverThreshold}, r.rebindPoolVMs(ctx, pool.Name)
+}
+
+// rebindPoolVMs schedules ALL VMs on lostPool as a batch (capacity + anti-affinity
+// accounted) and sticky-re-binds each that placed; VMs with no target get FailoverBlocked.
+func (r *Reconciler) rebindPoolVMs(ctx context.Context, lostPool string) error {
 	var vms netv1.VirtualMachineList
 	if err := r.Client.List(ctx, &vms); err != nil {
-		return ctrl.Result{}, fmt.Errorf("list vms: %w", err)
+		return fmt.Errorf("list vms: %w", err)
 	}
 	var pools platformv1.ClusterPoolList
 	if err := r.Client.List(ctx, &pools); err != nil {
-		return ctrl.Result{}, fmt.Errorf("list pools: %w", err)
-	}
-	for i := range vms.Items {
-		vm := &vms.Items[i]
-		if vm.Spec.ClusterName != pool.Name {
-			continue
-		}
-		if err := r.failoverVM(ctx, vm, pool.Name, pools.Items); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-	return ctrl.Result{RequeueAfter: r.FailoverThreshold}, nil
-}
-
-// failoverVM runs the fence-gated re-bind for a single VM already confirmed to be
-// on a lost pool. The Spec.ClusterName write is reached ONLY if BOTH fences confirm
-// AND a healthy target pool exists; every other path exits via block() (status only,
-// never Spec) — the fail-safe invariant.
-func (r *Reconciler) failoverVM(ctx context.Context, vm *netv1.VirtualMachine, lostPool string, pools []platformv1.ClusterPool) error {
-	if err := r.Fencer.FenceStorage(ctx, vm); err != nil {
-		return r.block(ctx, vm, "storage fence unconfirmed: "+err.Error())
-	}
-	if err := r.Fencer.FenceNetwork(ctx, vm); err != nil {
-		return r.block(ctx, vm, "network fence unconfirmed: "+err.Error())
+		return fmt.Errorf("list pools: %w", err)
 	}
 	var candidates []platformv1.ClusterPool
-	for _, p := range pools {
+	for _, p := range pools.Items {
 		if p.Name != lostPool {
 			candidates = append(candidates, p)
 		}
 	}
-	// nil allocated: capacity accounting across multiple VMs failing over in the
-	// same pass is deferred (Phase 4). Single-VM failovers are safe; a burst onto
-	// the same target may over-commit until the next reconcile re-scores.
-	newPool, reason, ok := scheduler.Schedule(vm, candidates, nil)
-	if !ok {
-		return r.block(ctx, vm, "no pool to fail over to: "+reason)
+	var batch []*netv1.VirtualMachine
+	for i := range vms.Items {
+		if vms.Items[i].Spec.ClusterName == lostPool {
+			batch = append(batch, &vms.Items[i])
+		}
 	}
-	vm.Spec.ClusterName = newPool
-	if err := r.Client.Update(ctx, vm); err != nil {
-		return fmt.Errorf("rebind vm: %w", err)
+	placements := scheduler.ScheduleBatch(batch, candidates)
+	for i, vm := range batch {
+		pl := placements[i]
+		if !pl.OK {
+			if err := r.block(ctx, vm, "no pool to fail over to: "+pl.Reason); err != nil {
+				return err
+			}
+			continue
+		}
+		vm.Spec.ClusterName = pl.Pool
+		if err := r.Client.Update(ctx, vm); err != nil {
+			return fmt.Errorf("rebind vm %s: %w", vm.Name, err)
+		}
+		msg := "failed over to " + pl.Pool
+		if pl.Violated {
+			msg += " (anti-affinity violated: no non-violating pool)"
+		}
+		meta.SetStatusCondition(&vm.Status.Conditions, metav1.Condition{Type: "FailoverBlocked", Status: metav1.ConditionFalse, Reason: "FailedOver", Message: msg, ObservedGeneration: vm.Generation})
+		meta.SetStatusCondition(&vm.Status.Conditions, metav1.Condition{Type: "Scheduled", Status: metav1.ConditionTrue, Reason: "FailedOver", Message: "bound to " + pl.Pool, ObservedGeneration: vm.Generation})
+		if err := r.Client.Status().Update(ctx, vm); err != nil {
+			return fmt.Errorf("status vm %s: %w", vm.Name, err)
+		}
 	}
-	meta.SetStatusCondition(&vm.Status.Conditions, metav1.Condition{Type: "FailoverBlocked", Status: metav1.ConditionFalse, Reason: "FailedOver", Message: "failed over to " + newPool, ObservedGeneration: vm.Generation})
-	meta.SetStatusCondition(&vm.Status.Conditions, metav1.Condition{Type: "Scheduled", Status: metav1.ConditionTrue, Reason: "FailedOver", Message: "bound to " + newPool, ObservedGeneration: vm.Generation})
-	return r.Client.Status().Update(ctx, vm)
+	return nil
+}
+
+// blockPoolVMs marks every VM on lostPool FailoverBlocked (used when the pool-wide
+// fence barrier is not satisfied). Writes only status, never Spec.
+func (r *Reconciler) blockPoolVMs(ctx context.Context, lostPool, msg string) error {
+	var vms netv1.VirtualMachineList
+	if err := r.Client.List(ctx, &vms); err != nil {
+		return fmt.Errorf("list vms: %w", err)
+	}
+	for i := range vms.Items {
+		if vms.Items[i].Spec.ClusterName != lostPool {
+			continue
+		}
+		if err := r.block(ctx, &vms.Items[i], msg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// setFencedPrefixes records which /64s central has fenced (drives recovery release).
+func (r *Reconciler) setFencedPrefixes(ctx context.Context, pool *platformv1.ClusterPool, fenced []string) error {
+	pool.Status.FencedPrefixes = fenced
+	return r.Client.Status().Update(ctx, pool)
+}
+
+// releaseDrained clears the fence (both backends) for every FencedPrefix the broker
+// has reported Drained, then trims it from FencedPrefixes. Fail-safe: an un-drained
+// /64 stays fenced. Returns nil when there's nothing to release.
+func (r *Reconciler) releaseDrained(ctx context.Context, pool *platformv1.ClusterPool) error {
+	if len(pool.Status.FencedPrefixes) == 0 {
+		return nil
+	}
+	drained := map[string]bool{}
+	for _, d := range pool.Status.NodeDrain {
+		if d.Drained {
+			drained[d.Prefix] = true
+		}
+	}
+	var remain []string
+	changed := false
+	for _, p := range pool.Status.FencedPrefixes {
+		if !drained[p] {
+			remain = append(remain, p)
+			continue
+		}
+		if err := r.StorageFencer.Release(ctx, p); err != nil {
+			remain = append(remain, p) // hold the fence if release unconfirmed
+			continue
+		}
+		if err := r.NetworkFencer.Release(ctx, p); err != nil {
+			remain = append(remain, p)
+			continue
+		}
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	pool.Status.FencedPrefixes = remain
+	return r.Client.Status().Update(ctx, pool)
 }
 
 // block records a FailoverBlocked=True condition on the VM and writes ONLY status
