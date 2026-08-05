@@ -17,8 +17,15 @@ POOL="${POOL:-replicapool}"
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then sed -n '3,15p' "$0"; exit 0; fi
 OUT=""; [ "${1:-}" = "--out" ] && OUT="${2:-}"
 ex() { docker exec "$CEPH_CTR" "$@"; }
-echo "== waiting for ceph health =="
-for i in $(seq 1 60); do ex ceph -s 2>/dev/null | grep -qE 'HEALTH_OK|HEALTH_WARN' && break; sleep 5; done
+# Readiness = mon responsive + the OSD up+in. We do NOT gate on HEALTH_OK/WARN: the ceph/demo node
+# runs a single v6 OSD and Squid's OSD_UNREACHABLE health check FALSE-POSITIVES on IPv6 (it claims
+# the osd's [fd00:db8:0:5::1] public addr "is not in fd00:db8:0:5::/64 subnet" though it plainly is),
+# leaving the cluster HEALTH_ERR forever. RBD provisions fine regardless; we mute the bogus check
+# below so `ceph -s` reports HEALTH_WARN.
+echo "== waiting for ceph mon + osd =="
+for i in $(seq 1 60); do ex ceph osd stat 2>/dev/null | grep -qE '1 up|[1-9][0-9]* up' && break; sleep 5; done
+# Mute the known-cosmetic v6 reachability false-positive (sticky: stays muted if it re-fires).
+ex ceph health mute OSD_UNREACHABLE --sticky 2>/dev/null || true
 ex ceph osd pool create "$POOL" 8 8 2>/dev/null || true
 ex rbd pool init "$POOL" || true
 KEY=$(ex ceph auth get-or-create-key client.rbd mon 'profile rbd' osd "profile rbd pool=$POOL")

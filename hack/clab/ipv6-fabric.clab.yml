@@ -225,9 +225,22 @@ topology:
       image: quay.io/ceph/demo:latest
       network-mode: container:clab-xdp-ipv6-fabric-ceph-net
       startup-delay: 20   # wait for ceph-net to create dummy0 + the /64 before ceph/demo binds MON_IP
+      # ceph/demo IPv6 knobs (found live — the demo image mishandles v6 out of the box):
+      #   MON_IP bracketed -> the demo writes `mon host = v2:${MON_IP}:${MON_PORT}` verbatim; without
+      #     brackets a v6 addr swallows the port (fd00:...:1:3300) so clients hunt a bogus addr and the
+      #     bootstrap RADOS-times-out. Bracketing also keeps monmaptool/ceph-mon --public-addr correct.
+      #   IP_VERSION=6 -> makes the demo add `ms bind ipv6 = true` to ceph.conf.
+      #   CEPH_ARGS ms-bind-ipv4=false -> the OSD/MGR otherwise try to pick a v4 public_addr from the
+      #     v6-only public_network and abort ("Failed to pick public address"). osd-pool-default-size=1
+      #     suits the single-OSD demo (no degraded/undersized PGs -> RBD provisions clean).
+      #   DEMO_DAEMONS=osd -> bring up only mon+mgr+osd (all RBD needs); skip rgw (its demo-user step
+      #     needs CEPH_DEMO_UID and was crashing the container) + mds/nfs we don't use.
       env:
-        MON_IP: fd00:db8:0:5::1
+        MON_IP: "[fd00:db8:0:5::1]"
         CEPH_PUBLIC_NETWORK: fd00:db8:0:5::/64
+        IP_VERSION: "6"
+        CEPH_ARGS: "--ms-bind-ipv4=false --osd-pool-default-size=1"
+        DEMO_DAEMONS: osd
 
   # All fabric links are MTU 3000 (clab defaults veths to 9500). Native/driver XDP on a veth requires
   # MTU <= ~3500 (a linear-buffer limit); at 9500 the loader silently falls back to SKB/generic. We
