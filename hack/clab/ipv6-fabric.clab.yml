@@ -199,33 +199,35 @@ topology:
       entrypoint: "/bin/sh /edge-xdp-wrapper.sh"
 
     # --- shared Ceph/demo storage node (Tier-2 storage fencing) ---
-    # ceph runs the all-in-one quay.io/ceph/demo image (mon+mgr+osd+mds) with an IPv6-only
-    # public network = its own fabric /64 (fd00:db8:0:5::/64, mon fd00:db8:0:5::1). Unlike the
-    # kind hosts, this is a NON-kind container with no fabric-preboot oneshot, so a co-netns FRR
-    # sidecar (ceph-frr) creates dummy0 + speaks unnumbered eBGP for it (mirrors edge*-xdp). Each
-    # compute node reaches the mon via its own /64 underlay = the Tier-2 fence coordinate.
-    ceph:
-      kind: linux
-      image: quay.io/ceph/demo:latest
-      env:
-        MON_IP: fd00:db8:0:5::1
-        CEPH_PUBLIC_NETWORK: fd00:db8:0:5::/64
-      # Ephemeral: no persistent binds. clab treats a bare `name:/path` bind as a RELATIVE
-      # host path (not a docker named volume) and fails verification; the gate doesn't need
-      # Ceph state to survive a lab teardown, so run ceph/demo fully in-container.
-      sysctls:
-        net.ipv6.conf.all.forwarding: 1
-    # ceph-frr: shares the ceph netns; creates dummy0 (fd00:db8:0:5::1/64) then runs FRR to
-    # announce fd00:db8:0:5::/64 over unnumbered eBGP, dual-homed to sw1/sw2 (frr/ceph.conf).
-    ceph-frr:
+    # Each compute node reaches the mon via its own /64 underlay = the Tier-2 fence coordinate,
+    # so ceph lives on its OWN fabric /64 (fd00:db8:0:5::/64, mon fd00:db8:0:5::1).
+    #
+    # NETNS OWNER = ceph-net (FRR), NOT ceph. ceph/demo has no `ip` and, given an IPv6-only
+    # CEPH_PUBLIC_NETWORK, exits at boot if the /64 isn't already on an interface — but a
+    # co-netns sidecar can only start AFTER its target is running (chicken-and-egg). So the FRR
+    # container owns the netns + the sw1/sw2 uplinks, creates dummy0 (fd00:db8:0:5::1/64) FIRST,
+    # then ceph/demo joins that netns (startup-delay) and finds the /64 already present.
+    ceph-net:
       kind: linux
       image: frrouting/frr:latest
-      network-mode: container:clab-xdp-ipv6-fabric-ceph
       binds:
         - frr/daemons:/etc/frr/daemons
         - frr/ceph.conf:/etc/frr/frr.conf
         - ceph-preboot.sh:/ceph-preboot.sh:ro
       entrypoint: "/bin/sh /ceph-preboot.sh"
+      sysctls:
+        net.ipv6.conf.all.forwarding: 1
+    # ceph/demo (mon+mgr+osd+mds) shares ceph-net's netns; by the time it boots, dummy0 already
+    # carries fd00:db8:0:5::1/64 so MON_IP binds cleanly. Ephemeral (no persistent binds: clab
+    # reads a bare `name:/path` bind as a relative host path and fails verification).
+    ceph:
+      kind: linux
+      image: quay.io/ceph/demo:latest
+      network-mode: container:clab-xdp-ipv6-fabric-ceph-net
+      startup-delay: 20   # wait for ceph-net to create dummy0 + the /64 before ceph/demo binds MON_IP
+      env:
+        MON_IP: fd00:db8:0:5::1
+        CEPH_PUBLIC_NETWORK: fd00:db8:0:5::/64
 
   # All fabric links are MTU 3000 (clab defaults veths to 9500). Native/driver XDP on a veth requires
   # MTU <= ~3500 (a linear-buffer limit); at 9500 the loader silently falls back to SKB/generic. We
@@ -269,7 +271,7 @@ topology:
     # --- shared Ceph storage node: dual-homed to both ToRs (eth1->sw1:eth6, eth2->sw2:eth6),
     # the next free port on each ToR. The ceph-frr sidecar (in the ceph netns) peers over both
     # and announces fd00:db8:0:5::/64 so every compute node reaches the mon from its own /64. ---
-    - endpoints: ["ceph:eth1", "sw1:eth6"]
+    - endpoints: ["ceph-net:eth1", "sw1:eth6"]
       mtu: 3000
-    - endpoints: ["ceph:eth2", "sw2:eth6"]
+    - endpoints: ["ceph-net:eth2", "sw2:eth6"]
       mtu: 3000
