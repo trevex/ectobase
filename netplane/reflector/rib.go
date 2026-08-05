@@ -100,6 +100,12 @@ func NewRIB() *RIB {
 
 // Subscribe registers s for vni, streams the current table for that vni in a
 // deterministic order, then EndOfRIB (a graceful-restart / prune marker).
+//
+// No fence filtering is needed here: a fenced /64 can never have a route in
+// r.routes (Announce drops fenced-nexthop routes and SetFence withdraws any
+// already-stored ones, both under r.mu), so the snapshot is inherently
+// fence-clean. A subscriber that races an in-flight SetFence converges via the
+// WITHDRAW dropRouteAllOrigins fans out to all current sinks.
 func (r *RIB) Subscribe(vni uint32, s Sink) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -231,7 +237,8 @@ func (r *RIB) fanout(k routeKey, nexthops []string, op pb.RouteOp, origin string
 }
 
 // SetFence blocks a node /64: rejects future announces whose nexthop is inside it and
-// withdraws already-stored matching routes. Idempotent.
+// withdraws already-stored matching routes. Idempotent. The fenced set is expected to be
+// small (a handful of failed-over /64s), so the O(routes x fenced) scan is not a hot path.
 func (r *RIB) SetFence(prefix string) {
 	_, ipnet, err := net.ParseCIDR(prefix)
 	if err != nil {
