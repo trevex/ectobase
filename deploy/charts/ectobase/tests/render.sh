@@ -99,6 +99,25 @@ echo "$snrw" | grep -q "name: self-node-remediation-config"     && ok "SNRConfig
 # 8a) watchdog.enabled without a device must FAIL helm template.
 neg "watchdog without device" --set tier1Failover.enabled=true,tier1Failover.watchdog.enabled=true,tier1Failover.watchdog.device=
 
+# 9) Broker: absent when disabled, Deployment + SA render + wired when enabled.
+render_show_only templates/broker.yaml "$DIR/values/ebpf-clab.yaml" >/dev/null 2>&1 \
+  && bad "broker Deployment rendered while broker disabled" || ok "broker absent when disabled"
+
+brk=$(helm template ectobase deploy/charts/ectobase --namespace ectobase-system \
+        --set broker.enabled=true --set broker.clusterName=k02 --show-only templates/broker.yaml 2>/dev/null)
+echo "$brk" | grep -q "kind: Deployment"                && ok "broker Deployment renders" || bad "broker Deployment renders"
+echo "$brk" | grep -q "name: central-broker"            && ok "broker name" || bad "broker name"
+echo "$brk" | grep -q -- "--cluster-name=k02"           && ok "broker --cluster-name wired" || bad "broker --cluster-name wired"
+echo "$brk" | grep -q "serviceAccountName: central-broker" && ok "broker SA on pod" || bad "broker SA on pod"
+
+brkrbac=$(helm template ectobase deploy/charts/ectobase --namespace ectobase-system \
+            --set broker.enabled=true --set broker.clusterName=k02 --show-only templates/rbac.yaml 2>/dev/null)
+echo "$brkrbac" | grep -q "kind: ServiceAccount" && echo "$brkrbac" | grep -q "name: central-broker" \
+  && ok "broker ServiceAccount renders" || bad "broker ServiceAccount renders"
+
+# 9a) broker.enabled=true with empty clusterName must FAIL helm template.
+neg "broker without clusterName" --set broker.enabled=true
+
 # 5) helm lint clean.
 helm lint deploy/charts/ectobase >/dev/null 2>&1 && ok "helm lint" || bad "helm lint"
 

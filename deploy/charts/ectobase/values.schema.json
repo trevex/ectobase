@@ -14,12 +14,22 @@
     "images": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["flowplane", "flowplaneDpdk", "netplane", "cni"],
+      "required": ["flowplane", "flowplaneDpdk", "netplane", "cni", "centralBroker"],
       "properties": {
         "flowplane": { "type": "string", "minLength": 1 },
         "flowplaneDpdk": { "type": "string", "minLength": 1 },
         "netplane": { "type": "string", "minLength": 1 },
-        "cni": { "type": "string", "minLength": 1 }
+        "cni": { "type": "string", "minLength": 1 },
+        "centralBroker": { "type": "string", "minLength": 1 }
+      }
+    },
+    "broker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "clusterName": { "type": "string" },
+        "centralKubeconfigSecret": { "type": "string", "minLength": 1 }
       }
     },
     "dpdk": {

@@ -8,6 +8,7 @@ images:
   flowplaneDpdk: ghcr.io/trevex/ectobase/flowplane-dpdk:dev
   netplane: ghcr.io/trevex/ectobase/netplane:dev
   cni: ghcr.io/trevex/ectobase/cni:dev
+  centralBroker: ghcr.io/trevex/ectobase/central-broker:dev
 imagePullPolicy: IfNotPresent
 
 # Overlay uplink interface (used by the DPDK datapath; the eBPF wrapper defaults to eth1).
@@ -27,6 +28,13 @@ dpdk:
 
 # Install the net.ectobase.dev CRDs with the chart (managed on helm upgrade).
 installCRDs: true
+
+# Per-cluster broker (kubelet-analog): syncs compiled objects from central down + heartbeats
+# the ClusterPool lease + reports NodePrefixes. Off by default; on for compute clusters.
+broker:
+  enabled: false
+  clusterName: ""                       # this cluster's pool name (e.g. k02); required when enabled
+  centralKubeconfigSecret: broker-central-kubeconfig  # Secret (key: kubeconfig) with a central token
 
 # Blue-green operator (thread C). Off until it lands; requires dataplane: dpdk.
 blueGreen:

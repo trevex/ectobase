@@ -1,0 +1,46 @@
+{{- if .Values.broker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: central-broker
+  namespace: ectobase-system
+  labels:
+    app.kubernetes.io/name: central-broker
+    app.kubernetes.io/part-of: netplane
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: central-broker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: central-broker
+        app.kubernetes.io/part-of: netplane
+    spec:
+      serviceAccountName: central-broker
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: broker
+          image: {{ .Values.images.centralBroker }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: ["broker"]
+          args:
+            - "--cluster-name={{ .Values.broker.clusterName }}"
+            - "--central-kubeconfig=/secrets/central/kubeconfig"
+          volumeMounts:
+            - name: central-kubeconfig
+              mountPath: /secrets/central
+              readOnly: true
+      volumes:
+        - name: central-kubeconfig
+          secret:
+            secretName: {{ .Values.broker.centralKubeconfigSecret }}
+{{- end }}

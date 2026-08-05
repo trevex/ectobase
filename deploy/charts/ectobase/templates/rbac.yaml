@@ -118,3 +118,49 @@ subjects:
   - kind: ServiceAccount
     name: netplane-controller
     namespace: ectobase-system
+{{- if .Values.broker.enabled }}
+---
+# The per-cluster broker (kubelet-analog) syncs compiled objects from central down into
+# THIS downstream cluster's net.ectobase.dev CRDs (create/update/patch/delete + GC), reads
+# Nodes for underlay/prefix reporting, and reads VMIs for VM lifecycle status. Central-side
+# credentials come from a separate mounted kubeconfig (broker.centralKubeconfigSecret); this
+# RBAC is only the downstream (in-cluster) half. Central-side RBAC is minted by the e2e token.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: central-broker
+  namespace: ectobase-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: central-broker
+rules:
+  - apiGroups: ["net.ectobase.dev"]
+    resources:
+      - compilednics
+      - compiledvms
+      - compiledvolumeattachments
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources:
+      - nodes
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["kubevirt.io"]
+    resources:
+      - virtualmachineinstances
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: central-broker
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: central-broker
+subjects:
+  - kind: ServiceAccount
+    name: central-broker
+    namespace: ectobase-system
+{{- end }}

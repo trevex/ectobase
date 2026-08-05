@@ -22,4 +22,9 @@
     {{- fail "invalid values: tier1Failover.watchdog.enabled=true requires tier1Failover.watchdog.device (e.g. /dev/watchdog). Set tier1Failover.watchdog.device or set watchdog.enabled: false." -}}
   {{- end -}}
 {{- end -}}
+{{- if .Values.broker.enabled -}}
+  {{- if not .Values.broker.clusterName -}}
+    {{- fail "invalid values: broker.enabled=true requires broker.clusterName (this cluster's ClusterPool name, e.g. k02). Set broker.clusterName or set broker.enabled: false." -}}
+  {{- end -}}
+{{- end -}}
 {{- end -}}
