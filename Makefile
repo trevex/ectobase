@@ -83,6 +83,11 @@ image-kindnode: ## Build the fabric kind-node image (node-IP = pre-kubelet BGP /
 	docker build $(if $(DOCKER_BUILD_NET),--network=$(DOCKER_BUILD_NET)) \
 		-t $(KINDNODE_IMAGE):$(TAG) hack/kind-fabric-node
 
+IMG_REPO ?= ghcr.io/trevex/ectobase
+.PHONY: image-tayga
+image-tayga: ## Build the lab NAT64/DNS64 (tayga) image
+	docker build -t $(IMG_REPO)/tayga:latest test/images/tayga
+
 # --- quality ---------------------------------------------------------------
 .PHONY: fmt
 fmt: ## Format all Rust code
