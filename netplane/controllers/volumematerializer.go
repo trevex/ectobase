@@ -22,8 +22,12 @@ const dvFieldOwner = "volume-materializer"
 // (via the ceph-csi StorageClass) whose source is a registry import of BootImage
 // (bootable) or a blank disk of Size. Pure; TypeMeta set for server-side apply.
 func buildDataVolume(cva *netv1.CompiledVolumeAttachment) *cdiv1.DataVolume {
+	// Block volumeMode: the correct mode for a KubeVirt VM disk (raw block device — better perf and
+	// clean cross-node reschedule/migration semantics vs a disk.img on a Filesystem PVC).
+	blockMode := corev1.PersistentVolumeBlock
 	storage := &cdiv1.StorageSpec{
 		AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+		VolumeMode:  &blockMode,
 		Resources:   corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: cva.Spec.Size}},
 	}
 	if cva.Spec.StorageClass != "" {
@@ -33,12 +37,12 @@ func buildDataVolume(cva *netv1.CompiledVolumeAttachment) *cdiv1.DataVolume {
 	var source *cdiv1.DataVolumeSource
 	if cva.Spec.BootImage != "" {
 		url := "docker://" + cva.Spec.BootImage
-		// PullMethod=node imports the containerdisk via the NODE's CRI image cache instead of the
-		// CDI importer pod pulling directly. This is the recommended method for containerdisk images
-		// (shared node cache) and is REQUIRED where the pod network has no registry egress — e.g. the
-		// isolated clab overlay, where pods can't reach the internet but the node (docker NAT) can.
-		pullNode := cdiv1.RegistryPullNode
-		source = &cdiv1.DataVolumeSource{Registry: &cdiv1.DataVolumeSourceRegistry{URL: &url, PullMethod: &pullNode}}
+		// Default (pod) pull method: the importer pod pulls the containerdisk over the pod network.
+		// This needs the pod network to have registry egress — on the IPv6-only clab overlay that
+		// comes from the edge's Tayga NAT64/DNS64. (pullMethod=node was tried but CDI's node-pull
+		// importer mis-handles the RBD block device on kind: Block -> GetAvailableSpaceBlock panic,
+		// Filesystem -> 'unable to convert source data to target format'.)
+		source = &cdiv1.DataVolumeSource{Registry: &cdiv1.DataVolumeSourceRegistry{URL: &url}}
 	} else {
 		source = &cdiv1.DataVolumeSource{Blank: &cdiv1.DataVolumeBlankImage{}}
 	}
