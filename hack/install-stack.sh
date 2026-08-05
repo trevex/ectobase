@@ -39,6 +39,11 @@ if [ "${INSTALL_CEPH_EXTERNAL:-}" = "1" ]; then
   bash "$(dirname "$0")/ceph-external-up.sh"
 fi
 
+# Optional: csi-addons controller (NetworkFence) — the k01 storage-fence executor (dev only).
+if [ "${INSTALL_CSI_ADDONS:-}" = "1" ]; then
+  bash "$(dirname "$0")/csi-addons-up.sh"
+fi
+
 # Optional: medik8s NHC + SNR operators for Tier-1 autonomous local failover (dev only).
 if [ "${INSTALL_MEDIK8S:-}" = "1" ]; then
   bash "$(dirname "$0")/medik8s-up.sh"
