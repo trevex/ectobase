@@ -213,6 +213,7 @@ func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[
 	if err := b.Central.Get(ctx, client.ObjectKey{Name: b.ClusterName}, &pool); err != nil {
 		return fmt.Errorf("get pool %s: %w", b.ClusterName, err)
 	}
+	orig := pool.DeepCopy()
 	pool.Status.NodePrefixes = NodePrefixesFromNodes(nodes)
 
 	// A fenced /64 is "busy" if any VM still runs on a node in it: map each node to
@@ -228,8 +229,12 @@ func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[
 		}
 	}
 	pool.Status.NodeDrain = DrainStatus(pool.Status.FencedPrefixes, busy)
-	if err := b.Central.Status().Update(ctx, &pool); err != nil {
-		return fmt.Errorf("update pool %s status: %w", b.ClusterName, err)
+	// Merge Patch (not Update): the Heartbeater concurrently writes Lease/Allocatable and the
+	// pool-health controller writes Phase on this same status subresource. A full Update from a
+	// cached Get 409-conflicts against them and clobbers their fields; MergeFrom patches only
+	// NodePrefixes/NodeDrain (this pool's fence facts) with no resourceVersion precondition.
+	if err := b.Central.Status().Patch(ctx, &pool, client.MergeFrom(orig)); err != nil {
+		return fmt.Errorf("patch pool %s status: %w", b.ClusterName, err)
 	}
 
 	// Per-VM placement: stamp each central VirtualMachine we can resolve. Failures are
@@ -244,8 +249,9 @@ func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[
 		if placement == nil {
 			continue // node unknown (no prefix resolved) — nothing to report yet.
 		}
+		vmOrig := vm.DeepCopy()
 		vm.Status.Placement = placement
-		_ = b.Central.Status().Update(ctx, &vm)
+		_ = b.Central.Status().Patch(ctx, &vm, client.MergeFrom(vmOrig))
 	}
 	return nil
 }

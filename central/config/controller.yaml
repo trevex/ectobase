@@ -22,6 +22,20 @@ rules:
   - apiGroups: ["platform.ectobase.dev"]
     resources: ["clusterpools/status"]
     verbs: ["get", "update", "patch"]
+  # The scheduler watches VirtualMachines and binds spec.clusterName; the failover controller
+  # re-binds them + reads compiled/volume state during drain. Without these the scheduler's
+  # VirtualMachine informer is forbidden -> cache never syncs -> the manager stalls and NO
+  # reconciler (incl. pool-health that sets ClusterPool phase) runs.
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["virtualmachines", "compiledvms", "compilednics", "compiledvolumeattachments", "volumes"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["virtualmachines/status", "compiledvms/status"]
+    verbs: ["get", "update", "patch"]
+  # The StorageFencer creates/deletes csi-addons NetworkFence CRs to blocklist a lost pool's /64.
+  - apiGroups: ["csiaddons.openshift.io"]
+    resources: ["networkfences"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

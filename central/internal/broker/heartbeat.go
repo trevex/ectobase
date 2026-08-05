@@ -39,14 +39,17 @@ func (h *Heartbeater) heartbeatOnce(ctx context.Context) error {
 		return fmt.Errorf("report capacity: %w", err)
 	}
 	now := metav1.NewMicroTime(time.Now())
+	orig := pool.DeepCopy()
 	pool.Status.Lease = &platformv1.ClusterPoolLease{HolderIdentity: h.HolderIdentity, RenewTime: &now}
 	pool.Status.Allocatable = rl
-	// No retry loop: a 409 conflict (e.g. the pool-health controller concurrently
-	// writing Status.Phase) just means we miss one beat. The pool-health staleness
-	// threshold is >> Interval, so the next tick recovers well before the pool is
-	// judged stale — the broker is the sole writer of its own lease.
-	if err := h.Central.Status().Update(ctx, pool); err != nil {
-		return fmt.Errorf("update clusterpool status: %w", err)
+	// A merge Patch (not Update) of ONLY the lease+allocatable fields: the statusReporter
+	// concurrently patches NodePrefixes/NodeDrain and the pool-health controller writes Phase
+	// on the SAME status subresource. A full Status().Update from a cached (stale) Get both
+	// 409-conflicts against those writers AND clobbers their fields back to the cached value
+	// (this is why NodePrefixes never stuck). MergeFrom sends only this beat's diff with no
+	// resourceVersion precondition — no conflict, no clobber.
+	if err := h.Central.Status().Patch(ctx, pool, client.MergeFrom(orig)); err != nil {
+		return fmt.Errorf("patch clusterpool status: %w", err)
 	}
 	return nil
 }
