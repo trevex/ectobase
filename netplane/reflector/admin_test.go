@@ -29,3 +29,10 @@ func TestAdminServer_SetClearFence(t *testing.T) {
 		t.Fatalf("ClearFence must re-allow the route")
 	}
 }
+
+func TestAdminServer_SetFence_RejectsInvalidPrefix(t *testing.T) {
+	a := NewAdminServer(NewRIB())
+	if _, err := a.SetFence(context.Background(), &pb.FenceRequest{Prefix: "not-a-cidr"}); err == nil {
+		t.Fatalf("SetFence must reject an invalid prefix")
+	}
+}
