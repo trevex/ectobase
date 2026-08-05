@@ -114,6 +114,22 @@ func main() {
 		log.Fatalf("new manager: %v", err)
 	}
 
+	// The cache's ByObject.Field selector is only a server-side WATCH filter; the broker's
+	// Broker.List(MatchingFields{"spec.clusterName"}) against the cached client additionally needs a
+	// registered field INDEX, else it fails "Index with name field:spec.clusterName does not exist"
+	// and nothing ever syncs downstream. Register the index for each synced type.
+	idxCtx := context.Background()
+	idx := func(obj client.Object, extract func(client.Object) string) {
+		if ierr := mgr.GetFieldIndexer().IndexField(idxCtx, obj, "spec.clusterName", func(o client.Object) []string {
+			return []string{extract(o)}
+		}); ierr != nil {
+			log.Fatalf("index spec.clusterName on %T: %v", obj, ierr)
+		}
+	}
+	idx(&netv1.CompiledNIC{}, func(o client.Object) string { return o.(*netv1.CompiledNIC).Spec.ClusterName })
+	idx(&netv1.CompiledVM{}, func(o client.Object) string { return o.(*netv1.CompiledVM).Spec.ClusterName })
+	idx(&netv1.CompiledVolumeAttachment{}, func(o client.Object) string { return o.(*netv1.CompiledVolumeAttachment).Spec.ClusterName })
+
 	// Reconciler: on any CompiledNIC OR CompiledVM event, trigger a full set-reconcile
 	// of BOTH types. A full resync per event is correct here: the syncs are declarative +
 	// idempotent (derive both desired and current sets live; no in-memory diff state).

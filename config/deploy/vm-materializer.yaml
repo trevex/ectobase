@@ -1,0 +1,75 @@
+# Downstream vm-materializer: turns broker-synced CompiledVM / CompiledVolumeAttachment (local
+# net.ectobase.dev) into KubeVirt VirtualMachine + CDI DataVolume objects on this compute cluster.
+# Runs ONLY on compute pools (k02/k03) — the cluster where KubeVirt actually boots the VM. Uses the
+# in-cluster config (a normal pod: it talks to the local apiserver via the kubernetes ClusterIP and
+# never touches the datapath, so no hostNetwork).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vm-materializer
+  namespace: ectobase-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vm-materializer
+rules:
+  # Read the broker-synced compiled inputs.
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["compiledvms", "compiledvolumeattachments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["compiledvms/status", "compiledvolumeattachments/status"]
+    verbs: ["get", "update", "patch"]
+  # Materialize KubeVirt VMs (Owns VirtualMachine) + observe the VMIs it boots.
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachines"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachineinstances"]
+    verbs: ["get", "list", "watch"]
+  # Materialize CDI DataVolumes (Owns DataVolume) for the RBD boot disks.
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["datavolumes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vm-materializer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vm-materializer
+subjects:
+  - kind: ServiceAccount
+    name: vm-materializer
+    namespace: ectobase-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vm-materializer
+  namespace: ectobase-system
+  labels:
+    app.kubernetes.io/name: vm-materializer
+    app.kubernetes.io/part-of: netplane
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vm-materializer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vm-materializer
+        app.kubernetes.io/part-of: netplane
+    spec:
+      serviceAccountName: vm-materializer
+      containers:
+        - name: vm-materializer
+          image: ghcr.io/trevex/ectobase/netplane:dev
+          imagePullPolicy: IfNotPresent
+          command: ["vm-materializer"]
