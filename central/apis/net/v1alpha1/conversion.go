@@ -1821,6 +1821,11 @@ func Convert_v1alpha1_VirtualMachineSpec_To_net_VirtualMachineSpec(in *VirtualMa
 	} else {
 		out.PoolSelector = nil
 	}
+	if in.AntiAffinity != nil {
+		out.AntiAffinity = &net.VMAntiAffinity{Group: in.AntiAffinity.Group}
+	} else {
+		out.AntiAffinity = nil
+	}
 	return nil
 }
 
@@ -1855,6 +1860,11 @@ func Convert_net_VirtualMachineSpec_To_v1alpha1_VirtualMachineSpec(in *net.Virtu
 	} else {
 		out.PoolSelector = nil
 	}
+	if in.AntiAffinity != nil {
+		out.AntiAffinity = &netv1.VMAntiAffinity{Group: in.AntiAffinity.Group}
+	} else {
+		out.AntiAffinity = nil
+	}
 	return nil
 }
 
@@ -1867,6 +1877,11 @@ func Convert_v1alpha1_VirtualMachineStatus_To_net_VirtualMachineStatus(in *Virtu
 	} else {
 		out.Conditions = nil
 	}
+	if in.Placement != nil {
+		out.Placement = &net.VMPlacement{ClusterName: in.Placement.ClusterName, NodeName: in.Placement.NodeName, NodePrefix: in.Placement.NodePrefix}
+	} else {
+		out.Placement = nil
+	}
 	return nil
 }
 
@@ -1878,6 +1893,11 @@ func Convert_net_VirtualMachineStatus_To_v1alpha1_VirtualMachineStatus(in *net.V
 		copy(out.Conditions, in.Conditions)
 	} else {
 		out.Conditions = nil
+	}
+	if in.Placement != nil {
+		out.Placement = &netv1.VMPlacement{ClusterName: in.Placement.ClusterName, NodeName: in.Placement.NodeName, NodePrefix: in.Placement.NodePrefix}
+	} else {
+		out.Placement = nil
 	}
 	return nil
 }

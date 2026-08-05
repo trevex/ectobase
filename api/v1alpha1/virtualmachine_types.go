@@ -41,6 +41,10 @@ type VirtualMachineSpec struct {
 	// PoolSelector, if set, restricts scheduling to ClusterPools whose labels match.
 	// +optional
 	PoolSelector *metav1.LabelSelector `json:"poolSelector,omitempty"`
+	// AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools during
+	// scheduling and failover (best-effort: availability wins if no non-violating pool).
+	// +optional
+	AntiAffinity *VMAntiAffinity `json:"antiAffinity,omitempty"`
 }
 
 // VirtualMachineStatus defines the observed state of a VirtualMachine.
@@ -54,6 +58,10 @@ type VirtualMachineStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+	// Placement is the VM's actual running location, stamped by the broker. Central
+	// uses NodePrefix as the fence coordinate and to gate recovery drain.
+	// +optional
+	Placement *VMPlacement `json:"placement,omitempty"`
 }
 
 // +genclient
@@ -79,4 +87,22 @@ type VirtualMachineList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 
 	Items []VirtualMachine `json:"items"`
+}
+
+// VMAntiAffinity is a minimal anti-affinity: VMs sharing Group should land on
+// different ClusterPools. Best-effort — a failover with no non-violating pool
+// places anyway and records the violation.
+type VMAntiAffinity struct {
+	// Group is the anti-affinity key; VMs with the same Group repel each other.
+	Group string `json:"group,omitempty"`
+}
+
+// VMPlacement is the VM's actual running location, reported upward by the broker.
+type VMPlacement struct {
+	// ClusterName is the pool the VM is running on.
+	ClusterName string `json:"clusterName,omitempty"`
+	// NodeName is the node running the VM.
+	NodeName string `json:"nodeName,omitempty"`
+	// NodePrefix is that node's /64 underlay prefix (the fence coordinate).
+	NodePrefix string `json:"nodePrefix,omitempty"`
 }

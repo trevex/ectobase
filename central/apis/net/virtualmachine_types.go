@@ -24,6 +24,8 @@ type VirtualMachineSpec struct {
 	RunStrategy string
 	// PoolSelector, if set, restricts scheduling to ClusterPools whose labels match.
 	PoolSelector *metav1.LabelSelector
+	// AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools.
+	AntiAffinity *VMAntiAffinity
 }
 
 // VirtualMachineStatus defines the observed state of a VirtualMachine.
@@ -32,6 +34,8 @@ type VirtualMachineStatus struct {
 	Phase string
 	// Conditions capture scheduling/failover observations.
 	Conditions []metav1.Condition
+	// Placement is the VM's actual running location, stamped by the broker.
+	Placement *VMPlacement
 }
 
 // +genclient
@@ -54,4 +58,16 @@ type VirtualMachineList struct {
 	metav1.ListMeta
 
 	Items []VirtualMachine
+}
+
+// VMAntiAffinity is the hub mirror of the anti-affinity group key.
+type VMAntiAffinity struct {
+	Group string
+}
+
+// VMPlacement is the hub mirror of the VM's actual running location.
+type VMPlacement struct {
+	ClusterName string
+	NodeName    string
+	NodePrefix  string
 }

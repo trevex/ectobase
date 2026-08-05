@@ -65,6 +65,8 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/trevex/ectobase/api/v1alpha1.NetworkInterfaceStatus":         schema_trevex_ectobase_api_v1alpha1_NetworkInterfaceStatus(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.PortStatus":                     schema_trevex_ectobase_api_v1alpha1_PortStatus(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.RateLimit":                      schema_trevex_ectobase_api_v1alpha1_RateLimit(ref),
+		"github.com/trevex/ectobase/api/v1alpha1.VMAntiAffinity":                 schema_trevex_ectobase_api_v1alpha1_VMAntiAffinity(ref),
+		"github.com/trevex/ectobase/api/v1alpha1.VMPlacement":                    schema_trevex_ectobase_api_v1alpha1_VMPlacement(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.VPC":                            schema_trevex_ectobase_api_v1alpha1_VPC(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.VPCList":                        schema_trevex_ectobase_api_v1alpha1_VPCList(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.VPCPeering":                     schema_trevex_ectobase_api_v1alpha1_VPCPeering(ref),
@@ -2314,6 +2316,60 @@ func schema_trevex_ectobase_api_v1alpha1_RateLimit(ref common.ReferenceCallback)
 	}
 }
 
+func schema_trevex_ectobase_api_v1alpha1_VMAntiAffinity(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VMAntiAffinity is a minimal anti-affinity: VMs sharing Group should land on different ClusterPools. Best-effort — a failover with no non-violating pool places anyway and records the violation.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"group": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Group is the anti-affinity key; VMs with the same Group repel each other.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_trevex_ectobase_api_v1alpha1_VMPlacement(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VMPlacement is the VM's actual running location, reported upward by the broker.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"clusterName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ClusterName is the pool the VM is running on.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"nodeName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "NodeName is the node running the VM.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"nodePrefix": {
+						SchemaProps: spec.SchemaProps{
+							Description: "NodePrefix is that node's /64 underlay prefix (the fence coordinate).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 func schema_trevex_ectobase_api_v1alpha1_VPC(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -2825,11 +2881,17 @@ func schema_trevex_ectobase_api_v1alpha1_VirtualMachineSpec(ref common.Reference
 							Ref:         ref(metav1.LabelSelector{}.OpenAPIModelName()),
 						},
 					},
+					"antiAffinity": {
+						SchemaProps: spec.SchemaProps{
+							Description: "AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools during scheduling and failover (best-effort: availability wins if no non-violating pool).",
+							Ref:         ref("github.com/trevex/ectobase/api/v1alpha1.VMAntiAffinity"),
+						},
+					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference", v1.ResourceRequirements{}.OpenAPIModelName(), metav1.LabelSelector{}.OpenAPIModelName()},
+			"github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference", "github.com/trevex/ectobase/api/v1alpha1.VMAntiAffinity", v1.ResourceRequirements{}.OpenAPIModelName(), metav1.LabelSelector{}.OpenAPIModelName()},
 	}
 }
 
@@ -2871,11 +2933,17 @@ func schema_trevex_ectobase_api_v1alpha1_VirtualMachineStatus(ref common.Referen
 							},
 						},
 					},
+					"placement": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Placement is the VM's actual running location, stamped by the broker. Central uses NodePrefix as the fence coordinate and to gate recovery drain.",
+							Ref:         ref("github.com/trevex/ectobase/api/v1alpha1.VMPlacement"),
+						},
+					},
 				},
 			},
 		},
 		Dependencies: []string{
-			metav1.Condition{}.OpenAPIModelName()},
+			"github.com/trevex/ectobase/api/v1alpha1.VMPlacement", metav1.Condition{}.OpenAPIModelName()},
 	}
 }
 
