@@ -33,7 +33,12 @@ func buildDataVolume(cva *netv1.CompiledVolumeAttachment) *cdiv1.DataVolume {
 	var source *cdiv1.DataVolumeSource
 	if cva.Spec.BootImage != "" {
 		url := "docker://" + cva.Spec.BootImage
-		source = &cdiv1.DataVolumeSource{Registry: &cdiv1.DataVolumeSourceRegistry{URL: &url}}
+		// PullMethod=node imports the containerdisk via the NODE's CRI image cache instead of the
+		// CDI importer pod pulling directly. This is the recommended method for containerdisk images
+		// (shared node cache) and is REQUIRED where the pod network has no registry egress — e.g. the
+		// isolated clab overlay, where pods can't reach the internet but the node (docker NAT) can.
+		pullNode := cdiv1.RegistryPullNode
+		source = &cdiv1.DataVolumeSource{Registry: &cdiv1.DataVolumeSourceRegistry{URL: &url, PullMethod: &pullNode}}
 	} else {
 		source = &cdiv1.DataVolumeSource{Blank: &cdiv1.DataVolumeBlankImage{}}
 	}
