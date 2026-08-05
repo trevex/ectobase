@@ -1,0 +1,73 @@
+# Tier-2 live-gate fixture — applied to k01 (central). A stateful RBD-backed VirtualMachine
+# on the net.ectobase.dev API, PINNED to pool k02 via spec.clusterName. The Phase-3 scheduler
+# SKIPS a VM whose spec.clusterName is already set (central/internal/scheduler/controller.go:29),
+# so this hard-binds the VM to k02 without needing a labelled ClusterPool + poolSelector.
+#
+# On k02 node death the failover controller (central/internal/failover/failover.go:107) re-binds
+# every VM with spec.clusterName==k02 to a surviving pool (k03) AFTER the k02 /64 is fenced (Ceph
+# NetworkFence result==Succeeded + reflector SetFence). The same RBD (VolumeRefs) reattaches on k03.
+#
+# LIVE-ITERATE: if hard-pinning via spec.clusterName is not the desired path (e.g. you want the
+# scheduler to place it), drop `clusterName` and instead add a poolSelector that matches ONLY k02's
+# ClusterPool labels — but that requires the k02 pool to carry a distinguishing label; the scheduler
+# matches labels, not the pool name (central/internal/scheduler/schedule.go).
+#
+#   poolSelector:
+#     matchLabels:
+#       ectobase.dev/pool: k02      # <-- must exist on the k02 ClusterPool
+---
+apiVersion: net.ectobase.dev/v1alpha1
+kind: VPC
+metadata:
+  name: blue
+  namespace: default
+spec:
+  vni: 100
+---
+apiVersion: net.ectobase.dev/v1alpha1
+kind: NetworkInterface
+metadata:
+  name: tier2-nic
+  namespace: default
+spec:
+  vpcRef:
+    name: blue
+  # The VM's overlay IP (distinct from the multicluster fixture's .1/.3 endpoints).
+  ips:
+    - 10.0.0.20
+  # Pinned MAC — the VMI's virtio NIC MUST carry the same MAC (KubeVirt pod-tap binding).
+  # The vm-materializer stamps this onto the launcher's interface macAddress.
+  mac: "52:54:00:00:00:20"
+---
+apiVersion: net.ectobase.dev/v1alpha1
+kind: Volume
+metadata:
+  name: tier2-disk
+  namespace: default
+spec:
+  # Small RBD boot disk. BootImage makes it bootable (imported into the RBD via CDI);
+  # a Volume with a BootImage is the boot disk (see VirtualMachineSpec.VolumeRefs).
+  size: 1Gi
+  storageClass: ceph-rbd
+  bootImage: quay.io/containerdisks/fedora:41
+---
+apiVersion: net.ectobase.dev/v1alpha1
+kind: VirtualMachine
+metadata:
+  name: tier2-vm
+  namespace: default
+spec:
+  # Hard-bind to k02 (scheduler skips already-bound VMs). Failover re-writes this to k03.
+  clusterName: k02
+  interfaceRefs:
+    - name: tier2-nic
+  # Stateful boot disk — the RBD that must reattach on k03 after the fence.
+  volumeRefs:
+    - name: tier2-disk
+  # RerunOnFailure = Tier-1 local restart; Tier-2 failover re-binds clusterName and the
+  # broker/vm-materializer reboots the VMI on the new pool.
+  runStrategy: RerunOnFailure
+  resources:
+    requests:
+      cpu: "1"
+      memory: 1Gi
