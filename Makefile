@@ -95,6 +95,15 @@ image-vyos: ## Build the lab VyOS (clab) image from the pinned rolling ISO
 	  bash scripts/extract-rootfs.sh vyos-amd64.iso rootfs-amd64.tar && \
 	  docker build -f clab/Dockerfile -t $(IMG_REPO)/vyos:clab .
 
+.PHONY: image-talos
+image-talos: ## Build the lab Talos container image (rootfs from imager)
+	cd test/images/talos && . ./versions.env && \
+	  bash scripts/extract-rootfs.sh amd64 && \
+	  docker build -f container/Dockerfile -t $(IMG_REPO)/talos:container .
+
+.PHONY: lab-images
+lab-images: image-tayga image-vyos image-talos ## Build all lab container images
+
 # --- quality ---------------------------------------------------------------
 .PHONY: fmt
 fmt: ## Format all Rust code

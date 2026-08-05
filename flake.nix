@@ -63,6 +63,26 @@
             };
           };
         };
+        # Pin talosctl to the Talos release the container image ships (v1.14.0-beta.0),
+        # so the CLI validates the same machine-config documents the nodes run — the
+        # native GoBGP BGPPeerConfig is v1.14+; nixpkgs talosctl only tracks stable.
+        talosVersion = "1.14.0-beta.0";
+        talosctlHash = {
+          x86_64-linux = "sha256-UB5aaqxQunF60z1nOUpQhD/Xa+CMRe/q6zexs9HMV88=";
+          aarch64-linux = "sha256-XY0W8FKTkKJrMnOiyWDMGtIgvnw6ST6Pqe1OF56CiE4=";
+        };
+        talosArch = { x86_64-linux = "amd64"; aarch64-linux = "arm64"; };
+        talosOS = { x86_64-linux = "linux"; aarch64-linux = "linux"; };
+        talosctl = pkgs.stdenvNoCC.mkDerivation {
+          pname = "talosctl";
+          version = talosVersion;
+          src = pkgs.fetchurl {
+            url = "https://github.com/siderolabs/talos/releases/download/v${talosVersion}/talosctl-${talosOS.${system}}-${talosArch.${system}}";
+            hash = talosctlHash.${system};
+          };
+          dontUnpack = true;
+          installPhase = "install -Dm755 $src $out/bin/talosctl";
+        };
       in
       {
         devShells.default = pkgs.mkShell {
@@ -122,6 +142,9 @@
             pkgs.squashfs-tools-ng            # sqfs2tar
             pkgs.libarchive                   # bsdtar
             pkgs.minisign                     # optional ISO signature verification
+            talosctl                          # Talos gen/bootstrap/kubeconfig, pinned to the image version (test/images/talos)
+            pkgs.zstd                         # decompress the Talos imager initramfs
+            pkgs.cpio                         # unpack the imager initramfs cpio
           ];
 
           RUST_BACKTRACE = 1;
