@@ -7,12 +7,14 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	netv1 "github.com/trevex/ectobase/api/v1alpha1"
+	platformv1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
 )
 
 // Broker is the per-cluster set-reconcile engine: it makes the downstream compiled
@@ -195,4 +197,64 @@ func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// ReportStatus stamps this pool's fence coordinates + per-VM placement + drain status
+// into central. Called each sync tick alongside the lease heartbeat. nodes are the
+// downstream nodes' fence identities (name + /64 underlay prefix); vmNode maps a VM's
+// "namespace/name" key -> the running node's name.
+//
+// The status write is split into a pool update (NodePrefixes + NodeDrain) and a
+// best-effort per-VM Placement update. A VM present in vmNode but absent from central
+// (e.g. a raw KubeVirt VMI with no central VirtualMachine anchor) is skipped, not
+// treated as an error — vmNode is a superset gathered from the live downstream.
+func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[string]string) error {
+	var pool platformv1.ClusterPool
+	if err := b.Central.Get(ctx, client.ObjectKey{Name: b.ClusterName}, &pool); err != nil {
+		return fmt.Errorf("get pool %s: %w", b.ClusterName, err)
+	}
+	pool.Status.NodePrefixes = NodePrefixesFromNodes(nodes)
+
+	// A fenced /64 is "busy" if any VM still runs on a node in it: map each node to
+	// its prefix, then mark a prefix busy if any vmNode target lands on such a node.
+	nodePrefix := make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		nodePrefix[n.Name] = n.Prefix
+	}
+	busy := map[string]bool{}
+	for _, nodeName := range vmNode {
+		if p := nodePrefix[nodeName]; p != "" {
+			busy[p] = true
+		}
+	}
+	pool.Status.NodeDrain = DrainStatus(pool.Status.FencedPrefixes, busy)
+	if err := b.Central.Status().Update(ctx, &pool); err != nil {
+		return fmt.Errorf("update pool %s status: %w", b.ClusterName, err)
+	}
+
+	// Per-VM placement: stamp each central VirtualMachine we can resolve. Failures are
+	// swallowed (the pool status — the fence-gating signal — already landed above).
+	for vmKey, nodeName := range vmNode {
+		ns, name := splitVMKey(vmKey)
+		var vm netv1.VirtualMachine
+		if err := b.Central.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &vm); err != nil {
+			continue // VM may not be a central-tracked object; skip.
+		}
+		placement := PlacementForVM(b.ClusterName, nodeName, nodes)
+		if placement == nil {
+			continue // node unknown (no prefix resolved) — nothing to report yet.
+		}
+		vm.Status.Placement = placement
+		_ = b.Central.Status().Update(ctx, &vm)
+	}
+	return nil
+}
+
+// splitVMKey splits a "namespace/name" vmNode key. A key with no slash is treated as
+// a bare name in the "default" namespace.
+func splitVMKey(k string) (namespace, name string) {
+	if i := strings.IndexByte(k, '/'); i >= 0 {
+		return k[:i], k[i+1:]
+	}
+	return "default", k
 }

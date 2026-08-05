@@ -22,6 +22,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -156,9 +157,115 @@ func main() {
 		log.Fatalf("add heartbeater runnable: %v", err)
 	}
 
+	// Upward status reporter: every 10s, gather the downstream fence facts (each node's
+	// /64 + each VM's running node) and stamp them into central (ClusterPool
+	// NodePrefixes/NodeDrain + per-VM Placement). Separate from the lease heartbeater so
+	// a slow node/VMI list never delays the lease renewal.
+	sr := &statusReporter{
+		central:     mgr.GetClient(),
+		downstream:  downstreamClient,
+		clusterName: clusterName,
+		interval:    10 * time.Second,
+	}
+	if err := mgr.Add(sr); err != nil {
+		log.Fatalf("add status reporter runnable: %v", err)
+	}
+
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Fatalf("manager: %v", err)
 	}
+}
+
+// statusReporter periodically reports this pool's fence facts upward to central via
+// Broker.ReportStatus. It gathers the (fuzzy-sourced) node /64 prefixes + VM->node
+// map from the downstream cluster, keeping that gathering out of the clean, unit-
+// tested ReportStatus seam.
+type statusReporter struct {
+	central     client.Client
+	downstream  client.Client
+	clusterName string
+	interval    time.Duration
+}
+
+// Start runs reportOnce every interval until ctx is done (manager.Runnable).
+func (s *statusReporter) Start(ctx context.Context) error {
+	t := time.NewTicker(s.interval)
+	defer t.Stop()
+	_ = s.reportOnce(ctx) // best-effort immediate report; retried next tick on error
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-t.C:
+			if err := s.reportOnce(ctx); err != nil {
+				log.Printf("status report: %v", err)
+			}
+		}
+	}
+}
+
+// reportOnce gathers downstream fence facts and calls Broker.ReportStatus.
+func (s *statusReporter) reportOnce(ctx context.Context) error {
+	nodes, err := s.gatherNodes(ctx)
+	if err != nil {
+		return fmt.Errorf("gather nodes: %w", err)
+	}
+	vmNode := s.gatherVMNodes(ctx)
+	b := &broker.Broker{Central: s.central, Downstream: s.downstream, ClusterName: s.clusterName}
+	return b.ReportStatus(ctx, nodes, vmNode)
+}
+
+// gatherNodes lists downstream nodes and derives each node's /64 fence prefix.
+//
+// TODO(fence-source): the true per-node /64 underlay prefix is node-local dataplane
+// state (the flowplane agent's --underlay flag, host-prefixed to /64); it is NOT yet
+// surfaced onto the corev1.Node object. Until the agent stamps it as a Node
+// annotation/label, we fall back to Node.Spec.PodCIDRs[0] — the closest real per-node
+// prefix the broker can read via the downstream client. This is provisional: the
+// fence coordinate central acts on is only as correct as this source.
+func (s *statusReporter) gatherNodes(ctx context.Context) ([]broker.NodeFact, error) {
+	nodeList := &corev1.NodeList{}
+	if err := s.downstream.List(ctx, nodeList); err != nil {
+		return nil, fmt.Errorf("list nodes: %w", err)
+	}
+	out := make([]broker.NodeFact, 0, len(nodeList.Items))
+	for i := range nodeList.Items {
+		n := &nodeList.Items[i]
+		prefix := ""
+		if len(n.Spec.PodCIDRs) > 0 {
+			prefix = n.Spec.PodCIDRs[0]
+		}
+		out = append(out, broker.NodeFact{Name: n.Name, Prefix: prefix})
+	}
+	return out, nil
+}
+
+// gatherVMNodes maps each downstream KubeVirt VirtualMachineInstance's
+// "namespace/name" -> the node it runs on (VMI.status.nodeName). Read via unstructured
+// so central need not import the heavy kubevirt.io/api module. Best-effort: if the VMI
+// CRD is absent (no KubeVirt on the downstream) it returns an empty map, and
+// ReportStatus still stamps the node prefixes + an all-drained NodeDrain.
+func (s *statusReporter) gatherVMNodes(ctx context.Context) map[string]string {
+	vmis := &unstructured.UnstructuredList{}
+	vmis.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "kubevirt.io",
+		Version: "v1",
+		Kind:    "VirtualMachineInstanceList",
+	})
+	if err := s.downstream.List(ctx, vmis); err != nil {
+		// No KubeVirt / no VMIs — not fatal; report prefixes with nothing busy.
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(vmis.Items))
+	for i := range vmis.Items {
+		vmi := &vmis.Items[i]
+		nodeName, found, err := unstructured.NestedString(vmi.Object, "status", "nodeName")
+		if err != nil || !found || nodeName == "" {
+			continue // not scheduled to a node yet
+		}
+		out[vmi.GetNamespace()+"/"+vmi.GetName()] = nodeName
+	}
+	return out
 }
 
 // nodeCapacityReporter sums Status.Allocatable over all Ready downstream nodes.
