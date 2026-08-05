@@ -108,6 +108,10 @@ func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 // a VM when one of its NetworkInterfaces changes (MAC).
 func (r *CompiledVMReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		// Distinct name: CompiledVolumeAttachmentReconciler also For(VirtualMachine), and
+		// controller-runtime derives the name from the watched kind, so both would default to
+		// "virtualmachine" and the manager rejects the duplicate.
+		Named("compiledvm").
 		For(&netv1.VirtualMachine{}).
 		Owns(&netv1.CompiledVM{}).
 		// MAC lives in NetworkInterface.spec, so a MAC change bumps generation;

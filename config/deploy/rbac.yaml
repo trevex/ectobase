@@ -105,6 +105,22 @@ rules:
   - apiGroups: ["net.ectobase.dev"]
     resources: ["vpcpeerings/status"]
     verbs: ["get", "update", "patch"]
+  # The CompiledVMReconciler compiles VirtualMachine -> CompiledVM and the
+  # CompiledVolumeAttachmentReconciler compiles Volume -> CompiledVolumeAttachment (the tier2 VM
+  # path). Without these the compiler's VirtualMachine/Volume informers are forbidden -> the caches
+  # never sync -> no CompiledVM is produced, so the broker syncs nothing and no VM ever boots.
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["virtualmachines", "volumes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["virtualmachines/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["compiledvms", "compiledvolumeattachments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["compiledvms/status", "compiledvolumeattachments/status"]
+    verbs: ["get", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

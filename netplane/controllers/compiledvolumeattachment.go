@@ -123,6 +123,9 @@ func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req 
 // when a referenced Volume changes.
 func (r *CompiledVolumeAttachmentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		// Distinct name: CompiledVMReconciler also For(VirtualMachine) (both default to
+		// "virtualmachine" otherwise -> duplicate-controller-name panic at manager start).
+		Named("compiledvolumeattachment").
 		For(&netv1.VirtualMachine{}).
 		Owns(&netv1.CompiledVolumeAttachment{}).
 		// Only Volume spec changes (Size/StorageClass/BootImage) affect the compiled
