@@ -9,10 +9,13 @@ set -euo pipefail
 #
 # Env overrides:
 #   CEPH_CTR  ceph container name (default clab-xdp-ipv6-fabric-ceph)
-#   MON       v6 mon endpoint     (default [fd00:db8:0:5::1]:6789)
+#   MON       v6 mon endpoint     (default [fd00:db8:0:5::1]:3300 — the msgr-v2 port)
 #   POOL      RBD pool            (default replicapool)
+# NOTE: this ceph/demo mon is msgr-v2 ONLY (bound [fd00:db8:0:5::1]:3300; `ceph mon dump` shows no
+# v1 addr — the demo pins the monmap to the :3300 endpoint under IPv6). librados/ceph-csi connect to
+# :3300 as v2. Using the legacy v1 port 6789 gets connection-refused (nothing listens there).
 CEPH_CTR="${CEPH_CTR:-clab-xdp-ipv6-fabric-ceph}"
-MON="${MON:-[fd00:db8:0:5::1]:6789}"
+MON="${MON:-[fd00:db8:0:5::1]:3300}"
 POOL="${POOL:-replicapool}"
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then sed -n '3,15p' "$0"; exit 0; fi
 OUT=""; [ "${1:-}" = "--out" ] && OUT="${2:-}"
