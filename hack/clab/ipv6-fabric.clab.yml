@@ -198,6 +198,35 @@ topology:
         - /sys/fs/bpf:/sys/fs/bpf
       entrypoint: "/bin/sh /edge-xdp-wrapper.sh"
 
+    # --- shared Ceph/demo storage node (Tier-2 storage fencing) ---
+    # ceph runs the all-in-one quay.io/ceph/demo image (mon+mgr+osd+mds) with an IPv6-only
+    # public network = its own fabric /64 (fd00:db8:0:5::/64, mon fd00:db8:0:5::1). Unlike the
+    # kind hosts, this is a NON-kind container with no fabric-preboot oneshot, so a co-netns FRR
+    # sidecar (ceph-frr) creates dummy0 + speaks unnumbered eBGP for it (mirrors edge*-xdp). Each
+    # compute node reaches the mon via its own /64 underlay = the Tier-2 fence coordinate.
+    ceph:
+      kind: linux
+      image: quay.io/ceph/demo:latest
+      env:
+        MON_IP: fd00:db8:0:5::1
+        CEPH_PUBLIC_NETWORK: fd00:db8:0:5::/64
+      binds:
+        - ceph-etc:/etc/ceph
+        - ceph-data:/var/lib/ceph
+      sysctls:
+        net.ipv6.conf.all.forwarding: 1
+    # ceph-frr: shares the ceph netns; creates dummy0 (fd00:db8:0:5::1/64) then runs FRR to
+    # announce fd00:db8:0:5::/64 over unnumbered eBGP, dual-homed to sw1/sw2 (frr/ceph.conf).
+    ceph-frr:
+      kind: linux
+      image: frrouting/frr:latest
+      network-mode: container:clab-xdp-ipv6-fabric-ceph
+      binds:
+        - frr/daemons:/etc/frr/daemons
+        - frr/ceph.conf:/etc/frr/frr.conf
+        - ceph-preboot.sh:/ceph-preboot.sh:ro
+      entrypoint: "/bin/sh /ceph-preboot.sh"
+
   # All fabric links are MTU 3000 (clab defaults veths to 9500). Native/driver XDP on a veth requires
   # MTU <= ~3500 (a linear-buffer limit); at 9500 the loader silently falls back to SKB/generic. We
   # prefer native everywhere on clab ("closer to real hardware"), and the edge REQUIRES native for its
@@ -236,4 +265,11 @@ topology:
     - endpoints: ["edge1:eth2", "clabwan:e1wan"]
       mtu: 3000
     - endpoints: ["edge2:eth2", "clabwan:e2wan"]
+      mtu: 3000
+    # --- shared Ceph storage node: dual-homed to both ToRs (eth1->sw1:eth6, eth2->sw2:eth6),
+    # the next free port on each ToR. The ceph-frr sidecar (in the ceph netns) peers over both
+    # and announces fd00:db8:0:5::/64 so every compute node reaches the mon from its own /64. ---
+    - endpoints: ["ceph:eth1", "sw1:eth6"]
+      mtu: 3000
+    - endpoints: ["ceph:eth2", "sw2:eth6"]
       mtu: 3000
