@@ -13,10 +13,13 @@ import (
 	"os"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	// registers the --kubeconfig flag on flag.CommandLine via init().
 	_ "sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -26,7 +29,9 @@ import (
 	"github.com/trevex/ectobase/central/apis/platform/install"
 	"github.com/trevex/ectobase/central/internal/clusterpool"
 	"github.com/trevex/ectobase/central/internal/failover"
+	"github.com/trevex/ectobase/central/internal/fence"
 	"github.com/trevex/ectobase/central/internal/scheduler"
+	routebusv1 "github.com/trevex/ectobase/netplane/gen/routebusv1"
 )
 
 func main() {
@@ -35,6 +40,11 @@ func main() {
 	// this the scheduler/clusterpool informers stall silently and no events are
 	// delivered. The Deployment manifest carries this in its env stanza too.
 	os.Setenv("KUBE_FEATURE_WatchListClient", "false") //nolint:errcheck
+
+	reflectorAdmin := flag.String("reflector-admin", "", "reflector RouteBusAdmin gRPC address (network fence); empty => DenyFencer")
+	csiDriver := flag.String("csi-driver", "rbd.csi.ceph.com", "CSI driver for NetworkFence")
+	csiSecretName := flag.String("csi-secret-name", "rook-csi-rbd-provisioner", "NetworkFence provisioner secret name")
+	csiSecretNS := flag.String("csi-secret-namespace", "rook-ceph", "NetworkFence provisioner secret namespace")
 
 	flag.Parse()
 
@@ -75,10 +85,24 @@ func main() {
 
 	// Tier-2 failover: threshold (2m) is deliberately > pool-health's 30s
 	// HealthStale — a pool must be Unknown for a while before a destructive
-	// rebind. DenyFencer is the default so Tier-2 fails safe until Phase-4
-	// storage/network fence actuators exist. Both scheduler + failover watch
-	// ClusterPool; independent controllers on the same manager is fine.
-	if err := (&failover.Reconciler{Client: mgr.GetClient(), StorageFencer: failover.DenyFencer{}, NetworkFencer: failover.DenyFencer{}, FailoverThreshold: 2 * time.Minute}).SetupWithManager(mgr); err != nil {
+	// rebind. Both scheduler + failover watch ClusterPool; independent
+	// controllers on the same manager is fine.
+	//
+	// The storage fencer is ALWAYS the real csi-addons NetworkFence actuator
+	// (a cluster without csi-addons just errors on Fence → the barrier blocks →
+	// fail-safe). The network fencer defaults to DenyFencer (fail-safe) and is
+	// wired to the real reflector RouteBusAdmin only when -reflector-admin is set.
+	var storageF failover.PrefixFencer = fence.NewStorageFencer(mgr.GetClient(), *csiDriver, client.ObjectKey{Name: *csiSecretName, Namespace: *csiSecretNS})
+	var networkF failover.PrefixFencer = failover.DenyFencer{}
+	if *reflectorAdmin != "" {
+		conn, derr := grpc.NewClient(*reflectorAdmin, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if derr != nil {
+			log.Fatalf("dial reflector admin: %v", derr)
+		}
+		networkF = fence.NewNetworkFencer(routebusv1.NewRouteBusAdminClient(conn))
+	}
+
+	if err := (&failover.Reconciler{Client: mgr.GetClient(), StorageFencer: storageF, NetworkFencer: networkF, FailoverThreshold: 2 * time.Minute}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup failover controller: %v", err)
 	}
 
