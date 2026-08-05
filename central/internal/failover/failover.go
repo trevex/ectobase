@@ -62,15 +62,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, rq ctrl.Request) (ctrl.Resul
 	if len(pool.Status.NodePrefixes) == 0 {
 		return ctrl.Result{RequeueAfter: r.FailoverThreshold}, r.blockPoolVMs(ctx, pool.Name, "no NodePrefixes reported; cannot fence")
 	}
+	// Track a /64 the moment its STORAGE fence is applied so that a later barrier
+	// failure still records it in FencedPrefixes -> releaseDrained can release it on
+	// recovery. Releasing a network fence that was never set is a harmless idempotent
+	// no-op. The error paths persist only pool status + VM status, never Spec.
 	var fenced []string
 	for _, p := range pool.Status.NodePrefixes {
 		if err := r.StorageFencer.Fence(ctx, p); err != nil {
+			_ = r.setFencedPrefixes(ctx, &pool, fenced) // track what's already applied for later release
 			return ctrl.Result{RequeueAfter: r.FailoverThreshold}, r.blockPoolVMs(ctx, pool.Name, "storage fence unconfirmed for "+p+": "+err.Error())
 		}
+		fenced = append(fenced, p) // storage fence applied -> track it (network Release is idempotent)
 		if err := r.NetworkFencer.Fence(ctx, p); err != nil {
+			_ = r.setFencedPrefixes(ctx, &pool, fenced)
 			return ctrl.Result{RequeueAfter: r.FailoverThreshold}, r.blockPoolVMs(ctx, pool.Name, "network fence unconfirmed for "+p+": "+err.Error())
 		}
-		fenced = append(fenced, p)
 	}
 	if err := r.setFencedPrefixes(ctx, &pool, fenced); err != nil {
 		return ctrl.Result{}, err

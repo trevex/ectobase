@@ -27,6 +27,13 @@ type denyFencer struct{ err error }
 func (d denyFencer) Fence(context.Context, string) error { return d.err }
 func (denyFencer) Release(context.Context, string) error { return nil }
 
+type releaseErrFencer struct{}
+
+func (releaseErrFencer) Fence(context.Context, string) error { return nil }
+func (releaseErrFencer) Release(context.Context, string) error {
+	return errors.New("release unconfirmed")
+}
+
 func lostPoolObj(name string, prefixes ...string) *platformv1.ClusterPool {
 	old := metav1.NewMicroTime(time.Now().Add(-10 * time.Minute))
 	return &platformv1.ClusterPool{
@@ -75,5 +82,46 @@ func TestFailover_PartialFence_Blocks(t *testing.T) {
 	_ = c.Get(context.Background(), key("vm1"), got)
 	if got.Spec.ClusterName != "A" {
 		t.Fatalf("must NOT rebind when a fence is unconfirmed, got %q", got.Spec.ClusterName)
+	}
+}
+
+func TestFailover_ReleaseDrained_ReleasesOnlyDrained(t *testing.T) {
+	scheme := testScheme(t)
+	// Pool is fenced on two /64s; the broker reports only the first drained.
+	pool := readyPoolObj("A")
+	pool.Status.FencedPrefixes = []string{"2001:db8:0:1::/64", "2001:db8:0:2::/64"}
+	pool.Status.NodeDrain = []platformv1.NodeDrainStatus{
+		{Prefix: "2001:db8:0:1::/64", Drained: true},
+		{Prefix: "2001:db8:0:2::/64", Drained: false},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool).WithStatusSubresource(pool).Build()
+	r := &Reconciler{Client: c, StorageFencer: okFencer{}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+
+	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := &platformv1.ClusterPool{}
+	_ = c.Get(context.Background(), key("A"), got)
+	if len(got.Status.FencedPrefixes) != 1 || got.Status.FencedPrefixes[0] != "2001:db8:0:2::/64" {
+		t.Fatalf("drained /64 must be released, undrained held; got %v", got.Status.FencedPrefixes)
+	}
+}
+
+func TestFailover_ReleaseDrained_HoldsOnReleaseError(t *testing.T) {
+	scheme := testScheme(t)
+	pool := readyPoolObj("A")
+	pool.Status.FencedPrefixes = []string{"2001:db8:0:1::/64"}
+	pool.Status.NodeDrain = []platformv1.NodeDrainStatus{{Prefix: "2001:db8:0:1::/64", Drained: true}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool).WithStatusSubresource(pool).Build()
+	// Storage release fails -> the /64 must stay fenced (held).
+	r := &Reconciler{Client: c, StorageFencer: releaseErrFencer{}, NetworkFencer: okFencer{}, FailoverThreshold: time.Minute}
+
+	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := &platformv1.ClusterPool{}
+	_ = c.Get(context.Background(), key("A"), got)
+	if len(got.Status.FencedPrefixes) != 1 {
+		t.Fatalf("release-failed /64 must be HELD, got %v", got.Status.FencedPrefixes)
 	}
 }

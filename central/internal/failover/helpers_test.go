@@ -35,5 +35,3 @@ func readyPoolObj(name string) *platformv1.ClusterPool {
 
 func req(name string) ctrl.Request     { return ctrl.Request{NamespacedName: types.NamespacedName{Name: name}} }
 func key(name string) client.ObjectKey { return types.NamespacedName{Name: name} }
-
-var _ = metav1.Now
