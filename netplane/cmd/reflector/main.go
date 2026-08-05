@@ -44,7 +44,9 @@ func main() {
 		log.Printf("mTLS enabled")
 	}
 	srv := grpc.NewServer(opts...)
-	routebusv1.RegisterRouteBusServer(srv, reflector.NewServer(reflector.NewRIB()))
+	rib := reflector.NewRIB()
+	routebusv1.RegisterRouteBusServer(srv, reflector.NewServer(rib))
+	routebusv1.RegisterRouteBusAdminServer(srv, reflector.NewAdminServer(rib))
 
 	// On SIGTERM/SIGINT, GracefulStop drains in-flight sessions (agents see clean stream closes and
 	// fast-withdraw) instead of a hard kill.
