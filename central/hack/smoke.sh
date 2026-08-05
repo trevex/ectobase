@@ -23,10 +23,11 @@ CENTRAL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLUSTER="${KIND_CLUSTER:-central-smoke}"
 APISERVER_IMG="ghcr.io/trevex/ectobase/central-apiserver:dev"
 CONTROLLER_IMG="ghcr.io/trevex/ectobase/central-controller:dev"
+BROKER_IMG="ghcr.io/trevex/ectobase/central-broker:dev"
 
 cleanup() {
   # Remove host-built binaries copied next to the Dockerfiles.
-  rm -f "${CENTRAL_DIR}/central-apiserver" "${CENTRAL_DIR}/central-controller"
+  rm -f "${CENTRAL_DIR}/central-apiserver" "${CENTRAL_DIR}/central-controller" "${CENTRAL_DIR}/central-broker"
 }
 trap cleanup EXIT
 
@@ -38,15 +39,18 @@ echo "==> building host binaries (GOWORK=off, static)"
   cd "${CENTRAL_DIR}"
   GOWORK=off CGO_ENABLED=0 go build -o central-apiserver ./cmd/apiserver
   GOWORK=off CGO_ENABLED=0 go build -o central-controller ./cmd/controller
+  GOWORK=off CGO_ENABLED=0 go build -o central-broker ./cmd/broker
 )
 
 echo "==> building images"
 docker build -f "${CENTRAL_DIR}/Dockerfile.apiserver" -t "${APISERVER_IMG}" "${CENTRAL_DIR}"
 docker build -f "${CENTRAL_DIR}/Dockerfile.controller" -t "${CONTROLLER_IMG}" "${CENTRAL_DIR}"
+docker build -f "${CENTRAL_DIR}/Dockerfile.broker" -t "${BROKER_IMG}" "${CENTRAL_DIR}"
 
 echo "==> loading images into kind"
 kind load docker-image --name "${CLUSTER}" "${APISERVER_IMG}"
 kind load docker-image --name "${CLUSTER}" "${CONTROLLER_IMG}"
+kind load docker-image --name "${CLUSTER}" "${BROKER_IMG}"
 
 echo "==> applying manifests"
 kubectl apply -k "${CENTRAL_DIR}/config"
