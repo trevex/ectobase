@@ -49,3 +49,8 @@ func (in CompiledWorkloadSpec) OpenAPIModelName() string {
 func (in CompiledWorkloadStatus) OpenAPIModelName() string {
 	return "dev.ectobase.platform.v1alpha1.CompiledWorkloadStatus"
 }
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in NodeDrainStatus) OpenAPIModelName() string {
+	return "dev.ectobase.platform.v1alpha1.NodeDrainStatus"
+}

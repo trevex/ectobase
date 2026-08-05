@@ -30,6 +30,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &platformv1alpha1.CompiledWorkloadSpecApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("CompiledWorkloadStatus"):
 		return &platformv1alpha1.CompiledWorkloadStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("NodeDrainStatus"):
+		return &platformv1alpha1.NodeDrainStatusApplyConfiguration{}
 
 	}
 	return nil

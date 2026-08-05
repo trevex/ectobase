@@ -91,6 +91,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		v1alpha1.CompiledWorkloadList{}.OpenAPIModelName():                       schema_central_apis_platform_v1alpha1_CompiledWorkloadList(ref),
 		v1alpha1.CompiledWorkloadSpec{}.OpenAPIModelName():                       schema_central_apis_platform_v1alpha1_CompiledWorkloadSpec(ref),
 		v1alpha1.CompiledWorkloadStatus{}.OpenAPIModelName():                     schema_central_apis_platform_v1alpha1_CompiledWorkloadStatus(ref),
+		v1alpha1.NodeDrainStatus{}.OpenAPIModelName():                            schema_central_apis_platform_v1alpha1_NodeDrainStatus(ref),
 		v1.AWSElasticBlockStoreVolumeSource{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_AWSElasticBlockStoreVolumeSource(ref),
 		v1.Affinity{}.OpenAPIModelName():                                         schema_k8sio_api_core_v1_Affinity(ref),
 		v1.AppArmorProfile{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_AppArmorProfile(ref),
@@ -3239,11 +3240,63 @@ func schema_central_apis_platform_v1alpha1_ClusterPoolStatus(ref common.Referenc
 							Ref:         ref(v1alpha1.ClusterPoolLease{}.OpenAPIModelName()),
 						},
 					},
+					"nodePrefixes": {
+						SchemaProps: spec.SchemaProps{
+							Description: "NodePrefixes is the set of node /64 underlay prefixes composing this cluster, reported by the broker. Central fences these (Ceph NetworkFence + route blocklist) to evacuate a lost pool without reaching it.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"fencedPrefixes": {
+						SchemaProps: spec.SchemaProps{
+							Description: "FencedPrefixes is the subset of NodePrefixes central has fenced (evacuation).",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"nodeDrain": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-map-keys": []interface{}{
+									"prefix",
+								},
+								"x-kubernetes-list-type": "map",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "NodeDrain reports, per fenced /64, whether the returning broker has confirmed its stale VMIs are terminated (safe to release the fence).",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(v1alpha1.NodeDrainStatus{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.ClusterPoolLease{}.OpenAPIModelName(), resource.Quantity{}.OpenAPIModelName(), metav1.Condition{}.OpenAPIModelName()},
+			v1alpha1.ClusterPoolLease{}.OpenAPIModelName(), v1alpha1.NodeDrainStatus{}.OpenAPIModelName(), resource.Quantity{}.OpenAPIModelName(), metav1.Condition{}.OpenAPIModelName()},
 	}
 }
 
@@ -3385,6 +3438,35 @@ func schema_central_apis_platform_v1alpha1_CompiledWorkloadStatus(ref common.Ref
 						},
 					},
 				},
+			},
+		},
+	}
+}
+
+func schema_central_apis_platform_v1alpha1_NodeDrainStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "NodeDrainStatus is the per-/64 drain confirmation used to gate fence release.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"prefix": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Prefix is the node /64 underlay prefix.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"drained": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Drained is true once the broker confirms the /64's stale VMIs are gone.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"prefix"},
 			},
 		},
 	}
