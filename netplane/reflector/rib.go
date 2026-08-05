@@ -3,6 +3,7 @@
 package reflector
 
 import (
+	"net"
 	"sort"
 	"sync"
 
@@ -76,6 +77,11 @@ type RIB struct {
 	publicByOrigin map[string]map[publicKey]struct{}
 
 	sinks map[string]Sink // every connected session, keyed by node id
+
+	// fenced blocks nexthops inside a node /64 (Tier-2 failover): announces whose
+	// nexthop falls inside a fenced prefix are rejected, and stored matching routes
+	// are withdrawn. Keyed by the /64 CIDR string.
+	fenced map[string]*net.IPNet
 }
 
 func NewRIB() *RIB {
@@ -88,11 +94,18 @@ func NewRIB() *RIB {
 		public:         map[publicKey]PublicRecord{},
 		publicByOrigin: map[string]map[publicKey]struct{}{},
 		sinks:          map[string]Sink{},
+		fenced:         map[string]*net.IPNet{},
 	}
 }
 
 // Subscribe registers s for vni, streams the current table for that vni in a
 // deterministic order, then EndOfRIB (a graceful-restart / prune marker).
+//
+// No fence filtering is needed here: a fenced /64 can never have a route in
+// r.routes (Announce drops fenced-nexthop routes and SetFence withdraws any
+// already-stored ones, both under r.mu), so the snapshot is inherently
+// fence-clean. A subscriber that races an in-flight SetFence converges via the
+// WITHDRAW dropRouteAllOrigins fans out to all current sinks.
 func (r *RIB) Subscribe(vni uint32, s Sink) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -133,6 +146,9 @@ func (r *RIB) Unsubscribe(vni uint32, sinkID string) {
 func (r *RIB) Announce(origin string, vni uint32, prefix string, nexthops []string, external bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if anyNexthopFenced(nexthops, r.fenced) {
+		return // drop: this nexthop is fenced
+	}
 	k := routeKey{vni, prefix}
 	e := r.routes[k]
 	if e.origins == nil {
@@ -218,6 +234,80 @@ func (r *RIB) fanout(k routeKey, nexthops []string, op pb.RouteOp, origin string
 		}
 		s.Send(routeUpdate(k, nexthops, op, external))
 	}
+}
+
+// SetFence blocks a node /64: rejects future announces whose nexthop is inside it and
+// withdraws already-stored matching routes. Idempotent. The fenced set is expected to be
+// small (a handful of failed-over /64s), so the O(routes x fenced) scan is not a hot path.
+func (r *RIB) SetFence(prefix string) {
+	_, ipnet, err := net.ParseCIDR(prefix)
+	if err != nil {
+		return
+	}
+	r.mu.Lock()
+	r.fenced[prefix] = ipnet
+	var victims []routeKey
+	for k, e := range r.routes {
+		for _, nhs := range e.origins {
+			if anyNexthopFenced(nhs, r.fenced) {
+				victims = append(victims, k)
+				break
+			}
+		}
+	}
+	r.mu.Unlock()
+	for _, k := range victims {
+		r.dropRouteAllOrigins(k)
+	}
+}
+
+// ClearFence removes a /64 block. Routes are restored by the owning agents' next resync.
+func (r *RIB) ClearFence(prefix string) {
+	r.mu.Lock()
+	delete(r.fenced, prefix)
+	r.mu.Unlock()
+}
+
+// HasRoute reports whether (vni, prefix) is currently stored. Test/inspection helper.
+func (r *RIB) HasRoute(vni uint32, prefix string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.routes[routeKey{vni, prefix}]
+	return ok
+}
+
+func anyNexthopFenced(nexthops []string, fenced map[string]*net.IPNet) bool {
+	for _, nh := range nexthops {
+		ip := net.ParseIP(nh)
+		if ip == nil {
+			continue
+		}
+		for _, ipnet := range fenced {
+			if ipnet.Contains(ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// dropRouteAllOrigins removes a route entirely (all origins) and fans out a single
+// WITHDRAW to subscribers. Used by SetFence to evict a fenced node's routes.
+func (r *RIB) dropRouteAllOrigins(k routeKey) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.routes[k]
+	if !ok {
+		return
+	}
+	for origin := range e.origins {
+		if s, ok := r.byOrigin[origin]; ok {
+			delete(s, k)
+		}
+	}
+	delete(r.routes, k)
+	// fanout requires r.mu held (it reads r.subscribers); Sink.Send is non-blocking.
+	r.fanout(k, nil, pb.RouteOp_ROUTE_OP_WITHDRAW, "", e.external)
 }
 
 func routeUpdate(k routeKey, nexthops []string, op pb.RouteOp, external bool) *pb.ServerMsg {

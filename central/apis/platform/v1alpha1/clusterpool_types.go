@@ -33,6 +33,28 @@ type ClusterPoolStatus struct {
 	// Lease is the broker heartbeat; a stale RenewTime drives Phase to Unknown.
 	// +optional
 	Lease *ClusterPoolLease `json:"lease,omitempty" protobuf:"bytes,4,opt,name=lease"`
+	// NodePrefixes is the set of node /64 underlay prefixes composing this cluster,
+	// reported by the broker. Central fences these (Ceph NetworkFence + route
+	// blocklist) to evacuate a lost pool without reaching it.
+	// +optional
+	NodePrefixes []string `json:"nodePrefixes,omitempty" protobuf:"bytes,5,rep,name=nodePrefixes"`
+	// FencedPrefixes is the subset of NodePrefixes central has fenced (evacuation).
+	// +optional
+	FencedPrefixes []string `json:"fencedPrefixes,omitempty" protobuf:"bytes,6,rep,name=fencedPrefixes"`
+	// NodeDrain reports, per fenced /64, whether the returning broker has confirmed
+	// its stale VMIs are terminated (safe to release the fence).
+	// +optional
+	// +listType=map
+	// +listMapKey=prefix
+	NodeDrain []NodeDrainStatus `json:"nodeDrain,omitempty" protobuf:"bytes,7,rep,name=nodeDrain"`
+}
+
+// NodeDrainStatus is the per-/64 drain confirmation used to gate fence release.
+type NodeDrainStatus struct {
+	// Prefix is the node /64 underlay prefix.
+	Prefix string `json:"prefix" protobuf:"bytes,1,opt,name=prefix"`
+	// Drained is true once the broker confirms the /64's stale VMIs are gone.
+	Drained bool `json:"drained,omitempty" protobuf:"varint,2,opt,name=drained"`
 }
 
 // ClusterPoolLease is the broker's heartbeat on a ClusterPool: the identity

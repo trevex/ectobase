@@ -119,3 +119,147 @@ var RouteBus_ServiceDesc = grpc.ServiceDesc{
 	},
 	Metadata: "routebus.proto",
 }
+
+const (
+	RouteBusAdmin_SetFence_FullMethodName   = "/routebus.v1.RouteBusAdmin/SetFence"
+	RouteBusAdmin_ClearFence_FullMethodName = "/routebus.v1.RouteBusAdmin/ClearFence"
+)
+
+// RouteBusAdminClient is the client API for RouteBusAdmin service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// RouteBusAdmin lets central set/clear per-/64 route fences on the reflector.
+type RouteBusAdminClient interface {
+	SetFence(ctx context.Context, in *FenceRequest, opts ...grpc.CallOption) (*FenceReply, error)
+	ClearFence(ctx context.Context, in *FenceRequest, opts ...grpc.CallOption) (*FenceReply, error)
+}
+
+type routeBusAdminClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewRouteBusAdminClient(cc grpc.ClientConnInterface) RouteBusAdminClient {
+	return &routeBusAdminClient{cc}
+}
+
+func (c *routeBusAdminClient) SetFence(ctx context.Context, in *FenceRequest, opts ...grpc.CallOption) (*FenceReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FenceReply)
+	err := c.cc.Invoke(ctx, RouteBusAdmin_SetFence_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *routeBusAdminClient) ClearFence(ctx context.Context, in *FenceRequest, opts ...grpc.CallOption) (*FenceReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FenceReply)
+	err := c.cc.Invoke(ctx, RouteBusAdmin_ClearFence_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RouteBusAdminServer is the server API for RouteBusAdmin service.
+// All implementations must embed UnimplementedRouteBusAdminServer
+// for forward compatibility.
+//
+// RouteBusAdmin lets central set/clear per-/64 route fences on the reflector.
+type RouteBusAdminServer interface {
+	SetFence(context.Context, *FenceRequest) (*FenceReply, error)
+	ClearFence(context.Context, *FenceRequest) (*FenceReply, error)
+	mustEmbedUnimplementedRouteBusAdminServer()
+}
+
+// UnimplementedRouteBusAdminServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedRouteBusAdminServer struct{}
+
+func (UnimplementedRouteBusAdminServer) SetFence(context.Context, *FenceRequest) (*FenceReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetFence not implemented")
+}
+func (UnimplementedRouteBusAdminServer) ClearFence(context.Context, *FenceRequest) (*FenceReply, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClearFence not implemented")
+}
+func (UnimplementedRouteBusAdminServer) mustEmbedUnimplementedRouteBusAdminServer() {}
+func (UnimplementedRouteBusAdminServer) testEmbeddedByValue()                       {}
+
+// UnsafeRouteBusAdminServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to RouteBusAdminServer will
+// result in compilation errors.
+type UnsafeRouteBusAdminServer interface {
+	mustEmbedUnimplementedRouteBusAdminServer()
+}
+
+func RegisterRouteBusAdminServer(s grpc.ServiceRegistrar, srv RouteBusAdminServer) {
+	// If the following call panics, it indicates UnimplementedRouteBusAdminServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&RouteBusAdmin_ServiceDesc, srv)
+}
+
+func _RouteBusAdmin_SetFence_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FenceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RouteBusAdminServer).SetFence(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RouteBusAdmin_SetFence_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RouteBusAdminServer).SetFence(ctx, req.(*FenceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RouteBusAdmin_ClearFence_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FenceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RouteBusAdminServer).ClearFence(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RouteBusAdmin_ClearFence_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RouteBusAdminServer).ClearFence(ctx, req.(*FenceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// RouteBusAdmin_ServiceDesc is the grpc.ServiceDesc for RouteBusAdmin service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var RouteBusAdmin_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "routebus.v1.RouteBusAdmin",
+	HandlerType: (*RouteBusAdminServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "SetFence",
+			Handler:    _RouteBusAdmin_SetFence_Handler,
+		},
+		{
+			MethodName: "ClearFence",
+			Handler:    _RouteBusAdmin_ClearFence_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "routebus.proto",
+}

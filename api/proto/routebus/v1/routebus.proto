@@ -10,6 +10,18 @@ service RouteBus {
   rpc Session(stream ClientMsg) returns (stream ServerMsg);
 }
 
+// RouteBusAdmin lets central set/clear per-/64 route fences on the reflector.
+service RouteBusAdmin {
+  rpc SetFence(FenceRequest) returns (FenceReply);
+  rpc ClearFence(FenceRequest) returns (FenceReply);
+}
+
+message FenceRequest {
+  string prefix = 1; // node /64, e.g. "2001:db8:0:1::/64"
+}
+
+message FenceReply {}
+
 enum RouteOp {
   ROUTE_OP_UNSPECIFIED = 0;
   ROUTE_OP_ADD = 1;

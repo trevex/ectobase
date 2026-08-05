@@ -20,6 +20,15 @@ type ClusterPoolStatusApplyConfiguration struct {
 	Allocatable *corev1.ResourceList `json:"allocatable,omitempty"`
 	// Lease is the broker heartbeat; a stale RenewTime drives Phase to Unknown.
 	Lease *ClusterPoolLeaseApplyConfiguration `json:"lease,omitempty"`
+	// NodePrefixes is the set of node /64 underlay prefixes composing this cluster,
+	// reported by the broker. Central fences these (Ceph NetworkFence + route
+	// blocklist) to evacuate a lost pool without reaching it.
+	NodePrefixes []string `json:"nodePrefixes,omitempty"`
+	// FencedPrefixes is the subset of NodePrefixes central has fenced (evacuation).
+	FencedPrefixes []string `json:"fencedPrefixes,omitempty"`
+	// NodeDrain reports, per fenced /64, whether the returning broker has confirmed
+	// its stale VMIs are terminated (safe to release the fence).
+	NodeDrain []NodeDrainStatusApplyConfiguration `json:"nodeDrain,omitempty"`
 }
 
 // ClusterPoolStatusApplyConfiguration constructs a declarative configuration of the ClusterPoolStatus type for use with
@@ -62,5 +71,38 @@ func (b *ClusterPoolStatusApplyConfiguration) WithAllocatable(value corev1.Resou
 // If called multiple times, the Lease field is set to the value of the last call.
 func (b *ClusterPoolStatusApplyConfiguration) WithLease(value *ClusterPoolLeaseApplyConfiguration) *ClusterPoolStatusApplyConfiguration {
 	b.Lease = value
+	return b
+}
+
+// WithNodePrefixes adds the given value to the NodePrefixes field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the NodePrefixes field.
+func (b *ClusterPoolStatusApplyConfiguration) WithNodePrefixes(values ...string) *ClusterPoolStatusApplyConfiguration {
+	for i := range values {
+		b.NodePrefixes = append(b.NodePrefixes, values[i])
+	}
+	return b
+}
+
+// WithFencedPrefixes adds the given value to the FencedPrefixes field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the FencedPrefixes field.
+func (b *ClusterPoolStatusApplyConfiguration) WithFencedPrefixes(values ...string) *ClusterPoolStatusApplyConfiguration {
+	for i := range values {
+		b.FencedPrefixes = append(b.FencedPrefixes, values[i])
+	}
+	return b
+}
+
+// WithNodeDrain adds the given value to the NodeDrain field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the NodeDrain field.
+func (b *ClusterPoolStatusApplyConfiguration) WithNodeDrain(values ...*NodeDrainStatusApplyConfiguration) *ClusterPoolStatusApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithNodeDrain")
+		}
+		b.NodeDrain = append(b.NodeDrain, *values[i])
+	}
 	return b
 }

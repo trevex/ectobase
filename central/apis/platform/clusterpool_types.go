@@ -26,6 +26,18 @@ type ClusterPoolStatus struct {
 	Allocatable corev1.ResourceList
 	// Lease is the broker heartbeat; a stale RenewTime drives Phase to Unknown.
 	Lease *ClusterPoolLease
+	// NodePrefixes is the set of node /64 underlay prefixes composing this cluster.
+	NodePrefixes []string
+	// FencedPrefixes is the subset of NodePrefixes central has fenced.
+	FencedPrefixes []string
+	// NodeDrain reports per-/64 drain confirmation gating fence release.
+	NodeDrain []NodeDrainStatus
+}
+
+// NodeDrainStatus is the per-/64 drain confirmation used to gate fence release.
+type NodeDrainStatus struct {
+	Prefix  string
+	Drained bool
 }
 
 // ClusterPoolLease is the broker's heartbeat on a ClusterPool.
