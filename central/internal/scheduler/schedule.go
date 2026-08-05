@@ -90,3 +90,75 @@ func fitScore(req, allocatable, used corev1.ResourceList) (float64, bool) {
 	}
 	return minFree, true
 }
+
+// ScheduleAntiAffine is Schedule plus anti-affinity: pools already holding the vm's
+// AntiAffinity.Group (per occupancy: poolName -> set of groups) are avoided. It first
+// tries non-violating fitting pools; if none, it falls back to any fitting pool and
+// reports violated=true (availability wins). occupancy may be nil.
+func ScheduleAntiAffine(vm *netv1.VirtualMachine, pools []platformv1.ClusterPool, allocated map[string]corev1.ResourceList, occupancy map[string]map[string]bool) (string, string, bool, bool) {
+	group := ""
+	if vm.Spec.AntiAffinity != nil {
+		group = vm.Spec.AntiAffinity.Group
+	}
+	if group == "" {
+		name, reason, ok := Schedule(vm, pools, allocated)
+		return name, reason, false, ok
+	}
+	// First pass: pools NOT already holding the group.
+	var clean []platformv1.ClusterPool
+	for i := range pools {
+		if occupancy[pools[i].Name][group] {
+			continue
+		}
+		clean = append(clean, pools[i])
+	}
+	if name, reason, ok := Schedule(vm, clean, allocated); ok {
+		return name, reason, false, true
+	}
+	// Fallback: any fitting pool, accept the violation.
+	name, reason, ok := Schedule(vm, pools, allocated)
+	return name, reason, ok, ok // violated == ok (a placement here is a violation)
+}
+
+// Placement is one VM's ScheduleBatch outcome.
+type Placement struct {
+	Pool     string
+	Violated bool
+	OK       bool
+	Reason   string
+}
+
+// ScheduleBatch places a batch of VMs against the pools, accumulating committed
+// resources (so N VMs don't over-commit one target) and anti-affinity occupancy
+// (so a batch doesn't co-locate a Group it just placed). Order follows the input.
+func ScheduleBatch(vms []*netv1.VirtualMachine, pools []platformv1.ClusterPool) []Placement {
+	allocated := map[string]corev1.ResourceList{}
+	occupancy := map[string]map[string]bool{}
+	out := make([]Placement, len(vms))
+	for i, vm := range vms {
+		name, reason, violated, ok := ScheduleAntiAffine(vm, pools, allocated, occupancy)
+		out[i] = Placement{Pool: name, Violated: violated, OK: ok, Reason: reason}
+		if !ok {
+			continue
+		}
+		// Commit this VM's requests against the chosen pool.
+		cur := allocated[name]
+		if cur == nil {
+			cur = corev1.ResourceList{}
+		}
+		for r, q := range vm.Spec.Resources.Requests {
+			c := cur[r]
+			c.Add(q)
+			cur[r] = c
+		}
+		allocated[name] = cur
+		// Record anti-affinity occupancy.
+		if vm.Spec.AntiAffinity != nil && vm.Spec.AntiAffinity.Group != "" {
+			if occupancy[name] == nil {
+				occupancy[name] = map[string]bool{}
+			}
+			occupancy[name][vm.Spec.AntiAffinity.Group] = true
+		}
+	}
+	return out
+}
