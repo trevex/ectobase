@@ -6,4 +6,5 @@ use (
 	./cni
 	./netplane
 	./test/e2e
+	./test/lab
 )
