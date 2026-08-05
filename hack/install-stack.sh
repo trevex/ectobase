@@ -34,6 +34,11 @@ if [ "${INSTALL_ROOK:-}" = "1" ]; then
   bash "$(dirname "$0")/rook-ceph-up.sh"
 fi
 
+# Optional: external ceph-csi (RBD) against the shared clab ceph node (dev only).
+if [ "${INSTALL_CEPH_EXTERNAL:-}" = "1" ]; then
+  bash "$(dirname "$0")/ceph-external-up.sh"
+fi
+
 # Optional: medik8s NHC + SNR operators for Tier-1 autonomous local failover (dev only).
 if [ "${INSTALL_MEDIK8S:-}" = "1" ]; then
   bash "$(dirname "$0")/medik8s-up.sh"
