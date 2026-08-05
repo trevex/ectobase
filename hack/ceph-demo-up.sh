@@ -19,13 +19,23 @@ MON="${MON:-[fd00:db8:0:5::1]:3300}"
 POOL="${POOL:-replicapool}"
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then sed -n '3,15p' "$0"; exit 0; fi
 
-# The ceph-csi RBD nodeplugin does `modprobe rbd` at NodeStage (rbd map) time; kind nodes ship no
-# kernel modules, so it fails ("Module rbd not found") unless rbd is already loaded in the HOST
-# kernel the kind containers share. Load it once here (this is the host-side ceph enablement step).
-# Harmless if already loaded; best-effort (a PVC still *provisions* without it — only pod/VM ATTACH
-# needs the module).
-( sudo modprobe rbd 2>/dev/null || modprobe rbd 2>/dev/null ) && echo "== host rbd module loaded ==" \
-  || echo "WARN: could not modprobe rbd on the host — RBD volume ATTACH (VM boot) will fail until it is"
+# --- host + kind-node prep so the ceph-csi RBD nodeplugin can `rbd map` (krbd) at ATTACH time ---
+# A PVC *provisions* via librbd in the provisioner without any of this; it is ONLY needed when a pod
+# or VM ATTACHES the RBD (NodeStage -> krbd map + mkfs), e.g. the tier2 VM boot. Three kind gotchas:
+#   1. modprobe rbd (+nbd) on the HOST: kind nodes ship no modules but share the host kernel, so
+#      loading once makes krbd available to every node (else "Module rbd not found").
+#   2. remount /sys rw in each kind node: kind mounts /sys ro, but krbd maps by writing
+#      /sys/bus/rbd/add -> EROFS "rbd: sysfs write failed" otherwise.
+#   3. mount devtmpfs over /dev in each kind node: kind's /dev is a small tmpfs, so the kernel's
+#      dynamically-created /dev/rbd0 node never appears -> mkfs.ext4 fails "not a block device".
+#      devtmpfs surfaces all kernel device nodes. (NOTE: both remounts revert if a node restarts —
+#      the tier2 gate restarts the killed pool AFTER the VM has moved off it, so that is fine.)
+for m in rbd nbd; do sudo modprobe "$m" 2>/dev/null || modprobe "$m" 2>/dev/null || true; done
+echo "== host rbd/nbd modules loaded =="
+for n in $(docker ps --format '{{.Names}}' | grep -E 'control-plane|worker'); do
+  docker exec "$n" sh -c 'mount -o remount,rw /sys 2>/dev/null; mountpoint -q /dev && grep -q "devtmpfs /dev" /proc/mounts || mount -t devtmpfs devtmpfs /dev 2>/dev/null' 2>/dev/null \
+    && echo "== kind node $n prepped for krbd (/sys rw + devtmpfs /dev) ==" || echo "WARN: krbd prep on $n failed"
+done
 OUT=""; [ "${1:-}" = "--out" ] && OUT="${2:-}"
 ex() { docker exec "$CEPH_CTR" "$@"; }
 # Readiness = mon responsive + the OSD up+in. We do NOT gate on HEALTH_OK/WARN: the ceph/demo node

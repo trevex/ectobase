@@ -83,6 +83,11 @@ storageClass:
   clusterID: "${CEPH_FSID}"
   pool: "${CEPH_POOL}"
   imageFeatures: "layering"
+  # krbd (the kernel rbd client used at NodeStage/`rbd map`, e.g. by CDI import + VM attach) must be
+  # told ms_mode to reach this msgr-v2-ONLY mon on :3300 — otherwise it tries legacy msgr1 and fails
+  # "rbd: failed to get mon address (possible ms_mode mismatch)". prefer-crc negotiates v2 (crc, no
+  # encryption) and is supported on modern kernels (>=5.11). librbd (provisioner) doesn't need this.
+  mapOptions: "ms_mode=prefer-crc"
   mountOptions: []
   reclaimPolicy: Delete
   allowVolumeExpansion: true
