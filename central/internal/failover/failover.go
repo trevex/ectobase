@@ -218,5 +218,9 @@ func poolLost(pool *platformv1.ClusterPool, now time.Time, threshold time.Durati
 }
 
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).For(&platformv1.ClusterPool{}).Complete(r)
+	// Distinct name: the clusterpool (pool-health) reconciler also watches ClusterPool and
+	// controller-runtime derives the controller name from the watched kind, so both would default
+	// to "clusterpool" and the manager rejects the duplicate ("controller with name clusterpool
+	// already exists"). Name this one "failover".
+	return ctrl.NewControllerManagedBy(mgr).Named("failover").For(&platformv1.ClusterPool{}).Complete(r)
 }
