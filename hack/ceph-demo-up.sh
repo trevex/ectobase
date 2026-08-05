@@ -18,6 +18,14 @@ CEPH_CTR="${CEPH_CTR:-clab-xdp-ipv6-fabric-ceph}"
 MON="${MON:-[fd00:db8:0:5::1]:3300}"
 POOL="${POOL:-replicapool}"
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then sed -n '3,15p' "$0"; exit 0; fi
+
+# The ceph-csi RBD nodeplugin does `modprobe rbd` at NodeStage (rbd map) time; kind nodes ship no
+# kernel modules, so it fails ("Module rbd not found") unless rbd is already loaded in the HOST
+# kernel the kind containers share. Load it once here (this is the host-side ceph enablement step).
+# Harmless if already loaded; best-effort (a PVC still *provisions* without it — only pod/VM ATTACH
+# needs the module).
+( sudo modprobe rbd 2>/dev/null || modprobe rbd 2>/dev/null ) && echo "== host rbd module loaded ==" \
+  || echo "WARN: could not modprobe rbd on the host — RBD volume ATTACH (VM boot) will fail until it is"
 OUT=""; [ "${1:-}" = "--out" ] && OUT="${2:-}"
 ex() { docker exec "$CEPH_CTR" "$@"; }
 # Readiness = mon responsive + the OSD up+in. We do NOT gate on HEALTH_OK/WARN: the ceph/demo node
