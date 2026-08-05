@@ -210,9 +210,9 @@ topology:
       env:
         MON_IP: fd00:db8:0:5::1
         CEPH_PUBLIC_NETWORK: fd00:db8:0:5::/64
-      binds:
-        - ceph-etc:/etc/ceph
-        - ceph-data:/var/lib/ceph
+      # Ephemeral: no persistent binds. clab treats a bare `name:/path` bind as a RELATIVE
+      # host path (not a docker named volume) and fails verification; the gate doesn't need
+      # Ceph state to survive a lab teardown, so run ceph/demo fully in-container.
       sysctls:
         net.ipv6.conf.all.forwarding: 1
     # ceph-frr: shares the ceph netns; creates dummy0 (fd00:db8:0:5::1/64) then runs FRR to
