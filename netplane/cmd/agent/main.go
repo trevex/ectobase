@@ -25,7 +25,7 @@ func main() {
 	underlay := flag.String("underlay", "", "this node's underlay IPv6 (required)")
 	reflectorAddr := flag.String("reflector", "127.0.0.1:1338", "reflector gRPC address")
 	dataplaneAddr := flag.String("dataplane", "127.0.0.1:1337", "local flowplane DataplaneNode address")
-	kubeconfig := flag.String("kubeconfig", "", "kubeconfig for the central API (empty = in-cluster)")
+	kubeconfig := flag.String("kubeconfig", "", "kubeconfig for this node's own cluster apiserver — where the broker syncs the compiled CRDs (empty = in-cluster). The agent never talks to central.")
 	edgeLoopback := flag.String("edge-loopback", "", "if set, this node is a WAN edge; value = its UNIQUE control-plane loopback IPv6 (e.g. fd00:db8:0:9::1)")
 	tlsCA := flag.String("tls-ca", "", "CA bundle to verify the reflector (enables mTLS)")
 	tlsCert := flag.String("tls-cert", "", "agent client cert (identity == node)")
@@ -92,6 +92,9 @@ func main() {
 		pubs, err := r.DesiredPublic(ctx)
 		if err != nil {
 			return agent.DesiredState{}, err
+		}
+		if err := r.StampNodePrefix(ctx); err != nil {
+			log.Printf("stamp node prefix: %v", err)
 		}
 		return agent.DesiredState{Subs: subs, Routes: routes, Nats: nats, Pubs: pubs, EgressVNIs: egressVNIs, PeeringImports: peeringImports}, nil
 	}

@@ -215,16 +215,15 @@ func (s *statusReporter) reportOnce(ctx context.Context) error {
 	return b.ReportStatus(ctx, nodes, vmNode)
 }
 
-// gatherNodes lists downstream nodes and derives each node's /64 fence prefix.
-//
-// TODO(fence-source): the true per-node /64 is node-local dataplane state (the flowplane
-// agent's --underlay, host-prefixed to /64) and is NOT yet surfaced onto corev1.Node.
-// PodCIDRs[0] is a STAND-IN, not just provisional: on v4-primary clusters it is an IPv4
-// /24 — a different address family than the v6 /64 the fencers target, so it can NEVER
-// match a real fence coordinate — and a node with no PodCIDR yields "" and silently drops
-// out of NodePrefixes while its VMs still exist. So real fence RELEASE (and any production
-// reliance on the drain signal) MUST NOT be enabled against this source. Follow-up: have
-// the agent stamp its /64 as a Node annotation and read that here.
+// nodePrefixFromNode returns the node's underlay /64 fence prefix from the annotation the
+// netplane agent stamps on its own Node, or "" if absent (the node is not fence-eligible).
+func nodePrefixFromNode(n *corev1.Node) string {
+	return n.Annotations[netv1.NodeUnderlayPrefixAnnotation]
+}
+
+// gatherNodes lists downstream nodes and reads each node's /64 fence prefix from the
+// agent-stamped NodeUnderlayPrefixAnnotation. A node without it is not fence-eligible
+// (dropped from NodePrefixes by NodePrefixesFromNodes) — safer than a wrong prefix.
 func (s *statusReporter) gatherNodes(ctx context.Context) ([]broker.NodeFact, error) {
 	nodeList := &corev1.NodeList{}
 	if err := s.downstream.List(ctx, nodeList); err != nil {
@@ -233,11 +232,7 @@ func (s *statusReporter) gatherNodes(ctx context.Context) ([]broker.NodeFact, er
 	out := make([]broker.NodeFact, 0, len(nodeList.Items))
 	for i := range nodeList.Items {
 		n := &nodeList.Items[i]
-		prefix := ""
-		if len(n.Spec.PodCIDRs) > 0 {
-			prefix = n.Spec.PodCIDRs[0]
-		}
-		out = append(out, broker.NodeFact{Name: n.Name, Prefix: prefix})
+		out = append(out, broker.NodeFact{Name: n.Name, Prefix: nodePrefixFromNode(n)})
 	}
 	return out, nil
 }

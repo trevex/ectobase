@@ -114,7 +114,7 @@ central: per drained /64 ──> delete NetworkFence + clear reflector blocklist
 - KubeVirt live-migration path (this is restart-based failover).
 - Real multi-cluster **fabric** (cross-cluster underlay/dataplane on real hardware). The control-plane multi-cluster logic IS validated in-process via multiple envtest instances (§8); real-fabric wiring is strictly additive and deferred.
 - Hardware/ConnectX; richer affinity beyond the minimal group/spread.
-- **Real node-/64 fence-source (implementation follow-up).** The broker's `ReportStatus` core is complete + tested, but the fact-gathering in `cmd/broker` derives each node's /64 from `Node.Spec.PodCIDRs[0]` — a **provisional stand-in** that may be the wrong address family (an IPv4 pod `/24` on v4-primary clusters) or absent. The true per-node /64 is node-local dataplane state (the flowplane agent's `--underlay`, host-prefixed to /64) not yet surfaced on `corev1.Node`. Follow-up: have the agent stamp its /64 as a Node annotation and read that. Until then, **real fence release / production reliance on the drain signal must not be enabled against this source** (guarded by a `TODO(fence-source)` in `gatherNodes`). This is the primary blocker for the deferred single-cluster kind-lab gate.
+- **Node-/64 fence-source — DONE (2026-08-05 follow-up).** The netplane agent stamps its node's real underlay /64 as the `net.ectobase.dev/underlay-prefix` Node annotation (derived from `--underlay`, address-family-correct), and the broker's `gatherNodes` reads it. The provisional `PodCIDRs[0]` stand-in is removed. See `2026-08-05-node-underlay-prefix-annotation-design.md`. This unblocks the single-cluster kind-lab gate.
 
 ## 10. Success criteria
 
