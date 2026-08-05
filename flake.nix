@@ -118,6 +118,10 @@
             pkgs.libpcap                      # net_pcap PMD
             pkgs.libbpf                       # net_af_xdp PMD (Milestone 2)
             pkgs.xdp-tools.lib                # net_af_xdp PMD (Milestone 2) — libxdp.so is in the .lib output
+            # VyOS clab image: ISO fetch + userspace squashfs->rootfs extraction (test/images/vyos)
+            pkgs.squashfs-tools-ng            # sqfs2tar
+            pkgs.libarchive                   # bsdtar
+            pkgs.minisign                     # optional ISO signature verification
           ];
 
           RUST_BACKTRACE = 1;

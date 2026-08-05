@@ -88,6 +88,13 @@ IMG_REPO ?= ghcr.io/trevex/ectobase
 image-tayga: ## Build the lab NAT64/DNS64 (tayga) image
 	docker build -t $(IMG_REPO)/tayga:latest test/images/tayga
 
+.PHONY: image-vyos
+image-vyos: ## Build the lab VyOS (clab) image from the pinned rolling ISO
+	cd test/images/vyos && . ./versions.env && \
+	  bash scripts/fetch-iso.sh "$$VYOS_ISO_URL" vyos-amd64.iso && \
+	  bash scripts/extract-rootfs.sh vyos-amd64.iso rootfs-amd64.tar && \
+	  docker build -f clab/Dockerfile -t $(IMG_REPO)/vyos:clab .
+
 # --- quality ---------------------------------------------------------------
 .PHONY: fmt
 fmt: ## Format all Rust code
