@@ -57,7 +57,11 @@ spec:
       containers:
         - name: controller
           image: ghcr.io/trevex/ectobase/central-controller:dev
-          args: []
+          args:
+            - "-reflector-admin=[fd00:db8:0:1::1]:1338"
+            - "-csi-driver=rbd.csi.ceph.com"
+            - "-csi-secret-name=csi-rbd-secret"
+            - "-csi-secret-namespace=ceph-csi"
           env:
             # client-go's WatchListClient uses SendInitialEvents=true streaming
             # list-watches that this aggregated apiserver (older apiserver libs)
