@@ -217,12 +217,14 @@ func (s *statusReporter) reportOnce(ctx context.Context) error {
 
 // gatherNodes lists downstream nodes and derives each node's /64 fence prefix.
 //
-// TODO(fence-source): the true per-node /64 underlay prefix is node-local dataplane
-// state (the flowplane agent's --underlay flag, host-prefixed to /64); it is NOT yet
-// surfaced onto the corev1.Node object. Until the agent stamps it as a Node
-// annotation/label, we fall back to Node.Spec.PodCIDRs[0] — the closest real per-node
-// prefix the broker can read via the downstream client. This is provisional: the
-// fence coordinate central acts on is only as correct as this source.
+// TODO(fence-source): the true per-node /64 is node-local dataplane state (the flowplane
+// agent's --underlay, host-prefixed to /64) and is NOT yet surfaced onto corev1.Node.
+// PodCIDRs[0] is a STAND-IN, not just provisional: on v4-primary clusters it is an IPv4
+// /24 — a different address family than the v6 /64 the fencers target, so it can NEVER
+// match a real fence coordinate — and a node with no PodCIDR yields "" and silently drops
+// out of NodePrefixes while its VMs still exist. So real fence RELEASE (and any production
+// reliance on the drain signal) MUST NOT be enabled against this source. Follow-up: have
+// the agent stamp its /64 as a Node annotation and read that here.
 func (s *statusReporter) gatherNodes(ctx context.Context) ([]broker.NodeFact, error) {
 	nodeList := &corev1.NodeList{}
 	if err := s.downstream.List(ctx, nodeList); err != nil {
