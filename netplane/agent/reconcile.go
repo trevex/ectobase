@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	netv1 "github.com/trevex/ectobase/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,6 +50,10 @@ func NewReconciler(kubeconfig, nodeID string, deps Deps) (*Reconciler, error) {
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {
 		return nil, fmt.Errorf("register scheme: %w", err)
+	}
+	// corev1 for StampNodePrefix's Node get/patch (the /64 underlay annotation the broker reads).
+	if err := corev1.AddToScheme(scheme); err != nil {
+		return nil, fmt.Errorf("register corev1 scheme: %w", err)
 	}
 	c, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
