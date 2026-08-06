@@ -11,6 +11,12 @@ kubeProxyReplacement: true
 k8sServiceHost: localhost
 k8sServicePort: 7445
 
+# Single operator replica: clusters default to one control-plane node, and the
+# operator's default 2 replicas have anti-affinity that leaves the 2nd Pending on
+# a 1-node cluster → `helm --wait` never sees 2/2. One operator is fine for a lab.
+operator:
+  replicas: 1
+
 routingMode: tunnel
 tunnelProtocol: vxlan
 
