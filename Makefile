@@ -101,8 +101,13 @@ image-talos: ## Build the lab Talos container image (rootfs from imager)
 	  bash scripts/extract-rootfs.sh amd64 && \
 	  docker build -f container/Dockerfile -t $(IMG_REPO)/talos:container .
 
+.PHONY: image-wan
+image-wan: ## Build the lab WAN-sim (nft masquerade + ECMP return) image via nix
+	cd test/images/wan && nix build .#default && docker load -i result | tee /dev/stderr | grep -oE 'wan-simulator:latest' >/dev/null
+	docker tag wan-simulator:latest $(IMG_REPO)/wan:latest
+
 .PHONY: lab-images
-lab-images: image-tayga image-vyos image-talos ## Build all lab container images
+lab-images: image-tayga image-vyos image-talos image-wan ## Build all lab container images
 
 # --- quality ---------------------------------------------------------------
 .PHONY: fmt
