@@ -17,7 +17,7 @@ const (
 	EdgeLoopback = "fd00:ffff"            // edge DNS64 loopbacks: fd00:ffff::e1, fd00:ffff::e2
 	DNSUpstream  = "2606:4700:4700::1111" // DNS64 upstream
 	WanGwV4      = "172.29.0.1"           // wan bridge v4 gateway
-	NodeAggr     = "fd00:cafe::/16"       // aggregate of every cluster's /48 node identities
+	NodeAggr     = "fd00:cafe::/32"       // aggregate of every cluster's /48 node identities (fd00:cafe:<h>::/48)
 	RAAggr       = "fd00:db8::/32"        // aggregate of every switch RA /64
 	LoopAggr     = "fd00:ffff::/32"       // aggregate of the edge loopbacks
 )
