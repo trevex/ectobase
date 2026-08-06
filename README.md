@@ -94,6 +94,15 @@ sudo -E bash test/scenario-restart.sh       # graceful datapath restart (crictl 
 hack/clab-down.sh
 ```
 
+### The Talos multi-cluster fabric (`test/lab`)
+
+A newer, additive Go/cobra harness stands up a **multi-cluster Talos IPv6-BGP fabric on containerlab** (containers only) with **fabric-only egress** and a **local registry mirror**, then deploys the ectobase substrate (central + brokers) onto it. It coexists with the `hack/clab` kind fabric above (nothing there changes). See [`test/lab/README.md`](test/lab/README.md).
+
+```sh
+make lab-images                                # build the talos/vyos/tayga/wan images (first run)
+sudo -E env "PATH=$PATH" go run ./test/lab up  # multi-cluster Talos fabric + ectobase substrate
+```
+
 ## Distributed firewall
 
 The distributed firewall is **always-on deny-by-default**: `fw_eval_dir` accepts a packet only on an explicit matching allow rule. The control plane materializes k8s default-allow explicitly — `Compile()` emits a per-direction allow-all for any NIC no `FirewallPolicy` selects. A **compiler controller** (`CompiledNICReconciler`) writes one `CompiledNIC` per `NetworkInterface`; the **node agent** installs its rules on the dataplane via `AddFwRule` during each reconcile loop (`ReconcileFirewall`). See [`docs/superpowers/specs/2026-07-15-compilednic-firewall-pipeline-design.md`](docs/superpowers/specs/2026-07-15-compilednic-firewall-pipeline-design.md) for the full design.
