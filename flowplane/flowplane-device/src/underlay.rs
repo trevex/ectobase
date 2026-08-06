@@ -34,28 +34,58 @@ fn is_underlay_candidate(ip: &Ipv6Addr) -> bool {
     (ip.segments()[0] & 0xffc0) != 0xfe80
 }
 
-/// True if `ifname` is a loopback/dummy interface we prefer to source the underlay /64 from
-/// (`lo`, `dummy`, `dummy0`, `dummy1`, ...).
-fn is_loopback_iface(ifname: &str) -> bool {
-    ifname == "lo" || ifname.starts_with("dummy")
-}
-
 /// Infer the host's underlay IPv6 ADDRESS — the node's fabric-loopback identity (the same address
 /// the kubelet advertises as its node IP on an unnumbered IPv6 fabric).
 ///
-/// Prefers a `lo`/`dummy*` global-unicast address (the fabric loopback), else the first
-/// global-unicast address. Returns `None` when there is no global-unicast address at all.
+/// Preference order: a `dummy*` global-unicast address (the fabric loopback we deliberately create
+/// for the node identity), then `lo`, then the first global-unicast address anywhere. `dummy*` is
+/// preferred over `lo` because some platforms park an unrelated ULA on `lo` — e.g. Talos hostDNS
+/// binds `fd54:616c:6f73::…` ("Talos") to `lo`, which would otherwise shadow the fabric `/64`.
+/// Returns `None` when there is no global-unicast address at all.
 pub fn infer_underlay_address(addrs: &[IfAddr]) -> Option<Ipv6Addr> {
     addrs
         .iter()
-        .find(|a| is_loopback_iface(&a.ifname) && is_underlay_candidate(&a.addr))
+        .find(|a| a.ifname.starts_with("dummy") && is_underlay_candidate(&a.addr))
+        .or_else(|| {
+            addrs
+                .iter()
+                .find(|a| a.ifname == "lo" && is_underlay_candidate(&a.addr))
+        })
         .or_else(|| addrs.iter().find(|a| is_underlay_candidate(&a.addr)))
+        .map(|a| a.addr)
+}
+
+/// Infer the host underlay ADDRESS, constrained to `within` when set — the authoritative
+/// cluster-wide filter. The node's fabric identity is known to live inside a well-known aggregate
+/// (e.g. `fd00:cafe::/32` on the Talos lab, `fd00:db8::/32` on the kind fabric), so when the
+/// operator passes that aggregate we pick the host address inside it and ignore every unrelated
+/// global address (a mgmt `status.hostIP`, a Talos hostDNS `lo` ULA, CNI veth /128s, …). A
+/// `dummy*` address inside the aggregate is still preferred over any other match. `within = None`
+/// falls back to [`infer_underlay_address`]'s interface-name heuristic.
+pub fn infer_underlay_address_within(
+    addrs: &[IfAddr],
+    within: Option<Ipv6Net>,
+) -> Option<Ipv6Addr> {
+    let Some(net) = within else {
+        return infer_underlay_address(addrs);
+    };
+    let inside = |a: &&IfAddr| is_underlay_candidate(&a.addr) && net.contains(&a.addr);
+    addrs
+        .iter()
+        .find(|a| a.ifname.starts_with("dummy") && inside(a))
+        .or_else(|| addrs.iter().find(inside))
         .map(|a| a.addr)
 }
 
 /// Infer the host underlay /64 — the /64 of [`infer_underlay_address`].
 pub fn infer_underlay_prefix(addrs: &[IfAddr]) -> Option<Ipv6Net> {
     infer_underlay_address(addrs).and_then(|ip| Ipv6Net::new(ip, 64).ok().map(|n| n.trunc()))
+}
+
+/// Infer the host underlay /64 constrained to `within` (see [`infer_underlay_address_within`]).
+pub fn infer_underlay_prefix_within(addrs: &[IfAddr], within: Option<Ipv6Net>) -> Option<Ipv6Net> {
+    infer_underlay_address_within(addrs, within)
+        .and_then(|ip| Ipv6Net::new(ip, 64).ok().map(|n| n.trunc()))
 }
 
 /// A /128 allocator over the host underlay /64.
@@ -246,6 +276,44 @@ mod tests {
         assert_eq!(
             infer_underlay_prefix(&addrs).unwrap(),
             "fd00:db8:0:1::/64".parse::<Ipv6Net>().unwrap()
+        );
+    }
+
+    #[test]
+    fn prefers_dummy_over_lo_global_ula_talos() {
+        // Talos parks a branded ULA (fd54:616c:6f73:: = "Talos", hostDNS) on `lo`, which is a
+        // GLOBAL candidate iterated before dummy0. The dummy0 fabric identity must still win —
+        // otherwise the underlay pool becomes fd54:616c:6f73::/64 (not fabric-routable).
+        let addrs = vec![
+            a("lo", "fd54:616c:6f73:0:204f:5320:444e:531", 128), // Talos hostDNS lo ULA: NOT preferred
+            a("dummy0", "fd00:cafe:1914::1", 128),               // fabric identity: PICK
+        ];
+        assert_eq!(
+            infer_underlay_prefix(&addrs).unwrap(),
+            "fd00:cafe:1914::/64".parse::<Ipv6Net>().unwrap()
+        );
+    }
+
+    #[test]
+    fn within_filter_selects_the_expected_aggregate() {
+        // The authoritative cluster-wide filter: even with a mgmt hostIP, a Talos lo ULA, and the
+        // node's own API-VIP /64 all present, `within = fd00:cafe::/32` + dummy preference pins the
+        // dummy0 node-identity /64 (fd00:cafe:1914::/64), never the API VIP (fd00:cafe:1914:1::/64).
+        let addrs = vec![
+            a("eth0", "3fff:172:20:20::7", 64), // docker mgmt (status.hostIP): excluded
+            a("lo", "fd54:616c:6f73:0:204f:5320:444e:531", 128), // Talos hostDNS: excluded
+            a("vip0", "fd00:cafe:1914:1::1", 128), // API VIP: in-aggregate but not dummy
+            a("dummy0", "fd00:cafe:1914::1", 128), // node identity: PICK
+        ];
+        let within = Some("fd00:cafe::/32".parse::<Ipv6Net>().unwrap());
+        assert_eq!(
+            infer_underlay_prefix_within(&addrs, within).unwrap(),
+            "fd00:cafe:1914::/64".parse::<Ipv6Net>().unwrap()
+        );
+        // within = None falls back to the interface-name heuristic (dummy0 still wins here).
+        assert_eq!(
+            infer_underlay_prefix_within(&addrs, None).unwrap(),
+            "fd00:cafe:1914::/64".parse::<Ipv6Net>().unwrap()
         );
     }
 

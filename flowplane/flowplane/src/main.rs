@@ -11,6 +11,7 @@ mod maps;
 mod node;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use ipnet::Ipv6Net;
 
 // ---------------------------------------------------------------------------
 // Sysfs / parse helpers
@@ -134,6 +135,13 @@ enum Cmd {
         /// loopback. Set explicitly for tests / hosts without a fabric loopback.
         #[arg(long = "local-underlay")]
         local_underlay: Option<String>,
+        /// Expected node-underlay aggregate (CIDR, e.g. `fd00:cafe::/32`). When set, the underlay
+        /// address is the host address inside this prefix — the authoritative cluster-wide filter
+        /// that ignores unrelated global addresses (mgmt `status.hostIP`, a Talos hostDNS `lo` ULA,
+        /// CNI veth /128s). Takes precedence over HOST_IP + interface inference; `--local-underlay`
+        /// still overrides it.
+        #[arg(long = "underlay-within")]
+        underlay_within: Option<String>,
         /// Underlay next-hop MAC — outer eth dst for ALL encapped traffic.
         #[arg(long)]
         gateway_mac: String,
@@ -332,12 +340,24 @@ enum Cmd {
 /// Resolve this hypervisor's underlay IPv6 identity (also the /64 the AttachInterface pool
 /// allocates from), in precedence order:
 ///   1. `--local-underlay` when set — tests / hosts without a fabric loopback.
-///   2. the kubelet node IP from the downward-API env (`HOST_IP`/`NODE_IP` = `status.hostIP`) —
-///      the proper-cluster path (a KubeVirt node's fabric identity).
-///   3. inference from the host's `lo`/`dummy*` fabric-loopback address.
-fn resolve_underlay_ipv6(flag: Option<&str>) -> anyhow::Result<[u8; 16]> {
+///   2. `--underlay-within <cidr>` when set — the authoritative cluster-wide filter: the host
+///      address inside the expected node aggregate (e.g. `fd00:cafe::/32`). This overrides a wrong
+///      `status.hostIP` (a mgmt address) and ignores unrelated global addresses (a Talos hostDNS
+///      `lo` ULA, CNI veth /128s, the node's own API-VIP /64, …).
+///   3. the kubelet node IP from the downward-API env (`HOST_IP`/`NODE_IP` = `status.hostIP`) —
+///      the proper-cluster path (a KubeVirt node's fabric identity) when hostIP is the fabric addr.
+///   4. inference from the host's `dummy*`/`lo` fabric-loopback address.
+fn resolve_underlay_ipv6(flag: Option<&str>, within: Option<Ipv6Net>) -> anyhow::Result<[u8; 16]> {
     if let Some(s) = flag {
         return parse_ipv6(s);
+    }
+    if let Some(net) = within {
+        let addrs = flowplane_device::read_host_ifaddrs()?;
+        if let Some(a) = flowplane_device::infer_underlay_address_within(&addrs, Some(net)) {
+            println!("underlay: selected {a} within {net}");
+            return Ok(a.octets());
+        }
+        println!("underlay: no host address within {net}; falling back to HOST_IP/inference");
     }
     for var in ["HOST_IP", "NODE_IP"] {
         if let Ok(v) = std::env::var(var) {
@@ -353,8 +373,8 @@ fn resolve_underlay_ipv6(flag: Option<&str>) -> anyhow::Result<[u8; 16]> {
         return Ok(a.octets());
     }
     anyhow::bail!(
-        "cannot determine underlay IPv6: pass --local-underlay, set HOST_IP (status.hostIP), \
-         or run on a fabric node with a lo/dummy /64"
+        "cannot determine underlay IPv6: pass --local-underlay or --underlay-within, set HOST_IP \
+         (status.hostIP), or run on a fabric node with a lo/dummy /64"
     )
 }
 
@@ -385,6 +405,7 @@ async fn main() -> anyhow::Result<()> {
             wan_uplink,
             extra_uplink,
             local_underlay,
+            underlay_within,
             gateway,
             gateway6,
             gateway_mac,
@@ -400,7 +421,12 @@ async fn main() -> anyhow::Result<()> {
                 // SAFETY: single-threaded CLI startup, before any datapath thread is spawned.
                 std::env::set_var("FLOWPLANE_CONNTRACK_MAX", n.to_string());
             }
-            let underlay = resolve_underlay_ipv6(local_underlay.as_deref())?;
+            let within = underlay_within
+                .as_deref()
+                .map(|s| s.parse::<Ipv6Net>())
+                .transpose()
+                .context("parse --underlay-within")?;
+            let underlay = resolve_underlay_ipv6(local_underlay.as_deref(), within)?;
             let gateway_ipv4 = parse_ipv4(&gateway)?;
             let gateway_ipv6 = match &gateway6 {
                 Some(s) => parse_ipv6(s)?,

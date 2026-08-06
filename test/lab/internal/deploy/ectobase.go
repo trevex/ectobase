@@ -25,6 +25,7 @@ type EctobaseSpec struct {
 	CentralIdentity   string           // bare v6, e.g. fd00:cafe:<h>::1 (reflector host on the fabric)
 	ChartPath         string           // <repoRoot>/deploy/charts/ectobase
 	NADCRDPath        string           // NetworkAttachmentDefinition CRD manifest (abs or repo-relative)
+	UnderlayWithin    string           // node-underlay aggregate CIDR (fd00:cafe::/32) for flowplane's underlay filter
 	Compute           []ComputeCluster // compute clusters running the broker (k02, k03, …)
 }
 
@@ -137,7 +138,7 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 			"broker-central-kubeconfig", "kubeconfig", brokerKubeconfig); err != nil {
 			return fmt.Errorf("cluster %s: create broker secret: %w", c.Name, err)
 		}
-		if err := helmInstallEctobase(ctx, c.Kubeconfig, c.Name, s.ChartPath, s.CentralIdentity); err != nil {
+		if err := helmInstallEctobase(ctx, c.Kubeconfig, c.Name, s.ChartPath, s.CentralIdentity, s.UnderlayWithin); err != nil {
 			return fmt.Errorf("cluster %s: helm install ectobase: %w", c.Name, err)
 		}
 	}
@@ -231,17 +232,25 @@ func createSecretFromFile(ctx context.Context, kubeconfig, ns, name, key, path s
 // helmInstallEctobase installs/upgrades the ectobase chart with a broker on one
 // compute cluster. apiserverAddress is the LOCAL cluster (the agent reads/writes
 // its own cluster); reflectorAddress points at central's reflector on the fabric.
-func helmInstallEctobase(ctx context.Context, kubeconfig, clusterName, chartPath, centralIdentity string) error {
-	return exec.Run(ctx, "helm", "upgrade", "--install", "ectobase", chartPath,
+func helmInstallEctobase(ctx context.Context, kubeconfig, clusterName, chartPath, centralIdentity, underlayWithin string) error {
+	args := []string{"upgrade", "--install", "ectobase", chartPath,
 		"--kubeconfig", kubeconfig,
 		"--namespace", "ectobase-system", "--create-namespace",
 		"--set", "broker.enabled=true",
-		"--set", "broker.clusterName="+clusterName,
+		"--set", "broker.clusterName=" + clusterName,
 		"--set", "apiserverAddress=https://127.0.0.1:6443",
-		"--set", "reflectorAddress=["+centralIdentity+"]:1338",
+		"--set", "reflectorAddress=[" + centralIdentity + "]:1338",
 		"--set", "installCRDs=true",
 		"--set", "dataplane=ebpf",
-		"--wait", "--timeout", "8m")
+	}
+	if underlayWithin != "" {
+		// flowplane picks the node's fabric underlay as the host address inside this aggregate — the
+		// authoritative filter past a mgmt hostIP / Talos hostDNS lo ULA. The CIDR has no comma so
+		// helm --set takes it literally (`:` and `/` are not --set metacharacters).
+		args = append(args, "--set", "underlayWithin="+underlayWithin)
+	}
+	args = append(args, "--wait", "--timeout", "8m")
+	return exec.Run(ctx, "helm", args...)
 }
 
 // waitPoolsReady blocks until every compute pool reports status.phase == Ready

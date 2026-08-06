@@ -13,6 +13,10 @@ imagePullPolicy: IfNotPresent
 
 # Overlay uplink interface (used by the DPDK datapath; the eBPF wrapper defaults to eth1).
 uplink: eth1
+# Expected node-underlay aggregate (CIDR). When set, flowplane picks the host address inside it as
+# the underlay (the authoritative cluster-wide filter — ignores mgmt hostIP / Talos hostDNS lo ULA /
+# CNI /128s). Empty = infer from the dummy*/lo fabric loopback. The Talos lab sets fd00:cafe::/32.
+underlayWithin: ""
 # Fabric reflector address the agent dials.
 reflectorAddress: "[fd00:db8:0:1::1]:1338"
 # Control-plane API server the agent dials over the fabric (kubeconfig server URL).

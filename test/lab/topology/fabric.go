@@ -337,6 +337,7 @@ func deployEctobase(ctx context.Context, cfg *config.Config) error {
 		CentralIdentity:   dc.Nodes[0].IdentityAddr,
 		ChartPath:         filepath.Join(root, "deploy/charts/ectobase"),
 		NADCRDPath:        filepath.Join(root, "test/lab/deploy/nad-crd.yaml"),
+		UnderlayWithin:    fabric.NodeAggr,
 		Compute:           compute,
 	}
 	return deploy.Ectobase(ctx, spec)

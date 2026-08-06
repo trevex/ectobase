@@ -8,6 +8,7 @@
     "env": { "type": "string", "enum": ["clab", "hw"] },
     "imagePullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
     "uplink": { "type": "string", "minLength": 1 },
+    "underlayWithin": { "type": "string" },
     "reflectorAddress": { "type": "string", "minLength": 1 },
     "apiserverAddress": { "type": "string", "minLength": 1 },
     "installCRDs": { "type": "boolean" },

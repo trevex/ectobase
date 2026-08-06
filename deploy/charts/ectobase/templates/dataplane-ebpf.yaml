@@ -55,7 +55,7 @@ spec:
                 [ "$(cat /sys/class/net/$d/operstate 2>/dev/null)" = "up" ] && EXTRA="$EXTRA --extra-uplink $d"
               done
               echo "flowplane wrapper: uplink=$UPLINK gateway_mac=$GW_MAC extra=[$EXTRA]"
-              exec flowplane serve --addr 127.0.0.1:1337 --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC" $EXTRA
+              exec flowplane serve --addr 127.0.0.1:1337 --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC"{{ if .Values.underlayWithin }} --underlay-within {{ .Values.underlayWithin }}{{ end }} $EXTRA
 {{- if eq .Values.env "clab" }}
           env:
             # Compute nodes MUST run generic/SKB XDP on clab. uplink_rx delivers to guests by

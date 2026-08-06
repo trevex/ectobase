@@ -8,7 +8,8 @@ pub mod veth;
 pub use netns::{configure_guest_netns, GuestNetConfig};
 pub use tap::{create_persistent_tap, delete_tap, open_tap_fd};
 pub use underlay::{
-    infer_underlay_address, infer_underlay_prefix, read_host_ifaddrs, IfAddr, UnderlayIpam,
+    infer_underlay_address, infer_underlay_address_within, infer_underlay_prefix,
+    infer_underlay_prefix_within, read_host_ifaddrs, IfAddr, UnderlayIpam,
 };
 pub use veth::{
     bind_preallocated_guest_end, create_preallocated_veth, create_veth_pair, delete_link,
