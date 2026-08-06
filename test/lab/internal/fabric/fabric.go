@@ -66,7 +66,8 @@ func (v *View) EdgeLoopback() string { return EdgeLoopback }
 func (v *View) DNSUpstream() string  { return DNSUpstream }
 func (v *View) WanGwV4() string      { return WanGwV4 }
 func (v *View) RegistryAddr() string { return RegistryAddr }
-func (v *View) MgmtV6Subnet() string { return MgmtV6Subnet }
+func (v *View) MgmtV6Subnet() string  { return MgmtV6Subnet }
+func (v *View) MgmtV6Gateway() string { return MgmtV6Gateway }
 
 // AS + aggregate accessors the VyOS templates reference.
 func (v *View) ASEdge() int      { return v.Cfg.Fabric.AS.Edge }

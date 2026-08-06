@@ -18,12 +18,20 @@ topology:
       startup-config: vyos/edge1.boot
       enforce-startup-config: true
       sysctls: {net.ipv6.conf.all.forwarding: 1}
+      # Drop the docker-injected mgmt default (a kernel route, FRR distance 0) so
+      # FRR selects the BGP/static ::/0 and egress leaves via the fabric, not mgmt.
+      exec:
+        - "ip -6 route del default via 3fff:172:20:20::1 dev eth0"
     edge2:
       kind: vyosnetworks_vyos
       image: img/vyos
       startup-config: vyos/edge2.boot
       enforce-startup-config: true
       sysctls: {net.ipv6.conf.all.forwarding: 1}
+      # Drop the docker-injected mgmt default (a kernel route, FRR distance 0) so
+      # FRR selects the BGP/static ::/0 and egress leaves via the fabric, not mgmt.
+      exec:
+        - "ip -6 route del default via 3fff:172:20:20::1 dev eth0"
 
     nat64-1:
       kind: linux
@@ -56,12 +64,20 @@ topology:
       startup-config: vyos/sw1.boot
       enforce-startup-config: true
       sysctls: {net.ipv6.conf.all.forwarding: 1}
+      # Drop the docker-injected mgmt default (a kernel route, FRR distance 0) so
+      # FRR selects the BGP/static ::/0 and egress leaves via the fabric, not mgmt.
+      exec:
+        - "ip -6 route del default via 3fff:172:20:20::1 dev eth0"
     sw2:
       kind: vyosnetworks_vyos
       image: img/vyos
       startup-config: vyos/sw2.boot
       enforce-startup-config: true
       sysctls: {net.ipv6.conf.all.forwarding: 1}
+      # Drop the docker-injected mgmt default (a kernel route, FRR distance 0) so
+      # FRR selects the BGP/static ::/0 and egress leaves via the fabric, not mgmt.
+      exec:
+        - "ip -6 route del default via 3fff:172:20:20::1 dev eth0"
     central-1:
       kind: linux
       image: img/talos
