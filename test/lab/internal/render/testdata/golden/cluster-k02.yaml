@@ -69,10 +69,10 @@ machine:
                   # NAT64 / wan native-v6), keeping mgmt only as a last-resort
                   # fallback so control-plane image pulls never stall during boot.
                   # Re-run each tick in case DHCP re-adds the metric-1024 default.
-                  if ip -6 route show default | grep -q "via 3fff:172:20:20::1 dev eth0 metric 1024"; then
-                    ip -6 route del default via 3fff:172:20:20::1 dev eth0 metric 1024 2>/dev/null || true
-                    ip -6 route add default via 3fff:172:20:20::1 dev eth0 metric 4096 2>/dev/null || true
-                  fi
+                  # (Unconditional del+add — busybox `ip` output spacing makes a
+                  # grep guard fragile; the add is a no-op once already at 4096.)
+                  ip -6 route del default via 3fff:172:20:20::1 dev eth0 metric 1024 2>/dev/null || true
+                  ip -6 route add default via 3fff:172:20:20::1 dev eth0 metric 4096 2>/dev/null || true
                   if wget -q -T2 --no-check-certificate -O- https://127.0.0.1:6443/healthz 2>/dev/null | grep -qx ok; then
                     ip addr add "$vip" dev vip0 2>/dev/null || true
                   else
