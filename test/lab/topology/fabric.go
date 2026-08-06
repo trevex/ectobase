@@ -240,9 +240,12 @@ func Up(ctx context.Context, cfg *config.Config) error {
 		slog.Warn("host native-v6 egress setup failed (v4/NAT64 egress still works)", "err", err)
 	}
 
-	// Push local images best-effort: the registry container must be reachable on
-	// the fabric first, and a fresh checkout may not have built the :dev images.
-	reg := registry.New("[" + fabric.RegistryAddr + "]:" + fabric.RegistryPort)
+	// Push local images best-effort. Push goes via the registry container's
+	// host-published localhost port (127.0.0.1:5000, which is in docker's default
+	// insecure-registries — no host dockerd reconfig needed); the nodes pull the
+	// same registry:2 process via its fabric mirror addr. A fresh checkout may not
+	// have built the :dev images.
+	reg := registry.New("127.0.0.1:" + fabric.RegistryPort)
 	if err := reg.PushLocal(ctx, cfg.Fabric.Registry.Push); err != nil {
 		slog.Warn("push-local images failed (registry unreachable or images not built?)", "err", err)
 	}

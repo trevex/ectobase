@@ -72,13 +72,20 @@ func TestPushLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := [][]string{
-		{"docker", "tag", "ghcr.io/trevex/ectobase/flowplane:dev", "[fd00:29::5]:5000/flowplane:dev"},
-		{"docker", "push", "[fd00:29::5]:5000/flowplane:dev"},
-		{"docker", "tag", "ghcr.io/trevex/ectobase/netplane:dev", "[fd00:29::5]:5000/netplane:dev"},
-		{"docker", "push", "[fd00:29::5]:5000/netplane:dev"},
+		{"docker", "tag", "ghcr.io/trevex/ectobase/flowplane:dev", "[fd00:29::5]:5000/trevex/ectobase/flowplane:dev"},
+		{"docker", "push", "[fd00:29::5]:5000/trevex/ectobase/flowplane:dev"},
+		{"docker", "tag", "ghcr.io/trevex/ectobase/netplane:dev", "[fd00:29::5]:5000/trevex/ectobase/netplane:dev"},
+		{"docker", "push", "[fd00:29::5]:5000/trevex/ectobase/netplane:dev"},
 	}
 	if !reflect.DeepEqual(rec.calls, want) {
 		t.Fatalf("got %v\nwant %v", rec.calls, want)
+	}
+	// The pushed repo path must carry the MirrorPath segment so it matches the
+	// full path the Talos mirror forwards (a bare <name> repo would 404 on pull).
+	for _, c := range rec.calls {
+		if !strings.Contains(c[len(c)-1], "/trevex/ectobase/") {
+			t.Fatalf("push ref missing mirror path segment: %v", c)
+		}
 	}
 }
 
@@ -92,7 +99,7 @@ func TestPushLocalTagErrorAborts(t *testing.T) {
 	}
 	// Only the first tag ran; push (and the second image) must not have been called.
 	want := [][]string{
-		{"docker", "tag", "ghcr.io/trevex/ectobase/flowplane:dev", "[fd00:29::5]:5000/flowplane:dev"},
+		{"docker", "tag", "ghcr.io/trevex/ectobase/flowplane:dev", "[fd00:29::5]:5000/trevex/ectobase/flowplane:dev"},
 	}
 	if !reflect.DeepEqual(rec.calls, want) {
 		t.Fatalf("expected abort after first tag, got %v", rec.calls)

@@ -113,6 +113,9 @@ topology:
         WAN_MASQ_V4: "{{ join " " .Wan.MasqV4 }}"
         WAN_MASQ_V6: "{{ join " " .Wan.MasqV6 }}"
         WAN_ROUTES: "{{ range $i, $r := .Wan.Routes }}{{ if $i }};{{ end }}{{ $r.Prefix }} {{ join "," $r.NextHops }}{{ end }}"
+        # eth5 is the registry link; it must join br0 (the WAN L2 segment) so the
+        # registry (fd00:29::5 on eth5) is reachable over the fabric from the nodes.
+        WAN_LAN_IFACES: "eth1 eth2 eth3 eth4 eth5"
 
     registry:
       kind: linux
@@ -121,6 +124,10 @@ topology:
       # from /etc/docker/registry/config.yml; the cache is a host-path dir (clab
       # binds cannot name docker volumes). The exec entries give the registry its
       # fabric address on the WAN segment after clab attaches the veths.
+      # Host pushes to 127.0.0.1:5000 (docker-default-insecure); nodes pull via the
+      # fabric addr — same registry:2 process, same filesystem storage backend.
+      ports:
+        - "127.0.0.1:5000:5000"
       binds:
         - registry/config.yml:/etc/docker/registry/config.yml
         - registry-cache:/var/lib/registry
