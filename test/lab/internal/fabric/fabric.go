@@ -55,6 +55,14 @@ func (v *View) EdgeLoopback() string { return EdgeLoopback }
 func (v *View) DNSUpstream() string  { return DNSUpstream }
 func (v *View) WanGwV4() string      { return WanGwV4 }
 
+// AS + aggregate accessors the VyOS templates reference.
+func (v *View) ASEdge() int      { return v.Cfg.Fabric.AS.Edge }
+func (v *View) ASSwitch() int    { return v.Cfg.Fabric.AS.Switch }
+func (v *View) ASHost() int      { return v.Cfg.Fabric.AS.Host }
+func (v *View) NodeAggr() string { return NodeAggr }
+func (v *View) RAAggr() string   { return RAAggr }
+func (v *View) LoopAggr() string { return LoopAggr }
+
 // Build assembles the view: flatten nodes in declaration order, then compute the
 // WAN egress (masquerade the fabric aggregates out the uplink; ECMP return routes
 // back via both edges on the WAN segment).

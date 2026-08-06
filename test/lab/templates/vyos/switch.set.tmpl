@@ -1,0 +1,25 @@
+set system host-name 'sw{{ .SW }}'
+set service ssh
+set system login user admin authentication plaintext-password 'admin'
+set protocols bgp system-as '{{ .ASSwitch }}'
+set protocols bgp parameters router-id '10.0.1.{{ .SW }}'
+set protocols bgp parameters bestpath as-path multipath-relax
+set protocols bgp address-family ipv6-unicast maximum-paths ebgp '64'
+set protocols bgp peer-group edges remote-as 'external'
+set protocols bgp peer-group edges capability extended-nexthop
+set protocols bgp peer-group edges bfd
+set protocols bgp peer-group edges address-family ipv6-unicast
+set protocols bgp neighbor eth1 interface v6only peer-group 'edges'
+set protocols bgp neighbor eth2 interface v6only peer-group 'edges'
+set protocols bgp peer-group hosts remote-as 'external'
+set protocols bgp peer-group hosts capability extended-nexthop
+set protocols bgp peer-group hosts address-family ipv6-unicast as-override
+{{- range $n := .Nodes }}
+{{- $eth := printf "eth%d" (add 2 $n.PortSeq) }}
+set protocols bgp neighbor {{ $eth }} interface v6only peer-group 'hosts'
+set protocols static route6 {{ $n.RA64 }} interface {{ $eth }}
+set protocols bgp address-family ipv6-unicast network '{{ $n.RA64 }}'
+set service router-advert interface {{ $eth }} prefix {{ $n.RA64 }}
+set service router-advert interface {{ $eth }} name-server '{{ $.EdgeLoopback }}::e1'
+set service router-advert interface {{ $eth }} name-server '{{ $.EdgeLoopback }}::e2'
+{{- end }}
