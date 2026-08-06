@@ -5,6 +5,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -26,7 +27,13 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return os.Setenv("LAB_CONFIG", abs)
+		if err := os.Setenv("LAB_CONFIG", abs); err != nil {
+			return err
+		}
+		// Anchor all relative paths (build/<name>, clab binds) to the config's
+		// directory so render/up/down write the same tree regardless of the caller's
+		// working directory (e.g. sudo `lab up` from repo root vs `go run .`).
+		return os.Chdir(filepath.Dir(abs))
 	},
 }
 
