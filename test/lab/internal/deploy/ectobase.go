@@ -57,9 +57,21 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 	}
 
 	slog.Info("deploying shared reflector")
+	// Create ectobase-system + the SAs first, then mark the namespace PSA-privileged
+	// BEFORE applying the reflector: the reflector runs hostNetwork (+ hostPort 1338),
+	// which Talos's baseline PSA enforcement rejects. Applying the reflector first
+	// would leave its ReplicaSet in a long FailedCreate backoff even after the label
+	// lands. Order matters — label must precede the pod-creating manifest.
 	if err := kubectlApply(ctx, s.CentralKubeconfig,
 		filepath.Join(s.RepoRoot, "config/deploy/namespace.yaml"),
 		filepath.Join(s.RepoRoot, "config/deploy/rbac.yaml"),
+	); err != nil {
+		return fmt.Errorf("apply reflector namespace/rbac: %w", err)
+	}
+	if err := labelPSAPrivileged(ctx, s.CentralKubeconfig, "ectobase-system"); err != nil {
+		return fmt.Errorf("label reflector namespace privileged: %w", err)
+	}
+	if err := kubectlApply(ctx, s.CentralKubeconfig,
 		filepath.Join(s.RepoRoot, "config/deploy/reflector.yaml"),
 	); err != nil {
 		return fmt.Errorf("apply reflector: %w", err)
@@ -107,7 +119,7 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		}
 		// The broker-central-kubeconfig Secret must exist before the chart's broker
 		// pod starts, so create the namespace + secret ahead of helm.
-		if err := ensureNamespace(ctx, c.Kubeconfig, "ectobase-system"); err != nil {
+		if err := ensureHelmNamespace(ctx, c.Kubeconfig, "ectobase-system", "ectobase"); err != nil {
 			return fmt.Errorf("cluster %s: ensure namespace: %w", c.Name, err)
 		}
 		if err := createSecretFromFile(ctx, c.Kubeconfig, "ectobase-system",
@@ -146,17 +158,47 @@ func kubectlApplyStdin(ctx context.Context, kubeconfig, yaml string) error {
 	return exec.RunStdin(ctx, yaml, "kubectl", "--kubeconfig", kubeconfig, "apply", "-f", "-")
 }
 
-// ensureNamespace idempotently creates a namespace (apply of a minimal manifest).
-func ensureNamespace(ctx context.Context, kubeconfig, ns string) error {
-	m := fmt.Sprintf("apiVersion: v1\nkind: Namespace\nmetadata:\n  name: %s\n", ns)
+// ensureHelmNamespace idempotently creates a namespace pre-stamped with Helm's
+// ownership label + annotations so the chart (whose own namespace.yaml manages the
+// same namespace) can adopt it. Without these, `helm install` refuses a
+// pre-existing namespace ("invalid ownership metadata"). We must create it ahead of
+// helm because the broker-central-kubeconfig Secret has to exist before the chart's
+// broker pod starts.
+//
+// It also stamps pod-security.kubernetes.io/enforce=privileged: Talos enforces the
+// baseline PodSecurity level cluster-wide, which rejects the dataplane pods
+// (flowplane is privileged + hostPID + hostPath; agent/broker are hostNetwork).
+// Kind does not enforce PSA, so this only bites on Talos.
+func ensureHelmNamespace(ctx context.Context, kubeconfig, ns, release string) error {
+	m := fmt.Sprintf(`apiVersion: v1
+kind: Namespace
+metadata:
+  name: %s
+  labels:
+    app.kubernetes.io/managed-by: Helm
+    pod-security.kubernetes.io/enforce: privileged
+  annotations:
+    meta.helm.sh/release-name: %s
+    meta.helm.sh/release-namespace: %s
+`, ns, release, ns)
 	return kubectlApplyStdin(ctx, kubeconfig, m)
+}
+
+// labelPSAPrivileged marks ns as PodSecurity privileged so hostNetwork/privileged
+// pods are admitted under Talos's baseline-enforcing default (see ensureHelmNamespace).
+func labelPSAPrivileged(ctx context.Context, kubeconfig, ns string) error {
+	return exec.Run(ctx, "kubectl", "--kubeconfig", kubeconfig, "label", "ns", ns,
+		"pod-security.kubernetes.io/enforce=privileged", "--overwrite")
 }
 
 // waitAggregatedAPI blocks until the central aggregated API actually serves the
 // platform group — APIService availability + aggregation can lag the apply.
 func waitAggregatedAPI(ctx context.Context, kubeconfig string) error {
+	// Generous: the central-apiserver pod must cold-pull its :dev image from the
+	// in-fabric registry, start, and have its APIService become Available before the
+	// aggregated group is served.
 	slog.Info("waiting for the central aggregated API to serve")
-	return wait.WaitFor(ctx, 3*time.Minute, 3*time.Second, func() (bool, error) {
+	return wait.WaitFor(ctx, 6*time.Minute, 3*time.Second, func() (bool, error) {
 		err := exec.Run(ctx, "kubectl", "--kubeconfig", kubeconfig,
 			"get", "clusterpools.platform.ectobase.dev", "--request-timeout=5s")
 		return err == nil, err
@@ -220,10 +262,14 @@ func waitPoolsReady(ctx context.Context, kubeconfig string, compute []ComputeClu
 	})
 }
 
-// poolField reads a jsonpath field of a ClusterPool via kubectl.
+// poolField reads a jsonpath field of a ClusterPool via kubectl. It uses the fully
+// qualified plural resource (clusterpools.platform.ectobase.dev): the aggregated
+// API's short-name discovery intermittently flakes ("the server doesn't have a
+// resource type \"clusterpool\""), which would make the readiness poll error
+// forever even once the pools are Ready.
 func poolField(ctx context.Context, kubeconfig, name, jsonpath string) (string, error) {
 	out, err := exec.OutputStr(ctx, "kubectl", "--kubeconfig", kubeconfig,
-		"get", "clusterpool", name, "-o", "jsonpath="+jsonpath)
+		"get", "clusterpools.platform.ectobase.dev", name, "-o", "jsonpath="+jsonpath)
 	return strings.TrimSpace(out), err
 }
 
