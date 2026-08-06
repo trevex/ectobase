@@ -49,6 +49,13 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 	}
 
 	// --- Central cluster ---
+	// Re-untaint before scheduling: `up` untainted every node during its bootstrap loop, but Talos
+	// re-applies the control-plane NoSchedule taint over time, so by the deploy step (minutes later)
+	// central is tainted again and central/config's pods (which don't tolerate it) sit Pending.
+	// Untainting here lets them schedule; running pods survive a later re-taint.
+	if err := AllowSchedulingOnControlPlanes(ctx, s.CentralKubeconfig); err != nil {
+		return fmt.Errorf("untaint central: %w", err)
+	}
 	slog.Info("deploying central apiserver + controller", "kustomize", filepath.Join(s.RepoRoot, "central/config"))
 	if err := kubectlApplyKustomize(ctx, s.CentralKubeconfig, filepath.Join(s.RepoRoot, "central/config")); err != nil {
 		return fmt.Errorf("apply central/config: %w", err)
@@ -124,6 +131,11 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 	// --- Each compute cluster ---
 	for _, c := range s.Compute {
 		slog.Info("deploying ectobase chart on compute cluster", "cluster", c.Name)
+		// Re-untaint (Talos re-applies the control-plane taint) so the chart's Deployments
+		// (broker/controller) schedule; helm --wait would otherwise time out on them Pending.
+		if err := AllowSchedulingOnControlPlanes(ctx, c.Kubeconfig); err != nil {
+			return fmt.Errorf("cluster %s: untaint: %w", c.Name, err)
+		}
 		// The chart renders a NetworkAttachmentDefinition unconditionally, so the NAD
 		// CRD must exist first.
 		if err := kubectlApply(ctx, c.Kubeconfig, s.NADCRDPath); err != nil {
