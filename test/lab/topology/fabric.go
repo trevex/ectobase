@@ -39,6 +39,7 @@ import (
 	"github.com/trevex/ectobase/test/lab/internal/clab"
 	"github.com/trevex/ectobase/test/lab/internal/config"
 	"github.com/trevex/ectobase/test/lab/internal/deploy"
+	"github.com/trevex/ectobase/test/lab/internal/exec"
 	"github.com/trevex/ectobase/test/lab/internal/fabric"
 	"github.com/trevex/ectobase/test/lab/internal/registry"
 	"github.com/trevex/ectobase/test/lab/internal/render"
@@ -222,6 +223,14 @@ func Up(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("clab deploy: %w", err)
 	}
 
+	// The host reaches the fabric (node identities + anycast API VIPs, all under
+	// fd00:cafe::/32) only through the wan container, whose mgmt address is the
+	// host's single next hop into the lab. Add that route so talosctl/kubectl can
+	// reach the nodes.
+	if err := addHostFabricRoute(ctx, cfg.Name); err != nil {
+		return fmt.Errorf("host fabric route: %w", err)
+	}
+
 	// Push local images best-effort: the registry container must be reachable on
 	// the fabric first, and a fresh checkout may not have built the :dev images.
 	reg := registry.New("[" + fabric.RegistryAddr + "]:" + fabric.RegistryPort)
@@ -233,7 +242,14 @@ func Up(ctx context.Context, cfg *config.Config) error {
 		dc := cfg.Derived.Clusters[cl.Name]
 		talosconfig := p.clusterTalosconfig(cl.Name)
 		kubeconfig := p.clusterKubeconfig(cl.Name)
-		if err := talos.Bootstrap(ctx, talosconfig, kubeconfig, []string{dc.APIVipAddr}); err != nil {
+		// Bootstrap targets the nodes' own dummy0 identities, not the API VIP: the
+		// health-gated VIP is only held (and BGP-advertised) once the apiserver is
+		// up, i.e. AFTER bootstrap — targeting it here would be a chicken-and-egg.
+		endpoints := make([]string, len(dc.Nodes))
+		for i, n := range dc.Nodes {
+			endpoints[i] = n.IdentityAddr
+		}
+		if err := talos.Bootstrap(ctx, talosconfig, kubeconfig, endpoints); err != nil {
 			return fmt.Errorf("cluster %s bootstrap: %w", cl.Name, err)
 		}
 		if err := deploy.WaitAPIServer(ctx, kubeconfig); err != nil {
@@ -264,11 +280,38 @@ func deployEctobase(_ context.Context, _ *config.Config) error {
 	return nil
 }
 
+// fabricHostPrefix is the aggregate the host routes into the fabric: every
+// cluster's node identities and anycast API VIPs live under fd00:cafe::/32.
+const fabricHostPrefix = "fd00:cafe::/32"
+
+// addHostFabricRoute points fd00:cafe::/32 at the wan container's mgmt address so
+// the host (talosctl/kubectl) can reach the nodes + API VIPs through the fabric.
+func addHostFabricRoute(ctx context.Context, labName string) error {
+	via, err := clab.MgmtIP6(ctx, labName, "wan")
+	if err != nil {
+		return fmt.Errorf("wan mgmt IPv6: %w", err)
+	}
+	if via == "" {
+		return fmt.Errorf("wan container has no mgmt IPv6 (is the mgmt network dual-stack?)")
+	}
+	slog.Info("routing host into the fabric", "prefix", fabricHostPrefix, "via", via)
+	return exec.Sudo(ctx, "ip", "-6", "route", "replace", fabricHostPrefix, "via", via)
+}
+
+// delHostFabricRoute removes the host→fabric route (best-effort, on down).
+func delHostFabricRoute(ctx context.Context) {
+	if err := exec.Sudo(ctx, "ip", "-6", "route", "del", fabricHostPrefix); err != nil {
+		slog.Debug("remove host fabric route (already gone?)", "err", err)
+	}
+}
+
 // Down destroys the containerlab topology and removes build/<name>/ while
 // preserving the registry cache for a warm re-up. With purge, it removes the whole
 // build tree including the cache.
 func Down(ctx context.Context, cfg *config.Config, purge bool) error {
 	p := buildPaths(cfg)
+
+	delHostFabricRoute(ctx)
 
 	c := clab.Clab{TopoFile: p.topo}
 	if err := c.Destroy(ctx); err != nil {
