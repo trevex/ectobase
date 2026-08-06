@@ -16,10 +16,16 @@ set protocols bgp peer-group hosts capability extended-nexthop
 set protocols bgp peer-group hosts address-family ipv6-unicast as-override
 {{- range $n := .Nodes }}
 {{- $eth := printf "eth%d" (add 2 $n.PortSeq) }}
+{{- /* Per-switch RA /64 (fd00:db8:<SW>:<portSeq>::/64): each switch advertises a
+       DISTINCT prefix so the node's two uplinks hold addresses in different /64s.
+       A shared /64 across both uplinks breaks the return path — a reply routed via
+       the "wrong" switch can't ND-resolve an address that lives on the other
+       uplink, black-holing native-v6 egress. */}}
+{{- $ra := printf "%s:%d:%d::/64" $.RAPrefix $.SW $n.PortSeq }}
 set protocols bgp neighbor {{ $eth }} interface v6only peer-group 'hosts'
-set protocols static route6 {{ $n.RA64 }} interface {{ $eth }}
-set protocols bgp address-family ipv6-unicast network '{{ $n.RA64 }}'
-set service router-advert interface {{ $eth }} prefix {{ $n.RA64 }}
+set protocols static route6 {{ $ra }} interface {{ $eth }}
+set protocols bgp address-family ipv6-unicast network '{{ $ra }}'
+set service router-advert interface {{ $eth }} prefix {{ $ra }}
 set service router-advert interface {{ $eth }} name-server '{{ $.EdgeLoopback }}::e1'
 set service router-advert interface {{ $eth }} name-server '{{ $.EdgeLoopback }}::e2'
 {{- end }}
