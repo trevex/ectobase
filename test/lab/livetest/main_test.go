@@ -13,6 +13,7 @@ package livetest
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -43,9 +44,16 @@ func loadConfig(t *testing.T) *config.Config {
 	return cfg
 }
 
+// buildDir is build/<name>/, anchored on $LAB_CONFIG's directory (the module dir),
+// NOT the CWD: `go test` runs each test binary from the livetest package dir, so a
+// CWD-relative path would miss the build tree.
+func buildDir(cfg *config.Config) string {
+	return filepath.Join(filepath.Dir(configPath()), "build", cfg.Name)
+}
+
 // kubeconfigPath is the root-owned per-cluster kubeconfig under build/<name>/.
 func kubeconfigPath(cfg *config.Config, cluster string) string {
-	return "build/" + cfg.Name + "/" + cluster + ".kubeconfig"
+	return filepath.Join(buildDir(cfg), cluster+".kubeconfig")
 }
 
 // requireFabricUp skips the test when the central kubeconfig is missing — i.e.
