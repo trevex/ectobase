@@ -1,0 +1,16 @@
+# registry:2 config for the lab mirror. Plain filesystem registry backed by the
+# persistent cache volume (ectobase-lab-registry-cache). Holds the pushed :dev
+# images and serves as the in-fabric mirror. Per-upstream pull-through (proxying
+# docker.io etc.) is layered in at `lab up` (T16) once the container wiring +
+# fabric addressing are settled — a single registry:2 can proxy only one upstream
+# and can't also accept pushes, so the proxy topology is decided live.
+version: 0.1
+storage:
+  filesystem:
+    rootdirectory: /var/lib/registry
+  delete:
+    enabled: true
+http:
+  addr: :5000
+log:
+  level: warn
