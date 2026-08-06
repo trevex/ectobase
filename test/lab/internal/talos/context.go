@@ -19,6 +19,7 @@ type ClusterCtx struct {
 	APIVipCIDR       string   // fd00:cafe:<h>:1::1/128
 	RegistryEndpoint string   // e.g. http://[fd00:29::5]:5000
 	Upstreams        []string // machine.registries.mirrors keys
+	MgmtV6Gateway    string   // the mgmt default the api-vip pod drops (fabric-only egress)
 }
 
 // NodeCtx is the node-patch + bgp-peer template data.
@@ -42,6 +43,7 @@ func NewClusterCtx(v *fabric.View, clusterName string) ClusterCtx {
 		APIVipCIDR:       dc.APIVip,
 		RegistryEndpoint: fabric.RegistryEndpoint,
 		Upstreams:        v.Cfg.Fabric.Registry.Upstreams,
+		MgmtV6Gateway:    fabric.MgmtV6Gateway,
 	}
 }
 
