@@ -122,10 +122,9 @@ topology:
     wan:
       kind: linux
       image: img/wan
-      # wan-simulator:latest is mutable and rebuilt often; always re-pull so a
-      # deploy never reuses a stale cached image (the stable node images keep
-      # clab's IfNotPresent default).
-      image-pull-policy: Always
+      # All lab images are built locally (make lab-images) and not pushed to a
+      # remote registry, so keep clab's IfNotPresent default — an Always policy
+      # would force a failing remote pull of the local-only wan image.
       cap-add: ["NET_ADMIN"]
       env:
         WAN_V4_ADDR: 172.29.0.1/24
