@@ -77,6 +77,17 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		return fmt.Errorf("apply reflector: %w", err)
 	}
 
+	// The netplane compiler compiles net.ectobase.dev/NetworkInterface (+VPC/VM) into
+	// per-cluster CompiledNICs (stamped with clusterName) that the brokers sync down and
+	// the agents program. It runs hostNetwork on central's control-plane; its ClusterRole
+	// came from config/deploy/rbac.yaml above, and ectobase-system is now PSA-privileged.
+	slog.Info("deploying netplane compiler on central")
+	if err := kubectlApply(ctx, s.CentralKubeconfig,
+		filepath.Join(s.RepoRoot, "config/deploy/controller.yaml"),
+	); err != nil {
+		return fmt.Errorf("apply netplane compiler: %w", err)
+	}
+
 	slog.Info("creating broker central identity (SA + RBAC)")
 	brokerRBAC := filepath.Join(s.WorkDir, "broker-rbac.yaml")
 	if err := os.WriteFile(brokerRBAC, []byte(brokerRBACManifest), 0o644); err != nil {
