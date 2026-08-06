@@ -9,6 +9,69 @@ use flowplane_core::err::DpErr;
 
 use crate::coreimpl::CtxPkt;
 
+/// Resolve the real egress ifindex + L2 nexthop (dst MAC) + our src MAC for an outer packet destined
+/// to `dst6`, via the kernel FIB + neighbour table (`bpf_fib_lookup`). Returns `(dmac, smac, ifindex)`
+/// on success, `None` on any FIB miss / unresolved neighbour so the caller keeps its configured
+/// fallback (`Local.gateway_mac` / `uplink_mac` / `uplink_ifindex`).
+///
+/// Why: the startup-resolved single gateway MAC is wrong on a multi-router uplink — on a dual-homed
+/// fabric node the node's OWN link-local can appear as a stale "router" neighbour, so a fixed
+/// `grep -m1 router` MAC can point the encap frame at the node itself (the switch then drops it as
+/// PACKET_OTHERHOST). A per-packet FIB lookup returns the correct nexthop MAC from the kernel neigh
+/// table AND lets egress follow whichever ToR the FIB selects (per-flow ECMP across both uplinks).
+///
+/// `ctx` is the raw program context (`*mut __sk_buff` for tc, `*mut xdp_md` for XDP). The ~64-byte
+/// `bpf_fib_lookup` params ride in the `FIB_SCRATCH` per-CPU array (NOT the stack) — the `tc_guest_tx`
+/// v4 chain is already near the 512-byte BPF combined-stack limit — and callers hold `PortMeta` by
+/// reference. `#[inline(never)]` keeps this glue out of the caller's frame.
+#[inline(never)]
+pub fn fib_nexthop(
+    ctx: *mut core::ffi::c_void,
+    dst6: &[u8; 16],
+) -> Option<([u8; 6], [u8; 6], u32)> {
+    const AF_INET6: u8 = 10;
+    const BPF_FIB_LOOKUP_DIRECT: u32 = 1;
+    const BPF_FIB_LOOKUP_OUTPUT: u32 = 2;
+    const BPF_FIB_LKUP_RET_SUCCESS: i64 = 0;
+    let p = crate::maps::FIB_SCRATCH.get_ptr_mut(0)?;
+    unsafe {
+        core::ptr::write_bytes(
+            p as *mut u8,
+            0,
+            core::mem::size_of::<aya_ebpf::bindings::bpf_fib_lookup>(),
+        );
+        (*p).family = AF_INET6;
+        // ipv6_dst (anon union #4) = the outer destination, in network byte order (its raw bytes).
+        core::ptr::copy_nonoverlapping(
+            dst6.as_ptr(),
+            core::ptr::addr_of_mut!((*p).__bindgen_anon_4) as *mut u8,
+            16,
+        );
+        let ret = aya_ebpf::helpers::gen::bpf_fib_lookup(
+            ctx,
+            p,
+            core::mem::size_of::<aya_ebpf::bindings::bpf_fib_lookup>() as i32,
+            BPF_FIB_LOOKUP_DIRECT | BPF_FIB_LOOKUP_OUTPUT,
+        );
+        if ret == BPF_FIB_LKUP_RET_SUCCESS {
+            Some(((*p).dmac, (*p).smac, (*p).ifindex))
+        } else {
+            None
+        }
+    }
+}
+
+/// Override an `EncapParams`' L2 nexthop + egress ifindex with a per-packet FIB result, falling back
+/// to the configured `Local` values on a FIB miss. Central so the tc and XDP encap paths share it.
+#[inline(always)]
+pub fn fib_override(ctx: *mut core::ffi::c_void, e: &mut EncapParams) {
+    if let Some((dmac, smac, ifindex)) = fib_nexthop(ctx, &e.nexthop_ipv6) {
+        e.gateway_mac = dmac;
+        e.uplink_mac = smac;
+        e.uplink_ifindex = ifindex;
+    }
+}
+
 /// Grow headroom and write the outer Eth+IPv6 for an encap toward `route.nexthop_ipv6`. Returns
 /// `true` on success.
 /// `inner_proto` = IPv6 next-header byte (IPPROTO_IPIP for an IPv4 inner, IPPROTO_IPV6 for IPv6).

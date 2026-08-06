@@ -25,6 +25,14 @@ set protocols bgp peer-group hosts address-family ipv6-unicast as-override
 set protocols bgp neighbor {{ $eth }} interface v6only peer-group 'hosts'
 set protocols static route6 {{ $ra }} interface {{ $eth }}
 set protocols bgp address-family ipv6-unicast network '{{ $ra }}'
+{{- /* Originate the node's underlay /64 (guest-endpoint underlays are allocated in its upper half).
+       Talos native GoBGP can only advertise host routes (/128), so the node cannot announce its /64
+       itself; the directly-connected ToR originates it here. RECURSIVE next-hop = the node identity
+       /128 (learned from this node via BGP on {{ $eth }}) — a via-interface static would try to ND-
+       resolve endpoint underlays that live only inside flowplane, not on the node's uplink. The
+       recursive route self-withdraws (nexthop tracking) when the node's /128 is withdrawn. */}}
+set protocols static route6 {{ $n.NodeNet64 }} next-hop {{ $n.IdentityAddr }}
+set protocols bgp address-family ipv6-unicast network '{{ $n.NodeNet64 }}'
 set service router-advert interface {{ $eth }} prefix {{ $ra }}
 set service router-advert interface {{ $eth }} name-server '{{ $.EdgeLoopback }}::e1'
 set service router-advert interface {{ $eth }} name-server '{{ $.EdgeLoopback }}::e2'

@@ -27,8 +27,11 @@ const BPF_SKB_TSTAMP_DELIVERY_MONO: u32 = 1;
 #[classifier]
 pub fn tc_guest_tx(ctx: TcContext) -> i32 {
     let ifindex = unsafe { (*ctx.skb.skb).ifindex };
+    // Hold PortMeta by REFERENCE (not a ~70-byte by-value copy): frees the stack the per-packet
+    // bpf_fib_lookup scratch needs to stay under the 512B BPF combined-stack limit on the v4 encap
+    // path. Every use below is a field read or `&`-borrow, so a reference suffices.
     let meta = match unsafe { PORT_META.get(&ifindex) } {
-        Some(m) => *m,
+        Some(m) => m,
         None => return TC_ACT_OK,
     };
     // Bounds-checked ethertype read (classification only).
@@ -161,7 +164,7 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
         if ctx.data() + flowplane_common::arp_nd::ETH_LEN + 20 > ctx.data_end() {
             return TC_ACT_OK;
         }
-        match crate::egress::forward_decision_v4(ctx.data(), ctx.data_end(), ifindex, &meta) {
+        match crate::egress::forward_decision_v4(ctx.data(), ctx.data_end(), ifindex, meta) {
             crate::egress::EgressVerdict::Pass => return TC_ACT_OK,
             crate::egress::EgressVerdict::Drop => return TC_ACT_SHOT,
             crate::egress::EgressVerdict::Local {
@@ -185,7 +188,12 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
                 }
                 return TC_ACT_OK;
             }
-            crate::egress::EgressVerdict::Encap(e) => {
+            crate::egress::EgressVerdict::Encap(mut e) => {
+                // Resolve the real nexthop MAC + egress uplink per-packet from the kernel FIB (neigh
+                // table), overriding the startup-resolved single gateway MAC. Fixes wrong-MAC drops on
+                // a multi-router uplink and follows the FIB's ECMP uplink choice. FIB miss => keep the
+                // configured Local fallback.
+                crate::encap::fib_override(ctx.skb.skb as *mut core::ffi::c_void, &mut e);
                 // WORKING invocation (validated by test/tc-egress-netns.sh):
                 // bpf_skb_adjust_room(skb, +IPV6_LEN, BPF_ADJ_ROOM_MAC, 0) inserts IPV6_LEN bytes
                 // immediately AFTER the L2 (MAC) header, i.e. between the inner Ethernet and the
@@ -310,6 +318,10 @@ pub fn tc_guest_egress_v6(ctx: TcContext) -> i32 {
 /// packet pointer is cast/stored across the boundary).
 #[inline(never)]
 fn encap_v6_egress(ctx: &TcContext, ifindex: u32, e: &flowplane_core::encap::EncapParams) -> i32 {
+    // Per-packet FIB nexthop (see fib_override / the v4 arm). Mutable local copy of the params.
+    let mut e = *e;
+    crate::encap::fib_override(ctx.skb.skb as *mut core::ffi::c_void, &mut e);
+    let e = &e;
     if ctx
         .adjust_room(crate::parse::IPV6_LEN as i32, BPF_ADJ_ROOM_MAC, 0)
         .is_err()

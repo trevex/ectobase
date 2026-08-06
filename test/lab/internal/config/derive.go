@@ -26,7 +26,10 @@ type DerivedNode struct {
 	PortSeq      int    // 1-based across ALL clusters (switch host-port index + BGP router-id)
 	Identity     string // fd00:cafe:<h>::<index>/128 (dummy0, GoBGP-advertised)
 	IdentityAddr string // fd00:cafe:<h>::<index> (bare, for BGPPeerConfig routeSource)
-	RA64         string // fd00:db8:0:<portSeq>::/64 (switch RA on this node's ports)
+	NodeNet64    string // fd00:cafe:<h>::/64 (the node's underlay pool; the ToR originates it into
+	// BGP with a recursive nexthop = IdentityAddr so guest-endpoint underlays in its upper half are
+	// fabric-routable — Talos native GoBGP can only advertise host routes, so the /64 is switch-side)
+	RA64 string // fd00:db8:0:<portSeq>::/64 (switch RA on this node's ports)
 }
 
 // hash48 maps a cluster name to a stable 16-bit group in fd00:cafe:<h>::/48.
@@ -62,6 +65,7 @@ func (c *Config) derive() {
 				PortSeq:      port,
 				Identity:     fmt.Sprintf("fd00:cafe:%x::%d/128", h, i),
 				IdentityAddr: fmt.Sprintf("fd00:cafe:%x::%d", h, i),
+				NodeNet64:    fmt.Sprintf("fd00:cafe:%x::/64", h),
 				RA64:         fmt.Sprintf("fd00:db8:0:%d::/64", port),
 			})
 		}
