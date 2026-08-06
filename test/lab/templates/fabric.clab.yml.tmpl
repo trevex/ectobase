@@ -1,0 +1,140 @@
+# Generated from templates/fabric.clab.yml.tmpl — do not edit by hand.
+name: {{ .Name }}
+
+mgmt:
+  network: {{ .Name }}-mgmt
+  ipv4-subnet: 172.20.20.0/24
+  ipv6-subnet: 3fff:172:20:20::/64
+
+topology:
+  defaults:
+    env:
+      TZ: UTC
+
+  nodes:
+    edge1:
+      kind: vyosnetworks_vyos
+      image: {{ index .Images "vyos" }}
+      startup-config: vyos/edge1.boot
+      enforce-startup-config: true
+      sysctls: {net.ipv6.conf.all.forwarding: 1}
+    edge2:
+      kind: vyosnetworks_vyos
+      image: {{ index .Images "vyos" }}
+      startup-config: vyos/edge2.boot
+      enforce-startup-config: true
+      sysctls: {net.ipv6.conf.all.forwarding: 1}
+
+    nat64-1:
+      kind: linux
+      image: {{ index .Images "tayga" }}
+      cap-add: ["NET_ADMIN"]
+      devices: ["/dev/net/tun"]
+      env:
+        V6_ADDR: {{ .TaygaNet }}:1::2/64
+        V6_GW: {{ .TaygaNet }}:1::1
+        WAN_ADDR: 172.29.0.21/24
+        WAN_GW: {{ .WanGwV4 }}
+        POOL: 172.29.64.0/24
+        POOL_ADDR: 172.29.64.1
+    nat64-2:
+      kind: linux
+      image: {{ index .Images "tayga" }}
+      cap-add: ["NET_ADMIN"]
+      devices: ["/dev/net/tun"]
+      env:
+        V6_ADDR: {{ .TaygaNet }}:2::2/64
+        V6_GW: {{ .TaygaNet }}:2::1
+        WAN_ADDR: 172.29.0.22/24
+        WAN_GW: {{ .WanGwV4 }}
+        POOL: 172.29.65.0/24
+        POOL_ADDR: 172.29.65.1
+
+    sw1:
+      kind: vyosnetworks_vyos
+      image: {{ index .Images "vyos" }}
+      startup-config: vyos/sw1.boot
+      enforce-startup-config: true
+      sysctls: {net.ipv6.conf.all.forwarding: 1}
+    sw2:
+      kind: vyosnetworks_vyos
+      image: {{ index .Images "vyos" }}
+      startup-config: vyos/sw2.boot
+      enforce-startup-config: true
+      sysctls: {net.ipv6.conf.all.forwarding: 1}
+
+{{- range $n := .Nodes }}
+    {{ $n.Cluster }}-{{ $n.Index }}:
+      kind: linux
+      image: {{ index $.Images "talos" }}
+      # containerlab runs every node privileged, so Talos boots in container mode
+      # with a writable rootfs; it reads its machine config from USERDATA. Talos'
+      # SetupSharedFilesystems marks /var, /etc/cni and /run MS_SHARED, which needs
+      # them to be real mount points (containerlab has no tmpfs key), so we bind
+      # per-node dirs. They live on disk under build/<name>/mounts — a bind is a
+      # mount point regardless of backing store, so this keeps /var off RAM.
+      env:
+        PLATFORM: container
+      env-files: [talos/{{ $n.Cluster }}-{{ $n.Index }}.env]
+      binds:
+        - mounts/{{ $n.Cluster }}-{{ $n.Index }}/run:/run
+        - mounts/{{ $n.Cluster }}-{{ $n.Index }}/var:/var
+        - mounts/{{ $n.Cluster }}-{{ $n.Index }}/cni:/etc/cni
+        - /usr/lib/modules:/usr/lib/modules:ro
+      sysctls:
+        net.ipv6.conf.all.disable_ipv6: "0"
+{{- end }}
+    wan:
+      kind: linux
+      image: {{ index .Images "wan" }}
+      # wan-simulator:latest is mutable and rebuilt often; always re-pull so a
+      # deploy never reuses a stale cached image (the stable node images keep
+      # clab's IfNotPresent default).
+      image-pull-policy: Always
+      cap-add: ["NET_ADMIN"]
+      env:
+        WAN_V4_ADDR: {{ .Wan.V4Addr }}
+        WAN_V6_ADDR: {{ .Wan.V6Addr }}
+        WAN_MASQ_V4: "{{ join " " .Wan.MasqV4 }}"
+        WAN_MASQ_V6: "{{ join " " .Wan.MasqV6 }}"
+        WAN_ROUTES: "{{ range $i, $r := .Wan.Routes }}{{ if $i }};{{ end }}{{ $r.Prefix }} {{ join "," $r.NextHops }}{{ end }}"
+
+    registry:
+      kind: linux
+      image: {{ index .Images "registry" }}
+      # Persistent pull-through + push-local mirror. The cache bind + the node's
+      # fabric address/config are finalized in Task 13 (registry) + Task 16 (up);
+      # a host-path cache dir is used because clab binds cannot name docker volumes.
+      binds:
+        - registry/config.yml:/etc/distribution/config.yml
+        - registry-cache:/var/lib/registry
+
+  links:
+    - endpoints: ["edge1:eth1", "sw1:eth1"]
+      mtu: 1500
+    - endpoints: ["edge1:eth2", "sw2:eth1"]
+      mtu: 1500
+    - endpoints: ["edge2:eth1", "sw1:eth2"]
+      mtu: 1500
+    - endpoints: ["edge2:eth2", "sw2:eth2"]
+      mtu: 1500
+{{- range $n := .Nodes }}
+    - endpoints: ["{{ $n.Cluster }}-{{ $n.Index }}:eth1", "sw1:eth{{ add 2 $n.PortSeq }}"]
+      mtu: 1500
+    - endpoints: ["{{ $n.Cluster }}-{{ $n.Index }}:eth2", "sw2:eth{{ add 2 $n.PortSeq }}"]
+      mtu: 1500
+{{- end }}
+    - endpoints: ["edge1:eth3", "wan:eth1"]
+      mtu: 1500
+    - endpoints: ["edge2:eth3", "wan:eth2"]
+      mtu: 1500
+    - endpoints: ["edge1:eth4", "nat64-1:eth1"]
+      mtu: 1500
+    - endpoints: ["edge2:eth4", "nat64-2:eth1"]
+      mtu: 1500
+    - endpoints: ["nat64-1:eth2", "wan:eth3"]
+      mtu: 1500
+    - endpoints: ["nat64-2:eth2", "wan:eth4"]
+      mtu: 1500
+    - endpoints: ["registry:eth1", "wan:eth5"]
+      mtu: 1500
