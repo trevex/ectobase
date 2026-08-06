@@ -20,7 +20,12 @@ const (
 	NodeAggr     = "fd00:cafe::/32"       // aggregate of every cluster's /48 node identities (fd00:cafe:<h>::/48)
 	RAAggr       = "fd00:db8::/32"        // aggregate of every switch RA /64
 	LoopAggr     = "fd00:ffff::/32"       // aggregate of the edge loopbacks
+	RegistryAddr = "fd00:29::5"           // registry node's address on the WAN segment (fd00:29::/64)
+	RegistryPort = "5000"                 // registry:2 default listen port
 )
+
+// RegistryEndpoint is the in-fabric mirror target the Talos nodes point at.
+var RegistryEndpoint = "http://[" + RegistryAddr + "]:" + RegistryPort
 
 // View is the template data for all topology templates.
 type View struct {

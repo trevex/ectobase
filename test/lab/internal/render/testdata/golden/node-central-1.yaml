@@ -1,0 +1,8 @@
+machine:
+  network:
+    hostname: central-1
+    interfaces:
+      - interface: dummy0
+        dummy: true
+        addresses:
+          - fd00:cafe:f55a::1/128

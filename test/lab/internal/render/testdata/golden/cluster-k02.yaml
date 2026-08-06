@@ -1,0 +1,72 @@
+apiVersion: v1alpha1
+kind: KubeNetworkConfig
+podSubnets:
+  - fd00:244:1914::/56
+serviceSubnets:
+  - fd00:96:1914::/108
+---
+apiVersion: v1alpha1
+kind: KubeNodeConfig
+nodeIP:
+  validSubnets:
+    - fd00:cafe:1914::/64
+---
+apiVersion: v1alpha1
+kind: ResolverConfig
+nameservers:
+  - address: fd00:ffff::e1
+  - address: fd00:ffff::e2
+---
+# Cilium replaces kube-proxy (kubeProxyReplacement), so disable Talos' kube-proxy.
+apiVersion: v1alpha1
+kind: KubeProxyConfig
+enabled: false
+---
+cluster:
+  etcd:
+    advertisedSubnets:
+      - fd00:cafe:1914::/64
+    extraArgs:
+      max-learners: "3"
+machine:
+  # Pull-through + push-local mirror on the fabric: every upstream resolves to the
+  # in-fabric registry so pulls stay node->fabric->registry (finalized in Task 13/16).
+  registries:
+    mirrors:
+      docker.io:
+        endpoints:
+          - http://[fd00:29::5]:5000
+      ghcr.io:
+        endpoints:
+          - http://[fd00:29::5]:5000
+  # Health-gated anycast API VIP: a per-node static pod holds vip0 only while the
+  # local apiserver /healthz is ok; GoBGP advertises vip0 (see BGPPeerConfig), so an
+  # unhealthy node withdraws itself from the anycast set instead of black-holing.
+  pods:
+    - apiVersion: v1
+      kind: Pod
+      metadata:
+        name: api-vip
+        namespace: kube-system
+      spec:
+        hostNetwork: true
+        containers:
+          - name: agent
+            image: alpine:3
+            securityContext:
+              capabilities:
+                add: ["NET_ADMIN"]
+            command: ["/bin/sh", "-c"]
+            args:
+              - |
+                ip link add vip0 type dummy 2>/dev/null || true
+                ip link set vip0 up
+                vip=fd00:cafe:1914:1::1/128
+                while :; do
+                  if wget -q -T2 --no-check-certificate -O- https://127.0.0.1:6443/healthz 2>/dev/null | grep -qx ok; then
+                    ip addr add "$vip" dev vip0 2>/dev/null || true
+                  else
+                    ip addr del "$vip" dev vip0 2>/dev/null || true
+                  fi
+                  sleep 2
+                done
