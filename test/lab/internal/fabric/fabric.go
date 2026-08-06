@@ -32,6 +32,10 @@ type View struct {
 	Cfg   *config.Config
 	Nodes []config.DerivedNode // flattened across clusters, in cluster-declaration order (PortSeq ascending)
 	Wan   Wan
+	// ModulesDir is the host kernel-modules dir bind-mounted into the Talos nodes.
+	// Build defaults it to /usr/lib/modules (golden-stable); topology.Render
+	// overrides it with the host's real path (NixOS keeps modules elsewhere).
+	ModulesDir string
 }
 
 type Wan struct {
@@ -73,7 +77,7 @@ func (v *View) LoopAggr() string { return LoopAggr }
 // WAN egress (masquerade the fabric aggregates out the uplink; ECMP return routes
 // back via both edges on the WAN segment).
 func Build(cfg *config.Config) *View {
-	v := &View{Cfg: cfg}
+	v := &View{Cfg: cfg, ModulesDir: "/usr/lib/modules"}
 	for _, cl := range cfg.Fabric.Clusters { // ordered slice → deterministic
 		v.Nodes = append(v.Nodes, cfg.Derived.Clusters[cl.Name].Nodes...)
 	}

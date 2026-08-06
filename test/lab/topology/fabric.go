@@ -34,6 +34,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/trevex/ectobase/test/lab/internal/clab"
 	"github.com/trevex/ectobase/test/lab/internal/config"
@@ -95,6 +96,7 @@ func (p paths) ciliumValues(cluster string) string {
 func Render(ctx context.Context, cfg *config.Config) error {
 	p := buildPaths(cfg)
 	v := fabric.Build(cfg)
+	v.ModulesDir = detectModulesDir()
 
 	for _, dir := range []string{p.build, p.vyos, p.talos, p.mounts, p.k8s, p.reg} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -296,4 +298,27 @@ func Down(ctx context.Context, cfg *config.Config, purge bool) error {
 	}
 	slog.Info("lab down (registry cache preserved)", "build", p.build)
 	return nil
+}
+
+// detectModulesDir returns the host kernel-modules parent dir for the running
+// kernel (bind-mounted into the Talos container nodes). Standard on most distros
+// is /usr/lib/modules or /lib/modules; NixOS keeps them under /run/booted-system.
+// Falls back to /usr/lib/modules (the container's own expected path) if none hold
+// the running kernel — clab will then error clearly on the missing bind.
+func detectModulesDir() string {
+	rel, _ := os.ReadFile("/proc/sys/kernel/osrelease")
+	kver := strings.TrimSpace(string(rel))
+	for _, cand := range []string{
+		"/usr/lib/modules",
+		"/lib/modules",
+		"/run/booted-system/kernel-modules/lib/modules",
+		"/run/current-system/kernel-modules/lib/modules",
+	} {
+		if kver != "" {
+			if st, err := os.Stat(filepath.Join(cand, kver)); err == nil && st.IsDir() {
+				return cand
+			}
+		}
+	}
+	return "/usr/lib/modules"
 }

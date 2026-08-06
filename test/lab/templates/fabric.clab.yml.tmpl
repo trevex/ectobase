@@ -80,7 +80,7 @@ topology:
         - mounts/{{ $n.Cluster }}-{{ $n.Index }}/run:/run
         - mounts/{{ $n.Cluster }}-{{ $n.Index }}/var:/var
         - mounts/{{ $n.Cluster }}-{{ $n.Index }}/cni:/etc/cni
-        - /usr/lib/modules:/usr/lib/modules:ro
+        - {{ $.ModulesDir }}:/usr/lib/modules:ro
       sysctls:
         net.ipv6.conf.all.disable_ipv6: "0"
 {{- end }}
