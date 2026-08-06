@@ -137,12 +137,16 @@ topology:
     registry:
       kind: linux
       image: registry:2
-      # Persistent pull-through + push-local mirror. The cache bind + the node's
-      # fabric address/config are finalized in Task 13 (registry) + Task 16 (up);
-      # a host-path cache dir is used because clab binds cannot name docker volumes.
+      # Persistent pull-through + push-local mirror. registry:2 reads its config
+      # from /etc/docker/registry/config.yml; the cache is a host-path dir (clab
+      # binds cannot name docker volumes). The exec entries give the registry its
+      # fabric address on the WAN segment after clab attaches the veths.
       binds:
-        - registry/config.yml:/etc/distribution/config.yml
+        - registry/config.yml:/etc/docker/registry/config.yml
         - registry-cache:/var/lib/registry
+      exec:
+        - ip -6 addr add fd00:29::5/64 dev eth1
+        - ip -6 route replace default via fd00:29::1
 
   links:
     - endpoints: ["edge1:eth1", "sw1:eth1"]

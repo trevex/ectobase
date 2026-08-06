@@ -3,6 +3,7 @@ package render
 
 import (
 	"bytes"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"text/template"
@@ -29,6 +30,28 @@ func File(templatePath, outPath string, data any) error {
 		return err
 	}
 	out, err := String(string(src), data)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(outPath, []byte(out), 0o644)
+}
+
+// StringFS renders a named template read from fsys to a string.
+func StringFS(fsys fs.FS, templatePath string, data any) (string, error) {
+	src, err := fs.ReadFile(fsys, templatePath)
+	if err != nil {
+		return "", err
+	}
+	return String(string(src), data)
+}
+
+// FileFS renders a template read from fsys into outPath (creating parent dirs).
+// It lets the compiled binary render from embedded templates independent of cwd.
+func FileFS(fsys fs.FS, templatePath, outPath string, data any) error {
+	out, err := StringFS(fsys, templatePath, data)
 	if err != nil {
 		return err
 	}

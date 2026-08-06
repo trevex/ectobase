@@ -1,0 +1,8 @@
+// Package templates embeds the lab's render templates so the compiled `lab`
+// binary carries them (runnable from any cwd).
+package templates
+
+import "embed"
+
+//go:embed fabric.clab.yml.tmpl vyos/*.tmpl talos/*.tmpl k8s/*.tmpl registry/*.tmpl
+var FS embed.FS

@@ -59,6 +59,7 @@ func (v *View) RAPrefix() string     { return RAPrefix }
 func (v *View) EdgeLoopback() string { return EdgeLoopback }
 func (v *View) DNSUpstream() string  { return DNSUpstream }
 func (v *View) WanGwV4() string      { return WanGwV4 }
+func (v *View) RegistryAddr() string { return RegistryAddr }
 
 // AS + aggregate accessors the VyOS templates reference.
 func (v *View) ASEdge() int      { return v.Cfg.Fabric.AS.Edge }

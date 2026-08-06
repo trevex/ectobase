@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -28,26 +29,39 @@ func (r *recorder) run(ctx context.Context, name string, args ...string) error {
 }
 
 func TestEnsureCache(t *testing.T) {
-	rec := &recorder{}
-	reg := &Registry{Host: "[fd00:29::5]:5000", Run: rec.run}
-	if err := reg.EnsureCache(context.Background()); err != nil {
+	build := t.TempDir()
+	if err := EnsureCache(context.Background(), build); err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{{"docker", "volume", "create", CacheVolume}}
-	if !reflect.DeepEqual(rec.calls, want) {
-		t.Fatalf("got %v want %v", rec.calls, want)
+	dir := filepath.Join(build, CacheDirName)
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("cache dir not created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("%s is not a directory", dir)
+	}
+	// Idempotent: a second call must not error.
+	if err := EnsureCache(context.Background(), build); err != nil {
+		t.Fatalf("second EnsureCache: %v", err)
 	}
 }
 
-func TestPurge(t *testing.T) {
-	rec := &recorder{}
-	reg := &Registry{Host: "[fd00:29::5]:5000", Run: rec.run}
-	if err := reg.Purge(context.Background()); err != nil {
+func TestPurgeCache(t *testing.T) {
+	build := t.TempDir()
+	dir := filepath.Join(build, CacheDirName)
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{{"docker", "volume", "rm", CacheVolume}}
-	if !reflect.DeepEqual(rec.calls, want) {
-		t.Fatalf("got %v want %v", rec.calls, want)
+	if err := PurgeCache(build); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("cache dir still present after purge: %v", err)
+	}
+	// Idempotent: purging an absent dir is not an error.
+	if err := PurgeCache(build); err != nil {
+		t.Fatalf("second PurgeCache: %v", err)
 	}
 }
 

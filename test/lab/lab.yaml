@@ -1,0 +1,17 @@
+name: ectobase
+images:
+  talos:    ghcr.io/trevex/ectobase/talos:container
+  vyos:     ghcr.io/trevex/ectobase/vyos:clab
+  tayga:    ghcr.io/trevex/ectobase/tayga:latest
+  wan:      ghcr.io/trevex/ectobase/wan:latest
+  registry: registry:2
+fabric:
+  as: { edge: 65000, switch: 65010, host: 65100 }
+  nat64Prefix: 64:ff9b::/96
+  registry:
+    upstreams: [docker.io, ghcr.io, quay.io, registry.k8s.io, gcr.io]
+    push: [flowplane, netplane, cni, central-apiserver, central-controller, central-broker]
+  clusters:
+    - { name: central, nodes: 1 }
+    - { name: k02, nodes: 1 }
+    - { name: k03, nodes: 1 }
