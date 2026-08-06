@@ -290,10 +290,75 @@ func Up(ctx context.Context, cfg *config.Config) error {
 	return nil
 }
 
-// deployEctobase deploys the ectobase substrate onto the clusters. Stub until T17.
-func deployEctobase(_ context.Context, _ *config.Config) error {
-	slog.Info("ectobase deploy: TODO T17")
-	return nil
+// Deploy runs ONLY the ectobase substrate deploy against an already-up fabric
+// (all cluster kubeconfigs must already exist under build/<name>/). It is the
+// `lab deploy` entry point, so the deploy can be re-run while iterating without a
+// full re-up.
+func Deploy(ctx context.Context, cfg *config.Config) error {
+	return deployEctobase(ctx, cfg)
+}
+
+// centralCluster is the cluster that hosts the central aggregated apiserver +
+// controller + reflector. Compute clusters run the ectobase chart with a broker.
+const centralCluster = "central"
+
+// deployEctobase builds the flat EctobaseSpec from cfg + the build-tree paths and
+// deploys the ectobase substrate onto the clusters.
+func deployEctobase(ctx context.Context, cfg *config.Config) error {
+	root, err := repoRoot()
+	if err != nil {
+		return fmt.Errorf("locate repo root: %w", err)
+	}
+	dc, ok := cfg.Derived.Clusters[centralCluster]
+	if !ok {
+		return fmt.Errorf("no cluster named %q in the config (need a central cluster for the apiserver + reflector)", centralCluster)
+	}
+	if len(dc.Nodes) == 0 {
+		return fmt.Errorf("central cluster %q has no nodes", centralCluster)
+	}
+
+	p := buildPaths(cfg)
+	var compute []deploy.ComputeCluster
+	for _, cl := range cfg.Fabric.Clusters {
+		if cl.Name == centralCluster {
+			continue
+		}
+		compute = append(compute, deploy.ComputeCluster{
+			Name:       cl.Name,
+			Kubeconfig: p.clusterKubeconfig(cl.Name),
+		})
+	}
+
+	spec := deploy.EctobaseSpec{
+		RepoRoot:          root,
+		WorkDir:           filepath.Join(p.build, "deploy"),
+		CentralKubeconfig: p.clusterKubeconfig(centralCluster),
+		CentralAPIVip:     dc.APIVipAddr,
+		CentralIdentity:   dc.Nodes[0].IdentityAddr,
+		ChartPath:         filepath.Join(root, "deploy/charts/ectobase"),
+		NADCRDPath:        filepath.Join(root, "test/lab/deploy/nad-crd.yaml"),
+		Compute:           compute,
+	}
+	return deploy.Ectobase(ctx, spec)
+}
+
+// repoRoot walks up from the current working directory (the config dir, i.e.
+// test/lab) until it finds the dir containing go.work (the repo root).
+func repoRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("go.work not found walking up from %q", dir)
+		}
+		dir = parent
+	}
 }
 
 // fabricHostPrefix is the aggregate the host routes into the fabric: every

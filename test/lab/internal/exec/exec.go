@@ -104,6 +104,12 @@ func runStdin(ctx context.Context, stdin string, name string, args ...string) er
 	return err
 }
 
+// RunStdin executes name+args feeding stdin, streaming stdout/stderr to the
+// process's own (for e.g. `kubectl apply -f -`); wraps failures in *ExecError.
+func RunStdin(ctx context.Context, stdin string, name string, args ...string) error {
+	return runStdin(ctx, stdin, name, args...)
+}
+
 // OutputStdin runs name+args feeding stdin, returning stdout; wraps failures.
 func OutputStdin(ctx context.Context, stdin string, name string, args ...string) ([]byte, error) {
 	return exec1(ctx, stdin, true, false, name, args...)
