@@ -231,6 +231,15 @@ func Up(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("host fabric route: %w", err)
 	}
 
+	// Give the fabric real native-IPv6 internet: the wan masquerades fabric egress
+	// onto the clab mgmt subnet, which docker does NOT NAT66 to the host uplink, so
+	// the host must. (v4 dsts already work via the tayga NAT64 path; this covers
+	// dual-stack registries that resolve to a real AAAA.) Best-effort: a host with
+	// no native v6 uplink still gets v4/NAT64 egress.
+	if err := setupHostEgress(ctx); err != nil {
+		slog.Warn("host native-v6 egress setup failed (v4/NAT64 egress still works)", "err", err)
+	}
+
 	// Push local images best-effort: the registry container must be reachable on
 	// the fabric first, and a fresh checkout may not have built the :dev images.
 	reg := registry.New("[" + fabric.RegistryAddr + "]:" + fabric.RegistryPort)
@@ -309,6 +318,82 @@ func delHostFabricRoute(ctx context.Context) {
 	}
 }
 
+// detectV6Uplink returns the host interface carrying the default IPv6 route (the
+// real internet uplink the fabric masquerades onto), or "" if the host has none.
+func detectV6Uplink(ctx context.Context) string {
+	out, err := exec.OutputStr(ctx, "ip", "-6", "route", "show", "default")
+	if err != nil {
+		return ""
+	}
+	fields := strings.Fields(out)
+	for i, f := range fields {
+		if f == "dev" && i+1 < len(fields) {
+			return fields[i+1]
+		}
+	}
+	return ""
+}
+
+// setupHostEgress enables the host to forward + NAT66 the clab mgmt subnet onto
+// its real IPv6 uplink, so the wan's masqueraded native-v6 fabric egress reaches
+// the internet. Idempotent (rules are -C-guarded). No-op if the host has no v6
+// uplink (v4/NAT64 egress via tayga is unaffected).
+func setupHostEgress(ctx context.Context) error {
+	uplink := detectV6Uplink(ctx)
+	if uplink == "" {
+		slog.Info("no host IPv6 uplink; skipping native-v6 fabric egress (v4/NAT64 unaffected)")
+		return nil
+	}
+	slog.Info("enabling native-v6 fabric egress", "uplink", uplink, "subnet", fabric.MgmtV6Subnet)
+	if err := exec.Sudo(ctx, "sysctl", "-qw", "net.ipv6.conf.all.forwarding=1"); err != nil {
+		return err
+	}
+	rules := [][]string{
+		{"-t", "nat", "POSTROUTING", "-s", fabric.MgmtV6Subnet, "-o", uplink, "-j", "MASQUERADE"},
+		{"FORWARD", "-s", fabric.MgmtV6Subnet, "-o", uplink, "-j", "ACCEPT"},
+		{"FORWARD", "-d", fabric.MgmtV6Subnet, "-i", uplink, "-j", "ACCEPT"},
+	}
+	for _, r := range rules {
+		// -C to check, -I to add only if absent (idempotent).
+		check := insertAfterTable(append([]string{"ip6tables"}, r...), "-C")
+		if exec.Sudo(ctx, check...) == nil {
+			continue
+		}
+		add := insertAfterTable(append([]string{"ip6tables"}, r...), "-I")
+		if err := exec.Sudo(ctx, add...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// insertAfterTable splices the ip6tables op (-C/-I) after an optional "-t <table>"
+// prefix so both `ip6tables -t nat -C ...` and `ip6tables -C ...` form correctly.
+func insertAfterTable(argv []string, op string) []string {
+	// argv[0]=="ip6tables"; if argv[1]=="-t", op goes after argv[2].
+	if len(argv) > 2 && argv[1] == "-t" {
+		out := append([]string{argv[0], argv[1], argv[2], op}, argv[3:]...)
+		return out
+	}
+	return append([]string{argv[0], op}, argv[1:]...)
+}
+
+// teardownHostEgress removes the native-v6 egress rules (best-effort, on down).
+func teardownHostEgress(ctx context.Context) {
+	uplink := detectV6Uplink(ctx)
+	if uplink == "" {
+		return
+	}
+	dels := [][]string{
+		{"-t", "nat", "-D", "POSTROUTING", "-s", fabric.MgmtV6Subnet, "-o", uplink, "-j", "MASQUERADE"},
+		{"-D", "FORWARD", "-s", fabric.MgmtV6Subnet, "-o", uplink, "-j", "ACCEPT"},
+		{"-D", "FORWARD", "-d", fabric.MgmtV6Subnet, "-i", uplink, "-j", "ACCEPT"},
+	}
+	for _, d := range dels {
+		_ = exec.Sudo(ctx, append([]string{"ip6tables"}, d...)...)
+	}
+}
+
 // Down destroys the containerlab topology and removes build/<name>/ while
 // preserving the registry cache for a warm re-up. With purge, it removes the whole
 // build tree including the cache.
@@ -316,6 +401,7 @@ func Down(ctx context.Context, cfg *config.Config, purge bool) error {
 	p := buildPaths(cfg)
 
 	delHostFabricRoute(ctx)
+	teardownHostEgress(ctx)
 
 	c := clab.Clab{TopoFile: p.topo}
 	if err := c.Destroy(ctx); err != nil {

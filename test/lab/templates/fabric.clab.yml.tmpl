@@ -4,7 +4,7 @@ name: {{ .Name }}
 mgmt:
   network: {{ .Name }}-mgmt
   ipv4-subnet: 172.20.20.0/24
-  ipv6-subnet: 3fff:172:20:20::/64
+  ipv6-subnet: {{ .MgmtV6Subnet }}
 
 topology:
   defaults:

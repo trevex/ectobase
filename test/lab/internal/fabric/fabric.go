@@ -13,7 +13,8 @@ import (
 const (
 	TaygaNet     = "fd00:64"              // nat64 edge links: fd00:64:1::/64, fd00:64:2::/64
 	WanNet       = "fd00:29"              // WAN segment fd00:29::/64; wan ::1, edge1 ::11, edge2 ::12
-	RAPrefix     = "fd00:db8"             // switch RA /64s: fd00:db8:0:<portSeq>::/64 (matches DerivedNode.RA64)
+	RAPrefix     = "fd00:db8"             // switch RA /64s: fd00:db8:<SW>:<portSeq>::/64 (per-switch, symmetric return)
+	MgmtV6Subnet = "3fff:172:20:20::/64"  // clab mgmt docker network v6 subnet (host NAT66's it → real uplink)
 	EdgeLoopback = "fd00:ffff"            // edge DNS64 loopbacks: fd00:ffff::e1, fd00:ffff::e2
 	DNSUpstream  = "2606:4700:4700::1111" // DNS64 upstream
 	WanGwV4      = "172.29.0.1"           // wan bridge v4 gateway
@@ -64,6 +65,7 @@ func (v *View) EdgeLoopback() string { return EdgeLoopback }
 func (v *View) DNSUpstream() string  { return DNSUpstream }
 func (v *View) WanGwV4() string      { return WanGwV4 }
 func (v *View) RegistryAddr() string { return RegistryAddr }
+func (v *View) MgmtV6Subnet() string { return MgmtV6Subnet }
 
 // AS + aggregate accessors the VyOS templates reference.
 func (v *View) ASEdge() int      { return v.Cfg.Fabric.AS.Edge }
