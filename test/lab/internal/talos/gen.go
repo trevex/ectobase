@@ -6,12 +6,26 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/trevex/ectobase/test/lab/internal/config"
 	"github.com/trevex/ectobase/test/lab/internal/docstrip"
 	"github.com/trevex/ectobase/test/lab/internal/exec"
 )
+
+// cpTaint matches the control-plane NoSchedule taint entry `talosctl gen config`
+// emits in the KubeNodeConfig doc. A config-patch can't clear it (Talos's typed merge
+// unions map keys but keeps the base value; the legacy cluster.allowSchedulingOnControlPlanes
+// errors "already set" on v1.14), so we strip it post-gen — the lab's single
+// control-plane-only nodes must run every workload.
+var cpTaint = regexp.MustCompile(`taints:\n\s*node-role\.kubernetes\.io/control-plane: NoSchedule`)
+
+// stripControlPlaneTaint removes the control-plane NoSchedule taint from a generated
+// machine config, leaving an empty taints map, so the control-plane node is schedulable.
+func stripControlPlaneTaint(cfg []byte) []byte {
+	return cpTaint.ReplaceAll(cfg, []byte("taints: {}"))
+}
 
 // Userdata is the container USERDATA env value carrying a base64 machine config.
 func Userdata(machineConfig []byte) string {
@@ -79,6 +93,7 @@ func Gen(ctx context.Context, s GenSpec) error {
 	if err != nil {
 		return err
 	}
+	stripped = stripControlPlaneTaint(stripped)
 	if err := os.WriteFile(cpPath, stripped, 0o644); err != nil {
 		return err
 	}

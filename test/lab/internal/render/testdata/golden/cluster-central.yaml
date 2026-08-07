@@ -10,6 +10,12 @@ kind: KubeNodeConfig
 nodeIP:
   validSubnets:
     - fd00:cafe:f55a::/64
+# NOTE: the default control-plane NoSchedule taint (declared in this KubeNodeConfig doc
+# by `talosctl gen config`) is stripped post-gen in talos.Gen — a config-patch can't
+# clear it (the typed merge unions map keys but keeps the base value, and the legacy
+# cluster.allowSchedulingOnControlPlanes errors "already set" on Talos v1.14). These are
+# single control-plane-only clusters, so removing the taint makes the node schedulable
+# instead of tolerating it in every component.
 ---
 apiVersion: v1alpha1
 kind: ResolverConfig
@@ -23,11 +29,6 @@ kind: KubeProxyConfig
 enabled: false
 ---
 cluster:
-  # Single control-plane node per cluster — there are no workers, so the control-plane
-  # NoSchedule taint would leave every workload (ceph-csi, csi-addons, KubeVirt/CDI,
-  # the VMs) unschedulable. Tell Talos not to taint control planes so the whole cluster
-  # is schedulable, instead of tolerating the taint in every component.
-  allowSchedulingOnControlPlanes: true
   etcd:
     advertisedSubnets:
       - fd00:cafe:f55a::/64
