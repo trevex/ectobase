@@ -94,9 +94,9 @@ sudo -E bash test/scenario-restart.sh       # graceful datapath restart (crictl 
 hack/clab-down.sh
 ```
 
-### The Talos multi-cluster fabric (`test/lab`)
+### The multi-cluster fabric (`test/lab`)
 
-A newer, additive Go/cobra harness stands up a **multi-cluster Talos IPv6-BGP fabric on containerlab** (containers only) with **fabric-only egress** and a **local registry mirror**, then deploys the ectobase substrate (central + brokers) onto it. It coexists with the `hack/clab` kind fabric above (nothing there changes). See [`test/lab/README.md`](test/lab/README.md).
+A Go/cobra harness stands up a **multi-cluster IPv6-BGP fabric on containerlab with kind clusters** (kindnet CNI) — **fabric-only egress**, a **local registry mirror**, and optional **Ceph + the Tier-2 VM-reschedule gate** — then deploys the ectobase substrate (central + brokers) onto it. See [`test/lab/README.md`](test/lab/README.md).
 
 ```sh
 make lab-images                                # build the talos/vyos/tayga/wan images (first run)
