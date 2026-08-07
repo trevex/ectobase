@@ -220,7 +220,9 @@ func waitAggregatedAPI(ctx context.Context, kubeconfig string) error {
 	// in-fabric registry, start, and have its APIService become Available before the
 	// aggregated group is served.
 	slog.Info("waiting for the central aggregated API to serve")
-	return wait.WaitFor(ctx, 6*time.Minute, 3*time.Second, func() (bool, error) {
+	// 12m: a cold boot pulls central-apiserver over the in-fabric registry (slow) and
+	// the pod may restart once while kine/postgres settle — 6m was occasionally too short.
+	return wait.WaitFor(ctx, 12*time.Minute, 3*time.Second, func() (bool, error) {
 		err := exec.Run(ctx, "kubectl", "--kubeconfig", kubeconfig,
 			"get", "clusterpools.platform.ectobase.dev", "--request-timeout=5s")
 		return err == nil, err

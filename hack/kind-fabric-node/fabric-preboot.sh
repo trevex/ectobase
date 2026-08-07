@@ -32,6 +32,11 @@ NODEIP="${BASE}1"                                # fd00:db8:0:1::1
 # used to be a clab `exec`; the node owns it now).
 sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1 || true
 
+# Mount bpffs at /sys/fs/bpf so the flowplane dataplane can create its BPF pin dir
+# (/sys/fs/bpf/flowplane). Cilium used to mount this (its mount-bpf-fs init container);
+# with the kindnet CNI nothing does, so the node owns it. Idempotent.
+mountpoint -q /sys/fs/bpf 2>/dev/null || mount -t bpf bpf /sys/fs/bpf 2>/dev/null || true
+
 # NB: the k8s pod overlay is handled by Cilium in TUNNEL (VXLAN) mode — cross-node
 # pod traffic is encapsulated to the peer NODE IP (reachable via the underlay BGP),
 # so pod-CIDR routes NEVER enter this kernel FIB as `via <peer>` nor the underlay
