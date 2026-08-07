@@ -29,6 +29,19 @@ cluster:
     extraArgs:
       max-learners: "3"
 machine:
+  # Accept RA-installed default routes on BOTH fabric uplinks. The nodes forward
+  # (IPv6 forwarding on, for the guest<->fabric datapath), and with forwarding on the
+  # kernel installs an RA default only when accept_ra=2 (=1 accepts the RA for SLAAC
+  # but drops the default). Without this pin the value is inconsistent per node/iface
+  # (kernel/bring-up quirk demotes some uplinks to 1), so a node could end up with no
+  # RA default and fall back to the GoBGP-learned ::/0 — both are fabric egress, but
+  # this makes it deterministic: every node gets a fabric-preferred `proto ra` default
+  # (ECMP across eth1+eth2). Talos reconciles machine.sysctls, so the pin survives the
+  # demoter. (The overlay egress uses the BGP-installed remote /64s, not the default,
+  # so the default's provenance never affects it.)
+  sysctls:
+    net.ipv6.conf.eth1.accept_ra: "2"
+    net.ipv6.conf.eth2.accept_ra: "2"
 {{- if .Upstreams }}
   # Pull-through + push-local mirror on the fabric: every upstream resolves to the
   # in-fabric registry so pulls stay node->fabric->registry (finalized in Task 13/16).
