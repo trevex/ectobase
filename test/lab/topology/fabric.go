@@ -8,24 +8,14 @@
 //	build/<name>/
 //	  <name>.clab.yml                 fabric.clab.yml.tmpl
 //	  vyos/{edge1,edge2,sw1,sw2}.boot vyos .set → RenderBoot
-//	  talos/
-//	    <cluster>-<index>.env         per-node USERDATA (flat, matches clab bind)
-//	    <cluster>-<index>.yaml        per-node machine config
-//	    <cluster>-talosconfig         per-cluster talosconfig (Bootstrap)
-//	    <cluster>-secrets.yaml        per-cluster PKI
-//	    talosconfig, controlplane.yaml, cluster.yaml, node-*.yaml  (scratch)
-//	  mounts/<cluster>-<index>/{run,var,cni}
-//	  k8s/cilium-<cluster>.yaml       cilium-values.yaml.tmpl
+//	  kind/
+//	    <cluster>-kind.yaml           per-cluster kind Cluster config
+//	    <cluster>-<index>.prefix      per-node underlay /64 (extraMount → /etc/fabric/prefix)
+//	    <cluster>-uplinks             fabric BGP uplinks (extraMount → /etc/fabric/uplinks)
+//	    <cluster>-certs.d/            containerd registry-mirror hosts.toml (extraMount)
+//	  <cluster>.kubeconfig            collected from `kind get kubeconfig`
 //	  registry/config.yml             registry/config.yml.tmpl
 //	  registry-cache/                 persistent mirror cache (preserved on down)
-//
-// Per-cluster talosconfig wrinkle: `talosctl gen config` writes talosconfig +
-// controlplane.yaml into --output-dir. All clusters share the flat talos/ dir so
-// the per-node .env files land flat where the clab template expects them
-// (talos/<cluster>-<index>.env). Each cluster's Gen therefore overwrites the
-// scratch talosconfig; we copy it to talos/<cluster>-talosconfig right after each
-// cluster's Gen (secrets are already per-cluster via SecretsPath) so Bootstrap has
-// a distinct talosconfig per cluster.
 package topology
 
 import (
@@ -43,65 +33,41 @@ import (
 	"github.com/trevex/ectobase/test/lab/internal/fabric"
 	"github.com/trevex/ectobase/test/lab/internal/registry"
 	"github.com/trevex/ectobase/test/lab/internal/render"
-	"github.com/trevex/ectobase/test/lab/internal/talos"
 	"github.com/trevex/ectobase/test/lab/internal/vyos"
 	"github.com/trevex/ectobase/test/lab/templates"
 )
 
-// stripDocs are the machine-config doc kinds dropped from the generated
-// controlplane: HostnameConfig (talosctl v1.14 emits one that collides with our
-// machine.network.hostname → validate fails) and KubeFlannelCNIConfig (CNI=none,
-// Cilium installs the CNI).
-var stripDocs = []string{"HostnameConfig", "KubeFlannelCNIConfig"}
-
 // paths bundles the build-tree paths for one lab.
 type paths struct {
-	build  string // build/<name>
-	topo   string // build/<name>/<name>.clab.yml
-	vyos   string // build/<name>/vyos
-	talos  string // build/<name>/talos
-	mounts string // build/<name>/mounts
-	k8s    string // build/<name>/k8s
-	kind   string // build/<name>/kind (per-cluster kind Cluster configs + prefix/uplinks)
-	reg    string // build/<name>/registry
+	build string // build/<name>
+	topo  string // build/<name>/<name>.clab.yml
+	vyos  string // build/<name>/vyos
+	kind  string // build/<name>/kind (per-cluster kind Cluster configs + prefix/uplinks)
+	reg   string // build/<name>/registry
 }
 
 func buildPaths(cfg *config.Config) paths {
 	b := render.BuildDir(cfg.Name)
 	return paths{
-		build:  b,
-		topo:   filepath.Join(b, cfg.Name+".clab.yml"),
-		vyos:   filepath.Join(b, "vyos"),
-		talos:  filepath.Join(b, "talos"),
-		mounts: filepath.Join(b, "mounts"),
-		k8s:    filepath.Join(b, "k8s"),
-		kind:   filepath.Join(b, "kind"),
-		reg:    filepath.Join(b, "registry"),
+		build: b,
+		topo:  filepath.Join(b, cfg.Name+".clab.yml"),
+		vyos:  filepath.Join(b, "vyos"),
+		kind:  filepath.Join(b, "kind"),
+		reg:   filepath.Join(b, "registry"),
 	}
-}
-
-// clusterTalosconfig is the per-cluster talosconfig Bootstrap uses.
-func (p paths) clusterTalosconfig(cluster string) string {
-	return filepath.Join(p.talos, cluster+"-talosconfig")
 }
 
 func (p paths) clusterKubeconfig(cluster string) string {
 	return filepath.Join(p.build, cluster+".kubeconfig")
 }
 
-func (p paths) ciliumValues(cluster string) string {
-	return filepath.Join(p.k8s, "cilium-"+cluster+".yaml")
-}
-
-// Render expands every template into build/<name>/ and runs talosctl gen per
-// cluster. It is idempotent: templates are re-rendered and per-cluster secrets are
-// reused when present.
+// Render expands every template into build/<name>/. It is idempotent: templates are
+// re-rendered on each call.
 func Render(ctx context.Context, cfg *config.Config) error {
 	p := buildPaths(cfg)
 	v := fabric.Build(cfg)
-	v.ModulesDir = detectModulesDir()
 
-	for _, dir := range []string{p.build, p.vyos, p.talos, p.mounts, p.k8s, p.kind, p.reg} {
+	for _, dir := range []string{p.build, p.vyos, p.kind, p.reg} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %w", dir, err)
 		}
@@ -260,54 +226,10 @@ func genKindCluster(cfg *config.Config, v *fabric.View, p paths, cluster string,
 		kindClusterCtx{RegistryHost: v.RegistryHost(), Nodes: nodes})
 }
 
-// genCluster renders one cluster's Talos machine-config set and preserves its
-// talosconfig under a per-cluster name (see the package doc for the flat-dir
-// rationale).
-func genCluster(ctx context.Context, cfg *config.Config, v *fabric.View, p paths, cluster string, dc config.DerivedCluster) error {
-	clusterPatch, err := render.StringFS(templates.FS, "talos/cluster-patch.yaml.tmpl", talos.NewClusterCtx(v, cluster))
-	if err != nil {
-		return fmt.Errorf("render cluster patch: %w", err)
-	}
-	nodePatch := func(n config.DerivedNode) ([]byte, error) {
-		s, err := render.StringFS(templates.FS, "talos/node-patch.yaml.tmpl", talos.NewNodeCtx(v, n))
-		return []byte(s), err
-	}
-	peerConfig := func(n config.DerivedNode) ([]byte, error) {
-		s, err := render.StringFS(templates.FS, "talos/bgp-peer.yaml.tmpl", talos.NewNodeCtx(v, n))
-		return []byte(s), err
-	}
-	spec := talos.GenSpec{
-		Dir:          p.talos,
-		SecretsPath:  filepath.Join(p.talos, cluster+"-secrets.yaml"),
-		MountsDir:    p.mounts,
-		ClusterName:  cluster,
-		Endpoint:     fmt.Sprintf("https://[%s]:6443", dc.APIVipAddr),
-		K8sVersion:   "", // talosctl default
-		SANs:         []string{dc.APIVipAddr, "127.0.0.1"},
-		ClusterPatch: []byte(clusterPatch),
-		StripDocs:    stripDocs,
-		Nodes:        dc.Nodes,
-		NodePatch:    nodePatch,
-		PeerConfig:   peerConfig,
-	}
-	if err := talos.Gen(ctx, spec); err != nil {
-		return err
-	}
-	// Preserve this cluster's talosconfig before the next cluster's gen overwrites it.
-	tc, err := os.ReadFile(filepath.Join(p.talos, "talosconfig"))
-	if err != nil {
-		return fmt.Errorf("read talosconfig: %w", err)
-	}
-	if err := os.WriteFile(p.clusterTalosconfig(cluster), tc, 0o644); err != nil {
-		return fmt.Errorf("write per-cluster talosconfig: %w", err)
-	}
-	return nil
-}
-
-// Up renders the build tree, deploys the containerlab topology, pushes the local
-// :dev images into the in-fabric mirror, then per cluster bootstraps the Talos
-// control plane, installs Cilium, waits for Ready, and un-taints the control-plane
-// nodes. Finally it deploys the ectobase substrate (T17 stub for now).
+// Up renders the build tree, deploys the containerlab topology (the clab k8s-kind
+// nodes create the kind clusters with kindnet), pushes the local :dev images into
+// the in-fabric mirror, then per cluster collects the kind kubeconfig, waits for the
+// API + nodes Ready, and finally deploys the ectobase substrate.
 func Up(ctx context.Context, cfg *config.Config) error {
 	p := buildPaths(cfg)
 	if err := Render(ctx, cfg); err != nil {
@@ -769,27 +691,4 @@ func Down(ctx context.Context, cfg *config.Config, purge bool) error {
 	}
 	slog.Info("lab down (registry cache preserved)", "build", p.build)
 	return nil
-}
-
-// detectModulesDir returns the host kernel-modules parent dir for the running
-// kernel (bind-mounted into the Talos container nodes). Standard on most distros
-// is /usr/lib/modules or /lib/modules; NixOS keeps them under /run/booted-system.
-// Falls back to /usr/lib/modules (the container's own expected path) if none hold
-// the running kernel — clab will then error clearly on the missing bind.
-func detectModulesDir() string {
-	rel, _ := os.ReadFile("/proc/sys/kernel/osrelease")
-	kver := strings.TrimSpace(string(rel))
-	for _, cand := range []string{
-		"/usr/lib/modules",
-		"/lib/modules",
-		"/run/booted-system/kernel-modules/lib/modules",
-		"/run/current-system/kernel-modules/lib/modules",
-	} {
-		if kver != "" {
-			if st, err := os.Stat(filepath.Join(cand, kver)); err == nil && st.IsDir() {
-				return cand
-			}
-		}
-	}
-	return "/usr/lib/modules"
 }

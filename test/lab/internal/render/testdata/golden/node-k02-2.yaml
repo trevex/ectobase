@@ -1,8 +1,0 @@
-machine:
-  network:
-    hostname: k02-2
-    interfaces:
-      - interface: dummy0
-        dummy: true
-        addresses:
-          - fd00:cafe:1914::2/128

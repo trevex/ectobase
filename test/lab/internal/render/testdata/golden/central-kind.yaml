@@ -4,12 +4,13 @@ networking:
   ipFamily: ipv6
   # Use kind's default CNI (kindnet) + kube-proxy — NOT Cilium. The CNI here only
   # serves ordinary pods (the VM/overlay datapath is flowplane's, independent of the
-  # pod CNI); kindnet plain-MASQUERADEs pod egress to the node IP, which — with the
-  # fabric-preboot autoconf=0 (route source = the BGP-announced dummy0 identity) — is
-  # fabric-routable, so pods (e.g. the ceph-csi provisioner) reach the in-fabric mon.
-  # Cilium's per-egress-device SNAT couldn't source an address on the unnumbered fabric
-  # uplinks. kindnet's cross-node pod routes would break on the per-/64 fabric, so this
-  # assumes 1 node/cluster (the lab default + the Tier-2 gate); multi-node needs flannel.
+  # pod CNI); kindnet plain-MASQUERADEs pod egress to the per-packet route source (the
+  # egress uplink's RA-SLAAC addr, which the WAN masquerades back via the edges), so
+  # pods (e.g. the ceph-csi provisioner) reach the in-fabric mon symmetrically. Cilium
+  # couldn't masquerade at all on the unnumbered fabric uplinks (per-egress-device SNAT
+  # with no address to source from). kindnet's cross-node pod routes would break on the
+  # per-/64 fabric, so this assumes 1 node/cluster (the lab default + the Tier-2 gate);
+  # multi-node needs flannel.
 # Pull :dev + upstream images through the in-fabric registry mirror (fabric-parity
 # with the removed Talos machine.registries.mirrors). containerd 2.x: the mirror is
 # configured via config_path/hosts.toml (mounted at /etc/containerd/certs.d), NOT the

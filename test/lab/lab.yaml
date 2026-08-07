@@ -1,6 +1,5 @@
 name: ectobase
 images:
-  talos:    ghcr.io/trevex/ectobase/talos:container
   kindNode: ghcr.io/trevex/ectobase/kind-node-fabric:dev
   vyos:     ghcr.io/trevex/ectobase/vyos:clab
   tayga:    ghcr.io/trevex/ectobase/tayga:latest

@@ -1,8 +1,0 @@
-machine:
-  network:
-    hostname: {{ .Hostname }}
-    interfaces:
-      - interface: dummy0
-        dummy: true
-        addresses:
-          - {{ .Identity }}
