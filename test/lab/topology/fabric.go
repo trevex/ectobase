@@ -722,6 +722,30 @@ func writeKindKubeconfig(ctx context.Context, kindName, dst string) error {
 	return os.WriteFile(dst, out, 0o600)
 }
 
+// forceRemoveLingeringClab force-removes any clab-<labName>-* containers left
+// behind by a wedged `clab destroy` (docker "did not receive an exit event"). For
+// each, it kills the container-shim by container ID (pkill -9 -f <cid>) then
+// `docker rm -f`. Best-effort: errors are logged at debug and ignored.
+func forceRemoveLingeringClab(ctx context.Context, labName string) {
+	prefix := "clab-" + labName + "-"
+	out, err := exec.SudoOutput(ctx, "docker", "ps", "-aq", "--filter", "name="+prefix, "--format", "{{.Names}}")
+	if err != nil {
+		slog.Debug("list lingering clab containers", "err", err)
+		return
+	}
+	for _, name := range strings.Fields(string(out)) {
+		cid, err := exec.OutputStr(ctx, "docker", "inspect", "-f", "{{.Id}}", name)
+		if cid = strings.TrimSpace(cid); cid != "" && err == nil {
+			_ = exec.Sudo(ctx, "pkill", "-9", "-f", cid)
+		}
+		if err := exec.Sudo(ctx, "docker", "rm", "-f", name); err != nil {
+			slog.Debug("force-remove lingering clab container", "name", name, "err", err)
+		} else {
+			slog.Info("force-removed wedged clab container", "name", name)
+		}
+	}
+}
+
 // Down destroys the containerlab topology and removes build/<name>/ while
 // preserving the registry cache for a warm re-up. With purge, it removes the whole
 // build tree including the cache.
@@ -735,6 +759,12 @@ func Down(ctx context.Context, cfg *config.Config, purge bool) error {
 	if err := c.Destroy(ctx); err != nil {
 		slog.Warn("clab destroy (already down?)", "err", err)
 	}
+	// clab's VyOS nodes frequently wedge on destroy ("did not receive an exit
+	// event") and are left behind, which blocks the next `clab deploy` ("use
+	// --reconfigure"). Force-remove any lingering clab-<name>-* containers by
+	// killing their container-shim (the same recovery the Tier-2 gate uses for a
+	// zombied node) then `docker rm -f`. Best-effort.
+	forceRemoveLingeringClab(ctx, cfg.Name)
 
 	if purge {
 		slog.Info("purging build tree (including registry cache)", "build", p.build)
