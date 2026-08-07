@@ -14,6 +14,8 @@ fabric:
   registry:
     upstreams: [docker.io, ghcr.io, quay.io, registry.k8s.io, gcr.io]
     push: [flowplane, netplane, cni, central-apiserver, central-controller, central-broker]
+  ceph:
+    enabled: true
   clusters:
     - { name: central, nodes: 1 }
     - { name: k02, nodes: 1 }

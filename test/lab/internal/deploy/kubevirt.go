@@ -145,6 +145,22 @@ func PatchCentralCSIClusterID(ctx context.Context, r Runner, centralKubeconfig, 
 	return nil
 }
 
+// VMMaterializer applies the vm-materializer (SA + RBAC + Deployment in
+// ectobase-system) onto a compute cluster from config/deploy/vm-materializer.yaml.
+// The materializer turns a broker-synced CompiledVM into a KubeVirt VirtualMachine
+// (+ RBD DataVolume) — the compute-side half of the Tier-2 VM pipeline. It is NOT
+// in the ectobase Helm chart (only the flowplane NAD is), so `lab tier2` deploys it
+// here. Idempotent (kubectl apply). ectobase-system is already PSA-privileged from
+// the chart, so the materializer (a standard Deployment) schedules fine.
+func VMMaterializer(ctx context.Context, r Runner, kubeconfig, manifestPath string) error {
+	r = runnerOf(r)
+	slog.Info("deploying vm-materializer", "manifest", manifestPath)
+	if err := r.Run(ctx, "kubectl", "--kubeconfig", kubeconfig, "apply", "-f", manifestPath); err != nil {
+		return fmt.Errorf("apply vm-materializer: %w", err)
+	}
+	return nil
+}
+
 // csiClusterIDPatch finds the index of the `-csi-cluster-id=` arg in args and
 // composes the JSON6902 patch body that replaces it with `-csi-cluster-id=<fsid>`.
 // Pure (no I/O) so PatchCentralCSIClusterID's index-finding + patch composition is

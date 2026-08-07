@@ -373,18 +373,12 @@ func Ceph(ctx context.Context, cfg *config.Config, purge bool) error {
 	}
 
 	// Step 2: external ceph-csi-rbd on every cluster (central = fence executor +
-	// compute = attach). Values render under build/<name>/ceph/.
-	//
-	// Re-untaint each control-plane node first: `up` untainted every node, but Talos
-	// re-applies the control-plane NoSchedule taint over time, so by `lab ceph`
-	// (minutes later) the ceph-csi provisioner Deployment — which carries no
-	// control-plane toleration — sits Pending on these single-node clusters and
-	// helm --wait times out. Mirrors deploy.Ectobase's re-untaint.
+	// compute = attach). Values render under build/<name>/ceph/. The ceph-csi
+	// provisioner + csi-addons controller carry an explicit control-plane toleration
+	// (see cephCSIValues / CSIAddons), so they schedule on these single-node clusters
+	// regardless of when Talos re-applies the control-plane taint — no untaint needed.
 	cephValuesDir := filepath.Join(p.build, "ceph")
 	for _, c := range clusters {
-		if err := deploy.AllowSchedulingOnControlPlanes(ctx, c.Kubeconfig); err != nil {
-			return fmt.Errorf("cluster %s: untaint: %w", c.Name, err)
-		}
 		if err := deploy.CephCSI(ctx, nil, c.Kubeconfig, c.Name, cephValuesDir, params); err != nil {
 			return fmt.Errorf("cluster %s: ceph-csi: %w", c.Name, err)
 		}
@@ -431,14 +425,26 @@ func Tier2(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 
-	// KubeVirt + CDI on every compute cluster (central runs no VMs — it is the fence
-	// executor / provisioner only).
+	// The vm-materializer (CompiledVM -> KubeVirt VirtualMachine + RBD DataVolume) is
+	// the compute-side half of the Tier-2 VM pipeline. It is NOT in the ectobase Helm
+	// chart, so deploy it here from config/deploy/vm-materializer.yaml.
+	root, err := repoRoot()
+	if err != nil {
+		return fmt.Errorf("locate repo root: %w", err)
+	}
+	materializerManifest := filepath.Join(root, "config/deploy/vm-materializer.yaml")
+
+	// KubeVirt + CDI + vm-materializer on every compute cluster (central runs no VMs —
+	// it is the fence executor / provisioner only).
 	for _, cl := range cfg.Fabric.Clusters {
 		if cl.Name == centralCluster {
 			continue
 		}
 		if err := deploy.KubeVirtCDI(ctx, nil, p.clusterKubeconfig(cl.Name)); err != nil {
 			return fmt.Errorf("cluster %s: kubevirt+cdi: %w", cl.Name, err)
+		}
+		if err := deploy.VMMaterializer(ctx, nil, p.clusterKubeconfig(cl.Name), materializerManifest); err != nil {
+			return fmt.Errorf("cluster %s: vm-materializer: %w", cl.Name, err)
 		}
 	}
 
