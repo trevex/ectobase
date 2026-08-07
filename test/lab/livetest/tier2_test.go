@@ -132,8 +132,7 @@ func TestTier2Failover(t *testing.T) {
 		_, _ = exec.SudoOutput(context.Background(), "docker", "start", k02Ctr)
 	})
 
-	out, err := exec.SudoOutput(ctx, "docker", "kill", k02Ctr)
-	require.NoError(t, err, "docker kill %s: %s", k02Ctr, out)
+	require.NoError(t, hardKillNode(ctx, k02Ctr), "kill k02 node container %s", k02Ctr)
 	t.Logf("killed k02 node container %s", k02Ctr)
 
 	// --- Phase 7: fence asserted (central) ------------------------------------------
@@ -195,6 +194,25 @@ func TestTier2Failover(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// hardKillNode simulates a node failure by stopping its container. It tries
+// `docker kill` first; if that fails because the container's init has zombied
+// (these clab Talos nodes run no init to reap/forward signals — the daemon then
+// reports "PID is zombie and can not be killed"), it force-kills the container's
+// containerd-shim by container ID, which tears the container down all the same.
+// Recovery is a `docker start` in the caller's Cleanup.
+func hardKillNode(ctx context.Context, container string) error {
+	if _, err := exec.SudoOutput(ctx, "docker", "kill", container); err == nil {
+		return nil
+	}
+	cid, err := exec.OutputStr(ctx, "docker", "inspect", "-f", "{{.Id}}", container)
+	if err != nil {
+		return fmt.Errorf("inspect %s for shim kill: %w", container, err)
+	}
+	// Force-kill the shim (and anything else) for this container ID.
+	_, err = exec.SudoOutput(ctx, "pkill", "-9", "-f", strings.TrimSpace(cid))
+	return err
 }
 
 // expectVMCluster asserts the VirtualMachine spec.clusterName equals want.
