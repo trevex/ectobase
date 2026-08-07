@@ -194,7 +194,11 @@ func Render(ctx context.Context, cfg *config.Config) error {
 // kindClusterCtx is rendered per cluster; each node contributes a kindNodeCtx
 // whose PrefixPath/UplinksPath are ABSOLUTE (kind rejects relative extraMounts
 // hostPaths).
-type kindNodeCtx struct{ Role, Image, PrefixPath, UplinksPath string }
+type kindNodeCtx struct{ Role, Image, PrefixPath, UplinksPath, CertsDir string }
+
+// mirroredRegistries are the upstream registries the kind nodes pull through the
+// in-fabric registry mirror (containerd 2.x config_path/hosts.toml).
+var mirroredRegistries = []string{"ghcr.io", "quay.io", "docker.io", "registry.k8s.io", "gcr.io"}
 type kindClusterCtx struct {
 	RegistryHost string
 	Nodes        []kindNodeCtx
@@ -219,6 +223,22 @@ func genKindCluster(cfg *config.Config, v *fabric.View, p paths, cluster string,
 	}
 	uplinksPath := filepath.Join(absKind, uplinksName)
 
+	// containerd 2.x registry mirror: one hosts.toml per upstream registry under a
+	// certs.d dir mounted at /etc/containerd/certs.d. Each points the upstream at the
+	// in-fabric registry (pull-through cache) over http (skip_verify).
+	certsRel := cluster + "-certs.d"
+	for _, reg := range mirroredRegistries {
+		dir := filepath.Join(p.kind, certsRel, reg)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("mkdir certs.d %s: %w", reg, err)
+		}
+		hosts := fmt.Sprintf("[host.\"http://%s\"]\n  capabilities = [\"pull\", \"resolve\"]\n  skip_verify = true\n", v.RegistryHost())
+		if err := os.WriteFile(filepath.Join(dir, "hosts.toml"), []byte(hosts), 0o644); err != nil {
+			return fmt.Errorf("write hosts.toml %s: %w", reg, err)
+		}
+	}
+	certsDir := filepath.Join(absKind, certsRel)
+
 	nodes := make([]kindNodeCtx, 0, len(dc.Nodes))
 	for _, n := range dc.Nodes {
 		prefixName := fmt.Sprintf("%s-%d.prefix", n.Cluster, n.Index)
@@ -234,6 +254,7 @@ func genKindCluster(cfg *config.Config, v *fabric.View, p paths, cluster string,
 			Image:       v.Images()["kindNode"],
 			PrefixPath:  filepath.Join(absKind, prefixName),
 			UplinksPath: uplinksPath,
+			CertsDir:    certsDir,
 		})
 	}
 

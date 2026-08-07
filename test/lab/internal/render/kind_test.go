@@ -73,14 +73,15 @@ func TestKindClusterGolden(t *testing.T) {
 	const base = "/build/ectobase/kind"
 	data := struct {
 		RegistryHost string
-		Nodes        []struct{ Role, Image, PrefixPath, UplinksPath string }
+		Nodes        []struct{ Role, Image, PrefixPath, UplinksPath, CertsDir string }
 	}{
 		RegistryHost: view.RegistryHost(),
-		Nodes: []struct{ Role, Image, PrefixPath, UplinksPath string }{{
+		Nodes: []struct{ Role, Image, PrefixPath, UplinksPath, CertsDir string }{{
 			Role:        "control-plane",
 			Image:       view.Images()["kindNode"],
 			PrefixPath:  base + "/central-1.prefix",
 			UplinksPath: base + "/central-uplinks",
+			CertsDir:    base + "/central-certs.d",
 		}},
 	}
 	out, err := String(string(b), data)
@@ -112,8 +113,8 @@ func TestKindClusterGolden(t *testing.T) {
 		"image: ghcr.io/trevex/ectobase/kind-node-fabric:dev",
 		"containerPath: /etc/fabric/prefix",
 		"containerPath: /etc/fabric/uplinks",
-		`registry.mirrors."ghcr.io"`,
-		view.RegistryHost(),
+		"containerPath: /etc/containerd/certs.d",
+		`config_path = "/etc/containerd/certs.d"`,
 	} {
 		if !strings.Contains(out, w) {
 			t.Errorf("expected %q in rendered kind Cluster config", w)

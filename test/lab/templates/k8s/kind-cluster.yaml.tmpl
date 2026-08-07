@@ -5,19 +5,14 @@ networking:
   disableDefaultCNI: true
   kubeProxyMode: none
 # Pull :dev + upstream images through the in-fabric registry mirror (fabric-parity
-# with the removed Talos machine.registries.mirrors). {{ .RegistryHost }} = [fd00:29::5]:5000.
+# with the removed Talos machine.registries.mirrors). containerd 2.x: the mirror is
+# configured via config_path/hosts.toml (mounted at /etc/containerd/certs.d), NOT the
+# legacy inline registry.mirrors — inline mirrors corrupt the CRI plugin on containerd
+# v2 (kubelet: "unknown service runtime.v1.RuntimeService").
 containerdConfigPatches:
   - |-
-    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."ghcr.io"]
-      endpoint = ["http://{{ .RegistryHost }}"]
-    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."quay.io"]
-      endpoint = ["http://{{ .RegistryHost }}"]
-    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."docker.io"]
-      endpoint = ["http://{{ .RegistryHost }}"]
-    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."registry.k8s.io"]
-      endpoint = ["http://{{ .RegistryHost }}"]
-    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."gcr.io"]
-      endpoint = ["http://{{ .RegistryHost }}"]
+    [plugins."io.containerd.grpc.v1.cri".registry]
+      config_path = "/etc/containerd/certs.d"
 nodes:
 {{- range .Nodes }}
   - role: {{ .Role }}
@@ -28,5 +23,8 @@ nodes:
         readOnly: true
       - hostPath: {{ .UplinksPath }}
         containerPath: /etc/fabric/uplinks
+        readOnly: true
+      - hostPath: {{ .CertsDir }}
+        containerPath: /etc/containerd/certs.d
         readOnly: true
 {{- end }}
