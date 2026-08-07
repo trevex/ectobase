@@ -41,10 +41,16 @@ sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1 || true
 # fixes that, since kindnet adds the route unconditionally and treats the error as
 # fatal.) So preboot does NOT touch pod routing at all — Cilium owns it.
 
-# 1) The underlay /64 lives on dummy0 (next-hop-independent, up instantly — no BGP
-#    peer required for the address to exist, which is what kubelet needs at start).
+# 1) The node identity lives on dummy0 as a /128 (next-hop-independent, up instantly —
+#    no BGP peer required for the address to exist, which is what kubelet needs at
+#    start). It is a /128, NOT the /64: the /64 is ORIGINATED by the ToR (switch.set)
+#    with a recursive next-hop = this /128, so the node MUST advertise the /128 (below)
+#    for that recursion to resolve via the fabric. Advertising the /64 instead leaves
+#    the ToR's recursive next-hop unresolved → it falls back to the switch's mgmt
+#    default → the node is black-holed off the fabric. flowplane still infers the
+#    underlay /64 from this address (it is within --underlay-within fd00:cafe::/32).
 ip link show dummy0 >/dev/null 2>&1 || ip link add dummy0 type dummy
-ip -6 addr replace "${NODEIP}/${PLEN}" dev dummy0
+ip -6 addr replace "${NODEIP}/128" dev dummy0
 ip link set dummy0 up
 
 # 2) kubelet --node-ip = the fabric address, via KUBELET_EXTRA_ARGS (last wins).
@@ -64,6 +70,26 @@ printf 'KUBELET_EXTRA_ARGS=%s --node-ip=%s\n' "$extra" "$NODEIP" > "$KF"
 #    UPLINKS overridable via /etc/fabric/uplinks (space-separated); default eth1.
 UPLINKS="eth1"
 [ -r /etc/fabric/uplinks ] && UPLINKS="$(tr -d '\n' < /etc/fabric/uplinks)"
+
+# Fabric-only egress (the Talos accept_ra lesson): with forwarding=1 the kernel only
+# installs an RA-learned default when accept_ra=2 (accept_ra=1 accepts the prefix but
+# NOT the default). The fabric uplinks do NOT exist yet at preboot (clab attaches them
+# after `kind create`), so set the DEFAULT template (inherited by eth1/eth2 when clab
+# creates them) — plus any uplink that already exists — so the switch RA then gives the
+# node a fabric default (→ the in-fabric registry fd00:29::5 + NAT64 internet).
+sysctl -w net.ipv6.conf.default.accept_ra=2 >/dev/null 2>&1 || true
+for u in $UPLINKS; do
+  sysctl -w "net.ipv6.conf.${u}.accept_ra=2" >/dev/null 2>&1 || true
+done
+# Demote the docker mgmt default (eth0) below 1024 so the fabric RA default (metric
+# 1024) wins once it arrives, but mgmt stays a fallback for the pre-fabric kubeadm
+# image pulls. One-shot: docker sets this default once at container start.
+MGMTGW="$(ip -6 route show default dev eth0 2>/dev/null | awk '/via/{print $3; exit}')"
+if [ -n "${MGMTGW:-}" ]; then
+  ip -6 route del default via "$MGMTGW" dev eth0 2>/dev/null || true
+  ip -6 route add default via "$MGMTGW" dev eth0 metric 4096 2>/dev/null || true
+fi
+
 ROUTERID="10.0.2.$(printf '%s' "$BASE" | sed 's/.*:\([0-9a-f]*\)::$/\1/' | tr -cd '0-9')"
 [ -n "$ROUTERID" ] || ROUTERID="10.0.2.1"
 {
@@ -86,7 +112,10 @@ ROUTERID="10.0.2.$(printf '%s' "$BASE" | sed 's/.*:\([0-9a-f]*\)::$/\1/' | tr -c
   done
   echo " address-family ipv6 unicast"
   echo "  maximum-paths 64"
-  echo "  network ${PREFIX}"
+  # Advertise the node's /128 IDENTITY (dummy0), not the /64: the ToR ORIGINATES the
+  # /64 with a recursive next-hop = this /128 (see step 1). Endpoint underlays in the
+  # /64 upper half reach the node because the ToR routes the /64 → this /128 → here.
+  echo "  network ${NODEIP}/128"
   for u in $UPLINKS; do echo "  neighbor $u activate"; echo "  neighbor $u allowas-in 1"; done
   echo " exit-address-family"
 } > /etc/frr/frr.conf
