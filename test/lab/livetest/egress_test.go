@@ -59,7 +59,8 @@ func TestNAT64Egress(t *testing.T) {
 }
 
 // TestFabricOnlyEgress asserts egress prefers the fabric, not the docker mgmt
-// side-channel: the fabric defaults are `proto ra` at metric 1024, and the mgmt
+// side-channel: a fabric default (via the uplinks eth1/eth2 — from RA `proto ra`
+// or the node GoBGP's edge `::/0` `proto bgp`) sits at metric 1024, while the mgmt
 // default (via MgmtV6Gateway dev eth0) is demoted (not metric 1024, or absent).
 // Precisely: no default-route line matches BOTH `dev eth0` AND `metric 1024`.
 func TestFabricOnlyEgress(t *testing.T) {
@@ -93,13 +94,24 @@ func TestFabricOnlyEgress(t *testing.T) {
 					if strings.Contains(line, mgmtGw) && strings.Contains(line, "metric 1024") {
 						return fmt.Errorf("mgmt-gateway default is at fabric metric 1024: %q", line)
 					}
-					// The fabric-preferred defaults live at proto ra, metric 1024.
-					if strings.Contains(line, "proto ra") && strings.Contains(line, "metric 1024") {
+					// A fabric-preferred default is a metric-1024 default that is NOT via
+					// the mgmt iface (eth0). It may be installed from RA (`proto ra`, a
+					// single nexthop out one uplink) OR from the node's GoBGP learning the
+					// edge-originated `::/0` (`proto bgp`, ECMP across both uplinks) — both
+					// egress over the fabric. Which appears depends on the uplink's
+					// accept_ra vs forwarding: a metric-1024 RA default only installs when
+					// accept_ra=2 while forwarding is on, else the BGP default is the fabric
+					// lane (non-deterministic across nodes; nothing sets accept_ra). Accept
+					// either. (The `default proto bgp … metric 1024` header line carries the
+					// metric; its ECMP `nexthop … dev eth1/eth2` lines are separate.)
+					if strings.HasPrefix(line, "default") &&
+						strings.Contains(line, "metric 1024") &&
+						!strings.Contains(line, "dev eth0") {
 						faLane = true
 					}
 				}
 				if !faLane {
-					return fmt.Errorf("no fabric-preferred `proto ra` metric-1024 default installed:\n%s", routes)
+					return fmt.Errorf("no fabric-preferred metric-1024 default via the uplinks (proto ra or bgp):\n%s", routes)
 				}
 				return nil
 			})

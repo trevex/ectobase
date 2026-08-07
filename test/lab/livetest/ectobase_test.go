@@ -126,12 +126,6 @@ func TestCrossClusterFabricReachability(t *testing.T) {
 	}
 }
 
-// TestCrossClusterOverlayPing is a placeholder for the full encap-overlay
-// endpoint-attach ping: attaching an endpoint on each node's dataplane
-// (AttachInterface on 127.0.0.1:1337) and driving the
-// NetworkInterface -> CompiledNIC -> broker -> agent pipeline to an overlay ping.
-// That path is a live-iteration follow-up not yet automated on Talos, so this is
-// skipped rather than faked. See the livetest README / MEMORY for context.
-func TestCrossClusterOverlayPing(t *testing.T) {
-	t.Skip("overlay endpoint-attach ping: follow-up; see README")
-}
+// TestCrossClusterOverlayPing lives in overlay_test.go (the full encap-overlay
+// endpoint-attach ping through the real NetworkInterface -> CompiledNIC -> broker
+// -> agent -> dataplane pipeline).
