@@ -582,7 +582,6 @@ func deployEctobase(ctx context.Context, cfg *config.Config) error {
 		RepoRoot:          root,
 		WorkDir:           filepath.Join(p.build, "deploy"),
 		CentralKubeconfig: p.clusterKubeconfig(centralCluster),
-		CentralAPIVip:     dc.APIVipAddr,
 		CentralIdentity:   dc.Nodes[0].IdentityAddr,
 		ChartPath:         filepath.Join(root, "deploy/charts/ectobase"),
 		NADCRDPath:        filepath.Join(root, "test/lab/deploy/nad-crd.yaml"),

@@ -21,8 +21,7 @@ type EctobaseSpec struct {
 	RepoRoot          string           // repo root (dir containing go.work)
 	WorkDir           string           // build/<name>/deploy scratch dir (created if missing)
 	CentralKubeconfig string           // path to central's kubeconfig
-	CentralAPIVip     string           // bare v6, e.g. fd00:cafe:<h>:1::1 (broker's central server host)
-	CentralIdentity   string           // bare v6, e.g. fd00:cafe:<h>::1 (reflector host on the fabric)
+	CentralIdentity   string           // bare v6, e.g. fd00:cafe:<h>::1 (central's fabric address: the broker's central server host AND the reflector host)
 	ChartPath         string           // <repoRoot>/deploy/charts/ectobase
 	NADCRDPath        string           // NetworkAttachmentDefinition CRD manifest (abs or repo-relative)
 	UnderlayWithin    string           // node-underlay aggregate CIDR (fd00:cafe::/32) for flowplane's underlay filter
@@ -119,7 +118,7 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 	}
 	brokerKubeconfig := filepath.Join(s.WorkDir, "broker-central.kubeconfig")
 	if err := os.WriteFile(brokerKubeconfig,
-		[]byte(mintKubeconfig(s.CentralAPIVip, strings.TrimSpace(token))), 0o600); err != nil {
+		[]byte(mintKubeconfig(s.CentralIdentity, strings.TrimSpace(token))), 0o600); err != nil {
 		return fmt.Errorf("write broker kubeconfig: %w", err)
 	}
 
@@ -142,6 +141,15 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		}
 		if err := helmInstallEctobase(ctx, c.Kubeconfig, c.Name, s.ChartPath, s.CentralIdentity, s.UnderlayWithin); err != nil {
 			return fmt.Errorf("cluster %s: helm install ectobase: %w", c.Name, err)
+		}
+		// The broker mounts broker-central-kubeconfig as a volume, so an existing
+		// broker pod keeps the OLD kubeconfig across a re-`deploy` that rewrote the
+		// secret (helm won't roll it — the secret is created outside the chart). On a
+		// fresh up the broker starts after the secret so this is a no-op; on re-deploy
+		// it makes the broker pick up the current central address. Best-effort.
+		if err := exec.Run(ctx, "kubectl", "--kubeconfig", c.Kubeconfig, "-n", "ectobase-system",
+			"rollout", "restart", "deploy/central-broker"); err != nil {
+			slog.Debug("rollout restart central-broker", "cluster", c.Name, "err", err)
 		}
 	}
 
@@ -299,7 +307,7 @@ func poolField(ctx context.Context, kubeconfig, name, jsonpath string) (string, 
 // The bracketed-IPv6 server MUST be double-quoted: an unquoted https://[..]:6443
 // is a YAML flow sequence and fails to parse. TLS verify is skipped because
 // central's serving cert is self-signed.
-func mintKubeconfig(centralAPIVip, token string) string {
+func mintKubeconfig(centralHost, token string) string {
 	return fmt.Sprintf(`apiVersion: v1
 kind: Config
 clusters:
@@ -317,7 +325,7 @@ users:
 - name: ectobase-broker
   user:
     token: %s
-`, centralAPIVip, token)
+`, centralHost, token)
 }
 
 // clusterPoolsManifest renders one cluster-scoped ClusterPool per compute cluster

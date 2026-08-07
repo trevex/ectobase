@@ -52,18 +52,27 @@ fabric:
 		t.Errorf("rendered output differs from golden %s (run with -update to regenerate)", goldenPath)
 	}
 
-	// Structural assertions (independent of the byte-for-byte golden).
-	if !strings.Contains(s, "clusterPoolIPv6PodCIDRList") {
-		t.Errorf("expected clusterPoolIPv6PodCIDRList in rendered values")
+	// Structural assertions (independent of the byte-for-byte golden). The kind
+	// values use ipam.mode: kubernetes (kind allocates node podCIDRs), cni.exclusive
+	// false (Multus/KubeVirt coexistence), and route-source masquerade (pod→fabric
+	// /64 reachability). k8sServiceHost/Port are injected at install time (the kind
+	// API IP), NOT in the values — so 7445/KubePrism must be ABSENT.
+	if !strings.Contains(s, "mode: kubernetes") {
+		t.Errorf("expected ipam.mode: kubernetes in rendered values")
 	}
-	if !strings.Contains(s, "fd00:244:") {
-		t.Errorf("expected central pod subnet prefix fd00:244: in rendered values")
+	// k8sServiceHost/Port are injected at install time, so they must NOT be set as
+	// config lines here (a bare "k8sServiceHost:" / "k8sServicePort:" YAML key).
+	if strings.Contains(s, "\nk8sServiceHost:") || strings.Contains(s, "\nk8sServicePort:") {
+		t.Errorf("k8sServiceHost/Port must be injected at install, not set in the values")
+	}
+	if !strings.Contains(s, "cni:\n  exclusive: false") {
+		t.Errorf("expected cni.exclusive: false (Multus coexistence)")
+	}
+	if !strings.Contains(s, "enableMasqueradeRouteSource: true") {
+		t.Errorf("expected enableMasqueradeRouteSource: true")
 	}
 	if !strings.Contains(s, "kubeProxyReplacement: true") {
 		t.Errorf("expected kubeProxyReplacement: true")
-	}
-	if !strings.Contains(s, "k8sServicePort: 7445") {
-		t.Errorf("expected k8sServicePort: 7445")
 	}
 	if !strings.Contains(s, "tunnelProtocol: vxlan") {
 		t.Errorf("expected tunnelProtocol: vxlan")
