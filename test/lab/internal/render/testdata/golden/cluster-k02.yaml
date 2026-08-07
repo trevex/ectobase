@@ -23,6 +23,11 @@ kind: KubeProxyConfig
 enabled: false
 ---
 cluster:
+  # Single control-plane node per cluster — there are no workers, so the control-plane
+  # NoSchedule taint would leave every workload (ceph-csi, csi-addons, KubeVirt/CDI,
+  # the VMs) unschedulable. Tell Talos not to taint control planes so the whole cluster
+  # is schedulable, instead of tolerating the taint in every component.
+  allowSchedulingOnControlPlanes: true
   etcd:
     advertisedSubnets:
       - fd00:cafe:1914::/64

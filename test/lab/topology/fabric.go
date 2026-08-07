@@ -291,13 +291,9 @@ func Up(ctx context.Context, cfg *config.Config) error {
 		if err := deploy.WaitAPIServer(ctx, kubeconfig); err != nil {
 			return fmt.Errorf("cluster %s api server: %w", cl.Name, err)
 		}
-		// Untaint BEFORE installing Cilium: these are control-plane-only clusters,
-		// so the cilium-operator Deployment can't schedule (→ no pod CIDR → the
-		// agent never goes Ready → helm --wait times out) until the control-plane
-		// NoSchedule taint is gone.
-		if err := deploy.AllowSchedulingOnControlPlanes(ctx, kubeconfig); err != nil {
-			return fmt.Errorf("cluster %s untaint: %w", cl.Name, err)
-		}
+		// No untaint needed: cluster.allowSchedulingOnControlPlanes is set in the Talos
+		// config, so these control-plane-only nodes are never tainted and the
+		// cilium-operator (and every other workload) schedules on the single node.
 		if err := deploy.HelmInstall(ctx, kubeconfig, "cilium", deploy.CiliumChart,
 			deploy.CiliumRepo, deploy.CiliumVersion, p.ciliumValues(cl.Name)); err != nil {
 			return fmt.Errorf("cluster %s cilium: %w", cl.Name, err)

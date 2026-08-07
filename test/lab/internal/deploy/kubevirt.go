@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
+
+	"github.com/trevex/ectobase/test/lab/internal/wait"
 )
 
 // KubeVirt/CDI pins (port of hack/install-stack.sh). Bumping these is the single
@@ -72,15 +75,19 @@ func KubeVirtCDI(ctx context.Context, r Runner, kubeconfig string) error {
 	if err := labelNamespacePrivileged(ctx, r, kubeconfig, "kubevirt"); err != nil {
 		slog.Debug("label kubevirt ns privileged (ns not created yet?)", "err", err)
 	}
+	// Patch the CR (emulation + flowplane binding + control-plane tolerations) BEFORE
+	// waiting for Available: the workloads toleration is what lets the virt-handler DS
+	// target the tainted single node, without which the CR never goes Available. Retry
+	// briefly — the operator's validating webhook may not be serving the instant the CR
+	// is created.
+	slog.Info("configuring the KubeVirt CR (emulation, flowplane binding, tolerations)")
+	if err := retryPatch(ctx, r, kubeconfig, "kubevirt", "kubevirt", "kubevirt", kubevirtCRPatch()); err != nil {
+		return fmt.Errorf("patch kubevirt cr: %w", err)
+	}
 	slog.Info("waiting for KubeVirt to become Available (up to 10m)")
 	if err := r.Run(ctx, "kubectl", "--kubeconfig", kubeconfig, "-n", "kubevirt",
 		"wait", "kv/kubevirt", "--for=condition=Available", "--timeout=10m"); err != nil {
 		return fmt.Errorf("wait kubevirt Available: %w", err)
-	}
-	slog.Info("registering flowplane network binding on the KubeVirt CR")
-	if err := r.Run(ctx, "kubectl", "--kubeconfig", kubeconfig, "-n", "kubevirt",
-		"patch", "kubevirt", "kubevirt", "--type=merge", "-p", kubevirtCRPatch()); err != nil {
-		return fmt.Errorf("patch kubevirt cr: %w", err)
 	}
 
 	// --- CDI ---
@@ -102,6 +109,23 @@ func KubeVirtCDI(ctx context.Context, r Runner, kubeconfig string) error {
 
 	slog.Info("KubeVirt + CDI installed", "kubeconfig", kubeconfig)
 	return nil
+}
+
+// retryPatch merge-patches a namespaced resource, retrying for up to 2m: an operator's
+// validating webhook (KubeVirt/CDI) is often not yet serving the instant its CR is
+// created, so the first patch can transiently fail. Returns the last patch error on
+// timeout.
+func retryPatch(ctx context.Context, r Runner, kubeconfig, ns, resource, name, patch string) error {
+	var last error
+	werr := wait.WaitFor(ctx, 2*time.Minute, 5*time.Second, func() (bool, error) {
+		last = r.Run(ctx, "kubectl", "--kubeconfig", kubeconfig, "-n", ns,
+			"patch", resource, name, "--type=merge", "-p", patch)
+		return last == nil, nil
+	})
+	if werr != nil && last != nil {
+		return last
+	}
+	return werr
 }
 
 // labelNamespacePrivileged stamps ns with the PSA enforce=privileged label
