@@ -10,9 +10,11 @@ import (
 	"time"
 )
 
-// TestAPIVIPAnycast asserts each cluster's anycast API VIP is reachable and
-// serving: /readyz over the VIP returns ok, and the cluster's node reports Ready.
-func TestAPIVIPAnycast(t *testing.T) {
+// TestClusterAPIReady asserts each cluster's API server is reachable and serving
+// (/readyz returns ok via the collected kubeconfig) and its node reports Ready.
+// (The Talos anycast API VIP is gone on the kind substrate — kind clusters expose
+// the API on the host-published endpoint in their kubeconfig.)
+func TestClusterAPIReady(t *testing.T) {
 	cfg := loadConfig(t)
 	requireFabricUp(t, cfg)
 	ctx := context.Background()
@@ -23,7 +25,7 @@ func TestAPIVIPAnycast(t *testing.T) {
 			eventually(t, 2*time.Minute, 5*time.Second, func() error {
 				out, err := kubectl(ctx, cfg, cl.Name, "get", "--raw=/readyz")
 				if err != nil {
-					return fmt.Errorf("get --raw=/readyz on %s (API VIP unreachable?): %w\n%s", cl.Name, err, out)
+					return fmt.Errorf("get --raw=/readyz on %s (cluster API unreachable?): %w\n%s", cl.Name, err, out)
 				}
 				if !strings.Contains(out, "ok") {
 					return fmt.Errorf("readyz did not report ok on %s: %q", cl.Name, out)
