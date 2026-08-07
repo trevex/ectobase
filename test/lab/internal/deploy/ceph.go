@@ -143,10 +143,20 @@ func CephDemo(ctx context.Context, s CephDemoSpec) (CephParams, error) {
 		slog.Debug("rbd pool init (already init?)", "pool", pool, "err", err)
 	}
 
-	keyOut, err := ex("ceph", "auth", "get-or-create-key", "client.rbd",
-		"mon", "profile rbd", "osd", "profile rbd pool="+pool)
+	// mon caps: `profile rbd` lets the client blocklist (osd blocklist range ADD) so
+	// csi-addons can FENCE, but it does NOT permit `osd blocklist range rm` — the
+	// Tier-2 recovery UN-fence then fails EACCES and the blocklist entry leaks. The
+	// explicit `allow command "osd blocklist"` grants both add + rm.
+	const rbdMonCaps = `profile rbd, allow command "osd blocklist"`
+	rbdOSDCaps := "profile rbd pool=" + pool
+	keyOut, err := ex("ceph", "auth", "get-or-create-key", "client.rbd", "mon", rbdMonCaps, "osd", rbdOSDCaps)
 	if err != nil {
 		return CephParams{}, fmt.Errorf("ceph auth get-or-create-key client.rbd: %w", err)
+	}
+	// get-or-create-key does NOT update caps on an already-existing key; ensure the
+	// blocklist-rm cap is present even when the client pre-exists (idempotent re-runs).
+	if _, err := ex("ceph", "auth", "caps", "client.rbd", "mon", rbdMonCaps, "osd", rbdOSDCaps); err != nil {
+		return CephParams{}, fmt.Errorf("ceph auth caps client.rbd: %w", err)
 	}
 	fsidOut, err := ex("ceph", "fsid")
 	if err != nil {
