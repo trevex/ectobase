@@ -66,6 +66,15 @@ func (v *View) EdgeLoopback() string  { return EdgeLoopback }
 func (v *View) DNSUpstream() string   { return DNSUpstream }
 func (v *View) WanGwV4() string       { return WanGwV4 }
 func (v *View) RegistryAddr() string  { return RegistryAddr }
+
+// RegistryHost is the in-fabric registry as host:port (bracketed v6, no scheme) — the
+// kind containerd registry-mirror endpoint, the analog of the Talos mirror target.
+func (v *View) RegistryHost() string { return "[" + RegistryAddr + "]:" + RegistryPort }
+
+// NodeUplinks is the space-separated fabric uplink ifaces of a cluster node (the clab
+// links wire each node's eth1↔sw1 + eth2↔sw2). Written to /etc/fabric/uplinks for the
+// kind-node-fabric preboot's FRR eBGP + RA-default acceptance.
+func (v *View) NodeUplinks() string { return "eth1 eth2" }
 func (v *View) MgmtV6Subnet() string  { return MgmtV6Subnet }
 func (v *View) MgmtV6Gateway() string { return MgmtV6Gateway }
 
