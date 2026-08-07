@@ -79,16 +79,27 @@ topology:
       exec:
         - "ip -6 route del default via {{ .MgmtV6Gateway }} dev eth0"
 
-{{- range $n := .Nodes }}
-    {{ $n.Cluster }}-{{ $n.Index }}:
+    # --- kind clusters: one k8s-kind lifecycle node per cluster (clab runs `kind
+    # create`; the kind cluster is named after this node). The per-node kind
+    # containers (<cluster>-control-plane / -worker) are declared as ext-container
+    # nodes below and carry the fabric links — attaching links to the k8s-kind
+    # lifecycle node itself fails ("network namespace not available") since it owns
+    # no netns of its own. ---
+{{- range $c := .ClusterNames }}
+    {{ $c }}:
       kind: k8s-kind
-      startup-config: kind/{{ $n.Cluster }}-kind.yaml
+      startup-config: kind/{{ $c }}-kind.yaml
       extras:
         k8s_kind:
           deploy:
-            wait: 0s   # do NOT gate on control-plane Ready: disableDefaultCNI leaves the
-            # node NotReady until topology.Up installs Cilium after clab deploy. A non-zero
-            # wait times out here (node never Ready pre-CNI) and cascades to link-attach.
+            wait: 120s   # clab k8s-kind boot-marker scan timeout (NOT a node-Ready gate); must exceed the node preboot delay
+{{- end }}
+    # The kind-created node containers, as clab link endpoints. ext-container =
+    # attach to the already-existing container kind made; names MUST match kind's
+    # (<cluster>-control-plane / <cluster>-worker[N] — see DerivedNode.KindContainer).
+{{- range $n := .Nodes }}
+    {{ $n.KindContainer }}:
+      kind: ext-container
 {{- end }}
     wan:
       kind: linux
@@ -182,9 +193,9 @@ topology:
     - endpoints: ["edge2:eth2", "sw2:eth2"]
       mtu: 1500
 {{- range $n := .Nodes }}
-    - endpoints: ["{{ $n.Cluster }}-{{ $n.Index }}:eth1", "sw1:eth{{ add 2 $n.PortSeq }}"]
+    - endpoints: ["{{ $n.KindContainer }}:eth1", "sw1:eth{{ add 2 $n.PortSeq }}"]
       mtu: 1500
-    - endpoints: ["{{ $n.Cluster }}-{{ $n.Index }}:eth2", "sw2:eth{{ add 2 $n.PortSeq }}"]
+    - endpoints: ["{{ $n.KindContainer }}:eth2", "sw2:eth{{ add 2 $n.PortSeq }}"]
       mtu: 1500
 {{- end }}
     - endpoints: ["edge1:eth3", "wan:eth1"]

@@ -14,7 +14,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -66,10 +65,11 @@ func requireFabricUp(t *testing.T, cfg *config.Config) {
 	}
 }
 
-// nodeContainer is the containerlab container name of a cluster node
-// (clab-<lab>-<cluster>-<index>).
+// nodeContainer is the docker container name of a cluster node. With the kind
+// substrate the node is a kind-created container (<cluster>-control-plane /
+// -worker[N]) with NO clab-<lab>- prefix — see DerivedNode.KindContainer.
 func nodeContainer(cfg *config.Config, node config.DerivedNode) string {
-	return clab.ContainerName(cfg.Name, node.Cluster+"-"+strconv.Itoa(node.Index))
+	return node.KindContainer()
 }
 
 // switchContainer is the containerlab container name of a fabric switch (sw1/sw2).

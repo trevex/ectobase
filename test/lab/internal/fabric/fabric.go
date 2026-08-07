@@ -75,6 +75,17 @@ func (v *View) RegistryHost() string { return "[" + RegistryAddr + "]:" + Regist
 // links wire each node's eth1↔sw1 + eth2↔sw2). Written to /etc/fabric/uplinks for the
 // kind-node-fabric preboot's FRR eBGP + RA-default acceptance.
 func (v *View) NodeUplinks() string { return "eth1 eth2" }
+
+// ClusterNames lists the clusters in declaration order — one clab k8s-kind lifecycle
+// node is rendered per cluster (kind cluster name = cluster name), while the per-node
+// kind containers are separate ext-container link endpoints.
+func (v *View) ClusterNames() []string {
+	out := make([]string, 0, len(v.Cfg.Fabric.Clusters))
+	for _, cl := range v.Cfg.Fabric.Clusters {
+		out = append(out, cl.Name)
+	}
+	return out
+}
 func (v *View) MgmtV6Subnet() string  { return MgmtV6Subnet }
 func (v *View) MgmtV6Gateway() string { return MgmtV6Gateway }
 

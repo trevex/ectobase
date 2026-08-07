@@ -39,6 +39,31 @@ type DerivedNode struct {
 	RA64 string // fd00:db8:0:<portSeq>::/64 (switch RA on this node's ports)
 }
 
+// KindRole is the kind node role: the first node in a cluster is the control-plane,
+// the rest are workers.
+func (n DerivedNode) KindRole() string {
+	if n.Index == 1 {
+		return "control-plane"
+	}
+	return "worker"
+}
+
+// KindContainer is the docker container name kind gives this node. The kind cluster
+// is named after the clab k8s-kind lifecycle node (= the cluster name), and kind
+// names its containers <cluster>-control-plane and <cluster>-worker, <cluster>-worker2, …
+// This is the single source of truth used by both the clab render (ext-container
+// link endpoints) and the live test suite (nodeContainer).
+func (n DerivedNode) KindContainer() string {
+	switch n.Index {
+	case 1:
+		return n.Cluster + "-control-plane"
+	case 2:
+		return n.Cluster + "-worker"
+	default:
+		return fmt.Sprintf("%s-worker%d", n.Cluster, n.Index-1)
+	}
+}
+
 // hash48 maps a cluster name to a stable 16-bit group in fd00:cafe:<h>::/48.
 func hash48(name string) uint16 {
 	h := fnv.New32a()

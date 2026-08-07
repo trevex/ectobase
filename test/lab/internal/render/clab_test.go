@@ -52,13 +52,23 @@ fabric:
 		t.Errorf("rendered output differs from golden %s (run with -update to regenerate)", goldenPath)
 	}
 
-	// Structural invariants (independent of the byte-for-byte golden).
+	// Structural invariants (independent of the byte-for-byte golden). One k8s-kind
+	// lifecycle node per cluster (central:, k02:) plus the kind-created node
+	// containers as ext-container link endpoints (<cluster>-control-plane / -worker).
 	for _, name := range []string{
-		"central-1:", "k02-1:", "k02-2:",
+		"central:", "k02:",
+		"central-control-plane:", "k02-control-plane:", "k02-worker:",
 		"registry:", "wan:", "edge1:", "edge2:", "sw1:", "sw2:", "nat64-1:", "nat64-2:",
 	} {
 		if !strings.Contains(out, name) {
 			t.Errorf("expected node %q in rendered topology", name)
+		}
+	}
+	// The k8s-kind lifecycle nodes own no netns; links must attach to the
+	// ext-container node containers, never the lifecycle node.
+	for _, ep := range []string{`"central-control-plane:eth1"`, `"k02-worker:eth2"`} {
+		if !strings.Contains(out, ep) {
+			t.Errorf("expected link endpoint %s in rendered topology", ep)
 		}
 	}
 	// Switch host-ports: PortSeq 1,2,3 → sw1:eth3, sw1:eth4, sw1:eth5.

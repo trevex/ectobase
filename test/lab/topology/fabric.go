@@ -353,10 +353,10 @@ func Up(ctx context.Context, cfg *config.Config) error {
 		dc := cfg.Derived.Clusters[cl.Name]
 		kubeconfig := p.clusterKubeconfig(cl.Name)
 		// clab's k8s-kind node creates + owns the kind cluster (no talosctl bootstrap);
-		// it is named after the node's clab short name (<cluster>-<index>). Collect its
-		// kubeconfig into build/<name>/<cluster>.kubeconfig where the deploy pipeline
-		// expects it. Default 1 node/cluster → the cluster's single node is node[0].
-		kindName := fmt.Sprintf("%s-%d", dc.Nodes[0].Cluster, dc.Nodes[0].Index)
+		// there is one k8s-kind lifecycle node per cluster, named after the cluster, so
+		// the kind cluster name IS the cluster name. Collect its kubeconfig into
+		// build/<name>/<cluster>.kubeconfig where the deploy pipeline expects it.
+		kindName := cl.Name
 		if err := writeKindKubeconfig(ctx, kindName, kubeconfig); err != nil {
 			return fmt.Errorf("cluster %s kubeconfig: %w", cl.Name, err)
 		}

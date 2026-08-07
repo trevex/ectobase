@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -130,9 +129,10 @@ spec: {clusterName: %q, interfaceRefs: [{name: nic-c}], runStrategy: Halted}
 `, overlayVNI, overlayIPA, nodeK8sName(a), overlayIPC, nodeK8sName(c), a.Cluster, c.Cluster)
 }
 
-// nodeK8sName is a node's Kubernetes name (<cluster>-<index>), matching the agent's
-// --node-id and CompiledNIC.spec.nodeName.
-func nodeK8sName(n config.DerivedNode) string { return n.Cluster + "-" + strconv.Itoa(n.Index) }
+// nodeK8sName is a node's Kubernetes name, matching the agent's --node-id and
+// CompiledNIC.spec.nodeName. With the kind substrate the k8s Node name is the kind
+// container name (<cluster>-control-plane), not <cluster>-<index>.
+func nodeK8sName(n config.DerivedNode) string { return n.KindContainer() }
 
 // applyCentral applies a multi-doc YAML to central via `kubectl apply -f -`.
 func applyCentral(ctx context.Context, cfg *config.Config, yaml string) error {
