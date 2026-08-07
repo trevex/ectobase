@@ -237,10 +237,10 @@ func cephCSIValues(p CephParams) string {
 provisioner:
   replicaCount: 1            # single-node cluster: the chart default (3) leaves 2 replicas Pending
   # NOTE: the provisioner runs on the POD network and reaches the ceph mon's /64 because
-  # kindnet plain-MASQUERADEs pod egress to the node IP (= the BGP-announced dummy0
-  # identity, since fabric-preboot sets autoconf=0 so no SLAAC addr wins source
-  # selection). This also lets the csi-addons fence RPC (ceph osd blocklist, served from
-  # this pod) reach the mon for the Tier-2 gate.
+  # kindnet plain-MASQUERADEs pod egress to the per-packet route source (the egress
+  # uplink's RA-SLAAC addr, which the fabric routes back symmetrically via the same ToR).
+  # This also lets the csi-addons fence RPC (ceph osd blocklist, served from this pod)
+  # reach the mon for the Tier-2 gate.
 secret:
   create: true
   name: csi-rbd-secret
