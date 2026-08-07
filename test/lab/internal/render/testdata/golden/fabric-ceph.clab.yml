@@ -78,33 +78,36 @@ topology:
       # FRR selects the BGP/static ::/0 and egress leaves via the fabric, not mgmt.
       exec:
         - "ip -6 route del default via 3fff:172:20:20::1 dev eth0"
-    central-1:
+
+    # --- kind clusters: one k8s-kind lifecycle node per cluster (clab runs `kind
+    # create`; the kind cluster is named after this node). The per-node kind
+    # containers (<cluster>-control-plane / -worker) are declared as ext-container
+    # nodes below and carry the fabric links — attaching links to the k8s-kind
+    # lifecycle node itself fails ("network namespace not available") since it owns
+    # no netns of its own. ---
+    central:
       kind: k8s-kind
       startup-config: kind/central-kind.yaml
       extras:
         k8s_kind:
           deploy:
-            wait: 0s   # do NOT gate on control-plane Ready: disableDefaultCNI leaves the
-            # node NotReady until topology.Up installs Cilium after clab deploy. A non-zero
-            # wait times out here (node never Ready pre-CNI) and cascades to link-attach.
-    k02-1:
+            wait: 120s   # clab k8s-kind boot-marker scan timeout (NOT a node-Ready gate); must exceed the node preboot delay
+    k02:
       kind: k8s-kind
       startup-config: kind/k02-kind.yaml
       extras:
         k8s_kind:
           deploy:
-            wait: 0s   # do NOT gate on control-plane Ready: disableDefaultCNI leaves the
-            # node NotReady until topology.Up installs Cilium after clab deploy. A non-zero
-            # wait times out here (node never Ready pre-CNI) and cascades to link-attach.
-    k02-2:
-      kind: k8s-kind
-      startup-config: kind/k02-kind.yaml
-      extras:
-        k8s_kind:
-          deploy:
-            wait: 0s   # do NOT gate on control-plane Ready: disableDefaultCNI leaves the
-            # node NotReady until topology.Up installs Cilium after clab deploy. A non-zero
-            # wait times out here (node never Ready pre-CNI) and cascades to link-attach.
+            wait: 120s   # clab k8s-kind boot-marker scan timeout (NOT a node-Ready gate); must exceed the node preboot delay
+    # The kind-created node containers, as clab link endpoints. ext-container =
+    # attach to the already-existing container kind made; names MUST match kind's
+    # (<cluster>-control-plane / <cluster>-worker[N] — see DerivedNode.KindContainer).
+    central-control-plane:
+      kind: ext-container
+    k02-control-plane:
+      kind: ext-container
+    k02-worker:
+      kind: ext-container
     wan:
       kind: linux
       image: img/wan
@@ -194,17 +197,17 @@ topology:
       mtu: 1500
     - endpoints: ["edge2:eth2", "sw2:eth2"]
       mtu: 1500
-    - endpoints: ["central-1:eth1", "sw1:eth3"]
+    - endpoints: ["central-control-plane:eth1", "sw1:eth3"]
       mtu: 1500
-    - endpoints: ["central-1:eth2", "sw2:eth3"]
+    - endpoints: ["central-control-plane:eth2", "sw2:eth3"]
       mtu: 1500
-    - endpoints: ["k02-1:eth1", "sw1:eth4"]
+    - endpoints: ["k02-control-plane:eth1", "sw1:eth4"]
       mtu: 1500
-    - endpoints: ["k02-1:eth2", "sw2:eth4"]
+    - endpoints: ["k02-control-plane:eth2", "sw2:eth4"]
       mtu: 1500
-    - endpoints: ["k02-2:eth1", "sw1:eth5"]
+    - endpoints: ["k02-worker:eth1", "sw1:eth5"]
       mtu: 1500
-    - endpoints: ["k02-2:eth2", "sw2:eth5"]
+    - endpoints: ["k02-worker:eth2", "sw2:eth5"]
       mtu: 1500
     - endpoints: ["edge1:eth3", "wan:eth1"]
       mtu: 1500
