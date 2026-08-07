@@ -26,6 +26,11 @@ const tier2VMNS = "default"
 const (
 	tier2VMName = "tier2-vm"
 	tier2Volume = "tier2-disk"
+	// tier2VMIName is the KubeVirt VirtualMachine/VMI name the pipeline produces: the
+	// compiler namespace-prefixes the CompiledVM (default-<vm>), and the vm-materializer
+	// names the KubeVirt VM after it. So the net.ectobase.dev VM `tier2-vm` in namespace
+	// `default` materializes as KubeVirt VMI `default-tier2-vm`.
+	tier2VMIName = "default-" + tier2VMName
 )
 
 // fenceName mirrors central/internal/fence/storage.go fenceName(): "ectobase-" +
@@ -101,8 +106,8 @@ func TestTier2Failover(t *testing.T) {
 		return expectVMIAndRBD(ctx, cfg, "k02")
 	})
 	if phase, err := kubectl(ctx, cfg, "k02", "-n", tier2VMNS,
-		"get", "vmi", tier2VMName, "-o", "jsonpath={.status.phase}"); err == nil {
-		t.Logf("k02 VMI %s phase=%q (not hard-required Running)", tier2VMName, strings.TrimSpace(phase))
+		"get", "vmi", tier2VMIName, "-o", "jsonpath={.status.phase}"); err == nil {
+		t.Logf("k02 VMI %s phase=%q (not hard-required Running)", tier2VMIName, strings.TrimSpace(phase))
 	}
 
 	// --- Phase 5: k02 fence coordinate ----------------------------------------------
@@ -166,8 +171,8 @@ func TestTier2Failover(t *testing.T) {
 		return expectVMIAndRBD(ctx, cfg, "k03")
 	})
 	if phase, err := kubectl(ctx, cfg, "k03", "-n", tier2VMNS,
-		"get", "vmi", tier2VMName, "-o", "jsonpath={.status.phase}"); err == nil {
-		t.Logf("k03 VMI %s phase=%q (not hard-required Running)", tier2VMName, strings.TrimSpace(phase))
+		"get", "vmi", tier2VMIName, "-o", "jsonpath={.status.phase}"); err == nil {
+		t.Logf("k03 VMI %s phase=%q (not hard-required Running)", tier2VMIName, strings.TrimSpace(phase))
 	}
 
 	// --- Phase 11: recovery — restart k02, assert fence released --------------------
@@ -209,8 +214,8 @@ func expectVMCluster(ctx context.Context, cfg *config.Config, want string) error
 // one PVC bound to the ceph-rbd StorageClass is Bound in tier2VMNS (the RBD reattach
 // signal). It does NOT require the VMI phase to be Running.
 func expectVMIAndRBD(ctx context.Context, cfg *config.Config, cluster string) error {
-	if _, err := kubectl(ctx, cfg, cluster, "-n", tier2VMNS, "get", "vmi", tier2VMName); err != nil {
-		return fmt.Errorf("VMI %s not present on %s/%s: %w", tier2VMName, cluster, tier2VMNS, err)
+	if _, err := kubectl(ctx, cfg, cluster, "-n", tier2VMNS, "get", "vmi", tier2VMIName); err != nil {
+		return fmt.Errorf("VMI %s not present on %s/%s: %w", tier2VMIName, cluster, tier2VMNS, err)
 	}
 	// Any ceph-rbd PVC Bound in the ns (the DataVolume/PVC name is derived by CDI).
 	out, err := kubectl(ctx, cfg, cluster, "-n", tier2VMNS, "get", "pvc",

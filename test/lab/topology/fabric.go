@@ -343,17 +343,14 @@ func Ceph(ctx context.Context, cfg *config.Config, purge bool) error {
 		return cephPurge(ctx, clusters)
 	}
 
-	// Compute-node containers (clab-<name>-<cluster>-<index>) that attach RBD and so
-	// need the krbd fixups. Central runs only the provisioner (librbd, no attach), so
-	// it is excluded from the krbd prep.
-	var nodeCtrs []string
-	for _, cl := range cfg.Fabric.Clusters {
-		if cl.Name == centralCluster {
+	// Compute clusters attach RBD (krbd) and so need the nodeplugin krbd fixup. Central
+	// runs only the provisioner (librbd, no attach), so it is excluded.
+	var computeClusters []deploy.ComputeCluster
+	for _, c := range clusters {
+		if c.Name == centralCluster {
 			continue
 		}
-		for _, n := range cfg.Derived.Clusters[cl.Name].Nodes {
-			nodeCtrs = append(nodeCtrs, clab.ContainerName(cfg.Name, fmt.Sprintf("%s-%d", n.Cluster, n.Index)))
-		}
+		computeClusters = append(computeClusters, c)
 	}
 
 	// Step 1: create the pool + emit the external-cluster params (run against the
@@ -369,10 +366,8 @@ func Ceph(ctx context.Context, cfg *config.Config, purge bool) error {
 	}
 
 	// Step 2: external ceph-csi-rbd on every cluster (central = fence executor +
-	// compute = attach). Values render under build/<name>/ceph/. The ceph-csi
-	// provisioner + csi-addons controller carry an explicit control-plane toleration
-	// (see cephCSIValues / CSIAddons), so they schedule on these single-node clusters
-	// regardless of when Talos re-applies the control-plane taint — no untaint needed.
+	// compute = attach). Values render under build/<name>/ceph/. (The nodes are never
+	// tainted — cluster-patch strips the control-plane taint — so every pod schedules.)
 	cephValuesDir := filepath.Join(p.build, "ceph")
 	for _, c := range clusters {
 		if err := deploy.CephCSI(ctx, nil, c.Kubeconfig, c.Name, cephValuesDir, params); err != nil {
@@ -386,8 +381,8 @@ func Ceph(ctx context.Context, cfg *config.Config, purge bool) error {
 		return fmt.Errorf("csi-addons on central: %w", err)
 	}
 
-	// Step 4: krbd node fixups (probe-first) so compute-node attach works.
-	deploy.EnsureNodeKrbd(ctx, nil, nodeCtrs)
+	// Step 4: krbd nodeplugin fixup so compute-node attach works.
+	deploy.EnsureNodeKrbd(ctx, nil, computeClusters)
 
 	slog.Info("ceph deployed", "clusters", len(clusters), "fenceExecutor", centralCluster)
 	return nil

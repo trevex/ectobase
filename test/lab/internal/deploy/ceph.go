@@ -360,70 +360,36 @@ func CephPurge(ctx context.Context, r Runner, kubeconfig, cluster string) {
 	}
 }
 
-// EnsureNodeKrbd applies the per-node krbd fixups to every compute-node container
-// so the ceph-csi RBD nodeplugin can `rbd map` at NodeStage. Talos delta of
-// ceph-demo-up.sh's kind-node prep: kind mounted /sys ro + a tmpfs /dev; Talos
-// container nodes have the same two problems:
-//  1. remount /sys rw: krbd maps by writing /sys/bus/rbd/add -> EROFS
-//     "rbd: sysfs write failed" if /sys is ro.
-//  2. mount devtmpfs over /dev: the kernel's dynamically-created /dev/rbd0 node
-//     never appears on a small tmpfs /dev -> mkfs.ext4 fails "not a block device".
-//     devtmpfs surfaces all kernel device nodes.
-//
-// Only applies a fixup if the probe shows it is needed (probe-first, per the plan
-// Talos delta). Both remounts revert if a node restarts — the Tier-2 gate restarts
-// the killed pool AFTER the VM has moved off it, so that is fine. Best-effort per
-// node: a failure is logged, not fatal (krbd is only needed for ATTACH, not PVC
-// provisioning).
-func EnsureNodeKrbd(ctx context.Context, r Runner, nodeCtrs []string) {
+// CephCSINodeplugin is the ceph-csi RBD nodeplugin DaemonSet name.
+const CephCSINodeplugin = "ceph-csi-rbd-nodeplugin"
+
+// EnsureNodeKrbd makes the ceph-csi RBD nodeplugin able to `rbd map` (krbd) at
+// NodeStage on each compute cluster. Talos container nodes give the kubelet — and so
+// the nodeplugin's hostPath /dev — a small tmpfs /dev, so the kernel's dynamically-
+// created /dev/rbdN device nodes never appear and `rbd map` fails "mapping succeeded
+// but /dev/rbdN is not accessible, is host /dev mounted?". The kind harness fixed this
+// with `mount -t devtmpfs devtmpfs /dev` on the node, but Talos nodes ship no
+// mount/sh binary (the docker-exec approach silently no-ops). So run the mount INSIDE
+// the privileged nodeplugin container (which has util-linux) via kubectl exec — the
+// `rbd map` runs in that same container, and devtmpfs surfaces every kernel device
+// node to it. Best-effort per cluster (logged, not fatal: krbd is only needed for
+// ATTACH, not PVC provisioning). Reverts if the nodeplugin restarts; re-run `lab ceph`
+// to reapply.
+func EnsureNodeKrbd(ctx context.Context, r Runner, clusters []ComputeCluster) {
 	r = runnerOf(r)
-	for _, n := range nodeCtrs {
-		// Probe /sys writability: is it mounted ro?
-		if sysReadOnly(ctx, r, n) {
-			if err := r.Run(ctx, "docker", "exec", n, "mount", "-o", "remount,rw", "/sys"); err != nil {
-				slog.Warn("krbd prep: remount /sys rw failed", "node", n, "err", err)
-			} else {
-				slog.Info("krbd prep: remounted /sys rw", "node", n)
-			}
-		}
-		// Probe /dev: is it a devtmpfs already?
-		if !devIsDevtmpfs(ctx, r, n) {
-			if err := r.Run(ctx, "docker", "exec", n, "mount", "-t", "devtmpfs", "devtmpfs", "/dev"); err != nil {
-				slog.Warn("krbd prep: mount devtmpfs /dev failed", "node", n, "err", err)
-			} else {
-				slog.Info("krbd prep: mounted devtmpfs over /dev", "node", n)
-			}
+	for _, c := range clusters {
+		// Wait for the nodeplugin pod to be Ready so the exec lands.
+		_ = wait.WaitFor(ctx, 2*time.Minute, 5*time.Second, func() (bool, error) {
+			err := r.Run(ctx, "kubectl", "--kubeconfig", c.Kubeconfig, "-n", CephCSINS,
+				"rollout", "status", "ds/"+CephCSINodeplugin, "--timeout=10s")
+			return err == nil, nil
+		})
+		if err := r.Run(ctx, "kubectl", "--kubeconfig", c.Kubeconfig, "-n", CephCSINS,
+			"exec", "ds/"+CephCSINodeplugin, "-c", "csi-rbdplugin", "--",
+			"mount", "-t", "devtmpfs", "devtmpfs", "/dev"); err != nil {
+			slog.Warn("krbd prep: mount devtmpfs in nodeplugin failed", "cluster", c.Name, "err", err)
+		} else {
+			slog.Info("krbd prep: devtmpfs mounted in nodeplugin", "cluster", c.Name)
 		}
 	}
-}
-
-// sysReadOnly reports whether /sys is mounted read-only in the node container.
-func sysReadOnly(ctx context.Context, r Runner, node string) bool {
-	out, err := r.Output(ctx, "docker", "exec", node, "cat", "/proc/mounts")
-	if err != nil {
-		return false // can't probe -> don't touch
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		f := strings.Fields(line)
-		if len(f) >= 4 && f[1] == "/sys" {
-			opts := "," + f[3] + ","
-			return strings.Contains(opts, ",ro,")
-		}
-	}
-	return false
-}
-
-// devIsDevtmpfs reports whether /dev is backed by devtmpfs in the node container.
-func devIsDevtmpfs(ctx context.Context, r Runner, node string) bool {
-	out, err := r.Output(ctx, "docker", "exec", node, "cat", "/proc/mounts")
-	if err != nil {
-		return true // can't probe -> don't touch
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		f := strings.Fields(line)
-		if len(f) >= 3 && f[1] == "/dev" && f[2] == "devtmpfs" {
-			return true
-		}
-	}
-	return false
 }
