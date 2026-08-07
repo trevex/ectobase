@@ -78,8 +78,20 @@ UPLINKS="eth1"
 # creates them) — plus any uplink that already exists — so the switch RA then gives the
 # node a fabric default (→ the in-fabric registry fd00:29::5 + NAT64 internet).
 sysctl -w net.ipv6.conf.default.accept_ra=2 >/dev/null 2>&1 || true
+# ...but do NOT SLAAC-autoconfigure a global address ON the uplinks (Talos parity): a
+# per-switch RA /64 SLAAC addr on the outgoing interface wins RFC6724 source selection
+# (Rule 5, "prefer outgoing interface") over the dummy0 identity, so fabric-bound
+# traffic would source from — and Cilium would masquerade to — that ephemeral SLAAC
+# addr (return path breaks the ceph-mon path). autoconf=0 keeps ONLY link-local on the
+# uplinks so the route source for fabric dests is the BGP-announced dummy0 identity.
+sysctl -w net.ipv6.conf.default.autoconf=0 >/dev/null 2>&1 || true
 for u in $UPLINKS; do
   sysctl -w "net.ipv6.conf.${u}.accept_ra=2" >/dev/null 2>&1 || true
+  sysctl -w "net.ipv6.conf.${u}.autoconf=0" >/dev/null 2>&1 || true
+  # drop any SLAAC global already picked up before autoconf was disabled.
+  for a in $(ip -6 addr show dev "$u" scope global 2>/dev/null | awk '/inet6/{print $2}'); do
+    ip -6 addr del "$a" dev "$u" 2>/dev/null || true
+  done
 done
 # Demote the docker mgmt default (eth0) below 1024 so the fabric RA default (metric
 # 1024) wins once it arrives, but mgmt stays a fallback for the pre-fabric kubeadm

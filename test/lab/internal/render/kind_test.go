@@ -108,8 +108,6 @@ func TestKindClusterGolden(t *testing.T) {
 
 	for _, w := range []string{
 		"ipFamily: ipv6",
-		"disableDefaultCNI: true",
-		"kubeProxyMode: none",
 		"image: ghcr.io/trevex/ectobase/kind-node-fabric:dev",
 		"containerPath: /etc/fabric/prefix",
 		"containerPath: /etc/fabric/uplinks",
@@ -119,5 +117,9 @@ func TestKindClusterGolden(t *testing.T) {
 		if !strings.Contains(out, w) {
 			t.Errorf("expected %q in rendered kind Cluster config", w)
 		}
+	}
+	// kindnet is the CNI now: the default CNI + kube-proxy must NOT be disabled.
+	if strings.Contains(out, "disableDefaultCNI") || strings.Contains(out, "kubeProxyMode") {
+		t.Errorf("disableDefaultCNI/kubeProxyMode must be absent (kindnet + kube-proxy are the CNI)")
 	}
 }
