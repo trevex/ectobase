@@ -62,6 +62,7 @@ type paths struct {
 	talos  string // build/<name>/talos
 	mounts string // build/<name>/mounts
 	k8s    string // build/<name>/k8s
+	kind   string // build/<name>/kind (per-cluster kind Cluster configs + prefix/uplinks)
 	reg    string // build/<name>/registry
 }
 
@@ -74,6 +75,7 @@ func buildPaths(cfg *config.Config) paths {
 		talos:  filepath.Join(b, "talos"),
 		mounts: filepath.Join(b, "mounts"),
 		k8s:    filepath.Join(b, "k8s"),
+		kind:   filepath.Join(b, "kind"),
 		reg:    filepath.Join(b, "registry"),
 	}
 }
@@ -99,7 +101,7 @@ func Render(ctx context.Context, cfg *config.Config) error {
 	v := fabric.Build(cfg)
 	v.ModulesDir = detectModulesDir()
 
-	for _, dir := range []string{p.build, p.vyos, p.talos, p.mounts, p.k8s, p.reg} {
+	for _, dir := range []string{p.build, p.vyos, p.talos, p.mounts, p.k8s, p.kind, p.reg} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %w", dir, err)
 		}
@@ -139,10 +141,10 @@ func Render(ctx context.Context, cfg *config.Config) error {
 		}
 	}
 
-	// Per-cluster Talos machine configs + Cilium values.
+	// Per-cluster kind Cluster configs (+ prefix/uplinks files) + Cilium values.
 	for _, cl := range cfg.Fabric.Clusters {
 		dc := cfg.Derived.Clusters[cl.Name]
-		if err := genCluster(ctx, cfg, v, p, cl.Name, dc); err != nil {
+		if err := genKindCluster(cfg, v, p, cl.Name, dc); err != nil {
 			return fmt.Errorf("cluster %s: %w", cl.Name, err)
 		}
 		if err := render.FileFS(templates.FS, "k8s/cilium-values.yaml.tmpl",
@@ -186,6 +188,58 @@ func Render(ctx context.Context, cfg *config.Config) error {
 
 	slog.Info("rendered lab", "build", p.build, "clusters", len(cfg.Fabric.Clusters))
 	return nil
+}
+
+// kindNodeCtx / kindClusterCtx are the k8s/kind-cluster.yaml.tmpl data. One
+// kindClusterCtx is rendered per cluster; each node contributes a kindNodeCtx
+// whose PrefixPath/UplinksPath are ABSOLUTE (kind rejects relative extraMounts
+// hostPaths).
+type kindNodeCtx struct{ Role, Image, PrefixPath, UplinksPath string }
+type kindClusterCtx struct {
+	RegistryHost string
+	Nodes        []kindNodeCtx
+}
+
+// genKindCluster writes one cluster's kind artifacts under build/<name>/kind/:
+// a per-node <cluster>-<index>.prefix (the node's /64), a single shared
+// <cluster>-uplinks (the fabric BGP uplinks), and the kind Cluster config
+// <cluster>-kind.yaml (control-plane for node 1, workers thereafter). The
+// per-node preboot reads /etc/fabric/{prefix,uplinks} from the extraMounts.
+func genKindCluster(cfg *config.Config, v *fabric.View, p paths, cluster string, dc config.DerivedCluster) error {
+	// Absolute base for extraMounts hostPaths (kind rejects relative ones).
+	absKind, err := filepath.Abs(p.kind)
+	if err != nil {
+		return fmt.Errorf("abs kind dir: %w", err)
+	}
+
+	// One shared uplinks file per cluster.
+	uplinksName := cluster + "-uplinks"
+	if err := os.WriteFile(filepath.Join(p.kind, uplinksName), []byte(v.NodeUplinks()+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write kind uplinks: %w", err)
+	}
+	uplinksPath := filepath.Join(absKind, uplinksName)
+
+	nodes := make([]kindNodeCtx, 0, len(dc.Nodes))
+	for _, n := range dc.Nodes {
+		prefixName := fmt.Sprintf("%s-%d.prefix", n.Cluster, n.Index)
+		if err := os.WriteFile(filepath.Join(p.kind, prefixName), []byte(n.NodeNet64+"\n"), 0o644); err != nil {
+			return fmt.Errorf("write kind prefix for %s-%d: %w", n.Cluster, n.Index, err)
+		}
+		role := "worker"
+		if n.Index == 1 {
+			role = "control-plane"
+		}
+		nodes = append(nodes, kindNodeCtx{
+			Role:        role,
+			Image:       v.Images()["kindNode"],
+			PrefixPath:  filepath.Join(absKind, prefixName),
+			UplinksPath: uplinksPath,
+		})
+	}
+
+	return render.FileFS(templates.FS, "k8s/kind-cluster.yaml.tmpl",
+		filepath.Join(p.kind, cluster+"-kind.yaml"),
+		kindClusterCtx{RegistryHost: v.RegistryHost(), Nodes: nodes})
 }
 
 // genCluster renders one cluster's Talos machine-config set and preserves its

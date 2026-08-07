@@ -1,0 +1,34 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  ipFamily: ipv6
+  disableDefaultCNI: true
+  kubeProxyMode: none
+# Pull :dev + upstream images through the in-fabric registry mirror (fabric-parity
+# with the removed Talos machine.registries.mirrors). {{ .RegistryHost }} = [fd00:29::5]:5000.
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."ghcr.io"]
+      endpoint = ["http://{{ .RegistryHost }}"]
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."quay.io"]
+      endpoint = ["http://{{ .RegistryHost }}"]
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."docker.io"]
+      endpoint = ["http://{{ .RegistryHost }}"]
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."registry.k8s.io"]
+      endpoint = ["http://{{ .RegistryHost }}"]
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."gcr.io"]
+      endpoint = ["http://{{ .RegistryHost }}"]
+    [plugins."io.containerd.grpc.v1.cri".registry.configs."{{ .RegistryHost }}".tls]
+      insecure_skip_verify = true
+nodes:
+{{- range .Nodes }}
+  - role: {{ .Role }}
+    image: {{ .Image }}
+    extraMounts:
+      - hostPath: {{ .PrefixPath }}
+        containerPath: /etc/fabric/prefix
+        readOnly: true
+      - hostPath: {{ .UplinksPath }}
+        containerPath: /etc/fabric/uplinks
+        readOnly: true
+{{- end }}

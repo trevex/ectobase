@@ -81,24 +81,11 @@ topology:
 
 {{- range $n := .Nodes }}
     {{ $n.Cluster }}-{{ $n.Index }}:
-      kind: linux
-      image: {{ index $.Images "talos" }}
-      # containerlab runs every node privileged, so Talos boots in container mode
-      # with a writable rootfs; it reads its machine config from USERDATA. Talos'
-      # SetupSharedFilesystems marks /var, /etc/cni and /run MS_SHARED, which needs
-      # them to be real mount points (containerlab has no tmpfs key), so we bind
-      # per-node dirs. They live on disk under build/<name>/mounts — a bind is a
-      # mount point regardless of backing store, so this keeps /var off RAM.
-      env:
-        PLATFORM: container
-      env-files: [talos/{{ $n.Cluster }}-{{ $n.Index }}.env]
-      binds:
-        - mounts/{{ $n.Cluster }}-{{ $n.Index }}/run:/run
-        - mounts/{{ $n.Cluster }}-{{ $n.Index }}/var:/var
-        - mounts/{{ $n.Cluster }}-{{ $n.Index }}/cni:/etc/cni
-        - {{ $.ModulesDir }}:/usr/lib/modules:ro
-      sysctls:
-        net.ipv6.conf.all.disable_ipv6: "0"
+      kind: k8s-kind
+      startup-config: kind/{{ $n.Cluster }}-kind.yaml
+      k8s_kind:
+        deploy:
+          wait: 180s   # clab k8s-kind boot-marker scan (not a Ready gate); exceeds the node preboot delay
 {{- end }}
     wan:
       kind: linux
