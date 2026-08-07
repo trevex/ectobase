@@ -175,7 +175,7 @@ func TestTier2Failover(t *testing.T) {
 	}
 
 	// --- Phase 11: recovery — restart k02, assert fence released --------------------
-	out, err = exec.SudoOutput(ctx, "docker", "start", k02Ctr)
+	out, err := exec.SudoOutput(ctx, "docker", "start", k02Ctr)
 	require.NoError(t, err, "docker start %s: %s", k02Ctr, out)
 	t.Logf("restarted k02 node container %s", k02Ctr)
 
