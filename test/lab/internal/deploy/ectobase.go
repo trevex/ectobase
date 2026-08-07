@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -53,6 +54,14 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 	slog.Info("deploying central apiserver + controller", "kustomize", filepath.Join(s.RepoRoot, "central/config"))
 	if err := kubectlApplyKustomize(ctx, s.CentralKubeconfig, filepath.Join(s.RepoRoot, "central/config")); err != nil {
 		return fmt.Errorf("apply central/config: %w", err)
+	}
+	// central/config hardcodes the Talos/bash-era reflector-admin address
+	// (fd00:db8:0:1::1); on this fabric the reflector runs on central's identity, so
+	// point the controller's -reflector-admin there. Without this the Tier-2 failover's
+	// reflector route-withdrawal can't connect (dial no route to host) and the VM never
+	// reschedules off the fenced pool.
+	if err := patchCentralReflectorAdmin(ctx, s.CentralKubeconfig, "["+s.CentralIdentity+"]:1338"); err != nil {
+		return fmt.Errorf("patch central-controller reflector-admin: %w", err)
 	}
 	if err := waitAggregatedAPI(ctx, s.CentralKubeconfig); err != nil {
 		return fmt.Errorf("central aggregated API: %w", err)
@@ -303,6 +312,37 @@ func poolField(ctx context.Context, kubeconfig, name, jsonpath string) (string, 
 	out, err := exec.OutputStr(ctx, "kubectl", "--kubeconfig", kubeconfig,
 		"get", "clusterpools.platform.ectobase.dev", name, "-o", "jsonpath="+jsonpath)
 	return strings.TrimSpace(out), err
+}
+
+// patchCentralReflectorAdmin sets the central-controller's -reflector-admin arg to
+// addr (host:port, bracketed v6). central/config ships a fixed Talos/bash-era value;
+// this repoints it at the reflector on this fabric (central's identity) so the Tier-2
+// failover route-withdrawal can reach it. It reads the current args and JSON-patches
+// the -reflector-admin element in place (mirrors PatchCentralCSIClusterID).
+func patchCentralReflectorAdmin(ctx context.Context, kubeconfig, addr string) error {
+	out, err := exec.Output(ctx, "kubectl", "--kubeconfig", kubeconfig,
+		"-n", "system", "get", "deploy", "central-controller",
+		"-o", "jsonpath={.spec.template.spec.containers[0].args}")
+	if err != nil {
+		return fmt.Errorf("get central-controller args: %w", err)
+	}
+	var args []string
+	if err := json.Unmarshal(out, &args); err != nil {
+		return fmt.Errorf("parse central-controller args %q: %w", string(out), err)
+	}
+	const prefix = "-reflector-admin="
+	for i, a := range args {
+		if strings.HasPrefix(a, prefix) {
+			patch := fmt.Sprintf(`[{"op":"replace","path":"/spec/template/spec/containers/0/args/%d","value":"-reflector-admin=%s"}]`, i, addr)
+			if err := exec.Run(ctx, "kubectl", "--kubeconfig", kubeconfig,
+				"-n", "system", "patch", "deploy", "central-controller", "--type=json", "-p", patch); err != nil {
+				return fmt.Errorf("patch reflector-admin: %w", err)
+			}
+			slog.Info("central-controller reflector-admin set", "addr", addr)
+			return nil
+		}
+	}
+	return fmt.Errorf("no %q arg in central-controller args %v", prefix, args)
 }
 
 // mintKubeconfig hand-writes a token kubeconfig for the broker→central connection.
