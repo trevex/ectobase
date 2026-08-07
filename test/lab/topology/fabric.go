@@ -363,11 +363,22 @@ func Up(ctx context.Context, cfg *config.Config) error {
 		if err := deploy.WaitAPIServer(ctx, kubeconfig); err != nil {
 			return fmt.Errorf("cluster %s api server: %w", cl.Name, err)
 		}
+		// With kube-proxy replaced there is no ClusterIP to bootstrap the Cilium
+		// agents' API connection against, so inject the control-plane container's
+		// kind-network IPv6 (where kubeadm advertises the API server) as
+		// k8sServiceHost. This replaces the Talos KubePrism localhost:7445, which
+		// does not exist on kind.
+		apiIP, err := clab.KindNodeIP6(ctx, dc.Nodes[0].KindContainer())
+		if err != nil || apiIP == "" {
+			return fmt.Errorf("cluster %s: resolve kind API server IPv6 for %s: %w",
+				cl.Name, dc.Nodes[0].KindContainer(), err)
+		}
 		// kind's control-plane node carries no NoSchedule taint (kubeProxyMode:none +
 		// disableDefaultCNI; single-node), so the cilium-operator + every workload
 		// schedules on it.
 		if err := deploy.HelmInstall(ctx, kubeconfig, "cilium", deploy.CiliumChart,
-			deploy.CiliumRepo, deploy.CiliumVersion, p.ciliumValues(cl.Name)); err != nil {
+			deploy.CiliumRepo, deploy.CiliumVersion, p.ciliumValues(cl.Name),
+			"k8sServiceHost="+apiIP, "k8sServicePort=6443"); err != nil {
 			return fmt.Errorf("cluster %s cilium: %w", cl.Name, err)
 		}
 		if err := deploy.WaitNodesReady(ctx, kubeconfig, len(dc.Nodes)); err != nil {

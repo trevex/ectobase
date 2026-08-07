@@ -1,34 +1,41 @@
-# Cilium values for the container-mode Talos IPv6 fabric.
-# IPv6-only, tunnel (vxlan) routing, kube-proxy replacement via Talos KubePrism.
+# Cilium values for the kind IPv6 fabric clusters. IPv6-only, tunnel (vxlan)
+# routing, kube-proxy replacement.
+#
+# k8sServiceHost / k8sServicePort are injected at install time (topology.Up) as the
+# control-plane container's kind-network IPv6 + 6443: with kube-proxy replaced there
+# is no ClusterIP to bootstrap the agents' API connection against, and kubeadm
+# advertises the API server on the kind-network address (NOT the Talos KubePrism
+# localhost:7445 — that endpoint does not exist on kind).
 ipv4:
   enabled: false
 ipv6:
   enabled: true
 
 kubeProxyReplacement: true
-# Talos KubePrism — a host-local apiserver load-balancer, decoupled from the
-# anycast API VIP + BGP convergence (Talos-recommended for kube-proxy replacement).
-k8sServiceHost: localhost
-k8sServicePort: 7445
 
-# Single operator replica: clusters default to one control-plane node, and the
-# operator's default 2 replicas have anti-affinity that leaves the 2nd Pending on
-# a 1-node cluster → `helm --wait` never sees 2/2. One operator is fine for a lab.
-operator:
-  replicas: 1
+# Coexist with Multus (required for the KubeVirt network-binding NADs in Tier-2).
+# Cilium's default cni.exclusive=true renames Multus's 00-multus.conf so the binding
+# NAD is silently ignored; false keeps Multus primary, delegating to Cilium.
+cni:
+  exclusive: false
 
 routingMode: tunnel
 tunnelProtocol: vxlan
 
+# Use the per-node podCIDR kube-controller-manager allocates from kind's default
+# podSubnet, matching node.spec.podCIDRs (kind sets --allocate-node-cidrs).
 ipam:
-  mode: cluster-pool
-  operator:
-    clusterPoolIPv6PodCIDRList:
-      - {{ .PodSubnet }}
-    # Per-node pod CIDR mask. Cilium's cluster-pool allocator caps the node-CIDR
-    # count at 2^16, so (maskSize - poolMask) must be <= 16; the pod pool is a /56,
-    # so /64 is the largest (and natural IPv6) per-node size.
-    clusterPoolIPv6MaskSize: 64
+  mode: kubernetes
+
+# Single operator replica: clusters default to one control-plane node, and the
+# operator's default 2 replicas have anti-affinity that leaves the 2nd Pending on a
+# 1-node cluster → `helm --wait` never sees 2/2. One operator is fine for a lab.
+operator:
+  replicas: 1
+
+# Quieter, faster bring-up: no Hubble UI/relay needed for the e2e.
+hubble:
+  enabled: false
 
 bpf:
   # iptables (not BPF) masquerade: route-source masquerade below is only supported on
@@ -42,29 +49,3 @@ enableIPv6Masquerade: true
 # fabric /64 (e.g. the ceph mon on fd00:cafe:635::/64) is SNATed to a SLAAC uplink addr
 # whose return path breaks, so librbd hangs. The node identity is stable + fabric-routable.
 enableMasqueradeRouteSource: true
-
-# Talos runs Cilium in a container-mode node: mount the host cgroup rather than
-# letting the agent auto-mount, and grant the capability sets Talos documents.
-cgroup:
-  autoMount:
-    enabled: false
-  hostRoot: /sys/fs/cgroup
-
-securityContext:
-  capabilities:
-    ciliumAgent:
-      - CHOWN
-      - KILL
-      - NET_ADMIN
-      - NET_RAW
-      - IPC_LOCK
-      - SYS_ADMIN
-      - SYS_RESOURCE
-      - DAC_OVERRIDE
-      - FOWNER
-      - SETGID
-      - SETUID
-    cleanCiliumState:
-      - NET_ADMIN
-      - SYS_ADMIN
-      - SYS_RESOURCE

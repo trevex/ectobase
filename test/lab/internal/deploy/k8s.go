@@ -35,14 +35,18 @@ func WaitAPIServer(ctx context.Context, kubeconfig string) error {
 
 // HelmInstall installs or upgrades chart (from repo, pinned to version) as release
 // name in kube-system, applying valuesFile, and waits for the rollout.
-func HelmInstall(ctx context.Context, kubeconfig, name, chart, repo, version, valuesFile string) error {
+func HelmInstall(ctx context.Context, kubeconfig, name, chart, repo, version, valuesFile string, sets ...string) error {
 	slog.Info("installing helm release", "name", name, "chart", chart, "version", version)
-	return exec.Run(ctx, "helm", "upgrade", "--install", name, chart,
+	args := []string{"upgrade", "--install", name, chart,
 		"--repo", repo, "--version", version,
 		"--namespace", "kube-system",
 		"--kubeconfig", kubeconfig,
-		"--values", valuesFile,
-		"--wait", "--timeout", "10m")
+		"--values", valuesFile}
+	for _, s := range sets {
+		args = append(args, "--set", s)
+	}
+	args = append(args, "--wait", "--timeout", "10m")
+	return exec.Run(ctx, "helm", args...)
 }
 
 // Apply applies the manifest at path to the cluster (server-side create/update).
