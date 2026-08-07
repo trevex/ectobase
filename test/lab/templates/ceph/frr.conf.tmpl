@@ -31,6 +31,11 @@ bfd
 exit
 !
 router bgp {{ .ASHost }}
+ ! IPv6-only fabric: dummy0/eth1/eth2 carry no IPv4, so FRR bgpd cannot auto-derive
+ ! a router-id and would refuse sessions ("router-id is 0.0.0.0"). Pin it explicitly,
+ ! mirroring the Talos-host convention (10.0.100.<PortSeq>); ceph sits at CephPortSeq
+ ! (= totalNodes+1), so this is distinct from every node router-id.
+ bgp router-id 10.0.100.{{ .CephPortSeq }}
  bgp bestpath as-path multipath-relax
  neighbor eth1 interface remote-as external
  neighbor eth1 bfd profile fabric-fast

@@ -19,7 +19,7 @@ fabric:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Derived.CephNet64 == "" || c.Derived.CephMonAddr == "" || c.Derived.CephNet == "" {
+	if c.Derived.CephNet64 == "" || c.Derived.CephMonAddr == "" {
 		t.Fatalf("ceph derived fields empty: %+v", c.Derived)
 	}
 	// The mon addr must sit inside the /64 and end in ::1.

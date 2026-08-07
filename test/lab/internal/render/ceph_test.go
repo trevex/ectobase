@@ -2,6 +2,7 @@ package render
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -102,6 +103,40 @@ fabric:
 	for _, unwanted := range []string{"ceph-net", "ceph:", "MON_IP", "CEPH_PUBLIC_NETWORK"} {
 		if strings.Contains(out, unwanted) {
 			t.Errorf("base (ceph-off) topology unexpectedly contains %q", unwanted)
+		}
+	}
+}
+
+// TestCephFRRConf renders the ceph FRR config and asserts the load-bearing lines:
+// an explicit `bgp router-id` (this fabric is IPv6-only, so bgpd cannot auto-derive
+// one — without it the ceph /64 never propagates and storage is unreachable), plus
+// the `router bgp <ASHost>` and `network <CephNet64>` announcement. frr.conf is not
+// otherwise goldened, so this guards against a router-id regression.
+func TestCephFRRConf(t *testing.T) {
+	c, err := config.LoadBytes([]byte(cephFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := fabric.Build(c)
+
+	b, err := os.ReadFile("../../templates/ceph/frr.conf.tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := String(string(b), v)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// CephPortSeq = TotalNodes(3) + 1 = 4 → router-id 10.0.100.4 (distinct from the
+	// node router-ids 10.0.100.1-3).
+	for _, want := range []string{
+		"bgp router-id 10.0.100.4",
+		"router bgp " + strconv.Itoa(c.Fabric.AS.Host),
+		"network " + c.Derived.CephNet64,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in rendered ceph frr.conf", want)
 		}
 	}
 }

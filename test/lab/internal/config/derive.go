@@ -12,9 +12,8 @@ type Derived struct {
 	// so it is deterministic and never collides with a cluster /48). The ceph node
 	// lives on its OWN fabric /64 = the Tier-2 storage-fence coordinate (each client
 	// is seen FROM its own node /64), announced into the fabric via unnumbered eBGP.
-	CephNet64   string // fd00:cafe:<h>::/64 (the ceph node's underlay pool, on dummy0)
+	CephNet64   string // fd00:cafe:<h>::/64 (the ceph node's underlay pool, on dummy0; also the announced public_network)
 	CephMonAddr string // fd00:cafe:<h>::1 (the mon address; the demo binds MON_IP here)
-	CephNet     string // alias of CephNet64 (the announced public_network)
 }
 
 type DerivedCluster struct {
@@ -85,5 +84,4 @@ func (c *Config) derive() {
 	h := hash48("ceph")
 	c.Derived.CephNet64 = fmt.Sprintf("fd00:cafe:%x::/64", h)
 	c.Derived.CephMonAddr = fmt.Sprintf("fd00:cafe:%x::1", h)
-	c.Derived.CephNet = c.Derived.CephNet64
 }

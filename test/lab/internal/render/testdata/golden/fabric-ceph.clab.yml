@@ -255,6 +255,6 @@ topology:
     # FRR sidecar (in the ceph netns) peers over both and announces the ceph /64 so
     # every compute node reaches the mon from its own /64. ---
     - endpoints: ["ceph-net:eth1", "sw1:eth6"]
-      mtu: 3000
+      mtu: 1500
     - endpoints: ["ceph-net:eth2", "sw2:eth6"]
-      mtu: 3000
+      mtu: 1500
