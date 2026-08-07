@@ -11,19 +11,19 @@ import (
 // Fixed fabric constants (from the icn/sandbox fabric defaults). The simplified
 // lab.yaml does not expose these; every cluster on the shared fabric uses them.
 const (
-	TaygaNet     = "fd00:64"              // nat64 edge links: fd00:64:1::/64, fd00:64:2::/64
-	WanNet       = "fd00:29"              // WAN segment fd00:29::/64; wan ::1, edge1 ::11, edge2 ::12
-	RAPrefix     = "fd00:db8"             // switch RA /64s: fd00:db8:<SW>:<portSeq>::/64 (per-switch, symmetric return)
-	MgmtV6Subnet  = "3fff:172:20:20::/64" // clab mgmt docker network v6 subnet (host NAT66's it → real uplink)
-	MgmtV6Gateway = "3fff:172:20:20::1"   // clab mgmt gateway; nodes drop its default so egress is fabric-only
-	EdgeLoopback = "fd00:ffff"            // edge DNS64 loopbacks: fd00:ffff::e1, fd00:ffff::e2
-	DNSUpstream  = "2606:4700:4700::1111" // DNS64 upstream
-	WanGwV4      = "172.29.0.1"           // wan bridge v4 gateway
-	NodeAggr     = "fd00:cafe::/32"       // aggregate of every cluster's /48 node identities (fd00:cafe:<h>::/48)
-	RAAggr       = "fd00:db8::/32"        // aggregate of every switch RA /64
-	LoopAggr     = "fd00:ffff::/32"       // aggregate of the edge loopbacks
-	RegistryAddr = "fd00:29::5"           // registry node's address on the WAN segment (fd00:29::/64)
-	RegistryPort = "5000"                 // registry:2 default listen port
+	TaygaNet      = "fd00:64"              // nat64 edge links: fd00:64:1::/64, fd00:64:2::/64
+	WanNet        = "fd00:29"              // WAN segment fd00:29::/64; wan ::1, edge1 ::11, edge2 ::12
+	RAPrefix      = "fd00:db8"             // switch RA /64s: fd00:db8:<SW>:<portSeq>::/64 (per-switch, symmetric return)
+	MgmtV6Subnet  = "3fff:172:20:20::/64"  // clab mgmt docker network v6 subnet (host NAT66's it → real uplink)
+	MgmtV6Gateway = "3fff:172:20:20::1"    // clab mgmt gateway; nodes drop its default so egress is fabric-only
+	EdgeLoopback  = "fd00:ffff"            // edge DNS64 loopbacks: fd00:ffff::e1, fd00:ffff::e2
+	DNSUpstream   = "2606:4700:4700::1111" // DNS64 upstream
+	WanGwV4       = "172.29.0.1"           // wan bridge v4 gateway
+	NodeAggr      = "fd00:cafe::/32"       // aggregate of every cluster's /48 node identities (fd00:cafe:<h>::/48)
+	RAAggr        = "fd00:db8::/32"        // aggregate of every switch RA /64
+	LoopAggr      = "fd00:ffff::/32"       // aggregate of the edge loopbacks
+	RegistryAddr  = "fd00:29::5"           // registry node's address on the WAN segment (fd00:29::/64)
+	RegistryPort  = "5000"                 // registry:2 default listen port
 )
 
 // RegistryEndpoint is the in-fabric mirror target the Talos nodes point at.
@@ -59,15 +59,30 @@ func (v *View) Images() map[string]string { return v.Cfg.Images }
 func (v *View) NAT64Prefix() string       { return v.Cfg.Fabric.NAT64Prefix }
 
 // Const accessors so templates can reference the fixed fabric constants ({{ .TaygaNet }}).
-func (v *View) TaygaNet() string     { return TaygaNet }
-func (v *View) WanNet() string       { return WanNet }
-func (v *View) RAPrefix() string     { return RAPrefix }
-func (v *View) EdgeLoopback() string { return EdgeLoopback }
-func (v *View) DNSUpstream() string  { return DNSUpstream }
-func (v *View) WanGwV4() string      { return WanGwV4 }
-func (v *View) RegistryAddr() string { return RegistryAddr }
+func (v *View) TaygaNet() string      { return TaygaNet }
+func (v *View) WanNet() string        { return WanNet }
+func (v *View) RAPrefix() string      { return RAPrefix }
+func (v *View) EdgeLoopback() string  { return EdgeLoopback }
+func (v *View) DNSUpstream() string   { return DNSUpstream }
+func (v *View) WanGwV4() string       { return WanGwV4 }
+func (v *View) RegistryAddr() string  { return RegistryAddr }
 func (v *View) MgmtV6Subnet() string  { return MgmtV6Subnet }
 func (v *View) MgmtV6Gateway() string { return MgmtV6Gateway }
+
+// Ceph accessors: the optional fabric-attached Ceph/demo storage node. The clab
+// + switch templates guard the ceph blocks on CephEnabled; the addresses come
+// from the fabric-level derivation (hash48("ceph")).
+func (v *View) CephEnabled() bool   { return v.Cfg.Fabric.Ceph.Enabled }
+func (v *View) CephNet64() string   { return v.Cfg.Derived.CephNet64 }
+func (v *View) CephMonAddr() string { return v.Cfg.Derived.CephMonAddr }
+
+// CephMonEndpoint is the mon's messenger-v2 endpoint (bracketed v6 + port 3300).
+func (v *View) CephMonEndpoint() string { return "[" + v.Cfg.Derived.CephMonAddr + "]:3300" }
+
+// CephPortSeq is the switch host-port index for the ceph uplink: it sits after
+// every cluster node (total nodes + 1), so the switch eth is eth{{add 2 CephPortSeq}}
+// — the next free host port on each ToR, colliding with no node port.
+func (v *View) CephPortSeq() int { return v.Cfg.TotalNodes() + 1 }
 
 // AS + aggregate accessors the VyOS templates reference.
 func (v *View) ASEdge() int      { return v.Cfg.Fabric.AS.Edge }

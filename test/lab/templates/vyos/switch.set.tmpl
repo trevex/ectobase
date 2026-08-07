@@ -37,3 +37,18 @@ set service router-advert interface {{ $eth }} prefix {{ $ra }}
 set service router-advert interface {{ $eth }} name-server '{{ $.EdgeLoopback }}::e1'
 set service router-advert interface {{ $eth }} name-server '{{ $.EdgeLoopback }}::e2'
 {{- end }}
+{{- if .CephEnabled }}
+{{- /* Optional Ceph host-port: the ceph node dual-homes to both ToRs at the next
+       free host port (CephPortSeq = totalNodes + 1). It peers into the same 'hosts'
+       peer-group (as-override) so the ceph /64 it announces propagates to every node.
+       The ceph sidecar announces its /64 itself over unnumbered eBGP, so — unlike the
+       Talos nodes — the switch does NOT originate a recursive /64 for it. */}}
+{{- $ceth := printf "eth%d" (add 2 $.CephPortSeq) }}
+{{- $cra := printf "%s:%d:%d::/64" $.RAPrefix $.SW $.CephPortSeq }}
+set protocols bgp neighbor {{ $ceth }} interface v6only peer-group 'hosts'
+set protocols static route6 {{ $cra }} interface {{ $ceth }}
+set protocols bgp address-family ipv6-unicast network '{{ $cra }}'
+set service router-advert interface {{ $ceth }} prefix {{ $cra }}
+set service router-advert interface {{ $ceth }} name-server '{{ $.EdgeLoopback }}::e1'
+set service router-advert interface {{ $ceth }} name-server '{{ $.EdgeLoopback }}::e2'
+{{- end }}

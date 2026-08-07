@@ -1,0 +1,48 @@
+! Generated from templates/ceph/frr.conf.tmpl — do not edit by hand.
+! ceph (shared Ceph/demo fabric node) — announces its underlay /64 via unnumbered eBGP.
+!
+! Mirrors the Talos-host model: a per-node /64 lives on dummy0 and is announced into
+! the fabric over unnumbered eBGP, so every compute node reaches the Ceph mon
+! ({{ .CephMonAddr }}) via its own /64 underlay — which is the Tier-2 storage-fence
+! coordinate (each client is seen FROM its node /64).
+!
+! Unlike the Talos hosts (which single-home to sw1 via the fabric-preboot oneshot),
+! ceph is a NON-Talos container with no fabric-preboot; this FRR instance runs in the
+! SAME netns as the ceph container (clab network-mode: container:...), creates dummy0
+! with the /64 (ceph-preboot.sh), and DUAL-HOMES to both ToRs (eth1->sw1, eth2->sw2)
+! for HA, so a single ToR loss does not partition storage. allowas-in on both uplinks
+! accepts other nodes' /64s that transited a shared-ASN session, matching the host confs.
+frr defaults datacenter
+hostname ceph
+!
+! dummy0 carries the announced /64; no BGP on it, it is just the origin prefix.
+interface eth1
+ no ipv6 nd suppress-ra
+!
+interface eth2
+ no ipv6 nd suppress-ra
+!
+bfd
+ profile fabric-fast
+  transmit-interval 150
+  receive-interval 150
+  detect-multiplier 3
+ exit
+exit
+!
+router bgp {{ .ASHost }}
+ bgp bestpath as-path multipath-relax
+ neighbor eth1 interface remote-as external
+ neighbor eth1 bfd profile fabric-fast
+ neighbor eth2 interface remote-as external
+ neighbor eth2 bfd profile fabric-fast
+ !
+ address-family ipv6 unicast
+  maximum-paths 64
+  network {{ .CephNet64 }}
+  neighbor eth1 activate
+  neighbor eth1 allowas-in 1
+  neighbor eth2 activate
+  neighbor eth2 allowas-in 1
+ exit-address-family
+!

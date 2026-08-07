@@ -1,10 +1,10 @@
 # Generated from templates/fabric.clab.yml.tmpl — do not edit by hand.
-name: {{ .Name }}
+name: ectobase
 
 mgmt:
-  network: {{ .Name }}-mgmt
+  network: ectobase-mgmt
   ipv4-subnet: 172.20.20.0/24
-  ipv6-subnet: {{ .MgmtV6Subnet }}
+  ipv6-subnet: 3fff:172:20:20::/64
 
 topology:
   defaults:
@@ -14,75 +14,73 @@ topology:
   nodes:
     edge1:
       kind: vyosnetworks_vyos
-      image: {{ index .Images "vyos" }}
+      image: img/vyos
       startup-config: vyos/edge1.boot
       enforce-startup-config: true
       sysctls: {net.ipv6.conf.all.forwarding: 1}
       # Drop the docker-injected mgmt default (a kernel route, FRR distance 0) so
       # FRR selects the BGP/static ::/0 and egress leaves via the fabric, not mgmt.
       exec:
-        - "ip -6 route del default via {{ .MgmtV6Gateway }} dev eth0"
+        - "ip -6 route del default via 3fff:172:20:20::1 dev eth0"
     edge2:
       kind: vyosnetworks_vyos
-      image: {{ index .Images "vyos" }}
+      image: img/vyos
       startup-config: vyos/edge2.boot
       enforce-startup-config: true
       sysctls: {net.ipv6.conf.all.forwarding: 1}
       # Drop the docker-injected mgmt default (a kernel route, FRR distance 0) so
       # FRR selects the BGP/static ::/0 and egress leaves via the fabric, not mgmt.
       exec:
-        - "ip -6 route del default via {{ .MgmtV6Gateway }} dev eth0"
+        - "ip -6 route del default via 3fff:172:20:20::1 dev eth0"
 
     nat64-1:
       kind: linux
-      image: {{ index .Images "tayga" }}
+      image: img/tayga
       cap-add: ["NET_ADMIN"]
       devices: ["/dev/net/tun"]
       env:
-        V6_ADDR: {{ .TaygaNet }}:1::2/64
-        V6_GW: {{ .TaygaNet }}:1::1
+        V6_ADDR: fd00:64:1::2/64
+        V6_GW: fd00:64:1::1
         WAN_ADDR: 172.29.0.21/24
-        WAN_GW: {{ .WanGwV4 }}
+        WAN_GW: 172.29.0.1
         POOL: 172.29.64.0/24
         POOL_ADDR: 172.29.64.1
     nat64-2:
       kind: linux
-      image: {{ index .Images "tayga" }}
+      image: img/tayga
       cap-add: ["NET_ADMIN"]
       devices: ["/dev/net/tun"]
       env:
-        V6_ADDR: {{ .TaygaNet }}:2::2/64
-        V6_GW: {{ .TaygaNet }}:2::1
+        V6_ADDR: fd00:64:2::2/64
+        V6_GW: fd00:64:2::1
         WAN_ADDR: 172.29.0.22/24
-        WAN_GW: {{ .WanGwV4 }}
+        WAN_GW: 172.29.0.1
         POOL: 172.29.65.0/24
         POOL_ADDR: 172.29.65.1
 
     sw1:
       kind: vyosnetworks_vyos
-      image: {{ index .Images "vyos" }}
+      image: img/vyos
       startup-config: vyos/sw1.boot
       enforce-startup-config: true
       sysctls: {net.ipv6.conf.all.forwarding: 1}
       # Drop the docker-injected mgmt default (a kernel route, FRR distance 0) so
       # FRR selects the BGP/static ::/0 and egress leaves via the fabric, not mgmt.
       exec:
-        - "ip -6 route del default via {{ .MgmtV6Gateway }} dev eth0"
+        - "ip -6 route del default via 3fff:172:20:20::1 dev eth0"
     sw2:
       kind: vyosnetworks_vyos
-      image: {{ index .Images "vyos" }}
+      image: img/vyos
       startup-config: vyos/sw2.boot
       enforce-startup-config: true
       sysctls: {net.ipv6.conf.all.forwarding: 1}
       # Drop the docker-injected mgmt default (a kernel route, FRR distance 0) so
       # FRR selects the BGP/static ::/0 and egress leaves via the fabric, not mgmt.
       exec:
-        - "ip -6 route del default via {{ .MgmtV6Gateway }} dev eth0"
-
-{{- range $n := .Nodes }}
-    {{ $n.Cluster }}-{{ $n.Index }}:
+        - "ip -6 route del default via 3fff:172:20:20::1 dev eth0"
+    central-1:
       kind: linux
-      image: {{ index $.Images "talos" }}
+      image: img/talos
       # containerlab runs every node privileged, so Talos boots in container mode
       # with a writable rootfs; it reads its machine config from USERDATA. Talos'
       # SetupSharedFilesystems marks /var, /etc/cni and /run MS_SHARED, which needs
@@ -91,35 +89,72 @@ topology:
       # mount point regardless of backing store, so this keeps /var off RAM.
       env:
         PLATFORM: container
-      env-files: [talos/{{ $n.Cluster }}-{{ $n.Index }}.env]
+      env-files: [talos/central-1.env]
       binds:
-        - mounts/{{ $n.Cluster }}-{{ $n.Index }}/run:/run
-        - mounts/{{ $n.Cluster }}-{{ $n.Index }}/var:/var
-        - mounts/{{ $n.Cluster }}-{{ $n.Index }}/cni:/etc/cni
-        - {{ $.ModulesDir }}:/usr/lib/modules:ro
+        - mounts/central-1/run:/run
+        - mounts/central-1/var:/var
+        - mounts/central-1/cni:/etc/cni
+        - /usr/lib/modules:/usr/lib/modules:ro
       sysctls:
         net.ipv6.conf.all.disable_ipv6: "0"
-{{- end }}
+    k02-1:
+      kind: linux
+      image: img/talos
+      # containerlab runs every node privileged, so Talos boots in container mode
+      # with a writable rootfs; it reads its machine config from USERDATA. Talos'
+      # SetupSharedFilesystems marks /var, /etc/cni and /run MS_SHARED, which needs
+      # them to be real mount points (containerlab has no tmpfs key), so we bind
+      # per-node dirs. They live on disk under build/<name>/mounts — a bind is a
+      # mount point regardless of backing store, so this keeps /var off RAM.
+      env:
+        PLATFORM: container
+      env-files: [talos/k02-1.env]
+      binds:
+        - mounts/k02-1/run:/run
+        - mounts/k02-1/var:/var
+        - mounts/k02-1/cni:/etc/cni
+        - /usr/lib/modules:/usr/lib/modules:ro
+      sysctls:
+        net.ipv6.conf.all.disable_ipv6: "0"
+    k02-2:
+      kind: linux
+      image: img/talos
+      # containerlab runs every node privileged, so Talos boots in container mode
+      # with a writable rootfs; it reads its machine config from USERDATA. Talos'
+      # SetupSharedFilesystems marks /var, /etc/cni and /run MS_SHARED, which needs
+      # them to be real mount points (containerlab has no tmpfs key), so we bind
+      # per-node dirs. They live on disk under build/<name>/mounts — a bind is a
+      # mount point regardless of backing store, so this keeps /var off RAM.
+      env:
+        PLATFORM: container
+      env-files: [talos/k02-2.env]
+      binds:
+        - mounts/k02-2/run:/run
+        - mounts/k02-2/var:/var
+        - mounts/k02-2/cni:/etc/cni
+        - /usr/lib/modules:/usr/lib/modules:ro
+      sysctls:
+        net.ipv6.conf.all.disable_ipv6: "0"
     wan:
       kind: linux
-      image: {{ index .Images "wan" }}
+      image: img/wan
       # All lab images are built locally (make lab-images) and not pushed to a
       # remote registry, so keep clab's IfNotPresent default — an Always policy
       # would force a failing remote pull of the local-only wan image.
       cap-add: ["NET_ADMIN"]
       env:
-        WAN_V4_ADDR: {{ .Wan.V4Addr }}
-        WAN_V6_ADDR: {{ .Wan.V6Addr }}
-        WAN_MASQ_V4: "{{ join " " .Wan.MasqV4 }}"
-        WAN_MASQ_V6: "{{ join " " .Wan.MasqV6 }}"
-        WAN_ROUTES: "{{ range $i, $r := .Wan.Routes }}{{ if $i }};{{ end }}{{ $r.Prefix }} {{ join "," $r.NextHops }}{{ end }}"
+        WAN_V4_ADDR: 172.29.0.1/24
+        WAN_V6_ADDR: fd00:29::1/64
+        WAN_MASQ_V4: "172.29.0.0/16"
+        WAN_MASQ_V6: "fd00:cafe::/32 fd00:db8::/32 fd00:ffff::/32 fd00:29::/64"
+        WAN_ROUTES: "fd00:cafe::/32 fd00:29::11,fd00:29::12;fd00:db8::/32 fd00:29::11,fd00:29::12;fd00:ffff::/32 fd00:29::11,fd00:29::12"
         # eth5 is the registry link; it must join br0 (the WAN L2 segment) so the
         # registry (fd00:29::5 on eth5) is reachable over the fabric from the nodes.
         WAN_LAN_IFACES: "eth1 eth2 eth3 eth4 eth5"
 
     registry:
       kind: linux
-      image: {{ index .Images "registry" }}
+      image: registry:2
       # Persistent pull-through + push-local mirror. registry:2 reads its config
       # from /etc/docker/registry/config.yml; the cache is a host-path dir (clab
       # binds cannot name docker volumes). The exec entries give the registry its
@@ -132,23 +167,22 @@ topology:
         - registry/config.yml:/etc/docker/registry/config.yml
         - registry-cache:/var/lib/registry
       exec:
-        - ip -6 addr add {{ .RegistryAddr }}/64 dev eth1
-        - ip -6 route replace default via {{ .WanNet }}::1
-{{- if .CephEnabled }}
+        - ip -6 addr add fd00:29::5/64 dev eth1
+        - ip -6 route replace default via fd00:29::1
 
     # --- optional shared Ceph/demo storage node (Tier-2 storage fencing) ---
     # Each compute node reaches the mon via its own /64 underlay = the Tier-2 fence
-    # coordinate, so ceph lives on its OWN fabric /64 ({{ .CephNet64 }}, mon {{ .CephMonAddr }}).
+    # coordinate, so ceph lives on its OWN fabric /64 (fd00:cafe:635::/64, mon fd00:cafe:635::1).
     #
     # NETNS OWNER = ceph-net (FRR), NOT ceph. ceph/demo has no `ip` and, given an
     # IPv6-only CEPH_PUBLIC_NETWORK, exits at boot if the /64 isn't already on an
     # interface — but a co-netns sidecar can only start AFTER its target is running
     # (chicken-and-egg). So the FRR container owns the netns + the sw1/sw2 uplinks,
-    # creates dummy0 ({{ .CephMonAddr }}/64) FIRST, then ceph/demo joins that netns
+    # creates dummy0 (fd00:cafe:635::1/64) FIRST, then ceph/demo joins that netns
     # (startup-delay) and finds the /64 already present.
     ceph-net:
       kind: linux
-      image: {{ index .Images "frr" }}
+      image: img/frr
       binds:
         - ceph/frr-daemons:/etc/frr/daemons
         - ceph/frr.conf:/etc/frr/frr.conf
@@ -157,13 +191,13 @@ topology:
       sysctls:
         net.ipv6.conf.all.forwarding: 1
     # ceph/demo (mon+mgr+osd) shares ceph-net's netns; by the time it boots, dummy0
-    # already carries {{ .CephMonAddr }}/64 so MON_IP binds cleanly. Ephemeral (no
+    # already carries fd00:cafe:635::1/64 so MON_IP binds cleanly. Ephemeral (no
     # persistent binds: clab reads a bare `name:/path` bind as a relative host path
     # and fails verification).
     ceph:
       kind: linux
-      image: {{ index .Images "ceph" }}
-      network-mode: container:clab-{{ .Name }}-ceph-net
+      image: img/ceph
+      network-mode: container:clab-ectobase-ceph-net
       startup-delay: 20   # wait for ceph-net to create dummy0 + the /64 before ceph/demo binds MON_IP
       # ceph/demo IPv6 knobs (the demo image mishandles v6 out of the box):
       #   MON_IP bracketed -> the demo writes `mon host = v2:${MON_IP}:${MON_PORT}` verbatim;
@@ -175,12 +209,11 @@ topology:
       #     single-OSD demo (no degraded/undersized PGs -> RBD provisions clean).
       #   DEMO_DAEMONS=osd -> bring up only mon+mgr+osd (all RBD needs); skip rgw + mds/nfs.
       env:
-        MON_IP: "[{{ .CephMonAddr }}]"
-        CEPH_PUBLIC_NETWORK: {{ .CephNet64 }}
+        MON_IP: "[fd00:cafe:635::1]"
+        CEPH_PUBLIC_NETWORK: fd00:cafe:635::/64
         IP_VERSION: "6"
         CEPH_ARGS: "--ms-bind-ipv4=false --osd-pool-default-size=1"
         DEMO_DAEMONS: osd
-{{- end }}
 
   links:
     - endpoints: ["edge1:eth1", "sw1:eth1"]
@@ -191,12 +224,18 @@ topology:
       mtu: 1500
     - endpoints: ["edge2:eth2", "sw2:eth2"]
       mtu: 1500
-{{- range $n := .Nodes }}
-    - endpoints: ["{{ $n.Cluster }}-{{ $n.Index }}:eth1", "sw1:eth{{ add 2 $n.PortSeq }}"]
+    - endpoints: ["central-1:eth1", "sw1:eth3"]
       mtu: 1500
-    - endpoints: ["{{ $n.Cluster }}-{{ $n.Index }}:eth2", "sw2:eth{{ add 2 $n.PortSeq }}"]
+    - endpoints: ["central-1:eth2", "sw2:eth3"]
       mtu: 1500
-{{- end }}
+    - endpoints: ["k02-1:eth1", "sw1:eth4"]
+      mtu: 1500
+    - endpoints: ["k02-1:eth2", "sw2:eth4"]
+      mtu: 1500
+    - endpoints: ["k02-2:eth1", "sw1:eth5"]
+      mtu: 1500
+    - endpoints: ["k02-2:eth2", "sw2:eth5"]
+      mtu: 1500
     - endpoints: ["edge1:eth3", "wan:eth1"]
       mtu: 1500
     - endpoints: ["edge2:eth3", "wan:eth2"]
@@ -211,13 +250,11 @@ topology:
       mtu: 1500
     - endpoints: ["registry:eth1", "wan:eth5"]
       mtu: 1500
-{{- if .CephEnabled }}
     # --- shared Ceph storage node: dual-homed to both ToRs (eth1->sw1, eth2->sw2),
     # the next free host port on each ToR (CephPortSeq = totalNodes + 1). The ceph-net
     # FRR sidecar (in the ceph netns) peers over both and announces the ceph /64 so
     # every compute node reaches the mon from its own /64. ---
-    - endpoints: ["ceph-net:eth1", "sw1:eth{{ add 2 .CephPortSeq }}"]
+    - endpoints: ["ceph-net:eth1", "sw1:eth6"]
       mtu: 3000
-    - endpoints: ["ceph-net:eth2", "sw2:eth{{ add 2 .CephPortSeq }}"]
+    - endpoints: ["ceph-net:eth2", "sw2:eth6"]
       mtu: 3000
-{{- end }}

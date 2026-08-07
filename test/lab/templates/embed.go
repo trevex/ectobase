@@ -4,5 +4,5 @@ package templates
 
 import "embed"
 
-//go:embed fabric.clab.yml.tmpl vyos/*.tmpl talos/*.tmpl k8s/*.tmpl registry/*.tmpl
+//go:embed fabric.clab.yml.tmpl vyos/*.tmpl talos/*.tmpl k8s/*.tmpl registry/*.tmpl ceph/*
 var FS embed.FS

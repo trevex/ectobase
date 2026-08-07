@@ -5,6 +5,9 @@ images:
   tayga:    ghcr.io/trevex/ectobase/tayga:latest
   wan:      ghcr.io/trevex/ectobase/wan:latest
   registry: registry:2
+  # Only used when fabric.ceph.enabled: true (the optional storage node + FRR sidecar).
+  frr:      frrouting/frr:latest
+  ceph:     quay.io/ceph/demo:latest
 fabric:
   as: { edge: 65000, switch: 65010, host: 65100 }
   nat64Prefix: 64:ff9b::/96

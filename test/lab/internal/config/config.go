@@ -20,7 +20,15 @@ type Fabric struct {
 	AS          ASConfig  `yaml:"as"`
 	NAT64Prefix string    `yaml:"nat64Prefix"`
 	Registry    Registry  `yaml:"registry"`
+	Ceph        Ceph      `yaml:"ceph"`
 	Clusters    []Cluster `yaml:"clusters"`
+}
+
+// Ceph optionally attaches a single-OSD Ceph/demo storage node to the fabric
+// (for RBD PVC + Tier-2 storage-fence tests). Off by default so the base fabric
+// stays lean; the ceph clab node + FRR sidecar are only rendered when enabled.
+type Ceph struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 type ASConfig struct {

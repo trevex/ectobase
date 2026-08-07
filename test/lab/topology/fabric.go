@@ -160,6 +160,30 @@ func Render(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("registry cache dir: %w", err)
 	}
 
+	// Optional Ceph node: render its FRR sidecar files (preboot script + daemons +
+	// frr.conf) into build/<name>/ceph/. Guarded so the base fabric stays lean.
+	if cfg.Fabric.Ceph.Enabled {
+		cephDir := filepath.Join(p.build, "ceph")
+		if err := os.MkdirAll(cephDir, 0o755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", cephDir, err)
+		}
+		if err := render.FileFS(templates.FS, "ceph/frr.conf.tmpl", filepath.Join(cephDir, "frr.conf"), v); err != nil {
+			return fmt.Errorf("render ceph frr.conf: %w", err)
+		}
+		// ceph-preboot.sh templates in the mon addr (dummy0 /64).
+		if err := render.FileFS(templates.FS, "ceph/ceph-preboot.sh", filepath.Join(cephDir, "ceph-preboot.sh"), v); err != nil {
+			return fmt.Errorf("render ceph preboot: %w", err)
+		}
+		// frr-daemons is a static shell file: copy verbatim (embed → build).
+		daemons, err := templates.FS.ReadFile("ceph/frr-daemons")
+		if err != nil {
+			return fmt.Errorf("read embedded ceph/frr-daemons: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(cephDir, "frr-daemons"), daemons, 0o644); err != nil {
+			return fmt.Errorf("write ceph/frr-daemons: %w", err)
+		}
+	}
+
 	slog.Info("rendered lab", "build", p.build, "clusters", len(cfg.Fabric.Clusters))
 	return nil
 }
