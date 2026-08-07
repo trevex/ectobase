@@ -80,7 +80,7 @@ func KubeVirtCDI(ctx context.Context, r Runner, kubeconfig string) error {
 	// target the tainted single node, without which the CR never goes Available. Retry
 	// briefly — the operator's validating webhook may not be serving the instant the CR
 	// is created.
-	slog.Info("configuring the KubeVirt CR (emulation, flowplane binding, tolerations)")
+	slog.Info("configuring the KubeVirt CR (emulation, flowplane binding)")
 	if err := retryPatch(ctx, r, kubeconfig, "kubevirt", "kubevirt", "kubevirt", kubevirtCRPatch()); err != nil {
 		return fmt.Errorf("patch kubevirt cr: %w", err)
 	}
