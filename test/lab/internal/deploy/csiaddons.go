@@ -63,6 +63,14 @@ func CSIAddons(ctx context.Context, r Runner, kubeconfig, version string) error 
 	if err := r.Run(ctx, "kubectl", "--kubeconfig", kubeconfig, "apply", "-f", csiAddonsReleaseURL(version, "setup-controller.yaml")); err != nil {
 		return fmt.Errorf("apply csi-addons controller: %w", err)
 	}
+	// The upstream controller-manager Deployment carries no control-plane toleration;
+	// on these single-node Talos clusters the re-applied control-plane NoSchedule taint
+	// leaves it Pending. Tolerate the taint so it schedules regardless of untaint timing.
+	if err := r.Run(ctx, "kubectl", "--kubeconfig", kubeconfig, "-n", CSIAddonsNS,
+		"patch", "deploy", "csi-addons-controller-manager", "--type=strategic",
+		"-p", controlPlaneTolerationPatch()); err != nil {
+		return fmt.Errorf("patch csi-addons controller toleration: %w", err)
+	}
 	slog.Info("csi-addons controller applied (NetworkFence CRD available)")
 
 	// --- csi-addons k8s-sidecar into the ceph-csi RBD provisioner (the fence
@@ -119,6 +127,14 @@ metadata:
     pod-security.kubernetes.io/enforce: privileged
 `, ns)
 	return r.RunStdin(ctx, m, "kubectl", "--kubeconfig", kubeconfig, "apply", "-f", "-")
+}
+
+// controlPlaneTolerationPatch is a strategic-merge patch adding a control-plane
+// NoSchedule toleration to a Deployment's pod template, so it schedules on these
+// single-node Talos clusters where the control-plane taint is (re-)applied.
+func controlPlaneTolerationPatch() string {
+	return `{"spec":{"template":{"spec":{"tolerations":[` +
+		`{"key":"node-role.kubernetes.io/control-plane","operator":"Exists","effect":"NoSchedule"}]}}}}`
 }
 
 // csiAddonsSidecarRBAC renders the ClusterRole + bindings the provisioner SA needs

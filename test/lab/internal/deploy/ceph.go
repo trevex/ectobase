@@ -236,6 +236,14 @@ func cephCSIValues(p CephParams) string {
       - "%s"
 provisioner:
   replicaCount: 1            # single-node cluster: the chart default (3) leaves 2 replicas Pending
+  # These single-node Talos clusters are control-plane-only, and Talos RE-APPLIES the
+  # control-plane NoSchedule taint after the harness untaints — so the provisioner
+  # Deployment (and any rollout surge, e.g. the csi-addons sidecar injection) must
+  # TOLERATE the taint to schedule reliably regardless of untaint timing.
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
 secret:
   create: true
   name: csi-rbd-secret
