@@ -322,6 +322,88 @@ func Deploy(ctx context.Context, cfg *config.Config) error {
 	return deployEctobase(ctx, cfg)
 }
 
+// Ceph deploys Ceph (pool + external ceph-csi-rbd + csi-addons) onto an
+// already-up fabric with fabric.ceph.enabled. It is the `lab ceph` entry point.
+// When purge is set it uninstalls instead (helm uninstall + delete namespaces).
+func Ceph(ctx context.Context, cfg *config.Config, purge bool) error {
+	if !cfg.Fabric.Ceph.Enabled {
+		return fmt.Errorf("fabric.ceph.enabled is false in %s — enable ceph and re-up the fabric first", cfg.Name)
+	}
+	p := buildPaths(cfg)
+
+	// Central is the fence-executor / provisioner cluster (csi-addons controller +
+	// the ceph-csi provisioner it dials). Compute clusters run ceph-csi too so their
+	// nodes can attach RBD.
+	centralKubeconfig := p.clusterKubeconfig(centralCluster)
+	var clusters []deploy.ComputeCluster
+	for _, cl := range cfg.Fabric.Clusters {
+		clusters = append(clusters, deploy.ComputeCluster{
+			Name:       cl.Name,
+			Kubeconfig: p.clusterKubeconfig(cl.Name),
+		})
+	}
+
+	if purge {
+		return cephPurge(ctx, clusters)
+	}
+
+	// Compute-node containers (clab-<name>-<cluster>-<index>) that attach RBD and so
+	// need the krbd fixups. Central runs only the provisioner (librbd, no attach), so
+	// it is excluded from the krbd prep.
+	var nodeCtrs []string
+	for _, cl := range cfg.Fabric.Clusters {
+		if cl.Name == centralCluster {
+			continue
+		}
+		for _, n := range cfg.Derived.Clusters[cl.Name].Nodes {
+			nodeCtrs = append(nodeCtrs, clab.ContainerName(cfg.Name, fmt.Sprintf("%s-%d", n.Cluster, n.Index)))
+		}
+	}
+
+	// Step 1: create the pool + emit the external-cluster params (run against the
+	// shared clab ceph node; the params are cluster-independent).
+	params, err := deploy.CephDemo(ctx, deploy.CephDemoSpec{
+		LabName: cfg.Name,
+		WorkDir: p.build,
+		MonAddr: cfg.Derived.CephMonAddr,
+		MonEndp: "[" + cfg.Derived.CephMonAddr + "]:3300",
+	})
+	if err != nil {
+		return fmt.Errorf("ceph demo (pool + params): %w", err)
+	}
+
+	// Step 2: external ceph-csi-rbd on every cluster (central = fence executor +
+	// compute = attach). Values render under build/<name>/ceph/.
+	cephValuesDir := filepath.Join(p.build, "ceph")
+	for _, c := range clusters {
+		if err := deploy.CephCSI(ctx, nil, c.Kubeconfig, c.Name, cephValuesDir, params); err != nil {
+			return fmt.Errorf("cluster %s: ceph-csi: %w", c.Name, err)
+		}
+	}
+
+	// Step 3: csi-addons controller + sidecar into the central (fence executor)
+	// provisioner.
+	if err := deploy.CSIAddons(ctx, nil, centralKubeconfig, deploy.CSIAddonsVersion); err != nil {
+		return fmt.Errorf("csi-addons on central: %w", err)
+	}
+
+	// Step 4: krbd node fixups (probe-first) so compute-node attach works.
+	deploy.EnsureNodeKrbd(ctx, nil, nodeCtrs)
+
+	slog.Info("ceph deployed", "clusters", len(clusters), "fenceExecutor", centralCluster)
+	return nil
+}
+
+// cephPurge uninstalls the ceph-csi-rbd release and deletes the ceph-csi +
+// csi-addons namespaces on every cluster (best-effort).
+func cephPurge(ctx context.Context, clusters []deploy.ComputeCluster) error {
+	for _, c := range clusters {
+		deploy.CephPurge(ctx, nil, c.Kubeconfig, c.Name)
+	}
+	slog.Info("ceph purged", "clusters", len(clusters))
+	return nil
+}
+
 // centralCluster is the cluster that hosts the central aggregated apiserver +
 // controller + reflector. Compute clusters run the ectobase chart with a broker.
 const centralCluster = "central"
