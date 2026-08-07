@@ -83,9 +83,10 @@ topology:
     {{ $n.Cluster }}-{{ $n.Index }}:
       kind: k8s-kind
       startup-config: kind/{{ $n.Cluster }}-kind.yaml
-      k8s_kind:
-        deploy:
-          wait: 180s   # clab k8s-kind boot-marker scan (not a Ready gate); exceeds the node preboot delay
+      extras:
+        k8s_kind:
+          deploy:
+            wait: 180s   # clab k8s-kind boot-marker scan (not a Ready gate); exceeds the node preboot delay
 {{- end }}
     wan:
       kind: linux
