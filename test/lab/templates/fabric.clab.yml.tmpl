@@ -86,7 +86,9 @@ topology:
       extras:
         k8s_kind:
           deploy:
-            wait: 180s   # clab k8s-kind boot-marker scan (not a Ready gate); exceeds the node preboot delay
+            wait: 0s   # do NOT gate on control-plane Ready: disableDefaultCNI leaves the
+            # node NotReady until topology.Up installs Cilium after clab deploy. A non-zero
+            # wait times out here (node never Ready pre-CNI) and cascades to link-attach.
 {{- end }}
     wan:
       kind: linux
