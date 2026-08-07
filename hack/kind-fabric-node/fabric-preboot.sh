@@ -92,14 +92,18 @@ ROUTERID="10.0.2.$(printf '%s' "$BASE" | sed 's/.*:\([0-9a-f]*\)::$/\1/' | tr -c
 } > /etc/frr/frr.conf
 systemctl restart frr || systemctl start frr || true
 
-# 4) Best-effort wait for BGP convergence (underlay reachability) before kubelet.
+# 4) Best-effort BRIEF wait for BGP convergence (underlay reachability) before kubelet.
 #    Ensures the underlay (peer /64s, the reflector/apiserver loopbacks, and the
 #    control-plane API server the Cilium agents reach via k8sServiceHost) is routable
-#    by the time kubelet + the agents come up. BOUNDED: the uplink is wired by clab
-#    shortly after boot and FRR converges within seconds; if not, proceed after the
-#    timeout — NEVER hard-block kubelet. Keep it under systemd's TimeoutStartSec (90s)
-#    and clab's k8s-kind deploy wait (120s).
-CONVERGE_TIMEOUT="${FABRIC_BGP_TIMEOUT:-60}"
+#    by the time kubelet + the agents come up. CRITICAL: this oneshot gates
+#    multi-user.target (WantedBy) via kubelet, and clab/kind abort the node if the
+#    "Reached target Multi-User System" marker doesn't appear within kind's own
+#    ~30s "Preparing nodes" wait. In the Go lab the fabric (VyOS switches/edges)
+#    boots CONCURRENTLY with the kind clusters, so BGP is NOT converged at node boot
+#    and a long wait here delays multi-user past that marker -> the node is deleted.
+#    So keep this SHORT (well under kind's marker wait); Cilium/kubelet self-heal
+#    once FRR converges. Override with FABRIC_BGP_TIMEOUT if a node needs longer.
+CONVERGE_TIMEOUT="${FABRIC_BGP_TIMEOUT:-5}"
 i=0
 while [ "$i" -lt "$CONVERGE_TIMEOUT" ]; do
   if ip -6 route show proto bgp 2>/dev/null | grep -q .; then
