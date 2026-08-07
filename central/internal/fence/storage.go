@@ -86,11 +86,46 @@ func (f *StorageFencer) Fence(ctx context.Context, prefix string) error {
 	return nil
 }
 
-// Release flips the CR to Unfenced and deletes it; nil once removed/not-found.
+// Release drives the NetworkFence Fenced->Unfenced so csi-addons runs
+// `ceph osd blocklist rm`, then deletes the CR. Like Fence it is fail-safe: it returns
+// nil ONLY once the un-fence has completed (the CR was observed Unfenced AND reported
+// status.result==Succeeded) and the CR is removed; while the transition is in flight it
+// returns an error so the caller holds the drain and retries on the next reconcile. A
+// missing CR means already released.
+//
+// It must NOT simply delete a Fenced CR: ceph removes the blocklist entry only on the
+// Fenced->Unfenced state transition (this driver runs no delete-finalizer un-fence), so
+// a bare delete leaves the blocklist in place (with a multi-year expiry) even though the
+// CR is gone — exactly the recovery leak this replaces.
 func (f *StorageFencer) Release(ctx context.Context, prefix string) error {
-	u := f.obj(prefix, "Unfenced")
-	if err := f.c.Delete(ctx, u); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete NetworkFence %s: %w", u.GetName(), err)
+	name := fenceName(prefix)
+	cur := &unstructured.Unstructured{}
+	cur.SetGroupVersionKind(schema.GroupVersionKind{Group: NetworkFenceGVR.Group, Version: NetworkFenceGVR.Version, Kind: "NetworkFence"})
+	err := f.c.Get(ctx, client.ObjectKey{Name: name}, cur)
+	if apierrors.IsNotFound(err) {
+		return nil // already released
+	}
+	if err != nil {
+		return fmt.Errorf("get NetworkFence %s: %w", name, err)
+	}
+	state, _, _ := unstructured.NestedString(cur.Object, "spec", "fenceState")
+	if state != "Unfenced" {
+		// Flip to Unfenced IN PLACE (preserve resourceVersion) so csi-addons
+		// un-blocklists. status.result still reflects the prior Fenced op, so it is NOT
+		// trusted here — await a later reconcile once the CR is observed Unfenced.
+		_ = unstructured.SetNestedField(cur.Object, "Unfenced", "spec", "fenceState")
+		if uerr := f.c.Update(ctx, cur); uerr != nil {
+			return fmt.Errorf("update NetworkFence %s to Unfenced: %w", name, uerr)
+		}
+		return fmt.Errorf("NetworkFence %s set Unfenced; awaiting un-fence", name)
+	}
+	// Observed Unfenced (from a prior reconcile): status.result now reflects the un-fence.
+	result, _, _ := unstructured.NestedString(cur.Object, "status", "result")
+	if result != "Succeeded" {
+		return fmt.Errorf("NetworkFence %s un-fence not confirmed (result=%q)", name, result)
+	}
+	if derr := f.c.Delete(ctx, cur); derr != nil && !apierrors.IsNotFound(derr) {
+		return fmt.Errorf("delete NetworkFence %s: %w", name, derr)
 	}
 	return nil
 }
