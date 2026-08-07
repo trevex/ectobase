@@ -404,6 +404,60 @@ func cephPurge(ctx context.Context, clusters []deploy.ComputeCluster) error {
 	return nil
 }
 
+// Tier2 deploys the Tier-2 (VM live-migration + fencing) prerequisites onto an
+// already-up fabric: KubeVirt + CDI + the flowplane network binding on every compute
+// cluster, and the ceph fsid wired into the central controller's ceph-csi fence
+// actuator. It is the `lab tier2 up` entry point. Requires fabric.ceph.enabled (RBD
+// is the Tier-2 storage) and that `lab ceph` has already run (it consumes the fsid
+// from build/<name>/ceph.env).
+func Tier2(ctx context.Context, cfg *config.Config) error {
+	if !cfg.Fabric.Ceph.Enabled {
+		return fmt.Errorf("fabric.ceph.enabled is false in %s — Tier-2 needs RBD; enable ceph, re-up, and run `lab ceph` first", cfg.Name)
+	}
+	p := buildPaths(cfg)
+
+	// The ceph fsid was emitted by CephDemo into build/<name>/ceph.env (CEPH_FSID=...).
+	fsid, err := readCephFSID(filepath.Join(p.build, "ceph.env"))
+	if err != nil {
+		return err
+	}
+
+	// KubeVirt + CDI on every compute cluster (central runs no VMs — it is the fence
+	// executor / provisioner only).
+	for _, cl := range cfg.Fabric.Clusters {
+		if cl.Name == centralCluster {
+			continue
+		}
+		if err := deploy.KubeVirtCDI(ctx, nil, p.clusterKubeconfig(cl.Name)); err != nil {
+			return fmt.Errorf("cluster %s: kubevirt+cdi: %w", cl.Name, err)
+		}
+	}
+
+	// Wire the ceph fsid into the central controller's ceph-csi fence actuator.
+	if err := deploy.PatchCentralCSIClusterID(ctx, nil, p.clusterKubeconfig(centralCluster), fsid); err != nil {
+		return fmt.Errorf("wire central csi-cluster-id: %w", err)
+	}
+
+	slog.Info("tier2 deployed", "computeClusters", len(cfg.Fabric.Clusters)-1, "fsid", fsid)
+	return nil
+}
+
+// readCephFSID reads the CEPH_FSID= value from a ceph.env file (written by CephDemo).
+func readCephFSID(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("ceph.env not found — run `lab ceph` first (%s): %w", path, err)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "CEPH_FSID="); ok {
+			if v = strings.TrimSpace(v); v != "" {
+				return v, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no non-empty CEPH_FSID= line in %s — run `lab ceph` first", path)
+}
+
 // centralCluster is the cluster that hosts the central aggregated apiserver +
 // controller + reflector. Compute clusters run the ectobase chart with a broker.
 const centralCluster = "central"
