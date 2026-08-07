@@ -31,8 +31,17 @@ ipam:
     clusterPoolIPv6MaskSize: 64
 
 bpf:
-  masquerade: true
+  # iptables (not BPF) masquerade: route-source masquerade below is only supported on
+  # the iptables path (the agent rejects enable-masquerade-to-route-source with
+  # enable-bpf-masquerade=true). Perf is irrelevant for the lab.
+  masquerade: false
 enableIPv6Masquerade: true
+# Masquerade pod egress to the ROUTE SOURCE — the node's announced identity
+# fd00:cafe:<h>::1 (dummy0 = the k8s InternalIP + BGP-advertised address) — not the
+# egress device's ephemeral RA-SLAAC uplink address. Without this, pod traffic to a
+# fabric /64 (e.g. the ceph mon on fd00:cafe:635::/64) is SNATed to a SLAAC uplink addr
+# whose return path breaks, so librbd hangs. The node identity is stable + fabric-routable.
+enableMasqueradeRouteSource: true
 
 # Talos runs Cilium in a container-mode node: mount the host cgroup rather than
 # letting the agent auto-mount, and grant the capability sets Talos documents.

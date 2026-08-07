@@ -236,26 +236,11 @@ func cephCSIValues(p CephParams) string {
       - "%s"
 provisioner:
   replicaCount: 1            # single-node cluster: the chart default (3) leaves 2 replicas Pending
-  # The pod network can't reach the ceph mon's /64 across this fabric: Cilium's
-  # dual-uplink IPv6 masquerade (to an ephemeral RA-SLAAC uplink address) breaks the
-  # pod->ceph return path, so librbd CreateVolume hangs. Run the provisioner on the
-  # host network (like the nodeplugin, which reaches the mon fine) — the chart's
-  # documented escape hatch "for deployments where the podNetwork has no access to
-  # ceph". This also lets the csi-addons fence RPC (ceph osd blocklist, served from
-  # this pod) reach the mon for the Tier-2 gate.
-  enableHostNetwork: true
-  # Recreate (not RollingUpdate): a hostNetwork rollout surge would put two pods on the
-  # same node binding the same host ports (metrics + the csi-addons sidecar :9070) and
-  # deadlock. Recreate terminates the old pod first, so only one provisioner ever holds
-  # the host ports. Brief provisioning downtime during a rollout is fine for the lab.
-  strategy:
-    type: Recreate
-  httpMetrics:
-    # Move off 8080: the nodeplugin is already hostNetwork and binds host :8080 on the
-    # single node; a hostNetwork provisioner on :8080 too would collide.
-    containerPort: 8090
-    service:
-      servicePort: 8090
+  # NOTE: the provisioner runs on the POD network and reaches the ceph mon's /64 via
+  # Cilium's route-source masquerade (enableMasqueradeRouteSource in cilium-values —
+  # SNAT to the node's announced identity, not the ephemeral RA-SLAAC uplink addr).
+  # This also lets the csi-addons fence RPC (ceph osd blocklist, served from this pod)
+  # reach the mon for the Tier-2 gate.
   # These single-node Talos clusters are control-plane-only, and Talos RE-APPLIES the
   # control-plane NoSchedule taint after the harness untaints — so the provisioner
   # Deployment (and any rollout surge, e.g. the csi-addons sidecar injection) must
