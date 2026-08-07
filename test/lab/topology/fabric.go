@@ -374,8 +374,17 @@ func Ceph(ctx context.Context, cfg *config.Config, purge bool) error {
 
 	// Step 2: external ceph-csi-rbd on every cluster (central = fence executor +
 	// compute = attach). Values render under build/<name>/ceph/.
+	//
+	// Re-untaint each control-plane node first: `up` untainted every node, but Talos
+	// re-applies the control-plane NoSchedule taint over time, so by `lab ceph`
+	// (minutes later) the ceph-csi provisioner Deployment — which carries no
+	// control-plane toleration — sits Pending on these single-node clusters and
+	// helm --wait times out. Mirrors deploy.Ectobase's re-untaint.
 	cephValuesDir := filepath.Join(p.build, "ceph")
 	for _, c := range clusters {
+		if err := deploy.AllowSchedulingOnControlPlanes(ctx, c.Kubeconfig); err != nil {
+			return fmt.Errorf("cluster %s: untaint: %w", c.Name, err)
+		}
 		if err := deploy.CephCSI(ctx, nil, c.Kubeconfig, c.Name, cephValuesDir, params); err != nil {
 			return fmt.Errorf("cluster %s: ceph-csi: %w", c.Name, err)
 		}
