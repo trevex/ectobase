@@ -122,18 +122,20 @@ func TestTier2Failover(t *testing.T) {
 	cephCtr := "clab-" + cfg.Name + "-ceph"
 	t.Logf("k02 prefix=%s fenceCR=%s hextets=%s ceph=%s", k02Prefix, fenceCR, k02Hextets, cephCtr)
 
-	// --- Phase 6: hard-kill k02 -----------------------------------------------------
-	k02Node, ok := clusterNode(cfg, "k02")
-	require.True(t, ok, "no derived node for cluster k02")
-	k02Ctr := nodeContainer(cfg, k02Node)
-
-	// Register recovery FIRST so a mid-test failure still restarts k02.
+	// --- Phase 6: drain k02 (stop its broker heartbeat) -----------------------------
+	// Instead of `docker kill`ing the node (which destroys its clab fabric veths so the
+	// node can never rejoin — flowplane crash-loops and the rest of the live suite
+	// fails), stop the broker so k02's ClusterPool lease goes stale → central marks the
+	// pool Unknown → the failover reconciler fences + reschedules its VMs. The node +
+	// its fabric stay fully intact; recovery is just restarting the broker. This is a
+	// split-brain "pool unreachable but node alive" scenario — exactly what storage
+	// fencing guards against.
+	// Register recovery FIRST so a mid-test failure still restores the heartbeat.
 	t.Cleanup(func() {
-		_, _ = exec.SudoOutput(context.Background(), "docker", "start", k02Ctr)
+		_ = scaleBrokerReplicas(context.Background(), cfg, "k02", 1)
 	})
-
-	require.NoError(t, hardKillNode(ctx, k02Ctr), "kill k02 node container %s", k02Ctr)
-	t.Logf("killed k02 node container %s", k02Ctr)
+	require.NoError(t, scaleBrokerReplicas(ctx, cfg, "k02", 0), "scale down k02 broker (drain)")
+	t.Logf("drained k02: scaled its broker to 0 (heartbeat stops → pool goes Unknown)")
 
 	// --- Phase 7: fence asserted (central) ------------------------------------------
 	eventually(t, 6*time.Minute, 10*time.Second, func() error {
@@ -174,10 +176,9 @@ func TestTier2Failover(t *testing.T) {
 		t.Logf("k03 VMI %s phase=%q (not hard-required Running)", tier2VMIName, strings.TrimSpace(phase))
 	}
 
-	// --- Phase 11: recovery — restart k02, assert fence released --------------------
-	out, err := exec.SudoOutput(ctx, "docker", "start", k02Ctr)
-	require.NoError(t, err, "docker start %s: %s", k02Ctr, out)
-	t.Logf("restarted k02 node container %s", k02Ctr)
+	// --- Phase 11: recovery — restore the broker heartbeat, assert fence released ----
+	require.NoError(t, scaleBrokerReplicas(ctx, cfg, "k02", 1), "scale up k02 broker (recover)")
+	t.Logf("recovered k02: scaled its broker back to 1 (lease renews → pool Ready → fence released)")
 
 	eventually(t, 6*time.Minute, 10*time.Second, func() error {
 		// The blocklist no longer contains the k02 client.
@@ -196,22 +197,15 @@ func TestTier2Failover(t *testing.T) {
 	})
 }
 
-// hardKillNode simulates a node failure by stopping its container. It tries
-// `docker kill` first; if that fails because the container's init has zombied
-// (these clab Talos nodes run no init to reap/forward signals — the daemon then
-// reports "PID is zombie and can not be killed"), it force-kills the container's
-// containerd-shim by container ID, which tears the container down all the same.
-// Recovery is a `docker start` in the caller's Cleanup.
-func hardKillNode(ctx context.Context, container string) error {
-	if _, err := exec.SudoOutput(ctx, "docker", "kill", container); err == nil {
-		return nil
-	}
-	cid, err := exec.OutputStr(ctx, "docker", "inspect", "-f", "{{.Id}}", container)
-	if err != nil {
-		return fmt.Errorf("inspect %s for shim kill: %w", container, err)
-	}
-	// Force-kill the shim (and anything else) for this container ID.
-	_, err = exec.SudoOutput(ctx, "pkill", "-9", "-f", strings.TrimSpace(cid))
+// scaleBrokerReplicas scales a compute cluster's central-broker deployment. Scaling
+// to 0 stops the broker's ClusterPool-lease heartbeat, so central marks the pool
+// Unknown (lease stale) and the Tier-2 failover reconciler fences + reschedules its
+// VMs — a non-destructive drain that (unlike killing the node container) preserves the
+// node's clab fabric veths, so the node stays usable for the rest of the suite. Scaling
+// back to 1 renews the lease → pool Ready → the fence is released.
+func scaleBrokerReplicas(ctx context.Context, cfg *config.Config, cluster string, replicas int) error {
+	_, err := kubectl(ctx, cfg, cluster, "-n", "ectobase-system",
+		"scale", "deploy/central-broker", fmt.Sprintf("--replicas=%d", replicas))
 	return err
 }
 
