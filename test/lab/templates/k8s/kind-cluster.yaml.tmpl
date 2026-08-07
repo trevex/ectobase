@@ -18,8 +18,6 @@ containerdConfigPatches:
       endpoint = ["http://{{ .RegistryHost }}"]
     [plugins."io.containerd.grpc.v1.cri".registry.mirrors."gcr.io"]
       endpoint = ["http://{{ .RegistryHost }}"]
-    [plugins."io.containerd.grpc.v1.cri".registry.configs."{{ .RegistryHost }}".tls]
-      insecure_skip_verify = true
 nodes:
 {{- range .Nodes }}
   - role: {{ .Role }}
