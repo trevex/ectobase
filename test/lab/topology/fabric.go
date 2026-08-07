@@ -330,24 +330,21 @@ func Up(ctx context.Context, cfg *config.Config) error {
 
 	for _, cl := range cfg.Fabric.Clusters {
 		dc := cfg.Derived.Clusters[cl.Name]
-		talosconfig := p.clusterTalosconfig(cl.Name)
 		kubeconfig := p.clusterKubeconfig(cl.Name)
-		// Bootstrap targets the nodes' own dummy0 identities, not the API VIP: the
-		// health-gated VIP is only held (and BGP-advertised) once the apiserver is
-		// up, i.e. AFTER bootstrap — targeting it here would be a chicken-and-egg.
-		endpoints := make([]string, len(dc.Nodes))
-		for i, n := range dc.Nodes {
-			endpoints[i] = n.IdentityAddr
-		}
-		if err := talos.Bootstrap(ctx, talosconfig, kubeconfig, endpoints); err != nil {
-			return fmt.Errorf("cluster %s bootstrap: %w", cl.Name, err)
+		// clab's k8s-kind node creates + owns the kind cluster (no talosctl bootstrap);
+		// it is named after the node's clab short name (<cluster>-<index>). Collect its
+		// kubeconfig into build/<name>/<cluster>.kubeconfig where the deploy pipeline
+		// expects it. Default 1 node/cluster → the cluster's single node is node[0].
+		kindName := fmt.Sprintf("%s-%d", dc.Nodes[0].Cluster, dc.Nodes[0].Index)
+		if err := writeKindKubeconfig(ctx, kindName, kubeconfig); err != nil {
+			return fmt.Errorf("cluster %s kubeconfig: %w", cl.Name, err)
 		}
 		if err := deploy.WaitAPIServer(ctx, kubeconfig); err != nil {
 			return fmt.Errorf("cluster %s api server: %w", cl.Name, err)
 		}
-		// No untaint needed: cluster.allowSchedulingOnControlPlanes is set in the Talos
-		// config, so these control-plane-only nodes are never tainted and the
-		// cilium-operator (and every other workload) schedules on the single node.
+		// kind's control-plane node carries no NoSchedule taint (kubeProxyMode:none +
+		// disableDefaultCNI; single-node), so the cilium-operator + every workload
+		// schedules on it.
 		if err := deploy.HelmInstall(ctx, kubeconfig, "cilium", deploy.CiliumChart,
 			deploy.CiliumRepo, deploy.CiliumVersion, p.ciliumValues(cl.Name)); err != nil {
 			return fmt.Errorf("cluster %s cilium: %w", cl.Name, err)
@@ -681,6 +678,16 @@ func teardownHostEgress(ctx context.Context) {
 	for _, d := range dels {
 		_ = exec.Sudo(ctx, append([]string{"ip6tables"}, d...)...)
 	}
+}
+
+// writeKindKubeconfig writes the kind cluster's kubeconfig (host-accessible server)
+// to dst. The kind cluster name is the clab k8s-kind node's short name.
+func writeKindKubeconfig(ctx context.Context, kindName, dst string) error {
+	out, err := exec.Output(ctx, "kind", "get", "kubeconfig", "--name", kindName)
+	if err != nil {
+		return fmt.Errorf("kind get kubeconfig %s: %w\n%s", kindName, err, out)
+	}
+	return os.WriteFile(dst, out, 0o600)
 }
 
 // Down destroys the containerlab topology and removes build/<name>/ while
