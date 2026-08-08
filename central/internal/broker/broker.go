@@ -19,7 +19,8 @@ import (
 
 // Broker is the per-cluster set-reconcile engine: it makes the downstream compiled
 // objects (CompiledNIC via SyncOnce, CompiledVM via SyncCompiledVMs,
-// CompiledVolumeAttachment via SyncCompiledVolumeAttachments) exactly match the
+// CompiledVolumeAttachment via SyncCompiledVolumeAttachments, CompiledContainer via
+// SyncCompiledContainers) exactly match the
 // central objects bound to ClusterName (spec.clusterName), per-type. Both spec AND
 // labels are mirrored: the `workload` label is load-bearing downstream (the
 // vm-materializer joins a VM to its volume attachments by it).
@@ -98,6 +99,9 @@ func keyVM(o *netv1.CompiledVM) string { return o.Namespace + "/" + o.Name }
 
 // keyAtt identifies a namespaced CompiledVolumeAttachment as "namespace/name".
 func keyAtt(o *netv1.CompiledVolumeAttachment) string { return o.Namespace + "/" + o.Name }
+
+// keyCtr identifies a namespaced CompiledContainer as "namespace/name".
+func keyCtr(o *netv1.CompiledContainer) string { return o.Namespace + "/" + o.Name }
 
 // SyncCompiledVMs is the CompiledVM twin of SyncOnce: declarative set-reconcile of
 // CompiledVMs bound to ClusterName, central->downstream (create/update/delete).
@@ -194,6 +198,56 @@ func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 		local.Labels = maps.Clone(w.Labels)
 		if err := b.Downstream.Create(ctx, local); err != nil {
 			return fmt.Errorf("create attachment %s: %w", k, err)
+		}
+	}
+	return nil
+}
+
+// SyncCompiledContainers is the CompiledContainer twin of SyncOnce: declarative
+// set-reconcile of CompiledContainers bound to ClusterName, central->downstream.
+func (b *Broker) SyncCompiledContainers(ctx context.Context) error {
+	desired := &netv1.CompiledContainerList{}
+	if err := b.Central.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
+		return fmt.Errorf("list central containers: %w", err)
+	}
+	want := make(map[string]netv1.CompiledContainer, len(desired.Items))
+	for _, o := range desired.Items {
+		want[keyCtr(&o)] = o
+	}
+	have := &netv1.CompiledContainerList{}
+	if err := b.Downstream.List(ctx, have); err != nil {
+		return fmt.Errorf("list downstream containers: %w", err)
+	}
+	haveKeys := make(map[string]bool, len(have.Items))
+	for i := range have.Items {
+		cur := &have.Items[i]
+		haveKeys[keyCtr(cur)] = true
+		w, ok := want[keyCtr(cur)]
+		if !ok {
+			if err := b.Downstream.Delete(ctx, cur); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("gc container %s: %w", keyCtr(cur), err)
+			}
+			continue
+		}
+		if !equality.Semantic.DeepEqual(cur.Spec, w.Spec) || !maps.Equal(cur.Labels, w.Labels) {
+			cur.Spec = w.Spec
+			cur.Labels = maps.Clone(w.Labels)
+			if err := b.Downstream.Update(ctx, cur); err != nil {
+				return fmt.Errorf("update container %s: %w", keyCtr(cur), err)
+			}
+		}
+	}
+	for k, w := range want {
+		if haveKeys[k] {
+			continue
+		}
+		local := &netv1.CompiledContainer{}
+		local.Namespace = w.Namespace
+		local.Name = w.Name
+		local.Spec = w.Spec
+		local.Labels = maps.Clone(w.Labels)
+		if err := b.Downstream.Create(ctx, local); err != nil {
+			return fmt.Errorf("create container %s: %w", k, err)
 		}
 	}
 	return nil

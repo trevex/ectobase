@@ -143,6 +143,51 @@ func TestSyncCompiledVolumeAttachments_NamespacedCreateUpdateGC(t *testing.T) {
 	if err := b.SyncCompiledVolumeAttachments(context.Background()); err != nil { t.Fatalf("second sync: %v", err) }
 }
 
+func TestSyncCompiledContainers_NamespacedCreateUpdateGC(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := netv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	ctr := func(ns, name, cn, img string) *netv1.CompiledContainer {
+		return &netv1.CompiledContainer{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: netv1.CompiledContainerSpec{ClusterName: cn, Image: img}}
+	}
+	idx := func(o client.Object) []string { return []string{o.(*netv1.CompiledContainer).Spec.ClusterName} }
+	central := fake.NewClientBuilder().WithScheme(s).
+		WithIndex(&netv1.CompiledContainer{}, "spec.clusterName", idx).
+		WithObjects(ctr("ns1", "a", "c1", "nginx"), ctr("ns1", "b", "c2", "x")).Build()
+	downstream := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(ctr("ns1", "stale", "c1", "old"), ctr("ns1", "a", "c1", "OLD")).Build()
+
+	b := &Broker{Central: central, Downstream: downstream, ClusterName: "c1"}
+	if err := b.SyncCompiledContainers(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	list := &netv1.CompiledContainerList{}
+	if err := downstream.List(context.Background(), list); err != nil {
+		t.Fatal(err)
+	}
+	// exactly {ns1/a(nginx)}: b is c2 (bounded out), stale GC'd, a updated OLD->nginx.
+	if len(list.Items) != 1 {
+		t.Fatalf("want 1 (a), got %d: %+v", len(list.Items), list.Items)
+	}
+	if list.Items[0].Name != "a" || list.Items[0].Spec.Image != "nginx" {
+		t.Fatalf("want a(nginx), got %+v", list.Items[0])
+	}
+
+	// Idempotency: a second sync of the converged set is a no-op.
+	if err := b.SyncCompiledContainers(context.Background()); err != nil {
+		t.Fatalf("second sync: %v", err)
+	}
+	list2 := &netv1.CompiledContainerList{}
+	if err := downstream.List(context.Background(), list2); err != nil {
+		t.Fatal(err)
+	}
+	if len(list2.Items) != 1 || list2.Items[0].Name != "a" || list2.Items[0].Spec.Image != "nginx" {
+		t.Fatalf("idempotency: set drifted on re-sync: %+v", list2.Items)
+	}
+}
+
 // TestSync_PropagatesLabels guards the load-bearing workload-label propagation: the
 // downstream vm-materializer joins a VM to its volume attachments by the workload
 // label, so the broker must mirror labels (not just spec) central->downstream.

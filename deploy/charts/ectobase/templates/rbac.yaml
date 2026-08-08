@@ -157,6 +157,7 @@ rules:
       - compilednics
       - compiledvms
       - compiledvolumeattachments
+      - compiledcontainers
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources:

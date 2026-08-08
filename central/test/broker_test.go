@@ -175,6 +175,20 @@ func TestBroker_Loopback(t *testing.T) {
 		return keys
 	}
 
+	// downCtrKeys returns the current downstream CompiledContainer "namespace/name" keys.
+	downCtrKeys := func() []string {
+		t.Helper()
+		list := &netv1.CompiledContainerList{}
+		if err := downstreamClient.List(ctx, list); err != nil {
+			t.Fatalf("downstream Ctr List: %v", err)
+		}
+		keys := make([]string, len(list.Items))
+		for i := range list.Items {
+			keys[i] = list.Items[i].Namespace + "/" + list.Items[i].Name
+		}
+		return keys
+	}
+
 	// newVM constructs a minimal CompiledVM bound to a cluster.
 	newVM := func(name, cluster, image string) *netv1.CompiledVM {
 		return &netv1.CompiledVM{
@@ -188,6 +202,14 @@ func TestBroker_Loopback(t *testing.T) {
 		return &netv1.CompiledVolumeAttachment{
 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
 			Spec:       netv1.CompiledVolumeAttachmentSpec{ClusterName: cluster, BootImage: bootImage},
+		}
+	}
+
+	// newCtr constructs a minimal CompiledContainer bound to a cluster.
+	newCtr := func(name, cluster, image string) *netv1.CompiledContainer {
+		return &netv1.CompiledContainer{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+			Spec:       netv1.CompiledContainerSpec{ClusterName: cluster, Image: image},
 		}
 	}
 
@@ -431,4 +453,64 @@ func TestBroker_Loopback(t *testing.T) {
 		t.Fatalf("(f) gc: expected empty downstream attachments, got %v", attKeys)
 	}
 	t.Log("(f) CompiledVolumeAttachment GC: PASS (downstream attachments empty)")
+
+	// ================================================================
+	// (g) CompiledContainer: bounded pull, update, GC.
+	// ================================================================
+	if err := centralClient2.Create(ctx, newCtr("ctr-a", "c1", "nginx")); err != nil {
+		t.Fatalf("(g) central Create ctr-a: %v", err)
+	}
+	if err := centralClient2.Create(ctx, newCtr("ctr-b", "c2", "redis")); err != nil {
+		t.Fatalf("(g) central Create ctr-b (c2): %v", err)
+	}
+
+	if err := b2.SyncCompiledContainers(ctx); err != nil {
+		t.Fatalf("(g) SyncCompiledContainers: %v", err)
+	}
+	ctrKeys := downCtrKeys()
+	if len(ctrKeys) != 1 || ctrKeys[0] != ns+"/ctr-a" {
+		t.Fatalf("(g) bounded pull: expected downstream=[%s/ctr-a], got %v", ns, ctrKeys)
+	}
+	gotCtr := &netv1.CompiledContainer{}
+	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "ctr-a"}, gotCtr); err != nil {
+		t.Fatalf("(g) downstream Get ctr-a: %v", err)
+	}
+	if gotCtr.Spec.Image != "nginx" {
+		t.Fatalf("(g) expected ctr-a image=nginx, got %q", gotCtr.Spec.Image)
+	}
+	t.Logf("(g) CompiledContainer bounded pull: PASS (downstream=[%s/ctr-a], c2 excluded)", ns)
+
+	// Update ctr-a image central->downstream.
+	curCtr := &netv1.CompiledContainer{}
+	if err := centralClient2.Get(ctx, client.ObjectKey{Namespace: ns, Name: "ctr-a"}, curCtr); err != nil {
+		t.Fatalf("(g) central Get ctr-a: %v", err)
+	}
+	curCtr.Spec.Image = "nginx-updated"
+	if err := centralClient2.Update(ctx, curCtr); err != nil {
+		t.Fatalf("(g) central Update ctr-a: %v", err)
+	}
+	if err := b2.SyncCompiledContainers(ctx); err != nil {
+		t.Fatalf("(g) SyncCompiledContainers after update: %v", err)
+	}
+	gotCtr = &netv1.CompiledContainer{}
+	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "ctr-a"}, gotCtr); err != nil {
+		t.Fatalf("(g) downstream Get ctr-a after update: %v", err)
+	}
+	if gotCtr.Spec.Image != "nginx-updated" {
+		t.Fatalf("(g) update: expected ctr-a image=nginx-updated, got %q", gotCtr.Spec.Image)
+	}
+	t.Log("(g) CompiledContainer update: PASS (downstream ctr-a image=nginx-updated)")
+
+	// GC: delete central ctr-a, downstream should be empty.
+	delCtr := &netv1.CompiledContainer{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "ctr-a"}}
+	if err := centralClient2.Delete(ctx, delCtr); err != nil {
+		t.Fatalf("(g) central Delete ctr-a: %v", err)
+	}
+	if err := b2.SyncCompiledContainers(ctx); err != nil {
+		t.Fatalf("(g) SyncCompiledContainers after delete: %v", err)
+	}
+	if ctrKeys := downCtrKeys(); len(ctrKeys) != 0 {
+		t.Fatalf("(g) gc: expected empty downstream containers, got %v", ctrKeys)
+	}
+	t.Log("(g) CompiledContainer GC: PASS (downstream containers empty)")
 }

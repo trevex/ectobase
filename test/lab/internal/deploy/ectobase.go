@@ -412,7 +412,7 @@ metadata:
   name: ectobase-broker
 rules:
 - apiGroups: ["net.ectobase.dev"]
-  resources: ["compilednics", "compiledvms", "compiledvolumeattachments"]
+  resources: ["compilednics", "compiledvms", "compiledvolumeattachments", "compiledcontainers"]
   verbs: ["get", "list", "watch"]
 - apiGroups: ["platform.ectobase.dev"]
   resources: ["clusterpools"]

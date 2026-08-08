@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Command broker runs the per-cluster broker: it watches the compiled objects
-// (CompiledNIC, CompiledVM, CompiledVolumeAttachment) in the CENTRAL aggregated
+// (CompiledNIC, CompiledVM, CompiledVolumeAttachment, CompiledContainer) in the CENTRAL aggregated
 // apiserver (filtered by spec.clusterName) and set-reconciles them onto a
 // DOWNSTREAM cluster's apiserver.
 //
@@ -107,6 +107,9 @@ func main() {
 				&netv1.CompiledVolumeAttachment{}: {
 					Field: fields.OneTermEqualSelector("spec.clusterName", clusterName),
 				},
+				&netv1.CompiledContainer{}: {
+					Field: fields.OneTermEqualSelector("spec.clusterName", clusterName),
+				},
 			},
 		},
 	})
@@ -129,6 +132,7 @@ func main() {
 	idx(&netv1.CompiledNIC{}, func(o client.Object) string { return o.(*netv1.CompiledNIC).Spec.ClusterName })
 	idx(&netv1.CompiledVM{}, func(o client.Object) string { return o.(*netv1.CompiledVM).Spec.ClusterName })
 	idx(&netv1.CompiledVolumeAttachment{}, func(o client.Object) string { return o.(*netv1.CompiledVolumeAttachment).Spec.ClusterName })
+	idx(&netv1.CompiledContainer{}, func(o client.Object) string { return o.(*netv1.CompiledContainer).Spec.ClusterName })
 
 	// Reconciler: on any CompiledNIC OR CompiledVM event, trigger a full set-reconcile
 	// of BOTH types. A full resync per event is correct here: the syncs are declarative +
@@ -155,6 +159,12 @@ func main() {
 		For(&netv1.CompiledVolumeAttachment{}).
 		Complete(r); err != nil {
 		log.Fatalf("setup compiledvolumeattachment broker controller: %v", err)
+	}
+	if err := ctrl.NewControllerManagedBy(mgr).
+		Named("compiledcontainer").
+		For(&netv1.CompiledContainer{}).
+		Complete(r); err != nil {
+		log.Fatalf("setup compiledcontainer broker controller: %v", err)
 	}
 
 	// Heartbeater: renew the ClusterPool lease + report node capacity every 10s.
@@ -323,9 +333,10 @@ func nodeIsReady(node *corev1.Node) bool {
 }
 
 // brokerReconciler wraps the broker engine so it satisfies reconcile.Reconciler.
-// It holds no per-object state: every CompiledNIC, CompiledVM, or
-// CompiledVolumeAttachment event triggers a full SyncOnce + SyncCompiledVMs +
-// SyncCompiledVolumeAttachments (declarative set-reconcile; idempotent and restart-safe).
+// It holds no per-object state: every CompiledNIC, CompiledVM,
+// CompiledVolumeAttachment, or CompiledContainer event triggers a full SyncOnce +
+// SyncCompiledVMs + SyncCompiledVolumeAttachments + SyncCompiledContainers
+// (declarative set-reconcile; idempotent and restart-safe).
 type brokerReconciler struct {
 	central     client.Client
 	downstream  client.Client
@@ -345,6 +356,9 @@ func (r *brokerReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.
 		return ctrl.Result{}, err
 	}
 	if err := b.SyncCompiledVolumeAttachments(ctx); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := b.SyncCompiledContainers(ctx); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
