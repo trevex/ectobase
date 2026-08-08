@@ -3,6 +3,7 @@ package exec
 import (
 	"context"
 	"os"
+	"os/exec"
 )
 
 // Sudo runs a command as root: directly when the process is already root (e.g. a
@@ -15,6 +16,16 @@ func Sudo(ctx context.Context, args ...string) error {
 		return Run(ctx, args[0], args[1:]...)
 	}
 	return Run(ctx, "sudo", append([]string{"-n"}, args...)...)
+}
+
+// SudoCmd builds (does not run) an *exec.Cmd that runs args as root — directly when
+// already root, else via `sudo -n` — so callers can Start/Wait a long-lived process
+// (e.g. a background packet sniff). Mirrors Sudo's privilege handling.
+func SudoCmd(ctx context.Context, args ...string) *exec.Cmd {
+	if os.Geteuid() == 0 {
+		return exec.CommandContext(ctx, args[0], args[1:]...)
+	}
+	return exec.CommandContext(ctx, "sudo", append([]string{"-n"}, args...)...)
 }
 
 // SudoStdin is Sudo feeding stdin (for `nft -f -`).
