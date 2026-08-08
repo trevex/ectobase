@@ -50,8 +50,8 @@ func (execRunner) SudoOutput(ctx context.Context, args ...string) ([]byte, error
 var DefaultRunner Runner = execRunner{}
 
 // CephParams are the external-cluster connection params emitted by CephDemo and
-// consumed by CephCSI (the ceph-csi-rbd Helm values). Mirrors ceph-demo-up.sh's
-// CEPH_* output.
+// consumed by CephCSI (the ceph-csi-rbd Helm values). The CEPH_* output fields
+// match the old ceph-demo env format.
 type CephParams struct {
 	FSID string // ceph cluster fsid  -> StorageClass/csiConfig clusterID
 	Mon  string // v6 mon endpoint    -> csiConfig monitors ([addr]:3300, msgr-v2)
@@ -81,7 +81,7 @@ func runnerOf(r Runner) Runner {
 
 // CephDemo creates the RBD pool on the shared clab ceph/demo fabric node and
 // emits the external-cluster connection params (fsid, mon, client key) for
-// external ceph-csi. Dev-only, NOT production. Port of hack/ceph-demo-up.sh.
+// external ceph-csi. Dev-only, NOT production. (Ported to Go from the old ceph-demo bring-up script.)
 //
 // The ceph/demo mon is msgr-v2 ONLY (bound [<mon>]:3300; `ceph mon dump` shows no
 // v1 addr — the demo pins the monmap to the :3300 endpoint under IPv6).
@@ -170,7 +170,7 @@ func CephDemo(ctx context.Context, s CephDemoSpec) (CephParams, error) {
 		Key:  strings.TrimSpace(string(keyOut)),
 	}
 
-	// Emit build/<name>/ceph.env (mirrors ceph-demo-up.sh --out).
+	// Emit build/<name>/ceph.env (the CEPH_* external-cluster param file).
 	if s.WorkDir != "" {
 		if err := os.MkdirAll(s.WorkDir, 0o755); err != nil {
 			return CephParams{}, fmt.Errorf("mkdir workdir: %w", err)
@@ -210,13 +210,13 @@ func cephOSDUp(out []byte) bool {
 	return false
 }
 
-// cephEnv renders the CEPH_* env file (the ceph-demo-up.sh --out format).
+// cephEnv renders the CEPH_* env file (external-cluster params for ceph-csi).
 func cephEnv(p CephParams) string {
 	return fmt.Sprintf("CEPH_FSID=%s\nCEPH_MON=%s\nCEPH_POOL=%s\nCEPH_RBD_KEY=%s\n",
 		p.FSID, p.Mon, p.Pool, p.Key)
 }
 
-// Ceph-CSI chart pin (ceph-external-up.sh).
+// Ceph-CSI chart pin (ported to Go from the old external-ceph bring-up script).
 const (
 	CephCSIRepo    = "https://ceph.github.io/csi-charts"
 	CephCSIChart   = "ceph-csi/ceph-csi-rbd"
@@ -227,8 +227,8 @@ const (
 	CSIUser = "rbd"
 )
 
-// cephCSIValues renders the ceph-csi-rbd Helm values YAML from params. Port of the
-// ceph-external-up.sh heredoc. The chart renders the ceph-csi-config ConfigMap from
+// cephCSIValues renders the ceph-csi-rbd Helm values YAML from params (ported to Go
+// from the old external-ceph bring-up script's heredoc). The chart renders the ceph-csi-config ConfigMap from
 // csiConfig, the csi-rbd-secret from secret.*, and a StorageClass from
 // storageClass.*. The StorageClass secret refs default to secret.name in the
 // release namespace, i.e. csi-rbd-secret / ceph-csi — which is exactly what the
@@ -277,7 +277,7 @@ storageClass:
 
 // cephCSIHelmArgs composes the `helm upgrade --install` argv for the ceph-csi-rbd
 // chart against kubeconfig, reading valuesFile. Pure function so the argv is
-// unit-tested. Mirrors ceph-external-up.sh's helm invocation.
+// unit-tested.
 func cephCSIHelmArgs(kubeconfig, valuesFile string) []string {
 	return []string{"upgrade", "--install", CephCSIRelease, CephCSIChart,
 		"--kubeconfig", kubeconfig,
@@ -289,7 +289,7 @@ func cephCSIHelmArgs(kubeconfig, valuesFile string) []string {
 
 // CephCSI installs external ceph-csi (RBD) into one cluster via the upstream Helm
 // chart, wired to the shared clab ceph/demo node using params from CephDemo.
-// Dev-only. Port of hack/ceph-external-up.sh.
+// Dev-only. (Ported to Go from the old external-ceph bring-up script.)
 //
 // Installs the ceph-csi-rbd chart (provisioner + nodeplugin + CSIDriver + rbac +
 // the ceph-csi-config ConfigMap) into namespace ceph-csi, and — via chart values —

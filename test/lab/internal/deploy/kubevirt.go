@@ -11,7 +11,7 @@ import (
 	"github.com/trevex/ectobase/test/lab/internal/wait"
 )
 
-// KubeVirt/CDI pins (port of hack/install-stack.sh). Bumping these is the single
+// KubeVirt/CDI pins (ported to Go from the old install-stack bring-up script). Bumping these is the single
 // place versions change; the URL helpers below embed them.
 const (
 	KubeVirtVersion = "v1.5.0"
@@ -38,8 +38,8 @@ func cdiCRURL() string {
 	return "https://github.com/kubevirt/containerized-data-importer/releases/download/" + CDIVersion + "/cdi-cr.yaml"
 }
 
-// kubevirtCRPatch is the merge-patch applied to the KubeVirt CR (port of
-// hack/install-stack.sh). It:
+// kubevirtCRPatch is the merge-patch applied to the KubeVirt CR (ported to Go
+// from the old install-stack bring-up script). It:
 //   - enables software emulation (useEmulation:true) — clab/kind nodes have no KVM —
 //     and the NetworkBindingPlugins feature gate,
 //   - registers the `flowplane` network binding as domainAttachmentType=tap wired to
@@ -51,7 +51,7 @@ func kubevirtCRPatch() string {
 }
 
 // KubeVirtCDI installs KubeVirt + CDI onto one already-up cluster and registers the
-// flowplane network binding (port of hack/install-stack.sh's KubeVirt/CDI block).
+// flowplane network binding (ported to Go from the old install-stack bring-up script's KubeVirt/CDI block).
 //
 // Sequence per component: apply operator, apply CR, label the operand namespace
 // PSA-privileged (Talos's baseline PSA rejects the privileged virt/cdi pods

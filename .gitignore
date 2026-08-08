@@ -23,7 +23,7 @@ flowplane/nfkit/tests/data/l2fwd_out.pcap
 # multicluster-e2e.sh renders this from patch.reflector.yaml.tmpl (env-substituted at run time)
 test/e2e/fixtures/multicluster/agent-overlay/patch.reflector.yaml
 
-# kubevirt-vm-e2e.sh renders these from *.tmpl (named-placeholder substitution at run time)
+# rendered from *.tmpl (named-placeholder substitution at run time) — not checked in
 test/e2e/fixtures/kubevirt/vpc-nics.yaml
 test/e2e/fixtures/kubevirt/vmi.yaml
 

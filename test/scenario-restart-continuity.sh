@@ -112,7 +112,7 @@ sudo docker ps --filter "name=$SRC_NODE" --format '{{.Names}}' \
   | grep -q "$SRC_NODE" || fail "clab fabric not up ($SRC_NODE not running); run hack/clab-up.sh"
 
 CID_INIT=$(xdp_cid)
-[ -n "$CID_INIT" ] || fail "flowplane container not running on $SRC_NODE; deploy the stack (hack/install-stack.sh) with the branch image"
+[ -n "$CID_INIT" ] || fail "flowplane container not running on $SRC_NODE; deploy the stack (make lab-deploy) with the branch image"
 
 sudo docker exec "$SRC_NODE" ls "$PIN/INTERFACES" "$PIN/UNDERLAY" "$PIN/IFACE_META" >/dev/null 2>&1 \
   || fail "flowplane bpf pins not present under $PIN — is the DS running the branch image?"

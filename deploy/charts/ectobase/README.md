@@ -10,8 +10,7 @@ vm-materializer) restarts the VM on a surviving node — all in-cluster, with ce
 unreachable. This chart owns only the *configuration*; the medik8s operators are a
 prerequisite.
 
-**Prerequisite:** install the medik8s NHC + SNR operators (dev: `hack/medik8s-up.sh`
-or `INSTALL_MEDIK8S=1 hack/install-stack.sh`).
+**Prerequisite:** install the medik8s NHC + SNR operators. Note: Tier-1 (medik8s NHC + SNR operators) is not currently wired in the Go lab (`make lab-deploy`); it must be installed manually.
 
 **Enable:**
 ```
@@ -32,5 +31,4 @@ helm upgrade --install ectobase deploy/charts/ectobase \
   quorum, preventing a network blip from cascading into a pool-wide fence storm.
 
 **Caveat:** with `watchdog.enabled=false`, remediation is timeout-based (not a hard fence);
-`watchdog.enabled=true` is the hardening answer. Validate end-to-end with
-`hack/tier1-failover-e2e.sh` on a dev fabric.
+`watchdog.enabled=true` is the hardening answer. Tier-1 failover is dormant; the Tier-2 gate is exercised via `make lab-tier2-up`.

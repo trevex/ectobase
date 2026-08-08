@@ -9,7 +9,7 @@ import (
 	"github.com/trevex/ectobase/test/lab/internal/wait"
 )
 
-// csi-addons pins (csi-addons-up.sh). The version tags both the release assets and
+// csi-addons pins (ported to Go from the old csi-addons bring-up script). The version tags both the release assets and
 // the k8s-sidecar image.
 const (
 	CSIAddonsVersion = "v0.12.0"
@@ -28,8 +28,8 @@ func csiAddonsReleaseURL(version, asset string) string {
 // CSIAddons installs the csi-addons controller + NetworkFence CRD (the Tier-2
 // storage-fence executor) into the target (central / fence-executor) cluster at
 // the pinned release, then wires the k8s-sidecar into the ceph-csi RBD provisioner
-// (the actuator the controller dials to run `ceph osd blocklist`). Port of
-// hack/csi-addons-up.sh.
+// (the actuator the controller dials to run `ceph osd blocklist`).
+// (Ported to Go from the old csi-addons bring-up script.)
 //
 // csi-addons provides the NetworkFence CRD + controller that the Tier-2 fence gate
 // drives to block a partitioned node's ceph RBD access (fence-before-failover). The
