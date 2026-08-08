@@ -52,7 +52,7 @@ func (p *plugin) Validate(_ context.Context, a admission.Attributes, _ admission
 
 // setsClusterName reports whether the write introduces or changes spec.clusterName.
 // It reads the Spec.ClusterName field generically so it is robust across
-// VirtualMachine, CompiledNIC and CompiledWorkload. Objects without such a field
+// VirtualMachine and CompiledNIC. Objects without such a field
 // (e.g. VPC, ClusterPool) always report false.
 func setsClusterName(a admission.Attributes) bool {
 	newVal := clusterNameOf(a.GetObject())

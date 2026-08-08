@@ -56,7 +56,6 @@ func main() {
 		// default; Phase-1 disables MutatingAdmissionPolicy/ValidatingAdmissionPolicy.
 		WithAdmissionPlugin(clusterrestriction.PluginName, clusterrestriction.Register).
 		With(apiserver.Resource(&platform.ClusterPool{}, v1alpha1.SchemeGroupVersion)).
-		With(apiserver.Resource(&platform.CompiledWorkload{}, v1alpha1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.VPC{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.NetworkInterface{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.FirewallPolicy{}, netv1.SchemeGroupVersion)).

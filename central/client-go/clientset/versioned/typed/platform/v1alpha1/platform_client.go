@@ -13,7 +13,6 @@ import (
 type PlatformV1alpha1Interface interface {
 	RESTClient() rest.Interface
 	ClusterPoolsGetter
-	CompiledWorkloadsGetter
 }
 
 // PlatformV1alpha1Client is used to interact with features provided by the platform.ectobase.dev group.
@@ -23,10 +22,6 @@ type PlatformV1alpha1Client struct {
 
 func (c *PlatformV1alpha1Client) ClusterPools() ClusterPoolInterface {
 	return newClusterPools(c)
-}
-
-func (c *PlatformV1alpha1Client) CompiledWorkloads() CompiledWorkloadInterface {
-	return newCompiledWorkloads(c)
 }
 
 // NewForConfig creates a new PlatformV1alpha1Client for the given config.

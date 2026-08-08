@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Registers the aggregated groups with the host kube-apiserver, pointing at the in-cluster
-# apiserver-service. The central apiserver serves BOTH platform.ectobase.dev (ClusterPool,
-# CompiledWorkload) AND net.ectobase.dev (VPC/NetworkInterface/VirtualMachine/Volume + the
+# apiserver-service. The central apiserver serves BOTH platform.ectobase.dev (ClusterPool)
+# AND net.ectobase.dev (VPC/NetworkInterface/VirtualMachine/Volume + the
 # Compiled* types — main.go installs both schemes), so BOTH groups need an APIService or the
 # host kube-apiserver never routes net.ectobase.dev to central (the compiler/failover
 # controller and the VM/Volume fixtures live in that group). insecureSkipTLSVerify because the

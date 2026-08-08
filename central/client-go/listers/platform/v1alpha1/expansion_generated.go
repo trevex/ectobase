@@ -5,7 +5,3 @@ package v1alpha1
 // ClusterPoolListerExpansion allows custom methods to be added to
 // ClusterPoolLister.
 type ClusterPoolListerExpansion interface{}
-
-// CompiledWorkloadListerExpansion allows custom methods to be added to
-// CompiledWorkloadLister.
-type CompiledWorkloadListerExpansion interface{}

@@ -39,8 +39,6 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 	// Group=platform.ectobase.dev, Version=v1alpha1
 	case v1alpha1.SchemeGroupVersion.WithResource("clusterpools"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Platform().V1alpha1().ClusterPools().Informer()}, nil
-	case v1alpha1.SchemeGroupVersion.WithResource("compiledworkloads"):
-		return &genericInformer{resource: resource.GroupResource(), informer: f.Platform().V1alpha1().CompiledWorkloads().Informer()}, nil
 
 	}
 
