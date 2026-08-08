@@ -774,7 +774,9 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 - Create: `test/lab/livetest/lb_test.go`
 - Test binary: `cmd/netprobe`
 
-**RISK (from the spec + memory `scapy-to-go-probe-port.md`):** there is no existing LB e2e to port, and the in-node `flowplane serve` LB path had pre-existing rot. This may surface real datapath work. **Fallback (explicitly user-approved):** if the LB datapath does not distribute after honest diagnosis, land the test `t.Skip`'d with a documented reason + a follow-up memory/issue, rather than blocking the phase.
+**RISK (from the spec + memory `scapy-to-go-probe-port.md`):** there is no existing LB e2e to port, and the in-node `flowplane serve` LB path had pre-existing rot. This may surface real datapath work.
+
+**POSTURE — DO NOT SKIP NEEDLESSLY (user directive, 2026-08-08):** The default and strongly-preferred outcome is a **passing** test. If the LB datapath does not forward, **root-cause it and fix the datapath** — that is in scope for this task. Treat a skip as a genuine last resort that requires: (a) a concrete, evidenced root cause (flowplane pod logs, `ListInterfaces`/Maglev-table state, packet captures showing exactly where the frame is dropped), (b) a determination that the fix is materially beyond this effort's scope, and (c) **escalation to the human for explicit sign-off before skipping** — report BLOCKED with the evidence rather than self-approving a skip. Do not weaken assertions to go green, and do not skip to save effort.
 
 The LB API: `AddLbVip{id, vip, vni, ...}` then `AddLbBackend{id, backend_underlay}` (rebuilds Maglev). `vni=0` is the WAN-edge external LB (wan_rx Maglev — needs a flowplane edge, which the kind lab lacks). So this test targets the **intra-fabric** LB: a VIP inside the overlay VNI with two backends on two compute nodes, and asserts traffic to the VIP reaches more than one backend (Maglev distribution) OR at minimum that the VIP is programmed and forwards to a backend.
 
@@ -897,11 +899,11 @@ nix develop --command bash -c 'cd test/lab && go vet -tags live ./livetest/... 2
 nix develop --command bash -c 'cd test/lab && sudo -E env "PATH=$PATH" \
   go test -tags live -run TestLbDistributeSmoke -count=1 -v ./livetest/... -timeout 25m'
 ```
-Expected (best case): `--- PASS: TestLbDistributeSmoke`. Acceptable (documented): `--- SKIP: TestLbDistributeSmoke` with the "LB datapath not forwarding" reason, IF the datapath genuinely does not forward after diagnosis (check the flowplane pod log; confirm AddLbVip/AddLbBackend returned OK and the Maglev table was built). Do NOT skip to avoid effort — skip only on a real, diagnosed datapath gap.
+Expected: `--- PASS: TestLbDistributeSmoke`. **The test MUST pass** — root-cause and fix any datapath failure (this is in scope). Diagnose with: the flowplane pod log, confirming `AddLbVip`/`AddLbBackend` returned OK and the Maglev table was built (`ListInterfaces` or a datapath dump), and packet captures pinpointing where the frame is dropped. A skip is a last resort ONLY: if, after evidenced diagnosis, the fix is materially out of scope, STOP and report BLOCKED to the controller with the evidence for a human decision — do NOT self-approve a `t.Skip`, and never weaken assertions to go green.
 
-- [ ] **Step 4: If skipped, record the follow-up**
+- [ ] **Step 4: Only if the controller/human approved a skip after BLOCKED escalation**
 
-If the test lands skipped, append a follow-up to the memory file `memory/scapy-to-go-probe-port.md` (or the effort memory `memory/retire-bash-clab-datapath-to-go.md`) noting the LB serve datapath still needs a fix + that `TestLbDistributeSmoke` is scaffolded-and-skipped awaiting it. Keep it one line in the index.
+A skip is NOT the implementer's call. If — and only if — the controller relayed explicit human sign-off to skip (after a BLOCKED report with evidenced root cause), append a follow-up to `memory/retire-bash-clab-datapath-to-go.md` noting the specific LB serve datapath defect (with the evidence) + that `TestLbDistributeSmoke` is scaffolded-and-skipped awaiting the fix. Keep the `MEMORY.md` index line to one line. Otherwise (the expected path) the test passes and this step is skipped.
 
 - [ ] **Step 5: Commit**
 
