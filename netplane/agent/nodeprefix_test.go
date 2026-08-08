@@ -13,7 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	netv1 "github.com/trevex/ectobase/api/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 )
 
 func TestUnderlayPrefix(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	netv1 "github.com/trevex/ectobase/api/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"

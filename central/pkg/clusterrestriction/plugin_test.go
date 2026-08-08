@@ -11,7 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/admission"
 
-	netv1 "github.com/trevex/ectobase/api/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 )
 
 // vm builds a typed VirtualMachine with the given spec.clusterName so setsClusterName

@@ -5,6 +5,8 @@ package fake
 import (
 	applyconfigurations "github.com/trevex/ectobase/central/client-go/applyconfigurations"
 	clientset "github.com/trevex/ectobase/central/client-go/clientset/versioned"
+	netv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/net/v1alpha1"
+	fakenetv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/net/v1alpha1/fake"
 	platformv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/platform/v1alpha1"
 	fakeplatformv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/platform/v1alpha1/fake"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -119,6 +121,11 @@ var (
 	_ clientset.Interface = &Clientset{}
 	_ testing.FakeClient  = &Clientset{}
 )
+
+// NetV1alpha1 retrieves the NetV1alpha1Client
+func (c *Clientset) NetV1alpha1() netv1alpha1.NetV1alpha1Interface {
+	return &fakenetv1alpha1.FakeNetV1alpha1{Fake: &c.Fake}
+}
 
 // PlatformV1alpha1 retrieves the PlatformV1alpha1Client
 func (c *Clientset) PlatformV1alpha1() platformv1alpha1.PlatformV1alpha1Interface {

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	netv1 "github.com/trevex/ectobase/api/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 )
 
 // ReconcileFirewall programs the firewall rules of every CompiledNIC scheduled to this node onto

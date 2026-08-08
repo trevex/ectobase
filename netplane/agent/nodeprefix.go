@@ -11,7 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	netv1 "github.com/trevex/ectobase/api/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 )
 
 // underlayPrefix returns the /64 network of a node's underlay IPv6 address (the Tier-2

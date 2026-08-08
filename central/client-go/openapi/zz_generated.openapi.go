@@ -6,7 +6,8 @@
 package openapi
 
 import (
-	v1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
+	v1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	platformv1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	v1 "k8s.io/api/core/v1"
 	resource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,684 +19,386 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
-		v1alpha1.ClusterPool{}.OpenAPIModelName():                                schema_ectobase_api_platform_v1alpha1_ClusterPool(ref),
-		v1alpha1.ClusterPoolLease{}.OpenAPIModelName():                           schema_ectobase_api_platform_v1alpha1_ClusterPoolLease(ref),
-		v1alpha1.ClusterPoolList{}.OpenAPIModelName():                            schema_ectobase_api_platform_v1alpha1_ClusterPoolList(ref),
-		v1alpha1.ClusterPoolSpec{}.OpenAPIModelName():                            schema_ectobase_api_platform_v1alpha1_ClusterPoolSpec(ref),
-		v1alpha1.ClusterPoolStatus{}.OpenAPIModelName():                          schema_ectobase_api_platform_v1alpha1_ClusterPoolStatus(ref),
-		v1alpha1.NodeDrainStatus{}.OpenAPIModelName():                            schema_ectobase_api_platform_v1alpha1_NodeDrainStatus(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledContainer":              schema_trevex_ectobase_api_v1alpha1_CompiledContainer(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledContainerInterface":     schema_trevex_ectobase_api_v1alpha1_CompiledContainerInterface(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledContainerList":          schema_trevex_ectobase_api_v1alpha1_CompiledContainerList(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledContainerSpec":          schema_trevex_ectobase_api_v1alpha1_CompiledContainerSpec(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledContainerStatus":        schema_trevex_ectobase_api_v1alpha1_CompiledContainerStatus(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledFirewall":               schema_trevex_ectobase_api_v1alpha1_CompiledFirewall(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledFwRule":                 schema_trevex_ectobase_api_v1alpha1_CompiledFwRule(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledLB":                     schema_trevex_ectobase_api_v1alpha1_CompiledLB(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledLBPort":                 schema_trevex_ectobase_api_v1alpha1_CompiledLBPort(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledNATSource":              schema_trevex_ectobase_api_v1alpha1_CompiledNATSource(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledNIC":                    schema_trevex_ectobase_api_v1alpha1_CompiledNIC(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledNICList":                schema_trevex_ectobase_api_v1alpha1_CompiledNICList(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledNICSpec":                schema_trevex_ectobase_api_v1alpha1_CompiledNICSpec(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledNICStatus":              schema_trevex_ectobase_api_v1alpha1_CompiledNICStatus(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledPeerImport":             schema_trevex_ectobase_api_v1alpha1_CompiledPeerImport(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledVM":                     schema_trevex_ectobase_api_v1alpha1_CompiledVM(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledVMInterface":            schema_trevex_ectobase_api_v1alpha1_CompiledVMInterface(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledVMList":                 schema_trevex_ectobase_api_v1alpha1_CompiledVMList(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledVMSpec":                 schema_trevex_ectobase_api_v1alpha1_CompiledVMSpec(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledVMStatus":               schema_trevex_ectobase_api_v1alpha1_CompiledVMStatus(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledVolumeAttachment":       schema_trevex_ectobase_api_v1alpha1_CompiledVolumeAttachment(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledVolumeAttachmentList":   schema_trevex_ectobase_api_v1alpha1_CompiledVolumeAttachmentList(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledVolumeAttachmentSpec":   schema_trevex_ectobase_api_v1alpha1_CompiledVolumeAttachmentSpec(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.CompiledVolumeAttachmentStatus": schema_trevex_ectobase_api_v1alpha1_CompiledVolumeAttachmentStatus(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.Container":                      schema_trevex_ectobase_api_v1alpha1_Container(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.ContainerList":                  schema_trevex_ectobase_api_v1alpha1_ContainerList(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.ContainerSpec":                  schema_trevex_ectobase_api_v1alpha1_ContainerSpec(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.ContainerStatus":                schema_trevex_ectobase_api_v1alpha1_ContainerStatus(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.EgressQoS":                      schema_trevex_ectobase_api_v1alpha1_EgressQoS(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.FirewallPolicy":                 schema_trevex_ectobase_api_v1alpha1_FirewallPolicy(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.FirewallPolicyList":             schema_trevex_ectobase_api_v1alpha1_FirewallPolicyList(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.FirewallPolicyRule":             schema_trevex_ectobase_api_v1alpha1_FirewallPolicyRule(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.FirewallPolicySpec":             schema_trevex_ectobase_api_v1alpha1_FirewallPolicySpec(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.FirewallPolicyStatus":           schema_trevex_ectobase_api_v1alpha1_FirewallPolicyStatus(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.FloatingIP":                     schema_trevex_ectobase_api_v1alpha1_FloatingIP(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.FloatingIPList":                 schema_trevex_ectobase_api_v1alpha1_FloatingIPList(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.FloatingIPSpec":                 schema_trevex_ectobase_api_v1alpha1_FloatingIPSpec(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.FloatingIPStatus":               schema_trevex_ectobase_api_v1alpha1_FloatingIPStatus(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.InterfaceQoS":                   schema_trevex_ectobase_api_v1alpha1_InterfaceQoS(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.LoadBalancer":                   schema_trevex_ectobase_api_v1alpha1_LoadBalancer(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.LoadBalancerList":               schema_trevex_ectobase_api_v1alpha1_LoadBalancerList(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.LoadBalancerPort":               schema_trevex_ectobase_api_v1alpha1_LoadBalancerPort(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.LoadBalancerSpec":               schema_trevex_ectobase_api_v1alpha1_LoadBalancerSpec(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.LoadBalancerStatus":             schema_trevex_ectobase_api_v1alpha1_LoadBalancerStatus(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference":           schema_trevex_ectobase_api_v1alpha1_LocalObjectReference(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.NATAllocation":                  schema_trevex_ectobase_api_v1alpha1_NATAllocation(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.NATGateway":                     schema_trevex_ectobase_api_v1alpha1_NATGateway(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.NATGatewayList":                 schema_trevex_ectobase_api_v1alpha1_NATGatewayList(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.NATGatewaySpec":                 schema_trevex_ectobase_api_v1alpha1_NATGatewaySpec(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.NATGatewayStatus":               schema_trevex_ectobase_api_v1alpha1_NATGatewayStatus(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.NetworkInterface":               schema_trevex_ectobase_api_v1alpha1_NetworkInterface(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.NetworkInterfaceList":           schema_trevex_ectobase_api_v1alpha1_NetworkInterfaceList(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.NetworkInterfaceSpec":           schema_trevex_ectobase_api_v1alpha1_NetworkInterfaceSpec(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.NetworkInterfaceStatus":         schema_trevex_ectobase_api_v1alpha1_NetworkInterfaceStatus(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.PortStatus":                     schema_trevex_ectobase_api_v1alpha1_PortStatus(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.RateLimit":                      schema_trevex_ectobase_api_v1alpha1_RateLimit(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VMAntiAffinity":                 schema_trevex_ectobase_api_v1alpha1_VMAntiAffinity(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VMPlacement":                    schema_trevex_ectobase_api_v1alpha1_VMPlacement(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VPC":                            schema_trevex_ectobase_api_v1alpha1_VPC(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VPCList":                        schema_trevex_ectobase_api_v1alpha1_VPCList(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VPCPeering":                     schema_trevex_ectobase_api_v1alpha1_VPCPeering(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VPCPeeringList":                 schema_trevex_ectobase_api_v1alpha1_VPCPeeringList(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VPCPeeringSpec":                 schema_trevex_ectobase_api_v1alpha1_VPCPeeringSpec(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VPCPeeringStatus":               schema_trevex_ectobase_api_v1alpha1_VPCPeeringStatus(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VPCReference":                   schema_trevex_ectobase_api_v1alpha1_VPCReference(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VPCSpec":                        schema_trevex_ectobase_api_v1alpha1_VPCSpec(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VPCStatus":                      schema_trevex_ectobase_api_v1alpha1_VPCStatus(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VirtualMachine":                 schema_trevex_ectobase_api_v1alpha1_VirtualMachine(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VirtualMachineList":             schema_trevex_ectobase_api_v1alpha1_VirtualMachineList(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VirtualMachineSpec":             schema_trevex_ectobase_api_v1alpha1_VirtualMachineSpec(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VirtualMachineStatus":           schema_trevex_ectobase_api_v1alpha1_VirtualMachineStatus(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.Volume":                         schema_trevex_ectobase_api_v1alpha1_Volume(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VolumeList":                     schema_trevex_ectobase_api_v1alpha1_VolumeList(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VolumeSpec":                     schema_trevex_ectobase_api_v1alpha1_VolumeSpec(ref),
-		"github.com/trevex/ectobase/api/v1alpha1.VolumeStatus":                   schema_trevex_ectobase_api_v1alpha1_VolumeStatus(ref),
-		v1.AWSElasticBlockStoreVolumeSource{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_AWSElasticBlockStoreVolumeSource(ref),
-		v1.Affinity{}.OpenAPIModelName():                                         schema_k8sio_api_core_v1_Affinity(ref),
-		v1.AppArmorProfile{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_AppArmorProfile(ref),
-		v1.AttachedVolume{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_AttachedVolume(ref),
-		v1.AvoidPods{}.OpenAPIModelName():                                        schema_k8sio_api_core_v1_AvoidPods(ref),
-		v1.AzureDiskVolumeSource{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_AzureDiskVolumeSource(ref),
-		v1.AzureFilePersistentVolumeSource{}.OpenAPIModelName():                  schema_k8sio_api_core_v1_AzureFilePersistentVolumeSource(ref),
-		v1.AzureFileVolumeSource{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_AzureFileVolumeSource(ref),
-		v1.Binding{}.OpenAPIModelName():                                          schema_k8sio_api_core_v1_Binding(ref),
-		v1.CSIPersistentVolumeSource{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_CSIPersistentVolumeSource(ref),
-		v1.CSIVolumeSource{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_CSIVolumeSource(ref),
-		v1.Capabilities{}.OpenAPIModelName():                                     schema_k8sio_api_core_v1_Capabilities(ref),
-		v1.CephFSPersistentVolumeSource{}.OpenAPIModelName():                     schema_k8sio_api_core_v1_CephFSPersistentVolumeSource(ref),
-		v1.CephFSVolumeSource{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_CephFSVolumeSource(ref),
-		v1.CinderPersistentVolumeSource{}.OpenAPIModelName():                     schema_k8sio_api_core_v1_CinderPersistentVolumeSource(ref),
-		v1.CinderVolumeSource{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_CinderVolumeSource(ref),
-		v1.ClientIPConfig{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_ClientIPConfig(ref),
-		v1.ClusterTrustBundleProjection{}.OpenAPIModelName():                     schema_k8sio_api_core_v1_ClusterTrustBundleProjection(ref),
-		v1.ComponentCondition{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_ComponentCondition(ref),
-		v1.ComponentStatus{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_ComponentStatus(ref),
-		v1.ComponentStatusList{}.OpenAPIModelName():                              schema_k8sio_api_core_v1_ComponentStatusList(ref),
-		v1.ConfigMap{}.OpenAPIModelName():                                        schema_k8sio_api_core_v1_ConfigMap(ref),
-		v1.ConfigMapEnvSource{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_ConfigMapEnvSource(ref),
-		v1.ConfigMapKeySelector{}.OpenAPIModelName():                             schema_k8sio_api_core_v1_ConfigMapKeySelector(ref),
-		v1.ConfigMapList{}.OpenAPIModelName():                                    schema_k8sio_api_core_v1_ConfigMapList(ref),
-		v1.ConfigMapNodeConfigSource{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_ConfigMapNodeConfigSource(ref),
-		v1.ConfigMapProjection{}.OpenAPIModelName():                              schema_k8sio_api_core_v1_ConfigMapProjection(ref),
-		v1.ConfigMapVolumeSource{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_ConfigMapVolumeSource(ref),
-		v1.Container{}.OpenAPIModelName():                                        schema_k8sio_api_core_v1_Container(ref),
-		v1.ContainerExtendedResourceRequest{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_ContainerExtendedResourceRequest(ref),
-		v1.ContainerImage{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_ContainerImage(ref),
-		v1.ContainerPort{}.OpenAPIModelName():                                    schema_k8sio_api_core_v1_ContainerPort(ref),
-		v1.ContainerResizePolicy{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_ContainerResizePolicy(ref),
-		v1.ContainerRestartRule{}.OpenAPIModelName():                             schema_k8sio_api_core_v1_ContainerRestartRule(ref),
-		v1.ContainerRestartRuleOnExitCodes{}.OpenAPIModelName():                  schema_k8sio_api_core_v1_ContainerRestartRuleOnExitCodes(ref),
-		v1.ContainerState{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_ContainerState(ref),
-		v1.ContainerStateRunning{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_ContainerStateRunning(ref),
-		v1.ContainerStateTerminated{}.OpenAPIModelName():                         schema_k8sio_api_core_v1_ContainerStateTerminated(ref),
-		v1.ContainerStateWaiting{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_ContainerStateWaiting(ref),
-		v1.ContainerStatus{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_ContainerStatus(ref),
-		v1.ContainerUser{}.OpenAPIModelName():                                    schema_k8sio_api_core_v1_ContainerUser(ref),
-		v1.DaemonEndpoint{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_DaemonEndpoint(ref),
-		v1.DownwardAPIProjection{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_DownwardAPIProjection(ref),
-		v1.DownwardAPIVolumeFile{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_DownwardAPIVolumeFile(ref),
-		v1.DownwardAPIVolumeSource{}.OpenAPIModelName():                          schema_k8sio_api_core_v1_DownwardAPIVolumeSource(ref),
-		v1.EmptyDirVolumeSource{}.OpenAPIModelName():                             schema_k8sio_api_core_v1_EmptyDirVolumeSource(ref),
-		v1.EndpointAddress{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_EndpointAddress(ref),
-		v1.EndpointPort{}.OpenAPIModelName():                                     schema_k8sio_api_core_v1_EndpointPort(ref),
-		v1.EndpointSubset{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_EndpointSubset(ref),
-		v1.Endpoints{}.OpenAPIModelName():                                        schema_k8sio_api_core_v1_Endpoints(ref),
-		v1.EndpointsList{}.OpenAPIModelName():                                    schema_k8sio_api_core_v1_EndpointsList(ref),
-		v1.EnvFromSource{}.OpenAPIModelName():                                    schema_k8sio_api_core_v1_EnvFromSource(ref),
-		v1.EnvVar{}.OpenAPIModelName():                                           schema_k8sio_api_core_v1_EnvVar(ref),
-		v1.EnvVarSource{}.OpenAPIModelName():                                     schema_k8sio_api_core_v1_EnvVarSource(ref),
-		v1.EphemeralContainer{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_EphemeralContainer(ref),
-		v1.EphemeralContainerCommon{}.OpenAPIModelName():                         schema_k8sio_api_core_v1_EphemeralContainerCommon(ref),
-		v1.EphemeralVolumeSource{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_EphemeralVolumeSource(ref),
-		v1.Event{}.OpenAPIModelName():                                            schema_k8sio_api_core_v1_Event(ref),
-		v1.EventList{}.OpenAPIModelName():                                        schema_k8sio_api_core_v1_EventList(ref),
-		v1.EventSeries{}.OpenAPIModelName():                                      schema_k8sio_api_core_v1_EventSeries(ref),
-		v1.EventSource{}.OpenAPIModelName():                                      schema_k8sio_api_core_v1_EventSource(ref),
-		v1.ExecAction{}.OpenAPIModelName():                                       schema_k8sio_api_core_v1_ExecAction(ref),
-		v1.FCVolumeSource{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_FCVolumeSource(ref),
-		v1.FileKeySelector{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_FileKeySelector(ref),
-		v1.FlexPersistentVolumeSource{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_FlexPersistentVolumeSource(ref),
-		v1.FlexVolumeSource{}.OpenAPIModelName():                                 schema_k8sio_api_core_v1_FlexVolumeSource(ref),
-		v1.FlockerVolumeSource{}.OpenAPIModelName():                              schema_k8sio_api_core_v1_FlockerVolumeSource(ref),
-		v1.GCEPersistentDiskVolumeSource{}.OpenAPIModelName():                    schema_k8sio_api_core_v1_GCEPersistentDiskVolumeSource(ref),
-		v1.GRPCAction{}.OpenAPIModelName():                                       schema_k8sio_api_core_v1_GRPCAction(ref),
-		v1.GitRepoVolumeSource{}.OpenAPIModelName():                              schema_k8sio_api_core_v1_GitRepoVolumeSource(ref),
-		v1.GlusterfsPersistentVolumeSource{}.OpenAPIModelName():                  schema_k8sio_api_core_v1_GlusterfsPersistentVolumeSource(ref),
-		v1.GlusterfsVolumeSource{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_GlusterfsVolumeSource(ref),
-		v1.HTTPGetAction{}.OpenAPIModelName():                                    schema_k8sio_api_core_v1_HTTPGetAction(ref),
-		v1.HTTPHeader{}.OpenAPIModelName():                                       schema_k8sio_api_core_v1_HTTPHeader(ref),
-		v1.HostAlias{}.OpenAPIModelName():                                        schema_k8sio_api_core_v1_HostAlias(ref),
-		v1.HostIP{}.OpenAPIModelName():                                           schema_k8sio_api_core_v1_HostIP(ref),
-		v1.HostPathVolumeSource{}.OpenAPIModelName():                             schema_k8sio_api_core_v1_HostPathVolumeSource(ref),
-		v1.ISCSIPersistentVolumeSource{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_ISCSIPersistentVolumeSource(ref),
-		v1.ISCSIVolumeSource{}.OpenAPIModelName():                                schema_k8sio_api_core_v1_ISCSIVolumeSource(ref),
-		v1.ImageVolumeSource{}.OpenAPIModelName():                                schema_k8sio_api_core_v1_ImageVolumeSource(ref),
-		v1.ImageVolumeStatus{}.OpenAPIModelName():                                schema_k8sio_api_core_v1_ImageVolumeStatus(ref),
-		v1.KeyToPath{}.OpenAPIModelName():                                        schema_k8sio_api_core_v1_KeyToPath(ref),
-		v1.Lifecycle{}.OpenAPIModelName():                                        schema_k8sio_api_core_v1_Lifecycle(ref),
-		v1.LifecycleHandler{}.OpenAPIModelName():                                 schema_k8sio_api_core_v1_LifecycleHandler(ref),
-		v1.LimitRange{}.OpenAPIModelName():                                       schema_k8sio_api_core_v1_LimitRange(ref),
-		v1.LimitRangeItem{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_LimitRangeItem(ref),
-		v1.LimitRangeList{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_LimitRangeList(ref),
-		v1.LimitRangeSpec{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_LimitRangeSpec(ref),
-		v1.LinuxContainerUser{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_LinuxContainerUser(ref),
-		v1.List{}.OpenAPIModelName():                                             schema_k8sio_api_core_v1_List(ref),
-		v1.LoadBalancerIngress{}.OpenAPIModelName():                              schema_k8sio_api_core_v1_LoadBalancerIngress(ref),
-		v1.LoadBalancerStatus{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_LoadBalancerStatus(ref),
-		v1.LocalObjectReference{}.OpenAPIModelName():                             schema_k8sio_api_core_v1_LocalObjectReference(ref),
-		v1.LocalVolumeSource{}.OpenAPIModelName():                                schema_k8sio_api_core_v1_LocalVolumeSource(ref),
-		v1.ModifyVolumeStatus{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_ModifyVolumeStatus(ref),
-		v1.NFSVolumeSource{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_NFSVolumeSource(ref),
-		v1.Namespace{}.OpenAPIModelName():                                        schema_k8sio_api_core_v1_Namespace(ref),
-		v1.NamespaceCondition{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_NamespaceCondition(ref),
-		v1.NamespaceList{}.OpenAPIModelName():                                    schema_k8sio_api_core_v1_NamespaceList(ref),
-		v1.NamespaceSpec{}.OpenAPIModelName():                                    schema_k8sio_api_core_v1_NamespaceSpec(ref),
-		v1.NamespaceStatus{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_NamespaceStatus(ref),
-		v1.Node{}.OpenAPIModelName():                                             schema_k8sio_api_core_v1_Node(ref),
-		v1.NodeAddress{}.OpenAPIModelName():                                      schema_k8sio_api_core_v1_NodeAddress(ref),
-		v1.NodeAffinity{}.OpenAPIModelName():                                     schema_k8sio_api_core_v1_NodeAffinity(ref),
-		v1.NodeAllocatableResourceClaimStatus{}.OpenAPIModelName():               schema_k8sio_api_core_v1_NodeAllocatableResourceClaimStatus(ref),
-		v1.NodeCondition{}.OpenAPIModelName():                                    schema_k8sio_api_core_v1_NodeCondition(ref),
-		v1.NodeConfigSource{}.OpenAPIModelName():                                 schema_k8sio_api_core_v1_NodeConfigSource(ref),
-		v1.NodeConfigStatus{}.OpenAPIModelName():                                 schema_k8sio_api_core_v1_NodeConfigStatus(ref),
-		v1.NodeDaemonEndpoints{}.OpenAPIModelName():                              schema_k8sio_api_core_v1_NodeDaemonEndpoints(ref),
-		v1.NodeFeatures{}.OpenAPIModelName():                                     schema_k8sio_api_core_v1_NodeFeatures(ref),
-		v1.NodeList{}.OpenAPIModelName():                                         schema_k8sio_api_core_v1_NodeList(ref),
-		v1.NodeProxyOptions{}.OpenAPIModelName():                                 schema_k8sio_api_core_v1_NodeProxyOptions(ref),
-		v1.NodeRuntimeHandler{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_NodeRuntimeHandler(ref),
-		v1.NodeRuntimeHandlerFeatures{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_NodeRuntimeHandlerFeatures(ref),
-		v1.NodeSelector{}.OpenAPIModelName():                                     schema_k8sio_api_core_v1_NodeSelector(ref),
-		v1.NodeSelectorRequirement{}.OpenAPIModelName():                          schema_k8sio_api_core_v1_NodeSelectorRequirement(ref),
-		v1.NodeSelectorTerm{}.OpenAPIModelName():                                 schema_k8sio_api_core_v1_NodeSelectorTerm(ref),
-		v1.NodeSpec{}.OpenAPIModelName():                                         schema_k8sio_api_core_v1_NodeSpec(ref),
-		v1.NodeStatus{}.OpenAPIModelName():                                       schema_k8sio_api_core_v1_NodeStatus(ref),
-		v1.NodeSwapStatus{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_NodeSwapStatus(ref),
-		v1.NodeSystemInfo{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_NodeSystemInfo(ref),
-		v1.ObjectFieldSelector{}.OpenAPIModelName():                              schema_k8sio_api_core_v1_ObjectFieldSelector(ref),
-		v1.ObjectReference{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_ObjectReference(ref),
-		v1.PersistentVolume{}.OpenAPIModelName():                                 schema_k8sio_api_core_v1_PersistentVolume(ref),
-		v1.PersistentVolumeClaim{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_PersistentVolumeClaim(ref),
-		v1.PersistentVolumeClaimCondition{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_PersistentVolumeClaimCondition(ref),
-		v1.PersistentVolumeClaimList{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_PersistentVolumeClaimList(ref),
-		v1.PersistentVolumeClaimSpec{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_PersistentVolumeClaimSpec(ref),
-		v1.PersistentVolumeClaimStatus{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_PersistentVolumeClaimStatus(ref),
-		v1.PersistentVolumeClaimTemplate{}.OpenAPIModelName():                    schema_k8sio_api_core_v1_PersistentVolumeClaimTemplate(ref),
-		v1.PersistentVolumeClaimVolumeSource{}.OpenAPIModelName():                schema_k8sio_api_core_v1_PersistentVolumeClaimVolumeSource(ref),
-		v1.PersistentVolumeList{}.OpenAPIModelName():                             schema_k8sio_api_core_v1_PersistentVolumeList(ref),
-		v1.PersistentVolumeSource{}.OpenAPIModelName():                           schema_k8sio_api_core_v1_PersistentVolumeSource(ref),
-		v1.PersistentVolumeSpec{}.OpenAPIModelName():                             schema_k8sio_api_core_v1_PersistentVolumeSpec(ref),
-		v1.PersistentVolumeStatus{}.OpenAPIModelName():                           schema_k8sio_api_core_v1_PersistentVolumeStatus(ref),
-		v1.PhotonPersistentDiskVolumeSource{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_PhotonPersistentDiskVolumeSource(ref),
-		v1.Pod{}.OpenAPIModelName():                                              schema_k8sio_api_core_v1_Pod(ref),
-		v1.PodAffinity{}.OpenAPIModelName():                                      schema_k8sio_api_core_v1_PodAffinity(ref),
-		v1.PodAffinityTerm{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_PodAffinityTerm(ref),
-		v1.PodAntiAffinity{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_PodAntiAffinity(ref),
-		v1.PodAttachOptions{}.OpenAPIModelName():                                 schema_k8sio_api_core_v1_PodAttachOptions(ref),
-		v1.PodCertificateProjection{}.OpenAPIModelName():                         schema_k8sio_api_core_v1_PodCertificateProjection(ref),
-		v1.PodCondition{}.OpenAPIModelName():                                     schema_k8sio_api_core_v1_PodCondition(ref),
-		v1.PodDNSConfig{}.OpenAPIModelName():                                     schema_k8sio_api_core_v1_PodDNSConfig(ref),
-		v1.PodDNSConfigOption{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_PodDNSConfigOption(ref),
-		v1.PodExecOptions{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_PodExecOptions(ref),
-		v1.PodExtendedResourceClaimStatus{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_PodExtendedResourceClaimStatus(ref),
-		v1.PodIP{}.OpenAPIModelName():                                            schema_k8sio_api_core_v1_PodIP(ref),
-		v1.PodList{}.OpenAPIModelName():                                          schema_k8sio_api_core_v1_PodList(ref),
-		v1.PodLogOptions{}.OpenAPIModelName():                                    schema_k8sio_api_core_v1_PodLogOptions(ref),
-		v1.PodOS{}.OpenAPIModelName():                                            schema_k8sio_api_core_v1_PodOS(ref),
-		v1.PodPortForwardOptions{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_PodPortForwardOptions(ref),
-		v1.PodProxyOptions{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_PodProxyOptions(ref),
-		v1.PodReadinessGate{}.OpenAPIModelName():                                 schema_k8sio_api_core_v1_PodReadinessGate(ref),
-		v1.PodResourceClaim{}.OpenAPIModelName():                                 schema_k8sio_api_core_v1_PodResourceClaim(ref),
-		v1.PodResourceClaimStatus{}.OpenAPIModelName():                           schema_k8sio_api_core_v1_PodResourceClaimStatus(ref),
-		v1.PodSchedulingGate{}.OpenAPIModelName():                                schema_k8sio_api_core_v1_PodSchedulingGate(ref),
-		v1.PodSchedulingGroup{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_PodSchedulingGroup(ref),
-		v1.PodSecurityContext{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_PodSecurityContext(ref),
-		v1.PodSignature{}.OpenAPIModelName():                                     schema_k8sio_api_core_v1_PodSignature(ref),
-		v1.PodSpec{}.OpenAPIModelName():                                          schema_k8sio_api_core_v1_PodSpec(ref),
-		v1.PodStatus{}.OpenAPIModelName():                                        schema_k8sio_api_core_v1_PodStatus(ref),
-		v1.PodStatusResult{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_PodStatusResult(ref),
-		v1.PodTemplate{}.OpenAPIModelName():                                      schema_k8sio_api_core_v1_PodTemplate(ref),
-		v1.PodTemplateList{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_PodTemplateList(ref),
-		v1.PodTemplateSpec{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_PodTemplateSpec(ref),
-		v1.PortStatus{}.OpenAPIModelName():                                       schema_k8sio_api_core_v1_PortStatus(ref),
-		v1.PortworxVolumeSource{}.OpenAPIModelName():                             schema_k8sio_api_core_v1_PortworxVolumeSource(ref),
-		v1.PreferAvoidPodsEntry{}.OpenAPIModelName():                             schema_k8sio_api_core_v1_PreferAvoidPodsEntry(ref),
-		v1.PreferredSchedulingTerm{}.OpenAPIModelName():                          schema_k8sio_api_core_v1_PreferredSchedulingTerm(ref),
-		v1.Probe{}.OpenAPIModelName():                                            schema_k8sio_api_core_v1_Probe(ref),
-		v1.ProbeHandler{}.OpenAPIModelName():                                     schema_k8sio_api_core_v1_ProbeHandler(ref),
-		v1.ProjectedVolumeSource{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_ProjectedVolumeSource(ref),
-		v1.QuobyteVolumeSource{}.OpenAPIModelName():                              schema_k8sio_api_core_v1_QuobyteVolumeSource(ref),
-		v1.RBDPersistentVolumeSource{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_RBDPersistentVolumeSource(ref),
-		v1.RBDVolumeSource{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_RBDVolumeSource(ref),
-		v1.RangeAllocation{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_RangeAllocation(ref),
-		v1.ReplicationController{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_ReplicationController(ref),
-		v1.ReplicationControllerCondition{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_ReplicationControllerCondition(ref),
-		v1.ReplicationControllerList{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_ReplicationControllerList(ref),
-		v1.ReplicationControllerSpec{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_ReplicationControllerSpec(ref),
-		v1.ReplicationControllerStatus{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_ReplicationControllerStatus(ref),
-		v1.ResourceClaim{}.OpenAPIModelName():                                    schema_k8sio_api_core_v1_ResourceClaim(ref),
-		v1.ResourceFieldSelector{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_ResourceFieldSelector(ref),
-		v1.ResourceHealth{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_ResourceHealth(ref),
-		v1.ResourceQuota{}.OpenAPIModelName():                                    schema_k8sio_api_core_v1_ResourceQuota(ref),
-		v1.ResourceQuotaList{}.OpenAPIModelName():                                schema_k8sio_api_core_v1_ResourceQuotaList(ref),
-		v1.ResourceQuotaSpec{}.OpenAPIModelName():                                schema_k8sio_api_core_v1_ResourceQuotaSpec(ref),
-		v1.ResourceQuotaStatus{}.OpenAPIModelName():                              schema_k8sio_api_core_v1_ResourceQuotaStatus(ref),
-		v1.ResourceRequirements{}.OpenAPIModelName():                             schema_k8sio_api_core_v1_ResourceRequirements(ref),
-		v1.ResourceStatus{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_ResourceStatus(ref),
-		v1.SELinuxOptions{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_SELinuxOptions(ref),
-		v1.ScaleIOPersistentVolumeSource{}.OpenAPIModelName():                    schema_k8sio_api_core_v1_ScaleIOPersistentVolumeSource(ref),
-		v1.ScaleIOVolumeSource{}.OpenAPIModelName():                              schema_k8sio_api_core_v1_ScaleIOVolumeSource(ref),
-		v1.ScopeSelector{}.OpenAPIModelName():                                    schema_k8sio_api_core_v1_ScopeSelector(ref),
-		v1.ScopedResourceSelectorRequirement{}.OpenAPIModelName():                schema_k8sio_api_core_v1_ScopedResourceSelectorRequirement(ref),
-		v1.SeccompProfile{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_SeccompProfile(ref),
-		v1.Secret{}.OpenAPIModelName():                                           schema_k8sio_api_core_v1_Secret(ref),
-		v1.SecretEnvSource{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_SecretEnvSource(ref),
-		v1.SecretKeySelector{}.OpenAPIModelName():                                schema_k8sio_api_core_v1_SecretKeySelector(ref),
-		v1.SecretList{}.OpenAPIModelName():                                       schema_k8sio_api_core_v1_SecretList(ref),
-		v1.SecretProjection{}.OpenAPIModelName():                                 schema_k8sio_api_core_v1_SecretProjection(ref),
-		v1.SecretReference{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_SecretReference(ref),
-		v1.SecretVolumeSource{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_SecretVolumeSource(ref),
-		v1.SecurityContext{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_SecurityContext(ref),
-		v1.SerializedReference{}.OpenAPIModelName():                              schema_k8sio_api_core_v1_SerializedReference(ref),
-		v1.Service{}.OpenAPIModelName():                                          schema_k8sio_api_core_v1_Service(ref),
-		v1.ServiceAccount{}.OpenAPIModelName():                                   schema_k8sio_api_core_v1_ServiceAccount(ref),
-		v1.ServiceAccountList{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_ServiceAccountList(ref),
-		v1.ServiceAccountTokenProjection{}.OpenAPIModelName():                    schema_k8sio_api_core_v1_ServiceAccountTokenProjection(ref),
-		v1.ServiceList{}.OpenAPIModelName():                                      schema_k8sio_api_core_v1_ServiceList(ref),
-		v1.ServicePort{}.OpenAPIModelName():                                      schema_k8sio_api_core_v1_ServicePort(ref),
-		v1.ServiceProxyOptions{}.OpenAPIModelName():                              schema_k8sio_api_core_v1_ServiceProxyOptions(ref),
-		v1.ServiceSpec{}.OpenAPIModelName():                                      schema_k8sio_api_core_v1_ServiceSpec(ref),
-		v1.ServiceStatus{}.OpenAPIModelName():                                    schema_k8sio_api_core_v1_ServiceStatus(ref),
-		v1.SessionAffinityConfig{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_SessionAffinityConfig(ref),
-		v1.SleepAction{}.OpenAPIModelName():                                      schema_k8sio_api_core_v1_SleepAction(ref),
-		v1.StorageOSPersistentVolumeSource{}.OpenAPIModelName():                  schema_k8sio_api_core_v1_StorageOSPersistentVolumeSource(ref),
-		v1.StorageOSVolumeSource{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_StorageOSVolumeSource(ref),
-		v1.Sysctl{}.OpenAPIModelName():                                           schema_k8sio_api_core_v1_Sysctl(ref),
-		v1.TCPSocketAction{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_TCPSocketAction(ref),
-		v1.Taint{}.OpenAPIModelName():                                            schema_k8sio_api_core_v1_Taint(ref),
-		v1.Toleration{}.OpenAPIModelName():                                       schema_k8sio_api_core_v1_Toleration(ref),
-		v1.TopologySelectorLabelRequirement{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_TopologySelectorLabelRequirement(ref),
-		v1.TopologySelectorTerm{}.OpenAPIModelName():                             schema_k8sio_api_core_v1_TopologySelectorTerm(ref),
-		v1.TopologySpreadConstraint{}.OpenAPIModelName():                         schema_k8sio_api_core_v1_TopologySpreadConstraint(ref),
-		v1.TypedLocalObjectReference{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_TypedLocalObjectReference(ref),
-		v1.TypedObjectReference{}.OpenAPIModelName():                             schema_k8sio_api_core_v1_TypedObjectReference(ref),
-		v1.Volume{}.OpenAPIModelName():                                           schema_k8sio_api_core_v1_Volume(ref),
-		v1.VolumeDevice{}.OpenAPIModelName():                                     schema_k8sio_api_core_v1_VolumeDevice(ref),
-		v1.VolumeMount{}.OpenAPIModelName():                                      schema_k8sio_api_core_v1_VolumeMount(ref),
-		v1.VolumeMountStatus{}.OpenAPIModelName():                                schema_k8sio_api_core_v1_VolumeMountStatus(ref),
-		v1.VolumeNodeAffinity{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_VolumeNodeAffinity(ref),
-		v1.VolumeProjection{}.OpenAPIModelName():                                 schema_k8sio_api_core_v1_VolumeProjection(ref),
-		v1.VolumeResourceRequirements{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_VolumeResourceRequirements(ref),
-		v1.VolumeSource{}.OpenAPIModelName():                                     schema_k8sio_api_core_v1_VolumeSource(ref),
-		v1.VolumeStatus{}.OpenAPIModelName():                                     schema_k8sio_api_core_v1_VolumeStatus(ref),
-		v1.VsphereVirtualDiskVolumeSource{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_VsphereVirtualDiskVolumeSource(ref),
-		v1.WeightedPodAffinityTerm{}.OpenAPIModelName():                          schema_k8sio_api_core_v1_WeightedPodAffinityTerm(ref),
-		v1.WindowsSecurityContextOptions{}.OpenAPIModelName():                    schema_k8sio_api_core_v1_WindowsSecurityContextOptions(ref),
-		resource.Quantity{}.OpenAPIModelName():                                   schema_apimachinery_pkg_api_resource_Quantity(ref),
-		metav1.APIGroup{}.OpenAPIModelName():                                     schema_pkg_apis_meta_v1_APIGroup(ref),
-		metav1.APIGroupList{}.OpenAPIModelName():                                 schema_pkg_apis_meta_v1_APIGroupList(ref),
-		metav1.APIResource{}.OpenAPIModelName():                                  schema_pkg_apis_meta_v1_APIResource(ref),
-		metav1.APIResourceList{}.OpenAPIModelName():                              schema_pkg_apis_meta_v1_APIResourceList(ref),
-		metav1.APIVersions{}.OpenAPIModelName():                                  schema_pkg_apis_meta_v1_APIVersions(ref),
-		metav1.ApplyOptions{}.OpenAPIModelName():                                 schema_pkg_apis_meta_v1_ApplyOptions(ref),
-		metav1.Condition{}.OpenAPIModelName():                                    schema_pkg_apis_meta_v1_Condition(ref),
-		metav1.CreateOptions{}.OpenAPIModelName():                                schema_pkg_apis_meta_v1_CreateOptions(ref),
-		metav1.DeleteOptions{}.OpenAPIModelName():                                schema_pkg_apis_meta_v1_DeleteOptions(ref),
-		metav1.Duration{}.OpenAPIModelName():                                     schema_pkg_apis_meta_v1_Duration(ref),
-		metav1.FieldSelectorRequirement{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_FieldSelectorRequirement(ref),
-		metav1.FieldsV1{}.OpenAPIModelName():                                     schema_pkg_apis_meta_v1_FieldsV1(ref),
-		metav1.GetOptions{}.OpenAPIModelName():                                   schema_pkg_apis_meta_v1_GetOptions(ref),
-		metav1.GroupKind{}.OpenAPIModelName():                                    schema_pkg_apis_meta_v1_GroupKind(ref),
-		metav1.GroupResource{}.OpenAPIModelName():                                schema_pkg_apis_meta_v1_GroupResource(ref),
-		metav1.GroupVersion{}.OpenAPIModelName():                                 schema_pkg_apis_meta_v1_GroupVersion(ref),
-		metav1.GroupVersionForDiscovery{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_GroupVersionForDiscovery(ref),
-		metav1.GroupVersionKind{}.OpenAPIModelName():                             schema_pkg_apis_meta_v1_GroupVersionKind(ref),
-		metav1.GroupVersionResource{}.OpenAPIModelName():                         schema_pkg_apis_meta_v1_GroupVersionResource(ref),
-		metav1.InternalEvent{}.OpenAPIModelName():                                schema_pkg_apis_meta_v1_InternalEvent(ref),
-		metav1.LabelSelector{}.OpenAPIModelName():                                schema_pkg_apis_meta_v1_LabelSelector(ref),
-		metav1.LabelSelectorRequirement{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_LabelSelectorRequirement(ref),
-		metav1.List{}.OpenAPIModelName():                                         schema_pkg_apis_meta_v1_List(ref),
-		metav1.ListMeta{}.OpenAPIModelName():                                     schema_pkg_apis_meta_v1_ListMeta(ref),
-		metav1.ListOptions{}.OpenAPIModelName():                                  schema_pkg_apis_meta_v1_ListOptions(ref),
-		metav1.ManagedFieldsEntry{}.OpenAPIModelName():                           schema_pkg_apis_meta_v1_ManagedFieldsEntry(ref),
-		metav1.MicroTime{}.OpenAPIModelName():                                    schema_pkg_apis_meta_v1_MicroTime(ref),
-		metav1.ObjectMeta{}.OpenAPIModelName():                                   schema_pkg_apis_meta_v1_ObjectMeta(ref),
-		metav1.OwnerReference{}.OpenAPIModelName():                               schema_pkg_apis_meta_v1_OwnerReference(ref),
-		metav1.PartialObjectMetadata{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_PartialObjectMetadata(ref),
-		metav1.PartialObjectMetadataList{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_PartialObjectMetadataList(ref),
-		metav1.Patch{}.OpenAPIModelName():                                        schema_pkg_apis_meta_v1_Patch(ref),
-		metav1.PatchOptions{}.OpenAPIModelName():                                 schema_pkg_apis_meta_v1_PatchOptions(ref),
-		metav1.Preconditions{}.OpenAPIModelName():                                schema_pkg_apis_meta_v1_Preconditions(ref),
-		metav1.RootPaths{}.OpenAPIModelName():                                    schema_pkg_apis_meta_v1_RootPaths(ref),
-		metav1.ServerAddressByClientCIDR{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_ServerAddressByClientCIDR(ref),
-		metav1.ShardInfo{}.OpenAPIModelName():                                    schema_pkg_apis_meta_v1_ShardInfo(ref),
-		metav1.Status{}.OpenAPIModelName():                                       schema_pkg_apis_meta_v1_Status(ref),
-		metav1.StatusCause{}.OpenAPIModelName():                                  schema_pkg_apis_meta_v1_StatusCause(ref),
-		metav1.StatusDetails{}.OpenAPIModelName():                                schema_pkg_apis_meta_v1_StatusDetails(ref),
-		metav1.Table{}.OpenAPIModelName():                                        schema_pkg_apis_meta_v1_Table(ref),
-		metav1.TableColumnDefinition{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_TableColumnDefinition(ref),
-		metav1.TableOptions{}.OpenAPIModelName():                                 schema_pkg_apis_meta_v1_TableOptions(ref),
-		metav1.TableRow{}.OpenAPIModelName():                                     schema_pkg_apis_meta_v1_TableRow(ref),
-		metav1.TableRowCondition{}.OpenAPIModelName():                            schema_pkg_apis_meta_v1_TableRowCondition(ref),
-		metav1.Time{}.OpenAPIModelName():                                         schema_pkg_apis_meta_v1_Time(ref),
-		metav1.Timestamp{}.OpenAPIModelName():                                    schema_pkg_apis_meta_v1_Timestamp(ref),
-		metav1.TypeMeta{}.OpenAPIModelName():                                     schema_pkg_apis_meta_v1_TypeMeta(ref),
-		metav1.UpdateOptions{}.OpenAPIModelName():                                schema_pkg_apis_meta_v1_UpdateOptions(ref),
-		metav1.WatchEvent{}.OpenAPIModelName():                                   schema_pkg_apis_meta_v1_WatchEvent(ref),
-		runtime.RawExtension{}.OpenAPIModelName():                                schema_k8sio_apimachinery_pkg_runtime_RawExtension(ref),
-		runtime.TypeMeta{}.OpenAPIModelName():                                    schema_k8sio_apimachinery_pkg_runtime_TypeMeta(ref),
-		runtime.Unknown{}.OpenAPIModelName():                                     schema_k8sio_apimachinery_pkg_runtime_Unknown(ref),
-		version.Info{}.OpenAPIModelName():                                        schema_k8sio_apimachinery_pkg_version_Info(ref),
+		v1alpha1.CompiledContainer{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_CompiledContainer(ref),
+		v1alpha1.CompiledContainerInterface{}.OpenAPIModelName():     schema_ectobase_api_net_v1alpha1_CompiledContainerInterface(ref),
+		v1alpha1.CompiledContainerList{}.OpenAPIModelName():          schema_ectobase_api_net_v1alpha1_CompiledContainerList(ref),
+		v1alpha1.CompiledContainerSpec{}.OpenAPIModelName():          schema_ectobase_api_net_v1alpha1_CompiledContainerSpec(ref),
+		v1alpha1.CompiledContainerStatus{}.OpenAPIModelName():        schema_ectobase_api_net_v1alpha1_CompiledContainerStatus(ref),
+		v1alpha1.CompiledFirewall{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_CompiledFirewall(ref),
+		v1alpha1.CompiledFwRule{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_CompiledFwRule(ref),
+		v1alpha1.CompiledLB{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_CompiledLB(ref),
+		v1alpha1.CompiledLBPort{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_CompiledLBPort(ref),
+		v1alpha1.CompiledNATSource{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_CompiledNATSource(ref),
+		v1alpha1.CompiledNIC{}.OpenAPIModelName():                    schema_ectobase_api_net_v1alpha1_CompiledNIC(ref),
+		v1alpha1.CompiledNICList{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_CompiledNICList(ref),
+		v1alpha1.CompiledNICSpec{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_CompiledNICSpec(ref),
+		v1alpha1.CompiledNICStatus{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_CompiledNICStatus(ref),
+		v1alpha1.CompiledPeerImport{}.OpenAPIModelName():             schema_ectobase_api_net_v1alpha1_CompiledPeerImport(ref),
+		v1alpha1.CompiledVM{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_CompiledVM(ref),
+		v1alpha1.CompiledVMInterface{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_CompiledVMInterface(ref),
+		v1alpha1.CompiledVMList{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_CompiledVMList(ref),
+		v1alpha1.CompiledVMSpec{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_CompiledVMSpec(ref),
+		v1alpha1.CompiledVMStatus{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_CompiledVMStatus(ref),
+		v1alpha1.CompiledVolumeAttachment{}.OpenAPIModelName():       schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachment(ref),
+		v1alpha1.CompiledVolumeAttachmentList{}.OpenAPIModelName():   schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachmentList(ref),
+		v1alpha1.CompiledVolumeAttachmentSpec{}.OpenAPIModelName():   schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachmentSpec(ref),
+		v1alpha1.CompiledVolumeAttachmentStatus{}.OpenAPIModelName(): schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachmentStatus(ref),
+		v1alpha1.Container{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_Container(ref),
+		v1alpha1.ContainerList{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_ContainerList(ref),
+		v1alpha1.ContainerSpec{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_ContainerSpec(ref),
+		v1alpha1.ContainerStatus{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_ContainerStatus(ref),
+		v1alpha1.EgressQoS{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_EgressQoS(ref),
+		v1alpha1.FirewallPolicy{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_FirewallPolicy(ref),
+		v1alpha1.FirewallPolicyList{}.OpenAPIModelName():             schema_ectobase_api_net_v1alpha1_FirewallPolicyList(ref),
+		v1alpha1.FirewallPolicyRule{}.OpenAPIModelName():             schema_ectobase_api_net_v1alpha1_FirewallPolicyRule(ref),
+		v1alpha1.FirewallPolicySpec{}.OpenAPIModelName():             schema_ectobase_api_net_v1alpha1_FirewallPolicySpec(ref),
+		v1alpha1.FirewallPolicyStatus{}.OpenAPIModelName():           schema_ectobase_api_net_v1alpha1_FirewallPolicyStatus(ref),
+		v1alpha1.FloatingIP{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_FloatingIP(ref),
+		v1alpha1.FloatingIPList{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_FloatingIPList(ref),
+		v1alpha1.FloatingIPSpec{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_FloatingIPSpec(ref),
+		v1alpha1.FloatingIPStatus{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_FloatingIPStatus(ref),
+		v1alpha1.InterfaceQoS{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_InterfaceQoS(ref),
+		v1alpha1.LoadBalancer{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_LoadBalancer(ref),
+		v1alpha1.LoadBalancerList{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_LoadBalancerList(ref),
+		v1alpha1.LoadBalancerPort{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_LoadBalancerPort(ref),
+		v1alpha1.LoadBalancerSpec{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_LoadBalancerSpec(ref),
+		v1alpha1.LoadBalancerStatus{}.OpenAPIModelName():             schema_ectobase_api_net_v1alpha1_LoadBalancerStatus(ref),
+		v1alpha1.LocalObjectReference{}.OpenAPIModelName():           schema_ectobase_api_net_v1alpha1_LocalObjectReference(ref),
+		v1alpha1.NATAllocation{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_NATAllocation(ref),
+		v1alpha1.NATGateway{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_NATGateway(ref),
+		v1alpha1.NATGatewayList{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_NATGatewayList(ref),
+		v1alpha1.NATGatewaySpec{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_NATGatewaySpec(ref),
+		v1alpha1.NATGatewayStatus{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_NATGatewayStatus(ref),
+		v1alpha1.NetworkInterface{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_NetworkInterface(ref),
+		v1alpha1.NetworkInterfaceList{}.OpenAPIModelName():           schema_ectobase_api_net_v1alpha1_NetworkInterfaceList(ref),
+		v1alpha1.NetworkInterfaceSpec{}.OpenAPIModelName():           schema_ectobase_api_net_v1alpha1_NetworkInterfaceSpec(ref),
+		v1alpha1.NetworkInterfaceStatus{}.OpenAPIModelName():         schema_ectobase_api_net_v1alpha1_NetworkInterfaceStatus(ref),
+		v1alpha1.PortStatus{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_PortStatus(ref),
+		v1alpha1.RateLimit{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_RateLimit(ref),
+		v1alpha1.VMAntiAffinity{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_VMAntiAffinity(ref),
+		v1alpha1.VMPlacement{}.OpenAPIModelName():                    schema_ectobase_api_net_v1alpha1_VMPlacement(ref),
+		v1alpha1.VPC{}.OpenAPIModelName():                            schema_ectobase_api_net_v1alpha1_VPC(ref),
+		v1alpha1.VPCList{}.OpenAPIModelName():                        schema_ectobase_api_net_v1alpha1_VPCList(ref),
+		v1alpha1.VPCPeering{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_VPCPeering(ref),
+		v1alpha1.VPCPeeringList{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_VPCPeeringList(ref),
+		v1alpha1.VPCPeeringSpec{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_VPCPeeringSpec(ref),
+		v1alpha1.VPCPeeringStatus{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_VPCPeeringStatus(ref),
+		v1alpha1.VPCReference{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_VPCReference(ref),
+		v1alpha1.VPCSpec{}.OpenAPIModelName():                        schema_ectobase_api_net_v1alpha1_VPCSpec(ref),
+		v1alpha1.VPCStatus{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_VPCStatus(ref),
+		v1alpha1.VirtualMachine{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_VirtualMachine(ref),
+		v1alpha1.VirtualMachineList{}.OpenAPIModelName():             schema_ectobase_api_net_v1alpha1_VirtualMachineList(ref),
+		v1alpha1.VirtualMachineSpec{}.OpenAPIModelName():             schema_ectobase_api_net_v1alpha1_VirtualMachineSpec(ref),
+		v1alpha1.VirtualMachineStatus{}.OpenAPIModelName():           schema_ectobase_api_net_v1alpha1_VirtualMachineStatus(ref),
+		v1alpha1.Volume{}.OpenAPIModelName():                         schema_ectobase_api_net_v1alpha1_Volume(ref),
+		v1alpha1.VolumeList{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_VolumeList(ref),
+		v1alpha1.VolumeSpec{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_VolumeSpec(ref),
+		v1alpha1.VolumeStatus{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_VolumeStatus(ref),
+		platformv1alpha1.ClusterPool{}.OpenAPIModelName():            schema_ectobase_api_platform_v1alpha1_ClusterPool(ref),
+		platformv1alpha1.ClusterPoolLease{}.OpenAPIModelName():       schema_ectobase_api_platform_v1alpha1_ClusterPoolLease(ref),
+		platformv1alpha1.ClusterPoolList{}.OpenAPIModelName():        schema_ectobase_api_platform_v1alpha1_ClusterPoolList(ref),
+		platformv1alpha1.ClusterPoolSpec{}.OpenAPIModelName():        schema_ectobase_api_platform_v1alpha1_ClusterPoolSpec(ref),
+		platformv1alpha1.ClusterPoolStatus{}.OpenAPIModelName():      schema_ectobase_api_platform_v1alpha1_ClusterPoolStatus(ref),
+		platformv1alpha1.NodeDrainStatus{}.OpenAPIModelName():        schema_ectobase_api_platform_v1alpha1_NodeDrainStatus(ref),
+		v1.AWSElasticBlockStoreVolumeSource{}.OpenAPIModelName():     schema_k8sio_api_core_v1_AWSElasticBlockStoreVolumeSource(ref),
+		v1.Affinity{}.OpenAPIModelName():                             schema_k8sio_api_core_v1_Affinity(ref),
+		v1.AppArmorProfile{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_AppArmorProfile(ref),
+		v1.AttachedVolume{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_AttachedVolume(ref),
+		v1.AvoidPods{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_AvoidPods(ref),
+		v1.AzureDiskVolumeSource{}.OpenAPIModelName():                schema_k8sio_api_core_v1_AzureDiskVolumeSource(ref),
+		v1.AzureFilePersistentVolumeSource{}.OpenAPIModelName():      schema_k8sio_api_core_v1_AzureFilePersistentVolumeSource(ref),
+		v1.AzureFileVolumeSource{}.OpenAPIModelName():                schema_k8sio_api_core_v1_AzureFileVolumeSource(ref),
+		v1.Binding{}.OpenAPIModelName():                              schema_k8sio_api_core_v1_Binding(ref),
+		v1.CSIPersistentVolumeSource{}.OpenAPIModelName():            schema_k8sio_api_core_v1_CSIPersistentVolumeSource(ref),
+		v1.CSIVolumeSource{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_CSIVolumeSource(ref),
+		v1.Capabilities{}.OpenAPIModelName():                         schema_k8sio_api_core_v1_Capabilities(ref),
+		v1.CephFSPersistentVolumeSource{}.OpenAPIModelName():         schema_k8sio_api_core_v1_CephFSPersistentVolumeSource(ref),
+		v1.CephFSVolumeSource{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_CephFSVolumeSource(ref),
+		v1.CinderPersistentVolumeSource{}.OpenAPIModelName():         schema_k8sio_api_core_v1_CinderPersistentVolumeSource(ref),
+		v1.CinderVolumeSource{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_CinderVolumeSource(ref),
+		v1.ClientIPConfig{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_ClientIPConfig(ref),
+		v1.ClusterTrustBundleProjection{}.OpenAPIModelName():         schema_k8sio_api_core_v1_ClusterTrustBundleProjection(ref),
+		v1.ComponentCondition{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_ComponentCondition(ref),
+		v1.ComponentStatus{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_ComponentStatus(ref),
+		v1.ComponentStatusList{}.OpenAPIModelName():                  schema_k8sio_api_core_v1_ComponentStatusList(ref),
+		v1.ConfigMap{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_ConfigMap(ref),
+		v1.ConfigMapEnvSource{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_ConfigMapEnvSource(ref),
+		v1.ConfigMapKeySelector{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_ConfigMapKeySelector(ref),
+		v1.ConfigMapList{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_ConfigMapList(ref),
+		v1.ConfigMapNodeConfigSource{}.OpenAPIModelName():            schema_k8sio_api_core_v1_ConfigMapNodeConfigSource(ref),
+		v1.ConfigMapProjection{}.OpenAPIModelName():                  schema_k8sio_api_core_v1_ConfigMapProjection(ref),
+		v1.ConfigMapVolumeSource{}.OpenAPIModelName():                schema_k8sio_api_core_v1_ConfigMapVolumeSource(ref),
+		v1.Container{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_Container(ref),
+		v1.ContainerExtendedResourceRequest{}.OpenAPIModelName():     schema_k8sio_api_core_v1_ContainerExtendedResourceRequest(ref),
+		v1.ContainerImage{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_ContainerImage(ref),
+		v1.ContainerPort{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_ContainerPort(ref),
+		v1.ContainerResizePolicy{}.OpenAPIModelName():                schema_k8sio_api_core_v1_ContainerResizePolicy(ref),
+		v1.ContainerRestartRule{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_ContainerRestartRule(ref),
+		v1.ContainerRestartRuleOnExitCodes{}.OpenAPIModelName():      schema_k8sio_api_core_v1_ContainerRestartRuleOnExitCodes(ref),
+		v1.ContainerState{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_ContainerState(ref),
+		v1.ContainerStateRunning{}.OpenAPIModelName():                schema_k8sio_api_core_v1_ContainerStateRunning(ref),
+		v1.ContainerStateTerminated{}.OpenAPIModelName():             schema_k8sio_api_core_v1_ContainerStateTerminated(ref),
+		v1.ContainerStateWaiting{}.OpenAPIModelName():                schema_k8sio_api_core_v1_ContainerStateWaiting(ref),
+		v1.ContainerStatus{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_ContainerStatus(ref),
+		v1.ContainerUser{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_ContainerUser(ref),
+		v1.DaemonEndpoint{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_DaemonEndpoint(ref),
+		v1.DownwardAPIProjection{}.OpenAPIModelName():                schema_k8sio_api_core_v1_DownwardAPIProjection(ref),
+		v1.DownwardAPIVolumeFile{}.OpenAPIModelName():                schema_k8sio_api_core_v1_DownwardAPIVolumeFile(ref),
+		v1.DownwardAPIVolumeSource{}.OpenAPIModelName():              schema_k8sio_api_core_v1_DownwardAPIVolumeSource(ref),
+		v1.EmptyDirVolumeSource{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_EmptyDirVolumeSource(ref),
+		v1.EndpointAddress{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_EndpointAddress(ref),
+		v1.EndpointPort{}.OpenAPIModelName():                         schema_k8sio_api_core_v1_EndpointPort(ref),
+		v1.EndpointSubset{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_EndpointSubset(ref),
+		v1.Endpoints{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_Endpoints(ref),
+		v1.EndpointsList{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_EndpointsList(ref),
+		v1.EnvFromSource{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_EnvFromSource(ref),
+		v1.EnvVar{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_EnvVar(ref),
+		v1.EnvVarSource{}.OpenAPIModelName():                         schema_k8sio_api_core_v1_EnvVarSource(ref),
+		v1.EphemeralContainer{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_EphemeralContainer(ref),
+		v1.EphemeralContainerCommon{}.OpenAPIModelName():             schema_k8sio_api_core_v1_EphemeralContainerCommon(ref),
+		v1.EphemeralVolumeSource{}.OpenAPIModelName():                schema_k8sio_api_core_v1_EphemeralVolumeSource(ref),
+		v1.Event{}.OpenAPIModelName():                                schema_k8sio_api_core_v1_Event(ref),
+		v1.EventList{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_EventList(ref),
+		v1.EventSeries{}.OpenAPIModelName():                          schema_k8sio_api_core_v1_EventSeries(ref),
+		v1.EventSource{}.OpenAPIModelName():                          schema_k8sio_api_core_v1_EventSource(ref),
+		v1.ExecAction{}.OpenAPIModelName():                           schema_k8sio_api_core_v1_ExecAction(ref),
+		v1.FCVolumeSource{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_FCVolumeSource(ref),
+		v1.FileKeySelector{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_FileKeySelector(ref),
+		v1.FlexPersistentVolumeSource{}.OpenAPIModelName():           schema_k8sio_api_core_v1_FlexPersistentVolumeSource(ref),
+		v1.FlexVolumeSource{}.OpenAPIModelName():                     schema_k8sio_api_core_v1_FlexVolumeSource(ref),
+		v1.FlockerVolumeSource{}.OpenAPIModelName():                  schema_k8sio_api_core_v1_FlockerVolumeSource(ref),
+		v1.GCEPersistentDiskVolumeSource{}.OpenAPIModelName():        schema_k8sio_api_core_v1_GCEPersistentDiskVolumeSource(ref),
+		v1.GRPCAction{}.OpenAPIModelName():                           schema_k8sio_api_core_v1_GRPCAction(ref),
+		v1.GitRepoVolumeSource{}.OpenAPIModelName():                  schema_k8sio_api_core_v1_GitRepoVolumeSource(ref),
+		v1.GlusterfsPersistentVolumeSource{}.OpenAPIModelName():      schema_k8sio_api_core_v1_GlusterfsPersistentVolumeSource(ref),
+		v1.GlusterfsVolumeSource{}.OpenAPIModelName():                schema_k8sio_api_core_v1_GlusterfsVolumeSource(ref),
+		v1.HTTPGetAction{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_HTTPGetAction(ref),
+		v1.HTTPHeader{}.OpenAPIModelName():                           schema_k8sio_api_core_v1_HTTPHeader(ref),
+		v1.HostAlias{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_HostAlias(ref),
+		v1.HostIP{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_HostIP(ref),
+		v1.HostPathVolumeSource{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_HostPathVolumeSource(ref),
+		v1.ISCSIPersistentVolumeSource{}.OpenAPIModelName():          schema_k8sio_api_core_v1_ISCSIPersistentVolumeSource(ref),
+		v1.ISCSIVolumeSource{}.OpenAPIModelName():                    schema_k8sio_api_core_v1_ISCSIVolumeSource(ref),
+		v1.ImageVolumeSource{}.OpenAPIModelName():                    schema_k8sio_api_core_v1_ImageVolumeSource(ref),
+		v1.ImageVolumeStatus{}.OpenAPIModelName():                    schema_k8sio_api_core_v1_ImageVolumeStatus(ref),
+		v1.KeyToPath{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_KeyToPath(ref),
+		v1.Lifecycle{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_Lifecycle(ref),
+		v1.LifecycleHandler{}.OpenAPIModelName():                     schema_k8sio_api_core_v1_LifecycleHandler(ref),
+		v1.LimitRange{}.OpenAPIModelName():                           schema_k8sio_api_core_v1_LimitRange(ref),
+		v1.LimitRangeItem{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_LimitRangeItem(ref),
+		v1.LimitRangeList{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_LimitRangeList(ref),
+		v1.LimitRangeSpec{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_LimitRangeSpec(ref),
+		v1.LinuxContainerUser{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_LinuxContainerUser(ref),
+		v1.List{}.OpenAPIModelName():                                 schema_k8sio_api_core_v1_List(ref),
+		v1.LoadBalancerIngress{}.OpenAPIModelName():                  schema_k8sio_api_core_v1_LoadBalancerIngress(ref),
+		v1.LoadBalancerStatus{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_LoadBalancerStatus(ref),
+		v1.LocalObjectReference{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_LocalObjectReference(ref),
+		v1.LocalVolumeSource{}.OpenAPIModelName():                    schema_k8sio_api_core_v1_LocalVolumeSource(ref),
+		v1.ModifyVolumeStatus{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_ModifyVolumeStatus(ref),
+		v1.NFSVolumeSource{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_NFSVolumeSource(ref),
+		v1.Namespace{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_Namespace(ref),
+		v1.NamespaceCondition{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_NamespaceCondition(ref),
+		v1.NamespaceList{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_NamespaceList(ref),
+		v1.NamespaceSpec{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_NamespaceSpec(ref),
+		v1.NamespaceStatus{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_NamespaceStatus(ref),
+		v1.Node{}.OpenAPIModelName():                                 schema_k8sio_api_core_v1_Node(ref),
+		v1.NodeAddress{}.OpenAPIModelName():                          schema_k8sio_api_core_v1_NodeAddress(ref),
+		v1.NodeAffinity{}.OpenAPIModelName():                         schema_k8sio_api_core_v1_NodeAffinity(ref),
+		v1.NodeAllocatableResourceClaimStatus{}.OpenAPIModelName():   schema_k8sio_api_core_v1_NodeAllocatableResourceClaimStatus(ref),
+		v1.NodeCondition{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_NodeCondition(ref),
+		v1.NodeConfigSource{}.OpenAPIModelName():                     schema_k8sio_api_core_v1_NodeConfigSource(ref),
+		v1.NodeConfigStatus{}.OpenAPIModelName():                     schema_k8sio_api_core_v1_NodeConfigStatus(ref),
+		v1.NodeDaemonEndpoints{}.OpenAPIModelName():                  schema_k8sio_api_core_v1_NodeDaemonEndpoints(ref),
+		v1.NodeFeatures{}.OpenAPIModelName():                         schema_k8sio_api_core_v1_NodeFeatures(ref),
+		v1.NodeList{}.OpenAPIModelName():                             schema_k8sio_api_core_v1_NodeList(ref),
+		v1.NodeProxyOptions{}.OpenAPIModelName():                     schema_k8sio_api_core_v1_NodeProxyOptions(ref),
+		v1.NodeRuntimeHandler{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_NodeRuntimeHandler(ref),
+		v1.NodeRuntimeHandlerFeatures{}.OpenAPIModelName():           schema_k8sio_api_core_v1_NodeRuntimeHandlerFeatures(ref),
+		v1.NodeSelector{}.OpenAPIModelName():                         schema_k8sio_api_core_v1_NodeSelector(ref),
+		v1.NodeSelectorRequirement{}.OpenAPIModelName():              schema_k8sio_api_core_v1_NodeSelectorRequirement(ref),
+		v1.NodeSelectorTerm{}.OpenAPIModelName():                     schema_k8sio_api_core_v1_NodeSelectorTerm(ref),
+		v1.NodeSpec{}.OpenAPIModelName():                             schema_k8sio_api_core_v1_NodeSpec(ref),
+		v1.NodeStatus{}.OpenAPIModelName():                           schema_k8sio_api_core_v1_NodeStatus(ref),
+		v1.NodeSwapStatus{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_NodeSwapStatus(ref),
+		v1.NodeSystemInfo{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_NodeSystemInfo(ref),
+		v1.ObjectFieldSelector{}.OpenAPIModelName():                  schema_k8sio_api_core_v1_ObjectFieldSelector(ref),
+		v1.ObjectReference{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_ObjectReference(ref),
+		v1.PersistentVolume{}.OpenAPIModelName():                     schema_k8sio_api_core_v1_PersistentVolume(ref),
+		v1.PersistentVolumeClaim{}.OpenAPIModelName():                schema_k8sio_api_core_v1_PersistentVolumeClaim(ref),
+		v1.PersistentVolumeClaimCondition{}.OpenAPIModelName():       schema_k8sio_api_core_v1_PersistentVolumeClaimCondition(ref),
+		v1.PersistentVolumeClaimList{}.OpenAPIModelName():            schema_k8sio_api_core_v1_PersistentVolumeClaimList(ref),
+		v1.PersistentVolumeClaimSpec{}.OpenAPIModelName():            schema_k8sio_api_core_v1_PersistentVolumeClaimSpec(ref),
+		v1.PersistentVolumeClaimStatus{}.OpenAPIModelName():          schema_k8sio_api_core_v1_PersistentVolumeClaimStatus(ref),
+		v1.PersistentVolumeClaimTemplate{}.OpenAPIModelName():        schema_k8sio_api_core_v1_PersistentVolumeClaimTemplate(ref),
+		v1.PersistentVolumeClaimVolumeSource{}.OpenAPIModelName():    schema_k8sio_api_core_v1_PersistentVolumeClaimVolumeSource(ref),
+		v1.PersistentVolumeList{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_PersistentVolumeList(ref),
+		v1.PersistentVolumeSource{}.OpenAPIModelName():               schema_k8sio_api_core_v1_PersistentVolumeSource(ref),
+		v1.PersistentVolumeSpec{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_PersistentVolumeSpec(ref),
+		v1.PersistentVolumeStatus{}.OpenAPIModelName():               schema_k8sio_api_core_v1_PersistentVolumeStatus(ref),
+		v1.PhotonPersistentDiskVolumeSource{}.OpenAPIModelName():     schema_k8sio_api_core_v1_PhotonPersistentDiskVolumeSource(ref),
+		v1.Pod{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_Pod(ref),
+		v1.PodAffinity{}.OpenAPIModelName():                          schema_k8sio_api_core_v1_PodAffinity(ref),
+		v1.PodAffinityTerm{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_PodAffinityTerm(ref),
+		v1.PodAntiAffinity{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_PodAntiAffinity(ref),
+		v1.PodAttachOptions{}.OpenAPIModelName():                     schema_k8sio_api_core_v1_PodAttachOptions(ref),
+		v1.PodCertificateProjection{}.OpenAPIModelName():             schema_k8sio_api_core_v1_PodCertificateProjection(ref),
+		v1.PodCondition{}.OpenAPIModelName():                         schema_k8sio_api_core_v1_PodCondition(ref),
+		v1.PodDNSConfig{}.OpenAPIModelName():                         schema_k8sio_api_core_v1_PodDNSConfig(ref),
+		v1.PodDNSConfigOption{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_PodDNSConfigOption(ref),
+		v1.PodExecOptions{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_PodExecOptions(ref),
+		v1.PodExtendedResourceClaimStatus{}.OpenAPIModelName():       schema_k8sio_api_core_v1_PodExtendedResourceClaimStatus(ref),
+		v1.PodIP{}.OpenAPIModelName():                                schema_k8sio_api_core_v1_PodIP(ref),
+		v1.PodList{}.OpenAPIModelName():                              schema_k8sio_api_core_v1_PodList(ref),
+		v1.PodLogOptions{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_PodLogOptions(ref),
+		v1.PodOS{}.OpenAPIModelName():                                schema_k8sio_api_core_v1_PodOS(ref),
+		v1.PodPortForwardOptions{}.OpenAPIModelName():                schema_k8sio_api_core_v1_PodPortForwardOptions(ref),
+		v1.PodProxyOptions{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_PodProxyOptions(ref),
+		v1.PodReadinessGate{}.OpenAPIModelName():                     schema_k8sio_api_core_v1_PodReadinessGate(ref),
+		v1.PodResourceClaim{}.OpenAPIModelName():                     schema_k8sio_api_core_v1_PodResourceClaim(ref),
+		v1.PodResourceClaimStatus{}.OpenAPIModelName():               schema_k8sio_api_core_v1_PodResourceClaimStatus(ref),
+		v1.PodSchedulingGate{}.OpenAPIModelName():                    schema_k8sio_api_core_v1_PodSchedulingGate(ref),
+		v1.PodSchedulingGroup{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_PodSchedulingGroup(ref),
+		v1.PodSecurityContext{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_PodSecurityContext(ref),
+		v1.PodSignature{}.OpenAPIModelName():                         schema_k8sio_api_core_v1_PodSignature(ref),
+		v1.PodSpec{}.OpenAPIModelName():                              schema_k8sio_api_core_v1_PodSpec(ref),
+		v1.PodStatus{}.OpenAPIModelName():                            schema_k8sio_api_core_v1_PodStatus(ref),
+		v1.PodStatusResult{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_PodStatusResult(ref),
+		v1.PodTemplate{}.OpenAPIModelName():                          schema_k8sio_api_core_v1_PodTemplate(ref),
+		v1.PodTemplateList{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_PodTemplateList(ref),
+		v1.PodTemplateSpec{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_PodTemplateSpec(ref),
+		v1.PortStatus{}.OpenAPIModelName():                           schema_k8sio_api_core_v1_PortStatus(ref),
+		v1.PortworxVolumeSource{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_PortworxVolumeSource(ref),
+		v1.PreferAvoidPodsEntry{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_PreferAvoidPodsEntry(ref),
+		v1.PreferredSchedulingTerm{}.OpenAPIModelName():              schema_k8sio_api_core_v1_PreferredSchedulingTerm(ref),
+		v1.Probe{}.OpenAPIModelName():                                schema_k8sio_api_core_v1_Probe(ref),
+		v1.ProbeHandler{}.OpenAPIModelName():                         schema_k8sio_api_core_v1_ProbeHandler(ref),
+		v1.ProjectedVolumeSource{}.OpenAPIModelName():                schema_k8sio_api_core_v1_ProjectedVolumeSource(ref),
+		v1.QuobyteVolumeSource{}.OpenAPIModelName():                  schema_k8sio_api_core_v1_QuobyteVolumeSource(ref),
+		v1.RBDPersistentVolumeSource{}.OpenAPIModelName():            schema_k8sio_api_core_v1_RBDPersistentVolumeSource(ref),
+		v1.RBDVolumeSource{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_RBDVolumeSource(ref),
+		v1.RangeAllocation{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_RangeAllocation(ref),
+		v1.ReplicationController{}.OpenAPIModelName():                schema_k8sio_api_core_v1_ReplicationController(ref),
+		v1.ReplicationControllerCondition{}.OpenAPIModelName():       schema_k8sio_api_core_v1_ReplicationControllerCondition(ref),
+		v1.ReplicationControllerList{}.OpenAPIModelName():            schema_k8sio_api_core_v1_ReplicationControllerList(ref),
+		v1.ReplicationControllerSpec{}.OpenAPIModelName():            schema_k8sio_api_core_v1_ReplicationControllerSpec(ref),
+		v1.ReplicationControllerStatus{}.OpenAPIModelName():          schema_k8sio_api_core_v1_ReplicationControllerStatus(ref),
+		v1.ResourceClaim{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_ResourceClaim(ref),
+		v1.ResourceFieldSelector{}.OpenAPIModelName():                schema_k8sio_api_core_v1_ResourceFieldSelector(ref),
+		v1.ResourceHealth{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_ResourceHealth(ref),
+		v1.ResourceQuota{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_ResourceQuota(ref),
+		v1.ResourceQuotaList{}.OpenAPIModelName():                    schema_k8sio_api_core_v1_ResourceQuotaList(ref),
+		v1.ResourceQuotaSpec{}.OpenAPIModelName():                    schema_k8sio_api_core_v1_ResourceQuotaSpec(ref),
+		v1.ResourceQuotaStatus{}.OpenAPIModelName():                  schema_k8sio_api_core_v1_ResourceQuotaStatus(ref),
+		v1.ResourceRequirements{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_ResourceRequirements(ref),
+		v1.ResourceStatus{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_ResourceStatus(ref),
+		v1.SELinuxOptions{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_SELinuxOptions(ref),
+		v1.ScaleIOPersistentVolumeSource{}.OpenAPIModelName():        schema_k8sio_api_core_v1_ScaleIOPersistentVolumeSource(ref),
+		v1.ScaleIOVolumeSource{}.OpenAPIModelName():                  schema_k8sio_api_core_v1_ScaleIOVolumeSource(ref),
+		v1.ScopeSelector{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_ScopeSelector(ref),
+		v1.ScopedResourceSelectorRequirement{}.OpenAPIModelName():    schema_k8sio_api_core_v1_ScopedResourceSelectorRequirement(ref),
+		v1.SeccompProfile{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_SeccompProfile(ref),
+		v1.Secret{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_Secret(ref),
+		v1.SecretEnvSource{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_SecretEnvSource(ref),
+		v1.SecretKeySelector{}.OpenAPIModelName():                    schema_k8sio_api_core_v1_SecretKeySelector(ref),
+		v1.SecretList{}.OpenAPIModelName():                           schema_k8sio_api_core_v1_SecretList(ref),
+		v1.SecretProjection{}.OpenAPIModelName():                     schema_k8sio_api_core_v1_SecretProjection(ref),
+		v1.SecretReference{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_SecretReference(ref),
+		v1.SecretVolumeSource{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_SecretVolumeSource(ref),
+		v1.SecurityContext{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_SecurityContext(ref),
+		v1.SerializedReference{}.OpenAPIModelName():                  schema_k8sio_api_core_v1_SerializedReference(ref),
+		v1.Service{}.OpenAPIModelName():                              schema_k8sio_api_core_v1_Service(ref),
+		v1.ServiceAccount{}.OpenAPIModelName():                       schema_k8sio_api_core_v1_ServiceAccount(ref),
+		v1.ServiceAccountList{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_ServiceAccountList(ref),
+		v1.ServiceAccountTokenProjection{}.OpenAPIModelName():        schema_k8sio_api_core_v1_ServiceAccountTokenProjection(ref),
+		v1.ServiceList{}.OpenAPIModelName():                          schema_k8sio_api_core_v1_ServiceList(ref),
+		v1.ServicePort{}.OpenAPIModelName():                          schema_k8sio_api_core_v1_ServicePort(ref),
+		v1.ServiceProxyOptions{}.OpenAPIModelName():                  schema_k8sio_api_core_v1_ServiceProxyOptions(ref),
+		v1.ServiceSpec{}.OpenAPIModelName():                          schema_k8sio_api_core_v1_ServiceSpec(ref),
+		v1.ServiceStatus{}.OpenAPIModelName():                        schema_k8sio_api_core_v1_ServiceStatus(ref),
+		v1.SessionAffinityConfig{}.OpenAPIModelName():                schema_k8sio_api_core_v1_SessionAffinityConfig(ref),
+		v1.SleepAction{}.OpenAPIModelName():                          schema_k8sio_api_core_v1_SleepAction(ref),
+		v1.StorageOSPersistentVolumeSource{}.OpenAPIModelName():      schema_k8sio_api_core_v1_StorageOSPersistentVolumeSource(ref),
+		v1.StorageOSVolumeSource{}.OpenAPIModelName():                schema_k8sio_api_core_v1_StorageOSVolumeSource(ref),
+		v1.Sysctl{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_Sysctl(ref),
+		v1.TCPSocketAction{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_TCPSocketAction(ref),
+		v1.Taint{}.OpenAPIModelName():                                schema_k8sio_api_core_v1_Taint(ref),
+		v1.Toleration{}.OpenAPIModelName():                           schema_k8sio_api_core_v1_Toleration(ref),
+		v1.TopologySelectorLabelRequirement{}.OpenAPIModelName():     schema_k8sio_api_core_v1_TopologySelectorLabelRequirement(ref),
+		v1.TopologySelectorTerm{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_TopologySelectorTerm(ref),
+		v1.TopologySpreadConstraint{}.OpenAPIModelName():             schema_k8sio_api_core_v1_TopologySpreadConstraint(ref),
+		v1.TypedLocalObjectReference{}.OpenAPIModelName():            schema_k8sio_api_core_v1_TypedLocalObjectReference(ref),
+		v1.TypedObjectReference{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_TypedObjectReference(ref),
+		v1.Volume{}.OpenAPIModelName():                               schema_k8sio_api_core_v1_Volume(ref),
+		v1.VolumeDevice{}.OpenAPIModelName():                         schema_k8sio_api_core_v1_VolumeDevice(ref),
+		v1.VolumeMount{}.OpenAPIModelName():                          schema_k8sio_api_core_v1_VolumeMount(ref),
+		v1.VolumeMountStatus{}.OpenAPIModelName():                    schema_k8sio_api_core_v1_VolumeMountStatus(ref),
+		v1.VolumeNodeAffinity{}.OpenAPIModelName():                   schema_k8sio_api_core_v1_VolumeNodeAffinity(ref),
+		v1.VolumeProjection{}.OpenAPIModelName():                     schema_k8sio_api_core_v1_VolumeProjection(ref),
+		v1.VolumeResourceRequirements{}.OpenAPIModelName():           schema_k8sio_api_core_v1_VolumeResourceRequirements(ref),
+		v1.VolumeSource{}.OpenAPIModelName():                         schema_k8sio_api_core_v1_VolumeSource(ref),
+		v1.VolumeStatus{}.OpenAPIModelName():                         schema_k8sio_api_core_v1_VolumeStatus(ref),
+		v1.VsphereVirtualDiskVolumeSource{}.OpenAPIModelName():       schema_k8sio_api_core_v1_VsphereVirtualDiskVolumeSource(ref),
+		v1.WeightedPodAffinityTerm{}.OpenAPIModelName():              schema_k8sio_api_core_v1_WeightedPodAffinityTerm(ref),
+		v1.WindowsSecurityContextOptions{}.OpenAPIModelName():        schema_k8sio_api_core_v1_WindowsSecurityContextOptions(ref),
+		resource.Quantity{}.OpenAPIModelName():                       schema_apimachinery_pkg_api_resource_Quantity(ref),
+		metav1.APIGroup{}.OpenAPIModelName():                         schema_pkg_apis_meta_v1_APIGroup(ref),
+		metav1.APIGroupList{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_APIGroupList(ref),
+		metav1.APIResource{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_APIResource(ref),
+		metav1.APIResourceList{}.OpenAPIModelName():                  schema_pkg_apis_meta_v1_APIResourceList(ref),
+		metav1.APIVersions{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_APIVersions(ref),
+		metav1.ApplyOptions{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_ApplyOptions(ref),
+		metav1.Condition{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_Condition(ref),
+		metav1.CreateOptions{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_CreateOptions(ref),
+		metav1.DeleteOptions{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_DeleteOptions(ref),
+		metav1.Duration{}.OpenAPIModelName():                         schema_pkg_apis_meta_v1_Duration(ref),
+		metav1.FieldSelectorRequirement{}.OpenAPIModelName():         schema_pkg_apis_meta_v1_FieldSelectorRequirement(ref),
+		metav1.FieldsV1{}.OpenAPIModelName():                         schema_pkg_apis_meta_v1_FieldsV1(ref),
+		metav1.GetOptions{}.OpenAPIModelName():                       schema_pkg_apis_meta_v1_GetOptions(ref),
+		metav1.GroupKind{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_GroupKind(ref),
+		metav1.GroupResource{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_GroupResource(ref),
+		metav1.GroupVersion{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_GroupVersion(ref),
+		metav1.GroupVersionForDiscovery{}.OpenAPIModelName():         schema_pkg_apis_meta_v1_GroupVersionForDiscovery(ref),
+		metav1.GroupVersionKind{}.OpenAPIModelName():                 schema_pkg_apis_meta_v1_GroupVersionKind(ref),
+		metav1.GroupVersionResource{}.OpenAPIModelName():             schema_pkg_apis_meta_v1_GroupVersionResource(ref),
+		metav1.InternalEvent{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_InternalEvent(ref),
+		metav1.LabelSelector{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_LabelSelector(ref),
+		metav1.LabelSelectorRequirement{}.OpenAPIModelName():         schema_pkg_apis_meta_v1_LabelSelectorRequirement(ref),
+		metav1.List{}.OpenAPIModelName():                             schema_pkg_apis_meta_v1_List(ref),
+		metav1.ListMeta{}.OpenAPIModelName():                         schema_pkg_apis_meta_v1_ListMeta(ref),
+		metav1.ListOptions{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_ListOptions(ref),
+		metav1.ManagedFieldsEntry{}.OpenAPIModelName():               schema_pkg_apis_meta_v1_ManagedFieldsEntry(ref),
+		metav1.MicroTime{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_MicroTime(ref),
+		metav1.ObjectMeta{}.OpenAPIModelName():                       schema_pkg_apis_meta_v1_ObjectMeta(ref),
+		metav1.OwnerReference{}.OpenAPIModelName():                   schema_pkg_apis_meta_v1_OwnerReference(ref),
+		metav1.PartialObjectMetadata{}.OpenAPIModelName():            schema_pkg_apis_meta_v1_PartialObjectMetadata(ref),
+		metav1.PartialObjectMetadataList{}.OpenAPIModelName():        schema_pkg_apis_meta_v1_PartialObjectMetadataList(ref),
+		metav1.Patch{}.OpenAPIModelName():                            schema_pkg_apis_meta_v1_Patch(ref),
+		metav1.PatchOptions{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_PatchOptions(ref),
+		metav1.Preconditions{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_Preconditions(ref),
+		metav1.RootPaths{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_RootPaths(ref),
+		metav1.ServerAddressByClientCIDR{}.OpenAPIModelName():        schema_pkg_apis_meta_v1_ServerAddressByClientCIDR(ref),
+		metav1.ShardInfo{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_ShardInfo(ref),
+		metav1.Status{}.OpenAPIModelName():                           schema_pkg_apis_meta_v1_Status(ref),
+		metav1.StatusCause{}.OpenAPIModelName():                      schema_pkg_apis_meta_v1_StatusCause(ref),
+		metav1.StatusDetails{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_StatusDetails(ref),
+		metav1.Table{}.OpenAPIModelName():                            schema_pkg_apis_meta_v1_Table(ref),
+		metav1.TableColumnDefinition{}.OpenAPIModelName():            schema_pkg_apis_meta_v1_TableColumnDefinition(ref),
+		metav1.TableOptions{}.OpenAPIModelName():                     schema_pkg_apis_meta_v1_TableOptions(ref),
+		metav1.TableRow{}.OpenAPIModelName():                         schema_pkg_apis_meta_v1_TableRow(ref),
+		metav1.TableRowCondition{}.OpenAPIModelName():                schema_pkg_apis_meta_v1_TableRowCondition(ref),
+		metav1.Time{}.OpenAPIModelName():                             schema_pkg_apis_meta_v1_Time(ref),
+		metav1.Timestamp{}.OpenAPIModelName():                        schema_pkg_apis_meta_v1_Timestamp(ref),
+		metav1.TypeMeta{}.OpenAPIModelName():                         schema_pkg_apis_meta_v1_TypeMeta(ref),
+		metav1.UpdateOptions{}.OpenAPIModelName():                    schema_pkg_apis_meta_v1_UpdateOptions(ref),
+		metav1.WatchEvent{}.OpenAPIModelName():                       schema_pkg_apis_meta_v1_WatchEvent(ref),
+		runtime.RawExtension{}.OpenAPIModelName():                    schema_k8sio_apimachinery_pkg_runtime_RawExtension(ref),
+		runtime.TypeMeta{}.OpenAPIModelName():                        schema_k8sio_apimachinery_pkg_runtime_TypeMeta(ref),
+		runtime.Unknown{}.OpenAPIModelName():                         schema_k8sio_apimachinery_pkg_runtime_Unknown(ref),
+		version.Info{}.OpenAPIModelName():                            schema_k8sio_apimachinery_pkg_version_Info(ref),
 	}
 }
 
-func schema_ectobase_api_platform_v1alpha1_ClusterPool(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "ClusterPool is an attached cluster exposed as a schedulable capacity domain.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"kind": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"apiVersion": {
-						SchemaProps: spec.SchemaProps{
-							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"metadata": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
-						},
-					},
-					"spec": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.ClusterPoolSpec{}.OpenAPIModelName()),
-						},
-					},
-					"status": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.ClusterPoolStatus{}.OpenAPIModelName()),
-						},
-					},
-				},
-			},
-		},
-		Dependencies: []string{
-			v1alpha1.ClusterPoolSpec{}.OpenAPIModelName(), v1alpha1.ClusterPoolStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
-	}
-}
-
-func schema_ectobase_api_platform_v1alpha1_ClusterPoolLease(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "ClusterPoolLease is the broker's heartbeat on a ClusterPool: the identity holding it and when it was last renewed. Stale RenewTime => the pool is Unknown.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"holderIdentity": {
-						SchemaProps: spec.SchemaProps{
-							Description: "HolderIdentity is the broker instance currently reporting for this pool.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"renewTime": {
-						SchemaProps: spec.SchemaProps{
-							Description: "RenewTime is when the holder last renewed the lease.",
-							Ref:         ref(metav1.MicroTime{}.OpenAPIModelName()),
-						},
-					},
-				},
-			},
-		},
-		Dependencies: []string{
-			metav1.MicroTime{}.OpenAPIModelName()},
-	}
-}
-
-func schema_ectobase_api_platform_v1alpha1_ClusterPoolList(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "ClusterPoolList is a list of ClusterPool objects.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"kind": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"apiVersion": {
-						SchemaProps: spec.SchemaProps{
-							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"metadata": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
-						},
-					},
-					"items": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.ClusterPool{}.OpenAPIModelName()),
-									},
-								},
-							},
-						},
-					},
-				},
-				Required: []string{"items"},
-			},
-		},
-		Dependencies: []string{
-			v1alpha1.ClusterPool{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
-	}
-}
-
-func schema_ectobase_api_platform_v1alpha1_ClusterPoolSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "ClusterPoolSpec defines the desired state of a ClusterPool.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"region": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Region is the region the attached cluster resides in.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"endpoint": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Endpoint is the reachable API endpoint of the attached cluster.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
-func schema_ectobase_api_platform_v1alpha1_ClusterPoolStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "ClusterPoolStatus defines the observed state of a ClusterPool.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"phase": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Phase is the current lifecycle phase of the ClusterPool.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"conditions": {
-						VendorExtensible: spec.VendorExtensible{
-							Extensions: spec.Extensions{
-								"x-kubernetes-list-map-keys": []interface{}{
-									"type",
-								},
-								"x-kubernetes-list-type":       "map",
-								"x-kubernetes-patch-merge-key": "type",
-								"x-kubernetes-patch-strategy":  "merge",
-							},
-						},
-						SchemaProps: spec.SchemaProps{
-							Description: "Conditions represent the latest available observations of the ClusterPool's state.",
-							Type:        []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref(metav1.Condition{}.OpenAPIModelName()),
-									},
-								},
-							},
-						},
-					},
-					"allocatable": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Allocatable is the schedulable capacity the broker reports for this pool.",
-							Type:        []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Ref: ref(resource.Quantity{}.OpenAPIModelName()),
-									},
-								},
-							},
-						},
-					},
-					"lease": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Lease is the broker heartbeat; a stale RenewTime drives Phase to Unknown.",
-							Ref:         ref(v1alpha1.ClusterPoolLease{}.OpenAPIModelName()),
-						},
-					},
-					"nodePrefixes": {
-						SchemaProps: spec.SchemaProps{
-							Description: "NodePrefixes is the set of node /64 underlay prefixes composing this cluster, reported by the broker. Central fences these (Ceph NetworkFence + route blocklist) to evacuate a lost pool without reaching it.",
-							Type:        []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: "",
-										Type:    []string{"string"},
-										Format:  "",
-									},
-								},
-							},
-						},
-					},
-					"fencedPrefixes": {
-						SchemaProps: spec.SchemaProps{
-							Description: "FencedPrefixes is the subset of NodePrefixes central has fenced (evacuation).",
-							Type:        []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: "",
-										Type:    []string{"string"},
-										Format:  "",
-									},
-								},
-							},
-						},
-					},
-					"nodeDrain": {
-						VendorExtensible: spec.VendorExtensible{
-							Extensions: spec.Extensions{
-								"x-kubernetes-list-map-keys": []interface{}{
-									"prefix",
-								},
-								"x-kubernetes-list-type": "map",
-							},
-						},
-						SchemaProps: spec.SchemaProps{
-							Description: "NodeDrain reports, per fenced /64, whether the returning broker has confirmed its stale VMIs are terminated (safe to release the fence).",
-							Type:        []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.NodeDrainStatus{}.OpenAPIModelName()),
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-		Dependencies: []string{
-			v1alpha1.ClusterPoolLease{}.OpenAPIModelName(), v1alpha1.NodeDrainStatus{}.OpenAPIModelName(), resource.Quantity{}.OpenAPIModelName(), metav1.Condition{}.OpenAPIModelName()},
-	}
-}
-
-func schema_ectobase_api_platform_v1alpha1_NodeDrainStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "NodeDrainStatus is the per-/64 drain confirmation used to gate fence release.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"prefix": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Prefix is the node /64 underlay prefix.",
-							Default:     "",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"drained": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Drained is true once the broker confirms the /64's stale VMIs are gone.",
-							Type:        []string{"boolean"},
-							Format:      "",
-						},
-					},
-				},
-				Required: []string{"prefix"},
-			},
-		},
-	}
-}
-
-func schema_trevex_ectobase_api_v1alpha1_CompiledContainer(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledContainer(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -725,24 +428,24 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledContainer(ref common.ReferenceC
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledContainerSpec"),
+							Ref:     ref(v1alpha1.CompiledContainerSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledContainerStatus"),
+							Ref:     ref(v1alpha1.CompiledContainerStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.CompiledContainerSpec", "github.com/trevex/ectobase/api/v1alpha1.CompiledContainerStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+			v1alpha1.CompiledContainerSpec{}.OpenAPIModelName(), v1alpha1.CompiledContainerStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledContainerInterface(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledContainerInterface(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -776,7 +479,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledContainerInterface(ref common.R
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledContainerList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledContainerList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -810,7 +513,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledContainerList(ref common.Refere
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledContainer"),
+										Ref:     ref(v1alpha1.CompiledContainer{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -821,11 +524,11 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledContainerList(ref common.Refere
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.CompiledContainer", metav1.ListMeta{}.OpenAPIModelName()},
+			v1alpha1.CompiledContainer{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledContainerSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledContainerSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -920,7 +623,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledContainerSpec(ref common.Refere
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledContainerInterface"),
+										Ref:     ref(v1alpha1.CompiledContainerInterface{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -930,11 +633,11 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledContainerSpec(ref common.Refere
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.CompiledContainerInterface", v1.EnvVar{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName()},
+			v1alpha1.CompiledContainerInterface{}.OpenAPIModelName(), v1.EnvVar{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledContainerStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledContainerStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -954,7 +657,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledContainerStatus(ref common.Refe
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledFirewall(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledFirewall(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -969,7 +672,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledFirewall(ref common.ReferenceCa
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledFwRule"),
+										Ref:     ref(v1alpha1.CompiledFwRule{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -983,7 +686,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledFirewall(ref common.ReferenceCa
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledFwRule"),
+										Ref:     ref(v1alpha1.CompiledFwRule{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -993,11 +696,11 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledFirewall(ref common.ReferenceCa
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.CompiledFwRule"},
+			v1alpha1.CompiledFwRule{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledFwRule(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledFwRule(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1041,7 +744,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledFwRule(ref common.ReferenceCall
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledLB(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledLB(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1064,7 +767,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledLB(ref common.ReferenceCallback
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledLBPort"),
+										Ref:     ref(v1alpha1.CompiledLBPort{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1075,11 +778,11 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledLB(ref common.ReferenceCallback
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.CompiledLBPort"},
+			v1alpha1.CompiledLBPort{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledLBPort(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledLBPort(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1107,7 +810,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledLBPort(ref common.ReferenceCall
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledNATSource(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledNATSource(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1153,7 +856,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledNATSource(ref common.ReferenceC
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledNIC(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledNIC(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1183,24 +886,24 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledNIC(ref common.ReferenceCallbac
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledNICSpec"),
+							Ref:     ref(v1alpha1.CompiledNICSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledNICStatus"),
+							Ref:     ref(v1alpha1.CompiledNICStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.CompiledNICSpec", "github.com/trevex/ectobase/api/v1alpha1.CompiledNICStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+			v1alpha1.CompiledNICSpec{}.OpenAPIModelName(), v1alpha1.CompiledNICStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledNICList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledNICList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1234,7 +937,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledNICList(ref common.ReferenceCal
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledNIC"),
+										Ref:     ref(v1alpha1.CompiledNIC{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1245,11 +948,11 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledNICList(ref common.ReferenceCal
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.CompiledNIC", metav1.ListMeta{}.OpenAPIModelName()},
+			v1alpha1.CompiledNIC{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledNICSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledNICSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1283,7 +986,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledNICSpec(ref common.ReferenceCal
 						SchemaProps: spec.SchemaProps{
 							Description: "Port describes the dataplane port allocated for this interface.",
 							Default:     map[string]interface{}{},
-							Ref:         ref("github.com/trevex/ectobase/api/v1alpha1.PortStatus"),
+							Ref:         ref(v1alpha1.PortStatus{}.OpenAPIModelName()),
 						},
 					},
 					"overlayIPs": {
@@ -1305,7 +1008,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledNICSpec(ref common.ReferenceCal
 						SchemaProps: spec.SchemaProps{
 							Description: "Firewall holds the compiled ingress and egress firewall rules.",
 							Default:     map[string]interface{}{},
-							Ref:         ref("github.com/trevex/ectobase/api/v1alpha1.CompiledFirewall"),
+							Ref:         ref(v1alpha1.CompiledFirewall{}.OpenAPIModelName()),
 						},
 					},
 					"nat": {
@@ -1316,7 +1019,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledNICSpec(ref common.ReferenceCal
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledNATSource"),
+										Ref:     ref(v1alpha1.CompiledNATSource{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1330,7 +1033,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledNICSpec(ref common.ReferenceCal
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledLB"),
+										Ref:     ref(v1alpha1.CompiledLB{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1344,7 +1047,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledNICSpec(ref common.ReferenceCal
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledPeerImport"),
+										Ref:     ref(v1alpha1.CompiledPeerImport{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1362,11 +1065,11 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledNICSpec(ref common.ReferenceCal
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.CompiledFirewall", "github.com/trevex/ectobase/api/v1alpha1.CompiledLB", "github.com/trevex/ectobase/api/v1alpha1.CompiledNATSource", "github.com/trevex/ectobase/api/v1alpha1.CompiledPeerImport", "github.com/trevex/ectobase/api/v1alpha1.PortStatus"},
+			v1alpha1.CompiledFirewall{}.OpenAPIModelName(), v1alpha1.CompiledLB{}.OpenAPIModelName(), v1alpha1.CompiledNATSource{}.OpenAPIModelName(), v1alpha1.CompiledPeerImport{}.OpenAPIModelName(), v1alpha1.PortStatus{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledNICStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledNICStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1393,7 +1096,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledNICStatus(ref common.ReferenceC
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledPeerImport(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledPeerImport(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1430,7 +1133,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledPeerImport(ref common.Reference
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledVM(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledVM(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1460,24 +1163,24 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledVM(ref common.ReferenceCallback
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledVMSpec"),
+							Ref:     ref(v1alpha1.CompiledVMSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledVMStatus"),
+							Ref:     ref(v1alpha1.CompiledVMStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.CompiledVMSpec", "github.com/trevex/ectobase/api/v1alpha1.CompiledVMStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+			v1alpha1.CompiledVMSpec{}.OpenAPIModelName(), v1alpha1.CompiledVMStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledVMInterface(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledVMInterface(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1504,7 +1207,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledVMInterface(ref common.Referenc
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledVMList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledVMList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1538,7 +1241,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledVMList(ref common.ReferenceCall
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledVM"),
+										Ref:     ref(v1alpha1.CompiledVM{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1549,11 +1252,11 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledVMList(ref common.ReferenceCall
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.CompiledVM", metav1.ListMeta{}.OpenAPIModelName()},
+			v1alpha1.CompiledVM{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledVMSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledVMSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1596,7 +1299,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledVMSpec(ref common.ReferenceCall
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledVMInterface"),
+										Ref:     ref(v1alpha1.CompiledVMInterface{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1606,11 +1309,11 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledVMSpec(ref common.ReferenceCall
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.CompiledVMInterface", v1.ResourceRequirements{}.OpenAPIModelName()},
+			v1alpha1.CompiledVMInterface{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledVMStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledVMStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1630,7 +1333,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledVMStatus(ref common.ReferenceCa
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledVolumeAttachment(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachment(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1660,24 +1363,24 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledVolumeAttachment(ref common.Ref
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledVolumeAttachmentSpec"),
+							Ref:     ref(v1alpha1.CompiledVolumeAttachmentSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledVolumeAttachmentStatus"),
+							Ref:     ref(v1alpha1.CompiledVolumeAttachmentStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.CompiledVolumeAttachmentSpec", "github.com/trevex/ectobase/api/v1alpha1.CompiledVolumeAttachmentStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+			v1alpha1.CompiledVolumeAttachmentSpec{}.OpenAPIModelName(), v1alpha1.CompiledVolumeAttachmentStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledVolumeAttachmentList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachmentList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1711,7 +1414,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledVolumeAttachmentList(ref common
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledVolumeAttachment"),
+										Ref:     ref(v1alpha1.CompiledVolumeAttachment{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1722,11 +1425,11 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledVolumeAttachmentList(ref common
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.CompiledVolumeAttachment", metav1.ListMeta{}.OpenAPIModelName()},
+			v1alpha1.CompiledVolumeAttachment{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledVolumeAttachmentSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachmentSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1776,7 +1479,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledVolumeAttachmentSpec(ref common
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_CompiledVolumeAttachmentStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachmentStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1796,7 +1499,7 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledVolumeAttachmentStatus(ref comm
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_Container(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_Container(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1826,24 +1529,24 @@ func schema_trevex_ectobase_api_v1alpha1_Container(ref common.ReferenceCallback)
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.ContainerSpec"),
+							Ref:     ref(v1alpha1.ContainerSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.ContainerStatus"),
+							Ref:     ref(v1alpha1.ContainerStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.ContainerSpec", "github.com/trevex/ectobase/api/v1alpha1.ContainerStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+			v1alpha1.ContainerSpec{}.OpenAPIModelName(), v1alpha1.ContainerStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_ContainerList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_ContainerList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1877,7 +1580,7 @@ func schema_trevex_ectobase_api_v1alpha1_ContainerList(ref common.ReferenceCallb
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.Container"),
+										Ref:     ref(v1alpha1.Container{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1888,11 +1591,11 @@ func schema_trevex_ectobase_api_v1alpha1_ContainerList(ref common.ReferenceCallb
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.Container", metav1.ListMeta{}.OpenAPIModelName()},
+			v1alpha1.Container{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_ContainerSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_ContainerSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1921,7 +1624,7 @@ func schema_trevex_ectobase_api_v1alpha1_ContainerSpec(ref common.ReferenceCallb
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference"),
+										Ref:     ref(v1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1997,11 +1700,11 @@ func schema_trevex_ectobase_api_v1alpha1_ContainerSpec(ref common.ReferenceCallb
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference", v1.EnvVar{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName()},
+			v1alpha1.LocalObjectReference{}.OpenAPIModelName(), v1.EnvVar{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_ContainerStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_ContainerStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2021,7 +1724,7 @@ func schema_trevex_ectobase_api_v1alpha1_ContainerStatus(ref common.ReferenceCal
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_EgressQoS(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_EgressQoS(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2055,7 +1758,7 @@ func schema_trevex_ectobase_api_v1alpha1_EgressQoS(ref common.ReferenceCallback)
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_FirewallPolicy(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_FirewallPolicy(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2085,24 +1788,24 @@ func schema_trevex_ectobase_api_v1alpha1_FirewallPolicy(ref common.ReferenceCall
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.FirewallPolicySpec"),
+							Ref:     ref(v1alpha1.FirewallPolicySpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.FirewallPolicyStatus"),
+							Ref:     ref(v1alpha1.FirewallPolicyStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.FirewallPolicySpec", "github.com/trevex/ectobase/api/v1alpha1.FirewallPolicyStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+			v1alpha1.FirewallPolicySpec{}.OpenAPIModelName(), v1alpha1.FirewallPolicyStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_FirewallPolicyList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_FirewallPolicyList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2136,7 +1839,7 @@ func schema_trevex_ectobase_api_v1alpha1_FirewallPolicyList(ref common.Reference
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.FirewallPolicy"),
+										Ref:     ref(v1alpha1.FirewallPolicy{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2147,11 +1850,11 @@ func schema_trevex_ectobase_api_v1alpha1_FirewallPolicyList(ref common.Reference
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.FirewallPolicy", metav1.ListMeta{}.OpenAPIModelName()},
+			v1alpha1.FirewallPolicy{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_FirewallPolicyRule(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_FirewallPolicyRule(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2195,7 +1898,7 @@ func schema_trevex_ectobase_api_v1alpha1_FirewallPolicyRule(ref common.Reference
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_FirewallPolicySpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_FirewallPolicySpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2216,7 +1919,7 @@ func schema_trevex_ectobase_api_v1alpha1_FirewallPolicySpec(ref common.Reference
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.FirewallPolicyRule"),
+										Ref:     ref(v1alpha1.FirewallPolicyRule{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2230,7 +1933,7 @@ func schema_trevex_ectobase_api_v1alpha1_FirewallPolicySpec(ref common.Reference
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.FirewallPolicyRule"),
+										Ref:     ref(v1alpha1.FirewallPolicyRule{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2240,11 +1943,11 @@ func schema_trevex_ectobase_api_v1alpha1_FirewallPolicySpec(ref common.Reference
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.FirewallPolicyRule", metav1.LabelSelector{}.OpenAPIModelName()},
+			v1alpha1.FirewallPolicyRule{}.OpenAPIModelName(), metav1.LabelSelector{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_FirewallPolicyStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_FirewallPolicyStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2255,7 +1958,7 @@ func schema_trevex_ectobase_api_v1alpha1_FirewallPolicyStatus(ref common.Referen
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_FloatingIP(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_FloatingIP(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2285,24 +1988,24 @@ func schema_trevex_ectobase_api_v1alpha1_FloatingIP(ref common.ReferenceCallback
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.FloatingIPSpec"),
+							Ref:     ref(v1alpha1.FloatingIPSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.FloatingIPStatus"),
+							Ref:     ref(v1alpha1.FloatingIPStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.FloatingIPSpec", "github.com/trevex/ectobase/api/v1alpha1.FloatingIPStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+			v1alpha1.FloatingIPSpec{}.OpenAPIModelName(), v1alpha1.FloatingIPStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_FloatingIPList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_FloatingIPList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2336,7 +2039,7 @@ func schema_trevex_ectobase_api_v1alpha1_FloatingIPList(ref common.ReferenceCall
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.FloatingIP"),
+										Ref:     ref(v1alpha1.FloatingIP{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2347,11 +2050,11 @@ func schema_trevex_ectobase_api_v1alpha1_FloatingIPList(ref common.ReferenceCall
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.FloatingIP", metav1.ListMeta{}.OpenAPIModelName()},
+			v1alpha1.FloatingIP{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_FloatingIPSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_FloatingIPSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2362,7 +2065,7 @@ func schema_trevex_ectobase_api_v1alpha1_FloatingIPSpec(ref common.ReferenceCall
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_FloatingIPStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_FloatingIPStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2373,7 +2076,7 @@ func schema_trevex_ectobase_api_v1alpha1_FloatingIPStatus(ref common.ReferenceCa
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_InterfaceQoS(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_InterfaceQoS(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2383,24 +2086,24 @@ func schema_trevex_ectobase_api_v1alpha1_InterfaceQoS(ref common.ReferenceCallba
 					"egress": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Egress shapes outbound (VM->out) throughput.",
-							Ref:         ref("github.com/trevex/ectobase/api/v1alpha1.EgressQoS"),
+							Ref:         ref(v1alpha1.EgressQoS{}.OpenAPIModelName()),
 						},
 					},
 					"ingress": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Ingress polices inbound (out->VM) throughput.",
-							Ref:         ref("github.com/trevex/ectobase/api/v1alpha1.RateLimit"),
+							Ref:         ref(v1alpha1.RateLimit{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.EgressQoS", "github.com/trevex/ectobase/api/v1alpha1.RateLimit"},
+			v1alpha1.EgressQoS{}.OpenAPIModelName(), v1alpha1.RateLimit{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_LoadBalancer(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_LoadBalancer(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2430,24 +2133,24 @@ func schema_trevex_ectobase_api_v1alpha1_LoadBalancer(ref common.ReferenceCallba
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.LoadBalancerSpec"),
+							Ref:     ref(v1alpha1.LoadBalancerSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.LoadBalancerStatus"),
+							Ref:     ref(v1alpha1.LoadBalancerStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.LoadBalancerSpec", "github.com/trevex/ectobase/api/v1alpha1.LoadBalancerStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+			v1alpha1.LoadBalancerSpec{}.OpenAPIModelName(), v1alpha1.LoadBalancerStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_LoadBalancerList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_LoadBalancerList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2481,7 +2184,7 @@ func schema_trevex_ectobase_api_v1alpha1_LoadBalancerList(ref common.ReferenceCa
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.LoadBalancer"),
+										Ref:     ref(v1alpha1.LoadBalancer{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2492,11 +2195,11 @@ func schema_trevex_ectobase_api_v1alpha1_LoadBalancerList(ref common.ReferenceCa
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.LoadBalancer", metav1.ListMeta{}.OpenAPIModelName()},
+			v1alpha1.LoadBalancer{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_LoadBalancerPort(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_LoadBalancerPort(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2526,7 +2229,7 @@ func schema_trevex_ectobase_api_v1alpha1_LoadBalancerPort(ref common.ReferenceCa
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_LoadBalancerSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_LoadBalancerSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2549,7 +2252,7 @@ func schema_trevex_ectobase_api_v1alpha1_LoadBalancerSpec(ref common.ReferenceCa
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.LoadBalancerPort"),
+										Ref:     ref(v1alpha1.LoadBalancerPort{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2569,7 +2272,7 @@ func schema_trevex_ectobase_api_v1alpha1_LoadBalancerSpec(ref common.ReferenceCa
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference"),
+										Ref:     ref(v1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2580,11 +2283,11 @@ func schema_trevex_ectobase_api_v1alpha1_LoadBalancerSpec(ref common.ReferenceCa
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.LoadBalancerPort", "github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference", metav1.LabelSelector{}.OpenAPIModelName()},
+			v1alpha1.LoadBalancerPort{}.OpenAPIModelName(), v1alpha1.LocalObjectReference{}.OpenAPIModelName(), metav1.LabelSelector{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_LoadBalancerStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_LoadBalancerStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2604,7 +2307,7 @@ func schema_trevex_ectobase_api_v1alpha1_LoadBalancerStatus(ref common.Reference
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_LocalObjectReference(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_LocalObjectReference(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2626,7 +2329,7 @@ func schema_trevex_ectobase_api_v1alpha1_LocalObjectReference(ref common.Referen
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_NATAllocation(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_NATAllocation(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2670,7 +2373,7 @@ func schema_trevex_ectobase_api_v1alpha1_NATAllocation(ref common.ReferenceCallb
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_NATGateway(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_NATGateway(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2700,24 +2403,24 @@ func schema_trevex_ectobase_api_v1alpha1_NATGateway(ref common.ReferenceCallback
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.NATGatewaySpec"),
+							Ref:     ref(v1alpha1.NATGatewaySpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.NATGatewayStatus"),
+							Ref:     ref(v1alpha1.NATGatewayStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.NATGatewaySpec", "github.com/trevex/ectobase/api/v1alpha1.NATGatewayStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+			v1alpha1.NATGatewaySpec{}.OpenAPIModelName(), v1alpha1.NATGatewayStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_NATGatewayList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_NATGatewayList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2751,7 +2454,7 @@ func schema_trevex_ectobase_api_v1alpha1_NATGatewayList(ref common.ReferenceCall
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.NATGateway"),
+										Ref:     ref(v1alpha1.NATGateway{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2762,11 +2465,11 @@ func schema_trevex_ectobase_api_v1alpha1_NATGatewayList(ref common.ReferenceCall
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.NATGateway", metav1.ListMeta{}.OpenAPIModelName()},
+			v1alpha1.NATGateway{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_NATGatewaySpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_NATGatewaySpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2777,7 +2480,7 @@ func schema_trevex_ectobase_api_v1alpha1_NATGatewaySpec(ref common.ReferenceCall
 						SchemaProps: spec.SchemaProps{
 							Description: "VPCRef selects the VPC whose interfaces egress through this gateway.",
 							Default:     map[string]interface{}{},
-							Ref:         ref("github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference"),
+							Ref:         ref(v1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 						},
 					},
 					"publicIPs": {
@@ -2814,11 +2517,11 @@ func schema_trevex_ectobase_api_v1alpha1_NATGatewaySpec(ref common.ReferenceCall
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference"},
+			v1alpha1.LocalObjectReference{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_NATGatewayStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_NATGatewayStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2833,7 +2536,7 @@ func schema_trevex_ectobase_api_v1alpha1_NATGatewayStatus(ref common.ReferenceCa
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.NATAllocation"),
+										Ref:     ref(v1alpha1.NATAllocation{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2849,11 +2552,11 @@ func schema_trevex_ectobase_api_v1alpha1_NATGatewayStatus(ref common.ReferenceCa
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.NATAllocation"},
+			v1alpha1.NATAllocation{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_NetworkInterface(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_NetworkInterface(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2883,24 +2586,24 @@ func schema_trevex_ectobase_api_v1alpha1_NetworkInterface(ref common.ReferenceCa
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.NetworkInterfaceSpec"),
+							Ref:     ref(v1alpha1.NetworkInterfaceSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.NetworkInterfaceStatus"),
+							Ref:     ref(v1alpha1.NetworkInterfaceStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.NetworkInterfaceSpec", "github.com/trevex/ectobase/api/v1alpha1.NetworkInterfaceStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+			v1alpha1.NetworkInterfaceSpec{}.OpenAPIModelName(), v1alpha1.NetworkInterfaceStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_NetworkInterfaceList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_NetworkInterfaceList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2934,7 +2637,7 @@ func schema_trevex_ectobase_api_v1alpha1_NetworkInterfaceList(ref common.Referen
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.NetworkInterface"),
+										Ref:     ref(v1alpha1.NetworkInterface{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2945,11 +2648,11 @@ func schema_trevex_ectobase_api_v1alpha1_NetworkInterfaceList(ref common.Referen
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.NetworkInterface", metav1.ListMeta{}.OpenAPIModelName()},
+			v1alpha1.NetworkInterface{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_NetworkInterfaceSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_NetworkInterfaceSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -2960,7 +2663,7 @@ func schema_trevex_ectobase_api_v1alpha1_NetworkInterfaceSpec(ref common.Referen
 						SchemaProps: spec.SchemaProps{
 							Description: "VPCRef references the VPC this interface belongs to.",
 							Default:     map[string]interface{}{},
-							Ref:         ref("github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference"),
+							Ref:         ref(v1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 						},
 					},
 					"ips": {
@@ -2995,7 +2698,7 @@ func schema_trevex_ectobase_api_v1alpha1_NetworkInterfaceSpec(ref common.Referen
 					"qos": {
 						SchemaProps: spec.SchemaProps{
 							Description: "QoS caps/shapes throughput for this interface. Nil = unlimited.",
-							Ref:         ref("github.com/trevex/ectobase/api/v1alpha1.InterfaceQoS"),
+							Ref:         ref(v1alpha1.InterfaceQoS{}.OpenAPIModelName()),
 						},
 					},
 					"clusterName": {
@@ -3010,11 +2713,11 @@ func schema_trevex_ectobase_api_v1alpha1_NetworkInterfaceSpec(ref common.Referen
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.InterfaceQoS", "github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference"},
+			v1alpha1.InterfaceQoS{}.OpenAPIModelName(), v1alpha1.LocalObjectReference{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_NetworkInterfaceStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_NetworkInterfaceStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3038,7 +2741,7 @@ func schema_trevex_ectobase_api_v1alpha1_NetworkInterfaceStatus(ref common.Refer
 					"port": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Port describes the dataplane port allocated for this interface.",
-							Ref:         ref("github.com/trevex/ectobase/api/v1alpha1.PortStatus"),
+							Ref:         ref(v1alpha1.PortStatus{}.OpenAPIModelName()),
 						},
 					},
 					"state": {
@@ -3052,11 +2755,11 @@ func schema_trevex_ectobase_api_v1alpha1_NetworkInterfaceStatus(ref common.Refer
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.PortStatus"},
+			v1alpha1.PortStatus{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_PortStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_PortStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3090,7 +2793,7 @@ func schema_trevex_ectobase_api_v1alpha1_PortStatus(ref common.ReferenceCallback
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_RateLimit(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_RateLimit(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3117,7 +2820,7 @@ func schema_trevex_ectobase_api_v1alpha1_RateLimit(ref common.ReferenceCallback)
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VMAntiAffinity(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VMAntiAffinity(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3137,7 +2840,7 @@ func schema_trevex_ectobase_api_v1alpha1_VMAntiAffinity(ref common.ReferenceCall
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VMPlacement(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VMPlacement(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3171,7 +2874,7 @@ func schema_trevex_ectobase_api_v1alpha1_VMPlacement(ref common.ReferenceCallbac
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VPC(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VPC(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3201,24 +2904,24 @@ func schema_trevex_ectobase_api_v1alpha1_VPC(ref common.ReferenceCallback) commo
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.VPCSpec"),
+							Ref:     ref(v1alpha1.VPCSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.VPCStatus"),
+							Ref:     ref(v1alpha1.VPCStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.VPCSpec", "github.com/trevex/ectobase/api/v1alpha1.VPCStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+			v1alpha1.VPCSpec{}.OpenAPIModelName(), v1alpha1.VPCStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VPCList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VPCList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3252,7 +2955,7 @@ func schema_trevex_ectobase_api_v1alpha1_VPCList(ref common.ReferenceCallback) c
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.VPC"),
+										Ref:     ref(v1alpha1.VPC{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -3263,11 +2966,11 @@ func schema_trevex_ectobase_api_v1alpha1_VPCList(ref common.ReferenceCallback) c
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.VPC", metav1.ListMeta{}.OpenAPIModelName()},
+			v1alpha1.VPC{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VPCPeering(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VPCPeering(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3297,24 +3000,24 @@ func schema_trevex_ectobase_api_v1alpha1_VPCPeering(ref common.ReferenceCallback
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.VPCPeeringSpec"),
+							Ref:     ref(v1alpha1.VPCPeeringSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.VPCPeeringStatus"),
+							Ref:     ref(v1alpha1.VPCPeeringStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.VPCPeeringSpec", "github.com/trevex/ectobase/api/v1alpha1.VPCPeeringStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+			v1alpha1.VPCPeeringSpec{}.OpenAPIModelName(), v1alpha1.VPCPeeringStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VPCPeeringList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VPCPeeringList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3348,7 +3051,7 @@ func schema_trevex_ectobase_api_v1alpha1_VPCPeeringList(ref common.ReferenceCall
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.VPCPeering"),
+										Ref:     ref(v1alpha1.VPCPeering{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -3359,11 +3062,11 @@ func schema_trevex_ectobase_api_v1alpha1_VPCPeeringList(ref common.ReferenceCall
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.VPCPeering", metav1.ListMeta{}.OpenAPIModelName()},
+			v1alpha1.VPCPeering{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VPCPeeringSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VPCPeeringSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3374,14 +3077,14 @@ func schema_trevex_ectobase_api_v1alpha1_VPCPeeringSpec(ref common.ReferenceCall
 						SchemaProps: spec.SchemaProps{
 							Description: "VPCRef is this side's VPC (same namespace as this VPCPeering object).",
 							Default:     map[string]interface{}{},
-							Ref:         ref("github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference"),
+							Ref:         ref(v1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 						},
 					},
 					"peerVpcRef": {
 						SchemaProps: spec.SchemaProps{
 							Description: "PeerVPCRef references the other VPC (namespace + name).",
 							Default:     map[string]interface{}{},
-							Ref:         ref("github.com/trevex/ectobase/api/v1alpha1.VPCReference"),
+							Ref:         ref(v1alpha1.VPCReference{}.OpenAPIModelName()),
 						},
 					},
 					"exposedPrefixes": {
@@ -3404,11 +3107,11 @@ func schema_trevex_ectobase_api_v1alpha1_VPCPeeringSpec(ref common.ReferenceCall
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference", "github.com/trevex/ectobase/api/v1alpha1.VPCReference"},
+			v1alpha1.LocalObjectReference{}.OpenAPIModelName(), v1alpha1.VPCReference{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VPCPeeringStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VPCPeeringStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3435,7 +3138,7 @@ func schema_trevex_ectobase_api_v1alpha1_VPCPeeringStatus(ref common.ReferenceCa
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VPCReference(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VPCReference(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3463,7 +3166,7 @@ func schema_trevex_ectobase_api_v1alpha1_VPCReference(ref common.ReferenceCallba
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VPCSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VPCSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3490,7 +3193,7 @@ func schema_trevex_ectobase_api_v1alpha1_VPCSpec(ref common.ReferenceCallback) c
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VPCStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VPCStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3517,7 +3220,7 @@ func schema_trevex_ectobase_api_v1alpha1_VPCStatus(ref common.ReferenceCallback)
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VirtualMachine(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VirtualMachine(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3547,24 +3250,24 @@ func schema_trevex_ectobase_api_v1alpha1_VirtualMachine(ref common.ReferenceCall
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.VirtualMachineSpec"),
+							Ref:     ref(v1alpha1.VirtualMachineSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.VirtualMachineStatus"),
+							Ref:     ref(v1alpha1.VirtualMachineStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.VirtualMachineSpec", "github.com/trevex/ectobase/api/v1alpha1.VirtualMachineStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+			v1alpha1.VirtualMachineSpec{}.OpenAPIModelName(), v1alpha1.VirtualMachineStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VirtualMachineList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VirtualMachineList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3598,7 +3301,7 @@ func schema_trevex_ectobase_api_v1alpha1_VirtualMachineList(ref common.Reference
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.VirtualMachine"),
+										Ref:     ref(v1alpha1.VirtualMachine{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -3609,11 +3312,11 @@ func schema_trevex_ectobase_api_v1alpha1_VirtualMachineList(ref common.Reference
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.VirtualMachine", metav1.ListMeta{}.OpenAPIModelName()},
+			v1alpha1.VirtualMachine{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VirtualMachineSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VirtualMachineSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3635,7 +3338,7 @@ func schema_trevex_ectobase_api_v1alpha1_VirtualMachineSpec(ref common.Reference
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference"),
+										Ref:     ref(v1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -3649,7 +3352,7 @@ func schema_trevex_ectobase_api_v1alpha1_VirtualMachineSpec(ref common.Reference
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference"),
+										Ref:     ref(v1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -3685,18 +3388,18 @@ func schema_trevex_ectobase_api_v1alpha1_VirtualMachineSpec(ref common.Reference
 					"antiAffinity": {
 						SchemaProps: spec.SchemaProps{
 							Description: "AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools during scheduling and failover (best-effort: availability wins if no non-violating pool).",
-							Ref:         ref("github.com/trevex/ectobase/api/v1alpha1.VMAntiAffinity"),
+							Ref:         ref(v1alpha1.VMAntiAffinity{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference", "github.com/trevex/ectobase/api/v1alpha1.VMAntiAffinity", v1.ResourceRequirements{}.OpenAPIModelName(), metav1.LabelSelector{}.OpenAPIModelName()},
+			v1alpha1.LocalObjectReference{}.OpenAPIModelName(), v1alpha1.VMAntiAffinity{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName(), metav1.LabelSelector{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VirtualMachineStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VirtualMachineStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3737,18 +3440,18 @@ func schema_trevex_ectobase_api_v1alpha1_VirtualMachineStatus(ref common.Referen
 					"placement": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Placement is the VM's actual running location, stamped by the broker. Central uses NodePrefix as the fence coordinate and to gate recovery drain.",
-							Ref:         ref("github.com/trevex/ectobase/api/v1alpha1.VMPlacement"),
+							Ref:         ref(v1alpha1.VMPlacement{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.VMPlacement", metav1.Condition{}.OpenAPIModelName()},
+			v1alpha1.VMPlacement{}.OpenAPIModelName(), metav1.Condition{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_Volume(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_Volume(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3778,24 +3481,24 @@ func schema_trevex_ectobase_api_v1alpha1_Volume(ref common.ReferenceCallback) co
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.VolumeSpec"),
+							Ref:     ref(v1alpha1.VolumeSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.VolumeStatus"),
+							Ref:     ref(v1alpha1.VolumeStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.VolumeSpec", "github.com/trevex/ectobase/api/v1alpha1.VolumeStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+			v1alpha1.VolumeSpec{}.OpenAPIModelName(), v1alpha1.VolumeStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VolumeList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VolumeList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3829,7 +3532,7 @@ func schema_trevex_ectobase_api_v1alpha1_VolumeList(ref common.ReferenceCallback
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.Volume"),
+										Ref:     ref(v1alpha1.Volume{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -3840,11 +3543,11 @@ func schema_trevex_ectobase_api_v1alpha1_VolumeList(ref common.ReferenceCallback
 			},
 		},
 		Dependencies: []string{
-			"github.com/trevex/ectobase/api/v1alpha1.Volume", metav1.ListMeta{}.OpenAPIModelName()},
+			v1alpha1.Volume{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VolumeSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VolumeSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3880,7 +3583,7 @@ func schema_trevex_ectobase_api_v1alpha1_VolumeSpec(ref common.ReferenceCallback
 	}
 }
 
-func schema_trevex_ectobase_api_v1alpha1_VolumeStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_net_v1alpha1_VolumeStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -3895,6 +3598,304 @@ func schema_trevex_ectobase_api_v1alpha1_VolumeStatus(ref common.ReferenceCallba
 						},
 					},
 				},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_platform_v1alpha1_ClusterPool(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ClusterPool is an attached cluster exposed as a schedulable capacity domain.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(platformv1alpha1.ClusterPoolSpec{}.OpenAPIModelName()),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(platformv1alpha1.ClusterPoolStatus{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			platformv1alpha1.ClusterPoolSpec{}.OpenAPIModelName(), platformv1alpha1.ClusterPoolStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_platform_v1alpha1_ClusterPoolLease(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ClusterPoolLease is the broker's heartbeat on a ClusterPool: the identity holding it and when it was last renewed. Stale RenewTime => the pool is Unknown.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"holderIdentity": {
+						SchemaProps: spec.SchemaProps{
+							Description: "HolderIdentity is the broker instance currently reporting for this pool.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"renewTime": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RenewTime is when the holder last renewed the lease.",
+							Ref:         ref(metav1.MicroTime{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			metav1.MicroTime{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_platform_v1alpha1_ClusterPoolList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ClusterPoolList is a list of ClusterPool objects.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(platformv1alpha1.ClusterPool{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			platformv1alpha1.ClusterPool{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_platform_v1alpha1_ClusterPoolSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ClusterPoolSpec defines the desired state of a ClusterPool.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"region": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Region is the region the attached cluster resides in.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"endpoint": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Endpoint is the reachable API endpoint of the attached cluster.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_platform_v1alpha1_ClusterPoolStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ClusterPoolStatus defines the observed state of a ClusterPool.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"phase": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Phase is the current lifecycle phase of the ClusterPool.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"conditions": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-map-keys": []interface{}{
+									"type",
+								},
+								"x-kubernetes-list-type":       "map",
+								"x-kubernetes-patch-merge-key": "type",
+								"x-kubernetes-patch-strategy":  "merge",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "Conditions represent the latest available observations of the ClusterPool's state.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(metav1.Condition{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+					"allocatable": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Allocatable is the schedulable capacity the broker reports for this pool.",
+							Type:        []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Ref: ref(resource.Quantity{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+					"lease": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Lease is the broker heartbeat; a stale RenewTime drives Phase to Unknown.",
+							Ref:         ref(platformv1alpha1.ClusterPoolLease{}.OpenAPIModelName()),
+						},
+					},
+					"nodePrefixes": {
+						SchemaProps: spec.SchemaProps{
+							Description: "NodePrefixes is the set of node /64 underlay prefixes composing this cluster, reported by the broker. Central fences these (Ceph NetworkFence + route blocklist) to evacuate a lost pool without reaching it.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"fencedPrefixes": {
+						SchemaProps: spec.SchemaProps{
+							Description: "FencedPrefixes is the subset of NodePrefixes central has fenced (evacuation).",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"nodeDrain": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-map-keys": []interface{}{
+									"prefix",
+								},
+								"x-kubernetes-list-type": "map",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "NodeDrain reports, per fenced /64, whether the returning broker has confirmed its stale VMIs are terminated (safe to release the fence).",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(platformv1alpha1.NodeDrainStatus{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			platformv1alpha1.ClusterPoolLease{}.OpenAPIModelName(), platformv1alpha1.NodeDrainStatus{}.OpenAPIModelName(), resource.Quantity{}.OpenAPIModelName(), metav1.Condition{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_platform_v1alpha1_NodeDrainStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "NodeDrainStatus is the per-/64 drain confirmation used to gate fence release.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"prefix": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Prefix is the node /64 underlay prefix.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"drained": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Drained is true once the broker confirms the /64's stale VMIs are gone.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"prefix"},
 			},
 		},
 	}

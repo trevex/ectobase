@@ -9,7 +9,7 @@ import (
 	"log"
 	"os"
 
-	netv1 "github.com/trevex/ectobase/api/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	"github.com/trevex/ectobase/netplane/controllers"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"

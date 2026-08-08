@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"sort"
 
-	netv1 "github.com/trevex/ectobase/api/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	"github.com/trevex/ectobase/netplane/allocator"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"

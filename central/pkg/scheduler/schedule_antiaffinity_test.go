@@ -10,7 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
-	netv1 "github.com/trevex/ectobase/api/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
 )

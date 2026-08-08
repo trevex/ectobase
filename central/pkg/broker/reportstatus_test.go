@@ -12,8 +12,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	netv1 "github.com/trevex/ectobase/api/v1alpha1"
-	netinstall "github.com/trevex/ectobase/central/apis/net/install"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	netinstall "github.com/trevex/ectobase/api/net/install"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 )

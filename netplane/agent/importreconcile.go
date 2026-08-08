@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	netv1 "github.com/trevex/ectobase/api/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 )
 
 // desiredEgressVNIs returns the VNIs this node hosts that need internet egress — derived solely from

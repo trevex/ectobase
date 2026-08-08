@@ -3,9 +3,11 @@
 package applyconfigurations
 
 import (
-	v1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
+	v1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	platformv1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	internal "github.com/trevex/ectobase/central/client-go/applyconfigurations/internal"
-	platformv1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/platform/v1alpha1"
+	netv1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/net/v1alpha1"
+	applyconfigurationsplatformv1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/platform/v1alpha1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	managedfields "k8s.io/apimachinery/pkg/util/managedfields"
@@ -15,17 +17,135 @@ import (
 // apply configuration type exists for the given GroupVersionKind.
 func ForKind(kind schema.GroupVersionKind) interface{} {
 	switch kind {
-	// Group=platform.ectobase.dev, Version=v1alpha1
-	case v1alpha1.SchemeGroupVersion.WithKind("ClusterPool"):
-		return &platformv1alpha1.ClusterPoolApplyConfiguration{}
-	case v1alpha1.SchemeGroupVersion.WithKind("ClusterPoolLease"):
-		return &platformv1alpha1.ClusterPoolLeaseApplyConfiguration{}
-	case v1alpha1.SchemeGroupVersion.WithKind("ClusterPoolSpec"):
-		return &platformv1alpha1.ClusterPoolSpecApplyConfiguration{}
-	case v1alpha1.SchemeGroupVersion.WithKind("ClusterPoolStatus"):
-		return &platformv1alpha1.ClusterPoolStatusApplyConfiguration{}
-	case v1alpha1.SchemeGroupVersion.WithKind("NodeDrainStatus"):
-		return &platformv1alpha1.NodeDrainStatusApplyConfiguration{}
+	// Group=net.ectobase.dev, Version=v1alpha1
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledContainer"):
+		return &netv1alpha1.CompiledContainerApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledContainerInterface"):
+		return &netv1alpha1.CompiledContainerInterfaceApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledContainerSpec"):
+		return &netv1alpha1.CompiledContainerSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledContainerStatus"):
+		return &netv1alpha1.CompiledContainerStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledFirewall"):
+		return &netv1alpha1.CompiledFirewallApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledFwRule"):
+		return &netv1alpha1.CompiledFwRuleApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledLB"):
+		return &netv1alpha1.CompiledLBApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledLBPort"):
+		return &netv1alpha1.CompiledLBPortApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledNATSource"):
+		return &netv1alpha1.CompiledNATSourceApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledNIC"):
+		return &netv1alpha1.CompiledNICApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledNICSpec"):
+		return &netv1alpha1.CompiledNICSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledNICStatus"):
+		return &netv1alpha1.CompiledNICStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledPeerImport"):
+		return &netv1alpha1.CompiledPeerImportApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledVM"):
+		return &netv1alpha1.CompiledVMApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledVMInterface"):
+		return &netv1alpha1.CompiledVMInterfaceApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledVMSpec"):
+		return &netv1alpha1.CompiledVMSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledVMStatus"):
+		return &netv1alpha1.CompiledVMStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledVolumeAttachment"):
+		return &netv1alpha1.CompiledVolumeAttachmentApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledVolumeAttachmentSpec"):
+		return &netv1alpha1.CompiledVolumeAttachmentSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledVolumeAttachmentStatus"):
+		return &netv1alpha1.CompiledVolumeAttachmentStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("Container"):
+		return &netv1alpha1.ContainerApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ContainerSpec"):
+		return &netv1alpha1.ContainerSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("ContainerStatus"):
+		return &netv1alpha1.ContainerStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("EgressQoS"):
+		return &netv1alpha1.EgressQoSApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("FirewallPolicy"):
+		return &netv1alpha1.FirewallPolicyApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("FirewallPolicyRule"):
+		return &netv1alpha1.FirewallPolicyRuleApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("FirewallPolicySpec"):
+		return &netv1alpha1.FirewallPolicySpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("FloatingIP"):
+		return &netv1alpha1.FloatingIPApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("InterfaceQoS"):
+		return &netv1alpha1.InterfaceQoSApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("LoadBalancer"):
+		return &netv1alpha1.LoadBalancerApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("LoadBalancerPort"):
+		return &netv1alpha1.LoadBalancerPortApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("LoadBalancerSpec"):
+		return &netv1alpha1.LoadBalancerSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("LoadBalancerStatus"):
+		return &netv1alpha1.LoadBalancerStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("LocalObjectReference"):
+		return &netv1alpha1.LocalObjectReferenceApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("NATAllocation"):
+		return &netv1alpha1.NATAllocationApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("NATGateway"):
+		return &netv1alpha1.NATGatewayApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("NATGatewaySpec"):
+		return &netv1alpha1.NATGatewaySpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("NATGatewayStatus"):
+		return &netv1alpha1.NATGatewayStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("NetworkInterface"):
+		return &netv1alpha1.NetworkInterfaceApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("NetworkInterfaceSpec"):
+		return &netv1alpha1.NetworkInterfaceSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("NetworkInterfaceStatus"):
+		return &netv1alpha1.NetworkInterfaceStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("PortStatus"):
+		return &netv1alpha1.PortStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("RateLimit"):
+		return &netv1alpha1.RateLimitApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VirtualMachine"):
+		return &netv1alpha1.VirtualMachineApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VirtualMachineSpec"):
+		return &netv1alpha1.VirtualMachineSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VirtualMachineStatus"):
+		return &netv1alpha1.VirtualMachineStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VMAntiAffinity"):
+		return &netv1alpha1.VMAntiAffinityApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VMPlacement"):
+		return &netv1alpha1.VMPlacementApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("Volume"):
+		return &netv1alpha1.VolumeApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VolumeSpec"):
+		return &netv1alpha1.VolumeSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VolumeStatus"):
+		return &netv1alpha1.VolumeStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VPC"):
+		return &netv1alpha1.VPCApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VPCPeering"):
+		return &netv1alpha1.VPCPeeringApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VPCPeeringSpec"):
+		return &netv1alpha1.VPCPeeringSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VPCPeeringStatus"):
+		return &netv1alpha1.VPCPeeringStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VPCReference"):
+		return &netv1alpha1.VPCReferenceApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VPCSpec"):
+		return &netv1alpha1.VPCSpecApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VPCStatus"):
+		return &netv1alpha1.VPCStatusApplyConfiguration{}
+
+		// Group=platform.ectobase.dev, Version=v1alpha1
+	case platformv1alpha1.SchemeGroupVersion.WithKind("ClusterPool"):
+		return &applyconfigurationsplatformv1alpha1.ClusterPoolApplyConfiguration{}
+	case platformv1alpha1.SchemeGroupVersion.WithKind("ClusterPoolLease"):
+		return &applyconfigurationsplatformv1alpha1.ClusterPoolLeaseApplyConfiguration{}
+	case platformv1alpha1.SchemeGroupVersion.WithKind("ClusterPoolSpec"):
+		return &applyconfigurationsplatformv1alpha1.ClusterPoolSpecApplyConfiguration{}
+	case platformv1alpha1.SchemeGroupVersion.WithKind("ClusterPoolStatus"):
+		return &applyconfigurationsplatformv1alpha1.ClusterPoolStatusApplyConfiguration{}
+	case platformv1alpha1.SchemeGroupVersion.WithKind("NodeDrainStatus"):
+		return &applyconfigurationsplatformv1alpha1.NodeDrainStatusApplyConfiguration{}
 
 	}
 	return nil

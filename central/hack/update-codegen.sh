@@ -14,10 +14,6 @@ CODEGEN_PKG=$(go list -m -f '{{.Dir}}' k8s.io/code-generator)
 # shellcheck disable=SC1091 # we trust kube_codegen.sh
 source "${CODEGEN_PKG}/kube_codegen.sh"
 
-kube::codegen::gen_helpers \
-    --boilerplate "${SCRIPT_DIR}/boilerplate.go.txt" \
-    "${PROJECT_DIR}/apis"
-
 # NOTE: unsure why, but openapi-gen opens files not in read-only mode, so let's
 #       workaround this for now by setting chmod for relevant modules
 #       https://github.com/kubernetes/kubernetes/issues/136295
@@ -31,11 +27,9 @@ trap cleanup_workaround EXIT
   k8s.io/apimachinery=https://github.com/kubernetes/apimachinery.git
 go mod tidy
 
-# NOTE: gen_openapi + gen_client each accept exactly ONE positional input-dir.
-# platform moved to api/platform (Task 1 pilot); net still lives in central/apis/net.
-# net/v1alpha1 has no +genclient so gen_client only produces platform clients.
-# We point gen_openapi at central/apis (net openapi) with api/platform/v1alpha1 as
-# extra-pkgs, and then run gen_client from api/platform which is the sole genclient source.
+# Both net and platform now live under ../api in the standard <group>/<version>
+# layout (api/net/v1alpha1 + api/platform/v1alpha1), so a single positional input
+# dir suffices — no --extra-pkgs for either group, no --one-input-api flag.
 kube::codegen::gen_openapi \
     --output-dir "${PROJECT_DIR}/client-go/openapi" \
     --output-pkg "${THIS_PKG}/client-go/openapi" \
@@ -43,9 +37,7 @@ kube::codegen::gen_openapi \
     --output-model-name-file "zz_generated.model_name.go" \
     --boilerplate "${PROJECT_DIR}/hack/boilerplate.go.txt" \
     --extra-pkgs "k8s.io/api/core/v1" \
-    --extra-pkgs "github.com/trevex/ectobase/api/v1alpha1" \
-    --extra-pkgs "github.com/trevex/ectobase/api/platform/v1alpha1" \
-    "${PROJECT_DIR}/apis"
+    "${PROJECT_DIR}/../api"
 
 kube::codegen::gen_client \
   --with-watch \
@@ -57,5 +49,4 @@ kube::codegen::gen_client \
   --output-dir "$PROJECT_DIR/client-go" \
   --output-pkg "${THIS_PKG}/client-go" \
   --boilerplate "$SCRIPT_DIR/boilerplate.go.txt" \
-  --one-input-api "platform" \
   "$PROJECT_DIR/../api"

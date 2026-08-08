@@ -12,9 +12,9 @@ import (
 
 	"go.opendefense.cloud/kit/apiserver"
 
-	netv1 "github.com/trevex/ectobase/api/v1alpha1"
-	netapi "github.com/trevex/ectobase/central/apis/net"
-	netinstall "github.com/trevex/ectobase/central/apis/net/install"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	netapi "github.com/trevex/ectobase/api/net"
+	netinstall "github.com/trevex/ectobase/api/net/install"
 	"github.com/trevex/ectobase/api/platform"
 	"github.com/trevex/ectobase/api/platform/install"
 	"github.com/trevex/ectobase/api/platform/v1alpha1"

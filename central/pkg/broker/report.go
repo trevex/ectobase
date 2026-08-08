@@ -4,7 +4,7 @@
 package broker
 
 import (
-	netv1 "github.com/trevex/ectobase/api/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 )
 

@@ -34,9 +34,10 @@ docs-serve: ## Serve the mdbook docs locally with live reload
 	mdbook serve docs
 
 .PHONY: generate
-generate: ## Regenerate deepcopy (zz_generated) + CRD manifests from api/v1alpha1 (controller-gen)
-	cd api && controller-gen object paths=./v1alpha1/...
-	cd api && controller-gen crd paths=./v1alpha1/... output:crd:artifacts:config=../config/crd/bases
+generate: ## Regenerate deepcopy/conversion (kube::codegen) + CRD manifests (controller-gen)
+	cd api && ./hack/update-codegen.sh
+	cd central && ./hack/update-codegen.sh
+	cd api && controller-gen crd paths=./net/v1alpha1/... paths=./platform/v1alpha1/... output:crd:artifacts:config=../config/crd/bases
 	./hack/sync-chart-crds.sh
 
 .PHONY: proto-go
