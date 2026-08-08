@@ -11,10 +11,9 @@ in Phase 3 of de-dpservice-ing conformance.
 - **Byte-parity anchors (flowplane/tests/)** — prove the real eBPF bytecode produces
   identical output to the sim/core for the same input; golden-from-original for several
   responders.
-- **Go e2e smoke (`test/e2e/`)** — real gRPC attach, real kernel/clab topology; proves
-  the control-plane wiring and live forwarding.
-- **clab continuous fabric (`hack/clab/`)** — proves zero-drop under sustained traffic;
-  not a per-feature test.
+- **Go live lab suite (`test/lab/livetest/`)** — real gRPC attach on the Go kind fabric
+  (`make lab-up` / `lab-deploy` / `lab-test`); proves the control-plane wiring and live
+  forwarding under real kernel/CNI topology.
 
 ---
 
@@ -141,7 +140,7 @@ tap), which the byte-parity anchors cover at the eBPF bytecode level.
 
 ### DHCPv6 — `test_dhcpv6.py`
 
-**Status: covered by the Go live lease smoke — `test/e2e/smoke_lb_dhcp_test.go::TestDhcpLeaseSmoke` (DHCPv6 case).**
+**Status: covered by the Go live lease smoke — `test/lab/livetest/dhcp_test.go::TestDhcpLeaseSmoke` (DHCPv6 case).**
 
 `test_dhcpv6_vf0` / `test_dhcpv6_vf1` test a full DHCPv6 Solicit→Reply + Request→Reply
 exchange including PXE/iPXE vendor-class and Boot File URL options, plus a Confirm→Reply.
@@ -158,7 +157,7 @@ extracted into `flowplane-core` and is sim-tested in `dhcp_test.rs`):
 - The DHCPv6 responder therefore stays entirely in `flowplane-ebpf` (XDP path), not in
   `flowplane-core`, and its conformance is asserted at the live level instead of the sim level.
 
-**Current state:** `TestDhcpLeaseSmoke` (`test/e2e/smoke_lb_dhcp_test.go`) drives a real
+**Current state:** `TestDhcpLeaseSmoke` (`test/lab/livetest/dhcp_test.go`) drives a real
 DHCPv6 client through the datapath and asserts the ADVERTISE/Reply IA Address equals the
 guest's configured IPv6 (programmed via `DataplaneNode/AttachInterface` `requested_ips`,
 after the dual-stack fix that made `AttachInterface` set `guest_ipv6`). This is the sole
@@ -178,9 +177,11 @@ map to ectobase/flowplane: flowplane has no HA-peer protocol; state survives via
 
 - **Maglev determinism across restart** — covered by
   `lb_scenario_test::ew_lb_reforward_converges_no_loop` (same Maglev selection after
-  flow age-out) and the `test/scenario-restart.sh` harness (live restart smoke).
-- **CT/NAT state survival** — covered by `test/scenario-restart.sh`
-  (graceful-restart: state written to journal, re-loaded on bring-up).
+  flow age-out) and `test/lab/livetest/restart_test.go::TestRestartContinuity` (live
+  restart smoke on the Go kind fabric).
+- **CT/NAT state survival** — covered by
+  `test/lab/livetest/restart_test.go::TestRestartContinuity` (graceful-restart: state
+  written to journal, re-loaded on bring-up).
 - **MAC sync across two instances** — not applicable (no HA peer; MAC is in `PortMeta`
   static config).
 

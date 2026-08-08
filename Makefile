@@ -198,10 +198,6 @@ tap-dhcp-probe: ## Native-mode DHCP frame-growth fidelity probe on a real tap (n
 tap-vm-smoke: ## Boot a CirrOS VM on a real tap and verify guest_tx/ARP (needs sudo + KVM)
 	./test/tap-vm-smoke.sh run
 
-.PHONY: scenario-peering
-scenario-peering: ## clab VPC-peering scenario: reachability + firewall two-step + overlap (needs sudo on the clab host)
-	sudo -E ./test/scenario-vpc-peering.sh
-
 .PHONY: test-all
 test-all: test e2e ha ## Run the full local test matrix (needs sudo)
 

@@ -12,10 +12,6 @@ __pycache__/
 # Brainstorming visual-companion session artifacts
 .superpowers/
 
-# clab-up.sh renders these from the kind configs (absolute prefix mount paths)
-hack/clab/*.gen
-hack/clab/clab-*/
-
 # mdbook build output (regenerate with `make docs`)
 /docs/book
 flowplane/nfkit/tests/data/l2fwd_out.pcap

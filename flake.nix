@@ -102,9 +102,9 @@
             # provided here, so the scripts use bare tool names (no host-specific paths) and are
             # expected to run inside `nix develop` (the Makefile wraps them).
             pkgs.bpf-linker
-            pkgs.bpftools # provides `bpftool`; the clab harness runs it via nsenter or docker exec
-            pkgs.bpftrace # ad-hoc XDP/tc tracepoints for hack/clab/bpf-trace.sh
-            pkgs.xdp-tools # xdpdump, used by hack/clab/bpf-trace.sh
+            pkgs.bpftools # provides `bpftool`; the lab harness runs it via nsenter or docker exec
+            pkgs.bpftrace # ad-hoc XDP/tc tracepoints for datapath debugging
+            pkgs.xdp-tools # xdpdump
             pkgs.protobuf
             pkgs.protoc-gen-go # `make proto-go` gRPC stub generation
             pkgs.protoc-gen-go-grpc
@@ -118,12 +118,12 @@
             pkgs.tcpdump
             pkgs.util-linux # nsenter, for entering container/netns namespaces from the harness
             pkgs.kubectl
-            # clab fabric tooling — so hack/clab-up.sh + `go test ./test/e2e/...` work in a plain
+            # kind fabric tooling — so `go run ./test/lab` (make lab-*) works in a plain
             # `nix develop` (Cilium installs via the pinned helm chart — no cilium-cli needed).
             pkgs.kind
             pkgs.containerlab
             pkgs.kubernetes-helm
-            pkgs.gettext # provides envsubst for the clab fixture/kind-config templating
+            pkgs.gettext # provides envsubst for fixture/kind-config templating
             pkgs.socat
             pkgs.gnumake
             # DPDK build toolchain — dpdk-sys/build.rs downloads the pinned DPDK release and

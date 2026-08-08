@@ -41,8 +41,9 @@ ectobase is two planes — the `flowplane` datapath and the `netplane` control p
 | `cni/` | The CNI plugin (`cni/plugin/main.go`) that attaches pods via the DataplaneNode gRPC. |
 | `api/` | Kubernetes CRD types (`api/v1alpha1/`, group `net.ectobase.dev`) and the gRPC contracts (`api/proto/dataplane/v1/{dataplane,dpdk}.proto`, `api/proto/routebus/v1/routebus.proto`). |
 | `config/` | Kubernetes manifests: CRD bases, the `flowplane` DaemonSet, netplane agent/reflector/controller deployments, RBAC, and the `ectobase-system` namespace. |
-| `hack/` | Lab bring-up: the **containerlab + kind fabric** (`clab-up.sh`/`clab-down.sh`, `clab/`), the fabric kind-node image, and edge-agent helpers. |
-| `test/` | Local harnesses: the `scenario-*.sh` feature scenarios, `netns-e2e.sh`, `ha-smoke.sh`, `scenario-restart.sh`, `tap-vm-smoke.sh`, and the WAN-edge netns tests. |
+| `hack/` | Build/ops helpers: the fabric kind-node image, the DPDK build helpers, chart-CRD sync, and BPF cleanup. |
+| `test/lab/` | The **Go kind fabric** (`go run ./test/lab` — driven by `make lab-*`): a kind cluster on a routed IPv6 fabric with the full netplane stack + `flowplane` DaemonSet, plus the live conformance suite in `test/lab/livetest/`. |
+| `test/` | Local netns/dev harnesses: `netns-e2e.sh`, `ha-smoke.sh`, `tap-vm-smoke.sh`, and the WAN-edge / tap netns tests. The Go probe sources live in `test/e2e/cmd/` (the livetests build them). |
 | `docs/superpowers/{specs,plans}/` | Per-milestone design specs and implementation plans. |
 
 ## `flowplane` CLI
@@ -81,18 +82,23 @@ make image             # build the ghcr.io/trevex/ectobase/flowplane image
 
 The `e2e`, `ha`, and `tap-*` targets need **passwordless sudo** (XDP attach, network namespaces, raw sockets). The scripts elevate individual commands themselves.
 
-### The clab + kind fabric (integration)
+### The Go kind fabric (integration)
 
-The primary integration environment is a **containerlab IPv6 fabric wrapping a kind cluster**, with the full netplane stack (agent + reflector + controller) and the `flowplane` DaemonSet deployed:
+The primary integration environment is a **kind cluster on a routed IPv6 fabric**, driven entirely from Go (`go run ./test/lab`), with the full netplane stack (agent + reflector + controller) and the `flowplane` DaemonSet deployed:
 
 ```sh
-hack/clab-up.sh            # bring up the fabric + kind + netplane stack
-# ... deploy workloads / run scenarios ...
-sudo -E bash test/scenario-nat-egress.sh    # container egress via distributed SNAT + WAN edge
-sudo -E bash test/scenario-lb-ingress.sh    # N-S load balancing
-sudo -E bash test/scenario-restart.sh       # graceful datapath restart (crictl kill -> adopt, no /128 reissue)
-hack/clab-down.sh
+make lab-up            # bring up the kind fabric + deploy the ectobase substrate
+make lab-deploy        # re-run only the ectobase substrate deploy on an up fabric
+make lab-ceph          # deploy Ceph (ceph-csi + csi-addons); needs fabric.ceph.enabled
+make lab-test          # run the live conformance suite (test/lab/livetest/)
+make lab-down          # tear down the fabric (keeps the registry cache)
 ```
+
+The live suite (`test/lab/livetest/`) is where the datapath conformance now lives: DHCPv6 lease
+(`TestDhcpLeaseSmoke`), distributed-SNAT container egress + NAT64 (`TestNatEgressSmoke` /
+`TestNAT64Egress`), overlay-internal QoS shaping/policing (`TestQoSGuestToGuest`), pod overlay
+reachability (`TestPodOverlayPing`), VPC peering (`TestVPCPeering`), and graceful restart continuity
+(`TestRestartContinuity`).
 
 ### The multi-cluster fabric (`test/lab`)
 
