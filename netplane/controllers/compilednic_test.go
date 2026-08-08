@@ -319,6 +319,39 @@ func TestResolvePlacement(t *testing.T) {
 	if got.ClusterName != "default-cluster" || got.WorkloadID != "" {
 		t.Fatalf("orphan NIC: got %+v", got)
 	}
+	// A standalone (Pod) NIC with no owning VM but its own spec.clusterName is placed there.
+	standalone := &netv1.NetworkInterface{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "nic-pod"},
+		Spec:       netv1.NetworkInterfaceSpec{ClusterName: "k02"},
+	}
+	got = resolvePlacement(standalone, vms, "default-cluster")
+	if got.ClusterName != "k02" || got.WorkloadID != "" {
+		t.Fatalf("standalone NIC: got %+v", got)
+	}
+	// An owning VM's placement takes precedence over the NIC's own clusterName.
+	owned := &netv1.NetworkInterface{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "nic-a"},
+		Spec:       netv1.NetworkInterfaceSpec{ClusterName: "k02"},
+	}
+	got = resolvePlacement(owned, vms, "default-cluster")
+	if got.ClusterName != "edge1" || got.WorkloadID != "vm1" {
+		t.Fatalf("owned NIC clusterName precedence: got %+v", got)
+	}
+}
+
+func TestCompile_StandaloneClusterNameAndMAC(t *testing.T) {
+	nic := &netv1.NetworkInterface{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "nic-pod"},
+		Spec:       netv1.NetworkInterfaceSpec{IPs: []string{"10.0.0.7"}, MAC: "aa:bb:cc:dd:ee:ff", ClusterName: "k02"},
+	}
+	placement := resolvePlacement(nic, nil, "default-cluster")
+	c := Compile(nic, 100, nil, nil, nil, nil, placement)
+	if c.Spec.ClusterName != "k02" {
+		t.Fatalf("clusterName not placed from nic.spec.clusterName: %q", c.Spec.ClusterName)
+	}
+	if c.Spec.MAC != "aa:bb:cc:dd:ee:ff" {
+		t.Fatalf("MAC not carried into CompiledNIC: %q", c.Spec.MAC)
+	}
 }
 
 func TestCompile_StampsPlacement(t *testing.T) {

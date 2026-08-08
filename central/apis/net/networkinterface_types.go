@@ -19,6 +19,8 @@ type NetworkInterfaceSpec struct {
 	NodeName *string
 	// QoS caps/shapes throughput for this interface. Nil = unlimited.
 	QoS *InterfaceQoS
+	// ClusterName is the compute cluster this standalone (e.g. Pod) NIC targets.
+	ClusterName string
 }
 
 // InterfaceQoS is per-interface traffic control.

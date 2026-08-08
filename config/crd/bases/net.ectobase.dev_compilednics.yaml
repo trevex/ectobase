@@ -146,6 +146,11 @@ spec:
                   - vip
                   type: object
                 type: array
+              mac:
+                description: |-
+                  MAC is the guest L2 address copied from the source NetworkInterface. The CNI
+                  programs it as the datapath guest MAC (empty for containers — the datapath derives one).
+                type: string
               nat:
                 description: |-
                   NAT lists the egress-SNAT sources for this NIC's overlay IPs — one entry per NATGateway

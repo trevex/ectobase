@@ -488,6 +488,7 @@ func Convert_v1alpha1_NetworkInterfaceSpec_To_net_NetworkInterfaceSpec(in *Netwo
 	out.IPs = in.IPs
 	out.MAC = in.MAC
 	out.NodeName = in.NodeName
+	out.ClusterName = in.ClusterName
 	if in.QoS != nil {
 		out.QoS = &net.InterfaceQoS{}
 		if err := Convert_v1alpha1_InterfaceQoS_To_net_InterfaceQoS(in.QoS, out.QoS, s); err != nil {
@@ -507,6 +508,7 @@ func Convert_net_NetworkInterfaceSpec_To_v1alpha1_NetworkInterfaceSpec(in *net.N
 	out.IPs = in.IPs
 	out.MAC = in.MAC
 	out.NodeName = in.NodeName
+	out.ClusterName = in.ClusterName
 	if in.QoS != nil {
 		out.QoS = &InterfaceQoS{}
 		if err := Convert_net_InterfaceQoS_To_v1alpha1_InterfaceQoS(in.QoS, out.QoS, s); err != nil {
@@ -1250,6 +1252,7 @@ func Convert_v1alpha1_CompiledNICSpec_To_net_CompiledNICSpec(in *CompiledNICSpec
 	} else {
 		out.PeerImports = nil
 	}
+	out.MAC = in.MAC
 	return nil
 }
 
@@ -1295,6 +1298,7 @@ func Convert_net_CompiledNICSpec_To_v1alpha1_CompiledNICSpec(in *net.CompiledNIC
 	} else {
 		out.PeerImports = nil
 	}
+	out.MAC = in.MAC
 	return nil
 }
 

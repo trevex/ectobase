@@ -41,6 +41,12 @@ spec:
             description: NetworkInterfaceSpec is the desired state of a NetworkInterface
               (a thin NIC).
             properties:
+              clusterName:
+                description: |-
+                  ClusterName is the compute cluster this standalone (e.g. Pod) NIC targets. The
+                  compiler uses it for placement (CompiledNIC.spec.clusterName) when no
+                  VirtualMachine owns this NIC; an owning VM's placement takes precedence.
+                type: string
               ips:
                 description: |-
                   IPs are the user-specified overlay IPs (v4 and/or v6). The platform does

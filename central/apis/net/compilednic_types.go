@@ -27,6 +27,8 @@ type CompiledNICSpec struct {
 	LB []CompiledLB
 	// PeerImports lists peer VPCs whose routes this NIC imports.
 	PeerImports []CompiledPeerImport
+	// MAC is the guest L2 address copied from the source NetworkInterface.
+	MAC string
 }
 
 // CompiledFirewall holds pre-compiled ingress and egress rules for a NIC.

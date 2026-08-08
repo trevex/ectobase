@@ -50,6 +50,10 @@ type CompiledNICSpec struct {
 	// involving this NIC's VPC.
 	// +optional
 	PeerImports []CompiledPeerImport `json:"peerImports,omitempty"`
+	// MAC is the guest L2 address copied from the source NetworkInterface. The CNI
+	// programs it as the datapath guest MAC (empty for containers — the datapath derives one).
+	// +optional
+	MAC string `json:"mac,omitempty"`
 }
 
 // CompiledFirewall holds pre-compiled ingress and egress rules for a NIC.

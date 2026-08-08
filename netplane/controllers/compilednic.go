@@ -51,6 +51,10 @@ func resolvePlacement(nic *netv1.NetworkInterface, vms []netv1.VirtualMachine, d
 			}
 		}
 	}
+	// No owning VM: a standalone (e.g. Pod) NIC may name its own compute cluster.
+	if nic.Spec.ClusterName != "" {
+		return Placement{ClusterName: nic.Spec.ClusterName}
+	}
 	return Placement{ClusterName: defaultCluster}
 }
 
@@ -89,6 +93,7 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 			Port:       port,
 			OverlayIPs: append([]string(nil), nic.Spec.IPs...),
 			Firewall:   netv1.CompiledFirewall{},
+			MAC:        nic.Spec.MAC,
 		},
 	}
 

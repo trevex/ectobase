@@ -27,6 +27,11 @@ type NetworkInterfaceSpec struct {
 	// QoS caps/shapes throughput for this interface. Nil = unlimited.
 	// +optional
 	QoS *InterfaceQoS `json:"qos,omitempty" protobuf:"bytes,4,opt,name=qos"`
+	// ClusterName is the compute cluster this standalone (e.g. Pod) NIC targets. The
+	// compiler uses it for placement (CompiledNIC.spec.clusterName) when no
+	// VirtualMachine owns this NIC; an owning VM's placement takes precedence.
+	// +optional
+	ClusterName string `json:"clusterName,omitempty" protobuf:"bytes,6,opt,name=clusterName"`
 }
 
 // InterfaceQoS is per-interface traffic control. Egress is EDT-shaped (smoothed) at the uplink fq

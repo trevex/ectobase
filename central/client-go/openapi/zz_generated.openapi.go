@@ -788,6 +788,13 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledNICSpec(ref common.ReferenceCal
 							},
 						},
 					},
+					"mac": {
+						SchemaProps: spec.SchemaProps{
+							Description: "MAC is the guest L2 address copied from the source NetworkInterface. The CNI programs it as the datapath guest MAC (empty for containers — the datapath derives one).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
 				},
 				Required: []string{"nodeName", "vni", "port", "firewall"},
 			},
@@ -2202,6 +2209,13 @@ func schema_trevex_ectobase_api_v1alpha1_NetworkInterfaceSpec(ref common.Referen
 						SchemaProps: spec.SchemaProps{
 							Description: "QoS caps/shapes throughput for this interface. Nil = unlimited.",
 							Ref:         ref("github.com/trevex/ectobase/api/v1alpha1.InterfaceQoS"),
+						},
+					},
+					"clusterName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ClusterName is the compute cluster this standalone (e.g. Pod) NIC targets. The compiler uses it for placement (CompiledNIC.spec.clusterName) when no VirtualMachine owns this NIC; an owning VM's placement takes precedence.",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 				},
