@@ -21,7 +21,6 @@ const (
 	podVNI = 201
 	podIPA = "10.0.2.1"
 	podIPC = "10.0.2.3"
-	podMAC = "" // empty: the dataplane derives a stable MAC for the veth (container) model
 )
 
 // TestPodOverlayPing spawns TWO real Pods, one per compute cluster, each attached to
