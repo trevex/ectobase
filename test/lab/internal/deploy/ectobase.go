@@ -160,6 +160,14 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 			"rollout", "restart", "deploy/central-broker"); err != nil {
 			slog.Debug("rollout restart central-broker", "cluster", c.Name, "err", err)
 		}
+		// Multus (thin) so a Pod annotated onto our overlay is attached via
+		// Multus -> flowplane-cni (a SECONDARY network) instead of a hand-driven
+		// gRPC attach. Installed AFTER the chart so flowplane-cni + the
+		// dataplane-kubeconfig already exist; Multus only wraps the default CNI, so
+		// the ordering vs flowplane-cni is not strict. Compute clusters only.
+		if err := Multus(ctx, nil, c.Kubeconfig); err != nil {
+			return fmt.Errorf("cluster %s: install Multus: %w", c.Name, err)
+		}
 	}
 
 	// --- Readiness ---

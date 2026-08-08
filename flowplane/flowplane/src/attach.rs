@@ -126,6 +126,29 @@ impl AttachState {
         }
     }
 
+    /// Guest-side (in-netns) device name for a veth interface. The `interface_id` the CNI passes is
+    /// `<pod-uid>/<cni-ifname>` (e.g. `3889a54a-.../net1`) — a fine map key but NOT a valid Linux
+    /// device name (it contains `/` and exceeds IFNAMSIZ), so using it verbatim as the guest link
+    /// name made `ip link set … name <id>` fail ("rename guest veth") for every real CNI-driven pod.
+    /// We derive a valid name from the id: the component after the last `/` (the CNI's own ifname,
+    /// e.g. `net1`) when it is a valid <=15-char device name, else a stable FNV hash (`g-<hash>`).
+    /// The map key + the response `ifname` stay the full `interface_id`; only the actual link name is
+    /// sanitized. gRPC callers that pass a clean id (`nic-a`) are unaffected (the whole id is valid).
+    fn guest_ifname(interface_id: &str) -> String {
+        let last = interface_id.rsplit('/').next().unwrap_or(interface_id);
+        if is_valid_ifname(last) {
+            last.to_string()
+        } else if is_valid_ifname(interface_id) {
+            interface_id.to_string()
+        } else {
+            let mut h: u32 = 2166136261;
+            for b in interface_id.as_bytes() {
+                h = (h ^ *b as u32).wrapping_mul(16777619);
+            }
+            format!("g-{h:08x}")
+        }
+    }
+
     /// Root-netns tap device name for an interface (the tap analogue of `host_veth_name`). A tap is a
     /// single device with no `<host>p` peer suffix, so it may use the full IFNAMSIZ (15); longer ids
     /// are hashed to a stable short name. qemu is pointed at this name (or handed its fd).
@@ -237,13 +260,17 @@ impl AttachState {
             DeviceType::Veth | DeviceType::PodTap => Self::host_veth_name(interface_id),
             DeviceType::Tap => tap_dev.clone(),
         };
+        // Guest-side (in-netns) device name. Derived from the interface_id but sanitized to a valid
+        // Linux device name — the CNI passes `<pod-uid>/<ifname>` as the id, which is not usable as a
+        // link name. See `guest_ifname`.
+        let guest_ifname = Self::guest_ifname(interface_id);
         // Create + configure the device. If anything fails after creation, tear it down so we don't
         // leak. veth: create the pair + move the guest end into the netns. tap: a single root-netns
         // device. pod-tap: the veth + a pod-netns tap (named `tap_dev`) wired by mirred (KubeVirt).
         let setup = match device_type {
             DeviceType::Veth => flowplane_device::create_veth_pair(&flowplane_device::VethSpec {
                 host_name: device.clone(),
-                guest_name: interface_id.to_string(),
+                guest_name: guest_ifname.clone(),
                 netns_path: netns_path.to_string(),
                 mac,
                 mtu: self.guest_mtu as u32,
@@ -309,7 +336,7 @@ impl AttachState {
             if let Err(e) =
                 flowplane_device::configure_guest_netns(&flowplane_device::GuestNetConfig {
                     netns_path: netns_path.to_string(),
-                    guest_ifname: interface_id.to_string(),
+                    guest_ifname: guest_ifname.clone(),
                     ipv4,
                     gateway_ipv4: self.gateway_ipv4,
                     ipv6,
@@ -329,7 +356,9 @@ impl AttachState {
         // `ifname` returned to the caller: for a veth it's the guest end inside the netns (the pod's
         // interface); for a tap it's the root-netns tap the caller points qemu at (or opens for its fd).
         let ifname = match device_type {
-            DeviceType::Veth => interface_id.to_string(),
+            // The guest-side (in-netns) device name the CNI reports back to the runtime — the
+            // sanitized name we actually created, not the raw interface_id (which may contain `/`).
+            DeviceType::Veth => guest_ifname.clone(),
             // The tap the caller points qemu/libvirt at: root-netns (Tap, == device) or the
             // pod-netns tap (PodTap). Both are `tap_dev` (the caller-supplied name, e.g. "tap0").
             DeviceType::Tap | DeviceType::PodTap => tap_dev.clone(),
@@ -509,6 +538,19 @@ impl AttachState {
     }
 }
 
+/// True iff `s` is a usable Linux network device name: non-empty, at most IFNAMSIZ-1 (15) bytes, and
+/// free of `/`, whitespace, and the `.`/`..` special names (which `ip link set … name` rejects). Used
+/// by `guest_ifname` to decide whether the CNI-supplied name can be used verbatim.
+fn is_valid_ifname(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 15
+        && s != "."
+        && s != ".."
+        && !s
+            .bytes()
+            .any(|b| b == b'/' || b == b':' || b.is_ascii_whitespace())
+}
+
 /// First valid IPv4 address in `requested_ips`, as raw octets.  Returns `None` if none is present
 /// (caller should `.context("requires at least one IPv4")`).
 fn primary_ipv4(requested_ips: &[String]) -> Option<[u8; 4]> {
@@ -584,6 +626,52 @@ mod tests {
     #[test]
     fn host_veth_name_short_passthrough() {
         assert_eq!(AttachState::host_veth_name("t0"), "veth-t0");
+    }
+
+    #[test]
+    fn is_valid_ifname_accepts_and_rejects() {
+        assert!(is_valid_ifname("net1"));
+        assert!(is_valid_ifname("eth0"));
+        assert!(is_valid_ifname("nic-a"));
+        assert!(is_valid_ifname("012345678901234")); // 15 bytes
+        assert!(!is_valid_ifname("")); // empty
+        assert!(!is_valid_ifname("0123456789012345")); // 16 bytes > IFNAMSIZ-1
+        assert!(!is_valid_ifname("uid/net1")); // contains '/'
+        assert!(!is_valid_ifname("a:b")); // contains ':'
+        assert!(!is_valid_ifname("a b")); // whitespace
+        assert!(!is_valid_ifname(".")); // special
+        assert!(!is_valid_ifname("..")); // special
+    }
+
+    #[test]
+    fn guest_ifname_extracts_cni_ifname_from_uid_slash_ifname() {
+        // The CNI passes `<pod-uid>/<cni-ifname>` — the guest link must be the valid trailing name.
+        assert_eq!(
+            AttachState::guest_ifname("3889a54a-a2a8-4bb9-a5c0-6e0a1c24f4a9/net1"),
+            "net1"
+        );
+        assert_eq!(
+            AttachState::guest_ifname("3889a54a-a2a8-4bb9-a5c0-6e0a1c24f4a9/eth0"),
+            "eth0"
+        );
+    }
+
+    #[test]
+    fn guest_ifname_passes_through_clean_ids() {
+        // A gRPC-driven caller with a clean, valid id keeps it verbatim (no `/`, <=15 chars).
+        assert_eq!(AttachState::guest_ifname("nic-a"), "nic-a");
+        assert_eq!(AttachState::guest_ifname("t0"), "t0");
+    }
+
+    #[test]
+    fn guest_ifname_hashes_when_trailing_component_is_invalid() {
+        // A trailing component that is itself too long / invalid falls back to a stable hash.
+        let long_tail = "uid/this-name-is-way-too-long-for-ifnamsiz";
+        let n = AttachState::guest_ifname(long_tail);
+        assert!(is_valid_ifname(&n), "{n} must be a valid device name");
+        assert!(n.starts_with("g-"));
+        // Deterministic (same id -> same name), so detach/re-attach agree.
+        assert_eq!(n, AttachState::guest_ifname(long_tail));
     }
 
     #[test]
