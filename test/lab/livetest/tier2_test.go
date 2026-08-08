@@ -33,7 +33,7 @@ const (
 	tier2VMIName = "default-" + tier2VMName
 )
 
-// fenceName mirrors central/internal/fence/storage.go fenceName(): "ectobase-" +
+// fenceName mirrors central/pkg/fence/storage.go fenceName(): "ectobase-" +
 // prefix with ':' -> '-', '/' -> '--', '.' -> '-'. Used to look up the csi-addons
 // NetworkFence CR for a node /64 by name.
 func fenceName(prefix string) string {
