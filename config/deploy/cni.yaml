@@ -17,9 +17,9 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get"]
-  # Resolve {vni, ips, mac} from the NetworkInterface + its VPC.
+  # Resolve {vni, ips, mac} from the broker-synced CompiledNIC (central policy).
   - apiGroups: ["net.ectobase.dev"]
-    resources: ["networkinterfaces", "vpcs"]
+    resources: ["compilednics"]
     verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
