@@ -310,12 +310,12 @@ func TestResolvePlacement(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "vm1"},
 		Spec:       netv1.VirtualMachineSpec{ClusterName: "edge1", InterfaceRefs: []netv1.LocalObjectReference{{Name: "nic-a"}}},
 	}}
-	got := resolvePlacement(nic, vms, "default-cluster")
-	if got.ClusterName != "edge1" || got.WorkloadID != "vm1" {
+	got := resolvePlacement(nic, nil, vms, "default-cluster")
+	if got.ClusterName != "edge1" || got.WorkloadID != "vm1" || got.NodeName != "" {
 		t.Fatalf("owned NIC: got %+v", got)
 	}
 	orphan := &netv1.NetworkInterface{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "nic-x"}}
-	got = resolvePlacement(orphan, vms, "default-cluster")
+	got = resolvePlacement(orphan, nil, vms, "default-cluster")
 	if got.ClusterName != "default-cluster" || got.WorkloadID != "" {
 		t.Fatalf("orphan NIC: got %+v", got)
 	}
@@ -324,7 +324,7 @@ func TestResolvePlacement(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "nic-pod"},
 		Spec:       netv1.NetworkInterfaceSpec{ClusterName: "k02"},
 	}
-	got = resolvePlacement(standalone, vms, "default-cluster")
+	got = resolvePlacement(standalone, nil, vms, "default-cluster")
 	if got.ClusterName != "k02" || got.WorkloadID != "" {
 		t.Fatalf("standalone NIC: got %+v", got)
 	}
@@ -333,9 +333,19 @@ func TestResolvePlacement(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "nic-a"},
 		Spec:       netv1.NetworkInterfaceSpec{ClusterName: "k02"},
 	}
-	got = resolvePlacement(owned, vms, "default-cluster")
+	got = resolvePlacement(owned, nil, vms, "default-cluster")
 	if got.ClusterName != "edge1" || got.WorkloadID != "vm1" {
 		t.Fatalf("owned NIC clusterName precedence: got %+v", got)
+	}
+	// An owning Container is the placement AUTHORITY: it wins over the VM (checked first) and pins the
+	// NodeName. nic-a is referenced by BOTH the VM (edge1) and the container (c1/n1) → container wins.
+	containers := []netv1.Container{{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "ctr1"},
+		Spec:       netv1.ContainerSpec{ClusterName: "c1", NodeName: "n1", InterfaceRefs: []netv1.LocalObjectReference{{Name: "nic-a"}}},
+	}}
+	got = resolvePlacement(nic, containers, vms, "default-cluster")
+	if got.ClusterName != "c1" || got.NodeName != "n1" || got.WorkloadID != "ctr1" {
+		t.Fatalf("container-owned NIC (authority over VM): got %+v", got)
 	}
 }
 
@@ -344,7 +354,7 @@ func TestCompile_StandaloneClusterNameAndMAC(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "nic-pod"},
 		Spec:       netv1.NetworkInterfaceSpec{IPs: []string{"10.0.0.7"}, MAC: "aa:bb:cc:dd:ee:ff", ClusterName: "k02"},
 	}
-	placement := resolvePlacement(nic, nil, "default-cluster")
+	placement := resolvePlacement(nic, nil, nil, "default-cluster")
 	c := Compile(nic, 100, nil, nil, nil, nil, placement)
 	if c.Spec.ClusterName != "k02" {
 		t.Fatalf("clusterName not placed from nic.spec.clusterName: %q", c.Spec.ClusterName)

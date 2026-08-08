@@ -32,18 +32,29 @@ type PeerImportSpec struct {
 }
 
 // Placement is the cluster binding for a compiled object, resolved from the
-// owning VirtualMachine (or the compiler default for NICs with no owning VM).
+// owning Container/VirtualMachine (or the compiler default for NICs with no owning workload).
 type Placement struct {
 	ClusterName string
-	WorkloadID  string // owning VM name; "" when defaulted (no workload label)
+	// NodeName is the owning Container's node pin (Container is the placement authority and pins the
+	// node). "" for VM-owned and standalone NICs, whose node comes from nic.spec.nodeName instead.
+	NodeName   string
+	WorkloadID string // owning Container/VM name; "" when defaulted (no workload label)
 }
 
-// resolvePlacement finds the VirtualMachine (same namespace) that owns nic via
-// its spec.interfaceRefs and returns its placement; falls back to the default
-// cluster name with no workload id when no VM owns the NIC. A NIC has one owning
-// VM by construction; if several reference it (an invalid config), the first in
-// list order wins.
-func resolvePlacement(nic *netv1.NetworkInterface, vms []netv1.VirtualMachine, defaultCluster string) Placement {
+// resolvePlacement finds the workload (same namespace) that owns nic via its spec.interfaceRefs and
+// returns its placement. Precedence: owning Container > owning VirtualMachine > nic.spec.clusterName >
+// default. A Container is the placement AUTHORITY and additionally pins the NodeName; a VM contributes
+// only the cluster binding (its NICs keep sourcing NodeName from nic.spec.nodeName). A NIC has one
+// owning workload by construction; if several reference it (an invalid config), the first in list order
+// wins (containers checked before VMs).
+func resolvePlacement(nic *netv1.NetworkInterface, containers []netv1.Container, vms []netv1.VirtualMachine, defaultCluster string) Placement {
+	for i := range containers {
+		for _, ref := range containers[i].Spec.InterfaceRefs {
+			if ref.Name == nic.Name {
+				return Placement{ClusterName: containers[i].Spec.ClusterName, NodeName: containers[i].Spec.NodeName, WorkloadID: containers[i].Name}
+			}
+		}
+	}
 	for i := range vms {
 		for _, ref := range vms[i].Spec.InterfaceRefs {
 			if ref.Name == nic.Name {
@@ -51,7 +62,7 @@ func resolvePlacement(nic *netv1.NetworkInterface, vms []netv1.VirtualMachine, d
 			}
 		}
 	}
-	// No owning VM: a standalone (e.g. Pod) NIC may name its own compute cluster.
+	// No owning workload: a standalone (e.g. Pod) NIC may name its own compute cluster.
 	if nic.Spec.ClusterName != "" {
 		return Placement{ClusterName: nic.Spec.ClusterName}
 	}
@@ -68,9 +79,15 @@ func resolvePlacement(nic *netv1.NetworkInterface, vms []netv1.VirtualMachine, d
 // slice of PeerImportSpecs; only entries whose VPCName matches the NIC's VPC are emitted. The
 // returned CompiledNIC has no Status set (caller fills that in if needed).
 func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPolicy, lbs []netv1.LoadBalancer, peerings []PeerImportSpec, natBySource map[string]netv1.NATAllocation, placement Placement) netv1.CompiledNIC {
+	// Node binding: an owning Container is the placement authority and pins the node (placement.NodeName);
+	// VM-owned and standalone NICs keep their existing source (nic.spec.nodeName), so those paths are
+	// byte-unchanged (their placement.NodeName is "").
 	nodeName := ""
 	if nic.Spec.NodeName != nil {
 		nodeName = *nic.Spec.NodeName
+	}
+	if placement.NodeName != "" {
+		nodeName = placement.NodeName
 	}
 
 	port := netv1.PortStatus{}
@@ -299,12 +316,17 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("gather nat allocations: %w", err)
 	}
-	// Resolve placement (cluster binding) from the owning VirtualMachine, if any, else the default.
+	// Resolve placement (cluster + node binding) from the owning Container or VirtualMachine, if any,
+	// else the default. Container is the placement authority (checked first) and also pins the node.
+	var containers netv1.ContainerList
+	if err := r.Client.List(ctx, &containers, client.InNamespace(nic.Namespace)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list containers: %w", err)
+	}
 	var vms netv1.VirtualMachineList
 	if err := r.Client.List(ctx, &vms, client.InNamespace(nic.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list virtualmachines: %w", err)
 	}
-	placement := resolvePlacement(&nic, vms.Items, r.DefaultClusterName)
+	placement := resolvePlacement(&nic, containers.Items, vms.Items, r.DefaultClusterName)
 	compiled := Compile(&nic, vni, policies.Items, lbs.Items, peerImports, natBySource, placement)
 	key := types.NamespacedName{Namespace: compiled.Namespace, Name: compiled.Name}
 	var existing netv1.CompiledNIC
@@ -356,6 +378,9 @@ func (r *CompiledNICReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// A VirtualMachine's spec.clusterName (placement) is stamped onto its NICs' CompiledNICs, so
 		// re-enqueue the owned NICs when the VM changes.
 		Watches(&netv1.VirtualMachine{}, handler.EnqueueRequestsFromMapFunc(r.nicsForVM)).
+		// A Container's spec.clusterName AND spec.nodeName (it is the placement authority) are stamped
+		// onto its NICs' CompiledNICs, so re-enqueue the owned NICs when the Container changes.
+		Watches(&netv1.Container{}, handler.EnqueueRequestsFromMapFunc(r.nicsForContainer)).
 		Complete(r)
 }
 
@@ -398,6 +423,21 @@ func (r *CompiledNICReconciler) nicsForVM(ctx context.Context, obj client.Object
 	var reqs []reconcile.Request
 	for _, ref := range vm.Spec.InterfaceRefs {
 		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: vm.Namespace, Name: ref.Name}})
+	}
+	return reqs
+}
+
+// nicsForContainer maps a Container event to reconcile requests for each NetworkInterface it owns
+// (via spec.interfaceRefs), so a placement (spec.clusterName/spec.nodeName) change re-stamps their
+// CompiledNICs.
+func (r *CompiledNICReconciler) nicsForContainer(ctx context.Context, obj client.Object) []reconcile.Request {
+	ctr, ok := obj.(*netv1.Container)
+	if !ok {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for _, ref := range ctr.Spec.InterfaceRefs {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ctr.Namespace, Name: ref.Name}})
 	}
 	return reqs
 }
