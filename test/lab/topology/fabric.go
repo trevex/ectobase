@@ -648,6 +648,31 @@ func forceRemoveLingeringClab(ctx context.Context, labName string) {
 	}
 }
 
+// cleanupHostRBD force-releases any host krbd devices the ceph-csi nodeplugin left
+// mapped. kind shares the host kernel, so an RBD PVC / VM-disk `rbd map` creates
+// /dev/rbdN on the HOST; those kernel maps outlive `clab destroy` (which only removes
+// the node containers) and, pointing at a destroyed mon, hang system shutdown and
+// leave orphaned inodes. Each is force-removed via the rbd sysfs interface — no mon
+// round-trip, and "force" tolerates a device the kernel can no longer flush. No-op
+// when the rbd module was never loaded (/sys/bus/rbd absent), i.e. a ceph-less lab.
+func cleanupHostRBD(ctx context.Context) {
+	devs, err := os.ReadDir("/sys/bus/rbd/devices")
+	if err != nil || len(devs) == 0 {
+		return
+	}
+	remove := "/sys/bus/rbd/remove_single_major" // modern kernels; older expose only remove
+	if _, err := os.Stat(remove); err != nil {
+		remove = "/sys/bus/rbd/remove"
+	}
+	for _, d := range devs {
+		if err := exec.SudoStdin(ctx, d.Name()+" force\n", "tee", remove); err != nil {
+			slog.Debug("rbd force-unmap", "id", d.Name(), "err", err)
+			continue
+		}
+		slog.Info("force-unmapped leftover host rbd device", "id", d.Name())
+	}
+}
+
 // Down destroys the containerlab topology and removes build/<name>/ while
 // preserving the registry cache for a warm re-up. With purge, it removes the whole
 // build tree including the cache.
@@ -667,6 +692,19 @@ func Down(ctx context.Context, cfg *config.Config, purge bool) error {
 	// killing their container-shim (the same recovery the Tier-2 gate uses for a
 	// zombied node) then `docker rm -f`. Best-effort.
 	forceRemoveLingeringClab(ctx, cfg.Name)
+
+	// kind shares the host kernel, so an RBD PVC / VM-disk `rbd map` (ceph-csi
+	// nodeplugin) creates /dev/rbdN on the HOST. clab destroy removes the node
+	// containers but NOT these kernel maps, so they dangle at the now-gone mon —
+	// which hangs system shutdown ("cannot connect to ceph") and orphans the
+	// rbd-backed filesystem. Force-release them now that the holders (nodes) are gone.
+	cleanupHostRBD(ctx)
+
+	// clab destroy usually removes its mgmt network, but a force-removed (wedged)
+	// node can leave <name>-mgmt (+ its docker ip6tables MASQUERADE) behind. Best-effort.
+	if err := exec.Sudo(ctx, "docker", "network", "rm", cfg.Name+"-mgmt"); err != nil {
+		slog.Debug("remove mgmt network (already gone?)", "err", err)
+	}
 
 	if purge {
 		slog.Info("purging build tree (including registry cache)", "build", p.build)
