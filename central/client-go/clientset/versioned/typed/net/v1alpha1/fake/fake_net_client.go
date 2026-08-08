@@ -40,10 +40,6 @@ func (c *FakeNetV1alpha1) VPCPeerings(namespace string) v1alpha1.VPCPeeringInter
 	return newFakeVPCPeerings(c, namespace)
 }
 
-func (c *FakeNetV1alpha1) Volumes(namespace string) v1alpha1.VolumeInterface {
-	return newFakeVolumes(c, namespace)
-}
-
 // RESTClient returns a RESTClient that is used to communicate
 // with API server by this client implementation.
 func (c *FakeNetV1alpha1) RESTClient() rest.Interface {

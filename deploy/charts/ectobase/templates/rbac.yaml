@@ -118,7 +118,7 @@ rules:
   - apiGroups: ["compute.ectobase.dev"]
     resources: ["virtualmachines/status"]
     verbs: ["get", "update", "patch"]
-  - apiGroups: ["net.ectobase.dev"]
+  - apiGroups: ["storage.ectobase.dev"]
     resources: ["volumes"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["compiled.ectobase.dev"]

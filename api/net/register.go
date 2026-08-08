@@ -48,8 +48,6 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&NATGatewayList{},
 		&VPCPeering{},
 		&VPCPeeringList{},
-		&Volume{},
-		&VolumeList{},
 	)
 
 	return nil

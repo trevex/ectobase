@@ -15,5 +15,3 @@ type NetworkInterfaceExpansion interface{}
 type VPCExpansion interface{}
 
 type VPCPeeringExpansion interface{}
-
-type VolumeExpansion interface{}

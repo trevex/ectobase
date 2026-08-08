@@ -88,7 +88,7 @@ func TestTier2Failover(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = kubectl(ctx, cfg, "central", "delete", "virtualmachines.compute.ectobase.dev",
 			tier2VMName, "-n", tier2VMNS, "--ignore-not-found", "--wait=false")
-		_, _ = kubectl(ctx, cfg, "central", "delete", "volumes.net.ectobase.dev",
+		_, _ = kubectl(ctx, cfg, "central", "delete", "volumes.storage.ectobase.dev",
 			tier2Volume, "-n", tier2VMNS, "--ignore-not-found", "--wait=false")
 		_, _ = kubectl(ctx, cfg, "central", "delete", "networkinterfaces.net.ectobase.dev",
 			"tier2-nic", "-n", tier2VMNS, "--ignore-not-found", "--wait=false")

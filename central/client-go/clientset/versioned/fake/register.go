@@ -7,6 +7,7 @@ import (
 	computev1alpha1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platformv1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
+	storagev1alpha1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -22,6 +23,7 @@ var localSchemeBuilder = runtime.SchemeBuilder{
 	computev1alpha1.AddToScheme,
 	netv1alpha1.AddToScheme,
 	platformv1alpha1.AddToScheme,
+	storagev1alpha1.AddToScheme,
 }
 
 // AddToScheme adds all types of this clientset into the given scheme. This allows composition

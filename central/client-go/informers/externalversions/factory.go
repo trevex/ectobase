@@ -14,6 +14,7 @@ import (
 	internalinterfaces "github.com/trevex/ectobase/central/client-go/informers/externalversions/internalinterfaces"
 	net "github.com/trevex/ectobase/central/client-go/informers/externalversions/net"
 	platform "github.com/trevex/ectobase/central/client-go/informers/externalversions/platform"
+	storage "github.com/trevex/ectobase/central/client-go/informers/externalversions/storage"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -316,6 +317,7 @@ type SharedInformerFactory interface {
 	Compute() compute.Interface
 	Net() net.Interface
 	Platform() platform.Interface
+	Storage() storage.Interface
 }
 
 func (f *sharedInformerFactory) Compiled() compiled.Interface {
@@ -332,4 +334,8 @@ func (f *sharedInformerFactory) Net() net.Interface {
 
 func (f *sharedInformerFactory) Platform() platform.Interface {
 	return platform.New(f, f.namespace, f.tweakListOptions)
+}
+
+func (f *sharedInformerFactory) Storage() storage.Interface {
+	return storage.New(f, f.namespace, f.tweakListOptions)
 }

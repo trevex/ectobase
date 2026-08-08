@@ -19,7 +19,6 @@ type NetV1alpha1Interface interface {
 	NetworkInterfacesGetter
 	VPCsGetter
 	VPCPeeringsGetter
-	VolumesGetter
 }
 
 // NetV1alpha1Client is used to interact with features provided by the net.ectobase.dev group.
@@ -53,10 +52,6 @@ func (c *NetV1alpha1Client) VPCs(namespace string) VPCInterface {
 
 func (c *NetV1alpha1Client) VPCPeerings(namespace string) VPCPeeringInterface {
 	return newVPCPeerings(c, namespace)
-}
-
-func (c *NetV1alpha1Client) Volumes(namespace string) VolumeInterface {
-	return newVolumes(c, namespace)
 }
 
 // NewForConfig creates a new NetV1alpha1Client for the given config.

@@ -29,7 +29,7 @@ spec:
   # Pinned MAC — the VMI's virtio NIC MUST carry the same MAC (KubeVirt pod-tap binding).
   mac: "52:54:00:00:00:20"
 ---
-apiVersion: net.ectobase.dev/v1alpha1
+apiVersion: storage.ectobase.dev/v1alpha1
 kind: Volume
 metadata:
   name: tier2-disk

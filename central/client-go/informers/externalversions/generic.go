@@ -9,6 +9,7 @@ import (
 	computev1alpha1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platformv1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
+	storagev1alpha1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	cache "k8s.io/client-go/tools/cache"
 )
@@ -70,12 +71,14 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Net().V1alpha1().VPCs().Informer()}, nil
 	case netv1alpha1.SchemeGroupVersion.WithResource("vpcpeerings"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Net().V1alpha1().VPCPeerings().Informer()}, nil
-	case netv1alpha1.SchemeGroupVersion.WithResource("volumes"):
-		return &genericInformer{resource: resource.GroupResource(), informer: f.Net().V1alpha1().Volumes().Informer()}, nil
 
 		// Group=platform.ectobase.dev, Version=v1alpha1
 	case platformv1alpha1.SchemeGroupVersion.WithResource("clusterpools"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Platform().V1alpha1().ClusterPools().Informer()}, nil
+
+		// Group=storage.ectobase.dev, Version=v1alpha1
+	case storagev1alpha1.SchemeGroupVersion.WithResource("volumes"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Storage().V1alpha1().Volumes().Informer()}, nil
 
 	}
 

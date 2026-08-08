@@ -189,23 +189,3 @@ func (in VPCSpec) OpenAPIModelName() string {
 func (in VPCStatus) OpenAPIModelName() string {
 	return "dev.ectobase.net.v1alpha1.VPCStatus"
 }
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in Volume) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.Volume"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in VolumeList) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.VolumeList"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in VolumeSpec) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.VolumeSpec"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in VolumeStatus) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.VolumeStatus"
-}

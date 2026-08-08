@@ -22,8 +22,6 @@ type Interface interface {
 	VPCs() VPCInformer
 	// VPCPeerings returns a VPCPeeringInformer.
 	VPCPeerings() VPCPeeringInformer
-	// Volumes returns a VolumeInformer.
-	Volumes() VolumeInformer
 }
 
 type version struct {
@@ -70,9 +68,4 @@ func (v *version) VPCs() VPCInformer {
 // VPCPeerings returns a VPCPeeringInformer.
 func (v *version) VPCPeerings() VPCPeeringInformer {
 	return &vPCPeeringInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
-}
-
-// Volumes returns a VolumeInformer.
-func (v *version) Volumes() VolumeInformer {
-	return &volumeInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }

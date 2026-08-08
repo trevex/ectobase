@@ -31,8 +31,5 @@ var Funcs = func(codecs runtimeserializer.CodecFactory) []any {
 		func(s *net.VPCPeeringSpec, c randfill.Continue) {
 			c.FillNoCustom(s)
 		},
-		func(s *net.VolumeSpec, c randfill.Continue) {
-			c.FillNoCustom(s)
-		},
 	}
 }

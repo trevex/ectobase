@@ -10,6 +10,7 @@ import (
 	computev1alpha1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platformv1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
+	storagev1alpha1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 	v1 "k8s.io/api/core/v1"
 	resource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -95,16 +96,16 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		netv1alpha1.VPCReference{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_VPCReference(ref),
 		netv1alpha1.VPCSpec{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_VPCSpec(ref),
 		netv1alpha1.VPCStatus{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_VPCStatus(ref),
-		netv1alpha1.Volume{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_Volume(ref),
-		netv1alpha1.VolumeList{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_VolumeList(ref),
-		netv1alpha1.VolumeSpec{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_VolumeSpec(ref),
-		netv1alpha1.VolumeStatus{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_VolumeStatus(ref),
 		platformv1alpha1.ClusterPool{}.OpenAPIModelName():            schema_ectobase_api_platform_v1alpha1_ClusterPool(ref),
 		platformv1alpha1.ClusterPoolLease{}.OpenAPIModelName():       schema_ectobase_api_platform_v1alpha1_ClusterPoolLease(ref),
 		platformv1alpha1.ClusterPoolList{}.OpenAPIModelName():        schema_ectobase_api_platform_v1alpha1_ClusterPoolList(ref),
 		platformv1alpha1.ClusterPoolSpec{}.OpenAPIModelName():        schema_ectobase_api_platform_v1alpha1_ClusterPoolSpec(ref),
 		platformv1alpha1.ClusterPoolStatus{}.OpenAPIModelName():      schema_ectobase_api_platform_v1alpha1_ClusterPoolStatus(ref),
 		platformv1alpha1.NodeDrainStatus{}.OpenAPIModelName():        schema_ectobase_api_platform_v1alpha1_NodeDrainStatus(ref),
+		storagev1alpha1.Volume{}.OpenAPIModelName():                  schema_ectobase_api_storage_v1alpha1_Volume(ref),
+		storagev1alpha1.VolumeList{}.OpenAPIModelName():              schema_ectobase_api_storage_v1alpha1_VolumeList(ref),
+		storagev1alpha1.VolumeSpec{}.OpenAPIModelName():              schema_ectobase_api_storage_v1alpha1_VolumeSpec(ref),
+		storagev1alpha1.VolumeStatus{}.OpenAPIModelName():            schema_ectobase_api_storage_v1alpha1_VolumeStatus(ref),
 		v1.AWSElasticBlockStoreVolumeSource{}.OpenAPIModelName():     schema_k8sio_api_core_v1_AWSElasticBlockStoreVolumeSource(ref),
 		v1.Affinity{}.OpenAPIModelName():                             schema_k8sio_api_core_v1_Affinity(ref),
 		v1.AppArmorProfile{}.OpenAPIModelName():                      schema_k8sio_api_core_v1_AppArmorProfile(ref),
@@ -3534,158 +3535,6 @@ func schema_ectobase_api_net_v1alpha1_VPCStatus(ref common.ReferenceCallback) co
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_Volume(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "Volume is a persistent RBD-backed disk referenced by a VirtualMachine.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"kind": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"apiVersion": {
-						SchemaProps: spec.SchemaProps{
-							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"metadata": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
-						},
-					},
-					"spec": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(netv1alpha1.VolumeSpec{}.OpenAPIModelName()),
-						},
-					},
-					"status": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(netv1alpha1.VolumeStatus{}.OpenAPIModelName()),
-						},
-					},
-				},
-			},
-		},
-		Dependencies: []string{
-			netv1alpha1.VolumeSpec{}.OpenAPIModelName(), netv1alpha1.VolumeStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
-	}
-}
-
-func schema_ectobase_api_net_v1alpha1_VolumeList(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "VolumeList is a list of Volume objects.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"kind": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"apiVersion": {
-						SchemaProps: spec.SchemaProps{
-							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"metadata": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
-						},
-					},
-					"items": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref(netv1alpha1.Volume{}.OpenAPIModelName()),
-									},
-								},
-							},
-						},
-					},
-				},
-				Required: []string{"items"},
-			},
-		},
-		Dependencies: []string{
-			netv1alpha1.Volume{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
-	}
-}
-
-func schema_ectobase_api_net_v1alpha1_VolumeSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "VolumeSpec defines a persistent RBD-backed disk for a VM.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"size": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Size is the requested disk size (e.g. 10Gi).",
-							Ref:         ref(resource.Quantity{}.OpenAPIModelName()),
-						},
-					},
-					"storageClass": {
-						SchemaProps: spec.SchemaProps{
-							Description: "StorageClass is the ceph-csi RBD StorageClass; empty uses the cluster default.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"bootImage": {
-						SchemaProps: spec.SchemaProps{
-							Description: "BootImage, if set, is a containerDisk/registry image imported into the disk (making it bootable). Empty leaves a blank data disk of Size.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-				},
-				Required: []string{"size"},
-			},
-		},
-		Dependencies: []string{
-			resource.Quantity{}.OpenAPIModelName()},
-	}
-}
-
-func schema_ectobase_api_net_v1alpha1_VolumeStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "VolumeStatus is the observed state of a Volume.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"phase": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Phase is the current lifecycle phase of the Volume.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
 func schema_ectobase_api_platform_v1alpha1_ClusterPool(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -3979,6 +3828,158 @@ func schema_ectobase_api_platform_v1alpha1_NodeDrainStatus(ref common.ReferenceC
 					},
 				},
 				Required: []string{"prefix"},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_storage_v1alpha1_Volume(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "Volume is a persistent RBD-backed disk referenced by a VirtualMachine.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(storagev1alpha1.VolumeSpec{}.OpenAPIModelName()),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(storagev1alpha1.VolumeStatus{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			storagev1alpha1.VolumeSpec{}.OpenAPIModelName(), storagev1alpha1.VolumeStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_storage_v1alpha1_VolumeList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VolumeList is a list of Volume objects.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(storagev1alpha1.Volume{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			storagev1alpha1.Volume{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_storage_v1alpha1_VolumeSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VolumeSpec defines a persistent RBD-backed disk for a VM.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"size": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Size is the requested disk size (e.g. 10Gi).",
+							Ref:         ref(resource.Quantity{}.OpenAPIModelName()),
+						},
+					},
+					"storageClass": {
+						SchemaProps: spec.SchemaProps{
+							Description: "StorageClass is the ceph-csi RBD StorageClass; empty uses the cluster default.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"bootImage": {
+						SchemaProps: spec.SchemaProps{
+							Description: "BootImage, if set, is a containerDisk/registry image imported into the disk (making it bootable). Empty leaves a blank data disk of Size.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"size"},
+			},
+		},
+		Dependencies: []string{
+			resource.Quantity{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_storage_v1alpha1_VolumeStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VolumeStatus is the observed state of a Volume.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"phase": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Phase is the current lifecycle phase of the Volume.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
 			},
 		},
 	}

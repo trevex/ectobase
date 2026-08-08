@@ -23,6 +23,8 @@ import (
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
 	compiledinstall "github.com/trevex/ectobase/api/compiled/install"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	storageinstall "github.com/trevex/ectobase/api/storage/install"
+	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 )
 
 // TestVPC_CRUD proves the net.ectobase.dev group is served end-to-end by the
@@ -38,11 +40,12 @@ func TestVPC_CRUD(t *testing.T) {
 
 	scheme := runtime.NewScheme()
 	// Both groups are installed: the aggregated server binary serves both, and
-	// the client scheme must know the net, compiled, and compute types to (de)serialize them.
+	// the client scheme must know the net, compiled, compute, and storage types to (de)serialize them.
 	platforminstall.Install(scheme)
 	netinstall.Install(scheme)
 	compiledinstall.Install(scheme)
 	computeinstall.Install(scheme)
+	storageinstall.Install(scheme)
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
 	}
@@ -146,6 +149,7 @@ func startNetEnv(t *testing.T) (client.Client, context.Context) {
 	netinstall.Install(scheme)
 	compiledinstall.Install(scheme)
 	computeinstall.Install(scheme)
+	storageinstall.Install(scheme)
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
 	}
@@ -287,12 +291,12 @@ func TestCompiledNIC_SpecClusterNameSelector(t *testing.T) {
 func TestVolume_CRUD(t *testing.T) {
 	c, ctx := startNetEnv(t)
 
-	vol := &netv1.Volume{
+	vol := &storagev1.Volume{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "test-vol-",
 			Namespace:    "default",
 		},
-		Spec: netv1.VolumeSpec{
+		Spec: storagev1.VolumeSpec{
 			Size:         resource.MustParse("10Gi"),
 			StorageClass: "ceph-rbd",
 			BootImage:    "quay.io/containerdisks/fedora:41",
@@ -306,7 +310,7 @@ func TestVolume_CRUD(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = c.Delete(ctx, vol) })
 
-	got := &netv1.Volume{}
+	got := &storagev1.Volume{}
 	if err := c.Get(ctx, client.ObjectKeyFromObject(vol), got); err != nil {
 		t.Fatalf("Get: %v", err)
 	}

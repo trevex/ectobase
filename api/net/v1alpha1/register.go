@@ -55,8 +55,6 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&NATGatewayList{},
 		&FloatingIP{},
 		&FloatingIPList{},
-		&Volume{},
-		&VolumeList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil

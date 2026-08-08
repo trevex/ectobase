@@ -1,7 +1,7 @@
 // Copyright 2026 ectobase contributors
 // SPDX-License-Identifier: Apache-2.0
 
-package net
+package storage
 
 import (
 	"k8s.io/apimachinery/pkg/api/resource"

@@ -26,7 +26,7 @@ func Volume(name, namespace string) *VolumeApplyConfiguration {
 	b.WithName(name)
 	b.WithNamespace(namespace)
 	b.WithKind("Volume")
-	b.WithAPIVersion("net.ectobase.dev/v1alpha1")
+	b.WithAPIVersion("storage.ectobase.dev/v1alpha1")
 	return b
 }
 

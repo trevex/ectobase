@@ -10,6 +10,7 @@ import (
 	computev1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/compute/v1alpha1"
 	netv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/net/v1alpha1"
 	platformv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/platform/v1alpha1"
+	storagev1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/storage/v1alpha1"
 	discovery "k8s.io/client-go/discovery"
 	rest "k8s.io/client-go/rest"
 	flowcontrol "k8s.io/client-go/util/flowcontrol"
@@ -21,6 +22,7 @@ type Interface interface {
 	ComputeV1alpha1() computev1alpha1.ComputeV1alpha1Interface
 	NetV1alpha1() netv1alpha1.NetV1alpha1Interface
 	PlatformV1alpha1() platformv1alpha1.PlatformV1alpha1Interface
+	StorageV1alpha1() storagev1alpha1.StorageV1alpha1Interface
 }
 
 // Clientset contains the clients for groups.
@@ -30,6 +32,7 @@ type Clientset struct {
 	computeV1alpha1  *computev1alpha1.ComputeV1alpha1Client
 	netV1alpha1      *netv1alpha1.NetV1alpha1Client
 	platformV1alpha1 *platformv1alpha1.PlatformV1alpha1Client
+	storageV1alpha1  *storagev1alpha1.StorageV1alpha1Client
 }
 
 // CompiledV1alpha1 retrieves the CompiledV1alpha1Client
@@ -50,6 +53,11 @@ func (c *Clientset) NetV1alpha1() netv1alpha1.NetV1alpha1Interface {
 // PlatformV1alpha1 retrieves the PlatformV1alpha1Client
 func (c *Clientset) PlatformV1alpha1() platformv1alpha1.PlatformV1alpha1Interface {
 	return c.platformV1alpha1
+}
+
+// StorageV1alpha1 retrieves the StorageV1alpha1Client
+func (c *Clientset) StorageV1alpha1() storagev1alpha1.StorageV1alpha1Interface {
+	return c.storageV1alpha1
 }
 
 // Discovery retrieves the DiscoveryClient
@@ -112,6 +120,10 @@ func NewForConfigAndClient(c *rest.Config, httpClient *http.Client) (*Clientset,
 	if err != nil {
 		return nil, err
 	}
+	cs.storageV1alpha1, err = storagev1alpha1.NewForConfigAndClient(&configShallowCopy, httpClient)
+	if err != nil {
+		return nil, err
+	}
 
 	cs.DiscoveryClient, err = discovery.NewDiscoveryClientForConfigAndClient(&configShallowCopy, httpClient)
 	if err != nil {
@@ -137,6 +149,7 @@ func New(c rest.Interface) *Clientset {
 	cs.computeV1alpha1 = computev1alpha1.New(c)
 	cs.netV1alpha1 = netv1alpha1.New(c)
 	cs.platformV1alpha1 = platformv1alpha1.New(c)
+	cs.storageV1alpha1 = storagev1alpha1.New(c)
 
 	cs.DiscoveryClient = discovery.NewDiscoveryClient(c)
 	return &cs

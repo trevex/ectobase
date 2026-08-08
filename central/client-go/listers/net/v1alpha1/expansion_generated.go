@@ -57,11 +57,3 @@ type VPCPeeringListerExpansion interface{}
 // VPCPeeringNamespaceListerExpansion allows custom methods to be added to
 // VPCPeeringNamespaceLister.
 type VPCPeeringNamespaceListerExpansion interface{}
-
-// VolumeListerExpansion allows custom methods to be added to
-// VolumeLister.
-type VolumeListerExpansion interface{}
-
-// VolumeNamespaceListerExpansion allows custom methods to be added to
-// VolumeNamespaceLister.
-type VolumeNamespaceListerExpansion interface{}

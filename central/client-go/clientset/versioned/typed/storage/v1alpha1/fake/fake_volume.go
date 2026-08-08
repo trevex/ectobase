@@ -3,21 +3,21 @@
 package fake
 
 import (
-	v1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
-	netv1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/net/v1alpha1"
-	typednetv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/net/v1alpha1"
+	v1alpha1 "github.com/trevex/ectobase/api/storage/v1alpha1"
+	storagev1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/storage/v1alpha1"
+	typedstoragev1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/storage/v1alpha1"
 	gentype "k8s.io/client-go/gentype"
 )
 
 // fakeVolumes implements VolumeInterface
 type fakeVolumes struct {
-	*gentype.FakeClientWithListAndApply[*v1alpha1.Volume, *v1alpha1.VolumeList, *netv1alpha1.VolumeApplyConfiguration]
-	Fake *FakeNetV1alpha1
+	*gentype.FakeClientWithListAndApply[*v1alpha1.Volume, *v1alpha1.VolumeList, *storagev1alpha1.VolumeApplyConfiguration]
+	Fake *FakeStorageV1alpha1
 }
 
-func newFakeVolumes(fake *FakeNetV1alpha1, namespace string) typednetv1alpha1.VolumeInterface {
+func newFakeVolumes(fake *FakeStorageV1alpha1, namespace string) typedstoragev1alpha1.VolumeInterface {
 	return &fakeVolumes{
-		gentype.NewFakeClientWithListAndApply[*v1alpha1.Volume, *v1alpha1.VolumeList, *netv1alpha1.VolumeApplyConfiguration](
+		gentype.NewFakeClientWithListAndApply[*v1alpha1.Volume, *v1alpha1.VolumeList, *storagev1alpha1.VolumeApplyConfiguration](
 			fake.Fake,
 			namespace,
 			v1alpha1.SchemeGroupVersion.WithResource("volumes"),

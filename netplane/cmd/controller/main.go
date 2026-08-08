@@ -11,6 +11,7 @@ import (
 
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 	"github.com/trevex/ectobase/netplane/controllers"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
@@ -43,6 +44,9 @@ func main() {
 	}
 	if err := compiledv1.AddToScheme(scheme); err != nil {
 		log.Fatalf("add compiled scheme: %v", err)
+	}
+	if err := storagev1.AddToScheme(scheme); err != nil {
+		log.Fatalf("add storage scheme: %v", err)
 	}
 
 	// Build the rest.Config from --central-kubeconfig if given, else fall back to the

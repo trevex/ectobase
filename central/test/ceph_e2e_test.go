@@ -30,6 +30,8 @@ import (
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	compiledinstall "github.com/trevex/ectobase/api/compiled/install"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	storageinstall "github.com/trevex/ectobase/api/storage/install"
+	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/broker"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
 	"github.com/trevex/ectobase/central/pkg/scheduler"
@@ -69,6 +71,7 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 	netinstall.Install(scheme)
 	compiledinstall.Install(scheme)
 	computeinstall.Install(scheme)
+	storageinstall.Install(scheme)
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
 	}
@@ -188,9 +191,9 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 		t.Fatalf("central status update nic-a: %v", err)
 	}
 
-	boot := &netv1.Volume{
+	boot := &storagev1.Volume{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "boot"},
-		Spec: netv1.VolumeSpec{
+		Spec: storagev1.VolumeSpec{
 			Size:         resource.MustParse("10Gi"),
 			StorageClass: "ceph-rbd",
 			BootImage:    "quay.io/containerdisks/fedora:41",

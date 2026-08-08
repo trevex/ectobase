@@ -7,7 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -26,8 +26,8 @@ import (
 // CompileVolumeAttachments lowers a VirtualMachine + its referenced Volumes into one
 // CompiledVolumeAttachment per VolumeRef, each cluster-bound (from placement) and
 // workload-labelled. A Volume with a BootImage yields Boot=true. Pure.
-func CompileVolumeAttachments(vm *computev1.VirtualMachine, volumes []netv1.Volume, placement Placement) []compiledv1.CompiledVolumeAttachment {
-	byName := map[string]*netv1.Volume{}
+func CompileVolumeAttachments(vm *computev1.VirtualMachine, volumes []storagev1.Volume, placement Placement) []compiledv1.CompiledVolumeAttachment {
+	byName := map[string]*storagev1.Volume{}
 	for i := range volumes {
 		byName[volumes[i].Name] = &volumes[i]
 	}
@@ -65,7 +65,7 @@ func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req 
 	if err := r.Client.Get(ctx, req.NamespacedName, &vm); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	var volList netv1.VolumeList
+	var volList storagev1.VolumeList
 	if err := r.Client.List(ctx, &volList, client.InNamespace(vm.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list volumes: %w", err)
 	}
@@ -132,14 +132,14 @@ func (r *CompiledVolumeAttachmentReconciler) SetupWithManager(mgr ctrl.Manager) 
 		Owns(&compiledv1.CompiledVolumeAttachment{}).
 		// Only Volume spec changes (Size/StorageClass/BootImage) affect the compiled
 		// attachment; GenerationChangedPredicate skips re-compiling on Volume status writes.
-		Watches(&netv1.Volume{}, handler.EnqueueRequestsFromMapFunc(r.vmsForVolume),
+		Watches(&storagev1.Volume{}, handler.EnqueueRequestsFromMapFunc(r.vmsForVolume),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Complete(r)
 }
 
 // vmsForVolume maps a Volume event to reconcile requests for VMs (same namespace) that reference it.
 func (r *CompiledVolumeAttachmentReconciler) vmsForVolume(ctx context.Context, obj client.Object) []reconcile.Request {
-	vol, ok := obj.(*netv1.Volume)
+	vol, ok := obj.(*storagev1.Volume)
 	if !ok {
 		return nil
 	}

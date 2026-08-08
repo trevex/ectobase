@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: volumes.net.ectobase.dev
+  name: volumes.storage.ectobase.dev
 spec:
-  group: net.ectobase.dev
+  group: storage.ectobase.dev
   names:
     kind: Volume
     listKind: VolumeList

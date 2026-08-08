@@ -21,6 +21,9 @@ import (
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	netapi "github.com/trevex/ectobase/api/net"
 	netinstall "github.com/trevex/ectobase/api/net/install"
+	storageapi "github.com/trevex/ectobase/api/storage"
+	storageinstall "github.com/trevex/ectobase/api/storage/install"
+	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 	"github.com/trevex/ectobase/api/platform"
 	"github.com/trevex/ectobase/api/platform/install"
 	"github.com/trevex/ectobase/api/platform/v1alpha1"
@@ -39,6 +42,7 @@ func init() {
 	netinstall.Install(scheme)
 	compiledinstall.Install(scheme)
 	computeinstall.Install(scheme)
+	storageinstall.Install(scheme)
 
 	// we need to add the options to empty v1
 	// TODO: fix the server code to avoid this
@@ -71,7 +75,7 @@ func main() {
 		With(apiserver.Resource(&netapi.LoadBalancer{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.NATGateway{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.VPCPeering{}, netv1.SchemeGroupVersion)).
-		With(apiserver.Resource(&netapi.Volume{}, netv1.SchemeGroupVersion)).
+		With(apiserver.Resource(&storageapi.Volume{}, storagev1.SchemeGroupVersion)).
 		With(apiserver.Resource(&computeapi.VirtualMachine{}, computev1.SchemeGroupVersion)).
 		With(apiserver.Resource(&computeapi.Container{}, computev1.SchemeGroupVersion)).
 		With(apiserver.Resource(&compiledapi.CompiledNIC{}, compiledv1.SchemeGroupVersion)).

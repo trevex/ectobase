@@ -6,10 +6,10 @@ import (
 	context "context"
 	time "time"
 
-	apinetv1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	apistoragev1alpha1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 	versioned "github.com/trevex/ectobase/central/client-go/clientset/versioned"
 	internalinterfaces "github.com/trevex/ectobase/central/client-go/informers/externalversions/internalinterfaces"
-	netv1alpha1 "github.com/trevex/ectobase/central/client-go/listers/net/v1alpha1"
+	storagev1alpha1 "github.com/trevex/ectobase/central/client-go/listers/storage/v1alpha1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -21,7 +21,7 @@ import (
 // Volumes.
 type VolumeInformer interface {
 	Informer() cache.SharedIndexInformer
-	Lister() netv1alpha1.VolumeLister
+	Lister() storagev1alpha1.VolumeLister
 }
 
 type volumeInformer struct {
@@ -48,7 +48,7 @@ func NewFilteredVolumeInformer(client versioned.Interface, namespace string, res
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
 func NewVolumeInformerWithOptions(client versioned.Interface, namespace string, options internalinterfaces.InformerOptions) cache.SharedIndexInformer {
-	gvr := schema.GroupVersionResource{Group: "net.ectobase.dev", Version: "v1alpha1", Resource: "volumes"}
+	gvr := schema.GroupVersionResource{Group: "storage.ectobase.dev", Version: "v1alpha1", Resource: "volumes"}
 	identifier := options.InformerName.WithResource(gvr)
 	tweakListOptions := options.TweakListOptions
 	return cache.NewSharedIndexInformerWithOptions(
@@ -57,28 +57,28 @@ func NewVolumeInformerWithOptions(client versioned.Interface, namespace string, 
 				if tweakListOptions != nil {
 					tweakListOptions(&opts)
 				}
-				return client.NetV1alpha1().Volumes(namespace).List(context.Background(), opts)
+				return client.StorageV1alpha1().Volumes(namespace).List(context.Background(), opts)
 			},
 			WatchFunc: func(opts v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&opts)
 				}
-				return client.NetV1alpha1().Volumes(namespace).Watch(context.Background(), opts)
+				return client.StorageV1alpha1().Volumes(namespace).Watch(context.Background(), opts)
 			},
 			ListWithContextFunc: func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&opts)
 				}
-				return client.NetV1alpha1().Volumes(namespace).List(ctx, opts)
+				return client.StorageV1alpha1().Volumes(namespace).List(ctx, opts)
 			},
 			WatchFuncWithContext: func(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&opts)
 				}
-				return client.NetV1alpha1().Volumes(namespace).Watch(ctx, opts)
+				return client.StorageV1alpha1().Volumes(namespace).Watch(ctx, opts)
 			},
 		}, client),
-		&apinetv1alpha1.Volume{},
+		&apistoragev1alpha1.Volume{},
 		cache.SharedIndexInformerOptions{
 			ResyncPeriod: options.ResyncPeriod,
 			Indexers:     options.Indexers,
@@ -92,9 +92,9 @@ func (f *volumeInformer) defaultInformer(client versioned.Interface, resyncPerio
 }
 
 func (f *volumeInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&apinetv1alpha1.Volume{}, f.defaultInformer)
+	return f.factory.InformerFor(&apistoragev1alpha1.Volume{}, f.defaultInformer)
 }
 
-func (f *volumeInformer) Lister() netv1alpha1.VolumeLister {
-	return netv1alpha1.NewVolumeLister(f.Informer().GetIndexer())
+func (f *volumeInformer) Lister() storagev1alpha1.VolumeLister {
+	return storagev1alpha1.NewVolumeLister(f.Informer().GetIndexer())
 }

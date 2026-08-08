@@ -3,7 +3,7 @@ package controllers
 import (
 	"testing"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -15,9 +15,9 @@ func TestCompileVolumeAttachments(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "vm1"},
 		Spec:       computev1.VirtualMachineSpec{ClusterName: "c1", VolumeRefs: []computev1.LocalObjectReference{{Name: "boot"}, {Name: "data"}}},
 	}
-	volumes := []netv1.Volume{
-		{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "boot"}, Spec: netv1.VolumeSpec{Size: resource.MustParse("10Gi"), BootImage: "quay.io/containerdisks/fedora:41", StorageClass: "ceph-rbd"}},
-		{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "data"}, Spec: netv1.VolumeSpec{Size: resource.MustParse("5Gi")}},
+	volumes := []storagev1.Volume{
+		{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "boot"}, Spec: storagev1.VolumeSpec{Size: resource.MustParse("10Gi"), BootImage: "quay.io/containerdisks/fedora:41", StorageClass: "ceph-rbd"}},
+		{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "data"}, Spec: storagev1.VolumeSpec{Size: resource.MustParse("5Gi")}},
 	}
 	atts := CompileVolumeAttachments(vm, volumes, Placement{ClusterName: "c1", WorkloadID: "vm1"})
 	if len(atts) != 2 {

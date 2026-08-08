@@ -7,11 +7,13 @@ import (
 	computev1alpha1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platformv1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
+	storagev1alpha1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 	compiledv1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/compiled/v1alpha1"
 	applyconfigurationscomputev1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/compute/v1alpha1"
 	internal "github.com/trevex/ectobase/central/client-go/applyconfigurations/internal"
 	applyconfigurationsnetv1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/net/v1alpha1"
 	applyconfigurationsplatformv1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/platform/v1alpha1"
+	applyconfigurationsstoragev1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/storage/v1alpha1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	managedfields "k8s.io/apimachinery/pkg/util/managedfields"
@@ -126,12 +128,6 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &applyconfigurationsnetv1alpha1.PortStatusApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("RateLimit"):
 		return &applyconfigurationsnetv1alpha1.RateLimitApplyConfiguration{}
-	case netv1alpha1.SchemeGroupVersion.WithKind("Volume"):
-		return &applyconfigurationsnetv1alpha1.VolumeApplyConfiguration{}
-	case netv1alpha1.SchemeGroupVersion.WithKind("VolumeSpec"):
-		return &applyconfigurationsnetv1alpha1.VolumeSpecApplyConfiguration{}
-	case netv1alpha1.SchemeGroupVersion.WithKind("VolumeStatus"):
-		return &applyconfigurationsnetv1alpha1.VolumeStatusApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("VPC"):
 		return &applyconfigurationsnetv1alpha1.VPCApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("VPCPeering"):
@@ -158,6 +154,14 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &applyconfigurationsplatformv1alpha1.ClusterPoolStatusApplyConfiguration{}
 	case platformv1alpha1.SchemeGroupVersion.WithKind("NodeDrainStatus"):
 		return &applyconfigurationsplatformv1alpha1.NodeDrainStatusApplyConfiguration{}
+
+		// Group=storage.ectobase.dev, Version=v1alpha1
+	case storagev1alpha1.SchemeGroupVersion.WithKind("Volume"):
+		return &applyconfigurationsstoragev1alpha1.VolumeApplyConfiguration{}
+	case storagev1alpha1.SchemeGroupVersion.WithKind("VolumeSpec"):
+		return &applyconfigurationsstoragev1alpha1.VolumeSpecApplyConfiguration{}
+	case storagev1alpha1.SchemeGroupVersion.WithKind("VolumeStatus"):
+		return &applyconfigurationsstoragev1alpha1.VolumeStatusApplyConfiguration{}
 
 	}
 	return nil

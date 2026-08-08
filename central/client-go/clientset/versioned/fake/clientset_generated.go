@@ -13,6 +13,8 @@ import (
 	fakenetv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/net/v1alpha1/fake"
 	platformv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/platform/v1alpha1"
 	fakeplatformv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/platform/v1alpha1/fake"
+	storagev1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/storage/v1alpha1"
+	fakestoragev1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/storage/v1alpha1/fake"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
@@ -144,4 +146,9 @@ func (c *Clientset) NetV1alpha1() netv1alpha1.NetV1alpha1Interface {
 // PlatformV1alpha1 retrieves the PlatformV1alpha1Client
 func (c *Clientset) PlatformV1alpha1() platformv1alpha1.PlatformV1alpha1Interface {
 	return &fakeplatformv1alpha1.FakePlatformV1alpha1{Fake: &c.Fake}
+}
+
+// StorageV1alpha1 retrieves the StorageV1alpha1Client
+func (c *Clientset) StorageV1alpha1() storagev1alpha1.StorageV1alpha1Interface {
+	return &fakestoragev1alpha1.FakeStorageV1alpha1{Fake: &c.Fake}
 }
