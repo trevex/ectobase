@@ -53,12 +53,16 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&CompiledNICList{},
 		&CompiledVM{},
 		&CompiledVMList{},
+		&CompiledContainer{},
+		&CompiledContainerList{},
 		&Volume{},
 		&VolumeList{},
 		&CompiledVolumeAttachment{},
 		&CompiledVolumeAttachmentList{},
 		&VirtualMachine{},
 		&VirtualMachineList{},
+		&Container{},
+		&ContainerList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil
