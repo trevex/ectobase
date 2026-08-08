@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	"github.com/trevex/ectobase/api/platform/install"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
@@ -53,10 +54,14 @@ func main() {
 
 	scheme := runtime.NewScheme()
 	install.Install(scheme)
-	// The scheduler reads VirtualMachine (net) + ClusterPool (platform), so both
-	// groups must be present on the manager scheme.
+	// The scheduler/failover read VirtualMachine (compute.ectobase.dev) + ClusterPool
+	// (platform), and a NATGateway path touches net, so all three groups must be present
+	// on the manager scheme.
 	if err := netv1.AddToScheme(scheme); err != nil {
 		log.Fatalf("register net.ectobase.dev scheme: %v", err)
+	}
+	if err := computev1.AddToScheme(scheme); err != nil {
+		log.Fatalf("register compute.ectobase.dev scheme: %v", err)
 	}
 	// The aggregated group has no core-v1; register the meta options group so the
 	// client can encode List/Watch/Status requests.

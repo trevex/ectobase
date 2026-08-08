@@ -10,6 +10,7 @@ import (
 	"os"
 
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 	"github.com/trevex/ectobase/netplane/controllers"
@@ -44,6 +45,9 @@ func main() {
 	}
 	if err := compiledv1.AddToScheme(scheme); err != nil {
 		log.Fatalf("add compiled scheme: %v", err)
+	}
+	if err := computev1.AddToScheme(scheme); err != nil {
+		log.Fatalf("add compute scheme: %v", err)
 	}
 	if err := storagev1.AddToScheme(scheme); err != nil {
 		log.Fatalf("add storage scheme: %v", err)

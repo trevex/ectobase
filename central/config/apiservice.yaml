@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Registers the aggregated groups with the host kube-apiserver, pointing at the in-cluster
-# apiserver-service. The central apiserver serves BOTH platform.ectobase.dev (ClusterPool)
-# AND net.ectobase.dev (VPC/NetworkInterface/VirtualMachine/Volume + the
-# Compiled* types — main.go installs both schemes), so BOTH groups need an APIService or the
-# host kube-apiserver never routes net.ectobase.dev to central (the compiler/failover
-# controller and the VM/Volume fixtures live in that group). insecureSkipTLSVerify because the
-# serving cert is self-signed/ephemeral (see apiserver.yaml) — replace with a caBundle in prod.
+# apiserver-service. The central apiserver serves FIVE groups (main.go installs all their
+# schemes): platform.ectobase.dev (ClusterPool), net.ectobase.dev (VPC/NetworkInterface/
+# FirewallPolicy/FloatingIP/LoadBalancer/NATGateway/VPCPeering), compute.ectobase.dev
+# (VirtualMachine/Container), storage.ectobase.dev (Volume), and compiled.ectobase.dev
+# (CompiledNIC/CompiledVM/CompiledContainer/CompiledVolumeAttachment). EACH group needs its
+# own APIService or the host kube-apiserver never routes it to central — e.g. the broker's
+# RESTMapper can't discover compiled.ectobase.dev and crash-loops. insecureSkipTLSVerify
+# because the serving cert is self-signed/ephemeral (see apiserver.yaml) — caBundle in prod.
 ---
 apiVersion: apiregistration.k8s.io/v1
 kind: APIService
@@ -30,6 +32,51 @@ metadata:
   name: v1alpha1.net.ectobase.dev
 spec:
   group: net.ectobase.dev
+  version: v1alpha1
+  service:
+    namespace: system
+    name: apiserver-service
+    port: 443
+  insecureSkipTLSVerify: true
+  groupPriorityMinimum: 2000
+  versionPriority: 100
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.compute.ectobase.dev
+spec:
+  group: compute.ectobase.dev
+  version: v1alpha1
+  service:
+    namespace: system
+    name: apiserver-service
+    port: 443
+  insecureSkipTLSVerify: true
+  groupPriorityMinimum: 2000
+  versionPriority: 100
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.storage.ectobase.dev
+spec:
+  group: storage.ectobase.dev
+  version: v1alpha1
+  service:
+    namespace: system
+    name: apiserver-service
+    port: 443
+  insecureSkipTLSVerify: true
+  groupPriorityMinimum: 2000
+  versionPriority: 100
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.compiled.ectobase.dev
+spec:
+  group: compiled.ectobase.dev
   version: v1alpha1
   service:
     namespace: system
