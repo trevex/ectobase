@@ -121,6 +121,22 @@ rules:
   - apiGroups: ["net.ectobase.dev"]
     resources: ["compiledvms/status", "compiledvolumeattachments/status"]
     verbs: ["get", "update", "patch"]
+  # The CompiledContainerReconciler compiles Container -> CompiledContainer, and the
+  # CompiledNICReconciler derives an owned NIC's placement (clusterName/nodeName) from the owning
+  # Container. Without these the compiler's Container informer is forbidden -> the cache never syncs
+  # -> owned NICs fall back to the default cluster and no CompiledContainer is produced.
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["containers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["containers/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["compiledcontainers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["compiledcontainers/status"]
+    verbs: ["get", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

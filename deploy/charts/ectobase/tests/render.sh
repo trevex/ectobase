@@ -31,9 +31,9 @@ for tpl in "${!MAP[@]}"; do
   fi
 done
 
-# 2) CRDs: 12 with installCRDs, 0 without. (Count tracks crd-bases/*.yaml — bump when net types are added.)
+# 2) CRDs: 14 with installCRDs, 0 without. (Count tracks crd-bases/*.yaml — bump when net types are added.)
 n=$(render_show_only templates/crds.yaml "$DIR/values/ebpf-clab.yaml" | grep -c "kind: CustomResourceDefinition")
-[ "$n" = "12" ] && ok "installCRDs renders 12 CRDs" || bad "installCRDs rendered $n CRDs (want 12)"
+[ "$n" = "14" ] && ok "installCRDs renders 14 CRDs" || bad "installCRDs rendered $n CRDs (want 14)"
 
 # 3) DPDK renders under dpdk, not under ebpf.
 render_show_only templates/dataplane-dpdk.yaml "$DIR/values/dpdk-clab.yaml" | grep -q "flowplane-dpdk serve" \
