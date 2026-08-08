@@ -6,7 +6,7 @@ package clusterpool
 import (
 	"time"
 
-	platformv1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 )
 
 const (

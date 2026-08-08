@@ -5,7 +5,7 @@ package broker
 
 import (
 	netv1 "github.com/trevex/ectobase/api/v1alpha1"
-	platformv1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 )
 
 // NodeFact is a node's fence-relevant identity: its name and its /64 underlay prefix.

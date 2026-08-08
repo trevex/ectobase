@@ -3,7 +3,7 @@
 package scheme
 
 import (
-	platformv1alpha1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	platformv1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"

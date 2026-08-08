@@ -3,7 +3,7 @@
 package fake
 
 import (
-	v1alpha1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	v1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	platformv1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/platform/v1alpha1"
 	typedplatformv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/platform/v1alpha1"
 	gentype "k8s.io/client-go/gentype"

@@ -19,7 +19,7 @@ import (
 
 	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 	netinstall "github.com/trevex/ectobase/central/apis/net/install"
-	platforminstall "github.com/trevex/ectobase/central/apis/platform/install"
+	platforminstall "github.com/trevex/ectobase/api/platform/install"
 	"github.com/trevex/ectobase/central/pkg/broker"
 	"github.com/trevex/ectobase/netplane/controllers"
 )

@@ -8,7 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/trevex/ectobase/central/apis/platform"
+	"github.com/trevex/ectobase/api/platform"
 )
 
 // GroupName is the group name used in this package

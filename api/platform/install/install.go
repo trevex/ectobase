@@ -7,8 +7,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 
-	"github.com/trevex/ectobase/central/apis/platform"
-	"github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	"github.com/trevex/ectobase/api/platform"
+	"github.com/trevex/ectobase/api/platform/v1alpha1"
 )
 
 // Install registers the API group and adds types to a scheme

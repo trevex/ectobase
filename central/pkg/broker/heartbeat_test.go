@@ -15,8 +15,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	platforminstall "github.com/trevex/ectobase/central/apis/platform/install"
-	platformv1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	platforminstall "github.com/trevex/ectobase/api/platform/install"
+	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 )
 
 type staticReporter struct{ rl corev1.ResourceList }

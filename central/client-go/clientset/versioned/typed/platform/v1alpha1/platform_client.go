@@ -5,7 +5,7 @@ package v1alpha1
 import (
 	http "net/http"
 
-	platformv1alpha1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	platformv1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	scheme "github.com/trevex/ectobase/central/client-go/clientset/versioned/scheme"
 	rest "k8s.io/client-go/rest"
 )

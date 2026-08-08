@@ -7,7 +7,7 @@ import (
 	runtimeserializer "k8s.io/apimachinery/pkg/runtime/serializer"
 	"sigs.k8s.io/randfill"
 
-	"github.com/trevex/ectobase/central/apis/platform"
+	"github.com/trevex/ectobase/api/platform"
 )
 
 // Funcs returns the fuzzer functions for the platform api group.

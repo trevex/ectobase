@@ -6,7 +6,7 @@ package broker
 import (
 	"testing"
 
-	platformv1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 )
 
 func TestDrainStatus_MarksEmptyNodesDrained(t *testing.T) {

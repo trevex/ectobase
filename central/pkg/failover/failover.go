@@ -18,7 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	netv1 "github.com/trevex/ectobase/api/v1alpha1"
-	platformv1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
 	"github.com/trevex/ectobase/central/pkg/scheduler"
 )

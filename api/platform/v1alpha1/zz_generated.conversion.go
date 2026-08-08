@@ -8,7 +8,7 @@ package v1alpha1
 import (
 	unsafe "unsafe"
 
-	platform "github.com/trevex/ectobase/central/apis/platform"
+	platform "github.com/trevex/ectobase/api/platform"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	conversion "k8s.io/apimachinery/pkg/conversion"

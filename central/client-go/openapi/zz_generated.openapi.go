@@ -6,7 +6,7 @@
 package openapi
 
 import (
-	v1alpha1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	v1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	v1 "k8s.io/api/core/v1"
 	resource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,6 +18,12 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
+		v1alpha1.ClusterPool{}.OpenAPIModelName():                                schema_ectobase_api_platform_v1alpha1_ClusterPool(ref),
+		v1alpha1.ClusterPoolLease{}.OpenAPIModelName():                           schema_ectobase_api_platform_v1alpha1_ClusterPoolLease(ref),
+		v1alpha1.ClusterPoolList{}.OpenAPIModelName():                            schema_ectobase_api_platform_v1alpha1_ClusterPoolList(ref),
+		v1alpha1.ClusterPoolSpec{}.OpenAPIModelName():                            schema_ectobase_api_platform_v1alpha1_ClusterPoolSpec(ref),
+		v1alpha1.ClusterPoolStatus{}.OpenAPIModelName():                          schema_ectobase_api_platform_v1alpha1_ClusterPoolStatus(ref),
+		v1alpha1.NodeDrainStatus{}.OpenAPIModelName():                            schema_ectobase_api_platform_v1alpha1_NodeDrainStatus(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.CompiledContainer":              schema_trevex_ectobase_api_v1alpha1_CompiledContainer(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.CompiledContainerInterface":     schema_trevex_ectobase_api_v1alpha1_CompiledContainerInterface(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.CompiledContainerList":          schema_trevex_ectobase_api_v1alpha1_CompiledContainerList(ref),
@@ -93,12 +99,6 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/trevex/ectobase/api/v1alpha1.VolumeList":                     schema_trevex_ectobase_api_v1alpha1_VolumeList(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.VolumeSpec":                     schema_trevex_ectobase_api_v1alpha1_VolumeSpec(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.VolumeStatus":                   schema_trevex_ectobase_api_v1alpha1_VolumeStatus(ref),
-		v1alpha1.ClusterPool{}.OpenAPIModelName():                                schema_central_apis_platform_v1alpha1_ClusterPool(ref),
-		v1alpha1.ClusterPoolLease{}.OpenAPIModelName():                           schema_central_apis_platform_v1alpha1_ClusterPoolLease(ref),
-		v1alpha1.ClusterPoolList{}.OpenAPIModelName():                            schema_central_apis_platform_v1alpha1_ClusterPoolList(ref),
-		v1alpha1.ClusterPoolSpec{}.OpenAPIModelName():                            schema_central_apis_platform_v1alpha1_ClusterPoolSpec(ref),
-		v1alpha1.ClusterPoolStatus{}.OpenAPIModelName():                          schema_central_apis_platform_v1alpha1_ClusterPoolStatus(ref),
-		v1alpha1.NodeDrainStatus{}.OpenAPIModelName():                            schema_central_apis_platform_v1alpha1_NodeDrainStatus(ref),
 		v1.AWSElasticBlockStoreVolumeSource{}.OpenAPIModelName():                 schema_k8sio_api_core_v1_AWSElasticBlockStoreVolumeSource(ref),
 		v1.Affinity{}.OpenAPIModelName():                                         schema_k8sio_api_core_v1_Affinity(ref),
 		v1.AppArmorProfile{}.OpenAPIModelName():                                  schema_k8sio_api_core_v1_AppArmorProfile(ref),
@@ -394,6 +394,304 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		runtime.TypeMeta{}.OpenAPIModelName():                                    schema_k8sio_apimachinery_pkg_runtime_TypeMeta(ref),
 		runtime.Unknown{}.OpenAPIModelName():                                     schema_k8sio_apimachinery_pkg_runtime_Unknown(ref),
 		version.Info{}.OpenAPIModelName():                                        schema_k8sio_apimachinery_pkg_version_Info(ref),
+	}
+}
+
+func schema_ectobase_api_platform_v1alpha1_ClusterPool(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ClusterPool is an attached cluster exposed as a schedulable capacity domain.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(v1alpha1.ClusterPoolSpec{}.OpenAPIModelName()),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(v1alpha1.ClusterPoolStatus{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			v1alpha1.ClusterPoolSpec{}.OpenAPIModelName(), v1alpha1.ClusterPoolStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_platform_v1alpha1_ClusterPoolLease(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ClusterPoolLease is the broker's heartbeat on a ClusterPool: the identity holding it and when it was last renewed. Stale RenewTime => the pool is Unknown.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"holderIdentity": {
+						SchemaProps: spec.SchemaProps{
+							Description: "HolderIdentity is the broker instance currently reporting for this pool.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"renewTime": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RenewTime is when the holder last renewed the lease.",
+							Ref:         ref(metav1.MicroTime{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			metav1.MicroTime{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_platform_v1alpha1_ClusterPoolList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ClusterPoolList is a list of ClusterPool objects.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(v1alpha1.ClusterPool{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			v1alpha1.ClusterPool{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_platform_v1alpha1_ClusterPoolSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ClusterPoolSpec defines the desired state of a ClusterPool.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"region": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Region is the region the attached cluster resides in.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"endpoint": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Endpoint is the reachable API endpoint of the attached cluster.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_platform_v1alpha1_ClusterPoolStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ClusterPoolStatus defines the observed state of a ClusterPool.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"phase": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Phase is the current lifecycle phase of the ClusterPool.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"conditions": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-map-keys": []interface{}{
+									"type",
+								},
+								"x-kubernetes-list-type":       "map",
+								"x-kubernetes-patch-merge-key": "type",
+								"x-kubernetes-patch-strategy":  "merge",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "Conditions represent the latest available observations of the ClusterPool's state.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(metav1.Condition{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+					"allocatable": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Allocatable is the schedulable capacity the broker reports for this pool.",
+							Type:        []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Ref: ref(resource.Quantity{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+					"lease": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Lease is the broker heartbeat; a stale RenewTime drives Phase to Unknown.",
+							Ref:         ref(v1alpha1.ClusterPoolLease{}.OpenAPIModelName()),
+						},
+					},
+					"nodePrefixes": {
+						SchemaProps: spec.SchemaProps{
+							Description: "NodePrefixes is the set of node /64 underlay prefixes composing this cluster, reported by the broker. Central fences these (Ceph NetworkFence + route blocklist) to evacuate a lost pool without reaching it.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"fencedPrefixes": {
+						SchemaProps: spec.SchemaProps{
+							Description: "FencedPrefixes is the subset of NodePrefixes central has fenced (evacuation).",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"nodeDrain": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-map-keys": []interface{}{
+									"prefix",
+								},
+								"x-kubernetes-list-type": "map",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "NodeDrain reports, per fenced /64, whether the returning broker has confirmed its stale VMIs are terminated (safe to release the fence).",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(v1alpha1.NodeDrainStatus{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			v1alpha1.ClusterPoolLease{}.OpenAPIModelName(), v1alpha1.NodeDrainStatus{}.OpenAPIModelName(), resource.Quantity{}.OpenAPIModelName(), metav1.Condition{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_platform_v1alpha1_NodeDrainStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "NodeDrainStatus is the per-/64 drain confirmation used to gate fence release.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"prefix": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Prefix is the node /64 underlay prefix.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"drained": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Drained is true once the broker confirms the /64's stale VMIs are gone.",
+							Type:        []string{"boolean"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"prefix"},
+			},
+		},
 	}
 }
 
@@ -3597,304 +3895,6 @@ func schema_trevex_ectobase_api_v1alpha1_VolumeStatus(ref common.ReferenceCallba
 						},
 					},
 				},
-			},
-		},
-	}
-}
-
-func schema_central_apis_platform_v1alpha1_ClusterPool(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "ClusterPool is an attached cluster exposed as a schedulable capacity domain.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"kind": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"apiVersion": {
-						SchemaProps: spec.SchemaProps{
-							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"metadata": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
-						},
-					},
-					"spec": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.ClusterPoolSpec{}.OpenAPIModelName()),
-						},
-					},
-					"status": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.ClusterPoolStatus{}.OpenAPIModelName()),
-						},
-					},
-				},
-			},
-		},
-		Dependencies: []string{
-			v1alpha1.ClusterPoolSpec{}.OpenAPIModelName(), v1alpha1.ClusterPoolStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
-	}
-}
-
-func schema_central_apis_platform_v1alpha1_ClusterPoolLease(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "ClusterPoolLease is the broker's heartbeat on a ClusterPool: the identity holding it and when it was last renewed. Stale RenewTime => the pool is Unknown.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"holderIdentity": {
-						SchemaProps: spec.SchemaProps{
-							Description: "HolderIdentity is the broker instance currently reporting for this pool.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"renewTime": {
-						SchemaProps: spec.SchemaProps{
-							Description: "RenewTime is when the holder last renewed the lease.",
-							Ref:         ref(metav1.MicroTime{}.OpenAPIModelName()),
-						},
-					},
-				},
-			},
-		},
-		Dependencies: []string{
-			metav1.MicroTime{}.OpenAPIModelName()},
-	}
-}
-
-func schema_central_apis_platform_v1alpha1_ClusterPoolList(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "ClusterPoolList is a list of ClusterPool objects.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"kind": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"apiVersion": {
-						SchemaProps: spec.SchemaProps{
-							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"metadata": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
-						},
-					},
-					"items": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.ClusterPool{}.OpenAPIModelName()),
-									},
-								},
-							},
-						},
-					},
-				},
-				Required: []string{"items"},
-			},
-		},
-		Dependencies: []string{
-			v1alpha1.ClusterPool{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
-	}
-}
-
-func schema_central_apis_platform_v1alpha1_ClusterPoolSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "ClusterPoolSpec defines the desired state of a ClusterPool.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"region": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Region is the region the attached cluster resides in.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"endpoint": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Endpoint is the reachable API endpoint of the attached cluster.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
-func schema_central_apis_platform_v1alpha1_ClusterPoolStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "ClusterPoolStatus defines the observed state of a ClusterPool.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"phase": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Phase is the current lifecycle phase of the ClusterPool.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"conditions": {
-						VendorExtensible: spec.VendorExtensible{
-							Extensions: spec.Extensions{
-								"x-kubernetes-list-map-keys": []interface{}{
-									"type",
-								},
-								"x-kubernetes-list-type":       "map",
-								"x-kubernetes-patch-merge-key": "type",
-								"x-kubernetes-patch-strategy":  "merge",
-							},
-						},
-						SchemaProps: spec.SchemaProps{
-							Description: "Conditions represent the latest available observations of the ClusterPool's state.",
-							Type:        []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref(metav1.Condition{}.OpenAPIModelName()),
-									},
-								},
-							},
-						},
-					},
-					"allocatable": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Allocatable is the schedulable capacity the broker reports for this pool.",
-							Type:        []string{"object"},
-							AdditionalProperties: &spec.SchemaOrBool{
-								Allows: true,
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Ref: ref(resource.Quantity{}.OpenAPIModelName()),
-									},
-								},
-							},
-						},
-					},
-					"lease": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Lease is the broker heartbeat; a stale RenewTime drives Phase to Unknown.",
-							Ref:         ref(v1alpha1.ClusterPoolLease{}.OpenAPIModelName()),
-						},
-					},
-					"nodePrefixes": {
-						SchemaProps: spec.SchemaProps{
-							Description: "NodePrefixes is the set of node /64 underlay prefixes composing this cluster, reported by the broker. Central fences these (Ceph NetworkFence + route blocklist) to evacuate a lost pool without reaching it.",
-							Type:        []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: "",
-										Type:    []string{"string"},
-										Format:  "",
-									},
-								},
-							},
-						},
-					},
-					"fencedPrefixes": {
-						SchemaProps: spec.SchemaProps{
-							Description: "FencedPrefixes is the subset of NodePrefixes central has fenced (evacuation).",
-							Type:        []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: "",
-										Type:    []string{"string"},
-										Format:  "",
-									},
-								},
-							},
-						},
-					},
-					"nodeDrain": {
-						VendorExtensible: spec.VendorExtensible{
-							Extensions: spec.Extensions{
-								"x-kubernetes-list-map-keys": []interface{}{
-									"prefix",
-								},
-								"x-kubernetes-list-type": "map",
-							},
-						},
-						SchemaProps: spec.SchemaProps{
-							Description: "NodeDrain reports, per fenced /64, whether the returning broker has confirmed its stale VMIs are terminated (safe to release the fence).",
-							Type:        []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.NodeDrainStatus{}.OpenAPIModelName()),
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-		Dependencies: []string{
-			v1alpha1.ClusterPoolLease{}.OpenAPIModelName(), v1alpha1.NodeDrainStatus{}.OpenAPIModelName(), resource.Quantity{}.OpenAPIModelName(), metav1.Condition{}.OpenAPIModelName()},
-	}
-}
-
-func schema_central_apis_platform_v1alpha1_NodeDrainStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "NodeDrainStatus is the per-/64 drain confirmation used to gate fence release.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"prefix": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Prefix is the node /64 underlay prefix.",
-							Default:     "",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"drained": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Drained is true once the broker confirms the /64's stale VMIs are gone.",
-							Type:        []string{"boolean"},
-							Format:      "",
-						},
-					},
-				},
-				Required: []string{"prefix"},
 			},
 		},
 	}

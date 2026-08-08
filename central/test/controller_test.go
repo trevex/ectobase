@@ -20,8 +20,8 @@ import (
 
 	kitenvtest "go.opendefense.cloud/kit/envtest"
 
-	"github.com/trevex/ectobase/central/apis/platform/install"
-	"github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	"github.com/trevex/ectobase/api/platform/install"
+	"github.com/trevex/ectobase/api/platform/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
 )
 

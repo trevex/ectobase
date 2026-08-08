@@ -15,9 +15,9 @@ import (
 	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 	netapi "github.com/trevex/ectobase/central/apis/net"
 	netinstall "github.com/trevex/ectobase/central/apis/net/install"
-	"github.com/trevex/ectobase/central/apis/platform"
-	"github.com/trevex/ectobase/central/apis/platform/install"
-	"github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	"github.com/trevex/ectobase/api/platform"
+	"github.com/trevex/ectobase/api/platform/install"
+	"github.com/trevex/ectobase/api/platform/v1alpha1"
 	"github.com/trevex/ectobase/central/client-go/openapi"
 	"github.com/trevex/ectobase/central/pkg/clusterrestriction"
 )

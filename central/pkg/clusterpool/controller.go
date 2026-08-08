@@ -18,7 +18,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	"github.com/trevex/ectobase/api/platform/v1alpha1"
 )
 
 // PhasePending is the initial lifecycle phase assigned to a new ClusterPool.

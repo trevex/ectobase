@@ -9,7 +9,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	platformv1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 )
 
 func TestPhaseFromLease(t *testing.T) {

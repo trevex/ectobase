@@ -3,7 +3,7 @@
 package v1alpha1
 
 import (
-	platformv1alpha1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	platformv1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	labels "k8s.io/apimachinery/pkg/labels"
 	listers "k8s.io/client-go/listers"
 	cache "k8s.io/client-go/tools/cache"

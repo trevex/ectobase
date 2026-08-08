@@ -8,16 +8,6 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-
-	"go.opendefense.cloud/kit/apiserver/resource"
-	kitrest "go.opendefense.cloud/kit/apiserver/rest"
-)
-
-var (
-	_ resource.Object                         = &ClusterPool{}
-	_ resource.ObjectWithStatusSubResource    = &ClusterPool{}
-	_ kitrest.SelectableFieldsProvider        = &ClusterPool{}
-	_ kitrest.SupportedFieldSelectorsProvider = &ClusterPool{}
 )
 
 func (o *ClusterPool) GetObjectMeta() *metav1.ObjectMeta {

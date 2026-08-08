@@ -24,8 +24,8 @@ import (
 
 	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 	netinstall "github.com/trevex/ectobase/central/apis/net/install"
-	platforminstall "github.com/trevex/ectobase/central/apis/platform/install"
-	platformv1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	platforminstall "github.com/trevex/ectobase/api/platform/install"
+	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/broker"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
 	"github.com/trevex/ectobase/central/pkg/scheduler"

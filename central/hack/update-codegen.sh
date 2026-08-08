@@ -31,6 +31,11 @@ trap cleanup_workaround EXIT
   k8s.io/apimachinery=https://github.com/kubernetes/apimachinery.git
 go mod tidy
 
+# NOTE: gen_openapi + gen_client each accept exactly ONE positional input-dir.
+# platform moved to api/platform (Task 1 pilot); net still lives in central/apis/net.
+# net/v1alpha1 has no +genclient so gen_client only produces platform clients.
+# We point gen_openapi at central/apis (net openapi) with api/platform/v1alpha1 as
+# extra-pkgs, and then run gen_client from api/platform which is the sole genclient source.
 kube::codegen::gen_openapi \
     --output-dir "${PROJECT_DIR}/client-go/openapi" \
     --output-pkg "${THIS_PKG}/client-go/openapi" \
@@ -39,6 +44,7 @@ kube::codegen::gen_openapi \
     --boilerplate "${PROJECT_DIR}/hack/boilerplate.go.txt" \
     --extra-pkgs "k8s.io/api/core/v1" \
     --extra-pkgs "github.com/trevex/ectobase/api/v1alpha1" \
+    --extra-pkgs "github.com/trevex/ectobase/api/platform/v1alpha1" \
     "${PROJECT_DIR}/apis"
 
 kube::codegen::gen_client \
@@ -51,4 +57,5 @@ kube::codegen::gen_client \
   --output-dir "$PROJECT_DIR/client-go" \
   --output-pkg "${THIS_PKG}/client-go" \
   --boilerplate "$SCRIPT_DIR/boilerplate.go.txt" \
-  "$PROJECT_DIR/apis"
+  --one-input-api "platform" \
+  "$PROJECT_DIR/../api"

@@ -3,7 +3,7 @@
 
 // +k8s:openapi-gen=true
 // +k8s:deepcopy-gen=package
-// +k8s:conversion-gen=github.com/trevex/ectobase/central/apis/platform
+// +k8s:conversion-gen=github.com/trevex/ectobase/api/platform
 // +k8s:defaulter-gen=TypeMeta
 // +k8s:prerelease-lifecycle-gen=true
 // +groupName=platform.ectobase.dev

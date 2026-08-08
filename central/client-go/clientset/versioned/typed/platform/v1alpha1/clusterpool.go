@@ -5,7 +5,7 @@ package v1alpha1
 import (
 	context "context"
 
-	platformv1alpha1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	platformv1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	applyconfigurationsplatformv1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/platform/v1alpha1"
 	scheme "github.com/trevex/ectobase/central/client-go/clientset/versioned/scheme"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"

@@ -6,7 +6,7 @@ import (
 	context "context"
 	time "time"
 
-	apisplatformv1alpha1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
+	apiplatformv1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	versioned "github.com/trevex/ectobase/central/client-go/clientset/versioned"
 	internalinterfaces "github.com/trevex/ectobase/central/client-go/informers/externalversions/internalinterfaces"
 	platformv1alpha1 "github.com/trevex/ectobase/central/client-go/listers/platform/v1alpha1"
@@ -77,7 +77,7 @@ func NewClusterPoolInformerWithOptions(client versioned.Interface, options inter
 				return client.PlatformV1alpha1().ClusterPools().Watch(ctx, opts)
 			},
 		}, client),
-		&apisplatformv1alpha1.ClusterPool{},
+		&apiplatformv1alpha1.ClusterPool{},
 		cache.SharedIndexInformerOptions{
 			ResyncPeriod: options.ResyncPeriod,
 			Indexers:     options.Indexers,
@@ -91,7 +91,7 @@ func (f *clusterPoolInformer) defaultInformer(client versioned.Interface, resync
 }
 
 func (f *clusterPoolInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&apisplatformv1alpha1.ClusterPool{}, f.defaultInformer)
+	return f.factory.InformerFor(&apiplatformv1alpha1.ClusterPool{}, f.defaultInformer)
 }
 
 func (f *clusterPoolInformer) Lister() platformv1alpha1.ClusterPoolLister {
