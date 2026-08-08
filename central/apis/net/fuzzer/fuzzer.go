@@ -46,5 +46,11 @@ var Funcs = func(codecs runtimeserializer.CodecFactory) []any {
 		func(s *net.VirtualMachineSpec, c randfill.Continue) {
 			c.FillNoCustom(s)
 		},
+		func(s *net.ContainerSpec, c randfill.Continue) {
+			c.FillNoCustom(s)
+		},
+		func(s *net.CompiledContainerSpec, c randfill.Continue) {
+			c.FillNoCustom(s)
+		},
 	}
 }

@@ -20,6 +20,7 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	conversion "k8s.io/apimachinery/pkg/conversion"
 	runtime "k8s.io/apimachinery/pkg/runtime"
@@ -313,6 +314,50 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}
 	if err := s.AddGeneratedConversionFunc((*net.VirtualMachineList)(nil), (*VirtualMachineList)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_net_VirtualMachineList_To_v1alpha1_VirtualMachineList(a.(*net.VirtualMachineList), b.(*VirtualMachineList), scope)
+	}); err != nil {
+		return err
+	}
+
+	// --- Container ---
+	if err := s.AddGeneratedConversionFunc((*Container)(nil), (*net.Container)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_Container_To_net_Container(a.(*Container), b.(*net.Container), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.Container)(nil), (*Container)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_Container_To_v1alpha1_Container(a.(*net.Container), b.(*Container), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*ContainerList)(nil), (*net.ContainerList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_ContainerList_To_net_ContainerList(a.(*ContainerList), b.(*net.ContainerList), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.ContainerList)(nil), (*ContainerList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_ContainerList_To_v1alpha1_ContainerList(a.(*net.ContainerList), b.(*ContainerList), scope)
+	}); err != nil {
+		return err
+	}
+
+	// --- CompiledContainer ---
+	if err := s.AddGeneratedConversionFunc((*CompiledContainer)(nil), (*net.CompiledContainer)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_CompiledContainer_To_net_CompiledContainer(a.(*CompiledContainer), b.(*net.CompiledContainer), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.CompiledContainer)(nil), (*CompiledContainer)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_CompiledContainer_To_v1alpha1_CompiledContainer(a.(*net.CompiledContainer), b.(*CompiledContainer), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*CompiledContainerList)(nil), (*net.CompiledContainerList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1alpha1_CompiledContainerList_To_net_CompiledContainerList(a.(*CompiledContainerList), b.(*net.CompiledContainerList), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*net.CompiledContainerList)(nil), (*CompiledContainerList)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_net_CompiledContainerList_To_v1alpha1_CompiledContainerList(a.(*net.CompiledContainerList), b.(*CompiledContainerList), scope)
 	}); err != nil {
 		return err
 	}
@@ -1904,4 +1949,262 @@ func Convert_net_VirtualMachineStatus_To_v1alpha1_VirtualMachineStatus(in *net.V
 		out.Placement = nil
 	}
 	return nil
+}
+
+// ============================ Container ============================
+
+// Convert_v1alpha1_Container_To_net_Container converts a versioned Container to internal.
+func Convert_v1alpha1_Container_To_net_Container(in *Container, out *net.Container, s conversion.Scope) error {
+	out.ObjectMeta = in.ObjectMeta
+	if err := Convert_v1alpha1_ContainerSpec_To_net_ContainerSpec(&in.Spec, &out.Spec, s); err != nil {
+		return err
+	}
+	return Convert_v1alpha1_ContainerStatus_To_net_ContainerStatus(&in.Status, &out.Status, s)
+}
+
+// Convert_net_Container_To_v1alpha1_Container converts an internal Container to versioned.
+func Convert_net_Container_To_v1alpha1_Container(in *net.Container, out *Container, s conversion.Scope) error {
+	out.ObjectMeta = in.ObjectMeta
+	if err := Convert_net_ContainerSpec_To_v1alpha1_ContainerSpec(&in.Spec, &out.Spec, s); err != nil {
+		return err
+	}
+	return Convert_net_ContainerStatus_To_v1alpha1_ContainerStatus(&in.Status, &out.Status, s)
+}
+
+// Convert_v1alpha1_ContainerList_To_net_ContainerList converts a versioned list to internal.
+func Convert_v1alpha1_ContainerList_To_net_ContainerList(in *ContainerList, out *net.ContainerList, s conversion.Scope) error {
+	out.ListMeta = in.ListMeta
+	if in.Items != nil {
+		out.Items = make([]net.Container, len(in.Items))
+		for i := range in.Items {
+			if err := Convert_v1alpha1_Container_To_net_Container(&in.Items[i], &out.Items[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
+	return nil
+}
+
+// Convert_net_ContainerList_To_v1alpha1_ContainerList converts an internal list to versioned.
+func Convert_net_ContainerList_To_v1alpha1_ContainerList(in *net.ContainerList, out *ContainerList, s conversion.Scope) error {
+	out.ListMeta = in.ListMeta
+	if in.Items != nil {
+		out.Items = make([]Container, len(in.Items))
+		for i := range in.Items {
+			if err := Convert_net_Container_To_v1alpha1_Container(&in.Items[i], &out.Items[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
+	return nil
+}
+
+// Convert_v1alpha1_ContainerSpec_To_net_ContainerSpec converts a versioned spec to internal.
+func Convert_v1alpha1_ContainerSpec_To_net_ContainerSpec(in *ContainerSpec, out *net.ContainerSpec, s conversion.Scope) error {
+	out.ClusterName = in.ClusterName
+	out.NodeName = in.NodeName
+	if in.InterfaceRefs != nil {
+		out.InterfaceRefs = make([]net.LocalObjectReference, len(in.InterfaceRefs))
+		for i := range in.InterfaceRefs {
+			if err := Convert_v1alpha1_LocalObjectReference_To_net_LocalObjectReference(&in.InterfaceRefs[i], &out.InterfaceRefs[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.InterfaceRefs = nil
+	}
+	out.Image = in.Image
+	out.Command = copyStringSlice(in.Command)
+	out.Args = copyStringSlice(in.Args)
+	out.Env = copyEnvVars(in.Env)
+	out.Resources = *in.Resources.DeepCopy()
+	out.RestartPolicy = in.RestartPolicy
+	return nil
+}
+
+// Convert_net_ContainerSpec_To_v1alpha1_ContainerSpec converts an internal spec to versioned.
+func Convert_net_ContainerSpec_To_v1alpha1_ContainerSpec(in *net.ContainerSpec, out *ContainerSpec, s conversion.Scope) error {
+	out.ClusterName = in.ClusterName
+	out.NodeName = in.NodeName
+	if in.InterfaceRefs != nil {
+		out.InterfaceRefs = make([]LocalObjectReference, len(in.InterfaceRefs))
+		for i := range in.InterfaceRefs {
+			if err := Convert_net_LocalObjectReference_To_v1alpha1_LocalObjectReference(&in.InterfaceRefs[i], &out.InterfaceRefs[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.InterfaceRefs = nil
+	}
+	out.Image = in.Image
+	out.Command = copyStringSlice(in.Command)
+	out.Args = copyStringSlice(in.Args)
+	out.Env = copyEnvVars(in.Env)
+	out.Resources = *in.Resources.DeepCopy()
+	out.RestartPolicy = in.RestartPolicy
+	return nil
+}
+
+// Convert_v1alpha1_ContainerStatus_To_net_ContainerStatus converts a versioned status to internal.
+func Convert_v1alpha1_ContainerStatus_To_net_ContainerStatus(in *ContainerStatus, out *net.ContainerStatus, _ conversion.Scope) error {
+	out.State = in.State
+	return nil
+}
+
+// Convert_net_ContainerStatus_To_v1alpha1_ContainerStatus converts an internal status to versioned.
+func Convert_net_ContainerStatus_To_v1alpha1_ContainerStatus(in *net.ContainerStatus, out *ContainerStatus, _ conversion.Scope) error {
+	out.State = in.State
+	return nil
+}
+
+// ============================ CompiledContainer ============================
+
+// Convert_v1alpha1_CompiledContainer_To_net_CompiledContainer converts a versioned CompiledContainer to internal.
+func Convert_v1alpha1_CompiledContainer_To_net_CompiledContainer(in *CompiledContainer, out *net.CompiledContainer, s conversion.Scope) error {
+	out.ObjectMeta = in.ObjectMeta
+	if err := Convert_v1alpha1_CompiledContainerSpec_To_net_CompiledContainerSpec(&in.Spec, &out.Spec, s); err != nil {
+		return err
+	}
+	return Convert_v1alpha1_CompiledContainerStatus_To_net_CompiledContainerStatus(&in.Status, &out.Status, s)
+}
+
+// Convert_net_CompiledContainer_To_v1alpha1_CompiledContainer converts an internal CompiledContainer to versioned.
+func Convert_net_CompiledContainer_To_v1alpha1_CompiledContainer(in *net.CompiledContainer, out *CompiledContainer, s conversion.Scope) error {
+	out.ObjectMeta = in.ObjectMeta
+	if err := Convert_net_CompiledContainerSpec_To_v1alpha1_CompiledContainerSpec(&in.Spec, &out.Spec, s); err != nil {
+		return err
+	}
+	return Convert_net_CompiledContainerStatus_To_v1alpha1_CompiledContainerStatus(&in.Status, &out.Status, s)
+}
+
+// Convert_v1alpha1_CompiledContainerList_To_net_CompiledContainerList converts a versioned list to internal.
+func Convert_v1alpha1_CompiledContainerList_To_net_CompiledContainerList(in *CompiledContainerList, out *net.CompiledContainerList, s conversion.Scope) error {
+	out.ListMeta = in.ListMeta
+	if in.Items != nil {
+		out.Items = make([]net.CompiledContainer, len(in.Items))
+		for i := range in.Items {
+			if err := Convert_v1alpha1_CompiledContainer_To_net_CompiledContainer(&in.Items[i], &out.Items[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
+	return nil
+}
+
+// Convert_net_CompiledContainerList_To_v1alpha1_CompiledContainerList converts an internal list to versioned.
+func Convert_net_CompiledContainerList_To_v1alpha1_CompiledContainerList(in *net.CompiledContainerList, out *CompiledContainerList, s conversion.Scope) error {
+	out.ListMeta = in.ListMeta
+	if in.Items != nil {
+		out.Items = make([]CompiledContainer, len(in.Items))
+		for i := range in.Items {
+			if err := Convert_net_CompiledContainer_To_v1alpha1_CompiledContainer(&in.Items[i], &out.Items[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
+	return nil
+}
+
+// Convert_v1alpha1_CompiledContainerSpec_To_net_CompiledContainerSpec converts a versioned spec to internal.
+func Convert_v1alpha1_CompiledContainerSpec_To_net_CompiledContainerSpec(in *CompiledContainerSpec, out *net.CompiledContainerSpec, s conversion.Scope) error {
+	out.ClusterName = in.ClusterName
+	out.NodeName = in.NodeName
+	out.Image = in.Image
+	out.Command = copyStringSlice(in.Command)
+	out.Args = copyStringSlice(in.Args)
+	out.Env = copyEnvVars(in.Env)
+	out.Resources = *in.Resources.DeepCopy()
+	out.RestartPolicy = in.RestartPolicy
+	if in.Interfaces != nil {
+		out.Interfaces = make([]net.CompiledContainerInterface, len(in.Interfaces))
+		for i := range in.Interfaces {
+			if err := Convert_v1alpha1_CompiledContainerInterface_To_net_CompiledContainerInterface(&in.Interfaces[i], &out.Interfaces[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Interfaces = nil
+	}
+	return nil
+}
+
+// Convert_net_CompiledContainerSpec_To_v1alpha1_CompiledContainerSpec converts an internal spec to versioned.
+func Convert_net_CompiledContainerSpec_To_v1alpha1_CompiledContainerSpec(in *net.CompiledContainerSpec, out *CompiledContainerSpec, s conversion.Scope) error {
+	out.ClusterName = in.ClusterName
+	out.NodeName = in.NodeName
+	out.Image = in.Image
+	out.Command = copyStringSlice(in.Command)
+	out.Args = copyStringSlice(in.Args)
+	out.Env = copyEnvVars(in.Env)
+	out.Resources = *in.Resources.DeepCopy()
+	out.RestartPolicy = in.RestartPolicy
+	if in.Interfaces != nil {
+		out.Interfaces = make([]CompiledContainerInterface, len(in.Interfaces))
+		for i := range in.Interfaces {
+			if err := Convert_net_CompiledContainerInterface_To_v1alpha1_CompiledContainerInterface(&in.Interfaces[i], &out.Interfaces[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Interfaces = nil
+	}
+	return nil
+}
+
+// Convert_v1alpha1_CompiledContainerInterface_To_net_CompiledContainerInterface converts a versioned interface to internal.
+func Convert_v1alpha1_CompiledContainerInterface_To_net_CompiledContainerInterface(in *CompiledContainerInterface, out *net.CompiledContainerInterface, _ conversion.Scope) error {
+	out.NetworkName = in.NetworkName
+	out.NetworkInterfaceRef = in.NetworkInterfaceRef
+	out.MAC = in.MAC
+	return nil
+}
+
+// Convert_net_CompiledContainerInterface_To_v1alpha1_CompiledContainerInterface converts an internal interface to versioned.
+func Convert_net_CompiledContainerInterface_To_v1alpha1_CompiledContainerInterface(in *net.CompiledContainerInterface, out *CompiledContainerInterface, _ conversion.Scope) error {
+	out.NetworkName = in.NetworkName
+	out.NetworkInterfaceRef = in.NetworkInterfaceRef
+	out.MAC = in.MAC
+	return nil
+}
+
+// Convert_v1alpha1_CompiledContainerStatus_To_net_CompiledContainerStatus converts a versioned status to internal.
+func Convert_v1alpha1_CompiledContainerStatus_To_net_CompiledContainerStatus(in *CompiledContainerStatus, out *net.CompiledContainerStatus, _ conversion.Scope) error {
+	out.State = in.State
+	return nil
+}
+
+// Convert_net_CompiledContainerStatus_To_v1alpha1_CompiledContainerStatus converts an internal status to versioned.
+func Convert_net_CompiledContainerStatus_To_v1alpha1_CompiledContainerStatus(in *net.CompiledContainerStatus, out *CompiledContainerStatus, _ conversion.Scope) error {
+	out.State = in.State
+	return nil
+}
+
+// copyStringSlice returns a nil-preserving copy of a []string.
+func copyStringSlice(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	out := make([]string, len(in))
+	copy(out, in)
+	return out
+}
+
+// copyEnvVars returns a nil-preserving deep copy of a []corev1.EnvVar.
+func copyEnvVars(in []corev1.EnvVar) []corev1.EnvVar {
+	if in == nil {
+		return nil
+	}
+	out := make([]corev1.EnvVar, len(in))
+	for i := range in {
+		in[i].DeepCopyInto(&out[i])
+	}
+	return out
 }
