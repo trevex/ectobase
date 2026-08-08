@@ -701,9 +701,14 @@ func Down(ctx context.Context, cfg *config.Config, purge bool) error {
 	cleanupHostRBD(ctx)
 
 	// clab destroy usually removes its mgmt network, but a force-removed (wedged)
-	// node can leave <name>-mgmt (+ its docker ip6tables MASQUERADE) behind. Best-effort.
-	if err := exec.Sudo(ctx, "docker", "network", "rm", cfg.Name+"-mgmt"); err != nil {
-		slog.Debug("remove mgmt network (already gone?)", "err", err)
+	// node can leave <name>-mgmt (+ its docker ip6tables MASQUERADE) behind. Only
+	// remove it if it's still present, so a normal down doesn't log a noisy
+	// "network not found" when clab already cleaned it up. Best-effort.
+	mgmt := cfg.Name + "-mgmt"
+	if out, err := exec.SudoOutput(ctx, "docker", "network", "ls", "-q", "--filter", "name=^"+mgmt+"$"); err == nil && strings.TrimSpace(string(out)) != "" {
+		if err := exec.Sudo(ctx, "docker", "network", "rm", mgmt); err != nil {
+			slog.Debug("remove mgmt network", "err", err)
+		}
 	}
 
 	if purge {
