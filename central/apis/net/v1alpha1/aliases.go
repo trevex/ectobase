@@ -91,6 +91,16 @@ type (
 	VirtualMachineList   = netv1.VirtualMachineList
 	VirtualMachineSpec   = netv1.VirtualMachineSpec
 	VirtualMachineStatus = netv1.VirtualMachineStatus
+
+	Container                  = netv1.Container
+	ContainerList              = netv1.ContainerList
+	ContainerSpec              = netv1.ContainerSpec
+	ContainerStatus            = netv1.ContainerStatus
+	CompiledContainer          = netv1.CompiledContainer
+	CompiledContainerList      = netv1.CompiledContainerList
+	CompiledContainerSpec      = netv1.CompiledContainerSpec
+	CompiledContainerInterface = netv1.CompiledContainerInterface
+	CompiledContainerStatus    = netv1.CompiledContainerStatus
 )
 
 // GroupName is the API group name for these objects.
@@ -141,6 +151,10 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&CompiledVolumeAttachmentList{},
 		&VirtualMachine{},
 		&VirtualMachineList{},
+		&Container{},
+		&ContainerList{},
+		&CompiledContainer{},
+		&CompiledContainerList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil

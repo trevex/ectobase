@@ -58,6 +58,10 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&CompiledVolumeAttachmentList{},
 		&VirtualMachine{},
 		&VirtualMachineList{},
+		&Container{},
+		&ContainerList{},
+		&CompiledContainer{},
+		&CompiledContainerList{},
 	)
 
 	return nil
