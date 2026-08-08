@@ -121,8 +121,13 @@ impl DataplaneNode for DpdkNodeService {
         } else {
             parse_mac(&r.mac).map_err(|e| Status::invalid_argument(e.to_string()))?
         };
-        // Guest-side interface name inside the netns (mirrors eBPF: guest_name = interface_id).
-        let guest_name = r.interface_id.clone();
+        // Guest-side interface name inside the netns. The CNI passes `<pod-uid>/<cni-ifname>` as the
+        // interface_id, which is NOT a valid Linux device name (`/`, >IFNAMSIZ) — using it verbatim
+        // as the guest link name made the container-via-CNI attach fail (the same bug fixed in the
+        // eBPF backend, attach.rs). Sanitize it via the shared `guest_ifname`; the registry/map key
+        // and PortMeta below keep the full `interface_id`, only the link name + response ifname are
+        // the sanitized name (matches the eBPF attach response).
+        let guest_name = crate::attach_state::guest_ifname(&r.interface_id);
 
         let attach = self.attach.clone();
 

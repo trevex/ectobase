@@ -146,6 +146,45 @@ pub fn host_veth_name(interface_id: &str) -> String {
     }
 }
 
+/// True iff `s` is a usable Linux network device name: non-empty, at most IFNAMSIZ-1 (15) bytes, and
+/// free of `/`, `:`, and whitespace, and not the `.`/`..` special names (which `ip link set … name`
+/// rejects). Transcribed verbatim from `flowplane/src/attach.rs` `is_valid_ifname`; used by
+/// `guest_ifname` to decide whether the id can be used verbatim.
+fn is_valid_ifname(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 15
+        && s != "."
+        && s != ".."
+        && !s
+            .bytes()
+            .any(|b| b == b'/' || b == b':' || b.is_ascii_whitespace())
+}
+
+/// Guest-side (in-netns) interface name derived from `interface_id`, sanitized to a valid Linux
+/// device name. Transcribed verbatim from `flowplane/src/attach.rs` `AttachState::guest_ifname` so
+/// both backends name the guest link identically for the same id.
+///
+/// The CNI passes `<pod-uid>/<cni-ifname>` (e.g. `3889a54a-.../net1`) as the interface_id — a fine
+/// map key but NOT a valid device name (it contains `/` and exceeds IFNAMSIZ), so using it verbatim
+/// as the guest link name made `ip link set … name <id>` fail for every real CNI-driven pod. We
+/// derive a valid name: the component after the last `/` (the CNI's own ifname) when it is a valid
+/// <=15-char device name, else the whole id when that is valid, else a stable FNV hash (`g-<hash>`).
+/// Only the link name is sanitized — the registry/map key + `PortMeta` stay the full `interface_id`.
+pub fn guest_ifname(interface_id: &str) -> String {
+    let last = interface_id.rsplit('/').next().unwrap_or(interface_id);
+    if is_valid_ifname(last) {
+        last.to_string()
+    } else if is_valid_ifname(interface_id) {
+        interface_id.to_string()
+    } else {
+        let mut h: u32 = 2166136261;
+        for b in interface_id.as_bytes() {
+            h = (h ^ *b as u32).wrapping_mul(16777619);
+        }
+        format!("g-{h:08x}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,6 +276,69 @@ mod tests {
             format!("veth-{h:08x}")
         };
         assert_eq!(host_veth_name(id), ebpf);
+    }
+
+    // ── is_valid_ifname / guest_ifname (eBPF parity) ─────────────────────────
+    #[test]
+    fn is_valid_ifname_accepts_and_rejects() {
+        assert!(is_valid_ifname("net1"));
+        assert!(is_valid_ifname("eth0"));
+        assert!(is_valid_ifname("nic-a"));
+        assert!(is_valid_ifname("012345678901234")); // 15 bytes
+        assert!(!is_valid_ifname("")); // empty
+        assert!(!is_valid_ifname("0123456789012345")); // 16 bytes > IFNAMSIZ-1
+        assert!(!is_valid_ifname("uid/net1")); // contains '/'
+        assert!(!is_valid_ifname("a:b")); // contains ':'
+        assert!(!is_valid_ifname("a b")); // whitespace
+        assert!(!is_valid_ifname(".")); // special
+        assert!(!is_valid_ifname("..")); // special
+    }
+
+    #[test]
+    fn guest_ifname_extracts_cni_ifname_from_uid_slash_ifname() {
+        // The CNI passes `<pod-uid>/<cni-ifname>` — the guest link must be the valid trailing name
+        // (the `/`-bearing, >15-char id itself would make `ip link set … name` fail). This is the
+        // exact bug fixed for the eBPF backend (attach.rs guest_ifname); mirror it for DPDK.
+        assert_eq!(
+            guest_ifname("3889a54a-a2a8-4bb9-a5c0-6e0a1c24f4a9/net1"),
+            "net1"
+        );
+        assert_eq!(
+            guest_ifname("3889a54a-a2a8-4bb9-a5c0-6e0a1c24f4a9/eth0"),
+            "eth0"
+        );
+    }
+
+    #[test]
+    fn guest_ifname_passes_through_clean_ids() {
+        // A gRPC-driven caller with a clean, valid id keeps it verbatim (no `/`, <=15 chars).
+        assert_eq!(guest_ifname("nic-a"), "nic-a");
+        assert_eq!(guest_ifname("t0"), "t0");
+    }
+
+    #[test]
+    fn guest_ifname_hashes_when_trailing_component_is_invalid() {
+        // A trailing component that is itself too long / invalid falls back to a stable hash.
+        let long_tail = "uid/this-name-is-way-too-long-for-ifnamsiz";
+        let n = guest_ifname(long_tail);
+        assert!(is_valid_ifname(&n), "{n} must be a valid device name");
+        assert!(n.starts_with("g-"));
+        // Deterministic (same id -> same name), so detach/re-attach agree.
+        assert_eq!(n, guest_ifname(long_tail));
+    }
+
+    #[test]
+    fn guest_ifname_matches_ebpf() {
+        // The hash fold + `g-` prefix must be byte-identical to `AttachState::guest_ifname`.
+        let id = "uid/this-name-is-way-too-long-for-ifnamsiz";
+        let ebpf = {
+            let mut h: u32 = 2166136261;
+            for b in id.as_bytes() {
+                h = (h ^ *b as u32).wrapping_mul(16777619);
+            }
+            format!("g-{h:08x}")
+        };
+        assert_eq!(guest_ifname(id), ebpf);
     }
 
     // ── DpdkAttachState registry ─────────────────────────────────────────────
