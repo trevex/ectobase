@@ -26,6 +26,8 @@ import (
 	netinstall "github.com/trevex/ectobase/api/net/install"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
+	compiledinstall "github.com/trevex/ectobase/api/compiled/install"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/broker"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
 	"github.com/trevex/ectobase/central/pkg/scheduler"
@@ -63,6 +65,7 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 	scheme := runtime.NewScheme()
 	platforminstall.Install(scheme)
 	netinstall.Install(scheme)
+	compiledinstall.Install(scheme)
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
 	}
@@ -235,7 +238,7 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 		t.Fatalf("compile Reconcile vm1 (CompiledVolumeAttachment): %v", err)
 	}
 
-	compiled := &netv1.CompiledVM{}
+	compiled := &compiledv1.CompiledVM{}
 	if err := centralClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "default-vm1"}, compiled); err != nil {
 		t.Fatalf("central get default-vm1: %v", err)
 	}
@@ -243,7 +246,7 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 		t.Fatalf("expected default-vm1 clusterName=c1, got %q", compiled.Spec.ClusterName)
 	}
 
-	att := &netv1.CompiledVolumeAttachment{}
+	att := &compiledv1.CompiledVolumeAttachment{}
 	if err := centralClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm1-boot"}, att); err != nil {
 		t.Fatalf("central get CompiledVolumeAttachment vm1-boot: %v", err)
 	}
@@ -275,14 +278,14 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 	if err := b.SyncCompiledVolumeAttachments(ctx); err != nil {
 		t.Fatalf("broker SyncCompiledVolumeAttachments: %v", err)
 	}
-	downVMs := &netv1.CompiledVMList{}
+	downVMs := &compiledv1.CompiledVMList{}
 	if err := downstreamClient.List(ctx, downVMs); err != nil {
 		t.Fatalf("downstream List CompiledVM: %v", err)
 	}
 	if len(downVMs.Items) != 1 || downVMs.Items[0].Name != "default-vm1" {
 		t.Fatalf("sync: expected downstream CompiledVM=[default-vm1], got %d items", len(downVMs.Items))
 	}
-	downAtts := &netv1.CompiledVolumeAttachmentList{}
+	downAtts := &compiledv1.CompiledVolumeAttachmentList{}
 	if err := downstreamClient.List(ctx, downAtts); err != nil {
 		t.Fatalf("downstream List CompiledVolumeAttachment: %v", err)
 	}

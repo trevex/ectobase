@@ -6,6 +6,7 @@ import (
 	fmt "fmt"
 	http "net/http"
 
+	compiledv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/compiled/v1alpha1"
 	netv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/net/v1alpha1"
 	platformv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/platform/v1alpha1"
 	discovery "k8s.io/client-go/discovery"
@@ -15,6 +16,7 @@ import (
 
 type Interface interface {
 	Discovery() discovery.DiscoveryInterface
+	CompiledV1alpha1() compiledv1alpha1.CompiledV1alpha1Interface
 	NetV1alpha1() netv1alpha1.NetV1alpha1Interface
 	PlatformV1alpha1() platformv1alpha1.PlatformV1alpha1Interface
 }
@@ -22,8 +24,14 @@ type Interface interface {
 // Clientset contains the clients for groups.
 type Clientset struct {
 	*discovery.DiscoveryClient
+	compiledV1alpha1 *compiledv1alpha1.CompiledV1alpha1Client
 	netV1alpha1      *netv1alpha1.NetV1alpha1Client
 	platformV1alpha1 *platformv1alpha1.PlatformV1alpha1Client
+}
+
+// CompiledV1alpha1 retrieves the CompiledV1alpha1Client
+func (c *Clientset) CompiledV1alpha1() compiledv1alpha1.CompiledV1alpha1Interface {
+	return c.compiledV1alpha1
 }
 
 // NetV1alpha1 retrieves the NetV1alpha1Client
@@ -80,6 +88,10 @@ func NewForConfigAndClient(c *rest.Config, httpClient *http.Client) (*Clientset,
 
 	var cs Clientset
 	var err error
+	cs.compiledV1alpha1, err = compiledv1alpha1.NewForConfigAndClient(&configShallowCopy, httpClient)
+	if err != nil {
+		return nil, err
+	}
 	cs.netV1alpha1, err = netv1alpha1.NewForConfigAndClient(&configShallowCopy, httpClient)
 	if err != nil {
 		return nil, err
@@ -109,6 +121,7 @@ func NewForConfigOrDie(c *rest.Config) *Clientset {
 // New creates a new Clientset for the given RESTClient.
 func New(c rest.Interface) *Clientset {
 	var cs Clientset
+	cs.compiledV1alpha1 = compiledv1alpha1.New(c)
 	cs.netV1alpha1 = netv1alpha1.New(c)
 	cs.platformV1alpha1 = platformv1alpha1.New(c)
 

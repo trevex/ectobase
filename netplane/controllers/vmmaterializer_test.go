@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -81,13 +82,13 @@ func TestKubeVirtCRDLoads(t *testing.T) {
 }
 
 func TestBuildVM(t *testing.T) {
-	cvm := &netv1.CompiledVM{
+	cvm := &compiledv1.CompiledVM{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "ns-vm1", Labels: map[string]string{"workload": "vm1"}},
-		Spec: netv1.CompiledVMSpec{
+		Spec: compiledv1.CompiledVMSpec{
 			Image:       "quay.io/containerdisks/fedora:41",
 			RunStrategy: "RerunOnFailure",
 			Resources:   corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}},
-			Interfaces:  []netv1.CompiledVMInterface{{MAC: "02:00:00:00:00:01", NetworkName: "flowplane-overlay"}},
+			Interfaces:  []compiledv1.CompiledVMInterface{{MAC: "02:00:00:00:00:01", NetworkName: "flowplane-overlay"}},
 		},
 	}
 	vm := buildVM(cvm, nil)
@@ -115,11 +116,11 @@ func TestBuildVM(t *testing.T) {
 }
 
 func TestBuildVM_FromDataVolumes(t *testing.T) {
-	cvm := &netv1.CompiledVM{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "ns-vm1", Labels: map[string]string{"workload": "vm1"}},
-		Spec: netv1.CompiledVMSpec{Image: "ignored-when-volumes", RunStrategy: "RerunOnFailure"}}
-	atts := []netv1.CompiledVolumeAttachment{
-		{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "vm1-data"}, Spec: netv1.CompiledVolumeAttachmentSpec{Boot: false}},
-		{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "vm1-boot"}, Spec: netv1.CompiledVolumeAttachmentSpec{Boot: true}},
+	cvm := &compiledv1.CompiledVM{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "ns-vm1", Labels: map[string]string{"workload": "vm1"}},
+		Spec: compiledv1.CompiledVMSpec{Image: "ignored-when-volumes", RunStrategy: "RerunOnFailure"}}
+	atts := []compiledv1.CompiledVolumeAttachment{
+		{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "vm1-data"}, Spec: compiledv1.CompiledVolumeAttachmentSpec{Boot: false}},
+		{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "vm1-boot"}, Spec: compiledv1.CompiledVolumeAttachmentSpec{Boot: true}},
 	}
 	vm := buildVM(cvm, atts)
 	vols := vm.Spec.Template.Spec.Volumes
@@ -157,6 +158,9 @@ func TestMaterializer_CreatesVM(t *testing.T) {
 	if err := netv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
+	if err := compiledv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
 	if err := kubevirtv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
@@ -181,14 +185,14 @@ func TestMaterializer_CreatesVM(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	cvm := &netv1.CompiledVM{
+	cvm := &compiledv1.CompiledVM{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "default-vm1", Labels: map[string]string{"workload": "vm1"}},
-		Spec: netv1.CompiledVMSpec{
+		Spec: compiledv1.CompiledVMSpec{
 			ClusterName: "cluster-a",
 			Image:       "quay.io/containerdisks/fedora:41",
 			RunStrategy: "RerunOnFailure",
 			Resources:   corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}},
-			Interfaces:  []netv1.CompiledVMInterface{{MAC: "02:00:00:00:00:01", NetworkName: "flowplane-overlay"}},
+			Interfaces:  []compiledv1.CompiledVMInterface{{MAC: "02:00:00:00:00:01", NetworkName: "flowplane-overlay"}},
 		},
 	}
 	if err := c.Create(ctx, cvm); err != nil {

@@ -38,6 +38,7 @@ generate: ## Regenerate deepcopy/conversion (kube::codegen) + CRD manifests (con
 	cd api && ./hack/update-codegen.sh
 	cd central && ./hack/update-codegen.sh
 	cd api && controller-gen crd paths=./net/v1alpha1/... output:crd:artifacts:config=../config/crd/bases
+	cd api && controller-gen crd paths=./compiled/v1alpha1/... output:crd:artifacts:config=../config/crd/bases
 	cd api && controller-gen crd paths=./platform/v1alpha1/... output:crd:artifacts:config=../central/config/crd
 	./hack/sync-chart-crds.sh
 

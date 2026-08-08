@@ -6,7 +6,8 @@
 package openapi
 
 import (
-	v1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	v1alpha1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	netv1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platformv1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	v1 "k8s.io/api/core/v1"
 	resource "k8s.io/apimachinery/pkg/api/resource"
@@ -19,81 +20,83 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
-		v1alpha1.CompiledContainer{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_CompiledContainer(ref),
-		v1alpha1.CompiledContainerInterface{}.OpenAPIModelName():     schema_ectobase_api_net_v1alpha1_CompiledContainerInterface(ref),
-		v1alpha1.CompiledContainerList{}.OpenAPIModelName():          schema_ectobase_api_net_v1alpha1_CompiledContainerList(ref),
-		v1alpha1.CompiledContainerSpec{}.OpenAPIModelName():          schema_ectobase_api_net_v1alpha1_CompiledContainerSpec(ref),
-		v1alpha1.CompiledContainerStatus{}.OpenAPIModelName():        schema_ectobase_api_net_v1alpha1_CompiledContainerStatus(ref),
-		v1alpha1.CompiledFirewall{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_CompiledFirewall(ref),
-		v1alpha1.CompiledFwRule{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_CompiledFwRule(ref),
-		v1alpha1.CompiledLB{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_CompiledLB(ref),
-		v1alpha1.CompiledLBPort{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_CompiledLBPort(ref),
-		v1alpha1.CompiledNATSource{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_CompiledNATSource(ref),
-		v1alpha1.CompiledNIC{}.OpenAPIModelName():                    schema_ectobase_api_net_v1alpha1_CompiledNIC(ref),
-		v1alpha1.CompiledNICList{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_CompiledNICList(ref),
-		v1alpha1.CompiledNICSpec{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_CompiledNICSpec(ref),
-		v1alpha1.CompiledNICStatus{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_CompiledNICStatus(ref),
-		v1alpha1.CompiledPeerImport{}.OpenAPIModelName():             schema_ectobase_api_net_v1alpha1_CompiledPeerImport(ref),
-		v1alpha1.CompiledVM{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_CompiledVM(ref),
-		v1alpha1.CompiledVMInterface{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_CompiledVMInterface(ref),
-		v1alpha1.CompiledVMList{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_CompiledVMList(ref),
-		v1alpha1.CompiledVMSpec{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_CompiledVMSpec(ref),
-		v1alpha1.CompiledVMStatus{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_CompiledVMStatus(ref),
-		v1alpha1.CompiledVolumeAttachment{}.OpenAPIModelName():       schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachment(ref),
-		v1alpha1.CompiledVolumeAttachmentList{}.OpenAPIModelName():   schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachmentList(ref),
-		v1alpha1.CompiledVolumeAttachmentSpec{}.OpenAPIModelName():   schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachmentSpec(ref),
-		v1alpha1.CompiledVolumeAttachmentStatus{}.OpenAPIModelName(): schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachmentStatus(ref),
-		v1alpha1.Container{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_Container(ref),
-		v1alpha1.ContainerList{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_ContainerList(ref),
-		v1alpha1.ContainerSpec{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_ContainerSpec(ref),
-		v1alpha1.ContainerStatus{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_ContainerStatus(ref),
-		v1alpha1.EgressQoS{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_EgressQoS(ref),
-		v1alpha1.FirewallPolicy{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_FirewallPolicy(ref),
-		v1alpha1.FirewallPolicyList{}.OpenAPIModelName():             schema_ectobase_api_net_v1alpha1_FirewallPolicyList(ref),
-		v1alpha1.FirewallPolicyRule{}.OpenAPIModelName():             schema_ectobase_api_net_v1alpha1_FirewallPolicyRule(ref),
-		v1alpha1.FirewallPolicySpec{}.OpenAPIModelName():             schema_ectobase_api_net_v1alpha1_FirewallPolicySpec(ref),
-		v1alpha1.FirewallPolicyStatus{}.OpenAPIModelName():           schema_ectobase_api_net_v1alpha1_FirewallPolicyStatus(ref),
-		v1alpha1.FloatingIP{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_FloatingIP(ref),
-		v1alpha1.FloatingIPList{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_FloatingIPList(ref),
-		v1alpha1.FloatingIPSpec{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_FloatingIPSpec(ref),
-		v1alpha1.FloatingIPStatus{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_FloatingIPStatus(ref),
-		v1alpha1.InterfaceQoS{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_InterfaceQoS(ref),
-		v1alpha1.LoadBalancer{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_LoadBalancer(ref),
-		v1alpha1.LoadBalancerList{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_LoadBalancerList(ref),
-		v1alpha1.LoadBalancerPort{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_LoadBalancerPort(ref),
-		v1alpha1.LoadBalancerSpec{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_LoadBalancerSpec(ref),
-		v1alpha1.LoadBalancerStatus{}.OpenAPIModelName():             schema_ectobase_api_net_v1alpha1_LoadBalancerStatus(ref),
-		v1alpha1.LocalObjectReference{}.OpenAPIModelName():           schema_ectobase_api_net_v1alpha1_LocalObjectReference(ref),
-		v1alpha1.NATAllocation{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_NATAllocation(ref),
-		v1alpha1.NATGateway{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_NATGateway(ref),
-		v1alpha1.NATGatewayList{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_NATGatewayList(ref),
-		v1alpha1.NATGatewaySpec{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_NATGatewaySpec(ref),
-		v1alpha1.NATGatewayStatus{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_NATGatewayStatus(ref),
-		v1alpha1.NetworkInterface{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_NetworkInterface(ref),
-		v1alpha1.NetworkInterfaceList{}.OpenAPIModelName():           schema_ectobase_api_net_v1alpha1_NetworkInterfaceList(ref),
-		v1alpha1.NetworkInterfaceSpec{}.OpenAPIModelName():           schema_ectobase_api_net_v1alpha1_NetworkInterfaceSpec(ref),
-		v1alpha1.NetworkInterfaceStatus{}.OpenAPIModelName():         schema_ectobase_api_net_v1alpha1_NetworkInterfaceStatus(ref),
-		v1alpha1.PortStatus{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_PortStatus(ref),
-		v1alpha1.RateLimit{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_RateLimit(ref),
-		v1alpha1.VMAntiAffinity{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_VMAntiAffinity(ref),
-		v1alpha1.VMPlacement{}.OpenAPIModelName():                    schema_ectobase_api_net_v1alpha1_VMPlacement(ref),
-		v1alpha1.VPC{}.OpenAPIModelName():                            schema_ectobase_api_net_v1alpha1_VPC(ref),
-		v1alpha1.VPCList{}.OpenAPIModelName():                        schema_ectobase_api_net_v1alpha1_VPCList(ref),
-		v1alpha1.VPCPeering{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_VPCPeering(ref),
-		v1alpha1.VPCPeeringList{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_VPCPeeringList(ref),
-		v1alpha1.VPCPeeringSpec{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_VPCPeeringSpec(ref),
-		v1alpha1.VPCPeeringStatus{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_VPCPeeringStatus(ref),
-		v1alpha1.VPCReference{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_VPCReference(ref),
-		v1alpha1.VPCSpec{}.OpenAPIModelName():                        schema_ectobase_api_net_v1alpha1_VPCSpec(ref),
-		v1alpha1.VPCStatus{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_VPCStatus(ref),
-		v1alpha1.VirtualMachine{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_VirtualMachine(ref),
-		v1alpha1.VirtualMachineList{}.OpenAPIModelName():             schema_ectobase_api_net_v1alpha1_VirtualMachineList(ref),
-		v1alpha1.VirtualMachineSpec{}.OpenAPIModelName():             schema_ectobase_api_net_v1alpha1_VirtualMachineSpec(ref),
-		v1alpha1.VirtualMachineStatus{}.OpenAPIModelName():           schema_ectobase_api_net_v1alpha1_VirtualMachineStatus(ref),
-		v1alpha1.Volume{}.OpenAPIModelName():                         schema_ectobase_api_net_v1alpha1_Volume(ref),
-		v1alpha1.VolumeList{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_VolumeList(ref),
-		v1alpha1.VolumeSpec{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_VolumeSpec(ref),
-		v1alpha1.VolumeStatus{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_VolumeStatus(ref),
+		v1alpha1.CompiledContainer{}.OpenAPIModelName():              schema_ectobase_api_compiled_v1alpha1_CompiledContainer(ref),
+		v1alpha1.CompiledContainerInterface{}.OpenAPIModelName():     schema_ectobase_api_compiled_v1alpha1_CompiledContainerInterface(ref),
+		v1alpha1.CompiledContainerList{}.OpenAPIModelName():          schema_ectobase_api_compiled_v1alpha1_CompiledContainerList(ref),
+		v1alpha1.CompiledContainerSpec{}.OpenAPIModelName():          schema_ectobase_api_compiled_v1alpha1_CompiledContainerSpec(ref),
+		v1alpha1.CompiledContainerStatus{}.OpenAPIModelName():        schema_ectobase_api_compiled_v1alpha1_CompiledContainerStatus(ref),
+		v1alpha1.CompiledFirewall{}.OpenAPIModelName():               schema_ectobase_api_compiled_v1alpha1_CompiledFirewall(ref),
+		v1alpha1.CompiledFwRule{}.OpenAPIModelName():                 schema_ectobase_api_compiled_v1alpha1_CompiledFwRule(ref),
+		v1alpha1.CompiledLB{}.OpenAPIModelName():                     schema_ectobase_api_compiled_v1alpha1_CompiledLB(ref),
+		v1alpha1.CompiledLBPort{}.OpenAPIModelName():                 schema_ectobase_api_compiled_v1alpha1_CompiledLBPort(ref),
+		v1alpha1.CompiledNATSource{}.OpenAPIModelName():              schema_ectobase_api_compiled_v1alpha1_CompiledNATSource(ref),
+		v1alpha1.CompiledNIC{}.OpenAPIModelName():                    schema_ectobase_api_compiled_v1alpha1_CompiledNIC(ref),
+		v1alpha1.CompiledNICList{}.OpenAPIModelName():                schema_ectobase_api_compiled_v1alpha1_CompiledNICList(ref),
+		v1alpha1.CompiledNICSpec{}.OpenAPIModelName():                schema_ectobase_api_compiled_v1alpha1_CompiledNICSpec(ref),
+		v1alpha1.CompiledNICStatus{}.OpenAPIModelName():              schema_ectobase_api_compiled_v1alpha1_CompiledNICStatus(ref),
+		v1alpha1.CompiledPeerImport{}.OpenAPIModelName():             schema_ectobase_api_compiled_v1alpha1_CompiledPeerImport(ref),
+		v1alpha1.CompiledVM{}.OpenAPIModelName():                     schema_ectobase_api_compiled_v1alpha1_CompiledVM(ref),
+		v1alpha1.CompiledVMInterface{}.OpenAPIModelName():            schema_ectobase_api_compiled_v1alpha1_CompiledVMInterface(ref),
+		v1alpha1.CompiledVMList{}.OpenAPIModelName():                 schema_ectobase_api_compiled_v1alpha1_CompiledVMList(ref),
+		v1alpha1.CompiledVMSpec{}.OpenAPIModelName():                 schema_ectobase_api_compiled_v1alpha1_CompiledVMSpec(ref),
+		v1alpha1.CompiledVMStatus{}.OpenAPIModelName():               schema_ectobase_api_compiled_v1alpha1_CompiledVMStatus(ref),
+		v1alpha1.CompiledVolumeAttachment{}.OpenAPIModelName():       schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachment(ref),
+		v1alpha1.CompiledVolumeAttachmentList{}.OpenAPIModelName():   schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachmentList(ref),
+		v1alpha1.CompiledVolumeAttachmentSpec{}.OpenAPIModelName():   schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachmentSpec(ref),
+		v1alpha1.CompiledVolumeAttachmentStatus{}.OpenAPIModelName(): schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachmentStatus(ref),
+		v1alpha1.LocalObjectReference{}.OpenAPIModelName():           schema_ectobase_api_compiled_v1alpha1_LocalObjectReference(ref),
+		v1alpha1.PortStatus{}.OpenAPIModelName():                     schema_ectobase_api_compiled_v1alpha1_PortStatus(ref),
+		netv1alpha1.Container{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_Container(ref),
+		netv1alpha1.ContainerList{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_ContainerList(ref),
+		netv1alpha1.ContainerSpec{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_ContainerSpec(ref),
+		netv1alpha1.ContainerStatus{}.OpenAPIModelName():             schema_ectobase_api_net_v1alpha1_ContainerStatus(ref),
+		netv1alpha1.EgressQoS{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_EgressQoS(ref),
+		netv1alpha1.FirewallPolicy{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_FirewallPolicy(ref),
+		netv1alpha1.FirewallPolicyList{}.OpenAPIModelName():          schema_ectobase_api_net_v1alpha1_FirewallPolicyList(ref),
+		netv1alpha1.FirewallPolicyRule{}.OpenAPIModelName():          schema_ectobase_api_net_v1alpha1_FirewallPolicyRule(ref),
+		netv1alpha1.FirewallPolicySpec{}.OpenAPIModelName():          schema_ectobase_api_net_v1alpha1_FirewallPolicySpec(ref),
+		netv1alpha1.FirewallPolicyStatus{}.OpenAPIModelName():        schema_ectobase_api_net_v1alpha1_FirewallPolicyStatus(ref),
+		netv1alpha1.FloatingIP{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_FloatingIP(ref),
+		netv1alpha1.FloatingIPList{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_FloatingIPList(ref),
+		netv1alpha1.FloatingIPSpec{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_FloatingIPSpec(ref),
+		netv1alpha1.FloatingIPStatus{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_FloatingIPStatus(ref),
+		netv1alpha1.InterfaceQoS{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_InterfaceQoS(ref),
+		netv1alpha1.LoadBalancer{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_LoadBalancer(ref),
+		netv1alpha1.LoadBalancerList{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_LoadBalancerList(ref),
+		netv1alpha1.LoadBalancerPort{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_LoadBalancerPort(ref),
+		netv1alpha1.LoadBalancerSpec{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_LoadBalancerSpec(ref),
+		netv1alpha1.LoadBalancerStatus{}.OpenAPIModelName():          schema_ectobase_api_net_v1alpha1_LoadBalancerStatus(ref),
+		netv1alpha1.LocalObjectReference{}.OpenAPIModelName():        schema_ectobase_api_net_v1alpha1_LocalObjectReference(ref),
+		netv1alpha1.NATAllocation{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_NATAllocation(ref),
+		netv1alpha1.NATGateway{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_NATGateway(ref),
+		netv1alpha1.NATGatewayList{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_NATGatewayList(ref),
+		netv1alpha1.NATGatewaySpec{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_NATGatewaySpec(ref),
+		netv1alpha1.NATGatewayStatus{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_NATGatewayStatus(ref),
+		netv1alpha1.NetworkInterface{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_NetworkInterface(ref),
+		netv1alpha1.NetworkInterfaceList{}.OpenAPIModelName():        schema_ectobase_api_net_v1alpha1_NetworkInterfaceList(ref),
+		netv1alpha1.NetworkInterfaceSpec{}.OpenAPIModelName():        schema_ectobase_api_net_v1alpha1_NetworkInterfaceSpec(ref),
+		netv1alpha1.NetworkInterfaceStatus{}.OpenAPIModelName():      schema_ectobase_api_net_v1alpha1_NetworkInterfaceStatus(ref),
+		netv1alpha1.PortStatus{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_PortStatus(ref),
+		netv1alpha1.RateLimit{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_RateLimit(ref),
+		netv1alpha1.VMAntiAffinity{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_VMAntiAffinity(ref),
+		netv1alpha1.VMPlacement{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_VMPlacement(ref),
+		netv1alpha1.VPC{}.OpenAPIModelName():                         schema_ectobase_api_net_v1alpha1_VPC(ref),
+		netv1alpha1.VPCList{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_VPCList(ref),
+		netv1alpha1.VPCPeering{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_VPCPeering(ref),
+		netv1alpha1.VPCPeeringList{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_VPCPeeringList(ref),
+		netv1alpha1.VPCPeeringSpec{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_VPCPeeringSpec(ref),
+		netv1alpha1.VPCPeeringStatus{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_VPCPeeringStatus(ref),
+		netv1alpha1.VPCReference{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_VPCReference(ref),
+		netv1alpha1.VPCSpec{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_VPCSpec(ref),
+		netv1alpha1.VPCStatus{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_VPCStatus(ref),
+		netv1alpha1.VirtualMachine{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_VirtualMachine(ref),
+		netv1alpha1.VirtualMachineList{}.OpenAPIModelName():          schema_ectobase_api_net_v1alpha1_VirtualMachineList(ref),
+		netv1alpha1.VirtualMachineSpec{}.OpenAPIModelName():          schema_ectobase_api_net_v1alpha1_VirtualMachineSpec(ref),
+		netv1alpha1.VirtualMachineStatus{}.OpenAPIModelName():        schema_ectobase_api_net_v1alpha1_VirtualMachineStatus(ref),
+		netv1alpha1.Volume{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_Volume(ref),
+		netv1alpha1.VolumeList{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_VolumeList(ref),
+		netv1alpha1.VolumeSpec{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_VolumeSpec(ref),
+		netv1alpha1.VolumeStatus{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_VolumeStatus(ref),
 		platformv1alpha1.ClusterPool{}.OpenAPIModelName():            schema_ectobase_api_platform_v1alpha1_ClusterPool(ref),
 		platformv1alpha1.ClusterPoolLease{}.OpenAPIModelName():       schema_ectobase_api_platform_v1alpha1_ClusterPoolLease(ref),
 		platformv1alpha1.ClusterPoolList{}.OpenAPIModelName():        schema_ectobase_api_platform_v1alpha1_ClusterPoolList(ref),
@@ -398,7 +401,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledContainer(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledContainer(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -445,7 +448,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledContainer(ref common.ReferenceCall
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledContainerInterface(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledContainerInterface(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -479,7 +482,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledContainerInterface(ref common.Refe
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledContainerList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledContainerList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -528,7 +531,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledContainerList(ref common.Reference
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledContainerSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledContainerSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -637,7 +640,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledContainerSpec(ref common.Reference
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledContainerStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledContainerStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -657,7 +660,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledContainerStatus(ref common.Referen
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledFirewall(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledFirewall(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -700,7 +703,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledFirewall(ref common.ReferenceCallb
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledFwRule(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledFwRule(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -744,7 +747,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledFwRule(ref common.ReferenceCallbac
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledLB(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledLB(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -782,7 +785,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledLB(ref common.ReferenceCallback) c
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledLBPort(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledLBPort(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -810,7 +813,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledLBPort(ref common.ReferenceCallbac
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledNATSource(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledNATSource(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -856,7 +859,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledNATSource(ref common.ReferenceCall
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledNIC(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledNIC(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -903,7 +906,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledNIC(ref common.ReferenceCallback) 
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledNICList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledNICList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -952,7 +955,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledNICList(ref common.ReferenceCallba
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledNICSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledNICSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1069,7 +1072,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledNICSpec(ref common.ReferenceCallba
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledNICStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledNICStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1096,7 +1099,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledNICStatus(ref common.ReferenceCall
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledPeerImport(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledPeerImport(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1133,7 +1136,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledPeerImport(ref common.ReferenceCal
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledVM(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledVM(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1180,7 +1183,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledVM(ref common.ReferenceCallback) c
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledVMInterface(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledVMInterface(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1207,7 +1210,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledVMInterface(ref common.ReferenceCa
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledVMList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledVMList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1256,7 +1259,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledVMList(ref common.ReferenceCallbac
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledVMSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledVMSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1313,7 +1316,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledVMSpec(ref common.ReferenceCallbac
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledVMStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledVMStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1333,7 +1336,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledVMStatus(ref common.ReferenceCallb
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachment(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachment(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1380,7 +1383,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachment(ref common.Refere
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachmentList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachmentList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1429,7 +1432,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachmentList(ref common.Re
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachmentSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachmentSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1479,7 +1482,7 @@ func schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachmentSpec(ref common.Re
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachmentStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachmentStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1489,6 +1492,62 @@ func schema_ectobase_api_net_v1alpha1_CompiledVolumeAttachmentStatus(ref common.
 					"state": {
 						SchemaProps: spec.SchemaProps{
 							Description: "State is the materialization state.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_compiled_v1alpha1_LocalObjectReference(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "LocalObjectReference references an object by name within the same namespace.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Name is the name of the referenced object.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"name"},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_compiled_v1alpha1_PortStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "PortStatus describes the dataplane port allocated for a NetworkInterface.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"type": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Type is the port type (e.g. tap or vf).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Name is the host-side interface name (e.g. dtapvf_0) for tap ports.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"pciAddress": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PCIAddress is the PCI address for vf ports.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -1529,20 +1588,20 @@ func schema_ectobase_api_net_v1alpha1_Container(ref common.ReferenceCallback) co
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.ContainerSpec{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.ContainerSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.ContainerStatus{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.ContainerStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.ContainerSpec{}.OpenAPIModelName(), v1alpha1.ContainerStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+			netv1alpha1.ContainerSpec{}.OpenAPIModelName(), netv1alpha1.ContainerStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -1580,7 +1639,7 @@ func schema_ectobase_api_net_v1alpha1_ContainerList(ref common.ReferenceCallback
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.Container{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.Container{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1591,7 +1650,7 @@ func schema_ectobase_api_net_v1alpha1_ContainerList(ref common.ReferenceCallback
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.Container{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+			netv1alpha1.Container{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -1624,7 +1683,7 @@ func schema_ectobase_api_net_v1alpha1_ContainerSpec(ref common.ReferenceCallback
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.LocalObjectReference{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1700,7 +1759,7 @@ func schema_ectobase_api_net_v1alpha1_ContainerSpec(ref common.ReferenceCallback
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.LocalObjectReference{}.OpenAPIModelName(), v1.EnvVar{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName()},
+			netv1alpha1.LocalObjectReference{}.OpenAPIModelName(), v1.EnvVar{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName()},
 	}
 }
 
@@ -1788,20 +1847,20 @@ func schema_ectobase_api_net_v1alpha1_FirewallPolicy(ref common.ReferenceCallbac
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.FirewallPolicySpec{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.FirewallPolicySpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.FirewallPolicyStatus{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.FirewallPolicyStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.FirewallPolicySpec{}.OpenAPIModelName(), v1alpha1.FirewallPolicyStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+			netv1alpha1.FirewallPolicySpec{}.OpenAPIModelName(), netv1alpha1.FirewallPolicyStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -1839,7 +1898,7 @@ func schema_ectobase_api_net_v1alpha1_FirewallPolicyList(ref common.ReferenceCal
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.FirewallPolicy{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.FirewallPolicy{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1850,7 +1909,7 @@ func schema_ectobase_api_net_v1alpha1_FirewallPolicyList(ref common.ReferenceCal
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.FirewallPolicy{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+			netv1alpha1.FirewallPolicy{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -1919,7 +1978,7 @@ func schema_ectobase_api_net_v1alpha1_FirewallPolicySpec(ref common.ReferenceCal
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.FirewallPolicyRule{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.FirewallPolicyRule{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1933,7 +1992,7 @@ func schema_ectobase_api_net_v1alpha1_FirewallPolicySpec(ref common.ReferenceCal
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.FirewallPolicyRule{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.FirewallPolicyRule{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1943,7 +2002,7 @@ func schema_ectobase_api_net_v1alpha1_FirewallPolicySpec(ref common.ReferenceCal
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.FirewallPolicyRule{}.OpenAPIModelName(), metav1.LabelSelector{}.OpenAPIModelName()},
+			netv1alpha1.FirewallPolicyRule{}.OpenAPIModelName(), metav1.LabelSelector{}.OpenAPIModelName()},
 	}
 }
 
@@ -1988,20 +2047,20 @@ func schema_ectobase_api_net_v1alpha1_FloatingIP(ref common.ReferenceCallback) c
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.FloatingIPSpec{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.FloatingIPSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.FloatingIPStatus{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.FloatingIPStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.FloatingIPSpec{}.OpenAPIModelName(), v1alpha1.FloatingIPStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+			netv1alpha1.FloatingIPSpec{}.OpenAPIModelName(), netv1alpha1.FloatingIPStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -2039,7 +2098,7 @@ func schema_ectobase_api_net_v1alpha1_FloatingIPList(ref common.ReferenceCallbac
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.FloatingIP{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.FloatingIP{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2050,7 +2109,7 @@ func schema_ectobase_api_net_v1alpha1_FloatingIPList(ref common.ReferenceCallbac
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.FloatingIP{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+			netv1alpha1.FloatingIP{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -2086,20 +2145,20 @@ func schema_ectobase_api_net_v1alpha1_InterfaceQoS(ref common.ReferenceCallback)
 					"egress": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Egress shapes outbound (VM->out) throughput.",
-							Ref:         ref(v1alpha1.EgressQoS{}.OpenAPIModelName()),
+							Ref:         ref(netv1alpha1.EgressQoS{}.OpenAPIModelName()),
 						},
 					},
 					"ingress": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Ingress polices inbound (out->VM) throughput.",
-							Ref:         ref(v1alpha1.RateLimit{}.OpenAPIModelName()),
+							Ref:         ref(netv1alpha1.RateLimit{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.EgressQoS{}.OpenAPIModelName(), v1alpha1.RateLimit{}.OpenAPIModelName()},
+			netv1alpha1.EgressQoS{}.OpenAPIModelName(), netv1alpha1.RateLimit{}.OpenAPIModelName()},
 	}
 }
 
@@ -2133,20 +2192,20 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancer(ref common.ReferenceCallback)
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.LoadBalancerSpec{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.LoadBalancerSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.LoadBalancerStatus{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.LoadBalancerStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.LoadBalancerSpec{}.OpenAPIModelName(), v1alpha1.LoadBalancerStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+			netv1alpha1.LoadBalancerSpec{}.OpenAPIModelName(), netv1alpha1.LoadBalancerStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -2184,7 +2243,7 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancerList(ref common.ReferenceCallb
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.LoadBalancer{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.LoadBalancer{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2195,7 +2254,7 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancerList(ref common.ReferenceCallb
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.LoadBalancer{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+			netv1alpha1.LoadBalancer{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -2252,7 +2311,7 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancerSpec(ref common.ReferenceCallb
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.LoadBalancerPort{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.LoadBalancerPort{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2272,7 +2331,7 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancerSpec(ref common.ReferenceCallb
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.LocalObjectReference{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2283,7 +2342,7 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancerSpec(ref common.ReferenceCallb
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.LoadBalancerPort{}.OpenAPIModelName(), v1alpha1.LocalObjectReference{}.OpenAPIModelName(), metav1.LabelSelector{}.OpenAPIModelName()},
+			netv1alpha1.LoadBalancerPort{}.OpenAPIModelName(), netv1alpha1.LocalObjectReference{}.OpenAPIModelName(), metav1.LabelSelector{}.OpenAPIModelName()},
 	}
 }
 
@@ -2403,20 +2462,20 @@ func schema_ectobase_api_net_v1alpha1_NATGateway(ref common.ReferenceCallback) c
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.NATGatewaySpec{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.NATGatewaySpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.NATGatewayStatus{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.NATGatewayStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.NATGatewaySpec{}.OpenAPIModelName(), v1alpha1.NATGatewayStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+			netv1alpha1.NATGatewaySpec{}.OpenAPIModelName(), netv1alpha1.NATGatewayStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -2454,7 +2513,7 @@ func schema_ectobase_api_net_v1alpha1_NATGatewayList(ref common.ReferenceCallbac
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.NATGateway{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.NATGateway{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2465,7 +2524,7 @@ func schema_ectobase_api_net_v1alpha1_NATGatewayList(ref common.ReferenceCallbac
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.NATGateway{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+			netv1alpha1.NATGateway{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -2480,7 +2539,7 @@ func schema_ectobase_api_net_v1alpha1_NATGatewaySpec(ref common.ReferenceCallbac
 						SchemaProps: spec.SchemaProps{
 							Description: "VPCRef selects the VPC whose interfaces egress through this gateway.",
 							Default:     map[string]interface{}{},
-							Ref:         ref(v1alpha1.LocalObjectReference{}.OpenAPIModelName()),
+							Ref:         ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 						},
 					},
 					"publicIPs": {
@@ -2517,7 +2576,7 @@ func schema_ectobase_api_net_v1alpha1_NATGatewaySpec(ref common.ReferenceCallbac
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.LocalObjectReference{}.OpenAPIModelName()},
+			netv1alpha1.LocalObjectReference{}.OpenAPIModelName()},
 	}
 }
 
@@ -2536,7 +2595,7 @@ func schema_ectobase_api_net_v1alpha1_NATGatewayStatus(ref common.ReferenceCallb
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.NATAllocation{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.NATAllocation{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2552,7 +2611,7 @@ func schema_ectobase_api_net_v1alpha1_NATGatewayStatus(ref common.ReferenceCallb
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.NATAllocation{}.OpenAPIModelName()},
+			netv1alpha1.NATAllocation{}.OpenAPIModelName()},
 	}
 }
 
@@ -2586,20 +2645,20 @@ func schema_ectobase_api_net_v1alpha1_NetworkInterface(ref common.ReferenceCallb
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.NetworkInterfaceSpec{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.NetworkInterfaceSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.NetworkInterfaceStatus{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.NetworkInterfaceStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.NetworkInterfaceSpec{}.OpenAPIModelName(), v1alpha1.NetworkInterfaceStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+			netv1alpha1.NetworkInterfaceSpec{}.OpenAPIModelName(), netv1alpha1.NetworkInterfaceStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -2637,7 +2696,7 @@ func schema_ectobase_api_net_v1alpha1_NetworkInterfaceList(ref common.ReferenceC
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.NetworkInterface{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.NetworkInterface{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2648,7 +2707,7 @@ func schema_ectobase_api_net_v1alpha1_NetworkInterfaceList(ref common.ReferenceC
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.NetworkInterface{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+			netv1alpha1.NetworkInterface{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -2663,7 +2722,7 @@ func schema_ectobase_api_net_v1alpha1_NetworkInterfaceSpec(ref common.ReferenceC
 						SchemaProps: spec.SchemaProps{
 							Description: "VPCRef references the VPC this interface belongs to.",
 							Default:     map[string]interface{}{},
-							Ref:         ref(v1alpha1.LocalObjectReference{}.OpenAPIModelName()),
+							Ref:         ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 						},
 					},
 					"ips": {
@@ -2698,7 +2757,7 @@ func schema_ectobase_api_net_v1alpha1_NetworkInterfaceSpec(ref common.ReferenceC
 					"qos": {
 						SchemaProps: spec.SchemaProps{
 							Description: "QoS caps/shapes throughput for this interface. Nil = unlimited.",
-							Ref:         ref(v1alpha1.InterfaceQoS{}.OpenAPIModelName()),
+							Ref:         ref(netv1alpha1.InterfaceQoS{}.OpenAPIModelName()),
 						},
 					},
 					"clusterName": {
@@ -2713,7 +2772,7 @@ func schema_ectobase_api_net_v1alpha1_NetworkInterfaceSpec(ref common.ReferenceC
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.InterfaceQoS{}.OpenAPIModelName(), v1alpha1.LocalObjectReference{}.OpenAPIModelName()},
+			netv1alpha1.InterfaceQoS{}.OpenAPIModelName(), netv1alpha1.LocalObjectReference{}.OpenAPIModelName()},
 	}
 }
 
@@ -2741,7 +2800,7 @@ func schema_ectobase_api_net_v1alpha1_NetworkInterfaceStatus(ref common.Referenc
 					"port": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Port describes the dataplane port allocated for this interface.",
-							Ref:         ref(v1alpha1.PortStatus{}.OpenAPIModelName()),
+							Ref:         ref(netv1alpha1.PortStatus{}.OpenAPIModelName()),
 						},
 					},
 					"state": {
@@ -2755,7 +2814,7 @@ func schema_ectobase_api_net_v1alpha1_NetworkInterfaceStatus(ref common.Referenc
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.PortStatus{}.OpenAPIModelName()},
+			netv1alpha1.PortStatus{}.OpenAPIModelName()},
 	}
 }
 
@@ -2904,20 +2963,20 @@ func schema_ectobase_api_net_v1alpha1_VPC(ref common.ReferenceCallback) common.O
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.VPCSpec{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.VPCSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.VPCStatus{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.VPCStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.VPCSpec{}.OpenAPIModelName(), v1alpha1.VPCStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+			netv1alpha1.VPCSpec{}.OpenAPIModelName(), netv1alpha1.VPCStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -2955,7 +3014,7 @@ func schema_ectobase_api_net_v1alpha1_VPCList(ref common.ReferenceCallback) comm
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.VPC{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.VPC{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -2966,7 +3025,7 @@ func schema_ectobase_api_net_v1alpha1_VPCList(ref common.ReferenceCallback) comm
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.VPC{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+			netv1alpha1.VPC{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -3000,20 +3059,20 @@ func schema_ectobase_api_net_v1alpha1_VPCPeering(ref common.ReferenceCallback) c
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.VPCPeeringSpec{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.VPCPeeringSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.VPCPeeringStatus{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.VPCPeeringStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.VPCPeeringSpec{}.OpenAPIModelName(), v1alpha1.VPCPeeringStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+			netv1alpha1.VPCPeeringSpec{}.OpenAPIModelName(), netv1alpha1.VPCPeeringStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -3051,7 +3110,7 @@ func schema_ectobase_api_net_v1alpha1_VPCPeeringList(ref common.ReferenceCallbac
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.VPCPeering{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.VPCPeering{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -3062,7 +3121,7 @@ func schema_ectobase_api_net_v1alpha1_VPCPeeringList(ref common.ReferenceCallbac
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.VPCPeering{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+			netv1alpha1.VPCPeering{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -3077,14 +3136,14 @@ func schema_ectobase_api_net_v1alpha1_VPCPeeringSpec(ref common.ReferenceCallbac
 						SchemaProps: spec.SchemaProps{
 							Description: "VPCRef is this side's VPC (same namespace as this VPCPeering object).",
 							Default:     map[string]interface{}{},
-							Ref:         ref(v1alpha1.LocalObjectReference{}.OpenAPIModelName()),
+							Ref:         ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 						},
 					},
 					"peerVpcRef": {
 						SchemaProps: spec.SchemaProps{
 							Description: "PeerVPCRef references the other VPC (namespace + name).",
 							Default:     map[string]interface{}{},
-							Ref:         ref(v1alpha1.VPCReference{}.OpenAPIModelName()),
+							Ref:         ref(netv1alpha1.VPCReference{}.OpenAPIModelName()),
 						},
 					},
 					"exposedPrefixes": {
@@ -3107,7 +3166,7 @@ func schema_ectobase_api_net_v1alpha1_VPCPeeringSpec(ref common.ReferenceCallbac
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.LocalObjectReference{}.OpenAPIModelName(), v1alpha1.VPCReference{}.OpenAPIModelName()},
+			netv1alpha1.LocalObjectReference{}.OpenAPIModelName(), netv1alpha1.VPCReference{}.OpenAPIModelName()},
 	}
 }
 
@@ -3250,20 +3309,20 @@ func schema_ectobase_api_net_v1alpha1_VirtualMachine(ref common.ReferenceCallbac
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.VirtualMachineSpec{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.VirtualMachineSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.VirtualMachineStatus{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.VirtualMachineStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.VirtualMachineSpec{}.OpenAPIModelName(), v1alpha1.VirtualMachineStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+			netv1alpha1.VirtualMachineSpec{}.OpenAPIModelName(), netv1alpha1.VirtualMachineStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -3301,7 +3360,7 @@ func schema_ectobase_api_net_v1alpha1_VirtualMachineList(ref common.ReferenceCal
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.VirtualMachine{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.VirtualMachine{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -3312,7 +3371,7 @@ func schema_ectobase_api_net_v1alpha1_VirtualMachineList(ref common.ReferenceCal
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.VirtualMachine{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+			netv1alpha1.VirtualMachine{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -3338,7 +3397,7 @@ func schema_ectobase_api_net_v1alpha1_VirtualMachineSpec(ref common.ReferenceCal
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.LocalObjectReference{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -3352,7 +3411,7 @@ func schema_ectobase_api_net_v1alpha1_VirtualMachineSpec(ref common.ReferenceCal
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.LocalObjectReference{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -3388,14 +3447,14 @@ func schema_ectobase_api_net_v1alpha1_VirtualMachineSpec(ref common.ReferenceCal
 					"antiAffinity": {
 						SchemaProps: spec.SchemaProps{
 							Description: "AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools during scheduling and failover (best-effort: availability wins if no non-violating pool).",
-							Ref:         ref(v1alpha1.VMAntiAffinity{}.OpenAPIModelName()),
+							Ref:         ref(netv1alpha1.VMAntiAffinity{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.LocalObjectReference{}.OpenAPIModelName(), v1alpha1.VMAntiAffinity{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName(), metav1.LabelSelector{}.OpenAPIModelName()},
+			netv1alpha1.LocalObjectReference{}.OpenAPIModelName(), netv1alpha1.VMAntiAffinity{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName(), metav1.LabelSelector{}.OpenAPIModelName()},
 	}
 }
 
@@ -3440,14 +3499,14 @@ func schema_ectobase_api_net_v1alpha1_VirtualMachineStatus(ref common.ReferenceC
 					"placement": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Placement is the VM's actual running location, stamped by the broker. Central uses NodePrefix as the fence coordinate and to gate recovery drain.",
-							Ref:         ref(v1alpha1.VMPlacement{}.OpenAPIModelName()),
+							Ref:         ref(netv1alpha1.VMPlacement{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.VMPlacement{}.OpenAPIModelName(), metav1.Condition{}.OpenAPIModelName()},
+			netv1alpha1.VMPlacement{}.OpenAPIModelName(), metav1.Condition{}.OpenAPIModelName()},
 	}
 }
 
@@ -3481,20 +3540,20 @@ func schema_ectobase_api_net_v1alpha1_Volume(ref common.ReferenceCallback) commo
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.VolumeSpec{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.VolumeSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(v1alpha1.VolumeStatus{}.OpenAPIModelName()),
+							Ref:     ref(netv1alpha1.VolumeStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.VolumeSpec{}.OpenAPIModelName(), v1alpha1.VolumeStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+			netv1alpha1.VolumeSpec{}.OpenAPIModelName(), netv1alpha1.VolumeStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -3532,7 +3591,7 @@ func schema_ectobase_api_net_v1alpha1_VolumeList(ref common.ReferenceCallback) c
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(v1alpha1.Volume{}.OpenAPIModelName()),
+										Ref:     ref(netv1alpha1.Volume{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -3543,7 +3602,7 @@ func schema_ectobase_api_net_v1alpha1_VolumeList(ref common.ReferenceCallback) c
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.Volume{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+			netv1alpha1.Volume{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 

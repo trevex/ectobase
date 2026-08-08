@@ -104,7 +104,7 @@ func TestPodOverlayPing(t *testing.T) {
 		ep := ep
 		eventually(t, 2*time.Minute, 5*time.Second, func() error {
 			nn, err := kubectl(ctx, cfg, ep.node.Cluster,
-				"get", "compilednics.net.ectobase.dev", "default-"+ep.nic,
+				"get", "compilednics.compiled.ectobase.dev", "default-"+ep.nic,
 				"-o", "jsonpath={.spec.nodeName}")
 			if err != nil {
 				return fmt.Errorf("get CompiledNIC default-%s on %s: %w", ep.nic, ep.node.Cluster, err)

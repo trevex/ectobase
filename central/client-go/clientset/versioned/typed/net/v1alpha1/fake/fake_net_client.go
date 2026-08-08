@@ -12,22 +12,6 @@ type FakeNetV1alpha1 struct {
 	*testing.Fake
 }
 
-func (c *FakeNetV1alpha1) CompiledContainers(namespace string) v1alpha1.CompiledContainerInterface {
-	return newFakeCompiledContainers(c, namespace)
-}
-
-func (c *FakeNetV1alpha1) CompiledNICs(namespace string) v1alpha1.CompiledNICInterface {
-	return newFakeCompiledNICs(c, namespace)
-}
-
-func (c *FakeNetV1alpha1) CompiledVMs(namespace string) v1alpha1.CompiledVMInterface {
-	return newFakeCompiledVMs(c, namespace)
-}
-
-func (c *FakeNetV1alpha1) CompiledVolumeAttachments(namespace string) v1alpha1.CompiledVolumeAttachmentInterface {
-	return newFakeCompiledVolumeAttachments(c, namespace)
-}
-
 func (c *FakeNetV1alpha1) Containers(namespace string) v1alpha1.ContainerInterface {
 	return newFakeContainers(c, namespace)
 }

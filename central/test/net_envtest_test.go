@@ -20,6 +20,8 @@ import (
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	netinstall "github.com/trevex/ectobase/api/net/install"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
+	compiledinstall "github.com/trevex/ectobase/api/compiled/install"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 )
 
 // TestVPC_CRUD proves the net.ectobase.dev group is served end-to-end by the
@@ -35,9 +37,10 @@ func TestVPC_CRUD(t *testing.T) {
 
 	scheme := runtime.NewScheme()
 	// Both groups are installed: the aggregated server binary serves both, and
-	// the client scheme must know the net types to (de)serialize them.
+	// the client scheme must know the net and compiled types to (de)serialize them.
 	platforminstall.Install(scheme)
 	netinstall.Install(scheme)
+	compiledinstall.Install(scheme)
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
 	}
@@ -139,6 +142,7 @@ func startNetEnv(t *testing.T) (client.Client, context.Context) {
 	scheme := runtime.NewScheme()
 	platforminstall.Install(scheme)
 	netinstall.Install(scheme)
+	compiledinstall.Install(scheme)
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
 	}
@@ -226,17 +230,17 @@ func TestNetworkInterface_CRUD(t *testing.T) {
 func TestCompiledNIC_SpecClusterNameSelector(t *testing.T) {
 	c, ctx := startNetEnv(t)
 
-	newNIC := func(cluster string) *netv1.CompiledNIC {
-		return &netv1.CompiledNIC{
+	newNIC := func(cluster string) *compiledv1.CompiledNIC {
+		return &compiledv1.CompiledNIC{
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: "cnic-" + cluster + "-",
 				Namespace:    "default",
 			},
-			Spec: netv1.CompiledNICSpec{
+			Spec: compiledv1.CompiledNICSpec{
 				ClusterName: cluster,
 				NodeName:    "node-" + cluster,
 				VNI:         1000,
-				Port:        netv1.PortStatus{Type: netv1.PortTypeTap, Name: "dtapvf_0"},
+				Port:        compiledv1.PortStatus{Type: compiledv1.PortTypeTap, Name: "dtapvf_0"},
 			},
 		}
 	}
@@ -254,7 +258,7 @@ func TestCompiledNIC_SpecClusterNameSelector(t *testing.T) {
 		_ = c.Delete(ctx, b)
 	})
 
-	list := &netv1.CompiledNICList{}
+	list := &compiledv1.CompiledNICList{}
 	if err := c.List(ctx, list, client.InNamespace("default"), client.MatchingFields{"spec.clusterName": "c1"}); err != nil {
 		t.Fatalf("List(spec.clusterName=c1): %v", err)
 	}
@@ -324,13 +328,13 @@ func TestVolume_CRUD(t *testing.T) {
 func TestCompiledVolumeAttachment_SpecClusterNameSelector(t *testing.T) {
 	c, ctx := startNetEnv(t)
 
-	newCVA := func(cluster string) *netv1.CompiledVolumeAttachment {
-		return &netv1.CompiledVolumeAttachment{
+	newCVA := func(cluster string) *compiledv1.CompiledVolumeAttachment {
+		return &compiledv1.CompiledVolumeAttachment{
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: "cva-" + cluster + "-",
 				Namespace:    "default",
 			},
-			Spec: netv1.CompiledVolumeAttachmentSpec{
+			Spec: compiledv1.CompiledVolumeAttachmentSpec{
 				ClusterName:  cluster,
 				Size:         resource.MustParse("10Gi"),
 				StorageClass: "ceph-rbd",
@@ -353,7 +357,7 @@ func TestCompiledVolumeAttachment_SpecClusterNameSelector(t *testing.T) {
 		_ = c.Delete(ctx, b)
 	})
 
-	list := &netv1.CompiledVolumeAttachmentList{}
+	list := &compiledv1.CompiledVolumeAttachmentList{}
 	if err := c.List(ctx, list, client.InNamespace("default"), client.MatchingFields{"spec.clusterName": "c1"}); err != nil {
 		t.Fatalf("List(spec.clusterName=c1): %v", err)
 	}
@@ -380,17 +384,17 @@ func TestCompiledVolumeAttachment_SpecClusterNameSelector(t *testing.T) {
 func TestCompiledVM_SpecClusterNameSelector(t *testing.T) {
 	c, ctx := startNetEnv(t)
 
-	newVM := func(cluster string) *netv1.CompiledVM {
-		return &netv1.CompiledVM{
+	newVM := func(cluster string) *compiledv1.CompiledVM {
+		return &compiledv1.CompiledVM{
 			ObjectMeta: metav1.ObjectMeta{
 				GenerateName: "cvm-" + cluster + "-",
 				Namespace:    "default",
 			},
-			Spec: netv1.CompiledVMSpec{
+			Spec: compiledv1.CompiledVMSpec{
 				ClusterName: cluster,
 				Image:       "fedora",
 				RunStrategy: "RerunOnFailure",
-				Interfaces:  []netv1.CompiledVMInterface{{MAC: "02:00:00:00:00:01", NetworkName: "flowplane-overlay"}},
+				Interfaces:  []compiledv1.CompiledVMInterface{{MAC: "02:00:00:00:00:01", NetworkName: "flowplane-overlay"}},
 			},
 		}
 	}
@@ -409,7 +413,7 @@ func TestCompiledVM_SpecClusterNameSelector(t *testing.T) {
 	})
 
 	// Basic create/get round-trip: Image survives the internal<->versioned conversion.
-	gotA := &netv1.CompiledVM{}
+	gotA := &compiledv1.CompiledVM{}
 	if err := c.Get(ctx, client.ObjectKeyFromObject(a), gotA); err != nil {
 		t.Fatalf("Get a: %v", err)
 	}
@@ -417,7 +421,7 @@ func TestCompiledVM_SpecClusterNameSelector(t *testing.T) {
 		t.Fatalf("Get a: expected Image=fedora, got %q", gotA.Spec.Image)
 	}
 
-	list := &netv1.CompiledVMList{}
+	list := &compiledv1.CompiledVMList{}
 	if err := c.List(ctx, list, client.InNamespace("default"), client.MatchingFields{"spec.clusterName": "c1"}); err != nil {
 		t.Fatalf("List(spec.clusterName=c1): %v", err)
 	}

@@ -9,6 +9,7 @@ import (
 	time "time"
 
 	versioned "github.com/trevex/ectobase/central/client-go/clientset/versioned"
+	compiled "github.com/trevex/ectobase/central/client-go/informers/externalversions/compiled"
 	internalinterfaces "github.com/trevex/ectobase/central/client-go/informers/externalversions/internalinterfaces"
 	net "github.com/trevex/ectobase/central/client-go/informers/externalversions/net"
 	platform "github.com/trevex/ectobase/central/client-go/informers/externalversions/platform"
@@ -310,8 +311,13 @@ type SharedInformerFactory interface {
 	// client.
 	InformerFor(obj runtime.Object, newFunc internalinterfaces.NewInformerFunc) cache.SharedIndexInformer
 
+	Compiled() compiled.Interface
 	Net() net.Interface
 	Platform() platform.Interface
+}
+
+func (f *sharedInformerFactory) Compiled() compiled.Interface {
+	return compiled.New(f, f.namespace, f.tweakListOptions)
 }
 
 func (f *sharedInformerFactory) Net() net.Interface {

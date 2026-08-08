@@ -20,6 +20,8 @@ import (
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	netinstall "github.com/trevex/ectobase/api/net/install"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
+	compiledinstall "github.com/trevex/ectobase/api/compiled/install"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/broker"
 	"github.com/trevex/ectobase/netplane/controllers"
 )
@@ -55,6 +57,7 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	// against this scheme.
 	platforminstall.Install(scheme)
 	netinstall.Install(scheme)
+	compiledinstall.Install(scheme)
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
 	}
@@ -199,7 +202,7 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	// ASSERT (central): nic-a compiled to name "default-nic-a", bound to c1, with
 	// the workload=vm1 label inherited from its owning VM.
 	// ================================================================
-	compiledA := &netv1.CompiledNIC{}
+	compiledA := &compiledv1.CompiledNIC{}
 	if err := centralClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "default-nic-a"}, compiledA); err != nil {
 		t.Fatalf("central Get default-nic-a: %v", err)
 	}
@@ -217,7 +220,7 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	}
 
 	// nic-b compiled to c2 (owned by vm2) — used to prove bounded pull below.
-	compiledB := &netv1.CompiledNIC{}
+	compiledB := &compiledv1.CompiledNIC{}
 	if err := centralClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "default-nic-b"}, compiledB); err != nil {
 		t.Fatalf("central Get default-nic-b: %v", err)
 	}
@@ -241,7 +244,7 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	// ASSERT (downstream): exactly ONE CompiledNIC (nic-a's), bound to c1; the c2
 	// workload (default-nic-b) did NOT cross.
 	// ================================================================
-	downList := &netv1.CompiledNICList{}
+	downList := &compiledv1.CompiledNICList{}
 	if err := downstreamClient.List(ctx, downList); err != nil {
 		t.Fatalf("downstream List: %v", err)
 	}

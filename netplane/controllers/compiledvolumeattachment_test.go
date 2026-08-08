@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -21,7 +22,7 @@ func TestCompileVolumeAttachments(t *testing.T) {
 	if len(atts) != 2 {
 		t.Fatalf("want 2 attachments, got %d", len(atts))
 	}
-	byName := map[string]netv1.CompiledVolumeAttachment{}
+	byName := map[string]compiledv1.CompiledVolumeAttachment{}
 	for _, a := range atts {
 		byName[a.Name] = a
 	}

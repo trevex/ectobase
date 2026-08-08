@@ -7,7 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
@@ -21,7 +21,7 @@ const dvFieldOwner = "volume-materializer"
 // buildDataVolume turns a CompiledVolumeAttachment into a CDI DataVolume: an RBD PVC
 // (via the ceph-csi StorageClass) whose source is a registry import of BootImage
 // (bootable) or a blank disk of Size. Pure; TypeMeta set for server-side apply.
-func buildDataVolume(cva *netv1.CompiledVolumeAttachment) *cdiv1.DataVolume {
+func buildDataVolume(cva *compiledv1.CompiledVolumeAttachment) *cdiv1.DataVolume {
 	// Block volumeMode: the correct mode for a KubeVirt VM disk (raw block device — better perf and
 	// clean cross-node reschedule/migration semantics vs a disk.img on a Filesystem PVC).
 	blockMode := corev1.PersistentVolumeBlock
@@ -62,7 +62,7 @@ func buildDataVolume(cva *netv1.CompiledVolumeAttachment) *cdiv1.DataVolume {
 type VolumeMaterializerReconciler struct{ Client client.Client }
 
 func (r *VolumeMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	var cva netv1.CompiledVolumeAttachment
+	var cva compiledv1.CompiledVolumeAttachment
 	if err := r.Client.Get(ctx, req.NamespacedName, &cva); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -80,7 +80,7 @@ func (r *VolumeMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 func (r *VolumeMaterializerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&netv1.CompiledVolumeAttachment{}).
+		For(&compiledv1.CompiledVolumeAttachment{}).
 		Owns(&cdiv1.DataVolume{}).
 		Complete(r)
 }

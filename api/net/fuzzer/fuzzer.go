@@ -31,25 +31,13 @@ var Funcs = func(codecs runtimeserializer.CodecFactory) []any {
 		func(s *net.VPCPeeringSpec, c randfill.Continue) {
 			c.FillNoCustom(s)
 		},
-		func(s *net.CompiledNICSpec, c randfill.Continue) {
-			c.FillNoCustom(s)
-		},
-		func(s *net.CompiledVMSpec, c randfill.Continue) {
-			c.FillNoCustom(s)
-		},
 		func(s *net.VolumeSpec, c randfill.Continue) {
-			c.FillNoCustom(s)
-		},
-		func(s *net.CompiledVolumeAttachmentSpec, c randfill.Continue) {
 			c.FillNoCustom(s)
 		},
 		func(s *net.VirtualMachineSpec, c randfill.Continue) {
 			c.FillNoCustom(s)
 		},
 		func(s *net.ContainerSpec, c randfill.Continue) {
-			c.FillNoCustom(s)
-		},
-		func(s *net.CompiledContainerSpec, c randfill.Continue) {
 			c.FillNoCustom(s)
 		},
 	}

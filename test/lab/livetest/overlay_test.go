@@ -67,7 +67,7 @@ func TestCrossClusterOverlayPing(t *testing.T) {
 		tc := tc
 		eventually(t, 2*time.Minute, 5*time.Second, func() error {
 			nn, err := kubectl(ctx, cfg, tc.node.Cluster,
-				"get", "compilednics.net.ectobase.dev", "default-"+tc.nic,
+				"get", "compilednics.compiled.ectobase.dev", "default-"+tc.nic,
 				"-o", "jsonpath={.spec.nodeName}")
 			if err != nil {
 				return fmt.Errorf("get CompiledNIC default-%s on %s: %w", tc.nic, tc.node.Cluster, err)

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -16,23 +17,26 @@ func fwScheme(t *testing.T) *runtime.Scheme {
 	if err := netv1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
+	if err := compiledv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
 	return s
 }
 
 // The agent pushes the COMPLETE desired rule set per interface, in CompiledNIC order (ingress rules
 // fw-in-0..N first, then egress fw-eg-0..N), via a single ReplaceInterfaceFirewall call.
 func TestReconcileFirewall_PushesFullOrderedSet(t *testing.T) {
-	cnic := &netv1.CompiledNIC{
+	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "green-0-nic0", Namespace: "default"},
-		Spec: netv1.CompiledNICSpec{
+		Spec: compiledv1.CompiledNICSpec{
 			NodeName:   "nodeA",
 			OverlayIPs: []string{"10.0.20.11"},
-			Firewall: netv1.CompiledFirewall{
-				Ingress: []netv1.CompiledFwRule{
+			Firewall: compiledv1.CompiledFirewall{
+				Ingress: []compiledv1.CompiledFwRule{
 					{CIDR: "0.0.0.0/0", Action: "Deny"},
 					{CIDR: "10.0.10.0/24", Proto: "ICMP", Action: "Allow"},
 				},
-				Egress: []netv1.CompiledFwRule{{CIDR: "0.0.0.0/0", Action: "Allow"}},
+				Egress: []compiledv1.CompiledFwRule{{CIDR: "0.0.0.0/0", Action: "Allow"}},
 			},
 		},
 	}
@@ -60,12 +64,12 @@ func TestReconcileFirewall_PushesFullOrderedSet(t *testing.T) {
 // same client+dp must converge a deny→allow swap to EXACTLY [allow] — the old in-memory-diff path
 // left the stale deny in place after a restart (scenario-vpc-peering Assertion 2).
 func TestReconcileFirewall_RestartSafeConverges(t *testing.T) {
-	cnic := &netv1.CompiledNIC{
+	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "green-0-nic0", Namespace: "default"},
-		Spec: netv1.CompiledNICSpec{
+		Spec: compiledv1.CompiledNICSpec{
 			NodeName:   "nodeA",
 			OverlayIPs: []string{"10.0.20.11"},
-			Firewall:   netv1.CompiledFirewall{Ingress: []netv1.CompiledFwRule{{CIDR: "0.0.0.0/0", Action: "Deny"}}},
+			Firewall:   compiledv1.CompiledFirewall{Ingress: []compiledv1.CompiledFwRule{{CIDR: "0.0.0.0/0", Action: "Deny"}}},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(fwScheme(t)).WithObjects(cnic).Build()
@@ -79,7 +83,7 @@ func TestReconcileFirewall_RestartSafeConverges(t *testing.T) {
 	}
 
 	// Swap deny → allow on the same object.
-	cnic.Spec.Firewall.Ingress = []netv1.CompiledFwRule{{CIDR: "10.0.10.0/24", Proto: "ICMP", Action: "Allow"}}
+	cnic.Spec.Firewall.Ingress = []compiledv1.CompiledFwRule{{CIDR: "10.0.10.0/24", Proto: "ICMP", Action: "Allow"}}
 	if err := cl.Update(context.Background(), cnic); err != nil {
 		t.Fatal(err)
 	}
@@ -97,14 +101,14 @@ func TestReconcileFirewall_RestartSafeConverges(t *testing.T) {
 
 // Replace is idempotent: repeated reconciles never error (no ALREADY_EXISTS) and leave the final set.
 func TestReconcileFirewall_ConvergesOnRepeat(t *testing.T) {
-	cnic := &netv1.CompiledNIC{
+	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "green-0-nic0", Namespace: "default"},
-		Spec: netv1.CompiledNICSpec{
+		Spec: compiledv1.CompiledNICSpec{
 			NodeName:   "nodeA",
 			OverlayIPs: []string{"10.0.20.11"},
-			Firewall: netv1.CompiledFirewall{
-				Ingress: []netv1.CompiledFwRule{{CIDR: "0.0.0.0/0", Proto: "TCP", Port: 443, Action: "Allow"}},
-				Egress:  []netv1.CompiledFwRule{{CIDR: "0.0.0.0/0", Action: "Allow"}},
+			Firewall: compiledv1.CompiledFirewall{
+				Ingress: []compiledv1.CompiledFwRule{{CIDR: "0.0.0.0/0", Proto: "TCP", Port: 443, Action: "Allow"}},
+				Egress:  []compiledv1.CompiledFwRule{{CIDR: "0.0.0.0/0", Action: "Allow"}},
 			},
 		},
 	}

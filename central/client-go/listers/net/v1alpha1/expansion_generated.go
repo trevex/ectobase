@@ -2,38 +2,6 @@
 
 package v1alpha1
 
-// CompiledContainerListerExpansion allows custom methods to be added to
-// CompiledContainerLister.
-type CompiledContainerListerExpansion interface{}
-
-// CompiledContainerNamespaceListerExpansion allows custom methods to be added to
-// CompiledContainerNamespaceLister.
-type CompiledContainerNamespaceListerExpansion interface{}
-
-// CompiledNICListerExpansion allows custom methods to be added to
-// CompiledNICLister.
-type CompiledNICListerExpansion interface{}
-
-// CompiledNICNamespaceListerExpansion allows custom methods to be added to
-// CompiledNICNamespaceLister.
-type CompiledNICNamespaceListerExpansion interface{}
-
-// CompiledVMListerExpansion allows custom methods to be added to
-// CompiledVMLister.
-type CompiledVMListerExpansion interface{}
-
-// CompiledVMNamespaceListerExpansion allows custom methods to be added to
-// CompiledVMNamespaceLister.
-type CompiledVMNamespaceListerExpansion interface{}
-
-// CompiledVolumeAttachmentListerExpansion allows custom methods to be added to
-// CompiledVolumeAttachmentLister.
-type CompiledVolumeAttachmentListerExpansion interface{}
-
-// CompiledVolumeAttachmentNamespaceListerExpansion allows custom methods to be added to
-// CompiledVolumeAttachmentNamespaceLister.
-type CompiledVolumeAttachmentNamespaceListerExpansion interface{}
-
 // ContainerListerExpansion allows custom methods to be added to
 // ContainerLister.
 type ContainerListerExpansion interface{}

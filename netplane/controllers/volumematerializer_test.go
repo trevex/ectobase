@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,9 +23,9 @@ import (
 )
 
 func TestBuildDataVolume_Boot(t *testing.T) {
-	cva := &netv1.CompiledVolumeAttachment{
+	cva := &compiledv1.CompiledVolumeAttachment{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "vm1-boot", Labels: map[string]string{"workload": "vm1"}},
-		Spec:       netv1.CompiledVolumeAttachmentSpec{Size: resource.MustParse("10Gi"), StorageClass: "ceph-rbd", BootImage: "quay.io/containerdisks/fedora:41", Boot: true},
+		Spec:       compiledv1.CompiledVolumeAttachmentSpec{Size: resource.MustParse("10Gi"), StorageClass: "ceph-rbd", BootImage: "quay.io/containerdisks/fedora:41", Boot: true},
 	}
 	dv := buildDataVolume(cva)
 	if dv.Name != "vm1-boot" || dv.Namespace != "ns" {
@@ -49,7 +50,7 @@ func TestBuildDataVolume_Boot(t *testing.T) {
 }
 
 func TestBuildDataVolume_Blank(t *testing.T) {
-	cva := &netv1.CompiledVolumeAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "vm1-data"}, Spec: netv1.CompiledVolumeAttachmentSpec{Size: resource.MustParse("5Gi")}}
+	cva := &compiledv1.CompiledVolumeAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "vm1-data"}, Spec: compiledv1.CompiledVolumeAttachmentSpec{Size: resource.MustParse("5Gi")}}
 	dv := buildDataVolume(cva)
 	if dv.Spec.Source == nil || dv.Spec.Source.Blank == nil {
 		t.Fatalf("expected blank source, got %+v", dv.Spec.Source)
@@ -69,6 +70,9 @@ func TestVolumeMaterializer_CreatesDataVolume(t *testing.T) {
 
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := compiledv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 	if err := cdiv1.AddToScheme(scheme); err != nil {
@@ -95,9 +99,9 @@ func TestVolumeMaterializer_CreatesDataVolume(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	cva := &netv1.CompiledVolumeAttachment{
+	cva := &compiledv1.CompiledVolumeAttachment{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "vm1-boot", Labels: map[string]string{"workload": "vm1"}},
-		Spec: netv1.CompiledVolumeAttachmentSpec{
+		Spec: compiledv1.CompiledVolumeAttachmentSpec{
 			ClusterName:  "cluster-a",
 			Size:         resource.MustParse("10Gi"),
 			StorageClass: "ceph-rbd",

@@ -24,6 +24,8 @@ import (
 	netinstall "github.com/trevex/ectobase/api/net/install"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
+	compiledinstall "github.com/trevex/ectobase/api/compiled/install"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/broker"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
 	"github.com/trevex/ectobase/central/pkg/scheduler"
@@ -50,6 +52,7 @@ func TestPhase3_HeartbeatScheduleCompileSync_E2E(t *testing.T) {
 	scheme := runtime.NewScheme()
 	platforminstall.Install(scheme)
 	netinstall.Install(scheme)
+	compiledinstall.Install(scheme)
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
 	}
@@ -196,7 +199,7 @@ func TestPhase3_HeartbeatScheduleCompileSync_E2E(t *testing.T) {
 	if _, err := cr.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Namespace: ns, Name: "nic-a"}}); err != nil {
 		t.Fatalf("compile Reconcile nic-a: %v", err)
 	}
-	compiled := &netv1.CompiledNIC{}
+	compiled := &compiledv1.CompiledNIC{}
 	if err := centralClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "default-nic-a"}, compiled); err != nil {
 		t.Fatalf("central get default-nic-a: %v", err)
 	}
@@ -215,7 +218,7 @@ func TestPhase3_HeartbeatScheduleCompileSync_E2E(t *testing.T) {
 	if err := b.SyncOnce(ctx); err != nil {
 		t.Fatalf("broker SyncOnce: %v", err)
 	}
-	downList := &netv1.CompiledNICList{}
+	downList := &compiledv1.CompiledNICList{}
 	if err := downstreamClient.List(ctx, downList); err != nil {
 		t.Fatalf("downstream List: %v", err)
 	}

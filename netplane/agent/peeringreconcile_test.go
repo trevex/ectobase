@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -15,11 +15,11 @@ import (
 func TestReconcilePass_IncludesPeeringImportsAndSubs(t *testing.T) {
 	s := egScheme(t)
 	// CompiledNIC on this node: VNI 100, peers with VNI 200 for prefix "10.1.0.0/24".
-	cnic := &netv1.CompiledNIC{
+	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "web-0"},
-		Spec: netv1.CompiledNICSpec{
+		Spec: compiledv1.CompiledNICSpec{
 			NodeName: "nodeA", VNI: 100,
-			PeerImports: []netv1.CompiledPeerImport{{PeerVNI: 200, ImportPrefixes: []string{"10.1.0.0/24"}}},
+			PeerImports: []compiledv1.CompiledPeerImport{{PeerVNI: 200, ImportPrefixes: []string{"10.1.0.0/24"}}},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
@@ -48,17 +48,17 @@ func TestReconcilePass_IncludesPeeringImportsAndSubs(t *testing.T) {
 
 func TestDesiredPeeringImports(t *testing.T) {
 	s := egScheme(t) // reuse scheme helper from importreconcile_test.go
-	cnic := &netv1.CompiledNIC{
+	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "web-0"},
-		Spec: netv1.CompiledNICSpec{
+		Spec: compiledv1.CompiledNICSpec{
 			NodeName: "nodeA", VNI: 100,
-			PeerImports: []netv1.CompiledPeerImport{{PeerVNI: 200, ImportPrefixes: []string{"10.1.0.0/24"}}},
+			PeerImports: []compiledv1.CompiledPeerImport{{PeerVNI: 200, ImportPrefixes: []string{"10.1.0.0/24"}}},
 		},
 	}
-	offNode := &netv1.CompiledNIC{
+	offNode := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "web-1"},
-		Spec: netv1.CompiledNICSpec{NodeName: "nodeB", VNI: 300,
-			PeerImports: []netv1.CompiledPeerImport{{PeerVNI: 400}}},
+		Spec: compiledv1.CompiledNICSpec{NodeName: "nodeB", VNI: 300,
+			PeerImports: []compiledv1.CompiledPeerImport{{PeerVNI: 400}}},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic, offNode).Build()
 	r := &Reconciler{client: cl, nodeID: "nodeA"}

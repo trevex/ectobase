@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 )
 
 // desiredEgressVNIs returns the VNIs this node hosts that need internet egress — derived solely from
@@ -16,7 +16,7 @@ import (
 func (r *Reconciler) desiredEgressVNIs(ctx context.Context) ([]uint32, error) {
 	set := map[uint32]struct{}{}
 
-	var cnics netv1.CompiledNICList
+	var cnics compiledv1.CompiledNICList
 	if err := r.client.List(ctx, &cnics); err != nil {
 		return nil, fmt.Errorf("list compilednics: %w", err)
 	}
@@ -40,7 +40,7 @@ func (r *Reconciler) desiredEgressVNIs(ctx context.Context) ([]uint32, error) {
 // desiredPeeringImports scans CompiledNICs scheduled to this node and returns, per local VNI,
 // the peer imports (deduped by peerVNI, prefixes unioned). Mirrors desiredEgressVNIs' scan.
 func (r *Reconciler) desiredPeeringImports(ctx context.Context) (map[uint32][]PeerImport, error) {
-	var cnics netv1.CompiledNICList
+	var cnics compiledv1.CompiledNICList
 	if err := r.client.List(ctx, &cnics); err != nil {
 		return nil, err
 	}

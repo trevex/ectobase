@@ -21,12 +21,15 @@ rules:
       - networkinterfaces/status
       - natgateways
       - natgateways/status
-      # The agent lists CompiledNICs (firewall + LB reconcile) and LoadBalancers
-      # (edge ReconcileLB -> AddLbVip) to program the dataplane.
-      - compilednics
-      - compilednics/status
+      # The agent lists LoadBalancers (edge ReconcileLB -> AddLbVip) to program the dataplane.
       - loadbalancers
       - loadbalancers/status
+    verbs: ["get", "list", "watch"]
+  # The agent lists CompiledNICs (firewall + LB reconcile) to program the dataplane.
+  - apiGroups: ["compiled.ectobase.dev"]
+    resources:
+      - compilednics
+      - compilednics/status
     verbs: ["get", "list", "watch"]
   # The agent reports interface programming state back onto the NIC status.
   - apiGroups: ["net.ectobase.dev"]
@@ -87,10 +90,10 @@ rules:
   - apiGroups: ["net.ectobase.dev"]
     resources: ["firewallpolicies", "loadbalancers"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["net.ectobase.dev"]
+  - apiGroups: ["compiled.ectobase.dev"]
     resources: ["compilednics"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["net.ectobase.dev"]
+  - apiGroups: ["compiled.ectobase.dev"]
     resources: ["compilednics/status"]
     verbs: ["get", "update", "patch"]
   # The VPCPeeringReconciler evaluates mutual consent and writes VPCPeering.Status; the
@@ -115,10 +118,10 @@ rules:
   - apiGroups: ["net.ectobase.dev"]
     resources: ["virtualmachines/status"]
     verbs: ["get", "update", "patch"]
-  - apiGroups: ["net.ectobase.dev"]
+  - apiGroups: ["compiled.ectobase.dev"]
     resources: ["compiledvms", "compiledvolumeattachments"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["net.ectobase.dev"]
+  - apiGroups: ["compiled.ectobase.dev"]
     resources: ["compiledvms/status", "compiledvolumeattachments/status"]
     verbs: ["get", "update", "patch"]
   # The CompiledContainerReconciler compiles Container -> CompiledContainer, and the
@@ -131,10 +134,10 @@ rules:
   - apiGroups: ["net.ectobase.dev"]
     resources: ["containers/status"]
     verbs: ["get", "update", "patch"]
-  - apiGroups: ["net.ectobase.dev"]
+  - apiGroups: ["compiled.ectobase.dev"]
     resources: ["compiledcontainers"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["net.ectobase.dev"]
+  - apiGroups: ["compiled.ectobase.dev"]
     resources: ["compiledcontainers/status"]
     verbs: ["get", "update", "patch"]
 ---
@@ -153,7 +156,7 @@ subjects:
 {{- if .Values.broker.enabled }}
 ---
 # The per-cluster broker (kubelet-analog) syncs compiled objects from central down into
-# THIS downstream cluster's net.ectobase.dev CRDs (create/update/patch/delete + GC), reads
+# THIS downstream cluster's compiled.ectobase.dev CRDs (create/update/patch/delete + GC), reads
 # Nodes for underlay/prefix reporting, and reads VMIs for VM lifecycle status. Central-side
 # credentials come from a separate mounted kubeconfig (broker.centralKubeconfigSecret); this
 # RBAC is only the downstream (in-cluster) half. Central-side RBAC is minted by the e2e token.
@@ -168,7 +171,7 @@ kind: ClusterRole
 metadata:
   name: central-broker
 rules:
-  - apiGroups: ["net.ectobase.dev"]
+  - apiGroups: ["compiled.ectobase.dev"]
     resources:
       - compilednics
       - compiledvms

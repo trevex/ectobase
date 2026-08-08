@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -22,6 +23,9 @@ func findExternalRoute(routes []ExternalRoute, prefix string) *ExternalRoute {
 func TestDesiredExternalRoutesEdgeIntoPublicVNI(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := compiledv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 	// No VPC/NATGateway/LoadBalancer objects at all: the edge is tenant-agnostic.
@@ -48,6 +52,9 @@ func TestDesiredExternalRoutesNonEdgeStagesNothing(t *testing.T) {
 	if err := netv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
+	if err := compiledv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 	routes, err := DesiredExternalRoutes(context.Background(), c, "fd00::b", "")
 	if err != nil {
@@ -64,6 +71,9 @@ func TestDesiredExternalRoutesNonEdgeStagesNothing(t *testing.T) {
 func TestReconcileEdgeStagesExternalDefault(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := compiledv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 

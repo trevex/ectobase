@@ -16,7 +16,8 @@ import (
 
 	kitenvtest "go.opendefense.cloud/kit/envtest"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledinstall "github.com/trevex/ectobase/api/compiled/install"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	netinstall "github.com/trevex/ectobase/api/net/install"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
 	"github.com/trevex/ectobase/central/pkg/broker"
@@ -25,7 +26,7 @@ import (
 // TestBroker_Loopback is the Phase-1b integration gate: it runs the broker
 // engine between TWO real in-process apiservers and asserts the full sync
 // contract (bounded pull, update propagation, GC, partition-survive) over the
-// REAL, namespaced CompiledNIC type (group net.ectobase.dev).
+// REAL, namespaced CompiledNIC type (group compiled.ectobase.dev).
 //
 //   - CENTRAL   = the kit aggregated apiserver (serves CompiledNIC with a
 //     selectable spec.clusterName field), started via kitenvtest.
@@ -46,12 +47,12 @@ func TestBroker_Loopback(t *testing.T) {
 	const ns = "default"
 
 	scheme := runtime.NewScheme()
-	// The aggregated server binary serves both groups; the client scheme must
-	// know the net types (external api/v1alpha1, registered via netinstall) to
-	// (de)serialize CompiledNIC. platforminstall is retained because the server
-	// still serves the platform group.
+	// The aggregated server binary serves all groups; the client scheme must
+	// know both net and compiled types to (de)serialize CompiledNIC.
+	// platforminstall is retained because the server still serves the platform group.
 	platforminstall.Install(scheme)
 	netinstall.Install(scheme)
+	compiledinstall.Install(scheme)
 	// APIService (apiregistration.k8s.io) must be registered so the kit envtest
 	// harness can poll the aggregated APIService for readiness.
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
@@ -120,15 +121,15 @@ func TestBroker_Loopback(t *testing.T) {
 
 	// newNIC constructs a valid CompiledNIC: the CRD marks nodeName, vni, port and
 	// firewall as required, so all are set (firewall/port take empty-but-present values).
-	newNIC := func(name, cluster, node string) *netv1.CompiledNIC {
-		return &netv1.CompiledNIC{
+	newNIC := func(name, cluster, node string) *compiledv1.CompiledNIC {
+		return &compiledv1.CompiledNIC{
 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
-			Spec: netv1.CompiledNICSpec{
+			Spec: compiledv1.CompiledNICSpec{
 				ClusterName: cluster,
 				NodeName:    node,
 				VNI:         1000,
-				Port:        netv1.PortStatus{Type: netv1.PortTypeTap, Name: "dtapvf_0"},
-				Firewall:    netv1.CompiledFirewall{},
+				Port:        compiledv1.PortStatus{Type: compiledv1.PortTypeTap, Name: "dtapvf_0"},
+				Firewall:    compiledv1.CompiledFirewall{},
 			},
 		}
 	}
@@ -136,7 +137,7 @@ func TestBroker_Loopback(t *testing.T) {
 	// downKeys returns the current downstream CompiledNIC "namespace/name" keys.
 	downKeys := func() []string {
 		t.Helper()
-		list := &netv1.CompiledNICList{}
+		list := &compiledv1.CompiledNICList{}
 		if err := downstreamClient.List(ctx, list); err != nil {
 			t.Fatalf("downstream List: %v", err)
 		}
@@ -150,7 +151,7 @@ func TestBroker_Loopback(t *testing.T) {
 	// downVMKeys returns the current downstream CompiledVM "namespace/name" keys.
 	downVMKeys := func() []string {
 		t.Helper()
-		list := &netv1.CompiledVMList{}
+		list := &compiledv1.CompiledVMList{}
 		if err := downstreamClient.List(ctx, list); err != nil {
 			t.Fatalf("downstream VM List: %v", err)
 		}
@@ -164,7 +165,7 @@ func TestBroker_Loopback(t *testing.T) {
 	// downAttKeys returns the current downstream CompiledVolumeAttachment "namespace/name" keys.
 	downAttKeys := func() []string {
 		t.Helper()
-		list := &netv1.CompiledVolumeAttachmentList{}
+		list := &compiledv1.CompiledVolumeAttachmentList{}
 		if err := downstreamClient.List(ctx, list); err != nil {
 			t.Fatalf("downstream Att List: %v", err)
 		}
@@ -178,7 +179,7 @@ func TestBroker_Loopback(t *testing.T) {
 	// downCtrKeys returns the current downstream CompiledContainer "namespace/name" keys.
 	downCtrKeys := func() []string {
 		t.Helper()
-		list := &netv1.CompiledContainerList{}
+		list := &compiledv1.CompiledContainerList{}
 		if err := downstreamClient.List(ctx, list); err != nil {
 			t.Fatalf("downstream Ctr List: %v", err)
 		}
@@ -190,26 +191,26 @@ func TestBroker_Loopback(t *testing.T) {
 	}
 
 	// newVM constructs a minimal CompiledVM bound to a cluster.
-	newVM := func(name, cluster, image string) *netv1.CompiledVM {
-		return &netv1.CompiledVM{
+	newVM := func(name, cluster, image string) *compiledv1.CompiledVM {
+		return &compiledv1.CompiledVM{
 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
-			Spec:       netv1.CompiledVMSpec{ClusterName: cluster, Image: image},
+			Spec:       compiledv1.CompiledVMSpec{ClusterName: cluster, Image: image},
 		}
 	}
 
 	// newAtt constructs a minimal CompiledVolumeAttachment bound to a cluster.
-	newAtt := func(name, cluster, bootImage string) *netv1.CompiledVolumeAttachment {
-		return &netv1.CompiledVolumeAttachment{
+	newAtt := func(name, cluster, bootImage string) *compiledv1.CompiledVolumeAttachment {
+		return &compiledv1.CompiledVolumeAttachment{
 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
-			Spec:       netv1.CompiledVolumeAttachmentSpec{ClusterName: cluster, BootImage: bootImage},
+			Spec:       compiledv1.CompiledVolumeAttachmentSpec{ClusterName: cluster, BootImage: bootImage},
 		}
 	}
 
 	// newCtr constructs a minimal CompiledContainer bound to a cluster.
-	newCtr := func(name, cluster, image string) *netv1.CompiledContainer {
-		return &netv1.CompiledContainer{
+	newCtr := func(name, cluster, image string) *compiledv1.CompiledContainer {
+		return &compiledv1.CompiledContainer{
 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
-			Spec:       netv1.CompiledContainerSpec{ClusterName: cluster, Image: image},
+			Spec:       compiledv1.CompiledContainerSpec{ClusterName: cluster, Image: image},
 		}
 	}
 
@@ -230,7 +231,7 @@ func TestBroker_Loopback(t *testing.T) {
 	if len(keys) != 1 || keys[0] != ns+"/nic-a" {
 		t.Fatalf("(a) bounded pull: expected downstream=[%s/nic-a], got %v", ns, keys)
 	}
-	got := &netv1.CompiledNIC{}
+	got := &compiledv1.CompiledNIC{}
 	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "nic-a"}, got); err != nil {
 		t.Fatalf("(a) downstream Get nic-a: %v", err)
 	}
@@ -242,7 +243,7 @@ func TestBroker_Loopback(t *testing.T) {
 	// ================================================================
 	// (b) UPDATE: central nic-a nodeName node-1->node-1b propagates downstream.
 	// ================================================================
-	cur := &netv1.CompiledNIC{}
+	cur := &compiledv1.CompiledNIC{}
 	if err := centralClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "nic-a"}, cur); err != nil {
 		t.Fatalf("(b) central Get nic-a: %v", err)
 	}
@@ -254,7 +255,7 @@ func TestBroker_Loopback(t *testing.T) {
 	if err := b.SyncOnce(ctx); err != nil {
 		t.Fatalf("(b) SyncOnce: %v", err)
 	}
-	got = &netv1.CompiledNIC{}
+	got = &compiledv1.CompiledNIC{}
 	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "nic-a"}, got); err != nil {
 		t.Fatalf("(b) downstream Get nic-a: %v", err)
 	}
@@ -266,7 +267,7 @@ func TestBroker_Loopback(t *testing.T) {
 	// ================================================================
 	// (c) GC: deleting central nic-a empties downstream.
 	// ================================================================
-	del := &netv1.CompiledNIC{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "nic-a"}}
+	del := &compiledv1.CompiledNIC{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "nic-a"}}
 	if err := centralClient.Delete(ctx, del); err != nil {
 		t.Fatalf("(c) central Delete nic-a: %v", err)
 	}
@@ -351,7 +352,7 @@ func TestBroker_Loopback(t *testing.T) {
 	if len(vmKeys) != 1 || vmKeys[0] != ns+"/vm-a" {
 		t.Fatalf("(e) bounded pull: expected downstream=[%s/vm-a], got %v", ns, vmKeys)
 	}
-	gotVM := &netv1.CompiledVM{}
+	gotVM := &compiledv1.CompiledVM{}
 	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm-a"}, gotVM); err != nil {
 		t.Fatalf("(e) downstream Get vm-a: %v", err)
 	}
@@ -361,7 +362,7 @@ func TestBroker_Loopback(t *testing.T) {
 	t.Logf("(e) CompiledVM bounded pull: PASS (downstream=[%s/vm-a], c2 excluded)", ns)
 
 	// Update vm-a image central->downstream.
-	curVM := &netv1.CompiledVM{}
+	curVM := &compiledv1.CompiledVM{}
 	if err := centralClient2.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm-a"}, curVM); err != nil {
 		t.Fatalf("(e) central Get vm-a: %v", err)
 	}
@@ -372,7 +373,7 @@ func TestBroker_Loopback(t *testing.T) {
 	if err := b2.SyncCompiledVMs(ctx); err != nil {
 		t.Fatalf("(e) SyncCompiledVMs after update: %v", err)
 	}
-	gotVM = &netv1.CompiledVM{}
+	gotVM = &compiledv1.CompiledVM{}
 	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm-a"}, gotVM); err != nil {
 		t.Fatalf("(e) downstream Get vm-a after update: %v", err)
 	}
@@ -382,7 +383,7 @@ func TestBroker_Loopback(t *testing.T) {
 	t.Log("(e) CompiledVM update: PASS (downstream vm-a image=fedora-updated)")
 
 	// GC: delete central vm-a, downstream should be empty.
-	delVM := &netv1.CompiledVM{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "vm-a"}}
+	delVM := &compiledv1.CompiledVM{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "vm-a"}}
 	if err := centralClient2.Delete(ctx, delVM); err != nil {
 		t.Fatalf("(e) central Delete vm-a: %v", err)
 	}
@@ -411,7 +412,7 @@ func TestBroker_Loopback(t *testing.T) {
 	if len(attKeys) != 1 || attKeys[0] != ns+"/att-a" {
 		t.Fatalf("(f) bounded pull: expected downstream=[%s/att-a], got %v", ns, attKeys)
 	}
-	gotAtt := &netv1.CompiledVolumeAttachment{}
+	gotAtt := &compiledv1.CompiledVolumeAttachment{}
 	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "att-a"}, gotAtt); err != nil {
 		t.Fatalf("(f) downstream Get att-a: %v", err)
 	}
@@ -421,7 +422,7 @@ func TestBroker_Loopback(t *testing.T) {
 	t.Logf("(f) CompiledVolumeAttachment bounded pull: PASS (downstream=[%s/att-a], c2 excluded)", ns)
 
 	// Update att-a bootImage central->downstream.
-	curAtt := &netv1.CompiledVolumeAttachment{}
+	curAtt := &compiledv1.CompiledVolumeAttachment{}
 	if err := centralClient2.Get(ctx, client.ObjectKey{Namespace: ns, Name: "att-a"}, curAtt); err != nil {
 		t.Fatalf("(f) central Get att-a: %v", err)
 	}
@@ -432,7 +433,7 @@ func TestBroker_Loopback(t *testing.T) {
 	if err := b2.SyncCompiledVolumeAttachments(ctx); err != nil {
 		t.Fatalf("(f) SyncCompiledVolumeAttachments after update: %v", err)
 	}
-	gotAtt = &netv1.CompiledVolumeAttachment{}
+	gotAtt = &compiledv1.CompiledVolumeAttachment{}
 	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "att-a"}, gotAtt); err != nil {
 		t.Fatalf("(f) downstream Get att-a after update: %v", err)
 	}
@@ -442,7 +443,7 @@ func TestBroker_Loopback(t *testing.T) {
 	t.Log("(f) CompiledVolumeAttachment update: PASS (downstream att-a bootImage=fedora-updated)")
 
 	// GC: delete central att-a, downstream should be empty.
-	delAtt := &netv1.CompiledVolumeAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "att-a"}}
+	delAtt := &compiledv1.CompiledVolumeAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "att-a"}}
 	if err := centralClient2.Delete(ctx, delAtt); err != nil {
 		t.Fatalf("(f) central Delete att-a: %v", err)
 	}
@@ -471,7 +472,7 @@ func TestBroker_Loopback(t *testing.T) {
 	if len(ctrKeys) != 1 || ctrKeys[0] != ns+"/ctr-a" {
 		t.Fatalf("(g) bounded pull: expected downstream=[%s/ctr-a], got %v", ns, ctrKeys)
 	}
-	gotCtr := &netv1.CompiledContainer{}
+	gotCtr := &compiledv1.CompiledContainer{}
 	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "ctr-a"}, gotCtr); err != nil {
 		t.Fatalf("(g) downstream Get ctr-a: %v", err)
 	}
@@ -481,7 +482,7 @@ func TestBroker_Loopback(t *testing.T) {
 	t.Logf("(g) CompiledContainer bounded pull: PASS (downstream=[%s/ctr-a], c2 excluded)", ns)
 
 	// Update ctr-a image central->downstream.
-	curCtr := &netv1.CompiledContainer{}
+	curCtr := &compiledv1.CompiledContainer{}
 	if err := centralClient2.Get(ctx, client.ObjectKey{Namespace: ns, Name: "ctr-a"}, curCtr); err != nil {
 		t.Fatalf("(g) central Get ctr-a: %v", err)
 	}
@@ -492,7 +493,7 @@ func TestBroker_Loopback(t *testing.T) {
 	if err := b2.SyncCompiledContainers(ctx); err != nil {
 		t.Fatalf("(g) SyncCompiledContainers after update: %v", err)
 	}
-	gotCtr = &netv1.CompiledContainer{}
+	gotCtr = &compiledv1.CompiledContainer{}
 	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "ctr-a"}, gotCtr); err != nil {
 		t.Fatalf("(g) downstream Get ctr-a after update: %v", err)
 	}
@@ -502,7 +503,7 @@ func TestBroker_Loopback(t *testing.T) {
 	t.Log("(g) CompiledContainer update: PASS (downstream ctr-a image=nginx-updated)")
 
 	// GC: delete central ctr-a, downstream should be empty.
-	delCtr := &netv1.CompiledContainer{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "ctr-a"}}
+	delCtr := &compiledv1.CompiledContainer{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "ctr-a"}}
 	if err := centralClient2.Delete(ctx, delCtr); err != nil {
 		t.Fatalf("(g) central Delete ctr-a: %v", err)
 	}

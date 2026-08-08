@@ -35,6 +35,7 @@ import (
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/broker"
 )
 
@@ -60,13 +61,17 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
-	// Build scheme covering all three groups the broker touches:
-	//   - net.ectobase.dev  (CompiledNIC + CompiledVM sync, on central),
+	// Build scheme covering all groups the broker touches:
+	//   - net.ectobase.dev (networking types, on central),
+	//   - compiled.ectobase.dev (CompiledNIC + CompiledVM + CompiledContainer + CompiledVolumeAttachment sync, on central),
 	//   - platform.ectobase.dev (ClusterPool lease/capacity heartbeat, on central),
 	//   - core/v1 (downstream Node list for capacity reporting).
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {
 		log.Fatalf("register net.ectobase.dev scheme: %v", err)
+	}
+	if err := compiledv1.AddToScheme(scheme); err != nil {
+		log.Fatalf("register compiled.ectobase.dev scheme: %v", err)
 	}
 	platforminstall.Install(scheme)
 	if err := corev1.AddToScheme(scheme); err != nil {
@@ -98,16 +103,16 @@ func main() {
 		Metrics: metricsserver.Options{BindAddress: "0"},
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
-				&netv1.CompiledNIC{}: {
+				&compiledv1.CompiledNIC{}: {
 					Field: fields.OneTermEqualSelector("spec.clusterName", clusterName),
 				},
-				&netv1.CompiledVM{}: {
+				&compiledv1.CompiledVM{}: {
 					Field: fields.OneTermEqualSelector("spec.clusterName", clusterName),
 				},
-				&netv1.CompiledVolumeAttachment{}: {
+				&compiledv1.CompiledVolumeAttachment{}: {
 					Field: fields.OneTermEqualSelector("spec.clusterName", clusterName),
 				},
-				&netv1.CompiledContainer{}: {
+				&compiledv1.CompiledContainer{}: {
 					Field: fields.OneTermEqualSelector("spec.clusterName", clusterName),
 				},
 			},
@@ -129,10 +134,10 @@ func main() {
 			log.Fatalf("index spec.clusterName on %T: %v", obj, ierr)
 		}
 	}
-	idx(&netv1.CompiledNIC{}, func(o client.Object) string { return o.(*netv1.CompiledNIC).Spec.ClusterName })
-	idx(&netv1.CompiledVM{}, func(o client.Object) string { return o.(*netv1.CompiledVM).Spec.ClusterName })
-	idx(&netv1.CompiledVolumeAttachment{}, func(o client.Object) string { return o.(*netv1.CompiledVolumeAttachment).Spec.ClusterName })
-	idx(&netv1.CompiledContainer{}, func(o client.Object) string { return o.(*netv1.CompiledContainer).Spec.ClusterName })
+	idx(&compiledv1.CompiledNIC{}, func(o client.Object) string { return o.(*compiledv1.CompiledNIC).Spec.ClusterName })
+	idx(&compiledv1.CompiledVM{}, func(o client.Object) string { return o.(*compiledv1.CompiledVM).Spec.ClusterName })
+	idx(&compiledv1.CompiledVolumeAttachment{}, func(o client.Object) string { return o.(*compiledv1.CompiledVolumeAttachment).Spec.ClusterName })
+	idx(&compiledv1.CompiledContainer{}, func(o client.Object) string { return o.(*compiledv1.CompiledContainer).Spec.ClusterName })
 
 	// Reconciler: on any CompiledNIC OR CompiledVM event, trigger a full set-reconcile
 	// of BOTH types. A full resync per event is correct here: the syncs are declarative +
@@ -144,25 +149,25 @@ func main() {
 		clusterName: clusterName,
 	}
 	if err := ctrl.NewControllerManagedBy(mgr).
-		For(&netv1.CompiledNIC{}).
+		For(&compiledv1.CompiledNIC{}).
 		Complete(r); err != nil {
 		log.Fatalf("setup broker controller: %v", err)
 	}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("compiledvm").
-		For(&netv1.CompiledVM{}).
+		For(&compiledv1.CompiledVM{}).
 		Complete(r); err != nil {
 		log.Fatalf("setup compiledvm broker controller: %v", err)
 	}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("compiledvolumeattachment").
-		For(&netv1.CompiledVolumeAttachment{}).
+		For(&compiledv1.CompiledVolumeAttachment{}).
 		Complete(r); err != nil {
 		log.Fatalf("setup compiledvolumeattachment broker controller: %v", err)
 	}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("compiledcontainer").
-		For(&netv1.CompiledContainer{}).
+		For(&compiledv1.CompiledContainer{}).
 		Complete(r); err != nil {
 		log.Fatalf("setup compiledcontainer broker controller: %v", err)
 	}

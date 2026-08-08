@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -20,13 +21,13 @@ import (
 )
 
 func TestBuildPod(t *testing.T) {
-	cc := &netv1.CompiledContainer{
+	cc := &compiledv1.CompiledContainer{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "default-ctr1"},
-		Spec: netv1.CompiledContainerSpec{
+		Spec: compiledv1.CompiledContainerSpec{
 			NodeName: "n1",
 			Image:    "busybox:1.36",
 			Command:  []string{"sleep", "3600"},
-			Interfaces: []netv1.CompiledContainerInterface{{
+			Interfaces: []compiledv1.CompiledContainerInterface{{
 				NetworkName:         "flowplane-overlay",
 				NetworkInterfaceRef: "default/nic-a",
 				MAC:                 "02:00:00:00:00:aa",
@@ -72,10 +73,10 @@ func TestBuildPod(t *testing.T) {
 }
 
 func TestBuildPod_MultiInterfaceJoinsNetworks(t *testing.T) {
-	cc := &netv1.CompiledContainer{
+	cc := &compiledv1.CompiledContainer{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "default-ctr1"},
-		Spec: netv1.CompiledContainerSpec{
-			Interfaces: []netv1.CompiledContainerInterface{
+		Spec: compiledv1.CompiledContainerSpec{
+			Interfaces: []compiledv1.CompiledContainerInterface{
 				{NetworkName: "net-a", NetworkInterfaceRef: "default/nic-a"},
 				{NetworkName: "net-b", NetworkInterfaceRef: "default/nic-b"},
 			},
@@ -92,9 +93,9 @@ func TestBuildPod_MultiInterfaceJoinsNetworks(t *testing.T) {
 }
 
 func TestBuildPod_RestartPolicyRespected(t *testing.T) {
-	cc := &netv1.CompiledContainer{
+	cc := &compiledv1.CompiledContainer{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "default-ctr1"},
-		Spec:       netv1.CompiledContainerSpec{RestartPolicy: corev1.RestartPolicyNever},
+		Spec:       compiledv1.CompiledContainerSpec{RestartPolicy: corev1.RestartPolicyNever},
 	}
 	if pod := buildPod(cc); pod.Spec.RestartPolicy != corev1.RestartPolicyNever {
 		t.Fatalf("restartPolicy: %q", pod.Spec.RestartPolicy)
@@ -112,6 +113,9 @@ func TestPodMaterializer_CreatesPod(t *testing.T) {
 
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := compiledv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 	if err := corev1.AddToScheme(scheme); err != nil {
@@ -135,14 +139,14 @@ func TestPodMaterializer_CreatesPod(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	cc := &netv1.CompiledContainer{
+	cc := &compiledv1.CompiledContainer{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "default-ctr1"},
-		Spec: netv1.CompiledContainerSpec{
+		Spec: compiledv1.CompiledContainerSpec{
 			ClusterName: "cluster-a",
 			NodeName:    "n1",
 			Image:       "busybox:1.36",
 			Command:     []string{"sleep", "3600"},
-			Interfaces: []netv1.CompiledContainerInterface{{
+			Interfaces: []compiledv1.CompiledContainerInterface{{
 				NetworkName:         "flowplane-overlay",
 				NetworkInterfaceRef: "default/nic-a",
 				MAC:                 "02:00:00:00:00:aa",

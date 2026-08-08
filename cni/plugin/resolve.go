@@ -7,7 +7,7 @@ import (
 	"context"
 	"fmt"
 
-	v1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -27,7 +27,7 @@ type resolved struct {
 // controller-runtime fake client.
 func resolveCompiledNIC(ctx context.Context, c client.Client, ns, name string) (resolved, error) {
 	compiledName := ns + "-" + name
-	var cn v1alpha1.CompiledNIC
+	var cn compiledv1.CompiledNIC
 	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: compiledName}, &cn); err != nil {
 		return resolved{}, fmt.Errorf("get CompiledNIC %s/%s (not compiled/synced yet?): %w", ns, compiledName, err)
 	}

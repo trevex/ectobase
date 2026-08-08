@@ -9,6 +9,7 @@ import (
 	"reflect"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -78,7 +79,7 @@ func resolvePlacement(nic *netv1.NetworkInterface, containers []netv1.Container,
 // (natBySource, keyed by source overlay IP), records a CompiledNATSource. peerings is a pre-resolved
 // slice of PeerImportSpecs; only entries whose VPCName matches the NIC's VPC are emitted. The
 // returned CompiledNIC has no Status set (caller fills that in if needed).
-func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPolicy, lbs []netv1.LoadBalancer, peerings []PeerImportSpec, natBySource map[string]netv1.NATAllocation, placement Placement) netv1.CompiledNIC {
+func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPolicy, lbs []netv1.LoadBalancer, peerings []PeerImportSpec, natBySource map[string]netv1.NATAllocation, placement Placement) compiledv1.CompiledNIC {
 	// Node binding: an owning Container is the placement authority and pins the node (placement.NodeName);
 	// VM-owned and standalone NICs keep their existing source (nic.spec.nodeName), so those paths are
 	// byte-unchanged (their placement.NodeName is "").
@@ -90,26 +91,31 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 		nodeName = placement.NodeName
 	}
 
-	port := netv1.PortStatus{}
+	var port compiledv1.PortStatus
 	if nic.Status.Port != nil {
-		port = *nic.Status.Port
+		p := nic.Status.Port
+		port = compiledv1.PortStatus{
+			Type:       compiledv1.PortType(p.Type),
+			Name:       p.Name,
+			PCIAddress: p.PCIAddress,
+		}
 	}
 
-	compiled := netv1.CompiledNIC{
+	compiled := compiledv1.CompiledNIC{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "net.ectobase.dev/v1alpha1",
+			APIVersion: "compiled.ectobase.dev/v1alpha1",
 			Kind:       "CompiledNIC",
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-%s", nic.Namespace, nic.Name),
 			Namespace: nic.Namespace,
 		},
-		Spec: netv1.CompiledNICSpec{
+		Spec: compiledv1.CompiledNICSpec{
 			NodeName:   nodeName,
 			VNI:        vni,
 			Port:       port,
 			OverlayIPs: append([]string(nil), nic.Spec.IPs...),
-			Firewall:   netv1.CompiledFirewall{},
+			Firewall:   compiledv1.CompiledFirewall{},
 			MAC:        nic.Spec.MAC,
 		},
 	}
@@ -131,7 +137,7 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 
 		// Translate ingress rules.
 		for _, r := range policy.Spec.Ingress {
-			compiled.Spec.Firewall.Ingress = append(compiled.Spec.Firewall.Ingress, netv1.CompiledFwRule{
+			compiled.Spec.Firewall.Ingress = append(compiled.Spec.Firewall.Ingress, compiledv1.CompiledFwRule{
 				CIDR:   r.CIDR,
 				Proto:  r.Proto,
 				Port:   r.Port,
@@ -141,7 +147,7 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 
 		// Translate egress rules.
 		for _, r := range policy.Spec.Egress {
-			compiled.Spec.Firewall.Egress = append(compiled.Spec.Firewall.Egress, netv1.CompiledFwRule{
+			compiled.Spec.Firewall.Egress = append(compiled.Spec.Firewall.Egress, compiledv1.CompiledFwRule{
 				CIDR:   r.CIDR,
 				Proto:  r.Proto,
 				Port:   r.Port,
@@ -156,8 +162,8 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 	// Emit BOTH families: the dataplane enforces v4 AND v6 firewalling, so a ruleless direction
 	// needs a v6 default-allow (::/0) alongside the v4 one (0.0.0.0/0) or v6-only/dual-stack
 	// guests would be dropped by deny-by-default. Proto "" = any, Port 0 = any.
-	allowAll4 := netv1.CompiledFwRule{CIDR: "0.0.0.0/0", Action: "Allow"}
-	allowAll6 := netv1.CompiledFwRule{CIDR: "::/0", Action: "Allow"}
+	allowAll4 := compiledv1.CompiledFwRule{CIDR: "0.0.0.0/0", Action: "Allow"}
+	allowAll6 := compiledv1.CompiledFwRule{CIDR: "::/0", Action: "Allow"}
 	if len(compiled.Spec.Firewall.Ingress) == 0 {
 		compiled.Spec.Firewall.Ingress = append(compiled.Spec.Firewall.Ingress, allowAll4, allowAll6)
 	}
@@ -173,18 +179,18 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 		if !lbMatchesNIC(lb, nic, nicLabels) {
 			continue
 		}
-		ports := make([]netv1.CompiledLBPort, 0, len(lb.Spec.Ports))
+		ports := make([]compiledv1.CompiledLBPort, 0, len(lb.Spec.Ports))
 		for _, p := range lb.Spec.Ports {
-			ports = append(ports, netv1.CompiledLBPort{Port: p.Port, Proto: p.Proto})
+			ports = append(ports, compiledv1.CompiledLBPort{Port: p.Port, Proto: p.Proto})
 		}
-		compiled.Spec.LB = append(compiled.Spec.LB, netv1.CompiledLB{VIP: lb.Spec.VIP, Ports: ports})
+		compiled.Spec.LB = append(compiled.Spec.LB, compiledv1.CompiledLB{VIP: lb.Spec.VIP, Ports: ports})
 	}
 
 	for _, p := range peerings {
 		if p.VPCName != nic.Spec.VPCRef.Name {
 			continue
 		}
-		compiled.Spec.PeerImports = append(compiled.Spec.PeerImports, netv1.CompiledPeerImport{
+		compiled.Spec.PeerImports = append(compiled.Spec.PeerImports, compiledv1.CompiledPeerImport{
 			PeerVNI:        p.PeerVNI,
 			ImportPrefixes: append([]string(nil), p.ImportPrefixes...),
 		})
@@ -198,7 +204,7 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 		if !ok {
 			continue
 		}
-		compiled.Spec.NAT = append(compiled.Spec.NAT, netv1.CompiledNATSource{
+		compiled.Spec.NAT = append(compiled.Spec.NAT, compiledv1.CompiledNATSource{
 			SourceIP: ip, NATIP: a.PublicIP, PortMin: a.PortMin, PortMax: a.PortMax,
 		})
 	}
@@ -329,7 +335,7 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	placement := resolvePlacement(&nic, containers.Items, vms.Items, r.DefaultClusterName)
 	compiled := Compile(&nic, vni, policies.Items, lbs.Items, peerImports, natBySource, placement)
 	key := types.NamespacedName{Namespace: compiled.Namespace, Name: compiled.Name}
-	var existing netv1.CompiledNIC
+	var existing compiledv1.CompiledNIC
 	err = r.Client.Get(ctx, key, &existing)
 	switch {
 	case apierrors.IsNotFound(err):
@@ -365,7 +371,7 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 func (r *CompiledNICReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&netv1.NetworkInterface{}).
-		Owns(&netv1.CompiledNIC{}).
+		Owns(&compiledv1.CompiledNIC{}).
 		Watches(&netv1.FirewallPolicy{}, handler.EnqueueRequestsFromMapFunc(r.nicsForFirewallPolicy),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&netv1.LoadBalancer{}, handler.EnqueueRequestsFromMapFunc(r.nicsForLB),

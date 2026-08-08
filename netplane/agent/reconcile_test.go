@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -15,6 +16,9 @@ func ptr[T any](v T) *T { return &v }
 func TestDesiredAnnouncesLocalInterfaces(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := compiledv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 	// Overlay host routes are announced from the LOCAL dataplane's attached interfaces (node-local

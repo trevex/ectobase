@@ -12,10 +12,6 @@ import (
 
 type NetV1alpha1Interface interface {
 	RESTClient() rest.Interface
-	CompiledContainersGetter
-	CompiledNICsGetter
-	CompiledVMsGetter
-	CompiledVolumeAttachmentsGetter
 	ContainersGetter
 	FirewallPoliciesGetter
 	FloatingIPsGetter
@@ -31,22 +27,6 @@ type NetV1alpha1Interface interface {
 // NetV1alpha1Client is used to interact with features provided by the net.ectobase.dev group.
 type NetV1alpha1Client struct {
 	restClient rest.Interface
-}
-
-func (c *NetV1alpha1Client) CompiledContainers(namespace string) CompiledContainerInterface {
-	return newCompiledContainers(c, namespace)
-}
-
-func (c *NetV1alpha1Client) CompiledNICs(namespace string) CompiledNICInterface {
-	return newCompiledNICs(c, namespace)
-}
-
-func (c *NetV1alpha1Client) CompiledVMs(namespace string) CompiledVMInterface {
-	return newCompiledVMs(c, namespace)
-}
-
-func (c *NetV1alpha1Client) CompiledVolumeAttachments(namespace string) CompiledVolumeAttachmentInterface {
-	return newCompiledVolumeAttachments(c, namespace)
 }
 
 func (c *NetV1alpha1Client) Containers(namespace string) ContainerInterface {

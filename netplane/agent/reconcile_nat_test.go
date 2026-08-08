@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -14,17 +15,20 @@ func TestReconcileProgramsLocalNatSourceAndStagesAnnounce(t *testing.T) {
 	if err := netv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
+	if err := compiledv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
 
 	// A local CompiledNIC on nodeA carries the central NAT allocation; the source's node-local
 	// underlay comes from the dataplane's attached-interface list and is used as the block owner.
-	cnic := &netv1.CompiledNIC{}
+	cnic := &compiledv1.CompiledNIC{}
 	cnic.Name = "default-nic-a"
 	cnic.Namespace = "default"
-	cnic.Spec = netv1.CompiledNICSpec{
+	cnic.Spec = compiledv1.CompiledNICSpec{
 		NodeName:   "nodeA",
 		VNI:        100,
 		OverlayIPs: []string{"10.0.0.1"},
-		NAT: []netv1.CompiledNATSource{
+		NAT: []compiledv1.CompiledNATSource{
 			{SourceIP: "10.0.0.1", NATIP: "203.0.113.1", PortMin: 1024, PortMax: 2048},
 		},
 	}

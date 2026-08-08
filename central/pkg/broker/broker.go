@@ -15,6 +15,7 @@ import (
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 )
 
 // Broker is the per-cluster set-reconcile engine: it makes the downstream compiled
@@ -31,24 +32,24 @@ type Broker struct {
 }
 
 // key identifies a namespaced CompiledNIC as "namespace/name".
-func key(o *netv1.CompiledNIC) string { return o.Namespace + "/" + o.Name }
+func key(o *compiledv1.CompiledNIC) string { return o.Namespace + "/" + o.Name }
 
 // SyncOnce is a declarative set-reconcile: desired = central CompiledNICs with
 // spec.clusterName==ClusterName; make downstream match (create/update/delete).
 // Idempotent and restart-safe (no in-memory diff; derived from live sets each call).
 func (b *Broker) SyncOnce(ctx context.Context) error {
 	// Fetch desired set from central, filtered by clusterName field index.
-	desired := &netv1.CompiledNICList{}
+	desired := &compiledv1.CompiledNICList{}
 	if err := b.Central.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
 		return fmt.Errorf("list central: %w", err)
 	}
-	want := make(map[string]netv1.CompiledNIC, len(desired.Items))
+	want := make(map[string]compiledv1.CompiledNIC, len(desired.Items))
 	for _, o := range desired.Items {
 		want[key(&o)] = o
 	}
 
 	// Fetch current set from downstream.
-	have := &netv1.CompiledNICList{}
+	have := &compiledv1.CompiledNICList{}
 	if err := b.Downstream.List(ctx, have); err != nil {
 		return fmt.Errorf("list downstream: %w", err)
 	}
@@ -82,7 +83,7 @@ func (b *Broker) SyncOnce(ctx context.Context) error {
 		if haveKeys[k] {
 			continue
 		}
-		local := &netv1.CompiledNIC{}
+		local := &compiledv1.CompiledNIC{}
 		local.Namespace = w.Namespace
 		local.Name = w.Name
 		local.Spec = w.Spec
@@ -95,26 +96,26 @@ func (b *Broker) SyncOnce(ctx context.Context) error {
 }
 
 // keyVM identifies a namespaced CompiledVM as "namespace/name".
-func keyVM(o *netv1.CompiledVM) string { return o.Namespace + "/" + o.Name }
+func keyVM(o *compiledv1.CompiledVM) string { return o.Namespace + "/" + o.Name }
 
 // keyAtt identifies a namespaced CompiledVolumeAttachment as "namespace/name".
-func keyAtt(o *netv1.CompiledVolumeAttachment) string { return o.Namespace + "/" + o.Name }
+func keyAtt(o *compiledv1.CompiledVolumeAttachment) string { return o.Namespace + "/" + o.Name }
 
 // keyCtr identifies a namespaced CompiledContainer as "namespace/name".
-func keyCtr(o *netv1.CompiledContainer) string { return o.Namespace + "/" + o.Name }
+func keyCtr(o *compiledv1.CompiledContainer) string { return o.Namespace + "/" + o.Name }
 
 // SyncCompiledVMs is the CompiledVM twin of SyncOnce: declarative set-reconcile of
 // CompiledVMs bound to ClusterName, central->downstream (create/update/delete).
 func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
-	desired := &netv1.CompiledVMList{}
+	desired := &compiledv1.CompiledVMList{}
 	if err := b.Central.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
 		return fmt.Errorf("list central vms: %w", err)
 	}
-	want := make(map[string]netv1.CompiledVM, len(desired.Items))
+	want := make(map[string]compiledv1.CompiledVM, len(desired.Items))
 	for _, o := range desired.Items {
 		want[keyVM(&o)] = o
 	}
-	have := &netv1.CompiledVMList{}
+	have := &compiledv1.CompiledVMList{}
 	if err := b.Downstream.List(ctx, have); err != nil {
 		return fmt.Errorf("list downstream vms: %w", err)
 	}
@@ -141,7 +142,7 @@ func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 		if haveKeys[k] {
 			continue
 		}
-		local := &netv1.CompiledVM{}
+		local := &compiledv1.CompiledVM{}
 		local.Namespace = w.Namespace
 		local.Name = w.Name
 		local.Spec = w.Spec
@@ -156,15 +157,15 @@ func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 // SyncCompiledVolumeAttachments is the CompiledVolumeAttachment twin of SyncOnce:
 // declarative set-reconcile of attachments bound to ClusterName, central->downstream.
 func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
-	desired := &netv1.CompiledVolumeAttachmentList{}
+	desired := &compiledv1.CompiledVolumeAttachmentList{}
 	if err := b.Central.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
 		return fmt.Errorf("list central attachments: %w", err)
 	}
-	want := make(map[string]netv1.CompiledVolumeAttachment, len(desired.Items))
+	want := make(map[string]compiledv1.CompiledVolumeAttachment, len(desired.Items))
 	for _, o := range desired.Items {
 		want[keyAtt(&o)] = o
 	}
-	have := &netv1.CompiledVolumeAttachmentList{}
+	have := &compiledv1.CompiledVolumeAttachmentList{}
 	if err := b.Downstream.List(ctx, have); err != nil {
 		return fmt.Errorf("list downstream attachments: %w", err)
 	}
@@ -191,7 +192,7 @@ func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 		if haveKeys[k] {
 			continue
 		}
-		local := &netv1.CompiledVolumeAttachment{}
+		local := &compiledv1.CompiledVolumeAttachment{}
 		local.Namespace = w.Namespace
 		local.Name = w.Name
 		local.Spec = w.Spec
@@ -206,15 +207,15 @@ func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 // SyncCompiledContainers is the CompiledContainer twin of SyncOnce: declarative
 // set-reconcile of CompiledContainers bound to ClusterName, central->downstream.
 func (b *Broker) SyncCompiledContainers(ctx context.Context) error {
-	desired := &netv1.CompiledContainerList{}
+	desired := &compiledv1.CompiledContainerList{}
 	if err := b.Central.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
 		return fmt.Errorf("list central containers: %w", err)
 	}
-	want := make(map[string]netv1.CompiledContainer, len(desired.Items))
+	want := make(map[string]compiledv1.CompiledContainer, len(desired.Items))
 	for _, o := range desired.Items {
 		want[keyCtr(&o)] = o
 	}
-	have := &netv1.CompiledContainerList{}
+	have := &compiledv1.CompiledContainerList{}
 	if err := b.Downstream.List(ctx, have); err != nil {
 		return fmt.Errorf("list downstream containers: %w", err)
 	}
@@ -241,7 +242,7 @@ func (b *Broker) SyncCompiledContainers(ctx context.Context) error {
 		if haveKeys[k] {
 			continue
 		}
-		local := &netv1.CompiledContainer{}
+		local := &compiledv1.CompiledContainer{}
 		local.Namespace = w.Namespace
 		local.Name = w.Name
 		local.Spec = w.Spec

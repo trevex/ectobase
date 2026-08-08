@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -67,7 +68,7 @@ func TestCompile_ProducesCompiledNIC(t *testing.T) {
 	if c.Spec.VNI != 100 {
 		t.Fatalf("VNI = %d, want 100", c.Spec.VNI)
 	}
-	if c.Spec.Port.Type != netv1.PortTypeTap {
+	if c.Spec.Port.Type != compiledv1.PortTypeTap {
 		t.Fatalf("Port.Type = %q, want tap", c.Spec.Port.Type)
 	}
 	if c.Spec.Port.Name != "dtapvf_0" {
@@ -127,7 +128,7 @@ func TestCompile_UnpoliciedGetsAllowAll(t *testing.T) {
 }
 
 // hasCIDR reports whether the rule list contains an Allow rule for the given CIDR.
-func hasAllowCIDR(rules []netv1.CompiledFwRule, cidr string) bool {
+func hasAllowCIDR(rules []compiledv1.CompiledFwRule, cidr string) bool {
 	for _, r := range rules {
 		if r.CIDR == cidr && r.Action == "Allow" {
 			return true
@@ -146,7 +147,7 @@ func TestCompile_RulelessGetsBothFamilies(t *testing.T) {
 	c := Compile(nic, nic.Status.VNI, nil, nil, nil, nil, Placement{ClusterName: "test"}) // no policies
 	for _, dir := range []struct {
 		name  string
-		rules []netv1.CompiledFwRule
+		rules []compiledv1.CompiledFwRule
 	}{
 		{"ingress", c.Spec.Firewall.Ingress},
 		{"egress", c.Spec.Firewall.Egress},
@@ -380,6 +381,9 @@ func lbScheme(t *testing.T) *runtime.Scheme {
 	if err := netv1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
+	if err := compiledv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
 	return s
 }
 
@@ -398,7 +402,7 @@ func TestReconcile_NoWriteWhenUnchanged(t *testing.T) {
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
-	var first netv1.CompiledNIC
+	var first compiledv1.CompiledNIC
 	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "default-web-0"}, &first); err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +412,7 @@ func TestReconcile_NoWriteWhenUnchanged(t *testing.T) {
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
-	var second netv1.CompiledNIC
+	var second compiledv1.CompiledNIC
 	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "default-web-0"}, &second); err != nil {
 		t.Fatal(err)
 	}

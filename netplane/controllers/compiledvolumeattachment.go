@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,21 +25,21 @@ import (
 // CompileVolumeAttachments lowers a VirtualMachine + its referenced Volumes into one
 // CompiledVolumeAttachment per VolumeRef, each cluster-bound (from placement) and
 // workload-labelled. A Volume with a BootImage yields Boot=true. Pure.
-func CompileVolumeAttachments(vm *netv1.VirtualMachine, volumes []netv1.Volume, placement Placement) []netv1.CompiledVolumeAttachment {
+func CompileVolumeAttachments(vm *netv1.VirtualMachine, volumes []netv1.Volume, placement Placement) []compiledv1.CompiledVolumeAttachment {
 	byName := map[string]*netv1.Volume{}
 	for i := range volumes {
 		byName[volumes[i].Name] = &volumes[i]
 	}
-	var out []netv1.CompiledVolumeAttachment
+	var out []compiledv1.CompiledVolumeAttachment
 	for _, ref := range vm.Spec.VolumeRefs {
 		vol, ok := byName[ref.Name]
 		if !ok {
 			continue // volume not found yet; the Volume watch re-triggers
 		}
-		att := netv1.CompiledVolumeAttachment{
-			TypeMeta:   metav1.TypeMeta{APIVersion: "net.ectobase.dev/v1alpha1", Kind: "CompiledVolumeAttachment"},
+		att := compiledv1.CompiledVolumeAttachment{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "compiled.ectobase.dev/v1alpha1", Kind: "CompiledVolumeAttachment"},
 			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%s", vm.Name, ref.Name), Namespace: vm.Namespace},
-			Spec: netv1.CompiledVolumeAttachmentSpec{
+			Spec: compiledv1.CompiledVolumeAttachmentSpec{
 				ClusterName:  placement.ClusterName,
 				Size:         vol.Spec.Size,
 				StorageClass: vol.Spec.StorageClass,
@@ -69,11 +70,11 @@ func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req 
 	}
 	placement := Placement{ClusterName: vm.Spec.ClusterName, WorkloadID: vm.Name}
 	desired := CompileVolumeAttachments(&vm, volList.Items, placement)
-	want := map[string]netv1.CompiledVolumeAttachment{}
+	want := map[string]compiledv1.CompiledVolumeAttachment{}
 	for _, a := range desired {
 		want[a.Name] = a
 	}
-	var have netv1.CompiledVolumeAttachmentList
+	var have compiledv1.CompiledVolumeAttachmentList
 	if err := r.Client.List(ctx, &have, client.InNamespace(vm.Namespace), client.MatchingLabels{"workload": vm.Name}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list attachments: %w", err)
 	}
@@ -127,7 +128,7 @@ func (r *CompiledVolumeAttachmentReconciler) SetupWithManager(mgr ctrl.Manager) 
 		// "virtualmachine" otherwise -> duplicate-controller-name panic at manager start).
 		Named("compiledvolumeattachment").
 		For(&netv1.VirtualMachine{}).
-		Owns(&netv1.CompiledVolumeAttachment{}).
+		Owns(&compiledv1.CompiledVolumeAttachment{}).
 		// Only Volume spec changes (Size/StorageClass/BootImage) affect the compiled
 		// attachment; GenerationChangedPredicate skips re-compiling on Volume status writes.
 		Watches(&netv1.Volume{}, handler.EnqueueRequestsFromMapFunc(r.vmsForVolume),

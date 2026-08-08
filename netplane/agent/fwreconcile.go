@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 )
 
 // ReconcileFirewall programs the firewall rules of every CompiledNIC scheduled to this node onto
@@ -29,7 +29,7 @@ func (r *Reconciler) ReconcileFirewall(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var list netv1.CompiledNICList
+	var list compiledv1.CompiledNICList
 	if err := r.client.List(ctx, &list); err != nil {
 		return fmt.Errorf("list compilednics: %w", err)
 	}
@@ -71,7 +71,7 @@ func (r *Reconciler) ReconcileFirewall(ctx context.Context) error {
 // compiledToFw lowers a CompiledFwRule to the dataplane FwRule. k8s NetworkPolicy-style semantics: an
 // INGRESS rule's peer CIDR is the SOURCE (who may reach us) and an EGRESS rule's is the DESTINATION;
 // the port is always the destination port. (An allow-all `0.0.0.0/0` is symmetric either way.)
-func compiledToFw(cr netv1.CompiledFwRule, egress bool) FwRule {
+func compiledToFw(cr compiledv1.CompiledFwRule, egress bool) FwRule {
 	fw := FwRule{
 		Proto:      protoNum(cr.Proto),
 		DstPortMin: uint32(cr.Port),

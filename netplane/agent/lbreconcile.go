@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 )
 
 // lbBacking is one (VIP, backend NIC) pairing this node hosts: a CompiledNIC.LB entry together with
@@ -22,7 +23,7 @@ type lbBacking struct {
 // overlay IPs to `ulByIP` (overlay IP -> underlay, from the local dataplane's attached interfaces).
 // A NIC whose overlay IP isn't attached locally yet is skipped (nothing to announce until it is).
 func (r *Reconciler) desiredLB(ctx context.Context, ulByIP map[string]string) ([]lbBacking, error) {
-	var cnics netv1.CompiledNICList
+	var cnics compiledv1.CompiledNICList
 	if err := r.client.List(ctx, &cnics); err != nil {
 		return nil, fmt.Errorf("list compilednics: %w", err)
 	}

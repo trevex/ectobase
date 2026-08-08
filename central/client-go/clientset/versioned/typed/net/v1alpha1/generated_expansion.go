@@ -2,14 +2,6 @@
 
 package v1alpha1
 
-type CompiledContainerExpansion interface{}
-
-type CompiledNICExpansion interface{}
-
-type CompiledVMExpansion interface{}
-
-type CompiledVolumeAttachmentExpansion interface{}
-
 type ContainerExpansion interface{}
 
 type FirewallPolicyExpansion interface{}

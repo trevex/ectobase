@@ -9,7 +9,7 @@ import (
 	"flag"
 	"log"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"github.com/trevex/ectobase/netplane/controllers"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,8 +25,8 @@ func main() {
 	flag.Parse()
 
 	scheme := runtime.NewScheme()
-	if err := netv1.AddToScheme(scheme); err != nil {
-		log.Fatalf("add netv1 scheme: %v", err)
+	if err := compiledv1.AddToScheme(scheme); err != nil {
+		log.Fatalf("add compiled scheme: %v", err)
 	}
 	if err := corev1.AddToScheme(scheme); err != nil {
 		log.Fatalf("add corev1 scheme: %v", err)

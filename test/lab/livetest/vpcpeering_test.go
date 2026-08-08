@@ -157,7 +157,7 @@ spec:
 		ep := ep
 		eventually(t, 2*time.Minute, 5*time.Second, func() error {
 			nn, err := kubectl(ctx, cfg, ep.node.Cluster,
-				"get", "compilednics.net.ectobase.dev", "default-"+ep.nic,
+				"get", "compilednics.compiled.ectobase.dev", "default-"+ep.nic,
 				"-o", "jsonpath={.spec.nodeName}")
 			if err != nil {
 				return fmt.Errorf("get CompiledNIC default-%s on %s: %w", ep.nic, ep.node.Cluster, err)
@@ -335,7 +335,7 @@ func patchVNIReadyN(t *testing.T, ctx context.Context, cfg *config.Config, resou
 func requirePeerImport(t *testing.T, ctx context.Context, cfg *config.Config, cluster, compiledNIC, prefix string) {
 	t.Helper()
 	eventually(t, 2*time.Minute, 5*time.Second, func() error {
-		out, err := kubectl(ctx, cfg, cluster, "get", "compilednics.net.ectobase.dev", compiledNIC,
+		out, err := kubectl(ctx, cfg, cluster, "get", "compilednics.compiled.ectobase.dev", compiledNIC,
 			"-o", "jsonpath={.spec.peerImports}")
 		if err != nil {
 			return fmt.Errorf("get %s peerImports on %s: %w", compiledNIC, cluster, err)

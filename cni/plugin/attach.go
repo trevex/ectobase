@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	v1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -55,7 +55,7 @@ func parseCNIArgs(cniArgs string) podArgs {
 
 // newK8sClient builds a controller-runtime client from an on-node kubeconfig
 // (the SA-token kubeconfig dropped by the CNI-installer DaemonSet). The scheme
-// carries our net.ectobase.dev/v1alpha1 CRDs so resolveCompiledNIC() can GET the
+// carries our compiled.ectobase.dev/v1alpha1 CRDs so resolveCompiledNIC() can GET the
 // CompiledNIC.
 func newK8sClient(kubeconfigPath string) (client.Client, error) {
 	cfg, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
@@ -67,7 +67,7 @@ func newK8sClient(kubeconfigPath string) (client.Client, error) {
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		return nil, fmt.Errorf("register core scheme: %w", err)
 	}
-	if err := v1alpha1.AddToScheme(scheme); err != nil {
+	if err := compiledv1.AddToScheme(scheme); err != nil {
 		return nil, fmt.Errorf("register scheme: %w", err)
 	}
 

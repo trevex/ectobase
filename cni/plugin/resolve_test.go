@@ -7,7 +7,7 @@ import (
 	"context"
 	"testing"
 
-	v1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -15,15 +15,15 @@ import (
 
 func TestResolveCompiledNIC(t *testing.T) {
 	scheme := runtime.NewScheme()
-	if err := v1alpha1.AddToScheme(scheme); err != nil {
+	if err := compiledv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("AddToScheme: %v", err)
 	}
 
 	// The compiler names the CompiledNIC "<ns>-<nic>": for NetworkInterface default/vm0
 	// the CNI GETs default/default-vm0.
-	cn := &v1alpha1.CompiledNIC{
+	cn := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-vm0", Namespace: "default"},
-		Spec: v1alpha1.CompiledNICSpec{
+		Spec: compiledv1.CompiledNICSpec{
 			VNI:        100,
 			OverlayIPs: []string{"10.0.0.1"},
 			MAC:        "52:54:00:00:00:aa",
@@ -54,13 +54,13 @@ func TestResolveCompiledNIC(t *testing.T) {
 // kubelet retries CNI ADD once the broker finishes syncing.
 func TestResolveCompiledNICNotSynced(t *testing.T) {
 	scheme := runtime.NewScheme()
-	if err := v1alpha1.AddToScheme(scheme); err != nil {
+	if err := compiledv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("AddToScheme: %v", err)
 	}
 
-	cn := &v1alpha1.CompiledNIC{
+	cn := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-vm0", Namespace: "default"},
-		Spec:       v1alpha1.CompiledNICSpec{VNI: 0},
+		Spec:       compiledv1.CompiledNICSpec{VNI: 0},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cn).Build()
 

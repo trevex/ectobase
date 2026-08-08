@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -16,25 +17,28 @@ func TestDesiredAnnouncesOnlyLocalCompiledNicNat(t *testing.T) {
 	if err := netv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
+	if err := compiledv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
 
-	localC := &netv1.CompiledNIC{}
+	localC := &compiledv1.CompiledNIC{}
 	localC.Name = "default-nic-a"
 	localC.Namespace = "default"
-	localC.Spec = netv1.CompiledNICSpec{
+	localC.Spec = compiledv1.CompiledNICSpec{
 		NodeName:   "nodeA",
 		VNI:        100,
 		OverlayIPs: []string{"10.0.0.1"},
-		NAT:        []netv1.CompiledNATSource{{SourceIP: "10.0.0.1", NATIP: "1.2.3.4", PortMin: 1024, PortMax: 2048}},
+		NAT:        []compiledv1.CompiledNATSource{{SourceIP: "10.0.0.1", NATIP: "1.2.3.4", PortMin: 1024, PortMax: 2048}},
 	}
 
-	remoteC := &netv1.CompiledNIC{}
+	remoteC := &compiledv1.CompiledNIC{}
 	remoteC.Name = "default-nic-b"
 	remoteC.Namespace = "default"
-	remoteC.Spec = netv1.CompiledNICSpec{
+	remoteC.Spec = compiledv1.CompiledNICSpec{
 		NodeName:   "nodeB",
 		VNI:        100,
 		OverlayIPs: []string{"10.0.0.2"},
-		NAT:        []netv1.CompiledNATSource{{SourceIP: "10.0.0.2", NATIP: "1.2.3.4", PortMin: 2048, PortMax: 3072}},
+		NAT:        []compiledv1.CompiledNATSource{{SourceIP: "10.0.0.2", NATIP: "1.2.3.4", PortMin: 2048, PortMax: 3072}},
 	}
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(localC, remoteC).Build()

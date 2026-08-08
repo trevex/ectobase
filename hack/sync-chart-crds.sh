@@ -8,4 +8,5 @@ DST="$REPO/deploy/charts/ectobase/crd-bases"
 rm -rf "$DST"
 mkdir -p "$DST"
 cp "$SRC"/net.ectobase.dev_*.yaml "$DST"/
+cp "$SRC"/compiled.ectobase.dev_*.yaml "$DST"/
 echo "synced $(ls "$DST" | wc -l) CRD(s) -> deploy/charts/ectobase/crd-bases/"

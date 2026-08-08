@@ -9,6 +9,7 @@ import (
 	"reflect"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -25,23 +26,23 @@ import (
 // args, env, resources, restart policy), the cluster/node binding, and one resolved overlay interface
 // (MAC + networkName + networkInterfaceRef) per owned NetworkInterface. networkName is the multus NAD
 // name for the flowplane overlay binding (the same source CompileVM uses).
-func CompileContainer(ctr *netv1.Container, nics []netv1.NetworkInterface, networkName string) netv1.CompiledContainer {
+func CompileContainer(ctr *netv1.Container, nics []netv1.NetworkInterface, networkName string) compiledv1.CompiledContainer {
 	macByNIC := map[string]string{}
 	for i := range nics {
 		macByNIC[nics[i].Name] = nics[i].Spec.MAC
 	}
-	var ifaces []netv1.CompiledContainerInterface
+	var ifaces []compiledv1.CompiledContainerInterface
 	for _, ref := range ctr.Spec.InterfaceRefs {
-		ifaces = append(ifaces, netv1.CompiledContainerInterface{
+		ifaces = append(ifaces, compiledv1.CompiledContainerInterface{
 			NetworkName:         networkName,
 			MAC:                 macByNIC[ref.Name],
 			NetworkInterfaceRef: ctr.Namespace + "/" + ref.Name,
 		})
 	}
-	compiled := netv1.CompiledContainer{
-		TypeMeta:   metav1.TypeMeta{APIVersion: "net.ectobase.dev/v1alpha1", Kind: "CompiledContainer"},
+	compiled := compiledv1.CompiledContainer{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "compiled.ectobase.dev/v1alpha1", Kind: "CompiledContainer"},
 		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%s", ctr.Namespace, ctr.Name), Namespace: ctr.Namespace},
-		Spec: netv1.CompiledContainerSpec{
+		Spec: compiledv1.CompiledContainerSpec{
 			ClusterName:   ctr.Spec.ClusterName,
 			NodeName:      ctr.Spec.NodeName,
 			Image:         ctr.Spec.Image,
@@ -76,7 +77,7 @@ func (r *CompiledContainerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	compiled := CompileContainer(&ctr, nicList.Items, r.NetworkName)
 	key := types.NamespacedName{Namespace: compiled.Namespace, Name: compiled.Name}
-	var existing netv1.CompiledContainer
+	var existing compiledv1.CompiledContainer
 	err := r.Client.Get(ctx, key, &existing)
 	switch {
 	case apierrors.IsNotFound(err):
@@ -110,7 +111,7 @@ func (r *CompiledContainerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("compiledcontainer").
 		For(&netv1.Container{}).
-		Owns(&netv1.CompiledContainer{}).
+		Owns(&compiledv1.CompiledContainer{}).
 		// MAC lives in NetworkInterface.spec, so a MAC change bumps generation;
 		// GenerationChangedPredicate avoids recompiling every Container on unrelated NIC status writes
 		// (e.g. port allocation).

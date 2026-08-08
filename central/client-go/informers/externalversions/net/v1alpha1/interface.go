@@ -8,14 +8,6 @@ import (
 
 // Interface provides access to all the informers in this group version.
 type Interface interface {
-	// CompiledContainers returns a CompiledContainerInformer.
-	CompiledContainers() CompiledContainerInformer
-	// CompiledNICs returns a CompiledNICInformer.
-	CompiledNICs() CompiledNICInformer
-	// CompiledVMs returns a CompiledVMInformer.
-	CompiledVMs() CompiledVMInformer
-	// CompiledVolumeAttachments returns a CompiledVolumeAttachmentInformer.
-	CompiledVolumeAttachments() CompiledVolumeAttachmentInformer
 	// Containers returns a ContainerInformer.
 	Containers() ContainerInformer
 	// FirewallPolicies returns a FirewallPolicyInformer.
@@ -47,26 +39,6 @@ type version struct {
 // New returns a new Interface.
 func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakListOptions internalinterfaces.TweakListOptionsFunc) Interface {
 	return &version{factory: f, namespace: namespace, tweakListOptions: tweakListOptions}
-}
-
-// CompiledContainers returns a CompiledContainerInformer.
-func (v *version) CompiledContainers() CompiledContainerInformer {
-	return &compiledContainerInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
-}
-
-// CompiledNICs returns a CompiledNICInformer.
-func (v *version) CompiledNICs() CompiledNICInformer {
-	return &compiledNICInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
-}
-
-// CompiledVMs returns a CompiledVMInformer.
-func (v *version) CompiledVMs() CompiledVMInformer {
-	return &compiledVMInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
-}
-
-// CompiledVolumeAttachments returns a CompiledVolumeAttachmentInformer.
-func (v *version) CompiledVolumeAttachments() CompiledVolumeAttachmentInformer {
-	return &compiledVolumeAttachmentInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
 // Containers returns a ContainerInformer.

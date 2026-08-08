@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -38,7 +38,7 @@ const (
 // hostname nodeSelector, the Exists toleration, terminationGracePeriodSeconds=0, and a
 // single container built from the compiled spec. Pure: no I/O. TypeMeta is set so the
 // object is self-describing for a server-side-apply patch.
-func buildPod(cc *netv1.CompiledContainer) *corev1.Pod {
+func buildPod(cc *compiledv1.CompiledContainer) *corev1.Pod {
 	// Multus annotation: join every interface's NetworkName (the NAD name). The
 	// network-interface annotation is single-valued (flowplane-cni resolves one NIC per
 	// pod); the tests use exactly one interface, so we take index 0.
@@ -94,7 +94,7 @@ func buildPod(cc *netv1.CompiledContainer) *corev1.Pod {
 type PodMaterializerReconciler struct{ Client client.Client }
 
 func (r *PodMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	var cc netv1.CompiledContainer
+	var cc compiledv1.CompiledContainer
 	if err := r.Client.Get(ctx, req.NamespacedName, &cc); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -113,7 +113,7 @@ func (r *PodMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 func (r *PodMaterializerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&netv1.CompiledContainer{}).
+		For(&compiledv1.CompiledContainer{}).
 		Owns(&corev1.Pod{}).
 		Complete(r)
 }

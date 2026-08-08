@@ -9,6 +9,7 @@ import (
 	"reflect"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -28,7 +29,7 @@ const defaultRunStrategy = "RerunOnFailure"
 // CompileVM lowers a VirtualMachine into a CompiledVM: containerDisk image, compute
 // resources, run strategy (defaulted), the cluster binding (from placement), and
 // one resolved overlay interface (MAC + networkName) per owned NetworkInterface.
-func CompileVM(vm *netv1.VirtualMachine, nics []netv1.NetworkInterface, placement Placement, networkName string) netv1.CompiledVM {
+func CompileVM(vm *netv1.VirtualMachine, nics []netv1.NetworkInterface, placement Placement, networkName string) compiledv1.CompiledVM {
 	runStrategy := vm.Spec.RunStrategy
 	if runStrategy == "" {
 		runStrategy = defaultRunStrategy
@@ -37,14 +38,14 @@ func CompileVM(vm *netv1.VirtualMachine, nics []netv1.NetworkInterface, placemen
 	for i := range nics {
 		macByNIC[nics[i].Name] = nics[i].Spec.MAC
 	}
-	var ifaces []netv1.CompiledVMInterface
+	var ifaces []compiledv1.CompiledVMInterface
 	for _, ref := range vm.Spec.InterfaceRefs {
-		ifaces = append(ifaces, netv1.CompiledVMInterface{MAC: macByNIC[ref.Name], NetworkName: networkName})
+		ifaces = append(ifaces, compiledv1.CompiledVMInterface{MAC: macByNIC[ref.Name], NetworkName: networkName})
 	}
-	compiled := netv1.CompiledVM{
-		TypeMeta:   metav1.TypeMeta{APIVersion: "net.ectobase.dev/v1alpha1", Kind: "CompiledVM"},
+	compiled := compiledv1.CompiledVM{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "compiled.ectobase.dev/v1alpha1", Kind: "CompiledVM"},
 		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%s", vm.Namespace, vm.Name), Namespace: vm.Namespace},
-		Spec: netv1.CompiledVMSpec{
+		Spec: compiledv1.CompiledVMSpec{
 			ClusterName: placement.ClusterName,
 			Image:       vm.Spec.Image,
 			Resources:   *vm.Spec.Resources.DeepCopy(),
@@ -76,7 +77,7 @@ func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	placement := Placement{ClusterName: vm.Spec.ClusterName, WorkloadID: vm.Name}
 	compiled := CompileVM(&vm, nicList.Items, placement, r.NetworkName)
 	key := types.NamespacedName{Namespace: compiled.Namespace, Name: compiled.Name}
-	var existing netv1.CompiledVM
+	var existing compiledv1.CompiledVM
 	err := r.Client.Get(ctx, key, &existing)
 	switch {
 	case apierrors.IsNotFound(err):
@@ -113,7 +114,7 @@ func (r *CompiledVMReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// "virtualmachine" and the manager rejects the duplicate.
 		Named("compiledvm").
 		For(&netv1.VirtualMachine{}).
-		Owns(&netv1.CompiledVM{}).
+		Owns(&compiledv1.CompiledVM{}).
 		// MAC lives in NetworkInterface.spec, so a MAC change bumps generation;
 		// GenerationChangedPredicate avoids recompiling every VM on unrelated NIC
 		// status writes (e.g. port allocation).

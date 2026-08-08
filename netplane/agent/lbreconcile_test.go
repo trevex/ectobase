@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	rbv1 "github.com/trevex/ectobase/netplane/gen/routebusv1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -16,18 +17,21 @@ func lbTestScheme(t *testing.T) *runtime.Scheme {
 	if err := netv1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
+	if err := compiledv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
 	return s
 }
 
 func TestDesiredLB_JoinsUnderlayFromDataplane(t *testing.T) {
 	s := lbTestScheme(t)
-	cnic := &netv1.CompiledNIC{
+	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
-		Spec: netv1.CompiledNICSpec{
+		Spec: compiledv1.CompiledNICSpec{
 			NodeName:   "nodeA",
 			VNI:        100,
 			OverlayIPs: []string{"10.0.10.5"},
-			LB:         []netv1.CompiledLB{{VIP: "203.0.113.50", Ports: []netv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
+			LB:         []compiledv1.CompiledLB{{VIP: "203.0.113.50", Ports: []compiledv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
@@ -51,12 +55,12 @@ func TestDesiredLB_JoinsUnderlayFromDataplane(t *testing.T) {
 
 func TestDesiredLB_SkipsWhenNoUnderlay(t *testing.T) {
 	s := lbTestScheme(t)
-	cnic := &netv1.CompiledNIC{
+	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
-		Spec: netv1.CompiledNICSpec{
+		Spec: compiledv1.CompiledNICSpec{
 			NodeName: "nodeA", VNI: 100,
 			OverlayIPs: []string{"10.0.10.5"},
-			LB:         []netv1.CompiledLB{{VIP: "203.0.113.50"}},
+			LB:         []compiledv1.CompiledLB{{VIP: "203.0.113.50"}},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
@@ -74,12 +78,12 @@ func TestDesiredLB_SkipsWhenNoUnderlay(t *testing.T) {
 func TestDesired_EmitsVIPAnycastRoute(t *testing.T) {
 	s := lbTestScheme(t)
 	node := "nodeA"
-	cnic := &netv1.CompiledNIC{
+	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
-		Spec: netv1.CompiledNICSpec{
+		Spec: compiledv1.CompiledNICSpec{
 			NodeName: node, VNI: 100,
 			OverlayIPs: []string{"10.0.0.20"},
-			LB:         []netv1.CompiledLB{{VIP: "203.0.113.50", Ports: []netv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
+			LB:         []compiledv1.CompiledLB{{VIP: "203.0.113.50", Ports: []compiledv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
@@ -167,12 +171,12 @@ func TestReconcileLB_NonEdgeNoop(t *testing.T) {
 func TestDesiredPublic_EmitsLBVIP(t *testing.T) {
 	s := lbTestScheme(t)
 	node := "nodeA"
-	cnic := &netv1.CompiledNIC{
+	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
-		Spec: netv1.CompiledNICSpec{
+		Spec: compiledv1.CompiledNICSpec{
 			NodeName: node, VNI: 100,
 			OverlayIPs: []string{"10.0.0.20"},
-			LB:         []netv1.CompiledLB{{VIP: "203.0.113.50"}},
+			LB:         []compiledv1.CompiledLB{{VIP: "203.0.113.50"}},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()

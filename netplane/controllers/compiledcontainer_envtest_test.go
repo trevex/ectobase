@@ -12,6 +12,7 @@ import (
 	"time"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -37,6 +38,9 @@ func TestCompiledContainerControllerEnvtest(t *testing.T) {
 
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := compiledv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 
@@ -111,7 +115,7 @@ func TestCompiledContainerControllerEnvtest(t *testing.T) {
 
 	// The CompiledNIC inherits BOTH clusterName and nodeName from the Container.
 	eventually(t, 15*time.Second, func() error {
-		var c netv1.CompiledNIC
+		var c compiledv1.CompiledNIC
 		if err := direct.Get(ctx, client.ObjectKey{Namespace: "default", Name: "default-nic-a"}, &c); err != nil {
 			return err
 		}
@@ -126,7 +130,7 @@ func TestCompiledContainerControllerEnvtest(t *testing.T) {
 
 	// The CompiledContainer is emitted with placement + one resolved interface.
 	eventually(t, 15*time.Second, func() error {
-		var cc netv1.CompiledContainer
+		var cc compiledv1.CompiledContainer
 		if err := direct.Get(ctx, client.ObjectKey{Namespace: "default", Name: "default-ctr1"}, &cc); err != nil {
 			return err
 		}

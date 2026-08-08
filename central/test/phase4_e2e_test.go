@@ -25,6 +25,8 @@ import (
 	netinstall "github.com/trevex/ectobase/api/net/install"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
+	compiledinstall "github.com/trevex/ectobase/api/compiled/install"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/broker"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
 	"github.com/trevex/ectobase/central/pkg/scheduler"
@@ -58,6 +60,7 @@ func TestPhase4_ScheduleCompileSyncMaterialize_E2E(t *testing.T) {
 	scheme := runtime.NewScheme()
 	platforminstall.Install(scheme)
 	netinstall.Install(scheme)
+	compiledinstall.Install(scheme)
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
 	}
@@ -209,7 +212,7 @@ func TestPhase4_ScheduleCompileSyncMaterialize_E2E(t *testing.T) {
 	if _, err := cr.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Namespace: ns, Name: "vm1"}}); err != nil {
 		t.Fatalf("compile Reconcile vm1: %v", err)
 	}
-	compiled := &netv1.CompiledVM{}
+	compiled := &compiledv1.CompiledVM{}
 	if err := centralClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "default-vm1"}, compiled); err != nil {
 		t.Fatalf("central get default-vm1: %v", err)
 	}
@@ -234,7 +237,7 @@ func TestPhase4_ScheduleCompileSyncMaterialize_E2E(t *testing.T) {
 	if err := b.SyncCompiledVMs(ctx); err != nil {
 		t.Fatalf("broker SyncCompiledVMs: %v", err)
 	}
-	downList := &netv1.CompiledVMList{}
+	downList := &compiledv1.CompiledVMList{}
 	if err := downstreamClient.List(ctx, downList); err != nil {
 		t.Fatalf("downstream List CompiledVM: %v", err)
 	}

@@ -1,6 +1,6 @@
 {
   "kind": "CompiledNIC",
-  "apiVersion": "net.ectobase.dev/v1alpha1",
+  "apiVersion": "compiled.ectobase.dev/v1alpha1",
   "metadata": {
     "name": "default-nic-frontend",
     "namespace": "default"

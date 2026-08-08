@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/clientcmd"
@@ -50,6 +51,9 @@ func NewReconciler(kubeconfig, nodeID string, deps Deps) (*Reconciler, error) {
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {
 		return nil, fmt.Errorf("register scheme: %w", err)
+	}
+	if err := compiledv1.AddToScheme(scheme); err != nil {
+		return nil, fmt.Errorf("register compiled scheme: %w", err)
 	}
 	// corev1 for StampNodePrefix's Node get/patch (the /64 underlay annotation the broker reads).
 	if err := corev1.AddToScheme(scheme); err != nil {
@@ -114,7 +118,7 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 	// Central egress-SNAT policy: each CompiledNIC.NAT allocation for a source attached on THIS node,
 	// joined to that source's node-local underlay. Program the local SNAT source and announce its NAT
 	// block (owner = the source's node-local underlay) so peers learn the neighbor-nat return route.
-	var cnics netv1.CompiledNICList
+	var cnics compiledv1.CompiledNICList
 	if err := r.client.List(ctx, &cnics); err != nil {
 		return nil, nil, nil, nil, nil, fmt.Errorf("list compilednics: %w", err)
 	}

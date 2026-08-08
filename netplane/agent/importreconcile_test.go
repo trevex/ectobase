@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -13,6 +14,9 @@ import (
 func egScheme(t *testing.T) *runtime.Scheme {
 	s := runtime.NewScheme()
 	if err := netv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := compiledv1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
 	return s
@@ -33,11 +37,11 @@ func TestDesiredEgressVNIs_NAT(t *testing.T) {
 	// A local NIC with a NAT allocation (CompiledNIC.NAT non-empty) needs egress: the NATGateway
 	// reconciler allocates a block to every source in a gateway's VPC, so this stands in for
 	// "the NIC's VPC has a NATGateway and this node hosts a NIC in it".
-	cnic := &netv1.CompiledNIC{
+	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
-		Spec: netv1.CompiledNICSpec{
+		Spec: compiledv1.CompiledNICSpec{
 			NodeName: node, VNI: 100,
-			NAT: []netv1.CompiledNATSource{{SourceIP: "10.0.0.1", NATIP: "203.0.113.1", PortMin: 1024, PortMax: 2048}},
+			NAT: []compiledv1.CompiledNATSource{{SourceIP: "10.0.0.1", NATIP: "203.0.113.1", PortMin: 1024, PortMax: 2048}},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
@@ -55,11 +59,11 @@ func TestDesiredEgressVNIs_NAT(t *testing.T) {
 func TestDesiredEgressVNIs_LBBackend(t *testing.T) {
 	s := egScheme(t)
 	node := "nodeA"
-	cnic := &netv1.CompiledNIC{
+	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
-		Spec: netv1.CompiledNICSpec{
+		Spec: compiledv1.CompiledNICSpec{
 			NodeName: node, VNI: 200,
-			LB: []netv1.CompiledLB{{VIP: "203.0.113.5"}},
+			LB: []compiledv1.CompiledLB{{VIP: "203.0.113.5"}},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
@@ -77,9 +81,9 @@ func TestDesiredEgressVNIs_NeitherIsEmpty(t *testing.T) {
 	s := egScheme(t)
 	node := "nodeA"
 	// A local NIC with neither a NAT allocation nor LB membership needs no egress.
-	cnic := &netv1.CompiledNIC{
+	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
-		Spec:       netv1.CompiledNICSpec{NodeName: node, VNI: 100},
+		Spec:       compiledv1.CompiledNICSpec{NodeName: node, VNI: 100},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
 	r := &Reconciler{client: cl, nodeID: node}

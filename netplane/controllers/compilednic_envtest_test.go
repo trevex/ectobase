@@ -12,6 +12,7 @@ import (
 	"time"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -35,6 +36,9 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := compiledv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 
@@ -100,7 +104,7 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 
 		// Poll until the CompiledNIC appears and has the expected firewall rules.
 		eventually(t, 15*time.Second, func() error {
-			return checkCompiledNIC(ctx, direct, "default", "default-nic-frontend", func(c *netv1.CompiledNIC) error {
+			return checkCompiledNIC(ctx, direct, "default", "default-nic-frontend", func(c *compiledv1.CompiledNIC) error {
 				// Ingress should have exactly the policy rule (no allow-all, since the policy governs it).
 				if len(c.Spec.Firewall.Ingress) != 1 {
 					return fmt.Errorf("ingress rules = %d, want 1", len(c.Spec.Firewall.Ingress))
@@ -129,7 +133,7 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 		mustCreate(ctx, t, direct, nic)
 
 		eventually(t, 15*time.Second, func() error {
-			return checkCompiledNIC(ctx, direct, "default", "default-nic-backend", func(c *netv1.CompiledNIC) error {
+			return checkCompiledNIC(ctx, direct, "default", "default-nic-backend", func(c *compiledv1.CompiledNIC) error {
 				if len(c.Spec.Firewall.Ingress) != 2 || !hasAllowCIDR(c.Spec.Firewall.Ingress, "0.0.0.0/0") || !hasAllowCIDR(c.Spec.Firewall.Ingress, "::/0") {
 					return fmt.Errorf("ingress = %+v, want v4+v6 allow-all", c.Spec.Firewall.Ingress)
 				}
@@ -171,6 +175,9 @@ func TestCompiledNICControllerEnvtest_DeletedPolicyClearsRule(t *testing.T) {
 
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := compiledv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 
@@ -237,7 +244,7 @@ func TestCompiledNICControllerEnvtest_DeletedPolicyClearsRule(t *testing.T) {
 
 	// The CompiledNIC's Ingress must contain the Deny rule.
 	eventually(t, 15*time.Second, func() error {
-		return checkCompiledNIC(ctx, direct, "default", "default-nic-green", func(c *netv1.CompiledNIC) error {
+		return checkCompiledNIC(ctx, direct, "default", "default-nic-green", func(c *compiledv1.CompiledNIC) error {
 			if !hasFwRule(c.Spec.Firewall.Ingress, "0.0.0.0/0", "Deny") {
 				return fmt.Errorf("ingress = %+v, want a {0.0.0.0/0 Deny} rule", c.Spec.Firewall.Ingress)
 			}
@@ -254,7 +261,7 @@ func TestCompiledNICControllerEnvtest_DeletedPolicyClearsRule(t *testing.T) {
 	// Assert on the ABSENCE of any Deny (the property under test), and — as a positive sanity check
 	// — that the allow-all default has materialized for both families.
 	eventually(t, 15*time.Second, func() error {
-		return checkCompiledNIC(ctx, direct, "default", "default-nic-green", func(c *netv1.CompiledNIC) error {
+		return checkCompiledNIC(ctx, direct, "default", "default-nic-green", func(c *compiledv1.CompiledNIC) error {
 			for _, r := range c.Spec.Firewall.Ingress {
 				if r.Action == "Deny" {
 					return fmt.Errorf("stale Deny rule persists after policy delete: ingress = %+v", c.Spec.Firewall.Ingress)
@@ -281,7 +288,7 @@ func TestCompiledNICControllerEnvtest_DeletedPolicyClearsRule(t *testing.T) {
 func ptrTo[T any](v T) *T { return &v }
 
 // hasFwRule reports whether the rule list contains a rule with the given CIDR and Action.
-func hasFwRule(rules []netv1.CompiledFwRule, cidr, action string) bool {
+func hasFwRule(rules []compiledv1.CompiledFwRule, cidr, action string) bool {
 	for _, r := range rules {
 		if r.CIDR == cidr && r.Action == action {
 			return true
@@ -292,8 +299,8 @@ func hasFwRule(rules []netv1.CompiledFwRule, cidr, action string) bool {
 
 // checkCompiledNIC fetches the CompiledNIC with the given namespace/name and runs check against it.
 // Returns an error if the object doesn't exist yet or check fails.
-func checkCompiledNIC(ctx context.Context, c client.Client, namespace, name string, check func(*netv1.CompiledNIC) error) error {
-	var got netv1.CompiledNIC
+func checkCompiledNIC(ctx context.Context, c client.Client, namespace, name string, check func(*compiledv1.CompiledNIC) error) error {
+	var got compiledv1.CompiledNIC
 	if err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &got); err != nil {
 		return err
 	}

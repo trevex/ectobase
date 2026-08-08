@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"sort"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	kubevirtv1 "kubevirt.io/api/core/v1"
@@ -44,13 +44,13 @@ func vmRunStrategy(s string) kubevirtv1.VirtualMachineRunStrategy {
 // attachment first, then the rest by name); otherwise it falls back to an ephemeral
 // containerDisk from cvm.Spec.Image (the Phase-4 behavior). Pure: no I/O. TypeMeta is set so
 // the object is self-describing for a server-side-apply patch.
-func buildVM(cvm *netv1.CompiledVM, attachments []netv1.CompiledVolumeAttachment) *kubevirtv1.VirtualMachine {
+func buildVM(cvm *compiledv1.CompiledVM, attachments []compiledv1.CompiledVolumeAttachment) *kubevirtv1.VirtualMachine {
 	rs := vmRunStrategy(cvm.Spec.RunStrategy)
 	var disks []kubevirtv1.Disk
 	var volumes []kubevirtv1.Volume
 	if len(attachments) > 0 {
 		// Persistent RBD disks: boot attachment first, then the rest by name (deterministic).
-		ordered := append([]netv1.CompiledVolumeAttachment(nil), attachments...)
+		ordered := append([]compiledv1.CompiledVolumeAttachment(nil), attachments...)
 		sort.SliceStable(ordered, func(i, j int) bool {
 			if ordered[i].Spec.Boot != ordered[j].Spec.Boot {
 				return ordered[i].Spec.Boot // boot first
@@ -112,11 +112,11 @@ func buildVM(cvm *netv1.CompiledVM, attachments []netv1.CompiledVolumeAttachment
 type VMMaterializerReconciler struct{ Client client.Client }
 
 func (r *VMMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	var cvm netv1.CompiledVM
+	var cvm compiledv1.CompiledVM
 	if err := r.Client.Get(ctx, req.NamespacedName, &cvm); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	var atts netv1.CompiledVolumeAttachmentList
+	var atts compiledv1.CompiledVolumeAttachmentList
 	if w := cvm.Labels["workload"]; w != "" {
 		if err := r.Client.List(ctx, &atts, client.InNamespace(cvm.Namespace), client.MatchingLabels{"workload": w}); err != nil {
 			return ctrl.Result{}, fmt.Errorf("list attachments: %w", err)
@@ -140,9 +140,9 @@ func (r *VMMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 func (r *VMMaterializerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&netv1.CompiledVM{}).
+		For(&compiledv1.CompiledVM{}).
 		Owns(&kubevirtv1.VirtualMachine{}).
-		Watches(&netv1.CompiledVolumeAttachment{}, handler.EnqueueRequestsFromMapFunc(r.cvmsForAttachment)).
+		Watches(&compiledv1.CompiledVolumeAttachment{}, handler.EnqueueRequestsFromMapFunc(r.cvmsForAttachment)).
 		Complete(r)
 }
 
@@ -150,7 +150,7 @@ func (r *VMMaterializerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // (named "{namespace}-{workload}"), so a new/changed DataVolume-backing attachment
 // re-materializes the VM's disk list.
 func (r *VMMaterializerReconciler) cvmsForAttachment(ctx context.Context, obj client.Object) []reconcile.Request {
-	cva, ok := obj.(*netv1.CompiledVolumeAttachment)
+	cva, ok := obj.(*compiledv1.CompiledVolumeAttachment)
 	if !ok {
 		return nil
 	}
