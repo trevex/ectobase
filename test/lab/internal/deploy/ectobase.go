@@ -168,6 +168,16 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		if err := Multus(ctx, nil, c.Kubeconfig); err != nil {
 			return fmt.Errorf("cluster %s: install Multus: %w", c.Name, err)
 		}
+		// The pod-materializer turns a broker-synced CompiledContainer into a v1.Pod on
+		// this compute cluster (the container-workload analogue of the vm-materializer).
+		// Containers are the common case, so it belongs in the BASE compute substrate
+		// (alongside Multus/CNI) — NOT gated behind `lab tier2`. It is NOT in the ectobase
+		// Helm chart, so apply it here from config/deploy/pod-materializer.yaml. Idempotent
+		// (kubectl apply); ectobase-system is PSA-privileged from the chart.
+		if err := PodMaterializer(ctx, nil, c.Kubeconfig,
+			filepath.Join(s.RepoRoot, "config/deploy/pod-materializer.yaml")); err != nil {
+			return fmt.Errorf("cluster %s: pod-materializer: %w", c.Name, err)
+		}
 	}
 
 	// --- Readiness ---
@@ -175,6 +185,22 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		return fmt.Errorf("cluster pools ready: %w", err)
 	}
 	slog.Info("ectobase substrate deployed", "compute", len(s.Compute))
+	return nil
+}
+
+// PodMaterializer applies the pod-materializer (SA + RBAC + Deployment in
+// ectobase-system) onto a compute cluster from config/deploy/pod-materializer.yaml.
+// The materializer turns a broker-synced CompiledContainer into a v1.Pod (attached to
+// the flowplane overlay via Multus + flowplane-cni) — the compute-side half of the
+// container-workload pipeline. It mirrors deploy.VMMaterializer but is base-substrate
+// (deployed on EVERY compute cluster, alongside Multus), not tier2-gated. Idempotent
+// (kubectl apply); ectobase-system is already PSA-privileged from the chart.
+func PodMaterializer(ctx context.Context, r Runner, kubeconfig, manifestPath string) error {
+	r = runnerOf(r)
+	slog.Info("deploying pod-materializer", "manifest", manifestPath)
+	if err := r.Run(ctx, "kubectl", "--kubeconfig", kubeconfig, "apply", "-f", manifestPath); err != nil {
+		return fmt.Errorf("apply pod-materializer: %w", err)
+	}
 	return nil
 }
 

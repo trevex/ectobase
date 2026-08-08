@@ -29,16 +29,19 @@ const (
 // our overlay via Multus -> flowplane-cni (a SECONDARY network), and pings across the
 // encapsulated overlay both ways.
 //
-// This drives the REAL control-plane flow: a VPC + two NetworkInterfaces (each with a
-// spec.clusterName placement + spec.nodeName) are applied to CENTRAL; the netplane
-// compiler lowers them to per-cluster CompiledNICs (stamped with clusterName from the
-// NIC placement + nodeName); the brokers sync each CompiledNIC to ITS compute cluster.
-// The flowplane-cni then resolves the pod's overlay {vni, ips, mac} from the
-// broker-synced CompiledNIC <ns>-<nic> (central policy) — NOT the raw NetworkInterface
-// + VPC — and calls the node-local dataplane AttachInterface, which creates the veth in
-// the pod netns, addresses it (overlay /32 + 169.254.0.1 gateway), programs the eBPF
-// maps, and announces the underlay /128 to the reflector so the cross-cluster route is
-// learned. No raw NIC/VPC is applied to the compute clusters.
+// This drives the REAL control-plane + container-workload flow END TO END: a VPC + two
+// NetworkInterfaces (NO placement on the NICs) are applied to CENTRAL, and a Container
+// per endpoint (carrying the spec.clusterName + spec.nodeName placement and owning its
+// NIC via interfaceRefs) is applied to CENTRAL too. The netplane compiler is the placement
+// authority: it stamps each CompiledNIC's clusterName + nodeName FROM the owning Container,
+// and lowers the Container itself to a per-cluster CompiledContainer; the brokers sync both
+// to ITS compute cluster; the pod-materializer turns each CompiledContainer into a real
+// v1.Pod (with the Multus + flowplane-cni annotations). The flowplane-cni then resolves the
+// pod's overlay {vni, ips, mac} from the broker-synced CompiledNIC <ns>-<nic> (central
+// policy) and calls the node-local dataplane AttachInterface, which creates the veth in the
+// pod netns, addresses it (overlay /32 + 169.254.0.1 gateway), programs the eBPF maps, and
+// announces the underlay /128 to the reflector so the cross-cluster route is learned. No raw
+// Pod/NIC/VPC is applied to the compute clusters — only the NAD.
 func TestPodOverlayPing(t *testing.T) {
 	cfg := loadConfig(t)
 	requireFabricUp(t, cfg)
@@ -62,11 +65,10 @@ func TestPodOverlayPing(t *testing.T) {
 	epA := endpoint{nodeA, "pod-nic-a", podIPA, podMACA}
 	epC := endpoint{nodeC, "pod-nic-c", podIPC, podMACC}
 
-	// 1. VPC + two NICs on CENTRAL. Each NIC carries spec.clusterName (the pod's
-	//    cluster placement — what stamps CompiledNIC.clusterName for the broker to
-	//    select on) + spec.nodeName (what the agent's firewall reconcile gates on) +
-	//    spec.mac. defaultPolicy Allow so guest egress isn't deny-by-default dropped.
-	require.NoError(t, applyCentral(ctx, cfg, podCentralFixture(epA.nic, epA.ip, epA.mac, epA.node, epC.nic, epC.ip, epC.mac, epC.node)))
+	// 1. VPC + two NICs on CENTRAL. The NICs carry NO placement: an owning Container is
+	//    the placement authority (it stamps CompiledNIC.clusterName + nodeName). Just IPs +
+	//    mac here. defaultPolicy Allow so guest egress isn't deny-by-default dropped.
+	require.NoError(t, applyCentral(ctx, cfg, podCentralFixture(epA.nic, epA.ip, epA.mac, epC.nic, epC.ip, epC.mac)))
 	// The compiler gates on a Ready VPC with a vni; mark VPC + both NICs Ready.
 	patchPodVNIReady(t, ctx, cfg, "vpcs.net.ectobase.dev", "pod-vpc")
 	patchPodVNIReady(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", epA.nic)
@@ -77,8 +79,27 @@ func TestPodOverlayPing(t *testing.T) {
 		_, _ = kubectl(ctx, cfg, "central", "delete", "vpc.net.ectobase.dev", "pod-vpc", "--ignore-not-found", "--wait=false")
 	})
 
-	// 2. Each compute cluster's CompiledNIC lands (broker sync) with the expected node
-	//    — the CNI reads THIS object, so it must be present before the pod attaches.
+	// 2. NAD (flowplane-cni secondary net) on EACH cluster + a Container per endpoint on
+	//    CENTRAL. The Container owns its NIC (interfaceRefs) and pins the placement
+	//    (clusterName + nodeName); the compiler is the placement authority — it stamps those
+	//    onto the owned CompiledNIC AND lowers the Container to a CompiledContainer that the
+	//    broker syncs down and the pod-materializer turns into the real Pod (with the
+	//    Multus/flowplane-cni annotations). We never create a raw Pod. GC on the Container
+	//    cascades to the CompiledContainer + Pod. Applied BEFORE the CompiledNIC placement
+	//    check below, since the placement now flows from the Container.
+	for _, ep := range []endpoint{epA, epC} {
+		ep := ep
+		require.NoError(t, applyCluster(ctx, cfg, ep.node.Cluster, podNADManifest()))
+		require.NoError(t, applyCentral(ctx, cfg, containerFixture(containerName(ep.nic), ep.node.Cluster, nodeK8sName(ep.node), ep.nic)))
+		t.Cleanup(func() {
+			_, _ = kubectl(ctx, cfg, "central", "delete", "container.net.ectobase.dev", containerName(ep.nic), "--ignore-not-found", "--wait=false")
+			_, _ = kubectl(ctx, cfg, ep.node.Cluster, "delete", "net-attach-def", podNADName, "--ignore-not-found")
+		})
+	}
+
+	// 3. Each compute cluster's CompiledNIC lands (broker sync) with the expected node
+	//    (stamped from the owning Container) — the CNI reads THIS object, so it must be
+	//    present before the pod attaches.
 	for _, ep := range []endpoint{epA, epC} {
 		ep := ep
 		eventually(t, 2*time.Minute, 5*time.Second, func() error {
@@ -96,32 +117,28 @@ func TestPodOverlayPing(t *testing.T) {
 		})
 	}
 
-	// 3. NAD (flowplane-cni secondary net) + the Pod on EACH compute cluster.
-	for _, ep := range []endpoint{epA, epC} {
-		ep := ep
-		require.NoError(t, applyCluster(ctx, cfg, ep.node.Cluster, podNADManifest()))
-		require.NoError(t, applyCluster(ctx, cfg, ep.node.Cluster, podManifest(podName(ep.nic), ep.nic, nodeK8sName(ep.node))))
-		t.Cleanup(func() {
-			_, _ = kubectl(ctx, cfg, ep.node.Cluster, "delete", "pod", podName(ep.nic), "--ignore-not-found", "--force", "--grace-period=0")
-			_, _ = kubectl(ctx, cfg, ep.node.Cluster, "delete", "net-attach-def", podNADName, "--ignore-not-found")
-		})
-	}
-
-	// 4. Both pods Ready (the secondary attach ran = flowplane-cni resolved the
-	//    CompiledNIC + AttachInterface succeeded).
+	// 4. Both pods Ready (materializer created the Pod + the secondary attach ran =
+	//    flowplane-cni resolved the CompiledNIC + AttachInterface succeeded). The Pod name
+	//    is the CompiledContainer name; we resolve it by the materializer's label to avoid
+	//    coupling to the <ns>-<name> format.
+	podByEP := map[string]string{}
 	for _, ep := range []endpoint{epA, epC} {
 		ep := ep
 		eventually(t, 3*time.Minute, 5*time.Second, func() error {
-			out, err := kubectl(ctx, cfg, ep.node.Cluster, "get", "pod", podName(ep.nic),
-				"-o", "jsonpath={.status.phase}")
+			pod, err := podForContainer(ctx, cfg, ep.node.Cluster, compiledContainerName(ep.nic))
 			if err != nil {
 				return err
 			}
-			if strings.TrimSpace(out) != "Running" {
-				desc, _ := kubectl(ctx, cfg, ep.node.Cluster, "describe", "pod", podName(ep.nic))
-				return fmt.Errorf("pod %s on %s phase=%q, not Running:\n%s",
-					podName(ep.nic), ep.node.Cluster, strings.TrimSpace(out), tail(desc, 25))
+			phase, err := kubectl(ctx, cfg, ep.node.Cluster, "get", "pod", pod, "-o", "jsonpath={.status.phase}")
+			if err != nil {
+				return err
 			}
+			if strings.TrimSpace(phase) != "Running" {
+				desc, _ := kubectl(ctx, cfg, ep.node.Cluster, "describe", "pod", pod)
+				return fmt.Errorf("pod %s on %s phase=%q, not Running:\n%s",
+					pod, ep.node.Cluster, strings.TrimSpace(phase), tail(desc, 25))
+			}
+			podByEP[ep.nic] = pod
 			return nil
 		})
 	}
@@ -130,12 +147,12 @@ func TestPodOverlayPing(t *testing.T) {
 	for _, ep := range []endpoint{epA, epC} {
 		ep := ep
 		eventually(t, 60*time.Second, 5*time.Second, func() error {
-			out, err := kubectl(ctx, cfg, ep.node.Cluster, "exec", podName(ep.nic), "--", "ip", "-o", "addr")
+			out, err := kubectl(ctx, cfg, ep.node.Cluster, "exec", podByEP[ep.nic], "--", "ip", "-o", "addr")
 			if err != nil {
-				return fmt.Errorf("ip addr in %s: %w\n%s", podName(ep.nic), err, out)
+				return fmt.Errorf("ip addr in %s: %w\n%s", podByEP[ep.nic], err, out)
 			}
 			if !strings.Contains(out, ep.ip) {
-				return fmt.Errorf("pod %s overlay IP %s not present yet:\n%s", podName(ep.nic), ep.ip, out)
+				return fmt.Errorf("pod %s overlay IP %s not present yet:\n%s", podByEP[ep.nic], ep.ip, out)
 			}
 			return nil
 		})
@@ -144,24 +161,28 @@ func TestPodOverlayPing(t *testing.T) {
 	// 6. Cross-cluster overlay ping both ways from inside the pods (bounded-retry to
 	//    absorb the agent firewall/route reconcile + reflector propagation).
 	eventually(t, 2*time.Minute, 5*time.Second, func() error {
-		return podPing(ctx, cfg, epA.node.Cluster, podName(epA.nic), epC.ip)
+		return podPing(ctx, cfg, epA.node.Cluster, podByEP[epA.nic], epC.ip)
 	})
 	eventually(t, 2*time.Minute, 5*time.Second, func() error {
-		return podPing(ctx, cfg, epC.node.Cluster, podName(epC.nic), epA.ip)
+		return podPing(ctx, cfg, epC.node.Cluster, podByEP[epC.nic], epA.ip)
 	})
 }
 
-// podName is the Pod name for a NIC.
-func podName(nic string) string { return "pod-" + nic }
+// containerName is the Container name that owns a NIC.
+func containerName(nic string) string { return "ctr-" + nic }
+
+// compiledContainerName is the CompiledContainer (and materialized Pod) name for a NIC:
+// the compiler names it <namespace>-<container> (all fixtures live in the default namespace).
+func compiledContainerName(nic string) string { return "default-" + containerName(nic) }
 
 const podNADName = "flowplane-overlay"
 
 // podCentralFixture renders the central fixture for the two Pod endpoints: a VPC and
-// two NetworkInterfaces, each with spec.clusterName (the pod's cluster — stamps the
-// CompiledNIC.clusterName the broker selects on), spec.nodeName (the agent firewall
-// reconcile gate), spec.ips, and spec.mac. The compiler lowers each to a per-cluster
-// CompiledNIC default-<nic>. defaultPolicy Allow so guest egress isn't dropped.
-func podCentralFixture(nicA, ipA, macA string, nodeA config.DerivedNode, nicC, ipC, macC string, nodeC config.DerivedNode) string {
+// two NetworkInterfaces with spec.ips + spec.mac and NO placement. The owning Container
+// (applied separately) is the placement authority — it stamps the CompiledNIC's
+// clusterName + nodeName. The compiler lowers each NIC to a per-cluster CompiledNIC
+// default-<nic>. defaultPolicy Allow so guest egress isn't dropped.
+func podCentralFixture(nicA, ipA, macA, nicC, ipC, macC string) string {
 	return fmt.Sprintf(`apiVersion: net.ectobase.dev/v1alpha1
 kind: VPC
 metadata: {name: pod-vpc}
@@ -170,15 +191,50 @@ spec: {vni: %d, defaultPolicy: Allow}
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NetworkInterface
 metadata: {name: %s}
-spec: {vpcRef: {name: pod-vpc}, ips: [%q], mac: %q, clusterName: %q, nodeName: %q}
+spec: {vpcRef: {name: pod-vpc}, ips: [%q], mac: %q}
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NetworkInterface
 metadata: {name: %s}
-spec: {vpcRef: {name: pod-vpc}, ips: [%q], mac: %q, clusterName: %q, nodeName: %q}
-`, podVNI,
-		nicA, ipA, macA, nodeA.Cluster, nodeK8sName(nodeA),
-		nicC, ipC, macC, nodeC.Cluster, nodeK8sName(nodeC))
+spec: {vpcRef: {name: pod-vpc}, ips: [%q], mac: %q}
+`, podVNI, nicA, ipA, macA, nicC, ipC, macC)
+}
+
+// containerFixture renders a Container that owns nic and pins its placement (clusterName +
+// nodeName). The compiler is the placement authority: it stamps those onto the owned
+// CompiledNIC and lowers this Container to a CompiledContainer that the pod-materializer
+// turns into the real Pod. name/node are the container name and the k8s hostname.
+func containerFixture(name, cluster, node, nic string) string {
+	return fmt.Sprintf(`apiVersion: net.ectobase.dev/v1alpha1
+kind: Container
+metadata: {name: %s, namespace: default}
+spec:
+  clusterName: %q
+  nodeName: %q
+  interfaceRefs: [{name: %s}]
+  image: busybox:1.36
+  command: ["sleep", "3600"]
+`, name, cluster, node, nic)
+}
+
+// podForContainer resolves the materialized Pod name for a CompiledContainer via the
+// materializer's net.ectobase.dev/container label (avoids coupling to the pod's name
+// format). Errors until exactly one matching pod exists.
+func podForContainer(ctx context.Context, cfg *config.Config, cluster, compiledContainer string) (string, error) {
+	out, err := kubectl(ctx, cfg, cluster, "get", "pod",
+		"-l", "net.ectobase.dev/container="+compiledContainer,
+		"-o", "jsonpath={.items[*].metadata.name}")
+	if err != nil {
+		return "", fmt.Errorf("get pod for container %s on %s: %w", compiledContainer, cluster, err)
+	}
+	name := strings.TrimSpace(out)
+	if name == "" {
+		return "", fmt.Errorf("no Pod yet for container %s on %s (materializer not caught up?)", compiledContainer, cluster)
+	}
+	if strings.ContainsAny(name, " \t") {
+		return "", fmt.Errorf("multiple Pods for container %s on %s: %q", compiledContainer, cluster, name)
+	}
+	return name, nil
 }
 
 // podNADManifest renders the NetworkAttachmentDefinition that references flowplane-cni.
@@ -203,29 +259,6 @@ spec:
       ]
     }
 `, podNADName, podNADName)
-}
-
-// podManifest renders a busybox Pod annotated onto our overlay: the flowplane-cni NIC
-// ref (net.ectobase.dev/network-interface) + the Multus secondary-network annotation
-// (k8s.v1.cni.cncf.io/networks) that runs flowplane-cni as net1. Pinned to the node.
-func podManifest(name, nic, node string) string {
-	return fmt.Sprintf(`apiVersion: v1
-kind: Pod
-metadata:
-  name: %s
-  namespace: default
-  annotations:
-    net.ectobase.dev/network-interface: default/%s
-    k8s.v1.cni.cncf.io/networks: %s
-spec:
-  terminationGracePeriodSeconds: 0
-  nodeSelector: {kubernetes.io/hostname: %s}
-  tolerations: [{operator: Exists}]
-  containers:
-    - name: c
-      image: busybox:1.36
-      command: ["sleep", "3600"]
-`, name, nic, podNADName, node)
 }
 
 // patchPodVNIReady marks a net.ectobase.dev resource's status Ready with the pod

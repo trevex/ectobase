@@ -16,11 +16,12 @@ import (
 
 // Control-plane-driven VPC-peering scenario, ported from test/scenario-vpc-peering.sh
 // but driven end-to-end through the real control plane: VPCs / NICs / VPCPeerings /
-// FirewallPolicies are applied to CENTRAL, the netplane compiler lowers them to
-// per-cluster CompiledNICs (with PeerImports + firewall), the brokers sync them to the
-// compute clusters, and REAL Pods are spawned via Multus + flowplane-cni. No direct
-// dataplane AttachInterface: the CNI attaches each pod by reading the broker-synced
-// CompiledNIC.
+// FirewallPolicies + a Container per endpoint are applied to CENTRAL, the netplane
+// compiler lowers them to per-cluster CompiledNICs (with PeerImports + firewall) and
+// CompiledContainers, the brokers sync them to the compute clusters, and the
+// pod-materializer spawns the REAL Pods (attached via Multus + flowplane-cni). No raw
+// Pod and no direct dataplane AttachInterface: the owning Container is the placement
+// authority and the materializer + CNI produce and attach each pod.
 //
 // Distinct VNIs (110/120) + IP ranges (10.0.10.x / 10.0.20.x) so it never collides
 // with the overlay(100)/pod(201)/qos/dhcp/nat suites.
@@ -81,8 +82,9 @@ func TestVPCPeering(t *testing.T) {
 	local := endpoint{nodeC, "green-local", greenLocalIP, greenLocalMAC, peerGreenVNI}
 	all := []endpoint{blue, green, local}
 
-	// 1. VPCs + NICs on CENTRAL. Green NICs carry label side=green so the FirewallPolicy
-	//    selector governs them (and, per the compiler, replaces the allow-all fallback).
+	// 1. VPCs + NICs on CENTRAL (NO placement on the NICs — the owning Containers, applied
+	//    in step 5, are the placement authority). Green NICs carry label side=green so the
+	//    FirewallPolicy selector governs them (replacing the compiler's allow-all fallback).
 	require.NoError(t, applyCentral(ctx, cfg, vpcPeeringCentralFixture(blue, green, local)))
 	// The compiler gates on Ready VPCs/NICs with a vni; patch each with its own vni.
 	patchVNIReadyN(t, ctx, cfg, "vpcs.net.ectobase.dev", "peer-blue", peerBlueVNI)
@@ -95,9 +97,29 @@ func TestVPCPeering(t *testing.T) {
 		_, _ = kubectl(ctx, cfg, "central", "delete", "vpcpeering.net.ectobase.dev", "blue-to-green", "green-to-blue", "--ignore-not-found", "--wait=false")
 		_, _ = kubectl(ctx, cfg, "central", "delete", "firewallpolicy.net.ectobase.dev", "green-deny-all", "green-allow-blue", "--ignore-not-found", "--wait=false")
 		for _, ep := range all {
+			_, _ = kubectl(ctx, cfg, "central", "delete", "container.net.ectobase.dev", containerName(ep.nic), "--ignore-not-found", "--wait=false")
 			_, _ = kubectl(ctx, cfg, "central", "delete", "networkinterface.net.ectobase.dev", ep.nic, "--ignore-not-found", "--wait=false")
 		}
 		_, _ = kubectl(ctx, cfg, "central", "delete", "vpc.net.ectobase.dev", "peer-blue", "peer-green", "--ignore-not-found", "--wait=false")
+	})
+
+	// A Container per endpoint on CENTRAL owns its NIC and pins the placement (clusterName +
+	// nodeName): the compiler stamps those onto the owned CompiledNIC and lowers the Container
+	// to a CompiledContainer the pod-materializer turns into the real Pod. Apply the NADs too
+	// (one per compute cluster). These must exist before the step-4 CompiledNIC placement check.
+	appliedNADClusters := map[string]bool{}
+	for _, ep := range all {
+		ep := ep
+		if !appliedNADClusters[ep.node.Cluster] {
+			require.NoError(t, applyCluster(ctx, cfg, ep.node.Cluster, podNADManifest()))
+			appliedNADClusters[ep.node.Cluster] = true
+		}
+		require.NoError(t, applyCentral(ctx, cfg, containerFixture(containerName(ep.nic), ep.node.Cluster, nodeK8sName(ep.node), ep.nic)))
+	}
+	t.Cleanup(func() {
+		for cl := range appliedNADClusters {
+			_, _ = kubectl(ctx, cfg, cl, "delete", "net-attach-def", podNADName, "--ignore-not-found")
+		}
 	})
 
 	// 2. Deny-all ingress policy on green BEFORE the peering. Without a selecting policy the
@@ -150,47 +172,40 @@ spec:
 	requirePeerImport(t, ctx, cfg, blue.node.Cluster, "default-"+blue.nic, peerGreenSubnet)
 	requirePeerImport(t, ctx, cfg, green.node.Cluster, "default-"+green.nic, peerBlueSubnet)
 
-	// 5. NAD + the 3 Pods (blue-guest@nodeA, green-guest + green-local@nodeC) via Multus/CNI.
-	for _, ep := range all {
-		ep := ep
-		require.NoError(t, applyCluster(ctx, cfg, ep.node.Cluster, podNADManifest()))
-		require.NoError(t, applyCluster(ctx, cfg, ep.node.Cluster, podManifest(podName(ep.nic), ep.nic, nodeK8sName(ep.node))))
-		t.Cleanup(func() {
-			_, _ = kubectl(ctx, cfg, ep.node.Cluster, "delete", "pod", podName(ep.nic), "--ignore-not-found", "--force", "--grace-period=0")
-		})
-	}
-	t.Cleanup(func() {
-		for _, cl := range []string{nodeA.Cluster, nodeC.Cluster} {
-			_, _ = kubectl(ctx, cfg, cl, "delete", "net-attach-def", podNADName, "--ignore-not-found")
-		}
-	})
-
-	// 6. All pods Running (secondary attach ran = CNI resolved CompiledNIC + AttachInterface).
+	// 5. The materializer turns each CompiledContainer into a real Pod: wait for all three
+	//    Running (secondary attach ran = CNI resolved CompiledNIC + AttachInterface). Resolve
+	//    the Pod name via the materializer's net.ectobase.dev/container label.
+	podByNIC := map[string]string{}
 	for _, ep := range all {
 		ep := ep
 		eventually(t, 3*time.Minute, 5*time.Second, func() error {
-			out, err := kubectl(ctx, cfg, ep.node.Cluster, "get", "pod", podName(ep.nic), "-o", "jsonpath={.status.phase}")
+			pod, err := podForContainer(ctx, cfg, ep.node.Cluster, compiledContainerName(ep.nic))
 			if err != nil {
 				return err
 			}
-			if strings.TrimSpace(out) != "Running" {
-				desc, _ := kubectl(ctx, cfg, ep.node.Cluster, "describe", "pod", podName(ep.nic))
-				return fmt.Errorf("pod %s on %s phase=%q, not Running:\n%s", podName(ep.nic), ep.node.Cluster, strings.TrimSpace(out), tail(desc, 25))
+			phase, err := kubectl(ctx, cfg, ep.node.Cluster, "get", "pod", pod, "-o", "jsonpath={.status.phase}")
+			if err != nil {
+				return err
 			}
+			if strings.TrimSpace(phase) != "Running" {
+				desc, _ := kubectl(ctx, cfg, ep.node.Cluster, "describe", "pod", pod)
+				return fmt.Errorf("pod %s on %s phase=%q, not Running:\n%s", pod, ep.node.Cluster, strings.TrimSpace(phase), tail(desc, 25))
+			}
+			podByNIC[ep.nic] = pod
 			return nil
 		})
 	}
 
-	// 7. Overlay iface landed inside each pod with the expected IP (net1).
+	// 6. Overlay iface landed inside each pod with the expected IP (net1).
 	for _, ep := range all {
 		ep := ep
 		eventually(t, 60*time.Second, 5*time.Second, func() error {
-			out, err := kubectl(ctx, cfg, ep.node.Cluster, "exec", podName(ep.nic), "--", "ip", "-o", "addr")
+			out, err := kubectl(ctx, cfg, ep.node.Cluster, "exec", podByNIC[ep.nic], "--", "ip", "-o", "addr")
 			if err != nil {
-				return fmt.Errorf("ip addr in %s: %w\n%s", podName(ep.nic), err, out)
+				return fmt.Errorf("ip addr in %s: %w\n%s", podByNIC[ep.nic], err, out)
 			}
 			if !strings.Contains(out, ep.ip) {
-				return fmt.Errorf("pod %s overlay IP %s not present yet:\n%s", podName(ep.nic), ep.ip, out)
+				return fmt.Errorf("pod %s overlay IP %s not present yet:\n%s", podByNIC[ep.nic], ep.ip, out)
 			}
 			return nil
 		})
@@ -202,7 +217,7 @@ spec:
 	// peering imported the route but grants NO firewall permission. Retry a few times
 	// to confirm it's consistently denied (not just slow to converge).
 	// -----------------------------------------------------------------------
-	requireConsistentlyDenied(t, ctx, cfg, blue.node.Cluster, podName(blue.nic), green.ip)
+	requireConsistentlyDenied(t, ctx, cfg, blue.node.Cluster, podByNIC[blue.nic], green.ip)
 	t.Logf("Assertion 1 PASS: pre-policy cross-VPC ping blue-guest -> %s consistently blocked (deny-by-default)", green.ip)
 
 	// -----------------------------------------------------------------------
@@ -220,7 +235,7 @@ spec:
 `, peerBlueSubnet)))
 
 	eventually(t, 3*time.Minute, 5*time.Second, func() error {
-		return podPing(ctx, cfg, blue.node.Cluster, podName(blue.nic), green.ip)
+		return podPing(ctx, cfg, blue.node.Cluster, podByNIC[blue.nic], green.ip)
 	})
 	t.Logf("Assertion 2 PASS: post-policy cross-VPC ping blue-guest -> %s succeeded", green.ip)
 
@@ -231,7 +246,7 @@ spec:
 	// Cross-check via the dataplane: ListInterfaces on the green node reports 10.0.10.77.
 	// -----------------------------------------------------------------------
 	eventually(t, 2*time.Minute, 5*time.Second, func() error {
-		return podPing(ctx, cfg, green.node.Cluster, podName(green.nic), local.ip)
+		return podPing(ctx, cfg, green.node.Cluster, podByNIC[green.nic], local.ip)
 	})
 	greenContainer := nodeContainer(cfg, green.node)
 	out, err := dataplaneGRPC(t, ctx, greenContainer, "ListInterfaces", "")
@@ -242,9 +257,9 @@ spec:
 		local.ip, greenLocalIP)
 }
 
-// vpcPeeringCentralFixture renders the two VPCs and three NICs. Green NICs get label
-// side=green so the FirewallPolicy selector governs them. Each NIC carries its cluster
-// placement (spec.clusterName), spec.nodeName, spec.ips and spec.mac.
+// vpcPeeringCentralFixture renders the two VPCs and three NICs (NO placement — the owning
+// Containers are the placement authority). Green NICs get label side=green so the
+// FirewallPolicy selector governs them. Each NIC carries spec.ips and spec.mac.
 func vpcPeeringCentralFixture(blue, green, local struct {
 	node config.DerivedNode
 	nic  string
@@ -265,22 +280,22 @@ spec: {vni: %d}
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NetworkInterface
 metadata: {name: %s, labels: {scenario: vpc-peering, side: blue}}
-spec: {vpcRef: {name: peer-blue}, ips: [%q], mac: %q, clusterName: %q, nodeName: %q}
+spec: {vpcRef: {name: peer-blue}, ips: [%q], mac: %q}
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NetworkInterface
 metadata: {name: %s, labels: {scenario: vpc-peering, side: green}}
-spec: {vpcRef: {name: peer-green}, ips: [%q], mac: %q, clusterName: %q, nodeName: %q}
+spec: {vpcRef: {name: peer-green}, ips: [%q], mac: %q}
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NetworkInterface
 metadata: {name: %s, labels: {scenario: vpc-peering, side: green}}
-spec: {vpcRef: {name: peer-green}, ips: [%q], mac: %q, clusterName: %q, nodeName: %q}
+spec: {vpcRef: {name: peer-green}, ips: [%q], mac: %q}
 `,
 		peerBlueVNI, peerGreenVNI,
-		blue.nic, blue.ip, blue.mac, blue.node.Cluster, nodeK8sName(blue.node),
-		green.nic, green.ip, green.mac, green.node.Cluster, nodeK8sName(green.node),
-		local.nic, local.ip, local.mac, local.node.Cluster, nodeK8sName(local.node),
+		blue.nic, blue.ip, blue.mac,
+		green.nic, green.ip, green.mac,
+		local.nic, local.ip, local.mac,
 	)
 }
 
