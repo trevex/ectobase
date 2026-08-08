@@ -11,11 +11,11 @@ import (
 	"github.com/trevex/ectobase/api/net/fuzzer"
 )
 
-// TestRoundTripTypes exercises the HAND-WRITTEN internal<->versioned conversions
-// (see central/apis/net/v1alpha1/conversion.go) via the standard apimachinery
+// TestRoundTripTypes exercises the generated internal<->versioned conversions
+// (api/net/v1alpha1/zz_generated.conversion.go) via the standard apimachinery
 // roundtrip harness: fuzz an internal object, convert to versioned and back, and
 // assert equality. This is the guard that catches field drift between the
-// internal (central/apis/net) and versioned (api/v1alpha1) shapes.
+// internal (api/net) and versioned (api/net/v1alpha1) shapes.
 func TestRoundTripTypes(t *testing.T) {
 	roundtrip.RoundTripTestForAPIGroup(t, Install, fuzzer.Funcs)
 }

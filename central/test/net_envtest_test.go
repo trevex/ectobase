@@ -24,9 +24,9 @@ import (
 
 // TestVPC_CRUD proves the net.ectobase.dev group is served end-to-end by the
 // aggregated apiserver: a namespaced VPC (whose versioned struct lives in the
-// external api module and is converted to the internal central/apis/net type via
-// the hand-written conversions) is created, read back, and its fields (including
-// the *int32 VNI pointer) survive the internal<->versioned round-trip.
+// external api module, api/net/v1alpha1, and is converted to the internal api/net
+// type via the generated conversions) is created, read back, and its fields
+// (including the *int32 VNI pointer) survive the internal<->versioned round-trip.
 func TestVPC_CRUD(t *testing.T) {
 	// The envtest harness builds the apiserver binary with `-mod mod`, which
 	// conflicts with the repo's go.work workspace mode. Disable workspace mode

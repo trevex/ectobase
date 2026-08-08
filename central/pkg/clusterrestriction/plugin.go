@@ -71,7 +71,7 @@ func setsClusterName(a admission.Attributes) bool {
 //
 // Reflection (not ToUnstructured + json path) is deliberate and load-bearing for
 // the security guarantee: the aggregated apiserver hands admission the INTERNAL
-// object (central/apis/net.VirtualMachine etc.), whose structs carry NO json tags,
+// object (api/net.VirtualMachine etc.), whose structs carry NO json tags,
 // so ToUnstructured would key the map by Go field names ("Spec"/"ClusterName") and a
 // "spec.clusterName" lookup would silently miss — failing the guard open. Reflecting
 // on the Go field name works for both the internal and versioned representations.
