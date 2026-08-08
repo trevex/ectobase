@@ -88,12 +88,13 @@ func addFwEgressAllow(t *testing.T, ctx context.Context, container, id string) {
 
 // buildStaticBin compiles a cmd/<pkg> to a CGO_ENABLED=0 static binary in t.TempDir()
 // (runs inside the Ubuntu-based kind node after docker cp). Returns the host path.
-// Built from repoRoot so ./cmd/... resolves regardless of the test's CWD.
+// The packet-test probes (tap-dhcp-probe, netprobe, ...) live in the sibling
+// test/e2e module, so we build ./cmd/<pkg> from there regardless of the test's CWD.
 func buildStaticBin(t *testing.T, pkg string) string {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), pkg)
 	cmd := exec.Command("go", "build", "-o", out, "./cmd/"+pkg)
-	cmd.Dir = repoRoot(t)
+	cmd.Dir = filepath.Join(repoRoot(t), "test", "e2e")
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if o, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build cmd/%s: %v\n%s", pkg, err, o)
