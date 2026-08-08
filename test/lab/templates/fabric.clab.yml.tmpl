@@ -33,6 +33,21 @@ topology:
       exec:
         - "ip -6 route del default via {{ .MgmtV6Gateway }} dev eth0"
 
+    # flowplane WAN-edge sidecar: shares the edge1 VyOS netns and runs wan_rx so the
+    # fabric has a real N/S LoadBalancer edge (VyOS alone cannot run the eBPF datapath).
+    # SKB mode (kind veths are MTU 1500); the wrapper attaches uplink_rx on eth1/eth2 and
+    # wan_rx on eth3 in edge1's netns. Uses the host-local flowplane :dev image (IfNotPresent).
+    flowplane-edge1:
+      kind: linux
+      image: {{ index .Images "flowplane" }}
+      network-mode: container:clab-{{ .Name }}-edge1
+      cap-add: ["NET_ADMIN", "SYS_ADMIN", "BPF", "PERFMON", "NET_RAW"]
+      binds:
+        - flowplane/edge-wrapper.sh:/edge-wrapper.sh:ro
+        - /sys/fs/bpf:/sys/fs/bpf
+      startup-delay: 35   # wait for edge1 (VyOS) + clab veths before attaching XDP in its netns
+      entrypoint: "/bin/sh /edge-wrapper.sh"
+
     nat64-1:
       kind: linux
       image: {{ index .Images "tayga" }}
