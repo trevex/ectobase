@@ -18,6 +18,11 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
+		"github.com/trevex/ectobase/api/v1alpha1.CompiledContainer":              schema_trevex_ectobase_api_v1alpha1_CompiledContainer(ref),
+		"github.com/trevex/ectobase/api/v1alpha1.CompiledContainerInterface":     schema_trevex_ectobase_api_v1alpha1_CompiledContainerInterface(ref),
+		"github.com/trevex/ectobase/api/v1alpha1.CompiledContainerList":          schema_trevex_ectobase_api_v1alpha1_CompiledContainerList(ref),
+		"github.com/trevex/ectobase/api/v1alpha1.CompiledContainerSpec":          schema_trevex_ectobase_api_v1alpha1_CompiledContainerSpec(ref),
+		"github.com/trevex/ectobase/api/v1alpha1.CompiledContainerStatus":        schema_trevex_ectobase_api_v1alpha1_CompiledContainerStatus(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.CompiledFirewall":               schema_trevex_ectobase_api_v1alpha1_CompiledFirewall(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.CompiledFwRule":                 schema_trevex_ectobase_api_v1alpha1_CompiledFwRule(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.CompiledLB":                     schema_trevex_ectobase_api_v1alpha1_CompiledLB(ref),
@@ -37,6 +42,10 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/trevex/ectobase/api/v1alpha1.CompiledVolumeAttachmentList":   schema_trevex_ectobase_api_v1alpha1_CompiledVolumeAttachmentList(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.CompiledVolumeAttachmentSpec":   schema_trevex_ectobase_api_v1alpha1_CompiledVolumeAttachmentSpec(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.CompiledVolumeAttachmentStatus": schema_trevex_ectobase_api_v1alpha1_CompiledVolumeAttachmentStatus(ref),
+		"github.com/trevex/ectobase/api/v1alpha1.Container":                      schema_trevex_ectobase_api_v1alpha1_Container(ref),
+		"github.com/trevex/ectobase/api/v1alpha1.ContainerList":                  schema_trevex_ectobase_api_v1alpha1_ContainerList(ref),
+		"github.com/trevex/ectobase/api/v1alpha1.ContainerSpec":                  schema_trevex_ectobase_api_v1alpha1_ContainerSpec(ref),
+		"github.com/trevex/ectobase/api/v1alpha1.ContainerStatus":                schema_trevex_ectobase_api_v1alpha1_ContainerStatus(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.EgressQoS":                      schema_trevex_ectobase_api_v1alpha1_EgressQoS(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.FirewallPolicy":                 schema_trevex_ectobase_api_v1alpha1_FirewallPolicy(ref),
 		"github.com/trevex/ectobase/api/v1alpha1.FirewallPolicyList":             schema_trevex_ectobase_api_v1alpha1_FirewallPolicyList(ref),
@@ -389,6 +398,265 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		runtime.TypeMeta{}.OpenAPIModelName():                                    schema_k8sio_apimachinery_pkg_runtime_TypeMeta(ref),
 		runtime.Unknown{}.OpenAPIModelName():                                     schema_k8sio_apimachinery_pkg_runtime_Unknown(ref),
 		version.Info{}.OpenAPIModelName():                                        schema_k8sio_apimachinery_pkg_version_Info(ref),
+	}
+}
+
+func schema_trevex_ectobase_api_v1alpha1_CompiledContainer(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CompiledContainer is the lowered pod intent for a Container.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledContainerSpec"),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledContainerStatus"),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/trevex/ectobase/api/v1alpha1.CompiledContainerSpec", "github.com/trevex/ectobase/api/v1alpha1.CompiledContainerStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_trevex_ectobase_api_v1alpha1_CompiledContainerInterface(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CompiledContainerInterface is a resolved overlay interface for a container.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"networkName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "NetworkName is the multus NetworkAttachmentDefinition name for the overlay binding.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"networkInterfaceRef": {
+						SchemaProps: spec.SchemaProps{
+							Description: "NetworkInterfaceRef is \"<namespace>/<nic>\" — the pod's net.ectobase.dev/network-interface annotation, which flowplane-cni resolves to the CompiledNIC.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"mac": {
+						SchemaProps: spec.SchemaProps{
+							Description: "MAC is the pinned L2 address (from the NetworkInterface).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_trevex_ectobase_api_v1alpha1_CompiledContainerList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CompiledContainerList is a list of CompiledContainer objects.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledContainer"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/trevex/ectobase/api/v1alpha1.CompiledContainer", metav1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_trevex_ectobase_api_v1alpha1_CompiledContainerSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CompiledContainerSpec is the lowered, ready-to-materialize intent for a container workload: the pod template + the cluster/node binding + the per-interface overlay wiring. A downstream pod-materializer turns this into a v1.Pod.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"clusterName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ClusterName is the cluster this compiled container is bound to. The broker selects on this field.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"nodeName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "NodeName is the pod nodeSelector (kubernetes.io/hostname).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"image": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Image is the container image.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"command": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Command overrides the image entrypoint.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"args": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Args are the container args.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"env": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Env are the container environment variables.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(v1.EnvVar{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+					"resources": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Resources is the compute request/limit.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(v1.ResourceRequirements{}.OpenAPIModelName()),
+						},
+					},
+					"restartPolicy": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RestartPolicy is the Pod restart policy.\n\nPossible enum values:\n - `\"Always\"`\n - `\"Never\"`\n - `\"OnFailure\"`",
+							Type:        []string{"string"},
+							Format:      "",
+							Enum:        []interface{}{"Always", "Never", "OnFailure"},
+						},
+					},
+					"interfaces": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Interfaces are the container's overlay interfaces (one per owned NetworkInterface).",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.CompiledContainerInterface"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/trevex/ectobase/api/v1alpha1.CompiledContainerInterface", v1.EnvVar{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName()},
+	}
+}
+
+func schema_trevex_ectobase_api_v1alpha1_CompiledContainerStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CompiledContainerStatus is the observed state of a CompiledContainer.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"state": {
+						SchemaProps: spec.SchemaProps{
+							Description: "State is the materialization state (e.g. Applied, Pending).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
 	}
 }
 
@@ -1224,6 +1492,231 @@ func schema_trevex_ectobase_api_v1alpha1_CompiledVolumeAttachmentStatus(ref comm
 					"state": {
 						SchemaProps: spec.SchemaProps{
 							Description: "State is the materialization state.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_trevex_ectobase_api_v1alpha1_Container(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "Container is a schedulable container workload on the ectobase overlay.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.ContainerSpec"),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.ContainerStatus"),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/trevex/ectobase/api/v1alpha1.ContainerSpec", "github.com/trevex/ectobase/api/v1alpha1.ContainerStatus", metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_trevex_ectobase_api_v1alpha1_ContainerList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ContainerList is a list of Container objects.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.Container"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/trevex/ectobase/api/v1alpha1.Container", metav1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_trevex_ectobase_api_v1alpha1_ContainerSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ContainerSpec is a schedulable container workload: it owns NetworkInterfaces and carries the pod template. Placement (ClusterName/NodeName) is the authority for its owned NICs; in this slice it is set by hand (no scheduler binds it yet).",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"clusterName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ClusterName is the cluster this container is bound to (the placement authority for owned NICs).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"nodeName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "NodeName pins the Pod (and the owned NICs) to a node; the agent firewall reconcile gates on it.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"interfaceRefs": {
+						SchemaProps: spec.SchemaProps{
+							Description: "InterfaceRefs names the NetworkInterfaces (same namespace) this container owns.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference"),
+									},
+								},
+							},
+						},
+					},
+					"image": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Image is the container image.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"command": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Command overrides the image entrypoint.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"args": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Args are the container args.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"env": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Env are the container environment variables.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(v1.EnvVar{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+					"resources": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Resources is the compute request/limit.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(v1.ResourceRequirements{}.OpenAPIModelName()),
+						},
+					},
+					"restartPolicy": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RestartPolicy is the Pod restart policy (default Always).\n\nPossible enum values:\n - `\"Always\"`\n - `\"Never\"`\n - `\"OnFailure\"`",
+							Type:        []string{"string"},
+							Format:      "",
+							Enum:        []interface{}{"Always", "Never", "OnFailure"},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/trevex/ectobase/api/v1alpha1.LocalObjectReference", v1.EnvVar{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName()},
+	}
+}
+
+func schema_trevex_ectobase_api_v1alpha1_ContainerStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ContainerStatus is the observed state of a Container.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"state": {
+						SchemaProps: spec.SchemaProps{
+							Description: "State is the compile/materialization state (e.g. Compiled, Pending).",
 							Type:        []string{"string"},
 							Format:      "",
 						},

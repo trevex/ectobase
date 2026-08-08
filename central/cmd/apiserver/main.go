@@ -69,6 +69,8 @@ func main() {
 		With(apiserver.Resource(&netapi.Volume{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.CompiledVolumeAttachment{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.VirtualMachine{}, netv1.SchemeGroupVersion)).
+		With(apiserver.Resource(&netapi.Container{}, netv1.SchemeGroupVersion)).
+		With(apiserver.Resource(&netapi.CompiledContainer{}, netv1.SchemeGroupVersion)).
 		Execute()
 	os.Exit(code)
 }
