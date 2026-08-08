@@ -6,26 +6,6 @@
 package v1alpha1
 
 // OpenAPIModelName returns the OpenAPI model name for this type.
-func (in Container) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.Container"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in ContainerList) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.ContainerList"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in ContainerSpec) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.ContainerSpec"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in ContainerStatus) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.ContainerStatus"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
 func (in EgressQoS) OpenAPIModelName() string {
 	return "dev.ectobase.net.v1alpha1.EgressQoS"
 }
@@ -166,16 +146,6 @@ func (in RateLimit) OpenAPIModelName() string {
 }
 
 // OpenAPIModelName returns the OpenAPI model name for this type.
-func (in VMAntiAffinity) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.VMAntiAffinity"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in VMPlacement) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.VMPlacement"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
 func (in VPC) OpenAPIModelName() string {
 	return "dev.ectobase.net.v1alpha1.VPC"
 }
@@ -218,26 +188,6 @@ func (in VPCSpec) OpenAPIModelName() string {
 // OpenAPIModelName returns the OpenAPI model name for this type.
 func (in VPCStatus) OpenAPIModelName() string {
 	return "dev.ectobase.net.v1alpha1.VPCStatus"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in VirtualMachine) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.VirtualMachine"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in VirtualMachineList) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.VirtualMachineList"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in VirtualMachineSpec) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.VirtualMachineSpec"
-}
-
-// OpenAPIModelName returns the OpenAPI model name for this type.
-func (in VirtualMachineStatus) OpenAPIModelName() string {
-	return "dev.ectobase.net.v1alpha1.VirtualMachineStatus"
 }
 
 // OpenAPIModelName returns the OpenAPI model name for this type.

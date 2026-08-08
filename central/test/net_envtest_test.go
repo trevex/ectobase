@@ -19,6 +19,7 @@ import (
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	netinstall "github.com/trevex/ectobase/api/net/install"
+	computeinstall "github.com/trevex/ectobase/api/compute/install"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
 	compiledinstall "github.com/trevex/ectobase/api/compiled/install"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
@@ -37,10 +38,11 @@ func TestVPC_CRUD(t *testing.T) {
 
 	scheme := runtime.NewScheme()
 	// Both groups are installed: the aggregated server binary serves both, and
-	// the client scheme must know the net and compiled types to (de)serialize them.
+	// the client scheme must know the net, compiled, and compute types to (de)serialize them.
 	platforminstall.Install(scheme)
 	netinstall.Install(scheme)
 	compiledinstall.Install(scheme)
+	computeinstall.Install(scheme)
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
 	}
@@ -143,6 +145,7 @@ func startNetEnv(t *testing.T) (client.Client, context.Context) {
 	platforminstall.Install(scheme)
 	netinstall.Install(scheme)
 	compiledinstall.Install(scheme)
+	computeinstall.Install(scheme)
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
 	}

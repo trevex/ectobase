@@ -22,7 +22,9 @@ import (
 	kitenvtest "go.opendefense.cloud/kit/envtest"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netinstall "github.com/trevex/ectobase/api/net/install"
+	computeinstall "github.com/trevex/ectobase/api/compute/install"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	compiledinstall "github.com/trevex/ectobase/api/compiled/install"
@@ -61,6 +63,7 @@ func TestPhase4_ScheduleCompileSyncMaterialize_E2E(t *testing.T) {
 	platforminstall.Install(scheme)
 	netinstall.Install(scheme)
 	compiledinstall.Install(scheme)
+	computeinstall.Install(scheme)
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
 	}
@@ -177,11 +180,11 @@ func TestPhase4_ScheduleCompileSyncMaterialize_E2E(t *testing.T) {
 		t.Fatalf("central status update nic-a: %v", err)
 	}
 
-	vm1 := &netv1.VirtualMachine{
+	vm1 := &computev1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "vm1"},
-		Spec: netv1.VirtualMachineSpec{
+		Spec: computev1.VirtualMachineSpec{
 			Image:         "quay.io/containerdisks/fedora:41",
-			InterfaceRefs: []netv1.LocalObjectReference{{Name: "nic-a"}},
+			InterfaceRefs: []computev1.LocalObjectReference{{Name: "nic-a"}},
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
 			},
@@ -195,7 +198,7 @@ func TestPhase4_ScheduleCompileSyncMaterialize_E2E(t *testing.T) {
 	if _, err := sr.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Namespace: ns, Name: "vm1"}}); err != nil {
 		t.Fatalf("scheduler Reconcile: %v", err)
 	}
-	boundVM := &netv1.VirtualMachine{}
+	boundVM := &computev1.VirtualMachine{}
 	if err := centralClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm1"}, boundVM); err != nil {
 		t.Fatalf("get vm1 after schedule: %v", err)
 	}

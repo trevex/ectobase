@@ -86,7 +86,7 @@ func TestTier2Failover(t *testing.T) {
 	// Best-effort teardown of the fixture regardless of outcome (delete by name; the
 	// kubectl helper has no stdin, so `delete -f -` is not usable here).
 	t.Cleanup(func() {
-		_, _ = kubectl(ctx, cfg, "central", "delete", "virtualmachines.net.ectobase.dev",
+		_, _ = kubectl(ctx, cfg, "central", "delete", "virtualmachines.compute.ectobase.dev",
 			tier2VMName, "-n", tier2VMNS, "--ignore-not-found", "--wait=false")
 		_, _ = kubectl(ctx, cfg, "central", "delete", "volumes.net.ectobase.dev",
 			tier2Volume, "-n", tier2VMNS, "--ignore-not-found", "--wait=false")
@@ -212,7 +212,7 @@ func scaleBrokerReplicas(ctx context.Context, cfg *config.Config, cluster string
 // expectVMCluster asserts the VirtualMachine spec.clusterName equals want.
 func expectVMCluster(ctx context.Context, cfg *config.Config, want string) error {
 	cn, err := kubectl(ctx, cfg, "central",
-		"get", "virtualmachines.net.ectobase.dev", tier2VMName, "-o", "jsonpath={.spec.clusterName}")
+		"get", "virtualmachines.compute.ectobase.dev", tier2VMName, "-o", "jsonpath={.spec.clusterName}")
 	if err != nil {
 		return fmt.Errorf("get VirtualMachine %s clusterName: %w", tier2VMName, err)
 	}

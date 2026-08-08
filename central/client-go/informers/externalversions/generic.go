@@ -6,6 +6,7 @@ import (
 	fmt "fmt"
 
 	v1alpha1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	computev1alpha1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platformv1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -48,9 +49,13 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 	case v1alpha1.SchemeGroupVersion.WithResource("compiledvolumeattachments"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Compiled().V1alpha1().CompiledVolumeAttachments().Informer()}, nil
 
+		// Group=compute.ectobase.dev, Version=v1alpha1
+	case computev1alpha1.SchemeGroupVersion.WithResource("containers"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Compute().V1alpha1().Containers().Informer()}, nil
+	case computev1alpha1.SchemeGroupVersion.WithResource("virtualmachines"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Compute().V1alpha1().VirtualMachines().Informer()}, nil
+
 		// Group=net.ectobase.dev, Version=v1alpha1
-	case netv1alpha1.SchemeGroupVersion.WithResource("containers"):
-		return &genericInformer{resource: resource.GroupResource(), informer: f.Net().V1alpha1().Containers().Informer()}, nil
 	case netv1alpha1.SchemeGroupVersion.WithResource("firewallpolicies"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Net().V1alpha1().FirewallPolicies().Informer()}, nil
 	case netv1alpha1.SchemeGroupVersion.WithResource("floatingips"):
@@ -65,8 +70,6 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Net().V1alpha1().VPCs().Informer()}, nil
 	case netv1alpha1.SchemeGroupVersion.WithResource("vpcpeerings"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Net().V1alpha1().VPCPeerings().Informer()}, nil
-	case netv1alpha1.SchemeGroupVersion.WithResource("virtualmachines"):
-		return &genericInformer{resource: resource.GroupResource(), informer: f.Net().V1alpha1().VirtualMachines().Informer()}, nil
 	case netv1alpha1.SchemeGroupVersion.WithResource("volumes"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Net().V1alpha1().Volumes().Informer()}, nil
 

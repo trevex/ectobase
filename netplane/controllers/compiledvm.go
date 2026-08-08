@@ -9,6 +9,7 @@ import (
 	"reflect"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,7 +30,7 @@ const defaultRunStrategy = "RerunOnFailure"
 // CompileVM lowers a VirtualMachine into a CompiledVM: containerDisk image, compute
 // resources, run strategy (defaulted), the cluster binding (from placement), and
 // one resolved overlay interface (MAC + networkName) per owned NetworkInterface.
-func CompileVM(vm *netv1.VirtualMachine, nics []netv1.NetworkInterface, placement Placement, networkName string) compiledv1.CompiledVM {
+func CompileVM(vm *computev1.VirtualMachine, nics []netv1.NetworkInterface, placement Placement, networkName string) compiledv1.CompiledVM {
 	runStrategy := vm.Spec.RunStrategy
 	if runStrategy == "" {
 		runStrategy = defaultRunStrategy
@@ -66,7 +67,7 @@ type CompiledVMReconciler struct {
 }
 
 func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	var vm netv1.VirtualMachine
+	var vm computev1.VirtualMachine
 	if err := r.Client.Get(ctx, req.NamespacedName, &vm); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -113,7 +114,7 @@ func (r *CompiledVMReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// controller-runtime derives the name from the watched kind, so both would default to
 		// "virtualmachine" and the manager rejects the duplicate.
 		Named("compiledvm").
-		For(&netv1.VirtualMachine{}).
+		For(&computev1.VirtualMachine{}).
 		Owns(&compiledv1.CompiledVM{}).
 		// MAC lives in NetworkInterface.spec, so a MAC change bumps generation;
 		// GenerationChangedPredicate avoids recompiling every VM on unrelated NIC
@@ -130,7 +131,7 @@ func (r *CompiledVMReconciler) vmsForNIC(ctx context.Context, obj client.Object)
 	if !ok {
 		return nil
 	}
-	var vms netv1.VirtualMachineList
+	var vms computev1.VirtualMachineList
 	if err := r.Client.List(ctx, &vms, client.InNamespace(nic.Namespace)); err != nil {
 		return nil
 	}

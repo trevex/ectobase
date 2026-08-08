@@ -13,7 +13,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 )
@@ -296,7 +296,7 @@ func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[
 	// swallowed (the pool status — the fence-gating signal — already landed above).
 	for vmKey, nodeName := range vmNode {
 		ns, name := splitVMKey(vmKey)
-		var vm netv1.VirtualMachine
+		var vm computev1.VirtualMachine
 		if err := b.Central.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &vm); err != nil {
 			continue // VM may not be a central-tracked object; skip.
 		}

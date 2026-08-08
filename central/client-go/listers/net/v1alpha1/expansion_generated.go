@@ -2,14 +2,6 @@
 
 package v1alpha1
 
-// ContainerListerExpansion allows custom methods to be added to
-// ContainerLister.
-type ContainerListerExpansion interface{}
-
-// ContainerNamespaceListerExpansion allows custom methods to be added to
-// ContainerNamespaceLister.
-type ContainerNamespaceListerExpansion interface{}
-
 // FirewallPolicyListerExpansion allows custom methods to be added to
 // FirewallPolicyLister.
 type FirewallPolicyListerExpansion interface{}
@@ -65,14 +57,6 @@ type VPCPeeringListerExpansion interface{}
 // VPCPeeringNamespaceListerExpansion allows custom methods to be added to
 // VPCPeeringNamespaceLister.
 type VPCPeeringNamespaceListerExpansion interface{}
-
-// VirtualMachineListerExpansion allows custom methods to be added to
-// VirtualMachineLister.
-type VirtualMachineListerExpansion interface{}
-
-// VirtualMachineNamespaceListerExpansion allows custom methods to be added to
-// VirtualMachineNamespaceLister.
-type VirtualMachineNamespaceListerExpansion interface{}
 
 // VolumeListerExpansion allows custom methods to be added to
 // VolumeLister.

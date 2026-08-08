@@ -1,7 +1,7 @@
 // Copyright 2026 ectobase contributors
 // SPDX-License-Identifier: Apache-2.0
 
-package net
+package compute
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

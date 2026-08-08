@@ -99,12 +99,15 @@ rules:
   # CompiledVolumeAttachmentReconciler compiles Volume -> CompiledVolumeAttachment (the tier2 VM
   # path). Without these the compiler's VirtualMachine/Volume informers are forbidden -> the caches
   # never sync -> no CompiledVM is produced, so the broker syncs nothing and no VM ever boots.
-  - apiGroups: ["net.ectobase.dev"]
-    resources: ["virtualmachines", "volumes"]
+  - apiGroups: ["compute.ectobase.dev"]
+    resources: ["virtualmachines"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["net.ectobase.dev"]
+  - apiGroups: ["compute.ectobase.dev"]
     resources: ["virtualmachines/status"]
     verbs: ["get", "update", "patch"]
+  - apiGroups: ["net.ectobase.dev"]
+    resources: ["volumes"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["compiled.ectobase.dev"]
     resources: ["compiledvms", "compiledvolumeattachments"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -115,10 +118,10 @@ rules:
   # CompiledNICReconciler derives an owned NIC's placement (clusterName/nodeName) from the owning
   # Container. Without these the compiler's Container informer is forbidden -> the cache never syncs
   # -> owned NICs fall back to the default cluster and no CompiledContainer is produced.
-  - apiGroups: ["net.ectobase.dev"]
+  - apiGroups: ["compute.ectobase.dev"]
     resources: ["containers"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["net.ectobase.dev"]
+  - apiGroups: ["compute.ectobase.dev"]
     resources: ["containers/status"]
     verbs: ["get", "update", "patch"]
   - apiGroups: ["compiled.ectobase.dev"]

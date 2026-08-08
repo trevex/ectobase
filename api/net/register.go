@@ -50,10 +50,6 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&VPCPeeringList{},
 		&Volume{},
 		&VolumeList{},
-		&VirtualMachine{},
-		&VirtualMachineList{},
-		&Container{},
-		&ContainerList{},
 	)
 
 	return nil

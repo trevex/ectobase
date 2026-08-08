@@ -8,8 +8,6 @@ import (
 
 // Interface provides access to all the informers in this group version.
 type Interface interface {
-	// Containers returns a ContainerInformer.
-	Containers() ContainerInformer
 	// FirewallPolicies returns a FirewallPolicyInformer.
 	FirewallPolicies() FirewallPolicyInformer
 	// FloatingIPs returns a FloatingIPInformer.
@@ -24,8 +22,6 @@ type Interface interface {
 	VPCs() VPCInformer
 	// VPCPeerings returns a VPCPeeringInformer.
 	VPCPeerings() VPCPeeringInformer
-	// VirtualMachines returns a VirtualMachineInformer.
-	VirtualMachines() VirtualMachineInformer
 	// Volumes returns a VolumeInformer.
 	Volumes() VolumeInformer
 }
@@ -39,11 +35,6 @@ type version struct {
 // New returns a new Interface.
 func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakListOptions internalinterfaces.TweakListOptionsFunc) Interface {
 	return &version{factory: f, namespace: namespace, tweakListOptions: tweakListOptions}
-}
-
-// Containers returns a ContainerInformer.
-func (v *version) Containers() ContainerInformer {
-	return &containerInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
 // FirewallPolicies returns a FirewallPolicyInformer.
@@ -79,11 +70,6 @@ func (v *version) VPCs() VPCInformer {
 // VPCPeerings returns a VPCPeeringInformer.
 func (v *version) VPCPeerings() VPCPeeringInformer {
 	return &vPCPeeringInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
-}
-
-// VirtualMachines returns a VirtualMachineInformer.
-func (v *version) VirtualMachines() VirtualMachineInformer {
-	return &virtualMachineInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
 // Volumes returns a VolumeInformer.

@@ -3,21 +3,21 @@
 package fake
 
 import (
-	v1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
-	netv1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/net/v1alpha1"
-	typednetv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/net/v1alpha1"
+	v1alpha1 "github.com/trevex/ectobase/api/compute/v1alpha1"
+	computev1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/compute/v1alpha1"
+	typedcomputev1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/compute/v1alpha1"
 	gentype "k8s.io/client-go/gentype"
 )
 
 // fakeVirtualMachines implements VirtualMachineInterface
 type fakeVirtualMachines struct {
-	*gentype.FakeClientWithListAndApply[*v1alpha1.VirtualMachine, *v1alpha1.VirtualMachineList, *netv1alpha1.VirtualMachineApplyConfiguration]
-	Fake *FakeNetV1alpha1
+	*gentype.FakeClientWithListAndApply[*v1alpha1.VirtualMachine, *v1alpha1.VirtualMachineList, *computev1alpha1.VirtualMachineApplyConfiguration]
+	Fake *FakeComputeV1alpha1
 }
 
-func newFakeVirtualMachines(fake *FakeNetV1alpha1, namespace string) typednetv1alpha1.VirtualMachineInterface {
+func newFakeVirtualMachines(fake *FakeComputeV1alpha1, namespace string) typedcomputev1alpha1.VirtualMachineInterface {
 	return &fakeVirtualMachines{
-		gentype.NewFakeClientWithListAndApply[*v1alpha1.VirtualMachine, *v1alpha1.VirtualMachineList, *netv1alpha1.VirtualMachineApplyConfiguration](
+		gentype.NewFakeClientWithListAndApply[*v1alpha1.VirtualMachine, *v1alpha1.VirtualMachineList, *computev1alpha1.VirtualMachineApplyConfiguration](
 			fake.Fake,
 			namespace,
 			v1alpha1.SchemeGroupVersion.WithResource("virtualmachines"),

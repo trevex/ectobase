@@ -14,7 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
 )
@@ -23,7 +23,7 @@ import (
 // (allocated[r]+request[r] <= Allocatable[r] for every requested r). Among fitting
 // pools it returns the one with the highest minimum free fraction across the
 // requested resources (spread), tie-broken by lowest name. ok=false + reason if none.
-func Schedule(vm *netv1.VirtualMachine, pools []platformv1.ClusterPool, allocated map[string]corev1.ResourceList) (string, string, bool) {
+func Schedule(vm *computev1.VirtualMachine, pools []platformv1.ClusterPool, allocated map[string]corev1.ResourceList) (string, string, bool) {
 	req := vm.Spec.Resources.Requests
 	var sel labels.Selector
 	if vm.Spec.PoolSelector != nil {
@@ -95,7 +95,7 @@ func fitScore(req, allocatable, used corev1.ResourceList) (float64, bool) {
 // AntiAffinity.Group (per occupancy: poolName -> set of groups) are avoided. It first
 // tries non-violating fitting pools; if none, it falls back to any fitting pool and
 // reports violated=true (availability wins). occupancy may be nil.
-func ScheduleAntiAffine(vm *netv1.VirtualMachine, pools []platformv1.ClusterPool, allocated map[string]corev1.ResourceList, occupancy map[string]map[string]bool) (string, string, bool, bool) {
+func ScheduleAntiAffine(vm *computev1.VirtualMachine, pools []platformv1.ClusterPool, allocated map[string]corev1.ResourceList, occupancy map[string]map[string]bool) (string, string, bool, bool) {
 	group := ""
 	if vm.Spec.AntiAffinity != nil {
 		group = vm.Spec.AntiAffinity.Group
@@ -131,7 +131,7 @@ type Placement struct {
 // ScheduleBatch places a batch of VMs against the pools, accumulating committed
 // resources (so N VMs don't over-commit one target) and anti-affinity occupancy
 // (so a batch doesn't co-locate a Group it just placed). Order follows the input.
-func ScheduleBatch(vms []*netv1.VirtualMachine, pools []platformv1.ClusterPool) []Placement {
+func ScheduleBatch(vms []*computev1.VirtualMachine, pools []platformv1.ClusterPool) []Placement {
 	allocated := map[string]corev1.ResourceList{}
 	occupancy := map[string]map[string]bool{}
 	out := make([]Placement, len(vms))

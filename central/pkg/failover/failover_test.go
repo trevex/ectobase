@@ -12,7 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
 )
@@ -46,8 +46,8 @@ func lostPoolObj(name string, prefixes ...string) *platformv1.ClusterPool {
 	}
 }
 
-func vmOn(name, pool string) *netv1.VirtualMachine {
-	return &netv1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: netv1.VirtualMachineSpec{ClusterName: pool}}
+func vmOn(name, pool string) *computev1.VirtualMachine {
+	return &computev1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: computev1.VirtualMachineSpec{ClusterName: pool}}
 }
 
 func TestFailover_WholePoolFence_ThenRebind(t *testing.T) {
@@ -61,7 +61,7 @@ func TestFailover_WholePoolFence_ThenRebind(t *testing.T) {
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	got := &netv1.VirtualMachine{}
+	got := &computev1.VirtualMachine{}
 	_ = c.Get(context.Background(), key("vm1"), got)
 	if got.Spec.ClusterName != "B" {
 		t.Fatalf("want rebind to B, got %q", got.Spec.ClusterName)
@@ -78,7 +78,7 @@ func TestFailover_PartialFence_Blocks(t *testing.T) {
 	if _, err := r.Reconcile(context.Background(), req("A")); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	got := &netv1.VirtualMachine{}
+	got := &computev1.VirtualMachine{}
 	_ = c.Get(context.Background(), key("vm1"), got)
 	if got.Spec.ClusterName != "A" {
 		t.Fatalf("must NOT rebind when a fence is unconfirmed, got %q", got.Spec.ClusterName)
@@ -138,7 +138,7 @@ func TestFailover_MultiPrefix_PartialBarrier_TracksAppliedFence(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 	// VM must NOT rebind (barrier blocked).
-	got := &netv1.VirtualMachine{}
+	got := &computev1.VirtualMachine{}
 	_ = c.Get(context.Background(), key("vm1"), got)
 	if got.Spec.ClusterName != "A" {
 		t.Fatalf("must NOT rebind on partial barrier, got %q", got.Spec.ClusterName)

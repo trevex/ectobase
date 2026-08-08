@@ -7,7 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
 )
@@ -18,8 +18,8 @@ func pool(name, phase, cpu string, labels map[string]string) platformv1.ClusterP
 		Status:     platformv1.ClusterPoolStatus{Phase: phase, Allocatable: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(cpu)}},
 	}
 }
-func vmReq(cpu string) *netv1.VirtualMachine {
-	return &netv1.VirtualMachine{Spec: netv1.VirtualMachineSpec{Resources: corev1.ResourceRequirements{
+func vmReq(cpu string) *computev1.VirtualMachine {
+	return &computev1.VirtualMachine{Spec: computev1.VirtualMachineSpec{Resources: corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(cpu)}}}}
 }
 
@@ -45,7 +45,7 @@ func TestSchedule(t *testing.T) {
 	}
 
 	// gpu request but no pool advertises gpu -> unschedulable.
-	gpu := &netv1.VirtualMachine{Spec: netv1.VirtualMachineSpec{Resources: corev1.ResourceRequirements{
+	gpu := &computev1.VirtualMachine{Spec: computev1.VirtualMachineSpec{Resources: corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("1")}}}}
 	if _, _, ok := Schedule(gpu, pools, nil); ok {
 		t.Fatalf("want unschedulable (no gpu)")

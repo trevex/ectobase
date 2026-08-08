@@ -26,7 +26,7 @@ func Container(name, namespace string) *ContainerApplyConfiguration {
 	b.WithName(name)
 	b.WithNamespace(namespace)
 	b.WithKind("Container")
-	b.WithAPIVersion("net.ectobase.dev/v1alpha1")
+	b.WithAPIVersion("compute.ectobase.dev/v1alpha1")
 	return b
 }
 

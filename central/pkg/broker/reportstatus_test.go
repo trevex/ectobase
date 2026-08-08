@@ -12,7 +12,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
+	computeinstall "github.com/trevex/ectobase/api/compute/install"
 	netinstall "github.com/trevex/ectobase/api/net/install"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
@@ -29,6 +30,9 @@ func TestReportStatus_WritesPrefixesPlacementAndDrain(t *testing.T) {
 	if err := netinstall.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
+	if err := computeinstall.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
 
 	const (
 		prefix1 = "2001:db8:0:1::/64" // node-1, hosts vm1 -> stays busy (fenced)
@@ -40,7 +44,7 @@ func TestReportStatus_WritesPrefixesPlacementAndDrain(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "c1"},
 		Status:     platformv1.ClusterPoolStatus{FencedPrefixes: []string{prefix1, prefix2}},
 	}
-	vm := &netv1.VirtualMachine{
+	vm := &computev1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "vm1"},
 	}
 	c := fake.NewClientBuilder().
@@ -83,7 +87,7 @@ func TestReportStatus_WritesPrefixesPlacementAndDrain(t *testing.T) {
 	}
 
 	// VM: Placement stamped with cluster + node + resolved /64.
-	gotVM := &netv1.VirtualMachine{}
+	gotVM := &computev1.VirtualMachine{}
 	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "vm1"}, gotVM); err != nil {
 		t.Fatal(err)
 	}

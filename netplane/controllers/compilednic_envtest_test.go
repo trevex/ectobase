@@ -12,6 +12,7 @@ import (
 	"time"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -39,6 +40,9 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := compiledv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := computev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 
@@ -178,6 +182,9 @@ func TestCompiledNICControllerEnvtest_DeletedPolicyClearsRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := compiledv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := computev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 

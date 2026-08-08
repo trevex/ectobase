@@ -4,15 +4,16 @@ import (
 	"testing"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestCompileVolumeAttachments(t *testing.T) {
-	vm := &netv1.VirtualMachine{
+	vm := &computev1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "vm1"},
-		Spec:       netv1.VirtualMachineSpec{ClusterName: "c1", VolumeRefs: []netv1.LocalObjectReference{{Name: "boot"}, {Name: "data"}}},
+		Spec:       computev1.VirtualMachineSpec{ClusterName: "c1", VolumeRefs: []computev1.LocalObjectReference{{Name: "boot"}, {Name: "data"}}},
 	}
 	volumes := []netv1.Volume{
 		{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "boot"}, Spec: netv1.VolumeSpec{Size: resource.MustParse("10Gi"), BootImage: "quay.io/containerdisks/fedora:41", StorageClass: "ceph-rbd"}},

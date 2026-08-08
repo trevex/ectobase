@@ -17,7 +17,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
 	"github.com/trevex/ectobase/central/pkg/scheduler"
@@ -88,7 +88,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, rq ctrl.Request) (ctrl.Resul
 // rebindPoolVMs schedules ALL VMs on lostPool as a batch (capacity + anti-affinity
 // accounted) and sticky-re-binds each that placed; VMs with no target get FailoverBlocked.
 func (r *Reconciler) rebindPoolVMs(ctx context.Context, lostPool string) error {
-	var vms netv1.VirtualMachineList
+	var vms computev1.VirtualMachineList
 	if err := r.Client.List(ctx, &vms); err != nil {
 		return fmt.Errorf("list vms: %w", err)
 	}
@@ -102,7 +102,7 @@ func (r *Reconciler) rebindPoolVMs(ctx context.Context, lostPool string) error {
 			candidates = append(candidates, p)
 		}
 	}
-	var batch []*netv1.VirtualMachine
+	var batch []*computev1.VirtualMachine
 	for i := range vms.Items {
 		if vms.Items[i].Spec.ClusterName == lostPool {
 			batch = append(batch, &vms.Items[i])
@@ -137,7 +137,7 @@ func (r *Reconciler) rebindPoolVMs(ctx context.Context, lostPool string) error {
 // blockPoolVMs marks every VM on lostPool FailoverBlocked (used when the pool-wide
 // fence barrier is not satisfied). Writes only status, never Spec.
 func (r *Reconciler) blockPoolVMs(ctx context.Context, lostPool, msg string) error {
-	var vms netv1.VirtualMachineList
+	var vms computev1.VirtualMachineList
 	if err := r.Client.List(ctx, &vms); err != nil {
 		return fmt.Errorf("list vms: %w", err)
 	}
@@ -198,7 +198,7 @@ func (r *Reconciler) releaseDrained(ctx context.Context, pool *platformv1.Cluste
 // block records a FailoverBlocked=True condition on the VM and writes ONLY status
 // (never Spec) — the fail-safe exit used whenever a fence is unconfirmed or no
 // target pool exists.
-func (r *Reconciler) block(ctx context.Context, vm *netv1.VirtualMachine, msg string) error {
+func (r *Reconciler) block(ctx context.Context, vm *computev1.VirtualMachine, msg string) error {
 	meta.SetStatusCondition(&vm.Status.Conditions, metav1.Condition{Type: "FailoverBlocked", Status: metav1.ConditionTrue, Reason: "FenceUnconfirmed", Message: msg, ObservedGeneration: vm.Generation})
 	return r.Client.Status().Update(ctx, vm)
 }

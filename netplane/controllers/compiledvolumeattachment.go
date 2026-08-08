@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -25,7 +26,7 @@ import (
 // CompileVolumeAttachments lowers a VirtualMachine + its referenced Volumes into one
 // CompiledVolumeAttachment per VolumeRef, each cluster-bound (from placement) and
 // workload-labelled. A Volume with a BootImage yields Boot=true. Pure.
-func CompileVolumeAttachments(vm *netv1.VirtualMachine, volumes []netv1.Volume, placement Placement) []compiledv1.CompiledVolumeAttachment {
+func CompileVolumeAttachments(vm *computev1.VirtualMachine, volumes []netv1.Volume, placement Placement) []compiledv1.CompiledVolumeAttachment {
 	byName := map[string]*netv1.Volume{}
 	for i := range volumes {
 		byName[volumes[i].Name] = &volumes[i]
@@ -60,7 +61,7 @@ func CompileVolumeAttachments(vm *netv1.VirtualMachine, volumes []netv1.Volume, 
 type CompiledVolumeAttachmentReconciler struct{ Client client.Client }
 
 func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	var vm netv1.VirtualMachine
+	var vm computev1.VirtualMachine
 	if err := r.Client.Get(ctx, req.NamespacedName, &vm); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -127,7 +128,7 @@ func (r *CompiledVolumeAttachmentReconciler) SetupWithManager(mgr ctrl.Manager) 
 		// Distinct name: CompiledVMReconciler also For(VirtualMachine) (both default to
 		// "virtualmachine" otherwise -> duplicate-controller-name panic at manager start).
 		Named("compiledvolumeattachment").
-		For(&netv1.VirtualMachine{}).
+		For(&computev1.VirtualMachine{}).
 		Owns(&compiledv1.CompiledVolumeAttachment{}).
 		// Only Volume spec changes (Size/StorageClass/BootImage) affect the compiled
 		// attachment; GenerationChangedPredicate skips re-compiling on Volume status writes.
@@ -142,7 +143,7 @@ func (r *CompiledVolumeAttachmentReconciler) vmsForVolume(ctx context.Context, o
 	if !ok {
 		return nil
 	}
-	var vms netv1.VirtualMachineList
+	var vms computev1.VirtualMachineList
 	if err := r.Client.List(ctx, &vms, client.InNamespace(vol.Namespace)); err != nil {
 		return nil
 	}

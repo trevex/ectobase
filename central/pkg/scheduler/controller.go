@@ -14,7 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 )
 
@@ -22,7 +22,7 @@ import (
 type Reconciler struct{ Client client.Client }
 
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	var vm netv1.VirtualMachine
+	var vm computev1.VirtualMachine
 	if err := r.Client.Get(ctx, req.NamespacedName, &vm); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -63,7 +63,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 // allocatedByPool sums the resource Requests of every bound VM, grouped by its pool.
 func (r *Reconciler) allocatedByPool(ctx context.Context) (map[string]corev1.ResourceList, error) {
-	var vms netv1.VirtualMachineList
+	var vms computev1.VirtualMachineList
 	if err := r.Client.List(ctx, &vms); err != nil {
 		return nil, fmt.Errorf("list vms: %w", err)
 	}
@@ -90,13 +90,13 @@ func (r *Reconciler) allocatedByPool(ctx context.Context) (map[string]corev1.Res
 // SetupWithManager watches VirtualMachines and re-enqueues all unbound VMs when any ClusterPool changes.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&netv1.VirtualMachine{}).
+		For(&computev1.VirtualMachine{}).
 		Watches(&platformv1.ClusterPool{}, handler.EnqueueRequestsFromMapFunc(r.unboundVMs)).
 		Complete(r)
 }
 
 func (r *Reconciler) unboundVMs(ctx context.Context, _ client.Object) []ctrl.Request {
-	var vms netv1.VirtualMachineList
+	var vms computev1.VirtualMachineList
 	if err := r.Client.List(ctx, &vms); err != nil {
 		return nil
 	}

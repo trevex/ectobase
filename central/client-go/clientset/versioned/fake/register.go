@@ -4,6 +4,7 @@ package fake
 
 import (
 	compiledv1alpha1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	computev1alpha1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platformv1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,6 +19,7 @@ var codecs = serializer.NewCodecFactory(scheme)
 
 var localSchemeBuilder = runtime.SchemeBuilder{
 	compiledv1alpha1.AddToScheme,
+	computev1alpha1.AddToScheme,
 	netv1alpha1.AddToScheme,
 	platformv1alpha1.AddToScheme,
 }

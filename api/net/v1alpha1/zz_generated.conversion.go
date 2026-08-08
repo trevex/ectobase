@@ -9,8 +9,7 @@ import (
 	unsafe "unsafe"
 
 	net "github.com/trevex/ectobase/api/net"
-	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	conversion "k8s.io/apimachinery/pkg/conversion"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
@@ -22,46 +21,6 @@ func init() {
 // RegisterConversions adds conversion functions to the given scheme.
 // Public to allow building arbitrary schemes.
 func RegisterConversions(s *runtime.Scheme) error {
-	if err := s.AddGeneratedConversionFunc((*Container)(nil), (*net.Container)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha1_Container_To_net_Container(a.(*Container), b.(*net.Container), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*net.Container)(nil), (*Container)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_net_Container_To_v1alpha1_Container(a.(*net.Container), b.(*Container), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*ContainerList)(nil), (*net.ContainerList)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha1_ContainerList_To_net_ContainerList(a.(*ContainerList), b.(*net.ContainerList), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*net.ContainerList)(nil), (*ContainerList)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_net_ContainerList_To_v1alpha1_ContainerList(a.(*net.ContainerList), b.(*ContainerList), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*ContainerSpec)(nil), (*net.ContainerSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha1_ContainerSpec_To_net_ContainerSpec(a.(*ContainerSpec), b.(*net.ContainerSpec), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*net.ContainerSpec)(nil), (*ContainerSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_net_ContainerSpec_To_v1alpha1_ContainerSpec(a.(*net.ContainerSpec), b.(*ContainerSpec), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*ContainerStatus)(nil), (*net.ContainerStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha1_ContainerStatus_To_net_ContainerStatus(a.(*ContainerStatus), b.(*net.ContainerStatus), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*net.ContainerStatus)(nil), (*ContainerStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_net_ContainerStatus_To_v1alpha1_ContainerStatus(a.(*net.ContainerStatus), b.(*ContainerStatus), scope)
-	}); err != nil {
-		return err
-	}
 	if err := s.AddGeneratedConversionFunc((*EgressQoS)(nil), (*net.EgressQoS)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_v1alpha1_EgressQoS_To_net_EgressQoS(a.(*EgressQoS), b.(*net.EgressQoS), scope)
 	}); err != nil {
@@ -342,26 +301,6 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*VMAntiAffinity)(nil), (*net.VMAntiAffinity)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha1_VMAntiAffinity_To_net_VMAntiAffinity(a.(*VMAntiAffinity), b.(*net.VMAntiAffinity), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*net.VMAntiAffinity)(nil), (*VMAntiAffinity)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_net_VMAntiAffinity_To_v1alpha1_VMAntiAffinity(a.(*net.VMAntiAffinity), b.(*VMAntiAffinity), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*VMPlacement)(nil), (*net.VMPlacement)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha1_VMPlacement_To_net_VMPlacement(a.(*VMPlacement), b.(*net.VMPlacement), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*net.VMPlacement)(nil), (*VMPlacement)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_net_VMPlacement_To_v1alpha1_VMPlacement(a.(*net.VMPlacement), b.(*VMPlacement), scope)
-	}); err != nil {
-		return err
-	}
 	if err := s.AddGeneratedConversionFunc((*VPC)(nil), (*net.VPC)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_v1alpha1_VPC_To_net_VPC(a.(*VPC), b.(*net.VPC), scope)
 	}); err != nil {
@@ -452,46 +391,6 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
-	if err := s.AddGeneratedConversionFunc((*VirtualMachine)(nil), (*net.VirtualMachine)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha1_VirtualMachine_To_net_VirtualMachine(a.(*VirtualMachine), b.(*net.VirtualMachine), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*net.VirtualMachine)(nil), (*VirtualMachine)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_net_VirtualMachine_To_v1alpha1_VirtualMachine(a.(*net.VirtualMachine), b.(*VirtualMachine), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*VirtualMachineList)(nil), (*net.VirtualMachineList)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha1_VirtualMachineList_To_net_VirtualMachineList(a.(*VirtualMachineList), b.(*net.VirtualMachineList), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*net.VirtualMachineList)(nil), (*VirtualMachineList)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_net_VirtualMachineList_To_v1alpha1_VirtualMachineList(a.(*net.VirtualMachineList), b.(*VirtualMachineList), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*VirtualMachineSpec)(nil), (*net.VirtualMachineSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha1_VirtualMachineSpec_To_net_VirtualMachineSpec(a.(*VirtualMachineSpec), b.(*net.VirtualMachineSpec), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*net.VirtualMachineSpec)(nil), (*VirtualMachineSpec)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_net_VirtualMachineSpec_To_v1alpha1_VirtualMachineSpec(a.(*net.VirtualMachineSpec), b.(*VirtualMachineSpec), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*VirtualMachineStatus)(nil), (*net.VirtualMachineStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_v1alpha1_VirtualMachineStatus_To_net_VirtualMachineStatus(a.(*VirtualMachineStatus), b.(*net.VirtualMachineStatus), scope)
-	}); err != nil {
-		return err
-	}
-	if err := s.AddGeneratedConversionFunc((*net.VirtualMachineStatus)(nil), (*VirtualMachineStatus)(nil), func(a, b interface{}, scope conversion.Scope) error {
-		return Convert_net_VirtualMachineStatus_To_v1alpha1_VirtualMachineStatus(a.(*net.VirtualMachineStatus), b.(*VirtualMachineStatus), scope)
-	}); err != nil {
-		return err
-	}
 	if err := s.AddGeneratedConversionFunc((*Volume)(nil), (*net.Volume)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_v1alpha1_Volume_To_net_Volume(a.(*Volume), b.(*net.Volume), scope)
 	}); err != nil {
@@ -533,116 +432,6 @@ func RegisterConversions(s *runtime.Scheme) error {
 		return err
 	}
 	return nil
-}
-
-func autoConvert_v1alpha1_Container_To_net_Container(in *Container, out *net.Container, s conversion.Scope) error {
-	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_v1alpha1_ContainerSpec_To_net_ContainerSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	if err := Convert_v1alpha1_ContainerStatus_To_net_ContainerStatus(&in.Status, &out.Status, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_v1alpha1_Container_To_net_Container is an autogenerated conversion function.
-func Convert_v1alpha1_Container_To_net_Container(in *Container, out *net.Container, s conversion.Scope) error {
-	return autoConvert_v1alpha1_Container_To_net_Container(in, out, s)
-}
-
-func autoConvert_net_Container_To_v1alpha1_Container(in *net.Container, out *Container, s conversion.Scope) error {
-	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_net_ContainerSpec_To_v1alpha1_ContainerSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	if err := Convert_net_ContainerStatus_To_v1alpha1_ContainerStatus(&in.Status, &out.Status, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_net_Container_To_v1alpha1_Container is an autogenerated conversion function.
-func Convert_net_Container_To_v1alpha1_Container(in *net.Container, out *Container, s conversion.Scope) error {
-	return autoConvert_net_Container_To_v1alpha1_Container(in, out, s)
-}
-
-func autoConvert_v1alpha1_ContainerList_To_net_ContainerList(in *ContainerList, out *net.ContainerList, s conversion.Scope) error {
-	out.ListMeta = in.ListMeta
-	out.Items = *(*[]net.Container)(unsafe.Pointer(&in.Items))
-	return nil
-}
-
-// Convert_v1alpha1_ContainerList_To_net_ContainerList is an autogenerated conversion function.
-func Convert_v1alpha1_ContainerList_To_net_ContainerList(in *ContainerList, out *net.ContainerList, s conversion.Scope) error {
-	return autoConvert_v1alpha1_ContainerList_To_net_ContainerList(in, out, s)
-}
-
-func autoConvert_net_ContainerList_To_v1alpha1_ContainerList(in *net.ContainerList, out *ContainerList, s conversion.Scope) error {
-	out.ListMeta = in.ListMeta
-	out.Items = *(*[]Container)(unsafe.Pointer(&in.Items))
-	return nil
-}
-
-// Convert_net_ContainerList_To_v1alpha1_ContainerList is an autogenerated conversion function.
-func Convert_net_ContainerList_To_v1alpha1_ContainerList(in *net.ContainerList, out *ContainerList, s conversion.Scope) error {
-	return autoConvert_net_ContainerList_To_v1alpha1_ContainerList(in, out, s)
-}
-
-func autoConvert_v1alpha1_ContainerSpec_To_net_ContainerSpec(in *ContainerSpec, out *net.ContainerSpec, s conversion.Scope) error {
-	out.ClusterName = in.ClusterName
-	out.NodeName = in.NodeName
-	out.InterfaceRefs = *(*[]net.LocalObjectReference)(unsafe.Pointer(&in.InterfaceRefs))
-	out.Image = in.Image
-	out.Command = *(*[]string)(unsafe.Pointer(&in.Command))
-	out.Args = *(*[]string)(unsafe.Pointer(&in.Args))
-	out.Env = *(*[]v1.EnvVar)(unsafe.Pointer(&in.Env))
-	out.Resources = in.Resources
-	out.RestartPolicy = v1.RestartPolicy(in.RestartPolicy)
-	return nil
-}
-
-// Convert_v1alpha1_ContainerSpec_To_net_ContainerSpec is an autogenerated conversion function.
-func Convert_v1alpha1_ContainerSpec_To_net_ContainerSpec(in *ContainerSpec, out *net.ContainerSpec, s conversion.Scope) error {
-	return autoConvert_v1alpha1_ContainerSpec_To_net_ContainerSpec(in, out, s)
-}
-
-func autoConvert_net_ContainerSpec_To_v1alpha1_ContainerSpec(in *net.ContainerSpec, out *ContainerSpec, s conversion.Scope) error {
-	out.ClusterName = in.ClusterName
-	out.NodeName = in.NodeName
-	out.InterfaceRefs = *(*[]LocalObjectReference)(unsafe.Pointer(&in.InterfaceRefs))
-	out.Image = in.Image
-	out.Command = *(*[]string)(unsafe.Pointer(&in.Command))
-	out.Args = *(*[]string)(unsafe.Pointer(&in.Args))
-	out.Env = *(*[]v1.EnvVar)(unsafe.Pointer(&in.Env))
-	out.Resources = in.Resources
-	out.RestartPolicy = v1.RestartPolicy(in.RestartPolicy)
-	return nil
-}
-
-// Convert_net_ContainerSpec_To_v1alpha1_ContainerSpec is an autogenerated conversion function.
-func Convert_net_ContainerSpec_To_v1alpha1_ContainerSpec(in *net.ContainerSpec, out *ContainerSpec, s conversion.Scope) error {
-	return autoConvert_net_ContainerSpec_To_v1alpha1_ContainerSpec(in, out, s)
-}
-
-func autoConvert_v1alpha1_ContainerStatus_To_net_ContainerStatus(in *ContainerStatus, out *net.ContainerStatus, s conversion.Scope) error {
-	out.State = in.State
-	return nil
-}
-
-// Convert_v1alpha1_ContainerStatus_To_net_ContainerStatus is an autogenerated conversion function.
-func Convert_v1alpha1_ContainerStatus_To_net_ContainerStatus(in *ContainerStatus, out *net.ContainerStatus, s conversion.Scope) error {
-	return autoConvert_v1alpha1_ContainerStatus_To_net_ContainerStatus(in, out, s)
-}
-
-func autoConvert_net_ContainerStatus_To_v1alpha1_ContainerStatus(in *net.ContainerStatus, out *ContainerStatus, s conversion.Scope) error {
-	out.State = in.State
-	return nil
-}
-
-// Convert_net_ContainerStatus_To_v1alpha1_ContainerStatus is an autogenerated conversion function.
-func Convert_net_ContainerStatus_To_v1alpha1_ContainerStatus(in *net.ContainerStatus, out *ContainerStatus, s conversion.Scope) error {
-	return autoConvert_net_ContainerStatus_To_v1alpha1_ContainerStatus(in, out, s)
 }
 
 func autoConvert_v1alpha1_EgressQoS_To_net_EgressQoS(in *EgressQoS, out *net.EgressQoS, s conversion.Scope) error {
@@ -750,7 +539,7 @@ func Convert_net_FirewallPolicyRule_To_v1alpha1_FirewallPolicyRule(in *net.Firew
 }
 
 func autoConvert_v1alpha1_FirewallPolicySpec_To_net_FirewallPolicySpec(in *FirewallPolicySpec, out *net.FirewallPolicySpec, s conversion.Scope) error {
-	out.InterfaceSelector = (*metav1.LabelSelector)(unsafe.Pointer(in.InterfaceSelector))
+	out.InterfaceSelector = (*v1.LabelSelector)(unsafe.Pointer(in.InterfaceSelector))
 	out.Ingress = *(*[]net.FirewallPolicyRule)(unsafe.Pointer(&in.Ingress))
 	out.Egress = *(*[]net.FirewallPolicyRule)(unsafe.Pointer(&in.Egress))
 	return nil
@@ -762,7 +551,7 @@ func Convert_v1alpha1_FirewallPolicySpec_To_net_FirewallPolicySpec(in *FirewallP
 }
 
 func autoConvert_net_FirewallPolicySpec_To_v1alpha1_FirewallPolicySpec(in *net.FirewallPolicySpec, out *FirewallPolicySpec, s conversion.Scope) error {
-	out.InterfaceSelector = (*metav1.LabelSelector)(unsafe.Pointer(in.InterfaceSelector))
+	out.InterfaceSelector = (*v1.LabelSelector)(unsafe.Pointer(in.InterfaceSelector))
 	out.Ingress = *(*[]FirewallPolicyRule)(unsafe.Pointer(&in.Ingress))
 	out.Egress = *(*[]FirewallPolicyRule)(unsafe.Pointer(&in.Egress))
 	return nil
@@ -982,7 +771,7 @@ func Convert_net_LoadBalancerPort_To_v1alpha1_LoadBalancerPort(in *net.LoadBalan
 func autoConvert_v1alpha1_LoadBalancerSpec_To_net_LoadBalancerSpec(in *LoadBalancerSpec, out *net.LoadBalancerSpec, s conversion.Scope) error {
 	out.VIP = in.VIP
 	out.Ports = *(*[]net.LoadBalancerPort)(unsafe.Pointer(&in.Ports))
-	out.TargetSelector = (*metav1.LabelSelector)(unsafe.Pointer(in.TargetSelector))
+	out.TargetSelector = (*v1.LabelSelector)(unsafe.Pointer(in.TargetSelector))
 	out.TargetRefs = *(*[]net.LocalObjectReference)(unsafe.Pointer(&in.TargetRefs))
 	return nil
 }
@@ -995,7 +784,7 @@ func Convert_v1alpha1_LoadBalancerSpec_To_net_LoadBalancerSpec(in *LoadBalancerS
 func autoConvert_net_LoadBalancerSpec_To_v1alpha1_LoadBalancerSpec(in *net.LoadBalancerSpec, out *LoadBalancerSpec, s conversion.Scope) error {
 	out.VIP = in.VIP
 	out.Ports = *(*[]LoadBalancerPort)(unsafe.Pointer(&in.Ports))
-	out.TargetSelector = (*metav1.LabelSelector)(unsafe.Pointer(in.TargetSelector))
+	out.TargetSelector = (*v1.LabelSelector)(unsafe.Pointer(in.TargetSelector))
 	out.TargetRefs = *(*[]LocalObjectReference)(unsafe.Pointer(&in.TargetRefs))
 	return nil
 }
@@ -1337,50 +1126,6 @@ func Convert_net_RateLimit_To_v1alpha1_RateLimit(in *net.RateLimit, out *RateLim
 	return autoConvert_net_RateLimit_To_v1alpha1_RateLimit(in, out, s)
 }
 
-func autoConvert_v1alpha1_VMAntiAffinity_To_net_VMAntiAffinity(in *VMAntiAffinity, out *net.VMAntiAffinity, s conversion.Scope) error {
-	out.Group = in.Group
-	return nil
-}
-
-// Convert_v1alpha1_VMAntiAffinity_To_net_VMAntiAffinity is an autogenerated conversion function.
-func Convert_v1alpha1_VMAntiAffinity_To_net_VMAntiAffinity(in *VMAntiAffinity, out *net.VMAntiAffinity, s conversion.Scope) error {
-	return autoConvert_v1alpha1_VMAntiAffinity_To_net_VMAntiAffinity(in, out, s)
-}
-
-func autoConvert_net_VMAntiAffinity_To_v1alpha1_VMAntiAffinity(in *net.VMAntiAffinity, out *VMAntiAffinity, s conversion.Scope) error {
-	out.Group = in.Group
-	return nil
-}
-
-// Convert_net_VMAntiAffinity_To_v1alpha1_VMAntiAffinity is an autogenerated conversion function.
-func Convert_net_VMAntiAffinity_To_v1alpha1_VMAntiAffinity(in *net.VMAntiAffinity, out *VMAntiAffinity, s conversion.Scope) error {
-	return autoConvert_net_VMAntiAffinity_To_v1alpha1_VMAntiAffinity(in, out, s)
-}
-
-func autoConvert_v1alpha1_VMPlacement_To_net_VMPlacement(in *VMPlacement, out *net.VMPlacement, s conversion.Scope) error {
-	out.ClusterName = in.ClusterName
-	out.NodeName = in.NodeName
-	out.NodePrefix = in.NodePrefix
-	return nil
-}
-
-// Convert_v1alpha1_VMPlacement_To_net_VMPlacement is an autogenerated conversion function.
-func Convert_v1alpha1_VMPlacement_To_net_VMPlacement(in *VMPlacement, out *net.VMPlacement, s conversion.Scope) error {
-	return autoConvert_v1alpha1_VMPlacement_To_net_VMPlacement(in, out, s)
-}
-
-func autoConvert_net_VMPlacement_To_v1alpha1_VMPlacement(in *net.VMPlacement, out *VMPlacement, s conversion.Scope) error {
-	out.ClusterName = in.ClusterName
-	out.NodeName = in.NodeName
-	out.NodePrefix = in.NodePrefix
-	return nil
-}
-
-// Convert_net_VMPlacement_To_v1alpha1_VMPlacement is an autogenerated conversion function.
-func Convert_net_VMPlacement_To_v1alpha1_VMPlacement(in *net.VMPlacement, out *VMPlacement, s conversion.Scope) error {
-	return autoConvert_net_VMPlacement_To_v1alpha1_VMPlacement(in, out, s)
-}
-
 func autoConvert_v1alpha1_VPC_To_net_VPC(in *VPC, out *net.VPC, s conversion.Scope) error {
 	out.ObjectMeta = in.ObjectMeta
 	if err := Convert_v1alpha1_VPCSpec_To_net_VPCSpec(&in.Spec, &out.Spec, s); err != nil {
@@ -1607,118 +1352,6 @@ func autoConvert_net_VPCStatus_To_v1alpha1_VPCStatus(in *net.VPCStatus, out *VPC
 // Convert_net_VPCStatus_To_v1alpha1_VPCStatus is an autogenerated conversion function.
 func Convert_net_VPCStatus_To_v1alpha1_VPCStatus(in *net.VPCStatus, out *VPCStatus, s conversion.Scope) error {
 	return autoConvert_net_VPCStatus_To_v1alpha1_VPCStatus(in, out, s)
-}
-
-func autoConvert_v1alpha1_VirtualMachine_To_net_VirtualMachine(in *VirtualMachine, out *net.VirtualMachine, s conversion.Scope) error {
-	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_v1alpha1_VirtualMachineSpec_To_net_VirtualMachineSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	if err := Convert_v1alpha1_VirtualMachineStatus_To_net_VirtualMachineStatus(&in.Status, &out.Status, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_v1alpha1_VirtualMachine_To_net_VirtualMachine is an autogenerated conversion function.
-func Convert_v1alpha1_VirtualMachine_To_net_VirtualMachine(in *VirtualMachine, out *net.VirtualMachine, s conversion.Scope) error {
-	return autoConvert_v1alpha1_VirtualMachine_To_net_VirtualMachine(in, out, s)
-}
-
-func autoConvert_net_VirtualMachine_To_v1alpha1_VirtualMachine(in *net.VirtualMachine, out *VirtualMachine, s conversion.Scope) error {
-	out.ObjectMeta = in.ObjectMeta
-	if err := Convert_net_VirtualMachineSpec_To_v1alpha1_VirtualMachineSpec(&in.Spec, &out.Spec, s); err != nil {
-		return err
-	}
-	if err := Convert_net_VirtualMachineStatus_To_v1alpha1_VirtualMachineStatus(&in.Status, &out.Status, s); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Convert_net_VirtualMachine_To_v1alpha1_VirtualMachine is an autogenerated conversion function.
-func Convert_net_VirtualMachine_To_v1alpha1_VirtualMachine(in *net.VirtualMachine, out *VirtualMachine, s conversion.Scope) error {
-	return autoConvert_net_VirtualMachine_To_v1alpha1_VirtualMachine(in, out, s)
-}
-
-func autoConvert_v1alpha1_VirtualMachineList_To_net_VirtualMachineList(in *VirtualMachineList, out *net.VirtualMachineList, s conversion.Scope) error {
-	out.ListMeta = in.ListMeta
-	out.Items = *(*[]net.VirtualMachine)(unsafe.Pointer(&in.Items))
-	return nil
-}
-
-// Convert_v1alpha1_VirtualMachineList_To_net_VirtualMachineList is an autogenerated conversion function.
-func Convert_v1alpha1_VirtualMachineList_To_net_VirtualMachineList(in *VirtualMachineList, out *net.VirtualMachineList, s conversion.Scope) error {
-	return autoConvert_v1alpha1_VirtualMachineList_To_net_VirtualMachineList(in, out, s)
-}
-
-func autoConvert_net_VirtualMachineList_To_v1alpha1_VirtualMachineList(in *net.VirtualMachineList, out *VirtualMachineList, s conversion.Scope) error {
-	out.ListMeta = in.ListMeta
-	out.Items = *(*[]VirtualMachine)(unsafe.Pointer(&in.Items))
-	return nil
-}
-
-// Convert_net_VirtualMachineList_To_v1alpha1_VirtualMachineList is an autogenerated conversion function.
-func Convert_net_VirtualMachineList_To_v1alpha1_VirtualMachineList(in *net.VirtualMachineList, out *VirtualMachineList, s conversion.Scope) error {
-	return autoConvert_net_VirtualMachineList_To_v1alpha1_VirtualMachineList(in, out, s)
-}
-
-func autoConvert_v1alpha1_VirtualMachineSpec_To_net_VirtualMachineSpec(in *VirtualMachineSpec, out *net.VirtualMachineSpec, s conversion.Scope) error {
-	out.ClusterName = in.ClusterName
-	out.InterfaceRefs = *(*[]net.LocalObjectReference)(unsafe.Pointer(&in.InterfaceRefs))
-	out.VolumeRefs = *(*[]net.LocalObjectReference)(unsafe.Pointer(&in.VolumeRefs))
-	out.Resources = in.Resources
-	out.Image = in.Image
-	out.RunStrategy = in.RunStrategy
-	out.PoolSelector = (*metav1.LabelSelector)(unsafe.Pointer(in.PoolSelector))
-	out.AntiAffinity = (*net.VMAntiAffinity)(unsafe.Pointer(in.AntiAffinity))
-	return nil
-}
-
-// Convert_v1alpha1_VirtualMachineSpec_To_net_VirtualMachineSpec is an autogenerated conversion function.
-func Convert_v1alpha1_VirtualMachineSpec_To_net_VirtualMachineSpec(in *VirtualMachineSpec, out *net.VirtualMachineSpec, s conversion.Scope) error {
-	return autoConvert_v1alpha1_VirtualMachineSpec_To_net_VirtualMachineSpec(in, out, s)
-}
-
-func autoConvert_net_VirtualMachineSpec_To_v1alpha1_VirtualMachineSpec(in *net.VirtualMachineSpec, out *VirtualMachineSpec, s conversion.Scope) error {
-	out.ClusterName = in.ClusterName
-	out.InterfaceRefs = *(*[]LocalObjectReference)(unsafe.Pointer(&in.InterfaceRefs))
-	out.VolumeRefs = *(*[]LocalObjectReference)(unsafe.Pointer(&in.VolumeRefs))
-	out.Resources = in.Resources
-	out.Image = in.Image
-	out.RunStrategy = in.RunStrategy
-	out.PoolSelector = (*metav1.LabelSelector)(unsafe.Pointer(in.PoolSelector))
-	out.AntiAffinity = (*VMAntiAffinity)(unsafe.Pointer(in.AntiAffinity))
-	return nil
-}
-
-// Convert_net_VirtualMachineSpec_To_v1alpha1_VirtualMachineSpec is an autogenerated conversion function.
-func Convert_net_VirtualMachineSpec_To_v1alpha1_VirtualMachineSpec(in *net.VirtualMachineSpec, out *VirtualMachineSpec, s conversion.Scope) error {
-	return autoConvert_net_VirtualMachineSpec_To_v1alpha1_VirtualMachineSpec(in, out, s)
-}
-
-func autoConvert_v1alpha1_VirtualMachineStatus_To_net_VirtualMachineStatus(in *VirtualMachineStatus, out *net.VirtualMachineStatus, s conversion.Scope) error {
-	out.Phase = in.Phase
-	out.Conditions = *(*[]metav1.Condition)(unsafe.Pointer(&in.Conditions))
-	out.Placement = (*net.VMPlacement)(unsafe.Pointer(in.Placement))
-	return nil
-}
-
-// Convert_v1alpha1_VirtualMachineStatus_To_net_VirtualMachineStatus is an autogenerated conversion function.
-func Convert_v1alpha1_VirtualMachineStatus_To_net_VirtualMachineStatus(in *VirtualMachineStatus, out *net.VirtualMachineStatus, s conversion.Scope) error {
-	return autoConvert_v1alpha1_VirtualMachineStatus_To_net_VirtualMachineStatus(in, out, s)
-}
-
-func autoConvert_net_VirtualMachineStatus_To_v1alpha1_VirtualMachineStatus(in *net.VirtualMachineStatus, out *VirtualMachineStatus, s conversion.Scope) error {
-	out.Phase = in.Phase
-	out.Conditions = *(*[]metav1.Condition)(unsafe.Pointer(&in.Conditions))
-	out.Placement = (*VMPlacement)(unsafe.Pointer(in.Placement))
-	return nil
-}
-
-// Convert_net_VirtualMachineStatus_To_v1alpha1_VirtualMachineStatus is an autogenerated conversion function.
-func Convert_net_VirtualMachineStatus_To_v1alpha1_VirtualMachineStatus(in *net.VirtualMachineStatus, out *VirtualMachineStatus, s conversion.Scope) error {
-	return autoConvert_net_VirtualMachineStatus_To_v1alpha1_VirtualMachineStatus(in, out, s)
 }
 
 func autoConvert_v1alpha1_Volume_To_net_Volume(in *Volume, out *net.Volume, s conversion.Scope) error {

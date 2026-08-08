@@ -4,7 +4,7 @@
 package broker
 
 import (
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 )
 
@@ -30,10 +30,10 @@ func NodePrefixesFromNodes(nodes []NodeFact) []string {
 
 // PlacementForVM builds a VMPlacement for a VM running on nodeName in pool, resolving
 // the node's /64 from nodes. Returns nil if the node is unknown (nothing to report yet).
-func PlacementForVM(pool, nodeName string, nodes []NodeFact) *netv1.VMPlacement {
+func PlacementForVM(pool, nodeName string, nodes []NodeFact) *computev1.VMPlacement {
 	for _, n := range nodes {
 		if n.Name == nodeName {
-			return &netv1.VMPlacement{ClusterName: pool, NodeName: nodeName, NodePrefix: n.Prefix}
+			return &computev1.VMPlacement{ClusterName: pool, NodeName: nodeName, NodePrefix: n.Prefix}
 		}
 	}
 	return nil

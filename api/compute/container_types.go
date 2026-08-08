@@ -1,7 +1,7 @@
 // Copyright 2026 ectobase contributors
 // SPDX-License-Identifier: Apache-2.0
 
-package net
+package compute
 
 import (
 	corev1 "k8s.io/api/core/v1"

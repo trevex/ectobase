@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: containers.net.ectobase.dev
+  name: containers.compute.ectobase.dev
 spec:
-  group: net.ectobase.dev
+  group: compute.ectobase.dev
   names:
     kind: Container
     listKind: ContainerList

@@ -10,7 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
 )
@@ -25,11 +25,11 @@ func readyPool(name string, cpu int64) platformv1.ClusterPool {
 	}
 }
 
-func vmWith(group string, cpu int64) *netv1.VirtualMachine {
-	vm := &netv1.VirtualMachine{}
+func vmWith(group string, cpu int64) *computev1.VirtualMachine {
+	vm := &computev1.VirtualMachine{}
 	vm.Spec.Resources.Requests = corev1.ResourceList{corev1.ResourceCPU: *resource.NewQuantity(cpu, resource.DecimalSI)}
 	if group != "" {
-		vm.Spec.AntiAffinity = &netv1.VMAntiAffinity{Group: group}
+		vm.Spec.AntiAffinity = &computev1.VMAntiAffinity{Group: group}
 	}
 	return vm
 }
@@ -54,7 +54,7 @@ func TestSchedule_AntiAffinity_AvailabilityWinsWithViolation(t *testing.T) {
 
 func TestScheduleBatch_NoOverCommit(t *testing.T) {
 	pools := []platformv1.ClusterPool{readyPool("A", 2)} // fits exactly two 1-CPU VMs
-	vms := []*netv1.VirtualMachine{vmWith("", 1), vmWith("", 1), vmWith("", 1)}
+	vms := []*computev1.VirtualMachine{vmWith("", 1), vmWith("", 1), vmWith("", 1)}
 	res := ScheduleBatch(vms, pools)
 	if res[0].Pool != "A" || res[1].Pool != "A" {
 		t.Fatalf("first two should fit A: %+v", res)

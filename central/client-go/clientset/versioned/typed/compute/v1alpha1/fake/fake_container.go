@@ -3,21 +3,21 @@
 package fake
 
 import (
-	v1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
-	netv1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/net/v1alpha1"
-	typednetv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/net/v1alpha1"
+	v1alpha1 "github.com/trevex/ectobase/api/compute/v1alpha1"
+	computev1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/compute/v1alpha1"
+	typedcomputev1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/compute/v1alpha1"
 	gentype "k8s.io/client-go/gentype"
 )
 
 // fakeContainers implements ContainerInterface
 type fakeContainers struct {
-	*gentype.FakeClientWithListAndApply[*v1alpha1.Container, *v1alpha1.ContainerList, *netv1alpha1.ContainerApplyConfiguration]
-	Fake *FakeNetV1alpha1
+	*gentype.FakeClientWithListAndApply[*v1alpha1.Container, *v1alpha1.ContainerList, *computev1alpha1.ContainerApplyConfiguration]
+	Fake *FakeComputeV1alpha1
 }
 
-func newFakeContainers(fake *FakeNetV1alpha1, namespace string) typednetv1alpha1.ContainerInterface {
+func newFakeContainers(fake *FakeComputeV1alpha1, namespace string) typedcomputev1alpha1.ContainerInterface {
 	return &fakeContainers{
-		gentype.NewFakeClientWithListAndApply[*v1alpha1.Container, *v1alpha1.ContainerList, *netv1alpha1.ContainerApplyConfiguration](
+		gentype.NewFakeClientWithListAndApply[*v1alpha1.Container, *v1alpha1.ContainerList, *computev1alpha1.ContainerApplyConfiguration](
 			fake.Fake,
 			namespace,
 			v1alpha1.SchemeGroupVersion.WithResource("containers"),

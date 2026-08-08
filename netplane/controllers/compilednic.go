@@ -9,6 +9,7 @@ import (
 	"reflect"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -48,7 +49,7 @@ type Placement struct {
 // only the cluster binding (its NICs keep sourcing NodeName from nic.spec.nodeName). A NIC has one
 // owning workload by construction; if several reference it (an invalid config), the first in list order
 // wins (containers checked before VMs).
-func resolvePlacement(nic *netv1.NetworkInterface, containers []netv1.Container, vms []netv1.VirtualMachine, defaultCluster string) Placement {
+func resolvePlacement(nic *netv1.NetworkInterface, containers []computev1.Container, vms []computev1.VirtualMachine, defaultCluster string) Placement {
 	for i := range containers {
 		for _, ref := range containers[i].Spec.InterfaceRefs {
 			if ref.Name == nic.Name {
@@ -324,11 +325,11 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 	// Resolve placement (cluster + node binding) from the owning Container or VirtualMachine, if any,
 	// else the default. Container is the placement authority (checked first) and also pins the node.
-	var containers netv1.ContainerList
+	var containers computev1.ContainerList
 	if err := r.Client.List(ctx, &containers, client.InNamespace(nic.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list containers: %w", err)
 	}
-	var vms netv1.VirtualMachineList
+	var vms computev1.VirtualMachineList
 	if err := r.Client.List(ctx, &vms, client.InNamespace(nic.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list virtualmachines: %w", err)
 	}
@@ -383,10 +384,10 @@ func (r *CompiledNICReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&netv1.VPC{}, handler.EnqueueRequestsFromMapFunc(r.nicsForVPC)).
 		// A VirtualMachine's spec.clusterName (placement) is stamped onto its NICs' CompiledNICs, so
 		// re-enqueue the owned NICs when the VM changes.
-		Watches(&netv1.VirtualMachine{}, handler.EnqueueRequestsFromMapFunc(r.nicsForVM)).
+		Watches(&computev1.VirtualMachine{}, handler.EnqueueRequestsFromMapFunc(r.nicsForVM)).
 		// A Container's spec.clusterName AND spec.nodeName (it is the placement authority) are stamped
 		// onto its NICs' CompiledNICs, so re-enqueue the owned NICs when the Container changes.
-		Watches(&netv1.Container{}, handler.EnqueueRequestsFromMapFunc(r.nicsForContainer)).
+		Watches(&computev1.Container{}, handler.EnqueueRequestsFromMapFunc(r.nicsForContainer)).
 		Complete(r)
 }
 
@@ -422,7 +423,7 @@ func (r *CompiledNICReconciler) nicsForNAT(ctx context.Context, obj client.Objec
 // nicsForVM maps a VirtualMachine event to reconcile requests for each NetworkInterface it owns
 // (via spec.interfaceRefs), so a placement (spec.clusterName) change re-stamps their CompiledNICs.
 func (r *CompiledNICReconciler) nicsForVM(ctx context.Context, obj client.Object) []reconcile.Request {
-	vm, ok := obj.(*netv1.VirtualMachine)
+	vm, ok := obj.(*computev1.VirtualMachine)
 	if !ok {
 		return nil
 	}
@@ -437,7 +438,7 @@ func (r *CompiledNICReconciler) nicsForVM(ctx context.Context, obj client.Object
 // (via spec.interfaceRefs), so a placement (spec.clusterName/spec.nodeName) change re-stamps their
 // CompiledNICs.
 func (r *CompiledNICReconciler) nicsForContainer(ctx context.Context, obj client.Object) []reconcile.Request {
-	ctr, ok := obj.(*netv1.Container)
+	ctr, ok := obj.(*computev1.Container)
 	if !ok {
 		return nil
 	}

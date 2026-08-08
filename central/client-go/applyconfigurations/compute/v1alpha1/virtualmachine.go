@@ -26,7 +26,7 @@ func VirtualMachine(name, namespace string) *VirtualMachineApplyConfiguration {
 	b.WithName(name)
 	b.WithNamespace(namespace)
 	b.WithKind("VirtualMachine")
-	b.WithAPIVersion("net.ectobase.dev/v1alpha1")
+	b.WithAPIVersion("compute.ectobase.dev/v1alpha1")
 	return b
 }
 

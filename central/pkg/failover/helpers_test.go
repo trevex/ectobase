@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
 )
@@ -21,6 +22,9 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
 	if err := netv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := computev1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
 	if err := platformv1.AddToScheme(s); err != nil {

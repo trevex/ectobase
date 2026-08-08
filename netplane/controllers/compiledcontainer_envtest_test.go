@@ -12,6 +12,7 @@ import (
 	"time"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -41,6 +42,9 @@ func TestCompiledContainerControllerEnvtest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := compiledv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := computev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 
@@ -104,13 +108,13 @@ func TestCompiledContainerControllerEnvtest(t *testing.T) {
 	mustCreate(ctx, t, direct, nic)
 
 	// The owning Container: placement authority (clusterName + nodeName).
-	ctr := &netv1.Container{}
+	ctr := &computev1.Container{}
 	ctr.Name = "ctr1"
 	ctr.Namespace = "default"
 	ctr.Spec.ClusterName = "c1"
 	ctr.Spec.NodeName = "n1"
 	ctr.Spec.Image = "nginx:latest"
-	ctr.Spec.InterfaceRefs = []netv1.LocalObjectReference{{Name: "nic-a"}}
+	ctr.Spec.InterfaceRefs = []computev1.LocalObjectReference{{Name: "nic-a"}}
 	mustCreate(ctx, t, direct, ctr)
 
 	// The CompiledNIC inherits BOTH clusterName and nodeName from the Container.

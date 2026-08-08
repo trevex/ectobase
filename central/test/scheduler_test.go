@@ -13,7 +13,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
 	"github.com/trevex/ectobase/central/pkg/scheduler"
@@ -46,9 +46,9 @@ func TestScheduler_BindsVM(t *testing.T) {
 	}
 
 	// Unbound vm1 requesting cpu:2.
-	vm := &netv1.VirtualMachine{
+	vm := &computev1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "vm1"},
-		Spec: netv1.VirtualMachineSpec{
+		Spec: computev1.VirtualMachineSpec{
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
 			},
@@ -63,7 +63,7 @@ func TestScheduler_BindsVM(t *testing.T) {
 		t.Fatalf("scheduler Reconcile: %v", err)
 	}
 
-	got := &netv1.VirtualMachine{}
+	got := &computev1.VirtualMachine{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm1"}, got); err != nil {
 		t.Fatalf("get vm1: %v", err)
 	}

@@ -6,10 +6,10 @@ import (
 	context "context"
 	time "time"
 
-	apinetv1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	apicomputev1alpha1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	versioned "github.com/trevex/ectobase/central/client-go/clientset/versioned"
 	internalinterfaces "github.com/trevex/ectobase/central/client-go/informers/externalversions/internalinterfaces"
-	netv1alpha1 "github.com/trevex/ectobase/central/client-go/listers/net/v1alpha1"
+	computev1alpha1 "github.com/trevex/ectobase/central/client-go/listers/compute/v1alpha1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -21,7 +21,7 @@ import (
 // Containers.
 type ContainerInformer interface {
 	Informer() cache.SharedIndexInformer
-	Lister() netv1alpha1.ContainerLister
+	Lister() computev1alpha1.ContainerLister
 }
 
 type containerInformer struct {
@@ -48,7 +48,7 @@ func NewFilteredContainerInformer(client versioned.Interface, namespace string, 
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
 func NewContainerInformerWithOptions(client versioned.Interface, namespace string, options internalinterfaces.InformerOptions) cache.SharedIndexInformer {
-	gvr := schema.GroupVersionResource{Group: "net.ectobase.dev", Version: "v1alpha1", Resource: "containers"}
+	gvr := schema.GroupVersionResource{Group: "compute.ectobase.dev", Version: "v1alpha1", Resource: "containers"}
 	identifier := options.InformerName.WithResource(gvr)
 	tweakListOptions := options.TweakListOptions
 	return cache.NewSharedIndexInformerWithOptions(
@@ -57,28 +57,28 @@ func NewContainerInformerWithOptions(client versioned.Interface, namespace strin
 				if tweakListOptions != nil {
 					tweakListOptions(&opts)
 				}
-				return client.NetV1alpha1().Containers(namespace).List(context.Background(), opts)
+				return client.ComputeV1alpha1().Containers(namespace).List(context.Background(), opts)
 			},
 			WatchFunc: func(opts v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&opts)
 				}
-				return client.NetV1alpha1().Containers(namespace).Watch(context.Background(), opts)
+				return client.ComputeV1alpha1().Containers(namespace).Watch(context.Background(), opts)
 			},
 			ListWithContextFunc: func(ctx context.Context, opts v1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&opts)
 				}
-				return client.NetV1alpha1().Containers(namespace).List(ctx, opts)
+				return client.ComputeV1alpha1().Containers(namespace).List(ctx, opts)
 			},
 			WatchFuncWithContext: func(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&opts)
 				}
-				return client.NetV1alpha1().Containers(namespace).Watch(ctx, opts)
+				return client.ComputeV1alpha1().Containers(namespace).Watch(ctx, opts)
 			},
 		}, client),
-		&apinetv1alpha1.Container{},
+		&apicomputev1alpha1.Container{},
 		cache.SharedIndexInformerOptions{
 			ResyncPeriod: options.ResyncPeriod,
 			Indexers:     options.Indexers,
@@ -92,9 +92,9 @@ func (f *containerInformer) defaultInformer(client versioned.Interface, resyncPe
 }
 
 func (f *containerInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&apinetv1alpha1.Container{}, f.defaultInformer)
+	return f.factory.InformerFor(&apicomputev1alpha1.Container{}, f.defaultInformer)
 }
 
-func (f *containerInformer) Lister() netv1alpha1.ContainerLister {
-	return netv1alpha1.NewContainerLister(f.Informer().GetIndexer())
+func (f *containerInformer) Lister() computev1alpha1.ContainerLister {
+	return computev1alpha1.NewContainerLister(f.Informer().GetIndexer())
 }

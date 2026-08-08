@@ -12,10 +12,6 @@ type FakeNetV1alpha1 struct {
 	*testing.Fake
 }
 
-func (c *FakeNetV1alpha1) Containers(namespace string) v1alpha1.ContainerInterface {
-	return newFakeContainers(c, namespace)
-}
-
 func (c *FakeNetV1alpha1) FirewallPolicies(namespace string) v1alpha1.FirewallPolicyInterface {
 	return newFakeFirewallPolicies(c, namespace)
 }
@@ -42,10 +38,6 @@ func (c *FakeNetV1alpha1) VPCs(namespace string) v1alpha1.VPCInterface {
 
 func (c *FakeNetV1alpha1) VPCPeerings(namespace string) v1alpha1.VPCPeeringInterface {
 	return newFakeVPCPeerings(c, namespace)
-}
-
-func (c *FakeNetV1alpha1) VirtualMachines(namespace string) v1alpha1.VirtualMachineInterface {
-	return newFakeVirtualMachines(c, namespace)
 }
 
 func (c *FakeNetV1alpha1) Volumes(namespace string) v1alpha1.VolumeInterface {

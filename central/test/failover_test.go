@@ -15,7 +15,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
 	"github.com/trevex/ectobase/central/pkg/failover"
@@ -74,9 +74,9 @@ func TestFailover_RebindsOffLostPool(t *testing.T) {
 	}
 
 	// vm1 bound to c1, requesting cpu:2.
-	vm := &netv1.VirtualMachine{
+	vm := &computev1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "vm1"},
-		Spec: netv1.VirtualMachineSpec{
+		Spec: computev1.VirtualMachineSpec{
 			ClusterName: "c1",
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
@@ -94,7 +94,7 @@ func TestFailover_RebindsOffLostPool(t *testing.T) {
 		if _, err := r.Reconcile(ctx, reqC1); err != nil {
 			t.Fatalf("failover Reconcile: %v", err)
 		}
-		got := &netv1.VirtualMachine{}
+		got := &computev1.VirtualMachine{}
 		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm1"}, got); err != nil {
 			t.Fatalf("get vm1: %v", err)
 		}
@@ -106,7 +106,7 @@ func TestFailover_RebindsOffLostPool(t *testing.T) {
 
 	t.Run("deny fencer keeps vm on c1 and blocks", func(t *testing.T) {
 		// Re-bind vm1 back to the lost c1 for this sub-test.
-		back := &netv1.VirtualMachine{}
+		back := &computev1.VirtualMachine{}
 		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm1"}, back); err != nil {
 			t.Fatalf("get vm1: %v", err)
 		}
@@ -119,7 +119,7 @@ func TestFailover_RebindsOffLostPool(t *testing.T) {
 		if _, err := r.Reconcile(ctx, reqC1); err != nil {
 			t.Fatalf("failover Reconcile (deny): %v", err)
 		}
-		got := &netv1.VirtualMachine{}
+		got := &computev1.VirtualMachine{}
 		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm1"}, got); err != nil {
 			t.Fatalf("get vm1: %v", err)
 		}

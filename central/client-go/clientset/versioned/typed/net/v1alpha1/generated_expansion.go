@@ -2,8 +2,6 @@
 
 package v1alpha1
 
-type ContainerExpansion interface{}
-
 type FirewallPolicyExpansion interface{}
 
 type FloatingIPExpansion interface{}
@@ -17,7 +15,5 @@ type NetworkInterfaceExpansion interface{}
 type VPCExpansion interface{}
 
 type VPCPeeringExpansion interface{}
-
-type VirtualMachineExpansion interface{}
 
 type VolumeExpansion interface{}

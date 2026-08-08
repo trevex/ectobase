@@ -7,6 +7,7 @@ package openapi
 
 import (
 	v1alpha1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	computev1alpha1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platformv1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	v1 "k8s.io/api/core/v1"
@@ -46,10 +47,17 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		v1alpha1.CompiledVolumeAttachmentStatus{}.OpenAPIModelName(): schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachmentStatus(ref),
 		v1alpha1.LocalObjectReference{}.OpenAPIModelName():           schema_ectobase_api_compiled_v1alpha1_LocalObjectReference(ref),
 		v1alpha1.PortStatus{}.OpenAPIModelName():                     schema_ectobase_api_compiled_v1alpha1_PortStatus(ref),
-		netv1alpha1.Container{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_Container(ref),
-		netv1alpha1.ContainerList{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_ContainerList(ref),
-		netv1alpha1.ContainerSpec{}.OpenAPIModelName():               schema_ectobase_api_net_v1alpha1_ContainerSpec(ref),
-		netv1alpha1.ContainerStatus{}.OpenAPIModelName():             schema_ectobase_api_net_v1alpha1_ContainerStatus(ref),
+		computev1alpha1.Container{}.OpenAPIModelName():               schema_ectobase_api_compute_v1alpha1_Container(ref),
+		computev1alpha1.ContainerList{}.OpenAPIModelName():           schema_ectobase_api_compute_v1alpha1_ContainerList(ref),
+		computev1alpha1.ContainerSpec{}.OpenAPIModelName():           schema_ectobase_api_compute_v1alpha1_ContainerSpec(ref),
+		computev1alpha1.ContainerStatus{}.OpenAPIModelName():         schema_ectobase_api_compute_v1alpha1_ContainerStatus(ref),
+		computev1alpha1.LocalObjectReference{}.OpenAPIModelName():    schema_ectobase_api_compute_v1alpha1_LocalObjectReference(ref),
+		computev1alpha1.VMAntiAffinity{}.OpenAPIModelName():          schema_ectobase_api_compute_v1alpha1_VMAntiAffinity(ref),
+		computev1alpha1.VMPlacement{}.OpenAPIModelName():             schema_ectobase_api_compute_v1alpha1_VMPlacement(ref),
+		computev1alpha1.VirtualMachine{}.OpenAPIModelName():          schema_ectobase_api_compute_v1alpha1_VirtualMachine(ref),
+		computev1alpha1.VirtualMachineList{}.OpenAPIModelName():      schema_ectobase_api_compute_v1alpha1_VirtualMachineList(ref),
+		computev1alpha1.VirtualMachineSpec{}.OpenAPIModelName():      schema_ectobase_api_compute_v1alpha1_VirtualMachineSpec(ref),
+		computev1alpha1.VirtualMachineStatus{}.OpenAPIModelName():    schema_ectobase_api_compute_v1alpha1_VirtualMachineStatus(ref),
 		netv1alpha1.EgressQoS{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_EgressQoS(ref),
 		netv1alpha1.FirewallPolicy{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_FirewallPolicy(ref),
 		netv1alpha1.FirewallPolicyList{}.OpenAPIModelName():          schema_ectobase_api_net_v1alpha1_FirewallPolicyList(ref),
@@ -78,8 +86,6 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		netv1alpha1.NetworkInterfaceStatus{}.OpenAPIModelName():      schema_ectobase_api_net_v1alpha1_NetworkInterfaceStatus(ref),
 		netv1alpha1.PortStatus{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_PortStatus(ref),
 		netv1alpha1.RateLimit{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_RateLimit(ref),
-		netv1alpha1.VMAntiAffinity{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_VMAntiAffinity(ref),
-		netv1alpha1.VMPlacement{}.OpenAPIModelName():                 schema_ectobase_api_net_v1alpha1_VMPlacement(ref),
 		netv1alpha1.VPC{}.OpenAPIModelName():                         schema_ectobase_api_net_v1alpha1_VPC(ref),
 		netv1alpha1.VPCList{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_VPCList(ref),
 		netv1alpha1.VPCPeering{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_VPCPeering(ref),
@@ -89,10 +95,6 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		netv1alpha1.VPCReference{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_VPCReference(ref),
 		netv1alpha1.VPCSpec{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_VPCSpec(ref),
 		netv1alpha1.VPCStatus{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_VPCStatus(ref),
-		netv1alpha1.VirtualMachine{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_VirtualMachine(ref),
-		netv1alpha1.VirtualMachineList{}.OpenAPIModelName():          schema_ectobase_api_net_v1alpha1_VirtualMachineList(ref),
-		netv1alpha1.VirtualMachineSpec{}.OpenAPIModelName():          schema_ectobase_api_net_v1alpha1_VirtualMachineSpec(ref),
-		netv1alpha1.VirtualMachineStatus{}.OpenAPIModelName():        schema_ectobase_api_net_v1alpha1_VirtualMachineStatus(ref),
 		netv1alpha1.Volume{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_Volume(ref),
 		netv1alpha1.VolumeList{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_VolumeList(ref),
 		netv1alpha1.VolumeSpec{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_VolumeSpec(ref),
@@ -1558,7 +1560,7 @@ func schema_ectobase_api_compiled_v1alpha1_PortStatus(ref common.ReferenceCallba
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_Container(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compute_v1alpha1_Container(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1588,24 +1590,24 @@ func schema_ectobase_api_net_v1alpha1_Container(ref common.ReferenceCallback) co
 					"spec": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(netv1alpha1.ContainerSpec{}.OpenAPIModelName()),
+							Ref:     ref(computev1alpha1.ContainerSpec{}.OpenAPIModelName()),
 						},
 					},
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref(netv1alpha1.ContainerStatus{}.OpenAPIModelName()),
+							Ref:     ref(computev1alpha1.ContainerStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			netv1alpha1.ContainerSpec{}.OpenAPIModelName(), netv1alpha1.ContainerStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+			computev1alpha1.ContainerSpec{}.OpenAPIModelName(), computev1alpha1.ContainerStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_ContainerList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compute_v1alpha1_ContainerList(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1639,7 +1641,7 @@ func schema_ectobase_api_net_v1alpha1_ContainerList(ref common.ReferenceCallback
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(netv1alpha1.Container{}.OpenAPIModelName()),
+										Ref:     ref(computev1alpha1.Container{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1650,11 +1652,11 @@ func schema_ectobase_api_net_v1alpha1_ContainerList(ref common.ReferenceCallback
 			},
 		},
 		Dependencies: []string{
-			netv1alpha1.Container{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+			computev1alpha1.Container{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_ContainerSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compute_v1alpha1_ContainerSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1683,7 +1685,7 @@ func schema_ectobase_api_net_v1alpha1_ContainerSpec(ref common.ReferenceCallback
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
+										Ref:     ref(computev1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -1759,11 +1761,11 @@ func schema_ectobase_api_net_v1alpha1_ContainerSpec(ref common.ReferenceCallback
 			},
 		},
 		Dependencies: []string{
-			netv1alpha1.LocalObjectReference{}.OpenAPIModelName(), v1.EnvVar{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName()},
+			computev1alpha1.LocalObjectReference{}.OpenAPIModelName(), v1.EnvVar{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName()},
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_ContainerStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+func schema_ectobase_api_compute_v1alpha1_ContainerStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
@@ -1780,6 +1782,313 @@ func schema_ectobase_api_net_v1alpha1_ContainerStatus(ref common.ReferenceCallba
 				},
 			},
 		},
+	}
+}
+
+func schema_ectobase_api_compute_v1alpha1_LocalObjectReference(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "LocalObjectReference references an object by name within the same namespace.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Name is the name of the referenced object.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"name"},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_compute_v1alpha1_VMAntiAffinity(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VMAntiAffinity is a minimal anti-affinity: VMs sharing Group should land on different ClusterPools. Best-effort — a failover with no non-violating pool places anyway and records the violation.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"group": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Group is the anti-affinity key; VMs with the same Group repel each other.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_compute_v1alpha1_VMPlacement(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VMPlacement is the VM's actual running location, reported upward by the broker.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"clusterName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ClusterName is the pool the VM is running on.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"nodeName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "NodeName is the node running the VM.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"nodePrefix": {
+						SchemaProps: spec.SchemaProps{
+							Description: "NodePrefix is that node's /64 underlay prefix (the fence coordinate).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_compute_v1alpha1_VirtualMachine(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VirtualMachine is the placement anchor for a workload.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(computev1alpha1.VirtualMachineSpec{}.OpenAPIModelName()),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(computev1alpha1.VirtualMachineStatus{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			computev1alpha1.VirtualMachineSpec{}.OpenAPIModelName(), computev1alpha1.VirtualMachineStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_compute_v1alpha1_VirtualMachineList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VirtualMachineList is a list of VirtualMachine objects.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(computev1alpha1.VirtualMachine{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			computev1alpha1.VirtualMachine{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_compute_v1alpha1_VirtualMachineSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VirtualMachineSpec defines the desired state of a VirtualMachine: the cluster binding (placement anchor), the NetworkInterfaces it owns, its compute resources, and — since Phase 4 — its boot intent (containerDisk Image + RunStrategy). The compiler propagates ClusterName (and a workload=<name> label) onto the CompiledNICs of the referenced interfaces and onto a CompiledVM. Ceph-backed volume lifecycle is a later phase.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"clusterName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ClusterName is the cluster this workload is bound to. Set manually or by the compiler default in Phase 1b; the Phase-3 scheduler writes it later.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"interfaceRefs": {
+						SchemaProps: spec.SchemaProps{
+							Description: "InterfaceRefs names the NetworkInterfaces (same namespace) this VM owns.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(computev1alpha1.LocalObjectReference{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+					"volumeRefs": {
+						SchemaProps: spec.SchemaProps{
+							Description: "VolumeRefs names the Volumes (same namespace) this VM attaches. A referenced Volume with a BootImage is the boot disk; others are data disks. When empty the VM boots ephemerally from Image (containerDisk).",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(computev1alpha1.LocalObjectReference{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+					"resources": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Resources is the compute resource request/limit for this workload. Only Requests is used for scheduling capacity fit; Limits is carried for parity.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(v1.ResourceRequirements{}.OpenAPIModelName()),
+						},
+					},
+					"image": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Image is the containerDisk image the VM boots from (e.g. quay.io/containerdisks/fedora:41).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"runStrategy": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RunStrategy is the KubeVirt run strategy (Always, RerunOnFailure, Manual, Halted). Empty defaults to RerunOnFailure (Tier-1 local restart on node death).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"poolSelector": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PoolSelector, if set, restricts scheduling to ClusterPools whose labels match.",
+							Ref:         ref(metav1.LabelSelector{}.OpenAPIModelName()),
+						},
+					},
+					"antiAffinity": {
+						SchemaProps: spec.SchemaProps{
+							Description: "AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools during scheduling and failover (best-effort: availability wins if no non-violating pool).",
+							Ref:         ref(computev1alpha1.VMAntiAffinity{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			computev1alpha1.LocalObjectReference{}.OpenAPIModelName(), computev1alpha1.VMAntiAffinity{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName(), metav1.LabelSelector{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_compute_v1alpha1_VirtualMachineStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VirtualMachineStatus defines the observed state of a VirtualMachine.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"phase": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Phase is the current lifecycle phase of the VirtualMachine.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"conditions": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-map-keys": []interface{}{
+									"type",
+								},
+								"x-kubernetes-list-type":       "map",
+								"x-kubernetes-patch-merge-key": "type",
+								"x-kubernetes-patch-strategy":  "merge",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "Conditions capture scheduling/failover observations (Scheduled, Unschedulable, FailoverBlocked).",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(metav1.Condition{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+					"placement": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Placement is the VM's actual running location, stamped by the broker. Central uses NodePrefix as the fence coordinate and to gate recovery drain.",
+							Ref:         ref(computev1alpha1.VMPlacement{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			computev1alpha1.VMPlacement{}.OpenAPIModelName(), metav1.Condition{}.OpenAPIModelName()},
 	}
 }
 
@@ -2879,60 +3188,6 @@ func schema_ectobase_api_net_v1alpha1_RateLimit(ref common.ReferenceCallback) co
 	}
 }
 
-func schema_ectobase_api_net_v1alpha1_VMAntiAffinity(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "VMAntiAffinity is a minimal anti-affinity: VMs sharing Group should land on different ClusterPools. Best-effort — a failover with no non-violating pool places anyway and records the violation.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"group": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Group is the anti-affinity key; VMs with the same Group repel each other.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
-func schema_ectobase_api_net_v1alpha1_VMPlacement(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "VMPlacement is the VM's actual running location, reported upward by the broker.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"clusterName": {
-						SchemaProps: spec.SchemaProps{
-							Description: "ClusterName is the pool the VM is running on.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"nodeName": {
-						SchemaProps: spec.SchemaProps{
-							Description: "NodeName is the node running the VM.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"nodePrefix": {
-						SchemaProps: spec.SchemaProps{
-							Description: "NodePrefix is that node's /64 underlay prefix (the fence coordinate).",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
 func schema_ectobase_api_net_v1alpha1_VPC(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -3276,237 +3531,6 @@ func schema_ectobase_api_net_v1alpha1_VPCStatus(ref common.ReferenceCallback) co
 				},
 			},
 		},
-	}
-}
-
-func schema_ectobase_api_net_v1alpha1_VirtualMachine(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "VirtualMachine is the placement anchor for a workload.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"kind": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"apiVersion": {
-						SchemaProps: spec.SchemaProps{
-							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"metadata": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
-						},
-					},
-					"spec": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(netv1alpha1.VirtualMachineSpec{}.OpenAPIModelName()),
-						},
-					},
-					"status": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(netv1alpha1.VirtualMachineStatus{}.OpenAPIModelName()),
-						},
-					},
-				},
-			},
-		},
-		Dependencies: []string{
-			netv1alpha1.VirtualMachineSpec{}.OpenAPIModelName(), netv1alpha1.VirtualMachineStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
-	}
-}
-
-func schema_ectobase_api_net_v1alpha1_VirtualMachineList(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "VirtualMachineList is a list of VirtualMachine objects.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"kind": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"apiVersion": {
-						SchemaProps: spec.SchemaProps{
-							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"metadata": {
-						SchemaProps: spec.SchemaProps{
-							Default: map[string]interface{}{},
-							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
-						},
-					},
-					"items": {
-						SchemaProps: spec.SchemaProps{
-							Type: []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref(netv1alpha1.VirtualMachine{}.OpenAPIModelName()),
-									},
-								},
-							},
-						},
-					},
-				},
-				Required: []string{"items"},
-			},
-		},
-		Dependencies: []string{
-			netv1alpha1.VirtualMachine{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
-	}
-}
-
-func schema_ectobase_api_net_v1alpha1_VirtualMachineSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "VirtualMachineSpec defines the desired state of a VirtualMachine: the cluster binding (placement anchor), the NetworkInterfaces it owns, its compute resources, and — since Phase 4 — its boot intent (containerDisk Image + RunStrategy). The compiler propagates ClusterName (and a workload=<name> label) onto the CompiledNICs of the referenced interfaces and onto a CompiledVM. Ceph-backed volume lifecycle is a later phase.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"clusterName": {
-						SchemaProps: spec.SchemaProps{
-							Description: "ClusterName is the cluster this workload is bound to. Set manually or by the compiler default in Phase 1b; the Phase-3 scheduler writes it later.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"interfaceRefs": {
-						SchemaProps: spec.SchemaProps{
-							Description: "InterfaceRefs names the NetworkInterfaces (same namespace) this VM owns.",
-							Type:        []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
-									},
-								},
-							},
-						},
-					},
-					"volumeRefs": {
-						SchemaProps: spec.SchemaProps{
-							Description: "VolumeRefs names the Volumes (same namespace) this VM attaches. A referenced Volume with a BootImage is the boot disk; others are data disks. When empty the VM boots ephemerally from Image (containerDisk).",
-							Type:        []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
-									},
-								},
-							},
-						},
-					},
-					"resources": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Resources is the compute resource request/limit for this workload. Only Requests is used for scheduling capacity fit; Limits is carried for parity.",
-							Default:     map[string]interface{}{},
-							Ref:         ref(v1.ResourceRequirements{}.OpenAPIModelName()),
-						},
-					},
-					"image": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Image is the containerDisk image the VM boots from (e.g. quay.io/containerdisks/fedora:41).",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"runStrategy": {
-						SchemaProps: spec.SchemaProps{
-							Description: "RunStrategy is the KubeVirt run strategy (Always, RerunOnFailure, Manual, Halted). Empty defaults to RerunOnFailure (Tier-1 local restart on node death).",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"poolSelector": {
-						SchemaProps: spec.SchemaProps{
-							Description: "PoolSelector, if set, restricts scheduling to ClusterPools whose labels match.",
-							Ref:         ref(metav1.LabelSelector{}.OpenAPIModelName()),
-						},
-					},
-					"antiAffinity": {
-						SchemaProps: spec.SchemaProps{
-							Description: "AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools during scheduling and failover (best-effort: availability wins if no non-violating pool).",
-							Ref:         ref(netv1alpha1.VMAntiAffinity{}.OpenAPIModelName()),
-						},
-					},
-				},
-			},
-		},
-		Dependencies: []string{
-			netv1alpha1.LocalObjectReference{}.OpenAPIModelName(), netv1alpha1.VMAntiAffinity{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName(), metav1.LabelSelector{}.OpenAPIModelName()},
-	}
-}
-
-func schema_ectobase_api_net_v1alpha1_VirtualMachineStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
-	return common.OpenAPIDefinition{
-		Schema: spec.Schema{
-			SchemaProps: spec.SchemaProps{
-				Description: "VirtualMachineStatus defines the observed state of a VirtualMachine.",
-				Type:        []string{"object"},
-				Properties: map[string]spec.Schema{
-					"phase": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Phase is the current lifecycle phase of the VirtualMachine.",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
-					"conditions": {
-						VendorExtensible: spec.VendorExtensible{
-							Extensions: spec.Extensions{
-								"x-kubernetes-list-map-keys": []interface{}{
-									"type",
-								},
-								"x-kubernetes-list-type":       "map",
-								"x-kubernetes-patch-merge-key": "type",
-								"x-kubernetes-patch-strategy":  "merge",
-							},
-						},
-						SchemaProps: spec.SchemaProps{
-							Description: "Conditions capture scheduling/failover observations (Scheduled, Unschedulable, FailoverBlocked).",
-							Type:        []string{"array"},
-							Items: &spec.SchemaOrArray{
-								Schema: &spec.Schema{
-									SchemaProps: spec.SchemaProps{
-										Default: map[string]interface{}{},
-										Ref:     ref(metav1.Condition{}.OpenAPIModelName()),
-									},
-								},
-							},
-						},
-					},
-					"placement": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Placement is the VM's actual running location, stamped by the broker. Central uses NodePrefix as the fence coordinate and to gate recovery drain.",
-							Ref:         ref(netv1alpha1.VMPlacement{}.OpenAPIModelName()),
-						},
-					},
-				},
-			},
-		},
-		Dependencies: []string{
-			netv1alpha1.VMPlacement{}.OpenAPIModelName(), metav1.Condition{}.OpenAPIModelName()},
 	}
 }
 

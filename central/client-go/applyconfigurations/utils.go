@@ -4,9 +4,11 @@ package applyconfigurations
 
 import (
 	v1alpha1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	computev1alpha1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platformv1alpha1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	compiledv1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/compiled/v1alpha1"
+	applyconfigurationscomputev1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/compute/v1alpha1"
 	internal "github.com/trevex/ectobase/central/client-go/applyconfigurations/internal"
 	applyconfigurationsnetv1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/net/v1alpha1"
 	applyconfigurationsplatformv1alpha1 "github.com/trevex/ectobase/central/client-go/applyconfigurations/platform/v1alpha1"
@@ -63,13 +65,27 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 	case v1alpha1.SchemeGroupVersion.WithKind("PortStatus"):
 		return &compiledv1alpha1.PortStatusApplyConfiguration{}
 
+		// Group=compute.ectobase.dev, Version=v1alpha1
+	case computev1alpha1.SchemeGroupVersion.WithKind("Container"):
+		return &applyconfigurationscomputev1alpha1.ContainerApplyConfiguration{}
+	case computev1alpha1.SchemeGroupVersion.WithKind("ContainerSpec"):
+		return &applyconfigurationscomputev1alpha1.ContainerSpecApplyConfiguration{}
+	case computev1alpha1.SchemeGroupVersion.WithKind("ContainerStatus"):
+		return &applyconfigurationscomputev1alpha1.ContainerStatusApplyConfiguration{}
+	case computev1alpha1.SchemeGroupVersion.WithKind("LocalObjectReference"):
+		return &applyconfigurationscomputev1alpha1.LocalObjectReferenceApplyConfiguration{}
+	case computev1alpha1.SchemeGroupVersion.WithKind("VirtualMachine"):
+		return &applyconfigurationscomputev1alpha1.VirtualMachineApplyConfiguration{}
+	case computev1alpha1.SchemeGroupVersion.WithKind("VirtualMachineSpec"):
+		return &applyconfigurationscomputev1alpha1.VirtualMachineSpecApplyConfiguration{}
+	case computev1alpha1.SchemeGroupVersion.WithKind("VirtualMachineStatus"):
+		return &applyconfigurationscomputev1alpha1.VirtualMachineStatusApplyConfiguration{}
+	case computev1alpha1.SchemeGroupVersion.WithKind("VMAntiAffinity"):
+		return &applyconfigurationscomputev1alpha1.VMAntiAffinityApplyConfiguration{}
+	case computev1alpha1.SchemeGroupVersion.WithKind("VMPlacement"):
+		return &applyconfigurationscomputev1alpha1.VMPlacementApplyConfiguration{}
+
 		// Group=net.ectobase.dev, Version=v1alpha1
-	case netv1alpha1.SchemeGroupVersion.WithKind("Container"):
-		return &applyconfigurationsnetv1alpha1.ContainerApplyConfiguration{}
-	case netv1alpha1.SchemeGroupVersion.WithKind("ContainerSpec"):
-		return &applyconfigurationsnetv1alpha1.ContainerSpecApplyConfiguration{}
-	case netv1alpha1.SchemeGroupVersion.WithKind("ContainerStatus"):
-		return &applyconfigurationsnetv1alpha1.ContainerStatusApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("EgressQoS"):
 		return &applyconfigurationsnetv1alpha1.EgressQoSApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("FirewallPolicy"):
@@ -110,16 +126,6 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &applyconfigurationsnetv1alpha1.PortStatusApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("RateLimit"):
 		return &applyconfigurationsnetv1alpha1.RateLimitApplyConfiguration{}
-	case netv1alpha1.SchemeGroupVersion.WithKind("VirtualMachine"):
-		return &applyconfigurationsnetv1alpha1.VirtualMachineApplyConfiguration{}
-	case netv1alpha1.SchemeGroupVersion.WithKind("VirtualMachineSpec"):
-		return &applyconfigurationsnetv1alpha1.VirtualMachineSpecApplyConfiguration{}
-	case netv1alpha1.SchemeGroupVersion.WithKind("VirtualMachineStatus"):
-		return &applyconfigurationsnetv1alpha1.VirtualMachineStatusApplyConfiguration{}
-	case netv1alpha1.SchemeGroupVersion.WithKind("VMAntiAffinity"):
-		return &applyconfigurationsnetv1alpha1.VMAntiAffinityApplyConfiguration{}
-	case netv1alpha1.SchemeGroupVersion.WithKind("VMPlacement"):
-		return &applyconfigurationsnetv1alpha1.VMPlacementApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("Volume"):
 		return &applyconfigurationsnetv1alpha1.VolumeApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("VolumeSpec"):

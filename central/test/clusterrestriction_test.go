@@ -20,8 +20,9 @@ import (
 
 	kitenvtest "go.opendefense.cloud/kit/envtest"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netinstall "github.com/trevex/ectobase/api/net/install"
+	computeinstall "github.com/trevex/ectobase/api/compute/install"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 )
@@ -54,6 +55,7 @@ func TestClusterRestriction_BrokerImpersonation(t *testing.T) {
 	scheme := runtime.NewScheme()
 	platforminstall.Install(scheme)
 	netinstall.Install(scheme)
+	computeinstall.Install(scheme)
 	// rbac.authorization.k8s.io (via client-go scheme) is needed to create the
 	// ClusterRole/ClusterRoleBinding that authorizes the impersonated broker.
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
@@ -160,9 +162,9 @@ func TestClusterRestriction_BrokerImpersonation(t *testing.T) {
 	// exercises the reflection-based Spec.ClusterName extraction, which works on the
 	// INTERNAL (json-tagless) net type the apiserver hands to admission — the earlier
 	// ToUnstructured+json-path approach failed open here (regression guard).
-	vmBroker := &netv1.VirtualMachine{
+	vmBroker := &computev1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "vm-broker"},
-		Spec:       netv1.VirtualMachineSpec{ClusterName: "c1"},
+		Spec:       computev1.VirtualMachineSpec{ClusterName: "c1"},
 	}
 	err = brokerClient.Create(ctx, vmBroker)
 	if err == nil {
@@ -177,9 +179,9 @@ func TestClusterRestriction_BrokerImpersonation(t *testing.T) {
 	t.Logf("(deny spec.clusterName): PASS (%v)", err)
 
 	// (allow) admin sets spec.clusterName on a VM — unrestricted.
-	vmAdmin := &netv1.VirtualMachine{
+	vmAdmin := &computev1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "vm-admin"},
-		Spec:       netv1.VirtualMachineSpec{ClusterName: "c1"},
+		Spec:       computev1.VirtualMachineSpec{ClusterName: "c1"},
 	}
 	if err := admin.Create(ctx, vmAdmin); err != nil {
 		t.Fatalf("(allow admin spec.clusterName): expected success, got: %v", err)

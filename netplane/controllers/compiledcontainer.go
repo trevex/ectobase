@@ -9,6 +9,7 @@ import (
 	"reflect"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,7 +27,7 @@ import (
 // args, env, resources, restart policy), the cluster/node binding, and one resolved overlay interface
 // (MAC + networkName + networkInterfaceRef) per owned NetworkInterface. networkName is the multus NAD
 // name for the flowplane overlay binding (the same source CompileVM uses).
-func CompileContainer(ctr *netv1.Container, nics []netv1.NetworkInterface, networkName string) compiledv1.CompiledContainer {
+func CompileContainer(ctr *computev1.Container, nics []netv1.NetworkInterface, networkName string) compiledv1.CompiledContainer {
 	macByNIC := map[string]string{}
 	for i := range nics {
 		macByNIC[nics[i].Name] = nics[i].Spec.MAC
@@ -67,7 +68,7 @@ type CompiledContainerReconciler struct {
 }
 
 func (r *CompiledContainerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	var ctr netv1.Container
+	var ctr computev1.Container
 	if err := r.Client.Get(ctx, req.NamespacedName, &ctr); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -110,7 +111,7 @@ func (r *CompiledContainerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 func (r *CompiledContainerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("compiledcontainer").
-		For(&netv1.Container{}).
+		For(&computev1.Container{}).
 		Owns(&compiledv1.CompiledContainer{}).
 		// MAC lives in NetworkInterface.spec, so a MAC change bumps generation;
 		// GenerationChangedPredicate avoids recompiling every Container on unrelated NIC status writes
@@ -127,7 +128,7 @@ func (r *CompiledContainerReconciler) containersForNIC(ctx context.Context, obj 
 	if !ok {
 		return nil
 	}
-	var ctrs netv1.ContainerList
+	var ctrs computev1.ContainerList
 	if err := r.Client.List(ctx, &ctrs, client.InNamespace(nic.Namespace)); err != nil {
 		return nil
 	}

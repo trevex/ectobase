@@ -12,7 +12,6 @@ import (
 
 type NetV1alpha1Interface interface {
 	RESTClient() rest.Interface
-	ContainersGetter
 	FirewallPoliciesGetter
 	FloatingIPsGetter
 	LoadBalancersGetter
@@ -20,17 +19,12 @@ type NetV1alpha1Interface interface {
 	NetworkInterfacesGetter
 	VPCsGetter
 	VPCPeeringsGetter
-	VirtualMachinesGetter
 	VolumesGetter
 }
 
 // NetV1alpha1Client is used to interact with features provided by the net.ectobase.dev group.
 type NetV1alpha1Client struct {
 	restClient rest.Interface
-}
-
-func (c *NetV1alpha1Client) Containers(namespace string) ContainerInterface {
-	return newContainers(c, namespace)
 }
 
 func (c *NetV1alpha1Client) FirewallPolicies(namespace string) FirewallPolicyInterface {
@@ -59,10 +53,6 @@ func (c *NetV1alpha1Client) VPCs(namespace string) VPCInterface {
 
 func (c *NetV1alpha1Client) VPCPeerings(namespace string) VPCPeeringInterface {
 	return newVPCPeerings(c, namespace)
-}
-
-func (c *NetV1alpha1Client) VirtualMachines(namespace string) VirtualMachineInterface {
-	return newVirtualMachines(c, namespace)
 }
 
 func (c *NetV1alpha1Client) Volumes(namespace string) VolumeInterface {

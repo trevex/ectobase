@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -307,9 +308,9 @@ func TestCompile_NATFromAllocations(t *testing.T) {
 
 func TestResolvePlacement(t *testing.T) {
 	nic := &netv1.NetworkInterface{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "nic-a"}}
-	vms := []netv1.VirtualMachine{{
+	vms := []computev1.VirtualMachine{{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "vm1"},
-		Spec:       netv1.VirtualMachineSpec{ClusterName: "edge1", InterfaceRefs: []netv1.LocalObjectReference{{Name: "nic-a"}}},
+		Spec:       computev1.VirtualMachineSpec{ClusterName: "edge1", InterfaceRefs: []computev1.LocalObjectReference{{Name: "nic-a"}}},
 	}}
 	got := resolvePlacement(nic, nil, vms, "default-cluster")
 	if got.ClusterName != "edge1" || got.WorkloadID != "vm1" || got.NodeName != "" {
@@ -340,9 +341,9 @@ func TestResolvePlacement(t *testing.T) {
 	}
 	// An owning Container is the placement AUTHORITY: it wins over the VM (checked first) and pins the
 	// NodeName. nic-a is referenced by BOTH the VM (edge1) and the container (c1/n1) → container wins.
-	containers := []netv1.Container{{
+	containers := []computev1.Container{{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "ctr1"},
-		Spec:       netv1.ContainerSpec{ClusterName: "c1", NodeName: "n1", InterfaceRefs: []netv1.LocalObjectReference{{Name: "nic-a"}}},
+		Spec:       computev1.ContainerSpec{ClusterName: "c1", NodeName: "n1", InterfaceRefs: []computev1.LocalObjectReference{{Name: "nic-a"}}},
 	}}
 	got = resolvePlacement(nic, containers, vms, "default-cluster")
 	if got.ClusterName != "c1" || got.NodeName != "n1" || got.WorkloadID != "ctr1" {
@@ -382,6 +383,9 @@ func lbScheme(t *testing.T) *runtime.Scheme {
 		t.Fatal(err)
 	}
 	if err := compiledv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := computev1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
 	return s

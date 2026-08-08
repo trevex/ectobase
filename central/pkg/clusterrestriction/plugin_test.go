@@ -11,21 +11,21 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/admission"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 )
 
 // vm builds a typed VirtualMachine with the given spec.clusterName so setsClusterName
 // exercises the real ToUnstructured extraction path (not a hand-built map).
 func vm(clusterName string) runtime.Object {
-	return &netv1.VirtualMachine{
+	return &computev1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "vm1"},
-		Spec:       netv1.VirtualMachineSpec{ClusterName: clusterName},
+		Spec:       computev1.VirtualMachineSpec{ClusterName: clusterName},
 	}
 }
 
 func TestSetsClusterName(t *testing.T) {
-	gvk := schema.GroupVersionKind{Group: "net.ectobase.dev", Version: "v1alpha1", Kind: "VirtualMachine"}
-	gvr := schema.GroupVersionResource{Group: "net.ectobase.dev", Version: "v1alpha1", Resource: "virtualmachines"}
+	gvk := schema.GroupVersionKind{Group: "compute.ectobase.dev", Version: "v1alpha1", Kind: "VirtualMachine"}
+	gvr := schema.GroupVersionResource{Group: "compute.ectobase.dev", Version: "v1alpha1", Resource: "virtualmachines"}
 	mk := func(newObj, oldObj runtime.Object, op admission.Operation) admission.Attributes {
 		return admission.NewAttributesRecord(newObj, oldObj, gvk, "default", "vm1", gvr, "", op, nil, false, nil)
 	}

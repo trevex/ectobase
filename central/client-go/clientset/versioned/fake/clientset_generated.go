@@ -7,6 +7,8 @@ import (
 	clientset "github.com/trevex/ectobase/central/client-go/clientset/versioned"
 	compiledv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/compiled/v1alpha1"
 	fakecompiledv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/compiled/v1alpha1/fake"
+	computev1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/compute/v1alpha1"
+	fakecomputev1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/compute/v1alpha1/fake"
 	netv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/net/v1alpha1"
 	fakenetv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/net/v1alpha1/fake"
 	platformv1alpha1 "github.com/trevex/ectobase/central/client-go/clientset/versioned/typed/platform/v1alpha1"
@@ -127,6 +129,11 @@ var (
 // CompiledV1alpha1 retrieves the CompiledV1alpha1Client
 func (c *Clientset) CompiledV1alpha1() compiledv1alpha1.CompiledV1alpha1Interface {
 	return &fakecompiledv1alpha1.FakeCompiledV1alpha1{Fake: &c.Fake}
+}
+
+// ComputeV1alpha1 retrieves the ComputeV1alpha1Client
+func (c *Clientset) ComputeV1alpha1() computev1alpha1.ComputeV1alpha1Interface {
+	return &fakecomputev1alpha1.FakeComputeV1alpha1{Fake: &c.Fake}
 }
 
 // NetV1alpha1 retrieves the NetV1alpha1Client

@@ -3,7 +3,7 @@
 package v1alpha1
 
 import (
-	netv1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1alpha1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	labels "k8s.io/apimachinery/pkg/labels"
 	listers "k8s.io/client-go/listers"
 	cache "k8s.io/client-go/tools/cache"
@@ -14,7 +14,7 @@ import (
 type ContainerLister interface {
 	// List lists all Containers in the indexer.
 	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*netv1alpha1.Container, err error)
+	List(selector labels.Selector) (ret []*computev1alpha1.Container, err error)
 	// Containers returns an object that can list and get Containers.
 	Containers(namespace string) ContainerNamespaceLister
 	ContainerListerExpansion
@@ -22,17 +22,17 @@ type ContainerLister interface {
 
 // containerLister implements the ContainerLister interface.
 type containerLister struct {
-	listers.ResourceIndexer[*netv1alpha1.Container]
+	listers.ResourceIndexer[*computev1alpha1.Container]
 }
 
 // NewContainerLister returns a new ContainerLister.
 func NewContainerLister(indexer cache.Indexer) ContainerLister {
-	return &containerLister{listers.New[*netv1alpha1.Container](indexer, netv1alpha1.Resource("container"))}
+	return &containerLister{listers.New[*computev1alpha1.Container](indexer, computev1alpha1.Resource("container"))}
 }
 
 // Containers returns an object that can list and get Containers.
 func (s *containerLister) Containers(namespace string) ContainerNamespaceLister {
-	return containerNamespaceLister{listers.NewNamespaced[*netv1alpha1.Container](s.ResourceIndexer, namespace)}
+	return containerNamespaceLister{listers.NewNamespaced[*computev1alpha1.Container](s.ResourceIndexer, namespace)}
 }
 
 // ContainerNamespaceLister helps list and get Containers.
@@ -40,15 +40,15 @@ func (s *containerLister) Containers(namespace string) ContainerNamespaceLister 
 type ContainerNamespaceLister interface {
 	// List lists all Containers in the indexer for a given namespace.
 	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*netv1alpha1.Container, err error)
+	List(selector labels.Selector) (ret []*computev1alpha1.Container, err error)
 	// Get retrieves the Container from the indexer for a given namespace and name.
 	// Objects returned here must be treated as read-only.
-	Get(name string) (*netv1alpha1.Container, error)
+	Get(name string) (*computev1alpha1.Container, error)
 	ContainerNamespaceListerExpansion
 }
 
 // containerNamespaceLister implements the ContainerNamespaceLister
 // interface.
 type containerNamespaceLister struct {
-	listers.ResourceIndexer[*netv1alpha1.Container]
+	listers.ResourceIndexer[*computev1alpha1.Container]
 }

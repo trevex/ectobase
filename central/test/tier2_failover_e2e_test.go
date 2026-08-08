@@ -11,7 +11,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	"github.com/trevex/ectobase/central/pkg/clusterpool"
 	"github.com/trevex/ectobase/central/pkg/failover"
@@ -69,9 +69,9 @@ func TestTier2_Failover_FenceRebindRelease(t *testing.T) {
 	}
 
 	// vm1 bound to the lost poolA.
-	vm := &netv1.VirtualMachine{
+	vm := &computev1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "vm1"},
-		Spec:       netv1.VirtualMachineSpec{ClusterName: "poolA"},
+		Spec:       computev1.VirtualMachineSpec{ClusterName: "poolA"},
 	}
 	if err := c.Create(ctx, vm); err != nil {
 		t.Fatalf("create vm1: %v", err)
@@ -90,7 +90,7 @@ func TestTier2_Failover_FenceRebindRelease(t *testing.T) {
 		t.Fatalf("reconcile (fence/rebind): %v", err)
 	}
 
-	got := &netv1.VirtualMachine{}
+	got := &computev1.VirtualMachine{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm1"}, got); err != nil {
 		t.Fatalf("get vm1: %v", err)
 	}

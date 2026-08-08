@@ -2,6 +2,7 @@ package controllers
 
 import (
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -9,12 +10,12 @@ import (
 )
 
 func TestCompileVM(t *testing.T) {
-	vm := &netv1.VirtualMachine{
+	vm := &computev1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "vm1"},
-		Spec: netv1.VirtualMachineSpec{
+		Spec: computev1.VirtualMachineSpec{
 			ClusterName:   "c1",
 			Image:         "quay.io/containerdisks/fedora:41",
-			InterfaceRefs: []netv1.LocalObjectReference{{Name: "nic-a"}},
+			InterfaceRefs: []computev1.LocalObjectReference{{Name: "nic-a"}},
 			Resources:     corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}},
 		},
 	}

@@ -18,7 +18,9 @@ import (
 	kitenvtest "go.opendefense.cloud/kit/envtest"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netinstall "github.com/trevex/ectobase/api/net/install"
+	computeinstall "github.com/trevex/ectobase/api/compute/install"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
 	compiledinstall "github.com/trevex/ectobase/api/compiled/install"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
@@ -58,6 +60,7 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	platforminstall.Install(scheme)
 	netinstall.Install(scheme)
 	compiledinstall.Install(scheme)
+	computeinstall.Install(scheme)
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
 	}
@@ -164,21 +167,21 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	setVNI(nicA, 1000)
 	setVNI(nicB, 2000)
 
-	vm1 := &netv1.VirtualMachine{
+	vm1 := &computev1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "vm1"},
-		Spec: netv1.VirtualMachineSpec{
+		Spec: computev1.VirtualMachineSpec{
 			ClusterName:   "c1",
-			InterfaceRefs: []netv1.LocalObjectReference{{Name: "nic-a"}},
+			InterfaceRefs: []computev1.LocalObjectReference{{Name: "nic-a"}},
 		},
 	}
 	if err := centralClient.Create(ctx, vm1); err != nil {
 		t.Fatalf("central Create vm1: %v", err)
 	}
-	vm2 := &netv1.VirtualMachine{
+	vm2 := &computev1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "vm2"},
-		Spec: netv1.VirtualMachineSpec{
+		Spec: computev1.VirtualMachineSpec{
 			ClusterName:   "c2",
-			InterfaceRefs: []netv1.LocalObjectReference{{Name: "nic-b"}},
+			InterfaceRefs: []computev1.LocalObjectReference{{Name: "nic-b"}},
 		},
 	}
 	if err := centralClient.Create(ctx, vm2); err != nil {

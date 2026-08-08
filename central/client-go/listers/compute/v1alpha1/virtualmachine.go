@@ -3,7 +3,7 @@
 package v1alpha1
 
 import (
-	netv1alpha1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	computev1alpha1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	labels "k8s.io/apimachinery/pkg/labels"
 	listers "k8s.io/client-go/listers"
 	cache "k8s.io/client-go/tools/cache"
@@ -14,7 +14,7 @@ import (
 type VirtualMachineLister interface {
 	// List lists all VirtualMachines in the indexer.
 	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*netv1alpha1.VirtualMachine, err error)
+	List(selector labels.Selector) (ret []*computev1alpha1.VirtualMachine, err error)
 	// VirtualMachines returns an object that can list and get VirtualMachines.
 	VirtualMachines(namespace string) VirtualMachineNamespaceLister
 	VirtualMachineListerExpansion
@@ -22,17 +22,17 @@ type VirtualMachineLister interface {
 
 // virtualMachineLister implements the VirtualMachineLister interface.
 type virtualMachineLister struct {
-	listers.ResourceIndexer[*netv1alpha1.VirtualMachine]
+	listers.ResourceIndexer[*computev1alpha1.VirtualMachine]
 }
 
 // NewVirtualMachineLister returns a new VirtualMachineLister.
 func NewVirtualMachineLister(indexer cache.Indexer) VirtualMachineLister {
-	return &virtualMachineLister{listers.New[*netv1alpha1.VirtualMachine](indexer, netv1alpha1.Resource("virtualmachine"))}
+	return &virtualMachineLister{listers.New[*computev1alpha1.VirtualMachine](indexer, computev1alpha1.Resource("virtualmachine"))}
 }
 
 // VirtualMachines returns an object that can list and get VirtualMachines.
 func (s *virtualMachineLister) VirtualMachines(namespace string) VirtualMachineNamespaceLister {
-	return virtualMachineNamespaceLister{listers.NewNamespaced[*netv1alpha1.VirtualMachine](s.ResourceIndexer, namespace)}
+	return virtualMachineNamespaceLister{listers.NewNamespaced[*computev1alpha1.VirtualMachine](s.ResourceIndexer, namespace)}
 }
 
 // VirtualMachineNamespaceLister helps list and get VirtualMachines.
@@ -40,15 +40,15 @@ func (s *virtualMachineLister) VirtualMachines(namespace string) VirtualMachineN
 type VirtualMachineNamespaceLister interface {
 	// List lists all VirtualMachines in the indexer for a given namespace.
 	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*netv1alpha1.VirtualMachine, err error)
+	List(selector labels.Selector) (ret []*computev1alpha1.VirtualMachine, err error)
 	// Get retrieves the VirtualMachine from the indexer for a given namespace and name.
 	// Objects returned here must be treated as read-only.
-	Get(name string) (*netv1alpha1.VirtualMachine, error)
+	Get(name string) (*computev1alpha1.VirtualMachine, error)
 	VirtualMachineNamespaceListerExpansion
 }
 
 // virtualMachineNamespaceLister implements the VirtualMachineNamespaceLister
 // interface.
 type virtualMachineNamespaceLister struct {
-	listers.ResourceIndexer[*netv1alpha1.VirtualMachine]
+	listers.ResourceIndexer[*computev1alpha1.VirtualMachine]
 }
