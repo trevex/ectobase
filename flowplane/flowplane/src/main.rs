@@ -179,10 +179,13 @@ enum Cmd {
     /// loopback) and print it, then exit. No datapath, no root — reads `ip -6 -o addr`. Used by the
     /// containerlab IPv6-fabric e2e to assert the inferred /64 matches the fabric-announced dummy0.
     InferUnderlay,
-    /// Attach the trivial xdp_pass program to an interface (redirect-target enabler), then idle.
+    /// Attach the trivial xdp_pass program to one or more interfaces (redirect-target enabler), then
+    /// idle. Repeatable `--iface`: an XDP_REDIRECT *into* a veth only lands if the receiving peer has
+    /// an XDP program, so the kind fabric attaches this on the switch veths that face the native-XDP
+    /// WAN edge.
     Pass {
-        #[arg(long)]
-        iface: String,
+        #[arg(long = "iface", required = true)]
+        ifaces: Vec<String>,
     },
     /// Attach xdp_inspect to an interface and print the first packet bytes every 500 ms.
     Inspect {
@@ -1383,10 +1386,18 @@ async fn main() -> anyhow::Result<()> {
             let _ = &gateway_mac; // consumed by the encap LOCAL branch when --uplink is set
             tokio::signal::ctrl_c().await?;
         }
-        Cmd::Pass { iface } => {
+        Cmd::Pass { ifaces } => {
             let mut ebpf = loader::load_ebpf(&loader::ephemeral_pin_dir()?)?;
-            loader::attach_xdp(&mut ebpf, "xdp_pass", &iface)?;
-            println!("attached xdp_pass to {iface}; ctrl-c to detach");
+            // Load (verify) once on the first iface, then attach the same program to the rest.
+            for (i, iface) in ifaces.iter().enumerate() {
+                if i == 0 {
+                    loader::attach_xdp(&mut ebpf, "xdp_pass", iface)?;
+                } else {
+                    loader::attach_xdp_extra(&mut ebpf, "xdp_pass", iface)?;
+                }
+                println!("attached xdp_pass to {iface}");
+            }
+            println!("idling; ctrl-c to detach");
             tokio::signal::ctrl_c().await?;
         }
         Cmd::Inspect { iface } => {

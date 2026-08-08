@@ -94,6 +94,23 @@ topology:
       exec:
         - "ip -6 route del default via {{ .MgmtV6Gateway }} dev eth0"
 
+    # flowplane xdp_pass sidecar: shares the sw1 VyOS netns and attaches the trivial xdp_pass program
+    # to sw1's edge-facing veths (eth1 = edge1's LOCAL uplink, eth2 = edge2's LOCAL uplink). The WAN
+    # edge runs NATIVE XDP and XDP_REDIRECTs the encapped N/S-LB frame out its LOCAL uplink onto sw1;
+    # the kernel drops a veth-redirected frame unless the receiving peer has an XDP program — a
+    # kind/clab veth artifact (redirect to a real NIC works). Uses the flowplane image's built-in
+    # xdp_pass (`flowplane pass`), so nothing is vendored. sw2 is never a redirect target (it carries
+    # the edges' extra-uplink, an uplink_rx RECEIVE side).
+    flowplane-pass-sw1:
+      kind: linux
+      image: {{ index .Images "flowplane" }}
+      network-mode: container:clab-{{ .Name }}-sw1
+      cap-add: ["NET_ADMIN", "SYS_ADMIN", "BPF", "PERFMON", "NET_RAW"]
+      binds:
+        - /sys/fs/bpf:/sys/fs/bpf
+      startup-delay: 35   # wait for sw1 (VyOS) + clab veths before attaching XDP in its netns
+      entrypoint: "flowplane pass --iface eth1 --iface eth2"
+
     # --- kind clusters: one k8s-kind lifecycle node per cluster (clab runs `kind
     # create`; the kind cluster is named after this node). The per-node kind
     # containers (<cluster>-control-plane / -worker) are declared as ext-container
