@@ -19,7 +19,7 @@ import (
 	"github.com/trevex/ectobase/central/apis/platform/install"
 	"github.com/trevex/ectobase/central/apis/platform/v1alpha1"
 	"github.com/trevex/ectobase/central/client-go/openapi"
-	"github.com/trevex/ectobase/central/internal/clusterrestriction"
+	"github.com/trevex/ectobase/central/pkg/clusterrestriction"
 )
 
 const (

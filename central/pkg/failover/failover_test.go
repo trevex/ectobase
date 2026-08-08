@@ -14,7 +14,7 @@ import (
 
 	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
-	"github.com/trevex/ectobase/central/internal/clusterpool"
+	"github.com/trevex/ectobase/central/pkg/clusterpool"
 )
 
 type okFencer struct{}

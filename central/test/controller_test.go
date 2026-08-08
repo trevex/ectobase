@@ -22,7 +22,7 @@ import (
 
 	"github.com/trevex/ectobase/central/apis/platform/install"
 	"github.com/trevex/ectobase/central/apis/platform/v1alpha1"
-	"github.com/trevex/ectobase/central/internal/clusterpool"
+	"github.com/trevex/ectobase/central/pkg/clusterpool"
 )
 
 // TestClusterPoolController_SetsPending runs the ClusterPool reconciler against

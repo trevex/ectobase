@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/trevex/ectobase/central/internal/failover"
+	"github.com/trevex/ectobase/central/pkg/failover"
 )
 
 // NetworkFenceGVR is the csi-addons NetworkFence group/version (cluster-scoped CR).

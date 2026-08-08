@@ -17,8 +17,8 @@ import (
 
 	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/central/apis/platform/v1alpha1"
-	"github.com/trevex/ectobase/central/internal/clusterpool"
-	"github.com/trevex/ectobase/central/internal/failover"
+	"github.com/trevex/ectobase/central/pkg/clusterpool"
+	"github.com/trevex/ectobase/central/pkg/failover"
 )
 
 // confirmingFencer confirms every fence (storage + network) for any /64 — the

@@ -27,10 +27,10 @@ import (
 
 	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 	"github.com/trevex/ectobase/central/apis/platform/install"
-	"github.com/trevex/ectobase/central/internal/clusterpool"
-	"github.com/trevex/ectobase/central/internal/failover"
-	"github.com/trevex/ectobase/central/internal/fence"
-	"github.com/trevex/ectobase/central/internal/scheduler"
+	"github.com/trevex/ectobase/central/pkg/clusterpool"
+	"github.com/trevex/ectobase/central/pkg/failover"
+	"github.com/trevex/ectobase/central/pkg/fence"
+	"github.com/trevex/ectobase/central/pkg/scheduler"
 	routebusv1 "github.com/trevex/ectobase/netplane/gen/routebusv1"
 )
 

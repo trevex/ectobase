@@ -35,7 +35,7 @@ import (
 
 	netv1 "github.com/trevex/ectobase/api/v1alpha1"
 	platforminstall "github.com/trevex/ectobase/central/apis/platform/install"
-	"github.com/trevex/ectobase/central/internal/broker"
+	"github.com/trevex/ectobase/central/pkg/broker"
 )
 
 func main() {
