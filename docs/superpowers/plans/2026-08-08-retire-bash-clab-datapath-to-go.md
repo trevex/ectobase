@@ -997,12 +997,8 @@ cd /home/nik/Development/ironcore-net-xdp
 ls -la test/e2e/
 find test/e2e -name '*.go' | xargs -r grep -l "package e2e"
 ```
-- The `cmd/`, `netprobe`, `tap-dhcp-probe*` binaries, and `fixtures/` are **kept** (the probes' *sources* live under `test/e2e/cmd/...`? verify — if the probe sources are actually at repo-root `cmd/tap-dhcp-probe` and `cmd/netprobe`, then the `test/e2e/netprobe` / `tap-dhcp-probe*` are stale build artifacts and can be removed; the Phase 2 tests build from repo-root `./cmd/...`). Confirm where the probe sources live:
-  ```bash
-  ls cmd/tap-dhcp-probe cmd/netprobe 2>/dev/null && echo "REPO-ROOT probes exist (Phase 2 builds these)"
-  ls test/e2e/cmd 2>/dev/null
-  ```
-- If **no** `package e2e` `.go` files remain, delete the leftover stale binaries (`git rm test/e2e/netprobe test/e2e/tap-dhcp-probe test/e2e/tap-dhcp-probe.bin` if tracked) and, if `test/e2e/go.mod` exists only to serve the deleted tests, evaluate removing the empty package. **Do NOT delete `test/e2e/cmd/` or `test/e2e/fixtures/` if the repo-root `cmd/` probes actually re-export or depend on them** — verify with `go build ./...` before removing anything ambiguous.
+- **CONFIRMED (Task 2.2):** the probe SOURCES live at `test/e2e/cmd/tap-dhcp-probe` and `test/e2e/cmd/netprobe` (there is NO repo-root `cmd/`). The Phase 2 `buildStaticBin` helper builds `./cmd/<pkg>` with `cmd.Dir = <repo>/test/e2e`. Therefore **`test/e2e/cmd/` AND `test/e2e/go.mod`/`go.sum` MUST be kept** — deleting them breaks every Phase 2 datapath test. `test/e2e/fixtures/` is likely still referenced too — verify with `git grep fixtures test/e2e` before touching it. Do NOT remove the `test/e2e` package/module; only remove the specific datapath `*_test.go` files + `env.go` listed above.
+- The stale prebuilt binaries `test/e2e/netprobe`, `test/e2e/tap-dhcp-probe`, `test/e2e/tap-dhcp-probe.bin` (committed artifacts, if tracked) can be `git rm`'d — the tests build fresh from source. Confirm they are not referenced (`git grep -n "e2e/netprobe\|e2e/tap-dhcp-probe"`) before removing.
 - If `package e2e` `.go` files DO remain (e.g. a helper used elsewhere), leave the package and just ensure it builds.
 
 - [ ] **Step 4: Verify the build across the affected modules**
