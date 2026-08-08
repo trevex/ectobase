@@ -96,12 +96,12 @@ func cmdAdd(args *skel.CmdArgs) error {
 		return err
 	}
 
-	// Resolve overlay {vni, ips} from the NetworkInterface + its VPC.
+	// Resolve overlay {vni, ips, mac} from the broker-synced CompiledNIC (central policy).
 	cl, err := newK8sClient(conf.Kubeconfig)
 	if err != nil {
 		return err
 	}
-	res, err := resolve(ctx, cl, niNS, niName)
+	res, err := resolveCompiledNIC(ctx, cl, niNS, niName)
 	if err != nil {
 		return err
 	}

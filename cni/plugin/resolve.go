@@ -19,32 +19,24 @@ type resolved struct {
 	MAC string // the interface L2 address (set for VMs; empty = dataplane derives)
 }
 
-// resolve reads the NetworkInterface <ns>/<name> and, via its VPCRef, the VPC's
-// effective VNI. It returns the overlay VNI plus the interface's user-specified
-// overlay IPs and MAC. It is kept pure (client.Client injected) so it unit-tests
-// against a controller-runtime fake client.
-func resolve(ctx context.Context, c client.Client, ns, name string) (resolved, error) {
-	var nic v1alpha1.NetworkInterface
-	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &nic); err != nil {
-		return resolved{}, fmt.Errorf("get NetworkInterface %s/%s: %w", ns, name, err)
+// resolveCompiledNIC reads the broker-synced CompiledNIC (central policy) for the
+// NetworkInterface <ns>/<name> and returns the overlay {vni, ips, mac}. The compiler
+// names the CompiledNIC "<ns>-<nic>" in the NIC's namespace. The CNI reads THIS lowered
+// object — not the raw NetworkInterface + VPC — so the compute cluster never needs the
+// source CRDs. It is kept pure (client.Client injected) so it unit-tests against a
+// controller-runtime fake client.
+func resolveCompiledNIC(ctx context.Context, c client.Client, ns, name string) (resolved, error) {
+	compiledName := ns + "-" + name
+	var cn v1alpha1.CompiledNIC
+	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: compiledName}, &cn); err != nil {
+		return resolved{}, fmt.Errorf("get CompiledNIC %s/%s (not compiled/synced yet?): %w", ns, compiledName, err)
 	}
 
-	vpcName := nic.Spec.VPCRef.Name
-	if vpcName == "" {
-		return resolved{}, fmt.Errorf("NetworkInterface %s/%s has an empty vpcRef.name", ns, name)
+	// VNI==0 means the object exists but has not been fully compiled/synced (or the VPC
+	// has no allocated VNI yet). Fail clearly so the kubelet retries CNI ADD.
+	if cn.Spec.VNI == 0 {
+		return resolved{}, fmt.Errorf("CompiledNIC %s/%s has no VNI (spec.vni is 0) — not compiled/synced yet", ns, compiledName)
 	}
 
-	// VPCRef is a same-namespace LocalObjectReference, and VPC is namespaced — get it in the
-	// NetworkInterface's namespace (a bare name would fail "empty namespace ... resource name").
-	var vpc v1alpha1.VPC
-	if err := c.Get(ctx, types.NamespacedName{Namespace: ns, Name: vpcName}, &vpc); err != nil {
-		return resolved{}, fmt.Errorf("get VPC %s/%s: %w", ns, vpcName, err)
-	}
-
-	vni := vpc.Status.VNI
-	if vni == 0 {
-		return resolved{}, fmt.Errorf("VPC %s has no allocated VNI (status.vni is 0)", vpcName)
-	}
-
-	return resolved{VNI: uint32(vni), IPs: nic.Spec.IPs, MAC: nic.Spec.MAC}, nil
+	return resolved{VNI: uint32(cn.Spec.VNI), IPs: cn.Spec.OverlayIPs, MAC: cn.Spec.MAC}, nil
 }

@@ -55,7 +55,8 @@ func parseCNIArgs(cniArgs string) podArgs {
 
 // newK8sClient builds a controller-runtime client from an on-node kubeconfig
 // (the SA-token kubeconfig dropped by the CNI-installer DaemonSet). The scheme
-// carries our net.ectobase.dev/v1alpha1 CRDs so resolve() can GET them.
+// carries our net.ectobase.dev/v1alpha1 CRDs so resolveCompiledNIC() can GET the
+// CompiledNIC.
 func newK8sClient(kubeconfigPath string) (client.Client, error) {
 	cfg, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
 	if err != nil {
