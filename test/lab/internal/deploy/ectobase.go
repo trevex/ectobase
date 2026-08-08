@@ -437,7 +437,7 @@ kind: ClusterRole
 metadata:
   name: ectobase-broker
 rules:
-- apiGroups: ["net.ectobase.dev"]
+- apiGroups: ["compiled.ectobase.dev"]
   resources: ["compilednics", "compiledvms", "compiledvolumeattachments", "compiledcontainers"]
   verbs: ["get", "list", "watch"]
 - apiGroups: ["platform.ectobase.dev"]
