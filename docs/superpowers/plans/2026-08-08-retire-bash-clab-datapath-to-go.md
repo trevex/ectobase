@@ -780,14 +780,21 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 The LB API: `AddLbVip{id, vip, vni, ...}` then `AddLbBackend{id, backend_underlay}` (rebuilds Maglev). `vni=0` is the WAN-edge external LB (wan_rx Maglev — needs a flowplane edge, which the kind lab lacks). So this test targets the **intra-fabric** LB: a VIP inside the overlay VNI with two backends on two compute nodes, and asserts traffic to the VIP reaches more than one backend (Maglev distribution) OR at minimum that the VIP is programmed and forwards to a backend.
 
-- [ ] **Step 1: Inspect the exact LB request fields before writing**
+- [ ] **Step 1: The exact LB request fields (confirmed from the proto)**
 
-Read the proto so the JSON matches:
-```bash
-cd /home/nik/Development/ironcore-net-xdp
-sed -n '60,120p' api/proto/dataplane/v1/dataplane.proto
+`api/proto/dataplane/v1/dataplane.proto` defines:
+```proto
+message AddLbVipRequest {
+  string id = 1;                 // stable LB id
+  uint32 vni = 2;                // overlay VNI; 0 for the WAN edge
+  string vip = 3;                // the public VIP (IPv4 or IPv6)
+  string lb_underlay = 4;        // the LB's own underlay /128 (anycast)
+  repeated PortProto ports = 5;  // the LB services  (PortProto{ uint32 port; uint32 proto; })
+}
+message AddLbBackendRequest { string id = 1; string backend_underlay = 2; }
+message DelLbVipRequest { string id = 1; }
 ```
-Note the exact field names/types of `AddLbVipRequest` (id, vip, vni, port?, proto?) and `AddLbBackendRequest` (id, backend underlay field name). Build the JSON bodies from the ACTUAL field names — do not assume.
+So the AddLbVip JSON is `{"id":..,"vni":..,"vip":..,"lb_underlay":..,"ports":[{"port":..,"proto":6}]}` — `lb_underlay` and `ports` are REQUIRED (the skeleton below reflects this). `lb_underlay` is the LB's own anycast /128; for this intra-overlay smoke, use the client node's underlay /128 (the LB is co-located on the client node) — resolve it via a throwaway `attachGuest` on the client node, or reuse the client endpoint's own underlay. Confirm the datapath's expectation against the LB serve path (grep `AddLbVip`/`lb_underlay` in the flowplane Rust source) while diagnosing.
 
 - [ ] **Step 2: Write the test (with a built-in skip path)**
 
@@ -845,6 +852,10 @@ func TestLbDistributeSmoke(t *testing.T) {
 	clientContainer := nodeContainer(cfg, clientNode)
 	_ = attachGuest(t, ctx, cfg, clientNode, lbClient, []string{lbClientIP}, lbClientMAC)
 	addFwEgressAllow(t, ctx, clientContainer, lbClient)
+	// The LB's own anycast underlay (co-located on the client node): reuse backendA's
+	// underlay (ulA is on the client node). If the datapath requires a distinct LB
+	// anycast /128, attach a throwaway endpoint on the client node for it instead.
+	lbUnderlay := ulA
 	t.Cleanup(func() {
 		for id, n := range map[string]string{"lbbe-a": nodeContainer(cfg, backendA), "lbbe-b": nodeContainer(cfg, backendB), lbClient: clientContainer} {
 			_, _ = dataplaneGRPC(t, ctx, n, "DetachInterface", fmt.Sprintf(`{"interface_id":%q}`, id))
@@ -853,11 +864,14 @@ func TestLbDistributeSmoke(t *testing.T) {
 
 	// 3. Register the VIP + both backends on the client node's dataplane.
 	//    Field names per api/proto/dataplane/v1/dataplane.proto (confirmed in Step 1).
-	vipBody := fmt.Sprintf(`{"id":%q,"vip":%q,"vni":%d}`, lbVIPID, lbVIP, overlayVNI) // ADJUST fields
+	//    lb_underlay = the LB's own anycast /128 (co-located on the client node — use a
+	//    client-node underlay); ports = the LB services (TCP/80 here).
+	vipBody := fmt.Sprintf(`{"id":%q,"vni":%d,"vip":%q,"lb_underlay":%q,"ports":[{"port":80,"proto":6}]}`,
+		lbVIPID, overlayVNI, lbVIP, lbUnderlay)
 	out, err := dataplaneGRPC(t, ctx, clientContainer, "AddLbVip", vipBody)
 	require.NoError(t, err, "AddLbVip: %s", out)
 	for _, ul := range []string{ulA, ulB} {
-		beBody := fmt.Sprintf(`{"id":%q,"backend_underlay":%q}`, lbVIPID, ul) // ADJUST field name
+		beBody := fmt.Sprintf(`{"id":%q,"backend_underlay":%q}`, lbVIPID, ul)
 		out, err := dataplaneGRPC(t, ctx, clientContainer, "AddLbBackend", beBody)
 		require.NoError(t, err, "AddLbBackend %s: %s", ul, out)
 	}
