@@ -16,10 +16,6 @@ __pycache__/
 /docs/book
 flowplane/nfkit/tests/data/l2fwd_out.pcap
 
-# rendered from *.tmpl (named-placeholder substitution at run time) — not checked in
-test/e2e/fixtures/kubevirt/vpc-nics.yaml
-test/e2e/fixtures/kubevirt/vmi.yaml
-
 # Go binaries built by go build ./cmd/... in test/e2e (artifact, not source)
 test/e2e/tap-dhcp-probe.bin
 test/e2e/tap-dhcp-probe
