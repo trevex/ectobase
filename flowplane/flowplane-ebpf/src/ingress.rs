@@ -113,13 +113,27 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
     }
     let nexthdr = unsafe { *p.add(ETH_LEN + 6) };
     if nexthdr == crate::parse::IPPROTO_IPV6 {
-        // Inner is IPv6: TAIL-CALL the dedicated xdp_uplink_v6 program (fresh 512B stack). The v6
-        // firewall + conntrack (CtKey6/CtEntry/FwRule6) overflow uplink_rx's own 408B frame when run
-        // inline. The tail-call RESETS the stack; xdp_uplink_v6 runs the v6 path with its own budget.
-        // We deliberately do NOT fall back to an inline `v6_uplink_rx(ctx)` here: a static call would
-        // pull the v6 fw/ct frames back onto uplink_rx's combined stack (the verifier sums all
-        // statically-reachable calls, tail-call reset notwithstanding) — the very overflow this split
-        // fixes. Mirrors the tc egress split (tc.rs), which likewise passes-through on tail-call miss.
+        // Inner is IPv6. FIRST handle the WAN-edge local-deliver case HERE (in try_uplink_rx's own
+        // stack budget): a v6-in-v6 packet whose outer dst is the edge's local-deliver underlay — e.g.
+        // a DSR return (src=VIP) heading back to the WAN client, or a v6 guest egressing to the
+        // internet — is decapped and its inner IPv6 handed to the local kernel (VyOS), which routes it
+        // out to the WAN. This CANNOT live in the v6 tail-call target (`v6_uplink_rx`): that program is
+        // already at its 512B combined-stack limit, so adding the decap+local-deliver there overflows
+        // the verifier. Only NON-local-deliver v6 frames (guest delivery) tail-call on.
+        let outer_dst =
+            unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + 24) as *const [u8; 16]) };
+        if let Some(u) = unsafe { crate::maps::UNDERLAY.get(&outer_dst) } {
+            if u.tap_ifindex == UNDERLAY_LOCAL_DELIVER {
+                return edge_local_deliver(ctx, ETH_P_IPV6);
+            }
+        }
+        // TAIL-CALL the dedicated xdp_uplink_v6 program (fresh 512B stack). The v6 firewall + conntrack
+        // (CtKey6/CtEntry/FwRule6) overflow uplink_rx's own 408B frame when run inline. The tail-call
+        // RESETS the stack; xdp_uplink_v6 runs the v6 path with its own budget. We deliberately do NOT
+        // fall back to an inline `v6_uplink_rx(ctx)` here: a static call would pull the v6 fw/ct frames
+        // back onto uplink_rx's combined stack (the verifier sums all statically-reachable calls,
+        // tail-call reset notwithstanding) — the very overflow this split fixes. Mirrors the tc egress
+        // split (tc.rs), which likewise passes-through on tail-call miss.
         let _ =
             unsafe { crate::maps::UPLINK_PROGS.tail_call(ctx, flowplane_common::UPLINK_PROG_V6) };
         // tail_call only returns on failure (slot empty / not registered) → passthrough.
@@ -140,7 +154,7 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
     // fabric->WAN packet (source hypervisor SNAT'd + encapped toward the edge) is decapped and the
     // inner IPv4 handed to the local kernel (VyOS), which routes/masquerades it to the real WAN.
     if u.tap_ifindex == UNDERLAY_LOCAL_DELIVER {
-        return edge_local_deliver(ctx);
+        return edge_local_deliver(ctx, ETH_P_IP);
     }
     // LB takes precedence: Maglev-select a backend underlay. If the backend is remote (not in
     // UNDERLAY), reforward the encapped packet directly to the backend node without decap.
@@ -344,7 +358,7 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
 /// WAN. The inner Ethernet dst is set to our uplink MAC so the kernel L3-accepts the frame on the
 /// fabric iface after PASS (src = GW_MAC, a locally-generated placeholder).
 #[inline(always)]
-fn edge_local_deliver(ctx: &XdpContext) -> Result<u32, DpErr> {
+fn edge_local_deliver(ctx: &XdpContext, ethertype: u16) -> Result<u32, DpErr> {
     if unsafe { bpf_xdp_adjust_head(ctx.ctx, IPV6_LEN as i32) } != 0 {
         return Err(DpErr::Bounds);
     }
@@ -358,7 +372,9 @@ fn edge_local_deliver(ctx: &XdpContext) -> Result<u32, DpErr> {
     unsafe {
         write6(q, &local.uplink_mac);
         write6(q.add(6), &GW_MAC);
-        core::ptr::write_unaligned(q.add(12) as *mut u16, ETH_P_IP.to_be());
+        // ethertype of the now-exposed inner packet: ETH_P_IP for a v4 inner (NAT egress →
+        // masquerade), ETH_P_IPV6 for a v6 inner (e.g. a DSR return, src=VIP, back to the WAN client).
+        core::ptr::write_unaligned(q.add(12) as *mut u16, ethertype.to_be());
     }
     Ok(xdp_action::XDP_PASS)
 }
