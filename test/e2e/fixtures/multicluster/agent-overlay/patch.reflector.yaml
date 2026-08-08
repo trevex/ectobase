@@ -10,4 +10,4 @@
 # regex-matching YAML content.
 - op: replace
   path: /spec/template/spec/containers/0/args/2
-  value: '--reflector=[${CLAB_FABRIC_REFLECTOR6}]:${CLAB_REFLECTOR_PORT}'
+  value: '--reflector=[fd00:db8:0:1::1]:1338'
