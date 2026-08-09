@@ -15,10 +15,10 @@ metadata:
   name: pod-materializer
 rules:
   # Read the broker-synced compiled inputs.
-  - apiGroups: ["net.ectobase.dev"]
+  - apiGroups: ["compiled.ectobase.dev"]
     resources: ["compiledcontainers"]
     verbs: ["get", "list", "watch"]
-  - apiGroups: ["net.ectobase.dev"]
+  - apiGroups: ["compiled.ectobase.dev"]
     resources: ["compiledcontainers/status"]
     verbs: ["get", "update", "patch"]
   # Materialize workload Pods (Owns Pod).
