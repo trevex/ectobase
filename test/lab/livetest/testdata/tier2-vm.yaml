@@ -42,7 +42,7 @@ spec:
   storageClass: ceph-rbd
   bootImage: "quay.io/containerdisks/fedora:41"
 ---
-apiVersion: net.ectobase.dev/v1alpha1
+apiVersion: compute.ectobase.dev/v1alpha1
 kind: VirtualMachine
 metadata:
   name: tier2-vm

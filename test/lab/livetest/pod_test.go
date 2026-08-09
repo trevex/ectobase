@@ -205,7 +205,7 @@ spec: {vpcRef: {name: pod-vpc}, ips: [%q], mac: %q}
 // CompiledNIC and lowers this Container to a CompiledContainer that the pod-materializer
 // turns into the real Pod. name/node are the container name and the k8s hostname.
 func containerFixture(name, cluster, node, nic string) string {
-	return fmt.Sprintf(`apiVersion: net.ectobase.dev/v1alpha1
+	return fmt.Sprintf(`apiVersion: compute.ectobase.dev/v1alpha1
 kind: Container
 metadata: {name: %s, namespace: default}
 spec:

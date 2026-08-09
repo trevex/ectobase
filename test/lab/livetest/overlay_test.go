@@ -117,12 +117,12 @@ kind: NetworkInterface
 metadata: {name: nic-c}
 spec: {vpcRef: {name: blue}, ips: [%q], nodeName: %q}
 ---
-apiVersion: net.ectobase.dev/v1alpha1
+apiVersion: compute.ectobase.dev/v1alpha1
 kind: VirtualMachine
 metadata: {name: vm-a}
 spec: {clusterName: %q, interfaceRefs: [{name: nic-a}], runStrategy: Halted}
 ---
-apiVersion: net.ectobase.dev/v1alpha1
+apiVersion: compute.ectobase.dev/v1alpha1
 kind: VirtualMachine
 metadata: {name: vm-c}
 spec: {clusterName: %q, interfaceRefs: [{name: nic-c}], runStrategy: Halted}
