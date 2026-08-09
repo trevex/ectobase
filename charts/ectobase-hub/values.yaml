@@ -1,0 +1,30 @@
+# Copyright 2026 ectobase contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# namespace is the Kubernetes namespace for hub infrastructure:
+#   hub-apiserver, hub-controller, kine, postgres, and the hub-side hub-broker identity.
+# This matches what hub/config/* applies today (the `system` namespace).
+namespace: system
+
+# agentNamespace is the Kubernetes namespace for the netplane compiler and reflector.
+# Matches what config/deploy/{controller,reflector}.yaml apply today (ectobase-system).
+agentNamespace: ectobase-system
+
+# reflectorAdmin is the address the hub-controller passes to the agents via
+# the -reflector-admin flag. Default is the fabric loopback of the control-plane node.
+reflectorAdmin: "[fd00:db8:0:1::1]:1338"
+
+# imagePullPolicy applies to all containers in the chart.
+imagePullPolicy: IfNotPresent
+
+images:
+  # hubApiserver is the hub aggregated apiserver image.
+  hubApiserver: ghcr.io/trevex/ectobase/hub-apiserver:dev
+  # hubController is the hub controller image (ClusterPool reconciler + scheduler).
+  hubController: ghcr.io/trevex/ectobase/hub-controller:dev
+  # netplane is the shared image for the netplane-controller (compiler) and reflector binaries.
+  netplane: ghcr.io/trevex/ectobase/netplane:dev
+  # kine is the etcd-v3 shim image.
+  kine: rancher/kine:v0.13.0
+  # postgres is the backing storage for kine (dev/smoke; not HA).
+  postgres: postgres:16

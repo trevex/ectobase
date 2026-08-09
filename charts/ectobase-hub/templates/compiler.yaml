@@ -1,0 +1,46 @@
+# Copyright 2026 ectobase contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The netplane compiler (netplane-controller): compiles NIC/VM/Container objects
+# into CompiledNIC/CompiledVM/CompiledContainer. Runs in agentNamespace
+# (ectobase-system) as a hostNetwork singleton on the control-plane node.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netplane-controller
+  namespace: {{ .Values.agentNamespace }}
+  labels:
+    app.kubernetes.io/name: netplane-controller
+    app.kubernetes.io/part-of: netplane
+    {{- include "ectobase-hub.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # hostNetwork singleton: never surge two pods (they'd collide on host ports). Recreate ensures the
+  # old pod is torn down before the new one starts on rollout.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: netplane-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: netplane-controller
+        app.kubernetes.io/part-of: netplane
+    spec:
+      serviceAccountName: netplane-controller
+      # The controller is a singleton reconciler writing NATGateway.Status. It
+      # runs on the control-plane node alongside the reflector so it can reach the
+      # API server without a ClusterIP (hostNetwork, same reasoning as the reflector).
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: controller
+          image: {{ .Values.images.netplane }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: ["controller"]

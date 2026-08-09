@@ -1,0 +1,143 @@
+# Copyright 2026 ectobase contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The hub aggregated apiserver (platform.ectobase.dev et al.). Stores objects in
+# kine (--etcd-servers=http://kine:2379) and self-generates a self-signed
+# serving cert on startup (apiserver-kit MaybeDefaultWithSelfSignedCerts into
+# --cert-dir, an emptyDir). Delegated authn/authz uses the pod's ServiceAccount
+# (in-cluster config).
+#
+# NOTE (dev/smoke only): the APIService (apiservice.yaml) uses
+# insecureSkipTLSVerify because the serving cert is self-signed and ephemeral.
+# Production must inject a caBundle instead.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hub-apiserver
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ectobase-hub.labels" . | nindent 4 }}
+---
+# Allow the aggregated apiserver to delegate authn/authz to the host kube-apiserver.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hub-apiserver-auth-delegator
+  labels:
+    {{- include "ectobase-hub.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: hub-apiserver
+    namespace: {{ .Values.namespace }}
+---
+# The generic apiserver runs admission informers that require broad read access;
+# for dev/smoke we grant cluster-admin. Production should scope this down.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hub-apiserver-admin
+  labels:
+    {{- include "ectobase-hub.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: hub-apiserver
+    namespace: {{ .Values.namespace }}
+---
+# Access to the extension-apiserver-authentication configmap in kube-system,
+# which carries the requestheader/client CA the aggregation layer needs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hub-apiserver-extension-auth-reader
+  namespace: kube-system
+  labels:
+    {{- include "ectobase-hub.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: hub-apiserver
+    namespace: {{ .Values.namespace }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: apiserver-service
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ectobase-hub.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: hub-apiserver
+  ports:
+    - name: https
+      port: 443
+      targetPort: 6443
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hub-apiserver
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: hub-apiserver
+    {{- include "ectobase-hub.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hub-apiserver
+  template:
+    metadata:
+      labels:
+        app: hub-apiserver
+    spec:
+      serviceAccountName: hub-apiserver
+      containers:
+        - name: apiserver
+          image: {{ .Values.images.hubApiserver }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          args:
+            - "--etcd-servers=http://kine:2379"
+            - "--secure-port=6443"
+            - "--cert-dir=/var/run/apiserver/certs"
+            - "--audit-log-path=-"
+            # The admission-policy plugins' informers watch alpha resources
+            # (Mutating/ValidatingAdmissionPolicyBinding) that this host kube does
+            # not serve, so informer-sync never completes and /readyz stays 500.
+            # We serve no admission policies here, so disable those plugins.
+            - "--disable-admission-plugins=MutatingAdmissionPolicy,ValidatingAdmissionPolicy"
+          ports:
+            - name: https
+              containerPort: 6443
+          volumeMounts:
+            - name: cert-dir
+              mountPath: /var/run/apiserver/certs
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 6443
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 6443
+              scheme: HTTPS
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: cert-dir
+          emptyDir: {}
