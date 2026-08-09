@@ -1,5 +1,6 @@
 /bin/
 /test/apiserver.local.config/
 /apiserver.local.config/
-/central-apiserver
-/central-controller
+/hub-apiserver
+/hub-controller
+/hub-broker

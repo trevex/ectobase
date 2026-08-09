@@ -25,7 +25,7 @@ Each cluster is a distinct kind cluster (own control plane + kubeconfig) on the 
   ```
   On NixOS the real setuid `sudo` is `/run/wrappers/bin/sudo` (a PATH-shadowing `sudo` breaks nested elevation).
 - **Docker with IPv6 enabled** on the clab management network (the host routes into the fabric over the mgmt net's IPv6 gateway), and the `rbd` kernel module loadable on the host (`modprobe rbd`) for Ceph.
-- **Images built** (`make lab-images` + `make image-kindnode`; ceph/frr pull from upstream when `ceph.enabled`). The central `:dev` images (`central-apiserver`/`-controller`/`-broker`) must be built too — `up` pushes local `:dev` images into the fabric mirror, it does not build them.
+- **Images built** (`make lab-images` + `make image-kindnode`; ceph/frr pull from upstream when `ceph.enabled`). The hub `:dev` images (`hub-apiserver`/`-controller`/`-broker`) must be built too — `up` pushes local `:dev` images into the fabric mirror, it does not build them.
 - **Disk headroom.** The fabric runs ~10 containers + 3 kind clusters and pulls images; keep tens of GB free. Prune co-resident stale fabrics first (`docker builder/image/volume prune`).
 
 ## Quickstart
@@ -76,7 +76,7 @@ fabric:
   nat64Prefix: 64:ff9b::/96
   registry:
     upstreams: [docker.io, ghcr.io, quay.io, registry.k8s.io, gcr.io]
-    push: [flowplane, netplane, cni, central-apiserver, central-controller, central-broker]  # :dev
+    push: [flowplane, netplane, cni, hub-apiserver, hub-controller, hub-broker]  # :dev
   ceph: { enabled: true }               # optional storage node + Tier-2 gate
   clusters:
     - { name: central, nodes: 1 }       # hosts the central apiserver + controller + reflector
