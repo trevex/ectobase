@@ -124,7 +124,10 @@ func TestPodMaterializer_CreatesPod(t *testing.T) {
 	metav1.AddToGroupVersion(scheme, schema.GroupVersion{Version: "v1"})
 
 	env := &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		CRDDirectoryPaths: []string{
+			filepath.Join("..", "..", "charts", "ectobase-pool", "crd-bases"),
+			filepath.Join("..", "..", "test", "crds"),
+		},
 		ErrorIfCRDPathMissing: true,
 	}
 	cfg, err := env.Start()

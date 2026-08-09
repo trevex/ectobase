@@ -50,10 +50,11 @@ import (
 //     kubevirt.io/v1.VirtualMachine (RerunOnFailure default, containerDisk boot,
 //     pinned-MAC interface on the flowplane-overlay multus network).
 //
-// The downstream envtest loads BOTH CRD dirs — the net CRDs (CompiledVM +
-// CompiledNIC) under config/crd/bases and the vendored KubeVirt VirtualMachine
-// CRD fixture under netplane/test/crds — and its client scheme registers BOTH
-// netv1 and kubevirtv1 so both object families (de)serialize.
+// The downstream envtest loads THREE CRD dirs — the net+compiled CRDs under
+// charts/ectobase-pool/crd-bases, the compute/storage/platform CRDs under
+// test/crds, and the vendored KubeVirt VirtualMachine CRD fixture under
+// netplane/test/crds — and its client scheme registers BOTH netv1 and kubevirtv1
+// so both object families (de)serialize.
 func TestPhase4_ScheduleCompileSyncMaterialize_E2E(t *testing.T) {
 	t.Setenv("GOWORK", "off")
 
@@ -96,11 +97,12 @@ func TestPhase4_ScheduleCompileSyncMaterialize_E2E(t *testing.T) {
 		t.Fatalf("hub client.New: %v", err)
 	}
 
-	// --- DOWNSTREAM: plain controller-runtime apiserver with BOTH the net CRDs
-	//     (CompiledVM + CompiledNIC) AND the KubeVirt VirtualMachine CRD fixture. ---
+	// --- DOWNSTREAM: plain controller-runtime apiserver with the net+compiled CRDs,
+	//     compute/storage/platform CRDs, AND the KubeVirt VirtualMachine CRD fixture. ---
 	downEnv := &envtest.Environment{
 		CRDDirectoryPaths: []string{
-			filepath.Join("..", "..", "config", "crd", "bases"),
+			filepath.Join("..", "..", "charts", "ectobase-pool", "crd-bases"),
+			filepath.Join("..", "..", "test", "crds"),
 			filepath.Join("..", "..", "netplane", "test", "crds"),
 		},
 		ErrorIfCRDPathMissing: true,

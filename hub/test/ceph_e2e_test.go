@@ -57,10 +57,11 @@ import (
 //  6. the downstream VMMaterializerReconciler turns default-vm1 into a kubevirt.io/v1
 //     VirtualMachine that boots from the vm1-boot DataVolume (NO containerDisk).
 //
-// The downstream envtest loads the net CRDs (config/crd/bases) + the vendored
-// KubeVirt VirtualMachine + CDI DataVolume CRD fixtures (netplane/test/crds), and its
-// client scheme registers netv1 + kubevirtv1 + cdiv1 so all three object families
-// (de)serialize.
+// The downstream envtest loads three CRD dirs: the net+compiled CRDs
+// (charts/ectobase-pool/crd-bases) + the compute/storage/platform CRDs (test/crds)
+// + the vendored KubeVirt VirtualMachine + CDI DataVolume CRD fixtures
+// (netplane/test/crds), and its client scheme registers netv1 + kubevirtv1 + cdiv1
+// so all three object families (de)serialize.
 func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 	t.Setenv("GOWORK", "off")
 
@@ -107,11 +108,13 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 		t.Fatalf("hub client.New: %v", err)
 	}
 
-	// --- DOWNSTREAM: plain controller-runtime apiserver with the net CRDs +
-	//     the KubeVirt VirtualMachine + CDI DataVolume CRD fixtures. ---
+	// --- DOWNSTREAM: plain controller-runtime apiserver with the net+compiled CRDs,
+	//     compute/storage/platform CRDs, AND the KubeVirt VirtualMachine + CDI DataVolume
+	//     CRD fixtures. ---
 	downEnv := &envtest.Environment{
 		CRDDirectoryPaths: []string{
-			filepath.Join("..", "..", "config", "crd", "bases"),
+			filepath.Join("..", "..", "charts", "ectobase-pool", "crd-bases"),
+			filepath.Join("..", "..", "test", "crds"),
 			filepath.Join("..", "..", "netplane", "test", "crds"),
 		},
 		ErrorIfCRDPathMissing: true,

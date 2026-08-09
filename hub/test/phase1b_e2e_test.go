@@ -93,7 +93,10 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 
 	// --- DOWNSTREAM: plain controller-runtime apiserver with the CompiledNIC CRD. ---
 	downEnv := &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		CRDDirectoryPaths: []string{
+			filepath.Join("..", "..", "charts", "ectobase-pool", "crd-bases"),
+			filepath.Join("..", "..", "test", "crds"),
+		},
 		ErrorIfCRDPathMissing: true,
 	}
 	downCfg, err := downEnv.Start()

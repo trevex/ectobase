@@ -168,7 +168,8 @@ func TestMaterializer_CreatesVM(t *testing.T) {
 
 	env := &envtest.Environment{
 		CRDDirectoryPaths: []string{
-			filepath.Join("..", "..", "config", "crd", "bases"),
+			filepath.Join("..", "..", "charts", "ectobase-pool", "crd-bases"),
+			filepath.Join("..", "..", "test", "crds"),
 			kubeVirtCRDPath(),
 		},
 		ErrorIfCRDPathMissing: true,

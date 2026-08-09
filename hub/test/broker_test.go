@@ -31,7 +31,7 @@ import (
 //   - HUB   = the kit aggregated apiserver (serves CompiledNIC with a
 //     selectable spec.clusterName field), started via kitenvtest.
 //   - DOWNSTREAM = a plain controller-runtime envtest apiserver with the
-//     CompiledNIC CRD installed from config/crd/bases.
+//     CompiledNIC CRD installed from charts/ectobase-pool/crd-bases.
 //
 // The broker is driven directly via SyncOnce (no informer/WatchListClient) so
 // the assertions are deterministic. CompiledNIC is namespaced; both apiservers
@@ -93,7 +93,10 @@ func TestBroker_Loopback(t *testing.T) {
 
 	// --- DOWNSTREAM: plain controller-runtime apiserver with the CompiledNIC CRD. ---
 	downEnv := &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		CRDDirectoryPaths: []string{
+			filepath.Join("..", "..", "charts", "ectobase-pool", "crd-bases"),
+			filepath.Join("..", "..", "test", "crds"),
+		},
 		ErrorIfCRDPathMissing: true,
 	}
 	downCfg, err := downEnv.Start()
