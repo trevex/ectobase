@@ -1,0 +1,59 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: floatingips.net.ectobase.dev
+spec:
+  group: net.ectobase.dev
+  names:
+    kind: FloatingIP
+    listKind: FloatingIPList
+    plural: floatingips
+    shortNames:
+    - fip
+    singular: floatingip
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: FloatingIP is a scaffold-only resource. Floating/movable virtual
+          IP (§3.7).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              FloatingIPSpec is the desired state of a FloatingIP.
+
+              SCAFFOLD ONLY: intentionally empty. Floating/movable virtual IP (§3.7).
+              Fleshed out in a later plan (YAGNI here).
+            type: object
+          status:
+            description: |-
+              FloatingIPStatus is the observed state of a FloatingIP.
+
+              SCAFFOLD ONLY: intentionally empty.
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

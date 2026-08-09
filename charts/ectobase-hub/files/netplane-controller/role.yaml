@@ -1,0 +1,94 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: netplane-controller
+rules:
+- apiGroups:
+  - compiled.ectobase.dev
+  resources:
+  - compiledcontainers
+  - compilednics
+  - compiledvms
+  - compiledvolumeattachments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - compiled.ectobase.dev
+  resources:
+  - compiledcontainers/status
+  - compilednics/status
+  - compiledvms/status
+  - compiledvolumeattachments/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - compute.ectobase.dev
+  resources:
+  - containers
+  - virtualmachines
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - compute.ectobase.dev
+  resources:
+  - containers/status
+  - virtualmachines/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - net.ectobase.dev
+  resources:
+  - firewallpolicies
+  - loadbalancers
+  - networkinterfaces
+  - vpcpeerings
+  - vpcs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - net.ectobase.dev
+  resources:
+  - natgateways
+  verbs:
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - net.ectobase.dev
+  resources:
+  - natgateways/status
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - net.ectobase.dev
+  resources:
+  - vpcpeerings/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - storage.ectobase.dev
+  resources:
+  - volumes
+  verbs:
+  - get
+  - list
+  - watch
