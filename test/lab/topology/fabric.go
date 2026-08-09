@@ -328,7 +328,7 @@ func Ceph(ctx context.Context, cfg *config.Config, purge bool) error {
 	// Central is the fence-executor / provisioner cluster (csi-addons controller +
 	// the ceph-csi provisioner it dials). Compute clusters run ceph-csi too so their
 	// nodes can attach RBD.
-	centralKubeconfig := p.clusterKubeconfig(centralCluster)
+	hubKubeconfig := p.clusterKubeconfig(centralCluster)
 	var clusters []deploy.ComputeCluster
 	for _, cl := range cfg.Fabric.Clusters {
 		clusters = append(clusters, deploy.ComputeCluster{
@@ -375,7 +375,7 @@ func Ceph(ctx context.Context, cfg *config.Config, purge bool) error {
 
 	// Step 3: csi-addons controller + sidecar into the central (fence executor)
 	// provisioner.
-	if err := deploy.CSIAddons(ctx, nil, centralKubeconfig, deploy.CSIAddonsVersion); err != nil {
+	if err := deploy.CSIAddons(ctx, nil, hubKubeconfig, deploy.CSIAddonsVersion); err != nil {
 		return fmt.Errorf("csi-addons on central: %w", err)
 	}
 
@@ -496,8 +496,8 @@ func deployEctobase(ctx context.Context, cfg *config.Config) error {
 	spec := deploy.EctobaseSpec{
 		RepoRoot:          root,
 		WorkDir:           filepath.Join(p.build, "deploy"),
-		CentralKubeconfig: p.clusterKubeconfig(centralCluster),
-		CentralIdentity:   dc.Nodes[0].IdentityAddr,
+		HubKubeconfig: p.clusterKubeconfig(centralCluster),
+		HubIdentity:   dc.Nodes[0].IdentityAddr,
 		ChartPath:         filepath.Join(root, "deploy/charts/ectobase"),
 		NADCRDPath:        filepath.Join(root, "test/lab/deploy/nad-crd.yaml"),
 		UnderlayWithin:    fabric.NodeAggr,

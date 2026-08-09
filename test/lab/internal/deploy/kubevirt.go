@@ -143,11 +143,11 @@ func labelNamespacePrivileged(ctx context.Context, r Runner, kubeconfig, ns stri
 //
 // It reads the current args, locates the flag index, and applies a JSON6902 replace
 // at exactly that index (composed by the pure csiClusterIDPatch helper).
-func PatchCentralCSIClusterID(ctx context.Context, r Runner, centralKubeconfig, fsid string) error {
+func PatchCentralCSIClusterID(ctx context.Context, r Runner, hubKubeconfig, fsid string) error {
 	r = runnerOf(r)
 	slog.Info("wiring the ceph fsid into hub-controller", "fsid", fsid)
 
-	out, err := r.Output(ctx, "kubectl", "--kubeconfig", centralKubeconfig,
+	out, err := r.Output(ctx, "kubectl", "--kubeconfig", hubKubeconfig,
 		"-n", "system", "get", "deploy", "hub-controller",
 		"-o", "jsonpath={.spec.template.spec.containers[0].args}")
 	if err != nil {
@@ -161,7 +161,7 @@ func PatchCentralCSIClusterID(ctx context.Context, r Runner, centralKubeconfig, 
 	if err != nil {
 		return err
 	}
-	if err := r.Run(ctx, "kubectl", "--kubeconfig", centralKubeconfig,
+	if err := r.Run(ctx, "kubectl", "--kubeconfig", hubKubeconfig,
 		"-n", "system", "patch", "deploy", "hub-controller", "--type=json", "-p", patch); err != nil {
 		return fmt.Errorf("patch hub-controller csi-cluster-id: %w", err)
 	}

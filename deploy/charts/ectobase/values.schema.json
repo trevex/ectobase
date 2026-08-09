@@ -30,7 +30,7 @@
       "properties": {
         "enabled": { "type": "boolean" },
         "clusterName": { "type": "string" },
-        "centralKubeconfigSecret": { "type": "string", "minLength": 1 }
+        "hubKubeconfigSecret": { "type": "string", "minLength": 1 }
       }
     },
     "dpdk": {

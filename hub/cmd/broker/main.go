@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Command broker runs the per-cluster broker: it watches the compiled objects
-// (CompiledNIC, CompiledVM, CompiledVolumeAttachment, CompiledContainer) in the CENTRAL aggregated
+// (CompiledNIC, CompiledVM, CompiledVolumeAttachment, CompiledContainer) in the HUB aggregated
 // apiserver (filtered by spec.clusterName) and set-reconciles them onto a
 // DOWNSTREAM cluster's apiserver.
 //
@@ -46,11 +46,11 @@ func main() {
 	os.Setenv("KUBE_FEATURE_WatchListClient", "false") //nolint:errcheck
 
 	var (
-		centralKubeconfig    string
+		hubKubeconfig        string
 		downstreamKubeconfig string
 		clusterName          string
 	)
-	flag.StringVar(&centralKubeconfig, "central-kubeconfig", "", "Path to the central aggregated-apiserver kubeconfig.")
+	flag.StringVar(&hubKubeconfig, "hub-kubeconfig", "", "Path to the hub aggregated-apiserver kubeconfig.")
 	flag.StringVar(&downstreamKubeconfig, "downstream-kubeconfig", "", "Path to the downstream cluster kubeconfig.")
 	flag.StringVar(&clusterName, "cluster-name", "", "Cluster name this broker instance serves (required).")
 	flag.Parse()
@@ -62,9 +62,9 @@ func main() {
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
 	// Build scheme covering all groups the broker touches:
-	//   - net.ectobase.dev (networking types, on central),
-	//   - compiled.ectobase.dev (CompiledNIC + CompiledVM + CompiledContainer + CompiledVolumeAttachment sync, on central),
-	//   - platform.ectobase.dev (ClusterPool lease/capacity heartbeat, on central),
+	//   - net.ectobase.dev (networking types, on hub),
+	//   - compiled.ectobase.dev (CompiledNIC + CompiledVM + CompiledContainer + CompiledVolumeAttachment sync, on hub),
+	//   - platform.ectobase.dev (ClusterPool lease/capacity heartbeat, on hub),
 	//   - core/v1 (downstream Node list for capacity reporting).
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {
@@ -79,10 +79,10 @@ func main() {
 	}
 	metav1.AddToGroupVersion(scheme, schema.GroupVersion{Version: "v1"})
 
-	// Central rest.Config — from --central-kubeconfig if given, else in-cluster/KUBECONFIG.
-	centralCfg, err := clientcmd.BuildConfigFromFlags("", centralKubeconfig)
+	// Hub rest.Config — from --hub-kubeconfig if given, else in-cluster/KUBECONFIG.
+	centralCfg, err := clientcmd.BuildConfigFromFlags("", hubKubeconfig)
 	if err != nil {
-		log.Fatalf("build central rest.Config: %v", err)
+		log.Fatalf("build hub rest.Config: %v", err)
 	}
 
 	// Downstream client — plain client.Client (no cache; broker writes here directly).
@@ -95,7 +95,7 @@ func main() {
 		log.Fatalf("build downstream client: %v", err)
 	}
 
-	// Manager on the CENTRAL config. Cache is scoped to this cluster's slice via a
+	// Manager on the HUB config. Cache is scoped to this cluster's slice via a
 	// field selector on spec.clusterName so the informer only streams the objects
 	// this broker owns — bounding both memory and apiserver watch traffic.
 	mgr, err := ctrl.NewManager(centralCfg, ctrl.Options{
@@ -142,7 +142,7 @@ func main() {
 	// Reconciler: on any CompiledNIC OR CompiledVM event, trigger a full set-reconcile
 	// of BOTH types. A full resync per event is correct here: the syncs are declarative +
 	// idempotent (derive both desired and current sets live; no in-memory diff state).
-	// The central client comes from the manager so it reads through the cache.
+	// The hub client comes from the manager so it reads through the cache.
 	r := &brokerReconciler{
 		central:     mgr.GetClient(),
 		downstream:  downstreamClient,
@@ -189,7 +189,7 @@ func main() {
 	}
 
 	// Upward status reporter: every 10s, gather the downstream fence facts (each node's
-	// /64 + each VM's running node) and stamp them into central (ClusterPool
+	// /64 + each VM's running node) and stamp them into the hub (ClusterPool
 	// NodePrefixes/NodeDrain + per-VM Placement). Separate from the lease heartbeater so
 	// a slow node/VMI list never delays the lease renewal.
 	sr := &statusReporter{
@@ -207,7 +207,7 @@ func main() {
 	}
 }
 
-// statusReporter periodically reports this pool's fence facts upward to central via
+// statusReporter periodically reports this pool's fence facts upward to the hub via
 // Broker.ReportStatus. It gathers the (fuzzy-sourced) node /64 prefixes + VM->node
 // map from the downstream cluster, keeping that gathering out of the clean, unit-
 // tested ReportStatus seam.
@@ -270,7 +270,7 @@ func (s *statusReporter) gatherNodes(ctx context.Context) ([]broker.NodeFact, er
 
 // gatherVMNodes maps each downstream KubeVirt VirtualMachineInstance's
 // "namespace/name" -> the node it runs on (VMI.status.nodeName). Read via unstructured
-// so central need not import the heavy kubevirt.io/api module. Best-effort: if the VMI
+// so the hub need not import the heavy kubevirt.io/api module. Best-effort: if the VMI
 // CRD is absent (no KubeVirt on the downstream) it returns an empty map, and
 // ReportStatus still stamps the node prefixes + an all-drained NodeDrain.
 func (s *statusReporter) gatherVMNodes(ctx context.Context) map[string]string {

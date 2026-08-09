@@ -158,11 +158,11 @@ subjects:
     namespace: ectobase-system
 {{- if .Values.broker.enabled }}
 ---
-# The per-cluster broker (kubelet-analog) syncs compiled objects from central down into
+# The per-cluster broker (kubelet-analog) syncs compiled objects from the hub down into
 # THIS downstream cluster's compiled.ectobase.dev CRDs (create/update/patch/delete + GC), reads
-# Nodes for underlay/prefix reporting, and reads VMIs for VM lifecycle status. Central-side
-# credentials come from a separate mounted kubeconfig (broker.centralKubeconfigSecret); this
-# RBAC is only the downstream (in-cluster) half. Central-side RBAC is minted by the e2e token.
+# Nodes for underlay/prefix reporting, and reads VMIs for VM lifecycle status. Hub-side
+# credentials come from a separate mounted kubeconfig (broker.hubKubeconfigSecret); this
+# RBAC is only the downstream (in-cluster) half. Hub-side RBAC is minted by the e2e token.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

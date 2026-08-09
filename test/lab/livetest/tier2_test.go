@@ -80,7 +80,7 @@ func TestTier2Failover(t *testing.T) {
 	}
 
 	// --- Phase 2: apply fixture + Ready VPC -----------------------------------------
-	require.NoError(t, applyCentral(ctx, cfg, readFixture(t, "tier2-vm.yaml")), "apply tier2 fixture to central")
+	require.NoError(t, applyHub(ctx, cfg, readFixture(t, "tier2-vm.yaml")), "apply tier2 fixture to central")
 	patchVNIReady(t, ctx, cfg, "vpcs.net.ectobase.dev", "blue")
 
 	// Best-effort teardown of the fixture regardless of outcome (delete by name; the

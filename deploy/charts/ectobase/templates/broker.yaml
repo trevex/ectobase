@@ -34,13 +34,13 @@ spec:
           command: ["broker"]
           args:
             - "--cluster-name={{ .Values.broker.clusterName }}"
-            - "--central-kubeconfig=/secrets/central/kubeconfig"
+            - "--hub-kubeconfig=/secrets/hub/kubeconfig"
           volumeMounts:
-            - name: central-kubeconfig
-              mountPath: /secrets/central
+            - name: hub-kubeconfig
+              mountPath: /secrets/hub
               readOnly: true
       volumes:
-        - name: central-kubeconfig
+        - name: hub-kubeconfig
           secret:
-            secretName: {{ .Values.broker.centralKubeconfigSecret }}
+            secretName: {{ .Values.broker.hubKubeconfigSecret }}
 {{- end }}

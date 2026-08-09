@@ -1,4 +1,4 @@
-// Command controller runs the central control-plane reconcilers: it watches
+// Command controller runs the hub control-plane reconcilers: it watches
 // NATGateway and NetworkInterface objects and writes deterministic
 // (public-IP, port-block) allocations to NATGateway.Status.Allocations; and
 // watches NetworkInterfaces + NetworkPolicies to write CompiledNIC objects.
@@ -25,16 +25,16 @@ import (
 
 func main() {
 	// CRITICAL: disable client-go streaming list-watch before any client/manager construction.
-	// This controller now targets the central aggregated apiserver, which does not support the
+	// This controller now targets the hub aggregated apiserver, which does not support the
 	// client-go WatchList; without this flag the informer stalls silently and no events are delivered.
 	os.Setenv("KUBE_FEATURE_WatchListClient", "false") //nolint:errcheck
 
 	var (
-		centralKubeconfig string
-		clusterName       string
-		networkName       string
+		hubKubeconfig string
+		clusterName   string
+		networkName   string
 	)
-	flag.StringVar(&centralKubeconfig, "central-kubeconfig", "", "Path to the central aggregated-apiserver kubeconfig (falls back to in-cluster/KUBECONFIG when empty).")
+	flag.StringVar(&hubKubeconfig, "hub-kubeconfig", "", "Path to the hub aggregated-apiserver kubeconfig (falls back to in-cluster/KUBECONFIG when empty).")
 	flag.StringVar(&clusterName, "cluster-name", "", "Default cluster binding stamped onto CompiledNICs whose NIC has no owning VirtualMachine.")
 	flag.StringVar(&networkName, "network-name", "flowplane-overlay", "Multus NetworkAttachmentDefinition name for the flowplane overlay binding stamped onto CompiledVMs.")
 	flag.Parse()
@@ -53,12 +53,12 @@ func main() {
 		log.Fatalf("add storage scheme: %v", err)
 	}
 
-	// Build the rest.Config from --central-kubeconfig if given, else fall back to the
+	// Build the rest.Config from --hub-kubeconfig if given, else fall back to the
 	// controller-runtime default (in-cluster, then --kubeconfig / KUBECONFIG).
 	var cfg *rest.Config
 	var err error
-	if centralKubeconfig != "" {
-		cfg, err = clientcmd.BuildConfigFromFlags("", centralKubeconfig)
+	if hubKubeconfig != "" {
+		cfg, err = clientcmd.BuildConfigFromFlags("", hubKubeconfig)
 	} else {
 		cfg, err = ctrl.GetConfig()
 	}

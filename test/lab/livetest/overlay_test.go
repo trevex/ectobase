@@ -53,7 +53,7 @@ func TestCrossClusterOverlayPing(t *testing.T) {
 
 	// 1. VPC + two NICs (each pinned to a node via spec.nodeName) + two halted anchor
 	//    VMs (which stamp CompiledNIC.clusterName). Applied to central.
-	require.NoError(t, applyCentral(ctx, cfg, overlayFixture(nodeA, nodeC)))
+	require.NoError(t, applyHub(ctx, cfg, overlayFixture(nodeA, nodeC)))
 	// The compiler gates on a Ready VPC with a vni; mark VPC + both NICs Ready.
 	patchVNIReady(t, ctx, cfg, "vpcs.net.ectobase.dev", "blue")
 	patchVNIReady(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", "nic-a")
@@ -134,8 +134,8 @@ spec: {clusterName: %q, interfaceRefs: [{name: nic-c}], runStrategy: Halted}
 // container name (<cluster>-control-plane), not <cluster>-<index>.
 func nodeK8sName(n config.DerivedNode) string { return n.KindContainer() }
 
-// applyCentral applies a multi-doc YAML to central via `kubectl apply -f -`.
-func applyCentral(ctx context.Context, cfg *config.Config, yaml string) error {
+// applyHub applies a multi-doc YAML to the hub cluster via `kubectl apply -f -`.
+func applyHub(ctx context.Context, cfg *config.Config, yaml string) error {
 	return exec.SudoStdin(ctx, yaml,
 		"kubectl", "--kubeconfig", kubeconfigPath(cfg, "central"), "apply", "-f", "-")
 }
