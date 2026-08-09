@@ -36,6 +36,18 @@
           ln -s ${pkgs.kubectl}/bin/kubectl $out/bin/kubectl
         '';
 
+        # helm-unittest nix package ships a single binary named `untt`, but the upstream
+        # plugin.yaml uses platform-specific names (untt-linux-amd64, untt-macos-arm64, …).
+        # Create a wrapper derivation that copies the plugin dir and adds the required symlink.
+        helm-unittest-fixed = pkgs.runCommand "helm-unittest-fixed"
+          { src = pkgs.kubernetes-helmPlugins.helm-unittest; }
+          ''
+            mkdir -p $out
+            cp -r $src/helm-unittest $out/helm-unittest
+            chmod -R u+w $out/helm-unittest
+            ln -sf $out/helm-unittest/untt $out/helm-unittest/untt-linux-amd64
+          '';
+
         # Rust is managed entirely by rustup (community-standard for aya/aya-build), pinned
         # via rust-toolchain.toml to nightly-2026-01-15 (LLVM 21) to match nixpkgs bpf-linker.
         # The pre-commit rustfmt/clippy hooks therefore run through rustup too (system hooks
@@ -122,7 +134,7 @@
             # `nix develop` (Cilium installs via the pinned helm chart — no cilium-cli needed).
             pkgs.kind
             pkgs.containerlab
-            pkgs.kubernetes-helm
+            (pkgs.wrapHelm pkgs.kubernetes-helm { plugins = [ helm-unittest-fixed ]; })
             pkgs.gettext # provides envsubst for fixture/kind-config templating
             pkgs.socat
             pkgs.gnumake

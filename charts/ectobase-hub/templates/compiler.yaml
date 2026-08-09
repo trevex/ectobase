@@ -12,7 +12,6 @@ metadata:
   namespace: {{ .Values.agentNamespace }}
   labels:
     app.kubernetes.io/name: netplane-controller
-    app.kubernetes.io/part-of: netplane
     {{- include "ectobase-hub.labels" . | nindent 4 }}
 spec:
   replicas: 1
@@ -27,7 +26,6 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: netplane-controller
-        app.kubernetes.io/part-of: netplane
     spec:
       serviceAccountName: netplane-controller
       # The controller is a singleton reconciler writing NATGateway.Status. It

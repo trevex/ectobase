@@ -1,0 +1,813 @@
+renders the hub control plane:
+  1: |
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: hub-apiserver
+      namespace: system
+  2: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: hub-apiserver-auth-delegator
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: system:auth-delegator
+    subjects:
+      - kind: ServiceAccount
+        name: hub-apiserver
+        namespace: system
+  3: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: hub-apiserver-admin
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: cluster-admin
+    subjects:
+      - kind: ServiceAccount
+        name: hub-apiserver
+        namespace: system
+  4: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: hub-apiserver-extension-auth-reader
+      namespace: kube-system
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: extension-apiserver-authentication-reader
+    subjects:
+      - kind: ServiceAccount
+        name: hub-apiserver
+        namespace: system
+  5: |
+    apiVersion: v1
+    kind: Service
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: apiserver-service
+      namespace: system
+    spec:
+      ports:
+        - name: https
+          port: 443
+          targetPort: 6443
+      selector:
+        app: hub-apiserver
+  6: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        app: hub-apiserver
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: hub-apiserver
+      namespace: system
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: hub-apiserver
+      template:
+        metadata:
+          labels:
+            app: hub-apiserver
+        spec:
+          containers:
+            - args:
+                - --etcd-servers=http://kine:2379
+                - --secure-port=6443
+                - --cert-dir=/var/run/apiserver/certs
+                - --audit-log-path=-
+                - --disable-admission-plugins=MutatingAdmissionPolicy,ValidatingAdmissionPolicy
+              image: ghcr.io/trevex/ectobase/hub-apiserver:dev
+              imagePullPolicy: IfNotPresent
+              livenessProbe:
+                httpGet:
+                  path: /livez
+                  port: 6443
+                  scheme: HTTPS
+                initialDelaySeconds: 15
+                periodSeconds: 10
+              name: apiserver
+              ports:
+                - containerPort: 6443
+                  name: https
+              readinessProbe:
+                httpGet:
+                  path: /readyz
+                  port: 6443
+                  scheme: HTTPS
+                initialDelaySeconds: 5
+                periodSeconds: 5
+              volumeMounts:
+                - mountPath: /var/run/apiserver/certs
+                  name: cert-dir
+          serviceAccountName: hub-apiserver
+          volumes:
+            - emptyDir: {}
+              name: cert-dir
+  7: |
+    apiVersion: apiregistration.k8s.io/v1
+    kind: APIService
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: v1alpha1.platform.ectobase.dev
+    spec:
+      group: platform.ectobase.dev
+      groupPriorityMinimum: 2000
+      insecureSkipTLSVerify: true
+      service:
+        name: apiserver-service
+        namespace: system
+        port: 443
+      version: v1alpha1
+      versionPriority: 100
+  8: |
+    apiVersion: apiregistration.k8s.io/v1
+    kind: APIService
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: v1alpha1.net.ectobase.dev
+    spec:
+      group: net.ectobase.dev
+      groupPriorityMinimum: 2000
+      insecureSkipTLSVerify: true
+      service:
+        name: apiserver-service
+        namespace: system
+        port: 443
+      version: v1alpha1
+      versionPriority: 100
+  9: |
+    apiVersion: apiregistration.k8s.io/v1
+    kind: APIService
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: v1alpha1.compute.ectobase.dev
+    spec:
+      group: compute.ectobase.dev
+      groupPriorityMinimum: 2000
+      insecureSkipTLSVerify: true
+      service:
+        name: apiserver-service
+        namespace: system
+        port: 443
+      version: v1alpha1
+      versionPriority: 100
+  10: |
+    apiVersion: apiregistration.k8s.io/v1
+    kind: APIService
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: v1alpha1.storage.ectobase.dev
+    spec:
+      group: storage.ectobase.dev
+      groupPriorityMinimum: 2000
+      insecureSkipTLSVerify: true
+      service:
+        name: apiserver-service
+        namespace: system
+        port: 443
+      version: v1alpha1
+      versionPriority: 100
+  11: |
+    apiVersion: apiregistration.k8s.io/v1
+    kind: APIService
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: v1alpha1.compiled.ectobase.dev
+    spec:
+      group: compiled.ectobase.dev
+      groupPriorityMinimum: 2000
+      insecureSkipTLSVerify: true
+      service:
+        name: apiserver-service
+        namespace: system
+        port: 443
+      version: v1alpha1
+      versionPriority: 100
+  12: |
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: hub-broker
+      namespace: system
+  13: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: hub-broker
+    rules:
+      - apiGroups:
+          - compiled.ectobase.dev
+        resources:
+          - compiledcontainers
+          - compilednics
+          - compiledvms
+          - compiledvolumeattachments
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - platform.ectobase.dev
+        resources:
+          - clusterpools
+        verbs:
+          - create
+          - get
+          - list
+          - patch
+          - update
+          - watch
+      - apiGroups:
+          - platform.ectobase.dev
+        resources:
+          - clusterpools/status
+        verbs:
+          - get
+          - patch
+          - update
+  14: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: hub-broker
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: hub-broker
+    subjects:
+      - kind: ServiceAccount
+        name: hub-broker
+        namespace: system
+  15: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: netplane-controller
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: netplane-controller
+      namespace: ectobase-system
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: netplane-controller
+      strategy:
+        type: Recreate
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: netplane-controller
+        spec:
+          containers:
+            - command:
+                - controller
+              image: ghcr.io/trevex/ectobase/netplane:dev
+              imagePullPolicy: IfNotPresent
+              name: controller
+          dnsPolicy: ClusterFirstWithHostNet
+          hostNetwork: true
+          nodeSelector:
+            node-role.kubernetes.io/control-plane: ""
+          serviceAccountName: netplane-controller
+          tolerations:
+            - operator: Exists
+  16: |
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: hub-controller
+      namespace: system
+  17: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: hub-controller
+    rules:
+      - apiGroups:
+          - compiled.ectobase.dev
+        resources:
+          - compilednics
+          - compiledvms
+          - compiledvolumeattachments
+        verbs:
+          - get
+          - list
+          - patch
+          - update
+          - watch
+      - apiGroups:
+          - compiled.ectobase.dev
+        resources:
+          - compiledvms/status
+        verbs:
+          - get
+          - patch
+          - update
+      - apiGroups:
+          - compute.ectobase.dev
+        resources:
+          - virtualmachines
+        verbs:
+          - get
+          - list
+          - patch
+          - update
+          - watch
+      - apiGroups:
+          - compute.ectobase.dev
+        resources:
+          - virtualmachines/status
+        verbs:
+          - get
+          - patch
+          - update
+      - apiGroups:
+          - csiaddons.openshift.io
+        resources:
+          - networkfences
+        verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+      - apiGroups:
+          - platform.ectobase.dev
+        resources:
+          - clusterpools
+        verbs:
+          - get
+          - list
+          - patch
+          - update
+          - watch
+      - apiGroups:
+          - platform.ectobase.dev
+        resources:
+          - clusterpools/status
+        verbs:
+          - get
+          - patch
+          - update
+      - apiGroups:
+          - storage.ectobase.dev
+        resources:
+          - volumes
+        verbs:
+          - get
+          - list
+          - patch
+          - update
+          - watch
+  18: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: hub-controller
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: hub-controller
+    subjects:
+      - kind: ServiceAccount
+        name: hub-controller
+        namespace: system
+  19: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        app: hub-controller
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: hub-controller
+      namespace: system
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: hub-controller
+      template:
+        metadata:
+          labels:
+            app: hub-controller
+        spec:
+          containers:
+            - args:
+                - -reflector-admin=[fd00:db8:0:1::1]:1338
+                - -csi-driver=rbd.csi.ceph.com
+                - -csi-cluster-id=
+                - -csi-secret-name=csi-rbd-secret
+                - -csi-secret-namespace=ceph-csi
+              env:
+                - name: KUBE_FEATURE_WatchListClient
+                  value: "false"
+              image: ghcr.io/trevex/ectobase/hub-controller:dev
+              imagePullPolicy: IfNotPresent
+              name: controller
+          serviceAccountName: hub-controller
+  20: |
+    apiVersion: v1
+    kind: Service
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: postgres
+      namespace: system
+    spec:
+      ports:
+        - name: postgres
+          port: 5432
+          targetPort: 5432
+      selector:
+        app: hub-postgres
+  21: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        app: hub-postgres
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: postgres
+      namespace: system
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: hub-postgres
+      template:
+        metadata:
+          labels:
+            app: hub-postgres
+        spec:
+          containers:
+            - env:
+                - name: POSTGRES_PASSWORD
+                  value: kine
+                - name: POSTGRES_DB
+                  value: kine
+                - name: PGDATA
+                  value: /var/lib/postgresql/data/pgdata
+              image: postgres:16
+              imagePullPolicy: IfNotPresent
+              name: postgres
+              ports:
+                - containerPort: 5432
+              readinessProbe:
+                exec:
+                  command:
+                    - pg_isready
+                    - -U
+                    - postgres
+                initialDelaySeconds: 5
+                periodSeconds: 5
+              volumeMounts:
+                - mountPath: /var/lib/postgresql/data
+                  name: data
+          volumes:
+            - emptyDir: {}
+              name: data
+  22: |
+    apiVersion: v1
+    kind: Service
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: kine
+      namespace: system
+    spec:
+      ports:
+        - name: etcd
+          port: 2379
+          targetPort: 2379
+      selector:
+        app: hub-kine
+  23: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        app: hub-kine
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: kine
+      namespace: system
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: hub-kine
+      template:
+        metadata:
+          labels:
+            app: hub-kine
+        spec:
+          containers:
+            - args:
+                - --endpoint=postgres://postgres:kine@postgres:5432/kine?sslmode=disable
+                - --listen-address=0.0.0.0:2379
+              image: rancher/kine:v0.13.0
+              imagePullPolicy: IfNotPresent
+              name: kine
+              ports:
+                - containerPort: 2379
+              readinessProbe:
+                initialDelaySeconds: 5
+                periodSeconds: 5
+                tcpSocket:
+                  port: 2379
+  24: |
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: system
+  25: |
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: ectobase-system
+  26: |
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: netplane-controller
+      namespace: ectobase-system
+  27: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: netplane-controller
+    rules:
+      - apiGroups:
+          - compiled.ectobase.dev
+        resources:
+          - compiledcontainers
+          - compilednics
+          - compiledvms
+          - compiledvolumeattachments
+        verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+      - apiGroups:
+          - compiled.ectobase.dev
+        resources:
+          - compiledcontainers/status
+          - compilednics/status
+          - compiledvms/status
+          - compiledvolumeattachments/status
+        verbs:
+          - get
+          - patch
+          - update
+      - apiGroups:
+          - compute.ectobase.dev
+        resources:
+          - containers
+          - virtualmachines
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - compute.ectobase.dev
+        resources:
+          - containers/status
+          - virtualmachines/status
+        verbs:
+          - get
+          - patch
+          - update
+      - apiGroups:
+          - net.ectobase.dev
+        resources:
+          - firewallpolicies
+          - loadbalancers
+          - networkinterfaces
+          - vpcpeerings
+          - vpcs
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - net.ectobase.dev
+        resources:
+          - natgateways
+        verbs:
+          - get
+          - list
+          - update
+          - watch
+      - apiGroups:
+          - net.ectobase.dev
+        resources:
+          - natgateways/status
+        verbs:
+          - get
+          - update
+      - apiGroups:
+          - net.ectobase.dev
+        resources:
+          - vpcpeerings/status
+        verbs:
+          - get
+          - patch
+          - update
+      - apiGroups:
+          - storage.ectobase.dev
+        resources:
+          - volumes
+        verbs:
+          - get
+          - list
+          - watch
+  28: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: netplane-controller
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: netplane-controller
+    subjects:
+      - kind: ServiceAccount
+        name: netplane-controller
+        namespace: ectobase-system
+  29: |
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: netplane-reflector
+      namespace: ectobase-system
+  30: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: reflector
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: reflector
+      namespace: ectobase-system
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: reflector
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: reflector
+        spec:
+          containers:
+            - args:
+                - --listen=:1338
+              command:
+                - reflector
+              image: ghcr.io/trevex/ectobase/netplane:dev
+              imagePullPolicy: IfNotPresent
+              name: reflector
+              ports:
+                - containerPort: 1338
+                  name: routebus
+                  protocol: TCP
+          dnsPolicy: ClusterFirstWithHostNet
+          hostNetwork: true
+          nodeSelector:
+            node-role.kubernetes.io/control-plane: ""
+          serviceAccountName: netplane-reflector
+          tolerations:
+            - operator: Exists
+  31: |
+    apiVersion: v1
+    kind: Service
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: reflector
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: reflector
+      namespace: ectobase-system
+    spec:
+      ports:
+        - name: routebus
+          port: 1338
+          protocol: TCP
+          targetPort: 1338
+      selector:
+        app.kubernetes.io/name: reflector
+      type: ClusterIP

@@ -1,0 +1,37 @@
+suite: pool rbac injection
+templates:
+  - templates/rbac.yaml
+tests:
+  # Documents within templates/rbac.yaml (0-indexed, interleaved SA/CR/CRB per role):
+  #   0: SA  netplane-agent     1: CR  netplane-agent     2: CRB netplane-agent
+  #   3: SA  hub-broker         4: CR  hub-broker         5: CRB hub-broker
+  #   6: SA  pod-materializer   7: CR  pod-materializer   8: CRB pod-materializer
+  - it: netplane-agent ClusterRole carries the compiled read rule
+    set:
+      broker.clusterName: test
+    asserts:
+      - isKind:
+          of: ClusterRole
+        documentIndex: 1
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["compiled.ectobase.dev"]
+            resources: ["compilednics", "compilednics/status"]
+            verbs: ["get", "list", "watch"]
+        documentIndex: 1
+
+  - it: pod-materializer ClusterRole carries the pods full-CRUD rule
+    set:
+      broker.clusterName: test
+    asserts:
+      - isKind:
+          of: ClusterRole
+        documentIndex: 7
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods"]
+            verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+        documentIndex: 7

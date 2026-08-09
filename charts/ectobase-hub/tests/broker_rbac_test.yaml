@@ -1,0 +1,29 @@
+suite: hub hub-broker rbac
+templates:
+  - templates/broker-identity.yaml
+tests:
+  # Hub broker-identity.yaml documents (0-indexed):
+  #   0: SA  hub-broker
+  #   1: CR  hub-broker  (platform.ectobase.dev clusterpools; NO virtualmachineinstances)
+  #   2: CRB hub-broker
+  - it: hub-broker ClusterRole carries the clusterpools rule
+    asserts:
+      - isKind:
+          of: ClusterRole
+        documentIndex: 1
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["platform.ectobase.dev"]
+            resources: ["clusterpools"]
+            verbs: ["create", "get", "list", "patch", "update", "watch"]
+        documentIndex: 1
+
+  - it: hub-broker ClusterRole does NOT contain virtualmachineinstances (pool-only resource)
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            resources: ["virtualmachineinstances"]
+          any: true
+        documentIndex: 1

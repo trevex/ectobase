@@ -1,0 +1,5 @@
+tier1Failover:
+  enabled: true
+  watchdog:
+    enabled: true
+    device: /dev/watchdog

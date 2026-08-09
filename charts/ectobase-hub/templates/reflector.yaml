@@ -12,7 +12,6 @@ metadata:
   namespace: {{ .Values.agentNamespace }}
   labels:
     app.kubernetes.io/name: reflector
-    app.kubernetes.io/part-of: netplane
     {{- include "ectobase-hub.labels" . | nindent 4 }}
 spec:
   replicas: 1
@@ -23,7 +22,6 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: reflector
-        app.kubernetes.io/part-of: netplane
     spec:
       serviceAccountName: netplane-reflector
       # The reflector is the global rendezvous. It runs on hostNetwork and is pinned
@@ -54,7 +52,6 @@ metadata:
   namespace: {{ .Values.agentNamespace }}
   labels:
     app.kubernetes.io/name: reflector
-    app.kubernetes.io/part-of: netplane
     {{- include "ectobase-hub.labels" . | nindent 4 }}
 spec:
   type: ClusterIP

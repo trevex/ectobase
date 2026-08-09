@@ -1,0 +1,12 @@
+suite: hub-controller deployment
+templates:
+  - templates/hub-controller.yaml
+tests:
+  # hub-controller.yaml documents (0-indexed):
+  #   0: SA hub-controller   1: CR hub-controller   2: CRB hub-controller   3: Deployment
+  - it: deployment args include reflector-admin
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "-reflector-admin=[fd00:db8:0:1::1]:1338"
+        documentIndex: 3

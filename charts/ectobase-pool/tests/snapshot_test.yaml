@@ -1,0 +1,46 @@
+suite: pool render snapshots
+tests:
+  - it: renders (ebpf clab)
+    set: {broker.clusterName: test}
+    values: [values/ebpf-clab.yaml]
+    asserts:
+      - matchSnapshot: {}
+
+  - it: renders (ebpf hw)
+    set: {broker.clusterName: test}
+    values: [values/ebpf-hw.yaml]
+    asserts:
+      - matchSnapshot: {}
+
+  - it: renders (dpdk clab)
+    set: {broker.clusterName: test}
+    values: [values/dpdk-clab.yaml]
+    asserts:
+      - matchSnapshot: {}
+
+  - it: renders (dpdk hw)
+    set: {broker.clusterName: test}
+    values: [values/dpdk-hw.yaml]
+    asserts:
+      - matchSnapshot: {}
+
+  - it: renders (tier1 on)
+    set: {broker.clusterName: test}
+    values: [values/tier1-on.yaml]
+    asserts:
+      - matchSnapshot: {}
+
+  - it: renders (tier1 watchdog)
+    set: {broker.clusterName: test}
+    values: [values/tier1-watchdog.yaml]
+    asserts:
+      - matchSnapshot: {}
+
+  - it: renders with vm-materializer enabled
+    set: {broker.clusterName: test, vmMaterializer.enabled: true}
+    asserts:
+      - matchSnapshot: {}
+
+  - it: rejects a missing broker.clusterName
+    asserts:
+      - failedTemplate: {}
