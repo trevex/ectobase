@@ -80,7 +80,7 @@ func main() {
 	metav1.AddToGroupVersion(scheme, schema.GroupVersion{Version: "v1"})
 
 	// Hub rest.Config — from --hub-kubeconfig if given, else in-cluster/KUBECONFIG.
-	centralCfg, err := clientcmd.BuildConfigFromFlags("", hubKubeconfig)
+	hubCfg, err := clientcmd.BuildConfigFromFlags("", hubKubeconfig)
 	if err != nil {
 		log.Fatalf("build hub rest.Config: %v", err)
 	}
@@ -98,7 +98,7 @@ func main() {
 	// Manager on the HUB config. Cache is scoped to this cluster's slice via a
 	// field selector on spec.clusterName so the informer only streams the objects
 	// this broker owns — bounding both memory and apiserver watch traffic.
-	mgr, err := ctrl.NewManager(centralCfg, ctrl.Options{
+	mgr, err := ctrl.NewManager(hubCfg, ctrl.Options{
 		Scheme:  scheme,
 		Metrics: metricsserver.Options{BindAddress: "0"},
 		Cache: cache.Options{
@@ -144,7 +144,7 @@ func main() {
 	// idempotent (derive both desired and current sets live; no in-memory diff state).
 	// The hub client comes from the manager so it reads through the cache.
 	r := &brokerReconciler{
-		central:     mgr.GetClient(),
+		hub:     mgr.GetClient(),
 		downstream:  downstreamClient,
 		clusterName: clusterName,
 	}
@@ -178,7 +178,7 @@ func main() {
 		holderIdentity = clusterName
 	}
 	hb := &broker.Heartbeater{
-		Central:        mgr.GetClient(),
+		Hub:        mgr.GetClient(),
 		PoolName:       clusterName,
 		HolderIdentity: holderIdentity,
 		Reporter:       &nodeCapacityReporter{downstream: downstreamClient},
@@ -193,7 +193,7 @@ func main() {
 	// NodePrefixes/NodeDrain + per-VM Placement). Separate from the lease heartbeater so
 	// a slow node/VMI list never delays the lease renewal.
 	sr := &statusReporter{
-		central:     mgr.GetClient(),
+		hub:     mgr.GetClient(),
 		downstream:  downstreamClient,
 		clusterName: clusterName,
 		interval:    10 * time.Second,
@@ -212,7 +212,7 @@ func main() {
 // map from the downstream cluster, keeping that gathering out of the clean, unit-
 // tested ReportStatus seam.
 type statusReporter struct {
-	central     client.Client
+	hub     client.Client
 	downstream  client.Client
 	clusterName string
 	interval    time.Duration
@@ -242,7 +242,7 @@ func (s *statusReporter) reportOnce(ctx context.Context) error {
 		return fmt.Errorf("gather nodes: %w", err)
 	}
 	vmNode := s.gatherVMNodes(ctx)
-	b := &broker.Broker{Central: s.central, Downstream: s.downstream, ClusterName: s.clusterName}
+	b := &broker.Broker{Hub: s.hub, Downstream: s.downstream, ClusterName: s.clusterName}
 	return b.ReportStatus(ctx, nodes, vmNode)
 }
 
@@ -343,14 +343,14 @@ func nodeIsReady(node *corev1.Node) bool {
 // SyncCompiledVMs + SyncCompiledVolumeAttachments + SyncCompiledContainers
 // (declarative set-reconcile; idempotent and restart-safe).
 type brokerReconciler struct {
-	central     client.Client
+	hub     client.Client
 	downstream  client.Client
 	clusterName string
 }
 
 func (r *brokerReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result, error) {
 	b := &broker.Broker{
-		Central:     r.central,
+		Hub:     r.hub,
 		Downstream:  r.downstream,
 		ClusterName: r.clusterName,
 	}

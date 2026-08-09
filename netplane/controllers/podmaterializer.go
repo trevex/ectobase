@@ -90,7 +90,7 @@ func buildPod(cc *compiledv1.CompiledContainer) *corev1.Pod {
 
 // PodMaterializerReconciler turns local CompiledContainers into v1.Pods. It runs on the
 // DOWNSTREAM compute cluster (a plain k8s cluster with Multus + flowplane-cni installed),
-// not against the central aggregated apiserver.
+// not against the hub aggregated apiserver.
 type PodMaterializerReconciler struct{ Client client.Client }
 
 func (r *PodMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

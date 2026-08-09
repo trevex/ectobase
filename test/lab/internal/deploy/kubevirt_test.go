@@ -87,12 +87,12 @@ func TestKubeVirtCDIArgv(t *testing.T) {
 	}
 }
 
-// TestPatchCentralCSIClusterID drives PatchCentralCSIClusterID through a runner that
+// TestPatchHubCSIClusterID drives PatchHubCSIClusterID through a runner that
 // returns a canned args array and asserts the JSON6902 patch it composes.
-func TestPatchCentralCSIClusterID(t *testing.T) {
+func TestPatchHubCSIClusterID(t *testing.T) {
 	f := &csiArgsRunner{args: `["-reflector-admin=x","-csi-cluster-id=","-csi-secret-name=y"]`}
-	if err := PatchCentralCSIClusterID(context.Background(), f, "/kc/central.kubeconfig", "fsid-9"); err != nil {
-		t.Fatalf("PatchCentralCSIClusterID: %v", err)
+	if err := PatchHubCSIClusterID(context.Background(), f, "/kc/hub.kubeconfig", "fsid-9"); err != nil {
+		t.Fatalf("PatchHubCSIClusterID: %v", err)
 	}
 	c := f.findCall("kubectl", "patch", "deploy", "hub-controller", "--type=json")
 	if c == nil {
@@ -105,7 +105,7 @@ func TestPatchCentralCSIClusterID(t *testing.T) {
 }
 
 // csiArgsRunner is a fakeRunner whose Output returns a canned args JSON array (so the
-// PatchCentralCSIClusterID read path has something to parse).
+// PatchHubCSIClusterID read path has something to parse).
 type csiArgsRunner struct {
 	fakeRunner
 	args string

@@ -52,7 +52,7 @@ func readFixture(t *testing.T, name string) string {
 
 // TestTier2Failover is the Tier-2 fenced cross-cluster VM-reschedule gate. It boots a
 // stateful RBD-backed VirtualMachine on pool k02, hard-kills the k02 node container,
-// and asserts central FENCES k02 (Ceph NetworkFence result==Succeeded + OSD blocklist)
+// and asserts hub FENCES k02 (Ceph NetworkFence result==Succeeded + OSD blocklist)
 // then RE-BINDS the VM to k03, where the VMI + the same RBD reattach. Recovery
 // restarts k02 and asserts the fence releases. Best-effort on VMI Running (guest boot
 // under software emulation + CDI import over the fabric is slow); the fence + reschedule
@@ -80,19 +80,19 @@ func TestTier2Failover(t *testing.T) {
 	}
 
 	// --- Phase 2: apply fixture + Ready VPC -----------------------------------------
-	require.NoError(t, applyHub(ctx, cfg, readFixture(t, "tier2-vm.yaml")), "apply tier2 fixture to central")
+	require.NoError(t, applyHub(ctx, cfg, readFixture(t, "tier2-vm.yaml")), "apply tier2 fixture to the hub")
 	patchVNIReady(t, ctx, cfg, "vpcs.net.ectobase.dev", "blue")
 
 	// Best-effort teardown of the fixture regardless of outcome (delete by name; the
 	// kubectl helper has no stdin, so `delete -f -` is not usable here).
 	t.Cleanup(func() {
-		_, _ = kubectl(ctx, cfg, "central", "delete", "virtualmachines.compute.ectobase.dev",
+		_, _ = kubectl(ctx, cfg, "hub", "delete", "virtualmachines.compute.ectobase.dev",
 			tier2VMName, "-n", tier2VMNS, "--ignore-not-found", "--wait=false")
-		_, _ = kubectl(ctx, cfg, "central", "delete", "volumes.storage.ectobase.dev",
+		_, _ = kubectl(ctx, cfg, "hub", "delete", "volumes.storage.ectobase.dev",
 			tier2Volume, "-n", tier2VMNS, "--ignore-not-found", "--wait=false")
-		_, _ = kubectl(ctx, cfg, "central", "delete", "networkinterfaces.net.ectobase.dev",
+		_, _ = kubectl(ctx, cfg, "hub", "delete", "networkinterfaces.net.ectobase.dev",
 			"tier2-nic", "-n", tier2VMNS, "--ignore-not-found", "--wait=false")
-		_, _ = kubectl(ctx, cfg, "central", "delete", "vpcs.net.ectobase.dev",
+		_, _ = kubectl(ctx, cfg, "hub", "delete", "vpcs.net.ectobase.dev",
 			"blue", "-n", tier2VMNS, "--ignore-not-found", "--wait=false")
 	})
 
@@ -137,9 +137,9 @@ func TestTier2Failover(t *testing.T) {
 	require.NoError(t, scaleBrokerReplicas(ctx, cfg, "k02", 0), "scale down k02 broker (drain)")
 	t.Logf("drained k02: scaled its broker to 0 (heartbeat stops → pool goes Unknown)")
 
-	// --- Phase 7: fence asserted (central) ------------------------------------------
+	// --- Phase 7: fence asserted (hub) ------------------------------------------
 	eventually(t, 6*time.Minute, 10*time.Second, func() error {
-		res, err := kubectl(ctx, cfg, "central",
+		res, err := kubectl(ctx, cfg, "hub",
 			"get", "networkfence", fenceCR, "-o", "jsonpath={.status.result}")
 		if err != nil {
 			return fmt.Errorf("get NetworkFence %s: %w", fenceCR, err)
@@ -190,7 +190,7 @@ func TestTier2Failover(t *testing.T) {
 			return fmt.Errorf("ceph blocklist still contains k02 client (%s):\n%s", k02Hextets, bl)
 		}
 		// The NetworkFence CR is deleted (get errors).
-		if _, err := kubectl(ctx, cfg, "central", "get", "networkfence", fenceCR); err == nil {
+		if _, err := kubectl(ctx, cfg, "hub", "get", "networkfence", fenceCR); err == nil {
 			return fmt.Errorf("NetworkFence %s still present (want deleted)", fenceCR)
 		}
 		return nil
@@ -198,7 +198,7 @@ func TestTier2Failover(t *testing.T) {
 }
 
 // scaleBrokerReplicas scales a compute cluster's hub-broker deployment. Scaling
-// to 0 stops the broker's ClusterPool-lease heartbeat, so central marks the pool
+// to 0 stops the broker's ClusterPool-lease heartbeat, so the hub marks the pool
 // Unknown (lease stale) and the Tier-2 failover reconciler fences + reschedules its
 // VMs — a non-destructive drain that (unlike killing the node container) preserves the
 // node's clab fabric veths, so the node stays usable for the rest of the suite. Scaling
@@ -211,7 +211,7 @@ func scaleBrokerReplicas(ctx context.Context, cfg *config.Config, cluster string
 
 // expectVMCluster asserts the VirtualMachine spec.clusterName equals want.
 func expectVMCluster(ctx context.Context, cfg *config.Config, want string) error {
-	cn, err := kubectl(ctx, cfg, "central",
+	cn, err := kubectl(ctx, cfg, "hub",
 		"get", "virtualmachines.compute.ectobase.dev", tier2VMName, "-o", "jsonpath={.spec.clusterName}")
 	if err != nil {
 		return fmt.Errorf("get VirtualMachine %s clusterName: %w", tier2VMName, err)

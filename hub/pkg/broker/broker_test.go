@@ -30,13 +30,13 @@ func TestSync_NamespacedCreateUpdateGC(t *testing.T) {
 		}
 	}
 	idx := func(o client.Object) []string { return []string{o.(*compiledv1.CompiledNIC).Spec.ClusterName} }
-	central := fake.NewClientBuilder().WithScheme(s).
+	hub := fake.NewClientBuilder().WithScheme(s).
 		WithIndex(&compiledv1.CompiledNIC{}, "spec.clusterName", idx).
 		WithObjects(wl("ns1", "a", "c1", "n1"), wl("ns2", "b", "c1", "n2"), wl("ns1", "c", "c2", "n3")).Build()
 	downstream := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(wl("ns1", "stale", "c1", "old"), wl("ns1", "a", "c1", "OLD")).Build()
 
-	b := &Broker{Central: central, Downstream: downstream, ClusterName: "c1"}
+	b := &Broker{Hub: hub, Downstream: downstream, ClusterName: "c1"}
 	if err := b.SyncOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -84,13 +84,13 @@ func TestSyncCompiledVMs_NamespacedCreateUpdateGC(t *testing.T) {
 		return &compiledv1.CompiledVM{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: compiledv1.CompiledVMSpec{ClusterName: cn, Image: img}}
 	}
 	idx := func(o client.Object) []string { return []string{o.(*compiledv1.CompiledVM).Spec.ClusterName} }
-	central := fake.NewClientBuilder().WithScheme(s).
+	hub := fake.NewClientBuilder().WithScheme(s).
 		WithIndex(&compiledv1.CompiledVM{}, "spec.clusterName", idx).
 		WithObjects(vm("ns1", "a", "c1", "fedora"), vm("ns1", "b", "c2", "x")).Build()
 	downstream := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(vm("ns1", "stale", "c1", "old"), vm("ns1", "a", "c1", "OLD")).Build()
 
-	b := &Broker{Central: central, Downstream: downstream, ClusterName: "c1"}
+	b := &Broker{Hub: hub, Downstream: downstream, ClusterName: "c1"}
 	if err := b.SyncCompiledVMs(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -126,13 +126,13 @@ func TestSyncCompiledVolumeAttachments_NamespacedCreateUpdateGC(t *testing.T) {
 		return &compiledv1.CompiledVolumeAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: compiledv1.CompiledVolumeAttachmentSpec{ClusterName: cn, BootImage: img}}
 	}
 	idx := func(o client.Object) []string { return []string{o.(*compiledv1.CompiledVolumeAttachment).Spec.ClusterName} }
-	central := fake.NewClientBuilder().WithScheme(s).
+	hub := fake.NewClientBuilder().WithScheme(s).
 		WithIndex(&compiledv1.CompiledVolumeAttachment{}, "spec.clusterName", idx).
 		WithObjects(att("ns1", "a", "c1", "fedora"), att("ns1", "b", "c2", "x")).Build()
 	downstream := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(att("ns1", "stale", "c1", "old"), att("ns1", "a", "c1", "OLD")).Build()
 
-	b := &Broker{Central: central, Downstream: downstream, ClusterName: "c1"}
+	b := &Broker{Hub: hub, Downstream: downstream, ClusterName: "c1"}
 	if err := b.SyncCompiledVolumeAttachments(context.Background()); err != nil { t.Fatal(err) }
 
 	list := &compiledv1.CompiledVolumeAttachmentList{}
@@ -152,13 +152,13 @@ func TestSyncCompiledContainers_NamespacedCreateUpdateGC(t *testing.T) {
 		return &compiledv1.CompiledContainer{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: compiledv1.CompiledContainerSpec{ClusterName: cn, Image: img}}
 	}
 	idx := func(o client.Object) []string { return []string{o.(*compiledv1.CompiledContainer).Spec.ClusterName} }
-	central := fake.NewClientBuilder().WithScheme(s).
+	hub := fake.NewClientBuilder().WithScheme(s).
 		WithIndex(&compiledv1.CompiledContainer{}, "spec.clusterName", idx).
 		WithObjects(ctr("ns1", "a", "c1", "nginx"), ctr("ns1", "b", "c2", "x")).Build()
 	downstream := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(ctr("ns1", "stale", "c1", "old"), ctr("ns1", "a", "c1", "OLD")).Build()
 
-	b := &Broker{Central: central, Downstream: downstream, ClusterName: "c1"}
+	b := &Broker{Hub: hub, Downstream: downstream, ClusterName: "c1"}
 	if err := b.SyncCompiledContainers(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestSyncCompiledContainers_NamespacedCreateUpdateGC(t *testing.T) {
 
 // TestSync_PropagatesLabels guards the load-bearing workload-label propagation: the
 // downstream vm-materializer joins a VM to its volume attachments by the workload
-// label, so the broker must mirror labels (not just spec) central->downstream.
+// label, so the broker must mirror labels (not just spec) hub->downstream.
 func TestSync_PropagatesLabels(t *testing.T) {
 	s := runtime.NewScheme()
 	if err := compiledv1.AddToScheme(s); err != nil {
@@ -203,12 +203,12 @@ func TestSync_PropagatesLabels(t *testing.T) {
 	idx := func(o client.Object) []string {
 		return []string{o.(*compiledv1.CompiledVolumeAttachment).Spec.ClusterName}
 	}
-	central := fake.NewClientBuilder().WithScheme(s).
+	hub := fake.NewClientBuilder().WithScheme(s).
 		WithIndex(&compiledv1.CompiledVolumeAttachment{}, "spec.clusterName", idx).
 		WithObjects(att).Build()
 	downstream := fake.NewClientBuilder().WithScheme(s).Build()
 
-	b := &Broker{Central: central, Downstream: downstream, ClusterName: "c1"}
+	b := &Broker{Hub: hub, Downstream: downstream, ClusterName: "c1"}
 	if err := b.SyncCompiledVolumeAttachments(context.Background()); err != nil {
 		t.Fatal(err)
 	}

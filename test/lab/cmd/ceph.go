@@ -12,7 +12,7 @@ var cephCmd = &cobra.Command{
 	Use:   "ceph",
 	Short: "deploy Ceph (pool + ceph-csi-rbd + csi-addons) onto an already-up fabric",
 	Long: "Create the RBD pool on the shared clab ceph node, install external ceph-csi-rbd on\n" +
-		"every cluster, wire the csi-addons controller + sidecar into the central (fence\n" +
+		"every cluster, wire the csi-addons controller + sidecar into the hub (fence\n" +
 		"executor) provisioner, and apply the per-node krbd fixups. Requires\n" +
 		"fabric.ceph.enabled and an already-up fabric (all cluster kubeconfigs present).",
 	RunE: func(cmd *cobra.Command, _ []string) error {

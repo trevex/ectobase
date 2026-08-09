@@ -55,11 +55,11 @@ func kubeconfigPath(cfg *config.Config, cluster string) string {
 	return filepath.Join(buildDir(cfg), cluster+".kubeconfig")
 }
 
-// requireFabricUp skips the test when the central kubeconfig is missing — i.e.
+// requireFabricUp skips the test when the hub kubeconfig is missing — i.e.
 // the fabric was never brought up, so there is nothing to assert against.
 func requireFabricUp(t *testing.T, cfg *config.Config) {
 	t.Helper()
-	kc := kubeconfigPath(cfg, "central")
+	kc := kubeconfigPath(cfg, "hub")
 	if _, err := os.Stat(kc); err != nil {
 		t.Skipf("fabric not up: %s missing (run `lab up`)", kc)
 	}

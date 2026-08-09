@@ -1,7 +1,7 @@
 // Copyright 2026 ectobase contributors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package fence provides the central-side storage + network fence actuators that back
+// Package fence provides the hub-side storage + network fence actuators that back
 // the failover PrefixFencer seam.
 package fence
 

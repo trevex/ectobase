@@ -11,7 +11,7 @@ fabric:
   nat64Prefix: 64:ff9b::/96
   registry: {upstreams: [docker.io], push: [flowplane]}
   clusters:
-    - {name: central, nodes: 1}
+    - {name: hub, nodes: 1}
     - {name: k02, nodes: 2}
 `))
 	if err != nil {

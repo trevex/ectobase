@@ -16,7 +16,7 @@ import (
 
 // Control-plane-driven VPC-peering scenario, ported from test/scenario-vpc-peering.sh
 // but driven end-to-end through the real control plane: VPCs / NICs / VPCPeerings /
-// FirewallPolicies + a Container per endpoint are applied to CENTRAL, the netplane
+// FirewallPolicies + a Container per endpoint are applied to the HUB, the netplane
 // compiler lowers them to per-cluster CompiledNICs (with PeerImports + firewall) and
 // CompiledContainers, the brokers sync them to the compute clusters, and the
 // pod-materializer spawns the REAL Pods (attached via Multus + flowplane-cni). No raw
@@ -82,7 +82,7 @@ func TestVPCPeering(t *testing.T) {
 	local := endpoint{nodeC, "green-local", greenLocalIP, greenLocalMAC, peerGreenVNI}
 	all := []endpoint{blue, green, local}
 
-	// 1. VPCs + NICs on CENTRAL (NO placement on the NICs — the owning Containers, applied
+	// 1. VPCs + NICs on the HUB (NO placement on the NICs — the owning Containers, applied
 	//    in step 5, are the placement authority). Green NICs carry label side=green so the
 	//    FirewallPolicy selector governs them (replacing the compiler's allow-all fallback).
 	require.NoError(t, applyHub(ctx, cfg, vpcPeeringCentralFixture(blue, green, local)))
@@ -94,16 +94,16 @@ func TestVPCPeering(t *testing.T) {
 	patchVNIReadyN(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", local.nic, local.vni)
 
 	t.Cleanup(func() {
-		_, _ = kubectl(ctx, cfg, "central", "delete", "vpcpeering.net.ectobase.dev", "blue-to-green", "green-to-blue", "--ignore-not-found", "--wait=false")
-		_, _ = kubectl(ctx, cfg, "central", "delete", "firewallpolicy.net.ectobase.dev", "green-deny-all", "green-allow-blue", "--ignore-not-found", "--wait=false")
+		_, _ = kubectl(ctx, cfg, "hub", "delete", "vpcpeering.net.ectobase.dev", "blue-to-green", "green-to-blue", "--ignore-not-found", "--wait=false")
+		_, _ = kubectl(ctx, cfg, "hub", "delete", "firewallpolicy.net.ectobase.dev", "green-deny-all", "green-allow-blue", "--ignore-not-found", "--wait=false")
 		for _, ep := range all {
-			_, _ = kubectl(ctx, cfg, "central", "delete", "container.net.ectobase.dev", containerName(ep.nic), "--ignore-not-found", "--wait=false")
-			_, _ = kubectl(ctx, cfg, "central", "delete", "networkinterface.net.ectobase.dev", ep.nic, "--ignore-not-found", "--wait=false")
+			_, _ = kubectl(ctx, cfg, "hub", "delete", "container.net.ectobase.dev", containerName(ep.nic), "--ignore-not-found", "--wait=false")
+			_, _ = kubectl(ctx, cfg, "hub", "delete", "networkinterface.net.ectobase.dev", ep.nic, "--ignore-not-found", "--wait=false")
 		}
-		_, _ = kubectl(ctx, cfg, "central", "delete", "vpc.net.ectobase.dev", "peer-blue", "peer-green", "--ignore-not-found", "--wait=false")
+		_, _ = kubectl(ctx, cfg, "hub", "delete", "vpc.net.ectobase.dev", "peer-blue", "peer-green", "--ignore-not-found", "--wait=false")
 	})
 
-	// A Container per endpoint on CENTRAL owns its NIC and pins the placement (clusterName +
+	// A Container per endpoint on the HUB owns its NIC and pins the placement (clusterName +
 	// nodeName): the compiler stamps those onto the owned CompiledNIC and lowers the Container
 	// to a CompiledContainer the pod-materializer turns into the real Pod. Apply the NADs too
 	// (one per compute cluster). These must exist before the step-4 CompiledNIC placement check.
@@ -138,7 +138,7 @@ spec:
 	for _, name := range []string{"blue-to-green", "green-to-blue"} {
 		name := name
 		eventually(t, 2*time.Minute, 3*time.Second, func() error {
-			st, err := kubectl(ctx, cfg, "central", "get", "vpcpeering.net.ectobase.dev", name,
+			st, err := kubectl(ctx, cfg, "hub", "get", "vpcpeering.net.ectobase.dev", name,
 				"-o", "jsonpath={.status.state}")
 			if err != nil {
 				return err
@@ -224,7 +224,7 @@ spec:
 	// ASSERTION 2: swap deny-all -> allow blue's CIDR; the same ping MUST SUCCEED.
 	// Replace (not layer) so exactly one selecting policy governs green at a time.
 	// -----------------------------------------------------------------------
-	_, _ = kubectl(ctx, cfg, "central", "delete", "firewallpolicy.net.ectobase.dev", "green-deny-all", "--ignore-not-found")
+	_, _ = kubectl(ctx, cfg, "hub", "delete", "firewallpolicy.net.ectobase.dev", "green-deny-all", "--ignore-not-found")
 	require.NoError(t, applyHub(ctx, cfg, fmt.Sprintf(`apiVersion: net.ectobase.dev/v1alpha1
 kind: FirewallPolicy
 metadata: {name: green-allow-blue}
@@ -324,7 +324,7 @@ spec:
 // (the vni-parameterized variant of patchPodVNIReady — the two VPCs use distinct vnis).
 func patchVNIReadyN(t *testing.T, ctx context.Context, cfg *config.Config, resource, name string, vni int) {
 	t.Helper()
-	_, err := kubectl(ctx, cfg, "central", "patch", resource, name,
+	_, err := kubectl(ctx, cfg, "hub", "patch", resource, name,
 		"--subresource=status", "--type=merge",
 		"-p", fmt.Sprintf(`{"status":{"vni":%d,"state":"Ready"}}`, vni))
 	require.NoError(t, err, "patch %s/%s status (vni %d)", resource, name, vni)

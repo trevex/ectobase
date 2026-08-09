@@ -17,7 +17,7 @@ images: {talos: img/talos, vyos: img/vyos, tayga: img/tayga, wan: img/wan, regis
 fabric:
   as: {edge: 65000, switch: 65010, host: 65100}
   nat64Prefix: 64:ff9b::/96
-  clusters: [{name: central, nodes: 1}, {name: k02, nodes: 2}]
+  clusters: [{name: hub, nodes: 1}, {name: k02, nodes: 2}]
 `))
 	if err != nil {
 		t.Fatal(err)

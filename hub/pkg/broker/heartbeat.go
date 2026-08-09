@@ -21,7 +21,7 @@ type CapacityReporter interface{ Report(ctx context.Context) (corev1.ResourceLis
 
 // Heartbeater renews the broker's ClusterPool lease + reports capacity upward.
 type Heartbeater struct {
-	Central        client.Client
+	Hub        client.Client
 	PoolName       string
 	HolderIdentity string
 	Reporter       CapacityReporter
@@ -31,7 +31,7 @@ type Heartbeater struct {
 // heartbeatOnce renews the lease RenewTime + Allocatable on the broker's own ClusterPool.
 func (h *Heartbeater) heartbeatOnce(ctx context.Context) error {
 	pool := &platformv1.ClusterPool{}
-	if err := h.Central.Get(ctx, client.ObjectKey{Name: h.PoolName}, pool); err != nil {
+	if err := h.Hub.Get(ctx, client.ObjectKey{Name: h.PoolName}, pool); err != nil {
 		return fmt.Errorf("get clusterpool %s: %w", h.PoolName, err)
 	}
 	rl, err := h.Reporter.Report(ctx)
@@ -48,7 +48,7 @@ func (h *Heartbeater) heartbeatOnce(ctx context.Context) error {
 	// 409-conflicts against those writers AND clobbers their fields back to the cached value
 	// (this is why NodePrefixes never stuck). MergeFrom sends only this beat's diff with no
 	// resourceVersion precondition — no conflict, no clobber.
-	if err := h.Central.Status().Patch(ctx, pool, client.MergeFrom(orig)); err != nil {
+	if err := h.Hub.Status().Patch(ctx, pool, client.MergeFrom(orig)); err != nil {
 		return fmt.Errorf("patch clusterpool status: %w", err)
 	}
 	return nil

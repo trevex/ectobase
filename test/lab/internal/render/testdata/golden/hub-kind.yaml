@@ -24,12 +24,12 @@ nodes:
   - role: control-plane
     image: ghcr.io/trevex/ectobase/kind-node-fabric:dev
     extraMounts:
-      - hostPath: /build/ectobase/kind/central-1.prefix
+      - hostPath: /build/ectobase/kind/hub-1.prefix
         containerPath: /etc/fabric/prefix
         readOnly: true
-      - hostPath: /build/ectobase/kind/central-uplinks
+      - hostPath: /build/ectobase/kind/hub-uplinks
         containerPath: /etc/fabric/uplinks
         readOnly: true
-      - hostPath: /build/ectobase/kind/central-certs.d
+      - hostPath: /build/ectobase/kind/hub-certs.d
         containerPath: /etc/containerd/certs.d
         readOnly: true

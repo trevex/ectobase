@@ -47,8 +47,8 @@ import (
 //     clusterpool.Reconciler derives Ready;
 //  2. a Volume boot (10Gi, ceph-rbd, fedora BootImage) + a VirtualMachine vm1
 //     (VolumeRefs:[boot]) owning nic-a are created; scheduler.Reconciler binds vm1 to c1;
-//  3. the netplane CompiledVMReconciler lowers vm1 -> a central CompiledVM default-vm1
-//     AND the CompiledVolumeAttachmentReconciler emits a central CompiledVolumeAttachment
+//  3. the netplane CompiledVMReconciler lowers vm1 -> a hub CompiledVM default-vm1
+//     AND the CompiledVolumeAttachmentReconciler emits a hub CompiledVolumeAttachment
 //     vm1-boot (clusterName c1, Boot, BootImage, workload=vm1);
 //  4. the c1 broker's SyncCompiledVMs + SyncCompiledVolumeAttachments materialize both
 //     downstream;
@@ -82,29 +82,29 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 		t.Fatalf("register cdi scheme: %v", err)
 	}
 
-	// --- CENTRAL: kit aggregated apiserver. ---
-	centralEnv, err := kitenvtest.NewEnvironment(
+	// --- HUB: kit aggregated apiserver. ---
+	hubEnv, err := kitenvtest.NewEnvironment(
 		"github.com/trevex/ectobase/hub/cmd/apiserver",
 		nil,
 		[]string{filepath.Join(".", "fixtures")},
 	)
 	if err != nil {
-		t.Fatalf("central NewEnvironment: %v", err)
+		t.Fatalf("hub NewEnvironment: %v", err)
 	}
-	if _, err := centralEnv.Start(scheme, os.Stderr); err != nil {
-		t.Fatalf("central env.Start: %v", err)
+	if _, err := hubEnv.Start(scheme, os.Stderr); err != nil {
+		t.Fatalf("hub env.Start: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := centralEnv.Stop(); err != nil {
-			t.Errorf("central env.Stop: %v", err)
+		if err := hubEnv.Stop(); err != nil {
+			t.Errorf("hub env.Stop: %v", err)
 		}
 	})
-	if err := centralEnv.WaitUntilReadyWithTimeout(apiServiceTimeout); err != nil {
-		t.Fatalf("central WaitUntilReadyWithTimeout: %v", err)
+	if err := hubEnv.WaitUntilReadyWithTimeout(apiServiceTimeout); err != nil {
+		t.Fatalf("hub WaitUntilReadyWithTimeout: %v", err)
 	}
-	centralClient, err := client.New(centralEnv.GetRESTConfig(), client.Options{Scheme: scheme})
+	hubClient, err := client.New(hubEnv.GetRESTConfig(), client.Options{Scheme: scheme})
 	if err != nil {
-		t.Fatalf("central client.New: %v", err)
+		t.Fatalf("hub client.New: %v", err)
 	}
 
 	// --- DOWNSTREAM: plain controller-runtime apiserver with the net CRDs +
@@ -135,11 +135,11 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 	// ================================================================
 	// (1) HEARTBEAT + POOL PHASE: create pool c1, simulate a fresh beat, derive Ready.
 	// ================================================================
-	if err := centralClient.Create(ctx, &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: "c1"}}); err != nil {
-		t.Fatalf("central create pool c1: %v", err)
+	if err := hubClient.Create(ctx, &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: "c1"}}); err != nil {
+		t.Fatalf("hub create pool c1: %v", err)
 	}
 	pool := &platformv1.ClusterPool{}
-	if err := centralClient.Get(ctx, client.ObjectKey{Name: "c1"}, pool); err != nil {
+	if err := hubClient.Get(ctx, client.ObjectKey{Name: "c1"}, pool); err != nil {
 		t.Fatalf("get pool c1: %v", err)
 	}
 	now := metav1.NewMicroTime(time.Now())
@@ -148,16 +148,16 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 		corev1.ResourceCPU:    resource.MustParse("8"),
 		corev1.ResourceMemory: resource.MustParse("16Gi"),
 	}
-	if err := centralClient.Status().Update(ctx, pool); err != nil {
+	if err := hubClient.Status().Update(ctx, pool); err != nil {
 		t.Fatalf("heartbeat status update pool c1: %v", err)
 	}
 
-	pr := &clusterpool.Reconciler{Client: centralClient, HealthStale: time.Minute}
+	pr := &clusterpool.Reconciler{Client: hubClient, HealthStale: time.Minute}
 	if _, err := pr.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Name: "c1"}}); err != nil {
 		t.Fatalf("clusterpool Reconcile: %v", err)
 	}
 	gotPool := &platformv1.ClusterPool{}
-	if err := centralClient.Get(ctx, client.ObjectKey{Name: "c1"}, gotPool); err != nil {
+	if err := hubClient.Get(ctx, client.ObjectKey{Name: "c1"}, gotPool); err != nil {
 		t.Fatalf("get pool c1 after reconcile: %v", err)
 	}
 	if gotPool.Status.Phase != clusterpool.PhaseReady {
@@ -179,16 +179,16 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 			NodeName: &node1,
 		},
 	}
-	if err := centralClient.Create(ctx, nicA); err != nil {
-		t.Fatalf("central create nic-a: %v", err)
+	if err := hubClient.Create(ctx, nicA); err != nil {
+		t.Fatalf("hub create nic-a: %v", err)
 	}
 	curNic := &netv1.NetworkInterface{}
-	if err := centralClient.Get(ctx, client.ObjectKeyFromObject(nicA), curNic); err != nil {
-		t.Fatalf("central get nic-a for status: %v", err)
+	if err := hubClient.Get(ctx, client.ObjectKeyFromObject(nicA), curNic); err != nil {
+		t.Fatalf("hub get nic-a for status: %v", err)
 	}
 	curNic.Status.VNI = 1000
-	if err := centralClient.Status().Update(ctx, curNic); err != nil {
-		t.Fatalf("central status update nic-a: %v", err)
+	if err := hubClient.Status().Update(ctx, curNic); err != nil {
+		t.Fatalf("hub status update nic-a: %v", err)
 	}
 
 	boot := &storagev1.Volume{
@@ -199,8 +199,8 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 			BootImage:    "quay.io/containerdisks/fedora:41",
 		},
 	}
-	if err := centralClient.Create(ctx, boot); err != nil {
-		t.Fatalf("central create volume boot: %v", err)
+	if err := hubClient.Create(ctx, boot); err != nil {
+		t.Fatalf("hub create volume boot: %v", err)
 	}
 
 	vm1 := &computev1.VirtualMachine{
@@ -214,16 +214,16 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 			},
 		},
 	}
-	if err := centralClient.Create(ctx, vm1); err != nil {
-		t.Fatalf("central create vm1: %v", err)
+	if err := hubClient.Create(ctx, vm1); err != nil {
+		t.Fatalf("hub create vm1: %v", err)
 	}
 
-	sr := &scheduler.Reconciler{Client: centralClient}
+	sr := &scheduler.Reconciler{Client: hubClient}
 	if _, err := sr.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Namespace: ns, Name: "vm1"}}); err != nil {
 		t.Fatalf("scheduler Reconcile: %v", err)
 	}
 	boundVM := &computev1.VirtualMachine{}
-	if err := centralClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm1"}, boundVM); err != nil {
+	if err := hubClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm1"}, boundVM); err != nil {
 		t.Fatalf("get vm1 after schedule: %v", err)
 	}
 	if boundVM.Spec.ClusterName != "c1" {
@@ -235,26 +235,26 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 	// (3) COMPILE: CompiledVMReconciler lowers vm1 -> default-vm1 AND
 	//     CompiledVolumeAttachmentReconciler emits vm1-boot (bound c1, Boot, fedora).
 	// ================================================================
-	cr := &controllers.CompiledVMReconciler{Client: centralClient, NetworkName: "flowplane-overlay"}
+	cr := &controllers.CompiledVMReconciler{Client: hubClient, NetworkName: "flowplane-overlay"}
 	if _, err := cr.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Namespace: ns, Name: "vm1"}}); err != nil {
 		t.Fatalf("compile Reconcile vm1 (CompiledVM): %v", err)
 	}
-	cva := &controllers.CompiledVolumeAttachmentReconciler{Client: centralClient}
+	cva := &controllers.CompiledVolumeAttachmentReconciler{Client: hubClient}
 	if _, err := cva.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Namespace: ns, Name: "vm1"}}); err != nil {
 		t.Fatalf("compile Reconcile vm1 (CompiledVolumeAttachment): %v", err)
 	}
 
 	compiled := &compiledv1.CompiledVM{}
-	if err := centralClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "default-vm1"}, compiled); err != nil {
-		t.Fatalf("central get default-vm1: %v", err)
+	if err := hubClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "default-vm1"}, compiled); err != nil {
+		t.Fatalf("hub get default-vm1: %v", err)
 	}
 	if compiled.Spec.ClusterName != "c1" {
 		t.Fatalf("expected default-vm1 clusterName=c1, got %q", compiled.Spec.ClusterName)
 	}
 
 	att := &compiledv1.CompiledVolumeAttachment{}
-	if err := centralClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm1-boot"}, att); err != nil {
-		t.Fatalf("central get CompiledVolumeAttachment vm1-boot: %v", err)
+	if err := hubClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm1-boot"}, att); err != nil {
+		t.Fatalf("hub get CompiledVolumeAttachment vm1-boot: %v", err)
 	}
 	if att.Spec.ClusterName != "c1" {
 		t.Fatalf("expected vm1-boot clusterName=c1, got %q", att.Spec.ClusterName)
@@ -277,7 +277,7 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 	// ================================================================
 	// (4) SYNC: the c1 broker materializes default-vm1 + vm1-boot DOWNSTREAM.
 	// ================================================================
-	b := &broker.Broker{Central: centralClient, Downstream: downstreamClient, ClusterName: "c1"}
+	b := &broker.Broker{Hub: hubClient, Downstream: downstreamClient, ClusterName: "c1"}
 	if err := b.SyncCompiledVMs(ctx); err != nil {
 		t.Fatalf("broker SyncCompiledVMs: %v", err)
 	}

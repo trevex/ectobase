@@ -19,7 +19,7 @@ images: {talos: img/talos, vyos: img/vyos, tayga: img/tayga, wan: img/wan, regis
 fabric:
   as: {edge: 65000, switch: 65010, host: 65100}
   nat64Prefix: 64:ff9b::/96
-  clusters: [{name: central, nodes: 1}, {name: k02, nodes: 2}]
+  clusters: [{name: hub, nodes: 1}, {name: k02, nodes: 2}]
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -53,11 +53,11 @@ fabric:
 	}
 
 	// Structural invariants (independent of the byte-for-byte golden). One k8s-kind
-	// lifecycle node per cluster (central:, k02:) plus the kind-created node
+	// lifecycle node per cluster (hub:, k02:) plus the kind-created node
 	// containers as ext-container link endpoints (<cluster>-control-plane / -worker).
 	for _, name := range []string{
-		"central:", "k02:",
-		"central-control-plane:", "k02-control-plane:", "k02-worker:",
+		"hub:", "k02:",
+		"hub-control-plane:", "k02-control-plane:", "k02-worker:",
 		"registry:", "wan:", "edge1:", "edge2:", "sw1:", "sw2:", "nat64-1:", "nat64-2:",
 	} {
 		if !strings.Contains(out, name) {
@@ -66,7 +66,7 @@ fabric:
 	}
 	// The k8s-kind lifecycle nodes own no netns; links must attach to the
 	// ext-container node containers, never the lifecycle node.
-	for _, ep := range []string{`"central-control-plane:eth1"`, `"k02-worker:eth2"`} {
+	for _, ep := range []string{`"hub-control-plane:eth1"`, `"k02-worker:eth2"`} {
 		if !strings.Contains(out, ep) {
 			t.Errorf("expected link endpoint %s in rendered topology", ep)
 		}

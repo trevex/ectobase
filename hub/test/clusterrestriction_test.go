@@ -40,7 +40,7 @@ import (
 //   - (allow) an unimpersonated admin MAY set spec.clusterName.
 //
 // AUTHORIZATION: the main control plane (controller-runtime envtest) runs in
-// RBAC mode and proxies aggregated-group requests to the central apiserver,
+// RBAC mode and proxies aggregated-group requests to the hub apiserver,
 // which ALSO delegates authz back to the main control plane (SubjectAccessReview).
 // The kit/extension apiserver exposes no --authorization-mode (only delegated
 // authz options), so AlwaysAllow is unavailable. Instead we grant the broker

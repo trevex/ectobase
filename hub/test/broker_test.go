@@ -28,14 +28,14 @@ import (
 // contract (bounded pull, update propagation, GC, partition-survive) over the
 // REAL, namespaced CompiledNIC type (group compiled.ectobase.dev).
 //
-//   - CENTRAL   = the kit aggregated apiserver (serves CompiledNIC with a
+//   - HUB   = the kit aggregated apiserver (serves CompiledNIC with a
 //     selectable spec.clusterName field), started via kitenvtest.
 //   - DOWNSTREAM = a plain controller-runtime envtest apiserver with the
 //     CompiledNIC CRD installed from config/crd/bases.
 //
 // The broker is driven directly via SyncOnce (no informer/WatchListClient) so
 // the assertions are deterministic. CompiledNIC is namespaced; both apiservers
-// serve the "default" namespace out of the box (central does not register a
+// serve the "default" namespace out of the box (hub does not register a
 // core-namespace REST handler, so we cannot create an arbitrary namespace on it —
 // "default" is the namespace present on BOTH sides), so objects land there.
 func TestBroker_Loopback(t *testing.T) {
@@ -59,36 +59,36 @@ func TestBroker_Loopback(t *testing.T) {
 		t.Fatalf("register apiregistration scheme: %v", err)
 	}
 
-	// --- CENTRAL: kit aggregated apiserver. ---
-	centralEnv, err := kitenvtest.NewEnvironment(
+	// --- HUB: kit aggregated apiserver. ---
+	hubEnv, err := kitenvtest.NewEnvironment(
 		"github.com/trevex/ectobase/hub/cmd/apiserver",
 		nil,
 		[]string{filepath.Join(".", "fixtures")},
 	)
 	if err != nil {
-		t.Fatalf("central NewEnvironment: %v", err)
+		t.Fatalf("hub NewEnvironment: %v", err)
 	}
-	if _, err := centralEnv.Start(scheme, os.Stderr); err != nil {
-		t.Fatalf("central env.Start: %v", err)
+	if _, err := hubEnv.Start(scheme, os.Stderr); err != nil {
+		t.Fatalf("hub env.Start: %v", err)
 	}
-	// centralEnv is explicitly Stopped in assertion (d) to simulate a central
+	// hubEnv is explicitly Stopped in assertion (d) to simulate a hub
 	// outage; guard the cleanup so a double-Stop is harmless.
-	centralStopped := false
+	hubStopped := false
 	t.Cleanup(func() {
-		if centralStopped {
+		if hubStopped {
 			return
 		}
-		if err := centralEnv.Stop(); err != nil {
-			t.Errorf("central env.Stop: %v", err)
+		if err := hubEnv.Stop(); err != nil {
+			t.Errorf("hub env.Stop: %v", err)
 		}
 	})
-	if err := centralEnv.WaitUntilReadyWithTimeout(apiServiceTimeout); err != nil {
-		t.Fatalf("central WaitUntilReadyWithTimeout: %v", err)
+	if err := hubEnv.WaitUntilReadyWithTimeout(apiServiceTimeout); err != nil {
+		t.Fatalf("hub WaitUntilReadyWithTimeout: %v", err)
 	}
 
-	centralClient, err := client.New(centralEnv.GetRESTConfig(), client.Options{Scheme: scheme})
+	hubClient, err := client.New(hubEnv.GetRESTConfig(), client.Options{Scheme: scheme})
 	if err != nil {
-		t.Fatalf("central client.New: %v", err)
+		t.Fatalf("hub client.New: %v", err)
 	}
 
 	// --- DOWNSTREAM: plain controller-runtime apiserver with the CompiledNIC CRD. ---
@@ -114,7 +114,7 @@ func TestBroker_Loopback(t *testing.T) {
 	ctx := kitenvtest.Context()
 
 	b := &broker.Broker{
-		Central:     centralClient,
+		Hub:     hubClient,
 		Downstream:  downstreamClient,
 		ClusterName: "c1",
 	}
@@ -217,11 +217,11 @@ func TestBroker_Loopback(t *testing.T) {
 	// ================================================================
 	// (a) BOUNDED PULL: c2 must never cross into a c1-bound downstream.
 	// ================================================================
-	if err := centralClient.Create(ctx, newNIC("nic-a", "c1", "node-1")); err != nil {
-		t.Fatalf("central Create nic-a: %v", err)
+	if err := hubClient.Create(ctx, newNIC("nic-a", "c1", "node-1")); err != nil {
+		t.Fatalf("hub Create nic-a: %v", err)
 	}
-	if err := centralClient.Create(ctx, newNIC("nic-b", "c2", "node-2")); err != nil {
-		t.Fatalf("central Create nic-b: %v", err)
+	if err := hubClient.Create(ctx, newNIC("nic-b", "c2", "node-2")); err != nil {
+		t.Fatalf("hub Create nic-b: %v", err)
 	}
 
 	if err := b.SyncOnce(ctx); err != nil {
@@ -241,15 +241,15 @@ func TestBroker_Loopback(t *testing.T) {
 	t.Logf("(a) bounded pull: PASS (downstream=[%s/nic-a], c2 excluded)", ns)
 
 	// ================================================================
-	// (b) UPDATE: central nic-a nodeName node-1->node-1b propagates downstream.
+	// (b) UPDATE: hub nic-a nodeName node-1->node-1b propagates downstream.
 	// ================================================================
 	cur := &compiledv1.CompiledNIC{}
-	if err := centralClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "nic-a"}, cur); err != nil {
-		t.Fatalf("(b) central Get nic-a: %v", err)
+	if err := hubClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "nic-a"}, cur); err != nil {
+		t.Fatalf("(b) hub Get nic-a: %v", err)
 	}
 	cur.Spec.NodeName = "node-1b"
-	if err := centralClient.Update(ctx, cur); err != nil {
-		t.Fatalf("(b) central Update nic-a: %v", err)
+	if err := hubClient.Update(ctx, cur); err != nil {
+		t.Fatalf("(b) hub Update nic-a: %v", err)
 	}
 
 	if err := b.SyncOnce(ctx); err != nil {
@@ -265,11 +265,11 @@ func TestBroker_Loopback(t *testing.T) {
 	t.Log("(b) update: PASS (downstream nic-a nodeName=node-1b)")
 
 	// ================================================================
-	// (c) GC: deleting central nic-a empties downstream.
+	// (c) GC: deleting hub nic-a empties downstream.
 	// ================================================================
 	del := &compiledv1.CompiledNIC{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "nic-a"}}
-	if err := centralClient.Delete(ctx, del); err != nil {
-		t.Fatalf("(c) central Delete nic-a: %v", err)
+	if err := hubClient.Delete(ctx, del); err != nil {
+		t.Fatalf("(c) hub Delete nic-a: %v", err)
 	}
 
 	if err := b.SyncOnce(ctx); err != nil {
@@ -281,10 +281,10 @@ func TestBroker_Loopback(t *testing.T) {
 	t.Log("(c) gc: PASS (downstream empty)")
 
 	// ================================================================
-	// (d) PARTITION-SURVIVE: sync nic-c, stop central, downstream persists.
+	// (d) PARTITION-SURVIVE: sync nic-c, stop hub, downstream persists.
 	// ================================================================
-	if err := centralClient.Create(ctx, newNIC("nic-c", "c1", "node-3")); err != nil {
-		t.Fatalf("(d) central Create nic-c: %v", err)
+	if err := hubClient.Create(ctx, newNIC("nic-c", "c1", "node-3")); err != nil {
+		t.Fatalf("(d) hub Create nic-c: %v", err)
 	}
 	if err := b.SyncOnce(ctx); err != nil {
 		t.Fatalf("(d) SyncOnce: %v", err)
@@ -293,44 +293,44 @@ func TestBroker_Loopback(t *testing.T) {
 		t.Fatalf("(d) pre-partition: expected downstream=[%s/nic-c], got %v", ns, keys)
 	}
 
-	// Simulate a central outage: stop the central apiserver entirely.
-	if err := centralEnv.Stop(); err != nil {
-		t.Fatalf("(d) central env.Stop: %v", err)
+	// Simulate a hub outage: stop the hub apiserver entirely.
+	if err := hubEnv.Stop(); err != nil {
+		t.Fatalf("(d) hub env.Stop: %v", err)
 	}
-	centralStopped = true
+	hubStopped = true
 
-	// No SyncOnce here: prove the already-synced state persists without central.
+	// No SyncOnce here: prove the already-synced state persists without hub.
 	if keys := downKeys(); len(keys) != 1 || keys[0] != ns+"/nic-c" {
-		t.Fatalf("(d) partition-survive: expected downstream=[%s/nic-c] after central outage, got %v", ns, keys)
+		t.Fatalf("(d) partition-survive: expected downstream=[%s/nic-c] after hub outage, got %v", ns, keys)
 	}
-	t.Logf("(d) partition-survive: PASS (downstream=[%s/nic-c] survives central outage)", ns)
+	t.Logf("(d) partition-survive: PASS (downstream=[%s/nic-c] survives hub outage)", ns)
 
-	// Restart central so we can run the CompiledVM assertions.
-	centralEnv2, err := kitenvtest.NewEnvironment(
+	// Restart hub so we can run the CompiledVM assertions.
+	hubEnv2, err := kitenvtest.NewEnvironment(
 		"github.com/trevex/ectobase/hub/cmd/apiserver",
 		nil,
 		[]string{filepath.Join(".", "fixtures")},
 	)
 	if err != nil {
-		t.Fatalf("(e) central NewEnvironment restart: %v", err)
+		t.Fatalf("(e) hub NewEnvironment restart: %v", err)
 	}
-	if _, err := centralEnv2.Start(scheme, os.Stderr); err != nil {
-		t.Fatalf("(e) central env2.Start: %v", err)
+	if _, err := hubEnv2.Start(scheme, os.Stderr); err != nil {
+		t.Fatalf("(e) hub env2.Start: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := centralEnv2.Stop(); err != nil {
-			t.Errorf("central env2.Stop: %v", err)
+		if err := hubEnv2.Stop(); err != nil {
+			t.Errorf("hub env2.Stop: %v", err)
 		}
 	})
-	if err := centralEnv2.WaitUntilReadyWithTimeout(apiServiceTimeout); err != nil {
-		t.Fatalf("(e) central env2 WaitUntilReadyWithTimeout: %v", err)
+	if err := hubEnv2.WaitUntilReadyWithTimeout(apiServiceTimeout); err != nil {
+		t.Fatalf("(e) hub env2 WaitUntilReadyWithTimeout: %v", err)
 	}
-	centralClient2, err := client.New(centralEnv2.GetRESTConfig(), client.Options{Scheme: scheme})
+	hubClient2, err := client.New(hubEnv2.GetRESTConfig(), client.Options{Scheme: scheme})
 	if err != nil {
 		t.Fatalf("(e) central2 client.New: %v", err)
 	}
 	b2 := &broker.Broker{
-		Central:     centralClient2,
+		Hub:     hubClient2,
 		Downstream:  downstreamClient,
 		ClusterName: "c1",
 	}
@@ -338,11 +338,11 @@ func TestBroker_Loopback(t *testing.T) {
 	// ================================================================
 	// (e) CompiledVM: bounded pull, update, GC.
 	// ================================================================
-	if err := centralClient2.Create(ctx, newVM("vm-a", "c1", "fedora")); err != nil {
-		t.Fatalf("(e) central Create vm-a: %v", err)
+	if err := hubClient2.Create(ctx, newVM("vm-a", "c1", "fedora")); err != nil {
+		t.Fatalf("(e) hub Create vm-a: %v", err)
 	}
-	if err := centralClient2.Create(ctx, newVM("vm-b", "c2", "ubuntu")); err != nil {
-		t.Fatalf("(e) central Create vm-b (c2): %v", err)
+	if err := hubClient2.Create(ctx, newVM("vm-b", "c2", "ubuntu")); err != nil {
+		t.Fatalf("(e) hub Create vm-b (c2): %v", err)
 	}
 
 	if err := b2.SyncCompiledVMs(ctx); err != nil {
@@ -361,14 +361,14 @@ func TestBroker_Loopback(t *testing.T) {
 	}
 	t.Logf("(e) CompiledVM bounded pull: PASS (downstream=[%s/vm-a], c2 excluded)", ns)
 
-	// Update vm-a image central->downstream.
+	// Update vm-a image hub->downstream.
 	curVM := &compiledv1.CompiledVM{}
-	if err := centralClient2.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm-a"}, curVM); err != nil {
-		t.Fatalf("(e) central Get vm-a: %v", err)
+	if err := hubClient2.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm-a"}, curVM); err != nil {
+		t.Fatalf("(e) hub Get vm-a: %v", err)
 	}
 	curVM.Spec.Image = "fedora-updated"
-	if err := centralClient2.Update(ctx, curVM); err != nil {
-		t.Fatalf("(e) central Update vm-a: %v", err)
+	if err := hubClient2.Update(ctx, curVM); err != nil {
+		t.Fatalf("(e) hub Update vm-a: %v", err)
 	}
 	if err := b2.SyncCompiledVMs(ctx); err != nil {
 		t.Fatalf("(e) SyncCompiledVMs after update: %v", err)
@@ -382,10 +382,10 @@ func TestBroker_Loopback(t *testing.T) {
 	}
 	t.Log("(e) CompiledVM update: PASS (downstream vm-a image=fedora-updated)")
 
-	// GC: delete central vm-a, downstream should be empty.
+	// GC: delete hub vm-a, downstream should be empty.
 	delVM := &compiledv1.CompiledVM{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "vm-a"}}
-	if err := centralClient2.Delete(ctx, delVM); err != nil {
-		t.Fatalf("(e) central Delete vm-a: %v", err)
+	if err := hubClient2.Delete(ctx, delVM); err != nil {
+		t.Fatalf("(e) hub Delete vm-a: %v", err)
 	}
 	if err := b2.SyncCompiledVMs(ctx); err != nil {
 		t.Fatalf("(e) SyncCompiledVMs after delete: %v", err)
@@ -398,11 +398,11 @@ func TestBroker_Loopback(t *testing.T) {
 	// ================================================================
 	// (f) CompiledVolumeAttachment: bounded pull, update, GC.
 	// ================================================================
-	if err := centralClient2.Create(ctx, newAtt("att-a", "c1", "fedora")); err != nil {
-		t.Fatalf("(f) central Create att-a: %v", err)
+	if err := hubClient2.Create(ctx, newAtt("att-a", "c1", "fedora")); err != nil {
+		t.Fatalf("(f) hub Create att-a: %v", err)
 	}
-	if err := centralClient2.Create(ctx, newAtt("att-b", "c2", "ubuntu")); err != nil {
-		t.Fatalf("(f) central Create att-b (c2): %v", err)
+	if err := hubClient2.Create(ctx, newAtt("att-b", "c2", "ubuntu")); err != nil {
+		t.Fatalf("(f) hub Create att-b (c2): %v", err)
 	}
 
 	if err := b2.SyncCompiledVolumeAttachments(ctx); err != nil {
@@ -421,14 +421,14 @@ func TestBroker_Loopback(t *testing.T) {
 	}
 	t.Logf("(f) CompiledVolumeAttachment bounded pull: PASS (downstream=[%s/att-a], c2 excluded)", ns)
 
-	// Update att-a bootImage central->downstream.
+	// Update att-a bootImage hub->downstream.
 	curAtt := &compiledv1.CompiledVolumeAttachment{}
-	if err := centralClient2.Get(ctx, client.ObjectKey{Namespace: ns, Name: "att-a"}, curAtt); err != nil {
-		t.Fatalf("(f) central Get att-a: %v", err)
+	if err := hubClient2.Get(ctx, client.ObjectKey{Namespace: ns, Name: "att-a"}, curAtt); err != nil {
+		t.Fatalf("(f) hub Get att-a: %v", err)
 	}
 	curAtt.Spec.BootImage = "fedora-updated"
-	if err := centralClient2.Update(ctx, curAtt); err != nil {
-		t.Fatalf("(f) central Update att-a: %v", err)
+	if err := hubClient2.Update(ctx, curAtt); err != nil {
+		t.Fatalf("(f) hub Update att-a: %v", err)
 	}
 	if err := b2.SyncCompiledVolumeAttachments(ctx); err != nil {
 		t.Fatalf("(f) SyncCompiledVolumeAttachments after update: %v", err)
@@ -442,10 +442,10 @@ func TestBroker_Loopback(t *testing.T) {
 	}
 	t.Log("(f) CompiledVolumeAttachment update: PASS (downstream att-a bootImage=fedora-updated)")
 
-	// GC: delete central att-a, downstream should be empty.
+	// GC: delete hub att-a, downstream should be empty.
 	delAtt := &compiledv1.CompiledVolumeAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "att-a"}}
-	if err := centralClient2.Delete(ctx, delAtt); err != nil {
-		t.Fatalf("(f) central Delete att-a: %v", err)
+	if err := hubClient2.Delete(ctx, delAtt); err != nil {
+		t.Fatalf("(f) hub Delete att-a: %v", err)
 	}
 	if err := b2.SyncCompiledVolumeAttachments(ctx); err != nil {
 		t.Fatalf("(f) SyncCompiledVolumeAttachments after delete: %v", err)
@@ -458,11 +458,11 @@ func TestBroker_Loopback(t *testing.T) {
 	// ================================================================
 	// (g) CompiledContainer: bounded pull, update, GC.
 	// ================================================================
-	if err := centralClient2.Create(ctx, newCtr("ctr-a", "c1", "nginx")); err != nil {
-		t.Fatalf("(g) central Create ctr-a: %v", err)
+	if err := hubClient2.Create(ctx, newCtr("ctr-a", "c1", "nginx")); err != nil {
+		t.Fatalf("(g) hub Create ctr-a: %v", err)
 	}
-	if err := centralClient2.Create(ctx, newCtr("ctr-b", "c2", "redis")); err != nil {
-		t.Fatalf("(g) central Create ctr-b (c2): %v", err)
+	if err := hubClient2.Create(ctx, newCtr("ctr-b", "c2", "redis")); err != nil {
+		t.Fatalf("(g) hub Create ctr-b (c2): %v", err)
 	}
 
 	if err := b2.SyncCompiledContainers(ctx); err != nil {
@@ -481,14 +481,14 @@ func TestBroker_Loopback(t *testing.T) {
 	}
 	t.Logf("(g) CompiledContainer bounded pull: PASS (downstream=[%s/ctr-a], c2 excluded)", ns)
 
-	// Update ctr-a image central->downstream.
+	// Update ctr-a image hub->downstream.
 	curCtr := &compiledv1.CompiledContainer{}
-	if err := centralClient2.Get(ctx, client.ObjectKey{Namespace: ns, Name: "ctr-a"}, curCtr); err != nil {
-		t.Fatalf("(g) central Get ctr-a: %v", err)
+	if err := hubClient2.Get(ctx, client.ObjectKey{Namespace: ns, Name: "ctr-a"}, curCtr); err != nil {
+		t.Fatalf("(g) hub Get ctr-a: %v", err)
 	}
 	curCtr.Spec.Image = "nginx-updated"
-	if err := centralClient2.Update(ctx, curCtr); err != nil {
-		t.Fatalf("(g) central Update ctr-a: %v", err)
+	if err := hubClient2.Update(ctx, curCtr); err != nil {
+		t.Fatalf("(g) hub Update ctr-a: %v", err)
 	}
 	if err := b2.SyncCompiledContainers(ctx); err != nil {
 		t.Fatalf("(g) SyncCompiledContainers after update: %v", err)
@@ -502,10 +502,10 @@ func TestBroker_Loopback(t *testing.T) {
 	}
 	t.Log("(g) CompiledContainer update: PASS (downstream ctr-a image=nginx-updated)")
 
-	// GC: delete central ctr-a, downstream should be empty.
+	// GC: delete hub ctr-a, downstream should be empty.
 	delCtr := &compiledv1.CompiledContainer{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "ctr-a"}}
-	if err := centralClient2.Delete(ctx, delCtr); err != nil {
-		t.Fatalf("(g) central Delete ctr-a: %v", err)
+	if err := hubClient2.Delete(ctx, delCtr); err != nil {
+		t.Fatalf("(g) hub Delete ctr-a: %v", err)
 	}
 	if err := b2.SyncCompiledContainers(ctx); err != nil {
 		t.Fatalf("(g) SyncCompiledContainers after delete: %v", err)

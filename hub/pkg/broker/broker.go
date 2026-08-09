@@ -26,7 +26,7 @@ import (
 // labels are mirrored: the `workload` label is load-bearing downstream (the
 // vm-materializer joins a VM to its volume attachments by it).
 type Broker struct {
-	Central     client.Client
+	Hub     client.Client
 	Downstream  client.Client
 	ClusterName string
 }
@@ -38,10 +38,10 @@ func key(o *compiledv1.CompiledNIC) string { return o.Namespace + "/" + o.Name }
 // spec.clusterName==ClusterName; make downstream match (create/update/delete).
 // Idempotent and restart-safe (no in-memory diff; derived from live sets each call).
 func (b *Broker) SyncOnce(ctx context.Context) error {
-	// Fetch desired set from central, filtered by clusterName field index.
+	// Fetch desired set from the hub, filtered by clusterName field index.
 	desired := &compiledv1.CompiledNICList{}
-	if err := b.Central.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
-		return fmt.Errorf("list central: %w", err)
+	if err := b.Hub.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
+		return fmt.Errorf("list hub: %w", err)
 	}
 	want := make(map[string]compiledv1.CompiledNIC, len(desired.Items))
 	for _, o := range desired.Items {
@@ -105,11 +105,11 @@ func keyAtt(o *compiledv1.CompiledVolumeAttachment) string { return o.Namespace 
 func keyCtr(o *compiledv1.CompiledContainer) string { return o.Namespace + "/" + o.Name }
 
 // SyncCompiledVMs is the CompiledVM twin of SyncOnce: declarative set-reconcile of
-// CompiledVMs bound to ClusterName, central->downstream (create/update/delete).
+// CompiledVMs bound to ClusterName, hub->downstream (create/update/delete).
 func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 	desired := &compiledv1.CompiledVMList{}
-	if err := b.Central.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
-		return fmt.Errorf("list central vms: %w", err)
+	if err := b.Hub.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
+		return fmt.Errorf("list hub vms: %w", err)
 	}
 	want := make(map[string]compiledv1.CompiledVM, len(desired.Items))
 	for _, o := range desired.Items {
@@ -155,11 +155,11 @@ func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 }
 
 // SyncCompiledVolumeAttachments is the CompiledVolumeAttachment twin of SyncOnce:
-// declarative set-reconcile of attachments bound to ClusterName, central->downstream.
+// declarative set-reconcile of attachments bound to ClusterName, hub->downstream.
 func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 	desired := &compiledv1.CompiledVolumeAttachmentList{}
-	if err := b.Central.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
-		return fmt.Errorf("list central attachments: %w", err)
+	if err := b.Hub.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
+		return fmt.Errorf("list hub attachments: %w", err)
 	}
 	want := make(map[string]compiledv1.CompiledVolumeAttachment, len(desired.Items))
 	for _, o := range desired.Items {
@@ -205,11 +205,11 @@ func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 }
 
 // SyncCompiledContainers is the CompiledContainer twin of SyncOnce: declarative
-// set-reconcile of CompiledContainers bound to ClusterName, central->downstream.
+// set-reconcile of CompiledContainers bound to ClusterName, hub->downstream.
 func (b *Broker) SyncCompiledContainers(ctx context.Context) error {
 	desired := &compiledv1.CompiledContainerList{}
-	if err := b.Central.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
-		return fmt.Errorf("list central containers: %w", err)
+	if err := b.Hub.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
+		return fmt.Errorf("list hub containers: %w", err)
 	}
 	want := make(map[string]compiledv1.CompiledContainer, len(desired.Items))
 	for _, o := range desired.Items {
@@ -255,17 +255,17 @@ func (b *Broker) SyncCompiledContainers(ctx context.Context) error {
 }
 
 // ReportStatus stamps this pool's fence coordinates + per-VM placement + drain status
-// into central. Called each sync tick alongside the lease heartbeat. nodes are the
+// into the hub. Called each sync tick alongside the lease heartbeat. nodes are the
 // downstream nodes' fence identities (name + /64 underlay prefix); vmNode maps a VM's
 // "namespace/name" key -> the running node's name.
 //
 // The status write is split into a pool update (NodePrefixes + NodeDrain) and a
-// best-effort per-VM Placement update. A VM present in vmNode but absent from central
+// best-effort per-VM Placement update. A VM present in vmNode but absent from the hub
 // (e.g. a raw KubeVirt VMI with no central VirtualMachine anchor) is skipped, not
 // treated as an error — vmNode is a superset gathered from the live downstream.
 func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[string]string) error {
 	var pool platformv1.ClusterPool
-	if err := b.Central.Get(ctx, client.ObjectKey{Name: b.ClusterName}, &pool); err != nil {
+	if err := b.Hub.Get(ctx, client.ObjectKey{Name: b.ClusterName}, &pool); err != nil {
 		return fmt.Errorf("get pool %s: %w", b.ClusterName, err)
 	}
 	orig := pool.DeepCopy()
@@ -288,7 +288,7 @@ func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[
 	// pool-health controller writes Phase on this same status subresource. A full Update from a
 	// cached Get 409-conflicts against them and clobbers their fields; MergeFrom patches only
 	// NodePrefixes/NodeDrain (this pool's fence facts) with no resourceVersion precondition.
-	if err := b.Central.Status().Patch(ctx, &pool, client.MergeFrom(orig)); err != nil {
+	if err := b.Hub.Status().Patch(ctx, &pool, client.MergeFrom(orig)); err != nil {
 		return fmt.Errorf("patch pool %s status: %w", b.ClusterName, err)
 	}
 
@@ -297,8 +297,8 @@ func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[
 	for vmKey, nodeName := range vmNode {
 		ns, name := splitVMKey(vmKey)
 		var vm computev1.VirtualMachine
-		if err := b.Central.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &vm); err != nil {
-			continue // VM may not be a central-tracked object; skip.
+		if err := b.Hub.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &vm); err != nil {
+			continue // VM may not be a hub-tracked object; skip.
 		}
 		placement := PlacementForVM(b.ClusterName, nodeName, nodes)
 		if placement == nil {
@@ -306,7 +306,7 @@ func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[
 		}
 		vmOrig := vm.DeepCopy()
 		vm.Status.Placement = placement
-		_ = b.Central.Status().Patch(ctx, &vm, client.MergeFrom(vmOrig))
+		_ = b.Hub.Status().Patch(ctx, &vm, client.MergeFrom(vmOrig))
 	}
 	return nil
 }

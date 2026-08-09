@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Registers the aggregated groups with the host kube-apiserver, pointing at the in-cluster
-# apiserver-service. The central apiserver serves FIVE groups (main.go installs all their
+# apiserver-service. The hub apiserver serves FIVE groups (main.go installs all their
 # schemes): platform.ectobase.dev (ClusterPool), net.ectobase.dev (VPC/NetworkInterface/
 # FirewallPolicy/FloatingIP/LoadBalancer/NATGateway/VPCPeering), compute.ectobase.dev
 # (VirtualMachine/Container), storage.ectobase.dev (Volume), and compiled.ectobase.dev

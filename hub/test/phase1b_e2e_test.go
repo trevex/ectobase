@@ -31,10 +31,10 @@ import (
 // TestPhase1b_CompileBindSync_E2E proves the whole Phase-1b chain in one test,
 // end to end across TWO real in-process apiservers:
 //
-//  1. high-level VirtualMachine + NetworkInterface land in CENTRAL (the kit
+//  1. high-level VirtualMachine + NetworkInterface land in HUB (the kit
 //     aggregated apiserver serving net.ectobase.dev);
 //  2. the netplane CompiledNICReconciler compiles each NIC into a CompiledNIC in
-//     CENTRAL, inheriting spec.clusterName from the owning VM plus a
+//     HUB, inheriting spec.clusterName from the owning VM plus a
 //     workload=<vm> label (via resolvePlacement);
 //  3. the per-cluster broker syncs the c1-bound CompiledNIC into a DOWNSTREAM
 //     cluster, bounded by clusterName — the c2 workload never crosses.
@@ -42,7 +42,7 @@ import (
 // The reconciler is driven directly via Reconcile (no manager/informer) so the
 // assertions are deterministic. CompiledNIC/NetworkInterface/VirtualMachine are
 // namespaced; both apiservers serve the "default" namespace out of the box
-// (central registers no core-namespace REST handler), so objects land there.
+// (hub registers no core-namespace REST handler), so objects land there.
 func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	// The kit envtest harness builds the aggregated apiserver with `-mod mod`,
 	// which conflicts with the repo's go.work workspace mode. Disable workspace
@@ -53,7 +53,7 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 
 	scheme := runtime.NewScheme()
 	// The aggregated server binary serves both groups; the client scheme must know
-	// the net types (external api/v1alpha1, registered via netinstall — central's
+	// the net types (external api/v1alpha1, registered via netinstall — hub's
 	// versioned types are aliases to it) to (de)serialize the objects. The
 	// reconciler uses the same external netv1 types, so its GVK lookups resolve
 	// against this scheme.
@@ -65,30 +65,30 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 		t.Fatalf("register apiregistration scheme: %v", err)
 	}
 
-	// --- CENTRAL: kit aggregated apiserver. ---
-	centralEnv, err := kitenvtest.NewEnvironment(
+	// --- HUB: kit aggregated apiserver. ---
+	hubEnv, err := kitenvtest.NewEnvironment(
 		"github.com/trevex/ectobase/hub/cmd/apiserver",
 		nil,
 		[]string{filepath.Join(".", "fixtures")},
 	)
 	if err != nil {
-		t.Fatalf("central NewEnvironment: %v", err)
+		t.Fatalf("hub NewEnvironment: %v", err)
 	}
-	if _, err := centralEnv.Start(scheme, os.Stderr); err != nil {
-		t.Fatalf("central env.Start: %v", err)
+	if _, err := hubEnv.Start(scheme, os.Stderr); err != nil {
+		t.Fatalf("hub env.Start: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := centralEnv.Stop(); err != nil {
-			t.Errorf("central env.Stop: %v", err)
+		if err := hubEnv.Stop(); err != nil {
+			t.Errorf("hub env.Stop: %v", err)
 		}
 	})
-	if err := centralEnv.WaitUntilReadyWithTimeout(apiServiceTimeout); err != nil {
-		t.Fatalf("central WaitUntilReadyWithTimeout: %v", err)
+	if err := hubEnv.WaitUntilReadyWithTimeout(apiServiceTimeout); err != nil {
+		t.Fatalf("hub WaitUntilReadyWithTimeout: %v", err)
 	}
 
-	centralClient, err := client.New(centralEnv.GetRESTConfig(), client.Options{Scheme: scheme})
+	hubClient, err := client.New(hubEnv.GetRESTConfig(), client.Options{Scheme: scheme})
 	if err != nil {
-		t.Fatalf("central client.New: %v", err)
+		t.Fatalf("hub client.New: %v", err)
 	}
 
 	// --- DOWNSTREAM: plain controller-runtime apiserver with the CompiledNIC CRD. ---
@@ -114,7 +114,7 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	ctx := kitenvtest.Context()
 
 	// ================================================================
-	// Seed CENTRAL with the high-level objects for two workloads.
+	// Seed HUB with the high-level objects for two workloads.
 	//   - vm1 (cluster c1) owns nic-a  -> compiled NIC must bind to c1
 	//   - vm2 (cluster c2) owns nic-b  -> compiled NIC must bind to c2 (must NOT
 	//     cross into the c1-bound downstream).
@@ -131,8 +131,8 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 			NodeName: &node1,
 		},
 	}
-	if err := centralClient.Create(ctx, nicA); err != nil {
-		t.Fatalf("central Create nic-a: %v", err)
+	if err := hubClient.Create(ctx, nicA); err != nil {
+		t.Fatalf("hub Create nic-a: %v", err)
 	}
 	nicB := &netv1.NetworkInterface{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "nic-b"},
@@ -143,8 +143,8 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 			NodeName: &node2,
 		},
 	}
-	if err := centralClient.Create(ctx, nicB); err != nil {
-		t.Fatalf("central Create nic-b: %v", err)
+	if err := hubClient.Create(ctx, nicB); err != nil {
+		t.Fatalf("hub Create nic-b: %v", err)
 	}
 
 	// Give each NIC an effective VNI directly via the status subresource so the
@@ -156,12 +156,12 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	setVNI := func(nic *netv1.NetworkInterface, vni int32) {
 		t.Helper()
 		cur := &netv1.NetworkInterface{}
-		if err := centralClient.Get(ctx, client.ObjectKeyFromObject(nic), cur); err != nil {
-			t.Fatalf("central Get %s for status: %v", nic.Name, err)
+		if err := hubClient.Get(ctx, client.ObjectKeyFromObject(nic), cur); err != nil {
+			t.Fatalf("hub Get %s for status: %v", nic.Name, err)
 		}
 		cur.Status.VNI = vni
-		if err := centralClient.Status().Update(ctx, cur); err != nil {
-			t.Fatalf("central Status().Update %s: %v", nic.Name, err)
+		if err := hubClient.Status().Update(ctx, cur); err != nil {
+			t.Fatalf("hub Status().Update %s: %v", nic.Name, err)
 		}
 	}
 	setVNI(nicA, 1000)
@@ -174,8 +174,8 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 			InterfaceRefs: []computev1.LocalObjectReference{{Name: "nic-a"}},
 		},
 	}
-	if err := centralClient.Create(ctx, vm1); err != nil {
-		t.Fatalf("central Create vm1: %v", err)
+	if err := hubClient.Create(ctx, vm1); err != nil {
+		t.Fatalf("hub Create vm1: %v", err)
 	}
 	vm2 := &computev1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "vm2"},
@@ -184,17 +184,17 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 			InterfaceRefs: []computev1.LocalObjectReference{{Name: "nic-b"}},
 		},
 	}
-	if err := centralClient.Create(ctx, vm2); err != nil {
-		t.Fatalf("central Create vm2: %v", err)
+	if err := hubClient.Create(ctx, vm2); err != nil {
+		t.Fatalf("hub Create vm2: %v", err)
 	}
 
 	// ================================================================
-	// COMPILE: run the real netplane reconciler once per NIC against central.
+	// COMPILE: run the real netplane reconciler once per NIC against hub.
 	// ================================================================
 	// DefaultClusterName is the fallback for a NIC with no owning VM; it is not
 	// exercised here (both NICs are owned by a VM) — the fallback is covered by
 	// the netplane compiler unit tests.
-	r := &controllers.CompiledNICReconciler{Client: centralClient, DefaultClusterName: "default"}
+	r := &controllers.CompiledNICReconciler{Client: hubClient, DefaultClusterName: "default"}
 	for _, name := range []string{"nic-a", "nic-b"} {
 		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Namespace: ns, Name: name}}); err != nil {
 			t.Fatalf("compile Reconcile %s: %v", name, err)
@@ -202,12 +202,12 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	}
 
 	// ================================================================
-	// ASSERT (central): nic-a compiled to name "default-nic-a", bound to c1, with
+	// ASSERT (hub): nic-a compiled to name "default-nic-a", bound to c1, with
 	// the workload=vm1 label inherited from its owning VM.
 	// ================================================================
 	compiledA := &compiledv1.CompiledNIC{}
-	if err := centralClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "default-nic-a"}, compiledA); err != nil {
-		t.Fatalf("central Get default-nic-a: %v", err)
+	if err := hubClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "default-nic-a"}, compiledA); err != nil {
+		t.Fatalf("hub Get default-nic-a: %v", err)
 	}
 	if compiledA.Spec.ClusterName != "c1" {
 		t.Fatalf("compile: expected default-nic-a clusterName=c1 (from vm1), got %q", compiledA.Spec.ClusterName)
@@ -224,8 +224,8 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 
 	// nic-b compiled to c2 (owned by vm2) — used to prove bounded pull below.
 	compiledB := &compiledv1.CompiledNIC{}
-	if err := centralClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "default-nic-b"}, compiledB); err != nil {
-		t.Fatalf("central Get default-nic-b: %v", err)
+	if err := hubClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "default-nic-b"}, compiledB); err != nil {
+		t.Fatalf("hub Get default-nic-b: %v", err)
 	}
 	if compiledB.Spec.ClusterName != "c2" {
 		t.Fatalf("compile: expected default-nic-b clusterName=c2 (from vm2), got %q", compiledB.Spec.ClusterName)
@@ -236,9 +236,9 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	t.Log("compile: PASS (default-nic-a -> c1/workload=vm1, default-nic-b -> c2)")
 
 	// ================================================================
-	// BIND+SYNC: the c1 broker pulls central -> downstream, bounded by clusterName.
+	// BIND+SYNC: the c1 broker pulls hub -> downstream, bounded by clusterName.
 	// ================================================================
-	b := &broker.Broker{Central: centralClient, Downstream: downstreamClient, ClusterName: "c1"}
+	b := &broker.Broker{Hub: hubClient, Downstream: downstreamClient, ClusterName: "c1"}
 	if err := b.SyncOnce(ctx); err != nil {
 		t.Fatalf("broker SyncOnce: %v", err)
 	}

@@ -64,7 +64,7 @@ func MgmtIP6(ctx context.Context, labName, node string) (string, error) {
 }
 
 // KindNodeIP6 returns the first non-empty global IPv6 address of a kind node
-// container (named directly, e.g. "central-control-plane", NOT clab-prefixed —
+// container (named directly, e.g. "hub-control-plane", NOT clab-prefixed —
 // clab's k8s-kind containers are created by kind on the kind docker network).
 // kubeadm advertises the API server on this address, so it is Cilium's
 // k8sServiceHost with kube-proxy replacement (no ClusterIP to bootstrap against).

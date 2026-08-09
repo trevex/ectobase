@@ -21,6 +21,6 @@ fabric:
   ceph:
     enabled: true
   clusters:
-    - { name: central, nodes: 1 }
+    - { name: hub, nodes: 1 }
     - { name: k02, nodes: 1 }
     - { name: k03, nodes: 1 }

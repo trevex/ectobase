@@ -2,7 +2,7 @@
 // CompiledVM objects into kubevirt.io/v1.VirtualMachine objects (containerDisk boot,
 // pinned-MAC overlay interfaces on the flowplane multus network, runStrategy). It
 // targets a plain downstream k8s cluster with KubeVirt installed (in-cluster config by
-// default, or --kubeconfig), NOT the central aggregated apiserver.
+// default, or --kubeconfig), NOT the hub aggregated apiserver.
 package main
 
 import (

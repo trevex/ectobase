@@ -36,7 +36,7 @@ func TestHeartbeatOnce(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pool).WithStatusSubresource(pool).Build()
 
 	rl := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("8")}
-	h := &Heartbeater{Central: c, PoolName: "c1", HolderIdentity: "broker-1", Reporter: staticReporter{rl}}
+	h := &Heartbeater{Hub: c, PoolName: "c1", HolderIdentity: "broker-1", Reporter: staticReporter{rl}}
 	if err := h.heartbeatOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestHeartbeatOnce_ReporterError(t *testing.T) {
 	pool := &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: "c1"}}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(pool).WithStatusSubresource(pool).Build()
 
-	h := &Heartbeater{Central: c, PoolName: "c1", HolderIdentity: "broker-1", Reporter: errReporter{errors.New("boom")}}
+	h := &Heartbeater{Hub: c, PoolName: "c1", HolderIdentity: "broker-1", Reporter: errReporter{errors.New("boom")}}
 	if err := h.heartbeatOnce(context.Background()); err == nil {
 		t.Fatal("expected error from reporter, got nil")
 	}
@@ -87,7 +87,7 @@ func TestHeartbeatOnce_PoolNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := fake.NewClientBuilder().WithScheme(s).Build()
-	h := &Heartbeater{Central: c, PoolName: "missing", HolderIdentity: "b", Reporter: staticReporter{}}
+	h := &Heartbeater{Hub: c, PoolName: "missing", HolderIdentity: "b", Reporter: staticReporter{}}
 	if err := h.heartbeatOnce(context.Background()); err == nil {
 		t.Fatal("expected error for missing pool, got nil")
 	}

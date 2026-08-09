@@ -143,9 +143,9 @@ func TestKineDurability(t *testing.T) {
 }
 
 // pgRowCount runs a scalar count query against the kine Postgres DB via the
-// central-pg docker container (matching hack/kine-up.sh).
+// hub-pg docker container (matching hack/kine-up.sh).
 func pgRowCount(ctx context.Context, query string) (int, error) {
-	cmd := exec.CommandContext(ctx, "docker", "exec", "central-pg",
+	cmd := exec.CommandContext(ctx, "docker", "exec", "hub-pg",
 		"psql", "-U", "postgres", "-d", "kine", "-tAc", query)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

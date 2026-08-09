@@ -17,7 +17,7 @@ import (
 
 // TestRBDPVCBinds proves an RBD-backed PVC binds on every compute cluster (k02,
 // k03) through the ceph-csi provisioner. The `ceph-rbd` StorageClass provisions
-// from the fabric ceph node's `replicapool`; the provisioner runs on central too
+// from the fabric ceph node's `replicapool`; the provisioner runs on the hub too
 // (as the Tier-2 storage-fence executor). Skipped unless the fabric was brought
 // up with Ceph enabled AND `lab ceph` has deployed the CSI stack.
 func TestRBDPVCBinds(t *testing.T) {
@@ -40,9 +40,9 @@ func TestRBDPVCBinds(t *testing.T) {
 		t.Skipf("ceph not deployed (run `lab ceph`): %v", err)
 	}
 
-	// The central ceph-csi RBD provisioner must be Running (it drives PVC binds and
+	// The hub ceph-csi RBD provisioner must be Running (it drives PVC binds and
 	// is also the fence executor).
-	require.NoError(t, requireProvisionerRunning(ctx, cfg), "central ceph-csi provisioner not Running")
+	require.NoError(t, requireProvisionerRunning(ctx, cfg), "hub ceph-csi provisioner not Running")
 
 	for _, cl := range compute {
 		cl := cl
@@ -71,15 +71,15 @@ func TestRBDPVCBinds(t *testing.T) {
 	}
 }
 
-// requireProvisionerRunning asserts central's ceph-csi RBD provisioner pod is
+// requireProvisionerRunning asserts hub's ceph-csi RBD provisioner pod is
 // Running. It first tries the Helm chart's provisioner labels; if that selector
 // yields nothing (chart label drift), it falls back to matching any pod named
 // `ceph-csi-rbd-provisioner*` in the ceph-csi namespace.
 func requireProvisionerRunning(ctx context.Context, cfg *config.Config) error {
-	phases, err := kubectl(ctx, cfg, "central", "-n", "ceph-csi", "get", "pods",
+	phases, err := kubectl(ctx, cfg, "hub", "-n", "ceph-csi", "get", "pods",
 		"-l", "app=ceph-csi-rbd,component=provisioner", "-o", "jsonpath={.items[*].status.phase}")
 	if err != nil {
-		return fmt.Errorf("get ceph-csi provisioner pods on central: %w", err)
+		return fmt.Errorf("get ceph-csi provisioner pods on the hub: %w", err)
 	}
 	if strings.Contains(phases, "Running") {
 		return nil
@@ -87,10 +87,10 @@ func requireProvisionerRunning(ctx context.Context, cfg *config.Config) error {
 
 	// Fallback: the label selector matched nothing; look for a provisioner pod by
 	// name and require it Running.
-	out, err := kubectl(ctx, cfg, "central", "-n", "ceph-csi", "get", "pods",
+	out, err := kubectl(ctx, cfg, "hub", "-n", "ceph-csi", "get", "pods",
 		"-o", "jsonpath={range .items[*]}{.metadata.name}{\" \"}{.status.phase}{\"\\n\"}{end}")
 	if err != nil {
-		return fmt.Errorf("list ceph-csi pods on central: %w", err)
+		return fmt.Errorf("list ceph-csi pods on the hub: %w", err)
 	}
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Fields(line)
@@ -98,7 +98,7 @@ func requireProvisionerRunning(ctx context.Context, cfg *config.Config) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("no Running ceph-csi-rbd provisioner pod on central (phases=%q, pods=%q)", phases, out)
+	return fmt.Errorf("no Running ceph-csi-rbd provisioner pod on the hub (phases=%q, pods=%q)", phases, out)
 }
 
 // rbdPVCFixture renders a 1Gi ReadWriteOnce PVC bound to the ceph-rbd

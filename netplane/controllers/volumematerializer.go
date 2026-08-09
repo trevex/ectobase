@@ -58,7 +58,7 @@ func buildDataVolume(cva *compiledv1.CompiledVolumeAttachment) *cdiv1.DataVolume
 }
 
 // VolumeMaterializerReconciler turns CompiledVolumeAttachments into CDI DataVolumes.
-// It runs on the DOWNSTREAM cluster (plain k8s + CDI/ceph-csi), not against central.
+// It runs on the DOWNSTREAM cluster (plain k8s + CDI/ceph-csi), not against the hub.
 type VolumeMaterializerReconciler struct{ Client client.Client }
 
 func (r *VolumeMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

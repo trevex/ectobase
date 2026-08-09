@@ -135,15 +135,15 @@ func labelNamespacePrivileged(ctx context.Context, r Runner, kubeconfig, ns stri
 		"pod-security.kubernetes.io/enforce=privileged", "--overwrite")
 }
 
-// PatchCentralCSIClusterID sets the ceph cluster fsid on the central controller so
-// its ceph-csi NetworkFence actuator targets the right external cluster. The central
+// PatchHubCSIClusterID sets the ceph cluster fsid on the hub controller so
+// its ceph-csi NetworkFence actuator targets the right external cluster. The hub
 // controller is Deployment hub-controller in namespace system; its container
 // args include an empty `-csi-cluster-id=` element that we replace with
 // `-csi-cluster-id=<fsid>`.
 //
 // It reads the current args, locates the flag index, and applies a JSON6902 replace
 // at exactly that index (composed by the pure csiClusterIDPatch helper).
-func PatchCentralCSIClusterID(ctx context.Context, r Runner, hubKubeconfig, fsid string) error {
+func PatchHubCSIClusterID(ctx context.Context, r Runner, hubKubeconfig, fsid string) error {
 	r = runnerOf(r)
 	slog.Info("wiring the ceph fsid into hub-controller", "fsid", fsid)
 
@@ -187,7 +187,7 @@ func VMMaterializer(ctx context.Context, r Runner, kubeconfig, manifestPath stri
 
 // csiClusterIDPatch finds the index of the `-csi-cluster-id=` arg in args and
 // composes the JSON6902 patch body that replaces it with `-csi-cluster-id=<fsid>`.
-// Pure (no I/O) so PatchCentralCSIClusterID's index-finding + patch composition is
+// Pure (no I/O) so PatchHubCSIClusterID's index-finding + patch composition is
 // unit-tested. Errors if no `-csi-cluster-id=` arg is present.
 func csiClusterIDPatch(args []string, fsid string) (index int, patchJSON string, err error) {
 	const prefix = "-csi-cluster-id="

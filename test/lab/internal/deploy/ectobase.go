@@ -48,7 +48,7 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		return fmt.Errorf("mkdir workdir: %w", err)
 	}
 
-	// --- Central cluster ---
+	// --- Hub cluster ---
 	// (The clusters set cluster.allowSchedulingOnControlPlanes so control-plane nodes
 	// are never tainted — no untaint needed; every pod schedules on the single node.)
 	slog.Info("deploying hub apiserver + controller", "kustomize", filepath.Join(s.RepoRoot, "hub/config"))
@@ -352,7 +352,7 @@ func poolField(ctx context.Context, kubeconfig, name, jsonpath string) (string, 
 // addr (host:port, bracketed v6). hub/config ships a fixed Talos/bash-era value;
 // this repoints it at the reflector on this fabric (hub's identity) so the Tier-2
 // failover route-withdrawal can reach it. It reads the current args and JSON-patches
-// the -reflector-admin element in place (mirrors PatchCentralCSIClusterID).
+// the -reflector-admin element in place (mirrors PatchHubCSIClusterID).
 func patchHubReflectorAdmin(ctx context.Context, kubeconfig, addr string) error {
 	out, err := exec.Output(ctx, "kubectl", "--kubeconfig", kubeconfig,
 		"-n", "system", "get", "deploy", "hub-controller",
