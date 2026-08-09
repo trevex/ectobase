@@ -18,7 +18,7 @@ rules:
     resources: ["pods"]
     verbs: ["get"]
   # Resolve {vni, ips, mac} from the broker-synced CompiledNIC (central policy).
-  - apiGroups: ["net.ectobase.dev"]
+  - apiGroups: ["compiled.ectobase.dev"]
     resources: ["compilednics"]
     verbs: ["get"]
 ---
