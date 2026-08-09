@@ -11,9 +11,9 @@ import (
 
 // TestAPIModuleIsApimachineryOnly asserts the shared api module never pulls the
 // aggregated-apiserver framework (apiserver-kit) or k8s.io/apiserver into any of
-// its packages. Those belong exclusively to the central apiserver binary; the
+// its packages. Those belong exclusively to the hub apiserver binary; the
 // api module must stay importable by netplane/cni/broker without them. The
-// compile-time resource.Object proof lives at central/cmd/apiserver's
+// compile-time resource.Object proof lives at hub/cmd/apiserver's
 // apiserver.Resource(...) calls, not here.
 //
 // The check shells out to `go list -deps` over the module import-path pattern

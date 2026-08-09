@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	componentName = "central-apiserver"
+	componentName = "hub-apiserver"
 )
 
 var scheme = runtime.NewScheme()

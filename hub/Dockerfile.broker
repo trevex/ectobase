@@ -5,8 +5,8 @@
 # Dockerfile.apiserver for why the binary is built on the host and COPYd in
 # (local `replace` in go.mod).
 #
-# Expects: a statically linked `central-broker` binary next to this file.
+# Expects: a statically linked `hub-broker` binary next to this file.
 FROM gcr.io/distroless/static:nonroot
-COPY central-broker /usr/local/bin/broker
+COPY hub-broker /usr/local/bin/broker
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/broker"]

@@ -8,7 +8,7 @@ images:
   flowplaneDpdk: ghcr.io/trevex/ectobase/flowplane-dpdk:dev
   netplane: ghcr.io/trevex/ectobase/netplane:dev
   cni: ghcr.io/trevex/ectobase/cni:dev
-  centralBroker: ghcr.io/trevex/ectobase/central-broker:dev
+  hubBroker: ghcr.io/trevex/ectobase/hub-broker:dev
 imagePullPolicy: IfNotPresent
 
 # Overlay uplink interface (used by the DPDK datapath; the eBPF wrapper defaults to eth1).
@@ -38,7 +38,7 @@ installCRDs: true
 broker:
   enabled: false
   clusterName: ""                       # this cluster's pool name (e.g. k02); required when enabled
-  centralKubeconfigSecret: broker-central-kubeconfig  # Secret (key: kubeconfig) with a central token
+  centralKubeconfigSecret: broker-hub-kubeconfig  # Secret (key: kubeconfig) with a central token
 
 # Blue-green operator (thread C). Off until it lands; requires dataplane: dpdk.
 blueGreen:

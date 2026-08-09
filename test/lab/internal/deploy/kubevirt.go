@@ -137,7 +137,7 @@ func labelNamespacePrivileged(ctx context.Context, r Runner, kubeconfig, ns stri
 
 // PatchCentralCSIClusterID sets the ceph cluster fsid on the central controller so
 // its ceph-csi NetworkFence actuator targets the right external cluster. The central
-// controller is Deployment central-controller in namespace system; its container
+// controller is Deployment hub-controller in namespace system; its container
 // args include an empty `-csi-cluster-id=` element that we replace with
 // `-csi-cluster-id=<fsid>`.
 //
@@ -145,27 +145,27 @@ func labelNamespacePrivileged(ctx context.Context, r Runner, kubeconfig, ns stri
 // at exactly that index (composed by the pure csiClusterIDPatch helper).
 func PatchCentralCSIClusterID(ctx context.Context, r Runner, centralKubeconfig, fsid string) error {
 	r = runnerOf(r)
-	slog.Info("wiring the ceph fsid into central-controller", "fsid", fsid)
+	slog.Info("wiring the ceph fsid into hub-controller", "fsid", fsid)
 
 	out, err := r.Output(ctx, "kubectl", "--kubeconfig", centralKubeconfig,
-		"-n", "system", "get", "deploy", "central-controller",
+		"-n", "system", "get", "deploy", "hub-controller",
 		"-o", "jsonpath={.spec.template.spec.containers[0].args}")
 	if err != nil {
-		return fmt.Errorf("get central-controller args: %w", err)
+		return fmt.Errorf("get hub-controller args: %w", err)
 	}
 	var args []string
 	if err := json.Unmarshal(out, &args); err != nil {
-		return fmt.Errorf("parse central-controller args %q: %w", string(out), err)
+		return fmt.Errorf("parse hub-controller args %q: %w", string(out), err)
 	}
 	_, patch, err := csiClusterIDPatch(args, fsid)
 	if err != nil {
 		return err
 	}
 	if err := r.Run(ctx, "kubectl", "--kubeconfig", centralKubeconfig,
-		"-n", "system", "patch", "deploy", "central-controller", "--type=json", "-p", patch); err != nil {
-		return fmt.Errorf("patch central-controller csi-cluster-id: %w", err)
+		"-n", "system", "patch", "deploy", "hub-controller", "--type=json", "-p", patch); err != nil {
+		return fmt.Errorf("patch hub-controller csi-cluster-id: %w", err)
 	}
-	slog.Info("central-controller csi-cluster-id set", "fsid", fsid)
+	slog.Info("hub-controller csi-cluster-id set", "fsid", fsid)
 	return nil
 }
 
@@ -197,5 +197,5 @@ func csiClusterIDPatch(args []string, fsid string) (index int, patchJSON string,
 			return i, patch, nil
 		}
 	}
-	return 0, "", fmt.Errorf("no %q arg found in central-controller args %v", prefix, args)
+	return 0, "", fmt.Errorf("no %q arg found in hub-controller args %v", prefix, args)
 }

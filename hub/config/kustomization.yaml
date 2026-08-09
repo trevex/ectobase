@@ -1,7 +1,7 @@
 # Copyright 2026 ectobase contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Dev/smoke deployment of the central control plane:
+# Dev/smoke deployment of the hub control plane:
 #   kine (Postgres-backed etcd shim) -> aggregated apiserver -> APIService
 #   registration, plus the ClusterPool controller.
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -15,7 +15,7 @@ resources:
   - controller.yaml
 
 images:
-  - name: ghcr.io/trevex/ectobase/central-apiserver
+  - name: ghcr.io/trevex/ectobase/hub-apiserver
     newTag: dev
-  - name: ghcr.io/trevex/ectobase/central-controller
+  - name: ghcr.io/trevex/ectobase/hub-controller
     newTag: dev

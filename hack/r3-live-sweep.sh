@@ -6,15 +6,15 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 log() { echo "=== [r3-sweep $(date +%H:%M:%S)] $* ==="; }
 
-log "build central images (apiserver/controller/broker)"
-( cd central \
-  && GOWORK=off CGO_ENABLED=0 go build -o central-apiserver ./cmd/apiserver \
-  && GOWORK=off CGO_ENABLED=0 go build -o central-controller ./cmd/controller \
-  && GOWORK=off CGO_ENABLED=0 go build -o central-broker ./cmd/broker \
-  && docker build -f Dockerfile.apiserver  -t ghcr.io/trevex/ectobase/central-apiserver:dev  . \
-  && docker build -f Dockerfile.controller -t ghcr.io/trevex/ectobase/central-controller:dev . \
-  && docker build -f Dockerfile.broker     -t ghcr.io/trevex/ectobase/central-broker:dev     . ; \
-  rm -f central-apiserver central-controller central-broker ) || { log "central image build FAILED"; exit 1; }
+log "build hub images (apiserver/controller/broker)"
+( cd hub \
+  && GOWORK=off CGO_ENABLED=0 go build -o hub-apiserver ./cmd/apiserver \
+  && GOWORK=off CGO_ENABLED=0 go build -o hub-controller ./cmd/controller \
+  && GOWORK=off CGO_ENABLED=0 go build -o hub-broker ./cmd/broker \
+  && docker build -f Dockerfile.apiserver  -t ghcr.io/trevex/ectobase/hub-apiserver:dev  . \
+  && docker build -f Dockerfile.controller -t ghcr.io/trevex/ectobase/hub-controller:dev . \
+  && docker build -f Dockerfile.broker     -t ghcr.io/trevex/ectobase/hub-broker:dev     . ; \
+  rm -f hub-apiserver hub-controller hub-broker ) || { log "hub image build FAILED"; exit 1; }
 
 log "build netplane + cni images"
 make image-netplane || { log "image-netplane FAILED"; exit 1; }

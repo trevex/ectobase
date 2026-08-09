@@ -51,17 +51,17 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 	// --- Central cluster ---
 	// (The clusters set cluster.allowSchedulingOnControlPlanes so control-plane nodes
 	// are never tainted — no untaint needed; every pod schedules on the single node.)
-	slog.Info("deploying central apiserver + controller", "kustomize", filepath.Join(s.RepoRoot, "central/config"))
-	if err := kubectlApplyKustomize(ctx, s.CentralKubeconfig, filepath.Join(s.RepoRoot, "central/config")); err != nil {
-		return fmt.Errorf("apply central/config: %w", err)
+	slog.Info("deploying hub apiserver + controller", "kustomize", filepath.Join(s.RepoRoot, "hub/config"))
+	if err := kubectlApplyKustomize(ctx, s.CentralKubeconfig, filepath.Join(s.RepoRoot, "hub/config")); err != nil {
+		return fmt.Errorf("apply hub/config: %w", err)
 	}
-	// central/config hardcodes the Talos/bash-era reflector-admin address
+	// hub/config hardcodes the Talos/bash-era reflector-admin address
 	// (fd00:db8:0:1::1); on this fabric the reflector runs on central's identity, so
 	// point the controller's -reflector-admin there. Without this the Tier-2 failover's
 	// reflector route-withdrawal can't connect (dial no route to host) and the VM never
 	// reschedules off the fenced pool.
 	if err := patchCentralReflectorAdmin(ctx, s.CentralKubeconfig, "["+s.CentralIdentity+"]:1338"); err != nil {
-		return fmt.Errorf("patch central-controller reflector-admin: %w", err)
+		return fmt.Errorf("patch hub-controller reflector-admin: %w", err)
 	}
 	if err := waitAggregatedAPI(ctx, s.CentralKubeconfig); err != nil {
 		return fmt.Errorf("central aggregated API: %w", err)
@@ -121,7 +121,7 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 	// --- Shared broker→central kubeconfig ---
 	slog.Info("minting broker central token")
 	token, err := exec.OutputStr(ctx, "kubectl", "--kubeconfig", s.CentralKubeconfig,
-		"create", "token", "ectobase-broker", "-n", "system", "--duration=24h")
+		"create", "token", "hub-broker", "-n", "system", "--duration=24h")
 	if err != nil {
 		return fmt.Errorf("create broker token: %w", err)
 	}
@@ -139,26 +139,26 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		if err := kubectlApply(ctx, c.Kubeconfig, s.NADCRDPath); err != nil {
 			return fmt.Errorf("cluster %s: apply NAD CRD: %w", c.Name, err)
 		}
-		// The broker-central-kubeconfig Secret must exist before the chart's broker
+		// The broker-hub-kubeconfig Secret must exist before the chart's broker
 		// pod starts, so create the namespace + secret ahead of helm.
 		if err := ensureHelmNamespace(ctx, c.Kubeconfig, "ectobase-system", "ectobase"); err != nil {
 			return fmt.Errorf("cluster %s: ensure namespace: %w", c.Name, err)
 		}
 		if err := createSecretFromFile(ctx, c.Kubeconfig, "ectobase-system",
-			"broker-central-kubeconfig", "kubeconfig", brokerKubeconfig); err != nil {
+			"broker-hub-kubeconfig", "kubeconfig", brokerKubeconfig); err != nil {
 			return fmt.Errorf("cluster %s: create broker secret: %w", c.Name, err)
 		}
 		if err := helmInstallEctobase(ctx, c.Kubeconfig, c.Name, s.ChartPath, s.CentralIdentity, s.UnderlayWithin); err != nil {
 			return fmt.Errorf("cluster %s: helm install ectobase: %w", c.Name, err)
 		}
-		// The broker mounts broker-central-kubeconfig as a volume, so an existing
+		// The broker mounts broker-hub-kubeconfig as a volume, so an existing
 		// broker pod keeps the OLD kubeconfig across a re-`deploy` that rewrote the
 		// secret (helm won't roll it — the secret is created outside the chart). On a
 		// fresh up the broker starts after the secret so this is a no-op; on re-deploy
 		// it makes the broker pick up the current central address. Best-effort.
 		if err := exec.Run(ctx, "kubectl", "--kubeconfig", c.Kubeconfig, "-n", "ectobase-system",
-			"rollout", "restart", "deploy/central-broker"); err != nil {
-			slog.Debug("rollout restart central-broker", "cluster", c.Name, "err", err)
+			"rollout", "restart", "deploy/hub-broker"); err != nil {
+			slog.Debug("rollout restart hub-broker", "cluster", c.Name, "err", err)
 		}
 		// Multus (thin) so a Pod annotated onto our overlay is attached via
 		// Multus -> flowplane-cni (a SECONDARY network) instead of a hand-driven
@@ -227,7 +227,7 @@ func kubectlApplyStdin(ctx context.Context, kubeconfig, yaml string) error {
 // ownership label + annotations so the chart (whose own namespace.yaml manages the
 // same namespace) can adopt it. Without these, `helm install` refuses a
 // pre-existing namespace ("invalid ownership metadata"). We must create it ahead of
-// helm because the broker-central-kubeconfig Secret has to exist before the chart's
+// helm because the broker-hub-kubeconfig Secret has to exist before the chart's
 // broker pod starts.
 //
 // It also stamps pod-security.kubernetes.io/enforce=privileged: Talos enforces the
@@ -259,11 +259,11 @@ func labelPSAPrivileged(ctx context.Context, kubeconfig, ns string) error {
 // waitAggregatedAPI blocks until the central aggregated API actually serves the
 // platform group — APIService availability + aggregation can lag the apply.
 func waitAggregatedAPI(ctx context.Context, kubeconfig string) error {
-	// Generous: the central-apiserver pod must cold-pull its :dev image from the
+	// Generous: the hub-apiserver pod must cold-pull its :dev image from the
 	// in-fabric registry, start, and have its APIService become Available before the
 	// aggregated group is served.
 	slog.Info("waiting for the central aggregated API to serve")
-	// 12m: a cold boot pulls central-apiserver over the in-fabric registry (slow) and
+	// 12m: a cold boot pulls hub-apiserver over the in-fabric registry (slow) and
 	// the pod may restart once while kine/postgres settle — 6m was occasionally too short.
 	return wait.WaitFor(ctx, 12*time.Minute, 3*time.Second, func() (bool, error) {
 		err := exec.Run(ctx, "kubectl", "--kubeconfig", kubeconfig,
@@ -348,35 +348,35 @@ func poolField(ctx context.Context, kubeconfig, name, jsonpath string) (string, 
 	return strings.TrimSpace(out), err
 }
 
-// patchCentralReflectorAdmin sets the central-controller's -reflector-admin arg to
-// addr (host:port, bracketed v6). central/config ships a fixed Talos/bash-era value;
+// patchCentralReflectorAdmin sets the hub-controller's -reflector-admin arg to
+// addr (host:port, bracketed v6). hub/config ships a fixed Talos/bash-era value;
 // this repoints it at the reflector on this fabric (central's identity) so the Tier-2
 // failover route-withdrawal can reach it. It reads the current args and JSON-patches
 // the -reflector-admin element in place (mirrors PatchCentralCSIClusterID).
 func patchCentralReflectorAdmin(ctx context.Context, kubeconfig, addr string) error {
 	out, err := exec.Output(ctx, "kubectl", "--kubeconfig", kubeconfig,
-		"-n", "system", "get", "deploy", "central-controller",
+		"-n", "system", "get", "deploy", "hub-controller",
 		"-o", "jsonpath={.spec.template.spec.containers[0].args}")
 	if err != nil {
-		return fmt.Errorf("get central-controller args: %w", err)
+		return fmt.Errorf("get hub-controller args: %w", err)
 	}
 	var args []string
 	if err := json.Unmarshal(out, &args); err != nil {
-		return fmt.Errorf("parse central-controller args %q: %w", string(out), err)
+		return fmt.Errorf("parse hub-controller args %q: %w", string(out), err)
 	}
 	const prefix = "-reflector-admin="
 	for i, a := range args {
 		if strings.HasPrefix(a, prefix) {
 			patch := fmt.Sprintf(`[{"op":"replace","path":"/spec/template/spec/containers/0/args/%d","value":"-reflector-admin=%s"}]`, i, addr)
 			if err := exec.Run(ctx, "kubectl", "--kubeconfig", kubeconfig,
-				"-n", "system", "patch", "deploy", "central-controller", "--type=json", "-p", patch); err != nil {
+				"-n", "system", "patch", "deploy", "hub-controller", "--type=json", "-p", patch); err != nil {
 				return fmt.Errorf("patch reflector-admin: %w", err)
 			}
-			slog.Info("central-controller reflector-admin set", "addr", addr)
+			slog.Info("hub-controller reflector-admin set", "addr", addr)
 			return nil
 		}
 	}
-	return fmt.Errorf("no %q arg in central-controller args %v", prefix, args)
+	return fmt.Errorf("no %q arg in hub-controller args %v", prefix, args)
 }
 
 // mintKubeconfig hand-writes a token kubeconfig for the broker→central connection.
@@ -395,10 +395,10 @@ contexts:
 - name: broker@central
   context:
     cluster: central
-    user: ectobase-broker
+    user: hub-broker
 current-context: broker@central
 users:
-- name: ectobase-broker
+- name: hub-broker
   user:
     token: %s
 `, centralHost, token)
@@ -429,13 +429,13 @@ const brokerRBACManifest = `---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: ectobase-broker
+  name: hub-broker
   namespace: system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: ectobase-broker
+  name: hub-broker
 rules:
 - apiGroups: ["compiled.ectobase.dev"]
   resources: ["compilednics", "compiledvms", "compiledvolumeattachments", "compiledcontainers"]
@@ -450,13 +450,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: ectobase-broker
+  name: hub-broker
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: ectobase-broker
+  name: hub-broker
 subjects:
 - kind: ServiceAccount
-  name: ectobase-broker
+  name: hub-broker
   namespace: system
 `

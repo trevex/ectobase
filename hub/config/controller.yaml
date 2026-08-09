@@ -1,20 +1,20 @@
 # Copyright 2026 ectobase contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# The central controller: a controller-runtime manager running the ClusterPool
+# The hub controller: a controller-runtime manager running the ClusterPool
 # reconciler against the aggregated apiserver (via in-cluster config). It needs
 # RBAC to watch/get/list ClusterPools and update their status subresource.
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: central-controller
+  name: hub-controller
   namespace: system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: central-controller
+  name: hub-controller
 rules:
   - apiGroups: ["platform.ectobase.dev"]
     resources: ["clusterpools"]
@@ -51,37 +51,37 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: central-controller
+  name: hub-controller
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: central-controller
+  name: hub-controller
 subjects:
   - kind: ServiceAccount
-    name: central-controller
+    name: hub-controller
     namespace: system
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: central-controller
+  name: hub-controller
   namespace: system
   labels:
-    app: central-controller
+    app: hub-controller
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: central-controller
+      app: hub-controller
   template:
     metadata:
       labels:
-        app: central-controller
+        app: hub-controller
     spec:
-      serviceAccountName: central-controller
+      serviceAccountName: hub-controller
       containers:
         - name: controller
-          image: ghcr.io/trevex/ectobase/central-controller:dev
+          image: ghcr.io/trevex/ectobase/hub-controller:dev
           args:
             - "-reflector-admin=[fd00:db8:0:1::1]:1338"
             - "-csi-driver=rbd.csi.ceph.com"

@@ -2,10 +2,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: central-broker
+  name: hub-broker
   namespace: ectobase-system
   labels:
-    app.kubernetes.io/name: central-broker
+    app.kubernetes.io/name: hub-broker
     app.kubernetes.io/part-of: netplane
 spec:
   replicas: 1
@@ -13,14 +13,14 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: central-broker
+      app.kubernetes.io/name: hub-broker
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: central-broker
+        app.kubernetes.io/name: hub-broker
         app.kubernetes.io/part-of: netplane
     spec:
-      serviceAccountName: central-broker
+      serviceAccountName: hub-broker
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       nodeSelector:
@@ -29,7 +29,7 @@ spec:
         - operator: Exists
       containers:
         - name: broker
-          image: {{ .Values.images.centralBroker }}
+          image: {{ .Values.images.hubBroker }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           command: ["broker"]
           args:

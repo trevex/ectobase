@@ -4,7 +4,7 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-THIS_PKG="github.com/trevex/ectobase/central"
+THIS_PKG="github.com/trevex/ectobase/hub"
 
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 PROJECT_DIR="$SCRIPT_DIR/.."

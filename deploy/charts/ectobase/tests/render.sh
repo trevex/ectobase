@@ -106,13 +106,13 @@ render_show_only templates/broker.yaml "$DIR/values/ebpf-clab.yaml" >/dev/null 2
 brk=$(helm template ectobase deploy/charts/ectobase --namespace ectobase-system \
         --set broker.enabled=true --set broker.clusterName=k02 --show-only templates/broker.yaml 2>/dev/null)
 echo "$brk" | grep -q "kind: Deployment"                && ok "broker Deployment renders" || bad "broker Deployment renders"
-echo "$brk" | grep -q "name: central-broker"            && ok "broker name" || bad "broker name"
+echo "$brk" | grep -q "name: hub-broker"            && ok "broker name" || bad "broker name"
 echo "$brk" | grep -q -- "--cluster-name=k02"           && ok "broker --cluster-name wired" || bad "broker --cluster-name wired"
-echo "$brk" | grep -q "serviceAccountName: central-broker" && ok "broker SA on pod" || bad "broker SA on pod"
+echo "$brk" | grep -q "serviceAccountName: hub-broker" && ok "broker SA on pod" || bad "broker SA on pod"
 
 brkrbac=$(helm template ectobase deploy/charts/ectobase --namespace ectobase-system \
             --set broker.enabled=true --set broker.clusterName=k02 --show-only templates/rbac.yaml 2>/dev/null)
-echo "$brkrbac" | grep -q "kind: ServiceAccount" && echo "$brkrbac" | grep -q "name: central-broker" \
+echo "$brkrbac" | grep -q "kind: ServiceAccount" && echo "$brkrbac" | grep -q "name: hub-broker" \
   && ok "broker ServiceAccount renders" || bad "broker ServiceAccount renders"
 
 # 9a) broker.enabled=true with empty clusterName must FAIL helm template.

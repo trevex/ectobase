@@ -94,9 +94,9 @@ func TestPatchCentralCSIClusterID(t *testing.T) {
 	if err := PatchCentralCSIClusterID(context.Background(), f, "/kc/central.kubeconfig", "fsid-9"); err != nil {
 		t.Fatalf("PatchCentralCSIClusterID: %v", err)
 	}
-	c := f.findCall("kubectl", "patch", "deploy", "central-controller", "--type=json")
+	c := f.findCall("kubectl", "patch", "deploy", "hub-controller", "--type=json")
 	if c == nil {
-		t.Fatalf("no central-controller patch call:\n%v", f.calls)
+		t.Fatalf("no hub-controller patch call:\n%v", f.calls)
 	}
 	joined := strings.Join(c, " ")
 	if !strings.Contains(joined, `-csi-cluster-id=fsid-9`) || !strings.Contains(joined, `/args/1`) {

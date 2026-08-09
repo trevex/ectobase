@@ -1,8 +1,8 @@
 # Copyright 2026 ectobase contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Postgres + kine (etcd-v3 shim) for the central aggregated apiserver's storage.
-# Mirrors central/hack/kine-up.sh (rancher/kine over Postgres). kine exposes an
+# Postgres + kine (etcd-v3 shim) for the hub aggregated apiserver's storage.
+# Mirrors hub/hack/kine-up.sh (rancher/kine over Postgres). kine exposes an
 # etcd-v3 gRPC endpoint on :2379 that the apiserver talks to via --etcd-servers.
 # Storage here is ephemeral (emptyDir) — this is a dev/smoke manifest, not HA.
 ---
@@ -13,7 +13,7 @@ metadata:
   namespace: system
 spec:
   selector:
-    app: central-postgres
+    app: hub-postgres
   ports:
     - name: postgres
       port: 5432
@@ -25,16 +25,16 @@ metadata:
   name: postgres
   namespace: system
   labels:
-    app: central-postgres
+    app: hub-postgres
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: central-postgres
+      app: hub-postgres
   template:
     metadata:
       labels:
-        app: central-postgres
+        app: hub-postgres
     spec:
       containers:
         - name: postgres
@@ -67,7 +67,7 @@ metadata:
   namespace: system
 spec:
   selector:
-    app: central-kine
+    app: hub-kine
   ports:
     - name: etcd
       port: 2379
@@ -79,16 +79,16 @@ metadata:
   name: kine
   namespace: system
   labels:
-    app: central-kine
+    app: hub-kine
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: central-kine
+      app: hub-kine
   template:
     metadata:
       labels:
-        app: central-kine
+        app: hub-kine
     spec:
       containers:
         - name: kine

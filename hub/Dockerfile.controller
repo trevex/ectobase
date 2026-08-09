@@ -1,11 +1,11 @@
 # Copyright 2026 ectobase contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Minimal runtime image for the central controller. See Dockerfile.apiserver for
+# Minimal runtime image for the hub controller. See Dockerfile.apiserver for
 # why the binary is built on the host and COPYd in (local `replace` in go.mod).
 #
-# Expects: a statically linked `central-controller` binary next to this file.
+# Expects: a statically linked `hub-controller` binary next to this file.
 FROM gcr.io/distroless/static:nonroot
-COPY central-controller /usr/local/bin/central-controller
+COPY hub-controller /usr/local/bin/hub-controller
 USER 65532:65532
-ENTRYPOINT ["/usr/local/bin/central-controller"]
+ENTRYPOINT ["/usr/local/bin/hub-controller"]

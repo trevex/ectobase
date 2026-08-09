@@ -166,13 +166,13 @@ subjects:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: central-broker
+  name: hub-broker
   namespace: ectobase-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: central-broker
+  name: hub-broker
 rules:
   - apiGroups: ["compiled.ectobase.dev"]
     resources:
@@ -193,13 +193,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: central-broker
+  name: hub-broker
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: central-broker
+  name: hub-broker
 subjects:
   - kind: ServiceAccount
-    name: central-broker
+    name: hub-broker
     namespace: ectobase-system
 {{- end }}

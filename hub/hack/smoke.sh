@@ -2,32 +2,32 @@
 # Copyright 2026 ectobase contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Single-cluster live smoke for the central control plane:
+# Single-cluster live smoke for the hub control plane:
 #   1. bring up a plain kind cluster
-#   2. build the central-apiserver + central-controller binaries on the HOST
+#   2. build the hub-apiserver + hub-controller binaries on the HOST
 #      (GOWORK=off, CGO disabled, static) and bake them into distroless images
 #      (host build sidesteps the local `replace go.opendefense.cloud/kit` in
-#       central/go.mod, which points outside the module tree and so is not
+#       hub/go.mod, which points outside the module tree and so is not
 #       reachable from a Docker build context)
-#   3. `kind load` the images, `kubectl apply -k central/config`
+#   3. `kind load` the images, `kubectl apply -k hub/config`
 #   4. wait for rollouts, then prove:
 #        - `kubectl get clusterpools.platform.ectobase.dev` works (aggregation up)
 #        - a created ClusterPool gets status.phase: Pending (controller reconciles)
 #
-# The envtest controller test (central/test/controller_test.go) is the
+# The envtest controller test (hub/test/controller_test.go) is the
 # authoritative gate; this is best-effort end-to-end validation. Run from the
-# repo root: `bash central/hack/smoke.sh`.
+# repo root: `bash hub/hack/smoke.sh`.
 set -euo pipefail
 
-CENTRAL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CLUSTER="${KIND_CLUSTER:-central-smoke}"
-APISERVER_IMG="ghcr.io/trevex/ectobase/central-apiserver:dev"
-CONTROLLER_IMG="ghcr.io/trevex/ectobase/central-controller:dev"
-BROKER_IMG="ghcr.io/trevex/ectobase/central-broker:dev"
+HUB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CLUSTER="${KIND_CLUSTER:-hub-smoke}"
+APISERVER_IMG="ghcr.io/trevex/ectobase/hub-apiserver:dev"
+CONTROLLER_IMG="ghcr.io/trevex/ectobase/hub-controller:dev"
+BROKER_IMG="ghcr.io/trevex/ectobase/hub-broker:dev"
 
 cleanup() {
   # Remove host-built binaries copied next to the Dockerfiles.
-  rm -f "${CENTRAL_DIR}/central-apiserver" "${CENTRAL_DIR}/central-controller" "${CENTRAL_DIR}/central-broker"
+  rm -f "${HUB_DIR}/hub-apiserver" "${HUB_DIR}/hub-controller" "${HUB_DIR}/hub-broker"
 }
 trap cleanup EXIT
 
@@ -36,16 +36,16 @@ kind get clusters 2>/dev/null | grep -qx "${CLUSTER}" || kind create cluster --n
 
 echo "==> building host binaries (GOWORK=off, static)"
 (
-  cd "${CENTRAL_DIR}"
-  GOWORK=off CGO_ENABLED=0 go build -o central-apiserver ./cmd/apiserver
-  GOWORK=off CGO_ENABLED=0 go build -o central-controller ./cmd/controller
-  GOWORK=off CGO_ENABLED=0 go build -o central-broker ./cmd/broker
+  cd "${HUB_DIR}"
+  GOWORK=off CGO_ENABLED=0 go build -o hub-apiserver ./cmd/apiserver
+  GOWORK=off CGO_ENABLED=0 go build -o hub-controller ./cmd/controller
+  GOWORK=off CGO_ENABLED=0 go build -o hub-broker ./cmd/broker
 )
 
 echo "==> building images"
-docker build -f "${CENTRAL_DIR}/Dockerfile.apiserver" -t "${APISERVER_IMG}" "${CENTRAL_DIR}"
-docker build -f "${CENTRAL_DIR}/Dockerfile.controller" -t "${CONTROLLER_IMG}" "${CENTRAL_DIR}"
-docker build -f "${CENTRAL_DIR}/Dockerfile.broker" -t "${BROKER_IMG}" "${CENTRAL_DIR}"
+docker build -f "${HUB_DIR}/Dockerfile.apiserver" -t "${APISERVER_IMG}" "${HUB_DIR}"
+docker build -f "${HUB_DIR}/Dockerfile.controller" -t "${CONTROLLER_IMG}" "${HUB_DIR}"
+docker build -f "${HUB_DIR}/Dockerfile.broker" -t "${BROKER_IMG}" "${HUB_DIR}"
 
 echo "==> loading images into kind"
 kind load docker-image --name "${CLUSTER}" "${APISERVER_IMG}"
@@ -53,13 +53,13 @@ kind load docker-image --name "${CLUSTER}" "${CONTROLLER_IMG}"
 kind load docker-image --name "${CLUSTER}" "${BROKER_IMG}"
 
 echo "==> applying manifests"
-kubectl apply -k "${CENTRAL_DIR}/config"
+kubectl apply -k "${HUB_DIR}/config"
 
 echo "==> waiting for rollouts"
 kubectl -n system rollout status deploy/postgres --timeout=120s
 kubectl -n system rollout status deploy/kine --timeout=120s
-kubectl -n system rollout status deploy/central-apiserver --timeout=180s
-kubectl -n system rollout status deploy/central-controller --timeout=120s
+kubectl -n system rollout status deploy/hub-apiserver --timeout=180s
+kubectl -n system rollout status deploy/hub-controller --timeout=120s
 
 echo "==> waiting for the aggregated API to be available"
 for i in $(seq 1 30); do
@@ -90,7 +90,7 @@ if [ "${phase}" = "Pending" ]; then
 else
   echo "SMOKE FAIL: ClusterPool smoke-pool phase=${phase:-<empty>} (expected Pending)"
   kubectl -n system get pods
-  kubectl -n system logs deploy/central-controller --tail=50 || true
+  kubectl -n system logs deploy/hub-controller --tail=50 || true
   exit 1
 fi
 

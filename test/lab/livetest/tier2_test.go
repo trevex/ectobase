@@ -33,7 +33,7 @@ const (
 	tier2VMIName = "default-" + tier2VMName
 )
 
-// fenceName mirrors central/pkg/fence/storage.go fenceName(): "ectobase-" +
+// fenceName mirrors hub/pkg/fence/storage.go fenceName(): "ectobase-" +
 // prefix with ':' -> '-', '/' -> '--', '.' -> '-'. Used to look up the csi-addons
 // NetworkFence CR for a node /64 by name.
 func fenceName(prefix string) string {
@@ -197,7 +197,7 @@ func TestTier2Failover(t *testing.T) {
 	})
 }
 
-// scaleBrokerReplicas scales a compute cluster's central-broker deployment. Scaling
+// scaleBrokerReplicas scales a compute cluster's hub-broker deployment. Scaling
 // to 0 stops the broker's ClusterPool-lease heartbeat, so central marks the pool
 // Unknown (lease stale) and the Tier-2 failover reconciler fences + reschedules its
 // VMs — a non-destructive drain that (unlike killing the node container) preserves the
@@ -205,7 +205,7 @@ func TestTier2Failover(t *testing.T) {
 // back to 1 renews the lease → pool Ready → the fence is released.
 func scaleBrokerReplicas(ctx context.Context, cfg *config.Config, cluster string, replicas int) error {
 	_, err := kubectl(ctx, cfg, cluster, "-n", "ectobase-system",
-		"scale", "deploy/central-broker", fmt.Sprintf("--replicas=%d", replicas))
+		"scale", "deploy/hub-broker", fmt.Sprintf("--replicas=%d", replicas))
 	return err
 }
 
