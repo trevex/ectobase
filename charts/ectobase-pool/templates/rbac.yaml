@@ -1,0 +1,114 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: netplane-agent
+  namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: netplane-agent
+  labels: {{- include "ectobase-pool.labels" . | nindent 4 }}
+rules:
+  {{- (.Files.Get "files/netplane-agent/role.yaml" | fromYaml).rules | toYaml | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: netplane-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: netplane-agent
+subjects:
+  - kind: ServiceAccount
+    name: netplane-agent
+    namespace: {{ .Values.namespace }}
+---
+# The per-cluster broker (kubelet-analog) syncs compiled objects from the hub down into
+# THIS downstream cluster's compiled.ectobase.dev CRDs (create/update/patch/delete + GC), reads
+# Nodes for underlay/prefix reporting, and reads VMIs for VM lifecycle status. Hub-side
+# credentials come from a separate mounted kubeconfig (broker.hubKubeconfigSecret); this
+# RBAC is only the downstream (in-cluster) half. Hub-side RBAC is minted by the e2e token.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hub-broker
+  namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hub-broker
+  labels: {{- include "ectobase-pool.labels" . | nindent 4 }}
+rules:
+  {{- (.Files.Get "files/hub-broker/role.yaml" | fromYaml).rules | toYaml | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hub-broker
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: hub-broker
+subjects:
+  - kind: ServiceAccount
+    name: hub-broker
+    namespace: {{ .Values.namespace }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pod-materializer
+  namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pod-materializer
+  labels: {{- include "ectobase-pool.labels" . | nindent 4 }}
+rules:
+  {{- (.Files.Get "files/pod-materializer/role.yaml" | fromYaml).rules | toYaml | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pod-materializer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pod-materializer
+subjects:
+  - kind: ServiceAccount
+    name: pod-materializer
+    namespace: {{ .Values.namespace }}
+{{- if .Values.vmMaterializer.enabled }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vm-materializer
+  namespace: {{ .Values.namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vm-materializer
+  labels: {{- include "ectobase-pool.labels" . | nindent 4 }}
+rules:
+  {{- (.Files.Get "files/vm-materializer/role.yaml" | fromYaml).rules | toYaml | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vm-materializer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vm-materializer
+subjects:
+  - kind: ServiceAccount
+    name: vm-materializer
+    namespace: {{ .Values.namespace }}
+{{- end }}

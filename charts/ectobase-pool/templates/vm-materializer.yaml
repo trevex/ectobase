@@ -1,0 +1,34 @@
+{{- if .Values.vmMaterializer.enabled }}
+# Downstream vm-materializer: turns broker-synced CompiledVM / CompiledVolumeAttachment (local
+# compiled.ectobase.dev) into KubeVirt VirtualMachine + CDI DataVolume objects on this compute cluster.
+# Runs ONLY on compute pools (k02/k03) — the cluster where KubeVirt actually boots the VM. Uses the
+# in-cluster config (a normal pod: it talks to the local apiserver via the kubernetes ClusterIP and
+# never touches the datapath, so no hostNetwork). SA + RBAC are in rbac.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vm-materializer
+  namespace: {{ .Values.namespace }}
+  labels:
+    app.kubernetes.io/name: vm-materializer
+    app.kubernetes.io/part-of: netplane
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vm-materializer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vm-materializer
+        app.kubernetes.io/part-of: netplane
+    spec:
+      serviceAccountName: vm-materializer
+      containers:
+        - name: vm-materializer
+          image: {{ .Values.images.netplane }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: ["vm-materializer"]
+{{- end }}

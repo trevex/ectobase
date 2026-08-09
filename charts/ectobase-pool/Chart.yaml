@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ectobase-pool
+description: ectobase compute-cluster ("pool") dataplane + per-cluster control-plane agents.
+type: application
+version: 0.1.0
+appVersion: "dev"

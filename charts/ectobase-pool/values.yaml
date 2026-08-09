@@ -1,0 +1,69 @@
+# Namespace where all pool resources are deployed.
+namespace: ectobase-system
+
+# Datapath backend for the WHOLE cluster (whole-cluster toggle; no mixed clusters).
+dataplane: ebpf            # ebpf | dpdk
+# Deployment environment; drives datapath-specific knobs (hugepages, vfio, lcores).
+env: clab                  # clab | hw
+
+images:
+  flowplane: ghcr.io/trevex/ectobase/flowplane:dev
+  flowplaneDpdk: ghcr.io/trevex/ectobase/flowplane-dpdk:dev
+  netplane: ghcr.io/trevex/ectobase/netplane:dev
+  cni: ghcr.io/trevex/ectobase/cni:dev
+  hubBroker: ghcr.io/trevex/ectobase/hub-broker:dev
+imagePullPolicy: IfNotPresent
+
+# Overlay uplink interface (used by the DPDK datapath; the eBPF wrapper defaults to eth1).
+uplink: eth1
+# Expected node-underlay aggregate (CIDR). When set, flowplane picks the host address inside it as
+# the underlay (the authoritative cluster-wide filter — ignores mgmt hostIP / Talos hostDNS lo ULA /
+# CNI /128s). Empty = infer from the dummy*/lo fabric loopback. The Talos lab sets fd00:cafe::/32.
+underlayWithin: ""
+# Fabric reflector address the agent dials.
+reflectorAddress: "[fd00:db8:0:1::1]:1338"
+# Control-plane API server the agent dials over the fabric (kubeconfig server URL).
+apiserverAddress: "https://[fd00:db8:0:1::1]:6443"
+
+# DPDK-only knobs (dataplane: dpdk).
+dpdk:
+  lcores: "0"              # EAL -l value. clab MUST be a single lcore (shared host).
+  hugepages: false         # clab: false (--no-huge); hw: true.
+  hugepageSize: 1Gi
+  hugepageLimit: 2Gi
+  vfioDevices: []          # hw: [{name: <resource>, count: <n>}] device-plugin requests.
+
+# Install the net.ectobase.dev CRDs with the chart (managed on helm upgrade).
+installCRDs: true
+
+# Per-cluster broker (kubelet-analog): syncs compiled objects from the hub down into this
+# pool cluster. The broker is ALWAYS deployed in the pool chart; clusterName is required.
+broker:
+  clusterName: ""                       # this cluster's pool name (e.g. k02); required
+  hubKubeconfigSecret: broker-hub-kubeconfig  # Secret (key: kubeconfig) with a hub token
+
+# vm-materializer: turns broker-synced CompiledVM/CompiledVolumeAttachment into KubeVirt VMs.
+# Off by default; on for pools with KubeVirt installed.
+vmMaterializer:
+  enabled: false
+
+# Blue-green operator (thread C). Off until it lands; requires dataplane: dpdk.
+blueGreen:
+  enabled: false
+
+# Tier-1 autonomous local failover (medik8s NHC + SNR). Pool-local capability;
+# opt-in. When enabled, the chart renders a NodeHealthCheck + SelfNodeRemediationTemplate
+# (and a SelfNodeRemediationConfig only when a hardware watchdog is requested).
+tier1Failover:
+  enabled: false                          # opt-in per pool; renders nothing when false
+  snrNamespace: self-node-remediation     # where the SNR operator (+ our Template/Config) live
+  nodeSelector:                           # LabelSelector of nodes NHC watches
+    matchExpressions:
+      - key: node-role.kubernetes.io/control-plane
+        operator: DoesNotExist
+  unhealthyThreshold: 60s                 # Node Ready=Unknown/False duration before remediation
+  minHealthy: "51%"                       # NHC guard: never remediate below this healthy quorum
+  remediationStrategy: OutOfServiceTaint  # SNR enum: Automatic | ResourceDeletion | OutOfServiceTaint
+  watchdog:
+    enabled: false                        # dev/kind: software reboot. prod true = hardware watchdog
+    device: /dev/watchdog                 # watchdogFilePath on SelfNodeRemediationConfig (when enabled)

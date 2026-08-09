@@ -1,0 +1,94 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["namespace", "dataplane", "env", "images", "uplink", "installCRDs"],
+  "properties": {
+    "namespace": { "type": "string", "minLength": 1 },
+    "dataplane": { "type": "string", "enum": ["ebpf", "dpdk"] },
+    "env": { "type": "string", "enum": ["clab", "hw"] },
+    "imagePullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+    "uplink": { "type": "string", "minLength": 1 },
+    "underlayWithin": { "type": "string" },
+    "reflectorAddress": { "type": "string", "minLength": 1 },
+    "apiserverAddress": { "type": "string", "minLength": 1 },
+    "installCRDs": { "type": "boolean" },
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["flowplane", "flowplaneDpdk", "netplane", "cni", "hubBroker"],
+      "properties": {
+        "flowplane": { "type": "string", "minLength": 1 },
+        "flowplaneDpdk": { "type": "string", "minLength": 1 },
+        "netplane": { "type": "string", "minLength": 1 },
+        "cni": { "type": "string", "minLength": 1 },
+        "hubBroker": { "type": "string", "minLength": 1 }
+      }
+    },
+    "broker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "clusterName": { "type": "string" },
+        "hubKubeconfigSecret": { "type": "string", "minLength": 1 }
+      }
+    },
+    "vmMaterializer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "dpdk": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "lcores": { "type": "string", "minLength": 1 },
+        "hugepages": { "type": "boolean" },
+        "hugepageSize": { "type": "string", "enum": ["2Mi", "1Gi"] },
+        "hugepageLimit": { "type": "string", "minLength": 1 },
+        "vfioDevices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "count"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "count": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    },
+    "blueGreen": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean" } }
+    },
+    "tier1Failover": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "snrNamespace": { "type": "string", "minLength": 1 },
+        "nodeSelector": { "type": "object" },
+        "unhealthyThreshold": { "type": "string", "minLength": 1 },
+        "minHealthy": { "type": "string", "minLength": 1 },
+        "remediationStrategy": {
+          "type": "string",
+          "enum": ["Automatic", "ResourceDeletion", "OutOfServiceTaint"]
+        },
+        "watchdog": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "device": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}
