@@ -1,0 +1,11 @@
+# Config for crd-ref-docs (github.com/elastic/crd-ref-docs): generates the per-group CRD API
+# reference markdown under docs/reference/api/ from the Go types + kubebuilder markers.
+# See `make docs-crd-ref` (wired into `make generate`).
+processor:
+  # Fields we don't want expanded in the reference.
+  ignoreFields:
+    - "TypeMeta$"
+
+render:
+  # Render k8s apimachinery types as links to the upstream reference instead of expanding them.
+  kubernetesVersion: "1.30"

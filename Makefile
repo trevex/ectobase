@@ -24,14 +24,20 @@ release: ## Build the flowplane binary in release mode
 	cargo build -p flowplane --release
 
 .PHONY: docs
-docs: ## Build the mdbook documentation into docs/book
-	mdbook-mermaid install docs
-	mdbook build docs
+docs: ## Build the mkdocs site (strict: broken links/nav fail the build)
+	mkdocs build --strict
 
 .PHONY: docs-serve
-docs-serve: ## Serve the mdbook docs locally with live reload
-	mdbook-mermaid install docs
-	mdbook serve docs
+docs-serve: ## Serve the docs locally with live reload
+	mkdocs serve
+
+.PHONY: docs-crd-ref
+docs-crd-ref: ## Generate the per-group CRD API reference (crd-ref-docs)
+	@for g in net compute storage compiled platform; do \
+	  echo "crd-ref-docs -> docs/reference/api/$$g.md"; \
+	  crd-ref-docs --source-path=api/$$g/v1alpha1 --config=crd-ref-docs.yaml \
+	    --renderer=markdown --output-path=docs/reference/api/$$g.md ; \
+	done
 
 .PHONY: generate
 generate: ## Regenerate deepcopy/conversion (kube::codegen) + CRD manifests (controller-gen)
@@ -53,6 +59,8 @@ generate: ## Regenerate deepcopy/conversion (kube::codegen) + CRD manifests (con
 	cd hub && controller-gen rbac:roleName=hub-controller paths=./cmd/controller/... output:rbac:artifacts:config=../charts/ectobase-hub/files/hub-controller
 	cd hub && controller-gen rbac:roleName=hub-broker paths=./cmd/broker/rbac/hubside/... output:rbac:artifacts:config=../charts/ectobase-hub/files/hub-broker
 	cd hub && controller-gen rbac:roleName=hub-broker paths=./cmd/broker/rbac/poolside/... output:rbac:artifacts:config=../charts/ectobase-pool/files/hub-broker
+	# Docs: regenerate the per-group CRD API reference so it never drifts from the types.
+	$(MAKE) docs-crd-ref
 
 .PHONY: proto-go
 proto-go: ## Generate Go gRPC stubs for dataplane.v1 into cni/gen/dataplanev1

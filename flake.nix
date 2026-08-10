@@ -95,6 +95,22 @@
           dontUnpack = true;
           installPhase = "install -Dm755 $src $out/bin/talosctl";
         };
+        # crd-ref-docs generates the per-group CRD API reference markdown from the Go types +
+        # kubebuilder markers (see `make docs-crd-ref`, wired into `make generate`). Not in
+        # nixpkgs, so build it from source at a pinned tag.
+        crd-ref-docs = pkgs.buildGoModule rec {
+          pname = "crd-ref-docs";
+          version = "0.3.0";
+          src = pkgs.fetchFromGitHub {
+            owner = "elastic";
+            repo = "crd-ref-docs";
+            rev = "v${version}";
+            hash = "sha256-+kg9Ql6LrvQO9UJ0lBEXJpedMBpmasTwYgRg9pj8420=";
+          };
+          vendorHash = "sha256-lV9kMqdB4hA9v/748fJH9TnE5angryLdguAEjuMhUjM=";
+          subPackages = [ "." ]; # only the CLI; skip the test/api fixtures
+          doCheck = false;
+        };
       in
       {
         devShells.default = pkgs.mkShell {
@@ -107,8 +123,11 @@
             pkgs.cargo-edit
             pkgs.cargo-nextest
             pkgs.wasm-tools
-            pkgs.mdbook
-            pkgs.mdbook-mermaid
+            # Documentation: mkdocs + Material theme (mermaid via pymdownx.superfences); the API
+            # reference is generated per group by crd-ref-docs (see `make docs` / `make generate`).
+            pkgs.mkdocs
+            pkgs.python3Packages.mkdocs-material
+            crd-ref-docs
             pkgs.kubernetes-controller-tools # controller-gen: regenerates deepcopy + CRDs (see `make generate`)
             # eBPF + gRPC + VM/e2e harness tooling. Everything the test scripts need is
             # provided here, so the scripts use bare tool names (no host-specific paths) and are
