@@ -23,3 +23,6 @@ test/e2e/netprobe
 
 # mkdocs build output
 site/
+
+# Retired design archive: specs/plans live in git history, not tracked going forward.
+docs/superpowers/

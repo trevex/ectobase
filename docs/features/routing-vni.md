@@ -79,7 +79,7 @@ encap format and [Datapath programs](../architecture/dataplane/programs.md) for 
 
 `flowplane` never discovers routes on its own. Route distribution is the job of the
 **route bus** — a custom, per-VNI publish/subscribe channel between the per-node agents
-and the central reflector. It is metalbond-analog pub/sub, **not** BGP; BGP appears only
+and the reflector on the hub. It is metalbond-analog pub/sub, **not** BGP; BGP appears only
 at the [WAN edge](ns-edge.md) for announcing public prefixes upstream.
 
 Each node agent, driven purely by the [`CompiledNIC`](../architecture/compile-sync-materialize.md)

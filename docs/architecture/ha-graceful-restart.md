@@ -1,5 +1,9 @@
 # HA & graceful restart
 
+!!! success "Status: Implemented"
+    Adopt-and-repoint (pinned maps + pinned bpf-links) is the default on kernels ≥ 6.6 and is
+    proven zero-drop by the continuity test on the lab fabric.
+
 A `flowplane` process restart — a crash, OOM, liveness-kill, `crictl stop`, or a rolling image
 upgrade — causes **zero forwarding gap**. The datapath (eBPF programs + state maps) lives in the
 kernel independently of the agent process; two bpffs-pinning primitives make a restart seamless:
@@ -79,9 +83,9 @@ behaviour there. The uplink/wan XDP zero-gap path is unaffected.
 
 ## The zero-drop test
 
-`test/scenario-restart-continuity.sh` formalizes the guarantee. A continuous ping flow runs *through*
-the datapath while the `flowplane` container is `crictl`-stopped and kubelet-restarted, asserting the
-unique fingerprint of adopt-and-repoint:
+`TestRestartContinuity` (`test/lab/livetest/restart_test.go`) formalizes the guarantee. A continuous
+ping flow runs *through* the datapath while the `flowplane` container is `crictl`-stopped and
+kubelet-restarted, asserting the unique fingerprint of adopt-and-repoint:
 
 1. **Packet loss across the restart boundary is ≤ the threshold** (target ~0).
 2. **The pinned bpf-link at `$PIN/links/uplink-eth1` survived** the stop — same path present both

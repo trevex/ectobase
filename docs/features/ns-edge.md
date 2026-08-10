@@ -1,5 +1,10 @@
 # North-South WAN edge
 
+!!! warning "Status: Partial"
+    Egress SNAT with the distributed return is validated end-to-end on the lab fabric. The
+    internet→VIP ingress path is proven on the kind pseudo-edge; on real WAN hardware the edge
+    role (native XDP, anycast underlay, BGP announcement) is deployment-gated.
+
 The **WAN edge** bridges the tenant overlay to the internet. It gives overlay endpoints
 north-south connectivity — **egress** (VM → internet, SNAT), **ingress** (internet → service, L4
 load-balanced), and floating IPs — through a fleet of `flowplane` nodes running in an **edge role**.
@@ -42,7 +47,7 @@ flowchart TB
 ## Egress: distributed SNAT with a distributed return
 
 Egress SNAT is **distributed onto the source node**, not centralized on the edge. The NATGateway
-port-block allocator (in the central controller) assigns each source overlay IP a deterministic
+port-block allocator (in the hub controller) assigns each source overlay IP a deterministic
 `(public-IP, port-block)` — the GCP Cloud NAT model. The block is stamped into the source NIC's
 `CompiledNIC.NAT`, and the source node performs the SNAT locally on egress.
 

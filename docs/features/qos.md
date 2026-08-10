@@ -1,5 +1,10 @@
 # QoS: EDT shaping & policing
 
+!!! warning "Status: Partial"
+    Policing (drop) and the EDT stamping/wiring are implemented and validated in the lab. True FQ
+    *pacing* (loss-free shaping) can only be measured on real fabric/VMs — nested netns + veth do
+    not provide real FQ, so the clab run validates policing and "tstamp is set", not the pacing.
+
 Per-interface QoS gives each guest three independent traffic-control lanes: **EDT-shaped total
 egress**, **policed external egress**, and **policed ingress**. The headline capability is *true
 shaping* — pacing traffic to a rate with no packet loss — using the kernel's Earliest-Departure-Time
@@ -107,7 +112,7 @@ FQ, so it is **not** egress-shaped. Cross-node egress (encap → uplink) and all
 
 ## The `InterfaceQoS` API
 
-QoS is expressed per interface (`api/v1alpha1`, `NetworkInterfaceSpec.QoS`); nil means unlimited.
+QoS is expressed per interface (`api/net/v1alpha1`, `NetworkInterfaceSpec.QoS`); nil means unlimited.
 The agent lowers it into the one dataplane QoS map entry via `DataplaneNode/ConfigureQoS`:
 
 ```go

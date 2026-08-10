@@ -38,7 +38,7 @@ type VPCPeeringSpec struct {
     // VPCRef is this side's VPC (same namespace).
     VPCRef LocalObjectReference `json:"vpcRef"`
     // PeerVPCRef references the other VPC (may be another tenant namespace — peering is
-    // central-authored).
+    // hub-authored).
     PeerVPCRef ObjectReference `json:"peerVpcRef"`
     // ExposedPrefixes is the CIDR allow-list THIS side offers to the peer. Only local routes
     // within these CIDRs become reachable to the peer VPC. Empty = expose nothing (fail-closed).
@@ -52,7 +52,7 @@ type VPCPeeringSpec struct {
   imported routes.
 - **`exposedPrefixes` is per-side and fail-closed:** an empty list exposes nothing. It scopes
   reachability, route-table size, and topology visibility — it is *never* a firewall grant.
-- **Cross-namespace `peerVpcRef`** is allowed: the central cluster is authoritative and sees all
+- **Cross-namespace `peerVpcRef`** is allowed: the hub is authoritative and sees all
   tenants.
 
 ## The pipeline
@@ -68,7 +68,7 @@ flowchart TD
     G --> H[datapath UNCHANGED:<br/>route4/route6 now hits the import]
 ```
 
-### Central: `VPCPeering` → `CompiledNIC.PeerImports`
+### Hub: `VPCPeering` → `CompiledNIC.PeerImports`
 
 The `CompiledNICReconciler` (`netplane/controllers/compilednic.go`) resolves peerings and stamps a
 directive onto **every `CompiledNIC` of each side's VPC** — mirroring how `CompiledLB` rides on
@@ -101,9 +101,9 @@ type CompiledPeerImport struct {
 The reconciler watches `VPCPeering` and re-enqueues **both** sides' NICs when a peering (or its
 reciprocal) changes (`nicsForPeering`), so a consent race converges when the second object appears.
 
-**`exposedPrefixes` is enforced importer-side.** Each side's exposed list is carried *centrally*
+**`exposedPrefixes` is enforced importer-side.** Each side's exposed list is carried by the hub
 into the peer's `CompiledNIC`, and the peer's agent drops any imported route outside that list.
-This needs zero route-bus protocol change; the central cluster is the trust anchor regardless.
+This needs zero route-bus protocol change; the hub is the trust anchor regardless.
 Overlap between peer ranges is **permitted** — there is no overlap rejection; overlaps are resolved
 at the agent by local precedence.
 
@@ -127,9 +127,9 @@ unioned deterministically), and:
 
 ## End-to-end flow
 
-1. An operator (or the central cluster) creates `VPCPeering A→B` and `B→A`, each with its
+1. An operator (or the hub) creates `VPCPeering A→B` and `B→A`, each with its
    `exposedPrefixes`.
-2. The central controller marks both `Ready` and stamps `PeerImports` into every `CompiledNIC`
+2. The hub controller marks both `Ready` and stamps `PeerImports` into every `CompiledNIC`
    of A and B; the sync pipeline pushes the updated CompiledNICs to nodes.
 3. VPC-B's agent subscribes to VNI-A and imports A's exposed prefixes into VNI-B's route table
    (local precedence honoured).

@@ -133,7 +133,8 @@ one that bit us:
 
 - **Global observability.** One kernel backs every clab container, and prog IDs + tracepoints
   (`xdp:*`, `skb:kfree_skb`) are global — so a single `bpftrace`/`bpftool` on the host sees drops and
-  redirects across *every* netns at once (this is what `hack/clab/bpf-trace.sh` exploits).
+  redirects across *every* netns at once (this is what a single host-side `bpftrace` drop
+  monitor exploits).
 - **Pinning is per-bpffs-mount.** A pinned map lives at a bpffs inode; it outlives the creating
   process, and two processes that open the **same** pin path on the **same** bpffs share the map.
 - **netns does *not* scope bpffs.** Two processes in *different* netns that mount the *same*
@@ -146,6 +147,6 @@ one that bit us:
 Since ~5.17 the `skb:kfree_skb` tracepoint carries a `reason` enum (`SKB_DROP_REASON_*`) plus
 `skb->protocol` and the freeing function. Because it's kernel-global, aggregating
 `(reason, protocol, ksym(location))` over a failing flow tells you *where and why* a packet died — the
-cilium-drop-monitor pattern (`bpf-trace.sh dropmon`). It is the fastest way to distinguish, say,
+cilium-drop-monitor pattern (a host-side `bpftrace` on `skb:kfree_skb`). It is the fastest way to distinguish, say,
 `OTHERHOST` (wrong MAC) from `NETFILTER_DROP` (a firewall rule) from `IP_*` (header/checksum) — all of
 which look identical to `tcpdump`, which taps *before* these drops. Reach for it before theorizing.

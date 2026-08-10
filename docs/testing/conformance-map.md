@@ -1,9 +1,13 @@
 # Conformance coverage parity map: dpservice Python suite → native conformance
 
-**Purpose — pre-deletion safety artifact.**
-This document maps every applicable dpservice Python conformance test to its named
-native replacement before the vendored Python suite (`test/conformance/`) is deleted
-in Phase 3 of de-dpservice-ing conformance.
+!!! success "Status: Implemented"
+    The vendored dpservice Python conformance suite has been removed; every applicable test
+    now has a named native replacement (sim test, byte-parity anchor, or Go e2e/live smoke).
+
+**Purpose — the parity record.**
+This document maps every applicable dpservice Python conformance test to the named
+native replacement that superseded it. It is the durable record of what the (now removed)
+vendored Python suite once covered and where each behaviour is asserted today.
 
 **Test-at-the-right-level principle:**
 - **Sim (flowplane-sim)** — byte-level datapath correctness; runs in-process with
@@ -11,10 +15,10 @@ in Phase 3 of de-dpservice-ing conformance.
 - **Byte-parity anchors (flowplane/tests/)** — prove the real eBPF bytecode produces
   identical output to the sim/core for the same input; golden-from-original for several
   responders.
-- **Go e2e smoke (`test/e2e/`)** — real gRPC attach, real kernel/clab topology; proves
-  the control-plane wiring and live forwarding.
-- **clab continuous fabric (`hack/clab/`)** — proves zero-drop under sustained traffic;
-  not a per-feature test.
+- **Go e2e / live smoke (`test/lab/livetest/`)** — real gRPC attach, real kernel/clab
+  topology; proves the control-plane wiring and live forwarding.
+- **Live lab fabric (`test/lab/`, `make lab-test`)** — proves zero-drop under sustained
+  traffic on the kind + containerlab fabric; not a per-feature test.
 
 ---
 
@@ -141,7 +145,7 @@ tap), which the byte-parity anchors cover at the eBPF bytecode level.
 
 ### DHCPv6 — `test_dhcpv6.py`
 
-**Status: covered by the Go live lease smoke — `test/e2e/smoke_lb_dhcp_test.go::TestDhcpLeaseSmoke` (DHCPv6 case).**
+**Status: covered by the Go live lease smoke — `test/lab/livetest/dhcp_test.go::TestDhcpLeaseSmoke` (DHCPv6 case).**
 
 `test_dhcpv6_vf0` / `test_dhcpv6_vf1` test a full DHCPv6 Solicit→Reply + Request→Reply
 exchange including PXE/iPXE vendor-class and Boot File URL options, plus a Confirm→Reply.
@@ -158,11 +162,11 @@ extracted into `flowplane-core` and is sim-tested in `dhcp_test.rs`):
 - The DHCPv6 responder therefore stays entirely in `flowplane-ebpf` (XDP path), not in
   `flowplane-core`, and its conformance is asserted at the live level instead of the sim level.
 
-**Current state:** `TestDhcpLeaseSmoke` (`test/e2e/smoke_lb_dhcp_test.go`) drives a real
+**Current state:** `TestDhcpLeaseSmoke` (`test/lab/livetest/dhcp_test.go`) drives a real
 DHCPv6 client through the datapath and asserts the ADVERTISE/Reply IA Address equals the
 guest's configured IPv6 (programmed via `DataplaneNode/AttachInterface` `requested_ips`,
 after the dual-stack fix that made `AttachInterface` set `guest_ipv6`). This is the sole
-DHCPv6 conformance; it is clab/root-gated (skips off-fabric). Phase 3 removal of the vendored
+DHCPv6 conformance; it is clab/root-gated (skips off-fabric). Removal of the vendored
 Python suite is complete.
 
 ---
@@ -178,9 +182,10 @@ map to ectobase/flowplane: flowplane has no HA-peer protocol; state survives via
 
 - **Maglev determinism across restart** — covered by
   `lb_scenario_test::ew_lb_reforward_converges_no_loop` (same Maglev selection after
-  flow age-out) and the `test/scenario-restart.sh` harness (live restart smoke).
-- **CT/NAT state survival** — covered by `test/scenario-restart.sh`
-  (graceful-restart: state written to journal, re-loaded on bring-up).
+  flow age-out) and `TestRestartContinuity` (`test/lab/livetest/restart_test.go`, live
+  restart smoke).
+- **CT/NAT state survival** — covered by the `make ha` pinned-maps kill+adopt smoke and
+  `TestRestartContinuity` (graceful-restart: state written to journal, re-loaded on bring-up).
 - **MAC sync across two instances** — not applicable (no HA peer; MAC is in `PortMeta`
   static config).
 
@@ -210,9 +215,9 @@ not applicable to the ectobase architecture.
 **NONE.**
 
 All applicable Python tests have a named native destination (sim test, byte-parity
-anchor, or Go e2e smoke). The DHCPv6 conformance path is now the Go probe
-(`test/e2e/cmd/tap-dhcp-probe`) exercised by `TestDhcpLeaseSmoke`; the Python probe
-(`test/tap-dhcp-probe.py`) has been removed.
+anchor, or Go live smoke). The DHCPv6 conformance path is the Go probe
+(`test/e2e/cmd/tap-dhcp-probe`) exercised by `TestDhcpLeaseSmoke`; the Python probe has
+been removed.
 
-Phase 3 deletion of `test/conformance/` is safe for all applicable tests including DHCPv6,
-which is now covered by the Go probe (`TestDhcpLeaseSmoke`).
+The vendored `test/conformance/` Python suite has been deleted; every applicable test —
+including DHCPv6, now covered by the Go probe (`TestDhcpLeaseSmoke`) — has a native home.
