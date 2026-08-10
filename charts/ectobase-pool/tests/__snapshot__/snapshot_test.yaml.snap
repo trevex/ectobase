@@ -1855,11 +1855,6 @@ renders (dpdk clab):
           ]
         }
   21: |
-    apiVersion: v1
-    kind: Namespace
-    metadata:
-      name: ectobase-system
-  22: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -1888,13 +1883,13 @@ renders (dpdk clab):
               imagePullPolicy: IfNotPresent
               name: pod-materializer
           serviceAccountName: pod-materializer
-  23: |
+  22: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: netplane-agent
       namespace: ectobase-system
-  24: |
+  23: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -1945,7 +1940,7 @@ renders (dpdk clab):
           - patch
           - update
           - watch
-  25: |
+  24: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -1958,13 +1953,13 @@ renders (dpdk clab):
       - kind: ServiceAccount
         name: netplane-agent
         namespace: ectobase-system
-  26: |
+  25: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: hub-broker
       namespace: ectobase-system
-  27: |
+  26: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -2004,7 +1999,7 @@ renders (dpdk clab):
           - get
           - list
           - watch
-  28: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -2017,13 +2012,13 @@ renders (dpdk clab):
       - kind: ServiceAccount
         name: hub-broker
         namespace: ectobase-system
-  29: |
+  28: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  30: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -2060,7 +2055,7 @@ renders (dpdk clab):
           - get
           - patch
           - update
-  31: |
+  30: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -3945,11 +3940,6 @@ renders (dpdk hw):
           ]
         }
   21: |
-    apiVersion: v1
-    kind: Namespace
-    metadata:
-      name: ectobase-system
-  22: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -3978,13 +3968,13 @@ renders (dpdk hw):
               imagePullPolicy: IfNotPresent
               name: pod-materializer
           serviceAccountName: pod-materializer
-  23: |
+  22: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: netplane-agent
       namespace: ectobase-system
-  24: |
+  23: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -4035,7 +4025,7 @@ renders (dpdk hw):
           - patch
           - update
           - watch
-  25: |
+  24: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -4048,13 +4038,13 @@ renders (dpdk hw):
       - kind: ServiceAccount
         name: netplane-agent
         namespace: ectobase-system
-  26: |
+  25: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: hub-broker
       namespace: ectobase-system
-  27: |
+  26: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -4094,7 +4084,7 @@ renders (dpdk hw):
           - get
           - list
           - watch
-  28: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -4107,13 +4097,13 @@ renders (dpdk hw):
       - kind: ServiceAccount
         name: hub-broker
         namespace: ectobase-system
-  29: |
+  28: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  30: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -4150,7 +4140,7 @@ renders (dpdk hw):
           - get
           - patch
           - update
-  31: |
+  30: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -6031,11 +6021,6 @@ renders (ebpf clab):
           ]
         }
   21: |
-    apiVersion: v1
-    kind: Namespace
-    metadata:
-      name: ectobase-system
-  22: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -6064,13 +6049,13 @@ renders (ebpf clab):
               imagePullPolicy: IfNotPresent
               name: pod-materializer
           serviceAccountName: pod-materializer
-  23: |
+  22: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: netplane-agent
       namespace: ectobase-system
-  24: |
+  23: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -6121,7 +6106,7 @@ renders (ebpf clab):
           - patch
           - update
           - watch
-  25: |
+  24: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -6134,13 +6119,13 @@ renders (ebpf clab):
       - kind: ServiceAccount
         name: netplane-agent
         namespace: ectobase-system
-  26: |
+  25: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: hub-broker
       namespace: ectobase-system
-  27: |
+  26: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -6180,7 +6165,7 @@ renders (ebpf clab):
           - get
           - list
           - watch
-  28: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -6193,13 +6178,13 @@ renders (ebpf clab):
       - kind: ServiceAccount
         name: hub-broker
         namespace: ectobase-system
-  29: |
+  28: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  30: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -6236,7 +6221,7 @@ renders (ebpf clab):
           - get
           - patch
           - update
-  31: |
+  30: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -8114,11 +8099,6 @@ renders (ebpf hw):
           ]
         }
   21: |
-    apiVersion: v1
-    kind: Namespace
-    metadata:
-      name: ectobase-system
-  22: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -8147,13 +8127,13 @@ renders (ebpf hw):
               imagePullPolicy: IfNotPresent
               name: pod-materializer
           serviceAccountName: pod-materializer
-  23: |
+  22: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: netplane-agent
       namespace: ectobase-system
-  24: |
+  23: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -8204,7 +8184,7 @@ renders (ebpf hw):
           - patch
           - update
           - watch
-  25: |
+  24: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -8217,13 +8197,13 @@ renders (ebpf hw):
       - kind: ServiceAccount
         name: netplane-agent
         namespace: ectobase-system
-  26: |
+  25: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: hub-broker
       namespace: ectobase-system
-  27: |
+  26: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -8263,7 +8243,7 @@ renders (ebpf hw):
           - get
           - list
           - watch
-  28: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -8276,13 +8256,13 @@ renders (ebpf hw):
       - kind: ServiceAccount
         name: hub-broker
         namespace: ectobase-system
-  29: |
+  28: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  30: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -8319,7 +8299,7 @@ renders (ebpf hw):
           - get
           - patch
           - update
-  31: |
+  30: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -10200,11 +10180,6 @@ renders (tier1 on):
           ]
         }
   21: |
-    apiVersion: v1
-    kind: Namespace
-    metadata:
-      name: ectobase-system
-  22: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -10233,13 +10208,13 @@ renders (tier1 on):
               imagePullPolicy: IfNotPresent
               name: pod-materializer
           serviceAccountName: pod-materializer
-  23: |
+  22: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: netplane-agent
       namespace: ectobase-system
-  24: |
+  23: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -10290,7 +10265,7 @@ renders (tier1 on):
           - patch
           - update
           - watch
-  25: |
+  24: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -10303,13 +10278,13 @@ renders (tier1 on):
       - kind: ServiceAccount
         name: netplane-agent
         namespace: ectobase-system
-  26: |
+  25: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: hub-broker
       namespace: ectobase-system
-  27: |
+  26: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -10349,7 +10324,7 @@ renders (tier1 on):
           - get
           - list
           - watch
-  28: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -10362,13 +10337,13 @@ renders (tier1 on):
       - kind: ServiceAccount
         name: hub-broker
         namespace: ectobase-system
-  29: |
+  28: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  30: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -10405,7 +10380,7 @@ renders (tier1 on):
           - get
           - patch
           - update
-  31: |
+  30: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -10418,7 +10393,7 @@ renders (tier1 on):
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
-  32: |
+  31: |
     apiVersion: remediation.medik8s.io/v1alpha1
     kind: NodeHealthCheck
     metadata:
@@ -10443,7 +10418,7 @@ renders (tier1 on):
         - duration: 60s
           status: Unknown
           type: Ready
-  33: |
+  32: |
     apiVersion: self-node-remediation.medik8s.io/v1alpha1
     kind: SelfNodeRemediationTemplate
     metadata:
@@ -12323,11 +12298,6 @@ renders (tier1 watchdog):
           ]
         }
   21: |
-    apiVersion: v1
-    kind: Namespace
-    metadata:
-      name: ectobase-system
-  22: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -12356,13 +12326,13 @@ renders (tier1 watchdog):
               imagePullPolicy: IfNotPresent
               name: pod-materializer
           serviceAccountName: pod-materializer
-  23: |
+  22: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: netplane-agent
       namespace: ectobase-system
-  24: |
+  23: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -12413,7 +12383,7 @@ renders (tier1 watchdog):
           - patch
           - update
           - watch
-  25: |
+  24: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -12426,13 +12396,13 @@ renders (tier1 watchdog):
       - kind: ServiceAccount
         name: netplane-agent
         namespace: ectobase-system
-  26: |
+  25: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: hub-broker
       namespace: ectobase-system
-  27: |
+  26: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -12472,7 +12442,7 @@ renders (tier1 watchdog):
           - get
           - list
           - watch
-  28: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -12485,13 +12455,13 @@ renders (tier1 watchdog):
       - kind: ServiceAccount
         name: hub-broker
         namespace: ectobase-system
-  29: |
+  28: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  30: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -12528,7 +12498,7 @@ renders (tier1 watchdog):
           - get
           - patch
           - update
-  31: |
+  30: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -12541,7 +12511,7 @@ renders (tier1 watchdog):
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
-  32: |
+  31: |
     apiVersion: remediation.medik8s.io/v1alpha1
     kind: NodeHealthCheck
     metadata:
@@ -12566,7 +12536,7 @@ renders (tier1 watchdog):
         - duration: 60s
           status: Unknown
           type: Ready
-  33: |
+  32: |
     apiVersion: self-node-remediation.medik8s.io/v1alpha1
     kind: SelfNodeRemediationTemplate
     metadata:
@@ -12578,7 +12548,7 @@ renders (tier1 watchdog):
       template:
         spec:
           remediationStrategy: OutOfServiceTaint
-  34: |
+  33: |
     apiVersion: self-node-remediation.medik8s.io/v1alpha1
     kind: SelfNodeRemediationConfig
     metadata:
@@ -14456,11 +14426,6 @@ renders with vm-materializer enabled:
           ]
         }
   21: |
-    apiVersion: v1
-    kind: Namespace
-    metadata:
-      name: ectobase-system
-  22: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -14489,13 +14454,13 @@ renders with vm-materializer enabled:
               imagePullPolicy: IfNotPresent
               name: pod-materializer
           serviceAccountName: pod-materializer
-  23: |
+  22: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: netplane-agent
       namespace: ectobase-system
-  24: |
+  23: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -14546,7 +14511,7 @@ renders with vm-materializer enabled:
           - patch
           - update
           - watch
-  25: |
+  24: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -14559,13 +14524,13 @@ renders with vm-materializer enabled:
       - kind: ServiceAccount
         name: netplane-agent
         namespace: ectobase-system
-  26: |
+  25: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: hub-broker
       namespace: ectobase-system
-  27: |
+  26: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -14605,7 +14570,7 @@ renders with vm-materializer enabled:
           - get
           - list
           - watch
-  28: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -14618,13 +14583,13 @@ renders with vm-materializer enabled:
       - kind: ServiceAccount
         name: hub-broker
         namespace: ectobase-system
-  29: |
+  28: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  30: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -14661,7 +14626,7 @@ renders with vm-materializer enabled:
           - get
           - patch
           - update
-  31: |
+  30: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -14674,13 +14639,13 @@ renders with vm-materializer enabled:
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
-  32: |
+  31: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: vm-materializer
       namespace: ectobase-system
-  33: |
+  32: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -14739,7 +14704,7 @@ renders with vm-materializer enabled:
           - patch
           - update
           - watch
-  34: |
+  33: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -14752,7 +14717,7 @@ renders with vm-materializer enabled:
       - kind: ServiceAccount
         name: vm-materializer
         namespace: ectobase-system
-  35: |
+  34: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:

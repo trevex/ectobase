@@ -1,3 +1,9 @@
+{{- /* Validate values on every render (this template always renders). The pool chart does
+       not manage its release namespace ({{ .Values.namespace }}): that namespace hosts the
+       privileged dataplane + hostNetwork pods and must be created PSA-privileged by the
+       installer (`helm install --create-namespace` on a non-enforcing cluster, or a
+       pre-created privileged namespace on a baseline-enforcing one like Talos). */}}
+{{- include "ectobase-pool.validate" . -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
