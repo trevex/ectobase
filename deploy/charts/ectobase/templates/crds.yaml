@@ -1,6 +1,0 @@
-{{- if .Values.installCRDs }}
-{{- range $path, $_ := .Files.Glob "crd-bases/*.yaml" }}
----
-{{ $.Files.Get $path | trimPrefix "---\n" }}
-{{- end }}
-{{- end }}

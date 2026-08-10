@@ -1,5 +1,0 @@
-{{- include "ectobase.validate" . -}}
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: ectobase-system

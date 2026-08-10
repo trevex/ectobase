@@ -66,7 +66,8 @@ func main() {
 		log.Fatalf("get config: %v", err)
 	}
 
-	// Disable the metrics server: the controller runs hostNetwork (see config/deploy/controller.yaml),
+	// Disable the metrics server: the controller runs hostNetwork (see the compiler Deployment in
+	// charts/ectobase-hub/templates/compiler.yaml),
 	// so a default :8080 listener collides on rolling restart (new pod can't bind while the old holds
 	// it) → crashloop. Nothing scrapes it in this deployment; "0" turns it off.
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{

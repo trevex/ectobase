@@ -3,11 +3,11 @@
 
 # namespace is the Kubernetes namespace for hub infrastructure:
 #   hub-apiserver, hub-controller, kine, postgres, and the hub-side hub-broker identity.
-# This matches what hub/config/* applies today (the `system` namespace).
+# These pods are baseline-PSA-safe; the installer owns this (release) namespace.
 namespace: system
 
 # agentNamespace is the Kubernetes namespace for the netplane compiler and reflector.
-# Matches what config/deploy/{controller,reflector}.yaml apply today (ectobase-system).
+# They run hostNetwork, so the chart creates this namespace PSA-privileged.
 agentNamespace: ectobase-system
 
 # reflectorAdmin is the address the hub-controller passes to the agents via

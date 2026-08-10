@@ -91,4 +91,5 @@ make generate
 ```
 
 which runs `controller-gen object` (deepcopy) and `controller-gen crd` (the manifests under
-`config/crd/bases`). These files are **not** hand-maintained.
+`charts/ectobase-pool/crd-bases` for the net + compiled groups, and `test/crds` for the
+hub-aggregated-only compute/storage/platform groups). These files are **not** hand-maintained.

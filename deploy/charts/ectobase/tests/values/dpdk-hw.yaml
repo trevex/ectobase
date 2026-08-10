@@ -1,8 +1,0 @@
-dataplane: dpdk
-env: hw
-dpdk:
-  lcores: "0-3"
-  hugepages: true
-  vfioDevices:
-    - name: intel.com/intel_sriov_netdevice
-      count: 1

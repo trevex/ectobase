@@ -50,7 +50,7 @@ Prereqs: `containerlab`, `kind`, `docker`, root/sudo, the `dummy` kernel module,
 ```bash
 hack/clab-up.sh        # wan-up → clab deploy (--reconfigure, idempotent) → Cilium per cluster
 # deploy the netplane stack (agent + reflector + controller) + the flowplane DaemonSet on k01:
-kubectl apply -k config/deploy            # (namespace ectobase-system)
+helm install ectobase-pool charts/ectobase-pool -n ectobase-system  # per compute cluster
 hack/clab/edge-agents-up.sh               # start the WAN-edge flowplane sidecars + brokered agents
 
 # sanity: fabric addressing + BGP/BFD
@@ -81,7 +81,7 @@ each encodes a containerlab-veth constraint that does not exist on real hardware
 The loader prefers native/driver XDP and falls back to SKB/generic (`attach_xdp_mode`); setting
 `FLOWPLANE_SKB_MODE=1` forces generic. On clab the correct mode is **per role**:
 
-- **Compute nodes → generic/SKB** (`FLOWPLANE_SKB_MODE=1` in `config/deploy/flowplane.yaml`).
+- **Compute nodes → generic/SKB** (`FLOWPLANE_SKB_MODE=1` in `charts/ectobase-pool/templates/dataplane-ebpf.yaml`).
   `uplink_rx` delivers to guests by XDP-redirecting into the guest veth (the `GUEST_DEV` devmap). On a
   containerlab veth a **native** redirect into a veth fails with `-95`/`EOPNOTSUPP` (the veth
   `ndo_xdp_xmit` peer requirement) — only the generic/SKB path delivers. Nodes never `XDP_PASS` to the
