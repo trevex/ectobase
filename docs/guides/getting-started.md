@@ -20,11 +20,11 @@ make            # list every target with its one-line description
   target has no prebuilt std). `aya-build` is told to use exactly this toolchain.
 - **Go** (with default tools) — for `netplane`, the `cni/` plugin, and `controller-gen`.
 - **`bpf-linker`, `protobuf` + `grpcurl`** — eBPF linking and the gRPC contracts.
-- **`kind`, `containerlab`, `kubectl`** — the integration fabric.
+- **`kind`, `containerlab`, `kubectl`, `helm`** — the integration fabric (the `test/lab` CLI).
 - **`qemu`, `libvirt`, `OVMF`, `iproute2`, `bridge-utils`, `ethtool`, `tcpdump`** — VM boot and
   netns e2e harnesses.
 - **`python3`** — present for the DPDK build's pyelftools; packet crafting is now the Go probe (`test/e2e/cmd/tap-dhcp-probe`).
-- **`mdbook` + `mdbook-mermaid`** — this documentation.
+- **`mkdocs` + `mkdocs-material`** — this documentation (`make docs` = `mkdocs build --strict`).
 - **`KUBEBUILDER_ASSETS`** — a real in-process apiserver for the controller-runtime envtest
   integration tests.
 
@@ -49,10 +49,10 @@ by `aya-build` from `flowplane/build.rs` during `make build`. The Go modules bui
 
 | Target | What it does |
 |---|---|
-| `make generate` | Regenerate the hand-maintained deepcopy (`zz_generated.deepcopy.go`) + CRD manifests from `api/v1alpha1` via `controller-gen`. Run it after editing any CRD type. |
+| `make generate` | Regenerate the deepcopy/conversion + CRD manifests, the per-component RBAC roles, and the CRD API reference — all directly into the two Helm charts. Run it after editing any CRD type or a component's RBAC markers. |
 | `make proto-go` | Generate the Go gRPC stubs for `dataplane.v1` into `cni/gen/`. |
 | `make proto-routebus` | Generate the Go gRPC stubs for `routebus.v1` into `netplane/gen/`. |
-| `make docs` | Build this mdbook into `docs/book`. |
+| `make docs` | Build the mkdocs site (`mkdocs build --strict` — broken links/nav fail the build). |
 | `make docs-serve` | Serve the docs locally with live reload. |
 | `make image` / `make image-netplane` / `make image-kindnode` | Build the flowplane / netplane / fabric kind-node container images. |
 
@@ -71,6 +71,8 @@ Tests run at several levels of privilege and fidelity — see the
 | `make e2e` | sudo | 3-node netns overlay end-to-end |
 | `make ha` | sudo | HA pinned-maps kill+adopt smoke |
 | `make tap-vm-smoke` | sudo + KVM | Boot a CirrOS VM on a real tap |
+| `make lab-up` | sudo | Bring up the clab + kind fabric and deploy the two Helm charts |
+| `make lab-test` | sudo | Run the live multi-cluster suite against an up fabric |
 
 The `e2e`, `ha`, and `tap-*` targets need **passwordless sudo** (XDP attach, network namespaces, raw
 sockets); the scripts elevate individual commands themselves. On a NixOS host see the
