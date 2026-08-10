@@ -20,3 +20,6 @@ flowplane/nfkit/tests/data/l2fwd_out.pcap
 test/e2e/tap-dhcp-probe.bin
 test/e2e/tap-dhcp-probe
 test/e2e/netprobe
+
+# mkdocs build output
+site/

@@ -1,0 +1,98 @@
+site_name: ectobase
+site_description: Kubernetes-native multi-cluster IaaS on a shared eBPF/XDP overlay.
+repo_url: https://github.com/trevex/ectobase
+docs_dir: docs
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - content.code.copy
+    - search.suggest
+    - toc.follow
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+exclude_docs: |
+  superpowers/
+
+nav:
+  - Home: index.md
+  - Concepts:
+      - Two planes and the fleet: concepts/two-planes-and-the-fleet.md
+      - The overlay: concepts/overlay.md
+      - Intent to datapath: concepts/intent-to-datapath.md
+      - Workloads (containers & VMs): concepts/workloads.md
+  - Architecture:
+      - Repository layout: architecture/layout.md
+      - Multi-cluster control plane: architecture/multi-cluster-control-plane.md
+      - Compile, sync, materialize: architecture/compile-sync-materialize.md
+      - Route bus: architecture/route-bus.md
+      - CNI integration: architecture/cni-integration.md
+      - KubeVirt / VM integration: architecture/kubevirt-integration.md
+      - Storage / CSI integration: architecture/storage-csi-integration.md
+      - Rescheduling & failover: architecture/rescheduling-and-failover.md
+      - HA & graceful restart: architecture/ha-graceful-restart.md
+      - Dataplane:
+          - Datapath programs: architecture/dataplane/programs.md
+          - XDP / tc / BPF: architecture/dataplane/kernel-xdp-tc.md
+          - The pure-core seam: architecture/dataplane/pure-core.md
+          - Maps & state: architecture/dataplane/maps.md
+          - DPDK backend: architecture/dataplane/dpdk.md
+          - The flowplane CLI: architecture/dataplane/cli.md
+  - Features:
+      - Routing & VNI tenancy: features/routing-vni.md
+      - Distributed firewall: features/firewall.md
+      - NAT gateway: features/nat.md
+      - Load balancing: features/loadbalancer.md
+      - VPC peering: features/vpc-peering.md
+      - North-South WAN edge: features/ns-edge.md
+      - QoS: features/qos.md
+      - DHCP / ARP / ND: features/dhcp-arp-nd.md
+  - Guides:
+      - Getting started: guides/getting-started.md
+      - Deploying with Helm: guides/deploy-helm.md
+      - The local fabric: guides/local-fabric.md
+      - Operations runbook: guides/runbook.md
+      - Development: guides/development.md
+  - Reference:
+      - CRD interactions: reference/crd-interactions.md
+      - "API: net": reference/api/net.md
+      - "API: compute": reference/api/compute.md
+      - "API: storage": reference/api/storage.md
+      - "API: compiled": reference/api/compiled.md
+      - "API: platform": reference/api/platform.md
+      - Helm values: reference/helm-values.md
+      - Components: reference/components.md
+      - Generated artifacts: reference/generated-artifacts.md
+  - Testing:
+      - Strategy: testing/strategy.md
+      - The in-process sim: testing/sim.md
+      - Conformance map: testing/conformance-map.md
+  - Contributing:
+      - Overview: contributing/index.md
+      - Writing docs: contributing/documentation.md
