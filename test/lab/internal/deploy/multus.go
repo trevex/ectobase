@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 )
 
 // MultusVersion pins the thin Multus plugin. Bumping it is the single place the
@@ -11,6 +12,10 @@ import (
 // ghcr.io/k8snetworkplumbingwg/multus-cni:<version>, which the in-fabric registry
 // mirror pulls onto the nodes.
 const MultusVersion = "v4.1.0"
+
+// multusImage is the multus-cni image repo. The upstream daemonset manifest ships it at the
+// rolling `:snapshot` tag; Multus rewrites that to `:MultusVersion` before applying (see below).
+const multusImage = "ghcr.io/k8snetworkplumbingwg/multus-cni"
 
 // multusDaemonsetURL is the versioned upstream thin-plugin daemonset manifest.
 func multusDaemonsetURL() string {
@@ -35,12 +40,25 @@ func Multus(ctx context.Context, r Runner, kubeconfig string) error {
 	r = runnerOf(r)
 
 	slog.Info("installing Multus (thin)", "version", MultusVersion, "kubeconfig", kubeconfig)
-	if err := r.Run(ctx, "kubectl", "--kubeconfig", kubeconfig, "apply", "-f", multusDaemonsetURL()); err != nil {
+	// The upstream thin daemonset manifest hardcodes the ROLLING `multus-cni:snapshot` image
+	// (main-branch — non-deterministic per pull and cache-unstable in the mirror) even at a pinned
+	// manifest tag, so fetch the manifest and rewrite the image to the pinned MultusVersion before
+	// applying. This makes the deployed image reproducible and lets the in-fabric mirror cache it
+	// stably.
+	raw, err := r.Output(ctx, "curl", "-fsSL", multusDaemonsetURL())
+	if err != nil {
+		return fmt.Errorf("fetch multus daemonset manifest: %w", err)
+	}
+	manifest := strings.ReplaceAll(string(raw), multusImage+":snapshot", multusImage+":"+MultusVersion)
+	if err := r.RunStdin(ctx, manifest, "kubectl", "--kubeconfig", kubeconfig, "apply", "-f", "-"); err != nil {
 		return fmt.Errorf("apply multus daemonset: %w", err)
 	}
-	slog.Info("waiting for the Multus DaemonSet to roll out (up to 5m)")
+	// Wait generously: a COLD pull of the multus image through the fabric mirror can exceed several
+	// minutes on a slow uplink (the same fabric-cold-pull reason the hub apiserver gets 12m); once
+	// the mirror has cached it, restarts are fast.
+	slog.Info("waiting for the Multus DaemonSet to roll out (up to 12m)")
 	if err := r.Run(ctx, "kubectl", "--kubeconfig", kubeconfig, "-n", "kube-system",
-		"rollout", "status", "ds/kube-multus-ds", "--timeout=5m"); err != nil {
+		"rollout", "status", "ds/kube-multus-ds", "--timeout=12m"); err != nil {
 		return fmt.Errorf("wait multus daemonset: %w", err)
 	}
 	slog.Info("Multus installed", "kubeconfig", kubeconfig)
