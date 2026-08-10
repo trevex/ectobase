@@ -2,7 +2,6 @@ package deploy
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,14 +18,15 @@ import (
 // topology layer can import without a cycle. All addresses are derived by the
 // caller (never hardcoded here).
 type EctobaseSpec struct {
-	RepoRoot          string           // repo root (dir containing go.work)
-	WorkDir           string           // build/<name>/deploy scratch dir (created if missing)
-	HubKubeconfig string           // path to hub's kubeconfig
-	HubIdentity   string           // bare v6, e.g. fd00:cafe:<h>::1 (hub's fabric address: the broker's hub server host AND the reflector host)
-	ChartPath         string           // <repoRoot>/deploy/charts/ectobase
-	NADCRDPath        string           // NetworkAttachmentDefinition CRD manifest (abs or repo-relative)
-	UnderlayWithin    string           // node-underlay aggregate CIDR (fd00:cafe::/32) for flowplane's underlay filter
-	Compute           []ComputeCluster // compute clusters running the broker (k02, k03, …)
+	RepoRoot       string           // repo root (dir containing go.work)
+	WorkDir        string           // build/<name>/deploy scratch dir (created if missing)
+	HubKubeconfig  string           // path to hub's kubeconfig
+	HubIdentity    string           // bare v6, e.g. fd00:cafe:<h>::1 (hub's fabric address: the broker's hub server host AND the reflector host)
+	HubChartPath   string           // <repoRoot>/charts/ectobase-hub
+	PoolChartPath  string           // <repoRoot>/charts/ectobase-pool
+	NADCRDPath     string           // NetworkAttachmentDefinition CRD manifest (abs or repo-relative)
+	UnderlayWithin string           // node-underlay aggregate CIDR (fd00:cafe::/32) for flowplane's underlay filter
+	Compute        []ComputeCluster // compute clusters running the broker (k02, k03, …)
 }
 
 // ComputeCluster is one broker-running compute cluster.
@@ -36,10 +36,12 @@ type ComputeCluster struct {
 }
 
 // Ectobase deploys the (non-Ceph subset of the) ectobase substrate onto an
-// already-up multi-cluster fabric: the hub aggregated apiserver + controller
-// + reflector on the hub cluster, a broker identity + pre-created ClusterPools,
-// a shared broker→hub kubeconfig, then the chart (with a broker) on each
-// compute cluster, and finally waits for both pools to report Ready.
+// already-up multi-cluster fabric by installing the two Helm charts exactly as a
+// user would: the ectobase-hub chart on the hub cluster (aggregated apiserver +
+// controller + kine + compiler + reflector + hub-side broker identity), then the
+// ectobase-pool chart on each compute cluster (dataplane + agent + broker + cni +
+// materializers). Lab-only bits — the broker→hub token/kubeconfig and the
+// pre-created ClusterPools — are minted here as fixtures around the installs.
 //
 // It assumes every referenced kubeconfig already exists (the fabric is up). Every
 // kubectl/helm call passes --kubeconfig explicitly.
@@ -48,77 +50,25 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		return fmt.Errorf("mkdir workdir: %w", err)
 	}
 
-	// --- Hub cluster ---
-	// (The clusters set cluster.allowSchedulingOnControlPlanes so control-plane nodes
-	// are never tainted — no untaint needed; every pod schedules on the single node.)
-	slog.Info("deploying hub apiserver + controller", "kustomize", filepath.Join(s.RepoRoot, "hub/config"))
-	if err := kubectlApplyKustomize(ctx, s.HubKubeconfig, filepath.Join(s.RepoRoot, "hub/config")); err != nil {
-		return fmt.Errorf("apply hub/config: %w", err)
-	}
-	// hub/config hardcodes the Talos/bash-era reflector-admin address
-	// (fd00:db8:0:1::1); on this fabric the reflector runs on the hub's identity, so
-	// point the controller's -reflector-admin there. Without this the Tier-2 failover's
-	// reflector route-withdrawal can't connect (dial no route to host) and the VM never
-	// reschedules off the fenced pool.
-	if err := patchHubReflectorAdmin(ctx, s.HubKubeconfig, "["+s.HubIdentity+"]:1338"); err != nil {
-		return fmt.Errorf("patch hub-controller reflector-admin: %w", err)
+	// --- Hub cluster: one Helm release ---
+	// The ectobase-hub chart carries the aggregated apiserver + controller + kine, the netplane
+	// compiler, the reflector, and the hub-side hub-broker identity. --create-namespace makes the
+	// release namespace (system, whose pods are baseline-PSA-safe); the chart itself creates the
+	// PSA-privileged ectobase-system namespace for the hostNetwork compiler + reflector. The
+	// reflector runs on the hub's fabric identity, so the controller's -reflector-admin is pointed
+	// there via a chart value (retiring the old post-apply patch). The clusters set
+	// cluster.allowSchedulingOnControlPlanes so control-plane nodes are never tainted.
+	slog.Info("installing ectobase-hub chart", "chart", s.HubChartPath)
+	if err := helmInstallHub(ctx, s.HubKubeconfig, s.HubChartPath, s.HubIdentity); err != nil {
+		return fmt.Errorf("helm install ectobase-hub: %w", err)
 	}
 	if err := waitAggregatedAPI(ctx, s.HubKubeconfig); err != nil {
 		return fmt.Errorf("hub aggregated API: %w", err)
 	}
 
-	slog.Info("deploying shared reflector")
-	// Create ectobase-system + the SAs first, then mark the namespace PSA-privileged
-	// BEFORE applying the reflector: the reflector runs hostNetwork (+ hostPort 1338),
-	// which Talos's baseline PSA enforcement rejects. Applying the reflector first
-	// would leave its ReplicaSet in a long FailedCreate backoff even after the label
-	// lands. Order matters — label must precede the pod-creating manifest.
-	if err := kubectlApply(ctx, s.HubKubeconfig,
-		filepath.Join(s.RepoRoot, "config/deploy/namespace.yaml"),
-		filepath.Join(s.RepoRoot, "config/deploy/rbac.yaml"),
-	); err != nil {
-		return fmt.Errorf("apply reflector namespace/rbac: %w", err)
-	}
-	if err := labelPSAPrivileged(ctx, s.HubKubeconfig, "ectobase-system"); err != nil {
-		return fmt.Errorf("label reflector namespace privileged: %w", err)
-	}
-	if err := kubectlApply(ctx, s.HubKubeconfig,
-		filepath.Join(s.RepoRoot, "config/deploy/reflector.yaml"),
-	); err != nil {
-		return fmt.Errorf("apply reflector: %w", err)
-	}
-
-	// The netplane compiler compiles net.ectobase.dev/NetworkInterface (+VPC/VM) into
-	// per-cluster CompiledNICs (stamped with clusterName) that the brokers sync down and
-	// the agents program. It runs hostNetwork on the hub's control-plane; its ClusterRole
-	// came from config/deploy/rbac.yaml above, and ectobase-system is now PSA-privileged.
-	slog.Info("deploying netplane compiler on hub")
-	if err := kubectlApply(ctx, s.HubKubeconfig,
-		filepath.Join(s.RepoRoot, "config/deploy/controller.yaml"),
-	); err != nil {
-		return fmt.Errorf("apply netplane compiler: %w", err)
-	}
-
-	slog.Info("creating broker hub identity (SA + RBAC)")
-	brokerRBAC := filepath.Join(s.WorkDir, "broker-rbac.yaml")
-	if err := os.WriteFile(brokerRBAC, []byte(brokerRBACManifest), 0o644); err != nil {
-		return fmt.Errorf("write broker rbac: %w", err)
-	}
-	if err := kubectlApply(ctx, s.HubKubeconfig, brokerRBAC); err != nil {
-		return fmt.Errorf("apply broker rbac: %w", err)
-	}
-
-	slog.Info("pre-creating compute ClusterPools", "count", len(s.Compute))
-	poolsYAML := clusterPoolsManifest(s.Compute)
-	poolsPath := filepath.Join(s.WorkDir, "clusterpools.yaml")
-	if err := os.WriteFile(poolsPath, []byte(poolsYAML), 0o644); err != nil {
-		return fmt.Errorf("write clusterpools: %w", err)
-	}
-	if err := kubectlApply(ctx, s.HubKubeconfig, poolsPath); err != nil {
-		return fmt.Errorf("apply clusterpools: %w", err)
-	}
-
-	// --- Shared broker→hub kubeconfig ---
+	// --- Shared broker→hub kubeconfig (lab fixture) ---
+	// The hub-side hub-broker ServiceAccount is created by the ectobase-hub chart (system ns); mint
+	// a token for it and hand-write the broker's kubeconfig to the hub's fabric address.
 	slog.Info("minting broker hub token")
 	token, err := exec.OutputStr(ctx, "kubectl", "--kubeconfig", s.HubKubeconfig,
 		"create", "token", "hub-broker", "-n", "system", "--duration=24h")
@@ -131,52 +81,55 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		return fmt.Errorf("write broker kubeconfig: %w", err)
 	}
 
+	// Pre-create one ClusterPool per compute cluster (lab fixture). platform.ectobase.dev is served
+	// by the aggregated apiserver, so this must run after waitAggregatedAPI.
+	slog.Info("pre-creating compute ClusterPools", "count", len(s.Compute))
+	poolsYAML := clusterPoolsManifest(s.Compute)
+	poolsPath := filepath.Join(s.WorkDir, "clusterpools.yaml")
+	if err := os.WriteFile(poolsPath, []byte(poolsYAML), 0o644); err != nil {
+		return fmt.Errorf("write clusterpools: %w", err)
+	}
+	if err := kubectlApply(ctx, s.HubKubeconfig, poolsPath); err != nil {
+		return fmt.Errorf("apply clusterpools: %w", err)
+	}
+
 	// --- Each compute cluster ---
 	for _, c := range s.Compute {
-		slog.Info("deploying ectobase chart on compute cluster", "cluster", c.Name)
-		// The chart renders a NetworkAttachmentDefinition unconditionally, so the NAD
-		// CRD must exist first.
+		slog.Info("installing ectobase-pool chart on compute cluster", "cluster", c.Name)
+		// The chart renders a NetworkAttachmentDefinition unconditionally, so the NAD CRD must
+		// exist first.
 		if err := kubectlApply(ctx, c.Kubeconfig, s.NADCRDPath); err != nil {
 			return fmt.Errorf("cluster %s: apply NAD CRD: %w", c.Name, err)
 		}
-		// The broker-hub-kubeconfig Secret must exist before the chart's broker
-		// pod starts, so create the namespace + secret ahead of helm.
-		if err := ensureHelmNamespace(ctx, c.Kubeconfig, "ectobase-system", "ectobase"); err != nil {
+		// The pool chart does not manage its release namespace, and the broker-hub-kubeconfig Secret
+		// must exist before the chart's broker pod starts — so pre-create the (PSA-privileged)
+		// ectobase-system namespace + the secret ahead of helm.
+		if err := ensureHelmNamespace(ctx, c.Kubeconfig, "ectobase-system", "ectobase-pool"); err != nil {
 			return fmt.Errorf("cluster %s: ensure namespace: %w", c.Name, err)
 		}
 		if err := createSecretFromFile(ctx, c.Kubeconfig, "ectobase-system",
 			"broker-hub-kubeconfig", "kubeconfig", brokerKubeconfig); err != nil {
 			return fmt.Errorf("cluster %s: create broker secret: %w", c.Name, err)
 		}
-		if err := helmInstallEctobase(ctx, c.Kubeconfig, c.Name, s.ChartPath, s.HubIdentity, s.UnderlayWithin); err != nil {
-			return fmt.Errorf("cluster %s: helm install ectobase: %w", c.Name, err)
+		if err := helmInstallPool(ctx, c.Kubeconfig, c.Name, s.PoolChartPath, s.HubIdentity, s.UnderlayWithin); err != nil {
+			return fmt.Errorf("cluster %s: helm install ectobase-pool: %w", c.Name, err)
 		}
-		// The broker mounts broker-hub-kubeconfig as a volume, so an existing
-		// broker pod keeps the OLD kubeconfig across a re-`deploy` that rewrote the
-		// secret (helm won't roll it — the secret is created outside the chart). On a
-		// fresh up the broker starts after the secret so this is a no-op; on re-deploy
-		// it makes the broker pick up the current hub address. Best-effort.
+		// The broker mounts broker-hub-kubeconfig as a volume, so an existing broker pod keeps the
+		// OLD kubeconfig across a re-`deploy` that rewrote the secret (helm won't roll it — the
+		// secret is created outside the chart). On a fresh up the broker starts after the secret so
+		// this is a no-op; on re-deploy it makes the broker pick up the current hub address.
+		// Best-effort.
 		if err := exec.Run(ctx, "kubectl", "--kubeconfig", c.Kubeconfig, "-n", "ectobase-system",
 			"rollout", "restart", "deploy/hub-broker"); err != nil {
 			slog.Debug("rollout restart hub-broker", "cluster", c.Name, "err", err)
 		}
-		// Multus (thin) so a Pod annotated onto our overlay is attached via
-		// Multus -> flowplane-cni (a SECONDARY network) instead of a hand-driven
-		// gRPC attach. Installed AFTER the chart so flowplane-cni + the
-		// dataplane-kubeconfig already exist; Multus only wraps the default CNI, so
-		// the ordering vs flowplane-cni is not strict. Compute clusters only.
+		// Multus (thin) so a Pod annotated onto our overlay is attached via Multus ->
+		// flowplane-cni (a SECONDARY network) instead of a hand-driven gRPC attach. Installed
+		// AFTER the chart so flowplane-cni + the dataplane-kubeconfig already exist. Compute
+		// clusters only. The pod-materializer now ships in the ectobase-pool chart (base
+		// substrate), so it is no longer applied here.
 		if err := Multus(ctx, nil, c.Kubeconfig); err != nil {
 			return fmt.Errorf("cluster %s: install Multus: %w", c.Name, err)
-		}
-		// The pod-materializer turns a broker-synced CompiledContainer into a v1.Pod on
-		// this compute cluster (the container-workload analogue of the vm-materializer).
-		// Containers are the common case, so it belongs in the BASE compute substrate
-		// (alongside Multus/CNI) — NOT gated behind `lab tier2`. It is NOT in the ectobase
-		// Helm chart, so apply it here from config/deploy/pod-materializer.yaml. Idempotent
-		// (kubectl apply); ectobase-system is PSA-privileged from the chart.
-		if err := PodMaterializer(ctx, nil, c.Kubeconfig,
-			filepath.Join(s.RepoRoot, "config/deploy/pod-materializer.yaml")); err != nil {
-			return fmt.Errorf("cluster %s: pod-materializer: %w", c.Name, err)
 		}
 	}
 
@@ -186,27 +139,6 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 	}
 	slog.Info("ectobase substrate deployed", "compute", len(s.Compute))
 	return nil
-}
-
-// PodMaterializer applies the pod-materializer (SA + RBAC + Deployment in
-// ectobase-system) onto a compute cluster from config/deploy/pod-materializer.yaml.
-// The materializer turns a broker-synced CompiledContainer into a v1.Pod (attached to
-// the flowplane overlay via Multus + flowplane-cni) — the compute-side half of the
-// container-workload pipeline. It mirrors deploy.VMMaterializer but is base-substrate
-// (deployed on EVERY compute cluster, alongside Multus), not tier2-gated. Idempotent
-// (kubectl apply); ectobase-system is already PSA-privileged from the chart.
-func PodMaterializer(ctx context.Context, r Runner, kubeconfig, manifestPath string) error {
-	r = runnerOf(r)
-	slog.Info("deploying pod-materializer", "manifest", manifestPath)
-	if err := r.Run(ctx, "kubectl", "--kubeconfig", kubeconfig, "apply", "-f", manifestPath); err != nil {
-		return fmt.Errorf("apply pod-materializer: %w", err)
-	}
-	return nil
-}
-
-// kubectlApplyKustomize applies a kustomize dir to the cluster.
-func kubectlApplyKustomize(ctx context.Context, kubeconfig, dir string) error {
-	return exec.Run(ctx, "kubectl", "--kubeconfig", kubeconfig, "apply", "-k", dir)
 }
 
 // kubectlApply applies one or more manifest paths in a single kubectl call.
@@ -223,17 +155,13 @@ func kubectlApplyStdin(ctx context.Context, kubeconfig, yaml string) error {
 	return exec.RunStdin(ctx, yaml, "kubectl", "--kubeconfig", kubeconfig, "apply", "-f", "-")
 }
 
-// ensureHelmNamespace idempotently creates a namespace pre-stamped with Helm's
-// ownership label + annotations so the chart (whose own namespace.yaml manages the
-// same namespace) can adopt it. Without these, `helm install` refuses a
-// pre-existing namespace ("invalid ownership metadata"). We must create it ahead of
-// helm because the broker-hub-kubeconfig Secret has to exist before the chart's
-// broker pod starts.
-//
-// It also stamps pod-security.kubernetes.io/enforce=privileged: Talos enforces the
-// baseline PodSecurity level cluster-wide, which rejects the dataplane pods
-// (flowplane is privileged + hostPID + hostPath; agent/broker are hostNetwork).
-// Kind does not enforce PSA, so this only bites on Talos.
+// ensureHelmNamespace idempotently creates a namespace pre-stamped PSA-privileged (Talos
+// enforces the baseline PodSecurity level cluster-wide, which rejects the dataplane pods —
+// flowplane is privileged + hostPID + hostPath; agent/broker are hostNetwork; kind does not
+// enforce PSA so this only bites on Talos). It also stamps Helm's managed-by label + release
+// annotations so a chart that DID manage the namespace could adopt it; the pool chart does not
+// manage its release namespace, so those are harmless here — the reason to pre-create is that the
+// broker-hub-kubeconfig Secret has to exist before the chart's broker pod starts.
 func ensureHelmNamespace(ctx context.Context, kubeconfig, ns, release string) error {
 	m := fmt.Sprintf(`apiVersion: v1
 kind: Namespace
@@ -247,13 +175,6 @@ metadata:
     meta.helm.sh/release-namespace: %s
 `, ns, release, ns)
 	return kubectlApplyStdin(ctx, kubeconfig, m)
-}
-
-// labelPSAPrivileged marks ns as PodSecurity privileged so hostNetwork/privileged
-// pods are admitted under Talos's baseline-enforcing default (see ensureHelmNamespace).
-func labelPSAPrivileged(ctx context.Context, kubeconfig, ns string) error {
-	return exec.Run(ctx, "kubectl", "--kubeconfig", kubeconfig, "label", "ns", ns,
-		"pod-security.kubernetes.io/enforce=privileged", "--overwrite")
 }
 
 // waitAggregatedAPI blocks until the hub aggregated API actually serves the
@@ -284,14 +205,27 @@ func createSecretFromFile(ctx context.Context, kubeconfig, ns, name, key, path s
 	return kubectlApplyStdin(ctx, kubeconfig, string(manifest))
 }
 
-// helmInstallEctobase installs/upgrades the ectobase chart with a broker on one
-// compute cluster. apiserverAddress is the LOCAL cluster (the agent reads/writes
-// its own cluster); reflectorAddress points at the hub's reflector on the fabric.
-func helmInstallEctobase(ctx context.Context, kubeconfig, clusterName, chartPath, hubIdentity, underlayWithin string) error {
-	args := []string{"upgrade", "--install", "ectobase", chartPath,
+// helmInstallHub installs/upgrades the ectobase-hub chart on the hub cluster. The reflector runs
+// on the hub's fabric identity, so the hub-controller's -reflector-admin (a chart value) points
+// there. --create-namespace makes the baseline-safe `system` release namespace; the chart creates
+// the PSA-privileged ectobase-system namespace itself.
+func helmInstallHub(ctx context.Context, kubeconfig, chartPath, hubIdentity string) error {
+	args := []string{"upgrade", "--install", "ectobase-hub", chartPath,
 		"--kubeconfig", kubeconfig,
-		"--namespace", "ectobase-system", "--create-namespace",
-		"--set", "broker.enabled=true",
+		"--namespace", "system", "--create-namespace",
+		"--set", "reflectorAdmin=[" + hubIdentity + "]:1338",
+	}
+	return exec.Run(ctx, "helm", args...)
+}
+
+// helmInstallPool installs/upgrades the ectobase-pool chart with a broker on one compute cluster.
+// apiserverAddress is the LOCAL cluster (the agent reads/writes its own cluster); reflectorAddress
+// points at the hub's reflector on the fabric. The release namespace (ectobase-system) is
+// pre-created by the caller (ensureHelmNamespace), so no --create-namespace here.
+func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, hubIdentity, underlayWithin string) error {
+	args := []string{"upgrade", "--install", "ectobase-pool", chartPath,
+		"--kubeconfig", kubeconfig,
+		"--namespace", "ectobase-system",
 		"--set", "broker.clusterName=" + clusterName,
 		"--set", "apiserverAddress=https://127.0.0.1:6443",
 		"--set", "reflectorAddress=[" + hubIdentity + "]:1338",
@@ -348,37 +282,6 @@ func poolField(ctx context.Context, kubeconfig, name, jsonpath string) (string, 
 	return strings.TrimSpace(out), err
 }
 
-// patchHubReflectorAdmin sets the hub-controller's -reflector-admin arg to
-// addr (host:port, bracketed v6). hub/config ships a fixed Talos/bash-era value;
-// this repoints it at the reflector on this fabric (hub's identity) so the Tier-2
-// failover route-withdrawal can reach it. It reads the current args and JSON-patches
-// the -reflector-admin element in place (mirrors PatchHubCSIClusterID).
-func patchHubReflectorAdmin(ctx context.Context, kubeconfig, addr string) error {
-	out, err := exec.Output(ctx, "kubectl", "--kubeconfig", kubeconfig,
-		"-n", "system", "get", "deploy", "hub-controller",
-		"-o", "jsonpath={.spec.template.spec.containers[0].args}")
-	if err != nil {
-		return fmt.Errorf("get hub-controller args: %w", err)
-	}
-	var args []string
-	if err := json.Unmarshal(out, &args); err != nil {
-		return fmt.Errorf("parse hub-controller args %q: %w", string(out), err)
-	}
-	const prefix = "-reflector-admin="
-	for i, a := range args {
-		if strings.HasPrefix(a, prefix) {
-			patch := fmt.Sprintf(`[{"op":"replace","path":"/spec/template/spec/containers/0/args/%d","value":"-reflector-admin=%s"}]`, i, addr)
-			if err := exec.Run(ctx, "kubectl", "--kubeconfig", kubeconfig,
-				"-n", "system", "patch", "deploy", "hub-controller", "--type=json", "-p", patch); err != nil {
-				return fmt.Errorf("patch reflector-admin: %w", err)
-			}
-			slog.Info("hub-controller reflector-admin set", "addr", addr)
-			return nil
-		}
-	}
-	return fmt.Errorf("no %q arg in hub-controller args %v", prefix, args)
-}
-
 // mintKubeconfig hand-writes a token kubeconfig for the broker→hub connection.
 // The bracketed-IPv6 server MUST be double-quoted: an unquoted https://[..]:6443
 // is a YAML flow sequence and fails to parse. TLS verify is skipped because
@@ -421,42 +324,3 @@ spec:
 	}
 	return b.String()
 }
-
-// brokerRBACManifest is the broker's hub identity: a ServiceAccount in the
-// system namespace plus a ClusterRole/Binding granting read on the compiled net
-// resources and read/write on ClusterPools (+ status) for heartbeating.
-const brokerRBACManifest = `---
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: hub-broker
-  namespace: system
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: hub-broker
-rules:
-- apiGroups: ["compiled.ectobase.dev"]
-  resources: ["compilednics", "compiledvms", "compiledvolumeattachments", "compiledcontainers"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["platform.ectobase.dev"]
-  resources: ["clusterpools"]
-  verbs: ["get", "list", "watch", "create", "update", "patch"]
-- apiGroups: ["platform.ectobase.dev"]
-  resources: ["clusterpools/status"]
-  verbs: ["get", "update", "patch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: hub-broker
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: hub-broker
-subjects:
-- kind: ServiceAccount
-  name: hub-broker
-  namespace: system
-`

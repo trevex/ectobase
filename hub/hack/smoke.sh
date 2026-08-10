@@ -9,7 +9,7 @@
 #      (host build sidesteps the local `replace go.opendefense.cloud/kit` in
 #       hub/go.mod, which points outside the module tree and so is not
 #       reachable from a Docker build context)
-#   3. `kind load` the images, `kubectl apply -k hub/config`
+#   3. `kind load` the images, `helm install ectobase-hub` (the hub chart)
 #   4. wait for rollouts, then prove:
 #        - `kubectl get clusterpools.platform.ectobase.dev` works (aggregation up)
 #        - a created ClusterPool gets status.phase: Pending (controller reconciles)
@@ -52,8 +52,13 @@ kind load docker-image --name "${CLUSTER}" "${APISERVER_IMG}"
 kind load docker-image --name "${CLUSTER}" "${CONTROLLER_IMG}"
 kind load docker-image --name "${CLUSTER}" "${BROKER_IMG}"
 
-echo "==> applying manifests"
-kubectl apply -k "${HUB_DIR}/config"
+echo "==> installing the ectobase-hub chart"
+# The chart also ships the netplane compiler + reflector (they need the netplane:dev image, which
+# this hub-only smoke does not build), so DON'T --wait on the whole release — just install and then
+# wait on the system-namespace rollouts below. --create-namespace makes the baseline-safe `system`
+# release namespace; the chart creates the PSA-privileged ectobase-system namespace itself.
+helm upgrade --install ectobase-hub "${HUB_DIR}/../charts/ectobase-hub" \
+  --namespace system --create-namespace
 
 echo "==> waiting for rollouts"
 kubectl -n system rollout status deploy/postgres --timeout=120s

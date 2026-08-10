@@ -414,17 +414,17 @@ func Tier2(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 
-	// The vm-materializer (CompiledVM -> KubeVirt VirtualMachine + RBD DataVolume) is
-	// the compute-side half of the Tier-2 VM pipeline. It is NOT in the ectobase Helm
-	// chart, so deploy it here from config/deploy/vm-materializer.yaml.
+	// The vm-materializer (CompiledVM -> KubeVirt VirtualMachine + RBD DataVolume) is the
+	// compute-side half of the Tier-2 VM pipeline. It ships (gated off) in the ectobase-pool
+	// chart, so `lab tier2` turns it on by upgrading the pool release with vmMaterializer.enabled.
 	root, err := repoRoot()
 	if err != nil {
 		return fmt.Errorf("locate repo root: %w", err)
 	}
-	materializerManifest := filepath.Join(root, "config/deploy/vm-materializer.yaml")
+	poolChart := filepath.Join(root, "charts/ectobase-pool")
 
-	// KubeVirt + CDI + vm-materializer on every compute cluster (the hub runs no VMs —
-	// it is the fence executor / provisioner only).
+	// KubeVirt + CDI on every compute cluster, then enable the vm-materializer (the hub runs no
+	// VMs — it is the fence executor / provisioner only).
 	for _, cl := range cfg.Fabric.Clusters {
 		if cl.Name == hubCluster {
 			continue
@@ -432,7 +432,7 @@ func Tier2(ctx context.Context, cfg *config.Config) error {
 		if err := deploy.KubeVirtCDI(ctx, nil, p.clusterKubeconfig(cl.Name)); err != nil {
 			return fmt.Errorf("cluster %s: kubevirt+cdi: %w", cl.Name, err)
 		}
-		if err := deploy.VMMaterializer(ctx, nil, p.clusterKubeconfig(cl.Name), materializerManifest); err != nil {
+		if err := deploy.EnableVMMaterializer(ctx, nil, p.clusterKubeconfig(cl.Name), poolChart); err != nil {
 			return fmt.Errorf("cluster %s: vm-materializer: %w", cl.Name, err)
 		}
 	}
@@ -494,14 +494,15 @@ func deployEctobase(ctx context.Context, cfg *config.Config) error {
 	}
 
 	spec := deploy.EctobaseSpec{
-		RepoRoot:          root,
-		WorkDir:           filepath.Join(p.build, "deploy"),
-		HubKubeconfig: p.clusterKubeconfig(hubCluster),
-		HubIdentity:   dc.Nodes[0].IdentityAddr,
-		ChartPath:         filepath.Join(root, "deploy/charts/ectobase"),
-		NADCRDPath:        filepath.Join(root, "test/lab/deploy/nad-crd.yaml"),
-		UnderlayWithin:    fabric.NodeAggr,
-		Compute:           compute,
+		RepoRoot:       root,
+		WorkDir:        filepath.Join(p.build, "deploy"),
+		HubKubeconfig:  p.clusterKubeconfig(hubCluster),
+		HubIdentity:    dc.Nodes[0].IdentityAddr,
+		HubChartPath:   filepath.Join(root, "charts/ectobase-hub"),
+		PoolChartPath:  filepath.Join(root, "charts/ectobase-pool"),
+		NADCRDPath:     filepath.Join(root, "test/lab/deploy/nad-crd.yaml"),
+		UnderlayWithin: fabric.NodeAggr,
+		Compute:        compute,
 	}
 	return deploy.Ectobase(ctx, spec)
 }

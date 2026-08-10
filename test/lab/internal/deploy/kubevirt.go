@@ -169,18 +169,18 @@ func PatchHubCSIClusterID(ctx context.Context, r Runner, hubKubeconfig, fsid str
 	return nil
 }
 
-// VMMaterializer applies the vm-materializer (SA + RBAC + Deployment in
-// ectobase-system) onto a compute cluster from config/deploy/vm-materializer.yaml.
-// The materializer turns a broker-synced CompiledVM into a KubeVirt VirtualMachine
-// (+ RBD DataVolume) — the compute-side half of the Tier-2 VM pipeline. It is NOT
-// in the ectobase Helm chart (only the flowplane NAD is), so `lab tier2` deploys it
-// here. Idempotent (kubectl apply). ectobase-system is already PSA-privileged from
-// the chart, so the materializer (a standard Deployment) schedules fine.
-func VMMaterializer(ctx context.Context, r Runner, kubeconfig, manifestPath string) error {
+// EnableVMMaterializer turns on the vm-materializer (SA + RBAC + Deployment in ectobase-system)
+// on a compute cluster by upgrading the ectobase-pool release with vmMaterializer.enabled=true.
+// The materializer turns a broker-synced CompiledVM into a KubeVirt VirtualMachine (+ RBD
+// DataVolume) — the compute-side half of the Tier-2 VM pipeline. It ships gated-off in the pool
+// chart, so `lab tier2` flips it on here. --reuse-values keeps the release's existing values.
+func EnableVMMaterializer(ctx context.Context, r Runner, kubeconfig, poolChartPath string) error {
 	r = runnerOf(r)
-	slog.Info("deploying vm-materializer", "manifest", manifestPath)
-	if err := r.Run(ctx, "kubectl", "--kubeconfig", kubeconfig, "apply", "-f", manifestPath); err != nil {
-		return fmt.Errorf("apply vm-materializer: %w", err)
+	slog.Info("enabling vm-materializer via ectobase-pool upgrade")
+	if err := r.Run(ctx, "helm", "upgrade", "ectobase-pool", poolChartPath,
+		"--kubeconfig", kubeconfig, "--namespace", "ectobase-system",
+		"--reuse-values", "--set", "vmMaterializer.enabled=true", "--wait", "--timeout", "5m"); err != nil {
+		return fmt.Errorf("enable vm-materializer: %w", err)
 	}
 	return nil
 }

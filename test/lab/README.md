@@ -126,11 +126,11 @@ A persistent pull-through + push-local `registry:2` runs on the WAN segment at `
 
 ## Ectobase deploy (last step of `up`)
 
-- **Central cluster** gets `central/config` (aggregated apiserver + controller, via kustomize) — with `-reflector-admin` patched to central's fabric identity — plus the shared **reflector**, the broker's central identity, and one pre-created **ClusterPool** per compute cluster.
-- **Each compute cluster** gets the `deploy/charts/ectobase` Helm chart (`broker.enabled`, wired to central's apiserver + reflector at central's node identity).
+- **Hub cluster** gets the `charts/ectobase-hub` Helm chart (aggregated apiserver + controller + kine, the netplane compiler, the shared **reflector**, and the hub-side broker identity) — with `-reflector-admin` set to the hub's fabric identity via a chart value. The lab then mints the broker→hub token/kubeconfig and pre-creates one **ClusterPool** per compute cluster (test fixtures around the install).
+- **Each compute cluster** gets the `charts/ectobase-pool` Helm chart (dataplane + agent + broker + cni + pod-materializer; vm-materializer under `lab tier2`), wired to the hub's reflector at the hub's node identity and to its own local apiserver.
 - Both compute **ClusterPools converge to `Ready` with `nodePrefixes`**.
 
-The `ectobase-system` namespace is labeled PodSecurity **`privileged`** (the dataplane pods are privileged/hostPID/hostPath/hostNetwork).
+The pool's `ectobase-system` namespace is created PodSecurity **`privileged`** (the dataplane pods are privileged/hostPID/hostPath/hostNetwork); the hub chart likewise marks its `ectobase-system` namespace privileged for the hostNetwork compiler + reflector.
 
 ## Ceph + Tier-2 (`lab ceph`, `lab tier2`)
 
