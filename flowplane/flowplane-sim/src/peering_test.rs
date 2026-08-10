@@ -24,8 +24,8 @@
 //!    `Action::Pass` (miss).  Installing under the LOCAL VNI is what peering provides.
 //!
 //! 2. **`local_route_shadows_imported_peer_route`**
-//!    The datapath map holds one value per `(vni, prefix)` key.  The agent guarantees (Task 7
-//!    precedence) that a local route wins over any import for the same prefix.  This test pins that
+//!    The datapath map holds one value per `(vni, prefix)` key.  The agent guarantees (via
+//!    local-VNI precedence) that a local route wins over any import for the same prefix.  This test pins that
 //!    the entry the agent actually writes (the local nexthop) is what the datapath forwards on.
 //!    We model this by programming only the local-nexthop entry and asserting delivery via it.
 //!    (Agent-side precedence — ensuring the local entry is written and not overwritten — is tested
@@ -179,7 +179,7 @@ fn imported_cross_vni_route_resolves_and_delivers() {
 // ─── (2) local route shadows imported peer route ──────────────────────────────
 
 /// The datapath map holds exactly one `RouteValue` per `(vni, prefix)` key.
-/// The agent (Task 7 precedence) ensures that when both a local route and a peer import exist
+/// The agent (via local-VNI precedence) ensures that when both a local route and a peer import exist
 /// for the same destination, the LOCAL nexthop is what ends up in the map.
 ///
 /// This test pins that whichever entry is present in the map is what the datapath forwards on —
@@ -197,7 +197,7 @@ fn local_route_shadows_imported_peer_route() {
     configure_local(&mut node);
     allow_egress(&mut node, SRC_IFINDEX_A);
 
-    // Agent wrote the LOCAL nexthop into the map (having applied Task 7 precedence).
+    // Agent wrote the LOCAL nexthop into the map (having applied local-VNI precedence).
     // The peer import is NOT in the map — the agent did not write it because local wins.
     node.maps.add_route4(
         VNI_A,

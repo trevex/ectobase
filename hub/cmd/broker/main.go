@@ -8,8 +8,8 @@
 //
 // Required env: KUBE_FEATURE_WatchListClient=false (set unconditionally below).
 // The aggregated apiserver does not support the client-go streaming list-watch;
-// without this flag the informer stalls silently. The eventual Deployment manifest
-// (Task 6) must carry this in its env stanza as well.
+// without this flag the informer stalls silently. The Deployment manifest
+// must carry this in its env stanza as well.
 package main
 
 import (

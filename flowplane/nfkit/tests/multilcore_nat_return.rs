@@ -22,7 +22,7 @@
 //!   * `same_lcore_nat_return_still_resolves`: the return landing on A (the egress lcore) still
 //!     resolves — the shared table does not regress the same-lcore path.
 //!   * `normal_forward_ct_stays_per_lcore`: a plain (non-NAT, real-src) forward CT created on A is
-//!     NOT visible on B — the per-lcore fast path stays shared-nothing (the M8 isolation property).
+//!     NOT visible on B — the per-lcore fast path stays shared-nothing (the per-lcore isolation property).
 //!
 //! Before the fix, `cross_lcore_nat_return_resolves` FAILS (B misses → base-path ingress-firewall
 //! drop, inner dst never restored). Run with `--test-threads=1` (EAL is process-global).

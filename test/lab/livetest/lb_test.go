@@ -35,7 +35,7 @@ const (
 //
 // LB service programming is direct gRPC and the workload is a raw guest (not a CNI Pod): there is no
 // LB CRD -> edge/distributed-LB control path yet, and the edge Maglev / DSR path is the thing under
-// test — this is the user-approved shape from docs/superpowers/plans/2026-08-08-ns-lb-pseudo-edge-kind.md.
+// test.
 func TestLbDistributeSmoke(t *testing.T) {
 	cfg := loadConfig(t)
 	requireFabricUp(t, cfg)

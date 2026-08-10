@@ -1,4 +1,4 @@
-//! Task 5 (fallback a): the `shared_ct` HANDOFF across the two REAL datapath entrypoints.
+//! The `shared_ct` HANDOFF across the two REAL datapath entrypoints.
 //!
 //! ── WHAT THIS PROVES ──────────────────────────────────────────────────────────────────────────
 //! The DPDK serve worker runs guest egress (`process_guest_tx`) and NAT return (`process_uplink_rx`)
@@ -24,7 +24,7 @@
 //! manually-inserted CT entry like `multilcore_nat_return.rs` uses to isolate the table-selection
 //! property).
 //!
-//! ── WHY THIS IS THE COMPONENT TEST (Task 5 fallback a) ────────────────────────────────────────
+//! ── WHY THIS IS THE COMPONENT TEST ────────────────────────────────────────────────────────────
 //! Every datapath seam is already independently proven, so the remaining unproven property is the
 //! shared_ct HANDOFF itself, proven here over the exact `ComposedMaps` the serve worker uses:
 //!   * `guest_tx_datapath.rs` — real `process_guest_tx` over MbufPkt: SNAT+encap byte-parity + the
@@ -37,7 +37,7 @@
 //! The full-serve af_xdp e2e — bring up `flowplane-dpdk serve` with a preallocated guest port, gRPC
 //! attach, then inject a guest frame on the guest veth + the matching NAT return on the uplink over
 //! REAL af_xdp transport, asserting the encapped egress + reverse-DNAT delivery with real polling +
-//! timing — is a documented FOLLOW-UP (Task 6 backlog). It is heavy and flaky, and each of its seams
+//! timing — is a known follow-up. It is heavy and flaky, and each of its seams
 //! (datapath entrypoints, af_xdp transport, attach/pool binding, and — here — the shared_ct handoff)
 //! is independently proven above.
 //!

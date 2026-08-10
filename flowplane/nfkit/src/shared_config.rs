@@ -9,11 +9,11 @@
 //!
 //! ── WHAT THIS IS / ISN'T ──────────────────────────────────────────────────────────────────────
 //! This is the WRITER side + table STORAGE. It exposes:
-//!  * writer methods (`*_insert`/`*_remove`/`*_set`) the `DpdkMapWriter` (Task 6) calls, and
-//!  * reader getters (`*_get`/`is_nat_ip`/…) the composed datapath `Maps` impl (Task 5) calls.
+//!  * writer methods (`*_insert`/`*_remove`/`*_set`) the `DpdkMapWriter` calls, and
+//!  * reader getters (`*_get`/`is_nat_ip`/…) the composed datapath `Maps` impl calls.
 //!
 //! It deliberately does NOT `impl flowplane_core::maps::Maps` — that composition (shared CONFIG plus
-//! per-lcore FLOW state: conntrack/meter) is Task 5.
+//! per-lcore FLOW state: conntrack/meter) lives in the composed `Maps` impl.
 //!
 //! ── TABLE SET (derived from writer.rs ∩ maps.rs ∩ dpdk_maps.rs) ───────────────────────────────
 //! The CONFIG half only. The FLOW half of `DpdkMaps` (conntrack, plus the meter's per-packet token
@@ -479,9 +479,9 @@ impl SharedConfigMaps {
         self.neigh_nat_count.load(Ordering::Acquire)
     }
 
-    // ── WRITER side (names the DpdkMapWriter, Task 6, calls) ─────────────────────
+    // ── WRITER side (the methods the DpdkMapWriter calls) ─────────────────────────
     // Each is a thin wrapper building the tagged key then insert/remove. `insert`/`remove` return
-    // bool (false = table full / absent); writer methods propagate that so Task 6 can surface a
+    // bool (false = table full / absent); writer methods propagate that so the writer can surface a
     // `-ENOSPC`. Names are `<table>_insert` / `<table>_remove` mirroring the DpdkMaps setters.
 
     /// Insert/overwrite a `/32` IPv4 route `(vni,ipv4)`. Returns false if the table is full.
@@ -651,8 +651,8 @@ impl SharedConfigMaps {
         self.dhcp_meta.remove(&DhcpMetaK::new(ifindex))
     }
 
-    // ── READER side (getters the composed Maps impl, Task 5, calls) ──────────────
-    // Signatures MATCH `flowplane_core::maps::Maps` exactly so Task 5 can forward 1:1. Lock-free
+    // ── READER side (getters the composed Maps impl calls) ───────────────────────
+    // Signatures MATCH `flowplane_core::maps::Maps` exactly so the composed impl can forward 1:1. Lock-free
     // (`&self`) — safe concurrent with the single writer.
 
     /// Exact-match (`/32`) IPv4 route lookup (matches `Maps::route4_get`).

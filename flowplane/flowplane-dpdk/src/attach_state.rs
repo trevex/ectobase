@@ -1,5 +1,5 @@
 //! DPDK host-device attach state: the underlay /128 IPAM + the registry of attached guest devices
-//! (what B2b will af_xdp-bind + poll). Guarded by a Mutex; the attach/detach handlers are the only
+//! (what the datapath will af_xdp-bind + poll). Guarded by a Mutex; the attach/detach handlers are the only
 //! writers.
 //!
 //! `mac_for` and `host_veth_name` are transcribed verbatim from `flowplane/src/attach.rs`
@@ -17,10 +17,9 @@ use crate::port_backend::GuestPortBackend;
 /// BEFORE EAL init (so they can be passed as `--vdev=net_af_xdp<i>,iface=<host_ifname>`), giving a
 /// STATIC poll set. Each slot maps to ethdev port id `port_id` (uplink = 0, guests = 1..=N).
 ///
-/// Consumed by later tasks: Task 3 polls each slot's guest port in the worker loop; Task 4's
-/// AttachInterface binds a free slot to an interface (moving the guest veth end into the pod netns +
-/// recording the interface_id in `bound`). For THIS task (Task 2) the slot only records the
-/// preallocated host device + its ethdev port id; `bound` is always `None`.
+/// The worker loop polls each slot's guest port; AttachInterface binds a free slot to an interface
+/// (moving the guest veth end into the pod netns + recording the interface_id in `bound`). At
+/// preallocation the slot only records the host device + its ethdev port id; `bound` is `None`.
 #[derive(Clone, Debug)]
 pub struct GuestPortSlot {
     /// Host-end (root-netns) veth device name of the preallocated pair, e.g. `fpg0`.
@@ -29,8 +28,7 @@ pub struct GuestPortSlot {
     pub host_ifindex: u32,
     /// The DPDK ethdev port id this slot's af_xdp vdev probed as (1..=N; uplink is 0).
     pub port_id: u16,
-    /// Interface id bound to this slot, or `None` if free. Placeholder type for Task 2 — Task 4
-    /// finalizes the binding (it may carry more than the id).
+    /// Interface id bound to this slot, or `None` if free.
     pub bound: Option<String>,
     /// `true` once this slot's host-end veth (`host_ifname`) has been detected GONE — the pod's netns
     /// was destroyed WITHOUT a preceding DetachInterface, so the guest-end vanished and took the
@@ -39,7 +37,7 @@ pub struct GuestPortSlot {
     /// traffic), so a pool drained by dead slots correctly surfaces as `resource_exhausted`.
     ///
     /// LIVE RECOVERY (recreate the veth + `rte_dev` hotplug detach/attach the af_xdp vdev + reconfigure
-    /// the ethdev port) is wired by G3 (Task 6): `port_backend::VethBackend::recover` recreates the
+    /// the ethdev port) is handled by `port_backend::VethBackend::recover`, which recreates the
     /// veth + re-adds the vdev, the control path `Port::configure`s the re-added ethdev + swaps it into
     /// the worker's shared `Port` cell, and the worker rebuilds its `!Send` queue handles when it sees
     /// this slot's `generation` bump. Defaults to `false` at preallocation.
@@ -64,7 +62,7 @@ pub struct AttachedDevice {
 }
 
 /// Process-wide attach state: underlay IPAM (seeded from the node /64) + the interface_id → device
-/// registry. B2b iterates `registry` to bind/poll each guest af_xdp port.
+/// registry. The datapath iterates `registry` to bind/poll each guest af_xdp port.
 pub struct DpdkAttachState {
     pub ipam: Mutex<UnderlayIpam>,
     pub registry: Mutex<HashMap<Vec<u8>, AttachedDevice>>,
@@ -74,8 +72,8 @@ pub struct DpdkAttachState {
     pub gateway_ipv4: [u8; 4],
     pub gateway_ipv6: [u8; 16],
     /// The PREALLOCATED per-guest af_xdp port pool (VF-style), built at serve startup BEFORE EAL init
-    /// (see `serve.rs::run`). A STATIC poll set: Task 3 polls each slot's `port_id` in the worker
-    /// loop; Task 4's AttachInterface locks this to bind a free slot (`bound = Some(..)`) to an
+    /// (see `serve.rs::run`). A STATIC poll set: the worker loop polls each slot's `port_id`;
+    /// AttachInterface locks this to bind a free slot (`bound = Some(..)`) to an
     /// interface (moving the placeholder guest-end veth into the pod netns) and release it on detach.
     /// Empty for non-af-xdp backends (per-guest ports are af-xdp-only in this slice).
     pub guest_pool: Mutex<Vec<GuestPortSlot>>,
@@ -84,13 +82,13 @@ pub struct DpdkAttachState {
     /// so the handlers stay device-kind-agnostic (veth today; tap/vf are documented seams).
     /// `Arc<dyn ...>` so it clones cheaply into the `spawn_blocking` closures that shell out to `ip`.
     pub backend: Arc<dyn GuestPortBackend>,
-    /// Control-plane handle for dead-slot LIVE RECOVERY (G3/Task 6). Set ONCE by `serve.rs::run` after
+    /// Control-plane handle for dead-slot LIVE RECOVERY. Set ONCE by `serve.rs::run` after
     /// the datapath thread is spawned (the handle carries the shared `Mempool` + the `GuestDatapath`
     /// generation-handshake state, both of which are built alongside the workers). The attach path
     /// (`node.rs`) uses it to recover a dead slot when no free live slot remains. `OnceLock` because
     /// it is set exactly once at startup and only read thereafter; `None`/unset in unit tests + on
     /// non-serve construction (recovery is then simply unavailable — attach falls back to
-    /// `resource_exhausted`, the pre-G3 behavior).
+    /// `resource_exhausted`, the behavior prior to dead-slot live recovery).
     pub recover: std::sync::OnceLock<crate::serve::RecoverHandle>,
 }
 

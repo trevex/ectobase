@@ -1,11 +1,11 @@
-//! DE-RISK GATE for the DPDK `TapBackend` datapath slice (Task 1): prove that DPDK's `net_af_xdp`
+//! DE-RISK GATE for the DPDK `TapBackend` datapath slice: prove that DPDK's `net_af_xdp`
 //! PMD can bind a **tap kernel netdev** (`fptaphp0`) and that a frame written to the tap's
 //! **char-device fd** (`/dev/net/tun` after `TUNSETIFF`) round-trips through af_xdp in BOTH
 //! directions:
 //!   * fd write (guest egress) -> af_xdp RX on the netdev, and
 //!   * af_xdp TX on the netdev  -> fd read (guest ingress).
 //!
-//! af_xdp-on-veth is proven on this host (M7); af_xdp-on-tap (copy mode) is very likely but was
+//! af_xdp-on-veth is proven on this host; af_xdp-on-tap (copy mode) is very likely but was
 //! UNPROVEN. This is the go/no-go gate for the whole TapBackend model: if af_xdp cannot bind the
 //! tap netdev (Port::configure fails) or a frame does not cross the fd<->netdev seam, the model is
 //! invalid and the feature STOPs here.

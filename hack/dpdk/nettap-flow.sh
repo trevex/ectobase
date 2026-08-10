@@ -4,9 +4,9 @@
 # backing Linux tap device (the `iface=` value, e.g. nfkittap0), so we assert a `flower` filter with
 # the matched dst-ip/dst-port key appears via `tc filter show`.
 #
-# RESERVES hugepages and RESTORES the original vm.nr_hugepages on exit (trap) — the M7 self-restoring
-# pattern. The app's output goes to a LOGFILE (never our stdout pipe); the app is kill -9'd in the
-# trap (the M7 pipe-hang lesson). The DPDK-created tap is deleted in the trap too.
+# RESERVES hugepages and RESTORES the original vm.nr_hugepages on exit (trap) — the self-restoring
+# hugepage pattern. The app's output goes to a LOGFILE (never our stdout pipe); the app is kill -9'd in the
+# trap (avoids the pipe-hang where an orphaned app wedges the parent). The DPDK-created tap is deleted in the trap too.
 #
 # Exit 0 = flower filter with the matched key observed; 77 (skip) = not root / hugepages not
 # reservable / app printed FLOW UNSUPPORTED / no flower filter (missing kernel cls_flower or net_tap
@@ -32,7 +32,7 @@ restore() {
 }
 trap restore EXIT
 # Reserve hugepages (idempotent); restored to $ORIG_HP by the trap on ANY exit. net_tap uses
-# --no-huge (software backend), but reserve anyway to keep the harness uniform with M7.
+# --no-huge (software backend), but reserve anyway to keep the harness uniform with the af_xdp harness.
 sysctl -qw vm.nr_hugepages=1024 2>/dev/null || true
 
 # Run the example; output to the log (NOT our stdout pipe) so an orphan can't wedge the parent.

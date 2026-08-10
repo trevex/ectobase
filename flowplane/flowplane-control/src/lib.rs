@@ -17,18 +17,18 @@ pub use writer::{CtFlushScope, MapWriter};
 /// Holds the config shadow + interface metadata the agnostic ops need; programs maps via `W`.
 pub struct ControlCore<W: MapWriter> {
     pub(crate) w: W,
-    // ROUTES domain (Task 2)
+    // ROUTES domain
     pub(crate) routes_shadow: Vec<shadow::RouteShadowV4>,
     pub(crate) routes6_shadow: Vec<shadow::RouteShadowV6>,
-    // NAT domain (Task 4): interface meta + lb shadow the nat conflict checks read, and the
+    // NAT domain: interface meta + lb shadow the nat conflict checks read, and the
     // in-memory neighbor-NAT vec that drives the NEIGHBOR_NAT map reprogram.
     pub(crate) ifaces_meta: std::collections::HashMap<Vec<u8>, shadow::IfaceMeta>,
-    // LB domain (Task 5): the load balancers (keyed by id) + the Maglev table-id allocator.
+    // LB domain: the load balancers (keyed by id) + the Maglev table-id allocator.
     // The eBPF `detach_interface` VNI-reset reads lb-vni membership via `vni_has_lb`.
     pub(crate) lbs: std::collections::HashMap<Vec<u8>, shadow::LbEntry>,
     pub(crate) next_table_id: u32,
     pub(crate) neigh_nats: Vec<flowplane_common::NeighborNatEntry>,
-    // FIREWALL domain (Task 6): ifindex -> ordered (rule_id, rule) pairs. Drives the FW_RULES /
+    // FIREWALL domain: ifindex -> ordered (rule_id, rule) pairs. Drives the FW_RULES /
     // FW_META reprogram. The eBPF `detach_interface` drops an interface's shadow entry via
     // `remove_fw_rules`.
     pub(crate) fw: std::collections::HashMap<u32, Vec<(Vec<u8>, flowplane_common::FwRule)>>,

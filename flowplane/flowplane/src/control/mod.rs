@@ -331,9 +331,8 @@ impl Control {
                     v.tap_ifindex
                 );
             }
-            // Mirror the agnostic subset into the core so post-adopt NAT/LB conflict checks (moved
-            // into ControlCore in Task 4) see the recovered interface, exactly as they saw `by_id`
-            // before the refactor.
+            // Mirror the agnostic subset into the core so post-adopt NAT/LB conflict checks (which
+            // live in ControlCore) see the recovered interface, exactly as they saw `by_id` before.
             g.core.register_iface_meta(
                 id.clone(),
                 flowplane_control::shadow::IfaceMeta {
@@ -494,7 +493,7 @@ impl Control {
         f(&mut g.core)
     }
 
-    /// Set the guest DHCP config. Delegates to the backend-agnostic `ControlCore` (Task 7).
+    /// Set the guest DHCP config. Delegates to the backend-agnostic `ControlCore`.
     pub fn set_dhcp_config(
         &self,
         mtu: u16,
@@ -599,7 +598,7 @@ impl Control {
         // Resolved here (device-side bookkeeping) and handed to the agnostic map programming.
         let effective_mac = g.learned_macs.get(interface_id).copied().unwrap_or(mac);
         // The MAP-programming half (PORT_META/INTERFACES/UNDERLAY/self-routes/METER/IFACE_META) moved
-        // into the backend-agnostic `ControlCore` (Task 7). `IfaceParams` carries the device-resolved
+        // into the backend-agnostic `ControlCore`. `IfaceParams` carries the device-resolved
         // `tap`/`effective_mac` so the write set/order is byte-identical to the former inline body.
         if let Err(e) = g.core.program_interface(flowplane_control::IfaceParams {
             interface_id: interface_id.to_vec(),
@@ -705,7 +704,7 @@ impl Control {
         // Auto-reset VNI when the last local interface on it is removed:
         // purge neighbor NATs (and orphaned VIP/NAT/route state) for that VNI. This matches
         // dpservice's async-deletion model where the VNI is implicitly reset on last-iface removal.
-        // The reconciliation itself moved into `ControlCore::purge_vni` (Task 7); Control keeps only
+        // The reconciliation itself lives in `ControlCore::purge_vni`; Control keeps only
         // the "is the VNI still in use?" decision (it reads `by_id`, which stays authoritative here).
         let vni_still_in_use = g.by_id.values().any(|r| r.vni == vni) || g.core.vni_has_lb(vni);
         if !vni_still_in_use {

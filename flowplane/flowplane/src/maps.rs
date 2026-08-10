@@ -12,7 +12,7 @@ use flowplane_common::{
 };
 
 /// Typed handle over the `INTERFACES` BPF map (overlay (VNI, IPv4) -> delivery info).
-// Exercised by the roundtrip test now; wired into the gRPC control plane in Task 12.
+// Exercised by the roundtrip test and consumed by the gRPC control plane.
 pub struct Interfaces {
     map: HashMap<MapData, IfaceKey, IfaceValue>,
 }
@@ -42,7 +42,7 @@ impl Interfaces {
     }
 
     /// Snapshot every (key, value) — used at restart to rebuild in-memory bookkeeping from the
-    /// surviving pinned map. Mirrors `Conntrack::entries`. (Wired in by Task 5's restart path.)
+    /// surviving pinned map. Mirrors `Conntrack::entries`. (Consumed by the restart path.)
     pub(crate) fn entries(&self) -> Vec<(IfaceKey, IfaceValue)> {
         self.map.iter().filter_map(|r| r.ok()).collect()
     }
@@ -491,8 +491,8 @@ impl Underlay {
     }
 
     /// Every underlay /128 currently programmed — used at restart to rebuild `UnderlayIpam`'s
-    /// used-set (via `mark_used`) so a recovered live allocation is never reissued. (Wired in by
-    /// Task 5's restart path.)
+    /// used-set (via `mark_used`) so a recovered live allocation is never reissued. (Consumed by
+    /// the restart path.)
     pub(crate) fn keys(&self) -> Vec<[u8; 16]> {
         self.map.keys().filter_map(|r| r.ok()).collect()
     }

@@ -12,7 +12,7 @@
 //!   4. `Arc<SharedConfigMaps>` — the process-wide single-writer CONFIG tables.
 //!   5. `Arc<parking_lot::Mutex<ControlCore<DpdkMapWriter>>>` — the SINGLE serialized writer (the
 //!      Mutex enforces single-writer over the `&self` `SharedConfigMaps` writes). The gRPC service
-//!      (Task 9) will drive `ControlCore` through this handle.
+//!      drives `ControlCore` through this handle.
 //!   6. Datapath workers on a DEDICATED std::thread: `LcoreRuntime::for_each_worker` BLOCKS until
 //!      every worker lcore joins, so it cannot share the main thread with the tokio server. Each
 //!      worker registers as a `SharedConfigMaps` reader, owns a per-lcore `PerLcoreFlowMaps`,
@@ -26,7 +26,7 @@
 //! One `Arc<SharedConfigMaps>` is cloned three ways: (a) into `DpdkMapWriter` inside the
 //! `Mutex<ControlCore>` (the SOLE writer), (b) into the worker thread where every lcore derefs it to
 //! `&*shared` for lock-free reads (sound because `SharedConfigMaps: Sync`), and later (c) into the
-//! gRPC service (Task 9) via the same `Arc<Mutex<ControlCore>>`. Workers NEVER get a writer.
+//! gRPC service via the same `Arc<Mutex<ControlCore>>`. Workers NEVER get a writer.
 #![allow(clippy::result_large_err)]
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -65,7 +65,7 @@ const OUTER_V6_DST_OFF: usize = 14 + 24;
 const CONFIG_ENTRIES: u32 = 4096;
 
 /// NUMA socket the maps + mempool are allocated on. Single-socket assumption for the scaffold; a
-/// real multi-socket deployment would derive this per-port (Task 9+).
+/// real multi-socket deployment would derive this per-port.
 const SOCKET_ID: i32 = 0;
 
 /// A preallocated guest af_xdp port during STARTUP BUILD only: the configured ethdev `Port` plus the
@@ -352,7 +352,7 @@ pub struct ServeArgs {
     #[arg(long = "gateway-mac")]
     pub gateway_mac: String,
     /// This node's underlay IPv6 (outer src on encap; the /64 the AttachInterface pool allocates
-    /// from). Optional — resolved later (Task 9) from the node IP when unset.
+    /// from). Optional — resolved from the node IP when unset.
     #[arg(long = "local-underlay")]
     pub local_underlay: Option<String>,
     /// DPDK port backend.
@@ -380,12 +380,12 @@ pub struct ServeArgs {
     /// DHCPv6 DNS server, repeatable (server-wide).
     #[arg(long = "dhcpv6-dns")]
     pub dhcpv6_dns: Vec<String>,
-    /// Guest MTU override. Unset = derive from the uplink MTU minus encap overhead (Task 9).
+    /// Guest MTU override. Unset = derive from the uplink MTU minus encap overhead.
     #[arg(long = "guest-mtu")]
     pub guest_mtu: Option<u32>,
     /// Number of PREALLOCATED per-guest af_xdp ports (VF-style). The serve process creates this many
     /// guest veth pairs BEFORE EAL init and passes each as an extra `--vdev=net_af_xdp<i>`, giving a
-    /// STATIC poll set that AttachInterface (Task 4) later binds to guests. First slice: 1. Only
+    /// STATIC poll set that AttachInterface later binds to guests. Only
     /// meaningful for the af-xdp backend (ignored/skipped otherwise).
     #[arg(long = "guest-ports", default_value_t = 1)]
     pub guest_ports: u16,
@@ -555,9 +555,9 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     // EAL dependency, so compute it once up front and reuse it for the attach state below.
     //
     // The guest-end of each pair (`<host_ifname>p`, the create_veth_pair peer convention) stays a
-    // root-netns PLACEHOLDER until Task 4's AttachInterface moves it into the pod netns; the MAC set
+    // root-netns PLACEHOLDER until AttachInterface moves it into the pod netns; the MAC set
     // here is a deterministic placeholder (the real guest MAC is programmed at attach). `bound` is
-    // `None` for every slot (Task 4 binds them). `guest_mtu` was computed above (before the backend).
+    // `None` for every slot (attach binds them). `guest_mtu` was computed above (before the backend).
     // RAII startup-rollback guard, ARMED here and kept in scope across EVERY `?` from prealloc through
     // the worker `.spawn` below. As each pool device is created we `track` it; any early return drops
     // the guard and tears down what was created so far. We `disarm()` only AFTER the worker thread
@@ -583,7 +583,7 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
             for i in 0..args.guest_ports {
                 // Route preallocation through the backend (device mechanics: create `fpg{i}` with the
                 // deterministic placeholder MAC — the backend owns the naming/MAC scheme). Not
-                // datapath-significant yet; the real guest MAC is programmed at attach (Task 4).
+                // datapath-significant yet; the real guest MAC is programmed at attach.
                 //
                 // On failure the `?`-return drops `guard`, tearing down every device tracked so far —
                 // the RAII guard now covers prealloc failures too (no hand-rolled per-slot rollback).
@@ -658,7 +658,7 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     // af_xdp vdev was probed with queue_count=1). Each configured `Port` is paired with its host
     // veth ifindex (the key `ports_get` uses to resolve the guest's `PortMeta` in `worker_loop`).
     // These `GuestPort`s MUST outlive the datapath — a `Port` Drop stops+closes the ethdev — so they
-    // are moved into the worker thread below, where Task 3 polls their rx queue → `process_guest_tx`.
+    // are moved into the worker thread below, where the worker polls their rx queue → `process_guest_tx`.
     let mut guest_ports: Vec<GuestPort> = Vec::with_capacity(slots.len());
     for slot in &slots {
         // A guest ethdev-configure failure leaves the already-created host veths on the host; the
@@ -713,7 +713,7 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     }
     let rings = Arc::new(rings);
 
-    // ── 3c. GuestDatapath: the shared Port cells + generation handshake (G3 recovery) ──────────────
+    // ── 3c. GuestDatapath: the shared Port cells + generation handshake (dead-slot recovery) ──────────────
     // Move each configured guest `Port` into a per-index `Mutex<Option<Port>>` cell so the CONTROL
     // thread can SWAP a recovered Port in (dead-slot recovery) while a worker holds the cell only
     // briefly to (re)derive its `!Send` queue handles on-lcore. `generations[pi]` starts at 0 (matches
@@ -805,13 +805,13 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
 
     // ── 5. The SINGLE writer: ControlCore<DpdkMapWriter> behind a Mutex ─────────
     // The Mutex enforces single-writer over the `&self` SharedConfigMaps writes (soundness of the
-    // LF+RCU tables rests on exactly one writer). Task 9's DataplaneNode service takes handlers that
+    // LF+RCU tables rests on exactly one writer). The DataplaneNode service takes handlers that
     // lock this and drive ControlCore. Cloned here so the handle survives into the gRPC service.
     let ctrl = Arc::new(parking_lot::Mutex::new(ControlCore::new(
         DpdkMapWriter::new(shared.clone()),
     )));
 
-    // ── 5b. B2a attach state: underlay IPAM + device registry ─────────────────
+    // ── 5b. Host-device attach state: underlay IPAM + device registry ─────────────────
     // `underlay_prefix` (the /64 that seeds `UnderlayIpam`) was resolved with `underlay_addr` up front
     // (§4a needs the host address for LOCAL). The guest_mtu defaults to a sane 1450 (underlay MTU 1500
     // - 40-byte outer IPv6 - 8-byte encap header) when not set.
@@ -831,7 +831,7 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         .transpose()?
         .unwrap_or([0u8; 16]);
     // `guest_mtu` was computed up front (before EAL init) for the preallocated guest veths; reuse it.
-    // The preallocated `slots` move into `guest_pool` (behind a Mutex) so Task 4's AttachInterface can
+    // The preallocated `slots` move into `guest_pool` (behind a Mutex) so AttachInterface can
     // bind/release them; the guest `Port`s themselves are held live by the worker thread (below).
     let guest_pool_len = slots.len();
     let attach_state = Arc::new(DpdkAttachState {
@@ -842,13 +842,13 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         gateway_ipv6,
         guest_pool: std::sync::Mutex::new(slots),
         // Share the SAME backend instance §2a preallocated with — attach/detach route their
-        // assign/release/is_alive/recover device ops through it (Task 4 call sites in node.rs).
+        // assign/release/is_alive/recover device ops through it (call sites in node.rs).
         backend: port_backend.clone(),
         // Set just below, once the datapath + Mempool Arcs exist (they build the RecoverHandle).
         recover: std::sync::OnceLock::new(),
     });
 
-    // Wire the dead-slot LIVE RECOVERY handle into the attach state (G3/Task 6). The handle carries
+    // Wire the dead-slot LIVE RECOVERY handle into the attach state. The handle carries
     // the shared `Mempool` + the `GuestDatapath` generation-handshake state; the attach path
     // (`node.rs`) reads it to recover a dead slot when no free live slot remains. Set ONCE, before the
     // gRPC server (hence any attach) can run. Ignore the (impossible) re-set error.
@@ -971,8 +971,8 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     }
 
     // Close every guest ethdev BEFORE deleting its backing veth (the ethdev-close-before-link-delete
-    // ordering the pre-G3 code got from the guest `Port`s dropping when the worker closure returned).
-    // With G3 the guest `Port`s live in `datapath.ports` (shared cells so recovery can swap them), so
+    // ordering the pre-recovery code got from the guest `Port`s dropping when the worker closure returned).
+    // With dead-slot recovery the guest `Port`s live in `datapath.ports` (shared cells so recovery can swap them), so
     // they do NOT drop at `workers.join()`. Explicitly `take()` each cell here — the `Option<Port>`
     // → `None` transition runs `rte_eth_dev_stop`/`close`. The workers are already joined, so no
     // worker will observe the `None` (and even if the timing raced, `rebuild_guest_qs_entry` skips a
@@ -1012,16 +1012,16 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
 /// mbuf onto the uplink tx burst; `Drop` (or a frame with no resolvable underlay) frees the mbuf by
 /// letting it fall out of scope (`Mbuf`'s Drop returns it to the pool).
 ///
-/// GUEST block (Task 3): worker `q` owns the STRIDED subset of `guest_ports` for which
+/// GUEST block: worker `q` owns the STRIDED subset of `guest_ports` for which
 /// `owns(i, q, n_workers)` (round-robin by port index). For each owned guest port, rx its single
 /// queue and run the shared-core
-/// `process_guest_tx` (the exact seam Task 1's `guest_tx_datapath.rs` proves DPDK==sim on). Resolve
+/// `process_guest_tx` (the exact seam `guest_tx_datapath.rs` proves DPDK==sim on). Resolve
 /// the sending guest's `PortMeta` by the port's host veth ifindex (`ports_get`); an unbound pool port
-/// (no guest attached yet, Task 4 binds them) has no `PortMeta` → drop. The encap arm returns
+/// (no guest attached yet, attach binds them) has no `PortMeta` → drop. The encap arm returns
 /// `Redirect(uplink_ifindex)`, so a redirect whose target is `LOCAL.uplink_ifindex` is queued onto
 /// the SAME uplink tx burst (encap→fabric out the uplink).
 ///
-/// GUEST↔GUEST (Task 5): the `Deliver::Local` arm returns `Redirect(dest_tap_ifindex)` (inner Eth
+/// GUEST↔GUEST: the `Deliver::Local` arm returns `Redirect(dest_tap_ifindex)` (inner Eth
 /// already rewritten for the dest guest). The dest port may be owned by a DIFFERENT worker, and a
 /// `TxQueue` is `!Send`, so the source worker cannot tx it directly. It instead resolves the target
 /// ifindex → its port index (`ifindex_to_index`) and ENQUEUEs the mbuf into that port's `LcoreRing`
@@ -1033,7 +1033,7 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
 /// uplink identity (no outer MACs / uplink ifindex) → both blocks drop their bursts. Guest ports are
 /// polled EVERY iteration regardless of uplink rx count (no early `continue` on an idle uplink).
 ///
-/// NOTE (Task 5): each owned guest port's `TxQueue` (`gtx`) is used by the ring-drain block to tx the
+/// NOTE: each owned guest port's `TxQueue` (`gtx`) is used by the ring-drain block to tx the
 /// guest↔guest frames handed off into that port's `LcoreRing` by any worker's guest rx block.
 #[allow(clippy::too_many_arguments)]
 fn worker_loop(
@@ -1250,7 +1250,7 @@ fn worker_loop(
             tx_burst.clear();
         }
 
-        // ── GUEST block (guest → fabric, Task 3): rx each owned guest port, run process_guest_tx. ──
+        // ── GUEST block (guest → fabric): rx each owned guest port, run process_guest_tx. ──
         // Only meaningful with `LOCAL` programmed — the encapped frame egresses the uplink identified
         // by LOCAL. Without LOCAL there is no uplink identity, so poll+drain the guest ports (so their
         // rx rings don't back up) but drop everything.
@@ -1325,7 +1325,7 @@ fn worker_loop(
                             }
                         },
                         // No LOCAL (no uplink identity for the encap arm) or unbound pool port (no guest
-                        // attached yet; Task 4 binds them) → drop.
+                        // attached yet; attach binds them) → drop.
                         _ => Action::Drop,
                     }
                 };

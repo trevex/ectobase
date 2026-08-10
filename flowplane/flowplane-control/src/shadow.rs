@@ -46,7 +46,7 @@ impl LbIp {
 
 /// Registered load balancer: its Maglev table id, the (port,proto) services it answers, and the
 /// ordered backend list (drives the Maglev table). Keyed in `ControlCore.lbs` by the LB's id.
-/// Moved verbatim out of `control/mod.rs` (Task 5); the NAT preferred-underlay collision check
+/// Moved verbatim out of `control/mod.rs`; the NAT preferred-underlay collision check
 /// reads `lb_underlay`.
 pub struct LbEntry {
     pub vni: u32,

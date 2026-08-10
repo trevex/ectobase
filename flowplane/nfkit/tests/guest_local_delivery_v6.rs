@@ -1,4 +1,4 @@
-//! Task 3 (DPDK guest-egress polish sweep): VERIFY that NATIVE v6→v6 guest↔guest SAME-NODE local
+//! VERIFY that NATIVE v6→v6 guest↔guest SAME-NODE local
 //! delivery already works over the DPDK substrate — the compose of the real
 //! `flowplane_core::datapath::process_guest_tx_v6` `Deliver::Local` arm and the `nfkit::LcoreRing`
 //! cross-lcore handoff the serve worker uses to route a local-delivery redirect to the dest guest

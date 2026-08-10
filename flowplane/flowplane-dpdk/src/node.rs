@@ -69,9 +69,9 @@ use pb::{
 /// through ControlCore, symmetric with the eBPF service holding its `AttachState`).
 pub struct DpdkNodeService {
     ctrl: Arc<Mutex<ControlCore<DpdkMapWriter>>>,
-    #[allow(dead_code)] // held for symmetry + future getter-based reads (e.g. B2 device state)
+    #[allow(dead_code)] // held for symmetry + future getter-based reads (e.g. device-attach state)
     shared: Arc<SharedConfigMaps>,
-    /// B2a host-device attach state: underlay IPAM + the registry of active guest veths.
+    /// Host-device attach state: underlay IPAM + the registry of active guest veths.
     attach: Arc<crate::attach_state::DpdkAttachState>,
 }
 
@@ -97,7 +97,7 @@ impl DataplaneNode for DpdkNodeService {
         req: Request<AttachInterfaceRequest>,
     ) -> Result<Response<AttachInterfaceResponse>, Status> {
         let r = req.into_inner();
-        // B2a supports the container/veth device_type only (Tap/PodTap are eBPF-only for now).
+        // The DPDK backend supports the container/veth device_type only (Tap/PodTap are eBPF-only for now).
         if !(r.device_type.is_empty() || r.device_type == "veth") {
             return Err(Status::invalid_argument(format!(
                 "device_type {:?} not supported on DPDK yet (B2a = veth/container only)",
@@ -190,7 +190,7 @@ impl DataplaneNode for DpdkNodeService {
         let (slot_host_ifname, slot_host_ifindex) = match reserved {
             Some(fields) => fields,
             None => {
-                // No free LIVE slot. Before giving up, try DEAD-SLOT LIVE RECOVERY (G3/Task 6): if a
+                // No free LIVE slot. Before giving up, try DEAD-SLOT LIVE RECOVERY: if a
                 // dead slot exists AND the serve loop wired a `RecoverHandle`, recreate ONE dead slot's
                 // veth + hot-rebind its af_xdp ethdev off-thread, then bind the recovered slot. This
                 // reclaims a slot lost to a pod-netns-destroyed-without-detach without a serve restart.
@@ -632,7 +632,7 @@ impl DataplaneNode for DpdkNodeService {
         _req: Request<ListInterfacesRequest>,
     ) -> Result<Response<ListInterfacesResponse>, Status> {
         // Read the agnostic interface-meta rows from ControlCore (the DPDK source of truth for the
-        // attached set). `underlay_route` is the IPAM-allocated /128 recorded at attach (B2a); it
+        // attached set). `underlay_route` is the IPAM-allocated /128 recorded at attach; it
         // renders as "::" only for a row with no allocated underlay.
         let rows = self.ctrl.lock().iface_meta_rows();
         let interfaces = rows

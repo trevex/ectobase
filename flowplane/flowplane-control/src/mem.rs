@@ -24,7 +24,7 @@ pub struct MemMapWriter {
     pub fw_meta6: HashMap<u32, FwMeta>,
     pub meter: HashMap<u32, MeterState>,
     pub dhcp_config: Option<DhcpConfig>,
-    // INTERFACE domain (Task 7).
+    // INTERFACE domain.
     pub ports: HashMap<u32, PortMeta>,
     pub ifaces: HashMap<IfaceKey, IfaceValue>,
     // IfaceMetaKey is only Copy/Clone (not Hash), so key the fake by the padded id array.

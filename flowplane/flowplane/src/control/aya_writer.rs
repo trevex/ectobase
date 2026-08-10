@@ -17,23 +17,23 @@ use flowplane_control::{CtFlushScope, MapWriter};
 pub struct AyaWriter {
     pub routes: Routes,
     pub routes6: Routes6,
-    // NAT domain (Task 4).
+    // NAT domain.
     pub nat: Nat,
     pub nat_ips: NatIps,
     pub neigh_nat: NeighborNat,
     pub neigh_nat_count: NeighborNatCount,
-    // LB domain (Task 5): LB service map, Maglev table, and the UNDERLAY map (moved out of `Inner`;
-    // UNDERLAY is also read/written by the interface + edge paths via `core.writer_mut()`).
+    // LB domain: LB service map, Maglev table, and the UNDERLAY map. UNDERLAY is also
+    // read/written by the interface + edge paths via `core.writer_mut()`.
     pub lb: Lb,
     pub maglev: Maglev,
     pub underlay: Underlay,
-    // FIREWALL domain (Task 6): per-interface rule slots + per-direction rule counts.
+    // FIREWALL domain: per-interface rule slots + per-direction rule counts.
     pub fw_rules: FwRules,
     pub fw_meta: FwMetaMap,
     // IPv6 FIREWALL domain: v6 rule slots + per-direction rule counts (FW_RULES6 / FW_META6).
     pub fw_rules6: FwRules6,
     pub fw_meta6: FwMetaMap6,
-    // INTERFACE + QoS + DHCP domain (Task 7): the last config maps, moved out of `Inner`. After
+    // INTERFACE + QoS + DHCP domain: the last config maps, moved out of `Inner`. After
     // this, `AyaWriter` owns ALL config maps and `Inner` holds only device/loader fields + `core`.
     pub ports: PortMetaMap,
     pub ifaces: Interfaces,

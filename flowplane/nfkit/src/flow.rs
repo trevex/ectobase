@@ -3,7 +3,7 @@
 //! reference are owned by a builder holder (`Match5Drop`/`RawDecap`/`RawEncap`) that the caller
 //! binds to a `let` so it outlives the `validate`/`create` call (rte_flow copies spec/mask during
 //! the call, but the pointers must be valid for its duration). Modelled on `dpdk_hash.rs`
-//! (RAII `Drop`, `!Send`, `// SAFETY:` on every `unsafe`). See M10 design.
+//! (RAII `Drop`, `!Send`, `// SAFETY:` on every `unsafe`).
 use dpdk_sys as ffi;
 use std::marker::PhantomData;
 use std::os::raw::c_void;

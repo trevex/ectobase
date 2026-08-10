@@ -1,4 +1,4 @@
-//! Task 1 (DPDK guest-egress follow-ups): the NAT64 `shared_ct` HANDOFF across the two REAL datapath
+//! The NAT64 `shared_ct` HANDOFF across the two REAL datapath
 //! entrypoints — the v6→v4 egress WRITE and the v4→v6 ingress READ — over ONE [`ComposedMaps`].
 //!
 //! ── WHAT THIS PROVES ──────────────────────────────────────────────────────────────────────────

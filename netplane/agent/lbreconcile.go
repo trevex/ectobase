@@ -91,7 +91,7 @@ func (r *Reconciler) ReconcileLB(ctx context.Context) error {
 		delete(r.appliedLbVips, vip)
 	}
 	// Add VIPs newly desired (or just-deleted because ports changed). lbUnderlay = the edge's own
-	// anycast underlay; vni=0 (WAN). create_lb skips the UNDERLAY write for vni==0 (see Task 2).
+	// anycast underlay; vni=0 (WAN). create_lb skips the UNDERLAY write for vni==0.
 	for vip, ports := range desired {
 		if cur, ok := r.appliedLbVips[vip]; ok && lbPortsEqual(cur, ports) {
 			continue

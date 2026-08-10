@@ -4,7 +4,7 @@
 //go:build kine
 
 // Package test's kine build tag proves the aggregated apiserver can run with
-// kine (over Postgres) as its ONLY storage backend — no etcd (design M1).
+// kine (over Postgres) as its ONLY storage backend — no etcd.
 //
 // It reuses the envtest harness (front kube-apiserver, certs, client) but
 // overrides OUR aggregated apiserver's --etcd-servers to point at the kine

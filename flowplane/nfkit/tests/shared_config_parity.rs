@@ -1,4 +1,4 @@
-//! B1b vertical slice: config programmed via DpdkMapWriter+ControlCore (the gRPC-handler path),
+//! Deployable-DPDK-dataplane vertical slice: config programmed via DpdkMapWriter+ControlCore (the gRPC-handler path),
 //! datapath run on N lcores over SharedConfigMaps + per-lcore flow state, asserted byte-identical
 //! to the sim AND conntrack-isolated across lcores. Extends DPDK==sim==eBPF through the control path.
 //!

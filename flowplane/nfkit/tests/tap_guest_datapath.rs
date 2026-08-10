@@ -1,4 +1,4 @@
-//! Task 5 (the slice's FUNCTIONAL PROOF): the guest-egress datapath running over an
+//! FUNCTIONAL PROOF: the guest-egress datapath running over an
 //! **af_xdp-on-tap pool port driven by a raw tap fd** — i.e. the `TapBackend` transport, with the
 //! tap's guest-facing char-device fd standing in for qemu.
 //!
@@ -16,7 +16,7 @@
 //! `process_uplink_rx` — the shared_ct handoff read-side is proven in guest_tx_nat_return_handoff.rs.)
 //!
 //! Together: the VM's frame reaches the shared datapath over af_xdp-on-tap AND the datapath's
-//! delivery reaches the VM's fd. af_xdp-on-tap itself is the Task 1 gate (`afxdp_tap.rs`); this test
+//! delivery reaches the VM's fd. af_xdp-on-tap itself is the gate proven by `afxdp_tap.rs`; this test
 //! adds `process_guest_tx` on top, keyed by the tap ifindex (the value `ports_get` would use).
 //!
 //! SKIPS (passes) when unprivileged: tap creation + af_xdp bind need root/CAP_NET_ADMIN.

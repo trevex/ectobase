@@ -74,9 +74,9 @@ pub trait GuestPortBackend: Send + Sync {
     fn release(&self, host_ifname: &str, target: &AssignTarget);
     /// Is the slot's HOST device (the af_xdp ethdev's backing netdev) still alive?
     fn is_alive(&self, slot: &GuestPortSlot) -> bool;
-    /// Recover a slot whose host device died (ungraceful teardown). Filled in by G3 (Task 6).
+    /// Recover a slot whose host device died (ungraceful teardown).
     fn recover(&self, slot: &mut GuestPortSlot, pool_port_id: u16) -> Result<u32>;
-    /// Destroy a preallocated host device (`host_ifname`). Startup rollback G5 + shutdown.
+    /// Destroy a preallocated host device (`host_ifname`). Startup rollback + shutdown.
     /// Idempotent/best-effort.
     fn teardown(&self, host_ifname: &str);
 }
@@ -213,7 +213,7 @@ impl GuestPortBackend for VethBackend {
     }
 
     fn teardown(&self, host_ifname: &str) {
-        // Idempotent host-device delete (deletes the peer too). Used by startup rollback (G5) +
+        // Idempotent host-device delete (deletes the peer too). Used by startup rollback +
         // shutdown. Best-effort — `delete_link` ignores a missing link.
         flowplane_device::delete_link(host_ifname);
     }

@@ -1,4 +1,4 @@
-//! Task 5: guest↔guest SAME-NODE delivery over the DPDK substrate — the compose of the real
+//! Guest↔guest SAME-NODE delivery over the DPDK substrate — the compose of the real
 //! `flowplane_core::datapath::process_guest_tx` `Deliver::Local` arm and the `nfkit::LcoreRing`
 //! cross-lcore handoff the serve worker uses to route a local-delivery redirect to the dest guest
 //! port.
@@ -23,8 +23,8 @@
 //! ── FOLLOW-UP (documented, NOT done here) ─────────────────────────────────────────────────────
 //! The full TWO-LCORE af_xdp serve e2e — bring up `flowplane-dpdk serve` with two preallocated guest
 //! ports on two workers, attach two guests, inject a frame on guest A's veth and observe it delivered
-//! out guest B's veth over REAL af_xdp transport with real polling — is a documented Task 6 backlog
-//! item. It is heavy/flaky, and each seam here (the `Deliver::Local` datapath arm + the `LcoreRing`
+//! out guest B's veth over REAL af_xdp transport with real polling — is a known follow-up.
+//! It is heavy/flaky, and each seam here (the `Deliver::Local` datapath arm + the `LcoreRing`
 //! handoff) is proven independently.
 //!
 //! EAL is process-global (inits once), so this is ONE `#[test]`. Run with `--test-threads=1`.

@@ -1,4 +1,4 @@
-//! nfkit M11 — conntrack/NAT snapshot round-trip + established-flow continuity.
+//! nfkit — conntrack/NAT snapshot round-trip + established-flow continuity.
 //!
 //! Proves the blue-green state-handoff primitive: an OLD `DpdkMaps` (instance A) serializes its
 //! flow tables, a FRESH `DpdkMaps` (instance B — the "new binary") restores them, and an

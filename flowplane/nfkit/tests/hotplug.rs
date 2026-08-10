@@ -1,10 +1,10 @@
-//! DE-RISK GATE for dead-slot live recovery (flowplane-dpdk `VethBackend::recover`, Task 6/G3):
+//! DE-RISK GATE for dead-slot live recovery (flowplane-dpdk `VethBackend::recover`):
 //! prove that a `net_af_xdp` vdev can be ADDED AT RUNTIME (after EAL init) via
 //! `rte_eal_hotplug_add`, that its ethdev port `Port::configure`s up, and that it can then be
 //! hot-REMOVED. Recovery relies on exactly this: a slot whose backing veth died is recreated and
 //! its af_xdp vdev is hot-rebound in place — NOT re-inited (EAL is once-per-process).
 //!
-//! If this FAILS on a root host, the in-place hotplug rebind is not viable and Task 6 must fall
+//! If this FAILS on a root host, the in-place hotplug rebind is not viable and recovery must fall
 //! back to the "soft recovery" contingency (add the vdev under a NEW name/port id and grow the
 //! poll set). So a failure here PANICS (it is the whole point of the gate) rather than skipping.
 //!
@@ -108,7 +108,7 @@ fn afxdp_vdev_hotplug_add_configure_remove() {
     if let Err(e) = hotplug_add("vdev", VDEV, &devargs) {
         panic!(
             "rte_eal_hotplug_add(vdev, {VDEV}, {devargs}) FAILED: {e}. \
-             In-place af_xdp hotplug rebind is NOT viable on this host — Task 6 must use the \
+             In-place af_xdp hotplug rebind is NOT viable on this host — recovery must use the \
              soft-recovery contingency (new name/port id, grow the poll set)."
         );
     }

@@ -1,4 +1,4 @@
-//! Task 1: prove the shared-core guest-egress datapath `flowplane_core::datapath::process_guest_tx`
+//! Prove the shared-core guest-egress datapath `flowplane_core::datapath::process_guest_tx`
 //! over the DPDK `Pkt`/`Maps` backend — `MbufPkt` + `ComposedMaps` (SharedConfigMaps read-only
 //! config half + PerLcoreFlowMaps flow half). A guest IPv4 TCP frame with a NAT source + an external
 //! `0.0.0.0/0` route gets SNAT + outer-IPv6 encap → `Action::Redirect(uplink_ifindex)`, BYTE-

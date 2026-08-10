@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Bring up kine (etcd-v3 shim) backed by Postgres, for the aggregated
-# apiserver durability proof (M1: kine/Postgres as the ONLY storage, no etcd).
+# apiserver durability proof (kine/Postgres as the ONLY storage, no etcd).
 # Idempotent: tears down any prior instances first.
 set -euo pipefail
 

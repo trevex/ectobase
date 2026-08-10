@@ -65,7 +65,7 @@ impl Mempool {
     /// [struct-level safety invariant](Mempool#safety-invariant).
     ///
     // TODO(nfkit-safe): consider a lifetime-bound Mbuf<'pool> once RxQueue/TxQueue lifetimes
-    // exist (M3) to enforce this at the type level.
+    // exist to enforce this at the type level.
     #[inline]
     #[must_use]
     pub fn alloc(&self) -> Option<Mbuf> {

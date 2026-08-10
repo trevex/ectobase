@@ -1,4 +1,4 @@
-//! The control-plane map write surface. eBPF (`AyaWriter`) and DPDK (`SharedConfigMaps`, B1b)
+//! The control-plane map write surface. eBPF (`AyaWriter`) and DPDK (`SharedConfigMaps`)
 //! each implement this; `ControlCore` programs maps only through it.
 use flowplane_common::{
     DhcpConfig, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceMetaKey, IfaceMetaVal,
@@ -68,7 +68,7 @@ pub trait MapWriter {
     fn meter_upsert(&mut self, ifindex: u32, val: MeterState) -> anyhow::Result<()>;
     fn meter_remove(&mut self, ifindex: &u32) -> anyhow::Result<()>;
     fn dhcp_config_set(&mut self, cfg: &DhcpConfig) -> anyhow::Result<()>;
-    // INTERFACE domain (Task 7): the per-interface programming maps `program_interface` writes and
+    // INTERFACE domain: the per-interface programming maps `program_interface` writes and
     // the VNI-purge / detach reconciliation reads.
     fn ports_upsert(&mut self, ifindex: u32, meta: PortMeta) -> anyhow::Result<()>;
     fn ports_remove(&mut self, ifindex: u32) -> anyhow::Result<()>;

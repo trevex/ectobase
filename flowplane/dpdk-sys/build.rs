@@ -6,7 +6,7 @@ use std::{
 };
 
 const DPDK_VERSION: &str = "25.11.2";
-// SHA-256 of the tarball — verified in Task 4 Step 2.
+// SHA-256 of the tarball — verified against the upstream release.
 const DPDK_SHA256: &str = "418bfe3212640ee95a1cb10af6ed360cad2387686fe2721f8a3a9cd02d5ef4f2";
 // Only the PMDs we need — keeps the DPDK build small/fast.
 const DRIVERS: &str = "net/null,net/pcap,net/tap,net/af_xdp";

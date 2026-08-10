@@ -238,7 +238,7 @@ pub fn create_preallocated_veth(host_name: &str, mac: [u8; 6], mtu: u32) -> Resu
     }
 }
 
-/// Bind a PREALLOCATED pool slot's placeholder guest-end into a pod netns (Task 4 attach).
+/// Bind a PREALLOCATED pool slot's placeholder guest-end into a pod netns (attach).
 ///
 /// The guest-end currently lives in the ROOT netns as `placeholder_peer` (the `<host>p` convention
 /// from [`create_preallocated_veth`]). This moves it into `netns_path`, renames it to `guest_name`,
@@ -312,7 +312,7 @@ pub fn bind_preallocated_guest_end(
     Ok(())
 }
 
-/// Unbind a pool slot's guest-end from a pod netns back to the root netns (Task 4 detach).
+/// Unbind a pool slot's guest-end from a pod netns back to the root netns (detach).
 ///
 /// Moves the guest-end (`guest_name` inside `netns_path`) back to the init/root netns (by pid 1),
 /// renames it to `placeholder_peer` (the `<host>p` convention), and brings it DOWN — restoring the

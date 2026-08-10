@@ -75,7 +75,7 @@ fn make_svc(shared: Arc<SharedConfigMaps>) -> (DpdkNodeService, Arc<DpdkAttachSt
 
 /// Create a REAL preallocated pool veth (`<host_ifname>` up in root netns, placeholder `<host>p` down)
 /// and push it into the attach state's guest pool as one idle slot. Needs CAP_NET_ADMIN. Returns the
-/// slot's resolved host ifindex. Mirrors what `serve.rs::run` builds at startup (Task 2). The caller
+/// slot's resolved host ifindex. Mirrors what `serve.rs::run` builds at startup. The caller
 /// must `flowplane_device::delete_link(host_ifname)` at the end of the test to clean up.
 fn seed_pool_slot(attach: &DpdkAttachState, host_ifname: &str, port_id: u16) -> u32 {
     flowplane_device::delete_link(host_ifname);
@@ -595,7 +595,7 @@ async fn attach_skips_dead_pool_slot_and_exhausts_when_only_dead_left() {
     }
 }
 
-/// DEAD-SLOT LIVE RECOVERY (G3/Task 6), CONTROL LEVEL: prove the sanctioned recovery mutation
+/// DEAD-SLOT LIVE RECOVERY, CONTROL LEVEL: prove the sanctioned recovery mutation
 /// end-to-end on the control thread. Seeds ONE real pool slot with a live af_xdp ethdev (hotplug-add
 /// its vdev + `Port::configure`), wires a `RecoverHandle` into the attach state, attaches guest A
 /// (binds the slot), then deletes the slot's HOST veth (ungraceful pod-netns-destroyed teardown) and
@@ -786,7 +786,7 @@ async fn attach_tap_rejected_with_invalid_argument() {
             vni: 1,
             mac: "02:00:00:00:00:01".into(),
             requested_ips: vec!["10.0.0.1".into()],
-            device_type: "tap".into(), // unsupported on DPDK B2a
+            device_type: "tap".into(), // unsupported on the DPDK backend (veth/container only)
             tap_name: String::new(),
         }))
         .await;

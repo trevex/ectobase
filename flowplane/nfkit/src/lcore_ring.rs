@@ -32,7 +32,7 @@ pub struct LcoreRing {
 
 // SAFETY: MP enqueue is internally synchronized, so &LcoreRing may be shared across lcores for
 // enqueue. Send+Sync so it can live in an Arc captured by the for_each_worker closure. The SC
-// contract (one dequeuer) is upheld by the caller (Task 5: only the owning worker dequeues its ring).
+// contract (one dequeuer) is upheld by the caller: only the owning worker dequeues its ring.
 unsafe impl Send for LcoreRing {}
 unsafe impl Sync for LcoreRing {}
 

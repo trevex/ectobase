@@ -8,7 +8,7 @@
 //! the single tokio control thread and read lock-free by every datapath lcore — so they live once,
 //! process-wide, in [`SharedConfigMaps`] (LF+RCU). The FLOW maps (conntrack, meter) are mutated on
 //! the datapath every packet; making them per-lcore shared-nothing avoids any cross-lcore
-//! synchronization on the hot path. This mirrors the M8 per-lcore `DpdkMaps` model, but factors the
+//! synchronization on the hot path. This mirrors the per-lcore shared-nothing `DpdkMaps` model, but factors the
 //! flow half out so a worker composes it with the shared config half.
 //!
 //! ── FLOW HALF = PLAIN `DpdkHash` ──────────────────────────────────────────────────────────────

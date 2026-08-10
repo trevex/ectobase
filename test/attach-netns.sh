@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test/attach-netns.sh — GATE for the DataplaneNode.AttachInterface RPC (Task 3).
+# test/attach-netns.sh — GATE for the DataplaneNode.AttachInterface RPC.
 #
 # Proves the real AttachInterface/DetachInterface control path end to end:
 #   1. a dummy0 with a global ULA /64 in the ROOT netns gives underlay inference a /64;

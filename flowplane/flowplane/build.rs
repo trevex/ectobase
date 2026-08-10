@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context as _};
 use aya_build::{Package, Toolchain};
 
 fn main() -> anyhow::Result<()> {
-    // 1) Compile the eBPF object via aya-build (unchanged from Task 5).
+    // 1) Compile the eBPF object via aya-build.
     let metadata = cargo_metadata::MetadataCommand::new()
         .no_deps()
         .exec()

@@ -56,7 +56,7 @@ fn main() {
             while !burst.is_empty() {
                 let sent = tx.tx(&mut burst);
                 if sent == 0 {
-                    break; // ring full; drop remainder (M2 simplicity)
+                    break; // ring full; drop remainder (kept simple for this example)
                 }
             }
         }

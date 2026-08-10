@@ -10,7 +10,7 @@
 //! must feed `now` from the SAME domain — see `monotonic_ns`. The pacer itself is unit-agnostic.
 //!
 //! Structure: a min-heap ordered by (edt, seq). A hashed timing-wheel is the O(1)-per-op swap for
-//! line-rate pacing — a documented future optimization; the heap is correct and simple for now.
+//! line-rate pacing — a possible future optimization; the heap is correct and simple.
 use crate::Mbuf;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;

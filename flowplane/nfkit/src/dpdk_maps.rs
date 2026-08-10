@@ -1,6 +1,6 @@
 //! [`DpdkMaps`] — a [`flowplane_core::maps::Maps`] implementation backed by [`DpdkHash`]
 //! (DPDK `rte_hash`).  Mirrors [`flowplane_sim::maps::MemMaps`] in key derivation so the two
-//! implementations produce identical key→value behaviour and M3 parity anchors remain valid.
+//! implementations produce identical key→value behaviour and the DPDK-vs-sim parity anchors remain valid.
 
 use crate::{DpdkHash, HashError};
 use flowplane_common::{

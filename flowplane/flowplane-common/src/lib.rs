@@ -335,7 +335,7 @@ pub struct NatValue {
 
 /// Unified conntrack entry value. Keyed by the 5-tuple (`CtKey`) of the packet that will be SEEN;
 /// the datapath's `ct_apply` rewrites that packet's src or dst address (+L4 port) to
-/// `xlate_ip`/`xlate_port`. Replaces the feature-private `CtVal`/`NatCtVal` (removed in M5 Task 3).
+/// `xlate_ip`/`xlate_port`. Replaces the former feature-private `CtVal`/`NatCtVal`.
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct CtEntry {

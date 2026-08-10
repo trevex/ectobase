@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # env/ha-smoke.sh — HA (pinned-maps) smoke test for the XDP datapath.
 #
-# Proves the M13 property: with `--pin-dir`, the eBPF programs + maps are PINNED, so the datapath
+# Proves the pinned-maps HA property: with `--pin-dir`, the eBPF programs + maps are PINNED, so the datapath
 # stays kernel-resident and keeps forwarding even after the control-plane process is KILLED; a
 # restarted control plane re-ADOPTS the pinned CONNTRACK without re-attaching.
 #

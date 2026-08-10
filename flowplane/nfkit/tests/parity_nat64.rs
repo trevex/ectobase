@@ -7,7 +7,7 @@
 //! pkt + In-struct; no `DpdkMaps`/`MemMaps` is needed for this scenario.
 //!
 //! EAL is process-global and can only init once, so this is ONE `#[test]` running scenarios
-//! sequentially (Task 4 appends the egress scenario here). Run with `--test-threads=1`.
+//! sequentially (ingress and egress scenarios). Run with `--test-threads=1`.
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
