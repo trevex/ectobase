@@ -23,7 +23,7 @@ func TestSync_NamespacedCreateUpdateGC(t *testing.T) {
 	if err := compiledv1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
-	wl := func(ns, name, cn, _ string) *compiledv1.CompiledNIC {
+	wl := func(ns, name, cn string) *compiledv1.CompiledNIC {
 		return &compiledv1.CompiledNIC{
 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
 			Spec:       compiledv1.CompiledNICSpec{ClusterName: cn},
@@ -32,9 +32,9 @@ func TestSync_NamespacedCreateUpdateGC(t *testing.T) {
 	idx := func(o client.Object) []string { return []string{o.(*compiledv1.CompiledNIC).Spec.ClusterName} }
 	hub := fake.NewClientBuilder().WithScheme(s).
 		WithIndex(&compiledv1.CompiledNIC{}, "spec.clusterName", idx).
-		WithObjects(wl("ns1", "a", "c1", "n1"), wl("ns2", "b", "c1", "n2"), wl("ns1", "c", "c2", "n3")).Build()
+		WithObjects(wl("ns1", "a", "c1"), wl("ns2", "b", "c1"), wl("ns1", "c", "c2")).Build()
 	downstream := fake.NewClientBuilder().WithScheme(s).
-		WithObjects(wl("ns1", "stale", "c1", "old"), wl("ns1", "a", "c1", "OLD")).Build()
+		WithObjects(wl("ns1", "stale", "c1"), wl("ns1", "a", "c1")).Build()
 
 	b := &Broker{Hub: hub, Downstream: downstream, ClusterName: "c1"}
 	if err := b.SyncOnce(context.Background()); err != nil {

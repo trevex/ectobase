@@ -124,7 +124,7 @@ func TestBroker_Loopback(t *testing.T) {
 
 	// newNIC constructs a valid CompiledNIC: the CRD marks vni, port and firewall as
 	// required, so all are set (firewall/port take empty-but-present values).
-	newNIC := func(name, cluster, _ string) *compiledv1.CompiledNIC {
+	newNIC := func(name, cluster string) *compiledv1.CompiledNIC {
 		return &compiledv1.CompiledNIC{
 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
 			Spec: compiledv1.CompiledNICSpec{
@@ -219,10 +219,10 @@ func TestBroker_Loopback(t *testing.T) {
 	// ================================================================
 	// (a) BOUNDED PULL: c2 must never cross into a c1-bound downstream.
 	// ================================================================
-	if err := hubClient.Create(ctx, newNIC("nic-a", "c1", "node-1")); err != nil {
+	if err := hubClient.Create(ctx, newNIC("nic-a", "c1")); err != nil {
 		t.Fatalf("hub Create nic-a: %v", err)
 	}
-	if err := hubClient.Create(ctx, newNIC("nic-b", "c2", "node-2")); err != nil {
+	if err := hubClient.Create(ctx, newNIC("nic-b", "c2")); err != nil {
 		t.Fatalf("hub Create nic-b: %v", err)
 	}
 
@@ -270,7 +270,7 @@ func TestBroker_Loopback(t *testing.T) {
 	// ================================================================
 	// (d) PARTITION-SURVIVE: sync nic-c, stop hub, downstream persists.
 	// ================================================================
-	if err := hubClient.Create(ctx, newNIC("nic-c", "c1", "node-3")); err != nil {
+	if err := hubClient.Create(ctx, newNIC("nic-c", "c1")); err != nil {
 		t.Fatalf("(d) hub Create nic-c: %v", err)
 	}
 	if err := b.SyncOnce(ctx); err != nil {
