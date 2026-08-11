@@ -245,7 +245,6 @@ func TestCompiledNIC_SpecClusterNameSelector(t *testing.T) {
 			},
 			Spec: compiledv1.CompiledNICSpec{
 				ClusterName: cluster,
-				NodeName:    "node-" + cluster,
 				VNI:         1000,
 				Port:        compiledv1.PortStatus{Type: compiledv1.PortTypeTap, Name: "dtapvf_0"},
 			},

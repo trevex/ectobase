@@ -221,9 +221,6 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	if compiledA.Spec.VNI != 1000 {
 		t.Fatalf("compile: expected default-nic-a vni=1000, got %d", compiledA.Spec.VNI)
 	}
-	if compiledA.Spec.NodeName != "node-1" {
-		t.Fatalf("compile: expected default-nic-a nodeName=node-1, got %q", compiledA.Spec.NodeName)
-	}
 
 	// nic-b compiled to c2 (owned by vm2) — used to prove bounded pull below.
 	compiledB := &compiledv1.CompiledNIC{}
@@ -268,8 +265,8 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	if got.Spec.ClusterName != "c1" {
 		t.Fatalf("sync: expected downstream clusterName=c1, got %q", got.Spec.ClusterName)
 	}
-	if got.Spec.VNI != 1000 || got.Spec.NodeName != "node-1" {
-		t.Fatalf("sync: expected downstream vni=1000 node=node-1, got vni=%d node=%q", got.Spec.VNI, got.Spec.NodeName)
+	if got.Spec.VNI != 1000 {
+		t.Fatalf("sync: expected downstream vni=1000, got vni=%d", got.Spec.VNI)
 	}
 	t.Log("bind+sync: PASS (downstream=[default/default-nic-a], c2 excluded)")
 }

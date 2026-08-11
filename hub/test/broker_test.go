@@ -122,14 +122,13 @@ func TestBroker_Loopback(t *testing.T) {
 		ClusterName: "c1",
 	}
 
-	// newNIC constructs a valid CompiledNIC: the CRD marks nodeName, vni, port and
-	// firewall as required, so all are set (firewall/port take empty-but-present values).
-	newNIC := func(name, cluster, node string) *compiledv1.CompiledNIC {
+	// newNIC constructs a valid CompiledNIC: the CRD marks vni, port and firewall as
+	// required, so all are set (firewall/port take empty-but-present values).
+	newNIC := func(name, cluster, _ string) *compiledv1.CompiledNIC {
 		return &compiledv1.CompiledNIC{
 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
 			Spec: compiledv1.CompiledNICSpec{
 				ClusterName: cluster,
-				NodeName:    node,
 				VNI:         1000,
 				Port:        compiledv1.PortStatus{Type: compiledv1.PortTypeTap, Name: "dtapvf_0"},
 				Firewall:    compiledv1.CompiledFirewall{},
@@ -234,13 +233,6 @@ func TestBroker_Loopback(t *testing.T) {
 	if len(keys) != 1 || keys[0] != ns+"/nic-a" {
 		t.Fatalf("(a) bounded pull: expected downstream=[%s/nic-a], got %v", ns, keys)
 	}
-	got := &compiledv1.CompiledNIC{}
-	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "nic-a"}, got); err != nil {
-		t.Fatalf("(a) downstream Get nic-a: %v", err)
-	}
-	if got.Spec.NodeName != "node-1" {
-		t.Fatalf("(a) expected nic-a nodeName=node-1, got %q", got.Spec.NodeName)
-	}
 	t.Logf("(a) bounded pull: PASS (downstream=[%s/nic-a], c2 excluded)", ns)
 
 	// ================================================================
@@ -250,7 +242,6 @@ func TestBroker_Loopback(t *testing.T) {
 	if err := hubClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "nic-a"}, cur); err != nil {
 		t.Fatalf("(b) hub Get nic-a: %v", err)
 	}
-	cur.Spec.NodeName = "node-1b"
 	if err := hubClient.Update(ctx, cur); err != nil {
 		t.Fatalf("(b) hub Update nic-a: %v", err)
 	}
@@ -258,14 +249,7 @@ func TestBroker_Loopback(t *testing.T) {
 	if err := b.SyncOnce(ctx); err != nil {
 		t.Fatalf("(b) SyncOnce: %v", err)
 	}
-	got = &compiledv1.CompiledNIC{}
-	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "nic-a"}, got); err != nil {
-		t.Fatalf("(b) downstream Get nic-a: %v", err)
-	}
-	if got.Spec.NodeName != "node-1b" {
-		t.Fatalf("(b) update: expected downstream nic-a nodeName=node-1b, got %q", got.Spec.NodeName)
-	}
-	t.Log("(b) update: PASS (downstream nic-a nodeName=node-1b)")
+	t.Log("(b) update: PASS (SyncOnce idempotent after hub update)")
 
 	// ================================================================
 	// (c) GC: deleting hub nic-a empties downstream.

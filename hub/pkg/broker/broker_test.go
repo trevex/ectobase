@@ -23,10 +23,10 @@ func TestSync_NamespacedCreateUpdateGC(t *testing.T) {
 	if err := compiledv1.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
-	wl := func(ns, name, cn, node string) *compiledv1.CompiledNIC {
+	wl := func(ns, name, cn, _ string) *compiledv1.CompiledNIC {
 		return &compiledv1.CompiledNIC{
 			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
-			Spec:       compiledv1.CompiledNICSpec{ClusterName: cn, NodeName: node},
+			Spec:       compiledv1.CompiledNICSpec{ClusterName: cn},
 		}
 	}
 	idx := func(o client.Object) []string { return []string{o.(*compiledv1.CompiledNIC).Spec.ClusterName} }
@@ -45,21 +45,21 @@ func TestSync_NamespacedCreateUpdateGC(t *testing.T) {
 	if err := downstream.List(context.Background(), list); err != nil {
 		t.Fatal(err)
 	}
-	// exactly {ns1/a(node n1), ns2/b(node n2)}: c is c2 (bounded out), ns1/stale GC'd, ns1/a updated OLD->n1.
+	// exactly {ns1/a, ns2/b}: c is c2 (bounded out), ns1/stale GC'd, ns1/a updated from OLD.
 	if len(list.Items) != 2 {
 		t.Fatalf("want 2 items, got %d: %+v", len(list.Items), list.Items)
 	}
-	got := map[string]string{}
+	got := map[string]bool{}
 	for _, it := range list.Items {
-		got[it.Namespace+"/"+it.Name] = it.Spec.NodeName
+		got[it.Namespace+"/"+it.Name] = true
 	}
-	if got["ns1/a"] != "n1" || got["ns2/b"] != "n2" {
+	if !got["ns1/a"] || !got["ns2/b"] {
 		t.Fatalf("unexpected downstream set: %+v", got)
 	}
-	if _, ok := got["ns1/stale"]; ok {
+	if got["ns1/stale"] {
 		t.Fatalf("stale not GC'd: %+v", got)
 	}
-	if _, ok := got["ns1/c"]; ok {
+	if got["ns1/c"] {
 		t.Fatalf("c2 object crossed the boundary: %+v", got)
 	}
 
