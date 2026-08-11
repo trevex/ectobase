@@ -681,9 +681,6 @@ renders (dpdk clab):
                           - sourceIP
                         type: object
                       type: array
-                    nodeName:
-                      description: NodeName is the node this NIC is scheduled on.
-                      type: string
                     overlayIPs:
                       description: OverlayIPs are the guest overlay IP addresses.
                       items:
@@ -736,7 +733,6 @@ renders (dpdk clab):
                       type: integer
                   required:
                     - firewall
-                    - nodeName
                     - port
                     - vni
                   type: object
@@ -2751,9 +2747,6 @@ renders (dpdk hw):
                           - sourceIP
                         type: object
                       type: array
-                    nodeName:
-                      description: NodeName is the node this NIC is scheduled on.
-                      type: string
                     overlayIPs:
                       description: OverlayIPs are the guest overlay IP addresses.
                       items:
@@ -2806,7 +2799,6 @@ renders (dpdk hw):
                       type: integer
                   required:
                     - firewall
-                    - nodeName
                     - port
                     - vni
                   type: object
@@ -4836,9 +4828,6 @@ renders (ebpf clab):
                           - sourceIP
                         type: object
                       type: array
-                    nodeName:
-                      description: NodeName is the node this NIC is scheduled on.
-                      type: string
                     overlayIPs:
                       description: OverlayIPs are the guest overlay IP addresses.
                       items:
@@ -4891,7 +4880,6 @@ renders (ebpf clab):
                       type: integer
                   required:
                     - firewall
-                    - nodeName
                     - port
                     - vni
                   type: object
@@ -6917,9 +6905,6 @@ renders (ebpf hw):
                           - sourceIP
                         type: object
                       type: array
-                    nodeName:
-                      description: NodeName is the node this NIC is scheduled on.
-                      type: string
                     overlayIPs:
                       description: OverlayIPs are the guest overlay IP addresses.
                       items:
@@ -6972,7 +6957,6 @@ renders (ebpf hw):
                       type: integer
                   required:
                     - firewall
-                    - nodeName
                     - port
                     - vni
                   type: object
@@ -8995,9 +8979,6 @@ renders (tier1 on):
                           - sourceIP
                         type: object
                       type: array
-                    nodeName:
-                      description: NodeName is the node this NIC is scheduled on.
-                      type: string
                     overlayIPs:
                       description: OverlayIPs are the guest overlay IP addresses.
                       items:
@@ -9050,7 +9031,6 @@ renders (tier1 on):
                       type: integer
                   required:
                     - firewall
-                    - nodeName
                     - port
                     - vni
                   type: object
@@ -11113,9 +11093,6 @@ renders (tier1 watchdog):
                           - sourceIP
                         type: object
                       type: array
-                    nodeName:
-                      description: NodeName is the node this NIC is scheduled on.
-                      type: string
                     overlayIPs:
                       description: OverlayIPs are the guest overlay IP addresses.
                       items:
@@ -11168,7 +11145,6 @@ renders (tier1 watchdog):
                       type: integer
                   required:
                     - firewall
-                    - nodeName
                     - port
                     - vni
                   type: object
@@ -13241,9 +13217,6 @@ renders with vm-materializer enabled:
                           - sourceIP
                         type: object
                       type: array
-                    nodeName:
-                      description: NodeName is the node this NIC is scheduled on.
-                      type: string
                     overlayIPs:
                       description: OverlayIPs are the guest overlay IP addresses.
                       items:
@@ -13296,7 +13269,6 @@ renders with vm-materializer enabled:
                       type: integer
                   required:
                     - firewall
-                    - nodeName
                     - port
                     - vni
                   type: object

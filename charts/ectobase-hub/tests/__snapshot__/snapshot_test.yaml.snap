@@ -374,6 +374,7 @@ renders the hub control plane:
       - apiGroups:
           - compute.ectobase.dev
         resources:
+          - containers
           - virtualmachines
         verbs:
           - get
@@ -384,6 +385,7 @@ renders the hub control plane:
       - apiGroups:
           - compute.ectobase.dev
         resources:
+          - containers/status
           - virtualmachines/status
         verbs:
           - get
@@ -704,6 +706,7 @@ renders the hub control plane:
           - net.ectobase.dev
         resources:
           - vpcpeerings/status
+          - vpcs/status
         verbs:
           - get
           - patch
