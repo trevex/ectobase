@@ -66,3 +66,32 @@ func TestSchedule(t *testing.T) {
 		t.Fatalf("selector: want a, got %q", got)
 	}
 }
+
+// TestScheduleWorkload_Container exercises the generalized resource-based entry
+// point with a Container-style request (no PoolSelector). It must place onto the
+// most-free Ready pool, respect allocated capacity, and share capacity honestly.
+func TestScheduleWorkload_Container(t *testing.T) {
+	ready := clusterpool.PhaseReady
+	pools := []platformv1.ClusterPool{pool("a", ready, "4", nil), pool("b", ready, "8", nil)}
+
+	req := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")}
+
+	// nil selector fits both; b has more free -> b wins (spread by most-free).
+	got, _, ok := ScheduleWorkload(req, nil, pools, map[string]corev1.ResourceList{})
+	if !ok || got != "b" {
+		t.Fatalf("container: want b, got %q ok=%v", got, ok)
+	}
+
+	// b already loaded (a VM occupies 7/8) -> a (free 4) beats b (free 1),
+	// proving the container respects capacity another workload already consumed.
+	got, _, ok = ScheduleWorkload(req, nil, pools, map[string]corev1.ResourceList{"b": {corev1.ResourceCPU: resource.MustParse("7")}})
+	if !ok || got != "a" {
+		t.Fatalf("container shared-capacity: want a, got %q", got)
+	}
+
+	// request exceeds all Ready capacity -> unschedulable.
+	big := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100")}
+	if _, _, ok := ScheduleWorkload(big, nil, pools, nil); ok {
+		t.Fatalf("container: want unschedulable")
+	}
+}

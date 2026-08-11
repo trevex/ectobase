@@ -89,6 +89,12 @@ func main() {
 		log.Fatalf("setup scheduler controller: %v", err)
 	}
 
+	// The Container pool-scheduler mirrors the VM scheduler: it binds unbound
+	// Containers to a ClusterPool (VMs and Containers share pool capacity).
+	if err := (&scheduler.ContainerReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup container scheduler controller: %v", err)
+	}
+
 	// Tier-2 failover: threshold (2m) is deliberately > pool-health's 30s
 	// HealthStale — a pool must be Unknown for a while before a destructive
 	// rebind. Both scheduler + failover watch ClusterPool; independent

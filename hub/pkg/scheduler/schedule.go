@@ -23,11 +23,23 @@ import (
 // (allocated[r]+request[r] <= Allocatable[r] for every requested r). Among fitting
 // pools it returns the one with the highest minimum free fraction across the
 // requested resources (spread), tie-broken by lowest name. ok=false + reason if none.
+//
+// Schedule is a thin wrapper over ScheduleWorkload so both VirtualMachine and
+// Container workloads share the same placement logic.
 func Schedule(vm *computev1.VirtualMachine, pools []platformv1.ClusterPool, allocated map[string]corev1.ResourceList) (string, string, bool) {
-	req := vm.Spec.Resources.Requests
+	return ScheduleWorkload(vm.Spec.Resources.Requests, vm.Spec.PoolSelector, pools, allocated)
+}
+
+// ScheduleWorkload picks a ClusterPool for a workload given its resource requests
+// and an optional pool selector. It applies the same rules as Schedule (Ready +
+// selector match + resource fit) and returns the fitting pool with the highest
+// minimum free fraction (spread), tie-broken by lowest name. ok=false + reason if
+// none fits. A nil poolSelector matches any pool.
+func ScheduleWorkload(requests corev1.ResourceList, poolSelector *metav1.LabelSelector, pools []platformv1.ClusterPool, allocated map[string]corev1.ResourceList) (string, string, bool) {
+	req := requests
 	var sel labels.Selector
-	if vm.Spec.PoolSelector != nil {
-		s, err := metav1.LabelSelectorAsSelector(vm.Spec.PoolSelector)
+	if poolSelector != nil {
+		s, err := metav1.LabelSelectorAsSelector(poolSelector)
 		if err != nil {
 			return "", fmt.Sprintf("invalid poolSelector: %v", err), false
 		}

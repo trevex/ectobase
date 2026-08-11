@@ -7,6 +7,8 @@ package main
 //+kubebuilder:rbac:groups=platform.ectobase.dev,resources=clusterpools/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=compute.ectobase.dev,resources=virtualmachines,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=compute.ectobase.dev,resources=virtualmachines/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=compute.ectobase.dev,resources=containers,verbs=get;list;watch;update;patch
+//+kubebuilder:rbac:groups=compute.ectobase.dev,resources=containers/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=compiled.ectobase.dev,resources=compiledvms;compilednics;compiledvolumeattachments,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=compiled.ectobase.dev,resources=compiledvms/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=storage.ectobase.dev,resources=volumes,verbs=get;list;watch;update;patch

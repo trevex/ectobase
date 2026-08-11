@@ -38,7 +38,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// default MaxConcurrentReconciles=1), so binds are serialized. If concurrency is
 	// ever raised, the spec Update below still 409s on a racing write (optimistic
 	// concurrency) — but do not bump MaxConcurrentReconciles without revisiting this.
-	allocated, err := r.allocatedByPool(ctx)
+	allocated, err := allocatedByPool(ctx, r.Client)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -61,30 +61,49 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{}, nil
 }
 
-// allocatedByPool sums the resource Requests of every bound VM, grouped by its pool.
-func (r *Reconciler) allocatedByPool(ctx context.Context) (map[string]corev1.ResourceList, error) {
+// allocatedByPool sums the resource Requests of every bound workload — both
+// VirtualMachines and Containers — grouped by its pool. A VM and a Container on the
+// same pool both consume its Allocatable, so the two workload types share pool
+// capacity honestly.
+func allocatedByPool(ctx context.Context, cl client.Client) (map[string]corev1.ResourceList, error) {
+	out := map[string]corev1.ResourceList{}
+
 	var vms computev1.VirtualMachineList
-	if err := r.Client.List(ctx, &vms); err != nil {
+	if err := cl.List(ctx, &vms); err != nil {
 		return nil, fmt.Errorf("list vms: %w", err)
 	}
-	out := map[string]corev1.ResourceList{}
 	for i := range vms.Items {
 		v := &vms.Items[i]
-		if v.Spec.ClusterName == "" {
-			continue
-		}
-		cur := out[v.Spec.ClusterName]
-		if cur == nil {
-			cur = corev1.ResourceList{}
-		}
-		for name, q := range v.Spec.Resources.Requests {
-			c := cur[name]
-			c.Add(q)
-			cur[name] = c
-		}
-		out[v.Spec.ClusterName] = cur
+		addAllocation(out, v.Spec.ClusterName, v.Spec.Resources.Requests)
+	}
+
+	var containers computev1.ContainerList
+	if err := cl.List(ctx, &containers); err != nil {
+		return nil, fmt.Errorf("list containers: %w", err)
+	}
+	for i := range containers.Items {
+		c := &containers.Items[i]
+		addAllocation(out, c.Spec.ClusterName, c.Spec.Resources.Requests)
 	}
 	return out, nil
+}
+
+// addAllocation adds a bound workload's requests into out[pool]. Unbound workloads
+// (empty pool) are ignored.
+func addAllocation(out map[string]corev1.ResourceList, pool string, requests corev1.ResourceList) {
+	if pool == "" {
+		return
+	}
+	cur := out[pool]
+	if cur == nil {
+		cur = corev1.ResourceList{}
+	}
+	for name, q := range requests {
+		c := cur[name]
+		c.Add(q)
+		cur[name] = c
+	}
+	out[pool] = cur
 }
 
 // SetupWithManager watches VirtualMachines and re-enqueues all unbound VMs when any ClusterPool changes.
