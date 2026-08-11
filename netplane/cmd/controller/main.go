@@ -102,6 +102,10 @@ func main() {
 		log.Fatalf("setup vpcpeering controller: %v", err)
 	}
 
+	if err := (&controllers.VPCReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup vpc controller: %v", err)
+	}
+
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Fatalf("manager: %v", err)
 	}

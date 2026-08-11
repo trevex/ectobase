@@ -9,6 +9,7 @@ package main
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=networkinterfaces,verbs=get;list;watch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=firewallpolicies;loadbalancers,verbs=get;list;watch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=vpcs,verbs=get;list;watch
+//+kubebuilder:rbac:groups=net.ectobase.dev,resources=vpcs/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=vpcpeerings,verbs=get;list;watch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=vpcpeerings/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=compute.ectobase.dev,resources=virtualmachines,verbs=get;list;watch
