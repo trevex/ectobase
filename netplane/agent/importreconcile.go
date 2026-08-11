@@ -9,12 +9,18 @@ import (
 )
 
 // desiredEgressVNIs returns the VNIs this node hosts that need internet egress — derived solely from
-// the local CompiledNICs. A VNI needs egress if a local NIC in it has a NAT allocation
+// the locally-attached CompiledNICs. A VNI needs egress if a local NIC in it has a NAT allocation
 // (CompiledNIC.NAT non-empty; the NATGateway reconciler allocates a block to every source in a
 // gateway's VPC) or is an LB backend (CompiledNIC.LB non-empty). These VNIs import the public VNI's
 // default route (0.0.0.0/0, etc.) so their egress reaches the WAN edge.
+// "Local" is determined by (VNI, overlayIP) membership in the dataplane's ListInterfaces, not nodeName.
 func (r *Reconciler) desiredEgressVNIs(ctx context.Context) ([]uint32, error) {
 	set := map[uint32]struct{}{}
+
+	_, localSet, err := r.underlayByKey(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list local interfaces: %w", err)
+	}
 
 	var cnics compiledv1.CompiledNICList
 	if err := r.client.List(ctx, &cnics); err != nil {
@@ -22,7 +28,7 @@ func (r *Reconciler) desiredEgressVNIs(ctx context.Context) ([]uint32, error) {
 	}
 	for i := range cnics.Items {
 		c := &cnics.Items[i]
-		if c.Spec.NodeName != r.nodeID || c.Spec.VNI == 0 {
+		if !localNIC(c, localSet) || c.Spec.VNI == 0 {
 			continue
 		}
 		if len(c.Spec.NAT) > 0 || len(c.Spec.LB) > 0 {
@@ -37,9 +43,14 @@ func (r *Reconciler) desiredEgressVNIs(ctx context.Context) ([]uint32, error) {
 	return out, nil
 }
 
-// desiredPeeringImports scans CompiledNICs scheduled to this node and returns, per local VNI,
+// desiredPeeringImports scans locally-attached CompiledNICs and returns, per local VNI,
 // the peer imports (deduped by peerVNI, prefixes unioned). Mirrors desiredEgressVNIs' scan.
+// "Local" is determined by (VNI, overlayIP) membership in the dataplane's ListInterfaces.
 func (r *Reconciler) desiredPeeringImports(ctx context.Context) (map[uint32][]PeerImport, error) {
+	_, localSet, err := r.underlayByKey(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list local interfaces: %w", err)
+	}
 	var cnics compiledv1.CompiledNICList
 	if err := r.client.List(ctx, &cnics); err != nil {
 		return nil, err
@@ -48,7 +59,7 @@ func (r *Reconciler) desiredPeeringImports(ctx context.Context) (map[uint32][]Pe
 	acc := map[uint32]map[uint32]map[string]struct{}{}
 	for i := range cnics.Items {
 		c := &cnics.Items[i]
-		if c.Spec.NodeName != r.nodeID || c.Spec.VNI == 0 {
+		if !localNIC(c, localSet) || c.Spec.VNI == 0 {
 			continue
 		}
 		local := uint32(c.Spec.VNI)

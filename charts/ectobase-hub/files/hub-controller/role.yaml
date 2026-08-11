@@ -27,6 +27,7 @@ rules:
 - apiGroups:
   - compute.ectobase.dev
   resources:
+  - containers
   - virtualmachines
   verbs:
   - get
@@ -37,6 +38,7 @@ rules:
 - apiGroups:
   - compute.ectobase.dev
   resources:
+  - containers/status
   - virtualmachines/status
   verbs:
   - get

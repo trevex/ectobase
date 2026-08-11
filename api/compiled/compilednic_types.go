@@ -11,8 +11,6 @@ import (
 type CompiledNICSpec struct {
 	// ClusterName is the cluster this compiled NIC is bound to. The per-cluster broker selects on this field.
 	ClusterName string
-	// NodeName is the node this NIC is scheduled on.
-	NodeName string
 	// VNI is the effective VXLAN network identifier for this NIC.
 	VNI int32
 	// Port describes the dataplane port allocated for this interface.

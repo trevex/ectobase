@@ -18,11 +18,13 @@ type lbBacking struct {
 	Ports       []LbPort // service tuples (proto as IP protocol number)
 }
 
-// desiredLB lists the CompiledNICs scheduled to this node and, for each CompiledNIC.LB entry, emits
-// an lbBacking keyed on the backend NIC's node-local underlay /128 — resolved by joining the NIC's
-// overlay IPs to `ulByIP` (overlay IP -> underlay, from the local dataplane's attached interfaces).
+// desiredLB lists the CompiledNICs locally attached on this node and, for each CompiledNIC.LB entry,
+// emits an lbBacking keyed on the backend NIC's node-local underlay /128 — resolved by joining the
+// NIC's (VNI, overlayIP) to ulByKey (from the local dataplane's attached interfaces). A NIC is
+// "local" iff its (VNI, overlayIP) appears in localSet; its underlay is the matching ulByKey entry.
 // A NIC whose overlay IP isn't attached locally yet is skipped (nothing to announce until it is).
-func (r *Reconciler) desiredLB(ctx context.Context, ulByIP map[string]string) ([]lbBacking, error) {
+// Both maps are keyed by (VNI, overlayIP) so the function is safe under overlapping VPC subnets.
+func (r *Reconciler) desiredLB(ctx context.Context, ulByKey map[ipKey]string, localSet map[ipKey]struct{}) ([]lbBacking, error) {
 	var cnics compiledv1.CompiledNICList
 	if err := r.client.List(ctx, &cnics); err != nil {
 		return nil, fmt.Errorf("list compilednics: %w", err)
@@ -31,12 +33,12 @@ func (r *Reconciler) desiredLB(ctx context.Context, ulByIP map[string]string) ([
 	var out []lbBacking
 	for i := range cnics.Items {
 		c := &cnics.Items[i]
-		if c.Spec.NodeName != r.nodeID || len(c.Spec.LB) == 0 {
+		if !localNIC(c, localSet) || len(c.Spec.LB) == 0 {
 			continue
 		}
 		ul := ""
 		for _, ip := range c.Spec.OverlayIPs {
-			if u, ok := ulByIP[ip]; ok {
+			if u, ok := ulByKey[ipKey{uint32(c.Spec.VNI), ip}]; ok {
 				ul = u
 				break
 			}

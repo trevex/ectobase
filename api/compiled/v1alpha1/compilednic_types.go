@@ -25,8 +25,6 @@ type CompiledNICSpec struct {
 	// The per-cluster broker selects on this field.
 	// +optional
 	ClusterName string `json:"clusterName,omitempty"`
-	// NodeName is the node this NIC is scheduled on.
-	NodeName string `json:"nodeName"`
 	// VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
 	// status.vni, falling back to its VPC's status.vni).
 	VNI int32 `json:"vni"`

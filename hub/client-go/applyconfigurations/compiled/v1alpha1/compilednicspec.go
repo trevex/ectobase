@@ -22,8 +22,6 @@ type CompiledNICSpecApplyConfiguration struct {
 	// or the compiler's --cluster-name default for NICs with no owning VM.
 	// The per-cluster broker selects on this field.
 	ClusterName *string `json:"clusterName,omitempty"`
-	// NodeName is the node this NIC is scheduled on.
-	NodeName *string `json:"nodeName,omitempty"`
 	// VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
 	// status.vni, falling back to its VPC's status.vni).
 	VNI *int32 `json:"vni,omitempty"`
@@ -59,14 +57,6 @@ func CompiledNICSpec() *CompiledNICSpecApplyConfiguration {
 // If called multiple times, the ClusterName field is set to the value of the last call.
 func (b *CompiledNICSpecApplyConfiguration) WithClusterName(value string) *CompiledNICSpecApplyConfiguration {
 	b.ClusterName = &value
-	return b
-}
-
-// WithNodeName sets the NodeName field in the declarative configuration to the given value
-// and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the NodeName field is set to the value of the last call.
-func (b *CompiledNICSpecApplyConfiguration) WithNodeName(value string) *CompiledNICSpecApplyConfiguration {
-	b.NodeName = &value
 	return b
 }
 

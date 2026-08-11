@@ -28,7 +28,6 @@ func TestDesiredLB_JoinsUnderlayFromDataplane(t *testing.T) {
 	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
 		Spec: compiledv1.CompiledNICSpec{
-			NodeName:   "nodeA",
 			VNI:        100,
 			OverlayIPs: []string{"10.0.10.5"},
 			LB:         []compiledv1.CompiledLB{{VIP: "203.0.113.50", Ports: []compiledv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
@@ -38,7 +37,9 @@ func TestDesiredLB_JoinsUnderlayFromDataplane(t *testing.T) {
 	r := &Reconciler{client: cl, nodeID: "nodeA"}
 
 	// The backend NIC's overlay IP is attached locally with this node-local underlay.
-	got, err := r.desiredLB(context.Background(), map[string]string{"10.0.10.5": "2001:db8::dd"})
+	ulByKey := map[ipKey]string{{100, "10.0.10.5"}: "2001:db8::dd"}
+	localSet := map[ipKey]struct{}{{100, "10.0.10.5"}: {}}
+	got, err := r.desiredLB(context.Background(), ulByKey, localSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,15 +59,15 @@ func TestDesiredLB_SkipsWhenNoUnderlay(t *testing.T) {
 	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
 		Spec: compiledv1.CompiledNICSpec{
-			NodeName: "nodeA", VNI: 100,
+			VNI:        100,
 			OverlayIPs: []string{"10.0.10.5"},
 			LB:         []compiledv1.CompiledLB{{VIP: "203.0.113.50"}},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
 	r := &Reconciler{client: cl, nodeID: "nodeA"}
-	// Nothing attached locally (empty underlay index) → nothing to announce yet.
-	got, err := r.desiredLB(context.Background(), map[string]string{})
+	// Nothing attached locally (empty sets) → nothing to announce yet.
+	got, err := r.desiredLB(context.Background(), map[ipKey]string{}, map[ipKey]struct{}{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +82,7 @@ func TestDesired_EmitsVIPAnycastRoute(t *testing.T) {
 	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
 		Spec: compiledv1.CompiledNICSpec{
-			NodeName: node, VNI: 100,
+			VNI:        100,
 			OverlayIPs: []string{"10.0.0.20"},
 			LB:         []compiledv1.CompiledLB{{VIP: "203.0.113.50", Ports: []compiledv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
 		},
@@ -174,7 +175,7 @@ func TestDesiredPublic_EmitsLBVIP(t *testing.T) {
 	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Name: "default-web-0", Namespace: "default"},
 		Spec: compiledv1.CompiledNICSpec{
-			NodeName: node, VNI: 100,
+			VNI:        100,
 			OverlayIPs: []string{"10.0.0.20"},
 			LB:         []compiledv1.CompiledLB{{VIP: "203.0.113.50"}},
 		},

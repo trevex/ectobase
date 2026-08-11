@@ -19,13 +19,13 @@ func TestReconcileProgramsLocalNatSourceAndStagesAnnounce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A local CompiledNIC on nodeA carries the central NAT allocation; the source's node-local
-	// underlay comes from the dataplane's attached-interface list and is used as the block owner.
+	// A local CompiledNIC carries the central NAT allocation; "local" is determined by the
+	// dataplane's ListInterfaces matching (VNI, overlayIP) — not by a nodeName field.
+	// The source's node-local underlay comes from the dataplane and is used as the block owner.
 	cnic := &compiledv1.CompiledNIC{}
 	cnic.Name = "default-nic-a"
 	cnic.Namespace = "default"
 	cnic.Spec = compiledv1.CompiledNICSpec{
-		NodeName:   "nodeA",
 		VNI:        100,
 		OverlayIPs: []string{"10.0.0.1"},
 		NAT: []compiledv1.CompiledNATSource{

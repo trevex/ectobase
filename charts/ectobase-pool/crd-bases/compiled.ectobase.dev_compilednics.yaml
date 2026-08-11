@@ -182,9 +182,6 @@ spec:
                   - sourceIP
                   type: object
                 type: array
-              nodeName:
-                description: NodeName is the node this NIC is scheduled on.
-                type: string
               overlayIPs:
                 description: OverlayIPs are the guest overlay IP addresses.
                 items:
@@ -241,7 +238,6 @@ spec:
                 type: integer
             required:
             - firewall
-            - nodeName
             - port
             - vni
             type: object

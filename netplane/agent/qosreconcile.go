@@ -30,12 +30,20 @@ func qosEqual(a, b netv1.InterfaceQoS) bool {
 	return ae == be && ap == bp && ai == bi
 }
 
-// ReconcileQoS programs the QoS lanes (ConfigureQoS) for every NetworkInterface scheduled to this
-// node whose spec.qos is set. Diffs against r.appliedQoS: unchanged NICs are skipped, cleared/removed
-// NICs are set back to unlimited (0/0/0), new/changed caps are pushed. interface_id = NIC name.
+// ReconcileQoS programs the QoS lanes (ConfigureQoS) for every NetworkInterface that is locally
+// attached (its (VNI, overlayIP) appears in the dataplane's ListInterfaces) and whose spec.qos is
+// set. Diffs against r.appliedQoS: unchanged NICs are skipped, cleared/removed NICs are set back
+// to unlimited (0/0/0), new/changed caps are pushed. interface_id = NIC name.
+// Locality is determined by (VNI, overlayIP) — not nodeName — so QoS follows the interface wherever
+// the CNI attaches it, consistent with the rest of the agent's self-locating policy.
 func (r *Reconciler) ReconcileQoS(ctx context.Context) error {
 	if r.dp == nil {
 		return nil
+	}
+	// Build the (VNI, IP) set of locally-attached interfaces to decide which NICs to program.
+	_, localSet, err := r.underlayByKey(ctx)
+	if err != nil {
+		return fmt.Errorf("list local interfaces: %w", err)
 	}
 	var nics netv1.NetworkInterfaceList
 	if err := r.client.List(ctx, &nics); err != nil {
@@ -44,10 +52,20 @@ func (r *Reconciler) ReconcileQoS(ctx context.Context) error {
 	desired := map[string]netv1.InterfaceQoS{}
 	for i := range nics.Items {
 		nic := &nics.Items[i]
-		if nic.Spec.NodeName == nil || *nic.Spec.NodeName != r.nodeID {
+		if nic.Spec.QoS == nil {
 			continue
 		}
-		if nic.Spec.QoS == nil {
+		// A NIC is local iff any of its overlay IPs is attached here under its effective VNI.
+		// nic.Status.VNI is the effective VNI (same value the compiler stamps into CompiledNIC.VNI).
+		vni := uint32(nic.Status.VNI)
+		local := false
+		for _, ip := range nic.Spec.IPs {
+			if _, ok := localSet[ipKey{vni, ip}]; ok {
+				local = true
+				break
+			}
+		}
+		if !local {
 			continue
 		}
 		desired[nic.Name] = *nic.Spec.QoS

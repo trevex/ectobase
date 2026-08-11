@@ -39,11 +39,11 @@ func (r *Reconciler) DesiredPublic(ctx context.Context) ([]PublicPrefix, error) 
 	}
 	// LB backends on this node: one LB_VIP record per backed VIP so the edge can AddLbBackend.
 	// vni=0: the edge supplies its WAN LB-VNI at AddLbVip; AddLbBackend needs no VNI.
-	ulByIP, err := r.underlayByOverlayIP(ctx)
+	ulByKey, localSet, err := r.underlayByKey(ctx)
 	if err != nil {
 		return nil, err
 	}
-	lbs, err := r.desiredLB(ctx, ulByIP)
+	lbs, err := r.desiredLB(ctx, ulByKey, localSet)
 	if err != nil {
 		return nil, err
 	}

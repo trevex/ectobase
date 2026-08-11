@@ -25,7 +25,8 @@ func (r *Reconciler) ReconcileFirewall(ctx context.Context) error {
 		return nil
 	}
 	// The dataplane is the source of truth for which interface a NIC's overlay IP is attached to.
-	ifaceByIP, err := r.interfaceIDByOverlayIP(ctx)
+	// ifaceByKey is keyed by (VNI, overlayIP) — sound under overlapping VPC subnets.
+	ifaceByKey, localSet, err := r.interfaceIDByKey(ctx)
 	if err != nil {
 		return err
 	}
@@ -37,12 +38,12 @@ func (r *Reconciler) ReconcileFirewall(ctx context.Context) error {
 	desired := map[string][]FwRuleWithID{}
 	for i := range list.Items {
 		c := &list.Items[i]
-		if c.Spec.NodeName != r.nodeID {
+		if !localNIC(c, localSet) {
 			continue
 		}
 		iface := ""
 		for _, ip := range c.Spec.OverlayIPs {
-			if id, ok := ifaceByIP[ip]; ok {
+			if id, ok := ifaceByKey[ipKey{uint32(c.Spec.VNI), ip}]; ok {
 				iface = id
 				break
 			}

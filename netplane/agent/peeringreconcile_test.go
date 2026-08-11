@@ -14,16 +14,19 @@ import (
 // populated and every peer VNI is included in the Subs slice so the Bus subscribes to it.
 func TestReconcilePass_IncludesPeeringImportsAndSubs(t *testing.T) {
 	s := egScheme(t)
-	// CompiledNIC on this node: VNI 100, peers with VNI 200 for prefix "10.1.0.0/24".
+	// CompiledNIC locally attached (via dp.ifaces): VNI 100, peers with VNI 200 for prefix "10.1.0.0/24".
 	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "web-0"},
 		Spec: compiledv1.CompiledNICSpec{
-			NodeName: "nodeA", VNI: 100,
+			VNI:         100,
+			OverlayIPs:  []string{"10.0.0.1"},
 			PeerImports: []compiledv1.CompiledPeerImport{{PeerVNI: 200, ImportPrefixes: []string{"10.1.0.0/24"}}},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
-	r := &Reconciler{client: cl, nodeID: "nodeA", underlay: "fd00::a"}
+	dp := newRecordingDP()
+	dp.ifaces = []LocalInterface{{InterfaceID: "nic-0", Vni: 100, OverlayIPs: []string{"10.0.0.1"}, Underlay: "fd00::a"}}
+	r := &Reconciler{client: cl, nodeID: "nodeA", underlay: "fd00::a", dp: dp}
 
 	subs, _, _, _, peeringImports, err := r.Desired(context.Background())
 	if err != nil {
@@ -51,17 +54,25 @@ func TestDesiredPeeringImports(t *testing.T) {
 	cnic := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "web-0"},
 		Spec: compiledv1.CompiledNICSpec{
-			NodeName: "nodeA", VNI: 100,
+			VNI:         100,
+			OverlayIPs:  []string{"10.0.0.1"},
 			PeerImports: []compiledv1.CompiledPeerImport{{PeerVNI: 200, ImportPrefixes: []string{"10.1.0.0/24"}}},
 		},
 	}
+	// offNode NIC: different (VNI, IP) → not in dp.ifaces → skipped.
 	offNode := &compiledv1.CompiledNIC{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "web-1"},
-		Spec: compiledv1.CompiledNICSpec{NodeName: "nodeB", VNI: 300,
-			PeerImports: []compiledv1.CompiledPeerImport{{PeerVNI: 400}}},
+		Spec: compiledv1.CompiledNICSpec{
+			VNI:         300,
+			OverlayIPs:  []string{"10.0.0.2"},
+			PeerImports: []compiledv1.CompiledPeerImport{{PeerVNI: 400}},
+		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic, offNode).Build()
-	r := &Reconciler{client: cl, nodeID: "nodeA"}
+	dp := newRecordingDP()
+	// Only cnic (VNI 100 / 10.0.0.1) is locally attached; offNode NIC is not.
+	dp.ifaces = []LocalInterface{{InterfaceID: "nic-0", Vni: 100, OverlayIPs: []string{"10.0.0.1"}, Underlay: "fd00::a"}}
+	r := &Reconciler{client: cl, nodeID: "nodeA", dp: dp}
 	got, err := r.desiredPeeringImports(context.Background())
 	if err != nil {
 		t.Fatal(err)

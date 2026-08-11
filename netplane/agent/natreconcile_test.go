@@ -21,21 +21,21 @@ func TestDesiredAnnouncesOnlyLocalCompiledNicNat(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// localC: locally attached (dp.ifaces has VNI 100 / 10.0.0.1).
 	localC := &compiledv1.CompiledNIC{}
 	localC.Name = "default-nic-a"
 	localC.Namespace = "default"
 	localC.Spec = compiledv1.CompiledNICSpec{
-		NodeName:   "nodeA",
 		VNI:        100,
 		OverlayIPs: []string{"10.0.0.1"},
 		NAT:        []compiledv1.CompiledNATSource{{SourceIP: "10.0.0.1", NATIP: "1.2.3.4", PortMin: 1024, PortMax: 2048}},
 	}
 
+	// remoteC: NOT locally attached (10.0.0.2 absent from dp.ifaces); must be skipped.
 	remoteC := &compiledv1.CompiledNIC{}
 	remoteC.Name = "default-nic-b"
 	remoteC.Namespace = "default"
 	remoteC.Spec = compiledv1.CompiledNICSpec{
-		NodeName:   "nodeB",
 		VNI:        100,
 		OverlayIPs: []string{"10.0.0.2"},
 		NAT:        []compiledv1.CompiledNATSource{{SourceIP: "10.0.0.2", NATIP: "1.2.3.4", PortMin: 2048, PortMax: 3072}},

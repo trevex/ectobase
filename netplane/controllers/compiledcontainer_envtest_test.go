@@ -120,7 +120,8 @@ func TestCompiledContainerControllerEnvtest(t *testing.T) {
 	ctr.Spec.InterfaceRefs = []computev1.LocalObjectReference{{Name: "nic-a"}}
 	mustCreate(ctx, t, direct, ctr)
 
-	// The CompiledNIC inherits BOTH clusterName and nodeName from the Container.
+	// The CompiledNIC inherits clusterName from the Container (nodeName is no longer stamped
+	// on CompiledNIC — the agent self-locates via the dataplane's ListInterfaces instead).
 	eventually(t, 15*time.Second, func() error {
 		var c compiledv1.CompiledNIC
 		if err := direct.Get(ctx, client.ObjectKey{Namespace: "default", Name: "default-nic-a"}, &c); err != nil {
@@ -128,9 +129,6 @@ func TestCompiledContainerControllerEnvtest(t *testing.T) {
 		}
 		if c.Spec.ClusterName != "c1" {
 			return fmt.Errorf("clusterName=%q want c1", c.Spec.ClusterName)
-		}
-		if c.Spec.NodeName != "n1" {
-			return fmt.Errorf("nodeName=%q want n1", c.Spec.NodeName)
 		}
 		return nil
 	})

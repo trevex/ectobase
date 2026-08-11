@@ -80,6 +80,7 @@ rules:
   - net.ectobase.dev
   resources:
   - vpcpeerings/status
+  - vpcs/status
   verbs:
   - get
   - patch

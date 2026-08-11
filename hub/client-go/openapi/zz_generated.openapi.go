@@ -972,14 +972,6 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledNICSpec(ref common.ReferenceC
 							Format:      "",
 						},
 					},
-					"nodeName": {
-						SchemaProps: spec.SchemaProps{
-							Description: "NodeName is the node this NIC is scheduled on.",
-							Default:     "",
-							Type:        []string{"string"},
-							Format:      "",
-						},
-					},
 					"vni": {
 						SchemaProps: spec.SchemaProps{
 							Description: "VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's status.vni, falling back to its VPC's status.vni).",
@@ -1067,7 +1059,7 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledNICSpec(ref common.ReferenceC
 						},
 					},
 				},
-				Required: []string{"nodeName", "vni", "port", "firewall"},
+				Required: []string{"vni", "port", "firewall"},
 			},
 		},
 		Dependencies: []string{

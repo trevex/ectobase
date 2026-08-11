@@ -256,7 +256,6 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `clusterName` _string_ | ClusterName is the cluster this compiled NIC is bound to (the pod->node<br />binding). Set by the compiler from the owning VirtualMachine's placement,<br />or the compiler's --cluster-name default for NICs with no owning VM.<br />The per-cluster broker selects on this field. |  | Optional: \{\} <br /> |
-| `nodeName` _string_ | NodeName is the node this NIC is scheduled on. |  |  |
 | `vni` _integer_ | VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's<br />status.vni, falling back to its VPC's status.vni). |  |  |
 | `port` _[PortStatus](#portstatus)_ | Port describes the dataplane port allocated for this interface. |  |  |
 | `overlayIPs` _string array_ | OverlayIPs are the guest overlay IP addresses. |  | Optional: \{\} <br /> |

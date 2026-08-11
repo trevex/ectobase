@@ -81,17 +81,6 @@ func resolvePlacement(nic *netv1.NetworkInterface, containers []computev1.Contai
 // slice of PeerImportSpecs; only entries whose VPCName matches the NIC's VPC are emitted. The
 // returned CompiledNIC has no Status set (caller fills that in if needed).
 func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPolicy, lbs []netv1.LoadBalancer, peerings []PeerImportSpec, natBySource map[string]netv1.NATAllocation, placement Placement) compiledv1.CompiledNIC {
-	// Node binding: an owning Container is the placement authority and pins the node (placement.NodeName);
-	// VM-owned and standalone NICs keep their existing source (nic.spec.nodeName), so those paths are
-	// byte-unchanged (their placement.NodeName is "").
-	nodeName := ""
-	if nic.Spec.NodeName != nil {
-		nodeName = *nic.Spec.NodeName
-	}
-	if placement.NodeName != "" {
-		nodeName = placement.NodeName
-	}
-
 	var port compiledv1.PortStatus
 	if nic.Status.Port != nil {
 		p := nic.Status.Port
@@ -112,7 +101,6 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 			Namespace: nic.Namespace,
 		},
 		Spec: compiledv1.CompiledNICSpec{
-			NodeName:   nodeName,
 			VNI:        vni,
 			Port:       port,
 			OverlayIPs: append([]string(nil), nic.Spec.IPs...),

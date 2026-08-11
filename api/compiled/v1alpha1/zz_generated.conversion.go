@@ -592,7 +592,6 @@ func Convert_compiled_CompiledNICList_To_v1alpha1_CompiledNICList(in *compiled.C
 
 func autoConvert_v1alpha1_CompiledNICSpec_To_compiled_CompiledNICSpec(in *CompiledNICSpec, out *compiled.CompiledNICSpec, s conversion.Scope) error {
 	out.ClusterName = in.ClusterName
-	out.NodeName = in.NodeName
 	out.VNI = in.VNI
 	if err := Convert_v1alpha1_PortStatus_To_compiled_PortStatus(&in.Port, &out.Port, s); err != nil {
 		return err
@@ -615,7 +614,6 @@ func Convert_v1alpha1_CompiledNICSpec_To_compiled_CompiledNICSpec(in *CompiledNI
 
 func autoConvert_compiled_CompiledNICSpec_To_v1alpha1_CompiledNICSpec(in *compiled.CompiledNICSpec, out *CompiledNICSpec, s conversion.Scope) error {
 	out.ClusterName = in.ClusterName
-	out.NodeName = in.NodeName
 	out.VNI = in.VNI
 	if err := Convert_compiled_PortStatus_To_v1alpha1_PortStatus(&in.Port, &out.Port, s); err != nil {
 		return err
