@@ -51,6 +51,67 @@ func TestReconcileQoS_PushesCaps(t *testing.T) {
 	}
 }
 
+func TestReconcileQoS_ResolvesVNIFromVPC(t *testing.T) {
+	// nic.Status.VNI is unset (as in production — no controller writes it). The effective VNI must
+	// resolve through the referenced VPC's status.vni (=100), matching the locally-attached interface.
+	vpc := &netv1.VPC{
+		ObjectMeta: metav1.ObjectMeta{Name: "vpc-a", Namespace: "default"},
+		Status:     netv1.VPCStatus{VNI: 100},
+	}
+	nic := &netv1.NetworkInterface{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-0-nic0", Namespace: "default"},
+		Spec: netv1.NetworkInterfaceSpec{
+			VPCRef: netv1.LocalObjectReference{Name: "vpc-a"},
+			IPs:    []string{"10.0.0.1"},
+			QoS: &netv1.InterfaceQoS{
+				Egress:  &netv1.EgressQoS{RateMbps: 100, PublicMbps: 40},
+				Ingress: &netv1.RateLimit{RateMbps: 200},
+			},
+		},
+		// Status.VNI intentionally zero — resolution must come from the VPC.
+	}
+	cl := fake.NewClientBuilder().WithScheme(qosScheme(t)).WithObjects(vpc, nic).Build()
+	dp := newRecordingDP()
+	dp.ifaces = []LocalInterface{{InterfaceID: "web-0-nic0", Vni: 100, OverlayIPs: []string{"10.0.0.1"}, Underlay: "fd00::a"}}
+	r := &Reconciler{client: cl, nodeID: "nodeA", dp: dp}
+
+	if err := r.ReconcileQoS(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := dp.getQoS("web-0-nic0")
+	if !ok {
+		t.Fatalf("ConfigureQoS not called for web-0-nic0 (VNI should resolve from VPC); qos=%+v", dp.qos)
+	}
+	if got.egressMbps != 100 || got.publicMbps != 40 || got.ingressMbps != 200 {
+		t.Fatalf("ConfigureQoS caps = (%d,%d,%d), want (100,40,200)", got.egressMbps, got.publicMbps, got.ingressMbps)
+	}
+}
+
+func TestReconcileQoS_SkipsWhenVNIUnresolvable(t *testing.T) {
+	// No VPC object and status.vni==0 → effective VNI stays 0 → NIC is skipped even though a
+	// same-named interface is locally attached (its real VNI can't be matched).
+	nic := &netv1.NetworkInterface{
+		ObjectMeta: metav1.ObjectMeta{Name: "web-0-nic0", Namespace: "default"},
+		Spec: netv1.NetworkInterfaceSpec{
+			VPCRef: netv1.LocalObjectReference{Name: "vpc-missing"},
+			IPs:    []string{"10.0.0.1"},
+			QoS:    &netv1.InterfaceQoS{Egress: &netv1.EgressQoS{RateMbps: 100}},
+		},
+		// Status.VNI zero, VPC absent.
+	}
+	cl := fake.NewClientBuilder().WithScheme(qosScheme(t)).WithObjects(nic).Build()
+	dp := newRecordingDP()
+	dp.ifaces = []LocalInterface{{InterfaceID: "web-0-nic0", Vni: 100, OverlayIPs: []string{"10.0.0.1"}, Underlay: "fd00::a"}}
+	r := &Reconciler{client: cl, nodeID: "nodeA", dp: dp}
+
+	if err := r.ReconcileQoS(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(dp.qos) != 0 {
+		t.Fatalf("no qos expected when VNI is unresolvable, got %+v", dp.qos)
+	}
+}
+
 func TestReconcileQoS_SkipsUnsetAndOffNode(t *testing.T) {
 	// noCap: locally attached (VNI 100 / 10.0.0.1 in dp.ifaces) but no QoS set → skip.
 	noCap := &netv1.NetworkInterface{
