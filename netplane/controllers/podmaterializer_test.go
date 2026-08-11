@@ -72,6 +72,27 @@ func TestBuildPod(t *testing.T) {
 	}
 }
 
+// TestBuildPod_NoNodeName: an empty NodeName leaves placement to kube-scheduler — no hostname
+// nodeSelector is set (the node agent self-locates policy by the interface's (VNI, overlay IP),
+// so the Pod need not be pinned to a host).
+func TestBuildPod_NoNodeName(t *testing.T) {
+	cc := &compiledv1.CompiledContainer{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "default-ctr1"},
+		Spec: compiledv1.CompiledContainerSpec{
+			Image: "busybox:1.36",
+			Interfaces: []compiledv1.CompiledContainerInterface{{
+				NetworkName:         "flowplane-overlay",
+				NetworkInterfaceRef: "default/nic-a",
+				MAC:                 "02:00:00:00:00:aa",
+			}},
+		},
+	}
+	pod := buildPod(cc)
+	if pod.Spec.NodeSelector != nil {
+		t.Fatalf("expected no nodeSelector when NodeName empty, got %v", pod.Spec.NodeSelector)
+	}
+}
+
 func TestBuildPod_MultiInterfaceJoinsNetworks(t *testing.T) {
 	cc := &compiledv1.CompiledContainer{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "default-ctr1"},

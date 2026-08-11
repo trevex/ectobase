@@ -71,7 +71,6 @@ func buildPod(cc *compiledv1.CompiledContainer) *corev1.Pod {
 			Annotations: annotations,
 		},
 		Spec: corev1.PodSpec{
-			NodeSelector:                  map[string]string{"kubernetes.io/hostname": cc.Spec.NodeName},
 			RestartPolicy:                 restartPolicy,
 			Tolerations:                   []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
 			TerminationGracePeriodSeconds: &grace,
@@ -84,6 +83,13 @@ func buildPod(cc *compiledv1.CompiledContainer) *corev1.Pod {
 				Resources: cc.Spec.Resources,
 			}},
 		},
+	}
+	// NodeName is an OPTIONAL node pin. When set, hard-pin the Pod to that host; when empty,
+	// leave placement to kube-scheduler — the interface lands wherever the Pod is scheduled and
+	// the node agent self-locates its policy by the interface's (VNI, overlay IP), so no host pin
+	// is required for the datapath.
+	if cc.Spec.NodeName != "" {
+		pod.Spec.NodeSelector = map[string]string{"kubernetes.io/hostname": cc.Spec.NodeName}
 	}
 	return pod
 }
