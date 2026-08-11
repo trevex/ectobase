@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/trevex/ectobase/test/lab/internal/clab"
@@ -628,13 +629,35 @@ func teardownHostEgress(ctx context.Context) {
 }
 
 // writeKindKubeconfig writes the kind cluster's kubeconfig (host-accessible server)
-// to dst. The kind cluster name is the clab k8s-kind node's short name.
+// to dst. The kind cluster name is the clab k8s-kind node's short name. `lab up` runs as
+// root (sudo), so the file is chowned back to the invoking user so a plain
+// `kubectl --kubeconfig build/<name>/<cluster>.kubeconfig` works without sudo.
 func writeKindKubeconfig(ctx context.Context, kindName, dst string) error {
 	out, err := exec.Output(ctx, "kind", "get", "kubeconfig", "--name", kindName)
 	if err != nil {
 		return fmt.Errorf("kind get kubeconfig %s: %w\n%s", kindName, err, out)
 	}
-	return os.WriteFile(dst, out, 0o600)
+	if err := os.WriteFile(dst, out, 0o644); err != nil {
+		return err
+	}
+	chownToSudoUser(dst)
+	return nil
+}
+
+// chownToSudoUser chowns path to the pre-sudo invoking user ($SUDO_UID:$SUDO_GID) when the
+// process runs under sudo, so root-created lab artifacts (e.g. kubeconfigs) stay user-accessible.
+// Best-effort and a no-op when not run under sudo (the file is already user-owned).
+func chownToSudoUser(path string) {
+	uidS, gidS := os.Getenv("SUDO_UID"), os.Getenv("SUDO_GID")
+	if uidS == "" || gidS == "" {
+		return
+	}
+	uid, err1 := strconv.Atoi(uidS)
+	gid, err2 := strconv.Atoi(gidS)
+	if err1 != nil || err2 != nil {
+		return
+	}
+	_ = os.Chown(path, uid, gid)
 }
 
 // forceRemoveLingeringClab force-removes any clab-<labName>-* containers left
