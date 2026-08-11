@@ -44,6 +44,8 @@ type CompiledNICSpecApplyConfiguration struct {
 	// MAC is the guest L2 address copied from the source NetworkInterface. The CNI
 	// programs it as the datapath guest MAC (empty for containers — the datapath derives one).
 	MAC *string `json:"mac,omitempty"`
+	// QoS is the flattened per-interface QoS caps to program, or nil for unlimited.
+	QoS *CompiledQoSApplyConfiguration `json:"qos,omitempty"`
 }
 
 // CompiledNICSpecApplyConfiguration constructs a declarative configuration of the CompiledNICSpec type for use with
@@ -138,5 +140,13 @@ func (b *CompiledNICSpecApplyConfiguration) WithPeerImports(values ...*CompiledP
 // If called multiple times, the MAC field is set to the value of the last call.
 func (b *CompiledNICSpecApplyConfiguration) WithMAC(value string) *CompiledNICSpecApplyConfiguration {
 	b.MAC = &value
+	return b
+}
+
+// WithQoS sets the QoS field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the QoS field is set to the value of the last call.
+func (b *CompiledNICSpecApplyConfiguration) WithQoS(value *CompiledQoSApplyConfiguration) *CompiledNICSpecApplyConfiguration {
+	b.QoS = value
 	return b
 }

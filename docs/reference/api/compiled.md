@@ -264,6 +264,7 @@ _Appears in:_
 | `lb` _[CompiledLB](#compiledlb) array_ | LB lists the load balancers this NIC is a backend of. Pure forwarding membership —<br />it grants NO firewall permission (that comes solely from FirewallPolicy). |  | Optional: \{\} <br /> |
 | `peerImports` _[CompiledPeerImport](#compiledpeerimport) array_ | PeerImports lists peer VPCs whose routes this NIC imports (reachability only — grants NO<br />firewall permission; that comes solely from FirewallPolicy). Populated from Ready VPCPeerings<br />involving this NIC's VPC. |  | Optional: \{\} <br /> |
 | `mac` _string_ | MAC is the guest L2 address copied from the source NetworkInterface. The CNI<br />programs it as the datapath guest MAC (empty for containers — the datapath derives one). |  | Optional: \{\} <br /> |
+| `qos` _[CompiledQoS](#compiledqos)_ | QoS is the flattened per-interface QoS caps to program, or nil for unlimited. |  | Optional: \{\} <br /> |
 
 
 #### CompiledNICStatus
@@ -298,6 +299,25 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `peerVni` _integer_ | PeerVNI is the peer VPC's VNI to subscribe to on routebus. |  |  |
 | `importPrefixes` _string array_ | ImportPrefixes is the peer's exposedPrefixes: only peer routes within these CIDRs are<br />imported (filter applied importer-side). |  | Optional: \{\} <br /> |
+
+
+#### CompiledQoS
+
+
+
+CompiledQoS holds the flattened per-interface QoS caps in Mbit/s (0 = unlimited) that the
+dataplane programs: egress is EDT-shaped, public caps external/NATed egress, ingress is policed.
+
+
+
+_Appears in:_
+- [CompiledNICSpec](#compilednicspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `egressMbps` _integer_ | EgressMbps is the total egress EDT shaping cap (0 = unlimited). |  | Optional: \{\} <br /> |
+| `publicMbps` _integer_ | PublicMbps caps external/NATed egress only (0 = unlimited). |  | Optional: \{\} <br /> |
+| `ingressMbps` _integer_ | IngressMbps is the token-bucket policing cap on ingress (0 = unlimited). |  | Optional: \{\} <br /> |
 
 
 #### CompiledVM

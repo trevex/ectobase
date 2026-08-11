@@ -37,6 +37,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		v1alpha1.CompiledNICSpec{}.OpenAPIModelName():                schema_ectobase_api_compiled_v1alpha1_CompiledNICSpec(ref),
 		v1alpha1.CompiledNICStatus{}.OpenAPIModelName():              schema_ectobase_api_compiled_v1alpha1_CompiledNICStatus(ref),
 		v1alpha1.CompiledPeerImport{}.OpenAPIModelName():             schema_ectobase_api_compiled_v1alpha1_CompiledPeerImport(ref),
+		v1alpha1.CompiledQoS{}.OpenAPIModelName():                    schema_ectobase_api_compiled_v1alpha1_CompiledQoS(ref),
 		v1alpha1.CompiledVM{}.OpenAPIModelName():                     schema_ectobase_api_compiled_v1alpha1_CompiledVM(ref),
 		v1alpha1.CompiledVMInterface{}.OpenAPIModelName():            schema_ectobase_api_compiled_v1alpha1_CompiledVMInterface(ref),
 		v1alpha1.CompiledVMList{}.OpenAPIModelName():                 schema_ectobase_api_compiled_v1alpha1_CompiledVMList(ref),
@@ -1058,12 +1059,18 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledNICSpec(ref common.ReferenceC
 							Format:      "",
 						},
 					},
+					"qos": {
+						SchemaProps: spec.SchemaProps{
+							Description: "QoS is the flattened per-interface QoS caps to program, or nil for unlimited.",
+							Ref:         ref(v1alpha1.CompiledQoS{}.OpenAPIModelName()),
+						},
+					},
 				},
 				Required: []string{"vni", "port", "firewall"},
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.CompiledFirewall{}.OpenAPIModelName(), v1alpha1.CompiledLB{}.OpenAPIModelName(), v1alpha1.CompiledNATSource{}.OpenAPIModelName(), v1alpha1.CompiledPeerImport{}.OpenAPIModelName(), v1alpha1.PortStatus{}.OpenAPIModelName()},
+			v1alpha1.CompiledFirewall{}.OpenAPIModelName(), v1alpha1.CompiledLB{}.OpenAPIModelName(), v1alpha1.CompiledNATSource{}.OpenAPIModelName(), v1alpha1.CompiledPeerImport{}.OpenAPIModelName(), v1alpha1.CompiledQoS{}.OpenAPIModelName(), v1alpha1.PortStatus{}.OpenAPIModelName()},
 	}
 }
 
@@ -1126,6 +1133,40 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledPeerImport(ref common.Referen
 					},
 				},
 				Required: []string{"peerVni"},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_compiled_v1alpha1_CompiledQoS(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CompiledQoS holds the flattened per-interface QoS caps in Mbit/s (0 = unlimited) that the dataplane programs: egress is EDT-shaped, public caps external/NATed egress, ingress is policed.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"egressMbps": {
+						SchemaProps: spec.SchemaProps{
+							Description: "EgressMbps is the total egress EDT shaping cap (0 = unlimited).",
+							Type:        []string{"integer"},
+							Format:      "int64",
+						},
+					},
+					"publicMbps": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PublicMbps caps external/NATed egress only (0 = unlimited).",
+							Type:        []string{"integer"},
+							Format:      "int64",
+						},
+					},
+					"ingressMbps": {
+						SchemaProps: spec.SchemaProps{
+							Description: "IngressMbps is the token-bucket policing cap on ingress (0 = unlimited).",
+							Type:        []string{"integer"},
+							Format:      "int64",
+						},
+					},
+				},
 			},
 		},
 	}

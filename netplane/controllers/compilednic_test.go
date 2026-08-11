@@ -526,6 +526,51 @@ func TestNicsForPeering(t *testing.T) {
 	}
 }
 
+func TestCompile_QoSFolded(t *testing.T) {
+	nic := testNIC()
+	nic.Spec.QoS = &netv1.InterfaceQoS{
+		Egress:  &netv1.EgressQoS{RateMbps: 500, PublicMbps: 100},
+		Ingress: &netv1.RateLimit{RateMbps: 200},
+	}
+	c := Compile(nic, nic.Status.VNI, nil, nil, nil, nil, Placement{ClusterName: "test"})
+	if c.Spec.QoS == nil {
+		t.Fatal("expected CompiledNIC.spec.qos to be set")
+	}
+	if c.Spec.QoS.EgressMbps != 500 {
+		t.Fatalf("EgressMbps = %d, want 500", c.Spec.QoS.EgressMbps)
+	}
+	if c.Spec.QoS.PublicMbps != 100 {
+		t.Fatalf("PublicMbps = %d, want 100", c.Spec.QoS.PublicMbps)
+	}
+	if c.Spec.QoS.IngressMbps != 200 {
+		t.Fatalf("IngressMbps = %d, want 200", c.Spec.QoS.IngressMbps)
+	}
+}
+
+func TestCompile_QoSNilWhenUnset(t *testing.T) {
+	nic := testNIC()
+	// No QoS set → compiled QoS must be nil (not a zero-value struct).
+	c := Compile(nic, nic.Status.VNI, nil, nil, nil, nil, Placement{ClusterName: "test"})
+	if c.Spec.QoS != nil {
+		t.Fatalf("expected nil CompiledNIC.spec.qos, got %+v", c.Spec.QoS)
+	}
+}
+
+func TestCompile_QoSPartialEgress(t *testing.T) {
+	nic := testNIC()
+	// Only egress set, ingress nil: IngressMbps must be 0.
+	nic.Spec.QoS = &netv1.InterfaceQoS{
+		Egress: &netv1.EgressQoS{RateMbps: 1000},
+	}
+	c := Compile(nic, nic.Status.VNI, nil, nil, nil, nil, Placement{ClusterName: "test"})
+	if c.Spec.QoS == nil {
+		t.Fatal("expected CompiledNIC.spec.qos to be set")
+	}
+	if c.Spec.QoS.EgressMbps != 1000 || c.Spec.QoS.PublicMbps != 0 || c.Spec.QoS.IngressMbps != 0 {
+		t.Fatalf("caps = (%d,%d,%d), want (1000,0,0)", c.Spec.QoS.EgressMbps, c.Spec.QoS.PublicMbps, c.Spec.QoS.IngressMbps)
+	}
+}
+
 func TestNicsForLB(t *testing.T) {
 	s := lbScheme(t)
 	nic := &netv1.NetworkInterface{ObjectMeta: metav1.ObjectMeta{Name: "web-0", Namespace: "default", Labels: map[string]string{"app": "web"}}}

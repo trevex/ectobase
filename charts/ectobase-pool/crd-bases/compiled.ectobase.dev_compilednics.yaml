@@ -230,6 +230,25 @@ spec:
                     - vf
                     type: string
                 type: object
+              qos:
+                description: QoS is the flattened per-interface QoS caps to program,
+                  or nil for unlimited.
+                properties:
+                  egressMbps:
+                    description: EgressMbps is the total egress EDT shaping cap (0
+                      = unlimited).
+                    format: int32
+                    type: integer
+                  ingressMbps:
+                    description: IngressMbps is the token-bucket policing cap on ingress
+                      (0 = unlimited).
+                    format: int32
+                    type: integer
+                  publicMbps:
+                    description: PublicMbps caps external/NATed egress only (0 = unlimited).
+                    format: int32
+                    type: integer
+                type: object
               vni:
                 description: |-
                   VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's

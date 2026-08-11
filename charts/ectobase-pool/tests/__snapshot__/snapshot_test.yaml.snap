@@ -725,6 +725,22 @@ renders (dpdk clab):
                             - vf
                           type: string
                       type: object
+                    qos:
+                      description: QoS is the flattened per-interface QoS caps to program, or nil for unlimited.
+                      properties:
+                        egressMbps:
+                          description: EgressMbps is the total egress EDT shaping cap (0 = unlimited).
+                          format: int32
+                          type: integer
+                        ingressMbps:
+                          description: IngressMbps is the token-bucket policing cap on ingress (0 = unlimited).
+                          format: int32
+                          type: integer
+                        publicMbps:
+                          description: PublicMbps caps external/NATed egress only (0 = unlimited).
+                          format: int32
+                          type: integer
+                      type: object
                     vni:
                       description: |-
                         VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
@@ -1917,24 +1933,9 @@ renders (dpdk clab):
         resources:
           - loadbalancers
           - loadbalancers/status
-          - natgateways
-          - natgateways/status
-          - networkinterfaces
-          - vpcs
-          - vpcs/status
         verbs:
           - get
           - list
-          - watch
-      - apiGroups:
-          - net.ectobase.dev
-        resources:
-          - networkinterfaces/status
-        verbs:
-          - get
-          - list
-          - patch
-          - update
           - watch
   24: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -2790,6 +2791,22 @@ renders (dpdk hw):
                             - tap
                             - vf
                           type: string
+                      type: object
+                    qos:
+                      description: QoS is the flattened per-interface QoS caps to program, or nil for unlimited.
+                      properties:
+                        egressMbps:
+                          description: EgressMbps is the total egress EDT shaping cap (0 = unlimited).
+                          format: int32
+                          type: integer
+                        ingressMbps:
+                          description: IngressMbps is the token-bucket policing cap on ingress (0 = unlimited).
+                          format: int32
+                          type: integer
+                        publicMbps:
+                          description: PublicMbps caps external/NATed egress only (0 = unlimited).
+                          format: int32
+                          type: integer
                       type: object
                     vni:
                       description: |-
@@ -3998,24 +4015,9 @@ renders (dpdk hw):
         resources:
           - loadbalancers
           - loadbalancers/status
-          - natgateways
-          - natgateways/status
-          - networkinterfaces
-          - vpcs
-          - vpcs/status
         verbs:
           - get
           - list
-          - watch
-      - apiGroups:
-          - net.ectobase.dev
-        resources:
-          - networkinterfaces/status
-        verbs:
-          - get
-          - list
-          - patch
-          - update
           - watch
   24: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -4872,6 +4874,22 @@ renders (ebpf clab):
                             - vf
                           type: string
                       type: object
+                    qos:
+                      description: QoS is the flattened per-interface QoS caps to program, or nil for unlimited.
+                      properties:
+                        egressMbps:
+                          description: EgressMbps is the total egress EDT shaping cap (0 = unlimited).
+                          format: int32
+                          type: integer
+                        ingressMbps:
+                          description: IngressMbps is the token-bucket policing cap on ingress (0 = unlimited).
+                          format: int32
+                          type: integer
+                        publicMbps:
+                          description: PublicMbps caps external/NATed egress only (0 = unlimited).
+                          format: int32
+                          type: integer
+                      type: object
                     vni:
                       description: |-
                         VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
@@ -6075,24 +6093,9 @@ renders (ebpf clab):
         resources:
           - loadbalancers
           - loadbalancers/status
-          - natgateways
-          - natgateways/status
-          - networkinterfaces
-          - vpcs
-          - vpcs/status
         verbs:
           - get
           - list
-          - watch
-      - apiGroups:
-          - net.ectobase.dev
-        resources:
-          - networkinterfaces/status
-        verbs:
-          - get
-          - list
-          - patch
-          - update
           - watch
   24: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -6949,6 +6952,22 @@ renders (ebpf hw):
                             - vf
                           type: string
                       type: object
+                    qos:
+                      description: QoS is the flattened per-interface QoS caps to program, or nil for unlimited.
+                      properties:
+                        egressMbps:
+                          description: EgressMbps is the total egress EDT shaping cap (0 = unlimited).
+                          format: int32
+                          type: integer
+                        ingressMbps:
+                          description: IngressMbps is the token-bucket policing cap on ingress (0 = unlimited).
+                          format: int32
+                          type: integer
+                        publicMbps:
+                          description: PublicMbps caps external/NATed egress only (0 = unlimited).
+                          format: int32
+                          type: integer
+                      type: object
                     vni:
                       description: |-
                         VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
@@ -8149,24 +8168,9 @@ renders (ebpf hw):
         resources:
           - loadbalancers
           - loadbalancers/status
-          - natgateways
-          - natgateways/status
-          - networkinterfaces
-          - vpcs
-          - vpcs/status
         verbs:
           - get
           - list
-          - watch
-      - apiGroups:
-          - net.ectobase.dev
-        resources:
-          - networkinterfaces/status
-        verbs:
-          - get
-          - list
-          - patch
-          - update
           - watch
   24: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -9022,6 +9026,22 @@ renders (tier1 on):
                             - tap
                             - vf
                           type: string
+                      type: object
+                    qos:
+                      description: QoS is the flattened per-interface QoS caps to program, or nil for unlimited.
+                      properties:
+                        egressMbps:
+                          description: EgressMbps is the total egress EDT shaping cap (0 = unlimited).
+                          format: int32
+                          type: integer
+                        ingressMbps:
+                          description: IngressMbps is the token-bucket policing cap on ingress (0 = unlimited).
+                          format: int32
+                          type: integer
+                        publicMbps:
+                          description: PublicMbps caps external/NATed egress only (0 = unlimited).
+                          format: int32
+                          type: integer
                       type: object
                     vni:
                       description: |-
@@ -10226,24 +10246,9 @@ renders (tier1 on):
         resources:
           - loadbalancers
           - loadbalancers/status
-          - natgateways
-          - natgateways/status
-          - networkinterfaces
-          - vpcs
-          - vpcs/status
         verbs:
           - get
           - list
-          - watch
-      - apiGroups:
-          - net.ectobase.dev
-        resources:
-          - networkinterfaces/status
-        verbs:
-          - get
-          - list
-          - patch
-          - update
           - watch
   24: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -11137,6 +11142,22 @@ renders (tier1 watchdog):
                             - vf
                           type: string
                       type: object
+                    qos:
+                      description: QoS is the flattened per-interface QoS caps to program, or nil for unlimited.
+                      properties:
+                        egressMbps:
+                          description: EgressMbps is the total egress EDT shaping cap (0 = unlimited).
+                          format: int32
+                          type: integer
+                        ingressMbps:
+                          description: IngressMbps is the token-bucket policing cap on ingress (0 = unlimited).
+                          format: int32
+                          type: integer
+                        publicMbps:
+                          description: PublicMbps caps external/NATed egress only (0 = unlimited).
+                          format: int32
+                          type: integer
+                      type: object
                     vni:
                       description: |-
                         VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
@@ -12340,24 +12361,9 @@ renders (tier1 watchdog):
         resources:
           - loadbalancers
           - loadbalancers/status
-          - natgateways
-          - natgateways/status
-          - networkinterfaces
-          - vpcs
-          - vpcs/status
         verbs:
           - get
           - list
-          - watch
-      - apiGroups:
-          - net.ectobase.dev
-        resources:
-          - networkinterfaces/status
-        verbs:
-          - get
-          - list
-          - patch
-          - update
           - watch
   24: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -13261,6 +13267,22 @@ renders with vm-materializer enabled:
                             - vf
                           type: string
                       type: object
+                    qos:
+                      description: QoS is the flattened per-interface QoS caps to program, or nil for unlimited.
+                      properties:
+                        egressMbps:
+                          description: EgressMbps is the total egress EDT shaping cap (0 = unlimited).
+                          format: int32
+                          type: integer
+                        ingressMbps:
+                          description: IngressMbps is the token-bucket policing cap on ingress (0 = unlimited).
+                          format: int32
+                          type: integer
+                        publicMbps:
+                          description: PublicMbps caps external/NATed egress only (0 = unlimited).
+                          format: int32
+                          type: integer
+                      type: object
                     vni:
                       description: |-
                         VNI is the effective VXLAN network identifier for this NIC (resolved from the NIC's
@@ -14464,24 +14486,9 @@ renders with vm-materializer enabled:
         resources:
           - loadbalancers
           - loadbalancers/status
-          - natgateways
-          - natgateways/status
-          - networkinterfaces
-          - vpcs
-          - vpcs/status
         verbs:
           - get
           - list
-          - watch
-      - apiGroups:
-          - net.ectobase.dev
-        resources:
-          - networkinterfaces/status
-        verbs:
-          - get
-          - list
-          - patch
-          - update
           - watch
   24: |
     apiVersion: rbac.authorization.k8s.io/v1

@@ -81,6 +81,11 @@ func (in CompiledPeerImport) OpenAPIModelName() string {
 }
 
 // OpenAPIModelName returns the OpenAPI model name for this type.
+func (in CompiledQoS) OpenAPIModelName() string {
+	return "dev.ectobase.compiled.v1alpha1.CompiledQoS"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
 func (in CompiledVM) OpenAPIModelName() string {
 	return "dev.ectobase.compiled.v1alpha1.CompiledVM"
 }

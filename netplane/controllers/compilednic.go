@@ -198,6 +198,19 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 		})
 	}
 
+	// QoS: flatten NetworkInterface.spec.qos into a CompiledQoS so the agent on the pool
+	// can program it from the CompiledNIC without ever reading raw NetworkInterfaces.
+	if nic.Spec.QoS != nil {
+		compiled.Spec.QoS = &compiledv1.CompiledQoS{}
+		if nic.Spec.QoS.Egress != nil {
+			compiled.Spec.QoS.EgressMbps = nic.Spec.QoS.Egress.RateMbps
+			compiled.Spec.QoS.PublicMbps = nic.Spec.QoS.Egress.PublicMbps
+		}
+		if nic.Spec.QoS.Ingress != nil {
+			compiled.Spec.QoS.IngressMbps = nic.Spec.QoS.Ingress.RateMbps
+		}
+	}
+
 	compiled.Spec.ClusterName = placement.ClusterName
 	if placement.WorkloadID != "" {
 		if compiled.Labels == nil {

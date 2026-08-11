@@ -27,6 +27,16 @@ type CompiledNICSpec struct {
 	PeerImports []CompiledPeerImport
 	// MAC is the guest L2 address copied from the source NetworkInterface.
 	MAC string
+	// QoS is the flattened per-interface QoS caps to program, or nil for unlimited.
+	QoS *CompiledQoS
+}
+
+// CompiledQoS holds the flattened per-interface QoS caps in Mbit/s (0 = unlimited) that the
+// dataplane programs: egress is EDT-shaped, public caps external/NATed egress, ingress is policed.
+type CompiledQoS struct {
+	EgressMbps  uint32
+	PublicMbps  uint32
+	IngressMbps uint32
 }
 
 // CompiledFirewall holds pre-compiled ingress and egress rules for a NIC.

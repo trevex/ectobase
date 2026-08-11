@@ -27,22 +27,7 @@ rules:
   resources:
   - loadbalancers
   - loadbalancers/status
-  - natgateways
-  - natgateways/status
-  - networkinterfaces
-  - vpcs
-  - vpcs/status
   verbs:
   - get
   - list
-  - watch
-- apiGroups:
-  - net.ectobase.dev
-  resources:
-  - networkinterfaces/status
-  verbs:
-  - get
-  - list
-  - patch
-  - update
   - watch

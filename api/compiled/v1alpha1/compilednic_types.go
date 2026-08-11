@@ -52,6 +52,23 @@ type CompiledNICSpec struct {
 	// programs it as the datapath guest MAC (empty for containers — the datapath derives one).
 	// +optional
 	MAC string `json:"mac,omitempty"`
+	// QoS is the flattened per-interface QoS caps to program, or nil for unlimited.
+	// +optional
+	QoS *CompiledQoS `json:"qos,omitempty"`
+}
+
+// CompiledQoS holds the flattened per-interface QoS caps in Mbit/s (0 = unlimited) that the
+// dataplane programs: egress is EDT-shaped, public caps external/NATed egress, ingress is policed.
+type CompiledQoS struct {
+	// EgressMbps is the total egress EDT shaping cap (0 = unlimited).
+	// +optional
+	EgressMbps uint32 `json:"egressMbps,omitempty"`
+	// PublicMbps caps external/NATed egress only (0 = unlimited).
+	// +optional
+	PublicMbps uint32 `json:"publicMbps,omitempty"`
+	// IngressMbps is the token-bucket policing cap on ingress (0 = unlimited).
+	// +optional
+	IngressMbps uint32 `json:"ingressMbps,omitempty"`
 }
 
 // CompiledFirewall holds pre-compiled ingress and egress rules for a NIC.

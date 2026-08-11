@@ -50,6 +50,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &compiledv1alpha1.CompiledNICStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("CompiledPeerImport"):
 		return &compiledv1alpha1.CompiledPeerImportApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("CompiledQoS"):
+		return &compiledv1alpha1.CompiledQoSApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("CompiledVM"):
 		return &compiledv1alpha1.CompiledVMApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("CompiledVMInterface"):

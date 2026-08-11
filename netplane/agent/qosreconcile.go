@@ -5,98 +5,81 @@ import (
 	"errors"
 	"fmt"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 )
 
-// lanes flattens an InterfaceQoS into the three scalar Mbit/s caps the dataplane takes.
-func lanes(q netv1.InterfaceQoS) (egress, public, ingress uint32) {
-	if q.Egress != nil {
-		egress = q.Egress.RateMbps
-		public = q.Egress.PublicMbps
-	}
-	if q.Ingress != nil {
-		ingress = q.Ingress.RateMbps
-	}
-	return
+// compiledQoSCaps holds the three scalar Mbit/s caps the dataplane takes.
+// 0 in any field means unlimited.
+type compiledQoSCaps struct {
+	EgressMbps  uint32
+	PublicMbps  uint32
+	IngressMbps uint32
 }
 
-// qosEqual compares two InterfaceQoS by VALUE on the lanes we program (InterfaceQoS has pointer
-// fields, so `==` would compare pointers and defeat the idempotent-skip).
-// BurstKB is intentionally excluded: the adapter does not forward it and the dataplane ignores it
-// in v1; revisit when burst activation is implemented.
-func qosEqual(a, b netv1.InterfaceQoS) bool {
-	ae, ap, ai := lanes(a)
-	be, bp, bi := lanes(b)
-	return ae == be && ap == bp && ai == bi
+// qosCapsFromCompiled extracts the three caps from a *CompiledQoS (nil → all zeros/unlimited).
+func qosCapsFromCompiled(q *compiledv1.CompiledQoS) compiledQoSCaps {
+	if q == nil {
+		return compiledQoSCaps{}
+	}
+	return compiledQoSCaps{
+		EgressMbps:  q.EgressMbps,
+		PublicMbps:  q.PublicMbps,
+		IngressMbps: q.IngressMbps,
+	}
 }
 
-// ReconcileQoS programs the QoS lanes (ConfigureQoS) for every NetworkInterface that is locally
+// ReconcileQoS programs the QoS lanes (ConfigureQoS) for every CompiledNIC that is locally
 // attached (its (VNI, overlayIP) appears in the dataplane's ListInterfaces) and whose spec.qos is
 // set. Diffs against r.appliedQoS: unchanged NICs are skipped, cleared/removed NICs are set back
-// to unlimited (0/0/0), new/changed caps are pushed. interface_id = NIC name.
-// Locality is determined by (effective VNI, overlayIP) — not nodeName — so QoS follows the interface
-// wherever the CNI attaches it, consistent with the rest of the agent's self-locating policy. The
-// effective VNI is resolved the way the compiler does (status.vni else the VPC's status.vni), since
-// nic.Status.VNI is never populated in production.
+// to unlimited (0/0/0), new/changed caps are pushed.
+//
+// The interface_id is resolved from the local dataplane (interfaceIDByKey), consistent with
+// fwreconcile. Locality is determined by (VNI, overlayIP) — not nodeName — so QoS follows the
+// interface wherever the CNI attaches it. The QoS caps come directly from CompiledNIC.spec.qos,
+// which the compiler folds from NetworkInterface.spec.qos, so the agent never reads raw
+// NetworkInterfaces or VPCs.
 func (r *Reconciler) ReconcileQoS(ctx context.Context) error {
 	if r.dp == nil {
 		return nil
 	}
-	// Build the (VNI, IP) set of locally-attached interfaces to decide which NICs to program.
-	_, localSet, err := r.underlayByKey(ctx)
+	// ifaceByKey: (VNI, overlayIP) -> real interface_id the CNI attached with.
+	// localSet: set of all (VNI, overlayIP) pairs attached on this node.
+	ifaceByKey, localSet, err := r.interfaceIDByKey(ctx)
 	if err != nil {
 		return fmt.Errorf("list local interfaces: %w", err)
 	}
-	var nics netv1.NetworkInterfaceList
-	if err := r.client.List(ctx, &nics); err != nil {
-		return fmt.Errorf("list networkinterfaces: %w", err)
+	var cnics compiledv1.CompiledNICList
+	if err := r.client.List(ctx, &cnics); err != nil {
+		return fmt.Errorf("list compilednics: %w", err)
 	}
-	// Resolve each NIC's EFFECTIVE VNI the way the compiler does (compilednic.go): nic.Status.VNI if
-	// non-zero, else the referenced VPC's status.vni. nic.Status.VNI is NEVER populated in production
-	// (no controller writes it), so keying locality on it alone would silently never program QoS.
-	// Index VPC VNIs by "namespace/name" (VPCs and NICs share a namespace).
-	var vpcs netv1.VPCList
-	if err := r.client.List(ctx, &vpcs); err != nil {
-		return fmt.Errorf("list vpcs: %w", err)
-	}
-	vniByVPC := map[string]int32{}
-	for i := range vpcs.Items {
-		v := &vpcs.Items[i]
-		vniByVPC[v.Namespace+"/"+v.Name] = v.Status.VNI
-	}
-	desired := map[string]netv1.InterfaceQoS{}
-	for i := range nics.Items {
-		nic := &nics.Items[i]
-		if nic.Spec.QoS == nil {
+	// desired: interfaceID -> caps to program (only locally-attached NICs with QoS set).
+	desired := map[string]compiledQoSCaps{}
+	for i := range cnics.Items {
+		c := &cnics.Items[i]
+		if c.Spec.QoS == nil {
 			continue
 		}
-		// Effective VNI: status.vni, else the VPC's status.vni (compilednic.go vpcVNI precedence,
-		// same namespace as the NIC). If still 0 the VNI is unallocated → can't place it, skip.
-		effVNI := nic.Status.VNI
-		if effVNI == 0 {
-			effVNI = vniByVPC[nic.Namespace+"/"+nic.Spec.VPCRef.Name]
-		}
-		if effVNI == 0 {
+		if !localNIC(c, localSet) {
 			continue
 		}
-		// A NIC is local iff any of its overlay IPs is attached here under its effective VNI.
-		vni := uint32(effVNI)
-		local := false
-		for _, ip := range nic.Spec.IPs {
-			if _, ok := localSet[ipKey{vni, ip}]; ok {
-				local = true
+		// Resolve the dataplane interface_id from the (VNI, overlayIP) key — same as fwreconcile.
+		iface := ""
+		for _, ip := range c.Spec.OverlayIPs {
+			if id, ok := ifaceByKey[ipKey{uint32(c.Spec.VNI), ip}]; ok {
+				iface = id
 				break
 			}
 		}
-		if !local {
-			continue
+		if iface == "" {
+			continue // not attached locally yet
 		}
-		desired[nic.Name] = *nic.Spec.QoS
+		desired[iface] = qosCapsFromCompiled(c.Spec.QoS)
 	}
 	if r.appliedQoS == nil {
-		r.appliedQoS = map[string]netv1.InterfaceQoS{}
+		r.appliedQoS = map[string]compiledQoSCaps{}
 	}
 	var errs []error
+	// Clear QoS for interfaces that were previously programmed but are no longer desired.
 	for iface := range r.appliedQoS {
 		if _, ok := desired[iface]; ok {
 			continue
@@ -107,16 +90,16 @@ func (r *Reconciler) ReconcileQoS(ctx context.Context) error {
 		}
 		delete(r.appliedQoS, iface)
 	}
-	for iface, q := range desired {
-		if cur, ok := r.appliedQoS[iface]; ok && qosEqual(cur, q) {
-			continue
+	// Push new or changed caps.
+	for iface, caps := range desired {
+		if cur, ok := r.appliedQoS[iface]; ok && cur == caps {
+			continue // identical: skip (struct comparison on three uint32s is exact)
 		}
-		eg, pub, ing := lanes(q)
-		if err := r.dp.ConfigureQoS(ctx, iface, eg, pub, ing); err != nil {
+		if err := r.dp.ConfigureQoS(ctx, iface, caps.EgressMbps, caps.PublicMbps, caps.IngressMbps); err != nil {
 			errs = append(errs, fmt.Errorf("ConfigureQoS %s: %w", iface, err))
 			continue
 		}
-		r.appliedQoS[iface] = q
+		r.appliedQoS[iface] = caps
 	}
 	return errors.Join(errs...)
 }
