@@ -222,6 +222,23 @@ An un-drained `/64` stays fenced. This is the recovery-side fail-safe: storage
 is only reopened to a returned node once that node has proven it holds no stale
 VM instances that could race the ones now running on the new pool.
 
+## Why the datapath re-programs itself
+
+Failover only ever changes a VM's **pool** (`Spec.ClusterName`); it never has to
+name a node. The datapath follows automatically because the netplane agent is
+**self-locating**: it programs a `CompiledNIC`'s firewall / NAT / LB / QoS **iff
+that NIC's interface is locally attached**, matched by the unique
+`(VNI, overlay IP)` key the local dataplane reports — not by any declared node.
+
+So when the rebound VM boots on a surviving pool and its overlay interface
+attaches there, the agent on the new node recognises the `(VNI, overlay IP)` pair
+and programs the policy; the old pool's agents, which no longer see that
+interface, stop. Policy follows the interface, so a cross-pool move needs **no**
+node write-back and no per-node reconfiguration — the same property that lets the
+hub schedule workloads to a *pool* and leave the *node* to kube-scheduler /
+KubeVirt. See
+[CNI integration → Self-locating agent](./cni-integration.md#self-locating-agent).
+
 ## How it ties to the rest of the system
 
 - **Storage / CSI.** The storage fence *is* the CSI integration doing its most

@@ -77,6 +77,7 @@ nav:
       - Getting started: guides/getting-started.md
       - Deploying with Helm: guides/deploy-helm.md
       - The local fabric: guides/local-fabric.md
+      - Using the lab: guides/using-the-lab.md
       - Operations runbook: guides/runbook.md
       - Development: guides/development.md
   - Reference:

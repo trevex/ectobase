@@ -58,8 +58,14 @@ against the aggregated apiserver:
   phase from its broker's lease freshness: a fresh renew → `Ready`, a stale renew
   → `Unknown`, no lease → `Pending`. It requeues on a staleness interval so an
   expired lease is noticed without an event.
-- **Scheduling** (`hub/pkg/scheduler`) binds workloads (e.g. VirtualMachines) to a
-  pool.
+- **Scheduling** (`hub/pkg/scheduler`) binds workloads to a pool. **Both
+  `VirtualMachine` and `Container`** are pool-scheduled: a workload authored with
+  no `spec.clusterName` is bound to a `Ready` pool by resource fit and spread
+  (shared pool capacity is counted across VMs and Containers alike). The hub picks
+  only the *pool*; the *node* within it is chosen later on the pool cluster by
+  kube-scheduler (for Pods) or KubeVirt (for VMs) — `spec.nodeName` remains an
+  optional pin, not a requirement. An explicit `spec.clusterName` hard-binds the
+  workload and is left untouched.
 - **Failover / fencing** (`hub/pkg/failover`, `hub/pkg/fence`) reacts when a pool
   goes `Unknown` for long enough by fencing the pool's storage (via the csi-addons
   `NetworkFence` actuator) and its network (via the reflector's `RouteBusAdmin`

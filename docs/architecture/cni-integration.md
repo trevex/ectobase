@@ -115,6 +115,36 @@ sequenceDiagram
     Multus-->>Kubelet: Result
 ```
 
+## Self-locating agent
+
+The CNI attaches an interface; the **netplane agent** on the same node then
+programs that interface's central policy. It does so **self-locatingly**: the
+agent applies a `CompiledNIC`'s firewall / NAT / LB / peer-import / QoS **iff the
+NIC's interface is attached on this node**, and it decides "on this node" by
+matching the NIC's `(VNI, overlay IP)` against the interfaces the local dataplane
+reports (`DataplaneNode.ListInterfaces`) — never by a declared `nodeName`. The
+`CompiledNIC` carries no node field.
+
+The join key is `(VNI, overlay IP)`, not the overlay IP alone, because overlay IPs
+can collide across VPCs — two VPCs may both use `10.0.0.1`. The VNI disambiguates,
+so the pair is globally unique. The node-local **underlay** nexthop is then taken
+from the matched local interface (underlay allocation is node-local dataplane
+state, not central config).
+
+The consequence is that **policy follows the interface**. Wherever the CNI lands a
+NIC — on an auto-scheduled node, or after a reschedule / live migration — the
+agent on *that* node programs its policy, and no other node's agent does. Nothing
+has to write a chosen node back into the control plane for the datapath to be
+programmed correctly. This is the property that makes
+[rescheduling & failover](./rescheduling-and-failover.md) and hub pool-scheduling
+compose cleanly.
+
+!!! success "Status: Implemented"
+    The self-locating join lives in `netplane/agent/reconcile.go` (`localNIC`,
+    the `(VNI, overlay IP)` `ipKey`) and is applied across `fwreconcile.go`,
+    `natreconcile.go`, `lbreconcile.go`, `importreconcile.go`, and
+    `qosreconcile.go`.
+
 ## Where this lives
 
 | Concern | Location |

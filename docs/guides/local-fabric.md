@@ -86,11 +86,13 @@ the up-signal the lab waits on.
 
 ## Kubeconfigs / access
 
-Per-cluster kubeconfigs (root-owned) land at `test/lab/build/<name>/<cluster>.kubeconfig`:
+Per-cluster kubeconfigs land at `test/lab/build/<name>/<cluster>.kubeconfig`. Even
+though the lab brings the fabric up under `sudo`, `lab up` chowns each kubeconfig
+back to the invoking user, so `kubectl --kubeconfig …` works **without sudo**:
 
 ```sh
-sudo -n kubectl --kubeconfig test/lab/build/ectobase/hub.kubeconfig get nodes
-sudo -n kubectl --kubeconfig test/lab/build/ectobase/k02.kubeconfig get clusterpools.platform.ectobase.dev
+kubectl --kubeconfig test/lab/build/ectobase/hub.kubeconfig get nodes
+kubectl --kubeconfig test/lab/build/ectobase/k02.kubeconfig get clusterpools.platform.ectobase.dev
 ```
 
 ## Fabric-only egress
