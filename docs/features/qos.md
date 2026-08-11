@@ -132,10 +132,18 @@ type RateLimit struct {
 ```
 
 `EgressQoS.RateMbps` → the EDT total lane, `EgressQoS.PublicMbps` → the public police lane,
-`Ingress.RateMbps` → the ingress police lane. The agent's QoS reconciler diffs the desired QoS
-against what it has applied and idempotently clears a lane to unlimited when the spec drops it or the
-NIC is deleted. The uplink loader ensures an `mq` root + `fq` leaves (or a single `fq` on a
-one-queue NIC) so the EDT stamps actually pace.
+`Ingress.RateMbps` → the ingress police lane.
+
+Like the firewall, NAT, and load-balancer policy, QoS rides the **compiled** path rather than the
+raw `NetworkInterface`: the compiler flattens `NetworkInterfaceSpec.QoS` into
+`CompiledNIC.spec.qos` (a `CompiledQoS{egressMbps, publicMbps, ingressMbps}` — burst is not
+programmed), the broker syncs the `CompiledNIC` to the workload's pool, and the node agent programs
+QoS from the `CompiledNIC` — selecting it, like all the agent's policy, by the NIC's interface being
+**locally attached** (matched by the unique `(VNI, overlay IP)` key), not by a declared node. So QoS
+follows the workload across pools and reschedules, and the agent reads no raw `NetworkInterface` at
+all. The agent's QoS reconciler diffs the desired caps against what it has applied and idempotently
+clears a lane to unlimited when the spec drops it or the NIC is deleted. The uplink loader ensures an
+`mq` root + `fq` leaves (or a single `fq` on a one-queue NIC) so the EDT stamps actually pace.
 
 ## Validating shaping
 
