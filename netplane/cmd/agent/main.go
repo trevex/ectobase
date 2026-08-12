@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"log"
+	"math/rand/v2"
 	"os/signal"
 	"syscall"
 	"time"
@@ -103,15 +104,24 @@ func main() {
 	// prune-on-EndOfRIB can remove routes that left the RIB while we were disconnected. On disconnect,
 	// retry (the reflector fast-withdrew our announcements; the next Run re-announces from scratch).
 	bus := agent.NewBus(*nodeID, *underlay, dp, *edgeLoopback != "")
+	const maxBackoff = 30 * time.Second
+	backoff := time.Second
 	for ctx.Err() == nil {
+		start := time.Now()
 		if err := bus.Run(ctx, rb, reconcile); err != nil {
 			log.Printf("bus session ended: %v; reconnecting", err)
 		}
-		// Back off before reconnecting, but wake immediately on shutdown.
+		if time.Since(start) > maxBackoff {
+			backoff = time.Second // long-lived session; reset the backoff
+		}
+		// Back off before reconnecting (capped exponential + jitter so agents don't
+		// stampede the reflector in lockstep on recovery), but wake immediately on shutdown.
+		wait := backoff + time.Duration(rand.Int64N(int64(backoff)))
 		select {
 		case <-ctx.Done():
-		case <-time.After(time.Second):
+		case <-time.After(wait):
 		}
+		backoff = min(2*backoff, maxBackoff)
 	}
 	log.Print("shutdown signal received; agent exiting")
 }

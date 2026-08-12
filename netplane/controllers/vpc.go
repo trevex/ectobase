@@ -6,6 +6,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -156,12 +157,29 @@ func outranks(a, b *netv1.VPC) bool {
 }
 
 // lowestFreeVNI returns the smallest VNI in [VNIAllocStart, VNIAllocEnd] absent
-// from used, or ok=false if the range is exhausted.
+// from used, or ok=false if the range is exhausted. It sorts the used set and
+// walks for the first gap (O(n log n) in the number of allocated VNIs) rather
+// than probing the whole 16M range, which would be a serialized cliff once the
+// low end fills up.
 func lowestFreeVNI(used map[int32]struct{}) (int32, bool) {
-	for v := VNIAllocStart; v <= VNIAllocEnd; v++ {
-		if _, taken := used[v]; !taken {
-			return v, true
+	taken := make([]int32, 0, len(used))
+	for v := range used {
+		if v >= VNIAllocStart && v <= VNIAllocEnd {
+			taken = append(taken, v)
 		}
+	}
+	sort.Slice(taken, func(i, j int) bool { return taken[i] < taken[j] })
+	next := int32(VNIAllocStart)
+	for _, v := range taken {
+		if v > next {
+			break // gap at next
+		}
+		if v == next {
+			next++
+		}
+	}
+	if next <= VNIAllocEnd {
+		return next, true
 	}
 	return 0, false
 }

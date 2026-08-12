@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
@@ -111,6 +112,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&computev1.VirtualMachine{}).
 		Watches(&platformv1.ClusterPool{}, handler.EnqueueRequestsFromMapFunc(r.unboundVMs)).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 1}). // serialize binds; see allocatedByPool
 		Complete(r)
 }
 

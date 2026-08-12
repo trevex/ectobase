@@ -13,9 +13,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
-	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 )
 
 // Broker is the per-cluster set-reconcile engine: it makes the downstream compiled
@@ -26,7 +26,7 @@ import (
 // labels are mirrored: the `workload` label is load-bearing downstream (the
 // vm-materializer joins a VM to its volume attachments by it).
 type Broker struct {
-	Hub     client.Client
+	Hub         client.Client
 	Downstream  client.Client
 	ClusterName string
 }
@@ -295,7 +295,10 @@ func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[
 	// Per-VM placement: stamp each central VirtualMachine we can resolve. Failures are
 	// swallowed (the pool status — the fence-gating signal — already landed above).
 	for vmKey, nodeName := range vmNode {
-		ns, name := splitVMKey(vmKey)
+		ns, name, ok := splitVMKey(vmKey)
+		if !ok {
+			continue // malformed key without a namespace — don't guess and mis-target.
+		}
 		var vm computev1.VirtualMachine
 		if err := b.Hub.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &vm); err != nil {
 			continue // VM may not be a hub-tracked object; skip.
@@ -311,11 +314,12 @@ func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[
 	return nil
 }
 
-// splitVMKey splits a "namespace/name" vmNode key. A key with no slash is treated as
-// a bare name in the "default" namespace.
-func splitVMKey(k string) (namespace, name string) {
+// splitVMKey splits a "namespace/name" vmNode key. ok is false for a key without a
+// slash: guessing a namespace risks stamping placement onto a same-named VM in the
+// wrong namespace, which is worse than skipping.
+func splitVMKey(k string) (namespace, name string, ok bool) {
 	if i := strings.IndexByte(k, '/'); i >= 0 {
-		return k[:i], k[i+1:]
+		return k[:i], k[i+1:], true
 	}
-	return "default", k
+	return "", "", false
 }

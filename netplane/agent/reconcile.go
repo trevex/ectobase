@@ -7,8 +7,8 @@ import (
 	"net"
 	"sort"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/clientcmd"
@@ -151,7 +151,11 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 			}
 			if r.dp != nil {
 				if err := r.dp.AddNatSource(ctx, k.vni, src.SourceIP, src.NATIP, uint32(src.PortMin), uint32(src.PortMax)); err != nil {
+					// Don't advertise a NAT block the local dataplane failed to
+					// program: peers would learn a return route to a node with no
+					// matching SNAT state and misroute the reply. Retried next tick.
 					log.Printf("AddNatSource %s->%s vni=%d: %v", src.SourceIP, src.NATIP, k.vni, err)
+					continue
 				}
 			}
 			announceNat = append(announceNat, NatBlock{

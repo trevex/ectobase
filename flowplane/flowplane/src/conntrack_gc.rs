@@ -24,16 +24,16 @@ pub async fn run(ct: Arc<Mutex<Conntrack>>, interval: Duration) {
     loop {
         tokio::time::sleep(interval).await;
         let now = ktime_now_ns();
-        let stale: Vec<_> = {
-            let ct_guard = ct.lock();
-            ct_guard
-                .entries()
-                .into_iter()
-                .filter(|(_, e)| ct_is_expired(e, now))
-                .map(|(k, _)| k)
-                .collect()
-        };
+        // Scan and evict under a single lock: dropping and re-acquiring between the two
+        // would let the datapath refresh an entry in the gap, which we'd then wrongly
+        // evict from the stale snapshot and cause a spurious connection reset.
         let mut ct_guard = ct.lock();
+        let stale: Vec<_> = ct_guard
+            .entries()
+            .into_iter()
+            .filter(|(_, e)| ct_is_expired(e, now))
+            .map(|(k, _)| k)
+            .collect();
         for k in stale {
             let _ = ct_guard.remove(&k);
         }
