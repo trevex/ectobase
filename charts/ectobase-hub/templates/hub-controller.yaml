@@ -62,6 +62,11 @@ spec:
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           args:
             - "-reflector-admin={{ .Values.reflectorAdmin }}"
+            {{- if .Values.routebus.mtls.enabled }}
+            - "-reflector-tls-ca=/etc/routebus-tls/ca.crt"
+            - "-reflector-tls-cert=/etc/routebus-tls/tls.crt"
+            - "-reflector-tls-key=/etc/routebus-tls/tls.key"
+            {{- end }}
             - "-csi-driver=rbd.csi.ceph.com"
             # The ceph fsid (clusterID) is per-deploy (the lab ceph deploy emits it), so it cannot be
             # baked in; the tier2 live deploy patches this arg with the real fsid. Empty here =>
@@ -78,3 +83,13 @@ spec:
             # falls back to a plain LIST+WATCH.
             - name: KUBE_FEATURE_WatchListClient
               value: "false"
+          {{- if .Values.routebus.mtls.enabled }}
+          volumeMounts:
+            - name: routebus-tls
+              mountPath: /etc/routebus-tls
+              readOnly: true
+      volumes:
+        - name: routebus-tls
+          secret:
+            secretName: hub-controller-routebus-tls
+          {{- end }}

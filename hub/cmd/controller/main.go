@@ -33,6 +33,7 @@ import (
 	"github.com/trevex/ectobase/hub/pkg/fence"
 	"github.com/trevex/ectobase/hub/pkg/scheduler"
 	routebusv1 "github.com/trevex/ectobase/netplane/gen/routebusv1"
+	"github.com/trevex/ectobase/netplane/routebus"
 )
 
 func main() {
@@ -43,6 +44,9 @@ func main() {
 	os.Setenv("KUBE_FEATURE_WatchListClient", "false") //nolint:errcheck
 
 	reflectorAdmin := flag.String("reflector-admin", "", "reflector RouteBusAdmin gRPC address (network fence); empty => DenyFencer")
+	reflectorTLSCA := flag.String("reflector-tls-ca", "", "CA bundle to verify the reflector (enables mTLS on the admin dial)")
+	reflectorTLSCert := flag.String("reflector-tls-cert", "", "hub-controller client cert presented to the reflector admin API")
+	reflectorTLSKey := flag.String("reflector-tls-key", "", "hub-controller client key")
 	csiDriver := flag.String("csi-driver", "rbd.csi.ceph.com", "CSI driver for NetworkFence")
 	csiClusterID := flag.String("csi-cluster-id", "", "Ceph clusterID (fsid) written to NetworkFence spec.parameters.clusterID; required against a real ceph-csi driver")
 	csiSecretName := flag.String("csi-secret-name", "rook-csi-rbd-provisioner", "NetworkFence provisioner secret name")
@@ -107,7 +111,15 @@ func main() {
 	var storageF failover.PrefixFencer = fence.NewStorageFencer(mgr.GetClient(), *csiDriver, *csiClusterID, client.ObjectKey{Name: *csiSecretName, Namespace: *csiSecretNS})
 	var networkF failover.PrefixFencer = failover.DenyFencer{}
 	if *reflectorAdmin != "" {
-		conn, derr := grpc.NewClient(*reflectorAdmin, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		creds := insecure.NewCredentials()
+		if *reflectorTLSCA != "" || *reflectorTLSCert != "" || *reflectorTLSKey != "" {
+			tc, terr := routebus.ClientTLS(*reflectorTLSCA, *reflectorTLSCert, *reflectorTLSKey)
+			if terr != nil {
+				log.Fatalf("reflector admin tls: %v", terr)
+			}
+			creds = tc
+		}
+		conn, derr := grpc.NewClient(*reflectorAdmin, grpc.WithTransportCredentials(creds))
 		if derr != nil {
 			log.Fatalf("dial reflector admin: %v", derr)
 		}

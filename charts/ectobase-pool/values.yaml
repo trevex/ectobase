@@ -22,6 +22,16 @@ uplink: eth1
 underlayWithin: ""
 # Fabric reflector address the agent dials.
 reflectorAddress: "[fd00:db8:0:1::1]:1338"
+
+# routebus configures the agent's route-bus transport to the reflector.
+routebus:
+  mtls:
+    # enabled turns on mutual TLS to the reflector. REQUIRES cert-manager AND the hub
+    # chart installed first (it owns the shared CA ClusterIssuer this agent cert is
+    # issued from). MUST match the hub chart's routebus.mtls.enabled.
+    enabled: false
+    # clusterIssuer is the shared CA ClusterIssuer name; MUST match the hub chart.
+    clusterIssuer: ectobase-routebus-ca
 # Control-plane API server the agent dials over the fabric (kubeconfig server URL).
 apiserverAddress: "https://[fd00:db8:0:1::1]:6443"
 

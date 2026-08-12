@@ -8,5 +8,5 @@ tests:
     asserts:
       - contains:
           path: spec.template.spec.containers[0].args
-          content: "-reflector-admin=[fd00:db8:0:1::1]:1338"
+          content: "-reflector-admin=[fd00:db8:0:1::1]:1339"
         documentIndex: 3
