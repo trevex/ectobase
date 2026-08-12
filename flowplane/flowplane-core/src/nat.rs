@@ -21,10 +21,23 @@ use crate::pkt::Pkt;
 /// Max reverse-key probes when picking a source port. Mirrors the eBPF `nat::PROBE_LIMIT`.
 pub const PROBE_LIMIT: u16 = 64;
 
+/// Outcome of an egress SNAT attempt.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SnatOutcome {
+    /// SNAT was not applicable (not external / no NAT binding / non-L4) or it completed
+    /// successfully — the caller forwards the packet as usual.
+    Continue,
+    /// External SNAT was required but the `nat_ip` port space is exhausted. The caller
+    /// MUST drop: forwarding would leak the guest source IP and, worse, reusing an
+    /// already-allocated port would mis-demux that other flow's return traffic.
+    Exhausted,
+}
+
 /// Egress network SNAT. If `is_external` and the guest `(vni, src)` has a NAT config, allocate a
 /// source port (reusing the forward-conntrack port if the flow is already tracked), rewrite the
 /// inner src IP -> `nat_ip` and the L4 src port / ICMP id -> `nat_port` (+checksums), and pin the
-/// forward + reverse conntrack entries. Returns `true` if the packet was NAT'd.
+/// forward + reverse conntrack entries. Returns [`SnatOutcome::Exhausted`] (caller drops) if no
+/// free port could be allocated; otherwise [`SnatOutcome::Continue`].
 ///
 /// `ip_off` is the offset of the inner IPv4 header (e.g. `ETH_LEN` for a guest Ethernet frame).
 /// `now` is the monotonic time (ns) written into the conntrack `last_seen` field (eBPF: `now()`,
@@ -37,28 +50,28 @@ pub fn snat_egress<P: Pkt, M: Maps>(
     vni: u32,
     is_external: bool,
     now: u64,
-) -> bool {
+) -> SnatOutcome {
     if !is_external {
-        return false;
+        return SnatOutcome::Continue;
     }
     // Faithful to the eBPF bound `data + ip_off + 20 > data_end`.
     let hdr = match pkt.read_array::<20>(ip_off) {
         Some(h) => h,
-        None => return false,
+        None => return SnatOutcome::Continue,
     };
     let src: [u8; 4] = [hdr[12], hdr[13], hdr[14], hdr[15]];
     let dst: [u8; 4] = [hdr[16], hdr[17], hdr[18], hdr[19]];
     let nat = match maps.nat_get(&NatKey { vni, ipv4: src }) {
         Some(v) => v,
-        None => return false,
+        None => return SnatOutcome::Continue,
     };
     let range = nat.port_max.wrapping_sub(nat.port_min);
     if range == 0 {
-        return false;
+        return SnatOutcome::Continue;
     }
     let (proto, sport, dport) = match l4_ports(pkt, ip_off) {
         Some(v) => v,
-        None => return false,
+        None => return SnatOutcome::Continue,
     };
 
     // Forward conntrack: reuse the allocated port for an already-tracked flow.
@@ -94,6 +107,7 @@ pub fn snat_egress<P: Pkt, M: Maps>(
             // Allocate: hash the flow to a start slot, linear-probe for a free reverse key.
             let start = (hash5(&src, &dst, sport, dport, proto) % range as u32) as u16;
             let mut chosen = nat.port_min.wrapping_add(start);
+            let mut allocated = false;
             let mut i: u16 = 0;
             while i < PROBE_LIMIT {
                 let cand = nat.port_min.wrapping_add((start.wrapping_add(i)) % range);
@@ -112,6 +126,7 @@ pub fn snat_egress<P: Pkt, M: Maps>(
                 };
                 if maps.conntrack_get(&rev_key).is_none() {
                     chosen = cand;
+                    allocated = true;
                     maps.conntrack_insert(
                         rev_key,
                         CtEntry {
@@ -128,6 +143,13 @@ pub fn snat_egress<P: Pkt, M: Maps>(
                     break;
                 }
                 i += 1;
+            }
+            // Port space exhausted: every probed reverse key is live. `chosen` still holds the
+            // initial hash slot, whose reverse entry belongs to ANOTHER flow — emitting it would
+            // mis-demux that flow's return traffic. Drop instead of poisoning the table (no fwd
+            // entry inserted, no packet rewrite).
+            if !allocated {
+                return SnatOutcome::Exhausted;
             }
             maps.conntrack_insert(
                 fwd_key,
@@ -152,7 +174,7 @@ pub fn snat_egress<P: Pkt, M: Maps>(
     let ihl = (hdr[0] & 0x0f) as usize * 4;
     // src IP at ip_off + 12.
     if !pkt.write_array(ip_off + 12, &nat.nat_ipv4) {
-        return false;
+        return SnatOutcome::Continue;
     }
     // IP header checksum at ip_off + 10.
     if let Some(ipc) = pkt.read_u16_be(ip_off + 10) {
@@ -205,5 +227,5 @@ pub fn snat_egress<P: Pkt, M: Maps>(
             pkt.write_array(l4, &h);
         }
     }
-    true
+    SnatOutcome::Continue
 }

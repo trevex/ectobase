@@ -884,3 +884,66 @@ fn uplink_rx_dispatches_nat_return_past_deny_by_default_firewall() {
          path, not the base path (which would leave dst == NAT_IP)"
     );
 }
+
+// ─── (d) Port exhaustion: allocation failure DROPS instead of emitting a colliding port ──────────
+
+/// When every reverse-key slot in the NAT range is occupied, `snat_egress` must NOT reuse an
+/// already-allocated port (whose reverse entry belongs to another flow) — it drops the packet.
+/// Regression: previously the probe loop fell through with `chosen` still at the initial hash slot
+/// and emitted a colliding mapping + a poisoned forward entry, corrupting return-path demux.
+#[test]
+fn snat_port_exhaustion_drops_instead_of_colliding() {
+    let mut node = SimNode::new();
+    configure_local(&mut node);
+    allow_egress(&mut node, SRC_IFINDEX_A);
+    add_external_route(&mut node, EXT_IP);
+    // A range of exactly one port so all PROBE_LIMIT probes land on the same candidate.
+    add_nat(
+        &mut node.maps,
+        GUEST_A_IP,
+        NAT_IP_A,
+        PORT_MIN_A,
+        PORT_MIN_A + 1,
+    );
+    node.src_ifindex = SRC_IFINDEX_A;
+
+    // Occupy the sole reverse key (vni, 0, nat_ip, 0, PORT_MIN_A) with ANOTHER flow's mapping so
+    // allocation cannot succeed.
+    let occupied_rev = CtKey {
+        vni: VNI,
+        src_ip: [0; 4],
+        dst_ip: NAT_IP_A,
+        src_port: 0,
+        dst_port: PORT_MIN_A,
+        proto: 6, // TCP
+        _pad: [0; 3],
+    };
+    node.maps.conntrack.insert(
+        occupied_rev,
+        CtEntry {
+            last_seen: 0,
+            xlate_ip: [9, 9, 9, 9], // a different guest's flow owns this port
+            xlate_port: 4321,
+            flags: CT_REWRITE_DST | CT_F_SRC_NAT,
+            tcp_state: 0,
+            fwall_action: 0,
+            gen_bytes: [0; 4],
+            _pad: [0; 3],
+        },
+    );
+    let before = node.maps.conntrack.len();
+
+    let frame = guest_tcp_frame(GUEST_A_IP, 12345, 80);
+    let out = node.guest_tx(&frame, &port_meta(GUEST_A_IP));
+
+    assert_eq!(
+        out.action,
+        Action::Drop,
+        "exhausted SNAT must drop, not forward a packet on a colliding port"
+    );
+    assert_eq!(
+        node.maps.conntrack.len(),
+        before,
+        "no forward CT entry may be inserted on exhaustion (that would poison the table)"
+    );
+}
