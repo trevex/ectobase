@@ -39,11 +39,37 @@ spec:
           image: {{ .Values.images.netplane }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           command: ["reflector"]
-          args: ["--listen=:1338"]
+          args:
+            - "--listen=:1338"
+            # The RouteBusAdmin (fence) API is served on a SEPARATE socket from the
+            # agent-facing session port, so an agent holding a valid session cert
+            # cannot drive fencing. Only the hub-controller reaches :1339.
+            - "--admin-listen=:1339"
+            {{- if .Values.routebus.mtls.enabled }}
+            - "--admin-client-cn=hub-controller"
+            - "--tls-ca=/etc/routebus-tls/ca.crt"
+            - "--tls-cert=/etc/routebus-tls/tls.crt"
+            - "--tls-key=/etc/routebus-tls/tls.key"
+            {{- end }}
           ports:
             - name: routebus
               containerPort: 1338
               protocol: TCP
+            - name: routebus-admin
+              containerPort: 1339
+              protocol: TCP
+          {{- if .Values.routebus.mtls.enabled }}
+          volumeMounts:
+            - name: routebus-tls
+              mountPath: /etc/routebus-tls
+              readOnly: true
+          {{- end }}
+      {{- if .Values.routebus.mtls.enabled }}
+      volumes:
+        - name: routebus-tls
+          secret:
+            secretName: reflector-routebus-tls
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -61,4 +87,8 @@ spec:
     - name: routebus
       port: 1338
       targetPort: 1338
+      protocol: TCP
+    - name: routebus-admin
+      port: 1339
+      targetPort: 1339
       protocol: TCP

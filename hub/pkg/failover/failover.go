@@ -9,6 +9,7 @@ package failover
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -34,8 +35,12 @@ type PrefixFencer interface {
 // DenyFencer refuses to confirm any fence; wiring it means Tier-2 always fails safe.
 type DenyFencer struct{}
 
-func (DenyFencer) Fence(context.Context, string) error   { return fmt.Errorf("no fence actuator configured") }
-func (DenyFencer) Release(context.Context, string) error { return fmt.Errorf("no fence actuator configured") }
+func (DenyFencer) Fence(context.Context, string) error {
+	return fmt.Errorf("no fence actuator configured")
+}
+func (DenyFencer) Release(context.Context, string) error {
+	return fmt.Errorf("no fence actuator configured")
+}
 
 // Reconciler runs Tier-2 fence-gated failover for VMs bound to a lost pool.
 type Reconciler struct {
@@ -109,17 +114,23 @@ func (r *Reconciler) rebindPoolVMs(ctx context.Context, lostPool string) error {
 		}
 	}
 	placements := scheduler.ScheduleBatch(batch, candidates)
+	// Process the whole batch even if individual VMs fail: a mid-batch abort would
+	// leave later VMs stranded on the lost pool. Collect errors and return them
+	// aggregated so controller-runtime requeues and retries just the failures, while
+	// the VMs that succeeded keep their progress.
+	var errs []error
 	for i, vm := range batch {
 		pl := placements[i]
 		if !pl.OK {
 			if err := r.block(ctx, vm, "no pool to fail over to: "+pl.Reason); err != nil {
-				return err
+				errs = append(errs, fmt.Errorf("block vm %s: %w", vm.Name, err))
 			}
 			continue
 		}
 		vm.Spec.ClusterName = pl.Pool
 		if err := r.Client.Update(ctx, vm); err != nil {
-			return fmt.Errorf("rebind vm %s: %w", vm.Name, err)
+			errs = append(errs, fmt.Errorf("rebind vm %s: %w", vm.Name, err))
+			continue // don't stamp "failed over" conditions on a rebind that didn't land
 		}
 		msg := "failed over to " + pl.Pool
 		if pl.Violated {
@@ -127,11 +138,13 @@ func (r *Reconciler) rebindPoolVMs(ctx context.Context, lostPool string) error {
 		}
 		meta.SetStatusCondition(&vm.Status.Conditions, metav1.Condition{Type: "FailoverBlocked", Status: metav1.ConditionFalse, Reason: "FailedOver", Message: msg, ObservedGeneration: vm.Generation})
 		meta.SetStatusCondition(&vm.Status.Conditions, metav1.Condition{Type: "Scheduled", Status: metav1.ConditionTrue, Reason: "FailedOver", Message: "bound to " + pl.Pool, ObservedGeneration: vm.Generation})
+		// vm carries the fresh resourceVersion written back by the spec Update above,
+		// so this status write targets the current object rather than a stale one.
 		if err := r.Client.Status().Update(ctx, vm); err != nil {
-			return fmt.Errorf("status vm %s: %w", vm.Name, err)
+			errs = append(errs, fmt.Errorf("status vm %s: %w", vm.Name, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // blockPoolVMs marks every VM on lostPool FailoverBlocked (used when the pool-wide

@@ -42,6 +42,11 @@ spec:
             - "--dataplane=127.0.0.1:1337"
             # Reach the API over the fabric (the mgmt net has no inter-node path here).
             - "--kubeconfig=/etc/netplane/kubeconfig"
+            {{- if .Values.routebus.mtls.enabled }}
+            - "--tls-ca=/etc/routebus-tls/ca.crt"
+            - "--tls-cert=/etc/routebus-tls/tls.crt"
+            - "--tls-key=/etc/routebus-tls/tls.key"
+            {{- end }}
           env:
             - name: NODE_NAME
               valueFrom:
@@ -55,7 +60,17 @@ spec:
             - name: kubeconfig
               mountPath: /etc/netplane
               readOnly: true
+            {{- if .Values.routebus.mtls.enabled }}
+            - name: routebus-tls
+              mountPath: /etc/routebus-tls
+              readOnly: true
+            {{- end }}
       volumes:
         - name: kubeconfig
           configMap:
             name: netplane-agent-kubeconfig
+        {{- if .Values.routebus.mtls.enabled }}
+        - name: routebus-tls
+          secret:
+            secretName: agent-routebus-tls
+        {{- end }}

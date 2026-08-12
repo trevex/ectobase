@@ -115,22 +115,20 @@ func (a *Allocator) Preassign(source string, b Block) {
 	a.assigned[source] = a.blockAt(idx)
 }
 
-// Assign returns the block for a source. An already-assigned source (incl. one
-// seeded via Preassign) always returns its existing block — stable regardless of
-// what other sources are added or removed. A new source is handed the LOWEST free
-// block. When the whole pool is exhausted the last block is reused as an overflow
-// fallback (size the pool for the expected source count to avoid this).
-func (a *Allocator) Assign(source string) Block {
+// Assign returns the block for a source and ok=true. An already-assigned source
+// (incl. one seeded via Preassign) always returns its existing block — stable
+// regardless of what other sources are added or removed. A new source is handed the
+// LOWEST free block. When the whole pool is exhausted it returns ok=false rather than
+// a colliding fallback: handing the same (public IP, port range) to two distinct
+// sources overlaps their SNAT tuples and corrupts return-path conntrack on the
+// datapath. The caller must surface exhaustion (size the pool for the source count).
+func (a *Allocator) Assign(source string) (Block, bool) {
 	if b, ok := a.assigned[source]; ok {
-		return b
+		return b, true
 	}
 	total := a.total()
 	if total == 0 {
-		var ip string
-		if len(a.ips) > 0 {
-			ip = a.ips[0]
-		}
-		return Block{PublicIP: ip}
+		return Block{}, false // no public IPs / zero block size: nothing to hand out
 	}
 	idx := int32(-1)
 	for i := range total {
@@ -140,11 +138,10 @@ func (a *Allocator) Assign(source string) Block {
 		}
 	}
 	if idx < 0 {
-		idx = total - 1 // pool exhausted: overflow fallback (do not mark used)
-		return a.blockAt(idx)
+		return Block{}, false // pool exhausted — never emit a colliding block
 	}
 	a.used[idx] = true
 	b := a.blockAt(idx)
 	a.assigned[source] = b
-	return b
+	return b, true
 }

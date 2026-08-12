@@ -1,0 +1,27 @@
+{{- if .Values.routebus.mtls.enabled }}
+# Copyright 2026 ectobase contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Agent client identity for route-bus mutual TLS. Issued from the shared CA-type
+# ClusterIssuer the hub chart creates, so the reflector (whose server cert chains to
+# the same CA) accepts this client cert. Requires the hub chart to be installed first.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: agent-routebus-tls
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ectobase-pool.labels" . | nindent 4 }}
+spec:
+  secretName: agent-routebus-tls
+  duration: 8760h # 1y
+  commonName: agent
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  usages:
+    - client auth
+  issuerRef:
+    name: {{ .Values.routebus.mtls.clusterIssuer }}
+    kind: ClusterIssuer
+{{- end }}

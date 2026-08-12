@@ -415,6 +415,7 @@ pub fn nat64_egress_parse<P: Pkt, M: Maps>(
             let start = (hash5(&meta_guest_ipv4, &ipv4_dst, sport, dport, l4_proto_v4)
                 % range as u32) as u16;
             let mut chosen = nat.port_min.wrapping_add(start);
+            let mut allocated = false;
             let mut i: u16 = 0;
             while i < PROBE_LIMIT {
                 let cand = nat.port_min.wrapping_add((start.wrapping_add(i)) % range);
@@ -429,6 +430,7 @@ pub fn nat64_egress_parse<P: Pkt, M: Maps>(
                 };
                 if maps.conntrack_get(&rev_key).is_none() {
                     chosen = cand;
+                    allocated = true;
                     // Reverse entry: guest xlate_ip + original sport/id in xlate_port. CT_F_NAT64
                     // tells the ingress path to do IPv4→IPv6 expansion on the reply.
                     maps.conntrack_insert(
@@ -447,6 +449,11 @@ pub fn nat64_egress_parse<P: Pkt, M: Maps>(
                     break;
                 }
                 i += 1;
+            }
+            // Port space exhausted: bail before writing a forward entry / rewriting, so we never
+            // emit a colliding nat_port whose reverse belongs to another flow. None => caller drops.
+            if !allocated {
+                return None;
             }
             maps.conntrack_insert(
                 fwd_key,

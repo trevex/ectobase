@@ -101,14 +101,17 @@ pub fn forward_decision_v4(
     // packet bounds on every read/write, so the variable-IHL L4 accesses stay verifier-provable
     // across the bpf-to-bpf subprogram-call boundary. `now()` stamps the conntrack `last_seen`.
     let is_ext = route.is_external != 0;
-    flowplane_core::nat::snat_egress(
+    if flowplane_core::nat::snat_egress(
         &mut crate::coreimpl::RawPkt::new(data, data_end),
         &mut crate::coreimpl::GlobalMaps,
         ETH_LEN,
         meta.vni,
         is_ext,
         crate::conntrack::now(),
-    );
+    ) == flowplane_core::nat::SnatOutcome::Exhausted
+    {
+        return EgressVerdict::Drop;
+    }
     // Track every flow.
     if let Some(key) = crate::conntrack::ct_key(data, data_end, ETH_LEN, meta.vni) {
         if unsafe { crate::maps::CONNTRACK.get(&key) }.is_none() {

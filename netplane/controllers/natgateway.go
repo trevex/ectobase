@@ -20,6 +20,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -85,8 +86,15 @@ func (r *NATGatewayReconciler) Sync(ctx context.Context, natgw *netv1.NATGateway
 		a.Preassign(al.Source, allocator.Block{PublicIP: al.PublicIP, PortMin: al.PortMin, PortMax: al.PortMax})
 	}
 	allocations := make([]netv1.NATAllocation, 0, len(sources))
+	exhausted := 0
 	for _, src := range sources {
-		b := a.Assign(src)
+		b, ok := a.Assign(src)
+		if !ok {
+			// Pool exhausted: skip rather than emit a colliding block. Sources that DID
+			// allocate keep their (stable) blocks; the shortfall is surfaced via State.
+			exhausted++
+			continue
+		}
 		allocations = append(allocations, netv1.NATAllocation{
 			Source:   src,
 			PublicIP: b.PublicIP,
@@ -97,6 +105,11 @@ func (r *NATGatewayReconciler) Sync(ctx context.Context, natgw *netv1.NATGateway
 
 	natgw.Status.Allocations = allocations
 	natgw.Status.State = "Ready"
+	if exhausted > 0 {
+		natgw.Status.State = "Exhausted"
+		log.FromContext(ctx).Info("NATGateway port-block pool exhausted; some sources unallocated",
+			"natgateway", natgw.Name, "unallocated", exhausted, "publicIPs", len(natgw.Spec.PublicIPs))
+	}
 	if err := r.Client.Status().Update(ctx, natgw); err != nil {
 		return fmt.Errorf("update natgateway status: %w", err)
 	}

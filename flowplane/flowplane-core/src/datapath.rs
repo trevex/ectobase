@@ -19,7 +19,7 @@ use crate::encap::{reforward, write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
 use crate::firewall::fw_eval_dir;
 use crate::lb::{lb_select_forward, lb_select_forward_v6};
 use crate::maps::Maps;
-use crate::nat::snat_egress;
+use crate::nat::{snat_egress, SnatOutcome};
 use crate::nat64::{
     nat64_egress_parse, nat64_egress_write, nat64_ingress_parse, nat64_ingress_write,
 };
@@ -206,7 +206,12 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
     // which already passes `conntrack::now()` here (egress.rs); tests using `now: 0` are unaffected
     // (they stamp 0 and never sweep with a real clock).
     let is_ext = route.is_external != 0;
-    snat_egress(pkt, maps, ip_off, in_.meta.vni, is_ext, in_.now);
+    if snat_egress(pkt, maps, ip_off, in_.meta.vni, is_ext, in_.now) == SnatOutcome::Exhausted {
+        return GuestTxOut {
+            action: Action::Drop,
+            edt_tstamp,
+        };
+    }
 
     // 5. Track every flow: create-on-miss, refresh (last_seen + TCP state) on hit. Refresh mirrors
     //    the eBPF `ct_touch`; it is map-only (never mutates the packet), so it is byte-parity-neutral.

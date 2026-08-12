@@ -471,7 +471,7 @@ renders the hub control plane:
         spec:
           containers:
             - args:
-                - -reflector-admin=[fd00:db8:0:1::1]:1338
+                - -reflector-admin=[fd00:db8:0:1::1]:1339
                 - -csi-driver=rbd.csi.ceph.com
                 - -csi-cluster-id=
                 - -csi-secret-name=csi-rbd-secret
@@ -770,6 +770,7 @@ renders the hub control plane:
           containers:
             - args:
                 - --listen=:1338
+                - --admin-listen=:1339
               command:
                 - reflector
               image: ghcr.io/trevex/ectobase/netplane:dev
@@ -778,6 +779,9 @@ renders the hub control plane:
               ports:
                 - containerPort: 1338
                   name: routebus
+                  protocol: TCP
+                - containerPort: 1339
+                  name: routebus-admin
                   protocol: TCP
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
@@ -803,6 +807,10 @@ renders the hub control plane:
           port: 1338
           protocol: TCP
           targetPort: 1338
+        - name: routebus-admin
+          port: 1339
+          protocol: TCP
+          targetPort: 1339
       selector:
         app.kubernetes.io/name: reflector
       type: ClusterIP

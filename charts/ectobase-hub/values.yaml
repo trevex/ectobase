@@ -10,9 +10,28 @@ namespace: system
 # They run hostNetwork, so the chart creates this namespace PSA-privileged.
 agentNamespace: ectobase-system
 
-# reflectorAdmin is the address the hub-controller passes to the agents via
-# the -reflector-admin flag. Default is the fabric loopback of the control-plane node.
-reflectorAdmin: "[fd00:db8:0:1::1]:1338"
+# reflectorAdmin is the reflector RouteBusAdmin (fence) address the hub-controller
+# dials. It is the SEPARATE admin port (1339), not the agent-facing session port
+# (1338), so a session-cert holder cannot reach the fence API.
+reflectorAdmin: "[fd00:db8:0:1::1]:1339"
+
+# routebus configures the route-bus transport between the reflector, the agents, and
+# the hub-controller's fence client.
+routebus:
+  mtls:
+    # enabled turns on mutual TLS for the route bus AND CN-gates the fence API to the
+    # hub-controller identity. REQUIRES cert-manager in the cluster (the hub chart
+    # provisions a self-signed CA + ClusterIssuer that this and the pool chart issue
+    # from). Left off by default so a cert-manager-less lab still comes up on plaintext
+    # (dev only — the admin API is split onto its own port regardless).
+    enabled: false
+    # clusterIssuer is the shared CA ClusterIssuer name; MUST match the pool chart.
+    clusterIssuer: ectobase-routebus-ca
+    # caSecretName holds the CA keypair backing the ClusterIssuer.
+    caSecretName: ectobase-routebus-ca
+    # reflectorIP is the fabric-loopback IP agents dial; added as a SAN on the
+    # reflector server cert. MUST match the host part of reflectorAddress/reflectorAdmin.
+    reflectorIP: "fd00:db8:0:1::1"
 
 # imagePullPolicy applies to all containers in the chart.
 imagePullPolicy: IfNotPresent

@@ -24,6 +24,7 @@ type Attr struct {
 	Name            string
 	Subresource     string // "status" for status writes
 	SetsClusterName bool   // the write creates/changes spec.clusterName
+	Delete          bool   // the operation is a DELETE
 }
 
 // clusterOf returns the cluster a broker identity is scoped to, and whether the user is a broker.
@@ -44,6 +45,13 @@ func Review(u authuser.Info, a Attr) (bool, string) {
 	cluster, isBroker := clusterOf(u)
 	if !isBroker {
 		return true, ""
+	}
+	if a.Delete {
+		// A broker's only legitimate hub writes are its own ClusterPool status and
+		// per-VM placement status — it never deletes hub objects. Deny all deletes so
+		// a future RBAC widening (e.g. granting delete for GC) cannot silently become a
+		// cross-tenant delete primitive.
+		return false, "broker may not delete hub objects"
 	}
 	if a.SetsClusterName {
 		return false, "broker may not set spec.clusterName (cannot bind/re-bind workloads)"
