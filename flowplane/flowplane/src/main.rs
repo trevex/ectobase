@@ -479,11 +479,23 @@ async fn main() -> anyhow::Result<()> {
             }
             let dns4: Vec<[u8; 4]> = dhcp_dns
                 .iter()
-                .filter_map(|s| s.parse::<std::net::Ipv4Addr>().ok().map(|a| a.octets()))
+                .filter_map(|s| match s.parse::<std::net::Ipv4Addr>() {
+                    Ok(a) => Some(a.octets()),
+                    Err(_) => {
+                        eprintln!("ignoring unparseable --dhcp-dns entry {s:?}");
+                        None
+                    }
+                })
                 .collect();
             let dns6: Vec<[u8; 16]> = dhcpv6_dns
                 .iter()
-                .filter_map(|s| s.parse::<std::net::Ipv6Addr>().ok().map(|a| a.octets()))
+                .filter_map(|s| match s.parse::<std::net::Ipv6Addr>() {
+                    Ok(a) => Some(a.octets()),
+                    Err(_) => {
+                        eprintln!("ignoring unparseable --dhcpv6-dns entry {s:?}");
+                        None
+                    }
+                })
                 .collect();
             // One node-wide guest MTU: explicit --guest-mtu (or the deprecated --dhcp-mtu alias),
             // else derived from the smallest uplink MTU minus encap overhead. Drives DHCPv4 opt-26
