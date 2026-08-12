@@ -1072,6 +1072,14 @@ fn worker_loop(
     // parallel `rings`/`datapath.ports`/`generations` vecs, so the ring-drain block below can drain
     // exactly `rings[pi]` for each owned port and the recovery rebuild can re-derive handles for it.
     // The initial `host_ifindex` is read from the pool slot for port index `i` (port_id = i + 1).
+    // Snapshot every port's generation BEFORE deriving any queue handles below. If a
+    // recover_slot lands between this snapshot and the handle derive, the cached gen (from
+    // the snapshot) will be < the current gen, so the top-of-loop check rebuilds against the
+    // swapped-in Port. Reading the gen AFTER deriving handles (the previous order) could cache
+    // the post-recovery gen over pre-recovery handles and miss the rebuild forever.
+    let gen_snapshot: Vec<u32> = (0..datapath.generations.len())
+        .map(|i| datapath.generations[i].load(Ordering::Acquire))
+        .collect();
     let mut guest_qs: Vec<(usize, u32, nfkit::RxQueue, nfkit::TxQueue)> = (0..datapath.ports.len())
         .filter(|i| owns(*i, q, n_workers))
         .filter_map(|i| {
@@ -1096,10 +1104,7 @@ fn worker_loop(
     // loop the worker rebuilds that port's `guest_qs` entry on-lcore (`rebuild_guest_qs_entry`) — the
     // ONE sanctioned mutation to the static poll set. Control never touches the worker's `!Send`
     // handles; it only swaps the shared `Port` + bumps the generation.
-    let mut cached_gen: Vec<u32> = guest_qs
-        .iter()
-        .map(|(pi, ..)| datapath.generations[*pi].load(Ordering::Acquire))
-        .collect();
+    let mut cached_gen: Vec<u32> = guest_qs.iter().map(|(pi, ..)| gen_snapshot[*pi]).collect();
 
     let mut rx_burst = MbufBurst::new();
     let mut tx_burst = MbufBurst::new();
