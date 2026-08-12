@@ -53,18 +53,13 @@ pub trait MapWriter {
     fn fw_rules_upsert(&mut self, key: FwRuleKey, val: FwRule) -> anyhow::Result<()>;
     fn fw_rules_remove(&mut self, key: &FwRuleKey) -> anyhow::Result<()>;
     fn fw_meta_upsert(&mut self, ifindex: u32, val: FwMeta) -> anyhow::Result<()>;
-    /// IPv6 firewall rule upsert (`FW_RULES6`). DEFAULT no-op — real backends override in tasks 7/9.
-    fn fw_rules6_upsert(&mut self, _key: FwRuleKey, _val: FwRule6) -> anyhow::Result<()> {
-        Ok(())
-    }
-    /// IPv6 firewall rule remove (`FW_RULES6`). DEFAULT no-op — real backends override in tasks 7/9.
-    fn fw_rules6_remove(&mut self, _key: &FwRuleKey) -> anyhow::Result<()> {
-        Ok(())
-    }
-    /// IPv6 firewall meta upsert (`FW_META6`). DEFAULT no-op — real backends override in tasks 7/9.
-    fn fw_meta6_upsert(&mut self, _ifindex: u32, _val: FwMeta) -> anyhow::Result<()> {
-        Ok(())
-    }
+    /// IPv6 firewall rule upsert (`FW_RULES6`). Required (no default): a silently
+    /// no-op'd v6 firewall fails OPEN, so every backend must implement it explicitly.
+    fn fw_rules6_upsert(&mut self, key: FwRuleKey, val: FwRule6) -> anyhow::Result<()>;
+    /// IPv6 firewall rule remove (`FW_RULES6`). Required — see `fw_rules6_upsert`.
+    fn fw_rules6_remove(&mut self, key: &FwRuleKey) -> anyhow::Result<()>;
+    /// IPv6 firewall meta upsert (`FW_META6`). Required — see `fw_rules6_upsert`.
+    fn fw_meta6_upsert(&mut self, ifindex: u32, val: FwMeta) -> anyhow::Result<()>;
     fn meter_upsert(&mut self, ifindex: u32, val: MeterState) -> anyhow::Result<()>;
     fn meter_remove(&mut self, ifindex: &u32) -> anyhow::Result<()>;
     fn dhcp_config_set(&mut self, cfg: &DhcpConfig) -> anyhow::Result<()>;
