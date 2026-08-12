@@ -132,6 +132,11 @@ func cmdAdd(args *skel.CmdArgs) error {
 
 	result, err := buildResult(conf.CNIVersion, args.IfName, args.Netns, resp)
 	if err != nil {
+		// The interface is already attached but we cannot return a valid result. Detach
+		// it here rather than relying solely on the runtime to call DEL: DEL is keyed off
+		// the pod UID from CNI_ARGS, which some runtimes do not forward on the failure
+		// path, so without this the dataplane interface state would leak.
+		_ = detach(ctx, dp, interfaceID)
 		return err
 	}
 	return types.PrintResult(result, conf.CNIVersion)
