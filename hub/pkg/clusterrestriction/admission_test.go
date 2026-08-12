@@ -23,8 +23,11 @@ func TestReview(t *testing.T) {
 		{"broker writes own pool spec", brokerC1, Attr{Resource: "clusterpools", Name: "c1", Subresource: ""}, false},
 		{"broker sets clusterName", brokerC1, Attr{Resource: "virtualmachines", Name: "vm1", SetsClusterName: true}, false},
 		{"broker writes vm w/o clusterName change", brokerC1, Attr{Resource: "virtualmachines", Name: "vm1"}, true},
+		{"broker deletes own pool", brokerC1, Attr{Resource: "clusterpools", Name: "c1", Delete: true}, false},
+		{"broker deletes foreign vm", brokerC1, Attr{Resource: "virtualmachines", Name: "vm1", Delete: true}, false},
 		{"admin unrestricted", admin, Attr{Resource: "clusterpools", Name: "c2", Subresource: ""}, true},
 		{"admin sets clusterName", admin, Attr{Resource: "virtualmachines", SetsClusterName: true}, true},
+		{"admin deletes", admin, Attr{Resource: "virtualmachines", Name: "vm1", Delete: true}, true},
 	}
 	for _, tc := range cases {
 		allow, _ := Review(tc.user, tc.in)

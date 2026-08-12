@@ -31,9 +31,10 @@ var _ admission.ValidationInterface = (*plugin)(nil)
 
 // Handles returns true for the operations this validating plugin cares about.
 // spec.clusterName can be introduced on CREATE or changed on UPDATE, and pool
-// status is written via UPDATE, so both are handled.
+// status is written via UPDATE; DELETE is handled so a broker cannot delete hub
+// objects it does not own.
 func (p *plugin) Handles(op admission.Operation) bool {
-	return op == admission.Create || op == admission.Update
+	return op == admission.Create || op == admission.Update || op == admission.Delete
 }
 
 // Validate maps admission.Attributes -> Attr and applies the pure Review decision.
@@ -43,6 +44,7 @@ func (p *plugin) Validate(_ context.Context, a admission.Attributes, _ admission
 		Name:            a.GetName(),
 		Subresource:     a.GetSubresource(),
 		SetsClusterName: setsClusterName(a),
+		Delete:          a.GetOperation() == admission.Delete,
 	}
 	if allow, msg := Review(a.GetUserInfo(), attr); !allow {
 		return admission.NewForbidden(a, errors.New(msg))
