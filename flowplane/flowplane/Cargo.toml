@@ -13,6 +13,7 @@ flowplane-core = { path = "../flowplane-core" }
 flowplane-node = { path = "../flowplane-node" }
 flowplane-device = { path = "../flowplane-device" }
 tokio = { workspace = true }
+tokio-stream = { version = "0.1", features = ["net"] }
 anyhow = { workspace = true }
 parking_lot = { workspace = true }
 clap = { workspace = true }

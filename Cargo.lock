@@ -705,6 +705,7 @@ dependencies = [
  "prost",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-health",
  "uuid",
@@ -759,6 +760,7 @@ dependencies = [
  "parking_lot",
  "prost",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-health",
 ]

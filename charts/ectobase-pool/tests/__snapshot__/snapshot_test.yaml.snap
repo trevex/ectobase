@@ -48,7 +48,7 @@ renders (dpdk clab):
                 - --node-id=$(NODE_NAME)
                 - --underlay=$(NODE_IP)
                 - --reflector=[fd00:db8:0:1::1]:1338
-                - --dataplane=127.0.0.1:1337
+                - --dataplane=unix:///run/flowplane/dataplane.sock
                 - --kubeconfig=/etc/netplane/kubeconfig
               command:
                 - agent
@@ -68,6 +68,9 @@ renders (dpdk clab):
                 - mountPath: /etc/netplane
                   name: kubeconfig
                   readOnly: true
+                - mountPath: /run/flowplane
+                  name: flowplane-sock
+                  readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           serviceAccountName: netplane-agent
@@ -77,6 +80,10 @@ renders (dpdk clab):
             - configMap:
                 name: netplane-agent-kubeconfig
               name: kubeconfig
+            - hostPath:
+                path: /run/flowplane
+                type: DirectoryOrCreate
+              name: flowplane-sock
   3: |
     apiVersion: apps/v1
     kind: Deployment
@@ -1784,7 +1791,7 @@ renders (dpdk clab):
                   if [ -z "$GW_MAC" ]; then echo "FATAL: no fabric router neighbour on $UPLINK" >&2; exit 1; fi
                   echo "flowplane-dpdk wrapper: uplink=$UPLINK gateway_mac=$GW_MAC"
                   exec flowplane-dpdk serve \
-                    --addr 127.0.0.1:1337 \
+                    --addr unix:///run/flowplane/dataplane.sock \
                     --uplink "$UPLINK" \
                     --gateway 169.254.0.1 \
                     --gateway-mac "$GW_MAC" \
@@ -1801,7 +1808,7 @@ renders (dpdk clab):
                   command:
                     - /bin/sh
                     - -c
-                    - ss -ltn | grep -q '127.0.0.1:1337'
+                    - test -S /run/flowplane/dataplane.sock
                 failureThreshold: 6
                 initialDelaySeconds: 90
                 periodSeconds: 10
@@ -1812,7 +1819,7 @@ renders (dpdk clab):
                   command:
                     - /bin/sh
                     - -c
-                    - ss -ltn | grep -q '127.0.0.1:1337'
+                    - test -S /run/flowplane/dataplane.sock
                 failureThreshold: 40
                 initialDelaySeconds: 2
                 periodSeconds: 3
@@ -1829,6 +1836,8 @@ renders (dpdk clab):
                 - mountPath: /var/run/netns
                   mountPropagation: Bidirectional
                   name: netns
+                - mountPath: /run/flowplane
+                  name: flowplane-sock
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           hostPID: true
@@ -1847,6 +1856,10 @@ renders (dpdk clab):
                 path: /var/run/netns
                 type: DirectoryOrCreate
               name: netns
+            - hostPath:
+                path: /run/flowplane
+                type: DirectoryOrCreate
+              name: flowplane-sock
   20: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
@@ -2115,7 +2128,7 @@ renders (dpdk hw):
                 - --node-id=$(NODE_NAME)
                 - --underlay=$(NODE_IP)
                 - --reflector=[fd00:db8:0:1::1]:1338
-                - --dataplane=127.0.0.1:1337
+                - --dataplane=unix:///run/flowplane/dataplane.sock
                 - --kubeconfig=/etc/netplane/kubeconfig
               command:
                 - agent
@@ -2135,6 +2148,9 @@ renders (dpdk hw):
                 - mountPath: /etc/netplane
                   name: kubeconfig
                   readOnly: true
+                - mountPath: /run/flowplane
+                  name: flowplane-sock
+                  readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           serviceAccountName: netplane-agent
@@ -2144,6 +2160,10 @@ renders (dpdk hw):
             - configMap:
                 name: netplane-agent-kubeconfig
               name: kubeconfig
+            - hostPath:
+                path: /run/flowplane
+                type: DirectoryOrCreate
+              name: flowplane-sock
   3: |
     apiVersion: apps/v1
     kind: Deployment
@@ -3851,7 +3871,7 @@ renders (dpdk hw):
                   if [ -z "$GW_MAC" ]; then echo "FATAL: no fabric router neighbour on $UPLINK" >&2; exit 1; fi
                   echo "flowplane-dpdk wrapper: uplink=$UPLINK gateway_mac=$GW_MAC"
                   exec flowplane-dpdk serve \
-                    --addr 127.0.0.1:1337 \
+                    --addr unix:///run/flowplane/dataplane.sock \
                     --uplink "$UPLINK" \
                     --gateway 169.254.0.1 \
                     --gateway-mac "$GW_MAC" \
@@ -3867,7 +3887,7 @@ renders (dpdk hw):
                   command:
                     - /bin/sh
                     - -c
-                    - ss -ltn | grep -q '127.0.0.1:1337'
+                    - test -S /run/flowplane/dataplane.sock
                 failureThreshold: 6
                 initialDelaySeconds: 90
                 periodSeconds: 10
@@ -3878,7 +3898,7 @@ renders (dpdk hw):
                   command:
                     - /bin/sh
                     - -c
-                    - ss -ltn | grep -q '127.0.0.1:1337'
+                    - test -S /run/flowplane/dataplane.sock
                 failureThreshold: 40
                 initialDelaySeconds: 2
                 periodSeconds: 3
@@ -3900,6 +3920,8 @@ renders (dpdk hw):
                 - mountPath: /var/run/netns
                   mountPropagation: Bidirectional
                   name: netns
+                - mountPath: /run/flowplane
+                  name: flowplane-sock
                 - mountPath: /dev/vfio
                   name: vfio
                 - mountPath: /dev/hugepages
@@ -3922,6 +3944,10 @@ renders (dpdk hw):
                 path: /var/run/netns
                 type: DirectoryOrCreate
               name: netns
+            - hostPath:
+                path: /run/flowplane
+                type: DirectoryOrCreate
+              name: flowplane-sock
             - hostPath:
                 path: /dev/vfio
                 type: Directory
@@ -4197,7 +4223,7 @@ renders (ebpf clab):
                 - --node-id=$(NODE_NAME)
                 - --underlay=$(NODE_IP)
                 - --reflector=[fd00:db8:0:1::1]:1338
-                - --dataplane=127.0.0.1:1337
+                - --dataplane=unix:///run/flowplane/dataplane.sock
                 - --kubeconfig=/etc/netplane/kubeconfig
               command:
                 - agent
@@ -4217,6 +4243,9 @@ renders (ebpf clab):
                 - mountPath: /etc/netplane
                   name: kubeconfig
                   readOnly: true
+                - mountPath: /run/flowplane
+                  name: flowplane-sock
+                  readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           serviceAccountName: netplane-agent
@@ -4226,6 +4255,10 @@ renders (ebpf clab):
             - configMap:
                 name: netplane-agent-kubeconfig
               name: kubeconfig
+            - hostPath:
+                path: /run/flowplane
+                type: DirectoryOrCreate
+              name: flowplane-sock
   3: |
     apiVersion: apps/v1
     kind: Deployment
@@ -5940,7 +5973,7 @@ renders (ebpf clab):
                     [ "$(cat /sys/class/net/$d/operstate 2>/dev/null)" = "up" ] && EXTRA="$EXTRA --extra-uplink $d"
                   done
                   echo "flowplane wrapper: uplink=$UPLINK gateway_mac=$GW_MAC extra=[$EXTRA]"
-                  exec flowplane serve --addr 127.0.0.1:1337 --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC" $EXTRA
+                  exec flowplane serve --addr unix:///run/flowplane/dataplane.sock --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC" $EXTRA
               command:
                 - /bin/sh
                 - -c
@@ -5954,7 +5987,7 @@ renders (ebpf clab):
                   command:
                     - /bin/sh
                     - -c
-                    - ss -ltn | grep -q '127.0.0.1:1337'
+                    - test -S /run/flowplane/dataplane.sock
                 failureThreshold: 6
                 initialDelaySeconds: 90
                 periodSeconds: 10
@@ -5965,7 +5998,7 @@ renders (ebpf clab):
                   command:
                     - /bin/sh
                     - -c
-                    - ss -ltn | grep -q '127.0.0.1:1337'
+                    - test -S /run/flowplane/dataplane.sock
                 failureThreshold: 40
                 initialDelaySeconds: 2
                 periodSeconds: 3
@@ -5985,12 +6018,18 @@ renders (ebpf clab):
                 - mountPath: /var/run/netns
                   mountPropagation: Bidirectional
                   name: netns
+                - mountPath: /run/flowplane
+                  name: flowplane-sock
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           hostPID: true
           tolerations:
             - operator: Exists
           volumes:
+            - hostPath:
+                path: /run/flowplane
+                type: DirectoryOrCreate
+              name: flowplane-sock
             - hostPath:
                 path: /sys/fs/bpf
                 type: DirectoryOrCreate
@@ -6275,7 +6314,7 @@ renders (ebpf hw):
                 - --node-id=$(NODE_NAME)
                 - --underlay=$(NODE_IP)
                 - --reflector=[fd00:db8:0:1::1]:1338
-                - --dataplane=127.0.0.1:1337
+                - --dataplane=unix:///run/flowplane/dataplane.sock
                 - --kubeconfig=/etc/netplane/kubeconfig
               command:
                 - agent
@@ -6295,6 +6334,9 @@ renders (ebpf hw):
                 - mountPath: /etc/netplane
                   name: kubeconfig
                   readOnly: true
+                - mountPath: /run/flowplane
+                  name: flowplane-sock
+                  readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           serviceAccountName: netplane-agent
@@ -6304,6 +6346,10 @@ renders (ebpf hw):
             - configMap:
                 name: netplane-agent-kubeconfig
               name: kubeconfig
+            - hostPath:
+                path: /run/flowplane
+                type: DirectoryOrCreate
+              name: flowplane-sock
   3: |
     apiVersion: apps/v1
     kind: Deployment
@@ -8018,7 +8064,7 @@ renders (ebpf hw):
                     [ "$(cat /sys/class/net/$d/operstate 2>/dev/null)" = "up" ] && EXTRA="$EXTRA --extra-uplink $d"
                   done
                   echo "flowplane wrapper: uplink=$UPLINK gateway_mac=$GW_MAC extra=[$EXTRA]"
-                  exec flowplane serve --addr 127.0.0.1:1337 --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC" $EXTRA
+                  exec flowplane serve --addr unix:///run/flowplane/dataplane.sock --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC" $EXTRA
               command:
                 - /bin/sh
                 - -c
@@ -8029,7 +8075,7 @@ renders (ebpf hw):
                   command:
                     - /bin/sh
                     - -c
-                    - ss -ltn | grep -q '127.0.0.1:1337'
+                    - test -S /run/flowplane/dataplane.sock
                 failureThreshold: 6
                 initialDelaySeconds: 90
                 periodSeconds: 10
@@ -8040,7 +8086,7 @@ renders (ebpf hw):
                   command:
                     - /bin/sh
                     - -c
-                    - ss -ltn | grep -q '127.0.0.1:1337'
+                    - test -S /run/flowplane/dataplane.sock
                 failureThreshold: 40
                 initialDelaySeconds: 2
                 periodSeconds: 3
@@ -8060,12 +8106,18 @@ renders (ebpf hw):
                 - mountPath: /var/run/netns
                   mountPropagation: Bidirectional
                   name: netns
+                - mountPath: /run/flowplane
+                  name: flowplane-sock
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           hostPID: true
           tolerations:
             - operator: Exists
           volumes:
+            - hostPath:
+                path: /run/flowplane
+                type: DirectoryOrCreate
+              name: flowplane-sock
             - hostPath:
                 path: /sys/fs/bpf
                 type: DirectoryOrCreate
@@ -8350,7 +8402,7 @@ renders (tier1 on):
                 - --node-id=$(NODE_NAME)
                 - --underlay=$(NODE_IP)
                 - --reflector=[fd00:db8:0:1::1]:1338
-                - --dataplane=127.0.0.1:1337
+                - --dataplane=unix:///run/flowplane/dataplane.sock
                 - --kubeconfig=/etc/netplane/kubeconfig
               command:
                 - agent
@@ -8370,6 +8422,9 @@ renders (tier1 on):
                 - mountPath: /etc/netplane
                   name: kubeconfig
                   readOnly: true
+                - mountPath: /run/flowplane
+                  name: flowplane-sock
+                  readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           serviceAccountName: netplane-agent
@@ -8379,6 +8434,10 @@ renders (tier1 on):
             - configMap:
                 name: netplane-agent-kubeconfig
               name: kubeconfig
+            - hostPath:
+                path: /run/flowplane
+                type: DirectoryOrCreate
+              name: flowplane-sock
   3: |
     apiVersion: apps/v1
     kind: Deployment
@@ -10093,7 +10152,7 @@ renders (tier1 on):
                     [ "$(cat /sys/class/net/$d/operstate 2>/dev/null)" = "up" ] && EXTRA="$EXTRA --extra-uplink $d"
                   done
                   echo "flowplane wrapper: uplink=$UPLINK gateway_mac=$GW_MAC extra=[$EXTRA]"
-                  exec flowplane serve --addr 127.0.0.1:1337 --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC" $EXTRA
+                  exec flowplane serve --addr unix:///run/flowplane/dataplane.sock --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC" $EXTRA
               command:
                 - /bin/sh
                 - -c
@@ -10107,7 +10166,7 @@ renders (tier1 on):
                   command:
                     - /bin/sh
                     - -c
-                    - ss -ltn | grep -q '127.0.0.1:1337'
+                    - test -S /run/flowplane/dataplane.sock
                 failureThreshold: 6
                 initialDelaySeconds: 90
                 periodSeconds: 10
@@ -10118,7 +10177,7 @@ renders (tier1 on):
                   command:
                     - /bin/sh
                     - -c
-                    - ss -ltn | grep -q '127.0.0.1:1337'
+                    - test -S /run/flowplane/dataplane.sock
                 failureThreshold: 40
                 initialDelaySeconds: 2
                 periodSeconds: 3
@@ -10138,12 +10197,18 @@ renders (tier1 on):
                 - mountPath: /var/run/netns
                   mountPropagation: Bidirectional
                   name: netns
+                - mountPath: /run/flowplane
+                  name: flowplane-sock
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           hostPID: true
           tolerations:
             - operator: Exists
           volumes:
+            - hostPath:
+                path: /run/flowplane
+                type: DirectoryOrCreate
+              name: flowplane-sock
             - hostPath:
                 path: /sys/fs/bpf
                 type: DirectoryOrCreate
@@ -10465,7 +10530,7 @@ renders (tier1 watchdog):
                 - --node-id=$(NODE_NAME)
                 - --underlay=$(NODE_IP)
                 - --reflector=[fd00:db8:0:1::1]:1338
-                - --dataplane=127.0.0.1:1337
+                - --dataplane=unix:///run/flowplane/dataplane.sock
                 - --kubeconfig=/etc/netplane/kubeconfig
               command:
                 - agent
@@ -10485,6 +10550,9 @@ renders (tier1 watchdog):
                 - mountPath: /etc/netplane
                   name: kubeconfig
                   readOnly: true
+                - mountPath: /run/flowplane
+                  name: flowplane-sock
+                  readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           serviceAccountName: netplane-agent
@@ -10494,6 +10562,10 @@ renders (tier1 watchdog):
             - configMap:
                 name: netplane-agent-kubeconfig
               name: kubeconfig
+            - hostPath:
+                path: /run/flowplane
+                type: DirectoryOrCreate
+              name: flowplane-sock
   3: |
     apiVersion: apps/v1
     kind: Deployment
@@ -12208,7 +12280,7 @@ renders (tier1 watchdog):
                     [ "$(cat /sys/class/net/$d/operstate 2>/dev/null)" = "up" ] && EXTRA="$EXTRA --extra-uplink $d"
                   done
                   echo "flowplane wrapper: uplink=$UPLINK gateway_mac=$GW_MAC extra=[$EXTRA]"
-                  exec flowplane serve --addr 127.0.0.1:1337 --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC" $EXTRA
+                  exec flowplane serve --addr unix:///run/flowplane/dataplane.sock --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC" $EXTRA
               command:
                 - /bin/sh
                 - -c
@@ -12222,7 +12294,7 @@ renders (tier1 watchdog):
                   command:
                     - /bin/sh
                     - -c
-                    - ss -ltn | grep -q '127.0.0.1:1337'
+                    - test -S /run/flowplane/dataplane.sock
                 failureThreshold: 6
                 initialDelaySeconds: 90
                 periodSeconds: 10
@@ -12233,7 +12305,7 @@ renders (tier1 watchdog):
                   command:
                     - /bin/sh
                     - -c
-                    - ss -ltn | grep -q '127.0.0.1:1337'
+                    - test -S /run/flowplane/dataplane.sock
                 failureThreshold: 40
                 initialDelaySeconds: 2
                 periodSeconds: 3
@@ -12253,12 +12325,18 @@ renders (tier1 watchdog):
                 - mountPath: /var/run/netns
                   mountPropagation: Bidirectional
                   name: netns
+                - mountPath: /run/flowplane
+                  name: flowplane-sock
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           hostPID: true
           tolerations:
             - operator: Exists
           volumes:
+            - hostPath:
+                path: /run/flowplane
+                type: DirectoryOrCreate
+              name: flowplane-sock
             - hostPath:
                 path: /sys/fs/bpf
                 type: DirectoryOrCreate
@@ -12590,7 +12668,7 @@ renders with vm-materializer enabled:
                 - --node-id=$(NODE_NAME)
                 - --underlay=$(NODE_IP)
                 - --reflector=[fd00:db8:0:1::1]:1338
-                - --dataplane=127.0.0.1:1337
+                - --dataplane=unix:///run/flowplane/dataplane.sock
                 - --kubeconfig=/etc/netplane/kubeconfig
               command:
                 - agent
@@ -12610,6 +12688,9 @@ renders with vm-materializer enabled:
                 - mountPath: /etc/netplane
                   name: kubeconfig
                   readOnly: true
+                - mountPath: /run/flowplane
+                  name: flowplane-sock
+                  readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           serviceAccountName: netplane-agent
@@ -12619,6 +12700,10 @@ renders with vm-materializer enabled:
             - configMap:
                 name: netplane-agent-kubeconfig
               name: kubeconfig
+            - hostPath:
+                path: /run/flowplane
+                type: DirectoryOrCreate
+              name: flowplane-sock
   3: |
     apiVersion: apps/v1
     kind: Deployment
@@ -14333,7 +14418,7 @@ renders with vm-materializer enabled:
                     [ "$(cat /sys/class/net/$d/operstate 2>/dev/null)" = "up" ] && EXTRA="$EXTRA --extra-uplink $d"
                   done
                   echo "flowplane wrapper: uplink=$UPLINK gateway_mac=$GW_MAC extra=[$EXTRA]"
-                  exec flowplane serve --addr 127.0.0.1:1337 --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC" $EXTRA
+                  exec flowplane serve --addr unix:///run/flowplane/dataplane.sock --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC" $EXTRA
               command:
                 - /bin/sh
                 - -c
@@ -14347,7 +14432,7 @@ renders with vm-materializer enabled:
                   command:
                     - /bin/sh
                     - -c
-                    - ss -ltn | grep -q '127.0.0.1:1337'
+                    - test -S /run/flowplane/dataplane.sock
                 failureThreshold: 6
                 initialDelaySeconds: 90
                 periodSeconds: 10
@@ -14358,7 +14443,7 @@ renders with vm-materializer enabled:
                   command:
                     - /bin/sh
                     - -c
-                    - ss -ltn | grep -q '127.0.0.1:1337'
+                    - test -S /run/flowplane/dataplane.sock
                 failureThreshold: 40
                 initialDelaySeconds: 2
                 periodSeconds: 3
@@ -14378,12 +14463,18 @@ renders with vm-materializer enabled:
                 - mountPath: /var/run/netns
                   mountPropagation: Bidirectional
                   name: netns
+                - mountPath: /run/flowplane
+                  name: flowplane-sock
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           hostPID: true
           tolerations:
             - operator: Exists
           volumes:
+            - hostPath:
+                path: /run/flowplane
+                type: DirectoryOrCreate
+              name: flowplane-sock
             - hostPath:
                 path: /sys/fs/bpf
                 type: DirectoryOrCreate

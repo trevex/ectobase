@@ -24,7 +24,7 @@ import (
 
 const (
 	defaultKubeconfig    = "/etc/cni/net.d/dataplane-kubeconfig"
-	defaultDataplaneAddr = "127.0.0.1:1337"
+	defaultDataplaneAddr = "unix:///run/flowplane/dataplane.sock"
 
 	// networkInterfaceAnnotation names the NetworkInterface CR bound to this pod.
 	networkInterfaceAnnotation = "net.ectobase.dev/network-interface"
@@ -36,7 +36,8 @@ type netConf struct {
 
 	// Kubeconfig is the on-node SA-token kubeconfig used to read pod + CRDs.
 	Kubeconfig string `json:"kubeconfig,omitempty"`
-	// DataplaneAddr is the TCP address of the node-local flowplane DataplaneNode gRPC.
+	// DataplaneAddr is the address of the node-local flowplane DataplaneNode gRPC
+	// (a unix:// socket by default, or a host:port).
 	DataplaneAddr string `json:"dataplaneAddr,omitempty"`
 	// DeviceType selects the guest-edge device: "" / "veth" (container; default) or "pod-tap"
 	// (a KubeVirt VM — a tap in this pod netns spliced to a root-netns veth). Set in the NAD

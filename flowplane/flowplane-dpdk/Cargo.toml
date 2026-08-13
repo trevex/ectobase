@@ -15,6 +15,7 @@ ipnet = { workspace = true }
 nfkit = { path = "../nfkit" }
 anyhow = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { version = "0.1", features = ["net"] }
 tonic = { workspace = true, features = ["transport"] }
 tonic-health = "0.12"
 prost = { workspace = true }

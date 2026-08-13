@@ -600,13 +600,31 @@ async fn main() -> anyhow::Result<()> {
                 }
                 println!("shutting down; pinned datapath preserved for adopt on restart");
             };
-            tonic::transport::Server::builder()
+            let router = tonic::transport::Server::builder()
                 .add_service(health_service)
                 .add_service(node::pb::dataplane_node_server::DataplaneNodeServer::new(
                     node::NodeService::new(attach_state),
-                ))
-                .serve_with_shutdown(addr.parse()?, shutdown)
-                .await?;
+                ));
+            if let Some(path) = flowplane_device::grpc::uds_path(&addr) {
+                // Root-only unix socket: the dataplane gRPC is node-local and root-equivalent, so a
+                // 0600 socket restricts it to root on this node instead of any process that can reach
+                // a loopback TCP port.
+                use std::os::unix::fs::PermissionsExt;
+                let path = std::path::Path::new(path);
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let _ = std::fs::remove_file(path); // clear a stale socket from a prior run
+                let listener = tokio::net::UnixListener::bind(path)?;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+                println!("dataplane gRPC listening on unix://{}", path.display());
+                let incoming = tokio_stream::wrappers::UnixListenerStream::new(listener);
+                router
+                    .serve_with_incoming_shutdown(incoming, shutdown)
+                    .await?;
+            } else {
+                router.serve_with_shutdown(addr.parse()?, shutdown).await?;
+            }
         }
         Cmd::Bringup {
             uplink,

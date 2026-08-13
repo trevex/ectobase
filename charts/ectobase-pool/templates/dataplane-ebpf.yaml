@@ -55,7 +55,7 @@ spec:
                 [ "$(cat /sys/class/net/$d/operstate 2>/dev/null)" = "up" ] && EXTRA="$EXTRA --extra-uplink $d"
               done
               echo "flowplane wrapper: uplink=$UPLINK gateway_mac=$GW_MAC extra=[$EXTRA]"
-              exec flowplane serve --addr 127.0.0.1:1337 --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC"{{ if .Values.underlayWithin }} --underlay-within {{ .Values.underlayWithin }}{{ end }} $EXTRA
+              exec flowplane serve --addr unix:///run/flowplane/dataplane.sock --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC"{{ if .Values.underlayWithin }} --underlay-within {{ .Values.underlayWithin }}{{ end }} $EXTRA
 {{- if eq .Values.env "clab" }}
           env:
             # Compute nodes MUST run generic/SKB XDP on clab. uplink_rx delivers to guests by
@@ -68,16 +68,14 @@ spec:
             - name: FLOWPLANE_SKB_MODE
               value: "1"
 {{- end }}
-          # Readiness gates on the gRPC listener (127.0.0.1:1337), which flowplane opens
-          # ONLY after the base datapath is loaded + attached and DataplaneNode is serving
-          # (main.rs: load/attach -> health Serving -> serve). So pod-Ready == "ready to
-          # AttachInterface", and `kubectl rollout status ds/flowplane` genuinely waits for
-          # the datapath — callers (scenarios/CI) can wait-for-ready before driving attaches.
-          # A native gRPC probe can't be used: flowplane binds 127.0.0.1 only (node-local),
-          # not the pod IP the kubelet probe would dial. `ss` ships in the image (iproute2).
+          # Readiness gates on the gRPC unix socket, which flowplane creates ONLY after the
+          # base datapath is loaded + attached and DataplaneNode is serving (main.rs:
+          # load/attach -> health Serving -> serve). So pod-Ready == "ready to AttachInterface",
+          # and `kubectl rollout status ds/flowplane` genuinely waits for the datapath — callers
+          # (scenarios/CI) can wait-for-ready before driving attaches. `test -S` checks the socket.
           readinessProbe:
             exec:
-              command: ["/bin/sh", "-c", "ss -ltn | grep -q '127.0.0.1:1337'"]
+              command: ["/bin/sh", "-c", "test -S /run/flowplane/dataplane.sock"]
             initialDelaySeconds: 2
             periodSeconds: 3
             timeoutSeconds: 2
@@ -86,7 +84,7 @@ spec:
             failureThreshold: 40
           livenessProbe:
             exec:
-              command: ["/bin/sh", "-c", "ss -ltn | grep -q '127.0.0.1:1337'"]
+              command: ["/bin/sh", "-c", "test -S /run/flowplane/dataplane.sock"]
             initialDelaySeconds: 90
             periodSeconds: 10
             timeoutSeconds: 2
@@ -108,7 +106,14 @@ spec:
             - name: netns
               mountPath: /var/run/netns
               mountPropagation: Bidirectional
+            # The root-only gRPC socket dir, shared (hostPath) with the agent + the host-side CNI.
+            - name: flowplane-sock
+              mountPath: /run/flowplane
       volumes:
+        - name: flowplane-sock
+          hostPath:
+            path: /run/flowplane
+            type: DirectoryOrCreate
         - name: bpf-fs
           hostPath:
             path: /sys/fs/bpf

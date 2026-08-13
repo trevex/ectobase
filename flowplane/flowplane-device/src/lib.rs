@@ -1,5 +1,6 @@
 //! Host-device + underlay-IPAM plumbing shared by the eBPF `flowplane` and DPDK `flowplane-dpdk`
 //! agents. Pure Linux plumbing (`ip`/`ip netns exec` subprocess) — no tonic, no eBPF, no DPDK.
+pub mod grpc;
 pub mod netns;
 pub mod tap;
 pub mod underlay;

@@ -20,9 +20,10 @@ spec:
       # Run on every node, including control-plane (the fabric's cp node is a host too).
       tolerations:
         - operator: Exists
-      # hostNetwork so the agent can reach the node-local flowplane on 127.0.0.1:1337.
+      # hostNetwork so the agent can reach the reflector over the fabric loopback.
       # ClusterFirstWithHostNet keeps in-cluster DNS working, so the reflector
-      # Service name (reflector.ectobase-system.svc) still resolves.
+      # Service name (reflector.ectobase-system.svc) still resolves. The node-local
+      # flowplane is reached over the shared /run/flowplane unix socket (mounted below).
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
       containers:
@@ -39,7 +40,7 @@ spec:
             # The reflector listens on the control-plane node's fabric loopback,
             # reachable from every node over the BGP fabric (and cross-cluster later).
             - "--reflector={{ .Values.reflectorAddress }}"
-            - "--dataplane=127.0.0.1:1337"
+            - "--dataplane=unix:///run/flowplane/dataplane.sock"
             # Reach the API over the fabric (the mgmt net has no inter-node path here).
             - "--kubeconfig=/etc/netplane/kubeconfig"
             {{- if .Values.routebus.mtls.enabled }}
@@ -60,6 +61,11 @@ spec:
             - name: kubeconfig
               mountPath: /etc/netplane
               readOnly: true
+            # The dataplane's root-only gRPC socket, created by the flowplane DaemonSet on the
+            # shared hostPath. Read-only: the agent is a client.
+            - name: flowplane-sock
+              mountPath: /run/flowplane
+              readOnly: true
             {{- if .Values.routebus.mtls.enabled }}
             - name: routebus-tls
               mountPath: /etc/routebus-tls
@@ -69,6 +75,10 @@ spec:
         - name: kubeconfig
           configMap:
             name: netplane-agent-kubeconfig
+        - name: flowplane-sock
+          hostPath:
+            path: /run/flowplane
+            type: DirectoryOrCreate
         {{- if .Values.routebus.mtls.enabled }}
         - name: routebus-tls
           secret:

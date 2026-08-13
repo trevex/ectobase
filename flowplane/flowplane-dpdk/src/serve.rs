@@ -506,7 +506,13 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     // so a bad `--addr` fails here and CANNOT leak a spawned worker thread or a preallocated pool
     // device (the teardown for those runs only AFTER the workers join, past the disarmed
     // StartupGuard). `addr` stays in scope for `serve_with_shutdown(addr, ...)` below.
-    let addr: std::net::SocketAddr = args.addr.parse().context("parse --addr")?;
+    // A `unix:` scheme selects a root-only unix socket (node-local, root-equivalent RPCs); anything
+    // else is validated as a TCP SocketAddr here so a bad --addr still fails before any device/worker.
+    let uds_path = flowplane_device::grpc::uds_path(&args.addr).map(str::to_string);
+    let tcp_addr: Option<std::net::SocketAddr> = match &uds_path {
+        Some(_) => None,
+        None => Some(args.addr.parse().context("parse --addr")?),
+    };
 
     // ── 2. EAL ────────────────────────────────────────────────────────────────
     // Clamp the queue request to the datapath worker lcores available (lcores - 1): each worker
@@ -927,9 +933,9 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         .set_service_status("", tonic_health::ServingStatus::Serving)
         .await;
 
-    // `addr` was parsed up-front (see the top of `run`) so a bad `--addr` fails before any worker or
-    // pool device exists; here we just use it.
-    println!("serving flowplane-dpdk DataplaneNode on {addr}");
+    // The listen address was validated up-front (see the top of `run`) so a bad `--addr` fails before
+    // any worker or pool device exists; here we just use it.
+    println!("serving flowplane-dpdk DataplaneNode on {}", args.addr);
 
     // Graceful shutdown: stop the server on SIGINT (ctrl-c) or SIGTERM (kubelet/`docker stop`).
     let shutdown = async {
@@ -949,7 +955,7 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         println!("shutting down flowplane-dpdk");
     };
 
-    let serve_result = tonic::transport::Server::builder()
+    let router = tonic::transport::Server::builder()
         .add_service(health_service)
         // The DataplaneNode service. Its handlers lock `ctrl` (the sole writer) to drive the SAME
         // `ControlCore` orchestration the eBPF binary runs; `shared` backs getter-based reads. The
@@ -958,9 +964,26 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         // guest port → `process_guest_tx` → uplink (guest egress is wired). See `node.rs`.
         .add_service(pb::dataplane_node_server::DataplaneNodeServer::new(
             DpdkNodeService::new(ctrl.clone(), shared.clone(), attach_state.clone()),
-        ))
-        .serve_with_shutdown(addr, shutdown)
-        .await;
+        ));
+    let serve_result = if let Some(path) = &uds_path {
+        use std::os::unix::fs::PermissionsExt;
+        let p = std::path::Path::new(path);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let _ = std::fs::remove_file(p); // clear a stale socket from a prior run
+        let listener = tokio::net::UnixListener::bind(p).context("bind --addr unix socket")?;
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600))?;
+        println!("dataplane gRPC listening on unix://{}", p.display());
+        let incoming = tokio_stream::wrappers::UnixListenerStream::new(listener);
+        router
+            .serve_with_incoming_shutdown(incoming, shutdown)
+            .await
+    } else {
+        router
+            .serve_with_shutdown(tcp_addr.expect("tcp_addr set for non-uds"), shutdown)
+            .await
+    };
 
     // ── shutdown: stop the workers, join the datapath thread ────────────────────
     // Signal every poll loop to exit, then join. `for_each_worker` returns once all lcores observe

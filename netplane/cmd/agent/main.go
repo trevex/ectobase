@@ -25,7 +25,7 @@ func main() {
 	nodeID := flag.String("node-id", "", "stable node identity (required)")
 	underlay := flag.String("underlay", "", "this node's underlay IPv6 (required)")
 	reflectorAddr := flag.String("reflector", "127.0.0.1:1338", "reflector gRPC address")
-	dataplaneAddr := flag.String("dataplane", "127.0.0.1:1337", "local flowplane DataplaneNode address")
+	dataplaneAddr := flag.String("dataplane", "unix:///run/flowplane/dataplane.sock", "local flowplane DataplaneNode address (unix:// socket or host:port)")
 	kubeconfig := flag.String("kubeconfig", "", "kubeconfig for this node's own cluster apiserver — where the broker syncs the compiled CRDs (empty = in-cluster). The agent never talks to the hub.")
 	edgeLoopback := flag.String("edge-loopback", "", "if set, this node is a WAN edge; value = its UNIQUE control-plane loopback IPv6 (e.g. fd00:db8:0:9::1)")
 	tlsCA := flag.String("tls-ca", "", "CA bundle to verify the reflector (enables mTLS)")
