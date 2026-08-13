@@ -31,7 +31,11 @@ done
 [ -z "$GW_MAC" ] && { echo "edge-wrapper FATAL: no fabric neighbour MAC on $UPLINK" >&2; exit 1; }
 echo "edge-wrapper: uplink=$UPLINK extra=$EXTRA wan=$WAN underlay=$UL gw_mac=$GW_MAC"
 
-exec flowplane serve --addr unix:///run/flowplane/dataplane.sock --role edge \
+# The edge flowplane runs as a sidecar SHARING the clab edge node's netns; the lab harness reaches
+# it over that shared netns (TCP), so — unlike the compute-node DaemonSet dataplane (unix socket) —
+# the edge keeps a loopback TCP listener. A unix socket would live in the sidecar's own mount ns,
+# unreachable from a `docker exec` into the edge node. (UDS-in-sidecar is a possible follow-up.)
+exec flowplane serve --addr 127.0.0.1:1337 --role edge \
   --uplink "$UPLINK" --extra-uplink "$EXTRA" --wan-uplink "$WAN" \
   --local-underlay "$UL" --gateway 169.254.0.1 --gateway-mac "$GW_MAC" \
   --pin-dir "$PIN_DIR" --pin-links false

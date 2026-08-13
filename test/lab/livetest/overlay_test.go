@@ -215,13 +215,30 @@ func attachEndpoint(t *testing.T, ctx context.Context, cfg *config.Config, node 
 	return underlay
 }
 
-// dataplaneGRPC invokes a DataplaneNode method over grpcurl in the node's network
-// namespace (via `docker run --network container:<node>`), mounting the repo's proto
-// tree. `data` is the request JSON ("" for no-arg methods like ListInterfaces).
+// dataplaneGRPC invokes a DataplaneNode method over grpcurl. Two transports, because the two
+// dataplane deployments differ:
+//   - Compute-node DaemonSet dataplane serves a root-only UNIX SOCKET; grpcurl runs INSIDE the
+//     kind node (which has filesystem access to it) — a net-ns-sharing sibling container cannot
+//     reach a socket.
+//   - The WAN-edge flowplane runs as a sidecar sharing a clab node's netns and serves loopback TCP
+//     there (see edge-wrapper.sh); reach it over the shared netns (the socket would live in the
+//     sidecar's own mount ns, unreachable from a docker exec into the clab node).
+//
+// `data` is the request JSON ("" for no-arg methods like ListInterfaces).
 func dataplaneGRPC(t *testing.T, ctx context.Context, container, method, data string) (string, error) {
 	t.Helper()
-	// The dataplane serves a root-only unix socket (not TCP), so grpcurl must run INSIDE the node,
-	// which has filesystem access to it — a net-ns-sharing sibling container cannot reach a socket.
+	if strings.HasPrefix(container, "clab-") {
+		args := []string{"docker", "run", "--rm", "--network", "container:" + container,
+			"-v", repoRoot(t) + "/api/proto:/proto:ro",
+			"fullstorydev/grpcurl:latest", "-plaintext",
+			"-import-path", "/proto/dataplane/v1", "-proto", "dataplane.proto", "-max-time", "15"}
+		if data != "" {
+			args = append(args, "-d", data)
+		}
+		args = append(args, "127.0.0.1:1337", "dataplane.v1.DataplaneNode/"+method)
+		out, err := exec.SudoOutput(ctx, args...)
+		return string(out), err
+	}
 	stageGrpcurl(t, ctx, container)
 	args := []string{"grpcurl", "-plaintext",
 		"-import-path", "/proto/dataplane/v1", "-proto", "dataplane.proto", "-max-time", "15"}
