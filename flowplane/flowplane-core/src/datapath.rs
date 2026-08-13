@@ -456,6 +456,12 @@ pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
             if let Some(e) = maps.conntrack_get(&key) {
                 if e.flags & CT_REWRITE_DST != 0 {
                     if e.flags & CT_F_NAT64 != 0 {
+                        // Refresh the reverse entry (last_seen + TCP state, map-only/byte-neutral) so
+                        // an active NAT64 flow is not idle-GC'd mid-session. process_uplink_nat64_ingress
+                        // takes no Maps and cannot do it; this mirrors the eBPF ingress `ct_touch` on
+                        // the CT_REWRITE_DST reverse entry (which the core path was previously missing).
+                        let mut r = e;
+                        ct_refresh(&*pkt, maps, inner_off, &key, &mut r, in_.now);
                         // NAT64 return: v4->v6 expansion, not plain reverse-DNAT.
                         return process_uplink_nat64_ingress(
                             pkt,
@@ -463,7 +469,7 @@ pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
                                 tap_ifindex: in_.u.tap_ifindex,
                                 guest_mac: in_.u.guest_mac,
                                 guest_ipv6: in_.guest_ipv6,
-                                rev: &e,
+                                rev: &r,
                             },
                         );
                     }

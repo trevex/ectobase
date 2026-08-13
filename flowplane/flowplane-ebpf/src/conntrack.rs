@@ -23,7 +23,11 @@ pub fn ct_key(data: usize, data_end: usize, ip_off: usize, vni: u32) -> Option<C
     }
     let src = unsafe { core::ptr::read_unaligned(p.add(ip_off + 12) as *const [u8; 4]) };
     let dst = unsafe { core::ptr::read_unaligned(p.add(ip_off + 16) as *const [u8; 4]) };
-    let (proto, sport, dport) = l4_ports(data, data_end, ip_off)?;
+    // Fall back to `(protocol, 0, 0)` for an unrecognised L4 so every v4 flow is conntracked AND
+    // firewalled (parity with core `ct_key` / `ct_key6`). The protocol byte at `ip_off + 9` is inside
+    // the 20-byte header already bounds-checked above.
+    let proto_byte = unsafe { *p.add(ip_off + 9) };
+    let (proto, sport, dport) = l4_ports(data, data_end, ip_off).unwrap_or((proto_byte, 0, 0));
     Some(CtKey {
         vni,
         src_ip: src,

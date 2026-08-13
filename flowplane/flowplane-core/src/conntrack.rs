@@ -49,7 +49,11 @@ pub fn ct_key<P: Pkt>(pkt: &P, ip_off: usize, vni: u32) -> Option<CtKey> {
     // the standard 20-byte IPv4 header (options-free flows only).
     let src = pkt.read_array::<4>(ip_off + 12)?;
     let dst = pkt.read_array::<4>(ip_off + 16)?;
-    let (proto, sport, dport) = l4_ports(pkt, ip_off)?;
+    // Fall back to `(protocol, 0, 0)` for an unrecognised L4 (GRE/ESP/etc.), mirroring `ct_key6`, so
+    // EVERY v4 flow is conntracked AND firewalled (deny-by-default) instead of bypassing both. The
+    // protocol byte is at `ip_off + 9` (inside the already-bounded 20-byte header).
+    let (proto, sport, dport) =
+        l4_ports(pkt, ip_off).unwrap_or((pkt.read_u8(ip_off + 9).unwrap_or(0), 0, 0));
     Some(CtKey {
         vni,
         src_ip: src,
