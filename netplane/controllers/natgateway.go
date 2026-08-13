@@ -17,8 +17,10 @@ import (
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	"github.com/trevex/ectobase/netplane/allocator"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -30,6 +32,9 @@ const defaultPortsPerSource int32 = 1024
 // NATGatewayReconciler assigns deterministic egress SNAT blocks for a NATGateway's VPC.
 type NATGatewayReconciler struct {
 	Client client.Client
+	// APIReader is an uncached, strong reader used for the NIC allocation-input list, so the
+	// allocation table is never computed from a stale cache (which could drop a just-added source).
+	APIReader client.Reader
 }
 
 // keyOf returns the namespaced name of an object.
@@ -57,7 +62,7 @@ func (r *NATGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 // Spec.PublicIPs / PortsPerSource, and writes Status.Allocations + State=Ready.
 func (r *NATGatewayReconciler) Sync(ctx context.Context, natgw *netv1.NATGateway) error {
 	var nics netv1.NetworkInterfaceList
-	if err := r.Client.List(ctx, &nics, client.InNamespace(natgw.Namespace)); err != nil {
+	if err := r.APIReader.List(ctx, &nics, client.InNamespace(natgw.Namespace)); err != nil {
 		return fmt.Errorf("list networkinterfaces: %w", err)
 	}
 
@@ -103,14 +108,23 @@ func (r *NATGatewayReconciler) Sync(ctx context.Context, natgw *netv1.NATGateway
 		})
 	}
 
-	natgw.Status.Allocations = allocations
-	natgw.Status.State = "Ready"
+	state := "Ready"
 	if exhausted > 0 {
-		natgw.Status.State = "Exhausted"
+		state = "Exhausted"
 		log.FromContext(ctx).Info("NATGateway port-block pool exhausted; some sources unallocated",
 			"natgateway", natgw.Name, "unallocated", exhausted, "publicIPs", len(natgw.Spec.PublicIPs))
 	}
-	if err := r.Client.Status().Update(ctx, natgw); err != nil {
+	// Re-Get (strong read) and write status under RetryOnConflict so a racing update to the same
+	// NATGateway doesn't drop this reconcile's allocation table.
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var cur netv1.NATGateway
+		if err := r.APIReader.Get(ctx, keyOf(natgw), &cur); err != nil {
+			return err
+		}
+		cur.Status.Allocations = allocations
+		cur.Status.State = state
+		return r.Client.Status().Update(ctx, &cur)
+	}); err != nil {
 		return fmt.Errorf("update natgateway status: %w", err)
 	}
 	return nil
@@ -121,9 +135,15 @@ func (r *NATGatewayReconciler) Sync(ctx context.Context, natgw *netv1.NATGateway
 // re-triggers all NATGateways in the same namespace, because the allocation
 // table is computed over all NICs in the VPC.
 func (r *NATGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.APIReader == nil {
+		r.APIReader = mgr.GetAPIReader()
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&netv1.NATGateway{}).
 		Watches(&netv1.NetworkInterface{}, handler.EnqueueRequestsFromMapFunc(r.natgwsForNIC)).
+		// Serialize: the allocation table is a read-then-write over all NICs in the VPC; concurrent
+		// reconciles could race on Status. Mirrors the VPC allocator.
+		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)
 }
 

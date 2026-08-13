@@ -44,7 +44,7 @@ func TestSyncAllocatesDeterministicDisjointBlocks(t *testing.T) {
 		WithStatusSubresource(&netv1.NATGateway{}).
 		Build()
 
-	r := &NATGatewayReconciler{Client: c}
+	r := &NATGatewayReconciler{Client: c, APIReader: c}
 	ctx := context.Background()
 
 	if err := r.Sync(ctx, natgw); err != nil {
