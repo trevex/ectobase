@@ -53,7 +53,10 @@ RUN curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
 # NOTE: do NOT pass --no-default-features here — bpf-linker's default features include the
 # code it needs (dropping them gives ~67 unresolved-name compile errors); llvm-sys already
 # uses the system LLVM via LLVM_SYS_211_PREFIX, so default features link system LLVM 21.
-RUN cargo +nightly-2026-01-15 install bpf-linker --locked
+# PIN the version: the unpinned latest (0.11.0) references an LLVM-C symbol (LLVMParseIRInContext2)
+# not exported by this LLVM 21, failing to link. 0.10.3 is the version the nix devShell builds
+# against LLVM 21 (matching the flake), so the container matches the host toolchain.
+RUN cargo +nightly-2026-01-15 install bpf-linker --version 0.10.3 --locked
 
 WORKDIR /src
 COPY . .
