@@ -156,14 +156,16 @@ spec:
 	for _, ep := range all {
 		ep := ep
 		eventually(t, 2*time.Minute, 5*time.Second, func() error {
-			nn, err := kubectl(ctx, cfg, ep.node.Cluster,
+			name, err := kubectl(ctx, cfg, ep.node.Cluster,
 				"get", "compilednics.compiled.ectobase.dev", "default-"+ep.nic,
-				"-o", "jsonpath={.spec.nodeName}")
+				"-o", "jsonpath={.metadata.name}")
 			if err != nil {
 				return fmt.Errorf("get CompiledNIC default-%s on %s: %w", ep.nic, ep.node.Cluster, err)
 			}
-			if strings.TrimSpace(nn) != nodeK8sName(ep.node) {
-				return fmt.Errorf("CompiledNIC default-%s nodeName=%q, want %q", ep.nic, strings.TrimSpace(nn), nodeK8sName(ep.node))
+			// nodeName was removed from CompiledNIC (the agent self-locates by (VNI, overlayIP)),
+			// so the pre-condition is simply that the broker-synced CompiledNIC is present.
+			if strings.TrimSpace(name) == "" {
+				return fmt.Errorf("CompiledNIC default-%s not synced yet on %s", ep.nic, ep.node.Cluster)
 			}
 			return nil
 		})

@@ -19,12 +19,15 @@ import (
 
 // Cross-cluster overlay endpoints: same VPC (vni 100), one per compute cluster.
 const (
-	overlayVNI    = 100
-	overlayIPA    = "10.0.0.1"
-	overlayIPC    = "10.0.0.3"
-	overlayMACA   = "52:54:00:00:00:0a"
-	overlayMACC   = "52:54:00:00:00:0c"
-	dataplaneAddr = "127.0.0.1:1337"
+	overlayVNI  = 100
+	overlayIPA  = "10.0.0.1"
+	overlayIPC  = "10.0.0.3"
+	overlayMACA = "52:54:00:00:00:0a"
+	overlayMACC = "52:54:00:00:00:0c"
+	// dataplaneSocket is the dataplane's root-only unix socket on the node (see the chart's
+	// --addr), in grpc-go unix:// target form. grpcurl reaches it from INSIDE the node
+	// (dataplaneGRPC), not over TCP.
+	dataplaneSocket = "unix:///run/flowplane/dataplane.sock"
 )
 
 // TestCrossClusterOverlayPing drives the FULL control pipeline and datapath: a VPC
@@ -66,15 +69,16 @@ func TestCrossClusterOverlayPing(t *testing.T) {
 	}{{nodeA, "nic-a"}, {nodeC, "nic-c"}} {
 		tc := tc
 		eventually(t, 2*time.Minute, 5*time.Second, func() error {
-			nn, err := kubectl(ctx, cfg, tc.node.Cluster,
+			name, err := kubectl(ctx, cfg, tc.node.Cluster,
 				"get", "compilednics.compiled.ectobase.dev", "default-"+tc.nic,
-				"-o", "jsonpath={.spec.nodeName}")
+				"-o", "jsonpath={.metadata.name}")
 			if err != nil {
 				return fmt.Errorf("get CompiledNIC default-%s on %s: %w", tc.nic, tc.node.Cluster, err)
 			}
-			if strings.TrimSpace(nn) != nodeK8sName(tc.node) {
-				return fmt.Errorf("CompiledNIC default-%s nodeName=%q, want %q (not synced/stamped yet)",
-					tc.nic, strings.TrimSpace(nn), nodeK8sName(tc.node))
+			// nodeName was removed from CompiledNIC (the agent self-locates by (VNI, overlayIP)),
+			// so the pre-condition is simply that the broker-synced CompiledNIC is present.
+			if strings.TrimSpace(name) == "" {
+				return fmt.Errorf("CompiledNIC default-%s not synced yet on %s", tc.nic, tc.node.Cluster)
 			}
 			return nil
 		})
@@ -216,16 +220,35 @@ func attachEndpoint(t *testing.T, ctx context.Context, cfg *config.Config, node 
 // tree. `data` is the request JSON ("" for no-arg methods like ListInterfaces).
 func dataplaneGRPC(t *testing.T, ctx context.Context, container, method, data string) (string, error) {
 	t.Helper()
-	args := []string{"docker", "run", "--rm", "--network", "container:" + container,
-		"-v", repoRoot(t) + "/api/proto:/proto:ro",
-		"fullstorydev/grpcurl:latest", "-plaintext",
+	// The dataplane serves a root-only unix socket (not TCP), so grpcurl must run INSIDE the node,
+	// which has filesystem access to it — a net-ns-sharing sibling container cannot reach a socket.
+	stageGrpcurl(t, ctx, container)
+	args := []string{"grpcurl", "-plaintext",
 		"-import-path", "/proto/dataplane/v1", "-proto", "dataplane.proto", "-max-time", "15"}
 	if data != "" {
 		args = append(args, "-d", data)
 	}
-	args = append(args, dataplaneAddr, "dataplane.v1.DataplaneNode/"+method)
-	out, err := exec.SudoOutput(ctx, args...)
-	return string(out), err
+	args = append(args, dataplaneSocket, "dataplane.v1.DataplaneNode/"+method)
+	return nodeExec(ctx, container, args...)
+}
+
+// stageGrpcurl copies a grpcurl binary + the dataplane proto into the kind node (idempotent), so
+// dataplaneGRPC can dial the dataplane's root-only unix socket from inside the node.
+func stageGrpcurl(t *testing.T, ctx context.Context, container string) {
+	t.Helper()
+	if _, err := nodeExec(ctx, container, "test", "-x", "/usr/local/bin/grpcurl"); err != nil {
+		host := filepath.Join(t.TempDir(), "grpcurl")
+		cid, cerr := exec.SudoOutput(ctx, "docker", "create", "fullstorydev/grpcurl:latest")
+		require.NoError(t, cerr, "docker create grpcurl")
+		id := strings.TrimSpace(string(cid))
+		defer func() { _ = exec.Sudo(ctx, "docker", "rm", id) }()
+		require.NoError(t, exec.Sudo(ctx, "docker", "cp", id+":/bin/grpcurl", host), "extract grpcurl")
+		require.NoError(t, copyToNode(ctx, container, host, "/usr/local/bin/grpcurl"), "grpcurl -> node")
+		_, _ = nodeExec(ctx, container, "chmod", "+x", "/usr/local/bin/grpcurl")
+	}
+	if _, err := nodeExec(ctx, container, "test", "-f", "/proto/dataplane/v1/dataplane.proto"); err != nil {
+		require.NoError(t, copyToNode(ctx, container, filepath.Join(repoRoot(t), "api", "proto"), "/proto"), "proto -> node")
+	}
 }
 
 // underlayForID returns the underlay /128 of interface `id` in a ListInterfaces

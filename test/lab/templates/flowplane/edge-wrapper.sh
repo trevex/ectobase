@@ -31,7 +31,7 @@ done
 [ -z "$GW_MAC" ] && { echo "edge-wrapper FATAL: no fabric neighbour MAC on $UPLINK" >&2; exit 1; }
 echo "edge-wrapper: uplink=$UPLINK extra=$EXTRA wan=$WAN underlay=$UL gw_mac=$GW_MAC"
 
-exec flowplane serve --addr 127.0.0.1:1337 --role edge \
+exec flowplane serve --addr unix:///run/flowplane/dataplane.sock --role edge \
   --uplink "$UPLINK" --extra-uplink "$EXTRA" --wan-uplink "$WAN" \
   --local-underlay "$UL" --gateway 169.254.0.1 --gateway-mac "$GW_MAC" \
   --pin-dir "$PIN_DIR" --pin-links false
