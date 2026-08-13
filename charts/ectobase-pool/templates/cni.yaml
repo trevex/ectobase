@@ -54,6 +54,8 @@ spec:
         - name: install
           image: {{ .Values.images.cni }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          resources:
+            {{- include "ectobase-pool.resources" . | nindent 12 }}
           securityContext:
             runAsUser: 0
           volumeMounts:

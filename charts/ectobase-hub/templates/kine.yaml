@@ -6,6 +6,20 @@
 # etcd-v3 gRPC endpoint on :2379 that the apiserver talks to via --etcd-servers.
 # Storage here is ephemeral (emptyDir) — this is a dev/smoke manifest, not HA.
 ---
+# The postgres/kine password lives in a Secret rather than inline in the pod spec. Still dev-grade
+# (default value, ephemeral storage), but it keeps the credential out of the rendered Deployment and
+# lets an operator override it via values without editing templates.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kine-db
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ectobase-hub.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  password: {{ .Values.kine.password | quote }}
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -43,9 +57,14 @@ spec:
         - name: postgres
           image: {{ .Values.images.postgres }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          resources:
+            {{- include "ectobase-hub.resources" . | nindent 12 }}
           env:
             - name: POSTGRES_PASSWORD
-              value: kine
+              valueFrom:
+                secretKeyRef:
+                  name: kine-db
+                  key: password
             - name: POSTGRES_DB
               value: kine
             - name: PGDATA
@@ -101,9 +120,19 @@ spec:
         - name: kine
           image: {{ .Values.images.kine }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          resources:
+            {{- include "ectobase-hub.resources" . | nindent 12 }}
+          # Build the DSN at runtime so the password comes from the Secret (env) instead of being
+          # baked into the rendered args.
+          command: ["/bin/sh", "-c"]
           args:
-            - "--endpoint=postgres://postgres:kine@postgres:5432/kine?sslmode=disable"
-            - "--listen-address=0.0.0.0:2379"
+            - exec kine --endpoint="postgres://postgres:${KINE_DB_PASSWORD}@postgres:5432/kine?sslmode=disable" --listen-address=0.0.0.0:2379
+          env:
+            - name: KINE_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kine-db
+                  key: password
           ports:
             - containerPort: 2379
           readinessProbe:

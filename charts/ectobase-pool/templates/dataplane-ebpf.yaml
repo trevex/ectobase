@@ -29,6 +29,8 @@ spec:
         - name: flowplane
           image: {{ .Values.images.flowplane }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          resources:
+            {{- include "ectobase-pool.resources" . | nindent 12 }}
           # The overlay uplink is the containerlab fabric link (eth1, not the kind
           # mgmt eth0). The encap outer-eth next hop is the fabric router (sw1),
           # resolved dynamically as the "router" neighbour on the uplink so ONE

@@ -30,6 +30,8 @@ spec:
         - name: agent
           image: {{ .Values.images.netplane }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          resources:
+            {{- include "ectobase-pool.resources" . | nindent 12 }}
           command: ["agent"]
           # NOTE(tune): --underlay here is a fallback only. The reconciler announces
           # each endpoint's own status.underlayRoute (the /128 the attach path

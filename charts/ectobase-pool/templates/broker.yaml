@@ -30,6 +30,8 @@ spec:
         - name: broker
           image: {{ .Values.images.hubBroker }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          resources:
+            {{- include "ectobase-pool.resources" . | nindent 12 }}
           command: ["broker"]
           args:
             - "--cluster-name={{ .Values.broker.clusterName }}"

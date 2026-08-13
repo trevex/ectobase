@@ -30,5 +30,7 @@ spec:
         - name: vm-materializer
           image: {{ .Values.images.netplane }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          resources:
+            {{- include "ectobase-pool.resources" . | nindent 12 }}
           command: ["vm-materializer"]
 {{- end }}

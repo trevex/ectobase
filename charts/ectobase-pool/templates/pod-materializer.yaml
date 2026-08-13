@@ -29,4 +29,6 @@ spec:
         - name: pod-materializer
           image: {{ .Values.images.netplane }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          resources:
+            {{- include "ectobase-pool.resources" . | nindent 12 }}
           command: ["pod-materializer"]

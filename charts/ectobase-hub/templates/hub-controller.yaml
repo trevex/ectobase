@@ -60,6 +60,8 @@ spec:
         - name: controller
           image: {{ .Values.images.hubController }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          resources:
+            {{- include "ectobase-hub.resources" . | nindent 12 }}
           args:
             - "-reflector-admin={{ .Values.reflectorAdmin }}"
             {{- if .Values.routebus.mtls.enabled }}

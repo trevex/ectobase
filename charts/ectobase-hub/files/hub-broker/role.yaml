@@ -20,11 +20,8 @@ rules:
   resources:
   - clusterpools
   verbs:
-  - create
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - platform.ectobase.dev

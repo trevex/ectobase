@@ -13,3 +13,13 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/part-of: ectobase-hub
 {{- end }}
+
+{{/*
+Default pod resource requests (scheduling hints + Burstable QoS). Requests only — no limits, so
+nothing is throttled or OOM-killed on a lab node; set limits per your cluster if desired.
+*/}}
+{{- define "ectobase-hub.resources" -}}
+requests:
+  cpu: 50m
+  memory: 64Mi
+{{- end -}}

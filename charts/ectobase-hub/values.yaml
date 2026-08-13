@@ -36,6 +36,19 @@ routebus:
 # imagePullPolicy applies to all containers in the chart.
 imagePullPolicy: IfNotPresent
 
+# hubApiserver tunes the aggregated apiserver.
+hubApiserver:
+  # grantClusterAdmin binds the apiserver SA to cluster-admin. Default off: auth-delegator +
+  # the extension-apiserver-authentication reader are the standard host-cluster access an
+  # aggregated apiserver needs. Turn on only if the admission chain needs broader host reads.
+  grantClusterAdmin: false
+
+# kine is the etcd-v3-over-Postgres storage for the aggregated apiserver.
+kine:
+  # password backs both Postgres and the kine DSN, delivered via the kine-db Secret. Dev-grade
+  # default; override for anything beyond a throwaway smoke cluster.
+  password: kine
+
 images:
   # hubApiserver is the hub aggregated apiserver image.
   hubApiserver: ghcr.io/trevex/ectobase/hub-apiserver:dev

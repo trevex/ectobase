@@ -35,8 +35,12 @@ subjects:
     name: hub-apiserver
     namespace: {{ .Values.namespace }}
 ---
-# The generic apiserver runs admission informers that require broad read access;
-# for dev/smoke we grant cluster-admin. Production should scope this down.
+{{- if .Values.hubApiserver.grantClusterAdmin }}
+# Escape hatch (default OFF): a broad cluster-admin binding for the aggregated apiserver's SA.
+# An aggregated apiserver's host-cluster access is normally just auth-delegator (TokenReview /
+# SubjectAccessReview) + the extension-apiserver-authentication reader below; its OWN resources are
+# served from kine, not host RBAC. Enable this only if the apiserver-kit admission chain turns out
+# to need more host reads (a specific RBAC-forbidden error will say which).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -52,6 +56,7 @@ subjects:
     name: hub-apiserver
     namespace: {{ .Values.namespace }}
 ---
+{{- end }}
 # Access to the extension-apiserver-authentication configmap in kube-system,
 # which carries the requestheader/client CA the aggregation layer needs.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -108,6 +113,8 @@ spec:
         - name: apiserver
           image: {{ .Values.images.hubApiserver }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          resources:
+            {{- include "ectobase-hub.resources" . | nindent 12 }}
           args:
             - "--etcd-servers=http://kine:2379"
             - "--secure-port=6443"

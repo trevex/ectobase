@@ -41,4 +41,6 @@ spec:
         - name: controller
           image: {{ .Values.images.netplane }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
+          resources:
+            {{- include "ectobase-hub.resources" . | nindent 12 }}
           command: ["controller"]

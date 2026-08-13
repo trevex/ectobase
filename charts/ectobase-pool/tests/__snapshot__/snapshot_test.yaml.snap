@@ -64,6 +64,10 @@ renders (dpdk clab):
               image: ghcr.io/trevex/ectobase/netplane:dev
               imagePullPolicy: IfNotPresent
               name: agent
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               volumeMounts:
                 - mountPath: /etc/netplane
                   name: kubeconfig
@@ -115,6 +119,10 @@ renders (dpdk clab):
               image: ghcr.io/trevex/ectobase/hub-broker:dev
               imagePullPolicy: IfNotPresent
               name: broker
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               volumeMounts:
                 - mountPath: /secrets/hub
                   name: hub-kubeconfig
@@ -193,6 +201,10 @@ renders (dpdk clab):
             - image: ghcr.io/trevex/ectobase/cni:dev
               imagePullPolicy: IfNotPresent
               name: install
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               securityContext:
                 runAsUser: 0
               volumeMounts:
@@ -1907,6 +1919,10 @@ renders (dpdk clab):
               image: ghcr.io/trevex/ectobase/netplane:dev
               imagePullPolicy: IfNotPresent
               name: pod-materializer
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
           serviceAccountName: pod-materializer
   22: |
     apiVersion: v1
@@ -2144,6 +2160,10 @@ renders (dpdk hw):
               image: ghcr.io/trevex/ectobase/netplane:dev
               imagePullPolicy: IfNotPresent
               name: agent
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               volumeMounts:
                 - mountPath: /etc/netplane
                   name: kubeconfig
@@ -2195,6 +2215,10 @@ renders (dpdk hw):
               image: ghcr.io/trevex/ectobase/hub-broker:dev
               imagePullPolicy: IfNotPresent
               name: broker
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               volumeMounts:
                 - mountPath: /secrets/hub
                   name: hub-kubeconfig
@@ -2273,6 +2297,10 @@ renders (dpdk hw):
             - image: ghcr.io/trevex/ectobase/cni:dev
               imagePullPolicy: IfNotPresent
               name: install
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               securityContext:
                 runAsUser: 0
               volumeMounts:
@@ -4002,6 +4030,10 @@ renders (dpdk hw):
               image: ghcr.io/trevex/ectobase/netplane:dev
               imagePullPolicy: IfNotPresent
               name: pod-materializer
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
           serviceAccountName: pod-materializer
   22: |
     apiVersion: v1
@@ -4239,6 +4271,10 @@ renders (ebpf clab):
               image: ghcr.io/trevex/ectobase/netplane:dev
               imagePullPolicy: IfNotPresent
               name: agent
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               volumeMounts:
                 - mountPath: /etc/netplane
                   name: kubeconfig
@@ -4290,6 +4326,10 @@ renders (ebpf clab):
               image: ghcr.io/trevex/ectobase/hub-broker:dev
               imagePullPolicy: IfNotPresent
               name: broker
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               volumeMounts:
                 - mountPath: /secrets/hub
                   name: hub-kubeconfig
@@ -4368,6 +4408,10 @@ renders (ebpf clab):
             - image: ghcr.io/trevex/ectobase/cni:dev
               imagePullPolicy: IfNotPresent
               name: install
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               securityContext:
                 runAsUser: 0
               volumeMounts:
@@ -6003,6 +6047,10 @@ renders (ebpf clab):
                 initialDelaySeconds: 2
                 periodSeconds: 3
                 timeoutSeconds: 2
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               securityContext:
                 privileged: true
               volumeMounts:
@@ -6093,6 +6141,10 @@ renders (ebpf clab):
               image: ghcr.io/trevex/ectobase/netplane:dev
               imagePullPolicy: IfNotPresent
               name: pod-materializer
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
           serviceAccountName: pod-materializer
   22: |
     apiVersion: v1
@@ -6330,6 +6382,10 @@ renders (ebpf hw):
               image: ghcr.io/trevex/ectobase/netplane:dev
               imagePullPolicy: IfNotPresent
               name: agent
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               volumeMounts:
                 - mountPath: /etc/netplane
                   name: kubeconfig
@@ -6381,6 +6437,10 @@ renders (ebpf hw):
               image: ghcr.io/trevex/ectobase/hub-broker:dev
               imagePullPolicy: IfNotPresent
               name: broker
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               volumeMounts:
                 - mountPath: /secrets/hub
                   name: hub-kubeconfig
@@ -6459,6 +6519,10 @@ renders (ebpf hw):
             - image: ghcr.io/trevex/ectobase/cni:dev
               imagePullPolicy: IfNotPresent
               name: install
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               securityContext:
                 runAsUser: 0
               volumeMounts:
@@ -8091,6 +8155,10 @@ renders (ebpf hw):
                 initialDelaySeconds: 2
                 periodSeconds: 3
                 timeoutSeconds: 2
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               securityContext:
                 privileged: true
               volumeMounts:
@@ -8181,6 +8249,10 @@ renders (ebpf hw):
               image: ghcr.io/trevex/ectobase/netplane:dev
               imagePullPolicy: IfNotPresent
               name: pod-materializer
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
           serviceAccountName: pod-materializer
   22: |
     apiVersion: v1
@@ -8418,6 +8490,10 @@ renders (tier1 on):
               image: ghcr.io/trevex/ectobase/netplane:dev
               imagePullPolicy: IfNotPresent
               name: agent
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               volumeMounts:
                 - mountPath: /etc/netplane
                   name: kubeconfig
@@ -8469,6 +8545,10 @@ renders (tier1 on):
               image: ghcr.io/trevex/ectobase/hub-broker:dev
               imagePullPolicy: IfNotPresent
               name: broker
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               volumeMounts:
                 - mountPath: /secrets/hub
                   name: hub-kubeconfig
@@ -8547,6 +8627,10 @@ renders (tier1 on):
             - image: ghcr.io/trevex/ectobase/cni:dev
               imagePullPolicy: IfNotPresent
               name: install
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               securityContext:
                 runAsUser: 0
               volumeMounts:
@@ -10182,6 +10266,10 @@ renders (tier1 on):
                 initialDelaySeconds: 2
                 periodSeconds: 3
                 timeoutSeconds: 2
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               securityContext:
                 privileged: true
               volumeMounts:
@@ -10272,6 +10360,10 @@ renders (tier1 on):
               image: ghcr.io/trevex/ectobase/netplane:dev
               imagePullPolicy: IfNotPresent
               name: pod-materializer
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
           serviceAccountName: pod-materializer
   22: |
     apiVersion: v1
@@ -10546,6 +10638,10 @@ renders (tier1 watchdog):
               image: ghcr.io/trevex/ectobase/netplane:dev
               imagePullPolicy: IfNotPresent
               name: agent
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               volumeMounts:
                 - mountPath: /etc/netplane
                   name: kubeconfig
@@ -10597,6 +10693,10 @@ renders (tier1 watchdog):
               image: ghcr.io/trevex/ectobase/hub-broker:dev
               imagePullPolicy: IfNotPresent
               name: broker
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               volumeMounts:
                 - mountPath: /secrets/hub
                   name: hub-kubeconfig
@@ -10675,6 +10775,10 @@ renders (tier1 watchdog):
             - image: ghcr.io/trevex/ectobase/cni:dev
               imagePullPolicy: IfNotPresent
               name: install
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               securityContext:
                 runAsUser: 0
               volumeMounts:
@@ -12310,6 +12414,10 @@ renders (tier1 watchdog):
                 initialDelaySeconds: 2
                 periodSeconds: 3
                 timeoutSeconds: 2
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               securityContext:
                 privileged: true
               volumeMounts:
@@ -12400,6 +12508,10 @@ renders (tier1 watchdog):
               image: ghcr.io/trevex/ectobase/netplane:dev
               imagePullPolicy: IfNotPresent
               name: pod-materializer
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
           serviceAccountName: pod-materializer
   22: |
     apiVersion: v1
@@ -12684,6 +12796,10 @@ renders with vm-materializer enabled:
               image: ghcr.io/trevex/ectobase/netplane:dev
               imagePullPolicy: IfNotPresent
               name: agent
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               volumeMounts:
                 - mountPath: /etc/netplane
                   name: kubeconfig
@@ -12735,6 +12851,10 @@ renders with vm-materializer enabled:
               image: ghcr.io/trevex/ectobase/hub-broker:dev
               imagePullPolicy: IfNotPresent
               name: broker
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               volumeMounts:
                 - mountPath: /secrets/hub
                   name: hub-kubeconfig
@@ -12813,6 +12933,10 @@ renders with vm-materializer enabled:
             - image: ghcr.io/trevex/ectobase/cni:dev
               imagePullPolicy: IfNotPresent
               name: install
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               securityContext:
                 runAsUser: 0
               volumeMounts:
@@ -14448,6 +14572,10 @@ renders with vm-materializer enabled:
                 initialDelaySeconds: 2
                 periodSeconds: 3
                 timeoutSeconds: 2
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
               securityContext:
                 privileged: true
               volumeMounts:
@@ -14538,6 +14666,10 @@ renders with vm-materializer enabled:
               image: ghcr.io/trevex/ectobase/netplane:dev
               imagePullPolicy: IfNotPresent
               name: pod-materializer
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
           serviceAccountName: pod-materializer
   22: |
     apiVersion: v1
@@ -14815,4 +14947,8 @@ renders with vm-materializer enabled:
               image: ghcr.io/trevex/ectobase/netplane:dev
               imagePullPolicy: IfNotPresent
               name: vm-materializer
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
           serviceAccountName: vm-materializer
