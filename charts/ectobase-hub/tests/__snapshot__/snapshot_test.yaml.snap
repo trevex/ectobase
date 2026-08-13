@@ -28,6 +28,59 @@ renders the hub control plane:
         namespace: system
   3: |
     apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: hub-apiserver-informers
+    rules:
+      - apiGroups:
+          - admissionregistration.k8s.io
+        resources:
+          - validatingwebhookconfigurations
+          - mutatingwebhookconfigurations
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - flowcontrol.apiserver.k8s.io
+        resources:
+          - flowschemas
+          - prioritylevelconfigurations
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - ""
+        resources:
+          - namespaces
+        verbs:
+          - get
+          - list
+          - watch
+  4: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-hub
+        helm.sh/chart: ectobase-hub-0.1.0
+      name: hub-apiserver-informers
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: hub-apiserver-informers
+    subjects:
+      - kind: ServiceAccount
+        name: hub-apiserver
+        namespace: system
+  5: |
+    apiVersion: rbac.authorization.k8s.io/v1
     kind: RoleBinding
     metadata:
       labels:
@@ -44,7 +97,7 @@ renders the hub control plane:
       - kind: ServiceAccount
         name: hub-apiserver
         namespace: system
-  4: |
+  6: |
     apiVersion: v1
     kind: Service
     metadata:
@@ -61,7 +114,7 @@ renders the hub control plane:
           targetPort: 6443
       selector:
         app: hub-apiserver
-  5: |
+  7: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -120,7 +173,7 @@ renders the hub control plane:
           volumes:
             - emptyDir: {}
               name: cert-dir
-  6: |
+  8: |
     apiVersion: apiregistration.k8s.io/v1
     kind: APIService
     metadata:
@@ -139,7 +192,7 @@ renders the hub control plane:
         port: 443
       version: v1alpha1
       versionPriority: 100
-  7: |
+  9: |
     apiVersion: apiregistration.k8s.io/v1
     kind: APIService
     metadata:
@@ -158,7 +211,7 @@ renders the hub control plane:
         port: 443
       version: v1alpha1
       versionPriority: 100
-  8: |
+  10: |
     apiVersion: apiregistration.k8s.io/v1
     kind: APIService
     metadata:
@@ -177,7 +230,7 @@ renders the hub control plane:
         port: 443
       version: v1alpha1
       versionPriority: 100
-  9: |
+  11: |
     apiVersion: apiregistration.k8s.io/v1
     kind: APIService
     metadata:
@@ -196,7 +249,7 @@ renders the hub control plane:
         port: 443
       version: v1alpha1
       versionPriority: 100
-  10: |
+  12: |
     apiVersion: apiregistration.k8s.io/v1
     kind: APIService
     metadata:
@@ -215,7 +268,7 @@ renders the hub control plane:
         port: 443
       version: v1alpha1
       versionPriority: 100
-  11: |
+  13: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
@@ -225,7 +278,7 @@ renders the hub control plane:
         helm.sh/chart: ectobase-hub-0.1.0
       name: hub-broker
       namespace: system
-  12: |
+  14: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -262,7 +315,7 @@ renders the hub control plane:
           - get
           - patch
           - update
-  13: |
+  15: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -279,7 +332,7 @@ renders the hub control plane:
       - kind: ServiceAccount
         name: hub-broker
         namespace: system
-  14: |
+  16: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -319,7 +372,7 @@ renders the hub control plane:
           serviceAccountName: netplane-controller
           tolerations:
             - operator: Exists
-  15: |
+  17: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
@@ -329,7 +382,7 @@ renders the hub control plane:
         helm.sh/chart: ectobase-hub-0.1.0
       name: hub-controller
       namespace: system
-  16: |
+  18: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -419,7 +472,7 @@ renders the hub control plane:
           - patch
           - update
           - watch
-  17: |
+  19: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -436,7 +489,7 @@ renders the hub control plane:
       - kind: ServiceAccount
         name: hub-controller
         namespace: system
-  18: |
+  20: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -475,7 +528,7 @@ renders the hub control plane:
                   cpu: 50m
                   memory: 64Mi
           serviceAccountName: hub-controller
-  19: |
+  21: |
     apiVersion: v1
     kind: Secret
     metadata:
@@ -488,7 +541,7 @@ renders the hub control plane:
     stringData:
       password: kine
     type: Opaque
-  20: |
+  22: |
     apiVersion: v1
     kind: Service
     metadata:
@@ -505,7 +558,7 @@ renders the hub control plane:
           targetPort: 5432
       selector:
         app: hub-postgres
-  21: |
+  23: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -560,7 +613,7 @@ renders the hub control plane:
           volumes:
             - emptyDir: {}
               name: data
-  22: |
+  24: |
     apiVersion: v1
     kind: Service
     metadata:
@@ -577,7 +630,7 @@ renders the hub control plane:
           targetPort: 2379
       selector:
         app: hub-kine
-  23: |
+  25: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -624,7 +677,7 @@ renders the hub control plane:
                 requests:
                   cpu: 50m
                   memory: 64Mi
-  24: |
+  26: |
     apiVersion: v1
     kind: Namespace
     metadata:
@@ -634,7 +687,7 @@ renders the hub control plane:
         helm.sh/chart: ectobase-hub-0.1.0
         pod-security.kubernetes.io/enforce: privileged
       name: ectobase-system
-  25: |
+  27: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
@@ -644,7 +697,7 @@ renders the hub control plane:
         helm.sh/chart: ectobase-hub-0.1.0
       name: netplane-controller
       namespace: ectobase-system
-  26: |
+  28: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -743,7 +796,7 @@ renders the hub control plane:
           - get
           - list
           - watch
-  27: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -760,7 +813,7 @@ renders the hub control plane:
       - kind: ServiceAccount
         name: netplane-controller
         namespace: ectobase-system
-  28: |
+  30: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
@@ -770,7 +823,7 @@ renders the hub control plane:
         helm.sh/chart: ectobase-hub-0.1.0
       name: netplane-reflector
       namespace: ectobase-system
-  29: |
+  31: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -818,7 +871,7 @@ renders the hub control plane:
           serviceAccountName: netplane-reflector
           tolerations:
             - operator: Exists
-  30: |
+  32: |
     apiVersion: v1
     kind: Service
     metadata:

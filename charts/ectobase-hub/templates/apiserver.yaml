@@ -35,12 +35,48 @@ subjects:
     name: hub-apiserver
     namespace: {{ .Values.namespace }}
 ---
+# Scoped read for the generic apiserver's built-in informers. k8s.io/apiserver runs webhook
+# admission (validating/mutating configs) and API Priority & Fairness (flowschemas +
+# prioritylevelconfigurations) controllers whose informers must sync before /readyz passes, plus
+# namespace-lifecycle admission (namespaces). Without these the SA is RBAC-forbidden and the
+# aggregated API never becomes Ready. This is the least-privilege replacement for the former
+# cluster-admin binding (get;list;watch only, no writes, no access to arbitrary resources).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hub-apiserver-informers
+  labels:
+    {{- include "ectobase-hub.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingwebhookconfigurations", "mutatingwebhookconfigurations"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["flowcontrol.apiserver.k8s.io"]
+    resources: ["flowschemas", "prioritylevelconfigurations"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hub-apiserver-informers
+  labels:
+    {{- include "ectobase-hub.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: hub-apiserver-informers
+subjects:
+  - kind: ServiceAccount
+    name: hub-apiserver
+    namespace: {{ .Values.namespace }}
+---
 {{- if .Values.hubApiserver.grantClusterAdmin }}
-# Escape hatch (default OFF): a broad cluster-admin binding for the aggregated apiserver's SA.
-# An aggregated apiserver's host-cluster access is normally just auth-delegator (TokenReview /
-# SubjectAccessReview) + the extension-apiserver-authentication reader below; its OWN resources are
-# served from kine, not host RBAC. Enable this only if the apiserver-kit admission chain turns out
-# to need more host reads (a specific RBAC-forbidden error will say which).
+# Escape hatch (default OFF): a broad cluster-admin binding, in case a future apiserver-kit admission
+# chain needs host reads beyond the scoped informer role above (a specific RBAC-forbidden error names
+# the missing resource — prefer adding it to hub-apiserver-informers over enabling this).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
