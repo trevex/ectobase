@@ -1,0 +1,61 @@
+name: test
+
+# Fast, non-privileged unit/integration gate — the counterpart to docker.yml (which only builds and
+# publishes images). Runs the suites that need no root and no live cluster:
+#   * make sim        — pure-core + native datapath sim (flowplane-core + flowplane-sim)
+#   * make test       — flowplane host unit tests (builds the eBPF program via aya-build)
+#   * make chart-test — helm-unittest for both charts
+#   * go test         — every Go module (api, cni, netplane, hub)
+#
+# NOTE: the hub module currently pins a LOCAL replace for go.opendefense.cloud/kit (apiserver-kit),
+# so its `go test` fails until that module is upstreamed. That's expected and intentionally NOT gated
+# out here — it goes green on its own once the replace is dropped.
+#
+# NOT run here (separate privileged tier, tracked as a follow-up): make verifier / sim-anchor /
+# lab-test need root/self-hosted runners (XDP load, BPF_PROG_TEST_RUN, clab).
+#
+# The toolchain (pinned Rust nightly + LLVM, Go, helm + helm-unittest, controller-gen, and the
+# envtest kube-apiserver/etcd assets) all come from the flake devShell, so CI runs the SAME
+# environment as local `make`.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Rust datapath sim (pure-core + native sim)
+        run: nix develop --command make sim
+
+      - name: Rust flowplane host unit tests (eBPF build)
+        run: nix develop --command make test
+
+      - name: Helm chart unit tests
+        run: nix develop --command make chart-test
+
+      - name: Go unit + envtest (all modules)
+        run: |
+          nix develop --command bash -c '
+            set -uo pipefail
+            rc=0
+            for m in api cni netplane hub; do
+              echo "::group::go test $m"
+              (cd "$m" && go test ./...) || rc=1
+              echo "::endgroup::"
+            done
+            exit $rc
+          '
