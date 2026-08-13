@@ -260,4 +260,25 @@ impl MapWriter for AyaWriter {
         ct_flush_for_guest(&mut ct, s.vni, s.guest_ip, s.nat_ip, s.port_min, s.port_max);
         Ok(())
     }
+
+    fn conntrack_flush_interface(&mut self, vni: u32, guest_ip: [u8; 4]) -> anyhow::Result<()> {
+        // Remove every v4 CT entry for this (vni, guest_ip) — src OR dst — so a reschedule of the
+        // same overlay IP starts with a clean firewall state (no inherited established bypass).
+        let mut ct = self.conntrack.lock();
+        let to_remove: Vec<CtKey> = ct
+            .entries()
+            .into_iter()
+            .filter_map(|(k, _)| {
+                if k.vni == vni && (k.src_ip == guest_ip || k.dst_ip == guest_ip) {
+                    Some(k)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for k in to_remove {
+            let _ = ct.remove(&k);
+        }
+        Ok(())
+    }
 }

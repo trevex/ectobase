@@ -701,6 +701,10 @@ impl Control {
             let _ = g.core.writer_mut().route6_remove(rec.vni, rec.ipv6, 128);
         }
         g.core.remove_fw_rules(tap);
+        // Flush this interface's conntrack so a later reschedule of the same (VNI, overlayIP) cannot
+        // inherit a stale established-flow firewall bypass. Best-effort + per-interface (not gated on
+        // the last-iface purge_vni below, which only fires when the whole VNI empties).
+        let _ = g.core.writer_mut().conntrack_flush_interface(vni, rec.ipv4);
         // Auto-reset VNI when the last local interface on it is removed:
         // purge neighbor NATs (and orphaned VIP/NAT/route state) for that VNI. This matches
         // dpservice's async-deletion model where the VNI is implicitly reset on last-iface removal.

@@ -276,6 +276,13 @@ impl MapWriter for DpdkMapWriter {
         self.sc.bump_generation();
         Ok(())
     }
+
+    fn conntrack_flush_interface(&mut self, _vni: u32, _guest_ip: [u8; 4]) -> anyhow::Result<()> {
+        // Same DPDK invalidation primitive as conntrack_flush: bump the config generation so CT
+        // entries created before this detach are treated as stale by the generation check.
+        self.sc.bump_generation();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
