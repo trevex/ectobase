@@ -77,11 +77,16 @@ pub trait MapWriter {
     fn vips_remove(&mut self, key: &VipKey) -> anyhow::Result<()>;
     fn vips_get(&self, key: &VipKey) -> Option<[u8; 4]>;
     fn conntrack_flush(&mut self, scope: CtFlushScope) -> anyhow::Result<()>;
-    /// Flush ALL conntrack entries for a DETACHED interface's guest IP — every v4 entry whose key
-    /// vni matches and whose src OR dst is `guest_ip`. Called on interface teardown so a later
+    /// Flush ALL conntrack entries for a DETACHED interface's guest IPs — every v4 CONNTRACK entry
+    /// whose key vni matches and whose src OR dst is `guest_ip`, and every v6 CONNTRACK6 entry
+    /// matching `guest_ip6` (skipped when all-zero). Called on interface teardown so a later
     /// reschedule of the same `(VNI, overlayIP)` cannot inherit a stale established-flow firewall
     /// bypass (a CT hit skips the deny-by-default firewall). Unlike `conntrack_flush` this is NOT
-    /// scoped to a NAT allocation. (v4 CONNTRACK only; v6 CONNTRACK6 flush is a follow-up — the
-    /// control plane does not yet hold a handle to that map.)
-    fn conntrack_flush_interface(&mut self, vni: u32, guest_ip: [u8; 4]) -> anyhow::Result<()>;
+    /// scoped to a NAT allocation.
+    fn conntrack_flush_interface(
+        &mut self,
+        vni: u32,
+        guest_ip: [u8; 4],
+        guest_ip6: [u8; 16],
+    ) -> anyhow::Result<()>;
 }

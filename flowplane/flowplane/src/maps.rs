@@ -5,7 +5,7 @@ use aya::maps::{
 };
 use aya::Ebpf;
 use flowplane_common::{
-    CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey,
+    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey,
     IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbKey, LbValue, Local, MaglevKey,
     MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteLpmData, RouteLpmData6,
     RouteValue, UnderlayValue, VipKey,
@@ -363,6 +363,31 @@ impl Conntrack {
 
     /// Snapshot all (key, entry) pairs for a GC sweep.
     pub fn entries(&self) -> Vec<(CtKey, CtEntry)> {
+        self.map.iter().filter_map(|r| r.ok()).collect()
+    }
+}
+
+/// Typed handle over the `CONNTRACK6` BPF map (LRU hash map). Firewall-only v6 mirror of
+/// [`Conntrack`]; the control plane holds it so it can flush a detached interface's v6 entries.
+pub struct Conntrack6 {
+    map: HashMap<MapData, CtKey6, CtEntry>,
+}
+
+impl Conntrack6 {
+    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
+        let map = HashMap::try_from(
+            ebpf.take_map("CONNTRACK6")
+                .context("CONNTRACK6 map missing")?,
+        )?;
+        Ok(Self { map })
+    }
+
+    pub fn remove(&mut self, key: &CtKey6) -> anyhow::Result<()> {
+        self.map.remove(key).context("remove conntrack6")
+    }
+
+    /// Snapshot all (key, entry) pairs (used by the interface-detach flush).
+    pub fn entries(&self) -> Vec<(CtKey6, CtEntry)> {
         self.map.iter().filter_map(|r| r.ok()).collect()
     }
 }

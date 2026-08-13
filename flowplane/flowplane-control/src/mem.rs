@@ -32,7 +32,7 @@ pub struct MemMapWriter {
     pub dhcp_meta_removed: Vec<u32>,
     pub vips: HashMap<VipKey, [u8; 4]>,
     pub ct_flushes: Vec<CtFlushScope>,
-    pub ct_iface_flushes: Vec<(u32, [u8; 4])>,
+    pub ct_iface_flushes: Vec<(u32, [u8; 4], [u8; 16])>,
 }
 
 impl MapWriter for MemMapWriter {
@@ -200,8 +200,13 @@ impl MapWriter for MemMapWriter {
         self.ct_flushes.push(s);
         Ok(())
     }
-    fn conntrack_flush_interface(&mut self, vni: u32, guest_ip: [u8; 4]) -> anyhow::Result<()> {
-        self.ct_iface_flushes.push((vni, guest_ip));
+    fn conntrack_flush_interface(
+        &mut self,
+        vni: u32,
+        guest_ip: [u8; 4],
+        guest_ip6: [u8; 16],
+    ) -> anyhow::Result<()> {
+        self.ct_iface_flushes.push((vni, guest_ip, guest_ip6));
         Ok(())
     }
 }

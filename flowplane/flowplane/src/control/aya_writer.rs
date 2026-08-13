@@ -4,13 +4,13 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::maps::{
-    Conntrack, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwMetaMap6, FwRules, FwRules6, IfaceMetaMap,
-    Interfaces, Lb, Maglev, Meter, Nat, NatIps, NeighborNat, NeighborNatCount, PortMetaMap, Routes,
-    Routes6, Underlay, Vips,
+    Conntrack, Conntrack6, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwMetaMap6, FwRules, FwRules6,
+    IfaceMetaMap, Interfaces, Lb, Maglev, Meter, Nat, NatIps, NeighborNat, NeighborNatCount,
+    PortMetaMap, Routes, Routes6, Underlay, Vips,
 };
 use flowplane_common::{
-    CtKey, IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue, NatKey, NatValue, NeighborNatEntry,
-    PortMeta, RouteValue, VipKey,
+    CtKey, CtKey6, IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue, NatKey, NatValue,
+    NeighborNatEntry, PortMeta, RouteValue, VipKey,
 };
 use flowplane_control::{CtFlushScope, MapWriter};
 
@@ -46,6 +46,9 @@ pub struct AyaWriter {
     /// Shared conntrack handle (same Arc `Control` holds for the GC task); the NAT teardown flush
     /// scans+removes matching CONNTRACK entries here.
     pub conntrack: Arc<Mutex<Conntrack>>,
+    /// v6 firewall-only conntrack handle; the interface-detach flush scans+removes matching
+    /// CONNTRACK6 entries here (v6 has no userspace GC — the LRU map auto-evicts otherwise).
+    pub conntrack6: Arc<Mutex<Conntrack6>>,
 }
 
 impl AyaWriter {
@@ -261,23 +264,48 @@ impl MapWriter for AyaWriter {
         Ok(())
     }
 
-    fn conntrack_flush_interface(&mut self, vni: u32, guest_ip: [u8; 4]) -> anyhow::Result<()> {
+    fn conntrack_flush_interface(
+        &mut self,
+        vni: u32,
+        guest_ip: [u8; 4],
+        guest_ip6: [u8; 16],
+    ) -> anyhow::Result<()> {
         // Remove every v4 CT entry for this (vni, guest_ip) — src OR dst — so a reschedule of the
         // same overlay IP starts with a clean firewall state (no inherited established bypass).
-        let mut ct = self.conntrack.lock();
-        let to_remove: Vec<CtKey> = ct
-            .entries()
-            .into_iter()
-            .filter_map(|(k, _)| {
-                if k.vni == vni && (k.src_ip == guest_ip || k.dst_ip == guest_ip) {
-                    Some(k)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        for k in to_remove {
-            let _ = ct.remove(&k);
+        {
+            let mut ct = self.conntrack.lock();
+            let to_remove: Vec<CtKey> = ct
+                .entries()
+                .into_iter()
+                .filter_map(|(k, _)| {
+                    if k.vni == vni && (k.src_ip == guest_ip || k.dst_ip == guest_ip) {
+                        Some(k)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for k in to_remove {
+                let _ = ct.remove(&k);
+            }
+        }
+        // Same for the v6 firewall conntrack (skip when the interface has no v6 overlay IP).
+        if guest_ip6 != [0u8; 16] {
+            let mut ct6 = self.conntrack6.lock();
+            let to_remove: Vec<CtKey6> = ct6
+                .entries()
+                .into_iter()
+                .filter_map(|(k, _)| {
+                    if k.vni == vni && (k.src_ip == guest_ip6 || k.dst_ip == guest_ip6) {
+                        Some(k)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for k in to_remove {
+                let _ = ct6.remove(&k);
+            }
         }
         Ok(())
     }

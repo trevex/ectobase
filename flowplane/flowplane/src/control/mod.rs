@@ -9,8 +9,8 @@ use flowplane_common::{IfaceKey, IfaceMetaKey, IfaceMetaVal, Local, IFACE_DEV_MA
 
 use crate::loader;
 use crate::maps::{
-    Conntrack, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwMetaMap6, FwRules, FwRules6, GuestDevMap,
-    IfaceMetaMap, Interfaces, Lb, LocalMap, Maglev, Meter, Nat, NatIps, NeighborNat,
+    Conntrack, Conntrack6, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwMetaMap6, FwRules, FwRules6,
+    GuestDevMap, IfaceMetaMap, Interfaces, Lb, LocalMap, Maglev, Meter, Nat, NatIps, NeighborNat,
     NeighborNatCount, PortMetaMap, Routes, Routes6, UplinkDevMap, Vips,
 };
 // `Nat`, `NatIps`, `NeighborNat`, `NeighborNatCount` are still opened in `bring_up`/the test ctor,
@@ -235,6 +235,9 @@ impl Control {
         let dhcp_meta = DhcpMetaMap::open(&mut ebpf)?;
         let iface_meta = IfaceMetaMap::open(&mut ebpf)?;
         let conntrack = Arc::new(Mutex::new(Conntrack::open(&mut ebpf)?));
+        // v6 firewall conntrack handle for the interface-detach flush. No userspace GC task holds it
+        // (the LRU map self-evicts), so AyaWriter owns the sole handle — no Control field needed.
+        let conntrack6 = Arc::new(Mutex::new(Conntrack6::open(&mut ebpf)?));
         let aya = AyaWriter {
             routes,
             routes6,
@@ -257,6 +260,7 @@ impl Control {
             dhcp_meta,
             iface_meta,
             conntrack: Arc::clone(&conntrack),
+            conntrack6,
         };
         let mut inner = Inner {
             ebpf,
@@ -704,7 +708,10 @@ impl Control {
         // Flush this interface's conntrack so a later reschedule of the same (VNI, overlayIP) cannot
         // inherit a stale established-flow firewall bypass. Best-effort + per-interface (not gated on
         // the last-iface purge_vni below, which only fires when the whole VNI empties).
-        let _ = g.core.writer_mut().conntrack_flush_interface(vni, rec.ipv4);
+        let _ = g
+            .core
+            .writer_mut()
+            .conntrack_flush_interface(vni, rec.ipv4, rec.ipv6);
         // Auto-reset VNI when the last local interface on it is removed:
         // purge neighbor NATs (and orphaned VIP/NAT/route state) for that VNI. This matches
         // dpservice's async-deletion model where the VNI is implicitly reset on last-iface removal.
