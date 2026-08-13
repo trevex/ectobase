@@ -27,6 +27,8 @@ size_t nfkit_rcu_qsbr_get_memsize(uint32_t max_threads);
 int    nfkit_rcu_qsbr_init(struct rte_rcu_qsbr *v, uint32_t max_threads);
 int    nfkit_rcu_qsbr_thread_register(struct rte_rcu_qsbr *v, unsigned int thread_id);
 void   nfkit_rcu_qsbr_thread_online(struct rte_rcu_qsbr *v, unsigned int thread_id);
+void   nfkit_rcu_qsbr_thread_offline(struct rte_rcu_qsbr *v, unsigned int thread_id);
+void   nfkit_rcu_qsbr_thread_unregister(struct rte_rcu_qsbr *v, unsigned int thread_id);
 void   nfkit_rcu_qsbr_quiescent(struct rte_rcu_qsbr *v, unsigned int thread_id);
 
 /* Inter-lcore rte_ring: MP enqueue / SC dequeue. Create wraps RING_F_SC_DEQ (a C macro, not

@@ -27,6 +27,8 @@ size_t nfkit_rcu_qsbr_get_memsize(uint32_t m) { return rte_rcu_qsbr_get_memsize(
 int    nfkit_rcu_qsbr_init(struct rte_rcu_qsbr *v, uint32_t m) { return rte_rcu_qsbr_init(v, m); }
 int    nfkit_rcu_qsbr_thread_register(struct rte_rcu_qsbr *v, unsigned int t) { return rte_rcu_qsbr_thread_register(v, t); }
 void   nfkit_rcu_qsbr_thread_online(struct rte_rcu_qsbr *v, unsigned int t) { rte_rcu_qsbr_thread_online(v, t); }
+void   nfkit_rcu_qsbr_thread_offline(struct rte_rcu_qsbr *v, unsigned int t) { rte_rcu_qsbr_thread_offline(v, t); }
+void   nfkit_rcu_qsbr_thread_unregister(struct rte_rcu_qsbr *v, unsigned int t) { rte_rcu_qsbr_thread_unregister(v, t); }
 void   nfkit_rcu_qsbr_quiescent(struct rte_rcu_qsbr *v, unsigned int t) { rte_rcu_qsbr_quiescent(v, t); }
 
 int nfkit_rte_errno(void) { return rte_errno; }

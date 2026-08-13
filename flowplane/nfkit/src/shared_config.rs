@@ -438,6 +438,20 @@ impl SharedConfigMaps {
         unsafe { dpdk_sys::nfkit_rcu_qsbr_quiescent(self.qsbr, tok.id) };
     }
 
+    /// Take the reader `tok` OFFLINE and unregister it. MUST be called on every exit path of a
+    /// reader thread (normal loop exit, early failure, before the thread stops polling). A reader
+    /// that stays registered+online but never reports quiescence again would block the writer's
+    /// `synchronize_rcu` / deferred frees forever (unbounded memory growth). Consumes the token so
+    /// it cannot be used after going offline.
+    pub fn reader_offline(&self, tok: ReaderToken) {
+        // SAFETY: `tok` was produced by `register_reader` on THIS instance's qsbr, so `tok.id` is
+        // registered+online on `self.qsbr`. After offline+unregister the id is no longer waited on.
+        unsafe {
+            dpdk_sys::nfkit_rcu_qsbr_thread_offline(self.qsbr, tok.id);
+            dpdk_sys::nfkit_rcu_qsbr_thread_unregister(self.qsbr, tok.id);
+        }
+    }
+
     // ── singleton setters/getters ───────────────────────────────────────────────
 
     /// Set the `LOCAL[0]` singleton (uplink + underlay gateway).

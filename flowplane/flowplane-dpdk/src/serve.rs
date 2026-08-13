@@ -1052,6 +1052,9 @@ fn worker_loop(
         Ok(f) => f,
         Err(e) => {
             eprintln!("worker {q}: PerLcoreFlowMaps::new failed: {e}; worker exiting");
+            // Go offline before exiting: a registered-but-dead reader would stall the writer's
+            // RCU reclamation on every sibling worker forever.
+            shared.reader_offline(tok);
             return;
         }
     };
@@ -1414,6 +1417,9 @@ fn worker_loop(
         // Report quiescence EVERY iteration (incl. idle) so the writer's RCU reclaim can progress.
         shared.report_quiescent(&tok);
     }
+    // Normal exit (stop signalled): go offline+unregister so the writer's RCU reclaim never waits
+    // on this stopped reader.
+    shared.reader_offline(tok);
 }
 
 #[cfg(test)]
