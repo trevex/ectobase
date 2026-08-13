@@ -48,8 +48,8 @@ func (r *Reconciler) ReconcileQoS(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list local interfaces: %w", err)
 	}
-	var cnics compiledv1.CompiledNICList
-	if err := r.client.List(ctx, &cnics); err != nil {
+	cnics, err := r.listCNICs(ctx)
+	if err != nil {
 		return fmt.Errorf("list compilednics: %w", err)
 	}
 	// desired: interfaceID -> caps to program (only locally-attached NICs with QoS set).

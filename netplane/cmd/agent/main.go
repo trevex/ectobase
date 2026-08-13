@@ -77,6 +77,11 @@ func main() {
 	// and on session (re)open, pushing only the deltas onto the live stream — so CRD changes after
 	// startup converge without waiting for a disconnect, and removed NICs are withdrawn fabric-wide.
 	reconcile := func(ctx context.Context) (agent.DesiredState, error) {
+		// Snapshot the node-wide reads (ListInterfaces + CompiledNIC list) once for the whole tick:
+		// Desired + the firewall/LB/QoS/public reconcilers below otherwise re-fetch them ~7x and could
+		// see disagreeing mid-tick snapshots.
+		r.BeginTick()
+		defer r.EndTick()
 		subs, routes, nats, egressVNIs, peeringImports, err := r.Desired(ctx)
 		if err != nil {
 			return agent.DesiredState{}, err

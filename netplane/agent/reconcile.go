@@ -29,6 +29,42 @@ type Reconciler struct {
 	// appliedQoS tracks the last per-interface QoS caps pushed so ReconcileQoS only calls
 	// ConfigureQoS when caps change (level-triggered convergence). Keyed by interface_id.
 	appliedQoS map[string]compiledQoSCaps // interfaceID -> last-applied caps
+	// tick is the OPT-IN per-tick read cache. When non-nil (set by BeginTick at the top of each
+	// reconcile tick), listLocalIfaces + listCNICs snapshot ListInterfaces / the CompiledNIC list
+	// ONCE and share them across the ~7 helpers that need them within the tick. Left nil in tests so
+	// each Reconcile* call reads fresh. Single-goroutine (the bus Run loop) — no locking.
+	tick *tickSnapshot
+}
+
+// tickSnapshot lazily caches the two node-wide reads (ListInterfaces + CompiledNIC list) that are
+// identical within one reconcile tick.
+type tickSnapshot struct {
+	locals    []LocalInterface
+	haveLoc   bool
+	cnics     compiledv1.CompiledNICList
+	haveCNICs bool
+}
+
+// BeginTick enables the per-tick read cache for the current reconcile; EndTick clears it. Call
+// BeginTick once at the very top of each reconcile tick (and EndTick, typically deferred, at the
+// end) so a transient failure doesn't leave a stale snapshot for the next tick.
+func (r *Reconciler) BeginTick() { r.tick = &tickSnapshot{} }
+func (r *Reconciler) EndTick()   { r.tick = nil }
+
+// listCNICs returns the node's CompiledNIC list, served from the per-tick cache when one is active.
+func (r *Reconciler) listCNICs(ctx context.Context) (compiledv1.CompiledNICList, error) {
+	if r.tick != nil && r.tick.haveCNICs {
+		return r.tick.cnics, nil
+	}
+	var cnics compiledv1.CompiledNICList
+	if err := r.client.List(ctx, &cnics); err != nil {
+		return cnics, err
+	}
+	if r.tick != nil {
+		r.tick.cnics = cnics
+		r.tick.haveCNICs = true
+	}
+	return cnics, nil
 }
 
 // Deps carries the runtime dependencies wired into a Reconciler at construction.
@@ -93,12 +129,9 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 	// local dataplane (the underlay is node-local state the dataplane allocates, not central config).
 	// Overlay host routes announce from these; ulByKey indexes (VNI, overlay IP) -> node-local
 	// underlay so central NAT policy can be joined to the correct node-local nexthop.
-	var locals []LocalInterface
-	if r.dp != nil {
-		locals, err = r.dp.ListInterfaces(ctx)
-		if err != nil {
-			return nil, nil, nil, nil, nil, fmt.Errorf("list interfaces: %w", err)
-		}
+	locals, err := r.listLocalIfaces(ctx)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
 	}
 	vniSet := map[uint32]struct{}{PublicVNI: {}} // always subscribe to the public VNI to learn defaults
 	// ulByKey: (VNI, overlay IP) -> node-local underlay nexthop, sound under overlapping VPC subnets.
@@ -134,8 +167,8 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 	// joined to that source's node-local underlay. Program the local SNAT source and announce its NAT
 	// block (owner = the source's node-local underlay) so peers learn the neighbor-nat return route.
 	// A NIC is "local" iff its (VNI, overlayIP) is present in localSet — no nodeName dependency.
-	var cnics compiledv1.CompiledNICList
-	if err := r.client.List(ctx, &cnics); err != nil {
+	cnics, err := r.listCNICs(ctx)
+	if err != nil {
 		return nil, nil, nil, nil, nil, fmt.Errorf("list compilednics: %w", err)
 	}
 	for i := range cnics.Items {
@@ -235,13 +268,21 @@ func localNIC(c *compiledv1.CompiledNIC, local map[ipKey]struct{}) bool {
 }
 
 // listLocalIfaces returns the dataplane's locally-attached interfaces, or nil if dp is unset.
+// Served from the per-tick cache when one is active (see BeginTick).
 func (r *Reconciler) listLocalIfaces(ctx context.Context) ([]LocalInterface, error) {
+	if r.tick != nil && r.tick.haveLoc {
+		return r.tick.locals, nil
+	}
 	if r.dp == nil {
 		return nil, nil
 	}
 	locals, err := r.dp.ListInterfaces(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list interfaces: %w", err)
+	}
+	if r.tick != nil {
+		r.tick.locals = locals
+		r.tick.haveLoc = true
 	}
 	return locals, nil
 }

@@ -30,8 +30,8 @@ func (r *Reconciler) ReconcileFirewall(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var list compiledv1.CompiledNICList
-	if err := r.client.List(ctx, &list); err != nil {
+	list, err := r.listCNICs(ctx)
+	if err != nil {
 		return fmt.Errorf("list compilednics: %w", err)
 	}
 	// interfaceID -> ordered desired rules (ingress first, then egress; index = slot within family).
