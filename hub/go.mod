@@ -1,6 +1,6 @@
 module github.com/trevex/ectobase/hub
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/trevex/ectobase/api v0.0.0-00010101000000-000000000000
@@ -18,7 +18,7 @@ require (
 	kubevirt.io/containerized-data-importer-api v1.64.0
 	sigs.k8s.io/controller-runtime v0.24.1
 	sigs.k8s.io/randfill v1.0.0
-	sigs.k8s.io/structured-merge-diff/v6 v6.4.0
+	sigs.k8s.io/structured-merge-diff/v6 v6.4.2
 )
 
 require (
@@ -68,7 +68,7 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/ironcore-dev/controller-utils v0.12.0 // indirect
-	github.com/ironcore-dev/ironcore v0.4.1 // indirect
+	github.com/ironcore-dev/ironcore v0.4.3 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
@@ -126,7 +126,7 @@ require (
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kms v0.36.2 // indirect
 	k8s.io/streaming v0.36.2 // indirect
-	k8s.io/utils v0.0.0-20260319190234-28399d86e0b5 // indirect
+	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3 // indirect
 	kubevirt.io/controller-lifecycle-operator-sdk/api v0.2.4 // indirect
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.34.0 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
