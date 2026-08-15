@@ -6,7 +6,7 @@
 # These pods are baseline-PSA-safe; the installer owns this (release) namespace.
 namespace: system
 
-# agentNamespace is the Kubernetes namespace for the netplane compiler and reflector.
+# agentNamespace is the Kubernetes namespace for the mesh compiler and reflector.
 # They run hostNetwork, so the chart creates this namespace PSA-privileged.
 agentNamespace: ectobase-system
 
@@ -54,8 +54,8 @@ images:
   dispatchApiserver: ghcr.io/trevex/ectobase/dispatch-apiserver:dev
   # dispatchController is the dispatch controller image (ClusterPool reconciler + scheduler).
   dispatchController: ghcr.io/trevex/ectobase/dispatch-controller:dev
-  # netplane is the shared image for the netplane-controller (compiler) and reflector binaries.
-  netplane: ghcr.io/trevex/ectobase/netplane:dev
+  # mesh is the shared image for the mesh-controller (compiler) and reflector binaries.
+  mesh: ghcr.io/trevex/ectobase/mesh:dev
   # kine is the etcd-v3 shim image.
   kine: rancher/kine:v0.13.0
   # postgres is the backing storage for kine (dev/smoke; not HA).

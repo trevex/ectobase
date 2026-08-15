@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/trevex/ectobase/api v0.0.0-00010101000000-000000000000
-	github.com/trevex/ectobase/netplane v0.0.0-00010101000000-000000000000
+	github.com/trevex/ectobase/mesh v0.0.0-00010101000000-000000000000
 	go.opendefense.cloud/kit v0.3.4
 	google.golang.org/grpc v1.82.1
 	k8s.io/api v0.36.2
@@ -137,4 +137,4 @@ replace go.opendefense.cloud/kit => /home/nik/Development/apiserver-kit
 
 replace github.com/trevex/ectobase/api => ../api
 
-replace github.com/trevex/ectobase/netplane => ../netplane
+replace github.com/trevex/ectobase/mesh => ../mesh

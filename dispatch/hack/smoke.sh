@@ -53,7 +53,7 @@ kind load docker-image --name "${CLUSTER}" "${CONTROLLER_IMG}"
 kind load docker-image --name "${CLUSTER}" "${BROKER_IMG}"
 
 echo "==> installing the ectobase-dispatch chart"
-# The chart also ships the netplane compiler + reflector (they need the netplane:dev image, which
+# The chart also ships the mesh compiler + reflector (they need the mesh:dev image, which
 # this dispatch-only smoke does not build), so DON'T --wait on the whole release — just install and then
 # wait on the system-namespace rollouts below. --create-namespace makes the baseline-safe `system`
 # release namespace; the chart creates the PSA-privileged ectobase-system namespace itself.

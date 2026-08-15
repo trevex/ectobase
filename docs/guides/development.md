@@ -55,7 +55,7 @@ pass, everything that must track the Go types and the component code:
   (shipped by the pool chart); the dispatch-aggregated `compute`/`storage`/`platform` groups go into
   `test/crds` (for envtest);
 - the **per-component RBAC** ClusterRoles, one file per component into each chart's
-  `files/<role>/` (netplane controller/agent, the materializers, the cni, the dispatch
+  `files/<role>/` (mesh controller/agent, the materializers, the cni, the dispatch
   controller/broker) — so a component's RBAC always reflects its `+kubebuilder:rbac` markers;
 - the **CRD API reference** under `docs/reference/api/` (via `crd-ref-docs`, the `docs-crd-ref`
   step) so the docs never drift from the schema.
@@ -100,7 +100,7 @@ code that ships is the code under test. See
 ## Integration: the clab + kind fabric
 
 The primary integration environment is a containerlab IPv6 fabric wrapping a kind
-cluster, with the full netplane stack and the `flowplane` DaemonSet deployed. See
+cluster, with the full mesh stack and the `flowplane` DaemonSet deployed. See
 [The clab + kind fabric](../guides/local-fabric.md) for bring-up and scenarios.
 
 ## See also

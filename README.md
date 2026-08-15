@@ -5,7 +5,7 @@
 It is built from two planes and a fleet:
 
 - **flowplane** — the eBPF/XDP **dataplane** (Rust). Every forwarding decision is a per-flow table lookup: IPv6 underlay, IP-in-IPv6 overlay, multi-VNI tenancy, stateful NAT, Maglev load balancing with DSR, a deny-by-default firewall, DHCP/ARP/ND responders, QoS shaping, and NAT64 — all in the Linux kernel. A DPDK backend runs the same datapath logic for smartNIC offload.
-- **netplane** — the per-cluster **control plane** (Go/Kubernetes). CRDs describe intent; controllers compile it into per-workload `Compiled*` objects; a per-node agent programs the local dataplane; a reflector distributes overlay routes over a custom route bus.
+- **mesh** — the per-cluster **control plane** (Go/Kubernetes). CRDs describe intent; controllers compile it into per-workload `Compiled*` objects; a per-node agent programs the local dataplane; a reflector distributes overlay routes over a custom route bus.
 - **the dispatch** — the **fleet control plane**. An aggregated apiserver serves the whole API for many clusters; a per-cluster broker syncs each cluster's compiled objects down into it; a controller schedules workloads across clusters and drives failover.
 
 ```mermaid
@@ -13,12 +13,12 @@ flowchart TB
   subgraph dispatch["Dispatch cluster (fleet control plane)"]
     api["Aggregated apiserver + kine"]
     ctl["dispatch-controller<br/>(schedule / failover)"]
-    cmp["netplane compiler"]
+    cmp["mesh compiler"]
     rfl["reflector"]
   end
   subgraph pool["Compute cluster (a ClusterPool)"]
     brk["broker"]
-    agt["netplane agent"]
+    agt["mesh agent"]
     mat["pod / vm materializers"]
     dp["flowplane dataplane"]
   end
@@ -78,4 +78,4 @@ make docs              # build the static site (strict)
 
 ## Lineage & scope
 
-`flowplane` began as an eBPF/XDP reimagining of the DPDK-based [`dpservice`](https://github.com/ironcore-dev/dpservice), but ectobase has since grown its own Kubernetes control plane (`netplane`), a five-group CRD API, a route-distribution bus, a CNI, and a fleet control plane, and now targets containers and KubeVirt VMs directly. metalnet/ironcore compatibility is no longer a design constraint.
+`flowplane` began as an eBPF/XDP reimagining of the DPDK-based [`dpservice`](https://github.com/ironcore-dev/dpservice), but ectobase has since grown its own Kubernetes control plane (`mesh`), a five-group CRD API, a route-distribution bus, a CNI, and a fleet control plane, and now targets containers and KubeVirt VMs directly. metalnet/ironcore compatibility is no longer a design constraint.

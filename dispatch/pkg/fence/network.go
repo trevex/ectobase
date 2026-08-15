@@ -9,7 +9,7 @@ import (
 	"context"
 	"fmt"
 
-	pb "github.com/trevex/ectobase/netplane/gen/routebusv1"
+	pb "github.com/trevex/ectobase/mesh/gen/routebusv1"
 )
 
 // NetworkFencer is the network half of Tier-2 fencing: it withdraws a lost pool's

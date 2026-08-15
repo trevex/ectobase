@@ -32,7 +32,7 @@ const (
 // This drives the REAL control-plane + container-workload flow END TO END: a VPC + two
 // NetworkInterfaces (NO placement on the NICs) are applied to the DISPATCH, and a Container
 // per endpoint (carrying the spec.clusterName + spec.nodeName placement and owning its
-// NIC via interfaceRefs) is applied to the DISPATCH too. The netplane compiler is the placement
+// NIC via interfaceRefs) is applied to the DISPATCH too. The mesh compiler is the placement
 // authority: it stamps each CompiledNIC's clusterName + nodeName FROM the owning Container,
 // and lowers the Container itself to a per-cluster CompiledContainer; the brokers sync both
 // to ITS compute cluster; the pod-materializer turns each CompiledContainer into a real

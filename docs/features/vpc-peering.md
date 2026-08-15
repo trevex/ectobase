@@ -70,7 +70,7 @@ flowchart TD
 
 ### Dispatch: `VPCPeering` → `CompiledNIC.PeerImports`
 
-The `CompiledNICReconciler` (`netplane/controllers/compilednic.go`) resolves peerings and stamps a
+The `CompiledNICReconciler` (`mesh/controllers/compilednic.go`) resolves peerings and stamps a
 directive onto **every `CompiledNIC` of each side's VPC** — mirroring how `CompiledLB` rides on
 `CompiledNIC`. `resolvePeerImports` walks all `VPCPeering`s and, for each `Ready` one, resolves the
 peer VNI and the **reciprocal** side's `exposedPrefixes` (what the peer exposes to us):
@@ -109,7 +109,7 @@ at the agent by local precedence.
 
 ### Node agent: subscribe, import, precedence
 
-The agent (`netplane/agent/importreconcile.go`, `desiredPeeringImports`) scans the `CompiledNIC`s
+The agent (`mesh/agent/importreconcile.go`, `desiredPeeringImports`) scans the `CompiledNIC`s
 scheduled to its node, unions their `PeerImports` per local VNI (deduped by peer VNI, prefixes
 unioned deterministically), and:
 

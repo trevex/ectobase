@@ -1,7 +1,7 @@
 # Copyright 2026 ectobase contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# The reflector: routebus gRPC rendezvous server for the per-pool netplane
+# The reflector: routebus gRPC rendezvous server for the per-pool mesh
 # agents. Runs on hostNetwork pinned to the control-plane node so agents
 # can reach it over the fabric loopback (fd00:db8:0:1::1) without ClusterIP DNAT.
 ---
@@ -23,7 +23,7 @@ spec:
       labels:
         app.kubernetes.io/name: reflector
     spec:
-      serviceAccountName: netplane-reflector
+      serviceAccountName: mesh-reflector
       # The reflector is the global rendezvous. It runs on hostNetwork and is pinned
       # to the control-plane node, listening on that node's FABRIC loopback
       # (fd00:db8:0:1::1) — reachable from every node (and, in multi-cluster, every
@@ -36,7 +36,7 @@ spec:
         - operator: Exists
       containers:
         - name: reflector
-          image: {{ .Values.images.netplane }}
+          image: {{ .Values.images.mesh }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           resources:
             {{- include "ectobase-dispatch.resources" . | nindent 12 }}

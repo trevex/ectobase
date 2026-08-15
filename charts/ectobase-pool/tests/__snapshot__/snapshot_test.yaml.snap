@@ -22,26 +22,26 @@ renders (dpdk clab):
         current-context: fabric
     kind: ConfigMap
     metadata:
-      name: netplane-agent-kubeconfig
+      name: mesh-agent-kubeconfig
       namespace: ectobase-system
   2: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
       labels:
-        app.kubernetes.io/name: netplane-agent
-        app.kubernetes.io/part-of: netplane
-      name: netplane-agent
+        app.kubernetes.io/name: mesh-agent
+        app.kubernetes.io/part-of: mesh
+      name: mesh-agent
       namespace: ectobase-system
     spec:
       selector:
         matchLabels:
-          app.kubernetes.io/name: netplane-agent
+          app.kubernetes.io/name: mesh-agent
       template:
         metadata:
           labels:
-            app.kubernetes.io/name: netplane-agent
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/name: mesh-agent
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -49,7 +49,7 @@ renders (dpdk clab):
                 - --underlay=$(NODE_IP)
                 - --reflector=[fd00:db8:0:1::1]:1338
                 - --dataplane=unix:///run/flowplane/dataplane.sock
-                - --kubeconfig=/etc/netplane/kubeconfig
+                - --kubeconfig=/etc/mesh/kubeconfig
               command:
                 - agent
               env:
@@ -61,7 +61,7 @@ renders (dpdk clab):
                   valueFrom:
                     fieldRef:
                       fieldPath: status.hostIP
-              image: ghcr.io/trevex/ectobase/netplane:dev
+              image: ghcr.io/trevex/ectobase/mesh:dev
               imagePullPolicy: IfNotPresent
               name: agent
               resources:
@@ -69,7 +69,7 @@ renders (dpdk clab):
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /etc/netplane
+                - mountPath: /etc/mesh
                   name: kubeconfig
                   readOnly: true
                 - mountPath: /run/flowplane
@@ -77,12 +77,12 @@ renders (dpdk clab):
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
-          serviceAccountName: netplane-agent
+          serviceAccountName: mesh-agent
           tolerations:
             - operator: Exists
           volumes:
             - configMap:
-                name: netplane-agent-kubeconfig
+                name: mesh-agent-kubeconfig
               name: kubeconfig
             - hostPath:
                 path: /run/flowplane
@@ -94,7 +94,7 @@ renders (dpdk clab):
     metadata:
       labels:
         app.kubernetes.io/name: dispatch-broker
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: dispatch-broker
       namespace: ectobase-system
     spec:
@@ -108,7 +108,7 @@ renders (dpdk clab):
         metadata:
           labels:
             app.kubernetes.io/name: dispatch-broker
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -184,7 +184,7 @@ renders (dpdk clab):
     metadata:
       labels:
         app.kubernetes.io/name: flowplane-cni-install
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: flowplane-cni-install
       namespace: ectobase-system
     spec:
@@ -195,7 +195,7 @@ renders (dpdk clab):
         metadata:
           labels:
             app.kubernetes.io/name: flowplane-cni-install
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - image: ghcr.io/trevex/ectobase/cni:dev
@@ -1777,7 +1777,7 @@ renders (dpdk clab):
     metadata:
       labels:
         app.kubernetes.io/name: flowplane
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: flowplane-dpdk
       namespace: ectobase-system
     spec:
@@ -1788,7 +1788,7 @@ renders (dpdk clab):
         metadata:
           labels:
             app.kubernetes.io/name: flowplane
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -1897,7 +1897,7 @@ renders (dpdk clab):
     metadata:
       labels:
         app.kubernetes.io/name: pod-materializer
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: pod-materializer
       namespace: ectobase-system
     spec:
@@ -1911,12 +1911,12 @@ renders (dpdk clab):
         metadata:
           labels:
             app.kubernetes.io/name: pod-materializer
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - command:
                 - pod-materializer
-              image: ghcr.io/trevex/ectobase/netplane:dev
+              image: ghcr.io/trevex/ectobase/mesh:dev
               imagePullPolicy: IfNotPresent
               name: pod-materializer
               resources:
@@ -1928,7 +1928,7 @@ renders (dpdk clab):
     apiVersion: v1
     kind: ServiceAccount
     metadata:
-      name: netplane-agent
+      name: mesh-agent
       namespace: ectobase-system
   23: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -1937,7 +1937,7 @@ renders (dpdk clab):
       labels:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: ectobase
-      name: netplane-agent
+      name: mesh-agent
     rules:
       - apiGroups:
           - ""
@@ -1970,14 +1970,14 @@ renders (dpdk clab):
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
-      name: netplane-agent
+      name: mesh-agent
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
-      name: netplane-agent
+      name: mesh-agent
     subjects:
       - kind: ServiceAccount
-        name: netplane-agent
+        name: mesh-agent
         namespace: ectobase-system
   25: |
     apiVersion: v1
@@ -2118,26 +2118,26 @@ renders (dpdk hw):
         current-context: fabric
     kind: ConfigMap
     metadata:
-      name: netplane-agent-kubeconfig
+      name: mesh-agent-kubeconfig
       namespace: ectobase-system
   2: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
       labels:
-        app.kubernetes.io/name: netplane-agent
-        app.kubernetes.io/part-of: netplane
-      name: netplane-agent
+        app.kubernetes.io/name: mesh-agent
+        app.kubernetes.io/part-of: mesh
+      name: mesh-agent
       namespace: ectobase-system
     spec:
       selector:
         matchLabels:
-          app.kubernetes.io/name: netplane-agent
+          app.kubernetes.io/name: mesh-agent
       template:
         metadata:
           labels:
-            app.kubernetes.io/name: netplane-agent
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/name: mesh-agent
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -2145,7 +2145,7 @@ renders (dpdk hw):
                 - --underlay=$(NODE_IP)
                 - --reflector=[fd00:db8:0:1::1]:1338
                 - --dataplane=unix:///run/flowplane/dataplane.sock
-                - --kubeconfig=/etc/netplane/kubeconfig
+                - --kubeconfig=/etc/mesh/kubeconfig
               command:
                 - agent
               env:
@@ -2157,7 +2157,7 @@ renders (dpdk hw):
                   valueFrom:
                     fieldRef:
                       fieldPath: status.hostIP
-              image: ghcr.io/trevex/ectobase/netplane:dev
+              image: ghcr.io/trevex/ectobase/mesh:dev
               imagePullPolicy: IfNotPresent
               name: agent
               resources:
@@ -2165,7 +2165,7 @@ renders (dpdk hw):
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /etc/netplane
+                - mountPath: /etc/mesh
                   name: kubeconfig
                   readOnly: true
                 - mountPath: /run/flowplane
@@ -2173,12 +2173,12 @@ renders (dpdk hw):
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
-          serviceAccountName: netplane-agent
+          serviceAccountName: mesh-agent
           tolerations:
             - operator: Exists
           volumes:
             - configMap:
-                name: netplane-agent-kubeconfig
+                name: mesh-agent-kubeconfig
               name: kubeconfig
             - hostPath:
                 path: /run/flowplane
@@ -2190,7 +2190,7 @@ renders (dpdk hw):
     metadata:
       labels:
         app.kubernetes.io/name: dispatch-broker
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: dispatch-broker
       namespace: ectobase-system
     spec:
@@ -2204,7 +2204,7 @@ renders (dpdk hw):
         metadata:
           labels:
             app.kubernetes.io/name: dispatch-broker
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -2280,7 +2280,7 @@ renders (dpdk hw):
     metadata:
       labels:
         app.kubernetes.io/name: flowplane-cni-install
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: flowplane-cni-install
       namespace: ectobase-system
     spec:
@@ -2291,7 +2291,7 @@ renders (dpdk hw):
         metadata:
           labels:
             app.kubernetes.io/name: flowplane-cni-install
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - image: ghcr.io/trevex/ectobase/cni:dev
@@ -3873,7 +3873,7 @@ renders (dpdk hw):
     metadata:
       labels:
         app.kubernetes.io/name: flowplane
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: flowplane-dpdk
       namespace: ectobase-system
     spec:
@@ -3884,7 +3884,7 @@ renders (dpdk hw):
         metadata:
           labels:
             app.kubernetes.io/name: flowplane
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -4008,7 +4008,7 @@ renders (dpdk hw):
     metadata:
       labels:
         app.kubernetes.io/name: pod-materializer
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: pod-materializer
       namespace: ectobase-system
     spec:
@@ -4022,12 +4022,12 @@ renders (dpdk hw):
         metadata:
           labels:
             app.kubernetes.io/name: pod-materializer
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - command:
                 - pod-materializer
-              image: ghcr.io/trevex/ectobase/netplane:dev
+              image: ghcr.io/trevex/ectobase/mesh:dev
               imagePullPolicy: IfNotPresent
               name: pod-materializer
               resources:
@@ -4039,7 +4039,7 @@ renders (dpdk hw):
     apiVersion: v1
     kind: ServiceAccount
     metadata:
-      name: netplane-agent
+      name: mesh-agent
       namespace: ectobase-system
   23: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -4048,7 +4048,7 @@ renders (dpdk hw):
       labels:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: ectobase
-      name: netplane-agent
+      name: mesh-agent
     rules:
       - apiGroups:
           - ""
@@ -4081,14 +4081,14 @@ renders (dpdk hw):
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
-      name: netplane-agent
+      name: mesh-agent
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
-      name: netplane-agent
+      name: mesh-agent
     subjects:
       - kind: ServiceAccount
-        name: netplane-agent
+        name: mesh-agent
         namespace: ectobase-system
   25: |
     apiVersion: v1
@@ -4229,26 +4229,26 @@ renders (ebpf clab):
         current-context: fabric
     kind: ConfigMap
     metadata:
-      name: netplane-agent-kubeconfig
+      name: mesh-agent-kubeconfig
       namespace: ectobase-system
   2: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
       labels:
-        app.kubernetes.io/name: netplane-agent
-        app.kubernetes.io/part-of: netplane
-      name: netplane-agent
+        app.kubernetes.io/name: mesh-agent
+        app.kubernetes.io/part-of: mesh
+      name: mesh-agent
       namespace: ectobase-system
     spec:
       selector:
         matchLabels:
-          app.kubernetes.io/name: netplane-agent
+          app.kubernetes.io/name: mesh-agent
       template:
         metadata:
           labels:
-            app.kubernetes.io/name: netplane-agent
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/name: mesh-agent
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -4256,7 +4256,7 @@ renders (ebpf clab):
                 - --underlay=$(NODE_IP)
                 - --reflector=[fd00:db8:0:1::1]:1338
                 - --dataplane=unix:///run/flowplane/dataplane.sock
-                - --kubeconfig=/etc/netplane/kubeconfig
+                - --kubeconfig=/etc/mesh/kubeconfig
               command:
                 - agent
               env:
@@ -4268,7 +4268,7 @@ renders (ebpf clab):
                   valueFrom:
                     fieldRef:
                       fieldPath: status.hostIP
-              image: ghcr.io/trevex/ectobase/netplane:dev
+              image: ghcr.io/trevex/ectobase/mesh:dev
               imagePullPolicy: IfNotPresent
               name: agent
               resources:
@@ -4276,7 +4276,7 @@ renders (ebpf clab):
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /etc/netplane
+                - mountPath: /etc/mesh
                   name: kubeconfig
                   readOnly: true
                 - mountPath: /run/flowplane
@@ -4284,12 +4284,12 @@ renders (ebpf clab):
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
-          serviceAccountName: netplane-agent
+          serviceAccountName: mesh-agent
           tolerations:
             - operator: Exists
           volumes:
             - configMap:
-                name: netplane-agent-kubeconfig
+                name: mesh-agent-kubeconfig
               name: kubeconfig
             - hostPath:
                 path: /run/flowplane
@@ -4301,7 +4301,7 @@ renders (ebpf clab):
     metadata:
       labels:
         app.kubernetes.io/name: dispatch-broker
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: dispatch-broker
       namespace: ectobase-system
     spec:
@@ -4315,7 +4315,7 @@ renders (ebpf clab):
         metadata:
           labels:
             app.kubernetes.io/name: dispatch-broker
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -4391,7 +4391,7 @@ renders (ebpf clab):
     metadata:
       labels:
         app.kubernetes.io/name: flowplane-cni-install
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: flowplane-cni-install
       namespace: ectobase-system
     spec:
@@ -4402,7 +4402,7 @@ renders (ebpf clab):
         metadata:
           labels:
             app.kubernetes.io/name: flowplane-cni-install
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - image: ghcr.io/trevex/ectobase/cni:dev
@@ -5984,7 +5984,7 @@ renders (ebpf clab):
     metadata:
       labels:
         app.kubernetes.io/name: flowplane
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: flowplane
       namespace: ectobase-system
     spec:
@@ -5995,7 +5995,7 @@ renders (ebpf clab):
         metadata:
           labels:
             app.kubernetes.io/name: flowplane
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -6119,7 +6119,7 @@ renders (ebpf clab):
     metadata:
       labels:
         app.kubernetes.io/name: pod-materializer
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: pod-materializer
       namespace: ectobase-system
     spec:
@@ -6133,12 +6133,12 @@ renders (ebpf clab):
         metadata:
           labels:
             app.kubernetes.io/name: pod-materializer
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - command:
                 - pod-materializer
-              image: ghcr.io/trevex/ectobase/netplane:dev
+              image: ghcr.io/trevex/ectobase/mesh:dev
               imagePullPolicy: IfNotPresent
               name: pod-materializer
               resources:
@@ -6150,7 +6150,7 @@ renders (ebpf clab):
     apiVersion: v1
     kind: ServiceAccount
     metadata:
-      name: netplane-agent
+      name: mesh-agent
       namespace: ectobase-system
   23: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -6159,7 +6159,7 @@ renders (ebpf clab):
       labels:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: ectobase
-      name: netplane-agent
+      name: mesh-agent
     rules:
       - apiGroups:
           - ""
@@ -6192,14 +6192,14 @@ renders (ebpf clab):
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
-      name: netplane-agent
+      name: mesh-agent
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
-      name: netplane-agent
+      name: mesh-agent
     subjects:
       - kind: ServiceAccount
-        name: netplane-agent
+        name: mesh-agent
         namespace: ectobase-system
   25: |
     apiVersion: v1
@@ -6340,26 +6340,26 @@ renders (ebpf hw):
         current-context: fabric
     kind: ConfigMap
     metadata:
-      name: netplane-agent-kubeconfig
+      name: mesh-agent-kubeconfig
       namespace: ectobase-system
   2: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
       labels:
-        app.kubernetes.io/name: netplane-agent
-        app.kubernetes.io/part-of: netplane
-      name: netplane-agent
+        app.kubernetes.io/name: mesh-agent
+        app.kubernetes.io/part-of: mesh
+      name: mesh-agent
       namespace: ectobase-system
     spec:
       selector:
         matchLabels:
-          app.kubernetes.io/name: netplane-agent
+          app.kubernetes.io/name: mesh-agent
       template:
         metadata:
           labels:
-            app.kubernetes.io/name: netplane-agent
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/name: mesh-agent
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -6367,7 +6367,7 @@ renders (ebpf hw):
                 - --underlay=$(NODE_IP)
                 - --reflector=[fd00:db8:0:1::1]:1338
                 - --dataplane=unix:///run/flowplane/dataplane.sock
-                - --kubeconfig=/etc/netplane/kubeconfig
+                - --kubeconfig=/etc/mesh/kubeconfig
               command:
                 - agent
               env:
@@ -6379,7 +6379,7 @@ renders (ebpf hw):
                   valueFrom:
                     fieldRef:
                       fieldPath: status.hostIP
-              image: ghcr.io/trevex/ectobase/netplane:dev
+              image: ghcr.io/trevex/ectobase/mesh:dev
               imagePullPolicy: IfNotPresent
               name: agent
               resources:
@@ -6387,7 +6387,7 @@ renders (ebpf hw):
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /etc/netplane
+                - mountPath: /etc/mesh
                   name: kubeconfig
                   readOnly: true
                 - mountPath: /run/flowplane
@@ -6395,12 +6395,12 @@ renders (ebpf hw):
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
-          serviceAccountName: netplane-agent
+          serviceAccountName: mesh-agent
           tolerations:
             - operator: Exists
           volumes:
             - configMap:
-                name: netplane-agent-kubeconfig
+                name: mesh-agent-kubeconfig
               name: kubeconfig
             - hostPath:
                 path: /run/flowplane
@@ -6412,7 +6412,7 @@ renders (ebpf hw):
     metadata:
       labels:
         app.kubernetes.io/name: dispatch-broker
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: dispatch-broker
       namespace: ectobase-system
     spec:
@@ -6426,7 +6426,7 @@ renders (ebpf hw):
         metadata:
           labels:
             app.kubernetes.io/name: dispatch-broker
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -6502,7 +6502,7 @@ renders (ebpf hw):
     metadata:
       labels:
         app.kubernetes.io/name: flowplane-cni-install
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: flowplane-cni-install
       namespace: ectobase-system
     spec:
@@ -6513,7 +6513,7 @@ renders (ebpf hw):
         metadata:
           labels:
             app.kubernetes.io/name: flowplane-cni-install
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - image: ghcr.io/trevex/ectobase/cni:dev
@@ -8095,7 +8095,7 @@ renders (ebpf hw):
     metadata:
       labels:
         app.kubernetes.io/name: flowplane
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: flowplane
       namespace: ectobase-system
     spec:
@@ -8106,7 +8106,7 @@ renders (ebpf hw):
         metadata:
           labels:
             app.kubernetes.io/name: flowplane
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -8227,7 +8227,7 @@ renders (ebpf hw):
     metadata:
       labels:
         app.kubernetes.io/name: pod-materializer
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: pod-materializer
       namespace: ectobase-system
     spec:
@@ -8241,12 +8241,12 @@ renders (ebpf hw):
         metadata:
           labels:
             app.kubernetes.io/name: pod-materializer
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - command:
                 - pod-materializer
-              image: ghcr.io/trevex/ectobase/netplane:dev
+              image: ghcr.io/trevex/ectobase/mesh:dev
               imagePullPolicy: IfNotPresent
               name: pod-materializer
               resources:
@@ -8258,7 +8258,7 @@ renders (ebpf hw):
     apiVersion: v1
     kind: ServiceAccount
     metadata:
-      name: netplane-agent
+      name: mesh-agent
       namespace: ectobase-system
   23: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -8267,7 +8267,7 @@ renders (ebpf hw):
       labels:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: ectobase
-      name: netplane-agent
+      name: mesh-agent
     rules:
       - apiGroups:
           - ""
@@ -8300,14 +8300,14 @@ renders (ebpf hw):
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
-      name: netplane-agent
+      name: mesh-agent
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
-      name: netplane-agent
+      name: mesh-agent
     subjects:
       - kind: ServiceAccount
-        name: netplane-agent
+        name: mesh-agent
         namespace: ectobase-system
   25: |
     apiVersion: v1
@@ -8448,26 +8448,26 @@ renders (tier1 on):
         current-context: fabric
     kind: ConfigMap
     metadata:
-      name: netplane-agent-kubeconfig
+      name: mesh-agent-kubeconfig
       namespace: ectobase-system
   2: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
       labels:
-        app.kubernetes.io/name: netplane-agent
-        app.kubernetes.io/part-of: netplane
-      name: netplane-agent
+        app.kubernetes.io/name: mesh-agent
+        app.kubernetes.io/part-of: mesh
+      name: mesh-agent
       namespace: ectobase-system
     spec:
       selector:
         matchLabels:
-          app.kubernetes.io/name: netplane-agent
+          app.kubernetes.io/name: mesh-agent
       template:
         metadata:
           labels:
-            app.kubernetes.io/name: netplane-agent
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/name: mesh-agent
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -8475,7 +8475,7 @@ renders (tier1 on):
                 - --underlay=$(NODE_IP)
                 - --reflector=[fd00:db8:0:1::1]:1338
                 - --dataplane=unix:///run/flowplane/dataplane.sock
-                - --kubeconfig=/etc/netplane/kubeconfig
+                - --kubeconfig=/etc/mesh/kubeconfig
               command:
                 - agent
               env:
@@ -8487,7 +8487,7 @@ renders (tier1 on):
                   valueFrom:
                     fieldRef:
                       fieldPath: status.hostIP
-              image: ghcr.io/trevex/ectobase/netplane:dev
+              image: ghcr.io/trevex/ectobase/mesh:dev
               imagePullPolicy: IfNotPresent
               name: agent
               resources:
@@ -8495,7 +8495,7 @@ renders (tier1 on):
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /etc/netplane
+                - mountPath: /etc/mesh
                   name: kubeconfig
                   readOnly: true
                 - mountPath: /run/flowplane
@@ -8503,12 +8503,12 @@ renders (tier1 on):
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
-          serviceAccountName: netplane-agent
+          serviceAccountName: mesh-agent
           tolerations:
             - operator: Exists
           volumes:
             - configMap:
-                name: netplane-agent-kubeconfig
+                name: mesh-agent-kubeconfig
               name: kubeconfig
             - hostPath:
                 path: /run/flowplane
@@ -8520,7 +8520,7 @@ renders (tier1 on):
     metadata:
       labels:
         app.kubernetes.io/name: dispatch-broker
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: dispatch-broker
       namespace: ectobase-system
     spec:
@@ -8534,7 +8534,7 @@ renders (tier1 on):
         metadata:
           labels:
             app.kubernetes.io/name: dispatch-broker
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -8610,7 +8610,7 @@ renders (tier1 on):
     metadata:
       labels:
         app.kubernetes.io/name: flowplane-cni-install
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: flowplane-cni-install
       namespace: ectobase-system
     spec:
@@ -8621,7 +8621,7 @@ renders (tier1 on):
         metadata:
           labels:
             app.kubernetes.io/name: flowplane-cni-install
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - image: ghcr.io/trevex/ectobase/cni:dev
@@ -10203,7 +10203,7 @@ renders (tier1 on):
     metadata:
       labels:
         app.kubernetes.io/name: flowplane
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: flowplane
       namespace: ectobase-system
     spec:
@@ -10214,7 +10214,7 @@ renders (tier1 on):
         metadata:
           labels:
             app.kubernetes.io/name: flowplane
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -10338,7 +10338,7 @@ renders (tier1 on):
     metadata:
       labels:
         app.kubernetes.io/name: pod-materializer
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: pod-materializer
       namespace: ectobase-system
     spec:
@@ -10352,12 +10352,12 @@ renders (tier1 on):
         metadata:
           labels:
             app.kubernetes.io/name: pod-materializer
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - command:
                 - pod-materializer
-              image: ghcr.io/trevex/ectobase/netplane:dev
+              image: ghcr.io/trevex/ectobase/mesh:dev
               imagePullPolicy: IfNotPresent
               name: pod-materializer
               resources:
@@ -10369,7 +10369,7 @@ renders (tier1 on):
     apiVersion: v1
     kind: ServiceAccount
     metadata:
-      name: netplane-agent
+      name: mesh-agent
       namespace: ectobase-system
   23: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -10378,7 +10378,7 @@ renders (tier1 on):
       labels:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: ectobase
-      name: netplane-agent
+      name: mesh-agent
     rules:
       - apiGroups:
           - ""
@@ -10411,14 +10411,14 @@ renders (tier1 on):
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
-      name: netplane-agent
+      name: mesh-agent
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
-      name: netplane-agent
+      name: mesh-agent
     subjects:
       - kind: ServiceAccount
-        name: netplane-agent
+        name: mesh-agent
         namespace: ectobase-system
   25: |
     apiVersion: v1
@@ -10596,26 +10596,26 @@ renders (tier1 watchdog):
         current-context: fabric
     kind: ConfigMap
     metadata:
-      name: netplane-agent-kubeconfig
+      name: mesh-agent-kubeconfig
       namespace: ectobase-system
   2: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
       labels:
-        app.kubernetes.io/name: netplane-agent
-        app.kubernetes.io/part-of: netplane
-      name: netplane-agent
+        app.kubernetes.io/name: mesh-agent
+        app.kubernetes.io/part-of: mesh
+      name: mesh-agent
       namespace: ectobase-system
     spec:
       selector:
         matchLabels:
-          app.kubernetes.io/name: netplane-agent
+          app.kubernetes.io/name: mesh-agent
       template:
         metadata:
           labels:
-            app.kubernetes.io/name: netplane-agent
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/name: mesh-agent
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -10623,7 +10623,7 @@ renders (tier1 watchdog):
                 - --underlay=$(NODE_IP)
                 - --reflector=[fd00:db8:0:1::1]:1338
                 - --dataplane=unix:///run/flowplane/dataplane.sock
-                - --kubeconfig=/etc/netplane/kubeconfig
+                - --kubeconfig=/etc/mesh/kubeconfig
               command:
                 - agent
               env:
@@ -10635,7 +10635,7 @@ renders (tier1 watchdog):
                   valueFrom:
                     fieldRef:
                       fieldPath: status.hostIP
-              image: ghcr.io/trevex/ectobase/netplane:dev
+              image: ghcr.io/trevex/ectobase/mesh:dev
               imagePullPolicy: IfNotPresent
               name: agent
               resources:
@@ -10643,7 +10643,7 @@ renders (tier1 watchdog):
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /etc/netplane
+                - mountPath: /etc/mesh
                   name: kubeconfig
                   readOnly: true
                 - mountPath: /run/flowplane
@@ -10651,12 +10651,12 @@ renders (tier1 watchdog):
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
-          serviceAccountName: netplane-agent
+          serviceAccountName: mesh-agent
           tolerations:
             - operator: Exists
           volumes:
             - configMap:
-                name: netplane-agent-kubeconfig
+                name: mesh-agent-kubeconfig
               name: kubeconfig
             - hostPath:
                 path: /run/flowplane
@@ -10668,7 +10668,7 @@ renders (tier1 watchdog):
     metadata:
       labels:
         app.kubernetes.io/name: dispatch-broker
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: dispatch-broker
       namespace: ectobase-system
     spec:
@@ -10682,7 +10682,7 @@ renders (tier1 watchdog):
         metadata:
           labels:
             app.kubernetes.io/name: dispatch-broker
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -10758,7 +10758,7 @@ renders (tier1 watchdog):
     metadata:
       labels:
         app.kubernetes.io/name: flowplane-cni-install
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: flowplane-cni-install
       namespace: ectobase-system
     spec:
@@ -10769,7 +10769,7 @@ renders (tier1 watchdog):
         metadata:
           labels:
             app.kubernetes.io/name: flowplane-cni-install
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - image: ghcr.io/trevex/ectobase/cni:dev
@@ -12351,7 +12351,7 @@ renders (tier1 watchdog):
     metadata:
       labels:
         app.kubernetes.io/name: flowplane
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: flowplane
       namespace: ectobase-system
     spec:
@@ -12362,7 +12362,7 @@ renders (tier1 watchdog):
         metadata:
           labels:
             app.kubernetes.io/name: flowplane
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -12486,7 +12486,7 @@ renders (tier1 watchdog):
     metadata:
       labels:
         app.kubernetes.io/name: pod-materializer
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: pod-materializer
       namespace: ectobase-system
     spec:
@@ -12500,12 +12500,12 @@ renders (tier1 watchdog):
         metadata:
           labels:
             app.kubernetes.io/name: pod-materializer
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - command:
                 - pod-materializer
-              image: ghcr.io/trevex/ectobase/netplane:dev
+              image: ghcr.io/trevex/ectobase/mesh:dev
               imagePullPolicy: IfNotPresent
               name: pod-materializer
               resources:
@@ -12517,7 +12517,7 @@ renders (tier1 watchdog):
     apiVersion: v1
     kind: ServiceAccount
     metadata:
-      name: netplane-agent
+      name: mesh-agent
       namespace: ectobase-system
   23: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -12526,7 +12526,7 @@ renders (tier1 watchdog):
       labels:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: ectobase
-      name: netplane-agent
+      name: mesh-agent
     rules:
       - apiGroups:
           - ""
@@ -12559,14 +12559,14 @@ renders (tier1 watchdog):
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
-      name: netplane-agent
+      name: mesh-agent
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
-      name: netplane-agent
+      name: mesh-agent
     subjects:
       - kind: ServiceAccount
-        name: netplane-agent
+        name: mesh-agent
         namespace: ectobase-system
   25: |
     apiVersion: v1
@@ -12754,26 +12754,26 @@ renders with vm-materializer enabled:
         current-context: fabric
     kind: ConfigMap
     metadata:
-      name: netplane-agent-kubeconfig
+      name: mesh-agent-kubeconfig
       namespace: ectobase-system
   2: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
       labels:
-        app.kubernetes.io/name: netplane-agent
-        app.kubernetes.io/part-of: netplane
-      name: netplane-agent
+        app.kubernetes.io/name: mesh-agent
+        app.kubernetes.io/part-of: mesh
+      name: mesh-agent
       namespace: ectobase-system
     spec:
       selector:
         matchLabels:
-          app.kubernetes.io/name: netplane-agent
+          app.kubernetes.io/name: mesh-agent
       template:
         metadata:
           labels:
-            app.kubernetes.io/name: netplane-agent
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/name: mesh-agent
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -12781,7 +12781,7 @@ renders with vm-materializer enabled:
                 - --underlay=$(NODE_IP)
                 - --reflector=[fd00:db8:0:1::1]:1338
                 - --dataplane=unix:///run/flowplane/dataplane.sock
-                - --kubeconfig=/etc/netplane/kubeconfig
+                - --kubeconfig=/etc/mesh/kubeconfig
               command:
                 - agent
               env:
@@ -12793,7 +12793,7 @@ renders with vm-materializer enabled:
                   valueFrom:
                     fieldRef:
                       fieldPath: status.hostIP
-              image: ghcr.io/trevex/ectobase/netplane:dev
+              image: ghcr.io/trevex/ectobase/mesh:dev
               imagePullPolicy: IfNotPresent
               name: agent
               resources:
@@ -12801,7 +12801,7 @@ renders with vm-materializer enabled:
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /etc/netplane
+                - mountPath: /etc/mesh
                   name: kubeconfig
                   readOnly: true
                 - mountPath: /run/flowplane
@@ -12809,12 +12809,12 @@ renders with vm-materializer enabled:
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
-          serviceAccountName: netplane-agent
+          serviceAccountName: mesh-agent
           tolerations:
             - operator: Exists
           volumes:
             - configMap:
-                name: netplane-agent-kubeconfig
+                name: mesh-agent-kubeconfig
               name: kubeconfig
             - hostPath:
                 path: /run/flowplane
@@ -12826,7 +12826,7 @@ renders with vm-materializer enabled:
     metadata:
       labels:
         app.kubernetes.io/name: dispatch-broker
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: dispatch-broker
       namespace: ectobase-system
     spec:
@@ -12840,7 +12840,7 @@ renders with vm-materializer enabled:
         metadata:
           labels:
             app.kubernetes.io/name: dispatch-broker
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -12916,7 +12916,7 @@ renders with vm-materializer enabled:
     metadata:
       labels:
         app.kubernetes.io/name: flowplane-cni-install
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: flowplane-cni-install
       namespace: ectobase-system
     spec:
@@ -12927,7 +12927,7 @@ renders with vm-materializer enabled:
         metadata:
           labels:
             app.kubernetes.io/name: flowplane-cni-install
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - image: ghcr.io/trevex/ectobase/cni:dev
@@ -14509,7 +14509,7 @@ renders with vm-materializer enabled:
     metadata:
       labels:
         app.kubernetes.io/name: flowplane
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: flowplane
       namespace: ectobase-system
     spec:
@@ -14520,7 +14520,7 @@ renders with vm-materializer enabled:
         metadata:
           labels:
             app.kubernetes.io/name: flowplane
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - args:
@@ -14644,7 +14644,7 @@ renders with vm-materializer enabled:
     metadata:
       labels:
         app.kubernetes.io/name: pod-materializer
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: pod-materializer
       namespace: ectobase-system
     spec:
@@ -14658,12 +14658,12 @@ renders with vm-materializer enabled:
         metadata:
           labels:
             app.kubernetes.io/name: pod-materializer
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - command:
                 - pod-materializer
-              image: ghcr.io/trevex/ectobase/netplane:dev
+              image: ghcr.io/trevex/ectobase/mesh:dev
               imagePullPolicy: IfNotPresent
               name: pod-materializer
               resources:
@@ -14675,7 +14675,7 @@ renders with vm-materializer enabled:
     apiVersion: v1
     kind: ServiceAccount
     metadata:
-      name: netplane-agent
+      name: mesh-agent
       namespace: ectobase-system
   23: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -14684,7 +14684,7 @@ renders with vm-materializer enabled:
       labels:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: ectobase
-      name: netplane-agent
+      name: mesh-agent
     rules:
       - apiGroups:
           - ""
@@ -14717,14 +14717,14 @@ renders with vm-materializer enabled:
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
-      name: netplane-agent
+      name: mesh-agent
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
-      name: netplane-agent
+      name: mesh-agent
     subjects:
       - kind: ServiceAccount
-        name: netplane-agent
+        name: mesh-agent
         namespace: ectobase-system
   25: |
     apiVersion: v1
@@ -14925,7 +14925,7 @@ renders with vm-materializer enabled:
     metadata:
       labels:
         app.kubernetes.io/name: vm-materializer
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
       name: vm-materializer
       namespace: ectobase-system
     spec:
@@ -14939,12 +14939,12 @@ renders with vm-materializer enabled:
         metadata:
           labels:
             app.kubernetes.io/name: vm-materializer
-            app.kubernetes.io/part-of: netplane
+            app.kubernetes.io/part-of: mesh
         spec:
           containers:
             - command:
                 - vm-materializer
-              image: ghcr.io/trevex/ectobase/netplane:dev
+              image: ghcr.io/trevex/ectobase/mesh:dev
               imagePullPolicy: IfNotPresent
               name: vm-materializer
               resources:

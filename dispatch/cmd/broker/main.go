@@ -247,7 +247,7 @@ func (s *statusReporter) reportOnce(ctx context.Context) error {
 }
 
 // nodePrefixFromNode returns the node's underlay /64 fence prefix from the annotation the
-// netplane agent stamps on its own Node, or "" if absent (the node is not fence-eligible).
+// mesh agent stamps on its own Node, or "" if absent (the node is not fence-eligible).
 func nodePrefixFromNode(n *corev1.Node) string {
 	return n.Annotations[netv1.NodeUnderlayPrefixAnnotation]
 }

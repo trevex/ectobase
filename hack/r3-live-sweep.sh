@@ -16,8 +16,8 @@ log "build dispatch images (apiserver/controller/broker)"
   && docker build -f Dockerfile.broker     -t ghcr.io/trevex/ectobase/dispatch-broker:dev     . ; \
   rm -f dispatch-apiserver dispatch-controller dispatch-broker ) || { log "dispatch image build FAILED"; exit 1; }
 
-log "build netplane + cni images"
-make image-netplane || { log "image-netplane FAILED"; exit 1; }
+log "build mesh + cni images"
+make image-mesh || { log "image-mesh FAILED"; exit 1; }
 make image-cni      || { log "image-cni FAILED"; exit 1; }
 
 log "lab up (pushes :dev images to the in-fabric mirror + deploys the chart)"

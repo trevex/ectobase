@@ -35,7 +35,7 @@ import (
 	"github.com/trevex/ectobase/dispatch/pkg/broker"
 	"github.com/trevex/ectobase/dispatch/pkg/clusterpool"
 	"github.com/trevex/ectobase/dispatch/pkg/scheduler"
-	"github.com/trevex/ectobase/netplane/controllers"
+	"github.com/trevex/ectobase/mesh/controllers"
 )
 
 // TestCeph_ScheduleCompileSyncMaterializeVolume_E2E extends the Phase-4 chain one
@@ -47,7 +47,7 @@ import (
 //     clusterpool.Reconciler derives Ready;
 //  2. a Volume boot (10Gi, ceph-rbd, fedora BootImage) + a VirtualMachine vm1
 //     (VolumeRefs:[boot]) owning nic-a are created; scheduler.Reconciler binds vm1 to c1;
-//  3. the netplane CompiledVMReconciler lowers vm1 -> a dispatch CompiledVM default-vm1
+//  3. the mesh CompiledVMReconciler lowers vm1 -> a dispatch CompiledVM default-vm1
 //     AND the CompiledVolumeAttachmentReconciler emits a dispatch CompiledVolumeAttachment
 //     vm1-boot (clusterName c1, Boot, BootImage, workload=vm1);
 //  4. the c1 broker's SyncCompiledVMs + SyncCompiledVolumeAttachments materialize both
@@ -60,7 +60,7 @@ import (
 // The downstream envtest loads three CRD dirs: the net+compiled CRDs
 // (charts/ectobase-pool/crd-bases) + the compute/storage/platform CRDs (test/crds)
 // + the vendored KubeVirt VirtualMachine + CDI DataVolume CRD fixtures
-// (netplane/test/crds), and its client scheme registers netv1 + kubevirtv1 + cdiv1
+// (mesh/test/crds), and its client scheme registers netv1 + kubevirtv1 + cdiv1
 // so all three object families (de)serialize.
 func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 	t.Setenv("GOWORK", "off")
@@ -115,7 +115,7 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 		CRDDirectoryPaths: []string{
 			filepath.Join("..", "..", "charts", "ectobase-pool", "crd-bases"),
 			filepath.Join("..", "..", "test", "crds"),
-			filepath.Join("..", "..", "netplane", "test", "crds"),
+			filepath.Join("..", "..", "mesh", "test", "crds"),
 		},
 		ErrorIfCRDPathMissing: true,
 	}

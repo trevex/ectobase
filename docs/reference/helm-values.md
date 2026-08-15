@@ -18,7 +18,7 @@ the reflector, and the broker's dispatch-side identity.
 | --- | --- | --- |
 | `images.dispatchApiserver` | `ghcr.io/trevex/ectobase/dispatch-apiserver:dev` | Aggregated apiserver image. |
 | `images.dispatchController` | `ghcr.io/trevex/ectobase/dispatch-controller:dev` | Dispatch controller (ClusterPool reconciler + scheduler). |
-| `images.netplane` | `ghcr.io/trevex/ectobase/netplane:dev` | Shared image for the compiler (netplane-controller) and reflector. |
+| `images.mesh` | `ghcr.io/trevex/ectobase/mesh:dev` | Shared image for the compiler (mesh-controller) and reflector. |
 | `images.kine` | `rancher/kine:v0.13.0` | etcd-v3 shim in front of PostgreSQL. |
 | `images.postgres` | `postgres:16` | Backing store for kine (dev/smoke; not HA). |
 | `imagePullPolicy` | `IfNotPresent` | Applies to all containers in the chart. |
@@ -40,7 +40,7 @@ the reflector, and the broker's dispatch-side identity.
 
 ## ectobase-pool
 
-The pool chart deploys the node dataplane (eBPF or DPDK), the netplane agent, the
+The pool chart deploys the node dataplane (eBPF or DPDK), the mesh agent, the
 CNI, the broker runtime, and optional materializers and failover.
 
 ### Images and pull policy
@@ -49,7 +49,7 @@ CNI, the broker runtime, and optional materializers and failover.
 | --- | --- | --- |
 | `images.flowplane` | `ghcr.io/trevex/ectobase/flowplane:dev` | eBPF dataplane image. |
 | `images.flowplaneDpdk` | `ghcr.io/trevex/ectobase/flowplane-dpdk:dev` | DPDK dataplane image. |
-| `images.netplane` | `ghcr.io/trevex/ectobase/netplane:dev` | Agent, pod-materializer and vm-materializer image. |
+| `images.mesh` | `ghcr.io/trevex/ectobase/mesh:dev` | Agent, pod-materializer and vm-materializer image. |
 | `images.cni` | `ghcr.io/trevex/ectobase/cni:dev` | flowplane-cni image. |
 | `images.dispatchBroker` | `ghcr.io/trevex/ectobase/dispatch-broker:dev` | Broker runtime image. |
 | `imagePullPolicy` | `IfNotPresent` | Applies to all containers in the chart. |

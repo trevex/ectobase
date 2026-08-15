@@ -78,9 +78,9 @@ BGP appears only at the [WAN edge](features/ns-edge.md).
   policy of its own and exposes a small per-node gRPC surface (`DataplaneNode`) that the control
   plane programs. A [DPDK backend](architecture/dataplane/dpdk.md) exists as a fourth `Pkt`/`Maps`
   implementation that is byte-parity with the eBPF datapath. Code: `flowplane/`.
-- **netplane** — the per-cluster **control plane** (Go, controller-runtime). CRDs describe intent;
+- **mesh** — the per-cluster **control plane** (Go, controller-runtime). CRDs describe intent;
   controllers compile intent into `Compiled*` objects; the agent programs the local dataplane; the
-  reflector distributes overlay routes. Code: `netplane/`, `cni/`.
+  reflector distributes overlay routes. Code: `mesh/`, `cni/`.
 
 ## Roadmap
 

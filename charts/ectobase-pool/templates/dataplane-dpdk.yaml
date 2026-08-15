@@ -6,7 +6,7 @@ metadata:
   namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/name: flowplane
-    app.kubernetes.io/part-of: netplane
+    app.kubernetes.io/part-of: mesh
 spec:
   selector:
     matchLabels:
@@ -15,7 +15,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: flowplane
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
     spec:
       # Same host-integration posture as the eBPF datapath: it programs the node datapath
       # and serves the DataplaneNode gRPC on a root-only unix socket, so the agent

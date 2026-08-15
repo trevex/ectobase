@@ -10,5 +10,5 @@
 
 // Package v1alpha1 is the v1alpha1 version of the compute.ectobase.dev API group:
 // the compute objects (VirtualMachine, Container) served by the aggregated apiserver
-// and consumed as CRDs by the netplane control plane.
+// and consumed as CRDs by the mesh control plane.
 package v1alpha1

@@ -8,7 +8,7 @@
 
 Package v1alpha1 is the v1alpha1 version of the compiled.ectobase.dev API group:
 the compiled objects (CompiledNIC, CompiledVM, CompiledContainer, CompiledVolumeAttachment)
-served by the aggregated apiserver and consumed as CRDs by the netplane control plane.
+served by the aggregated apiserver and consumed as CRDs by the mesh control plane.
 
 ### Resource Types
 - [CompiledContainer](#compiledcontainer)

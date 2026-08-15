@@ -31,7 +31,7 @@ import (
 	"github.com/trevex/ectobase/dispatch/pkg/broker"
 	"github.com/trevex/ectobase/dispatch/pkg/clusterpool"
 	"github.com/trevex/ectobase/dispatch/pkg/scheduler"
-	"github.com/trevex/ectobase/netplane/controllers"
+	"github.com/trevex/ectobase/mesh/controllers"
 )
 
 // TestPhase3_HeartbeatScheduleCompileSync_E2E chains the whole Phase-3 control
@@ -43,7 +43,7 @@ import (
 //     the e2e sets the status directly, exactly what heartbeatOnce would write;
 //  2. clusterpool.Reconciler derives Phase=Ready from the fresh lease;
 //  3. scheduler.Reconciler binds the unbound vm1 (owning nic-a) to c1;
-//  4. the netplane CompiledNICReconciler compiles nic-a -> default-nic-a, inheriting
+//  4. the mesh CompiledNICReconciler compiles nic-a -> default-nic-a, inheriting
 //     spec.clusterName=c1 from vm1;
 //  5. the c1 broker syncs default-nic-a into the DOWNSTREAM cluster.
 func TestPhase3_HeartbeatScheduleCompileSync_E2E(t *testing.T) {
@@ -199,7 +199,7 @@ func TestPhase3_HeartbeatScheduleCompileSync_E2E(t *testing.T) {
 	t.Log("(3) schedule: PASS (vm1 -> c1)")
 
 	// ================================================================
-	// (4) COMPILE: the netplane reconciler compiles nic-a -> default-nic-a bound to c1.
+	// (4) COMPILE: the mesh reconciler compiles nic-a -> default-nic-a bound to c1.
 	// ================================================================
 	cr := &controllers.CompiledNICReconciler{Client: dispatchClient, DefaultClusterName: "default"}
 	if _, err := cr.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Namespace: ns, Name: "nic-a"}}); err != nil {

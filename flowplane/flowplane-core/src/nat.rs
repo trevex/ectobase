@@ -9,7 +9,7 @@
 //! packet bytes, so it does not affect byte-parity of the emitted frame.
 //!
 //! Source-BLOCK allocation (which `(nat_ip, port_range)` a guest gets) is OUT of scope — that is the
-//! Go `netplane/allocator`. This is only the datapath port pick WITHIN an already-allocated range.
+//! Go `mesh/allocator`. This is only the datapath port pick WITHIN an already-allocated range.
 
 use flowplane_common::csum::{csum_replace2, csum_replace4};
 use flowplane_common::{CtEntry, CtKey, NatKey, CT_F_SRC_NAT, CT_REWRITE_DST, CT_REWRITE_SRC};

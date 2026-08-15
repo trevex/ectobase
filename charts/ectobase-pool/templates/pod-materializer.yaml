@@ -10,7 +10,7 @@ metadata:
   namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/name: pod-materializer
-    app.kubernetes.io/part-of: netplane
+    app.kubernetes.io/part-of: mesh
 spec:
   replicas: 1
   strategy:
@@ -22,12 +22,12 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: pod-materializer
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
     spec:
       serviceAccountName: pod-materializer
       containers:
         - name: pod-materializer
-          image: {{ .Values.images.netplane }}
+          image: {{ .Values.images.mesh }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           resources:
             {{- include "ectobase-pool.resources" . | nindent 12 }}

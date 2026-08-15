@@ -7,14 +7,14 @@
     the API types or the component code.
 
 ectobase is a multi-cluster substrate. A single **dispatch** cluster runs the control plane (an
-aggregated apiserver, the dispatch controller, the netplane compiler, and the reflector); each
-**compute/pool** cluster runs the dataplane, the netplane agent, and a broker that syncs
+aggregated apiserver, the dispatch controller, the mesh compiler, and the reflector); each
+**compute/pool** cluster runs the dataplane, the mesh agent, and a broker that syncs
 compiled objects down from the dispatch. Those two roles map onto the two charts:
 
 | Chart | Runs on | Installs |
 |---|---|---|
-| `charts/ectobase-dispatch` | the dispatch cluster | aggregated apiserver + kine (+ postgres), dispatch-controller, netplane compiler, reflector, dispatch-side broker identity |
-| `charts/ectobase-pool` | each compute cluster | dataplane (`ebpf`/`dpdk`), netplane agent, broker, cni, KubeVirt NAD, pod-materializer (always), vm-materializer / tier1 (gated), the `net` + `compiled` CRDs |
+| `charts/ectobase-dispatch` | the dispatch cluster | aggregated apiserver + kine (+ postgres), dispatch-controller, mesh compiler, reflector, dispatch-side broker identity |
+| `charts/ectobase-pool` | each compute cluster | dataplane (`ebpf`/`dpdk`), mesh agent, broker, cni, KubeVirt NAD, pod-materializer (always), vm-materializer / tier1 (gated), the `net` + `compiled` CRDs |
 
 The reference install sequence lives in `test/lab/internal/deploy/ectobase.go` — the lab CLI
 installs both charts exactly the way an operator would, so it is the source of truth for the
@@ -28,7 +28,7 @@ The dispatch chart carries two namespaces on purpose:
   the aggregated apiserver, dispatch-controller, kine, and the dispatch-side broker identity. Create it
   with `--create-namespace`.
 - The chart itself creates the **PSA-privileged `ectobase-system`** namespace
-  (`agentNamespace`) for the hostNetwork netplane compiler and reflector.
+  (`agentNamespace`) for the hostNetwork mesh compiler and reflector.
 
 ```sh
 helm install ectobase-dispatch charts/ectobase-dispatch \
@@ -59,7 +59,7 @@ Source of truth: `charts/ectobase-dispatch/values.yaml` (schema: `values.schema.
 | `imagePullPolicy` | `IfNotPresent` | Applied to every container. |
 | `images.dispatchApiserver` | `…/dispatch-apiserver:dev` | Aggregated apiserver image. |
 | `images.dispatchController` | `…/dispatch-controller:dev` | Dispatch controller (ClusterPool reconciler + scheduler). |
-| `images.netplane` | `…/netplane:dev` | Shared image for the netplane compiler + reflector. |
+| `images.mesh` | `…/mesh:dev` | Shared image for the mesh compiler + reflector. |
 | `images.kine` | `rancher/kine:v0.13.0` | etcd-v3 shim over postgres. |
 | `images.postgres` | `postgres:16` | Backing store for kine (dev/smoke; not HA). |
 
@@ -123,7 +123,7 @@ Source of truth: `charts/ectobase-pool/values.yaml` (schema: `values.schema.json
 | `blueGreen.enabled` | `false` | Blue-green upgrade operator (requires `dataplane: dpdk`). |
 | `images.flowplane` | `…/flowplane:dev` | eBPF dataplane image. |
 | `images.flowplaneDpdk` | `…/flowplane-dpdk:dev` | DPDK dataplane image. |
-| `images.netplane` | `…/netplane:dev` | netplane agent image. |
+| `images.mesh` | `…/mesh:dev` | mesh agent image. |
 | `images.cni` | `…/cni:dev` | flowplane CNI plugin image. |
 | `images.dispatchBroker` | `…/dispatch-broker:dev` | Per-pool broker image. |
 

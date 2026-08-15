@@ -93,7 +93,7 @@ sequenceDiagram
 | --- | --- |
 | `Volume` API type | `api/storage/v1alpha1/volume_types.go` |
 | `CompiledVolumeAttachment` type | `api/compiled/v1alpha1/compiledvolumeattachment_types.go` |
-| `CompiledVolumeAttachment` → CDI `DataVolume` | `netplane/controllers/volumematerializer.go` |
+| `CompiledVolumeAttachment` → CDI `DataVolume` | `mesh/controllers/volumematerializer.go` |
 | `NetworkFence` storage fencer | `dispatch/pkg/fence/storage.go` |
 | Overlay-route network fencer | `dispatch/pkg/fence/network.go` |
 | Fence-gated failover | `dispatch/pkg/failover/failover.go` |

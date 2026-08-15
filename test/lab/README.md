@@ -76,7 +76,7 @@ fabric:
   nat64Prefix: 64:ff9b::/96
   registry:
     upstreams: [docker.io, ghcr.io, quay.io, registry.k8s.io, gcr.io]
-    push: [flowplane, netplane, cni, dispatch-apiserver, dispatch-controller, dispatch-broker]  # :dev
+    push: [flowplane, mesh, cni, dispatch-apiserver, dispatch-controller, dispatch-broker]  # :dev
   ceph: { enabled: true }               # optional storage node + Tier-2 gate
   clusters:
     - { name: central, nodes: 1 }       # hosts the central apiserver + controller + reflector
@@ -126,7 +126,7 @@ A persistent pull-through + push-local `registry:2` runs on the WAN segment at `
 
 ## Ectobase deploy (last step of `up`)
 
-- **Dispatch cluster** gets the `charts/ectobase-dispatch` Helm chart (aggregated apiserver + controller + kine, the netplane compiler, the shared **reflector**, and the dispatch-side broker identity) — with `-reflector-admin` set to the dispatch's fabric identity via a chart value. The lab then mints the broker→dispatch token/kubeconfig and pre-creates one **ClusterPool** per compute cluster (test fixtures around the install).
+- **Dispatch cluster** gets the `charts/ectobase-dispatch` Helm chart (aggregated apiserver + controller + kine, the mesh compiler, the shared **reflector**, and the dispatch-side broker identity) — with `-reflector-admin` set to the dispatch's fabric identity via a chart value. The lab then mints the broker→dispatch token/kubeconfig and pre-creates one **ClusterPool** per compute cluster (test fixtures around the install).
 - **Each compute cluster** gets the `charts/ectobase-pool` Helm chart (dataplane + agent + broker + cni + pod-materializer; vm-materializer under `lab tier2`), wired to the dispatch's reflector at the dispatch's node identity and to its own local apiserver.
 - Both compute **ClusterPools converge to `Ready` with `nodePrefixes`**.
 

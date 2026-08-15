@@ -117,7 +117,7 @@ sequenceDiagram
 
 ## Self-locating agent
 
-The CNI attaches an interface; the **netplane agent** on the same node then
+The CNI attaches an interface; the **mesh agent** on the same node then
 programs that interface's central policy. It does so **self-locatingly**: the
 agent applies a `CompiledNIC`'s firewall / NAT / LB / peer-import / QoS **iff the
 NIC's interface is attached on this node**, and it decides "on this node" by
@@ -140,7 +140,7 @@ programmed correctly. This is the property that makes
 compose cleanly.
 
 !!! success "Status: Implemented"
-    The self-locating join lives in `netplane/agent/reconcile.go` (`localNIC`,
+    The self-locating join lives in `mesh/agent/reconcile.go` (`localNIC`,
     the `(VNI, overlay IP)` `ipKey`) and is applied across `fwreconcile.go`,
     `natreconcile.go`, `lbreconcile.go`, `importreconcile.go`, and
     `qosreconcile.go`.

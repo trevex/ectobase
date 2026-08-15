@@ -59,7 +59,7 @@ khub get vpc,networkinterface,container,virtualmachine -A
 ```
 
 Each pool runs the `ectobase-pool` executors in the `ectobase-system` namespace —
-the netplane agent, the broker, the CNI installer, the dataplane, and the
+the mesh agent, the broker, the CNI installer, the dataplane, and the
 materializers:
 
 ```sh
@@ -74,11 +74,11 @@ k02 get compilednics,compiledcontainers,compiledvms -A
 
 ## The flow in one paragraph
 
-You author intent on the **dispatch**; the netplane compiler lowers it into small
+You author intent on the **dispatch**; the mesh compiler lowers it into small
 pool-scoped `Compiled*` objects and stamps the pool a dispatch scheduler chose; the
 **broker** syncs each `Compiled*` down to that pool; on the pool the
 **materializers** turn a `CompiledContainer` into a `Pod` and a `CompiledVM` into a
-KubeVirt `VirtualMachine`, while the **netplane agent** programs the dataplane for
+KubeVirt `VirtualMachine`, while the **mesh agent** programs the dataplane for
 whichever overlay interfaces actually attach on its node. The full picture is in
 [Compile, sync, materialize](../architecture/compile-sync-materialize.md).
 
@@ -311,7 +311,7 @@ column.
 | Synced | the same `Compiled*` (broker-selected by `spec.clusterName`) | **pool** | `k02 get compilednic,compiledcontainer,compiledvm,compiledvolumeattachment -A` |
 | Materialized | `Pod` (+ NAD) / KubeVirt `VirtualMachine` + `VirtualMachineInstance` + `DataVolume` | **pool** | `k02 get pod,networkattachmentdefinition -n ectobase-system; k02 get virtualmachine,virtualmachineinstance,datavolume -A` |
 
-The netplane **agent** on each pool node then programs the dataplane for whichever
+The mesh **agent** on each pool node then programs the dataplane for whichever
 overlay interfaces attach locally — matched by the unique `(VNI, overlay IP)` key,
 so policy follows the interface wherever it lands. See
 [CNI integration → Self-locating agent](../architecture/cni-integration.md#self-locating-agent).

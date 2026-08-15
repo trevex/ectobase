@@ -33,11 +33,11 @@ flowchart LR
     agentB -->|AddRoute / …<br/>DataplaneNode gRPC| fpB
 ```
 
-- **agent** (`netplane/agent`, per node) — a route-bus client. It reconciles the
+- **agent** (`mesh/agent`, per node) — a route-bus client. It reconciles the
   node's `NetworkInterface`s into a *desired* set of announcements, subscribes to
   the VNIs it cares about, and programs every route it learns onto the local
   datapath over the `DataplaneNode` gRPC (`127.0.0.1:1337`).
-- **reflector** (`netplane/reflector`, on the dispatch) — a route broker. It holds an
+- **reflector** (`mesh/reflector`, on the dispatch) — a route broker. It holds an
   in-memory RIB (`rib.go`) plus a global NAT table (`nattable.go`) and public-prefix
   table (`publictable.go`), and reflects records between the agents' streams
   (`server.go`).

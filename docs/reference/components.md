@@ -35,15 +35,15 @@ against two apiservers: the dispatch (source) and the pool (destination). The di
 chart provisions the broker's dispatch-side identity; the pool chart deploys the
 running broker (see below).
 
-### netplane controller (compiler)
+### mesh controller (compiler)
 
-The `netplane-controller` binary — the **compiler**. It watches the authored
+The `mesh-controller` binary — the **compiler**. It watches the authored
 `net`/`compute`/`storage` groups and lowers them into `compiled.ectobase.dev`
 objects (NetworkInterface + FirewallPolicy + LoadBalancer + VPCPeering →
 CompiledNIC; VirtualMachine → CompiledVM; Container → CompiledContainer; Volume →
 CompiledVolumeAttachment). It also resolves central NAT allocations onto
 NATGateway status. Runs hostNetwork in the dispatch cluster (agent namespace); talks
-to the dispatch apiserver. Shares the `netplane` image with the reflector.
+to the dispatch apiserver. Shares the `mesh` image with the reflector.
 
 ### reflector
 
@@ -51,13 +51,13 @@ The central route reflector. It accepts `routebus.v1` Session streams from the
 per-node agents and reflects per-VNI overlay routes between them — this is how
 overlay reachability is distributed (not BGP). Deployed by the dispatch chart as a
 Deployment fronted by a Service; the dispatch-controller passes its address to agents
-via `reflectorAdmin`. Shares the `netplane` image with the compiler.
+via `reflectorAdmin`. Shares the `mesh` image with the compiler.
 
 ## Pool components
 
 Deployed once per pool cluster (some as DaemonSets, one instance per node).
 
-### netplane agent
+### mesh agent
 
 The per-node control plane. It dials the node-local flowplane dataplane and the
 central reflector, then reconciles the node's CompiledNICs into route
@@ -112,11 +112,11 @@ selected when `dataplane: dpdk`, with its own knobs (`dpdk.lcores`, hugepages,
 | dispatch-apiserver | `dispatch-apiserver` | dispatch | dispatch cluster |
 | dispatch-controller | `dispatch-controller` | dispatch | dispatch cluster |
 | dispatch-broker | `dispatch-broker` | dispatch (identity) + pool (runtime) | per pool |
-| netplane controller (compiler) | `netplane` | dispatch | dispatch cluster |
-| reflector | `netplane` | dispatch | dispatch cluster |
-| netplane agent | `netplane` | pool | per node (DaemonSet) |
+| mesh controller (compiler) | `mesh` | dispatch | dispatch cluster |
+| reflector | `mesh` | dispatch | dispatch cluster |
+| mesh agent | `mesh` | pool | per node (DaemonSet) |
 | flowplane-cni | `cni` | pool | per node |
-| pod-materializer | `netplane` | pool | per pool |
-| vm-materializer | `netplane` | pool | per pool (opt-in) |
+| pod-materializer | `mesh` | pool | per pool |
+| vm-materializer | `mesh` | pool | per pool (opt-in) |
 | flowplane (eBPF) | `flowplane` | pool | per node (DaemonSet) |
 | flowplane-dpdk (DPDK) | `flowplane-dpdk` | pool | per node (DaemonSet) |

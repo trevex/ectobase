@@ -36,7 +36,7 @@ metadata:
   namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/name: flowplane-cni-install
-    app.kubernetes.io/part-of: netplane
+    app.kubernetes.io/part-of: mesh
 spec:
   selector:
     matchLabels:
@@ -45,7 +45,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: flowplane-cni-install
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
     spec:
       serviceAccountName: flowplane-cni
       tolerations:

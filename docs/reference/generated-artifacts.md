@@ -75,10 +75,10 @@ package, a `doc.go`). `controller-gen rbac` renders each marker set into a
 
 | Marker source | Generated into | Chart |
 | --- | --- | --- |
-| `netplane/cmd/controller` | `files/netplane-controller/role.yaml` | dispatch |
-| `netplane/cmd/agent` | `files/netplane-agent/role.yaml` | pool |
-| `netplane/cmd/vm-materializer` | `files/vm-materializer/role.yaml` | pool |
-| `netplane/cmd/pod-materializer` | `files/pod-materializer/role.yaml` | pool |
+| `mesh/cmd/controller` | `files/mesh-controller/role.yaml` | dispatch |
+| `mesh/cmd/agent` | `files/mesh-agent/role.yaml` | pool |
+| `mesh/cmd/vm-materializer` | `files/vm-materializer/role.yaml` | pool |
+| `mesh/cmd/pod-materializer` | `files/pod-materializer/role.yaml` | pool |
 | `cni` | `files/flowplane-cni/role.yaml` | pool |
 | `dispatch/cmd/controller` | `files/dispatch-controller/role.yaml` | dispatch |
 | `dispatch/cmd/broker/rbac/dispatchside` | `files/dispatch-broker/role.yaml` | dispatch |
@@ -89,7 +89,7 @@ reads its role file and splices the rules in:
 
 ```yaml
 rules:
-  {{- (.Files.Get "files/netplane-controller/role.yaml" | fromYaml).rules | toYaml | nindent 2 }}
+  {{- (.Files.Get "files/mesh-controller/role.yaml" | fromYaml).rules | toYaml | nindent 2 }}
 ```
 
 so the ClusterRole a component runs with is exactly the set of markers on its

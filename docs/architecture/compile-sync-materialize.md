@@ -18,7 +18,7 @@ workload flows through:
 ## VNI allocation
 
 Before a NIC can be compiled, its VPC needs a VNI. A **VPC VNI allocator**
-(`VPCReconciler`, `netplane/controllers/vpc.go`) runs on the dispatch and assigns every
+(`VPCReconciler`, `mesh/controllers/vpc.go`) runs on the dispatch and assigns every
 VPC a globally-unique VNI, published to `VPC.status.vni` alongside
 `status.state: Ready`. Creating a VPC with **no `spec.vni`** auto-allocates the
 lowest free VNI in `[1000, 2^24-1]`; setting `spec.vni` **pins** that value. No
@@ -37,9 +37,9 @@ programmed with the allocated overlay identity.
 
 ## The compiler
 
-The compiler is the set of **netplane controller reconcilers**
-(`netplane/controllers/`), which run on the dispatch against the aggregated apiserver
-(`charts/ectobase-dispatch/templates/compiler.yaml`, the `netplane-controller`
+The compiler is the set of **mesh controller reconcilers**
+(`mesh/controllers/`), which run on the dispatch against the aggregated apiserver
+(`charts/ectobase-dispatch/templates/compiler.yaml`, the `mesh-controller`
 Deployment). Each reconciler lowers one intent type into its `Compiled*` twin and
 stamps the target pool (and, where applicable, node) onto it:
 
@@ -77,7 +77,7 @@ and this is what the broker selects on. For NICs, the binding is resolved by
 2. **Owning `VirtualMachine`** — supplies the cluster binding.
 3. **The NIC's own `spec.clusterName`** — for a standalone NIC with no owning
    workload.
-4. **The compiler default** — the `netplane-controller`'s configured default
+4. **The compiler default** — the `mesh-controller`'s configured default
    cluster.
 
 The *node* within the chosen pool is picked on the pool cluster — by
@@ -144,7 +144,7 @@ network-binding plugin (a tap device).
 
 ### agent → dataplane
 
-The netplane **agent** (`netplane/agent`) consumes `CompiledNIC` as its **central
+The mesh **agent** (`mesh/agent`) consumes `CompiledNIC` as its **central
 policy** and programs the local `flowplane` datapath from it: firewall rules
 (`fwreconcile.go`), LB memberships (`lbreconcile.go`), NAT sources
 (`natreconcile.go`), and peering imports (`importreconcile.go`). It applies a
@@ -167,7 +167,7 @@ control-plane node write-back — the `CompiledNIC` has no node field at all. Se
 
 ```mermaid
 flowchart TB
-    subgraph hubbox["Dispatch — compiler (netplane-controller)"]
+    subgraph hubbox["Dispatch — compiler (mesh-controller)"]
         nic["NetworkInterface<br/>+ FirewallPolicy / LoadBalancer<br/>+ VPCPeering / NATGateway"]
         ctr["Container"]
         vm["VirtualMachine<br/>+ Volume"]
@@ -188,7 +188,7 @@ flowchart TB
     catt --> broker
 
     subgraph poolbox["Pool — synced compiled CRDs + executors"]
-        agent["netplane agent"]
+        agent["mesh agent"]
         dp["dataplane (flowplane)"]
         podmat["pod-materializer"]
         vmmat["vm-materializer"]
@@ -208,7 +208,7 @@ flowchart TB
 
 | Intent (dispatch) | Compiled (dispatch, pool-stamped) | Executor (pool) | Result |
 |---|---|---|---|
-| `NetworkInterface` (+ `FirewallPolicy`, `LoadBalancer`, `VPCPeering`, `NATGateway`) | `CompiledNIC` | netplane **agent** | dataplane programmed (firewall / LB / NAT / imports) |
+| `NetworkInterface` (+ `FirewallPolicy`, `LoadBalancer`, `VPCPeering`, `NATGateway`) | `CompiledNIC` | mesh **agent** | dataplane programmed (firewall / LB / NAT / imports) |
 | `Container` | `CompiledContainer` | **pod-materializer** | `v1.Pod` on the overlay |
 | `VirtualMachine` | `CompiledVM` | **vm-materializer** | KubeVirt `VirtualMachine` |
 | `VirtualMachine` + `Volume` | `CompiledVolumeAttachment` | **vm-materializer** | CDI `DataVolume` disk(s) |

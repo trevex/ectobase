@@ -78,7 +78,7 @@ The dispatch also hosts the **reflector** (`charts/ectobase-dispatch/templates/r
 the central rendezvous of the overlay [route bus](./route-bus.md). It runs on
 hostNetwork pinned to a control-plane node, listening on that node's fabric
 loopback so every node — in every pool — can reach it over the shared IPv6
-fabric. The per-pool netplane agents open a long-lived `RouteBus.Session` stream
+fabric. The per-pool mesh agents open a long-lived `RouteBus.Session` stream
 to it to learn which overlay prefix lives behind which underlay node.
 
 ## The pool
@@ -88,7 +88,7 @@ Each pool is a plain Kubernetes cluster, registered on the dispatch as a
 `charts/ectobase-pool` chart. It runs:
 
 - **broker** (`dispatch/cmd/broker/main.go`) — the kubelet-analog described below.
-- **netplane agent** — the per-node route-bus client that programs the local
+- **mesh agent** — the per-node route-bus client that programs the local
   dataplane from `CompiledNIC` (see [Compile → sync → materialize](./compile-sync-materialize.md)).
 - **dataplane** (`flowplane`, eBPF or DPDK) — the datapath itself.
 - **materializers** — `pod-materializer` and `vm-materializer`, which turn the
@@ -153,7 +153,7 @@ flowchart TB
     subgraph pool["Pool (a compute cluster)"]
         brk["broker<br/>(kubelet-analog)"]
         papi["pool apiserver<br/>compiled.ectobase.dev CRDs"]
-        agent["netplane agent"]
+        agent["mesh agent"]
         mat["pod- / vm-materializer"]
         dp["dataplane (flowplane)"]
         brk --> papi

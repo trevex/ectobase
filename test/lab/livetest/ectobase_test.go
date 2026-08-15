@@ -65,7 +65,7 @@ func TestClusterPoolsReady(t *testing.T) {
 	}
 }
 
-// TestBrokersConnectedToReflector asserts each compute cluster's netplane agent is
+// TestBrokersConnectedToReflector asserts each compute cluster's mesh agent is
 // connected to the dispatch's shared reflector: recent agent logs carry no
 // "connection refused" lines (cross-cluster routebus up).
 func TestBrokersConnectedToReflector(t *testing.T) {
@@ -79,7 +79,7 @@ func TestBrokersConnectedToReflector(t *testing.T) {
 			eventually(t, 2*time.Minute, 10*time.Second, func() error {
 				out, err := kubectl(ctx, cfg, cl.Name,
 					"-n", "ectobase-system", "logs",
-					"-l", "app.kubernetes.io/name=netplane-agent", "--since=60s")
+					"-l", "app.kubernetes.io/name=mesh-agent", "--since=60s")
 				if err != nil {
 					return fmt.Errorf("agent logs on %s: %w\n%s", cl.Name, err, out)
 				}

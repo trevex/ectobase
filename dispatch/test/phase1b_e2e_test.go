@@ -25,7 +25,7 @@ import (
 	compiledinstall "github.com/trevex/ectobase/api/compiled/install"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"github.com/trevex/ectobase/dispatch/pkg/broker"
-	"github.com/trevex/ectobase/netplane/controllers"
+	"github.com/trevex/ectobase/mesh/controllers"
 )
 
 // TestPhase1b_CompileBindSync_E2E proves the whole Phase-1b chain in one test,
@@ -33,7 +33,7 @@ import (
 //
 //  1. high-level VirtualMachine + NetworkInterface land in DISPATCH (the kit
 //     aggregated apiserver serving net.ectobase.dev);
-//  2. the netplane CompiledNICReconciler compiles each NIC into a CompiledNIC in
+//  2. the mesh CompiledNICReconciler compiles each NIC into a CompiledNIC in
 //     DISPATCH, inheriting spec.clusterName from the owning VM plus a
 //     workload=<vm> label (via resolvePlacement);
 //  3. the per-cluster broker syncs the c1-bound CompiledNIC into a DOWNSTREAM
@@ -192,11 +192,11 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	}
 
 	// ================================================================
-	// COMPILE: run the real netplane reconciler once per NIC against dispatch.
+	// COMPILE: run the real mesh reconciler once per NIC against dispatch.
 	// ================================================================
 	// DefaultClusterName is the fallback for a NIC with no owning VM; it is not
 	// exercised here (both NICs are owned by a VM) — the fallback is covered by
-	// the netplane compiler unit tests.
+	// the mesh compiler unit tests.
 	r := &controllers.CompiledNICReconciler{Client: dispatchClient, DefaultClusterName: "default"}
 	for _, name := range []string{"nic-a", "nic-b"} {
 		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Namespace: ns, Name: name}}); err != nil {

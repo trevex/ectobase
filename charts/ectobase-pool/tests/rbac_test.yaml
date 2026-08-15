@@ -3,10 +3,10 @@ templates:
   - templates/rbac.yaml
 tests:
   # Documents within templates/rbac.yaml (0-indexed, interleaved SA/CR/CRB per role):
-  #   0: SA  netplane-agent     1: CR  netplane-agent     2: CRB netplane-agent
+  #   0: SA  mesh-agent     1: CR  mesh-agent     2: CRB mesh-agent
   #   3: SA  dispatch-broker         4: CR  dispatch-broker         5: CRB dispatch-broker
   #   6: SA  pod-materializer   7: CR  pod-materializer   8: CRB pod-materializer
-  - it: netplane-agent ClusterRole carries the compiled read rule
+  - it: mesh-agent ClusterRole carries the compiled read rule
     set:
       broker.clusterName: test
     asserts:

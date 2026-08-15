@@ -18,7 +18,7 @@ make            # list every target with its one-line description
   nixpkgs `bpf-linker` (built against LLVM 21). This avoids the *"Invalid record"* mismatch when
   `bpf-linker` links the eBPF object. `rust-src` is included for `-Z build-std=core` (the `bpfel`
   target has no prebuilt std). `aya-build` is told to use exactly this toolchain.
-- **Go** (with default tools) — for `netplane`, the `cni/` plugin, and `controller-gen`.
+- **Go** (with default tools) — for `mesh`, the `cni/` plugin, and `controller-gen`.
 - **`bpf-linker`, `protobuf` + `grpcurl`** — eBPF linking and the gRPC contracts.
 - **`kind`, `containerlab`, `kubectl`, `helm`** — the integration fabric (the `test/lab` CLI).
 - **`qemu`, `libvirt`, `OVMF`, `iproute2`, `bridge-utils`, `ethtool`, `tcpdump`** — VM boot and
@@ -33,7 +33,7 @@ host-specific paths) and are expected to run inside `nix develop` (the Makefile 
 
 ## Building
 
-`flowplane` is the Rust dataplane daemon; the Go modules are `netplane`, `cni/`, and `api/`.
+`flowplane` is the Rust dataplane daemon; the Go modules are `mesh`, `cni/`, and `api/`.
 
 ```sh
 make build       # build flowplane (host crates + the eBPF object, via aya-build in build.rs)
@@ -51,10 +51,10 @@ by `aya-build` from `flowplane/build.rs` during `make build`. The Go modules bui
 |---|---|
 | `make generate` | Regenerate the deepcopy/conversion + CRD manifests, the per-component RBAC roles, and the CRD API reference — all directly into the two Helm charts. Run it after editing any CRD type or a component's RBAC markers. |
 | `make proto-go` | Generate the Go gRPC stubs for `dataplane.v1` into `cni/gen/`. |
-| `make proto-routebus` | Generate the Go gRPC stubs for `routebus.v1` into `netplane/gen/`. |
+| `make proto-routebus` | Generate the Go gRPC stubs for `routebus.v1` into `mesh/gen/`. |
 | `make docs` | Build the mkdocs site (`mkdocs build --strict` — broken links/nav fail the build). |
 | `make docs-serve` | Serve the docs locally with live reload. |
-| `make image` / `make image-netplane` / `make image-kindnode` | Build the flowplane / netplane / fabric kind-node container images. |
+| `make image` / `make image-mesh` / `make image-kindnode` | Build the flowplane / mesh / fabric kind-node container images. |
 
 ## Test targets
 

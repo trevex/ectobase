@@ -7,7 +7,7 @@
 # NOT managed here (a chart cannot bootstrap its own release namespace).
 #
 # This template manages only the EXTRA namespace {{ .Values.agentNamespace }}
-# (default "ectobase-system"), which hosts the compiler (netplane-controller) + reflector.
+# (default "ectobase-system"), which hosts the compiler (mesh-controller) + reflector.
 # Those run hostNetwork, so the namespace is marked PSA-privileged to be admitted under a
 # baseline-enforcing cluster (e.g. Talos); harmless on non-enforcing clusters (kind).
 apiVersion: v1

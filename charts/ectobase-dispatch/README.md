@@ -8,10 +8,10 @@ Helm chart for the ectobase fleet control-plane ("dispatch") cluster. Deploys:
   VM scheduler/failover against the aggregated apiserver.
 - **kine** — etcd-v3 shim over postgres, providing storage for the aggregated apiserver.
 - **postgres** — ephemeral postgres instance (dev/smoke; not HA).
-- **netplane-controller** (compiler) — compiles NIC/VM/Container objects into CompiledNIC/VM/Container.
-- **reflector** — routebus gRPC rendezvous server for the per-pool netplane agents.
+- **mesh-controller** (compiler) — compiles NIC/VM/Container objects into CompiledNIC/VM/Container.
+- **reflector** — routebus gRPC rendezvous server for the per-pool mesh agents.
 
-RBAC for `netplane-controller`, `dispatch-controller`, and the dispatch-side `dispatch-broker` identity
+RBAC for `mesh-controller`, `dispatch-controller`, and the dispatch-side `dispatch-broker` identity
 is generated from `files/<role>/role.yaml` (committed via `make generate`).
 
 ## Values
@@ -24,6 +24,6 @@ is generated from `files/<role>/role.yaml` (committed via `make generate`).
 | `imagePullPolicy` | `IfNotPresent` | Image pull policy for all containers |
 | `images.dispatchApiserver` | `ghcr.io/trevex/ectobase/dispatch-apiserver:dev` | Dispatch aggregated apiserver image |
 | `images.dispatchController` | `ghcr.io/trevex/ectobase/dispatch-controller:dev` | Dispatch controller image |
-| `images.netplane` | `ghcr.io/trevex/ectobase/netplane:dev` | Compiler + reflector image |
+| `images.mesh` | `ghcr.io/trevex/ectobase/mesh:dev` | Compiler + reflector image |
 | `images.kine` | `rancher/kine:v0.13.0` | Kine image |
 | `images.postgres` | `postgres:16` | Postgres image |

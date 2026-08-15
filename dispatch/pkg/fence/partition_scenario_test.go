@@ -12,7 +12,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/trevex/ectobase/netplane/reflector"
+	"github.com/trevex/ectobase/mesh/reflector"
 )
 
 // A partitioned pool's node keeps a live route + holds the RBD; central fences the

@@ -101,7 +101,7 @@ sequenceDiagram
 
 | Concern | Location |
 | --- | --- |
-| `CompiledVM` → KubeVirt `VirtualMachine` | `netplane/controllers/vmmaterializer.go` |
+| `CompiledVM` → KubeVirt `VirtualMachine` | `mesh/controllers/vmmaterializer.go` |
 | `flowplane` NAD (the binding target) | `charts/ectobase-pool/templates/kubevirt-binding.yaml` |
 | KubeVirt CR binding registration | `test/lab/internal/deploy/kubevirt.go` |
 | CNI `pod-tap` device handling | `cni/plugin/main.go`, `api/proto/dataplane/v1/dataplane.proto` |

@@ -225,7 +225,7 @@ VM instances that could race the ones now running on the new pool.
 ## Why the datapath re-programs itself
 
 Failover only ever changes a VM's **pool** (`Spec.ClusterName`); it never has to
-name a node. The datapath follows automatically because the netplane agent is
+name a node. The datapath follows automatically because the mesh agent is
 **self-locating**: it programs a `CompiledNIC`'s firewall / NAT / LB / QoS **iff
 that NIC's interface is locally attached**, matched by the unique
 `(VNI, overlay IP)` key the local dataplane reports — not by any declared node.

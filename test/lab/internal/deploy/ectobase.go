@@ -51,7 +51,7 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 	}
 
 	// --- Dispatch cluster: one Helm release ---
-	// The ectobase-dispatch chart carries the aggregated apiserver + controller + kine, the netplane
+	// The ectobase-dispatch chart carries the aggregated apiserver + controller + kine, the mesh
 	// compiler, the reflector, and the dispatch-side dispatch-broker identity. --create-namespace makes the
 	// release namespace (system, whose pods are baseline-PSA-safe); the chart itself creates the
 	// PSA-privileged ectobase-system namespace for the hostNetwork compiler + reflector. The

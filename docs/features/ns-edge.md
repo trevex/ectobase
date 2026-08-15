@@ -51,7 +51,7 @@ port-block allocator (in the dispatch controller) assigns each source overlay IP
 `(public-IP, port-block)` — the GCP Cloud NAT model. The block is stamped into the source NIC's
 `CompiledNIC.NAT`, and the source node performs the SNAT locally on egress.
 
-The **NAT block owner is the source NIC's underlay** (`netplane/agent/natreconcile.go`,
+The **NAT block owner is the source NIC's underlay** (`mesh/agent/natreconcile.go`,
 `NatBlock` carries the owning NIC's underlay). Each node announces the NAT blocks it owns on the
 route bus so every other node — and the edge — can return-route to it. When a return packet arrives
 from the WAN, the receiving edge maps `(public-IP, dst-port ∈ block) → source underlay` from that
@@ -64,7 +64,7 @@ need to hit the same edge that handled egress, which is exactly what makes a dra
 Rather than the edge enumerating which tenant VNIs need egress, the edge originates the external
 default route **once** into a reserved **public VNI (`PublicVNI = 0`)**, and any node that needs
 egress **imports** it into its own tenant VNI. `DesiredExternalRoutes`
-(`netplane/agent/natreconcile.go`) returns nothing on a non-edge node; on an edge it returns the
+(`mesh/agent/natreconcile.go`) returns nothing on a non-edge node; on an edge it returns the
 defaults into the public VNI with the edge's own anycast underlay as nexthop:
 
 ```go
@@ -80,7 +80,7 @@ corresponding dataplane table. A tenant node hosts no VNI-0 guests, so a learned
 *recorded, not installed into a VNI-0 table*. Every node subscribes to the public VNI; a node
 imports the learned default into a tenant VNI only when a local NIC in that VNI **needs egress** —
 i.e. it has a NAT allocation (`CompiledNIC.NAT` non-empty) or is an LB backend (`CompiledNIC.LB`
-non-empty), computed by `desiredEgressVNIs` (`netplane/agent/importreconcile.go`). This is the exact
+non-empty), computed by `desiredEgressVNIs` (`mesh/agent/importreconcile.go`). This is the exact
 import primitive that [VPC peering](./vpc-peering.md) generalizes from VNI 0 to arbitrary peer VNIs.
 
 ```mermaid
@@ -98,7 +98,7 @@ flowchart LR
 ## Edge identity on the route bus
 
 The edge advertises its identity as a **typed public-prefix record** on the route bus's PublicPrefix
-channel (`netplane/agent/public.go`). An edge (`edgeLoopback != ""`) announces one `EDGE_UNDERLAY`
+channel (`mesh/agent/public.go`). An edge (`edgeLoopback != ""`) announces one `EDGE_UNDERLAY`
 record mapping its **anycast datapath `/128`** to its **unique control-plane loopback** (the owner):
 
 ```go
@@ -117,7 +117,7 @@ not hardcoded** — new edges joining the anycast pool need no CRD edit.
 ## External load balancing
 
 Internet → VIP ingress rides the same channel and the same edge. A `LoadBalancer`-backed NIC
-announces an `LB_VIP` PublicPrefix (`netplane/agent/public.go`, `DesiredPublic`) carrying the VIP
+announces an `LB_VIP` PublicPrefix (`mesh/agent/public.go`, `DesiredPublic`) carrying the VIP
 and the backing NIC's underlay. **Only the edge** consumes `LB_VIP` records (`applyPublic`,
 gated on `b.isEdge`) — east-west LB uses the plain anycast route, but the edge runs the Maglev
 backend table and registers each backend via `AddLbBackend`:

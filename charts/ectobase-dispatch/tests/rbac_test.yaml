@@ -1,13 +1,13 @@
-suite: dispatch netplane-controller rbac
+suite: dispatch mesh-controller rbac
 templates:
   - templates/rbac.yaml
 tests:
   # Dispatch rbac.yaml documents (0-indexed):
-  #   0: SA  netplane-controller
-  #   1: CR  netplane-controller  (compiled.ectobase.dev full write rules)
-  #   2: CRB netplane-controller
-  #   3: SA  netplane-reflector
-  - it: netplane-controller ClusterRole carries a compiled.ectobase.dev write rule
+  #   0: SA  mesh-controller
+  #   1: CR  mesh-controller  (compiled.ectobase.dev full write rules)
+  #   2: CRB mesh-controller
+  #   3: SA  mesh-reflector
+  - it: mesh-controller ClusterRole carries a compiled.ectobase.dev write rule
     asserts:
       - isKind:
           of: ClusterRole

@@ -51,10 +51,10 @@ generate: ## Regenerate deepcopy/conversion (kube::codegen) + CRD manifests (con
 	cd api && controller-gen crd paths=./storage/v1alpha1/... output:crd:artifacts:config=../test/crds
 	cd api && controller-gen crd paths=./platform/v1alpha1/... output:crd:artifacts:config=../test/crds
 	# RBAC: one ClusterRole rules file per component into each chart's files/<role>/.
-	cd netplane && controller-gen rbac:roleName=netplane-controller paths=./cmd/controller/... output:rbac:artifacts:config=../charts/ectobase-dispatch/files/netplane-controller
-	cd netplane && controller-gen rbac:roleName=netplane-agent paths=./cmd/agent/... output:rbac:artifacts:config=../charts/ectobase-pool/files/netplane-agent
-	cd netplane && controller-gen rbac:roleName=vm-materializer paths=./cmd/vm-materializer/... output:rbac:artifacts:config=../charts/ectobase-pool/files/vm-materializer
-	cd netplane && controller-gen rbac:roleName=pod-materializer paths=./cmd/pod-materializer/... output:rbac:artifacts:config=../charts/ectobase-pool/files/pod-materializer
+	cd mesh && controller-gen rbac:roleName=mesh-controller paths=./cmd/controller/... output:rbac:artifacts:config=../charts/ectobase-dispatch/files/mesh-controller
+	cd mesh && controller-gen rbac:roleName=mesh-agent paths=./cmd/agent/... output:rbac:artifacts:config=../charts/ectobase-pool/files/mesh-agent
+	cd mesh && controller-gen rbac:roleName=vm-materializer paths=./cmd/vm-materializer/... output:rbac:artifacts:config=../charts/ectobase-pool/files/vm-materializer
+	cd mesh && controller-gen rbac:roleName=pod-materializer paths=./cmd/pod-materializer/... output:rbac:artifacts:config=../charts/ectobase-pool/files/pod-materializer
 	cd cni && controller-gen rbac:roleName=flowplane-cni paths=./... output:rbac:artifacts:config=../charts/ectobase-pool/files/flowplane-cni
 	cd dispatch && controller-gen rbac:roleName=dispatch-controller paths=./cmd/controller/... output:rbac:artifacts:config=../charts/ectobase-dispatch/files/dispatch-controller
 	cd dispatch && controller-gen rbac:roleName=dispatch-broker paths=./cmd/broker/rbac/dispatchside/... output:rbac:artifacts:config=../charts/ectobase-dispatch/files/dispatch-broker
@@ -70,10 +70,10 @@ proto-go: ## Generate Go gRPC stubs for dataplane.v1 into cni/gen/dataplanev1
 		api/proto/dataplane/v1/dataplane.proto
 
 .PHONY: proto-routebus
-proto-routebus: ## Generate Go gRPC stubs for routebus.v1 into netplane/gen/routebusv1
+proto-routebus: ## Generate Go gRPC stubs for routebus.v1 into mesh/gen/routebusv1
 	protoc -I api/proto/routebus/v1 \
-		--go_out=netplane/gen --go_opt=module=github.com/trevex/ectobase/netplane/gen \
-		--go-grpc_out=netplane/gen --go-grpc_opt=module=github.com/trevex/ectobase/netplane/gen \
+		--go_out=mesh/gen --go_opt=module=github.com/trevex/ectobase/mesh/gen \
+		--go-grpc_out=mesh/gen --go-grpc_opt=module=github.com/trevex/ectobase/mesh/gen \
 		api/proto/routebus/v1/routebus.proto
 
 IMAGE ?= ghcr.io/trevex/ectobase/flowplane
@@ -90,10 +90,10 @@ image: ## Build the flowplane container image (self-building Dockerfile; IMAGE/T
 image-push: ## Push the flowplane image (needs `docker login ghcr.io`)
 	docker push $(IMAGE):$(TAG)
 
-NETPLANE_IMAGE ?= ghcr.io/trevex/ectobase/netplane
-.PHONY: image-netplane
-image-netplane: ## Build the netplane (reflector+agent) image
-	docker build $(if $(DOCKER_BUILD_NET),--network=$(DOCKER_BUILD_NET)) -f Dockerfile.netplane -t $(NETPLANE_IMAGE):$(TAG) .
+MESH_IMAGE ?= ghcr.io/trevex/ectobase/mesh
+.PHONY: image-mesh
+image-mesh: ## Build the mesh (reflector+agent) image
+	docker build $(if $(DOCKER_BUILD_NET),--network=$(DOCKER_BUILD_NET)) -f Dockerfile.mesh -t $(MESH_IMAGE):$(TAG) .
 
 CNI_IMAGE ?= ghcr.io/trevex/ectobase/cni
 .PHONY: image-cni

@@ -1,17 +1,17 @@
 # Copyright 2026 ectobase contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# The netplane compiler (netplane-controller): compiles NIC/VM/Container objects
+# The mesh compiler (mesh-controller): compiles NIC/VM/Container objects
 # into CompiledNIC/CompiledVM/CompiledContainer. Runs in agentNamespace
 # (ectobase-system) as a hostNetwork singleton on the control-plane node.
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: netplane-controller
+  name: mesh-controller
   namespace: {{ .Values.agentNamespace }}
   labels:
-    app.kubernetes.io/name: netplane-controller
+    app.kubernetes.io/name: mesh-controller
     {{- include "ectobase-dispatch.labels" . | nindent 4 }}
 spec:
   replicas: 1
@@ -21,13 +21,13 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: netplane-controller
+      app.kubernetes.io/name: mesh-controller
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: netplane-controller
+        app.kubernetes.io/name: mesh-controller
     spec:
-      serviceAccountName: netplane-controller
+      serviceAccountName: mesh-controller
       # The controller is a singleton reconciler writing NATGateway.Status. It
       # runs on the control-plane node alongside the reflector so it can reach the
       # API server without a ClusterIP (hostNetwork, same reasoning as the reflector).
@@ -39,7 +39,7 @@ spec:
         - operator: Exists
       containers:
         - name: controller
-          image: {{ .Values.images.netplane }}
+          image: {{ .Values.images.mesh }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           resources:
             {{- include "ectobase-dispatch.resources" . | nindent 12 }}

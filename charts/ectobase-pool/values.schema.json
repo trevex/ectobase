@@ -61,7 +61,7 @@
       "required": [
         "flowplane",
         "flowplaneDpdk",
-        "netplane",
+        "mesh",
         "cni",
         "dispatchBroker"
       ],
@@ -74,7 +74,7 @@
           "type": "string",
           "minLength": 1
         },
-        "netplane": {
+        "mesh": {
           "type": "string",
           "minLength": 1
         },

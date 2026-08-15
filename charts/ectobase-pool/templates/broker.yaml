@@ -5,7 +5,7 @@ metadata:
   namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/name: dispatch-broker
-    app.kubernetes.io/part-of: netplane
+    app.kubernetes.io/part-of: mesh
 spec:
   replicas: 1
   strategy:
@@ -17,7 +17,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: dispatch-broker
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
     spec:
       serviceAccountName: dispatch-broker
       hostNetwork: true

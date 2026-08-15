@@ -32,8 +32,8 @@ import (
 	"github.com/trevex/ectobase/dispatch/pkg/failover"
 	"github.com/trevex/ectobase/dispatch/pkg/fence"
 	"github.com/trevex/ectobase/dispatch/pkg/scheduler"
-	routebusv1 "github.com/trevex/ectobase/netplane/gen/routebusv1"
-	"github.com/trevex/ectobase/netplane/routebus"
+	routebusv1 "github.com/trevex/ectobase/mesh/gen/routebusv1"
+	"github.com/trevex/ectobase/mesh/routebus"
 )
 
 func main() {
@@ -76,7 +76,7 @@ func main() {
 	// Disable the metrics server: a default :8080 listener collides on rolling
 	// restart (new pod can't bind while the old holds it) → crashloop. Nothing
 	// scrapes it in this deployment; "0" turns it off. Same lesson as the
-	// netplane controller.
+	// mesh controller.
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:  scheme,
 		Metrics: metricsserver.Options{BindAddress: "0"},

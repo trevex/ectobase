@@ -7,28 +7,28 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: netplane-agent
+  name: mesh-agent
   namespace: {{ .Values.namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: netplane-agent
+  name: mesh-agent
   labels: {{- include "ectobase-pool.labels" . | nindent 4 }}
 rules:
-  {{- (.Files.Get "files/netplane-agent/role.yaml" | fromYaml).rules | toYaml | nindent 2 }}
+  {{- (.Files.Get "files/mesh-agent/role.yaml" | fromYaml).rules | toYaml | nindent 2 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: netplane-agent
+  name: mesh-agent
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: netplane-agent
+  name: mesh-agent
 subjects:
   - kind: ServiceAccount
-    name: netplane-agent
+    name: mesh-agent
     namespace: {{ .Values.namespace }}
 ---
 # The per-cluster broker (kubelet-analog) syncs compiled objects from the dispatch down into

@@ -40,7 +40,7 @@ Prereqs (run everything inside `nix develop`):
 
 - Build the fabric + kind-node images: `make lab-images` and `make image-kindnode`.
 - Build the component `:dev` images the fabric mirror serves: `make image`,
-  `make image-netplane`, `make image-cni`, and the dispatch images (`dispatch-apiserver`,
+  `make image-mesh`, `make image-cni`, and the dispatch images (`dispatch-apiserver`,
   `dispatch-controller`, `dispatch-broker`). `lab up` **pushes** local `:dev` images into the mirror;
   it does not build them.
 - Docker with IPv6 enabled on the clab management network; tens of GB of disk headroom.
@@ -72,7 +72,7 @@ for the operator-facing version, and `test/lab/internal/deploy/ectobase.go` for 
 sequence):
 
 - The **dispatch** cluster gets `charts/ectobase-dispatch` (aggregated apiserver + kine, dispatch-controller,
-  the netplane compiler, the reflector, and the dispatch-side broker identity), with
+  the mesh compiler, the reflector, and the dispatch-side broker identity), with
   `reflectorAdmin` set to the dispatch's fabric identity. The lab then mints the broker→dispatch
   token/kubeconfig and pre-creates one `ClusterPool` per compute cluster (test fixtures around
   the install).

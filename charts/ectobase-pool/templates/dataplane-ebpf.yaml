@@ -6,7 +6,7 @@ metadata:
   namespace: {{ .Values.namespace }}
   labels:
     app.kubernetes.io/name: flowplane
-    app.kubernetes.io/part-of: netplane
+    app.kubernetes.io/part-of: mesh
 spec:
   selector:
     matchLabels:
@@ -15,7 +15,7 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: flowplane
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/part-of: mesh
     spec:
       # Programs the host datapath and listens on the node-local loopback, so it
       # shares the host network namespace (gRPC on 127.0.0.1:1337) and PID ns.

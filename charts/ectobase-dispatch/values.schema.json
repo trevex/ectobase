@@ -11,7 +11,7 @@
     },
     "agentNamespace": {
       "type": "string",
-      "description": "Namespace for the netplane compiler and reflector.",
+      "description": "Namespace for the mesh compiler and reflector.",
       "minLength": 1
     },
     "reflectorAdmin": {
@@ -29,7 +29,7 @@
       "properties": {
         "dispatchApiserver": {"type": "string"},
         "dispatchController": {"type": "string"},
-        "netplane": {"type": "string"},
+        "mesh": {"type": "string"},
         "kine": {"type": "string"},
         "postgres": {"type": "string"}
       }

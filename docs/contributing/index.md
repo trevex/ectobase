@@ -13,7 +13,7 @@ CNI plugin, the CRD API, the Helm charts, and the lab/test harnesses.
 | Path | What |
 |---|---|
 | `api/` | The Kubernetes CRD types, split into five API groups — `net`, `compute`, `storage`, `compiled`, `platform` (each under `api/<group>/v1alpha1/`) — plus the gRPC/protobuf contracts (`api/proto/dataplane/v1/`, `api/proto/routebus/v1/`) and the generated conversions. |
-| `netplane/` | The per-pool Go control plane: `cmd/agent`, `cmd/reflector`, `cmd/controller`, the pod/VM materializers, the `routebus` client/server, and the reconcile/desired-state logic. |
+| `mesh/` | The per-pool Go control plane: `cmd/agent`, `cmd/reflector`, `cmd/controller`, the pod/VM materializers, the `routebus` client/server, and the reconcile/desired-state logic. |
 | `cni/` | The CNI plugin (`cni/plugin/main.go`) that attaches pods via the `DataplaneNode` gRPC. |
 | `dispatch/` | The fleet control plane: the extension `apiserver`, the `controller` (compiler), and the `broker` (per-pool kubelet-analog) under `cmd/`, plus the generated client. |
 | `flowplane/` | The Rust workspace: the eBPF dataplane, its userspace loader/agent/CLI, the pure-core datapath library, the shared map types, and the in-process simulator. |
@@ -22,7 +22,7 @@ CNI plugin, the CRD API, the Helm charts, and the lab/test harnesses.
 | `docs/` | This mkdocs-material site (plus the design-spec/plan archive under `docs/superpowers/`). |
 
 See [Repository layout & crates](../architecture/layout.md) for the crate-level breakdown
-of `flowplane/` and the `netplane`/`dispatch` module split.
+of `flowplane/` and the `mesh`/`dispatch` module split.
 
 ## The toolchain: Nix devShell + `make`
 

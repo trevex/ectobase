@@ -8,7 +8,7 @@
 
 Package v1alpha1 is the v1alpha1 version of the net.ectobase.dev API group:
 the user-facing overlay networking model plus the compiled objects, served by
-the aggregated apiserver and consumed as CRDs by the netplane control plane.
+the aggregated apiserver and consumed as CRDs by the mesh control plane.
 
 ### Resource Types
 - [FirewallPolicy](#firewallpolicy)

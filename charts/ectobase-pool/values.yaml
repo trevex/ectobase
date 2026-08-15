@@ -9,7 +9,7 @@ env: clab                  # clab | hw
 images:
   flowplane: ghcr.io/trevex/ectobase/flowplane:dev
   flowplaneDpdk: ghcr.io/trevex/ectobase/flowplane-dpdk:dev
-  netplane: ghcr.io/trevex/ectobase/netplane:dev
+  mesh: ghcr.io/trevex/ectobase/mesh:dev
   cni: ghcr.io/trevex/ectobase/cni:dev
   dispatchBroker: ghcr.io/trevex/ectobase/dispatch-broker:dev
 imagePullPolicy: IfNotPresent

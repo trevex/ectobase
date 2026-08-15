@@ -1,22 +1,22 @@
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: netplane-agent
+  name: mesh-agent
   namespace: {{ .Values.namespace }}
   labels:
-    app.kubernetes.io/name: netplane-agent
-    app.kubernetes.io/part-of: netplane
+    app.kubernetes.io/name: mesh-agent
+    app.kubernetes.io/part-of: mesh
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: netplane-agent
+      app.kubernetes.io/name: mesh-agent
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: netplane-agent
-        app.kubernetes.io/part-of: netplane
+        app.kubernetes.io/name: mesh-agent
+        app.kubernetes.io/part-of: mesh
     spec:
-      serviceAccountName: netplane-agent
+      serviceAccountName: mesh-agent
       # Run on every node, including control-plane (the fabric's cp node is a host too).
       tolerations:
         - operator: Exists
@@ -28,7 +28,7 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: agent
-          image: {{ .Values.images.netplane }}
+          image: {{ .Values.images.mesh }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           resources:
             {{- include "ectobase-pool.resources" . | nindent 12 }}
@@ -44,7 +44,7 @@ spec:
             - "--reflector={{ .Values.reflectorAddress }}"
             - "--dataplane=unix:///run/flowplane/dataplane.sock"
             # Reach the API over the fabric (the mgmt net has no inter-node path here).
-            - "--kubeconfig=/etc/netplane/kubeconfig"
+            - "--kubeconfig=/etc/mesh/kubeconfig"
             {{- if .Values.routebus.mtls.enabled }}
             - "--tls-ca=/etc/routebus-tls/ca.crt"
             - "--tls-cert=/etc/routebus-tls/tls.crt"
@@ -61,7 +61,7 @@ spec:
                   fieldPath: status.hostIP
           volumeMounts:
             - name: kubeconfig
-              mountPath: /etc/netplane
+              mountPath: /etc/mesh
               readOnly: true
             # The dataplane's root-only gRPC socket, created by the flowplane DaemonSet on the
             # shared hostPath. Read-only: the agent is a client.
@@ -76,7 +76,7 @@ spec:
       volumes:
         - name: kubeconfig
           configMap:
-            name: netplane-agent-kubeconfig
+            name: mesh-agent-kubeconfig
         - name: flowplane-sock
           hostPath:
             path: /run/flowplane

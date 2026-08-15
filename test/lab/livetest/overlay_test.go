@@ -31,7 +31,7 @@ const (
 )
 
 // TestCrossClusterOverlayPing drives the FULL control pipeline and datapath: a VPC
-// + two NetworkInterfaces on the dispatch compile (netplane compiler) to per-cluster
+// + two NetworkInterfaces on the dispatch compile (mesh compiler) to per-cluster
 // CompiledNICs stamped with clusterName (from the anchor VMs) and nodeName (from
 // the NIC, which is what a scheduled workload sets and what the agent's firewall
 // reconcile gates on); the brokers sync them; the agents program the Allow firewall

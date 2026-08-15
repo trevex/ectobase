@@ -20,7 +20,7 @@ flowchart LR
         platform["platform.ectobase.dev<br/>ClusterPool"]
     end
 
-    compiler["Compiler<br/>(netplane controllers)"]
+    compiler["Compiler<br/>(mesh controllers)"]
 
     subgraph compiled["compiled.ectobase.dev (stamped per pool)"]
         cnic["CompiledNIC"]
@@ -64,7 +64,7 @@ addresses, a firewall policy's rules, an LB's VIP and backends.
 
 ### 2. Compile — lowering intent into `Compiled*`
 
-The **compiler** (the netplane controllers) reconciles that intent into the `compiled.ectobase.dev`
+The **compiler** (the mesh controllers) reconciles that intent into the `compiled.ectobase.dev`
 group: `CompiledNIC`, `CompiledVM`, `CompiledContainer`, and `CompiledVolumeAttachment`. A
 `CompiledNIC` is the keystone: a fully lowered, node-local bundle of one interface's VNI, underlay
 address, firewall rules, NAT sources, LB memberships, and peer imports — everything the dataplane

@@ -68,14 +68,14 @@ func TestPurgeCache(t *testing.T) {
 func TestPushLocal(t *testing.T) {
 	rec := &recorder{}
 	reg := &Registry{Host: "[fd00:29::5]:5000", Run: rec.run}
-	if err := reg.PushLocal(context.Background(), []string{"flowplane", "netplane"}); err != nil {
+	if err := reg.PushLocal(context.Background(), []string{"flowplane", "mesh"}); err != nil {
 		t.Fatal(err)
 	}
 	want := [][]string{
 		{"docker", "tag", "ghcr.io/trevex/ectobase/flowplane:dev", "[fd00:29::5]:5000/trevex/ectobase/flowplane:dev"},
 		{"docker", "push", "[fd00:29::5]:5000/trevex/ectobase/flowplane:dev"},
-		{"docker", "tag", "ghcr.io/trevex/ectobase/netplane:dev", "[fd00:29::5]:5000/trevex/ectobase/netplane:dev"},
-		{"docker", "push", "[fd00:29::5]:5000/trevex/ectobase/netplane:dev"},
+		{"docker", "tag", "ghcr.io/trevex/ectobase/mesh:dev", "[fd00:29::5]:5000/trevex/ectobase/mesh:dev"},
+		{"docker", "push", "[fd00:29::5]:5000/trevex/ectobase/mesh:dev"},
 	}
 	if !reflect.DeepEqual(rec.calls, want) {
 		t.Fatalf("got %v\nwant %v", rec.calls, want)
@@ -93,7 +93,7 @@ func TestPushLocalTagErrorAborts(t *testing.T) {
 	sentinel := errors.New("boom")
 	rec := &recorder{failAt: 1, err: sentinel}
 	reg := &Registry{Host: "[fd00:29::5]:5000", Run: rec.run}
-	err := reg.PushLocal(context.Background(), []string{"flowplane", "netplane"})
+	err := reg.PushLocal(context.Background(), []string{"flowplane", "mesh"})
 	if err == nil || !errors.Is(err, sentinel) {
 		t.Fatalf("expected wrapped sentinel error, got %v", err)
 	}

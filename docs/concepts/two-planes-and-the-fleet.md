@@ -4,7 +4,7 @@ ectobase is built from **two planes** and organized as a **fleet**. The mental m
 internalizing before anything else, because every other concept hangs off it.
 
 - **flowplane** — the **dataplane**. What moves packets.
-- **netplane** — the **control plane**. What decides where packets should go and programs the
+- **mesh** — the **control plane**. What decides where packets should go and programs the
   dataplane accordingly.
 - **the fleet (dispatch + pools)** — how a single API serves many clusters at once.
 
@@ -26,9 +26,9 @@ the `nfkit` substrate for hardware acceleration.
     The eBPF/XDP datapath — routing, stateful NAT, Maglev load balancing with DSR, deny-by-default
     firewall, DHCP/ARP/ND responders, QoS/EDT shaping, and NAT64 — runs on the shared IPv6 overlay.
 
-## netplane: the control plane
+## mesh: the control plane
 
-netplane is a Go control plane built on controller-runtime. It turns a small set of user-facing CRDs
+mesh is a Go control plane built on controller-runtime. It turns a small set of user-facing CRDs
 into concrete, fully lowered per-NIC dataplane configuration and distributes the dynamic parts of the
 overlay. Its pieces:
 

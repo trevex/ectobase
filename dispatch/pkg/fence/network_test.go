@@ -12,8 +12,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
-	pb "github.com/trevex/ectobase/netplane/gen/routebusv1"
-	"github.com/trevex/ectobase/netplane/reflector"
+	pb "github.com/trevex/ectobase/mesh/gen/routebusv1"
+	"github.com/trevex/ectobase/mesh/reflector"
 )
 
 func TestNetworkFencer_FenceCallsAdmin(t *testing.T) {

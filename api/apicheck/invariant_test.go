@@ -12,7 +12,7 @@ import (
 // TestAPIModuleIsApimachineryOnly asserts the shared api module never pulls the
 // aggregated-apiserver framework (apiserver-kit) or k8s.io/apiserver into any of
 // its packages. Those belong exclusively to the dispatch apiserver binary; the
-// api module must stay importable by netplane/cni/broker without them. The
+// api module must stay importable by mesh/cni/broker without them. The
 // compile-time resource.Object proof lives at dispatch/cmd/apiserver's
 // apiserver.Resource(...) calls, not here.
 //

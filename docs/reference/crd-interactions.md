@@ -21,7 +21,7 @@ the lifecycle. All live under `*.ectobase.dev` and are served at version
 
 The **net**, **compute** and **storage** groups are *authored* — a user (or a
 higher-level system) declares desired state in them. The **compiled** group is
-*derived* — no human writes it; the netplane compiler produces it. The
+*derived* — no human writes it; the mesh compiler produces it. The
 **platform** group is *operational* — it models the fleet of pool clusters that
 workloads can be scheduled onto.
 
@@ -81,7 +81,7 @@ user having to restate placement per interface.
 
 ### 2. The compiler lowers the intent graph
 
-The netplane compiler (the `netplane-controller`) watches the authored groups and
+The mesh compiler (the `mesh-controller`) watches the authored groups and
 flattens each workload's slice of the graph into a single compiled object:
 
 - **NetworkInterface + FirewallPolicy + LoadBalancer + VPCPeering → CompiledNIC.**
@@ -112,7 +112,7 @@ copy of exactly the compiled objects it owns.
 
 Inside the pool, node-local executors turn compiled objects into real state:
 
-- **netplane agent** consumes CompiledNIC and programs the node's flowplane
+- **mesh agent** consumes CompiledNIC and programs the node's flowplane
   datapath (firewall, NAT, LB, VNI, peer route imports) — one agent per node.
 - **pod-materializer** turns CompiledContainer into a `v1.Pod` attached to the
   flowplane overlay.
@@ -123,7 +123,7 @@ Inside the pool, node-local executors turn compiled objects into real state:
 
 | Intent kind(s) | Compiled kind | Executor | Produces |
 | --- | --- | --- | --- |
-| NetworkInterface + FirewallPolicy + LoadBalancer + VPCPeering (+ VPC, NATGateway, FloatingIP) | CompiledNIC | netplane agent (per node) | flowplane datapath programming (firewall / NAT / LB / VNI / peer routes) |
+| NetworkInterface + FirewallPolicy + LoadBalancer + VPCPeering (+ VPC, NATGateway, FloatingIP) | CompiledNIC | mesh agent (per node) | flowplane datapath programming (firewall / NAT / LB / VNI / peer routes) |
 | VirtualMachine | CompiledVM | vm-materializer (per pool) | KubeVirt VirtualMachine |
 | Container | CompiledContainer | pod-materializer (per pool) | Pod on the flowplane overlay |
 | Volume | CompiledVolumeAttachment | vm-materializer (per pool) | volume attachment on the VM |

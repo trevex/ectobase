@@ -32,7 +32,7 @@ import (
 	"github.com/trevex/ectobase/dispatch/pkg/broker"
 	"github.com/trevex/ectobase/dispatch/pkg/clusterpool"
 	"github.com/trevex/ectobase/dispatch/pkg/scheduler"
-	"github.com/trevex/ectobase/netplane/controllers"
+	"github.com/trevex/ectobase/mesh/controllers"
 )
 
 // TestPhase4_ScheduleCompileSyncMaterialize_E2E extends the Phase-3 chain one
@@ -43,7 +43,7 @@ import (
 //  1. ClusterPool c1 is created + a fresh broker heartbeat is simulated (lease
 //     RenewTime=now, Allocatable), then clusterpool.Reconciler derives Ready;
 //  2. scheduler.Reconciler binds the unbound vm1 (owning nic-a) to c1;
-//  3. the netplane CompiledVMReconciler lowers vm1 -> a dispatch CompiledVM
+//  3. the mesh CompiledVMReconciler lowers vm1 -> a dispatch CompiledVM
 //     default-vm1 (image, resolved MAC, flowplane-overlay network) bound to c1;
 //  4. the c1 broker's SyncCompiledVMs materializes default-vm1 downstream;
 //  5. the downstream VMMaterializerReconciler turns default-vm1 into a
@@ -53,7 +53,7 @@ import (
 // The downstream envtest loads THREE CRD dirs — the net+compiled CRDs under
 // charts/ectobase-pool/crd-bases, the compute/storage/platform CRDs under
 // test/crds, and the vendored KubeVirt VirtualMachine CRD fixture under
-// netplane/test/crds — and its client scheme registers BOTH netv1 and kubevirtv1
+// mesh/test/crds — and its client scheme registers BOTH netv1 and kubevirtv1
 // so both object families (de)serialize.
 func TestPhase4_ScheduleCompileSyncMaterialize_E2E(t *testing.T) {
 	t.Setenv("GOWORK", "off")
@@ -103,7 +103,7 @@ func TestPhase4_ScheduleCompileSyncMaterialize_E2E(t *testing.T) {
 		CRDDirectoryPaths: []string{
 			filepath.Join("..", "..", "charts", "ectobase-pool", "crd-bases"),
 			filepath.Join("..", "..", "test", "crds"),
-			filepath.Join("..", "..", "netplane", "test", "crds"),
+			filepath.Join("..", "..", "mesh", "test", "crds"),
 		},
 		ErrorIfCRDPathMissing: true,
 	}
@@ -210,7 +210,7 @@ func TestPhase4_ScheduleCompileSyncMaterialize_E2E(t *testing.T) {
 	t.Log("(2) schedule: PASS (vm1 -> c1)")
 
 	// ================================================================
-	// (3) COMPILE: the netplane CompiledVMReconciler lowers vm1 -> default-vm1
+	// (3) COMPILE: the mesh CompiledVMReconciler lowers vm1 -> default-vm1
 	//     bound to c1 (image + resolved MAC on the flowplane-overlay network).
 	// ================================================================
 	cr := &controllers.CompiledVMReconciler{Client: dispatchClient, NetworkName: "flowplane-overlay"}

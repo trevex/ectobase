@@ -16,7 +16,7 @@ import (
 
 // Control-plane-driven VPC-peering scenario, ported from test/scenario-vpc-peering.sh
 // but driven end-to-end through the real control plane: VPCs / NICs / VPCPeerings /
-// FirewallPolicies + a Container per endpoint are applied to the DISPATCH, the netplane
+// FirewallPolicies + a Container per endpoint are applied to the DISPATCH, the mesh
 // compiler lowers them to per-cluster CompiledNICs (with PeerImports + firewall) and
 // CompiledContainers, the brokers sync them to the compute clusters, and the
 // pod-materializer spawns the REAL Pods (attached via Multus + flowplane-cni). No raw
