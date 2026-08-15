@@ -13,11 +13,11 @@ import (
 	"github.com/trevex/ectobase/test/lab/internal/fabric"
 )
 
-// computeNodes returns the nodes of every non-hub cluster (k02, k03, …).
+// computeNodes returns the nodes of every non-dispatch cluster (k02, k03, …).
 func computeNodes(cfg *config.Config) []config.DerivedNode {
 	var out []config.DerivedNode
 	for _, cl := range cfg.Fabric.Clusters {
-		if cl.Name == "hub" {
+		if cl.Name == "dispatch" {
 			continue
 		}
 		out = append(out, cfg.Derived.Clusters[cl.Name].Nodes...)

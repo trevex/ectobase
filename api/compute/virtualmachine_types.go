@@ -60,12 +60,12 @@ type VirtualMachineList struct {
 	Items []VirtualMachine
 }
 
-// VMAntiAffinity is the hub mirror of the anti-affinity group key.
+// VMAntiAffinity is the dispatch mirror of the anti-affinity group key.
 type VMAntiAffinity struct {
 	Group string
 }
 
-// VMPlacement is the hub mirror of the VM's actual running location.
+// VMPlacement is the dispatch mirror of the VM's actual running location.
 type VMPlacement struct {
 	ClusterName string
 	NodeName    string

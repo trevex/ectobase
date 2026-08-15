@@ -3,7 +3,7 @@
 !!! success "Status: Implemented"
     The integration environment is driven by the **Go lab CLI** (`test/lab`, exposed as the
     `make lab-*` targets). It stands up a **containerlab IPv6-BGP fabric** wrapping several
-    **kind** clusters — a **hub** cluster plus one or more compute **pool** clusters — and
+    **kind** clusters — a **dispatch** cluster plus one or more compute **pool** clusters — and
     deploys the two Helm charts onto them exactly as an operator would.
 
 The fabric exercises the real paths: underlay inference over a per-node `/64` BGP fabric,
@@ -21,7 +21,7 @@ The lab CLI (`test/lab`, a cobra CLI; config in `test/lab/lab.yaml`) renders and
 | **Tayga NAT64** `nat64-1`/`nat64-2` | `64:ff9b::/96` → IPv4 pool → MASQUERADE to the WAN, one per edge. |
 | **WAN sim** `wan` | Masquerades all fabric prefixes onto the host uplink; the host's single route into the fabric. |
 | **Registry mirror** (`registry:2`) | Persistent pull-through + push-local mirror on the WAN segment (`fd00:29::5:5000`), cache-backed across `down`. |
-| **kind clusters** | One per lab cluster (`hub`, `k02`, `k03`, …). Each kind node runs the `kind-node-fabric` image, which before kubelet establishes a `dummy0` `/128` identity, sets `kubelet --node-ip` to it, and speaks FRR eBGP to both switches. |
+| **kind clusters** | One per lab cluster (`dispatch`, `k02`, `k03`, …). Each kind node runs the `kind-node-fabric` image, which before kubelet establishes a `dummy0` `/128` identity, sets `kubelet --node-ip` to it, and speaks FRR eBGP to both switches. |
 | **Ceph/demo** (optional) | On its own `/64` when `fabric.ceph.enabled`, for RBD + the Tier-2 storage fence. |
 
 Every per-cluster/per-node prefix is **derived** (FNV-1a of the cluster name) so parallel
@@ -40,8 +40,8 @@ Prereqs (run everything inside `nix develop`):
 
 - Build the fabric + kind-node images: `make lab-images` and `make image-kindnode`.
 - Build the component `:dev` images the fabric mirror serves: `make image`,
-  `make image-netplane`, `make image-cni`, and the hub images (`hub-apiserver`,
-  `hub-controller`, `hub-broker`). `lab up` **pushes** local `:dev` images into the mirror;
+  `make image-netplane`, `make image-cni`, and the dispatch images (`dispatch-apiserver`,
+  `dispatch-controller`, `dispatch-broker`). `lab up` **pushes** local `:dev` images into the mirror;
   it does not build them.
 - Docker with IPv6 enabled on the clab management network; tens of GB of disk headroom.
 - Passwordless real `sudo` (the live commands drive containerlab + host networking). On
@@ -71,15 +71,15 @@ The last step of `up` is the two-chart install (see [Deploying with Helm](./depl
 for the operator-facing version, and `test/lab/internal/deploy/ectobase.go` for the exact
 sequence):
 
-- The **hub** cluster gets `charts/ectobase-hub` (aggregated apiserver + kine, hub-controller,
-  the netplane compiler, the reflector, and the hub-side broker identity), with
-  `reflectorAdmin` set to the hub's fabric identity. The lab then mints the broker→hub
+- The **dispatch** cluster gets `charts/ectobase-dispatch` (aggregated apiserver + kine, dispatch-controller,
+  the netplane compiler, the reflector, and the dispatch-side broker identity), with
+  `reflectorAdmin` set to the dispatch's fabric identity. The lab then mints the broker→dispatch
   token/kubeconfig and pre-creates one `ClusterPool` per compute cluster (test fixtures around
   the install).
 - Each **compute** cluster gets `charts/ectobase-pool` (dataplane + agent + broker + cni +
-  pod-materializer; vm-materializer under `lab tier2`), wired to the hub's reflector and to
+  pod-materializer; vm-materializer under `lab tier2`), wired to the dispatch's reflector and to
   its own local apiserver. The lab pre-creates the privileged `ectobase-system` namespace + the
-  `broker-hub-kubeconfig` Secret first.
+  `broker-dispatch-kubeconfig` Secret first.
 
 Both compute **ClusterPools converge to `Ready` with `nodePrefixes`** — that convergence is
 the up-signal the lab waits on.
@@ -91,7 +91,7 @@ though the lab brings the fabric up under `sudo`, `lab up` chowns each kubeconfi
 back to the invoking user, so `kubectl --kubeconfig …` works **without sudo**:
 
 ```sh
-kubectl --kubeconfig test/lab/build/ectobase/hub.kubeconfig get nodes
+kubectl --kubeconfig test/lab/build/ectobase/dispatch.kubeconfig get nodes
 kubectl --kubeconfig test/lab/build/ectobase/k02.kubeconfig get clusterpools.platform.ectobase.dev
 ```
 

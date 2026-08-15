@@ -25,7 +25,7 @@ Each cluster is a distinct kind cluster (own control plane + kubeconfig) on the 
   ```
   On NixOS the real setuid `sudo` is `/run/wrappers/bin/sudo` (a PATH-shadowing `sudo` breaks nested elevation).
 - **Docker with IPv6 enabled** on the clab management network (the host routes into the fabric over the mgmt net's IPv6 gateway), and the `rbd` kernel module loadable on the host (`modprobe rbd`) for Ceph.
-- **Images built** (`make lab-images` + `make image-kindnode`; ceph/frr pull from upstream when `ceph.enabled`). The hub `:dev` images (`hub-apiserver`/`-controller`/`-broker`) must be built too — `up` pushes local `:dev` images into the fabric mirror, it does not build them.
+- **Images built** (`make lab-images` + `make image-kindnode`; ceph/frr pull from upstream when `ceph.enabled`). The dispatch `:dev` images (`dispatch-apiserver`/`-controller`/`-broker`) must be built too — `up` pushes local `:dev` images into the fabric mirror, it does not build them.
 - **Disk headroom.** The fabric runs ~10 containers + 3 kind clusters and pulls images; keep tens of GB free. Prune co-resident stale fabrics first (`docker builder/image/volume prune`).
 
 ## Quickstart
@@ -76,7 +76,7 @@ fabric:
   nat64Prefix: 64:ff9b::/96
   registry:
     upstreams: [docker.io, ghcr.io, quay.io, registry.k8s.io, gcr.io]
-    push: [flowplane, netplane, cni, hub-apiserver, hub-controller, hub-broker]  # :dev
+    push: [flowplane, netplane, cni, dispatch-apiserver, dispatch-controller, dispatch-broker]  # :dev
   ceph: { enabled: true }               # optional storage node + Tier-2 gate
   clusters:
     - { name: central, nodes: 1 }       # hosts the central apiserver + controller + reflector
@@ -126,11 +126,11 @@ A persistent pull-through + push-local `registry:2` runs on the WAN segment at `
 
 ## Ectobase deploy (last step of `up`)
 
-- **Hub cluster** gets the `charts/ectobase-hub` Helm chart (aggregated apiserver + controller + kine, the netplane compiler, the shared **reflector**, and the hub-side broker identity) — with `-reflector-admin` set to the hub's fabric identity via a chart value. The lab then mints the broker→hub token/kubeconfig and pre-creates one **ClusterPool** per compute cluster (test fixtures around the install).
-- **Each compute cluster** gets the `charts/ectobase-pool` Helm chart (dataplane + agent + broker + cni + pod-materializer; vm-materializer under `lab tier2`), wired to the hub's reflector at the hub's node identity and to its own local apiserver.
+- **Dispatch cluster** gets the `charts/ectobase-dispatch` Helm chart (aggregated apiserver + controller + kine, the netplane compiler, the shared **reflector**, and the dispatch-side broker identity) — with `-reflector-admin` set to the dispatch's fabric identity via a chart value. The lab then mints the broker→dispatch token/kubeconfig and pre-creates one **ClusterPool** per compute cluster (test fixtures around the install).
+- **Each compute cluster** gets the `charts/ectobase-pool` Helm chart (dataplane + agent + broker + cni + pod-materializer; vm-materializer under `lab tier2`), wired to the dispatch's reflector at the dispatch's node identity and to its own local apiserver.
 - Both compute **ClusterPools converge to `Ready` with `nodePrefixes`**.
 
-The pool's `ectobase-system` namespace is created PodSecurity **`privileged`** (the dataplane pods are privileged/hostPID/hostPath/hostNetwork); the hub chart likewise marks its `ectobase-system` namespace privileged for the hostNetwork compiler + reflector.
+The pool's `ectobase-system` namespace is created PodSecurity **`privileged`** (the dataplane pods are privileged/hostPID/hostPath/hostNetwork); the dispatch chart likewise marks its `ectobase-system` namespace privileged for the hostNetwork compiler + reflector.
 
 ## Ceph + Tier-2 (`lab ceph`, `lab tier2`)
 

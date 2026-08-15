@@ -15,14 +15,14 @@ CNI plugin, the CRD API, the Helm charts, and the lab/test harnesses.
 | `api/` | The Kubernetes CRD types, split into five API groups — `net`, `compute`, `storage`, `compiled`, `platform` (each under `api/<group>/v1alpha1/`) — plus the gRPC/protobuf contracts (`api/proto/dataplane/v1/`, `api/proto/routebus/v1/`) and the generated conversions. |
 | `netplane/` | The per-pool Go control plane: `cmd/agent`, `cmd/reflector`, `cmd/controller`, the pod/VM materializers, the `routebus` client/server, and the reconcile/desired-state logic. |
 | `cni/` | The CNI plugin (`cni/plugin/main.go`) that attaches pods via the `DataplaneNode` gRPC. |
-| `hub/` | The fleet control plane: the extension `apiserver`, the `controller` (compiler), and the `broker` (per-pool kubelet-analog) under `cmd/`, plus the generated client. |
+| `dispatch/` | The fleet control plane: the extension `apiserver`, the `controller` (compiler), and the `broker` (per-pool kubelet-analog) under `cmd/`, plus the generated client. |
 | `flowplane/` | The Rust workspace: the eBPF dataplane, its userspace loader/agent/CLI, the pure-core datapath library, the shared map types, and the in-process simulator. |
-| `charts/` | The Helm charts — `ectobase-hub` and `ectobase-pool` — with generated CRDs and RBAC. |
+| `charts/` | The Helm charts — `ectobase-dispatch` and `ectobase-pool` — with generated CRDs and RBAC. |
 | `test/` | Test harnesses: Go conformance/e2e suites (`test/conformance/`, `test/e2e/`), the CRD bases for envtest (`test/crds/`), test container images (`test/images/`), and the `test/lab/` kind + containerlab live lab. |
 | `docs/` | This mkdocs-material site (plus the design-spec/plan archive under `docs/superpowers/`). |
 
 See [Repository layout & crates](../architecture/layout.md) for the crate-level breakdown
-of `flowplane/` and the `netplane`/`hub` module split.
+of `flowplane/` and the `netplane`/`dispatch` module split.
 
 ## The toolchain: Nix devShell + `make`
 
@@ -84,7 +84,7 @@ flowchart LR
    manifests (into the pool chart's `crd-bases` and `test/crds`), the per-component RBAC
    roles (into each chart's `files/`), and the per-group CRD API reference under
    `docs/reference/api/`. Never hand-edit those generated artifacts.
-3. **Update the charts** (`charts/ectobase-hub`, `charts/ectobase-pool`) if the change adds
+3. **Update the charts** (`charts/ectobase-dispatch`, `charts/ectobase-pool`) if the change adds
    a component, permission, or value; keep the `helm-unittest` suites and snapshots current.
 4. **Update the docs** — the published pages are the living source of truth. Any change to
    behaviour, architecture, or the API updates the relevant page in the same commit

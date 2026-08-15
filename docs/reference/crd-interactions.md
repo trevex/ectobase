@@ -17,7 +17,7 @@ the lifecycle. All live under `*.ectobase.dev` and are served at version
 | [`compute.ectobase.dev`](api/compute.md) | users | VirtualMachine, Container |
 | [`storage.ectobase.dev`](api/storage.md) | users | Volume |
 | [`compiled.ectobase.dev`](api/compiled.md) | controllers | CompiledNIC, CompiledVM, CompiledContainer, CompiledVolumeAttachment |
-| [`platform.ectobase.dev`](api/platform.md) | hub controller | ClusterPool |
+| [`platform.ectobase.dev`](api/platform.md) | dispatch controller | ClusterPool |
 
 The **net**, **compute** and **storage** groups are *authored* — a user (or a
 higher-level system) declares desired state in them. The **compiled** group is
@@ -102,10 +102,10 @@ identifying the pool that owns the workload.
 
 ### 3. The broker syncs compiled objects to the owning pool
 
-Each pool cluster runs a **hub-broker** (a kubelet-analog). It watches the
-compiled objects in the hub apiserver, filtered to its own `spec.clusterName`,
+Each pool cluster runs a **dispatch-broker** (a kubelet-analog). It watches the
+compiled objects in the dispatch apiserver, filtered to its own `spec.clusterName`,
 and set-reconciles them onto the pool cluster's local apiserver. This is the seam
-that keeps the hub authoritative while giving each pool a local, node-reachable
+that keeps the dispatch authoritative while giving each pool a local, node-reachable
 copy of exactly the compiled objects it owns.
 
 ### 4. Executors realize the compiled objects
@@ -131,7 +131,7 @@ Inside the pool, node-local executors turn compiled objects into real state:
 ## Where placement lives: ClusterPool
 
 **ClusterPool** (`platform.ectobase.dev`) is the fleet inventory: one object per
-pool cluster. The hub controller reconciles it (seeding a new pool's lifecycle
+pool cluster. The dispatch controller reconciles it (seeding a new pool's lifecycle
 phase), and its `clusterName` is what the compiler stamps onto compiled objects
 and what each pool's broker filters on. It is the anchor that ties a workload's
 placement decision to a concrete cluster.

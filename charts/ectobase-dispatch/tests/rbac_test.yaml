@@ -1,0 +1,21 @@
+suite: dispatch netplane-controller rbac
+templates:
+  - templates/rbac.yaml
+tests:
+  # Dispatch rbac.yaml documents (0-indexed):
+  #   0: SA  netplane-controller
+  #   1: CR  netplane-controller  (compiled.ectobase.dev full write rules)
+  #   2: CRB netplane-controller
+  #   3: SA  netplane-reflector
+  - it: netplane-controller ClusterRole carries a compiled.ectobase.dev write rule
+    asserts:
+      - isKind:
+          of: ClusterRole
+        documentIndex: 1
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["compiled.ectobase.dev"]
+            resources: ["compiledcontainers", "compilednics", "compiledvms", "compiledvolumeattachments"]
+            verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+        documentIndex: 1

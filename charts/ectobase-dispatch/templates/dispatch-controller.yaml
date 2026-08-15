@@ -1,0 +1,97 @@
+# Copyright 2026 ectobase contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The dispatch controller: a controller-runtime manager running the ClusterPool
+# reconciler against the aggregated apiserver. RBAC rules are sourced from
+# the generated files/dispatch-controller/role.yaml.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dispatch-controller
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dispatch-controller
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+rules:
+  {{- (.Files.Get "files/dispatch-controller/role.yaml" | fromYaml).rules | toYaml | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dispatch-controller
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dispatch-controller
+subjects:
+  - kind: ServiceAccount
+    name: dispatch-controller
+    namespace: {{ .Values.namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dispatch-controller
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: dispatch-controller
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dispatch-controller
+  template:
+    metadata:
+      labels:
+        app: dispatch-controller
+    spec:
+      serviceAccountName: dispatch-controller
+      containers:
+        - name: controller
+          image: {{ .Values.images.dispatchController }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          resources:
+            {{- include "ectobase-dispatch.resources" . | nindent 12 }}
+          args:
+            - "-reflector-admin={{ .Values.reflectorAdmin }}"
+            {{- if .Values.routebus.mtls.enabled }}
+            - "-reflector-tls-ca=/etc/routebus-tls/ca.crt"
+            - "-reflector-tls-cert=/etc/routebus-tls/tls.crt"
+            - "-reflector-tls-key=/etc/routebus-tls/tls.key"
+            {{- end }}
+            - "-csi-driver=rbd.csi.ceph.com"
+            # The ceph fsid (clusterID) is per-deploy (the lab ceph deploy emits it), so it cannot be
+            # baked in; the tier2 live deploy patches this arg with the real fsid. Empty here =>
+            # NetworkFence spec.parameters.clusterID omitted => the ceph-csi driver rejects the fence
+            # ("missing or empty clusterID"). MUST be set to the fsid for the storage fence to succeed.
+            - "-csi-cluster-id="
+            - "-csi-secret-name=csi-rbd-secret"
+            - "-csi-secret-namespace=ceph-csi"
+          env:
+            # client-go's WatchListClient uses SendInitialEvents=true streaming
+            # list-watches that this aggregated apiserver (older apiserver libs)
+            # does not support, leaving the informer stuck with no initial LIST
+            # (workers start but no events ever arrive). Disable it so the cache
+            # falls back to a plain LIST+WATCH.
+            - name: KUBE_FEATURE_WatchListClient
+              value: "false"
+          {{- if .Values.routebus.mtls.enabled }}
+          volumeMounts:
+            - name: routebus-tls
+              mountPath: /etc/routebus-tls
+              readOnly: true
+      volumes:
+        - name: routebus-tls
+          secret:
+            secretName: dispatch-controller-routebus-tls
+          {{- end }}

@@ -1,0 +1,33 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dispatch-broker
+rules:
+- apiGroups:
+  - compiled.ectobase.dev
+  resources:
+  - compiledcontainers
+  - compilednics
+  - compiledvms
+  - compiledvolumeattachments
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - platform.ectobase.dev
+  resources:
+  - clusterpools
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - platform.ectobase.dev
+  resources:
+  - clusterpools/status
+  verbs:
+  - get
+  - patch
+  - update

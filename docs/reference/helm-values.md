@@ -1,23 +1,23 @@
 # Helm chart values
 
-ectobase ships two Helm charts: **`ectobase-hub`** for the fleet control plane
+ectobase ships two Helm charts: **`ectobase-dispatch`** for the fleet control plane
 and **`ectobase-pool`** for a workload cluster and its per-node dataplane. This
 page documents the important knobs of each, grouped by concern. It is not an
 exhaustive key dump — see each chart's `values.yaml` for every field.
 
 ---
 
-## ectobase-hub
+## ectobase-dispatch
 
-The hub chart deploys the aggregated apiserver, the hub controller, the compiler,
-the reflector, and the broker's hub-side identity.
+The dispatch chart deploys the aggregated apiserver, the dispatch controller, the compiler,
+the reflector, and the broker's dispatch-side identity.
 
 ### Images and pull policy
 
 | Value | Default | Meaning |
 | --- | --- | --- |
-| `images.hubApiserver` | `ghcr.io/trevex/ectobase/hub-apiserver:dev` | Aggregated apiserver image. |
-| `images.hubController` | `ghcr.io/trevex/ectobase/hub-controller:dev` | Hub controller (ClusterPool reconciler + scheduler). |
+| `images.dispatchApiserver` | `ghcr.io/trevex/ectobase/dispatch-apiserver:dev` | Aggregated apiserver image. |
+| `images.dispatchController` | `ghcr.io/trevex/ectobase/dispatch-controller:dev` | Dispatch controller (ClusterPool reconciler + scheduler). |
 | `images.netplane` | `ghcr.io/trevex/ectobase/netplane:dev` | Shared image for the compiler (netplane-controller) and reflector. |
 | `images.kine` | `rancher/kine:v0.13.0` | etcd-v3 shim in front of PostgreSQL. |
 | `images.postgres` | `postgres:16` | Backing store for kine (dev/smoke; not HA). |
@@ -27,14 +27,14 @@ the reflector, and the broker's hub-side identity.
 
 | Value | Default | Meaning |
 | --- | --- | --- |
-| `namespace` | `system` | Namespace for the hub infrastructure (apiserver, controller, kine, postgres, broker identity). Baseline-PSA-safe. |
+| `namespace` | `system` | Namespace for the dispatch infrastructure (apiserver, controller, kine, postgres, broker identity). Baseline-PSA-safe. |
 | `agentNamespace` | `ectobase-system` | Namespace for the compiler and reflector; created PSA-privileged because they run hostNetwork. |
 
 ### Control-plane addresses
 
 | Value | Default | Meaning |
 | --- | --- | --- |
-| `reflectorAdmin` | `[fd00:db8:0:1::1]:1338` | Address the hub-controller passes to agents (`-reflector-admin`); the fabric loopback of the control-plane node. |
+| `reflectorAdmin` | `[fd00:db8:0:1::1]:1338` | Address the dispatch-controller passes to agents (`-reflector-admin`); the fabric loopback of the control-plane node. |
 
 ---
 
@@ -51,7 +51,7 @@ CNI, the broker runtime, and optional materializers and failover.
 | `images.flowplaneDpdk` | `ghcr.io/trevex/ectobase/flowplane-dpdk:dev` | DPDK dataplane image. |
 | `images.netplane` | `ghcr.io/trevex/ectobase/netplane:dev` | Agent, pod-materializer and vm-materializer image. |
 | `images.cni` | `ghcr.io/trevex/ectobase/cni:dev` | flowplane-cni image. |
-| `images.hubBroker` | `ghcr.io/trevex/ectobase/hub-broker:dev` | Broker runtime image. |
+| `images.dispatchBroker` | `ghcr.io/trevex/ectobase/dispatch-broker:dev` | Broker runtime image. |
 | `imagePullPolicy` | `IfNotPresent` | Applies to all containers in the chart. |
 
 ### Namespace
@@ -93,7 +93,7 @@ The per-cluster broker is always deployed; `clusterName` is required.
 | Value | Default | Meaning |
 | --- | --- | --- |
 | `broker.clusterName` | `""` | This cluster's pool name (e.g. `k02`). Required. |
-| `broker.hubKubeconfigSecret` | `broker-hub-kubeconfig` | Secret (key `kubeconfig`) holding a hub token. |
+| `broker.dispatchKubeconfigSecret` | `broker-dispatch-kubeconfig` | Secret (key `kubeconfig`) holding a dispatch token. |
 
 ### CRDs
 

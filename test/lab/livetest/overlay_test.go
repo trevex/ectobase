@@ -31,7 +31,7 @@ const (
 )
 
 // TestCrossClusterOverlayPing drives the FULL control pipeline and datapath: a VPC
-// + two NetworkInterfaces on the hub compile (netplane compiler) to per-cluster
+// + two NetworkInterfaces on the dispatch compile (netplane compiler) to per-cluster
 // CompiledNICs stamped with clusterName (from the anchor VMs) and nodeName (from
 // the NIC, which is what a scheduled workload sets and what the agent's firewall
 // reconcile gates on); the brokers sync them; the agents program the Allow firewall
@@ -55,8 +55,8 @@ func TestCrossClusterOverlayPing(t *testing.T) {
 	}
 
 	// 1. VPC + two NICs (each pinned to a node via spec.nodeName) + two halted anchor
-	//    VMs (which stamp CompiledNIC.clusterName). applied to the hub.
-	require.NoError(t, applyHub(ctx, cfg, overlayFixture(nodeA, nodeC)))
+	//    VMs (which stamp CompiledNIC.clusterName). applied to the dispatch.
+	require.NoError(t, applyDispatch(ctx, cfg, overlayFixture(nodeA, nodeC)))
 	// The compiler gates on a Ready VPC with a vni; mark VPC + both NICs Ready.
 	patchVNIReady(t, ctx, cfg, "vpcs.net.ectobase.dev", "blue")
 	patchVNIReady(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", "nic-a")
@@ -101,7 +101,7 @@ func TestCrossClusterOverlayPing(t *testing.T) {
 	})
 }
 
-// overlayFixture renders the hub fixture: a VPC, two NICs (each pinned to its
+// overlayFixture renders the dispatch fixture: a VPC, two NICs (each pinned to its
 // node via spec.nodeName — the placement a scheduled workload would set, required
 // for the agent to program the NIC's firewall), and two halted anchor VMs whose
 // interfaceRefs stamp each CompiledNIC's clusterName.
@@ -138,10 +138,10 @@ spec: {clusterName: %q, interfaceRefs: [{name: nic-c}], runStrategy: Halted}
 // container name (<cluster>-control-plane), not <cluster>-<index>.
 func nodeK8sName(n config.DerivedNode) string { return n.KindContainer() }
 
-// applyHub applies a multi-doc YAML to the hub cluster via `kubectl apply -f -`.
-func applyHub(ctx context.Context, cfg *config.Config, yaml string) error {
+// applyDispatch applies a multi-doc YAML to the dispatch cluster via `kubectl apply -f -`.
+func applyDispatch(ctx context.Context, cfg *config.Config, yaml string) error {
 	return exec.SudoStdin(ctx, yaml,
-		"kubectl", "--kubeconfig", kubeconfigPath(cfg, "hub"), "apply", "-f", "-")
+		"kubectl", "--kubeconfig", kubeconfigPath(cfg, "dispatch"), "apply", "-f", "-")
 }
 
 // patchVNIReady marks a net.ectobase.dev resource's status Ready with the overlay
@@ -149,7 +149,7 @@ func applyHub(ctx context.Context, cfg *config.Config, yaml string) error {
 // flakes).
 func patchVNIReady(t *testing.T, ctx context.Context, cfg *config.Config, resource, name string) {
 	t.Helper()
-	_, err := kubectl(ctx, cfg, "hub", "patch", resource, name,
+	_, err := kubectl(ctx, cfg, "dispatch", "patch", resource, name,
 		"--subresource=status", "--type=merge",
 		"-p", fmt.Sprintf(`{"status":{"vni":%d,"state":"Ready"}}`, overlayVNI))
 	require.NoError(t, err, "patch %s/%s status", resource, name)

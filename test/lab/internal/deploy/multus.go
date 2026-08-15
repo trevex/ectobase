@@ -54,7 +54,7 @@ func Multus(ctx context.Context, r Runner, kubeconfig string) error {
 		return fmt.Errorf("apply multus daemonset: %w", err)
 	}
 	// Wait generously: a COLD pull of the multus image through the fabric mirror can exceed several
-	// minutes on a slow uplink (the same fabric-cold-pull reason the hub apiserver gets 12m); once
+	// minutes on a slow uplink (the same fabric-cold-pull reason the dispatch apiserver gets 12m); once
 	// the mirror has cached it, restarts are fast.
 	slog.Info("waiting for the Multus DaemonSet to roll out (up to 12m)")
 	if err := r.Run(ctx, "kubectl", "--kubeconfig", kubeconfig, "-n", "kube-system",

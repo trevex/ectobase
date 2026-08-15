@@ -84,7 +84,7 @@ func TestRestartContinuity(t *testing.T) {
 	require.NotEmpty(t, ulDst, "dst endpoint underlay")
 
 	// These endpoints are attached directly over the dataplane gRPC (not compiled
-	// from a hub-side NIC), so they inherit the deny-by-default firewall posture and
+	// from a dispatch-side NIC), so they inherit the deny-by-default firewall posture and
 	// would drop all overlay traffic. Program an any/any Allow on both directions of
 	// both endpoints so the request egresses the src, ingresses the dst, and the
 	// reply returns through the restarting node's uplink. (Verified: without these,

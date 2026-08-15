@@ -37,13 +37,13 @@ RBD storage.
 ## Node fencing for safe reschedule
 
 Rescheduling a VM off a lost node is only safe once the old node can no longer
-write its RBD disk — otherwise two instances could mount the same volume. The hub
+write its RBD disk — otherwise two instances could mount the same volume. The dispatch
 enforces this with a **two-backend fence** (storage + network) that must both
 confirm before any re-bind; see
 [Rescheduling &amp; failover](rescheduling-and-failover.md) for the full
 fence-gated failover flow.
 
-The **storage** half is the **csi-addons `NetworkFence`** mechanism. The hub's
+The **storage** half is the **csi-addons `NetworkFence`** mechanism. The dispatch's
 `StorageFencer` creates a cluster-scoped `NetworkFence`
 (`csiaddons.openshift.io/v1alpha1`) with `fenceState: Fenced` for the lost node's
 `/64`, targeting the ceph-csi RBD driver. csi-addons drives the driver's
@@ -80,11 +80,11 @@ sequenceDiagram
     Ceph-->>CDI: PVC bound → VM disk ready
 
     Note over Broker,Ceph: Fence on node loss
-    participant Hub as hub (failover)
-    Hub->>Ceph: NetworkFence Fenced (/64) → osd blocklist add
-    Ceph-->>Hub: status.result=Succeeded (RBD access blocked)
-    Note over Hub: reschedule VM only after storage + network fences confirm
-    Hub->>Ceph: NetworkFence Unfenced (drained) → osd blocklist rm
+    participant Dispatch as dispatch (failover)
+    Dispatch->>Ceph: NetworkFence Fenced (/64) → osd blocklist add
+    Ceph-->>Dispatch: status.result=Succeeded (RBD access blocked)
+    Note over Dispatch: reschedule VM only after storage + network fences confirm
+    Dispatch->>Ceph: NetworkFence Unfenced (drained) → osd blocklist rm
 ```
 
 ## Where this lives
@@ -94,9 +94,9 @@ sequenceDiagram
 | `Volume` API type | `api/storage/v1alpha1/volume_types.go` |
 | `CompiledVolumeAttachment` type | `api/compiled/v1alpha1/compiledvolumeattachment_types.go` |
 | `CompiledVolumeAttachment` → CDI `DataVolume` | `netplane/controllers/volumematerializer.go` |
-| `NetworkFence` storage fencer | `hub/pkg/fence/storage.go` |
-| Overlay-route network fencer | `hub/pkg/fence/network.go` |
-| Fence-gated failover | `hub/pkg/failover/failover.go` |
+| `NetworkFence` storage fencer | `dispatch/pkg/fence/storage.go` |
+| Overlay-route network fencer | `dispatch/pkg/fence/network.go` |
+| Fence-gated failover | `dispatch/pkg/failover/failover.go` |
 | ceph-csi-rbd install | `test/lab/internal/deploy/ceph.go` |
 | csi-addons + sidecar install | `test/lab/internal/deploy/csiaddons.go` |
 | KubeVirt / CDI install | `test/lab/internal/deploy/kubevirt.go` |

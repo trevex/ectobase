@@ -1,0 +1,5 @@
+suite: dispatch render snapshot
+tests:
+  - it: renders the dispatch control plane
+    asserts:
+      - matchSnapshot: {}

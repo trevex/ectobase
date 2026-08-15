@@ -1,7 +1,7 @@
 # Using the lab
 
 This is a hands-on walkthrough of driving a live ectobase fabric: you author
-**intent** on the hub, watch it compile and sync into a compute pool, and see the
+**intent** on the dispatch, watch it compile and sync into a compute pool, and see the
 overlay come up inside a real Pod and a real KubeVirt VM. It assumes the local
 lab fabric from [Local fabric](./local-fabric.md) is up.
 
@@ -18,7 +18,7 @@ make lab-up
 ```
 
 `lab-up` stands up the clab + kind fabric and deploys the two Helm charts
-(`ectobase-hub` on the hub cluster, `ectobase-pool` on each compute pool). See
+(`ectobase-dispatch` on the dispatch cluster, `ectobase-pool` on each compute pool). See
 [Deploy with Helm](./deploy-helm.md) for what the charts contain and
 [Local fabric](./local-fabric.md) for the fabric itself.
 
@@ -34,25 +34,25 @@ The Container section needs only `make lab-up`.
 
 ## Accessing & inspecting the clusters
 
-The fabric is three kind clusters — the **hub** (fleet control plane / aggregated
+The fabric is three kind clusters — the **dispatch** (fleet control plane / aggregated
 apiserver) plus two compute pools, **k02** and **k03**. `lab up` chowns each
 per-cluster kubeconfig back to your user, so `kubectl` works **without sudo**. Set
 one alias per cluster:
 
 ```sh
-alias khub='kubectl --kubeconfig test/lab/build/ectobase/hub.kubeconfig'
+alias khub='kubectl --kubeconfig test/lab/build/ectobase/dispatch.kubeconfig'
 alias k02='kubectl --kubeconfig test/lab/build/ectobase/k02.kubeconfig'
 alias k03='kubectl --kubeconfig test/lab/build/ectobase/k03.kubeconfig'
 ```
 
-Orient yourself. The pools register with the hub as `ClusterPool`s and converge to
+Orient yourself. The pools register with the dispatch as `ClusterPool`s and converge to
 `Ready` with their node `/64`s:
 
 ```sh
 khub get clusterpools.platform.ectobase.dev
 ```
 
-All **intent** is authored on the hub, so that is where you list workloads:
+All **intent** is authored on the dispatch, so that is where you list workloads:
 
 ```sh
 khub get vpc,networkinterface,container,virtualmachine -A
@@ -74,8 +74,8 @@ k02 get compilednics,compiledcontainers,compiledvms -A
 
 ## The flow in one paragraph
 
-You author intent on the **hub**; the netplane compiler lowers it into small
-pool-scoped `Compiled*` objects and stamps the pool a hub scheduler chose; the
+You author intent on the **dispatch**; the netplane compiler lowers it into small
+pool-scoped `Compiled*` objects and stamps the pool a dispatch scheduler chose; the
 **broker** syncs each `Compiled*` down to that pool; on the pool the
 **materializers** turn a `CompiledContainer` into a `Pod` and a `CompiledVM` into a
 KubeVirt `VirtualMachine`, while the **netplane agent** programs the dataplane for
@@ -85,7 +85,7 @@ whichever overlay interfaces actually attach on its node. The full picture is in
 ## Create a VPC + NetworkInterface
 
 Author a VPC with **just a name** — no `spec.vni` — plus a NetworkInterface that
-references it and carries the endpoint's overlay IP and MAC. Apply on the hub:
+references it and carries the endpoint's overlay IP and MAC. Apply on the dispatch:
 
 ```yaml
 apiVersion: net.ectobase.dev/v1alpha1
@@ -110,7 +110,7 @@ spec:
 khub apply -f vpc.yaml
 ```
 
-A **VPC VNI allocator** on the hub assigns the VNI automatically and marks the VPC
+A **VPC VNI allocator** on the dispatch assigns the VNI automatically and marks the VPC
 `Ready` — you never patch status by hand:
 
 ```sh
@@ -135,9 +135,9 @@ status:
 ## Run a Container workload
 
 Now attach a Container to that NIC. The Container **owns** the NIC via
-`interfaceRefs`, and it sets **no `clusterName` and no `nodeName`** — so the hub
+`interfaceRefs`, and it sets **no `clusterName` and no `nodeName`** — so the dispatch
 scheduler binds it to a pool, and kube-scheduler on that pool picks the node.
-Apply on the hub:
+Apply on the dispatch:
 
 ```yaml
 apiVersion: compute.ectobase.dev/v1alpha1
@@ -156,7 +156,7 @@ khub apply -f container.yaml
 ```
 
 !!! success "Status: Implemented"
-    A `Container` with no `spec.clusterName` is pool-scheduled by the hub (resource
+    A `Container` with no `spec.clusterName` is pool-scheduled by the dispatch (resource
     fit + spread, sharing pool capacity with VMs), exactly like a VM. `spec.nodeName`
     stays an **optional** pin — leave it empty and the node is chosen by
     kube-scheduler on the pool.
@@ -169,7 +169,7 @@ khub get container demo-ctr-a -o jsonpath='{.spec.clusterName}{"\n"}'   # e.g. k
 ```
 
 The compiler lowers the intent into a `CompiledNIC` and a `CompiledContainer` on
-the hub, both bound to that pool:
+the dispatch, both bound to that pool:
 
 ```sh
 khub get compilednic,compiledcontainer -A
@@ -230,7 +230,7 @@ encapsulated overlay.
 A VM in a VPC is the same shape as a Container, plus a persistent boot disk. Author
 a NetworkInterface, an RBD-backed `Volume` with a `bootImage`, and a
 `VirtualMachine` that owns both — again with **no `clusterName`** (auto-scheduled).
-Apply on the hub:
+Apply on the dispatch:
 
 ```yaml
 apiVersion: net.ectobase.dev/v1alpha1
@@ -299,15 +299,15 @@ it wherever it lands.
 
 ## Trace the objects end-to-end
 
-The same intent shows up at four stages. Author on the hub; the compiled twin is
-produced on the hub and pool-stamped; the broker syncs it into the bound pool; the
+The same intent shows up at four stages. Author on the dispatch; the compiled twin is
+produced on the dispatch and pool-stamped; the broker syncs it into the bound pool; the
 materializer produces the concrete Pod/VMI. Run each `get` on the cluster in its
 column.
 
 | Stage | Object | Where | Command |
 |---|---|---|---|
-| Intent | `VPC` / `NetworkInterface` / `Container` / `VirtualMachine` / `Volume` | **hub** | `khub get vpc,networkinterface,container,virtualmachine,volume -A` |
-| Compiled | `CompiledNIC` / `CompiledContainer` / `CompiledVM` / `CompiledVolumeAttachment` | **hub** | `khub get compilednic,compiledcontainer,compiledvm,compiledvolumeattachment -A` |
+| Intent | `VPC` / `NetworkInterface` / `Container` / `VirtualMachine` / `Volume` | **dispatch** | `khub get vpc,networkinterface,container,virtualmachine,volume -A` |
+| Compiled | `CompiledNIC` / `CompiledContainer` / `CompiledVM` / `CompiledVolumeAttachment` | **dispatch** | `khub get compilednic,compiledcontainer,compiledvm,compiledvolumeattachment -A` |
 | Synced | the same `Compiled*` (broker-selected by `spec.clusterName`) | **pool** | `k02 get compilednic,compiledcontainer,compiledvm,compiledvolumeattachment -A` |
 | Materialized | `Pod` (+ NAD) / KubeVirt `VirtualMachine` + `VirtualMachineInstance` + `DataVolume` | **pool** | `k02 get pod,networkattachmentdefinition -n ectobase-system; k02 get virtualmachine,virtualmachineinstance,datavolume -A` |
 
@@ -318,7 +318,7 @@ so policy follows the interface wherever it lands. See
 
 ## Cleanup
 
-Deleting the workload on the hub cascades through the pipeline — GC removes the
+Deleting the workload on the dispatch cascades through the pipeline — GC removes the
 `Compiled*` twins and the materialized Pod/VM on the pool:
 
 ```sh
@@ -338,7 +338,7 @@ khub delete vpc demo
 ## See also
 
 - [Compile, sync, materialize](../architecture/compile-sync-materialize.md) — the pipeline every workload flows through, including VNI allocation and scheduling.
-- [Multi-cluster control plane](../architecture/multi-cluster-control-plane.md) — the hub/pool split, the broker, and the scheduler.
+- [Multi-cluster control plane](../architecture/multi-cluster-control-plane.md) — the dispatch/pool split, the broker, and the scheduler.
 - [CNI integration](../architecture/cni-integration.md) — how a Pod joins the overlay and how the agent self-locates.
 - [Rescheduling & failover](../architecture/rescheduling-and-failover.md) — why moving a workload's pool is enough.
 - [Local fabric](./local-fabric.md) and [Deploy with Helm](./deploy-helm.md) — the fabric and the charts.

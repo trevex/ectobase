@@ -87,16 +87,16 @@ func TestKubeVirtCDIArgv(t *testing.T) {
 	}
 }
 
-// TestPatchHubCSIClusterID drives PatchHubCSIClusterID through a runner that
+// TestPatchDispatchCSIClusterID drives PatchDispatchCSIClusterID through a runner that
 // returns a canned args array and asserts the JSON6902 patch it composes.
-func TestPatchHubCSIClusterID(t *testing.T) {
+func TestPatchDispatchCSIClusterID(t *testing.T) {
 	f := &csiArgsRunner{args: `["-reflector-admin=x","-csi-cluster-id=","-csi-secret-name=y"]`}
-	if err := PatchHubCSIClusterID(context.Background(), f, "/kc/hub.kubeconfig", "fsid-9"); err != nil {
-		t.Fatalf("PatchHubCSIClusterID: %v", err)
+	if err := PatchDispatchCSIClusterID(context.Background(), f, "/kc/dispatch.kubeconfig", "fsid-9"); err != nil {
+		t.Fatalf("PatchDispatchCSIClusterID: %v", err)
 	}
-	c := f.findCall("kubectl", "patch", "deploy", "hub-controller", "--type=json")
+	c := f.findCall("kubectl", "patch", "deploy", "dispatch-controller", "--type=json")
 	if c == nil {
-		t.Fatalf("no hub-controller patch call:\n%v", f.calls)
+		t.Fatalf("no dispatch-controller patch call:\n%v", f.calls)
 	}
 	joined := strings.Join(c, " ")
 	if !strings.Contains(joined, `-csi-cluster-id=fsid-9`) || !strings.Contains(joined, `/args/1`) {
@@ -105,7 +105,7 @@ func TestPatchHubCSIClusterID(t *testing.T) {
 }
 
 // csiArgsRunner is a fakeRunner whose Output returns a canned args JSON array (so the
-// PatchHubCSIClusterID read path has something to parse).
+// PatchDispatchCSIClusterID read path has something to parse).
 type csiArgsRunner struct {
 	fakeRunner
 	args string

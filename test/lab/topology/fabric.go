@@ -326,10 +326,10 @@ func Ceph(ctx context.Context, cfg *config.Config, purge bool) error {
 	}
 	p := buildPaths(cfg)
 
-	// Hub is the fence-executor / provisioner cluster (csi-addons controller +
+	// Dispatch is the fence-executor / provisioner cluster (csi-addons controller +
 	// the ceph-csi provisioner it dials). Compute clusters run ceph-csi too so their
 	// nodes can attach RBD.
-	hubKubeconfig := p.clusterKubeconfig(hubCluster)
+	dispatchKubeconfig := p.clusterKubeconfig(dispatchCluster)
 	var clusters []deploy.ComputeCluster
 	for _, cl := range cfg.Fabric.Clusters {
 		clusters = append(clusters, deploy.ComputeCluster{
@@ -342,11 +342,11 @@ func Ceph(ctx context.Context, cfg *config.Config, purge bool) error {
 		return cephPurge(ctx, clusters)
 	}
 
-	// Compute clusters attach RBD (krbd) and so need the nodeplugin krbd fixup. The hub
+	// Compute clusters attach RBD (krbd) and so need the nodeplugin krbd fixup. The dispatch
 	// runs only the provisioner (librbd, no attach), so it is excluded.
 	var computeClusters []deploy.ComputeCluster
 	for _, c := range clusters {
-		if c.Name == hubCluster {
+		if c.Name == dispatchCluster {
 			continue
 		}
 		computeClusters = append(computeClusters, c)
@@ -364,7 +364,7 @@ func Ceph(ctx context.Context, cfg *config.Config, purge bool) error {
 		return fmt.Errorf("ceph demo (pool + params): %w", err)
 	}
 
-	// Step 2: external ceph-csi-rbd on every cluster (hub = fence executor +
+	// Step 2: external ceph-csi-rbd on every cluster (dispatch = fence executor +
 	// compute = attach). Values render under build/<name>/ceph/. (The nodes are never
 	// tainted — cluster-patch strips the control-plane taint — so every pod schedules.)
 	cephValuesDir := filepath.Join(p.build, "ceph")
@@ -374,16 +374,16 @@ func Ceph(ctx context.Context, cfg *config.Config, purge bool) error {
 		}
 	}
 
-	// Step 3: csi-addons controller + sidecar into the hub (fence executor)
+	// Step 3: csi-addons controller + sidecar into the dispatch (fence executor)
 	// provisioner.
-	if err := deploy.CSIAddons(ctx, nil, hubKubeconfig, deploy.CSIAddonsVersion); err != nil {
-		return fmt.Errorf("csi-addons on hub: %w", err)
+	if err := deploy.CSIAddons(ctx, nil, dispatchKubeconfig, deploy.CSIAddonsVersion); err != nil {
+		return fmt.Errorf("csi-addons on dispatch: %w", err)
 	}
 
 	// Step 4: krbd nodeplugin fixup so compute-node attach works.
 	deploy.EnsureNodeKrbd(ctx, nil, computeClusters)
 
-	slog.Info("ceph deployed", "clusters", len(clusters), "fenceExecutor", hubCluster)
+	slog.Info("ceph deployed", "clusters", len(clusters), "fenceExecutor", dispatchCluster)
 	return nil
 }
 
@@ -399,7 +399,7 @@ func cephPurge(ctx context.Context, clusters []deploy.ComputeCluster) error {
 
 // Tier2 deploys the Tier-2 (VM live-migration + fencing) prerequisites onto an
 // already-up fabric: KubeVirt + CDI + the flowplane network binding on every compute
-// cluster, and the ceph fsid wired into the hub controller's ceph-csi fence
+// cluster, and the ceph fsid wired into the dispatch controller's ceph-csi fence
 // actuator. It is the `lab tier2 up` entry point. Requires fabric.ceph.enabled (RBD
 // is the Tier-2 storage) and that `lab ceph` has already run (it consumes the fsid
 // from build/<name>/ceph.env).
@@ -424,10 +424,10 @@ func Tier2(ctx context.Context, cfg *config.Config) error {
 	}
 	poolChart := filepath.Join(root, "charts/ectobase-pool")
 
-	// KubeVirt + CDI on every compute cluster, then enable the vm-materializer (the hub runs no
+	// KubeVirt + CDI on every compute cluster, then enable the vm-materializer (the dispatch runs no
 	// VMs — it is the fence executor / provisioner only).
 	for _, cl := range cfg.Fabric.Clusters {
-		if cl.Name == hubCluster {
+		if cl.Name == dispatchCluster {
 			continue
 		}
 		if err := deploy.KubeVirtCDI(ctx, nil, p.clusterKubeconfig(cl.Name)); err != nil {
@@ -438,9 +438,9 @@ func Tier2(ctx context.Context, cfg *config.Config) error {
 		}
 	}
 
-	// Wire the ceph fsid into the hub controller's ceph-csi fence actuator.
-	if err := deploy.PatchHubCSIClusterID(ctx, nil, p.clusterKubeconfig(hubCluster), fsid); err != nil {
-		return fmt.Errorf("wire hub csi-cluster-id: %w", err)
+	// Wire the ceph fsid into the dispatch controller's ceph-csi fence actuator.
+	if err := deploy.PatchDispatchCSIClusterID(ctx, nil, p.clusterKubeconfig(dispatchCluster), fsid); err != nil {
+		return fmt.Errorf("wire dispatch csi-cluster-id: %w", err)
 	}
 
 	slog.Info("tier2 deployed", "computeClusters", len(cfg.Fabric.Clusters)-1, "fsid", fsid)
@@ -463,9 +463,9 @@ func readCephFSID(path string) (string, error) {
 	return "", fmt.Errorf("no non-empty CEPH_FSID= line in %s — run `lab ceph` first", path)
 }
 
-// hubCluster is the cluster that hosts the hub aggregated apiserver +
+// dispatchCluster is the cluster that hosts the dispatch aggregated apiserver +
 // controller + reflector. Compute clusters run the ectobase chart with a broker.
-const hubCluster = "hub"
+const dispatchCluster = "dispatch"
 
 // deployEctobase builds the flat EctobaseSpec from cfg + the build-tree paths and
 // deploys the ectobase substrate onto the clusters.
@@ -474,18 +474,18 @@ func deployEctobase(ctx context.Context, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("locate repo root: %w", err)
 	}
-	dc, ok := cfg.Derived.Clusters[hubCluster]
+	dc, ok := cfg.Derived.Clusters[dispatchCluster]
 	if !ok {
-		return fmt.Errorf("no cluster named %q in the config (need a hub cluster for the apiserver + reflector)", hubCluster)
+		return fmt.Errorf("no cluster named %q in the config (need a dispatch cluster for the apiserver + reflector)", dispatchCluster)
 	}
 	if len(dc.Nodes) == 0 {
-		return fmt.Errorf("hub cluster %q has no nodes", hubCluster)
+		return fmt.Errorf("dispatch cluster %q has no nodes", dispatchCluster)
 	}
 
 	p := buildPaths(cfg)
 	var compute []deploy.ComputeCluster
 	for _, cl := range cfg.Fabric.Clusters {
-		if cl.Name == hubCluster {
+		if cl.Name == dispatchCluster {
 			continue
 		}
 		compute = append(compute, deploy.ComputeCluster{
@@ -497,9 +497,9 @@ func deployEctobase(ctx context.Context, cfg *config.Config) error {
 	spec := deploy.EctobaseSpec{
 		RepoRoot:       root,
 		WorkDir:        filepath.Join(p.build, "deploy"),
-		HubKubeconfig:  p.clusterKubeconfig(hubCluster),
-		HubIdentity:    dc.Nodes[0].IdentityAddr,
-		HubChartPath:   filepath.Join(root, "charts/ectobase-hub"),
+		DispatchKubeconfig:  p.clusterKubeconfig(dispatchCluster),
+		DispatchIdentity:    dc.Nodes[0].IdentityAddr,
+		DispatchChartPath:   filepath.Join(root, "charts/ectobase-dispatch"),
 		PoolChartPath:  filepath.Join(root, "charts/ectobase-pool"),
 		NADCRDPath:     filepath.Join(root, "test/lab/deploy/nad-crd.yaml"),
 		UnderlayWithin: fabric.NodeAggr,

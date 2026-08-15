@@ -58,7 +58,7 @@ A `VirtualMachine` (also `compute.ectobase.dev`) owns `NetworkInterface`s and, o
 `Volume`s, and carries compute resources plus boot intent (a containerDisk `Image` or persistent
 volumes, and a KubeVirt `RunStrategy`). Its `ClusterName` is the placement anchor for its NICs.
 
-Unlike containers, VMs are **scheduled**: the hub-controller binds an unbound `VirtualMachine` to a
+Unlike containers, VMs are **scheduled**: the dispatch-controller binds an unbound `VirtualMachine` to a
 `ClusterPool` that fits its resource requests before compilation proceeds. The compiler then lowers
 the VM into a `CompiledVM` (and its interfaces into `CompiledNIC`s carrying the same cluster binding).
 
@@ -76,7 +76,7 @@ then data disks); with no volumes it falls back to an ephemeral containerDisk fr
 | Compiled form | `CompiledContainer` | `CompiledVM` (+ `CompiledVolumeAttachment`) |
 | Materialized as | `v1.Pod` | KubeVirt `VirtualMachine` |
 | Overlay attach | Multus + flowplane-cni (veth) | KubeVirt binding plugin + flowplane-cni (tap) |
-| Placement | explicit `ClusterName` / `NodeName` | scheduled onto a `ClusterPool` by the hub-controller |
+| Placement | explicit `ClusterName` / `NodeName` | scheduled onto a `ClusterPool` by the dispatch-controller |
 | Boot / image | container image | containerDisk `Image` or CDI `DataVolume` (RBD) |
 | Status | Implemented | Partial |
 

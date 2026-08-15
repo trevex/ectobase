@@ -52,10 +52,10 @@ pass, everything that must track the Go types and the component code:
 
 - the **deepcopy/conversion** for each API group (via `kube::codegen`);
 - the **CRD manifests** — the `net` + `compiled` groups go into `charts/ectobase-pool/crd-bases`
-  (shipped by the pool chart); the hub-aggregated `compute`/`storage`/`platform` groups go into
+  (shipped by the pool chart); the dispatch-aggregated `compute`/`storage`/`platform` groups go into
   `test/crds` (for envtest);
 - the **per-component RBAC** ClusterRoles, one file per component into each chart's
-  `files/<role>/` (netplane controller/agent, the materializers, the cni, the hub
+  `files/<role>/` (netplane controller/agent, the materializers, the cni, the dispatch
   controller/broker) — so a component's RBAC always reflects its `+kubebuilder:rbac` markers;
 - the **CRD API reference** under `docs/reference/api/` (via `crd-ref-docs`, the `docs-crd-ref`
   step) so the docs never drift from the schema.

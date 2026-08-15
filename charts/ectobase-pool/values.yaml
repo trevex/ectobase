@@ -11,7 +11,7 @@ images:
   flowplaneDpdk: ghcr.io/trevex/ectobase/flowplane-dpdk:dev
   netplane: ghcr.io/trevex/ectobase/netplane:dev
   cni: ghcr.io/trevex/ectobase/cni:dev
-  hubBroker: ghcr.io/trevex/ectobase/hub-broker:dev
+  dispatchBroker: ghcr.io/trevex/ectobase/dispatch-broker:dev
 imagePullPolicy: IfNotPresent
 
 # Overlay uplink interface (used by the DPDK datapath; the eBPF wrapper defaults to eth1).
@@ -26,11 +26,11 @@ reflectorAddress: "[fd00:db8:0:1::1]:1338"
 # routebus configures the agent's route-bus transport to the reflector.
 routebus:
   mtls:
-    # enabled turns on mutual TLS to the reflector. REQUIRES cert-manager AND the hub
+    # enabled turns on mutual TLS to the reflector. REQUIRES cert-manager AND the dispatch
     # chart installed first (it owns the shared CA ClusterIssuer this agent cert is
-    # issued from). MUST match the hub chart's routebus.mtls.enabled.
+    # issued from). MUST match the dispatch chart's routebus.mtls.enabled.
     enabled: false
-    # clusterIssuer is the shared CA ClusterIssuer name; MUST match the hub chart.
+    # clusterIssuer is the shared CA ClusterIssuer name; MUST match the dispatch chart.
     clusterIssuer: ectobase-routebus-ca
 # Control-plane API server the agent dials over the fabric (kubeconfig server URL).
 apiserverAddress: "https://[fd00:db8:0:1::1]:6443"
@@ -46,11 +46,11 @@ dpdk:
 # Install the net.ectobase.dev CRDs with the chart (managed on helm upgrade).
 installCRDs: true
 
-# Per-cluster broker (kubelet-analog): syncs compiled objects from the hub down into this
+# Per-cluster broker (kubelet-analog): syncs compiled objects from the dispatch down into this
 # pool cluster. The broker is ALWAYS deployed in the pool chart; clusterName is required.
 broker:
   clusterName: ""                       # this cluster's pool name (e.g. k02); required
-  hubKubeconfigSecret: broker-hub-kubeconfig  # Secret (key: kubeconfig) with a hub token
+  dispatchKubeconfigSecret: broker-dispatch-kubeconfig  # Secret (key: kubeconfig) with a dispatch token
 
 # vm-materializer: turns broker-synced CompiledVM/CompiledVolumeAttachment into KubeVirt VMs.
 # Off by default; on for pools with KubeVirt installed.

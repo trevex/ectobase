@@ -1,38 +1,38 @@
 # Components
 
-ectobase is a fleet control plane (the **hub**) driving many workload clusters
+ectobase is a fleet control plane (the **dispatch**) driving many workload clusters
 (**pools**), with a per-node dataplane on every pool node. This page lists each
 binary/image: what it is, where it runs, and what it talks to.
 
-The hub components ship in the [`ectobase-hub`](helm-values.md#ectobase-hub)
+The dispatch components ship in the [`ectobase-dispatch`](helm-values.md#ectobase-dispatch)
 chart; the pool components ship in [`ectobase-pool`](helm-values.md#ectobase-pool).
 
-## Hub components
+## Dispatch components
 
-Run once per fleet, in the hub cluster.
+Run once per fleet, in the dispatch cluster.
 
-### hub-apiserver
+### dispatch-apiserver
 
 The aggregated extension apiserver that serves every ectobase API group
 (`net`, `compute`, `storage`, `compiled`, `platform`). It is the single source
 of truth users write intent into and controllers write compiled objects into. It
-is backed by kine over PostgreSQL. Deployed by the hub chart; talks to kine.
+is backed by kine over PostgreSQL. Deployed by the dispatch chart; talks to kine.
 
-### hub-controller
+### dispatch-controller
 
 The central control-plane reconciler. Today it runs the **ClusterPool**
 reconciler (seeding a new pool's lifecycle phase); the fleet scheduler and
-failover reconcilers register on the same manager. Deployed by the hub chart;
-talks to the hub apiserver.
+failover reconcilers register on the same manager. Deployed by the dispatch chart;
+talks to the dispatch apiserver.
 
-### hub-broker
+### dispatch-broker
 
 The per-cluster broker (a kubelet-analog). It watches the compiled objects
-(CompiledNIC, CompiledVM, CompiledContainer, CompiledVolumeAttachment) in the hub
+(CompiledNIC, CompiledVM, CompiledContainer, CompiledVolumeAttachment) in the dispatch
 apiserver **filtered by `spec.clusterName`** and set-reconciles them onto a
 downstream pool cluster's apiserver. Although logically owned by a pool, it runs
-against two apiservers: the hub (source) and the pool (destination). The hub
-chart provisions the broker's hub-side identity; the pool chart deploys the
+against two apiservers: the dispatch (source) and the pool (destination). The dispatch
+chart provisions the broker's dispatch-side identity; the pool chart deploys the
 running broker (see below).
 
 ### netplane controller (compiler)
@@ -42,15 +42,15 @@ The `netplane-controller` binary — the **compiler**. It watches the authored
 objects (NetworkInterface + FirewallPolicy + LoadBalancer + VPCPeering →
 CompiledNIC; VirtualMachine → CompiledVM; Container → CompiledContainer; Volume →
 CompiledVolumeAttachment). It also resolves central NAT allocations onto
-NATGateway status. Runs hostNetwork in the hub cluster (agent namespace); talks
-to the hub apiserver. Shares the `netplane` image with the reflector.
+NATGateway status. Runs hostNetwork in the dispatch cluster (agent namespace); talks
+to the dispatch apiserver. Shares the `netplane` image with the reflector.
 
 ### reflector
 
 The central route reflector. It accepts `routebus.v1` Session streams from the
 per-node agents and reflects per-VNI overlay routes between them — this is how
-overlay reachability is distributed (not BGP). Deployed by the hub chart as a
-Deployment fronted by a Service; the hub-controller passes its address to agents
+overlay reachability is distributed (not BGP). Deployed by the dispatch chart as a
+Deployment fronted by a Service; the dispatch-controller passes its address to agents
 via `reflectorAdmin`. Shares the `netplane` image with the compiler.
 
 ## Pool components
@@ -79,7 +79,7 @@ flowplane.
 The downstream controller that materializes local **CompiledContainer** objects
 into `v1.Pod` objects, attached to the flowplane overlay via Multus and the
 flowplane-cni annotation and pinned to a node. Targets the plain downstream k8s
-cluster (not the hub aggregated apiserver). Deployed by the pool chart.
+cluster (not the dispatch aggregated apiserver). Deployed by the pool chart.
 
 ### vm-materializer
 
@@ -109,11 +109,11 @@ selected when `dataplane: dpdk`, with its own knobs (`dpdk.lcores`, hugepages,
 
 | Component | Image | Chart | Scope |
 | --- | --- | --- | --- |
-| hub-apiserver | `hub-apiserver` | hub | hub cluster |
-| hub-controller | `hub-controller` | hub | hub cluster |
-| hub-broker | `hub-broker` | hub (identity) + pool (runtime) | per pool |
-| netplane controller (compiler) | `netplane` | hub | hub cluster |
-| reflector | `netplane` | hub | hub cluster |
+| dispatch-apiserver | `dispatch-apiserver` | dispatch | dispatch cluster |
+| dispatch-controller | `dispatch-controller` | dispatch | dispatch cluster |
+| dispatch-broker | `dispatch-broker` | dispatch (identity) + pool (runtime) | per pool |
+| netplane controller (compiler) | `netplane` | dispatch | dispatch cluster |
+| reflector | `netplane` | dispatch | dispatch cluster |
 | netplane agent | `netplane` | pool | per node (DaemonSet) |
 | flowplane-cni | `cni` | pool | per node |
 | pod-materializer | `netplane` | pool | per pool |

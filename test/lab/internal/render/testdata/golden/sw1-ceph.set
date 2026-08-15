@@ -17,8 +17,8 @@ set protocols bgp peer-group hosts address-family ipv6-unicast as-override
 set protocols bgp neighbor eth3 interface v6only peer-group 'hosts'
 set protocols static route6 fd00:db8:1:1::/64 interface eth3
 set protocols bgp address-family ipv6-unicast network 'fd00:db8:1:1::/64'
-set protocols static route6 fd00:cafe:64ec::/64 next-hop fd00:cafe:64ec::1
-set protocols bgp address-family ipv6-unicast network 'fd00:cafe:64ec::/64'
+set protocols static route6 fd00:cafe:2e6b::/64 next-hop fd00:cafe:2e6b::1
+set protocols bgp address-family ipv6-unicast network 'fd00:cafe:2e6b::/64'
 set service router-advert interface eth3 prefix fd00:db8:1:1::/64
 set service router-advert interface eth3 name-server 'fd00:ffff::e1'
 set service router-advert interface eth3 name-server 'fd00:ffff::e2'

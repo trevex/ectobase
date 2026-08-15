@@ -1,0 +1,86 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dispatch-controller
+rules:
+- apiGroups:
+  - compiled.ectobase.dev
+  resources:
+  - compilednics
+  - compiledvms
+  - compiledvolumeattachments
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - compiled.ectobase.dev
+  resources:
+  - compiledvms/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - compute.ectobase.dev
+  resources:
+  - containers
+  - virtualmachines
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - compute.ectobase.dev
+  resources:
+  - containers/status
+  - virtualmachines/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - csiaddons.openshift.io
+  resources:
+  - networkfences
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - platform.ectobase.dev
+  resources:
+  - clusterpools
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - platform.ectobase.dev
+  resources:
+  - clusterpools/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - storage.ectobase.dev
+  resources:
+  - volumes
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch

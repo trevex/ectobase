@@ -1,0 +1,11 @@
+# Copyright 2026 ectobase contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Minimal runtime image for the dispatch controller. See Dockerfile.apiserver for
+# why the binary is built on the host and COPYd in (local `replace` in go.mod).
+#
+# Expects: a statically linked `dispatch-controller` binary next to this file.
+FROM gcr.io/distroless/static:nonroot
+COPY dispatch-controller /usr/local/bin/dispatch-controller
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/dispatch-controller"]

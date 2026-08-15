@@ -15,7 +15,7 @@ import (
 
 // RequireClientCN returns a unary interceptor that rejects any RPC whose verified
 // client-certificate CommonName is not allowedCN. It gates the admin (fence) API to
-// the hub-controller identity only, so an agent that holds a valid route-bus session
+// the dispatch-controller identity only, so an agent that holds a valid route-bus session
 // cert still cannot drive fencing (a route-withdraw DoS).
 //
 // If allowedCN is empty the interceptor is a no-op — mTLS-off dev mode, where the

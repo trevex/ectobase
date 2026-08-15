@@ -1,4 +1,4 @@
-# Tier-2 live-gate fixture — applied to the hub. A stateful RBD-backed VirtualMachine on the
+# Tier-2 live-gate fixture — applied to the dispatch. A stateful RBD-backed VirtualMachine on the
 # net.ectobase.dev API, PINNED to pool k02 via spec.clusterName. The Phase-3 scheduler SKIPS a VM
 # whose spec.clusterName is already set, so this hard-binds the VM to k02 without a labelled pool.
 #

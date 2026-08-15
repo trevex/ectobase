@@ -136,7 +136,7 @@ NIC — on an auto-scheduled node, or after a reschedule / live migration — th
 agent on *that* node programs its policy, and no other node's agent does. Nothing
 has to write a chosen node back into the control plane for the datapath to be
 programmed correctly. This is the property that makes
-[rescheduling & failover](./rescheduling-and-failover.md) and hub pool-scheduling
+[rescheduling & failover](./rescheduling-and-failover.md) and dispatch pool-scheduling
 compose cleanly.
 
 !!! success "Status: Implemented"

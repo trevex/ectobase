@@ -1,4 +1,4 @@
-// Command controller runs the hub control-plane reconcilers: it watches
+// Command controller runs the dispatch control-plane reconcilers: it watches
 // NATGateway and NetworkInterface objects and writes deterministic
 // (public-IP, port-block) allocations to NATGateway.Status.Allocations; and
 // watches NetworkInterfaces + NetworkPolicies to write CompiledNIC objects.
@@ -25,16 +25,16 @@ import (
 
 func main() {
 	// CRITICAL: disable client-go streaming list-watch before any client/manager construction.
-	// This controller now targets the hub aggregated apiserver, which does not support the
+	// This controller now targets the dispatch aggregated apiserver, which does not support the
 	// client-go WatchList; without this flag the informer stalls silently and no events are delivered.
 	os.Setenv("KUBE_FEATURE_WatchListClient", "false") //nolint:errcheck
 
 	var (
-		hubKubeconfig string
+		dispatchKubeconfig string
 		clusterName   string
 		networkName   string
 	)
-	flag.StringVar(&hubKubeconfig, "hub-kubeconfig", "", "Path to the hub aggregated-apiserver kubeconfig (falls back to in-cluster/KUBECONFIG when empty).")
+	flag.StringVar(&dispatchKubeconfig, "dispatch-kubeconfig", "", "Path to the dispatch aggregated-apiserver kubeconfig (falls back to in-cluster/KUBECONFIG when empty).")
 	flag.StringVar(&clusterName, "cluster-name", "", "Default cluster binding stamped onto CompiledNICs whose NIC has no owning VirtualMachine.")
 	flag.StringVar(&networkName, "network-name", "flowplane-overlay", "Multus NetworkAttachmentDefinition name for the flowplane overlay binding stamped onto CompiledVMs.")
 	flag.Parse()
@@ -53,12 +53,12 @@ func main() {
 		log.Fatalf("add storage scheme: %v", err)
 	}
 
-	// Build the rest.Config from --hub-kubeconfig if given, else fall back to the
+	// Build the rest.Config from --dispatch-kubeconfig if given, else fall back to the
 	// controller-runtime default (in-cluster, then --kubeconfig / KUBECONFIG).
 	var cfg *rest.Config
 	var err error
-	if hubKubeconfig != "" {
-		cfg, err = clientcmd.BuildConfigFromFlags("", hubKubeconfig)
+	if dispatchKubeconfig != "" {
+		cfg, err = clientcmd.BuildConfigFromFlags("", dispatchKubeconfig)
 	} else {
 		cfg, err = ctrl.GetConfig()
 	}
@@ -67,7 +67,7 @@ func main() {
 	}
 
 	// Disable the metrics server: the controller runs hostNetwork (see the compiler Deployment in
-	// charts/ectobase-hub/templates/compiler.yaml),
+	// charts/ectobase-dispatch/templates/compiler.yaml),
 	// so a default :8080 listener collides on rolling restart (new pod can't bind while the old holds
 	// it) → crashloop. Nothing scrapes it in this deployment; "0" turns it off.
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{

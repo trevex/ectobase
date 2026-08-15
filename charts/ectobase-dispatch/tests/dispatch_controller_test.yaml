@@ -1,0 +1,12 @@
+suite: dispatch-controller deployment
+templates:
+  - templates/dispatch-controller.yaml
+tests:
+  # dispatch-controller.yaml documents (0-indexed):
+  #   0: SA dispatch-controller   1: CR dispatch-controller   2: CRB dispatch-controller   3: Deployment
+  - it: deployment args include reflector-admin
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "-reflector-admin=[fd00:db8:0:1::1]:1339"
+        documentIndex: 3

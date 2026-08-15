@@ -14,7 +14,7 @@ name: ectobase
 fabric:
   as: {edge: 65000, switch: 65010, host: 65100}
   ceph: {enabled: true}
-  clusters: [{name: hub, nodes: 1}, {name: k02, nodes: 2}]
+  clusters: [{name: dispatch, nodes: 1}, {name: k02, nodes: 2}]
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +43,7 @@ fabric:
 	// Deterministic: a second load yields the same mon addr (fixed literal "ceph").
 	c2, err := LoadBytes([]byte(`
 name: ectobase
-fabric: {as: {edge: 65000, switch: 65010, host: 65100}, ceph: {enabled: true}, clusters: [{name: hub, nodes: 1}]}
+fabric: {as: {edge: 65000, switch: 65010, host: 65100}, ceph: {enabled: true}, clusters: [{name: dispatch, nodes: 1}]}
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -58,19 +58,19 @@ func TestDeriveStableAndDistinct(t *testing.T) {
 name: ectobase
 fabric:
   as: {edge: 65000, switch: 65010, host: 65100}
-  clusters: [{name: hub, nodes: 1}, {name: k02, nodes: 1}]
+  clusters: [{name: dispatch, nodes: 1}, {name: k02, nodes: 1}]
 `))
-	if c.Derived.Clusters["hub"].Prefix48 == c.Derived.Clusters["k02"].Prefix48 {
+	if c.Derived.Clusters["dispatch"].Prefix48 == c.Derived.Clusters["k02"].Prefix48 {
 		t.Fatal("cluster /48s must differ")
 	}
-	n := c.Derived.Clusters["hub"].Nodes[0]
-	if n.Identity == "" || n.RA64 == "" || c.Derived.Clusters["hub"].APIVip == "" {
+	n := c.Derived.Clusters["dispatch"].Nodes[0]
+	if n.Identity == "" || n.RA64 == "" || c.Derived.Clusters["dispatch"].APIVip == "" {
 		t.Fatalf("derived fields empty: %+v", n)
 	}
 	// Deterministic: a second load yields the same /48.
 	c2, _ := LoadBytes([]byte(`name: ectobase
-fabric: {as: {edge: 65000, switch: 65010, host: 65100}, clusters: [{name: hub, nodes: 1}]}`))
-	if c2.Derived.Clusters["hub"].Prefix48 != c.Derived.Clusters["hub"].Prefix48 {
+fabric: {as: {edge: 65000, switch: 65010, host: 65100}, clusters: [{name: dispatch, nodes: 1}]}`))
+	if c2.Derived.Clusters["dispatch"].Prefix48 != c.Derived.Clusters["dispatch"].Prefix48 {
 		t.Fatal("derivation not deterministic")
 	}
 }

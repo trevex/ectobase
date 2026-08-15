@@ -20,9 +20,9 @@ import (
 type EctobaseSpec struct {
 	RepoRoot       string           // repo root (dir containing go.work)
 	WorkDir        string           // build/<name>/deploy scratch dir (created if missing)
-	HubKubeconfig  string           // path to hub's kubeconfig
-	HubIdentity    string           // bare v6, e.g. fd00:cafe:<h>::1 (hub's fabric address: the broker's hub server host AND the reflector host)
-	HubChartPath   string           // <repoRoot>/charts/ectobase-hub
+	DispatchKubeconfig  string           // path to dispatch's kubeconfig
+	DispatchIdentity    string           // bare v6, e.g. fd00:cafe:<h>::1 (dispatch's fabric address: the broker's dispatch server host AND the reflector host)
+	DispatchChartPath   string           // <repoRoot>/charts/ectobase-dispatch
 	PoolChartPath  string           // <repoRoot>/charts/ectobase-pool
 	NADCRDPath     string           // NetworkAttachmentDefinition CRD manifest (abs or repo-relative)
 	UnderlayWithin string           // node-underlay aggregate CIDR (fd00:cafe::/32) for flowplane's underlay filter
@@ -37,10 +37,10 @@ type ComputeCluster struct {
 
 // Ectobase deploys the (non-Ceph subset of the) ectobase substrate onto an
 // already-up multi-cluster fabric by installing the two Helm charts exactly as a
-// user would: the ectobase-hub chart on the hub cluster (aggregated apiserver +
-// controller + kine + compiler + reflector + hub-side broker identity), then the
+// user would: the ectobase-dispatch chart on the dispatch cluster (aggregated apiserver +
+// controller + kine + compiler + reflector + dispatch-side broker identity), then the
 // ectobase-pool chart on each compute cluster (dataplane + agent + broker + cni +
-// materializers). Lab-only bits — the broker→hub token/kubeconfig and the
+// materializers). Lab-only bits — the broker→dispatch token/kubeconfig and the
 // pre-created ClusterPools — are minted here as fixtures around the installs.
 //
 // It assumes every referenced kubeconfig already exists (the fabric is up). Every
@@ -50,34 +50,34 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		return fmt.Errorf("mkdir workdir: %w", err)
 	}
 
-	// --- Hub cluster: one Helm release ---
-	// The ectobase-hub chart carries the aggregated apiserver + controller + kine, the netplane
-	// compiler, the reflector, and the hub-side hub-broker identity. --create-namespace makes the
+	// --- Dispatch cluster: one Helm release ---
+	// The ectobase-dispatch chart carries the aggregated apiserver + controller + kine, the netplane
+	// compiler, the reflector, and the dispatch-side dispatch-broker identity. --create-namespace makes the
 	// release namespace (system, whose pods are baseline-PSA-safe); the chart itself creates the
 	// PSA-privileged ectobase-system namespace for the hostNetwork compiler + reflector. The
-	// reflector runs on the hub's fabric identity, so the controller's -reflector-admin is pointed
+	// reflector runs on the dispatch's fabric identity, so the controller's -reflector-admin is pointed
 	// there via a chart value (retiring the old post-apply patch). The clusters set
 	// cluster.allowSchedulingOnControlPlanes so control-plane nodes are never tainted.
-	slog.Info("installing ectobase-hub chart", "chart", s.HubChartPath)
-	if err := helmInstallHub(ctx, s.HubKubeconfig, s.HubChartPath, s.HubIdentity); err != nil {
-		return fmt.Errorf("helm install ectobase-hub: %w", err)
+	slog.Info("installing ectobase-dispatch chart", "chart", s.DispatchChartPath)
+	if err := helmInstallDispatch(ctx, s.DispatchKubeconfig, s.DispatchChartPath, s.DispatchIdentity); err != nil {
+		return fmt.Errorf("helm install ectobase-dispatch: %w", err)
 	}
-	if err := waitAggregatedAPI(ctx, s.HubKubeconfig); err != nil {
-		return fmt.Errorf("hub aggregated API: %w", err)
+	if err := waitAggregatedAPI(ctx, s.DispatchKubeconfig); err != nil {
+		return fmt.Errorf("dispatch aggregated API: %w", err)
 	}
 
-	// --- Shared broker→hub kubeconfig (lab fixture) ---
-	// The hub-side hub-broker ServiceAccount is created by the ectobase-hub chart (system ns); mint
-	// a token for it and hand-write the broker's kubeconfig to the hub's fabric address.
-	slog.Info("minting broker hub token")
-	token, err := exec.OutputStr(ctx, "kubectl", "--kubeconfig", s.HubKubeconfig,
-		"create", "token", "hub-broker", "-n", "system", "--duration=24h")
+	// --- Shared broker→dispatch kubeconfig (lab fixture) ---
+	// The dispatch-side dispatch-broker ServiceAccount is created by the ectobase-dispatch chart (system ns); mint
+	// a token for it and hand-write the broker's kubeconfig to the dispatch's fabric address.
+	slog.Info("minting broker dispatch token")
+	token, err := exec.OutputStr(ctx, "kubectl", "--kubeconfig", s.DispatchKubeconfig,
+		"create", "token", "dispatch-broker", "-n", "system", "--duration=24h")
 	if err != nil {
 		return fmt.Errorf("create broker token: %w", err)
 	}
-	brokerKubeconfig := filepath.Join(s.WorkDir, "broker-hub.kubeconfig")
+	brokerKubeconfig := filepath.Join(s.WorkDir, "broker-dispatch.kubeconfig")
 	if err := os.WriteFile(brokerKubeconfig,
-		[]byte(mintKubeconfig(s.HubIdentity, strings.TrimSpace(token))), 0o600); err != nil {
+		[]byte(mintKubeconfig(s.DispatchIdentity, strings.TrimSpace(token))), 0o600); err != nil {
 		return fmt.Errorf("write broker kubeconfig: %w", err)
 	}
 
@@ -89,7 +89,7 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 	if err := os.WriteFile(poolsPath, []byte(poolsYAML), 0o644); err != nil {
 		return fmt.Errorf("write clusterpools: %w", err)
 	}
-	if err := kubectlApply(ctx, s.HubKubeconfig, poolsPath); err != nil {
+	if err := kubectlApply(ctx, s.DispatchKubeconfig, poolsPath); err != nil {
 		return fmt.Errorf("apply clusterpools: %w", err)
 	}
 
@@ -101,27 +101,27 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		if err := kubectlApply(ctx, c.Kubeconfig, s.NADCRDPath); err != nil {
 			return fmt.Errorf("cluster %s: apply NAD CRD: %w", c.Name, err)
 		}
-		// The pool chart does not manage its release namespace, and the broker-hub-kubeconfig Secret
+		// The pool chart does not manage its release namespace, and the broker-dispatch-kubeconfig Secret
 		// must exist before the chart's broker pod starts — so pre-create the (PSA-privileged)
 		// ectobase-system namespace + the secret ahead of helm.
 		if err := ensureHelmNamespace(ctx, c.Kubeconfig, "ectobase-system", "ectobase-pool"); err != nil {
 			return fmt.Errorf("cluster %s: ensure namespace: %w", c.Name, err)
 		}
 		if err := createSecretFromFile(ctx, c.Kubeconfig, "ectobase-system",
-			"broker-hub-kubeconfig", "kubeconfig", brokerKubeconfig); err != nil {
+			"broker-dispatch-kubeconfig", "kubeconfig", brokerKubeconfig); err != nil {
 			return fmt.Errorf("cluster %s: create broker secret: %w", c.Name, err)
 		}
-		if err := helmInstallPool(ctx, c.Kubeconfig, c.Name, s.PoolChartPath, s.HubIdentity, s.UnderlayWithin); err != nil {
+		if err := helmInstallPool(ctx, c.Kubeconfig, c.Name, s.PoolChartPath, s.DispatchIdentity, s.UnderlayWithin); err != nil {
 			return fmt.Errorf("cluster %s: helm install ectobase-pool: %w", c.Name, err)
 		}
-		// The broker mounts broker-hub-kubeconfig as a volume, so an existing broker pod keeps the
+		// The broker mounts broker-dispatch-kubeconfig as a volume, so an existing broker pod keeps the
 		// OLD kubeconfig across a re-`deploy` that rewrote the secret (helm won't roll it — the
 		// secret is created outside the chart). On a fresh up the broker starts after the secret so
-		// this is a no-op; on re-deploy it makes the broker pick up the current hub address.
+		// this is a no-op; on re-deploy it makes the broker pick up the current dispatch address.
 		// Best-effort.
 		if err := exec.Run(ctx, "kubectl", "--kubeconfig", c.Kubeconfig, "-n", "ectobase-system",
-			"rollout", "restart", "deploy/hub-broker"); err != nil {
-			slog.Debug("rollout restart hub-broker", "cluster", c.Name, "err", err)
+			"rollout", "restart", "deploy/dispatch-broker"); err != nil {
+			slog.Debug("rollout restart dispatch-broker", "cluster", c.Name, "err", err)
 		}
 		// Multus (thin) so a Pod annotated onto our overlay is attached via Multus ->
 		// flowplane-cni (a SECONDARY network) instead of a hand-driven gRPC attach. Installed
@@ -134,7 +134,7 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 	}
 
 	// --- Readiness ---
-	if err := waitPoolsReady(ctx, s.HubKubeconfig, s.Compute); err != nil {
+	if err := waitPoolsReady(ctx, s.DispatchKubeconfig, s.Compute); err != nil {
 		return fmt.Errorf("cluster pools ready: %w", err)
 	}
 	slog.Info("ectobase substrate deployed", "compute", len(s.Compute))
@@ -161,7 +161,7 @@ func kubectlApplyStdin(ctx context.Context, kubeconfig, yaml string) error {
 // enforce PSA so this only bites on Talos). It also stamps Helm's managed-by label + release
 // annotations so a chart that DID manage the namespace could adopt it; the pool chart does not
 // manage its release namespace, so those are harmless here — the reason to pre-create is that the
-// broker-hub-kubeconfig Secret has to exist before the chart's broker pod starts.
+// broker-dispatch-kubeconfig Secret has to exist before the chart's broker pod starts.
 func ensureHelmNamespace(ctx context.Context, kubeconfig, ns, release string) error {
 	m := fmt.Sprintf(`apiVersion: v1
 kind: Namespace
@@ -177,14 +177,14 @@ metadata:
 	return kubectlApplyStdin(ctx, kubeconfig, m)
 }
 
-// waitAggregatedAPI blocks until the hub aggregated API actually serves the
+// waitAggregatedAPI blocks until the dispatch aggregated API actually serves the
 // platform group — APIService availability + aggregation can lag the apply.
 func waitAggregatedAPI(ctx context.Context, kubeconfig string) error {
-	// Generous: the hub-apiserver pod must cold-pull its :dev image from the
+	// Generous: the dispatch-apiserver pod must cold-pull its :dev image from the
 	// in-fabric registry, start, and have its APIService become Available before the
 	// aggregated group is served.
-	slog.Info("waiting for the hub aggregated API to serve")
-	// 12m: a cold boot pulls hub-apiserver over the in-fabric registry (slow) and
+	slog.Info("waiting for the dispatch aggregated API to serve")
+	// 12m: a cold boot pulls dispatch-apiserver over the in-fabric registry (slow) and
 	// the pod may restart once while kine/postgres settle — 6m was occasionally too short.
 	return wait.WaitFor(ctx, 12*time.Minute, 3*time.Second, func() (bool, error) {
 		err := exec.Run(ctx, "kubectl", "--kubeconfig", kubeconfig,
@@ -205,30 +205,30 @@ func createSecretFromFile(ctx context.Context, kubeconfig, ns, name, key, path s
 	return kubectlApplyStdin(ctx, kubeconfig, string(manifest))
 }
 
-// helmInstallHub installs/upgrades the ectobase-hub chart on the hub cluster. The reflector runs
-// on the hub's fabric identity, so the hub-controller's -reflector-admin (a chart value) points
+// helmInstallDispatch installs/upgrades the ectobase-dispatch chart on the dispatch cluster. The reflector runs
+// on the dispatch's fabric identity, so the dispatch-controller's -reflector-admin (a chart value) points
 // there. --create-namespace makes the baseline-safe `system` release namespace; the chart creates
 // the PSA-privileged ectobase-system namespace itself.
-func helmInstallHub(ctx context.Context, kubeconfig, chartPath, hubIdentity string) error {
-	args := []string{"upgrade", "--install", "ectobase-hub", chartPath,
+func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIdentity string) error {
+	args := []string{"upgrade", "--install", "ectobase-dispatch", chartPath,
 		"--kubeconfig", kubeconfig,
 		"--namespace", "system", "--create-namespace",
-		"--set", "reflectorAdmin=[" + hubIdentity + "]:1338",
+		"--set", "reflectorAdmin=[" + dispatchIdentity + "]:1338",
 	}
 	return exec.Run(ctx, "helm", args...)
 }
 
 // helmInstallPool installs/upgrades the ectobase-pool chart with a broker on one compute cluster.
 // apiserverAddress is the LOCAL cluster (the agent reads/writes its own cluster); reflectorAddress
-// points at the hub's reflector on the fabric. The release namespace (ectobase-system) is
+// points at the dispatch's reflector on the fabric. The release namespace (ectobase-system) is
 // pre-created by the caller (ensureHelmNamespace), so no --create-namespace here.
-func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, hubIdentity, underlayWithin string) error {
+func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, dispatchIdentity, underlayWithin string) error {
 	args := []string{"upgrade", "--install", "ectobase-pool", chartPath,
 		"--kubeconfig", kubeconfig,
 		"--namespace", "ectobase-system",
 		"--set", "broker.clusterName=" + clusterName,
 		"--set", "apiserverAddress=https://127.0.0.1:6443",
-		"--set", "reflectorAddress=[" + hubIdentity + "]:1338",
+		"--set", "reflectorAddress=[" + dispatchIdentity + "]:1338",
 		"--set", "installCRDs=true",
 		"--set", "dataplane=ebpf",
 	}
@@ -282,29 +282,29 @@ func poolField(ctx context.Context, kubeconfig, name, jsonpath string) (string, 
 	return strings.TrimSpace(out), err
 }
 
-// mintKubeconfig hand-writes a token kubeconfig for the broker→hub connection.
+// mintKubeconfig hand-writes a token kubeconfig for the broker→dispatch connection.
 // The bracketed-IPv6 server MUST be double-quoted: an unquoted https://[..]:6443
 // is a YAML flow sequence and fails to parse. TLS verify is skipped because
-// the hub's serving cert is self-signed.
-func mintKubeconfig(hubHost, token string) string {
+// the dispatch's serving cert is self-signed.
+func mintKubeconfig(dispatchHost, token string) string {
 	return fmt.Sprintf(`apiVersion: v1
 kind: Config
 clusters:
-- name: hub
+- name: dispatch
   cluster:
     server: "https://[%s]:6443"
     insecure-skip-tls-verify: true
 contexts:
-- name: broker@hub
+- name: broker@dispatch
   context:
-    cluster: hub
-    user: hub-broker
-current-context: broker@hub
+    cluster: dispatch
+    user: dispatch-broker
+current-context: broker@dispatch
 users:
-- name: hub-broker
+- name: dispatch-broker
   user:
     token: %s
-`, hubHost, token)
+`, dispatchHost, token)
 }
 
 // clusterPoolsManifest renders one cluster-scoped ClusterPool per compute cluster

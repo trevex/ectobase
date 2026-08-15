@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Agent client identity for route-bus mutual TLS. Issued from the shared CA-type
-# ClusterIssuer the hub chart creates, so the reflector (whose server cert chains to
-# the same CA) accepts this client cert. Requires the hub chart to be installed first.
+# ClusterIssuer the dispatch chart creates, so the reflector (whose server cert chains to
+# the same CA) accepts this client cert. Requires the dispatch chart to be installed first.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:

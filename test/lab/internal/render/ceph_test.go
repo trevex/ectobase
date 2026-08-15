@@ -12,7 +12,7 @@ import (
 )
 
 // cephFixture is the ceph-enabled counterpart of the base clab/vyos fixtures.
-// It uses the SAME clusters (hub:1, k02:2 → TotalNodes=3) so the ceph host
+// It uses the SAME clusters (dispatch:1, k02:2 → TotalNodes=3) so the ceph host
 // port lands at CephPortSeq=4 → switch eth6, just past the node ports (eth3-5).
 const cephFixture = `
 name: ectobase
@@ -21,7 +21,7 @@ fabric:
   as: {edge: 65000, switch: 65010, host: 65100}
   nat64Prefix: 64:ff9b::/96
   ceph: {enabled: true}
-  clusters: [{name: hub, nodes: 1}, {name: k02, nodes: 2}]
+  clusters: [{name: dispatch, nodes: 1}, {name: k02, nodes: 2}]
 `
 
 // TestCephClabGolden renders the clab topology with ceph.enabled and asserts the
@@ -86,7 +86,7 @@ images: {talos: img/talos, vyos: img/vyos, tayga: img/tayga, wan: img/wan, regis
 fabric:
   as: {edge: 65000, switch: 65010, host: 65100}
   nat64Prefix: 64:ff9b::/96
-  clusters: [{name: hub, nodes: 1}, {name: k02, nodes: 2}]
+  clusters: [{name: dispatch, nodes: 1}, {name: k02, nodes: 2}]
 `))
 	if err != nil {
 		t.Fatal(err)

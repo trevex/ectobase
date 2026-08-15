@@ -10,9 +10,9 @@ CNI plugin, the CRD API, Kubernetes manifests, and the lab/test harnesses.
 | `flowplane/` | The Rust workspace: the eBPF dataplane, its userspace loader/agent/CLI, the pure-core datapath library, the shared map types, and the in-process simulator (see the crate table below). |
 | `netplane/` | The per-pool Go control plane: `cmd/agent`, `cmd/reflector`, `cmd/controller`, plus the `routebus` client/server and the reconcile/desired-state logic. |
 | `cni/` | The CNI plugin (`cni/plugin/main.go`) that attaches pods via the `DataplaneNode` gRPC. |
-| `hub/` | The fleet control plane: the extension `apiserver`, the `controller` (compiler), and the `broker` (per-pool kubelet-analog) under `cmd/`, plus their generated client. |
+| `dispatch/` | The fleet control plane: the extension `apiserver`, the `controller` (compiler), and the `broker` (per-pool kubelet-analog) under `cmd/`, plus their generated client. |
 | `api/` | Kubernetes CRD types, split into five API groups — `net`, `compute`, `storage`, `compiled`, `platform` (each `api/<group>/v1alpha1/`, group `<group>.ectobase.dev`) — and the gRPC/protobuf contracts (`api/proto/dataplane/v1/`, `api/proto/routebus/v1/`). |
-| `charts/` | The Helm charts (`ectobase-hub`, `ectobase-pool`) with generated CRDs and RBAC. |
+| `charts/` | The Helm charts (`ectobase-dispatch`, `ectobase-pool`) with generated CRDs and RBAC. |
 | `hack/` | Lab bring-up: the containerlab + kind IPv6 fabric (`clab-up.sh` / `clab-down.sh`, `clab/`), the fabric kind-node image, and edge-agent helpers. |
 | `test/` | Test harnesses: Go conformance/e2e suites (`test/conformance/`, `test/e2e/`), the CRD bases (`test/crds/`), test container images (`test/images/`), and the `test/lab/` kind-substrate lab. |
 | `docs/` | This mkdocs-material site plus the design-spec/plan archive (`docs/superpowers/`). |

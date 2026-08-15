@@ -1,5 +1,0 @@
-suite: hub render snapshot
-tests:
-  - it: renders the hub control plane
-    asserts:
-      - matchSnapshot: {}

@@ -1,7 +1,7 @@
 package main
 
 // RBAC for the netplane compiler (netplane-controller). Rules generated into
-// charts/ectobase-hub/files/netplane-controller/role.yaml by `make generate`
+// charts/ectobase-dispatch/files/netplane-controller/role.yaml by `make generate`
 // (controller-gen rbac). Keep in sync with the reconcilers in netplane/controllers.
 
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=natgateways,verbs=get;list;watch;update

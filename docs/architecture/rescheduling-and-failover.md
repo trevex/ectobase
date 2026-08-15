@@ -5,11 +5,11 @@ They operate at different scopes, with different blast radii, and neither
 depends on the other:
 
 - **Tier-1 — pool-local, node-level.** Inside a single pool, an unhealthy node
-  is remediated autonomously and fast, with no involvement from the hub. This is
+  is remediated autonomously and fast, with no involvement from the dispatch. This is
   a standard [medik8s](https://www.medik8s.io/) deployment
   (NodeHealthCheck + SelfNodeRemediation) that each pool opts into.
-- **Tier-2 — hub-driven, cross-pool, for VMs.** When a *whole pool* is lost, the
-  hub reschedules the VirtualMachines bound to it onto a healthy pool — but only
+- **Tier-2 — dispatch-driven, cross-pool, for VMs.** When a *whole pool* is lost, the
+  dispatch reschedules the VirtualMachines bound to it onto a healthy pool — but only
   after it has *fenced* the lost pool's storage and network, so a VM can never
   boot in two places at once.
 
@@ -40,7 +40,7 @@ flowchart TD
         snr --> healed["Node rejoins,<br/>pods rescheduled locally"]
     end
 
-    subgraph hub["The hub (fleet)"]
+    subgraph dispatch["The dispatch (fleet)"]
         lost["ClusterPool Unknown<br/>&gt; FailoverThreshold"]
         lost --> fence["Fence every node /64:<br/>storage (Ceph blocklist)<br/>+ network (route withdraw)"]
         fence -->|all /64s confirmed| rebind["Reschedule VMs to<br/>a healthy pool"]
@@ -79,7 +79,7 @@ Each pool can run the medik8s stack. The pool chart renders a
   (`/dev/watchdog`) so a wedged kernel is force-rebooted even if software can't
   act — the strongest self-fencing guarantee for node-level recovery.
 - **Outcome.** The node is rebooted or tainted out of service and its workloads
-  reschedule within the pool. The hub is never contacted.
+  reschedule within the pool. The dispatch is never contacted.
 - **Safety property.** `minHealthy` prevents a remediation storm from taking the
   pool below quorum, and the watchdog gives a genuine self-fence: a node that
   cannot prove it is healthy takes itself out.
@@ -101,27 +101,27 @@ tier1Failover:
 Because Tier-1 is entirely a pool-local medik8s deployment, it works the same
 whether the pool is one of many in a fleet or standing alone.
 
-## Tier-2 — hub-driven cross-pool VM failover
+## Tier-2 — dispatch-driven cross-pool VM failover
 
 !!! warning "Status: Partial"
     Implemented and proven on the lab fabric; not a hardened production path.
-    Code: `hub/pkg/failover/`, `hub/pkg/fence/`, `hub/pkg/scheduler/`,
-    wired in `hub/cmd/controller/main.go`.
+    Code: `dispatch/pkg/failover/`, `dispatch/pkg/fence/`, `dispatch/pkg/scheduler/`,
+    wired in `dispatch/cmd/controller/main.go`.
 
-Tier-2 is a controller on the hub (`failover.Reconciler`) that watches
+Tier-2 is a controller on the dispatch (`failover.Reconciler`) that watches
 `ClusterPool` objects. It runs alongside — but independently of — the pool-health
 and scheduler reconcilers on the same manager.
 
 ### What triggers it
 
-The hub declares a pool **lost** when it has been in the `Unknown` phase and its
+The dispatch declares a pool **lost** when it has been in the `Unknown` phase and its
 broker lease `RenewTime` has been stale for longer than `FailoverThreshold`
 (default `2m`). That threshold is deliberately far larger than pool-health's
 `30s` lease-staleness window: a pool must be gone for a good while — long enough
-that Tier-1 would already have handled any mere node blip — before the hub does
+that Tier-1 would already have handled any mere node blip — before the dispatch does
 anything destructive. If a pool is `Unknown` but has *no* lease timing at all,
 `poolLost` returns false: without evidence of *how long* the pool has been gone,
-the hub refuses to trigger a rebind. This is the first of several fail-safe
+the dispatch refuses to trigger a rebind. This is the first of several fail-safe
 defaults.
 
 ### What acts, and the fence-before-reschedule barrier
@@ -152,7 +152,7 @@ the pool `FailoverBlocked` and **leaves them in place** — it writes only statu
 never touches a VM's `Spec`. A pool that reported *no* `NodePrefixes` can't be
 safely fenced, so it is blocked outright rather than evacuated blind. The
 network fencer even defaults to a `DenyFencer` (which refuses to confirm) unless
-the reflector admin endpoint is explicitly wired, so a misconfigured hub fails
+the reflector admin endpoint is explicitly wired, so a misconfigured dispatch fails
 safe rather than open.
 
 Only once **every** `/64` has both fences confirmed active does the barrier
@@ -160,7 +160,7 @@ lift and rescheduling begin.
 
 ```mermaid
 sequenceDiagram
-    participant F as failover.Reconciler (hub)
+    participant F as failover.Reconciler (dispatch)
     participant S as StorageFencer<br/>(csi-addons / Ceph)
     participant N as NetworkFencer<br/>(reflector RouteBusAdmin)
     participant Sched as scheduler.ScheduleBatch
@@ -235,7 +235,7 @@ attaches there, the agent on the new node recognises the `(VNI, overlay IP)` pai
 and programs the policy; the old pool's agents, which no longer see that
 interface, stop. Policy follows the interface, so a cross-pool move needs **no**
 node write-back and no per-node reconfiguration — the same property that lets the
-hub schedule workloads to a *pool* and leave the *node* to kube-scheduler /
+dispatch schedule workloads to a *pool* and leave the *node* to kube-scheduler /
 KubeVirt. See
 [CNI integration → Self-locating agent](./cni-integration.md#self-locating-agent).
 
@@ -246,15 +246,15 @@ KubeVirt. See
   for how RBD volumes are provisioned and how the csi-addons `NetworkFence`
   actuator reaches Ceph. Tier-2's whole reason to fence-before-reschedule is the
   single-writer guarantee of a block device.
-- **The fleet model.** Tier-2 is a hub concern precisely because it moves
+- **The fleet model.** Tier-2 is a dispatch concern precisely because it moves
   workloads *between* pools. See
   [Multi-cluster control plane](multi-cluster-control-plane.md) for the
-  hub/pool/broker split, the `ClusterPool` lease that drives the `Unknown`
+  dispatch/pool/broker split, the `ClusterPool` lease that drives the `Unknown`
   phase, and the compile→sync→materialize path that re-materializes a VM after
   its `Spec.ClusterName` is changed.
 - **KubeVirt.** The workloads Tier-2 moves are KubeVirt VMs; see
   [KubeVirt / VM integration](kubevirt-integration.md).
-- **Node-level HA.** For hub *component* availability (as opposed to workload
+- **Node-level HA.** For dispatch *component* availability (as opposed to workload
   failover), see [HA & graceful restart](ha-graceful-restart.md).
 
 ## What is not done

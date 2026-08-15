@@ -1,0 +1,62 @@
+# Copyright 2026 ectobase contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# namespace is the Kubernetes namespace for dispatch infrastructure:
+#   dispatch-apiserver, dispatch-controller, kine, postgres, and the dispatch-side dispatch-broker identity.
+# These pods are baseline-PSA-safe; the installer owns this (release) namespace.
+namespace: system
+
+# agentNamespace is the Kubernetes namespace for the netplane compiler and reflector.
+# They run hostNetwork, so the chart creates this namespace PSA-privileged.
+agentNamespace: ectobase-system
+
+# reflectorAdmin is the reflector RouteBusAdmin (fence) address the dispatch-controller
+# dials. It is the SEPARATE admin port (1339), not the agent-facing session port
+# (1338), so a session-cert holder cannot reach the fence API.
+reflectorAdmin: "[fd00:db8:0:1::1]:1339"
+
+# routebus configures the route-bus transport between the reflector, the agents, and
+# the dispatch-controller's fence client.
+routebus:
+  mtls:
+    # enabled turns on mutual TLS for the route bus AND CN-gates the fence API to the
+    # dispatch-controller identity. REQUIRES cert-manager in the cluster (the dispatch chart
+    # provisions a self-signed CA + ClusterIssuer that this and the pool chart issue
+    # from). Left off by default so a cert-manager-less lab still comes up on plaintext
+    # (dev only — the admin API is split onto its own port regardless).
+    enabled: false
+    # clusterIssuer is the shared CA ClusterIssuer name; MUST match the pool chart.
+    clusterIssuer: ectobase-routebus-ca
+    # caSecretName holds the CA keypair backing the ClusterIssuer.
+    caSecretName: ectobase-routebus-ca
+    # reflectorIP is the fabric-loopback IP agents dial; added as a SAN on the
+    # reflector server cert. MUST match the host part of reflectorAddress/reflectorAdmin.
+    reflectorIP: "fd00:db8:0:1::1"
+
+# imagePullPolicy applies to all containers in the chart.
+imagePullPolicy: IfNotPresent
+
+# dispatchApiserver tunes the aggregated apiserver.
+dispatchApiserver:
+  # grantClusterAdmin binds the apiserver SA to cluster-admin. Default off: auth-delegator +
+  # the extension-apiserver-authentication reader are the standard host-cluster access an
+  # aggregated apiserver needs. Turn on only if the admission chain needs broader host reads.
+  grantClusterAdmin: false
+
+# kine is the etcd-v3-over-Postgres storage for the aggregated apiserver.
+kine:
+  # password backs both Postgres and the kine DSN, delivered via the kine-db Secret. Dev-grade
+  # default; override for anything beyond a throwaway smoke cluster.
+  password: kine
+
+images:
+  # dispatchApiserver is the dispatch aggregated apiserver image.
+  dispatchApiserver: ghcr.io/trevex/ectobase/dispatch-apiserver:dev
+  # dispatchController is the dispatch controller image (ClusterPool reconciler + scheduler).
+  dispatchController: ghcr.io/trevex/ectobase/dispatch-controller:dev
+  # netplane is the shared image for the netplane-controller (compiler) and reflector binaries.
+  netplane: ghcr.io/trevex/ectobase/netplane:dev
+  # kine is the etcd-v3 shim image.
+  kine: rancher/kine:v0.13.0
+  # postgres is the backing storage for kine (dev/smoke; not HA).
+  postgres: postgres:16

@@ -1,0 +1,186 @@
+# Copyright 2026 ectobase contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The dispatch aggregated apiserver (platform.ectobase.dev et al.). Stores objects in
+# kine (--etcd-servers=http://kine:2379) and self-generates a self-signed
+# serving cert on startup (apiserver-kit MaybeDefaultWithSelfSignedCerts into
+# --cert-dir, an emptyDir). Delegated authn/authz uses the pod's ServiceAccount
+# (in-cluster config).
+#
+# NOTE (dev/smoke only): the APIService (apiservice.yaml) uses
+# insecureSkipTLSVerify because the serving cert is self-signed and ephemeral.
+# Production must inject a caBundle instead.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dispatch-apiserver
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+---
+# Allow the aggregated apiserver to delegate authn/authz to the host kube-apiserver.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dispatch-apiserver-auth-delegator
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: dispatch-apiserver
+    namespace: {{ .Values.namespace }}
+---
+# Scoped read for the generic apiserver's built-in informers. k8s.io/apiserver runs webhook
+# admission (validating/mutating configs) and API Priority & Fairness (flowschemas +
+# prioritylevelconfigurations) controllers whose informers must sync before /readyz passes, plus
+# namespace-lifecycle admission (namespaces). Without these the SA is RBAC-forbidden and the
+# aggregated API never becomes Ready. This is the least-privilege replacement for the former
+# cluster-admin binding (get;list;watch only, no writes, no access to arbitrary resources).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dispatch-apiserver-informers
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingwebhookconfigurations", "mutatingwebhookconfigurations"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["flowcontrol.apiserver.k8s.io"]
+    resources: ["flowschemas", "prioritylevelconfigurations"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dispatch-apiserver-informers
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dispatch-apiserver-informers
+subjects:
+  - kind: ServiceAccount
+    name: dispatch-apiserver
+    namespace: {{ .Values.namespace }}
+---
+{{- if .Values.dispatchApiserver.grantClusterAdmin }}
+# Escape hatch (default OFF): a broad cluster-admin binding, in case a future apiserver-kit admission
+# chain needs host reads beyond the scoped informer role above (a specific RBAC-forbidden error names
+# the missing resource — prefer adding it to dispatch-apiserver-informers over enabling this).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dispatch-apiserver-admin
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: dispatch-apiserver
+    namespace: {{ .Values.namespace }}
+---
+{{- end }}
+# Access to the extension-apiserver-authentication configmap in kube-system,
+# which carries the requestheader/client CA the aggregation layer needs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dispatch-apiserver-extension-auth-reader
+  namespace: kube-system
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: dispatch-apiserver
+    namespace: {{ .Values.namespace }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: apiserver-service
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: dispatch-apiserver
+  ports:
+    - name: https
+      port: 443
+      targetPort: 6443
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dispatch-apiserver
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: dispatch-apiserver
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dispatch-apiserver
+  template:
+    metadata:
+      labels:
+        app: dispatch-apiserver
+    spec:
+      serviceAccountName: dispatch-apiserver
+      containers:
+        - name: apiserver
+          image: {{ .Values.images.dispatchApiserver }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          resources:
+            {{- include "ectobase-dispatch.resources" . | nindent 12 }}
+          args:
+            - "--etcd-servers=http://kine:2379"
+            - "--secure-port=6443"
+            - "--cert-dir=/var/run/apiserver/certs"
+            - "--audit-log-path=-"
+            # The admission-policy plugins' informers watch alpha resources
+            # (Mutating/ValidatingAdmissionPolicyBinding) that this host kube does
+            # not serve, so informer-sync never completes and /readyz stays 500.
+            # We serve no admission policies here, so disable those plugins.
+            - "--disable-admission-plugins=MutatingAdmissionPolicy,ValidatingAdmissionPolicy"
+          ports:
+            - name: https
+              containerPort: 6443
+          volumeMounts:
+            - name: cert-dir
+              mountPath: /var/run/apiserver/certs
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 6443
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 6443
+              scheme: HTTPS
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: cert-dir
+          emptyDir: {}

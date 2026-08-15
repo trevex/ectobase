@@ -63,7 +63,7 @@
         "flowplaneDpdk",
         "netplane",
         "cni",
-        "hubBroker"
+        "dispatchBroker"
       ],
       "properties": {
         "flowplane": {
@@ -82,7 +82,7 @@
           "type": "string",
           "minLength": 1
         },
-        "hubBroker": {
+        "dispatchBroker": {
           "type": "string",
           "minLength": 1
         }
@@ -95,7 +95,7 @@
         "clusterName": {
           "type": "string"
         },
-        "hubKubeconfigSecret": {
+        "dispatchKubeconfigSecret": {
           "type": "string",
           "minLength": 1
         }

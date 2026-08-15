@@ -42,23 +42,23 @@ docs-crd-ref: ## Generate the per-group CRD API reference (crd-ref-docs)
 .PHONY: generate
 generate: ## Regenerate deepcopy/conversion (kube::codegen) + CRD manifests (controller-gen)
 	cd api && ./hack/update-codegen.sh
-	cd hub && ./hack/update-codegen.sh
-	# CRDs: pool chart ships net + compiled; compute/storage/platform are hub-aggregated
-	# (served by the hub apiserver, shipped in no chart) and generated to test/crds for envtest.
+	cd dispatch && ./hack/update-codegen.sh
+	# CRDs: pool chart ships net + compiled; compute/storage/platform are dispatch-aggregated
+	# (served by the dispatch apiserver, shipped in no chart) and generated to test/crds for envtest.
 	cd api && controller-gen crd paths=./net/v1alpha1/... output:crd:artifacts:config=../charts/ectobase-pool/crd-bases
 	cd api && controller-gen crd paths=./compiled/v1alpha1/... output:crd:artifacts:config=../charts/ectobase-pool/crd-bases
 	cd api && controller-gen crd paths=./compute/v1alpha1/... output:crd:artifacts:config=../test/crds
 	cd api && controller-gen crd paths=./storage/v1alpha1/... output:crd:artifacts:config=../test/crds
 	cd api && controller-gen crd paths=./platform/v1alpha1/... output:crd:artifacts:config=../test/crds
 	# RBAC: one ClusterRole rules file per component into each chart's files/<role>/.
-	cd netplane && controller-gen rbac:roleName=netplane-controller paths=./cmd/controller/... output:rbac:artifacts:config=../charts/ectobase-hub/files/netplane-controller
+	cd netplane && controller-gen rbac:roleName=netplane-controller paths=./cmd/controller/... output:rbac:artifacts:config=../charts/ectobase-dispatch/files/netplane-controller
 	cd netplane && controller-gen rbac:roleName=netplane-agent paths=./cmd/agent/... output:rbac:artifacts:config=../charts/ectobase-pool/files/netplane-agent
 	cd netplane && controller-gen rbac:roleName=vm-materializer paths=./cmd/vm-materializer/... output:rbac:artifacts:config=../charts/ectobase-pool/files/vm-materializer
 	cd netplane && controller-gen rbac:roleName=pod-materializer paths=./cmd/pod-materializer/... output:rbac:artifacts:config=../charts/ectobase-pool/files/pod-materializer
 	cd cni && controller-gen rbac:roleName=flowplane-cni paths=./... output:rbac:artifacts:config=../charts/ectobase-pool/files/flowplane-cni
-	cd hub && controller-gen rbac:roleName=hub-controller paths=./cmd/controller/... output:rbac:artifacts:config=../charts/ectobase-hub/files/hub-controller
-	cd hub && controller-gen rbac:roleName=hub-broker paths=./cmd/broker/rbac/hubside/... output:rbac:artifacts:config=../charts/ectobase-hub/files/hub-broker
-	cd hub && controller-gen rbac:roleName=hub-broker paths=./cmd/broker/rbac/poolside/... output:rbac:artifacts:config=../charts/ectobase-pool/files/hub-broker
+	cd dispatch && controller-gen rbac:roleName=dispatch-controller paths=./cmd/controller/... output:rbac:artifacts:config=../charts/ectobase-dispatch/files/dispatch-controller
+	cd dispatch && controller-gen rbac:roleName=dispatch-broker paths=./cmd/broker/rbac/dispatchside/... output:rbac:artifacts:config=../charts/ectobase-dispatch/files/dispatch-broker
+	cd dispatch && controller-gen rbac:roleName=dispatch-broker paths=./cmd/broker/rbac/poolside/... output:rbac:artifacts:config=../charts/ectobase-pool/files/dispatch-broker
 	# Docs: regenerate the per-group CRD API reference so it never drifts from the types.
 	$(MAKE) docs-crd-ref
 
@@ -250,4 +250,4 @@ clean: ## Remove build artifacts
 
 .PHONY: chart-test
 chart-test: ## Run the Helm chart unit tests (helm-unittest) for both charts.
-	helm unittest charts/ectobase-hub charts/ectobase-pool
+	helm unittest charts/ectobase-dispatch charts/ectobase-pool

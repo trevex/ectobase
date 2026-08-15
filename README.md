@@ -6,13 +6,13 @@ It is built from two planes and a fleet:
 
 - **flowplane** — the eBPF/XDP **dataplane** (Rust). Every forwarding decision is a per-flow table lookup: IPv6 underlay, IP-in-IPv6 overlay, multi-VNI tenancy, stateful NAT, Maglev load balancing with DSR, a deny-by-default firewall, DHCP/ARP/ND responders, QoS shaping, and NAT64 — all in the Linux kernel. A DPDK backend runs the same datapath logic for smartNIC offload.
 - **netplane** — the per-cluster **control plane** (Go/Kubernetes). CRDs describe intent; controllers compile it into per-workload `Compiled*` objects; a per-node agent programs the local dataplane; a reflector distributes overlay routes over a custom route bus.
-- **the hub** — the **fleet control plane**. An aggregated apiserver serves the whole API for many clusters; a per-cluster broker syncs each cluster's compiled objects down into it; a controller schedules workloads across clusters and drives failover.
+- **the dispatch** — the **fleet control plane**. An aggregated apiserver serves the whole API for many clusters; a per-cluster broker syncs each cluster's compiled objects down into it; a controller schedules workloads across clusters and drives failover.
 
 ```mermaid
 flowchart TB
-  subgraph hub["Hub cluster (fleet control plane)"]
+  subgraph dispatch["Dispatch cluster (fleet control plane)"]
     api["Aggregated apiserver + kine"]
-    ctl["hub-controller<br/>(schedule / failover)"]
+    ctl["dispatch-controller<br/>(schedule / failover)"]
     cmp["netplane compiler"]
     rfl["reflector"]
   end
@@ -58,10 +58,10 @@ The datapath conformance suite runs in-process (`make sim`) and against a real k
 
 ## Deploying
 
-ectobase ships as two Helm charts — install `ectobase-hub` on the fleet control-plane cluster and `ectobase-pool` on each compute cluster:
+ectobase ships as two Helm charts — install `ectobase-dispatch` on the fleet control-plane cluster and `ectobase-pool` on each compute cluster:
 
 ```sh
-helm install ectobase-hub  charts/ectobase-hub  -n system --create-namespace
+helm install ectobase-dispatch  charts/ectobase-dispatch  -n system --create-namespace
 helm install ectobase-pool charts/ectobase-pool -n ectobase-system --set broker.clusterName=<pool>
 ```
 

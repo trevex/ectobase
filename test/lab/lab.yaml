@@ -17,10 +17,10 @@ fabric:
   nat64Prefix: 64:ff9b::/96
   registry:
     upstreams: [docker.io, ghcr.io, quay.io, registry.k8s.io, gcr.io]
-    push: [flowplane, netplane, cni, hub-apiserver, hub-controller, hub-broker]
+    push: [flowplane, netplane, cni, dispatch-apiserver, dispatch-controller, dispatch-broker]
   ceph:
     enabled: true
   clusters:
-    - { name: hub, nodes: 1 }
+    - { name: dispatch, nodes: 1 }
     - { name: k02, nodes: 1 }
     - { name: k03, nodes: 1 }

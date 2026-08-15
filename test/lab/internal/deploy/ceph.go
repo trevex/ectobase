@@ -232,7 +232,7 @@ const (
 // csiConfig, the csi-rbd-secret from secret.*, and a StorageClass from
 // storageClass.*. The StorageClass secret refs default to secret.name in the
 // release namespace, i.e. csi-rbd-secret / ceph-csi — which is exactly what the
-// hub failover controller's -csi-secret-name/-namespace point at.
+// dispatch failover controller's -csi-secret-name/-namespace point at.
 //
 // Pure function (no I/O) so the values render is unit-tested directly.
 func cephCSIValues(p CephParams) string {

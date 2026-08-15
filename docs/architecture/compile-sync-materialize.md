@@ -6,7 +6,7 @@ down to the owning pool, then **materialized** into real Kubernetes/KubeVirt
 objects and **programmed** onto the dataplane. This is the single pipeline every
 workload flows through:
 
-> **intent** (authored on the hub) → **`Compiled*`** (compiled on the hub, stamped
+> **intent** (authored on the dispatch) → **`Compiled*`** (compiled on the dispatch, stamped
 > per pool) → **synced down** to the pool → **materialized / programmed** on the pool.
 
 !!! success "Status: Implemented"
@@ -18,7 +18,7 @@ workload flows through:
 ## VNI allocation
 
 Before a NIC can be compiled, its VPC needs a VNI. A **VPC VNI allocator**
-(`VPCReconciler`, `netplane/controllers/vpc.go`) runs on the hub and assigns every
+(`VPCReconciler`, `netplane/controllers/vpc.go`) runs on the dispatch and assigns every
 VPC a globally-unique VNI, published to `VPC.status.vni` alongside
 `status.state: Ready`. Creating a VPC with **no `spec.vni`** auto-allocates the
 lowest free VNI in `[1000, 2^24-1]`; setting `spec.vni` **pins** that value. No
@@ -38,8 +38,8 @@ programmed with the allocated overlay identity.
 ## The compiler
 
 The compiler is the set of **netplane controller reconcilers**
-(`netplane/controllers/`), which run on the hub against the aggregated apiserver
-(`charts/ectobase-hub/templates/compiler.yaml`, the `netplane-controller`
+(`netplane/controllers/`), which run on the dispatch against the aggregated apiserver
+(`charts/ectobase-dispatch/templates/compiler.yaml`, the `netplane-controller`
 Deployment). Each reconciler lowers one intent type into its `Compiled*` twin and
 stamps the target pool (and, where applicable, node) onto it:
 
@@ -59,11 +59,11 @@ stamps the target pool (and, where applicable, node) onto it:
 
 ### How placement is resolved
 
-Placement happens in two independent steps: the **hub picks the pool**, and the
+Placement happens in two independent steps: the **dispatch picks the pool**, and the
 **pool picks the node**.
 
 The pool binding is a `spec.clusterName` on the workload. Both `Container` and
-`VirtualMachine` are **pool-scheduled by the hub** (`hub/pkg/scheduler`): a
+`VirtualMachine` are **pool-scheduled by the dispatch** (`dispatch/pkg/scheduler`): a
 workload authored with an empty `spec.clusterName` is bound to a `Ready` pool by
 resource fit and spread, exactly the same for containers and VMs. An explicit
 `spec.clusterName` pins the pool and the scheduler leaves it alone.
@@ -81,7 +81,7 @@ and this is what the broker selects on. For NICs, the binding is resolved by
    cluster.
 
 The *node* within the chosen pool is picked on the pool cluster — by
-kube-scheduler for Pods, by KubeVirt for VMs — not by the hub. `spec.nodeName` is
+kube-scheduler for Pods, by KubeVirt for VMs — not by the dispatch. `spec.nodeName` is
 an **optional pin**, not a requirement; when it is empty the pool schedules the
 workload freely. Crucially, a `CompiledNIC` carries **no** node field at all: the
 agent self-locates its policy by the interface's `(VNI, overlay IP)` key wherever
@@ -97,12 +97,12 @@ attachments.
 
 ## The broker sync
 
-The **broker** (`hub/pkg/broker`, `hub/cmd/broker/main.go`) syncs each compiled
-type from the hub down to the owning pool's local CRDs — a declarative
+The **broker** (`dispatch/pkg/broker`, `dispatch/cmd/broker/main.go`) syncs each compiled
+type from the dispatch down to the owning pool's local CRDs — a declarative
 set-reconcile filtered by `spec.clusterName == this pool`, with create / update /
 delete + GC. It is idempotent and restart-safe. This seam is described in full in
 [Multi-cluster control plane → Broker sync](./multi-cluster-control-plane.md#broker-sync);
-here it is simply the middle stage: the compiled objects the hub produced become
+here it is simply the middle stage: the compiled objects the dispatch produced become
 real CRDs in the pool that hosts the workload.
 
 ## The materializers and the agent
@@ -167,7 +167,7 @@ control-plane node write-back — the `CompiledNIC` has no node field at all. Se
 
 ```mermaid
 flowchart TB
-    subgraph hubbox["Hub — compiler (netplane-controller)"]
+    subgraph hubbox["Dispatch — compiler (netplane-controller)"]
         nic["NetworkInterface<br/>+ FirewallPolicy / LoadBalancer<br/>+ VPCPeering / NATGateway"]
         ctr["Container"]
         vm["VirtualMachine<br/>+ Volume"]
@@ -206,7 +206,7 @@ flowchart TB
 
 ## Intent → compiled → executor
 
-| Intent (hub) | Compiled (hub, pool-stamped) | Executor (pool) | Result |
+| Intent (dispatch) | Compiled (dispatch, pool-stamped) | Executor (pool) | Result |
 |---|---|---|---|
 | `NetworkInterface` (+ `FirewallPolicy`, `LoadBalancer`, `VPCPeering`, `NATGateway`) | `CompiledNIC` | netplane **agent** | dataplane programmed (firewall / LB / NAT / imports) |
 | `Container` | `CompiledContainer` | **pod-materializer** | `v1.Pod` on the overlay |
@@ -215,6 +215,6 @@ flowchart TB
 
 ## See also
 
-- [Multi-cluster control plane](./multi-cluster-control-plane.md) — the hub/pool split and the broker seam.
+- [Multi-cluster control plane](./multi-cluster-control-plane.md) — the dispatch/pool split and the broker seam.
 - [Control/data split & the route bus](./route-bus.md) — how the agent learns dynamic overlay routes.
 - [KubeVirt integration](./kubevirt-integration.md) — the VM materialize path in depth.

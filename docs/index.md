@@ -14,14 +14,14 @@ cluster, and materializes it as a real container or VM wired into the overlay.
 
 ## Architecture at a glance
 
-ectobase is two **planes** — a dataplane and a control plane — arranged as a **fleet** of one *hub*
+ectobase is two **planes** — a dataplane and a control plane — arranged as a **fleet** of one *dispatch*
 cluster and many *pool* clusters, all reachable over the IPv6 fabric.
 
 ```mermaid
 flowchart TB
-    subgraph hub["Hub cluster (fleet control plane)"]
+    subgraph dispatch["Dispatch cluster (fleet control plane)"]
         api["Aggregated apiserver<br/>(all API groups, no CRDs)"]
-        hubctl["Hub-controller<br/>(scheduling / failover)"]
+        hubctl["Dispatch-controller<br/>(scheduling / failover)"]
         compiler["Compiler<br/>(intent → Compiled*)"]
         refl["Reflector<br/>(route bus RIB)"]
         api --- compiler

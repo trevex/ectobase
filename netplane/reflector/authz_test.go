@@ -39,9 +39,9 @@ func TestRequireClientCN(t *testing.T) {
 		wantCall  bool
 	}{
 		{"empty allowedCN is a no-op", "", context.Background(), codes.OK, true},
-		{"no client cert is rejected", "hub-controller", context.Background(), codes.Unauthenticated, false},
-		{"wrong CN is rejected", "hub-controller", peerCtx("agent"), codes.PermissionDenied, false},
-		{"matching CN passes", "hub-controller", peerCtx("hub-controller"), codes.OK, true},
+		{"no client cert is rejected", "dispatch-controller", context.Background(), codes.Unauthenticated, false},
+		{"wrong CN is rejected", "dispatch-controller", peerCtx("agent"), codes.PermissionDenied, false},
+		{"matching CN passes", "dispatch-controller", peerCtx("dispatch-controller"), codes.OK, true},
 	}
 	for _, tc := range cases {
 		called = false

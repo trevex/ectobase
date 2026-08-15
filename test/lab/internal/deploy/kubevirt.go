@@ -135,37 +135,37 @@ func labelNamespacePrivileged(ctx context.Context, r Runner, kubeconfig, ns stri
 		"pod-security.kubernetes.io/enforce=privileged", "--overwrite")
 }
 
-// PatchHubCSIClusterID sets the ceph cluster fsid on the hub controller so
-// its ceph-csi NetworkFence actuator targets the right external cluster. The hub
-// controller is Deployment hub-controller in namespace system; its container
+// PatchDispatchCSIClusterID sets the ceph cluster fsid on the dispatch controller so
+// its ceph-csi NetworkFence actuator targets the right external cluster. The dispatch
+// controller is Deployment dispatch-controller in namespace system; its container
 // args include an empty `-csi-cluster-id=` element that we replace with
 // `-csi-cluster-id=<fsid>`.
 //
 // It reads the current args, locates the flag index, and applies a JSON6902 replace
 // at exactly that index (composed by the pure csiClusterIDPatch helper).
-func PatchHubCSIClusterID(ctx context.Context, r Runner, hubKubeconfig, fsid string) error {
+func PatchDispatchCSIClusterID(ctx context.Context, r Runner, dispatchKubeconfig, fsid string) error {
 	r = runnerOf(r)
-	slog.Info("wiring the ceph fsid into hub-controller", "fsid", fsid)
+	slog.Info("wiring the ceph fsid into dispatch-controller", "fsid", fsid)
 
-	out, err := r.Output(ctx, "kubectl", "--kubeconfig", hubKubeconfig,
-		"-n", "system", "get", "deploy", "hub-controller",
+	out, err := r.Output(ctx, "kubectl", "--kubeconfig", dispatchKubeconfig,
+		"-n", "system", "get", "deploy", "dispatch-controller",
 		"-o", "jsonpath={.spec.template.spec.containers[0].args}")
 	if err != nil {
-		return fmt.Errorf("get hub-controller args: %w", err)
+		return fmt.Errorf("get dispatch-controller args: %w", err)
 	}
 	var args []string
 	if err := json.Unmarshal(out, &args); err != nil {
-		return fmt.Errorf("parse hub-controller args %q: %w", string(out), err)
+		return fmt.Errorf("parse dispatch-controller args %q: %w", string(out), err)
 	}
 	_, patch, err := csiClusterIDPatch(args, fsid)
 	if err != nil {
 		return err
 	}
-	if err := r.Run(ctx, "kubectl", "--kubeconfig", hubKubeconfig,
-		"-n", "system", "patch", "deploy", "hub-controller", "--type=json", "-p", patch); err != nil {
-		return fmt.Errorf("patch hub-controller csi-cluster-id: %w", err)
+	if err := r.Run(ctx, "kubectl", "--kubeconfig", dispatchKubeconfig,
+		"-n", "system", "patch", "deploy", "dispatch-controller", "--type=json", "-p", patch); err != nil {
+		return fmt.Errorf("patch dispatch-controller csi-cluster-id: %w", err)
 	}
-	slog.Info("hub-controller csi-cluster-id set", "fsid", fsid)
+	slog.Info("dispatch-controller csi-cluster-id set", "fsid", fsid)
 	return nil
 }
 
@@ -187,7 +187,7 @@ func EnableVMMaterializer(ctx context.Context, r Runner, kubeconfig, poolChartPa
 
 // csiClusterIDPatch finds the index of the `-csi-cluster-id=` arg in args and
 // composes the JSON6902 patch body that replaces it with `-csi-cluster-id=<fsid>`.
-// Pure (no I/O) so PatchHubCSIClusterID's index-finding + patch composition is
+// Pure (no I/O) so PatchDispatchCSIClusterID's index-finding + patch composition is
 // unit-tested. Errors if no `-csi-cluster-id=` arg is present.
 func csiClusterIDPatch(args []string, fsid string) (index int, patchJSON string, err error) {
 	const prefix = "-csi-cluster-id="
@@ -197,5 +197,5 @@ func csiClusterIDPatch(args []string, fsid string) (index int, patchJSON string,
 			return i, patch, nil
 		}
 	}
-	return 0, "", fmt.Errorf("no %q arg found in hub-controller args %v", prefix, args)
+	return 0, "", fmt.Errorf("no %q arg found in dispatch-controller args %v", prefix, args)
 }

@@ -13,7 +13,7 @@ explains why it is split the way it is.
 
 ```mermaid
 flowchart LR
-    subgraph author["Author intent (hub API)"]
+    subgraph author["Author intent (dispatch API)"]
         net["net.ectobase.dev<br/>VPC · NetworkInterface · FirewallPolicy<br/>LoadBalancer · NATGateway · FloatingIP · VPCPeering"]
         compute["compute.ectobase.dev<br/>VirtualMachine · Container"]
         storage["storage.ectobase.dev<br/>Volume"]
@@ -49,7 +49,7 @@ flowchart LR
 
 ### 1. Intent — the user-facing CRDs
 
-Intent is authored against the hub's aggregated API in five groups:
+Intent is authored against the dispatch's aggregated API in five groups:
 
 | Group | Kinds |
 |---|---|
@@ -73,7 +73,7 @@ needs for that NIC, resolved and precomputed. Each compiled object is **stamped 
 
 ### 3. Sync — the broker
 
-Each pool's **broker** watches the compiled objects in the hub apiserver, **filtered by
+Each pool's **broker** watches the compiled objects in the dispatch apiserver, **filtered by
 `spec.clusterName`**, and set-reconciles them onto the pool's downstream apiserver as ordinary CRDs.
 The broker is a kubelet-analog: it does not interpret the objects, it just faithfully mirrors the
 subset destined for its pool into local storage where pool-side controllers can act on them.
@@ -93,7 +93,7 @@ Inside the pool, two kinds of consumer act on the synced compiled objects:
 
 The intent→compiled→programmed indirection is not incidental — it is the core design decision.
 
-**Central policy authoring.** Intent is authored and validated once, against the hub, for the whole
+**Central policy authoring.** Intent is authored and validated once, against the dispatch, for the whole
 fleet. Cross-cutting policy (firewall, LB, NAT allocation, VPC peering) is resolved centrally in the
 compiler, not re-derived on every node.
 

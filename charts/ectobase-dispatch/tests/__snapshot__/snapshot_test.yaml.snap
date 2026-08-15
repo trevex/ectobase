@@ -1,0 +1,897 @@
+renders the dispatch control plane:
+  1: |
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: dispatch-apiserver
+      namespace: system
+  2: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: dispatch-apiserver-auth-delegator
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: system:auth-delegator
+    subjects:
+      - kind: ServiceAccount
+        name: dispatch-apiserver
+        namespace: system
+  3: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: dispatch-apiserver-informers
+    rules:
+      - apiGroups:
+          - admissionregistration.k8s.io
+        resources:
+          - validatingwebhookconfigurations
+          - mutatingwebhookconfigurations
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - flowcontrol.apiserver.k8s.io
+        resources:
+          - flowschemas
+          - prioritylevelconfigurations
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - ""
+        resources:
+          - namespaces
+        verbs:
+          - get
+          - list
+          - watch
+  4: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: dispatch-apiserver-informers
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: dispatch-apiserver-informers
+    subjects:
+      - kind: ServiceAccount
+        name: dispatch-apiserver
+        namespace: system
+  5: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: dispatch-apiserver-extension-auth-reader
+      namespace: kube-system
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: extension-apiserver-authentication-reader
+    subjects:
+      - kind: ServiceAccount
+        name: dispatch-apiserver
+        namespace: system
+  6: |
+    apiVersion: v1
+    kind: Service
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: apiserver-service
+      namespace: system
+    spec:
+      ports:
+        - name: https
+          port: 443
+          targetPort: 6443
+      selector:
+        app: dispatch-apiserver
+  7: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        app: dispatch-apiserver
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: dispatch-apiserver
+      namespace: system
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: dispatch-apiserver
+      template:
+        metadata:
+          labels:
+            app: dispatch-apiserver
+        spec:
+          containers:
+            - args:
+                - --etcd-servers=http://kine:2379
+                - --secure-port=6443
+                - --cert-dir=/var/run/apiserver/certs
+                - --audit-log-path=-
+                - --disable-admission-plugins=MutatingAdmissionPolicy,ValidatingAdmissionPolicy
+              image: ghcr.io/trevex/ectobase/dispatch-apiserver:dev
+              imagePullPolicy: IfNotPresent
+              livenessProbe:
+                httpGet:
+                  path: /livez
+                  port: 6443
+                  scheme: HTTPS
+                initialDelaySeconds: 15
+                periodSeconds: 10
+              name: apiserver
+              ports:
+                - containerPort: 6443
+                  name: https
+              readinessProbe:
+                httpGet:
+                  path: /readyz
+                  port: 6443
+                  scheme: HTTPS
+                initialDelaySeconds: 5
+                periodSeconds: 5
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+              volumeMounts:
+                - mountPath: /var/run/apiserver/certs
+                  name: cert-dir
+          serviceAccountName: dispatch-apiserver
+          volumes:
+            - emptyDir: {}
+              name: cert-dir
+  8: |
+    apiVersion: apiregistration.k8s.io/v1
+    kind: APIService
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: v1alpha1.platform.ectobase.dev
+    spec:
+      group: platform.ectobase.dev
+      groupPriorityMinimum: 2000
+      insecureSkipTLSVerify: true
+      service:
+        name: apiserver-service
+        namespace: system
+        port: 443
+      version: v1alpha1
+      versionPriority: 100
+  9: |
+    apiVersion: apiregistration.k8s.io/v1
+    kind: APIService
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: v1alpha1.net.ectobase.dev
+    spec:
+      group: net.ectobase.dev
+      groupPriorityMinimum: 2000
+      insecureSkipTLSVerify: true
+      service:
+        name: apiserver-service
+        namespace: system
+        port: 443
+      version: v1alpha1
+      versionPriority: 100
+  10: |
+    apiVersion: apiregistration.k8s.io/v1
+    kind: APIService
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: v1alpha1.compute.ectobase.dev
+    spec:
+      group: compute.ectobase.dev
+      groupPriorityMinimum: 2000
+      insecureSkipTLSVerify: true
+      service:
+        name: apiserver-service
+        namespace: system
+        port: 443
+      version: v1alpha1
+      versionPriority: 100
+  11: |
+    apiVersion: apiregistration.k8s.io/v1
+    kind: APIService
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: v1alpha1.storage.ectobase.dev
+    spec:
+      group: storage.ectobase.dev
+      groupPriorityMinimum: 2000
+      insecureSkipTLSVerify: true
+      service:
+        name: apiserver-service
+        namespace: system
+        port: 443
+      version: v1alpha1
+      versionPriority: 100
+  12: |
+    apiVersion: apiregistration.k8s.io/v1
+    kind: APIService
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: v1alpha1.compiled.ectobase.dev
+    spec:
+      group: compiled.ectobase.dev
+      groupPriorityMinimum: 2000
+      insecureSkipTLSVerify: true
+      service:
+        name: apiserver-service
+        namespace: system
+        port: 443
+      version: v1alpha1
+      versionPriority: 100
+  13: |
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: dispatch-broker
+      namespace: system
+  14: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: dispatch-broker
+    rules:
+      - apiGroups:
+          - compiled.ectobase.dev
+        resources:
+          - compiledcontainers
+          - compilednics
+          - compiledvms
+          - compiledvolumeattachments
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - platform.ectobase.dev
+        resources:
+          - clusterpools
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - platform.ectobase.dev
+        resources:
+          - clusterpools/status
+        verbs:
+          - get
+          - patch
+          - update
+  15: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: dispatch-broker
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: dispatch-broker
+    subjects:
+      - kind: ServiceAccount
+        name: dispatch-broker
+        namespace: system
+  16: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: netplane-controller
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: netplane-controller
+      namespace: ectobase-system
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: netplane-controller
+      strategy:
+        type: Recreate
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: netplane-controller
+        spec:
+          containers:
+            - command:
+                - controller
+              image: ghcr.io/trevex/ectobase/netplane:dev
+              imagePullPolicy: IfNotPresent
+              name: controller
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+          dnsPolicy: ClusterFirstWithHostNet
+          hostNetwork: true
+          nodeSelector:
+            node-role.kubernetes.io/control-plane: ""
+          serviceAccountName: netplane-controller
+          tolerations:
+            - operator: Exists
+  17: |
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: dispatch-controller
+      namespace: system
+  18: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: dispatch-controller
+    rules:
+      - apiGroups:
+          - compiled.ectobase.dev
+        resources:
+          - compilednics
+          - compiledvms
+          - compiledvolumeattachments
+        verbs:
+          - get
+          - list
+          - patch
+          - update
+          - watch
+      - apiGroups:
+          - compiled.ectobase.dev
+        resources:
+          - compiledvms/status
+        verbs:
+          - get
+          - patch
+          - update
+      - apiGroups:
+          - compute.ectobase.dev
+        resources:
+          - containers
+          - virtualmachines
+        verbs:
+          - get
+          - list
+          - patch
+          - update
+          - watch
+      - apiGroups:
+          - compute.ectobase.dev
+        resources:
+          - containers/status
+          - virtualmachines/status
+        verbs:
+          - get
+          - patch
+          - update
+      - apiGroups:
+          - csiaddons.openshift.io
+        resources:
+          - networkfences
+        verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+      - apiGroups:
+          - platform.ectobase.dev
+        resources:
+          - clusterpools
+        verbs:
+          - get
+          - list
+          - patch
+          - update
+          - watch
+      - apiGroups:
+          - platform.ectobase.dev
+        resources:
+          - clusterpools/status
+        verbs:
+          - get
+          - patch
+          - update
+      - apiGroups:
+          - storage.ectobase.dev
+        resources:
+          - volumes
+        verbs:
+          - get
+          - list
+          - patch
+          - update
+          - watch
+  19: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: dispatch-controller
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: dispatch-controller
+    subjects:
+      - kind: ServiceAccount
+        name: dispatch-controller
+        namespace: system
+  20: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        app: dispatch-controller
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: dispatch-controller
+      namespace: system
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: dispatch-controller
+      template:
+        metadata:
+          labels:
+            app: dispatch-controller
+        spec:
+          containers:
+            - args:
+                - -reflector-admin=[fd00:db8:0:1::1]:1339
+                - -csi-driver=rbd.csi.ceph.com
+                - -csi-cluster-id=
+                - -csi-secret-name=csi-rbd-secret
+                - -csi-secret-namespace=ceph-csi
+              env:
+                - name: KUBE_FEATURE_WatchListClient
+                  value: "false"
+              image: ghcr.io/trevex/ectobase/dispatch-controller:dev
+              imagePullPolicy: IfNotPresent
+              name: controller
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+          serviceAccountName: dispatch-controller
+  21: |
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: kine-db
+      namespace: system
+    stringData:
+      password: kine
+    type: Opaque
+  22: |
+    apiVersion: v1
+    kind: Service
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: postgres
+      namespace: system
+    spec:
+      ports:
+        - name: postgres
+          port: 5432
+          targetPort: 5432
+      selector:
+        app: dispatch-postgres
+  23: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        app: dispatch-postgres
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: postgres
+      namespace: system
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: dispatch-postgres
+      template:
+        metadata:
+          labels:
+            app: dispatch-postgres
+        spec:
+          containers:
+            - env:
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      key: password
+                      name: kine-db
+                - name: POSTGRES_DB
+                  value: kine
+                - name: PGDATA
+                  value: /var/lib/postgresql/data/pgdata
+              image: postgres:16
+              imagePullPolicy: IfNotPresent
+              name: postgres
+              ports:
+                - containerPort: 5432
+              readinessProbe:
+                exec:
+                  command:
+                    - pg_isready
+                    - -U
+                    - postgres
+                initialDelaySeconds: 5
+                periodSeconds: 5
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+              volumeMounts:
+                - mountPath: /var/lib/postgresql/data
+                  name: data
+          volumes:
+            - emptyDir: {}
+              name: data
+  24: |
+    apiVersion: v1
+    kind: Service
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: kine
+      namespace: system
+    spec:
+      ports:
+        - name: etcd
+          port: 2379
+          targetPort: 2379
+      selector:
+        app: dispatch-kine
+  25: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        app: dispatch-kine
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: kine
+      namespace: system
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: dispatch-kine
+      template:
+        metadata:
+          labels:
+            app: dispatch-kine
+        spec:
+          containers:
+            - args:
+                - exec kine --endpoint="postgres://postgres:${KINE_DB_PASSWORD}@postgres:5432/kine?sslmode=disable" --listen-address=0.0.0.0:2379
+              command:
+                - /bin/sh
+                - -c
+              env:
+                - name: KINE_DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      key: password
+                      name: kine-db
+              image: rancher/kine:v0.13.0
+              imagePullPolicy: IfNotPresent
+              name: kine
+              ports:
+                - containerPort: 2379
+              readinessProbe:
+                initialDelaySeconds: 5
+                periodSeconds: 5
+                tcpSocket:
+                  port: 2379
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+  26: |
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+        pod-security.kubernetes.io/enforce: privileged
+      name: ectobase-system
+  27: |
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: netplane-controller
+      namespace: ectobase-system
+  28: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: netplane-controller
+    rules:
+      - apiGroups:
+          - compiled.ectobase.dev
+        resources:
+          - compiledcontainers
+          - compilednics
+          - compiledvms
+          - compiledvolumeattachments
+        verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+      - apiGroups:
+          - compiled.ectobase.dev
+        resources:
+          - compiledcontainers/status
+          - compilednics/status
+          - compiledvms/status
+          - compiledvolumeattachments/status
+        verbs:
+          - get
+          - patch
+          - update
+      - apiGroups:
+          - compute.ectobase.dev
+        resources:
+          - containers
+          - virtualmachines
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - compute.ectobase.dev
+        resources:
+          - containers/status
+          - virtualmachines/status
+        verbs:
+          - get
+          - patch
+          - update
+      - apiGroups:
+          - net.ectobase.dev
+        resources:
+          - firewallpolicies
+          - loadbalancers
+          - networkinterfaces
+          - vpcpeerings
+          - vpcs
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - net.ectobase.dev
+        resources:
+          - natgateways
+        verbs:
+          - get
+          - list
+          - update
+          - watch
+      - apiGroups:
+          - net.ectobase.dev
+        resources:
+          - natgateways/status
+        verbs:
+          - get
+          - update
+      - apiGroups:
+          - net.ectobase.dev
+        resources:
+          - vpcpeerings/status
+          - vpcs/status
+        verbs:
+          - get
+          - patch
+          - update
+      - apiGroups:
+          - storage.ectobase.dev
+        resources:
+          - volumes
+        verbs:
+          - get
+          - list
+          - watch
+  29: |
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: netplane-controller
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: ClusterRole
+      name: netplane-controller
+    subjects:
+      - kind: ServiceAccount
+        name: netplane-controller
+        namespace: ectobase-system
+  30: |
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: netplane-reflector
+      namespace: ectobase-system
+  31: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: reflector
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: reflector
+      namespace: ectobase-system
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: reflector
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: reflector
+        spec:
+          containers:
+            - args:
+                - --listen=:1338
+                - --admin-listen=:1339
+              command:
+                - reflector
+              image: ghcr.io/trevex/ectobase/netplane:dev
+              imagePullPolicy: IfNotPresent
+              name: reflector
+              ports:
+                - containerPort: 1338
+                  name: routebus
+                  protocol: TCP
+                - containerPort: 1339
+                  name: routebus-admin
+                  protocol: TCP
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+          dnsPolicy: ClusterFirstWithHostNet
+          hostNetwork: true
+          nodeSelector:
+            node-role.kubernetes.io/control-plane: ""
+          serviceAccountName: netplane-reflector
+          tolerations:
+            - operator: Exists
+  32: |
+    apiVersion: v1
+    kind: Service
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: reflector
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: reflector
+      namespace: ectobase-system
+    spec:
+      ports:
+        - name: routebus
+          port: 1338
+          protocol: TCP
+          targetPort: 1338
+        - name: routebus-admin
+          port: 1339
+          protocol: TCP
+          targetPort: 1339
+      selector:
+        app.kubernetes.io/name: reflector
+      type: ClusterIP

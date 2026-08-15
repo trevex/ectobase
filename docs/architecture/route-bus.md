@@ -5,7 +5,7 @@ makes no distributed decisions — every forwarding action is a per-flow-keyed B
 map lookup. All the state those maps hold is decided elsewhere and pushed down. The
 mechanism that distributes the *dynamic* part of that state — which overlay prefix
 lives behind which underlay node — is a custom **route bus**: a centralized reflector
-(running on the hub) and per-node agents exchanging routes over a bidirectional gRPC stream.
+(running on the dispatch) and per-node agents exchanging routes over a bidirectional gRPC stream.
 
 This is a [metalbond](https://github.com/ironcore-dev/metalbond)-style typed
 pub/sub, **not BGP in the hot path**. BGP appears only at the WAN edge, to announce
@@ -16,7 +16,7 @@ distribution between nodes.
 
 ```mermaid
 flowchart LR
-    subgraph hub["hub"]
+    subgraph dispatch["dispatch"]
         reflector["reflector<br/>(in-memory RIB + NAT/public tables)"]
     end
     subgraph nodeA["node A"]
@@ -37,7 +37,7 @@ flowchart LR
   node's `NetworkInterface`s into a *desired* set of announcements, subscribes to
   the VNIs it cares about, and programs every route it learns onto the local
   datapath over the `DataplaneNode` gRPC (`127.0.0.1:1337`).
-- **reflector** (`netplane/reflector`, on the hub) — a route broker. It holds an
+- **reflector** (`netplane/reflector`, on the dispatch) — a route broker. It holds an
   in-memory RIB (`rib.go`) plus a global NAT table (`nattable.go`) and public-prefix
   table (`publictable.go`), and reflects records between the agents' streams
   (`server.go`).

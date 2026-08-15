@@ -2,7 +2,7 @@
 // CompiledContainer objects into v1.Pod objects (attached to the flowplane overlay via
 // Multus + the flowplane-cni annotation, pinned to a node). It targets a plain downstream
 // k8s cluster with Multus + flowplane-cni installed (in-cluster config by default, or
-// --kubeconfig), NOT the hub aggregated apiserver.
+// --kubeconfig), NOT the dispatch aggregated apiserver.
 package main
 
 import (

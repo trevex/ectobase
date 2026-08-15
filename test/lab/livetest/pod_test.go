@@ -30,9 +30,9 @@ const (
 // encapsulated overlay both ways.
 //
 // This drives the REAL control-plane + container-workload flow END TO END: a VPC + two
-// NetworkInterfaces (NO placement on the NICs) are applied to the HUB, and a Container
+// NetworkInterfaces (NO placement on the NICs) are applied to the DISPATCH, and a Container
 // per endpoint (carrying the spec.clusterName + spec.nodeName placement and owning its
-// NIC via interfaceRefs) is applied to the HUB too. The netplane compiler is the placement
+// NIC via interfaceRefs) is applied to the DISPATCH too. The netplane compiler is the placement
 // authority: it stamps each CompiledNIC's clusterName + nodeName FROM the owning Container,
 // and lowers the Container itself to a per-cluster CompiledContainer; the brokers sync both
 // to ITS compute cluster; the pod-materializer turns each CompiledContainer into a real
@@ -65,18 +65,18 @@ func TestPodOverlayPing(t *testing.T) {
 	epA := endpoint{nodeA, "pod-nic-a", podIPA, podMACA}
 	epC := endpoint{nodeC, "pod-nic-c", podIPC, podMACC}
 
-	// 1. VPC + two NICs on the HUB. The NICs carry NO placement: an owning Container is
+	// 1. VPC + two NICs on the DISPATCH. The NICs carry NO placement: an owning Container is
 	//    the placement authority (it stamps CompiledNIC.clusterName + nodeName). Just IPs +
 	//    mac here. defaultPolicy Allow so guest egress isn't deny-by-default dropped.
-	require.NoError(t, applyHub(ctx, cfg, podHubFixture(epA.nic, epA.ip, epA.mac, epC.nic, epC.ip, epC.mac)))
+	require.NoError(t, applyDispatch(ctx, cfg, podDispatchFixture(epA.nic, epA.ip, epA.mac, epC.nic, epC.ip, epC.mac)))
 	// The compiler gates on a Ready VPC with a vni; mark VPC + both NICs Ready.
 	patchPodVNIReady(t, ctx, cfg, "vpcs.net.ectobase.dev", "pod-vpc")
 	patchPodVNIReady(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", epA.nic)
 	patchPodVNIReady(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", epC.nic)
 	t.Cleanup(func() {
-		_, _ = kubectl(ctx, cfg, "hub", "delete", "networkinterface.net.ectobase.dev", epA.nic, "--ignore-not-found", "--wait=false")
-		_, _ = kubectl(ctx, cfg, "hub", "delete", "networkinterface.net.ectobase.dev", epC.nic, "--ignore-not-found", "--wait=false")
-		_, _ = kubectl(ctx, cfg, "hub", "delete", "vpc.net.ectobase.dev", "pod-vpc", "--ignore-not-found", "--wait=false")
+		_, _ = kubectl(ctx, cfg, "dispatch", "delete", "networkinterface.net.ectobase.dev", epA.nic, "--ignore-not-found", "--wait=false")
+		_, _ = kubectl(ctx, cfg, "dispatch", "delete", "networkinterface.net.ectobase.dev", epC.nic, "--ignore-not-found", "--wait=false")
+		_, _ = kubectl(ctx, cfg, "dispatch", "delete", "vpc.net.ectobase.dev", "pod-vpc", "--ignore-not-found", "--wait=false")
 	})
 
 	// 2. NAD (flowplane-cni secondary net) on EACH cluster + a Container per endpoint on
@@ -90,9 +90,9 @@ func TestPodOverlayPing(t *testing.T) {
 	for _, ep := range []endpoint{epA, epC} {
 		ep := ep
 		require.NoError(t, applyCluster(ctx, cfg, ep.node.Cluster, podNADManifest()))
-		require.NoError(t, applyHub(ctx, cfg, containerFixture(containerName(ep.nic), ep.node.Cluster, nodeK8sName(ep.node), ep.nic)))
+		require.NoError(t, applyDispatch(ctx, cfg, containerFixture(containerName(ep.nic), ep.node.Cluster, nodeK8sName(ep.node), ep.nic)))
 		t.Cleanup(func() {
-			_, _ = kubectl(ctx, cfg, "hub", "delete", "container.net.ectobase.dev", containerName(ep.nic), "--ignore-not-found", "--wait=false")
+			_, _ = kubectl(ctx, cfg, "dispatch", "delete", "container.net.ectobase.dev", containerName(ep.nic), "--ignore-not-found", "--wait=false")
 			_, _ = kubectl(ctx, cfg, ep.node.Cluster, "delete", "net-attach-def", podNADName, "--ignore-not-found")
 		})
 	}
@@ -178,12 +178,12 @@ func compiledContainerName(nic string) string { return "default-" + containerNam
 
 const podNADName = "flowplane-overlay"
 
-// podHubFixture renders the hub fixture for the two Pod endpoints: a VPC and
+// podDispatchFixture renders the dispatch fixture for the two Pod endpoints: a VPC and
 // two NetworkInterfaces with spec.ips + spec.mac and NO placement. The owning Container
 // (applied separately) is the placement authority — it stamps the CompiledNIC's
 // clusterName + nodeName. The compiler lowers each NIC to a per-cluster CompiledNIC
 // default-<nic>. defaultPolicy Allow so guest egress isn't dropped.
-func podHubFixture(nicA, ipA, macA, nicC, ipC, macC string) string {
+func podDispatchFixture(nicA, ipA, macA, nicC, ipC, macC string) string {
 	return fmt.Sprintf(`apiVersion: net.ectobase.dev/v1alpha1
 kind: VPC
 metadata: {name: pod-vpc}
@@ -263,10 +263,10 @@ spec:
 }
 
 // patchPodVNIReady marks a net.ectobase.dev resource's status Ready with the pod
-// overlay vni on the hub (the compiler gates on a Ready VPC/NIC with a vni).
+// overlay vni on the dispatch (the compiler gates on a Ready VPC/NIC with a vni).
 func patchPodVNIReady(t *testing.T, ctx context.Context, cfg *config.Config, resource, name string) {
 	t.Helper()
-	_, err := kubectl(ctx, cfg, "hub", "patch", resource, name,
+	_, err := kubectl(ctx, cfg, "dispatch", "patch", resource, name,
 		"--subresource=status", "--type=merge",
 		"-p", fmt.Sprintf(`{"status":{"vni":%d,"state":"Ready"}}`, podVNI))
 	require.NoError(t, err, "patch %s/%s status", resource, name)

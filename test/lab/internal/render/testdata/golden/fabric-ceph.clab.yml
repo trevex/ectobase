@@ -117,9 +117,9 @@ topology:
     # nodes below and carry the fabric links — attaching links to the k8s-kind
     # lifecycle node itself fails ("network namespace not available") since it owns
     # no netns of its own. ---
-    hub:
+    dispatch:
       kind: k8s-kind
-      startup-config: kind/hub-kind.yaml
+      startup-config: kind/dispatch-kind.yaml
       extras:
         k8s_kind:
           deploy:
@@ -134,7 +134,7 @@ topology:
     # The kind-created node containers, as clab link endpoints. ext-container =
     # attach to the already-existing container kind made; names MUST match kind's
     # (<cluster>-control-plane / <cluster>-worker[N] — see DerivedNode.KindContainer).
-    hub-control-plane:
+    dispatch-control-plane:
       kind: ext-container
     k02-control-plane:
       kind: ext-container
@@ -229,9 +229,9 @@ topology:
       mtu: 1500
     - endpoints: ["edge2:eth2", "sw2:eth2"]
       mtu: 1500
-    - endpoints: ["hub-control-plane:eth1", "sw1:eth3"]
+    - endpoints: ["dispatch-control-plane:eth1", "sw1:eth3"]
       mtu: 1500
-    - endpoints: ["hub-control-plane:eth2", "sw2:eth3"]
+    - endpoints: ["dispatch-control-plane:eth2", "sw2:eth3"]
       mtu: 1500
     - endpoints: ["k02-control-plane:eth1", "sw1:eth4"]
       mtu: 1500

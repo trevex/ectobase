@@ -31,36 +31,36 @@ subjects:
     name: netplane-agent
     namespace: {{ .Values.namespace }}
 ---
-# The per-cluster broker (kubelet-analog) syncs compiled objects from the hub down into
+# The per-cluster broker (kubelet-analog) syncs compiled objects from the dispatch down into
 # THIS downstream cluster's compiled.ectobase.dev CRDs (create/update/patch/delete + GC), reads
-# Nodes for underlay/prefix reporting, and reads VMIs for VM lifecycle status. Hub-side
-# credentials come from a separate mounted kubeconfig (broker.hubKubeconfigSecret); this
-# RBAC is only the downstream (in-cluster) half. Hub-side RBAC is minted by the e2e token.
+# Nodes for underlay/prefix reporting, and reads VMIs for VM lifecycle status. Dispatch-side
+# credentials come from a separate mounted kubeconfig (broker.dispatchKubeconfigSecret); this
+# RBAC is only the downstream (in-cluster) half. Dispatch-side RBAC is minted by the e2e token.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: hub-broker
+  name: dispatch-broker
   namespace: {{ .Values.namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: hub-broker
+  name: dispatch-broker
   labels: {{- include "ectobase-pool.labels" . | nindent 4 }}
 rules:
-  {{- (.Files.Get "files/hub-broker/role.yaml" | fromYaml).rules | toYaml | nindent 2 }}
+  {{- (.Files.Get "files/dispatch-broker/role.yaml" | fromYaml).rules | toYaml | nindent 2 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: hub-broker
+  name: dispatch-broker
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: hub-broker
+  name: dispatch-broker
 subjects:
   - kind: ServiceAccount
-    name: hub-broker
+    name: dispatch-broker
     namespace: {{ .Values.namespace }}
 ---
 apiVersion: v1

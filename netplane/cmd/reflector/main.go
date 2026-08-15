@@ -57,7 +57,7 @@ func main() {
 	sessionSrv := grpc.NewServer(sessionOpts...)
 	routebusv1.RegisterRouteBusServer(sessionSrv, reflector.NewServer(rib))
 
-	// Admin server: separate socket, CN-gated to the hub-controller identity so even a
+	// Admin server: separate socket, CN-gated to the dispatch-controller identity so even a
 	// compromised agent holding a valid session cert cannot fence nodes.
 	adminOpts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(reflector.RequireClientCN(*adminCN)),

@@ -47,7 +47,7 @@ flowchart TB
 ## Egress: distributed SNAT with a distributed return
 
 Egress SNAT is **distributed onto the source node**, not centralized on the edge. The NATGateway
-port-block allocator (in the hub controller) assigns each source overlay IP a deterministic
+port-block allocator (in the dispatch controller) assigns each source overlay IP a deterministic
 `(public-IP, port-block)` — the GCP Cloud NAT model. The block is stamped into the source NIC's
 `CompiledNIC.NAT`, and the source node performs the SNAT locally on egress.
 

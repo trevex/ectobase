@@ -10,14 +10,14 @@ var tier2Cmd = &cobra.Command{
 	Use:   "tier2",
 	Short: "deploy the Tier-2 (VM live-migration + fencing) prerequisites",
 	Long: "KubeVirt + CDI + the flowplane network binding on every compute cluster, plus the\n" +
-		"ceph fsid wired into the hub controller's ceph-csi fence actuator. Requires\n" +
+		"ceph fsid wired into the dispatch controller's ceph-csi fence actuator. Requires\n" +
 		"fabric.ceph.enabled, an already-up fabric, and that `lab ceph` has already run\n" +
 		"(the fsid is read from build/<name>/ceph.env).",
 }
 
 var tier2UpCmd = &cobra.Command{
 	Use:   "up",
-	Short: "install KubeVirt + CDI and wire the hub controller fsid",
+	Short: "install KubeVirt + CDI and wire the dispatch controller fsid",
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		cfg, err := loadConfig()
 		if err != nil {

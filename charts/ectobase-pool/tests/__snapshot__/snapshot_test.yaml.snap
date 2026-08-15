@@ -93,30 +93,30 @@ renders (dpdk clab):
     kind: Deployment
     metadata:
       labels:
-        app.kubernetes.io/name: hub-broker
+        app.kubernetes.io/name: dispatch-broker
         app.kubernetes.io/part-of: netplane
-      name: hub-broker
+      name: dispatch-broker
       namespace: ectobase-system
     spec:
       replicas: 1
       selector:
         matchLabels:
-          app.kubernetes.io/name: hub-broker
+          app.kubernetes.io/name: dispatch-broker
       strategy:
         type: Recreate
       template:
         metadata:
           labels:
-            app.kubernetes.io/name: hub-broker
+            app.kubernetes.io/name: dispatch-broker
             app.kubernetes.io/part-of: netplane
         spec:
           containers:
             - args:
                 - --cluster-name=test
-                - --hub-kubeconfig=/secrets/hub/kubeconfig
+                - --dispatch-kubeconfig=/secrets/dispatch/kubeconfig
               command:
                 - broker
-              image: ghcr.io/trevex/ectobase/hub-broker:dev
+              image: ghcr.io/trevex/ectobase/dispatch-broker:dev
               imagePullPolicy: IfNotPresent
               name: broker
               resources:
@@ -124,20 +124,20 @@ renders (dpdk clab):
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /secrets/hub
-                  name: hub-kubeconfig
+                - mountPath: /secrets/dispatch
+                  name: dispatch-kubeconfig
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           nodeSelector:
             node-role.kubernetes.io/control-plane: ""
-          serviceAccountName: hub-broker
+          serviceAccountName: dispatch-broker
           tolerations:
             - operator: Exists
           volumes:
-            - name: hub-kubeconfig
+            - name: dispatch-kubeconfig
               secret:
-                secretName: broker-hub-kubeconfig
+                secretName: broker-dispatch-kubeconfig
   4: |
     apiVersion: v1
     kind: ServiceAccount
@@ -1983,7 +1983,7 @@ renders (dpdk clab):
     apiVersion: v1
     kind: ServiceAccount
     metadata:
-      name: hub-broker
+      name: dispatch-broker
       namespace: ectobase-system
   26: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -1992,7 +1992,7 @@ renders (dpdk clab):
       labels:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: ectobase
-      name: hub-broker
+      name: dispatch-broker
     rules:
       - apiGroups:
           - ""
@@ -2029,14 +2029,14 @@ renders (dpdk clab):
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
-      name: hub-broker
+      name: dispatch-broker
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
-      name: hub-broker
+      name: dispatch-broker
     subjects:
       - kind: ServiceAccount
-        name: hub-broker
+        name: dispatch-broker
         namespace: ectobase-system
   28: |
     apiVersion: v1
@@ -2189,30 +2189,30 @@ renders (dpdk hw):
     kind: Deployment
     metadata:
       labels:
-        app.kubernetes.io/name: hub-broker
+        app.kubernetes.io/name: dispatch-broker
         app.kubernetes.io/part-of: netplane
-      name: hub-broker
+      name: dispatch-broker
       namespace: ectobase-system
     spec:
       replicas: 1
       selector:
         matchLabels:
-          app.kubernetes.io/name: hub-broker
+          app.kubernetes.io/name: dispatch-broker
       strategy:
         type: Recreate
       template:
         metadata:
           labels:
-            app.kubernetes.io/name: hub-broker
+            app.kubernetes.io/name: dispatch-broker
             app.kubernetes.io/part-of: netplane
         spec:
           containers:
             - args:
                 - --cluster-name=test
-                - --hub-kubeconfig=/secrets/hub/kubeconfig
+                - --dispatch-kubeconfig=/secrets/dispatch/kubeconfig
               command:
                 - broker
-              image: ghcr.io/trevex/ectobase/hub-broker:dev
+              image: ghcr.io/trevex/ectobase/dispatch-broker:dev
               imagePullPolicy: IfNotPresent
               name: broker
               resources:
@@ -2220,20 +2220,20 @@ renders (dpdk hw):
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /secrets/hub
-                  name: hub-kubeconfig
+                - mountPath: /secrets/dispatch
+                  name: dispatch-kubeconfig
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           nodeSelector:
             node-role.kubernetes.io/control-plane: ""
-          serviceAccountName: hub-broker
+          serviceAccountName: dispatch-broker
           tolerations:
             - operator: Exists
           volumes:
-            - name: hub-kubeconfig
+            - name: dispatch-kubeconfig
               secret:
-                secretName: broker-hub-kubeconfig
+                secretName: broker-dispatch-kubeconfig
   4: |
     apiVersion: v1
     kind: ServiceAccount
@@ -4094,7 +4094,7 @@ renders (dpdk hw):
     apiVersion: v1
     kind: ServiceAccount
     metadata:
-      name: hub-broker
+      name: dispatch-broker
       namespace: ectobase-system
   26: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -4103,7 +4103,7 @@ renders (dpdk hw):
       labels:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: ectobase
-      name: hub-broker
+      name: dispatch-broker
     rules:
       - apiGroups:
           - ""
@@ -4140,14 +4140,14 @@ renders (dpdk hw):
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
-      name: hub-broker
+      name: dispatch-broker
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
-      name: hub-broker
+      name: dispatch-broker
     subjects:
       - kind: ServiceAccount
-        name: hub-broker
+        name: dispatch-broker
         namespace: ectobase-system
   28: |
     apiVersion: v1
@@ -4300,30 +4300,30 @@ renders (ebpf clab):
     kind: Deployment
     metadata:
       labels:
-        app.kubernetes.io/name: hub-broker
+        app.kubernetes.io/name: dispatch-broker
         app.kubernetes.io/part-of: netplane
-      name: hub-broker
+      name: dispatch-broker
       namespace: ectobase-system
     spec:
       replicas: 1
       selector:
         matchLabels:
-          app.kubernetes.io/name: hub-broker
+          app.kubernetes.io/name: dispatch-broker
       strategy:
         type: Recreate
       template:
         metadata:
           labels:
-            app.kubernetes.io/name: hub-broker
+            app.kubernetes.io/name: dispatch-broker
             app.kubernetes.io/part-of: netplane
         spec:
           containers:
             - args:
                 - --cluster-name=test
-                - --hub-kubeconfig=/secrets/hub/kubeconfig
+                - --dispatch-kubeconfig=/secrets/dispatch/kubeconfig
               command:
                 - broker
-              image: ghcr.io/trevex/ectobase/hub-broker:dev
+              image: ghcr.io/trevex/ectobase/dispatch-broker:dev
               imagePullPolicy: IfNotPresent
               name: broker
               resources:
@@ -4331,20 +4331,20 @@ renders (ebpf clab):
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /secrets/hub
-                  name: hub-kubeconfig
+                - mountPath: /secrets/dispatch
+                  name: dispatch-kubeconfig
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           nodeSelector:
             node-role.kubernetes.io/control-plane: ""
-          serviceAccountName: hub-broker
+          serviceAccountName: dispatch-broker
           tolerations:
             - operator: Exists
           volumes:
-            - name: hub-kubeconfig
+            - name: dispatch-kubeconfig
               secret:
-                secretName: broker-hub-kubeconfig
+                secretName: broker-dispatch-kubeconfig
   4: |
     apiVersion: v1
     kind: ServiceAccount
@@ -6205,7 +6205,7 @@ renders (ebpf clab):
     apiVersion: v1
     kind: ServiceAccount
     metadata:
-      name: hub-broker
+      name: dispatch-broker
       namespace: ectobase-system
   26: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -6214,7 +6214,7 @@ renders (ebpf clab):
       labels:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: ectobase
-      name: hub-broker
+      name: dispatch-broker
     rules:
       - apiGroups:
           - ""
@@ -6251,14 +6251,14 @@ renders (ebpf clab):
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
-      name: hub-broker
+      name: dispatch-broker
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
-      name: hub-broker
+      name: dispatch-broker
     subjects:
       - kind: ServiceAccount
-        name: hub-broker
+        name: dispatch-broker
         namespace: ectobase-system
   28: |
     apiVersion: v1
@@ -6411,30 +6411,30 @@ renders (ebpf hw):
     kind: Deployment
     metadata:
       labels:
-        app.kubernetes.io/name: hub-broker
+        app.kubernetes.io/name: dispatch-broker
         app.kubernetes.io/part-of: netplane
-      name: hub-broker
+      name: dispatch-broker
       namespace: ectobase-system
     spec:
       replicas: 1
       selector:
         matchLabels:
-          app.kubernetes.io/name: hub-broker
+          app.kubernetes.io/name: dispatch-broker
       strategy:
         type: Recreate
       template:
         metadata:
           labels:
-            app.kubernetes.io/name: hub-broker
+            app.kubernetes.io/name: dispatch-broker
             app.kubernetes.io/part-of: netplane
         spec:
           containers:
             - args:
                 - --cluster-name=test
-                - --hub-kubeconfig=/secrets/hub/kubeconfig
+                - --dispatch-kubeconfig=/secrets/dispatch/kubeconfig
               command:
                 - broker
-              image: ghcr.io/trevex/ectobase/hub-broker:dev
+              image: ghcr.io/trevex/ectobase/dispatch-broker:dev
               imagePullPolicy: IfNotPresent
               name: broker
               resources:
@@ -6442,20 +6442,20 @@ renders (ebpf hw):
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /secrets/hub
-                  name: hub-kubeconfig
+                - mountPath: /secrets/dispatch
+                  name: dispatch-kubeconfig
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           nodeSelector:
             node-role.kubernetes.io/control-plane: ""
-          serviceAccountName: hub-broker
+          serviceAccountName: dispatch-broker
           tolerations:
             - operator: Exists
           volumes:
-            - name: hub-kubeconfig
+            - name: dispatch-kubeconfig
               secret:
-                secretName: broker-hub-kubeconfig
+                secretName: broker-dispatch-kubeconfig
   4: |
     apiVersion: v1
     kind: ServiceAccount
@@ -8313,7 +8313,7 @@ renders (ebpf hw):
     apiVersion: v1
     kind: ServiceAccount
     metadata:
-      name: hub-broker
+      name: dispatch-broker
       namespace: ectobase-system
   26: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -8322,7 +8322,7 @@ renders (ebpf hw):
       labels:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: ectobase
-      name: hub-broker
+      name: dispatch-broker
     rules:
       - apiGroups:
           - ""
@@ -8359,14 +8359,14 @@ renders (ebpf hw):
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
-      name: hub-broker
+      name: dispatch-broker
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
-      name: hub-broker
+      name: dispatch-broker
     subjects:
       - kind: ServiceAccount
-        name: hub-broker
+        name: dispatch-broker
         namespace: ectobase-system
   28: |
     apiVersion: v1
@@ -8519,30 +8519,30 @@ renders (tier1 on):
     kind: Deployment
     metadata:
       labels:
-        app.kubernetes.io/name: hub-broker
+        app.kubernetes.io/name: dispatch-broker
         app.kubernetes.io/part-of: netplane
-      name: hub-broker
+      name: dispatch-broker
       namespace: ectobase-system
     spec:
       replicas: 1
       selector:
         matchLabels:
-          app.kubernetes.io/name: hub-broker
+          app.kubernetes.io/name: dispatch-broker
       strategy:
         type: Recreate
       template:
         metadata:
           labels:
-            app.kubernetes.io/name: hub-broker
+            app.kubernetes.io/name: dispatch-broker
             app.kubernetes.io/part-of: netplane
         spec:
           containers:
             - args:
                 - --cluster-name=test
-                - --hub-kubeconfig=/secrets/hub/kubeconfig
+                - --dispatch-kubeconfig=/secrets/dispatch/kubeconfig
               command:
                 - broker
-              image: ghcr.io/trevex/ectobase/hub-broker:dev
+              image: ghcr.io/trevex/ectobase/dispatch-broker:dev
               imagePullPolicy: IfNotPresent
               name: broker
               resources:
@@ -8550,20 +8550,20 @@ renders (tier1 on):
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /secrets/hub
-                  name: hub-kubeconfig
+                - mountPath: /secrets/dispatch
+                  name: dispatch-kubeconfig
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           nodeSelector:
             node-role.kubernetes.io/control-plane: ""
-          serviceAccountName: hub-broker
+          serviceAccountName: dispatch-broker
           tolerations:
             - operator: Exists
           volumes:
-            - name: hub-kubeconfig
+            - name: dispatch-kubeconfig
               secret:
-                secretName: broker-hub-kubeconfig
+                secretName: broker-dispatch-kubeconfig
   4: |
     apiVersion: v1
     kind: ServiceAccount
@@ -10424,7 +10424,7 @@ renders (tier1 on):
     apiVersion: v1
     kind: ServiceAccount
     metadata:
-      name: hub-broker
+      name: dispatch-broker
       namespace: ectobase-system
   26: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -10433,7 +10433,7 @@ renders (tier1 on):
       labels:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: ectobase
-      name: hub-broker
+      name: dispatch-broker
     rules:
       - apiGroups:
           - ""
@@ -10470,14 +10470,14 @@ renders (tier1 on):
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
-      name: hub-broker
+      name: dispatch-broker
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
-      name: hub-broker
+      name: dispatch-broker
     subjects:
       - kind: ServiceAccount
-        name: hub-broker
+        name: dispatch-broker
         namespace: ectobase-system
   28: |
     apiVersion: v1
@@ -10667,30 +10667,30 @@ renders (tier1 watchdog):
     kind: Deployment
     metadata:
       labels:
-        app.kubernetes.io/name: hub-broker
+        app.kubernetes.io/name: dispatch-broker
         app.kubernetes.io/part-of: netplane
-      name: hub-broker
+      name: dispatch-broker
       namespace: ectobase-system
     spec:
       replicas: 1
       selector:
         matchLabels:
-          app.kubernetes.io/name: hub-broker
+          app.kubernetes.io/name: dispatch-broker
       strategy:
         type: Recreate
       template:
         metadata:
           labels:
-            app.kubernetes.io/name: hub-broker
+            app.kubernetes.io/name: dispatch-broker
             app.kubernetes.io/part-of: netplane
         spec:
           containers:
             - args:
                 - --cluster-name=test
-                - --hub-kubeconfig=/secrets/hub/kubeconfig
+                - --dispatch-kubeconfig=/secrets/dispatch/kubeconfig
               command:
                 - broker
-              image: ghcr.io/trevex/ectobase/hub-broker:dev
+              image: ghcr.io/trevex/ectobase/dispatch-broker:dev
               imagePullPolicy: IfNotPresent
               name: broker
               resources:
@@ -10698,20 +10698,20 @@ renders (tier1 watchdog):
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /secrets/hub
-                  name: hub-kubeconfig
+                - mountPath: /secrets/dispatch
+                  name: dispatch-kubeconfig
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           nodeSelector:
             node-role.kubernetes.io/control-plane: ""
-          serviceAccountName: hub-broker
+          serviceAccountName: dispatch-broker
           tolerations:
             - operator: Exists
           volumes:
-            - name: hub-kubeconfig
+            - name: dispatch-kubeconfig
               secret:
-                secretName: broker-hub-kubeconfig
+                secretName: broker-dispatch-kubeconfig
   4: |
     apiVersion: v1
     kind: ServiceAccount
@@ -12572,7 +12572,7 @@ renders (tier1 watchdog):
     apiVersion: v1
     kind: ServiceAccount
     metadata:
-      name: hub-broker
+      name: dispatch-broker
       namespace: ectobase-system
   26: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -12581,7 +12581,7 @@ renders (tier1 watchdog):
       labels:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: ectobase
-      name: hub-broker
+      name: dispatch-broker
     rules:
       - apiGroups:
           - ""
@@ -12618,14 +12618,14 @@ renders (tier1 watchdog):
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
-      name: hub-broker
+      name: dispatch-broker
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
-      name: hub-broker
+      name: dispatch-broker
     subjects:
       - kind: ServiceAccount
-        name: hub-broker
+        name: dispatch-broker
         namespace: ectobase-system
   28: |
     apiVersion: v1
@@ -12825,30 +12825,30 @@ renders with vm-materializer enabled:
     kind: Deployment
     metadata:
       labels:
-        app.kubernetes.io/name: hub-broker
+        app.kubernetes.io/name: dispatch-broker
         app.kubernetes.io/part-of: netplane
-      name: hub-broker
+      name: dispatch-broker
       namespace: ectobase-system
     spec:
       replicas: 1
       selector:
         matchLabels:
-          app.kubernetes.io/name: hub-broker
+          app.kubernetes.io/name: dispatch-broker
       strategy:
         type: Recreate
       template:
         metadata:
           labels:
-            app.kubernetes.io/name: hub-broker
+            app.kubernetes.io/name: dispatch-broker
             app.kubernetes.io/part-of: netplane
         spec:
           containers:
             - args:
                 - --cluster-name=test
-                - --hub-kubeconfig=/secrets/hub/kubeconfig
+                - --dispatch-kubeconfig=/secrets/dispatch/kubeconfig
               command:
                 - broker
-              image: ghcr.io/trevex/ectobase/hub-broker:dev
+              image: ghcr.io/trevex/ectobase/dispatch-broker:dev
               imagePullPolicy: IfNotPresent
               name: broker
               resources:
@@ -12856,20 +12856,20 @@ renders with vm-materializer enabled:
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /secrets/hub
-                  name: hub-kubeconfig
+                - mountPath: /secrets/dispatch
+                  name: dispatch-kubeconfig
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           nodeSelector:
             node-role.kubernetes.io/control-plane: ""
-          serviceAccountName: hub-broker
+          serviceAccountName: dispatch-broker
           tolerations:
             - operator: Exists
           volumes:
-            - name: hub-kubeconfig
+            - name: dispatch-kubeconfig
               secret:
-                secretName: broker-hub-kubeconfig
+                secretName: broker-dispatch-kubeconfig
   4: |
     apiVersion: v1
     kind: ServiceAccount
@@ -14730,7 +14730,7 @@ renders with vm-materializer enabled:
     apiVersion: v1
     kind: ServiceAccount
     metadata:
-      name: hub-broker
+      name: dispatch-broker
       namespace: ectobase-system
   26: |
     apiVersion: rbac.authorization.k8s.io/v1
@@ -14739,7 +14739,7 @@ renders with vm-materializer enabled:
       labels:
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: ectobase
-      name: hub-broker
+      name: dispatch-broker
     rules:
       - apiGroups:
           - ""
@@ -14776,14 +14776,14 @@ renders with vm-materializer enabled:
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
-      name: hub-broker
+      name: dispatch-broker
     roleRef:
       apiGroup: rbac.authorization.k8s.io
       kind: ClusterRole
-      name: hub-broker
+      name: dispatch-broker
     subjects:
       - kind: ServiceAccount
-        name: hub-broker
+        name: dispatch-broker
         namespace: ectobase-system
   28: |
     apiVersion: v1

@@ -100,11 +100,11 @@ func TestCephCSIValuesDefaultPool(t *testing.T) {
 }
 
 func TestCephCSIHelmArgs(t *testing.T) {
-	args := cephCSIHelmArgs("/kc/hub.kubeconfig", "/values.yaml")
+	args := cephCSIHelmArgs("/kc/dispatch.kubeconfig", "/values.yaml")
 	joined := strings.Join(args, " ")
 	for _, want := range []string{
 		"upgrade --install ceph-csi-rbd ceph-csi/ceph-csi-rbd",
-		"--kubeconfig /kc/hub.kubeconfig",
+		"--kubeconfig /kc/dispatch.kubeconfig",
 		"--version 3.11.0",
 		"--namespace ceph-csi --create-namespace",
 		"-f /values.yaml",
@@ -192,7 +192,7 @@ func TestCSIAddonsSidecarRBAC(t *testing.T) {
 // provisioner is present.
 func TestCSIAddonsArgvOrder(t *testing.T) {
 	f := &fakeRunner{}
-	if err := CSIAddons(context.Background(), f, "/kc/hub.kubeconfig", ""); err != nil {
+	if err := CSIAddons(context.Background(), f, "/kc/dispatch.kubeconfig", ""); err != nil {
 		t.Fatalf("CSIAddons: %v", err)
 	}
 	// The three release assets are applied in order.

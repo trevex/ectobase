@@ -9,7 +9,7 @@ import (
 	"github.com/trevex/ectobase/test/lab/internal/fabric"
 )
 
-// kindFixture mirrors the base clab fixture (hub:1, k02:2) but declares the
+// kindFixture mirrors the base clab fixture (dispatch:1, k02:2) but declares the
 // kindNode image the kind-cluster template renders into each node.
 const kindFixture = `
 name: ectobase
@@ -17,7 +17,7 @@ images: {talos: img/talos, kindNode: ghcr.io/trevex/ectobase/kind-node-fabric:de
 fabric:
   as: {edge: 65000, switch: 65010, host: 65100}
   nat64Prefix: 64:ff9b::/96
-  clusters: [{name: hub, nodes: 1}, {name: k02, nodes: 2}]
+  clusters: [{name: dispatch, nodes: 1}, {name: k02, nodes: 2}]
 `
 
 // TestKindClabNodes asserts the cluster-node block renders as a k8s-kind node
@@ -40,7 +40,7 @@ func TestKindClabNodes(t *testing.T) {
 
 	for _, want := range []string{
 		"kind: k8s-kind",
-		"startup-config: kind/hub-kind.yaml",
+		"startup-config: kind/dispatch-kind.yaml",
 		"startup-config: kind/k02-kind.yaml",
 	} {
 		if !strings.Contains(out, want) {
@@ -48,7 +48,7 @@ func TestKindClabNodes(t *testing.T) {
 		}
 	}
 	// The old Talos cluster-node wiring must be gone.
-	if strings.Contains(out, "talos/hub-1.env") {
+	if strings.Contains(out, "talos/dispatch-1.env") {
 		t.Errorf("clab topology still references the removed Talos env-file bind")
 	}
 }
@@ -68,7 +68,7 @@ func TestKindClusterGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Emulate genKindCluster's data for the hub (single control-plane) cluster
+	// Emulate genKindCluster's data for the dispatch (single control-plane) cluster
 	// with deterministic absolute paths so the golden stays stable across hosts.
 	const base = "/build/ectobase/kind"
 	data := struct {
@@ -79,9 +79,9 @@ func TestKindClusterGolden(t *testing.T) {
 		Nodes: []struct{ Role, Image, PrefixPath, UplinksPath, CertsDir string }{{
 			Role:        "control-plane",
 			Image:       view.Images()["kindNode"],
-			PrefixPath:  base + "/hub-1.prefix",
-			UplinksPath: base + "/hub-uplinks",
-			CertsDir:    base + "/hub-certs.d",
+			PrefixPath:  base + "/dispatch-1.prefix",
+			UplinksPath: base + "/dispatch-uplinks",
+			CertsDir:    base + "/dispatch-certs.d",
 		}},
 	}
 	out, err := String(string(b), data)
@@ -89,7 +89,7 @@ func TestKindClusterGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const goldenPath = "testdata/golden/hub-kind.yaml"
+	const goldenPath = "testdata/golden/dispatch-kind.yaml"
 	if *update {
 		if err := os.MkdirAll("testdata/golden", 0o755); err != nil {
 			t.Fatal(err)

@@ -17,7 +17,7 @@ import (
 func computeClusters(cfg *config.Config) []config.Cluster {
 	var out []config.Cluster
 	for _, cl := range cfg.Fabric.Clusters {
-		if cl.Name == "hub" {
+		if cl.Name == "dispatch" {
 			continue
 		}
 		out = append(out, cl)
@@ -25,16 +25,16 @@ func computeClusters(cfg *config.Config) []config.Cluster {
 	return out
 }
 
-// poolField reads a jsonpath field of a compute ClusterPool from the hub. It uses
+// poolField reads a jsonpath field of a compute ClusterPool from the dispatch. It uses
 // the fully-qualified resource (clusterpools.platform.ectobase.dev): short-name
 // discovery on the aggregated API flakes.
 func poolField(ctx context.Context, cfg *config.Config, pool, jsonpath string) (string, error) {
-	out, err := kubectl(ctx, cfg, "hub",
+	out, err := kubectl(ctx, cfg, "dispatch",
 		"get", "clusterpools.platform.ectobase.dev", pool, "-o", "jsonpath="+jsonpath)
 	return strings.TrimSpace(out), err
 }
 
-// TestClusterPoolsReady asserts every compute pool on the hub reports
+// TestClusterPoolsReady asserts every compute pool on the dispatch reports
 // status.phase == Ready with a non-empty status.nodePrefixes.
 func TestClusterPoolsReady(t *testing.T) {
 	cfg := loadConfig(t)
@@ -66,7 +66,7 @@ func TestClusterPoolsReady(t *testing.T) {
 }
 
 // TestBrokersConnectedToReflector asserts each compute cluster's netplane agent is
-// connected to the hub's shared reflector: recent agent logs carry no
+// connected to the dispatch's shared reflector: recent agent logs carry no
 // "connection refused" lines (cross-cluster routebus up).
 func TestBrokersConnectedToReflector(t *testing.T) {
 	cfg := loadConfig(t)

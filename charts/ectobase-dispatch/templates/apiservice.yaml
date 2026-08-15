@@ -1,0 +1,94 @@
+# Copyright 2026 ectobase contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Registers the aggregated groups with the host kube-apiserver, pointing at the in-cluster
+# apiserver-service. The dispatch apiserver serves FIVE groups: platform.ectobase.dev (ClusterPool),
+# net.ectobase.dev (VPC/NetworkInterface/FirewallPolicy/FloatingIP/LoadBalancer/NATGateway/
+# VPCPeering), compute.ectobase.dev (VirtualMachine/Container), storage.ectobase.dev (Volume),
+# and compiled.ectobase.dev (CompiledNIC/CompiledVM/CompiledContainer/CompiledVolumeAttachment).
+# insecureSkipTLSVerify because the serving cert is self-signed/ephemeral (see apiserver.yaml).
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.platform.ectobase.dev
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+spec:
+  group: platform.ectobase.dev
+  version: v1alpha1
+  service:
+    namespace: {{ .Values.namespace }}
+    name: apiserver-service
+    port: 443
+  insecureSkipTLSVerify: true
+  groupPriorityMinimum: 2000
+  versionPriority: 100
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.net.ectobase.dev
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+spec:
+  group: net.ectobase.dev
+  version: v1alpha1
+  service:
+    namespace: {{ .Values.namespace }}
+    name: apiserver-service
+    port: 443
+  insecureSkipTLSVerify: true
+  groupPriorityMinimum: 2000
+  versionPriority: 100
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.compute.ectobase.dev
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+spec:
+  group: compute.ectobase.dev
+  version: v1alpha1
+  service:
+    namespace: {{ .Values.namespace }}
+    name: apiserver-service
+    port: 443
+  insecureSkipTLSVerify: true
+  groupPriorityMinimum: 2000
+  versionPriority: 100
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.storage.ectobase.dev
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+spec:
+  group: storage.ectobase.dev
+  version: v1alpha1
+  service:
+    namespace: {{ .Values.namespace }}
+    name: apiserver-service
+    port: 443
+  insecureSkipTLSVerify: true
+  groupPriorityMinimum: 2000
+  versionPriority: 100
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.compiled.ectobase.dev
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+spec:
+  group: compiled.ectobase.dev
+  version: v1alpha1
+  service:
+    namespace: {{ .Values.namespace }}
+    name: apiserver-service
+    port: 443
+  insecureSkipTLSVerify: true
+  groupPriorityMinimum: 2000
+  versionPriority: 100
