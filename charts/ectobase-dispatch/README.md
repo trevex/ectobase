@@ -20,7 +20,7 @@ is generated from `files/<role>/role.yaml` (committed via `make generate`).
 |-----|---------|-------------|
 | `namespace` | `system` | Namespace for dispatch infra (apiserver, controller, kine, broker identity) |
 | `agentNamespace` | `ectobase-system` | Namespace for compiler and reflector |
-| `reflectorAdmin` | `[fd00:db8:0:1::1]:1338` | Address dispatch-controller passes to agents via `-reflector-admin` |
+| `reflectorAdmin` | `[fd00:db8:0:1::1]:1339` | Reflector RouteBusAdmin (fence) address the dispatch-controller dials via `-reflector-admin` |
 | `imagePullPolicy` | `IfNotPresent` | Image pull policy for all containers |
 | `images.dispatchApiserver` | `ghcr.io/trevex/ectobase/dispatch-apiserver:dev` | Dispatch aggregated apiserver image |
 | `images.dispatchController` | `ghcr.io/trevex/ectobase/dispatch-controller:dev` | Dispatch controller image |

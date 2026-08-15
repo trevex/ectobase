@@ -213,7 +213,7 @@ func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIde
 	args := []string{"upgrade", "--install", "ectobase-dispatch", chartPath,
 		"--kubeconfig", kubeconfig,
 		"--namespace", "system", "--create-namespace",
-		"--set", "reflectorAdmin=[" + dispatchIdentity + "]:1338",
+		"--set", "reflectorAdmin=[" + dispatchIdentity + "]:1339",
 	}
 	return exec.Run(ctx, "helm", args...)
 }
