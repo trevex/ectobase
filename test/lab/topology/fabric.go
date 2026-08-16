@@ -506,15 +506,22 @@ func deployEctobase(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("dispatch cluster %q has no nodes", dispatchCluster)
 	}
 
+	// Route-bus mTLS PKI is on by default; set ECTOBASE_ROUTEBUS_MTLS=false to bring the
+	// fabric up on the plaintext route bus (dev/debug baseline).
+	mtls := os.Getenv("ECTOBASE_ROUTEBUS_MTLS") != "false"
+
 	p := buildPaths(cfg)
 	var compute []deploy.ComputeCluster
 	for _, cl := range cfg.Fabric.Clusters {
 		if cl.Name == dispatchCluster {
 			continue
 		}
+		// Constrain this pool's route-bus intermediate to its own underlay /48 so it can only
+		// mint node leaves inside the pool's underlay (the reflector then binds nexthops to that).
 		compute = append(compute, deploy.ComputeCluster{
-			Name:       cl.Name,
-			Kubeconfig: p.clusterKubeconfig(cl.Name),
+			Name:          cl.Name,
+			Kubeconfig:    p.clusterKubeconfig(cl.Name),
+			UnderlayCIDRs: cfg.Derived.Clusters[cl.Name].Prefix48,
 		})
 	}
 
@@ -528,6 +535,10 @@ func deployEctobase(ctx context.Context, cfg *config.Config) error {
 		NADCRDPath:     filepath.Join(root, "test/lab/deploy/nad-crd.yaml"),
 		UnderlayWithin: fabric.NodeAggr,
 		Compute:        compute,
+		RouteBusMTLS:   mtls,
+		// Agents dial the reflector at the dispatch identity, so that bare IP is the reflector
+		// server cert's SAN.
+		ReflectorIP: dc.Nodes[0].IdentityAddr,
 	}
 	return deploy.Ectobase(ctx, spec)
 }

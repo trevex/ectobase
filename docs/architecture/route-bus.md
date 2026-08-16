@@ -147,6 +147,75 @@ snapshot for a VNI completes with `EndOfRIB(vni)`, any `installed` prefix **not*
 from the datapath (`agent/bus.go`). This closes the gap that a plain re-announce
 cannot: routes that vanished during a disconnect.
 
+## Securing the bus: per-node mTLS + underlay authz
+
+The route bus is the fabric's source of truth for *where every overlay prefix lives*.
+Without authentication, any workload that can reach the reflector could announce a
+nexthop for **another** node's underlay and silently blackhole or hijack that traffic.
+The optional mutual-TLS PKI closes this: it binds each session to a node identity and
+cryptographically constrains what that node may announce. **Private keys never cross a
+cluster or node boundary** — only a CSR and signed certificates do.
+
+```mermaid
+flowchart TB
+    root["dispatch root CA<br/>(cert-manager self-signed, dispatch-controller ns)"]
+    subgraph signer["dispatch-controller"]
+        sign["RouteBusIdentity signer<br/>(routebusca)"]
+    end
+    subgraph pool["pool (per compute cluster)"]
+        broker["broker"]
+        issuer["cert-manager CA Issuer<br/>(routebus-pool-ca)"]
+        agent["agent (per node)"]
+    end
+    root --> sign
+    broker -->|"CSR (RouteBusIdentity)<br/>only the CSR crosses"| sign
+    sign -->|"signed intermediate<br/>name-constrained to pool /48 + DNS"| broker
+    broker -->|"{intermediate, pool key, root}"| issuer
+    issuer -->|"per-node leaf<br/>CN=node, IP SAN=node /128"| agent
+    agent -->|"presents leaf→intermediate<br/>(validates root-anchored)"| reflector["reflector<br/>(trusts only the root)"]
+```
+
+The trust chain has three levels:
+
+1. **Root CA** — a cert-manager self-signed CA held on the dispatch (in the
+   dispatch-controller's namespace, so the signer can mount its key). The reflector
+   trusts *only* this root.
+2. **Per-pool intermediate** — each pool's broker generates an intermediate keypair
+   **locally** and submits a CSR as a `RouteBusIdentity` (platform group) on dispatch.
+   The `routebusca` signer (`dispatch/pkg/routebusca`) signs a path-len-0 intermediate
+   that is **name-constrained** to the pool's DNS domain *and* its underlay IP ranges
+   (its `/48`). The broker writes `{tls.crt=intermediate, tls.key=pool key, ca.crt=root}`
+   into a Secret that backs a pool cert-manager CA Issuer. Because Go's TLS chain
+   verification enforces `NameConstraints`, one pool's intermediate **cannot** mint a
+   leaf whose identity belongs to another pool — cross-pool isolation for free.
+3. **Per-node leaf** — each agent self-mints its own cert-manager `Certificate`
+   (`CN=node`, `IP SAN = its underlay /128`) from the pool Issuer at startup
+   (`mesh/agent/nodecert.go`), and presents `leaf → intermediate` so the reflector can
+   build the path back to the root it trusts.
+
+### Reflector nexthop authorization
+
+mTLS authenticates *who* a session is; the reflector then enforces *what it may say*.
+On each session it binds the verified client cert's IP SANs and rejects any
+`Announce`/`AnnounceNat`/`AnnouncePublic` whose underlay is outside the node's `/64`
+(`mesh/reflector/underlayauthz.go`). A node owns a `/64` and its endpoints get `/128`s
+inside it, so the check masks both to `/64` — exact-`/128` would reject the legitimate
+per-endpoint nexthops. When a session is not mutually authenticated (mTLS off / dev
+mode) enforcement is disabled and every announcement is allowed, matching the bus's
+mTLS-optional posture. The admin (fence) API is additionally CN-gated to the
+`dispatch-controller` identity and split onto its own listener, so a session-cert
+holder can never drive fencing.
+
+### Enabling it
+
+Set `routebus.mtls.enabled=true` on **both** charts (they issue from one trust
+anchor). The dispatch chart owns the root CA + a CA-type `ClusterIssuer`; because a
+CA `ClusterIssuer` reads its CA secret from cert-manager's
+`--cluster-resource-namespace`, cert-manager on the dispatch cluster must be installed
+with that flag pointed at the namespace holding the root secret (`system`). Each pool
+sets `routebus.mtls.underlayCIDRs` to its underlay `/48` (the intermediate's IP
+name-constraint). cert-manager is required in every participating cluster.
+
 ## Why not BGP for the overlay?
 
 Overlay discovery is high-churn, typed (routes vs NAT blocks vs edge identities), and

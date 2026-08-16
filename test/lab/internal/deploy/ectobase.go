@@ -41,12 +41,25 @@ type EctobaseSpec struct {
 	NADCRDPath     string           // NetworkAttachmentDefinition CRD manifest (abs or repo-relative)
 	UnderlayWithin string           // node-underlay aggregate CIDR (fd00:cafe::/32) for flowplane's underlay filter
 	Compute        []ComputeCluster // compute clusters running the broker (k02, k03, …)
+
+	// RouteBusMTLS turns on the route-bus mutual-TLS PKI: install cert-manager in every
+	// cluster and pass routebus.mtls.enabled=true to both charts. The dispatch cluster gets
+	// cert-manager --cluster-resource-namespace=system (the ClusterIssuer's CA secret lives
+	// there); each pool gets its underlay /48 as the intermediate's IP name-constraint.
+	RouteBusMTLS bool
+	// ReflectorIP is the bare fabric IPv6 the agents dial (== DispatchIdentity); it is added
+	// as a SAN on the reflector server cert. Only used when RouteBusMTLS is set.
+	ReflectorIP string
 }
 
 // ComputeCluster is one broker-running compute cluster.
 type ComputeCluster struct {
 	Name       string
 	Kubeconfig string
+	// UnderlayCIDRs is this pool's underlay range(s) (its /48); the route-bus intermediate is
+	// IP-name-constrained to these so it can only mint node leaves inside the pool's underlay.
+	// Only used when EctobaseSpec.RouteBusMTLS is set.
+	UnderlayCIDRs string
 }
 
 // Ectobase deploys the (non-Ceph subset of the) ectobase substrate onto an
@@ -72,8 +85,18 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 	// reflector runs on the dispatch's fabric identity, so the controller's -reflector-admin is pointed
 	// there via a chart value (retiring the old post-apply patch). The clusters set
 	// cluster.allowSchedulingOnControlPlanes so control-plane nodes are never tainted.
+	// The route-bus PKI needs cert-manager BEFORE the chart (the chart creates
+	// Issuer/ClusterIssuer/Certificate objects the webhook must validate). The dispatch
+	// cluster's CA-type ClusterIssuer reads its CA secret from cert-manager's
+	// cluster-resource-namespace, and the chart puts that secret in `system`.
+	if s.RouteBusMTLS {
+		if err := CertManager(ctx, nil, s.DispatchKubeconfig, "system"); err != nil {
+			return fmt.Errorf("dispatch cert-manager: %w", err)
+		}
+	}
+
 	slog.Info("installing ectobase-dispatch chart", "chart", s.DispatchChartPath)
-	if err := helmInstallDispatch(ctx, s.DispatchKubeconfig, s.DispatchChartPath, s.DispatchIdentity); err != nil {
+	if err := helmInstallDispatch(ctx, s.DispatchKubeconfig, s.DispatchChartPath, s.DispatchIdentity, s.RouteBusMTLS, s.ReflectorIP); err != nil {
 		return fmt.Errorf("helm install ectobase-dispatch: %w", err)
 	}
 	if err := waitAggregatedAPI(ctx, s.DispatchKubeconfig); err != nil {
@@ -144,7 +167,16 @@ func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster, brokerKu
 		"broker-dispatch-kubeconfig", "kubeconfig", brokerKubeconfig); err != nil {
 		return fmt.Errorf("cluster %s: create broker secret: %w", c.Name, err)
 	}
-	if err := helmInstallPool(ctx, c.Kubeconfig, c.Name, s.PoolChartPath, s.DispatchIdentity, s.UnderlayWithin); err != nil {
+	// The pool chart renders a cert-manager Issuer (routebus-pool-ca) and each agent
+	// self-mints a leaf Certificate, so cert-manager must be up first. The pool uses a
+	// NAMESPACED Issuer (reads its secret from its own namespace), so no
+	// cluster-resource-namespace override is needed here.
+	if s.RouteBusMTLS {
+		if err := CertManager(ctx, nil, c.Kubeconfig, ""); err != nil {
+			return fmt.Errorf("cluster %s: cert-manager: %w", c.Name, err)
+		}
+	}
+	if err := helmInstallPool(ctx, c.Kubeconfig, c.Name, s.PoolChartPath, s.DispatchIdentity, s.UnderlayWithin, s.RouteBusMTLS, c.UnderlayCIDRs); err != nil {
 		return fmt.Errorf("cluster %s: helm install ectobase-pool: %w", c.Name, err)
 	}
 	// The broker mounts broker-dispatch-kubeconfig as a volume, so an existing broker pod keeps the
@@ -235,11 +267,19 @@ func createSecretFromFile(ctx context.Context, kubeconfig, ns, name, key, path s
 // on the dispatch's fabric identity, so the dispatch-controller's -reflector-admin (a chart value) points
 // there. --create-namespace makes the baseline-safe `system` release namespace; the chart creates
 // the PSA-privileged ectobase-system namespace itself.
-func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIdentity string) error {
+func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIdentity string, mtls bool, reflectorIP string) error {
 	args := []string{"upgrade", "--install", "ectobase-dispatch", chartPath,
 		"--kubeconfig", kubeconfig,
 		"--namespace", "system", "--create-namespace",
 		"--set", "reflectorAdmin=[" + dispatchIdentity + "]:" + reflectorAdminPort,
+	}
+	if mtls {
+		// reflectorIP MUST equal the host part of reflectorAdmin/reflectorAddress (dispatchIdentity)
+		// or client cert verification of the reflector server fails.
+		args = append(args,
+			"--set", "routebus.mtls.enabled=true",
+			"--set", "routebus.mtls.reflectorIP="+reflectorIP,
+		)
 	}
 	return exec.Run(ctx, "helm", args...)
 }
@@ -248,7 +288,7 @@ func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIde
 // apiserverAddress is the LOCAL cluster (the agent reads/writes its own cluster); reflectorAddress
 // points at the dispatch's reflector on the fabric. The release namespace (ectobase-system) is
 // pre-created by the caller (ensureHelmNamespace), so no --create-namespace here.
-func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, dispatchIdentity, underlayWithin string) error {
+func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, dispatchIdentity, underlayWithin string, mtls bool, underlayCIDRs string) error {
 	args := []string{"upgrade", "--install", "ectobase-pool", chartPath,
 		"--kubeconfig", kubeconfig,
 		"--namespace", "ectobase-system",
@@ -264,7 +304,20 @@ func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, di
 		// helm --set takes it literally (`:` and `/` are not --set metacharacters).
 		args = append(args, "--set", "underlayWithin="+underlayWithin)
 	}
-	args = append(args, "--wait", "--timeout", "8m")
+	timeout := "8m"
+	if mtls {
+		// The intermediate is IP-name-constrained to the pool /48. underlayCIDRs is a single
+		// CIDR (no comma) so helm --set takes it literally.
+		args = append(args,
+			"--set", "routebus.mtls.enabled=true",
+			"--set", "routebus.mtls.underlayCIDRs="+underlayCIDRs,
+		)
+		// mTLS adds a serial startup chain to agent readiness (broker CSR -> dispatch signer ->
+		// intermediate Secret -> pool Issuer ready -> cert-manager mints the node leaf -> agent
+		// connects), so --wait needs more headroom than the plaintext path.
+		timeout = "12m"
+	}
+	args = append(args, "--wait", "--timeout", timeout)
 	return exec.Run(ctx, "helm", args...)
 }
 

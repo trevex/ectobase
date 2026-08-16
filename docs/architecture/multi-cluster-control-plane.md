@@ -79,7 +79,11 @@ the central rendezvous of the overlay [route bus](./route-bus.md). It runs on
 hostNetwork pinned to a control-plane node, listening on that node's fabric
 loopback so every node — in every pool — can reach it over the shared IPv6
 fabric. The per-pool mesh agents open a long-lived `RouteBus.Session` stream
-to it to learn which overlay prefix lives behind which underlay node.
+to it to learn which overlay prefix lives behind which underlay node. The bus can
+be secured with [per-node mutual TLS](./route-bus.md#securing-the-bus-per-node-mtls-underlay-authz):
+a dispatch-held root CA signs a name-constrained intermediate per pool, each node
+self-mints a leaf bound to its own underlay, and the reflector rejects any announce
+outside the session's underlay.
 
 ## The pool
 
