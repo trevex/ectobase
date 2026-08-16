@@ -156,6 +156,12 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &applyconfigurationsplatformv1alpha1.ClusterPoolStatusApplyConfiguration{}
 	case platformv1alpha1.SchemeGroupVersion.WithKind("NodeDrainStatus"):
 		return &applyconfigurationsplatformv1alpha1.NodeDrainStatusApplyConfiguration{}
+	case platformv1alpha1.SchemeGroupVersion.WithKind("RouteBusIdentity"):
+		return &applyconfigurationsplatformv1alpha1.RouteBusIdentityApplyConfiguration{}
+	case platformv1alpha1.SchemeGroupVersion.WithKind("RouteBusIdentitySpec"):
+		return &applyconfigurationsplatformv1alpha1.RouteBusIdentitySpecApplyConfiguration{}
+	case platformv1alpha1.SchemeGroupVersion.WithKind("RouteBusIdentityStatus"):
+		return &applyconfigurationsplatformv1alpha1.RouteBusIdentityStatusApplyConfiguration{}
 
 		// Group=storage.ectobase.dev, Version=v1alpha1
 	case storagev1alpha1.SchemeGroupVersion.WithKind("Volume"):

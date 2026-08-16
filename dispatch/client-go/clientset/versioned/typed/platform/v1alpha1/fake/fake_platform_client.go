@@ -16,6 +16,10 @@ func (c *FakePlatformV1alpha1) ClusterPools() v1alpha1.ClusterPoolInterface {
 	return newFakeClusterPools(c)
 }
 
+func (c *FakePlatformV1alpha1) RouteBusIdentities() v1alpha1.RouteBusIdentityInterface {
+	return newFakeRouteBusIdentities(c)
+}
+
 // RESTClient returns a RESTClient that is used to communicate
 // with API server by this client implementation.
 func (c *FakePlatformV1alpha1) RESTClient() rest.Interface {

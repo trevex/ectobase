@@ -39,6 +39,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&ClusterPool{},
 		&ClusterPoolList{},
+		&RouteBusIdentity{},
+		&RouteBusIdentityList{},
 	)
 	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 

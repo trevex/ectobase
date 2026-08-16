@@ -75,6 +75,8 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		// Group=platform.ectobase.dev, Version=v1alpha1
 	case platformv1alpha1.SchemeGroupVersion.WithResource("clusterpools"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Platform().V1alpha1().ClusterPools().Informer()}, nil
+	case platformv1alpha1.SchemeGroupVersion.WithResource("routebusidentities"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Platform().V1alpha1().RouteBusIdentities().Informer()}, nil
 
 		// Group=storage.ectobase.dev, Version=v1alpha1
 	case storagev1alpha1.SchemeGroupVersion.WithResource("volumes"):

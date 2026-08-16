@@ -5,3 +5,7 @@ package v1alpha1
 // ClusterPoolListerExpansion allows custom methods to be added to
 // ClusterPoolLister.
 type ClusterPoolListerExpansion interface{}
+
+// RouteBusIdentityListerExpansion allows custom methods to be added to
+// RouteBusIdentityLister.
+type RouteBusIdentityListerExpansion interface{}

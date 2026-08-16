@@ -34,3 +34,23 @@ func (in ClusterPoolStatus) OpenAPIModelName() string {
 func (in NodeDrainStatus) OpenAPIModelName() string {
 	return "dev.ectobase.platform.v1alpha1.NodeDrainStatus"
 }
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in RouteBusIdentity) OpenAPIModelName() string {
+	return "dev.ectobase.platform.v1alpha1.RouteBusIdentity"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in RouteBusIdentityList) OpenAPIModelName() string {
+	return "dev.ectobase.platform.v1alpha1.RouteBusIdentityList"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in RouteBusIdentitySpec) OpenAPIModelName() string {
+	return "dev.ectobase.platform.v1alpha1.RouteBusIdentitySpec"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in RouteBusIdentityStatus) OpenAPIModelName() string {
+	return "dev.ectobase.platform.v1alpha1.RouteBusIdentityStatus"
+}

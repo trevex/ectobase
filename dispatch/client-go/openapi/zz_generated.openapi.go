@@ -103,6 +103,10 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		platformv1alpha1.ClusterPoolSpec{}.OpenAPIModelName():        schema_ectobase_api_platform_v1alpha1_ClusterPoolSpec(ref),
 		platformv1alpha1.ClusterPoolStatus{}.OpenAPIModelName():      schema_ectobase_api_platform_v1alpha1_ClusterPoolStatus(ref),
 		platformv1alpha1.NodeDrainStatus{}.OpenAPIModelName():        schema_ectobase_api_platform_v1alpha1_NodeDrainStatus(ref),
+		platformv1alpha1.RouteBusIdentity{}.OpenAPIModelName():       schema_ectobase_api_platform_v1alpha1_RouteBusIdentity(ref),
+		platformv1alpha1.RouteBusIdentityList{}.OpenAPIModelName():   schema_ectobase_api_platform_v1alpha1_RouteBusIdentityList(ref),
+		platformv1alpha1.RouteBusIdentitySpec{}.OpenAPIModelName():   schema_ectobase_api_platform_v1alpha1_RouteBusIdentitySpec(ref),
+		platformv1alpha1.RouteBusIdentityStatus{}.OpenAPIModelName(): schema_ectobase_api_platform_v1alpha1_RouteBusIdentityStatus(ref),
 		storagev1alpha1.Volume{}.OpenAPIModelName():                  schema_ectobase_api_storage_v1alpha1_Volume(ref),
 		storagev1alpha1.VolumeList{}.OpenAPIModelName():              schema_ectobase_api_storage_v1alpha1_VolumeList(ref),
 		storagev1alpha1.VolumeSpec{}.OpenAPIModelName():              schema_ectobase_api_storage_v1alpha1_VolumeSpec(ref),
@@ -3863,6 +3867,182 @@ func schema_ectobase_api_platform_v1alpha1_NodeDrainStatus(ref common.ReferenceC
 				Required: []string{"prefix"},
 			},
 		},
+	}
+}
+
+func schema_ectobase_api_platform_v1alpha1_RouteBusIdentity(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, served by the dispatch aggregated apiserver. The broker creates it; the dispatch signer fills status.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(platformv1alpha1.RouteBusIdentitySpec{}.OpenAPIModelName()),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(platformv1alpha1.RouteBusIdentityStatus{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			platformv1alpha1.RouteBusIdentitySpec{}.OpenAPIModelName(), platformv1alpha1.RouteBusIdentityStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_platform_v1alpha1_RouteBusIdentityList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "RouteBusIdentityList is a list of RouteBusIdentity objects.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(platformv1alpha1.RouteBusIdentity{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			platformv1alpha1.RouteBusIdentity{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_platform_v1alpha1_RouteBusIdentitySpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "RouteBusIdentitySpec is a pool's request for a route-bus intermediate CA. The pool (its broker) generates the intermediate keypair LOCALLY and submits only the CSR — the private key is never transmitted. The dispatch signer returns a name-constrained intermediate that can mint per-node agent leaves scoped to this pool.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"poolName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PoolName is the ClusterPool this identity belongs to. The signed intermediate is name-constrained to this pool so it can only mint node identities within it.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"request": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Request is the PEM-encoded PKCS#10 certificate-signing request for the pool's intermediate CA (the pool keeps the matching private key).",
+							Type:        []string{"string"},
+							Format:      "byte",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_platform_v1alpha1_RouteBusIdentityStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "RouteBusIdentityStatus carries the signer's response: the signed intermediate and the root CA bundle the reflector trusts.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"certificate": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Certificate is the PEM-encoded signed intermediate CA certificate (the CSR response).",
+							Type:        []string{"string"},
+							Format:      "byte",
+						},
+					},
+					"caBundle": {
+						SchemaProps: spec.SchemaProps{
+							Description: "CABundle is the PEM-encoded root CA the reflector trusts, so the pool can present the full chain (leaf -> intermediate -> root).",
+							Type:        []string{"string"},
+							Format:      "byte",
+						},
+					},
+					"conditions": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-map-keys": []interface{}{
+									"type",
+								},
+								"x-kubernetes-list-type":       "map",
+								"x-kubernetes-patch-merge-key": "type",
+								"x-kubernetes-patch-strategy":  "merge",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "Conditions represent the latest observations (e.g. Signed / Denied).",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(metav1.Condition{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			metav1.Condition{}.OpenAPIModelName()},
 	}
 }
 

@@ -105,3 +105,63 @@ _Appears in:_
 | `drained` _boolean_ | Drained is true once the broker confirms the /64's stale VMIs are gone. |  |  |
 
 
+#### RouteBusIdentity
+
+
+
+RouteBusIdentity is a pool's route-bus intermediate-CA request + signed response, served
+by the dispatch aggregated apiserver. The broker creates it; the dispatch signer fills status.
+
+
+
+_Appears in:_
+- [RouteBusIdentityList](#routebusidentitylist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[RouteBusIdentitySpec](#routebusidentityspec)_ |  |  |  |
+| `status` _[RouteBusIdentityStatus](#routebusidentitystatus)_ |  |  |  |
+
+
+
+
+#### RouteBusIdentitySpec
+
+
+
+RouteBusIdentitySpec is a pool's request for a route-bus intermediate CA. The pool (its
+broker) generates the intermediate keypair LOCALLY and submits only the CSR — the private
+key is never transmitted. The dispatch signer returns a name-constrained intermediate that
+can mint per-node agent leaves scoped to this pool.
+
+
+
+_Appears in:_
+- [RouteBusIdentity](#routebusidentity)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `poolName` _string_ | PoolName is the ClusterPool this identity belongs to. The signed intermediate is<br />name-constrained to this pool so it can only mint node identities within it. |  |  |
+| `request` _integer array_ | Request is the PEM-encoded PKCS#10 certificate-signing request for the pool's<br />intermediate CA (the pool keeps the matching private key). |  |  |
+
+
+#### RouteBusIdentityStatus
+
+
+
+RouteBusIdentityStatus carries the signer's response: the signed intermediate and the
+root CA bundle the reflector trusts.
+
+
+
+_Appears in:_
+- [RouteBusIdentity](#routebusidentity)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `certificate` _integer array_ | Certificate is the PEM-encoded signed intermediate CA certificate (the CSR response). |  | Optional: \{\} <br /> |
+| `caBundle` _integer array_ | CABundle is the PEM-encoded root CA the reflector trusts, so the pool can present the<br />full chain (leaf -> intermediate -> root). |  | Optional: \{\} <br /> |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#condition-v1-meta) array_ | Conditions represent the latest observations (e.g. Signed / Denied). |  | Optional: \{\} <br /> |
+
+
