@@ -5,6 +5,7 @@ package livetest
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -167,6 +168,24 @@ func TestPodOverlayPing(t *testing.T) {
 	eventually(t, 2*time.Minute, 5*time.Second, func() error {
 		return podPing(ctx, cfg, epC.node.Cluster, podByEP[epC.nic], epA.ip)
 	})
+
+	// 7. Jumbo overlay. Two checks: (a) the overlay iface got a jumbo MTU — flowplane derives it
+	//    from the 9000 underlay uplinks (8960 = 9000 - 40 encap) and the CNI provisions it, so a
+	//    value >1500 proves jumbo was plumbed end-to-end; (b) an 8000-byte payload actually crosses
+	//    the overlay. At an 8960 iface the ~8028-byte packet is sent unfragmented and encaps to
+	//    ~8068, which fits the 9000 underlay — if any underlay hop weren't jumbo the encapped outer
+	//    IPv6 frame would be dropped (routers don't fragment IPv6). Routes converged in step 6.
+	//    (busybox ping has no -M/DF; the MTU assertion is the deterministic jumbo-provisioning proof.)
+	for _, ep := range []endpoint{epA, epC} {
+		mtu, err := podOverlayMTU(ctx, cfg, ep.node.Cluster, podByEP[ep.nic])
+		require.NoError(t, err)
+		require.Greater(t, mtu, 1500,
+			"pod %s overlay iface MTU should be jumbo (derived from the 9000 underlay), got %d", podByEP[ep.nic], mtu)
+	}
+	require.NoError(t, podPingSize(ctx, cfg, epA.node.Cluster, podByEP[epA.nic], epC.ip, 8000),
+		"jumbo overlay ping A->C (8000B) failed — underlay not carrying jumbo")
+	require.NoError(t, podPingSize(ctx, cfg, epC.node.Cluster, podByEP[epC.nic], epA.ip, 8000),
+		"jumbo overlay ping C->A (8000B) failed — underlay not carrying jumbo")
 }
 
 // containerName is the Container name that owns a NIC.
@@ -279,6 +298,39 @@ func podPing(ctx context.Context, cfg *config.Config, cluster, pod, dstIP string
 		return fmt.Errorf("overlay ping %s from %s/%s: %w\n%s", dstIP, cluster, pod, err, out)
 	}
 	return nil
+}
+
+// podPingSize pings with an explicit payload size (busybox ping, no -M/DF flag). At a jumbo overlay
+// iface a >1500B payload is sent as one unfragmented frame that must cross the encapped underlay.
+func podPingSize(ctx context.Context, cfg *config.Config, cluster, pod, dstIP string, size int) error {
+	out, err := kubectl(ctx, cfg, cluster, "exec", pod, "--",
+		"ping", "-c3", "-W2", "-s", fmt.Sprintf("%d", size), dstIP)
+	if err != nil {
+		return fmt.Errorf("overlay ping %s from %s/%s (size=%d): %w\n%s", dstIP, cluster, pod, size, err, out)
+	}
+	return nil
+}
+
+// podOverlayMTU returns the largest non-loopback iface MTU inside the pod (the overlay/net1 iface,
+// which flowplane provisions to the derived guest MTU). Robust to the exact iface name/value.
+func podOverlayMTU(ctx context.Context, cfg *config.Config, cluster, pod string) (int, error) {
+	out, err := kubectl(ctx, cfg, cluster, "exec", pod, "--", "ip", "-o", "link", "show")
+	if err != nil {
+		return 0, fmt.Errorf("ip link in %s/%s: %w\n%s", cluster, pod, err, out)
+	}
+	max := 0
+	fields := strings.Fields(out)
+	for i, f := range fields {
+		if f == "mtu" && i+1 < len(fields) {
+			if v, e := strconv.Atoi(fields[i+1]); e == nil && v > max {
+				max = v
+			}
+		}
+	}
+	if max == 0 {
+		return 0, fmt.Errorf("no mtu found in ip link output for %s/%s:\n%s", cluster, pod, out)
+	}
+	return max, nil
 }
 
 // tail returns the last n lines of s (for compact diagnostics on failure).

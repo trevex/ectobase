@@ -62,18 +62,26 @@ The `veth` driver supports native XDP, but only when the frame fits its linear b
 `veth: Peer MTU is too large to set XDP` and the loader falls back to generic. Native at jumbo needs a
 multi-buffer (`xdp.frags` / `BPF_F_XDP_HAS_FRAGS`) program.
 
-**How it bit us:** containerlab defaults veths to **MTU 9500**, so native silently fell back to generic
-everywhere. We set the fabric links to **MTU 3000** to get native (still well above the encap need).
+`uplink_rx`, `xdp_uplink_v6`, and `wan_rx` are declared `#[xdp(frags)]` (aya sets
+`BPF_F_XDP_HAS_FRAGS` at load) so native XDP *can* attach at jumbo MTU. This is safe because the
+datapath only touches front headers (all access is const-offset within the guaranteed linear head)
+and uses incremental delta checksums — it never reads the payload, which is what lives in the frags.
+The verifier is stricter for frags programs, so a stray past-`data_end` read would be rejected; the
+programs verify + stay byte-identical to the sim.
 
-`uplink_rx` and `wan_rx` are declared `#[xdp(frags)]` (aya sets `BPF_F_XDP_HAS_FRAGS` at load) so
-native XDP *can* attach at jumbo MTU. This is safe because the datapath only touches front headers
-(all access is const-offset within the guaranteed linear head) and uses incremental delta checksums —
-it never reads the payload, which is what lives in the frags. The verifier is stricter for frags
-programs, so a stray past-`data_end` read would be rejected; the programs verify + stay byte-identical
-to the sim. Caveat: jumbo-native additionally needs the **RX NIC and the redirect target** to advertise
-scatter-gather (`NETDEV_XDP_ACT_RX_SG` / `NDO_XMIT_SG`); veth has it on recent kernels, real NICs vary.
-clab stays at MTU 3000 (native veth limit), so frags is exercised via the anchor test, not the clab
-datapath.
+**Jumbo on clab vs. hardware.** On containerlab, compute nodes are *pinned to generic/SKB XDP*
+(`FLOWPLANE_SKB_MODE`): native XDP redirect into a guest veth returns `-95/EOPNOTSUPP` on clab veths,
+so the guest-delivery path must use the skb path. Generic/SKB XDP carries non-linear (jumbo) skbs
+fine, so the fabric runs jumbo end-to-end — the compute-node underlay uplinks are **MTU 9000** (guest
+MTU 8960 = 9000 − 40 encap), exercised by `TestPodOverlayPing` (an 8000-byte DF ping across the
+overlay). The native `#[xdp(frags)]` *fast path* is therefore HW-gated (like DPDK): it needs a real
+NIC whose driver advertises XDP scatter-gather (`NETDEV_XDP_ACT_RX_SG` / `NDO_XMIT_SG`), and is
+covered by the byte-parity anchor rather than the clab datapath.
+
+**Guest-MTU probe.** `flowplane serve` probes each uplink's advertised `xdp-features` (`ip -d link
+show`) and only hands guests a jumbo MTU when the datapath can carry it — generic/SKB mode (always),
+or a native uplink advertising `rx-sg`. Otherwise it clamps the guest to the standard 1500-derived
+MTU rather than a jumbo one the native path would drop. An explicit `--guest-mtu` overrides the probe.
 
 ## Guest MTU provisioning
 

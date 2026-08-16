@@ -43,20 +43,74 @@ pub(crate) fn mtu_of(iface: &str) -> Option<u32> {
         .and_then(|s| s.trim().parse::<u32>().ok())
 }
 
+/// Standard (non-jumbo) underlay L3 MTU. When the datapath can't carry jumbo on the native fast
+/// path (native XDP with no RX scatter-gather), the guest is clamped to this rather than handed a
+/// jumbo MTU that would degrade or drop — an explicit `--guest-mtu` still overrides.
+pub(crate) const STANDARD_LINK_MTU: u32 = 1500;
+
 /// Node-wide guest MTU: the explicit override if set, else the smallest uplink MTU minus the encap
 /// overhead (so an encapped full-size guest frame still fits the underlay). One value feeds the veth
 /// link MTU, the pod route MTU (returned to the CNI), DHCPv4 option 26, and the IPv6 RA MTU option.
-/// Falls back to 1500 base if no uplink MTU is readable. Never returns above the underlay path.
-pub(crate) fn derive_guest_mtu(explicit: Option<u32>, uplinks: &[&str]) -> u16 {
+/// Falls back to 1500 base if no uplink MTU is readable. When `jumbo_ok` is false the underlay is
+/// first clamped to the standard MTU so jumbo is only offered where the datapath can carry it
+/// (generic/SKB mode, or a native NIC advertising RX scatter-gather — see [`jumbo_ok`]).
+pub(crate) fn derive_guest_mtu(explicit: Option<u32>, uplinks: &[&str], jumbo_ok: bool) -> u16 {
     if let Some(m) = explicit {
         return m as u16;
     }
-    let base = uplinks
+    let min_uplink = uplinks
         .iter()
         .filter_map(|u| mtu_of(u))
         .min()
-        .unwrap_or(1500);
+        .unwrap_or(STANDARD_LINK_MTU);
+    guest_mtu_from(min_uplink, jumbo_ok)
+}
+
+/// Pure guest-MTU policy given the smallest uplink MTU: clamp to standard when jumbo isn't safe,
+/// subtract the encap overhead, floor at 576.
+fn guest_mtu_from(min_uplink: u32, jumbo_ok: bool) -> u16 {
+    let base = if jumbo_ok {
+        min_uplink
+    } else {
+        min_uplink.min(STANDARD_LINK_MTU)
+    };
     base.saturating_sub(ENCAP_OVERHEAD_V6).max(576) as u16
+}
+
+/// Parse `ip -d link show dev <iface>` for XDP scatter-gather (`rx-sg`) in the advertised
+/// `xdp-features`. `None` when no xdp-features line is present (older iproute2 / no info); jumbo
+/// multi-buffer (frags) XDP needs `rx-sg` on the native path.
+pub(crate) fn parse_xdp_sg(ip_detail: &str) -> Option<bool> {
+    let line = ip_detail.lines().find(|l| l.contains("xdp-features"))?;
+    Some(line.contains("rx-sg"))
+}
+
+/// Best-effort probe of one uplink's XDP scatter-gather support via `ip -d link show` (shelling out
+/// keeps the dependency surface small, consistent with flowplane-device). `None` on any error.
+fn uplink_supports_sg(iface: &str) -> Option<bool> {
+    let out = std::process::Command::new("ip")
+        .args(["-d", "link", "show", "dev", iface])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_xdp_sg(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Whether jumbo guest MTUs are safe to hand out. Pure policy over the per-uplink SG probe results:
+/// always true in generic/SKB mode (the skb carries non-linear frames), otherwise every uplink must
+/// definitively advertise scatter-gather. Unknown (`None`) is treated as NOT jumbo-capable —
+/// conservative: prefer a working standard MTU over a possibly-degraded jumbo one.
+pub(crate) fn jumbo_ok(skb_mode: bool, sg: &[Option<bool>]) -> bool {
+    skb_mode || (!sg.is_empty() && sg.iter().all(|s| *s == Some(true)))
+}
+
+/// Probe every uplink's SG support and decide whether jumbo is safe (see [`jumbo_ok`]). `skb_mode`
+/// reflects the `FLOWPLANE_SKB_MODE` pin (generic XDP always carries jumbo).
+pub(crate) fn probe_jumbo_ok(skb_mode: bool, uplinks: &[&str]) -> bool {
+    let sg: Vec<Option<bool>> = uplinks.iter().map(|u| uplink_supports_sg(u)).collect();
+    jumbo_ok(skb_mode, &sg)
 }
 
 /// Parse `"aa:bb:cc:dd:ee:ff"` into 6 bytes.
@@ -503,9 +557,15 @@ async fn main() -> anyhow::Result<()> {
             let uplinks: Vec<&str> = std::iter::once(uplink.as_str())
                 .chain(extra_uplink.iter().map(|s| s.as_str()))
                 .collect();
-            let guest_mtu = derive_guest_mtu(guest_mtu.or(dhcp_mtu), &uplinks);
+            // Jumbo is offered only where the datapath can carry it: generic/SKB mode (skb handles
+            // non-linear frames) or a native uplink advertising XDP scatter-gather. Otherwise the
+            // guest is clamped to the standard MTU. An explicit --guest-mtu overrides the probe.
+            let skb_mode = std::env::var_os("FLOWPLANE_SKB_MODE").is_some();
+            let jumbo = probe_jumbo_ok(skb_mode, &uplinks);
+            let guest_mtu = derive_guest_mtu(guest_mtu.or(dhcp_mtu), &uplinks, jumbo);
             println!(
-                "guest MTU = {guest_mtu} (uplinks {uplinks:?}, encap overhead {ENCAP_OVERHEAD_V6})"
+                "guest MTU = {guest_mtu} (uplinks {uplinks:?}, encap overhead {ENCAP_OVERHEAD_V6}, \
+                 jumbo_ok {jumbo}, skb_mode {skb_mode})"
             );
             ctrl.set_dhcp_config(guest_mtu, &dns4, &dns6)
                 .map_err(|e| anyhow::anyhow!(e))?;
@@ -1499,6 +1559,49 @@ mod tests {
     #[test]
     fn parse_mac_valid() {
         assert_eq!(parse_mac("02:00:00:00:00:01").unwrap(), [2, 0, 0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn parse_xdp_sg_detects_rx_sg() {
+        let with = "12: eth1: <...> mtu 9000 ...\n    xdp-features: basic redirect ndo-xmit rx-sg";
+        let without = "12: eth1: <...> mtu 1500 ...\n    xdp-features: basic redirect ndo-xmit";
+        let none = "12: eth1: <...> mtu 1500 ...\n    link/ether 02:00:00:00:00:01";
+        assert_eq!(parse_xdp_sg(with), Some(true));
+        assert_eq!(parse_xdp_sg(without), Some(false));
+        assert_eq!(parse_xdp_sg(none), None);
+    }
+
+    #[test]
+    fn jumbo_ok_policy() {
+        // SKB mode always carries jumbo (skb non-linear), regardless of SG.
+        assert!(jumbo_ok(true, &[]));
+        assert!(jumbo_ok(true, &[Some(false), None]));
+        // Native: every uplink must definitively support SG.
+        assert!(jumbo_ok(false, &[Some(true), Some(true)]));
+        assert!(!jumbo_ok(false, &[Some(true), Some(false)]));
+        // Unknown (None) is conservative — not jumbo-capable.
+        assert!(!jumbo_ok(false, &[Some(true), None]));
+        // No uplinks -> not jumbo-capable on native.
+        assert!(!jumbo_ok(false, &[]));
+    }
+
+    #[test]
+    fn guest_mtu_clamps_to_standard_without_jumbo() {
+        // Jumbo ok: full underlay minus encap.
+        assert_eq!(guest_mtu_from(9000, true), 8960);
+        // Jumbo not ok: clamp to standard 1500 first, then minus encap.
+        assert_eq!(guest_mtu_from(9000, false), 1460);
+        // Small underlay is unaffected by the clamp either way.
+        assert_eq!(guest_mtu_from(1500, false), 1460);
+        assert_eq!(guest_mtu_from(1500, true), 1460);
+        // Floor at 576.
+        assert_eq!(guest_mtu_from(600, true), 576);
+    }
+
+    #[test]
+    fn derive_guest_mtu_explicit_overrides_probe() {
+        // Explicit --guest-mtu wins even when jumbo is not ok and uplinks are unreadable.
+        assert_eq!(derive_guest_mtu(Some(9000), &["nope0"], false), 9000);
     }
 
     #[test]

@@ -225,10 +225,14 @@ topology:
     - endpoints: ["edge2:eth2", "sw2:eth2"]
       mtu: 1500
 {{- range $n := .Nodes }}
+    # Jumbo (9000) on the compute-node underlay uplinks so the E/W overlay can carry jumbo guest
+    # frames (guest MTU = 9000 - 40 encap = 8960). Compute nodes run generic/SKB XDP on clab (native
+    # veth redirect is unsupported), which carries non-linear frames fine; the native #[xdp(frags)]
+    # fast path is HW-gated. N/S edge links stay 1500 (guests PMTU-clamp for internet egress).
     - endpoints: ["{{ $n.KindContainer }}:eth1", "sw1:eth{{ add 2 $n.PortSeq }}"]
-      mtu: 1500
+      mtu: 9000
     - endpoints: ["{{ $n.KindContainer }}:eth2", "sw2:eth{{ add 2 $n.PortSeq }}"]
-      mtu: 1500
+      mtu: 9000
 {{- end }}
     - endpoints: ["edge1:eth3", "wan:eth1"]
       mtu: 1500
