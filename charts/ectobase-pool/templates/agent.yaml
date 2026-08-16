@@ -46,7 +46,10 @@ spec:
             # Reach the API over the fabric (the mgmt net has no inter-node path here).
             - "--kubeconfig=/etc/mesh/kubeconfig"
             {{- if .Values.routebus.mtls.enabled }}
-            - "--tls-ca=/etc/routebus-tls/ca.crt"
+            # ca = ROOT (verify the reflector, whose server cert chains to root) from the
+            # broker-written intermediate Secret's ca.crt; cert/key = the pool-issued leaf
+            # (cert-manager bundles leaf+intermediate into tls.crt for the CA issuer).
+            - "--tls-ca=/etc/routebus-root/ca.crt"
             - "--tls-cert=/etc/routebus-tls/tls.crt"
             - "--tls-key=/etc/routebus-tls/tls.key"
             {{- end }}
@@ -72,6 +75,9 @@ spec:
             - name: routebus-tls
               mountPath: /etc/routebus-tls
               readOnly: true
+            - name: routebus-root
+              mountPath: /etc/routebus-root
+              readOnly: true
             {{- end }}
       volumes:
         - name: kubeconfig
@@ -85,4 +91,10 @@ spec:
         - name: routebus-tls
           secret:
             secretName: agent-routebus-tls
+        - name: routebus-root
+          secret:
+            secretName: {{ .Values.routebus.mtls.intermediateSecret }}
+            items:
+              - key: ca.crt
+                path: ca.crt
         {{- end }}

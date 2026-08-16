@@ -36,6 +36,16 @@ spec:
           args:
             - "--cluster-name={{ .Values.broker.clusterName }}"
             - "--dispatch-kubeconfig=/secrets/dispatch/kubeconfig"
+            {{- if .Values.routebus.mtls.enabled }}
+            # Bootstrap this pool's route-bus intermediate CA (generate keypair locally, CSR to
+            # dispatch, write the signed intermediate into this Secret in POD_NAMESPACE).
+            - "--routebus-intermediate-secret={{ .Values.routebus.mtls.intermediateSecret }}"
+            {{- end }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           volumeMounts:
             - name: dispatch-kubeconfig
               mountPath: /secrets/dispatch

@@ -2,9 +2,29 @@
 # Copyright 2026 ectobase contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Agent client identity for route-bus mutual TLS. Issued from the shared CA-type
-# ClusterIssuer the dispatch chart creates, so the reflector (whose server cert chains to
-# the same CA) accepts this client cert. Requires the dispatch chart to be installed first.
+# Pool-local route-bus PKI. The broker requests this pool's intermediate CA from dispatch (a
+# RouteBusIdentity CSR — the pool keeps the key) and writes it into the intermediateSecret
+# ({tls.crt=intermediate, tls.key=pool key, ca.crt=root}). A cert-manager CA Issuer backed by
+# that Secret mints the agent leaf. The reflector trusts only the ROOT; the agent presents
+# leaf -> intermediate (cert-manager bundles the chain) so it validates root-anchored, and the
+# intermediate's name-constraint keeps this pool from minting another pool's identity.
+#
+# No cross-cluster cert-manager dependency: the only thing crossing the boundary is the CSR.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: routebus-pool-ca
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ectobase-pool.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ .Values.routebus.mtls.intermediateSecret }}
+---
+# Agent client leaf, minted by the pool intermediate. Its DNS SAN sits under the pool's
+# name-constraint domain (<pool>.routebus.ectobase.dev) so it validates under the intermediate.
+# (Per-node leaves — <node>.<pool>.routebus.ectobase.dev via cert-manager-csi — are a follow-up;
+# this is the pool identity.)
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -14,14 +34,16 @@ metadata:
     {{- include "ectobase-pool.labels" . | nindent 4 }}
 spec:
   secretName: agent-routebus-tls
-  duration: 8760h # 1y
-  commonName: agent
+  duration: 2160h # 90d
+  commonName: {{ .Values.broker.clusterName }}
+  dnsNames:
+    - {{ .Values.broker.clusterName }}.routebus.ectobase.dev
   privateKey:
     algorithm: ECDSA
     size: 256
   usages:
     - client auth
   issuerRef:
-    name: {{ .Values.routebus.mtls.clusterIssuer }}
-    kind: ClusterIssuer
+    name: routebus-pool-ca
+    kind: Issuer
 {{- end }}

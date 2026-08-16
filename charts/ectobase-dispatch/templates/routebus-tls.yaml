@@ -16,7 +16,10 @@ apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
   name: routebus-selfsign
-  namespace: {{ .Values.agentNamespace }}
+  # The root CA + selfsign issuer live in the dispatch-controller's namespace so the signer
+  # can mount the root cert+key to sign pool intermediates. The cluster-scoped ClusterIssuer
+  # (below) still needs this CA secret in cert-manager's cluster-resource-namespace.
+  namespace: {{ .Values.namespace }}
   labels:
     {{- include "ectobase-dispatch.labels" . | nindent 4 }}
 spec:
@@ -26,7 +29,7 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: routebus-ca
-  namespace: {{ .Values.agentNamespace }}
+  namespace: {{ .Values.namespace }}
   labels:
     {{- include "ectobase-dispatch.labels" . | nindent 4 }}
 spec:

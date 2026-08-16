@@ -219,7 +219,7 @@
             "enabled": {
               "type": "boolean"
             },
-            "clusterIssuer": {
+            "intermediateSecret": {
               "type": "string"
             }
           }

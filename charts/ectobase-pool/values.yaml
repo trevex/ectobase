@@ -26,12 +26,14 @@ reflectorAddress: "[fd00:db8:0:1::1]:1338"
 # routebus configures the agent's route-bus transport to the reflector.
 routebus:
   mtls:
-    # enabled turns on mutual TLS to the reflector. REQUIRES cert-manager AND the dispatch
-    # chart installed first (it owns the shared CA ClusterIssuer this agent cert is
-    # issued from). MUST match the dispatch chart's routebus.mtls.enabled.
+    # enabled turns on mutual TLS to the reflector. REQUIRES cert-manager in the pool. The pool
+    # gets its own intermediate CA via a RouteBusIdentity CSR to dispatch (no cross-cluster
+    # cert-manager dependency). MUST match the dispatch chart's routebus.mtls.enabled.
     enabled: false
-    # clusterIssuer is the shared CA ClusterIssuer name; MUST match the dispatch chart.
-    clusterIssuer: ectobase-routebus-ca
+    # intermediateSecret is the pool CA Secret the broker requests from dispatch and writes
+    # locally ({tls.crt=intermediate, tls.key=pool key, ca.crt=root}); it backs the pool
+    # cert-manager Issuer that mints the agent leaf, and carries the root the agent trusts.
+    intermediateSecret: routebus-pool-ca
 # Control-plane API server the agent dials over the fabric (kubeconfig server URL).
 apiserverAddress: "https://[fd00:db8:0:1::1]:6443"
 
