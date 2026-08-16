@@ -70,10 +70,19 @@ rules:
   - platform.ectobase.dev
   resources:
   - clusterpools/status
+  - routebusidentities/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - platform.ectobase.dev
+  resources:
+  - routebusidentities
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - storage.ectobase.dev
   resources:

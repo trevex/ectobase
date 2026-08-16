@@ -13,3 +13,6 @@ package main
 //+kubebuilder:rbac:groups=compiled.ectobase.dev,resources=compiledvms/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=storage.ectobase.dev,resources=volumes,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=csiaddons.openshift.io,resources=networkfences,verbs=get;list;watch;create;update;patch;delete
+// Route-bus PKI signer: watches RouteBusIdentity CSRs and writes the signed intermediate to status.
+//+kubebuilder:rbac:groups=platform.ectobase.dev,resources=routebusidentities,verbs=get;list;watch
+//+kubebuilder:rbac:groups=platform.ectobase.dev,resources=routebusidentities/status,verbs=get;update;patch

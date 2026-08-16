@@ -315,6 +315,22 @@ renders the dispatch control plane:
           - get
           - patch
           - update
+      - apiGroups:
+          - platform.ectobase.dev
+        resources:
+          - routebusidentities
+        verbs:
+          - create
+          - get
+          - list
+          - update
+          - watch
+      - apiGroups:
+          - platform.ectobase.dev
+        resources:
+          - routebusidentities/status
+        verbs:
+          - get
   15: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -458,10 +474,19 @@ renders the dispatch control plane:
           - platform.ectobase.dev
         resources:
           - clusterpools/status
+          - routebusidentities/status
         verbs:
           - get
           - patch
           - update
+      - apiGroups:
+          - platform.ectobase.dev
+        resources:
+          - routebusidentities
+        verbs:
+          - get
+          - list
+          - watch
       - apiGroups:
           - storage.ectobase.dev
         resources:

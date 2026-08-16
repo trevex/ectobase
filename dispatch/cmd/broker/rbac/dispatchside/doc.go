@@ -12,3 +12,7 @@ package dispatchside
 // defense-in-depth, not the sole guard against a broker editing pools.
 //+kubebuilder:rbac:groups=platform.ectobase.dev,resources=clusterpools,verbs=get;list;watch
 //+kubebuilder:rbac:groups=platform.ectobase.dev,resources=clusterpools/status,verbs=get;update;patch
+// Route-bus PKI: the broker submits its pool intermediate-CA CSR as a RouteBusIdentity and reads
+// back the signed cert (the dispatch signer fills status).
+//+kubebuilder:rbac:groups=platform.ectobase.dev,resources=routebusidentities,verbs=get;list;watch;create;update
+//+kubebuilder:rbac:groups=platform.ectobase.dev,resources=routebusidentities/status,verbs=get

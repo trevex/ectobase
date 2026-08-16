@@ -2003,6 +2003,17 @@ renders (dpdk clab):
           - list
           - watch
       - apiGroups:
+          - ""
+        resources:
+          - secrets
+        verbs:
+          - create
+          - get
+          - list
+          - patch
+          - update
+          - watch
+      - apiGroups:
           - compiled.ectobase.dev
         resources:
           - compiledcontainers
@@ -4112,6 +4123,17 @@ renders (dpdk hw):
         verbs:
           - get
           - list
+          - watch
+      - apiGroups:
+          - ""
+        resources:
+          - secrets
+        verbs:
+          - create
+          - get
+          - list
+          - patch
+          - update
           - watch
       - apiGroups:
           - compiled.ectobase.dev
@@ -6225,6 +6247,17 @@ renders (ebpf clab):
           - list
           - watch
       - apiGroups:
+          - ""
+        resources:
+          - secrets
+        verbs:
+          - create
+          - get
+          - list
+          - patch
+          - update
+          - watch
+      - apiGroups:
           - compiled.ectobase.dev
         resources:
           - compiledcontainers
@@ -8331,6 +8364,17 @@ renders (ebpf hw):
         verbs:
           - get
           - list
+          - watch
+      - apiGroups:
+          - ""
+        resources:
+          - secrets
+        verbs:
+          - create
+          - get
+          - list
+          - patch
+          - update
           - watch
       - apiGroups:
           - compiled.ectobase.dev
@@ -10442,6 +10486,17 @@ renders (tier1 on):
         verbs:
           - get
           - list
+          - watch
+      - apiGroups:
+          - ""
+        resources:
+          - secrets
+        verbs:
+          - create
+          - get
+          - list
+          - patch
+          - update
           - watch
       - apiGroups:
           - compiled.ectobase.dev
@@ -12590,6 +12645,17 @@ renders (tier1 watchdog):
         verbs:
           - get
           - list
+          - watch
+      - apiGroups:
+          - ""
+        resources:
+          - secrets
+        verbs:
+          - create
+          - get
+          - list
+          - patch
+          - update
           - watch
       - apiGroups:
           - compiled.ectobase.dev
@@ -14748,6 +14814,17 @@ renders with vm-materializer enabled:
         verbs:
           - get
           - list
+          - watch
+      - apiGroups:
+          - ""
+        resources:
+          - secrets
+        verbs:
+          - create
+          - get
+          - list
+          - patch
+          - update
           - watch
       - apiGroups:
           - compiled.ectobase.dev

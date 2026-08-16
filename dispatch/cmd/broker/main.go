@@ -33,9 +33,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
-	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	"github.com/trevex/ectobase/dispatch/pkg/broker"
 )
 
@@ -46,13 +46,17 @@ func main() {
 	os.Setenv("KUBE_FEATURE_WatchListClient", "false") //nolint:errcheck
 
 	var (
-		dispatchKubeconfig        string
+		dispatchKubeconfig   string
 		downstreamKubeconfig string
 		clusterName          string
+		routebusSecret       string
+		routebusSecretNS     string
 	)
 	flag.StringVar(&dispatchKubeconfig, "dispatch-kubeconfig", "", "Path to the dispatch aggregated-apiserver kubeconfig.")
 	flag.StringVar(&downstreamKubeconfig, "downstream-kubeconfig", "", "Path to the downstream cluster kubeconfig.")
 	flag.StringVar(&clusterName, "cluster-name", "", "Cluster name this broker instance serves (required).")
+	flag.StringVar(&routebusSecret, "routebus-intermediate-secret", "", "if set, bootstrap this pool's route-bus intermediate CA into this Secret (enables the mTLS PKI); empty => disabled")
+	flag.StringVar(&routebusSecretNS, "routebus-intermediate-namespace", os.Getenv("POD_NAMESPACE"), "namespace for the intermediate CA Secret (defaults to POD_NAMESPACE)")
 	flag.Parse()
 
 	if clusterName == "" {
@@ -144,7 +148,7 @@ func main() {
 	// idempotent (derive both desired and current sets live; no in-memory diff state).
 	// The dispatch client comes from the manager so it reads through the cache.
 	r := &brokerReconciler{
-		dispatch:     mgr.GetClient(),
+		dispatch:    mgr.GetClient(),
 		downstream:  downstreamClient,
 		clusterName: clusterName,
 	}
@@ -178,7 +182,7 @@ func main() {
 		holderIdentity = clusterName
 	}
 	hb := &broker.Heartbeater{
-		Dispatch:        mgr.GetClient(),
+		Dispatch:       mgr.GetClient(),
 		PoolName:       clusterName,
 		HolderIdentity: holderIdentity,
 		Reporter:       &nodeCapacityReporter{downstream: downstreamClient},
@@ -193,13 +197,34 @@ func main() {
 	// NodePrefixes/NodeDrain + per-VM Placement). Separate from the lease heartbeater so
 	// a slow node/VMI list never delays the lease renewal.
 	sr := &statusReporter{
-		dispatch:     mgr.GetClient(),
+		dispatch:    mgr.GetClient(),
 		downstream:  downstreamClient,
 		clusterName: clusterName,
 		interval:    10 * time.Second,
 	}
 	if err := mgr.Add(sr); err != nil {
 		log.Fatalf("add status reporter runnable: %v", err)
+	}
+
+	// Route-bus PKI bootstrap: when enabled, generate this pool's intermediate CA keypair
+	// locally, submit a CSR as a RouteBusIdentity on dispatch, and write the signed intermediate
+	// + root bundle into the pool Secret that backs the pool cert-manager CA Issuer. A direct
+	// (uncached) dispatch client avoids adding a cluster-wide RouteBusIdentity watch to the cache.
+	if routebusSecret != "" {
+		dispatchDirect, derr := client.New(dispatchCfg, client.Options{Scheme: scheme})
+		if derr != nil {
+			log.Fatalf("build direct dispatch client: %v", derr)
+		}
+		boot := &broker.PoolCertBootstrapper{
+			Dispatch:   dispatchDirect,
+			Downstream: downstreamClient,
+			PoolName:   clusterName,
+			SecretName: routebusSecret,
+			SecretNS:   routebusSecretNS,
+		}
+		if err := mgr.Add(boot); err != nil {
+			log.Fatalf("add routebus cert bootstrapper: %v", err)
+		}
 	}
 
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
@@ -212,7 +237,7 @@ func main() {
 // map from the downstream cluster, keeping that gathering out of the clean, unit-
 // tested ReportStatus seam.
 type statusReporter struct {
-	dispatch     client.Client
+	dispatch    client.Client
 	downstream  client.Client
 	clusterName string
 	interval    time.Duration
@@ -343,14 +368,14 @@ func nodeIsReady(node *corev1.Node) bool {
 // SyncCompiledVMs + SyncCompiledVolumeAttachments + SyncCompiledContainers
 // (declarative set-reconcile; idempotent and restart-safe).
 type brokerReconciler struct {
-	dispatch     client.Client
+	dispatch    client.Client
 	downstream  client.Client
 	clusterName string
 }
 
 func (r *brokerReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result, error) {
 	b := &broker.Broker{
-		Dispatch:     r.dispatch,
+		Dispatch:    r.dispatch,
 		Downstream:  r.downstream,
 		ClusterName: r.clusterName,
 	}

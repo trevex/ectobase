@@ -31,3 +31,19 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - platform.ectobase.dev
+  resources:
+  - routebusidentities
+  verbs:
+  - create
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - platform.ectobase.dev
+  resources:
+  - routebusidentities/status
+  verbs:
+  - get
