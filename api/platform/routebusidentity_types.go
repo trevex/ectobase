@@ -19,6 +19,11 @@ type RouteBusIdentitySpec struct {
 	// Request is the PEM-encoded PKCS#10 certificate-signing request for the pool's
 	// intermediate CA (the pool keeps the matching private key).
 	Request []byte
+	// PermittedUnderlayCIDRs are the pool's underlay IPv6 ranges (e.g. its node /64s or the
+	// covering /48). The signer name-constrains the intermediate to these so it can only mint
+	// node leaves whose IP SAN (the node's /128 underlay) falls inside the pool — closing the
+	// IP-SAN bypass of the DNS constraint. The reflector then binds route nexthops to that SAN.
+	PermittedUnderlayCIDRs []string
 }
 
 // RouteBusIdentityStatus carries the signer's response: the signed intermediate and the

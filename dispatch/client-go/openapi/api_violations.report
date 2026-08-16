@@ -27,6 +27,7 @@ API rule violation: list_type_missing,github.com/trevex/ectobase/api/net/v1alpha
 API rule violation: list_type_missing,github.com/trevex/ectobase/api/net/v1alpha1,VPCPeeringSpec,ExposedPrefixes
 API rule violation: list_type_missing,github.com/trevex/ectobase/api/platform/v1alpha1,ClusterPoolStatus,FencedPrefixes
 API rule violation: list_type_missing,github.com/trevex/ectobase/api/platform/v1alpha1,ClusterPoolStatus,NodePrefixes
+API rule violation: list_type_missing,github.com/trevex/ectobase/api/platform/v1alpha1,RouteBusIdentitySpec,PermittedUnderlayCIDRs
 API rule violation: names_match,github.com/trevex/ectobase/api/compiled/v1alpha1,CompiledNICSpec,QoS
 API rule violation: names_match,github.com/trevex/ectobase/api/compiled/v1alpha1,CompiledPeerImport,PeerVNI
 API rule violation: names_match,github.com/trevex/ectobase/api/net/v1alpha1,NetworkInterfaceSpec,IPs

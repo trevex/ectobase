@@ -3987,6 +3987,21 @@ func schema_ectobase_api_platform_v1alpha1_RouteBusIdentitySpec(ref common.Refer
 							Format:      "byte",
 						},
 					},
+					"permittedUnderlayCIDRs": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PermittedUnderlayCIDRs are the pool's underlay IPv6 ranges. The signer name-constrains the intermediate to these so it can only mint node leaves whose IP SAN falls inside the pool — the reflector binds route nexthops to that SAN.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},

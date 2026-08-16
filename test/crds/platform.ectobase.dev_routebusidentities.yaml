@@ -45,6 +45,14 @@ spec:
               key is never transmitted. The dispatch signer returns a name-constrained intermediate that
               can mint per-node agent leaves scoped to this pool.
             properties:
+              permittedUnderlayCIDRs:
+                description: |-
+                  PermittedUnderlayCIDRs are the pool's underlay IPv6 ranges. The signer name-constrains
+                  the intermediate to these so it can only mint node leaves whose IP SAN falls inside the
+                  pool — the reflector binds route nexthops to that SAN.
+                items:
+                  type: string
+                type: array
               poolName:
                 description: |-
                   PoolName is the ClusterPool this identity belongs to. The signed intermediate is

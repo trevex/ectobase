@@ -12,6 +12,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -88,7 +89,7 @@ func TestSignIntermediate_IsConstrainedCA(t *testing.T) {
 	root, rootKey, _ := makeRoot(t)
 	csr, _ := makePoolCSR(t, "k02")
 
-	interPEM, err := SignIntermediate(root, rootKey, csr, "k02", time.Now().Add(90*24*time.Hour))
+	interPEM, err := SignIntermediate(root, rootKey, csr, "k02", nil, time.Now().Add(90*24*time.Hour))
 	if err != nil {
 		t.Fatalf("sign: %v", err)
 	}
@@ -114,7 +115,7 @@ func TestSignIntermediate_IsConstrainedCA(t *testing.T) {
 func TestNameConstraint_BlocksCrossPoolLeaf(t *testing.T) {
 	root, rootKey, _ := makeRoot(t)
 	csr, poolKey := makePoolCSR(t, "k02")
-	interPEM, err := SignIntermediate(root, rootKey, csr, "k02", time.Now().Add(90*24*time.Hour))
+	interPEM, err := SignIntermediate(root, rootKey, csr, "k02", nil, time.Now().Add(90*24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,6 +137,52 @@ func TestNameConstraint_BlocksCrossPoolLeaf(t *testing.T) {
 	evil := mintLeaf(t, inter, poolKey, NodeDNSName("node1", "k03"))
 	if _, err := evil.Verify(opts); err == nil {
 		t.Error("cross-pool leaf (k03 SAN under k02 intermediate) MUST be rejected by name constraints, but verified")
+	}
+}
+
+// TestIPRangeConstraint_BlocksForeignUnderlaySAN proves the IP name-constraint stops a pool
+// intermediate from minting a node leaf whose IP SAN is outside the pool's underlay — the
+// cross-pool underlay-hijack boundary that backs the reflector's nexthop==SAN check.
+func TestIPRangeConstraint_BlocksForeignUnderlaySAN(t *testing.T) {
+	root, rootKey, _ := makeRoot(t)
+	csr, poolKey := makePoolCSR(t, "k02")
+	interPEM, err := SignIntermediate(root, rootKey, csr, "k02", []string{"fd00:cafe:1914::/48"}, time.Now().Add(90*24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(interPEM)
+	inter, _ := x509.ParseCertificate(block.Bytes)
+
+	roots := x509.NewCertPool()
+	roots.AddCert(root)
+	inters := x509.NewCertPool()
+	inters.AddCert(inter)
+	opts := x509.VerifyOptions{Roots: roots, Intermediates: inters, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}
+
+	mintIP := func(node, ip string) *x509.Certificate {
+		leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		tmpl := &x509.Certificate{
+			SerialNumber: big.NewInt(3),
+			Subject:      pkix.Name{CommonName: node},
+			NotBefore:    time.Now().Add(-time.Minute),
+			NotAfter:     time.Now().Add(time.Hour),
+			KeyUsage:     x509.KeyUsageDigitalSignature,
+			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+			DNSNames:     []string{NodeDNSName(node, "k02")},
+			IPAddresses:  []net.IP{net.ParseIP(ip)},
+		}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, inter, &leafKey.PublicKey, poolKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, _ := x509.ParseCertificate(der)
+		return c
+	}
+	if _, err := mintIP("node1", "fd00:cafe:1914::1").Verify(opts); err != nil {
+		t.Errorf("in-range underlay SAN should verify: %v", err)
+	}
+	if _, err := mintIP("node1", "fd00:cafe:9999::1").Verify(opts); err == nil {
+		t.Error("foreign-underlay IP SAN MUST be rejected by the intermediate's IP constraint, but verified")
 	}
 }
 
@@ -172,7 +219,7 @@ func TestLoadRootCA_RoundTrip(t *testing.T) {
 
 func TestSignIntermediate_RejectsGarbageCSR(t *testing.T) {
 	root, rootKey, _ := makeRoot(t)
-	if _, err := SignIntermediate(root, rootKey, []byte("not a csr"), "k02", time.Now().Add(time.Hour)); err == nil {
+	if _, err := SignIntermediate(root, rootKey, []byte("not a csr"), "k02", nil, time.Now().Add(time.Hour)); err == nil {
 		t.Error("expected error on non-PEM CSR")
 	}
 }

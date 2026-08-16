@@ -243,6 +243,11 @@ func (in *RouteBusIdentitySpec) DeepCopyInto(out *RouteBusIdentitySpec) {
 		*out = make([]byte, len(*in))
 		copy(*out, *in)
 	}
+	if in.PermittedUnderlayCIDRs != nil {
+		in, out := &in.PermittedUnderlayCIDRs, &out.PermittedUnderlayCIDRs
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	return
 }
 

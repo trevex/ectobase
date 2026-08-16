@@ -2,6 +2,7 @@ package reflector
 
 import (
 	"io"
+	"log"
 	"sync"
 
 	pb "github.com/trevex/ectobase/mesh/gen/routebusv1"
@@ -42,6 +43,10 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 	if h == nil || h.NodeId == "" {
 		return status.Error(codes.InvalidArgument, "first message must be Hello with node_id")
 	}
+	// Underlay authz: the session may only announce nexthops/owners equal to its client cert's
+	// IP SANs (the node's underlay /128). No-op when mTLS is off (no verified cert).
+	guard := newUnderlayGuard(stream.Context())
+
 	sink := &chanSink{id: h.NodeId, ch: make(chan *pb.ServerMsg, 1024)}
 	// Register globally on Hello: NAT blocks broadcast to every session (not just
 	// VNI subscribers), and this replays the current NAT snapshot to the new peer.
@@ -79,12 +84,20 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 			s.rib.Unsubscribe(m.Unsubscribe.Vni, sink.id)
 		case *pb.ClientMsg_Announce:
 			a := m.Announce
+			if !guard.permits(a.NexthopUnderlay) {
+				log.Printf("reflector: reject Announce from %s: nexthop %q not authorized by client cert", sink.id, a.NexthopUnderlay)
+				continue
+			}
 			nh := append([]string{a.NexthopUnderlay}, a.ExtraNexthops...)
 			s.rib.Announce(sink.id, a.Vni, a.Prefix, nh, a.External)
 		case *pb.ClientMsg_Withdraw:
 			s.rib.Withdraw(sink.id, m.Withdraw.Vni, m.Withdraw.Prefix)
 		case *pb.ClientMsg_AnnounceNat:
 			a := m.AnnounceNat
+			if !guard.permits(a.OwnerUnderlay) {
+				log.Printf("reflector: reject AnnounceNat from %s: owner %q not authorized by client cert", sink.id, a.OwnerUnderlay)
+				continue
+			}
 			s.rib.AnnounceNat(sink.id, NatBlock{
 				Vni: a.Vni, SourceIP: a.SourceIp, NatIP: a.NatIp,
 				PortMin: a.PortMin, PortMax: a.PortMax, OwnerUnderlay: a.OwnerUnderlay,
@@ -94,6 +107,10 @@ func (s *Server) Session(stream pb.RouteBus_SessionServer) error {
 			s.rib.WithdrawNat(sink.id, w.NatIp, w.PortMin, w.PortMax)
 		case *pb.ClientMsg_AnnouncePublic:
 			p := m.AnnouncePublic
+			if !guard.permits(p.OwnerUnderlay) {
+				log.Printf("reflector: reject AnnouncePublic from %s: owner %q not authorized by client cert", sink.id, p.OwnerUnderlay)
+				continue
+			}
 			s.rib.AnnouncePublic(sink.id, PublicRecord{
 				Kind: p.Kind, Prefix: p.Prefix, OwnerUnderlay: p.OwnerUnderlay,
 				Vni: p.Vni, PortMin: p.PortMin, PortMax: p.PortMax,

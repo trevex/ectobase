@@ -18,6 +18,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"time"
 
@@ -47,9 +48,10 @@ func NodeDNSName(node, pool string) string { return node + "." + PoolDNSDomain(p
 const intermediateTTL = 90 * 24 * time.Hour
 
 // SignIntermediate signs the CSR as a pool-scoped, path-len-0 intermediate CA from the root.
-// The returned cert IsCA with MaxPathLen 0 (cannot sign further CAs) and is name-constrained
-// to the pool's DNS domain, so it can only issue leaves for its own pool. Pure — no k8s.
-func SignIntermediate(rootCert *x509.Certificate, rootKey crypto.Signer, csrDER []byte, poolName string, notAfter time.Time) ([]byte, error) {
+// The returned cert IsCA with MaxPathLen 0 (cannot sign further CAs) and is name-constrained to
+// the pool's DNS domain AND (when permittedCIDRs is non-empty) its underlay IP ranges, so it can
+// only issue leaves for its own pool and only with node IP SANs inside the pool's underlay. Pure.
+func SignIntermediate(rootCert *x509.Certificate, rootKey crypto.Signer, csrDER []byte, poolName string, permittedCIDRs []string, notAfter time.Time) ([]byte, error) {
 	block, _ := pem.Decode(csrDER)
 	if block == nil || block.Type != "CERTIFICATE REQUEST" {
 		return nil, fmt.Errorf("spec.request is not a PEM CERTIFICATE REQUEST")
@@ -79,6 +81,16 @@ func SignIntermediate(rootCert *x509.Certificate, rootKey crypto.Signer, csrDER 
 		// under the pool's domain. Go's TLS chain verification enforces this on the reflector.
 		PermittedDNSDomains:         []string{PoolDNSDomain(poolName)},
 		PermittedDNSDomainsCritical: true,
+	}
+	// IP boundary: constrain the intermediate to the pool's underlay ranges so it cannot mint a
+	// leaf with an IP SAN in another pool's underlay (which the reflector's nexthop==SAN check
+	// would otherwise accept). Empty ranges => no IP constraint (bootstrap before prefixes known).
+	for _, c := range permittedCIDRs {
+		_, ipNet, perr := net.ParseCIDR(c)
+		if perr != nil {
+			return nil, fmt.Errorf("bad underlay CIDR %q: %w", c, perr)
+		}
+		tmpl.PermittedIPRanges = append(tmpl.PermittedIPRanges, ipNet)
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, rootCert, csr.PublicKey, rootKey)
 	if err != nil {
@@ -119,7 +131,7 @@ func (s *Signer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 		return ctrl.Result{RequeueAfter: intermediateTTL / 3}, nil
 	}
 
-	cert, err := SignIntermediate(s.Root.Cert, s.Root.Key, id.Spec.Request, id.Spec.PoolName, time.Now().Add(intermediateTTL))
+	cert, err := SignIntermediate(s.Root.Cert, s.Root.Key, id.Spec.Request, id.Spec.PoolName, id.Spec.PermittedUnderlayCIDRs, time.Now().Add(intermediateTTL))
 	if err != nil {
 		return ctrl.Result{}, s.deny(ctx, &id, err.Error())
 	}

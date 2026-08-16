@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -57,6 +58,8 @@ func main() {
 	flag.StringVar(&clusterName, "cluster-name", "", "Cluster name this broker instance serves (required).")
 	flag.StringVar(&routebusSecret, "routebus-intermediate-secret", "", "if set, bootstrap this pool's route-bus intermediate CA into this Secret (enables the mTLS PKI); empty => disabled")
 	flag.StringVar(&routebusSecretNS, "routebus-intermediate-namespace", os.Getenv("POD_NAMESPACE"), "namespace for the intermediate CA Secret (defaults to POD_NAMESPACE)")
+	var routebusCIDRs string
+	flag.StringVar(&routebusCIDRs, "routebus-underlay-cidrs", "", "comma-separated pool underlay CIDRs (e.g. the pool /48); the intermediate is IP-name-constrained to these so it can only mint node leaves inside the pool's underlay")
 	flag.Parse()
 
 	if clusterName == "" {
@@ -215,12 +218,19 @@ func main() {
 		if derr != nil {
 			log.Fatalf("build direct dispatch client: %v", derr)
 		}
+		var cidrs []string
+		for _, c := range strings.Split(routebusCIDRs, ",") {
+			if c = strings.TrimSpace(c); c != "" {
+				cidrs = append(cidrs, c)
+			}
+		}
 		boot := &broker.PoolCertBootstrapper{
-			Dispatch:   dispatchDirect,
-			Downstream: downstreamClient,
-			PoolName:   clusterName,
-			SecretName: routebusSecret,
-			SecretNS:   routebusSecretNS,
+			Dispatch:       dispatchDirect,
+			Downstream:     downstreamClient,
+			PoolName:       clusterName,
+			SecretName:     routebusSecret,
+			SecretNS:       routebusSecretNS,
+			PermittedCIDRs: cidrs,
 		}
 		if err := mgr.Add(boot); err != nil {
 			log.Fatalf("add routebus cert bootstrapper: %v", err)

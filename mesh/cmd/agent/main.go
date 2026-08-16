@@ -8,6 +8,7 @@ import (
 	"flag"
 	"log"
 	"math/rand/v2"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -28,9 +29,11 @@ func main() {
 	dataplaneAddr := flag.String("dataplane", "unix:///run/flowplane/dataplane.sock", "local flowplane DataplaneNode address (unix:// socket or host:port)")
 	kubeconfig := flag.String("kubeconfig", "", "kubeconfig for this node's own cluster apiserver — where the broker syncs the compiled CRDs (empty = in-cluster). The agent never talks to the dispatch.")
 	edgeLoopback := flag.String("edge-loopback", "", "if set, this node is a WAN edge; value = its UNIQUE control-plane loopback IPv6 (e.g. fd00:db8:0:9::1)")
-	tlsCA := flag.String("tls-ca", "", "CA bundle to verify the reflector (enables mTLS)")
-	tlsCert := flag.String("tls-cert", "", "agent client cert (identity == node)")
-	tlsKey := flag.String("tls-key", "", "agent client key")
+	tlsCA := flag.String("tls-ca", "", "root CA bundle to verify the reflector (enables mTLS)")
+	tlsCert := flag.String("tls-cert", "", "agent client cert file (static/legacy mode; per-node mode uses --routebus-issuer instead)")
+	tlsKey := flag.String("tls-key", "", "agent client key file (static/legacy mode)")
+	routebusIssuer := flag.String("routebus-issuer", "", "pool cert-manager Issuer to self-mint a per-node leaf from (CN=node, IP SAN=underlay); enables per-node mTLS")
+	routebusCertNS := flag.String("routebus-cert-namespace", "", "namespace for the self-minted per-node Certificate/Secret")
 	flag.Parse()
 	if *nodeID == "" || *underlay == "" {
 		log.Fatal("--node-id and --underlay are required")
@@ -44,7 +47,24 @@ func main() {
 	dp := agent.NewDataplaneAdapter(dpv1.NewDataplaneNodeClient(dpConn))
 
 	var rbCreds = insecure.NewCredentials()
-	if *tlsCA != "" || *tlsCert != "" || *tlsKey != "" {
+	switch {
+	case *routebusIssuer != "":
+		// Per-node mTLS: self-provision a leaf from the pool Issuer (IP SAN = this node's underlay)
+		// and verify the reflector with the ROOT from --tls-ca. Blocks until cert-manager mints it.
+		chain, key, perr := agent.ProvisionNodeCert(context.Background(), *kubeconfig, *routebusCertNS, *nodeID, *underlay, *routebusIssuer)
+		if perr != nil {
+			log.Fatalf("provision per-node routebus cert: %v", perr)
+		}
+		caPEM, rerr := os.ReadFile(*tlsCA)
+		if rerr != nil {
+			log.Fatalf("read root ca %q: %v", *tlsCA, rerr)
+		}
+		tc, terr := routebus.ClientTLSFromPEM(caPEM, chain, key)
+		if terr != nil {
+			log.Fatalf("tls: %v", terr)
+		}
+		rbCreds = tc
+	case *tlsCA != "" || *tlsCert != "" || *tlsKey != "":
 		tc, err := routebus.ClientTLS(*tlsCA, *tlsCert, *tlsKey)
 		if err != nil {
 			log.Fatalf("tls: %v", err)

@@ -63,3 +63,22 @@ func ClientTLS(caFile, certFile, keyFile string) (credentials.TransportCredentia
 		MinVersion:   tls.VersionTLS13,
 	}), nil
 }
+
+// ClientTLSFromPEM builds client credentials from in-memory PEM (the agent obtains its per-node
+// leaf from the k8s API, not a file). certPEM should be the full chain (leaf + intermediate) so
+// the reflector can build leaf -> intermediate -> root; caPEM is the ROOT the agent trusts.
+func ClientTLSFromPEM(caPEM, certPEM, keyPEM []byte) (credentials.TransportCredentials, error) {
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("load client keypair from PEM: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("no certs parsed from root CA PEM")
+	}
+	return credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      pool,
+		MinVersion:   tls.VersionTLS13,
+	}), nil
+}

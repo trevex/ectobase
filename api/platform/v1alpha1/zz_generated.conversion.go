@@ -334,6 +334,7 @@ func Convert_platform_RouteBusIdentityList_To_v1alpha1_RouteBusIdentityList(in *
 func autoConvert_v1alpha1_RouteBusIdentitySpec_To_platform_RouteBusIdentitySpec(in *RouteBusIdentitySpec, out *platform.RouteBusIdentitySpec, s conversion.Scope) error {
 	out.PoolName = in.PoolName
 	out.Request = *(*[]byte)(unsafe.Pointer(&in.Request))
+	out.PermittedUnderlayCIDRs = *(*[]string)(unsafe.Pointer(&in.PermittedUnderlayCIDRs))
 	return nil
 }
 
@@ -345,6 +346,7 @@ func Convert_v1alpha1_RouteBusIdentitySpec_To_platform_RouteBusIdentitySpec(in *
 func autoConvert_platform_RouteBusIdentitySpec_To_v1alpha1_RouteBusIdentitySpec(in *platform.RouteBusIdentitySpec, out *RouteBusIdentitySpec, s conversion.Scope) error {
 	out.PoolName = in.PoolName
 	out.Request = *(*[]byte)(unsafe.Pointer(&in.Request))
+	out.PermittedUnderlayCIDRs = *(*[]string)(unsafe.Pointer(&in.PermittedUnderlayCIDRs))
 	return nil
 }
 

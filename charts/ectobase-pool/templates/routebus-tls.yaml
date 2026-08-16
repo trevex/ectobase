@@ -20,30 +20,7 @@ metadata:
 spec:
   ca:
     secretName: {{ .Values.routebus.mtls.intermediateSecret }}
----
-# Agent client leaf, minted by the pool intermediate. Its DNS SAN sits under the pool's
-# name-constraint domain (<pool>.routebus.ectobase.dev) so it validates under the intermediate.
-# (Per-node leaves — <node>.<pool>.routebus.ectobase.dev via cert-manager-csi — are a follow-up;
-# this is the pool identity.)
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: agent-routebus-tls
-  namespace: {{ .Values.namespace }}
-  labels:
-    {{- include "ectobase-pool.labels" . | nindent 4 }}
-spec:
-  secretName: agent-routebus-tls
-  duration: 2160h # 90d
-  commonName: {{ .Values.broker.clusterName }}
-  dnsNames:
-    - {{ .Values.broker.clusterName }}.routebus.ectobase.dev
-  privateKey:
-    algorithm: ECDSA
-    size: 256
-  usages:
-    - client auth
-  issuerRef:
-    name: routebus-pool-ca
-    kind: Issuer
+# The per-node agent leaves are NOT declared here: each agent self-mints its own cert-manager
+# Certificate (CN=node, IP SAN=its underlay /128) from this Issuer at startup, so the reflector
+# can bind route nexthops to the node's own underlay. See mesh/agent/nodecert.go.
 {{- end }}

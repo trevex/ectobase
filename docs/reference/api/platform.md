@@ -144,6 +144,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `poolName` _string_ | PoolName is the ClusterPool this identity belongs to. The signed intermediate is<br />name-constrained to this pool so it can only mint node identities within it. |  |  |
 | `request` _integer array_ | Request is the PEM-encoded PKCS#10 certificate-signing request for the pool's<br />intermediate CA (the pool keeps the matching private key). |  |  |
+| `permittedUnderlayCIDRs` _string array_ | PermittedUnderlayCIDRs are the pool's underlay IPv6 ranges. The signer name-constrains<br />the intermediate to these so it can only mint node leaves whose IP SAN falls inside the<br />pool — the reflector binds route nexthops to that SAN. |  | Optional: \{\} <br /> |
 
 
 #### RouteBusIdentityStatus

@@ -221,6 +221,9 @@
             },
             "intermediateSecret": {
               "type": "string"
+            },
+            "underlayCIDRs": {
+              "type": "string"
             }
           }
         }

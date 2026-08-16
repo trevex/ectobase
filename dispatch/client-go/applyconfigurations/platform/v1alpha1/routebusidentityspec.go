@@ -16,6 +16,10 @@ type RouteBusIdentitySpecApplyConfiguration struct {
 	// Request is the PEM-encoded PKCS#10 certificate-signing request for the pool's
 	// intermediate CA (the pool keeps the matching private key).
 	Request []byte `json:"request,omitempty"`
+	// PermittedUnderlayCIDRs are the pool's underlay IPv6 ranges. The signer name-constrains
+	// the intermediate to these so it can only mint node leaves whose IP SAN falls inside the
+	// pool — the reflector binds route nexthops to that SAN.
+	PermittedUnderlayCIDRs []string `json:"permittedUnderlayCIDRs,omitempty"`
 }
 
 // RouteBusIdentitySpecApplyConfiguration constructs a declarative configuration of the RouteBusIdentitySpec type for use with
@@ -38,6 +42,16 @@ func (b *RouteBusIdentitySpecApplyConfiguration) WithPoolName(value string) *Rou
 func (b *RouteBusIdentitySpecApplyConfiguration) WithRequest(values ...byte) *RouteBusIdentitySpecApplyConfiguration {
 	for i := range values {
 		b.Request = append(b.Request, values[i])
+	}
+	return b
+}
+
+// WithPermittedUnderlayCIDRs adds the given value to the PermittedUnderlayCIDRs field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the PermittedUnderlayCIDRs field.
+func (b *RouteBusIdentitySpecApplyConfiguration) WithPermittedUnderlayCIDRs(values ...string) *RouteBusIdentitySpecApplyConfiguration {
+	for i := range values {
+		b.PermittedUnderlayCIDRs = append(b.PermittedUnderlayCIDRs, values[i])
 	}
 	return b
 }

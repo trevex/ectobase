@@ -46,12 +46,12 @@ spec:
             # Reach the API over the fabric (the mgmt net has no inter-node path here).
             - "--kubeconfig=/etc/mesh/kubeconfig"
             {{- if .Values.routebus.mtls.enabled }}
-            # ca = ROOT (verify the reflector, whose server cert chains to root) from the
-            # broker-written intermediate Secret's ca.crt; cert/key = the pool-issued leaf
-            # (cert-manager bundles leaf+intermediate into tls.crt for the CA issuer).
+            # Per-node mTLS: the agent self-mints a leaf (CN=node, IP SAN=this node's underlay)
+            # from the pool Issuer via cert-manager, then dials the reflector verifying it with the
+            # ROOT (the broker-written intermediate Secret's ca.crt).
             - "--tls-ca=/etc/routebus-root/ca.crt"
-            - "--tls-cert=/etc/routebus-tls/tls.crt"
-            - "--tls-key=/etc/routebus-tls/tls.key"
+            - "--routebus-issuer=routebus-pool-ca"
+            - "--routebus-cert-namespace={{ .Values.namespace }}"
             {{- end }}
           env:
             - name: NODE_NAME
@@ -72,9 +72,7 @@ spec:
               mountPath: /run/flowplane
               readOnly: true
             {{- if .Values.routebus.mtls.enabled }}
-            - name: routebus-tls
-              mountPath: /etc/routebus-tls
-              readOnly: true
+            # Only the ROOT is mounted; the per-node leaf is minted at runtime and read via the API.
             - name: routebus-root
               mountPath: /etc/routebus-root
               readOnly: true
@@ -88,9 +86,6 @@ spec:
             path: /run/flowplane
             type: DirectoryOrCreate
         {{- if .Values.routebus.mtls.enabled }}
-        - name: routebus-tls
-          secret:
-            secretName: agent-routebus-tls
         - name: routebus-root
           secret:
             secretName: {{ .Values.routebus.mtls.intermediateSecret }}

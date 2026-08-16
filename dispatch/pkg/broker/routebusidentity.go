@@ -99,6 +99,10 @@ type PoolCertBootstrapper struct {
 	PoolName   string
 	SecretName string
 	SecretNS   string
+	// PermittedCIDRs are the pool's underlay ranges (from config, e.g. the pool's /48). The
+	// signer name-constrains the intermediate to these. Empty => no IP constraint (degraded;
+	// the reflector's nexthop==SAN check still holds, but a compromised pool could forge SANs).
+	PermittedCIDRs []string
 
 	RenewBefore  time.Duration // re-request when the intermediate is within this of expiry
 	PollInterval time.Duration // status poll cadence
@@ -150,11 +154,17 @@ func (b *PoolCertBootstrapper) ensure(ctx context.Context) error {
 		return fmt.Errorf("get pool CA secret: %w", err)
 	}
 
+	// The intermediate is name-constrained to the pool's configured underlay range(s). Sourced
+	// from config (not node annotations) so cert issuance doesn't depend on any agent having
+	// started — the agent's own cert depends on this intermediate, which would otherwise deadlock.
+	if len(b.PermittedCIDRs) == 0 {
+		log.Printf("routebus cert bootstrap: no underlay CIDRs configured; signing intermediate WITHOUT an IP name-constraint (degraded)")
+	}
 	keyPEM, csrPEM, err := GenerateIntermediateKeyAndCSR(b.PoolName)
 	if err != nil {
 		return err
 	}
-	if err := b.submitCSR(ctx, csrPEM); err != nil {
+	if err := b.submitCSR(ctx, csrPEM, b.PermittedCIDRs); err != nil {
 		return err
 	}
 	certPEM, caPEM, err := b.pollSigned(ctx, keyPEM)
@@ -164,14 +174,15 @@ func (b *PoolCertBootstrapper) ensure(ctx context.Context) error {
 	return b.writeSecret(ctx, keyPEM, certPEM, caPEM)
 }
 
-// submitCSR creates or updates this pool's RouteBusIdentity on dispatch with the new CSR.
-func (b *PoolCertBootstrapper) submitCSR(ctx context.Context, csrPEM []byte) error {
+// submitCSR creates or updates this pool's RouteBusIdentity on dispatch with the new CSR + the
+// pool's underlay CIDRs (which the signer turns into the intermediate's IP name-constraint).
+func (b *PoolCertBootstrapper) submitCSR(ctx context.Context, csrPEM []byte, cidrs []string) error {
 	id := &platform.RouteBusIdentity{}
 	err := b.Dispatch.Get(ctx, types.NamespacedName{Name: b.PoolName}, id)
 	if apierrors.IsNotFound(err) {
 		id = &platform.RouteBusIdentity{
 			ObjectMeta: metav1.ObjectMeta{Name: b.PoolName},
-			Spec:       platform.RouteBusIdentitySpec{PoolName: b.PoolName, Request: csrPEM},
+			Spec:       platform.RouteBusIdentitySpec{PoolName: b.PoolName, Request: csrPEM, PermittedUnderlayCIDRs: cidrs},
 		}
 		return b.Dispatch.Create(ctx, id)
 	}
@@ -180,6 +191,7 @@ func (b *PoolCertBootstrapper) submitCSR(ctx context.Context, csrPEM []byte) err
 	}
 	id.Spec.PoolName = b.PoolName
 	id.Spec.Request = csrPEM
+	id.Spec.PermittedUnderlayCIDRs = cidrs
 	// Clear the old status cert so pollSigned waits for the re-sign, not the stale one.
 	id.Status.Certificate = nil
 	if err := b.Dispatch.Update(ctx, id); err != nil {

@@ -1954,6 +1954,23 @@ renders (dpdk clab):
           - patch
           - watch
       - apiGroups:
+          - ""
+        resources:
+          - secrets
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - cert-manager.io
+        resources:
+          - certificates
+        verbs:
+          - create
+          - get
+          - list
+          - watch
+      - apiGroups:
           - compiled.ectobase.dev
         resources:
           - compilednics
@@ -4079,6 +4096,23 @@ renders (dpdk hw):
           - get
           - list
           - patch
+          - watch
+      - apiGroups:
+          - ""
+        resources:
+          - secrets
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - cert-manager.io
+        resources:
+          - certificates
+        verbs:
+          - create
+          - get
+          - list
           - watch
       - apiGroups:
           - compiled.ectobase.dev
@@ -6208,6 +6242,23 @@ renders (ebpf clab):
           - patch
           - watch
       - apiGroups:
+          - ""
+        resources:
+          - secrets
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - cert-manager.io
+        resources:
+          - certificates
+        verbs:
+          - create
+          - get
+          - list
+          - watch
+      - apiGroups:
           - compiled.ectobase.dev
         resources:
           - compilednics
@@ -8330,6 +8381,23 @@ renders (ebpf hw):
           - get
           - list
           - patch
+          - watch
+      - apiGroups:
+          - ""
+        resources:
+          - secrets
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - cert-manager.io
+        resources:
+          - certificates
+        verbs:
+          - create
+          - get
+          - list
           - watch
       - apiGroups:
           - compiled.ectobase.dev
@@ -10457,6 +10525,23 @@ renders (tier1 on):
           - get
           - list
           - patch
+          - watch
+      - apiGroups:
+          - ""
+        resources:
+          - secrets
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - cert-manager.io
+        resources:
+          - certificates
+        verbs:
+          - create
+          - get
+          - list
           - watch
       - apiGroups:
           - compiled.ectobase.dev
@@ -12621,6 +12706,23 @@ renders (tier1 watchdog):
           - get
           - list
           - patch
+          - watch
+      - apiGroups:
+          - ""
+        resources:
+          - secrets
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - cert-manager.io
+        resources:
+          - certificates
+        verbs:
+          - create
+          - get
+          - list
           - watch
       - apiGroups:
           - compiled.ectobase.dev
@@ -14795,6 +14897,23 @@ renders with vm-materializer enabled:
           - get
           - list
           - patch
+          - watch
+      - apiGroups:
+          - ""
+        resources:
+          - secrets
+        verbs:
+          - get
+          - list
+          - watch
+      - apiGroups:
+          - cert-manager.io
+        resources:
+          - certificates
+        verbs:
+          - create
+          - get
+          - list
           - watch
       - apiGroups:
           - compiled.ectobase.dev

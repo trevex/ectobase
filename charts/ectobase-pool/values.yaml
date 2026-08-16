@@ -32,8 +32,13 @@ routebus:
     enabled: false
     # intermediateSecret is the pool CA Secret the broker requests from dispatch and writes
     # locally ({tls.crt=intermediate, tls.key=pool key, ca.crt=root}); it backs the pool
-    # cert-manager Issuer that mints the agent leaf, and carries the root the agent trusts.
+    # cert-manager Issuer that mints per-node agent leaves, and carries the root the agent trusts.
     intermediateSecret: routebus-pool-ca
+    # underlayCIDRs (comma-separated) are this pool's underlay range(s), e.g. its /48. The
+    # intermediate is IP-name-constrained to these so it can only mint node leaves whose IP SAN
+    # is inside the pool's underlay; the reflector then binds route nexthops to that SAN. The
+    # deployer sets this (the lab derives it from the cluster prefix). Empty => no IP constraint.
+    underlayCIDRs: ""
 # Control-plane API server the agent dials over the fabric (kubeconfig server URL).
 apiserverAddress: "https://[fd00:db8:0:1::1]:6443"
 
