@@ -31,6 +31,7 @@ import (
 	"github.com/trevex/ectobase/dispatch/pkg/clusterpool"
 	"github.com/trevex/ectobase/dispatch/pkg/failover"
 	"github.com/trevex/ectobase/dispatch/pkg/fence"
+	"github.com/trevex/ectobase/dispatch/pkg/routebusca"
 	"github.com/trevex/ectobase/dispatch/pkg/scheduler"
 	routebusv1 "github.com/trevex/ectobase/mesh/gen/routebusv1"
 	"github.com/trevex/ectobase/mesh/routebus"
@@ -51,6 +52,8 @@ func main() {
 	csiClusterID := flag.String("csi-cluster-id", "", "Ceph clusterID (fsid) written to NetworkFence spec.parameters.clusterID; required against a real ceph-csi driver")
 	csiSecretName := flag.String("csi-secret-name", "rook-csi-rbd-provisioner", "NetworkFence provisioner secret name")
 	csiSecretNS := flag.String("csi-secret-namespace", "rook-ceph", "NetworkFence provisioner secret namespace")
+	routebusCACert := flag.String("routebus-ca-cert", "", "route-bus root CA cert PEM (dispatch cert-manager routebus-ca secret); empty => RouteBusIdentity signer inactive")
+	routebusCAKey := flag.String("routebus-ca-key", "", "route-bus root CA key PEM")
 
 	flag.Parse()
 
@@ -128,6 +131,19 @@ func main() {
 
 	if err := (&failover.Reconciler{Client: mgr.GetClient(), StorageFencer: storageF, NetworkFencer: networkF, FailoverThreshold: 2 * time.Minute}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup failover controller: %v", err)
+	}
+
+	// Route-bus PKI signer: signs per-pool intermediate CAs from the root (mounted from the
+	// dispatch cert-manager routebus-ca secret). Inactive when the root isn't mounted (mTLS off).
+	root, err := routebusca.LoadRootCA(*routebusCACert, *routebusCAKey)
+	if err != nil {
+		log.Fatalf("load route-bus root CA: %v", err)
+	}
+	if root == nil {
+		log.Printf("route-bus CA not configured (--routebus-ca-cert/key unset); RouteBusIdentity signer inactive")
+	}
+	if err := (&routebusca.Signer{Client: mgr.GetClient(), Root: root}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup routebus signer controller: %v", err)
 	}
 
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
