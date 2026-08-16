@@ -132,3 +132,17 @@ func eventually(t *testing.T, timeout, tick time.Duration, fn func() error) {
 		time.Sleep(tick)
 	}
 }
+
+// waitUpTo polls fn until it returns true or the timeout elapses, then returns regardless.
+// Unlike eventually it NEVER fails the test — it is a best-effort readiness wait for async
+// helpers (a backgrounded server binding, etc.) where a missed signal should fall through
+// to the same point a blind sleep would, rather than abort the test.
+func waitUpTo(timeout, tick time.Duration, fn func() bool) {
+	deadline := time.Now().Add(timeout)
+	for !fn() {
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(tick)
+	}
+}

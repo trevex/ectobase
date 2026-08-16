@@ -27,6 +27,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/trevex/ectobase/test/lab/internal/clab"
 	"github.com/trevex/ectobase/test/lab/internal/config"
 	"github.com/trevex/ectobase/test/lab/internal/deploy"
@@ -250,6 +252,10 @@ func Up(ctx context.Context, cfg *config.Config) error {
 	}
 
 	c := clab.Clab{TopoFile: p.topo}
+	// Clab's VyOS nodes sometimes wedge on teardown and are left behind, which makes the next
+	// `clab deploy` fail with "containers already exist" (requiring --reconfigure). Force-remove
+	// any lingering clab-<name>-* containers first so `lab up` is idempotent after a wedged down.
+	forceRemoveLingeringClab(ctx, cfg.Name)
 	if err := c.Deploy(ctx); err != nil {
 		return fmt.Errorf("clab deploy: %w", err)
 	}
@@ -368,10 +374,18 @@ func Ceph(ctx context.Context, cfg *config.Config, purge bool) error {
 	// compute = attach). Values render under build/<name>/ceph/. (The nodes are never
 	// tainted — cluster-patch strips the control-plane taint — so every pod schedules.)
 	cephValuesDir := filepath.Join(p.build, "ceph")
+	// ceph-csi is independent per cluster (own kubeconfig), so install concurrently.
+	var cephEG errgroup.Group
 	for _, c := range clusters {
-		if err := deploy.CephCSI(ctx, nil, c.Kubeconfig, c.Name, cephValuesDir, params); err != nil {
-			return fmt.Errorf("cluster %s: ceph-csi: %w", c.Name, err)
-		}
+		cephEG.Go(func() error {
+			if err := deploy.CephCSI(ctx, nil, c.Kubeconfig, c.Name, cephValuesDir, params); err != nil {
+				return fmt.Errorf("cluster %s: ceph-csi: %w", c.Name, err)
+			}
+			return nil
+		})
+	}
+	if err := cephEG.Wait(); err != nil {
+		return err
 	}
 
 	// Step 3: csi-addons controller + sidecar into the dispatch (fence executor)
@@ -425,17 +439,27 @@ func Tier2(ctx context.Context, cfg *config.Config) error {
 	poolChart := filepath.Join(root, "charts/ectobase-pool")
 
 	// KubeVirt + CDI on every compute cluster, then enable the vm-materializer (the dispatch runs no
-	// VMs — it is the fence executor / provisioner only).
+	// VMs — it is the fence executor / provisioner only). Each compute cluster is independent (own
+	// kubeconfig) and each install blocks ~10-20m on operator Available, so run them concurrently.
+	var kvEG errgroup.Group
 	for _, cl := range cfg.Fabric.Clusters {
 		if cl.Name == dispatchCluster {
 			continue
 		}
-		if err := deploy.KubeVirtCDI(ctx, nil, p.clusterKubeconfig(cl.Name)); err != nil {
-			return fmt.Errorf("cluster %s: kubevirt+cdi: %w", cl.Name, err)
-		}
-		if err := deploy.EnableVMMaterializer(ctx, nil, p.clusterKubeconfig(cl.Name), poolChart); err != nil {
-			return fmt.Errorf("cluster %s: vm-materializer: %w", cl.Name, err)
-		}
+		kc := p.clusterKubeconfig(cl.Name)
+		name := cl.Name
+		kvEG.Go(func() error {
+			if err := deploy.KubeVirtCDI(ctx, nil, kc); err != nil {
+				return fmt.Errorf("cluster %s: kubevirt+cdi: %w", name, err)
+			}
+			if err := deploy.EnableVMMaterializer(ctx, nil, kc, poolChart); err != nil {
+				return fmt.Errorf("cluster %s: vm-materializer: %w", name, err)
+			}
+			return nil
+		})
+	}
+	if err := kvEG.Wait(); err != nil {
+		return err
 	}
 
 	// Wire the ceph fsid into the dispatch controller's ceph-csi fence actuator.

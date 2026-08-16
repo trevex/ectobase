@@ -126,7 +126,9 @@ func TestRestartContinuity(t *testing.T) {
 	pingCmd.Stderr = &pingOut
 	require.NoError(t, pingCmd.Start(), "start continuous ping")
 
-	// Head-start: let a few probes complete before killing the container.
+	// Head-start: let a few probes complete before killing the container. This is a deliberate
+	// fixed lead-in, not a readiness wait — pingOut is written concurrently by the running ping,
+	// so polling it here would race the writer. 1s ~= a handful of probes at pingInterval.
 	time.Sleep(1 * time.Second)
 
 	// --- [4] crictl stop the flowplane container mid-flow ---

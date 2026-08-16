@@ -367,6 +367,8 @@ func requireConsistentlyDenied(t *testing.T, ctx context.Context, cfg *config.Co
 		if err := podPing(ctx, cfg, cluster, pod, dstIP); err == nil {
 			t.Fatalf("pre-policy cross-VPC ping %s from %s SUCCEEDED on attempt %d (expected consistent DROP — deny-by-default not enforced)", dstIP, pod, i+1)
 		}
+		// Deliberate spacing between the consecutive-failure samples (a sampling cadence, not a
+		// readiness wait) — we WANT to confirm the deny holds over a few seconds, not converge fast.
 		time.Sleep(2 * time.Second)
 	}
 }

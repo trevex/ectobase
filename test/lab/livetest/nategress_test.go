@@ -83,6 +83,9 @@ func TestNatEgressSmoke(t *testing.T) {
 
 	log1, c1 := sniff("eth1")
 	log2, c2 := sniff("eth2")
+	// Lead-in for the two backgrounded packet sniffers to attach to their interfaces before we
+	// generate traffic. netprobe emits no "capturing" signal to poll, so a short fixed wait is
+	// the correct primitive here (a missed head-start would lose the first packets).
 	time.Sleep(1500 * time.Millisecond)
 
 	sendArgs := []string{"/netprobe", "send", "--iface", natGuestID,

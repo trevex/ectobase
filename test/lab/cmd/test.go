@@ -15,8 +15,11 @@ var testCmd = &cobra.Command{
 	Use:   "test",
 	Short: "run the live connectivity suite (go test -tags live) against the up fabric",
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		// -timeout guards against a single hung live test consuming the whole go-test
+		// budget: the suite runs ~8m, so 25m leaves headroom while still failing a wedged
+		// test cleanly (with its own diagnostics) instead of as a package-level panic.
 		return exec.Run(cmd.Context(), "go", "test",
-			"-tags", "live", "-count=1", "-v", "./livetest/...")
+			"-tags", "live", "-timeout", "25m", "-count=1", "-v", "./livetest/...")
 	},
 }
 

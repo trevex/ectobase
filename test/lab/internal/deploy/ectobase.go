@@ -9,8 +9,22 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/trevex/ectobase/test/lab/internal/exec"
 	"github.com/trevex/ectobase/test/lab/internal/wait"
+)
+
+// Reflector ports the lab passes to the charts via `helm --set`. These MUST match the
+// chart defaults (charts/ectobase-dispatch/values.yaml `reflectorAdmin`,
+// charts/ectobase-pool/values.yaml `reflectorAddress`) — a mismatch silently wedges
+// fencing/route distribution (see the :1338/:1339 bug). TestReflectorPortsMatchCharts
+// asserts they stay in sync.
+const (
+	// reflectorAdminPort is the reflector RouteBusAdmin (fence) port the dispatch-controller dials.
+	reflectorAdminPort = "1339"
+	// reflectorSessionPort is the main RouteBus (route pub/sub) port the pool agents dial.
+	reflectorSessionPort = "1338"
 )
 
 // EctobaseSpec is the flat, primitives-only input to Ectobase. It deliberately
@@ -93,44 +107,13 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		return fmt.Errorf("apply clusterpools: %w", err)
 	}
 
-	// --- Each compute cluster ---
+	// --- Each compute cluster (in parallel: independent, each targets its own kubeconfig) ---
+	var eg errgroup.Group
 	for _, c := range s.Compute {
-		slog.Info("installing ectobase-pool chart on compute cluster", "cluster", c.Name)
-		// The chart renders a NetworkAttachmentDefinition unconditionally, so the NAD CRD must
-		// exist first.
-		if err := kubectlApply(ctx, c.Kubeconfig, s.NADCRDPath); err != nil {
-			return fmt.Errorf("cluster %s: apply NAD CRD: %w", c.Name, err)
-		}
-		// The pool chart does not manage its release namespace, and the broker-dispatch-kubeconfig Secret
-		// must exist before the chart's broker pod starts — so pre-create the (PSA-privileged)
-		// ectobase-system namespace + the secret ahead of helm.
-		if err := ensureHelmNamespace(ctx, c.Kubeconfig, "ectobase-system", "ectobase-pool"); err != nil {
-			return fmt.Errorf("cluster %s: ensure namespace: %w", c.Name, err)
-		}
-		if err := createSecretFromFile(ctx, c.Kubeconfig, "ectobase-system",
-			"broker-dispatch-kubeconfig", "kubeconfig", brokerKubeconfig); err != nil {
-			return fmt.Errorf("cluster %s: create broker secret: %w", c.Name, err)
-		}
-		if err := helmInstallPool(ctx, c.Kubeconfig, c.Name, s.PoolChartPath, s.DispatchIdentity, s.UnderlayWithin); err != nil {
-			return fmt.Errorf("cluster %s: helm install ectobase-pool: %w", c.Name, err)
-		}
-		// The broker mounts broker-dispatch-kubeconfig as a volume, so an existing broker pod keeps the
-		// OLD kubeconfig across a re-`deploy` that rewrote the secret (helm won't roll it — the
-		// secret is created outside the chart). On a fresh up the broker starts after the secret so
-		// this is a no-op; on re-deploy it makes the broker pick up the current dispatch address.
-		// Best-effort.
-		if err := exec.Run(ctx, "kubectl", "--kubeconfig", c.Kubeconfig, "-n", "ectobase-system",
-			"rollout", "restart", "deploy/dispatch-broker"); err != nil {
-			slog.Debug("rollout restart dispatch-broker", "cluster", c.Name, "err", err)
-		}
-		// Multus (thin) so a Pod annotated onto our overlay is attached via Multus ->
-		// flowplane-cni (a SECONDARY network) instead of a hand-driven gRPC attach. Installed
-		// AFTER the chart so flowplane-cni + the dataplane-kubeconfig already exist. Compute
-		// clusters only. The pod-materializer now ships in the ectobase-pool chart (base
-		// substrate), so it is no longer applied here.
-		if err := Multus(ctx, nil, c.Kubeconfig); err != nil {
-			return fmt.Errorf("cluster %s: install Multus: %w", c.Name, err)
-		}
+		eg.Go(func() error { return installPool(ctx, s, c, brokerKubeconfig) })
+	}
+	if err := eg.Wait(); err != nil {
+		return err
 	}
 
 	// --- Readiness ---
@@ -138,6 +121,49 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		return fmt.Errorf("cluster pools ready: %w", err)
 	}
 	slog.Info("ectobase substrate deployed", "compute", len(s.Compute))
+	return nil
+}
+
+// installPool deploys the ectobase-pool chart (+ its NAD CRD, broker secret, and Multus)
+// onto one compute cluster. It touches only that cluster's kubeconfig, so callers run it
+// concurrently across compute clusters.
+func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster, brokerKubeconfig string) error {
+	slog.Info("installing ectobase-pool chart on compute cluster", "cluster", c.Name)
+	// The chart renders a NetworkAttachmentDefinition unconditionally, so the NAD CRD must
+	// exist first.
+	if err := kubectlApply(ctx, c.Kubeconfig, s.NADCRDPath); err != nil {
+		return fmt.Errorf("cluster %s: apply NAD CRD: %w", c.Name, err)
+	}
+	// The pool chart does not manage its release namespace, and the broker-dispatch-kubeconfig Secret
+	// must exist before the chart's broker pod starts — so pre-create the (PSA-privileged)
+	// ectobase-system namespace + the secret ahead of helm.
+	if err := ensureHelmNamespace(ctx, c.Kubeconfig, "ectobase-system", "ectobase-pool"); err != nil {
+		return fmt.Errorf("cluster %s: ensure namespace: %w", c.Name, err)
+	}
+	if err := createSecretFromFile(ctx, c.Kubeconfig, "ectobase-system",
+		"broker-dispatch-kubeconfig", "kubeconfig", brokerKubeconfig); err != nil {
+		return fmt.Errorf("cluster %s: create broker secret: %w", c.Name, err)
+	}
+	if err := helmInstallPool(ctx, c.Kubeconfig, c.Name, s.PoolChartPath, s.DispatchIdentity, s.UnderlayWithin); err != nil {
+		return fmt.Errorf("cluster %s: helm install ectobase-pool: %w", c.Name, err)
+	}
+	// The broker mounts broker-dispatch-kubeconfig as a volume, so an existing broker pod keeps the
+	// OLD kubeconfig across a re-`deploy` that rewrote the secret (helm won't roll it — the
+	// secret is created outside the chart). On a fresh up the broker starts after the secret so
+	// this is a no-op; on re-deploy it makes the broker pick up the current dispatch address.
+	// Best-effort.
+	if err := exec.Run(ctx, "kubectl", "--kubeconfig", c.Kubeconfig, "-n", "ectobase-system",
+		"rollout", "restart", "deploy/dispatch-broker"); err != nil {
+		slog.Debug("rollout restart dispatch-broker", "cluster", c.Name, "err", err)
+	}
+	// Multus (thin) so a Pod annotated onto our overlay is attached via Multus ->
+	// flowplane-cni (a SECONDARY network) instead of a hand-driven gRPC attach. Installed
+	// AFTER the chart so flowplane-cni + the dataplane-kubeconfig already exist. Compute
+	// clusters only. The pod-materializer now ships in the ectobase-pool chart (base
+	// substrate), so it is no longer applied here.
+	if err := Multus(ctx, nil, c.Kubeconfig); err != nil {
+		return fmt.Errorf("cluster %s: install Multus: %w", c.Name, err)
+	}
 	return nil
 }
 
@@ -213,7 +239,7 @@ func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIde
 	args := []string{"upgrade", "--install", "ectobase-dispatch", chartPath,
 		"--kubeconfig", kubeconfig,
 		"--namespace", "system", "--create-namespace",
-		"--set", "reflectorAdmin=[" + dispatchIdentity + "]:1339",
+		"--set", "reflectorAdmin=[" + dispatchIdentity + "]:" + reflectorAdminPort,
 	}
 	return exec.Run(ctx, "helm", args...)
 }
@@ -228,7 +254,7 @@ func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, di
 		"--namespace", "ectobase-system",
 		"--set", "broker.clusterName=" + clusterName,
 		"--set", "apiserverAddress=https://127.0.0.1:6443",
-		"--set", "reflectorAddress=[" + dispatchIdentity + "]:1338",
+		"--set", "reflectorAddress=[" + dispatchIdentity + "]:" + reflectorSessionPort,
 		"--set", "installCRDs=true",
 		"--set", "dataplane=ebpf",
 	}

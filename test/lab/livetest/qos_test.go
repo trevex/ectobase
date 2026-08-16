@@ -195,7 +195,14 @@ func qosUDPRun(ctx context.Context, containerA, containerB, idA, idB, dstIP stri
 	if err := srvCmd.Start(); err != nil {
 		return 0, 0
 	}
-	time.Sleep(1 * time.Second) // let the server bind
+	// Wait for the one-off iperf3 server to bind its control socket (:5201) in B's netns
+	// before firing the client, instead of a blind sleep. Best-effort: falls through after
+	// the window if the bind can't be observed (e.g. no `ss` in the image), which is no worse
+	// than the old fixed wait.
+	waitUpTo(5*time.Second, 100*time.Millisecond, func() bool {
+		out, err := nodeExec(ctx, containerB, "ip", "netns", "exec", idB, "ss", "-tlnH")
+		return err == nil && strings.Contains(out, ":5201")
+	})
 
 	// Fire the client A→B (offered rate above the cap, 1200B datagrams). Best-effort:
 	// iperf3 UDP may return non-zero even on a clean run; the server JSON is truth.
