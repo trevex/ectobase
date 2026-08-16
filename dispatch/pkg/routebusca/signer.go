@@ -28,7 +28,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/trevex/ectobase/api/platform"
+	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 )
 
 // dnsSuffix roots the route-bus SAN namespace. A pool's intermediate is name-constrained to
@@ -114,7 +114,7 @@ type Signer struct {
 }
 
 func (s *Signer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	var id platform.RouteBusIdentity
+	var id platformv1.RouteBusIdentity
 	if err := s.Client.Get(ctx, req.NamespacedName, &id); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -149,7 +149,7 @@ func (s *Signer) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, 
 
 // alreadySigned reports whether status carries a cert matching the current CSR's public key
 // and comfortably before expiry (so re-issuing on rotation but not every reconcile).
-func (s *Signer) alreadySigned(id *platform.RouteBusIdentity) (bool, error) {
+func (s *Signer) alreadySigned(id *platformv1.RouteBusIdentity) (bool, error) {
 	if len(id.Status.Certificate) == 0 {
 		return false, nil
 	}
@@ -175,7 +175,7 @@ func (s *Signer) alreadySigned(id *platform.RouteBusIdentity) (bool, error) {
 	return publicKeysEqual(cert.PublicKey, csr.PublicKey), nil
 }
 
-func (s *Signer) deny(ctx context.Context, id *platform.RouteBusIdentity, msg string) error {
+func (s *Signer) deny(ctx context.Context, id *platformv1.RouteBusIdentity, msg string) error {
 	meta.SetStatusCondition(&id.Status.Conditions, metav1.Condition{
 		Type: "Signed", Status: metav1.ConditionFalse, Reason: "Denied", Message: msg,
 	})
@@ -187,7 +187,7 @@ func (s *Signer) deny(ctx context.Context, id *platform.RouteBusIdentity, msg st
 
 func (s *Signer) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&platform.RouteBusIdentity{}).
+		For(&platformv1.RouteBusIdentity{}).
 		Complete(s)
 }
 

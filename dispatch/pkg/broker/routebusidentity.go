@@ -21,7 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/trevex/ectobase/api/platform"
+	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 )
 
 // GenerateIntermediateKeyAndCSR generates a fresh ECDSA P-256 intermediate keypair for a pool
@@ -177,12 +177,12 @@ func (b *PoolCertBootstrapper) ensure(ctx context.Context) error {
 // submitCSR creates or updates this pool's RouteBusIdentity on dispatch with the new CSR + the
 // pool's underlay CIDRs (which the signer turns into the intermediate's IP name-constraint).
 func (b *PoolCertBootstrapper) submitCSR(ctx context.Context, csrPEM []byte, cidrs []string) error {
-	id := &platform.RouteBusIdentity{}
+	id := &platformv1.RouteBusIdentity{}
 	err := b.Dispatch.Get(ctx, types.NamespacedName{Name: b.PoolName}, id)
 	if apierrors.IsNotFound(err) {
-		id = &platform.RouteBusIdentity{
+		id = &platformv1.RouteBusIdentity{
 			ObjectMeta: metav1.ObjectMeta{Name: b.PoolName},
-			Spec:       platform.RouteBusIdentitySpec{PoolName: b.PoolName, Request: csrPEM, PermittedUnderlayCIDRs: cidrs},
+			Spec:       platformv1.RouteBusIdentitySpec{PoolName: b.PoolName, Request: csrPEM, PermittedUnderlayCIDRs: cidrs},
 		}
 		return b.Dispatch.Create(ctx, id)
 	}
@@ -205,7 +205,7 @@ func (b *PoolCertBootstrapper) submitCSR(ctx context.Context, csrPEM []byte, cid
 func (b *PoolCertBootstrapper) pollSigned(ctx context.Context, keyPEM []byte) (certPEM, caPEM []byte, err error) {
 	deadline := time.Now().Add(b.PollTimeout)
 	for {
-		var id platform.RouteBusIdentity
+		var id platformv1.RouteBusIdentity
 		if e := b.Dispatch.Get(ctx, types.NamespacedName{Name: b.PoolName}, &id); e == nil {
 			if len(id.Status.Certificate) > 0 && certMatchesKey(id.Status.Certificate, keyPEM) {
 				return id.Status.Certificate, id.Status.CABundle, nil
