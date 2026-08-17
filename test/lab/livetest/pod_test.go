@@ -69,7 +69,7 @@ func TestPodOverlayPing(t *testing.T) {
 	// 1. VPC + two NICs on the DISPATCH. The NICs carry NO placement: an owning Container is
 	//    the placement authority (it stamps CompiledNIC.clusterName + nodeName). Just IPs +
 	//    mac here. defaultPolicy Allow so guest egress isn't deny-by-default dropped.
-	require.NoError(t, applyDispatch(ctx, cfg, podDispatchFixture(epA.nic, epA.ip, epA.mac, epC.nic, epC.ip, epC.mac)))
+	applyDispatch(t, ctx, cfg, podDispatchFixture(epA.nic, epA.ip, epA.mac, epC.nic, epC.ip, epC.mac))
 	// The compiler gates on a Ready VPC with a vni; mark VPC + both NICs Ready.
 	patchPodVNIReady(t, ctx, cfg, "vpcs.net.ectobase.dev", "pod-vpc")
 	patchPodVNIReady(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", epA.nic)
@@ -91,7 +91,7 @@ func TestPodOverlayPing(t *testing.T) {
 	for _, ep := range []endpoint{epA, epC} {
 		ep := ep
 		require.NoError(t, applyCluster(ctx, cfg, ep.node.Cluster, podNADManifest()))
-		require.NoError(t, applyDispatch(ctx, cfg, containerFixture(containerName(ep.nic), ep.node.Cluster, nodeK8sName(ep.node), ep.nic)))
+		applyDispatch(t, ctx, cfg, containerFixture(containerName(ep.nic), ep.node.Cluster, nodeK8sName(ep.node), ep.nic))
 		t.Cleanup(func() {
 			_, _ = kubectl(ctx, cfg, "dispatch", "delete", "container.net.ectobase.dev", containerName(ep.nic), "--ignore-not-found", "--wait=false")
 			_, _ = kubectl(ctx, cfg, ep.node.Cluster, "delete", "net-attach-def", podNADName, "--ignore-not-found")

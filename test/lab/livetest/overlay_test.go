@@ -56,7 +56,7 @@ func TestCrossClusterOverlayPing(t *testing.T) {
 
 	// 1. VPC + two NICs (each pinned to a node via spec.nodeName) + two halted anchor
 	//    VMs (which stamp CompiledNIC.clusterName). applied to the dispatch.
-	require.NoError(t, applyDispatch(ctx, cfg, overlayFixture(nodeA, nodeC)))
+	applyDispatch(t, ctx, cfg, overlayFixture(nodeA, nodeC))
 	// The compiler gates on a Ready VPC with a vni; mark VPC + both NICs Ready.
 	patchVNIReady(t, ctx, cfg, "vpcs.net.ectobase.dev", "blue")
 	patchVNIReady(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", "nic-a")
@@ -138,10 +138,19 @@ spec: {clusterName: %q, interfaceRefs: [{name: nic-c}], runStrategy: Halted}
 // container name (<cluster>-control-plane), not <cluster>-<index>.
 func nodeK8sName(n config.DerivedNode) string { return n.KindContainer() }
 
-// applyDispatch applies a multi-doc YAML to the dispatch cluster via `kubectl apply -f -`.
-func applyDispatch(ctx context.Context, cfg *config.Config, yaml string) error {
-	return exec.SudoStdin(ctx, yaml,
-		"kubectl", "--kubeconfig", kubeconfigPath(cfg, "dispatch"), "apply", "-f", "-")
+// applyDispatch applies a multi-doc YAML to the dispatch cluster via `kubectl apply -f -`
+// and registers a t.Cleanup that deletes the same objects when the test ends, so live
+// runs don't leave orphaned VPCs/NICs/Containers/VMs on the shared fabric. Cleanup is
+// best-effort (--ignore-not-found; the compiler/materializer cascade-delete compiled
+// artifacts + pods) and uses a fresh context so it runs even after the test's ctx is done.
+func applyDispatch(t *testing.T, ctx context.Context, cfg *config.Config, yaml string) {
+	t.Helper()
+	kc := kubeconfigPath(cfg, "dispatch")
+	require.NoError(t, exec.SudoStdin(ctx, yaml, "kubectl", "--kubeconfig", kc, "apply", "-f", "-"))
+	t.Cleanup(func() {
+		_ = exec.SudoStdin(context.Background(), yaml,
+			"kubectl", "--kubeconfig", kc, "delete", "--ignore-not-found", "--wait=false", "-f", "-")
+	})
 }
 
 // patchVNIReady marks a net.ectobase.dev resource's status Ready with the overlay

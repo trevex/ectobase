@@ -85,7 +85,7 @@ func TestVPCPeering(t *testing.T) {
 	// 1. VPCs + NICs on the DISPATCH (NO placement on the NICs — the owning Containers, applied
 	//    in step 5, are the placement authority). Green NICs carry label side=green so the
 	//    FirewallPolicy selector governs them (replacing the compiler's allow-all fallback).
-	require.NoError(t, applyDispatch(ctx, cfg, vpcPeeringCentralFixture(blue, green, local)))
+	applyDispatch(t, ctx, cfg, vpcPeeringCentralFixture(blue, green, local))
 	// The compiler gates on Ready VPCs/NICs with a vni; patch each with its own vni.
 	patchVNIReadyN(t, ctx, cfg, "vpcs.net.ectobase.dev", "peer-blue", peerBlueVNI)
 	patchVNIReadyN(t, ctx, cfg, "vpcs.net.ectobase.dev", "peer-green", peerGreenVNI)
@@ -114,7 +114,7 @@ func TestVPCPeering(t *testing.T) {
 			require.NoError(t, applyCluster(ctx, cfg, ep.node.Cluster, podNADManifest()))
 			appliedNADClusters[ep.node.Cluster] = true
 		}
-		require.NoError(t, applyDispatch(ctx, cfg, containerFixture(containerName(ep.nic), ep.node.Cluster, nodeK8sName(ep.node), ep.nic)))
+		applyDispatch(t, ctx, cfg, containerFixture(containerName(ep.nic), ep.node.Cluster, nodeK8sName(ep.node), ep.nic))
 	}
 	t.Cleanup(func() {
 		for cl := range appliedNADClusters {
@@ -124,17 +124,17 @@ func TestVPCPeering(t *testing.T) {
 
 	// 2. Deny-all ingress policy on green BEFORE the peering. Without a selecting policy the
 	//    compiler emits an allow-until-selected fallback and Assertion 1 could never deny.
-	require.NoError(t, applyDispatch(ctx, cfg, `apiVersion: net.ectobase.dev/v1alpha1
+	applyDispatch(t, ctx, cfg, `apiVersion: net.ectobase.dev/v1alpha1
 kind: FirewallPolicy
 metadata: {name: green-deny-all}
 spec:
   interfaceSelector: {matchLabels: {side: green}}
   ingress:
     - {cidr: "0.0.0.0/0", action: "Deny"}
-`))
+`)
 
 	// 3. Mutual-consent VPCPeering pair. The VPCPeeringReconciler drives BOTH to Ready.
-	require.NoError(t, applyDispatch(ctx, cfg, vpcPeeringPairFixture()))
+	applyDispatch(t, ctx, cfg, vpcPeeringPairFixture())
 	for _, name := range []string{"blue-to-green", "green-to-blue"} {
 		name := name
 		eventually(t, 2*time.Minute, 3*time.Second, func() error {
@@ -227,14 +227,14 @@ spec:
 	// Replace (not layer) so exactly one selecting policy governs green at a time.
 	// -----------------------------------------------------------------------
 	_, _ = kubectl(ctx, cfg, "dispatch", "delete", "firewallpolicy.net.ectobase.dev", "green-deny-all", "--ignore-not-found")
-	require.NoError(t, applyDispatch(ctx, cfg, fmt.Sprintf(`apiVersion: net.ectobase.dev/v1alpha1
+	applyDispatch(t, ctx, cfg, fmt.Sprintf(`apiVersion: net.ectobase.dev/v1alpha1
 kind: FirewallPolicy
 metadata: {name: green-allow-blue}
 spec:
   interfaceSelector: {matchLabels: {side: green}}
   ingress:
     - {cidr: %q, proto: ICMP, action: Allow}
-`, peerBlueSubnet)))
+`, peerBlueSubnet))
 
 	eventually(t, 3*time.Minute, 5*time.Second, func() error {
 		return podPing(ctx, cfg, blue.node.Cluster, podByNIC[blue.nic], green.ip)
