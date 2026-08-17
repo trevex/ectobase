@@ -268,6 +268,20 @@ spec:
     requests:
       cpu: "1"
       memory: 1Gi
+  # cloudInit bootstraps the guest: without it a stock cloud image has no login, so
+  # neither the console nor SSH can get past the prompt. userData is a cloud-init
+  # user-data blob delivered as a NoCloud datasource; replace the key with your own
+  # (`cat ~/.ssh/id_ed25519.pub`).
+  cloudInit:
+    userData: |
+      #cloud-config
+      users:
+        - name: fedora
+          sudo: ALL=(ALL) NOPASSWD:ALL
+          ssh_authorized_keys:
+            - ssh-ed25519 AAAA...your-public-key...
+      # a password login also works if you prefer the serial console over SSH:
+      # chpasswd: { list: "fedora:fedora", expire: false }
 ```
 
 ```sh
@@ -283,19 +297,134 @@ khub get compiledvm,compiledvolumeattachment -A
 ```
 
 On the bound pool, the **vm-materializer** turns those into a KubeVirt
-`VirtualMachine` and a CDI `DataVolume`; KubeVirt then runs a
+`VirtualMachine` and a CDI `DataVolume` — plus, from `spec.cloudInit`, a
+`cloudInitNoCloud` disk carrying your user-data. KubeVirt then runs a
 `VirtualMachineInstance` in a `virt-launcher` pod. Inspect the VMI, see which node
-KubeVirt placed it on, and open its console:
+KubeVirt placed it on, and open its serial console:
 
 ```sh
 k02 get datavolume,virtualmachine,virtualmachineinstance -A
 k02 get pod -A -l kubevirt.io=virt-launcher -o wide     # the node it landed on
+# confirm cloud-init reached the guest (the NoCloud disk carries your user-data):
+k02 get vm.kubevirt.io demo-vm -o jsonpath='{.spec.template.spec.volumes[?(@.name=="cloudinitdisk")].cloudInitNoCloud.userData}{"\n"}'
 virtctl --kubeconfig test/lab/build/ectobase/k02.kubeconfig console demo-vm
 ```
 
+Log in as the cloud-init user (`fedora`) on the console — or SSH over the overlay
+from another endpoint in the same VPC:
+
+```sh
+# from a Container/VM in demo (which reaches 10.0.9.20 over the encapsulated overlay):
+ssh fedora@10.0.9.20
+```
+
 The VMI's overlay interface attaches via the KubeVirt `flowplane` network-binding
-plugin (a tap), and — as with the Pod — the node agent programs the datapath for
-it wherever it lands.
+plugin (a tap); the guest self-addresses `10.0.9.20` from the dataplane's DHCP
+responder, and — as with the Pod — the node agent programs the datapath for it
+wherever it lands.
+
+!!! warning "Status: Partial — guest datapath"
+    The compile → sync → materialize path for `cloudInit` is proven end-to-end (the
+    KubeVirt VM carries the NoCloud disk). Actually *booting* the guest and reaching
+    it over the overlay depends on the KubeVirt tap datapath, which is still being
+    hardened (see the "Partial" note above and
+    [KubeVirt integration](../architecture/kubevirt-integration.md)). Console/SSH work
+    once the guest boots on a node whose overlay datapath is up.
+
+## Firewall policies
+
+Each VPC has a `spec.defaultPolicy` (the `demo` VPC above used `Allow`). The
+production posture is **deny-by-default**: leave `defaultPolicy` unset (or `Deny`)
+and open specific flows with a `FirewallPolicy`, which selects interfaces by label and
+lists ingress/egress rules. Label the NICs you want to govern, then author the policy
+on the dispatch — the compiler folds matching rules into each `CompiledNIC` and the
+node agent programs them.
+
+```yaml
+apiVersion: net.ectobase.dev/v1alpha1
+kind: FirewallPolicy
+metadata:
+  name: demo-allow-icmp
+spec:
+  # selects NetworkInterfaces carrying this label (add `labels: {side: green}` to the NIC).
+  interfaceSelector:
+    matchLabels: { side: green }
+  ingress:
+    - { cidr: "10.0.9.0/24", proto: ICMP, action: Allow }
+```
+
+```sh
+khub apply -f firewall.yaml
+```
+
+!!! success "Status: Implemented"
+    `FirewallPolicy` is proven end-to-end in the live suite (`TestVPCPeering` asserts a
+    cross-endpoint ping is dropped under deny-by-default and passes once an allow rule is
+    applied). Rules compile into `CompiledNIC.spec.firewall` and the agent programs the
+    node datapath. See [Firewall](../features/firewall.md).
+
+## Cross-VPC connectivity (VPC peering)
+
+Two VPCs are isolated by default. A **mutual-consent** `VPCPeering` pair imports routes
+across them: each side names the other and exposes its own prefixes; both go
+`status.state: Ready` only when the reciprocal peering exists. This is a control-plane
+route-import — no datapath change — so firewall policy still governs the flow
+(deny-by-default means you also need an allow rule, as above).
+
+```yaml
+apiVersion: net.ectobase.dev/v1alpha1
+kind: VPCPeering
+metadata: { name: blue-to-green }
+spec:
+  vpcRef: { name: peer-blue }
+  peerVpcRef: { namespace: default, name: peer-green }
+  exposedPrefixes: ["10.0.10.0/24"]
+---
+apiVersion: net.ectobase.dev/v1alpha1
+kind: VPCPeering
+metadata: { name: green-to-blue }
+spec:
+  vpcRef: { name: peer-green }
+  peerVpcRef: { namespace: default, name: peer-blue }
+  exposedPrefixes: ["10.0.20.0/24"]
+```
+
+```sh
+khub apply -f peering.yaml
+khub get vpcpeering        # both -> Ready once the pair is mutual
+```
+
+!!! success "Status: Implemented"
+    `TestVPCPeering` proves the full path live: cross-VPC ping is blocked pre-policy,
+    reaches the peer once the peering pair + an allow rule exist, and local-VNI routes
+    take precedence over imported ones. See [VPC peering](../features/vpc-peering.md).
+
+## North-South: egress & load balancing
+
+Giving a workload internet egress (`NATGateway` + `FloatingIP`) or a public VIP
+(`LoadBalancer`) is authored the same way — a CRD on the dispatch that the compiler
+folds into the workload's `CompiledNIC`:
+
+```yaml
+apiVersion: net.ectobase.dev/v1alpha1
+kind: NATGateway
+metadata: { name: demo-egress }
+spec:
+  vpcRef: { name: demo }
+  # ...pool/port-block allocation...
+```
+
+!!! warning "Status: Partial — no N-S edge control path yet"
+    The **node-side** compile path works (the compiler folds `LoadBalancer`/`NATGateway`
+    into `CompiledNIC`, and the agent programs the backend distributed-LB / egress SNAT
+    at the node uplink). What is **not** wired yet is the **North-South edge** control
+    plane: registering a VIP on the WAN edge, or masquerading to the internet, is still
+    programmed directly on the edge datapath in the live tests (`TestLbDistributeSmoke`,
+    `TestNatEgressSmoke` drive the edge over the dataplane gRPC, not via these CRDs). So
+    a `khub apply -f loadbalancer.yaml` compiles, but a WAN client will not reach it
+    end-to-end from intent alone. The datapath itself is proven — see
+    [Load balancer](../features/loadbalancer.md) and [NAT](../features/nat.md) — the gap
+    is the edge control-plane wiring, tracked as a follow-up.
 
 ## Trace the objects end-to-end
 
