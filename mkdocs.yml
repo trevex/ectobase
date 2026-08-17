@@ -1,5 +1,7 @@
 site_name: ectobase
 site_description: Kubernetes-native multi-cluster IaaS on a shared eBPF/XDP overlay.
+# Project-pages URL so mkdocs emits correct canonical/sitemap links under the /ectobase/ base path.
+site_url: https://trevex.github.io/ectobase/
 repo_url: https://github.com/trevex/ectobase
 docs_dir: docs
 
