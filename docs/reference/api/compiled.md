@@ -21,6 +21,23 @@ served by the aggregated apiserver and consumed as CRDs by the mesh control plan
 
 
 
+#### CloudInit
+
+
+
+CloudInit is guest bootstrap config for a compiled VM, delivered by the materializer
+as a cloud-init NoCloud datasource.
+
+
+
+_Appears in:_
+- [CompiledVMSpec](#compiledvmspec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `userData` _string_ | UserData is the cloud-init user-data (commonly a #cloud-config document). |  | Optional: \{\} <br /> |
+
+
 #### CompiledContainer
 
 
@@ -397,6 +414,7 @@ _Appears in:_
 | `resources` _[ResourceRequirements](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#resourcerequirements-v1-core)_ | Resources is the compute request/limit; maps to the KubeVirt domain resources. |  | Optional: \{\} <br /> |
 | `runStrategy` _string_ | RunStrategy is the KubeVirt run strategy (defaulted upstream by the compiler). |  | Optional: \{\} <br /> |
 | `interfaces` _[CompiledVMInterface](#compiledvminterface) array_ | Interfaces are the VM's overlay interfaces (one per owned NetworkInterface). |  | Optional: \{\} <br /> |
+| `cloudInit` _[CloudInit](#cloudinit)_ | CloudInit, if set, is guest bootstrap delivered as a cloud-init NoCloud datasource. |  | Optional: \{\} <br /> |
 
 
 #### CompiledVMStatus

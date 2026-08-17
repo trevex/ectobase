@@ -43,6 +43,15 @@ spec:
               and the per-interface MAC + overlay network name. A downstream materializer
               turns this into a kubevirt.io/v1.VirtualMachine.
             properties:
+              cloudInit:
+                description: CloudInit, if set, is guest bootstrap delivered as a
+                  cloud-init NoCloud datasource.
+                properties:
+                  userData:
+                    description: 'UserData is the cloud-init user-data (commonly a
+                      #cloud-config document).'
+                    type: string
+                type: object
               clusterName:
                 description: |-
                   ClusterName is the cluster this compiled VM is bound to (the pod->node binding).

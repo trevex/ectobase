@@ -25,6 +25,8 @@ type CompiledVMSpecApplyConfiguration struct {
 	RunStrategy *string `json:"runStrategy,omitempty"`
 	// Interfaces are the VM's overlay interfaces (one per owned NetworkInterface).
 	Interfaces []CompiledVMInterfaceApplyConfiguration `json:"interfaces,omitempty"`
+	// CloudInit, if set, is guest bootstrap delivered as a cloud-init NoCloud datasource.
+	CloudInit *CloudInitApplyConfiguration `json:"cloudInit,omitempty"`
 }
 
 // CompiledVMSpecApplyConfiguration constructs a declarative configuration of the CompiledVMSpec type for use with
@@ -75,5 +77,13 @@ func (b *CompiledVMSpecApplyConfiguration) WithInterfaces(values ...*CompiledVMI
 		}
 		b.Interfaces = append(b.Interfaces, *values[i])
 	}
+	return b
+}
+
+// WithCloudInit sets the CloudInit field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the CloudInit field is set to the value of the last call.
+func (b *CompiledVMSpecApplyConfiguration) WithCloudInit(value *CloudInitApplyConfiguration) *CompiledVMSpecApplyConfiguration {
+	b.CloudInit = value
 	return b
 }

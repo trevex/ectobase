@@ -39,6 +39,9 @@ type VirtualMachineSpecApplyConfiguration struct {
 	// AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools during
 	// scheduling and failover (best-effort: availability wins if no non-violating pool).
 	AntiAffinity *VMAntiAffinityApplyConfiguration `json:"antiAffinity,omitempty"`
+	// CloudInit, if set, provides guest bootstrap (users, SSH keys, packages) delivered to
+	// the VM as a cloud-init NoCloud datasource. Required to log in to a stock cloud image.
+	CloudInit *CloudInitApplyConfiguration `json:"cloudInit,omitempty"`
 }
 
 // VirtualMachineSpecApplyConfiguration constructs a declarative configuration of the VirtualMachineSpec type for use with
@@ -118,5 +121,13 @@ func (b *VirtualMachineSpecApplyConfiguration) WithPoolSelector(value *metav1.La
 // If called multiple times, the AntiAffinity field is set to the value of the last call.
 func (b *VirtualMachineSpecApplyConfiguration) WithAntiAffinity(value *VMAntiAffinityApplyConfiguration) *VirtualMachineSpecApplyConfiguration {
 	b.AntiAffinity = value
+	return b
+}
+
+// WithCloudInit sets the CloudInit field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the CloudInit field is set to the value of the last call.
+func (b *VirtualMachineSpecApplyConfiguration) WithCloudInit(value *CloudInitApplyConfiguration) *VirtualMachineSpecApplyConfiguration {
+	b.CloudInit = value
 	return b
 }

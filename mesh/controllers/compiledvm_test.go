@@ -1,8 +1,8 @@
 package controllers
 
 import (
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -49,5 +49,25 @@ func TestCompileVM(t *testing.T) {
 	vm.Spec.RunStrategy = "Always"
 	if got := CompileVM(vm, nics, Placement{ClusterName: "c1", WorkloadID: "vm1"}, "flowplane-overlay"); got.Spec.RunStrategy != "Always" {
 		t.Fatalf("explicit runStrategy overwritten: %q", got.Spec.RunStrategy)
+	}
+
+	// No CloudInit intent -> none lowered (so the materializer adds no cloud-init disk).
+	if cvm.Spec.CloudInit != nil {
+		t.Fatalf("unset CloudInit should stay nil, got %+v", cvm.Spec.CloudInit)
+	}
+}
+
+func TestCompileVM_CloudInit(t *testing.T) {
+	userData := "#cloud-config\nusers:\n  - name: fedora\n    ssh_authorized_keys: [ssh-ed25519 AAAA...]\n"
+	vm := &computev1.VirtualMachine{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "vm1"},
+		Spec: computev1.VirtualMachineSpec{
+			Image:     "quay.io/containerdisks/fedora:41",
+			CloudInit: &computev1.CloudInit{UserData: userData},
+		},
+	}
+	cvm := CompileVM(vm, nil, Placement{ClusterName: "c1", WorkloadID: "vm1"}, "flowplane-overlay")
+	if cvm.Spec.CloudInit == nil || cvm.Spec.CloudInit.UserData != userData {
+		t.Fatalf("cloud-init userData not lowered onto the CompiledVM: %+v", cvm.Spec.CloudInit)
 	}
 }

@@ -29,6 +29,17 @@ type CompiledVMSpec struct {
 	// Interfaces are the VM's overlay interfaces (one per owned NetworkInterface).
 	// +optional
 	Interfaces []CompiledVMInterface `json:"interfaces,omitempty"`
+	// CloudInit, if set, is guest bootstrap delivered as a cloud-init NoCloud datasource.
+	// +optional
+	CloudInit *CloudInit `json:"cloudInit,omitempty"`
+}
+
+// CloudInit is guest bootstrap config for a compiled VM, delivered by the materializer
+// as a cloud-init NoCloud datasource.
+type CloudInit struct {
+	// UserData is the cloud-init user-data (commonly a #cloud-config document).
+	// +optional
+	UserData string `json:"userData,omitempty"`
 }
 
 // CompiledVMInterface is a resolved overlay interface for a VM: the pinned MAC

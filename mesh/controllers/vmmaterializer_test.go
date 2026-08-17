@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -112,6 +112,48 @@ func TestBuildVM(t *testing.T) {
 	}
 	if vm.Spec.Template.Spec.Domain.Resources.Requests.Memory().Cmp(resource.MustParse("1Gi")) != 0 {
 		t.Fatalf("mem")
+	}
+}
+
+func TestBuildVM_CloudInit(t *testing.T) {
+	userData := "#cloud-config\nusers: [{name: fedora, ssh_authorized_keys: [ssh-ed25519 AAAA...]}]\n"
+	cvm := &compiledv1.CompiledVM{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "ns-vm1"},
+		Spec: compiledv1.CompiledVMSpec{
+			Image:      "quay.io/containerdisks/fedora:41",
+			CloudInit:  &compiledv1.CloudInit{UserData: userData},
+			Interfaces: []compiledv1.CompiledVMInterface{{MAC: "02:00:00:00:00:01", NetworkName: "flowplane-overlay"}},
+		},
+	}
+	vm := buildVM(cvm, nil)
+	vols := vm.Spec.Template.Spec.Volumes
+	// containerDisk boot volume + the cloud-init NoCloud volume.
+	var ci *kubevirtv1.CloudInitNoCloudSource
+	for _, v := range vols {
+		if v.Name == cloudInitDiskName {
+			ci = v.CloudInitNoCloud
+		}
+	}
+	if ci == nil || ci.UserData != userData {
+		t.Fatalf("expected a %q NoCloud volume with the userData, got volumes %+v", cloudInitDiskName, vols)
+	}
+	// A matching disk must pair the cloud-init volume by name.
+	var haveDisk bool
+	for _, d := range vm.Spec.Template.Spec.Domain.Devices.Disks {
+		if d.Name == cloudInitDiskName {
+			haveDisk = true
+		}
+	}
+	if !haveDisk {
+		t.Fatalf("cloud-init volume has no paired disk: %+v", vm.Spec.Template.Spec.Domain.Devices.Disks)
+	}
+
+	// No cloud-init intent -> no cloud-init disk/volume (guard the nil path).
+	cvm.Spec.CloudInit = nil
+	for _, v := range buildVM(cvm, nil).Spec.Template.Spec.Volumes {
+		if v.Name == cloudInitDiskName {
+			t.Fatalf("cloud-init volume present without intent")
+		}
 	}
 }
 

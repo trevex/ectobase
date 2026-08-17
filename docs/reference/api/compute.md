@@ -18,6 +18,24 @@ and consumed as CRDs by the mesh control plane.
 
 
 
+#### CloudInit
+
+
+
+CloudInit is guest bootstrap config for a VM, delivered by the materializer as a
+cloud-init NoCloud datasource. UserData is the cloud-init user-data blob (e.g. a
+#cloud-config with users + ssh_authorized_keys, or an ignition config).
+
+
+
+_Appears in:_
+- [VirtualMachineSpec](#virtualmachinespec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `userData` _string_ | UserData is the cloud-init user-data (commonly a #cloud-config document). |  | Optional: \{\} <br /> |
+
+
 #### Container
 
 
@@ -215,6 +233,7 @@ _Appears in:_
 | `runStrategy` _string_ | RunStrategy is the KubeVirt run strategy (Always, RerunOnFailure, Manual, Halted).<br />Empty defaults to RerunOnFailure (Tier-1 local restart on node death). |  | Optional: \{\} <br /> |
 | `poolSelector` _[LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#labelselector-v1-meta)_ | PoolSelector, if set, restricts scheduling to ClusterPools whose labels match. |  | Optional: \{\} <br /> |
 | `antiAffinity` _[VMAntiAffinity](#vmantiaffinity)_ | AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools during<br />scheduling and failover (best-effort: availability wins if no non-violating pool). |  | Optional: \{\} <br /> |
+| `cloudInit` _[CloudInit](#cloudinit)_ | CloudInit, if set, provides guest bootstrap (users, SSH keys, packages) delivered to<br />the VM as a cloud-init NoCloud datasource. Required to log in to a stock cloud image. |  | Optional: \{\} <br /> |
 
 
 #### VirtualMachineStatus

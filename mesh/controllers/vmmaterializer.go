@@ -21,6 +21,8 @@ import (
 const (
 	// containerDiskName is the shared name pairing the boot Disk to its Volume.
 	containerDiskName = "containerdisk"
+	// cloudInitDiskName pairs the cloud-init NoCloud Disk to its Volume (KubeVirt convention).
+	cloudInitDiskName = "cloudinitdisk"
 	// flowplaneBindingName is the KubeVirt network-binding plugin (registered in the
 	// downstream KubeVirt CR) that attaches the flowplane overlay via a tap device.
 	flowplaneBindingName = "flowplane"
@@ -65,6 +67,12 @@ func buildVM(cvm *compiledv1.CompiledVM, attachments []compiledv1.CompiledVolume
 		// Ephemeral fallback: containerDisk from Image (Phase-4 behavior).
 		disks = []kubevirtv1.Disk{{Name: containerDiskName, DiskDevice: kubevirtv1.DiskDevice{Disk: &kubevirtv1.DiskTarget{Bus: kubevirtv1.DiskBusVirtio}}}}
 		volumes = []kubevirtv1.Volume{{Name: containerDiskName, VolumeSource: kubevirtv1.VolumeSource{ContainerDisk: &kubevirtv1.ContainerDiskSource{Image: cvm.Spec.Image}}}}
+	}
+	// Guest bootstrap: a cloud-init NoCloud disk (users, SSH keys) so a stock cloud image is
+	// loginable. Added alongside the boot disk regardless of ephemeral-vs-persistent boot.
+	if ci := cvm.Spec.CloudInit; ci != nil && ci.UserData != "" {
+		disks = append(disks, kubevirtv1.Disk{Name: cloudInitDiskName, DiskDevice: kubevirtv1.DiskDevice{Disk: &kubevirtv1.DiskTarget{Bus: kubevirtv1.DiskBusVirtio}}})
+		volumes = append(volumes, kubevirtv1.Volume{Name: cloudInitDiskName, VolumeSource: kubevirtv1.VolumeSource{CloudInitNoCloud: &kubevirtv1.CloudInitNoCloudSource{UserData: ci.UserData}}})
 	}
 	var ifaces []kubevirtv1.Interface
 	var networks []kubevirtv1.Network

@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"reflect"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
-	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -52,12 +52,22 @@ func CompileVM(vm *computev1.VirtualMachine, nics []netv1.NetworkInterface, plac
 			Resources:   *vm.Spec.Resources.DeepCopy(),
 			RunStrategy: runStrategy,
 			Interfaces:  ifaces,
+			CloudInit:   compiledCloudInit(vm.Spec.CloudInit),
 		},
 	}
 	if placement.WorkloadID != "" {
 		compiled.Labels = map[string]string{"workload": placement.WorkloadID}
 	}
 	return compiled
+}
+
+// compiledCloudInit lowers the VM's cloud-init intent onto its CompiledVM (nil stays nil,
+// so a VM without bootstrap produces no cloud-init disk downstream).
+func compiledCloudInit(ci *computev1.CloudInit) *compiledv1.CloudInit {
+	if ci == nil {
+		return nil
+	}
+	return &compiledv1.CloudInit{UserData: ci.UserData}
 }
 
 // CompiledVMReconciler watches VirtualMachines and upserts their CompiledVM.

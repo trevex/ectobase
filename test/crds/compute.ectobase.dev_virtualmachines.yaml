@@ -55,6 +55,16 @@ spec:
                       Group repel each other.
                     type: string
                 type: object
+              cloudInit:
+                description: |-
+                  CloudInit, if set, provides guest bootstrap (users, SSH keys, packages) delivered to
+                  the VM as a cloud-init NoCloud datasource. Required to log in to a stock cloud image.
+                properties:
+                  userData:
+                    description: 'UserData is the cloud-init user-data (commonly a
+                      #cloud-config document).'
+                    type: string
+                type: object
               clusterName:
                 description: |-
                   ClusterName is the cluster this workload is bound to. Set manually or by

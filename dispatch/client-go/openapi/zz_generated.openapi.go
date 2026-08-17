@@ -22,6 +22,7 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
+		v1alpha1.CloudInit{}.OpenAPIModelName():                      schema_ectobase_api_compiled_v1alpha1_CloudInit(ref),
 		v1alpha1.CompiledContainer{}.OpenAPIModelName():              schema_ectobase_api_compiled_v1alpha1_CompiledContainer(ref),
 		v1alpha1.CompiledContainerInterface{}.OpenAPIModelName():     schema_ectobase_api_compiled_v1alpha1_CompiledContainerInterface(ref),
 		v1alpha1.CompiledContainerList{}.OpenAPIModelName():          schema_ectobase_api_compiled_v1alpha1_CompiledContainerList(ref),
@@ -49,6 +50,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		v1alpha1.CompiledVolumeAttachmentStatus{}.OpenAPIModelName(): schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachmentStatus(ref),
 		v1alpha1.LocalObjectReference{}.OpenAPIModelName():           schema_ectobase_api_compiled_v1alpha1_LocalObjectReference(ref),
 		v1alpha1.PortStatus{}.OpenAPIModelName():                     schema_ectobase_api_compiled_v1alpha1_PortStatus(ref),
+		computev1alpha1.CloudInit{}.OpenAPIModelName():               schema_ectobase_api_compute_v1alpha1_CloudInit(ref),
 		computev1alpha1.Container{}.OpenAPIModelName():               schema_ectobase_api_compute_v1alpha1_Container(ref),
 		computev1alpha1.ContainerList{}.OpenAPIModelName():           schema_ectobase_api_compute_v1alpha1_ContainerList(ref),
 		computev1alpha1.ContainerSpec{}.OpenAPIModelName():           schema_ectobase_api_compute_v1alpha1_ContainerSpec(ref),
@@ -406,6 +408,26 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		runtime.TypeMeta{}.OpenAPIModelName():                        schema_k8sio_apimachinery_pkg_runtime_TypeMeta(ref),
 		runtime.Unknown{}.OpenAPIModelName():                         schema_k8sio_apimachinery_pkg_runtime_Unknown(ref),
 		version.Info{}.OpenAPIModelName():                            schema_k8sio_apimachinery_pkg_version_Info(ref),
+	}
+}
+
+func schema_ectobase_api_compiled_v1alpha1_CloudInit(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CloudInit is guest bootstrap config for a compiled VM, delivered by the materializer as a cloud-init NoCloud datasource.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"userData": {
+						SchemaProps: spec.SchemaProps{
+							Description: "UserData is the cloud-init user-data (commonly a #cloud-config document).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
 	}
 }
 
@@ -1348,11 +1370,17 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledVMSpec(ref common.ReferenceCa
 							},
 						},
 					},
+					"cloudInit": {
+						SchemaProps: spec.SchemaProps{
+							Description: "CloudInit, if set, is guest bootstrap delivered as a cloud-init NoCloud datasource.",
+							Ref:         ref(v1alpha1.CloudInit{}.OpenAPIModelName()),
+						},
+					},
 				},
 			},
 		},
 		Dependencies: []string{
-			v1alpha1.CompiledVMInterface{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName()},
+			v1alpha1.CloudInit{}.OpenAPIModelName(), v1alpha1.CompiledVMInterface{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName()},
 	}
 }
 
@@ -1588,6 +1616,26 @@ func schema_ectobase_api_compiled_v1alpha1_PortStatus(ref common.ReferenceCallba
 					"pciAddress": {
 						SchemaProps: spec.SchemaProps{
 							Description: "PCIAddress is the PCI address for vf ports.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_compute_v1alpha1_CloudInit(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "CloudInit is guest bootstrap config for a VM, delivered by the materializer as a cloud-init NoCloud datasource. UserData is the cloud-init user-data blob (e.g. a #cloud-config with users + ssh_authorized_keys, or an ignition config).",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"userData": {
+						SchemaProps: spec.SchemaProps{
+							Description: "UserData is the cloud-init user-data (commonly a #cloud-config document).",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -2070,11 +2118,17 @@ func schema_ectobase_api_compute_v1alpha1_VirtualMachineSpec(ref common.Referenc
 							Ref:         ref(computev1alpha1.VMAntiAffinity{}.OpenAPIModelName()),
 						},
 					},
+					"cloudInit": {
+						SchemaProps: spec.SchemaProps{
+							Description: "CloudInit, if set, provides guest bootstrap (users, SSH keys, packages) delivered to the VM as a cloud-init NoCloud datasource. Required to log in to a stock cloud image.",
+							Ref:         ref(computev1alpha1.CloudInit{}.OpenAPIModelName()),
+						},
+					},
 				},
 			},
 		},
 		Dependencies: []string{
-			computev1alpha1.LocalObjectReference{}.OpenAPIModelName(), computev1alpha1.VMAntiAffinity{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName(), metav1.LabelSelector{}.OpenAPIModelName()},
+			computev1alpha1.CloudInit{}.OpenAPIModelName(), computev1alpha1.LocalObjectReference{}.OpenAPIModelName(), computev1alpha1.VMAntiAffinity{}.OpenAPIModelName(), v1.ResourceRequirements{}.OpenAPIModelName(), metav1.LabelSelector{}.OpenAPIModelName()},
 	}
 }
 

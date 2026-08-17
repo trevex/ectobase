@@ -24,6 +24,8 @@ import (
 func ForKind(kind schema.GroupVersionKind) interface{} {
 	switch kind {
 	// Group=compiled.ectobase.dev, Version=v1alpha1
+	case v1alpha1.SchemeGroupVersion.WithKind("CloudInit"):
+		return &compiledv1alpha1.CloudInitApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("CompiledContainer"):
 		return &compiledv1alpha1.CompiledContainerApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("CompiledContainerInterface"):
@@ -70,6 +72,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &compiledv1alpha1.PortStatusApplyConfiguration{}
 
 		// Group=compute.ectobase.dev, Version=v1alpha1
+	case computev1alpha1.SchemeGroupVersion.WithKind("CloudInit"):
+		return &applyconfigurationscomputev1alpha1.CloudInitApplyConfiguration{}
 	case computev1alpha1.SchemeGroupVersion.WithKind("Container"):
 		return &applyconfigurationscomputev1alpha1.ContainerApplyConfiguration{}
 	case computev1alpha1.SchemeGroupVersion.WithKind("ContainerSpec"):

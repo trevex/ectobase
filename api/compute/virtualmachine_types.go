@@ -26,6 +26,15 @@ type VirtualMachineSpec struct {
 	PoolSelector *metav1.LabelSelector
 	// AntiAffinity, if set, spreads VMs sharing a Group across ClusterPools.
 	AntiAffinity *VMAntiAffinity
+	// CloudInit, if set, provides guest bootstrap delivered as a cloud-init NoCloud datasource.
+	CloudInit *CloudInit
+}
+
+// CloudInit is guest bootstrap config for a VM, delivered by the materializer as a
+// cloud-init NoCloud datasource.
+type CloudInit struct {
+	// UserData is the cloud-init user-data (commonly a #cloud-config document).
+	UserData string
 }
 
 // VirtualMachineStatus defines the observed state of a VirtualMachine.

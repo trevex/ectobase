@@ -45,6 +45,19 @@ type VirtualMachineSpec struct {
 	// scheduling and failover (best-effort: availability wins if no non-violating pool).
 	// +optional
 	AntiAffinity *VMAntiAffinity `json:"antiAffinity,omitempty"`
+	// CloudInit, if set, provides guest bootstrap (users, SSH keys, packages) delivered to
+	// the VM as a cloud-init NoCloud datasource. Required to log in to a stock cloud image.
+	// +optional
+	CloudInit *CloudInit `json:"cloudInit,omitempty"`
+}
+
+// CloudInit is guest bootstrap config for a VM, delivered by the materializer as a
+// cloud-init NoCloud datasource. UserData is the cloud-init user-data blob (e.g. a
+// #cloud-config with users + ssh_authorized_keys, or an ignition config).
+type CloudInit struct {
+	// UserData is the cloud-init user-data (commonly a #cloud-config document).
+	// +optional
+	UserData string `json:"userData,omitempty"`
 }
 
 // VirtualMachineStatus defines the observed state of a VirtualMachine.

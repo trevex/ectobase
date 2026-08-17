@@ -20,6 +20,8 @@ type CompiledVMSpec struct {
 	RunStrategy string
 	// Interfaces are the VM's overlay interfaces (one per owned NetworkInterface).
 	Interfaces []CompiledVMInterface
+	// CloudInit, if set, is guest bootstrap delivered as a cloud-init NoCloud datasource.
+	CloudInit *CloudInit
 }
 
 // CompiledVMInterface is a resolved overlay interface for a VM.
@@ -28,6 +30,13 @@ type CompiledVMInterface struct {
 	MAC string
 	// NetworkName is the multus NetworkAttachmentDefinition name for the overlay binding.
 	NetworkName string
+}
+
+// CloudInit is guest bootstrap config for a compiled VM, delivered by the materializer
+// as a cloud-init NoCloud datasource.
+type CloudInit struct {
+	// UserData is the cloud-init user-data (commonly a #cloud-config document).
+	UserData string
 }
 
 // CompiledVMStatus is the observed state of a CompiledVM.

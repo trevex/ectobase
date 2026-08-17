@@ -6,6 +6,11 @@
 package v1alpha1
 
 // OpenAPIModelName returns the OpenAPI model name for this type.
+func (in CloudInit) OpenAPIModelName() string {
+	return "dev.ectobase.compiled.v1alpha1.CloudInit"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
 func (in CompiledContainer) OpenAPIModelName() string {
 	return "dev.ectobase.compiled.v1alpha1.CompiledContainer"
 }
