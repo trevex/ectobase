@@ -10,7 +10,6 @@ aya-log = { workspace = true }
 flowplane-common = { path = "../flowplane-common", features = ["user"] }
 flowplane-control = { path = "../flowplane-control" }
 flowplane-core = { path = "../flowplane-core" }
-flowplane-node = { path = "../flowplane-node" }
 flowplane-device = { path = "../flowplane-device" }
 tokio = { workspace = true }
 tokio-stream = { version = "0.1", features = ["net"] }
@@ -31,6 +30,9 @@ ipnet = "2"
 # compiled bytecode against. flowplane-core supplies EncapParams/GW_MAC/Action for the fixture.
 flowplane-sim = { path = "../flowplane-sim" }
 flowplane-core = { path = "../flowplane-core" }
+# In-memory MapWriter backing ControlCore for the moved DataplaneNode handler unit tests
+# (handlers.rs) — no real eBPF maps needed to exercise the marshalling logic.
+flowplane-control = { path = "../flowplane-control", features = ["mem-writer"] }
 etherparse = "0.15"
 # Per-run bpffs pin dir for the anchor/verifier tests: the state maps are declared `pinned`, so
 # every load path (including the inline EbpfLoader tests) must set a `map_pin_path` on a bpffs.
@@ -48,3 +50,4 @@ parking_lot = { workspace = true }
 aya-build = "0.1.3"
 cargo_metadata = "0.23"
 flowplane-ebpf = { path = "../flowplane-ebpf" }
+tonic-build = "0.12"

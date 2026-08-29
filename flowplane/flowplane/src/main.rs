@@ -6,9 +6,24 @@
 mod attach;
 mod conntrack_gc;
 mod control;
+mod handlers;
 mod loader;
 mod maps;
 mod node;
+mod parse;
+pub mod pb {
+    tonic::include_proto!("dataplane.v1");
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn proto_types_present() {
+            let _ = super::AddRouteRequest::default();
+            let _ = super::AddRouteResponse::default();
+            let _ = super::ConfigureQoSRequest::default();
+        }
+    }
+}
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use ipnet::Ipv6Net;

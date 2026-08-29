@@ -41,5 +41,18 @@ fn main() -> anyhow::Result<()> {
     // crate's lib target, not its bin), leaving a stale embedded object.
     println!("cargo:rerun-if-changed=../flowplane-ebpf/src");
     println!("cargo:rerun-if-changed=../flowplane-ebpf/Cargo.toml");
+
+    // 2) Compile the DataplaneNode gRPC proto (server + client stubs) into `pb` (src/main.rs).
+    // Generate the client stub too: e2e test harnesses drive a running DataplaneNode over gRPC via
+    // `pb::dataplane_node_client::DataplaneNodeClient`.
+    tonic_build::configure()
+        .build_client(true)
+        .compile_protos(
+            &["../../api/proto/dataplane/v1/dataplane.proto"],
+            &["../../api/proto/dataplane/v1"],
+        )
+        .expect("tonic-build compile dataplane protos");
+    println!("cargo:rerun-if-changed=../../api/proto/dataplane/v1");
+
     Ok(())
 }

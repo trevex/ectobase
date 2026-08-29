@@ -566,7 +566,6 @@ dependencies = [
  "flowplane-core",
  "flowplane-device",
  "flowplane-ebpf",
- "flowplane-node",
  "flowplane-sim",
  "ipnet",
  "libc",
@@ -576,6 +575,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tonic",
+ "tonic-build",
  "tonic-health",
  "uuid",
 ]
@@ -622,18 +622,6 @@ dependencies = [
  "flowplane-core",
  "network-types",
  "which",
-]
-
-[[package]]
-name = "flowplane-node"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "flowplane-common",
- "flowplane-control",
- "prost",
- "tonic",
- "tonic-build",
 ]
 
 [[package]]

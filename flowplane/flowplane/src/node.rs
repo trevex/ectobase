@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tonic::{Request, Response, Status};
 
-pub use flowplane_node::pb;
+pub use crate::pb;
 use pb::dataplane_node_server::DataplaneNode;
 use pb::{
     AttachInterfaceRequest, AttachInterfaceResponse, ConfigureNetworkRequest,
@@ -12,6 +12,7 @@ use pb::{
 };
 
 use crate::attach::AttachState;
+use crate::handlers;
 
 /// The DataplaneNode gRPC service. Holds the shared attach state (live datapath control + underlay
 /// IPAM) when serving with a datapath; `None` means AttachInterface/DetachInterface are not wired
@@ -143,9 +144,7 @@ impl DataplaneNode for NodeService {
             r.external,
         );
         let resp = tokio::task::spawn_blocking(move || {
-            attach
-                .control
-                .with_core(|c| flowplane_node::add_route(c, &r))
+            attach.control.with_core(|c| handlers::add_route(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("add_route task panicked: {e}")))??;
@@ -169,7 +168,7 @@ impl DataplaneNode for NodeService {
         let resp = tokio::task::spawn_blocking(move || {
             attach
                 .control
-                .with_core(|c| flowplane_node::withdraw_route(c, &r))
+                .with_core(|c| handlers::withdraw_route(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("withdraw_route task panicked: {e}")))??;
@@ -197,7 +196,7 @@ impl DataplaneNode for NodeService {
         let resp = tokio::task::spawn_blocking(move || {
             attach
                 .control
-                .with_core(|c| flowplane_node::add_nat_source(c, &r))
+                .with_core(|c| handlers::add_nat_source(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("add_nat_source task panicked: {e}")))??;
@@ -221,7 +220,7 @@ impl DataplaneNode for NodeService {
         let resp = tokio::task::spawn_blocking(move || {
             attach
                 .control
-                .with_core(|c| flowplane_node::withdraw_nat_source(c, &r))
+                .with_core(|c| handlers::withdraw_nat_source(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("withdraw_nat_source task panicked: {e}")))??;
@@ -249,7 +248,7 @@ impl DataplaneNode for NodeService {
         let resp = tokio::task::spawn_blocking(move || {
             attach
                 .control
-                .with_core(|c| flowplane_node::add_neighbor_nat(c, &r))
+                .with_core(|c| handlers::add_neighbor_nat(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("add_neighbor_nat task panicked: {e}")))??;
@@ -274,7 +273,7 @@ impl DataplaneNode for NodeService {
         let resp = tokio::task::spawn_blocking(move || {
             attach
                 .control
-                .with_core(|c| flowplane_node::withdraw_neighbor_nat(c, &r))
+                .with_core(|c| handlers::withdraw_neighbor_nat(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("withdraw_neighbor_nat task panicked: {e}")))??;
@@ -302,9 +301,7 @@ impl DataplaneNode for NodeService {
             r.ports.clone(),
         );
         let resp = tokio::task::spawn_blocking(move || {
-            attach
-                .control
-                .with_core(|c| flowplane_node::add_lb_vip(c, &r))
+            attach.control.with_core(|c| handlers::add_lb_vip(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("add_lb_vip task panicked: {e}")))??;
@@ -328,7 +325,7 @@ impl DataplaneNode for NodeService {
         let resp = tokio::task::spawn_blocking(move || {
             attach
                 .control
-                .with_core(|c| flowplane_node::add_lb_backend(c, &r))
+                .with_core(|c| handlers::add_lb_backend(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("add_lb_backend task panicked: {e}")))??;
@@ -348,9 +345,7 @@ impl DataplaneNode for NodeService {
         let r = req.into_inner();
         let log_id = r.id.clone();
         let resp = tokio::task::spawn_blocking(move || {
-            attach
-                .control
-                .with_core(|c| flowplane_node::del_lb_vip(c, &r))
+            attach.control.with_core(|c| handlers::del_lb_vip(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("del_lb_vip task panicked: {e}")))??;
@@ -372,7 +367,7 @@ impl DataplaneNode for NodeService {
         let resp = tokio::task::spawn_blocking(move || {
             attach
                 .control
-                .with_core(|c| flowplane_node::del_lb_backend(c, &r))
+                .with_core(|c| handlers::del_lb_backend(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("del_lb_backend task panicked: {e}")))??;
@@ -412,9 +407,7 @@ impl DataplaneNode for NodeService {
             r.egress,
         );
         let resp = tokio::task::spawn_blocking(move || {
-            attach
-                .control
-                .with_core(|c| flowplane_node::add_fw_rule(c, &r))
+            attach.control.with_core(|c| handlers::add_fw_rule(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("add_fw_rule task panicked: {e}")))??;
@@ -436,9 +429,7 @@ impl DataplaneNode for NodeService {
         let r = req.into_inner();
         let (log_iface, log_rule_id) = (r.interface_id.clone(), r.rule_id.clone());
         let resp = tokio::task::spawn_blocking(move || {
-            attach
-                .control
-                .with_core(|c| flowplane_node::del_fw_rule(c, &r))
+            attach.control.with_core(|c| handlers::del_fw_rule(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("del_fw_rule task panicked: {e}")))??;
@@ -460,7 +451,7 @@ impl DataplaneNode for NodeService {
         let resp = tokio::task::spawn_blocking(move || {
             attach
                 .control
-                .with_core(|c| flowplane_node::replace_interface_firewall(c, &r))
+                .with_core(|c| handlers::replace_interface_firewall(c, &r))
         })
         .await
         .map_err(|e| {
@@ -487,9 +478,7 @@ impl DataplaneNode for NodeService {
             r.ingress_mbps as u64,
         );
         let resp = tokio::task::spawn_blocking(move || {
-            attach
-                .control
-                .with_core(|c| flowplane_node::configure_qos(c, &r))
+            attach.control.with_core(|c| handlers::configure_qos(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("configure_qos task panicked: {e}")))??;

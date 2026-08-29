@@ -469,7 +469,7 @@ impl Control {
     }
 
     /// Run `f` with an exclusive `&mut` borrow of the inner `ControlCore` under the `Inner` lock.
-    /// Lets the shared `flowplane-node` handler fns drive the same ControlCore the per-domain
+    /// Lets the shared `handlers` module's fns drive the same ControlCore the per-domain
     /// `Control` methods use, without duplicating their parse/marshalling.
     pub fn with_core<R>(&self, f: impl FnOnce(&mut ControlCore<AyaWriter>) -> R) -> R {
         let mut g = self.inner.lock();
