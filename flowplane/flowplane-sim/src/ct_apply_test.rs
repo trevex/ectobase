@@ -71,8 +71,7 @@ fn snat_entry() -> CtEntry {
         flags: CT_REWRITE_SRC,
         tcp_state: 0,
         fwall_action: 0,
-        gen_bytes: [0; 4],
-        _pad: [0; 3],
+        _pad: [0; 7],
     }
 }
 
@@ -231,8 +230,7 @@ fn ct_apply_default_entry_is_noop() {
             flags,
             tcp_state: 0,
             fwall_action: 0,
-            gen_bytes: [0; 4],
-            _pad: [0; 3],
+            _pad: [0; 7],
         };
 
         let mut pkt = VecPkt::from_bytes(&raw);

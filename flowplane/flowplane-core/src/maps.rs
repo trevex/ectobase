@@ -53,16 +53,4 @@ pub trait Maps {
     fn meter_get(&self, ifindex: u32) -> Option<MeterState>;
     /// Store the refilled per-interface token-bucket state back (`METER[ifindex]`).
     fn meter_update(&mut self, ifindex: u32, state: MeterState);
-
-    /// §5a generation-tag conntrack invalidation. The process-global config generation the datapath
-    /// stamps freshly-created conntrack entries with, and re-checks a cached binding against before
-    /// reusing it (see `nat::snat_egress`). DEFAULT `0`: the eBPF (`GlobalMaps`) and sim (`MemMaps`)
-    /// impls do NOT bump a generation — they return `0`, so every stamped `gen` is `0`, the
-    /// `gen == config_generation()` recheck is ALWAYS true, and the re-derivation branch never fires.
-    /// Their datapath is therefore byte-identical. Only the DPDK `ComposedMaps` overrides this to
-    /// return `SharedConfigMaps::generation()`, which the control writer bumps on any NAT/LB/route
-    /// withdrawal (`conntrack_flush`).
-    fn config_generation(&self) -> u64 {
-        0
-    }
 }

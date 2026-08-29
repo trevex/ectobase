@@ -345,31 +345,8 @@ pub struct CtEntry {
     pub flags: u8,
     pub tcp_state: u8,
     pub fwall_action: u8,
-    /// §5a generation-tag conntrack invalidation (DPDK serve binary only). Stamped with the low 32
-    /// bits of the `Maps::config_generation()` the entry was resolved under; the datapath re-validates
-    /// a cached binding when the process-global generation has moved past this value. Stored as a
-    /// **native-endian `[u8; 4]`** (alignment 1) — NOT a `u32` — so it fits in the former 7-byte `_pad`
-    /// WITHOUT forcing 4-byte field alignment; `size_of::<CtEntry>()` stays 24, so the eBPF `CONNTRACK`
-    /// map value ABI is UNCHANGED. Use [`CtEntry::gen`] / [`CtEntry::set_gen`] to read/write it as a
-    /// `u32`. eBPF + sim `config_generation()` return `0` (trait default), so they always stamp `0` and
-    /// the recheck never fires — their datapath is byte-identical.
-    pub gen_bytes: [u8; 4],
-    pub _pad: [u8; 3],
-}
-
-impl CtEntry {
-    /// The §5a generation stamp as a `u32` (native-endian; see [`CtEntry::gen_bytes`]).
-    #[must_use]
-    #[inline]
-    pub fn gen(&self) -> u32 {
-        u32::from_ne_bytes(self.gen_bytes)
-    }
-
-    /// Stamp the §5a generation (native-endian).
-    #[inline]
-    pub fn set_gen(&mut self, g: u32) {
-        self.gen_bytes = g.to_ne_bytes();
-    }
+    /// Trailing padding to keep the eBPF `CONNTRACK` map value ABI at 24 bytes / align 8.
+    pub _pad: [u8; 7],
 }
 
 // CtEntry.flags bits
@@ -924,9 +901,8 @@ mod tests {
     #[test]
     fn ct_entry_layout() {
         // 8 (last_seen) + 4 (xlate_ip) + 2 (xlate_port) + 1 (flags) + 1 (tcp_state)
-        // + 1 (fwall_action) + 4 (gen_bytes) + 3 (_pad) = 24, u64-aligned. The §5a generation stamp is
-        // stored as `[u8; 4]` (alignment 1) so it fits the former 7-byte `_pad` WITHOUT forcing field
-        // alignment — the size, and thus the eBPF CONNTRACK map value ABI, is UNCHANGED.
+        // + 1 (fwall_action) + 7 (_pad) = 24, u64-aligned. The eBPF CONNTRACK map value ABI is
+        // UNCHANGED from before the §5a generation stamp's removal (those 4 bytes were always 0).
         assert_eq!(core::mem::size_of::<CtEntry>(), 24);
         // Alignment must also be unchanged (u64 = 8) — a bigger alignment would change the map layout.
         assert_eq!(core::mem::align_of::<CtEntry>(), 8);
