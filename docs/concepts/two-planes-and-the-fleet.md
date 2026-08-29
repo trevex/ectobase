@@ -19,8 +19,7 @@ state those maps hold is decided elsewhere and pushed down. It attaches XDP to t
 Each node runs one `flowplane` process. It exposes a small local gRPC surface (`DataplaneNode`, on
 `127.0.0.1:1337`) that the control plane calls to program interfaces, and it participates in the
 [route bus](../architecture/route-bus.md) to learn which overlay prefix lives behind which underlay
-node. A byte-parity [DPDK backend](../architecture/dataplane/dpdk.md) implements the same datapath on
-the `nfkit` substrate for hardware acceleration.
+node.
 
 !!! success "Status: Implemented"
     The eBPF/XDP datapath — routing, stateful NAT, Maglev load balancing with DSR, deny-by-default

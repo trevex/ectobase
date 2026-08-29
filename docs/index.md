@@ -76,8 +76,7 @@ BGP appears only at the [WAN edge](features/ns-edge.md).
 - **flowplane** — the eBPF/XDP **dataplane** (Rust, built on [aya](https://aya-rs.dev/)). A
   map-driven kernel overlay: every forwarding decision is a per-flow table lookup. It holds no
   policy of its own and exposes a small per-node gRPC surface (`DataplaneNode`) that the control
-  plane programs. A [DPDK backend](architecture/dataplane/dpdk.md) exists as a fourth `Pkt`/`Maps`
-  implementation that is byte-parity with the eBPF datapath. Code: `flowplane/`.
+  plane programs. Code: `flowplane/`.
 - **mesh** — the per-cluster **control plane** (Go, controller-runtime). CRDs describe intent;
   controllers compile intent into `Compiled*` objects; the agent programs the local dataplane; the
   reflector distributes overlay routes. Code: `mesh/`, `cni/`.
@@ -88,12 +87,6 @@ Several capabilities are designed and partially built, gated on hardware or furt
 work:
 
 !!! note "Status: Planned"
-    - **DPDK on real hardware / rte_flow offload.** The DPDK dataplane is byte-parity with the
-      eBPF/sim datapath, but hardware-accelerated offload (mlx5 `rte_flow` RAW_DECAP/ENCAP, multi-queue
-      RSS at line rate) requires a SmartNIC and is validated only in simulation today.
-    - **Blue-green DPDK upgrades.** Hitless, state-handoff upgrades of the DPDK dataplane
-      (externalized conntrack + atomic steering flip) are specified with primitives in place, but the
-      full two-instance drain orchestration is not yet wired.
     - **Cross-pool failover.** Two-tier, fence-gated evacuation of a lost pool is partially built
       (health/lease tracking, Ceph NetworkFence, route blocklisting); end-to-end reschedule across
       pools is still being completed.

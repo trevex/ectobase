@@ -74,7 +74,7 @@ programs verify + stay byte-identical to the sim.
 so the guest-delivery path must use the skb path. Generic/SKB XDP carries non-linear (jumbo) skbs
 fine, so the fabric runs jumbo end-to-end — the compute-node underlay uplinks are **MTU 9000** (guest
 MTU 8960 = 9000 − 40 encap), exercised by `TestPodOverlayPing` (an 8000-byte DF ping across the
-overlay). The native `#[xdp(frags)]` *fast path* is therefore HW-gated (like DPDK): it needs a real
+overlay). The native `#[xdp(frags)]` *fast path* is therefore HW-gated: it needs a real
 NIC whose driver advertises XDP scatter-gather (`NETDEV_XDP_ACT_RX_SG` / `NDO_XMIT_SG`), and is
 covered by the byte-parity anchor rather than the clab datapath.
 

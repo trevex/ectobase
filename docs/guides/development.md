@@ -10,7 +10,7 @@ make            # list all make targets
 
 The dev shell (`flake.nix`) provides the pinned Rust toolchain (via `rustup`, from
 `rust-toolchain.toml`), Go, `bpf-linker`, `protobuf`, `bpftool`, `qemu`, `iproute2`,
-`kind`/`containerlab`/`helm`, `python3` (DPDK build's pyelftools), `mkdocs`+`mkdocs-material`,
+`kind`/`containerlab`/`helm`, `mkdocs`+`mkdocs-material`,
 `controller-gen` + `crd-ref-docs` (the CRD/RBAC/reference codegen). It also exports
 `KUBEBUILDER_ASSETS`, a real in-process apiserver (kube-apiserver + etcd + kubectl) so
 controller-runtime **envtest** integration tests can spin a real apiserver under `go test`.

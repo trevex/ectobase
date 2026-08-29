@@ -14,7 +14,7 @@ compiled objects down from the dispatch. Those two roles map onto the two charts
 | Chart | Runs on | Installs |
 |---|---|---|
 | `charts/ectobase-dispatch` | the dispatch cluster | aggregated apiserver + kine (+ postgres), dispatch-controller, mesh compiler, reflector, dispatch-side broker identity |
-| `charts/ectobase-pool` | each compute cluster | dataplane (`ebpf`/`dpdk`), mesh agent, broker, cni, KubeVirt NAD, pod-materializer (always), vm-materializer / tier1 (gated), the `net` + `compiled` CRDs |
+| `charts/ectobase-pool` | each compute cluster | dataplane (`ebpf`), mesh agent, broker, cni, KubeVirt NAD, pod-materializer (always), vm-materializer / tier1 (gated), the `net` + `compiled` CRDs |
 
 The reference install sequence lives in `test/lab/internal/deploy/ectobase.go` — the lab CLI
 installs both charts exactly the way an operator would, so it is the source of truth for the
@@ -89,7 +89,6 @@ helm install ectobase-pool charts/ectobase-pool \
   --set broker.clusterName=k02 \
   --set apiserverAddress='https://[fd00:cafe:2::1]:6443' \
   --set reflectorAddress='[fd00:cafe:1::1]:1338' \
-  --set dataplane=ebpf \
   --set installCRDs=true \
   --set underlayWithin='fd00:cafe::/32'
 ```
@@ -99,9 +98,6 @@ helm install ectobase-pool charts/ectobase-pool \
 its own cluster); `reflectorAddress` is the dispatch's reflector on the fabric. The NAD CRD
 (`NetworkAttachmentDefinition`) must exist first — the chart renders a NAD unconditionally.
 
-To install the DPDK dataplane instead of eBPF, set `--set dataplane=dpdk` (and, on real
-hardware, `--set env=hw` plus the `dpdk.*` hugepage/vfio knobs).
-
 ### Pool values
 
 Source of truth: `charts/ectobase-pool/values.yaml` (schema: `values.schema.json`).
@@ -109,9 +105,8 @@ Source of truth: `charts/ectobase-pool/values.yaml` (schema: `values.schema.json
 | Value | Default | Meaning |
 |---|---|---|
 | `namespace` | `ectobase-system` | Namespace all pool resources deploy into. |
-| `dataplane` | `ebpf` | Datapath backend for the whole cluster: `ebpf` or `dpdk` (no mixed clusters). |
-| `env` | `clab` | Deployment environment: `clab` or `hw` (drives the DPDK hugepage/vfio knobs). |
-| `uplink` | `eth1` | Overlay uplink interface (used by the DPDK datapath). |
+| `env` | `clab` | Deployment environment: `clab` or `hw`. |
+| `uplink` | `eth1` | Overlay uplink interface. |
 | `underlayWithin` | `""` | Node-underlay aggregate CIDR. When set, flowplane picks the host address inside it as the underlay (the authoritative filter past mgmt/hostDNS addresses). Empty = infer from the fabric loopback. |
 | `reflectorAddress` | `[fd00:db8:0:1::1]:1338` | Dispatch reflector address the agent dials. |
 | `apiserverAddress` | `https://[fd00:db8:0:1::1]:6443` | This cluster's local apiserver (the agent's kubeconfig server URL). |
@@ -120,16 +115,12 @@ Source of truth: `charts/ectobase-pool/values.yaml` (schema: `values.schema.json
 | `broker.dispatchKubeconfigSecret` | `broker-dispatch-kubeconfig` | Secret (key `kubeconfig`) with the broker's dispatch token. |
 | `vmMaterializer.enabled` | `false` | Deploy the vm-materializer (CompiledVM → KubeVirt VM). Pools with KubeVirt only. |
 | `tier1Failover.enabled` | `false` | Render the Tier-1 local-failover objects (medik8s NHC + SNR). Opt-in per pool. |
-| `blueGreen.enabled` | `false` | Blue-green upgrade operator (requires `dataplane: dpdk`). |
 | `images.flowplane` | `…/flowplane:dev` | eBPF dataplane image. |
-| `images.flowplaneDpdk` | `…/flowplane-dpdk:dev` | DPDK dataplane image. |
 | `images.mesh` | `…/mesh:dev` | mesh agent image. |
 | `images.cni` | `…/cni:dev` | flowplane CNI plugin image. |
 | `images.dispatchBroker` | `…/dispatch-broker:dev` | Per-pool broker image. |
 
-The DPDK-only knobs live under `dpdk.*` (`lcores`, `hugepages`, `hugepageSize`,
-`hugepageLimit`, `vfioDevices`) and only take effect when `dataplane: dpdk`. The Tier-1
-knobs live under `tier1Failover.*` (`snrNamespace`, `nodeSelector`, `unhealthyThreshold`,
+The Tier-1 knobs live under `tier1Failover.*` (`snrNamespace`, `nodeSelector`, `unhealthyThreshold`,
 `minHealthy`, `remediationStrategy`, `watchdog.*`). See the
 [Helm values reference](../reference/helm-values.md) for the complete list.
 

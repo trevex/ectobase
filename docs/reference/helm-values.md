@@ -40,7 +40,7 @@ the reflector, and the broker's dispatch-side identity.
 
 ## ectobase-pool
 
-The pool chart deploys the node dataplane (eBPF or DPDK), the mesh agent, the
+The pool chart deploys the node dataplane (eBPF), the mesh agent, the
 CNI, the broker runtime, and optional materializers and failover.
 
 ### Images and pull policy
@@ -48,7 +48,6 @@ CNI, the broker runtime, and optional materializers and failover.
 | Value | Default | Meaning |
 | --- | --- | --- |
 | `images.flowplane` | `ghcr.io/trevex/ectobase/flowplane:dev` | eBPF dataplane image. |
-| `images.flowplaneDpdk` | `ghcr.io/trevex/ectobase/flowplane-dpdk:dev` | DPDK dataplane image. |
 | `images.mesh` | `ghcr.io/trevex/ectobase/mesh:dev` | Agent, pod-materializer and vm-materializer image. |
 | `images.cni` | `ghcr.io/trevex/ectobase/cni:dev` | flowplane-cni image. |
 | `images.dispatchBroker` | `ghcr.io/trevex/ectobase/dispatch-broker:dev` | Broker runtime image. |
@@ -71,20 +70,13 @@ The agent dials the fabric control plane over the underlay.
 
 ### Dataplane
 
-Selects and configures the node datapath. The choice is whole-cluster; mixed
-clusters are not supported.
+Configures the node's eBPF datapath: environment, uplink interface, and underlay detection.
 
 | Value | Default | Meaning |
 | --- | --- | --- |
-| `dataplane` | `ebpf` | Datapath backend: `ebpf` or `dpdk`. |
-| `env` | `clab` | Deployment environment (`clab` or `hw`); drives datapath-specific knobs (hugepages, vfio, lcores). |
-| `uplink` | `eth1` | Overlay uplink interface (used by the DPDK datapath; the eBPF wrapper defaults to `eth1`). |
+| `env` | `clab` | Deployment environment: `clab` or `hw`. On `clab`, flowplane is forced into generic/SKB XDP mode (containerlab veths don't support native XDP redirect). |
+| `uplink` | `eth1` | Overlay uplink interface. |
 | `underlayWithin` | `""` | Expected node-underlay aggregate (CIDR). When set, flowplane picks the host address inside it as the underlay. Empty = infer from the fabric loopback. |
-| `dpdk.lcores` | `"0"` | EAL `-l` value. clab must be a single lcore (shared host). |
-| `dpdk.hugepages` | `false` | clab: `false` (`--no-huge`); hw: `true`. |
-| `dpdk.hugepageSize` | `1Gi` | Hugepage size request. |
-| `dpdk.hugepageLimit` | `2Gi` | Hugepage limit. |
-| `dpdk.vfioDevices` | `[]` | hw: `[{name: <resource>, count: <n>}]` device-plugin requests. |
 
 ### Broker
 
@@ -106,16 +98,6 @@ The per-cluster broker is always deployed; `clusterName` is required.
 | Value | Default | Meaning |
 | --- | --- | --- |
 | `vmMaterializer.enabled` | `false` | Turn broker-synced CompiledVM/CompiledVolumeAttachment into KubeVirt VMs. Enable on pools with KubeVirt installed. |
-
-### Blue-green (Planned)
-
-!!! note "Planned"
-    The blue-green operator has not landed yet; this toggle renders nothing today
-    and requires `dataplane: dpdk`.
-
-| Value | Default | Meaning |
-| --- | --- | --- |
-| `blueGreen.enabled` | `false` | Enable the blue-green dataplane-upgrade operator. |
 
 ### Tier-1 failover
 

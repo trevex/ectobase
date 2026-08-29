@@ -94,7 +94,7 @@ Each pool is a plain Kubernetes cluster, registered on the dispatch as a
 - **broker** (`dispatch/cmd/broker/main.go`) — the kubelet-analog described below.
 - **mesh agent** — the per-node route-bus client that programs the local
   dataplane from `CompiledNIC` (see [Compile → sync → materialize](./compile-sync-materialize.md)).
-- **dataplane** (`flowplane`, eBPF or DPDK) — the datapath itself.
+- **dataplane** (`flowplane`, eBPF) — the datapath itself.
 - **materializers** — `pod-materializer` and `vm-materializer`, which turn the
   synced compiled objects into real Pods and KubeVirt VirtualMachines.
 - **flowplane-cni** — the CNI plugin that attaches Pods/VMs to the overlay.

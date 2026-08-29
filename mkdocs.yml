@@ -64,7 +64,6 @@ nav:
           - XDP / tc / BPF: architecture/dataplane/kernel-xdp-tc.md
           - The pure-core seam: architecture/dataplane/pure-core.md
           - Maps & state: architecture/dataplane/maps.md
-          - DPDK backend: architecture/dataplane/dpdk.md
           - The flowplane CLI: architecture/dataplane/cli.md
   - Features:
       - Routing & VNI tenancy: features/routing-vni.md

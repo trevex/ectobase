@@ -1,8 +1,8 @@
 # Getting started (Nix + make)
 
 Everything ectobase needs to build and test is provided by the **Nix flake devShell**. You do not
-install Rust, Go, protobuf, `bpf-linker`, `kind`, `containerlab`, `qemu`, or the Python packet-craft
-tooling by hand — they are all pinned in `flake.nix`.
+install Rust, Go, protobuf, `bpf-linker`, `kind`, `containerlab`, or `qemu`
+by hand — they are all pinned in `flake.nix`.
 
 ```sh
 nix develop     # enter the dev shell (all targets assume you are inside it)
@@ -23,7 +23,6 @@ make            # list every target with its one-line description
 - **`kind`, `containerlab`, `kubectl`, `helm`** — the integration fabric (the `test/lab` CLI).
 - **`qemu`, `libvirt`, `OVMF`, `iproute2`, `bridge-utils`, `ethtool`, `tcpdump`** — VM boot and
   netns e2e harnesses.
-- **`python3`** — present for the DPDK build's pyelftools; packet crafting is now the Go probe (`test/e2e/cmd/tap-dhcp-probe`).
 - **`mkdocs` + `mkdocs-material`** — this documentation (`make docs` = `mkdocs build --strict`).
 - **`KUBEBUILDER_ASSETS`** — a real in-process apiserver for the controller-runtime envtest
   integration tests.

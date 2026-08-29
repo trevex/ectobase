@@ -95,15 +95,6 @@ The default node dataplane. It runs the eBPF tc/XDP datapath and exposes a
 `DataplaneNode` gRPC service that the agent and CNI drive (interface attach,
 route programming, firewall/NAT/LB state). Runs as a DaemonSet (one per node);
 talks to the local kernel datapath and serves gRPC to the local agent and CNI.
-Selected when `dataplane: ebpf`.
-
-### flowplane-dpdk (DPDK dataplane)
-
-The DPDK sibling of flowplane: same `DataplaneNode` gRPC contract and control
-core, but the datapath runs over DPDK (EAL → maps → datapath workers) instead of
-eBPF, for hosts with hugepages/vfio. Runs as a DaemonSet; drop-in replacement
-selected when `dataplane: dpdk`, with its own knobs (`dpdk.lcores`, hugepages,
-`vfioDevices`).
 
 ## Deployment map
 
@@ -119,4 +110,3 @@ selected when `dataplane: dpdk`, with its own knobs (`dpdk.lcores`, hugepages,
 | pod-materializer | `mesh` | pool | per pool |
 | vm-materializer | `mesh` | pool | per pool (opt-in) |
 | flowplane (eBPF) | `flowplane` | pool | per node (DaemonSet) |
-| flowplane-dpdk (DPDK) | `flowplane-dpdk` | pool | per node (DaemonSet) |

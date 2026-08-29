@@ -53,7 +53,7 @@ the page (or the relevant section) so a reader knows how far to trust it:
 ```
 
 Most of the eBPF datapath is **Implemented** and needs no badge — do not over-badge. Reach
-for **Partial**/**Planned** where a page describes something hardware-gated, DPDK-specific,
+for **Partial**/**Planned** where a page describes something hardware-gated
 or otherwise not fully shipped, so the caveat is impossible to miss.
 
 ## The generated CRD API reference
