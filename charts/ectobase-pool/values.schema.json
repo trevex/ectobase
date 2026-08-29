@@ -4,7 +4,6 @@
   "additionalProperties": false,
   "required": [
     "namespace",
-    "dataplane",
     "env",
     "images",
     "uplink",
@@ -14,13 +13,6 @@
     "namespace": {
       "type": "string",
       "minLength": 1
-    },
-    "dataplane": {
-      "type": "string",
-      "enum": [
-        "ebpf",
-        "dpdk"
-      ]
     },
     "env": {
       "type": "string",
@@ -60,17 +52,12 @@
       "additionalProperties": false,
       "required": [
         "flowplane",
-        "flowplaneDpdk",
         "mesh",
         "cni",
         "dispatchBroker"
       ],
       "properties": {
         "flowplane": {
-          "type": "string",
-          "minLength": 1
-        },
-        "flowplaneDpdk": {
           "type": "string",
           "minLength": 1
         },
@@ -102,60 +89,6 @@
       }
     },
     "vmMaterializer": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        }
-      }
-    },
-    "dpdk": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "lcores": {
-          "type": "string",
-          "minLength": 1
-        },
-        "hugepages": {
-          "type": "boolean"
-        },
-        "hugepageSize": {
-          "type": "string",
-          "enum": [
-            "2Mi",
-            "1Gi"
-          ]
-        },
-        "hugepageLimit": {
-          "type": "string",
-          "minLength": 1
-        },
-        "vfioDevices": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "name",
-              "count"
-            ],
-            "properties": {
-              "name": {
-                "type": "string",
-                "minLength": 1
-              },
-              "count": {
-                "type": "integer",
-                "minimum": 1
-              }
-            }
-          }
-        }
-      }
-    },
-    "blueGreen": {
       "type": "object",
       "additionalProperties": false,
       "properties": {

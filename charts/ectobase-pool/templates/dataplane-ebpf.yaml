@@ -1,4 +1,3 @@
-{{- if eq .Values.dataplane "ebpf" }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -132,4 +131,3 @@ spec:
           hostPath:
             path: /var/run/netns
             type: DirectoryOrCreate
-{{- end }}

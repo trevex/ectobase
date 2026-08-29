@@ -12,18 +12,6 @@ tests:
     asserts:
       - matchSnapshot: {}
 
-  - it: renders (dpdk clab)
-    set: {broker.clusterName: test}
-    values: [values/dpdk-clab.yaml]
-    asserts:
-      - matchSnapshot: {}
-
-  - it: renders (dpdk hw)
-    set: {broker.clusterName: test}
-    values: [values/dpdk-hw.yaml]
-    asserts:
-      - matchSnapshot: {}
-
   - it: renders (tier1 on)
     set: {broker.clusterName: test}
     values: [values/tier1-on.yaml]

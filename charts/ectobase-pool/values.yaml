@@ -1,20 +1,17 @@
 # Namespace where all pool resources are deployed.
 namespace: ectobase-system
 
-# Datapath backend for the WHOLE cluster (whole-cluster toggle; no mixed clusters).
-dataplane: ebpf            # ebpf | dpdk
-# Deployment environment; drives datapath-specific knobs (hugepages, vfio, lcores).
+# Deployment environment (clab | hw).
 env: clab                  # clab | hw
 
 images:
   flowplane: ghcr.io/trevex/ectobase/flowplane:dev
-  flowplaneDpdk: ghcr.io/trevex/ectobase/flowplane-dpdk:dev
   mesh: ghcr.io/trevex/ectobase/mesh:dev
   cni: ghcr.io/trevex/ectobase/cni:dev
   dispatchBroker: ghcr.io/trevex/ectobase/dispatch-broker:dev
 imagePullPolicy: IfNotPresent
 
-# Overlay uplink interface (used by the DPDK datapath; the eBPF wrapper defaults to eth1).
+# Overlay uplink interface (the eBPF dataplane defaults to eth1).
 uplink: eth1
 # Expected node-underlay aggregate (CIDR). When set, flowplane picks the host address inside it as
 # the underlay (the authoritative cluster-wide filter — ignores mgmt hostIP / Talos hostDNS lo ULA /
@@ -42,14 +39,6 @@ routebus:
 # Control-plane API server the agent dials over the fabric (kubeconfig server URL).
 apiserverAddress: "https://[fd00:db8:0:1::1]:6443"
 
-# DPDK-only knobs (dataplane: dpdk).
-dpdk:
-  lcores: "0"              # EAL -l value. clab MUST be a single lcore (shared host).
-  hugepages: false         # clab: false (--no-huge); hw: true.
-  hugepageSize: 1Gi
-  hugepageLimit: 2Gi
-  vfioDevices: []          # hw: [{name: <resource>, count: <n>}] device-plugin requests.
-
 # Install the net.ectobase.dev CRDs with the chart (managed on helm upgrade).
 installCRDs: true
 
@@ -62,10 +51,6 @@ broker:
 # vm-materializer: turns broker-synced CompiledVM/CompiledVolumeAttachment into KubeVirt VMs.
 # Off by default; on for pools with KubeVirt installed.
 vmMaterializer:
-  enabled: false
-
-# Blue-green operator (thread C). Off until it lands; requires dataplane: dpdk.
-blueGreen:
   enabled: false
 
 # Tier-1 autonomous local failover (medik8s NHC + SNR). Pool-local capability;
