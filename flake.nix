@@ -157,18 +157,6 @@
             pkgs.gettext # provides envsubst for fixture/kind-config templating
             pkgs.socat
             pkgs.gnumake
-            # DPDK build toolchain — dpdk-sys/build.rs downloads the pinned DPDK release and
-            # builds it with meson/ninja (static). These are the DPDK build + link deps and
-            # bindgen's clang. No prebuilt pkgs.dpdk — we compile our own pinned version.
-            pkgs.meson
-            pkgs.ninja
-            pkgs.pkg-config
-            pkgs.clang                        # bindgen front-end
-            pkgs.python3Packages.pyelftools   # required by the DPDK build — only python3 dep; pulls python3 transitively
-            pkgs.numactl                      # libnuma (DPDK dep)
-            pkgs.libpcap                      # net_pcap PMD
-            pkgs.libbpf                       # net_af_xdp PMD (Milestone 2)
-            pkgs.xdp-tools.lib                # net_af_xdp PMD (Milestone 2) — libxdp.so is in the .lib output
             # VyOS clab image: ISO fetch + userspace squashfs->rootfs extraction (test/images/vyos)
             pkgs.squashfs-tools-ng            # sqfs2tar
             pkgs.libarchive                   # bsdtar
@@ -180,8 +168,6 @@
 
           RUST_BACKTRACE = 1;
           PROTOC = "${pkgs.protobuf}/bin/protoc";
-          # rust-bindgen (dpdk-sys/build.rs) needs libclang at runtime.
-          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
           # Real in-process apiserver for controller-runtime envtest integration tests.
           KUBEBUILDER_ASSETS = "${kubebuilderAssets}/bin";
         };
