@@ -872,7 +872,7 @@ fn uplink_rx_dispatches_nat_return_past_deny_by_default_firewall() {
         out.action,
         Action::Redirect(DNAT_TAP),
         "unified uplink_rx must reverse-DNAT + deliver the established NAT return, NOT firewall-drop \
-         it (regression: DPDK serve loop calling process_uplink unconditionally)"
+         it (regression: uplink dispatch calling process_uplink unconditionally)"
     );
     let inner_ip_off = ETH_LEN;
     let dst_ip: [u8; 4] = out.pkt[inner_ip_off + 16..inner_ip_off + 20]

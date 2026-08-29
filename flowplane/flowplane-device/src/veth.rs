@@ -102,10 +102,8 @@ pub fn delete_link(name: &str) {
 /// True iff a link named `name` currently exists in the root netns (a `/sys/class/net/<name>/ifindex`
 /// that reads). A cheap sysfs stat (no subprocess) — safe to call under a std Mutex.
 ///
-/// Used by the DPDK dead-slot detection: a preallocated guest pool slot whose host-end veth has
-/// vanished (because the pod's netns was destroyed WITHOUT a preceding DetachInterface — veth pairs
-/// die together, so the guest-end taking the host-end with it) is DEAD and must be excluded from the
-/// free pool so attach never binds a blackhole slot.
+/// Used by the tap setup path (`tap.rs`) as a liveness check for a netdev by name — e.g. confirming
+/// a tap was actually created after `create_tap` and that it's actually gone after `delete_tap`.
 pub fn link_exists(name: &str) -> bool {
     ifindex_of(name).is_ok()
 }

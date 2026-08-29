@@ -96,43 +96,6 @@ pub fn port_u16(p: u32) -> anyhow::Result<u16> {
     u16::try_from(p).map_err(|_| anyhow::anyhow!("port {p} out of range (0..=65535)"))
 }
 
-/// Parse a `xx:xx:xx:xx:xx:xx` MAC into 6 bytes.
-pub fn parse_mac(s: &str) -> anyhow::Result<[u8; 6]> {
-    let mut out = [0u8; 6];
-    let mut n = 0;
-    for (i, part) in s.split(':').enumerate() {
-        if i >= 6 {
-            anyhow::bail!("bad mac {s:?}: too many octets");
-        }
-        out[i] = u8::from_str_radix(part, 16)
-            .map_err(|_| anyhow::anyhow!("bad mac octet {part:?} in {s:?}"))?;
-        n += 1;
-    }
-    if n != 6 {
-        anyhow::bail!("bad mac {s:?}: expected 6 octets, got {n}");
-    }
-    Ok(out)
-}
-
-/// First IPv4 in a `requested_ips` list, or `0.0.0.0` if none. The CNI passes overlay IPs as
-/// strings; the eBPF node's attach programs the v4/v6 it finds (IPAM of unset IPs is B2).
-pub fn first_ipv4(ips: &[String]) -> [u8; 4] {
-    ips.iter()
-        .filter_map(|s| s.parse::<std::net::Ipv4Addr>().ok())
-        .map(|a| a.octets())
-        .next()
-        .unwrap_or([0u8; 4])
-}
-
-/// First IPv6 in a `requested_ips` list, or the all-zero address if none.
-pub fn first_ipv6(ips: &[String]) -> [u8; 16] {
-    ips.iter()
-        .filter_map(|s| s.parse::<std::net::Ipv6Addr>().ok())
-        .map(|a| a.octets())
-        .next()
-        .unwrap_or([0u8; 16])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,12 +129,6 @@ mod tests {
         assert_eq!(port_u16(0).unwrap(), 0);
         assert_eq!(port_u16(65535).unwrap(), 65535);
         assert!(port_u16(65536).is_err());
-    }
-
-    #[test]
-    fn parse_mac_ok_and_bad() {
-        assert_eq!(parse_mac("02:00:00:00:00:01").unwrap(), [2, 0, 0, 0, 0, 1]);
-        assert!(parse_mac("not-a-mac").is_err());
     }
 
     #[test]
