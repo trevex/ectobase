@@ -14,7 +14,6 @@ __pycache__/
 
 # mdbook build output (regenerate with `make docs`)
 /docs/book
-flowplane/nfkit/tests/data/l2fwd_out.pcap
 
 # Go binaries built by go build ./cmd/... in test/e2e (artifact, not source)
 test/e2e/tap-dhcp-probe.bin
