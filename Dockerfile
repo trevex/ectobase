@@ -72,8 +72,8 @@ RUN cargo +nightly-2026-01-15 build --release -p flowplane \
 # Runtime
 # ---------------------------------------------------------------------------
 # debian:bookworm-slim (matches the builder's glibc) + iproute2. iproute2 is included so the SAME
-# image can run the tap-pool init container (`ip tuntap add ...` to create the kernel taps DPDK's
-# net_tap PMD used to make) AND the datapath (`flowplane serve`) — one image, no extra init image.
+# image can run the tap-pool init container (`ip tuntap add ...` to create the kernel taps) AND
+# the datapath (`flowplane serve`) — one image, no extra init image.
 FROM debian:bookworm-slim
 
 # iproute2 for veth/netns setup; ethtool to disable tx-checksum offload on guest veths (their
