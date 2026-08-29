@@ -7,7 +7,7 @@
 //!
 //! Inference is exposed via the `flowplane infer-underlay` subcommand (a root-free observability hook
 //! the containerlab IPv6-fabric e2e asserts on). The bringup path that CONSUMES the inferred /64 for
-//! IPAM is wired by `flowplane-dpdk`'s `DpdkAttachState` and `flowplane`'s `AttachState`.
+//! IPAM is wired by `flowplane`'s `AttachState`.
 use ipnet::Ipv6Net;
 use std::collections::BTreeSet;
 use std::net::Ipv6Addr;

@@ -1,11 +1,10 @@
 //! Shared DataplaneNode gRPC layer: the proto types (compiled once here) + parse helpers + the
-//! per-RPC marshalling fns both the eBPF `flowplane` and DPDK `flowplane-dpdk` node services call.
-//! Keeps the handler logic single-source. `flowplane-control` stays tonic-free; this crate is the
-//! tonic layer on top of it.
+//! per-RPC marshalling fns the eBPF `flowplane` node service calls. Keeps the handler logic
+//! single-source. `flowplane-control` stays tonic-free; this crate is the tonic layer on top of it.
 //!
 //! `result_large_err`: every handler returns `Result<_, tonic::Status>`; `Status` is large by design
-//! (it carries the gRPC status + metadata). Allowed crate-wide, matching the two node services'
-//! modules (`flowplane[-dpdk]/src/node.rs`).
+//! (it carries the gRPC status + metadata). Allowed crate-wide, matching the node service's
+//! `flowplane/src/node.rs`.
 #![allow(clippy::result_large_err)]
 
 pub mod pb {

@@ -1,8 +1,7 @@
 //! Pure parse/validate helpers: proto string fields → flowplane-control domain types.
 //!
-//! Copied verbatim from `flowplane-dpdk/src/node.rs` (source of truth). Both the eBPF
-//! `flowplane` and DPDK `flowplane-dpdk` node services use these; keeping a single copy
-//! here enforces byte-identical behaviour across backends.
+//! The eBPF `flowplane` node service uses these; keeping a single copy here enforces
+//! byte-identical behaviour wherever the node service is invoked.
 
 /// Parse a CIDR string into (is_v6, 16-byte address buffer, prefix_len). For IPv4 the four octets
 /// are left-aligned in the buffer (bytes[0..4]). Verbatim from the eBPF node service.

@@ -19,7 +19,7 @@ FROM debian:bookworm AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Base build tooling. protobuf-compiler is required by tonic-build/prost-build (build.rs
-# compiles proto/dpdk.proto and there is no vendored protoc in Cargo.lock).
+# compiles the dataplane proto and there is no vendored protoc in Cargo.lock).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg \
         build-essential pkg-config \

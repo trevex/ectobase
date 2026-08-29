@@ -1,7 +1,7 @@
 // Copyright 2026 ectobase contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Small helpers shared by the flowplane and flowplane-dpdk `serve` gRPC bind paths.
+//! Small helpers shared by the flowplane `serve` gRPC bind path.
 
 /// Extract the unix-socket path from a `--addr` value, or `None` for a `host:port` TCP address.
 ///

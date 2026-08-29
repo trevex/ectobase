@@ -1,8 +1,7 @@
-//! Persistent tap-device lifecycle for the DPDK af_xdp guest-port pool (VM backend). The tap's
-//! KERNEL NETDEV is af_xdp-bound as a pool port; its char-device FD (`open_tap_fd`) is the
-//! guest-facing side handed to qemu. Mirrors `veth.rs`'s ip-command style; reuses run/ifindex_of/
-//! mac_of/link_exists. A persistent tap SURVIVES an fd close AND process exit (unlike a veth pair,
-//! which dies with its peer) — the VF-like property TapBackend relies on.
+//! Persistent tap-device lifecycle for a VM guest-port backend. The tap's char-device FD
+//! (`open_tap_fd`) is the guest-facing side handed to qemu. Mirrors `veth.rs`'s ip-command style;
+//! reuses run/ifindex_of/mac_of/link_exists. A persistent tap SURVIVES an fd close AND process exit
+//! (unlike a veth pair, which dies with its peer) — a VF-like property a tap-based backend relies on.
 use crate::veth::{fmt_mac, ifindex_of, run, DeviceInfo};
 use anyhow::{bail, Context, Result};
 use std::os::fd::{FromRawFd, OwnedFd};
@@ -28,9 +27,9 @@ pub fn create_persistent_tap(name: &str, mac: [u8; 6], mtu: u32) -> Result<Devic
 /// `TUNSETIFF(name, IFF_TAP|IFF_NO_PI)`). The fd handed to qemu (the VM's NIC backend); in the
 /// datapath slice the test holds it to simulate the VM.
 ///
-/// The ifreq/ioctl sequence is lifted verbatim from the proven gate test
-/// `nfkit/tests/afxdp_tap.rs` (`IFF_NO_PI` = no 4-byte packet-info prefix, so read/write is the raw
-/// frame; `name` is NUL-padded into `ifr_name`, asserting it fits with room for the terminator).
+/// The ifreq/ioctl sequence is lifted verbatim from a proven gate test (`IFF_NO_PI` = no 4-byte
+/// packet-info prefix, so read/write is the raw frame; `name` is NUL-padded into `ifr_name`,
+/// asserting it fits with room for the terminator).
 pub fn open_tap_fd(name: &str) -> Result<OwnedFd> {
     // tuntap ioctl constants (Linux ABI, arch-stable on x86_64/aarch64 — see <linux/if_tun.h>).
     const TUNSETIFF: libc::c_ulong = 0x4004_54ca;

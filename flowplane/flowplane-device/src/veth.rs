@@ -72,8 +72,8 @@ pub fn ifindex_of(name: &str) -> Result<u32> {
 }
 
 /// Read `/sys/class/net/<name>/address` and parse the colon-separated hex MAC ("aa:bb:cc:dd:ee:ff")
-/// into a `[u8; 6]`. Used by `flowplane-dpdk serve` to resolve the `--uplink` netdev's MAC for the
-/// `LOCAL` config entry (outer eth SRC on encapped frames), mirroring the eBPF agent's bring-up.
+/// into a `[u8; 6]`. Used to resolve an `--uplink` netdev's MAC for the `LOCAL` config entry
+/// (outer eth SRC on encapped frames), mirroring the eBPF agent's bring-up.
 pub fn mac_of(name: &str) -> Result<[u8; 6]> {
     let s = std::fs::read_to_string(format!("/sys/class/net/{name}/address"))
         .with_context(|| format!("read MAC of {name}"))?;

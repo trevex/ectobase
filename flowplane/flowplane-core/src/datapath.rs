@@ -1,8 +1,8 @@
-//! Substrate-agnostic datapath orchestrators shared by the eBPF program, the native `SimNode`
-//! harness, and the DPDK NF (`nfkit`). These compose the REAL per-step core fns (`lb_select_forward`,
+//! Substrate-agnostic datapath orchestrators shared by the eBPF program and the native `SimNode`
+//! harness. These compose the REAL per-step core fns (`lb_select_forward`,
 //! `reforward`, `fw_eval_dir`, `ct_create_default`, `decap_and_rewrite`, metering) in the exact order
 //! and gates of the eBPF program tails, over any `Pkt` + `Maps` implementation. The SAME code thus
-//! runs under the sim, under the `BPF_PROG_TEST_RUN` anchor, and on DPDK mbufs.
+//! runs under the sim and under the `BPF_PROG_TEST_RUN` anchor.
 
 use flowplane_common::{
     Local, PortMeta, UnderlayValue, CT_F_NAT64, CT_REWRITE_DST, FW_ACTION_DROP, FW_DIR_EGRESS,

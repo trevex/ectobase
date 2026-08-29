@@ -296,7 +296,6 @@ func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, di
 		"--set", "apiserverAddress=https://127.0.0.1:6443",
 		"--set", "reflectorAddress=[" + dispatchIdentity + "]:" + reflectorSessionPort,
 		"--set", "installCRDs=true",
-		"--set", "dataplane=ebpf",
 	}
 	if underlayWithin != "" {
 		// flowplane picks the node's fabric underlay as the host address inside this aggregate — the
