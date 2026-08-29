@@ -1,8 +1,7 @@
 name: docker
 
-# Build and publish the flowplane container images (matrix over both datapaths):
-#   * flowplane       (Dockerfile)     -> the eBPF/XDP datapath binary
-#   * flowplane-dpdk  (Dockerfile.dpdk)-> the DPDK datapath binary (from-source DPDK build)
+# Build and publish the flowplane container image:
+#   * flowplane       (Dockerfile)     -> the eBPF datapath binary
 #
 # Each image is tagged the same way:
 #   * every push to main  -> tagged with the short commit SHA (e.g. d76a033)
@@ -28,7 +27,6 @@ jobs:
       matrix:
         include:
           - { image: flowplane,      dockerfile: Dockerfile }
-          - { image: flowplane-dpdk, dockerfile: Dockerfile.dpdk }
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -63,9 +61,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Each image self-builds a heavy toolchain + release Rust build (flowplane: LLVM 21 +
-          # bpf-linker; flowplane-dpdk: from-source DPDK), so reuse layers across runs via the
-          # GitHub Actions cache. Scope the cache per image so the two matrix legs don't evict
-          # each other's layers.
+          # The image self-builds a heavy toolchain + release Rust build (LLVM 21 + bpf-linker),
+          # so reuse layers across runs via the GitHub Actions cache. Scope the cache per image
+          # in case additional matrix legs are added later.
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
