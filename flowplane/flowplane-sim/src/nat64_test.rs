@@ -663,7 +663,7 @@ fn nat64_ingress_icmpv4_reply_becomes_icmpv6() {
 }
 
 /// Unified dispatch: a NAT64 return driven through the SHARED `SimNode::uplink_rx` entry (the same
-/// `flowplane_core::datapath::process_uplink_rx` the DPDK serve loop runs, mirroring the eBPF
+/// `flowplane_core::datapath::process_uplink_rx` the native SimNode runs, mirroring the eBPF
 /// `try_uplink_rx` base-vs-NAT-return dispatch) whose reverse conntrack entry carries `CT_F_NAT64 |
 /// CT_REWRITE_DST` must be v4→v6-EXPANDED via `process_uplink_nat64_ingress`, NOT delivered as a
 /// bare truncated IPv4 packet via the plain base path.

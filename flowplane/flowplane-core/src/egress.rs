@@ -100,7 +100,7 @@ pub fn deliver<M: Maps>(
 /// both egress and dest-ingress firewalls.
 ///
 /// This is the SHARED core the eBPF `egress::egress_fw_ct_v6` wrapper delegates to (seam-not-
-/// duplicate), and the SAME code the native SimNode + DPDK worker run via
+/// duplicate), and the SAME code the native SimNode runs via
 /// [`crate::datapath::process_guest_tx_v6`].
 pub enum EgressFwCt6 {
     Drop,

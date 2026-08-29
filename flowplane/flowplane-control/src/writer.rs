@@ -1,13 +1,13 @@
-//! The control-plane map write surface. eBPF (`AyaWriter`) and DPDK (`SharedConfigMaps`)
-//! each implement this; `ControlCore` programs maps only through it.
+//! The control-plane map write surface. The eBPF `AyaWriter` (and the in-memory `MemMapWriter`
+//! used in tests) implement this; `ControlCore` programs maps only through it.
 use flowplane_common::{
     DhcpConfig, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceMetaKey, IfaceMetaVal,
     IfaceValue, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry,
     PortMeta, RouteValue, UnderlayValue, VipKey,
 };
 
-/// The set of conntrack entries a NAT teardown must invalidate. eBPF flushes matching CT map
-/// entries; DPDK bumps the config-generation (spec §5a). Fields mirror `ct_flush_for_guest`.
+/// The set of conntrack entries a NAT teardown must invalidate; the eBPF writer flushes the
+/// matching CT map entries. Fields mirror `ct_flush_for_guest`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CtFlushScope {
     pub vni: u32,

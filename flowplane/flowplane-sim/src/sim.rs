@@ -164,9 +164,9 @@ impl SimNode {
     /// Unified host `uplink_rx`: drives [`flowplane_core::datapath::process_uplink_rx`], the shared
     /// entry that dispatches an established NAT return (inner dst a registered nat_ip with a matching
     /// `CT_REWRITE_DST` reverse entry, not LB-claimed) to the reverse-DNAT path and everything else to
-    /// the LB + base path — the SAME base-vs-NAT-return decision the eBPF `try_uplink_rx` makes inline
-    /// and the DPDK serve loop drives. Use this (over [`SimNode::uplink`] / [`SimNode::uplink_nat_return`],
-    /// which force one branch) to exercise the dispatch itself. A `CT_F_NAT64` reverse hit dispatches to
+    /// the LB + base path — the SAME base-vs-NAT-return decision the eBPF `try_uplink_rx` makes inline.
+    /// Use this (over [`SimNode::uplink`] / [`SimNode::uplink_nat_return`], which force one branch) to
+    /// exercise the dispatch itself. A `CT_F_NAT64` reverse hit dispatches to
     /// the v4→v6 expansion path, which reconstructs the reply's inner IPv6 dst from `guest_ipv6` (the
     /// guest's own overlay IPv6); it is unread on all other branches.
     pub fn uplink_rx(

@@ -100,9 +100,8 @@ impl<W: MapWriter> ControlCore<W> {
             }
             (vni, gip, nat_ip, port_min, port_max)
         };
-        // Flush CT entries for this guest. In eBPF this scans+removes matching CONNTRACK map
-        // entries; DPDK bumps the config-generation. The scope carries the same values the
-        // former `ct_flush_for_guest` matched on.
+        // Flush CT entries for this guest: in eBPF this scans+removes matching CONNTRACK map
+        // entries. The scope carries the same values the former `ct_flush_for_guest` matched on.
         self.w.conntrack_flush(CtFlushScope {
             vni,
             guest_ip: gip,

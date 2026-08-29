@@ -186,7 +186,7 @@ pub enum EgressFwCt {
 #[inline(never)]
 fn egress_fw_ct_v6(data: usize, data_end: usize, ifindex: u32, vni: u32) -> EgressFwCt {
     // Seam-not-duplicate: delegate to the SHARED core stage (`flowplane_core::egress::egress_fw_ct6`)
-    // — the SAME code the native SimNode + DPDK `process_guest_tx_v6` run. This wrapper stays a
+    // — the SAME code the native SimNode runs via `process_guest_tx_v6`. This wrapper stays a
     // `#[inline(never)]` subprogram so the core stage's CtKey6/CtEntry locals get their own BPF stack
     // frame (freed before `route_decision_v6`'s route-lookup frame). Reconstruct the packet window
     // inside (scalar data/data_end args — no packet pointer crosses the call boundary).
@@ -231,8 +231,8 @@ fn dest_ingress_fw_v6(data: usize, data_end: usize, tap_ifindex: u32) -> bool {
 #[inline(never)]
 fn route_decision_v6(data: usize, data_end: usize, meta: &PortMeta) -> EgressVerdict {
     // Seam-not-duplicate: delegate to the SHARED core stage (`flowplane_core::egress::route_decision6`
-    // = `route6` + `deliver`, `inner_proto = IPPROTO_IPV6`) — the SAME code the native SimNode + DPDK
-    // `process_guest_tx_v6` run. GlobalMaps' `route6_get`/`underlay_get`/`local()` compile to the
+    // = `route6` + `deliver`, `inner_proto = IPPROTO_IPV6`) — the SAME code the native SimNode runs
+    // via `process_guest_tx_v6`. GlobalMaps' `route6_get`/`underlay_get`/`local()` compile to the
     // same `ROUTES6`/`UNDERLAY`/`LOCAL[0]` accesses this wrapper used before, so the byte-relevant
     // decision is unchanged. This wrapper stays a `#[inline(never)]` subprogram so the core stage's
     // route-lookup `Key<RouteLpmData6>` frame gets its own BPF stack frame, sequential to (never

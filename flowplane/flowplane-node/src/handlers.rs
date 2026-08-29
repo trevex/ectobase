@@ -1,5 +1,5 @@
 //! Per-RPC marshalling fns shared by both DataplaneNode services. Each parses its `pb` request,
-//! drives the SAME `ControlCore` calls the eBPF + DPDK handlers used, and builds the response —
+//! drives the same `ControlCore` calls the eBPF node handlers use, and builds the response —
 //! side-effect-free apart from the ControlCore writes (no logging, no tonic transport), so each is
 //! unit-testable directly against a `ControlCore<MemMapWriter>`.
 

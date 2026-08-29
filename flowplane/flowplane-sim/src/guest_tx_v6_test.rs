@@ -3,8 +3,8 @@
 //!
 //! These drive the REAL shared core stages `flowplane_core::egress::{egress_fw_ct6, route_decision6}`
 //! via the full `SimNode::guest_tx_v6` compose (`flowplane_core::datapath::process_guest_tx_v6`) that
-//! the eBPF `forward_decision_v6` DELEGATES to — the SAME code runs in the eBPF tc datapath and on the
-//! DPDK serve loop. Nothing is reimplemented.
+//! the eBPF `forward_decision_v6` DELEGATES to — the SAME code runs in the eBPF tc datapath, with the
+//! native SimNode serving as the reference oracle. Nothing is reimplemented.
 //!
 //! A native v6 guest frame `[Eth 0x86DD][IPv6 guest_v6 → ext_v6][TCP]` whose dst is NOT in the NAT64
 //! prefix, with an egress-allow firewall rule + an external v6 `route6`, is:

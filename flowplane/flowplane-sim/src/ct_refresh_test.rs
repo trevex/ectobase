@@ -3,8 +3,8 @@
 //! compose (which now refreshes `last_seen` + TCP state on a CT hit) over in-memory `MemMaps` /
 //! `VecPkt` — nothing is reimplemented.
 //!
-//! Regression: before this fix the shared orchestrators (sim + DPDK) only CREATED conntrack entries
-//! on a miss (with `now = 0`) and did NOTHING on a hit, so an established TCP flow kept
+//! Regression: before this fix the shared orchestrator only CREATED conntrack entries on a miss
+//! (with `now = 0`) and did NOTHING on a hit, so an established TCP flow kept
 //! `tcp_state = 0` forever → `timeout_ns` always returned the 30 s idle timeout (never the 24 h
 //! ESTABLISHED timeout) and `last_seen` was never bumped, so a GC keyed on `ct_is_expired` evicted
 //! active NAT'd TCP flows after 30 s.

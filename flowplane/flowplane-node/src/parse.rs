@@ -115,7 +115,7 @@ pub fn parse_mac(s: &str) -> anyhow::Result<[u8; 6]> {
 }
 
 /// First IPv4 in a `requested_ips` list, or `0.0.0.0` if none. The CNI passes overlay IPs as
-/// strings; the DPDK attach programs the v4/v6 it finds (IPAM of unset IPs is B2).
+/// strings; the eBPF node's attach programs the v4/v6 it finds (IPAM of unset IPs is B2).
 pub fn first_ipv4(ips: &[String]) -> [u8; 4] {
     ips.iter()
         .filter_map(|s| s.parse::<std::net::Ipv4Addr>().ok())

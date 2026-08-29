@@ -429,8 +429,8 @@ pub fn process_uplink_nat_return<P: Pkt, M: Maps>(
 }
 
 /// Unified host `uplink_rx` entry: makes the base-vs-NAT-return dispatch the eBPF `try_uplink_rx`
-/// makes inline (`nat_guest` gate, `ingress.rs:163-209`), in SHARED code, so a substrate backend (the
-/// DPDK serve loop) decides identically instead of re-implementing it. A frame that LB does not claim,
+/// makes inline (`nat_guest` gate, `ingress.rs:163-209`), in SHARED code, so the native SimNode
+/// decides identically instead of re-implementing it. A frame that LB does not claim,
 /// whose inner dst is a registered nat_ip with a matching peer-independent `CT_REWRITE_DST` reverse
 /// entry, is an established NAT return → [`process_uplink_nat_return`] (reverse-DNAT + deliver, NO
 /// ingress firewall: it is the reply to a guest-initiated, already-egress-firewalled flow — see the

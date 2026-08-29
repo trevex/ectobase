@@ -835,14 +835,15 @@ fn seed_deny_by_default_ingress_fw(node: &mut SimNode) {
 }
 
 /// (c) Unified dispatch + firewall-skip: a NAT return driven through the SHARED `SimNode::uplink_rx`
-/// entry (the same `flowplane_core::datapath::process_uplink_rx` the DPDK serve loop runs, mirroring
+/// entry (the same `flowplane_core::datapath::process_uplink_rx` the native SimNode runs, mirroring
 /// the eBPF `try_uplink_rx` base-vs-NAT-return dispatch) must be reverse-DNAT'd + delivered EVEN under
 /// a deny-by-default ingress firewall on the guest tap.
 ///
-/// This is the non-privileged twin of the eBPF `anchor_dnat` firewall guard, protecting the DPDK
-/// serve-loop dispatch fix: the serve loop previously called `process_uplink` unconditionally, which
-/// runs the ingress firewall on the un-DNAT'd `EXT_IP -> NAT_IP` tuple (deny-by-default DROP) and
-/// never reverse-DNATs the return. `process_uplink_rx` instead dispatches it to the NAT-return path.
+/// This is the non-privileged twin of the eBPF `anchor_dnat` firewall guard, protecting against a
+/// once-real dispatch regression: a caller that invokes `process_uplink` unconditionally instead of
+/// this unified entry runs the ingress firewall on the un-DNAT'd `EXT_IP -> NAT_IP` tuple
+/// (deny-by-default DROP) and never reverse-DNATs the return. `process_uplink_rx` instead dispatches
+/// it to the NAT-return path.
 /// Two independent proofs it took that path: (1) it is delivered, not firewall-dropped; (2) the inner
 /// dst is reverse-DNAT'd to the guest (the base path never rewrites it).
 #[test]

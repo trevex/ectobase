@@ -1,4 +1,4 @@
-//! Backend-agnostic control-plane programming shared by the eBPF and DPDK dataplanes.
+//! Backend-agnostic control-plane programming for the eBPF dataplane's control core.
 mod firewall;
 mod interface;
 mod lb;
@@ -86,10 +86,9 @@ impl<W: MapWriter> ControlCore<W> {
             .map(|(id, _)| id.clone())
     }
     /// Snapshot the registered interface metadata as `(id, vni, ipv4, ipv6, underlay, ifindex)` rows.
-    /// Backs the `ListInterfaces` RPC on backends (like DPDK) that keep no separate device table —
-    /// `ifaces_meta` is the agnostic source of truth for the attached-interface set. The eBPF backend
-    /// has its own richer `Control::list_interfaces` (adds the resolved device); this exposes the
-    /// agnostic subset every backend shares.
+    /// Backs the `ListInterfaces` RPC — `ifaces_meta` is the agnostic source of truth for the
+    /// attached-interface set. The eBPF backend has its own richer `Control::list_interfaces` (adds
+    /// the resolved device); this exposes the agnostic subset.
     #[must_use]
     #[allow(clippy::type_complexity)]
     pub fn iface_meta_rows(&self) -> Vec<(Vec<u8>, u32, [u8; 4], [u8; 16], [u8; 16], u32)> {
