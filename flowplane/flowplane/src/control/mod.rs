@@ -10,8 +10,8 @@ use flowplane_common::{IfaceKey, IfaceMetaKey, IfaceMetaVal, Local, IFACE_DEV_MA
 use crate::loader;
 use crate::maps::{
     Conntrack, Conntrack6, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwMetaMap6, FwRules, FwRules6,
-    GuestDevMap, IfaceMetaMap, Interfaces, Lb, LocalMap, Maglev, Meter, Nat, NatIps, NeighborNat,
-    NeighborNatCount, PortMetaMap, Routes, Routes6, UplinkDevMap, Vips,
+    GeneveIfindexMap, IfaceMetaMap, Interfaces, Lb, LocalMap, Maglev, Meter, Nat, NatIps,
+    NeighborNat, NeighborNatCount, PortMetaMap, Routes, Routes6, Vips,
 };
 // `Nat`, `NatIps`, `NeighborNat`, `NeighborNatCount` are still opened in `bring_up`/the test ctor,
 // then moved into `AyaWriter` (they no longer live in `Inner`).
@@ -100,14 +100,13 @@ struct Inner {
     /// overlay ingress is dropped). Kept alive here for the datapath's lifetime like `_guest_progs`.
     _uplink_progs: aya::maps::ProgramArray<aya::maps::MapData>,
     _locals: LocalMap,
-    /// Owned `UPLINK_DEV` devmap handle. wan_rx is loaded LATER (attach_edge), so this handle MUST
-    /// stay alive here — dropping it after set() closes the map fd and wan_rx then fails to verify
-    /// ("fd is not pointing to valid bpf_map"), exactly like `_locals`/`_guest_progs`.
-    _uplink_dev: UplinkDevMap,
-    guest_dev: GuestDevMap,
+    /// Owned `GENEVE_IFINDEX` map handle. `wan_rx` is loaded LATER (`attach_edge`), and its bytecode
+    /// also reads `GENEVE_IFINDEX` (via `crate::tunnel::redirect`'s `geneve_ifindex()`), so this
+    /// handle MUST stay alive here — dropping it after `set()` closes the map fd and `wan_rx` then
+    /// fails to verify ("fd is not pointing to valid bpf_map"), exactly like `_locals`/`_guest_progs`.
+    _geneve_ifindex: GeneveIfindexMap,
     /// ifindex of the node-wide `collect_md` Geneve device (`flowplane_device::GENEVE_DEV`),
-    /// brought up in `bring_up`. Not yet read by anything — Task 3/4 program this into the
-    /// datapath (the LOCAL map / redirect target for the Geneve-encap rewrite).
+    /// brought up in `bring_up` and programmed into `GENEVE_IFINDEX[0]` right after.
     #[allow(dead_code)]
     geneve_ifindex: u32,
     core: ControlCore<AyaWriter>,
@@ -157,31 +156,46 @@ impl Control {
         // (delete-if-exists then add), so this is safe on both a fresh bring-up AND an adopt
         // restart — unlike the pinned BPF maps/links, this netdev is NOT torn down on graceful
         // shutdown (see the `Serve` shutdown handler in main.rs), so re-running `ensure_geneve_dev`
-        // here just confirms/repairs it. Nothing reads `geneve_ifindex` yet (Task 3/4 will program
-        // it into the datapath); it is threaded through now so that wiring is additive later.
+        // here just confirms/repairs it.
         let geneve_ifindex = flowplane_device::ensure_geneve_dev(flowplane_device::GENEVE_DEV)
             .context("bring up collect_md geneve device")?;
-        // The uplink RX path is always XDP, regardless of the guest edge attach mode.
+        let mut geneve_ifindex_map = GeneveIfindexMap::open(&mut ebpf)?;
+        geneve_ifindex_map.set(geneve_ifindex)?;
+        // uplink_rx is tcx on the geneve `collect_md` DEVICE's ingress — NOT the physical uplink
+        // NIC. The kernel decaps on the geneve device's own RX path (that is what `collect_md`
+        // means); only once that has happened does our tcx program see the (now-inner) frame, VNI
+        // recovered via `get_tunnel_key`. Attaching to the raw uplink NIC instead would see the
+        // still-encapsulated wire bytes (no tunnel-key metadata yet) and get_tunnel_key would just
+        // fail every time.
         if pin_links {
-            let uplink_pin = format!("uplink-{uplink}");
+            let uplink_pin = "uplink-geneve".to_string();
             // Adopt: atomically re-point the surviving pinned link at the fresh program (no gap). A
             // missing/broken pin falls through to a fresh attach+pin.
             let readopted = adopt
-                && loader::readopt_xdp_link(&mut ebpf, "uplink_rx", pin_dir, &uplink_pin)
+                && loader::readopt_tc_link(&mut ebpf, "uplink_rx", pin_dir, &uplink_pin)
                     .unwrap_or_else(|e| {
                         eprintln!("re-adopt uplink link failed ({e:#}); attaching fresh");
                         loader::unpin_link(pin_dir, &uplink_pin);
                         false
                     });
             if !readopted {
-                loader::attach_xdp_pinned_at(&mut ebpf, "uplink_rx", uplink, pin_dir, &uplink_pin)?;
+                loader::attach_tc_pinned_at(
+                    &mut ebpf,
+                    "uplink_rx",
+                    flowplane_device::GENEVE_DEV,
+                    pin_dir,
+                    &uplink_pin,
+                )?;
             }
         } else {
             // pin-links off: clear any stale pin from a previous pin-on run so the fresh (unpinned)
             // attach can't hit EBUSY against a link that survived the last process.
-            loader::unpin_link(pin_dir, &format!("uplink-{uplink}"));
-            loader::attach_xdp(&mut ebpf, "uplink_rx", uplink)?;
+            loader::unpin_link(pin_dir, "uplink-geneve");
+            loader::attach_tc_clsact_ingress(&mut ebpf, "uplink_rx", flowplane_device::GENEVE_DEV)?;
         }
+        // The physical uplink NIC still needs the `fq` root qdisc for EDT egress shaping (unrelated
+        // to the ingress attach above — this paces the departure time the guest-egress encap arm
+        // stamps via `bpf_skb_set_tstamp`).
         loader::ensure_fq_qdisc(uplink);
         // Guest edge is tcx-only. Pre-load tc_guest_tx and register the tc DHCP/NAT64 tail-call
         // array (GUEST_PROGS_TC) once here; per-interface attach then only needs attach().
@@ -190,9 +204,9 @@ impl Control {
             loader::load_program_tc(&mut ebpf, "tc_guest_tx")?;
             progs
         };
-        // Register the inner-IPv6 uplink tail-call target (xdp_uplink_v6) so uplink_rx's v6 tail
-        // call resolves; without this the daemon fails open to XDP_PASS on inner-v6 ingress.
-        let uplink_progs = loader::register_uplink_v6_xdp(&mut ebpf)?;
+        // Register the inner-IPv6 uplink tail-call target (xdp_uplink_v6, now tc) so uplink_rx's v6
+        // tail call resolves; without this the daemon fails open to TC_ACT_OK on inner-v6 ingress.
+        let uplink_progs = loader::register_uplink_v6_tc(&mut ebpf)?;
         let mut locals = LocalMap::open(&mut ebpf)?;
         locals.set(&Local {
             uplink_ifindex,
@@ -200,12 +214,6 @@ impl Control {
             gateway_mac,
             underlay_ipv6,
         })?;
-        // Point the uplink devmap at the fabric uplink so the wan_rx fabric redirect delivers over
-        // containerlab veths. The handle is stored in Inner (below) so its fd stays open until
-        // wan_rx is loaded in attach_edge.
-        let mut uplink_dev = UplinkDevMap::open(&mut ebpf)?;
-        uplink_dev.set(uplink_ifindex)?;
-        let guest_dev = GuestDevMap::open(&mut ebpf)?;
         let ports = PortMetaMap::open(&mut ebpf)?;
         let ifaces = Interfaces::open(&mut ebpf)?;
         let routes = Routes::open(&mut ebpf)?;
@@ -259,8 +267,7 @@ impl Control {
             _guest_progs: guest_progs,
             _uplink_progs: uplink_progs,
             _locals: locals,
-            _uplink_dev: uplink_dev,
-            guest_dev,
+            _geneve_ifindex: geneve_ifindex_map,
             geneve_ifindex,
             core: ControlCore::new(aya),
             recovered: Vec::new(),
@@ -342,8 +349,6 @@ impl Control {
             );
             g.by_id.insert(id.clone(), rec);
             g.iface_underlay.insert(id.clone(), v.underlay);
-            // GUEST_DEV is pinned and keyed by ifindex; re-insert defensively in case ifindex drifted.
-            let _ = g.guest_dev.insert(tap);
             reattach.push((id, device));
         }
         let underlays = g.core.writer().underlay_keys();
@@ -420,18 +425,18 @@ impl Control {
         let pin_dir = g.pin_dir.clone();
         if pin_links {
             let name = format!("wan-{wan_uplink}");
-            let readopted = loader::readopt_xdp_link(&mut g.ebpf, "wan_rx", &pin_dir, &name)
+            let readopted = loader::readopt_tc_link(&mut g.ebpf, "wan_rx", &pin_dir, &name)
                 .unwrap_or_else(|e| {
                     eprintln!("re-adopt wan link failed ({e:#}); attaching fresh");
                     loader::unpin_link(&pin_dir, &name);
                     false
                 });
             if !readopted {
-                loader::attach_xdp_pinned_at(&mut g.ebpf, "wan_rx", wan_uplink, &pin_dir, &name)?;
+                loader::attach_tc_pinned_at(&mut g.ebpf, "wan_rx", wan_uplink, &pin_dir, &name)?;
             }
         } else {
             loader::unpin_link(&pin_dir, &format!("wan-{wan_uplink}"));
-            loader::attach_xdp(&mut g.ebpf, "wan_rx", wan_uplink)?;
+            loader::attach_tc_clsact_ingress(&mut g.ebpf, "wan_rx", wan_uplink)?;
         }
         loader::ensure_fq_qdisc(wan_uplink);
         g.core.writer_mut().underlay_upsert(
@@ -453,24 +458,33 @@ impl Control {
     /// Attach `uplink_rx` on an ADDITIONAL fabric uplink (a dual-homed host decaps returns arriving
     /// via either ToR). The program is already loaded by `bring_up`; this just attaches it to
     /// another interface. LOCAL stays the primary uplink (egress + wan_rx redirect use it).
+    ///
+    /// NOTE: under the P2 geneve `collect_md` model, decap happens on the geneve device's OWN RX
+    /// path regardless of which physical NIC the encapped packet arrived on (a single virtual
+    /// device demuxes the tunnel), and `bring_up` attaches the "real" `uplink_rx` there — see its
+    /// doc comment. So attaching `uplink_rx` directly to a raw extra physical NIC (as this fn does)
+    /// now only ever sees still-encapsulated bytes: `get_tunnel_key` fails immediately and the
+    /// program passes every frame through unchanged. Kept (converted to tcx) for CLI/mechanical
+    /// parity rather than as something dual-homing still needs; a follow-up can retire
+    /// `--extra-uplink` entirely once that is confirmed in practice.
     pub fn attach_extra_uplink(&self, iface: &str) -> anyhow::Result<()> {
         let mut g = self.inner.lock();
         let pin_links = g.pin_links;
         let pin_dir = g.pin_dir.clone();
         if pin_links {
             let name = format!("uplink-{iface}");
-            let readopted = loader::readopt_xdp_link(&mut g.ebpf, "uplink_rx", &pin_dir, &name)
+            let readopted = loader::readopt_tc_link(&mut g.ebpf, "uplink_rx", &pin_dir, &name)
                 .unwrap_or_else(|e| {
                     eprintln!("re-adopt extra uplink {iface} failed ({e:#}); attaching fresh");
                     loader::unpin_link(&pin_dir, &name);
                     false
                 });
             if !readopted {
-                loader::attach_xdp_pinned_at(&mut g.ebpf, "uplink_rx", iface, &pin_dir, &name)?;
+                loader::attach_tc_pinned_at(&mut g.ebpf, "uplink_rx", iface, &pin_dir, &name)?;
             }
         } else {
             loader::unpin_link(&pin_dir, &format!("uplink-{iface}"));
-            loader::attach_xdp_extra(&mut g.ebpf, "uplink_rx", iface)?;
+            loader::attach_tc_clsact_ingress(&mut g.ebpf, "uplink_rx", iface)?;
         }
         loader::ensure_fq_qdisc(iface);
         println!("uplink_rx attached to extra uplink {iface}");
@@ -573,15 +587,11 @@ impl Control {
             )
         };
         // Do the FALLIBLE datapath writes first and commit the in-memory bookkeeping only after they
-        // all succeed. Otherwise a failed guest_dev/map write left a ghost by_id/links entry behind
-        // while attach.rs (seeing the Err) deleted the veth + released the IPAM /128 — so Control
+        // all succeed. Otherwise a failed map write left a ghost by_id/links entry behind while
+        // attach.rs (seeing the Err) deleted the veth + released the IPAM /128 — so Control
         // referenced a dead device and a retry of the same id hit "interface already exists". `link`
         // is a local until commit, so any early return here drops it, detaching the guest program.
         //
-        // Register the tap in GUEST_DEV so uplink_rx's delivery redirect reaches it over clab veths.
-        g.guest_dev
-            .insert(tap)
-            .context("register tap in GUEST_DEV")?;
         // MAC learning persistence: prefer the shadow-cached learned MAC (populated by
         // detach_interface) so a delete+recreate of the SAME interface preserves a datapath-learned
         // MAC (e.g. a VM behind the tap using a self-set MAC) even though the BPF UNDERLAY entry is
@@ -606,10 +616,9 @@ impl Control {
             total_mbps: params.total_mbps,
             public_mbps: params.public_mbps,
         }) {
-            g.guest_dev.remove(tap); // unwind the GUEST_DEV write
-                                     // A non-pinned `link` drops here -> detaches. A pinned link is held by the bpffs pin, not
-                                     // by `link`, so explicitly unpin to detach the program and avoid leaking the pin — keeping
-                                     // the partial-failure rollback invariant (attach.rs deletes the veth + releases the /128).
+            // A non-pinned `link` drops here -> detaches. A pinned link is held by the bpffs pin, not
+            // by `link`, so explicitly unpin to detach the program and avoid leaking the pin — keeping
+            // the partial-failure rollback invariant (attach.rs deletes the veth + releases the /128).
             if let GuestLink::Pinned(name) = &link {
                 let pd = g.pin_dir.clone();
                 loader::unpin_link(&pd, name);
@@ -662,7 +671,6 @@ impl Control {
         let tap = g.core.iface_ifindex(interface_id).unwrap_or(0);
         // Drop the core's agnostic mirror of this interface's metadata (registered in create_interface).
         g.core.forget_iface_meta(interface_id);
-        g.guest_dev.remove(tap);
         g.iface_underlay.remove(interface_id);
         // Drop the restart-journal entry so a later adopt does not resurrect a deleted interface.
         if let Some(k) = IfaceMetaKey::from_id(interface_id) {

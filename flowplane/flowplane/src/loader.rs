@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use aya::maps::{MapData, ProgramArray};
 use aya::programs::links::{FdLink, PinnedLink};
-use aya::programs::{tc, ProgramFd, SchedClassifier, TcAttachType, Xdp, XdpFlags};
+use aya::programs::{tc, ProgramFd, SchedClassifier, TcAttachType};
 use aya::Ebpf;
 
 /// Load the eBPF object that aya-build compiled to bpfel and placed in OUT_DIR.
@@ -177,13 +177,14 @@ pub fn register_guest_dhcp_tc(ebpf: &mut Ebpf) -> anyhow::Result<ProgramArray<Ma
     Ok(progs)
 }
 
-/// Load `xdp_uplink_v6` and register it in `UPLINK_PROGS[UPLINK_PROG_V6]` so `uplink_rx`'s inner-v6
-/// tail-call resolves. `xdp_uplink_v6` is a tail-call TARGET — it is loaded (verified) but NOT
-/// attached to an interface; it only ever runs via `uplink_rx`'s tail-call. The returned
-/// `ProgramArray` MUST be held in scope by the caller for the datapath's lifetime.
-pub fn register_uplink_v6_xdp(ebpf: &mut Ebpf) -> anyhow::Result<ProgramArray<MapData>> {
+/// Load `xdp_uplink_v6` (a tc program despite the name — see its doc comment in `main.rs`) and
+/// register it in `UPLINK_PROGS[UPLINK_PROG_V6]` so `uplink_rx`'s inner-v6 tail-call resolves.
+/// `xdp_uplink_v6` is a tail-call TARGET — it is loaded (verified) but NOT attached to an interface;
+/// it only ever runs via `uplink_rx`'s tail-call. The returned `ProgramArray` MUST be held in scope
+/// by the caller for the datapath's lifetime. Mirrors `register_guest_dhcp_tc`'s pattern.
+pub fn register_uplink_v6_tc(ebpf: &mut Ebpf) -> anyhow::Result<ProgramArray<MapData>> {
     {
-        let prog: &mut Xdp = ebpf
+        let prog: &mut SchedClassifier = ebpf
             .program_mut("xdp_uplink_v6")
             .context("xdp_uplink_v6 program missing")?
             .try_into()?;
@@ -193,7 +194,7 @@ pub fn register_uplink_v6_xdp(ebpf: &mut Ebpf) -> anyhow::Result<ProgramArray<Ma
         .take_map("UPLINK_PROGS")
         .context("UPLINK_PROGS map missing")?
         .try_into()?;
-    let prog: &Xdp = ebpf
+    let prog: &SchedClassifier = ebpf
         .program("xdp_uplink_v6")
         .context("xdp_uplink_v6 program missing")?
         .try_into()?;
@@ -202,41 +203,6 @@ pub fn register_uplink_v6_xdp(ebpf: &mut Ebpf) -> anyhow::Result<ProgramArray<Ma
         .set(flowplane_common::UPLINK_PROG_V6, fd, 0)
         .context("register xdp_uplink_v6 in UPLINK_PROGS")?;
     Ok(progs)
-}
-
-/// Attach an XDP program: force SKB/generic when `FLOWPLANE_SKB_MODE` is set (veth uplinks — e.g.
-/// containerlab/kind fabric links — do not support native XDP), else prefer native and fall back
-/// to SKB. Shared by the uplink attach paths.
-fn attach_xdp_mode(prog: &mut Xdp, prog_name: &str, iface: &str) -> anyhow::Result<()> {
-    if std::env::var_os("FLOWPLANE_SKB_MODE").is_some() {
-        prog.attach(iface, XdpFlags::SKB_MODE)
-            .with_context(|| format!("attach {prog_name} to {iface} (SKB_MODE)"))?;
-    } else {
-        prog.attach(iface, XdpFlags::default())
-            .or_else(|_| prog.attach(iface, XdpFlags::SKB_MODE))
-            .with_context(|| format!("attach {prog_name} to {iface}"))?;
-    }
-    Ok(())
-}
-
-/// Load (verify) and attach a named XDP program to one interface. Call this for the first
-/// interface; use `attach_xdp_loaded` for subsequent interfaces with the same program name.
-pub fn attach_xdp(ebpf: &mut Ebpf, prog_name: &str, iface: &str) -> anyhow::Result<()> {
-    let prog: &mut Xdp = ebpf
-        .program_mut(prog_name)
-        .with_context(|| format!("{prog_name} program missing"))?
-        .try_into()?;
-    prog.load().with_context(|| format!("verify {prog_name}"))?;
-    attach_xdp_mode(prog, prog_name, iface)
-}
-
-/// Attach an already-loaded XDP program to an additional interface (skips the `load()` call).
-pub fn attach_xdp_extra(ebpf: &mut Ebpf, prog_name: &str, iface: &str) -> anyhow::Result<()> {
-    let prog: &mut Xdp = ebpf
-        .program_mut(prog_name)
-        .with_context(|| format!("{prog_name} program missing"))?
-        .try_into()?;
-    attach_xdp_mode(prog, prog_name, iface)
 }
 
 /// Ensure a clsact qdisc exists on `iface`, then attach an already-loaded tc (classifier) program
@@ -279,142 +245,23 @@ pub fn ensure_fq_qdisc(iface: &str) {
     }
 }
 
-/// Load the eBPF object and attach `uplink_rx` to the named uplink interface. `pin_dir` is the
-/// bpffs `map_pin_path` for the load (debug `Load` command passes [`ephemeral_pin_dir`]).
+/// Load the eBPF object and attach `uplink_rx` (tcx, on the named uplink interface — NOTE: this
+/// debug helper attaches directly to `iface`, NOT the geneve `collect_md` device; `Control::bring_up`
+/// is what attaches it to the geneve device for the real datapath). `pin_dir` is the bpffs
+/// `map_pin_path` for the load (debug `Load` command passes [`ephemeral_pin_dir`]).
 pub fn attach_uplink(iface: &str, pin_dir: &Path) -> anyhow::Result<Ebpf> {
     let mut ebpf = load_ebpf(pin_dir)?;
-    attach_xdp(&mut ebpf, "uplink_rx", iface)?;
+    attach_tc_clsact_ingress(&mut ebpf, "uplink_rx", iface)?;
     ensure_fq_qdisc(iface);
     Ok(ebpf)
-}
-
-/// Attach `prog` to `iface` and pin the resulting XDP link to
-/// `<pin_dir>/links/<prog>-<iface>`, so the attachment (and thus the program + all its maps)
-/// survives this process exiting.
-///
-/// `already_loaded` mirrors the "load the program once, attach-only afterward" pattern used
-/// when the same program is attached to multiple interfaces.
-pub fn attach_xdp_pinned(
-    ebpf: &mut Ebpf,
-    prog: &str,
-    iface: &str,
-    pin_dir: &str,
-    already_loaded: bool,
-) -> anyhow::Result<()> {
-    use aya::programs::links::FdLink;
-
-    let p: &mut Xdp = ebpf
-        .program_mut(prog)
-        .with_context(|| format!("program {prog} missing"))?
-        .try_into()?;
-    if !already_loaded {
-        p.load().with_context(|| format!("load {prog}"))?;
-    }
-    let id = p
-        .attach(iface, XdpFlags::default())
-        .or_else(|_| p.attach(iface, XdpFlags::SKB_MODE))
-        .with_context(|| format!("attach {prog} to {iface}"))?;
-    let link = p.take_link(id).context("take xdp link")?;
-    // XdpLink wraps an FdLink on kernels >= 5.9 (bpf_link_create path); convert to pin.
-    let fd_link: FdLink = link.try_into().map_err(|_| {
-        anyhow::anyhow!(
-            "XDP link is not an FdLink (kernel < 5.9?); pinning requires bpf_link_create support"
-        )
-    })?;
-    let links_dir = format!("{pin_dir}/links");
-    std::fs::create_dir_all(&links_dir).ok();
-    let link_path = format!("{links_dir}/{prog}-{iface}");
-    let _ = std::fs::remove_file(&link_path);
-    fd_link
-        .pin(Path::new(&link_path))
-        .with_context(|| format!("pin link {link_path}"))?;
-    Ok(())
 }
 
 fn link_pin_path(pin_dir: &Path, name: &str) -> std::path::PathBuf {
     pin_dir.join("links").join(name)
 }
 
-/// Attach XDP `prog` to `iface` and pin the link to `<pin_dir>/links/<name>` so it survives this
-/// process exiting. The bpffs pin owns the attachment; the caller need not hold a handle. Loads the
-/// program if it is not already loaded (uplink_rx/wan_rx are not pre-loaded in bring_up).
-pub fn attach_xdp_pinned_at(
-    ebpf: &mut Ebpf,
-    prog: &str,
-    iface: &str,
-    pin_dir: &Path,
-    name: &str,
-) -> anyhow::Result<()> {
-    // Detach any stale pinned link of this name first (removing the bpffs pin drops the old
-    // program's last refcount) so the fresh attach below cannot hit EBUSY.
-    let _ = std::fs::remove_file(link_pin_path(pin_dir, name));
-    let p: &mut Xdp = ebpf
-        .program_mut(prog)
-        .with_context(|| format!("{prog} missing"))?
-        .try_into()?;
-    if p.fd().is_err() {
-        p.load().with_context(|| format!("load {prog}"))?;
-    }
-    let id = if std::env::var_os("FLOWPLANE_SKB_MODE").is_some() {
-        p.attach(iface, aya::programs::XdpFlags::SKB_MODE)
-            .with_context(|| format!("attach {prog} to {iface} (SKB_MODE)"))?
-    } else {
-        p.attach(iface, aya::programs::XdpFlags::default())
-            .or_else(|_| p.attach(iface, aya::programs::XdpFlags::SKB_MODE))
-            .with_context(|| format!("attach {prog} to {iface}"))?
-    };
-    let fd: FdLink = p
-        .take_link(id)?
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("XDP link is not an FdLink (kernel < 5.9?)"))?;
-    let path = link_pin_path(pin_dir, name);
-    std::fs::create_dir_all(path.parent().unwrap()).ok();
-    let _ = std::fs::remove_file(&path);
-    fd.pin(&path)
-        .with_context(|| format!("pin xdp link {}", path.display()))?;
-    Ok(())
-}
-
-/// Re-open a pinned XDP link and atomically re-point it at (a freshly-loaded) `prog` — no gap.
-/// Returns true if the pin existed (adopted); false if absent (caller attaches fresh).
-pub fn readopt_xdp_link(
-    ebpf: &mut Ebpf,
-    prog: &str,
-    pin_dir: &Path,
-    name: &str,
-) -> anyhow::Result<bool> {
-    let path = link_pin_path(pin_dir, name);
-    if !path.exists() {
-        return Ok(false);
-    }
-    {
-        let p: &mut Xdp = ebpf
-            .program_mut(prog)
-            .with_context(|| format!("{prog} missing"))?
-            .try_into()?;
-        if p.fd().is_err() {
-            p.load().with_context(|| format!("load {prog}"))?;
-        }
-    }
-    let pinned =
-        PinnedLink::from_pin(&path).with_context(|| format!("from_pin {}", path.display()))?;
-    let fd: FdLink = pinned.into();
-    let xlink: aya::programs::xdp::XdpLink = fd
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("pinned link at {} is not an XDP link", path.display()))?;
-    let p: &mut Xdp = ebpf
-        .program_mut(prog)
-        .with_context(|| format!("{prog} missing"))?
-        .try_into()?;
-    let id = p
-        .attach_to_link(xlink)
-        .with_context(|| format!("attach_to_link {prog}"))?;
-    let _ = p.take_link(id);
-    println!("adopt: re-pointed pinned link {name} -> {prog} (atomic, zero-gap)");
-    Ok(true)
-}
-
-/// tc analogues (tcx FdLink).
+/// tc (tcx FdLink) link pinning. Was "tc analogues" of an XDP pinning pair removed in P2 Task 4b
+/// (the whole overlay ingress/egress pipeline is tcx now — no XDP program is pinned any more).
 pub fn attach_tc_pinned_at(
     ebpf: &mut Ebpf,
     prog: &str,
@@ -504,7 +351,7 @@ pub fn pin_map(ebpf: &mut Ebpf, name: &str, pin_dir: &str) -> anyhow::Result<()>
 
 #[cfg(test)]
 mod tests {
-    use aya::programs::{SchedClassifier, Xdp};
+    use aya::programs::SchedClassifier;
     use aya::{EbpfLoader, VerifierLogLevel};
 
     #[test]
@@ -521,17 +368,14 @@ mod tests {
             .map_pin_path(pin.path())
             .load(bytes)
             .expect("load ebpf object");
-        {
-            let name = "uplink_rx";
-            let prog: &mut Xdp = ebpf
-                .program_mut(name)
-                .unwrap_or_else(|| panic!("XDP program {name} missing"))
-                .try_into()
-                .expect("is xdp");
-            prog.load()
-                .unwrap_or_else(|e| panic!("verifier rejected {name}: {e}"));
-        }
-        for name in ["tc_guest_tx", "tc_guest_dhcp", "tc_guest_nat64"] {
+        for name in [
+            "uplink_rx",
+            "xdp_uplink_v6",
+            "wan_rx",
+            "tc_guest_tx",
+            "tc_guest_dhcp",
+            "tc_guest_nat64",
+        ] {
             let prog: &mut SchedClassifier = ebpf
                 .program_mut(name)
                 .unwrap_or_else(|| panic!("tc program {name} missing"))

@@ -182,7 +182,8 @@ enum Cmd {
         /// Address to listen on (e.g. 127.0.0.1:1337).
         #[arg(long)]
         addr: String,
-        /// Uplink interface (uplink_rx attaches here).
+        /// Uplink interface (egress/EDT-shaping target; `uplink_rx` itself attaches to the geneve
+        /// `collect_md` device, not directly here — see `control::Control::bring_up`).
         #[arg(long)]
         uplink: String,
         /// Node role: "node" (default, a hypervisor) or "edge" (a WAN edge sidecar sharing VyOS's
@@ -193,9 +194,11 @@ enum Cmd {
         /// `--role edge`.
         #[arg(long = "wan-uplink")]
         wan_uplink: Option<String>,
-        /// Additional fabric uplink(s) to also attach `uplink_rx` on (repeatable). A dual-homed
-        /// host must decap returns arriving via EITHER ToR, so `uplink_rx` runs on every fabric
-        /// uplink (`--uplink` is the primary/LOCAL one; `--extra-uplink eth2` covers the second).
+        /// Additional fabric uplink(s) to also attach `uplink_rx` on (repeatable). NOTE: under the
+        /// geneve `collect_md` model a single virtual device demuxes decap regardless of which
+        /// physical NIC the encapped packet arrived on, so `uplink_rx` (attached once, to the geneve
+        /// device) already covers every fabric uplink; attaching it directly here as well is now a
+        /// no-op (see `Control::attach_extra_uplink`'s doc comment).
         #[arg(long = "extra-uplink")]
         extra_uplink: Vec<String>,
         /// This hypervisor's underlay IPv6 (outer src on encap; also the /64 the AttachInterface
@@ -248,14 +251,6 @@ enum Cmd {
     /// loopback) and print it, then exit. No datapath, no root — reads `ip -6 -o addr`. Used by the
     /// containerlab IPv6-fabric e2e to assert the inferred /64 matches the fabric-announced dummy0.
     InferUnderlay,
-    /// Attach the trivial xdp_pass program to one or more interfaces (redirect-target enabler), then
-    /// idle. Repeatable `--iface`: an XDP_REDIRECT *into* a veth only lands if the receiving peer has
-    /// an XDP program, so the kind fabric attaches this on the switch veths that face the native-XDP
-    /// WAN edge.
-    Pass {
-        #[arg(long = "iface", required = true)]
-        ifaces: Vec<String>,
-    },
     /// Attach xdp_inspect to an interface and print the first packet bytes every 500 ms.
     Inspect {
         #[arg(long)]
@@ -753,19 +748,27 @@ async fn main() -> anyhow::Result<()> {
             let mut ebpf = loader::load_ebpf(&map_pin_dir)?;
             loader::maybe_install_logger(&mut ebpf);
 
-            // Pass 1: attach ALL XDP programs while ebpf is still fully intact
+            // Pass 1: attach ALL tc programs while ebpf is still fully intact
             // (take_map consumes map entries, but programs are separate — still need &mut ebpf).
-            // uplink_rx: load + attach once.
+            // uplink_rx: load + attach once. NOTE: this debug/lab command (unlike `Serve`, which goes
+            // through `control::Control::bring_up`) does NOT bring up the geneve `collect_md` device
+            // and attaches `uplink_rx` directly to `--uplink` instead — so it only sees already-
+            // decapped frames if something else decapped them first; it predates the P2 Geneve pivot
+            // and was mechanically kept compiling (XDP -> tcx), not made geneve-aware.
             match pin_dir.as_deref() {
-                Some(dir) => {
-                    loader::attach_xdp_pinned(&mut ebpf, "uplink_rx", &uplink, dir, false)?
-                }
-                None => loader::attach_xdp(&mut ebpf, "uplink_rx", &uplink)?,
+                Some(dir) => loader::attach_tc_pinned_at(
+                    &mut ebpf,
+                    "uplink_rx",
+                    &uplink,
+                    std::path::Path::new(dir),
+                    &format!("uplink_rx-{uplink}"),
+                )?,
+                None => loader::attach_tc_clsact_ingress(&mut ebpf, "uplink_rx", &uplink)?,
             }
-            // Register the inner-v6 ingress tail-call target (xdp_uplink_v6) in UPLINK_PROGS so
-            // uplink_rx's IPPROTO_IPV6 tail-call resolves. Loaded but NOT attached (tail-call only).
+            // Register the inner-v6 ingress tail-call target (xdp_uplink_v6, now tc) in UPLINK_PROGS
+            // so uplink_rx's inner-v6 tail-call resolves. Loaded but NOT attached (tail-call only).
             // Held in scope so the userspace map fd lives for the datapath lifetime.
-            let _uplink_progs = loader::register_uplink_v6_xdp(&mut ebpf)?;
+            let _uplink_progs = loader::register_uplink_v6_tc(&mut ebpf)?;
             loader::ensure_fq_qdisc(&uplink);
             // tc_guest_tx: pre-load once, then attach via clsact ingress for each guest.
             // Register GUEST_PROGS_TC (tc_guest_dhcp + tc_guest_nat64 tail calls) first, then
@@ -1489,20 +1492,6 @@ async fn main() -> anyhow::Result<()> {
             }
             println!("tc-bringup: tc_guest_tx on {tap} (ifindex {tap_ifindex}); ctrl-c to stop");
             let _ = &gateway_mac; // consumed by the encap LOCAL branch when --uplink is set
-            tokio::signal::ctrl_c().await?;
-        }
-        Cmd::Pass { ifaces } => {
-            let mut ebpf = loader::load_ebpf(&loader::ephemeral_pin_dir()?)?;
-            // Load (verify) once on the first iface, then attach the same program to the rest.
-            for (i, iface) in ifaces.iter().enumerate() {
-                if i == 0 {
-                    loader::attach_xdp(&mut ebpf, "xdp_pass", iface)?;
-                } else {
-                    loader::attach_xdp_extra(&mut ebpf, "xdp_pass", iface)?;
-                }
-                println!("attached xdp_pass to {iface}");
-            }
-            println!("idling; ctrl-c to detach");
             tokio::signal::ctrl_c().await?;
         }
         Cmd::Inspect { iface } => {

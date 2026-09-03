@@ -14,6 +14,15 @@ use flowplane_common::{
 /// Evaluate the firewall for the IPv4 packet at `ip_off` against interface `ifindex` in `dir`
 /// (FW_DIR_*). Deny-by-default: returns FW_ACTION_ACCEPT only on an explicit matching accept rule,
 /// FW_ACTION_DROP otherwise.
+///
+/// NOTE: this fn is shared by BOTH the ingress (`process_uplink`, via `datapath::
+/// uplink_ingress_firewall_drop`) and egress (`egress::forward_decision_v4`) real-eBPF call sites,
+/// each with its own tight BPF combined-stack budget (see `tc.rs`'s comments on `tc_guest_tx`'s).
+/// Stays `#[inline(always)]` (tried leaving it unattributed and `#[inline(never)]` — LLVM still
+/// fully inlines it either way at these call sites, and `#[inline(never)]` additionally cost a real
+/// subprogram-call frame, making things worse); the P2 Task 4b ingress fix lives in how
+/// `flowplane_core::datapath` shapes its OWN call depth around this fn instead (see
+/// `datapath::uplink_ingress_firewall_drop`'s doc comment).
 #[inline(always)]
 pub fn fw_eval_dir<P: Pkt, M: Maps>(pkt: &P, maps: &M, ip_off: usize, ifindex: u32, dir: u8) -> u8 {
     // No per-interface firewall meta at all => no explicit allow => deny.

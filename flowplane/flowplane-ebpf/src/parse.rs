@@ -1,9 +1,6 @@
 // L2/L3 protocol constants single-sourced in `flowplane_common::proto`; re-exported so existing
 // `crate::parse::{ETH_LEN, IPV6_LEN, ETH_P_IP, ETH_P_IPV6}` import paths keep resolving.
 pub use flowplane_common::proto::{ETH_LEN, ETH_P_IP, ETH_P_IPV6, IPV6_LEN};
-pub use flowplane_core::parse::hash5;
-pub const IPPROTO_IPIP: u8 = 4; // IPv4 encapsulated in IPv6 (outer next-header)
-pub const IPPROTO_IPV6: u8 = 41; // IPv6 encapsulated in IPv6 (outer next-header)
 pub const IPPROTO_ICMPV6: u8 = 58; // ICMPv6
 
 /// # Safety

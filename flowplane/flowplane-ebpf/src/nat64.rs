@@ -4,14 +4,12 @@
 /// via the guest's NAT config, then encap'd and forwarded like a normal IPv4 NAT flow.
 ///
 /// Ingress (uplink_rx): an IPv4 reply that was reverse-NAT'd back to the guest IPv4 and carries
-/// CT_F_NAT64 in the conntrack entry is translated back to IPv6 and delivered to the VM's tap.
-use aya_ebpf::{
-    helpers::{bpf_redirect, bpf_xdp_adjust_head},
-    programs::XdpContext,
-};
+/// CT_F_NAT64 in the conntrack entry is translated back to IPv6 by
+/// `flowplane_core::datapath::process_uplink_nat64_ingress` (reached from `process_uplink_rx`) and
+/// delivered to the VM's tap — see the header comment on the (removed) ingress half below for why
+/// this module no longer owns that translation.
 use flowplane_core::err::DpErr;
 
-use crate::maps::PORT_META;
 use crate::parse::{ETH_LEN, IPV6_LEN};
 
 // The NAT64 well-known-prefix check `is_nat64_addr` (+ the `64:ff9b::/96` prefix const) lives in
@@ -125,72 +123,16 @@ pub fn tc_nat64_egress(
 // ─────────────────────────────────────────────────────────────────────────────
 // INGRESS: IPv4→IPv6 translation for NAT64 replies
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// Attempt NAT64 ingress reverse translation.
-///
-/// Called from `try_uplink_rx` after the standard NAT reverse conntrack detects CT_F_NAT64.
-/// Packet on entry: `Eth(14) + outer_IPv6(40) + inner_IPv4(20) + L4(...)` (pre-decap).
-/// `nat_guest_ipv4`: the restored guest IPv4 from the CT entry (xlate_ip).
-/// `orig_sport`: the original guest L4 port/id from the CT entry (xlate_port).
-/// `tap_ifindex` + `guest_mac`: from the UNDERLAY lookup.
-///
-/// Returns `Ok(Some(action))` if handled, `Ok(None)` to fall through, `Err(DpErr)` on error.
-#[inline(always)]
-pub fn nat64_ingress(
-    ctx: &XdpContext,
-    tap_ifindex: u32,
-    guest_mac: [u8; 6],
-    _nat_guest_ipv4: [u8; 4],
-    orig_sport: u16,
-) -> Result<Option<u32>, DpErr> {
-    // Guest IPv6 from PORT_META (used as the reconstructed inner IPv6 dst). Read here in the glue —
-    // PORT_META is not part of the core `Maps` seam — and passed into the parse.
-    let guest_ipv6 = match unsafe { PORT_META.get(&tap_ifindex) } {
-        Some(m) => m.guest_ipv6,
-        None => return Ok(None),
-    };
-
-    // Parse phase over the shared core seam (the SAME code the native SimNode + the BPF_PROG_TEST_RUN
-    // byte-parity anchor run): IHL==5, L4 proto/TTL/inner-v4-addrs/total-len/L4-checksum, and the
-    // reconstructed 64:ff9b:: IPv6 src. Runs on the PRE-resize [Eth][outerIPv6][innerIPv4][L4] frame;
-    // `None` => short frame / IHL≠5 / unsupported L4 / all-zero guest IPv6 → fall through.
-    let xlate = match flowplane_core::nat64::nat64_ingress_parse(
-        &crate::coreimpl::RawPkt::new(ctx.data(), ctx.data_end()),
-        ETH_LEN + IPV6_LEN,
-        guest_ipv6,
-        guest_mac,
-        orig_sport,
-    ) {
-        Some(x) => x,
-        None => return Ok(None),
-    };
-
-    // ── Packet resize: [Eth][outerIPv6(40)][innerIPv4(20)][L4] (74+L4) → [Eth][innerIPv6(40)][L4]
-    // (54+L4) — a net 20-byte shrink via adjust_head(+20) (drop 20 bytes off the front). After the
-    // shift, the physical L4 at old_data+74 lands at new_data+54. The resize stays in the glue (the
-    // core is a pure Pkt reader/writer). ──
-    if unsafe { bpf_xdp_adjust_head(ctx.ctx, 20) } != 0 {
-        return Err(DpErr::Bounds);
-    }
-    let data = ctx.data();
-    let data_end = ctx.data_end();
-    if data + ETH_LEN + IPV6_LEN + 8 > data_end {
-        return Err(DpErr::Bounds);
-    }
-
-    // Write phase over the shared core seam: guest-facing Ethernet (dst=guest_mac, src=GW_MAC, IPv6),
-    // the inner IPv6 header (src=64:ff9b::server, dst=guest_ipv6, TTL from the inner v4), and the L4
-    // translation (TCP/UDP checksum v4→v6; ICMPv4 echo-reply → ICMPv6 echo-reply). Re-wrap the resized
-    // frame in a fresh RawPkt (adjust_head invalidated the prior bounds). Byte-identical to the
-    // deleted inline rewrite.
-    if !flowplane_core::nat64::nat64_ingress_write(
-        &mut crate::coreimpl::RawPkt::new(data, data_end),
-        ETH_LEN,
-        crate::arp_nd::GW_MAC,
-        &xlate,
-    ) {
-        return Err(DpErr::Bounds);
-    }
-
-    Ok(Some(unsafe { bpf_redirect(tap_ifindex, 0) } as u32))
-}
+//
+// A tc-converted, resize-direction-corrected `nat64_ingress` (post-decap the growth is +20 —
+// [InnerEth][InnerIPv4][L4] (34+L4) -> [InnerEth][InnerIPv6][L4] (54+L4) via `adjust_room(20,
+// BPF_ADJ_ROOM_MAC)` — the mirror image of `tc_nat64_egress`'s `-20` shrink, reversed) was written
+// and wired up here for P2 Task 4b, called from a hand-inlined `ingress.rs::try_nat64_ingress` peek
+// ahead of `process_uplink_rx`. It was REVERTED: `try_nat64_ingress` + this fn's combined BPF stack
+// frames pushed `uplink_rx`'s combined-call-stack over the verifier's 512B limit ("combined stack
+// size of 2 calls is 608. Too large" — see the P2 Task 4b report). `uplink_rx` now delegates the
+// whole CT_F_NAT64 ingress-return case to `flowplane_core::datapath::process_uplink_nat64_ingress`
+// (reached internally by `process_uplink_rx`), whose `pkt.shrink_head(20)` still models the OLD
+// pre-decap 74->54 shrink (frozen since 4a) — a disclosed, Task-5-owned staleness, same category as
+// `flowplane_core::uplink::decap_and_rewrite`'s `shrink_head(IPV6_LEN)`. Fixing that AND restoring a
+// verifier-safe (out-of-line, low-stack) hand-inlined fast path here are both follow-up work.

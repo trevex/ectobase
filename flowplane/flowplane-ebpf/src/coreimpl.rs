@@ -1,4 +1,4 @@
-use aya_ebpf::{helpers::bpf_xdp_adjust_head, programs::XdpContext};
+use aya_ebpf::{bindings::bpf_adj_room_mode::BPF_ADJ_ROOM_MAC, programs::TcContext};
 use flowplane_common::{
     CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
     MaglevKey, MeterState, NatKey, NatValue, RouteLpmData, RouteLpmData6, RouteValue,
@@ -122,7 +122,7 @@ impl Maps for GlobalMaps {
     }
 }
 
-/// Shared raw read over a `[base, end)` packet window. `CtxPkt` and `RawPkt` both delegate here so
+/// Shared raw read over a `[base, end)` packet window. `TcPkt` and `RawPkt` both delegate here so
 /// their bounds/read behavior can never diverge.
 ///
 /// # Safety
@@ -169,19 +169,25 @@ unsafe fn write_raw_array<const N: usize>(
     true
 }
 
-/// `Pkt` over an XDP context. read/write are bounds-checked against data_end (verifier-safe).
-pub struct CtxPkt<'a> {
-    pub ctx: &'a XdpContext,
+/// `Pkt` over a tc (skb) context. read/write are bounds-checked against data_end (verifier-safe);
+/// resize goes through `bpf_skb_adjust_room` (the skb equivalent of `bpf_xdp_adjust_head`) in
+/// `BPF_ADJ_ROOM_MAC` mode (room is inserted/removed immediately after the L2 header — the same
+/// point `grow_head`/`shrink_head` operate at on the XDP side), followed by a `pull_data(0)` so the
+/// resized region is linear/writable before the caller's next `data()`/`data_end()` read (mirrors
+/// the established `adjust_room` + `pull_data` pairing already used by `nat64.rs`/`tc.rs`).
+pub struct TcPkt<'a> {
+    pub ctx: &'a TcContext,
 }
 
-impl Pkt for CtxPkt<'_> {
+impl Pkt for TcPkt<'_> {
     #[inline(always)]
     fn len(&self) -> usize {
         self.ctx.data_end() - self.ctx.data()
     }
     #[inline(always)]
     fn logical_len(&self) -> usize {
-        self.ctx.data_end() - self.ctx.data()
+        // skb->len: may exceed the linear head (data_end - data) for a non-linear skb.
+        self.ctx.len() as usize
     }
     #[inline(always)]
     fn read_array<const N: usize>(&self, off: usize) -> Option<[u8; N]> {
@@ -197,11 +203,25 @@ impl Pkt for CtxPkt<'_> {
     }
     #[inline(always)]
     fn grow_head(&mut self, delta: usize) -> bool {
-        unsafe { bpf_xdp_adjust_head(self.ctx.ctx, -(delta as i32)) == 0 }
+        if self
+            .ctx
+            .adjust_room(delta as i32, BPF_ADJ_ROOM_MAC, 0)
+            .is_err()
+        {
+            return false;
+        }
+        self.ctx.pull_data(0).is_ok()
     }
     #[inline(always)]
     fn shrink_head(&mut self, delta: usize) -> bool {
-        unsafe { bpf_xdp_adjust_head(self.ctx.ctx, delta as i32) == 0 }
+        if self
+            .ctx
+            .adjust_room(-(delta as i32), BPF_ADJ_ROOM_MAC, 0)
+            .is_err()
+        {
+            return false;
+        }
+        self.ctx.pull_data(0).is_ok()
     }
 }
 

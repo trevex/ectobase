@@ -115,7 +115,17 @@ pub fn public_pass<M: Maps>(
 /// Token-bucket POLICE of the ingress lane (traffic delivered to the guest), keyed by the
 /// destination tap `ifindex`. `true` = pass, `false` = drop. No entry, or `ingress_bps == 0` =>
 /// pass. Faithful reuse of [`take`].
-#[inline(always)]
+///
+/// `#[inline(never)]` (unlike this module's other by-value `MeterState` wrappers, which stay
+/// `#[inline(always)]` because the real eBPF egress path never calls them — `tc.rs`/`egress.rs`
+/// use their own pointer-based local wrappers instead, see `flowplane-ebpf/src/meter.rs`'s header
+/// comment): `flowplane_core::datapath::process_uplink` is the ONE real-eBPF call site (P2 Task
+/// 4b wired `uplink_rx` to it), and inlining a 96-byte `MeterState` copy (in fact two — one from
+/// `meter_get`, one written back via `meter_update`) into that already-large function's combined
+/// BPF stack blew the verifier's 512-byte combined-call-stack limit ("combined stack size of 2
+/// calls is 672. Too large"). Out-of-lining this one function was sufficient to fix it; the sim
+/// (no stack limit) is unaffected either way.
+#[inline(never)]
 pub fn ingress_pass<M: Maps>(maps: &mut M, ifindex: u32, len: u64, now: u64) -> bool {
     let mut m: MeterState = match maps.meter_get(ifindex) {
         Some(m) => m,

@@ -1,7 +1,7 @@
 use anyhow::Context;
 use aya::maps::{
     lpm_trie::{Key, LpmTrie},
-    Array, DevMap, DevMapHash, HashMap, MapData,
+    Array, HashMap, MapData,
 };
 use aya::Ebpf;
 use flowplane_common::{
@@ -93,57 +93,27 @@ impl LocalMap {
     }
 }
 
-/// Typed handle over the `UPLINK_DEV` devmap (single slot 0 -> fabric uplink ifindex). The edge
-/// `wan_rx` fabric redirect goes through this devmap so containerlab veth uplinks deliver the
-/// XDP_REDIRECT without needing a peer XDP program (see the eBPF `UPLINK_DEV` comment).
-pub struct UplinkDevMap {
-    map: DevMap<MapData>,
+/// Typed handle over the single-entry `GENEVE_IFINDEX` Array map: the kernel `collect_md` geneve
+/// device's ifindex, read by the tc guest-egress encap path (`crate::tunnel::redirect`) to
+/// `bpf_redirect` an overlay-bound skb after `bpf_skb_set_tunnel_key` has stamped the tunnel-key
+/// metadata dst. Populated once by `Control::bring_up` right after `ensure_geneve_dev`.
+pub struct GeneveIfindexMap {
+    map: Array<MapData, u32>,
 }
 
-impl UplinkDevMap {
+impl GeneveIfindexMap {
     pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = DevMap::try_from(
-            ebpf.take_map("UPLINK_DEV")
-                .context("UPLINK_DEV map missing")?,
+        let map = Array::try_from(
+            ebpf.take_map("GENEVE_IFINDEX")
+                .context("GENEVE_IFINDEX map missing")?,
         )?;
         Ok(Self { map })
     }
 
-    /// Point slot 0 at the fabric uplink ifindex (no chained program).
-    pub fn set(&mut self, uplink_ifindex: u32) -> anyhow::Result<()> {
+    pub fn set(&mut self, geneve_ifindex: u32) -> anyhow::Result<()> {
         self.map
-            .set(0, uplink_ifindex, None, 0)
-            .context("write UPLINK_DEV[0]")
-    }
-}
-
-/// Typed handle over the `GUEST_DEV` devmap-hash (tap ifindex -> same ifindex). `uplink_rx`'s guest
-/// DELIVERY redirect goes through this so containerlab veth guest taps deliver the XDP_REDIRECT
-/// without a peer XDP program (see the eBPF `GUEST_DEV` comment). Populated on attach, cleared on
-/// detach, keyed by the tap ifindex (many guests, unlike the single-slot UPLINK_DEV).
-pub struct GuestDevMap {
-    map: DevMapHash<MapData>,
-}
-
-impl GuestDevMap {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = DevMapHash::try_from(
-            ebpf.take_map("GUEST_DEV")
-                .context("GUEST_DEV map missing")?,
-        )?;
-        Ok(Self { map })
-    }
-
-    /// Map `tap_ifindex` -> `tap_ifindex` so `GUEST_DEV.redirect(tap_ifindex)` delivers to the tap.
-    pub fn insert(&mut self, tap_ifindex: u32) -> anyhow::Result<()> {
-        self.map
-            .insert(tap_ifindex, tap_ifindex, None, 0)
-            .with_context(|| format!("write GUEST_DEV[{tap_ifindex}]"))
-    }
-
-    /// Remove a tap ifindex on detach (best-effort).
-    pub fn remove(&mut self, tap_ifindex: u32) {
-        let _ = self.map.remove(tap_ifindex);
+            .set(0, geneve_ifindex, 0)
+            .context("write GENEVE_IFINDEX[0]")
     }
 }
 

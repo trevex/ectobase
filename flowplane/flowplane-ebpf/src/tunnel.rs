@@ -14,7 +14,10 @@
 
 use aya_ebpf::{
     bindings::{__sk_buff, bpf_tunnel_key},
-    helpers::{bpf_redirect, gen::bpf_skb_set_tunnel_key},
+    helpers::{
+        bpf_redirect,
+        gen::{bpf_skb_get_tunnel_key, bpf_skb_set_tunnel_key},
+    },
 };
 use flowplane_core::encap::TunnelEncap;
 
@@ -57,6 +60,38 @@ pub fn set_tunnel_key(skb: *mut __sk_buff, tunnel: &TunnelEncap) -> bool {
         )
     };
     ret == 0
+}
+
+/// Recover the Geneve tunnel key the kernel's `collect_md` ingress device stamped on `skb` as it
+/// decapped: the VNI (`tunnel_id`) and the sender's remote underlay (`remote_ipv6`). Counterpart to
+/// [`set_tunnel_key`] for the ingress direction. Returns `None` on a helper failure (no tunnel
+/// metadata present — e.g. the skb did not arrive via the geneve device).
+#[inline(always)]
+pub fn get_tunnel_key(skb: *mut __sk_buff) -> Option<(u32, [u8; 16])> {
+    // SAFETY: `key` is a plain-old-data struct fully zeroed before any field is read; the helper
+    // fills it in on success. See `set_tunnel_key` for why the `remote_ipv6` union arm is read via a
+    // raw 16-byte copy (no per-word byte-swap: the bytes are already network-order, verbatim).
+    let mut key: bpf_tunnel_key = unsafe { core::mem::zeroed() };
+    let ret = unsafe {
+        bpf_skb_get_tunnel_key(
+            skb,
+            &mut key as *mut bpf_tunnel_key,
+            core::mem::size_of::<bpf_tunnel_key>() as u32,
+            BPF_F_TUNINFO_IPV6,
+        )
+    };
+    if ret != 0 {
+        return None;
+    }
+    let mut remote = [0u8; 16];
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            core::ptr::addr_of!(key.__bindgen_anon_1) as *const u8,
+            remote.as_mut_ptr(),
+            16,
+        );
+    }
+    Some((key.tunnel_id, remote))
 }
 
 /// Redirect the (already tunnel-key-stamped) skb to the geneve `collect_md` device, which builds the

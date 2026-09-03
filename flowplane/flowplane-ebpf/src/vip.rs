@@ -1,4 +1,3 @@
-use aya_ebpf::programs::XdpContext;
 use flowplane_common::VipKey;
 
 use crate::csum::csum_replace4;
@@ -21,11 +20,11 @@ pub fn dnat_egress(data: usize, data_end: usize, ip_off: usize, vni: u32) {
     rewrite_raw(data, data_end, ip_off, vni, false);
 }
 
-/// Ingress DNAT: rewrite the inner IPv4 DEST if a VIP maps to an interface IP.
-#[inline(always)]
-pub fn dnat_ingress(ctx: &XdpContext, ip_off: usize, vni: u32) {
-    rewrite_raw(ctx.data(), ctx.data_end(), ip_off, vni, false);
-}
+// The ingress-side DNAT wrapper that used to live here (VIP V->G rewrite on an inbound frame) was
+// dropped in P2 Task 4b: `uplink_rx` now delegates entirely to `flowplane_core::datapath`'s
+// `process_uplink`/`process_uplink_rx` orchestrators, which do not (yet) model VIP ingress DNAT — a
+// gap inherited from the 4a core port, not introduced here. See the P2 Task 4b report for the
+// full list of behaviors 4a's core orchestrator does not (yet) cover.
 
 #[inline(always)]
 fn rewrite_raw(data: usize, data_end: usize, ip_off: usize, vni: u32, is_src: bool) {

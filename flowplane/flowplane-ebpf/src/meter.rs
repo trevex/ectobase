@@ -64,29 +64,9 @@ pub fn public_pass(ifindex: u32, len: u64, is_external: bool) -> bool {
     }
 }
 
-/// Police the ingress lane in place (keyed by dest tap `ifindex`). `true` = pass, `false` = drop.
-/// No entry or `ingress_bps == 0` => pass.
-#[inline(never)]
-pub fn ingress_pass(ifindex: u32, len: u64) -> bool {
-    let ptr = match METER.get_ptr_mut(&ifindex) {
-        Some(p) => p,
-        None => return true,
-    };
-    unsafe {
-        if (*ptr).ingress_bps == 0 {
-            return true;
-        }
-        let now = bpf_ktime_get_ns();
-        let (pass, tok) = take(
-            (*ptr).ingress_bps,
-            (*ptr).ingress_burst,
-            (*ptr).ingress_tokens,
-            (*ptr).ingress_last_ns,
-            now,
-            len,
-        );
-        (*ptr).ingress_tokens = tok;
-        (*ptr).ingress_last_ns = now;
-        pass
-    }
-}
+// The pointer-based ingress-lane policer that used to live here (mirroring `edt_stamp`/
+// `public_pass` above) was dropped in P2 Task 4b: `uplink_rx` now delegates ingress-lane metering
+// to `flowplane_core::meter::ingress_pass` (the by-value `MeterState` wrapper) via
+// `flowplane_core::datapath::process_uplink`, instead of hand-inlining the map access here. See
+// this module's header comment for why the by-value wrapper is normally avoided in eBPF (stack
+// pressure) — this is a known, disclosed risk for the verifier checkpoint, not an oversight.

@@ -1,6 +1,6 @@
 use aya_ebpf::{
     macros::map,
-    maps::{lpm_trie::LpmTrie, Array, DevMap, DevMapHash, HashMap, LruHashMap, ProgramArray},
+    maps::{lpm_trie::LpmTrie, Array, HashMap, LruHashMap, ProgramArray},
 };
 use flowplane_common::{
     Config, CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey,
@@ -28,20 +28,6 @@ pub static CONFIG: Array<Config> = Array::pinned(1, 0);
 pub static PORT_META: HashMap<u32, PortMeta> = HashMap::pinned(1024, 0);
 #[map]
 pub static LOCAL: Array<Local> = Array::pinned(1, 0);
-// Single-slot devmap holding the fabric uplink ifindex (key 0), populated by userspace when LOCAL
-// is set. The edge `wan_rx` RX->fabric redirect (encap_and_redirect) goes through this instead of a
-// plain bpf_redirect: on veth (containerlab) a plain XDP_REDIRECT only delivers if the peer port has
-// an XDP program (veth ndo_xdp_xmit requirement); the devmap path does not carry that constraint.
-// Production real NICs work either way, so this is a harness-robustness change, not a logic change.
-#[map]
-pub static UPLINK_DEV: DevMap = DevMap::with_max_entries(1, 0);
-// Per-guest-tap devmap (key = tap ifindex -> same ifindex), populated by userspace on interface
-// attach. `uplink_rx`'s guest DELIVERY redirect goes through this instead of a plain bpf_redirect:
-// on containerlab veths a plain XDP_REDIRECT into the guest veth is silently dropped (veth
-// ndo_xdp_xmit peer requirement), while the devmap path delivers. Production real NICs are
-// unaffected. Mirrors UPLINK_DEV, but keyed by ifindex (many guests) via DEVMAP_HASH.
-#[map]
-pub static GUEST_DEV: DevMapHash = DevMapHash::pinned(1024, 0);
 #[map]
 pub static INSPECT: Array<InspectEntry> = Array::with_max_entries(1, 0);
 // Single-slot config map holding the kernel `collect_md` Geneve device's ifindex (Task 1's device,
@@ -106,9 +92,10 @@ pub static DHCP_META: HashMap<u32, DhcpMeta> = HashMap::pinned(1024, 0);
 #[map]
 pub static GUEST_PROGS_TC: ProgramArray = ProgramArray::with_max_entries(8, 0);
 
-/// Tail-call targets for the **XDP** uplink (ingress) split. XDP programs can only tail-call other
-/// XDP programs, so this is a separate array from the tc-only `GUEST_PROGS_TC`. Populated by the
-/// loader with `xdp_uplink_v6` at `UPLINK_PROG_V6`; `uplink_rx` tail-calls it for inner-IPv6 frames
-/// (the v6 firewall + conntrack overflow uplink_rx's 512B combined BPF stack).
+/// Tail-call targets for the uplink (ingress) split, now tc (was XDP pre-4b — tc programs can only
+/// tail-call other tc programs, hence a separate array from `GUEST_PROGS_TC`, which lives on the
+/// guest-egress side of the process and is populated independently). Populated by the loader with
+/// `xdp_uplink_v6` at `UPLINK_PROG_V6`; `uplink_rx` tail-calls it for decapped frames whose inner
+/// ethertype is IPv6 (the v6 firewall + conntrack overflow uplink_rx's combined BPF stack).
 #[map]
 pub static UPLINK_PROGS: ProgramArray = ProgramArray::with_max_entries(4, 0);

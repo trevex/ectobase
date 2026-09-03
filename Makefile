@@ -178,11 +178,14 @@ test: ## Host unit + POD-layout tests (no root needed)
 	cargo test -p flowplane-common -p flowplane
 
 .PHONY: verifier
-verifier: ## Load the edge XDP + guest-facing tc programs through the kernel verifier (needs root)
-	# The main dataplane XDP (uplink_rx) is verifier-loaded by the sim-anchor byte-parity anchors;
-	# these two cover the programs those anchors don't exercise: the edge WAN XDP, and all three
-	# guest-facing tc classifiers (tc_guest_tx / tc_guest_nat64 / tc_guest_dhcp). verify_tc_guest is
-	# what catches tc-datapath stack/verifier regressions (e.g. an over-budget egress subprogram).
+verifier: ## Load the tcx overlay-ingress + guest-facing tc programs through the kernel verifier (needs root)
+	# verify_edge_wan_rx covers the tcx overlay-ingress trio (uplink_rx / xdp_uplink_v6 / wan_rx —
+	# all XDP pre-P2-Task-4b); verify_tc_guest covers the guest-facing tc classifiers (tc_guest_tx /
+	# tc_guest_nat64 / tc_guest_dhcp / tc_guest_egress_v6). Between them this is what catches
+	# stack/verifier regressions (e.g. an over-budget subprogram) across the whole eBPF datapath —
+	# NOTE: the anchor_uplink/anchor_lb/anchor_dnat byte-parity anchors (`make sim-anchor`) currently
+	# do NOT compile (pre-existing SimNode signature drift from P2 Task 4a; tracked as Task 7), so
+	# this target is presently the ONLY verifier coverage for `uplink_rx`.
 	sudo -E $$(command -v cargo) test -p flowplane --test verify_edge_wan_rx -- --ignored
 	sudo -E $$(command -v cargo) test -p flowplane --test verify_tc_guest -- --ignored
 
