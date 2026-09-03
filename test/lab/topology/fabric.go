@@ -248,29 +248,14 @@ func Up(ctx context.Context, cfg *config.Config) error {
 	}
 
 	c := clab.Clab{TopoFile: p.topo}
-	// Clab's VyOS nodes sometimes wedge on teardown and are left behind, which makes the next
-	// `clab deploy` fail with "containers already exist" (requiring --reconfigure). Force-remove
-	// any lingering clab-<name>-* containers first so `lab up` is idempotent after a wedged down.
-	forceRemoveLingeringClab(ctx, cfg.Name)
 	if err := c.Deploy(ctx); err != nil {
 		return fmt.Errorf("clab deploy: %w", err)
 	}
 
-	// The host reaches the fabric (node identities + anycast API VIPs, all under
-	// fd00:cafe::/32) only through the wan container, whose mgmt address is the
-	// host's single next hop into the lab. Add that route so talosctl/kubectl can
-	// reach the nodes.
-	if err := addHostFabricRoute(ctx, cfg.Name); err != nil {
+	// Route the host into the fabric via the WAN-segment jump veth (see
+	// addHostFabricRoute) so talosctl/kubectl can reach the nodes.
+	if err := addHostFabricRoute(ctx); err != nil {
 		return fmt.Errorf("host fabric route: %w", err)
-	}
-
-	// Give the fabric real native-IPv6 internet: the wan masquerades fabric egress
-	// onto the clab mgmt subnet, which docker does NOT NAT66 to the host uplink, so
-	// the host must. (v4 dsts already work via the tayga NAT64 path; this covers
-	// dual-stack registries that resolve to a real AAAA.) Best-effort: a host with
-	// no native v6 uplink still gets v4/NAT64 egress.
-	if err := setupHostEgress(ctx); err != nil {
-		slog.Warn("host native-v6 egress setup failed (v4/NAT64 egress still works)", "err", err)
 	}
 
 	// Push local images best-effort. Push goes via the registry container's
@@ -562,100 +547,25 @@ func repoRoot() (string, error) {
 // cluster's node identities and anycast API VIPs live under fd00:cafe::/32.
 const fabricHostPrefix = "fd00:cafe::/32"
 
-// addHostFabricRoute points fd00:cafe::/32 at the wan container's mgmt address so
-// the host (talosctl/kubectl) can reach the nodes + API VIPs through the fabric.
-func addHostFabricRoute(ctx context.Context, labName string) error {
-	via, err := clab.MgmtIP6(ctx, labName, "wan")
-	if err != nil {
-		return fmt.Errorf("wan mgmt IPv6: %w", err)
+// addHostFabricRoute brings up the host end of the WAN-segment jump veth and routes
+// fd00:cafe::/32 (node identities + anycast API VIPs) into the fabric via the wan
+// container (fd00:29::1), which ECMPs to both edges. Replaces the old mgmt-network
+// next hop (mgmt net removal is task B2).
+func addHostFabricRoute(ctx context.Context) error {
+	if err := exec.Sudo(ctx, "ip", "-6", "addr", "replace", fabric.JumpHostAddr+"/64", "dev", fabric.JumpIface); err != nil {
+		return fmt.Errorf("assign jump addr on %s: %w", fabric.JumpIface, err)
 	}
-	if via == "" {
-		return fmt.Errorf("wan container has no mgmt IPv6 (is the mgmt network dual-stack?)")
+	if err := exec.Sudo(ctx, "ip", "link", "set", fabric.JumpIface, "up"); err != nil {
+		return fmt.Errorf("bring up %s: %w", fabric.JumpIface, err)
 	}
-	slog.Info("routing host into the fabric", "prefix", fabricHostPrefix, "via", via)
-	return exec.Sudo(ctx, "ip", "-6", "route", "replace", fabricHostPrefix, "via", via)
+	slog.Info("routing host into the fabric", "prefix", fabricHostPrefix, "via", fabric.JumpVia, "dev", fabric.JumpIface)
+	return exec.Sudo(ctx, "ip", "-6", "route", "replace", fabricHostPrefix, "via", fabric.JumpVia, "dev", fabric.JumpIface)
 }
 
 // delHostFabricRoute removes the host→fabric route (best-effort, on down).
 func delHostFabricRoute(ctx context.Context) {
 	if err := exec.Sudo(ctx, "ip", "-6", "route", "del", fabricHostPrefix); err != nil {
 		slog.Debug("remove host fabric route (already gone?)", "err", err)
-	}
-}
-
-// detectV6Uplink returns the host interface carrying the default IPv6 route (the
-// real internet uplink the fabric masquerades onto), or "" if the host has none.
-func detectV6Uplink(ctx context.Context) string {
-	out, err := exec.OutputStr(ctx, "ip", "-6", "route", "show", "default")
-	if err != nil {
-		return ""
-	}
-	fields := strings.Fields(out)
-	for i, f := range fields {
-		if f == "dev" && i+1 < len(fields) {
-			return fields[i+1]
-		}
-	}
-	return ""
-}
-
-// setupHostEgress enables the host to forward + NAT66 the clab mgmt subnet onto
-// its real IPv6 uplink, so the wan's masqueraded native-v6 fabric egress reaches
-// the internet. Idempotent (rules are -C-guarded). No-op if the host has no v6
-// uplink (v4/NAT64 egress via tayga is unaffected).
-func setupHostEgress(ctx context.Context) error {
-	uplink := detectV6Uplink(ctx)
-	if uplink == "" {
-		slog.Info("no host IPv6 uplink; skipping native-v6 fabric egress (v4/NAT64 unaffected)")
-		return nil
-	}
-	slog.Info("enabling native-v6 fabric egress", "uplink", uplink, "subnet", fabric.MgmtV6Subnet)
-	if err := exec.Sudo(ctx, "sysctl", "-qw", "net.ipv6.conf.all.forwarding=1"); err != nil {
-		return err
-	}
-	rules := [][]string{
-		{"-t", "nat", "POSTROUTING", "-s", fabric.MgmtV6Subnet, "-o", uplink, "-j", "MASQUERADE"},
-		{"FORWARD", "-s", fabric.MgmtV6Subnet, "-o", uplink, "-j", "ACCEPT"},
-		{"FORWARD", "-d", fabric.MgmtV6Subnet, "-i", uplink, "-j", "ACCEPT"},
-	}
-	for _, r := range rules {
-		// -C to check, -I to add only if absent (idempotent).
-		check := insertAfterTable(append([]string{"ip6tables"}, r...), "-C")
-		if exec.Sudo(ctx, check...) == nil {
-			continue
-		}
-		add := insertAfterTable(append([]string{"ip6tables"}, r...), "-I")
-		if err := exec.Sudo(ctx, add...); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// insertAfterTable splices the ip6tables op (-C/-I) after an optional "-t <table>"
-// prefix so both `ip6tables -t nat -C ...` and `ip6tables -C ...` form correctly.
-func insertAfterTable(argv []string, op string) []string {
-	// argv[0]=="ip6tables"; if argv[1]=="-t", op goes after argv[2].
-	if len(argv) > 2 && argv[1] == "-t" {
-		out := append([]string{argv[0], argv[1], argv[2], op}, argv[3:]...)
-		return out
-	}
-	return append([]string{argv[0], op}, argv[1:]...)
-}
-
-// teardownHostEgress removes the native-v6 egress rules (best-effort, on down).
-func teardownHostEgress(ctx context.Context) {
-	uplink := detectV6Uplink(ctx)
-	if uplink == "" {
-		return
-	}
-	dels := [][]string{
-		{"-t", "nat", "-D", "POSTROUTING", "-s", fabric.MgmtV6Subnet, "-o", uplink, "-j", "MASQUERADE"},
-		{"-D", "FORWARD", "-s", fabric.MgmtV6Subnet, "-o", uplink, "-j", "ACCEPT"},
-		{"-D", "FORWARD", "-d", fabric.MgmtV6Subnet, "-i", uplink, "-j", "ACCEPT"},
-	}
-	for _, d := range dels {
-		_ = exec.Sudo(ctx, append([]string{"ip6tables"}, d...)...)
 	}
 }
 
@@ -691,30 +601,6 @@ func chownToSudoUser(path string) {
 	_ = os.Chown(path, uid, gid)
 }
 
-// forceRemoveLingeringClab force-removes any clab-<labName>-* containers left
-// behind by a wedged `clab destroy` (docker "did not receive an exit event"). For
-// each, it kills the container-shim by container ID (pkill -9 -f <cid>) then
-// `docker rm -f`. Best-effort: errors are logged at debug and ignored.
-func forceRemoveLingeringClab(ctx context.Context, labName string) {
-	prefix := "clab-" + labName + "-"
-	out, err := exec.SudoOutput(ctx, "docker", "ps", "-aq", "--filter", "name="+prefix, "--format", "{{.Names}}")
-	if err != nil {
-		slog.Debug("list lingering clab containers", "err", err)
-		return
-	}
-	for _, name := range strings.Fields(string(out)) {
-		cid, err := exec.OutputStr(ctx, "docker", "inspect", "-f", "{{.Id}}", name)
-		if cid = strings.TrimSpace(cid); cid != "" && err == nil {
-			_ = exec.Sudo(ctx, "pkill", "-9", "-f", cid)
-		}
-		if err := exec.Sudo(ctx, "docker", "rm", "-f", name); err != nil {
-			slog.Debug("force-remove lingering clab container", "name", name, "err", err)
-		} else {
-			slog.Info("force-removed wedged clab container", "name", name)
-		}
-	}
-}
-
 // cleanupHostRBD force-releases any host krbd devices the ceph-csi nodeplugin left
 // mapped. kind shares the host kernel, so an RBD PVC / VM-disk `rbd map` creates
 // /dev/rbdN on the HOST; those kernel maps outlive `clab destroy` (which only removes
@@ -747,18 +633,11 @@ func Down(ctx context.Context, cfg *config.Config, purge bool) error {
 	p := buildPaths(cfg)
 
 	delHostFabricRoute(ctx)
-	teardownHostEgress(ctx)
 
 	c := clab.Clab{TopoFile: p.topo}
 	if err := c.Destroy(ctx); err != nil {
 		slog.Warn("clab destroy (already down?)", "err", err)
 	}
-	// clab's VyOS nodes frequently wedge on destroy ("did not receive an exit
-	// event") and are left behind, which blocks the next `clab deploy` ("use
-	// --reconfigure"). Force-remove any lingering clab-<name>-* containers by
-	// killing their container-shim (the same recovery the Tier-2 gate uses for a
-	// zombied node) then `docker rm -f`. Best-effort.
-	forceRemoveLingeringClab(ctx, cfg.Name)
 
 	// kind shares the host kernel, so an RBD PVC / VM-disk `rbd map` (ceph-csi
 	// nodeplugin) creates /dev/rbdN on the HOST. clab destroy removes the node
@@ -766,17 +645,6 @@ func Down(ctx context.Context, cfg *config.Config, purge bool) error {
 	// which hangs system shutdown ("cannot connect to ceph") and orphans the
 	// rbd-backed filesystem. Force-release them now that the holders (nodes) are gone.
 	cleanupHostRBD(ctx)
-
-	// clab destroy usually removes its mgmt network, but a force-removed (wedged)
-	// node can leave <name>-mgmt (+ its docker ip6tables MASQUERADE) behind. Only
-	// remove it if it's still present, so a normal down doesn't log a noisy
-	// "network not found" when clab already cleaned it up. Best-effort.
-	mgmt := cfg.Name + "-mgmt"
-	if out, err := exec.SudoOutput(ctx, "docker", "network", "ls", "-q", "--filter", "name=^"+mgmt+"$"); err == nil && strings.TrimSpace(string(out)) != "" {
-		if err := exec.Sudo(ctx, "docker", "network", "rm", mgmt); err != nil {
-			slog.Debug("remove mgmt network", "err", err)
-		}
-	}
 
 	if purge {
 		slog.Info("purging build tree (including registry cache)", "build", p.build)

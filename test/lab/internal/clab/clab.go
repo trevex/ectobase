@@ -52,17 +52,6 @@ func MgmtIP(ctx context.Context, labName, node string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// MgmtIP6 returns a node's containerlab management IPv6 (empty when the mgmt
-// network has no IPv6 subnet). Used as the host's next hop into the fabric.
-func MgmtIP6(ctx context.Context, labName, node string) (string, error) {
-	out, err := exec.Output(ctx, "docker", "inspect", "clab-"+labName+"-"+node,
-		"--format", "{{range .NetworkSettings.Networks}}{{.GlobalIPv6Address}}{{end}}")
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
 // KindNodeIP6 returns the first non-empty global IPv6 address of a kind node
 // container (named directly, e.g. "dispatch-control-plane", NOT clab-prefixed —
 // clab's k8s-kind containers are created by kind on the kind docker network).

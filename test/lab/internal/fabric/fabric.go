@@ -22,6 +22,10 @@ const (
 	LoopAggr      = "fd00:ffff::/32"       // aggregate of the edge loopbacks
 	RegistryAddr  = "fd00:29::5"           // registry node's address on the WAN segment (fd00:29::/64)
 	RegistryPort  = "5000"                 // registry:2 default listen port
+
+	JumpHostAddr = "fd00:29::100" // host end of the WAN-segment jump veth (replaces the mgmt route)
+	JumpVia      = "fd00:29::1"   // the wan container's WAN-segment addr; it ECMPs NodeAggr → edges
+	JumpIface    = "ectojump"     // host-side ifname of the clab host:-endpoint veth
 )
 
 // RegistryEndpoint is the in-fabric mirror target the Talos nodes point at.
