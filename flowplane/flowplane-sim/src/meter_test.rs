@@ -21,12 +21,11 @@
 use etherparse::PacketBuilder;
 use flowplane_common::{
     FwMeta, FwRule, MeterState, PortMeta, RouteValue, UnderlayValue, FW_ACTION_ACCEPT,
-    FW_DIR_EGRESS, FW_DIR_INGRESS,
+    FW_DIR_EGRESS, FW_DIR_INGRESS, GENEVE_OVERHEAD,
 };
-use flowplane_core::encap::{ETH_LEN, IPV6_LEN};
 use flowplane_core::pkt::Action;
 
-use crate::{EncapParams, SimNode};
+use crate::SimNode;
 
 const VNI: u32 = 300;
 /// Sending guest port ifindex — the eBPF meter keys `METER[ingress_ifindex]`; the sim keys it on
@@ -190,13 +189,15 @@ fn no_meter_entry_always_passes() {
 /// advances the departure cursor and records a `last_tstamp`. Mirrors the eBPF `tc_guest_tx` path.
 ///
 /// The fixture routes packets via an EXTERNAL/ENCAP path (no local tap resolved → `deliver` returns
-/// `Encap`) so the sim stamps EDT off `pkt.len()` — exactly when `tc_guest_tx` calls `edt_stamp`. A
-/// local route (Local delivery) does NOT stamp, matching the eBPF behaviour (same-node is unshaped).
+/// `Encap`) so the sim stamps EDT off `pkt.len() + GENEVE_OVERHEAD` — exactly when `tc_guest_tx`
+/// calls `edt_stamp`. A local route (Local delivery) does NOT stamp, matching the eBPF behaviour
+/// (same-node is unshaped).
 ///
-/// NOTE: the Encap arm no longer writes outer bytes (see `flowplane_core::encap::TunnelEncap`), so
-/// `pkt.len()` here is the INNER frame length only — it under-counts the eventual Geneve wire
-/// overhead. A follow-up task accounts for that; this test's rate is sized off the (now correct)
-/// inner length so the 1-wire-frame/s pacing assertions below still hold.
+/// The Encap arm no longer writes outer bytes (see `flowplane_core::encap::TunnelEncap`), so
+/// `pkt.len()` alone is the INNER frame length only; `process_guest_tx` compensates by adding
+/// `GENEVE_OVERHEAD` back in before stamping (P2 Task 5) so shaping reflects real wire bytes — this
+/// test's rate is sized off that SAME compensated length so the 1-wire-frame/s pacing assertions
+/// below hold.
 ///
 /// Rate = 1 wire-frame/s. Three packets fired at now=0:
 ///   - packet 1: idle cursor (total_last_ns=0 ≤ now=0) → departs AT now (0); cursor = 0 + airtime.
@@ -243,8 +244,10 @@ fn edt_total_lane_shapes_not_drops() {
         out
     };
 
-    // The length the meter sees is the INNER frame length (Encap no longer writes outer bytes).
-    let wire_len = ext_frame(1).len() as u64;
+    // The length the meter sees is the INNER frame length PLUS GENEVE_OVERHEAD (Encap no longer
+    // writes outer bytes, so `process_guest_tx` adds the kernel's outer bytes back in before
+    // stamping — see its doc comment).
+    let wire_len = ext_frame(1).len() as u64 + GENEVE_OVERHEAD as u64;
     // Rate = 1 wire-frame/s → airtime = wire_len * 1e9 / wire_len = 1 s per packet.
     set_meter(&mut node, wire_len, 0); // total_bps = wire_len B/s; burst field unused by EDT
 
@@ -400,7 +403,9 @@ fn public_lane_exhaust_drop_then_pass_internal() {
     allow(&mut node, SRC_IFINDEX, FW_DIR_EGRESS);
     allow(&mut node, PEER_TAP, FW_DIR_INGRESS);
 
-    let frame_len = guest_frame(1).len() as u64;
+    // `public_pass` is measured against the real wire cost (inner length + GENEVE_OVERHEAD — see
+    // `process_guest_tx`'s doc comment), so size the bucket off that, not the bare inner length.
+    let frame_len = guest_frame(1).len() as u64 + GENEVE_OVERHEAD as u64;
     // Public bucket holds ~2 frames; no total shaping configured (total_bps=0 → edt_egress no-op).
     let public_burst = frame_len * 2 + 10;
     set_public_meter(&mut node, 0, frame_len, public_burst);
@@ -456,9 +461,10 @@ const INGRESS_TAP: u32 = 55;
 const INGRESS_GUEST_MAC: [u8; 6] = [0x52, 0x54, 0x00, 0x01, 0x02, 0x03];
 const INGRESS_GUEST_IP: [u8; 4] = [10, 1, 0, 10];
 const INGRESS_EXT_IP: [u8; 4] = [203, 0, 113, 42];
-const EDGE_UNDERLAY_INGRESS: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xcc];
 
-/// Build a TCP/IPv4 inner Ethernet frame from INGRESS_EXT_IP -> INGRESS_GUEST_IP.
+/// Build a POST-decap TCP/IPv4 inner Ethernet frame from INGRESS_EXT_IP -> INGRESS_GUEST_IP — the
+/// frame `host_uplink` receives, exactly as the kernel `collect_md` geneve device hands the ingress
+/// tcx program (see `sim.rs`'s module doc).
 fn ingress_inner_frame(sport: u16) -> Vec<u8> {
     let builder = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
         .ipv4(INGRESS_EXT_IP, INGRESS_GUEST_IP, 64)
@@ -466,20 +472,6 @@ fn ingress_inner_frame(sport: u16) -> Vec<u8> {
     let mut out = Vec::new();
     builder.write(&mut out, &[]).unwrap();
     out
-}
-
-/// Build an encapped fabric frame ready for `host_uplink` by running the real `edge_encap`.
-fn ingress_encapped(sport: u16) -> Vec<u8> {
-    let inner = ingress_inner_frame(sport);
-    let edge = SimNode::new();
-    let e = EncapParams {
-        gateway_mac: [0x01; 6],
-        uplink_mac: [0x02; 6],
-        src_underlay: EDGE_UNDERLAY_INGRESS,
-        nexthop_ipv6: [0u8; 16], // outer IPv6 dst content; irrelevant (decap only strips its length)
-        inner_proto: 4,          // IPPROTO_IPIP
-    };
-    edge.edge_encap(&inner, e)
 }
 
 /// Open an ingress ALLOW rule on INGRESS_TAP (needed so the firewall pass gate doesn't drop).
@@ -536,14 +528,17 @@ fn set_ingress_meter(node: &mut SimNode, ingress_bps: u64, ingress_burst: u64) {
 
 /// Ingress-lane policing: frames to the guest tap are dropped once the ingress bucket is exhausted.
 ///
-/// Fixture: ingress_burst sized for ~2 inner frames. Three encapped packets arrive at now=0:
+/// Fixture: ingress_burst sized for ~2 inner frames. Three POST-decap packets arrive at now=0:
 ///   - packets 1 and 2: within burst → Redirect(INGRESS_TAP);
 ///   - packet 3: bucket exhausted, no time elapsed → Drop.
 ///
-/// No METER entry configured on the SENDING side (egress), confirming the ingress lane is independent.
+/// No METER entry configured on the SENDING side (egress), confirming the ingress lane is
+/// independent. `ingress_pass` measures the POST-decap inner length (the kernel already stripped
+/// the outer Eth/IPv6/UDP/Geneve header before this program runs — see `sim.rs`'s module doc), same
+/// as it always has (this lane never wrote/measured outer bytes, so it needs no GENEVE_OVERHEAD
+/// compensation — see `process_uplink`'s ingress-lane policing step).
 #[test]
 fn ingress_lane_exhaust_drop() {
-    // Compute burst from one inner frame length (outer Eth+IPv6 stripped by decap_and_rewrite).
     let inner_len = ingress_inner_frame(1).len() as u64;
     // Burst fits ~2 frames: first two pass, third drops.
     let ingress_burst = inner_len * 2 + 10;
@@ -554,15 +549,9 @@ fn ingress_lane_exhaust_drop() {
     set_ingress_meter(&mut node, inner_len, ingress_burst); // bps=1 frame/s; burst=~2 frames
 
     // Build three different flows (distinct sports) so each hits the firewall as a new flow.
-    let pkt1 = ingress_encapped(40001);
-    let pkt2 = ingress_encapped(40002);
-    let pkt3 = ingress_encapped(40003);
-
-    // Verify: outer Eth+IPv6 header is present (sanity check on the fixture).
-    assert!(
-        pkt1.len() > ETH_LEN + IPV6_LEN,
-        "encapped frame must contain outer Eth+IPv6"
-    );
+    let pkt1 = ingress_inner_frame(40001);
+    let pkt2 = ingress_inner_frame(40002);
+    let pkt3 = ingress_inner_frame(40003);
 
     let out1 = node.host_uplink(
         &pkt1,

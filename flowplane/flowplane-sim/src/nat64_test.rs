@@ -402,12 +402,16 @@ fn non_nat64_dst_passes_through() {
 //
 // These drive the REAL `flowplane_core::nat64::{nat64_ingress_parse, nat64_ingress_write}` via the
 // full `SimNode::uplink_nat64_ingress` compose that the eBPF `nat64_ingress` mirrors. An external
-// IPv4 reply — encapped IP-in-IPv6 as `[Eth][outerIPv6][innerIPv4][L4]`, inner dst = the SNAT'd
+// IPv4 reply arrives POST-decap as `[InnerEth(14)][InnerIPv4(20)][L4]` (P2 Task 5: the kernel
+// `collect_md` geneve device already stripped the outer Eth/IPv6/UDP/Geneve header — the sim models
+// exactly that, not a byte-written wire frame; see `sim.rs`'s module doc), inner dst = the SNAT'd
 // NAT_IP, inner src = the external server EXT_V4, L4 dst port = the SNAT'd nat_port — whose reverse
 // conntrack entry carries `CT_F_NAT64` + `CT_REWRITE_DST` is reverse-NAT'd (guest IPv4 + orig port
-// restored) then expanded back to `[Eth][innerIPv6][L4]`: inner IPv6 dst = the guest's IPv6, src =
-// `64:ff9b::EXT_V4`, TCP/UDP checksum re-based to the IPv6 pseudo-header (ICMPv4 echo-reply →
-// ICMPv6 echo-reply). Coverage: TCP + UDP + ICMP. PINNED literals + valid-checksum assertions.
+// restored) then EXPANDED (a net +20 GROW, not the old -20 shrink — see
+// `process_uplink_nat64_ingress`'s doc comment) to `[Eth][innerIPv6][L4]`: inner IPv6 dst = the
+// guest's IPv6, src = `64:ff9b::EXT_V4`, TCP/UDP checksum re-based to the IPv6 pseudo-header (ICMPv4
+// echo-reply → ICMPv6 echo-reply). Coverage: TCP + UDP + ICMP. PINNED literals + valid-checksum
+// assertions.
 // ══════════════════════════════════════════════════════════════════════════════
 
 use flowplane_common::CtEntry;
@@ -415,8 +419,6 @@ use flowplane_common::CtEntry;
 const IPPROTO_ICMPV6: u8 = 58;
 const TAP_IFINDEX: u32 = 9;
 const GUEST_MAC: [u8; 6] = [0x22; 6];
-/// The external server's underlay (outer IPv6 src of the reply).
-const SERVER_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xdd];
 
 /// The reverse (peer-independent) conntrack entry the egress allocator stored: restores the guest
 /// IPv4 + orig port, and flags the flow as NAT64 for the ingress expansion.
@@ -439,22 +441,16 @@ fn nat64_src() -> [u8; 16] {
     ]
 }
 
-/// Wrap an inner `[IPv4][L4]` reply in the outer `[Eth][IPv6]` IP-in-IPv6 encap the uplink receives:
-/// outer src = server underlay, outer dst = this node's underlay, next-header IPIP(4).
-fn encap_reply(inner: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(ETH_LEN + IPV6_LEN + inner.len());
-    // Outer Ethernet: dst=our uplink MAC, src=gateway MAC, ethertype IPv6.
+/// Prepend a 14-byte inner Ethernet header to a bare `[IPv4][L4]` reply, producing the POST-decap
+/// frame `[InnerEth(14)][InnerIPv4][L4]` the ingress dispatch receives. The Ethernet header's
+/// content is never read by `ct_apply`/`nat64_ingress_parse` (both operate from `ETH_LEN` onward) —
+/// it only needs to occupy 14 bytes, exactly as the sender's own inner Ethernet would ride the
+/// tunnel unchanged.
+fn ingress_frame(inner: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(ETH_LEN + inner.len());
     out.extend_from_slice(&UPLINK_MAC);
     out.extend_from_slice(&GATEWAY_MAC);
-    out.extend_from_slice(&0x86DDu16.to_be_bytes());
-    // Outer IPv6: v6, plen = inner len, next-header IPIP, hops 64.
-    out.push(0x60);
-    out.extend_from_slice(&[0, 0, 0]);
-    out.extend_from_slice(&(inner.len() as u16).to_be_bytes());
-    out.push(4); // IPPROTO_IPIP
-    out.push(64);
-    out.extend_from_slice(&SERVER_UNDERLAY);
-    out.extend_from_slice(&SELF_UNDERLAY);
+    out.extend_from_slice(&flowplane_core::uplink::ETH_P_IP.to_be_bytes());
     out.extend_from_slice(inner);
     out
 }
@@ -554,7 +550,7 @@ fn nat64_ingress_tcp_expands_to_ipv6() {
     let nat_port = expected_nat_port(IPPROTO_TCP);
     let inner = inner_reply(IPPROTO_TCP, nat_port);
     let l4_len = inner.len() - 20; // 20 (TCP hdr) + 4 payload
-    let frame = encap_reply(&inner);
+    let frame = ingress_frame(&inner);
 
     let out = node.uplink_nat64_ingress(&frame, TAP_IFINDEX, GUEST_MAC, GUEST_IP6, &rev_ct(SPORT));
     assert_eq!(
@@ -562,11 +558,12 @@ fn nat64_ingress_tcp_expands_to_ipv6() {
         Action::Redirect(TAP_IFINDEX),
         "TCP NAT64 reply delivered to the guest tap"
     );
-    // Net -20 bytes (outer 54 + inner 20 → inner 40 headers): [Eth][IPv6][L4].
+    // Net +20 bytes (post-decap inner 34 -> inner 54: IPv4(20) header expands to IPv6(40)):
+    // [InnerEth(14)][InnerIPv4(20)][L4] -> [Eth(14)][IPv6(40)][L4].
     assert_eq!(
         out.pkt.len(),
-        frame.len() - 20,
-        "NAT64 ingress is net -20 bytes"
+        frame.len() + 20,
+        "NAT64 ingress is net +20 bytes (v4->v6 header expansion)"
     );
     assert_ingress_ipv6(&out.pkt, IPPROTO_TCP, l4_len);
     // TCP src port unchanged (= server DPORT); dst port restored to the guest sport by ct_apply.
@@ -595,11 +592,11 @@ fn nat64_ingress_udp_expands_to_ipv6() {
     let nat_port = expected_nat_port(IPPROTO_UDP);
     let inner = inner_reply(IPPROTO_UDP, nat_port);
     let l4_len = inner.len() - 20; // 8 (UDP hdr) + 4 payload
-    let frame = encap_reply(&inner);
+    let frame = ingress_frame(&inner);
 
     let out = node.uplink_nat64_ingress(&frame, TAP_IFINDEX, GUEST_MAC, GUEST_IP6, &rev_ct(SPORT));
     assert_eq!(out.action, Action::Redirect(TAP_IFINDEX));
-    assert_eq!(out.pkt.len(), frame.len() - 20);
+    assert_eq!(out.pkt.len(), frame.len() + 20);
     assert_ingress_ipv6(&out.pkt, IPPROTO_UDP, l4_len);
     assert_eq!(be16(&out.pkt, OUT_L4), DPORT, "UDP src port = server port");
     assert_eq!(
@@ -639,12 +636,12 @@ fn nat64_ingress_icmpv4_reply_becomes_icmpv6() {
         .unwrap();
     let inner = inner[ETH_LEN..].to_vec();
     let l4_len = inner.len() - 20; // 8 (echo hdr) + 4 payload
-    let frame = encap_reply(&inner);
+    let frame = ingress_frame(&inner);
 
     // Reverse CT for ICMP restores the guest's original id (SPORT) via ct_apply's ICMP id rewrite.
     let out = node.uplink_nat64_ingress(&frame, TAP_IFINDEX, GUEST_MAC, GUEST_IP6, &rev_ct(SPORT));
     assert_eq!(out.action, Action::Redirect(TAP_IFINDEX));
-    assert_eq!(out.pkt.len(), frame.len() - 20);
+    assert_eq!(out.pkt.len(), frame.len() + 20);
     assert_ingress_ipv6(&out.pkt, IPPROTO_ICMPV6, l4_len);
     // ICMPv4 echo reply (type 0) → ICMPv6 echo reply (type 129), code 0.
     assert_eq!(out.pkt[OUT_L4], 129, "ICMPv6 echo-reply type");
@@ -733,13 +730,23 @@ fn uplink_rx_dispatches_nat64_return_to_v6_expansion() {
         },
     );
 
+    // PORT_META[TAP_IFINDEX].guest_ipv6 is how `process_uplink_rx`'s CT_F_NAT64 branch sources the
+    // guest's overlay IPv6 AFTER resolving the delivery tap (mechanism #2) — see
+    // `flowplane_core::datapath::process_uplink_rx`'s doc comment on the fixed guest_ipv6 gap.
+    node.maps.port_meta.insert(
+        TAP_IFINDEX,
+        PortMeta {
+            guest_ipv6: GUEST_IP6,
+            ..Default::default()
+        },
+    );
+
     let inner = inner_reply(IPPROTO_TCP, nat_port);
     let l4_len = inner.len() - 20;
-    let frame = encap_reply(&inner);
+    let frame = ingress_frame(&inner);
 
-    // Drive the UNIFIED dispatch (NOT SimNode::uplink_nat64_ingress directly), with the guest's
-    // overlay IPv6 plumbed through UplinkIn.
-    let out = node.uplink_rx(&frame, VNI, &local(), GUEST_IP6);
+    // Drive the UNIFIED dispatch (NOT SimNode::uplink_nat64_ingress directly).
+    let out = node.uplink_rx(&frame, VNI, &local());
 
     assert_eq!(
         out.action,
@@ -747,11 +754,11 @@ fn uplink_rx_dispatches_nat64_return_to_v6_expansion() {
         "unified uplink_rx must v4→v6-expand the CT_F_NAT64 return and deliver it to the guest tap \
          (regression: dispatched to process_uplink → raw truncated IPv4)"
     );
-    // Net -20 bytes: the NAT64 v4→v6 expansion (outer 54 + inner 20 → inner 40 headers).
+    // Net +20 bytes: the NAT64 v4→v6 expansion (post-decap inner 34 -> inner 54 headers).
     assert_eq!(
         out.pkt.len(),
-        frame.len() - 20,
-        "NAT64 ingress is net -20 bytes (proves the v6-expansion path, not plain decap)"
+        frame.len() + 20,
+        "NAT64 ingress is net +20 bytes (proves the v6-expansion path, not plain delivery)"
     );
     // The delivered frame is IPv6 with dst = the guest's overlay IPv6 — NOT a bare IPv4 packet.
     assert_eq!(
@@ -763,7 +770,7 @@ fn uplink_rx_dispatches_nat64_return_to_v6_expansion() {
     assert_eq!(
         &out.pkt[ETH_LEN + 24..ETH_LEN + 40],
         &GUEST_IP6,
-        "IPv6 dst reconstructed to the guest's overlay IPv6 from UplinkIn.guest_ipv6"
+        "IPv6 dst reconstructed to the guest's overlay IPv6 from PORT_META[tap_ifindex].guest_ipv6"
     );
 }
 
@@ -773,7 +780,7 @@ fn uplink_rx_dispatches_nat64_return_to_v6_expansion() {
 fn nat64_ingress_ipv4_only_guest_passes() {
     let node = node();
     let nat_port = expected_nat_port(IPPROTO_TCP);
-    let frame = encap_reply(&inner_reply(IPPROTO_TCP, nat_port));
+    let frame = ingress_frame(&inner_reply(IPPROTO_TCP, nat_port));
     let out = node.uplink_nat64_ingress(&frame, TAP_IFINDEX, GUEST_MAC, [0u8; 16], &rev_ct(SPORT));
     assert_eq!(
         out.action,

@@ -15,14 +15,13 @@ use flowplane_common::{Local, RouteValue, UnderlayValue};
 
 use crate::compilednic::{apply, CompiledNic};
 use crate::fabric::{Fabric, Outcome, Prog};
-use crate::{EncapParams, MemMaps, SimNode};
+use crate::{MemMaps, SimNode};
 
 // ---- addressing ----
 const VNI: u32 = 100;
 const HOSTB_UL: [u8; 16] = ul(0xbb);
 const RELAY_UL: [u8; 16] = ul(0xcc);
 const EDGE_UL: [u8; 16] = ul(0xaa);
-const HOSTA_UL: [u8; 16] = ul(0xdd);
 
 const HOSTB_TAP: u32 = 42;
 const RELAY_TAP: u32 = 43;
@@ -73,22 +72,14 @@ fn eth_ipv6_tcp(src: [u8; 16], dst: [u8; 16], dport: u16) -> Vec<u8> {
     out
 }
 
-/// TEST-FIXTURE-ONLY: encapsulate a full inner Eth+IPv4 frame IP-in-IPv6 toward `dst_ul` from
-/// `src_ul` (the fabric wire format decap still expects — production encap emits a `TunnelEncap`
-/// decision instead, see `flowplane_core::encap`), standing in for "the packet already arrived
-/// encapped from an origin node" as an input fixture for the `Prog::UplinkRx` tests below.
-fn encap_to(inner: &[u8], src_ul: [u8; 16], dst_ul: [u8; 16]) -> Vec<u8> {
-    let node = SimNode::new();
-    node.edge_encap(
-        inner,
-        EncapParams {
-            gateway_mac: [1; 6],
-            uplink_mac: [2; 6],
-            src_underlay: src_ul,
-            nexthop_ipv6: dst_ul,
-            inner_proto: 4,
-        },
-    )
+/// Standing in for "the packet already arrived at this node's uplink_rx" as an input fixture for
+/// the `Prog::UplinkRx` tests below: under Geneve `collect_md` the kernel has already decapped by
+/// the time a tcx ingress program runs, so the fixture the ingress-side entrypoints consume IS the
+/// inner frame, unwrapped — no outer bytes to build (see `sim.rs`'s module doc). The VNI/remote
+/// that used to be encoded in an outer header now ride entirely on `Fabric`'s `Prog`/`TunnelEncap`
+/// plumbing instead.
+fn encap_to(inner: &[u8]) -> Vec<u8> {
+    inner.to_vec()
 }
 
 /// Parse a CompiledNIC firewall JSON snippet and apply it to `tap` on `maps`.
@@ -344,7 +335,7 @@ fn ew_lb_reforward_delivered() {
     fab.route(HOSTB_UL, "hostB");
 
     let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
-    let encapped = encap_to(&inner, HOSTA_UL, RELAY_UL);
+    let encapped = encap_to(&inner);
     let t = fab.deliver("relay", Prog::UplinkRx(VNI), &encapped);
     assert_eq!(
         t.outcome,
@@ -368,7 +359,7 @@ fn ew_lb_local_deliver_no_reforward() {
     fab.route(HOSTB_UL, "hostB");
 
     let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
-    let encapped = encap_to(&inner, HOSTA_UL, HOSTB_UL);
+    let encapped = encap_to(&inner);
     let t = fab.deliver("hostB", Prog::UplinkRx(VNI), &encapped);
     assert_eq!(
         t.outcome,
@@ -423,7 +414,7 @@ fn ew_lb_reforward_converges_no_loop() {
     fab.route(HOSTB_UL, "hostB");
 
     let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
-    let encapped = encap_to(&inner, HOSTA_UL, RELAY_UL);
+    let encapped = encap_to(&inner);
     let t = fab.deliver("relay", Prog::UplinkRx(VNI), &encapped);
     assert_ne!(
         t.outcome,
@@ -459,7 +450,7 @@ fn ew_lb_anycast_delivered_with_policy() {
     fab.route(HOSTB_UL, "hostB");
 
     let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
-    let encapped = encap_to(&inner, HOSTA_UL, HOSTB_UL);
+    let encapped = encap_to(&inner);
     let t = fab.deliver("hostB", Prog::UplinkRx(VNI), &encapped);
     assert_eq!(
         t.outcome,
@@ -505,7 +496,7 @@ fn ew_lb_anycast_dropped_without_policy() {
     fab.route(HOSTB_UL, "hostB");
 
     let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
-    let encapped = encap_to(&inner, HOSTA_UL, HOSTB_UL);
+    let encapped = encap_to(&inner);
     let t = fab.deliver("hostB", Prog::UplinkRx(VNI), &encapped);
     assert_eq!(
         t.outcome,

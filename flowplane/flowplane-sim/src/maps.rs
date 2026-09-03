@@ -1,6 +1,6 @@
 use flowplane_common::{
     CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
-    MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, RouteValue, UnderlayValue,
+    MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
 use std::collections::{HashMap, HashSet};
@@ -58,6 +58,10 @@ pub struct MemMaps {
     pub dhcp_meta: HashMap<u32, DhcpMeta>,
     /// Per-interface egress token-bucket state (`METER[ifindex]`).
     pub meter: HashMap<u32, MeterState>,
+    /// Per-port metadata (`PORT_META[tap_ifindex]`): vni + guest/gateway identity + the guest's
+    /// overlay IPv6. Read by [`Maps::port_meta_get`] — used on the CT_F_NAT64 ingress-return
+    /// dispatch to source the guest's overlay IPv6 once the delivery tap is resolved.
+    pub port_meta: HashMap<u32, PortMeta>,
 }
 
 /// True if the first `prefix` bits of `a` and `b` (big-endian byte order) are equal.
@@ -184,6 +188,9 @@ impl Maps for MemMaps {
     }
     fn meter_update(&mut self, ifindex: u32, state: MeterState) {
         self.meter.insert(ifindex, state);
+    }
+    fn port_meta_get(&self, ifindex: u32) -> Option<PortMeta> {
+        self.port_meta.get(&ifindex).copied()
     }
 }
 

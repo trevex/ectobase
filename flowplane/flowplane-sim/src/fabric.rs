@@ -1,8 +1,7 @@
-use flowplane_core::encap::{ETH_LEN, IPV6_LEN};
 use flowplane_core::pkt::Action;
 use std::collections::HashMap;
 
-use crate::sim::{wrap_fixture_outer_fresh, wrap_fixture_outer_reforward, SimNode};
+use crate::sim::SimNode;
 
 pub type NodeId = &'static str;
 
@@ -75,8 +74,10 @@ impl Fabric {
     /// production egress no longer writes an outer header (see `flowplane_core::encap`), so a
     /// `Redirect` with `tunnel: None` is always FINAL local delivery (decap already ran, or same-node
     /// `Deliver::Local`), while `tunnel: Some(t)` means the frame is still crossing the fabric toward
-    /// `t.remote`. This harness stands in for the kernel `collect_md` Geneve device: it builds the
-    /// synthetic wire bytes decap (not yet migrated — a later task's job) still expects.
+    /// `t.remote`. This harness stands in for the kernel `collect_md` Geneve device (P2 Task 5): it
+    /// carries the frame across hops EXACTLY as the kernel would deliver it to the next node's tcx
+    /// ingress program — no outer bytes are ever built or stripped. `t.vni` rides out-of-band (as the
+    /// tunnel key would), and `t.remote` is used only to look up which node owns that underlay.
     pub fn deliver(&mut self, ingress: NodeId, prog: Prog, pkt: &[u8]) -> Trace {
         let mut hops = Vec::new();
         let mut cur = ingress;
@@ -122,30 +123,16 @@ impl Fabric {
                         }
                         Some(t) => t,
                     };
-                    // Still crossing the fabric. A fresh egress hop (WanRx / GuestTx-style) leaves
-                    // `outpkt` as the pristine, byte-unchanged FULL inner frame (own Ethernet header
-                    // still present); a reforward hop (UplinkRx re-targeting a remote LB backend)
-                    // leaves the PREVIOUS hop's outer wrapper in place (no decap performed) — strip
-                    // it before re-wrapping, which also strips its Ethernet header (an earlier hop's
-                    // encap already consumed it).
-                    let is_reforward = matches!(cur_prog, Prog::UplinkRx(_));
-                    let inner: Vec<u8> = if is_reforward && outpkt.len() >= ETH_LEN + IPV6_LEN {
-                        outpkt[ETH_LEN + IPV6_LEN..].to_vec()
-                    } else {
-                        outpkt.clone()
-                    };
+                    // Still crossing the fabric. `outpkt` is ALREADY the frame to hand the next hop's
+                    // ingress program, byte-unchanged, in BOTH cases: a fresh egress hop (WanRx /
+                    // GuestTx-style Encap arm) never writes outer bytes (see `TunnelEncap`), and a
+                    // reforward hop (UplinkRx re-targeting a remote LB backend / neighbor-NAT owner)
+                    // doesn't touch bytes either — the frame it received (already the decapped inner,
+                    // per the post-decap ingress contract) is exactly what should cross to the next
+                    // node. No wrap, no strip: the VNI/remote ride entirely on `t`, not on wire bytes.
                     match self.routes.get(&t.remote).copied() {
                         Some(next) => {
-                            let src_underlay = self
-                                .nodes
-                                .get(cur)
-                                .map(|n| n.local.underlay_ipv6)
-                                .unwrap_or([0; 16]);
-                            buf = if is_reforward {
-                                wrap_fixture_outer_reforward(&inner, src_underlay, t.remote)
-                            } else {
-                                wrap_fixture_outer_fresh(&inner, src_underlay, t.remote)
-                            };
+                            buf = outpkt.clone();
                             cur = next;
                             cur_prog = Prog::UplinkRx(t.vni);
                         }

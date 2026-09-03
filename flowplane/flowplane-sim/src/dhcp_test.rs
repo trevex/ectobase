@@ -329,7 +329,7 @@ fn request_becomes_ack() {
 
 #[test]
 fn no_dhcp_config_falls_back_to_default_mtu_no_dns() {
-    // Without DHCP_CONFIG, the responder defaults MTU=1500 and omits DNS.
+    // Without DHCP_CONFIG, the responder defaults MTU = 1500 - GENEVE_OVERHEAD (1444) and omits DNS.
     let node = SimNode::new();
     let out = node.guest_dhcp4(
         &dhcp_request_frame(DHCP_MSG_DISCOVER),
@@ -337,10 +337,11 @@ fn no_dhcp_config_falls_back_to_default_mtu_no_dns() {
         INGRESS_IFINDEX,
     );
     assert_eq!(out.action, Action::Redirect(INGRESS_IFINDEX));
+    let default_mtu = 1500u16 - flowplane_common::GENEVE_OVERHEAD as u16;
     assert_eq!(
         find_option(&out.pkt, 26).as_deref(),
-        Some(&1500u16.to_be_bytes()[..]),
-        "default MTU = 1500"
+        Some(&default_mtu.to_be_bytes()[..]),
+        "default MTU = 1500 - GENEVE_OVERHEAD"
     );
     assert_eq!(
         find_option(&out.pkt, 6),

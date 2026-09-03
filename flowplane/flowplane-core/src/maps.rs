@@ -1,6 +1,6 @@
 use flowplane_common::{
     CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
-    MaglevKey, MeterState, NatKey, NatValue, RouteValue, UnderlayValue,
+    MaglevKey, MeterState, NatKey, NatValue, PortMeta, RouteValue, UnderlayValue,
 };
 
 /// Typed access to the datapath maps the core needs. eBPF impl wraps the `#[map]` statics
@@ -66,4 +66,10 @@ pub trait Maps {
     fn meter_get(&self, ifindex: u32) -> Option<MeterState>;
     /// Store the refilled per-interface token-bucket state back (`METER[ifindex]`).
     fn meter_update(&mut self, ifindex: u32, state: MeterState);
+    /// Per-port metadata (`PORT_META[tap_ifindex]`): vni + guest/gateway identity + the guest's
+    /// overlay IPv6. Used by the NAT64-ingress dispatch ([`crate::datapath::process_uplink_rx`]) to
+    /// source the guest's overlay IPv6 for the v4→v6 expansion AFTER the delivery tap has been
+    /// resolved (mechanism #2) — the caller cannot know the tap up front, so this can't be threaded
+    /// in as a plain input; it is read here, keyed by the just-resolved `tap_ifindex`. `None` if unset.
+    fn port_meta_get(&self, ifindex: u32) -> Option<PortMeta>;
 }

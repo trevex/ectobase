@@ -170,11 +170,12 @@ func TestPodOverlayPing(t *testing.T) {
 	})
 
 	// 7. Jumbo overlay. Two checks: (a) the overlay iface got a jumbo MTU — flowplane derives it
-	//    from the 9000 underlay uplinks (8960 = 9000 - 40 encap) and the CNI provisions it, so a
-	//    value >1500 proves jumbo was plumbed end-to-end; (b) an 8000-byte payload actually crosses
-	//    the overlay. At an 8960 iface the ~8028-byte packet is sent unfragmented and encaps to
-	//    ~8068, which fits the 9000 underlay — if any underlay hop weren't jumbo the encapped outer
-	//    IPv6 frame would be dropped (routers don't fragment IPv6). Routes converged in step 6.
+	//    from the 9000 underlay uplinks (8944 = 9000 - 56 Geneve encap) and the CNI provisions it,
+	//    so a value >1500 proves jumbo was plumbed end-to-end; (b) an 8000-byte payload actually
+	//    crosses the overlay. At an 8944 iface the ~8028-byte packet is sent unfragmented and encaps
+	//    to ~8084, which fits the 9000 underlay — if any underlay hop weren't jumbo the encapped
+	//    outer IPv6/UDP/Geneve frame would be dropped (routers don't fragment IPv6). Routes
+	//    converged in step 6.
 	//    (busybox ping has no -M/DF; the MTU assertion is the deterministic jumbo-provisioning proof.)
 	for _, ep := range []endpoint{epA, epC} {
 		mtu, err := podOverlayMTU(ctx, cfg, ep.node.Cluster, podByEP[ep.nic])

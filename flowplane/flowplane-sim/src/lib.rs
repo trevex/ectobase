@@ -7,7 +7,7 @@ pub mod sim;
 pub use fabric::{Fabric, Outcome, Prog, Trace};
 pub use maps::MemMaps;
 pub use pkt::VecPkt;
-pub use sim::{EncapParams, SimNode, SimOut};
+pub use sim::{SimNode, SimOut};
 
 #[cfg(test)]
 mod arp_nd_test;

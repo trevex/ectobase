@@ -1,29 +1,30 @@
 //! Full North-South walking-skeleton scenario, end to end through the REAL datapath core:
-//! external packet -> edge encap -> host uplink decap + ingress firewall + conntrack -> guest.
-//! Every processing step is a real `flowplane_core` fn (via `SimNode`); nothing is reimplemented here.
+//! external packet -> (P2 Task 5: kernel decap, modeled as already-happened) -> host uplink ingress
+//! firewall + conntrack -> guest. Every processing step is a real `flowplane_core` fn (via
+//! `SimNode`); nothing is reimplemented here.
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
     FwMeta, FwRule, Local, UnderlayValue, FW_ACTION_ACCEPT, FW_DIR_INGRESS, UNDERLAY_LOCAL_DELIVER,
 };
 use flowplane_core::conntrack::ct_key;
-use flowplane_core::encap::{ETH_LEN, IPV6_LEN};
+use flowplane_core::encap::ETH_LEN;
 use flowplane_core::maps::Maps;
 use flowplane_core::pkt::Action;
 use flowplane_core::uplink::GW_MAC;
 
-use crate::{EncapParams, SimNode, VecPkt};
+use crate::{SimNode, VecPkt};
 
 const VNI: u32 = 100;
 const TAP: u32 = 42;
 const GUEST_MAC: [u8; 6] = [0x66, 0x66, 0x66, 0x66, 0x66, 0x00];
 const GUEST_IP: [u8; 4] = [10, 0, 0, 10];
 const EXT_IP: [u8; 4] = [203, 0, 113, 9];
-const EDGE_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xaa];
 const HOST_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xbb];
 
-/// A full guest Ethernet frame `[Eth][IPv4][TCP]` (the tunnel payload before the inner Eth is
-/// consumed on encap), from `EXT_IP` -> `GUEST_IP` on `dport`.
+/// A full guest Ethernet frame `[InnerEth(14)][IPv4][TCP]` — the POST-decap frame the kernel
+/// `collect_md` geneve device hands the ingress tcx program (see `sim.rs`'s module doc), from
+/// `EXT_IP` -> `GUEST_IP` on `dport`.
 fn inner_eth_frame(dport: u16) -> Vec<u8> {
     let builder = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
         .ipv4(EXT_IP, GUEST_IP, 64)
@@ -31,16 +32,6 @@ fn inner_eth_frame(dport: u16) -> Vec<u8> {
     let mut out = Vec::new();
     builder.write(&mut out, &[]).unwrap();
     out
-}
-
-fn encap_params() -> EncapParams {
-    EncapParams {
-        gateway_mac: [1; 6],
-        uplink_mac: [2; 6],
-        src_underlay: EDGE_UNDERLAY,
-        nexthop_ipv6: HOST_UNDERLAY,
-        inner_proto: 4, // IPPROTO_IPIP
-    }
 }
 
 /// Install an ingress ALLOW rule on `tap` for TCP -> GUEST_IP:port.
@@ -75,18 +66,15 @@ fn allow_tcp(node: &mut SimNode, port: u16) {
 
 #[test]
 fn external_to_guest_encap_decap_fw_allow_ct() {
+    // POST-decap frame as it arrives at the host's uplink_rx (the kernel already decapped — see
+    // the module doc); `host_uplink` synthesizes the ROUTES/UNDERLAY self-route toward HOST_UNDERLAY.
     let inner = inner_eth_frame(443);
 
-    // Edge encapsulates toward the host underlay.
-    let edge = SimNode::new();
-    let encapped = edge.edge_encap(&inner, encap_params());
-    // Outer IPv6 dst (at ETH_LEN + 24) is the host underlay.
-    assert_eq!(&encapped[ETH_LEN + 24..ETH_LEN + 40], &HOST_UNDERLAY);
-
-    // Host runs the real uplink base path: ingress FW allow (new flow) + CT create + decap+rewrite.
+    // Host runs the real uplink base path: ingress FW allow (new flow) + CT create + inner-Eth
+    // rewrite (no resize — the frame arrives already decapped).
     let mut host = SimNode::new();
     allow_tcp(&mut host, 443);
-    let out = host.host_uplink(&encapped, VNI, GUEST_IP, TAP, GUEST_MAC);
+    let out = host.host_uplink(&inner, VNI, GUEST_IP, TAP, GUEST_MAC);
 
     assert_eq!(
         out.action,
@@ -99,10 +87,10 @@ fn external_to_guest_encap_decap_fw_allow_ct() {
     assert_eq!(
         out.pkt.len(),
         inner.len(),
-        "outer Eth+IPv6 stripped, inner Eth restored"
+        "inner Ethernet rewritten in place; the frame does not resize (no outer header to strip)"
     );
     // A new flow seeds the forward key (and a reverse key). Assert the forward entry exists.
-    let fwd_key = ct_key(&VecPkt::from_bytes(&encapped), ETH_LEN + IPV6_LEN, VNI).unwrap();
+    let fwd_key = ct_key(&VecPkt::from_bytes(&inner), ETH_LEN, VNI).unwrap();
     assert!(
         host.maps.conntrack_get(&fwd_key).is_some(),
         "forward conntrack entry created"
@@ -113,12 +101,10 @@ fn external_to_guest_encap_decap_fw_allow_ct() {
 fn external_to_guest_firewall_drop_on_unopened_port() {
     // Allow only :443, but the flow targets :80 -> ingress firewall drops the new flow.
     let inner = inner_eth_frame(80);
-    let edge = SimNode::new();
-    let encapped = edge.edge_encap(&inner, encap_params());
 
     let mut host = SimNode::new();
     allow_tcp(&mut host, 443);
-    let out = host.host_uplink(&encapped, VNI, GUEST_IP, TAP, GUEST_MAC);
+    let out = host.host_uplink(&inner, VNI, GUEST_IP, TAP, GUEST_MAC);
 
     assert_eq!(
         out.action,
@@ -152,8 +138,8 @@ fn edge_local() -> Local {
     }
 }
 
-/// A `[Eth][IPv4][TCP]` inner frame `EXT_IP -> UNROUTABLE_DST`, encapped for delivery. No ROUTES
-/// entry is ever programmed for `UNROUTABLE_DST` in these tests.
+/// A POST-decap `[InnerEth][IPv4][TCP]` frame `EXT_IP -> UNROUTABLE_DST`. No ROUTES entry is ever
+/// programmed for `UNROUTABLE_DST` in these tests.
 fn unroutable_inner_frame() -> Vec<u8> {
     let builder = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
         .ipv4(EXT_IP, UNROUTABLE_DST, 64)
@@ -163,15 +149,11 @@ fn unroutable_inner_frame() -> Vec<u8> {
     out
 }
 
-fn unroutable_encapped() -> Vec<u8> {
-    SimNode::new().edge_encap(&unroutable_inner_frame(), encap_params())
-}
-
 /// Sentinel hit: this node is registered as the WAN edge, so a `ROUTES` miss decaps-only + rewrites
 /// the inner Ethernet for local-kernel hand-off (`Action::Pass`) instead of guest delivery.
 #[test]
 fn wan_edge_sentinel_decaps_and_passes_to_kernel_on_routes_miss() {
-    let encapped = unroutable_encapped();
+    let encapped = unroutable_inner_frame();
     let mut node = SimNode::with_local(edge_local());
     node.maps.underlay.insert(
         HOST_UNDERLAY, // == edge_local().underlay_ipv6
@@ -204,7 +186,7 @@ fn wan_edge_sentinel_decaps_and_passes_to_kernel_on_routes_miss() {
     assert_eq!(
         out.pkt.len(),
         unroutable_inner_frame().len(),
-        "outer Eth+IPv6 stripped, inner Eth restored (same shape as guest delivery)"
+        "inner Eth rewritten in place, no resize (same shape as guest delivery)"
     );
 }
 
@@ -213,7 +195,7 @@ fn wan_edge_sentinel_decaps_and_passes_to_kernel_on_routes_miss() {
 /// into this node's own kernel.
 #[test]
 fn genuine_routes_miss_drops_not_passes() {
-    let encapped = unroutable_encapped();
+    let encapped = unroutable_inner_frame();
     let mut node = SimNode::new(); // no UNDERLAY[Local.underlay_ipv6] entry at all
 
     let out = node.uplink(&encapped, VNI, &edge_local());
@@ -230,7 +212,7 @@ fn genuine_routes_miss_drops_not_passes() {
 /// `UNDERLAY_LOCAL_DELIVER` tap_ifindex value means edge role.
 #[test]
 fn routes_miss_with_non_sentinel_local_underlay_entry_still_drops() {
-    let encapped = unroutable_encapped();
+    let encapped = unroutable_inner_frame();
     let mut node = SimNode::with_local(edge_local());
     node.maps.underlay.insert(
         HOST_UNDERLAY,

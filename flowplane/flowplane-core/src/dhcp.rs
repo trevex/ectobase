@@ -263,9 +263,13 @@ pub fn write<P: Pkt, M: Maps>(
         &[OPT_SUBNET_MASK, 4, 0xff, 0xff, 0xff, 0xff],
     );
 
-    // MTU option (from DHCP_CONFIG; default 1500). A zero MTU pads the slot.
+    // MTU option (from DHCP_CONFIG; default = the standard 1500 link MTU minus the Geneve overlay
+    // overhead the kernel adds on transmit — see `flowplane_common::GENEVE_OVERHEAD`). A zero MTU
+    // pads the slot.
     let cfg = maps.dhcp_config();
-    let mtu = cfg.map(|c| c.mtu).unwrap_or(1500);
+    let mtu = cfg
+        .map(|c| c.mtu)
+        .unwrap_or((1500 - flowplane_common::GENEVE_OVERHEAD) as u16);
     if mtu != 0 {
         let m = mtu.to_be_bytes();
         pkt.write_array::<4>(F_OPTS + O_MTU, &[OPT_MTU, 2, m[0], m[1]]);

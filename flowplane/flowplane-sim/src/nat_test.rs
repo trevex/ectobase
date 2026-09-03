@@ -19,10 +19,10 @@ use flowplane_common::{
     RouteValue, UnderlayValue, CT_F_SRC_NAT, CT_REWRITE_DST, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
     FW_DIR_INGRESS,
 };
-use flowplane_core::encap::{TunnelEncap, ETH_LEN, IPV6_LEN};
+use flowplane_core::encap::{TunnelEncap, ETH_LEN};
 use flowplane_core::pkt::Action;
 
-use crate::{EncapParams, MemMaps, SimNode};
+use crate::{MemMaps, SimNode};
 
 // ─── fixed test topology ──────────────────────────────────────────────────────
 
@@ -581,18 +581,7 @@ const DNAT_ORIG_SPORT: u16 = 40000; // restored inner dst port after reverse-DNA
 const DNAT_NAT_PORT: u16 = 20018; // allocated NAT port (inner dst port in the returning packet)
 const DNAT_EXT_PORT: u16 = 443; // external peer's port (inner src port, unchanged)
 
-const EDGE_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xaa];
 const HOST_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xbb];
-
-fn dnat_encap_params() -> EncapParams {
-    EncapParams {
-        gateway_mac: [1; 6],
-        uplink_mac: [2; 6],
-        src_underlay: EDGE_UNDERLAY,
-        nexthop_ipv6: HOST_UNDERLAY,
-        inner_proto: 4,
-    }
-}
 
 fn dnat_reverse_ct_entry() -> CtEntry {
     CtEntry {
@@ -654,25 +643,29 @@ fn dnat_host_node(proto: u8) -> SimNode {
     node
 }
 
-/// Build an encapped returning TCP frame: `[OuterEth][OuterIPv6][inner IPv4 TCP]`
-/// where inner is `EXT_IP:EXT_PORT → NAT_IP:NAT_PORT` (as the frame arrives from the peer).
+/// Build a POST-decap returning TCP frame `[InnerEth(14)][IPv4][TCP]` where inner is
+/// `EXT_IP:EXT_PORT → NAT_IP:NAT_PORT` (as the frame arrives from the peer, after the kernel's
+/// `collect_md` geneve device already stripped the outer Eth/IPv6/UDP/Geneve header — see the
+/// `sim.rs` module doc). The function name is kept for continuity with its callers; it no longer
+/// builds an outer wrapper.
 fn dnat_tcp_encapped() -> Vec<u8> {
     let inner = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
         .ipv4(DNAT_EXT_IP, DNAT_NAT_IP, 64)
         .tcp(DNAT_EXT_PORT, DNAT_NAT_PORT, 0, 1024);
     let mut frame = Vec::new();
     inner.write(&mut frame, &[0x01, 0x02, 0x03, 0x04]).unwrap();
-    SimNode::new().edge_encap(&frame, dnat_encap_params())
+    frame
 }
 
-/// Build an encapped returning UDP frame with a non-zero payload (so UDP csum is non-zero).
+/// Build a POST-decap returning UDP frame with a non-zero payload (so UDP csum is non-zero). See
+/// [`dnat_tcp_encapped`].
 fn dnat_udp_encapped() -> Vec<u8> {
     let inner = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
         .ipv4(DNAT_EXT_IP, DNAT_NAT_IP, 64)
         .udp(DNAT_EXT_PORT, DNAT_NAT_PORT);
     let mut frame = Vec::new();
     inner.write(&mut frame, &[0xaa, 0xbb, 0xcc, 0xdd]).unwrap();
-    SimNode::new().edge_encap(&frame, dnat_encap_params())
+    frame
 }
 
 /// (c) TCP DNAT return: a reply arriving `EXT_IP:EXT_PORT → NAT_IP:NAT_PORT` is reverse-DNAT'd
@@ -693,12 +686,12 @@ fn dnat_return_tcp_rewrites_dst_ip_and_port() {
         "reverse-DNAT'd return must be delivered to the guest tap (Redirect({DNAT_TAP}))"
     );
 
-    // After decap, outer IPv6 (40B) is stripped, leaving [InnerEth(14)][IPv4 ...].
+    // Post-decap frame `[InnerEth(14)][IPv4 ...]`; the reverse-DNAT rewrite is in place, no resize.
     // Inner IPv4 header starts at ETH_LEN = 14.
     let pkt = &out.pkt;
     assert!(
-        pkt.len() >= ETH_LEN + IPV6_LEN,
-        "output too short after decap"
+        pkt.len() >= ETH_LEN + 20 + 20,
+        "output too short to contain inner IPv4+TCP"
     );
 
     // dst IP at inner_ip_off + 16 == ETH_LEN + 16 = 30.
@@ -864,8 +857,8 @@ fn uplink_rx_dispatches_nat_return_past_deny_by_default_firewall() {
         gateway_mac: [1; 6],
         underlay_ipv6: HOST_UNDERLAY,
     };
-    // Plain (non-NAT64) NAT return: guest_ipv6 is only read on the CT_F_NAT64 branch.
-    let out = node.uplink_rx(&encapped, DNAT_VNI, &local, [0; 16]);
+    // Plain (non-NAT64) NAT return.
+    let out = node.uplink_rx(&encapped, DNAT_VNI, &local);
 
     assert_eq!(
         out.action,
@@ -958,7 +951,6 @@ const NEIGH_NAT_IP: [u8; 4] = [198, 51, 100, 77];
 const NEIGH_OWNER_UL: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xee];
 const NEIGH_PORT_MIN: u16 = 30000;
 const NEIGH_PORT_MAX: u16 = 30100;
-const NEIGH_EDGE_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xaa];
 const NEIGH_SELF_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xbb];
 
 fn neigh_local() -> Local {
@@ -982,24 +974,15 @@ fn neigh_nat_entry() -> NeighborNatEntry {
     }
 }
 
-/// A returning TCP frame from an external peer to `NEIGH_NAT_IP:dport`, encapped as it arrives at a
-/// node that does NOT own this nat_ip (no CT_REWRITE_DST reverse entry, no local NAT_IPS marker).
+/// A returning POST-decap TCP frame from an external peer to `NEIGH_NAT_IP:dport`, as it arrives at
+/// a node that does NOT own this nat_ip (no CT_REWRITE_DST reverse entry, no local NAT_IPS marker).
 fn neigh_encapped(dport: u16) -> Vec<u8> {
     let inner = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
         .ipv4(EXT_IP, NEIGH_NAT_IP, 64)
         .tcp(443, dport, 0, 1024);
     let mut frame = Vec::new();
     inner.write(&mut frame, &[]).unwrap();
-    SimNode::new().edge_encap(
-        &frame,
-        EncapParams {
-            gateway_mac: [1; 6],
-            uplink_mac: [2; 6],
-            src_underlay: NEIGH_EDGE_UNDERLAY,
-            nexthop_ipv6: NEIGH_SELF_UNDERLAY,
-            inner_proto: 4,
-        },
-    )
+    frame
 }
 
 /// Mechanism #3 (uplink-internal neighbor-NAT relay, `ingress.rs`'s "Neighbor NAT" block 245-261):
@@ -1014,7 +997,7 @@ fn uplink_relays_to_neighbor_nat_owner_when_not_locally_claimed() {
     let mut node = SimNode::with_local(neigh_local());
     node.maps.neighbor_nat.push(neigh_nat_entry());
 
-    let out = node.uplink_rx(&encapped, NEIGH_VNI, &neigh_local(), [0; 16]);
+    let out = node.uplink_rx(&encapped, NEIGH_VNI, &neigh_local());
 
     assert_eq!(
         out.action,

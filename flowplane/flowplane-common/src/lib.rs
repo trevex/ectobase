@@ -74,6 +74,15 @@ pub struct UnderlayValue {
 /// already means an LB-anycast VNF, so this needs a distinct value.
 pub const UNDERLAY_LOCAL_DELIVER: u32 = u32::MAX;
 
+/// Geneve overlay wire overhead the kernel's `collect_md` device adds on top of the inner frame the
+/// eBPF programs see: outer IPv6 (40) + outer UDP (8) + Geneve header (8) = 56. The outer Ethernet
+/// (14) is link framing on the fabric NIC, not part of the L3/L4 overhead a guest's own MTU needs to
+/// account for. Since P2 stopped writing outer bytes in the datapath (the kernel builds them from a
+/// `TunnelEncap` decision — see `flowplane_core::encap`), `pkt.len()` on the egress Encap arm and the
+/// ingress uplink path is the INNER length only; anywhere that needs to reflect real wire bytes
+/// (rate metering, the advertised guest MTU) adds this constant back in.
+pub const GENEVE_OVERHEAD: usize = 56;
+
 /// Per-port metadata, keyed by the guest tap's host-side ifindex.
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]

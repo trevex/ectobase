@@ -130,9 +130,12 @@ pub fn tc_nat64_egress(
 // and wired up here for P2 Task 4b, called from a hand-inlined `ingress.rs::try_nat64_ingress` peek
 // ahead of `process_uplink_rx`. It was REVERTED: `try_nat64_ingress` + this fn's combined BPF stack
 // frames pushed `uplink_rx`'s combined-call-stack over the verifier's 512B limit ("combined stack
-// size of 2 calls is 608. Too large" — see the P2 Task 4b report). `uplink_rx` now delegates the
+// size of 2 calls is 608. Too large" — see the P2 Task 4b report). `uplink_rx` still delegates the
 // whole CT_F_NAT64 ingress-return case to `flowplane_core::datapath::process_uplink_nat64_ingress`
-// (reached internally by `process_uplink_rx`), whose `pkt.shrink_head(20)` still models the OLD
-// pre-decap 74->54 shrink (frozen since 4a) — a disclosed, Task-5-owned staleness, same category as
-// `flowplane_core::uplink::decap_and_rewrite`'s `shrink_head(IPV6_LEN)`. Fixing that AND restoring a
-// verifier-safe (out-of-line, low-stack) hand-inlined fast path here are both follow-up work.
+// (reached internally by `process_uplink_rx`, over the real `TcPkt`, which supports resize via
+// `adjust_room` — see `coreimpl.rs`). P2 Task 5 fixed the two disclosed staleness items this comment
+// used to describe: `process_uplink_nat64_ingress`'s resize is now the correct `grow_head(20)` at the
+// post-decap `ETH_LEN` offset (not the stale pre-decap `shrink_head(20)` at `ETH_LEN+IPV6_LEN`), and
+// `flowplane_core::uplink::decap_and_rewrite` no longer strips a (nonexistent) outer header either.
+// Restoring a verifier-safe (out-of-line, low-stack) hand-inlined fast path here remains follow-up
+// work if the shared-orchestrator path's stack cost ever becomes a problem again.

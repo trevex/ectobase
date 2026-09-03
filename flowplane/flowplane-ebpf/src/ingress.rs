@@ -79,25 +79,14 @@ pub fn try_uplink_rx(ctx: &TcContext) -> Result<i32, DpErr> {
         return Ok(TC_ACT_OK);
     }
     let local: &Local = LOCAL.get(0).ok_or(DpErr::NoRoute)?;
+    // The CT_F_NAT64 ingress-return guest_ipv6 gap (P2 Task 4b) is fixed (P2 Task 5): `UplinkIn` no
+    // longer carries a `guest_ipv6` placeholder at all — `process_uplink_rx` reads
+    // `PORT_META[tap_ifindex].guest_ipv6` itself, AFTER resolving the delivery tap internally, which
+    // is the only point that value is actually knowable.
     let in_ = UplinkIn {
         vni,
         local,
         now: crate::conntrack::now(),
-        // `UplinkIn.guest_ipv6` would need the delivery tap resolved BEFORE this struct is built,
-        // but that resolution happens INSIDE process_uplink_rx (mechanism #2, from the reverse CT
-        // entry's restored guest IP) — so this placeholder can never be the real guest_ipv6.
-        // KNOWN GAP (disclosed in the P2 Task 4b report, not a 4b regression — inherited from what
-        // `UplinkIn`'s 4a contract can express): a real CT_F_NAT64 ingress-return flow's
-        // `nat64_ingress_parse` rejects an all-zero guest_ipv6 and falls through to `Action::Pass`
-        // instead of v6-expanding the reply. A hand-inlined peek-and-dispatch (mirroring
-        // `process_uplink_rx`'s own CT_F_NAT64 branch, but resolving `PORT_META.guest_ipv6` first)
-        // was prototyped here and measurably WORKED, but its own + `nat64::nat64_ingress`'s BPF
-        // stack frames combined with this function's already-large frame to exceed the verifier's
-        // 512B combined-call-stack limit ("combined stack size of 2 calls is 608. Too large") — see
-        // the verifier log in the P2 Task 4b report. Reverted rather than risk the checkpoint;
-        // fixing `UplinkIn`'s guest_ipv6 plumbing (or restructuring `process_uplink_nat64_ingress`
-        // to be its own out-of-line subprogram) is follow-up work, likely Task 5's.
-        guest_ipv6: [0u8; 16],
     };
     let mut pkt = TcPkt { ctx };
     let mut maps = GlobalMaps;

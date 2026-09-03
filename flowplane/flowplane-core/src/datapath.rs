@@ -6,14 +6,14 @@
 
 use flowplane_common::{
     Local, PortMeta, CT_F_NAT64, CT_REWRITE_DST, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS,
-    UNDERLAY_LOCAL_DELIVER,
+    GENEVE_OVERHEAD, UNDERLAY_LOCAL_DELIVER,
 };
 
 use crate::arp_nd::{arp_reply, nd_reply};
 use crate::conntrack::{ct_apply, ct_create_default, ct_key, ct_refresh};
 use crate::dhcp;
 use crate::egress::{deliver, egress_fw_ct6, route4, route_decision6, Deliver, EgressFwCt6};
-use crate::encap::{reforward, tunnel_encap, TunnelEncap, ETH_LEN, IPV6_LEN};
+use crate::encap::{reforward, tunnel_encap, TunnelEncap, ETH_LEN};
 use crate::firewall::fw_eval_dir;
 use crate::lb::{lb_select_forward, lb_select_forward_v6};
 use crate::maps::Maps;
@@ -33,14 +33,14 @@ use crate::uplink::{decap_and_rewrite, edge_local_deliver, ETH_P_IP, GW_MAC};
 /// reconstruction (see [`resolve_uplink_target`]) has to work with. `local` supplies the outer
 /// MACs/ifindex for an LB remote `reforward` / neighbor-NAT relay / WAN-edge local-deliver rewrite;
 /// `now` is the monotonic clock (ns) the ingress-lane meter stamps `last_ns` from (models
-/// `bpf_ktime_get_ns()`).
+/// `bpf_ktime_get_ns()`). There is no `guest_ipv6` field here: the CT_F_NAT64 reverse-return path
+/// (see [`process_uplink_rx`]) needs the delivery tap resolved FIRST (it is per-tap `PORT_META`
+/// metadata), which only happens inside the dispatch itself — so it is read from `Maps` there,
+/// not threaded in as an input the caller can't yet know.
 pub struct UplinkIn<'a> {
     pub vni: u32,
     pub local: &'a Local,
     pub now: u64,
-    /// The guest's own overlay IPv6 (its `PortMeta.guest_ipv6`); used ONLY on the `CT_F_NAT64`
-    /// reverse-return path to reconstruct the reply's inner IPv6 dst ([`process_uplink_nat64_ingress`]).
-    pub guest_ipv6: [u8; 16],
 }
 
 /// The outcome of reconstructing WHERE to deliver a decapped inner v4 frame from `(vni, inner dst)`
@@ -161,6 +161,20 @@ fn uplink_track_flow<P: Pkt, M: Maps>(pkt: &P, maps: &mut M, inner_off: usize, v
     }
 }
 
+/// Source the guest's overlay IPv6 for the CT_F_NAT64 ingress-return dispatch (mirrors
+/// `process_uplink_rx`'s CT_F_NAT64 branch — see its call site). `[0; 16]` if `PORT_META` has no
+/// entry for `tap_ifindex` (IPv4-only guest; `nat64_ingress_parse` rejects it, falling through to
+/// `Action::Pass`). `#[inline(never)]`: same BPF-stack-relief reasoning as
+/// [`uplink_ingress_firewall_drop`]/[`uplink_track_flow`] — inlining the ~70-byte `PortMeta` copy
+/// directly into `process_uplink_rx`'s already-large dispatch pushed the verifier's combined-call-
+/// stack over budget.
+#[inline(never)]
+fn resolve_nat64_guest_ipv6<M: Maps>(maps: &M, tap_ifindex: u32) -> [u8; 16] {
+    maps.port_meta_get(tap_ifindex)
+        .map(|m| m.guest_ipv6)
+        .unwrap_or([0; 16])
+}
+
 /// Returns the final delivery `Action` (+ tunnel decision on a relay/reforward arm), having mutated
 /// `pkt` in place.
 ///
@@ -171,7 +185,11 @@ fn uplink_track_flow<P: Pkt, M: Maps>(pkt: &P, maps: &mut M, inner_off: usize, v
 /// stage, not 3) — `#[inline(never)]` here was tried first and passed `uplink_rx` alone, but the
 /// extra chain depth pushed `main -> process_uplink -> uplink_ingress_firewall_drop` over budget.
 pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn) -> UplinkOut {
-    let inner_off = ETH_LEN + IPV6_LEN;
+    // Post-decap (P2 Task 5): the kernel `collect_md` geneve device already stripped the outer
+    // Eth/IPv6/UDP/Geneve header before this program runs — `pkt` IS the inner frame, so the inner
+    // 5-tuple/route lookups read at `ETH_LEN`, not `ETH_LEN + IPV6_LEN` (that old offset modeled the
+    // inner sitting BEHIND a still-present outer header, which no longer exists on this path).
+    let inner_off = ETH_LEN;
 
     // 1. LB dispatch (mirror ingress.rs:135-157).
     let lb_ul = lb_select_forward(&*pkt, &*maps, inner_off, in_.vni);
@@ -315,10 +333,11 @@ pub struct GuestTxOut {
 ///      `egress.rs`. No METER entry => unlimited (pass). `now` comes from `in_.now`;
 ///   7. deliver decision (`deliver`): Local tap (inner-Eth rewrite) | Encap (`TunnelEncap` decision,
 ///      no byte write) | Pass. In the Encap arm ONLY, EDT egress shaping (`edt_egress`, records
-///      `edt_tstamp`, no drop, step 6b) is called using `pkt.len()` — mirrors `tc.rs` `edt_stamp`.
-///      NOTE: `pkt.len()` here is the INNER frame length (no outer bytes are written anymore); it
-///      under-counts the eventual Geneve wire overhead — a follow-up task accounts for it. Local/Pass
-///      leave `edt_tstamp` as `None` (EDT shaping applies only on the encap/uplink egress path).
+///      `edt_tstamp`, no drop, step 6b) is called using `pkt.len() + GENEVE_OVERHEAD` — mirrors
+///      `tc.rs` `edt_stamp`. `pkt.len()` alone is the INNER frame length (no outer bytes are written
+///      anymore — see `TunnelEncap`); `GENEVE_OVERHEAD` adds back the kernel's outer
+///      Eth/IPv6/UDP/Geneve bytes so shaping reflects real wire bytes. Local/Pass leave `edt_tstamp`
+///      as `None` (EDT shaping applies only on the encap/uplink egress path).
 ///
 /// Returns the delivery `Action` + the EDT timestamp, having mutated `pkt` in place.
 ///
@@ -407,8 +426,18 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
     //       Same-node LOCAL delivery is unshaped (eBPF `tc_guest_tx` only stamps on the Encap
     //       arm, after `adjust_room`). `edt_tstamp` stays `None` for Local / Pass.
     let frame_len = pkt.len() as u64;
-    // a) Public-lane policing (external egress only) — mirrors egress.rs.
-    if !crate::meter::public_pass(maps, in_.src_ifindex, frame_len, is_ext, in_.now) {
+    // a) Public-lane policing (external egress only) — mirrors egress.rs. `public_pass` only
+    // actually measures `len` when `is_ext` (else it short-circuits to pass), and an external route
+    // leaves via the Encap arm below (no outer bytes written there — see `TunnelEncap`), so the
+    // GENEVE_OVERHEAD compensation belongs here: `frame_len` is the INNER length only; add the
+    // kernel's outer Eth/IPv6/UDP/Geneve bytes back in so the policer measures real wire bytes.
+    if !crate::meter::public_pass(
+        maps,
+        in_.src_ifindex,
+        frame_len + GENEVE_OVERHEAD as u64,
+        is_ext,
+        in_.now,
+    ) {
         return GuestTxOut {
             action: Action::Drop,
             edt_tstamp,
@@ -446,10 +475,16 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
             tunnel,
             uplink_ifindex,
         } => {
-            // No byte write (see `TunnelEncap`): EDT egress shaping stamps directly off the
-            // (unchanged) inner frame length — mirrors tc.rs `edt_stamp`. NOTE: this under-counts
-            // the eventual Geneve wire overhead; a follow-up task accounts for it.
-            edt_tstamp = crate::meter::edt_egress(maps, in_.src_ifindex, pkt.len() as u64, in_.now);
+            // No byte write (see `TunnelEncap`): EDT egress shaping stamps off the (unchanged)
+            // inner frame length PLUS `GENEVE_OVERHEAD` — the kernel's `collect_md` geneve device
+            // adds the outer Eth/IPv6/UDP/Geneve bytes on transmit, so shaping needs to reflect the
+            // real wire size, not just what this program can see. Mirrors tc.rs `edt_stamp`.
+            edt_tstamp = crate::meter::edt_egress(
+                maps,
+                in_.src_ifindex,
+                pkt.len() as u64 + GENEVE_OVERHEAD as u64,
+                in_.now,
+            );
             GuestTxOut {
                 action: Action::Redirect(uplink_ifindex),
                 edt_tstamp,
@@ -481,10 +516,12 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
 ///
 /// Verdict mapping (mirrors [`process_guest_tx`]):
 ///   - `Deliver::Encap { tunnel, uplink_ifindex }` → no byte write (see [`TunnelEncap`]) — EDT
-///     egress shaping (`edt_egress`, records `edt_tstamp`) stamps off `pkt.len()` (the unchanged
-///     inner frame length) → `Redirect(uplink_ifindex)`. This is now representation-identical to
-///     the v4 encap arm; the old v4/v6 outer next-header difference (IPIP vs IPPROTO_IPV6) no
-///     longer exists on the wire here — the packet's own ethertype already says which it is;
+///     egress shaping (`edt_egress`, records `edt_tstamp`) stamps off `pkt.len() + GENEVE_OVERHEAD`
+///     (the unchanged inner frame length, plus the kernel's outer Eth/IPv6/UDP/Geneve bytes so
+///     shaping reflects real wire bytes) → `Redirect(uplink_ifindex)`. This is now representation-
+///     identical to the v4 encap arm; the old v4/v6 outer next-header difference (IPIP vs
+///     IPPROTO_IPV6) no longer exists on the wire here — the packet's own ethertype already says
+///     which it is;
 ///   - `Deliver::Local { tap_ifindex, guest_mac }` → inner-Eth rewrite (dst = guest_mac, src =
 ///     GW_MAC, ethertype stays IPv6) → `Redirect(tap_ifindex)`, unshaped (`edt_tstamp = None`);
 ///   - `Deliver::Pass` → `Action::Pass`.
@@ -545,9 +582,14 @@ pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
             tunnel,
             uplink_ifindex,
         } => {
-            // No byte write (see `TunnelEncap`). NOTE: `pkt.len()` under-counts the eventual Geneve
-            // wire overhead; a follow-up task accounts for it (mirrors the v4 arm's note).
-            edt_tstamp = crate::meter::edt_egress(maps, in_.src_ifindex, pkt.len() as u64, in_.now);
+            // No byte write (see `TunnelEncap`); GENEVE_OVERHEAD compensates for the kernel's outer
+            // bytes not being visible to this program (mirrors the v4 arm).
+            edt_tstamp = crate::meter::edt_egress(
+                maps,
+                in_.src_ifindex,
+                pkt.len() as u64 + GENEVE_OVERHEAD as u64,
+                in_.now,
+            );
             GuestTxOut {
                 action: Action::Redirect(uplink_ifindex),
                 edt_tstamp,
@@ -583,7 +625,8 @@ pub fn process_uplink_nat_return<P: Pkt, M: Maps>(
     maps: &mut M,
     in_: &UplinkNatReturnIn,
 ) -> Action {
-    let inner_off = ETH_LEN + IPV6_LEN;
+    // Post-decap (P2 Task 5): see `process_uplink`'s doc comment on the same offset change.
+    let inner_off = ETH_LEN;
     let mut xlate_ip: Option<[u8; 4]> = None;
 
     // 1. Build the inner 5-tuple key; NAT returns are demuxed peer-independently.
@@ -633,9 +676,12 @@ pub fn process_uplink_nat_return<P: Pkt, M: Maps>(
 ///
 /// NAT64 returns (`CT_F_NAT64`) need v4->v6 expansion, not the plain reverse-DNAT: a matching
 /// `CT_F_NAT64 | CT_REWRITE_DST` reverse entry dispatches to [`process_uplink_nat64_ingress`]
-/// (restores the guest IPv4 dst, then expands back to the guest's overlay IPv6 via `in_.guest_ipv6`).
+/// (restores the guest IPv4 dst, then expands back to the guest's overlay IPv6 — sourced from
+/// `PORT_META[tap_ifindex].guest_ipv6` once the delivery tap is resolved; see the CT_F_NAT64 branch
+/// below).
 pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn) -> UplinkOut {
-    let inner_off = ETH_LEN + IPV6_LEN;
+    // Post-decap (P2 Task 5): see `process_uplink`'s doc comment on the same offset change.
+    let inner_off = ETH_LEN;
 
     // NAT-return dispatch — gated on `lb_ul.is_none()` exactly as `try_uplink_rx` (an LB VIP is never
     // itself a nat_ip, but keep the gate to mirror the eBPF ordering precisely).
@@ -667,15 +713,31 @@ pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
                                 UplinkTarget::Local {
                                     tap_ifindex,
                                     guest_mac,
-                                } => process_uplink_nat64_ingress(
-                                    pkt,
-                                    &UplinkNat64IngressIn {
-                                        tap_ifindex,
-                                        guest_mac,
-                                        guest_ipv6: in_.guest_ipv6,
-                                        rev: &r,
-                                    },
-                                ),
+                                } => {
+                                    // The guest's overlay IPv6 is per-tap metadata (`PORT_META`), not
+                                    // derivable from `(vni, inner dst)` alone — it can only be read
+                                    // NOW, after `tap_ifindex` is resolved (fixes the disclosed gap:
+                                    // the eBPF glue used to pass a `[0;16]` placeholder here because
+                                    // it cannot know the tap before this dispatch runs, which made
+                                    // `nat64_ingress_parse` reject every real NAT64 return and fall
+                                    // through to `Action::Pass` — see `ingress.rs`'s former comment).
+                                    // Out-of-lined (`#[inline(never)]`): inlining the ~70-byte
+                                    // `PortMeta` copy directly into this already-large dispatch
+                                    // pushed the verifier's combined-call-stack over budget
+                                    // ("combined stack size of 2 calls is 528. Too large") — the
+                                    // same BPF-stack-relief pattern as
+                                    // [`uplink_ingress_firewall_drop`]/[`uplink_track_flow`].
+                                    let guest_ipv6 = resolve_nat64_guest_ipv6(&*maps, tap_ifindex);
+                                    process_uplink_nat64_ingress(
+                                        pkt,
+                                        &UplinkNat64IngressIn {
+                                            tap_ifindex,
+                                            guest_mac,
+                                            guest_ipv6,
+                                            rev: &r,
+                                        },
+                                    )
+                                }
                                 UplinkTarget::EdgeLocalDeliver | UplinkTarget::Drop => Action::Drop,
                             };
                         return UplinkOut {
@@ -715,12 +777,18 @@ pub struct UplinkNat64IngressIn<'a> {
 }
 
 /// Host NAT64 ingress reply path, in place on `pkt`. Mirrors the eBPF ingress `nat64_ingress`:
-/// reverse `ct_apply` → `nat64_ingress_parse` (Pass on miss) → `shrink_head(20)` → `nat64_ingress_write`.
+/// reverse `ct_apply` → `nat64_ingress_parse` (Pass on miss) → `grow_head(20)` → `nat64_ingress_write`.
+///
+/// P2 Task 5: post-decap `pkt` arrives as `[InnerEth(14)][InnerIPv4(20)][L4]` (34+L4 bytes) — the
+/// kernel already stripped the outer Eth/IPv6/UDP/Geneve header. NAT64 v4→v6 EXPANDS the inner
+/// header (IPv4 20 → IPv6 40), so this is a **+20 GROW** to `[Eth(14)][IPv6(40)][L4]` (54+L4 bytes)
+/// — the mirror image of `nat64_egress`'s v6→v4 shrink, reversed. (The pre-Task-5 code shrank 20
+/// bytes here, which modeled the OLD pre-decap 74→54 collapse; that shape no longer exists.)
 ///
 /// `#[inline(never)]`: ingress-only, same BPF-stack-relief reasoning as [`process_uplink`].
 #[inline(never)]
 pub fn process_uplink_nat64_ingress<P: Pkt>(pkt: &mut P, in_: &UplinkNat64IngressIn) -> Action {
-    let inner_off = ETH_LEN + IPV6_LEN;
+    let inner_off = ETH_LEN;
     let orig_sport = in_.rev.xlate_port;
 
     // 1. Reverse conntrack apply: restore the guest IPv4 dst + orig L4 port (+ checksums).
@@ -733,8 +801,9 @@ pub fn process_uplink_nat64_ingress<P: Pkt>(pkt: &mut P, in_: &UplinkNat64Ingres
             None => return Action::Pass,
         };
 
-    // 3. Resize: shrink 20 bytes off the front (models adjust_head(+20)).
-    if !pkt.shrink_head(20) {
+    // 3. Resize: grow 20 bytes at the front (models adjust_room(+20, BPF_ADJ_ROOM_MAC) /
+    // bpf_xdp_adjust_head(-20)) — v4(20)→v6(40) inner header expansion.
+    if !pkt.grow_head(20) {
         return Action::Drop;
     }
 

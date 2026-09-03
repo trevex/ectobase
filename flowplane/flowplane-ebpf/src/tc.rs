@@ -111,10 +111,13 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
             };
         if is_rs {
             // Read only the MTU field (not the whole DhcpConfig) to keep this off the heavy stack.
+            // Default = the standard 1500 link MTU minus the Geneve overlay overhead the kernel adds
+            // on transmit (`flowplane_common::GENEVE_OVERHEAD`), same default as the DHCPv4 responder.
             let mtu = crate::maps::DHCP_CONFIG
                 .get(0)
                 .map(|c| c.mtu)
-                .unwrap_or(1500) as u32;
+                .unwrap_or((1500 - flowplane_common::GENEVE_OVERHEAD) as u16)
+                as u32;
             if unsafe { bpf_skb_change_tail(ctx.skb.skb, flowplane_core::arp_nd::RA_LEN as u32, 0) }
                 == 0
                 && ctx.pull_data(flowplane_core::arp_nd::RA_LEN as u32).is_ok()

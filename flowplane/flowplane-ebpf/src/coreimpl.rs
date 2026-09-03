@@ -1,7 +1,7 @@
 use aya_ebpf::{bindings::bpf_adj_room_mode::BPF_ADJ_ROOM_MAC, programs::TcContext};
 use flowplane_common::{
     CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
-    MaglevKey, MeterState, NatKey, NatValue, RouteLpmData, RouteLpmData6, RouteValue,
+    MaglevKey, MeterState, NatKey, NatValue, PortMeta, RouteLpmData, RouteLpmData6, RouteValue,
     UnderlayValue, VipKey,
 };
 use flowplane_core::maps::Maps;
@@ -119,6 +119,10 @@ impl Maps for GlobalMaps {
     #[inline(always)]
     fn meter_update(&mut self, ifindex: u32, state: MeterState) {
         let _ = crate::maps::METER.insert(&ifindex, &state, 0);
+    }
+    #[inline(always)]
+    fn port_meta_get(&self, ifindex: u32) -> Option<PortMeta> {
+        unsafe { crate::maps::PORT_META.get(&ifindex).copied() }
     }
 }
 
