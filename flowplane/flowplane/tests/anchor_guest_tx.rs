@@ -1,18 +1,38 @@
-//! BPF_PROG_TEST_RUN byte-parity anchor for the guest-egress `tc_guest_tx` datapath — specifically
-//! the outer-IPv6 flow-label ECMP computation (RFC 6438).
+//! `BPF_PROG_TEST_RUN` anchor for the guest-egress `tc_guest_tx` overlay-encap datapath (post-P2
+//! Geneve retarget).
 //!
-//! The other anchors (`anchor_uplink`, `anchor_lb`, `anchor_dnat`) all set `flow_label: 0`, so none
-//! of them exercise the inner-flow hash that `tc_guest_tx` writes into the outer IPv6 flow label on
-//! encap. This anchor closes that gap: it loads the REAL compiled `tc_guest_tx` tc classifier, runs
-//! it on a guest frame whose 5-tuple hashes to a NON-zero label, and asserts the kernel-returned
-//! encapped bytes equal the native `SimNode::guest_tx` output for the SAME input + map state. Any
-//! drift between the eBPF `egress_flow_label`/`inner_flow_label` and the native fold fails here.
+//! ## P2 Task 2/7: no more outer flow-label — this used to be a flow-label anchor
 //!
-//! Unlike the XDP anchors, `tc_guest_tx` is a `SchedClassifier` that keys `PORT_META` on
+//! Before P2, `tc_guest_tx` wrote a hand-rolled outer IPv6 header itself, including an RFC
+//! 6438-style flow label folded from the inner 5-tuple (`egress_flow_label`/`inner_flow_label`),
+//! used for underlay ECMP entropy. This file used to anchor that fold byte-for-byte.
+//!
+//! P2 replaced the byte-written outer header with a Geneve tunnel-key DECISION
+//! (`flowplane_core::encap::TunnelEncap`): `tc_guest_tx` now calls `bpf_skb_set_tunnel_key` +
+//! redirects to the kernel's `collect_md` geneve device, which builds the real outer
+//! Eth/IPv6/UDP/Geneve header on transmit — there is no outer IPv6 header, and so no outer flow
+//! label, for this program to write anymore. Fabric ECMP entropy becomes the kernel's own Geneve
+//! UDP-source-port hash, not something this crate computes (see `flowplane_sim::flow_label_test`'s
+//! module doc, which reconciled the same fold-helpers-are-now-disconnected finding on the sim side).
+//! The `flow_label20`/`hash5`/`inner_flow_label` helpers stay (still-correct, reusable hash-fold math
+//! used elsewhere — e.g. LB/NAT port selection), but there is no end-to-end "guest_tx writes the
+//! label into the outer header" property left to anchor.
+//!
+//! ## What this anchor proves now
+//!
+//! It loads the REAL compiled `tc_guest_tx` tc classifier, runs it on a guest frame that resolves to
+//! an overlay encap (route with no local delivery target), and asserts the kernel-returned verdict is
+//! `TC_ACT_REDIRECT` with the packet BYTE-FOR-BYTE UNCHANGED — the encap-side oracle P2 Task 7
+//! settled on (`TC_ACT_REDIRECT` + inner-unchanged; see the plan doc's Task 1 Step 5 spike finding).
+//! Byte parity against the native `SimNode::guest_tx` output continues to hold (trivially: neither
+//! side writes any bytes on this path anymore), so this also still catches a regression that
+//! reintroduces byte mutation on the encap arm.
+//!
+//! Unlike an XDP anchor, `tc_guest_tx` is a `SchedClassifier` that keys `PORT_META` on
 //! `skb->ifindex` (tc.rs). So this test-run supplies a `struct __sk_buff` ctx with `ifindex` set to
 //! the loopback ifindex (1, always present) and keys `PORT_META` on it. aya 0.13.1 exposes no tc
-//! `test_run`, so — as in `anchor_uplink` — we issue the raw `bpf(BPF_PROG_TEST_RUN, ...)` syscall on
-//! the fd of aya's loaded `SchedClassifier`.
+//! `test_run`, so we issue the raw `bpf(BPF_PROG_TEST_RUN, ...)` syscall on the fd of aya's loaded
+//! `SchedClassifier`.
 //!
 //! Privileged: needs CAP_BPF + a kernel with tc test-run. Run via `make sim-anchor`.
 
@@ -25,12 +45,10 @@ use flowplane_common::{
     FwMeta, FwRule, FwRuleKey, Local, PortMeta, RouteLpmData, RouteValue, FW_ACTION_ACCEPT,
     FW_DIR_EGRESS,
 };
-use flowplane_core::encap::ETH_LEN;
-use flowplane_core::parse::{flow_label20, hash5};
 use flowplane_core::pkt::Action;
 use flowplane_sim::SimNode;
 
-// --- Fixture (mirrors flowplane_sim::flow_label_test::guest_tx_encap_carries_inner_flow_label) ---
+// --- Fixture (a guest frame that resolves to an overlay encap, no local delivery target) ---
 
 /// Source ifindex the tc classifier keys PORT_META on. Loopback (1) always exists, so the kernel's
 /// skb test-run can resolve `__sk_buff.ifindex` to a real device.
@@ -217,26 +235,15 @@ fn bpf_prog_test_run_skb(
 
 #[test]
 #[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel tc test-run)"]
-fn guest_tx_encap_flow_label_bytecode_matches_native_sim() {
+fn guest_tx_encap_redirect_inner_unchanged_matches_native_sim() {
     // 1. Build the guest frame + the native pure-core expected output for the SAME fixture.
     let frame = guest_frame();
     let (native_action, native_pkt) = native_output(&frame);
     assert_eq!(
         native_action,
         Action::Redirect(UPLINK_IFINDEX),
-        "sanity: native sim encaps + redirects out the uplink"
+        "sanity: native sim encaps (tunnel-key decision) + redirects out the uplink"
     );
-    // The whole point of this anchor: the fixture must produce a NON-zero flow label, so the eBPF
-    // `egress_flow_label` code path is actually exercised (not the flow_label:0 the other anchors use).
-    let expected_label = flow_label20(hash5(&GUEST_IP, &DEST_IP, SPORT, DPORT, 17));
-    assert_ne!(expected_label, 0, "fixture must hash to a non-zero label");
-    let native_label = u32::from_be_bytes([
-        native_pkt[ETH_LEN],
-        native_pkt[ETH_LEN + 1],
-        native_pkt[ETH_LEN + 2],
-        native_pkt[ETH_LEN + 3],
-    ]) & 0x000F_FFFF;
-    assert_eq!(native_label, expected_label, "native label sanity");
 
     // 2. Load the real eBPF object the same way the daemon does, and populate the maps tc_guest_tx
     //    reads on the v4 encap path: PORT_META (keyed by skb ifindex), ROUTES (LPM /32), LOCAL[0],
@@ -325,8 +332,12 @@ fn guest_tx_encap_flow_label_bytecode_matches_native_sim() {
     let out = bpf_prog_test_run_skb(prog_fd, &frame, IFINDEX)
         .expect("BPF_PROG_TEST_RUN on tc_guest_tx (needs CAP_BPF + kernel tc test-run support)");
 
-    // The encap path ends in bpf_redirect(uplink) -> TC_ACT_REDIRECT, with the skb grown+rewritten
-    // to the encapped frame in data_out.
+    // The encap path stamps the Geneve tunnel key (bpf_skb_set_tunnel_key) and redirects to the
+    // geneve device — no byte write, so data_out is the UNCHANGED inner frame and the verdict is
+    // TC_ACT_REDIRECT. This is the encap-side oracle P2 Task 7 settled on (see the module doc): we
+    // can no longer observe the tunnel key itself from BPF_PROG_TEST_RUN (a decap-side
+    // `get_tunnel_key` on the SAME skb, later in the SAME run, would show it, but `tc_guest_tx` never
+    // reads it back), so redirect + inner-unchanged is the strongest claim provable here.
     assert_eq!(
         out.retval, TC_ACT_REDIRECT,
         "native pure-core diverged from real bytecode: expected TC_ACT_REDIRECT ({TC_ACT_REDIRECT}), \
@@ -334,32 +345,16 @@ fn guest_tx_encap_flow_label_bytecode_matches_native_sim() {
         out.retval
     );
 
-    // Primary anchor: full-frame byte parity between the native sim and the real bytecode. This
-    // covers the outer Eth+IPv6 header including the flow-label word, so any divergence in the eBPF
-    // `egress_flow_label` fold vs the native `inner_flow_label` fold fails here.
-    assert_eq!(
-        out.data.len(),
-        native_pkt.len(),
-        "native pure-core diverged from real bytecode: output length {} != native {}",
-        out.data.len(),
-        native_pkt.len()
-    );
+    // Primary anchor: the real bytecode must not write ANY outer bytes on the encap path anymore —
+    // its output is byte-identical to both the native sim's (also-unchanged) output and the original
+    // input frame.
     assert_eq!(
         out.data, native_pkt,
-        "native pure-core diverged from real bytecode: encapped output bytes differ from SimNode"
+        "native pure-core diverged from real bytecode: tc_guest_tx must leave the packet UNCHANGED \
+         on the encap path (the kernel geneve device builds the outer header, not this program)"
     );
-
-    // Belt-and-suspenders on the flow-label word specifically (the reason this anchor exists).
-    let outer_word = u32::from_be_bytes([
-        out.data[ETH_LEN],
-        out.data[ETH_LEN + 1],
-        out.data[ETH_LEN + 2],
-        out.data[ETH_LEN + 3],
-    ]);
-    assert_eq!(outer_word >> 28, 6, "outer IPv6 version must stay 6");
     assert_eq!(
-        outer_word & 0x000F_FFFF,
-        expected_label,
-        "real bytecode wrote the wrong outer flow label"
+        out.data, frame,
+        "tc_guest_tx must not mutate the inner frame on the encap arm"
     );
 }

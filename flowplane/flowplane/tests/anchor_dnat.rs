@@ -1,51 +1,50 @@
-//! BPF_PROG_TEST_RUN byte-parity anchor for the return-path (reverse) DNAT datapath: the
-//! `uplink_rx` conntrack rewrite-apply (`ct_apply`) that was extracted into `flowplane-core`
-//! (`conntrack::ct_apply`).
+//! `BPF_PROG_TEST_RUN` anchor for the return-path (reverse) DNAT datapath (post-P2 Geneve retarget):
+//! the `uplink_rx` conntrack rewrite-apply (`flowplane_core::conntrack::ct_apply`) reached on a
+//! previously-SNAT'd guest flow's reply.
 //!
-//! A previously-SNAT'd guest flow's REPLY returns from the external peer, encapped IP-in-IPv6 to the
-//! owning hypervisor. The egress SNAT (`snat_egress`) had installed a peer-independent reverse
-//! conntrack entry `(vni,0,nat_ip,0,nat_port)` carrying `CT_REWRITE_DST` + the guest's original
-//! `(xlate_ip, xlate_port)`. On the return, `uplink_rx` looks that entry up (zeroing the external
-//! src ip+port because the inner dst is a registered nat_ip), applies the reverse-DNAT — inner dst IP
-//! nat_ip -> guest, dst L4 port nat_port -> orig sport, + IP/L4 checksums — decaps, and delivers to
-//! the guest tap.
+//! ## Why this anchor no longer byte-compares the reverse-DNAT'd output
 //!
-//! # Two independent checks (the second breaks a circularity)
+//! `uplink_rx` is now a tc classifier on the geneve `collect_md` device (P2 Task 4b) — see
+//! `anchor_uplink.rs`'s module doc for the full explanation. Its FIRST action is
+//! `get_tunnel_key(ctx.skb.skb)`; on failure it returns `TC_ACT_OK` immediately, before the
+//! base-vs-NAT-return dispatch (or any other map/CT read) ever runs. `BPF_PROG_TEST_RUN` cannot
+//! construct the tunnel-key metadata a decap-side `get_tunnel_key` needs (confirmed empirically at
+//! P2 Task 1's spike), so the reverse-DNAT branch this file used to byte-anchor — including its
+//! ORIGINAL-golden-bytes cross-check against the pre-extraction inline implementation (HEAD
+//! `0f0ec06`) — has no bytecode oracle anymore: there is no way to produce a "current bytecode
+//! output" to compare against those goldens, because the real bytecode never reaches the code that
+//! used to produce them.
 //!
-//! 1. `dnat_return_bytecode_matches_native_sim` — loads the REAL compiled `uplink_rx`, runs it on a
-//!    crafted encapped reply via `BPF_PROG_TEST_RUN`, and asserts the kernel output equals the native
-//!    `flowplane-sim` `SimNode::uplink_nat_return` for the same input + map state. Because the
-//!    extraction made BOTH the production `uplink_rx` and `SimNode::uplink_nat_return` call the SAME
-//!    `flowplane_core::conntrack::ct_apply`, this cross-check alone would NOT catch a source-level
-//!    behavior change introduced by the extraction — it would change both sides identically.
+//! ## What this anchor still proves
 //!
-//! 2. `dnat_return_bytecode_matches_original_golden` — asserts the CURRENT compiled bytecode output
-//!    equals hardcoded GOLDEN bytes captured from the ORIGINAL, PRE-extraction inline-eBPF program
-//!    (HEAD `0f0ec06`, before `flowplane_core::conntrack::ct_apply` existed — `uplink_rx` ran its own
-//!    inline phase1-read / phase3-write `ct_apply`) via `BPF_PROG_TEST_RUN` on the identical fixtures.
-//!    This is INDEPENDENT of `SimNode` and so proves the rewired core is byte-faithful to the deleted
-//!    inline impl. It covers the DNAT branches the inline path had: TCP (addr + port + L4 csum), UDP
-//!    (addr + port + non-zero-csum fold), and ICMP (id + icmp csum).
+//! The real compiled `uplink_rx`, fed a post-decap TCP return frame (`EXT_IP:EXT_PORT ->
+//! NAT_IP:NAT_PORT`) with the SAME reverse-CT / NAT_IPS / firewall map state a real host would
+//! carry, still fails SAFE — `TC_ACT_OK`, packet unchanged — because the tunnel-key gate runs before
+//! the reverse-DNAT dispatch. In production this is unreachable (the geneve device always stamps a
+//! tunnel key), but it is exactly what `BPF_PROG_TEST_RUN` CAN exercise for this fixture shape.
 //!
-//! Residual limitation: the goldens pin the byte output for the SPECIFIC map state below (one seeded
-//! reverse CT entry + the fixed UNDERLAY/NAT_IPS/firewall config). They are a faithful anchor to the
-//! original for THESE vectors, not an exhaustive proof over all inputs. Together with check (1) and a
-//! line-by-line source review they give strong coverage of the extraction.
+//! The reverse-DNAT rewrite itself (TCP/UDP address + port + checksum fold via `ct_apply`) is
+//! exhaustively covered, bytecode-free, by `flowplane_sim::nat_test`'s
+//! `dnat_return_tcp_rewrites_dst_ip_and_port` / `dnat_return_udp_rewrites_dst_ip_and_port`, which
+//! drive the SAME `flowplane_core::conntrack::ct_apply` the real bytecode calls (via
+//! `SimNode::uplink_nat_return`). The `df94251` firewall-skip regression this file used to guard
+//! (an established NAT return must not be dropped by a deny-by-default ingress firewall) is likewise
+//! covered, bytecode-free, by
+//! `flowplane_sim::nat_test::uplink_rx_dispatches_nat_return_past_deny_by_default_firewall`, which
+//! drives the SAME `flowplane_core::datapath::process_uplink_rx` dispatch the real bytecode's
+//! base-vs-NAT-return branch delegates to. `native_reference` below re-derives the SAME fixture's
+//! expected reverse-DNAT as a sanity check, not a byte-parity oracle.
 //!
-//! Privileged: needs CAP_BPF + a kernel that supports XDP test-run. Run via `make sim-anchor`.
+//! Privileged: needs CAP_BPF + a kernel that supports tc test-run. Run via `make sim-anchor`.
 
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 
-use aya::maps::{Array, HashMap as AyaHashMap};
-use aya::programs::Xdp;
-use aya::{Ebpf, EbpfLoader};
+use aya::programs::SchedClassifier;
 use flowplane_common::{
-    CtEntry, CtKey, FwMeta, FwRule, FwRuleKey, Local, UnderlayValue, VipKey, CT_F_SRC_NAT,
-    CT_REWRITE_DST, FW_ACTION_ACCEPT, FW_DIR_INGRESS,
+    CtEntry, CtKey, Local, RouteValue, UnderlayValue, CT_F_SRC_NAT, CT_REWRITE_DST,
 };
-use flowplane_core::encap::{ETH_LEN, IPV6_LEN};
+use flowplane_core::encap::ETH_LEN;
 use flowplane_core::pkt::Action;
-use flowplane_sim::EncapParams;
 use flowplane_sim::SimNode;
 
 // --- Return-path DNAT fixture ----------------------------------------------------------------
@@ -59,15 +58,13 @@ const EXT_IP: [u8; 4] = [203, 0, 113, 9]; // the external peer (inner src on the
 const ORIG_SPORT: u16 = 40000; // the guest's original L4 sport (restored on the return)
 const NAT_PORT: u16 = 20018; // the allocated NAT port (inner dst port on the return)
 const EXT_PORT: u16 = 443; // the external peer's port (inner src port on the return)
-const EDGE_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xaa];
 const HOST_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xbb];
 
-const IPPROTO_ICMP: u8 = 1;
 const IPPROTO_TCP: u8 = 6;
-const IPPROTO_UDP: u8 = 17;
 
-/// A full guest Ethernet frame `[Eth][IPv4][TCP]` for the RETURN packet: `EXT_IP:EXT_PORT` ->
-/// `NAT_IP:NAT_PORT` (the packet as it arrives from the peer, before reverse-DNAT).
+/// The POST-decap RETURN frame `[InnerEth(14)][IPv4][TCP]`: `EXT_IP:EXT_PORT` -> `NAT_IP:NAT_PORT`
+/// (as it arrives from the peer, before reverse-DNAT) — exactly what the kernel `collect_md` geneve
+/// device would hand `uplink_rx`. This is also the literal `BPF_PROG_TEST_RUN` input below.
 fn tcp_return_frame() -> Vec<u8> {
     use etherparse::PacketBuilder;
     let builder = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
@@ -76,39 +73,6 @@ fn tcp_return_frame() -> Vec<u8> {
     let mut out = Vec::new();
     builder.write(&mut out, &[0x01, 0x02, 0x03, 0x04]).unwrap();
     out
-}
-
-/// UDP return with a non-zero payload (so the UDP checksum is non-zero and gets folded).
-fn udp_return_frame() -> Vec<u8> {
-    use etherparse::PacketBuilder;
-    let builder = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
-        .ipv4(EXT_IP, NAT_IP, 64)
-        .udp(EXT_PORT, NAT_PORT);
-    let mut out = Vec::new();
-    builder.write(&mut out, &[0xaa, 0xbb, 0xcc, 0xdd]).unwrap();
-    out
-}
-
-/// ICMP echo REPLY return — identifier == NAT_PORT so `l4_ports` returns `(NAT_PORT, NAT_PORT)`; the
-/// reverse-DNAT restores the ICMP id to ORIG_SPORT (+folds the ICMP checksum), like the inline path.
-fn icmp_return_frame() -> Vec<u8> {
-    use etherparse::PacketBuilder;
-    let builder = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
-        .ipv4(EXT_IP, NAT_IP, 64)
-        .icmpv4_echo_reply(NAT_PORT, 1);
-    let mut out = Vec::new();
-    builder.write(&mut out, &[0xde, 0xad, 0xbe, 0xef]).unwrap();
-    out
-}
-
-fn encap_params() -> EncapParams {
-    EncapParams {
-        gateway_mac: [1; 6],
-        uplink_mac: [2; 6],
-        src_underlay: EDGE_UNDERLAY,
-        nexthop_ipv6: HOST_UNDERLAY,
-        inner_proto: 4, // IPPROTO_IPIP
-    }
 }
 
 /// The peer-independent reverse conntrack entry the egress SNAT allocator stored:
@@ -138,67 +102,49 @@ fn reverse_ct_entry() -> CtEntry {
     }
 }
 
-/// An ingress ALLOW rule on TAP admitting the post-DNAT return flow (proto, `EXT_IP:* -> GUEST_IP:*`).
-/// The datapath firewall runs on the post-DNAT 5-tuple after the return is not in the forward CT.
-fn allow_rule(proto: u8) -> FwRule {
-    FwRule {
-        src_ip: [0; 4],
-        src_mask: [0; 4],
-        dst_ip: GUEST_IP,
-        dst_mask: [255, 255, 255, 255],
-        src_port_min: 0,
-        src_port_max: 65535,
-        dst_port_min: 0,
-        dst_port_max: 65535,
-        icmp_type: 0xffff,
-        icmp_code: 0xffff,
-        proto,
-        action: FW_ACTION_ACCEPT,
-        direction: FW_DIR_INGRESS,
-        enabled: 1,
-    }
-}
-
-/// An ingress ALLOW rule that does NOT match the return flow — it admits a DIFFERENT dst
-/// (`192.0.2.1`, TEST-NET-1). With `FW_META.ingress_count = 1` this makes the ingress firewall
-/// ENFORCED-but-deny-by-default for the actual return (`EXT_IP -> GUEST_IP`): a fresh `ct_key` on the
-/// post-DNAT tuple finds no entry and no matching accept, so an UNGUARDED firewall would DROP it.
-/// Mirrors the live clab scenario (guest has ingress rules, none for its NAT return) that `df94251`
-/// fixed. `enabled: 1` so the firewall is genuinely active — not a no-op empty ruleset.
-fn nonmatching_ingress_rule() -> FwRule {
-    FwRule {
-        dst_ip: [192, 0, 2, 1],
-        ..allow_rule(0)
-    }
-}
-
-/// Build the encapped return input + the native (pure-core) expected `SimOut` for it. The native side
-/// seeds the identical reverse CT entry + NAT_IPS registration the eBPF maps get.
-fn build_input_and_native(frame: &[u8], proto: u8) -> (Vec<u8>, Action, Vec<u8>) {
-    let encapped = SimNode::new().edge_encap(frame, encap_params());
-    // Outer IPv6 dst must be the host underlay (uplink_rx keys UNDERLAY on it).
-    assert_eq!(&encapped[ETH_LEN + 24..ETH_LEN + 40], &HOST_UNDERLAY);
-
+/// Native `flowplane_core::datapath::process_uplink_nat_return` reference for the TCP return
+/// fixture: seeds the identical reverse CT entry + NAT_IPS registration a real host's eBPF maps
+/// would carry. Sanity check on the fixture, not a byte-parity oracle.
+fn native_reference(frame: &[u8]) -> (Action, Vec<u8>) {
     let mut host = SimNode::new();
     host.maps
         .conntrack
-        .insert(reverse_ct_key(proto), reverse_ct_entry());
+        .insert(reverse_ct_key(IPPROTO_TCP), reverse_ct_entry());
     host.maps.nat_ips.insert((VNI, NAT_IP));
-    let u = UnderlayValue {
-        vni: VNI,
-        tap_ifindex: TAP,
-        guest_mac: GUEST_MAC,
-        _pad: [0; 2],
-    };
-    let out = host.uplink_nat_return(&encapped, VNI, u, GUEST_MAC);
-    (encapped, out.action, out.pkt)
+    // Delivery-target reconstruction mechanism #2 (see `flowplane_core::datapath::
+    // resolve_uplink_target`): the RESTORED guest IP (reverse CT's `xlate_ip`) is looked up via the
+    // SAME self-route `ROUTES(vni, guest_ip) -> UNDERLAY(nexthop)` a base delivery would use.
+    host.maps.underlay.insert(
+        HOST_UNDERLAY,
+        UnderlayValue {
+            vni: VNI,
+            tap_ifindex: TAP,
+            guest_mac: GUEST_MAC,
+            _pad: [0; 2],
+        },
+    );
+    host.maps.add_route4(
+        VNI,
+        GUEST_IP,
+        RouteValue {
+            nexthop_vni: VNI,
+            nexthop_ipv6: HOST_UNDERLAY,
+            is_external: 0,
+            _pad: [0; 3],
+        },
+    );
+    let local = Local::default();
+    let out = host.uplink_nat_return(frame, VNI, &local);
+    (out.action, out.pkt)
 }
 
-// --- Raw BPF_PROG_TEST_RUN syscall ----------------------------------------------------------
+// --- Raw BPF_PROG_TEST_RUN syscall (skb ctx — uplink_rx is a tc classifier, P2 Task 4b) ---------
 
 const BPF_PROG_TEST_RUN: libc::c_int = 10;
-const XDP_REDIRECT: u32 = 4;
-const XDP_DROP: u32 = 1;
+const TC_ACT_OK: u32 = 0;
+
+const SK_BUFF_SIZE: usize = 192;
+const SKB_IFINDEX_OFF: usize = 40;
 
 #[repr(C)]
 #[derive(Default)]
@@ -226,15 +172,25 @@ struct TestRunOut {
     data: Vec<u8>,
 }
 
-fn bpf_prog_test_run(prog_fd: RawFd, input: &[u8]) -> std::io::Result<TestRunOut> {
-    // Decap shrinks the frame (strips 40 bytes); size the out buffer generously so it is never clipped.
+fn bpf_prog_test_run_skb(
+    prog_fd: RawFd,
+    input: &[u8],
+    ifindex: u32,
+) -> std::io::Result<TestRunOut> {
     let mut out_buf = vec![0u8; input.len() + 256];
+    let mut ctx_in = [0u8; SK_BUFF_SIZE];
+    ctx_in[SKB_IFINDEX_OFF..SKB_IFINDEX_OFF + 4].copy_from_slice(&ifindex.to_ne_bytes());
+    let mut ctx_out = [0u8; SK_BUFF_SIZE];
     let mut attr = BpfAttrTest {
         prog_fd: prog_fd as u32,
         data_in: input.as_ptr() as u64,
         data_size_in: input.len() as u32,
         data_out: out_buf.as_mut_ptr() as u64,
         data_size_out: out_buf.len() as u32,
+        ctx_in: ctx_in.as_ptr() as u64,
+        ctx_size_in: ctx_in.len() as u32,
+        ctx_out: ctx_out.as_mut_ptr() as u64,
+        ctx_size_out: ctx_out.len() as u32,
         repeat: 1,
         ..Default::default()
     };
@@ -256,136 +212,22 @@ fn bpf_prog_test_run(prog_fd: RawFd, input: &[u8]) -> std::io::Result<TestRunOut
     })
 }
 
-// --- Shared eBPF load + map population -------------------------------------------------------
-
-/// Load the compiled object with the default ingress-ALLOW rule admitting the post-DNAT return flow.
-fn load_prog(proto: u8) -> (Ebpf, RawFd) {
-    load_prog_with_rule(proto, allow_rule(proto))
-}
-
-/// Load the compiled object, populate every map `uplink_rx` reads on the NAT-return path:
-/// UNDERLAY[host_underlay] (base tap), CONNTRACK (the seeded reverse CT_REWRITE_DST entry), NAT_IPS
-/// (nat_ip registration for peer-independent demux), FW_META (`ingress_count: 1`, so the ingress
-/// firewall is ENFORCED deny-by-default) + FW_RULES[`ingress_rule`], LOCAL. Returns the loaded `Ebpf`
-/// (kept alive by the caller) and the verified `uplink_rx` fd.
-fn load_prog_with_rule(proto: u8, ingress_rule: FwRule) -> (Ebpf, RawFd) {
-    let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowplane-prog"));
-    let pin = Box::leak(Box::new(
-        tempfile::Builder::new()
-            .prefix("flowplane-anchor-dnat-")
-            .tempdir_in("/sys/fs/bpf")
-            .expect("bpffs tempdir"),
-    ));
-    let mut ebpf = EbpfLoader::new()
-        .map_pin_path(pin.path())
-        .load(bytes)
-        .expect("load compiled eBPF object");
-
-    {
-        let mut underlay: AyaHashMap<_, [u8; 16], UnderlayValue> =
-            AyaHashMap::try_from(ebpf.map_mut("UNDERLAY").expect("UNDERLAY map")).unwrap();
-        underlay
-            .insert(
-                HOST_UNDERLAY,
-                UnderlayValue {
-                    vni: VNI,
-                    tap_ifindex: TAP,
-                    guest_mac: GUEST_MAC,
-                    _pad: [0; 2],
-                },
-                0,
-            )
-            .expect("insert UNDERLAY");
-    }
-    {
-        let mut ct: AyaHashMap<_, CtKey, CtEntry> =
-            AyaHashMap::try_from(ebpf.map_mut("CONNTRACK").expect("CONNTRACK map")).unwrap();
-        ct.insert(reverse_ct_key(proto), reverse_ct_entry(), 0)
-            .expect("seed reverse CT_REWRITE_DST entry");
-    }
-    {
-        let mut nat_ips: AyaHashMap<_, VipKey, u8> =
-            AyaHashMap::try_from(ebpf.map_mut("NAT_IPS").expect("NAT_IPS map")).unwrap();
-        nat_ips
-            .insert(
-                VipKey {
-                    vni: VNI,
-                    ipv4: NAT_IP,
-                },
-                1,
-                0,
-            )
-            .expect("register NAT_IP");
-    }
-    {
-        let mut fw_meta: AyaHashMap<_, u32, FwMeta> =
-            AyaHashMap::try_from(ebpf.map_mut("FW_META").expect("FW_META map")).unwrap();
-        fw_meta
-            .insert(
-                TAP,
-                FwMeta {
-                    ingress_count: 1,
-                    egress_count: 0,
-                },
-                0,
-            )
-            .expect("insert FW_META");
-    }
-    {
-        let mut fw_rules: AyaHashMap<_, FwRuleKey, FwRule> =
-            AyaHashMap::try_from(ebpf.map_mut("FW_RULES").expect("FW_RULES map")).unwrap();
-        fw_rules
-            .insert(
-                FwRuleKey {
-                    ifindex: TAP,
-                    idx: 0,
-                },
-                ingress_rule,
-                0,
-            )
-            .expect("insert FW_RULES");
-    }
-    {
-        let mut local: Array<_, Local> =
-            Array::try_from(ebpf.map_mut("LOCAL").expect("LOCAL map")).unwrap();
-        local
-            .set(
-                0,
-                Local {
-                    uplink_ifindex: 7,
-                    uplink_mac: [2; 6],
-                    gateway_mac: [1; 6],
-                    underlay_ipv6: HOST_UNDERLAY,
-                },
-                0,
-            )
-            .expect("write LOCAL[0]");
-    }
-
-    let prog: &mut Xdp = ebpf
-        .program_mut("uplink_rx")
-        .expect("uplink_rx program present")
-        .try_into()
-        .expect("uplink_rx is an XDP program");
-    prog.load().expect("verify/load uplink_rx");
-    let prog_fd = prog.fd().expect("uplink_rx fd").as_fd().as_raw_fd();
-    (ebpf, prog_fd)
-}
-
-// --- The anchor tests -----------------------------------------------------------------------
+// --- The anchor test -----------------------------------------------------------------------
 
 #[test]
-#[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel)"]
-fn dnat_return_bytecode_matches_native_sim() {
-    // 1. Build the encapped return input + the native pure-core expected output for the TCP fixture.
+#[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel tc test-run)"]
+fn dnat_return_bytecode_fails_safe_without_tunnel_key() {
     let frame = tcp_return_frame();
-    let (encapped, native_action, native_pkt) = build_input_and_native(&frame, IPPROTO_TCP);
+
+    // Sanity: what the native core reverse-DNATs + delivers for this fixture given a REAL tunnel
+    // key (the sim is the oracle for this path — see the module doc).
+    let (native_action, native_pkt) = native_reference(&frame);
     assert_eq!(
         native_action,
         Action::Redirect(TAP),
-        "sanity: native sim reverse-DNATs + delivers the return to the guest tap"
+        "sanity: native sim reverse-DNATs + delivers the return to the guest tap given a real \
+         tunnel key"
     );
-    // sanity: native reverse-DNAT rewrote the inner dst IP nat_ip -> guest (decapped: inner at ETH_LEN).
     let inner_dst = ETH_LEN + 16;
     assert_eq!(
         &native_pkt[inner_dst..inner_dst + 4],
@@ -393,162 +235,41 @@ fn dnat_return_bytecode_matches_native_sim() {
         "sanity: native reverse-DNAT rewrote inner dst IP to GUEST_IP"
     );
 
-    // 2. Load the real bytecode + maps, run uplink_rx on the encapped return.
-    let (_ebpf, prog_fd) = load_prog(IPPROTO_TCP);
-    let out = bpf_prog_test_run(prog_fd, &encapped)
-        .expect("BPF_PROG_TEST_RUN on uplink_rx (needs CAP_BPF + kernel test-run support)");
+    // Load the real eBPF object (aya-build embeds the bpfel object at $OUT_DIR/flowplane-prog;
+    // flowplane is binary-only, so the load is inlined). No map population needed: the tunnel-key
+    // gate is the FIRST thing `try_uplink_rx` does, before the base-vs-NAT-return dispatch or any
+    // other map/CT read (see the module doc).
+    let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowplane-prog"));
+    let pin = tempfile::Builder::new()
+        .prefix("flowplane-anchor-dnat-")
+        .tempdir_in("/sys/fs/bpf")
+        .expect("bpffs tempdir");
+    let mut ebpf = aya::EbpfLoader::new()
+        .map_pin_path(pin.path())
+        .load(bytes)
+        .expect("load compiled eBPF object");
+
+    let prog: &mut SchedClassifier = ebpf
+        .program_mut("uplink_rx")
+        .expect("uplink_rx program present")
+        .try_into()
+        .expect("uplink_rx is a SchedClassifier (tcx) program");
+    prog.load().expect("verify/load uplink_rx");
+    let prog_fd = prog.fd().expect("uplink_rx fd").as_fd().as_raw_fd();
+
+    // Run the real bytecode on the (undecorated) return frame — no tunnel-key metadata attached.
+    let out = bpf_prog_test_run_skb(prog_fd, &frame, 1 /* loopback, always present */)
+        .expect("BPF_PROG_TEST_RUN on uplink_rx (needs CAP_BPF + kernel tc test-run support)");
 
     assert_eq!(
-        out.retval, XDP_REDIRECT,
-        "native pure-core diverged from real bytecode: expected XDP_REDIRECT ({XDP_REDIRECT}), \
-         bytecode returned action {}",
-        out.retval
+        out.retval, TC_ACT_OK,
+        "uplink_rx must fail SAFE (TC_ACT_OK passthrough) when no tunnel-key metadata is present, \
+         even for a return-DNAT-shaped fixture with a matching reverse CT entry — the tunnel-key \
+         gate runs before the base-vs-NAT-return dispatch (see the module doc); production never \
+         reaches this branch"
     );
     assert_eq!(
-        out.data, native_pkt,
-        "native pure-core diverged from real bytecode: decapped+reverse-DNAT'd output bytes differ \
-         from SimNode"
-    );
-    assert_eq!(
-        &out.data[inner_dst..inner_dst + 4],
-        &GUEST_IP,
-        "inner dst IP reverse-DNAT'd to GUEST_IP"
-    );
-    // decap strips the outer IPv6 (40B): out == input - IPV6_LEN.
-    assert_eq!(
-        out.data.len(),
-        encapped.len() - IPV6_LEN,
-        "outer IPv6 (40B) stripped from the frame"
-    );
-}
-
-// --- Goldens captured from the ORIGINAL (pre-extraction) inline-eBPF uplink_rx @ 0f0ec06 -------
-//
-// Produced by running the ORIGINAL program (HEAD `0f0ec06`, before `flowplane_core::conntrack::
-// ct_apply` existed — `uplink_rx` ran its own inline phase1-read/phase3-write `ct_apply`) via
-// `BPF_PROG_TEST_RUN` on the identical fixtures + map state `load_prog` installs. Asserting the
-// CURRENT bytecode reproduces these proves the extraction is byte-faithful, INDEPENDENTLY of
-// `SimNode` (which now shares the extracted core with the production path). Captured by a throwaway
-// copy of this test built at `0f0ec06` that dumped `out.data` for each vector.
-
-#[rustfmt::skip]
-const TCP_OUT: &[u8] = &[
-    0x66, 0x66, 0x66, 0x66, 0x66, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x01, 0x08, 0x00, 0x45, 0x00,
-    0x00, 0x2c, 0x00, 0x00, 0x40, 0x00, 0x40, 0x06, 0xf4, 0xb8, 0xcb, 0x00, 0x71, 0x09, 0x0a, 0x00,
-    0x00, 0x0a, 0x01, 0xbb, 0x9c, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0x00,
-    0x04, 0x00, 0xc3, 0xcb, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04,
-];
-#[rustfmt::skip]
-const UDP_OUT: &[u8] = &[
-    0x66, 0x66, 0x66, 0x66, 0x66, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x01, 0x08, 0x00, 0x45, 0x00,
-    0x00, 0x20, 0x00, 0x00, 0x40, 0x00, 0x40, 0x11, 0xf4, 0xb9, 0xcb, 0x00, 0x71, 0x09, 0x0a, 0x00,
-    0x00, 0x0a, 0x01, 0xbb, 0x9c, 0x40, 0x00, 0x0c, 0xa4, 0x2d, 0xaa, 0xbb, 0xcc, 0xdd,
-];
-#[rustfmt::skip]
-const ICMP_OUT: &[u8] = &[
-    0x66, 0x66, 0x66, 0x66, 0x66, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x01, 0x08, 0x00, 0x45, 0x00,
-    0x00, 0x20, 0x00, 0x00, 0x40, 0x00, 0x40, 0x01, 0xf4, 0xc9, 0xcb, 0x00, 0x71, 0x09, 0x0a, 0x00,
-    0x00, 0x0a, 0x00, 0x00, 0xc6, 0x20, 0x9c, 0x40, 0x00, 0x01, 0xde, 0xad, 0xbe, 0xef,
-];
-
-#[test]
-#[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel)"]
-fn dnat_return_bytecode_matches_original_golden() {
-    struct Vector {
-        name: &'static str,
-        frame: Vec<u8>,
-        proto: u8,
-        golden: &'static [u8],
-    }
-    let vectors = [
-        Vector {
-            name: "TCP",
-            frame: tcp_return_frame(),
-            proto: IPPROTO_TCP,
-            golden: TCP_OUT,
-        },
-        Vector {
-            name: "UDP",
-            frame: udp_return_frame(),
-            proto: IPPROTO_UDP,
-            golden: UDP_OUT,
-        },
-        Vector {
-            name: "ICMP",
-            frame: icmp_return_frame(),
-            proto: IPPROTO_ICMP,
-            golden: ICMP_OUT,
-        },
-    ];
-
-    for v in &vectors {
-        let encapped = SimNode::new().edge_encap(&v.frame, encap_params());
-        let (_ebpf, prog_fd) = load_prog(v.proto);
-        let out = bpf_prog_test_run(prog_fd, &encapped)
-            .unwrap_or_else(|e| panic!("BPF_PROG_TEST_RUN on uplink_rx [{}] failed: {e}", v.name));
-        assert_eq!(
-            out.retval, XDP_REDIRECT,
-            "[{}] expected XDP_REDIRECT, got action {}",
-            v.name, out.retval
-        );
-        assert_eq!(
-            out.data, v.golden,
-            "[{}] current bytecode output diverged from the ORIGINAL (0f0ec06) inline-eBPF golden \
-             — the flowplane-core ct_apply extraction is NOT byte-faithful for this branch",
-            v.name
-        );
-    }
-}
-
-/// Regression guard for `df94251`: a NAT return must NOT be dropped by a deny-by-default ingress
-/// firewall. A NAT return matches a peer-independent `CT_REWRITE_DST` reverse entry and has its inner
-/// dst reverse-DNAT'd to the guest; it is the reply to a flow the guest itself initiated (already
-/// egress-firewalled) → established BY DEFINITION. `uplink_rx` must therefore SKIP the ingress
-/// firewall for NAT returns (`nat_guest.is_some()`), matching `flowplane_core::process_uplink_nat_return`
-/// (which does no firewall) — otherwise a fresh post-DNAT `ct_key` finds no entry, hits deny-by-default,
-/// and the established return is wrongly `XDP_DROP`ped (the exact clab bug fixed at `df94251`).
-///
-/// This is the CI guard the byte-parity anchors above could NOT provide: they install a MATCHING
-/// ingress allow rule, so the return passed even with the pre-fix unconditional firewall; and the sim
-/// `uplink_nat_return` never evaluates the firewall at all. Here the firewall is enforced
-/// (`ingress_count: 1`) with a NON-matching rule, so ONLY the `nat_guest.is_none()` guard keeps the
-/// return alive. Pre-`df94251` this returned `XDP_DROP`; post-fix it reverse-DNATs + delivers.
-#[test]
-#[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel)"]
-fn nat_return_survives_deny_by_default_ingress_firewall() {
-    // TCP is representative — the firewall-skip guard is proto-independent (it gates the whole block).
-    let frame = tcp_return_frame();
-    let (encapped, native_action, native_pkt) = build_input_and_native(&frame, IPPROTO_TCP);
-    assert_eq!(
-        native_action,
-        Action::Redirect(TAP),
-        "sanity: native sim (no firewall) reverse-DNATs + delivers the return to the guest tap"
-    );
-
-    // Enforced ingress firewall (ingress_count: 1) whose only rule does NOT match this return.
-    let (_ebpf, prog_fd) = load_prog_with_rule(IPPROTO_TCP, nonmatching_ingress_rule());
-    let out = bpf_prog_test_run(prog_fd, &encapped)
-        .expect("BPF_PROG_TEST_RUN on uplink_rx (needs CAP_BPF + kernel test-run support)");
-
-    assert_ne!(
-        out.retval, XDP_DROP,
-        "REGRESSION (df94251): the ingress firewall dropped an established NAT return — uplink_rx \
-         must skip the firewall when nat_guest.is_some()"
-    );
-    assert_eq!(
-        out.retval, XDP_REDIRECT,
-        "NAT return must reverse-DNAT + deliver to the guest tap (XDP_REDIRECT {XDP_REDIRECT}), got {}",
-        out.retval
-    );
-    // Byte parity with the native return: the firewall skip must change ONLY pass/drop, never bytes.
-    assert_eq!(
-        out.data, native_pkt,
-        "NAT return delivered bytes diverged from the native sim reverse-DNAT output"
-    );
-    let inner_dst = ETH_LEN + 16;
-    assert_eq!(
-        &out.data[inner_dst..inner_dst + 4],
-        &GUEST_IP,
-        "inner dst IP reverse-DNAT'd to GUEST_IP"
+        out.data, frame,
+        "uplink_rx must not mutate the packet before its tunnel-key gate"
     );
 }

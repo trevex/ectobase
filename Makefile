@@ -182,10 +182,7 @@ verifier: ## Load the tcx overlay-ingress + guest-facing tc programs through the
 	# verify_edge_wan_rx covers the tcx overlay-ingress trio (uplink_rx / xdp_uplink_v6 / wan_rx —
 	# all XDP pre-P2-Task-4b); verify_tc_guest covers the guest-facing tc classifiers (tc_guest_tx /
 	# tc_guest_nat64 / tc_guest_dhcp / tc_guest_egress_v6). Between them this is what catches
-	# stack/verifier regressions (e.g. an over-budget subprogram) across the whole eBPF datapath —
-	# NOTE: the anchor_uplink/anchor_lb/anchor_dnat byte-parity anchors (`make sim-anchor`) currently
-	# do NOT compile (pre-existing SimNode signature drift from P2 Task 4a; tracked as Task 7), so
-	# this target is presently the ONLY verifier coverage for `uplink_rx`.
+	# stack/verifier regressions (e.g. an over-budget subprogram) across the whole eBPF datapath.
 	sudo -E $$(command -v cargo) test -p flowplane --test verify_edge_wan_rx -- --ignored
 	sudo -E $$(command -v cargo) test -p flowplane --test verify_tc_guest -- --ignored
 
@@ -196,13 +193,18 @@ sim: ## Fast in-process datapath tests (no root, no clab): pure-core + native si
 .PHONY: sim-anchor
 sim-anchor: verifier ## Privileged BPF_PROG_TEST_RUN byte-parity anchors (native pure-core vs real bytecode)
 	cargo build -p flowplane
-	# Each anchor runs the REAL compiled program via BPF_PROG_TEST_RUN and asserts its output is
-	# byte-identical to the native SimNode for the same input + map state (and loads/verifies the
-	# program as a side effect). One `--test` binary per datapath; `--ignored` runs its anchor(s).
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_uplink -- --ignored    # uplink_rx N-S decap+deliver
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_lb -- --ignored         # uplink_rx Maglev LB reforward
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dnat -- --ignored       # dnat return (native + golden)
-	sudo -E $$(command -v cargo) test -p flowplane --test anchor_guest_tx -- --ignored   # tc_guest_tx encap + flow-label ECMP
+	# Each anchor runs the REAL compiled program via BPF_PROG_TEST_RUN. Post-P2 Geneve retarget
+	# (Task 7): `uplink_rx`'s decap-side `get_tunnel_key` has no BPF_PROG_TEST_RUN oracle (a fresh
+	# test skb carries no tunnel-key metadata — see anchor_uplink.rs's module doc), so
+	# anchor_uplink/anchor_lb/anchor_dnat now assert the real bytecode fails SAFE (TC_ACT_OK,
+	# packet unchanged) ahead of that gate, with the delivery-target/DNAT/LB logic itself covered
+	# bytecode-free by `flowplane-sim` (ns_scenario_test / lb_scenario_test / nat_test). The encap
+	# side (anchor_guest_tx) still proves real bytecode: TC_ACT_REDIRECT + inner-unchanged, byte-
+	# identical to the native sim. One `--test` binary per datapath; `--ignored` runs its anchor(s).
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_uplink -- --ignored    # uplink_rx fails safe (base N-S)
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_lb -- --ignored         # uplink_rx fails safe (LB local-deliver)
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dnat -- --ignored       # uplink_rx fails safe (DNAT return)
+	sudo -E $$(command -v cargo) test -p flowplane --test anchor_guest_tx -- --ignored   # tc_guest_tx encap: redirect + inner-unchanged
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dhcp -- --ignored       # tc_guest_dhcp DHCPv4 OFFER (native + golden)
 	# NOT YET ANCHORED (coverage gaps, tracked separately — do not assume these are covered):
 	#   - tc_guest_dhcp DHCPv6 ADVERTISE/REPLY (only the DHCPv4 OFFER is byte-anchored above).

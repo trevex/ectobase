@@ -3,12 +3,14 @@
 //! to `flowplane_core::datapath::process_uplink_rx` (VNI sourced from `get_tunnel_key`, no more
 //! `UNDERLAY[outer_dst]`), and `wan_rx` to `process_wan_rx`.
 //!
-//! This file used to load only `wan_rx` as XDP (checking the `UPLINK_DEV` devmap-redirect path,
-//! since removed along with the rest of the custom XDP encap scaffolding — see `xdp_encap.rs`'s
-//! deletion). It now loads all three tcx ingress programs: `anchor_uplink`/`anchor_lb`/`anchor_dnat`
-//! (Task 7) still call the pre-4a `SimNode` signatures and don't compile, so this is currently the
-//! ONLY thing that proves `uplink_rx` (the real fabric-ingress hot path, now calling the shared core
-//! orchestrator for the first time from actual eBPF bytecode) passes the kernel verifier.
+//! This file used to load only `wan_rx` as XDP (checking the old devmap-redirect path, since removed
+//! along with the rest of the custom XDP encap scaffolding). It now loads all three tcx ingress
+//! programs. `anchor_uplink`/`anchor_lb`/`anchor_dnat`
+//! (Task 7) load + run `uplink_rx` too, but `BPF_PROG_TEST_RUN` can't drive it past its
+//! `get_tunnel_key` gate (see those files' module docs), so THIS is the only thing that proves
+//! `uplink_rx` (the real fabric-ingress hot path, calling the shared core orchestrator from actual
+//! eBPF bytecode) passes the kernel verifier — including the `xdp_uplink_v6` tail-call target's own
+//! stack budget, which no anchor's fixture ever reaches at runtime.
 //!
 //! Privileged: needs CAP_BPF + a kernel with tc BPF. Run via `sudo -E cargo test -p flowplane --test
 //! verify_edge_wan_rx -- --ignored`.

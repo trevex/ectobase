@@ -1,33 +1,41 @@
-//! BPF_PROG_TEST_RUN byte-parity anchor for the LB **local-deliver** `uplink_rx` datapath.
+//! `BPF_PROG_TEST_RUN` anchor for the LB **local-deliver** `uplink_rx` datapath (post-P2 Geneve
+//! retarget).
 //!
-//! Companion to `anchor_uplink.rs` (the base N-S deliver anchor). This one anchors the
-//! load-balancer local-deliver branch: a single backend node owns an overlay LB VIP and is itself
-//! the Maglev-selected backend, so `uplink_rx` takes the LB-local-deliver path (LB dispatch selects
-//! this node's own underlay -> deliver to the local tap, DSR: no conntrack, inner dst stays the
-//! VIP). It loads the REAL compiled `uplink_rx`, runs it on a crafted encapped frame whose inner
-//! IPv4 dst is the OVERLAY_VIP via `BPF_PROG_TEST_RUN`, and asserts the kernel-returned output
-//! equals the native `flowplane-sim` `SimNode::uplink` output for the SAME input + map state.
+//! Companion to `anchor_uplink.rs` (the base N-S deliver anchor) — see that file's module doc for
+//! the full explanation of why this file no longer byte-compares delivery output: `uplink_rx` is now
+//! a tc classifier on the geneve `collect_md` device, and its FIRST action is
+//! `get_tunnel_key(ctx.skb.skb)` — on failure it returns `TC_ACT_OK` immediately, before the LB
+//! dispatch (or any other map read) ever runs. `BPF_PROG_TEST_RUN` cannot construct the tunnel-key
+//! metadata a decap-side `get_tunnel_key` needs (confirmed empirically at P2 Task 1's spike), so the
+//! LB local-deliver branch this file used to byte-anchor has no bytecode oracle anymore.
 //!
-//! The native LB dispatch glue and the eBPF `uplink_rx` LB glue are composed independently around
-//! the shared `flowplane-core` LB fns; this anchor proves they produce byte-identical output.
+//! What this anchor still proves: the real compiled `uplink_rx`, fed a post-decap inner frame whose
+//! IPv4 dst is the overlay LB VIP (the exact fixture that used to drive the LB local-deliver path)
+//! and with the SAME LB/Maglev/firewall map state a real LB backend would carry, still fails SAFE —
+//! `TC_ACT_OK`, packet unchanged — because the tunnel-key gate runs before the LB dispatch. In
+//! production this is unreachable (the geneve device always stamps a tunnel key), but it is exactly
+//! what `BPF_PROG_TEST_RUN` CAN exercise for this fixture shape.
 //!
-//! Privileged: needs CAP_BPF + a kernel that supports XDP test-run. Run via `make sim-anchor`.
+//! The LB local-deliver scenario itself (Maglev selects THIS node's own underlay → deliver to the
+//! local tap, DSR, no conntrack) is exhaustively covered, bytecode-free, by
+//! `flowplane_sim::lb_scenario_test::ew_lb_local_deliver_no_reforward` and its siblings, which drive
+//! the SAME `flowplane_core::datapath::process_uplink` the real bytecode calls. `native_reference`
+//! below re-derives the SAME fixture's expected delivery as a sanity check, not a byte-parity oracle.
+//!
+//! Privileged: needs CAP_BPF + a kernel that supports tc test-run. Run via `make sim-anchor`.
 
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 
-use aya::maps::{Array, HashMap as AyaHashMap};
-use aya::programs::Xdp;
 use flowplane_common::{
-    FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local, MaglevKey, UnderlayValue, FW_ACTION_ACCEPT,
+    FwMeta, FwRule, LbKey, LbValue, Local, MaglevKey, UnderlayValue, FW_ACTION_ACCEPT,
     FW_DIR_INGRESS,
 };
-use flowplane_core::encap::{ETH_LEN, IPV6_LEN};
+
+use aya::programs::SchedClassifier;
 use flowplane_core::pkt::Action;
-use flowplane_core::uplink::GW_MAC;
-use flowplane_sim::EncapParams;
 use flowplane_sim::SimNode;
 
-// --- LB local-deliver fixture (mirrors flowplane_sim::ew_lb_local_deliver_no_reforward) ----------
+// --- LB local-deliver fixture (mirrors flowplane_sim::lb_scenario_test::ew_lb_local_deliver_no_reforward) ----
 
 const VNI: u32 = 100;
 const TAP: u32 = 42;
@@ -35,7 +43,6 @@ const TABLE_ID: u32 = 1;
 const GUEST_MAC: [u8; 6] = [0x66, 0x66, 0x66, 0x66, 0x66, 0x00];
 const GUEST_IP: [u8; 4] = [10, 0, 0, 20]; // the client guest (LB source)
 const OVERLAY_VIP: [u8; 4] = [10, 0, 100, 1]; // the balanced overlay VIP (inner dst, DSR)
-const ORIGIN_UL: [u8; 16] = ul(0xdd); // where the encapped frame nominally comes from
 const BACKEND_UL: [u8; 16] = ul(0xbb); // this node's underlay == the Maglev backend
 const DPORT: u16 = 443;
 
@@ -61,7 +68,9 @@ fn underlay_value() -> UnderlayValue {
     }
 }
 
-/// A full guest Ethernet frame `[Eth][IPv4][TCP]` from `GUEST_IP` -> `OVERLAY_VIP:DPORT`.
+/// The POST-decap inner frame `[InnerEth(14)][IPv4][TCP]` from `GUEST_IP` -> `OVERLAY_VIP:DPORT` —
+/// exactly what the kernel `collect_md` geneve device would hand `uplink_rx`. This is also the
+/// literal `BPF_PROG_TEST_RUN` input below — there is no outer wrapper to build anymore.
 fn inner_eth_frame() -> Vec<u8> {
     use etherparse::PacketBuilder;
     let builder = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
@@ -70,24 +79,6 @@ fn inner_eth_frame() -> Vec<u8> {
     let mut out = Vec::new();
     builder.write(&mut out, &[]).unwrap();
     out
-}
-
-/// Encapsulate the inner frame IP-in-IPv6 toward `BACKEND_UL` (fabric wire format).
-fn encapped_input() -> Vec<u8> {
-    let inner = inner_eth_frame();
-    let encapped = SimNode::new().edge_encap(
-        &inner,
-        EncapParams {
-            gateway_mac: [1; 6],
-            uplink_mac: [2; 6],
-            src_underlay: ORIGIN_UL,
-            nexthop_ipv6: BACKEND_UL,
-            inner_proto: 4, // IPPROTO_IPIP
-        },
-    );
-    // Outer IPv6 dst must be the backend underlay (uplink_rx keys UNDERLAY on it).
-    assert_eq!(&encapped[ETH_LEN + 24..ETH_LEN + 40], &BACKEND_UL);
-    encapped
 }
 
 /// The single ingress ALLOW rule the backend installs on `TAP`, covering the VIP dst (DSR: the
@@ -111,10 +102,11 @@ fn allow_vip_rule() -> FwRule {
     }
 }
 
-/// Build the native (pure-core) expected `SimOut` for the LB local-deliver scenario: a backend
-/// node whose UNDERLAY self-entry + overlay LB + Maglev self-selection + VIP-allow firewall match
-/// exactly the eBPF maps the anchor populates.
-fn native_output(encapped: &[u8]) -> (Action, Vec<u8>) {
+/// Native `flowplane_core::datapath::process_uplink` reference for the LB local-deliver fixture: a
+/// backend node whose UNDERLAY self-entry + overlay LB + Maglev self-selection + VIP-allow firewall
+/// match exactly the eBPF maps the (unreachable, see the module doc) LB dispatch would read. Sanity
+/// check on the fixture, not a byte-parity oracle.
+fn native_reference(inner: &[u8]) -> (Action, Vec<u8>) {
     let mut node = SimNode::with_local(local());
     // UNDERLAY self-entry: BACKEND_UL -> this node's vni + tap + guest MAC.
     node.maps.underlay.insert(BACKEND_UL, underlay_value());
@@ -151,17 +143,18 @@ fn native_output(encapped: &[u8]) -> (Action, Vec<u8>) {
     node.maps.fw_rules.insert((TAP, 0), allow_vip_rule());
 
     let l = local();
-    let out = node.uplink(encapped, VNI, underlay_value(), BACKEND_UL, &l);
+    let out = node.uplink(inner, VNI, &l);
     (out.action, out.pkt)
 }
 
-// --- Raw BPF_PROG_TEST_RUN syscall (copied from anchor_uplink.rs) ----------------------------
+// --- Raw BPF_PROG_TEST_RUN syscall (skb ctx — uplink_rx is a tc classifier, P2 Task 4b) ---------
 
 const BPF_PROG_TEST_RUN: libc::c_int = 10;
-const XDP_REDIRECT: u32 = 4;
+const TC_ACT_OK: u32 = 0;
 
-/// The `test` arm of the kernel's `union bpf_attr` (uapi/linux/bpf.h). Only this arm is needed for
-/// `BPF_PROG_TEST_RUN`; `#[repr(C)]` + explicit padding matches the kernel struct layout exactly.
+const SK_BUFF_SIZE: usize = 192;
+const SKB_IFINDEX_OFF: usize = 40;
+
 #[repr(C)]
 #[derive(Default)]
 struct BpfAttrTest {
@@ -188,18 +181,25 @@ struct TestRunOut {
     data: Vec<u8>,
 }
 
-/// Issue `bpf(BPF_PROG_TEST_RUN)` on `prog_fd` with `input` as `data_in`. Returns the kernel's
-/// return code (the XDP action) + the (possibly resized/mutated) output packet buffer.
-fn bpf_prog_test_run(prog_fd: RawFd, input: &[u8]) -> std::io::Result<TestRunOut> {
-    // XDP test-run may grow the frame by up to 256 bytes (kernel headroom); ours only shrinks
-    // (decap strips 40 bytes), but size the out buffer generously so data_size_out is never clipped.
+fn bpf_prog_test_run_skb(
+    prog_fd: RawFd,
+    input: &[u8],
+    ifindex: u32,
+) -> std::io::Result<TestRunOut> {
     let mut out_buf = vec![0u8; input.len() + 256];
+    let mut ctx_in = [0u8; SK_BUFF_SIZE];
+    ctx_in[SKB_IFINDEX_OFF..SKB_IFINDEX_OFF + 4].copy_from_slice(&ifindex.to_ne_bytes());
+    let mut ctx_out = [0u8; SK_BUFF_SIZE];
     let mut attr = BpfAttrTest {
         prog_fd: prog_fd as u32,
         data_in: input.as_ptr() as u64,
         data_size_in: input.len() as u32,
         data_out: out_buf.as_mut_ptr() as u64,
         data_size_out: out_buf.len() as u32,
+        ctx_in: ctx_in.as_ptr() as u64,
+        ctx_size_in: ctx_in.len() as u32,
+        ctx_out: ctx_out.as_mut_ptr() as u64,
+        ctx_size_out: ctx_out.len() as u32,
         repeat: 1,
         ..Default::default()
     };
@@ -224,24 +224,24 @@ fn bpf_prog_test_run(prog_fd: RawFd, input: &[u8]) -> std::io::Result<TestRunOut
 // --- The anchor test ------------------------------------------------------------------------
 
 #[test]
-#[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel)"]
-fn uplink_rx_lb_deliver_bytecode_matches_native_sim() {
-    // 1. Build the encapped inner frame (inner dst = OVERLAY_VIP) toward BACKEND_UL.
-    let encapped = encapped_input();
+#[ignore = "privileged: run via `make sim-anchor` (needs CAP_BPF + kernel tc test-run)"]
+fn uplink_rx_lb_deliver_bytecode_fails_safe_without_tunnel_key() {
+    let inner = inner_eth_frame();
 
-    // 2. Native pure-core expected output for the SAME fixture + map state.
-    let (native_action, native_pkt) = native_output(&encapped);
+    // Sanity: what the native core delivers for this fixture given a REAL tunnel key (the sim is
+    // the oracle for the LB local-deliver path — see the module doc).
+    let (native_action, _native_pkt) = native_reference(&inner);
     assert_eq!(
         native_action,
         Action::Redirect(TAP),
-        "sanity: native LB sim delivers the fixture to the backend's tap"
+        "sanity: native LB sim delivers the fixture to the backend's tap given a real tunnel key"
     );
 
-    // 3. Load the real eBPF object (aya-build embeds the bpfel object at $OUT_DIR/flowplane-prog;
-    //    flowplane is binary-only, so the load is inlined). Populate the maps the LB local-deliver
-    //    path reads: UNDERLAY, LB, MAGLEV, FW_META/FW_RULES, LOCAL.
+    // Load the real eBPF object (aya-build embeds the bpfel object at $OUT_DIR/flowplane-prog;
+    // flowplane is binary-only, so the load is inlined). No map population needed: the tunnel-key
+    // gate is the FIRST thing `try_uplink_rx` does, before the LB dispatch or any other map read
+    // (see the module doc).
     let bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/flowplane-prog"));
-    // The state maps are declared `pinned`, so the loader needs a bpffs `map_pin_path`.
     let pin = tempfile::Builder::new()
         .prefix("flowplane-anchor-lb-")
         .tempdir_in("/sys/fs/bpf")
@@ -251,139 +251,26 @@ fn uplink_rx_lb_deliver_bytecode_matches_native_sim() {
         .load(bytes)
         .expect("load compiled eBPF object");
 
-    {
-        let mut underlay: AyaHashMap<_, [u8; 16], UnderlayValue> =
-            AyaHashMap::try_from(ebpf.map_mut("UNDERLAY").expect("UNDERLAY map")).unwrap();
-        underlay
-            .insert(BACKEND_UL, underlay_value(), 0)
-            .expect("insert UNDERLAY");
-    }
-    {
-        let mut lb: AyaHashMap<_, LbKey, LbValue> =
-            AyaHashMap::try_from(ebpf.map_mut("LB").expect("LB map")).unwrap();
-        lb.insert(
-            LbKey {
-                vni: VNI,
-                ipv4: OVERLAY_VIP,
-                port: DPORT,
-                proto: 6,
-                _pad: 0,
-            },
-            LbValue {
-                table_id: TABLE_ID,
-                size: 1,
-            },
-            0,
-        )
-        .expect("insert LB");
-    }
-    {
-        let mut maglev: AyaHashMap<_, MaglevKey, [u8; 16]> =
-            AyaHashMap::try_from(ebpf.map_mut("MAGLEV").expect("MAGLEV map")).unwrap();
-        maglev
-            .insert(
-                MaglevKey {
-                    table_id: TABLE_ID,
-                    slot: 0,
-                },
-                BACKEND_UL,
-                0,
-            )
-            .expect("insert MAGLEV");
-    }
-    {
-        let mut fw_meta: AyaHashMap<_, u32, FwMeta> =
-            AyaHashMap::try_from(ebpf.map_mut("FW_META").expect("FW_META map")).unwrap();
-        fw_meta
-            .insert(
-                TAP,
-                FwMeta {
-                    ingress_count: 1,
-                    egress_count: 0,
-                },
-                0,
-            )
-            .expect("insert FW_META");
-    }
-    {
-        let mut fw_rules: AyaHashMap<_, FwRuleKey, FwRule> =
-            AyaHashMap::try_from(ebpf.map_mut("FW_RULES").expect("FW_RULES map")).unwrap();
-        fw_rules
-            .insert(
-                FwRuleKey {
-                    ifindex: TAP,
-                    idx: 0,
-                },
-                allow_vip_rule(),
-                0,
-            )
-            .expect("insert FW_RULES");
-    }
-    {
-        // LOCAL[0]: read by the LB reforward branch (not taken here — LB selects self) and by other
-        // uplink_rx branches. Populate it defensively so no branch traps on a missing LOCAL and to
-        // mirror a real node's map state.
-        let mut local_map: Array<_, Local> =
-            Array::try_from(ebpf.map_mut("LOCAL").expect("LOCAL map")).unwrap();
-        local_map.set(0, local(), 0).expect("write LOCAL[0]");
-    }
-
-    // 4. Load (verify) the uplink_rx program and get its kernel fd.
-    let prog: &mut Xdp = ebpf
+    let prog: &mut SchedClassifier = ebpf
         .program_mut("uplink_rx")
         .expect("uplink_rx program present")
         .try_into()
-        .expect("uplink_rx is an XDP program");
+        .expect("uplink_rx is a SchedClassifier (tcx) program");
     prog.load().expect("verify/load uplink_rx");
     let prog_fd = prog.fd().expect("uplink_rx fd").as_fd().as_raw_fd();
 
-    // 5. Run the real bytecode on the encapped input via BPF_PROG_TEST_RUN.
-    let out = bpf_prog_test_run(prog_fd, &encapped)
-        .expect("BPF_PROG_TEST_RUN on uplink_rx (needs CAP_BPF + kernel test-run support)");
+    // Run the real bytecode on the (undecorated) inner LB-VIP frame — no tunnel-key metadata attached.
+    let out = bpf_prog_test_run_skb(prog_fd, &inner, 1 /* loopback, always present */)
+        .expect("BPF_PROG_TEST_RUN on uplink_rx (needs CAP_BPF + kernel tc test-run support)");
 
-    // The LB local-deliver path ends in bpf_redirect(tap) -> XDP_REDIRECT after the in-program
-    // adjust_head (decap). The output buffer is the decapped+rewritten inner frame — byte-comparable
-    // to the native SimNode output.
     assert_eq!(
-        out.retval, XDP_REDIRECT,
-        "native LB pure-core diverged from real bytecode: expected XDP_REDIRECT ({XDP_REDIRECT}), \
-         bytecode returned action {}",
-        out.retval
-    );
-
-    // Primary anchor: full-frame byte parity between the native LB sim and the real bytecode.
-    assert_eq!(
-        out.data.len(),
-        native_pkt.len(),
-        "native LB pure-core diverged from real bytecode: output length {} != native {}\n\
-         bytecode: {:02x?}\nnative:   {:02x?}",
-        out.data.len(),
-        native_pkt.len(),
-        out.data,
-        native_pkt,
+        out.retval, TC_ACT_OK,
+        "uplink_rx must fail SAFE (TC_ACT_OK passthrough) when no tunnel-key metadata is present, \
+         even for an LB-VIP-shaped fixture — the tunnel-key gate runs before the LB dispatch (see \
+         the module doc); production never reaches this branch"
     );
     assert_eq!(
-        out.data, native_pkt,
-        "native LB pure-core diverged from real bytecode: decapped output bytes differ from SimNode\n\
-         bytecode: {:02x?}\nnative:   {:02x?}",
-        out.data, native_pkt,
-    );
-
-    // Sanity on the delivered inner-Ethernet rewrite (the guest-facing contract): dst = guest MAC,
-    // src = gateway MAC, ethertype = IPv4. Inner IPv4 dst stays the VIP (DSR).
-    assert_eq!(&out.data[0..6], &GUEST_MAC, "inner eth dst = guest MAC");
-    assert_eq!(&out.data[6..12], &GW_MAC, "inner eth src = gateway MAC");
-    assert_eq!(&out.data[12..14], &[0x08, 0x00], "inner ethertype = IPv4");
-    // Outer Eth(14)+IPv6(40) stripped, inner Eth(14) restored: out == input - IPV6_LEN.
-    assert_eq!(
-        out.data.len(),
-        encapped.len() - IPV6_LEN,
-        "outer IPv6 (40B) stripped from the frame"
-    );
-    // DSR: the inner IPv4 dst is still the VIP (offset 14 eth + 16 into IPv4 header = dst addr).
-    assert_eq!(
-        &out.data[ETH_LEN + 16..ETH_LEN + 20],
-        &OVERLAY_VIP,
-        "DSR: inner IPv4 dst stays the overlay VIP"
+        out.data, inner,
+        "uplink_rx must not mutate the packet before its tunnel-key gate"
     );
 }
