@@ -51,10 +51,11 @@ type fwCall struct {
 }
 
 type routeCall struct {
-	vni      uint32
-	prefix   string
-	nexthop  string
-	external bool
+	vni         uint32
+	prefix      string
+	nexthop     string
+	external    bool
+	deliveryVNI uint32
 }
 
 type natSrcCall struct {
@@ -98,12 +99,12 @@ func (f *recordingDP) getNbrNat(natIp string, min, max uint32) (string, bool) {
 	return v, ok
 }
 
-func (f *recordingDP) AddRoute(_ context.Context, vni uint32, prefix, nexthop string, external bool) error {
+func (f *recordingDP) AddRoute(_ context.Context, vni uint32, prefix, nexthop string, external bool, deliveryVNI uint32) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.added[key(vni, prefix)] = nexthop
 	f.external[key(vni, prefix)] = external
-	f.routeAdds = append(f.routeAdds, routeCall{vni, prefix, nexthop, external})
+	f.routeAdds = append(f.routeAdds, routeCall{vni, prefix, nexthop, external, deliveryVNI})
 	return nil
 }
 func (f *recordingDP) AddNatSource(_ context.Context, vni uint32, src, nat string, portMin, portMax uint32) error {

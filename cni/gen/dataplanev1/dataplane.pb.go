@@ -1383,6 +1383,7 @@ type AddRouteRequest struct {
 	Prefix          string                 `protobuf:"bytes,2,opt,name=prefix,proto3" json:"prefix,omitempty"`                                          // CIDR: "10.0.0.5/32" or "2001:db8::5/128"
 	NexthopUnderlay string                 `protobuf:"bytes,3,opt,name=nexthop_underlay,json=nexthopUnderlay,proto3" json:"nexthop_underlay,omitempty"` // remote node underlay IPv6, e.g. "fd00:db8:0:2::a"
 	External        bool                   `protobuf:"varint,4,opt,name=external,proto3" json:"external,omitempty"`                                     // if set, matching source traffic egress-SNATs (e.g. an external default route)
+	DeliveryVni     uint32                 `protobuf:"varint,5,opt,name=delivery_vni,json=deliveryVni,proto3" json:"delivery_vni,omitempty"`            // on-wire Geneve VNI to stamp for this route; 0 means == vni
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1443,6 +1444,13 @@ func (x *AddRouteRequest) GetExternal() bool {
 		return x.External
 	}
 	return false
+}
+
+func (x *AddRouteRequest) GetDeliveryVni() uint32 {
+	if x != nil {
+		return x.DeliveryVni
+	}
+	return 0
 }
 
 type AddRouteResponse struct {
@@ -2200,12 +2208,13 @@ const file_dataplane_proto_rawDesc = "" +
 	"\agateway\x18\x02 \x01(\tR\agateway\x12\x10\n" +
 	"\x03mtu\x18\x03 \x01(\rR\x03mtu\x12\x10\n" +
 	"\x03dns\x18\x04 \x03(\tR\x03dns\"\x1a\n" +
-	"\x18ConfigureNetworkResponse\"\x82\x01\n" +
+	"\x18ConfigureNetworkResponse\"\xa5\x01\n" +
 	"\x0fAddRouteRequest\x12\x10\n" +
 	"\x03vni\x18\x01 \x01(\rR\x03vni\x12\x16\n" +
 	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12)\n" +
 	"\x10nexthop_underlay\x18\x03 \x01(\tR\x0fnexthopUnderlay\x12\x1a\n" +
-	"\bexternal\x18\x04 \x01(\bR\bexternal\"\x12\n" +
+	"\bexternal\x18\x04 \x01(\bR\bexternal\x12!\n" +
+	"\fdelivery_vni\x18\x05 \x01(\rR\vdeliveryVni\"\x12\n" +
 	"\x10AddRouteResponse\"@\n" +
 	"\x14WithdrawRouteRequest\x12\x10\n" +
 	"\x03vni\x18\x01 \x01(\rR\x03vni\x12\x16\n" +

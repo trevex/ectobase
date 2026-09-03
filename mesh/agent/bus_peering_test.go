@@ -49,6 +49,11 @@ func TestPeeringImport_FilterByPrefix(t *testing.T) {
 	if got == nil || got.vni != 100 || got.external {
 		t.Fatalf("imported route must be vni=100 external=false; got %+v", got)
 	}
+	// The load-bearing delivery_vni case: the route is keyed under the importer's local vni (100),
+	// but the on-wire Geneve delivery must be stamped with the peer's origin vni (200 = ru.Vni).
+	if got.deliveryVNI != 200 {
+		t.Fatalf("peer import must set deliveryVNI=peer origin vni (200); got %d", got.deliveryVNI)
+	}
 
 	// Outside the imported prefix -> dropped (no install under vni 100).
 	deliverPeer(ctx, b, 200, "10.9.9.9/32", "fd00::peer")
@@ -113,6 +118,11 @@ func TestPeeringImport_EvictAndRestore(t *testing.T) {
 	}
 	if b.origin[100]["10.1.0.5/32"] != "peer" {
 		t.Fatalf("origin must be peer after restore; got %q", b.origin[100]["10.1.0.5/32"])
+	}
+	// Restore must also re-stamp deliveryVNI with the peer's origin vni (200), matching the
+	// original import — not the local table vni (100).
+	if got := lastAdd(dp, "10.1.0.5/32"); got == nil || got.deliveryVNI != 200 {
+		t.Fatalf("restored import must set deliveryVNI=200; got %+v", got)
 	}
 }
 

@@ -158,8 +158,8 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 				return nil, nil, nil, nil, nil, fmt.Errorf("interface %s ip %q: %w", iface.InterfaceID, ip, err)
 			}
 			// Endpoint host routes are internal; egress-NAT default routes (external=true)
-			// are distributed separately by a controller.
-			announce = append(announce, Route{Vni: iface.Vni, Prefix: prefix, Nexthop: nexthop, External: false})
+			// are distributed separately by a controller. Own route: delivery vni == its own vni.
+			announce = append(announce, Route{Vni: iface.Vni, Prefix: prefix, Nexthop: nexthop, External: false, DeliveryVNI: iface.Vni})
 		}
 	}
 
@@ -208,7 +208,7 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 	}
 	for _, er := range extRoutes {
 		vniSet[er.Vni] = struct{}{} // subscribe to the VNI we originate into
-		announce = append(announce, Route{Vni: er.Vni, Prefix: er.Prefix, Nexthop: er.Nexthop, External: er.External})
+		announce = append(announce, Route{Vni: er.Vni, Prefix: er.Prefix, Nexthop: er.Nexthop, External: er.External, DeliveryVNI: er.Vni})
 	}
 
 	// LB backends: announce each backed VIP as an anycast overlay route (nexthop = this NIC's /128).
@@ -223,7 +223,7 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 		if err != nil {
 			return nil, nil, nil, nil, nil, fmt.Errorf("lb vip %q: %w", lb.VIP, err)
 		}
-		announce = append(announce, Route{Vni: lb.Vni, Prefix: prefix, Nexthop: lb.NicUnderlay, External: false})
+		announce = append(announce, Route{Vni: lb.Vni, Prefix: prefix, Nexthop: lb.NicUnderlay, External: false, DeliveryVNI: lb.Vni})
 	}
 
 	egressVNIs, err = r.desiredEgressVNIs(ctx)

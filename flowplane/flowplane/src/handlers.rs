@@ -26,16 +26,24 @@ pub fn add_route<W: MapWriter>(
     let nexthop = parse_nexthop6(&req.nexthop_underlay).map_err(invalid)?;
     let vni = req.vni;
     let external = req.external;
+    // The on-wire Geneve VNI may differ from the route's own table VNI (e.g. VPC peering:
+    // the route is keyed under the importer's local VNI, but delivery must be stamped with
+    // the peer's origin VNI). 0 ⇒ no explicit delivery VNI given, so it defaults to `vni`.
+    let dvni = if req.delivery_vni != 0 {
+        req.delivery_vni
+    } else {
+        vni
+    };
     // Idempotent: drop any existing (vni, prefix) so a re-announce or moved prefix replaces
     // the nexthop instead of hitting ROUTE_EXISTS (identical to the eBPF handler).
     let res: anyhow::Result<()> = if is_v6 {
         core.delete_route6(vni, bytes, len)
-            .and_then(|_| core.create_route6(vni, bytes, len, nexthop, vni, external))
+            .and_then(|_| core.create_route6(vni, bytes, len, nexthop, dvni, external))
     } else {
         let mut v4 = [0u8; 4];
         v4.copy_from_slice(&bytes[..4]);
         core.delete_route(vni, v4, len)
-            .and_then(|_| core.create_route(vni, v4, len, nexthop, vni, external))
+            .and_then(|_| core.create_route(vni, v4, len, nexthop, dvni, external))
     };
     res.map_err(internal)?;
     Ok(pb::AddRouteResponse {})
@@ -393,6 +401,7 @@ mod tests {
                 prefix: "10.0.0.0/24".into(),
                 nexthop_underlay: "2001:db8::1".into(),
                 external: true,
+                delivery_vni: 0,
             },
         );
         assert!(ok.is_ok(), "valid route: {ok:?}");
@@ -404,9 +413,56 @@ mod tests {
                 prefix: "not-a-cidr".into(),
                 nexthop_underlay: "2001:db8::1".into(),
                 external: true,
+                delivery_vni: 0,
             },
         );
         assert_eq!(bad.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn add_route_v4_delivery_vni_overrides_nexthop_vni_key_stays_own_vni() {
+        let mut c = core();
+        // Peer-import shape: the route is keyed under the importer's own vni (100), but the
+        // on-wire Geneve delivery must be stamped with the peer's origin vni (777).
+        let ok = add_route(
+            &mut c,
+            &pb::AddRouteRequest {
+                vni: 100,
+                prefix: "10.0.0.0/24".into(),
+                nexthop_underlay: "2001:db8::1".into(),
+                external: false,
+                delivery_vni: 777,
+            },
+        );
+        assert!(ok.is_ok(), "valid route: {ok:?}");
+        let val = c
+            .writer()
+            .routes
+            .get(&(100, [10, 0, 0, 0], 24))
+            .expect("route programmed under its own vni");
+        assert_eq!(
+            val.nexthop_vni, 777,
+            "delivery_vni must land in RouteValue.nexthop_vni"
+        );
+
+        // delivery_vni: 0 ⇒ falls back to vni (unchanged behavior).
+        let ok2 = add_route(
+            &mut c,
+            &pb::AddRouteRequest {
+                vni: 200,
+                prefix: "10.1.0.0/24".into(),
+                nexthop_underlay: "2001:db8::1".into(),
+                external: false,
+                delivery_vni: 0,
+            },
+        );
+        assert!(ok2.is_ok(), "valid route: {ok2:?}");
+        let val2 = c
+            .writer()
+            .routes
+            .get(&(200, [10, 1, 0, 0], 24))
+            .expect("route programmed");
+        assert_eq!(val2.nexthop_vni, 200, "delivery_vni=0 must default to vni");
     }
 
     #[test]

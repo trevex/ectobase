@@ -18,7 +18,10 @@ import (
 // Dataplane is the subset of flowplane the agent drives. dpAdapter wraps the real
 // DataplaneNode gRPC client; tests supply a fake.
 type Dataplane interface {
-	AddRoute(ctx context.Context, vni uint32, prefix, nexthop string, external bool) error
+	// deliveryVNI is the on-wire Geneve VNI to stamp for this route; it may differ from vni (the
+	// route's table key) for VPC-peering imports, where the key is the importer's local VNI but
+	// delivery must be stamped with the peer's origin VNI. 0 ⇒ defaults to vni.
+	AddRoute(ctx context.Context, vni uint32, prefix, nexthop string, external bool, deliveryVNI uint32) error
 	WithdrawRoute(ctx context.Context, vni uint32, prefix string) error
 	// AddNatSource programs LOCAL egress SNAT: (vni, sourceIP) is SNATed onto
 	// natIP:[portMin,portMax). Delete-then-add, so re-calling is idempotent.
@@ -99,6 +102,10 @@ type Route struct {
 	Prefix   string // CIDR, e.g. "10.0.0.5/32"
 	Nexthop  string // this node's underlay IPv6
 	External bool   // if set, matching source traffic egress-SNATs (e.g. an external default route)
+	// DeliveryVNI is the on-wire Geneve VNI for this route. For every route this node originates
+	// (announces), delivery always equals its own Vni — VNI-differing delivery only arises on the
+	// PEER-IMPORT path (see Bus.applyPeer), which builds AddRoute calls directly, not via Route.
+	DeliveryVNI uint32
 }
 
 // Bus is one agent's route-bus session driver.
@@ -422,7 +429,11 @@ func (b *Bus) apply(ctx context.Context, ru *rbv1.RouteUpdate) {
 		for _, vni := range evs {
 			switch ru.Op {
 			case rbv1.RouteOp_ROUTE_OP_ADD:
-				if err := b.dp.AddRoute(ctx, vni, ru.Prefix, nh, true); err != nil {
+				// deliveryVNI = ru.Vni here is PublicVNI (0): there is no real VPC to deliver into at
+				// VNI 0, and the dataplane treats delivery_vni=0 as "default to the key vni" — so this
+				// naturally preserves the original behavior (delivery == the local egress vni), while
+				// keeping this import structurally identical to a peer import (key != origin vni).
+				if err := b.dp.AddRoute(ctx, vni, ru.Prefix, nh, true, ru.Vni); err != nil {
 					log.Printf("import AddRoute vni=%d %s -> %s: %v", vni, ru.Prefix, nh, err)
 				}
 			case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
@@ -440,7 +451,8 @@ func (b *Bus) apply(ctx context.Context, ru *rbv1.RouteUpdate) {
 	// into ru.Vni's table first, then (if ru.Vni is imported) import it into the importer tables.
 	switch ru.Op {
 	case rbv1.RouteOp_ROUTE_OP_ADD:
-		if err := b.dp.AddRoute(ctx, ru.Vni, ru.Prefix, nh, ru.External); err != nil {
+		// Own table install: delivery vni == the route's own vni (key and delivery match).
+		if err := b.dp.AddRoute(ctx, ru.Vni, ru.Prefix, nh, ru.External, ru.Vni); err != nil {
 			log.Printf("AddRoute vni=%d %s -> %s external=%t: %v", ru.Vni, ru.Prefix, nh, ru.External, err)
 			// Still attempt the peer import below: it targets other tables and must not be skipped.
 		} else {
@@ -489,7 +501,10 @@ func (b *Bus) applyPeer(ctx context.Context, ru *rbv1.RouteUpdate, nh string, im
 			if b.origin[im.localVNI][ru.Prefix] == "own" {
 				continue // local route wins; do not shadow it
 			}
-			if err := b.dp.AddRoute(ctx, im.localVNI, ru.Prefix, nh, false); err != nil {
+			// Peer import: key = im.localVNI (the importer's table), but delivery must be stamped
+			// with ru.Vni (the peer's own/origin vni) so the datapath encaps toward the peer VPC —
+			// this is the load-bearing case for delivery_vni.
+			if err := b.dp.AddRoute(ctx, im.localVNI, ru.Prefix, nh, false, ru.Vni); err != nil {
 				log.Printf("peer import AddRoute vni=%d %s -> %s: %v", im.localVNI, ru.Prefix, nh, err)
 				continue
 			}
@@ -527,7 +542,8 @@ func (b *Bus) restoreImport(ctx context.Context, localVNI uint32, prefix string)
 		if !ok {
 			continue
 		}
-		if err := b.dp.AddRoute(ctx, localVNI, prefix, nh, false); err != nil {
+		// Restore mirrors applyPeer: key = localVNI, delivery = im.PeerVNI (the peer's origin vni).
+		if err := b.dp.AddRoute(ctx, localVNI, prefix, nh, false, im.PeerVNI); err != nil {
 			log.Printf("peer import restore AddRoute vni=%d %s -> %s: %v", localVNI, prefix, nh, err)
 			return
 		}
@@ -644,8 +660,10 @@ type dpAdapter struct{ c dpv1.DataplaneNodeClient }
 // NewDataplaneAdapter adapts a DataplaneNode client to the agent's Dataplane interface.
 func NewDataplaneAdapter(c dpv1.DataplaneNodeClient) Dataplane { return dpAdapter{c: c} }
 
-func (d dpAdapter) AddRoute(ctx context.Context, vni uint32, prefix, nexthop string, external bool) error {
-	_, err := d.c.AddRoute(ctx, &dpv1.AddRouteRequest{Vni: vni, Prefix: prefix, NexthopUnderlay: nexthop, External: external})
+func (d dpAdapter) AddRoute(ctx context.Context, vni uint32, prefix, nexthop string, external bool, deliveryVNI uint32) error {
+	_, err := d.c.AddRoute(ctx, &dpv1.AddRouteRequest{
+		Vni: vni, Prefix: prefix, NexthopUnderlay: nexthop, External: external, DeliveryVni: deliveryVNI,
+	})
 	return err
 }
 func (d dpAdapter) WithdrawRoute(ctx context.Context, vni uint32, prefix string) error {
