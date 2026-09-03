@@ -1,0 +1,64 @@
+! Generated from templates/frr/switch.conf.tmpl — do not edit by hand.
+! ToR switch (AS {{ .ASSwitch }}) — pure /128 relay with ECMP. Peers unnumbered to the
+! two edges and to every compute node (+ optional ceph). Nodes share AS {{ .ASHost }},
+! so host neighbors get as-override to re-propagate each node's /128 to the others.
+! No interface addresses, no originated /64, no router-advert (the pure /128-VTEP model).
+frr defaults datacenter
+hostname sw{{ .SW }}
+!
+interface eth1
+ no ipv6 nd suppress-ra
+!
+interface eth2
+ no ipv6 nd suppress-ra
+!
+{{- range $n := .Nodes }}
+interface eth{{ add 2 $n.PortSeq }}
+ no ipv6 nd suppress-ra
+!
+{{- end }}
+{{- if .CephEnabled }}
+interface eth{{ add 2 .CephPortSeq }}
+ no ipv6 nd suppress-ra
+!
+{{- end }}
+bfd
+ profile fabric-fast
+  transmit-interval 150
+  receive-interval 150
+  detect-multiplier 3
+ exit
+exit
+!
+router bgp {{ .ASSwitch }}
+ bgp router-id 10.0.1.{{ .SW }}
+ bgp bestpath as-path multipath-relax
+ ! Edges (unnumbered).
+ neighbor eth1 interface remote-as external
+ neighbor eth1 bfd profile fabric-fast
+ neighbor eth2 interface remote-as external
+ neighbor eth2 bfd profile fabric-fast
+ ! Compute-node host ports (unnumbered, shared AS {{ .ASHost }}).
+{{- range $n := .Nodes }}
+ neighbor eth{{ add 2 $n.PortSeq }} interface remote-as external
+ neighbor eth{{ add 2 $n.PortSeq }} bfd profile fabric-fast
+{{- end }}
+{{- if .CephEnabled }}
+ neighbor eth{{ add 2 .CephPortSeq }} interface remote-as external
+ neighbor eth{{ add 2 .CephPortSeq }} bfd profile fabric-fast
+{{- end }}
+ !
+ address-family ipv6 unicast
+  maximum-paths 64
+  neighbor eth1 activate
+  neighbor eth2 activate
+{{- range $n := .Nodes }}
+  neighbor eth{{ add 2 $n.PortSeq }} activate
+  neighbor eth{{ add 2 $n.PortSeq }} as-override
+{{- end }}
+{{- if .CephEnabled }}
+  neighbor eth{{ add 2 .CephPortSeq }} activate
+  neighbor eth{{ add 2 .CephPortSeq }} as-override
+{{- end }}
+ exit-address-family
+!
