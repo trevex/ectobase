@@ -105,6 +105,11 @@ struct Inner {
     /// ("fd is not pointing to valid bpf_map"), exactly like `_locals`/`_guest_progs`.
     _uplink_dev: UplinkDevMap,
     guest_dev: GuestDevMap,
+    /// ifindex of the node-wide `collect_md` Geneve device (`flowplane_device::GENEVE_DEV`),
+    /// brought up in `bring_up`. Not yet read by anything — Task 3/4 program this into the
+    /// datapath (the LOCAL map / redirect target for the Geneve-encap rewrite).
+    #[allow(dead_code)]
+    geneve_ifindex: u32,
     core: ControlCore<AyaWriter>,
     /// Interfaces recovered by `rebuild_from_maps` on adopt: (interface_id, device) whose guest
     /// program must be re-attached by the caller (`Serve`). Empty on a fresh (non-adopt) bring-up.
@@ -148,6 +153,14 @@ impl Control {
     ) -> anyhow::Result<Self> {
         let mut ebpf = loader::load_ebpf(pin_dir)?;
         loader::maybe_install_logger(&mut ebpf);
+        // Bring up the node-wide `collect_md` Geneve device (P2 overlay encap target). Idempotent
+        // (delete-if-exists then add), so this is safe on both a fresh bring-up AND an adopt
+        // restart — unlike the pinned BPF maps/links, this netdev is NOT torn down on graceful
+        // shutdown (see the `Serve` shutdown handler in main.rs), so re-running `ensure_geneve_dev`
+        // here just confirms/repairs it. Nothing reads `geneve_ifindex` yet (Task 3/4 will program
+        // it into the datapath); it is threaded through now so that wiring is additive later.
+        let geneve_ifindex = flowplane_device::ensure_geneve_dev(flowplane_device::GENEVE_DEV)
+            .context("bring up collect_md geneve device")?;
         // The uplink RX path is always XDP, regardless of the guest edge attach mode.
         if pin_links {
             let uplink_pin = format!("uplink-{uplink}");
@@ -248,6 +261,7 @@ impl Control {
             _locals: locals,
             _uplink_dev: uplink_dev,
             guest_dev,
+            geneve_ifindex,
             core: ControlCore::new(aya),
             recovered: Vec::new(),
             recovered_underlays: Vec::new(),
