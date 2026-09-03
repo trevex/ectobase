@@ -18,18 +18,21 @@ use crate::encap::ETH_LEN;
 use crate::err::DpErr;
 use crate::pkt::{Action, Pkt};
 
-// `GW_MAC` (inner-eth src on host delivery) + `ETH_P_IP` are single-sourced in
-// `flowplane_common::proto`; re-exported so `flowplane_core::uplink::{GW_MAC, ETH_P_IP}` keeps resolving.
-pub use flowplane_common::proto::{ETH_P_IP, GW_MAC};
+// `GW_MAC` (inner-eth src on host delivery) + `ETH_P_IP`/`ETH_P_IPV6` are single-sourced in
+// `flowplane_common::proto`; re-exported so `flowplane_core::uplink::{GW_MAC, ETH_P_IP, ETH_P_IPV6}`
+// keeps resolving.
+pub use flowplane_common::proto::{ETH_P_IP, ETH_P_IPV6, GW_MAC};
 
 /// Rewrite the inner Ethernet header for guest tap delivery, returning the delivery `Action`. Byte-
 /// identical to the inner-Eth-rewrite tail of the eBPF `try_uplink_rx` (the outer-strip that used to
 /// precede it is gone — the kernel `collect_md` geneve device already decapped before this program
 /// runs). Does NOT perform DNAT or execute the redirect — the caller does those.
 ///
-/// On entry the frame is already the decapped inner frame `[InnerEth(14)][InnerIPv4 ...]` (exactly
+/// On entry the frame is already the decapped inner frame `[InnerEth(14)][InnerIPv4/v6 ...]` (exactly
 /// what `get_tunnel_key` + the geneve device hand the tcx program). The inner Ethernet header is
-/// rewritten in place (dst=guest_mac, src=GW_MAC, ethertype=IPv4); the frame is NOT resized.
+/// rewritten in place (dst=guest_mac, src=GW_MAC, ethertype=`ethertype`); the frame is NOT resized.
+/// `ethertype` is `ETH_P_IP` for the v4 ingress path, `ETH_P_IPV6` for the v6 one (P2 Task 4c) — the
+/// rewrite itself is protocol-agnostic, only the wire ethertype it stamps differs.
 ///
 /// Returns `Ok(Action::Redirect(tap_ifindex))` after a successful rewrite; `Err(DpErr::Bounds)` if
 /// the frame is too short (matches the eBPF `Err` path).
@@ -38,6 +41,7 @@ pub fn decap_and_rewrite<P: Pkt>(
     pkt: &mut P,
     tap_ifindex: u32,
     guest_mac: [u8; 6],
+    ethertype: u16,
 ) -> Result<Action, DpErr> {
     if pkt.len() < ETH_LEN {
         return Err(DpErr::Bounds);
@@ -45,7 +49,7 @@ pub fn decap_and_rewrite<P: Pkt>(
     let mut ok = true;
     ok &= pkt.write_bytes(0, &guest_mac); // dst = guest MAC
     ok &= pkt.write_bytes(6, &GW_MAC); // src = gateway MAC
-    ok &= pkt.write_bytes(12, &ETH_P_IP.to_be_bytes()); // ethertype = IPv4
+    ok &= pkt.write_bytes(12, &ethertype.to_be_bytes());
     if !ok {
         return Err(DpErr::Bounds);
     }

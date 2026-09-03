@@ -33,8 +33,14 @@ use crate::tunnel::{get_tunnel_key, redirect as tunnel_redirect, set_tunnel_key}
 /// re-encaps it on transmit. Otherwise the `Action` alone decides: `Redirect` is a plain tc redirect
 /// (guest tap delivery), `Pass` hands the frame to the local kernel (WAN-edge local-deliver), `Drop`
 /// shoots it.
+///
+/// `pub(crate)` (P2 Task 4c): shared with `v6::v6_uplink_rx`, now that it also dispatches to a
+/// `flowplane_core::datapath` orchestrator's `Action`/`TunnelEncap` pair instead of hand-executing
+/// its own redirect/pass/drop. Still `#[inline(always)]` — this crosses a MODULE boundary, not a
+/// bpf-to-bpf CALL boundary, so it inlines directly into each program's own function body at compile
+/// time either way; no verifier stack cost from being shared.
 #[inline(always)]
-fn execute(ctx: &TcContext, action: Action, tunnel: Option<TunnelEncap>) -> i32 {
+pub(crate) fn execute(ctx: &TcContext, action: Action, tunnel: Option<TunnelEncap>) -> i32 {
     if let Some(tunnel) = tunnel {
         if !set_tunnel_key(ctx.skb.skb, &tunnel) {
             return TC_ACT_SHOT;

@@ -10,7 +10,6 @@ mod dhcp;
 mod egress;
 mod ingress;
 mod inspect;
-mod lb;
 mod maps;
 mod meter;
 mod nat;

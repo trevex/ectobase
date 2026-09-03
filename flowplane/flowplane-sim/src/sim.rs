@@ -240,6 +240,102 @@ impl SimNode {
         self.uplink(inner, vni, &local)
     }
 
+    /// Host `v6_uplink_rx` for the v6 LB + base ingress path. `inner` is the POST-decap frame
+    /// `[InnerEth(14)][InnerIPv6 ...]` — exactly what the kernel `collect_md` geneve device hands the
+    /// real tcx program `xdp_uplink_v6` (tail-called from `uplink_rx` on a decapped-inner-ethertype
+    /// IPv6 frame). v6 mirror of [`SimNode::uplink`], driving
+    /// [`flowplane_core::datapath::process_uplink_v6`] (P2 Task 4c) — the same shared-core
+    /// orchestrator `v6.rs::v6_uplink_rx` now delegates to. Mirrors `process_uplink_v6`:
+    ///   1. `lb_select_forward_v6` → local backend (deliver to its tap) | remote (reforward, no
+    ///      decap) | None → mechanisms #1/#4 (`resolve_uplink_target6`) — NO mechanism #3
+    ///      (neighbor-NAT relay is v4-only; v6 has no NAT_IPS/NEIGHBOR_NAT concept);
+    ///   2. ingress firewall on the inner v6 5-tuple against the deliver tap (new-flow gate,
+    ///      `CONNTRACK6`-backed);
+    ///   3. conntrack6 create-on-miss, **skipped for LB** (DSR, no ct);
+    ///   4. inner-Ethernet rewrite for guest tap delivery (ethertype = IPv6; no resize).
+    ///
+    /// A `ROUTES6` miss that is also not the WAN-edge sentinel resolves `UplinkTarget::Drop` — the
+    /// fail-closed security default this task gives v6 (HEAD's hand-inlined path fell through to
+    /// `Pass`/`TC_ACT_OK` here instead).
+    pub fn uplink_v6(&mut self, inner: &[u8], vni: u32, local: &Local) -> SimOut {
+        let mut pkt = VecPkt::from_bytes(inner);
+        let in_ = flowplane_core::datapath::UplinkIn {
+            vni,
+            local,
+            now: self.now,
+        };
+        let out = flowplane_core::datapath::process_uplink_v6(&mut pkt, &mut self.maps, &in_);
+        SimOut {
+            action: out.action,
+            pkt: pkt.into_bytes(),
+            tunnel: out.tunnel,
+        }
+    }
+
+    /// v6 mirror of [`SimNode::host_uplink`]: synthesizes the `ROUTES6` self-route + `UNDERLAY` entry
+    /// `program_interface` would have written for a v6 guest at overlay `dst` on `tap` (mechanism #1
+    /// of the v6 ingress delivery-target reconstruction — see
+    /// `flowplane_core::datapath::resolve_uplink_target6`), then delegates to [`SimNode::uplink_v6`].
+    /// With no LB maps set, `lb_select_forward_v6` returns None and the base path runs. `inner` is
+    /// the POST-decap frame.
+    pub fn host_uplink_v6(
+        &mut self,
+        inner: &[u8],
+        vni: u32,
+        dst: [u8; 16],
+        tap: u32,
+        guest_mac: [u8; 6],
+    ) -> SimOut {
+        // Placeholder self-route underlay — its VALUE is irrelevant (never re-parsed from the
+        // wire), it only needs to be a unique key joining the ROUTES6 entry to the UNDERLAY entry.
+        // Distinguished from `host_uplink`'s v4 placeholder by byte [13] so a test that (unusually)
+        // stands up both a v4 and a v6 self-route on the SAME tap on the SAME node never collides.
+        let underlay = [
+            0x20,
+            0x01,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            6,
+            (tap >> 8) as u8,
+            tap as u8,
+        ];
+        self.maps.underlay.insert(
+            underlay,
+            UnderlayValue {
+                vni,
+                tap_ifindex: tap,
+                guest_mac,
+                _pad: [0; 2],
+            },
+        );
+        self.maps.add_route6(
+            vni,
+            dst,
+            RouteValue {
+                nexthop_vni: vni,
+                nexthop_ipv6: underlay,
+                is_external: 0,
+                _pad: [0; 3],
+            },
+        );
+        let local = Local {
+            uplink_ifindex: 0,
+            uplink_mac: [0; 6],
+            gateway_mac: [0; 6],
+            underlay_ipv6: [0; 16],
+        };
+        self.uplink_v6(inner, vni, &local)
+    }
+
     /// Guest egress (`guest_tx`) for the IPv4 forwarding path. `frame` is a full guest Ethernet
     /// frame `[InnerEth(14)][IPv4][L4]`; `meta` is the sending port's `PortMeta` (vni + underlay
     /// identity). Composes the REAL core fns in the exact order + gates of the eBPF
