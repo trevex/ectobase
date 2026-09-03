@@ -10,9 +10,8 @@
 //! prefix, with an egress-allow firewall rule + an external v6 `route6`, is:
 //!   - deny-by-default egress-firewalled (a fresh flow with no egress rule is DROPPED);
 //!   - firewall-tracked in `conntrack6` (forward + pre-seeded reverse entries);
-//!   - route6-looked-up → encapped IP-in-IPv6 toward the nexthop with **outer next-header
-//!     IPPROTO_IPV6 (41 — IPv6-in-IPv6, NOT IPIP/4)**, outer src = node underlay, outer dst = route
-//!     nexthop.
+//!   - route6-looked-up → emits the `TunnelEncap{vni, remote}` decision toward the route nexthop
+//!     (NOT outer bytes — see `flowplane_core::encap`), leaving the inner frame byte-unchanged.
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
@@ -20,7 +19,7 @@ use flowplane_common::{
     FW_DIR_EGRESS,
 };
 use flowplane_core::conntrack::{ct_key6, invert_key6};
-use flowplane_core::encap::{ETH_LEN, IPV6_LEN};
+use flowplane_core::encap::{TunnelEncap, ETH_LEN};
 use flowplane_core::maps::Maps;
 use flowplane_core::pkt::Action;
 
@@ -144,49 +143,25 @@ fn native_v6_egress_encaps_ipv6_in_ipv6_and_tracks_conntrack6() {
     let mut node = node();
     let out = node.guest_tx_v6(&tcp_frame(), &port_meta());
 
-    // 1. Encap arm → redirect out the uplink; frame grew by exactly 40 (outer IPv6 prepended).
+    // 1. Encap arm → redirect out the uplink; the tunnel decision carries the route's vni + nexthop
+    //    underlay; the frame is byte-for-byte unchanged (no outer bytes written).
     assert_eq!(
         out.action,
         Action::Redirect(UPLINK_IFINDEX),
         "native v6 egress encaps out the uplink"
     );
     assert_eq!(
-        out.pkt.len(),
-        tcp_frame().len() + 40,
-        "outer IPv6 header (40B) prepended by grow_head/write_outer_v6"
-    );
-
-    // 2. Outer IPv6 header fields: version 6, next-header IPPROTO_IPV6 (41 — the v6-in-v6 difference
-    //    from the v4 IPIP/4 path), src = node underlay, dst = route nexthop underlay.
-    assert_eq!(out.pkt[ETH_LEN] >> 4, 6, "outer IPv6 version 6");
-    assert_eq!(
-        out.pkt[ETH_LEN + 6],
-        41,
-        "outer next-header = IPPROTO_IPV6 (IPv6-in-IPv6, NOT IPIP)"
+        out.tunnel,
+        Some(TunnelEncap {
+            vni: VNI,
+            remote: NEXTHOP_UNDERLAY
+        }),
+        "tunnel decision carries the route's vni + nexthop underlay"
     );
     assert_eq!(
-        &out.pkt[ETH_LEN + 8..ETH_LEN + 24],
-        &SELF_UNDERLAY,
-        "outer IPv6 src = node underlay"
-    );
-    assert_eq!(
-        &out.pkt[ETH_LEN + 24..ETH_LEN + 40],
-        &NEXTHOP_UNDERLAY,
-        "outer IPv6 dst = route nexthop underlay"
-    );
-
-    // 3. Inner IPv6 is the original guest packet, untouched (no SNAT on the native v6 path).
-    let inner = ETH_LEN + IPV6_LEN;
-    assert_eq!(out.pkt[inner] >> 4, 6, "inner IPv6 version 6");
-    assert_eq!(
-        &out.pkt[inner + 8..inner + 24],
-        &GUEST_V6,
-        "inner IPv6 src unchanged (no SNAT)"
-    );
-    assert_eq!(
-        &out.pkt[inner + 24..inner + 40],
-        &EXT_V6,
-        "inner IPv6 dst unchanged"
+        out.pkt,
+        tcp_frame(),
+        "inner IPv6 frame is byte-for-byte unchanged (no outer bytes written, no SNAT on v6)"
     );
 
     // 4. conntrack6 firewall-track landed: forward + pre-seeded reverse entries.

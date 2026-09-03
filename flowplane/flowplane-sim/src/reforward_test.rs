@@ -1,25 +1,22 @@
-use crate::VecPkt;
-use flowplane_common::Local;
-use flowplane_core::encap::{reforward, ETH_LEN};
-use flowplane_core::pkt::Action;
+//! Sim oracle: the LB remote-backend re-forward decision (East-West DSR, no decap). Drives the REAL
+//! `flowplane_core::encap::reforward` — production code, the same fn `process_uplink`'s LB-remote
+//! arm calls — and asserts the emitted `TunnelEncap{vni, remote}`. Under Geneve `collect_md` the
+//! kernel re-stamps the tunnel key; the datapath never rewrites outer bytes (contrast the old
+//! byte-rewriting `encap::reforward`, which mutated the outer Ethernet + IPv6 src/dst in place).
+
+use flowplane_core::encap::{reforward, TunnelEncap};
 
 #[test]
-fn reforward_rewrites_outer_to_backend() {
-    let mut p = VecPkt::from_bytes(&[0u8; ETH_LEN + 40 + 40]); // eth + outer v6 + inner placeholder
-    let local = Local {
-        uplink_ifindex: 9,
-        uplink_mac: [2; 6],
-        gateway_mac: [1; 6],
-        underlay_ipv6: [0; 16],
-    };
-    let lb_ul = [0x20u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xaa];
+fn reforward_emits_tunnel_encap_toward_the_backend_at_the_same_vni() {
+    let vni = 100;
     let backend = [0x20u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xbb];
+
     assert_eq!(
-        reforward(&mut p, &local, &lb_ul, &backend),
-        Action::Redirect(9)
+        reforward(vni, &backend),
+        TunnelEncap {
+            vni,
+            remote: backend
+        },
+        "reforward re-targets the SAME vni at the new backend underlay, no decap"
     );
-    assert_eq!(&p.bytes()[0..6], &[1u8; 6]);
-    assert_eq!(&p.bytes()[6..12], &[2u8; 6]);
-    assert_eq!(&p.bytes()[ETH_LEN + 8..ETH_LEN + 24], &lb_ul);
-    assert_eq!(&p.bytes()[ETH_LEN + 24..ETH_LEN + 40], &backend);
 }

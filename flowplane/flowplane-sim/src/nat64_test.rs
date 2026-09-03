@@ -8,15 +8,16 @@
 //! A guest IPv6 frame whose dst is in the NAT64 well-known prefix `64:ff9b::/96` is translated to an
 //! IPv4 packet: inner src IP → the guest's public NAT IPv4, inner dst IP → the embedded IPv4, src
 //! L4 port / ICMP id → an allocated `nat_port`, with a valid IPv4 header checksum + a v6→v4-translated
-//! L4 checksum; the flow is pinned in conntrack with the `CT_F_NAT64` flag; the result is encapped
-//! IP-in-IPv6 toward the route nexthop. Coverage: TCP + UDP (+ ICMPv6 echo).
+//! L4 checksum; the flow is pinned in conntrack with the `CT_F_NAT64` flag; the result carries the
+//! `TunnelEncap{vni, remote}` decision toward the route nexthop (NOT outer bytes — see
+//! `flowplane_core::encap`). Coverage: TCP + UDP (+ ICMPv6 echo).
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
     CtKey, Local, NatKey, NatValue, PortMeta, RouteValue, CT_F_NAT64, CT_F_SRC_NAT, CT_REWRITE_DST,
     CT_REWRITE_SRC,
 };
-use flowplane_core::encap::{ETH_LEN, IPV6_LEN};
+use flowplane_core::encap::{TunnelEncap, ETH_LEN, IPV6_LEN};
 use flowplane_core::parse::{hash5, IPPROTO_ICMP, IPPROTO_TCP, IPPROTO_UDP};
 use flowplane_core::pkt::Action;
 
@@ -162,23 +163,14 @@ fn checksum_valid(bytes: &[u8]) -> bool {
     (sum as u16) == 0xffff
 }
 
-// ─── offsets in the encapped output `[OuterEth(14)][OuterIPv6(40)][inner IPv4(20)][L4]` ───────
-const INNER_IP4: usize = ETH_LEN + IPV6_LEN;
+// ─── offsets in the translated (NOT outer-wrapped — see `TunnelEncap`) output
+// `[Eth(14)][inner IPv4(20)][L4]` ───────
+const INNER_IP4: usize = ETH_LEN;
 const INNER_L4: usize = INNER_IP4 + 20;
 
-/// Shared assertions on the translated + encapped output for a TCP/UDP NAT64 egress packet.
+/// Shared assertions on the translated output for a TCP/UDP NAT64 egress packet. The tunnel
+/// decision (route nexthop) is asserted separately by each caller via `out.tunnel`.
 fn assert_common(out: &[u8], proto: u8, l4_len: usize) {
-    // Outer IPv6 dst = the route nexthop underlay.
-    assert_eq!(
-        &out[ETH_LEN + 24..ETH_LEN + 40],
-        &NEXTHOP_UNDERLAY,
-        "outer IPv6 dst = route nexthop underlay"
-    );
-    // Outer IPv6 src = the guest's underlay.
-    assert_eq!(&out[ETH_LEN + 8..ETH_LEN + 24], &SELF_UNDERLAY);
-    // Outer next-header = IPIP (4).
-    assert_eq!(out[ETH_LEN + 6], 4, "outer next-header = IPIP");
-
     // Inner IPv4 header: IHL=5/version=4, proto, src=NAT_IP, dst=EXT_V4.
     assert_eq!(out[INNER_IP4], 0x45, "inner IPv4 version/IHL");
     assert_eq!(out[INNER_IP4 + 9], proto, "inner IPv4 proto");
@@ -213,6 +205,14 @@ fn nat64_egress_tcp_translates_snats_and_encaps() {
         out.action,
         Action::Redirect(UPLINK_IFINDEX),
         "TCP NAT64 egress encaps out the uplink"
+    );
+    assert_eq!(
+        out.tunnel,
+        Some(TunnelEncap {
+            vni: VNI,
+            remote: NEXTHOP_UNDERLAY
+        }),
+        "tunnel decision carries the route's vni + nexthop underlay"
     );
 
     let nat_port = expected_nat_port(IPPROTO_TCP);
@@ -274,6 +274,14 @@ fn nat64_egress_udp_translates_and_folds_checksum() {
     let mut node = node();
     let out = node.guest_tx_nat64(&udp_frame(), &port_meta());
     assert_eq!(out.action, Action::Redirect(UPLINK_IFINDEX));
+    assert_eq!(
+        out.tunnel,
+        Some(TunnelEncap {
+            vni: VNI,
+            remote: NEXTHOP_UNDERLAY
+        }),
+        "tunnel decision carries the route's vni + nexthop underlay"
+    );
 
     let nat_port = expected_nat_port(IPPROTO_UDP);
     // UDP payload = 4 bytes → L4 len = 8 (hdr) + 4.
@@ -319,6 +327,14 @@ fn nat64_egress_icmpv6_echo_becomes_icmpv4_echo() {
     let mut node = node();
     let out = node.guest_tx_nat64(&icmpv6_echo_frame(), &port_meta());
     assert_eq!(out.action, Action::Redirect(UPLINK_IFINDEX));
+    assert_eq!(
+        out.tunnel,
+        Some(TunnelEncap {
+            vni: VNI,
+            remote: NEXTHOP_UNDERLAY
+        }),
+        "tunnel decision carries the route's vni + nexthop underlay"
+    );
 
     // ICMPv6 echo id == SPORT so the port key is (SPORT, SPORT); the id is rewritten to nat_port.
     let range = (PORT_MAX - PORT_MIN) as u32;

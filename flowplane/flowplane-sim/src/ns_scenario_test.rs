@@ -5,12 +5,12 @@
 use etherparse::PacketBuilder;
 use flowplane_common::{FwMeta, FwRule, FW_ACTION_ACCEPT, FW_DIR_INGRESS};
 use flowplane_core::conntrack::ct_key;
-use flowplane_core::encap::{EncapParams, ETH_LEN, IPV6_LEN};
+use flowplane_core::encap::{ETH_LEN, IPV6_LEN};
 use flowplane_core::maps::Maps;
 use flowplane_core::pkt::Action;
 use flowplane_core::uplink::GW_MAC;
 
-use crate::{SimNode, VecPkt};
+use crate::{EncapParams, SimNode, VecPkt};
 
 const VNI: u32 = 100;
 const TAP: u32 = 42;
@@ -35,11 +35,9 @@ fn encap_params() -> EncapParams {
     EncapParams {
         gateway_mac: [1; 6],
         uplink_mac: [2; 6],
-        uplink_ifindex: 7,
         src_underlay: EDGE_UNDERLAY,
         nexthop_ipv6: HOST_UNDERLAY,
         inner_proto: 4, // IPPROTO_IPIP
-        flow_label: 0,
     }
 }
 

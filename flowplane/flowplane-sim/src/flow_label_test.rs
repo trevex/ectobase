@@ -1,12 +1,15 @@
-//! Tests for the outer IPv6 flow-label entropy helpers (RFC 6437/6438 fabric ECMP).
-use crate::{SimNode, VecPkt};
-use etherparse::PacketBuilder;
-use flowplane_common::{
-    FwMeta, FwRule, Local, PortMeta, RouteValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
-};
+//! Tests for the flow-label entropy helpers (RFC 6437/6438 fabric ECMP hash fold).
+//!
+//! NOTE: these helpers (`flow_label20`/`inner_flow_label`/`hash5`/`hash_v6`) are no longer wired
+//! into the production datapath — they used to feed the outer IPv6 flow-label field
+//! `write_outer_v6` wrote, which no longer exists (see `flowplane_core::encap::TunnelEncap`). Under
+//! Geneve, fabric ECMP entropy becomes the kernel's own Geneve UDP-source-port hash, not something
+//! this crate computes. The helpers themselves stay (still-correct, reusable hash-fold math); only
+//! the end-to-end "guest_tx writes the label into the outer header" test is gone — there is no outer
+//! header to write it into anymore.
+use crate::VecPkt;
 use flowplane_core::encap::ETH_LEN;
 use flowplane_core::parse::{flow_label20, hash5, hash_v6, inner_flow_label};
-use flowplane_core::pkt::Action;
 
 #[test]
 fn flow_label20_stays_within_20_bits() {
@@ -67,102 +70,4 @@ fn inner_flow_label_v6_matches_hashv6_fold() {
     let p = VecPkt::from_bytes(&b);
     let expect = flow_label20(hash_v6(&src, &dst, 5000, 443, 6));
     assert_eq!(inner_flow_label(&p, ETH_LEN, true), expect);
-}
-
-// End-to-end: guest_tx must write the inner-flow hash into the encapped outer IPv6 flow label.
-#[test]
-fn guest_tx_encap_carries_inner_flow_label() {
-    const IFINDEX: u32 = 10;
-    const UPLINK_IFINDEX: u32 = 7;
-    const VNI: u32 = 100;
-    let guest_ip = [10, 0, 2, 20];
-    let dest_ip = [10, 1, 1, 1];
-    let nexthop = [0x20u8, 1, 0xd, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
-
-    let mut node = SimNode::new();
-    node.src_ifindex = IFINDEX;
-    node.maps.local = Some(Local {
-        uplink_ifindex: UPLINK_IFINDEX,
-        uplink_mac: [0x02; 6],
-        gateway_mac: [0x03; 6],
-        underlay_ipv6: [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    });
-    // is_external:0 + no local underlay entry for nexthop → deliver returns Encap, no NAT rewrite,
-    // so the label is computed from the unchanged inner 5-tuple.
-    node.maps.add_route4(
-        VNI,
-        dest_ip,
-        RouteValue {
-            nexthop_vni: 0,
-            nexthop_ipv6: nexthop,
-            is_external: 0,
-            _pad: [0; 3],
-        },
-    );
-    node.maps.fw_meta.insert(
-        IFINDEX,
-        FwMeta {
-            ingress_count: 0,
-            egress_count: 1,
-        },
-    );
-    node.maps.fw_rules.insert(
-        (IFINDEX, 0),
-        FwRule {
-            src_ip: [0; 4],
-            src_mask: [0; 4],
-            dst_ip: [0; 4],
-            dst_mask: [0; 4],
-            src_port_min: 0,
-            src_port_max: 65535,
-            dst_port_min: 0,
-            dst_port_max: 65535,
-            icmp_type: 0xffff,
-            icmp_code: 0xffff,
-            proto: 0,
-            action: FW_ACTION_ACCEPT,
-            direction: FW_DIR_EGRESS,
-            enabled: 1,
-        },
-    );
-
-    let meta = PortMeta {
-        vni: VNI,
-        guest_ipv4: guest_ip,
-        gateway_ipv4: [10, 0, 0, 1],
-        guest_mac: [0xaa; 6],
-        _pad: [0; 2],
-        underlay_ipv6: [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-        gateway_ipv6: [0; 16],
-        guest_ipv6: [0; 16],
-    };
-    let mut frame = Vec::new();
-    PacketBuilder::ethernet2([0xaa; 6], [0xbb; 6])
-        .ipv4(guest_ip, dest_ip, 64)
-        .udp(12345, 53)
-        .write(&mut frame, &[])
-        .unwrap();
-
-    let out = node.guest_tx(&frame, &meta);
-    assert!(
-        matches!(out.action, Action::Redirect(UPLINK_IFINDEX)),
-        "expected encap redirect, got {:?}",
-        out.action
-    );
-    // Outer IPv6 first word is at offset ETH_LEN. Version must be 6, flow label must equal the
-    // inner-flow hash (UDP 12345->53, proto 17), unchanged by NAT.
-    let w = u32::from_be_bytes([
-        out.pkt[ETH_LEN],
-        out.pkt[ETH_LEN + 1],
-        out.pkt[ETH_LEN + 2],
-        out.pkt[ETH_LEN + 3],
-    ]);
-    let expected = flow_label20(hash5(&guest_ip, &dest_ip, 12345, 53, 17));
-    assert_eq!(w >> 28, 6, "outer IPv6 version must stay 6");
-    assert_ne!(expected, 0, "test flow should hash to a non-zero label");
-    assert_eq!(
-        w & 0xFFFFF,
-        expected,
-        "outer flow label must be the inner-flow hash"
-    );
 }

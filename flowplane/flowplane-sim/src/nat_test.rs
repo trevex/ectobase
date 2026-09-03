@@ -18,10 +18,10 @@ use flowplane_common::{
     CtEntry, CtKey, FwMeta, FwRule, Local, NatKey, NatValue, PortMeta, RouteValue, UnderlayValue,
     CT_F_SRC_NAT, CT_REWRITE_DST, FW_ACTION_ACCEPT, FW_DIR_EGRESS, FW_DIR_INGRESS,
 };
-use flowplane_core::encap::{EncapParams, ETH_LEN, IPV6_LEN};
+use flowplane_core::encap::{ETH_LEN, IPV6_LEN};
 use flowplane_core::pkt::Action;
 
-use crate::{MemMaps, SimNode};
+use crate::{EncapParams, MemMaps, SimNode};
 
 // ─── fixed test topology ──────────────────────────────────────────────────────
 
@@ -185,16 +185,19 @@ fn snat_rewrites_src_ip_and_port_with_valid_checksums() {
         out.action
     );
 
-    // After encap the buffer layout is [OuterEth(14)][OuterIPv6(40)][inner IPv4 ...].
-    // grow_head(IPV6_LEN=40) prepends 40 bytes; write_outer_v6 then writes the 54-byte outer
-    // header (14 B Eth + 40 B IPv6) which consumes those 40 new bytes AND the 14-byte inner
-    // Ethernet.  The inner IPv4 therefore starts at offset 54 = ETH_LEN(14) + IPV6_LEN(40).
-    let inner_ip_off = ETH_LEN + IPV6_LEN; // 14 + 40 = 54
+    // The Encap arm no longer writes outer bytes (see `flowplane_core::encap::TunnelEncap`): the
+    // buffer is just the (SNAT-rewritten) inner frame `[InnerEth(14)][IPv4 ...]`.
+    let inner_ip_off = ETH_LEN;
 
     let pkt = &out.pkt;
     assert!(
         pkt.len() >= inner_ip_off + 40,
         "output too short to contain inner IPv4+TCP"
+    );
+    assert_eq!(
+        pkt.len(),
+        frame.len(),
+        "SNAT rewrites bytes in place; the frame does not grow (no outer header written)"
     );
 
     // src IP at inner_ip_off + 12..+16.
@@ -261,7 +264,8 @@ fn snat_distinct_sources_map_to_distinct_blocks() {
         "guest A: expected Redirect"
     );
 
-    let inner_ip_off = ETH_LEN + IPV6_LEN; // 54: outer Eth(14) + outer IPv6(40)
+    // The Encap arm no longer writes outer bytes — the buffer is just the inner frame.
+    let inner_ip_off = ETH_LEN;
     let pkt_a = &out_a.pkt;
 
     let src_a = &pkt_a[inner_ip_off + 12..inner_ip_off + 16];
@@ -583,11 +587,9 @@ fn dnat_encap_params() -> EncapParams {
     EncapParams {
         gateway_mac: [1; 6],
         uplink_mac: [2; 6],
-        uplink_ifindex: 7,
         src_underlay: EDGE_UNDERLAY,
         nexthop_ipv6: HOST_UNDERLAY,
         inner_proto: 4,
-        flow_label: 0,
     }
 }
 

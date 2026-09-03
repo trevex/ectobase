@@ -1,8 +1,8 @@
-use flowplane_core::encap::ETH_LEN;
+use flowplane_core::encap::{ETH_LEN, IPV6_LEN};
 use flowplane_core::pkt::Action;
 use std::collections::HashMap;
 
-use crate::sim::SimNode;
+use crate::sim::{wrap_fixture_outer_fresh, wrap_fixture_outer_reforward, SimNode};
 
 pub type NodeId = &'static str;
 
@@ -66,6 +66,13 @@ impl Fabric {
 
     /// Run `prog` on `ingress`, then follow encap/redirect across the fabric until the frame is
     /// delivered to a guest tap, dropped, or passed. Cap at 8 hops (reforward-loop guard).
+    ///
+    /// Hop routing keys off the node's `TunnelEncap` decision (`SimOut::tunnel`), NOT packet bytes:
+    /// production egress no longer writes an outer header (see `flowplane_core::encap`), so a
+    /// `Redirect` with `tunnel: None` is always FINAL local delivery (decap already ran, or same-node
+    /// `Deliver::Local`), while `tunnel: Some(t)` means the frame is still crossing the fabric toward
+    /// `t.remote`. This harness stands in for the kernel `collect_md` Geneve device: it builds the
+    /// synthetic wire bytes decap (not yet migrated — a later task's job) still expects.
     pub fn deliver(&mut self, ingress: NodeId, prog: Prog, pkt: &[u8]) -> Trace {
         let mut hops = Vec::new();
         let mut cur = ingress;
@@ -78,6 +85,7 @@ impl Fabric {
                 .expect("unknown node")
                 .run(cur_prog, &buf);
             let action = out.action;
+            let tunnel = out.tunnel;
             let outpkt = out.pkt.clone();
             hops.push(Hop {
                 node: cur,
@@ -99,31 +107,43 @@ impl Fabric {
                     }
                 }
                 Action::Redirect(tap) => {
-                    // Ethertype at byte 12: 0x0800 => delivered inner frame (guest tap);
-                    // 0x86DD => still encapped on the fabric, route by outer IPv6 dst.
-                    // NOTE: this assumes an IPv4 inner (0x0800). A delivered IPv6-inner frame would
-                    // itself be 0x86DD and be misclassified as still-encapped — fine for the current
-                    // LB/N-S coverage (all inner-IPv4); revisit when the sim grows IPv6-inner paths.
-                    let ethertype = u16::from_be_bytes([
-                        outpkt.get(12).copied().unwrap_or(0),
-                        outpkt.get(13).copied().unwrap_or(0),
-                    ]);
-                    if ethertype == 0x0800 {
-                        return Trace {
-                            hops,
-                            outcome: Outcome::Delivered { node: cur, tap },
-                        };
-                    }
-                    // Still encapped: route by outer IPv6 dst at ETH_LEN+24..ETH_LEN+40.
-                    let mut od = [0u8; 16];
-                    if outpkt.len() >= ETH_LEN + 40 {
-                        od.copy_from_slice(&outpkt[ETH_LEN + 24..ETH_LEN + 40]);
-                    }
-                    match self.routes.get(&od).copied() {
+                    let t = match tunnel {
+                        None => {
+                            // No tunnel decision: local delivery to a guest tap (decap already ran,
+                            // or a same-node `Deliver::Local`) — this IS the final hop.
+                            return Trace {
+                                hops,
+                                outcome: Outcome::Delivered { node: cur, tap },
+                            };
+                        }
+                        Some(t) => t,
+                    };
+                    // Still crossing the fabric. A fresh egress hop (WanRx / GuestTx-style) leaves
+                    // `outpkt` as the pristine, byte-unchanged FULL inner frame (own Ethernet header
+                    // still present); a reforward hop (UplinkRx re-targeting a remote LB backend)
+                    // leaves the PREVIOUS hop's outer wrapper in place (no decap performed) — strip
+                    // it before re-wrapping, which also strips its Ethernet header (an earlier hop's
+                    // encap already consumed it).
+                    let is_reforward = cur_prog == Prog::UplinkRx;
+                    let inner: Vec<u8> = if is_reforward && outpkt.len() >= ETH_LEN + IPV6_LEN {
+                        outpkt[ETH_LEN + IPV6_LEN..].to_vec()
+                    } else {
+                        outpkt.clone()
+                    };
+                    match self.routes.get(&t.remote).copied() {
                         Some(next) => {
+                            let src_underlay = self
+                                .nodes
+                                .get(cur)
+                                .map(|n| n.local.underlay_ipv6)
+                                .unwrap_or([0; 16]);
+                            buf = if is_reforward {
+                                wrap_fixture_outer_reforward(&inner, src_underlay, t.remote)
+                            } else {
+                                wrap_fixture_outer_fresh(&inner, src_underlay, t.remote)
+                            };
                             cur = next;
                             cur_prog = Prog::UplinkRx;
-                            buf = outpkt;
                         }
                         None => {
                             return Trace {

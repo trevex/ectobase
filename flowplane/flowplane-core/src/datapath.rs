@@ -12,10 +12,8 @@ use flowplane_common::{
 use crate::arp_nd::{arp_reply, nd_reply};
 use crate::conntrack::{ct_apply, ct_create_default, ct_key, ct_refresh};
 use crate::dhcp;
-use crate::egress::{
-    deliver, egress_fw_ct6, route4, route_decision6, Deliver, EgressFwCt6, IPPROTO_IPIP,
-};
-use crate::encap::{reforward, write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
+use crate::egress::{deliver, egress_fw_ct6, route4, route_decision6, Deliver, EgressFwCt6};
+use crate::encap::{reforward, tunnel_encap, TunnelEncap, ETH_LEN, IPV6_LEN};
 use crate::firewall::fw_eval_dir;
 use crate::lb::{lb_select_forward, lb_select_forward_v6};
 use crate::maps::Maps;
@@ -49,8 +47,17 @@ pub struct UplinkIn<'a> {
 ///   4. decap + inner-Ethernet rewrite;
 ///   5. ingress-lane policing (keyed by dest tap).
 ///
-/// Returns the final delivery `Action`, having mutated `pkt` in place.
-pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn) -> Action {
+/// Result of [`process_uplink`] / [`process_uplink_rx`]: the delivery `Action`, plus the tunnel-key
+/// decision `Deliver::Encap`-style paths emit. Only the LB remote-backend re-forward arm sets
+/// `tunnel: Some(..)` — every other branch here is a decap/deliver path, so `tunnel` is `None`.
+pub struct UplinkOut {
+    pub action: Action,
+    pub tunnel: Option<TunnelEncap>,
+}
+
+/// Returns the final delivery `Action` (+ tunnel decision on the LB remote re-forward arm), having
+/// mutated `pkt` in place.
+pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn) -> UplinkOut {
     let inner_off = ETH_LEN + IPV6_LEN;
 
     // 1. LB dispatch (mirror ingress.rs:135-157).
@@ -59,8 +66,14 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
         Some(bul) => match maps.underlay_get(&bul) {
             Some(bu) => (bu.tap_ifindex, bu.guest_mac, true), // LB backend local
             None => {
-                // Remote backend: reforward the encapped frame, no decap.
-                return reforward(pkt, in_.local, &in_.outer_dst, &bul);
+                // Remote backend: re-forward — same vni, no decap, packet bytes untouched. The
+                // kernel geneve device re-stamps the tunnel key toward `bul` via
+                // `bpf_skb_set_tunnel_key` (wired up in a later task).
+                let tunnel = reforward(in_.vni, &bul);
+                return UplinkOut {
+                    action: Action::Redirect(in_.local.uplink_ifindex),
+                    tunnel: Some(tunnel),
+                };
             }
         },
         None => (in_.u.tap_ifindex, in_.u.guest_mac, false), // non-LB base
@@ -71,7 +84,10 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
         if maps.conntrack_get(&key).is_none()
             && fw_eval_dir(&*pkt, &*maps, inner_off, tap, FW_DIR_INGRESS) == FW_ACTION_DROP
         {
-            return Action::Drop;
+            return UplinkOut {
+                action: Action::Drop,
+                tunnel: None,
+            };
         }
     }
 
@@ -93,17 +109,26 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
         Err(_) => Action::Drop,
     };
     if action == Action::Drop {
-        return action;
+        return UplinkOut {
+            action,
+            tunnel: None,
+        };
     }
 
     // 5. Ingress-lane policing (keyed by dest tap) — mirrors ingress.rs uplink_rx. Post-decap inner
     // length is the frame delivered to the guest. No cap => pass.
     let in_len = pkt.len() as u64;
     if !crate::meter::ingress_pass(maps, tap, in_len, in_.now) {
-        return Action::Drop;
+        return UplinkOut {
+            action: Action::Drop,
+            tunnel: None,
+        };
     }
 
-    action
+    UplinkOut {
+        action,
+        tunnel: None,
+    }
 }
 
 /// Inputs for [`process_guest_tx`]. `meta` is the sending port's `PortMeta` (vni + guest/gateway
@@ -116,14 +141,16 @@ pub struct GuestTxIn<'a> {
     pub now: u64,
 }
 
-/// Result of [`process_guest_tx`]: the delivery `Action`, plus the EDT departure timestamp (ns)
-/// recorded when the Encap arm hit the `edt_egress` shaping path. `None` when the interface has no
-/// egress cap (`total_bps == 0`) / no METER entry, and on the Local/Pass verdicts (which leave it
-/// untouched — the eBPF `tc_guest_tx` only stamps on the Encap arm). Wire bytes are unchanged by
-/// EDT (FQ pacing is kernel-side).
+/// Result of [`process_guest_tx`] / [`process_guest_tx_v6`]: the delivery `Action`, plus the EDT
+/// departure timestamp (ns) recorded when the Encap arm hit the `edt_egress` shaping path, plus the
+/// tunnel-key decision the Encap arm emits (`None` on Local/Pass). `edt_tstamp` is `None` when the
+/// interface has no egress cap (`total_bps == 0`) / no METER entry, and on the Local/Pass verdicts
+/// (which leave it untouched — the eBPF `tc_guest_tx` only stamps on the Encap arm). Wire bytes are
+/// unchanged by EDT (FQ pacing is kernel-side) AND by the Encap arm itself (see [`TunnelEncap`]).
 pub struct GuestTxOut {
     pub action: Action,
     pub edt_tstamp: Option<u64>,
+    pub tunnel: Option<TunnelEncap>,
 }
 
 /// Guest egress (`guest_tx`) for the IPv4 forwarding path, operating in place on `pkt`. `pkt` is a
@@ -140,11 +167,12 @@ pub struct GuestTxOut {
 ///      TCP state — the eBPF `ct_touch`); both map-only, byte-neutral;
 ///   6. rate metering: public-lane policing (`public_pass`, external only, step 6a). Mirrors
 ///      `egress.rs`. No METER entry => unlimited (pass). `now` comes from `in_.now`;
-///   7. deliver decision (`deliver`): Local tap (inner-Eth rewrite) | Encap | Pass.
-///      In the Encap arm ONLY, after `grow_head(IPV6_LEN)`/`write_outer_v6`, EDT egress shaping
-///      (`edt_egress`, records `edt_tstamp`, no drop, step 6b) is called using the POST-encap
-///      `pkt.len()` — mirrors `tc.rs` `edt_stamp` after `adjust_room`. Local/Pass leave `edt_tstamp`
-///      as `None` (EDT shaping applies only on the encap/uplink egress path).
+///   7. deliver decision (`deliver`): Local tap (inner-Eth rewrite) | Encap (`TunnelEncap` decision,
+///      no byte write) | Pass. In the Encap arm ONLY, EDT egress shaping (`edt_egress`, records
+///      `edt_tstamp`, no drop, step 6b) is called using `pkt.len()` — mirrors `tc.rs` `edt_stamp`.
+///      NOTE: `pkt.len()` here is the INNER frame length (no outer bytes are written anymore); it
+///      under-counts the eventual Geneve wire overhead — a follow-up task accounts for it. Local/Pass
+///      leave `edt_tstamp` as `None` (EDT shaping applies only on the encap/uplink egress path).
 ///
 /// Returns the delivery `Action` + the EDT timestamp, having mutated `pkt` in place.
 ///
@@ -171,6 +199,7 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
                 return GuestTxOut {
                     action: Action::Drop,
                     edt_tstamp,
+                    tunnel: None,
                 };
             }
         }
@@ -185,6 +214,7 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
             return GuestTxOut {
                 action: Action::Pass,
                 edt_tstamp,
+                tunnel: None,
             }
         }
     };
@@ -194,6 +224,7 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
             return GuestTxOut {
                 action: Action::Pass,
                 edt_tstamp,
+                tunnel: None,
             }
         }
     };
@@ -210,6 +241,7 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
         return GuestTxOut {
             action: Action::Drop,
             edt_tstamp,
+            tunnel: None,
         };
     }
 
@@ -225,8 +257,7 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
 
     // 6. Egress metering — mirrors the eBPF split in egress.rs + tc.rs:
     //    a) Public-lane policing (drop-on-exhaust, external only) — mirrors egress.rs `public_pass`.
-    //    b) EDT egress shaping — mirrors tc.rs `edt_stamp`, called ONLY in the Encap arm (step 7)
-    //       AFTER `grow_head(IPV6_LEN)` / `write_outer_v6`, using the POST-encap `pkt.len()`.
+    //    b) EDT egress shaping — mirrors tc.rs `edt_stamp`, called ONLY in the Encap arm (step 7).
     //       Same-node LOCAL delivery is unshaped (eBPF `tc_guest_tx` only stamps on the Encap
     //       arm, after `adjust_room`). `edt_tstamp` stays `None` for Local / Pass.
     let frame_len = pkt.len() as u64;
@@ -235,13 +266,12 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
         return GuestTxOut {
             action: Action::Drop,
             edt_tstamp,
+            tunnel: None,
         };
     }
 
-    // 7. Deliver decision. Flow label from the (post-NAT) inner 5-tuple — same core helper the
-    // eBPF forward_decision_v4 runs, so the encapped bytes stay identical.
-    let flow_label = crate::parse::inner_flow_label(&*pkt, ip_off, false);
-    match deliver(&*maps, &route, in_.meta, IPPROTO_IPIP, flow_label) {
+    // 7. Deliver decision: Local tap (inner-Eth rewrite) | Encap (`TunnelEncap` decision) | Pass.
+    match deliver(&*maps, &route) {
         Deliver::Local {
             tap_ifindex,
             guest_mac,
@@ -253,6 +283,7 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
                 return GuestTxOut {
                     action: Action::Drop,
                     edt_tstamp,
+                    tunnel: None,
                 };
             }
             // Rewrite the inner Ethernet for the local guest: dst=guest MAC, src=GW_MAC,
@@ -262,31 +293,27 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
             GuestTxOut {
                 action: Action::Redirect(tap_ifindex),
                 edt_tstamp,
+                tunnel: None,
             }
         }
-        Deliver::Encap(e) => {
-            // Prepend 40 bytes (bpf_skb_adjust_room(+IPV6_LEN, MAC)) then write the outer
-            // Eth+IPv6, consuming the new 40 bytes + the 14-byte inner Ethernet, leaving the
-            // bare inner IPv4 — mirrors tc.rs `adjust_room` + `write_outer_v6`.
-            if !pkt.grow_head(IPV6_LEN) || !write_outer_v6(pkt, &e) {
-                return GuestTxOut {
-                    action: Action::Drop,
-                    edt_tstamp,
-                };
-            }
-            // b) EDT egress shaping: stamp AFTER the frame has been grown to its wire length,
-            // using pkt.len() which is now the full post-encap length (inner + 40-byte outer
-            // IPv6 header) — mirrors tc.rs `ctx.len()` after `adjust_room`. Wire bytes are
-            // unchanged (FQ pacing is kernel-side); edt_tstamp lets tests assert pacing.
+        Deliver::Encap {
+            tunnel,
+            uplink_ifindex,
+        } => {
+            // No byte write (see `TunnelEncap`): EDT egress shaping stamps directly off the
+            // (unchanged) inner frame length — mirrors tc.rs `edt_stamp`. NOTE: this under-counts
+            // the eventual Geneve wire overhead; a follow-up task accounts for it.
             edt_tstamp = crate::meter::edt_egress(maps, in_.src_ifindex, pkt.len() as u64, in_.now);
             GuestTxOut {
-                action: Action::Redirect(e.uplink_ifindex),
+                action: Action::Redirect(uplink_ifindex),
                 edt_tstamp,
+                tunnel: Some(tunnel),
             }
         }
         Deliver::Pass => GuestTxOut {
             action: Action::Pass,
             edt_tstamp,
+            tunnel: None,
         },
     }
 }
@@ -306,11 +333,12 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
 ///      flows only (`fw_eval_dir6` INGRESS, deny-by-default) — mirrors the v4 [`process_guest_tx`]
 ///      Local arm (the cross-node `uplink_rx` ingress path is bypassed for same-node delivery).
 ///
-/// Verdict mapping (mirrors [`process_guest_tx`], with the v6 differences called out):
-///   - `Deliver::Encap(e)` → `grow_head(IPV6_LEN)` + `write_outer_v6` with **`inner_proto =
-///     IPPROTO_IPV6` (41 — IPv6-in-IPv6), NOT `IPPROTO_IPIP` (4)** as the v4 path uses — this is the
-///     ONLY byte difference from the v4 encap arm — then EDT egress shaping (`edt_egress`, records
-///     `edt_tstamp`) using the POST-encap `pkt.len()` → `Redirect(e.uplink_ifindex)`;
+/// Verdict mapping (mirrors [`process_guest_tx`]):
+///   - `Deliver::Encap { tunnel, uplink_ifindex }` → no byte write (see [`TunnelEncap`]) — EDT
+///     egress shaping (`edt_egress`, records `edt_tstamp`) stamps off `pkt.len()` (the unchanged
+///     inner frame length) → `Redirect(uplink_ifindex)`. This is now representation-identical to
+///     the v4 encap arm; the old v4/v6 outer next-header difference (IPIP vs IPPROTO_IPV6) no
+///     longer exists on the wire here — the packet's own ethertype already says which it is;
 ///   - `Deliver::Local { tap_ifindex, guest_mac }` → inner-Eth rewrite (dst = guest_mac, src =
 ///     GW_MAC, ethertype stays IPv6) → `Redirect(tap_ifindex)`, unshaped (`edt_tstamp = None`);
 ///   - `Deliver::Pass` → `Action::Pass`.
@@ -332,15 +360,14 @@ pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
             return GuestTxOut {
                 action: Action::Drop,
                 edt_tstamp,
+                tunnel: None,
             }
         }
         EgressFwCt6::Pass { was_new } => was_new,
     };
 
-    // Stage 2: route6 + deliver. Flow label from the (SNAT-free) inner v6 5-tuple — the SAME core
-    // helper the eBPF forward_decision_v6 runs (is_v6 = true), so the encapped bytes stay identical.
-    let flow_label = crate::parse::inner_flow_label(&*pkt, ip_off, true);
-    match route_decision6(&*pkt, &*maps, in_.meta, flow_label) {
+    // Stage 2: route6 + deliver.
+    match route_decision6(&*pkt, &*maps, in_.meta) {
         Deliver::Local {
             tap_ifindex,
             guest_mac,
@@ -354,6 +381,7 @@ pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
                 return GuestTxOut {
                     action: Action::Drop,
                     edt_tstamp,
+                    tunnel: None,
                 };
             }
             // Rewrite the inner Ethernet for the local guest: dst=guest MAC, src=GW_MAC; the
@@ -364,28 +392,26 @@ pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
             GuestTxOut {
                 action: Action::Redirect(tap_ifindex),
                 edt_tstamp,
+                tunnel: None,
             }
         }
-        Deliver::Encap(e) => {
-            // Prepend 40 bytes then write the outer Eth+IPv6 (inner_proto = IPPROTO_IPV6/41 — the
-            // v6-in-v6 difference from the v4 IPIP/4 path — `route_decision6` set `e.inner_proto =
-            // IPPROTO_IPV6`), consuming the new 40 bytes + the 14-byte inner Ethernet, leaving the
-            // bare inner IPv6 — mirrors tc.rs adjust_room + write_outer_v6.
-            if !pkt.grow_head(IPV6_LEN) || !write_outer_v6(pkt, &e) {
-                return GuestTxOut {
-                    action: Action::Drop,
-                    edt_tstamp,
-                };
-            }
+        Deliver::Encap {
+            tunnel,
+            uplink_ifindex,
+        } => {
+            // No byte write (see `TunnelEncap`). NOTE: `pkt.len()` under-counts the eventual Geneve
+            // wire overhead; a follow-up task accounts for it (mirrors the v4 arm's note).
             edt_tstamp = crate::meter::edt_egress(maps, in_.src_ifindex, pkt.len() as u64, in_.now);
             GuestTxOut {
-                action: Action::Redirect(e.uplink_ifindex),
+                action: Action::Redirect(uplink_ifindex),
                 edt_tstamp,
+                tunnel: Some(tunnel),
             }
         }
         Deliver::Pass => GuestTxOut {
             action: Action::Pass,
             edt_tstamp,
+            tunnel: None,
         },
     }
 }
@@ -440,7 +466,7 @@ pub fn process_uplink_nat_return<P: Pkt, M: Maps>(
 /// NAT64 returns (`CT_F_NAT64`) need v4->v6 expansion, not the plain reverse-DNAT: a matching
 /// `CT_F_NAT64 | CT_REWRITE_DST` reverse entry dispatches to [`process_uplink_nat64_ingress`]
 /// (restores the guest IPv4 dst, then expands back to the guest's overlay IPv6 via `in_.guest_ipv6`).
-pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn) -> Action {
+pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn) -> UplinkOut {
     let inner_off = ETH_LEN + IPV6_LEN;
 
     // NAT-return dispatch — gated on `lb_ul.is_none()` exactly as `try_uplink_rx` (an LB VIP is never
@@ -462,8 +488,9 @@ pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
                         // the CT_REWRITE_DST reverse entry (which the core path was previously missing).
                         let mut r = e;
                         ct_refresh(&*pkt, maps, inner_off, &key, &mut r, in_.now);
-                        // NAT64 return: v4->v6 expansion, not plain reverse-DNAT.
-                        return process_uplink_nat64_ingress(
+                        // NAT64 return: v4->v6 expansion, not plain reverse-DNAT. Decap-only — no
+                        // tunnel decision.
+                        let action = process_uplink_nat64_ingress(
                             pkt,
                             &UplinkNat64IngressIn {
                                 tap_ifindex: in_.u.tap_ifindex,
@@ -472,8 +499,13 @@ pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
                                 rev: &r,
                             },
                         );
+                        return UplinkOut {
+                            action,
+                            tunnel: None,
+                        };
                     }
-                    return process_uplink_nat_return(
+                    // Decap-only — no tunnel decision.
+                    let action = process_uplink_nat_return(
                         pkt,
                         maps,
                         &UplinkNatReturnIn {
@@ -482,6 +514,10 @@ pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
                             guest_mac: in_.u.guest_mac,
                         },
                     );
+                    return UplinkOut {
+                        action,
+                        tunnel: None,
+                    };
                 }
             }
         }
@@ -535,53 +571,67 @@ pub struct GuestTxNat64In<'a> {
     pub local: &'a flowplane_common::Local,
 }
 
+/// Result of [`process_guest_tx_nat64`]: the delivery `Action`, plus the tunnel-key decision on the
+/// (only) encap outcome. `None` on Pass/Drop.
+pub struct GuestTxNat64Out {
+    pub action: Action,
+    pub tunnel: Option<TunnelEncap>,
+}
+
 /// Guest NAT64 egress path, in place on `pkt`. Mirrors the eBPF `nat64_egress`: parse (config +
 /// port-alloc + CT_F_NAT64 pins) → `shrink_head(20)` (v6→v4) → `nat64_egress_write` → route4 (Pass on
-/// miss) → `grow_head(IPV6_LEN)`+`write_outer_v6` encap toward the nexthop.
+/// miss) → the [`tunnel_encap`] decision toward the nexthop (no byte write — see [`TunnelEncap`]).
 pub fn process_guest_tx_nat64<P: Pkt, M: Maps>(
     pkt: &mut P,
     maps: &mut M,
     in_: &GuestTxNat64In,
-) -> Action {
+) -> GuestTxNat64Out {
     let ip6_off = ETH_LEN;
 
     // 1. Parse (dst-prefix check + NAT config + port alloc + CT_F_NAT64 conntrack inserts).
     let xlate = match nat64_egress_parse(&*pkt, maps, ip6_off, in_.meta.vni, in_.meta.guest_ipv4, 0)
     {
         Some(x) => x,
-        None => return Action::Pass,
+        None => {
+            return GuestTxNat64Out {
+                action: Action::Pass,
+                tunnel: None,
+            }
+        }
     };
 
     // 2. Resize: shrink inner IPv6(40)→IPv4(20) via a 20-byte front drop (models adjust_head(+20)).
     if !pkt.shrink_head(20) {
-        return Action::Drop;
+        return GuestTxNat64Out {
+            action: Action::Drop,
+            tunnel: None,
+        };
     }
 
     // 3. Write: restore the Ethernet header + build the IPv4 header + translate the L4.
     if !nat64_egress_write(pkt, ETH_LEN, true, &xlate) {
-        return Action::Drop;
+        return GuestTxNat64Out {
+            action: Action::Drop,
+            tunnel: None,
+        };
     }
 
     // 4. Route lookup on the embedded IPv4 dst.
     let route = match route4(&*maps, in_.meta.vni, &xlate.ipv4_dst) {
         Some(r) => r,
-        None => return Action::Pass,
+        None => {
+            return GuestTxNat64Out {
+                action: Action::Pass,
+                tunnel: None,
+            }
+        }
     };
 
-    // 5. Encap IP-in-IPv6 toward the route nexthop (IPIP inner-proto).
-    let e = EncapParams {
-        gateway_mac: in_.local.gateway_mac,
-        uplink_mac: in_.local.uplink_mac,
-        uplink_ifindex: in_.local.uplink_ifindex,
-        src_underlay: in_.meta.underlay_ipv6,
-        nexthop_ipv6: route.nexthop_ipv6,
-        inner_proto: IPPROTO_IPIP,
-        flow_label: 0,
-    };
-    if !pkt.grow_head(IPV6_LEN) || !write_outer_v6(pkt, &e) {
-        return Action::Drop;
+    // 5. Tunnel-key decision toward the route nexthop — no byte write.
+    GuestTxNat64Out {
+        action: Action::Redirect(in_.local.uplink_ifindex),
+        tunnel: Some(tunnel_encap(&route)),
     }
-    Action::Redirect(in_.local.uplink_ifindex)
 }
 
 /// Inputs for [`process_wan_rx`]. `local` supplies the outer MACs/ifindex + this node's underlay src.
@@ -589,36 +639,39 @@ pub struct WanRxIn<'a> {
     pub local: &'a flowplane_common::Local,
 }
 
+/// Result of [`process_wan_rx`]: the delivery `Action`, plus the tunnel-key decision on a VIP hit
+/// (`None` on Pass).
+pub struct WanRxOut {
+    pub action: Action,
+    pub tunnel: Option<TunnelEncap>,
+}
+
 /// Edge WAN-VIP ingress, in place on `pkt`. Mirrors `ingress.rs::try_wan_rx` VIP branch: dispatch on
-/// ethertype (offset 12) — 0x86DD → v6 core select (`inner_proto = 41`), else v4 core select
-/// (`inner_proto = 4`); on a VIP hit, encap the inner packet IP-in-IPv6 toward the Maglev-selected
-/// backend (`grow_head(IPV6_LEN)` + `write_outer_v6`) → `Redirect(uplink_ifindex)`; else `Pass`.
-pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> Action {
+/// ethertype (offset 12) — 0x86DD → v6 core select, else v4 core select; on a VIP hit, emit the
+/// tunnel-key decision toward the Maglev-selected backend (no byte write — see [`TunnelEncap`]) →
+/// `Redirect(uplink_ifindex)`; else `Pass`. The WAN LB service space is `vni = 0` (mirrors the
+/// `lb_select_forward*(.., 0)` lookup below).
+pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> WanRxOut {
     let ethertype = match pkt.read_array::<2>(12) {
         Some(b) => u16::from_be_bytes(b),
         None => 0, // frame < 14 bytes → v4 branch (matches plain.get(..).unwrap_or(0))
     };
     let selected = match ethertype {
-        0x86DD => lb_select_forward_v6(&*pkt, maps, ETH_LEN, 0).map(|b| (b, 41u8)),
-        _ => lb_select_forward(&*pkt, maps, ETH_LEN, 0).map(|b| (b, 4u8)),
+        0x86DD => lb_select_forward_v6(&*pkt, maps, ETH_LEN, 0),
+        _ => lb_select_forward(&*pkt, maps, ETH_LEN, 0),
     };
     match selected {
-        Some((backend, inner_proto)) => {
-            let e = EncapParams {
-                gateway_mac: in_.local.gateway_mac,
-                uplink_mac: in_.local.uplink_mac,
-                uplink_ifindex: in_.local.uplink_ifindex,
-                src_underlay: in_.local.underlay_ipv6,
-                nexthop_ipv6: backend,
-                inner_proto,
-                flow_label: 0,
-            };
-            if !pkt.grow_head(IPV6_LEN) || !write_outer_v6(pkt, &e) {
-                return Action::Drop;
-            }
-            Action::Redirect(in_.local.uplink_ifindex)
-        }
-        None => Action::Pass,
+        Some(backend) => WanRxOut {
+            action: Action::Redirect(in_.local.uplink_ifindex),
+            tunnel: Some(TunnelEncap {
+                vni: 0,
+                remote: backend,
+            }),
+        },
+        None => WanRxOut {
+            action: Action::Pass,
+            tunnel: None,
+        },
     }
 }
 

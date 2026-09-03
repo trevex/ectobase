@@ -12,11 +12,10 @@
 use etherparse::PacketBuilder;
 use flowplane_common::{LbKey, LbValue, MaglevKey};
 use flowplane_common::{Local, UnderlayValue};
-use flowplane_core::encap::EncapParams;
 
 use crate::compilednic::{apply, CompiledNic};
 use crate::fabric::{Fabric, Outcome, Prog};
-use crate::{MemMaps, SimNode};
+use crate::{EncapParams, MemMaps, SimNode};
 
 // ---- addressing ----
 const VNI: u32 = 100;
@@ -74,8 +73,10 @@ fn eth_ipv6_tcp(src: [u8; 16], dst: [u8; 16], dport: u16) -> Vec<u8> {
     out
 }
 
-/// Encapsulate a full inner Eth+IPv4 frame IP-in-IPv6 toward `dst_ul` from `src_ul` (the fabric
-/// wire format), mirroring a guest_tx / relay-origin encap.
+/// TEST-FIXTURE-ONLY: encapsulate a full inner Eth+IPv4 frame IP-in-IPv6 toward `dst_ul` from
+/// `src_ul` (the fabric wire format decap still expects — production encap emits a `TunnelEncap`
+/// decision instead, see `flowplane_core::encap`), standing in for "the packet already arrived
+/// encapped from an origin node" as an input fixture for the `Prog::UplinkRx` tests below.
 fn encap_to(inner: &[u8], src_ul: [u8; 16], dst_ul: [u8; 16]) -> Vec<u8> {
     let node = SimNode::new();
     node.edge_encap(
@@ -83,11 +84,9 @@ fn encap_to(inner: &[u8], src_ul: [u8; 16], dst_ul: [u8; 16]) -> Vec<u8> {
         EncapParams {
             gateway_mac: [1; 6],
             uplink_mac: [2; 6],
-            uplink_ifindex: 7,
             src_underlay: src_ul,
             nexthop_ipv6: dst_ul,
             inner_proto: 4,
-            flow_label: 0,
         },
     )
 }
@@ -467,15 +466,16 @@ fn ew_lb_anycast_dropped_without_policy() {
 /// Direct edge `wan_rx` test for a v6 WAN VIP. We assert on the EDGE hop only — not a full
 /// `Prog::WanRx → Delivered` Fabric trace — because the sim's Fabric/`SimNode::uplink` assumes a
 /// v4 inner and does NOT yet model v6-inner backend delivery (see fabric.rs:104-106). This proves
-/// the new code this slice adds: the edge v6 Maglev select + v6-in-IPv6 encap toward the backend.
+/// the new code this slice adds: the edge v6 Maglev select + the tunnel decision toward the backend.
 #[test]
 fn ns_lb_v6_wan_rx_encaps_to_backend() {
-    use flowplane_core::encap::ETH_LEN;
+    use flowplane_core::encap::TunnelEncap;
     use flowplane_core::pkt::Action;
 
     let edge = edge_node_v6();
 
-    // A v6 WAN frame hitting the VIP on 443 → Maglev-selects HOSTB_UL, encaps v6-in-IPv6.
+    // A v6 WAN frame hitting the VIP on 443 → Maglev-selects HOSTB_UL, emits the tunnel decision
+    // (WAN LB service space is vni=0) — no outer bytes written, frame unchanged.
     let frame = eth_ipv6_tcp(WAN_SRC6, WAN_VIP6, 443);
     let out = edge.wan_rx(&frame);
 
@@ -484,12 +484,17 @@ fn ns_lb_v6_wan_rx_encaps_to_backend() {
         Action::Redirect(7),
         "edge must redirect the encapped frame out its uplink ifindex (EDGE_UL local ifindex=7)"
     );
-    // Outer IPv6 dst is at ETH_LEN+24 .. ETH_LEN+40 of the encapped frame → the Maglev backend.
-    let outer_dst = &out.pkt[ETH_LEN + 24..ETH_LEN + 40];
     assert_eq!(
-        outer_dst,
-        &HOSTB_UL[..],
-        "outer IPv6 dst must be the Maglev-selected backend underlay (HOSTB_UL)"
+        out.tunnel,
+        Some(TunnelEncap {
+            vni: 0,
+            remote: HOSTB_UL
+        }),
+        "tunnel decision must target the Maglev-selected backend underlay (HOSTB_UL) at vni=0"
+    );
+    assert_eq!(
+        out.pkt, frame,
+        "frame is byte-for-byte unchanged (no outer bytes written)"
     );
 
     // Negative sub-case: a non-VIP v6 dst (last-4 != VIP key) → Pass, no encap.
@@ -497,4 +502,5 @@ fn ns_lb_v6_wan_rx_encaps_to_backend() {
     let miss = eth_ipv6_tcp(WAN_SRC6, non_vip, 443);
     let out2 = edge.wan_rx(&miss);
     assert_eq!(out2.action, Action::Pass, "non-VIP v6 dst must Pass");
+    assert_eq!(out2.tunnel, None, "non-VIP dst emits no tunnel decision");
 }

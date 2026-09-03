@@ -1,6 +1,8 @@
 //! Native `SimNode` that runs the REAL `flowplane_core` datapath fns over the sim `VecPkt`/`MemMaps`.
-//! No parallel reimplementation: `edge_encap` calls `write_outer_v6`; `uplink` composes the REAL
-//! core fns — `lb_select_forward` + `reforward` + `fw_eval_dir` + `ct_create_default` +
+//! No parallel reimplementation of PRODUCTION logic: encap arms call `flowplane_core::encap::{
+//! tunnel_encap, reforward}` and carry the resulting `TunnelEncap` decision on `SimOut` — they no
+//! longer write outer bytes (see `flowplane_core::encap` for why). `uplink` composes the REAL core
+//! fns — `lb_select_forward` + `reforward` + `fw_eval_dir` + `ct_create_default` +
 //! `decap_and_rewrite` — in the exact order + gates of the eBPF `try_uplink_rx` LB/base tail
 //! (`ingress.rs` 135-157 dispatch + 245-304 tail). The LB-dispatch glue is composed here (as it is
 //! in the eBPF wrapper); the `BPF_PROG_TEST_RUN` anchor guards native==bytecode on the LB path.
@@ -9,9 +11,15 @@
 //! The `try_uplink_rx` branches gated on `lb_ul.is_none()` — NAT64 reply, neighbor-NAT reforward,
 //! ICMP-echo reply, and inner `dnat_ingress` — are NOT modeled (out of scope for this LB-path
 //! harness). For LB packets those branches are skipped anyway.
+//!
+//! `EncapParams`/`edge_encap` below are a TEST-FIXTURE-ONLY byte writer: decap/ingress
+//! (`flowplane_core::uplink::decap_and_rewrite` and friends) still consume the old wire shape
+//! `[OuterEth(14)][OuterIPv6(40)][inner...]` until a later task migrates ingress to
+//! `bpf_skb_get_tunnel_key`, so ingress-path sim tests still need byte-accurate "arrived over the
+//! wire" input frames. Production egress never calls this — see `TunnelEncap` instead.
 
 use flowplane_common::{Local, PortMeta, UnderlayValue};
-use flowplane_core::encap::{write_outer_v6, EncapParams, ETH_LEN, IPV6_LEN};
+use flowplane_core::encap::{TunnelEncap, ETH_LEN, IPV6_LEN};
 use flowplane_core::maps::Maps;
 use flowplane_core::pkt::{Action, Pkt};
 
@@ -36,10 +44,14 @@ pub struct SimNode {
     pub last_tstamp: Option<u64>,
 }
 
-/// Result of `host_uplink`: the delivery `Action` plus the resulting (decapped) frame bytes.
+/// Result of a `SimNode` datapath call: the delivery `Action`, the resulting frame bytes, and the
+/// `TunnelEncap` decision when this call's verdict was an overlay encap (`None` otherwise — Local
+/// delivery, Pass, Drop, and every decap/ingress path never set it). Since production egress no
+/// longer writes outer bytes, `tunnel` is how tests observe the encap decision.
 pub struct SimOut {
     pub action: Action,
     pub pkt: Vec<u8>,
+    pub tunnel: Option<TunnelEncap>,
 }
 
 impl Default for SimNode {
@@ -70,20 +82,12 @@ impl SimNode {
         }
     }
 
-    /// Edge: encapsulate a full guest Ethernet frame `[InnerEth(14)][IPv4 ...]` toward `nexthop`,
-    /// producing `[OuterEth(14)][OuterIPv6(40)][bare IPv4 ...]` — the exact fabric wire format the
-    /// eBPF egress path emits. Byte-identical to the real encap: `grow_head(40)` prepends 40 bytes,
-    /// then the 54-byte outer header write consumes the 40 new bytes AND the 14-byte inner Ethernet,
-    /// leaving the bare inner IPv4 (inner_proto=IPIP; the outer length is derived from `logical_len`).
+    /// TEST-FIXTURE-ONLY: encapsulate a full guest Ethernet frame `[InnerEth(14)][IPv4 ...]` toward
+    /// `e.nexthop_ipv6`, producing `[OuterEth(14)][OuterIPv6(40)][bare IPv4 ...]` — the wire format
+    /// decap (`flowplane_core::uplink::decap_and_rewrite`) still consumes. NOT used by any
+    /// production datapath fn (which emits a `TunnelEncap` decision instead — see module docs).
     pub fn edge_encap(&self, inner_frame: &[u8], e: EncapParams) -> Vec<u8> {
-        assert!(
-            inner_frame.len() >= ETH_LEN,
-            "inner_frame must be a full Eth+IPv4 frame"
-        );
-        let mut p = VecPkt::from_bytes(inner_frame);
-        assert!(p.grow_head(IPV6_LEN));
-        assert!(write_outer_v6(&mut p, &e));
-        p.into_bytes()
+        wrap_fixture_outer_full(inner_frame, &e)
     }
 
     /// Host uplink_rx for the LB + base path. `u` is `UNDERLAY[outer_dst]` (this node's resolved
@@ -95,7 +99,8 @@ impl SimNode {
     ///   3. conntrack create-on-miss, **skipped for LB** (DSR, no ct — `ingress.rs:266`);
     ///   4. decap + inner-Ethernet rewrite.
     ///
-    /// Returns the final `Action` + the resulting frame bytes.
+    /// Returns the final `Action` + the resulting frame bytes + the `TunnelEncap` decision on the
+    /// remote-LB-backend reforward arm (`None` otherwise).
     pub fn uplink(
         &mut self,
         encapped: &[u8],
@@ -114,10 +119,11 @@ impl SimNode {
             // Base path (never NAT64); guest_ipv6 is only read on the CT_F_NAT64 return branch.
             guest_ipv6: [0; 16],
         };
-        let action = flowplane_core::datapath::process_uplink(&mut pkt, &mut self.maps, &in_);
+        let out = flowplane_core::datapath::process_uplink(&mut pkt, &mut self.maps, &in_);
         SimOut {
-            action,
+            action: out.action,
             pkt: pkt.into_bytes(),
+            tunnel: out.tunnel,
         }
     }
 
@@ -132,7 +138,8 @@ impl SimNode {
     ///      (`ct_apply`: inner dst IP -> guest, dst port -> orig sport, +IP/L4 checksums);
     ///   3. decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest.
     ///
-    /// Returns the delivery `Action` + resulting (decapped, reverse-DNAT'd) frame bytes.
+    /// Returns the delivery `Action` + resulting (decapped, reverse-DNAT'd) frame bytes. Decap-only
+    /// — `tunnel` is always `None`.
     ///
     /// Scope: the `ct_touch` refresh, NAT64 v4->v6 expansion, neighbor-NAT reforward, and inner
     /// `dnat_ingress` (VIP) branches are NOT modelled here — this seam covers the network-NAT
@@ -158,6 +165,7 @@ impl SimNode {
         SimOut {
             action,
             pkt: pkt.into_bytes(),
+            tunnel: None,
         }
     }
 
@@ -187,10 +195,11 @@ impl SimNode {
             now: self.now,
             guest_ipv6,
         };
-        let action = flowplane_core::datapath::process_uplink_rx(&mut pkt, &mut self.maps, &in_);
+        let out = flowplane_core::datapath::process_uplink_rx(&mut pkt, &mut self.maps, &in_);
         SimOut {
-            action,
+            action: out.action,
             pkt: pkt.into_bytes(),
+            tunnel: out.tunnel,
         }
     }
 
@@ -232,13 +241,14 @@ impl SimNode {
     ///   5. conntrack create-on-miss (`ct_create_default`);
     ///   6. rate metering: public-lane policing (`public_pass`, external only, step 6a). Mirrors
     ///      `egress.rs`. No METER entry => unlimited (pass). `now` comes from `self.now`;
-    ///   7. deliver decision (`deliver`): Local tap (inner-Eth rewrite) | Encap | Pass.
-    ///      In the Encap arm ONLY, after `grow_head(IPV6_LEN)`/`write_outer_v6`, EDT egress shaping
-    ///      (`edt_egress`, records `self.last_tstamp`, no drop, step 6b) is called using the
-    ///      POST-encap `pkt.len()` — mirrors `tc.rs` `edt_stamp` after `adjust_room`. Local/Pass
-    ///      leave `last_tstamp` unchanged (EDT shaping applies only on the encap/uplink egress path).
+    ///   7. deliver decision (`deliver`): Local tap (inner-Eth rewrite) | Encap (`TunnelEncap`
+    ///      decision — no byte write) | Pass. In the Encap arm ONLY, EDT egress shaping
+    ///      (`edt_egress`, records `self.last_tstamp`, no drop, step 6b) is called using `pkt.len()`
+    ///      — mirrors `tc.rs` `edt_stamp`. Local/Pass leave `last_tstamp` unchanged (EDT shaping
+    ///      applies only on the encap/uplink egress path).
     ///
-    /// Returns the delivery `Action` + the resulting frame bytes (encapped on the Encap path).
+    /// Returns the delivery `Action` + the resulting frame bytes (UNCHANGED on the Encap path — see
+    /// `TunnelEncap`) + the tunnel decision.
     ///
     /// NOTE (scope): only the fresh-flow / non-VIP path is composed here for the OUTPUT PACKET — that
     /// slice is byte-identical to the eBPF program and thus anchorable. Metering does not mutate
@@ -260,6 +270,7 @@ impl SimNode {
         SimOut {
             action: out.action,
             pkt: pkt.into_bytes(),
+            tunnel: out.tunnel,
         }
     }
 
@@ -274,13 +285,15 @@ impl SimNode {
     ///      bytes off the front; the writer restores the Ethernet header in front of the IPv4 hdr);
     ///   3. write (`nat64_egress_write`, `write_eth = true`): Ethernet + IPv4 header + L4 translation;
     ///   4. route lookup (`route4`) → Pass on miss;
-    ///   5. encap IP-in-IPv6 toward the route nexthop (`write_outer_v6`).
+    ///   5. the [`flowplane_core::encap::tunnel_encap`] decision toward the route nexthop (no byte
+    ///      write).
     ///
-    /// Returns `Redirect(uplink_ifindex)` + the encapped `[OuterEth][OuterIPv6][IPv4][L4]` frame, or
-    /// `Pass` when the frame is not a NAT64 packet / has no route. Byte-identical to the eBPF path.
+    /// Returns `Redirect(uplink_ifindex)` + `Some(TunnelEncap{..})` + the translated (NOT
+    /// outer-wrapped) `[Eth][IPv4][L4]` frame, or `Pass` when the frame is not a NAT64 packet / has
+    /// no route.
     pub fn guest_tx_nat64(&mut self, frame: &[u8], meta: &PortMeta) -> SimOut {
         let mut pkt = VecPkt::from_bytes(frame);
-        let action = flowplane_core::datapath::process_guest_tx_nat64(
+        let out = flowplane_core::datapath::process_guest_tx_nat64(
             &mut pkt,
             &mut self.maps,
             &flowplane_core::datapath::GuestTxNat64In {
@@ -289,8 +302,9 @@ impl SimNode {
             },
         );
         SimOut {
-            action,
+            action: out.action,
             pkt: pkt.into_bytes(),
+            tunnel: out.tunnel,
         }
     }
 
@@ -300,11 +314,11 @@ impl SimNode {
     /// (`egress_fw_ct6` + `route_decision6`) the eBPF `forward_decision_v6` delegates to, via
     /// [`flowplane_core::datapath::process_guest_tx_v6`]:
     ///   1. egress firewall + firewall-only v6 conntrack (deny-by-default on a fresh flow);
-    ///   2. route6 + deliver → Local tap (inner-Eth rewrite) | Encap (outer IPv6, inner-proto 41, IPv6-in-IPv6) | Pass;
+    ///   2. route6 + deliver → Local tap (inner-Eth rewrite) | Encap (`TunnelEncap` decision) | Pass;
     ///   3. dest ingress firewall on a NEW same-node Local flow (deny-by-default).
     ///
-    /// Returns `Redirect(uplink_ifindex)` + the encapped `[OuterEth][OuterIPv6][innerIPv6][L4]` frame
-    /// on the encap arm. Byte-identical to the eBPF path.
+    /// Returns `Redirect(uplink_ifindex)` + `Some(TunnelEncap{..})` on the encap arm, with `pkt`
+    /// UNCHANGED (no outer bytes written).
     pub fn guest_tx_v6(&mut self, frame: &[u8], meta: &PortMeta) -> SimOut {
         let mut pkt = VecPkt::from_bytes(frame);
         let out = flowplane_core::datapath::process_guest_tx_v6(
@@ -320,6 +334,7 @@ impl SimNode {
         SimOut {
             action: out.action,
             pkt: pkt.into_bytes(),
+            tunnel: out.tunnel,
         }
     }
 
@@ -339,7 +354,7 @@ impl SimNode {
     ///
     /// Returns `Redirect(tap_ifindex)` + the reconstructed `[Eth][IPv6][L4]` guest frame. Byte-identical
     /// to the eBPF path. `rev.xlate_port` is the restored guest L4 port/id (used by the ICMPv6 id +
-    /// consumed here before `ct_apply` overwrites the packet).
+    /// consumed here before `ct_apply` overwrites the packet). Decap-only — `tunnel` is always `None`.
     pub fn uplink_nat64_ingress(
         &self,
         encapped: &[u8],
@@ -361,25 +376,27 @@ impl SimNode {
         SimOut {
             action,
             pkt: pkt.into_bytes(),
+            tunnel: None,
         }
     }
 
     /// Edge WAN-VIP ingress (`wan_rx`): a plain `[Eth][IPv4|IPv6]` WAN frame; if its dst+port is a WAN
-    /// LB VIP (vni=0), Maglev-select a backend and encap the inner packet IP-in-IPv6 to the backend
-    /// underlay. Else Pass. Mirrors `ingress.rs::try_wan_rx` VIP branch. Dispatches on the frame's
-    /// ethertype (bytes [12..14]): `0x0800` runs the v4 core select (`inner_proto=4`/IPIP), `0x86DD`
-    /// runs the v6 core select (`inner_proto=41`/IPPROTO_IPV6). Returns the encapped frame (or the
-    /// input on Pass).
+    /// LB VIP (vni=0), Maglev-select a backend and emit the tunnel-key decision toward it (no byte
+    /// write). Else Pass. Mirrors `ingress.rs::try_wan_rx` VIP branch. Dispatches on the frame's
+    /// ethertype (bytes [12..14]): `0x0800` runs the v4 core select, `0x86DD` runs the v6 core select.
+    /// Returns `Some(TunnelEncap{vni: 0, remote: backend})` with `pkt` UNCHANGED on a VIP hit, or the
+    /// input unchanged with `tunnel: None` on Pass.
     pub fn wan_rx(&self, plain: &[u8]) -> SimOut {
         let mut pkt = VecPkt::from_bytes(plain);
-        let action = flowplane_core::datapath::process_wan_rx(
+        let out = flowplane_core::datapath::process_wan_rx(
             &mut pkt,
             &self.maps,
             &flowplane_core::datapath::WanRxIn { local: &self.local },
         );
         SimOut {
-            action,
+            action: out.action,
             pkt: pkt.into_bytes(),
+            tunnel: out.tunnel,
         }
     }
 
@@ -405,6 +422,7 @@ impl SimNode {
         SimOut {
             action,
             pkt: pkt.into_bytes(),
+            tunnel: None,
         }
     }
 
@@ -431,6 +449,7 @@ impl SimNode {
         SimOut {
             action,
             pkt: pkt.into_bytes(),
+            tunnel: None,
         }
     }
 
@@ -448,6 +467,7 @@ impl SimNode {
                         return SimOut {
                             action: Action::Pass,
                             pkt: pkt.to_vec(),
+                            tunnel: None,
                         }
                     }
                 };
@@ -457,6 +477,7 @@ impl SimNode {
                         return SimOut {
                             action: Action::Pass,
                             pkt: pkt.to_vec(),
+                            tunnel: None,
                         }
                     }
                 };
@@ -465,4 +486,109 @@ impl SimNode {
             }
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// TEST-FIXTURE-ONLY outer-header byte writer.
+//
+// Production egress (`flowplane_core::datapath::process_guest_tx*` / `process_wan_rx` / the LB
+// remote-backend re-forward in `process_uplink`) no longer writes outer bytes — it emits a
+// `TunnelEncap{vni, remote}` decision (see `flowplane_core::encap`), which the kernel's `collect_md`
+// Geneve device turns into the real wire header. Decap (`flowplane_core::uplink::decap_and_rewrite`)
+// has NOT been migrated yet — it still expects `[OuterEth(14)][OuterIPv6(40)][inner...]` — so
+// ingress/decap-path sim tests (and the `Fabric` harness, which stands in for "the wire") still need
+// a byte-accurate way to build that shape. This lives here, sim-side, precisely so it can't be
+// mistaken for production code.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/// TEST-FIXTURE-ONLY: parameters for the hand-rolled outer Eth+IPv6 header [`SimNode::edge_encap`]
+/// writes. See the module-level fixture-writer note above — production egress does not use this.
+#[derive(Copy, Clone)]
+pub struct EncapParams {
+    pub gateway_mac: [u8; 6],
+    pub uplink_mac: [u8; 6],
+    pub src_underlay: [u8; 16],
+    pub nexthop_ipv6: [u8; 16],
+    pub inner_proto: u8,
+}
+
+/// TEST-FIXTURE-ONLY: build `[OuterEth(14)][OuterIPv6(40)][bare inner ...]` from a full inner
+/// Ethernet frame + explicit header fields. Used by [`SimNode::edge_encap`].
+fn wrap_fixture_outer_full(inner_frame: &[u8], e: &EncapParams) -> Vec<u8> {
+    assert!(
+        inner_frame.len() >= ETH_LEN,
+        "inner_frame must be a full Eth+IPv4 frame"
+    );
+    let mut p = VecPkt::from_bytes(inner_frame);
+    assert!(p.grow_head(IPV6_LEN));
+    assert!(write_fixture_outer_v6(&mut p, e));
+    p.into_bytes()
+}
+
+/// TEST-FIXTURE-ONLY: [`Fabric`](crate::fabric::Fabric)-internal convenience for a FRESH egress hop
+/// (WanRx / GuestTx-style — the ORIGIN of a fabric crossing). `inner` is a FULL `[Eth][IP]...]`
+/// frame; its own 14-byte Ethernet header is consumed (mirrors a real encap), same as
+/// [`SimNode::edge_encap`]. Defaults the (functionally irrelevant to decap) outer MACs + next-header.
+pub(crate) fn wrap_fixture_outer_fresh(
+    inner: &[u8],
+    src_underlay: [u8; 16],
+    dst_underlay: [u8; 16],
+) -> Vec<u8> {
+    wrap_fixture_outer_full(
+        inner,
+        &EncapParams {
+            gateway_mac: [0; 6],
+            uplink_mac: [0; 6],
+            src_underlay,
+            nexthop_ipv6: dst_underlay,
+            inner_proto: 4,
+        },
+    )
+}
+
+/// TEST-FIXTURE-ONLY: [`Fabric`](crate::fabric::Fabric)-internal convenience for a RE-FORWARD hop
+/// (an `UplinkRx` frame whose PREVIOUS outer wrapper was just stripped). Unlike
+/// [`wrap_fixture_outer_fresh`], `inner` here is the BARE `[IP]...]` payload with NO Ethernet header
+/// — an earlier hop's encap already consumed it, and re-forward never decaps — so this PREPENDS the
+/// full outer header without consuming any of `inner`.
+pub(crate) fn wrap_fixture_outer_reforward(
+    inner: &[u8],
+    src_underlay: [u8; 16],
+    dst_underlay: [u8; 16],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(ETH_LEN + IPV6_LEN + inner.len());
+    out.extend_from_slice(&[0u8; 6]); // outer eth dst (irrelevant to decap)
+    out.extend_from_slice(&[0u8; 6]); // outer eth src (irrelevant to decap)
+    out.extend_from_slice(&0x86DDu16.to_be_bytes());
+    out.push(0x60); // version 6, traffic-class/flow-label = 0
+    out.extend_from_slice(&[0, 0, 0]);
+    out.extend_from_slice(&(inner.len() as u16).to_be_bytes());
+    out.push(4); // next-header (irrelevant to decap)
+    out.push(64); // hop-limit
+    out.extend_from_slice(&src_underlay);
+    out.extend_from_slice(&dst_underlay);
+    out.extend_from_slice(inner);
+    out
+}
+
+/// TEST-FIXTURE-ONLY byte writer — mirrors the old (now-removed) core `write_outer_v6` exactly,
+/// minus the RFC 6438 flow-label field (never meaningful to decap, which ignores the whole outer
+/// header's content bar its length + dst). `pkt` must already have `IPV6_LEN` bytes of front room
+/// (via `grow_head`).
+fn write_fixture_outer_v6(pkt: &mut VecPkt, e: &EncapParams) -> bool {
+    if ETH_LEN + IPV6_LEN > pkt.len() {
+        return false;
+    }
+    let inner_len = pkt.logical_len().saturating_sub(ETH_LEN + IPV6_LEN) as u16;
+    let mut ok = true;
+    ok &= pkt.write_bytes(0, &e.gateway_mac);
+    ok &= pkt.write_bytes(6, &e.uplink_mac);
+    ok &= pkt.write_bytes(12, &0x86DDu16.to_be_bytes());
+    let ip = ETH_LEN;
+    ok &= pkt.write_bytes(ip, &[0x60, 0, 0, 0]); // version 6, traffic-class/flow-label = 0
+    ok &= pkt.write_bytes(ip + 4, &inner_len.to_be_bytes());
+    ok &= pkt.write_bytes(ip + 6, &[e.inner_proto, 64]); // [next_header, hop_limit=64]
+    ok &= pkt.write_bytes(ip + 8, &e.src_underlay);
+    ok &= pkt.write_bytes(ip + 24, &e.nexthop_ipv6);
+    ok
 }

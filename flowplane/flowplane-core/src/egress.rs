@@ -11,15 +11,10 @@
 use flowplane_common::{Local, PortMeta, RouteValue, FW_ACTION_DROP, FW_DIR_EGRESS};
 
 use crate::conntrack::{ct_create_default6, ct_key6, ct_refresh6};
-use crate::encap::{EncapParams, ETH_LEN};
+use crate::encap::{tunnel_encap, TunnelEncap, ETH_LEN};
 use crate::firewall::fw_eval_dir6;
 use crate::maps::Maps;
 use crate::pkt::Pkt;
-
-/// IPIP outer next-header (IPv4-in-IPv6). Mirrors the eBPF `parse::IPPROTO_IPIP`.
-pub const IPPROTO_IPIP: u8 = 4;
-/// IPv6-in-IPv6 outer next-header. Mirrors the eBPF `parse::IPPROTO_IPV6`.
-pub const IPPROTO_IPV6: u8 = 41;
 
 /// What the caller's glue should do after the route+deliver decision. Mirrors the eBPF
 /// `egress::EgressVerdict` (kept in the eBPF crate because it is the glue's own type); the core
@@ -30,7 +25,13 @@ pub enum Deliver {
         tap_ifindex: u32,
         guest_mac: [u8; 6],
     },
-    Encap(EncapParams),
+    /// Overlay-egress: stamp `tunnel` (the Geneve tunnel key) and redirect out `uplink_ifindex`.
+    /// `uplink_ifindex` rides alongside the tunnel key purely for the caller's `bpf_redirect` /
+    /// `Action::Redirect` — it is node-local (from `Local`), not part of the wire decision itself.
+    Encap {
+        tunnel: TunnelEncap,
+        uplink_ifindex: u32,
+    },
 }
 
 /// Look up the exact-match (`/32`) IPv4 route for `dst` in the guest's VNI. `None` => the eBPF
@@ -47,28 +48,23 @@ pub fn route6<M: Maps>(maps: &M, vni: u32, dst: &[u8; 16]) -> Option<RouteValue>
     maps.route6_get(vni, dst)
 }
 
-/// Given a matched `route`, decide local-tap delivery vs. encap vs. pass. `inner_proto` is the outer
-/// next-header for the encap case (IPIP for v4-inner, IPPROTO_IPV6 for v6-inner). Faithful port of
-/// the eBPF local-fast-path + encap tail:
+/// Given a matched `route`, decide local-tap delivery vs. encap vs. pass. Faithful port of the eBPF
+/// local-fast-path + encap tail:
 ///   - if `UNDERLAY[route.nexthop_ipv6]` resolves to a LOCAL interface (`tap_ifindex != 0`), deliver
 ///     to that tap (`Deliver::Local`); the caller runs the destination ingress firewall for v4;
-///   - else if `LOCAL[0]` is set, `Deliver::Encap(..)` toward `route.nexthop_ipv6`;
+///   - else if `LOCAL[0]` is set, `Deliver::Encap` with the [`tunnel_encap`] decision toward
+///     `route.nexthop_ipv6`;
 ///   - else `Deliver::Pass`.
 ///
 /// The destination ingress-firewall gate on the v4 local path stays in the eBPF wrapper (it needs
 /// `was_new` + the packet), exactly as the wrapper still owns conntrack/vip/meter.
 ///
-/// `flow_label` is the 20-bit outer IPv6 flow label (RFC 6438 fabric ECMP); the caller computes it
-/// from the inner flow via [`crate::parse::inner_flow_label`] so the eBPF and native paths carry an
-/// identical value.
+/// Note: the old `inner_proto` (outer next-header) and `flow_label` (RFC 6438 outer flow-label
+/// entropy) parameters are gone — both were only meaningful to the byte-written outer header this
+/// fn used to build. Under Geneve `collect_md` the kernel builds the outer header itself; ECMP
+/// entropy becomes the kernel's Geneve UDP-source-port hash, not something this decision carries.
 #[inline(always)]
-pub fn deliver<M: Maps>(
-    maps: &M,
-    route: &RouteValue,
-    meta: &PortMeta,
-    inner_proto: u8,
-    flow_label: u32,
-) -> Deliver {
+pub fn deliver<M: Maps>(maps: &M, route: &RouteValue) -> Deliver {
     if let Some(u) = maps.underlay_get(&route.nexthop_ipv6) {
         if u.tap_ifindex != 0 {
             return Deliver::Local {
@@ -81,15 +77,10 @@ pub fn deliver<M: Maps>(
         Some(l) => l,
         None => return Deliver::Pass,
     };
-    Deliver::Encap(EncapParams {
-        gateway_mac: local.gateway_mac,
-        uplink_mac: local.uplink_mac,
+    Deliver::Encap {
+        tunnel: tunnel_encap(route),
         uplink_ifindex: local.uplink_ifindex,
-        src_underlay: meta.underlay_ipv6,
-        nexthop_ipv6: route.nexthop_ipv6,
-        inner_proto,
-        flow_label,
-    })
+    }
 }
 
 /// Result of the shared inner-v6 egress firewall/conntrack stage ([`egress_fw_ct6`]): either DROP
@@ -141,18 +132,11 @@ pub fn egress_fw_ct6<P: Pkt, M: Maps>(
 
 /// STAGE 2 (shared core) — route6 lookup + deliver decision for a native v6→v6 guest egress flow.
 /// Faithful mirror of the eBPF `egress::route_decision_v6`: read the inner IPv6 dst (@ `ip_off + 24`)
-/// → [`route6`] (Pass on miss) → [`deliver`] (local fast path / encap / pass) with `inner_proto =
-/// IPPROTO_IPV6` (41 — IPv6-in-IPv6, NOT IPIP/4). `flow_label` is the RFC-6438 outer flow label the
-/// caller computes from the inner 5-tuple ([`crate::parse::inner_flow_label`], `is_v6 = true`) so the
-/// eBPF and native encapped bytes are identical. Kept as a SEPARATE pub fn so the eBPF wrapper holds
-/// the route-lookup frame in its own `#[inline(never)]` frame, sequential to stage 1's.
+/// → [`route6`] (Pass on miss) → [`deliver`] (local fast path / encap / pass). Kept as a SEPARATE pub
+/// fn so the eBPF wrapper holds the route-lookup frame in its own `#[inline(never)]` frame,
+/// sequential to stage 1's.
 #[inline(always)]
-pub fn route_decision6<P: Pkt, M: Maps>(
-    pkt: &P,
-    maps: &M,
-    meta: &PortMeta,
-    flow_label: u32,
-) -> Deliver {
+pub fn route_decision6<P: Pkt, M: Maps>(pkt: &P, maps: &M, meta: &PortMeta) -> Deliver {
     let dst = match pkt.read_array::<16>(ip_off_dst6()) {
         Some(d) => d,
         None => return Deliver::Pass,
@@ -161,7 +145,7 @@ pub fn route_decision6<P: Pkt, M: Maps>(
         Some(r) => r,
         None => return Deliver::Pass,
     };
-    deliver(maps, &route, meta, IPPROTO_IPV6, flow_label)
+    deliver(maps, &route)
 }
 
 /// Inner IPv6 dst offset within a guest Ethernet frame: `ETH_LEN + 24` (IPv6 dst is at +24 in the
