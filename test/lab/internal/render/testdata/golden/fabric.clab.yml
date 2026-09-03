@@ -3,9 +3,12 @@ name: ectobase
 
 mgmt:
   network: ectobase-mgmt
-  # P3b: fabric-only from t=0 — nodes reach each other + the host only over the fabric
-  # (the host↔WAN jump veth below), not a mgmt route. The exact containerlab
-  # "detach fabric nodes from mgmt" knob is finalized at the B4 live bring-up.
+  # P3b: the fabric routers (edge/switch) are detached from mgmt via a per-node
+  # network-mode override below (no eth0, no mgmt default — fabric-only). The mgmt
+  # net still exists for the registry's published host port + other infra; compute
+  # nodes use kind's own bridge (eth0 default demoted by fabric-preboot so the
+  # fabric BGP default is preferred). The host reaches the fabric via the
+  # WAN-segment jump veth (below), not a mgmt route.
 
 topology:
   defaults:
@@ -16,6 +19,7 @@ topology:
     edge1:
       kind: linux
       image: img/frr
+      network-mode: none   # P3b: detach from clab mgmt — no eth0, fabric-only (links still attach)
       binds:
         - frr/edge1.conf:/etc/frr/frr.conf
         - frr/daemons:/etc/frr/daemons
@@ -23,6 +27,7 @@ topology:
     edge2:
       kind: linux
       image: img/frr
+      network-mode: none   # P3b: detach from clab mgmt — no eth0, fabric-only (links still attach)
       binds:
         - frr/edge2.conf:/etc/frr/frr.conf
         - frr/daemons:/etc/frr/daemons
@@ -71,6 +76,7 @@ topology:
     sw1:
       kind: linux
       image: img/frr
+      network-mode: none   # P3b: detach from clab mgmt — no eth0, fabric-only (links still attach)
       binds:
         - frr/sw1.conf:/etc/frr/frr.conf
         - frr/daemons:/etc/frr/daemons
@@ -78,6 +84,7 @@ topology:
     sw2:
       kind: linux
       image: img/frr
+      network-mode: none   # P3b: detach from clab mgmt — no eth0, fabric-only (links still attach)
       binds:
         - frr/sw2.conf:/etc/frr/frr.conf
         - frr/daemons:/etc/frr/daemons
@@ -144,6 +151,8 @@ topology:
         WAN_ROUTES: "fd00:cafe::/32 fd00:29::11,fd00:29::12;fd00:ffff::/32 fd00:29::11,fd00:29::12"
         # eth5 is the registry link; it must join br0 (the WAN L2 segment) so the
         # registry (fd00:29::5 on eth5) is reachable over the fabric from the nodes.
+        # eth6 is the host↔WAN jump link; it must also join br0 so the host's
+        # fd00:29::100 (addHostFabricRoute) is on the same WAN segment as the edges.
         WAN_LAN_IFACES: "eth1 eth2 eth3 eth4 eth5 eth6"
 
     registry:

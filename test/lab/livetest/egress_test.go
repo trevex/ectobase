@@ -57,15 +57,26 @@ func TestNAT64Egress(t *testing.T) {
 	})
 }
 
-// TestFabricOnlyEgress asserts egress is fabric-only now that the clab mgmt
-// network is disabled (P3b): there is no mgmt default at all (no `dev eth0`
-// default — mgmt never attaches an eth0 to the node), and the node's default
-// route is the fabric one, learned via the uplinks eth1/eth2. RA defaults were
-// removed in P3a, so the fabric default here is exclusively the BGP-learned
-// `::/0` from the edges; it may be ECMP'd across both uplinks, rendered as a
-// `default proto bgp …` header line followed by separate `nexthop … dev ethN`
-// lines. We don't assert a specific metric — the BGP-installed kernel metric
-// is implementation-dependent (unlike the old RA metric 1024).
+// TestFabricOnlyEgress asserts the fabric BGP default is present on every node
+// (P3b). The two node kinds differ in how mgmt attaches:
+//   - Fabric routers (edge/switch) are `network-mode: none` clab nodes — no eth0,
+//     no mgmt default at all; their only default is the BGP-learned `::/0` via
+//     the fabric uplinks.
+//   - Compute nodes are kind-created ext-container nodes; clab never attaches
+//     them to clab mgmt, but kind's own bridge gives them an eth0 with its own
+//     default, which fabric-preboot demotes (high metric) so the fabric BGP
+//     default is preferred rather than absent.
+//
+// So we only assert the positive invariant here: a fabric default via the
+// uplinks (eth1/eth2) is present. RA defaults were removed in P3a, so this is
+// exclusively the BGP-learned `::/0` from the edges; it may be ECMP'd across
+// both uplinks, rendered as a `default proto bgp …` header line followed by
+// separate `nexthop … dev ethN` lines. We don't assert a specific metric — the
+// BGP-installed kernel metric is implementation-dependent (unlike the old RA
+// metric 1024).
+//
+// TODO(B4): once live route output is known, tighten this to assert the fabric
+// default is PREFERRED (lower metric) over kind's demoted eth0 bridge default.
 func TestFabricOnlyEgress(t *testing.T) {
 	cfg := loadConfig(t)
 	requireFabricUp(t, cfg)
@@ -85,10 +96,6 @@ func TestFabricOnlyEgress(t *testing.T) {
 					line = strings.TrimSpace(line)
 					if line == "" {
 						continue
-					}
-					// Mgmt is disabled: there must be no eth0 default at all.
-					if strings.HasPrefix(line, "default") && strings.Contains(line, "dev eth0") {
-						return fmt.Errorf("mgmt default present (dev eth0) though mgmt is disabled: %q", line)
 					}
 					// The fabric default is a `default` (or its ECMP `nexthop`)
 					// line referencing one of the uplinks eth1/eth2.
