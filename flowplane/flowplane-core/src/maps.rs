@@ -32,6 +32,20 @@ pub trait Maps {
     }
     fn lb_get(&self, key: &LbKey) -> Option<LbValue>;
     fn maglev_get(&self, key: &MaglevKey) -> Option<[u8; 16]>;
+    /// Neighbor-NAT return-route lookup (`NEIGHBOR_NAT` table, linear-scanned): if `(vni, dst,
+    /// dport)` matches a registered block, return the OWNING node's underlay /128. NEIGHBOR_NAT
+    /// entries are installed ONLY for nat_ip blocks owned by ANOTHER node (mesh gossip; see
+    /// `mesh/agent/bus_test.go::TestApplyNatInstallsNeighborNatOnlyForRemoteOwners`) — a locally
+    /// owned nat_ip never appears here. Used for the cross-node relay case: an inbound packet whose
+    /// inner dst is a nat_ip this node does NOT own gets re-forwarded, byte-unchanged, toward the
+    /// real owner. Faithful port of the eBPF `nat::neighbor_nat_lookup`.
+    fn neighbor_nat_lookup(&self, vni: u32, dst: [u8; 4], dport: u16) -> Option<[u8; 16]>;
+    /// VNI-agnostic variant for the WAN-edge return path (`wan_rx`): a plain WAN-arriving IPv4
+    /// packet carries no VNI, so match on `(nat_ip, dport)` alone and return BOTH the owner's
+    /// underlay /128 AND its VNI — the edge must encap toward the owner WITH that VNI so the
+    /// owner's peer-independent reverse-conntrack key `(vni,0,nat_ip,0,nat_port)` matches. Faithful
+    /// port of the eBPF `nat::neighbor_nat_lookup_any`.
+    fn neighbor_nat_lookup_any(&self, dst: [u8; 4], dport: u16) -> Option<([u8; 16], u32)>;
     /// Network-NAT config for a `(vni, guest-ipv4)` pair (`NAT` map).
     fn nat_get(&self, key: &NatKey) -> Option<NatValue>;
     /// Is `(vni, ip)` a registered public NAT IP (the `NAT_IPS` set)? NAT returns are demuxed

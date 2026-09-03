@@ -50,3 +50,32 @@ pub fn decap_and_rewrite<P: Pkt>(
     }
     Ok(Action::Redirect(tap_ifindex))
 }
+
+/// WAN-edge local-deliver (mechanism #4 of the ingress delivery-target reconstruction — see
+/// `datapath::resolve_uplink_target`): on a `ROUTES` miss, if THIS node is registered as the WAN
+/// edge (`UNDERLAY[LOCAL.underlay_ipv6]` carries the `UNDERLAY_LOCAL_DELIVER` sentinel — programmed
+/// once by `Control::attach_edge`), strip the outer Eth+IPv6 tunnel header (same shape
+/// [`decap_and_rewrite`] strips) and rewrite the exposed inner Ethernet so the LOCAL KERNEL (VyOS)
+/// accepts + routes/masquerades it to the real WAN. Byte-identical to the eBPF
+/// `ingress::edge_local_deliver` tail, ported over `Pkt` so the sim exercises the SAME mechanism.
+///
+/// `ethertype` is the INNER protocol being exposed (`ETH_P_IP` for a v4 inner — the only case wired
+/// up here; a v6 inner is Task 4c). Returns `Action::Pass` on success (hand off to the kernel) or
+/// `Action::Drop` on a bounds failure.
+#[inline(always)]
+pub fn edge_local_deliver<P: Pkt>(pkt: &mut P, uplink_mac: [u8; 6], ethertype: u16) -> Action {
+    if !pkt.shrink_head(IPV6_LEN) {
+        return Action::Drop;
+    }
+    if pkt.len() < ETH_LEN {
+        return Action::Drop;
+    }
+    let mut ok = true;
+    ok &= pkt.write_bytes(0, &uplink_mac); // dst = our uplink MAC
+    ok &= pkt.write_bytes(6, &GW_MAC); // src = gateway MAC (locally-generated placeholder)
+    ok &= pkt.write_bytes(12, &ethertype.to_be_bytes());
+    if !ok {
+        return Action::Drop;
+    }
+    Action::Pass
+}

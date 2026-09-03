@@ -61,6 +61,14 @@ impl Maps for GlobalMaps {
         unsafe { crate::maps::MAGLEV.get(key).copied() }
     }
     #[inline(always)]
+    fn neighbor_nat_lookup(&self, vni: u32, dst: [u8; 4], dport: u16) -> Option<[u8; 16]> {
+        crate::nat::neighbor_nat_lookup(vni, dst, dport)
+    }
+    #[inline(always)]
+    fn neighbor_nat_lookup_any(&self, dst: [u8; 4], dport: u16) -> Option<([u8; 16], u32)> {
+        crate::nat::neighbor_nat_lookup_any(dst, dport)
+    }
+    #[inline(always)]
     fn nat_get(&self, key: &NatKey) -> Option<NatValue> {
         unsafe { crate::maps::NAT.get(key).copied() }
     }

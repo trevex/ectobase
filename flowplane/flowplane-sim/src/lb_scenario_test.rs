@@ -11,7 +11,7 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{LbKey, LbValue, MaglevKey};
-use flowplane_common::{Local, UnderlayValue};
+use flowplane_common::{Local, RouteValue, UnderlayValue};
 
 use crate::compilednic::{apply, CompiledNic};
 use crate::fabric::{Fabric, Outcome, Prog};
@@ -114,7 +114,13 @@ fn allow_all() -> &'static str {
     r#"[{"cidr":"0.0.0.0/0","action":"Allow"}]"#
 }
 
-/// Build a backend node (hostB): UNDERLAY self-entry + optional overlay-LB self-registration.
+/// Build a backend node (hostB): UNDERLAY self-entry + mesh-replicated WAN-VIP LB (mirroring
+/// `edge_node()`'s config — a REAL Maglev backend carries the same LB state every participating
+/// node does, via mesh gossip) + optional overlay-LB self-registration. The WAN LB replication is
+/// what lets `hostB`'s OWN `uplink_rx` recognize "I own this VIP" on ingress: WAN VIPs are anycast,
+/// not a guest's own overlay IP, so they have no `ROUTES` self-route for the ingress
+/// delivery-target reconstruction to find — `lb_select_forward` re-selecting itself (landing on the
+/// `Some(bu)`, tap != 0 branch) is the ONLY mechanism that resolves VIP delivery.
 fn backend_node(with_overlay_lb: bool) -> SimNode {
     let mut n = SimNode::with_local(local_for(HOSTB_UL, 9));
     n.maps.underlay.insert(
@@ -125,6 +131,26 @@ fn backend_node(with_overlay_lb: bool) -> SimNode {
             guest_mac: GUEST_MAC,
             _pad: [0; 2],
         },
+    );
+    n.maps.lb.insert(
+        LbKey {
+            vni: 0,
+            ipv4: WAN_VIP,
+            port: 443,
+            proto: 6,
+            _pad: 0,
+        },
+        LbValue {
+            table_id: 1,
+            size: 1,
+        },
+    );
+    n.maps.maglev.insert(
+        MaglevKey {
+            table_id: 1,
+            slot: 0,
+        },
+        HOSTB_UL,
     );
     if with_overlay_lb {
         n.maps.lb.insert(
@@ -319,7 +345,7 @@ fn ew_lb_reforward_delivered() {
 
     let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
     let encapped = encap_to(&inner, HOSTA_UL, RELAY_UL);
-    let t = fab.deliver("relay", Prog::UplinkRx, &encapped);
+    let t = fab.deliver("relay", Prog::UplinkRx(VNI), &encapped);
     assert_eq!(
         t.outcome,
         Outcome::Delivered {
@@ -343,7 +369,7 @@ fn ew_lb_local_deliver_no_reforward() {
 
     let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
     let encapped = encap_to(&inner, HOSTA_UL, HOSTB_UL);
-    let t = fab.deliver("hostB", Prog::UplinkRx, &encapped);
+    let t = fab.deliver("hostB", Prog::UplinkRx(VNI), &encapped);
     assert_eq!(
         t.outcome,
         Outcome::Delivered {
@@ -398,7 +424,7 @@ fn ew_lb_reforward_converges_no_loop() {
 
     let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
     let encapped = encap_to(&inner, HOSTA_UL, RELAY_UL);
-    let t = fab.deliver("relay", Prog::UplinkRx, &encapped);
+    let t = fab.deliver("relay", Prog::UplinkRx(VNI), &encapped);
     assert_ne!(
         t.outcome,
         Outcome::LoopHalted,
@@ -415,12 +441,26 @@ fn ew_lb_anycast_delivered_with_policy() {
     let mut fab = Fabric::new();
     let mut b = backend_node(false);
     apply_fw(&mut b.maps, HOSTB_TAP, allow_internal_443());
+    // The anycast ROUTE itself: hostB's own control plane self-registers a `ROUTES` entry for the
+    // VIP it serves (distinct from the LB path — no `LB`/`MAGLEV` maps here). This doubles as the
+    // ingress delivery-target marker (`resolve_uplink_target`'s mechanism #1), the same way a
+    // guest's own self-route does.
+    b.maps.add_route4(
+        VNI,
+        OVERLAY_VIP,
+        RouteValue {
+            nexthop_vni: VNI,
+            nexthop_ipv6: HOSTB_UL,
+            is_external: 0,
+            _pad: [0; 3],
+        },
+    );
     fab.add_node("hostB", b);
     fab.route(HOSTB_UL, "hostB");
 
     let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
     let encapped = encap_to(&inner, HOSTA_UL, HOSTB_UL);
-    let t = fab.deliver("hostB", Prog::UplinkRx, &encapped);
+    let t = fab.deliver("hostB", Prog::UplinkRx(VNI), &encapped);
     assert_eq!(
         t.outcome,
         Outcome::Delivered {
@@ -448,12 +488,25 @@ fn ew_lb_anycast_dropped_without_policy() {
         HOSTB_TAP,
         r#"[{"cidr":"1.2.3.0/24","proto":"TCP","port":443,"action":"Allow"}]"#,
     );
+    // Same anycast ROUTE self-registration as `ew_lb_anycast_delivered_with_policy` — without it,
+    // this test would (mis-)pass via a ROUTES-miss drop instead of the firewall drop it claims to
+    // exercise.
+    b.maps.add_route4(
+        VNI,
+        OVERLAY_VIP,
+        RouteValue {
+            nexthop_vni: VNI,
+            nexthop_ipv6: HOSTB_UL,
+            is_external: 0,
+            _pad: [0; 3],
+        },
+    );
     fab.add_node("hostB", b);
     fab.route(HOSTB_UL, "hostB");
 
     let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
     let encapped = encap_to(&inner, HOSTA_UL, HOSTB_UL);
-    let t = fab.deliver("hostB", Prog::UplinkRx, &encapped);
+    let t = fab.deliver("hostB", Prog::UplinkRx(VNI), &encapped);
     assert_eq!(
         t.outcome,
         Outcome::Dropped { node: "hostB" },

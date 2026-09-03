@@ -9,7 +9,11 @@ pub type NodeId = &'static str;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Prog {
     WanRx,
-    UplinkRx,
+    /// The VNI this hop resolves the delivery target under. Under Geneve `collect_md` the VNI
+    /// rides the tunnel key (`get_tunnel_key().tunnel_id`), out-of-band from the packet bytes — the
+    /// Fabric threads it explicitly from the PREVIOUS hop's `TunnelEncap.vni` (or the caller, for a
+    /// fresh entry) instead of re-deriving it by parsing an outer destination address.
+    UplinkRx(u32),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -124,7 +128,7 @@ impl Fabric {
                     // leaves the PREVIOUS hop's outer wrapper in place (no decap performed) — strip
                     // it before re-wrapping, which also strips its Ethernet header (an earlier hop's
                     // encap already consumed it).
-                    let is_reforward = cur_prog == Prog::UplinkRx;
+                    let is_reforward = matches!(cur_prog, Prog::UplinkRx(_));
                     let inner: Vec<u8> = if is_reforward && outpkt.len() >= ETH_LEN + IPV6_LEN {
                         outpkt[ETH_LEN + IPV6_LEN..].to_vec()
                     } else {
@@ -143,7 +147,7 @@ impl Fabric {
                                 wrap_fixture_outer_fresh(&inner, src_underlay, t.remote)
                             };
                             cur = next;
-                            cur_prog = Prog::UplinkRx;
+                            cur_prog = Prog::UplinkRx(t.vni);
                         }
                         None => {
                             return Trace {
@@ -236,6 +240,34 @@ mod tests {
                 guest_mac: BACKEND_GUEST_MAC,
                 _pad: [0; 2],
             },
+        );
+        // Mesh-replicated LB state: a REAL Maglev backend carries the SAME (vni=0) WAN LB config the
+        // edge does (mirrored via mesh gossip — `create_lb`/`add_lb_target` program every
+        // participating node identically), so its OWN `uplink_rx` re-selects itself via
+        // `lb_select_forward` and takes the local-LB-delivery branch (`Some(bu)`, tap != 0) — this
+        // does NOT depend on the ingress delivery-target reconstruction (`ROUTES` self-route) at
+        // all, which covers ordinary guest delivery, not anycast/VIP delivery. Without this, the
+        // backend has no way to recognize "I own this VIP" on ingress (WAN VIPs are anycast, not a
+        // guest's own overlay IP, so they have no ROUTES self-route).
+        backend.maps.lb.insert(
+            LbKey {
+                vni: 0,
+                ipv4: VIP,
+                port: 443,
+                proto: 6,
+                _pad: 0,
+            },
+            LbValue {
+                table_id: 1,
+                size: 1,
+            },
+        );
+        backend.maps.maglev.insert(
+            MaglevKey {
+                table_id: 1,
+                slot: 0,
+            },
+            BACKEND_UL,
         );
         // Always-on deny-by-default: the backend needs an explicit allow rule to deliver.
         backend.maps.fw_meta.insert(

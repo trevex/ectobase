@@ -5,8 +5,8 @@
 //! runs under the sim and under the `BPF_PROG_TEST_RUN` anchor.
 
 use flowplane_common::{
-    Local, PortMeta, UnderlayValue, CT_F_NAT64, CT_REWRITE_DST, FW_ACTION_DROP, FW_DIR_EGRESS,
-    FW_DIR_INGRESS,
+    Local, PortMeta, CT_F_NAT64, CT_REWRITE_DST, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS,
+    UNDERLAY_LOCAL_DELIVER,
 };
 
 use crate::arp_nd::{arp_reply, nd_reply};
@@ -21,17 +21,21 @@ use crate::nat::{snat_egress, SnatOutcome};
 use crate::nat64::{
     nat64_egress_parse, nat64_egress_write, nat64_ingress_parse, nat64_ingress_write,
 };
+use crate::parse::l4_ports;
 use crate::pkt::{Action, Pkt};
-use crate::uplink::{decap_and_rewrite, GW_MAC};
+use crate::uplink::{decap_and_rewrite, edge_local_deliver, ETH_P_IP, GW_MAC};
 
-/// Inputs for [`process_uplink`]. `u` is `UNDERLAY[outer_dst]` (this node's resolved vni + base tap);
-/// `outer_dst` is the encapped frame's current outer IPv6 dst; `local` supplies the outer
-/// MACs/ifindex for an LB remote `reforward`; `now` is the monotonic clock (ns) the ingress-lane
-/// meter stamps `last_ns` from (models `bpf_ktime_get_ns()`).
+/// Inputs for [`process_uplink`]. Under Geneve `collect_md` the kernel decaps before this runs and
+/// `get_tunnel_key` recovers only the VNI + sender remote — NOT "which local identity to deliver
+/// to" (that was previously encoded in the outer dst address under the per-interface /128 VTEP
+/// scheme). So there is no pre-resolved `UnderlayValue`/outer-dst here anymore: `vni` (from
+/// `get_tunnel_key().tunnel_id`) + the inner packet + maps are the ONLY inputs the delivery-target
+/// reconstruction (see [`resolve_uplink_target`]) has to work with. `local` supplies the outer
+/// MACs/ifindex for an LB remote `reforward` / neighbor-NAT relay / WAN-edge local-deliver rewrite;
+/// `now` is the monotonic clock (ns) the ingress-lane meter stamps `last_ns` from (models
+/// `bpf_ktime_get_ns()`).
 pub struct UplinkIn<'a> {
     pub vni: u32,
-    pub u: UnderlayValue,
-    pub outer_dst: [u8; 16],
     pub local: &'a Local,
     pub now: u64,
     /// The guest's own overlay IPv6 (its `PortMeta.guest_ipv6`); used ONLY on the `CT_F_NAT64`
@@ -39,24 +43,86 @@ pub struct UplinkIn<'a> {
     pub guest_ipv6: [u8; 16],
 }
 
+/// The outcome of reconstructing WHERE to deliver a decapped inner v4 frame from `(vni, inner dst)`
+/// plus maps alone — this covers mechanism ONE (normal guest self-route) and mechanism FOUR
+/// (WAN-edge sentinel / genuine miss) of the four-mechanism ingress delivery-target reconstruction
+/// (see the P2 Task-4 design doc). Mechanism TWO (NAT-return) and mechanism THREE (LB remote-backend
+/// / neighbor-NAT relay) are resolved by their own callers instead — a plain `ROUTES` lookup on the
+/// CURRENT packet bytes isn't the right tool for those (mechanism TWO keys off the reverse conntrack
+/// entry's restored guest IP, not the packet; mechanism THREE keys off `NEIGHBOR_NAT`, not `ROUTES`)
+/// — but mechanism TWO's callers reuse THIS resolver once they have the restored guest IP, since
+/// that address is exactly what the guest's own self-route is keyed on.
+enum UplinkTarget {
+    /// A local guest interface: `UNDERLAY[route.nexthop_ipv6]`, resolved via the guest's own
+    /// `ROUTES` self-route — `(vni, guest_ip) -> nexthop_ipv6 == that guest's own underlay`,
+    /// written once per interface by `program_interface` (`flowplane-control/src/interface.rs`;
+    /// verified: it always writes this /32 self-route when the interface has an IPv4).
+    Local {
+        tap_ifindex: u32,
+        guest_mac: [u8; 6],
+    },
+    /// `ROUTES` missed AND this node is configured as the WAN edge: `UNDERLAY[LOCAL.underlay_ipv6]`
+    /// carries the `UNDERLAY_LOCAL_DELIVER` sentinel (programmed once by `Control::attach_edge`,
+    /// keyed under the edge's OWN `Local.underlay_ipv6` — verified against `control/mod.rs`). Decap
+    /// already ran (kernel/Fabric); only the inner-Ethernet rewrite + kernel hand-off remains
+    /// ([`edge_local_deliver`]).
+    EdgeLocalDeliver,
+    /// `ROUTES` missed and this node is NOT the WAN edge: nothing on this node can legitimately
+    /// claim the packet. SECURITY DEFAULT: drop, never pass — passing would leak decapped overlay
+    /// bytes into this node's own kernel netns (a genuine miss must never look like a WAN egress).
+    Drop,
+}
+
+/// Resolve mechanisms #1 + #4 for an inner IPv4 `dst`: `ROUTES(vni, dst) -> nexthop_ipv6 ->
+/// UNDERLAY(nexthop_ipv6)`, falling back to the WAN-edge sentinel check (else genuine-miss `Drop`)
+/// on a `ROUTES` miss. Shared by the normal (non-LB, non-NAT) uplink base path
+/// ([`process_uplink`]) AND the NAT-return / NAT64-return delivery-target resolution
+/// ([`process_uplink_nat_return`], [`process_uplink_rx`]'s NAT64 dispatch): after `ct_apply` (or the
+/// reverse CT entry directly) restores the guest's real overlay IPv4, that restored address is
+/// EXACTLY the address the guest's own self-route is keyed on — the same lookup mechanism #1
+/// already does, so there is no separate map for mechanism #2.
+#[inline(always)]
+fn resolve_uplink_target<M: Maps>(
+    maps: &M,
+    vni: u32,
+    dst: &[u8; 4],
+    local: &Local,
+) -> UplinkTarget {
+    if let Some(route) = maps.route4_get(vni, dst) {
+        if let Some(u) = maps.underlay_get(&route.nexthop_ipv6) {
+            return UplinkTarget::Local {
+                tap_ifindex: u.tap_ifindex,
+                guest_mac: u.guest_mac,
+            };
+        }
+    }
+    if let Some(u) = maps.underlay_get(&local.underlay_ipv6) {
+        if u.tap_ifindex == UNDERLAY_LOCAL_DELIVER {
+            return UplinkTarget::EdgeLocalDeliver;
+        }
+    }
+    UplinkTarget::Drop
+}
+
 /// Host uplink_rx for the LB + base path, operating in place on `pkt`. Mirrors `try_uplink_rx`:
 ///   1. `lb_select_forward` → local backend (deliver to its tap) | remote (reforward, no decap)
-///      | None (base tap);
+///      | None → mechanism #3 (neighbor-NAT relay) → mechanisms #1/#4 (`resolve_uplink_target`);
 ///   2. ingress firewall on the inner 5-tuple against the deliver tap (new-flow gate);
 ///   3. conntrack create-on-miss, **skipped for LB** (DSR, no ct — `ingress.rs:266`);
 ///   4. decap + inner-Ethernet rewrite;
 ///   5. ingress-lane policing (keyed by dest tap).
 ///
 /// Result of [`process_uplink`] / [`process_uplink_rx`]: the delivery `Action`, plus the tunnel-key
-/// decision `Deliver::Encap`-style paths emit. Only the LB remote-backend re-forward arm sets
-/// `tunnel: Some(..)` — every other branch here is a decap/deliver path, so `tunnel` is `None`.
+/// decision the relay/reforward arms emit. Only the LB remote-backend re-forward + neighbor-NAT
+/// relay arms set `tunnel: Some(..)` — every other branch here is a decap/deliver/drop path, so
+/// `tunnel` is `None`.
 pub struct UplinkOut {
     pub action: Action,
     pub tunnel: Option<TunnelEncap>,
 }
 
-/// Returns the final delivery `Action` (+ tunnel decision on the LB remote re-forward arm), having
-/// mutated `pkt` in place.
+/// Returns the final delivery `Action` (+ tunnel decision on a relay/reforward arm), having mutated
+/// `pkt` in place.
 pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn) -> UplinkOut {
     let inner_off = ETH_LEN + IPV6_LEN;
 
@@ -68,7 +134,7 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
             None => {
                 // Remote backend: re-forward — same vni, no decap, packet bytes untouched. The
                 // kernel geneve device re-stamps the tunnel key toward `bul` via
-                // `bpf_skb_set_tunnel_key` (wired up in a later task).
+                // `bpf_skb_set_tunnel_key`.
                 let tunnel = reforward(in_.vni, &bul);
                 return UplinkOut {
                     action: Action::Redirect(in_.local.uplink_ifindex),
@@ -76,7 +142,49 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
                 };
             }
         },
-        None => (in_.u.tap_ifindex, in_.u.guest_mac, false), // non-LB base
+        None => {
+            let dst = match pkt.read_array::<4>(inner_off + 16) {
+                Some(d) => d,
+                None => {
+                    return UplinkOut {
+                        action: Action::Drop,
+                        tunnel: None,
+                    }
+                }
+            };
+            // Mechanism #3: neighbor-NAT relay — the inner dst may be a nat_ip owned by ANOTHER
+            // node (an owned nat_ip instead demuxes via the CT-based `nat_guest` path one level up,
+            // in `process_uplink_rx`, before `process_uplink` is ever called). Mirrors ingress.rs's
+            // "Neighbor NAT" block (245-261).
+            if let Some((_proto, _sport, dport)) = l4_ports(&*pkt, inner_off) {
+                if let Some(owner_ul) = maps.neighbor_nat_lookup(in_.vni, dst, dport) {
+                    let tunnel = reforward(in_.vni, &owner_ul);
+                    return UplinkOut {
+                        action: Action::Redirect(in_.local.uplink_ifindex),
+                        tunnel: Some(tunnel),
+                    };
+                }
+            }
+            // Mechanisms #1 (normal guest delivery) + #4 (WAN-edge sentinel / genuine miss).
+            match resolve_uplink_target(&*maps, in_.vni, &dst, in_.local) {
+                UplinkTarget::Local {
+                    tap_ifindex,
+                    guest_mac,
+                } => (tap_ifindex, guest_mac, false),
+                UplinkTarget::EdgeLocalDeliver => {
+                    return UplinkOut {
+                        action: edge_local_deliver(pkt, in_.local.uplink_mac, ETH_P_IP),
+                        tunnel: None,
+                    }
+                }
+                UplinkTarget::Drop => {
+                    return UplinkOut {
+                        action: Action::Drop,
+                        tunnel: None,
+                    }
+                }
+            }
+        }
     };
 
     // 2. Ingress firewall on NEW inbound flows against the deliver tap.
@@ -416,22 +524,27 @@ pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
     }
 }
 
-/// Inputs for [`process_uplink_nat_return`]. `u`'s base tap becomes the delivery ifindex.
-pub struct UplinkNatReturnIn {
+/// Inputs for [`process_uplink_nat_return`]. `local` supplies the WAN-edge-sentinel fallback input
+/// to [`resolve_uplink_target`] (mechanism #4) — in practice a NAT-return always resolves via
+/// mechanism #2 (the reverse CT entry's `xlate_ip` is on THIS node, since conntrack is never
+/// synced across nodes), so `local` only matters for the (never-expected) miss case.
+pub struct UplinkNatReturnIn<'a> {
     pub vni: u32,
-    pub tap_ifindex: u32,
-    pub guest_mac: [u8; 6],
+    pub local: &'a Local,
 }
 
 /// Host NAT reverse-DNAT return path, in place on `pkt`. Mirrors the eBPF `try_uplink_rx` NAT branch:
 /// build the inner 5-tuple key (demuxed peer-independently when the inner dst is a registered nat_ip);
-/// reverse-DNAT apply when the matched CT entry carries `CT_REWRITE_DST`; decap + inner-Eth rewrite.
+/// reverse-DNAT apply when the matched CT entry carries `CT_REWRITE_DST`; resolve the delivery
+/// target (mechanism #2 — see [`resolve_uplink_target`]) from the RESTORED guest IPv4 the reverse
+/// entry's `xlate_ip` carries; decap + inner-Eth rewrite.
 pub fn process_uplink_nat_return<P: Pkt, M: Maps>(
     pkt: &mut P,
     maps: &mut M,
     in_: &UplinkNatReturnIn,
 ) -> Action {
     let inner_off = ETH_LEN + IPV6_LEN;
+    let mut xlate_ip: Option<[u8; 4]> = None;
 
     // 1. Build the inner 5-tuple key; NAT returns are demuxed peer-independently.
     if let Some(mut key) = ct_key(&*pkt, inner_off, in_.vni) {
@@ -443,14 +556,29 @@ pub fn process_uplink_nat_return<P: Pkt, M: Maps>(
         if let Some(e) = maps.conntrack_get(&key) {
             if e.flags & CT_REWRITE_DST != 0 {
                 ct_apply(pkt, inner_off, &e);
+                xlate_ip = Some(e.xlate_ip);
             }
         }
     }
 
-    // 3. Decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest.
-    match decap_and_rewrite(pkt, in_.tap_ifindex, in_.guest_mac) {
-        Ok(a) => a,
-        Err(_) => Action::Drop,
+    // 3. Resolve delivery (mechanism #2) + rewrite the inner Ethernet for the guest (decap already
+    // ran via `ct_apply`'s address restore — the frame itself still needs the outer Eth+IPv6 strip).
+    let dst = match xlate_ip {
+        Some(ip) => ip,
+        // No CT_REWRITE_DST hit: this function's entire purpose is the established-NAT-return path
+        // (its callers only invoke it after confirming a hit), so a miss here means there is no
+        // legitimate delivery target to reconstruct. Fail closed.
+        None => return Action::Drop,
+    };
+    match resolve_uplink_target(&*maps, in_.vni, &dst, in_.local) {
+        UplinkTarget::Local {
+            tap_ifindex,
+            guest_mac,
+        } => match decap_and_rewrite(pkt, tap_ifindex, guest_mac) {
+            Ok(a) => a,
+            Err(_) => Action::Drop,
+        },
+        UplinkTarget::EdgeLocalDeliver | UplinkTarget::Drop => Action::Drop,
     }
 }
 
@@ -488,30 +616,41 @@ pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
                         // the CT_REWRITE_DST reverse entry (which the core path was previously missing).
                         let mut r = e;
                         ct_refresh(&*pkt, maps, inner_off, &key, &mut r, in_.now);
-                        // NAT64 return: v4->v6 expansion, not plain reverse-DNAT. Decap-only — no
-                        // tunnel decision.
-                        let action = process_uplink_nat64_ingress(
-                            pkt,
-                            &UplinkNat64IngressIn {
-                                tap_ifindex: in_.u.tap_ifindex,
-                                guest_mac: in_.u.guest_mac,
-                                guest_ipv6: in_.guest_ipv6,
-                                rev: &r,
-                            },
-                        );
+                        // Mechanism #2 (NAT64-return): the reverse entry's `xlate_ip` IS the guest's
+                        // real overlay IPv4 (`nat64_egress_parse` pins it from `meta_guest_ipv4`) —
+                        // the SAME address the guest's own ROUTES self-route is keyed on, so resolve
+                        // delivery exactly as mechanism #1. `process_uplink_nat64_ingress` itself
+                        // takes no `Maps` (by design — see its doc comment), so the resolve happens
+                        // here, before dispatch. Decap-only — no tunnel decision.
+                        let action =
+                            match resolve_uplink_target(&*maps, in_.vni, &r.xlate_ip, in_.local) {
+                                UplinkTarget::Local {
+                                    tap_ifindex,
+                                    guest_mac,
+                                } => process_uplink_nat64_ingress(
+                                    pkt,
+                                    &UplinkNat64IngressIn {
+                                        tap_ifindex,
+                                        guest_mac,
+                                        guest_ipv6: in_.guest_ipv6,
+                                        rev: &r,
+                                    },
+                                ),
+                                UplinkTarget::EdgeLocalDeliver | UplinkTarget::Drop => Action::Drop,
+                            };
                         return UplinkOut {
                             action,
                             tunnel: None,
                         };
                     }
-                    // Decap-only — no tunnel decision.
+                    // Mechanism #2 (NAT-return) — resolved internally by `process_uplink_nat_return`
+                    // from the reverse entry's restored guest IP. Decap-only — no tunnel decision.
                     let action = process_uplink_nat_return(
                         pkt,
                         maps,
                         &UplinkNatReturnIn {
                             vni: in_.vni,
-                            tap_ifindex: in_.u.tap_ifindex,
-                            guest_mac: in_.u.guest_mac,
+                            local: in_.local,
                         },
                     );
                     return UplinkOut {
@@ -646,11 +785,16 @@ pub struct WanRxOut {
     pub tunnel: Option<TunnelEncap>,
 }
 
-/// Edge WAN-VIP ingress, in place on `pkt`. Mirrors `ingress.rs::try_wan_rx` VIP branch: dispatch on
-/// ethertype (offset 12) — 0x86DD → v6 core select, else v4 core select; on a VIP hit, emit the
-/// tunnel-key decision toward the Maglev-selected backend (no byte write — see [`TunnelEncap`]) →
-/// `Redirect(uplink_ifindex)`; else `Pass`. The WAN LB service space is `vni = 0` (mirrors the
-/// `lb_select_forward*(.., 0)` lookup below).
+/// Edge WAN-VIP ingress, in place on `pkt`. Mirrors `ingress.rs::try_wan_rx`: dispatch on ethertype
+/// (offset 12) — 0x86DD → v6 core select; else v4 core select, falling back to mechanism #3
+/// (neighbor-NAT relay, v4-only — `NEIGHBOR_NAT` has no v6 WAN-return path) on an LB miss. On a
+/// VIP hit or a neighbor-NAT relay hit, emit the tunnel-key decision (no byte write — see
+/// [`TunnelEncap`]) → `Redirect(uplink_ifindex)`; else `Pass`. The WAN LB service space is `vni = 0`
+/// (mirrors the `lb_select_forward*(.., 0)` lookup below). The relay hit uses the REAL owner VNI
+/// from [`Maps::neighbor_nat_lookup_any`] — the eBPF `try_wan_rx` (ingress.rs:452) discards it
+/// (`let (owner_ul, _vni) = ..`), a bug this reconstruction fixes: without the owner's VNI, the
+/// relayed packet's tunnel key would carry the WRONG VNI and the owner's peer-independent reverse
+/// conntrack key `(vni,0,nat_ip,0,nat_port)` would never match.
 pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> WanRxOut {
     let ethertype = match pkt.read_array::<2>(12) {
         Some(b) => u16::from_be_bytes(b),
@@ -660,18 +804,35 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
         0x86DD => lb_select_forward_v6(&*pkt, maps, ETH_LEN, 0),
         _ => lb_select_forward(&*pkt, maps, ETH_LEN, 0),
     };
-    match selected {
-        Some(backend) => WanRxOut {
+    if let Some(backend) = selected {
+        return WanRxOut {
             action: Action::Redirect(in_.local.uplink_ifindex),
             tunnel: Some(TunnelEncap {
                 vni: 0,
                 remote: backend,
             }),
-        },
-        None => WanRxOut {
-            action: Action::Pass,
-            tunnel: None,
-        },
+        };
+    }
+    // Mechanism #3 (WAN-edge sub-case): a plain WAN-arriving IPv4 packet destined to a nat_ip block
+    // owned by some node, relayed toward the owner WITH the owner's real VNI.
+    if ethertype != 0x86DD {
+        if let Some(dst) = pkt.read_array::<4>(ETH_LEN + 16) {
+            if let Some((_proto, _sport, dport)) = l4_ports(&*pkt, ETH_LEN) {
+                if let Some((owner_ul, owner_vni)) = maps.neighbor_nat_lookup_any(dst, dport) {
+                    return WanRxOut {
+                        action: Action::Redirect(in_.local.uplink_ifindex),
+                        tunnel: Some(TunnelEncap {
+                            vni: owner_vni,
+                            remote: owner_ul,
+                        }),
+                    };
+                }
+            }
+        }
+    }
+    WanRxOut {
+        action: Action::Pass,
+        tunnel: None,
     }
 }
 

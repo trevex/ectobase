@@ -15,10 +15,11 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    CtEntry, CtKey, FwMeta, FwRule, Local, NatKey, NatValue, PortMeta, RouteValue, UnderlayValue,
-    CT_F_SRC_NAT, CT_REWRITE_DST, FW_ACTION_ACCEPT, FW_DIR_EGRESS, FW_DIR_INGRESS,
+    CtEntry, CtKey, FwMeta, FwRule, Local, NatKey, NatValue, NeighborNatEntry, PortMeta,
+    RouteValue, UnderlayValue, CT_F_SRC_NAT, CT_REWRITE_DST, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
+    FW_DIR_INGRESS,
 };
-use flowplane_core::encap::{ETH_LEN, IPV6_LEN};
+use flowplane_core::encap::{TunnelEncap, ETH_LEN, IPV6_LEN};
 use flowplane_core::pkt::Action;
 
 use crate::{EncapParams, MemMaps, SimNode};
@@ -626,7 +627,7 @@ fn dnat_host_node(proto: u8) -> SimNode {
         .conntrack
         .insert(dnat_reverse_ct_key(proto), dnat_reverse_ct_entry());
     node.maps.nat_ips.insert((DNAT_VNI, DNAT_NAT_IP));
-    // Seed UNDERLAY so uplink_nat_return can find the base tap.
+    // Seed UNDERLAY so the delivery-target resolution can find the base tap.
     node.maps.underlay.insert(
         HOST_UNDERLAY,
         UnderlayValue {
@@ -634,6 +635,20 @@ fn dnat_host_node(proto: u8) -> SimNode {
             tap_ifindex: DNAT_TAP,
             guest_mac: DNAT_GUEST_MAC,
             _pad: [0; 2],
+        },
+    );
+    // Self-route for the RESTORED guest IP (mechanism #2: `process_uplink_nat_return` resolves
+    // delivery via `ROUTES(vni, ct_apply-restored dst) -> UNDERLAY(nexthop)`, the SAME self-route
+    // `program_interface` would have written for this guest — see
+    // `flowplane_core::datapath::resolve_uplink_target`).
+    node.maps.add_route4(
+        DNAT_VNI,
+        DNAT_GUEST_IP,
+        RouteValue {
+            nexthop_vni: DNAT_VNI,
+            nexthop_ipv6: HOST_UNDERLAY,
+            is_external: 0,
+            _pad: [0; 3],
         },
     );
     node
@@ -670,13 +685,7 @@ fn dnat_udp_encapped() -> Vec<u8> {
 #[test]
 fn dnat_return_tcp_rewrites_dst_ip_and_port() {
     let encapped = dnat_tcp_encapped();
-    let u = flowplane_common::UnderlayValue {
-        vni: DNAT_VNI,
-        tap_ifindex: DNAT_TAP,
-        guest_mac: DNAT_GUEST_MAC,
-        _pad: [0; 2],
-    };
-    let out = dnat_host_node(6).uplink_nat_return(&encapped, DNAT_VNI, u, DNAT_GUEST_MAC);
+    let out = dnat_host_node(6).uplink_nat_return(&encapped, DNAT_VNI, &Local::default());
 
     assert_eq!(
         out.action,
@@ -746,13 +755,7 @@ fn dnat_return_tcp_rewrites_dst_ip_and_port() {
 #[test]
 fn dnat_return_udp_rewrites_dst_ip_and_port() {
     let encapped = dnat_udp_encapped();
-    let u = flowplane_common::UnderlayValue {
-        vni: DNAT_VNI,
-        tap_ifindex: DNAT_TAP,
-        guest_mac: DNAT_GUEST_MAC,
-        _pad: [0; 2],
-    };
-    let out = dnat_host_node(17).uplink_nat_return(&encapped, DNAT_VNI, u, DNAT_GUEST_MAC);
+    let out = dnat_host_node(17).uplink_nat_return(&encapped, DNAT_VNI, &Local::default());
 
     assert_eq!(
         out.action,
@@ -854,13 +857,7 @@ fn uplink_rx_dispatches_nat_return_past_deny_by_default_firewall() {
     let mut node = dnat_host_node(6);
     seed_deny_by_default_ingress_fw(&mut node);
 
-    let u = UnderlayValue {
-        vni: DNAT_VNI,
-        tap_ifindex: DNAT_TAP,
-        guest_mac: DNAT_GUEST_MAC,
-        _pad: [0; 2],
-    };
-    // `local` is unused on the NAT-return path but required by the unified entry's signature.
+    // `local` only matters for the (never-hit) WAN-edge-sentinel fallback on the NAT-return path.
     let local = Local {
         uplink_ifindex: 7,
         uplink_mac: [2; 6],
@@ -868,7 +865,7 @@ fn uplink_rx_dispatches_nat_return_past_deny_by_default_firewall() {
         underlay_ipv6: HOST_UNDERLAY,
     };
     // Plain (non-NAT64) NAT return: guest_ipv6 is only read on the CT_F_NAT64 branch.
-    let out = node.uplink_rx(&encapped, DNAT_VNI, u, HOST_UNDERLAY, &local, [0; 16]);
+    let out = node.uplink_rx(&encapped, DNAT_VNI, &local, [0; 16]);
 
     assert_eq!(
         out.action,
@@ -947,4 +944,148 @@ fn snat_port_exhaustion_drops_instead_of_colliding() {
         before,
         "no forward CT entry may be inserted on exhaustion (that would poison the table)"
     );
+}
+
+// ─── (e) Neighbor-NAT relay — mechanism #3 of the ingress delivery-target reconstruction ──────────
+//
+// `NEIGHBOR_NAT` entries are installed ONLY for nat_ip blocks owned by ANOTHER node (never a
+// locally-owned block — see `mesh/agent/bus_test.go::TestApplyNatInstallsNeighborNatOnlyForRemoteOwners`).
+// A packet whose inner dst is such a nat_ip, arriving at a node that does NOT own it, must be
+// re-forwarded byte-unchanged toward the real owner — with the OWNER's real vni, not a discarded one.
+
+const NEIGH_VNI: u32 = 500;
+const NEIGH_NAT_IP: [u8; 4] = [198, 51, 100, 77];
+const NEIGH_OWNER_UL: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xee];
+const NEIGH_PORT_MIN: u16 = 30000;
+const NEIGH_PORT_MAX: u16 = 30100;
+const NEIGH_EDGE_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xaa];
+const NEIGH_SELF_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xbb];
+
+fn neigh_local() -> Local {
+    Local {
+        uplink_ifindex: 9,
+        uplink_mac: [4; 6],
+        gateway_mac: [5; 6],
+        underlay_ipv6: NEIGH_SELF_UNDERLAY,
+    }
+}
+
+fn neigh_nat_entry() -> NeighborNatEntry {
+    NeighborNatEntry {
+        underlay: NEIGH_OWNER_UL,
+        nat_ip: NEIGH_NAT_IP,
+        vni: NEIGH_VNI,
+        port_min: NEIGH_PORT_MIN,
+        port_max: NEIGH_PORT_MAX,
+        enabled: 1,
+        _pad: [0; 3],
+    }
+}
+
+/// A returning TCP frame from an external peer to `NEIGH_NAT_IP:dport`, encapped as it arrives at a
+/// node that does NOT own this nat_ip (no CT_REWRITE_DST reverse entry, no local NAT_IPS marker).
+fn neigh_encapped(dport: u16) -> Vec<u8> {
+    let inner = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
+        .ipv4(EXT_IP, NEIGH_NAT_IP, 64)
+        .tcp(443, dport, 0, 1024);
+    let mut frame = Vec::new();
+    inner.write(&mut frame, &[]).unwrap();
+    SimNode::new().edge_encap(
+        &frame,
+        EncapParams {
+            gateway_mac: [1; 6],
+            uplink_mac: [2; 6],
+            src_underlay: NEIGH_EDGE_UNDERLAY,
+            nexthop_ipv6: NEIGH_SELF_UNDERLAY,
+            inner_proto: 4,
+        },
+    )
+}
+
+/// Mechanism #3 (uplink-internal neighbor-NAT relay, `ingress.rs`'s "Neighbor NAT" block 245-261):
+/// an inbound frame whose inner dst is a nat_ip this node does NOT own, but which IS registered in
+/// `NEIGHBOR_NAT` pointing at another node, must be re-forwarded byte-unchanged toward the real
+/// owner — same vni, new remote.
+#[test]
+fn uplink_relays_to_neighbor_nat_owner_when_not_locally_claimed() {
+    let dport = NEIGH_PORT_MIN + 5;
+    let encapped = neigh_encapped(dport);
+
+    let mut node = SimNode::with_local(neigh_local());
+    node.maps.neighbor_nat.push(neigh_nat_entry());
+
+    let out = node.uplink_rx(&encapped, NEIGH_VNI, &neigh_local(), [0; 16]);
+
+    assert_eq!(
+        out.action,
+        Action::Redirect(neigh_local().uplink_ifindex),
+        "neighbor-NAT relay must redirect out the uplink ifindex"
+    );
+    assert_eq!(
+        out.tunnel,
+        Some(TunnelEncap {
+            vni: NEIGH_VNI,
+            remote: NEIGH_OWNER_UL,
+        }),
+        "tunnel decision must re-target the SAME vni at the neighbor-NAT owner's underlay"
+    );
+    assert_eq!(
+        out.pkt, encapped,
+        "relay does not decap or rewrite bytes — the encapped frame passes through unchanged"
+    );
+}
+
+/// Mechanism #3 (WAN-edge neighbor-NAT relay, `try_wan_rx`): a plain WAN-arriving IPv4 return (no
+/// VNI on the wire) whose dst+port matches a `NEIGHBOR_NAT` block must relay toward the owner WITH
+/// THE OWNER'S REAL VNI. Regression: `ingress.rs`'s `try_wan_rx` (line 452) discards the VNI
+/// `neighbor_nat_lookup_any` returns (`let (owner_ul, _vni) = ..`) — this core reconstruction fixes
+/// it; using the wrong vni would mean the owner's peer-independent reverse conntrack key
+/// `(vni,0,nat_ip,0,nat_port)` never matches on the owner's uplink.
+#[test]
+fn wan_rx_relays_to_neighbor_nat_owner_with_the_real_owner_vni() {
+    let dport = NEIGH_PORT_MIN + 5;
+    let builder = PacketBuilder::ethernet2([0xaa; 6], [0xbb; 6])
+        .ipv4(EXT_IP, NEIGH_NAT_IP, 64)
+        .tcp(443, dport, 0, 1024);
+    let mut plain = Vec::new();
+    builder.write(&mut plain, &[]).unwrap();
+
+    let mut node = SimNode::with_local(neigh_local());
+    node.maps.neighbor_nat.push(neigh_nat_entry());
+
+    let out = node.wan_rx(&plain);
+
+    assert_eq!(
+        out.action,
+        Action::Redirect(neigh_local().uplink_ifindex),
+        "wan_rx relay must redirect out the uplink ifindex"
+    );
+    assert_eq!(
+        out.tunnel,
+        Some(TunnelEncap {
+            vni: NEIGH_VNI, // the OWNER's real vni — NOT 0, NOT discarded
+            remote: NEIGH_OWNER_UL,
+        }),
+        "wan_rx relay must carry the owner's REAL vni, not a discarded one"
+    );
+    assert_eq!(out.pkt, plain, "wan_rx relay does not rewrite bytes");
+}
+
+/// A WAN-arriving packet with no matching LB VIP AND no matching `NEIGHBOR_NAT` block falls through
+/// to `Pass` (handed to the local kernel — VyOS routing/BGP), exactly as `try_wan_rx` does for
+/// traffic it does not recognize at all. Distinct from the uplink-side genuine-miss case (which
+/// DROPS): `wan_rx` is the WAN's own ingress point, not a fabric decap path with overlay bytes to
+/// protect.
+#[test]
+fn wan_rx_passes_when_no_vip_and_no_neighbor_nat_match() {
+    let builder = PacketBuilder::ethernet2([0xaa; 6], [0xbb; 6])
+        .ipv4(EXT_IP, [1, 2, 3, 4], 64)
+        .tcp(443, 9999, 0, 1024);
+    let mut plain = Vec::new();
+    builder.write(&mut plain, &[]).unwrap();
+
+    let node = SimNode::with_local(neigh_local());
+    let out = node.wan_rx(&plain);
+    assert_eq!(out.action, Action::Pass);
+    assert_eq!(out.tunnel, None);
 }

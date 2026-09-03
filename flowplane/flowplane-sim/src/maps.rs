@@ -1,6 +1,6 @@
 use flowplane_common::{
     CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
-    MaglevKey, MeterState, NatKey, NatValue, RouteValue, UnderlayValue,
+    MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
 use std::collections::{HashMap, HashSet};
@@ -46,6 +46,10 @@ pub struct MemMaps {
     /// src ip+port are zeroed so the CT lookup hits the globally-unique `(vni,0,nat_ip,0,nat_port)`
     /// reverse entry the egress allocator stored.
     pub nat_ips: HashSet<(u32, [u8; 4])>,
+    /// Neighbor-NAT return-route table (`NEIGHBOR_NAT`), linear-scanned like the eBPF array — see
+    /// `Maps::neighbor_nat_lookup`. Tests populate directly (`m.neighbor_nat.push(..)`), mirroring
+    /// how `m.lb`/`m.maglev` are seeded.
+    pub neighbor_nat: Vec<NeighborNatEntry>,
     pub routes4: Vec<Route4>,
     pub routes6: Vec<Route6>,
     /// Server-wide DHCP config (`DHCP_CONFIG[0]`): MTU + DNS lists.
@@ -127,6 +131,26 @@ impl Maps for MemMaps {
     }
     fn maglev_get(&self, key: &MaglevKey) -> Option<[u8; 16]> {
         self.maglev.get(key).copied()
+    }
+    fn neighbor_nat_lookup(&self, vni: u32, dst: [u8; 4], dport: u16) -> Option<[u8; 16]> {
+        self.neighbor_nat
+            .iter()
+            .find(|e| {
+                e.enabled != 0
+                    && e.vni == vni
+                    && e.nat_ip == dst
+                    && dport >= e.port_min
+                    && dport < e.port_max
+            })
+            .map(|e| e.underlay)
+    }
+    fn neighbor_nat_lookup_any(&self, dst: [u8; 4], dport: u16) -> Option<([u8; 16], u32)> {
+        self.neighbor_nat
+            .iter()
+            .find(|e| {
+                e.enabled != 0 && e.nat_ip == dst && dport >= e.port_min && dport < e.port_max
+            })
+            .map(|e| (e.underlay, e.vni))
     }
     fn nat_get(&self, key: &NatKey) -> Option<NatValue> {
         self.nat.get(key).copied()

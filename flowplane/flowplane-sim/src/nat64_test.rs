@@ -719,20 +719,27 @@ fn uplink_rx_dispatches_nat64_return_to_v6_expansion() {
             _pad: [0; 2],
         },
     );
+    // Self-route for the guest's RESTORED overlay IPv4 (mechanism #2: the delivery target is
+    // resolved from the reverse CT entry's `xlate_ip` via `ROUTES(vni, xlate_ip) -> UNDERLAY` — the
+    // SAME self-route `program_interface` would have written for this guest).
+    node.maps.add_route4(
+        VNI,
+        GUEST_IP,
+        RouteValue {
+            nexthop_vni: VNI,
+            nexthop_ipv6: SELF_UNDERLAY,
+            is_external: 0,
+            _pad: [0; 3],
+        },
+    );
 
     let inner = inner_reply(IPPROTO_TCP, nat_port);
     let l4_len = inner.len() - 20;
     let frame = encap_reply(&inner);
 
-    let u = flowplane_common::UnderlayValue {
-        vni: VNI,
-        tap_ifindex: TAP_IFINDEX,
-        guest_mac: GUEST_MAC,
-        _pad: [0; 2],
-    };
     // Drive the UNIFIED dispatch (NOT SimNode::uplink_nat64_ingress directly), with the guest's
     // overlay IPv6 plumbed through UplinkIn.
-    let out = node.uplink_rx(&frame, VNI, u, SELF_UNDERLAY, &local(), GUEST_IP6);
+    let out = node.uplink_rx(&frame, VNI, &local(), GUEST_IP6);
 
     assert_eq!(
         out.action,

@@ -476,7 +476,7 @@ fn ingress_encapped(sport: u16) -> Vec<u8> {
         gateway_mac: [0x01; 6],
         uplink_mac: [0x02; 6],
         src_underlay: EDGE_UNDERLAY_INGRESS,
-        nexthop_ipv6: [0u8; 16], // outer IPv6 dst; resolved by host_uplink via UnderlayValue
+        nexthop_ipv6: [0u8; 16], // outer IPv6 dst content; irrelevant (decap only strips its length)
         inner_proto: 4,          // IPPROTO_IPIP
     };
     edge.edge_encap(&inner, e)
@@ -564,14 +564,26 @@ fn ingress_lane_exhaust_drop() {
         "encapped frame must contain outer Eth+IPv6"
     );
 
-    let out1 = node.host_uplink(&pkt1, INGRESS_VNI, INGRESS_TAP, INGRESS_GUEST_MAC);
+    let out1 = node.host_uplink(
+        &pkt1,
+        INGRESS_VNI,
+        INGRESS_GUEST_IP,
+        INGRESS_TAP,
+        INGRESS_GUEST_MAC,
+    );
     assert_eq!(
         out1.action,
         Action::Redirect(INGRESS_TAP),
         "ingress packet 1 must PASS (bucket full)"
     );
 
-    let out2 = node.host_uplink(&pkt2, INGRESS_VNI, INGRESS_TAP, INGRESS_GUEST_MAC);
+    let out2 = node.host_uplink(
+        &pkt2,
+        INGRESS_VNI,
+        INGRESS_GUEST_IP,
+        INGRESS_TAP,
+        INGRESS_GUEST_MAC,
+    );
     assert_eq!(
         out2.action,
         Action::Redirect(INGRESS_TAP),
@@ -579,7 +591,13 @@ fn ingress_lane_exhaust_drop() {
     );
 
     // Bucket now < 1 frame, no time elapsed → ingress policing drops.
-    let out3 = node.host_uplink(&pkt3, INGRESS_VNI, INGRESS_TAP, INGRESS_GUEST_MAC);
+    let out3 = node.host_uplink(
+        &pkt3,
+        INGRESS_VNI,
+        INGRESS_GUEST_IP,
+        INGRESS_TAP,
+        INGRESS_GUEST_MAC,
+    );
     assert_eq!(
         out3.action,
         Action::Drop,

@@ -7,10 +7,12 @@
 //! (`ingress.rs` 135-157 dispatch + 245-304 tail). The LB-dispatch glue is composed here (as it is
 //! in the eBPF wrapper); the `BPF_PROG_TEST_RUN` anchor guards native==bytecode on the LB path.
 //!
-//! Scope: this harness models the LB-select + firewall + conntrack-create + decap/reforward tail.
-//! The `try_uplink_rx` branches gated on `lb_ul.is_none()` — NAT64 reply, neighbor-NAT reforward,
-//! ICMP-echo reply, and inner `dnat_ingress` — are NOT modeled (out of scope for this LB-path
-//! harness). For LB packets those branches are skipped anyway.
+//! Scope: this harness models the LB-select + firewall + conntrack-create + decap/reforward tail,
+//! PLUS the ingress delivery-target reconstruction (`ROUTES` self-route / neighbor-NAT relay /
+//! WAN-edge sentinel / genuine-miss drop — see `flowplane_core::datapath::resolve_uplink_target`).
+//! The `try_uplink_rx` branches gated on `lb_ul.is_none()` — NAT64 reply, ICMP-echo reply, and inner
+//! `dnat_ingress` — are NOT modeled (out of scope for this LB-path harness). For LB packets those
+//! branches are skipped anyway.
 //!
 //! `EncapParams`/`edge_encap` below are a TEST-FIXTURE-ONLY byte writer: decap/ingress
 //! (`flowplane_core::uplink::decap_and_rewrite` and friends) still consume the old wire shape
@@ -18,9 +20,8 @@
 //! `bpf_skb_get_tunnel_key`, so ingress-path sim tests still need byte-accurate "arrived over the
 //! wire" input frames. Production egress never calls this — see `TunnelEncap` instead.
 
-use flowplane_common::{Local, PortMeta, UnderlayValue};
+use flowplane_common::{Local, PortMeta, RouteValue, UnderlayValue};
 use flowplane_core::encap::{TunnelEncap, ETH_LEN, IPV6_LEN};
-use flowplane_core::maps::Maps;
 use flowplane_core::pkt::{Action, Pkt};
 
 use crate::maps::MemMaps;
@@ -90,30 +91,24 @@ impl SimNode {
         wrap_fixture_outer_full(inner_frame, &e)
     }
 
-    /// Host uplink_rx for the LB + base path. `u` is `UNDERLAY[outer_dst]` (this node's resolved
-    /// vni + base tap); `outer_dst` is the encapped frame's current outer IPv6 dst; `local` supplies
-    /// the outer MACs/ifindex for an LB remote `reforward`. Mirrors `try_uplink_rx`:
+    /// Host uplink_rx for the LB + base path. Under Geneve `collect_md` there is no pre-resolved
+    /// `UnderlayValue`/outer-dst: `vni` (from `get_tunnel_key`) + the inner packet + maps are the
+    /// only inputs the delivery-target reconstruction has to work with (see
+    /// `flowplane_core::datapath::resolve_uplink_target`). `local` supplies the outer MACs/ifindex
+    /// for an LB remote `reforward` / neighbor-NAT relay / WAN-edge local-deliver rewrite. Mirrors
+    /// `try_uplink_rx`:
     ///   1. `lb_select_forward` → local backend (deliver to its tap) | remote (reforward, no decap)
-    ///      | None (base tap);
+    ///      | None → neighbor-NAT relay → ROUTES self-route + WAN-edge sentinel / genuine-miss drop;
     ///   2. ingress firewall on the inner 5-tuple against the deliver tap (new-flow gate);
     ///   3. conntrack create-on-miss, **skipped for LB** (DSR, no ct — `ingress.rs:266`);
     ///   4. decap + inner-Ethernet rewrite.
     ///
-    /// Returns the final `Action` + the resulting frame bytes + the `TunnelEncap` decision on the
-    /// remote-LB-backend reforward arm (`None` otherwise).
-    pub fn uplink(
-        &mut self,
-        encapped: &[u8],
-        vni: u32,
-        u: UnderlayValue,
-        outer_dst: [u8; 16],
-        local: &Local,
-    ) -> SimOut {
+    /// Returns the final `Action` + the resulting frame bytes + the `TunnelEncap` decision on a
+    /// relay/reforward arm (`None` otherwise).
+    pub fn uplink(&mut self, encapped: &[u8], vni: u32, local: &Local) -> SimOut {
         let mut pkt = VecPkt::from_bytes(encapped);
         let in_ = flowplane_core::datapath::UplinkIn {
             vni,
-            u,
-            outer_dst,
             local,
             now: self.now,
             // Base path (never NAT64); guest_ipv6 is only read on the CT_F_NAT64 return branch.
@@ -129,14 +124,14 @@ impl SimNode {
 
     /// Host uplink_rx for the NAT return / reverse-DNAT path. `encapped` is the fabric frame
     /// `[OuterEth(14)][OuterIPv6(40)][inner IPv4 ...]` returning from an external peer to a NAT'd
-    /// guest; `u`/`guest_mac` come from `UNDERLAY[outer_dst]` (base tap). Composes the REAL core fns
-    /// in the exact order + gates of the eBPF `try_uplink_rx` non-LB NAT branch (`ingress.rs`
-    /// 160-209 + the base decap tail):
+    /// guest. Composes the REAL core fns in the exact order + gates of the eBPF `try_uplink_rx`
+    /// non-LB NAT branch (`ingress.rs` 160-209 + the base decap tail):
     ///   1. build the inner 5-tuple key; if the inner dst is a registered nat_ip, zero the external
     ///      src ip+port so it hits the peer-independent `(vni,0,nat_ip,0,nat_port)` reverse entry;
     ///   2. CT lookup: if the entry has `CT_REWRITE_DST`, apply the reverse-DNAT translation
     ///      (`ct_apply`: inner dst IP -> guest, dst port -> orig sport, +IP/L4 checksums);
-    ///   3. decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest.
+    ///   3. resolve the delivery target from the RESTORED guest IP (`ROUTES` self-route ->
+    ///      `UNDERLAY`) and decap outer Eth+IPv6 + rewrite the inner Ethernet for the guest.
     ///
     /// Returns the delivery `Action` + resulting (decapped, reverse-DNAT'd) frame bytes. Decap-only
     /// — `tunnel` is always `None`.
@@ -145,22 +140,12 @@ impl SimNode {
     /// `dnat_ingress` (VIP) branches are NOT modelled here — this seam covers the network-NAT
     /// reverse-DNAT apply (`ct_apply`) + decap, which is the byte-output-relevant slice for a
     /// plain (non-NAT64) NAT return.
-    pub fn uplink_nat_return(
-        &mut self,
-        encapped: &[u8],
-        vni: u32,
-        u: UnderlayValue,
-        guest_mac: [u8; 6],
-    ) -> SimOut {
+    pub fn uplink_nat_return(&mut self, encapped: &[u8], vni: u32, local: &Local) -> SimOut {
         let mut pkt = VecPkt::from_bytes(encapped);
         let action = flowplane_core::datapath::process_uplink_nat_return(
             &mut pkt,
             &mut self.maps,
-            &flowplane_core::datapath::UplinkNatReturnIn {
-                vni,
-                tap_ifindex: u.tap_ifindex,
-                guest_mac,
-            },
+            &flowplane_core::datapath::UplinkNatReturnIn { vni, local },
         );
         SimOut {
             action,
@@ -181,16 +166,12 @@ impl SimNode {
         &mut self,
         encapped: &[u8],
         vni: u32,
-        u: UnderlayValue,
-        outer_dst: [u8; 16],
         local: &Local,
         guest_ipv6: [u8; 16],
     ) -> SimOut {
         let mut pkt = VecPkt::from_bytes(encapped);
         let in_ = flowplane_core::datapath::UplinkIn {
             vni,
-            u,
-            outer_dst,
             local,
             now: self.now,
             guest_ipv6,
@@ -203,29 +184,66 @@ impl SimNode {
         }
     }
 
-    /// Convenience wrapper for a plain non-LB delivery to `tap` (used by `ns_scenario_test`): builds
-    /// a base `UnderlayValue` and delegates to [`SimNode::uplink`]. With no LB maps set,
+    /// Convenience wrapper for a plain non-LB delivery of a guest at overlay `dst` to `tap` (used by
+    /// `ns_scenario_test`): synthesizes the `ROUTES` self-route + `UNDERLAY` entry
+    /// `program_interface` would have written for that guest (mechanism #1 of the ingress
+    /// delivery-target reconstruction — see `flowplane_core::datapath::resolve_uplink_target`) under
+    /// a fixed placeholder underlay, then delegates to [`SimNode::uplink`]. With no LB maps set,
     /// `lb_select_forward` returns None and the base path runs.
     pub fn host_uplink(
         &mut self,
         encapped: &[u8],
         vni: u32,
+        dst: [u8; 4],
         tap: u32,
         guest_mac: [u8; 6],
     ) -> SimOut {
-        let u = UnderlayValue {
+        // Placeholder self-route underlay — its VALUE is irrelevant (never re-parsed from the
+        // wire), it only needs to be a unique key joining the ROUTES entry to the UNDERLAY entry.
+        let underlay = [
+            0x20,
+            0x01,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            (tap >> 8) as u8,
+            tap as u8,
+        ];
+        self.maps.underlay.insert(
+            underlay,
+            UnderlayValue {
+                vni,
+                tap_ifindex: tap,
+                guest_mac,
+                _pad: [0; 2],
+            },
+        );
+        self.maps.add_route4(
             vni,
-            tap_ifindex: tap,
-            guest_mac,
-            _pad: [0; 2],
-        };
+            dst,
+            RouteValue {
+                nexthop_vni: vni,
+                nexthop_ipv6: underlay,
+                is_external: 0,
+                _pad: [0; 3],
+            },
+        );
         let local = Local {
             uplink_ifindex: 0,
             uplink_mac: [0; 6],
             gateway_mac: [0; 6],
             underlay_ipv6: [0; 16],
         };
-        self.uplink(encapped, vni, u, [0u8; 16], &local)
+        self.uplink(encapped, vni, &local)
     }
 
     /// Guest egress (`guest_tx`) for the IPv4 forwarding path. `frame` is a full guest Ethernet
@@ -453,36 +471,15 @@ impl SimNode {
         }
     }
 
-    /// Uniform entry for the Fabric. UplinkRx resolves `u = UNDERLAY[outer_dst]` from this node's maps.
+    /// Uniform entry for the Fabric. `Prog::UplinkRx(vni)` carries the VNI explicitly — under
+    /// Geneve `collect_md` it rides the tunnel key (`get_tunnel_key().tunnel_id`), out-of-band from
+    /// the packet bytes, not encoded in an outer destination address to be re-parsed here.
     pub fn run(&mut self, prog: crate::fabric::Prog, pkt: &[u8]) -> SimOut {
-        use flowplane_core::encap::ETH_LEN;
         match prog {
             crate::fabric::Prog::WanRx => self.wan_rx(pkt),
-            crate::fabric::Prog::UplinkRx => {
-                // outer IPv6 dst at ETH_LEN+24; resolve to this node's UnderlayValue.
-                let vp = VecPkt::from_bytes(pkt);
-                let outer_dst = match vp.read_array::<16>(ETH_LEN + 24) {
-                    Some(d) => d,
-                    None => {
-                        return SimOut {
-                            action: Action::Pass,
-                            pkt: pkt.to_vec(),
-                            tunnel: None,
-                        }
-                    }
-                };
-                let u = match self.maps.underlay_get(&outer_dst) {
-                    Some(u) => u,
-                    None => {
-                        return SimOut {
-                            action: Action::Pass,
-                            pkt: pkt.to_vec(),
-                            tunnel: None,
-                        }
-                    }
-                };
+            crate::fabric::Prog::UplinkRx(vni) => {
                 let local = self.local;
-                self.uplink(pkt, u.vni, u, outer_dst, &local)
+                self.uplink(pkt, vni, &local)
             }
         }
     }
