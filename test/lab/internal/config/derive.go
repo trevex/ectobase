@@ -36,7 +36,6 @@ type DerivedNode struct {
 	NodeNet64    string // fd00:cafe:<h>::/64 (the node's underlay pool; the ToR originates it into
 	// BGP with a recursive nexthop = IdentityAddr so guest-endpoint underlays in its upper half are
 	// fabric-routable — Talos native GoBGP can only advertise host routes, so the /64 is switch-side)
-	RA64 string // fd00:db8:0:<portSeq>::/64 (switch RA on this node's ports)
 }
 
 // KindRole is the kind node role: the first node in a cluster is the control-plane,
@@ -98,7 +97,6 @@ func (c *Config) derive() {
 				Identity:     fmt.Sprintf("fd00:cafe:%x::%d/128", h, i),
 				IdentityAddr: fmt.Sprintf("fd00:cafe:%x::%d", h, i),
 				NodeNet64:    fmt.Sprintf("fd00:cafe:%x::/64", h),
-				RA64:         fmt.Sprintf("fd00:db8:0:%d::/64", port),
 			})
 		}
 		c.Derived.Clusters[cl.Name] = dc

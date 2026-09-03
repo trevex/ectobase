@@ -64,7 +64,7 @@ fabric:
 		t.Fatal("cluster /48s must differ")
 	}
 	n := c.Derived.Clusters["dispatch"].Nodes[0]
-	if n.Identity == "" || n.RA64 == "" || c.Derived.Clusters["dispatch"].APIVip == "" {
+	if n.Identity == "" || c.Derived.Clusters["dispatch"].APIVip == "" {
 		t.Fatalf("derived fields empty: %+v", n)
 	}
 	// Deterministic: a second load yields the same /48.

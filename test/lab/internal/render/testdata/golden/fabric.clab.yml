@@ -159,8 +159,8 @@ topology:
         WAN_V4_ADDR: 172.29.0.1/24
         WAN_V6_ADDR: fd00:29::1/64
         WAN_MASQ_V4: "172.29.0.0/16"
-        WAN_MASQ_V6: "fd00:cafe::/32 fd00:db8::/32 fd00:ffff::/32 fd00:29::/64"
-        WAN_ROUTES: "fd00:cafe::/32 fd00:29::11,fd00:29::12;fd00:db8::/32 fd00:29::11,fd00:29::12;fd00:ffff::/32 fd00:29::11,fd00:29::12"
+        WAN_MASQ_V6: "fd00:cafe::/32 fd00:ffff::/32 fd00:29::/64"
+        WAN_ROUTES: "fd00:cafe::/32 fd00:29::11,fd00:29::12;fd00:ffff::/32 fd00:29::11,fd00:29::12"
         # eth5 is the registry link; it must join br0 (the WAN L2 segment) so the
         # registry (fd00:29::5 on eth5) is reachable over the fabric from the nodes.
         WAN_LAN_IFACES: "eth1 eth2 eth3 eth4 eth5"
