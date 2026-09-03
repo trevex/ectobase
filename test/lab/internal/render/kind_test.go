@@ -13,7 +13,7 @@ import (
 // kindNode image the kind-cluster template renders into each node.
 const kindFixture = `
 name: ectobase
-images: {talos: img/talos, kindNode: ghcr.io/trevex/ectobase/kind-node-fabric:dev, vyos: img/vyos, tayga: img/tayga, wan: img/wan, registry: registry:2}
+images: {talos: img/talos, kindNode: ghcr.io/trevex/ectobase/kind-node-fabric:dev, tayga: img/tayga, wan: img/wan, registry: registry:2}
 fabric:
   as: {edge: 65000, switch: 65010, host: 65100}
   nat64Prefix: 64:ff9b::/96

@@ -5,7 +5,7 @@ import "testing"
 func TestLoadValid(t *testing.T) {
 	c, err := LoadBytes([]byte(`
 name: ectobase
-images: {talos: t, vyos: v, tayga: g, registry: registry:2}
+images: {talos: t, tayga: g, registry: registry:2}
 fabric:
   as: {edge: 65000, switch: 65010, host: 65100}
   nat64Prefix: 64:ff9b::/96

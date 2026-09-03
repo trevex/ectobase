@@ -15,7 +15,7 @@ import (
 // port lands at CephPortSeq=4 → switch eth6, just past the node ports (eth3-5).
 const cephFixture = `
 name: ectobase
-images: {talos: img/talos, vyos: img/vyos, tayga: img/tayga, wan: img/wan, registry: registry:2, frr: img/frr, ceph: img/ceph}
+images: {talos: img/talos, tayga: img/tayga, wan: img/wan, registry: registry:2, frr: img/frr, ceph: img/ceph}
 fabric:
   as: {edge: 65000, switch: 65010, host: 65100}
   nat64Prefix: 64:ff9b::/96
@@ -81,7 +81,7 @@ func TestCephClabGolden(t *testing.T) {
 func TestCephDisabledUnchanged(t *testing.T) {
 	c, err := config.LoadBytes([]byte(`
 name: ectobase
-images: {talos: img/talos, vyos: img/vyos, tayga: img/tayga, wan: img/wan, registry: registry:2}
+images: {talos: img/talos, tayga: img/tayga, wan: img/wan, registry: registry:2}
 fabric:
   as: {edge: 65000, switch: 65010, host: 65100}
   nat64Prefix: 64:ff9b::/96
