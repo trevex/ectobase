@@ -46,14 +46,14 @@ mountpoint -q /sys/fs/bpf 2>/dev/null || mount -t bpf bpf /sys/fs/bpf 2>/dev/nul
 # fixes that, since kindnet adds the route unconditionally and treats the error as
 # fatal.) So preboot does NOT touch pod routing at all — Cilium owns it.
 
-# 1) The node identity lives on dummy0 as a /128 (next-hop-independent, up instantly —
-#    no BGP peer required for the address to exist, which is what kubelet needs at
-#    start). It is a /128, NOT the /64: the /64 is ORIGINATED by the ToR (switch.set)
-#    with a recursive next-hop = this /128, so the node MUST advertise the /128 (below)
-#    for that recursion to resolve via the fabric. Advertising the /64 instead leaves
-#    the ToR's recursive next-hop unresolved → it falls back to the switch's mgmt
-#    default → the node is black-holed off the fabric. flowplane still infers the
-#    underlay /64 from this address (it is within --underlay-within fd00:cafe::/32).
+# 1) The node identity lives on dummy0 as a /128 — the Geneve VTEP. Under the pure
+#    /128-VTEP fabric the ToR does NOT re-originate a /64; every ToR relays this /128
+#    with ECMP, so it is reachable fabric-wide (including from the edges, for return
+#    traffic + WAN masq of NodeAggr fd00:cafe::/32). WAN-bound egress therefore sources
+#    from this /128 directly — no SLAAC /64 source is needed or created. It is a /128,
+#    NOT the /64: it is up instantly (no BGP peer required) which is what kubelet needs
+#    at start. flowplane still infers the underlay /64 from this address (within
+#    --underlay-within fd00:cafe::/32).
 ip link show dummy0 >/dev/null 2>&1 || ip link add dummy0 type dummy
 ip -6 addr replace "${NODEIP}/128" dev dummy0
 ip link set dummy0 up
@@ -76,24 +76,10 @@ printf 'KUBELET_EXTRA_ARGS=%s --node-ip=%s\n' "$extra" "$NODEIP" > "$KF"
 UPLINKS="eth1"
 [ -r /etc/fabric/uplinks ] && UPLINKS="$(tr -d '\n' < /etc/fabric/uplinks)"
 
-# Fabric-only egress (the Talos accept_ra lesson): with forwarding=1 the kernel only
-# installs an RA-learned default when accept_ra=2 (accept_ra=1 accepts the prefix but
-# NOT the default). The fabric uplinks do NOT exist yet at preboot (clab attaches them
-# after `kind create`), so set the DEFAULT template (inherited by eth1/eth2 when clab
-# creates them) — plus any uplink that already exists — so the switch RA then gives the
-# node a fabric default (→ the in-fabric registry fd00:29::5 + NAT64 internet).
-#
-# NB: SLAAC autoconf is left ENABLED. The per-switch RA /64 SLAAC addr on each uplink is
-# the node's WAN-routable egress source (the WAN masquerades RAAggr fd00:db8::/32 back
-# via the edges; the dummy0 identity /128 is only reachable from the directly-connected
-# ToRs, so sourcing WAN-bound egress from it black-holes the return path — e.g. the
-# registry pull). kindnet plain-MASQUERADEs pod egress to the per-packet route source
-# (the egress uplink's SLAAC), so the ceph-mon reply returns via the same ToR — no
-# asymmetry (unlike Cilium BPF masquerade, which pinned one source regardless of egress).
-sysctl -w net.ipv6.conf.default.accept_ra=2 >/dev/null 2>&1 || true
-for u in $UPLINKS; do
-  sysctl -w "net.ipv6.conf.${u}.accept_ra=2" >/dev/null 2>&1 || true
-done
+# The fabric default (::/0) arrives via BGP (the edges default-originate; the ToR
+# re-advertises it to this host). No RA default, no SLAAC source — the /128 above is
+# the egress source. (mgmt eth0 stays as the pre-BGP-convergence image-pull fallback,
+# demoted below; P3b removes mgmt and moves early pulls onto the in-fabric registry.)
 # Demote the docker mgmt default (eth0) below 1024 so the fabric RA default (metric
 # 1024) wins once it arrives, but mgmt stays a fallback for the pre-fabric kubeadm
 # image pulls. One-shot: docker sets this default once at container start.
@@ -125,9 +111,9 @@ ROUTERID="10.0.2.$(printf '%s' "$BASE" | sed 's/.*:\([0-9a-f]*\)::$/\1/' | tr -c
   done
   echo " address-family ipv6 unicast"
   echo "  maximum-paths 64"
-  # Advertise the node's /128 IDENTITY (dummy0), not the /64: the ToR ORIGINATES the
-  # /64 with a recursive next-hop = this /128 (see step 1). Endpoint underlays in the
-  # /64 upper half reach the node because the ToR routes the /64 → this /128 → here.
+  # Advertise the node's /128 VTEP identity (dummy0). The ToR relays it fabric-wide
+  # with ECMP (no /64 re-origination); overlay traffic reaches this node by Geneve
+  # encap to this /128, so no underlay /64 need be advertised.
   echo "  network ${NODEIP}/128"
   for u in $UPLINKS; do echo "  neighbor $u activate"; echo "  neighbor $u allowas-in 1"; done
   echo " exit-address-family"
