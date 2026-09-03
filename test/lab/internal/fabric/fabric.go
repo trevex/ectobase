@@ -11,17 +11,15 @@ import (
 // Fixed fabric constants (from the icn/sandbox fabric defaults). The simplified
 // lab.yaml does not expose these; every cluster on the shared fabric uses them.
 const (
-	TaygaNet      = "fd00:64"              // nat64 edge links: fd00:64:1::/64, fd00:64:2::/64
-	WanNet        = "fd00:29"              // WAN segment fd00:29::/64; wan ::1, edge1 ::11, edge2 ::12
-	MgmtV6Subnet  = "3fff:172:20:20::/64"  // clab mgmt docker network v6 subnet (host NAT66's it → real uplink)
-	MgmtV6Gateway = "3fff:172:20:20::1"    // clab mgmt gateway; nodes drop its default so egress is fabric-only
-	EdgeLoopback  = "fd00:ffff"            // edge DNS64 loopbacks: fd00:ffff::e1, fd00:ffff::e2
-	DNSUpstream   = "2606:4700:4700::1111" // DNS64 upstream
-	WanGwV4       = "172.29.0.1"           // wan bridge v4 gateway
-	NodeAggr      = "fd00:cafe::/32"       // aggregate of every cluster's /48 node identities (fd00:cafe:<h>::/48)
-	LoopAggr      = "fd00:ffff::/32"       // aggregate of the edge loopbacks
-	RegistryAddr  = "fd00:29::5"           // registry node's address on the WAN segment (fd00:29::/64)
-	RegistryPort  = "5000"                 // registry:2 default listen port
+	TaygaNet     = "fd00:64"              // nat64 edge links: fd00:64:1::/64, fd00:64:2::/64
+	WanNet       = "fd00:29"              // WAN segment fd00:29::/64; wan ::1, edge1 ::11, edge2 ::12
+	EdgeLoopback = "fd00:ffff"            // edge DNS64 loopbacks: fd00:ffff::e1, fd00:ffff::e2
+	DNSUpstream  = "2606:4700:4700::1111" // DNS64 upstream
+	WanGwV4      = "172.29.0.1"           // wan bridge v4 gateway
+	NodeAggr     = "fd00:cafe::/32"       // aggregate of every cluster's /48 node identities (fd00:cafe:<h>::/48)
+	LoopAggr     = "fd00:ffff::/32"       // aggregate of the edge loopbacks
+	RegistryAddr = "fd00:29::5"           // registry node's address on the WAN segment (fd00:29::/64)
+	RegistryPort = "5000"                 // registry:2 default listen port
 
 	JumpHostAddr = "fd00:29::100" // host end of the WAN-segment jump veth (replaces the mgmt route)
 	JumpVia      = "fd00:29::1"   // the wan container's WAN-segment addr; it ECMPs NodeAggr → edges
@@ -83,8 +81,6 @@ func (v *View) ClusterNames() []string {
 	}
 	return out
 }
-func (v *View) MgmtV6Subnet() string  { return MgmtV6Subnet }
-func (v *View) MgmtV6Gateway() string { return MgmtV6Gateway }
 
 // Ceph accessors: the optional fabric-attached Ceph/demo storage node. The clab
 // + switch templates guard the ceph blocks on CephEnabled; the addresses come

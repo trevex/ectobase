@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/trevex/ectobase/test/lab/internal/config"
-	"github.com/trevex/ectobase/test/lab/internal/fabric"
 )
 
 // computeNodes returns the nodes of every non-dispatch cluster (k02, k03, …).
@@ -58,11 +57,15 @@ func TestNAT64Egress(t *testing.T) {
 	})
 }
 
-// TestFabricOnlyEgress asserts egress prefers the fabric, not the docker mgmt
-// side-channel: a fabric default (via the uplinks eth1/eth2 — from RA `proto ra`
-// or the node GoBGP's edge `::/0` `proto bgp`) sits at metric 1024, while the mgmt
-// default (via MgmtV6Gateway dev eth0) is demoted (not metric 1024, or absent).
-// Precisely: no default-route line matches BOTH `dev eth0` AND `metric 1024`.
+// TestFabricOnlyEgress asserts egress is fabric-only now that the clab mgmt
+// network is disabled (P3b): there is no mgmt default at all (no `dev eth0`
+// default — mgmt never attaches an eth0 to the node), and the node's default
+// route is the fabric one, learned via the uplinks eth1/eth2. RA defaults were
+// removed in P3a, so the fabric default here is exclusively the BGP-learned
+// `::/0` from the edges; it may be ECMP'd across both uplinks, rendered as a
+// `default proto bgp …` header line followed by separate `nexthop … dev ethN`
+// lines. We don't assert a specific metric — the BGP-installed kernel metric
+// is implementation-dependent (unlike the old RA metric 1024).
 func TestFabricOnlyEgress(t *testing.T) {
 	cfg := loadConfig(t)
 	requireFabricUp(t, cfg)
@@ -77,41 +80,25 @@ func TestFabricOnlyEgress(t *testing.T) {
 				if err != nil {
 					return fmt.Errorf("ip -6 route show default: %w", err)
 				}
-				mgmtGw := "via " + fabric.MgmtV6Gateway
-				var faLane bool
+				var fabricLane bool
 				for _, line := range strings.Split(strings.TrimSpace(routes), "\n") {
 					line = strings.TrimSpace(line)
 					if line == "" {
 						continue
 					}
-					// The mgmt default (dev eth0, via the docker mgmt gateway) must
-					// NOT sit at the fabric-preferred metric 1024 — it should be
-					// demoted (metric 4096) or absent, so egress prefers the fabric.
-					if strings.Contains(line, "dev eth0") && strings.Contains(line, "metric 1024") {
-						return fmt.Errorf("mgmt default is at fabric metric 1024 (egress leaks to docker mgmt): %q", line)
+					// Mgmt is disabled: there must be no eth0 default at all.
+					if strings.HasPrefix(line, "default") && strings.Contains(line, "dev eth0") {
+						return fmt.Errorf("mgmt default present (dev eth0) though mgmt is disabled: %q", line)
 					}
-					// Any mgmt default present should route via the demoted gateway.
-					if strings.Contains(line, mgmtGw) && strings.Contains(line, "metric 1024") {
-						return fmt.Errorf("mgmt-gateway default is at fabric metric 1024: %q", line)
-					}
-					// A fabric-preferred default is a metric-1024 default that is NOT via
-					// the mgmt iface (eth0). It may be installed from RA (`proto ra`, a
-					// single nexthop out one uplink) OR from the node's GoBGP learning the
-					// edge-originated `::/0` (`proto bgp`, ECMP across both uplinks) — both
-					// egress over the fabric. Which appears depends on the uplink's
-					// accept_ra vs forwarding: a metric-1024 RA default only installs when
-					// accept_ra=2 while forwarding is on, else the BGP default is the fabric
-					// lane (non-deterministic across nodes; nothing sets accept_ra). Accept
-					// either. (The `default proto bgp … metric 1024` header line carries the
-					// metric; its ECMP `nexthop … dev eth1/eth2` lines are separate.)
-					if strings.HasPrefix(line, "default") &&
-						strings.Contains(line, "metric 1024") &&
-						!strings.Contains(line, "dev eth0") {
-						faLane = true
+					// The fabric default is a `default` (or its ECMP `nexthop`)
+					// line referencing one of the uplinks eth1/eth2.
+					if (strings.HasPrefix(line, "default") || strings.HasPrefix(line, "nexthop")) &&
+						(strings.Contains(line, "dev eth1") || strings.Contains(line, "dev eth2")) {
+						fabricLane = true
 					}
 				}
-				if !faLane {
-					return fmt.Errorf("no fabric-preferred metric-1024 default via the uplinks (proto ra or bgp):\n%s", routes)
+				if !fabricLane {
+					return fmt.Errorf("no fabric default via the uplinks (dev eth1/eth2):\n%s", routes)
 				}
 				return nil
 			})

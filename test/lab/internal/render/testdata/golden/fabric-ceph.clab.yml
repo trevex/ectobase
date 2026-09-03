@@ -3,8 +3,9 @@ name: ectobase
 
 mgmt:
   network: ectobase-mgmt
-  ipv4-subnet: 172.20.20.0/24
-  ipv6-subnet: 3fff:172:20:20::/64
+  # P3b: fabric-only from t=0 — nodes reach each other + the host only over the fabric
+  # (the host↔WAN jump veth below), not a mgmt route. The exact containerlab
+  # "detach fabric nodes from mgmt" knob is finalized at the B4 live bring-up.
 
 topology:
   defaults:
@@ -19,11 +20,6 @@ topology:
         - frr/edge1.conf:/etc/frr/frr.conf
         - frr/daemons:/etc/frr/daemons
       sysctls: {net.ipv6.conf.all.forwarding: 1}
-      # P3a: mgmt is still attached; drop the docker-injected mgmt default so FRR's
-      # ::/0 (static on edges, BGP-learned on switches) wins and egress is fabric-bound.
-      # Removed in P3b when the mgmt network is disabled.
-      exec:
-        - "ip -6 route del default via 3fff:172:20:20::1 dev eth0"
     edge2:
       kind: linux
       image: img/frr
@@ -31,11 +27,6 @@ topology:
         - frr/edge2.conf:/etc/frr/frr.conf
         - frr/daemons:/etc/frr/daemons
       sysctls: {net.ipv6.conf.all.forwarding: 1}
-      # P3a: mgmt is still attached; drop the docker-injected mgmt default so FRR's
-      # ::/0 (static on edges, BGP-learned on switches) wins and egress is fabric-bound.
-      # Removed in P3b when the mgmt network is disabled.
-      exec:
-        - "ip -6 route del default via 3fff:172:20:20::1 dev eth0"
 
     # flowplane WAN-edge sidecar: shares the edge1 FRR netns and runs wan_rx so the
     # fabric has a real N/S LoadBalancer edge (FRR alone cannot run the eBPF datapath).
@@ -84,11 +75,6 @@ topology:
         - frr/sw1.conf:/etc/frr/frr.conf
         - frr/daemons:/etc/frr/daemons
       sysctls: {net.ipv6.conf.all.forwarding: 1}
-      # P3a: mgmt is still attached; drop the docker-injected mgmt default so FRR's
-      # ::/0 (static on edges, BGP-learned on switches) wins and egress is fabric-bound.
-      # Removed in P3b when the mgmt network is disabled.
-      exec:
-        - "ip -6 route del default via 3fff:172:20:20::1 dev eth0"
     sw2:
       kind: linux
       image: img/frr
@@ -96,11 +82,6 @@ topology:
         - frr/sw2.conf:/etc/frr/frr.conf
         - frr/daemons:/etc/frr/daemons
       sysctls: {net.ipv6.conf.all.forwarding: 1}
-      # P3a: mgmt is still attached; drop the docker-injected mgmt default so FRR's
-      # ::/0 (static on edges, BGP-learned on switches) wins and egress is fabric-bound.
-      # Removed in P3b when the mgmt network is disabled.
-      exec:
-        - "ip -6 route del default via 3fff:172:20:20::1 dev eth0"
 
     # flowplane xdp_pass sidecar: shares the sw1 FRR netns and attaches the trivial xdp_pass program
     # to sw1's edge-facing veths (eth1 = edge1's LOCAL uplink, eth2 = edge2's LOCAL uplink). The WAN
@@ -163,7 +144,7 @@ topology:
         WAN_ROUTES: "fd00:cafe::/32 fd00:29::11,fd00:29::12;fd00:ffff::/32 fd00:29::11,fd00:29::12"
         # eth5 is the registry link; it must join br0 (the WAN L2 segment) so the
         # registry (fd00:29::5 on eth5) is reachable over the fabric from the nodes.
-        WAN_LAN_IFACES: "eth1 eth2 eth3 eth4 eth5"
+        WAN_LAN_IFACES: "eth1 eth2 eth3 eth4 eth5 eth6"
 
     registry:
       kind: linux
@@ -274,6 +255,12 @@ topology:
     - endpoints: ["nat64-2:eth2", "wan:eth4"]
       mtu: 1500
     - endpoints: ["registry:eth1", "wan:eth5"]
+      mtu: 1500
+    # Host↔WAN jump: one veth from the host root netns onto the WAN segment (br0 in
+    # the wan container). The host assigns fd00:29::100 here (addHostFabricRoute) and
+    # routes fd00:cafe::/32 via fd00:29::1 — the single controlled ingress that
+    # replaces the disabled mgmt network.
+    - endpoints: ["wan:eth6", "host:ectojump"]
       mtu: 1500
     # --- shared Ceph storage node: dual-homed to both ToRs (eth1->sw1, eth2->sw2),
     # the next free host port on each ToR (CephPortSeq = totalNodes + 1). The ceph-net
