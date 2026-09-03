@@ -78,11 +78,15 @@ UPLINKS="eth1"
 
 # The fabric default (::/0) arrives via BGP (the edges default-originate; the ToR
 # re-advertises it to this host). No RA default, no SLAAC source — the /128 above is
-# the egress source. (mgmt eth0 stays as the pre-BGP-convergence image-pull fallback,
-# demoted below; P3b removes mgmt and moves early pulls onto the in-fabric registry.)
-# Demote the docker mgmt default (eth0) below 1024 so the fabric RA default (metric
-# 1024) wins once it arrives, but mgmt stays a fallback for the pre-fabric kubeadm
-# image pulls. One-shot: docker sets this default once at container start.
+# the egress source. (eth0 here is kind's own bridge — the fabric routers, not the
+# compute nodes, are the ones detached from clab mgmt in P3b; kind's bridge default is
+# demoted below so the fabric BGP default is preferred.)
+# Demote the kind-bridge default (eth0, kind's own docker network — NOT clab mgmt,
+# which the fabric routers drop via `network-mode: none`) below the fabric default so
+# the BGP-learned ::/0 wins once FRR converges. eth0 stays as the pre-convergence
+# image-pull fallback (kubeadm/CNI); steady-state egress + the in-fabric registry
+# (fd00:29::5, via the containerd mirror hosts.toml) go over the fabric. One-shot:
+# docker sets this default once at container start.
 MGMTGW="$(ip -6 route show default dev eth0 2>/dev/null | awk '/via/{print $3; exit}')"
 if [ -n "${MGMTGW:-}" ]; then
   ip -6 route del default via "$MGMTGW" dev eth0 2>/dev/null || true
