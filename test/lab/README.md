@@ -4,8 +4,8 @@ A Go/[cobra](https://github.com/spf13/cobra) `lab` CLI that stands up a **multi-
 
 The fabric is:
 
-- **VyOS edges** (`edge1`/`edge2`, AS 65000) — `default-originate` (`::/0`) + advertise `64:ff9b::/96`, with **DNS64** on a loopback and `eth`→WAN / `eth`→Tayga wiring.
-- **VyOS switches** (`sw1`/`sw2`, AS 65010) — transit eBGP to both edges and every node, with per-port **RA** (`service router-advert`) advertising that port's `/64` + the edge DNS64 name-server, and per-node **ToR `/64` origination** (a recursive static via the node's `/128`).
+- **FRR edges** (`edge1`/`edge2`, AS 65000) — `default-originate` (`::/0`) + advertise `64:ff9b::/96`, with **DNS64** on a loopback and `eth`→WAN / `eth`→Tayga wiring.
+- **FRR switches** (`sw1`/`sw2`, AS 65010) — transit eBGP to both edges and every node, with per-port **RA** (`service router-advert`) advertising that port's `/64` + the edge DNS64 name-server, and per-node **ToR `/64` origination** (a recursive static via the node's `/128`).
 - **Tayga NAT64** (`nat64-1`/`nat64-2`) — `64:ff9b::/96` → IPv4 pool → MASQUERADE to the WAN, one per edge.
 - A **WAN sim** (`wan`) that masquerades all fabric prefixes onto the host uplink and is the host's single route into the fabric.
 - A persistent **local registry mirror** (`registry:2`) on the WAN segment (`fd00:29::5:5000`).
@@ -50,7 +50,7 @@ sudo -E env "PATH=$PATH" /tmp/lab down             # tear down; keeps the regist
 | Command | What |
 |---|---|
 | `lab up` | Render → deploy the clab fabric (the `k8s-kind` nodes create the kind clusters with kindnet) → push local `:dev` images into the in-fabric mirror → per cluster collect the kubeconfig + wait Ready → deploy the ectobase substrate. |
-| `lab down [--purge]` | Destroy the clab topology (force-removing any wedged VyOS containers) and remove `build/<name>/`, **preserving the registry cache**. `--purge` removes the cache too. |
+| `lab down [--purge]` | Destroy the clab topology (force-removing any wedged clab containers) and remove `build/<name>/`, **preserving the registry cache**. `--purge` removes the cache too. |
 | `lab render` | Expand every template into `build/<name>/`. Idempotent; no fabric touched. |
 | `lab deploy` | Re-run **only** the ectobase substrate deploy against an already-up fabric — the fast iteration loop. |
 | `lab ceph [--purge]` | Deploy Ceph (pool + external ceph-csi-rbd + csi-addons on central). Requires `fabric.ceph.enabled`. |
@@ -65,11 +65,10 @@ sudo -E env "PATH=$PATH" /tmp/lab down             # tear down; keeps the regist
 name: ectobase
 images:
   kindNode: ghcr.io/trevex/ectobase/kind-node-fabric:dev
-  vyos:     ghcr.io/trevex/ectobase/vyos:clab
   tayga:    ghcr.io/trevex/ectobase/tayga:latest
   wan:      ghcr.io/trevex/ectobase/wan:latest
   registry: registry:2
-  frr:      frrouting/frr:latest        # only when ceph.enabled
+  frr:      frrouting/frr:latest        # edges + switches, plus the ceph FRR sidecar
   ceph:     quay.io/ceph/demo:latest     # only when ceph.enabled
 fabric:
   as: { edge: 65000, switch: 65010, host: 65100 }
@@ -148,6 +147,6 @@ With `fabric.ceph.enabled`:
 
 ### Debugging tips
 
-- Trace fabric hops from a container's netns: `sudo nsenter -t <pid> -n ping -6 <dst>` / `... tcpdump -eni eth1`. XDP decap runs before tcpdump on the uplink — capture at the VyOS switch or in the guest netns (drop `-p`, non-promiscuous silently misses veth RX).
+- Trace fabric hops from a container's netns: `sudo nsenter -t <pid> -n ping -6 <dst>` / `... tcpdump -eni eth1`. XDP decap runs before tcpdump on the uplink — capture at the FRR switch or in the guest netns (drop `-p`, non-promiscuous silently misses veth RX).
 - Route origination on an edge/switch: `docker exec clab-ectobase-sw1 vtysh -c "show ipv6 route <prefix>"`.
 - Ceph blocklist (Tier-2 fence): `docker exec clab-ectobase-ceph ceph osd blocklist ls`.

@@ -7,7 +7,7 @@
     deploys the two Helm charts onto them exactly as an operator would.
 
 The fabric exercises the real paths: underlay inference over a per-node `/64` BGP fabric,
-overlay routing across it, distributed SNAT + WAN egress through the VyOS edges, NAT64,
+overlay routing across it, distributed SNAT + WAN egress through the FRR edges, NAT64,
 North-South load balancing, and the multi-cluster broker/reflector control plane.
 
 ## What the fabric is
@@ -16,8 +16,8 @@ The lab CLI (`test/lab`, a cobra CLI; config in `test/lab/lab.yaml`) renders and
 
 | Component | Role |
 |---|---|
-| **VyOS edges** `edge1`/`edge2` (AS 65000) | `default-originate` (`::/0`) + advertise the NAT64 prefix `64:ff9b::/96`, DNS64 on a loopback, WAN + Tayga wiring. Each shares its netns with a `flowplane --role edge` sidecar (`wan_rx`). |
-| **VyOS switches** `sw1`/`sw2` (AS 65010) | Transit eBGP to both edges and every node; per-port RA advertising each port's `/64`; per-node ToR `/64` origination. |
+| **FRR edges** `edge1`/`edge2` (AS 65000) | `default-originate` (`::/0`) + advertise the NAT64 prefix `64:ff9b::/96`, DNS64 on a loopback, WAN + Tayga wiring. Each shares its netns with a `flowplane --role edge` sidecar (`wan_rx`). |
+| **FRR switches** `sw1`/`sw2` (AS 65010) | Transit eBGP to both edges and every node; per-port RA advertising each port's `/64`; per-node ToR `/64` origination. |
 | **Tayga NAT64** `nat64-1`/`nat64-2` | `64:ff9b::/96` → IPv4 pool → MASQUERADE to the WAN, one per edge. |
 | **WAN sim** `wan` | Masquerades all fabric prefixes onto the host uplink; the host's single route into the fabric. |
 | **Registry mirror** (`registry:2`) | Persistent pull-through + push-local mirror on the WAN segment (`fd00:29::5:5000`), cache-backed across `down`. |
@@ -127,7 +127,7 @@ The loader prefers native/driver XDP and falls back to SKB/generic (`attach_xdp_
   generic/SKB path delivers. Nodes never `XDP_PASS` to the local stack, so native buys them
   nothing.
 - **WAN edges → native** (`FLOWPLANE_SKB_MODE` *unset* on the edge sidecar).
-  `edge_local_deliver` decaps an egress packet then `XDP_PASS`es the inner IPv4 to VyOS. Under
+  `edge_local_deliver` decaps an egress packet then `XDP_PASS`es the inner IPv4 to FRR. Under
   **generic** XDP the skb's `skb->protocol` was set (to outer IPv6) *before* the program ran
   and is **not** re-derived after the head-adjust, so the decapped IPv4 never reaches
   `ip_rcv_core`. **Native** rebuilds the skb on PASS → `eth_type_trans` re-runs → protocol
@@ -166,7 +166,7 @@ each node has its own bpffs and runs exactly one flowplane pod.
 `flowplane`'s datapath is XDP: `XDP_REDIRECT`/`TX`/`DROP` consume the packet **before** the
 AF_PACKET tap, so plain `tcpdump` shows nothing and a silently-failed redirect looks identical
 to "no packet". Trace fabric hops from a container's netns
-(`sudo nsenter -t <pid> -n tcpdump -eni eth1`), and capture at the VyOS switch or in the guest
+(`sudo nsenter -t <pid> -n tcpdump -eni eth1`), and capture at the FRR switch or in the guest
 netns since XDP decap runs before tcpdump on the uplink. For kernel-global visibility across
 netns, the `xdp:xdp_redirect{,_err}` / `devmap_xmit` tracepoints and the `skb:kfree_skb`
 drop-reason tracepoint give ground truth:
@@ -189,10 +189,6 @@ bring-up (each cost real debugging — do not "simplify" them away):
 - **`bridge-nf-call-ip6tables=0`** — with it =1, even same-bridge IPv6 ND frames traverse the
   host ip6tables FORWARD chain (clab sets that chain's policy to DROP), so a multi-node
   cluster's nodes can't ND each other → never Ready.
-- **pty for the deploy** — clab's VyOS kind talks to the VyOS CLI over a pty to wait for "Cli
-  ready"; headless that read fails and clab loops forever, so the deploy runs under a pty.
-- **VyOS `admin` user + `enforce-startup-config: false`** — clab's vyos readiness probe runs
-  `su - admin`, but the base image ships only `vyos`; the boot config defines an `admin` login.
 
 See the [runbook](./runbook.md) for the operational gotchas (real-`sudo` path, conntrack-map
 OOM / `make bpf-clean`, the edge `FLOWPLANE_PIN_LINKS=false`, in-container `bpftool`).

@@ -95,4 +95,4 @@ display it.
 | `bpftool` shows no tcx / no prog-id | in-container bpftool v7.1.0 | devShell bpftool v7.6.0 via `nsenter` |
 
 See the [clab + kind fabric](./local-fabric.md) doc for the fabric-level host/kernel interactions
-(bridge-nf ND drop, the deploy pty, VyOS/Cilium bring-up) that the bring-up scripts also handle.
+(bridge-nf ND drop, FRR bring-up) that the bring-up scripts also handle.
