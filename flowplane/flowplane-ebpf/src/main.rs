@@ -8,7 +8,6 @@ mod csum;
 mod dbg;
 mod dhcp;
 mod egress;
-mod encap;
 mod ingress;
 mod inspect;
 mod lb;
@@ -18,8 +17,10 @@ mod nat;
 mod nat64;
 mod parse;
 mod tc;
+mod tunnel;
 mod v6;
 mod vip;
+mod xdp_encap;
 
 use aya_ebpf::{bindings::xdp_action, macros::xdp, programs::XdpContext};
 

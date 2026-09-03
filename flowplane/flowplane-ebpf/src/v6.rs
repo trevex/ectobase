@@ -6,9 +6,9 @@ use aya_ebpf::{
 use flowplane_core::err::DpErr;
 
 use crate::arp_nd::GW_MAC;
-use crate::encap::reforward;
 use crate::maps::{LOCAL, UNDERLAY};
 use crate::parse::{write16, write6, ETH_LEN, ETH_P_IPV6, IPPROTO_ICMPV6, IPV6_LEN};
+use crate::xdp_encap::reforward;
 
 const ICMPV6_ECHO_REQUEST: u8 = 128;
 const ICMPV6_ECHO_REPLY: u8 = 129;

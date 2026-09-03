@@ -1,9 +1,6 @@
 use aya_ebpf::{
     macros::map,
-    maps::{
-        lpm_trie::LpmTrie, Array, DevMap, DevMapHash, HashMap, LruHashMap, PerCpuArray,
-        ProgramArray,
-    },
+    maps::{lpm_trie::LpmTrie, Array, DevMap, DevMapHash, HashMap, LruHashMap, ProgramArray},
 };
 use flowplane_common::{
     Config, CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey,
@@ -47,13 +44,18 @@ pub static UPLINK_DEV: DevMap = DevMap::with_max_entries(1, 0);
 pub static GUEST_DEV: DevMapHash = DevMapHash::pinned(1024, 0);
 #[map]
 pub static INSPECT: Array<InspectEntry> = Array::with_max_entries(1, 0);
-// Per-CPU scratch for the ~64-byte `bpf_fib_lookup` params struct used by the guest-egress encap
-// path (see encap::fib_nexthop). Kept off the BPF stack — the tc_guest_tx v4 chain is already near
-// the 512-byte combined-stack limit — and per-CPU so concurrent invocations on different cores don't
-// race on the single entry. Not pinned: transient per-invocation scratch, never read cross-program.
+// Single-slot config map holding the kernel `collect_md` Geneve device's ifindex (Task 1's device,
+// see `control::Inner`). Populated by the loader (Task 4); the tc guest-egress encap path reads it
+// via `geneve_ifindex()` to `bpf_redirect` an overlay-bound skb after `bpf_skb_set_tunnel_key` has
+// stamped the tunnel-key metadata dst — the geneve device builds the real outer Eth/IPv6/UDP/Geneve
+// header from that metadata on transmit.
 #[map]
-pub static FIB_SCRATCH: PerCpuArray<aya_ebpf::bindings::bpf_fib_lookup> =
-    PerCpuArray::with_max_entries(1, 0);
+pub static GENEVE_IFINDEX: Array<u32> = Array::pinned(1, 0);
+/// The configured Geneve `collect_md` device ifindex, or 0 if unset (loader hasn't populated it yet).
+#[inline(always)]
+pub fn geneve_ifindex() -> u32 {
+    GENEVE_IFINDEX.get(0).copied().unwrap_or(0)
+}
 /// 1:1 VIP map. Value is the mapped IPv4 counterpart: (vni,G)->V for egress SNAT, (vni,V)->G for
 /// ingress DNAT.
 #[map]

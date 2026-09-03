@@ -1,5 +1,5 @@
 use flowplane_common::PortMeta;
-use flowplane_core::encap::EncapParams;
+use flowplane_core::encap::TunnelEncap;
 
 use crate::parse::ETH_LEN;
 
@@ -11,22 +11,11 @@ pub enum EgressVerdict {
         tap_ifindex: u32,
         guest_mac: [u8; 6],
     },
-    Encap(EncapParams),
-}
-
-/// Compute the outer IPv6 flow label from the inner packet, as a NON-inlined BPF subprogram so its
-/// locals get their own stack frame instead of piling onto `tc_guest_tx` (which is already at the
-/// 512-byte BPF stack limit). Takes `data`/`data_end` as scalars and reconstructs the packet window
-/// inside — no packet pointer crosses the call boundary, so the verifier re-derives bounds cleanly.
-/// The combined call-chain stack (tc_guest_tx + this frame) must stay under 512B, so
-/// `inner_flow_label` folds the 5-tuple incrementally rather than materializing address arrays.
-#[inline(never)]
-fn egress_flow_label(data: usize, data_end: usize, is_v6: bool) -> u32 {
-    flowplane_core::parse::inner_flow_label(
-        &crate::coreimpl::RawPkt::new(data, data_end),
-        ETH_LEN,
-        is_v6,
-    )
+    /// Overlay-egress: stamp the Geneve tunnel key and redirect to the geneve device (see
+    /// `crate::tunnel`). Mirrors `flowplane_core::egress::Deliver::Encap`'s `tunnel` decision;
+    /// `uplink_ifindex` is dropped here — the tc glue always redirects to the configured geneve
+    /// device (`crate::maps::geneve_ifindex()`), which resolves the real underlay nexthop itself.
+    Encap(TunnelEncap),
 }
 
 /// Run the in-place IPv4 egress pipeline (conntrack/firewall/vip/nat/meter/route) and decide what
@@ -129,15 +118,7 @@ pub fn forward_decision_v4(
     // anycast entries have tap_ifindex==0 and fall through to encap. Single-sourced in
     // `flowplane_core::egress::deliver` (the SAME decision the native SimNode runs). The dest ingress
     // firewall gate on the local path stays HERE in the wrapper — it needs `was_new` + the packet.
-    // Outer IPv6 flow label from the (post-NAT) inner 5-tuple, for RFC 6438 fabric ECMP.
-    let flow_label = egress_flow_label(data, data_end, false);
-    match flowplane_core::egress::deliver(
-        &crate::coreimpl::GlobalMaps,
-        &route,
-        meta,
-        crate::parse::IPPROTO_IPIP,
-        flow_label,
-    ) {
+    match flowplane_core::egress::deliver(&crate::coreimpl::GlobalMaps, &route) {
         flowplane_core::egress::Deliver::Local {
             tap_ifindex,
             guest_mac,
@@ -160,7 +141,7 @@ pub fn forward_decision_v4(
                 guest_mac,
             }
         }
-        flowplane_core::egress::Deliver::Encap(e) => EgressVerdict::Encap(e),
+        flowplane_core::egress::Deliver::Encap { tunnel, .. } => EgressVerdict::Encap(tunnel),
         flowplane_core::egress::Deliver::Pass => EgressVerdict::Pass,
     }
 }
@@ -231,20 +212,16 @@ fn dest_ingress_fw_v6(data: usize, data_end: usize, tap_ifindex: u32) -> bool {
 #[inline(never)]
 fn route_decision_v6(data: usize, data_end: usize, meta: &PortMeta) -> EgressVerdict {
     // Seam-not-duplicate: delegate to the SHARED core stage (`flowplane_core::egress::route_decision6`
-    // = `route6` + `deliver`, `inner_proto = IPPROTO_IPV6`) — the SAME code the native SimNode runs
-    // via `process_guest_tx_v6`. GlobalMaps' `route6_get`/`underlay_get`/`local()` compile to the
+    // = `route6` + `deliver`) — the SAME code the native SimNode runs via `process_guest_tx_v6`.
+    // GlobalMaps' `route6_get`/`underlay_get`/`local()` compile to the
     // same `ROUTES6`/`UNDERLAY`/`LOCAL[0]` accesses this wrapper used before, so the byte-relevant
     // decision is unchanged. This wrapper stays a `#[inline(never)]` subprogram so the core stage's
     // route-lookup `Key<RouteLpmData6>` frame gets its own BPF stack frame, sequential to (never
-    // coexisting with) `egress_fw_ct_v6`'s CtKey6 frame (512B combined limit). The outer flow label
-    // is computed here (out-of-line via `egress_flow_label`) and passed in, so no address arrays land
-    // on this frame.
-    let flow_label = egress_flow_label(data, data_end, true);
+    // coexisting with) `egress_fw_ct_v6`'s CtKey6 frame (512B combined limit).
     match flowplane_core::egress::route_decision6(
         &crate::coreimpl::RawPkt::new(data, data_end),
         &crate::coreimpl::GlobalMaps,
         meta,
-        flow_label,
     ) {
         flowplane_core::egress::Deliver::Local {
             tap_ifindex,
@@ -253,7 +230,7 @@ fn route_decision_v6(data: usize, data_end: usize, meta: &PortMeta) -> EgressVer
             tap_ifindex,
             guest_mac,
         },
-        flowplane_core::egress::Deliver::Encap(e) => EgressVerdict::Encap(e),
+        flowplane_core::egress::Deliver::Encap { tunnel, .. } => EgressVerdict::Encap(tunnel),
         flowplane_core::egress::Deliver::Pass => EgressVerdict::Pass,
     }
 }

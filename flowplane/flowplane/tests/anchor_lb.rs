@@ -21,9 +21,10 @@ use flowplane_common::{
     FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local, MaglevKey, UnderlayValue, FW_ACTION_ACCEPT,
     FW_DIR_INGRESS,
 };
-use flowplane_core::encap::{EncapParams, ETH_LEN, IPV6_LEN};
+use flowplane_core::encap::{ETH_LEN, IPV6_LEN};
 use flowplane_core::pkt::Action;
 use flowplane_core::uplink::GW_MAC;
+use flowplane_sim::EncapParams;
 use flowplane_sim::SimNode;
 
 // --- LB local-deliver fixture (mirrors flowplane_sim::ew_lb_local_deliver_no_reforward) ----------
@@ -79,11 +80,9 @@ fn encapped_input() -> Vec<u8> {
         EncapParams {
             gateway_mac: [1; 6],
             uplink_mac: [2; 6],
-            uplink_ifindex: 7,
             src_underlay: ORIGIN_UL,
             nexthop_ipv6: BACKEND_UL,
             inner_proto: 4, // IPPROTO_IPIP
-            flow_label: 0,
         },
     );
     // Outer IPv6 dst must be the backend underlay (uplink_rx keys UNDERLAY on it).

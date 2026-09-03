@@ -3,7 +3,7 @@
 //! redirecting back out the tap. The heavy logic lives in the shared pure core (flowplane_common::dhcp).
 
 use aya_ebpf::{
-    bindings::{bpf_adj_room_mode::BPF_ADJ_ROOM_MAC, TC_ACT_OK, TC_ACT_SHOT},
+    bindings::{TC_ACT_OK, TC_ACT_SHOT},
     helpers::{bpf_redirect, bpf_skb_change_tail},
     macros::classifier,
     programs::TcContext,
@@ -188,52 +188,27 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
                 }
                 return TC_ACT_OK;
             }
-            crate::egress::EgressVerdict::Encap(mut e) => {
-                // Resolve the real nexthop MAC + egress uplink per-packet from the kernel FIB (neigh
-                // table), overriding the startup-resolved single gateway MAC. Fixes wrong-MAC drops on
-                // a multi-router uplink and follows the FIB's ECMP uplink choice. FIB miss => keep the
-                // configured Local fallback.
-                crate::encap::fib_override(ctx.skb.skb as *mut core::ffi::c_void, &mut e);
-                // WORKING invocation (validated by test/tc-egress-netns.sh):
-                // bpf_skb_adjust_room(skb, +IPV6_LEN, BPF_ADJ_ROOM_MAC, 0) inserts IPV6_LEN bytes
-                // immediately AFTER the L2 (MAC) header, i.e. between the inner Ethernet and the
-                // inner IPv4 header: [inner_eth(14)][+40 new][inner_ip]. write_outer_v6 then writes
-                // [outer_eth(14)][outer_ipv6(40)] starting at data, overwriting the inner eth (14)
-                // plus the 40 inserted bytes — yielding [outer_eth][outer_ipv6][inner_ip], exactly
-                // the wire layout the XDP adjust_head(-40) path produces (inner eth consumed).
-                if ctx
-                    .adjust_room(crate::parse::IPV6_LEN as i32, BPF_ADJ_ROOM_MAC, 0)
-                    .is_err()
-                {
-                    return TC_ACT_OK;
-                }
-                if ctx
-                    .pull_data((flowplane_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN) as u32)
-                    .is_err()
-                {
-                    return TC_ACT_OK;
-                }
-                // adjust_room grew skb->len by IPV6_LEN; ctx.len() is now the full logical
-                // length. write_outer_v6 derives the outer payload from logical_len - ETH_LEN -
-                // IPV6_LEN, correct even when the inner sits in a paged frag.
-                let mut pkt =
-                    RawPkt::with_logical_len(ctx.data(), ctx.data_end(), ctx.len() as usize);
-                if flowplane_core::encap::write_outer_v6(&mut pkt, &e) {
-                    // EDT egress shaping: stamp the wire-length-derived departure time so the
-                    // uplink's fq qdisc paces this flow. `ctx.len()` is the full post-encap logical
-                    // length. No shaping configured => no stamp (send immediately).
-                    if let Some(ts) = crate::meter::edt_stamp(ifindex, ctx.len() as u64) {
-                        unsafe {
-                            aya_ebpf::helpers::gen::bpf_skb_set_tstamp(
-                                ctx.skb.skb as *mut _,
-                                ts,
-                                BPF_SKB_TSTAMP_DELIVERY_MONO,
-                            );
-                        }
+            crate::egress::EgressVerdict::Encap(tunnel) => {
+                // No byte write: the kernel's `collect_md` Geneve device builds the outer
+                // Eth/IPv6/UDP/Geneve header itself from the tunnel-key metadata dst stamped below.
+                // EDT egress shaping: stamp the wire-length-derived departure time so the uplink's fq
+                // qdisc paces this flow. `ctx.len()` is skb->len BEFORE the geneve device's own
+                // encapsulation grows it further — this under-counts the eventual wire overhead (a
+                // follow-up task can account for it; see `flowplane_core::datapath` encap-arm notes).
+                // No shaping configured => no stamp (send immediately).
+                if let Some(ts) = crate::meter::edt_stamp(ifindex, ctx.len() as u64) {
+                    unsafe {
+                        aya_ebpf::helpers::gen::bpf_skb_set_tstamp(
+                            ctx.skb.skb as *mut _,
+                            ts,
+                            BPF_SKB_TSTAMP_DELIVERY_MONO,
+                        );
                     }
-                    return unsafe { bpf_redirect(e.uplink_ifindex, 0) as i32 };
                 }
-                return TC_ACT_SHOT;
+                if !crate::tunnel::set_tunnel_key(ctx.skb.skb, &tunnel) {
+                    return TC_ACT_SHOT;
+                }
+                return crate::tunnel::redirect();
             }
         }
     }
@@ -247,13 +222,13 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
 #[classifier]
 pub fn tc_guest_nat64(ctx: TcContext) -> i32 {
     let ifindex = unsafe { (*ctx.skb.skb).ifindex };
-    // Read only the three fields tc_nat64_egress needs — copying the whole ~70-byte PortMeta onto
+    // Read only the two fields tc_nat64_egress needs — copying the whole ~70-byte PortMeta onto
     // this entry's frame would add to the tail-called call chain's combined BPF stack budget.
-    let (vni, guest_ipv4, underlay_ipv6) = match unsafe { PORT_META.get(&ifindex) } {
-        Some(m) => (m.vni, m.guest_ipv4, m.underlay_ipv6),
+    let (vni, guest_ipv4) = match unsafe { PORT_META.get(&ifindex) } {
+        Some(m) => (m.vni, m.guest_ipv4),
         None => return TC_ACT_OK,
     };
-    match crate::nat64::tc_nat64_egress(&ctx, vni, guest_ipv4, &underlay_ipv6) {
+    match crate::nat64::tc_nat64_egress(&ctx, vni, guest_ipv4) {
         Ok(Some(act)) => act,
         Ok(None) => TC_ACT_OK,
         Err(_) => TC_ACT_SHOT,
@@ -279,9 +254,9 @@ pub fn tc_guest_egress_v6(ctx: TcContext) -> i32 {
     // The tail-call gave this program a fresh 512B stack budget. `forward_decision_v6` is a thin
     // #[inline(always)] dispatcher that calls the two heavy stages — firewall/conntrack
     // (egress_fw_ct_v6) and route6+deliver (route_decision_v6) — as SEQUENTIAL #[inline(never)]
-    // subprograms, so their frames never coexist. The Encap-arm packet mutation is likewise split
-    // out (encap_v6_egress) so its EncapParams/RawPkt locals don't inflate THIS frame while the
-    // fw/ct subprogram is live on top of it — keeping the deepest chain under 512B.
+    // subprograms, so their frames never coexist. The Encap-arm tunnel-key stamp is likewise split
+    // out (encap_v6_egress), kept out-of-line for the same reason it always was, even though it no
+    // longer carries heavy locals.
     match crate::egress::forward_decision_v6(ctx.data(), ctx.data_end(), ifindex, meta) {
         crate::egress::EgressVerdict::Pass => TC_ACT_OK,
         crate::egress::EgressVerdict::Drop => TC_ACT_SHOT,
@@ -306,48 +281,36 @@ pub fn tc_guest_egress_v6(ctx: TcContext) -> i32 {
             }
             TC_ACT_OK
         }
-        crate::egress::EgressVerdict::Encap(e) => encap_v6_egress(&ctx, ifindex, &e),
+        crate::egress::EgressVerdict::Encap(tunnel) => encap_v6_egress(&ctx, ifindex, &tunnel),
     }
 }
 
-/// Resize + write the outer IPv6 header for an inner-v6 overlay egress packet, then EDT-stamp and
-/// redirect out the uplink. Out-of-line (`#[inline(never)]`) so its `EncapParams`/`RawPkt` locals
-/// get their own BPF stack frame instead of inflating `tc_guest_egress_v6`'s frame — that frame is
-/// held live across the `egress_fw_ct_v6` subprogram call, and the two must stay under the 512B
-/// combined stack limit. `ctx` is passed by reference (only skb helpers are called on it — no
-/// packet pointer is cast/stored across the boundary).
+/// Stamp the Geneve tunnel key + EDT-stamp + redirect for an inner-v6 overlay egress packet.
+/// Out-of-line (`#[inline(never)]`) so this stays its own BPF stack frame, sequential to (never
+/// coexisting with) `tc_guest_egress_v6`'s frame — that frame is held live across the
+/// `egress_fw_ct_v6` subprogram call, and the two must stay under the 512B combined stack limit.
+/// `ctx` is passed by reference (only skb helpers are called on it — no packet pointer is
+/// cast/stored across the boundary).
 #[inline(never)]
-fn encap_v6_egress(ctx: &TcContext, ifindex: u32, e: &flowplane_core::encap::EncapParams) -> i32 {
-    // Per-packet FIB nexthop (see fib_override / the v4 arm). Mutable local copy of the params.
-    let mut e = *e;
-    crate::encap::fib_override(ctx.skb.skb as *mut core::ffi::c_void, &mut e);
-    let e = &e;
-    if ctx
-        .adjust_room(crate::parse::IPV6_LEN as i32, BPF_ADJ_ROOM_MAC, 0)
-        .is_err()
-    {
-        return TC_ACT_OK;
-    }
-    if ctx
-        .pull_data((flowplane_common::arp_nd::ETH_LEN + crate::parse::IPV6_LEN) as u32)
-        .is_err()
-    {
-        return TC_ACT_OK;
-    }
-    let mut pkt = RawPkt::with_logical_len(ctx.data(), ctx.data_end(), ctx.len() as usize);
-    if flowplane_core::encap::write_outer_v6(&mut pkt, e) {
-        if let Some(ts) = crate::meter::edt_stamp(ifindex, ctx.len() as u64) {
-            unsafe {
-                aya_ebpf::helpers::gen::bpf_skb_set_tstamp(
-                    ctx.skb.skb as *mut _,
-                    ts,
-                    BPF_SKB_TSTAMP_DELIVERY_MONO,
-                );
-            }
+fn encap_v6_egress(
+    ctx: &TcContext,
+    ifindex: u32,
+    tunnel: &flowplane_core::encap::TunnelEncap,
+) -> i32 {
+    // No byte write: see the v4 arm's comment in `tc_guest_tx`.
+    if let Some(ts) = crate::meter::edt_stamp(ifindex, ctx.len() as u64) {
+        unsafe {
+            aya_ebpf::helpers::gen::bpf_skb_set_tstamp(
+                ctx.skb.skb as *mut _,
+                ts,
+                BPF_SKB_TSTAMP_DELIVERY_MONO,
+            );
         }
-        return unsafe { bpf_redirect(e.uplink_ifindex, 0) as i32 };
     }
-    TC_ACT_SHOT
+    if !crate::tunnel::set_tunnel_key(ctx.skb.skb, tunnel) {
+        return TC_ACT_SHOT;
+    }
+    crate::tunnel::redirect()
 }
 
 /// tc DHCP responder: build the OFFER/ACK into the (resized) skb and redirect it back to the guest.

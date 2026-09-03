@@ -198,9 +198,9 @@ impl Pkt for CtxPkt<'_> {
 }
 
 /// `Pkt` over a raw (data, data_end) window with no owning context. Used by callers that resize
-/// with a non-XDP primitive (e.g. tc `adjust_room`/`pull_data`) and then need the pure byte-write
-/// core encap. `grow_head`/`shrink_head` are unsupported (the caller resizes itself); the encap
-/// core only uses `len()`/`write_bytes()`. Construct via [`RawPkt::new`].
+/// with a non-XDP primitive (e.g. tc `adjust_room`/`pull_data`) and then need a pure byte-write
+/// core seam (nat64 translation, ARP/ND replies, DHCP). `grow_head`/`shrink_head` are unsupported
+/// (the caller resizes itself). Construct via [`RawPkt::new`].
 pub struct RawPkt {
     data: usize,
     data_end: usize,
@@ -217,19 +217,6 @@ impl RawPkt {
             data,
             data_end,
             logical_len: data_end - data,
-        }
-    }
-
-    /// Build a window whose logical (wire) length differs from the linear head — e.g. a tc
-    /// skb whose true length is `skb->len` (`ctx.len()`) but whose `[data, data_end)` covers
-    /// only the pulled linear head.
-    #[inline(always)]
-    pub fn with_logical_len(data: usize, data_end: usize, logical_len: usize) -> Self {
-        debug_assert!(data <= data_end, "RawPkt: data must not exceed data_end");
-        Self {
-            data,
-            data_end,
-            logical_len,
         }
     }
 }

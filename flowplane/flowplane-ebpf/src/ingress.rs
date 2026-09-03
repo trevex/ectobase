@@ -167,7 +167,7 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
     if lb_ul.is_none() {
         if let Some(bul) = crate::lb::lb_select_forward_icmp_error(ctx, ETH_LEN + IPV6_LEN, vni) {
             let local = LOCAL.get(0).ok_or(DpErr::NoRoute)?;
-            return Ok(crate::encap::reforward(ctx, local, &outer_dst, &bul));
+            return Ok(crate::xdp_encap::reforward(ctx, local, &outer_dst, &bul));
         }
     }
 
@@ -176,7 +176,7 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
             Some(bu) => *bu,
             None => {
                 let local = LOCAL.get(0).ok_or(DpErr::NoRoute)?;
-                return Ok(crate::encap::reforward(ctx, local, &outer_dst, &bul));
+                return Ok(crate::xdp_encap::reforward(ctx, local, &outer_dst, &bul));
             }
         },
         None => u,
@@ -252,7 +252,9 @@ pub fn try_uplink_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
             if let Some((_proto, _sport, dport)) = crate::parse::l4_ports(d, de, off) {
                 if let Some(owner_ul) = crate::nat::neighbor_nat_lookup(vni, inner_dst, dport) {
                     let local = LOCAL.get(0).ok_or(DpErr::NoRoute)?;
-                    return Ok(crate::encap::reforward(ctx, local, &outer_dst, &owner_ul));
+                    return Ok(crate::xdp_encap::reforward(
+                        ctx, local, &outer_dst, &owner_ul,
+                    ));
                 }
             }
         }
@@ -410,7 +412,7 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
                 is_external: 0,
                 _pad: [0; 3],
             };
-            return crate::encap::encap_and_redirect_via_devmap(
+            return crate::xdp_encap::encap_and_redirect_via_devmap(
                 ctx,
                 local,
                 &local.underlay_ipv6,
@@ -439,7 +441,7 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
             is_external: 0,
             _pad: [0; 3],
         };
-        return crate::encap::encap_and_redirect_via_devmap(
+        return crate::xdp_encap::encap_and_redirect_via_devmap(
             ctx,
             local,
             &local.underlay_ipv6,
@@ -460,7 +462,7 @@ pub fn try_wan_rx(ctx: &XdpContext) -> Result<u32, DpErr> {
         is_external: 0,
         _pad: [0; 3],
     };
-    crate::encap::encap_and_redirect_via_devmap(
+    crate::xdp_encap::encap_and_redirect_via_devmap(
         ctx,
         local,
         &local.underlay_ipv6,
