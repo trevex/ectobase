@@ -7,7 +7,7 @@
 //
 //	build/<name>/
 //	  <name>.clab.yml                 fabric.clab.yml.tmpl
-//	  vyos/{edge1,edge2,sw1,sw2}.boot vyos .set → RenderBoot
+//	  frr/{edge1,edge2,sw1,sw2}.conf + daemons  FRR configs
 //	  kind/
 //	    <cluster>-kind.yaml           per-cluster kind Cluster config
 //	    <cluster>-<index>.prefix      per-node underlay /64 (extraMount → /etc/fabric/prefix)
@@ -34,9 +34,9 @@ import (
 	"github.com/trevex/ectobase/test/lab/internal/deploy"
 	"github.com/trevex/ectobase/test/lab/internal/exec"
 	"github.com/trevex/ectobase/test/lab/internal/fabric"
+	"github.com/trevex/ectobase/test/lab/internal/frr"
 	"github.com/trevex/ectobase/test/lab/internal/registry"
 	"github.com/trevex/ectobase/test/lab/internal/render"
-	"github.com/trevex/ectobase/test/lab/internal/vyos"
 	"github.com/trevex/ectobase/test/lab/templates"
 )
 
@@ -44,7 +44,7 @@ import (
 type paths struct {
 	build string // build/<name>
 	topo  string // build/<name>/<name>.clab.yml
-	vyos  string // build/<name>/vyos
+	frr   string // build/<name>/frr (edge{1,2}.conf, sw{1,2}.conf, daemons)
 	kind  string // build/<name>/kind (per-cluster kind Cluster configs + prefix/uplinks)
 	reg   string // build/<name>/registry
 	flow  string // build/<name>/flowplane (the WAN-edge sidecar wrapper)
@@ -55,7 +55,7 @@ func buildPaths(cfg *config.Config) paths {
 	return paths{
 		build: b,
 		topo:  filepath.Join(b, cfg.Name+".clab.yml"),
-		vyos:  filepath.Join(b, "vyos"),
+		frr:   filepath.Join(b, "frr"),
 		kind:  filepath.Join(b, "kind"),
 		reg:   filepath.Join(b, "registry"),
 		flow:  filepath.Join(b, "flowplane"),
@@ -72,7 +72,7 @@ func Render(ctx context.Context, cfg *config.Config) error {
 	p := buildPaths(cfg)
 	v := fabric.Build(cfg)
 
-	for _, dir := range []string{p.build, p.vyos, p.kind, p.reg, p.flow} {
+	for _, dir := range []string{p.build, p.frr, p.kind, p.reg, p.flow} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %w", dir, err)
 		}
@@ -83,33 +83,28 @@ func Render(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("render clab topology: %w", err)
 	}
 
-	// VyOS edges + switches: render the .set, then convert to config.boot.
-	vyosImage := cfg.Images["vyos"]
+	// FRR edges + switches: render frr.conf per node, plus the shared daemons file.
+	// clab bind-mounts frr/<node>.conf at /etc/frr/frr.conf; the default frrouting/frr
+	// entrypoint reads it. No offline compile (unlike VyOS).
 	for _, e := range []int{1, 2} {
-		set, err := render.StringFS(templates.FS, "vyos/edge.set.tmpl", vyos.EdgeCtx{View: v, Edge: e})
-		if err != nil {
-			return fmt.Errorf("render edge%d set: %w", e, err)
-		}
-		boot, err := vyos.RenderBoot(ctx, vyosImage, []byte(set))
-		if err != nil {
-			return fmt.Errorf("render edge%d boot: %w", e, err)
-		}
-		if err := os.WriteFile(filepath.Join(p.vyos, fmt.Sprintf("edge%d.boot", e)), boot, 0o644); err != nil {
-			return err
+		out := filepath.Join(p.frr, fmt.Sprintf("edge%d.conf", e))
+		if err := render.FileFS(templates.FS, "frr/edge.conf.tmpl", out, frr.EdgeCtx{View: v, Edge: e}); err != nil {
+			return fmt.Errorf("render edge%d frr.conf: %w", e, err)
 		}
 	}
 	for _, s := range []int{1, 2} {
-		set, err := render.StringFS(templates.FS, "vyos/switch.set.tmpl", vyos.SwitchCtx{View: v, SW: s})
-		if err != nil {
-			return fmt.Errorf("render sw%d set: %w", s, err)
+		out := filepath.Join(p.frr, fmt.Sprintf("sw%d.conf", s))
+		if err := render.FileFS(templates.FS, "frr/switch.conf.tmpl", out, frr.SwitchCtx{View: v, SW: s}); err != nil {
+			return fmt.Errorf("render sw%d frr.conf: %w", s, err)
 		}
-		boot, err := vyos.RenderBoot(ctx, vyosImage, []byte(set))
-		if err != nil {
-			return fmt.Errorf("render sw%d boot: %w", s, err)
-		}
-		if err := os.WriteFile(filepath.Join(p.vyos, fmt.Sprintf("sw%d.boot", s)), boot, 0o644); err != nil {
-			return err
-		}
+	}
+	// Shared daemons file (static: copy verbatim embed → build).
+	daemons, err := templates.FS.ReadFile("frr/daemons")
+	if err != nil {
+		return fmt.Errorf("read embedded frr/daemons: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(p.frr, "daemons"), daemons, 0o644); err != nil {
+		return fmt.Errorf("write frr/daemons: %w", err)
 	}
 
 	// Per-cluster kind Cluster configs (+ prefix/uplinks files). The CNI is kindnet
@@ -177,6 +172,7 @@ type kindNodeCtx struct{ Role, Image, PrefixPath, UplinksPath, CertsDir string }
 // mirroredRegistries are the upstream registries the kind nodes pull through the
 // in-fabric registry mirror (containerd 2.x config_path/hosts.toml).
 var mirroredRegistries = []string{"ghcr.io", "quay.io", "docker.io", "registry.k8s.io", "gcr.io"}
+
 type kindClusterCtx struct {
 	RegistryHost string
 	Nodes        []kindNodeCtx
@@ -526,16 +522,16 @@ func deployEctobase(ctx context.Context, cfg *config.Config) error {
 	}
 
 	spec := deploy.EctobaseSpec{
-		RepoRoot:       root,
-		WorkDir:        filepath.Join(p.build, "deploy"),
-		DispatchKubeconfig:  p.clusterKubeconfig(dispatchCluster),
-		DispatchIdentity:    dc.Nodes[0].IdentityAddr,
-		DispatchChartPath:   filepath.Join(root, "charts/ectobase-dispatch"),
-		PoolChartPath:  filepath.Join(root, "charts/ectobase-pool"),
-		NADCRDPath:     filepath.Join(root, "test/lab/deploy/nad-crd.yaml"),
-		UnderlayWithin: fabric.NodeAggr,
-		Compute:        compute,
-		RouteBusMTLS:   mtls,
+		RepoRoot:           root,
+		WorkDir:            filepath.Join(p.build, "deploy"),
+		DispatchKubeconfig: p.clusterKubeconfig(dispatchCluster),
+		DispatchIdentity:   dc.Nodes[0].IdentityAddr,
+		DispatchChartPath:  filepath.Join(root, "charts/ectobase-dispatch"),
+		PoolChartPath:      filepath.Join(root, "charts/ectobase-pool"),
+		NADCRDPath:         filepath.Join(root, "test/lab/deploy/nad-crd.yaml"),
+		UnderlayWithin:     fabric.NodeAggr,
+		Compute:            compute,
+		RouteBusMTLS:       mtls,
 		// Agents dial the reflector at the dispatch identity, so that bare IP is the reflector
 		// server cert's SAN.
 		ReflectorIP: dc.Nodes[0].IdentityAddr,
