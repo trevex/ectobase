@@ -24,6 +24,15 @@ fabric:
 	}
 	v := fabric.Build(c)
 
+	// Ceph-enabled counterpart, mirroring the cephFixture shape in ceph_test.go, so
+	// the switch template's {{ if .CephEnabled }} branch (untested by the plain
+	// fixture above) gets golden + structural coverage too.
+	cCeph, err := config.LoadBytes([]byte(cephFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	vCeph := fabric.Build(cCeph)
+
 	edgeTmpl, err := os.ReadFile("../../templates/frr/edge.conf.tmpl")
 	if err != nil {
 		t.Fatal(err)
@@ -43,6 +52,8 @@ fabric:
 		{"edge2", edgeTmpl, frr.EdgeCtx{View: v, Edge: 2}, "testdata/golden/edge2.conf"},
 		{"sw1", switchTmpl, frr.SwitchCtx{View: v, SW: 1}, "testdata/golden/sw1.conf"},
 		{"sw2", switchTmpl, frr.SwitchCtx{View: v, SW: 2}, "testdata/golden/sw2.conf"},
+		{"sw1-ceph", switchTmpl, frr.SwitchCtx{View: vCeph, SW: 1}, "testdata/golden/sw1-ceph.conf"},
+		{"sw2-ceph", switchTmpl, frr.SwitchCtx{View: vCeph, SW: 2}, "testdata/golden/sw2-ceph.conf"},
 	}
 
 	out := map[string]string{}
@@ -69,7 +80,7 @@ fabric:
 		}
 	}
 
-	for _, sw := range []string{"sw1", "sw2"} {
+	for _, sw := range []string{"sw1", "sw2", "sw1-ceph", "sw2-ceph"} {
 		for _, bad := range []string{"ipv6 nd prefix", "network fd00:", "ipv6 route fd00:"} {
 			if strings.Contains(out[sw], bad) {
 				t.Errorf("%s: must not contain %q (pure /128 relay)", sw, bad)
@@ -77,6 +88,21 @@ fabric:
 		}
 		if !strings.Contains(out[sw], "as-override") {
 			t.Errorf("%s: expected as-override on host peers", sw)
+		}
+	}
+	// Ceph host port: CephPortSeq = TotalNodes(3)+1 = 4 → switch eth6 (mirrors the
+	// cephFixture comment in ceph_test.go). Must be peered + activated + as-override,
+	// same as every other host port.
+	for _, sw := range []string{"sw1-ceph", "sw2-ceph"} {
+		for _, want := range []string{
+			"neighbor eth6 interface remote-as external",
+			"neighbor eth6 bfd profile fabric-fast",
+			"neighbor eth6 activate",
+			"neighbor eth6 as-override",
+		} {
+			if !strings.Contains(out[sw], want) {
+				t.Errorf("%s: expected %q (ceph host port)", sw, want)
+			}
 		}
 	}
 	for _, want := range []string{

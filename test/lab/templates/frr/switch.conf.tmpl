@@ -18,6 +18,7 @@ interface eth{{ add 2 $n.PortSeq }}
 !
 {{- end }}
 {{- if .CephEnabled }}
+! Ceph storage node (same AS, dual-homed).
 interface eth{{ add 2 .CephPortSeq }}
  no ipv6 nd suppress-ra
 !
@@ -44,6 +45,7 @@ router bgp {{ .ASSwitch }}
  neighbor eth{{ add 2 $n.PortSeq }} bfd profile fabric-fast
 {{- end }}
 {{- if .CephEnabled }}
+ ! Ceph storage node (same AS, dual-homed).
  neighbor eth{{ add 2 .CephPortSeq }} interface remote-as external
  neighbor eth{{ add 2 .CephPortSeq }} bfd profile fabric-fast
 {{- end }}
@@ -57,6 +59,7 @@ router bgp {{ .ASSwitch }}
   neighbor eth{{ add 2 $n.PortSeq }} as-override
 {{- end }}
 {{- if .CephEnabled }}
+  ! Ceph storage node (same AS, dual-homed).
   neighbor eth{{ add 2 .CephPortSeq }} activate
   neighbor eth{{ add 2 .CephPortSeq }} as-override
 {{- end }}
