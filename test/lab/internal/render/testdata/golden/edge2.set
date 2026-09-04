@@ -53,6 +53,13 @@ set service dns forwarding listen-address 'fd00:ffff::e2'
 set service dns forwarding dns64-prefix '64:ff9b::/96'
 set service dns forwarding allow-from 'fd00:cafe::/32'
 set service dns forwarding allow-from 'fd00:ffff::/32'
-set service dns forwarding name-server '64:ff9b::8.8.8.8'
+# VyOS's name-server value validator rejects the dotted-quad-embedded IPv6
+# notation (64:ff9b::8.8.8.8 fails "not a valid IP address" at commit time —
+# confirmed live in /var/log/vyatta/vyos-router.log — silently dropping this
+# whole `set` and leaving the DNS64 forwarder upstream-less, which made it
+# fall back to full recursion and SERVFAIL since this fabric has no route to
+# the real IPv6 root servers). Use the equivalent pure-hex NAT64-mapped form
+# instead (8.8.8.8 = 0808:0808) — same address, a form VyOS's validator accepts.
+set service dns forwarding name-server '64:ff9b::808:808'
 commit
 exit

@@ -132,7 +132,10 @@ fabric:
 		"listen-address 'fd00:ffff::e1'",
 		"allow-from 'fd00:cafe::/32'",
 		"allow-from 'fd00:ffff::/32'",
-		"name-server '64:ff9b::8.8.8.8'",
+		// Pure-hex NAT64-mapped form (8.8.8.8 = 0808:0808): VyOS's name-server
+		// value validator rejects the dotted-quad-embedded notation
+		// (64:ff9b::8.8.8.8) as "not a valid IP address" (confirmed live, G4).
+		"name-server '64:ff9b::808:808'",
 	} {
 		if !strings.Contains(out["edge1"], want) {
 			t.Errorf("edge1: expected %q", want)
