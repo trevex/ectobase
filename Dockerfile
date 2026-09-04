@@ -71,10 +71,13 @@ RUN cargo +nightly-2026-01-15 build --release -p flowplane \
 # ---------------------------------------------------------------------------
 # Runtime
 # ---------------------------------------------------------------------------
-# debian:bookworm-slim (matches the builder's glibc) + iproute2. iproute2 is included so the SAME
-# image can run the tap-pool init container (`ip tuntap add ...` to create the kernel taps) AND
-# the datapath (`flowplane serve`) — one image, no extra init image.
-FROM debian:bookworm-slim
+# debian:trixie-slim + iproute2. trixie is REQUIRED: netkit `mode l3` link args need iproute2 >= 6.7,
+# and trixie ships iproute2 6.11+ (bookworm's 6.1.0 is too old — its `ip` fails the netkit_supported()
+# probe, forcing an Auto fallback to veth). The flowplane binary is built on bookworm (glibc 2.36) but
+# runs forward-compatibly on trixie's newer glibc. iproute2 is included so the SAME image can run the
+# tap-pool init container (`ip tuntap add ...` to create the kernel taps) AND the datapath
+# (`flowplane serve`) — one image, no extra init image.
+FROM debian:trixie-slim
 
 # iproute2 for veth/netns setup; ethtool to disable tx-checksum offload on guest veths (their
 # CHECKSUM_PARTIAL packets would otherwise be encapped with a stale/partial inner L4 checksum).
