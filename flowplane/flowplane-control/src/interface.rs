@@ -112,8 +112,11 @@ impl<W: MapWriter> ControlCore<W> {
         }
     }
 
-    /// Program PORT_META / INTERFACES / UNDERLAY / METER / local self-route(s) + the IFACE_META
+    /// Program PORT_META / INTERFACES / INTERFACES6 / METER / local self-route(s) + the IFACE_META
     /// restart journal for one interface. The device-side attach + bookkeeping stays on `Control`.
+    /// `underlay_ipv6` is the node VTEP (shared by every interface on this node); it is NOT written
+    /// to the UNDERLAY map — local delivery demuxes via INTERFACES/INTERFACES6 — but it does feed the
+    /// PORT_META + self-route nexthop so egress resolves a local destination to this node's VTEP.
     pub fn program_interface(&mut self, params: IfaceParams) -> anyhow::Result<()> {
         let IfaceParams {
             interface_id,
@@ -168,15 +171,6 @@ impl<W: MapWriter> ControlCore<W> {
                 },
             )?;
         }
-        self.w.underlay_upsert(
-            underlay_ipv6,
-            flowplane_common::UnderlayValue {
-                vni,
-                tap_ifindex: tap,
-                guest_mac: effective_mac,
-                _pad: [0; 2],
-            },
-        )?;
         // Local self-route: a same-host guest reaches this interface by its overlay IP. Program a
         // /32 (and /128 when dual-stack) route to this interface's OWN underlay so tc_guest_tx's
         // LPM resolves a local destination to a local underlay, and the local fast path delivers it
@@ -296,7 +290,7 @@ impl<W: MapWriter> ControlCore<W> {
 mod tests {
     use super::{meter_state, IfaceParams};
     use crate::{mem::MemMapWriter, shadow::IfaceMeta, ControlCore, MapWriter};
-    use flowplane_common::{IfaceKey, NatKey, VipKey};
+    use flowplane_common::{IfaceKey, IfaceKey6, NatKey, VipKey};
 
     /// Build an `IfaceParams` with fixed ancillary fields; only `ipv4`/`ipv6` vary across the
     /// family-conditional tests (vni=100, tap=42, effective_mac=[1..6]).
@@ -330,6 +324,11 @@ mod tests {
             c.w.routes6.contains_key(&(100, ipv6, 128)),
             "route6 /128 missing"
         );
+        // INTERFACES6 entry present for the v6-only overlay IP.
+        assert!(
+            c.w.ifaces6.contains_key(&IfaceKey6::new(100, ipv6)),
+            "INTERFACES6 entry missing for v6-only interface"
+        );
         // No bogus v4 self-route for 0.0.0.0/32.
         assert!(
             !c.w.routes.contains_key(&(100, [0u8; 4], 32)),
@@ -337,7 +336,7 @@ mod tests {
         );
         // No bogus INTERFACES entry for (vni, 0.0.0.0).
         assert!(
-            c.w.ifaces.get(&IfaceKey::new(100, [0u8; 4])).is_none(),
+            !c.w.ifaces.contains_key(&IfaceKey::new(100, [0u8; 4])),
             "bogus INTERFACES entry for 0.0.0.0 must not be programmed"
         );
     }
@@ -356,13 +355,18 @@ mod tests {
         );
         // INTERFACES entry present.
         assert!(
-            c.w.ifaces.get(&IfaceKey::new(100, ipv4)).is_some(),
+            c.w.ifaces.contains_key(&IfaceKey::new(100, ipv4)),
             "INTERFACES entry missing"
         );
         // No v6 route at all.
         assert!(
             c.w.routes6.is_empty(),
             "route6 map must be empty for v4-only"
+        );
+        // No INTERFACES6 entry either.
+        assert!(
+            c.w.ifaces6.is_empty(),
+            "INTERFACES6 map must be empty for v4-only"
         );
     }
 
@@ -379,8 +383,12 @@ mod tests {
             "route4 /32 missing"
         );
         assert!(
-            c.w.ifaces.get(&IfaceKey::new(100, ipv4)).is_some(),
+            c.w.ifaces.contains_key(&IfaceKey::new(100, ipv4)),
             "INTERFACES entry missing"
+        );
+        assert!(
+            c.w.ifaces6.contains_key(&IfaceKey6::new(100, ipv6)),
+            "INTERFACES6 entry missing"
         );
         assert!(
             c.w.routes6.contains_key(&(100, ipv6, 128)),
@@ -463,7 +471,7 @@ mod tests {
     }
 
     #[test]
-    fn program_interface_writes_ports_ifaces_underlay_routes_meter() {
+    fn program_interface_writes_ports_ifaces_routes_meter_no_plain_underlay() {
         let mut c = ControlCore::new(MemMapWriter::default());
         c.program_interface(IfaceParams {
             interface_id: b"if1".to_vec(),
@@ -483,10 +491,22 @@ mod tests {
         let pm = c.w.ports.get(&7).unwrap();
         assert_eq!(pm.vni, 5);
         assert_eq!(pm.guest_mac, [1, 2, 3, 4, 5, 6]);
+        // INTERFACES (v4) carries tap + guest_mac (local delivery demuxes on this, not UNDERLAY).
         let iv = c.w.ifaces.get(&IfaceKey::new(5, [10, 0, 0, 2])).unwrap();
         assert_eq!(iv.tap_ifindex, 7);
         assert_eq!(iv.is_local, 1);
-        assert!(c.w.underlay.contains_key(&[0xfd; 16]));
+        assert_eq!(iv.guest_mac, [1, 2, 3, 4, 5, 6]);
+        // INTERFACES6 (v6) sibling carries the same for the dual-stack overlay IPv6.
+        let iv6 = c.w.ifaces6.get(&IfaceKey6::new(5, [0x20; 16])).unwrap();
+        assert_eq!(iv6.tap_ifindex, 7);
+        assert_eq!(iv6.is_local, 1);
+        assert_eq!(iv6.guest_mac, [1, 2, 3, 4, 5, 6]);
+        // program_interface no longer writes a plain-interface UNDERLAY entry (the node VTEP is
+        // shared across interfaces; writing it here would clobber the edge sentinel).
+        assert!(
+            !c.w.underlay.contains_key(&[0xfd; 16]),
+            "plain interface must not write UNDERLAY[node VTEP]"
+        );
         // self-routes (v4 /32 + v6 /128)
         assert!(c.w.routes.contains_key(&(5, [10, 0, 0, 2], 32)));
         assert!(c.w.routes6.contains_key(&(5, [0x20; 16], 128)));

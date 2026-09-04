@@ -53,12 +53,6 @@ pub struct AyaWriter {
 }
 
 impl AyaWriter {
-    /// Every underlay /128 currently programmed (restart adopt reseeds `UnderlayIpam` from these).
-    /// Reaches the raw UNDERLAY map, which lives here now; not part of the `MapWriter` trait.
-    pub fn underlay_keys(&self) -> Vec<[u8; 16]> {
-        self.underlay.keys()
-    }
-
     /// All `IFACE_META` restart-journal entries (adopt scan). Reaches the raw map, which lives here
     /// now; not part of the `MapWriter` trait.
     pub fn iface_meta_entries(&self) -> Vec<(IfaceMetaKey, IfaceMetaVal)> {

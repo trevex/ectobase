@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use aya::Ebpf;
-use flowplane_common::{IfaceKey, IfaceMetaKey, IfaceMetaVal, Local, IFACE_DEV_MAX};
+use flowplane_common::{IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, Local, IFACE_DEV_MAX};
 
 use crate::loader;
 use crate::maps::{
@@ -65,8 +65,6 @@ pub struct IfaceParams {
 // documents each column). Fields are described where each is produced/consumed. The route shadow
 // aliases moved into `flowplane-control` (`shadow::RouteShadowV4/V6`) with the orchestration.
 
-/// `(vni, ipv4, ipv6, underlay, device)` for a single interface.
-pub(crate) type InterfaceDetail = (u32, [u8; 4], [u8; 16], [u8; 16], String);
 /// `(interface_id, vni, ipv4, ipv6, underlay, device)` row.
 pub(crate) type InterfaceRow = (Vec<u8>, u32, [u8; 4], [u8; 16], [u8; 16], String);
 
@@ -113,8 +111,6 @@ struct Inner {
     /// Interfaces recovered by `rebuild_from_maps` on adopt: (interface_id, device) whose guest
     /// program must be re-attached by the caller (`Serve`). Empty on a fresh (non-adopt) bring-up.
     recovered: Vec<(Vec<u8>, String)>,
-    /// Underlay /128s recovered from the surviving UNDERLAY map on adopt, for reseeding `UnderlayIpam`.
-    recovered_underlays: Vec<[u8; 16]>,
     /// Link-pinning enabled: pin program links + adopt them atomically on restart.
     pin_links: bool,
     /// Persistent pin dir for link pins; mirrors the map pin dir passed to load_ebpf.
@@ -273,7 +269,6 @@ impl Control {
             geneve_ifindex,
             core: ControlCore::new(aya),
             recovered: Vec::new(),
-            recovered_underlays: Vec::new(),
             pin_links,
             pin_dir: pin_dir.to_path_buf(),
             by_id: HashMap::new(),
@@ -282,17 +277,15 @@ impl Control {
             learned_macs: HashMap::new(),
         };
         // Restart adopt: the pinned state maps were reused by map_pin_path, so rebuild the in-memory
-        // bookkeeping (by_id/by_ifindex/iface_underlay) and the re-attach + IPAM-reseed lists from the
-        // surviving IFACE_META journal and UNDERLAY map. A fresh (non-adopt) bring-up starts empty.
+        // bookkeeping (by_id/by_ifindex/iface_underlay) and the re-attach list from the surviving
+        // IFACE_META journal. A fresh (non-adopt) bring-up starts empty.
         if adopt {
-            let (recovered, recovered_underlays) = Self::rebuild_from_maps(&mut inner)?;
+            let recovered = Self::rebuild_from_maps(&mut inner)?;
             eprintln!(
-                "adopt: recovered {} interface(s) and {} underlay /128(s) from pinned maps",
+                "adopt: recovered {} interface(s) from pinned maps",
                 recovered.len(),
-                recovered_underlays.len()
             );
             inner.recovered = recovered;
-            inner.recovered_underlays = recovered_underlays;
         }
         Ok(Self {
             inner: Mutex::new(inner),
@@ -302,12 +295,9 @@ impl Control {
 
     /// After adopting pinned maps on restart, repopulate the in-memory bookkeeping from the surviving
     /// `IFACE_META` journal so subsequent AttachInterface/DetachInterface/get/list see the pre-restart
-    /// state. Returns `(reattach, underlays)`:
-    ///   - `reattach`: `(interface_id, device)` whose guest program must be RE-ATTACHED by the caller
-    ///     (their links died with the old process; the maps survived).
-    ///   - `underlays`: every programmed underlay /128 (from the surviving UNDERLAY map) so the caller
-    ///     can reseed `UnderlayIpam` and never reissue a live allocation.
-    fn rebuild_from_maps(g: &mut Inner) -> anyhow::Result<(ReattachList, Vec<[u8; 16]>)> {
+    /// state. Returns `reattach`: `(interface_id, device)` whose guest program must be RE-ATTACHED by
+    /// the caller (their links died with the old process; the maps survived).
+    fn rebuild_from_maps(g: &mut Inner) -> anyhow::Result<ReattachList> {
         let journal = g.core.writer().iface_meta_entries();
         // Sanity cross-check: the journal should track the surviving INTERFACES map 1:1.
         let iface_count = g.core.writer().ifaces_count();
@@ -353,8 +343,7 @@ impl Control {
             g.iface_underlay.insert(id.clone(), v.underlay);
             reattach.push((id, device));
         }
-        let underlays = g.core.writer().underlay_keys();
-        Ok((reattach, underlays))
+        Ok(reattach)
     }
 
     /// Pure decode of one `IFACE_META` journal entry into `(interface_id, device, IfaceRecord)`.
@@ -378,12 +367,6 @@ impl Control {
     /// re-attach. Empty after a fresh bring-up.
     pub fn recovered_interfaces(&self) -> Vec<(Vec<u8>, String)> {
         self.inner.lock().recovered.clone()
-    }
-
-    /// The underlay /128s recovered on adopt, for reseeding `UnderlayIpam`. Empty after a fresh
-    /// bring-up.
-    pub fn recovered_underlays(&self) -> Vec<[u8; 16]> {
-        self.inner.lock().recovered_underlays.clone()
     }
 
     /// Re-attach the guest datapath program to an ADOPTED interface's device after a restart. The
@@ -684,17 +667,36 @@ impl Control {
             loader::unpin_link(&pin_dir, &name);
         }
         let _ = g.core.writer_mut().ports_remove(tap);
+        // Before removing the INTERFACES entries, snapshot the currently-learned guest MAC (the
+        // datapath may have updated it via DHCP/ARP MAC learning) from INTERFACES (v4), falling back
+        // to INTERFACES6 for a v6-only interface. This snapshot survives the delete so a later
+        // addinterface can restore the learned MAC.
+        let learned = g
+            .core
+            .writer()
+            .ifaces_get(&IfaceKey::new(rec.vni, rec.ipv4))
+            .or_else(|| {
+                if rec.ipv6 != [0u8; 16] {
+                    g.core
+                        .writer()
+                        .ifaces6_get(&IfaceKey6::new(rec.vni, rec.ipv6))
+                } else {
+                    None
+                }
+            });
+        if let Some(iv) = learned {
+            g.learned_macs.insert(interface_id.to_vec(), iv.guest_mac);
+        }
         let _ = g
             .core
             .writer_mut()
             .ifaces_remove(IfaceKey::new(rec.vni, rec.ipv4));
-        // Before removing the UNDERLAY entry, snapshot the currently-learned guest MAC
-        // (the datapath may have updated it via DHCP/ARP MAC learning). This snapshot
-        // survives the delete so that addinterface can restore the learned MAC.
-        if let Some(u) = g.core.writer().underlay_get(&rec.underlay) {
-            g.learned_macs.insert(interface_id.to_vec(), u.guest_mac);
+        if rec.ipv6 != [0u8; 16] {
+            let _ = g
+                .core
+                .writer_mut()
+                .ifaces6_remove(IfaceKey6::new(rec.vni, rec.ipv6));
         }
-        let _ = g.core.writer_mut().underlay_remove(&rec.underlay);
         let _ = g.core.writer_mut().meter_remove(&tap);
         let _ = g.core.writer_mut().dhcp_meta_remove(tap);
         // Remove the local self-route(s) programmed by program_interface.
@@ -720,14 +722,6 @@ impl Control {
             g.core.purge_vni(vni, rec.ipv4)?;
         }
         Ok(true)
-    }
-
-    /// Interface detail for get/list. Returns (vni, ipv4, ipv6, underlay, device).
-    pub fn get_interface(&self, interface_id: &[u8]) -> Option<InterfaceDetail> {
-        let g = self.inner.lock();
-        g.by_id
-            .get(interface_id)
-            .map(|r| (r.vni, r.ipv4, r.ipv6, r.underlay, r.device.clone()))
     }
 
     /// Read the `INTERFACES` map entry for `(vni, ipv4)` straight back out of the live eBPF map.

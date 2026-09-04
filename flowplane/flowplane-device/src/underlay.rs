@@ -1,15 +1,16 @@
-//! Underlay addressing: infer the host /64 from the fabric loopback, hand out /128s.
+//! Underlay addressing: infer the host's fabric-loopback VTEP (its /128 and /64) from the host's
+//! interface addresses.
 //!
 //! The hypervisor sits in an unnumbered IPv6-only BGP fabric: its stable identity is a /64 that
-//! lives on a loopback/dummy interface (also the kubelet's primary IP). We INFER that /64 from the
-//! host's interface addresses rather than configure it, then allocate a /128 per VM endpoint out of
-//! it. Overlay addresses are user-specified elsewhere; the underlay /128 is the ONLY allocation.
+//! lives on a loopback/dummy interface (also the kubelet's primary IP). We INFER that address rather
+//! than configure it. That single node VTEP is the underlay for EVERY interface on the node — local
+//! delivery demuxes on the overlay `(vni, ip)` via INTERFACES/INTERFACES6, so no per-endpoint /128
+//! is allocated. Overlay addresses are user-specified elsewhere.
 //!
 //! Inference is exposed via the `flowplane infer-underlay` subcommand (a root-free observability hook
-//! the containerlab IPv6-fabric e2e asserts on). The bringup path that CONSUMES the inferred /64 for
-//! IPAM is wired by `flowplane`'s `AttachState`.
+//! the containerlab IPv6-fabric e2e asserts on). The bringup path that CONSUMES the inferred VTEP is
+//! wired by `flowplane`'s `AttachState`.
 use ipnet::Ipv6Net;
-use std::collections::BTreeSet;
 use std::net::Ipv6Addr;
 
 /// One address seen on a host interface (name, addr, prefix_len).
@@ -86,107 +87,6 @@ pub fn infer_underlay_prefix(addrs: &[IfAddr]) -> Option<Ipv6Net> {
 pub fn infer_underlay_prefix_within(addrs: &[IfAddr], within: Option<Ipv6Net>) -> Option<Ipv6Net> {
     infer_underlay_address_within(addrs, within)
         .and_then(|ip| Ipv6Net::new(ip, 64).ok().map(|n| n.trunc()))
-}
-
-/// A /128 allocator over the host underlay /64.
-///
-/// Hands out the lowest free host address in the SECOND HALF of the /64 (host index >= 2^63 for a
-/// /64). The lower half is reserved for the host's own infrastructure addressing: the node fabric
-/// loopback `<prefix>::1` (which is ALSO the kubelet node IP), the gateway, the subnet-router
-/// anycast `<prefix>::`, etc. Allocating from the upper half guarantees a guest underlay /128 can
-/// never collide with any of those. Released addresses are reused lowest-first within the pool.
-pub struct UnderlayIpam {
-    prefix: Ipv6Net,
-    used: BTreeSet<u128>,
-    /// Lowest allocatable host index — the start of the prefix's second half.
-    start: u128,
-    next: u128,
-}
-
-impl UnderlayIpam {
-    /// Build an allocator over `prefix` (expected to be a /64).
-    pub fn new(prefix: Ipv6Net) -> UnderlayIpam {
-        // Reserve the lower half of the prefix for host infrastructure; allocate guests out of the
-        // upper half. For host_bits H the second half begins at host 2^(H-1) (e.g. 2^63 for a /64).
-        let host_bits = 128 - prefix.prefix_len() as u32;
-        let start: u128 = if host_bits == 0 {
-            0
-        } else if host_bits >= 128 {
-            1u128 << 127
-        } else {
-            1u128 << (host_bits - 1)
-        };
-        UnderlayIpam {
-            prefix,
-            used: BTreeSet::new(),
-            start,
-            next: start,
-        }
-    }
-
-    /// Return the lowest free /128 host in the /64, or `None` when the prefix is exhausted.
-    ///
-    /// A released host (which sits below the `next` high-water mark) is reused before any fresh
-    /// host is handed out, so the pool stays densely packed lowest-first. In the steady state
-    /// (no releases) this is O(1): the scan finds the first gap immediately at `next`.
-    pub fn allocate(&mut self) -> Option<Ipv6Addr> {
-        let base = u128::from(self.prefix.network());
-        // Number of host bits (128 - prefix_len); a /64 has 64 host bits.
-        let host_bits = 128 - self.prefix.prefix_len() as u32;
-        // Highest host index inside the prefix (inclusive). For a /64 this is 2^64 - 1.
-        let max_host: u128 = if host_bits >= 128 {
-            u128::MAX
-        } else {
-            (1u128 << host_bits) - 1
-        };
-
-        // Reuse the lowest released host (a gap in [start, next)) if there is one; otherwise take
-        // the next fresh host at the `next` high-water mark. The lower half of the prefix (incl.
-        // host 0 and the node loopback ::1) is never handed out because allocation starts at
-        // `self.start` (the prefix's second half) and releases never reintroduce a host below it.
-        let host = (self.start..self.next)
-            .find(|h| !self.used.contains(h))
-            .unwrap_or(self.next);
-        if host > max_host {
-            return None;
-        }
-        self.used.insert(host);
-        if host >= self.next {
-            self.next = host + 1;
-        }
-        Some(Ipv6Addr::from(base + host))
-    }
-
-    /// Mark `ip` free again so a later `allocate()` may hand it back out (lowest-first).
-    pub fn release(&mut self, ip: Ipv6Addr) {
-        let base = u128::from(self.prefix.network());
-        let host = u128::from(ip).wrapping_sub(base);
-        self.used.remove(&host);
-    }
-
-    /// Mark `ip` as ALREADY allocated (restart recovery). A restarted control plane rebuilds its
-    /// `used` set by calling this for every /128 found in the live (pinned) UNDERLAY map, so it can
-    /// never re-hand-out an address an existing guest still holds — the reissue-a-live-/128 blackhole
-    /// the review flagged. Addresses outside this prefix's allocatable second half are ignored (they
-    /// can never be handed out anyway, so tracking them is pointless). Also advances the `next`
-    /// high-water mark past a recovered address so fresh allocations continue above it.
-    pub fn mark_used(&mut self, ip: Ipv6Addr) {
-        let base = u128::from(self.prefix.network());
-        let host = u128::from(ip).wrapping_sub(base);
-        let host_bits = 128 - self.prefix.prefix_len() as u32;
-        let max_host: u128 = if host_bits >= 128 {
-            u128::MAX
-        } else {
-            (1u128 << host_bits) - 1
-        };
-        if host < self.start || host > max_host {
-            return;
-        }
-        self.used.insert(host);
-        if host >= self.next {
-            self.next = host + 1;
-        }
-    }
 }
 
 /// Read the host's IPv6 interface addresses by shelling out to `ip -6 -o addr`.
@@ -332,63 +232,9 @@ mod tests {
     }
 
     #[test]
-    fn allocates_128s_and_reuses_on_release() {
-        let mut ip = UnderlayIpam::new("2001:db8:fefe:1::/64".parse().unwrap());
-        let x = ip.allocate().unwrap();
-        let y = ip.allocate().unwrap();
-        assert_ne!(x, y);
-        ip.release(x);
-        assert_eq!(ip.allocate().unwrap(), x); // lowest free reused
-    }
-
-    #[test]
-    fn mark_used_prevents_reissue_after_restart() {
-        // Simulate a restart: a prior process handed out the first two /128s. Rebuilding the used
-        // set via mark_used must stop allocate() from reissuing either (which would blackhole the
-        // still-attached guests that hold them).
-        let mut ip = UnderlayIpam::new("fd00:db8:0:2::/64".parse().unwrap());
-        let live0: Ipv6Addr = "fd00:db8:0:2:8000::".parse().unwrap();
-        let live1: Ipv6Addr = "fd00:db8:0:2:8000::1".parse().unwrap();
-        ip.mark_used(live0);
-        ip.mark_used(live1);
-        let got = ip.allocate().unwrap();
-        assert_ne!(got, live0);
-        assert_ne!(got, live1);
-        assert_eq!(got, "fd00:db8:0:2:8000::2".parse::<Ipv6Addr>().unwrap());
-    }
-
-    #[test]
-    fn mark_used_ignores_out_of_range_addresses() {
-        // A foreign or lower-half address (e.g. the node loopback) in the map must be ignored, not
-        // tracked — and must not disturb the allocation cursor.
-        let mut ip = UnderlayIpam::new("fd00:db8:0:2::/64".parse().unwrap());
-        ip.mark_used("fd00:db8:0:2::1".parse().unwrap()); // node loopback (lower half) — ignore
-        ip.mark_used("2001:db8::1".parse().unwrap()); // different prefix — ignore
-        assert_eq!(
-            ip.allocate().unwrap(),
-            "fd00:db8:0:2:8000::".parse::<Ipv6Addr>().unwrap()
-        );
-    }
-
-    #[test]
     fn none_when_no_global_unicast() {
         let addrs = vec![a("eth0", "fe80::1", 64), a("lo", "::1", 128)];
         assert!(infer_underlay_prefix(&addrs).is_none());
-    }
-
-    #[test]
-    fn allocates_from_second_half_avoiding_node_loopback() {
-        // The node's own fabric loopback (also the kubelet node IP) is <prefix>::1. A guest
-        // underlay /128 must NEVER collide with it (nor with the gateway or other low-numbered
-        // infra addresses), so allocation starts in the SECOND HALF of the prefix. For a /64 the
-        // second half begins at host 2^63 -> <prefix>:8000::.
-        let mut ip = UnderlayIpam::new("fd00:db8:0:2::/64".parse().unwrap());
-        let node_lo: Ipv6Addr = "fd00:db8:0:2::1".parse().unwrap();
-        let first = ip.allocate().unwrap();
-        assert_ne!(first, node_lo, "must not hand out the node's own loopback");
-        assert_eq!(first, "fd00:db8:0:2:8000::".parse::<Ipv6Addr>().unwrap());
-        // and never the all-zeros subnet-router anycast either
-        assert_ne!(first, "fd00:db8:0:2::".parse::<Ipv6Addr>().unwrap());
     }
 
     #[test]

@@ -9,8 +9,8 @@ use crate::parse::{write16, write6, ETH_LEN, ETH_P_IPV6, IPPROTO_UDP};
 // (`d6_checksum`, `d6_url_len`, `D6Reply`, constants) are shared between XDP (removed) and tc.
 
 /// MAC learning for the egress edge: if the request's Ethernet source differs from the cached
-/// `meta.guest_mac`, update PORT_META (keyed by ifindex), UNDERLAY (keyed by underlay IPv6), and
-/// INTERFACES (keyed by vni+ipv4) so the local fast path and ingress delivery use the new MAC
+/// `meta.guest_mac`, update PORT_META (keyed by ifindex), INTERFACES (keyed by vni+ipv4), and
+/// INTERFACES6 (keyed by vni+ipv6) so the local fast path and ingress delivery use the new MAC
 /// immediately. The test suite sends REQUEST with a different Ethernet src than chaddr to verify
 /// that the datapath learns the actual L2 source address used by the VM.
 #[inline(always)]
@@ -19,16 +19,17 @@ pub(crate) fn learn_mac(ifindex: u32, meta: &PortMeta, eth_src: [u8; 6]) {
         let mut updated = *meta;
         updated.guest_mac = eth_src;
         let _ = crate::maps::PORT_META.insert(&ifindex, &updated, 0);
-        if let Some(u) = unsafe { crate::maps::UNDERLAY.get(&meta.underlay_ipv6) } {
-            let mut u2 = *u;
-            u2.guest_mac = eth_src;
-            let _ = crate::maps::UNDERLAY.insert(&meta.underlay_ipv6, &u2, 0);
-        }
         let ikey = flowplane_common::IfaceKey::new(meta.vni, meta.guest_ipv4);
         if let Some(iv) = unsafe { crate::maps::INTERFACES.get(&ikey) } {
             let mut iv2 = *iv;
             iv2.guest_mac = eth_src;
             let _ = crate::maps::INTERFACES.insert(&ikey, &iv2, 0);
+        }
+        let ikey6 = flowplane_common::IfaceKey6::new(meta.vni, meta.guest_ipv6);
+        if let Some(iv) = unsafe { crate::maps::INTERFACES6.get(&ikey6) } {
+            let mut iv2 = *iv;
+            iv2.guest_mac = eth_src;
+            let _ = crate::maps::INTERFACES6.insert(&ikey6, &iv2, 0);
         }
     }
 }

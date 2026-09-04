@@ -2,17 +2,16 @@
 //!
 //! The CNI hands us `{interface_id, netns_path, vni, requested_ips}` and expects us to (a) create a
 //! veth pair whose GUEST end lives inside the target netns and whose HOST end stays in the root
-//! netns as the datapath tap, (b) allocate an underlay /128 for the endpoint out of the inferred
-//! host /64, and (c) program the eBPF `INTERFACES`/`UNDERLAY` maps and attach the guest datapath
-//! program to the host-side veth.
+//! netns as the datapath tap, (b) program the eBPF `INTERFACES`/`INTERFACES6` maps with this node's
+//! VTEP as the endpoint underlay, and (c) attach the guest datapath program to the host-side veth.
 //!
 //! Rather than duplicate the map-programming + datapath-attach sequence, we reuse the legacy
 //! [`Control::create_interface`] path (the exact same one the dpservice CreateInterface handler
 //! drives): it attaches `tc_guest_tx` to the host-side veth and programs PORT_META /
-//! INTERFACES / UNDERLAY / the local self-route. Our job here is the veth+netns lifecycle plus the
-//! underlay-/128 IPAM (via [`UnderlayIpam`]) and MAC allocation, then delegation.
+//! INTERFACES / INTERFACES6 / the local self-route. Every interface on a node shares the one node
+//! VTEP as its underlay (local delivery demuxes on the overlay `(vni, ip)` via INTERFACES, not on a
+//! per-endpoint /128), so our job here is just the veth+netns lifecycle plus MAC allocation.
 
-use parking_lot::Mutex;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::process::Command;
 use std::sync::Arc;
@@ -20,7 +19,6 @@ use std::sync::Arc;
 use anyhow::{bail, Context};
 
 use crate::control::{Control, IfaceParams};
-use flowplane_device::UnderlayIpam;
 
 /// Guest-edge device backing an interface. Both run the SAME `tc_guest_tx` datapath on a single
 /// root-netns device (via `Control::create_interface`); they differ only in how that device is
@@ -74,12 +72,15 @@ pub struct AttachOutcome {
     pub underlay_route: String,
 }
 
-/// Shared state threaded into the DataplaneNode service: the live datapath control plane, the
-/// underlay /128 allocator (seeded from the inferred host /64 at serve startup), the server-wide
-/// overlay IPv4 gateway, and a MAC counter for endpoints that don't request a specific MAC.
+/// Shared state threaded into the DataplaneNode service: the live datapath control plane, this
+/// node's VTEP (the shared underlay every interface is programmed with), the server-wide overlay
+/// IPv4 gateway, and MAC/MTU/offload knobs applied at attach.
 pub struct AttachState {
     pub control: Arc<Control>,
-    pub ipam: Mutex<UnderlayIpam>,
+    /// This node's VTEP (fabric-loopback /128, resolved once at serve startup). It is programmed as
+    /// the `underlay_ipv6` of every interface on this node — local delivery demuxes on the overlay
+    /// `(vni, ip)` via INTERFACES/INTERFACES6, so no per-endpoint /128 is allocated.
+    pub node_vtep: [u8; 16],
     pub gateway_ipv4: [u8; 4],
     /// Server-wide overlay IPv6 gateway (from `--gateway6`), programmed into
     /// `PortMeta.gateway_ipv6` so the ND / DHCPv6 responders have a gateway. All-zeros = disabled.
@@ -176,16 +177,6 @@ impl AttachState {
         format!("vp-{h:08x}")
     }
 
-    /// Reseed the underlay IPAM used-set from addresses recovered on restart (the surviving pinned
-    /// UNDERLAY map), so a live guest's /128 is never handed out again after an flowplane restart —
-    /// the reissue-a-live-/128 blackhole the review flagged. Called once, on adopt.
-    pub fn seed_ipam(&self, addrs: &[[u8; 16]]) {
-        let mut ipam = self.ipam.lock();
-        for a in addrs {
-            ipam.mark_used(std::net::Ipv6Addr::from(*a));
-        }
-    }
-
     /// A locally-administered unicast MAC (02:xx:...) derived DETERMINISTICALLY from the
     /// interface_id (FNV-1a, same idiom as `host_veth_name`). Determinism is a correctness
     /// requirement, not a nicety: on detach the datapath's current guest MAC is cached in
@@ -202,9 +193,9 @@ impl AttachState {
         [0x02, 0x00, s[0], s[1], s[2], s[3]]
     }
 
-    /// Attach an interface: create the veth pair, move the guest end into `netns_path`, allocate an
-    /// underlay /128 + MAC, then delegate to `Control::create_interface` to program the maps and
-    /// attach the datapath to the host-side veth.
+    /// Attach an interface: create the veth pair, move the guest end into `netns_path`, derive its
+    /// MAC, then delegate to `Control::create_interface` to program the maps (with the node VTEP as
+    /// the underlay) and attach the datapath to the host-side veth.
     pub fn attach(
         &self,
         interface_id: &str,
@@ -239,11 +230,9 @@ impl AttachState {
             parse_mac(mac_req).context("invalid mac")?
         };
 
-        // Underlay /128 out of the inferred host /64.
-        let underlay_ipv6 = {
-            let mut ipam = self.ipam.lock();
-            ipam.allocate().context("underlay /64 exhausted")?.octets()
-        };
+        // Underlay = this node's VTEP, shared by every interface. Local delivery demuxes on the
+        // overlay (vni, ip) via INTERFACES/INTERFACES6, so no per-endpoint /128 is allocated.
+        let underlay_ipv6 = self.node_vtep;
 
         // The tap device name (for tap / pod-tap): the caller-supplied `tap_name` if set (KubeVirt's
         // domainAttachmentType:tap opens the primary tap by the literal name "tap0"), else derive it.
@@ -282,13 +271,11 @@ impl AttachState {
         };
         if let Err(e) = setup {
             let _ = run(&["ip", "link", "del", &device]);
-            let mut ipam = self.ipam.lock();
-            ipam.release(Ipv6Addr::from(underlay_ipv6));
             return Err(e);
         }
 
         // Delegate map-programming + datapath-attach to the legacy Control path (attaches
-        // tc_guest_tx to the root-netns device and programs PORT_META/INTERFACES/UNDERLAY).
+        // tc_guest_tx to the root-netns device and programs PORT_META/INTERFACES/INTERFACES6).
         let params = IfaceParams {
             vni,
             ipv4,
@@ -304,8 +291,6 @@ impl AttachState {
             .create_interface(interface_id.as_bytes(), &device, params)
         {
             let _ = run(&["ip", "link", "del", &device]);
-            let mut ipam = self.ipam.lock();
-            ipam.release(Ipv6Addr::from(underlay_ipv6));
             return Err(e).context("program datapath for interface");
         }
 
@@ -322,8 +307,6 @@ impl AttachState {
                 None => {
                     let _ = self.control.detach_interface(interface_id.as_bytes());
                     let _ = run(&["ip", "link", "del", &device]);
-                    let mut ipam = self.ipam.lock();
-                    ipam.release(Ipv6Addr::from(underlay_ipv6));
                     bail!("INTERFACES read-back failed after programming");
                 }
             }
@@ -343,12 +326,10 @@ impl AttachState {
                     gateway_ipv6: self.gateway_ipv6,
                 })
             {
-                // Roll back the programming + device + underlay we just claimed so a failed
-                // attach leaves no half-configured state (mirrors the read-back failure path).
+                // Roll back the programming + device we just claimed so a failed attach leaves no
+                // half-configured state (mirrors the read-back failure path).
                 let _ = self.control.detach_interface(interface_id.as_bytes());
                 let _ = run(&["ip", "link", "del", &device]);
-                let mut ipam = self.ipam.lock();
-                ipam.release(Ipv6Addr::from(underlay_ipv6));
                 return Err(e).context("configure guest netns");
             }
         }
@@ -509,18 +490,13 @@ impl AttachState {
         Ok(())
     }
 
-    /// Detach: remove the datapath programming (which also removes INTERFACES/UNDERLAY), delete the
-    /// host-side veth (its guest peer disappears with it), and release the underlay /128.
+    /// Detach: remove the datapath programming (which also removes INTERFACES/INTERFACES6) and
+    /// delete the host-side veth (its guest peer disappears with it). No underlay to reclaim — the
+    /// node VTEP is shared by every interface, never per-endpoint.
     pub fn detach(&self, interface_id: &str) -> anyhow::Result<()> {
-        // Snapshot the underlay /128 before Control forgets it, so we can release the IPAM slot.
-        let underlay = self
-            .control
-            .get_interface(interface_id.as_bytes())
-            .map(|(_, _, _, ul, _)| ul);
         // Best-effort cleanup: run ALL reclaim steps regardless of a datapath-detach failure. If the
-        // datapath detach errored and we returned early (the old behaviour), the host veth AND the
-        // underlay /128 would leak on every partial detach. Reclaim the veth + IPAM unconditionally,
-        // then surface the datapath error to the caller.
+        // datapath detach errored and we returned early (the old behaviour), the host veth would leak
+        // on every partial detach. Reclaim the veth unconditionally, then surface the datapath error.
         let dp = self
             .control
             .detach_interface(interface_id.as_bytes())
@@ -531,9 +507,6 @@ impl AttachState {
         // removes it outright. Idempotent: an already-absent device is fine, so errors are ignored.
         let _ = run(&["ip", "link", "del", &Self::host_veth_name(interface_id)]);
         let _ = run(&["ip", "link", "del", &Self::tap_name(interface_id)]);
-        if let Some(ul) = underlay {
-            self.ipam.lock().release(Ipv6Addr::from(ul));
-        }
         dp.map(|_| ())
     }
 }

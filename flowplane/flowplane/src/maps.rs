@@ -521,13 +521,6 @@ impl Underlay {
     pub fn get(&self, key: &[u8; 16]) -> Option<UnderlayValue> {
         self.map.get(key, 0).ok()
     }
-
-    /// Every underlay /128 currently programmed — used at restart to rebuild `UnderlayIpam`'s
-    /// used-set (via `mark_used`) so a recovered live allocation is never reissued. (Consumed by
-    /// the restart path.)
-    pub(crate) fn keys(&self) -> Vec<[u8; 16]> {
-        self.map.keys().filter_map(|r| r.ok()).collect()
-    }
 }
 
 /// Typed handle over the `NEIGHBOR_NAT` BPF map (slot index -> NeighborNatEntry).

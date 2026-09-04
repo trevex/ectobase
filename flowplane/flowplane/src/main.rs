@@ -590,16 +590,6 @@ async fn main() -> anyhow::Result<()> {
             // they can only be taken once).
             let control = std::sync::Arc::new(ctrl);
 
-            // Seed the underlay /128 allocator that AttachInterface hands endpoints out of. `underlay`
-            // was resolved above (flag override > kubelet node IP > lo/dummy inference); its /64 is
-            // authoritatively this node's fabric pool.
-            let ipam = {
-                let pool = ipnet::Ipv6Net::new(std::net::Ipv6Addr::from(underlay), 64)
-                    .context("build underlay /64 from resolved underlay")?
-                    .trunc();
-                println!("DataplaneNode: underlay pool = {pool}");
-                flowplane_device::UnderlayIpam::new(pool)
-            };
             // Disable guest tx-checksum offload at attach ONLY on a software-veth uplink (clab/kind),
             // which can't finalize CHECKSUM_PARTIAL; a real NIC finalizes the inner checksum in HW.
             let disable_guest_csum_offload = !attach::uplink_finalizes_checksum(&uplink);
@@ -611,7 +601,9 @@ async fn main() -> anyhow::Result<()> {
             }
             let attach_state = std::sync::Arc::new(attach::AttachState {
                 control: std::sync::Arc::clone(&control),
-                ipam: parking_lot::Mutex::new(ipam),
+                // Every interface on this node is programmed with the node VTEP as its underlay; local
+                // delivery demuxes on the overlay (vni, ip) via INTERFACES/INTERFACES6.
+                node_vtep: underlay,
                 gateway_ipv4,
                 gateway_ipv6,
                 disable_guest_csum_offload,
@@ -620,8 +612,7 @@ async fn main() -> anyhow::Result<()> {
 
             // On adopt, finish restart recovery: the maps + bookkeeping survived (bring_up), but the
             // guest program links died with the old process — re-attach each recovered interface's
-            // program to its (surviving) veth — and reseed the IPAM used-set from the recovered /128s
-            // so a live guest's underlay address is never handed out again.
+            // program to its (surviving) veth.
             if adopt {
                 let recovered = control.recovered_interfaces();
                 let mut reattached = 0usize;
@@ -633,12 +624,9 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                 }
-                let underlays = control.recovered_underlays();
-                attach_state.seed_ipam(&underlays);
                 println!(
-                    "adopt: re-attached {reattached}/{} guest program(s); reseeded IPAM with {} /128(s)",
+                    "adopt: re-attached {reattached}/{} guest program(s)",
                     recovered.len(),
-                    underlays.len()
                 );
             }
 
