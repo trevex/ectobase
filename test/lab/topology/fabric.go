@@ -47,7 +47,6 @@ type paths struct {
 	frr   string // build/<name>/frr (edge{1,2}.conf, sw{1,2}.conf, daemons)
 	kind  string // build/<name>/kind (per-cluster kind Cluster configs + prefix/uplinks)
 	reg   string // build/<name>/registry
-	flow  string // build/<name>/flowplane (the WAN-edge sidecar wrapper)
 }
 
 func buildPaths(cfg *config.Config) paths {
@@ -58,7 +57,6 @@ func buildPaths(cfg *config.Config) paths {
 		frr:   filepath.Join(b, "frr"),
 		kind:  filepath.Join(b, "kind"),
 		reg:   filepath.Join(b, "registry"),
-		flow:  filepath.Join(b, "flowplane"),
 	}
 }
 
@@ -72,7 +70,7 @@ func Render(ctx context.Context, cfg *config.Config) error {
 	p := buildPaths(cfg)
 	v := fabric.Build(cfg)
 
-	for _, dir := range []string{p.build, p.frr, p.kind, p.reg, p.flow} {
+	for _, dir := range []string{p.build, p.frr, p.kind, p.reg} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %w", dir, err)
 		}
@@ -114,16 +112,6 @@ func Render(ctx context.Context, cfg *config.Config) error {
 		if err := genKindCluster(cfg, v, p, cl.Name, dc); err != nil {
 			return fmt.Errorf("cluster %s: %w", cl.Name, err)
 		}
-	}
-
-	// flowplane WAN-edge sidecar wrapper (static shell file: copy verbatim embed -> build).
-	// clab binds it into the flowplane-edge1 node via the relative path flowplane/edge-wrapper.sh.
-	wrapper, err := templates.FS.ReadFile("flowplane/edge-wrapper.sh")
-	if err != nil {
-		return fmt.Errorf("read embedded flowplane/edge-wrapper.sh: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(p.flow, "edge-wrapper.sh"), wrapper, 0o755); err != nil {
-		return fmt.Errorf("write flowplane edge-wrapper.sh: %w", err)
 	}
 
 	// Registry config + persistent cache dir.
