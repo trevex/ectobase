@@ -100,6 +100,20 @@ CNI_IMAGE ?= ghcr.io/trevex/ectobase/cni
 image-cni: ## Build the flowplane CNI plugin + installer image
 	docker build $(if $(DOCKER_BUILD_NET),--network=$(DOCKER_BUILD_NET)) -f Dockerfile.cni -t $(CNI_IMAGE):$(TAG) .
 
+# Reuses IMG_REPO (defined below, at file scope, alongside the lab image-* targets)
+# instead of introducing a separate dispatch-only var; Make resolves recipe variable
+# references at execution time, so the later definition in the file still applies here.
+.PHONY: image-dispatch
+image-dispatch: ## Build the 3 dispatch images (apiserver/controller/broker)
+	cd dispatch \
+	  && GOWORK=off CGO_ENABLED=0 go build -o dispatch-apiserver ./cmd/apiserver \
+	  && GOWORK=off CGO_ENABLED=0 go build -o dispatch-controller ./cmd/controller \
+	  && GOWORK=off CGO_ENABLED=0 go build -o dispatch-broker ./cmd/broker \
+	  && docker build -f Dockerfile.apiserver  -t $(IMG_REPO)/dispatch-apiserver:$(TAG)  . \
+	  && docker build -f Dockerfile.controller -t $(IMG_REPO)/dispatch-controller:$(TAG) . \
+	  && docker build -f Dockerfile.broker     -t $(IMG_REPO)/dispatch-broker:$(TAG)     . ; \
+	  status=$$?; rm -f dispatch-apiserver dispatch-controller dispatch-broker; exit $$status
+
 KINDNODE_IMAGE ?= ghcr.io/trevex/ectobase/kind-node-fabric
 .PHONY: image-kindnode
 image-kindnode: ## Build the fabric kind-node image (node-IP = pre-kubelet BGP /64)
