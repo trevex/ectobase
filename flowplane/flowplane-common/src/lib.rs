@@ -100,7 +100,10 @@ pub struct PortMeta {
     pub guest_ipv4: [u8; 4],
     pub gateway_ipv4: [u8; 4],
     pub guest_mac: [u8; 6],
-    pub _pad: [u8; 2],
+    /// 1 = L3 pod edge (netkit): IP from byte 0, no L2 responders, synthetic-eth push/pop at the
+    /// edge; 0 = L2 (veth/tap).
+    pub l3: u8,
+    pub _pad: [u8; 1],
     pub underlay_ipv6: [u8; 16],
     pub gateway_ipv6: [u8; 16],
     /// Guest overlay IPv6 address (all-zero when the guest is IPv4-only). Used by NAT64 to
@@ -872,7 +875,7 @@ mod tests {
 
     #[test]
     fn port_meta_and_iface_layout() {
-        // 4 (vni) + 4 (guest_ipv4) + 4 (gateway_ipv4) + 6 (guest_mac) + 2 (_pad)
+        // 4 (vni) + 4 (guest_ipv4) + 4 (gateway_ipv4) + 6 (guest_mac) + 1 (l3) + 1 (_pad)
         // + 16 (underlay_ipv6) + 16 (gateway_ipv6) + 16 (guest_ipv6) = 68.
         assert_eq!(core::mem::size_of::<PortMeta>(), 68);
         assert_eq!(core::mem::size_of::<IfaceValue>(), 32);
