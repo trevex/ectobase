@@ -181,6 +181,7 @@ type ciliumCtx struct{ PodSubnet string }
 // are the two edge-loopback nameservers.
 type talosClusterCtx struct {
 	PodSubnet, SvcSubnet, NodeNet64, APIVipAddr, Resolver1, Resolver2 string
+	RegistryEndpoint                                                  string
 }
 
 // talosNodeCtx is the data for both talos/node-patch.yaml.tmpl and
@@ -205,12 +206,13 @@ func genTalosCluster(ctx context.Context, cfg *config.Config, p paths, cluster s
 	}
 
 	clusterPatch, err := render.StringFS(templates.FS, "talos/cluster-patch.yaml.tmpl", talosClusterCtx{
-		PodSubnet:  dc.PodSubnet,
-		SvcSubnet:  dc.SvcSubnet,
-		NodeNet64:  dc.NodeNet64,
-		APIVipAddr: dc.APIVipAddr,
-		Resolver1:  res1,
-		Resolver2:  res2,
+		PodSubnet:        dc.PodSubnet,
+		SvcSubnet:        dc.SvcSubnet,
+		NodeNet64:        dc.NodeNet64,
+		APIVipAddr:       dc.APIVipAddr,
+		Resolver1:        res1,
+		Resolver2:        res2,
+		RegistryEndpoint: fabric.RegistryEndpoint,
 	})
 	if err != nil {
 		return fmt.Errorf("render cluster-patch: %w", err)
@@ -261,11 +263,12 @@ func genTalosCluster(ctx context.Context, cfg *config.Config, p paths, cluster s
 }
 
 // Up renders the build tree, deploys the containerlab topology (the container-mode
-// Talos nodes boot from their USERDATA machine configs), then per cluster bootstraps
-// the Talos control plane (talosctl over clab-mgmt → etcd bootstrap → kubeconfig),
-// waits for the API, installs the Cilium CNI (container-mode + KubePrism), removes
-// the control-plane taint, and waits for nodes Ready. Finally it deploys the ectobase
-// substrate.
+// Talos nodes boot from their USERDATA machine configs), pushes the locally-built
+// :dev app images into the in-fabric registry (the nodes' containerd mirror ghcr.io
+// there), then per cluster bootstraps the Talos control plane (talosctl over
+// clab-mgmt → etcd bootstrap → kubeconfig), waits for the API, installs the Cilium
+// CNI (container-mode + KubePrism), removes the control-plane taint, and waits for
+// nodes Ready. Finally it deploys the ectobase substrate.
 func Up(ctx context.Context, cfg *config.Config) error {
 	p := buildPaths(cfg)
 	if err := Render(ctx, cfg); err != nil {
@@ -281,6 +284,20 @@ func Up(ctx context.Context, cfg *config.Config) error {
 	// addHostFabricRoute) so talosctl/kubectl can reach the nodes.
 	if err := addHostFabricRoute(ctx); err != nil {
 		return fmt.Errorf("host fabric route: %w", err)
+	}
+
+	// App-image delivery on Talos (B1): push the locally-built :dev app images into
+	// the in-fabric registry:2 (up now that clab deployed it). Each Talos node's
+	// containerd mirrors ghcr.io at this same registry (machine.registries.mirrors in
+	// the cluster-patch), so the pods pull the app images from the fabric. Push goes
+	// via the registry's host-published localhost port (127.0.0.1:5000, in docker's
+	// default insecure-registries — no host dockerd reconfig), landing under
+	// trevex/ectobase/<name> so it matches the full path containerd requests from the
+	// mirror. Fatal: a missing image otherwise surfaces ~12 min later as a
+	// deployEctobase timeout. `make lab-up` builds them first via lab-app-images.
+	reg := registry.New("127.0.0.1:" + fabric.RegistryPort)
+	if err := reg.PushLocal(ctx, cfg.Fabric.Registry.Push); err != nil {
+		return fmt.Errorf("push-local app images to the in-fabric mirror (build them first: make lab-app-images): %w", err)
 	}
 
 	for _, cl := range cfg.Fabric.Clusters {
@@ -319,12 +336,9 @@ func Up(ctx context.Context, cfg *config.Config) error {
 		}
 	}
 
-	// TODO(B1): app-image delivery on Talos. The kind-era `kind load docker-image`
-	// sideload is gone (no kind cluster to load into); how the locally-built :dev app
-	// images reach each Talos node's containerd is decided in B1. The A6 substrate
-	// spike does not deploy the app, so bring-up (Talos + Cilium + nodes Ready) works
-	// without it — deployEctobase below will ImagePullBackOff until B1 lands delivery.
-
+	// App images were pushed to the in-fabric registry above; each node's containerd
+	// mirrors ghcr.io there (cluster-patch machine.registries.mirrors), so the app
+	// pods pull the :dev images from the fabric.
 	if err := deployEctobase(ctx, cfg); err != nil {
 		return err
 	}

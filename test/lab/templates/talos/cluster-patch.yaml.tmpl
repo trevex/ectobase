@@ -39,6 +39,21 @@ cluster:
     extraArgs:
       max-learners: "3"
 machine:
+  # In-fabric registry mirror for the locally-built :dev app images. `lab up` pushes
+  # ghcr.io/trevex/ectobase/<name>:dev into the registry:2 on the WAN segment
+  # ({{ .RegistryEndpoint }}); containerd hits the mirror FIRST for every ghcr.io ref
+  # (the app images resolve there — no overridePath, so the full repo path
+  # trevex/ectobase/<name> is requested, which is exactly what the push stored) and
+  # falls through to https://ghcr.io for anything the mirror 404s. The registry is
+  # push-only (registry:2 can't proxy + accept pushes), so every OTHER upstream
+  # (quay.io/docker.io/registry.k8s.io/gcr.io) is pulled DIRECTLY upstream over the
+  # node's VTEP egress — not listed here.
+  registries:
+    mirrors:
+      ghcr.io:
+        endpoints:
+          - {{ .RegistryEndpoint }}
+          - https://ghcr.io
   # Health-gated anycast API VIP: a per-node static pod holds the VIP on its own vip0
   # dummy only while the local apiserver /healthz returns "ok". Talos' embedded GoBGP
   # advertises vip0 (see the BGPPeerConfig), so an unhealthy node withdraws itself
