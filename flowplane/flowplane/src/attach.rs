@@ -387,9 +387,9 @@ impl AttachState {
         }
 
         // Configure the container's pod netns with the overlay addr(s) + per-family default routes.
-        // Veth only: containers don't self-config (no DHCP/RA on the veth model); VMs (Tap/PodTap)
-        // self-configure via DHCP/RA and must NOT be touched here.
-        if let DeviceType::Veth = resolved {
+        // Containers only: Veth (L2, `via <gw>`) and Netkit (L3, on-link `default dev eth0`, no via)
+        // don't self-config. VMs (Tap/PodTap) self-configure via DHCP/RA and must NOT be touched here.
+        if matches!(resolved, DeviceType::Veth | DeviceType::Netkit) {
             if let Err(e) =
                 flowplane_device::configure_guest_netns(&flowplane_device::GuestNetConfig {
                     netns_path: netns_path.to_string(),
@@ -398,6 +398,7 @@ impl AttachState {
                     gateway_ipv4: self.gateway_ipv4,
                     ipv6,
                     gateway_ipv6: self.gateway_ipv6,
+                    l3,
                 })
             {
                 // Roll back the programming + device we just claimed so a failed attach leaves no
