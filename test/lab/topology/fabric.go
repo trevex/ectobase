@@ -157,10 +157,6 @@ func Render(ctx context.Context, cfg *config.Config) error {
 // hostPaths).
 type kindNodeCtx struct{ Role, Image, PrefixPath, UplinksPath, CertsDir string }
 
-// mirroredRegistries are the upstream registries the kind nodes pull through the
-// in-fabric registry mirror (containerd 2.x config_path/hosts.toml).
-var mirroredRegistries = []string{"ghcr.io", "quay.io", "docker.io", "registry.k8s.io", "gcr.io"}
-
 type kindClusterCtx struct {
 	RegistryHost string
 	Nodes        []kindNodeCtx
@@ -185,19 +181,16 @@ func genKindCluster(cfg *config.Config, v *fabric.View, p paths, cluster string,
 	}
 	uplinksPath := filepath.Join(absKind, uplinksName)
 
-	// containerd 2.x registry mirror: one hosts.toml per upstream registry under a
-	// certs.d dir mounted at /etc/containerd/certs.d. Each points the upstream at the
-	// in-fabric registry (pull-through cache) over http (skip_verify).
+	// containerd 2.x registry config: the kind config keeps config_path pointing at
+	// /etc/containerd/certs.d and bind-mounts this dir there, but we intentionally
+	// write NO per-upstream hosts.toml. With config_path set and an empty certs.d,
+	// containerd finds no host override and resolves every registry directly upstream
+	// (no in-fabric mirror — its node-return path is unreliable, and it taxed every
+	// upstream pull with a ~8-10s mirror timeout). The dir itself must still exist so
+	// the extraMount doesn't fail; an empty mounted dir is the intended no-op.
 	certsRel := cluster + "-certs.d"
-	for _, reg := range mirroredRegistries {
-		dir := filepath.Join(p.kind, certsRel, reg)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("mkdir certs.d %s: %w", reg, err)
-		}
-		hosts := fmt.Sprintf("[host.\"http://%s\"]\n  capabilities = [\"pull\", \"resolve\"]\n  skip_verify = true\n", v.RegistryHost())
-		if err := os.WriteFile(filepath.Join(dir, "hosts.toml"), []byte(hosts), 0o644); err != nil {
-			return fmt.Errorf("write hosts.toml %s: %w", reg, err)
-		}
+	if err := os.MkdirAll(filepath.Join(p.kind, certsRel), 0o755); err != nil {
+		return fmt.Errorf("mkdir certs.d: %w", err)
 	}
 	certsDir := filepath.Join(absKind, certsRel)
 
@@ -226,9 +219,11 @@ func genKindCluster(cfg *config.Config, v *fabric.View, p paths, cluster string,
 }
 
 // Up renders the build tree, deploys the containerlab topology (the clab k8s-kind
-// nodes create the kind clusters with kindnet), pushes the local :dev images into
-// the in-fabric mirror, then per cluster collects the kind kubeconfig, waits for the
-// API + nodes Ready, and finally deploys the ectobase substrate.
+// nodes create the kind clusters with kindnet), then per cluster collects the kind
+// kubeconfig and waits for the API + nodes Ready. Once every cluster is up it
+// sideloads the local :dev app images into each node's containerd via `kind load`
+// (the in-fabric mirror is bypassed — its node-return path is unreliable), and
+// finally deploys the ectobase substrate.
 func Up(ctx context.Context, cfg *config.Config) error {
 	p := buildPaths(cfg)
 	if err := Render(ctx, cfg); err != nil {
@@ -244,18 +239,6 @@ func Up(ctx context.Context, cfg *config.Config) error {
 	// addHostFabricRoute) so talosctl/kubectl can reach the nodes.
 	if err := addHostFabricRoute(ctx); err != nil {
 		return fmt.Errorf("host fabric route: %w", err)
-	}
-
-	// Push the local :dev images to the in-fabric mirror; a push failure is fatal
-	// (a missing image otherwise surfaces ~12 min later as a waitAggregatedAPI
-	// timeout in deployEctobase). `make lab-up` builds them first via lab-app-images.
-	// Push goes via the registry container's host-published localhost port
-	// (127.0.0.1:5000, which is in docker's default insecure-registries — no host
-	// dockerd reconfig needed); the nodes pull the same registry:2 process via its
-	// fabric mirror addr.
-	reg := registry.New("127.0.0.1:" + fabric.RegistryPort)
-	if err := reg.PushLocal(ctx, cfg.Fabric.Registry.Push); err != nil {
-		return fmt.Errorf("push-local images to the in-fabric mirror (build them first: make lab-app-images): %w", err)
 	}
 
 	for _, cl := range cfg.Fabric.Clusters {
@@ -279,10 +262,39 @@ func Up(ctx context.Context, cfg *config.Config) error {
 		}
 	}
 
+	// Now every cluster's kind node is up + Ready, so sideload the locally-built app
+	// images straight into each node's containerd (replaces the in-fabric mirror push,
+	// whose node-return path over the fabric is unreliable). Must run before
+	// deployEctobase so the pods find the images host-local (IfNotPresent, no pull).
+	if err := sideloadAppImages(ctx, cfg); err != nil {
+		return err
+	}
+
 	if err := deployEctobase(ctx, cfg); err != nil {
 		return err
 	}
 	slog.Info("lab up", "name", cfg.Name)
+	return nil
+}
+
+// sideloadAppImages loads the locally-built app images straight into each kind
+// cluster's node containerd via `kind load` (imagePullPolicy: IfNotPresent means the
+// pods then use them with no registry pull). Replaces the in-fabric registry mirror,
+// whose node-return path over the fabric is unreliable.
+//
+// `kind load docker-image` is used (not a raw `docker save | ctr import`): the host
+// `kind` binary can see the clab-created clusters, and it handles the docker-save +
+// per-node `ctr images import` internally, so it stays a single fail-loud step per
+// image. The kind cluster name IS the clab cluster name (one k8s-kind node/cluster).
+func sideloadAppImages(ctx context.Context, cfg *config.Config) error {
+	for _, cl := range cfg.Fabric.Clusters {
+		for _, name := range cfg.Fabric.Registry.Push { // [flowplane mesh cni dispatch-apiserver dispatch-controller dispatch-broker]
+			ref := "ghcr.io/trevex/ectobase/" + name + ":dev" // the local docker tag from make image-*
+			if err := exec.Run(ctx, "kind", "load", "docker-image", "--name", cl.Name, ref); err != nil {
+				return fmt.Errorf("kind load %s into cluster %s (build them first: make lab-app-images): %w", ref, cl.Name, err)
+			}
+		}
+	}
 	return nil
 }
 

@@ -30,6 +30,7 @@ func curlStatus(ctx context.Context, container, url string) (string, error) {
 // serving over the fabric from a compute node: /v2/ returns 200, and a pushed
 // image manifest (flowplane:dev) is present (200).
 func TestRegistryMirrorServes(t *testing.T) {
+	t.Skip("P4 drops the in-fabric registry mirror for image delivery; app images are sideloaded via kind load, upstreams pull direct. Re-evaluate if the mirror return-path is fixed.")
 	cfg := loadConfig(t)
 	requireFabricUp(t, cfg)
 	ctx := context.Background()
