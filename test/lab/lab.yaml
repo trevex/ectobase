@@ -7,6 +7,12 @@ images:
   flowplane: ghcr.io/trevex/ectobase/flowplane:dev
   tayga:    ghcr.io/trevex/ectobase/tayga:latest
   wan:      ghcr.io/trevex/ectobase/wan:latest
+  # Talos node image for the docker provisioner (P6 substrate). Mirrored from the
+  # tagged upstream release by `make image-talos-mirror` (pin: test/images/talos/
+  # versions.env). Like tayga/wan/frr, it is a host-side node/infra image, so it
+  # lives here but not in fabric.registry.push (that set is the locally-built :dev
+  # app images pushed into the in-fabric mirror).
+  talos:    ghcr.io/trevex/ectobase/talos:container
   registry: registry:2
   # frr: edges + switches, plus the ceph FRR sidecar. ceph: only when fabric.ceph.enabled: true.
   # Both pinned by digest (digest-pinned; third-party :latest tags roll — a fresh host would

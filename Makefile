@@ -131,6 +131,16 @@ image-talos: ## Build the lab Talos container image (rootfs from imager)
 	  bash scripts/extract-rootfs.sh amd64 && \
 	  docker build -f container/Dockerfile -t $(IMG_REPO)/talos:container .
 
+.PHONY: image-talos-mirror
+image-talos-mirror: ## Mirror the upstream Talos node image (docker pull + tag; no local rootfs build)
+	# P6 substrate: pull the tagged siderolabs release container image (the node
+	# image `talosctl cluster create --provisioner docker` runs) and tag it into
+	# the fabric namespace — the mirror alternative to `image-talos` (which rebuilds
+	# the rootfs from the imager). TALOS_VERSION is the single pin in versions.env.
+	cd test/images/talos && . ./versions.env && \
+	  docker pull ghcr.io/siderolabs/talos:$$TALOS_VERSION && \
+	  docker tag  ghcr.io/siderolabs/talos:$$TALOS_VERSION $(IMG_REPO)/talos:container
+
 .PHONY: image-wan
 image-wan: ## Build the lab WAN-sim (nft masquerade + ECMP return) image via nix
 	cd test/images/wan && nix build .#default && docker load -i result | tee /dev/stderr | grep -oE 'wan-simulator:latest' >/dev/null
