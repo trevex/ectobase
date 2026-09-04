@@ -4,13 +4,17 @@ use aya_ebpf::{
 };
 use flowplane_common::{
     Config, CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey,
-    IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbKey, LbValue, Local,
-    MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteLpmData,
+    IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbKey, LbValue,
+    Local, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteLpmData,
     RouteLpmData6, RouteValue, UnderlayValue, VipKey,
 };
 
 #[map]
 pub static INTERFACES: HashMap<IfaceKey, IfaceValue> = HashMap::pinned(1024, 0);
+/// IPv6 sibling of `INTERFACES`: overlay (VNI, IPv6) -> delivery info. Populated by the control
+/// plane alongside `INTERFACES`; the node-VTEP local-delivery demux reads it in a later step.
+#[map]
+pub static INTERFACES6: HashMap<IfaceKey6, IfaceValue> = HashMap::pinned(1024, 0);
 // Control-plane restart journal: interface_id -> (vni, ipv4/ipv6, device, underlay, tap). Written by
 // userspace on attach, removed on detach, and scanned on restart to rebuild in-memory bookkeeping +
 // re-attach guest programs. NEVER read by the datapath. Pinned so it survives an flowplane restart.

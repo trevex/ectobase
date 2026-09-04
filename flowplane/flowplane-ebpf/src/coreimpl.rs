@@ -1,8 +1,8 @@
 use aya_ebpf::{bindings::bpf_adj_room_mode::BPF_ADJ_ROOM_MAC, programs::TcContext};
 use flowplane_common::{
-    CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
-    MaglevKey, MeterState, NatKey, NatValue, PortMeta, RouteLpmData, RouteLpmData6, RouteValue,
-    UnderlayValue, VipKey,
+    CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceKey6,
+    IfaceValue, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, PortMeta,
+    RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue, VipKey,
 };
 use flowplane_core::maps::Maps;
 use flowplane_core::pkt::Pkt;
@@ -123,6 +123,22 @@ impl Maps for GlobalMaps {
     #[inline(always)]
     fn port_meta_get(&self, ifindex: u32) -> Option<PortMeta> {
         unsafe { crate::maps::PORT_META.get(&ifindex).copied() }
+    }
+    #[inline(always)]
+    fn ifaces_get(&self, vni: u32, ipv4: &[u8; 4]) -> Option<IfaceValue> {
+        unsafe {
+            crate::maps::INTERFACES
+                .get(&IfaceKey { vni, ipv4: *ipv4 })
+                .copied()
+        }
+    }
+    #[inline(always)]
+    fn ifaces6_get(&self, vni: u32, ipv6: &[u8; 16]) -> Option<IfaceValue> {
+        unsafe {
+            crate::maps::INTERFACES6
+                .get(&IfaceKey6 { vni, ipv6: *ipv6 })
+                .copied()
+        }
     }
 }
 

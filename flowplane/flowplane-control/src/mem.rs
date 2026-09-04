@@ -1,9 +1,9 @@
 //! In-memory `MapWriter` for testing `ControlCore` without CAP_BPF or a live map.
 use crate::writer::{CtFlushScope, MapWriter};
 use flowplane_common::{
-    DhcpConfig, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceMetaKey, IfaceMetaVal,
-    IfaceValue, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry,
-    PortMeta, RouteValue, UnderlayValue, VipKey,
+    DhcpConfig, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey,
+    IfaceMetaVal, IfaceValue, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatValue,
+    NeighborNatEntry, PortMeta, RouteValue, UnderlayValue, VipKey,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -27,6 +27,7 @@ pub struct MemMapWriter {
     // INTERFACE domain.
     pub ports: HashMap<u32, PortMeta>,
     pub ifaces: HashMap<IfaceKey, IfaceValue>,
+    pub ifaces6: HashMap<IfaceKey6, IfaceValue>,
     // IfaceMetaKey is only Copy/Clone (not Hash), so key the fake by the padded id array.
     pub iface_meta: HashMap<[u8; flowplane_common::IFACE_ID_MAX], IfaceMetaVal>,
     pub dhcp_meta_removed: Vec<u32>,
@@ -172,6 +173,17 @@ impl MapWriter for MemMapWriter {
     }
     fn ifaces_get(&self, k: &IfaceKey) -> Option<IfaceValue> {
         self.ifaces.get(k).copied()
+    }
+    fn ifaces6_upsert(&mut self, k: IfaceKey6, v: IfaceValue) -> anyhow::Result<()> {
+        self.ifaces6.insert(k, v);
+        Ok(())
+    }
+    fn ifaces6_remove(&mut self, k: IfaceKey6) -> anyhow::Result<()> {
+        self.ifaces6.remove(&k);
+        Ok(())
+    }
+    fn ifaces6_get(&self, k: &IfaceKey6) -> Option<IfaceValue> {
+        self.ifaces6.get(k).copied()
     }
     fn iface_meta_upsert(&mut self, k: IfaceMetaKey, v: IfaceMetaVal) -> anyhow::Result<()> {
         self.iface_meta.insert(k.id, v);

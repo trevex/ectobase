@@ -1,6 +1,6 @@
 use flowplane_common::{
-    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
-    MaglevKey, MeterState, NatKey, NatValue, PortMeta, RouteValue, UnderlayValue,
+    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceValue, LbKey,
+    LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, PortMeta, RouteValue, UnderlayValue,
 };
 
 /// Typed access to the datapath maps the core needs. eBPF impl wraps the `#[map]` statics
@@ -72,4 +72,12 @@ pub trait Maps {
     /// resolved (mechanism #2) — the caller cannot know the tap up front, so this can't be threaded
     /// in as a plain input; it is read here, keyed by the just-resolved `tap_ifindex`. `None` if unset.
     fn port_meta_get(&self, ifindex: u32) -> Option<PortMeta>;
+    /// Local-delivery demux by overlay (VNI, IPv4) (`INTERFACES` map). The v4 sibling of
+    /// [`Self::ifaces6_get`]; both back the node-VTEP local-delivery path added in a later step.
+    fn ifaces_get(&self, vni: u32, ipv4: &[u8; 4]) -> Option<IfaceValue>;
+    /// Local-delivery demux by overlay (VNI, IPv6) (`INTERFACES6` map). DEFAULT `None` so a backend
+    /// that has not populated the v6 map still compiles; the eBPF + sim backends override it.
+    fn ifaces6_get(&self, _vni: u32, _ipv6: &[u8; 16]) -> Option<IfaceValue> {
+        None
+    }
 }

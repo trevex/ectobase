@@ -1,9 +1,9 @@
 //! The control-plane map write surface. The eBPF `AyaWriter` (and the in-memory `MemMapWriter`
 //! used in tests) implement this; `ControlCore` programs maps only through it.
 use flowplane_common::{
-    DhcpConfig, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceMetaKey, IfaceMetaVal,
-    IfaceValue, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry,
-    PortMeta, RouteValue, UnderlayValue, VipKey,
+    DhcpConfig, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey,
+    IfaceMetaVal, IfaceValue, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatValue,
+    NeighborNatEntry, PortMeta, RouteValue, UnderlayValue, VipKey,
 };
 
 /// The set of conntrack entries a NAT teardown must invalidate; the eBPF writer flushes the
@@ -70,6 +70,10 @@ pub trait MapWriter {
     fn ifaces_upsert(&mut self, key: IfaceKey, val: IfaceValue) -> anyhow::Result<()>;
     fn ifaces_remove(&mut self, key: IfaceKey) -> anyhow::Result<()>;
     fn ifaces_get(&self, key: &IfaceKey) -> Option<IfaceValue>;
+    /// IPv6 sibling of `ifaces_upsert` (`INTERFACES6`). Dual-written by `program_interface`.
+    fn ifaces6_upsert(&mut self, key: IfaceKey6, val: IfaceValue) -> anyhow::Result<()>;
+    fn ifaces6_remove(&mut self, key: IfaceKey6) -> anyhow::Result<()>;
+    fn ifaces6_get(&self, key: &IfaceKey6) -> Option<IfaceValue>;
     fn iface_meta_upsert(&mut self, key: IfaceMetaKey, val: IfaceMetaVal) -> anyhow::Result<()>;
     fn iface_meta_remove(&mut self, key: &IfaceMetaKey) -> anyhow::Result<()>;
     fn dhcp_meta_remove(&mut self, ifindex: u32) -> anyhow::Result<()>;

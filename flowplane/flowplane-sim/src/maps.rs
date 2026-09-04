@@ -1,6 +1,7 @@
 use flowplane_common::{
-    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, LbKey, LbValue, Local,
-    MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteValue, UnderlayValue,
+    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceValue, LbKey,
+    LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta,
+    RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
 use std::collections::{HashMap, HashSet};
@@ -62,6 +63,10 @@ pub struct MemMaps {
     /// overlay IPv6. Read by [`Maps::port_meta_get`] — used on the CT_F_NAT64 ingress-return
     /// dispatch to source the guest's overlay IPv6 once the delivery tap is resolved.
     pub port_meta: HashMap<u32, PortMeta>,
+    /// Local-delivery demux by overlay (VNI, IPv4) (`INTERFACES` map). Seed with [`Self::add_iface`].
+    pub ifaces: HashMap<(u32, [u8; 4]), IfaceValue>,
+    /// Local-delivery demux by overlay (VNI, IPv6) (`INTERFACES6` map). Seed with [`Self::add_iface6`].
+    pub ifaces6: HashMap<(u32, [u8; 16]), IfaceValue>,
 }
 
 /// True if the first `prefix` bits of `a` and `b` (big-endian byte order) are equal.
@@ -96,6 +101,14 @@ impl MemMaps {
             prefix: 128,
             value,
         });
+    }
+    /// Seed an `INTERFACES` local-delivery entry for overlay `(vni, ipv4)`.
+    pub fn add_iface(&mut self, vni: u32, ipv4: [u8; 4], value: IfaceValue) {
+        self.ifaces.insert((vni, ipv4), value);
+    }
+    /// Seed an `INTERFACES6` local-delivery entry for overlay `(vni, ipv6)`.
+    pub fn add_iface6(&mut self, vni: u32, ipv6: [u8; 16], value: IfaceValue) {
+        self.ifaces6.insert((vni, ipv6), value);
     }
 }
 
@@ -191,6 +204,12 @@ impl Maps for MemMaps {
     }
     fn port_meta_get(&self, ifindex: u32) -> Option<PortMeta> {
         self.port_meta.get(&ifindex).copied()
+    }
+    fn ifaces_get(&self, vni: u32, ipv4: &[u8; 4]) -> Option<IfaceValue> {
+        self.ifaces.get(&(vni, *ipv4)).copied()
+    }
+    fn ifaces6_get(&self, vni: u32, ipv6: &[u8; 16]) -> Option<IfaceValue> {
+        self.ifaces6.get(&(vni, *ipv6)).copied()
     }
 }
 

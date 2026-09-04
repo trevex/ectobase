@@ -43,6 +43,15 @@ pub struct IfaceKey {
     pub ipv4: [u8; 4],
 }
 
+/// Key for the `interfaces6` map: an overlay (VNI, IPv6) tuple. The v6 sibling of [`IfaceKey`];
+/// shares the same [`IfaceValue`]. Used by the node-VTEP local-delivery demux.
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub struct IfaceKey6 {
+    pub vni: u32,
+    pub ipv6: [u8; 16],
+}
+
 /// Value for the `interfaces` map: how to reach/deliver to an overlay IP.
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
@@ -102,6 +111,12 @@ pub struct PortMeta {
 impl IfaceKey {
     pub fn new(vni: u32, ipv4: [u8; 4]) -> Self {
         Self { vni, ipv4 }
+    }
+}
+
+impl IfaceKey6 {
+    pub fn new(vni: u32, ipv6: [u8; 16]) -> Self {
+        Self { vni, ipv6 }
     }
 }
 
@@ -617,6 +632,7 @@ pub struct Config {
 mod user_impls {
     use super::*;
     unsafe impl aya::Pod for IfaceKey {}
+    unsafe impl aya::Pod for IfaceKey6 {}
     unsafe impl aya::Pod for IfaceValue {}
     unsafe impl aya::Pod for IfaceMetaKey {}
     unsafe impl aya::Pod for IfaceMetaVal {}
@@ -826,6 +842,18 @@ mod tests {
         let k = IfaceKey::new(100, [10, 0, 0, 5]);
         assert_eq!(k.vni, 100);
         assert_eq!(k.ipv4, [10, 0, 0, 5]);
+    }
+
+    #[test]
+    fn iface_key6_layout() {
+        // POD layout must be stable for sharing with eBPF: 4 (vni) + 16 (ipv6) = 20, align 4.
+        assert_eq!(offset_of!(IfaceKey6, vni), 0);
+        assert_eq!(offset_of!(IfaceKey6, ipv6), 4);
+        assert_eq!(size_of::<IfaceKey6>(), 4 + 16);
+        assert_eq!(align_of::<IfaceKey6>(), 4);
+        let k = IfaceKey6::new(100, [0x20; 16]);
+        assert_eq!(k.vni, 100);
+        assert_eq!(k.ipv6, [0x20; 16]);
     }
 
     #[test]

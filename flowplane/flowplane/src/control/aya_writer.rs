@@ -5,11 +5,11 @@ use parking_lot::Mutex;
 
 use crate::maps::{
     Conntrack, Conntrack6, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwMetaMap6, FwRules, FwRules6,
-    IfaceMetaMap, Interfaces, Lb, Maglev, Meter, Nat, NatIps, NeighborNat, NeighborNatCount,
-    PortMetaMap, Routes, Routes6, Underlay, Vips,
+    IfaceMetaMap, Interfaces, Interfaces6, Lb, Maglev, Meter, Nat, NatIps, NeighborNat,
+    NeighborNatCount, PortMetaMap, Routes, Routes6, Underlay, Vips,
 };
 use flowplane_common::{
-    CtKey, CtKey6, IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue, NatKey, NatValue,
+    CtKey, CtKey6, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, NatKey, NatValue,
     NeighborNatEntry, PortMeta, RouteValue, VipKey,
 };
 use flowplane_control::{CtFlushScope, MapWriter};
@@ -37,6 +37,7 @@ pub struct AyaWriter {
     // this, `AyaWriter` owns ALL config maps and `Inner` holds only device/loader fields + `core`.
     pub ports: PortMetaMap,
     pub ifaces: Interfaces,
+    pub ifaces6: Interfaces6,
     pub vips: Vips,
     pub meter: Meter,
     pub dhcp_config: DhcpConfigMap,
@@ -237,6 +238,15 @@ impl MapWriter for AyaWriter {
     }
     fn ifaces_get(&self, k: &IfaceKey) -> Option<IfaceValue> {
         self.ifaces.get(k)
+    }
+    fn ifaces6_upsert(&mut self, k: IfaceKey6, v: IfaceValue) -> anyhow::Result<()> {
+        self.ifaces6.upsert(k, v)
+    }
+    fn ifaces6_remove(&mut self, k: IfaceKey6) -> anyhow::Result<()> {
+        self.ifaces6.remove(k)
+    }
+    fn ifaces6_get(&self, k: &IfaceKey6) -> Option<IfaceValue> {
+        self.ifaces6.get(k)
     }
     fn iface_meta_upsert(&mut self, k: IfaceMetaKey, v: IfaceMetaVal) -> anyhow::Result<()> {
         self.iface_meta.upsert(k, v)

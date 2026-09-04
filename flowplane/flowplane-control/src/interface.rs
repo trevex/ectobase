@@ -14,8 +14,8 @@
 
 use crate::{ControlCore, MapWriter};
 use flowplane_common::{
-    DhcpConfig, IfaceKey, IfaceMetaKey, IfaceMetaVal, IfaceValue, MeterState, NatKey, PortMeta,
-    RouteValue, VipKey, IFACE_DEV_MAX,
+    DhcpConfig, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, MeterState, NatKey,
+    PortMeta, RouteValue, VipKey, IFACE_DEV_MAX,
 };
 
 /// Per-interface addressing + rate-limit parameters for `program_interface`. The agnostic subset of
@@ -145,6 +145,20 @@ impl<W: MapWriter> ControlCore<W> {
         if ipv4 != [0u8; 4] {
             self.w.ifaces_upsert(
                 IfaceKey::new(vni, ipv4),
+                IfaceValue {
+                    tap_ifindex: tap,
+                    is_local: 1,
+                    underlay_ipv6,
+                    guest_mac: effective_mac,
+                    _pad: [0; 2],
+                },
+            )?;
+        }
+        // Additive dual-write of the v6 sibling map (`INTERFACES6`). Nothing reads it yet; the
+        // node-VTEP local-delivery demux switches to it in a later step.
+        if ipv6 != [0u8; 16] {
+            self.w.ifaces6_upsert(
+                IfaceKey6::new(vni, ipv6),
                 IfaceValue {
                     tap_ifindex: tap,
                     is_local: 1,

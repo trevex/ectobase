@@ -10,8 +10,8 @@ use flowplane_common::{IfaceKey, IfaceMetaKey, IfaceMetaVal, Local, IFACE_DEV_MA
 use crate::loader;
 use crate::maps::{
     Conntrack, Conntrack6, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwMetaMap6, FwRules, FwRules6,
-    GeneveIfindexMap, IfaceMetaMap, Interfaces, Lb, LocalMap, Maglev, Meter, Nat, NatIps,
-    NeighborNat, NeighborNatCount, PortMetaMap, Routes, Routes6, Vips,
+    GeneveIfindexMap, IfaceMetaMap, Interfaces, Interfaces6, Lb, LocalMap, Maglev, Meter, Nat,
+    NatIps, NeighborNat, NeighborNatCount, PortMetaMap, Routes, Routes6, Vips,
 };
 // `Nat`, `NatIps`, `NeighborNat`, `NeighborNatCount` are still opened in `bring_up`/the test ctor,
 // then moved into `AyaWriter` (they no longer live in `Inner`).
@@ -216,6 +216,7 @@ impl Control {
         })?;
         let ports = PortMetaMap::open(&mut ebpf)?;
         let ifaces = Interfaces::open(&mut ebpf)?;
+        let ifaces6 = Interfaces6::open(&mut ebpf)?;
         let routes = Routes::open(&mut ebpf)?;
         let routes6 = Routes6::open(&mut ebpf)?;
         let vips = Vips::open(&mut ebpf)?;
@@ -254,6 +255,7 @@ impl Control {
             fw_meta6,
             ports,
             ifaces,
+            ifaces6,
             vips,
             meter,
             dhcp_config,

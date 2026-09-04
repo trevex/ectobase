@@ -6,9 +6,9 @@ use aya::maps::{
 use aya::Ebpf;
 use flowplane_common::{
     CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey,
-    IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbKey, LbValue, Local, MaglevKey,
-    MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteLpmData, RouteLpmData6,
-    RouteValue, UnderlayValue, VipKey,
+    IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbKey, LbValue, Local,
+    MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteLpmData,
+    RouteLpmData6, RouteValue, UnderlayValue, VipKey,
 };
 
 /// Typed handle over the `INTERFACES` BPF map (overlay (VNI, IPv4) -> delivery info).
@@ -44,6 +44,43 @@ impl Interfaces {
     /// Snapshot every (key, value) — used at restart to rebuild in-memory bookkeeping from the
     /// surviving pinned map. Mirrors `Conntrack::entries`. (Consumed by the restart path.)
     pub(crate) fn entries(&self) -> Vec<(IfaceKey, IfaceValue)> {
+        self.map.iter().filter_map(|r| r.ok()).collect()
+    }
+}
+
+/// Typed handle over the `INTERFACES6` BPF map (overlay (VNI, IPv6) -> delivery info). IPv6 sibling
+/// of [`Interfaces`]; dual-written by the control plane alongside the v4 map.
+pub struct Interfaces6 {
+    map: HashMap<MapData, IfaceKey6, IfaceValue>,
+}
+
+impl Interfaces6 {
+    /// Take ownership of the `INTERFACES6` map from a loaded eBPF object.
+    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
+        let map = HashMap::try_from(
+            ebpf.take_map("INTERFACES6")
+                .context("INTERFACES6 map missing")?,
+        )?;
+        Ok(Self { map })
+    }
+
+    pub fn upsert(&mut self, key: IfaceKey6, val: IfaceValue) -> anyhow::Result<()> {
+        self.map.insert(key, val, 0).context("insert iface6")
+    }
+
+    pub fn remove(&mut self, key: IfaceKey6) -> anyhow::Result<()> {
+        self.map.remove(&key).context("remove iface6")
+    }
+
+    /// Read-back accessor (parity with [`Interfaces::get`]); not used by the daemon.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn get(&self, key: &IfaceKey6) -> Option<IfaceValue> {
+        self.map.get(key, 0).ok()
+    }
+
+    /// Snapshot every (key, value) — parity with [`Interfaces::entries`].
+    #[allow(dead_code)]
+    pub(crate) fn entries(&self) -> Vec<(IfaceKey6, IfaceValue)> {
         self.map.iter().filter_map(|r| r.ok()).collect()
     }
 }
