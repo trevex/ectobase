@@ -7,22 +7,22 @@ import (
 	"os"
 	"time"
 
-	"github.com/trevex/ectobase/test/lab/internal/clab"
 	"github.com/trevex/ectobase/test/lab/internal/config"
 	"github.com/trevex/ectobase/test/lab/internal/exec"
 	"github.com/trevex/ectobase/test/lab/internal/wait"
 )
 
-// Bootstrap brings up a container-mode Talos control plane for one cluster: it
-// resolves each node's clab-mgmt address, points talosctl at them, waits for the
-// Talos API, bootstraps etcd once (on the single first control plane), and writes
-// the kubeconfig once the API serves.
+// Bootstrap brings up a container-mode Talos control plane for one cluster: it points
+// talosctl at each node's fabric /128 (dummy0 VTEP), waits for the Talos API, bootstraps
+// etcd once (on the single first control plane), and writes the kubeconfig once the API serves.
 //
-// Reachability: bootstrap runs over clab-mgmt (eth0), NOT the fabric — talosctl
-// reaches the Talos API on each node's mgmt IP. At this point the anycast API VIP
-// and the nodes' GoBGP peerings have not converged (the api-vip static pod only
-// claims the VIP once the local apiserver is healthy, which needs etcd bootstrapped
-// first), so the mgmt net is the only reachable control channel during bring-up.
+// Reachability: bootstrap runs over the FABRIC, not a mgmt net — the Talos nodes have no
+// clab-mgmt interface (network-mode: none), so their only interfaces are the two fabric
+// uplinks + dummy0 and the sole path to their Talos API is the node's GoBGP-advertised /128,
+// reached from the host via the jump-veth. talosctl therefore waits out Talos boot + GoBGP
+// convergence before the API answers on the /128. The /128 is a cert SAN (talos.Gen
+// --additional-sans), so TLS to it validates. This makes node egress fabric-only by
+// construction (no mgmt default to leak past the fabric RA/BGP default).
 //
 // Nodes are NOT Ready when this returns: the cluster CNI is "none" (flannel
 // stripped), so the caller installs Cilium and then waits for Ready. talosconfig
@@ -40,17 +40,12 @@ func Bootstrap(ctx context.Context, cfg *config.Config, cluster, talosconfig, ku
 		return fmt.Errorf("no talosconfig at %s — render first: %w", talosconfig, err)
 	}
 
-	// Resolve every node's clab-mgmt address as a talosctl endpoint; the first is the
-	// single control plane etcd is bootstrapped on (the others join as etcd learners).
-	mgmtNet := cfg.Name + "-mgmt"
+	// Each node's fabric /128 (dummy0 VTEP, GoBGP-advertised) is a talosctl endpoint; the first
+	// is the single control plane etcd is bootstrapped on (the others join as etcd learners). The
+	// host reaches these over the fabric (jump-veth) once GoBGP advertises them — no mgmt net.
 	endpoints := make([]string, 0, len(dc.Nodes))
 	for _, n := range dc.Nodes {
-		container := clab.ContainerName(cfg.Name, n.Name())
-		ip, err := clab.MgmtIP(ctx, container, mgmtNet)
-		if err != nil {
-			return fmt.Errorf("resolve mgmt IP for %s: %w", container, err)
-		}
-		endpoints = append(endpoints, ip)
+		endpoints = append(endpoints, n.IdentityAddr)
 	}
 	first := endpoints[0]
 
@@ -62,12 +57,14 @@ func Bootstrap(ctx context.Context, cfg *config.Config, cluster, talosconfig, ku
 		return err
 	}
 
-	slog.Info("waiting for the Talos API", "cluster", cluster, "endpoint", first)
-	if err := wait.WaitFor(ctx, 2*time.Minute, 2*time.Second, func() (bool, error) {
+	// Over the fabric the API only answers after Talos boots + GoBGP peers + the /128 propagates to
+	// the host (node -> ToR -> edge -> jump-veth), so wait more generously than the old mgmt path.
+	slog.Info("waiting for the Talos API over the fabric", "cluster", cluster, "endpoint", first)
+	if err := wait.WaitFor(ctx, 5*time.Minute, 3*time.Second, func() (bool, error) {
 		err := exec.Run(ctx, "talosctl", tcmd("-n", first, "version")...)
 		return err == nil, err
 	}); err != nil {
-		return fmt.Errorf("talos API unreachable at %s (lab up? mgmt up?): %w", first, err)
+		return fmt.Errorf("talos API unreachable at %s over the fabric (lab up? GoBGP converged? jump-veth route present?): %w", first, err)
 	}
 
 	slog.Info("bootstrapping etcd", "cluster", cluster, "node", first)

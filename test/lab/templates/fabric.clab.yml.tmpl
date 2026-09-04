@@ -84,14 +84,17 @@ topology:
     # SetupSharedFilesystems marks /var, /etc/cni and /run MS_SHARED, which needs them
     # to be real mount points, so bind per-node dirs from build/<name>/mounts/<node>/
     # (a bind is a mount point regardless of backing store, keeping /var off RAM), and
-    # bind the host kernel modules read-only for the kubelet. clab-mgmt stays attached
-    # (eth0) for bring-up, but hands out no IPv6 default of its own — the node's only
-    # default route is the BGP-learned ::/0 via the fabric uplinks once Talos' embedded
-    # GoBGP converges. ---
+    # bind the host kernel modules read-only for the kubelet. The nodes have NO clab-mgmt
+    # interface (network-mode: none): their only interfaces are the two fabric uplinks +
+    # dummy0, so the sole default route comes from the fabric (the ToRs' RA / BGP ::/0) —
+    # fabric-only egress by construction, no mgmt default to leak past it. talosctl
+    # bootstraps over the node's GoBGP-advertised /128, reached from the host via the
+    # jump-veth (see talos.Bootstrap), not a mgmt net. ---
 {{- range $n := .Nodes }}
     {{ $n.Name }}:
       kind: linux
       image: {{ index $.Images "talos" }}
+      network-mode: none
       env:
         PLATFORM: container
       env-files: [talos/{{ $n.Cluster }}/{{ $n.Name }}.env]
