@@ -5,45 +5,38 @@ package livetest
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-
 	labexec "github.com/trevex/ectobase/test/lab/internal/exec"
+
+	"github.com/stretchr/testify/require"
 )
 
-// TestRestartContinuity is the Go port of test/scenario-restart-continuity.sh: it
-// proves the flowplane graceful-restart ZERO-GAP guarantee on the kind fabric. A
-// continuous flow runs THROUGH the datapath of one compute node (k02) while that
-// node's flowplane container is crictl-stopped and kubelet-restarted, and the test
-// asserts three things (the unique fingerprint of adopt-and-repoint):
+// TestRestartContinuity proves the flowplane graceful-restart ZERO-GAP guarantee for a NETKIT (L3)
+// guest link — the P4/P6 datapath — on the Talos substrate. A continuous cross-cluster overlay flow
+// runs THROUGH one compute node (k02) while that node's flowplane DaemonSet pod is deleted and
+// rescheduled by the kubelet, and the test asserts the fingerprint of adopt-and-re-point:
 //
-//	[7a] packet loss across the restart boundary <= restartLossThresh (SKB fabric),
-//	[7b] the pinned uplink bpf-link (/sys/fs/bpf/flowplane/links/uplink-eth1) is
-//	     present BEFORE and AFTER the restart (held by bpffs, not the process),
-//	[7c] the eth1 XDP prog-id CHANGED (pre != post), proving the pinned link was
-//	     atomically re-pointed at the freshly-loaded program (bpf_link_update), NOT
-//	     a detach + re-attach (which would open a forwarding gap).
+//	[7a] packet loss across the restart boundary <= restartLossThresh (SKB/clab fabric),
+//	[7b] the pinned guest netkit link (/sys/fs/bpf/flowplane/links/guest-<hex(id)>) is present BEFORE
+//	     and AFTER the restart — held by the node's hostPath bpffs, not the flowplane process,
+//	[7c] the link's prog-id CHANGED (pre != post), proving `readopt_netkit_link` atomically re-pointed
+//	     the pinned netkit link at the freshly-loaded `tc_guest_tx` via bpf(BPF_LINK_UPDATE) — NOT a
+//	     detach + re-attach (which would open a forwarding gap, and on a live netkit link is unsafe).
 //
-// TRAFFIC SOURCE (choice + why): the bash pings the datapath virtual gateway
-// 169.254.0.1, on the premise that "the datapath ICMP-replies" to it. On THIS
-// datapath that premise is false — the guest tc egress program (tc_guest_tx) answers
-// ARP/ND/RA/DHCP for the gateway but has no IPv4 gateway echo responder, so an ICMP
-// echo to 169.254.0.1 is treated as an overlay packet to an unroutable dst and
-// dropped (verified live: 100% loss). Instead we use the REAL, proven cross-cluster
-// overlay flow: an endpoint on k02 pings an endpoint on k03. The REPLY traffic
-// returns to k02 encapsulated over eth1 and is decapped by k02's uplink XDP — the
-// exact pinned link this test exercises across the restart. k03's flowplane is NOT
-// restarted, so it keeps replying throughout. This gives a continuous flow whose
-// return path traverses the pinned uplink link (loss is a faithful measure of the
-// restart gap). We attach both endpoints directly over the dataplane gRPC (the
-// assertions are node-level either way, and a tight continuous ping through a
+// TRAFFIC: an endpoint on k02 pings an endpoint on k03 over the overlay. The k02 endpoint is a netkit
+// L3 guest (Auto device-type resolves to netkit on the Talos kernel), so its egress rides the pinned
+// netkit link this test exercises across the restart. k03's flowplane is NOT restarted, so it keeps
+// replying throughout — a continuous flow whose loss is a faithful measure of the restart gap. Both
+// endpoints are attached directly over the dataplane gRPC (a tight continuous ping through a
 // gRPC-attached endpoint is more reliable than the CNI-pod path for a ~12 s window).
 func TestRestartContinuity(t *testing.T) {
 	cfg := loadConfig(t)
@@ -54,7 +47,7 @@ func TestRestartContinuity(t *testing.T) {
 	if len(nodes) < 2 {
 		t.Skip("need >=2 compute nodes across clusters for a cross-cluster overlay flow")
 	}
-	// Distinct clusters: the return path must traverse the restarting node's uplink.
+	// Distinct clusters: the return path must traverse the restarting node, and k03 must keep replying.
 	src, dst := nodes[0], nodes[1]
 	if src.Cluster == dst.Cluster {
 		t.Skip("need the two endpoints in different clusters")
@@ -62,20 +55,21 @@ func TestRestartContinuity(t *testing.T) {
 	srcNode := nodeContainer(cfg, src)
 
 	const (
-		srcID = "rcont"       // endpoint on the restarting node (k02)
-		dstID = "rcont-peer"  // peer endpoint on the other node (k03)
-		srcIP = "10.0.0.60"   // distinct from other tests
-		dstIP = "10.0.0.61"   // distinct from other tests
+		srcID  = "rcont"      // endpoint on the restarting node (k02)
+		dstID  = "rcont-peer" // peer endpoint on the other node (k03)
+		srcIP  = "10.0.0.60"
+		dstIP  = "10.0.0.61"
 		srcMAC = "52:54:00:00:00:60"
 		dstMAC = "52:54:00:00:00:61"
-		uplinkIface   = "eth1"
-		uplinkPinPath = "/sys/fs/bpf/flowplane/links/uplink-eth1"
-		pingCount     = 60  // 60 * 0.2s = ~12 s window
-		pingInterval  = "0.2"
-		// SKB fabric threshold: kept at the bash value (kind veths are SKB/MTU-1500,
-		// same as clab). The restart gap is bounded by the container stop+adopt window.
+		pingCount    = 60 // 60 * 0.2s = ~12 s window
+		pingInterval = "0.2"
+		// SKB fabric threshold: the clab uplinks are SKB/MTU-1500. The restart gap is bounded by the
+		// pod stop+reschedule+adopt window; the pinned link keeps the datapath live across it.
 		restartLossThresh = 15
 	)
+	// The pinned guest link on the restarting node — `guest-<hex(interface_id)>` under the DS bpffs
+	// (a hostPath mount, so the pin survives the pod restart). Matches loader::link_pin_path naming.
+	guestPin := "/sys/fs/bpf/flowplane/links/guest-" + hex.EncodeToString([]byte(srcID))
 
 	// --- attach both endpoints (dpservice-style: /32 + 169.254.0.1 gateway) ---
 	ulSrc := attachEndpoint(t, ctx, cfg, src, srcID, srcIP, srcMAC)
@@ -83,12 +77,9 @@ func TestRestartContinuity(t *testing.T) {
 	require.NotEmpty(t, ulSrc, "src endpoint underlay")
 	require.NotEmpty(t, ulDst, "dst endpoint underlay")
 
-	// These endpoints are attached directly over the dataplane gRPC (not compiled
-	// from a dispatch-side NIC), so they inherit the deny-by-default firewall posture and
-	// would drop all overlay traffic. Program an any/any Allow on both directions of
-	// both endpoints so the request egresses the src, ingresses the dst, and the
-	// reply returns through the restarting node's uplink. (Verified: without these,
-	// 100% loss; with them, 0% loss.)
+	// gRPC-attached endpoints inherit the deny-by-default firewall; open any/any both directions on
+	// both so the request egresses src, ingresses dst, and the reply returns through the restarting
+	// node. (Verified in P4: without these, 100% loss; with them, 0%.)
 	allowAny(t, ctx, srcNode, srcID)
 	allowAny(t, ctx, nodeContainer(cfg, dst), dstID)
 	t.Cleanup(func() {
@@ -96,29 +87,32 @@ func TestRestartContinuity(t *testing.T) {
 		_, _ = dataplaneGRPC(t, ctx, nodeContainer(cfg, dst), "DetachInterface", fmt.Sprintf(`{"interface_id":%q}`, dstID))
 	})
 
-	// The reflector needs a beat to propagate both /128s + program the peer routes.
-	// Assert the flow works BEFORE we touch anything (else a 100%-loss run would
-	// falsely "pass" 7a's threshold with sent==received==0 — guard against that).
+	// The reflector needs a beat to propagate both /128s + program the peer routes. Assert the flow
+	// works BEFORE we touch anything (else a 100%-loss run would falsely "pass" 7a with sent==recv==0).
 	eventually(t, 90*time.Second, 5*time.Second, func() error {
 		return endpointPing(ctx, cfg, src, srcID, dstIP)
 	})
 
-	// --- [PRE] record uplink prog-id + pin presence on the restarting node ---
-	progPre, err := uplinkProgID(ctx, srcNode, uplinkIface)
-	require.NoError(t, err, "read pre-restart uplink prog-id")
-	require.NotZero(t, progPre, "no XDP program on %s before restart — datapath not loaded?", uplinkIface)
-	pinPre := pinExists(ctx, srcNode, uplinkPinPath)
-	require.True(t, pinPre, "uplink link pin %s missing PRE — link-pinning not enabled on the DS?", uplinkPinPath)
-
-	cidOld, err := flowplaneContainerID(ctx, srcNode)
+	// The clab node container does NOT restart (only the flowplane POD inside it does), so its host
+	// PID is stable — the guest netns and the node bpffs pins are reachable through /proc/<pid>/root
+	// throughout.
+	nodePID, err := dockerPID(ctx, srcNode)
 	require.NoError(t, err)
-	require.NotEmpty(t, cidOld, "no running flowplane container on %s", srcNode)
-	t.Logf("PRE: uplink %s prog-id=%d pin=%v flowplane=%s", uplinkIface, progPre, pinPre, cidOld)
+
+	// --- [PRE] record the guest netkit link's prog-id + pin presence on the restarting node ---
+	progPre, err := linkProgID(ctx, nodePID, guestPin)
+	require.NoError(t, err, "read pre-restart guest link prog-id")
+	require.NotZero(t, progPre, "no prog on the pinned guest netkit link %s before restart — datapath not loaded?", guestPin)
+	pinPre := hostPinExists(nodePID, guestPin)
+	require.True(t, pinPre, "guest link pin %s missing PRE — link-pinning not enabled on the DS?", guestPin)
+
+	oldPod, err := flowplanePod(ctx, cfg, src.Cluster)
+	require.NoError(t, err)
+	require.NotEmpty(t, oldPod, "no flowplane pod on %s", src.Cluster)
+	t.Logf("PRE: guest link %s prog-id=%d pin=%v flowplane pod=%s", guestPin, progPre, pinPre, oldPod)
 
 	// --- [3] start the continuous flow in the background (src -> dst overlay) ---
-	pid, err := dockerPID(ctx, srcNode)
-	require.NoError(t, err)
-	ns := fmt.Sprintf("/proc/%s/root/run/netns/%s", pid, srcID)
+	ns := fmt.Sprintf("/proc/%s/root/run/netns/%s", nodePID, srcID)
 	pingCmd := labexec.SudoCmd(ctx, "nsenter", "--net="+ns,
 		"ping", "-i", pingInterval, "-c", strconv.Itoa(pingCount), "-W", "1", dstIP)
 	var pingOut bytes.Buffer
@@ -126,31 +120,32 @@ func TestRestartContinuity(t *testing.T) {
 	pingCmd.Stderr = &pingOut
 	require.NoError(t, pingCmd.Start(), "start continuous ping")
 
-	// Head-start: let a few probes complete before killing the container. This is a deliberate
-	// fixed lead-in, not a readiness wait — pingOut is written concurrently by the running ping,
-	// so polling it here would race the writer. 1s ~= a handful of probes at pingInterval.
+	// Head-start: let a few probes complete before the restart. Deliberate fixed lead-in, not a
+	// readiness wait (pingOut is written concurrently, so polling it here would race the writer).
 	time.Sleep(1 * time.Second)
 
-	// --- [4] crictl stop the flowplane container mid-flow ---
-	t.Logf("crictl stop %s (mid-flow) — kubelet restarts + adopts the pinned link", cidOld)
-	_, err = nodeExec(ctx, srcNode, "crictl", "stop", cidOld)
-	require.NoError(t, err, "crictl stop %s", cidOld)
+	// --- [4] delete the flowplane DS pod mid-flow. The DaemonSet immediately reschedules a new pod on
+	//     the SAME node (Talos-compatible restart; crictl is unavailable on the shell-less node). The
+	//     pinned link keeps the netkit datapath live across the gap; the new pod adopts + re-points it.
+	t.Logf("delete flowplane pod %s (mid-flow) — DS reschedules + adopts the pinned netkit link", oldPod)
+	_, err = kubectl(ctx, cfg, src.Cluster, "-n", "ectobase-system", "delete", "pod", oldPod, "--wait=false")
+	require.NoError(t, err, "delete flowplane pod %s", oldPod)
 
-	// --- [5] wait for a NEW container that logged the atomic adopt re-point ---
-	var cidNew string
-	eventually(t, 100*time.Second, 2*time.Second, func() error {
-		cid, err := flowplaneContainerID(ctx, srcNode)
-		if err != nil || cid == "" || cid == cidOld {
-			return fmt.Errorf("new flowplane container not up yet (cur=%q old=%q)", cid, cidOld)
+	// --- [5] wait for a NEW flowplane pod that logged the netkit adopt re-point ---
+	var newPod string
+	eventually(t, 120*time.Second, 3*time.Second, func() error {
+		p, err := flowplanePod(ctx, cfg, src.Cluster)
+		if err != nil || p == "" || p == oldPod {
+			return fmt.Errorf("new flowplane pod not up yet (cur=%q old=%q)", p, oldPod)
 		}
-		logs, _ := nodeExec(ctx, srcNode, "crictl", "logs", cid)
+		logs, _ := kubectl(ctx, cfg, src.Cluster, "-n", "ectobase-system", "logs", p)
 		if !strings.Contains(logs, "adopt: re-pointed pinned link") {
-			return fmt.Errorf("new container %s has not logged the adopt re-point yet", cid)
+			return fmt.Errorf("new pod %s has not logged the adopt re-point yet", p)
 		}
-		cidNew = cid
+		newPod = p
 		return nil
 	})
-	t.Logf("restarted: %s -> %s (logged adopt re-point)", cidOld, cidNew)
+	t.Logf("restarted: %s -> %s (logged adopt re-point)", oldPod, newPod)
 
 	// --- [5b] wait for the ping to finish; parse sent/received ---
 	waitErr := pingCmd.Wait() // ping exits non-zero on any loss — expected, not fatal
@@ -162,25 +157,26 @@ func TestRestartContinuity(t *testing.T) {
 	}
 
 	// --- [6] record POST state ---
-	progPost, err := uplinkProgID(ctx, srcNode, uplinkIface)
-	require.NoError(t, err, "read post-restart uplink prog-id")
-	pinPost := pinExists(ctx, srcNode, uplinkPinPath)
-	t.Logf("POST: uplink %s prog-id=%d pin=%v flowplane=%s", uplinkIface, progPost, pinPost, cidNew)
+	progPost, err := linkProgID(ctx, nodePID, guestPin)
+	require.NoError(t, err, "read post-restart guest link prog-id")
+	pinPost := hostPinExists(nodePID, guestPin)
+	t.Logf("POST: guest link %s prog-id=%d pin=%v flowplane pod=%s", guestPin, progPost, pinPost, newPod)
 
 	// --- [7] assertions ---
 	// 7a. loss within threshold (and non-degenerate: sent>0).
 	require.Greater(t, sent, 0, "ping sent 0 packets — endpoint or routing setup failed")
 	require.LessOrEqualf(t, lost, restartLossThresh,
-		"packet loss %d/%d exceeds threshold %d (%d%%) — a REAL forwarding gap across the restart",
+		"packet loss %d/%d exceeds threshold %d (%d%%) — a REAL forwarding gap across the netkit restart",
 		lost, sent, restartLossThresh, lost*100/sent)
-	// 7b. pinned link survived the crictl stop.
-	require.Truef(t, pinPost, "bpf-link pin %s VANISHED across the restart — link was not persisted", uplinkPinPath)
-	// 7c. prog-id changed => atomic re-point, not the same program (and not a drop).
-	require.NotZero(t, progPost, "no XDP program on %s after restart — datapath dropped entirely", uplinkIface)
+	// 7b. pinned netkit link survived the pod delete.
+	require.Truef(t, pinPost, "guest netkit link pin %s VANISHED across the restart — link was not persisted", guestPin)
+	// 7c. prog-id changed => atomic BPF_LINK_UPDATE re-point (readopt_netkit_link), not the same
+	//     program (and not a drop / detach+reattach).
+	require.NotZero(t, progPost, "no prog on the guest netkit link after restart — datapath dropped entirely")
 	require.NotEqualf(t, progPre, progPost,
-		"uplink prog-id did NOT change (%d) — the link was not re-pointed (detach/re-attach or stale)", progPre)
+		"guest netkit link prog-id did NOT change (%d) — the pinned link was not re-pointed (readopt_netkit_link didn't run, or a detach+reattach happened)", progPre)
 
-	t.Logf("graceful-restart zero-drop continuity: loss=%d/%d pin=survived(%v->%v) prog-id=%d->%d (atomic re-point)",
+	t.Logf("netkit graceful-restart zero-drop continuity: loss=%d/%d pin=survived(%v->%v) prog-id=%d->%d (atomic BPF_LINK_UPDATE re-point)",
 		lost, sent, pinPre, pinPost, progPre, progPost)
 }
 
@@ -199,54 +195,44 @@ func allowAny(t *testing.T, ctx context.Context, container, id string) {
 	}
 }
 
-// uplinkProgID returns the XDP prog-id attached to iface in the node's network
-// namespace, via the nix bpftool (v7.6.0) run under nsenter — the AUTHORITATIVE
-// check (the in-container bpftool is too old to render XDP prog-ids reliably).
-// Returns 0 if no XDP program is attached.
-func uplinkProgID(ctx context.Context, container, iface string) (int, error) {
-	out, err := nodeNetnsExec(ctx, container, "bpftool", "-j", "net", "show", "dev", iface)
-	if err != nil {
-		return 0, fmt.Errorf("bpftool net show dev %s: %w\n%s", iface, err, out)
+// linkProgID returns the prog-id bound to the pinned bpf link at `pin` on the node's bpffs, read with
+// the HOST bpftool against the pin reached through /proc/<nodePID>/root (bpf links are kernel-global;
+// the pin is a node hostPath). A bpf_link_update re-point changes this prog-id. Returns 0 on absent pin.
+func linkProgID(ctx context.Context, nodePID, pin string) (int, error) {
+	hostPin := fmt.Sprintf("/proc/%s/root%s", nodePID, pin)
+	out, err := labexec.SudoOutput(ctx, "bpftool", "-j", "link", "show", "pinned", hostPin)
+	// bpftool reliably emits the link JSON on stdout but can still exit non-zero (255) when the pin is
+	// opened through a /proc/<pid>/root path (a libbpf teardown/feature-probe quirk), so parse the
+	// output regardless and only surface the exec error if no prog_id could be extracted. Output is a
+	// bare object `{"prog_id":N,...}` on current bpftool; tolerate an array form too.
+	trimmed := bytes.TrimSpace(out)
+	var obj struct {
+		ProgID int `json:"prog_id"`
 	}
-	// bpftool -j net show dev <iface> => [{"xdp":[{"devname":..,"id":N}], ...}]
+	if json.Unmarshal(trimmed, &obj) == nil && obj.ProgID != 0 {
+		return obj.ProgID, nil
+	}
 	var arr []struct {
-		XDP []struct {
-			ID int `json:"id"`
-		} `json:"xdp"`
+		ProgID int `json:"prog_id"`
 	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &arr); err != nil {
-		return 0, fmt.Errorf("parse bpftool json %q: %w", out, err)
-	}
-	for _, e := range arr {
-		for _, x := range e.XDP {
-			if x.ID != 0 {
-				return x.ID, nil
+	if json.Unmarshal(trimmed, &arr) == nil {
+		for _, e := range arr {
+			if e.ProgID != 0 {
+				return e.ProgID, nil
 			}
 		}
 	}
-	return 0, nil
-}
-
-// pinExists reports whether a bpffs path is present inside the node container.
-func pinExists(ctx context.Context, container, path string) bool {
-	_, err := nodeExec(ctx, container, "ls", path)
-	return err == nil
-}
-
-// flowplaneContainerID resolves the running flowplane crictl container id on the
-// node (empty if none). Uses `crictl ps --name flowplane -q`, filtered to the
-// running state (crictl -q emits one id per line).
-func flowplaneContainerID(ctx context.Context, container string) (string, error) {
-	out, err := nodeExec(ctx, container, "crictl", "ps", "--name", "flowplane", "--state", "Running", "-q")
 	if err != nil {
-		return "", err
+		return 0, fmt.Errorf("bpftool link show pinned %s: %w\n%s", hostPin, err, out)
 	}
-	for _, l := range strings.Split(strings.TrimSpace(out), "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			return l, nil
-		}
-	}
-	return "", nil
+	return 0, fmt.Errorf("no prog_id in bpftool json %q", out)
+}
+
+// hostPinExists reports whether a node bpffs pin is present, via /proc/<nodePID>/root (the test runs
+// as root, so it can stat the root-owned node bpffs).
+func hostPinExists(nodePID, pin string) bool {
+	_, err := os.Stat(fmt.Sprintf("/proc/%s/root%s", nodePID, pin))
+	return err == nil
 }
 
 var pingSentRe = regexp.MustCompile(`(\d+) packets transmitted, (\d+) received`)

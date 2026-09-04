@@ -5,7 +5,9 @@ package livetest
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -29,8 +31,15 @@ const (
 // TestNatEgressSmoke attaches a guest, programs egress SNAT (AddNatSource) + an
 // external NAT-eligible route (AddRoute external=true, nexthop=edgeNexthop) + an
 // egress-allow firewall rule, then injects a raw TCP frame from the guest netns and
-// proves SNAT fired by sniffing the IPIP-encapped frame on the node's fabric uplinks
-// and asserting the inner TCP source port is in [natPortMin, natPortMax].
+// proves SNAT fired by sniffing the encapped frame on the node's fabric uplinks and
+// asserting the inner TCP source port is in [natPortMin, natPortMax].
+//
+// SNAT rewrites the INNER packet (src IP -> nat_ip, src L4 port -> pooled port) in
+// forward_decision_v4 BEFORE the Geneve outer is built (flowplane-core nat::snat_egress),
+// so the on-wire frame is Eth·IPv6·UDP(6081)·Geneve·innerEth·innerIPv4·TCP. We sniff the
+// outer-IPv6 Geneve frame and extract the INNER TCP sport — reaching the inner header at
+// all requires the Geneve decode, so an inner match implicitly proves the encap. (The old
+// IPIP `--want-outer-ipv6-nh 4` check is gone: P2 moved the datapath to Geneve/UDP.)
 //
 // The edges are FRR NAT64 routers here, not flowplane, so this asserts the SNAT
 // REWRITE AT THE NODE UPLINK — not end-to-end internet (distinct from the node-level
@@ -67,16 +76,19 @@ func TestNatEgressSmoke(t *testing.T) {
 	addFwEgressAllow(t, ctx, container, natGuestID)
 
 	netprobe := buildStaticBin(t, "netprobe")
-	require.NoError(t, copyToNode(ctx, container, netprobe, "/netprobe"))
+	pid, err := dockerPID(ctx, container)
+	require.NoError(t, err)
 
+	// Sniff each node uplink (eth1/eth2 live in the node's netns) from the HOST via
+	// nsenter -n running the host netprobe binary in the node net ns; nsenter --net keeps
+	// the host mount ns, so the shell redirect writes each capture log to a HOST temp path.
 	sniff := func(iface string) (string, *exec.Cmd) {
-		logPath := "/snifflog-" + iface
+		logPath := filepath.Join(t.TempDir(), "snifflog-"+iface)
 		shCmd := fmt.Sprintf(
-			"/netprobe send-sniff --count 0 --rx-iface %s --rx-outer-ipv6 --rx-inner-ip-dst %s "+
-				"--rx-l4 tcp --want-outer-ipv6-nh 4 --extract inner-tcp-sport --sport-range %d-%d "+
-				"--timeout 12 > %s 2>&1",
-			iface, natExtDst, natPortMin, natPortMax, logPath)
-		c := labtexec.SudoCmd(ctx, "docker", "exec", container, "sh", "-c", shCmd)
+			"%s send-sniff --count 0 --rx-iface %s --rx-outer-ipv6 --rx-inner-ip-dst %s "+
+				"--rx-l4 tcp --extract inner-tcp-sport --sport-range %d-%d --timeout 12 > %s 2>&1",
+			netprobe, iface, natExtDst, natPortMin, natPortMax, logPath)
+		c := labtexec.SudoCmd(ctx, "nsenter", "-t", pid, "-n", "sh", "-c", shCmd)
 		_ = c.Start()
 		return logPath, c
 	}
@@ -88,7 +100,7 @@ func TestNatEgressSmoke(t *testing.T) {
 	// the correct primitive here (a missed head-start would lose the first packets).
 	time.Sleep(1500 * time.Millisecond)
 
-	sendArgs := []string{"/netprobe", "send", "--iface", natGuestID,
+	sendArgs := []string{netprobe, "send", "--iface", natGuestID,
 		"--eth-src", natGuestMAC, "--eth-dst", guestGWMAC,
 		"--ip-src", natGuestIP, "--ip-dst", natExtDst, "--l4", "tcp",
 		"--sport", "12345", "--dport", "80", "--count", "8", "--interval-ms", "200"}
@@ -103,8 +115,9 @@ func TestNatEgressSmoke(t *testing.T) {
 	go func() { defer wg.Done(); _ = c2.Wait() }()
 	wg.Wait()
 
-	l1, _ := nodeExec(ctx, container, "cat", log1)
-	l2, _ := nodeExec(ctx, container, "cat", log2)
+	l1b, _ := os.ReadFile(log1)
+	l2b, _ := os.ReadFile(log2)
+	l1, l2 := string(l1b), string(l2b)
 	t.Logf("send-sniff eth1:\n%s\nsend-sniff eth2:\n%s", strings.TrimSpace(l1), strings.TrimSpace(l2))
 
 	if !strings.Contains(l1, "OK:") && !strings.Contains(l2, "OK:") {

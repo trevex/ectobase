@@ -46,13 +46,13 @@ func TestDhcpLeaseSmoke(t *testing.T) {
 			fmt.Sprintf(`{"interface_id":%q}`, dhcpGuestID))
 	})
 
-	// Build the static tap-dhcp-probe and copy it to a ROOT path on the node.
+	// Build the static tap-dhcp-probe; nodeNetnsProbe nsenters this HOST binary into the
+	// guest netns (the Talos node is shell-less, so nothing is staged onto the node).
 	probe := buildStaticBin(t, "tap-dhcp-probe")
-	require.NoError(t, copyToNode(ctx, container, probe, "/tap-dhcp-probe"))
 
 	// DHCPv4: FATAL on wrong yiaddr.
-	v4Cmd := fmt.Sprintf("/tap-dhcp-probe --client-only --probe dhcp --iface %s --client-mac %s --expect-ip %s --timeout 6 2>&1",
-		dhcpGuestID, dhcpGuestMAC, dhcpGuestIP)
+	v4Cmd := fmt.Sprintf("%s --client-only --probe dhcp --iface %s --client-mac %s --expect-ip %s --timeout 6 2>&1",
+		probe, dhcpGuestID, dhcpGuestMAC, dhcpGuestIP)
 	v4Out, v4Err := nodeNetnsProbe(ctx, container, dhcpGuestID, "sh", "-c", v4Cmd)
 	t.Logf("DHCPv4 probe output:\n%s", strings.TrimSpace(v4Out))
 	require.NoError(t, v4Err, "DHCPv4 probe failed:\n%s", v4Out)
@@ -60,8 +60,8 @@ func TestDhcpLeaseSmoke(t *testing.T) {
 	t.Logf("DHCPv4 lease smoke PASS: yiaddr=%s", dhcpGuestIP)
 
 	// DHCPv6: PRIMARY CONFORMANCE. FATAL on missing ia_addr / echoed clientid / OK.
-	v6Cmd := fmt.Sprintf("/tap-dhcp-probe --client-only --probe dhcpv6 --iface %s --client-mac %s --guest6 %s --timeout 6 2>&1",
-		dhcpGuestID, dhcpGuestMAC, dhcpGuestv6)
+	v6Cmd := fmt.Sprintf("%s --client-only --probe dhcpv6 --iface %s --client-mac %s --guest6 %s --timeout 6 2>&1",
+		probe, dhcpGuestID, dhcpGuestMAC, dhcpGuestv6)
 	v6Out, v6Err := nodeNetnsProbe(ctx, container, dhcpGuestID, "sh", "-c", v6Cmd)
 	t.Logf("DHCPv6 probe output:\n%s", strings.TrimSpace(v6Out))
 	require.NoError(t, v6Err, "DHCPv6 probe FAILED; guest_ipv6 comes from AttachInterface requested_ips:\n%s", v6Out)

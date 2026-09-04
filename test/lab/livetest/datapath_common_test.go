@@ -102,24 +102,32 @@ func buildStaticBin(t *testing.T, pkg string) string {
 	return out
 }
 
-// copyToNode docker-cp's a host file into the kind node container at a ROOT path
-// (NOT /tmp — kind mounts /tmp as tmpfs and docker cp there is lost).
-func copyToNode(ctx context.Context, container, hostPath, nodePath string) error {
-	return labexec.Sudo(ctx, "docker", "cp", hostPath, container+":"+nodePath)
-}
-
-// nodeExec runs a command inside the kind node container via `sudo docker exec`.
+// nodeExec runs a command inside a container via `sudo docker exec`. It works on the
+// SHELL-FUL clab containers (the FRR switches/edges and the wan gateway — e.g. lb_test
+// programming a route on `wan`), but NOT on the compute Talos node containers, which are
+// shell-less: those are reached via nsenter (node/guest netns, host binaries) and the
+// flowplane pod instead. Do not use this against a compute node on the Talos substrate.
 func nodeExec(ctx context.Context, container string, args ...string) (string, error) {
 	full := append([]string{"docker", "exec", container}, args...)
 	out, err := labexec.SudoOutput(ctx, full...)
 	return string(out), err
 }
 
-// nodeNetnsProbe runs `docker exec <node> ip netns exec <id> <args...>` — the netns
-// created via the flowplane pod is visible on the node (shared /var/run/netns).
+// nodeNetnsProbe runs args in the guest netns <id> on the node, via nsenter from the
+// HOST into that netns. The Talos node is shell-less, so we run HOST binaries (nsenter
+// --net changes only the net namespace, not the mount namespace) in the guest netns —
+// the netns file is the node's /run/netns/<id> (created via the flowplane pod, which
+// hostPath-mounts the node's /run), reached through the node container's /proc/<pid>/root.
+// Binary paths in args must therefore be HOST paths.
 func nodeNetnsProbe(ctx context.Context, container, id string, args ...string) (string, error) {
-	full := append([]string{"ip", "netns", "exec", id}, args...)
-	return nodeExec(ctx, container, full...)
+	pid, err := dockerPID(ctx, container)
+	if err != nil {
+		return "", err
+	}
+	ns := fmt.Sprintf("/proc/%s/root/run/netns/%s", pid, id)
+	full := append([]string{"nsenter", "--net=" + ns}, args...)
+	out, err := labexec.SudoOutput(ctx, full...)
+	return string(out), err
 }
 
 // asJSON is a tiny helper to keep request-building readable in tests.

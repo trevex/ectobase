@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -87,13 +89,14 @@ func TestQoSGuestToGuest(t *testing.T) {
 		return endpointPing(ctx, cfg, nodeA, qosIDA, qosIPB)
 	})
 
-	// 4. Stage a static iperf3 into both nodes (ROOT path; kind /tmp is tmpfs).
+	// 4. Build the static iperf3 (host binary; nsenter runs it in the guest netns — the
+	//    Talos node is shell-less, so nothing is staged onto the node). The one-off
+	//    server writes its JSON to a HOST temp path (see qosUDPRun).
 	iperf3Path := buildIperf3Static(t)
-	require.NoError(t, copyToNode(ctx, containerA, iperf3Path, "/iperf3"))
-	require.NoError(t, copyToNode(ctx, containerB, iperf3Path, "/iperf3"))
+	jsonHost := filepath.Join(t.TempDir(), "g2g.json")
 
 	udpRun := func() (recvMbps, lossPct float64) {
-		return qosUDPRun(ctx, containerA, containerB, qosIDA, qosIDB, qosIPB)
+		return qosUDPRun(ctx, containerA, containerB, qosIDA, qosIDB, qosIPB, iperf3Path, jsonHost)
 	}
 	// bestOf3 runs the measurement up to 3 times and returns the run whose pass
 	// predicate holds; else the last run. Absorbs UDP-on-SKB scheduling noise
@@ -187,36 +190,42 @@ func configureQoS(t *testing.T, ctx context.Context, container, id string, egres
 // reads + parses B's JSON. Mirrors the bash udp_run (scenario lines 58-73):
 // the authoritative UDP server stats are end.sum_received (end.sum is malformed,
 // bytes=0). Returns (0,0) on any failure.
-func qosUDPRun(ctx context.Context, containerA, containerB, idA, idB, dstIP string) (float64, float64) {
-	// Start the one-off server in B's netns, backgrounded inside the node so the
-	// docker exec returns immediately; it self-exits after the single client run.
-	srvCmd := labexec.SudoCmd(ctx, "docker", "exec", containerB,
-		"ip", "netns", "exec", idB, "sh", "-c", "/iperf3 -s --one-off -J >/g2g.json 2>/dev/null")
+func qosUDPRun(ctx context.Context, containerA, containerB, idA, idB, dstIP, iperf3Host, jsonHost string) (float64, float64) {
+	// nsenter into B's guest netns from the HOST (the Talos node is shell-less) and start
+	// the one-off server backgrounded. nsenter --net keeps the host mount ns, so the host
+	// `sh` redirect writes the JSON to the HOST path jsonHost; the server self-exits after
+	// the single client run.
+	pidB, err := dockerPID(ctx, containerB)
+	if err != nil {
+		return 0, 0
+	}
+	nsB := fmt.Sprintf("/proc/%s/root/run/netns/%s", pidB, idB)
+	srvSh := fmt.Sprintf("%s -s --one-off -J >%s 2>/dev/null", iperf3Host, jsonHost)
+	srvCmd := labexec.SudoCmd(ctx, "nsenter", "--net="+nsB, "sh", "-c", srvSh)
 	if err := srvCmd.Start(); err != nil {
 		return 0, 0
 	}
 	// Wait for the one-off iperf3 server to bind its control socket (:5201) in B's netns
 	// before firing the client, instead of a blind sleep. Best-effort: falls through after
-	// the window if the bind can't be observed (e.g. no `ss` in the image), which is no worse
-	// than the old fixed wait.
+	// the window if the bind can't be observed, which is no worse than a fixed wait.
 	waitUpTo(5*time.Second, 100*time.Millisecond, func() bool {
-		out, err := nodeExec(ctx, containerB, "ip", "netns", "exec", idB, "ss", "-tlnH")
+		out, err := nodeNetnsProbe(ctx, containerB, idB, "ss", "-tlnH")
 		return err == nil && strings.Contains(out, ":5201")
 	})
 
 	// Fire the client A→B (offered rate above the cap, 1200B datagrams). Best-effort:
 	// iperf3 UDP may return non-zero even on a clean run; the server JSON is truth.
 	_, _ = nodeNetnsProbe(ctx, containerA, idA,
-		"/iperf3", "-u", "-b", fmt.Sprintf("%dM", qosOfferedM),
+		iperf3Host, "-u", "-b", fmt.Sprintf("%dM", qosOfferedM),
 		"-t", fmt.Sprintf("%d", qosIperfSec), "-l", "1200", "-c", dstIP)
 
 	_ = srvCmd.Wait() // server one-off exits when the client run completes
 
-	raw, err := nodeExec(ctx, containerB, "cat", "/g2g.json")
+	raw, err := os.ReadFile(jsonHost)
 	if err != nil {
 		return 0, 0
 	}
-	return parseIperf3Recv(raw)
+	return parseIperf3Recv(string(raw))
 }
 
 // parseIperf3Recv extracts end.sum_received.{bits_per_second,lost_percent} from an
