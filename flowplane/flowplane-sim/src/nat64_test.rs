@@ -706,27 +706,19 @@ fn uplink_rx_dispatches_nat64_return_to_v6_expansion() {
         },
         rev_ct(SPORT),
     );
-    // Seed UNDERLAY[SELF_UNDERLAY] so the delivery tap + guest MAC resolve.
-    node.maps.underlay.insert(
-        SELF_UNDERLAY,
-        flowplane_common::UnderlayValue {
-            vni: VNI,
-            tap_ifindex: TAP_IFINDEX,
-            guest_mac: GUEST_MAC,
-            _pad: [0; 2],
-        },
-    );
-    // Self-route for the guest's RESTORED overlay IPv4 (mechanism #2: the delivery target is
-    // resolved from the reverse CT entry's `xlate_ip` via `ROUTES(vni, xlate_ip) -> UNDERLAY` — the
-    // SAME self-route `program_interface` would have written for this guest).
-    node.maps.add_route4(
+    // INTERFACES entry for the guest's RESTORED overlay IPv4 (mechanism #2: the delivery target is
+    // resolved from the reverse CT entry's `xlate_ip` via `resolve_uplink_target(vni, xlate_ip)` →
+    // `INTERFACES[(vni, xlate_ip)]` — the SAME local-delivery entry `program_interface` would have
+    // written for this guest).
+    node.maps.add_iface(
         VNI,
         GUEST_IP,
-        RouteValue {
-            nexthop_vni: VNI,
-            nexthop_ipv6: SELF_UNDERLAY,
-            is_external: 0,
-            _pad: [0; 3],
+        flowplane_common::IfaceValue {
+            tap_ifindex: TAP_IFINDEX,
+            is_local: 1,
+            underlay_ipv6: [0; 16],
+            guest_mac: GUEST_MAC,
+            _pad: [0; 2],
         },
     );
 

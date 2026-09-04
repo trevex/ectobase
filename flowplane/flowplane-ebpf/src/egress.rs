@@ -118,7 +118,15 @@ pub fn forward_decision_v4(
     // anycast entries have tap_ifindex==0 and fall through to encap. Single-sourced in
     // `flowplane_core::egress::deliver` (the SAME decision the native SimNode runs). The dest ingress
     // firewall gate on the local path stays HERE in the wrapper — it needs `was_new` + the packet.
-    match flowplane_core::egress::deliver(&crate::coreimpl::GlobalMaps, &route) {
+    let mut dst16 = [0u8; 16];
+    dst16[..4].copy_from_slice(&dst);
+    match flowplane_core::egress::deliver(
+        &crate::coreimpl::GlobalMaps,
+        meta.vni,
+        &dst16,
+        false,
+        &route,
+    ) {
         flowplane_core::egress::Deliver::Local {
             tap_ifindex,
             guest_mac,

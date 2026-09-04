@@ -57,29 +57,28 @@ pub struct UplinkIn<'a> {
 /// `tap_ifindex`/`guest_mac` a v4 self-route and a v6 self-route resolve to look identical) — shared
 /// by both [`resolve_uplink_target`] (v4) and [`resolve_uplink_target6`] (v6, P2 Task 4c).
 enum UplinkTarget {
-    /// A local guest interface: `UNDERLAY[route.nexthop_ipv6]`, resolved via the guest's own
-    /// `ROUTES` self-route — `(vni, guest_ip) -> nexthop_ipv6 == that guest's own underlay`,
-    /// written once per interface by `program_interface` (`flowplane-control/src/interface.rs`;
-    /// verified: it always writes this /32 self-route when the interface has an IPv4).
+    /// A local guest interface, resolved by demuxing the overlay dst against the node-VTEP
+    /// `INTERFACES[(vni, guest_ipv4)]` / `INTERFACES6[(vni, guest_ipv6)]` map (`is_local != 0`),
+    /// written per interface by `program_interface` (`flowplane-control/src/interface.rs`).
     Local {
         tap_ifindex: u32,
         guest_mac: [u8; 6],
     },
-    /// `ROUTES` missed AND this node is configured as the WAN edge: `UNDERLAY[LOCAL.underlay_ipv6]`
+    /// `INTERFACES` missed AND this node is configured as the WAN edge: `UNDERLAY[LOCAL.underlay_ipv6]`
     /// carries the `UNDERLAY_LOCAL_DELIVER` sentinel (programmed once by `Control::attach_edge`,
     /// keyed under the edge's OWN `Local.underlay_ipv6` — verified against `control/mod.rs`). Decap
     /// already ran (kernel/Fabric); only the inner-Ethernet rewrite + kernel hand-off remains
     /// ([`edge_local_deliver`]).
     EdgeLocalDeliver,
-    /// `ROUTES` missed and this node is NOT the WAN edge: nothing on this node can legitimately
+    /// `INTERFACES` missed and this node is NOT the WAN edge: nothing on this node can legitimately
     /// claim the packet. SECURITY DEFAULT: drop, never pass — passing would leak decapped overlay
     /// bytes into this node's own kernel netns (a genuine miss must never look like a WAN egress).
     Drop,
 }
 
-/// Resolve mechanisms #1 + #4 for an inner IPv4 `dst`: `ROUTES(vni, dst) -> nexthop_ipv6 ->
-/// UNDERLAY(nexthop_ipv6)`, falling back to the WAN-edge sentinel check (else genuine-miss `Drop`)
-/// on a `ROUTES` miss. Shared by the normal (non-LB, non-NAT) uplink base path
+/// Resolve mechanisms #1 + #4 for an inner IPv4 `dst`: demux `INTERFACES[(vni, dst)]` (local
+/// delivery on `is_local`), falling back to the WAN-edge sentinel check (else genuine-miss `Drop`)
+/// on an `INTERFACES` miss. Shared by the normal (non-LB, non-NAT) uplink base path
 /// ([`process_uplink`]) AND the NAT-return / NAT64-return delivery-target resolution
 /// ([`process_uplink_nat_return`], [`process_uplink_rx`]'s NAT64 dispatch): after `ct_apply` (or the
 /// reverse CT entry directly) restores the guest's real overlay IPv4, that restored address is
@@ -92,11 +91,11 @@ fn resolve_uplink_target<M: Maps>(
     dst: &[u8; 4],
     local: &Local,
 ) -> UplinkTarget {
-    if let Some(route) = maps.route4_get(vni, dst) {
-        if let Some(u) = maps.underlay_get(&route.nexthop_ipv6) {
+    if let Some(iv) = maps.ifaces_get(vni, dst) {
+        if iv.is_local != 0 {
             return UplinkTarget::Local {
-                tap_ifindex: u.tap_ifindex,
-                guest_mac: u.guest_mac,
+                tap_ifindex: iv.tap_ifindex,
+                guest_mac: iv.guest_mac,
             };
         }
     }
@@ -108,15 +107,15 @@ fn resolve_uplink_target<M: Maps>(
     UplinkTarget::Drop
 }
 
-/// Resolve mechanisms #1 + #4 for an inner IPv6 `dst`: `ROUTES6(vni, dst) -> nexthop_ipv6 ->
-/// UNDERLAY(nexthop_ipv6)`, falling back to the WAN-edge sentinel check (else genuine-miss `Drop`) on
-/// a `ROUTES6` miss. v6 mirror of [`resolve_uplink_target`] (P2 Task 4c) — v6 has no NAT/NAT64-return
+/// Resolve mechanisms #1 + #4 for an inner IPv6 `dst`: demux `INTERFACES6[(vni, dst)]` (local
+/// delivery on `is_local`), falling back to the WAN-edge sentinel check (else genuine-miss `Drop`) on
+/// an `INTERFACES6` miss. v6 mirror of [`resolve_uplink_target`] (P2 Task 4c) — v6 has no NAT/NAT64-return
 /// mechanism TWO caller (those are v4-only; see [`process_uplink_v6`]'s doc comment), so this is used
 /// by [`process_uplink_v6`] alone. The `local.underlay_ipv6`/`UNDERLAY_LOCAL_DELIVER` sentinel check
 /// is the SAME node-identity lookup the v4 resolver uses — the WAN-edge role isn't protocol-specific.
 ///
-/// SECURITY DEFAULT (closes the pre-existing v6 gap — P2 Task 4c): a `ROUTES6` miss that is also not
-/// the edge sentinel returns `UplinkTarget::Drop`, never a pass-through. HEAD's hand-inlined
+/// SECURITY DEFAULT (closes the pre-existing v6 gap — P2 Task 4c): an `INTERFACES6` miss that is also
+/// not the edge sentinel returns `UplinkTarget::Drop`, never a pass-through. HEAD's hand-inlined
 /// `v6_uplink_rx` fell through to `TC_ACT_OK` on a `ROUTES6` miss (fail-OPEN — a decapped overlay v6
 /// frame with no legitimate local claimant was handed to this node's own kernel netns); this resolver
 /// gives v6 the exact fail-closed default v4 already has.
@@ -127,11 +126,11 @@ fn resolve_uplink_target6<M: Maps>(
     dst: &[u8; 16],
     local: &Local,
 ) -> UplinkTarget {
-    if let Some(route) = maps.route6_get(vni, dst) {
-        if let Some(u) = maps.underlay_get(&route.nexthop_ipv6) {
+    if let Some(iv) = maps.ifaces6_get(vni, dst) {
+        if iv.is_local != 0 {
             return UplinkTarget::Local {
-                tap_ifindex: u.tap_ifindex,
-                guest_mac: u.guest_mac,
+                tap_ifindex: iv.tap_ifindex,
+                guest_mac: iv.guest_mac,
             };
         }
     }
@@ -633,7 +632,10 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
     }
 
     // 7. Deliver decision: Local tap (inner-Eth rewrite) | Encap (`TunnelEncap` decision) | Pass.
-    match deliver(&*maps, &route) {
+    //    Local delivery is demuxed by the overlay dst (vni, inner IPv4) via INTERFACES.
+    let mut dst16 = [0u8; 16];
+    dst16[..4].copy_from_slice(&dst);
+    match deliver(&*maps, in_.meta.vni, &dst16, false, &route) {
         Deliver::Local {
             tap_ifindex,
             guest_mac,

@@ -432,18 +432,19 @@ fn ew_lb_anycast_delivered_with_policy() {
     let mut fab = Fabric::new();
     let mut b = backend_node(false);
     apply_fw(&mut b.maps, HOSTB_TAP, allow_internal_443());
-    // The anycast ROUTE itself: hostB's own control plane self-registers a `ROUTES` entry for the
-    // VIP it serves (distinct from the LB path — no `LB`/`MAGLEV` maps here). This doubles as the
-    // ingress delivery-target marker (`resolve_uplink_target`'s mechanism #1), the same way a
-    // guest's own self-route does.
-    b.maps.add_route4(
+    // The anycast VIP's ingress delivery-target marker (`resolve_uplink_target`'s mechanism #1):
+    // hostB's own control plane self-registers an `INTERFACES[(vni, VIP)]` local-delivery entry for
+    // the VIP it serves (distinct from the LB path — no `LB`/`MAGLEV` maps here), the same way a
+    // guest's own overlay IP entry does.
+    b.maps.add_iface(
         VNI,
         OVERLAY_VIP,
-        RouteValue {
-            nexthop_vni: VNI,
-            nexthop_ipv6: HOSTB_UL,
-            is_external: 0,
-            _pad: [0; 3],
+        flowplane_common::IfaceValue {
+            tap_ifindex: HOSTB_TAP,
+            is_local: 1,
+            underlay_ipv6: [0; 16],
+            guest_mac: GUEST_MAC,
+            _pad: [0; 2],
         },
     );
     fab.add_node("hostB", b);

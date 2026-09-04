@@ -27,7 +27,7 @@
 //! that built it was testing a fiction. `Fabric::deliver` (`fabric.rs`) carries the frame across
 //! hops the same way: no wire bytes, VNI/remote threaded through `TunnelEncap`/`Prog::UplinkRx`.
 
-use flowplane_common::{Local, PortMeta, RouteValue, UnderlayValue};
+use flowplane_common::{IfaceValue, Local, PortMeta};
 use flowplane_core::encap::TunnelEncap;
 use flowplane_core::pkt::Action;
 
@@ -179,11 +179,11 @@ impl SimNode {
     }
 
     /// Convenience wrapper for a plain non-LB delivery of a guest at overlay `dst` to `tap` (used by
-    /// `ns_scenario_test`): synthesizes the `ROUTES` self-route + `UNDERLAY` entry
-    /// `program_interface` would have written for that guest (mechanism #1 of the ingress
-    /// delivery-target reconstruction — see `flowplane_core::datapath::resolve_uplink_target`) under
-    /// a fixed placeholder underlay, then delegates to [`SimNode::uplink`]. With no LB maps set,
-    /// `lb_select_forward` returns None and the base path runs. `inner` is the POST-decap frame.
+    /// `ns_scenario_test`): seeds the `INTERFACES[(vni, dst)]` local-delivery entry `program_interface`
+    /// would have written for that guest (mechanism #1 of the ingress delivery-target reconstruction —
+    /// see `flowplane_core::datapath::resolve_uplink_target`), then delegates to [`SimNode::uplink`].
+    /// With no LB maps set, `lb_select_forward` returns None and the base path runs. `inner` is the
+    /// POST-decap frame.
     pub fn host_uplink(
         &mut self,
         inner: &[u8],
@@ -192,43 +192,15 @@ impl SimNode {
         tap: u32,
         guest_mac: [u8; 6],
     ) -> SimOut {
-        // Placeholder self-route underlay — its VALUE is irrelevant (never re-parsed from the
-        // wire), it only needs to be a unique key joining the ROUTES entry to the UNDERLAY entry.
-        let underlay = [
-            0x20,
-            0x01,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            (tap >> 8) as u8,
-            tap as u8,
-        ];
-        self.maps.underlay.insert(
-            underlay,
-            UnderlayValue {
-                vni,
-                tap_ifindex: tap,
-                guest_mac,
-                _pad: [0; 2],
-            },
-        );
-        self.maps.add_route4(
+        self.maps.add_iface(
             vni,
             dst,
-            RouteValue {
-                nexthop_vni: vni,
-                nexthop_ipv6: underlay,
-                is_external: 0,
-                _pad: [0; 3],
+            IfaceValue {
+                tap_ifindex: tap,
+                is_local: 1,
+                underlay_ipv6: [0; 16],
+                guest_mac,
+                _pad: [0; 2],
             },
         );
         let local = Local {
@@ -272,9 +244,9 @@ impl SimNode {
         }
     }
 
-    /// v6 mirror of [`SimNode::host_uplink`]: synthesizes the `ROUTES6` self-route + `UNDERLAY` entry
-    /// `program_interface` would have written for a v6 guest at overlay `dst` on `tap` (mechanism #1
-    /// of the v6 ingress delivery-target reconstruction — see
+    /// v6 mirror of [`SimNode::host_uplink`]: seeds the `INTERFACES6[(vni, dst)]` local-delivery entry
+    /// `program_interface` would have written for a v6 guest at overlay `dst` on `tap` (mechanism #1 of
+    /// the v6 ingress delivery-target reconstruction — see
     /// `flowplane_core::datapath::resolve_uplink_target6`), then delegates to [`SimNode::uplink_v6`].
     /// With no LB maps set, `lb_select_forward_v6` returns None and the base path runs. `inner` is
     /// the POST-decap frame.
@@ -286,45 +258,15 @@ impl SimNode {
         tap: u32,
         guest_mac: [u8; 6],
     ) -> SimOut {
-        // Placeholder self-route underlay — its VALUE is irrelevant (never re-parsed from the
-        // wire), it only needs to be a unique key joining the ROUTES6 entry to the UNDERLAY entry.
-        // Distinguished from `host_uplink`'s v4 placeholder by byte [13] so a test that (unusually)
-        // stands up both a v4 and a v6 self-route on the SAME tap on the SAME node never collides.
-        let underlay = [
-            0x20,
-            0x01,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            6,
-            (tap >> 8) as u8,
-            tap as u8,
-        ];
-        self.maps.underlay.insert(
-            underlay,
-            UnderlayValue {
-                vni,
-                tap_ifindex: tap,
-                guest_mac,
-                _pad: [0; 2],
-            },
-        );
-        self.maps.add_route6(
+        self.maps.add_iface6(
             vni,
             dst,
-            RouteValue {
-                nexthop_vni: vni,
-                nexthop_ipv6: underlay,
-                is_external: 0,
-                _pad: [0; 3],
+            IfaceValue {
+                tap_ifindex: tap,
+                is_local: 1,
+                underlay_ipv6: [0; 16],
+                guest_mac,
+                _pad: [0; 2],
             },
         );
         let local = Local {

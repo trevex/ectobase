@@ -121,6 +121,18 @@ fn deliver_node() -> SimNode {
             _pad: [0; 3],
         },
     );
+    // Local delivery is demuxed by (vni, overlay dst) via INTERFACES.
+    node.maps.add_iface(
+        VNI,
+        PEER_IP,
+        flowplane_common::IfaceValue {
+            tap_ifindex: PEER_TAP,
+            is_local: 1,
+            underlay_ipv6: [0; 16],
+            guest_mac: [0xcc; 6],
+            _pad: [0; 2],
+        },
+    );
     allow(&mut node, SRC_IFINDEX, FW_DIR_EGRESS);
     allow(&mut node, PEER_TAP, FW_DIR_INGRESS);
     node
@@ -331,6 +343,18 @@ fn edt_total_lane_shapes_not_drops() {
             _pad: [0; 3],
         },
     );
+    // Local delivery is demuxed by (vni, overlay dst) via INTERFACES.
+    node.maps.add_iface(
+        VNI,
+        PEER_IP,
+        flowplane_common::IfaceValue {
+            tap_ifindex: PEER_TAP,
+            is_local: 1,
+            underlay_ipv6: [0; 16],
+            guest_mac: [0xcc; 6],
+            _pad: [0; 2],
+        },
+    );
     allow(&mut node, PEER_TAP, FW_DIR_INGRESS);
     node.last_tstamp = Some(99999); // poison — must be cleared by None on local delivery
     let local_out = node.guest_tx(&guest_frame(9999), &port_meta());
@@ -398,6 +422,18 @@ fn public_lane_exhaust_drop_then_pass_internal() {
             nexthop_ipv6: PEER_UNDERLAY,
             is_external: 0,
             _pad: [0; 3],
+        },
+    );
+    // Local delivery is demuxed by (vni, overlay dst) via INTERFACES.
+    node.maps.add_iface(
+        VNI,
+        PEER_IP,
+        flowplane_common::IfaceValue {
+            tap_ifindex: PEER_TAP,
+            is_local: 1,
+            underlay_ipv6: [0; 16],
+            guest_mac: [0xcc; 6],
+            _pad: [0; 2],
         },
     );
     allow(&mut node, SRC_IFINDEX, FW_DIR_EGRESS);

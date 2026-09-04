@@ -40,9 +40,7 @@
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 
 use aya::programs::SchedClassifier;
-use flowplane_common::{
-    CtEntry, CtKey, Local, RouteValue, UnderlayValue, CT_F_SRC_NAT, CT_REWRITE_DST,
-};
+use flowplane_common::{CtEntry, CtKey, Local, CT_F_SRC_NAT, CT_REWRITE_DST};
 use flowplane_core::encap::ETH_LEN;
 use flowplane_core::pkt::Action;
 use flowplane_sim::SimNode;
@@ -58,7 +56,6 @@ const EXT_IP: [u8; 4] = [203, 0, 113, 9]; // the external peer (inner src on the
 const ORIG_SPORT: u16 = 40000; // the guest's original L4 sport (restored on the return)
 const NAT_PORT: u16 = 20018; // the allocated NAT port (inner dst port on the return)
 const EXT_PORT: u16 = 443; // the external peer's port (inner src port on the return)
-const HOST_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xbb];
 
 const IPPROTO_TCP: u8 = 6;
 
@@ -113,24 +110,16 @@ fn native_reference(frame: &[u8]) -> (Action, Vec<u8>) {
     host.maps.nat_ips.insert((VNI, NAT_IP));
     // Delivery-target reconstruction mechanism #2 (see `flowplane_core::datapath::
     // resolve_uplink_target`): the RESTORED guest IP (reverse CT's `xlate_ip`) is looked up via the
-    // SAME self-route `ROUTES(vni, guest_ip) -> UNDERLAY(nexthop)` a base delivery would use.
-    host.maps.underlay.insert(
-        HOST_UNDERLAY,
-        UnderlayValue {
-            vni: VNI,
-            tap_ifindex: TAP,
-            guest_mac: GUEST_MAC,
-            _pad: [0; 2],
-        },
-    );
-    host.maps.add_route4(
+    // SAME `INTERFACES[(vni, guest_ip)]` local-delivery entry a base delivery would use.
+    host.maps.add_iface(
         VNI,
         GUEST_IP,
-        RouteValue {
-            nexthop_vni: VNI,
-            nexthop_ipv6: HOST_UNDERLAY,
-            is_external: 0,
-            _pad: [0; 3],
+        flowplane_common::IfaceValue {
+            tap_ifindex: TAP,
+            is_local: 1,
+            underlay_ipv6: [0; 16],
+            guest_mac: GUEST_MAC,
+            _pad: [0; 2],
         },
     );
     let local = Local::default();

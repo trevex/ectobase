@@ -6,8 +6,7 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule, PortMeta, RouteValue, UnderlayValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
-    FW_DIR_INGRESS,
+    FwMeta, FwRule, PortMeta, RouteValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS, FW_DIR_INGRESS,
 };
 use flowplane_core::encap::TunnelEncap;
 use flowplane_core::pkt::Action;
@@ -145,15 +144,8 @@ fn guest_tx_v4_local_delivery_emits_no_tunnel_decision() {
 
     let mut node = SimNode::new();
     node.src_ifindex = SRC_IFINDEX;
-    node.maps.underlay.insert(
-        PEER_UNDERLAY,
-        UnderlayValue {
-            vni: VNI,
-            tap_ifindex: PEER_TAP,
-            guest_mac: [0xcc; 6],
-            _pad: [0; 2],
-        },
-    );
+    // Local delivery is now demuxed by (vni, overlay dst) via INTERFACES. The egress route lookup
+    // still needs an internal ROUTES entry for the packet to reach the deliver stage (miss = Pass).
     node.maps.add_route4(
         VNI,
         EXT_IP,
@@ -162,6 +154,17 @@ fn guest_tx_v4_local_delivery_emits_no_tunnel_decision() {
             nexthop_ipv6: PEER_UNDERLAY,
             is_external: 0,
             _pad: [0; 3],
+        },
+    );
+    node.maps.add_iface(
+        VNI,
+        EXT_IP,
+        flowplane_common::IfaceValue {
+            tap_ifindex: PEER_TAP,
+            is_local: 1,
+            underlay_ipv6: [0; 16],
+            guest_mac: [0xcc; 6],
+            _pad: [0; 2],
         },
     );
     allow(&mut node, SRC_IFINDEX, FW_DIR_EGRESS);

@@ -48,28 +48,47 @@ pub fn route6<M: Maps>(maps: &M, vni: u32, dst: &[u8; 16]) -> Option<RouteValue>
     maps.route6_get(vni, dst)
 }
 
-/// Given a matched `route`, decide local-tap delivery vs. encap vs. pass. Faithful port of the eBPF
-/// local-fast-path + encap tail:
-///   - if `UNDERLAY[route.nexthop_ipv6]` resolves to a LOCAL interface (`tap_ifindex != 0`), deliver
-///     to that tap (`Deliver::Local`); the caller runs the destination ingress firewall for v4;
+/// Given the packet's `(vni, overlay dst)` and its matched `route`, decide local-tap delivery vs.
+/// encap vs. pass. Local delivery is now demuxed by the overlay destination address via the
+/// `INTERFACES` / `INTERFACES6` maps (the node-VTEP scheme) rather than by a per-interface /128
+/// `UNDERLAY[route.nexthop_ipv6]` self-route:
+///   - if `INTERFACES[(vni, dst)]` (v4) / `INTERFACES6[(vni, dst)]` (v6) resolves to a LOCAL
+///     interface (`is_local != 0`), deliver to that tap (`Deliver::Local`); the caller runs the
+///     destination ingress firewall for v4;
 ///   - else if `LOCAL[0]` is set, `Deliver::Encap` with the [`tunnel_encap`] decision toward
 ///     `route.nexthop_ipv6`;
 ///   - else `Deliver::Pass`.
 ///
-/// The destination ingress-firewall gate on the v4 local path stays in the eBPF wrapper (it needs
-/// `was_new` + the packet), exactly as the wrapper still owns conntrack/vip/meter.
+/// `dst` is the 16-byte overlay destination; `is_v6` selects the map (v4 callers pass the 4-byte
+/// dst left-justified in the 16-byte buffer). `route` is still needed for the encap-on-miss arm
+/// (the tunnel key rides `route.nexthop_ipv6`). The destination ingress-firewall gate on the v4
+/// local path stays in the eBPF wrapper (it needs `was_new` + the packet), exactly as the wrapper
+/// still owns conntrack/vip/meter.
 ///
 /// Note: the old `inner_proto` (outer next-header) and `flow_label` (RFC 6438 outer flow-label
 /// entropy) parameters are gone — both were only meaningful to the byte-written outer header this
 /// fn used to build. Under Geneve `collect_md` the kernel builds the outer header itself; ECMP
 /// entropy becomes the kernel's Geneve UDP-source-port hash, not something this decision carries.
 #[inline(always)]
-pub fn deliver<M: Maps>(maps: &M, route: &RouteValue) -> Deliver {
-    if let Some(u) = maps.underlay_get(&route.nexthop_ipv6) {
-        if u.tap_ifindex != 0 {
+pub fn deliver<M: Maps>(
+    maps: &M,
+    vni: u32,
+    dst: &[u8; 16],
+    is_v6: bool,
+    route: &RouteValue,
+) -> Deliver {
+    let iface = if is_v6 {
+        maps.ifaces6_get(vni, dst)
+    } else {
+        let mut dst4 = [0u8; 4];
+        dst4.copy_from_slice(&dst[..4]);
+        maps.ifaces_get(vni, &dst4)
+    };
+    if let Some(iv) = iface {
+        if iv.is_local != 0 {
             return Deliver::Local {
-                tap_ifindex: u.tap_ifindex,
-                guest_mac: u.guest_mac,
+                tap_ifindex: iv.tap_ifindex,
+                guest_mac: iv.guest_mac,
             };
         }
     }
@@ -145,7 +164,7 @@ pub fn route_decision6<P: Pkt, M: Maps>(pkt: &P, maps: &M, meta: &PortMeta) -> D
         Some(r) => r,
         None => return Deliver::Pass,
     };
-    deliver(maps, &route)
+    deliver(maps, meta.vni, &dst, true, &route)
 }
 
 /// Inner IPv6 dst offset within a guest Ethernet frame: `ETH_LEN + 24` (IPv6 dst is at +24 in the

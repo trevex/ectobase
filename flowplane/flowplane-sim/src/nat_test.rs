@@ -144,8 +144,8 @@ fn port_meta(guest_ip: [u8; 4]) -> PortMeta {
     }
 }
 
-/// Configure `node.local` + the `UPLINK_UNDERLAY` underlay entry so `deliver` takes the `Encap`
-/// path toward the external route nexthop (not `Local` — the nexthop is the uplink, not a tap).
+/// Configure `node.local` so `deliver` takes the `Encap` path toward the external route nexthop
+/// (not `Local` — an external dst has no `INTERFACES` local-delivery entry).
 fn configure_local(node: &mut SimNode) {
     node.maps.local = Some(Local {
         uplink_ifindex: 7,
@@ -153,9 +153,9 @@ fn configure_local(node: &mut SimNode) {
         gateway_mac: [0x03; 6],
         underlay_ipv6: [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01],
     });
-    // We do NOT insert an underlay entry for UPLINK_UNDERLAY — `deliver` only takes `Local` when
-    // `underlay_get(nexthop_ipv6)` returns `Some(u)` with `tap_ifindex != 0`.  An absent entry
-    // means `deliver` falls through to `Deliver::Encap` via `Local[0]`, which is what we want.
+    // We do NOT seed an `INTERFACES[(vni, ext_dst)]` entry — `deliver` only takes `Local` when the
+    // overlay dst has a local `INTERFACES` entry (`is_local != 0`). Absent, `deliver` falls through
+    // to `Deliver::Encap` via `Local[0]`, which is what we want for an external route.
 }
 
 // ─── (a) SNAT rewrite: src IP and port rewritten, checksums updated ───────────
@@ -483,6 +483,18 @@ fn snat_no_op_for_internal_route() {
             _pad: [0; 3],
         },
     );
+    // Local delivery is demuxed by (vni, overlay dst) via INTERFACES.
+    node.maps.add_iface(
+        VNI,
+        EXT_IP,
+        flowplane_common::IfaceValue {
+            tap_ifindex: PEER_TAP,
+            is_local: 1,
+            underlay_ipv6: [0; 16],
+            guest_mac: [0xcc; 6],
+            _pad: [0; 2],
+        },
+    );
     // NAT entry present (must be ignored on internal route).
     add_nat(&mut node.maps, GUEST_A_IP, NAT_IP_A, PORT_MIN_A, PORT_MAX_A);
     allow_egress(&mut node, SRC_IFINDEX_A);
@@ -609,35 +621,24 @@ fn dnat_reverse_ct_key(proto: u8) -> CtKey {
 
 /// Build a node with the reverse CT entry + NAT_IPS registration seeded for DNAT return.
 fn dnat_host_node(proto: u8) -> SimNode {
-    use flowplane_common::UnderlayValue;
-
     let mut node = SimNode::new();
     node.maps
         .conntrack
         .insert(dnat_reverse_ct_key(proto), dnat_reverse_ct_entry());
     node.maps.nat_ips.insert((DNAT_VNI, DNAT_NAT_IP));
-    // Seed UNDERLAY so the delivery-target resolution can find the base tap.
-    node.maps.underlay.insert(
-        HOST_UNDERLAY,
-        UnderlayValue {
-            vni: DNAT_VNI,
-            tap_ifindex: DNAT_TAP,
-            guest_mac: DNAT_GUEST_MAC,
-            _pad: [0; 2],
-        },
-    );
-    // Self-route for the RESTORED guest IP (mechanism #2: `process_uplink_nat_return` resolves
-    // delivery via `ROUTES(vni, ct_apply-restored dst) -> UNDERLAY(nexthop)`, the SAME self-route
-    // `program_interface` would have written for this guest — see
+    // INTERFACES entry for the RESTORED guest IP (mechanism #2: `process_uplink_nat_return` resolves
+    // delivery via `resolve_uplink_target(vni, ct_apply-restored dst)` → `INTERFACES[(vni, dst)]`,
+    // the SAME local-delivery entry `program_interface` would have written for this guest — see
     // `flowplane_core::datapath::resolve_uplink_target`).
-    node.maps.add_route4(
+    node.maps.add_iface(
         DNAT_VNI,
         DNAT_GUEST_IP,
-        RouteValue {
-            nexthop_vni: DNAT_VNI,
-            nexthop_ipv6: HOST_UNDERLAY,
-            is_external: 0,
-            _pad: [0; 3],
+        flowplane_common::IfaceValue {
+            tap_ifindex: DNAT_TAP,
+            is_local: 1,
+            underlay_ipv6: [0; 16],
+            guest_mac: DNAT_GUEST_MAC,
+            _pad: [0; 2],
         },
     );
     node

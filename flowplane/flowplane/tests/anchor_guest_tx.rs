@@ -86,8 +86,8 @@ fn port_meta() -> PortMeta {
 }
 
 fn route_value() -> RouteValue {
-    // is_external:0 + no UNDERLAY entry for NEXTHOP → deliver returns Encap (no NAT rewrite), so the
-    // label is computed from the unchanged inner 5-tuple.
+    // is_external:0 + no INTERFACES entry for DEST_IP → deliver returns Encap (no NAT rewrite), so
+    // the label is computed from the unchanged inner 5-tuple.
     RouteValue {
         nexthop_vni: 0,
         nexthop_ipv6: NEXTHOP,
