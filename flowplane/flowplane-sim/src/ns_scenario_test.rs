@@ -5,7 +5,8 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule, Local, UnderlayValue, FW_ACTION_ACCEPT, FW_DIR_INGRESS, UNDERLAY_LOCAL_DELIVER,
+    FwMeta, FwRule, Local, PortMeta, UnderlayValue, FW_ACTION_ACCEPT, FW_DIR_INGRESS,
+    UNDERLAY_LOCAL_DELIVER,
 };
 use flowplane_core::conntrack::ct_key;
 use flowplane_core::encap::ETH_LEN;
@@ -94,6 +95,70 @@ fn external_to_guest_encap_decap_fw_allow_ct() {
     assert!(
         host.maps.conntrack_get(&fwd_key).is_some(),
         "forward conntrack entry created"
+    );
+}
+
+/// Seed `PORT_META[tap]` marking the delivery target an L3 netkit pod (`l3 = 1`). Keyed by tap
+/// ifindex, exactly how `resolve_delivery_l3` looks it up (`maps.port_meta_get(tap)`).
+fn mark_l3_pod(node: &mut SimNode, tap: u32) {
+    node.maps.port_meta.insert(
+        tap,
+        PortMeta {
+            vni: VNI,
+            guest_ipv4: GUEST_IP,
+            gateway_ipv4: [10, 0, 0, 1],
+            guest_mac: GUEST_MAC,
+            l3: 1,
+            _pad: [0; 1],
+            underlay_ipv6: HOST_UNDERLAY,
+            gateway_ipv6: [0; 16],
+            guest_ipv6: [0; 16],
+        },
+    );
+}
+
+/// L3 (netkit) delivery target: `PORT_META[tap].l3 == 1` makes `decap_and_rewrite` write the inner
+/// eth **dst = all-zero MAC** (the NOARP netkit device MAC — an L3 pod PACKET_OTHERHOST-drops any
+/// other unicast dst, so `guest_mac` would be wrong here). src (`GW_MAC`), ethertype, and the inner
+/// IP payload are byte-identical to the `l3 == 0` case (`external_to_guest_encap_decap_fw_allow_ct`).
+#[test]
+fn external_to_guest_l3_pod_delivery_zero_dst_mac() {
+    let inner = inner_eth_frame(443);
+
+    let mut host = SimNode::new();
+    allow_tcp(&mut host, 443);
+    mark_l3_pod(&mut host, TAP);
+    let out = host.host_uplink(&inner, VNI, GUEST_IP, TAP, GUEST_MAC);
+
+    assert_eq!(
+        out.action,
+        Action::Redirect(TAP),
+        "delivered to the L3 pod tap"
+    );
+    assert_eq!(
+        &out.pkt[0..6],
+        &[0u8; 6],
+        "L3 pod: inner eth dst = all-zero (netkit device) MAC, NOT guest MAC"
+    );
+    assert_eq!(
+        &out.pkt[6..12],
+        &GW_MAC,
+        "inner eth src = gateway MAC (unchanged vs the L2 case)"
+    );
+    assert_eq!(
+        &out.pkt[12..14],
+        &[0x08, 0x00],
+        "inner ethertype = IPv4 (unchanged vs the L2 case)"
+    );
+    assert_eq!(
+        &out.pkt[14..],
+        &inner[14..],
+        "inner IP payload byte-identical (only the 6-byte dst MAC changed vs the L2 case)"
+    );
+    assert_eq!(
+        out.pkt.len(),
+        inner.len(),
+        "inner Ethernet rewritten in place; the frame does not resize"
     );
 }
 
