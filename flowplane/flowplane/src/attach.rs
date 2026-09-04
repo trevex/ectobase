@@ -128,8 +128,7 @@ pub fn uplink_finalizes_checksum(uplink: &str) -> bool {
 /// netkit driver (needs a recent kernel + `CONFIG_NETKIT`), and a feature check that only inspects a
 /// version string would lie on backported/patched kernels. Actually creating the device is the only
 /// honest probe. Cheap after the first call (cached bool). Used by the `Auto` device-type resolver in
-/// `attach` to decide netkit-vs-veth — kept even while `Auto` still resolves to `Veth` (Task B.4 wires
-/// it in once `attach_netkit` exists).
+/// `attach` to decide netkit-vs-veth: `Auto` resolves to netkit L3 when this returns true, else veth.
 pub fn netkit_supported() -> bool {
     static SUPPORTED: OnceLock<bool> = OnceLock::new();
     *SUPPORTED.get_or_init(|| {
@@ -322,11 +321,10 @@ impl AttachState {
                 disable_csum_offload: self.disable_guest_csum_offload,
             })
             .map(|_dev| ()),
-            // Explicit netkit: create the L3 pair (primary in root netns, peer as the pod eth0). The
-            // netkit primary has no settable MAC (L3, NOARP) — `mac` is carried only for map
-            // programming. The guest-program attach for this device is Task B.4; `create_interface`
-            // currently bails at the program-attach step for l3, so an explicit netkit attach fails
-            // cleanly (no caller selects netkit yet — Auto resolves to Veth above).
+            // Netkit (the default container edge when the kernel supports it, via `Auto`): create the
+            // L3 pair (primary in root netns, peer as the pod eth0). The netkit primary has no settable
+            // MAC (L3, NOARP) — `mac` is carried only for map programming. `create_interface` attaches
+            // `tc_guest_tx` on the netkit PEER hook (pod egress) via a raw bpf(BPF_LINK_CREATE).
             DeviceType::Netkit => {
                 flowplane_device::netkit::create_netkit_pair(&flowplane_device::VethSpec {
                     host_name: device.clone(),
