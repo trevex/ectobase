@@ -47,7 +47,6 @@ type paths struct {
 	build string // build/<name>
 	topo  string // build/<name>/<name>.clab.yml
 	frr   string // build/<name>/frr (edge{1,2}.conf, sw{1,2}.conf, daemons)
-	kind  string // build/<name>/kind (per-cluster kind Cluster configs + prefix/uplinks)
 	reg   string // build/<name>/registry
 }
 
@@ -57,7 +56,6 @@ func buildPaths(cfg *config.Config) paths {
 		build: b,
 		topo:  filepath.Join(b, cfg.Name+".clab.yml"),
 		frr:   filepath.Join(b, "frr"),
-		kind:  filepath.Join(b, "kind"),
 		reg:   filepath.Join(b, "registry"),
 	}
 }
@@ -128,6 +126,14 @@ func Render(ctx context.Context, cfg *config.Config) error {
 		if err := genTalosCluster(ctx, cfg, p, cl.Name, dc, res1, res2); err != nil {
 			return fmt.Errorf("cluster %s talos: %w", cl.Name, err)
 		}
+		// Cilium container-mode values for this cluster's pod pool (installed at Up —
+		// Talos resolves the cluster CNI to "none", so Cilium is the substrate CNI).
+		// Written alongside the talos configs (genTalosCluster created the dir).
+		if err := render.FileFS(templates.FS, "k8s/cilium-values.yaml.tmpl",
+			filepath.Join(p.build, "talos", cl.Name, "cilium-values.yaml"),
+			ciliumCtx{PodSubnet: dc.PodSubnet}); err != nil {
+			return fmt.Errorf("cluster %s cilium values: %w", cl.Name, err)
+		}
 	}
 
 	// Registry config + persistent cache dir.
@@ -166,6 +172,10 @@ func Render(ctx context.Context, cfg *config.Config) error {
 	slog.Info("rendered lab", "build", p.build, "clusters", len(cfg.Fabric.Clusters))
 	return nil
 }
+
+// ciliumCtx is the k8s/cilium-values.yaml.tmpl data: the per-cluster pod pool the
+// cluster-pool IPAM allocator carves per-node /64s from.
+type ciliumCtx struct{ PodSubnet string }
 
 // talosClusterCtx is the talos/cluster-patch.yaml.tmpl data (per cluster). Resolver1/2
 // are the two edge-loopback nameservers.
@@ -250,12 +260,12 @@ func genTalosCluster(ctx context.Context, cfg *config.Config, p paths, cluster s
 	})
 }
 
-// Up renders the build tree, deploys the containerlab topology (the clab k8s-kind
-// nodes create the kind clusters with kindnet), then per cluster collects the kind
-// kubeconfig and waits for the API + nodes Ready. Once every cluster is up it
-// sideloads the local :dev app images into each node's containerd via `kind load`
-// (the in-fabric mirror is bypassed — its node-return path is unreliable), and
-// finally deploys the ectobase substrate.
+// Up renders the build tree, deploys the containerlab topology (the container-mode
+// Talos nodes boot from their USERDATA machine configs), then per cluster bootstraps
+// the Talos control plane (talosctl over clab-mgmt → etcd bootstrap → kubeconfig),
+// waits for the API, installs the Cilium CNI (container-mode + KubePrism), removes
+// the control-plane taint, and waits for nodes Ready. Finally it deploys the ectobase
+// substrate.
 func Up(ctx context.Context, cfg *config.Config) error {
 	p := buildPaths(cfg)
 	if err := Render(ctx, cfg); err != nil {
@@ -276,57 +286,49 @@ func Up(ctx context.Context, cfg *config.Config) error {
 	for _, cl := range cfg.Fabric.Clusters {
 		dc := cfg.Derived.Clusters[cl.Name]
 		kubeconfig := p.clusterKubeconfig(cl.Name)
-		// clab's k8s-kind node creates + owns the kind cluster (no talosctl bootstrap);
-		// there is one k8s-kind lifecycle node per cluster, named after the cluster, so
-		// the kind cluster name IS the cluster name. Collect its kubeconfig into
-		// build/<name>/<cluster>.kubeconfig where the deploy pipeline expects it.
-		kindName := cl.Name
-		if err := writeKindKubeconfig(ctx, kindName, kubeconfig); err != nil {
-			return fmt.Errorf("cluster %s kubeconfig: %w", cl.Name, err)
+		talosconfig := filepath.Join(p.build, "talos", cl.Name, "talosconfig")
+		// Bootstrap the container-mode Talos control plane over clab-mgmt (talosctl
+		// reaches the Talos API on each node's mgmt IP — the anycast API VIP + GoBGP
+		// have not converged yet). Writes build/<name>/<cluster>.kubeconfig, where the
+		// deploy pipeline expects it.
+		if err := talos.Bootstrap(ctx, cfg, cl.Name, talosconfig, kubeconfig); err != nil {
+			return fmt.Errorf("cluster %s bootstrap: %w", cl.Name, err)
 		}
+		// clab commands run under sudo, so lab up may run as root; talosctl writes the
+		// kubeconfig itself, but chown defensively so a plain `kubectl --kubeconfig
+		// build/<name>/<cluster>.kubeconfig` works without sudo.
+		chownToSudoUser(kubeconfig)
+
 		if err := deploy.WaitAPIServer(ctx, kubeconfig); err != nil {
 			return fmt.Errorf("cluster %s api server: %w", cl.Name, err)
 		}
-		// The CNI is kind's default (kindnet) + kube-proxy — installed by `kind create`
-		// itself, so there is no CNI step here; the node reaches Ready on its own.
+		// CNI: Talos resolves the cluster CNI to "none" (flannel stripped), so install
+		// Cilium (container-mode + KubePrism kube-proxy replacement). Values were
+		// rendered per cluster into build/<name>/talos/<cluster>/cilium-values.yaml.
+		ciliumValues := filepath.Join(p.build, "talos", cl.Name, "cilium-values.yaml")
+		if err := deploy.HelmInstall(ctx, kubeconfig, "cilium", deploy.CiliumChart, deploy.CiliumRepo, deploy.CiliumVersion, ciliumValues); err != nil {
+			return fmt.Errorf("cluster %s cilium: %w", cl.Name, err)
+		}
+		// These are control-plane-only clusters, so drop the NoSchedule taint (Talos
+		// bakes it in; config-patch can't clear it) before waiting for workloads.
+		if err := deploy.AllowSchedulingOnControlPlanes(ctx, kubeconfig); err != nil {
+			return fmt.Errorf("cluster %s untaint control planes: %w", cl.Name, err)
+		}
 		if err := deploy.WaitNodesReady(ctx, kubeconfig, len(dc.Nodes)); err != nil {
 			return fmt.Errorf("cluster %s nodes ready: %w", cl.Name, err)
 		}
 	}
 
-	// Now every cluster's kind node is up + Ready, so sideload the locally-built app
-	// images straight into each node's containerd (replaces the in-fabric mirror push,
-	// whose node-return path over the fabric is unreliable). Must run before
-	// deployEctobase so the pods find the images host-local (IfNotPresent, no pull).
-	if err := sideloadAppImages(ctx, cfg); err != nil {
-		return err
-	}
+	// TODO(B1): app-image delivery on Talos. The kind-era `kind load docker-image`
+	// sideload is gone (no kind cluster to load into); how the locally-built :dev app
+	// images reach each Talos node's containerd is decided in B1. The A6 substrate
+	// spike does not deploy the app, so bring-up (Talos + Cilium + nodes Ready) works
+	// without it — deployEctobase below will ImagePullBackOff until B1 lands delivery.
 
 	if err := deployEctobase(ctx, cfg); err != nil {
 		return err
 	}
 	slog.Info("lab up", "name", cfg.Name)
-	return nil
-}
-
-// sideloadAppImages loads the locally-built app images straight into each kind
-// cluster's node containerd via `kind load` (imagePullPolicy: IfNotPresent means the
-// pods then use them with no registry pull). Replaces the in-fabric registry mirror,
-// whose node-return path over the fabric is unreliable.
-//
-// `kind load docker-image` is used (not a raw `docker save | ctr import`): the host
-// `kind` binary can see the clab-created clusters, and it handles the docker-save +
-// per-node `ctr images import` internally, so it stays a single fail-loud step per
-// image. The kind cluster name IS the clab cluster name (one k8s-kind node/cluster).
-func sideloadAppImages(ctx context.Context, cfg *config.Config) error {
-	for _, cl := range cfg.Fabric.Clusters {
-		for _, name := range cfg.Fabric.Registry.Push { // [flowplane mesh cni dispatch-apiserver dispatch-controller dispatch-broker]
-			ref := "ghcr.io/trevex/ectobase/" + name + ":dev" // the local docker tag from make image-*
-			if err := exec.Run(ctx, "kind", "load", "docker-image", "--name", cl.Name, ref); err != nil {
-				return fmt.Errorf("kind load %s into cluster %s (build them first: make lab-app-images): %w", ref, cl.Name, err)
-			}
-		}
-	}
 	return nil
 }
 
@@ -601,22 +603,6 @@ func delHostFabricRoute(ctx context.Context) {
 	if err := exec.Sudo(ctx, "ip", "-6", "route", "del", fabricHostPrefix); err != nil {
 		slog.Debug("remove host fabric route (already gone?)", "err", err)
 	}
-}
-
-// writeKindKubeconfig writes the kind cluster's kubeconfig (host-accessible server)
-// to dst. The kind cluster name is the clab k8s-kind node's short name. `lab up` runs as
-// root (sudo), so the file is chowned back to the invoking user so a plain
-// `kubectl --kubeconfig build/<name>/<cluster>.kubeconfig` works without sudo.
-func writeKindKubeconfig(ctx context.Context, kindName, dst string) error {
-	out, err := exec.Output(ctx, "kind", "get", "kubeconfig", "--name", kindName)
-	if err != nil {
-		return fmt.Errorf("kind get kubeconfig %s: %w\n%s", kindName, err, out)
-	}
-	if err := os.WriteFile(dst, out, 0o644); err != nil {
-		return err
-	}
-	chownToSudoUser(dst)
-	return nil
 }
 
 // chownToSudoUser chowns path to the pre-sudo invoking user ($SUDO_UID:$SUDO_GID) when the

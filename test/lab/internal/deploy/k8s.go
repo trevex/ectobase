@@ -63,6 +63,18 @@ func SetDefaultStorageClass(ctx context.Context, kubeconfig, sc string) error {
 		"-p", `{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}`)
 }
 
+// AllowSchedulingOnControlPlanes removes the control-plane NoSchedule taint from
+// every node so workloads schedule. Talos 1.14 bakes that taint into the generated
+// KubeNodeConfig (and config-patch maps only deep-merge, so it can't be cleared in
+// config); these clusters are control-plane-only, so removing it is the equivalent
+// of the old allowSchedulingOnControlPlanes. Idempotent: removing an absent taint
+// is not an error for kubectl.
+func AllowSchedulingOnControlPlanes(ctx context.Context, kubeconfig string) error {
+	slog.Info("removing control-plane NoSchedule taint (control-plane-only clusters)")
+	return exec.Run(ctx, "kubectl", "--kubeconfig", kubeconfig,
+		"taint", "nodes", "--all", "node-role.kubernetes.io/control-plane-")
+}
+
 // WaitNodesReady blocks until at least want nodes report Ready (post-CNI).
 func WaitNodesReady(ctx context.Context, kubeconfig string, want int) error {
 	slog.Info("waiting for nodes to become Ready", "want", want)

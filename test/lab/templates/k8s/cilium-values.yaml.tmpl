@@ -1,0 +1,57 @@
+# Generated from templates/k8s/cilium-values.yaml.tmpl — do not edit by hand.
+# Cilium values for the container-mode Talos IPv6 fabric.
+# IPv6-only, tunnel (vxlan) routing, kube-proxy replacement via Talos KubePrism.
+ipv4:
+  enabled: false
+ipv6:
+  enabled: true
+
+kubeProxyReplacement: true
+# Talos KubePrism — a host-local apiserver load-balancer, decoupled from the anycast
+# API VIP + GoBGP convergence (Talos-recommended for kube-proxy replacement). The
+# cluster-patch's KubePrismConfig pins this same port (7445).
+k8sServiceHost: localhost
+k8sServicePort: "7445"
+
+routingMode: tunnel
+tunnelProtocol: vxlan
+
+ipam:
+  mode: cluster-pool
+  operator:
+    clusterPoolIPv6PodCIDRList:
+      - {{ .PodSubnet }}
+    # Per-node pod CIDR mask. Cilium's cluster-pool allocator caps the node-CIDR
+    # count at 2^16, so (maskSize - poolMask) must be <= 16; the pod pool is a /56,
+    # so /64 is the largest (and natural IPv6) per-node size.
+    clusterPoolIPv6MaskSize: 64
+
+bpf:
+  masquerade: true
+enableIPv6Masquerade: true
+
+# Talos runs Cilium in a container-mode node: mount the host cgroup rather than
+# letting the agent auto-mount, and grant the capability sets Talos documents.
+cgroup:
+  autoMount:
+    enabled: false
+  hostRoot: /sys/fs/cgroup
+
+securityContext:
+  capabilities:
+    ciliumAgent:
+      - CHOWN
+      - KILL
+      - NET_ADMIN
+      - NET_RAW
+      - IPC_LOCK
+      - SYS_ADMIN
+      - SYS_RESOURCE
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    cleanCiliumState:
+      - NET_ADMIN
+      - SYS_ADMIN
+      - SYS_RESOURCE
