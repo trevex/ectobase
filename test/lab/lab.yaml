@@ -6,6 +6,10 @@ images:
   flowplane: ghcr.io/trevex/ectobase/flowplane:dev
   tayga:    ghcr.io/trevex/ectobase/tayga:latest
   wan:      ghcr.io/trevex/ectobase/wan:latest
+  # Fabric routers (sw1/sw2/edge1/edge2), custom ISO->rootfs clab build (`make
+  # image-vyos`; pin: test/images/vyos/versions.env). Build-locally, host-local
+  # image like tayga/wan (IfNotPresent default; no remote pull).
+  vyos:     ghcr.io/trevex/ectobase/vyos:clab
   # Talos node image for the docker provisioner (P6 substrate). Mirrored from the
   # tagged upstream release by `make image-talos-mirror` (pin: test/images/talos/
   # versions.env). Like tayga/wan/frr, it is a host-side node/infra image, so it

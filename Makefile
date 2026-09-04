@@ -119,6 +119,13 @@ IMG_REPO ?= ghcr.io/trevex/ectobase
 image-tayga: ## Build the lab NAT64/DNS64 (tayga) image
 	docker build -t $(IMG_REPO)/tayga:latest test/images/tayga
 
+.PHONY: image-vyos
+image-vyos: ## Build the lab VyOS (clab) image from the pinned rolling ISO
+	cd test/images/vyos && . ./versions.env && \
+	  bash scripts/fetch-iso.sh "$$VYOS_ISO_URL" vyos-amd64.iso && \
+	  bash scripts/extract-rootfs.sh vyos-amd64.iso rootfs-amd64.tar && \
+	  docker build -f clab/Dockerfile -t $(IMG_REPO)/vyos:clab .
+
 .PHONY: image-talos
 image-talos: ## Build the lab Talos container image (rootfs from imager)
 	cd test/images/talos && . ./versions.env && \
@@ -141,7 +148,7 @@ image-wan: ## Build the lab WAN-sim (nft masquerade + ECMP return) image via nix
 	docker tag wan-simulator:latest $(IMG_REPO)/wan:latest
 
 .PHONY: lab-images
-lab-images: image-tayga image-wan ## Build all test/lab container images
+lab-images: image-tayga image-vyos image-wan ## Build all test/lab container images
 
 .PHONY: lab-app-images
 lab-app-images: image image-mesh image-cni image-dispatch ## Build all 6 app images the chart deploys
