@@ -246,11 +246,13 @@ func Up(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("host fabric route: %w", err)
 	}
 
-	// Push local images best-effort. Push goes via the registry container's
-	// host-published localhost port (127.0.0.1:5000, which is in docker's default
-	// insecure-registries — no host dockerd reconfig needed); the nodes pull the
-	// same registry:2 process via its fabric mirror addr. A fresh checkout may not
-	// have built the :dev images.
+	// Push the local :dev images to the in-fabric mirror; a push failure is fatal
+	// (a missing image otherwise surfaces ~12 min later as a waitAggregatedAPI
+	// timeout in deployEctobase). `make lab-up` builds them first via lab-app-images.
+	// Push goes via the registry container's host-published localhost port
+	// (127.0.0.1:5000, which is in docker's default insecure-registries — no host
+	// dockerd reconfig needed); the nodes pull the same registry:2 process via its
+	// fabric mirror addr.
 	reg := registry.New("127.0.0.1:" + fabric.RegistryPort)
 	if err := reg.PushLocal(ctx, cfg.Fabric.Registry.Push); err != nil {
 		return fmt.Errorf("push-local images to the in-fabric mirror (build them first: make lab-app-images): %w", err)
