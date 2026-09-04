@@ -58,6 +58,9 @@ pub struct IfaceParams {
     pub underlay_ipv6: [u8; 16],
     pub total_mbps: u64,
     pub public_mbps: u64,
+    /// L3 (netkit) edge: program `PORT_META.l3 = 1` and attach the guest program via `BPF_NETKIT`
+    /// (Task B.4) rather than tcx/clsact. `false` for veth/tap/pod-tap (L2, unchanged tcx attach).
+    pub l3: bool,
 }
 
 // Named shapes for the gRPC list/get return rows, so the signatures below read as
@@ -559,6 +562,15 @@ impl Control {
         // the caller explicitly supplies a preferred_underlay_route (see grpc.rs handler).
         // The guest program was pre-loaded in bring_up, so attach always succeeds and we get a
         // droppable link back — dropping it detaches the program on interface teardown.
+        //
+        // netkit (L3) primaries take the guest program via `BPF_NETKIT`, NOT tcx/clsact — attaching a
+        // clsact/tcx program to an L3 netkit primary is the wrong attach point. That wiring is Task
+        // B.4; until it lands, bail cleanly here so an explicit `device_type="netkit"` attach fails at
+        // the program-attach step (the device we created is torn down by the attach.rs rollback) rather
+        // than silently mis-attaching. No caller selects netkit yet (Auto resolves to Veth).
+        if params.l3 {
+            anyhow::bail!("netkit program attach not yet implemented (Task B.4)");
+        }
         let link = if g.pin_links {
             let pin_dir = g.pin_dir.clone();
             let gname = format!("guest-{}", hex_encode(interface_id));
@@ -600,6 +612,7 @@ impl Control {
             underlay_ipv6,
             total_mbps: params.total_mbps,
             public_mbps: params.public_mbps,
+            l3: params.l3,
         }) {
             // A non-pinned `link` drops here -> detaches. A pinned link is held by the bpffs pin, not
             // by `link`, so explicitly unpin to detach the program and avoid leaking the pin — keeping

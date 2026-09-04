@@ -14,7 +14,7 @@
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{bail, Context};
 
@@ -25,9 +25,19 @@ use crate::control::{Control, IfaceParams};
 /// created and how the guest reaches it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DeviceType {
+    /// Default (empty / `"auto"`): let the node pick the best available container edge. Resolved at
+    /// attach time — netkit L3 when the kernel supports it, else veth. Never reaches device creation
+    /// as `Auto`: `attach` resolves it to a concrete type first (see the `resolved` match).
+    Auto,
     /// Container: a veth pair whose guest end is moved into the target netns (the pod's `eth0`) and
     /// whose host end stays in the root netns as the datapath device.
     Veth,
+    /// Container (L3): an in-kernel BPF-programmable `netkit` pair in `mode l3`. The primary lives in
+    /// the root netns as the datapath device; the peer is the pod's `eth0`. Carries no L2/eth header
+    /// and has no settable MAC (local L3 delivery doesn't consult a device MAC). The guest program is
+    /// attached via `BPF_NETKIT` (Task B.4), NOT tcx — so an explicit netkit attach currently fails
+    /// cleanly at the program-attach step until B.4 lands.
+    Netkit,
     /// VM (fd model): a single root-netns tap whose fd is handed to qemu. No netns move, no peer —
     /// symmetric with the container host-veth. The VM's virtio NIC MAC MUST be supplied (local
     /// delivery rewrites the frame dst to `guest_mac`, so a derived MAC would never match the VM).
@@ -42,16 +52,22 @@ pub enum DeviceType {
 }
 
 impl DeviceType {
-    /// Parse the `AttachInterface.device_type` proto field. Empty or `"veth"` → `Veth` (the default,
-    /// preserving container behavior); `"tap"` → `Tap` (root-netns fd model); `"pod-tap"` → `PodTap`
-    /// (KubeVirt-compatible pod-netns tap); anything else is an error.
+    /// Parse the `AttachInterface.device_type` proto field. Empty or `"auto"` → `Auto` (the default:
+    /// node picks netkit L3 if the kernel supports it, else veth); `"veth"` → `Veth` (explicit L2
+    /// container); `"netkit"` → `Netkit` (explicit L3 container); `"tap"` → `Tap` (root-netns fd
+    /// model); `"pod-tap"` → `PodTap` (KubeVirt-compatible pod-netns tap); anything else is an error.
     pub fn parse(s: &str) -> anyhow::Result<Self> {
         match s {
-            "" | "veth" => Ok(DeviceType::Veth),
+            "" | "auto" => Ok(DeviceType::Auto),
+            "veth" => Ok(DeviceType::Veth),
+            "netkit" => Ok(DeviceType::Netkit),
             "tap" => Ok(DeviceType::Tap),
             "pod-tap" => Ok(DeviceType::PodTap),
             other => {
-                bail!("unknown device_type {other:?} (want \"veth\", \"tap\", or \"pod-tap\")")
+                bail!(
+                    "unknown device_type {other:?} \
+                     (want \"\"/\"auto\", \"veth\", \"netkit\", \"tap\", or \"pod-tap\")"
+                )
             }
         }
     }
@@ -105,6 +121,27 @@ pub struct AttachState {
 /// on any uncertainty — the wrong guess that direction is a tiny perf tax, not a correctness bug.
 pub fn uplink_finalizes_checksum(uplink: &str) -> bool {
     std::fs::symlink_metadata(format!("/sys/class/net/{uplink}/device")).is_ok()
+}
+
+/// Whether this kernel can actually stand up an L3 `netkit` pod device. Probed ONCE (memoized in a
+/// `OnceLock`) by creating a throwaway `netkit mode l3` link and deleting it: many kernels lack the
+/// netkit driver (needs a recent kernel + `CONFIG_NETKIT`), and a feature check that only inspects a
+/// version string would lie on backported/patched kernels. Actually creating the device is the only
+/// honest probe. Cheap after the first call (cached bool). Used by the `Auto` device-type resolver in
+/// `attach` to decide netkit-vs-veth — kept even while `Auto` still resolves to `Veth` (Task B.4 wires
+/// it in once `attach_netkit` exists).
+#[allow(dead_code)]
+pub fn netkit_supported() -> bool {
+    static SUPPORTED: OnceLock<bool> = OnceLock::new();
+    *SUPPORTED.get_or_init(|| {
+        // A fixed, unlikely-to-collide throwaway name in the root netns. Delete any stale one first
+        // (best-effort), create the L3 pair, then delete it — success on create == supported.
+        let tmp = "fp-nkprobe0";
+        let _ = run(&["ip", "link", "del", tmp]);
+        let ok = run(&["ip", "link", "add", tmp, "type", "netkit", "mode", "l3"]).is_ok();
+        let _ = run(&["ip", "link", "del", tmp]);
+        ok
+    })
 }
 
 impl AttachState {
@@ -241,13 +278,27 @@ impl AttachState {
         } else {
             tap_name.to_string()
         };
-        // The root-netns datapath device tc_guest_tx attaches to: a veth host end (its peer moves
-        // into the pod netns) or a single tap (its fd is handed to qemu). `create_interface` runs
-        // the identical datapath on either — the device type only changes how it's created here.
-        // Veth + PodTap use a root-netns veth as the datapath device; Tap uses a root-netns tap.
-        let device = match device_type {
-            DeviceType::Veth | DeviceType::PodTap => Self::host_veth_name(interface_id),
+        // Resolve the caller's device type to a concrete one before any device work. `Auto` (the
+        // default / empty device_type) currently resolves to `Veth` so the default container path is
+        // unchanged and green.
+        // TODO(B.4): once attach_netkit is implemented, Auto -> Netkit when netkit_supported().
+        let resolved = match device_type {
+            DeviceType::Auto => DeviceType::Veth,
+            dt => dt,
+        };
+        // Whether this is an L3 (netkit) edge — threaded into PORT_META.l3 so the datapath treats the
+        // primary as an L3 (no-eth) device. Only netkit is L3; veth/tap/pod-tap are all L2.
+        let l3 = matches!(resolved, DeviceType::Netkit);
+        // The root-netns datapath device tc_guest_tx attaches to: a veth/netkit host end (its peer
+        // moves into the pod netns) or a single tap (its fd is handed to qemu). `create_interface`
+        // runs the identical datapath on either — the device type only changes how it's created here.
+        // Veth + PodTap + Netkit use a root-netns primary as the datapath device; Tap uses a tap.
+        let device = match resolved {
+            DeviceType::Veth | DeviceType::PodTap | DeviceType::Netkit => {
+                Self::host_veth_name(interface_id)
+            }
             DeviceType::Tap => tap_dev.clone(),
+            DeviceType::Auto => unreachable!("Auto resolved to a concrete device type above"),
         };
         // Guest-side (in-netns) device name. Derived from the interface_id but sanitized to a valid
         // Linux device name — the CNI passes `<pod-uid>/<ifname>` as the id, which is not usable as a
@@ -256,7 +307,7 @@ impl AttachState {
         // Create + configure the device. If anything fails after creation, tear it down so we don't
         // leak. veth: create the pair + move the guest end into the netns. tap: a single root-netns
         // device. pod-tap: the veth + a pod-netns tap (named `tap_dev`) wired by mirred (KubeVirt).
-        let setup = match device_type {
+        let setup = match resolved {
             DeviceType::Veth => flowplane_device::create_veth_pair(&flowplane_device::VethSpec {
                 host_name: device.clone(),
                 guest_name: guest_ifname.clone(),
@@ -266,8 +317,25 @@ impl AttachState {
                 disable_csum_offload: self.disable_guest_csum_offload,
             })
             .map(|_dev| ()),
+            // Explicit netkit: create the L3 pair (primary in root netns, peer as the pod eth0). The
+            // netkit primary has no settable MAC (L3, NOARP) — `mac` is carried only for map
+            // programming. The guest-program attach for this device is Task B.4; `create_interface`
+            // currently bails at the program-attach step for l3, so an explicit netkit attach fails
+            // cleanly (no caller selects netkit yet — Auto resolves to Veth above).
+            DeviceType::Netkit => {
+                flowplane_device::netkit::create_netkit_pair(&flowplane_device::VethSpec {
+                    host_name: device.clone(),
+                    guest_name: guest_ifname.clone(),
+                    netns_path: netns_path.to_string(),
+                    mac,
+                    mtu: self.guest_mtu as u32,
+                    disable_csum_offload: self.disable_guest_csum_offload,
+                })
+                .map(|_dev| ())
+            }
             DeviceType::Tap => self.setup_tap(&device, mac),
             DeviceType::PodTap => self.setup_pod_tap(&device, netns_path, &tap_dev, mac),
+            DeviceType::Auto => unreachable!("Auto resolved to a concrete device type above"),
         };
         if let Err(e) = setup {
             let _ = run(&["ip", "link", "del", &device]);
@@ -285,6 +353,7 @@ impl AttachState {
             underlay_ipv6,
             total_mbps: 0,
             public_mbps: 0,
+            l3,
         };
         if let Err(e) = self
             .control
@@ -315,7 +384,7 @@ impl AttachState {
         // Configure the container's pod netns with the overlay addr(s) + per-family default routes.
         // Veth only: containers don't self-config (no DHCP/RA on the veth model); VMs (Tap/PodTap)
         // self-configure via DHCP/RA and must NOT be touched here.
-        if let DeviceType::Veth = device_type {
+        if let DeviceType::Veth = resolved {
             if let Err(e) =
                 flowplane_device::configure_guest_netns(&flowplane_device::GuestNetConfig {
                     netns_path: netns_path.to_string(),
@@ -336,13 +405,15 @@ impl AttachState {
 
         // `ifname` returned to the caller: for a veth it's the guest end inside the netns (the pod's
         // interface); for a tap it's the root-netns tap the caller points qemu at (or opens for its fd).
-        let ifname = match device_type {
+        let ifname = match resolved {
             // The guest-side (in-netns) device name the CNI reports back to the runtime — the
             // sanitized name we actually created, not the raw interface_id (which may contain `/`).
-            DeviceType::Veth => guest_ifname.clone(),
+            // Netkit is the same shape (the pod's eth0 is the peer), though it bails at attach until B.4.
+            DeviceType::Veth | DeviceType::Netkit => guest_ifname.clone(),
             // The tap the caller points qemu/libvirt at: root-netns (Tap, == device) or the
             // pod-netns tap (PodTap). Both are `tap_dev` (the caller-supplied name, e.g. "tap0").
             DeviceType::Tap | DeviceType::PodTap => tap_dev.clone(),
+            DeviceType::Auto => unreachable!("Auto resolved to a concrete device type above"),
         };
         Ok(AttachOutcome {
             ifname,
@@ -681,8 +752,11 @@ mod tests {
 
     #[test]
     fn device_type_parse() {
-        assert_eq!(DeviceType::parse("").unwrap(), DeviceType::Veth);
+        // Empty and "auto" both mean "let the node choose" (Auto); "veth"/"netkit" are explicit.
+        assert_eq!(DeviceType::parse("").unwrap(), DeviceType::Auto);
+        assert_eq!(DeviceType::parse("auto").unwrap(), DeviceType::Auto);
         assert_eq!(DeviceType::parse("veth").unwrap(), DeviceType::Veth);
+        assert_eq!(DeviceType::parse("netkit").unwrap(), DeviceType::Netkit);
         assert_eq!(DeviceType::parse("tap").unwrap(), DeviceType::Tap);
         assert_eq!(DeviceType::parse("pod-tap").unwrap(), DeviceType::PodTap);
         assert!(DeviceType::parse("bridge").is_err());
@@ -690,8 +764,11 @@ mod tests {
 
     #[test]
     fn device_type_requires_mac() {
-        // A VM's MAC must match the datapath's guest_mac; a container derives one.
+        // A VM's MAC must match the datapath's guest_mac; a container derives one. Netkit is an L3
+        // container edge with no settable MAC, so like veth/auto it must NOT require one.
+        assert!(!DeviceType::Auto.requires_mac());
         assert!(!DeviceType::Veth.requires_mac());
+        assert!(!DeviceType::Netkit.requires_mac());
         assert!(DeviceType::Tap.requires_mac());
         assert!(DeviceType::PodTap.requires_mac());
     }

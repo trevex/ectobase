@@ -37,6 +37,9 @@ pub struct IfaceParams {
     pub underlay_ipv6: [u8; 16],
     pub total_mbps: u64,
     pub public_mbps: u64,
+    /// L3 (netkit) edge → `PortMeta.l3 = 1` (datapath reads the IP from byte 0, no L2 responders).
+    /// `false` for veth/tap/pod-tap (L2, `l3 = 0`), preserving the existing behaviour.
+    pub l3: bool,
 }
 
 /// Build a `MeterState` from per-lane caps in Mbit/s. Egress total is EDT-shaped: only
@@ -131,6 +134,7 @@ impl<W: MapWriter> ControlCore<W> {
             underlay_ipv6,
             total_mbps,
             public_mbps,
+            l3,
         } = params;
         self.w.ports_upsert(
             tap,
@@ -139,7 +143,7 @@ impl<W: MapWriter> ControlCore<W> {
                 guest_ipv4: ipv4,
                 gateway_ipv4,
                 guest_mac: effective_mac,
-                l3: 0,
+                l3: u8::from(l3),
                 _pad: [0; 1],
                 underlay_ipv6,
                 gateway_ipv6,
@@ -309,6 +313,7 @@ mod tests {
             underlay_ipv6: [0xfd; 16],
             total_mbps: 0,
             public_mbps: 0,
+            l3: false,
         }
     }
 
@@ -487,10 +492,12 @@ mod tests {
             underlay_ipv6: [0xfd; 16],
             total_mbps: 100,
             public_mbps: 40,
+            l3: false,
         })
         .unwrap();
         let pm = c.w.ports.get(&7).unwrap();
         assert_eq!(pm.vni, 5);
+        assert_eq!(pm.l3, 0, "veth/tap/pod-tap edges are L2 (l3 == 0)");
         assert_eq!(pm.guest_mac, [1, 2, 3, 4, 5, 6]);
         // INTERFACES (v4) carries tap + guest_mac (local delivery demuxes on this, not UNDERLAY).
         let iv = c.w.ifaces.get(&IfaceKey::new(5, [10, 0, 0, 2])).unwrap();

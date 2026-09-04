@@ -137,8 +137,10 @@ message AttachInterfaceRequest {
   uint32 vni = 3;
   string mac = 4;          // optional; allocated if empty (REQUIRED for device_type=tap)
   repeated string requested_ips = 5; // optional; allocated if empty
-  string device_type = 6;  // "veth" (default/empty; container, guest end in netns) | "tap" (VM: a
-                           // single root-netns tap whose fd is handed to qemu) | "pod-tap" (VM,
+  string device_type = 6;  // "" / "auto" (default: netkit L3 if the kernel supports it, else veth) |
+                           // "veth" (L2 container, guest end in netns) | "netkit" (L3 pod: netkit
+                           // primary in root netns, peer as the pod eth0) | "tap" (VM: a single
+                           // root-netns tap whose fd is handed to qemu) | "pod-tap" (VM,
                            // KubeVirt-compatible: tap in the pod netns spliced to a root-netns veth)
   string tap_name = 7;     // exact device name for the tap (tap/pod-tap); empty = derive "tap-<id>".
                            // KubeVirt's domainAttachmentType:tap opens the primary tap by the literal

@@ -873,8 +873,10 @@ type AttachInterfaceRequest struct {
 	Vni          uint32                 `protobuf:"varint,3,opt,name=vni,proto3" json:"vni,omitempty"`
 	Mac          string                 `protobuf:"bytes,4,opt,name=mac,proto3" json:"mac,omitempty"`                                       // optional; allocated if empty (REQUIRED for device_type=tap)
 	RequestedIps []string               `protobuf:"bytes,5,rep,name=requested_ips,json=requestedIps,proto3" json:"requested_ips,omitempty"` // optional; allocated if empty
-	DeviceType   string                 `protobuf:"bytes,6,opt,name=device_type,json=deviceType,proto3" json:"device_type,omitempty"`       // "veth" (default/empty; container, guest end in netns) | "tap" (VM: a
-	// single root-netns tap whose fd is handed to qemu) | "pod-tap" (VM,
+	DeviceType   string                 `protobuf:"bytes,6,opt,name=device_type,json=deviceType,proto3" json:"device_type,omitempty"`       // "" / "auto" (default: netkit L3 if the kernel supports it, else veth) |
+	// "veth" (L2 container, guest end in netns) | "netkit" (L3 pod: netkit
+	// primary in root netns, peer as the pod eth0) | "tap" (VM: a single
+	// root-netns tap whose fd is handed to qemu) | "pod-tap" (VM,
 	// KubeVirt-compatible: tap in the pod netns spliced to a root-netns veth)
 	TapName       string `protobuf:"bytes,7,opt,name=tap_name,json=tapName,proto3" json:"tap_name,omitempty"` // exact device name for the tap (tap/pod-tap); empty = derive "tap-<id>".
 	unknownFields protoimpl.UnknownFields
