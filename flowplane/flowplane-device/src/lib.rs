@@ -2,12 +2,14 @@
 //! (`ip`/`ip netns exec` subprocess) — no tonic, no eBPF.
 pub mod geneve;
 pub mod grpc;
+pub mod netkit;
 pub mod netns;
 pub mod tap;
 pub mod underlay;
 pub mod veth;
 
 pub use geneve::{delete_geneve_dev, ensure_geneve_dev, geneve_add_args, GENEVE_DEV};
+pub use netkit::{create_netkit_pair, delete_netkit, netkit_add_args};
 pub use netns::{configure_guest_netns, GuestNetConfig};
 pub use tap::{create_persistent_tap, delete_tap, open_tap_fd};
 pub use underlay::{
