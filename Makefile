@@ -139,6 +139,9 @@ image-wan: ## Build the lab WAN-sim (nft masquerade + ECMP return) image via nix
 .PHONY: lab-images
 lab-images: image-kindnode image-tayga image-wan ## Build all test/lab container images
 
+.PHONY: lab-app-images
+lab-app-images: image image-mesh image-cni image-dispatch ## Build all 6 app images the chart deploys
+
 # --- lab (test/lab kind fabric) --------------------------------------------
 # Run the Go lab CLI directly via `go run` (no stray prebuilt binary). The live
 # commands drive containerlab + host networking, so they need real root; `sudo -E`
@@ -150,7 +153,7 @@ LAB_ROOT := sudo -E env "PATH=$$PATH" go run ./test/lab
 .PHONY: lab-render lab-up lab-down lab-down-purge lab-deploy lab-ceph lab-tier2-up lab-test
 lab-render: ## Render the lab build tree (no root)
 	$(LAB) render
-lab-up: ## Bring up the kind fabric + deploy the ectobase substrate
+lab-up: lab-app-images ## Build app images, then bring up the kind fabric + deploy ectobase
 	$(LAB_ROOT) up
 lab-down: ## Tear down the fabric (keeps the registry cache)
 	$(LAB_ROOT) down
