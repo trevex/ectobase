@@ -16,6 +16,14 @@ k8sServicePort: "7445"
 routingMode: tunnel
 tunnelProtocol: vxlan
 
+# Single-replica operator: every lab cluster is a single control-plane node, and the
+# operator Deployment defaults to 2 replicas with a hard (required) pod anti-affinity
+# on hostname — the second replica is unschedulable on a 1-node cluster, so the
+# Deployment sticks at 1/2 Available and `helm --wait` times out even though the
+# running operator is fully functional. Pin to 1 to match the node count.
+operator:
+  replicas: 1
+
 ipam:
   mode: cluster-pool
   operator:
