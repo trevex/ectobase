@@ -36,9 +36,9 @@ const (
 // the NIC, which is what a scheduled workload sets and what the agent's firewall
 // reconcile gates on); the brokers sync them; the agents program the Allow firewall
 // + learn the peer route via the reflector. The test then attaches an endpoint on
-// each node's flowplane over the real dataplane AttachInterface (grpcurl at
-// 127.0.0.1:1337 in the node netns), addresses the endpoint netns dpservice-style,
-// and pings across the encapsulated overlay in both directions.
+// each node's flowplane over the real dataplane AttachInterface (grpcurl to the
+// dataplane's unix socket inside the node), addresses the endpoint netns
+// dpservice-style, and pings across the encapsulated overlay in both directions.
 func TestCrossClusterOverlayPing(t *testing.T) {
 	cfg := loadConfig(t)
 	requireFabricUp(t, cfg)
@@ -224,30 +224,12 @@ func attachEndpoint(t *testing.T, ctx context.Context, cfg *config.Config, node 
 	return underlay
 }
 
-// dataplaneGRPC invokes a DataplaneNode method over grpcurl. Two transports, because the two
-// dataplane deployments differ:
-//   - Compute-node DaemonSet dataplane serves a root-only UNIX SOCKET; grpcurl runs INSIDE the
-//     kind node (which has filesystem access to it) — a net-ns-sharing sibling container cannot
-//     reach a socket.
-//   - The WAN-edge flowplane runs as a sidecar sharing a clab node's netns and serves loopback TCP
-//     there (see edge-wrapper.sh); reach it over the shared netns (the socket would live in the
-//     sidecar's own mount ns, unreachable from a docker exec into the clab node).
-//
-// `data` is the request JSON ("" for no-arg methods like ListInterfaces).
+// dataplaneGRPC invokes a DataplaneNode method over grpcurl against a compute node's dataplane.
+// The compute-node DaemonSet dataplane serves a root-only UNIX SOCKET, so grpcurl runs INSIDE the
+// kind node (which has filesystem access to it) — a net-ns-sharing sibling container cannot reach a
+// socket. `data` is the request JSON ("" for no-arg methods like ListInterfaces).
 func dataplaneGRPC(t *testing.T, ctx context.Context, container, method, data string) (string, error) {
 	t.Helper()
-	if strings.HasPrefix(container, "clab-") {
-		args := []string{"docker", "run", "--rm", "--network", "container:" + container,
-			"-v", repoRoot(t) + "/api/proto:/proto:ro",
-			"fullstorydev/grpcurl:latest", "-plaintext",
-			"-import-path", "/proto/dataplane/v1", "-proto", "dataplane.proto", "-max-time", "15"}
-		if data != "" {
-			args = append(args, "-d", data)
-		}
-		args = append(args, "127.0.0.1:1337", "dataplane.v1.DataplaneNode/"+method)
-		out, err := exec.SudoOutput(ctx, args...)
-		return string(out), err
-	}
 	stageGrpcurl(t, ctx, container)
 	args := []string{"grpcurl", "-plaintext",
 		"-import-path", "/proto/dataplane/v1", "-proto", "dataplane.proto", "-max-time", "15"}
