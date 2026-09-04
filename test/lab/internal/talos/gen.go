@@ -80,6 +80,18 @@ func Gen(ctx context.Context, s GenSpec) error {
 	if err != nil {
 		return err
 	}
+	// Drop the control-plane NoSchedule taint from KubeNodeConfig: these are
+	// control-plane-only clusters (every node is a fabric host that must run the
+	// ectobase datapath + workloads), so the control planes must stay schedulable.
+	// Talos OWNS + reconciles this taint back, so a one-shot `kubectl taint ... -`
+	// races (cert-manager & the pool pods only schedule while it's briefly off);
+	// removing it from the declarative config is the only durable fix on Talos 1.14
+	// (the deprecated cluster.allowSchedulingOnControlPlanes conflicts with the taint
+	// and fails config validation at boot, and patch can't delete a map key).
+	stripped, err = docstrip.RemoveKeys(stripped, "KubeNodeConfig", "taints")
+	if err != nil {
+		return err
+	}
 	if err := os.WriteFile(cpPath, stripped, 0o644); err != nil {
 		return err
 	}

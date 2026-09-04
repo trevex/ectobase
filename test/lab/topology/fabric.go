@@ -326,11 +326,12 @@ func Up(ctx context.Context, cfg *config.Config) error {
 		if err := deploy.HelmInstall(ctx, kubeconfig, "cilium", deploy.CiliumChart, deploy.CiliumRepo, deploy.CiliumVersion, ciliumValues); err != nil {
 			return fmt.Errorf("cluster %s cilium: %w", cl.Name, err)
 		}
-		// These are control-plane-only clusters, so drop the NoSchedule taint (Talos
-		// bakes it in; config-patch can't clear it) before waiting for workloads.
-		if err := deploy.AllowSchedulingOnControlPlanes(ctx, kubeconfig); err != nil {
-			return fmt.Errorf("cluster %s untaint control planes: %w", cl.Name, err)
-		}
+		// These are control-plane-only clusters, so the control planes must stay
+		// schedulable — handled declaratively in talos.Gen (the KubeNodeConfig
+		// control-plane taint is stripped from the rendered config), so no post-hoc
+		// `kubectl taint -` is needed here. A live untaint would in fact FAIL now: the
+		// taint never exists, and kubectl errors ("taint not found") on removing an
+		// absent taint.
 		if err := deploy.WaitNodesReady(ctx, kubeconfig, len(dc.Nodes)); err != nil {
 			return fmt.Errorf("cluster %s nodes ready: %w", cl.Name, err)
 		}
