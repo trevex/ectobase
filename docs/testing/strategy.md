@@ -29,7 +29,7 @@ The levels, in order of cost:
 | Byte-parity anchors | `make sim-anchor` | The real eBPF bytecode emits **identical** output to the native core for the same input (`BPF_PROG_TEST_RUN`). Sudo. |
 | Go controller envtest | `go test` (in devShell) | Controllers against a real in-process apiserver (`KUBEBUILDER_ASSETS`). |
 | Go e2e smoke | `make e2e` | Real program load/attach, real veth redirect, real `DataplaneNode` gRPC, real DHCP client exchange, graceful-restart state survival. Sudo. |
-| Live lab scenarios | `make lab-test` | Behaviors that only appear under sustained kernel forwarding — most importantly zero-drop across a graceful restart, and native-XDP-only paths. The Go live suite (`test/lab/livetest/`) runs against the kind + containerlab fabric. Sudo. |
+| Live lab scenarios | `make lab-test` | Behaviors that only appear under sustained kernel forwarding — most importantly zero-drop across a graceful restart, and native-XDP-only paths. The Go live suite (`test/lab/livetest/`) runs against the Talos + containerlab fabric. Sudo. |
 
 ## The load-bearing pattern: one core, run everywhere
 

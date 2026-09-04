@@ -17,7 +17,7 @@ Bring the fabric up and deploy both charts:
 make lab-up
 ```
 
-`lab-up` stands up the clab + kind fabric and deploys the two Helm charts
+`lab-up` stands up the clab + Talos fabric and deploys the two Helm charts
 (`ectobase-dispatch` on the dispatch cluster, `ectobase-pool` on each compute pool). See
 [Deploy with Helm](./deploy-helm.md) for what the charts contain and
 [Local fabric](./local-fabric.md) for the fabric itself.
@@ -34,7 +34,7 @@ The Container section needs only `make lab-up`.
 
 ## Accessing & inspecting the clusters
 
-The fabric is three kind clusters — the **dispatch** (fleet control plane / aggregated
+The fabric is three Talos clusters — the **dispatch** (fleet control plane / aggregated
 apiserver) plus two compute pools, **k02** and **k03**. `lab up` chowns each
 per-cluster kubeconfig back to your user, so `kubectl` works **without sudo**. Set
 one alias per cluster:

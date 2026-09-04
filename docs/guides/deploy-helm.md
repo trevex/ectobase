@@ -70,7 +70,9 @@ dispatch-broker kubeconfig at startup. So two fixtures must exist before `helm i
 
 1. A **PSA-privileged `ectobase-system`** namespace (the dataplane pods are
    privileged/hostPID/hostPath, the agent/broker are hostNetwork — Talos enforces baseline PSA
-   cluster-wide and would reject them; kind does not enforce PSA, so this only bites on Talos).
+   cluster-wide and would reject them; the lab fabric runs on Talos today, so this always
+   applies there — a bare `kind` cluster, if you test outside the lab, does not enforce PSA by
+   default).
 2. A **`broker-dispatch-kubeconfig` Secret** (key `kubeconfig`) holding the broker's credential to
    the dispatch — a token kubeconfig pointing at the dispatch's apiserver on the fabric.
 
@@ -127,7 +129,7 @@ The Tier-1 knobs live under `tier1Failover.*` (`snrNamespace`, `nodeSelector`, `
 ## Trying it end to end
 
 The [local fabric](./local-fabric.md) runs this exact two-chart install for you across a
-dispatch + compute-pool kind fabric — `make lab-up` renders the charts, brings up the clusters,
+dispatch + compute-pool Talos fabric — `make lab-up` renders the charts, brings up the clusters,
 mints the broker secret, and installs both charts. Read
 `test/lab/internal/deploy/ectobase.go` to see the reference sequence (namespaces, secret,
 the two `helm install`s) that this page mirrors.

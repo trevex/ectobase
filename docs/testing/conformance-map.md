@@ -18,7 +18,7 @@ vendored Python suite once covered and where each behaviour is asserted today.
 - **Go e2e / live smoke (`test/lab/livetest/`)** — real gRPC attach, real kernel/clab
   topology; proves the control-plane wiring and live forwarding.
 - **Live lab fabric (`test/lab/`, `make lab-test`)** — proves zero-drop under sustained
-  traffic on the kind + containerlab fabric; not a per-feature test.
+  traffic on the Talos + containerlab fabric; not a per-feature test.
 
 ---
 

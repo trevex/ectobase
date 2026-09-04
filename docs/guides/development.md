@@ -10,7 +10,7 @@ make            # list all make targets
 
 The dev shell (`flake.nix`) provides the pinned Rust toolchain (via `rustup`, from
 `rust-toolchain.toml`), Go, `bpf-linker`, `protobuf`, `bpftool`, `qemu`, `iproute2`,
-`kind`/`containerlab`/`helm`, `mkdocs`+`mkdocs-material`,
+`talosctl`/`containerlab`/`helm`, `mkdocs`+`mkdocs-material`,
 `controller-gen` + `crd-ref-docs` (the CRD/RBAC/reference codegen). It also exports
 `KUBEBUILDER_ASSETS`, a real in-process apiserver (kube-apiserver + etcd + kubectl) so
 controller-runtime **envtest** integration tests can spin a real apiserver under `go test`.
@@ -97,11 +97,12 @@ fork a parallel core to satisfy an anchor — move the assertion up to a live te
 code that ships is the code under test. See
 [Strategy: test at the right level](../testing/strategy.md).
 
-## Integration: the clab + kind fabric
+## Integration: the clab + Talos fabric
 
-The primary integration environment is a containerlab IPv6 fabric wrapping a kind
-cluster, with the full mesh stack and the `flowplane` DaemonSet deployed. See
-[The clab + kind fabric](../guides/local-fabric.md) for bring-up and scenarios.
+The primary integration environment is a containerlab IPv6 fabric wrapping
+Talos-in-container clusters, with the full mesh stack and the `flowplane` DaemonSet
+deployed. See [The clab + Talos fabric](../guides/local-fabric.md) for bring-up and
+scenarios.
 
 ## See also
 

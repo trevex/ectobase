@@ -3,7 +3,7 @@
 `flowplane` is an XDP + tc datapath, so its correctness depends on a handful of Linux kernel
 behaviours that are easy to get wrong and hard to observe. This chapter is the reference for the ones
 we hit in practice — each is stated with *what the kernel does* and *how it bit us*, so the constraint
-survives independent of any one bug. Most of these are **veth-specific** (the containerlab/kind
+survives independent of any one bug. Most of these are **veth-specific** (the containerlab/Talos
 fabric): real NICs behave more forgivingly, which is exactly why a clab-green datapath can still have
 latent assumptions.
 
@@ -148,7 +148,7 @@ one that bit us:
 - **netns does *not* scope bpffs.** Two processes in *different* netns that mount the *same*
   `/sys/fs/bpf` and pin under the same dir **collide** on one map set. This is exactly the two-edge
   `LOCAL` collision — separate netns, shared host bpffs, one `LOCAL` map. Isolation comes from separate
-  **pin dirs** (or separate bpffs mounts, as each kind node / real host already has), *not* from netns.
+  **pin dirs** (or separate bpffs mounts, as each Talos node / real host already has), *not* from netns.
 
 ## `skb:kfree_skb` drop reasons — the debugging primitive
 

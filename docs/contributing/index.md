@@ -18,7 +18,7 @@ CNI plugin, the CRD API, the Helm charts, and the lab/test harnesses.
 | `dispatch/` | The fleet control plane: the extension `apiserver`, the `controller` (compiler), and the `broker` (per-pool kubelet-analog) under `cmd/`, plus the generated client. |
 | `flowplane/` | The Rust workspace: the eBPF dataplane, its userspace loader/agent/CLI, the pure-core datapath library, the shared map types, and the in-process simulator. |
 | `charts/` | The Helm charts — `ectobase-dispatch` and `ectobase-pool` — with generated CRDs and RBAC. |
-| `test/` | Test harnesses: Go conformance/e2e suites (`test/conformance/`, `test/e2e/`), the CRD bases for envtest (`test/crds/`), test container images (`test/images/`), and the `test/lab/` kind + containerlab live lab. |
+| `test/` | Test harnesses: Go conformance/e2e suites (`test/conformance/`, `test/e2e/`), the CRD bases for envtest (`test/crds/`), test container images (`test/images/`), and the `test/lab/` Talos + containerlab live lab. |
 | `docs/` | This mkdocs-material site (plus the design-spec/plan archive under `docs/superpowers/`). |
 
 See [Repository layout & crates](../architecture/layout.md) for the crate-level breakdown
@@ -35,7 +35,7 @@ make            # list every annotated make target
 ```
 
 The dev shell provides the pinned Rust toolchain, Go, `bpf-linker`, `protobuf`, `bpftool`,
-`qemu`, `kind`/`containerlab`/`helm`, `controller-gen` + `crd-ref-docs`, and
+`qemu`, `talosctl`/`containerlab`/`helm`, `controller-gen` + `crd-ref-docs`, and
 `mkdocs`+`mkdocs-material`. It exports `KUBEBUILDER_ASSETS` so controller-runtime
 **envtest** integration tests can spin a real in-process apiserver under `go test`.
 
@@ -48,7 +48,7 @@ Key targets (the full annotated list prints from a bare `make`):
 | `make test` / `make sim` | Host unit + POD-layout tests / the in-process datapath sim. |
 | `make lint` / `make fmt` / `make check` | Clippy / format / the pre-commit gate. |
 | `make sim-anchor` / `make verifier` / `make e2e` / `make ha` | The privileged (sudo) datapath tests. |
-| `make lab-up` / `make lab-test` / `make lab-down` | Bring up / test / tear down the live kind + containerlab fabric. |
+| `make lab-up` / `make lab-test` / `make lab-down` | Bring up / test / tear down the live Talos + containerlab fabric. |
 | `make docs` / `make docs-serve` | Build (`mkdocs build --strict`) / live-serve this site. |
 
 ## The test tiers
@@ -62,7 +62,7 @@ Each concern is asserted at the cheapest level that can observe it (see
 - **envtest** (`go test` in the devShell) — controllers/compilers against a real
   in-process apiserver via `KUBEBUILDER_ASSETS`.
 - **Live lab** (`make lab-test`) — the Go live suite (`test/lab/livetest/`) against the
-  kind + containerlab fabric, for behaviours that only appear under sustained kernel
+  Talos + containerlab fabric, for behaviours that only appear under sustained kernel
   forwarding (zero-drop restart, native-XDP paths). Sudo.
 
 ## How a change flows

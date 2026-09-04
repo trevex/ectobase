@@ -1,7 +1,7 @@
 # Getting started (Nix + make)
 
 Everything ectobase needs to build and test is provided by the **Nix flake devShell**. You do not
-install Rust, Go, protobuf, `bpf-linker`, `kind`, `containerlab`, or `qemu`
+install Rust, Go, protobuf, `bpf-linker`, `talosctl`, `containerlab`, or `qemu`
 by hand — they are all pinned in `flake.nix`.
 
 ```sh
@@ -20,7 +20,9 @@ make            # list every target with its one-line description
   target has no prebuilt std). `aya-build` is told to use exactly this toolchain.
 - **Go** (with default tools) — for `mesh`, the `cni/` plugin, and `controller-gen`.
 - **`bpf-linker`, `protobuf` + `grpcurl`** — eBPF linking and the gRPC contracts.
-- **`kind`, `containerlab`, `kubectl`, `helm`** — the integration fabric (the `test/lab` CLI).
+- **`talosctl`, `containerlab`, `kubectl`, `helm`** — the integration fabric (the `test/lab` CLI):
+  `talosctl` is pinned to the Talos release the lab's node image ships (Talos ≥1.14, needed for
+  the native GoBGP `BGPPeerConfig` doc).
 - **`qemu`, `libvirt`, `OVMF`, `iproute2`, `bridge-utils`, `ethtool`, `tcpdump`** — VM boot and
   netns e2e harnesses.
 - **`mkdocs` + `mkdocs-material`** — this documentation (`make docs` = `mkdocs build --strict`).
@@ -53,7 +55,7 @@ by `aya-build` from `flowplane/build.rs` during `make build`. The Go modules bui
 | `make proto-routebus` | Generate the Go gRPC stubs for `routebus.v1` into `mesh/gen/`. |
 | `make docs` | Build the mkdocs site (`mkdocs build --strict` — broken links/nav fail the build). |
 | `make docs-serve` | Serve the docs locally with live reload. |
-| `make image` / `make image-mesh` / `make image-kindnode` | Build the flowplane / mesh / fabric kind-node container images. |
+| `make image` / `make image-mesh` / `make image-cni` | Build the flowplane / mesh / CNI-plugin container images (see [the lab guide](./local-fabric.md) for the fabric's own images: `make lab-images` + `make image-talos-mirror`). |
 
 ## Test targets
 
@@ -70,7 +72,7 @@ Tests run at several levels of privilege and fidelity — see the
 | `make e2e` | sudo | 3-node netns overlay end-to-end |
 | `make ha` | sudo | HA pinned-maps kill+adopt smoke |
 | `make tap-vm-smoke` | sudo + KVM | Boot a CirrOS VM on a real tap |
-| `make lab-up` | sudo | Bring up the clab + kind fabric and deploy the two Helm charts |
+| `make lab-up` | sudo | Bring up the clab + Talos fabric and deploy the two Helm charts |
 | `make lab-test` | sudo | Run the live multi-cluster suite against an up fabric |
 
 The `e2e`, `ha`, and `tap-*` targets need **passwordless sudo** (XDP attach, network namespaces, raw
@@ -79,6 +81,6 @@ sockets); the scripts elevate individual commands themselves. On a NixOS host se
 
 ## Next steps
 
-- The integration environment: [the clab + kind fabric](./local-fabric.md).
+- The integration environment: [the clab + Talos fabric](./local-fabric.md).
 - Zero-downtime restart semantics: [HA & graceful restart](../architecture/ha-graceful-restart.md).
 - Hard-won operational findings: [the runbook](./runbook.md).

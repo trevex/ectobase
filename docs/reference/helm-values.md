@@ -112,5 +112,5 @@ Remediation). Renders nothing when disabled.
 | `tier1Failover.unhealthyThreshold` | `60s` | Node `Ready=Unknown/False` duration before remediation. |
 | `tier1Failover.minHealthy` | `51%` | NHC guard: never remediate below this healthy quorum. |
 | `tier1Failover.remediationStrategy` | `OutOfServiceTaint` | SNR strategy: `Automatic`, `ResourceDeletion`, or `OutOfServiceTaint`. |
-| `tier1Failover.watchdog.enabled` | `false` | dev/kind: software reboot; prod `true`: hardware watchdog. |
+| `tier1Failover.watchdog.enabled` | `false` | dev/lab: software reboot; prod `true`: hardware watchdog. |
 | `tier1Failover.watchdog.device` | `/dev/watchdog` | `watchdogFilePath` on SelfNodeRemediationConfig (when enabled). |

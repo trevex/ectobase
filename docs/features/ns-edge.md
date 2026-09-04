@@ -2,7 +2,7 @@
 
 !!! warning "Status: Partial"
     Egress SNAT with the distributed return is validated end-to-end on the lab fabric. The
-    internet→VIP ingress path is proven on the kind pseudo-edge; on real WAN hardware the edge
+    internet→VIP ingress path is proven on the Talos pseudo-edge; on real WAN hardware the edge
     role (native XDP, anycast underlay, BGP announcement) is deployment-gated.
 
 The **WAN edge** bridges the tenant overlay to the internet. It gives overlay endpoints
@@ -144,5 +144,5 @@ recompute, not a connection. Draining an edge withdraws its BGP/health, ECMP rem
 in-flight flows reshuffle to other edges that recompute the same mapping. BGP appears **only** at
 the edge's northbound WAN announcement — internal reachability is the route bus, never BGP.
 
-See the [clab + kind fabric](../guides/local-fabric.md) for the FRR edge topology this runs on, and
+See the [clab + Talos fabric](../guides/local-fabric.md) for the FRR edge topology this runs on, and
 the [runbook](../guides/runbook.md) for the edge dual-XDP-attach pinning caveat in SKB mode.

@@ -1,10 +1,10 @@
-# IPv6 fabric (containerlab + kind) for ectobase
+# IPv6 fabric (containerlab + Talos) for ectobase
 
 !!! success "Status: Implemented"
     The integration environment is driven by the **Go lab CLI** (`test/lab`, exposed as the
     `make lab-*` targets). It stands up a **containerlab IPv6-BGP fabric** wrapping several
-    **kind** clusters — a **dispatch** cluster plus one or more compute **pool** clusters — and
-    deploys the two Helm charts onto them exactly as an operator would.
+    **Talos-in-container** clusters — a **dispatch** cluster plus one or more compute **pool**
+    clusters — and deploys the two Helm charts onto them exactly as an operator would.
 
 The fabric exercises the real paths: underlay inference over a per-node `/64` BGP fabric,
 overlay routing across it, distributed SNAT + WAN egress through the FRR edges, NAT64,
@@ -21,24 +21,29 @@ The lab CLI (`test/lab`, a cobra CLI; config in `test/lab/lab.yaml`) renders and
 | **Tayga NAT64** `nat64-1`/`nat64-2` | `64:ff9b::/96` → IPv4 pool → MASQUERADE to the WAN, one per edge. |
 | **WAN sim** `wan` | Masquerades all fabric prefixes onto the host uplink; the host's single route into the fabric. |
 | **Registry mirror** (`registry:2`) | Persistent pull-through + push-local mirror on the WAN segment (`fd00:29::5:5000`), cache-backed across `down`. |
-| **kind clusters** | One per lab cluster (`dispatch`, `k02`, `k03`, …). Each kind node runs the `kind-node-fabric` image, which before kubelet establishes a `dummy0` `/128` identity, sets `kubelet --node-ip` to it, and speaks FRR eBGP to both switches. |
+| **Talos-in-container nodes** | One per lab-cluster node (`dispatch`, `k02`, `k03`, …). Each is a stock siderolabs `talos:container` image, booted with `PLATFORM=container` + a base64 `USERDATA=` machine config. Talos' own embedded GoBGP establishes the `dummy0` `/128` identity (= kubelet `--node-ip`) and speaks unnumbered eBGP to both switches — no fabric-preboot script, no on-node FRR. |
 | **Ceph/demo** (optional) | On its own `/64` when `fabric.ceph.enabled`, for RBD + the Tier-2 storage fence. |
 
 Every per-cluster/per-node prefix is **derived** (FNV-1a of the cluster name) so parallel
 clusters never collide; the whole fabric lives under `fd00:cafe::/32` (the single aggregate
 the host routes into via the WAN container).
 
-The pod CNI is **kindnet** (+ kube-proxy), not Cilium: the CNI here only serves ordinary pods
-— the VM/overlay datapath is flowplane's, independent of the pod CNI. On this per-`/64`
-fabric kindnet plain-`MASQUERADE`s pod egress to the egress uplink's SLAAC address, so pods
-reach in-fabric services symmetrically. (This requires **1 node per cluster**; kindnet's
-cross-node pod routes would break on the per-`/64` fabric.)
+The pod CNI is **Cilium** (container-mode, `kubeProxyReplacement=true` via Talos' KubePrism,
+IPv6-only, vxlan tunnel), not kindnet — Talos resolves the cluster CNI to `"none"` so Cilium
+owns it. It coexists with a thin **Multus** DaemonSet (`cni.exclusive: false` in the Cilium
+values) that attaches the flowplane overlay as a Multus secondary network; the VM/overlay
+datapath is flowplane's either way, independent of the pod CNI. (This still requires **1 node
+per cluster**: every lab cluster is a single-node Talos control plane today, and the Cilium
+operator's replica count is pinned to match — not a fabric-routing limitation the way
+kindnet's node-local pod routing used to be.)
 
 ## Bring it up
 
 Prereqs (run everything inside `nix develop`):
 
-- Build the fabric + kind-node images: `make lab-images` and `make image-kindnode`.
+- Build the fabric images and mirror the Talos node image: `make lab-images` and
+  `make image-talos-mirror` (pulls the pinned upstream `siderolabs/talos` release and tags it
+  into the fabric namespace — no local rootfs build needed).
 - Build the component `:dev` images the fabric mirror serves: `make image`,
   `make image-mesh`, `make image-cni`, and the dispatch images (`dispatch-apiserver`,
   `dispatch-controller`, `dispatch-broker`). `lab up` **pushes** local `:dev` images into the mirror;
@@ -50,7 +55,7 @@ Prereqs (run everything inside `nix develop`):
 
 ```sh
 make lab-render     # expand templates into test/lab/build/<name>/ (no root)
-make lab-up         # render → clab fabric → kind clusters (kindnet) → push :dev images → deploy the two charts
+make lab-up         # render → clab fabric (Talos nodes + Cilium/Multus) → push :dev images → deploy the two charts
 make lab-test       # the live suite (go test -tags live ./livetest/...)
 make lab-down       # tear down; keeps the registry cache (make lab-down-purge removes it)
 ```
@@ -97,21 +102,22 @@ kubectl --kubeconfig test/lab/build/ectobase/k02.kubeconfig get clusterpools.pla
 
 ## Fabric-only egress
 
-The node's preferred default (`::/0`) arrives via FRR BGP `default-originate` from the edges,
-relayed by the switches to the node's own FRR speaker over unnumbered eBGP — no RA involved.
-`fabric-preboot` deletes the kind-bridge (`eth0`) kernel default outright (admin distance always
-beats a higher-metric demotion), so zebra installs the BGP default and egress is fabric-only.
-Traffic goes `node → switch → edge → (Tayga NAT64 for IPv4) → WAN → internet`. `up`
-auto-configures the host NAT66 + FORWARD so the WAN's masqueraded fabric egress reaches the host
-uplink.
+The node's preferred default (`::/0`) arrives via Talos' own embedded GoBGP peering unnumbered
+eBGP to both switches, originated by the edges (`default-originate`) and relayed by the
+switches — no RA involved, no on-node FRR. There is no kind-bridge default to delete: GoBGP is
+the node's only route source for `::/0`, and because the node sources fabric egress from its
+own `/128` VTEP natively, NAT64 egress needs no masquerade/route-map patch. Traffic goes
+`node → switch → edge → (Tayga NAT64 for IPv4) → WAN → internet`. `up` auto-configures the host
+NAT66 + FORWARD so the WAN's masqueraded fabric egress reaches the host uplink.
 
 ## Registry mirror
 
 A persistent pull-through + push-local `registry:2` runs on the WAN segment
 (`fd00:29::5:5000`), cache-backed at `build/<name>/registry-cache` (survives `down`). `up`
-pushes local `:dev` images via the host-published `127.0.0.1:5000`; nodes pull over the fabric
-via the containerd `certs.d` hosts.toml mirror. The cache makes a second `up` materially
-faster.
+pushes local `:dev` images via the host-published `127.0.0.1:5000`; each Talos node's
+containerd mirrors `ghcr.io` at this same registry via a declarative
+`machine.registries.mirrors` doc in its rendered machine config (not a mounted `certs.d`). The
+cache makes a second `up` materially faster.
 
 ## XDP attach modes, MTU, and the per-edge pin namespace
 

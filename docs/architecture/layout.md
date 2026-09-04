@@ -13,12 +13,12 @@ CNI plugin, the CRD API, Kubernetes manifests, and the lab/test harnesses.
 | `dispatch/` | The fleet control plane: the extension `apiserver`, the `controller` (compiler), and the `broker` (per-pool kubelet-analog) under `cmd/`, plus their generated client. |
 | `api/` | Kubernetes CRD types, split into five API groups — `net`, `compute`, `storage`, `compiled`, `platform` (each `api/<group>/v1alpha1/`, group `<group>.ectobase.dev`) — and the gRPC/protobuf contracts (`api/proto/dataplane/v1/`, `api/proto/routebus/v1/`). |
 | `charts/` | The Helm charts (`ectobase-dispatch`, `ectobase-pool`) with generated CRDs and RBAC. |
-| `hack/` | Lab bring-up: the containerlab + kind IPv6 fabric (`clab-up.sh` / `clab-down.sh`, `clab/`), the fabric kind-node image, and edge-agent helpers. |
-| `test/` | Test harnesses: Go conformance/e2e suites (`test/conformance/`, `test/e2e/`), the CRD bases (`test/crds/`), test container images (`test/images/`), and the `test/lab/` kind-substrate lab. |
+| `hack/` | Dev/ops scripts: BPF-pin cleanup across clab up/down cycles (`bpf-cleanup.sh`), the flowplane CNI node installer the pool chart's DaemonSet runs (`cni-install.sh`), and one-off live-sweep helpers. The containerlab + Talos fabric bring-up itself lives entirely in `test/lab/` (below), not here. |
+| `test/` | Test harnesses: Go conformance/e2e suites (`test/conformance/`, `test/e2e/`), the CRD bases (`test/crds/`), test container images (`test/images/`), and the `test/lab/` Talos-substrate lab. |
 | `docs/` | This mkdocs-material site plus the design-spec/plan archive (`docs/superpowers/`). |
 
 The Nix flake (`flake.nix`) provides the entire toolchain — pinned Rust, `bpf-linker`,
-`protobuf`, Go, `kind`/`containerlab`, `qemu`, `bpftool`, and
+`protobuf`, Go, `talosctl`/`containerlab`, `qemu`, `bpftool`, and
 friends. `make` (from inside `nix develop`) is the entry point for all build/test/lab
 targets. See [Getting started](../guides/getting-started.md).
 

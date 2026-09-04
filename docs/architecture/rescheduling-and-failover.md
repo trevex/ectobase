@@ -94,7 +94,7 @@ tier1Failover:
   minHealthy: "51%"                       # NHC guard: never remediate below this healthy quorum
   remediationStrategy: OutOfServiceTaint  # SNR enum: Automatic | ResourceDeletion | OutOfServiceTaint
   watchdog:
-    enabled: false                        # dev/kind: software reboot. prod true = hardware watchdog
+    enabled: false                        # dev/lab: software reboot. prod true = hardware watchdog
     device: /dev/watchdog
 ```
 
