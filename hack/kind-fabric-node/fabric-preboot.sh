@@ -37,6 +37,25 @@ sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1 || true
 # with the kindnet CNI nothing does, so the node owns it. Idempotent.
 mountpoint -q /sys/fs/bpf 2>/dev/null || mount -t bpf bpf /sys/fs/bpf 2>/dev/null || true
 
+# Exempt NAT64 egress (dst 64:ff9b::/96) from kind's KIND-MASQ-AGENT MASQUERADE.
+# kindnet MASQUERADEs any non-pod-CIDR, non-LOCAL egress to the node's kind-bridge
+# eth0 /64 address — which overrides even a VTEP-sourced socket, and the edges route
+# that kind prefix out the WAN, so the NAT64 reply (return-routed by the edges only to
+# the /128 VTEP) is black-holed. A `-j RETURN` at the TOP of the built-in nat
+# POSTROUTING chain short-circuits both KUBE-POSTROUTING and the KIND-MASQ-AGENT jump
+# for this dst, so the packet keeps its VTEP source (set via the zebra SET_SRC route-map
+# below). POSTROUTING is a built-in chain (present now, pre-kubelet) that kube-proxy and
+# kindnet only APPEND their jumps to — they never flush it — so this survives their
+# periodic reconcile, unlike a rule inside the kindnet-owned KIND-MASQ-AGENT chain (which
+# does not even exist yet at preboot). Idempotent: drop any prior copy, then insert first.
+if command -v ip6tables >/dev/null 2>&1; then
+  MASQ_EXEMPT='-d 64:ff9b::/96 -m comment --comment nat64-egress-exempt-kind-masq -j RETURN'
+  # shellcheck disable=SC2086
+  while ip6tables -t nat -D POSTROUTING $MASQ_EXEMPT 2>/dev/null; do :; done
+  # shellcheck disable=SC2086
+  ip6tables -t nat -I POSTROUTING 1 $MASQ_EXEMPT 2>/dev/null || true
+fi
+
 # NB: the k8s pod overlay is handled by Cilium in TUNNEL (VXLAN) mode — cross-node
 # pod traffic is encapsulated to the peer NODE IP (reachable via the underlay BGP),
 # so pod-CIDR routes NEVER enter this kernel FIB as `via <peer>` nor the underlay
@@ -123,6 +142,19 @@ ROUTERID="10.0.2.$(printf '%s' "$BASE" | sed 's/.*:\([0-9a-f]*\)::$/\1/' | tr -c
   echo "  network ${NODEIP}/128"
   for u in $UPLINKS; do echo "  neighbor $u activate"; echo "  neighbor $u allowas-in 1"; done
   echo " exit-address-family"
+  echo "exit"
+  # zebra preferred-src: install every BGP-learned route (::/0, 64:ff9b::/96, the
+  # fabric prefixes) with the /128 VTEP as its route `src`. Without this the routes
+  # carry no preferred-src, so RFC 6724 source-selection for fabric-bound egress
+  # (notably the NAT64 dst 64:ff9b::/96, whose reply the edges return-route only to
+  # the VTEP) picks the node's kind-bridge eth0 /64 global instead — and the edges
+  # route that kind prefix out the WAN, black-holing the reply. Pinning src=VTEP in
+  # zebra makes the FIB source fabric egress from the fabric identity. A route-map
+  # (not a post-hoc `ip route replace`) so it survives BGP reconvergence/ECMP churn.
+  echo "route-map SET_SRC permit 10"
+  echo " set src ${NODEIP}"
+  echo "exit"
+  echo "ipv6 protocol bgp route-map SET_SRC"
 } > /etc/frr/frr.conf
 systemctl restart frr || systemctl start frr || true
 
