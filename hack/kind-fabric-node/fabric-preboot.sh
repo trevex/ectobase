@@ -78,19 +78,21 @@ UPLINKS="eth1"
 
 # The fabric default (::/0) arrives via BGP (the edges default-originate; the ToR
 # re-advertises it to this host). No RA default, no SLAAC source — the /128 above is
-# the egress source. (eth0 here is kind's own bridge — the fabric routers, not the
-# compute nodes, are the ones detached from clab mgmt in P3b; kind's bridge default is
-# demoted below so the fabric BGP default is preferred.)
-# Demote the kind-bridge default (eth0, kind's own docker network — NOT clab mgmt,
-# which the fabric routers drop via `network-mode: none`) below the fabric default so
-# the BGP-learned ::/0 wins once FRR converges. eth0 stays as the pre-convergence
-# image-pull fallback (kubeadm/CNI); steady-state egress + the in-fabric registry
-# (fd00:29::5, via the containerd mirror hosts.toml) go over the fabric. One-shot:
-# docker sets this default once at container start.
+# the egress source.
+#
+# eth0 here is kind's own bridge (NOT clab mgmt — the fabric routers drop that via
+# `network-mode: none`). kind injects a kernel default via that bridge, and FRR/zebra
+# selects defaults by ADMIN DISTANCE first: a kernel route (distance 0) always outranks
+# the BGP-learned ::/0 (distance 20) regardless of metric — so merely DEMOTING the
+# kind default (higher metric) never lets the fabric default into the FIB. We therefore
+# DELETE the kind-bridge default outright so zebra installs the BGP ::/0 and egress is
+# fabric-only. Intra-cluster traffic is unaffected (the kind subnet stays a connected
+# route); image pulls go to the in-fabric registry (fd00:29::5, via the containerd
+# mirror hosts.toml) over the fabric once FRR converges (kubelet retries; the BGP-
+# convergence wait below gates kubelet start). One-shot: docker sets this default once.
 MGMTGW="$(ip -6 route show default dev eth0 2>/dev/null | awk '/via/{print $3; exit}')"
 if [ -n "${MGMTGW:-}" ]; then
   ip -6 route del default via "$MGMTGW" dev eth0 2>/dev/null || true
-  ip -6 route add default via "$MGMTGW" dev eth0 metric 4096 2>/dev/null || true
 fi
 
 ROUTERID="10.0.2.$(printf '%s' "$BASE" | sed 's/.*:\([0-9a-f]*\)::$/\1/' | tr -cd '0-9')"

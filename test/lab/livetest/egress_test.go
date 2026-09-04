@@ -57,26 +57,28 @@ func TestNAT64Egress(t *testing.T) {
 	})
 }
 
-// TestFabricOnlyEgress asserts the fabric BGP default is present on every node
-// (P3b). The two node kinds differ in how mgmt attaches:
+// TestFabricOnlyEgress asserts the fabric BGP default is present on every node,
+// and ONLY the fabric default (P3b). The two node kinds differ in how mgmt
+// attaches:
 //   - Fabric routers (edge/switch) are `network-mode: none` clab nodes — no eth0,
 //     no mgmt default at all; their only default is the BGP-learned `::/0` via
 //     the fabric uplinks.
 //   - Compute nodes are kind-created ext-container nodes; clab never attaches
 //     them to clab mgmt, but kind's own bridge gives them an eth0 with its own
-//     default, which fabric-preboot demotes (high metric) so the fabric BGP
-//     default is preferred rather than absent.
+//     kernel default. FRR/zebra picks defaults by administrative distance
+//     first — a kernel route (distance 0) always outranks the BGP-learned
+//     `::/0` (distance 20) regardless of metric — so fabric-preboot DELETES
+//     the kind-bridge default outright (demoting it would never let the BGP
+//     default into the FIB). So a correctly-booted compute node has no `dev
+//     eth0` default at all.
 //
-// So we only assert the positive invariant here: a fabric default via the
-// uplinks (eth1/eth2) is present. RA defaults were removed in P3a, so this is
-// exclusively the BGP-learned `::/0` from the edges; it may be ECMP'd across
-// both uplinks, rendered as a `default proto bgp …` header line followed by
-// separate `nexthop … dev ethN` lines. We don't assert a specific metric — the
-// BGP-installed kernel metric is implementation-dependent (unlike the old RA
-// metric 1024).
-//
-// TODO(B4): once live route output is known, tighten this to assert the fabric
-// default is PREFERRED (lower metric) over kind's demoted eth0 bridge default.
+// We assert both halves of the invariant: a fabric default via the uplinks
+// (eth1/eth2) is present, and no default remains via eth0. RA defaults were
+// removed in P3a, so the fabric default is exclusively the BGP-learned `::/0`
+// from the edges; it may be ECMP'd across both uplinks, rendered as a
+// `default proto bgp …` header line followed by separate `nexthop … dev ethN`
+// lines. We don't assert a specific metric — the BGP-installed kernel metric
+// is implementation-dependent (unlike the old RA metric 1024).
 func TestFabricOnlyEgress(t *testing.T) {
 	cfg := loadConfig(t)
 	requireFabricUp(t, cfg)
@@ -91,7 +93,7 @@ func TestFabricOnlyEgress(t *testing.T) {
 				if err != nil {
 					return fmt.Errorf("ip -6 route show default: %w", err)
 				}
-				var fabricLane bool
+				var fabricLane, eth0Default bool
 				for _, line := range strings.Split(strings.TrimSpace(routes), "\n") {
 					line = strings.TrimSpace(line)
 					if line == "" {
@@ -103,9 +105,18 @@ func TestFabricOnlyEgress(t *testing.T) {
 						(strings.Contains(line, "dev eth1") || strings.Contains(line, "dev eth2")) {
 						fabricLane = true
 					}
+					// The kind-bridge default (eth0) must be gone: fabric-preboot
+					// deletes it so zebra installs the BGP default instead of
+					// merely demoting it (admin distance beats metric).
+					if strings.HasPrefix(line, "default") && strings.Contains(line, "dev eth0") {
+						eth0Default = true
+					}
 				}
 				if !fabricLane {
 					return fmt.Errorf("no fabric default via the uplinks (dev eth1/eth2):\n%s", routes)
+				}
+				if eth0Default {
+					return fmt.Errorf("stale default via dev eth0 (kind-bridge default not deleted):\n%s", routes)
 				}
 				return nil
 			})
