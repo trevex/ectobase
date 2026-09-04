@@ -37,6 +37,7 @@ const (
 // LB CRD -> edge/distributed-LB control path yet, and the edge Maglev / DSR path is the thing under
 // test.
 func TestLbDistributeSmoke(t *testing.T) {
+	t.Skip("P3 pruned the flowplane-edge1 XDP sidecar (wan_rx Maglev + DSR edge); N/S-LB is re-integrated under Geneve/tcx in its own edge spec (see docs project_p2_deferred_ingress_features). Not a P4 datapath.")
 	cfg := loadConfig(t)
 	requireFabricUp(t, cfg)
 	ctx := context.Background()
