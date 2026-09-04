@@ -30,9 +30,16 @@ pub use flowplane_common::proto::{ETH_P_IP, ETH_P_IPV6, GW_MAC};
 ///
 /// On entry the frame is already the decapped inner frame `[InnerEth(14)][InnerIPv4/v6 ...]` (exactly
 /// what `get_tunnel_key` + the geneve device hand the tcx program). The inner Ethernet header is
-/// rewritten in place (dst=guest_mac, src=GW_MAC, ethertype=`ethertype`); the frame is NOT resized.
-/// `ethertype` is `ETH_P_IP` for the v4 ingress path, `ETH_P_IPV6` for the v6 one (P2 Task 4c) — the
-/// rewrite itself is protocol-agnostic, only the wire ethertype it stamps differs.
+/// rewritten in place (dst = delivery MAC, src=GW_MAC, ethertype=`ethertype`); the frame is NOT
+/// resized. `ethertype` is `ETH_P_IP` for the v4 ingress path, `ETH_P_IPV6` for the v6 one (P2 Task
+/// 4c) — the rewrite itself is protocol-agnostic, only the wire ethertype it stamps differs.
+///
+/// `l3` picks the inner dst MAC. For an L2 delivery tap (veth/tap, `l3 == false`) the dst is
+/// `guest_mac`, as always. For an L3 netkit pod (`l3 == true`) the dst is the all-zero MAC:
+/// SPIKE-PROVEN (Task B.5) — netkit is ETH-framed at the BPF hook, and the NOARP L3 pod device does
+/// dst-MAC filtering, accepting only its own device MAC (`00:00:00:00:00:00`) or bcast/mcast; an
+/// arbitrary unicast like `guest_mac` is dropped as `PACKET_OTHERHOST`. src MAC (`GW_MAC`) and the
+/// ethertype are identical in both cases. No frame push/pop — the eth header is already present.
 ///
 /// Returns `Ok(Action::Redirect(tap_ifindex))` after a successful rewrite; `Err(DpErr::Bounds)` if
 /// the frame is too short (matches the eBPF `Err` path).
@@ -42,12 +49,16 @@ pub fn decap_and_rewrite<P: Pkt>(
     tap_ifindex: u32,
     guest_mac: [u8; 6],
     ethertype: u16,
+    l3: bool,
 ) -> Result<Action, DpErr> {
     if pkt.len() < ETH_LEN {
         return Err(DpErr::Bounds);
     }
+    // L3 netkit pod: deliver to the pod's zero device MAC (unicast guest_mac would be dropped as
+    // PACKET_OTHERHOST by the NOARP pod). L2 tap: the guest MAC as always.
+    let dst_mac = if l3 { [0u8; 6] } else { guest_mac };
     let mut ok = true;
-    ok &= pkt.write_bytes(0, &guest_mac); // dst = guest MAC
+    ok &= pkt.write_bytes(0, &dst_mac); // dst = delivery MAC (guest MAC on L2; zero MAC on L3)
     ok &= pkt.write_bytes(6, &GW_MAC); // src = gateway MAC
     ok &= pkt.write_bytes(12, &ethertype.to_be_bytes());
     if !ok {

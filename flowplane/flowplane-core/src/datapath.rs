@@ -213,6 +213,18 @@ fn resolve_nat64_guest_ipv6<M: Maps>(maps: &M, tap_ifindex: u32) -> [u8; 16] {
         .unwrap_or([0; 16])
 }
 
+/// Source the delivery tap's `l3` bit (`PortMeta.l3 != 0`) for [`decap_and_rewrite`]: `true` picks the
+/// all-zero inner dst MAC an L3 netkit pod accepts, `false` keeps the L2 `guest_mac`. Mirrors
+/// [`resolve_nat64_guest_ipv6`]'s per-tap `PORT_META` lookup (and its `#[inline(never)]` BPF-stack-
+/// relief reasoning — the ~70-byte `PortMeta` copy stays out of the caller's already-large dispatch).
+/// `false` when `PORT_META` has no entry for `tap_ifindex` (defaults to the L2 path, byte-unchanged).
+#[inline(never)]
+fn resolve_delivery_l3<M: Maps>(maps: &M, tap_ifindex: u32) -> bool {
+    maps.port_meta_get(tap_ifindex)
+        .map(|m| m.l3 != 0)
+        .unwrap_or(false)
+}
+
 /// Returns the final delivery `Action` (+ tunnel decision on a relay/reforward arm), having mutated
 /// `pkt` in place.
 ///
@@ -305,8 +317,10 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
         uplink_track_flow(&*pkt, maps, inner_off, in_.vni, in_.now);
     }
 
-    // 4. Decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest.
-    let action = match decap_and_rewrite(pkt, tap, guest_mac, ETH_P_IP) {
+    // 4. Decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest. The delivery tap's `l3`
+    //    bit selects the inner dst MAC (zero MAC for an L3 netkit pod; guest_mac for an L2 tap).
+    let l3 = resolve_delivery_l3(&*maps, tap);
+    let action = match decap_and_rewrite(pkt, tap, guest_mac, ETH_P_IP, l3) {
         Ok(a) => a,
         Err(_) => Action::Drop,
     };
@@ -469,8 +483,10 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
         uplink_track_flow6(&*pkt, maps, inner_off, in_.vni, in_.now);
     }
 
-    // 4. Decap already ran (kernel); rewrite the inner Ethernet for the guest (ethertype = IPv6).
-    let action = match decap_and_rewrite(pkt, tap, guest_mac, ETH_P_IPV6) {
+    // 4. Decap already ran (kernel); rewrite the inner Ethernet for the guest (ethertype = IPv6). The
+    //    delivery tap's `l3` bit selects the inner dst MAC (zero MAC on L3 netkit; guest_mac on L2).
+    let l3 = resolve_delivery_l3(&*maps, tap);
+    let action = match decap_and_rewrite(pkt, tap, guest_mac, ETH_P_IPV6, l3) {
         Ok(a) => a,
         Err(_) => Action::Drop,
     };
@@ -846,10 +862,15 @@ pub fn process_uplink_nat_return<P: Pkt, M: Maps>(
         UplinkTarget::Local {
             tap_ifindex,
             guest_mac,
-        } => match decap_and_rewrite(pkt, tap_ifindex, guest_mac, ETH_P_IP) {
-            Ok(a) => a,
-            Err(_) => Action::Drop,
-        },
+        } => {
+            // Same delivery-tap `l3` selection as `process_uplink` — an L3 netkit pod can receive
+            // NAT returns too, and would drop a unicast guest_mac dst as PACKET_OTHERHOST.
+            let l3 = resolve_delivery_l3(&*maps, tap_ifindex);
+            match decap_and_rewrite(pkt, tap_ifindex, guest_mac, ETH_P_IP, l3) {
+                Ok(a) => a,
+                Err(_) => Action::Drop,
+            }
+        }
         UplinkTarget::EdgeLocalDeliver | UplinkTarget::Drop => Action::Drop,
     }
 }

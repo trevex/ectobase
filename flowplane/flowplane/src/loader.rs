@@ -335,22 +335,28 @@ pub fn unpin_link(pin_dir: &Path, name: &str) {
     let _ = std::fs::remove_file(link_pin_path(pin_dir, name));
 }
 
-// ── netkit (BPF_NETKIT_PRIMARY) attach ────────────────────────────────────────
+// ── netkit (BPF_NETKIT_PEER) attach ───────────────────────────────────────────
 //
 // aya 0.13 has NO netkit attach API (aya-rs/aya#1540 open): `SchedClassifier::attach`
 // only does tc/tcx, and `bpf_link_create` is `pub(crate)`. netkit is an L3 pod device whose
-// PRIMARY (root-netns) end takes a `SCHED_CLS` program via `bpf(BPF_LINK_CREATE)` with attach_type
-// `BPF_NETKIT_PRIMARY` — NOT tcx/clsact. So we issue the raw `bpf(2)` syscall ourselves.
+// root-netns (PRIMARY) end takes a `SCHED_CLS` program via `bpf(BPF_LINK_CREATE)` — NOT tcx/clsact.
+// So we issue the raw `bpf(2)` syscall ourselves.
+//
+// SPIKE (Task B.5, live BPF on a netkit L3 pair, kernel 7.1.4): the two netkit attach_types hook
+// OPPOSITE directions. `BPF_NETKIT_PRIMARY`(54) intercepts host→pod (inbound); `BPF_NETKIT_PEER`(55)
+// intercepts pod→host — the pod-EGRESS hook. `tc_guest_tx` IS the guest-egress pipeline, so it must
+// attach via PEER; PRIMARY (as B.4 first used) runs on the wrong direction and never sees pod egress.
+// The target ifindex is still the netkit PRIMARY (root-netns) device either way.
 //
 // bpf(2) command numbers and the attach_type value come from aya-obj's generated kernel bindings
 // (`aya_obj::generated::bpf_cmd` / `bpf_attach_type`), transcribed here as literals with their
 // source so this crate needn't take a direct aya-obj dep just for three constants:
-//   bpf_cmd::BPF_OBJ_PIN            = 6
-//   bpf_cmd::BPF_LINK_CREATE        = 28
-//   bpf_attach_type::BPF_NETKIT_PRIMARY = 54
+//   bpf_cmd::BPF_OBJ_PIN         = 6
+//   bpf_cmd::BPF_LINK_CREATE     = 28
+//   bpf_attach_type::BPF_NETKIT_PEER = 55
 const BPF_OBJ_PIN: libc::c_int = 6;
 const BPF_LINK_CREATE: libc::c_int = 28;
-const BPF_NETKIT_PRIMARY: u32 = 54;
+const BPF_NETKIT_PEER: u32 = 55;
 
 /// The `link_create` arm of `union bpf_attr`, trimmed to the fields the netkit attach sets. Layout
 /// mirrors the kernel's `struct { prog_fd; {target_fd|target_ifindex}; attach_type; flags; <union> }`
@@ -376,8 +382,10 @@ struct BpfObjPinAttr {
     file_flags: u32,
 }
 
-/// `bpf(BPF_LINK_CREATE, { prog_fd, target_ifindex, BPF_NETKIT_PRIMARY, 0 })` → an owned link fd.
-/// The returned fd owns the netkit attach; drop it (without pinning) and the program detaches.
+/// `bpf(BPF_LINK_CREATE, { prog_fd, target_ifindex, BPF_NETKIT_PEER, 0 })` → an owned link fd.
+/// `target_ifindex` is the netkit PRIMARY (root-netns) device; `BPF_NETKIT_PEER` selects the
+/// pod-EGRESS direction on it (see the module comment / Task B.5 spike). The returned fd owns the
+/// netkit attach; drop it (without pinning) and the program detaches.
 fn bpf_link_create_netkit(
     prog_fd: std::os::fd::BorrowedFd<'_>,
     primary_ifindex: u32,
@@ -386,7 +394,7 @@ fn bpf_link_create_netkit(
     let mut attr = BpfLinkCreateAttr {
         prog_fd: prog_fd.as_raw_fd() as u32,
         target_ifindex: primary_ifindex,
-        attach_type: BPF_NETKIT_PRIMARY,
+        attach_type: BPF_NETKIT_PEER,
         flags: 0,
         _anon3: 0,
     };
@@ -403,7 +411,7 @@ fn bpf_link_create_netkit(
     };
     if ret < 0 {
         return Err(std::io::Error::last_os_error())
-            .context("bpf(BPF_LINK_CREATE) BPF_NETKIT_PRIMARY");
+            .context("bpf(BPF_LINK_CREATE) BPF_NETKIT_PEER");
     }
     // SAFETY: `ret` is a fresh, owned fd returned by the kernel; we take sole ownership of it.
     Ok(unsafe { OwnedFd::from_raw_fd(ret as std::os::fd::RawFd) })
@@ -440,8 +448,9 @@ fn bpf_obj_pin(fd: std::os::fd::BorrowedFd<'_>, path: &Path) -> anyhow::Result<(
     Ok(())
 }
 
-/// netkit analogue of [`attach_tc_pinned_at`]: attach the SCHED_CLS `prog` to the netkit PRIMARY
-/// (root-netns) device `primary_ifindex` via `bpf(BPF_LINK_CREATE)` with `BPF_NETKIT_PRIMARY`, then
+/// netkit analogue of [`attach_tc_pinned_at`]: attach the SCHED_CLS `prog` (the guest-egress
+/// `tc_guest_tx`) to the netkit PRIMARY (root-netns) device `primary_ifindex` via `bpf(BPF_LINK_CREATE)`
+/// with `BPF_NETKIT_PEER` — the pod-EGRESS direction on the primary (Task B.5 spike) — then
 /// pin the resulting link at `<pin_dir>/links/<name>` so the attach survives a control-plane restart
 /// (the bpffs pin holds the link, which holds the program — exactly as the tcx `FdLink` pin does).
 /// [`unpin_link`] detaches it (removing the pin drops the last ref).
@@ -576,7 +585,7 @@ mod tests {
         let pin_dir = super::ephemeral_pin_dir().expect("ephemeral pin dir");
         let mut ebpf = super::load_ebpf(&pin_dir).expect("load ebpf");
 
-        // The decisive call: raw bpf(BPF_LINK_CREATE) with BPF_NETKIT_PRIMARY, then pin.
+        // The decisive call: raw bpf(BPF_LINK_CREATE) with BPF_NETKIT_PEER (pod-egress), then pin.
         super::attach_netkit_pinned_at(
             &mut ebpf,
             "tc_guest_tx",
@@ -590,7 +599,8 @@ mod tests {
         let pin_path = super::link_pin_path(&pin_dir, "spike");
         assert!(pin_path.exists(), "link pin {} missing", pin_path.display());
 
-        // Visible as a netkit attachment in `bpftool net` (grep for "netkit" on our primary).
+        // Visible as a netkit PEER attachment in `bpftool net` — B.5: the guest-egress program
+        // attaches on the pod-egress hook, so bpftool shows `netkit/peer` (was `netkit/primary`).
         let out = Command::new("bpftool")
             .args(["net", "show"])
             .output()
@@ -598,8 +608,8 @@ mod tests {
         let text = String::from_utf8_lossy(&out.stdout);
         println!("bpftool net show:\n{text}");
         assert!(
-            text.contains("netkit"),
-            "no netkit attachment visible in `bpftool net show`:\n{text}"
+            text.contains("netkit/peer"),
+            "no netkit/peer attachment visible in `bpftool net show`:\n{text}"
         );
 
         // Detach + cleanup.
