@@ -63,14 +63,12 @@ func TestNAT64Egress(t *testing.T) {
 //   - Fabric routers (edge/switch) are `network-mode: none` clab nodes — no eth0,
 //     no mgmt default at all; their only default is the BGP-learned `::/0` via
 //     the fabric uplinks.
-//   - Compute nodes are kind-created ext-container nodes; clab never attaches
-//     them to clab mgmt, but kind's own bridge gives them an eth0 with its own
-//     kernel default. FRR/zebra picks defaults by administrative distance
-//     first — a kernel route (distance 0) always outranks the BGP-learned
-//     `::/0` (distance 20) regardless of metric — so fabric-preboot DELETES
-//     the kind-bridge default outright (demoting it would never let the BGP
-//     default into the FIB). So a correctly-booted compute node has no `dev
-//     eth0` default at all.
+//   - Compute nodes are container-mode Talos clab nodes wired directly into the
+//     topology (eth1->sw1, eth2->sw2); clab-mgmt stays attached on eth0 (talosctl
+//     bring-up needs it before Talos' embedded GoBGP converges), but the clab mgmt
+//     bridge hands out no IPv6 default of its own on this fabric. So a
+//     correctly-booted compute node has no `dev eth0` default at all — the only
+//     default it ever installs is the BGP-learned one via eth1/eth2.
 //
 // We assert both halves of the invariant: a fabric default via the uplinks
 // (eth1/eth2) is present, and no default remains via eth0. RA defaults were
@@ -105,9 +103,8 @@ func TestFabricOnlyEgress(t *testing.T) {
 						(strings.Contains(line, "dev eth1") || strings.Contains(line, "dev eth2")) {
 						fabricLane = true
 					}
-					// The kind-bridge default (eth0) must be gone: fabric-preboot
-					// deletes it so zebra installs the BGP default instead of
-					// merely demoting it (admin distance beats metric).
+					// No default should ever appear via eth0 (clab-mgmt) — the
+					// fabric BGP-learned default via eth1/eth2 is the only one.
 					if strings.HasPrefix(line, "default") && strings.Contains(line, "dev eth0") {
 						eth0Default = true
 					}
@@ -116,7 +113,7 @@ func TestFabricOnlyEgress(t *testing.T) {
 					return fmt.Errorf("no fabric default via the uplinks (dev eth1/eth2):\n%s", routes)
 				}
 				if eth0Default {
-					return fmt.Errorf("stale default via dev eth0 (kind-bridge default not deleted):\n%s", routes)
+					return fmt.Errorf("unexpected default via dev eth0 (clab-mgmt):\n%s", routes)
 				}
 				return nil
 			})

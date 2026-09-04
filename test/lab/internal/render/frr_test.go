@@ -13,7 +13,7 @@ import (
 func TestFRRGolden(t *testing.T) {
 	c, err := config.LoadBytes([]byte(`
 name: ectobase
-images: {kindNode: img/kn, frr: img/frr, tayga: img/tayga, wan: img/wan, registry: registry:2}
+images: {frr: img/frr, tayga: img/tayga, wan: img/wan, registry: registry:2}
 fabric:
   as: {edge: 65000, switch: 65010, host: 65100}
   nat64Prefix: 64:ff9b::/96

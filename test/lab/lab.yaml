@@ -1,6 +1,5 @@
 name: ectobase
 images:
-  kindNode: ghcr.io/trevex/ectobase/kind-node-fabric:dev
   # The flowplane WAN-edge sidecar (shares the edge1 netns, runs wan_rx for N/S LB).
   # Same locally-built :dev image the DaemonSet pushes to the mirror; clab uses the
   # host-local copy (IfNotPresent default), so no remote pull.

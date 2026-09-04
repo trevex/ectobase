@@ -114,12 +114,6 @@ image-dispatch: ## Build the 3 dispatch images (apiserver/controller/broker)
 	  && docker build -f Dockerfile.broker     -t $(IMG_REPO)/dispatch-broker:$(TAG)     . ; \
 	  status=$$?; rm -f dispatch-apiserver dispatch-controller dispatch-broker; exit $$status
 
-KINDNODE_IMAGE ?= ghcr.io/trevex/ectobase/kind-node-fabric
-.PHONY: image-kindnode
-image-kindnode: ## Build the fabric kind-node image (node-IP = pre-kubelet BGP /64)
-	docker build $(if $(DOCKER_BUILD_NET),--network=$(DOCKER_BUILD_NET)) \
-		-t $(KINDNODE_IMAGE):$(TAG) hack/kind-fabric-node
-
 IMG_REPO ?= ghcr.io/trevex/ectobase
 .PHONY: image-tayga
 image-tayga: ## Build the lab NAT64/DNS64 (tayga) image
@@ -147,12 +141,12 @@ image-wan: ## Build the lab WAN-sim (nft masquerade + ECMP return) image via nix
 	docker tag wan-simulator:latest $(IMG_REPO)/wan:latest
 
 .PHONY: lab-images
-lab-images: image-kindnode image-tayga image-wan ## Build all test/lab container images
+lab-images: image-tayga image-wan ## Build all test/lab container images
 
 .PHONY: lab-app-images
 lab-app-images: image image-mesh image-cni image-dispatch ## Build all 6 app images the chart deploys
 
-# --- lab (test/lab kind fabric) --------------------------------------------
+# --- lab (test/lab Talos/clab fabric) ---------------------------------------
 # Run the Go lab CLI directly via `go run` (no stray prebuilt binary). The live
 # commands drive containerlab + host networking, so they need real root; `sudo -E`
 # preserves the env and we re-assert PATH so the devShell tools resolve under sudo.
@@ -163,7 +157,7 @@ LAB_ROOT := sudo -E env "PATH=$$PATH" go run ./test/lab
 .PHONY: lab-render lab-up lab-down lab-down-purge lab-deploy lab-ceph lab-tier2-up lab-test
 lab-render: ## Render the lab build tree (no root)
 	$(LAB) render
-lab-up: lab-app-images ## Build app images, then bring up the kind fabric + deploy ectobase
+lab-up: lab-app-images ## Build app images, then bring up the Talos fabric + deploy ectobase
 	$(LAB_ROOT) up
 lab-down: ## Tear down the fabric (keeps the registry cache)
 	$(LAB_ROOT) down
@@ -251,7 +245,7 @@ test-all: test e2e ha ## Run the full local test matrix (needs sudo)
 
 # --- housekeeping ----------------------------------------------------------
 .PHONY: bpf-clean
-bpf-clean: ## Free leaked flowplane BPF pins (host + kind/clab nodes); prevents conntrack-map OOM across clab cycles
+bpf-clean: ## Free leaked flowplane BPF pins (host + Talos/clab nodes); prevents conntrack-map OOM across clab cycles
 	./hack/bpf-cleanup.sh
 
 .PHONY: clean

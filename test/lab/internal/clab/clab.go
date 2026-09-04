@@ -60,22 +60,3 @@ func MgmtIP(ctx context.Context, container, mgmtNet string) (string, error) {
 	}
 	return ip, nil
 }
-
-// KindNodeIP6 returns the first non-empty global IPv6 address of a kind node
-// container (named directly, e.g. "dispatch-control-plane", NOT clab-prefixed —
-// clab's k8s-kind containers are created by kind on the kind docker network).
-// kubeadm advertises the API server on this address, so it is Cilium's
-// k8sServiceHost with kube-proxy replacement (no ClusterIP to bootstrap against).
-func KindNodeIP6(ctx context.Context, container string) (string, error) {
-	out, err := exec.Output(ctx, "docker", "inspect", container,
-		"--format", "{{range .NetworkSettings.Networks}}{{.GlobalIPv6Address}} {{end}}")
-	if err != nil {
-		return "", err
-	}
-	for _, f := range strings.Fields(string(out)) {
-		if f != "" {
-			return f, nil
-		}
-	}
-	return "", nil
-}
