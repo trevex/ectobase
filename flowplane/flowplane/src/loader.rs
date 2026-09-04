@@ -335,6 +335,156 @@ pub fn unpin_link(pin_dir: &Path, name: &str) {
     let _ = std::fs::remove_file(link_pin_path(pin_dir, name));
 }
 
+// ── netkit (BPF_NETKIT_PRIMARY) attach ────────────────────────────────────────
+//
+// aya 0.13 has NO netkit attach API (aya-rs/aya#1540 open): `SchedClassifier::attach`
+// only does tc/tcx, and `bpf_link_create` is `pub(crate)`. netkit is an L3 pod device whose
+// PRIMARY (root-netns) end takes a `SCHED_CLS` program via `bpf(BPF_LINK_CREATE)` with attach_type
+// `BPF_NETKIT_PRIMARY` — NOT tcx/clsact. So we issue the raw `bpf(2)` syscall ourselves.
+//
+// bpf(2) command numbers and the attach_type value come from aya-obj's generated kernel bindings
+// (`aya_obj::generated::bpf_cmd` / `bpf_attach_type`), transcribed here as literals with their
+// source so this crate needn't take a direct aya-obj dep just for three constants:
+//   bpf_cmd::BPF_OBJ_PIN            = 6
+//   bpf_cmd::BPF_LINK_CREATE        = 28
+//   bpf_attach_type::BPF_NETKIT_PRIMARY = 54
+const BPF_OBJ_PIN: libc::c_int = 6;
+const BPF_LINK_CREATE: libc::c_int = 28;
+const BPF_NETKIT_PRIMARY: u32 = 54;
+
+/// The `link_create` arm of `union bpf_attr`, trimmed to the fields the netkit attach sets. Layout
+/// mirrors the kernel's `struct { prog_fd; {target_fd|target_ifindex}; attach_type; flags; <union> }`
+/// (field offsets 0/4/8/12; the trailing 8 zero bytes cover the `anon_3` union — `relative_fd`/
+/// `expected_revision` = 0 == "no anchor link, append"). We pass `size_of::<Self>()` (24) as the
+/// syscall `size`: the kernel zero-fills the remainder of its internal `bpf_attr`, exactly as libbpf
+/// does when it passes `offsetofend(link_create, <last used field>)`. 8-byte aligned because the real
+/// `anon_3` union contains an `__aligned_u64`.
+#[repr(C, align(8))]
+struct BpfLinkCreateAttr {
+    prog_fd: u32,
+    target_ifindex: u32,
+    attach_type: u32,
+    flags: u32,
+    _anon3: u64,
+}
+
+/// The `BPF_OBJ_PIN` arm of `union bpf_attr`: `{ __aligned_u64 pathname; __u32 bpf_fd; __u32 file_flags }`.
+#[repr(C, align(8))]
+struct BpfObjPinAttr {
+    pathname: u64,
+    bpf_fd: u32,
+    file_flags: u32,
+}
+
+/// `bpf(BPF_LINK_CREATE, { prog_fd, target_ifindex, BPF_NETKIT_PRIMARY, 0 })` → an owned link fd.
+/// The returned fd owns the netkit attach; drop it (without pinning) and the program detaches.
+fn bpf_link_create_netkit(
+    prog_fd: std::os::fd::BorrowedFd<'_>,
+    primary_ifindex: u32,
+) -> anyhow::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    let mut attr = BpfLinkCreateAttr {
+        prog_fd: prog_fd.as_raw_fd() as u32,
+        target_ifindex: primary_ifindex,
+        attach_type: BPF_NETKIT_PRIMARY,
+        flags: 0,
+        _anon3: 0,
+    };
+    // SAFETY: `attr` is a live, correctly-aligned `BpfLinkCreateAttr` matching the kernel's
+    // `link_create` arm; we pass its address and size. `SYS_bpf` with `BPF_LINK_CREATE` returns a
+    // new fd (>= 0) on success or -1 with errno set. No borrows escape the call.
+    let ret = unsafe {
+        libc::syscall(
+            libc::SYS_bpf,
+            BPF_LINK_CREATE,
+            &mut attr as *mut _ as *mut libc::c_void,
+            std::mem::size_of::<BpfLinkCreateAttr>() as libc::c_uint,
+        )
+    };
+    if ret < 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("bpf(BPF_LINK_CREATE) BPF_NETKIT_PRIMARY");
+    }
+    // SAFETY: `ret` is a fresh, owned fd returned by the kernel; we take sole ownership of it.
+    Ok(unsafe { OwnedFd::from_raw_fd(ret as std::os::fd::RawFd) })
+}
+
+/// `bpf(BPF_OBJ_PIN, { pathname, bpf_fd })` — pin a bpf object (here: a link fd) into bpffs so the
+/// attach survives this process. Parallels `FdLink::pin`, which aya only exposes for links it built
+/// internally (its `FdLink::new` is `pub(crate)` and takes an aya-internal fd type), so we can't wrap
+/// our raw link fd as an `FdLink` — we pin it via the syscall directly.
+fn bpf_obj_pin(fd: std::os::fd::BorrowedFd<'_>, path: &Path) -> anyhow::Result<()> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt as _;
+    let cpath = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .with_context(|| format!("pin path {} has an interior NUL", path.display()))?;
+    let mut attr = BpfObjPinAttr {
+        pathname: cpath.as_ptr() as u64,
+        bpf_fd: fd.as_raw_fd() as u32,
+        file_flags: 0,
+    };
+    // SAFETY: `attr` matches the kernel's `BPF_OBJ_PIN` arm; `pathname` points at `cpath`, kept alive
+    // across the call. Returns 0 on success, -1 + errno on failure.
+    let ret = unsafe {
+        libc::syscall(
+            libc::SYS_bpf,
+            BPF_OBJ_PIN,
+            &mut attr as *mut _ as *mut libc::c_void,
+            std::mem::size_of::<BpfObjPinAttr>() as libc::c_uint,
+        )
+    };
+    if ret < 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("bpf(BPF_OBJ_PIN) {}", path.display()));
+    }
+    Ok(())
+}
+
+/// netkit analogue of [`attach_tc_pinned_at`]: attach the SCHED_CLS `prog` to the netkit PRIMARY
+/// (root-netns) device `primary_ifindex` via `bpf(BPF_LINK_CREATE)` with `BPF_NETKIT_PRIMARY`, then
+/// pin the resulting link at `<pin_dir>/links/<name>` so the attach survives a control-plane restart
+/// (the bpffs pin holds the link, which holds the program — exactly as the tcx `FdLink` pin does).
+/// [`unpin_link`] detaches it (removing the pin drops the last ref).
+///
+/// Unlike tcx, an L3 netkit primary has no clsact qdisc — the program binds to the device via the
+/// netkit driver's BPF hook, so there is NO `qdisc_add_clsact` here.
+///
+/// TODO: netkit link re-adopt on restart. The tcx path (`readopt_tc_link`) re-points the surviving
+/// pin at a freshly-loaded program via `attach_to_link`; the netkit equivalent would be
+/// `bpf(BPF_LINK_UPDATE)` on the reopened pin fd. Deferred: the pinned link already keeps the OLD
+/// program attached across a restart (shared pinned maps), and `IFACE_META` does not yet record the
+/// `l3` bit, so `reattach_guest` cannot cheaply tell a netkit interface from a veth one. See report.
+pub fn attach_netkit_pinned_at(
+    ebpf: &mut Ebpf,
+    prog: &str,
+    primary_ifindex: u32,
+    pin_dir: &Path,
+    name: &str,
+) -> anyhow::Result<()> {
+    use std::os::fd::AsFd;
+    // Detach any stale pinned link of this name first (avoids a doubled netkit attach).
+    let path = link_pin_path(pin_dir, name);
+    let _ = std::fs::remove_file(&path);
+
+    let p: &mut SchedClassifier = ebpf
+        .program_mut(prog)
+        .with_context(|| format!("netkit prog {prog} missing"))?
+        .try_into()?;
+    if p.fd().is_err() {
+        p.load().with_context(|| format!("load {prog}"))?;
+    }
+    let prog_fd = p.fd().with_context(|| format!("fd for {prog}"))?;
+    let link = bpf_link_create_netkit(prog_fd.as_fd(), primary_ifindex)
+        .with_context(|| format!("attach {prog} to netkit ifindex {primary_ifindex}"))?;
+
+    std::fs::create_dir_all(path.parent().unwrap()).ok();
+    let _ = std::fs::remove_file(&path);
+    bpf_obj_pin(link.as_fd(), &path)
+        .with_context(|| format!("pin netkit link {}", path.display()))?;
+    // `link` drops here — the bpffs pin now owns the attach (restart-survivable).
+    Ok(())
+}
+
 /// Pin a loaded map to `<pin_dir>/<name>` so a restarted control plane can re-acquire it.
 /// Must be called BEFORE `take_map` / `Conntrack::open` on the same map name, because
 /// `take_map` removes the map from the `Ebpf` object's collection.
@@ -384,5 +534,78 @@ mod tests {
             prog.load()
                 .unwrap_or_else(|e| panic!("verifier rejected {name}: {e}"));
         }
+    }
+
+    // SPIKE (Task B.4): confirm the raw `bpf(BPF_LINK_CREATE)` netkit attach ABI live. Creates an L3
+    // netkit pair, loads `tc_guest_tx` via aya, attaches it to the primary via
+    // `attach_netkit_pinned_at`, and asserts the attach is visible in `bpftool net` as a netkit
+    // program on the primary ifindex. Run under sudo:
+    //   sudo -E cargo test -p flowplane netkit_attach_pins_and_shows_in_bpftool -- --ignored --nocapture
+    #[test]
+    #[ignore = "privileged + live: attaches a real BPF program to a netkit primary (needs root); run under sudo"]
+    fn netkit_attach_pins_and_shows_in_bpftool() {
+        use std::process::Command;
+
+        fn ip(args: &[&str]) {
+            let _ = Command::new("ip").args(args).output();
+        }
+
+        let ns = "fp-nkattach-ns";
+        let primary = "fp-nkatt0";
+        // Fresh start.
+        ip(&["netns", "del", ns]);
+        ip(&["link", "del", primary]);
+        Command::new("ip")
+            .args(["netns", "add", ns])
+            .status()
+            .expect("add netns");
+        let netns_path = format!("/var/run/netns/{ns}");
+
+        let info = flowplane_device::netkit::create_netkit_pair(&flowplane_device::VethSpec {
+            host_name: primary.into(),
+            guest_name: "eth0".into(),
+            netns_path: netns_path.clone(),
+            mac: [0x02, 0, 0, 0, 0, 0x99],
+            mtu: 1400,
+            disable_csum_offload: false,
+        })
+        .expect("create netkit pair");
+        let primary_ifindex = info.host_ifindex;
+
+        // A bpffs pin dir for the maps (pinned maps need a map_pin_path) and the link pin.
+        let pin_dir = super::ephemeral_pin_dir().expect("ephemeral pin dir");
+        let mut ebpf = super::load_ebpf(&pin_dir).expect("load ebpf");
+
+        // The decisive call: raw bpf(BPF_LINK_CREATE) with BPF_NETKIT_PRIMARY, then pin.
+        super::attach_netkit_pinned_at(
+            &mut ebpf,
+            "tc_guest_tx",
+            primary_ifindex,
+            &pin_dir,
+            "spike",
+        )
+        .expect("attach_netkit_pinned_at");
+
+        // The link pin exists on bpffs.
+        let pin_path = super::link_pin_path(&pin_dir, "spike");
+        assert!(pin_path.exists(), "link pin {} missing", pin_path.display());
+
+        // Visible as a netkit attachment in `bpftool net` (grep for "netkit" on our primary).
+        let out = Command::new("bpftool")
+            .args(["net", "show"])
+            .output()
+            .expect("run bpftool net show");
+        let text = String::from_utf8_lossy(&out.stdout);
+        println!("bpftool net show:\n{text}");
+        assert!(
+            text.contains("netkit"),
+            "no netkit attachment visible in `bpftool net show`:\n{text}"
+        );
+
+        // Detach + cleanup.
+        super::unpin_link(&pin_dir, "spike");
+        let _ = std::fs::remove_dir_all(&pin_dir);
+        ip(&["link", "del", primary]);
+        ip(&["netns", "del", ns]);
     }
 }

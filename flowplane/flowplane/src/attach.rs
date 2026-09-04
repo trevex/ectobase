@@ -130,7 +130,6 @@ pub fn uplink_finalizes_checksum(uplink: &str) -> bool {
 /// honest probe. Cheap after the first call (cached bool). Used by the `Auto` device-type resolver in
 /// `attach` to decide netkit-vs-veth — kept even while `Auto` still resolves to `Veth` (Task B.4 wires
 /// it in once `attach_netkit` exists).
-#[allow(dead_code)]
 pub fn netkit_supported() -> bool {
     static SUPPORTED: OnceLock<bool> = OnceLock::new();
     *SUPPORTED.get_or_init(|| {
@@ -279,11 +278,17 @@ impl AttachState {
             tap_name.to_string()
         };
         // Resolve the caller's device type to a concrete one before any device work. `Auto` (the
-        // default / empty device_type) currently resolves to `Veth` so the default container path is
-        // unchanged and green.
-        // TODO(B.4): once attach_netkit is implemented, Auto -> Netkit when netkit_supported().
+        // default / empty device_type) picks the best available container edge: netkit L3 when the
+        // kernel supports it (probed once, cached — see `netkit_supported`), else veth. Explicit
+        // types pass through unchanged.
         let resolved = match device_type {
-            DeviceType::Auto => DeviceType::Veth,
+            DeviceType::Auto => {
+                if netkit_supported() {
+                    DeviceType::Netkit
+                } else {
+                    DeviceType::Veth
+                }
+            }
             dt => dt,
         };
         // Whether this is an L3 (netkit) edge — threaded into PORT_META.l3 so the datapath treats the

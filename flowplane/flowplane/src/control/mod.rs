@@ -563,15 +563,25 @@ impl Control {
         // The guest program was pre-loaded in bring_up, so attach always succeeds and we get a
         // droppable link back — dropping it detaches the program on interface teardown.
         //
-        // netkit (L3) primaries take the guest program via `BPF_NETKIT`, NOT tcx/clsact — attaching a
-        // clsact/tcx program to an L3 netkit primary is the wrong attach point. That wiring is Task
-        // B.4; until it lands, bail cleanly here so an explicit `device_type="netkit"` attach fails at
-        // the program-attach step (the device we created is torn down by the attach.rs rollback) rather
-        // than silently mis-attaching. No caller selects netkit yet (Auto resolves to Veth).
-        if params.l3 {
-            anyhow::bail!("netkit program attach not yet implemented (Task B.4)");
-        }
-        let link = if g.pin_links {
+        // netkit (L3) primaries take the guest program via `BPF_NETKIT_PRIMARY`, NOT tcx/clsact —
+        // attaching a clsact/tcx program to an L3 netkit primary is the wrong attach point. netkit has
+        // no aya attach API (aya-rs/aya#1540), so `attach_netkit_pinned_at` issues a raw
+        // `bpf(BPF_LINK_CREATE)` and pins the link. Netkit only exists in the pin-links (production
+        // Serve) path — `create_netkit_pair` is never created by a non-pinning debug caller — so a
+        // non-pinning netkit attach is unsupported and rejected rather than silently mis-attached via
+        // tcx. `tap` (resolved above from the device ifindex) IS the netkit PRIMARY ifindex.
+        let link = if params.l3 {
+            if !g.pin_links {
+                anyhow::bail!("netkit (L3) attach requires pin-links mode (production Serve)");
+            }
+            let pin_dir = g.pin_dir.clone();
+            let gname = format!("guest-{}", hex_encode(interface_id));
+            loader::attach_netkit_pinned_at(&mut g.ebpf, "tc_guest_tx", tap, &pin_dir, &gname)
+                .with_context(|| {
+                    format!("attach+pin tc_guest_tx to netkit {device} (ifindex {tap})")
+                })?;
+            GuestLink::Pinned(gname)
+        } else if g.pin_links {
             let pin_dir = g.pin_dir.clone();
             let gname = format!("guest-{}", hex_encode(interface_id));
             loader::attach_tc_pinned_at(&mut g.ebpf, "tc_guest_tx", device, &pin_dir, &gname)
