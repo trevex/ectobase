@@ -20,19 +20,19 @@ topology:
   nodes:
     edge1:
       kind: linux
-      image: img/frr
+      image: img/vyos
       network-mode: none   # P3b: detach from clab mgmt — no eth0, fabric-only (links still attach)
+      # vyos-router runs this as a vbash script on every boot (BGP+DNS64+NAT64-routes);
+      # config.boot itself stays the image's stock default.
       binds:
-        - frr/edge1.conf:/etc/frr/frr.conf
-        - frr/daemons:/etc/frr/daemons
+        - vyos/edge1.set:/opt/vyatta/etc/config/scripts/vyos-postconfig-bootup.script
       sysctls: {net.ipv6.conf.all.forwarding: 1}
     edge2:
       kind: linux
-      image: img/frr
+      image: img/vyos
       network-mode: none   # P3b: detach from clab mgmt — no eth0, fabric-only (links still attach)
       binds:
-        - frr/edge2.conf:/etc/frr/frr.conf
-        - frr/daemons:/etc/frr/daemons
+        - vyos/edge2.set:/opt/vyatta/etc/config/scripts/vyos-postconfig-bootup.script
       sysctls: {net.ipv6.conf.all.forwarding: 1}
 
     nat64-1:
@@ -62,19 +62,19 @@ topology:
 
     sw1:
       kind: linux
-      image: img/frr
+      image: img/vyos
       network-mode: none   # P3b: detach from clab mgmt — no eth0, fabric-only (links still attach)
+      # vyos-router runs this as a vbash script on every boot (BGP+RA relay);
+      # config.boot itself stays the image's stock default.
       binds:
-        - frr/sw1.conf:/etc/frr/frr.conf
-        - frr/daemons:/etc/frr/daemons
+        - vyos/sw1.set:/opt/vyatta/etc/config/scripts/vyos-postconfig-bootup.script
       sysctls: {net.ipv6.conf.all.forwarding: 1}
     sw2:
       kind: linux
-      image: img/frr
+      image: img/vyos
       network-mode: none   # P3b: detach from clab mgmt — no eth0, fabric-only (links still attach)
       binds:
-        - frr/sw2.conf:/etc/frr/frr.conf
-        - frr/daemons:/etc/frr/daemons
+        - vyos/sw2.set:/opt/vyatta/etc/config/scripts/vyos-postconfig-bootup.script
       sysctls: {net.ipv6.conf.all.forwarding: 1}
 
     # --- Talos compute nodes: one container-mode Talos node per cluster node (P6

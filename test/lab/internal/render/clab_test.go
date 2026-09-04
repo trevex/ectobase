@@ -15,7 +15,7 @@ var update = flag.Bool("update", false, "update golden files")
 func TestClabGolden(t *testing.T) {
 	c, err := config.LoadBytes([]byte(`
 name: ectobase
-images: {talos: img/talos, tayga: img/tayga, wan: img/wan, registry: registry:2, frr: img/frr}
+images: {talos: img/talos, tayga: img/tayga, wan: img/wan, registry: registry:2, frr: img/frr, vyos: img/vyos}
 fabric:
   as: {edge: 65000, switch: 65010, host: 65100}
   nat64Prefix: 64:ff9b::/96
