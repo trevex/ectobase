@@ -114,6 +114,11 @@ fn allow_all() -> &'static str {
 /// `Some(bu)`, tap != 0 branch) is the ONLY mechanism that resolves VIP delivery.
 fn backend_node(with_overlay_lb: bool) -> SimNode {
     let mut n = SimNode::with_local(local_for(HOSTB_UL, 9));
+    // FICTION (known limitation): this hand-seeds an `UNDERLAY[backend]` self-entry with a real tap,
+    // but since the node-VTEP underlay change the production control plane no longer writes a
+    // per-interface UNDERLAY entry (delivery moved to INTERFACES). This seed keeps the LB
+    // local-backend arm's sim green, but does NOT reflect real state — LB local-backend delivery is
+    // deferred to the N/S-LB edge rebuild (see the KNOWN LIMITATION in datapath.rs `process_uplink`).
     n.maps.underlay.insert(
         HOSTB_UL,
         UnderlayValue {

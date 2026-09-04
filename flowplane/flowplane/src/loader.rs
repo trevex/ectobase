@@ -458,11 +458,15 @@ fn bpf_obj_pin(fd: std::os::fd::BorrowedFd<'_>, path: &Path) -> anyhow::Result<(
 /// Unlike tcx, an L3 netkit primary has no clsact qdisc — the program binds to the device via the
 /// netkit driver's BPF hook, so there is NO `qdisc_add_clsact` here.
 ///
-/// TODO: netkit link re-adopt on restart. The tcx path (`readopt_tc_link`) re-points the surviving
-/// pin at a freshly-loaded program via `attach_to_link`; the netkit equivalent would be
-/// `bpf(BPF_LINK_UPDATE)` on the reopened pin fd. Deferred: the pinned link already keeps the OLD
-/// program attached across a restart (shared pinned maps), and `IFACE_META` does not yet record the
-/// `l3` bit, so `reattach_guest` cannot cheaply tell a netkit interface from a veth one. See report.
+/// TODO: netkit link re-adopt on restart is NOT merely unimplemented — it is ACTIVELY UNSAFE today.
+/// `IFACE_META` does not record the `l3` bit, so on adopt `reattach_guest` unconditionally takes the
+/// tcx path (`readopt_tc_link`) for EVERY interface, including netkit ones. On a netkit link that
+/// `BPF_LINK_UPDATE`-shaped re-adopt may fail and then `unpin_link` the LIVE netkit link (detaching a
+/// running pod's datapath) and mis-attach a clsact/tcx program to the L3 netkit primary — a dead pod.
+/// The netkit-correct re-adopt is `bpf(BPF_LINK_UPDATE)` on the reopened pin fd. Deferred and safe for
+/// now ONLY because P4 tears the lab down between runs (no in-place flowplane restart with live netkit
+/// pods); before that guarantee goes away, `IFACE_META` must record `l3` and `reattach_guest` must
+/// branch on it (netkit → the LINK_UPDATE path, never the tcx unpin+reattach). See B.5/review notes.
 pub fn attach_netkit_pinned_at(
     ebpf: &mut Ebpf,
     prog: &str,

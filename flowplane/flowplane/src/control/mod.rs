@@ -382,6 +382,11 @@ impl Control {
         if g.pin_links {
             let pin_dir = g.pin_dir.clone();
             let gname = format!("guest-{}", hex_encode(interface_id));
+            // NOTE: this unconditionally takes the tcx re-adopt path — it does NOT branch on `l3`
+            // because `IFACE_META` doesn't record it yet. For a netkit (L3) interface this is UNSAFE
+            // (can unpin the live netkit link + mis-attach tcx to the L3 primary → dead pod). Safe only
+            // because P4 never does an in-place flowplane restart with live netkit pods. See the
+            // `attach_netkit_pinned_at` TODO in loader.rs before relying on netkit restart recovery.
             let readopted = loader::readopt_tc_link(&mut g.ebpf, "tc_guest_tx", &pin_dir, &gname)
                 .unwrap_or_else(|e| {
                     eprintln!("re-adopt guest link {gname} failed ({e:#}); attaching fresh");
@@ -563,8 +568,10 @@ impl Control {
         // The guest program was pre-loaded in bring_up, so attach always succeeds and we get a
         // droppable link back — dropping it detaches the program on interface teardown.
         //
-        // netkit (L3) primaries take the guest program via `BPF_NETKIT_PRIMARY`, NOT tcx/clsact —
-        // attaching a clsact/tcx program to an L3 netkit primary is the wrong attach point. netkit has
+        // netkit (L3) devices take the guest-EGRESS program via the `BPF_NETKIT_PEER` hook (spike-
+        // proven: PRIMARY=host→pod, PEER=pod egress; `tc_guest_tx` is the pod-egress pipeline), NOT
+        // tcx/clsact — attaching a clsact/tcx program to an L3 netkit primary is the wrong attach point.
+        // The attach targets the primary ifindex with attach_type PEER. netkit has
         // no aya attach API (aya-rs/aya#1540), so `attach_netkit_pinned_at` issues a raw
         // `bpf(BPF_LINK_CREATE)` and pins the link. Netkit only exists in the pin-links (production
         // Serve) path — `create_netkit_pair` is never created by a non-pinning debug caller — so a
