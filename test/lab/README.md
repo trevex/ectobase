@@ -4,8 +4,8 @@ A Go/[cobra](https://github.com/spf13/cobra) `lab` CLI that stands up a **multi-
 
 The fabric is:
 
-- **FRR edges** (`edge1`/`edge2`, AS 65000) — `default-originate` (`::/0`) + advertise `64:ff9b::/96`, with **DNS64** on a loopback and `eth`→WAN / `eth`→Tayga wiring.
-- **FRR switches** (`sw1`/`sw2`, AS 65010) — transit eBGP to both edges and every node, with per-port **RA** (`service router-advert`) advertising that port's `/64` + the edge DNS64 name-server, and per-node **ToR `/64` origination** (a recursive static via the node's `/128`).
+- **FRR edges** (`edge1`/`edge2`, AS 65000) — eBGP `default-originate` (`::/0`) + advertise `64:ff9b::/96`, with a static route handing the NAT64 prefix to Tayga and `eth`→WAN / `eth`→Tayga wiring. (DNS64 is deferred to a later egress spec.)
+- **FRR switches** (`sw1`/`sw2`, AS 65010) — a pure `/128` ECMP relay: unnumbered eBGP to both edges and every node (`as-override` re-propagates each node's `/128`), no interface addresses, no originated `/64`, no router-advert.
 - **Tayga NAT64** (`nat64-1`/`nat64-2`) — `64:ff9b::/96` → IPv4 pool → MASQUERADE to the WAN, one per edge.
 - A **WAN sim** (`wan`) that masquerades all fabric prefixes onto the host uplink and is the host's single route into the fabric.
 - A persistent **local registry mirror** (`registry:2`) on the WAN segment (`fd00:29::5:5000`).
@@ -50,7 +50,7 @@ sudo -E env "PATH=$PATH" /tmp/lab down             # tear down; keeps the regist
 | Command | What |
 |---|---|
 | `lab up` | Render → deploy the clab fabric (the `k8s-kind` nodes create the kind clusters with kindnet) → push local `:dev` images into the in-fabric mirror → per cluster collect the kubeconfig + wait Ready → deploy the ectobase substrate. |
-| `lab down [--purge]` | Destroy the clab topology (force-removing any wedged clab containers) and remove `build/<name>/`, **preserving the registry cache**. `--purge` removes the cache too. |
+| `lab down [--purge]` | Destroy the clab topology and remove `build/<name>/`, **preserving the registry cache**. `--purge` removes the cache too. |
 | `lab render` | Expand every template into `build/<name>/`. Idempotent; no fabric touched. |
 | `lab deploy` | Re-run **only** the ectobase substrate deploy against an already-up fabric — the fast iteration loop. |
 | `lab ceph [--purge]` | Deploy Ceph (pool + external ceph-csi-rbd + csi-addons on central). Requires `fabric.ceph.enabled`. |
@@ -111,13 +111,13 @@ sudo -n kubectl --kubeconfig test/lab/build/ectobase/k02.kubeconfig     get clus
 
 - creates `dummy0` with the node's `/128` identity, sets `kubelet --node-ip` to it, and runs FRR eBGP on the uplinks advertising that `/128`;
 - mounts **bpffs** at `/sys/fs/bpf` (kindnet, unlike Cilium, doesn't — flowplane needs it);
-- sets `accept_ra=2` on the uplinks (so the switch RA default installs) and keeps SLAAC on (the RA-SLAAC uplink addr is the WAN-routable egress source).
+- deletes the kind-bridge (`eth0`) kernel default outright (admin distance always beats a higher-metric demotion) so zebra installs the FRR-BGP `::/0` (`default-originate` from the edges, relayed by the switches) — no RA default, no SLAAC; the node's `/128` identity is its own egress source.
 
 The **pod CNI is kindnet** (+ kube-proxy), not Cilium: the CNI here only serves ordinary pods (the VM/overlay datapath is flowplane's, independent of the pod CNI). kindnet plain-`MASQUERADE`s pod egress to the per-packet route source (the egress uplink's SLAAC), so pods (e.g. the ceph-csi provisioner) reach the in-fabric mon symmetrically — Cilium couldn't masquerade at all on the unnumbered fabric uplinks.
 
 ## Fabric-only egress
 
-The node's preferred default (`::/0`) comes only from the edges via the switch RA (`proto ra`, metric 1024); the docker mgmt default is demoted to metric 4096. Traffic goes `node → switch → edge → (Tayga NAT64 for IPv4) → WAN → internet`. `up` auto-configures the host NAT66 + FORWARD (uplink auto-detected) so the WAN's masqueraded fabric egress reaches the host uplink.
+The node's preferred default (`::/0`) arrives via FRR BGP `default-originate` from the edges, relayed by the switches to the node's own FRR speaker over unnumbered eBGP — no RA involved. `fabric-preboot` deletes the kind-bridge (`eth0`) kernel default outright (admin distance always beats a higher-metric demotion), so zebra installs the BGP default and egress is fabric-only. Traffic goes `node → switch → edge → (Tayga NAT64 for IPv4) → WAN → internet`. `up` auto-configures the host NAT66 + FORWARD (uplink auto-detected) so the WAN's masqueraded fabric egress reaches the host uplink.
 
 ## Registry mirror
 

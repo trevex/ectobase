@@ -24,7 +24,7 @@ import (
 // (fabric.EdgeLoopback / LoopAggr fd00:ffff::/32, advertised into the fabric). Used
 // as the NAT-egress external-route nexthop: the node's route lookup resolves it and
 // transmits the IPIP-encapped frame on an uplink, which is all the SNAT sniff needs
-// (the edges are VyOS NAT64 routers here, not flowplane, so we assert SNAT AT THE
+// (the edges are FRR NAT64 routers here, not flowplane, so we assert SNAT AT THE
 // NODE UPLINK, not end-to-end internet).
 const edgeNexthop = fabric.EdgeLoopback + "::e1"
 

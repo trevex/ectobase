@@ -1,7 +1,7 @@
 // Package fabric computes the fixed IPv6-fabric addressing (constants the
 // simplified lab.yaml does not expose) plus the flattened multi-cluster node
 // list and the WAN masq/return-route set, as one view consumed by every
-// topology template (clab, VyOS, Talos, Cilium).
+// topology template (clab, FRR, Cilium).
 package fabric
 
 import (
@@ -11,15 +11,14 @@ import (
 // Fixed fabric constants (from the icn/sandbox fabric defaults). The simplified
 // lab.yaml does not expose these; every cluster on the shared fabric uses them.
 const (
-	TaygaNet     = "fd00:64"              // nat64 edge links: fd00:64:1::/64, fd00:64:2::/64
-	WanNet       = "fd00:29"              // WAN segment fd00:29::/64; wan ::1, edge1 ::11, edge2 ::12
-	EdgeLoopback = "fd00:ffff"            // edge DNS64 loopbacks: fd00:ffff::e1, fd00:ffff::e2
-	DNSUpstream  = "2606:4700:4700::1111" // DNS64 upstream
-	WanGwV4      = "172.29.0.1"           // wan bridge v4 gateway
-	NodeAggr     = "fd00:cafe::/32"       // aggregate of every cluster's /48 node identities (fd00:cafe:<h>::/48)
-	LoopAggr     = "fd00:ffff::/32"       // aggregate of the edge loopbacks
-	RegistryAddr = "fd00:29::5"           // registry node's address on the WAN segment (fd00:29::/64)
-	RegistryPort = "5000"                 // registry:2 default listen port
+	TaygaNet     = "fd00:64"        // nat64 edge links: fd00:64:1::/64, fd00:64:2::/64
+	WanNet       = "fd00:29"        // WAN segment fd00:29::/64; wan ::1, edge1 ::11, edge2 ::12
+	EdgeLoopback = "fd00:ffff"      // edge loopbacks: fd00:ffff::e1, fd00:ffff::e2
+	WanGwV4      = "172.29.0.1"     // wan bridge v4 gateway
+	NodeAggr     = "fd00:cafe::/32" // aggregate of every cluster's /48 node identities (fd00:cafe:<h>::/48)
+	LoopAggr     = "fd00:ffff::/32" // aggregate of the edge loopbacks
+	RegistryAddr = "fd00:29::5"     // registry node's address on the WAN segment (fd00:29::/64)
+	RegistryPort = "5000"           // registry:2 default listen port
 
 	JumpHostAddr = "fd00:29::100" // host end of the WAN-segment jump veth (replaces the mgmt route)
 	JumpVia      = "fd00:29::1"   // the wan container's WAN-segment addr; it ECMPs NodeAggr → edges
@@ -58,7 +57,6 @@ func (v *View) NAT64Prefix() string       { return v.Cfg.Fabric.NAT64Prefix }
 func (v *View) TaygaNet() string     { return TaygaNet }
 func (v *View) WanNet() string       { return WanNet }
 func (v *View) EdgeLoopback() string { return EdgeLoopback }
-func (v *View) DNSUpstream() string  { return DNSUpstream }
 func (v *View) WanGwV4() string      { return WanGwV4 }
 func (v *View) RegistryAddr() string { return RegistryAddr }
 
@@ -97,7 +95,7 @@ func (v *View) CephMonEndpoint() string { return "[" + v.Cfg.Derived.CephMonAddr
 // — the next free host port on each ToR, colliding with no node port.
 func (v *View) CephPortSeq() int { return v.Cfg.TotalNodes() + 1 }
 
-// AS + aggregate accessors the VyOS templates reference.
+// AS + aggregate accessors the FRR templates reference.
 func (v *View) ASEdge() int      { return v.Cfg.Fabric.AS.Edge }
 func (v *View) ASSwitch() int    { return v.Cfg.Fabric.AS.Switch }
 func (v *View) ASHost() int      { return v.Cfg.Fabric.AS.Host }

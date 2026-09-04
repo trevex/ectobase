@@ -132,7 +132,7 @@ systemctl restart frr || systemctl start frr || true
 #    by the time kubelet + the agents come up. CRITICAL: this oneshot gates
 #    multi-user.target (WantedBy) via kubelet, and clab/kind abort the node if the
 #    "Reached target Multi-User System" marker doesn't appear within kind's own
-#    ~30s "Preparing nodes" wait. In the Go lab the fabric (VyOS switches/edges)
+#    ~30s "Preparing nodes" wait. In the Go lab the fabric (FRR switches/edges)
 #    boots CONCURRENTLY with the kind clusters, so BGP is NOT converged at node boot
 #    and a long wait here delays multi-user past that marker -> the node is deleted.
 #    So keep this SHORT (well under kind's marker wait); Cilium/kubelet self-heal

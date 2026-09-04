@@ -2,7 +2,7 @@
 
 !!! success "Status: Implemented"
     Each gotcha below has a root cause and a concrete workaround wired into the tooling
-    (the `test/lab` CLI, the edge sidecar wrapper, or `make bpf-clean`).
+    (the `test/lab` CLI or `make bpf-clean`).
 
 Operational findings that cost real debugging. Each has a root cause and a concrete workaround wired
 into the scripts — do not "simplify" them away.
@@ -46,20 +46,13 @@ container. Run `make bpf-clean` whenever a debugging session (host-run netns sce
 restarts, or repeated `make lab-up`/`lab-down` cycles) accumulates memory — a `clab destroy`
 removes the containers but never touches the host-side pins.
 
-## Edge dual-XDP-attach in SKB mode — `FLOWPLANE_PIN_LINKS=false`
+## Edge dual-XDP-attach in SKB mode — deferred (P4)
 
-A [WAN edge](../features/ns-edge.md) attaches **two** XDP programs: `uplink_rx` on the fabric uplink
-(egress decap) and `wan_rx` on the WAN uplink (NAT-return re-encap). In **SKB/generic XDP** mode
-(clab veths have no native XDP), **pinning the first link and then attaching the second XDP program
-silently drops the first attachment** — an aya generic-XDP `bpf_link` quirk. Only one of
-`uplink_rx`/`wan_rx` ever lands, and egress decap breaks.
-
-The edge sidecar therefore attaches with **`--pin-links false`**
-(`test/lab/templates/flowplane/edge-wrapper.sh`). This is safe because the edge is
-stateless/drain-safe anycast — either edge handles any return, so it
-does not need pinned-link zero-gap HA. Its **maps still pin** for conntrack continuity; only the
-links re-attach fresh on restart, which also avoids adopting a stale link across a fabric recreate
-(a dead ifindex). Non-edge nodes keep `--pin-links` on (see [HA & restart](../architecture/ha-graceful-restart.md)).
+This used to document an aya generic-XDP `bpf_link` quirk (pinning a first XDP link and then
+attaching a second silently drops the first) worked around via `--pin-links false` on the
+WAN-edge flowplane sidecar's dual attach (`uplink_rx` + `wan_rx`). That sidecar has been pruned
+from this fabric; the N/S-LB edge datapath is a later (P4) concern. Non-edge nodes keep
+`--pin-links` on (see [HA & restart](../architecture/ha-graceful-restart.md)).
 
 ## Native XDP is blocked under vhost (ironcore-in-a-box)
 
@@ -90,7 +83,7 @@ display it.
 |---|---|---|
 | `sudo` fails to elevate in a sub-script | PATH-shadowed `sudo` on NixOS | use `/run/wrappers/bin/sudo` |
 | Host RAM climbs across clab cycles / OOM | leaked pinned conntrack maps | `make bpf-clean` (auto-wired into clab up/down) |
-| Edge egress decap broken in clab | 2nd XDP attach drops the 1st in SKB mode | `FLOWPLANE_PIN_LINKS=false` on the edge |
+| Edge N/S-LB datapath | pruned from the fabric | deferred (P4) |
 | Native XDP won't attach on a VM tap | vhost-net → KVM `XDP_TX`-on-tun limit | use tcx (default) / a native-XDP fabric |
 | `bpftool` shows no tcx / no prog-id | in-container bpftool v7.1.0 | devShell bpftool v7.6.0 via `nsenter` |
 

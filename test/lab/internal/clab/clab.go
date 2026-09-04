@@ -41,17 +41,6 @@ func (c Clab) Destroy(ctx context.Context) error { return c.run(ctx, "destroy", 
 func (c Clab) Inspect(ctx context.Context) error { return c.run(ctx, "inspect") }
 func (c Clab) Graph(ctx context.Context) error   { return c.run(ctx, "graph") }
 
-// MgmtIP returns the containerlab management IP of a node (clab-<labName>-<node>),
-// via docker inspect. Used for interactive SSH access.
-func MgmtIP(ctx context.Context, labName, node string) (string, error) {
-	out, err := exec.Output(ctx, "docker", "inspect", ContainerName(labName, node),
-		"--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}")
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
 // KindNodeIP6 returns the first non-empty global IPv6 address of a kind node
 // container (named directly, e.g. "dispatch-control-plane", NOT clab-prefixed —
 // clab's k8s-kind containers are created by kind on the kind docker network).

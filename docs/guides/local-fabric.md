@@ -16,8 +16,8 @@ The lab CLI (`test/lab`, a cobra CLI; config in `test/lab/lab.yaml`) renders and
 
 | Component | Role |
 |---|---|
-| **FRR edges** `edge1`/`edge2` (AS 65000) | `default-originate` (`::/0`) + advertise the NAT64 prefix `64:ff9b::/96`, DNS64 on a loopback, WAN + Tayga wiring. Each shares its netns with a `flowplane --role edge` sidecar (`wan_rx`). |
-| **FRR switches** `sw1`/`sw2` (AS 65010) | Transit eBGP to both edges and every node; per-port RA advertising each port's `/64`; per-node ToR `/64` origination. |
+| **FRR edges** `edge1`/`edge2` (AS 65000) | eBGP `default-originate` (`::/0`) + advertise the NAT64 prefix `64:ff9b::/96`, a static route handing that prefix to Tayga, WAN + Tayga wiring. (DNS64 is deferred to a later egress spec.) The N/S-LB edge datapath is a later (P4) concern. |
+| **FRR switches** `sw1`/`sw2` (AS 65010) | A pure `/128` ECMP relay: unnumbered eBGP to both edges and every node (`as-override`), no interface addresses, no originated `/64`, no router-advert. |
 | **Tayga NAT64** `nat64-1`/`nat64-2` | `64:ff9b::/96` → IPv4 pool → MASQUERADE to the WAN, one per edge. |
 | **WAN sim** `wan` | Masquerades all fabric prefixes onto the host uplink; the host's single route into the fabric. |
 | **Registry mirror** (`registry:2`) | Persistent pull-through + push-local mirror on the WAN segment (`fd00:29::5:5000`), cache-backed across `down`. |
@@ -97,10 +97,13 @@ kubectl --kubeconfig test/lab/build/ectobase/k02.kubeconfig get clusterpools.pla
 
 ## Fabric-only egress
 
-The node's preferred default (`::/0`) comes only from the edges via the switch RA (`proto ra`,
-metric 1024); the docker mgmt default is demoted to metric 4096. Traffic goes
-`node → switch → edge → (Tayga NAT64 for IPv4) → WAN → internet`. `up` auto-configures the
-host NAT66 + FORWARD so the WAN's masqueraded fabric egress reaches the host uplink.
+The node's preferred default (`::/0`) arrives via FRR BGP `default-originate` from the edges,
+relayed by the switches to the node's own FRR speaker over unnumbered eBGP — no RA involved.
+`fabric-preboot` deletes the kind-bridge (`eth0`) kernel default outright (admin distance always
+beats a higher-metric demotion), so zebra installs the BGP default and egress is fabric-only.
+Traffic goes `node → switch → edge → (Tayga NAT64 for IPv4) → WAN → internet`. `up`
+auto-configures the host NAT66 + FORWARD so the WAN's masqueraded fabric egress reaches the host
+uplink.
 
 ## Registry mirror
 
@@ -115,10 +118,10 @@ faster.
 These three settings are load-bearing for the datapath on clab veths. They are **not**
 arbitrary — each encodes a containerlab-veth constraint that does not exist on real hardware.
 
-### Per-role XDP mode: nodes are generic, edges are native
+### Per-role XDP mode: nodes are generic/SKB; the edge role is deferred (P4)
 
 The loader prefers native/driver XDP and falls back to SKB/generic (`attach_xdp_mode`); setting
-`FLOWPLANE_SKB_MODE=1` forces generic. On clab the correct mode is **per role**:
+`FLOWPLANE_SKB_MODE=1` forces generic. On clab the correct mode for compute nodes is:
 
 - **Compute nodes → generic/SKB** (`FLOWPLANE_SKB_MODE=1` in the pool chart's
   `dataplane-ebpf` DaemonSet). `uplink_rx` delivers to guests by XDP-redirecting into the
@@ -126,19 +129,13 @@ The loader prefers native/driver XDP and falls back to SKB/generic (`attach_xdp_
   fails with `-95`/`EOPNOTSUPP` (the veth `ndo_xdp_xmit` peer requirement) — only the
   generic/SKB path delivers. Nodes never `XDP_PASS` to the local stack, so native buys them
   nothing.
-- **WAN edges → native** (`FLOWPLANE_SKB_MODE` *unset* on the edge sidecar).
-  `edge_local_deliver` decaps an egress packet then `XDP_PASS`es the inner IPv4 to FRR. Under
-  **generic** XDP the skb's `skb->protocol` was set (to outer IPv6) *before* the program ran
-  and is **not** re-derived after the head-adjust, so the decapped IPv4 never reaches
-  `ip_rcv_core`. **Native** rebuilds the skb on PASS → `eth_type_trans` re-runs → protocol
-  correct. The edge does no guest-veth redirect, so it dodges the `EOPNOTSUPP` problem. (On
-  real NICs native works for *both* roles — real drivers honor `ndo_xdp_xmit` and rebuild the
-  skb on PASS. The split is a clab-veth artifact.)
 
-Verify with `bpftool net show` in the node/edge netns: nodes show `generic`, edges show
-`driver`. The graceful-restart **adopt** path re-points the existing pinned link *without*
-changing attach mode — a plain DS rollout will **not** flip native↔generic. To force a fresh
-attach, clear the pins.
+The WAN-edge flowplane sidecar (and its native-XDP handling) has been pruned from this fabric —
+FRR is the whole edge node today. The N/S-LB edge datapath is a later (P4) concern.
+
+Verify with `bpftool net show` in the node netns: nodes show `generic`. The graceful-restart
+**adopt** path re-points the existing pinned link *without* changing attach mode — a plain DS
+rollout will **not** flip native↔generic. To force a fresh attach, clear the pins.
 
 ### Fabric MTU (so native can attach at all)
 
@@ -149,17 +146,13 @@ a lower MTU — comfortably above the encap need (outer IPv6 40 + a 1500-MTU gue
 and below the native limit. The dataplane code itself is MTU-agnostic; this is purely a harness
 knob.
 
-### Per-edge bpffs pin namespace (or the two edges collide)
+### Per-edge bpffs pin namespace — deferred (P4)
 
-Both edge sidecars (`edge1`, `edge2`) are co-located on one host and **bind-mount the same
-host `/sys/fs/bpf`**. A shared pin dir would make them share one `LOCAL`/`INTERFACES`/`CONNTRACK`
-map set. `LOCAL` holds a single `uplink_mac`; the two edges have different eth1 MACs, so
-whichever seeds `LOCAL` last wins and the other edge's `edge_local_deliver` writes the **wrong**
-inner-eth dst MAC → the kernel drops the decapped packet as `PACKET_OTHERHOST` in `ip_rcv_core`
-→ 100% N-S loss for any flow that ECMP-hashes to the losing edge. Fix: each edge pins to its
-**own** dir (`--pin-dir /sys/fs/bpf/flowplane-$EDGE_ID`). In production the edges are separate
-hosts (separate bpffs) so this never arises. The in-cluster DaemonSet needs **no** such split:
-each node has its own bpffs and runs exactly one flowplane pod.
+This used to document a bpffs-collision hazard between the two `flowplane --role edge`
+sidecars co-located on one host. That sidecar has been pruned from the fabric, so the
+hazard does not currently apply; revisit if/when the N/S-LB edge datapath (P4) reintroduces
+a per-edge sidecar. The in-cluster DaemonSet needs no such split: each node has its own
+bpffs and runs exactly one flowplane pod.
 
 ## Debugging the datapath (XDP layer *and* kernel stack)
 

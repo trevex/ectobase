@@ -8,10 +8,10 @@ images:
   tayga:    ghcr.io/trevex/ectobase/tayga:latest
   wan:      ghcr.io/trevex/ectobase/wan:latest
   registry: registry:2
-  # Only used when fabric.ceph.enabled: true (the optional storage node + FRR sidecar).
-  # Pinned by digest (the third-party :latest tags roll; a fresh host would otherwise pull a
-  # newer, unvalidated image). These digests are the known-good images the sweep runs on
-  # (frr ~v8.x, ceph demo ~reef); bump deliberately when upgrading.
+  # frr: edges + switches, plus the ceph FRR sidecar. ceph: only when fabric.ceph.enabled: true.
+  # Both pinned by digest (digest-pinned; third-party :latest tags roll — a fresh host would
+  # otherwise pull a newer, unvalidated image). These digests are the known-good images the
+  # sweep runs on (frr ~v8.x, ceph demo ~reef); bump deliberately when upgrading.
   frr:      frrouting/frr@sha256:990e83490108b686fd6df3b1cafa6bdbb2714acb00eedb9a89693946f46f45ce
   ceph:     quay.io/ceph/demo@sha256:522483cf07cfce6386b8e18a3edfa88a1b32c688dee231d0a6962b1513557723
 fabric:

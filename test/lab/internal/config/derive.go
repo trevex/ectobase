@@ -33,9 +33,9 @@ type DerivedNode struct {
 	PortSeq      int    // 1-based across ALL clusters (switch host-port index + BGP router-id)
 	Identity     string // fd00:cafe:<h>::<index>/128 (dummy0, GoBGP-advertised)
 	IdentityAddr string // fd00:cafe:<h>::<index> (bare, for BGPPeerConfig routeSource)
-	NodeNet64    string // fd00:cafe:<h>::/64 (the node's underlay pool; the ToR originates it into
-	// BGP with a recursive nexthop = IdentityAddr so guest-endpoint underlays in its upper half are
-	// fabric-routable — Talos native GoBGP can only advertise host routes, so the /64 is switch-side)
+	NodeNet64    string // fd00:cafe:<h>::/64 (the node's underlay /64; NOT originated into BGP — the
+	// node advertises only its /128 VTEP identity. NodeNet64 is retained as the per-node underlay
+	// pool that flowplane allocates guest-endpoint /128s from, written to /etc/fabric/prefix)
 }
 
 // KindRole is the kind node role: the first node in a cluster is the control-plane,

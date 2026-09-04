@@ -32,7 +32,7 @@ const (
 // proves SNAT fired by sniffing the IPIP-encapped frame on the node's fabric uplinks
 // and asserting the inner TCP source port is in [natPortMin, natPortMax].
 //
-// The edges are VyOS NAT64 routers here, not flowplane, so this asserts the SNAT
+// The edges are FRR NAT64 routers here, not flowplane, so this asserts the SNAT
 // REWRITE AT THE NODE UPLINK — not end-to-end internet (distinct from the node-level
 // TestNAT64Egress, which pings a NAT64-embedded v4 via tayga).
 func TestNatEgressSmoke(t *testing.T) {

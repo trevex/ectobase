@@ -1,8 +1,9 @@
 ! Generated from templates/frr/edge.conf.tmpl — do not edit by hand.
-! WAN edge (AS {{ .ASEdge }}) — eBPF SIIT/NAT64 decap boundary. Originates ::/0 into
-! the fabric (default-originate) and advertises the NAT64 /96 + its loopback. The
-! edge sidecar (flowplane-edge1) shares this netns and runs wan_rx; FRR here is only
-! the kernel router. IPv6-only fabric: pin the router-id (no v4 to auto-derive).
+! WAN edge (AS {{ .ASEdge }}) — NAT64 boundary. Originates ::/0 into the fabric
+! (default-originate) and advertises the NAT64 /96 + its loopback, with a static
+! route handing the NAT64 prefix to tayga. FRR here is the kernel router; the
+! N/S-LB edge datapath is a later (P4) concern. IPv6-only fabric: pin the
+! router-id (no v4 to auto-derive).
 frr defaults datacenter
 hostname edge{{ .Edge }}
 !

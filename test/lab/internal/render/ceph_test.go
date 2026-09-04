@@ -10,7 +10,7 @@ import (
 	"github.com/trevex/ectobase/test/lab/internal/fabric"
 )
 
-// cephFixture is the ceph-enabled counterpart of the base clab/vyos fixtures.
+// cephFixture is the ceph-enabled counterpart of the base clab/FRR fixtures.
 // It uses the SAME clusters (dispatch:1, k02:2 → TotalNodes=3) so the ceph host
 // port lands at CephPortSeq=4 → switch eth6, just past the node ports (eth3-5).
 const cephFixture = `

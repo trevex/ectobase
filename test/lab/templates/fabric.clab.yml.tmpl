@@ -6,7 +6,7 @@ mgmt:
   # P3b: the fabric routers (edge/switch) are detached from mgmt via a per-node
   # network-mode override below (no eth0, no mgmt default — fabric-only). The mgmt
   # net still exists for the registry's published host port + other infra; compute
-  # nodes use kind's own bridge (eth0 default demoted by fabric-preboot so the
+  # nodes use kind's own bridge (eth0 default deleted by fabric-preboot so the
   # fabric BGP default is preferred). The host reaches the fabric via the
   # WAN-segment jump veth (below), not a mgmt route.
 
