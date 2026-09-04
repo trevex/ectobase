@@ -228,6 +228,9 @@ impl<W: MapWriter> ControlCore<W> {
                     ipv6,
                     underlay: underlay_ipv6,
                     device: dev,
+                    // Record the attach shape so adopt re-points the pinned link correctly (netkit vs tcx).
+                    l3: u8::from(l3),
+                    _pad: [0; 3],
                 },
             )?;
         }

@@ -142,7 +142,9 @@ pub struct IfaceMetaKey {
 /// in-memory bookkeeping and re-attach the guest program after an flowplane restart. `id_len`/`device_len`
 /// give the used prefix of the padded `IfaceMetaKey.id` / `device`. `tap_ifindex` is the ifindex at
 /// attach time; the rebuild re-derives the live ifindex from `device` (the veth persists) and treats
-/// this as a cross-check. Field order is chosen so the struct has no implicit padding.
+/// this as a cross-check. `l3` records how the guest program was attached, so adopt re-points the pinned
+/// link with the matching mechanism (netkit → `bpf(BPF_LINK_UPDATE)`, veth/tcx → `readopt_tc_link`).
+/// Field order is chosen so the struct has no implicit padding (`_pad` makes the tail explicit).
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct IfaceMetaVal {
@@ -154,6 +156,10 @@ pub struct IfaceMetaVal {
     pub ipv6: [u8; 16],
     pub underlay: [u8; 16],
     pub device: [u8; IFACE_DEV_MAX],
+    /// 1 = the guest program is attached to a netkit L3 primary via `BPF_NETKIT_PEER` (adopt must
+    /// re-point it with `bpf(BPF_LINK_UPDATE)`); 0 = tcx/clsact on a veth (adopt uses `readopt_tc_link`).
+    pub l3: u8,
+    pub _pad: [u8; 3],
 }
 
 impl IfaceMetaKey {

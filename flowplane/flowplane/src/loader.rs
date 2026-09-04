@@ -458,15 +458,11 @@ fn bpf_obj_pin(fd: std::os::fd::BorrowedFd<'_>, path: &Path) -> anyhow::Result<(
 /// Unlike tcx, an L3 netkit primary has no clsact qdisc — the program binds to the device via the
 /// netkit driver's BPF hook, so there is NO `qdisc_add_clsact` here.
 ///
-/// TODO: netkit link re-adopt on restart is NOT merely unimplemented — it is ACTIVELY UNSAFE today.
-/// `IFACE_META` does not record the `l3` bit, so on adopt `reattach_guest` unconditionally takes the
-/// tcx path (`readopt_tc_link`) for EVERY interface, including netkit ones. On a netkit link that
-/// `BPF_LINK_UPDATE`-shaped re-adopt may fail and then `unpin_link` the LIVE netkit link (detaching a
-/// running pod's datapath) and mis-attach a clsact/tcx program to the L3 netkit primary — a dead pod.
-/// The netkit-correct re-adopt is `bpf(BPF_LINK_UPDATE)` on the reopened pin fd. Deferred and safe for
-/// now ONLY because P4 tears the lab down between runs (no in-place flowplane restart with live netkit
-/// pods); before that guarantee goes away, `IFACE_META` must record `l3` and `reattach_guest` must
-/// branch on it (netkit → the LINK_UPDATE path, never the tcx unpin+reattach). See B.5/review notes.
+/// Restart re-adopt of this pinned netkit link is handled by [`readopt_netkit_link`]: it reopens the
+/// pin and issues `bpf(BPF_LINK_UPDATE)` to atomically re-point it at the freshly-loaded program
+/// (zero-gap). `IFACE_META` records the `l3` bit at attach time so `reattach_guest` selects the netkit
+/// path (never the tcx `readopt_tc_link`, which cannot drive a netkit link and would tear the live one
+/// down). See B.5/review notes.
 pub fn attach_netkit_pinned_at(
     ebpf: &mut Ebpf,
     prog: &str,
@@ -496,6 +492,114 @@ pub fn attach_netkit_pinned_at(
         .with_context(|| format!("pin netkit link {}", path.display()))?;
     // `link` drops here — the bpffs pin now owns the attach (restart-survivable).
     Ok(())
+}
+
+// bpf(2) command numbers from aya-obj's generated `bpf_cmd` (transcribed as literals, same as the
+// BPF_OBJ_PIN/BPF_LINK_CREATE constants above):
+//   bpf_cmd::BPF_OBJ_GET     = 7
+//   bpf_cmd::BPF_LINK_UPDATE = 29
+const BPF_OBJ_GET: libc::c_int = 7;
+const BPF_LINK_UPDATE: libc::c_int = 29;
+
+/// The `link_update` arm of `union bpf_attr`: `{ __u32 link_fd; __u32 new_prog_fd; __u32 flags;
+/// __u32 old_prog_fd }` (kernel offsets 0/4/8/12). `flags == 0` with `old_prog_fd == 0` means an
+/// unconditional re-point (no `BPF_F_REPLACE` old-prog check). 8-byte aligned to match `bpf_attr`.
+#[repr(C, align(8))]
+struct BpfLinkUpdateAttr {
+    link_fd: u32,
+    new_prog_fd: u32,
+    flags: u32,
+    old_prog_fd: u32,
+}
+
+/// `bpf(BPF_OBJ_GET, { pathname })` — reopen a pinned bpf object (here a link) from bpffs as an owned
+/// fd. Reuses [`BpfObjPinAttr`] (same `obj` arm; `bpf_fd`/`file_flags` are 0 on input).
+fn bpf_obj_get(path: &Path) -> anyhow::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt as _;
+    let cpath = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .with_context(|| format!("pin path {} has an interior NUL", path.display()))?;
+    let mut attr = BpfObjPinAttr {
+        pathname: cpath.as_ptr() as u64,
+        bpf_fd: 0,
+        file_flags: 0,
+    };
+    // SAFETY: `attr` matches the kernel's `BPF_OBJ_GET` (obj) arm; `pathname` points at `cpath`, kept
+    // alive across the call. Returns a fresh fd (>= 0) on success or -1 with errno set.
+    let ret = unsafe {
+        libc::syscall(
+            libc::SYS_bpf,
+            BPF_OBJ_GET,
+            &mut attr as *mut _ as *mut libc::c_void,
+            std::mem::size_of::<BpfObjPinAttr>() as libc::c_uint,
+        )
+    };
+    if ret < 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("bpf(BPF_OBJ_GET) {}", path.display()));
+    }
+    // SAFETY: `ret` is a fresh, owned fd returned by the kernel; we take sole ownership.
+    Ok(unsafe { OwnedFd::from_raw_fd(ret as std::os::fd::RawFd) })
+}
+
+/// netkit analogue of [`readopt_tc_link`]: reopen the pinned link at `<pin_dir>/links/<name>` and
+/// atomically re-point it at the freshly-loaded `prog` via `bpf(BPF_LINK_UPDATE)` — the netkit-correct
+/// zero-gap re-adopt (a netkit link is not a tcx link, so `readopt_tc_link` cannot drive it). Returns
+/// `Ok(false)` if no pin exists (nothing to adopt); the caller then attaches fresh.
+pub fn readopt_netkit_link(
+    ebpf: &mut Ebpf,
+    prog: &str,
+    pin_dir: &Path,
+    name: &str,
+) -> anyhow::Result<bool> {
+    use std::os::fd::{AsFd, AsRawFd};
+    let path = link_pin_path(pin_dir, name);
+    if !path.exists() {
+        return Ok(false);
+    }
+    // Load the program fresh if this process hasn't yet, and take its raw fd (u32) within the borrow.
+    let new_prog_fd = {
+        let p: &mut SchedClassifier = ebpf
+            .program_mut(prog)
+            .with_context(|| format!("netkit prog {prog} missing"))?
+            .try_into()?;
+        if p.fd().is_err() {
+            p.load().with_context(|| format!("load {prog}"))?;
+        }
+        p.fd()
+            .with_context(|| format!("fd for {prog}"))?
+            .as_fd()
+            .as_raw_fd() as u32
+    };
+    // Reopen the pinned netkit link and atomically re-point it at the new program.
+    let link_fd = bpf_obj_get(&path)?;
+    let mut attr = BpfLinkUpdateAttr {
+        link_fd: link_fd.as_raw_fd() as u32,
+        new_prog_fd,
+        flags: 0,
+        old_prog_fd: 0,
+    };
+    // SAFETY: `attr` matches the kernel's `link_update` arm; `link_fd` (owned) and the program fd are
+    // both live for the call. Returns 0 on success, -1 with errno on failure.
+    let ret = unsafe {
+        libc::syscall(
+            libc::SYS_bpf,
+            BPF_LINK_UPDATE,
+            &mut attr as *mut _ as *mut libc::c_void,
+            std::mem::size_of::<BpfLinkUpdateAttr>() as libc::c_uint,
+        )
+    };
+    if ret < 0 {
+        return Err(std::io::Error::last_os_error()).with_context(|| {
+            format!(
+                "bpf(BPF_LINK_UPDATE) re-point netkit link {}",
+                path.display()
+            )
+        });
+    }
+    // `link_fd` drops here — the bpffs pin still holds the (now re-pointed) link.
+    println!("adopt: re-pointed pinned link {name} -> {prog} (netkit, atomic, zero-gap)");
+    Ok(true)
 }
 
 /// Pin a loaded map to `<pin_dir>/<name>` so a restarted control plane can re-acquire it.

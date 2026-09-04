@@ -616,8 +616,8 @@ async fn main() -> anyhow::Result<()> {
             if adopt {
                 let recovered = control.recovered_interfaces();
                 let mut reattached = 0usize;
-                for (id, device) in &recovered {
-                    match control.reattach_guest(id, device) {
+                for (id, device, l3) in &recovered {
+                    match control.reattach_guest(id, device, *l3) {
                         Ok(()) => reattached += 1,
                         Err(e) => {
                             eprintln!("adopt: re-attach guest program to {device} failed: {e:#}")

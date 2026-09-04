@@ -113,7 +113,7 @@ struct Inner {
     core: ControlCore<AyaWriter>,
     /// Interfaces recovered by `rebuild_from_maps` on adopt: (interface_id, device) whose guest
     /// program must be re-attached by the caller (`Serve`). Empty on a fresh (non-adopt) bring-up.
-    recovered: Vec<(Vec<u8>, String)>,
+    recovered: ReattachList,
     /// Link-pinning enabled: pin program links + adopt them atomically on restart.
     pin_links: bool,
     /// Persistent pin dir for link pins; mirrors the map pin dir passed to load_ebpf.
@@ -133,7 +133,9 @@ struct Inner {
 
 /// `(interface_id, device)` pairs whose guest program must be re-attached after a graceful restart
 /// (their bpf-links died with the old process; the pinned maps survived).
-type ReattachList = Vec<(Vec<u8>, String)>;
+// (interface_id, device, l3): l3 tells the adopt caller whether to re-point the guest program's
+// pinned link as a netkit link (bpf(BPF_LINK_UPDATE)) or a tcx link (readopt_tc_link).
+type ReattachList = Vec<(Vec<u8>, String, bool)>;
 
 impl Control {
     /// Load + attach uplink_rx, set LOCAL, take the map handles. The uplink identity + pinning policy
@@ -344,7 +346,7 @@ impl Control {
             );
             g.by_id.insert(id.clone(), rec);
             g.iface_underlay.insert(id.clone(), v.underlay);
-            reattach.push((id, device));
+            reattach.push((id, device, v.l3 != 0));
         }
         Ok(reattach)
     }
@@ -368,7 +370,7 @@ impl Control {
 
     /// The `(interface_id, device)` list recovered on adopt, whose guest program the caller must
     /// re-attach. Empty after a fresh bring-up.
-    pub fn recovered_interfaces(&self) -> Vec<(Vec<u8>, String)> {
+    pub fn recovered_interfaces(&self) -> ReattachList {
         self.inner.lock().recovered.clone()
     }
 
@@ -377,24 +379,52 @@ impl Control {
     /// `rebuild_from_maps`); this ONLY re-creates the `GuestLink` (the old one died with the process)
     /// and stores it so a later DetachInterface can drop it — no map writes, no bookkeeping insert.
     /// Mirrors the attach half of `create_interface`.
-    pub fn reattach_guest(&self, interface_id: &[u8], device: &str) -> anyhow::Result<()> {
+    pub fn reattach_guest(
+        &self,
+        interface_id: &[u8],
+        device: &str,
+        l3: bool,
+    ) -> anyhow::Result<()> {
         let mut g = self.inner.lock();
         if g.pin_links {
             let pin_dir = g.pin_dir.clone();
             let gname = format!("guest-{}", hex_encode(interface_id));
-            // NOTE: this unconditionally takes the tcx re-adopt path — it does NOT branch on `l3`
-            // because `IFACE_META` doesn't record it yet. For a netkit (L3) interface this is UNSAFE
-            // (can unpin the live netkit link + mis-attach tcx to the L3 primary → dead pod). Safe only
-            // because P4 never does an in-place flowplane restart with live netkit pods. See the
-            // `attach_netkit_pinned_at` TODO in loader.rs before relying on netkit restart recovery.
-            let readopted = loader::readopt_tc_link(&mut g.ebpf, "tc_guest_tx", &pin_dir, &gname)
-                .unwrap_or_else(|e| {
-                    eprintln!("re-adopt guest link {gname} failed ({e:#}); attaching fresh");
-                    loader::unpin_link(&pin_dir, &gname);
-                    false
-                });
+            // Re-point the guest program's pinned link at the freshly-loaded program, atomically
+            // (zero-gap). `l3` (from the IFACE_META journal, recorded at attach) selects the mechanism:
+            // a netkit (L3) link MUST be re-pointed with bpf(BPF_LINK_UPDATE) (readopt_netkit_link) —
+            // the tcx readopt path can't drive a netkit link and would unpin the LIVE link + mis-attach
+            // a clsact/tcx program to the L3 primary (dead pod). A veth link uses readopt_tc_link.
+            let readopt = if l3 {
+                loader::readopt_netkit_link(&mut g.ebpf, "tc_guest_tx", &pin_dir, &gname)
+            } else {
+                loader::readopt_tc_link(&mut g.ebpf, "tc_guest_tx", &pin_dir, &gname)
+            };
+            let readopted = readopt.unwrap_or_else(|e| {
+                eprintln!("re-adopt guest link {gname} failed ({e:#}); attaching fresh");
+                loader::unpin_link(&pin_dir, &gname);
+                false
+            });
             if !readopted {
-                loader::attach_tc_pinned_at(&mut g.ebpf, "tc_guest_tx", device, &pin_dir, &gname)?;
+                // No pin to adopt (or adopt failed): (re)attach fresh with the matching mechanism.
+                if l3 {
+                    let tap = crate::ifindex(device)
+                        .with_context(|| format!("resolve netkit primary ifindex for {device}"))?;
+                    loader::attach_netkit_pinned_at(
+                        &mut g.ebpf,
+                        "tc_guest_tx",
+                        tap,
+                        &pin_dir,
+                        &gname,
+                    )?;
+                } else {
+                    loader::attach_tc_pinned_at(
+                        &mut g.ebpf,
+                        "tc_guest_tx",
+                        device,
+                        &pin_dir,
+                        &gname,
+                    )?;
+                }
             }
             g.links
                 .insert(interface_id.to_vec(), GuestLink::Pinned(gname));
@@ -815,6 +845,8 @@ mod tests {
             ipv6: [0x20; 16],
             underlay: [0xfd; 16],
             device: dev,
+            l3: 0,
+            _pad: [0; 3],
         };
         let (got_id, got_dev, rec) = Control::decode_iface_meta(&key, &val);
         assert_eq!(
