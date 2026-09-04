@@ -1,0 +1,75 @@
+# Per-cluster machine-config patch (talosctl gen config --config-patch). It sets
+# the cluster-wide bits; the CNI is resolved to "none" by STRIPPING the
+# KubeFlannelCNIConfig doc in talos.Gen — with no CNI doc and no legacy
+# .cluster.network block, Talos 1.14 installs no CNI, so the ectobase datapath owns
+# pod networking. kube-proxy is disabled (the datapath replaces it).
+apiVersion: v1alpha1
+kind: KubeProxyConfig
+enabled: false
+---
+# KubePrism (in-cluster apiserver load-balancer) is enabled by default; pin its port
+# so the cluster-wide config-doc is explicit.
+apiVersion: v1alpha1
+kind: KubePrismConfig
+port: 7445
+---
+apiVersion: v1alpha1
+kind: KubeNetworkConfig
+podSubnets:
+  - {{ .PodSubnet }}
+serviceSubnets:
+  - {{ .SvcSubnet }}
+---
+apiVersion: v1alpha1
+kind: ResolverConfig
+nameservers:
+  - address: {{ .Resolver1 }}
+  - address: {{ .Resolver2 }}
+---
+# etcd runs in-band on the BGP fabric (the underlay), never mgmt: it advertises +
+# listens on the node /64, so its member IPs are the node /128 identities. The API
+# VIP lives in a different /64 (fd00:cafe:<h>:1::/64), so it never gets picked as an
+# etcd peer. max-learners=3 lets the control-plane nodes join etcd as learners
+# together — the default single-learner limit deadlocks over the fabric (slower to
+# converge than an L2 mgmt net).
+cluster:
+  etcd:
+    advertisedSubnets:
+      - {{ .NodeNet64 }}
+    extraArgs:
+      max-learners: "3"
+machine:
+  # Health-gated anycast API VIP: a per-node static pod holds the VIP on its own vip0
+  # dummy only while the local apiserver /healthz returns "ok". Talos' embedded GoBGP
+  # advertises vip0 (see the BGPPeerConfig), so an unhealthy node withdraws itself
+  # from the anycast set instead of black-holing API traffic.
+  pods:
+    - apiVersion: v1
+      kind: Pod
+      metadata:
+        name: api-vip
+        namespace: kube-system
+      spec:
+        hostNetwork: true
+        containers:
+          - name: agent
+            image: alpine:3
+            securityContext:
+              capabilities:
+                add: ["NET_ADMIN"]
+            command: ["/bin/sh", "-c"]
+            # busybox only (no package install): create the vip0 dummy, then hold the
+            # VIP on it only while the local apiserver /healthz returns "ok".
+            args:
+              - |
+                ip link add vip0 type dummy 2>/dev/null || true
+                ip link set vip0 up
+                vip={{ .APIVipAddr }}/128
+                while :; do
+                  if wget -q -T2 --no-check-certificate -O- https://127.0.0.1:6443/healthz 2>/dev/null | grep -qx ok; then
+                    ip addr add "$vip" dev vip0 2>/dev/null || true
+                  else
+                    ip addr del "$vip" dev vip0 2>/dev/null || true
+                  fi
+                  sleep 2
+                done

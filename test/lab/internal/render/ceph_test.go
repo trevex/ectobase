@@ -31,7 +31,7 @@ func TestCephClabGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	view := fabric.Build(c)
+	view := fabric.ClabView{View: fabric.Build(c), ModulesDir: "/lib/modules"}
 
 	b, err := os.ReadFile("../../templates/fabric.clab.yml.tmpl")
 	if err != nil {
@@ -90,7 +90,7 @@ fabric:
 	if err != nil {
 		t.Fatal(err)
 	}
-	view := fabric.Build(c)
+	view := fabric.ClabView{View: fabric.Build(c), ModulesDir: "/lib/modules"}
 	b, err := os.ReadFile("../../templates/fabric.clab.yml.tmpl")
 	if err != nil {
 		t.Fatal(err)

@@ -24,7 +24,9 @@ fabric:
 	if err != nil {
 		t.Fatal(err)
 	}
-	view := fabric.Build(c)
+	// Fixed modules dir so the golden stays stable across hosts (the real path is
+	// host-dependent; ClabView keeps it off the pure View for exactly this reason).
+	view := fabric.ClabView{View: fabric.Build(c), ModulesDir: "/lib/modules"}
 
 	b, err := os.ReadFile("../../templates/fabric.clab.yml.tmpl")
 	if err != nil {
@@ -52,21 +54,39 @@ fabric:
 		t.Errorf("rendered output differs from golden %s (run with -update to regenerate)", goldenPath)
 	}
 
-	// Structural invariants (independent of the byte-for-byte golden). One k8s-kind
-	// lifecycle node per cluster (dispatch:, k02:) plus the kind-created node
-	// containers as ext-container link endpoints (<cluster>-control-plane / -worker).
+	// Structural invariants (independent of the byte-for-byte golden). One container-mode
+	// Talos node per cluster node, named <cluster>-<index>, carrying the fabric links.
 	for _, name := range []string{
-		"dispatch:", "k02:",
-		"dispatch-control-plane:", "k02-control-plane:", "k02-worker:",
+		"dispatch-1:", "k02-1:", "k02-2:",
 		"registry:", "wan:", "edge1:", "edge2:", "sw1:", "sw2:", "nat64-1:", "nat64-2:",
 	} {
 		if !strings.Contains(out, name) {
 			t.Errorf("expected node %q in rendered topology", name)
 		}
 	}
-	// The k8s-kind lifecycle nodes own no netns; links must attach to the
-	// ext-container node containers, never the lifecycle node.
-	for _, ep := range []string{`"dispatch-control-plane:eth1"`, `"k02-worker:eth2"`} {
+	// The retired kind substrate must be gone: no k8s-kind lifecycle nodes, no
+	// ext-container node containers.
+	for _, gone := range []string{"kind: k8s-kind", "kind: ext-container", "dispatch-control-plane:"} {
+		if strings.Contains(out, gone) {
+			t.Errorf("rendered topology still references the retired kind substrate: %q", gone)
+		}
+	}
+	// Each Talos node reads its USERDATA env-file and binds its per-node mounts + the
+	// host kernel modules.
+	for _, want := range []string{
+		"image: img/talos",
+		"PLATFORM: container",
+		"env-files: [talos/dispatch/dispatch-1.env]",
+		"env-files: [talos/k02/k02-2.env]",
+		"- mounts/dispatch-1/run:/run",
+		"- /lib/modules:/usr/lib/modules:ro",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in rendered topology", want)
+		}
+	}
+	// Link endpoints attach to the Talos nodes directly.
+	for _, ep := range []string{`"dispatch-1:eth1"`, `"k02-2:eth2"`} {
 		if !strings.Contains(out, ep) {
 			t.Errorf("expected link endpoint %s in rendered topology", ep)
 		}

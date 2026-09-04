@@ -1,0 +1,19 @@
+---
+# Talos' embedded GoBGP (osrg/gobgp) peers unnumbered to both ToRs over the node's
+# two underlay uplinks (eth1->sw1, eth2->sw2) and advertises the node's /128 identity
+# (dummy0) plus the health-gated anycast API VIP (vip0). The node AS is shared across
+# every node; the ToRs run as-override to re-propagate each /128 to the others.
+apiVersion: v1alpha1
+kind: BGPPeerConfig
+localASN: {{ .LocalASN }}
+routerID: {{ .RouterID }}
+routeSource: {{ .IdentityAddr }}
+advertise:
+  - dummy0   # node identity (/128)
+  - vip0     # the anycast API VIP, present only while the local apiserver is healthy
+multipath: true
+neighbors:
+  - link: eth1
+    peerASN: {{ .PeerASN }}
+  - link: eth2
+    peerASN: {{ .PeerASN }}

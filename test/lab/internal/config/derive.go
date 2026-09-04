@@ -38,6 +38,12 @@ type DerivedNode struct {
 	// pool that flowplane allocates guest-endpoint /128s from, written to /etc/fabric/prefix)
 }
 
+// Name is the node's globally-unique name across the multi-cluster topology:
+// <cluster>-<index> (e.g. dispatch-1, k02-2). It is the clab Talos node name, the
+// Talos hostname, the per-node env-file / mounts-dir basename, and the Kubernetes
+// node name.
+func (n DerivedNode) Name() string { return fmt.Sprintf("%s-%d", n.Cluster, n.Index) }
+
 // KindRole is the kind node role: the first node in a cluster is the control-plane,
 // the rest are workers.
 func (n DerivedNode) KindRole() string {

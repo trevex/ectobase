@@ -5,6 +5,11 @@
 package fabric
 
 import (
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+
 	"github.com/trevex/ectobase/test/lab/internal/config"
 )
 
@@ -101,6 +106,42 @@ func (v *View) ASSwitch() int    { return v.Cfg.Fabric.AS.Switch }
 func (v *View) ASHost() int      { return v.Cfg.Fabric.AS.Host }
 func (v *View) NodeAggr() string { return NodeAggr }
 func (v *View) LoopAggr() string { return LoopAggr }
+
+// ClabView wraps the View with the render-time host paths the clab topology template
+// needs (kept OFF View so View stays pure/deterministic for the golden tests — the
+// modules dir is host-dependent). The View methods promote through the embed, so the
+// clab template still reaches .Name/.Nodes/.Images/... unchanged.
+type ClabView struct {
+	*View
+	// ModulesDir is the host kernel-modules dir bound read-only into each Talos node
+	// for the kubelet (container-mode Talos ships no modules of its own).
+	ModulesDir string
+}
+
+// ModulesDir returns the host kernel-modules directory for the running kernel. It
+// probes the standard location and the NixOS booted-system path; if neither holds the
+// running kernel's modules it falls back to an empty per-lab dir under build/<name> so
+// the clab bind won't fail (a degraded mode with no real modules — a live A4 concern).
+func ModulesDir(labName string) string {
+	rel, err := os.ReadFile("/proc/sys/kernel/osrelease")
+	if err != nil {
+		slog.Debug("read kernel osrelease failed", "err", err)
+	}
+	kver := strings.TrimRight(string(rel), "\n ")
+	for _, cand := range []string{"/lib/modules", "/run/booted-system/kernel-modules/lib/modules"} {
+		if st, err := os.Stat(filepath.Join(cand, kver)); err == nil && st.IsDir() {
+			return cand
+		}
+	}
+	fallback := filepath.Join("build", labName, "modules")
+	if abs, err := filepath.Abs(fallback); err == nil {
+		fallback = abs
+	}
+	if err := os.MkdirAll(fallback, 0o755); err != nil {
+		slog.Warn("create fallback modules dir failed", "dir", fallback, "err", err)
+	}
+	return fallback
+}
 
 // Build assembles the view: flatten nodes in declaration order, then compute the
 // WAN egress (masquerade the fabric aggregates out the uplink; ECMP return routes

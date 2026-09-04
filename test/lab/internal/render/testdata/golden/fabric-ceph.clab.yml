@@ -5,10 +5,10 @@ mgmt:
   network: ectobase-mgmt
   # P3b: the fabric routers (edge/switch) are detached from mgmt via a per-node
   # network-mode override below (no eth0, no mgmt default — fabric-only). The mgmt
-  # net still exists for the registry's published host port + other infra; compute
-  # nodes use kind's own bridge (eth0 default deleted by fabric-preboot so the
-  # fabric BGP default is preferred). The host reaches the fabric via the
-  # WAN-segment jump veth (below), not a mgmt route.
+  # net still exists for the registry's published host port + other infra; the Talos
+  # compute nodes keep clab-mgmt on eth0 (the fabric BGP ::/0 default is preferred
+  # once Talos GoBGP converges). The host reaches the fabric via the WAN-segment jump
+  # veth (below), not a mgmt route.
 
 topology:
   defaults:
@@ -75,35 +75,54 @@ topology:
         - frr/daemons:/etc/frr/daemons
       sysctls: {net.ipv6.conf.all.forwarding: 1}
 
-    # --- kind clusters: one k8s-kind lifecycle node per cluster (clab runs `kind
-    # create`; the kind cluster is named after this node). The per-node kind
-    # containers (<cluster>-control-plane / -worker) are declared as ext-container
-    # nodes below and carry the fabric links — attaching links to the k8s-kind
-    # lifecycle node itself fails ("network namespace not available") since it owns
-    # no netns of its own. ---
-    dispatch:
-      kind: k8s-kind
-      startup-config: kind/dispatch-kind.yaml
-      extras:
-        k8s_kind:
-          deploy:
-            wait: 120s   # clab k8s-kind boot-marker scan timeout (NOT a node-Ready gate); must exceed the node preboot delay
-    k02:
-      kind: k8s-kind
-      startup-config: kind/k02-kind.yaml
-      extras:
-        k8s_kind:
-          deploy:
-            wait: 120s   # clab k8s-kind boot-marker scan timeout (NOT a node-Ready gate); must exceed the node preboot delay
-    # The kind-created node containers, as clab link endpoints. ext-container =
-    # attach to the already-existing container kind made; names MUST match kind's
-    # (<cluster>-control-plane / <cluster>-worker[N] — see DerivedNode.KindContainer).
-    dispatch-control-plane:
-      kind: ext-container
-    k02-control-plane:
-      kind: ext-container
-    k02-worker:
-      kind: ext-container
+    # --- Talos compute nodes: one container-mode Talos node per cluster node (P6
+    # substrate). Each reads its machine config from USERDATA (base64, rendered by
+    # talos.Gen into talos/<cluster>/<node>.env). containerlab runs every node
+    # privileged, so Talos boots in container mode with a writable rootfs. Talos'
+    # SetupSharedFilesystems marks /var, /etc/cni and /run MS_SHARED, which needs them
+    # to be real mount points, so bind per-node dirs from build/<name>/mounts/<node>/
+    # (a bind is a mount point regardless of backing store, keeping /var off RAM), and
+    # bind the host kernel modules read-only for the kubelet. clab-mgmt stays attached
+    # (eth0) — the fabric BGP ::/0 default is preferred once Talos GoBGP converges. ---
+    dispatch-1:
+      kind: linux
+      image: img/talos
+      env:
+        PLATFORM: container
+      env-files: [talos/dispatch/dispatch-1.env]
+      binds:
+        - mounts/dispatch-1/run:/run
+        - mounts/dispatch-1/var:/var
+        - mounts/dispatch-1/cni:/etc/cni
+        - /lib/modules:/usr/lib/modules:ro
+      sysctls:
+        net.ipv6.conf.all.disable_ipv6: "0"
+    k02-1:
+      kind: linux
+      image: img/talos
+      env:
+        PLATFORM: container
+      env-files: [talos/k02/k02-1.env]
+      binds:
+        - mounts/k02-1/run:/run
+        - mounts/k02-1/var:/var
+        - mounts/k02-1/cni:/etc/cni
+        - /lib/modules:/usr/lib/modules:ro
+      sysctls:
+        net.ipv6.conf.all.disable_ipv6: "0"
+    k02-2:
+      kind: linux
+      image: img/talos
+      env:
+        PLATFORM: container
+      env-files: [talos/k02/k02-2.env]
+      binds:
+        - mounts/k02-2/run:/run
+        - mounts/k02-2/var:/var
+        - mounts/k02-2/cni:/etc/cni
+        - /lib/modules:/usr/lib/modules:ro
+      sysctls:
+        net.ipv6.conf.all.disable_ipv6: "0"
     wan:
       kind: linux
       image: img/wan
@@ -199,25 +218,25 @@ topology:
     # frames (guest MTU = 9000 - 40 encap = 8960). Compute nodes run generic/SKB XDP on clab (native
     # veth redirect is unsupported), which carries non-linear frames fine; the native #[xdp(frags)]
     # fast path is HW-gated. N/S edge links stay 1500 (guests PMTU-clamp for internet egress).
-    - endpoints: ["dispatch-control-plane:eth1", "sw1:eth3"]
+    - endpoints: ["dispatch-1:eth1", "sw1:eth3"]
       mtu: 9000
-    - endpoints: ["dispatch-control-plane:eth2", "sw2:eth3"]
-      mtu: 9000
-    # Jumbo (9000) on the compute-node underlay uplinks so the E/W overlay can carry jumbo guest
-    # frames (guest MTU = 9000 - 40 encap = 8960). Compute nodes run generic/SKB XDP on clab (native
-    # veth redirect is unsupported), which carries non-linear frames fine; the native #[xdp(frags)]
-    # fast path is HW-gated. N/S edge links stay 1500 (guests PMTU-clamp for internet egress).
-    - endpoints: ["k02-control-plane:eth1", "sw1:eth4"]
-      mtu: 9000
-    - endpoints: ["k02-control-plane:eth2", "sw2:eth4"]
+    - endpoints: ["dispatch-1:eth2", "sw2:eth3"]
       mtu: 9000
     # Jumbo (9000) on the compute-node underlay uplinks so the E/W overlay can carry jumbo guest
     # frames (guest MTU = 9000 - 40 encap = 8960). Compute nodes run generic/SKB XDP on clab (native
     # veth redirect is unsupported), which carries non-linear frames fine; the native #[xdp(frags)]
     # fast path is HW-gated. N/S edge links stay 1500 (guests PMTU-clamp for internet egress).
-    - endpoints: ["k02-worker:eth1", "sw1:eth5"]
+    - endpoints: ["k02-1:eth1", "sw1:eth4"]
       mtu: 9000
-    - endpoints: ["k02-worker:eth2", "sw2:eth5"]
+    - endpoints: ["k02-1:eth2", "sw2:eth4"]
+      mtu: 9000
+    # Jumbo (9000) on the compute-node underlay uplinks so the E/W overlay can carry jumbo guest
+    # frames (guest MTU = 9000 - 40 encap = 8960). Compute nodes run generic/SKB XDP on clab (native
+    # veth redirect is unsupported), which carries non-linear frames fine; the native #[xdp(frags)]
+    # fast path is HW-gated. N/S edge links stay 1500 (guests PMTU-clamp for internet egress).
+    - endpoints: ["k02-2:eth1", "sw1:eth5"]
+      mtu: 9000
+    - endpoints: ["k02-2:eth2", "sw2:eth5"]
       mtu: 9000
     - endpoints: ["edge1:eth3", "wan:eth1"]
       mtu: 1500

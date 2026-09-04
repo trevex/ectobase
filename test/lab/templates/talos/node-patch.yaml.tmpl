@@ -1,0 +1,32 @@
+# Per-node machine-config patch (talosctl machineconfig patch). The node identity is
+# a /128 on a dummy0 (the pure /128-VTEP model); Talos' embedded GoBGP advertises it
+# (see the BGPPeerConfig doc talos.Gen appends). The KubeNetworkConfig / ResolverConfig
+# docs restate the cluster-wide values (idempotent merge) so a per-node config is
+# self-contained; KubeNodeConfig pins the kubelet nodeIP to the node underlay /64.
+apiVersion: v1alpha1
+kind: KubeNetworkConfig
+podSubnets:
+  - {{ .PodSubnet }}
+serviceSubnets:
+  - {{ .SvcSubnet }}
+---
+apiVersion: v1alpha1
+kind: KubeNodeConfig
+nodeIP:
+  validSubnets:
+    - {{ .NodeNet64 }}
+---
+apiVersion: v1alpha1
+kind: ResolverConfig
+nameservers:
+  - address: {{ .Resolver1 }}
+  - address: {{ .Resolver2 }}
+---
+machine:
+  network:
+    hostname: {{ .Hostname }}
+    interfaces:
+      - interface: dummy0
+        dummy: true
+        addresses:
+          - {{ .Identity }}

@@ -20,39 +20,6 @@ fabric:
   clusters: [{name: dispatch, nodes: 1}, {name: k02, nodes: 2}]
 `
 
-// TestKindClabNodes asserts the cluster-node block renders as a k8s-kind node
-// pointing at the per-cluster kind Cluster config under kind/.
-func TestKindClabNodes(t *testing.T) {
-	c, err := config.LoadBytes([]byte(kindFixture))
-	if err != nil {
-		t.Fatal(err)
-	}
-	view := fabric.Build(c)
-
-	b, err := os.ReadFile("../../templates/fabric.clab.yml.tmpl")
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := String(string(b), view)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, want := range []string{
-		"kind: k8s-kind",
-		"startup-config: kind/dispatch-kind.yaml",
-		"startup-config: kind/k02-kind.yaml",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("expected %q in rendered clab topology", want)
-		}
-	}
-	// The old Talos cluster-node wiring must be gone.
-	if strings.Contains(out, "talos/dispatch-1.env") {
-		t.Errorf("clab topology still references the removed Talos env-file bind")
-	}
-}
-
 // TestKindClusterGolden renders one cluster's kind Cluster config (control-plane
 // only for the default single-node cluster) and asserts the load-bearing
 // networking, image, extraMounts, and registry-mirror lines.

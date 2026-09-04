@@ -8,12 +8,13 @@
 //	build/<name>/
 //	  <name>.clab.yml                 fabric.clab.yml.tmpl
 //	  frr/{edge1,edge2,sw1,sw2}.conf + daemons  FRR configs
-//	  kind/
-//	    <cluster>-kind.yaml           per-cluster kind Cluster config
-//	    <cluster>-<index>.prefix      per-node underlay /64 (extraMount → /etc/fabric/prefix)
-//	    <cluster>-uplinks             fabric BGP uplinks (extraMount → /etc/fabric/uplinks)
-//	    <cluster>-certs.d/            containerd registry-mirror hosts.toml (extraMount)
-//	  <cluster>.kubeconfig            collected from `kind get kubeconfig`
+//	  talos/<cluster>/
+//	    controlplane.yaml, talosconfig  talosctl gen config outputs (CNI-flannel stripped)
+//	    <cluster>-<index>.yaml          per-node machine config (/128 identity + BGPPeerConfig)
+//	    <cluster>-<index>.env           USERDATA=<base64 machine config> (clab env-file)
+//	  talos-secrets/<cluster>.yaml      persisted PKI (survives the talos/ wipe → stable identities)
+//	  mounts/<cluster>-<index>/{run,var,cni}  per-node bind sources (Talos MS_SHARED mount points)
+//	  <cluster>.kubeconfig            collected once the control plane is bootstrapped
 //	  registry/config.yml             registry/config.yml.tmpl
 //	  registry-cache/                 persistent mirror cache (preserved on down)
 package topology
@@ -37,6 +38,7 @@ import (
 	"github.com/trevex/ectobase/test/lab/internal/frr"
 	"github.com/trevex/ectobase/test/lab/internal/registry"
 	"github.com/trevex/ectobase/test/lab/internal/render"
+	"github.com/trevex/ectobase/test/lab/internal/talos"
 	"github.com/trevex/ectobase/test/lab/templates"
 )
 
@@ -70,14 +72,18 @@ func Render(ctx context.Context, cfg *config.Config) error {
 	p := buildPaths(cfg)
 	v := fabric.Build(cfg)
 
-	for _, dir := range []string{p.build, p.frr, p.kind, p.reg} {
+	for _, dir := range []string{p.build, p.frr, p.reg} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %w", dir, err)
 		}
 	}
 
-	// clab topology.
-	if err := render.FileFS(templates.FS, "fabric.clab.yml.tmpl", p.topo, v); err != nil {
+	// clab topology. The Talos node stanzas bind the host kernel-modules dir (host-
+	// dependent), so wrap the View with the resolved path (kept off View for golden
+	// determinism).
+	modulesDir := fabric.ModulesDir(cfg.Name)
+	if err := render.FileFS(templates.FS, "fabric.clab.yml.tmpl", p.topo,
+		fabric.ClabView{View: v, ModulesDir: modulesDir}); err != nil {
 		return fmt.Errorf("render clab topology: %w", err)
 	}
 
@@ -105,12 +111,22 @@ func Render(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("write frr/daemons: %w", err)
 	}
 
-	// Per-cluster kind Cluster configs (+ prefix/uplinks files). The CNI is kindnet
-	// (kind default) — no Cilium values to render.
+	// Per-cluster Talos machine-config sets (P6 substrate): one container-mode Talos
+	// cluster per declared cluster, each rendered from the talos/ templates + gen'd via
+	// talosctl (talos.Gen). Regenerated from scratch each render so a reduced node count
+	// leaves no stale files; the PKI secrets persist OUTSIDE the wiped talos dir (see
+	// genTalosCluster) so a re-render keeps stable node identities.
+	if err := os.RemoveAll(filepath.Join(p.build, "talos")); err != nil {
+		return fmt.Errorf("clean talos dir: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(p.build, "talos-secrets"), 0o755); err != nil {
+		return fmt.Errorf("mkdir talos-secrets: %w", err)
+	}
+	res1, res2 := fabric.EdgeLoopback+"::e1", fabric.EdgeLoopback+"::e2" // edge loopback resolvers
 	for _, cl := range cfg.Fabric.Clusters {
 		dc := cfg.Derived.Clusters[cl.Name]
-		if err := genKindCluster(cfg, v, p, cl.Name, dc); err != nil {
-			return fmt.Errorf("cluster %s: %w", cl.Name, err)
+		if err := genTalosCluster(ctx, cfg, p, cl.Name, dc, res1, res2); err != nil {
+			return fmt.Errorf("cluster %s talos: %w", cl.Name, err)
 		}
 	}
 
@@ -151,71 +167,87 @@ func Render(ctx context.Context, cfg *config.Config) error {
 	return nil
 }
 
-// kindNodeCtx / kindClusterCtx are the k8s/kind-cluster.yaml.tmpl data. One
-// kindClusterCtx is rendered per cluster; each node contributes a kindNodeCtx
-// whose PrefixPath/UplinksPath are ABSOLUTE (kind rejects relative extraMounts
-// hostPaths).
-type kindNodeCtx struct{ Role, Image, PrefixPath, UplinksPath, CertsDir string }
-
-type kindClusterCtx struct {
-	RegistryHost string
-	Nodes        []kindNodeCtx
+// talosClusterCtx is the talos/cluster-patch.yaml.tmpl data (per cluster). Resolver1/2
+// are the two edge-loopback nameservers.
+type talosClusterCtx struct {
+	PodSubnet, SvcSubnet, NodeNet64, APIVipAddr, Resolver1, Resolver2 string
 }
 
-// genKindCluster writes one cluster's kind artifacts under build/<name>/kind/:
-// a per-node <cluster>-<index>.prefix (the node's /64), a single shared
-// <cluster>-uplinks (the fabric BGP uplinks), and the kind Cluster config
-// <cluster>-kind.yaml (control-plane for node 1, workers thereafter). The
-// per-node preboot reads /etc/fabric/{prefix,uplinks} from the extraMounts.
-func genKindCluster(cfg *config.Config, v *fabric.View, p paths, cluster string, dc config.DerivedCluster) error {
-	// Absolute base for extraMounts hostPaths (kind rejects relative ones).
-	absKind, err := filepath.Abs(p.kind)
+// talosNodeCtx is the data for both talos/node-patch.yaml.tmpl and
+// talos/bgp-peer.yaml.tmpl (each references only the subset it needs).
+type talosNodeCtx struct {
+	Hostname, Identity, IdentityAddr string
+	NodeNet64, PodSubnet, SvcSubnet  string
+	Resolver1, Resolver2, RouterID   string
+	LocalASN, PeerASN                int
+}
+
+// genTalosCluster renders one cluster's Talos machine-config set under
+// build/<name>/talos/<cluster>/ and gens it via talosctl (talos.Gen): the cluster-wide
+// patch, then a per-node patch (the /128-VTEP identity on dummy0) + the GoBGP
+// BGPPeerConfig doc. The PKI secrets persist OUTSIDE the (wiped) talos dir under
+// talos-secrets/<cluster>.yaml so a re-render keeps stable node identities. Each node's
+// config is emitted as a base64 USERDATA env-file the clab Talos node reads at boot.
+func genTalosCluster(ctx context.Context, cfg *config.Config, p paths, cluster string, dc config.DerivedCluster, res1, res2 string) error {
+	dir := filepath.Join(p.build, "talos", cluster)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
+	clusterPatch, err := render.StringFS(templates.FS, "talos/cluster-patch.yaml.tmpl", talosClusterCtx{
+		PodSubnet:  dc.PodSubnet,
+		SvcSubnet:  dc.SvcSubnet,
+		NodeNet64:  dc.NodeNet64,
+		APIVipAddr: dc.APIVipAddr,
+		Resolver1:  res1,
+		Resolver2:  res2,
+	})
 	if err != nil {
-		return fmt.Errorf("abs kind dir: %w", err)
+		return fmt.Errorf("render cluster-patch: %w", err)
 	}
 
-	// One shared uplinks file per cluster.
-	uplinksName := cluster + "-uplinks"
-	if err := os.WriteFile(filepath.Join(p.kind, uplinksName), []byte(v.NodeUplinks()+"\n"), 0o644); err != nil {
-		return fmt.Errorf("write kind uplinks: %w", err)
-	}
-	uplinksPath := filepath.Join(absKind, uplinksName)
-
-	// containerd 2.x registry config: the kind config keeps config_path pointing at
-	// /etc/containerd/certs.d and bind-mounts this dir there, but we intentionally
-	// write NO per-upstream hosts.toml. With config_path set and an empty certs.d,
-	// containerd finds no host override and resolves every registry directly upstream
-	// (no in-fabric mirror — its node-return path is unreliable, and it taxed every
-	// upstream pull with a ~8-10s mirror timeout). The dir itself must still exist so
-	// the extraMount doesn't fail; an empty mounted dir is the intended no-op.
-	certsRel := cluster + "-certs.d"
-	if err := os.MkdirAll(filepath.Join(p.kind, certsRel), 0o755); err != nil {
-		return fmt.Errorf("mkdir certs.d: %w", err)
-	}
-	certsDir := filepath.Join(absKind, certsRel)
-
-	nodes := make([]kindNodeCtx, 0, len(dc.Nodes))
+	sans := []string{dc.APIVipAddr}
+	nodes := make([]talos.NodeSpec, 0, len(dc.Nodes))
 	for _, n := range dc.Nodes {
-		prefixName := fmt.Sprintf("%s-%d.prefix", n.Cluster, n.Index)
-		if err := os.WriteFile(filepath.Join(p.kind, prefixName), []byte(n.NodeNet64+"\n"), 0o644); err != nil {
-			return fmt.Errorf("write kind prefix for %s-%d: %w", n.Cluster, n.Index, err)
-		}
-		role := "worker"
-		if n.Index == 1 {
-			role = "control-plane"
-		}
-		nodes = append(nodes, kindNodeCtx{
-			Role:        role,
-			Image:       v.Images()["kindNode"],
-			PrefixPath:  filepath.Join(absKind, prefixName),
-			UplinksPath: uplinksPath,
-			CertsDir:    certsDir,
+		sans = append(sans, n.IdentityAddr)
+		np, err := render.StringFS(templates.FS, "talos/node-patch.yaml.tmpl", talosNodeCtx{
+			Hostname:  n.Name(),
+			Identity:  n.Identity,
+			NodeNet64: n.NodeNet64,
+			PodSubnet: dc.PodSubnet,
+			SvcSubnet: dc.SvcSubnet,
+			Resolver1: res1,
+			Resolver2: res2,
 		})
+		if err != nil {
+			return fmt.Errorf("render node-patch %s: %w", n.Name(), err)
+		}
+		peer, err := render.StringFS(templates.FS, "talos/bgp-peer.yaml.tmpl", talosNodeCtx{
+			IdentityAddr: n.IdentityAddr,
+			LocalASN:     cfg.Fabric.AS.Host,
+			PeerASN:      cfg.Fabric.AS.Switch,
+			RouterID:     fmt.Sprintf("10.0.100.%d", n.PortSeq),
+		})
+		if err != nil {
+			return fmt.Errorf("render bgp-peer %s: %w", n.Name(), err)
+		}
+		nodes = append(nodes, talos.NodeSpec{Name: n.Name(), Patch: []byte(np), Peer: []byte(peer)})
 	}
 
-	return render.FileFS(templates.FS, "k8s/kind-cluster.yaml.tmpl",
-		filepath.Join(p.kind, cluster+"-kind.yaml"),
-		kindClusterCtx{RegistryHost: v.RegistryHost(), Nodes: nodes})
+	return talos.Gen(ctx, talos.GenSpec{
+		Dir:          dir,
+		SecretsPath:  filepath.Join(p.build, "talos-secrets", cluster+".yaml"),
+		MountsDir:    filepath.Join(p.build, "mounts"),
+		ClusterName:  cluster,
+		Endpoint:     fmt.Sprintf("https://[%s]:6443", dc.APIVipAddr),
+		SANs:         sans,
+		ClusterPatch: []byte(clusterPatch),
+		// KubeFlannelCNIConfig stripped -> no CNI doc + no legacy .cluster.network makes
+		// Talos 1.14 resolve the cluster CNI to "none", so the ectobase datapath owns pod
+		// networking. Discovery/Hostname docs stripped as in the icn reference.
+		StripDocs: []string{"HostnameConfig", "DiscoveryServiceConfig", "DiscoveryIdentityConfig", "KubeFlannelCNIConfig"},
+		Nodes:     nodes,
+	})
 }
 
 // Up renders the build tree, deploys the containerlab topology (the clab k8s-kind
