@@ -83,20 +83,26 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 0
 fi
 
-# Target the kind node containers (k0N-control-plane / k0N-worker) and the clab
-# fabric containers (clab-xdp-ipv6-fabric-*). Match by name so we never touch an
-# unrelated container.
+# Target the clab fabric containers (clab-<lab>-*, lab = ectobase). Match by name so
+# we never touch an unrelated container.
+# NOTE (P6 Talos substrate): the compute node containers are now shell-less Talos
+# images, so the `docker exec sh` sweep below CANNOT run inside them — it degrades
+# gracefully (the per-container skip message) and the container-local BPF sweep is a
+# no-op on Talos nodes. The host sweep above still runs. A real Talos node sweep would
+# nsenter a host bpftool into the node's mount+net ns; that port is deferred (bpf-clean
+# is a dev maintenance helper, not part of the lab up/deploy/gates).
 mapfile -t CONTAINERS < <(docker ps --format '{{.Names}}' 2>/dev/null \
-  | grep -E '^(clab-xdp-ipv6-fabric-|k[0-9]+-(control-plane|worker))' || true)
+  | grep -E '^clab-ectobase-' || true)
 
 if [ "${#CONTAINERS[@]}" -eq 0 ]; then
-  echo "bpf-cleanup: no kind/clab node containers running — host sweep only"
+  echo "bpf-cleanup: no clab fabric containers running — host sweep only"
   exit 0
 fi
 
 for c in "${CONTAINERS[@]}"; do
   echo "bpf-cleanup: container sweep ($c)"
-  # Each kind node has its own /sys/fs/bpf; clean it while the container still exists.
+  # Each node has its own /sys/fs/bpf; clean it while the container still exists.
+  # Shell-less Talos nodes fall through to the skip message (see NOTE above).
   docker exec "$c" sh -c "$SWEEP_BODY; sweep_local_body '/sys/fs/bpf'" 2>/dev/null \
     || echo "  (skipped: $c has no shell or bpffs)"
 done
