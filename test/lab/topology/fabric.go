@@ -253,7 +253,7 @@ func Up(ctx context.Context, cfg *config.Config) error {
 	// have built the :dev images.
 	reg := registry.New("127.0.0.1:" + fabric.RegistryPort)
 	if err := reg.PushLocal(ctx, cfg.Fabric.Registry.Push); err != nil {
-		slog.Warn("push-local images failed (registry unreachable or images not built?)", "err", err)
+		return fmt.Errorf("push-local images to the in-fabric mirror (build them first: make lab-app-images): %w", err)
 	}
 
 	for _, cl := range cfg.Fabric.Clusters {
