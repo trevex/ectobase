@@ -12,8 +12,9 @@ import (
 
 // TestClusterAPIReady asserts each cluster's API server is reachable and serving
 // (/readyz returns ok via the collected kubeconfig) and its node reports Ready.
-// (The Talos anycast API VIP is gone on the kind substrate — kind clusters expose
-// the API on the host-published endpoint in their kubeconfig.)
+// (The collected kubeconfig points at the Talos anycast API VIP, which is only
+// announced once GoBGP has relayed it into the fabric — so this also proves VIP +
+// BGP convergence, not just apiserver health.)
 func TestClusterAPIReady(t *testing.T) {
 	cfg := loadConfig(t)
 	requireFabricUp(t, cfg)

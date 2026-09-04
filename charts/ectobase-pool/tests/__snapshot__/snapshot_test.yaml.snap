@@ -1815,7 +1815,7 @@ renders (ebpf clab):
                   if [ -z "$GW_MAC" ]; then echo "FATAL: no fabric router neighbour on $UPLINK" >&2; exit 1; fi
                   # Dual-homed fabric: also run uplink_rx on any OTHER up ethN (the second ToR uplink),
                   # so N-S returns arriving via either ToR (ECMP) are decapped. Primary/LOCAL = $UPLINK.
-                  # eth0 is the kind/docker mgmt iface (not fabric) — skip it; fabric uplinks are eth1+.
+                  # eth0 is the clab-mgmt/docker iface (not fabric) — skip it; fabric uplinks are eth1+.
                   EXTRA=""
                   for d in $(ls /sys/class/net | grep -E '^eth[1-9][0-9]*$'); do
                     [ "$d" = "$UPLINK" ] && continue
@@ -3966,7 +3966,7 @@ renders (ebpf hw):
                   if [ -z "$GW_MAC" ]; then echo "FATAL: no fabric router neighbour on $UPLINK" >&2; exit 1; fi
                   # Dual-homed fabric: also run uplink_rx on any OTHER up ethN (the second ToR uplink),
                   # so N-S returns arriving via either ToR (ECMP) are decapped. Primary/LOCAL = $UPLINK.
-                  # eth0 is the kind/docker mgmt iface (not fabric) — skip it; fabric uplinks are eth1+.
+                  # eth0 is the clab-mgmt/docker iface (not fabric) — skip it; fabric uplinks are eth1+.
                   EXTRA=""
                   for d in $(ls /sys/class/net | grep -E '^eth[1-9][0-9]*$'); do
                     [ "$d" = "$UPLINK" ] && continue
@@ -6114,7 +6114,7 @@ renders (tier1 on):
                   if [ -z "$GW_MAC" ]; then echo "FATAL: no fabric router neighbour on $UPLINK" >&2; exit 1; fi
                   # Dual-homed fabric: also run uplink_rx on any OTHER up ethN (the second ToR uplink),
                   # so N-S returns arriving via either ToR (ECMP) are decapped. Primary/LOCAL = $UPLINK.
-                  # eth0 is the kind/docker mgmt iface (not fabric) — skip it; fabric uplinks are eth1+.
+                  # eth0 is the clab-mgmt/docker iface (not fabric) — skip it; fabric uplinks are eth1+.
                   EXTRA=""
                   for d in $(ls /sys/class/net | grep -E '^eth[1-9][0-9]*$'); do
                     [ "$d" = "$UPLINK" ] && continue
@@ -8302,7 +8302,7 @@ renders (tier1 watchdog):
                   if [ -z "$GW_MAC" ]; then echo "FATAL: no fabric router neighbour on $UPLINK" >&2; exit 1; fi
                   # Dual-homed fabric: also run uplink_rx on any OTHER up ethN (the second ToR uplink),
                   # so N-S returns arriving via either ToR (ECMP) are decapped. Primary/LOCAL = $UPLINK.
-                  # eth0 is the kind/docker mgmt iface (not fabric) — skip it; fabric uplinks are eth1+.
+                  # eth0 is the clab-mgmt/docker iface (not fabric) — skip it; fabric uplinks are eth1+.
                   EXTRA=""
                   for d in $(ls /sys/class/net | grep -E '^eth[1-9][0-9]*$'); do
                     [ "$d" = "$UPLINK" ] && continue
@@ -10500,7 +10500,7 @@ renders with vm-materializer enabled:
                   if [ -z "$GW_MAC" ]; then echo "FATAL: no fabric router neighbour on $UPLINK" >&2; exit 1; fi
                   # Dual-homed fabric: also run uplink_rx on any OTHER up ethN (the second ToR uplink),
                   # so N-S returns arriving via either ToR (ECMP) are decapped. Primary/LOCAL = $UPLINK.
-                  # eth0 is the kind/docker mgmt iface (not fabric) — skip it; fabric uplinks are eth1+.
+                  # eth0 is the clab-mgmt/docker iface (not fabric) — skip it; fabric uplinks are eth1+.
                   EXTRA=""
                   for d in $(ls /sys/class/net | grep -E '^eth[1-9][0-9]*$'); do
                     [ "$d" = "$UPLINK" ] && continue

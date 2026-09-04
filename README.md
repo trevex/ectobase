@@ -54,7 +54,7 @@ make test              # host unit + datapath sim tests (no root)
 make generate          # regenerate CRDs, RBAC, conversions, and the CRD API reference
 ```
 
-The datapath conformance suite runs in-process (`make sim`) and against a real kernel/gRPC path; the full multi-cluster integration suite runs on a local containerlab + kind fabric (`make lab-up` / `make lab-test`). See the documentation for the test tiers.
+The datapath conformance suite runs in-process (`make sim`) and against a real kernel/gRPC path; the full multi-cluster integration suite runs on a local Talos + containerlab fabric (`make lab-up` / `make lab-test`). See the documentation for the test tiers.
 
 ## Deploying
 

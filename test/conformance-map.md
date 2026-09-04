@@ -11,9 +11,9 @@ in Phase 3 of de-dpservice-ing conformance.
 - **Byte-parity anchors (flowplane/tests/)** — prove the real eBPF bytecode produces
   identical output to the sim/core for the same input; golden-from-original for several
   responders.
-- **Go live lab suite (`test/lab/livetest/`)** — real gRPC attach on the Go kind fabric
-  (`make lab-up` / `lab-deploy` / `lab-test`); proves the control-plane wiring and live
-  forwarding under real kernel/CNI topology.
+- **Go live lab suite (`test/lab/livetest/`)** — real gRPC attach on the Talos +
+  containerlab fabric (`make lab-up` / `lab-deploy` / `lab-test`); proves the
+  control-plane wiring and live forwarding under real kernel/CNI topology.
 
 ---
 
@@ -178,7 +178,7 @@ map to ectobase/flowplane: flowplane has no HA-peer protocol; state survives via
 - **Maglev determinism across restart** — covered by
   `lb_scenario_test::ew_lb_reforward_converges_no_loop` (same Maglev selection after
   flow age-out) and `test/lab/livetest/restart_test.go::TestRestartContinuity` (live
-  restart smoke on the Go kind fabric).
+  restart smoke on the Talos + containerlab fabric).
 - **CT/NAT state survival** — covered by
   `test/lab/livetest/restart_test.go::TestRestartContinuity` (graceful-restart: state
   written to journal, re-loaded on bring-up).

@@ -6,9 +6,11 @@ mgmt:
   # P3b: the fabric routers (edge/switch) are detached from mgmt via a per-node
   # network-mode override below (no eth0, no mgmt default — fabric-only). The mgmt
   # net still exists for the registry's published host port + other infra; the Talos
-  # compute nodes keep clab-mgmt on eth0 (the fabric BGP ::/0 default is preferred
-  # once Talos GoBGP converges). The host reaches the fabric via the WAN-segment jump
-  # veth (below), not a mgmt route.
+  # compute nodes keep clab-mgmt on eth0 for bring-up (talosctl needs it before Talos'
+  # embedded GoBGP converges), but the mgmt bridge hands out no IPv6 default of its
+  # own — the node's only default route is the BGP-learned ::/0 via the fabric
+  # uplinks. The host reaches the fabric via the WAN-segment jump veth (below), not a
+  # mgmt route.
 
 topology:
   defaults:
@@ -83,7 +85,9 @@ topology:
     # to be real mount points, so bind per-node dirs from build/<name>/mounts/<node>/
     # (a bind is a mount point regardless of backing store, keeping /var off RAM), and
     # bind the host kernel modules read-only for the kubelet. clab-mgmt stays attached
-    # (eth0) — the fabric BGP ::/0 default is preferred once Talos GoBGP converges. ---
+    # (eth0) for bring-up, but hands out no IPv6 default of its own — the node's only
+    # default route is the BGP-learned ::/0 via the fabric uplinks once Talos' embedded
+    # GoBGP converges. ---
     dispatch-1:
       kind: linux
       image: img/talos

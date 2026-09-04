@@ -30,12 +30,12 @@ spec:
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           resources:
             {{- include "ectobase-pool.resources" . | nindent 12 }}
-          # The overlay uplink is the containerlab fabric link (eth1, not the kind
-          # mgmt eth0). The encap outer-eth next hop is the fabric router (sw1),
+          # The overlay uplink is the containerlab fabric link (eth1, not the
+          # clab-mgmt eth0). The encap outer-eth next hop is the fabric router (sw1),
           # resolved dynamically as the "router" neighbour on the uplink so ONE
           # DaemonSet works on every node (each node's sw1 port has its own MAC).
           # local-underlay is left unset: flowplane infers the /64 from dummy0 (the
-          # fabric loopback), NOT status.hostIP (which is the kind mgmt address).
+          # fabric loopback), NOT status.hostIP (which is the clab-mgmt address).
           command: ["/bin/sh", "-c"]
           args:
             - |
@@ -49,7 +49,7 @@ spec:
               if [ -z "$GW_MAC" ]; then echo "FATAL: no fabric router neighbour on $UPLINK" >&2; exit 1; fi
               # Dual-homed fabric: also run uplink_rx on any OTHER up ethN (the second ToR uplink),
               # so N-S returns arriving via either ToR (ECMP) are decapped. Primary/LOCAL = $UPLINK.
-              # eth0 is the kind/docker mgmt iface (not fabric) — skip it; fabric uplinks are eth1+.
+              # eth0 is the clab-mgmt/docker iface (not fabric) — skip it; fabric uplinks are eth1+.
               EXTRA=""
               for d in $(ls /sys/class/net | grep -E '^eth[1-9][0-9]*$'); do
                 [ "$d" = "$UPLINK" ] && continue

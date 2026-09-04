@@ -149,12 +149,13 @@
             pkgs.tcpdump
             pkgs.util-linux # nsenter, for entering container/netns namespaces from the harness
             pkgs.kubectl
-            # kind fabric tooling — so `go run ./test/lab` (make lab-*) works in a plain
-            # `nix develop` (Cilium installs via the pinned helm chart — no cilium-cli needed).
-            pkgs.kind
+            # Talos + containerlab fabric tooling — so `go run ./test/lab` (make lab-*) works
+            # in a plain `nix develop` (Cilium installs via the pinned helm chart — no
+            # cilium-cli needed).
+            pkgs.kind                         # plain kind cluster for dispatch/hack/smoke.sh (not the lab fabric)
             pkgs.containerlab
             (pkgs.wrapHelm pkgs.kubernetes-helm { plugins = [ helm-unittest-fixed ]; })
-            pkgs.gettext # provides envsubst for fixture/kind-config templating
+            pkgs.gettext # provides envsubst for fixture templating
             pkgs.socat
             pkgs.gnumake
             # VyOS clab image: ISO fetch + userspace squashfs->rootfs extraction (test/images/vyos)

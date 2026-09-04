@@ -1,5 +1,5 @@
 // Package cmd is the `lab` CLI: it stands up a multi-cluster IPv6-BGP fabric on
-// containerlab (kind clusters as the node substrate) and deploys the ectobase
+// containerlab (Talos-in-container nodes as the substrate) and deploys the ectobase
 // substrate onto it.
 package cmd
 
@@ -20,7 +20,7 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "lab",
-	Short: "ectobase kind fabric lab harness",
+	Short: "ectobase Talos fabric lab harness",
 	// Every subprocess (render, tests) reads $LAB_CONFIG; set it from --config once here.
 	PersistentPreRunE: func(*cobra.Command, []string) error {
 		log.InitLogging(verbose)

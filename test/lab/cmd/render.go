@@ -26,7 +26,7 @@ func loadConfig() (*config.Config, error) {
 
 var renderCmd = &cobra.Command{
 	Use:   "render",
-	Short: "expand all templates into build/<name>/ (clab + kind Cluster configs)",
+	Short: "expand all templates into build/<name>/ (clab + Talos machine configs)",
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		cfg, err := loadConfig()
 		if err != nil {
