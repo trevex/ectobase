@@ -16,6 +16,15 @@ k8sServicePort: "7445"
 routingMode: tunnel
 tunnelProtocol: vxlan
 
+# Coexist with Multus. Cilium defaults to cni.exclusive=true, which makes the agent
+# take sole ownership of /etc/cni/net.d and RENAME every other CNI conf to
+# `*.cilium_bak` — including Multus's `00-multus.conflist`. That silently disables the
+# Multus secondary-network attach the flowplane overlay rides on: the pod then comes up
+# with only Cilium's primary eth0 and never gets its overlay net1. Turn exclusivity off
+# so Multus's top-level conf survives and delegates the default network to Cilium.
+cni:
+  exclusive: false
+
 # Single-replica operator: every lab cluster is a single control-plane node, and the
 # operator Deployment defaults to 2 replicas with a hard (required) pod anti-affinity
 # on hostname — the second replica is unschedulable on a 1-node cluster, so the

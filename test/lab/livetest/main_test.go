@@ -65,11 +65,11 @@ func requireFabricUp(t *testing.T, cfg *config.Config) {
 	}
 }
 
-// nodeContainer is the docker container name of a cluster node. With the kind
-// substrate the node is a kind-created container (<cluster>-control-plane /
-// -worker[N]) with NO clab-<lab>- prefix — see DerivedNode.KindContainer.
+// nodeContainer is the docker container name of a cluster node. On the Talos
+// substrate each node is a containerlab-managed Talos container named
+// clab-<lab>-<node> (node = <cluster>-<index>, DerivedNode.Name).
 func nodeContainer(cfg *config.Config, node config.DerivedNode) string {
-	return node.KindContainer()
+	return clab.ContainerName(cfg.Name, node.Name())
 }
 
 // switchContainer is the containerlab container name of a fabric switch (sw1/sw2).

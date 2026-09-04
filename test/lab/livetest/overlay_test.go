@@ -24,10 +24,6 @@ const (
 	overlayIPC  = "10.0.0.3"
 	overlayMACA = "52:54:00:00:00:0a"
 	overlayMACC = "52:54:00:00:00:0c"
-	// dataplaneSocket is the dataplane's root-only unix socket on the node (see the chart's
-	// --addr), in grpc-go unix:// target form. grpcurl reaches it from INSIDE the node
-	// (dataplaneGRPC), not over TCP.
-	dataplaneSocket = "unix:///run/flowplane/dataplane.sock"
 )
 
 // TestCrossClusterOverlayPing drives the FULL control pipeline and datapath: a VPC
@@ -134,9 +130,9 @@ spec: {clusterName: %q, interfaceRefs: [{name: nic-c}], runStrategy: Halted}
 }
 
 // nodeK8sName is a node's Kubernetes name, matching the agent's --node-id and
-// CompiledNIC.spec.nodeName. With the kind substrate the k8s Node name is the kind
-// container name (<cluster>-control-plane), not <cluster>-<index>.
-func nodeK8sName(n config.DerivedNode) string { return n.KindContainer() }
+// CompiledNIC.spec.nodeName. On the Talos substrate the k8s Node name is the Talos
+// hostname <cluster>-<index> (DerivedNode.Name).
+func nodeK8sName(n config.DerivedNode) string { return n.Name() }
 
 // applyDispatch applies a multi-doc YAML to the dispatch cluster via `kubectl apply -f -`
 // and registers a t.Cleanup that deletes the same objects when the test ends, so live
@@ -225,38 +221,27 @@ func attachEndpoint(t *testing.T, ctx context.Context, cfg *config.Config, node 
 }
 
 // dataplaneGRPC invokes a DataplaneNode method over grpcurl against a compute node's dataplane.
-// The compute-node DaemonSet dataplane serves a root-only UNIX SOCKET, so grpcurl runs INSIDE the
-// kind node (which has filesystem access to it) — a net-ns-sharing sibling container cannot reach a
-// socket. `data` is the request JSON ("" for no-arg methods like ListInterfaces).
+// The DaemonSet dataplane serves a root-only UNIX SOCKET at /run/flowplane/dataplane.sock, which
+// the chart hostPath-mounts onto the Talos node's /run. The Talos node has no shell (no docker
+// exec), so grpcurl runs from the HOST (it's in the devshell) and reaches the socket as a plain
+// filesystem object through the node container's /proc/<pid>/root mount. `data` is the request
+// JSON ("" for no-arg methods like ListInterfaces).
 func dataplaneGRPC(t *testing.T, ctx context.Context, container, method, data string) (string, error) {
 	t.Helper()
-	stageGrpcurl(t, ctx, container)
+	pid, err := dockerPID(ctx, container)
+	require.NoError(t, err, "resolve host pid of %s", container)
+	// grpcurl dials the unix:// scheme URI natively (no -unix flag); the socket is the
+	// node's /run/flowplane/dataplane.sock, reached from the host through /proc/<pid>/root.
+	sock := fmt.Sprintf("unix:///proc/%s/root/run/flowplane/dataplane.sock", pid)
+	proto := filepath.Join(repoRoot(t), "api", "proto", "dataplane", "v1")
 	args := []string{"grpcurl", "-plaintext",
-		"-import-path", "/proto/dataplane/v1", "-proto", "dataplane.proto", "-max-time", "15"}
+		"-import-path", proto, "-proto", "dataplane.proto", "-max-time", "15"}
 	if data != "" {
 		args = append(args, "-d", data)
 	}
-	args = append(args, dataplaneSocket, "dataplane.v1.DataplaneNode/"+method)
-	return nodeExec(ctx, container, args...)
-}
-
-// stageGrpcurl copies a grpcurl binary + the dataplane proto into the kind node (idempotent), so
-// dataplaneGRPC can dial the dataplane's root-only unix socket from inside the node.
-func stageGrpcurl(t *testing.T, ctx context.Context, container string) {
-	t.Helper()
-	if _, err := nodeExec(ctx, container, "test", "-x", "/usr/local/bin/grpcurl"); err != nil {
-		host := filepath.Join(t.TempDir(), "grpcurl")
-		cid, cerr := exec.SudoOutput(ctx, "docker", "create", "fullstorydev/grpcurl:latest")
-		require.NoError(t, cerr, "docker create grpcurl")
-		id := strings.TrimSpace(string(cid))
-		defer func() { _ = exec.Sudo(ctx, "docker", "rm", id) }()
-		require.NoError(t, exec.Sudo(ctx, "docker", "cp", id+":/bin/grpcurl", host), "extract grpcurl")
-		require.NoError(t, copyToNode(ctx, container, host, "/usr/local/bin/grpcurl"), "grpcurl -> node")
-		_, _ = nodeExec(ctx, container, "chmod", "+x", "/usr/local/bin/grpcurl")
-	}
-	if _, err := nodeExec(ctx, container, "test", "-f", "/proto/dataplane/v1/dataplane.proto"); err != nil {
-		require.NoError(t, copyToNode(ctx, container, filepath.Join(repoRoot(t), "api", "proto"), "/proto"), "proto -> node")
-	}
+	args = append(args, sock, "dataplane.v1.DataplaneNode/"+method)
+	out, err := exec.SudoOutput(ctx, args...)
+	return string(out), err
 }
 
 // underlayForID returns the underlay /128 of interface `id` in a ListInterfaces
