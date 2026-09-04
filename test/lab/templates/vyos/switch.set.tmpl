@@ -1,0 +1,47 @@
+# Generated from templates/vyos/switch.set.tmpl — do not edit by hand. Each line
+# below is a VyOS `set` CLI command; internal/vyos.Wrap turns this body into the
+# vbash postconfig-bootup script the VyOS clab image runs at boot (config.boot
+# itself stays the image's stock default — this script does the real config,
+# live, every boot).
+#
+# ToR switch (AS {{ .ASSwitch }}) — pure /128 relay with ECMP. Peers unnumbered to
+# the two edges and to every compute node (+ optional ceph). Nodes share AS
+# {{ .ASHost }}, so host neighbors get as-override to re-propagate each node's
+# /128 to the others. No interface addresses, no originated prefix (the pure
+# /128-VTEP model, mirrors the old templates/frr/switch.conf.tmpl) — router-advert
+# on every node-facing link gives nodes a fabric RA default (replaces FRR's
+# `no ipv6 nd suppress-ra`).
+set system host-name 'sw{{ .SW }}'
+
+set protocols bgp system-as '{{ .ASSwitch }}'
+set protocols bgp parameters router-id '10.0.1.{{ .SW }}'
+set protocols bgp parameters bestpath as-path multipath-relax
+set protocols bgp address-family ipv6-unicast maximum-paths ebgp '64'
+
+# Edges (unnumbered).
+set protocols bgp peer-group edges remote-as 'external'
+set protocols bgp peer-group edges capability extended-nexthop
+set protocols bgp peer-group edges bfd
+set protocols bgp peer-group edges address-family ipv6-unicast
+set protocols bgp neighbor eth1 interface v6only peer-group 'edges'
+set protocols bgp neighbor eth2 interface v6only peer-group 'edges'
+set service router-advert interface eth1 default-lifetime '1800'
+set service router-advert interface eth2 default-lifetime '1800'
+
+# Compute-node host ports (unnumbered, shared AS {{ .ASHost }}); as-override
+# re-propagates each node's own /128 back out to the others. Router-advert with
+# a default lifetime (no prefix — nodes take their /128 from Talos, not SLAAC)
+# gives every node a fabric RA default route.
+set protocols bgp peer-group hosts remote-as 'external'
+set protocols bgp peer-group hosts capability extended-nexthop
+set protocols bgp peer-group hosts bfd
+set protocols bgp peer-group hosts address-family ipv6-unicast as-override
+{{- range $n := .Nodes }}
+set protocols bgp neighbor eth{{ add 2 $n.PortSeq }} interface v6only peer-group 'hosts'
+set service router-advert interface eth{{ add 2 $n.PortSeq }} default-lifetime '1800'
+{{- end }}
+{{- if .CephEnabled }}
+# Ceph storage node (same AS, dual-homed).
+set protocols bgp neighbor eth{{ add 2 .CephPortSeq }} interface v6only peer-group 'hosts'
+set service router-advert interface eth{{ add 2 .CephPortSeq }} default-lifetime '1800'
+{{- end }}

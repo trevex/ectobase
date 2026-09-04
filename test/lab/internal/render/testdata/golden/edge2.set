@@ -1,0 +1,58 @@
+#!/bin/vbash
+source /opt/vyatta/etc/functions/script-template
+configure
+# Generated from templates/vyos/edge.set.tmpl — do not edit by hand. Each line
+# below is a VyOS `set` CLI command; internal/vyos.Wrap turns this body into the
+# vbash postconfig-bootup script the VyOS clab image runs at boot (config.boot
+# itself stays the image's stock default — this script does the real config,
+# live, every boot).
+#
+# WAN edge (AS 65000) — NAT64 boundary. Originates ::/0 into the fabric
+# (default-originate) and advertises the NAT64 /96 + its loopback, with a static
+# route handing the NAT64 prefix to tayga (mirrors the old
+# templates/frr/edge.conf.tmpl). Also runs the DNS64 forwarder on this edge's own
+# loopback — the node's existing resolver — so the node's own upstream image
+# pulls (registry.k8s.io/quay.io/etc, not the in-fabric ghcr.io mirror) egress
+# via this edge's tayga NAT64 too.
+set system host-name 'edge2'
+
+# Loopback /128 on a dummy interface (VyOS's `lo` isn't addressed the way FRR's
+# was); this is Resolver1/Resolver2 in the Talos machine config.
+set interfaces dummy dum0 address 'fd00:ffff::e2/128'
+# WAN segment + tayga NAT64 link (numbered; clab wires the links).
+set interfaces ethernet eth3 address 'fd00:29::12/64'
+set interfaces ethernet eth4 address 'fd00:64:2::1/64'
+
+# The edge's own FIB: default out the WAN, NAT64 prefix to tayga.
+set protocols static route6 ::/0 next-hop 'fd00:29::1'
+set protocols static route6 64:ff9b::/96 next-hop 'fd00:64:2::2'
+
+set protocols bgp system-as '65000'
+set protocols bgp parameters router-id '10.0.0.2'
+set protocols bgp parameters bestpath as-path multipath-relax
+set protocols bgp address-family ipv6-unicast maximum-paths ebgp '64'
+# Advertise the loopback + NAT64 /96 explicitly.
+set protocols bgp address-family ipv6-unicast network 'fd00:ffff::e2/128'
+set protocols bgp address-family ipv6-unicast network '64:ff9b::/96'
+
+# Unnumbered fabric uplinks toward the two ToRs; default-originate sources the
+# fabric's only ::/0 (no mgmt default left to compete with it).
+set protocols bgp peer-group fabric remote-as 'external'
+set protocols bgp peer-group fabric capability extended-nexthop
+set protocols bgp peer-group fabric bfd
+set protocols bgp peer-group fabric address-family ipv6-unicast default-originate
+set protocols bgp neighbor eth1 interface v6only peer-group 'fabric'
+set protocols bgp neighbor eth2 interface v6only peer-group 'fabric'
+
+# DNS64 forwarder on this edge's own loopback: synthesizes AAAA answers under
+# the NAT64 /96 for A-only names, allowed from the fabric aggregates (every
+# node identity + both edge loopbacks), upstream-resolving via 8.8.8.8 through
+# this edge's OWN NAT64 (64:ff9b::8.8.8.8 — self-contained, only needs the
+# host's v4 internet).
+set service dns forwarding listen-address 'fd00:ffff::e2'
+set service dns forwarding dns64-prefix '64:ff9b::/96'
+set service dns forwarding allow-from 'fd00:cafe::/32'
+set service dns forwarding allow-from 'fd00:ffff::/32'
+set service dns forwarding name-server '64:ff9b::8.8.8.8'
+commit
+exit

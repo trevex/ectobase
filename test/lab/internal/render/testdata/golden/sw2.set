@@ -1,0 +1,49 @@
+#!/bin/vbash
+source /opt/vyatta/etc/functions/script-template
+configure
+# Generated from templates/vyos/switch.set.tmpl — do not edit by hand. Each line
+# below is a VyOS `set` CLI command; internal/vyos.Wrap turns this body into the
+# vbash postconfig-bootup script the VyOS clab image runs at boot (config.boot
+# itself stays the image's stock default — this script does the real config,
+# live, every boot).
+#
+# ToR switch (AS 65010) — pure /128 relay with ECMP. Peers unnumbered to
+# the two edges and to every compute node (+ optional ceph). Nodes share AS
+# 65100, so host neighbors get as-override to re-propagate each node's
+# /128 to the others. No interface addresses, no originated prefix (the pure
+# /128-VTEP model, mirrors the old templates/frr/switch.conf.tmpl) — router-advert
+# on every node-facing link gives nodes a fabric RA default (replaces FRR's
+# `no ipv6 nd suppress-ra`).
+set system host-name 'sw2'
+
+set protocols bgp system-as '65010'
+set protocols bgp parameters router-id '10.0.1.2'
+set protocols bgp parameters bestpath as-path multipath-relax
+set protocols bgp address-family ipv6-unicast maximum-paths ebgp '64'
+
+# Edges (unnumbered).
+set protocols bgp peer-group edges remote-as 'external'
+set protocols bgp peer-group edges capability extended-nexthop
+set protocols bgp peer-group edges bfd
+set protocols bgp peer-group edges address-family ipv6-unicast
+set protocols bgp neighbor eth1 interface v6only peer-group 'edges'
+set protocols bgp neighbor eth2 interface v6only peer-group 'edges'
+set service router-advert interface eth1 default-lifetime '1800'
+set service router-advert interface eth2 default-lifetime '1800'
+
+# Compute-node host ports (unnumbered, shared AS 65100); as-override
+# re-propagates each node's own /128 back out to the others. Router-advert with
+# a default lifetime (no prefix — nodes take their /128 from Talos, not SLAAC)
+# gives every node a fabric RA default route.
+set protocols bgp peer-group hosts remote-as 'external'
+set protocols bgp peer-group hosts capability extended-nexthop
+set protocols bgp peer-group hosts bfd
+set protocols bgp peer-group hosts address-family ipv6-unicast as-override
+set protocols bgp neighbor eth3 interface v6only peer-group 'hosts'
+set service router-advert interface eth3 default-lifetime '1800'
+set protocols bgp neighbor eth4 interface v6only peer-group 'hosts'
+set service router-advert interface eth4 default-lifetime '1800'
+set protocols bgp neighbor eth5 interface v6only peer-group 'hosts'
+set service router-advert interface eth5 default-lifetime '1800'
+commit
+exit
