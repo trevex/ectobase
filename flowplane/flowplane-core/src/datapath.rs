@@ -23,9 +23,10 @@ use crate::nat::{snat_egress, SnatOutcome};
 use crate::nat64::{
     nat64_egress_parse, nat64_egress_write, nat64_ingress_parse, nat64_ingress_write,
 };
-use crate::parse::l4_ports;
+use crate::parse::{l4_ports, IPPROTO_TCP, IPPROTO_UDP};
 use crate::pkt::{Action, Pkt};
 use crate::uplink::{decap_and_rewrite, edge_local_deliver, ETH_P_IP, ETH_P_IPV6, GW_MAC};
+use flowplane_common::csum::csum_replace4;
 
 /// Inputs for [`process_uplink`]. Under Geneve `collect_md` the kernel decaps before this runs and
 /// `get_tunnel_key` recovers only the VNI + sender remote — NOT "which local identity to deliver
@@ -225,6 +226,55 @@ fn resolve_delivery_l3<M: Maps>(maps: &M, tap_ifindex: u32) -> bool {
         .unwrap_or(false)
 }
 
+/// F2: rewrite an inbound frame's inner IPv4 DESTINATION `old` -> `new` (1:1 floating-IP DNAT),
+/// fixing the IPv4 header checksum and the TCP/UDP L4 checksum incrementally. ICMP needs no L4
+/// fixup (the ICMPv4 checksum does not cover addresses). Mirrors `nat.rs`'s SNAT read-modify-write
+/// window pattern for eBPF-verifier friendliness (one dominating bound per access).
+///
+/// `#[inline(never)]`: keeps this out of `process_uplink`'s already-tight combined call stack (same
+/// BPF-stack-relief discipline as `uplink_ingress_firewall_drop`).
+#[inline(never)]
+fn vip_dnat_rewrite<P: Pkt>(pkt: &mut P, ip_off: usize, old: &[u8; 4], new: &[u8; 4]) {
+    // dst IP at ip_off + 16.
+    if !pkt.write_array(ip_off + 16, new) {
+        return;
+    }
+    // IP header checksum at ip_off + 10.
+    if let Some(ipc) = pkt.read_u16_be(ip_off + 10) {
+        let c = csum_replace4(ipc, old, new);
+        pkt.write_array(ip_off + 10, &c.to_be_bytes());
+    }
+    let ihl = match pkt.read_u8(ip_off) {
+        Some(b) => (b & 0x0f) as usize * 4,
+        None => return,
+    };
+    let proto = match pkt.read_u8(ip_off + 9) {
+        Some(p) => p,
+        None => return,
+    };
+    let l4 = ip_off + ihl;
+    if proto == IPPROTO_TCP {
+        // TCP checksum at l4[16..18]. Window = 18 (single dominating bound).
+        if let Some(mut h) = pkt.read_array::<18>(l4) {
+            let c0 = u16::from_be_bytes([h[16], h[17]]);
+            let c1 = csum_replace4(c0, old, new);
+            h[16..18].copy_from_slice(&c1.to_be_bytes());
+            pkt.write_array(l4, &h);
+        }
+    } else if proto == IPPROTO_UDP {
+        // UDP checksum at l4[6..8]; a zero UDP checksum stays zero. Window = 8.
+        if let Some(mut h) = pkt.read_array::<8>(l4) {
+            let c0 = u16::from_be_bytes([h[6], h[7]]);
+            if c0 != 0 {
+                let c1 = csum_replace4(c0, old, new);
+                h[6..8].copy_from_slice(&c1.to_be_bytes());
+            }
+            pkt.write_array(l4, &h);
+        }
+    }
+    // ICMP (proto 1): no L4 checksum fixup — the ICMPv4 checksum does not cover the IP addresses.
+}
+
 /// Returns the final delivery `Action` (+ tunnel decision on a relay/reforward arm), having mutated
 /// `pkt` in place.
 ///
@@ -276,35 +326,61 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
                     }
                 }
             };
-            // Mechanism #3: neighbor-NAT relay — the inner dst may be a nat_ip owned by ANOTHER
-            // node (an owned nat_ip instead demuxes via the CT-based `nat_guest` path one level up,
-            // in `process_uplink_rx`, before `process_uplink` is ever called). Mirrors ingress.rs's
-            // "Neighbor NAT" block (245-261).
-            if let Some((_proto, _sport, dport)) = l4_ports(&*pkt, inner_off) {
-                if let Some(owner_ul) = maps.neighbor_nat_lookup(in_.vni, dst, dport) {
-                    let tunnel = reforward(in_.vni, &owner_ul);
-                    return UplinkOut {
-                        action: Action::Redirect(in_.local.uplink_ifindex),
-                        tunnel: Some(tunnel),
-                    };
-                }
-            }
-            // Mechanisms #1 (normal guest delivery) + #4 (WAN-edge sentinel / genuine miss).
-            match resolve_uplink_target(&*maps, in_.vni, &dst, in_.local) {
-                UplinkTarget::Local {
-                    tap_ifindex,
-                    guest_mac,
-                } => (tap_ifindex, guest_mac, false),
-                UplinkTarget::EdgeLocalDeliver => {
-                    return UplinkOut {
-                        action: edge_local_deliver(pkt, in_.local.uplink_mac, ETH_P_IP),
-                        tunnel: None,
+            // F2: 1:1 floating-IP ingress DNAT. `VIPS[(vni,V)] = G` means dst V must be rewritten to
+            // the backing guest G and delivered locally (VIPS is only programmed on the node that owns
+            // G — the `--vip` CLI maps a node's OWN guest — so a non-local G is a misconfig -> Drop, and
+            // there is no reforward arm). A floating IP is never a nat_ip, so this precedes + skips the
+            // neighbor-NAT relay. Rebuild of the pre-P2 eBPF `vip::dnat_ingress`.
+            if let Some(g) = maps.vip_get(in_.vni, &dst) {
+                vip_dnat_rewrite(pkt, inner_off, &dst, &g);
+                match resolve_uplink_target(&*maps, in_.vni, &g, in_.local) {
+                    UplinkTarget::Local {
+                        tap_ifindex,
+                        guest_mac,
+                    } => (tap_ifindex, guest_mac, false),
+                    UplinkTarget::EdgeLocalDeliver => {
+                        return UplinkOut {
+                            action: edge_local_deliver(pkt, in_.local.uplink_mac, ETH_P_IP),
+                            tunnel: None,
+                        }
+                    }
+                    UplinkTarget::Drop => {
+                        return UplinkOut {
+                            action: Action::Drop,
+                            tunnel: None,
+                        }
                     }
                 }
-                UplinkTarget::Drop => {
-                    return UplinkOut {
-                        action: Action::Drop,
-                        tunnel: None,
+            } else {
+                // Mechanism #3: neighbor-NAT relay — the inner dst may be a nat_ip owned by ANOTHER
+                // node (an owned nat_ip instead demuxes via the CT-based `nat_guest` path one level up,
+                // in `process_uplink_rx`). Mirrors ingress.rs's "Neighbor NAT" block.
+                if let Some((_proto, _sport, dport)) = l4_ports(&*pkt, inner_off) {
+                    if let Some(owner_ul) = maps.neighbor_nat_lookup(in_.vni, dst, dport) {
+                        let tunnel = reforward(in_.vni, &owner_ul);
+                        return UplinkOut {
+                            action: Action::Redirect(in_.local.uplink_ifindex),
+                            tunnel: Some(tunnel),
+                        };
+                    }
+                }
+                // Mechanisms #1 (normal guest delivery) + #4 (WAN-edge sentinel / genuine miss).
+                match resolve_uplink_target(&*maps, in_.vni, &dst, in_.local) {
+                    UplinkTarget::Local {
+                        tap_ifindex,
+                        guest_mac,
+                    } => (tap_ifindex, guest_mac, false),
+                    UplinkTarget::EdgeLocalDeliver => {
+                        return UplinkOut {
+                            action: edge_local_deliver(pkt, in_.local.uplink_mac, ETH_P_IP),
+                            tunnel: None,
+                        }
+                    }
+                    UplinkTarget::Drop => {
+                        return UplinkOut {
+                            action: Action::Drop,
+                            tunnel: None,
+                        }
                     }
                 }
             }

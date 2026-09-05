@@ -50,4 +50,6 @@ mod peering_test;
 #[cfg(test)]
 mod reforward_test;
 #[cfg(test)]
+mod vip_test;
+#[cfg(test)]
 mod vni_test;
