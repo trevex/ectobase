@@ -13,9 +13,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -76,32 +74,6 @@ func newK8sClient(kubeconfigPath string) (client.Client, error) {
 		return nil, fmt.Errorf("build client: %w", err)
 	}
 	return c, nil
-}
-
-// resolvePodInterfaceRef reads the pod <ns>/<name> via the on-node SA-token
-// kubeconfig and returns the NetworkInterface CR "<ns>/<name>" named by the
-// pod's net.ectobase.dev/network-interface annotation.
-func resolvePodInterfaceRef(ctx context.Context, kubeconfigPath, podNS, podName string) (string, string, error) {
-	c, err := newK8sClient(kubeconfigPath)
-	if err != nil {
-		return "", "", err
-	}
-
-	var pod corev1.Pod
-	if err := c.Get(ctx, types.NamespacedName{Namespace: podNS, Name: podName}, &pod); err != nil {
-		return "", "", fmt.Errorf("get pod %s/%s: %w", podNS, podName, err)
-	}
-
-	ref := pod.Annotations[networkInterfaceAnnotation]
-	if ref == "" {
-		return "", "", fmt.Errorf("pod %s/%s missing annotation %q", podNS, podName, networkInterfaceAnnotation)
-	}
-
-	ns, name, ok := strings.Cut(ref, "/")
-	if !ok || ns == "" || name == "" {
-		return "", "", fmt.Errorf("annotation %q value %q is not <ns>/<name>", networkInterfaceAnnotation, ref)
-	}
-	return ns, name, nil
 }
 
 // dialDataplane dials the node-local flowplane DataplaneNode gRPC. The dataplane

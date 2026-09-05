@@ -91,18 +91,14 @@ func cmdAdd(args *skel.CmdArgs) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Read the pod to find which NetworkInterface CR it is bound to.
-	niNS, niName, err := resolvePodInterfaceRef(ctx, conf.Kubeconfig, pod.Namespace, pod.Name)
-	if err != nil {
-		return err
-	}
-
-	// Resolve overlay {vni, ips, mac} from the broker-synced CompiledNIC (central policy).
+	// Resolve overlay {vni, ips, mac} from the broker-synced CompiledNIC (central policy). A container
+	// Pod is resolved by its net.ectobase.dev/network-interface annotation; a KubeVirt virt-launcher
+	// pod (no such annotation) by the interface MAC in its Multus networks annotation — see resolvePodNIC.
 	cl, err := newK8sClient(conf.Kubeconfig)
 	if err != nil {
 		return err
 	}
-	res, err := resolveCompiledNIC(ctx, cl, niNS, niName)
+	res, err := resolvePodNIC(ctx, cl, conf, pod.Namespace, pod.Name)
 	if err != nil {
 		return err
 	}
