@@ -42,21 +42,19 @@ func (c Clab) Destroy(ctx context.Context) error { return c.run(ctx, "destroy", 
 func (c Clab) Inspect(ctx context.Context) error { return c.run(ctx, "inspect") }
 func (c Clab) Graph(ctx context.Context) error   { return c.run(ctx, "graph") }
 
-// MgmtIP returns a container's IPv4 address on the named clab mgmt docker network
-// (clab's mgmt.network is `<lab>-mgmt`). The Talos compute nodes keep clab-mgmt on
-// eth0, so talosctl reaches the Talos API here during bring-up — decoupled from the
-// anycast API VIP + GoBGP, which have not converged at bootstrap time. clab's mgmt
-// bridge always assigns IPv4, and Talos auto-adds the node's runtime addresses to
-// the apid cert SANs, so an IPv4 mgmt endpoint validates.
-func MgmtIP(ctx context.Context, container, mgmtNet string) (string, error) {
-	out, err := exec.Output(ctx, "docker", "inspect", container,
-		"--format", fmt.Sprintf("{{ (index .NetworkSettings.Networks %q).IPAddress }}", mgmtNet))
+// ContainerPID resolves a container's host PID via `docker inspect`, for reaching it
+// with `nsenter -t <pid> -n` — used to run a command inside a node's own network
+// namespace (immune to fabric-routing flaps) instead of over the fabric from the
+// host netns. The Talos compute nodes have no clab-mgmt interface (network-mode:
+// none), so this is their only host-side reachability path besides the fabric itself.
+func ContainerPID(ctx context.Context, container string) (string, error) {
+	out, err := exec.Output(ctx, "docker", "inspect", "-f", "{{.State.Pid}}", container)
 	if err != nil {
 		return "", err
 	}
-	ip := strings.TrimSpace(string(out))
-	if ip == "" {
-		return "", fmt.Errorf("no IPv4 address on mgmt network %q for container %s", mgmtNet, container)
+	pid := strings.TrimSpace(string(out))
+	if pid == "" || pid == "0" {
+		return "", fmt.Errorf("no running pid for container %s", container)
 	}
-	return ip, nil
+	return pid, nil
 }

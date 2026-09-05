@@ -324,7 +324,11 @@ func Up(ctx context.Context, cfg *config.Config) error {
 		// build/<name>/<cluster>.kubeconfig` works without sudo.
 		chownToSudoUser(kubeconfig)
 
-		if err := deploy.WaitAPIServer(ctx, kubeconfig); err != nil {
+		// Reach the readyz check via nsenter into the first (in a single-CP cluster, the
+		// only) control-plane node's own netns — see WaitAPIServer: right after bootstrap
+		// the fabric path to the anycast API VIP is exactly what may still be flapping.
+		cpContainer := clab.ContainerName(cfg.Name, dc.Nodes[0].Name())
+		if err := deploy.WaitAPIServer(ctx, kubeconfig, cpContainer); err != nil {
 			return fmt.Errorf("cluster %s api server: %w", cl.Name, err)
 		}
 		// CNI: Talos resolves the cluster CNI to "none" (flannel stripped), so install

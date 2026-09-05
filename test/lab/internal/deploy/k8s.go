@@ -5,10 +5,12 @@ package deploy
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/trevex/ectobase/test/lab/internal/clab"
 	"github.com/trevex/ectobase/test/lab/internal/exec"
 	"github.com/trevex/ectobase/test/lab/internal/wait"
 )
@@ -21,14 +23,26 @@ const (
 )
 
 // WaitAPIServer blocks until the Kubernetes API server answers /readyz via
-// kubeconfig. After bootstrap the endpoint is the anycast API VIP, which is only
-// announced once a node's apiserver is healthy — so this also waits out VIP + BGP
-// convergence before anything (Cilium, kubectl) tries to talk to the cluster.
-func WaitAPIServer(ctx context.Context, kubeconfig string) error {
-	slog.Info("waiting for the Kubernetes API server")
+// kubeconfig. kubeconfig's server is the anycast API VIP, which lives on a
+// per-node vip0 dummy interface ONLY while that node's own apiserver is healthy
+// (see the cluster-patch api-vip pod) — reachable from the host over the fabric
+// only once GoBGP/RA have converged and stayed converged. Right after bootstrap
+// that is exactly what is still flapping, so this reaches it instead via `nsenter
+// -t <pid> -n` into nodeContainer's OWN network namespace (pid resolved with
+// clab.ContainerPID): for a single-CP cluster the VIP (and the node itself) is
+// on-link inside that netns, immune to fabric-routing flaps. nodeContainer is the
+// clab container name of a control-plane node (the caller picks one that should be
+// currently serving the VIP).
+func WaitAPIServer(ctx context.Context, kubeconfig, nodeContainer string) error {
+	slog.Info("waiting for the Kubernetes API server", "via", nodeContainer)
+	pid, err := clab.ContainerPID(ctx, nodeContainer)
+	if err != nil {
+		return fmt.Errorf("resolve %s container pid for nsenter: %w", nodeContainer, err)
+	}
 	return wait.WaitFor(ctx, 5*time.Minute, 3*time.Second, func() (bool, error) {
-		err := exec.Run(ctx, "kubectl", "--kubeconfig", kubeconfig,
-			"get", "--raw=/readyz", "--request-timeout=5s")
+		nsArgs := []string{"nsenter", "-t", pid, "-n", "kubectl", "--kubeconfig", kubeconfig,
+			"get", "--raw=/readyz", "--request-timeout=5s"}
+		err := exec.Sudo(ctx, nsArgs...)
 		return err == nil, err
 	})
 }
