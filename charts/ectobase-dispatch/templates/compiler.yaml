@@ -39,7 +39,7 @@ spec:
         - operator: Exists
       containers:
         - name: controller
-          image: {{ .Values.images.mesh }}
+          image: {{ .Values.images.mesh | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           resources:
             {{- include "ectobase-dispatch.resources" . | nindent 12 }}

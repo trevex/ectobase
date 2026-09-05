@@ -55,7 +55,7 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: {{ .Values.images.postgres }}
+          image: {{ .Values.images.postgres | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           resources:
             {{- include "ectobase-dispatch.resources" . | nindent 12 }}
@@ -118,7 +118,7 @@ spec:
     spec:
       containers:
         - name: kine
-          image: {{ .Values.images.kine }}
+          image: {{ .Values.images.kine | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           resources:
             {{- include "ectobase-dispatch.resources" . | nindent 12 }}

@@ -12,8 +12,8 @@ import (
 	"github.com/trevex/ectobase/test/lab/internal/fabric"
 )
 
-// registryURL builds an http URL to a path on the in-fabric registry mirror
-// (bracketed IPv6 host:port).
+// registryURL builds an http URL to a path on the in-fabric registry (bracketed
+// IPv6 host:port) — the routable address the nodes pull the :dev app images from.
 func registryURL(path string) string {
 	return "http://[" + fabric.RegistryAddr + "]:" + fabric.RegistryPort + path
 }
@@ -26,11 +26,15 @@ func curlStatus(ctx context.Context, container, url string) (string, error) {
 	return strings.TrimSpace(out), err
 }
 
-// TestRegistryMirrorServes asserts the in-fabric registry mirror is reachable and
-// serving over the fabric from a compute node: /v2/ returns 200, and a pushed
-// image manifest (flowplane:dev) is present (200).
-func TestRegistryMirrorServes(t *testing.T) {
-	t.Skip("P4 drops the in-fabric registry mirror for image delivery; app images are sideloaded via kind load, upstreams pull direct. Re-evaluate if the mirror return-path is fixed.")
+// TestRegistryServesAppImages asserts the in-fabric registry is reachable over the
+// fabric from a compute node AND serves the pushed :dev app images: /v2/ returns 200,
+// and the flowplane:dev manifest is present (200). This exercises the P6 direct-
+// registry delivery path end to end — the node reaches [fd00:29::5]:5000 from its
+// routable identity (the biasNodeSourceAddresses pod-aggregate addrlabel is what makes
+// that source selection correct; without it the pull sources from an unroutable pod
+// address and hangs), which is exactly how the pods pull their images (no ghcr.io
+// mirror). A regression here resurfaces as cluster-wide ImagePullBackOff at `lab up`.
+func TestRegistryServesAppImages(t *testing.T) {
 	cfg := loadConfig(t)
 	requireFabricUp(t, cfg)
 	ctx := context.Background()

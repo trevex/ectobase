@@ -26,7 +26,7 @@ spec:
         - operator: Exists
       containers:
         - name: flowplane
-          image: {{ .Values.images.flowplane }}
+          image: {{ .Values.images.flowplane | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           resources:
             {{- include "ectobase-pool.resources" . | nindent 12 }}

@@ -52,7 +52,7 @@ spec:
         - operator: Exists
       containers:
         - name: install
-          image: {{ .Values.images.cni }}
+          image: {{ .Values.images.cni | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           resources:
             {{- include "ectobase-pool.resources" . | nindent 12 }}

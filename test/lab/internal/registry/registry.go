@@ -24,12 +24,13 @@ const CacheDirName = "registry-cache"
 // LocalRepo is the ghcr namespace the lab's :dev images live under.
 const LocalRepo = "ghcr.io/trevex/ectobase"
 
-// MirrorPath is LocalRepo with the ghcr.io registry host stripped. The Talos
-// mirror endpoints carry no overridePath, so containerd requests the FULL
-// original repository path from the mirror (e.g. pulling
-// ghcr.io/trevex/ectobase/flowplane:dev becomes GET
-// /v2/trevex/ectobase/flowplane/manifests/dev). Pushes must therefore land under
-// this same path or the node pull 404s.
+// MirrorPath is LocalRepo with the ghcr.io registry host stripped. Nodes pull the
+// app images DIRECTLY from the in-fabric registry by its routable address
+// ([fd00:29::5]:5000/trevex/ectobase/<name>:dev — the deploy sets the charts' image
+// values, see internal/deploy.appImageRepo), so containerd requests
+// /v2/trevex/ectobase/<name>/... . Pushes must land under this same path or the node
+// pull 404s. (There is no ghcr.io mirror: a path-scoped Talos mirror key produces no
+// containerd hosts.toml, and a bare ghcr.io key would swallow the upstream images.)
 const MirrorPath = "trevex/ectobase"
 
 // Runner runs a command; injectable so tests can capture the docker argv.

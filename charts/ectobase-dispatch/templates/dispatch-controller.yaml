@@ -58,7 +58,7 @@ spec:
       serviceAccountName: dispatch-controller
       containers:
         - name: controller
-          image: {{ .Values.images.dispatchController }}
+          image: {{ .Values.images.dispatchController | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           resources:
             {{- include "ectobase-dispatch.resources" . | nindent 12 }}

@@ -189,7 +189,7 @@ type ciliumCtx struct{ PodSubnet string }
 // are the two edge-loopback nameservers.
 type talosClusterCtx struct {
 	PodSubnet, SvcSubnet, NodeNet64, APIVipAddr, Resolver1, Resolver2 string
-	RegistryEndpoint                                                  string
+	RegistryHost, RegistryEndpoint                                    string
 }
 
 // talosNodeCtx is the data for both talos/node-patch.yaml.tmpl and
@@ -220,6 +220,7 @@ func genTalosCluster(ctx context.Context, cfg *config.Config, p paths, cluster s
 		APIVipAddr:       dc.APIVipAddr,
 		Resolver1:        res1,
 		Resolver2:        res2,
+		RegistryHost:     fabric.RegistryHost,
 		RegistryEndpoint: fabric.RegistryEndpoint,
 	})
 	if err != nil {
@@ -586,6 +587,7 @@ func deployEctobase(ctx context.Context, cfg *config.Config) error {
 		NADCRDPath:         filepath.Join(root, "test/lab/deploy/nad-crd.yaml"),
 		UnderlayWithin:     fabric.NodeAggr,
 		Compute:            compute,
+		ImageRegistry:      fabric.RegistryHost,
 		RouteBusMTLS:       mtls,
 		// Agents dial the reflector at the dispatch identity, so that bare IP is the reflector
 		// server cert's SAN.
@@ -622,6 +624,15 @@ const fabricHostPrefix = "fd00:cafe::/32"
 // container (fd00:29::1), which ECMPs to both edges. Replaces the old mgmt-network
 // next hop (mgmt net removal is task B2).
 func addHostFabricRoute(ctx context.Context) error {
+	// Take the jump veth out of NetworkManager's hands FIRST. On NM hosts the freshly
+	// created ectojump lands "managed" and NM asynchronously reconfigures it — flushing
+	// the addr/route we set below and breaking NDP to the wan (neighbor fd00:29::1 goes
+	// FAILED), so the host cannot reach the fabric API VIP and every deploy helm/kubectl
+	// times out. `nmcli device set ... managed no` is best-effort: hosts without NM (or
+	// where the device is already unmanaged) simply no-op, so a non-zero exit is not fatal.
+	if err := exec.Sudo(ctx, "nmcli", "device", "set", fabric.JumpIface, "managed", "no"); err != nil {
+		slog.Debug("nmcli set jump iface unmanaged (no NM / already unmanaged?)", "dev", fabric.JumpIface, "err", err)
+	}
 	if err := exec.Sudo(ctx, "ip", "-6", "addr", "replace", fabric.JumpHostAddr+"/64", "dev", fabric.JumpIface); err != nil {
 		return fmt.Errorf("assign jump addr on %s: %w", fabric.JumpIface, err)
 	}
@@ -690,6 +701,21 @@ func biasNodeSourceAddresses(ctx context.Context, cfg *config.Config) error {
 			}
 			if err := ns("ip", "-6", "addrlabel", "add", "prefix", talosDNSStubAddr+"/128", "label", "99"); err != nil {
 				slog.Debug("node addrlabel add dns-stub exception (already present?)", "node", n.Name(), "err", err)
+			}
+			// Carve the Cilium pod aggregate (fd00:244::/32) out of the label-1 ULA
+			// class too. Each node's dummy0 also carries a /128 from its pod pool
+			// (fd00:244:<h>::<x>) — and for a destination like the in-fabric registry
+			// (fd00:29::5) that /128 shares a LONGER prefix with the destination than
+			// the fabric identity (fd00:cafe:...) does, so Rule 8 (longest match) picks
+			// it over label parity — and it is not routable back from the WAN, so the
+			// registry pull hangs and containerd silently falls through to real ghcr.io
+			// (403 for the private :dev images). Labeling the pod aggregate non-1 makes
+			// Rule 5 (matching label) prefer the label-1 fabric identity for every
+			// non-pod destination, while pod↔pod traffic (dest also fd00:244, label 99)
+			// still prefers a pod source. Confirmed live: `ip -6 route get fd00:29::5`
+			// flips from `src fd00:244:...` to `src fd00:cafe:...` and the pull succeeds.
+			if err := ns("ip", "-6", "addrlabel", "add", "prefix", fabric.PodAggr, "label", "99"); err != nil {
+				slog.Debug("node addrlabel add pod-aggregate exception (already present?)", "node", n.Name(), "err", err)
 			}
 		}
 	}

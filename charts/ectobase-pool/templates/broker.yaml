@@ -28,7 +28,7 @@ spec:
         - operator: Exists
       containers:
         - name: broker
-          image: {{ .Values.images.dispatchBroker }}
+          image: {{ .Values.images.dispatchBroker | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           resources:
             {{- include "ectobase-pool.resources" . | nindent 12 }}

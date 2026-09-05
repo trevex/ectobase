@@ -21,6 +21,7 @@ const (
 	EdgeLoopback = "fd00:ffff"      // edge loopbacks: fd00:ffff::e1, fd00:ffff::e2
 	WanGwV4      = "172.29.0.1"     // wan bridge v4 gateway
 	NodeAggr     = "fd00:cafe::/32" // aggregate of every cluster's /48 node identities (fd00:cafe:<h>::/48)
+	PodAggr      = "fd00:244::/32"  // aggregate of every cluster's Cilium pod pool (fd00:244:<h>::/56)
 	LoopAggr     = "fd00:ffff::/32" // aggregate of the edge loopbacks
 	RegistryAddr = "fd00:29::5"     // registry node's address on the WAN segment (fd00:29::/64)
 	RegistryPort = "5000"           // registry:2 default listen port
@@ -30,8 +31,15 @@ const (
 	JumpIface    = "ectojump"     // host-side ifname of the clab host:-endpoint veth
 )
 
-// RegistryEndpoint is the in-fabric mirror target the Talos nodes point at.
-var RegistryEndpoint = "http://[" + RegistryAddr + "]:" + RegistryPort
+// RegistryHost is the in-fabric registry's routable [host]:port authority, as it
+// appears in an image reference ([fd00:29::5]:5000/trevex/ectobase/<name>:dev). The
+// nodes pull the locally-built :dev app images from here directly (no ghcr.io mirror
+// redirection); the cluster-patch marks this host plain-HTTP so containerd speaks h2c.
+var RegistryHost = "[" + RegistryAddr + "]:" + RegistryPort
+
+// RegistryEndpoint is the plain-HTTP endpoint URL for RegistryHost (the hosts.toml
+// endpoint the Talos nodes talk to registry:2 over).
+var RegistryEndpoint = "http://" + RegistryHost
 
 // View is the template data for all topology templates.
 type View struct {

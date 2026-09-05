@@ -36,7 +36,7 @@ spec:
         - operator: Exists
       containers:
         - name: reflector
-          image: {{ .Values.images.mesh }}
+          image: {{ .Values.images.mesh | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           resources:
             {{- include "ectobase-dispatch.resources" . | nindent 12 }}

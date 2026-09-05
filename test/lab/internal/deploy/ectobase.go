@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -32,15 +33,23 @@ const (
 // topology layer can import without a cycle. All addresses are derived by the
 // caller (never hardcoded here).
 type EctobaseSpec struct {
-	RepoRoot       string           // repo root (dir containing go.work)
-	WorkDir        string           // build/<name>/deploy scratch dir (created if missing)
-	DispatchKubeconfig  string           // path to dispatch's kubeconfig
-	DispatchIdentity    string           // bare v6, e.g. fd00:cafe:<h>::1 (dispatch's fabric address: the broker's dispatch server host AND the reflector host)
-	DispatchChartPath   string           // <repoRoot>/charts/ectobase-dispatch
-	PoolChartPath  string           // <repoRoot>/charts/ectobase-pool
-	NADCRDPath     string           // NetworkAttachmentDefinition CRD manifest (abs or repo-relative)
-	UnderlayWithin string           // node-underlay aggregate CIDR (fd00:cafe::/32) for flowplane's underlay filter
-	Compute        []ComputeCluster // compute clusters running the broker (k02, k03, …)
+	RepoRoot           string           // repo root (dir containing go.work)
+	WorkDir            string           // build/<name>/deploy scratch dir (created if missing)
+	DispatchKubeconfig string           // path to dispatch's kubeconfig
+	DispatchIdentity   string           // bare v6, e.g. fd00:cafe:<h>::1 (dispatch's fabric address: the broker's dispatch server host AND the reflector host)
+	DispatchChartPath  string           // <repoRoot>/charts/ectobase-dispatch
+	PoolChartPath      string           // <repoRoot>/charts/ectobase-pool
+	NADCRDPath         string           // NetworkAttachmentDefinition CRD manifest (abs or repo-relative)
+	UnderlayWithin     string           // node-underlay aggregate CIDR (fd00:cafe::/32) for flowplane's underlay filter
+	Compute            []ComputeCluster // compute clusters running the broker (k02, k03, …)
+
+	// ImageRegistry, when non-empty, is the bracketed [host]:port of the in-fabric
+	// registry the lab's locally-built :dev app images are pulled from (e.g.
+	// "[fd00:29::5]:5000"). The deploy rewrites every chart's images.<component> value
+	// to <ImageRegistry>/trevex/ectobase/<name>:dev so nodes pull the images directly
+	// from that routable registry — no ghcr.io mirror. Empty leaves the charts' real
+	// ghcr.io defaults (for a non-lab install).
+	ImageRegistry string
 
 	// RouteBusMTLS turns on the route-bus mutual-TLS PKI: install cert-manager in every
 	// cluster and pass routebus.mtls.enabled=true to both charts. The dispatch cluster gets
@@ -96,7 +105,7 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 	}
 
 	slog.Info("installing ectobase-dispatch chart", "chart", s.DispatchChartPath)
-	if err := helmInstallDispatch(ctx, s.DispatchKubeconfig, s.DispatchChartPath, s.DispatchIdentity, s.RouteBusMTLS, s.ReflectorIP); err != nil {
+	if err := helmInstallDispatch(ctx, s.DispatchKubeconfig, s.DispatchChartPath, s.DispatchIdentity, s.RouteBusMTLS, s.ReflectorIP, s.ImageRegistry); err != nil {
 		return fmt.Errorf("helm install ectobase-dispatch: %w", err)
 	}
 	if err := waitAggregatedAPI(ctx, s.DispatchKubeconfig); err != nil {
@@ -176,7 +185,7 @@ func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster, brokerKu
 			return fmt.Errorf("cluster %s: cert-manager: %w", c.Name, err)
 		}
 	}
-	if err := helmInstallPool(ctx, c.Kubeconfig, c.Name, s.PoolChartPath, s.DispatchIdentity, s.UnderlayWithin, s.RouteBusMTLS, c.UnderlayCIDRs); err != nil {
+	if err := helmInstallPool(ctx, c.Kubeconfig, c.Name, s.PoolChartPath, s.DispatchIdentity, s.UnderlayWithin, s.RouteBusMTLS, c.UnderlayCIDRs, s.ImageRegistry); err != nil {
 		return fmt.Errorf("cluster %s: helm install ectobase-pool: %w", c.Name, err)
 	}
 	// The broker mounts broker-dispatch-kubeconfig as a volume, so an existing broker pod keeps the
@@ -263,16 +272,61 @@ func createSecretFromFile(ctx context.Context, kubeconfig, ns, name, key, path s
 	return kubectlApplyStdin(ctx, kubeconfig, string(manifest))
 }
 
+// appImageRepo is the ghcr.io/trevex/ectobase namespace the lab's :dev images live
+// under (mirrored from internal/registry.MirrorPath, kept local so this deploy package
+// stays a leaf with no registry-package import).
+const appImageRepo = "trevex/ectobase"
+
+// dispatchImages / poolImages map each chart's `images.<key>` value to the ghcr repo
+// name the corresponding :dev image was built+pushed under. Used only to retarget the
+// lab's images at the in-fabric registry (ImageRegistry); they MUST stay in sync with
+// the charts' values.yaml `images:` blocks (TestDeployImagesMatchCharts guards this).
+var (
+	dispatchImages = map[string]string{
+		"dispatchApiserver":  "dispatch-apiserver",
+		"dispatchController": "dispatch-controller",
+		"mesh":               "mesh",
+	}
+	poolImages = map[string]string{
+		"flowplane":      "flowplane",
+		"mesh":           "mesh",
+		"cni":            "cni",
+		"dispatchBroker": "dispatch-broker",
+	}
+)
+
+// imageSetArgs returns helm `--set-string images.<key>=<registry>/trevex/ectobase/<name>:dev`
+// flags retargeting each chart image value at the in-fabric registry. registry is a
+// bracketed [host]:port (e.g. "[fd00:29::5]:5000"); empty returns nil (leave the chart's
+// real ghcr.io defaults). Keys are emitted in sorted order for a stable argv.
+func imageSetArgs(registry string, images map[string]string) []string {
+	if registry == "" {
+		return nil
+	}
+	keys := make([]string, 0, len(images))
+	for k := range images {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	args := make([]string, 0, len(keys)*2)
+	for _, k := range keys {
+		args = append(args, "--set-string",
+			fmt.Sprintf("images.%s=%s/%s/%s:dev", k, registry, appImageRepo, images[k]))
+	}
+	return args
+}
+
 // helmInstallDispatch installs/upgrades the ectobase-dispatch chart on the dispatch cluster. The reflector runs
 // on the dispatch's fabric identity, so the dispatch-controller's -reflector-admin (a chart value) points
 // there. --create-namespace makes the baseline-safe `system` release namespace; the chart creates
 // the PSA-privileged ectobase-system namespace itself.
-func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIdentity string, mtls bool, reflectorIP string) error {
+func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIdentity string, mtls bool, reflectorIP, imageRegistry string) error {
 	args := []string{"upgrade", "--install", "ectobase-dispatch", chartPath,
 		"--kubeconfig", kubeconfig,
 		"--namespace", "system", "--create-namespace",
 		"--set", "reflectorAdmin=[" + dispatchIdentity + "]:" + reflectorAdminPort,
 	}
+	args = append(args, imageSetArgs(imageRegistry, dispatchImages)...)
 	if mtls {
 		// reflectorIP MUST equal the host part of reflectorAdmin/reflectorAddress (dispatchIdentity)
 		// or client cert verification of the reflector server fails.
@@ -288,7 +342,7 @@ func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIde
 // apiserverAddress is the LOCAL cluster (the agent reads/writes its own cluster); reflectorAddress
 // points at the dispatch's reflector on the fabric. The release namespace (ectobase-system) is
 // pre-created by the caller (ensureHelmNamespace), so no --create-namespace here.
-func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, dispatchIdentity, underlayWithin string, mtls bool, underlayCIDRs string) error {
+func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, dispatchIdentity, underlayWithin string, mtls bool, underlayCIDRs, imageRegistry string) error {
 	args := []string{"upgrade", "--install", "ectobase-pool", chartPath,
 		"--kubeconfig", kubeconfig,
 		"--namespace", "ectobase-system",
@@ -297,6 +351,7 @@ func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, di
 		"--set", "reflectorAddress=[" + dispatchIdentity + "]:" + reflectorSessionPort,
 		"--set", "installCRDs=true",
 	}
+	args = append(args, imageSetArgs(imageRegistry, poolImages)...)
 	if underlayWithin != "" {
 		// flowplane picks the node's fabric underlay as the host address inside this aggregate — the
 		// authoritative filter past a mgmt hostIP / Talos hostDNS lo ULA. The CIDR has no comma so

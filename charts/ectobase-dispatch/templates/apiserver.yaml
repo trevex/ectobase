@@ -147,7 +147,7 @@ spec:
       serviceAccountName: dispatch-apiserver
       containers:
         - name: apiserver
-          image: {{ .Values.images.dispatchApiserver }}
+          image: {{ .Values.images.dispatchApiserver | quote }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           resources:
             {{- include "ectobase-dispatch.resources" . | nindent 12 }}
