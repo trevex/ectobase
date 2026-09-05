@@ -67,14 +67,10 @@ func TestVMOverlayConnectivity(t *testing.T) {
 	patchVMOverlayReady(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", vmOverlayVMNIC)
 	patchVMOverlayReady(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", vmOverlayPeerNIC)
 
-	// 2. The peer container's NAD (flowplane-cni secondary net) on the cluster. The VM's
-	//    binding NAD (ectobase-system/flowplane) + the `flowplane` binding registration are
-	//    shipped by the pool chart / lab KubeVirt deploy, so only the container NAD is applied
-	//    here.
-	require.NoError(t, applyCluster(ctx, cfg, cluster, podNADManifest()))
-	t.Cleanup(func() {
-		_, _ = kubectl(ctx, cfg, cluster, "delete", "net-attach-def", podNADName, "--ignore-not-found")
-	})
+	// 2. NADs are shipped by the pool chart / lab KubeVirt deploy: the peer container's
+	//    `ectobase-system/flowplane-overlay` (templates/flowplane-overlay-nad.yaml) and the VM's
+	//    `ectobase-system/flowplane` binding NAD + the `flowplane` binding registration. Nothing to
+	//    create here — the compiler stamps those ns-qualified names.
 
 	// 3. Both CompiledNICs land on the compute cluster (broker sync) — the CNI reads these.
 	for _, nic := range []string{vmOverlayVMNIC, vmOverlayPeerNIC} {

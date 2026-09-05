@@ -37,7 +37,11 @@ func main() {
 	)
 	flag.StringVar(&dispatchKubeconfig, "dispatch-kubeconfig", "", "Path to the dispatch aggregated-apiserver kubeconfig (falls back to in-cluster/KUBECONFIG when empty).")
 	flag.StringVar(&clusterName, "cluster-name", "", "Default cluster binding stamped onto CompiledNICs whose NIC has no owning VirtualMachine.")
-	flag.StringVar(&networkName, "network-name", "flowplane-overlay", "Multus NetworkAttachmentDefinition name for the flowplane overlay stamped onto CompiledContainers (the container/veth NAD).")
+	// Namespace-qualified (ns/name) so ONE NAD in the pool namespace serves pods in any workload
+	// namespace — a bare name resolves only in the pod's OWN namespace, so a container pod outside the
+	// pool namespace hit "cannot find NAD flowplane-overlay in namespace <workload-ns>". Mirrors
+	// --vm-network-name; the pool chart ships this NAD (templates/flowplane-overlay-nad.yaml).
+	flag.StringVar(&networkName, "network-name", "ectobase-system/flowplane-overlay", "Multus NAD (ns/name) for the flowplane container overlay, stamped onto CompiledContainers (the container/netkit NAD).")
 	// VMs use a DIFFERENT NAD than containers: the KubeVirt `flowplane` binding NAD (deviceType=pod-tap,
 	// in the pool namespace), referenced namespace-qualified because the launcher runs in the workload
 	// namespace. Distinct from --network-name (containers = veth). Default matches the lab's binding CR

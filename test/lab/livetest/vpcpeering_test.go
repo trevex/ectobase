@@ -105,22 +105,12 @@ func TestVPCPeering(t *testing.T) {
 
 	// A Container per endpoint on the DISPATCH owns its NIC and pins the placement (clusterName +
 	// nodeName): the compiler stamps those onto the owned CompiledNIC and lowers the Container
-	// to a CompiledContainer the pod-materializer turns into the real Pod. Apply the NADs too
-	// (one per compute cluster). These must exist before the step-4 CompiledNIC placement check.
-	appliedNADClusters := map[string]bool{}
+	// to a CompiledContainer the pod-materializer turns into the real Pod. The container overlay NAD
+	// (`ectobase-system/flowplane-overlay`) is shipped by the pool chart, so no per-test NAD here.
 	for _, ep := range all {
 		ep := ep
-		if !appliedNADClusters[ep.node.Cluster] {
-			require.NoError(t, applyCluster(ctx, cfg, ep.node.Cluster, podNADManifest()))
-			appliedNADClusters[ep.node.Cluster] = true
-		}
 		applyDispatch(t, ctx, cfg, containerFixture(containerName(ep.nic), ep.node.Cluster, nodeK8sName(ep.node), ep.nic))
 	}
-	t.Cleanup(func() {
-		for cl := range appliedNADClusters {
-			_, _ = kubectl(ctx, cfg, cl, "delete", "net-attach-def", podNADName, "--ignore-not-found")
-		}
-	})
 
 	// 2. Deny-all ingress policy on green BEFORE the peering. Without a selecting policy the
 	//    compiler emits an allow-until-selected fallback and Assertion 1 could never deny.

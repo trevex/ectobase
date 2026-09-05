@@ -80,21 +80,19 @@ func TestPodOverlayPing(t *testing.T) {
 		_, _ = kubectl(ctx, cfg, "dispatch", "delete", "vpc.net.ectobase.dev", "pod-vpc", "--ignore-not-found", "--wait=false")
 	})
 
-	// 2. NAD (flowplane-cni secondary net) on EACH cluster + a Container per endpoint on
-	//    CENTRAL. The Container owns its NIC (interfaceRefs) and pins the placement
-	//    (clusterName + nodeName); the compiler is the placement authority — it stamps those
-	//    onto the owned CompiledNIC AND lowers the Container to a CompiledContainer that the
-	//    broker syncs down and the pod-materializer turns into the real Pod (with the
-	//    Multus/flowplane-cni annotations). We never create a raw Pod. GC on the Container
-	//    cascades to the CompiledContainer + Pod. Applied BEFORE the CompiledNIC placement
-	//    check below, since the placement now flows from the Container.
+	// 2. A Container per endpoint on CENTRAL. The Container owns its NIC (interfaceRefs) and pins the
+	//    placement (clusterName + nodeName); the compiler is the placement authority — it stamps those
+	//    onto the owned CompiledNIC AND lowers the Container to a CompiledContainer that the broker
+	//    syncs down and the pod-materializer turns into the real Pod (with the Multus/flowplane-cni
+	//    annotations). We never create a raw Pod. GC on the Container cascades to the CompiledContainer
+	//    + Pod. The flowplane-cni secondary-net NAD (`ectobase-system/flowplane-overlay`) is shipped by
+	//    the pool chart (templates/flowplane-overlay-nad.yaml) — the compiler stamps that ns-qualified
+	//    name, so no per-test NAD is created here.
 	for _, ep := range []endpoint{epA, epC} {
 		ep := ep
-		require.NoError(t, applyCluster(ctx, cfg, ep.node.Cluster, podNADManifest()))
 		applyDispatch(t, ctx, cfg, containerFixture(containerName(ep.nic), ep.node.Cluster, nodeK8sName(ep.node), ep.nic))
 		t.Cleanup(func() {
 			_, _ = kubectl(ctx, cfg, "dispatch", "delete", "container.net.ectobase.dev", containerName(ep.nic), "--ignore-not-found", "--wait=false")
-			_, _ = kubectl(ctx, cfg, ep.node.Cluster, "delete", "net-attach-def", podNADName, "--ignore-not-found")
 		})
 	}
 
@@ -196,8 +194,6 @@ func containerName(nic string) string { return "ctr-" + nic }
 // the compiler names it <namespace>-<container> (all fixtures live in the default namespace).
 func compiledContainerName(nic string) string { return "default-" + containerName(nic) }
 
-const podNADName = "flowplane-overlay"
-
 // podDispatchFixture renders the dispatch fixture for the two Pod endpoints: a VPC and
 // two NetworkInterfaces with spec.ips + spec.mac and NO placement. The owning Container
 // (applied separately) is the placement authority — it stamps the CompiledNIC's
@@ -256,30 +252,6 @@ func podForContainer(ctx context.Context, cfg *config.Config, cluster, compiledC
 		return "", fmt.Errorf("multiple Pods for container %s on %s: %q", compiledContainer, cluster, name)
 	}
 	return name, nil
-}
-
-// podNADManifest renders the NetworkAttachmentDefinition that references flowplane-cni.
-// It matches cni/plugin/main.go's netConf: type flowplane-cni, kubeconfig +
-// dataplaneAddr defaults are baked into the plugin so we only need the type here (the
-// KubeVirt binding NAD is likewise minimal). deviceType is empty (= veth, container).
-func podNADManifest() string {
-	return fmt.Sprintf(`apiVersion: k8s.cni.cncf.io/v1
-kind: NetworkAttachmentDefinition
-metadata: {name: %s, namespace: default}
-spec:
-  config: |
-    {
-      "cniVersion": "1.0.0",
-      "name": "%s",
-      "plugins": [
-        {
-          "type": "flowplane-cni",
-          "kubeconfig": "/etc/cni/net.d/dataplane-kubeconfig",
-          "dataplaneAddr": "unix:///run/flowplane/dataplane.sock"
-        }
-      ]
-    }
-`, podNADName, podNADName)
 }
 
 // patchPodVNIReady marks a net.ectobase.dev resource's status Ready with the pod

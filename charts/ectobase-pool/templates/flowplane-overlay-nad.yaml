@@ -1,0 +1,24 @@
+# Container overlay NAD (the flowplane-cni SECONDARY network for Pods). The mesh compiler stamps
+# this NAD (as `{{ .Values.namespace }}/flowplane-overlay`, its --network-name default) onto every
+# CompiledContainer interface, and the pod-materializer writes it into the pod's Multus
+# `k8s.v1.cni.cncf.io/networks` annotation — so Multus runs flowplane-cni in the pod netns. Unlike
+# the KubeVirt VM binding NAD (`flowplane`, deviceType=pod-tap), this carries NO deviceType, so the
+# CNI picks the container edge (Auto = netkit L3 when supported, else veth). Referenced
+# cross-namespace (ns/name) so one NAD in this namespace serves pods in any workload namespace —
+# mirroring how the VM binding NAD is referenced. kubeconfig + dataplaneAddr default in the plugin.
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: flowplane-overlay
+  namespace: {{ .Values.namespace }}
+spec:
+  config: |
+    {
+      "cniVersion": "1.0.0",
+      "name": "flowplane-overlay",
+      "plugins": [
+        {
+          "type": "flowplane-cni"
+        }
+      ]
+    }
