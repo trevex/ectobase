@@ -294,6 +294,13 @@ func Up(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("host fabric route: %w", err)
 	}
 
+	// Bias every node's IPv6 source-address selection toward its fabric identity
+	// (see biasNodeSourceAddresses) BEFORE any node-side pull can race it — etcd's own
+	// image pull starts within seconds of boot.
+	if err := biasNodeSourceAddresses(ctx, cfg); err != nil {
+		return fmt.Errorf("bias node source addresses: %w", err)
+	}
+
 	// App-image delivery on Talos (B1): push the locally-built :dev app images into
 	// the in-fabric registry:2 (up now that clab deployed it). Each Talos node's
 	// containerd mirrors ghcr.io at this same registry (machine.registries.mirrors in
@@ -624,6 +631,76 @@ func addHostFabricRoute(ctx context.Context) error {
 	slog.Info("routing host into the fabric", "prefix", fabricHostPrefix, "via", fabric.JumpVia, "dev", fabric.JumpIface)
 	return exec.Sudo(ctx, "ip", "-6", "route", "replace", fabricHostPrefix, "via", fabric.JumpVia, "dev", fabric.JumpIface)
 }
+
+// biasNodeSourceAddresses fixes a live-confirmed IPv6 source-address-selection bug
+// that black-holes a node's OWN upstream egress (etcd/kubelet's image pulls — the
+// thing this whole milestone exists to unblock): every Talos node carries a SECOND
+// global-looking address besides its fabric identity — talosDNSStubAddr, a FIXED
+// address (identical, byte-for-byte, on every node — confirmed live across three
+// nodes) that container-mode Talos binds on `lo` for its own internal DNS-forwarder
+// stub (the "fd54:616c:6f73..." bytes spell "Talos...DNS"). It is not part of the
+// fabric, never advertised by GoBGP, and the fabric has no route back to it anywhere.
+// The BGP/static fabric routes (NodeAggr/LoopAggr/NAT64) all carry an explicit `src`
+// (Talos/GoBGP pins it), so they're unaffected — but the RA-installed default route
+// (the fabric-only default from Part A) has NO explicit src, so any destination NOT
+// covered by a pinned-src route (an upstream pull's real destination — registry.k8s.io
+// is dual-stack so DNS64 returns its real AAAA; even the IN-FABRIC registry mirror,
+// fd00:29::5, since WanNet has no pinned-src route either) falls to plain RFC 6724
+// source selection. Both candidate addresses are "unique-local" (fc00::/7) under the
+// kernel's default address-label policy table with the SAME label, so Rule 2 ties and
+// the tie-break can land on the DNS-stub address — confirmed live via `ip -6 route
+// get`: `src fd54:...` instead of the node identity, and the connection then either
+// timed out (a real destination) or looped (WAN's own default route, since nothing in
+// the fabric has ever heard of that address as a destination either).
+//
+// The fix: reclassify ALL of ULA space (fc00::/7 — this covers NodeAggr, LoopAggr,
+// WanNet, and the DNS-stub address alike) to the SAME address-label (1) as the
+// default "::/0" entry, then carve the DNS-stub address back OUT with its own,
+// non-matching /128 label so it never wins Rule 2 again. Net effect: for ANY
+// destination (global or in-fabric ULA) that reaches this default route, the node's
+// fabric identity now matches the destination's label and the DNS-stub address never
+// does. (An earlier, incomplete version of this fix only added a label-1 override for
+// NodeAggr — sufficient for global destinations, but it left fc00::/7's default label
+// unchanged, un-fixing in-fabric-ULA destinations like the registry mirror; verified
+// live both ways before landing this version.) `ip addrlabel` is kernel/namespace
+// state with no Talos machine-config equivalent, so it runs the same way
+// talos.Bootstrap/deploy.WaitAPIServer reach a node: `nsenter -t <container-pid> -n`
+// (clab.ContainerPID) — applied once per node right after clab deploy, before any
+// node-side pull can race it.
+func biasNodeSourceAddresses(ctx context.Context, cfg *config.Config) error {
+	for _, cl := range cfg.Fabric.Clusters {
+		for _, n := range cfg.Derived.Clusters[cl.Name].Nodes {
+			container := clab.ContainerName(cfg.Name, n.Name())
+			pid, err := clab.ContainerPID(ctx, container)
+			if err != nil {
+				return fmt.Errorf("resolve %s container pid for nsenter: %w", container, err)
+			}
+			ns := func(args ...string) error {
+				return exec.Sudo(ctx, append([]string{"nsenter", "-t", pid, "-n"}, args...)...)
+			}
+			// Replace the kernel's default fc00::/7 policy-table entry (label 5) with
+			// label 1 (matching "::/0"). `ip addrlabel` has no atomic "replace", so
+			// del-then-add; tolerate del failing (already gone from a prior run against
+			// still-running containers).
+			if err := ns("ip", "-6", "addrlabel", "del", "prefix", "fc00::/7", "label", "5"); err != nil {
+				slog.Debug("node addrlabel del fc00::/7 (already gone?)", "node", n.Name(), "err", err)
+			}
+			if err := ns("ip", "-6", "addrlabel", "add", "prefix", "fc00::/7", "label", "1"); err != nil {
+				slog.Debug("node addrlabel add fc00::/7 (already present?)", "node", n.Name(), "err", err)
+			}
+			if err := ns("ip", "-6", "addrlabel", "add", "prefix", talosDNSStubAddr+"/128", "label", "99"); err != nil {
+				slog.Debug("node addrlabel add dns-stub exception (already present?)", "node", n.Name(), "err", err)
+			}
+		}
+	}
+	return nil
+}
+
+// talosDNSStubAddr is the fixed address container-mode Talos binds on `lo` for its
+// internal DNS-forwarder stub — identical on every node (not per-node/random),
+// confirmed live. See biasNodeSourceAddresses for why it must be excluded from the
+// fc00::/7 relabel.
+const talosDNSStubAddr = "fd54:616c:6f73:0:204f:5320:444e:531"
 
 // delHostFabricRoute removes the host→fabric route (best-effort, on down).
 func delHostFabricRoute(ctx context.Context) {
