@@ -187,6 +187,10 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
                             i += 1;
                         }
                     }
+                    // Guest-egress same-node local delivery stays plain bpf_redirect: bpf_redirect_peer
+                    // from the netkit PEER (pod-egress) hook does not deliver through the peer's
+                    // ingress mirred to the VM tap (proven live). Peer-redirect is uplink-only (see
+                    // ingress::execute).
                     return unsafe { bpf_redirect(tap_ifindex, 0) as i32 };
                 }
                 return TC_ACT_OK;
@@ -280,6 +284,8 @@ pub fn tc_guest_egress_v6(ctx: TcContext) -> i32 {
                     }
                     core::ptr::write_unaligned(q.add(12) as *mut u16, 0x86DDu16.to_be());
                 }
+                // Guest-egress same-node local delivery stays plain bpf_redirect (peer-redirect is
+                // uplink-only — see the v4 arm + ingress::execute).
                 return unsafe { bpf_redirect(tap_ifindex, 0) as i32 };
             }
             TC_ACT_OK

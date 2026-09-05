@@ -64,6 +64,8 @@ enum UplinkTarget {
     Local {
         tap_ifindex: u32,
         guest_mac: [u8; 6],
+        /// Target device has a netns peer (veth/netkit) → deliver with `bpf_redirect_peer`.
+        peer_capable: bool,
     },
     /// `INTERFACES` missed AND this node is configured as the WAN edge: `UNDERLAY[LOCAL.underlay_ipv6]`
     /// carries the `UNDERLAY_LOCAL_DELIVER` sentinel (programmed once by `Control::attach_edge`,
@@ -103,6 +105,7 @@ fn resolve_uplink_target<M: Maps>(
             return UplinkTarget::Local {
                 tap_ifindex: iv.tap_ifindex,
                 guest_mac: iv.guest_mac,
+                peer_capable: iv.peer_capable != 0,
             };
         }
     }
@@ -138,6 +141,7 @@ fn resolve_uplink_target6<M: Maps>(
             return UplinkTarget::Local {
                 tap_ifindex: iv.tap_ifindex,
                 guest_mac: iv.guest_mac,
+                peer_capable: iv.peer_capable != 0,
             };
         }
     }
@@ -312,9 +316,9 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
     // when LB is rebuilt. NOTE: `lb_scenario_test.rs::backend_node` hand-seeds `UNDERLAY[backend]` with
     // a real tap — a state the production control plane no longer produces; that seed is a fiction that
     // keeps this arm's sim green and must NOT be read as "this works for local backends".
-    let (tap, guest_mac, is_lb) = match lb_ul {
+    let (tap, guest_mac, is_lb, peer_capable) = match lb_ul {
         Some(bul) => match maps.underlay_get(&bul) {
-            Some(bu) => (bu.tap_ifindex, bu.guest_mac, true), // LB backend local (see KNOWN LIMITATION above)
+            Some(bu) => (bu.tap_ifindex, bu.guest_mac, true, false), // LB backend local (see KNOWN LIMITATION above)
             None => {
                 // Remote backend: re-forward — same vni, no decap, packet bytes untouched. The
                 // kernel geneve device re-stamps the tunnel key toward `bul` via
@@ -367,7 +371,8 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
                 UplinkTarget::Local {
                     tap_ifindex,
                     guest_mac,
-                } => (tap_ifindex, guest_mac, false),
+                    peer_capable,
+                } => (tap_ifindex, guest_mac, false, peer_capable),
                 UplinkTarget::EdgeLocalDeliver => {
                     return UplinkOut {
                         action: edge_local_deliver(pkt, in_.local.uplink_mac, ETH_P_IP),
@@ -402,7 +407,7 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
     // 4. Decap outer Eth+IPv6 and rewrite the inner Ethernet for the guest. The delivery tap's `l3`
     //    bit selects the inner dst MAC (zero MAC for an L3 netkit pod; guest_mac for an L2 tap).
     let l3 = resolve_delivery_l3(&*maps, tap);
-    let action = match decap_and_rewrite(pkt, tap, guest_mac, ETH_P_IP, l3) {
+    let action = match decap_and_rewrite(pkt, tap, guest_mac, ETH_P_IP, l3, peer_capable) {
         Ok(a) => a,
         Err(_) => Action::Drop,
     };
@@ -506,9 +511,9 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
 
     // 1. v6 LB dispatch (mirror the pre-4c hand-inlined `v6_uplink_rx`'s LB block).
     let lb_ul = lb_select_forward_v6(&*pkt, &*maps, inner_off, in_.vni);
-    let (tap, guest_mac, is_lb) = match lb_ul {
+    let (tap, guest_mac, is_lb, peer_capable) = match lb_ul {
         Some(bul) => match maps.underlay_get(&bul) {
-            Some(bu) => (bu.tap_ifindex, bu.guest_mac, true), // LB backend local (see KNOWN LIMITATION on the v4 LB arm)
+            Some(bu) => (bu.tap_ifindex, bu.guest_mac, true, false), // LB backend local (see KNOWN LIMITATION on the v4 LB arm)
             None => {
                 // Remote backend: re-forward — same vni, no decap, packet bytes untouched. The
                 // kernel geneve device re-stamps the tunnel key toward `bul`.
@@ -535,7 +540,8 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
                 UplinkTarget::Local {
                     tap_ifindex,
                     guest_mac,
-                } => (tap_ifindex, guest_mac, false),
+                    peer_capable,
+                } => (tap_ifindex, guest_mac, false, peer_capable),
                 UplinkTarget::EdgeLocalDeliver => {
                     return UplinkOut {
                         action: edge_local_deliver(pkt, in_.local.uplink_mac, ETH_P_IPV6),
@@ -568,7 +574,7 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
     // 4. Decap already ran (kernel); rewrite the inner Ethernet for the guest (ethertype = IPv6). The
     //    delivery tap's `l3` bit selects the inner dst MAC (zero MAC on L3 netkit; guest_mac on L2).
     let l3 = resolve_delivery_l3(&*maps, tap);
-    let action = match decap_and_rewrite(pkt, tap, guest_mac, ETH_P_IPV6, l3) {
+    let action = match decap_and_rewrite(pkt, tap, guest_mac, ETH_P_IPV6, l3, peer_capable) {
         Ok(a) => a,
         Err(_) => Action::Drop,
     };
@@ -944,11 +950,12 @@ pub fn process_uplink_nat_return<P: Pkt, M: Maps>(
         UplinkTarget::Local {
             tap_ifindex,
             guest_mac,
+            peer_capable,
         } => {
             // Same delivery-tap `l3` selection as `process_uplink` — an L3 netkit pod can receive
             // NAT returns too, and would drop a unicast guest_mac dst as PACKET_OTHERHOST.
             let l3 = resolve_delivery_l3(&*maps, tap_ifindex);
-            match decap_and_rewrite(pkt, tap_ifindex, guest_mac, ETH_P_IP, l3) {
+            match decap_and_rewrite(pkt, tap_ifindex, guest_mac, ETH_P_IP, l3, peer_capable) {
                 Ok(a) => a,
                 Err(_) => Action::Drop,
             }
@@ -1005,6 +1012,10 @@ pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
                                 UplinkTarget::Local {
                                     tap_ifindex,
                                     guest_mac,
+                                    // NAT64-return delivery keeps plain bpf_redirect (a niche path;
+                                    // process_uplink_nat64_ingress builds its own action). peer-redirect
+                                    // is applied to the main uplink + guest-egress local arms.
+                                    peer_capable: _,
                                 } => {
                                     // The guest's overlay IPv6 is per-tap metadata (`PORT_META`), not
                                     // derivable from `(vni, inner dst)` alone — it can only be read

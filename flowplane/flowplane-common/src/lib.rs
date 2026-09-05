@@ -64,7 +64,12 @@ pub struct IfaceValue {
     pub underlay_ipv6: [u8; 16],
     /// Guest MAC (inner eth dst for local delivery).
     pub guest_mac: [u8; 6],
-    pub _pad: [u8; 2],
+    /// 1 = the local delivery device has a netns peer (veth/netkit) → local delivery may use
+    /// `bpf_redirect_peer` (inject at the peer's ingress in the pod netns, same softirq). 0 = a
+    /// peerless device (root-netns tap) → must use plain `bpf_redirect`. Set at attach from the
+    /// DeviceType. Additive ABI: reuses a former `_pad` byte, so `size_of::<IfaceValue>()` is unchanged.
+    pub peer_capable: u8,
+    pub _pad: [u8; 1],
 }
 
 /// Ingress delivery entry: an interface's underlay IPv6 -> its VNI + local tap + guest MAC.

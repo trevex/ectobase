@@ -119,7 +119,8 @@ fn native_reference(frame: &[u8]) -> (Action, Vec<u8>) {
             is_local: 1,
             underlay_ipv6: [0; 16],
             guest_mac: GUEST_MAC,
-            _pad: [0; 2],
+            peer_capable: 0,
+            _pad: [0; 1],
         },
     );
     let local = Local::default();

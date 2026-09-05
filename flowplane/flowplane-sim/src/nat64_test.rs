@@ -719,7 +719,8 @@ fn uplink_rx_dispatches_nat64_return_to_v6_expansion() {
             is_local: 1,
             underlay_ipv6: [0; 16],
             guest_mac: GUEST_MAC,
-            _pad: [0; 2],
+            peer_capable: 0,
+            _pad: [0; 1],
         },
     );
 

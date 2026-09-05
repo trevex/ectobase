@@ -112,6 +112,10 @@ pub struct IfaceParams {
     /// header with a zeroed dst (NOARP peer) instead of rewriting it to `guest_mac`. True only for the
     /// container netkit-L3 edge; false for veth/tap AND the VM netkit-L2 pod-tap (real MAC, ARP).
     pub l3: bool,
+    /// The delivery device has a netns peer (veth/netkit) → local delivery may use `bpf_redirect_peer`
+    /// (written to `IfaceValue.peer_capable`). True for veth/netkit/pod-tap; false for a peerless
+    /// root-netns tap. Distinct from `netkit`: a veth is peer_capable but NOT netkit-attached.
+    pub peer_capable: bool,
 }
 
 // Named shapes for the gRPC list/get return rows, so the signatures below read as
@@ -759,6 +763,7 @@ impl Control {
             total_mbps: params.total_mbps,
             public_mbps: params.public_mbps,
             l3: params.l3,
+            peer_capable: params.peer_capable,
         }) {
             // A non-pinned `link` drops here -> detaches. A pinned link is held by the bpffs pin, not
             // by `link`, so explicitly unpin to detach the program and avoid leaking the pin — keeping

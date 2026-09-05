@@ -41,8 +41,9 @@ pub use flowplane_common::proto::{ETH_P_IP, ETH_P_IPV6, GW_MAC};
 /// arbitrary unicast like `guest_mac` is dropped as `PACKET_OTHERHOST`. src MAC (`GW_MAC`) and the
 /// ethertype are identical in both cases. No frame push/pop — the eth header is already present.
 ///
-/// Returns `Ok(Action::Redirect(tap_ifindex))` after a successful rewrite; `Err(DpErr::Bounds)` if
-/// the frame is too short (matches the eBPF `Err` path).
+/// Returns `Ok(Action::Redirect(tap_ifindex))` (or `Action::RedirectPeer` when `peer_capable`, i.e.
+/// the delivery device is a veth/netkit with a pod-netns peer) after a successful rewrite;
+/// `Err(DpErr::Bounds)` if the frame is too short (matches the eBPF `Err` path).
 #[inline(always)]
 pub fn decap_and_rewrite<P: Pkt>(
     pkt: &mut P,
@@ -50,6 +51,7 @@ pub fn decap_and_rewrite<P: Pkt>(
     guest_mac: [u8; 6],
     ethertype: u16,
     l3: bool,
+    peer_capable: bool,
 ) -> Result<Action, DpErr> {
     if pkt.len() < ETH_LEN {
         return Err(DpErr::Bounds);
@@ -64,7 +66,13 @@ pub fn decap_and_rewrite<P: Pkt>(
     if !ok {
         return Err(DpErr::Bounds);
     }
-    Ok(Action::Redirect(tap_ifindex))
+    // A veth/netkit target has a pod-netns peer: deliver at the peer's ingress in the same softirq
+    // (bpf_redirect_peer) instead of the primary's xmit + host-stack re-entry (bpf_redirect).
+    Ok(if peer_capable {
+        Action::RedirectPeer(tap_ifindex)
+    } else {
+        Action::Redirect(tap_ifindex)
+    })
 }
 
 /// WAN-edge local-deliver (mechanism #4 of the ingress delivery-target reconstruction — see

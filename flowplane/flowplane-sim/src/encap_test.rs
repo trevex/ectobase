@@ -165,7 +165,8 @@ fn guest_tx_v4_local_delivery_emits_no_tunnel_decision() {
             is_local: 1,
             underlay_ipv6: [0; 16],
             guest_mac: [0xcc; 6],
-            _pad: [0; 2],
+            peer_capable: 0,
+            _pad: [0; 1],
         },
     );
     allow(&mut node, SRC_IFINDEX, FW_DIR_EGRESS);

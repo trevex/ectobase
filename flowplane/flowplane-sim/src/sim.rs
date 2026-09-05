@@ -192,6 +192,23 @@ impl SimNode {
         tap: u32,
         guest_mac: [u8; 6],
     ) -> SimOut {
+        // Default: a peerless delivery device (plain bpf_redirect). Peer-capable (veth/netkit) local
+        // delivery is exercised via `host_uplink_peer`.
+        self.host_uplink_peer(inner, vni, dst, tap, guest_mac, false)
+    }
+
+    /// As [`host_uplink`], but seeds the delivery interface's `peer_capable` bit — when true the local
+    /// delivery target is a veth/netkit (a pod-netns peer), so the core emits `Action::RedirectPeer`
+    /// (bpf_redirect_peer) instead of `Action::Redirect`.
+    pub fn host_uplink_peer(
+        &mut self,
+        inner: &[u8],
+        vni: u32,
+        dst: [u8; 4],
+        tap: u32,
+        guest_mac: [u8; 6],
+        peer_capable: bool,
+    ) -> SimOut {
         self.maps.add_iface(
             vni,
             dst,
@@ -200,7 +217,8 @@ impl SimNode {
                 is_local: 1,
                 underlay_ipv6: [0; 16],
                 guest_mac,
-                _pad: [0; 2],
+                peer_capable: u8::from(peer_capable),
+                _pad: [0; 1],
             },
         );
         let local = Local {
@@ -266,7 +284,8 @@ impl SimNode {
                 is_local: 1,
                 underlay_ipv6: [0; 16],
                 guest_mac,
-                _pad: [0; 2],
+                peer_capable: 0,
+                _pad: [0; 1],
             },
         );
         let local = Local {

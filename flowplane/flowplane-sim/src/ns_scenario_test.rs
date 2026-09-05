@@ -98,6 +98,26 @@ fn external_to_guest_encap_decap_fw_allow_ct() {
     );
 }
 
+/// A `peer_capable` delivery target (veth/netkit, `IfaceValue.peer_capable == 1`) makes the uplink
+/// base path emit `Action::RedirectPeer(tap)` (bpf_redirect_peer → the pod-netns peer's ingress)
+/// instead of `Action::Redirect(tap)`. The inner-Ethernet rewrite is byte-identical to the plain
+/// case — only the redirect flavor differs (a kernel-datapath choice; the guest still gets the frame).
+#[test]
+fn external_to_guest_peer_capable_uses_redirect_peer() {
+    let inner = inner_eth_frame(443);
+    let mut host = SimNode::new();
+    allow_tcp(&mut host, 443);
+    let out = host.host_uplink_peer(&inner, VNI, GUEST_IP, TAP, GUEST_MAC, true);
+    assert_eq!(
+        out.action,
+        Action::RedirectPeer(TAP),
+        "peer_capable target → bpf_redirect_peer to the pod-netns peer"
+    );
+    // The frame is delivered identically to the plain-redirect case (same eth rewrite).
+    assert_eq!(&out.pkt[0..6], &GUEST_MAC, "inner eth dst = guest MAC");
+    assert_eq!(&out.pkt[6..12], &GW_MAC, "inner eth src = gateway MAC");
+}
+
 /// Seed `PORT_META[tap]` marking the delivery target an L3 netkit pod (`l3 = 1`). Keyed by tap
 /// ifindex, exactly how `resolve_delivery_l3` looks it up (`maps.port_meta_get(tap)`).
 fn mark_l3_pod(node: &mut SimNode, tap: u32) {

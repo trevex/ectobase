@@ -493,7 +493,8 @@ fn snat_no_op_for_internal_route() {
             is_local: 1,
             underlay_ipv6: [0; 16],
             guest_mac: [0xcc; 6],
-            _pad: [0; 2],
+            peer_capable: 0,
+            _pad: [0; 1],
         },
     );
     // NAT entry present (must be ignored on internal route).
@@ -639,7 +640,8 @@ fn dnat_host_node(proto: u8) -> SimNode {
             is_local: 1,
             underlay_ipv6: [0; 16],
             guest_mac: DNAT_GUEST_MAC,
-            _pad: [0; 2],
+            peer_capable: 0,
+            _pad: [0; 1],
         },
     );
     node

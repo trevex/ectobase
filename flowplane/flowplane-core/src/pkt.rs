@@ -7,8 +7,13 @@
 pub enum Action {
     Pass,
     Drop,
-    /// Redirect out this ifindex.
+    /// Redirect out this ifindex (plain `bpf_redirect`).
     Redirect(u32),
+    /// Redirect to the netns PEER of this ifindex (`bpf_redirect_peer`): inject at the peer's ingress
+    /// in the pod netns in the same softirq, skipping the primary's xmit + host-stack re-entry. Only
+    /// valid for a veth/netkit device (a `peer_capable` local-delivery target); the sim treats it as a
+    /// plain delivery to the ifindex (the peer hop is a kernel-datapath detail it doesn't model).
+    RedirectPeer(u32),
 }
 
 #[allow(clippy::len_without_is_empty)]

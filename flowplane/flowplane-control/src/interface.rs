@@ -40,6 +40,9 @@ pub struct IfaceParams {
     /// L3 (netkit) edge → `PortMeta.l3 = 1` (datapath reads the IP from byte 0, no L2 responders).
     /// `false` for veth/tap/pod-tap (L2, `l3 = 0`), preserving the existing behaviour.
     pub l3: bool,
+    /// The delivery device has a netns peer (veth/netkit) → written to `IfaceValue.peer_capable` so
+    /// local delivery uses `bpf_redirect_peer`. `false` for a peerless root-netns tap.
+    pub peer_capable: bool,
 }
 
 /// Build a `MeterState` from per-lane caps in Mbit/s. Egress total is EDT-shaped: only
@@ -135,6 +138,7 @@ impl<W: MapWriter> ControlCore<W> {
             total_mbps,
             public_mbps,
             l3,
+            peer_capable,
         } = params;
         self.w.ports_upsert(
             tap,
@@ -158,7 +162,8 @@ impl<W: MapWriter> ControlCore<W> {
                     is_local: 1,
                     underlay_ipv6,
                     guest_mac: effective_mac,
-                    _pad: [0; 2],
+                    peer_capable: u8::from(peer_capable),
+                    _pad: [0; 1],
                 },
             )?;
         }
@@ -172,7 +177,8 @@ impl<W: MapWriter> ControlCore<W> {
                     is_local: 1,
                     underlay_ipv6,
                     guest_mac: effective_mac,
-                    _pad: [0; 2],
+                    peer_capable: u8::from(peer_capable),
+                    _pad: [0; 1],
                 },
             )?;
         }
@@ -317,6 +323,7 @@ mod tests {
             total_mbps: 0,
             public_mbps: 0,
             l3: false,
+            peer_capable: false,
         }
     }
 
@@ -496,6 +503,7 @@ mod tests {
             total_mbps: 100,
             public_mbps: 40,
             l3: false,
+            peer_capable: false,
         })
         .unwrap();
         let pm = c.w.ports.get(&7).unwrap();

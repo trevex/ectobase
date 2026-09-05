@@ -111,7 +111,11 @@ impl Fabric {
                         outcome: Outcome::Passed { node: cur },
                     }
                 }
-                Action::Redirect(tap) => {
+                // `RedirectPeer` is a local delivery via bpf_redirect_peer (inject at the pod-netns
+                // peer's ingress) — the peer hop is a kernel-datapath detail the fabric model doesn't
+                // simulate, so it is delivery to `tap` exactly like `Redirect` (and never carries a
+                // tunnel: peer-redirect is only ever the same-node/decapped local arm).
+                Action::Redirect(tap) | Action::RedirectPeer(tap) => {
                     let t = match tunnel {
                         None => {
                             // No tunnel decision: local delivery to a guest tap (decap already ran,

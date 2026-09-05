@@ -402,6 +402,14 @@ impl AttachState {
             // the L2/L3 SEMANTIC — true only for the container netkit-L3 edge, false for the L2 VM tap.
             netkit: matches!(resolved, DeviceType::Netkit | DeviceType::PodTap),
             l3,
+            // Peer-capable = local delivery may use bpf_redirect_peer (inject at the pod-netns peer's
+            // ingress). Only the CONTAINER edges qualify: for veth/netkit the peer IS the pod's eth0,
+            // so peer-ingress delivery reaches the guest. PodTap is EXCLUDED: its netkit peer is an
+            // intermediary spliced to the qemu tap by a pod-netns `tc mirred` on the peer's ingress,
+            // and bpf_redirect_peer bypasses that ingress mirred (the frame lands in the peer's stack,
+            // never the tap) — proven live (VM ping broke). A root-netns `Tap` has no peer either. So
+            // VMs keep plain bpf_redirect: primary xmit → netkit forward → peer RX → mirred → tap.
+            peer_capable: matches!(resolved, DeviceType::Veth | DeviceType::Netkit),
         };
         if let Err(e) = self
             .control

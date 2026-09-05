@@ -833,7 +833,11 @@ async fn main() -> anyhow::Result<()> {
                         is_local: 1,
                         underlay_ipv6: underlay,
                         guest_mac,
-                        _pad: [0; 2],
+                        // Debug CLI on an arbitrary named device: keep plain bpf_redirect (always
+                        // correct for veth/netkit/tap). The production attach path derives this from
+                        // the DeviceType.
+                        peer_capable: 0,
+                        _pad: [0; 1],
                     },
                 )?;
                 underlay_map.upsert(

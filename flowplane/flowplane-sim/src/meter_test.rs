@@ -131,7 +131,8 @@ fn deliver_node() -> SimNode {
             is_local: 1,
             underlay_ipv6: [0; 16],
             guest_mac: [0xcc; 6],
-            _pad: [0; 2],
+            peer_capable: 0,
+            _pad: [0; 1],
         },
     );
     allow(&mut node, SRC_IFINDEX, FW_DIR_EGRESS);
@@ -353,7 +354,8 @@ fn edt_total_lane_shapes_not_drops() {
             is_local: 1,
             underlay_ipv6: [0; 16],
             guest_mac: [0xcc; 6],
-            _pad: [0; 2],
+            peer_capable: 0,
+            _pad: [0; 1],
         },
     );
     allow(&mut node, PEER_TAP, FW_DIR_INGRESS);
@@ -434,7 +436,8 @@ fn public_lane_exhaust_drop_then_pass_internal() {
             is_local: 1,
             underlay_ipv6: [0; 16],
             guest_mac: [0xcc; 6],
-            _pad: [0; 2],
+            peer_capable: 0,
+            _pad: [0; 1],
         },
     );
     allow(&mut node, SRC_IFINDEX, FW_DIR_EGRESS);
