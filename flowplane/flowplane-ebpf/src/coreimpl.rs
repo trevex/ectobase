@@ -81,6 +81,10 @@ impl Maps for GlobalMaps {
         }
     }
     #[inline(always)]
+    fn vip_get(&self, vni: u32, v: &[u8; 4]) -> Option<[u8; 4]> {
+        unsafe { crate::maps::VIPS.get(&VipKey { vni, ipv4: *v }).copied() }
+    }
+    #[inline(always)]
     fn route4_get(&self, vni: u32, dst: &[u8; 4]) -> Option<RouteValue> {
         crate::maps::ROUTES
             .get(&aya_ebpf::maps::lpm_trie::Key::new(

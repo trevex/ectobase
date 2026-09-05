@@ -67,6 +67,8 @@ pub struct MemMaps {
     pub ifaces: HashMap<(u32, [u8; 4]), IfaceValue>,
     /// Local-delivery demux by overlay (VNI, IPv6) (`INTERFACES6` map). Seed with [`Self::add_iface6`].
     pub ifaces6: HashMap<(u32, [u8; 16]), IfaceValue>,
+    /// 1:1 floating-IP map (`VIPS`), keyed `(vni, V)` → guest `G`. Seed with [`Self::add_vip`].
+    pub vips: HashMap<(u32, [u8; 4]), [u8; 4]>,
 }
 
 /// True if the first `prefix` bits of `a` and `b` (big-endian byte order) are equal.
@@ -109,6 +111,10 @@ impl MemMaps {
     /// Seed an `INTERFACES6` local-delivery entry for overlay `(vni, ipv6)`.
     pub fn add_iface6(&mut self, vni: u32, ipv6: [u8; 16], value: IfaceValue) {
         self.ifaces6.insert((vni, ipv6), value);
+    }
+    /// Seed a `VIPS` 1:1 floating-IP entry: inner dst `v` (the VIP) → backing guest `g`.
+    pub fn add_vip(&mut self, vni: u32, v: [u8; 4], g: [u8; 4]) {
+        self.vips.insert((vni, v), g);
     }
 }
 
@@ -174,6 +180,9 @@ impl Maps for MemMaps {
     }
     fn is_nat_ip(&self, vni: u32, ip: &[u8; 4]) -> bool {
         self.nat_ips.contains(&(vni, *ip))
+    }
+    fn vip_get(&self, vni: u32, v: &[u8; 4]) -> Option<[u8; 4]> {
+        self.vips.get(&(vni, *v)).copied()
     }
     fn route4_get(&self, vni: u32, dst: &[u8; 4]) -> Option<RouteValue> {
         // Longest-prefix match over the stored routes for this VNI (mirrors the eBPF LPM trie).
@@ -257,5 +266,15 @@ mod tests {
             }),
             None
         );
+    }
+
+    #[test]
+    fn vips_roundtrip() {
+        let mut m = MemMaps::default();
+        m.add_vip(100, [203, 0, 113, 7], [10, 0, 0, 9]);
+        assert_eq!(m.vip_get(100, &[203, 0, 113, 7]), Some([10, 0, 0, 9]));
+        // wrong vni misses; unmapped V misses.
+        assert_eq!(m.vip_get(101, &[203, 0, 113, 7]), None);
+        assert_eq!(m.vip_get(100, &[203, 0, 113, 8]), None);
     }
 }

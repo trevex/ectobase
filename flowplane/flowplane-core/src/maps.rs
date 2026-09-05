@@ -80,4 +80,11 @@ pub trait Maps {
     fn ifaces6_get(&self, _vni: u32, _ipv6: &[u8; 16]) -> Option<IfaceValue> {
         None
     }
+    /// 1:1 floating-IP ingress lookup: the `VIPS` map's `(vni, V) → G` direction — the counterpart
+    /// of the egress `snat_egress` `(vni, G) → V` read. `Some(G)` means an inbound frame's inner
+    /// dst `V` must be DNAT'd to the backing guest IPv4 `G` and delivered locally (see
+    /// [`crate::datapath::process_uplink`]'s floating-IP arm). Required (no default): both the eBPF
+    /// `GlobalMaps` and the sim `MemMaps` wire it — a floating IP the core cannot see is a silent
+    /// black hole, not a graceful degradation.
+    fn vip_get(&self, vni: u32, v: &[u8; 4]) -> Option<[u8; 4]>;
 }
