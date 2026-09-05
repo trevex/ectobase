@@ -571,8 +571,7 @@ impl AttachState {
         .context("set pod tap mac")?;
         run_netns(netns_path, &["ip", "link", "set", tap, "mtu", &mtu]).context("pod tap mtu")?;
         run_netns(netns_path, &["ip", "link", "set", tap, "up"]).context("pod tap up")?;
-        run_netns(netns_path, &["ip", "link", "set", peer, "mtu", &mtu])
-            .context("pod peer mtu")?;
+        run_netns(netns_path, &["ip", "link", "set", peer, "mtu", &mtu]).context("pod peer mtu")?;
         run_netns(netns_path, &["ip", "link", "set", peer, "up"]).context("pod peer up")?;
 
         // Point-to-point splice: clsact + a matchall `mirred` redirect each way (peer<->tap). No

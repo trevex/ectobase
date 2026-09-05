@@ -596,15 +596,17 @@ impl Control {
         // Uniqueness is keyed the same way create_interface checks it: any by_id record on this VNI
         // holding this (non-zero) v4 or v6 overlay address.
         let v4_hit = ipv4 != [0u8; 4] && g.by_id.values().any(|r| r.vni == vni && r.ipv4 == ipv4);
-        let v6_hit =
-            ipv6 != [0u8; 16] && g.by_id.values().any(|r| r.vni == vni && r.ipv6 == ipv6);
+        let v6_hit = ipv6 != [0u8; 16] && g.by_id.values().any(|r| r.vni == vni && r.ipv6 == ipv6);
         if !v4_hit && !v6_hit {
             return OverlayStatus::Free;
         }
         // Present: compare the resident guest MAC (from INTERFACES / INTERFACES6) to the requested
         // MAC. Same MAC => same logical NIC re-attaching => adopt; different => real conflict.
         let resident = if v4_hit {
-            g.core.writer().ifaces_get(&IfaceKey::new(vni, ipv4)).map(|v| v.guest_mac)
+            g.core
+                .writer()
+                .ifaces_get(&IfaceKey::new(vni, ipv4))
+                .map(|v| v.guest_mac)
         } else {
             g.core
                 .writer()
@@ -935,7 +937,10 @@ mod tests {
         let mac = [0x52, 0x54, 0, 0, 0x05, 0x0a];
         let other = [0x52, 0x54, 0, 0, 0x05, 0x0b];
         // Free: address not claimed → normal attach.
-        assert_eq!(OverlayStatus::classify(false, None, mac), OverlayStatus::Free);
+        assert_eq!(
+            OverlayStatus::classify(false, None, mac),
+            OverlayStatus::Free
+        );
         assert_eq!(
             OverlayStatus::classify(false, Some(other), mac),
             OverlayStatus::Free,
