@@ -17,7 +17,7 @@ use crate::dhcp;
 use crate::egress::{deliver, egress_fw_ct6, route4, route_decision6, Deliver, EgressFwCt6};
 use crate::encap::{reforward, tunnel_encap, TunnelEncap, ETH_LEN};
 use crate::firewall::{fw_eval_dir, fw_eval_dir6};
-use crate::lb::{lb_select_forward, lb_select_forward_v6};
+use crate::lb::{lb_select_forward, lb_select_forward_icmp_error, lb_select_forward_v6};
 use crate::maps::Maps;
 use crate::nat::{snat_egress, SnatOutcome};
 use crate::nat64::{
@@ -291,8 +291,12 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
     // inner sitting BEHIND a still-present outer header, which no longer exists on this path).
     let inner_off = ETH_LEN;
 
-    // 1. LB dispatch (mirror ingress.rs:135-157).
-    let lb_ul = lb_select_forward(&*pkt, &*maps, inner_off, in_.vni);
+    // 1. LB dispatch. The ICMP-error relay wins first: an ICMP error destined to a VIP must follow
+    //    its EMBEDDED flow's backend, not the (mis-hashed) outer ICMP tuple. Everything else — incl.
+    //    a normal ICMP echo to a VIP — falls through to the plain select (echo load-balances to a
+    //    backend; it is NOT answered by the dataplane).
+    let lb_ul = lb_select_forward_icmp_error(&*pkt, &*maps, inner_off, in_.vni)
+        .or_else(|| lb_select_forward(&*pkt, &*maps, inner_off, in_.vni));
     // KNOWN LIMITATION (deferred to the N/S-LB edge spec): LB local-backend delivery still resolves the
     // selected backend via `UNDERLAY[backend_underlay]`, but since the underlay-model change every
     // interface shares the node VTEP and `program_interface` no longer writes a per-interface UNDERLAY
