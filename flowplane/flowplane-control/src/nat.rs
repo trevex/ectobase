@@ -61,7 +61,7 @@ impl<W: MapWriter> ControlCore<W> {
                 port_max,
             },
         )?;
-        // Mark this nat_ip in NAT_IPS so the ingress can generate ICMP echo replies for it.
+        // Mark this nat_ip in NAT_IPS for peer-independent NAT-return demux (Maps::is_nat_ip).
         let _ = self.w.nat_ips_set(vni, nat_ip);
         Ok(preferred_ul.unwrap_or(underlay))
     }

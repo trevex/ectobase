@@ -501,9 +501,9 @@ fn uplink_track_flow6<P: Pkt, M: Maps>(
 ///
 /// SCOPE (confirmed against the pre-4c `v6.rs`): no ingress-lane metering step — `v6_uplink_rx` never
 /// had one (verified back to the pre-tcx `c2cdc55` v6 program; this is a pre-existing, out-of-scope
-/// gap, not something this task's fail-open fix touches). No ICMPv6-echo-to-VIP intercept — deferred
-/// to its own M2+ feature spec (per the P2 Task-4c brief), same as v4's dropped ICMP-echo/ICMP-error
-/// features.
+/// gap, not something this task's fail-open fix touches). No ICMPv6-echo-to-VIP intercept — by design
+/// the dataplane does NOT answer ping locally (only ARP/ND/RA/DHCP are); ICMP echo to a VIP is
+/// forwarded to a backend by the LB select. (v4's ICMP-error LB relay was rebuilt as F3, v4-only.)
 ///
 /// Returns the delivery `Action`, plus the tunnel-key decision the relay/reforward arm emits (`None`
 /// on every other branch) — reuses [`UplinkOut`] (protocol-agnostic).

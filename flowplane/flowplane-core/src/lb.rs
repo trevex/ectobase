@@ -82,6 +82,13 @@ pub fn lb_select_forward_v6<P: Pkt, M: Maps>(
 /// the SWAPPED embedded tuple, reconstructing the original client->VIP forward-flow hash so the error
 /// lands on the same backend. Faithful port of the pre-P2 eBPF `lb::lb_select_forward_icmp_error`
 /// (recovered from 7a9a962). IHL==5 required for both outer + embedded IPv4 to keep offsets constant.
+///
+/// KNOWN LIMITATION (deferred to the N/S-LB edge spec): the relayed error reuses the shared LB
+/// delivery path, so `process_uplink`'s ingress firewall evaluates it on its OUTER ICMP tuple
+/// (src = the erroring router, proto = ICMP). A typical backend policy ("allow TCP/443 from any")
+/// does not match ICMP, so the relayed error is firewall-dropped in production — a latent PMTUD gap,
+/// consistent with how all DSR-LB traffic is firewall-gated today. The fix (exempt relayed ICMP
+/// errors, or evaluate against the embedded flow) belongs to the N/S-LB edge spec.
 #[inline(always)]
 pub fn lb_select_forward_icmp_error<P: Pkt, M: Maps>(
     pkt: &P,

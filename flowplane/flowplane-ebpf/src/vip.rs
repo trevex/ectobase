@@ -20,11 +20,10 @@ pub fn dnat_egress(data: usize, data_end: usize, ip_off: usize, vni: u32) {
     rewrite_raw(data, data_end, ip_off, vni, false);
 }
 
-// The ingress-side DNAT wrapper that used to live here (VIP V->G rewrite on an inbound frame) was
-// dropped in P2 Task 4b: `uplink_rx` now delegates entirely to `flowplane_core::datapath`'s
-// `process_uplink`/`process_uplink_rx` orchestrators, which do not (yet) model VIP ingress DNAT — a
-// gap inherited from the 4a core port, not introduced here. See the P2 Task 4b report for the
-// full list of behaviors 4a's core orchestrator does not (yet) cover.
+// The ingress-side DNAT wrapper (VIP V->G rewrite on an inbound frame) now lives in
+// `flowplane_core::datapath::process_uplink` (rebuilt as F2, 2026-09-05) — `uplink_rx` delegates to
+// the core orchestrator, which DNATs V->G via `Maps::vip_get` and delivers to G's tap. Only the
+// egress SNAT/DNAT (`snat_egress`/`dnat_egress`) remain here (raw-pointer, same-host VIP traffic).
 
 #[inline(always)]
 fn rewrite_raw(data: usize, data_end: usize, ip_off: usize, vni: u32, is_src: bool) {

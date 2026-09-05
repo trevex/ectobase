@@ -60,8 +60,10 @@ pub static MAGLEV: HashMap<MaglevKey, [u8; 16]> = HashMap::pinned(65536, 0);
 pub static CONNTRACK: LruHashMap<CtKey, CtEntry> = LruHashMap::pinned(1_048_576, 0);
 #[map]
 pub static NAT: HashMap<NatKey, NatValue> = HashMap::pinned(1024, 0);
-/// Marks a (vni, nat_ip) as a network-NAT IP (value = 1). Used by ingress to detect incoming
-/// ICMP echo requests targeting the NAT IP and reply in the dataplane (without involving the VM).
+/// Marks a (vni, nat_ip) as a network-NAT IP (value = 1). Used by ingress ONLY for peer-independent
+/// NAT-return demux (`Maps::is_nat_ip`): a registered nat_ip inner dst keys the reverse conntrack
+/// entry `(vni,0,nat_ip,0,nat_port)`. The dataplane does NOT answer ICMP echo to a NAT IP — pings
+/// are forwarded (an unsolicited ping to a SNAT address has no backend and drops).
 #[map]
 pub static NAT_IPS: HashMap<VipKey, u8> = HashMap::pinned(1024, 0);
 #[map]
