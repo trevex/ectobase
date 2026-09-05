@@ -124,7 +124,9 @@ func cmdAdd(args *skel.CmdArgs) error {
 		TapName:    conf.TapName,
 	})
 	if err != nil {
-		return err
+		// Include netns + resolved overlay in the error so a launcher attach failure is diagnosable
+		// from the pod event (the dataplane's own error chain is otherwise truncated in the status).
+		return fmt.Errorf("attach netns=%q vni=%d ips=%v devtype=%q: %w", args.Netns, res.VNI, res.IPs, conf.DeviceType, err)
 	}
 
 	result, err := buildResult(conf.CNIVersion, args.IfName, args.Netns, resp)
