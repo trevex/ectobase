@@ -88,7 +88,7 @@ func TestBuildVM(t *testing.T) {
 			Image:       "quay.io/containerdisks/fedora:41",
 			RunStrategy: "RerunOnFailure",
 			Resources:   corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}},
-			Interfaces:  []compiledv1.CompiledVMInterface{{MAC: "02:00:00:00:00:01", NetworkName: "flowplane-overlay"}},
+			Interfaces:  []compiledv1.CompiledVMInterface{{MAC: "02:00:00:00:00:01", NetworkName: "ectobase-system/flowplane"}},
 		},
 	}
 	vm := buildVM(cvm, nil)
@@ -107,7 +107,7 @@ func TestBuildVM(t *testing.T) {
 		t.Fatalf("interfaces: %+v", ifaces)
 	}
 	nets := vm.Spec.Template.Spec.Networks
-	if len(nets) != 1 || nets[0].Multus == nil || nets[0].Multus.NetworkName != "flowplane-overlay" {
+	if len(nets) != 1 || nets[0].Multus == nil || nets[0].Multus.NetworkName != "ectobase-system/flowplane" {
 		t.Fatalf("networks: %+v", nets)
 	}
 	if vm.Spec.Template.Spec.Domain.Resources.Requests.Memory().Cmp(resource.MustParse("1Gi")) != 0 {
@@ -122,7 +122,7 @@ func TestBuildVM_CloudInit(t *testing.T) {
 		Spec: compiledv1.CompiledVMSpec{
 			Image:      "quay.io/containerdisks/fedora:41",
 			CloudInit:  &compiledv1.CloudInit{UserData: userData},
-			Interfaces: []compiledv1.CompiledVMInterface{{MAC: "02:00:00:00:00:01", NetworkName: "flowplane-overlay"}},
+			Interfaces: []compiledv1.CompiledVMInterface{{MAC: "02:00:00:00:00:01", NetworkName: "ectobase-system/flowplane"}},
 		},
 	}
 	vm := buildVM(cvm, nil)
@@ -235,7 +235,7 @@ func TestMaterializer_CreatesVM(t *testing.T) {
 			Image:       "quay.io/containerdisks/fedora:41",
 			RunStrategy: "RerunOnFailure",
 			Resources:   corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")}},
-			Interfaces:  []compiledv1.CompiledVMInterface{{MAC: "02:00:00:00:00:01", NetworkName: "flowplane-overlay"}},
+			Interfaces:  []compiledv1.CompiledVMInterface{{MAC: "02:00:00:00:00:01", NetworkName: "ectobase-system/flowplane"}},
 		},
 	}
 	if err := c.Create(ctx, cvm); err != nil {
@@ -263,7 +263,7 @@ func TestMaterializer_CreatesVM(t *testing.T) {
 		t.Fatalf("interfaces: %+v", ifaces)
 	}
 	nets := vm.Spec.Template.Spec.Networks
-	if len(nets) != 1 || nets[0].Multus == nil || nets[0].Multus.NetworkName != "flowplane-overlay" {
+	if len(nets) != 1 || nets[0].Multus == nil || nets[0].Multus.NetworkName != "ectobase-system/flowplane" {
 		t.Fatalf("networks: %+v", nets)
 	}
 

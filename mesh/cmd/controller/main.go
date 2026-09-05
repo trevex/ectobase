@@ -33,10 +33,16 @@ func main() {
 		dispatchKubeconfig string
 		clusterName   string
 		networkName   string
+		vmNetworkName string
 	)
 	flag.StringVar(&dispatchKubeconfig, "dispatch-kubeconfig", "", "Path to the dispatch aggregated-apiserver kubeconfig (falls back to in-cluster/KUBECONFIG when empty).")
 	flag.StringVar(&clusterName, "cluster-name", "", "Default cluster binding stamped onto CompiledNICs whose NIC has no owning VirtualMachine.")
-	flag.StringVar(&networkName, "network-name", "flowplane-overlay", "Multus NetworkAttachmentDefinition name for the flowplane overlay binding stamped onto CompiledVMs.")
+	flag.StringVar(&networkName, "network-name", "flowplane-overlay", "Multus NetworkAttachmentDefinition name for the flowplane overlay stamped onto CompiledContainers (the container/veth NAD).")
+	// VMs use a DIFFERENT NAD than containers: the KubeVirt `flowplane` binding NAD (deviceType=pod-tap,
+	// in the pool namespace), referenced namespace-qualified because the launcher runs in the workload
+	// namespace. Distinct from --network-name (containers = veth). Default matches the lab's binding CR
+	// (test/lab/internal/deploy/kubevirt.go registers binding.flowplane -> ectobase-system/flowplane).
+	flag.StringVar(&vmNetworkName, "vm-network-name", "ectobase-system/flowplane", "Multus NAD (ns/name) for the KubeVirt VM flowplane binding, stamped onto CompiledVMs.")
 	flag.Parse()
 
 	scheme := runtime.NewScheme()
@@ -86,7 +92,7 @@ func main() {
 		log.Fatalf("setup compilednic controller: %v", err)
 	}
 
-	if err := (&controllers.CompiledVMReconciler{Client: mgr.GetClient(), NetworkName: networkName}).SetupWithManager(mgr); err != nil {
+	if err := (&controllers.CompiledVMReconciler{Client: mgr.GetClient(), NetworkName: vmNetworkName}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup compiledvm controller: %v", err)
 	}
 
