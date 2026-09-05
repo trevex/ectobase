@@ -38,6 +38,35 @@ enum GuestLink {
     Pinned(String),
 }
 
+/// Result of `Control::overlay_status`: whether an overlay `(vni, ip)` is claimable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlayStatus {
+    /// No interface holds this (vni, ip) — a normal attach may proceed.
+    Free,
+    /// Already held by the SAME logical NIC (matching guest MAC) — an idempotent re-attach should
+    /// adopt it (return success without creating a second device).
+    SameEndpoint,
+    /// Already held by a DIFFERENT endpoint (different MAC) — a genuine `ROUTE_EXISTS` conflict.
+    Conflict,
+}
+
+impl OverlayStatus {
+    /// Pure decision the `(vni, ip)` idempotency check makes: given whether the overlay address is
+    /// already claimed and the resident guest MAC (if the INTERFACES entry is present), decide
+    /// whether a re-attach with `req_mac` adopts (same endpoint), conflicts (different endpoint), or
+    /// is free. A missing resident MAC on a claimed address is treated as a conflict (fail safe —
+    /// don't adopt an endpoint we can't confirm is the same one).
+    fn classify(present: bool, resident_mac: Option<[u8; 6]>, req_mac: [u8; 6]) -> OverlayStatus {
+        if !present {
+            return OverlayStatus::Free;
+        }
+        match resident_mac {
+            Some(m) if m == req_mac => OverlayStatus::SameEndpoint,
+            _ => OverlayStatus::Conflict,
+        }
+    }
+}
+
 /// Lowercase-hex encode an interface_id for a filesystem-safe, collision-free link pin name.
 fn hex_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -548,6 +577,43 @@ impl Control {
         flowplane_control::meter_state(egress_mbps, public_mbps, ingress_mbps)
     }
 
+    /// Whether an overlay `(vni, ip)` is already claimed, and if so whether by the SAME logical
+    /// endpoint (matching guest MAC) or a different one. Used by the attach path to make
+    /// AttachInterface idempotent: a KubeVirt launcher attaches the flowplane NAD TWICE (the multus
+    /// network source + the binding plugin's own NAD), so `flowplane-cni` runs twice for the SAME VM
+    /// NIC — same (vni, ip) and same MAC, different interface_id. The 2nd attach must ADOPT the 1st
+    /// (return success, no 2nd device) instead of failing `ROUTE_EXISTS`, which would wedge the pod
+    /// sandbox in an infinite CreatePodSandbox retry. A genuinely different endpoint (different MAC)
+    /// still conflicts. Read under the same lock `create_interface` uses so the two agree.
+    pub fn overlay_status(
+        &self,
+        vni: u32,
+        ipv4: [u8; 4],
+        ipv6: [u8; 16],
+        mac: [u8; 6],
+    ) -> OverlayStatus {
+        let g = self.inner.lock();
+        // Uniqueness is keyed the same way create_interface checks it: any by_id record on this VNI
+        // holding this (non-zero) v4 or v6 overlay address.
+        let v4_hit = ipv4 != [0u8; 4] && g.by_id.values().any(|r| r.vni == vni && r.ipv4 == ipv4);
+        let v6_hit =
+            ipv6 != [0u8; 16] && g.by_id.values().any(|r| r.vni == vni && r.ipv6 == ipv6);
+        if !v4_hit && !v6_hit {
+            return OverlayStatus::Free;
+        }
+        // Present: compare the resident guest MAC (from INTERFACES / INTERFACES6) to the requested
+        // MAC. Same MAC => same logical NIC re-attaching => adopt; different => real conflict.
+        let resident = if v4_hit {
+            g.core.writer().ifaces_get(&IfaceKey::new(vni, ipv4)).map(|v| v.guest_mac)
+        } else {
+            g.core
+                .writer()
+                .ifaces6_get(&IfaceKey6::new(vni, ipv6))
+                .map(|v| v.guest_mac)
+        };
+        OverlayStatus::classify(true, resident, mac)
+    }
+
     /// Program a LOCAL interface: attach tc_guest_tx to its device, set PORT_META + INTERFACES +
     /// UNDERLAY, retain the link for detach, and record shadow detail.
     pub fn create_interface(
@@ -859,6 +925,37 @@ mod tests {
         assert_eq!(rec.ipv6, [0x20; 16]);
         assert_eq!(rec.underlay, [0xfd; 16]);
         assert_eq!(rec.device, "dtapvf_3");
+    }
+
+    /// The idempotency crux: a re-attach of the same overlay (vni, ip) ADOPTS only when the resident
+    /// MAC matches (the KubeVirt double-attach — one VM NIC, two launcher annotation entries, same
+    /// MAC), and still CONFLICTS for a different endpoint or an unconfirmable (missing) resident MAC.
+    #[test]
+    fn overlay_status_classify_adopts_same_mac_only() {
+        let mac = [0x52, 0x54, 0, 0, 0x05, 0x0a];
+        let other = [0x52, 0x54, 0, 0, 0x05, 0x0b];
+        // Free: address not claimed → normal attach.
+        assert_eq!(OverlayStatus::classify(false, None, mac), OverlayStatus::Free);
+        assert_eq!(
+            OverlayStatus::classify(false, Some(other), mac),
+            OverlayStatus::Free,
+            "presence flag governs; a stray resident MAC on an unclaimed key is ignored"
+        );
+        // Same endpoint: claimed + resident MAC == requested → adopt (the KubeVirt 2nd attach).
+        assert_eq!(
+            OverlayStatus::classify(true, Some(mac), mac),
+            OverlayStatus::SameEndpoint
+        );
+        // Conflict: claimed by a different MAC → real ROUTE_EXISTS.
+        assert_eq!(
+            OverlayStatus::classify(true, Some(other), mac),
+            OverlayStatus::Conflict
+        );
+        // Fail safe: claimed but no resident MAC to confirm identity → conflict, never adopt.
+        assert_eq!(
+            OverlayStatus::classify(true, None, mac),
+            OverlayStatus::Conflict
+        );
     }
 
     /// An interface_id at the exact cap round-trips; one byte over is rejected (would alias on adopt).

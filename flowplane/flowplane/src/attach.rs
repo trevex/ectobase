@@ -18,7 +18,7 @@ use std::sync::{Arc, OnceLock};
 
 use anyhow::{bail, Context};
 
-use crate::control::{Control, IfaceParams};
+use crate::control::{Control, IfaceParams, OverlayStatus};
 
 /// Guest-edge device backing an interface. Both run the SAME `tc_guest_tx` datapath on a single
 /// root-netns device (via `Control::create_interface`); they differ only in how that device is
@@ -308,6 +308,31 @@ impl AttachState {
         // Linux device name — the CNI passes `<pod-uid>/<ifname>` as the id, which is not usable as a
         // link name. See `guest_ifname`.
         let guest_ifname = Self::guest_ifname(interface_id);
+        // The ifname reported back to the CNI: the guest-side (in-netns) device for a container edge,
+        // or the tap the runtime points qemu at for a VM. Computed here (before device creation) so
+        // the idempotent-adopt path below can return it without touching devices.
+        let ifname = match resolved {
+            DeviceType::Veth | DeviceType::Netkit => guest_ifname.clone(),
+            DeviceType::Tap | DeviceType::PodTap => tap_dev.clone(),
+            DeviceType::Auto => unreachable!("Auto resolved to a concrete device type above"),
+        };
+        // Idempotent re-attach. A KubeVirt virt-launcher attaches the flowplane NAD TWICE — once as
+        // the VMI's multus network source (carries the MAC + a generated ifname) and once as the
+        // `flowplane` binding plugin's own NAD (carries logicNetworkName, no ifname) — so Multus runs
+        // `flowplane-cni` twice for the SAME VM NIC: same (vni, ip) + MAC, DIFFERENT interface_id.
+        // The 2nd ADD must adopt the 1st (return its outcome, create no 2nd device) or it fails
+        // `ROUTE_EXISTS` and wedges the pod sandbox in an infinite CreatePodSandbox retry loop. The
+        // binding attach must succeed for KubeVirt's domainAttachmentType:tap to resolve the pod
+        // link, so we cannot simply drop one attach. A DIFFERENT endpoint (different MAC) claiming an
+        // in-use (vni, ip) is still a real conflict. Checked before any device work so neither adopt
+        // nor conflict churns devices.
+        match self.control.overlay_status(vni, ipv4, ipv6, mac) {
+            OverlayStatus::SameEndpoint => {
+                return Ok(self.make_outcome(ifname, ipv4, ipv6, mac, underlay_ipv6));
+            }
+            OverlayStatus::Conflict => bail!("ROUTE_EXISTS: IP already in use in this VNI"),
+            OverlayStatus::Free => {}
+        }
         // Create + configure the device. If anything fails after creation, tear it down so we don't
         // leak. veth: create the pair + move the guest end into the netns. tap: a single root-netns
         // device. pod-tap: the veth + a pod-netns tap (named `tap_dev`) wired by mirred (KubeVirt).
@@ -407,19 +432,23 @@ impl AttachState {
             }
         }
 
-        // `ifname` returned to the caller: for a veth it's the guest end inside the netns (the pod's
-        // interface); for a tap it's the root-netns tap the caller points qemu at (or opens for its fd).
-        let ifname = match resolved {
-            // The guest-side (in-netns) device name the CNI reports back to the runtime — the
-            // sanitized name we actually created, not the raw interface_id (which may contain `/`).
-            // Netkit is the same shape (the pod's eth0 is the peer), though it bails at attach until B.4.
-            DeviceType::Veth | DeviceType::Netkit => guest_ifname.clone(),
-            // The tap the caller points qemu/libvirt at: root-netns (Tap, == device) or the
-            // pod-netns tap (PodTap). Both are `tap_dev` (the caller-supplied name, e.g. "tap0").
-            DeviceType::Tap | DeviceType::PodTap => tap_dev.clone(),
-            DeviceType::Auto => unreachable!("Auto resolved to a concrete device type above"),
-        };
-        Ok(AttachOutcome {
+        // `ifname` (computed before device creation) is the guest end for a veth/netkit or the tap
+        // the caller points qemu at for a Tap/PodTap.
+        Ok(self.make_outcome(ifname, ipv4, ipv6, mac, underlay_ipv6))
+    }
+
+    /// Build the `AttachOutcome` returned to the CNI. Shared by the normal success path and the
+    /// idempotent-adopt path so a re-attach reports the identical {ips, mac, gateway, underlay} the
+    /// first attach did.
+    fn make_outcome(
+        &self,
+        ifname: String,
+        ipv4: [u8; 4],
+        ipv6: [u8; 16],
+        mac: [u8; 6],
+        underlay_ipv6: [u8; 16],
+    ) -> AttachOutcome {
+        AttachOutcome {
             ifname,
             ips: {
                 let mut v = Vec::new();
@@ -440,7 +469,7 @@ impl AttachState {
                 Ipv4Addr::from(self.gateway_ipv4).to_string()
             },
             underlay_route: Ipv6Addr::from(underlay_ipv6).to_string(),
-        })
+        }
     }
 
     /// Create + configure a root-netns tap for a VM: a single device (no netns move, no peer),
