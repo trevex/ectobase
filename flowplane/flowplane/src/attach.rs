@@ -490,9 +490,17 @@ impl AttachState {
         tap: &str,
         mac: [u8; 6],
     ) -> anyhow::Result<()> {
-        let _ = run(&["ip", "link", "del", host]);
-        // veth: host end in the root netns, peer created here then moved into the pod netns.
+        // Idempotent on CNI-ADD retry: CRI/Multus retries the sandbox with the SAME interface_id
+        // (pod UID is stable), so `host`/`peer`/`tap` names recur. A prior partial attach leaves the
+        // root-netns host veth AND the pod-netns tap0/peer behind; re-creating them then fails
+        // (`RTNETLINK: File exists` on the veth, or `ioctl(TUNSETIFF): Device or resource busy` on the
+        // tap), and the leaked devices accumulate (ifindex climbs every retry). Delete all three up
+        // front (ignore "not found") so each attempt starts clean.
         let peer = Self::pod_peer_name(host);
+        let _ = run(&["ip", "link", "del", host]);
+        let _ = run_netns(netns_path, &["ip", "link", "del", tap]);
+        let _ = run_netns(netns_path, &["ip", "link", "del", &peer]);
+        // veth: host end in the root netns, peer created here then moved into the pod netns.
         run(&[
             "ip", "link", "add", host, "type", "veth", "peer", "name", &peer,
         ])
