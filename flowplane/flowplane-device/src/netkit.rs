@@ -9,11 +9,30 @@
 use crate::veth::{ifindex_of, run, run_netns, DeviceInfo, VethSpec};
 use anyhow::{Context, Result};
 
-/// Build the `ip link add <primary> type netkit mode l3 peer name <peer>` argument vector. This one
-/// command creates BOTH ends at once (primary in the root netns, peer named `<peer>` also in the
-/// root netns until moved). `mode l3` selects the L3 (no-eth) datapath. Args only — `run()` supplies
-/// the leading `"ip"` (same convention as `geneve_add_args`).
-pub fn netkit_add_args(primary: &str, peer: &str) -> Vec<String> {
+/// netkit datapath mode. `L3` (no-eth, NOARP, unsettable all-zero MAC) is the container edge; `L2`
+/// (eth-framed, real settable MAC, ARP) is the VM edge — a KubeVirt VM reads the pod link's MAC and
+/// libvirt rejects an empty MAC, so the L3 mode's zeroed MAC cannot back a VM (Cilium #37265).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NetkitMode {
+    L2,
+    L3,
+}
+
+impl NetkitMode {
+    /// The `mode` token for `ip link add ... type netkit mode <m>`.
+    fn as_arg(self) -> &'static str {
+        match self {
+            NetkitMode::L2 => "l2",
+            NetkitMode::L3 => "l3",
+        }
+    }
+}
+
+/// Build the `ip link add <primary> type netkit mode <l2|l3> peer name <peer>` argument vector. This
+/// one command creates BOTH ends at once (primary in the root netns, peer named `<peer>` also in the
+/// root netns until moved). Args only — `run()` supplies the leading `"ip"` (same convention as
+/// `geneve_add_args`).
+pub fn netkit_add_args(primary: &str, peer: &str, mode: NetkitMode) -> Vec<String> {
     vec![
         "link".into(),
         "add".into(),
@@ -21,7 +40,7 @@ pub fn netkit_add_args(primary: &str, peer: &str) -> Vec<String> {
         "type".into(),
         "netkit".into(),
         "mode".into(),
-        "l3".into(),
+        mode.as_arg().into(),
         "peer".into(),
         "name".into(),
         peer.into(),
@@ -34,7 +53,7 @@ pub fn netkit_add_args(primary: &str, peer: &str) -> Vec<String> {
 /// the pod netns → rename to `spec.guest_name` → set peer up/mtu → set primary mtu/up → resolve
 /// primary ifindex. Reuses `netkit_add_args` for the add command so the tested arg vector is exactly
 /// what gets shelled. Uses the same `run_netns` (`ip netns exec`) netns-entry mechanism as veth.rs.
-pub fn create_netkit_pair(spec: &VethSpec) -> Result<DeviceInfo> {
+pub fn create_netkit_pair(spec: &VethSpec, mode: NetkitMode) -> Result<DeviceInfo> {
     // Fresh start: remove any stale primary from a previous run (deletes the peer too).
     delete_netkit(&spec.host_name)?;
     let primary = &spec.host_name;
@@ -46,25 +65,33 @@ pub fn create_netkit_pair(spec: &VethSpec) -> Result<DeviceInfo> {
 
     let result = (|| -> Result<u32> {
         let mut argv: Vec<String> = vec!["ip".into()];
-        argv.extend(netkit_add_args(primary, &tmp_peer));
+        argv.extend(netkit_add_args(primary, &tmp_peer, mode));
         let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
         run(&argv).context("create netkit pair")?;
         // Move the peer end into the target netns (by path, e.g. /var/run/netns/<ns>).
         run(&["ip", "link", "set", &tmp_peer, "netns", &spec.netns_path])
             .context("move netkit peer into netns")?;
-        // Inside the netns: rename to the requested guest name, bring up, set MTU.
-        //
-        // NOTE — unlike veth (L2), an L3 netkit device carries NO L2/eth header: it comes up with a
-        // fixed all-zero MAC and the `NOARP` flag, and the kernel REJECTS an address-set on it
-        // (`RTNETLINK: Operation not supported`, verified live on this host). So `spec.mac` is NOT
-        // applied to the device — it is retained in the returned `DeviceInfo` only for the caller's
-        // map programming (local L3 delivery doesn't consult a device MAC). This is the one place the
-        // sequence intentionally differs from `create_veth_pair`.
+        // Inside the netns: rename to the requested guest name, then (L2 only) set the MAC, bring up,
+        // set MTU.
         run_netns(
             &spec.netns_path,
             &["ip", "link", "set", &tmp_peer, "name", &spec.guest_name],
         )
         .context("rename netkit peer")?;
+        // MAC: an L2 netkit device is eth-framed and takes a settable MAC (mirroring create_veth_pair)
+        // — the VM edge needs a real MAC on the pod link so a KubeVirt VM's libvirt config is valid.
+        // An L3 netkit device carries NO L2/eth header: it comes up with a fixed all-zero MAC + the
+        // `NOARP` flag and the kernel REJECTS an address-set (`RTNETLINK: Operation not supported`,
+        // verified live), so `spec.mac` is NOT applied — it is retained in the returned `DeviceInfo`
+        // only for the caller's map programming (local L3 delivery doesn't consult a device MAC).
+        if mode == NetkitMode::L2 {
+            let macs = crate::veth::fmt_mac(spec.mac);
+            run_netns(
+                &spec.netns_path,
+                &["ip", "link", "set", &spec.guest_name, "address", &macs],
+            )
+            .context("set netkit L2 peer mac")?;
+        }
         run_netns(
             &spec.netns_path,
             &["ip", "link", "set", &spec.guest_name, "up"],
@@ -108,11 +135,17 @@ mod tests {
     use crate::veth::link_exists;
 
     #[test]
-    fn netkit_add_args_are_l3_primary_peer() {
+    fn netkit_add_args_carry_the_mode() {
         assert_eq!(
-            netkit_add_args("fp-nk0", "fp-nk0p"),
+            netkit_add_args("fp-nk0", "fp-nk0p", NetkitMode::L3),
             vec![
                 "link", "add", "fp-nk0", "type", "netkit", "mode", "l3", "peer", "name", "fp-nk0p"
+            ]
+        );
+        assert_eq!(
+            netkit_add_args("fp-nk0", "fp-nk0p", NetkitMode::L2),
+            vec![
+                "link", "add", "fp-nk0", "type", "netkit", "mode", "l2", "peer", "name", "fp-nk0p"
             ]
         );
     }
@@ -140,7 +173,7 @@ mod tests {
             mtu: 1400,
             disable_csum_offload: false,
         };
-        let info = create_netkit_pair(&spec).expect("create netkit pair");
+        let info = create_netkit_pair(&spec, NetkitMode::L3).expect("create netkit pair");
         // The primary (datapath) end resolves to a real ifindex in the root netns.
         assert!(info.host_ifindex >= 2, "resolved a real primary ifindex");
         // `spec.mac` is carried through for the caller's map programming (an L3 netkit device has no

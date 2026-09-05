@@ -43,11 +43,13 @@ pub enum DeviceType {
     /// delivery rewrites the frame dst to `guest_mac`, so a derived MAC would never match the VM).
     Tap,
     /// VM (KubeVirt-compatible): the tap lives in the POD netns (virt-launcher opens it by name),
-    /// connected to a root-netns veth by `tc mirred`. The root-netns veth end is the unchanged
-    /// datapath device (`tc_guest_tx` + `uplink_rx` target), exactly like a container; the pod-netns
-    /// `mirred` splice replaces "the pod process on the veth peer". A point-to-point `mirred` splice
-    /// (rather than a bridge) keeps it lean — no bridge MAC-learning / STP / unicast flooding, and it
-    /// forwards regardless of the L2 addressing. MAC required (same reason as `Tap`).
+    /// connected to a root-netns **netkit-L2** primary by `tc mirred`. The netkit primary is the
+    /// datapath device (`tc_guest_tx` via the BPF_NETKIT_PEER hook + `uplink_rx` target), its peer is
+    /// the pod link (`pod<hash>`); the pod-netns `mirred` splice bridges that peer to the tap. netkit
+    /// (not veth) — the container edge already uses netkit, so no veth on the VM path either. L2 mode
+    /// (real MAC): a KubeVirt VM reads the pod link's MAC and libvirt rejects the L3 zeroed MAC. A
+    /// point-to-point `mirred` splice (rather than a bridge) keeps it lean — no MAC-learning / STP /
+    /// flooding — and forwards regardless of L2 addressing. MAC required (same reason as `Tap`).
     PodTap,
 }
 
@@ -361,17 +363,18 @@ impl AttachState {
             // L3 pair (primary in root netns, peer as the pod eth0). The netkit primary has no settable
             // MAC (L3, NOARP) — `mac` is carried only for map programming. `create_interface` attaches
             // `tc_guest_tx` on the netkit PEER hook (pod egress) via a raw bpf(BPF_LINK_CREATE).
-            DeviceType::Netkit => {
-                flowplane_device::netkit::create_netkit_pair(&flowplane_device::VethSpec {
+            DeviceType::Netkit => flowplane_device::netkit::create_netkit_pair(
+                &flowplane_device::VethSpec {
                     host_name: device.clone(),
                     guest_name: guest_ifname.clone(),
                     netns_path: netns_path.to_string(),
                     mac,
                     mtu: self.guest_mtu as u32,
                     disable_csum_offload: self.disable_guest_csum_offload,
-                })
-                .map(|_dev| ())
-            }
+                },
+                flowplane_device::NetkitMode::L3,
+            )
+            .map(|_dev| ()),
             DeviceType::Tap => self.setup_tap(&device, mac),
             DeviceType::PodTap => {
                 self.setup_pod_tap(&device, netns_path, &guest_ifname, &tap_dev, mac)
@@ -394,6 +397,10 @@ impl AttachState {
             underlay_ipv6,
             total_mbps: 0,
             public_mbps: 0,
+            // Attach via netkit (BPF_NETKIT_PEER) for BOTH the container netkit edge AND the VM
+            // pod-tap edge (its datapath device is now a netkit-L2 primary, not a veth). `l3` stays
+            // the L2/L3 SEMANTIC — true only for the container netkit-L3 edge, false for the L2 VM tap.
+            netkit: matches!(resolved, DeviceType::Netkit | DeviceType::PodTap),
             l3,
         };
         if let Err(e) = self
@@ -517,14 +524,15 @@ impl AttachState {
         Ok(())
     }
 
-    /// Create the KubeVirt-compatible pod-netns tap topology: a veth pair whose HOST end (`host`,
-    /// root netns) is the unchanged datapath device (`tc_guest_tx` + `uplink_rx` target, exactly like
-    /// a container), whose PEER moves into the pod netns, plus a `tap` in the pod netns that qemu
-    /// drives. The peer and tap are spliced point-to-point with `tc mirred` — leaner than a Linux
-    /// bridge (no MAC-learning / STP / unicast flooding): `mirred` shovels every frame peer<->tap
-    /// unconditionally, so all guest egress (incl. gateway-bound frames to GW_MAC) reaches
-    /// `tc_guest_tx` on the root veth, and delivery reaches the VM, regardless of L2 addressing.
-    /// `Control::create_interface` later attaches the datapath to `host`, unchanged from the veth path.
+    /// Create the KubeVirt-compatible pod-netns tap topology: a **netkit-L2 pair** whose PRIMARY
+    /// (`host`, root netns) is the datapath device (`tc_guest_tx` via the BPF_NETKIT_PEER hook +
+    /// `uplink_rx` target), whose PEER moves into the pod netns as the pod link (`pod<hash>`), plus a
+    /// `tap` in the pod netns that qemu drives. The peer and tap are spliced point-to-point with `tc
+    /// mirred` — leaner than a Linux bridge (no MAC-learning / STP / unicast flooding): `mirred`
+    /// shovels every frame peer<->tap unconditionally, so all guest egress reaches `tc_guest_tx` on the
+    /// netkit primary and delivery reaches the VM, regardless of L2 addressing. netkit replaces the
+    /// veth pair (the container edge already uses netkit) — no veth on the VM path. `create_interface`
+    /// attaches the datapath to `host` via netkit (params.netkit), with L2 semantics (params.l3=false).
     ///
     /// `peer` and `tap` MUST be the names virt-launcher expects for a secondary-network
     /// domainAttachmentType:tap: `peer` = the pod link `pod<hash>` (= CNI_IFNAME, so phase-2 discovery
@@ -547,13 +555,23 @@ impl AttachState {
         let _ = run(&["ip", "link", "del", host]);
         let _ = run_netns(netns_path, &["ip", "link", "del", tap]);
         let _ = run_netns(netns_path, &["ip", "link", "del", peer]);
-        // veth: host end in the root netns, peer created here then moved into the pod netns.
-        run(&[
-            "ip", "link", "add", host, "type", "veth", "peer", "name", peer,
-        ])
-        .context("create pod-tap veth pair")?;
-        run(&["ip", "link", "set", peer, "netns", netns_path])
-            .context("move peer into pod netns")?;
+        // netkit-L2 pair: `host` (primary) is the root-netns datapath device (tc_guest_tx via the
+        // BPF_NETKIT_PEER hook + uplink_rx target), `peer` (= pod<hash>) is the pod-netns pod link
+        // KubeVirt discovers. L2 mode (eth-framed, real settable MAC) — a KubeVirt VM reads the pod
+        // link's MAC and libvirt rejects the L3 mode's zeroed MAC. `create_netkit_pair` creates the
+        // pair, moves + renames the peer to `peer`, sets its MAC, and brings both ends up at guest_mtu.
+        flowplane_device::netkit::create_netkit_pair(
+            &flowplane_device::VethSpec {
+                host_name: host.to_string(),
+                guest_name: peer.to_string(),
+                netns_path: netns_path.to_string(),
+                mac,
+                mtu: self.guest_mtu as u32,
+                disable_csum_offload: self.disable_guest_csum_offload,
+            },
+            flowplane_device::NetkitMode::L2,
+        )
+        .context("create pod-tap netkit-L2 pair")?;
 
         let mtu = self.guest_mtu.to_string();
         // Pod-netns tap (what qemu/libvirt opens): vnet_hdr for vhost=on virtio; MTU + up. Its MAC is
@@ -571,8 +589,7 @@ impl AttachState {
         .context("set pod tap mac")?;
         run_netns(netns_path, &["ip", "link", "set", tap, "mtu", &mtu]).context("pod tap mtu")?;
         run_netns(netns_path, &["ip", "link", "set", tap, "up"]).context("pod tap up")?;
-        run_netns(netns_path, &["ip", "link", "set", peer, "mtu", &mtu]).context("pod peer mtu")?;
-        run_netns(netns_path, &["ip", "link", "set", peer, "up"]).context("pod peer up")?;
+        // (`peer` is already up at guest_mtu — create_netkit_pair brought it up.)
 
         // Point-to-point splice: clsact + a matchall `mirred` redirect each way (peer<->tap). No
         // bridge → no MAC learning → no gateway-at-own-MAC hairpin.

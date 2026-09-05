@@ -67,6 +67,22 @@ impl OverlayStatus {
     }
 }
 
+/// Whether `device` is a `netkit` link, by parsing `ip -d link show <device>` (the `-d` detail line
+/// carries the link kind). Used ONLY on restart-adopt to pick the guest-program re-attach mechanism
+/// (netkit `bpf(BPF_LINK_UPDATE)` vs tcx) — the device kind is authoritative there, since the
+/// datapath L2/L3 semantics (which no longer imply the device kind, now that the VM pod-tap is
+/// netkit-L2) live in the surviving PORT_META map. Best-effort: any error / missing device → false
+/// (fall back to the tcx re-attach path).
+fn device_is_netkit(device: &str) -> bool {
+    std::process::Command::new("ip")
+        .args(["-d", "link", "show", device])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("netkit"))
+        .unwrap_or(false)
+}
+
 /// Lowercase-hex encode an interface_id for a filesystem-safe, collision-free link pin name.
 fn hex_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -87,8 +103,14 @@ pub struct IfaceParams {
     pub underlay_ipv6: [u8; 16],
     pub total_mbps: u64,
     pub public_mbps: u64,
-    /// L3 (netkit) edge: program `PORT_META.l3 = 1` and attach the guest program via `BPF_NETKIT`
-    /// (Task B.4) rather than tcx/clsact. `false` for veth/tap/pod-tap (L2, unchanged tcx attach).
+    /// Attach the guest program via the `BPF_NETKIT_PEER` hook (raw `bpf(BPF_LINK_CREATE)`) rather
+    /// than tcx/clsact — true for a netkit device (container L3 edge OR the VM L2 pod-tap edge),
+    /// false for veth/tap. Decoupled from `l3`: the VM edge is netkit (`netkit=true`) but L2
+    /// (`l3=false`), so the attach mechanism and the datapath L2/L3 semantics are chosen independently.
+    pub netkit: bool,
+    /// L3 (no-eth) datapath semantics: program `PORT_META.l3 = 1` so local delivery keeps the eth
+    /// header with a zeroed dst (NOARP peer) instead of rewriting it to `guest_mac`. True only for the
+    /// container netkit-L3 edge; false for veth/tap AND the VM netkit-L2 pod-tap (real MAC, ARP).
     pub l3: bool,
 }
 
@@ -162,8 +184,10 @@ struct Inner {
 
 /// `(interface_id, device)` pairs whose guest program must be re-attached after a graceful restart
 /// (their bpf-links died with the old process; the pinned maps survived).
-// (interface_id, device, l3): l3 tells the adopt caller whether to re-point the guest program's
-// pinned link as a netkit link (bpf(BPF_LINK_UPDATE)) or a tcx link (readopt_tc_link).
+// (interface_id, device, netkit): the bool tells the adopt caller whether to re-point the guest
+// program's pinned link as a netkit link (bpf(BPF_LINK_UPDATE)) or a tcx link (readopt_tc_link). It
+// is probed from the live device kind on adopt (device_is_netkit), NOT the journal l3 bit — the VM
+// pod-tap is a netkit device with L2 semantics, so l3 no longer implies the device kind.
 type ReattachList = Vec<(Vec<u8>, String, bool)>;
 
 impl Control {
@@ -375,7 +399,12 @@ impl Control {
             );
             g.by_id.insert(id.clone(), rec);
             g.iface_underlay.insert(id.clone(), v.underlay);
-            reattach.push((id, device, v.l3 != 0));
+            // The re-attach mechanism (netkit BPF_LINK_UPDATE vs tcx) is decided by the DEVICE KIND,
+            // not the journal `l3` bit: the VM pod-tap is a netkit device with L2 (l3=0) semantics, so
+            // `l3` no longer distinguishes it from a veth/tap. Probe the live device (it survives a
+            // flowplane restart — it lives in the node root netns / the still-running pod netns).
+            let netkit = device_is_netkit(&device);
+            reattach.push((id, device, netkit));
         }
         Ok(reattach)
     }
@@ -412,18 +441,20 @@ impl Control {
         &self,
         interface_id: &[u8],
         device: &str,
-        l3: bool,
+        netkit: bool,
     ) -> anyhow::Result<()> {
         let mut g = self.inner.lock();
         if g.pin_links {
             let pin_dir = g.pin_dir.clone();
             let gname = format!("guest-{}", hex_encode(interface_id));
             // Re-point the guest program's pinned link at the freshly-loaded program, atomically
-            // (zero-gap). `l3` (from the IFACE_META journal, recorded at attach) selects the mechanism:
-            // a netkit (L3) link MUST be re-pointed with bpf(BPF_LINK_UPDATE) (readopt_netkit_link) —
-            // the tcx readopt path can't drive a netkit link and would unpin the LIVE link + mis-attach
-            // a clsact/tcx program to the L3 primary (dead pod). A veth link uses readopt_tc_link.
-            let readopt = if l3 {
+            // (zero-gap). `netkit` (probed from the live device at adopt) selects the mechanism: a
+            // netkit link (container L3 OR VM L2 pod-tap) MUST be re-pointed with bpf(BPF_LINK_UPDATE)
+            // (readopt_netkit_link) — the tcx readopt path can't drive a netkit link and would unpin
+            // the LIVE link + mis-attach a clsact/tcx program to the netkit primary. A veth/tap link
+            // uses readopt_tc_link. (Independent of the L2/L3 datapath semantics, which live in the
+            // surviving PORT_META map, not here.)
+            let readopt = if netkit {
                 loader::readopt_netkit_link(&mut g.ebpf, "tc_guest_tx", &pin_dir, &gname)
             } else {
                 loader::readopt_tc_link(&mut g.ebpf, "tc_guest_tx", &pin_dir, &gname)
@@ -435,7 +466,7 @@ impl Control {
             });
             if !readopted {
                 // No pin to adopt (or adopt failed): (re)attach fresh with the matching mechanism.
-                if l3 {
+                if netkit {
                     let tap = crate::ifindex(device)
                         .with_context(|| format!("resolve netkit primary ifindex for {device}"))?;
                     loader::attach_netkit_pinned_at(
@@ -675,9 +706,9 @@ impl Control {
         // Serve) path — `create_netkit_pair` is never created by a non-pinning debug caller — so a
         // non-pinning netkit attach is unsupported and rejected rather than silently mis-attached via
         // tcx. `tap` (resolved above from the device ifindex) IS the netkit PRIMARY ifindex.
-        let link = if params.l3 {
+        let link = if params.netkit {
             if !g.pin_links {
-                anyhow::bail!("netkit (L3) attach requires pin-links mode (production Serve)");
+                anyhow::bail!("netkit attach requires pin-links mode (production Serve)");
             }
             let pin_dir = g.pin_dir.clone();
             let gname = format!("guest-{}", hex_encode(interface_id));

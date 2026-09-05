@@ -9,7 +9,7 @@ pub mod underlay;
 pub mod veth;
 
 pub use geneve::{delete_geneve_dev, ensure_geneve_dev, geneve_add_args, GENEVE_DEV};
-pub use netkit::{create_netkit_pair, delete_netkit, netkit_add_args};
+pub use netkit::{create_netkit_pair, delete_netkit, netkit_add_args, NetkitMode};
 pub use netns::{configure_guest_netns, GuestNetConfig};
 pub use tap::{create_persistent_tap, delete_tap, open_tap_fd};
 pub use underlay::{

@@ -678,14 +678,17 @@ mod tests {
             .expect("add netns");
         let netns_path = format!("/var/run/netns/{ns}");
 
-        let info = flowplane_device::netkit::create_netkit_pair(&flowplane_device::VethSpec {
-            host_name: primary.into(),
-            guest_name: "eth0".into(),
-            netns_path: netns_path.clone(),
-            mac: [0x02, 0, 0, 0, 0, 0x99],
-            mtu: 1400,
-            disable_csum_offload: false,
-        })
+        let info = flowplane_device::netkit::create_netkit_pair(
+            &flowplane_device::VethSpec {
+                host_name: primary.into(),
+                guest_name: "eth0".into(),
+                netns_path: netns_path.clone(),
+                mac: [0x02, 0, 0, 0, 0, 0x99],
+                mtu: 1400,
+                disable_csum_offload: false,
+            },
+            flowplane_device::NetkitMode::L3,
+        )
         .expect("create netkit pair");
         let primary_ifindex = info.host_ifindex;
 
