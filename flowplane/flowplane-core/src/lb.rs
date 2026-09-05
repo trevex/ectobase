@@ -89,6 +89,11 @@ pub fn lb_select_forward_v6<P: Pkt, M: Maps>(
 /// does not match ICMP, so the relayed error is firewall-dropped in production — a latent PMTUD gap,
 /// consistent with how all DSR-LB traffic is firewall-gated today. The fix (exempt relayed ICMP
 /// errors, or evaluate against the embedded flow) belongs to the N/S-LB edge spec.
+///
+/// `#[inline(always)]`: it reads the packet, and out-of-lining a packet-reading subprogram loses the
+/// eBPF verifier's pkt-pointer range tracking across the call boundary ("R3 pointer arithmetic on
+/// pkt_end prohibited"). The frame budget it adds to `process_uplink` is instead reclaimed by
+/// out-of-lining the packet-FREE `resolve_uplink_target` (see there).
 #[inline(always)]
 pub fn lb_select_forward_icmp_error<P: Pkt, M: Maps>(
     pkt: &P,

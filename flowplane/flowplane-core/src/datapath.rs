@@ -85,7 +85,13 @@ enum UplinkTarget {
 /// reverse CT entry directly) restores the guest's real overlay IPv4, that restored address is
 /// EXACTLY the address the guest's own self-route is keyed on — the same lookup mechanism #1
 /// already does, so there is no separate map for mechanism #2.
-#[inline(always)]
+///
+/// `#[inline(never)]`: it is packet-FREE (takes `dst` by value; only map lookups), so out-of-lining
+/// it is verifier-safe and reclaims frame budget in its callers. P2 added a packet-reading
+/// (must-stay-inlined) ICMP-error relay + VIP-DNAT arm to `process_uplink`, pushing its inlined
+/// frame over the eBPF verifier's combined-2-call stack budget; moving this (larger, pkt-free) helper
+/// out-of-line brings `uplink_rx` back under budget without a pkt-pointer-tracking regression.
+#[inline(never)]
 fn resolve_uplink_target<M: Maps>(
     maps: &M,
     vni: u32,
@@ -333,28 +339,14 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
             // F2: 1:1 floating-IP ingress DNAT. `VIPS[(vni,V)] = G` means dst V must be rewritten to
             // the backing guest G and delivered locally (VIPS is only programmed on the node that owns
             // G — the `--vip` CLI maps a node's OWN guest — so a non-local G is a misconfig -> Drop, and
-            // there is no reforward arm). A floating IP is never a nat_ip, so this precedes + skips the
-            // neighbor-NAT relay. Rebuild of the pre-P2 eBPF `vip::dnat_ingress`.
-            if let Some(g) = maps.vip_get(in_.vni, &dst) {
+            // there is no reforward arm). A floating IP is never a nat_ip, so a VIP hit SKIPS the
+            // neighbor-NAT relay. Rebuild of the pre-P2 eBPF `vip::dnat_ingress`. NOTE: compute a single
+            // `deliver_dst` and fall through to ONE `resolve_uplink_target` below — duplicating that
+            // (inlined) match in a separate VIP branch blew the eBPF verifier's combined-call stack
+            // budget ("combined stack size of 2 calls is 528"), regressing `uplink_rx` load.
+            let deliver_dst = if let Some(g) = maps.vip_get(in_.vni, &dst) {
                 vip_dnat_rewrite(pkt, inner_off, &dst, &g);
-                match resolve_uplink_target(&*maps, in_.vni, &g, in_.local) {
-                    UplinkTarget::Local {
-                        tap_ifindex,
-                        guest_mac,
-                    } => (tap_ifindex, guest_mac, false),
-                    UplinkTarget::EdgeLocalDeliver => {
-                        return UplinkOut {
-                            action: edge_local_deliver(pkt, in_.local.uplink_mac, ETH_P_IP),
-                            tunnel: None,
-                        }
-                    }
-                    UplinkTarget::Drop => {
-                        return UplinkOut {
-                            action: Action::Drop,
-                            tunnel: None,
-                        }
-                    }
-                }
+                g
             } else {
                 // Mechanism #3: neighbor-NAT relay — the inner dst may be a nat_ip owned by ANOTHER
                 // node (an owned nat_ip instead demuxes via the CT-based `nat_guest` path one level up,
@@ -368,23 +360,24 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
                         };
                     }
                 }
-                // Mechanisms #1 (normal guest delivery) + #4 (WAN-edge sentinel / genuine miss).
-                match resolve_uplink_target(&*maps, in_.vni, &dst, in_.local) {
-                    UplinkTarget::Local {
-                        tap_ifindex,
-                        guest_mac,
-                    } => (tap_ifindex, guest_mac, false),
-                    UplinkTarget::EdgeLocalDeliver => {
-                        return UplinkOut {
-                            action: edge_local_deliver(pkt, in_.local.uplink_mac, ETH_P_IP),
-                            tunnel: None,
-                        }
+                dst
+            };
+            // Mechanisms #1 (normal/DNAT'd guest delivery) + #4 (WAN-edge sentinel / genuine miss).
+            match resolve_uplink_target(&*maps, in_.vni, &deliver_dst, in_.local) {
+                UplinkTarget::Local {
+                    tap_ifindex,
+                    guest_mac,
+                } => (tap_ifindex, guest_mac, false),
+                UplinkTarget::EdgeLocalDeliver => {
+                    return UplinkOut {
+                        action: edge_local_deliver(pkt, in_.local.uplink_mac, ETH_P_IP),
+                        tunnel: None,
                     }
-                    UplinkTarget::Drop => {
-                        return UplinkOut {
-                            action: Action::Drop,
-                            tunnel: None,
-                        }
+                }
+                UplinkTarget::Drop => {
+                    return UplinkOut {
+                        action: Action::Drop,
+                        tunnel: None,
                     }
                 }
             }

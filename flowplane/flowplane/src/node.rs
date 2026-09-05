@@ -59,7 +59,10 @@ impl DataplaneNode for NodeService {
         })
         .await
         .map_err(|e| Status::internal(format!("attach task panicked: {e}")))?
-        .map_err(|e| Status::internal(e.to_string()))?;
+        // `{:#}` renders the full anyhow context chain (e.g. the underlying `ip netns exec`/`ip
+        // tuntap` stderr), not just the top `.context(...)` — the truncated top line masked the
+        // real cause of pod-tap attach failures.
+        .map_err(|e| Status::internal(format!("{e:#}")))?;
 
         Ok(Response::new(AttachInterfaceResponse {
             ifname: outcome.ifname,
@@ -83,7 +86,7 @@ impl DataplaneNode for NodeService {
         tokio::task::spawn_blocking(move || attach.detach(&id))
             .await
             .map_err(|e| Status::internal(format!("detach task panicked: {e}")))?
-            .map_err(|e| Status::internal(e.to_string()))?;
+            .map_err(|e| Status::internal(format!("{e:#}")))?;
         Ok(Response::new(DetachInterfaceResponse {}))
     }
 
