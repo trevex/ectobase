@@ -1,10 +1,14 @@
 # KubeVirt network-binding NAD for the flowplane overlay. virt-controller injects
 # this NAD into the virt-launcher pod's Multus annotation (per the `flowplane`
 # binding registered in the KubeVirt CR, see the lab KubeVirt deploy (test/lab/internal/deploy/kubevirt.go)), so Multus runs
-# our CNI IN THE LAUNCHER POD NETNS. The CNI (deviceType=pod-tap, tapName=tap0)
-# creates the tap "tap0" in that netns spliced to a root-netns veth carrying our
-# datapath; KubeVirt's domainAttachmentType:tap then opens tap0 as the VM's NIC, and
-# our DHCP/ARP/RA responders configure the guest.
+# our CNI IN THE LAUNCHER POD NETNS. The CNI (deviceType=pod-tap) creates the pod
+# link `pod<hash>` (= the CNI_IFNAME Multus assigns) and the tap `tap<hash>`
+# (= KubeVirt's GenerateTapDeviceName for a secondary network) in that netns,
+# spliced to a root-netns veth carrying our datapath; KubeVirt's
+# domainAttachmentType:tap discovers `pod<hash>` and opens `tap<hash>` as the VM's
+# NIC, and our DHCP/ARP/RA responders configure the guest. The dataplane derives
+# both names from the CNI_IFNAME, so no `tapName` is set here (a literal "tap0" is
+# the PRIMARY-only name and would not be found on this secondary network).
 apiVersion: k8s.cni.cncf.io/v1
 kind: NetworkAttachmentDefinition
 metadata:
@@ -18,8 +22,7 @@ spec:
       "plugins": [
         {
           "type": "flowplane-cni",
-          "deviceType": "pod-tap",
-          "tapName": "tap0"
+          "deviceType": "pod-tap"
         }
       ]
     }

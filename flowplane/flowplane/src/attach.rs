@@ -201,15 +201,19 @@ impl AttachState {
         }
     }
 
-    /// Pod-netns veth-peer name for the `PodTap` model — a stable short (`vp-<hash>`, 11 chars) name
-    /// distinct from both the root veth (`veth-<id>`) and the pod-netns tap (`tap-<id>`). It only
-    /// needs to be a valid, collision-free handle for the `mirred` splice inside the pod netns.
-    fn pod_peer_name(interface_id: &str) -> String {
-        let mut h: u32 = 2166136261;
-        for b in interface_id.as_bytes() {
-            h = (h ^ *b as u32).wrapping_mul(16777619);
+    /// The tap device name KubeVirt's `domainAttachmentType: tap` derives for a SECONDARY-network
+    /// binding: `GenerateTapDeviceName` returns `"tap" + podInterfaceName[3:]` (strip the 3-char
+    /// `pod`/`net` prefix, prepend `tap`), e.g. `pod9404eea3257` -> `tap9404eea3257`. virt-launcher
+    /// looks up THIS exact name in the launcher pod netns and points the domain `<target dev=…>` at it
+    /// (`managed='no'`), so the pod-netns tap MUST carry it. `tap0` — the PRIMARY-only name — is never
+    /// looked up for a secondary network and was the cause of the "Link not found" boot failure. The
+    /// pod link (`pod<hash>`, ≤14 chars) always has a 3+ char prefix; guard the tiny-name case anyway.
+    fn kubevirt_secondary_tap_name(pod_link: &str) -> String {
+        if pod_link.len() > 3 {
+            format!("tap{}", &pod_link[3..])
+        } else {
+            format!("tap-{pod_link}")
         }
-        format!("vp-{h:08x}")
     }
 
     /// A locally-administered unicast MAC (02:xx:...) derived DETERMINISTICALLY from the
@@ -269,17 +273,10 @@ impl AttachState {
         // overlay (vni, ip) via INTERFACES/INTERFACES6, so no per-endpoint /128 is allocated.
         let underlay_ipv6 = self.node_vtep;
 
-        // The tap device name (for tap / pod-tap): the caller-supplied `tap_name` if set (KubeVirt's
-        // domainAttachmentType:tap opens the primary tap by the literal name "tap0"), else derive it.
-        let tap_dev = if tap_name.is_empty() {
-            Self::tap_name(interface_id)
-        } else {
-            tap_name.to_string()
-        };
-        // Resolve the caller's device type to a concrete one before any device work. `Auto` (the
-        // default / empty device_type) picks the best available container edge: netkit L3 when the
-        // kernel supports it (probed once, cached — see `netkit_supported`), else veth. Explicit
-        // types pass through unchanged.
+        // Resolve the caller's device type to a concrete one before any device work (moved ahead of the
+        // tap-name derivation, which now depends on it). `Auto` (the default / empty device_type) picks
+        // the best available container edge: netkit L3 when the kernel supports it (probed once,
+        // cached — see `netkit_supported`), else veth. Explicit types pass through unchanged.
         let resolved = match device_type {
             DeviceType::Auto => {
                 if netkit_supported() {
@@ -293,6 +290,22 @@ impl AttachState {
         // Whether this is an L3 (netkit) edge — threaded into PORT_META.l3 so the datapath treats the
         // primary as an L3 (no-eth) device. Only netkit is L3; veth/tap/pod-tap are all L2.
         let l3 = matches!(resolved, DeviceType::Netkit);
+        // Guest-side (in-netns) device name = the pod link. For a KubeVirt VM (PodTap) this MUST equal
+        // the CNI_IFNAME Multus assigned (`pod<hash>`): virt-launcher's domainAttachmentType:tap
+        // phase-2 discovery does a netlink LinkByName on the computed `pod<hash>` (then ordinal
+        // `net<N>`) name and IGNORES the network-status metadata — so the in-pod device has to actually
+        // carry that name, else discovery yields an empty name and libvirt aborts ("Link not found").
+        // `guest_ifname` is the sanitized trailing CNI_IFNAME (the `<pod-uid>/<ifname>` id's tail).
+        let guest_ifname = Self::guest_ifname(interface_id);
+        // The tap device name. For pod-tap it MUST match what virt-launcher derives from the pod link —
+        // `GenerateTapDeviceName` = "tap" + podInterfaceName[3:] (e.g. pod9404… -> tap9404…), NOT the
+        // literal "tap0" (the PRIMARY-only name KubeVirt never looks for on a secondary network). For a
+        // root-netns Tap, honour the caller's `tap_name` if set, else derive one.
+        let tap_dev = match resolved {
+            DeviceType::PodTap => Self::kubevirt_secondary_tap_name(&guest_ifname),
+            _ if !tap_name.is_empty() => tap_name.to_string(),
+            _ => Self::tap_name(interface_id),
+        };
         // The root-netns datapath device tc_guest_tx attaches to: a veth/netkit host end (its peer
         // moves into the pod netns) or a single tap (its fd is handed to qemu). `create_interface`
         // runs the identical datapath on either — the device type only changes how it's created here.
@@ -304,16 +317,14 @@ impl AttachState {
             DeviceType::Tap => tap_dev.clone(),
             DeviceType::Auto => unreachable!("Auto resolved to a concrete device type above"),
         };
-        // Guest-side (in-netns) device name. Derived from the interface_id but sanitized to a valid
-        // Linux device name — the CNI passes `<pod-uid>/<ifname>` as the id, which is not usable as a
-        // link name. See `guest_ifname`.
-        let guest_ifname = Self::guest_ifname(interface_id);
-        // The ifname reported back to the CNI: the guest-side (in-netns) device for a container edge,
-        // or the tap the runtime points qemu at for a VM. Computed here (before device creation) so
-        // the idempotent-adopt path below can return it without touching devices.
+        // The ifname reported to the CNI. Container edge: the guest device. VM (PodTap): the POD LINK
+        // (`pod<hash>` = guest_ifname) that virt-launcher discovers — NOT the tap. (main.go's CNI
+        // Result sets the interface name from CNI_IFNAME directly; this rides the gRPC response too.)
+        // Computed before device creation so the idempotent-adopt path can return it without touching
+        // devices.
         let ifname = match resolved {
-            DeviceType::Veth | DeviceType::Netkit => guest_ifname.clone(),
-            DeviceType::Tap | DeviceType::PodTap => tap_dev.clone(),
+            DeviceType::Veth | DeviceType::Netkit | DeviceType::PodTap => guest_ifname.clone(),
+            DeviceType::Tap => tap_dev.clone(),
             DeviceType::Auto => unreachable!("Auto resolved to a concrete device type above"),
         };
         // Idempotent re-attach. A KubeVirt virt-launcher attaches the flowplane NAD TWICE — once as
@@ -362,7 +373,9 @@ impl AttachState {
                 .map(|_dev| ())
             }
             DeviceType::Tap => self.setup_tap(&device, mac),
-            DeviceType::PodTap => self.setup_pod_tap(&device, netns_path, &tap_dev, mac),
+            DeviceType::PodTap => {
+                self.setup_pod_tap(&device, netns_path, &guest_ifname, &tap_dev, mac)
+            }
             DeviceType::Auto => unreachable!("Auto resolved to a concrete device type above"),
         };
         if let Err(e) = setup {
@@ -512,29 +525,34 @@ impl AttachState {
     /// unconditionally, so all guest egress (incl. gateway-bound frames to GW_MAC) reaches
     /// `tc_guest_tx` on the root veth, and delivery reaches the VM, regardless of L2 addressing.
     /// `Control::create_interface` later attaches the datapath to `host`, unchanged from the veth path.
+    ///
+    /// `peer` and `tap` MUST be the names virt-launcher expects for a secondary-network
+    /// domainAttachmentType:tap: `peer` = the pod link `pod<hash>` (= CNI_IFNAME, so phase-2 discovery
+    /// finds it), `tap` = `tap<hash>` (= `GenerateTapDeviceName`, so `<target dev=…>` resolves). The
+    /// caller derives both (`guest_ifname` / `kubevirt_secondary_tap_name`).
     fn setup_pod_tap(
         &self,
         host: &str,
         netns_path: &str,
+        peer: &str,
         tap: &str,
         mac: [u8; 6],
     ) -> anyhow::Result<()> {
         // Idempotent on CNI-ADD retry: CRI/Multus retries the sandbox with the SAME interface_id
         // (pod UID is stable), so `host`/`peer`/`tap` names recur. A prior partial attach leaves the
-        // root-netns host veth AND the pod-netns tap0/peer behind; re-creating them then fails
+        // root-netns host veth AND the pod-netns tap/peer behind; re-creating them then fails
         // (`RTNETLINK: File exists` on the veth, or `ioctl(TUNSETIFF): Device or resource busy` on the
         // tap), and the leaked devices accumulate (ifindex climbs every retry). Delete all three up
         // front (ignore "not found") so each attempt starts clean.
-        let peer = Self::pod_peer_name(host);
         let _ = run(&["ip", "link", "del", host]);
         let _ = run_netns(netns_path, &["ip", "link", "del", tap]);
-        let _ = run_netns(netns_path, &["ip", "link", "del", &peer]);
+        let _ = run_netns(netns_path, &["ip", "link", "del", peer]);
         // veth: host end in the root netns, peer created here then moved into the pod netns.
         run(&[
-            "ip", "link", "add", host, "type", "veth", "peer", "name", &peer,
+            "ip", "link", "add", host, "type", "veth", "peer", "name", peer,
         ])
         .context("create pod-tap veth pair")?;
-        run(&["ip", "link", "set", &peer, "netns", netns_path])
+        run(&["ip", "link", "set", peer, "netns", netns_path])
             .context("move peer into pod netns")?;
 
         let mtu = self.guest_mtu.to_string();
@@ -553,28 +571,28 @@ impl AttachState {
         .context("set pod tap mac")?;
         run_netns(netns_path, &["ip", "link", "set", tap, "mtu", &mtu]).context("pod tap mtu")?;
         run_netns(netns_path, &["ip", "link", "set", tap, "up"]).context("pod tap up")?;
-        run_netns(netns_path, &["ip", "link", "set", &peer, "mtu", &mtu])
+        run_netns(netns_path, &["ip", "link", "set", peer, "mtu", &mtu])
             .context("pod peer mtu")?;
-        run_netns(netns_path, &["ip", "link", "set", &peer, "up"]).context("pod peer up")?;
+        run_netns(netns_path, &["ip", "link", "set", peer, "up"]).context("pod peer up")?;
 
         // Point-to-point splice: clsact + a matchall `mirred` redirect each way (peer<->tap). No
         // bridge → no MAC learning → no gateway-at-own-MAC hairpin.
         run_netns(netns_path, &["tc", "qdisc", "add", "dev", tap, "clsact"])
             .context("clsact on pod tap")?;
-        run_netns(netns_path, &["tc", "qdisc", "add", "dev", &peer, "clsact"])
+        run_netns(netns_path, &["tc", "qdisc", "add", "dev", peer, "clsact"])
             .context("clsact on pod peer")?;
         run_netns(
             netns_path,
             &[
                 "tc", "filter", "add", "dev", tap, "ingress", "matchall", "action", "mirred",
-                "egress", "redirect", "dev", &peer,
+                "egress", "redirect", "dev", peer,
             ],
         )
         .context("mirred tap->peer")?;
         run_netns(
             netns_path,
             &[
-                "tc", "filter", "add", "dev", &peer, "ingress", "matchall", "action", "mirred",
+                "tc", "filter", "add", "dev", peer, "ingress", "matchall", "action", "mirred",
                 "egress", "redirect", "dev", tap,
             ],
         )
@@ -582,7 +600,7 @@ impl AttachState {
 
         // Offloads off on a software-uplink fabric (same rationale as setup_veth/setup_tap).
         if self.disable_guest_csum_offload {
-            for dev in [tap, peer.as_str()] {
+            for dev in [tap, peer] {
                 let _ = run_netns(
                     netns_path,
                     &[
@@ -814,16 +832,25 @@ mod tests {
         assert!(DeviceType::PodTap.requires_mac());
     }
 
+    /// The pod-tap tap name MUST match KubeVirt's `GenerateTapDeviceName` for a secondary network:
+    /// "tap" + podInterfaceName[3:] (strip the `pod`/`net` prefix). virt-launcher looks this up by
+    /// name; a mismatch (e.g. the old literal "tap0") is the "Link not found" boot failure.
     #[test]
-    fn pod_peer_name_fits_and_distinct() {
-        let p = AttachState::pod_peer_name("a-very-long-interface-id-way-over-ifnamsiz");
-        assert!(p.len() <= 15, "{p} exceeds IFNAMSIZ");
-        assert!(p.starts_with("vp-"));
-        // The three pod-tap devices for one id must all be distinct (peer, tap, root veth).
-        let id = "v0";
-        let peer = AttachState::pod_peer_name(id);
-        assert_ne!(peer, AttachState::tap_name(id));
-        assert_ne!(peer, AttachState::host_veth_name(id));
+    fn kubevirt_secondary_tap_name_matches_virtlauncher() {
+        // pod<hash> pod link -> tap<hash> (KubeVirt strips "pod", prepends "tap").
+        assert_eq!(
+            AttachState::kubevirt_secondary_tap_name("pod9404eea3257"),
+            "tap9404eea3257"
+        );
+        // Ordinal net<N> pod link -> tap<N> (same strip-3 rule).
+        assert_eq!(AttachState::kubevirt_secondary_tap_name("net2"), "tap2");
+        // Fits IFNAMSIZ (pod<hash> is 14 chars -> tap<hash> is 14).
+        assert!(AttachState::kubevirt_secondary_tap_name("pod9404eea3257").len() <= 15);
+        // Never the primary-only "tap0", which KubeVirt does not look up on a secondary network.
+        assert_ne!(
+            AttachState::kubevirt_secondary_tap_name("pod9404eea3257"),
+            "tap0"
+        );
     }
 
     #[test]
