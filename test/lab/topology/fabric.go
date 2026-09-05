@@ -102,8 +102,13 @@ func Render(ctx context.Context, cfg *config.Config) error {
 			return fmt.Errorf("write edge%d vyos config: %w", e, err)
 		}
 	}
+	// The two edge-loopback DNS64 resolvers (== the Talos ResolverConfig/cluster-patch
+	// Resolver1/Resolver2) are also announced as RDNSS on the switches' node-facing RA
+	// (see switch.set.tmpl), so computed here ahead of both the switch and the
+	// per-cluster Talos renders below that consume them.
+	res1, res2 := fabric.EdgeLoopback+"::e1", fabric.EdgeLoopback+"::e2" // edge loopback resolvers
 	for _, s := range []int{1, 2} {
-		body, err := render.StringFS(templates.FS, "vyos/switch.set.tmpl", vyos.SwitchCtx{View: v, SW: s})
+		body, err := render.StringFS(templates.FS, "vyos/switch.set.tmpl", vyos.SwitchCtx{View: v, SW: s, Resolver1: res1, Resolver2: res2})
 		if err != nil {
 			return fmt.Errorf("render sw%d vyos config: %w", s, err)
 		}
@@ -124,7 +129,6 @@ func Render(ctx context.Context, cfg *config.Config) error {
 	if err := os.MkdirAll(filepath.Join(p.build, "talos-secrets"), 0o755); err != nil {
 		return fmt.Errorf("mkdir talos-secrets: %w", err)
 	}
-	res1, res2 := fabric.EdgeLoopback+"::e1", fabric.EdgeLoopback+"::e2" // edge loopback resolvers
 	for _, cl := range cfg.Fabric.Clusters {
 		dc := cfg.Derived.Clusters[cl.Name]
 		if err := genTalosCluster(ctx, cfg, p, cl.Name, dc, res1, res2); err != nil {

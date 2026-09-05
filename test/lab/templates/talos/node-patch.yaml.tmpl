@@ -3,6 +3,15 @@
 # (see the BGPPeerConfig doc talos.Gen appends). The KubeNetworkConfig / ResolverConfig
 # docs restate the cluster-wide values (idempotent merge) so a per-node config is
 # self-contained; KubeNodeConfig pins the kubelet nodeIP to the node underlay /64.
+#
+# machine.sysctls: accept_ra=2 on the fabric uplinks. A host with IPv6 forwarding on
+# (this node forwards for pods) normally IGNORES router advertisements entirely — RFC
+# 4861 6.2.7/Linux's accept_ra semantics only honor RA when accept_ra=2 ("always, even
+# when forwarding"), default=1 stops accepting once forwarding is enabled. Without this
+# the RA default installed at boot is flushed the moment forwarding comes up, isolating
+# the node from the fabric right after GoBGP's own routes churn. default.accept_ra
+# covers any interface clab attaches after boot; the explicit eth1/eth2 are
+# belt-and-suspenders for the two uplinks we know about up front.
 apiVersion: v1alpha1
 kind: KubeNetworkConfig
 podSubnets:
@@ -30,3 +39,7 @@ machine:
         dummy: true
         addresses:
           - {{ .Identity }}
+  sysctls:
+    net.ipv6.conf.default.accept_ra: "2"
+    net.ipv6.conf.eth1.accept_ra: "2"
+    net.ipv6.conf.eth2.accept_ra: "2"

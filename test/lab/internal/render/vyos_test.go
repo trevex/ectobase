@@ -46,6 +46,10 @@ fabric:
 		t.Fatal(err)
 	}
 
+	// The two edge-loopback DNS64 resolvers, exactly as topology/fabric.go computes
+	// them for both the switch RDNSS RA and the Talos ResolverConfig/cluster-patch.
+	res1, res2 := fabric.EdgeLoopback+"::e1", fabric.EdgeLoopback+"::e2"
+
 	cases := []struct {
 		name   string
 		tmpl   []byte
@@ -54,10 +58,10 @@ fabric:
 	}{
 		{"edge1", edgeTmpl, vyos.EdgeCtx{View: v, Edge: 1}, "testdata/golden/edge1.set"},
 		{"edge2", edgeTmpl, vyos.EdgeCtx{View: v, Edge: 2}, "testdata/golden/edge2.set"},
-		{"sw1", switchTmpl, vyos.SwitchCtx{View: v, SW: 1}, "testdata/golden/sw1.set"},
-		{"sw2", switchTmpl, vyos.SwitchCtx{View: v, SW: 2}, "testdata/golden/sw2.set"},
-		{"sw1-ceph", switchTmpl, vyos.SwitchCtx{View: vCeph, SW: 1}, "testdata/golden/sw1-ceph.set"},
-		{"sw2-ceph", switchTmpl, vyos.SwitchCtx{View: vCeph, SW: 2}, "testdata/golden/sw2-ceph.set"},
+		{"sw1", switchTmpl, vyos.SwitchCtx{View: v, SW: 1, Resolver1: res1, Resolver2: res2}, "testdata/golden/sw1.set"},
+		{"sw2", switchTmpl, vyos.SwitchCtx{View: v, SW: 2, Resolver1: res1, Resolver2: res2}, "testdata/golden/sw2.set"},
+		{"sw1-ceph", switchTmpl, vyos.SwitchCtx{View: vCeph, SW: 1, Resolver1: res1, Resolver2: res2}, "testdata/golden/sw1-ceph.set"},
+		{"sw2-ceph", switchTmpl, vyos.SwitchCtx{View: vCeph, SW: 2, Resolver1: res1, Resolver2: res2}, "testdata/golden/sw2-ceph.set"},
 	}
 
 	out := map[string]string{}
@@ -106,6 +110,19 @@ fabric:
 		}
 		if !strings.Contains(out[sw], "router-advert interface eth1 default-lifetime") {
 			t.Errorf("%s: expected an RA default-lifetime on the node-facing links", sw)
+		}
+		// eth3 is the first actual node-facing host port (eth1/eth2 are the
+		// edge-facing links); RDNSS belongs there, not on the edge-facing RA.
+		for _, want := range []string{
+			"router-advert interface eth3 name-server 'fd00:ffff::e1'",
+			"router-advert interface eth3 name-server 'fd00:ffff::e2'",
+		} {
+			if !strings.Contains(out[sw], want) {
+				t.Errorf("%s: expected %q (RDNSS on the node-facing RA)", sw, want)
+			}
+		}
+		if strings.Contains(out[sw], "router-advert interface eth1 name-server") {
+			t.Errorf("%s: RDNSS should not be on the edge-facing link (eth1)", sw)
 		}
 	}
 	// Ceph host port: CephPortSeq = TotalNodes(3)+1 = 4 → switch eth6 (mirrors the

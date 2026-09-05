@@ -13,7 +13,9 @@ configure
 # /128 to the others. No interface addresses, no originated prefix (the pure
 # /128-VTEP model, mirrors the old templates/frr/switch.conf.tmpl) — router-advert
 # on every node-facing link gives nodes a fabric RA default (replaces FRR's
-# `no ipv6 nd suppress-ra`).
+# `no ipv6 nd suppress-ra`), with RDNSS name-servers so the node's egress DNS
+# survives on the RA path alone (the two edge-loopback DNS64 resolvers — same
+# addresses as the static Talos ResolverConfig, belt-and-suspenders).
 set system host-name 'sw1'
 
 set protocols bgp system-as '65010'
@@ -41,9 +43,15 @@ set protocols bgp peer-group hosts bfd
 set protocols bgp peer-group hosts address-family ipv6-unicast as-override
 set protocols bgp neighbor eth3 interface v6only peer-group 'hosts'
 set service router-advert interface eth3 default-lifetime '1800'
+set service router-advert interface eth3 name-server 'fd00:ffff::e1'
+set service router-advert interface eth3 name-server 'fd00:ffff::e2'
 set protocols bgp neighbor eth4 interface v6only peer-group 'hosts'
 set service router-advert interface eth4 default-lifetime '1800'
+set service router-advert interface eth4 name-server 'fd00:ffff::e1'
+set service router-advert interface eth4 name-server 'fd00:ffff::e2'
 set protocols bgp neighbor eth5 interface v6only peer-group 'hosts'
 set service router-advert interface eth5 default-lifetime '1800'
+set service router-advert interface eth5 name-server 'fd00:ffff::e1'
+set service router-advert interface eth5 name-server 'fd00:ffff::e2'
 commit
 exit

@@ -24,6 +24,11 @@ type EdgeCtx struct {
 type SwitchCtx struct {
 	*fabric.View
 	SW int // 1 or 2
+	// Resolver1/2 are the two edge-loopback DNS64 resolvers (== the Talos
+	// ResolverConfig / cluster-patch .Resolver1/.Resolver2), announced as RDNSS on
+	// the switch's node-facing router-advert links so a node's egress DNS survives
+	// on the RA path alone, independent of the static ResolverConfig doc.
+	Resolver1, Resolver2 string
 }
 
 // Wrap turns a rendered body of `set ...` commands (blank lines and `#`

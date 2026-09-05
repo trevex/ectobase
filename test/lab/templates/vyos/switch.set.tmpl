@@ -10,7 +10,9 @@
 # /128 to the others. No interface addresses, no originated prefix (the pure
 # /128-VTEP model, mirrors the old templates/frr/switch.conf.tmpl) — router-advert
 # on every node-facing link gives nodes a fabric RA default (replaces FRR's
-# `no ipv6 nd suppress-ra`).
+# `no ipv6 nd suppress-ra`), with RDNSS name-servers so the node's egress DNS
+# survives on the RA path alone (the two edge-loopback DNS64 resolvers — same
+# addresses as the static Talos ResolverConfig, belt-and-suspenders).
 set system host-name 'sw{{ .SW }}'
 
 set protocols bgp system-as '{{ .ASSwitch }}'
@@ -39,6 +41,8 @@ set protocols bgp peer-group hosts address-family ipv6-unicast as-override
 {{- range $n := .Nodes }}
 set protocols bgp neighbor eth{{ add 2 $n.PortSeq }} interface v6only peer-group 'hosts'
 set service router-advert interface eth{{ add 2 $n.PortSeq }} default-lifetime '1800'
+set service router-advert interface eth{{ add 2 $n.PortSeq }} name-server '{{ $.Resolver1 }}'
+set service router-advert interface eth{{ add 2 $n.PortSeq }} name-server '{{ $.Resolver2 }}'
 {{- end }}
 {{- if .CephEnabled }}
 # Ceph storage node (same AS, dual-homed).
