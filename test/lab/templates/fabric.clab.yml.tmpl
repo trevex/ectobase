@@ -99,6 +99,18 @@ topology:
       kind: linux
       image: {{ index $.Images "talos" }}
       network-mode: none
+      # System containerd (machined's own image pulls) resolves via the container
+      # runtime's /etc/resolv.conf, which is read-only and — being fabric-only, no
+      # mgmt — would otherwise inherit the host's non-DNS64 resolvers. Point it at the
+      # two edge-loopback DNS64 resolvers so v4-only upstream registries (e.g.
+      # ghcr.io/siderolabs/kubelet) synthesize a 64:ff9b::/96 AAAA and pull over
+      # NAT64. (Talos's own machine-config nameservers can't rewrite this RO file in
+      # container mode; hostDNS on 127.0.0.53 is likewise unreachable to docker's
+      # resolv.conf generator, so set the fabric resolvers directly here.)
+      dns:
+        servers:
+          - {{ $.EdgeLoopback }}::e1
+          - {{ $.EdgeLoopback }}::e2
       env:
         PLATFORM: container
       env-files: [talos/{{ $n.Cluster }}/{{ $n.Name }}.env]
