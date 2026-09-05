@@ -170,6 +170,7 @@ renders (ebpf clab):
           - compilednics
         verbs:
           - get
+          - list
   6: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -1913,8 +1914,7 @@ renders (ebpf clab):
           "plugins": [
             {
               "type": "flowplane-cni",
-              "deviceType": "pod-tap",
-              "tapName": "tap0"
+              "deviceType": "pod-tap"
             }
           ]
         }
@@ -2321,6 +2321,7 @@ renders (ebpf hw):
           - compilednics
         verbs:
           - get
+          - list
   6: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -4061,8 +4062,7 @@ renders (ebpf hw):
           "plugins": [
             {
               "type": "flowplane-cni",
-              "deviceType": "pod-tap",
-              "tapName": "tap0"
+              "deviceType": "pod-tap"
             }
           ]
         }
@@ -4469,6 +4469,7 @@ renders (tier1 on):
           - compilednics
         verbs:
           - get
+          - list
   6: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -6212,8 +6213,7 @@ renders (tier1 on):
           "plugins": [
             {
               "type": "flowplane-cni",
-              "deviceType": "pod-tap",
-              "tapName": "tap0"
+              "deviceType": "pod-tap"
             }
           ]
         }
@@ -6657,6 +6657,7 @@ renders (tier1 watchdog):
           - compilednics
         verbs:
           - get
+          - list
   6: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -8400,8 +8401,7 @@ renders (tier1 watchdog):
           "plugins": [
             {
               "type": "flowplane-cni",
-              "deviceType": "pod-tap",
-              "tapName": "tap0"
+              "deviceType": "pod-tap"
             }
           ]
         }
@@ -8855,6 +8855,7 @@ renders with vm-materializer enabled:
           - compilednics
         verbs:
           - get
+          - list
   6: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -10598,8 +10599,7 @@ renders with vm-materializer enabled:
           "plugins": [
             {
               "type": "flowplane-cni",
-              "deviceType": "pod-tap",
-              "tapName": "tap0"
+              "deviceType": "pod-tap"
             }
           ]
         }
