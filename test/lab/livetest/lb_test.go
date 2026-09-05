@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	// The VIP is IPv6: the kind fabric's WAN-edge segment (fd00:29::/64) is v6-only, so a WAN client
+	// The VIP is IPv6: the fabric's WAN-edge segment (fd00:29::/64) is v6-only, so a WAN client
 	// can only reach a v6 VIP. Documentation prefix — not in any overlay/underlay/fabric range.
 	lbVIP        = "2001:db8:2b::1"
 	lbBackendIP4 = "10.0.0.181"
@@ -25,7 +25,7 @@ const (
 	lbBackendMAC = "52:54:00:00:2b:01"
 )
 
-// TestLbDistributeSmoke drives the N/S IPv6 LoadBalancer datapath end-to-end on the kind fabric:
+// TestLbDistributeSmoke drives the N/S IPv6 LoadBalancer datapath end-to-end on the fabric:
 // a WAN client curls an IPv6 VIP -> the flowplane wan_rx EDGE (a sidecar in the VyOS edge1 netns)
 // Maglev-selects a backend and encaps to it -> the backend node's uplink_rx (distributed-LB,
 // registered with the guest VNI) decaps + delivers to the backend with the DSR firewall-skip -> the
@@ -125,7 +125,7 @@ func mustGRPC(t *testing.T, ctx context.Context, container, method, data string)
 }
 
 // startLbBackendHTTPD starts a detached IPv6 HTTP server bound to [vip]:80 inside the guest netns
-// (the kind node has python3, no busybox/curl) that returns "hello-lb", and registers a cleanup that
+// (via the host python3 nsenter'd into the netns; no busybox/curl in scope) that returns "hello-lb", and registers a cleanup that
 // kills it. The DSR reply it emits has src=vip.
 func startLbBackendHTTPD(t *testing.T, ctx context.Context, container, netns, vip string) {
 	t.Helper()

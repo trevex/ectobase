@@ -87,7 +87,8 @@ func addFwEgressAllow(t *testing.T, ctx context.Context, container, id string) {
 }
 
 // buildStaticBin compiles a cmd/<pkg> to a CGO_ENABLED=0 static binary in t.TempDir()
-// (runs inside the Ubuntu-based kind node after docker cp). Returns the host path.
+// and returns the HOST path — the probes run as host binaries nsenter'd into the node/
+// guest netns (the Talos node is shell-less; nothing is copied into it).
 // The packet-test probes (tap-dhcp-probe, netprobe, ...) live in the sibling
 // test/e2e module, so we build ./cmd/<pkg> from there regardless of the test's CWD.
 func buildStaticBin(t *testing.T, pkg string) string {
