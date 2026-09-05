@@ -28,6 +28,8 @@ mod firewall_test;
 #[cfg(test)]
 mod flow_label_test;
 #[cfg(test)]
+mod forward_principle_test;
+#[cfg(test)]
 mod guest_tx_v6_test;
 #[cfg(test)]
 mod icmp_error_relay_test;
