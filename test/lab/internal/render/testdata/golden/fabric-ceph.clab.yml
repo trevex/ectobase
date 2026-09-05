@@ -3,14 +3,18 @@ name: ectobase
 
 mgmt:
   network: ectobase-mgmt
-  # P3b: the fabric routers (edge/switch) are detached from mgmt via a per-node
-  # network-mode override below (no eth0, no mgmt default — fabric-only). The mgmt
-  # net still exists for the registry's published host port + other infra; the Talos
-  # compute nodes keep clab-mgmt on eth0 for bring-up (talosctl needs it before Talos'
-  # embedded GoBGP converges), but the mgmt bridge hands out no IPv6 default of its
-  # own — the node's only default route is the BGP-learned ::/0 via the fabric
-  # uplinks. The host reaches the fabric via the WAN-segment jump veth (below), not a
-  # mgmt route.
+  # P3b/mgmt-drop: every fabric router (edge/switch) AND every Talos compute node is
+  # detached from mgmt via a per-node network-mode override below (no eth0 at all —
+  # fabric-only egress by construction, no mgmt default to leak past the fabric
+  # RA/BGP default). The mgmt net still exists only for the registry's published
+  # host port + other infra that isn't part of the fabric-only model. With no
+  # clab-mgmt on the Talos nodes, the harness has no mgmt-IP path to them either: the
+  # host reaches the fabric itself via the WAN-segment jump veth (below, for
+  # fabric-dependent calls like Cilium install / node-ready waits), and reaches a
+  # given node's Talos API / kubectl directly and fabric-independently via `nsenter
+  # -t <container-pid> -n` into that node's own network namespace (talos.Bootstrap,
+  # deploy.WaitAPIServer) — its /128 (and, for a single-CP cluster, the anycast API
+  # VIP) is on-link inside that netns regardless of what the fabric is doing.
 
 topology:
   defaults:
