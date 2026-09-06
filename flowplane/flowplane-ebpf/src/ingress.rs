@@ -1,8 +1,15 @@
-//! tcx ingress on the geneve `collect_md` device (`uplink_rx`) + the WAN-edge return path
-//! (`wan_rx`). The kernel decaps the outer Eth/IPv6/UDP/Geneve header before either program runs
-//! (`collect_md` metadata dst), so the packet these programs see is exactly the inner frame the
+//! tcx ingress on the geneve `collect_md` device (`uplink_dsr_note` + `uplink_rx`) + the WAN-edge
+//! return path (`wan_rx`). The kernel decaps the outer Eth/IPv6/UDP/Geneve header before any of these
+//! programs run (`collect_md` metadata dst), so the packet they see is exactly the inner frame the
 //! sender's `tc_guest_tx`/`nat64_egress`/`wan_rx`-relay handed to the geneve device — VNI comes from
 //! `get_tunnel_key` (the tunnel-key metadata the decap stamped), not from an outer address.
+//!
+//! `uplink_dsr_note` and `uplink_rx` are TWO SEPARATE tcx programs attached to the SAME geneve
+//! ingress hook (`uplink_dsr_note` ordered to run FIRST — see `flowplane::loader`/`control::bring_up`'s
+//! `LinkOrder::first()` attach), not one combined program (B7c). See `try_uplink_dsr_note`'s doc
+//! comment for why: the DSR-map note cannot live on `uplink_rx`'s own call graph without either
+//! inlining it (blows the verifier's combined-stack budget) or out-of-lining it (rejected — "R2
+//! pointer arithmetic on pkt_end prohibited").
 //!
 //! Delivery-target resolution (four mechanisms — see the P2 Task-4 design doc) is owned by the
 //! shared `flowplane_core::datapath` orchestrators (`process_uplink_rx`/`process_wan_rx`, the SAME
@@ -11,11 +18,12 @@
 //! redirect / pass-to-kernel / drop).
 
 use aya_ebpf::{
-    bindings::{TC_ACT_OK, TC_ACT_SHOT},
+    bindings::{TC_ACT_OK, TC_ACT_SHOT, TC_ACT_UNSPEC},
     helpers::{bpf_redirect, bpf_redirect_peer},
     programs::TcContext,
 };
 use flowplane_common::Local;
+use flowplane_core::conntrack::{dsr_note, dsr_note6};
 use flowplane_core::datapath::{process_uplink_rx, process_wan_rx, UplinkIn, WanRxIn};
 use flowplane_core::encap::TunnelEncap;
 use flowplane_core::err::DpErr;
@@ -35,11 +43,12 @@ use crate::tunnel::{
 /// counterpart to `get_tunnel_key` for the option TLV. `>= 0` means the option was present; a
 /// negative return (no option / not a DSR flow) yields `None`, a byte-for-byte no-op downstream.
 ///
-/// `#[inline(never)]`: shared by both `try_uplink_rx` (v4) and `v6::v6_uplink_rx`. Keeps the 24-byte
-/// option buffer off the CALLER's own BPF stack frame — same out-of-lining discipline the core
-/// `process_uplink`/`process_uplink_rx` call chain uses throughout (see
-/// `flowplane_core::datapath`'s `#[inline(never)]` helpers) to stay under the verifier's combined
-/// call-stack budget.
+/// `#[inline(never)]`: keeps the 24-byte option buffer off the CALLER's own BPF stack frame — same
+/// out-of-lining discipline the core `process_uplink`/`process_uplink_rx` call chain uses throughout
+/// (see `flowplane_core::datapath`'s `#[inline(never)]` helpers) to stay under the verifier's
+/// combined call-stack budget. B7c: the only caller is now `try_uplink_dsr_note` below — `try_uplink_rx`
+/// / `v6::v6_uplink_rx` no longer call it (the DSR option is read/noted entirely in the separate
+/// `uplink_dsr_note` tcx program, before either of those programs ever runs).
 #[inline(never)]
 pub(crate) fn resolve_dsr_opt(skb: *mut __sk_buff) -> Option<DsrOpt> {
     let mut opt_buf = [0u8; DSR_OPT_BUF_LEN as usize];
@@ -48,6 +57,67 @@ pub(crate) fn resolve_dsr_opt(skb: *mut __sk_buff) -> Option<DsrOpt> {
     } else {
         None
     }
+}
+
+/// B7c: tcx ingress "pre-program" on the geneve `collect_md` device (see `main.rs::uplink_dsr_note`),
+/// attached to run BEFORE `uplink_rx` on the SAME hook. Its ONLY job is the DSR reverse-VIP note
+/// (`flowplane_core::conntrack::dsr_note`/`dsr_note6`) that used to live inside
+/// `process_uplink`/`process_uplink_v6` (via the now-removed `UplinkIn::dsr`) — moved out because:
+///   - inlining the DSR `ct_key` build (~48B) into `uplink_rx`'s own frame pushed its combined
+///     call-stack over the eBPF verifier's 512-byte budget (`uplink_rx`(288) ->
+///     `uplink_ingress_firewall_drop`(280) -> leaf(8) = 576 > 512, and `main` was already at the
+///     ceiling on this shared path before B7 added the note);
+///   - out-of-lining the note instead (a `#[inline(never)]` helper taking `pkt` + calling into `Maps`)
+///     hit "R2 pointer arithmetic on pkt_end prohibited": a pkt-taking + map-calling subprogram can't
+///     survive a call boundary once `pkt` has crossed it.
+///
+/// A SEPARATE tcx program gets its OWN fresh 512B stack, so the inline `ct_key` is free here. This
+/// program is deliberately tiny: `get_tunnel_key` + `resolve_dsr_opt` + (on `Some`) one `dsr_note`/
+/// `dsr_note6` call — nothing else.
+///
+/// ALWAYS returns `TC_ACT_UNSPEC`: the kernel's tcx multi-prog dispatcher treats a `SchedClassifier`
+/// program's `-1` return as `TCX_NEXT` (the two share the same numeric value; see
+/// `aya_ebpf::bindings::{TC_ACT_UNSPEC, tcx_action_base::TCX_NEXT}`) — "continue to the next program
+/// in the chain" — so `uplink_rx` always runs next, unconditionally. This program NEVER drops and
+/// NEVER short-circuits delivery, even when the tunnel metadata / DSR option is absent or malformed
+/// (returning `TC_ACT_OK`/0 here instead would be `TCX_PASS` — a FINAL verdict that would skip
+/// `uplink_rx` entirely, silently breaking every uplink packet).
+///
+/// NOTE (scope, flagged for review): unlike the pre-B7c inline note, this does NOT re-run
+/// `uplink_rx`'s own LB selection to confirm this node is actually the chosen local backend before
+/// noting the VIP — it notes unconditionally whenever the DSR option is present on this node's
+/// uplink. In practice `wan_rx` only ever stamps the option on a frame it is ALSO tunnel-keying
+/// toward this exact backend's node_vtep, so arriving here with the option set already implies this
+/// node is the intended backend; this program does not (cannot, cheaply, on its own stack) re-verify
+/// that independently. See the B7c commit message.
+pub fn try_uplink_dsr_note(ctx: &TcContext) -> i32 {
+    let vni = match get_tunnel_key(ctx.skb.skb) {
+        Some((vni, _remote)) => vni,
+        None => return TC_ACT_UNSPEC,
+    };
+    let opt = match resolve_dsr_opt(ctx.skb.skb) {
+        Some(opt) => opt,
+        None => return TC_ACT_UNSPEC,
+    };
+    let data = ctx.data();
+    let data_end = ctx.data_end();
+    if data + ETH_LEN > data_end {
+        return TC_ACT_UNSPEC;
+    }
+    // Same post-decap inner-ethertype dispatch as `try_uplink_rx` (offset 12 of the inner frame).
+    let ethertype = u16::from_be(unsafe {
+        core::ptr::read_unaligned((data as *const u8).add(12) as *const u16)
+    });
+    let pkt = TcPkt { ctx };
+    let mut maps = GlobalMaps;
+    let now = crate::conntrack::now();
+    if ethertype == ETH_P_IPV6 {
+        dsr_note6(&pkt, &mut maps, ETH_LEN, vni, &opt.vip, now);
+    } else if ethertype == ETH_P_IP {
+        let vip = [opt.vip[0], opt.vip[1], opt.vip[2], opt.vip[3]];
+        dsr_note(&pkt, &mut maps, ETH_LEN, vni, &vip, now);
+    }
+    TC_ACT_UNSPEC
 }
 
 /// Execute an `Action` + optional `TunnelEncap` decision from a `flowplane_core::datapath`
@@ -118,14 +188,18 @@ pub fn try_uplink_rx(ctx: &TcContext) -> Result<i32, DpErr> {
     // `PORT_META[tap_ifindex].guest_ipv6` itself, AFTER resolving the delivery tap internally, which
     // is the only point that value is actually knowable.
     //
-    // B7: recover the DSR Geneve option the edge dispatched (if any) off the SAME tunnel metadata
-    // `get_tunnel_key` just read above.
-    let dsr = resolve_dsr_opt(ctx.skb.skb);
+    // B7c: the DSR Geneve option is no longer read/threaded here — `UplinkIn` is back to its
+    // DSR-free (main-equivalent) shape. The DSR reverse-VIP note now runs entirely in the separate
+    // `uplink_dsr_note` tcx pre-program (see `try_uplink_dsr_note` below), which runs BEFORE this
+    // program on the same geneve ingress hook: inlining the DSR note's `ct_key` build into `uplink_rx`
+    // pushed its combined call-stack over the verifier's 512-byte budget (`resolve_uplink_target`'s
+    // out-of-lining alone was not enough headroom), and out-of-lining the note itself hit "R2 pointer
+    // arithmetic on pkt_end prohibited" (a pkt-taking + map-calling subprogram can't survive a call
+    // boundary once `pkt` crosses it). A separate tcx program gets its own fresh 512B stack instead.
     let in_ = UplinkIn {
         vni,
         local,
         now: crate::conntrack::now(),
-        dsr,
     };
     let mut pkt = TcPkt { ctx };
     let mut maps = GlobalMaps;

@@ -4,7 +4,7 @@ use flowplane_core::datapath::{process_uplink_v6, UplinkIn};
 use flowplane_core::err::DpErr;
 
 use crate::coreimpl::{GlobalMaps, RawPkt};
-use crate::ingress::{execute, resolve_dsr_opt};
+use crate::ingress::execute;
 use crate::maps::LOCAL;
 use crate::tunnel::get_tunnel_key;
 
@@ -49,14 +49,14 @@ pub fn v6_uplink_rx(ctx: &TcContext) -> Result<i32, DpErr> {
         None => return Ok(TC_ACT_OK),
     };
     let local: &Local = LOCAL.get(0).ok_or(DpErr::NoRoute)?;
-    // B7: recover the DSR Geneve option the edge dispatched (if any) off the SAME tunnel metadata
-    // `get_tunnel_key` just read above — shared helper with `ingress.rs::try_uplink_rx`'s v4 mirror.
-    let dsr = resolve_dsr_opt(ctx.skb.skb);
+    // B7c: the DSR Geneve option is no longer read/threaded here — it is read + noted entirely by
+    // the separate `uplink_dsr_note` tcx program, which runs BEFORE `uplink_rx` (and thus before this
+    // tail-called v6 program) on the same geneve ingress hook. See `ingress.rs::try_uplink_dsr_note`'s
+    // doc comment.
     let in_ = UplinkIn {
         vni,
         local,
         now: crate::conntrack::now(),
-        dsr,
     };
     let mut pkt = RawPkt::new(ctx.data(), ctx.data_end());
     let mut maps = GlobalMaps;

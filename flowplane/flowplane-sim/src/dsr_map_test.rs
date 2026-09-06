@@ -1,13 +1,22 @@
-//! B7/B7b: at the backend node, `uplink_rx` (post-decap) reads the DSR Geneve option (threaded in
-//! like `vni` via `UplinkIn::dsr`) and, on a load-balanced LOCAL delivery, notes the REVERSE DSR VIP
-//! so the guest's reply is later reverse-SNAT'd src -> VIP (`ct_apply`/its v6 sibling, applied on
-//! egress in B8). The only per-connection DSR state lives here on the backend.
+//! B7/B7b/B7c: at the backend node, the DSR Geneve option (read off the tunnel metadata the same
+//! `get_tunnel_key` call recovers `vni` from) notes the REVERSE DSR VIP so the guest's reply is later
+//! reverse-SNAT'd src -> VIP (`ct_apply`/its v6 sibling, applied on egress in B8). The only
+//! per-connection DSR state lives here on the backend.
 //!
 //! B7b moved this state OUT of `CONNTRACK`/`CtEntry` (which briefly grew an `xlate_ip6` field, B5)
 //! into dedicated compact `DSR`/`DSR6` LRU maps (see `flowplane_common::DsrVip`) — the `CtEntry` copy
 //! on the stack in the pre-existing hot conntrack frames (`ct_apply`/`ct_create_default`) had pushed
 //! `uplink_rx`'s combined BPF stack over the verifier's 512-byte limit. This file was `dsr_ct_test.rs`
 //! before B7b; renamed to reflect the new map-based storage.
+//!
+//! B7c moved the note itself OFF `uplink_rx`'s call graph entirely, into a SEPARATE tcx pre-program
+//! (`uplink_dsr_note`, attached to run before `uplink_rx` on the same geneve ingress hook — see
+//! `flowplane-ebpf/src/ingress.rs::try_uplink_dsr_note`'s doc comment): even out-of-lined, the note's
+//! `ct_key` build still pushed `uplink_rx`'s combined stack over budget once inlined, and out-of-lining
+//! it as a pkt-taking subprogram hit "R2 pointer arithmetic on pkt_end prohibited". `UplinkIn` no
+//! longer carries a `dsr` field at all; `SimNode::uplink_dsr`/`uplink_v6_dsr` model the two-program
+//! sequence by calling `dsr_note`/`dsr_note6` directly (modeling `uplink_dsr_note`) BEFORE
+//! `process_uplink`/`process_uplink_v6` (modeling `uplink_rx`) — see their doc comments.
 //!
 //! # Coverage
 //!
@@ -17,8 +26,8 @@
 //!    idempotent (a second call with a different VIP never overwrites the first).
 //! 2. End-to-end through `SimNode::uplink_v6_dsr`/`uplink_dsr`: a DSR-forwarded frame hitting a LOCAL
 //!    LB-backend delivery notes the reverse DSR VIP in the map — the SAME core path
-//!    `process_uplink`/`process_uplink_v6` runs in production, driven by the eBPF `uplink_rx`'s
-//!    `get_tunnel_opt` + `dsr::decode` (see `ingress.rs`/`v6.rs`).
+//!    `process_uplink`/`process_uplink_v6` runs in production, driven (post-B7c) by the SEPARATE
+//!    `uplink_dsr_note` tcx program's `get_tunnel_opt` + `dsr::decode` (see `ingress.rs`/`v6.rs`).
 //! 3. Regression: a non-DSR (`dsr: None`) LB delivery notes NOTHING (no `DSR`/`DSR6` entry, and no
 //!    `CONNTRACK`/`CONNTRACK6` entry either) — matches the pre-existing "LB is DSR, no ct" contract
 //!    (`ns_scenario_v6_test.rs`, `v6_lb_local_backend_delivered_no_conntrack6_created`); `dsr`

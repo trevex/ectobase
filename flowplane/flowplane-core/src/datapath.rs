@@ -44,14 +44,6 @@ pub struct UplinkIn<'a> {
     pub vni: u32,
     pub local: &'a Local,
     pub now: u64,
-    /// The DSR Geneve option the edge dispatched (`flowplane_common::DsrOpt`), decoded post-decap by
-    /// the eBPF wrapper via `tunnel::get_tunnel_opt` + `flowplane_core::dsr::decode` (see `ingress.rs`/
-    /// `v6.rs`). `Some` only on a load-balanced flow's forwarded frame; `None` for every non-LB /
-    /// non-DSR uplink. On a LOCAL LB-backend delivery hit, `process_uplink`/`process_uplink_v6` use it
-    /// to note the reverse DSR VIP in the dedicated `DSR`/`DSR6` map (B7/B7b, see
-    /// `conntrack::dsr_note`/`dsr_note6`) — the guest's reply is later reverse-SNAT'd src -> VIP on
-    /// egress (B8).
-    pub dsr: Option<flowplane_common::DsrOpt>,
 }
 
 /// The outcome of reconstructing WHERE to deliver a decapped inner frame from `(vni, inner dst)` plus
@@ -325,17 +317,17 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
                     be.overlay_ip[3],
                 ];
                 match maps.ifaces_get(be.vni, &overlay4) {
+                    // B7c: the DSR reverse-VIP note (`conntrack::dsr_note`) used to live here, gated
+                    // on this exact "confirmed local LB-backend delivery" branch. It moved OUT to the
+                    // separate `uplink_dsr_note` tcx pre-program (see `flowplane-ebpf/src/ingress.rs`'s
+                    // doc comment) — inlining its `ct_key` build into this call graph pushed
+                    // `uplink_rx`'s combined stack over the verifier's 512-byte budget, and
+                    // out-of-lining it hit "R2 pointer arithmetic on pkt_end prohibited" (a pkt-taking
+                    // subprogram can't survive a call boundary once `pkt` crosses it). The new program
+                    // notes the VIP unconditionally whenever the DSR option is present, without
+                    // re-confirming local-backend delivery the way this branch does — see the B7c
+                    // commit message for the accepted trade-off.
                     Some(iv) if iv.is_local != 0 => {
-                        // B7/B7b: local LB-backend delivery confirmed — note the reverse DSR VIP in
-                        // the dedicated `DSR` map (keyed on the guest-reply tuple) when the edge
-                        // dispatched a DSR VIP option, so the guest's reply is later reverse-SNAT'd
-                        // src -> VIP (B8).
-                        if let Some(opt) = in_.dsr {
-                            let v4 = [opt.vip[0], opt.vip[1], opt.vip[2], opt.vip[3]];
-                            crate::conntrack::dsr_note(
-                                &*pkt, maps, inner_off, in_.vni, &v4, in_.now,
-                            );
-                        }
                         (iv.tap_ifindex, iv.guest_mac, true, iv.peer_capable != 0)
                     }
                     _ => {
@@ -541,16 +533,10 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
         Some(be) => {
             if be.node_vtep == in_.local.underlay_ipv6 {
                 match maps.ifaces6_get(be.vni, &be.overlay_ip) {
+                    // B7c: see the v4 `process_uplink`'s matching comment — the DSR reverse-VIP note
+                    // (`conntrack::dsr_note6`) moved out to the separate `uplink_dsr_note` tcx
+                    // pre-program (verifier stack budget).
                     Some(iv) if iv.is_local != 0 => {
-                        // B7/B7b: local LB-backend delivery confirmed — note the reverse DSR VIP in
-                        // the dedicated `DSR6` map (keyed on the guest-reply tuple) when the edge
-                        // dispatched a DSR VIP option, so the guest's reply is later reverse-SNAT'd
-                        // src -> VIP (B8).
-                        if let Some(opt) = in_.dsr {
-                            crate::conntrack::dsr_note6(
-                                &*pkt, maps, inner_off, in_.vni, &opt.vip, in_.now,
-                            );
-                        }
                         (iv.tap_ifindex, iv.guest_mac, true, iv.peer_capable != 0)
                     }
                     _ => {

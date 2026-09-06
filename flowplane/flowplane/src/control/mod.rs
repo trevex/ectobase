@@ -245,11 +245,42 @@ impl Control {
                     &uplink_pin,
                 )?;
             }
+            // B7c: `uplink_dsr_note` is a SEPARATE tcx program on the SAME geneve ingress hook,
+            // ordered to run BEFORE `uplink_rx` via `LinkOrder::first()` (see
+            // `attach_tc_pinned_at_first`'s doc comment for the ordering guarantee — it is
+            // independent of which of the two calls runs first). It does only the DSR-map note (its
+            // own fresh 512B BPF stack), then always continues to `uplink_rx`; see
+            // `flowplane-ebpf/src/ingress.rs::try_uplink_dsr_note`'s doc comment for why this is a
+            // separate program at all. Attached unconditionally on every node (harmless no-op when no
+            // DSR option is ever present, e.g. on a node that is never an LB backend).
+            let dsr_note_pin = "uplink-dsr-note-geneve".to_string();
+            let dsr_note_readopted = adopt
+                && loader::readopt_tc_link(&mut ebpf, "uplink_dsr_note", pin_dir, &dsr_note_pin)
+                    .unwrap_or_else(|e| {
+                        eprintln!("re-adopt uplink_dsr_note link failed ({e:#}); attaching fresh");
+                        loader::unpin_link(pin_dir, &dsr_note_pin);
+                        false
+                    });
+            if !dsr_note_readopted {
+                loader::attach_tc_pinned_at_first(
+                    &mut ebpf,
+                    "uplink_dsr_note",
+                    flowplane_device::GENEVE_DEV,
+                    pin_dir,
+                    &dsr_note_pin,
+                )?;
+            }
         } else {
             // pin-links off: clear any stale pin from a previous pin-on run so the fresh (unpinned)
             // attach can't hit EBUSY against a link that survived the last process.
             loader::unpin_link(pin_dir, "uplink-geneve");
             loader::attach_tc_clsact_ingress(&mut ebpf, "uplink_rx", flowplane_device::GENEVE_DEV)?;
+            loader::unpin_link(pin_dir, "uplink-dsr-note-geneve");
+            loader::attach_tc_clsact_ingress_first(
+                &mut ebpf,
+                "uplink_dsr_note",
+                flowplane_device::GENEVE_DEV,
+            )?;
         }
         // The physical uplink NIC still needs the `fq` root qdisc for EDT egress shaping (unrelated
         // to the ingress attach above — this paces the departure time the guest-egress encap arm

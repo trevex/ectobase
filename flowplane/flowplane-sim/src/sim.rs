@@ -114,10 +114,14 @@ impl SimNode {
         self.uplink_dsr(inner, vni, local, None)
     }
 
-    /// As [`SimNode::uplink`], but threads a DSR Geneve option (`UplinkIn::dsr`) into the core call —
-    /// exactly what the eBPF wrapper decodes off the tunnel metadata via `tunnel::get_tunnel_opt` +
-    /// `flowplane_core::dsr::decode` (B7). On a local LB-backend delivery hit, `process_uplink` uses
-    /// this to create the reverse DSR conntrack entry.
+    /// As [`SimNode::uplink`], but models the B7c two-tcx-program sequence for a DSR-forwarded frame:
+    /// `flowplane_core::conntrack::dsr_note` FIRST (modeling the separate `uplink_dsr_note` tcx
+    /// pre-program — see `flowplane-ebpf/src/ingress.rs::try_uplink_dsr_note`'s doc comment for why
+    /// production splits the note out into its own program), THEN
+    /// `flowplane_core::datapath::process_uplink` (modeling `uplink_rx`, now DSR-free again). The sim
+    /// cannot model an actual tcx program chain, but composing the two REAL core fns in the same
+    /// order production runs them proves the note + the (unconditional-on-any-DSR-option, not gated on
+    /// confirmed local-LB-backend delivery) semantics production has post-B7c.
     pub fn uplink_dsr(
         &mut self,
         inner: &[u8],
@@ -126,11 +130,21 @@ impl SimNode {
         dsr: Option<flowplane_common::DsrOpt>,
     ) -> SimOut {
         let mut pkt = VecPkt::from_bytes(inner);
+        if let Some(opt) = dsr {
+            let vip4 = [opt.vip[0], opt.vip[1], opt.vip[2], opt.vip[3]];
+            flowplane_core::conntrack::dsr_note(
+                &pkt,
+                &mut self.maps,
+                flowplane_core::encap::ETH_LEN,
+                vni,
+                &vip4,
+                self.now,
+            );
+        }
         let in_ = flowplane_core::datapath::UplinkIn {
             vni,
             local,
             now: self.now,
-            dsr,
         };
         let out = flowplane_core::datapath::process_uplink(&mut pkt, &mut self.maps, &in_);
         SimOut {
@@ -189,7 +203,6 @@ impl SimNode {
             vni,
             local,
             now: self.now,
-            dsr: None,
         };
         let out = flowplane_core::datapath::process_uplink_rx(&mut pkt, &mut self.maps, &in_);
         SimOut {
@@ -273,8 +286,9 @@ impl SimNode {
         self.uplink_v6_dsr(inner, vni, local, None)
     }
 
-    /// As [`SimNode::uplink_v6`], but threads a DSR Geneve option (`UplinkIn::dsr`) into the core call
-    /// — see [`SimNode::uplink_dsr`]'s doc comment (v6 mirror, B7).
+    /// As [`SimNode::uplink_v6`], but models the B7c two-tcx-program sequence — v6 mirror of
+    /// [`SimNode::uplink_dsr`]'s doc comment: `dsr_note6` first (modeling `uplink_dsr_note`), then
+    /// `process_uplink_v6` (modeling `uplink_rx`'s v6 tail-call target).
     pub fn uplink_v6_dsr(
         &mut self,
         inner: &[u8],
@@ -283,11 +297,20 @@ impl SimNode {
         dsr: Option<flowplane_common::DsrOpt>,
     ) -> SimOut {
         let mut pkt = VecPkt::from_bytes(inner);
+        if let Some(opt) = dsr {
+            flowplane_core::conntrack::dsr_note6(
+                &pkt,
+                &mut self.maps,
+                flowplane_core::encap::ETH_LEN,
+                vni,
+                &opt.vip,
+                self.now,
+            );
+        }
         let in_ = flowplane_core::datapath::UplinkIn {
             vni,
             local,
             now: self.now,
-            dsr,
         };
         let out = flowplane_core::datapath::process_uplink_v6(&mut pkt, &mut self.maps, &in_);
         SimOut {

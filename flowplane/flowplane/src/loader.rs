@@ -2,7 +2,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use aya::maps::{MapData, ProgramArray};
-use aya::programs::links::{FdLink, PinnedLink};
+use aya::programs::links::{FdLink, LinkOrder, PinnedLink};
+use aya::programs::tc::TcAttachOptions;
 use aya::programs::{tc, ProgramFd, SchedClassifier, TcAttachType};
 use aya::Ebpf;
 
@@ -111,6 +112,33 @@ pub fn attach_tc_clsact_ingress(
     prog.load().with_context(|| format!("verify {prog_name}"))?;
     prog.attach(iface, TcAttachType::Ingress)
         .with_context(|| format!("attach {prog_name} to {iface} (clsact ingress)"))?;
+    Ok(())
+}
+
+/// B7c: as [`attach_tc_clsact_ingress`], but orders the attach via `LinkOrder::first()` — the kernel
+/// tcx multi-prog `BPF_F_BEFORE` flag places this program ahead of every OTHER tcx program already
+/// on the same hook, regardless of attach call order. Used to attach `uplink_dsr_note` strictly
+/// before `uplink_rx` on the geneve device's ingress hook (see `control::Control::bring_up`): `uplink_rx`
+/// keeps attaching via the plain (default-order, i.e. `LinkOrder::last()`/append) [`attach_tc_clsact_ingress`]
+/// / [`attach_tc_pinned_at`], so the two calls are order-independent of each other — dsr_note always
+/// ends up first, uplink_rx always last, no matter which is attached first.
+pub fn attach_tc_clsact_ingress_first(
+    ebpf: &mut Ebpf,
+    prog_name: &str,
+    iface: &str,
+) -> anyhow::Result<()> {
+    let _ = tc::qdisc_add_clsact(iface);
+    let prog: &mut SchedClassifier = ebpf
+        .program_mut(prog_name)
+        .with_context(|| format!("tc program {prog_name} missing"))?
+        .try_into()?;
+    prog.load().with_context(|| format!("verify {prog_name}"))?;
+    prog.attach_with_options(
+        iface,
+        TcAttachType::Ingress,
+        TcAttachOptions::TcxOrder(LinkOrder::first()),
+    )
+    .with_context(|| format!("attach {prog_name} to {iface} (clsact ingress, first)"))?;
     Ok(())
 }
 
@@ -282,6 +310,45 @@ pub fn attach_tc_pinned_at(
     let id = p
         .attach(iface, aya::programs::TcAttachType::Ingress)
         .with_context(|| format!("attach {prog} to {iface}"))?;
+    let fd: FdLink = p.take_link(id)?.try_into().map_err(|_| {
+        anyhow::anyhow!("tc link is not a tcx FdLink (kernel < 6.6); pinning unavailable")
+    })?;
+    let path = link_pin_path(pin_dir, name);
+    std::fs::create_dir_all(path.parent().unwrap()).ok();
+    let _ = std::fs::remove_file(&path);
+    fd.pin(&path)
+        .with_context(|| format!("pin tc link {}", path.display()))?;
+    Ok(())
+}
+
+/// B7c: as [`attach_tc_pinned_at`], but orders the attach via `LinkOrder::first()` (see
+/// [`attach_tc_clsact_ingress_first`]'s doc comment for the ordering guarantee). Used for
+/// `uplink_dsr_note`'s pinned attach so a fresh attach lands strictly before `uplink_rx` on the
+/// geneve device's ingress hook.
+pub fn attach_tc_pinned_at_first(
+    ebpf: &mut Ebpf,
+    prog: &str,
+    iface: &str,
+    pin_dir: &Path,
+    name: &str,
+) -> anyhow::Result<()> {
+    // Detach any stale pinned link of this name first (avoids a doubled tcx attach).
+    let _ = std::fs::remove_file(link_pin_path(pin_dir, name));
+    let _ = aya::programs::tc::qdisc_add_clsact(iface);
+    let p: &mut SchedClassifier = ebpf
+        .program_mut(prog)
+        .with_context(|| format!("tc {prog} missing"))?
+        .try_into()?;
+    if p.fd().is_err() {
+        p.load().with_context(|| format!("load {prog}"))?;
+    }
+    let id = p
+        .attach_with_options(
+            iface,
+            aya::programs::TcAttachType::Ingress,
+            TcAttachOptions::TcxOrder(LinkOrder::first()),
+        )
+        .with_context(|| format!("attach {prog} to {iface} (first)"))?;
     let fd: FdLink = p.take_link(id)?.try_into().map_err(|_| {
         anyhow::anyhow!("tc link is not a tcx FdLink (kernel < 6.6); pinning unavailable")
     })?;
@@ -636,6 +703,7 @@ mod tests {
             .load(bytes)
             .expect("load ebpf object");
         for name in [
+            "uplink_dsr_note",
             "uplink_rx",
             "xdp_uplink_v6",
             "wan_rx",

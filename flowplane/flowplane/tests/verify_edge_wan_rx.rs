@@ -1,10 +1,14 @@
-//! Verifier load check for the tcx overlay-ingress programs (`uplink_rx`, `xdp_uplink_v6`,
-//! `wan_rx`) — P2 Task 4b converted all three from XDP to `#[classifier]` (tcx), wired `uplink_rx`
-//! to `flowplane_core::datapath::process_uplink_rx` (VNI sourced from `get_tunnel_key`, no more
-//! `UNDERLAY[outer_dst]`), and `wan_rx` to `process_wan_rx`.
+//! Verifier load check for the tcx overlay-ingress programs (`uplink_dsr_note`, `uplink_rx`,
+//! `xdp_uplink_v6`, `wan_rx`) — P2 Task 4b converted the latter three from XDP to `#[classifier]`
+//! (tcx), wired `uplink_rx` to `flowplane_core::datapath::process_uplink_rx` (VNI sourced from
+//! `get_tunnel_key`, no more `UNDERLAY[outer_dst]`), and `wan_rx` to `process_wan_rx`. B7c added
+//! `uplink_dsr_note`, a separate tcx pre-program on the SAME geneve ingress hook as `uplink_rx` (see
+//! `flowplane-ebpf/src/ingress.rs::try_uplink_dsr_note`'s doc comment) — this is the gate that proves
+//! it loads under its own stack budget AND that splitting it back out brought `uplink_rx` back under
+//! the verifier's combined-stack limit.
 //!
 //! This file used to load only `wan_rx` as XDP (checking the old devmap-redirect path, since removed
-//! along with the rest of the custom XDP encap scaffolding). It now loads all three tcx ingress
+//! along with the rest of the custom XDP encap scaffolding). It now loads all four tcx ingress
 //! programs. `anchor_uplink`/`anchor_lb`/`anchor_dnat`
 //! (Task 7) load + run `uplink_rx` too, but `BPF_PROG_TEST_RUN` can't drive it past its
 //! `get_tunnel_key` gate (see those files' module docs), so THIS is the only thing that proves
@@ -38,7 +42,7 @@ fn tcx_overlay_ingress_programs_verify() {
     // the `ingress.rs::try_nat64_ingress` peek) is the stack-depth/complexity risk this checkpoint
     // exists to catch; `xdp_uplink_v6` and `wan_rx` are simpler but must verify too (no XDP left in
     // the overlay ingress/WAN-return path).
-    for name in ["uplink_rx", "xdp_uplink_v6", "wan_rx"] {
+    for name in ["uplink_dsr_note", "uplink_rx", "xdp_uplink_v6", "wan_rx"] {
         let prog: &mut SchedClassifier = ebpf
             .program_mut(name)
             .unwrap_or_else(|| panic!("{name} program present"))

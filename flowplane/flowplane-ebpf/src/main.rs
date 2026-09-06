@@ -26,6 +26,17 @@ use aya_ebpf::{
     programs::{TcContext, XdpContext},
 };
 
+/// B7c: tcx ingress "pre-program" on the geneve `collect_md` device, attached BEFORE `uplink_rx` on
+/// the SAME hook (see `flowplane::control::Control::bring_up`'s `LinkOrder::first()` attach). Its only
+/// job is the DSR reverse-VIP map note — split out of `uplink_rx` into its OWN fresh 512B BPF stack,
+/// since neither inlining nor out-of-lining it on `uplink_rx`'s own call graph verifies (see
+/// `ingress::try_uplink_dsr_note`'s doc comment for the full story). ALWAYS returns `TC_ACT_UNSPEC`
+/// (== `TCX_NEXT` under the kernel's tcx multi-prog dispatcher) so `uplink_rx` always runs next.
+#[classifier]
+pub fn uplink_dsr_note(ctx: TcContext) -> i32 {
+    ingress::try_uplink_dsr_note(&ctx)
+}
+
 /// tcx ingress on the geneve `collect_md` device (Task 3's device — see `flowplane_device::geneve`).
 /// The kernel decaps the outer Eth/IPv6/UDP/Geneve header before this runs; VNI comes from
 /// `get_tunnel_key`, not an outer address (see `ingress.rs`'s module doc for the full design).
