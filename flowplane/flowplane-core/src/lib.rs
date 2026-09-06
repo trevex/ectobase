@@ -4,6 +4,7 @@ pub mod arp_nd;
 pub mod conntrack;
 pub mod datapath;
 pub mod dhcp;
+pub mod dsr;
 pub mod egress;
 pub mod encap;
 pub mod err;

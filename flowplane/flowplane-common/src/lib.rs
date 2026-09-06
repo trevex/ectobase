@@ -317,6 +317,20 @@ pub struct LbBackend {
     pub _pad: [u8; 3],
 }
 
+/// The DSR identity an edge dispatches to a backend: the VIP (+ service port + family) the backend
+/// must reverse-SNAT the guest reply source to. Payload of the Geneve DSR TLV (see flowplane-core::dsr).
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
+pub struct DsrOpt {
+    /// 0 = VIP is IPv4 (first 4 bytes of `vip`); 1 = IPv6 (full 16 bytes).
+    pub family: u8,
+    pub _pad: u8,
+    /// Service L4 port (host order in the struct; encode/decode handle network order).
+    pub port: u16,
+    /// The VIP, v4 left-justified in 16 bytes when `family == 0`.
+    pub vip: [u8; 16],
+}
+
 /// Conntrack key: the VNI + 5-tuple (host-order ports; for ICMP the ports hold the id).
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
@@ -387,6 +401,9 @@ pub const CT_F_FIREWALL: u8 = 0x20;
 /// and reverse conntrack entries carry this flag so the ingress reply path knows to expand
 /// IPv4 back to IPv6 when delivering the translated reply to the guest.
 pub const CT_F_NAT64: u8 = 0x40;
+/// Set on a DSR reverse conntrack entry: the guest reply's src must be rewritten to the VIP the
+/// edge dispatched (stored in `xlate_ip`/`xlate_ip6`). Distinct from `CT_F_SRC_NAT` (port-NAT).
+pub const CT_F_DSR: u8 = 0x80;
 
 // CtEntry.tcp_state values (mirror dpservice dp_flow_tcp_state)
 pub const TCP_NONE: u8 = 0;
@@ -683,6 +700,7 @@ mod user_impls {
     unsafe impl aya::Pod for LbValue {}
     unsafe impl aya::Pod for MaglevKey {}
     unsafe impl aya::Pod for LbBackend {}
+    unsafe impl aya::Pod for DsrOpt {}
     unsafe impl aya::Pod for CtKey {}
     unsafe impl aya::Pod for NatKey {}
     unsafe impl aya::Pod for NatValue {}
@@ -941,6 +959,17 @@ mod tests {
         // coupling is the eBPF reader + the control-plane writer, changed together.
         assert_eq!(core::mem::size_of::<LbBackend>(), 40);
         assert_eq!(core::mem::align_of::<LbBackend>(), 4);
+    }
+
+    #[test]
+    fn dsr_opt_layout() {
+        // family(1) + _pad(1) + port(2) + vip(16) = 20, the Geneve DSR TLV payload size the B1
+        // spike froze (24-byte buffer = 4-byte option header + this 20-byte payload).
+        assert_eq!(offset_of!(DsrOpt, family), 0);
+        assert_eq!(offset_of!(DsrOpt, port), 2);
+        assert_eq!(offset_of!(DsrOpt, vip), 4);
+        assert_eq!(size_of::<DsrOpt>(), 20);
+        assert_eq!(align_of::<DsrOpt>(), 2);
     }
 
     #[test]
