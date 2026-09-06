@@ -1,5 +1,7 @@
-use flowplane_common::PortMeta;
+use flowplane_common::{CtEntry, PortMeta, CT_REWRITE_SRC};
 use flowplane_core::encap::TunnelEncap;
+use flowplane_core::maps::Maps;
+use flowplane_core::pkt::Pkt;
 
 use crate::parse::ETH_LEN;
 
@@ -70,6 +72,15 @@ pub fn forward_decision_v4(
             }
         }
     }
+    // B8b: DSR reverse-SNAT. If this is the guest's REPLY to a DSR-load-balanced flow, the backend's
+    // ingress `uplink_dsr_note` tcx pre-program (B7c) already noted the client-visible VIP for this
+    // exact reply 5-tuple (`invert_key(ct_key(forwarded))` == `ct_key(reply)`) in the `DSR` map.
+    // Rewrite the inner src (this guest's own overlay IP) -> that VIP, mirroring
+    // `flowplane_core::datapath::process_guest_tx`'s B8 stage byte-for-byte (same `ct_key` lookup,
+    // same transient `CtEntry{ xlate_ip, flags: CT_REWRITE_SRC, .. }` fed through `ct_apply` — the
+    // SAME rewrite path the established-flow CT hit above already uses). Out-of-line so this stays a
+    // separate, sequential BPF stack frame — see `dsr_reverse_snat_v4`'s doc comment.
+    dsr_reverse_snat_v4(data, data_end, meta.vni);
     // SNAT: rewrite inner IPv4 source if a VIP mapping exists (G->V).
     crate::vip::snat_egress(data, data_end, ETH_LEN, meta.vni);
     // DNAT: rewrite inner IPv4 destination if a VIP mapping exists (V->G). This handles
@@ -151,6 +162,33 @@ pub fn forward_decision_v4(
         }
         flowplane_core::egress::Deliver::Encap { tunnel, .. } => EgressVerdict::Encap(tunnel),
         flowplane_core::egress::Deliver::Pass => EgressVerdict::Pass,
+    }
+}
+
+/// DSR reverse-SNAT (B8b) for the inner-v4 egress flow: v4 sibling of [`dsr_reverse_snat_v6`], and the
+/// real-eBPF counterpart of `flowplane_core::datapath::process_guest_tx`'s B8 stage (byte-identical
+/// rewrite: same `ct_key` lookup against the `DSR` map, same transient `CtEntry{ xlate_ip, flags:
+/// CT_REWRITE_SRC, .. }` fed through `ct_apply` — the SAME rewrite mechanism the established-flow CT
+/// hit in `forward_decision_v4` above already uses). A miss (no note, or not a DSR flow) is a no-op.
+///
+/// Out-of-line (`#[inline(never)]`) purely for STACK BUDGET: `forward_decision_v4` is
+/// `#[inline(always)]`, so its whole body (CT/firewall, VIP, route, network-NAT, deliver) is one
+/// large frame folded directly into `tc_guest_tx` — the biggest program in this crate. Making this
+/// map-lookup-plus-rewrite its OWN out-of-line subprogram keeps its locals (`CtKey`, the transient
+/// `CtEntry`) off that already-tight combined frame; the call is sequential (runs once, returns
+/// before the caller continues into VIP/route/NAT below), so it does not nest with anything else.
+#[inline(never)]
+fn dsr_reverse_snat_v4(data: usize, data_end: usize, vni: u32) {
+    let mut pkt = crate::coreimpl::RawPkt::new(data, data_end);
+    if let Some(key) = flowplane_core::conntrack::ct_key(&pkt, ETH_LEN, vni) {
+        if let Some(d) = crate::coreimpl::GlobalMaps.dsr_get(&key) {
+            let e = CtEntry {
+                xlate_ip: [d.vip[0], d.vip[1], d.vip[2], d.vip[3]],
+                flags: CT_REWRITE_SRC,
+                ..Default::default()
+            };
+            flowplane_core::conntrack::ct_apply(&mut pkt, ETH_LEN, &e);
+        }
     }
 }
 
@@ -243,16 +281,47 @@ fn route_decision_v6(data: usize, data_end: usize, meta: &PortMeta) -> EgressVer
     }
 }
 
-/// IPv6-inner egress decision (fw/ct + route6 + local/encap). Map-driven; used by tc. No NAT64
-/// (caller runs that first), no resize. Caller verified ETH_LEN+IPV6_LEN present and
+/// DSR reverse-SNAT (B8b) for the inner-v6 egress flow: v6 sibling of [`dsr_reverse_snat_v4`], and the
+/// real-eBPF counterpart of `flowplane_core::datapath::process_guest_tx_v6`'s B8 stage (byte-identical
+/// rewrite: same `ct_key6` lookup against the `DSR6` map, same address-only [`rewrite_v6_addr`] — no
+/// port/ICMP rewrite; DSR preserves the client-visible VIP:port). A miss (no note, or not a DSR flow)
+/// is a no-op.
+///
+/// Out-of-line (`#[inline(never)]`) so its `CtKey6` + rewrite locals get their OWN sequential BPF
+/// stack frame, called from the thin `forward_decision_v6` dispatcher right after `egress_fw_ct_v6`
+/// and freed via return BEFORE `route_decision_v6` runs — none of the three stages' heavy frames ever
+/// coexist on the combined 512B stack.
+#[inline(never)]
+fn dsr_reverse_snat_v6(data: usize, data_end: usize, vni: u32) {
+    let mut pkt = crate::coreimpl::RawPkt::new(data, data_end);
+    if let Some(key) = flowplane_core::conntrack::ct_key6(&pkt, ETH_LEN, vni) {
+        if let Some(d) = crate::coreimpl::GlobalMaps.dsr6_get(&key) {
+            if let Some(src) = pkt.read_array::<16>(ETH_LEN + 8) {
+                let nexthdr = pkt.read_u8(ETH_LEN + 6).unwrap_or(0);
+                flowplane_core::conntrack::rewrite_v6_addr(
+                    &mut pkt,
+                    ETH_LEN,
+                    ETH_LEN + 8,
+                    nexthdr,
+                    &src,
+                    &d.vip,
+                );
+            }
+        }
+    }
+}
+
+/// IPv6-inner egress decision (fw/ct + DSR reverse-SNAT + route6 + local/encap). Map-driven; used by
+/// tc. No NAT64 (caller runs that first), no resize. Caller verified ETH_LEN+IPV6_LEN present and
 /// ethertype==ETH_P_IPV6.
 ///
-/// THIN dispatcher: the two heavy stages — stateful firewall/conntrack (`egress_fw_ct_v6`, ~336B)
-/// and the route6 lookup + deliver (`route_decision_v6`, ~264B) — are each their own
-/// `#[inline(never)]` subprogram, called SEQUENTIALLY here. So neither of the big frames coexists
-/// with the other on the combined BPF stack (512B limit); this dispatcher itself carries no heavy
-/// locals. Established flows (CT hit) skip the firewall; new flows are egress-firewalled then
-/// tracked, then routed.
+/// THIN dispatcher: the three heavy stages — stateful firewall/conntrack (`egress_fw_ct_v6`, ~336B),
+/// DSR reverse-SNAT (`dsr_reverse_snat_v6`, small but map-lookup-bearing), and the route6 lookup +
+/// deliver (`route_decision_v6`, ~264B) — are each their own `#[inline(never)]` subprogram, called
+/// SEQUENTIALLY here. So none of the frames coexists with another on the combined BPF stack (512B
+/// limit); this dispatcher itself carries no heavy locals. Established flows (CT hit) skip the
+/// firewall; new flows are egress-firewalled then tracked, then (either way) checked for a DSR
+/// reverse-SNAT note, then routed.
 #[inline(always)]
 pub fn forward_decision_v6(
     data: usize,
@@ -265,13 +334,16 @@ pub fn forward_decision_v6(
         EgressFwCt::Drop => return EgressVerdict::Drop,
         EgressFwCt::Pass { was_new } => was_new,
     };
-    // Stage 2: route6 + deliver decision (its own sequential frame — freed before stage 3).
+    // Stage 2 (B8b): DSR reverse-SNAT — a no-op unless this reply's 5-tuple hit the `DSR6` map. Runs
+    // BEFORE the route decision so a rewritten src still routes correctly (route/deliver key off DST).
+    dsr_reverse_snat_v6(data, data_end, meta.vni);
+    // Stage 3: route6 + deliver decision (its own sequential frame — freed before stage 4).
     let verdict = route_decision_v6(data, data_end, meta);
-    // Stage 3: on a NEW flow delivered to a SAME-NODE guest, enforce the DESTINATION's ingress
+    // Stage 4: on a NEW flow delivered to a SAME-NODE guest, enforce the DESTINATION's ingress
     // firewall (uplink_rx is bypassed for same-node traffic). Deny-by-default. Mirrors the v4
     // `forward_decision_v4` Local arm. Established flows (was_new==false, incl. the pre-seeded
     // reverse entry for a same-node reply) skip this. `dest_ingress_fw_v6` is its own sequential
-    // #[inline(never)] frame so its FwRule6 locals never coexist with stage 2's route-lookup frame.
+    // #[inline(never)] frame so its FwRule6 locals never coexist with stage 3's route-lookup frame.
     if let EgressVerdict::Local { tap_ifindex, .. } = verdict {
         if was_new && dest_ingress_fw_v6(data, data_end, tap_ifindex) {
             return EgressVerdict::Drop;

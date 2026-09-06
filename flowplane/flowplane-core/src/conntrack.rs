@@ -278,12 +278,14 @@ fn csum_replace16(check: u16, old: &[u8; 16], new: &[u8; 16]) -> u16 {
 /// the address rewritten but no checksum fix-up — out of scope for B5.
 ///
 /// Used by `wan_rx`'s DSR-encode (B6, `datapath::wan_rx` rewrites the inner dst VIP -> the backend's
-/// overlay IP) and will be used again by the backend's DSR reverse-SNAT egress rewrite (B8). Kept
-/// `pub(crate)` for those direct callers — no longer shared with a `ct_apply6` (removed in B7b: DSR
-/// reverse state moved out of `CtEntry` into the dedicated `DSR`/`DSR6` maps, see [`dsr_note`]/
-/// [`dsr_note6`]).
+/// overlay IP) and by the backend's DSR reverse-SNAT egress rewrite: the core sim mirror
+/// (`datapath::process_guest_tx_v6`, B8) AND the real eBPF egress (`flowplane_ebpf::egress`'s
+/// `dsr_reverse_snat_v6`, B8b) both call this directly. `pub` (not `pub(crate)`) since B8b's caller
+/// lives in the separate `flowplane-ebpf` crate — no longer shared with a `ct_apply6` (removed in
+/// B7b: DSR reverse state moved out of `CtEntry` into the dedicated `DSR`/`DSR6` maps, see
+/// [`dsr_note`]/[`dsr_note6`]).
 #[inline(always)]
-pub(crate) fn rewrite_v6_addr<P: Pkt>(
+pub fn rewrite_v6_addr<P: Pkt>(
     pkt: &mut P,
     ip_off: usize,
     addr_off: usize,
