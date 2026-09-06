@@ -254,6 +254,91 @@ pub fn ct_apply<P: Pkt>(pkt: &mut P, ip_off: usize, e: &CtEntry) {
     }
 }
 
+/// Fold a 16-byte address change into an L4 checksum by chaining four `csum_replace4` folds over
+/// the address's 4-byte words. IPv6 has no IP-header checksum (unlike v4's `ct_apply`), so the
+/// whole address delta must be folded into the TCP/UDP checksum instead.
+#[inline(always)]
+fn csum_replace16(check: u16, old: &[u8; 16], new: &[u8; 16]) -> u16 {
+    let mut c = check;
+    let mut i = 0;
+    while i < 16 {
+        let o: [u8; 4] = [old[i], old[i + 1], old[i + 2], old[i + 3]];
+        let n: [u8; 4] = [new[i], new[i + 1], new[i + 2], new[i + 3]];
+        c = csum_replace4(c, &o, &n);
+        i += 4;
+    }
+    c
+}
+
+/// Rewrite the 16-byte IPv6 address at `addr_off` (`ip_off+8` for src, `ip_off+24` for dst) from
+/// `old` to `new`, then fold the delta into the TCP (checksum @ l4+16, within an 18-byte window
+/// mirroring `ct_apply`'s TCP window) or UDP (checksum @ l4+6, zero-stays-zero) checksum at
+/// `l4 = ip_off + 40`. Address-only: unlike `ct_apply`, no L4 port is rewritten (DSR reverse-SNAT
+/// preserves the client-visible VIP:port). Other next-headers (including ICMPv6) are left with
+/// the address rewritten but no checksum fix-up — out of scope for B5.
+///
+/// Shared by `ct_apply6`'s src/dst branches; kept `pub(crate)` so a future direct v6 rewriter can
+/// reuse it (B6).
+#[inline(always)]
+pub(crate) fn rewrite_v6_addr<P: Pkt>(
+    pkt: &mut P,
+    ip_off: usize,
+    addr_off: usize,
+    nexthdr: u8,
+    old: &[u8; 16],
+    new: &[u8; 16],
+) -> bool {
+    if !pkt.write_array(addr_off, new) {
+        return false;
+    }
+    let l4 = ip_off + 40;
+    if nexthdr == IPPROTO_TCP {
+        // TCP window = 18 bytes: checksum at [16..18] (ports untouched, so not part of the window
+        // contract here — only the checksum field needs read-modify-write).
+        if let Some(mut h) = pkt.read_array::<18>(l4) {
+            let c0 = u16::from_be_bytes([h[16], h[17]]);
+            let c1 = csum_replace16(c0, old, new);
+            h[16..18].copy_from_slice(&c1.to_be_bytes());
+            pkt.write_array(l4, &h);
+        }
+    } else if nexthdr == IPPROTO_UDP {
+        // UDP window = 8 bytes: checksum at [6..8]. A zero UDP checksum stays zero.
+        if let Some(mut h) = pkt.read_array::<8>(l4) {
+            let c0 = u16::from_be_bytes([h[6], h[7]]);
+            if c0 != 0 {
+                let c1 = csum_replace16(c0, old, new);
+                h[6..8].copy_from_slice(&c1.to_be_bytes());
+            }
+            pkt.write_array(l4, &h);
+        }
+    }
+    true
+}
+
+/// v6 sibling of `ct_apply`: rewrite the inner IPv6 src (`CT_REWRITE_SRC`) or dst
+/// (`CT_REWRITE_DST`) to `e.xlate_ip6`, folding the 16-byte address delta into the TCP/UDP
+/// checksum (IPv6 has no IP checksum). For DSR reverse-SNAT (src overlay -> VIP). Fixed 40-byte
+/// IPv6 header (no ext headers), same assumption as `ct_key6`/`lb_select_forward_v6`.
+#[inline(always)]
+pub fn ct_apply6<P: Pkt>(pkt: &mut P, ip_off: usize, e: &CtEntry) {
+    // DEFAULT (flag-less) entries carry no translation — never rewrite.
+    if e.flags & (CT_REWRITE_SRC | CT_REWRITE_DST) == 0 {
+        return;
+    }
+    let rewrite_src = e.flags & CT_REWRITE_SRC != 0;
+    let addr_off = ip_off + if rewrite_src { 8 } else { 24 };
+    let old_addr = match pkt.read_array::<16>(addr_off) {
+        Some(a) => a,
+        None => return,
+    };
+    let new_addr = e.xlate_ip6;
+    let nexthdr = match pkt.read_u8(ip_off + 6) {
+        Some(n) => n,
+        None => return,
+    };
+    rewrite_v6_addr(pkt, ip_off, addr_off, nexthdr, &old_addr, &new_addr);
+}
+
 /// Read the TCP flags byte for an IPv4 packet at `ip_off`, or None if not TCP / out of bounds /
 /// IP options present (IHL != 5). Faithful port of the eBPF `parse::tcp_flags` over `Pkt`.
 #[inline(always)]
@@ -324,6 +409,7 @@ pub fn ct_create_default<P: Pkt, M: Maps>(
         flags: CT_F_DEFAULT,
         tcp_state: tcp,
         fwall_action: 0,
+        xlate_ip6: [0; 16],
         _pad: [0; 7],
     };
     maps.conntrack_insert(key, e);
@@ -372,6 +458,7 @@ pub fn ct_create_default6<P: Pkt, M: Maps>(
         flags: CT_F_DEFAULT,
         tcp_state: tcp,
         fwall_action: 0,
+        xlate_ip6: [0; 16],
         _pad: [0; 7],
     };
     maps.conntrack6_insert(key, e);

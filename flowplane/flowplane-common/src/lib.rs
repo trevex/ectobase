@@ -386,7 +386,10 @@ pub struct CtEntry {
     pub flags: u8,
     pub tcp_state: u8,
     pub fwall_action: u8,
-    /// Trailing padding to keep the eBPF `CONNTRACK` map value ABI at 24 bytes / align 8.
+    /// v6 translate address (DSR reverse-SNAT src -> VIP). Used when a v6 flow's entry rewrites an
+    /// address; v4 flows use `xlate_ip`. Zero unless a v6 DSR (`CT_F_DSR`) entry.
+    pub xlate_ip6: [u8; 16],
+    /// Trailing padding to keep the eBPF `CONNTRACK`/`CONNTRACK6` map value ABI at 40 bytes / align 8.
     pub _pad: [u8; 7],
 }
 
@@ -981,9 +984,11 @@ mod tests {
     #[test]
     fn ct_entry_layout() {
         // 8 (last_seen) + 4 (xlate_ip) + 2 (xlate_port) + 1 (flags) + 1 (tcp_state)
-        // + 1 (fwall_action) + 7 (_pad) = 24, u64-aligned. The eBPF CONNTRACK map value ABI is
-        // UNCHANGED from before the §5a generation stamp's removal (those 4 bytes were always 0).
-        assert_eq!(core::mem::size_of::<CtEntry>(), 24);
+        // + 1 (fwall_action) + 16 (xlate_ip6) + 7 (_pad) = 40, u64-aligned. CONNTRACK/CONNTRACK6
+        // are RUNTIME LRU maps re-created on load — growing the value is NOT a wire/journal ABI
+        // concern; the coupling is the core+ebpf ct_apply twins + the aya_writer GC + this test,
+        // changed together (B5: xlate_ip6 added for v6 DSR reverse-SNAT).
+        assert_eq!(core::mem::size_of::<CtEntry>(), 40);
         // Alignment must also be unchanged (u64 = 8) — a bigger alignment would change the map layout.
         assert_eq!(core::mem::align_of::<CtEntry>(), 8);
     }

@@ -605,6 +605,7 @@ fn dnat_reverse_ct_entry() -> CtEntry {
         flags: CT_REWRITE_DST | CT_F_SRC_NAT,
         tcp_state: 0,
         fwall_action: 0,
+        xlate_ip6: [0; 16],
         _pad: [0; 7],
     }
 }
@@ -923,6 +924,7 @@ fn snat_port_exhaustion_drops_instead_of_colliding() {
             flags: CT_REWRITE_DST | CT_F_SRC_NAT,
             tcp_state: 0,
             fwall_action: 0,
+            xlate_ip6: [0; 16],
             _pad: [0; 7],
         },
     );

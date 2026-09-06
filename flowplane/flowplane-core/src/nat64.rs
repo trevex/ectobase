@@ -437,6 +437,7 @@ pub fn nat64_egress_parse<P: Pkt, M: Maps>(
                             flags: CT_REWRITE_DST | CT_F_SRC_NAT | CT_F_NAT64,
                             tcp_state: 0,
                             fwall_action: 0,
+                            xlate_ip6: [0; 16],
                             _pad: [0; 7],
                         },
                     );
@@ -458,6 +459,7 @@ pub fn nat64_egress_parse<P: Pkt, M: Maps>(
                     flags: CT_REWRITE_SRC | CT_F_SRC_NAT | CT_F_NAT64,
                     tcp_state: 0,
                     fwall_action: 0,
+                    xlate_ip6: [0; 16],
                     _pad: [0; 7],
                 },
             );

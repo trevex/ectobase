@@ -95,6 +95,7 @@ fn reverse_ct_entry() -> CtEntry {
         flags: CT_REWRITE_DST | CT_F_SRC_NAT,
         tcp_state: 0,
         fwall_action: 0,
+        xlate_ip6: [0; 16],
         _pad: [0; 7],
     }
 }

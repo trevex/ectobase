@@ -123,6 +123,7 @@ pub fn snat_egress<P: Pkt, M: Maps>(
                             flags: CT_REWRITE_DST | CT_F_SRC_NAT,
                             tcp_state: 0,
                             fwall_action: 0,
+                            xlate_ip6: [0; 16],
                             _pad: [0; 7],
                         },
                     );
@@ -146,6 +147,7 @@ pub fn snat_egress<P: Pkt, M: Maps>(
                     flags: CT_REWRITE_SRC | CT_F_SRC_NAT,
                     tcp_state: 0,
                     fwall_action: 0,
+                    xlate_ip6: [0; 16],
                     _pad: [0; 7],
                 },
             );
