@@ -1,7 +1,7 @@
 use crate::maps::Maps;
 use crate::parse::{hash5, l4_ports};
 use crate::pkt::Pkt;
-use flowplane_common::{LbKey, MaglevKey};
+use flowplane_common::{LbBackend, LbKey, MaglevKey};
 
 /// Maglev backend select for an LB service. Faithful port of eBPF `lb::lb_select_forward` (primary
 /// TCP/UDP/ICMP path). Reads the inner IPv4 at `ip_off`; returns the backend underlay /128, or None
@@ -12,7 +12,7 @@ pub fn lb_select_forward<P: Pkt, M: Maps>(
     maps: &M,
     ip_off: usize,
     vni: u32,
-) -> Option<[u8; 16]> {
+) -> Option<LbBackend> {
     let dst = pkt.read_array::<4>(ip_off + 16)?;
     let src = pkt.read_array::<4>(ip_off + 12)?;
     let (proto, sport, dport) = l4_ports(pkt, ip_off)?;
@@ -44,7 +44,7 @@ pub fn lb_select_forward_v6<P: Pkt, M: Maps>(
     maps: &M,
     ip_off: usize,
     vni: u32,
-) -> Option<[u8; 16]> {
+) -> Option<LbBackend> {
     let nexthdr = pkt.read_u8(ip_off + 6)?;
     // Only relay TCP/UDP (matching dpservice behaviour).
     if nexthdr != 6 && nexthdr != 17 {
@@ -100,7 +100,7 @@ pub fn lb_select_forward_icmp_error<P: Pkt, M: Maps>(
     maps: &M,
     ip_off: usize,
     vni: u32,
-) -> Option<[u8; 16]> {
+) -> Option<LbBackend> {
     // Outer IPv4: IHL==5, proto==ICMP(1).
     if pkt.read_u8(ip_off)? & 0x0f != 5 {
         return None;
