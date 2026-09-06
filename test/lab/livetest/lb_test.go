@@ -73,11 +73,11 @@ func TestLbDistributeSmoke(t *testing.T) {
 		_, _ = dataplaneGRPC(t, ctx, beContainer, "DetachInterface", `{"interface_id":"lbbe"}`)
 	})
 
-	// 2. Guest netns: the VIP on lo (DSR reply src=VIP) + a v6 default route toward the overlay
-	//    gateway. The node runs no --gateway6, so gateway ND isn't answered — install a static neigh
-	//    to the datapath's gateway MAC (guestGWMAC) so the DSR reply egresses into tc_guest_egress.
+	// 2. Guest netns: UNMODIFIED per the spec's Geneve-TLV DSR (§4.3) — the edge rewrites the inner
+	//    dst to the backend's OWN overlay IP (no VIP-on-loopback); the httpd binds that overlay IP.
+	//    Just a v6 default route toward the overlay gateway so the reply egresses into tc_guest_tx
+	//    (the node runs no --gateway6, so ND isn't answered — install a static neigh to guestGWMAC).
 	for _, cmd := range [][]string{
-		{"ip", "-6", "addr", "replace", lbVIP + "/128", "dev", "lo"},
 		{"ip", "-6", "neigh", "replace", "fe80::1", "lladdr", guestGWMAC, "dev", "lbbe"},
 		{"ip", "-6", "route", "replace", "default", "via", "fe80::1", "dev", "lbbe"},
 	} {
@@ -85,11 +85,14 @@ func TestLbDistributeSmoke(t *testing.T) {
 			t.Fatalf("guest setup %v: %v\n%s", cmd, err, out)
 		}
 	}
-	startLbBackendHTTPD(t, ctx, beContainer, "lbbe", lbVIP)
+	// httpd binds the backend's OVERLAY IP (what the DSR forward's rewritten inner dst is); the reply
+	// leaves src=overlay and the backend egress reverse-SNATs src -> VIP so the WAN client sees the VIP.
+	startLbBackendHTTPD(t, ctx, beContainer, "lbbe", lbBackendIP6)
 
-	// 3. Firewall: v6 ingress-allow for the VIP (DSR keeps inner dst=VIP), v6 egress-allow for the reply.
+	// 3. Firewall: v6 ingress-allow for the backend overlay IP (the DSR-rewritten inner dst), v6
+	//    egress-allow for the reply.
 	mustGRPC(t, ctx, beContainer, "AddFwRule", fmt.Sprintf(
-		`{"interface_id":"lbbe","rule_id":"lb-in","dst_cidr":%q,"proto":6,"dst_port_min":80,"dst_port_max":80,"allow":true,"egress":false}`, lbVIP+"/128"))
+		`{"interface_id":"lbbe","rule_id":"lb-in","dst_cidr":%q,"proto":6,"dst_port_min":80,"dst_port_max":80,"allow":true,"egress":false}`, lbBackendIP6+"/128"))
 	mustGRPC(t, ctx, beContainer, "AddFwRule",
 		`{"interface_id":"lbbe","rule_id":"lb-eg","src_cidr":"::/0","proto":0,"allow":true,"egress":true}`)
 	// DSR return route: the WAN-client prefix -> the edge underlay. Guest egress encaps the reply to
@@ -170,13 +173,11 @@ func TestLbDistributeSmokeV4(t *testing.T) {
 		_, _ = dataplaneGRPC(t, ctx, beContainer, "DetachInterface", `{"interface_id":"lbbe4"}`)
 	})
 
-	// 2. Guest netns: the VIP on lo (DSR reply src=VIP) + a v4 default route toward the
-	//    dpservice-style on-link overlay gateway (overlayGwV4). The datapath answers ARP
-	//    for it (unlike the v6 gateway), but a static neigh is pre-seeded anyway as
-	//    belt-and-suspenders against ARP-resolution flakiness (mirrors the v6 test's
-	//    static-ND workaround).
+	// 2. Guest netns: UNMODIFIED per the spec's Geneve-TLV DSR (§4.3) — no VIP-on-lo; the edge
+	//    rewrites the inner dst to the backend's OWN overlay IP and the httpd binds that. Just a v4
+	//    default route toward the dpservice-style on-link overlay gateway (overlayGwV4) so the reply
+	//    egresses into tc_guest_tx (static neigh pre-seeded as belt-and-suspenders).
 	for _, cmd := range [][]string{
-		{"ip", "addr", "replace", lbVIP4 + "/32", "dev", "lo"},
 		{"ip", "route", "replace", overlayGwV4 + "/32", "dev", "lbbe4"},
 		{"ip", "neigh", "replace", overlayGwV4, "lladdr", guestGWMAC, "dev", "lbbe4"},
 		{"ip", "route", "replace", "default", "via", overlayGwV4, "dev", "lbbe4"},
@@ -185,11 +186,13 @@ func TestLbDistributeSmokeV4(t *testing.T) {
 			t.Fatalf("guest setup %v: %v\n%s", cmd, err, out)
 		}
 	}
-	startLbBackendHTTPDv4(t, ctx, beContainer, "lbbe4", lbVIP4)
+	// httpd binds the backend's OVERLAY IP (the DSR-rewritten inner dst); egress reverse-SNATs src -> VIP.
+	startLbBackendHTTPDv4(t, ctx, beContainer, "lbbe4", lbBackendIP4)
 
-	// 3. Firewall: v4 ingress-allow for the VIP (DSR keeps inner dst=VIP), v4 egress-allow for the reply.
+	// 3. Firewall: v4 ingress-allow for the backend overlay IP (the DSR-rewritten inner dst), v4
+	//    egress-allow for the reply.
 	mustGRPC(t, ctx, beContainer, "AddFwRule", fmt.Sprintf(
-		`{"interface_id":"lbbe4","rule_id":"lb-in4","dst_cidr":%q,"proto":6,"dst_port_min":80,"dst_port_max":80,"allow":true,"egress":false}`, lbVIP4+"/32"))
+		`{"interface_id":"lbbe4","rule_id":"lb-in4","dst_cidr":%q,"proto":6,"dst_port_min":80,"dst_port_max":80,"allow":true,"egress":false}`, lbBackendIP4+"/32"))
 	mustGRPC(t, ctx, beContainer, "AddFwRule",
 		`{"interface_id":"lbbe4","rule_id":"lb-eg4","src_cidr":"0.0.0.0/0","proto":0,"allow":true,"egress":true}`)
 	// DSR return route: the WAN v4 client's /24 -> the edge underlay (the underlay nexthop
