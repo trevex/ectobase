@@ -66,7 +66,7 @@ topology:
         # reference `serve --role edge` invocation sets this too.
         FLOWPLANE_SKB_MODE: "1"
       cmd: >-
-        serve --addr [::]:1337 --role edge --uplink eth1 --wan-uplink eth3
+        serve --addr unix:///run/flowplane/dataplane.sock --role edge --uplink eth1 --wan-uplink eth3
         --local-underlay {{ .EdgeLoopback }}::e1 --gateway 169.254.0.1
         --gateway-mac 02:00:00:00:00:01
     edge2:

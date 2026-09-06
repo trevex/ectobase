@@ -59,7 +59,9 @@ func TestLbDistributeSmoke(t *testing.T) {
 	require.NotEmpty(t, nodes, "need a compute node for the LB backend")
 	backend := nodes[0]
 	beContainer := nodeContainer(cfg, backend)
-	edge := clab.ContainerName(cfg.Name, "edge1")
+	// The edge flowplane runs in the flowplane-edge1 sidecar (shares edge1's netns); its
+	// dataplane.sock lives in the sidecar's fs, so gRPC targets that container, not edge1.
+	edge := clab.ContainerName(cfg.Name, "flowplane-edge1")
 	wan := clab.ContainerName(cfg.Name, "wan")
 	edgeUnderlay := fabric.EdgeLoopback + "::e1" // the edge's BGP-advertised local-deliver underlay
 	edge1WanAddr := fabric.WanNet + "::11"       // edge1 on the WAN segment
@@ -151,7 +153,9 @@ func TestLbDistributeSmokeV4(t *testing.T) {
 	require.NotEmpty(t, nodes, "need a compute node for the LB backend")
 	backend := nodes[0]
 	beContainer := nodeContainer(cfg, backend)
-	edge := clab.ContainerName(cfg.Name, "edge1")
+	// The edge flowplane runs in the flowplane-edge1 sidecar (shares edge1's netns); its
+	// dataplane.sock lives in the sidecar's fs, so gRPC targets that container, not edge1.
+	edge := clab.ContainerName(cfg.Name, "flowplane-edge1")
 	wan := clab.ContainerName(cfg.Name, "wan")
 	edgeUnderlay := fabric.EdgeLoopback + "::e1"   // the edge's BGP-advertised local-deliver underlay (always v6)
 	edge1WanV4Addr := fabric.WanGwV4Base + ".11"   // edge1 on the (now dual-stack) WAN segment
@@ -263,10 +267,19 @@ class H(http.server.BaseHTTPRequestHandler):
  def log_message(s,*a): pass
 http.server.HTTPServer.address_family=socket.%s
 http.server.HTTPServer((%q,80),H).serve_forever()`, af, vip)
-	err := exec.Sudo(ctx, "docker", "exec", "-d", container, "ip", "netns", "exec", netns, "python3", "-c", py)
-	require.NoError(t, err, "start httpd in %s netns %s", container, netns)
+	// The Talos node is shell-less (no `ip`/`python3` in the container), so run the HOST python3
+	// nsenter'd into the guest netns — the same mechanism nodeNetnsProbe uses — backgrounded via
+	// Start() so it serves until Cleanup kills it.
+	pid, err := dockerPID(ctx, container)
+	require.NoError(t, err, "resolve pid for %s", container)
+	ns := fmt.Sprintf("/proc/%s/root/run/netns/%s", pid, netns)
+	cmd := exec.SudoCmd(ctx, "nsenter", "--net="+ns, "python3", "-c", py)
+	require.NoError(t, cmd.Start(), "start httpd in %s netns %s", container, netns)
 	t.Cleanup(func() {
-		_ = exec.Sudo(ctx, "docker", "exec", container, "sh", "-c", "pkill -f http.server || true")
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = exec.Sudo(ctx, "pkill", "-f", "http.server")
 	})
 }
 
