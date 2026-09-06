@@ -16,7 +16,6 @@ fn reforward_emits_tunnel_encap_toward_the_backend_at_the_same_vni() {
         TunnelEncap {
             vni,
             remote: backend,
-            dsr_vip: None
         },
         "reforward re-targets the SAME vni at the new backend underlay, no decap"
     );

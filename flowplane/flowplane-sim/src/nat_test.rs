@@ -605,7 +605,6 @@ fn dnat_reverse_ct_entry() -> CtEntry {
         flags: CT_REWRITE_DST | CT_F_SRC_NAT,
         tcp_state: 0,
         fwall_action: 0,
-        xlate_ip6: [0; 16],
         _pad: [0; 7],
     }
 }
@@ -924,7 +923,6 @@ fn snat_port_exhaustion_drops_instead_of_colliding() {
             flags: CT_REWRITE_DST | CT_F_SRC_NAT,
             tcp_state: 0,
             fwall_action: 0,
-            xlate_ip6: [0; 16],
             _pad: [0; 7],
         },
     );
@@ -1015,7 +1013,6 @@ fn uplink_relays_to_neighbor_nat_owner_when_not_locally_claimed() {
         Some(TunnelEncap {
             vni: NEIGH_VNI,
             remote: NEIGH_OWNER_UL,
-            dsr_vip: None,
         }),
         "tunnel decision must re-target the SAME vni at the neighbor-NAT owner's underlay"
     );
@@ -1055,7 +1052,6 @@ fn wan_rx_relays_to_neighbor_nat_owner_with_the_real_owner_vni() {
         Some(TunnelEncap {
             vni: NEIGH_VNI, // the OWNER's real vni — NOT 0, NOT discarded
             remote: NEIGH_OWNER_UL,
-            dsr_vip: None,
         }),
         "wan_rx relay must carry the owner's REAL vni, not a discarded one"
     );

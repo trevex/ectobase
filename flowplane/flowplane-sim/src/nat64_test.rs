@@ -212,7 +212,6 @@ fn nat64_egress_tcp_translates_snats_and_encaps() {
         Some(TunnelEncap {
             vni: VNI,
             remote: NEXTHOP_UNDERLAY,
-            dsr_vip: None
         }),
         "tunnel decision carries the route's vni + nexthop underlay"
     );
@@ -281,7 +280,6 @@ fn nat64_egress_udp_translates_and_folds_checksum() {
         Some(TunnelEncap {
             vni: VNI,
             remote: NEXTHOP_UNDERLAY,
-            dsr_vip: None
         }),
         "tunnel decision carries the route's vni + nexthop underlay"
     );
@@ -335,7 +333,6 @@ fn nat64_egress_icmpv6_echo_becomes_icmpv4_echo() {
         Some(TunnelEncap {
             vni: VNI,
             remote: NEXTHOP_UNDERLAY,
-            dsr_vip: None
         }),
         "tunnel decision carries the route's vni + nexthop underlay"
     );
@@ -434,7 +431,6 @@ fn rev_ct(orig_sport: u16) -> CtEntry {
         flags: CT_REWRITE_DST | CT_F_SRC_NAT | CT_F_NAT64,
         tcp_state: 0,
         fwall_action: 0,
-        xlate_ip6: [0; 16],
         _pad: [0; 7],
     }
 }

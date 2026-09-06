@@ -1,5 +1,5 @@
-//! Direct unit tests for `flowplane_core::conntrack::ct_apply`/`ct_apply6` — the CT-rewrite seam
-//! shared by the production eBPF path and `SimNode`.
+//! Direct unit tests for `flowplane_core::conntrack::ct_apply` — the CT-rewrite seam shared by the
+//! production eBPF path and `SimNode`.
 //!
 //! # Why these live in `flowplane-sim` rather than `flowplane-core`
 //!
@@ -10,10 +10,7 @@
 //! tests that need a concrete `Pkt` is therefore `flowplane-sim`, which already depends on
 //! `flowplane-core` and re-exports `VecPkt`.  This is consistent with `conntrack_test.rs` and
 //! `firewall_test.rs` which follow the same pattern (they call `flowplane_core` functions from
-//! `flowplane-sim` using `VecPkt`/`MemMaps`).  `flowplane-sim` also carries the `etherparse`
-//! dev-dependency `flowplane-core` deliberately does not have, so v6 DSR (`ct_apply6`) frames
-//! below are built with `etherparse::PacketBuilder` for correct initial checksums, same as the
-//! v4 frames.
+//! `flowplane-sim` using `VecPkt`/`MemMaps`).
 //!
 //! # Coverage
 //!
@@ -22,13 +19,15 @@
 //! 2. `CT_REWRITE_SRC` UDP — same for UDP; also verifies zero-csum invariant: a UDP frame
 //!    with checksum == 0 is left with checksum == 0 after the address rewrite (zero stays zero).
 //! 3. DEFAULT / flag-less entry — `ct_apply` is a no-op; every byte is unchanged.
-//! 4. `ct_apply6` (B5, v6 DSR reverse-SNAT): `CT_REWRITE_SRC` rewrites the inner v6 src to
-//!    `xlate_ip6`, folding the 16-byte address delta into the TCP/UDP checksum (IPv6 has no IP
-//!    checksum).
+//!
+//! B7b removed the v6 DSR reverse-SNAT `ct_apply6` (it existed only to rewrite `CtEntry.xlate_ip6`,
+//! which B7b also removed — DSR reverse state now lives in the dedicated `DSR`/`DSR6` maps, see
+//! `flowplane-sim/src/dsr_map_test.rs`). `ct_apply` itself is address-and-port-agnostic to that
+//! removal — it never touched `xlate_ip6` — so its v4 coverage here is unchanged.
 
 use crate::VecPkt;
-use flowplane_common::{CtEntry, CT_F_DEFAULT, CT_F_DSR, CT_REWRITE_SRC};
-use flowplane_core::conntrack::{ct_apply, ct_apply6};
+use flowplane_common::{CtEntry, CT_F_DEFAULT, CT_REWRITE_SRC};
+use flowplane_core::conntrack::ct_apply;
 
 // ─── fixed topology ───────────────────────────────────────────────────────────
 
@@ -77,7 +76,6 @@ fn snat_entry() -> CtEntry {
         flags: CT_REWRITE_SRC,
         tcp_state: 0,
         fwall_action: 0,
-        xlate_ip6: [0; 16],
         _pad: [0; 7],
     }
 }
@@ -237,7 +235,6 @@ fn ct_apply_default_entry_is_noop() {
             flags,
             tcp_state: 0,
             fwall_action: 0,
-            xlate_ip6: [0; 16],
             _pad: [0; 7],
         };
 
@@ -249,183 +246,6 @@ fn ct_apply_default_entry_is_noop() {
             raw.as_slice(),
             "flags=0x{flags:02x}: ct_apply with a DEFAULT (flag-less) entry must be a no-op; \
              every byte must be identical to the original"
-        );
-    }
-}
-
-// ─── ct_apply6 (B5, v6 DSR reverse-SNAT) tests ────────────────────────────────
-
-/// Guest overlay IPv6 source (the address DSR reverse-SNAT rewrites away).
-const OVERLAY_IP6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x61];
-/// External client IPv6 destination.
-const CLIENT_IP6: [u8; 16] = [0xfd, 0, 0, 0x29, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9];
-/// The VIP the overlay src is rewritten to (DSR reverse-SNAT translate address).
-const VIP_IP6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
-
-/// Build a bare `[IPv6(40)][TCP(20)][payload]` frame at `ip_off = 0` via `etherparse`, matching
-/// `bare_ipv4_tcp`'s pattern so `ct_apply6` gets a real initial TCP checksum to fold.
-fn bare_ipv6_tcp(src: [u8; 16], dst: [u8; 16], sport: u16, dport: u16) -> Vec<u8> {
-    use etherparse::PacketBuilder;
-    let builder = PacketBuilder::ipv6(src, dst, 64).tcp(sport, dport, 0, 1024);
-    let mut out = Vec::new();
-    builder.write(&mut out, &[0x01, 0x02, 0x03, 0x04]).unwrap();
-    out
-}
-
-/// Build a bare `[IPv6(40)][UDP(8)][payload]` frame at `ip_off = 0`.
-fn bare_ipv6_udp(src: [u8; 16], dst: [u8; 16], sport: u16, dport: u16) -> Vec<u8> {
-    use etherparse::PacketBuilder;
-    let builder = PacketBuilder::ipv6(src, dst, 64).udp(sport, dport);
-    let mut out = Vec::new();
-    builder.write(&mut out, &[0xaa, 0xbb, 0xcc, 0xdd]).unwrap();
-    out
-}
-
-/// A `CT_REWRITE_SRC | CT_F_DSR` entry: `xlate_ip6 = VIP_IP6` (reverse-SNAT src -> VIP).
-fn dsr_reverse_snat_entry() -> CtEntry {
-    CtEntry {
-        xlate_ip6: VIP_IP6,
-        flags: CT_REWRITE_SRC | CT_F_DSR,
-        ..Default::default()
-    }
-}
-
-/// `ct_apply6` on a TCP packet with `CT_REWRITE_SRC` rewrites:
-///   - inner src IP at ip_off+8 -> `VIP_IP6`
-///   - TCP checksum at l4+16 = offset 56 updated (non-zero; folds the 16-byte address delta)
-///   - dst IP at ip_off+24 is NOT changed
-///   - dst/src ports are NOT changed (DSR reverse-SNAT is address-only, no port NAT)
-#[test]
-fn ct_apply6_rewrites_src_to_xlate_ip6() {
-    let raw = bare_ipv6_tcp(OVERLAY_IP6, CLIENT_IP6, 80, 40000);
-    let mut pkt = VecPkt::from_bytes(&raw);
-    let e = dsr_reverse_snat_entry();
-
-    ct_apply6(&mut pkt, 0, &e);
-
-    let out = pkt.bytes();
-
-    // Pinned: src IP at offset 8..24 must be VIP_IP6.
-    assert_eq!(&out[8..24], &VIP_IP6, "src -> vip");
-
-    // dst IP at offset 24..40 unchanged.
-    assert_eq!(&out[24..40], &CLIENT_IP6, "dst IP must be unchanged");
-
-    // TCP ports (l4+0 = offset 40, l4+2 = offset 42) unchanged — address-only rewrite.
-    assert_eq!(
-        u16::from_be_bytes([out[40], out[41]]),
-        80,
-        "TCP src port must be unchanged by ct_apply6"
-    );
-    assert_eq!(
-        u16::from_be_bytes([out[42], out[43]]),
-        40000,
-        "TCP dst port must be unchanged by ct_apply6"
-    );
-
-    // TCP checksum at l4+16 = offset 56 — non-zero after folding the address delta.
-    let tcp_csum = u16::from_be_bytes([out[56], out[57]]);
-    assert_ne!(
-        tcp_csum, 0,
-        "TCP checksum must be non-zero after ct_apply6's address rewrite"
-    );
-
-    // Payload bytes unchanged.
-    assert_eq!(
-        &out[out.len() - 4..],
-        &[0x01, 0x02, 0x03, 0x04],
-        "payload must be unchanged"
-    );
-}
-
-/// `ct_apply6` on a UDP packet with non-zero checksum folds the address delta the same way TCP
-/// does, leaving the checksum non-zero.
-#[test]
-fn ct_apply6_rewrite_src_udp_nonzero_csum() {
-    let raw = bare_ipv6_udp(OVERLAY_IP6, CLIENT_IP6, 80, 40000);
-    let mut pkt = VecPkt::from_bytes(&raw);
-    let e = dsr_reverse_snat_entry();
-
-    ct_apply6(&mut pkt, 0, &e);
-
-    let out = pkt.bytes();
-    assert_eq!(&out[8..24], &VIP_IP6, "UDP: src -> vip");
-    assert_eq!(&out[24..40], &CLIENT_IP6, "UDP: dst IP must be unchanged");
-
-    // UDP checksum at l4+6 = offset 46 — non-zero (was non-zero before, fold keeps it non-zero).
-    let udp_csum = u16::from_be_bytes([out[46], out[47]]);
-    assert_ne!(
-        udp_csum, 0,
-        "UDP checksum must remain non-zero after ct_apply6's address fold"
-    );
-}
-
-/// `ct_apply6` on a UDP frame whose checksum field is 0 (disabled) leaves it at zero — the
-/// zero-stays-zero guard mirrors `ct_apply`'s UDP branch.
-#[test]
-fn ct_apply6_rewrite_src_udp_zero_csum_stays_zero() {
-    let mut raw = bare_ipv6_udp(OVERLAY_IP6, CLIENT_IP6, 80, 40000);
-    // UDP checksum is at l4+6 = offset 46 for a bare (no-ethernet) v6 frame.
-    raw[46] = 0;
-    raw[47] = 0;
-
-    let mut pkt = VecPkt::from_bytes(&raw);
-    ct_apply6(&mut pkt, 0, &dsr_reverse_snat_entry());
-
-    let out = pkt.bytes();
-    assert_eq!(
-        &out[8..24],
-        &VIP_IP6,
-        "zero-csum UDP: src IP still rewritten"
-    );
-    assert_eq!(
-        u16::from_be_bytes([out[46], out[47]]),
-        0,
-        "ct_apply6 UDP: a zero checksum must stay zero"
-    );
-}
-
-/// `CT_REWRITE_DST` rewrites the inner dst IP instead of src, leaving src untouched.
-#[test]
-fn ct_apply6_rewrite_dst_to_xlate_ip6() {
-    let raw = bare_ipv6_tcp(CLIENT_IP6, OVERLAY_IP6, 40000, 80);
-    let mut pkt = VecPkt::from_bytes(&raw);
-    let e = CtEntry {
-        xlate_ip6: VIP_IP6,
-        flags: flowplane_common::CT_REWRITE_DST,
-        ..Default::default()
-    };
-
-    ct_apply6(&mut pkt, 0, &e);
-
-    let out = pkt.bytes();
-    assert_eq!(
-        &out[8..24],
-        &CLIENT_IP6,
-        "CT_REWRITE_DST: src must be unchanged"
-    );
-    assert_eq!(&out[24..40], &VIP_IP6, "CT_REWRITE_DST: dst -> vip");
-}
-
-/// FLAG-LESS / DEFAULT entry is a complete no-op for `ct_apply6`, same contract as `ct_apply`.
-#[test]
-fn ct_apply6_default_entry_is_noop() {
-    let raw = bare_ipv6_tcp(OVERLAY_IP6, CLIENT_IP6, 80, 40000);
-
-    for &flags in &[0u8, CT_F_DEFAULT] {
-        let e = CtEntry {
-            xlate_ip6: VIP_IP6, // would rewrite if applied
-            flags,
-            ..Default::default()
-        };
-
-        let mut pkt = VecPkt::from_bytes(&raw);
-        ct_apply6(&mut pkt, 0, &e);
-
-        assert_eq!(
-            pkt.bytes(),
-            raw.as_slice(),
-            "flags=0x{flags:02x}: ct_apply6 with a DEFAULT (flag-less) entry must be a no-op"
         );
     }
 }

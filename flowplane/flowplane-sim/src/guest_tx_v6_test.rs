@@ -156,7 +156,6 @@ fn native_v6_egress_encaps_ipv6_in_ipv6_and_tracks_conntrack6() {
         Some(TunnelEncap {
             vni: VNI,
             remote: NEXTHOP_UNDERLAY,
-            dsr_vip: None
         }),
         "tunnel decision carries the route's vni + nexthop underlay"
     );

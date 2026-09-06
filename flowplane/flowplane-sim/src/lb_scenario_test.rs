@@ -565,15 +565,18 @@ fn ns_lb_v6_wan_rx_dsr_encode() {
         Some(TunnelEncap {
             vni: VNI,
             remote: HOSTB_UL,
-            dsr_vip: Some(DsrOpt {
-                family: 1,
-                _pad: 0,
-                port: 443,
-                vip: WAN_VIP6
-            })
         }),
-        "tunnel decision targets the Maglev-selected backend at its OWN vni, carrying a DSR option \
-         with the ORIGINAL VIP"
+        "tunnel decision targets the Maglev-selected backend at its OWN vni"
+    );
+    assert_eq!(
+        out.dsr,
+        Some(DsrOpt {
+            family: 1,
+            _pad: 0,
+            port: 443,
+            vip: WAN_VIP6
+        }),
+        "wan_rx carries a DSR option with the ORIGINAL VIP"
     );
     assert_eq!(
         &out.pkt[ETH_LEN + 24..ETH_LEN + 40],
@@ -592,6 +595,7 @@ fn ns_lb_v6_wan_rx_dsr_encode() {
     let out2 = e.wan_rx(&miss);
     assert_eq!(out2.action, Action::Pass, "non-VIP v6 dst must Pass");
     assert_eq!(out2.tunnel, None, "non-VIP dst emits no tunnel decision");
+    assert_eq!(out2.dsr, None, "non-VIP dst emits no DSR option");
     assert_eq!(out2.pkt, miss, "non-VIP frame is byte-for-byte unchanged");
 }
 
@@ -624,15 +628,18 @@ fn ns_lb_v4_wan_rx_dsr_encode() {
         Some(TunnelEncap {
             vni: VNI,
             remote: HOSTB_UL,
-            dsr_vip: Some(DsrOpt {
-                family: 0,
-                _pad: 0,
-                port: 443,
-                vip: vip16
-            })
         }),
-        "tunnel decision targets the Maglev-selected backend at its OWN vni, carrying a DSR option \
-         with the ORIGINAL v4 VIP left-justified in the 16-byte field"
+        "tunnel decision targets the Maglev-selected backend at its OWN vni"
+    );
+    assert_eq!(
+        out.dsr,
+        Some(DsrOpt {
+            family: 0,
+            _pad: 0,
+            port: 443,
+            vip: vip16
+        }),
+        "wan_rx carries a DSR option with the ORIGINAL v4 VIP left-justified in the 16-byte field"
     );
     assert_eq!(
         &out.pkt[ETH_LEN + 16..ETH_LEN + 20],

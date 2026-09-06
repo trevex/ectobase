@@ -14,7 +14,7 @@ use crate::parse::{l4_ports, l4_ports_v6, IPPROTO_ICMP, IPPROTO_TCP, IPPROTO_UDP
 use crate::pkt::Pkt;
 use flowplane_common::csum::{csum_replace2, csum_replace4};
 use flowplane_common::{
-    CtEntry, CtKey, CT_F_DEFAULT, CT_F_DSR, CT_REWRITE_DST, CT_REWRITE_SRC, TCP_ESTABLISHED,
+    CtEntry, CtKey, DsrVip, CT_F_DEFAULT, CT_REWRITE_DST, CT_REWRITE_SRC, TCP_ESTABLISHED,
     TCP_FINWAIT, TCP_NEW_SYN, TCP_NEW_SYNACK, TCP_RST_FIN,
 };
 
@@ -277,8 +277,11 @@ fn csum_replace16(check: u16, old: &[u8; 16], new: &[u8; 16]) -> u16 {
 /// preserves the client-visible VIP:port). Other next-headers (including ICMPv6) are left with
 /// the address rewritten but no checksum fix-up — out of scope for B5.
 ///
-/// Shared by `ct_apply6`'s src/dst branches; kept `pub(crate)` so a future direct v6 rewriter can
-/// reuse it (B6).
+/// Used by `wan_rx`'s DSR-encode (B6, `datapath::wan_rx` rewrites the inner dst VIP -> the backend's
+/// overlay IP) and will be used again by the backend's DSR reverse-SNAT egress rewrite (B8). Kept
+/// `pub(crate)` for those direct callers — no longer shared with a `ct_apply6` (removed in B7b: DSR
+/// reverse state moved out of `CtEntry` into the dedicated `DSR`/`DSR6` maps, see [`dsr_note`]/
+/// [`dsr_note6`]).
 #[inline(always)]
 pub(crate) fn rewrite_v6_addr<P: Pkt>(
     pkt: &mut P,
@@ -313,30 +316,6 @@ pub(crate) fn rewrite_v6_addr<P: Pkt>(
         }
     }
     true
-}
-
-/// v6 sibling of `ct_apply`: rewrite the inner IPv6 src (`CT_REWRITE_SRC`) or dst
-/// (`CT_REWRITE_DST`) to `e.xlate_ip6`, folding the 16-byte address delta into the TCP/UDP
-/// checksum (IPv6 has no IP checksum). For DSR reverse-SNAT (src overlay -> VIP). Fixed 40-byte
-/// IPv6 header (no ext headers), same assumption as `ct_key6`/`lb_select_forward_v6`.
-#[inline(always)]
-pub fn ct_apply6<P: Pkt>(pkt: &mut P, ip_off: usize, e: &CtEntry) {
-    // DEFAULT (flag-less) entries carry no translation — never rewrite.
-    if e.flags & (CT_REWRITE_SRC | CT_REWRITE_DST) == 0 {
-        return;
-    }
-    let rewrite_src = e.flags & CT_REWRITE_SRC != 0;
-    let addr_off = ip_off + if rewrite_src { 8 } else { 24 };
-    let old_addr = match pkt.read_array::<16>(addr_off) {
-        Some(a) => a,
-        None => return,
-    };
-    let new_addr = e.xlate_ip6;
-    let nexthdr = match pkt.read_u8(ip_off + 6) {
-        Some(n) => n,
-        None => return,
-    };
-    rewrite_v6_addr(pkt, ip_off, addr_off, nexthdr, &old_addr, &new_addr);
 }
 
 /// Read the TCP flags byte for an IPv4 packet at `ip_off`, or None if not TCP / out of bounds /
@@ -409,7 +388,6 @@ pub fn ct_create_default<P: Pkt, M: Maps>(
         flags: CT_F_DEFAULT,
         tcp_state: tcp,
         fwall_action: 0,
-        xlate_ip6: [0; 16],
         _pad: [0; 7],
     };
     maps.conntrack_insert(key, e);
@@ -458,7 +436,6 @@ pub fn ct_create_default6<P: Pkt, M: Maps>(
         flags: CT_F_DEFAULT,
         tcp_state: tcp,
         fwall_action: 0,
-        xlate_ip6: [0; 16],
         _pad: [0; 7],
     };
     maps.conntrack6_insert(key, e);
@@ -487,11 +464,13 @@ pub fn ct_refresh6<P: Pkt, M: Maps>(
     maps.conntrack6_insert(*key, *e);
 }
 
-/// Create the DSR reverse conntrack entry for a load-balanced v6 flow. `pkt` is the forwarded frame
-/// (src=client, dst=backend overlay). The reverse entry is keyed on the guest-reply tuple (invert of
-/// the forwarded key) and rewrites the reply src -> `vip`. Idempotent (never overwrites).
+/// Note the DSR reverse VIP for a load-balanced v6 flow, in the dedicated `DSR6` map (B7b — moved
+/// out of `CONNTRACK6`/`CtEntry` to keep the hot conntrack frames off the `uplink_rx` verifier stack
+/// budget; see [`flowplane_common::DsrVip`]). `pkt` is the forwarded frame (src=client, dst=backend
+/// overlay). The reply key is `invert_key6` of the forwarded flow's key; idempotent (never
+/// overwrites an existing note).
 #[inline(always)]
-pub fn dsr_ct_create6<P: Pkt, M: Maps>(
+pub fn dsr_note6<P: Pkt, M: Maps>(
     pkt: &P,
     maps: &mut M,
     ip_off: usize,
@@ -504,25 +483,33 @@ pub fn dsr_ct_create6<P: Pkt, M: Maps>(
         None => return,
     };
     let rev = invert_key6(&fwd);
-    if maps.conntrack6_get(&rev).is_some() {
-        return;
-    }
-    let e = CtEntry {
-        last_seen: now,
-        xlate_ip: [0; 4],
-        xlate_ip6: *vip,
-        xlate_port: 0, // DSR preserves the service port; only the address changes
-        flags: CT_REWRITE_SRC | CT_F_DSR,
-        tcp_state: 0,
-        fwall_action: 0,
-        _pad: [0; 7],
-    };
-    maps.conntrack6_insert(rev, e);
+    // pkt-free out-of-line stash: keeps the DsrVip build + map get/insert off the (packet-holding)
+    // `process_uplink_v6` frame — critical for the `uplink_rx` combined-stack verifier budget. No
+    // `pkt` crosses this call boundary, so it avoids the "R2 pointer arithmetic on pkt_end" rejection
+    // that blocks out-lining a pkt-taking + map-calling helper.
+    dsr_stash6(maps, &rev, vip, now);
 }
 
-/// v4 sibling of [`dsr_ct_create6`]: stores the VIP in `xlate_ip` (4 bytes).
+/// pkt-free DSR6 map stash (idempotent). Split out of [`dsr_note6`] as `#[inline(never)]` so its
+/// locals live in their own frame, not the packet-holding uplink frame.
+#[inline(never)]
+fn dsr_stash6<M: Maps>(maps: &mut M, rev: &flowplane_common::CtKey6, vip: &[u8; 16], now: u64) {
+    if maps.dsr6_get(rev).is_some() {
+        return;
+    }
+    maps.dsr6_insert(
+        *rev,
+        DsrVip {
+            vip: *vip,
+            last_seen: now,
+        },
+    );
+}
+
+/// v4 sibling of [`dsr_note6`]: notes the VIP (left-justified into the 16-byte `DsrVip::vip`) in the
+/// `DSR` map, keyed on `invert_key` of the forwarded flow.
 #[inline(always)]
-pub fn dsr_ct_create<P: Pkt, M: Maps>(
+pub fn dsr_note<P: Pkt, M: Maps>(
     pkt: &P,
     maps: &mut M,
     ip_off: usize,
@@ -535,18 +522,23 @@ pub fn dsr_ct_create<P: Pkt, M: Maps>(
         None => return,
     };
     let rev = invert_key(&fwd);
-    if maps.conntrack_get(&rev).is_some() {
+    let mut vip = [0u8; 16];
+    vip[..4].copy_from_slice(vip4);
+    // pkt-free out-of-line stash (see [`dsr_stash6`]): off the packet-holding `process_uplink` frame.
+    dsr_stash(maps, &rev, &vip, now);
+}
+
+/// pkt-free DSR (v4) map stash (idempotent). v4 sibling of [`dsr_stash6`].
+#[inline(never)]
+fn dsr_stash<M: Maps>(maps: &mut M, rev: &flowplane_common::CtKey, vip: &[u8; 16], now: u64) {
+    if maps.dsr_get(rev).is_some() {
         return;
     }
-    let e = CtEntry {
-        last_seen: now,
-        xlate_ip: *vip4,
-        xlate_ip6: [0; 16],
-        xlate_port: 0,
-        flags: CT_REWRITE_SRC | CT_F_DSR,
-        tcp_state: 0,
-        fwall_action: 0,
-        _pad: [0; 7],
-    };
-    maps.conntrack_insert(rev, e);
+    maps.dsr_insert(
+        *rev,
+        DsrVip {
+            vip: *vip,
+            last_seen: now,
+        },
+    );
 }

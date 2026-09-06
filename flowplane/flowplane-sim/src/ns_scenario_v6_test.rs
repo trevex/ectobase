@@ -367,7 +367,6 @@ fn v6_lb_remote_backend_reforwards_with_tunnel_decision_no_decap() {
         Some(TunnelEncap {
             vni: VNI,
             remote: REMOTE_BACKEND_UL,
-            dsr_vip: None
         }),
         "tunnel decision targets the Maglev-selected remote backend, same VNI"
     );

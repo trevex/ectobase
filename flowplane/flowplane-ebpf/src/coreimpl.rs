@@ -1,6 +1,6 @@
 use aya_ebpf::{bindings::bpf_adj_room_mode::BPF_ADJ_ROOM_MAC, programs::TcContext};
 use flowplane_common::{
-    CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceKey6,
+    CtEntry, CtKey, DhcpConfig, DhcpMeta, DsrVip, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceKey6,
     IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue,
     PortMeta, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue, VipKey,
 };
@@ -51,6 +51,22 @@ impl Maps for GlobalMaps {
     #[inline(always)]
     fn conntrack6_insert(&mut self, key: flowplane_common::CtKey6, entry: CtEntry) {
         let _ = crate::maps::CONNTRACK6.insert(&key, &entry, 0);
+    }
+    #[inline(always)]
+    fn dsr_get(&self, key: &CtKey) -> Option<DsrVip> {
+        unsafe { crate::maps::DSR.get(key).copied() }
+    }
+    #[inline(always)]
+    fn dsr_insert(&mut self, key: CtKey, v: DsrVip) {
+        let _ = crate::maps::DSR.insert(&key, &v, 0);
+    }
+    #[inline(always)]
+    fn dsr6_get(&self, key: &flowplane_common::CtKey6) -> Option<DsrVip> {
+        unsafe { crate::maps::DSR6.get(key).copied() }
+    }
+    #[inline(always)]
+    fn dsr6_insert(&mut self, key: flowplane_common::CtKey6, v: DsrVip) {
+        let _ = crate::maps::DSR6.insert(&key, &v, 0);
     }
     #[inline(always)]
     fn lb_get(&self, key: &LbKey) -> Option<LbValue> {

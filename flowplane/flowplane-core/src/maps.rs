@@ -1,7 +1,7 @@
 use flowplane_common::{
-    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceValue, LbBackend,
-    LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, PortMeta, RouteValue,
-    UnderlayValue,
+    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrVip, FwMeta, FwRule, FwRuleKey, IfaceValue,
+    LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, PortMeta,
+    RouteValue, UnderlayValue,
 };
 
 /// Typed access to the datapath maps the core needs. eBPF impl wraps the `#[map]` statics
@@ -21,6 +21,22 @@ pub trait Maps {
     }
     /// Firewall-only IPv6 conntrack insert (`CONNTRACK6` map). DEFAULT no-op — see [`Self::conntrack6_get`].
     fn conntrack6_insert(&mut self, _key: CtKey6, _entry: CtEntry) {}
+    /// DSR reverse-VIP lookup (`DSR` map, B7b): keyed on the guest-reply 5-tuple
+    /// (`invert_key(ct_key(forwarded))`). Holds the VIP a backend's reply must be reverse-SNAT'd to.
+    /// Split out of `CONNTRACK`/`CtEntry` into its own compact LRU map so the DSR-create path does
+    /// not inflate the hot conntrack stack frames (`ct_apply`/`ct_create_default`) that `uplink_rx`'s
+    /// combined BPF stack budget is sensitive to. Required (no default): v4 DSR is wired on both the
+    /// eBPF `GlobalMaps` and the sim `MemMaps`.
+    fn dsr_get(&self, key: &CtKey) -> Option<DsrVip>;
+    /// Note a DSR reverse VIP (`DSR` map insert) — see [`Self::dsr_get`].
+    fn dsr_insert(&mut self, key: CtKey, v: DsrVip);
+    /// IPv6 sibling of [`Self::dsr_get`] (`DSR6` map). DEFAULT `None`, mirroring [`Self::conntrack6_get`]
+    /// — a backend without v6 DSR wiring simply never notes/finds a reverse VIP.
+    fn dsr6_get(&self, _key: &CtKey6) -> Option<DsrVip> {
+        None
+    }
+    /// IPv6 sibling of [`Self::dsr_insert`] (`DSR6` map). DEFAULT no-op — see [`Self::dsr6_get`].
+    fn dsr6_insert(&mut self, _key: CtKey6, _v: DsrVip) {}
     /// IPv6 firewall meta (`FW_META6`). DEFAULT `None` — a backend without v6 fw wiring denies v6 by
     /// default (see [`crate::firewall::fw_eval_dir6`]). Overridden by the sim `MemMaps`; the eBPF
     /// `GlobalMaps` gains an override in a later v6-firewall task.

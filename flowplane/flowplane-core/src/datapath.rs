@@ -48,8 +48,9 @@ pub struct UplinkIn<'a> {
     /// the eBPF wrapper via `tunnel::get_tunnel_opt` + `flowplane_core::dsr::decode` (see `ingress.rs`/
     /// `v6.rs`). `Some` only on a load-balanced flow's forwarded frame; `None` for every non-LB /
     /// non-DSR uplink. On a LOCAL LB-backend delivery hit, `process_uplink`/`process_uplink_v6` use it
-    /// to create the reverse DSR conntrack entry (B7) — the guest's reply is later reverse-SNAT'd
-    /// src -> VIP by `ct_apply`/`ct_apply6` on egress (B8).
+    /// to note the reverse DSR VIP in the dedicated `DSR`/`DSR6` map (B7/B7b, see
+    /// `conntrack::dsr_note`/`dsr_note6`) — the guest's reply is later reverse-SNAT'd src -> VIP on
+    /// egress (B8).
     pub dsr: Option<flowplane_common::DsrOpt>,
 }
 
@@ -325,12 +326,13 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
                 ];
                 match maps.ifaces_get(be.vni, &overlay4) {
                     Some(iv) if iv.is_local != 0 => {
-                        // B7: local LB-backend delivery confirmed — create the reverse DSR conntrack
-                        // entry (keyed on the guest-reply tuple) when the edge dispatched a DSR VIP
-                        // option, so the guest's reply is later reverse-SNAT'd src -> VIP (B8).
+                        // B7/B7b: local LB-backend delivery confirmed — note the reverse DSR VIP in
+                        // the dedicated `DSR` map (keyed on the guest-reply tuple) when the edge
+                        // dispatched a DSR VIP option, so the guest's reply is later reverse-SNAT'd
+                        // src -> VIP (B8).
                         if let Some(opt) = in_.dsr {
                             let v4 = [opt.vip[0], opt.vip[1], opt.vip[2], opt.vip[3]];
-                            crate::conntrack::dsr_ct_create(
+                            crate::conntrack::dsr_note(
                                 &*pkt, maps, inner_off, in_.vni, &v4, in_.now,
                             );
                         }
@@ -540,11 +542,12 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
             if be.node_vtep == in_.local.underlay_ipv6 {
                 match maps.ifaces6_get(be.vni, &be.overlay_ip) {
                     Some(iv) if iv.is_local != 0 => {
-                        // B7: local LB-backend delivery confirmed — create the reverse DSR conntrack6
-                        // entry (keyed on the guest-reply tuple) when the edge dispatched a DSR VIP
-                        // option, so the guest's reply is later reverse-SNAT'd src -> VIP (B8).
+                        // B7/B7b: local LB-backend delivery confirmed — note the reverse DSR VIP in
+                        // the dedicated `DSR6` map (keyed on the guest-reply tuple) when the edge
+                        // dispatched a DSR VIP option, so the guest's reply is later reverse-SNAT'd
+                        // src -> VIP (B8).
                         if let Some(opt) = in_.dsr {
-                            crate::conntrack::dsr_ct_create6(
+                            crate::conntrack::dsr_note6(
                                 &*pkt, maps, inner_off, in_.vni, &opt.vip, in_.now,
                             );
                         }
@@ -1237,10 +1240,13 @@ pub struct WanRxIn<'a> {
 }
 
 /// Result of [`process_wan_rx`]: the delivery `Action`, plus the tunnel-key decision on a VIP hit
-/// (`None` on Pass).
+/// (`None` on Pass). `dsr` carries the Geneve DSR option to stamp alongside `tunnel` on a VIP hit
+/// (`None` for every other arm — plain reforward, neighbor-NAT relay, Pass). Lives here (not on
+/// `TunnelEncap`) because only the edge `wan_rx` encode ever sets it — see `TunnelEncap`'s doc.
 pub struct WanRxOut {
     pub action: Action,
     pub tunnel: Option<TunnelEncap>,
+    pub dsr: Option<flowplane_common::DsrOpt>,
 }
 
 /// Edge WAN-VIP ingress, in place on `pkt`. Mirrors `ingress.rs::try_wan_rx`: dispatch on ethertype
@@ -1267,7 +1273,9 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
         // rewriting) into the Geneve DSR option, then rewrite the inner dst -> the backend's OWN
         // overlay IP (the guest only accepts its own IP as a dst). The inner SRC is left as the
         // real client so the backend can key its own DSR conntrack/reverse-SNAT on the real client
-        // flow, not the VIP. `apply_encap` (B4) stamps `dsr_vip` on the wire — no eBPF change here.
+        // flow, not the VIP. The `dsr` option travels on `WanRxOut` (not `TunnelEncap` — only this
+        // edge encode ever sets it); `try_wan_rx` stamps it on the wire as a Geneve TLV AFTER the
+        // tunnel key, via `set_tunnel_opt` (B7b relocation).
         let is_v6 = ethertype == 0x86DD;
         let dsr = if is_v6 {
             let vip = match pkt.read_array::<16>(ETH_LEN + 24) {
@@ -1276,6 +1284,7 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
                     return WanRxOut {
                         action: Action::Drop,
                         tunnel: None,
+                        dsr: None,
                     }
                 }
             };
@@ -1304,6 +1313,7 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
                     return WanRxOut {
                         action: Action::Drop,
                         tunnel: None,
+                        dsr: None,
                     }
                 }
             };
@@ -1329,8 +1339,8 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
             tunnel: Some(TunnelEncap {
                 vni: backend.vni,
                 remote: backend.node_vtep,
-                dsr_vip: Some(dsr),
             }),
+            dsr: Some(dsr),
         };
     }
     // Mechanism #3 (WAN-edge sub-case): a plain WAN-arriving IPv4 packet destined to a nat_ip block
@@ -1344,8 +1354,8 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
                         tunnel: Some(TunnelEncap {
                             vni: owner_vni,
                             remote: owner_ul,
-                            dsr_vip: None,
                         }),
+                        dsr: None,
                     };
                 }
             }
@@ -1354,6 +1364,7 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
     WanRxOut {
         action: Action::Pass,
         tunnel: None,
+        dsr: None,
     }
 }
 

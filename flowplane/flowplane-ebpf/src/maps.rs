@@ -3,10 +3,10 @@ use aya_ebpf::{
     maps::{lpm_trie::LpmTrie, Array, HashMap, LruHashMap, ProgramArray},
 };
 use flowplane_common::{
-    Config, CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey,
-    IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbBackend, LbKey,
-    LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta,
-    RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue, VipKey,
+    Config, CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrVip, FwMeta, FwRule, FwRule6,
+    FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry,
+    LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry,
+    PortMeta, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue, VipKey,
 };
 
 #[map]
@@ -79,6 +79,16 @@ pub static FW_META6: HashMap<u32, FwMeta> = HashMap::pinned(1024, 0);
 /// IPv6 firewall-only conntrack (`CtKey6` -> `CtEntry`). Mirror of `CONNTRACK` (LRU, same cap/flags).
 #[map]
 pub static CONNTRACK6: LruHashMap<CtKey6, CtEntry> = LruHashMap::pinned(1_048_576, 0);
+/// DSR reverse-VIP state (B7b), keyed on the guest-reply 5-tuple (`invert_key(ct_key(forwarded))`).
+/// Split out of `CONNTRACK`/`CtEntry` into its own compact LRU map: the DSR-create call copied a
+/// (then-40-byte) `CtEntry` on the stack in `uplink_rx`'s hot conntrack frames, pushing the combined
+/// BPF stack over the 512-byte verifier limit. Sized modestly relative to `CONNTRACK` — one entry per
+/// concurrently DSR-active flow, not one per interface/route.
+#[map]
+pub static DSR: LruHashMap<CtKey, DsrVip> = LruHashMap::pinned(65536, 0);
+/// IPv6 sibling of `DSR`, keyed on `CtKey6`.
+#[map]
+pub static DSR6: LruHashMap<CtKey6, DsrVip> = LruHashMap::pinned(65536, 0);
 #[map]
 pub static UNDERLAY: HashMap<[u8; 16], UnderlayValue> = HashMap::pinned(4096, 0);
 #[map]

@@ -136,11 +136,30 @@ pub fn try_uplink_rx(ctx: &TcContext) -> Result<i32, DpErr> {
 /// WAN-edge return path (`wan_rx`, tcx on the WAN uplink): delegates entirely to
 /// `flowplane_core::datapath::process_wan_rx` (VIP ingress + the neighbor-NAT relay carrying the
 /// real owner VNI — see its doc comment for the bug that fixed), then executes its verdict.
+///
+/// On a VIP hit `out.dsr` is `Some` (B7b: the DSR option lives on `WanRxOut`, not `TunnelEncap` —
+/// only this program's edge encode ever sets it). This is handled here, NOT via the shared
+/// `execute()` (which stays key-only, shared with `try_uplink_rx`/`v6_uplink_rx` — neither of which
+/// ever carries a DSR option): stamp the tunnel key via `apply_encap`, then — only when `dsr` is
+/// present — attach the Geneve DSR TLV via `set_tunnel_opt` (MUST come after the key; see its doc),
+/// before redirecting to the geneve device.
 pub fn try_wan_rx(ctx: &TcContext) -> Result<i32, DpErr> {
     let local: &Local = LOCAL.get(0).ok_or(DpErr::NoRoute)?;
     let in_ = WanRxIn { local };
     let mut pkt = TcPkt { ctx };
     let maps = GlobalMaps;
     let out = process_wan_rx(&mut pkt, &maps, &in_);
-    Ok(execute(ctx, out.action, out.tunnel))
+    if let Some(tunnel) = out.tunnel {
+        if !apply_encap(ctx.skb.skb, &tunnel) {
+            return Ok(TC_ACT_SHOT);
+        }
+        if let Some(opt) = out.dsr {
+            let buf = flowplane_core::dsr::encode(&opt);
+            if !crate::tunnel::set_tunnel_opt(ctx.skb.skb, &buf) {
+                return Ok(TC_ACT_SHOT);
+            }
+        }
+        return Ok(tunnel_redirect());
+    }
+    Ok(execute(ctx, out.action, None))
 }

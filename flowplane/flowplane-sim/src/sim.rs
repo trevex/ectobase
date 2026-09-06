@@ -55,11 +55,14 @@ pub struct SimNode {
 /// Result of a `SimNode` datapath call: the delivery `Action`, the resulting frame bytes, and the
 /// `TunnelEncap` decision when this call's verdict was an overlay encap (`None` otherwise — Local
 /// delivery, Pass, Drop, and every decap/ingress path never set it). Since production egress no
-/// longer writes outer bytes, `tunnel` is how tests observe the encap decision.
+/// longer writes outer bytes, `tunnel` is how tests observe the encap decision. `dsr` mirrors
+/// `WanRxOut::dsr` (B7b) — populated only by [`SimNode::wan_rx`] on a VIP hit; every other
+/// entrypoint always sets it `None`.
 pub struct SimOut {
     pub action: Action,
     pub pkt: Vec<u8>,
     pub tunnel: Option<TunnelEncap>,
+    pub dsr: Option<flowplane_common::DsrOpt>,
 }
 
 impl Default for SimNode {
@@ -134,6 +137,7 @@ impl SimNode {
             action: out.action,
             pkt: pkt.into_bytes(),
             tunnel: out.tunnel,
+            dsr: None,
         }
     }
 
@@ -166,6 +170,7 @@ impl SimNode {
             action,
             pkt: pkt.into_bytes(),
             tunnel: None,
+            dsr: None,
         }
     }
 
@@ -191,6 +196,7 @@ impl SimNode {
             action: out.action,
             pkt: pkt.into_bytes(),
             tunnel: out.tunnel,
+            dsr: None,
         }
     }
 
@@ -288,6 +294,7 @@ impl SimNode {
             action: out.action,
             pkt: pkt.into_bytes(),
             tunnel: out.tunnel,
+            dsr: None,
         }
     }
 
@@ -369,6 +376,7 @@ impl SimNode {
             action: out.action,
             pkt: pkt.into_bytes(),
             tunnel: out.tunnel,
+            dsr: None,
         }
     }
 
@@ -403,6 +411,7 @@ impl SimNode {
             action: out.action,
             pkt: pkt.into_bytes(),
             tunnel: out.tunnel,
+            dsr: None,
         }
     }
 
@@ -433,6 +442,7 @@ impl SimNode {
             action: out.action,
             pkt: pkt.into_bytes(),
             tunnel: out.tunnel,
+            dsr: None,
         }
     }
 
@@ -478,6 +488,7 @@ impl SimNode {
             action,
             pkt: pkt.into_bytes(),
             tunnel: None,
+            dsr: None,
         }
     }
 
@@ -498,6 +509,7 @@ impl SimNode {
             action: out.action,
             pkt: pkt.into_bytes(),
             tunnel: out.tunnel,
+            dsr: out.dsr,
         }
     }
 
@@ -524,6 +536,7 @@ impl SimNode {
             action,
             pkt: pkt.into_bytes(),
             tunnel: None,
+            dsr: None,
         }
     }
 
@@ -551,6 +564,7 @@ impl SimNode {
             action,
             pkt: pkt.into_bytes(),
             tunnel: None,
+            dsr: None,
         }
     }
 

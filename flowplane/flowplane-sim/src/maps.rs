@@ -1,7 +1,7 @@
 use flowplane_common::{
-    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceValue, LbBackend,
-    LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta,
-    RouteValue, UnderlayValue,
+    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrVip, FwMeta, FwRule, FwRuleKey, IfaceValue,
+    LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry,
+    PortMeta, RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
 use std::collections::{HashMap, HashSet};
@@ -39,6 +39,10 @@ pub struct MemMaps {
     pub conntrack: HashMap<CtKey, CtEntry>,
     /// Firewall-only IPv6 conntrack (`CONNTRACK6` map).
     pub conntrack6: HashMap<CtKey6, CtEntry>,
+    /// DSR reverse-VIP state (`DSR` map, B7b), keyed on the guest-reply 5-tuple.
+    pub dsr: HashMap<CtKey, DsrVip>,
+    /// IPv6 sibling of `dsr` (`DSR6` map).
+    pub dsr6: HashMap<CtKey6, DsrVip>,
     pub lb: HashMap<LbKey, LbValue>,
     pub maglev: HashMap<MaglevKey, LbBackend>,
     pub nat: HashMap<NatKey, NatValue>,
@@ -146,6 +150,18 @@ impl Maps for MemMaps {
     }
     fn conntrack6_insert(&mut self, key: CtKey6, entry: CtEntry) {
         self.conntrack6.insert(key, entry);
+    }
+    fn dsr_get(&self, key: &CtKey) -> Option<DsrVip> {
+        self.dsr.get(key).copied()
+    }
+    fn dsr_insert(&mut self, key: CtKey, v: DsrVip) {
+        self.dsr.insert(key, v);
+    }
+    fn dsr6_get(&self, key: &CtKey6) -> Option<DsrVip> {
+        self.dsr6.get(key).copied()
+    }
+    fn dsr6_insert(&mut self, key: CtKey6, v: DsrVip) {
+        self.dsr6.insert(key, v);
     }
     fn fw_meta6(&self, ifindex: u32) -> Option<FwMeta> {
         self.fw_meta6.get(&ifindex).copied()

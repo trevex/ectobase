@@ -331,6 +331,21 @@ pub struct DsrOpt {
     pub vip: [u8; 16],
 }
 
+/// DSR reverse-SNAT state (B7b): the VIP a backend must rewrite a guest reply's source address to,
+/// stored in the dedicated `DSR`/`DSR6` LRU maps keyed by the reply 5-tuple (`CtKey`/`CtKey6` —
+/// `invert_key`/`invert_key6` of the forwarded flow's key). Deliberately compact (24 bytes) so it
+/// does not inflate `CtEntry` or the conntrack hot paths; `last_seen` is informational only — the
+/// LRU map itself handles eviction.
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
+pub struct DsrVip {
+    /// The VIP, v4 left-justified in 16 bytes for a v4 flow (mirrors `DsrOpt::vip`/`LbBackend::overlay_ip`).
+    pub vip: [u8; 16],
+    /// Informational: kernel-monotonic ns timestamp of the most recent note. Not read by the
+    /// reverse-SNAT rewrite; the LRU map's own eviction handles lifecycle.
+    pub last_seen: u64,
+}
+
 /// Conntrack key: the VNI + 5-tuple (host-order ports; for ICMP the ports hold the id).
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
@@ -377,6 +392,12 @@ pub struct NatValue {
 /// Unified conntrack entry value. Keyed by the 5-tuple (`CtKey`) of the packet that will be SEEN;
 /// the datapath's `ct_apply` rewrites that packet's src or dst address (+L4 port) to
 /// `xlate_ip`/`xlate_port`. Replaces the former feature-private `CtVal`/`NatCtVal`.
+///
+/// DSR reverse-SNAT state does NOT live here (B7b): it was briefly stored inline (a `xlate_ip6`
+/// field grew this to 40 bytes) but that copy landed in the pre-existing hot stack frames
+/// (`ct_apply`/`ct_create_default`) and pushed `uplink_rx`'s combined BPF stack over the 512-byte
+/// verifier limit. DSR reverse state now lives in its own compact `DSR`/`DSR6` LRU maps (see
+/// [`DsrVip`]), keyed by the reply 5-tuple; `CtEntry` is back to its pre-DSR 24-byte layout.
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct CtEntry {
@@ -386,10 +407,7 @@ pub struct CtEntry {
     pub flags: u8,
     pub tcp_state: u8,
     pub fwall_action: u8,
-    /// v6 translate address (DSR reverse-SNAT src -> VIP). Used when a v6 flow's entry rewrites an
-    /// address; v4 flows use `xlate_ip`. Zero unless a v6 DSR (`CT_F_DSR`) entry.
-    pub xlate_ip6: [u8; 16],
-    /// Trailing padding to keep the eBPF `CONNTRACK`/`CONNTRACK6` map value ABI at 40 bytes / align 8.
+    /// Trailing padding to keep the eBPF `CONNTRACK`/`CONNTRACK6` map value ABI at 24 bytes / align 8.
     pub _pad: [u8; 7],
 }
 
@@ -404,9 +422,8 @@ pub const CT_F_FIREWALL: u8 = 0x20;
 /// and reverse conntrack entries carry this flag so the ingress reply path knows to expand
 /// IPv4 back to IPv6 when delivering the translated reply to the guest.
 pub const CT_F_NAT64: u8 = 0x40;
-/// Set on a DSR reverse conntrack entry: the guest reply's src must be rewritten to the VIP the
-/// edge dispatched (stored in `xlate_ip`/`xlate_ip6`). Distinct from `CT_F_SRC_NAT` (port-NAT).
-pub const CT_F_DSR: u8 = 0x80;
+// 0x80 (former CT_F_DSR) is free: DSR reverse-SNAT state moved out of CtEntry into the dedicated
+// `DSR`/`DSR6` maps (see `DsrVip`) — B7b.
 
 // CtEntry.tcp_state values (mirror dpservice dp_flow_tcp_state)
 pub const TCP_NONE: u8 = 0;
@@ -704,6 +721,7 @@ mod user_impls {
     unsafe impl aya::Pod for MaglevKey {}
     unsafe impl aya::Pod for LbBackend {}
     unsafe impl aya::Pod for DsrOpt {}
+    unsafe impl aya::Pod for DsrVip {}
     unsafe impl aya::Pod for CtKey {}
     unsafe impl aya::Pod for NatKey {}
     unsafe impl aya::Pod for NatValue {}
@@ -984,13 +1002,23 @@ mod tests {
     #[test]
     fn ct_entry_layout() {
         // 8 (last_seen) + 4 (xlate_ip) + 2 (xlate_port) + 1 (flags) + 1 (tcp_state)
-        // + 1 (fwall_action) + 16 (xlate_ip6) + 7 (_pad) = 40, u64-aligned. CONNTRACK/CONNTRACK6
-        // are RUNTIME LRU maps re-created on load — growing the value is NOT a wire/journal ABI
-        // concern; the coupling is the core+ebpf ct_apply twins + the aya_writer GC + this test,
-        // changed together (B5: xlate_ip6 added for v6 DSR reverse-SNAT).
-        assert_eq!(core::mem::size_of::<CtEntry>(), 40);
+        // + 1 (fwall_action) + 7 (_pad) = 24, u64-aligned. CONNTRACK/CONNTRACK6 are RUNTIME LRU maps
+        // re-created on load — growing/shrinking the value is NOT a wire/journal ABI concern; the
+        // coupling is the core+ebpf ct_apply twins + the aya_writer GC + this test, changed together.
+        // B7b: reverted the B5 `xlate_ip6` growth (40 -> 24) — DSR reverse-SNAT state moved to the
+        // dedicated `DSR`/`DSR6` maps (see `dsr_vip_layout`) to keep this struct (copied on the stack
+        // by every `ct_apply`/`ct_create_default` call) out of the `uplink_rx` verifier stack budget.
+        assert_eq!(core::mem::size_of::<CtEntry>(), 24);
         // Alignment must also be unchanged (u64 = 8) — a bigger alignment would change the map layout.
         assert_eq!(core::mem::align_of::<CtEntry>(), 8);
+    }
+
+    #[test]
+    fn dsr_vip_layout() {
+        // 16 (vip) + 8 (last_seen) = 24, u64-aligned. RUNTIME LRU map value (DSR/DSR6, B7b) — no
+        // wire/journal ABI concern, same coupling rule as `ct_entry_layout`.
+        assert_eq!(core::mem::size_of::<DsrVip>(), 24);
+        assert_eq!(core::mem::align_of::<DsrVip>(), 8);
     }
 
     #[test]
