@@ -215,11 +215,20 @@ impl Control {
         // restart — unlike the pinned BPF maps/links, this netdev is NOT torn down on graceful
         // shutdown (see the `Serve` shutdown handler in main.rs), so re-running `ensure_geneve_dev`
         // here just confirms/repairs it.
-        let geneve_ifindex =
-            flowplane_device::ensure_geneve_dev(flowplane_device::GENEVE_DEV, gateway_mac)
-                .context("bring up collect_md geneve device")?;
+        let flowplane_device::GeneveDev {
+            ifindex: geneve_ifindex,
+            recreated: geneve_recreated,
+        } = flowplane_device::ensure_geneve_dev(flowplane_device::GENEVE_DEV, gateway_mac)
+            .context("bring up collect_md geneve device")?;
         let mut geneve_ifindex_map = GeneveIfindexMap::open(&mut ebpf)?;
         geneve_ifindex_map.set(geneve_ifindex)?;
+        // If the geneve netdev was CREATED fresh this bring-up (new ifindex), any pinned tc link that
+        // survived in the (host-mounted) bpffs from a prior process points at the OLD, now-gone device
+        // — re-pointing it via `readopt_tc_link`/`bpf_link_update` can silently land on a dangling link
+        // (program updated, attached to nothing), which is exactly how `uplink_rx` went missing on the
+        // edge after a lab re-up. So only READOPT when the device was CONFIRMED (survived, links still
+        // valid); a recreated device forces the fresh attach+pin path below (which clears the stale pin).
+        let geneve_adopt = adopt && !geneve_recreated;
         // uplink_rx is tcx on the geneve `collect_md` DEVICE's ingress — NOT the physical uplink
         // NIC. The kernel decaps on the geneve device's own RX path (that is what `collect_md`
         // means); only once that has happened does our tcx program see the (now-inner) frame, VNI
@@ -230,7 +239,7 @@ impl Control {
             let uplink_pin = "uplink-geneve".to_string();
             // Adopt: atomically re-point the surviving pinned link at the fresh program (no gap). A
             // missing/broken pin falls through to a fresh attach+pin.
-            let readopted = adopt
+            let readopted = geneve_adopt
                 && loader::readopt_tc_link(&mut ebpf, "uplink_rx", pin_dir, &uplink_pin)
                     .unwrap_or_else(|e| {
                         eprintln!("re-adopt uplink link failed ({e:#}); attaching fresh");
@@ -255,7 +264,7 @@ impl Control {
             // separate program at all. Attached unconditionally on every node (harmless no-op when no
             // DSR option is ever present, e.g. on a node that is never an LB backend).
             let dsr_note_pin = "uplink-dsr-note-geneve".to_string();
-            let dsr_note_readopted = adopt
+            let dsr_note_readopted = geneve_adopt
                 && loader::readopt_tc_link(&mut ebpf, "uplink_dsr_note", pin_dir, &dsr_note_pin)
                     .unwrap_or_else(|e| {
                         eprintln!("re-adopt uplink_dsr_note link failed ({e:#}); attaching fresh");

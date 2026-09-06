@@ -11,6 +11,18 @@ use anyhow::{Context, Result};
 /// destination or VNI on the device itself; the tc program supplies both per-packet.
 pub const GENEVE_DEV: &str = "fp-geneve0";
 
+/// Outcome of [`ensure_geneve_dev`]: the resolved ifindex, plus whether the netdev was CREATED fresh
+/// this call (`recreated == true`) versus CONFIRMED in place (`false`). Callers use `recreated` to
+/// decide how to (re)attach the device's pinned tc links: a fresh device has a new ifindex, so any
+/// surviving pinned link from a prior process points at the OLD (now-gone) device and MUST be
+/// fresh-attached — re-pointing it via `bpf_link_update` can silently land on a dangling link
+/// (program updated, but attached to nothing). A confirmed device keeps its links valid, so the
+/// zero-gap adopt re-point is correct.
+pub struct GeneveDev {
+    pub ifindex: u32,
+    pub recreated: bool,
+}
+
 /// Build the `ip link add <name> type geneve external` argument vector (no destination, no VNI —
 /// `external` is exactly the `collect_md` metadata mode: the datapath program supplies the tunnel
 /// key per-packet via `bpf_skb_set_tunnel_key`/`get_tunnel_key`). Args only — `run()` supplies the
@@ -36,14 +48,17 @@ pub fn geneve_add_args(name: &str) -> Vec<String> {
 /// `uplink_rx` attached to nothing. Leaving the survivor in place keeps those links valid so the
 /// zero-gap adopt works as designed. Reuses `geneve_add_args` so the tested arg vector is exactly what
 /// gets shelled.
-pub fn ensure_geneve_dev(name: &str, gateway_mac: [u8; 6]) -> Result<u32> {
+pub fn ensure_geneve_dev(name: &str, gateway_mac: [u8; 6]) -> Result<GeneveDev> {
     // CONFIRM path: a correctly-MAC'd device already survives from a prior bring-up. Do NOT recreate
     // it (that severs the pinned datapath links); just make sure it is up (idempotent, link-safe) and
     // return its ifindex. The gateway-MAC match is the "this is our device, configured by the current
     // code" signal — a survivor from before the MAC fix falls through to the recreate path below.
     if link_exists(name) && mac_of(name).map(|m| m == gateway_mac).unwrap_or(false) {
         run(&["ip", "link", "set", name, "up"]).with_context(|| format!("geneve dev {name} up"))?;
-        return ifindex_of(name);
+        return Ok(GeneveDev {
+            ifindex: ifindex_of(name)?,
+            recreated: false,
+        });
     }
     // Fresh start: remove any stale/mis-MAC'd device from a previous run (ignores "does not exist").
     delete_geneve_dev(name)?;
@@ -62,7 +77,10 @@ pub fn ensure_geneve_dev(name: &str, gateway_mac: [u8; 6]) -> Result<u32> {
     run(&["ip", "link", "set", name, "address", &macs])
         .with_context(|| format!("set geneve dev {name} mac"))?;
     run(&["ip", "link", "set", name, "up"]).with_context(|| format!("geneve dev {name} up"))?;
-    ifindex_of(name)
+    Ok(GeneveDev {
+        ifindex: ifindex_of(name)?,
+        recreated: true,
+    })
 }
 
 /// Idempotent `ip link del <name>` (ignores "does not exist" / any other error — best-effort,
@@ -91,8 +109,9 @@ mod tests {
         let name = "fpdev-geneve-test0";
         let _ = delete_geneve_dev(name);
         let gw_mac = [0x02, 0, 0, 0, 0, 0x01];
-        let ifindex1 = ensure_geneve_dev(name, gw_mac).expect("create geneve dev");
-        assert!(ifindex1 >= 2, "resolved a real ifindex");
+        let dev1 = ensure_geneve_dev(name, gw_mac).expect("create geneve dev");
+        assert!(dev1.ifindex >= 2, "resolved a real ifindex");
+        assert!(dev1.recreated, "first ensure creates the device fresh");
         assert!(link_exists(name), "geneve dev present after create");
         assert_eq!(
             mac_of(name).expect("read geneve mac"),
@@ -100,13 +119,14 @@ mod tests {
             "gateway MAC stamped"
         );
         // Re-running must be idempotent AND must PRESERVE the surviving device (CONFIRM path, not
-        // delete+recreate) so any pinned tc links on it stay valid — same ifindex proves it was not
-        // torn down and re-added.
-        let ifindex2 = ensure_geneve_dev(name, gw_mac).expect("confirm geneve dev");
+        // delete+recreate) so any pinned tc links on it stay valid — same ifindex + recreated==false
+        // proves it was not torn down and re-added.
+        let dev2 = ensure_geneve_dev(name, gw_mac).expect("confirm geneve dev");
         assert_eq!(
-            ifindex2, ifindex1,
+            dev2.ifindex, dev1.ifindex,
             "confirm path preserves the surviving device"
         );
+        assert!(!dev2.recreated, "confirm path does not recreate");
         delete_geneve_dev(name).expect("delete geneve dev");
         assert!(
             !link_exists(name),
