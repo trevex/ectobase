@@ -11,7 +11,7 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{LbBackend, LbKey, LbValue, MaglevKey};
-use flowplane_common::{Local, RouteValue, UnderlayValue};
+use flowplane_common::{Local, RouteValue};
 
 use crate::compilednic::{apply, CompiledNic};
 use crate::fabric::{Fabric, Outcome, Prog};
@@ -24,7 +24,6 @@ const RELAY_UL: [u8; 16] = ul(0xcc);
 const EDGE_UL: [u8; 16] = ul(0xaa);
 
 const HOSTB_TAP: u32 = 42;
-const RELAY_TAP: u32 = 43;
 const GUEST_MAC: [u8; 6] = [0x66, 0x66, 0x66, 0x66, 0x66, 0x00];
 
 const WAN_VIP: [u8; 4] = [203, 0, 113, 50]; // N/S public VIP (edge, vni=0)
@@ -38,9 +37,20 @@ const WAN_SRC6: [u8; 16] = [
 ];
 const OVERLAY_VIP: [u8; 4] = [10, 0, 100, 1]; // E/W overlay VIP (vni=100)
 const GUEST_A: [u8; 4] = [10, 0, 0, 20]; // an internal E/W client (in 10.0.0.0/8)
+                                         // hostB's own concrete backend overlay IP (distinct from any VIP): the real `INTERFACES` delivery
+                                         // key for local LB-backend delivery is `(vni, backend's OWN overlay ip)`, never the VIP itself (DSR
+                                         // keeps the inner dst as the VIP) -- see `flowplane_core::datapath::process_uplink`'s LB arm.
+const BACKEND_OVERLAY_IP: [u8; 4] = [10, 0, 0, 181];
 
 const fn ul(last: u8) -> [u8; 16] {
     [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, last]
+}
+
+/// Left-justify a v4 addr into the 16-byte `LbBackend.overlay_ip` representation (`is_v6 == 0`).
+const fn v4_in_16(ip: [u8; 4]) -> [u8; 16] {
+    [
+        ip[0], ip[1], ip[2], ip[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ]
 }
 
 fn local_for(underlay: [u8; 16], ifindex: u32) -> Local {
@@ -105,27 +115,27 @@ fn allow_all() -> &'static str {
     r#"[{"cidr":"0.0.0.0/0","action":"Allow"}]"#
 }
 
-/// Build a backend node (hostB): UNDERLAY self-entry + mesh-replicated WAN-VIP LB (mirroring
-/// `edge_node()`'s config — a REAL Maglev backend carries the same LB state every participating
-/// node does, via mesh gossip) + optional overlay-LB self-registration. The WAN LB replication is
-/// what lets `hostB`'s OWN `uplink_rx` recognize "I own this VIP" on ingress: WAN VIPs are anycast,
-/// not a guest's own overlay IP, so they have no `ROUTES` self-route for the ingress
-/// delivery-target reconstruction to find — `lb_select_forward` re-selecting itself (landing on the
-/// `Some(bu)`, tap != 0 branch) is the ONLY mechanism that resolves VIP delivery.
+/// Build a backend node (hostB): an `INTERFACES` local-delivery row for hostB's own concrete
+/// backend overlay IP + mesh-replicated WAN-VIP LB (mirroring `edge_node()`'s config — a REAL
+/// Maglev backend carries the same LB state every participating node does, via mesh gossip) +
+/// optional overlay-LB self-registration. The WAN LB replication is what lets `hostB`'s OWN
+/// `uplink_rx` recognize "I own this VIP" on ingress: WAN VIPs are anycast, not a guest's own
+/// overlay IP, so they have no `ROUTES` self-route for the ingress delivery-target reconstruction to
+/// find — `lb_select_forward` re-selecting itself (`be.node_vtep == local.underlay_ipv6`) and then
+/// resolving the delivery tap via `INTERFACES[(vni, be.overlay_ip)]` is the ONLY mechanism that
+/// resolves VIP delivery.
 fn backend_node(with_overlay_lb: bool) -> SimNode {
     let mut n = SimNode::with_local(local_for(HOSTB_UL, 9));
-    // FICTION (known limitation): this hand-seeds an `UNDERLAY[backend]` self-entry with a real tap,
-    // but since the node-VTEP underlay change the production control plane no longer writes a
-    // per-interface UNDERLAY entry (delivery moved to INTERFACES). This seed keeps the LB
-    // local-backend arm's sim green, but does NOT reflect real state — LB local-backend delivery is
-    // deferred to the N/S-LB edge rebuild (see the KNOWN LIMITATION in datapath.rs `process_uplink`).
-    n.maps.underlay.insert(
-        HOSTB_UL,
-        UnderlayValue {
-            vni: VNI,
+    n.maps.add_iface(
+        VNI,
+        BACKEND_OVERLAY_IP,
+        flowplane_common::IfaceValue {
             tap_ifindex: HOSTB_TAP,
+            is_local: 1,
+            underlay_ipv6: HOSTB_UL,
             guest_mac: GUEST_MAC,
-            _pad: [0; 2],
+            peer_capable: 0,
+            _pad: [0; 1],
         },
     );
     n.maps.lb.insert(
@@ -141,15 +151,15 @@ fn backend_node(with_overlay_lb: bool) -> SimNode {
             size: 1,
         },
     );
-    n.maps.maglev.insert(
-        MaglevKey {
-            table_id: 1,
-            slot: 0,
-        },
+    n.maps.add_maglev(
+        1,
+        0,
         LbBackend {
             node_vtep: HOSTB_UL,
+            overlay_ip: v4_in_16(BACKEND_OVERLAY_IP),
             vni: VNI,
-            ..Default::default()
+            is_v6: 0,
+            _pad: [0; 3],
         },
     );
     if with_overlay_lb {
@@ -166,15 +176,15 @@ fn backend_node(with_overlay_lb: bool) -> SimNode {
                 size: 1,
             },
         );
-        n.maps.maglev.insert(
-            MaglevKey {
-                table_id: 2,
-                slot: 0,
-            },
+        n.maps.add_maglev(
+            2,
+            0,
             LbBackend {
                 node_vtep: HOSTB_UL,
+                overlay_ip: v4_in_16(BACKEND_OVERLAY_IP),
                 vni: VNI,
-                ..Default::default()
+                is_v6: 0,
+                _pad: [0; 3],
             },
         );
     }
@@ -197,15 +207,15 @@ fn edge_node() -> SimNode {
             size: 1,
         },
     );
-    e.maps.maglev.insert(
-        MaglevKey {
-            table_id: 1,
-            slot: 0,
-        },
+    e.maps.add_maglev(
+        1,
+        0,
         LbBackend {
             node_vtep: HOSTB_UL,
+            overlay_ip: v4_in_16(BACKEND_OVERLAY_IP),
             vni: VNI,
-            ..Default::default()
+            is_v6: 0,
+            _pad: [0; 3],
         },
     );
     e
@@ -318,15 +328,9 @@ fn ew_lb_reforward_delivered() {
     let mut fab = Fabric::new();
 
     let mut relay = SimNode::with_local(local_for(RELAY_UL, 8));
-    relay.maps.underlay.insert(
-        RELAY_UL,
-        UnderlayValue {
-            vni: VNI,
-            tap_ifindex: RELAY_TAP,
-            guest_mac: [0; 6],
-            _pad: [0; 2],
-        },
-    );
+    // NOTE: no `relay.maps.underlay` self-entry needed — the relay's own underlay is never looked
+    // up: the reforward decision is `be.node_vtep == local.underlay_ipv6` (RELAY_UL != HOSTB_UL, so
+    // remote), and `reforward()` redirects out `local.uplink_ifindex` directly, no map lookup.
     relay.maps.lb.insert(
         LbKey {
             vni: VNI,
@@ -340,15 +344,18 @@ fn ew_lb_reforward_delivered() {
             size: 1,
         },
     );
-    relay.maps.maglev.insert(
-        MaglevKey {
-            table_id: 2,
-            slot: 0,
-        },
+    // Mesh-gossiped copy of hostB's Maglev slot: same backend identity (node_vtep + overlay_ip) as
+    // `backend_node(true)`'s own table-2 slot, so hostB's self-reselection after the reforward hits
+    // the SAME `INTERFACES` row.
+    relay.maps.add_maglev(
+        2,
+        0,
         LbBackend {
             node_vtep: HOSTB_UL,
+            overlay_ip: v4_in_16(BACKEND_OVERLAY_IP),
             vni: VNI,
-            ..Default::default()
+            is_v6: 0,
+            _pad: [0; 3],
         },
     );
     fab.add_node("relay", relay);
@@ -403,15 +410,9 @@ fn ew_lb_reforward_converges_no_loop() {
     // is never hit. Same setup as reforward_delivered; assert NOT LoopHalted.
     let mut fab = Fabric::new();
     let mut relay = SimNode::with_local(local_for(RELAY_UL, 8));
-    relay.maps.underlay.insert(
-        RELAY_UL,
-        UnderlayValue {
-            vni: VNI,
-            tap_ifindex: RELAY_TAP,
-            guest_mac: [0; 6],
-            _pad: [0; 2],
-        },
-    );
+    // NOTE: no `relay.maps.underlay` self-entry needed — the relay's own underlay is never looked
+    // up: the reforward decision is `be.node_vtep == local.underlay_ipv6` (RELAY_UL != HOSTB_UL, so
+    // remote), and `reforward()` redirects out `local.uplink_ifindex` directly, no map lookup.
     relay.maps.lb.insert(
         LbKey {
             vni: VNI,
@@ -425,15 +426,18 @@ fn ew_lb_reforward_converges_no_loop() {
             size: 1,
         },
     );
-    relay.maps.maglev.insert(
-        MaglevKey {
-            table_id: 2,
-            slot: 0,
-        },
+    // Mesh-gossiped copy of hostB's Maglev slot: same backend identity (node_vtep + overlay_ip) as
+    // `backend_node(true)`'s own table-2 slot, so hostB's self-reselection after the reforward hits
+    // the SAME `INTERFACES` row.
+    relay.maps.add_maglev(
+        2,
+        0,
         LbBackend {
             node_vtep: HOSTB_UL,
+            overlay_ip: v4_in_16(BACKEND_OVERLAY_IP),
             vni: VNI,
-            ..Default::default()
+            is_v6: 0,
+            _pad: [0; 3],
         },
     );
     fab.add_node("relay", relay);

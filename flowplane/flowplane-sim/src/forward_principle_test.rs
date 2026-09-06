@@ -4,7 +4,7 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule, LbBackend, LbKey, LbValue, Local, MaglevKey, UnderlayValue, FW_ACTION_ACCEPT,
+    FwMeta, FwRule, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, FW_ACTION_ACCEPT,
     FW_DIR_INGRESS,
 };
 use flowplane_core::pkt::Action;
@@ -15,7 +15,11 @@ const VNI: u32 = 100;
 const VIP: [u8; 4] = [203, 0, 113, 50];
 const NAT_IP: [u8; 4] = [203, 0, 113, 60];
 const CLIENT: [u8; 4] = [198, 51, 100, 9];
-const BACKEND_UL: [u8; 16] = [0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xa1];
+// The backend is THIS node itself (LB self-select, DSR): its node_vtep must equal `local()`'s own
+// underlay so the LB arm takes the local-delivery branch and resolves the tap via
+// `INTERFACES[(vni, BACKEND_OVERLAY_IP)]`.
+const BACKEND_UL: [u8; 16] = [0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x0e];
+const BACKEND_OVERLAY_IP: [u8; 4] = [10, 0, 0, 181];
 const BACKEND_TAP: u32 = 61;
 
 fn local() -> Local {
@@ -23,7 +27,7 @@ fn local() -> Local {
         uplink_ifindex: 5,
         uplink_mac: [2; 6],
         gateway_mac: [1; 6],
-        underlay_ipv6: [0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x0e],
+        underlay_ipv6: BACKEND_UL,
     }
 }
 
@@ -92,17 +96,26 @@ fn ping_to_lb_vip_forwards_to_backend_not_answered() {
         },
         LbBackend {
             node_vtep: BACKEND_UL,
+            overlay_ip: {
+                let mut o = [0u8; 16];
+                o[..4].copy_from_slice(&BACKEND_OVERLAY_IP);
+                o
+            },
             vni: VNI,
-            ..Default::default()
+            is_v6: 0,
+            _pad: [0; 3],
         },
     );
-    n.maps.underlay.insert(
-        BACKEND_UL,
-        UnderlayValue {
-            vni: VNI,
+    n.maps.add_iface(
+        VNI,
+        BACKEND_OVERLAY_IP,
+        IfaceValue {
             tap_ifindex: BACKEND_TAP,
+            is_local: 1,
+            underlay_ipv6: BACKEND_UL,
             guest_mac: [7; 6],
-            _pad: [0; 2],
+            peer_capable: 0,
+            _pad: [0; 1],
         },
     );
     allow_ingress_all(&mut n, BACKEND_TAP);

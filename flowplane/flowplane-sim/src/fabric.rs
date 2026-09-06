@@ -162,15 +162,26 @@ mod tests {
     use super::*;
     use etherparse::PacketBuilder;
     use flowplane_common::{
-        FwMeta, FwRule, LbBackend, LbKey, LbValue, Local, MaglevKey, UnderlayValue,
-        FW_ACTION_ACCEPT, FW_DIR_INGRESS,
+        FwMeta, FwRule, IfaceValue, LbBackend, LbKey, LbValue, Local, FW_ACTION_ACCEPT,
+        FW_DIR_INGRESS,
     };
 
     const EDGE_UL: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xed, 0xee];
     const BACKEND_UL: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xba, 0xcc];
     const VIP: [u8; 4] = [203, 0, 113, 1];
+    // The backend's own concrete overlay IP (distinct from the VIP): local LB-backend delivery
+    // resolves via `INTERFACES[(vni, backend's overlay ip)]`, never the VIP itself (DSR keeps the
+    // inner dst as the VIP).
+    const BACKEND_OVERLAY_IP: [u8; 4] = [10, 0, 0, 181];
     const BACKEND_GUEST_MAC: [u8; 6] = [0x66, 0x66, 0x66, 0x66, 0xba, 0xcc];
     const TAP: u32 = 42;
+
+    /// Left-justify a v4 addr into the 16-byte `LbBackend.overlay_ip` representation (`is_v6 == 0`).
+    const fn v4_in_16(ip: [u8; 4]) -> [u8; 16] {
+        [
+            ip[0], ip[1], ip[2], ip[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]
+    }
 
     /// Build a plain `[Eth][IPv4][TCP]` WAN frame as arrives at the edge (dst = VIP, dport = 443).
     fn wan_frame() -> Vec<u8> {
@@ -208,42 +219,46 @@ mod tests {
             },
         );
         // size=1 => slot 0 always selected regardless of hash
-        edge.maps.maglev.insert(
-            MaglevKey {
-                table_id: 1,
-                slot: 0,
-            },
+        edge.maps.add_maglev(
+            1,
+            0,
             LbBackend {
                 node_vtep: BACKEND_UL,
+                overlay_ip: v4_in_16(BACKEND_OVERLAY_IP),
                 vni: 100,
-                ..Default::default()
+                is_v6: 0,
+                _pad: [0; 3],
             },
         );
 
-        // Backend node: UNDERLAY[backend_ul] = vni 100, tap 42, guest MAC.
+        // Backend node: an `INTERFACES` local-delivery row for its own overlay IP, tap 42, guest MAC.
         let mut backend = SimNode::with_local(Local {
             uplink_ifindex: 8,
             uplink_mac: [0x03; 6],
             gateway_mac: [0x01; 6],
             underlay_ipv6: BACKEND_UL,
         });
-        backend.maps.underlay.insert(
-            BACKEND_UL,
-            UnderlayValue {
-                vni: 100,
+        backend.maps.add_iface(
+            100,
+            BACKEND_OVERLAY_IP,
+            IfaceValue {
                 tap_ifindex: TAP,
+                is_local: 1,
+                underlay_ipv6: BACKEND_UL,
                 guest_mac: BACKEND_GUEST_MAC,
-                _pad: [0; 2],
+                peer_capable: 0,
+                _pad: [0; 1],
             },
         );
         // Mesh-replicated LB state: a REAL Maglev backend carries the SAME (vni=0) WAN LB config the
         // edge does (mirrored via mesh gossip — `create_lb`/`add_lb_target` program every
         // participating node identically), so its OWN `uplink_rx` re-selects itself via
-        // `lb_select_forward` and takes the local-LB-delivery branch (`Some(bu)`, tap != 0) — this
-        // does NOT depend on the ingress delivery-target reconstruction (`ROUTES` self-route) at
-        // all, which covers ordinary guest delivery, not anycast/VIP delivery. Without this, the
-        // backend has no way to recognize "I own this VIP" on ingress (WAN VIPs are anycast, not a
-        // guest's own overlay IP, so they have no ROUTES self-route).
+        // `lb_select_forward` (`be.node_vtep == local.underlay_ipv6`) and resolves the delivery tap
+        // via `INTERFACES[(vni, be.overlay_ip)]` — this does NOT depend on the ingress
+        // delivery-target reconstruction (`ROUTES` self-route) at all, which covers ordinary guest
+        // delivery, not anycast/VIP delivery. Without this, the backend has no way to recognize "I
+        // own this VIP" on ingress (WAN VIPs are anycast, not a guest's own overlay IP, so they have
+        // no ROUTES self-route).
         backend.maps.lb.insert(
             LbKey {
                 vni: 0,
@@ -257,15 +272,15 @@ mod tests {
                 size: 1,
             },
         );
-        backend.maps.maglev.insert(
-            MaglevKey {
-                table_id: 1,
-                slot: 0,
-            },
+        backend.maps.add_maglev(
+            1,
+            0,
             LbBackend {
                 node_vtep: BACKEND_UL,
+                overlay_ip: v4_in_16(BACKEND_OVERLAY_IP),
                 vni: 100,
-                ..Default::default()
+                is_v6: 0,
+                _pad: [0; 3],
             },
         );
         // Always-on deny-by-default: the backend needs an explicit allow rule to deliver.

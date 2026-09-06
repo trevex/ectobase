@@ -10,8 +10,8 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule6, LbBackend, LbKey, LbValue, Local, MaglevKey, PortMeta, UnderlayValue,
-    FW_ACTION_ACCEPT, FW_DIR_INGRESS, UNDERLAY_LOCAL_DELIVER,
+    FwMeta, FwRule6, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, PortMeta,
+    UnderlayValue, FW_ACTION_ACCEPT, FW_DIR_INGRESS, UNDERLAY_LOCAL_DELIVER,
 };
 use flowplane_core::conntrack::ct_key6;
 use flowplane_core::encap::{TunnelEncap, ETH_LEN};
@@ -224,6 +224,13 @@ const GUEST_A6: [u8; 16] = [
     0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x20,
 ];
 const REMOTE_BACKEND_UL: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xcc];
+// The backend's own concrete overlay IPv6 (distinct from `OVERLAY_VIP6`): local LB-backend delivery
+// resolves via `INTERFACES6[(vni, backend's overlay ip)]`, never the VIP itself (DSR keeps the inner
+// dst as the VIP). Only meaningful for the LOCAL-delivery test (`install_lb6`'s remote-backend
+// caller never reaches the `INTERFACES6` lookup).
+const BACKEND_OVERLAY_IP6: [u8; 16] = [
+    0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x81,
+];
 
 fn local_for(underlay: [u8; 16], ifindex: u32) -> Local {
     Local {
@@ -272,9 +279,10 @@ fn install_lb6(node: &mut SimNode, backend: [u8; 16]) {
         },
         LbBackend {
             node_vtep: backend,
+            overlay_ip: BACKEND_OVERLAY_IP6,
             vni: VNI,
             is_v6: 1,
-            ..Default::default()
+            _pad: [0; 3],
         },
     );
 }
@@ -284,13 +292,16 @@ fn v6_lb_local_backend_delivered_no_conntrack6_created() {
     // The LB backend re-selects itself (DSR): UNDERLAY[HOSTB_UL] is THIS node's own tap.
     const HOSTB_UL: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xdd];
     let mut node = SimNode::with_local(local_for(HOSTB_UL, 9));
-    node.maps.underlay.insert(
-        HOSTB_UL,
-        UnderlayValue {
-            vni: VNI,
+    node.maps.add_iface6(
+        VNI,
+        BACKEND_OVERLAY_IP6,
+        IfaceValue {
             tap_ifindex: TAP,
+            is_local: 1,
+            underlay_ipv6: HOSTB_UL,
             guest_mac: GUEST_MAC,
-            _pad: [0; 2],
+            peer_capable: 0,
+            _pad: [0; 1],
         },
     );
     install_lb6(&mut node, HOSTB_UL);

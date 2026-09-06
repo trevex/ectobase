@@ -3,9 +3,7 @@
 //! Maglev backend that owns the ORIGINAL client->VIP flow. Faithful rebuild of the pre-P2 eBPF
 //! `lb::lb_select_forward_icmp_error` (recovered from 7a9a962), now in flowplane_core + sim-tested.
 
-use flowplane_common::{
-    FwMeta, FwRule, LbBackend, LbKey, LbValue, Local, MaglevKey, UnderlayValue,
-};
+use flowplane_common::{FwMeta, FwRule, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey};
 use flowplane_core::pkt::Action;
 
 use crate::SimNode;
@@ -58,9 +56,19 @@ const BACKEND_A_UL: [u8; 16] = ul(0xa1);
 const BACKEND_B_UL: [u8; 16] = ul(0xb2);
 const LOCAL_UL: [u8; 16] = ul(0x0e);
 const BACKEND_A_TAP: u32 = 61;
+// The LOCAL-delivery tests below select a backend that IS this node itself (LOCAL_UL), so the LB
+// arm resolves the delivery tap via `INTERFACES[(vni, BACKEND_A_OVERLAY_IP)]`.
+const BACKEND_A_OVERLAY_IP: [u8; 4] = [10, 0, 0, 181];
 
 const fn ul(last: u8) -> [u8; 16] {
     [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, last]
+}
+
+/// Left-justify a v4 addr into the 16-byte `LbBackend.overlay_ip` representation (`is_v6 == 0`).
+const fn v4_in_16(ip: [u8; 4]) -> [u8; 16] {
+    [
+        ip[0], ip[1], ip[2], ip[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ]
 }
 
 fn local() -> Local {
@@ -172,25 +180,31 @@ fn icmp_error_to_vip_relays_to_backend() {
             size: 1,
         },
     );
+    // Self-select (LOCAL_UL == this node's own `local()` underlay): the LB arm takes the
+    // local-delivery branch and resolves the tap via `INTERFACES[(vni, BACKEND_A_OVERLAY_IP)]`.
     n.maps.maglev.insert(
         MaglevKey {
             table_id: 9,
             slot: 0,
         },
         LbBackend {
-            node_vtep: BACKEND_A_UL,
+            node_vtep: LOCAL_UL,
+            overlay_ip: v4_in_16(BACKEND_A_OVERLAY_IP),
             vni: VNI,
-            ..Default::default()
+            is_v6: 0,
+            _pad: [0; 3],
         },
     );
-    // local backend delivery reuses the existing LB UNDERLAY[backend] path (the documented fiction).
-    n.maps.underlay.insert(
-        BACKEND_A_UL,
-        UnderlayValue {
-            vni: VNI,
+    n.maps.add_iface(
+        VNI,
+        BACKEND_A_OVERLAY_IP,
+        IfaceValue {
             tap_ifindex: BACKEND_A_TAP,
+            is_local: 1,
+            underlay_ipv6: LOCAL_UL,
             guest_mac: [7; 6],
-            _pad: [0; 2],
+            peer_capable: 0,
+            _pad: [0; 1],
         },
     );
     allow_ingress_all(&mut n, BACKEND_A_TAP); // see DEVIATION note above
@@ -267,24 +281,31 @@ fn icmp_error_embedded_udp_relayed_but_icmp_embedded_not() {
             size: 1,
         },
     );
+    // Self-select (LOCAL_UL == this node's own `local()` underlay) — same shape as
+    // `icmp_error_to_vip_relays_to_backend`.
     relayed.maps.maglev.insert(
         MaglevKey {
             table_id: 5,
             slot: 0,
         },
         LbBackend {
-            node_vtep: BACKEND_A_UL,
+            node_vtep: LOCAL_UL,
+            overlay_ip: v4_in_16(BACKEND_A_OVERLAY_IP),
             vni: VNI,
-            ..Default::default()
+            is_v6: 0,
+            _pad: [0; 3],
         },
     );
-    relayed.maps.underlay.insert(
-        BACKEND_A_UL,
-        UnderlayValue {
-            vni: VNI,
+    relayed.maps.add_iface(
+        VNI,
+        BACKEND_A_OVERLAY_IP,
+        IfaceValue {
             tap_ifindex: BACKEND_A_TAP,
+            is_local: 1,
+            underlay_ipv6: LOCAL_UL,
             guest_mac: [7; 6],
-            _pad: [0; 2],
+            peer_capable: 0,
+            _pad: [0; 1],
         },
     );
     allow_ingress_all(&mut relayed, BACKEND_A_TAP); // see DEVIATION note above

@@ -116,6 +116,10 @@ impl MemMaps {
     pub fn add_vip(&mut self, vni: u32, v: [u8; 4], g: [u8; 4]) {
         self.vips.insert((vni, v), g);
     }
+    /// Seed a `MAGLEV` slot with a full `LbBackend` value.
+    pub fn add_maglev(&mut self, table_id: u32, slot: u32, backend: LbBackend) {
+        self.maglev.insert(MaglevKey { table_id, slot }, backend);
+    }
 }
 
 impl Maps for MemMaps {
