@@ -298,6 +298,25 @@ pub struct MaglevKey {
     pub slot: u32,
 }
 
+/// Maglev slot value: a fully self-describing LB backend. Replaces the bare `[u8; 16]` backend-node
+/// underlay that used to be the `MAGLEV` value. `node_vtep == Local.underlay_ipv6` decides
+/// local-vs-remote delivery (no `is_local:0` INTERFACES rows needed); on a local hit the datapath
+/// resolves the delivery tap via `INTERFACES[(vni, overlay_ip4)]` / `INTERFACES6[(vni, overlay_ip6)]`.
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
+pub struct LbBackend {
+    /// Backend node underlay /128 (the tunnel dst for a remote backend).
+    pub node_vtep: [u8; 16],
+    /// Backend guest overlay IP: a v4 address left-justified in the first 4 bytes when `is_v6 == 0`,
+    /// or the full 16-byte v6 address when `is_v6 == 1`.
+    pub overlay_ip: [u8; 16],
+    /// Backend delivery VNI (the tenant VNI the guest lives in).
+    pub vni: u32,
+    /// Overlay family selector: 0 → look up `INTERFACES` with `overlay_ip[0..4]`; 1 → `INTERFACES6`.
+    pub is_v6: u8,
+    pub _pad: [u8; 3],
+}
+
 /// Conntrack key: the VNI + 5-tuple (host-order ports; for ICMP the ports hold the id).
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
@@ -663,6 +682,7 @@ mod user_impls {
     unsafe impl aya::Pod for LbKey {}
     unsafe impl aya::Pod for LbValue {}
     unsafe impl aya::Pod for MaglevKey {}
+    unsafe impl aya::Pod for LbBackend {}
     unsafe impl aya::Pod for CtKey {}
     unsafe impl aya::Pod for NatKey {}
     unsafe impl aya::Pod for NatValue {}
@@ -912,6 +932,15 @@ mod tests {
         assert_eq!(core::mem::size_of::<MaglevKey>(), 8);
         assert_eq!(core::mem::size_of::<CtKey>(), 20);
         assert_eq!(core::mem::size_of::<UnderlayValue>(), 16);
+    }
+
+    #[test]
+    fn lb_backend_layout() {
+        // node_vtep(16) + overlay_ip(16) + vni(4) + is_v6(1) + _pad(3) = 40, u32-aligned.
+        // MAGLEV is a RUNTIME map re-created on load — no wire/journal ABI concern; the only
+        // coupling is the eBPF reader + the control-plane writer, changed together.
+        assert_eq!(core::mem::size_of::<LbBackend>(), 40);
+        assert_eq!(core::mem::align_of::<LbBackend>(), 4);
     }
 
     #[test]
