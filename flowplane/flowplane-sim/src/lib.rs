@@ -22,6 +22,8 @@ mod ct_refresh_test;
 #[cfg(test)]
 mod dhcp_test;
 #[cfg(test)]
+mod dsr_ct_test;
+#[cfg(test)]
 mod encap_test;
 #[cfg(test)]
 mod firewall_test;

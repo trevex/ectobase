@@ -14,8 +14,8 @@ use crate::parse::{l4_ports, l4_ports_v6, IPPROTO_ICMP, IPPROTO_TCP, IPPROTO_UDP
 use crate::pkt::Pkt;
 use flowplane_common::csum::{csum_replace2, csum_replace4};
 use flowplane_common::{
-    CtEntry, CtKey, CT_F_DEFAULT, CT_REWRITE_DST, CT_REWRITE_SRC, TCP_ESTABLISHED, TCP_FINWAIT,
-    TCP_NEW_SYN, TCP_NEW_SYNACK, TCP_RST_FIN,
+    CtEntry, CtKey, CT_F_DEFAULT, CT_F_DSR, CT_REWRITE_DST, CT_REWRITE_SRC, TCP_ESTABLISHED,
+    TCP_FINWAIT, TCP_NEW_SYN, TCP_NEW_SYNACK, TCP_RST_FIN,
 };
 
 /// Idle timeout for non-established flows (30 s), in nanoseconds. Mirrors dpservice.
@@ -485,4 +485,68 @@ pub fn ct_refresh6<P: Pkt, M: Maps>(
         e.tcp_state = tcp_advance(e.tcp_state, fl);
     }
     maps.conntrack6_insert(*key, *e);
+}
+
+/// Create the DSR reverse conntrack entry for a load-balanced v6 flow. `pkt` is the forwarded frame
+/// (src=client, dst=backend overlay). The reverse entry is keyed on the guest-reply tuple (invert of
+/// the forwarded key) and rewrites the reply src -> `vip`. Idempotent (never overwrites).
+#[inline(always)]
+pub fn dsr_ct_create6<P: Pkt, M: Maps>(
+    pkt: &P,
+    maps: &mut M,
+    ip_off: usize,
+    vni: u32,
+    vip: &[u8; 16],
+    now: u64,
+) {
+    let fwd = match ct_key6(pkt, ip_off, vni) {
+        Some(k) => k,
+        None => return,
+    };
+    let rev = invert_key6(&fwd);
+    if maps.conntrack6_get(&rev).is_some() {
+        return;
+    }
+    let e = CtEntry {
+        last_seen: now,
+        xlate_ip: [0; 4],
+        xlate_ip6: *vip,
+        xlate_port: 0, // DSR preserves the service port; only the address changes
+        flags: CT_REWRITE_SRC | CT_F_DSR,
+        tcp_state: 0,
+        fwall_action: 0,
+        _pad: [0; 7],
+    };
+    maps.conntrack6_insert(rev, e);
+}
+
+/// v4 sibling of [`dsr_ct_create6`]: stores the VIP in `xlate_ip` (4 bytes).
+#[inline(always)]
+pub fn dsr_ct_create<P: Pkt, M: Maps>(
+    pkt: &P,
+    maps: &mut M,
+    ip_off: usize,
+    vni: u32,
+    vip4: &[u8; 4],
+    now: u64,
+) {
+    let fwd = match ct_key(pkt, ip_off, vni) {
+        Some(k) => k,
+        None => return,
+    };
+    let rev = invert_key(&fwd);
+    if maps.conntrack_get(&rev).is_some() {
+        return;
+    }
+    let e = CtEntry {
+        last_seen: now,
+        xlate_ip: *vip4,
+        xlate_ip6: [0; 16],
+        xlate_port: 0,
+        flags: CT_REWRITE_SRC | CT_F_DSR,
+        tcp_state: 0,
+        fwall_action: 0,
+        _pad: [0; 7],
+    };
+    maps.conntrack_insert(rev, e);
 }

@@ -108,11 +108,26 @@ impl SimNode {
     /// Returns the final `Action` + the resulting frame bytes + the `TunnelEncap` decision on a
     /// relay/reforward arm (`None` otherwise).
     pub fn uplink(&mut self, inner: &[u8], vni: u32, local: &Local) -> SimOut {
+        self.uplink_dsr(inner, vni, local, None)
+    }
+
+    /// As [`SimNode::uplink`], but threads a DSR Geneve option (`UplinkIn::dsr`) into the core call —
+    /// exactly what the eBPF wrapper decodes off the tunnel metadata via `tunnel::get_tunnel_opt` +
+    /// `flowplane_core::dsr::decode` (B7). On a local LB-backend delivery hit, `process_uplink` uses
+    /// this to create the reverse DSR conntrack entry.
+    pub fn uplink_dsr(
+        &mut self,
+        inner: &[u8],
+        vni: u32,
+        local: &Local,
+        dsr: Option<flowplane_common::DsrOpt>,
+    ) -> SimOut {
         let mut pkt = VecPkt::from_bytes(inner);
         let in_ = flowplane_core::datapath::UplinkIn {
             vni,
             local,
             now: self.now,
+            dsr,
         };
         let out = flowplane_core::datapath::process_uplink(&mut pkt, &mut self.maps, &in_);
         SimOut {
@@ -169,6 +184,7 @@ impl SimNode {
             vni,
             local,
             now: self.now,
+            dsr: None,
         };
         let out = flowplane_core::datapath::process_uplink_rx(&mut pkt, &mut self.maps, &in_);
         SimOut {
@@ -248,11 +264,24 @@ impl SimNode {
     /// fail-closed security default this task gives v6 (HEAD's hand-inlined path fell through to
     /// `Pass`/`TC_ACT_OK` here instead).
     pub fn uplink_v6(&mut self, inner: &[u8], vni: u32, local: &Local) -> SimOut {
+        self.uplink_v6_dsr(inner, vni, local, None)
+    }
+
+    /// As [`SimNode::uplink_v6`], but threads a DSR Geneve option (`UplinkIn::dsr`) into the core call
+    /// — see [`SimNode::uplink_dsr`]'s doc comment (v6 mirror, B7).
+    pub fn uplink_v6_dsr(
+        &mut self,
+        inner: &[u8],
+        vni: u32,
+        local: &Local,
+        dsr: Option<flowplane_common::DsrOpt>,
+    ) -> SimOut {
         let mut pkt = VecPkt::from_bytes(inner);
         let in_ = flowplane_core::datapath::UplinkIn {
             vni,
             local,
             now: self.now,
+            dsr,
         };
         let out = flowplane_core::datapath::process_uplink_v6(&mut pkt, &mut self.maps, &in_);
         SimOut {

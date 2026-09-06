@@ -44,6 +44,13 @@ pub struct UplinkIn<'a> {
     pub vni: u32,
     pub local: &'a Local,
     pub now: u64,
+    /// The DSR Geneve option the edge dispatched (`flowplane_common::DsrOpt`), decoded post-decap by
+    /// the eBPF wrapper via `tunnel::get_tunnel_opt` + `flowplane_core::dsr::decode` (see `ingress.rs`/
+    /// `v6.rs`). `Some` only on a load-balanced flow's forwarded frame; `None` for every non-LB /
+    /// non-DSR uplink. On a LOCAL LB-backend delivery hit, `process_uplink`/`process_uplink_v6` use it
+    /// to create the reverse DSR conntrack entry (B7) — the guest's reply is later reverse-SNAT'd
+    /// src -> VIP by `ct_apply`/`ct_apply6` on egress (B8).
+    pub dsr: Option<flowplane_common::DsrOpt>,
 }
 
 /// The outcome of reconstructing WHERE to deliver a decapped inner frame from `(vni, inner dst)` plus
@@ -318,6 +325,15 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
                 ];
                 match maps.ifaces_get(be.vni, &overlay4) {
                     Some(iv) if iv.is_local != 0 => {
+                        // B7: local LB-backend delivery confirmed — create the reverse DSR conntrack
+                        // entry (keyed on the guest-reply tuple) when the edge dispatched a DSR VIP
+                        // option, so the guest's reply is later reverse-SNAT'd src -> VIP (B8).
+                        if let Some(opt) = in_.dsr {
+                            let v4 = [opt.vip[0], opt.vip[1], opt.vip[2], opt.vip[3]];
+                            crate::conntrack::dsr_ct_create(
+                                &*pkt, maps, inner_off, in_.vni, &v4, in_.now,
+                            );
+                        }
                         (iv.tap_ifindex, iv.guest_mac, true, iv.peer_capable != 0)
                     }
                     _ => {
@@ -524,6 +540,14 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
             if be.node_vtep == in_.local.underlay_ipv6 {
                 match maps.ifaces6_get(be.vni, &be.overlay_ip) {
                     Some(iv) if iv.is_local != 0 => {
+                        // B7: local LB-backend delivery confirmed — create the reverse DSR conntrack6
+                        // entry (keyed on the guest-reply tuple) when the edge dispatched a DSR VIP
+                        // option, so the guest's reply is later reverse-SNAT'd src -> VIP (B8).
+                        if let Some(opt) = in_.dsr {
+                            crate::conntrack::dsr_ct_create6(
+                                &*pkt, maps, inner_off, in_.vni, &opt.vip, in_.now,
+                            );
+                        }
                         (iv.tap_ifindex, iv.guest_mac, true, iv.peer_capable != 0)
                     }
                     _ => {

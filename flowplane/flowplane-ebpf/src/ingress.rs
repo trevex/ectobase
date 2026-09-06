@@ -21,10 +21,34 @@ use flowplane_core::encap::TunnelEncap;
 use flowplane_core::err::DpErr;
 use flowplane_core::pkt::Action;
 
+use aya_ebpf::bindings::__sk_buff;
+use flowplane_common::DsrOpt;
+
 use crate::coreimpl::{GlobalMaps, TcPkt};
 use crate::maps::LOCAL;
 use crate::parse::{ETH_LEN, ETH_P_IP, ETH_P_IPV6};
-use crate::tunnel::{apply_encap, get_tunnel_key, redirect as tunnel_redirect};
+use crate::tunnel::{
+    apply_encap, get_tunnel_key, get_tunnel_opt, redirect as tunnel_redirect, DSR_OPT_BUF_LEN,
+};
+
+/// B7: recover the DSR Geneve option the edge dispatched (if any) off `skb`'s tunnel metadata —
+/// counterpart to `get_tunnel_key` for the option TLV. `>= 0` means the option was present; a
+/// negative return (no option / not a DSR flow) yields `None`, a byte-for-byte no-op downstream.
+///
+/// `#[inline(never)]`: shared by both `try_uplink_rx` (v4) and `v6::v6_uplink_rx`. Keeps the 24-byte
+/// option buffer off the CALLER's own BPF stack frame — same out-of-lining discipline the core
+/// `process_uplink`/`process_uplink_rx` call chain uses throughout (see
+/// `flowplane_core::datapath`'s `#[inline(never)]` helpers) to stay under the verifier's combined
+/// call-stack budget.
+#[inline(never)]
+pub(crate) fn resolve_dsr_opt(skb: *mut __sk_buff) -> Option<DsrOpt> {
+    let mut opt_buf = [0u8; DSR_OPT_BUF_LEN as usize];
+    if get_tunnel_opt(skb, &mut opt_buf) >= 0 {
+        flowplane_core::dsr::decode(&opt_buf)
+    } else {
+        None
+    }
+}
 
 /// Execute an `Action` + optional `TunnelEncap` decision from a `flowplane_core::datapath`
 /// orchestrator. An LB-remote-backend reforward / neighbor-NAT relay hit (`Some(tunnel)`) re-stamps
@@ -93,10 +117,15 @@ pub fn try_uplink_rx(ctx: &TcContext) -> Result<i32, DpErr> {
     // longer carries a `guest_ipv6` placeholder at all — `process_uplink_rx` reads
     // `PORT_META[tap_ifindex].guest_ipv6` itself, AFTER resolving the delivery tap internally, which
     // is the only point that value is actually knowable.
+    //
+    // B7: recover the DSR Geneve option the edge dispatched (if any) off the SAME tunnel metadata
+    // `get_tunnel_key` just read above.
+    let dsr = resolve_dsr_opt(ctx.skb.skb);
     let in_ = UplinkIn {
         vni,
         local,
         now: crate::conntrack::now(),
+        dsr,
     };
     let mut pkt = TcPkt { ctx };
     let mut maps = GlobalMaps;
