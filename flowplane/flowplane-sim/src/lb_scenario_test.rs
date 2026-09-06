@@ -10,7 +10,7 @@
 //! Coverage proves LB flows IFF an explicit rule permits its source on the port.
 
 use etherparse::PacketBuilder;
-use flowplane_common::{LbKey, LbValue, MaglevKey};
+use flowplane_common::{LbBackend, LbKey, LbValue, MaglevKey};
 use flowplane_common::{Local, RouteValue, UnderlayValue};
 
 use crate::compilednic::{apply, CompiledNic};
@@ -146,7 +146,11 @@ fn backend_node(with_overlay_lb: bool) -> SimNode {
             table_id: 1,
             slot: 0,
         },
-        HOSTB_UL,
+        LbBackend {
+            node_vtep: HOSTB_UL,
+            vni: VNI,
+            ..Default::default()
+        },
     );
     if with_overlay_lb {
         n.maps.lb.insert(
@@ -167,7 +171,11 @@ fn backend_node(with_overlay_lb: bool) -> SimNode {
                 table_id: 2,
                 slot: 0,
             },
-            HOSTB_UL,
+            LbBackend {
+                node_vtep: HOSTB_UL,
+                vni: VNI,
+                ..Default::default()
+            },
         );
     }
     n
@@ -194,7 +202,11 @@ fn edge_node() -> SimNode {
             table_id: 1,
             slot: 0,
         },
-        HOSTB_UL,
+        LbBackend {
+            node_vtep: HOSTB_UL,
+            vni: VNI,
+            ..Default::default()
+        },
     );
     e
 }
@@ -222,7 +234,12 @@ fn edge_node_v6() -> SimNode {
             table_id: 1,
             slot: 0,
         },
-        HOSTB_UL,
+        LbBackend {
+            node_vtep: HOSTB_UL,
+            vni: VNI,
+            is_v6: 1,
+            ..Default::default()
+        },
     );
     e
 }
@@ -328,7 +345,11 @@ fn ew_lb_reforward_delivered() {
             table_id: 2,
             slot: 0,
         },
-        HOSTB_UL,
+        LbBackend {
+            node_vtep: HOSTB_UL,
+            vni: VNI,
+            ..Default::default()
+        },
     );
     fab.add_node("relay", relay);
 
@@ -409,7 +430,11 @@ fn ew_lb_reforward_converges_no_loop() {
             table_id: 2,
             slot: 0,
         },
-        HOSTB_UL,
+        LbBackend {
+            node_vtep: HOSTB_UL,
+            vni: VNI,
+            ..Default::default()
+        },
     );
     fab.add_node("relay", relay);
     let mut b = backend_node(true);
@@ -554,4 +579,103 @@ fn ns_lb_v6_wan_rx_encaps_to_backend() {
     let out2 = edge.wan_rx(&miss);
     assert_eq!(out2.action, Action::Pass, "non-VIP v6 dst must Pass");
     assert_eq!(out2.tunnel, None, "non-VIP dst emits no tunnel decision");
+}
+
+// ================= Local LB-backend delivery: distinct taps per backend =================
+//
+// Reproduces (as a regression test) the delivery-collapse bug: the OLD LB local-backend arm
+// resolved the selected backend via `UNDERLAY[backend_underlay]` — a single per-NODE tap — so
+// every backend hosted on the SAME node collapsed onto that one tap, no matter which backend
+// Maglev actually picked. The FIX makes `LbBackend` self-describing: local iff
+// `be.node_vtep == in_.local.underlay_ipv6`, and the delivery tap is then resolved per-BACKEND
+// via `INTERFACES[(vni, overlay_ip)]` (v4) / `INTERFACES6[(vni, overlay_ip)]` (v6) — so two
+// backends on one node, with distinct overlay IPs, now reach their OWN distinct taps.
+
+#[test]
+fn ns_lb_two_backends_one_node_deliver_to_distinct_taps_v4() {
+    use flowplane_common::{IfaceValue, LbBackend, LbKey, LbValue, MaglevKey};
+    use flowplane_core::pkt::Action;
+
+    const BE1_IP: [u8; 4] = [10, 0, 0, 61];
+    const BE2_IP: [u8; 4] = [10, 0, 0, 62];
+    const BE1_TAP: u32 = 61;
+    const BE2_TAP: u32 = 62;
+
+    let mut n = SimNode::with_local(local_for(HOSTB_UL, 9));
+    n.maps.add_iface(
+        VNI,
+        BE1_IP,
+        IfaceValue {
+            tap_ifindex: BE1_TAP,
+            is_local: 1,
+            underlay_ipv6: HOSTB_UL,
+            guest_mac: GUEST_MAC,
+            peer_capable: 0,
+            _pad: [0; 1],
+        },
+    );
+    n.maps.add_iface(
+        VNI,
+        BE2_IP,
+        IfaceValue {
+            tap_ifindex: BE2_TAP,
+            is_local: 1,
+            underlay_ipv6: HOSTB_UL,
+            guest_mac: GUEST_MAC,
+            peer_capable: 0,
+            _pad: [0; 1],
+        },
+    );
+    apply_fw(&mut n.maps, BE1_TAP, allow_from_any_443());
+    apply_fw(&mut n.maps, BE2_TAP, allow_from_any_443());
+
+    n.maps.lb.insert(
+        LbKey {
+            vni: VNI,
+            ipv4: OVERLAY_VIP,
+            port: 443,
+            proto: 6,
+            _pad: 0,
+        },
+        LbValue {
+            table_id: 7,
+            size: 2,
+        },
+    );
+    let mk = |ip: [u8; 4]| LbBackend {
+        node_vtep: HOSTB_UL,
+        overlay_ip: [
+            ip[0], ip[1], ip[2], ip[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ],
+        vni: VNI,
+        is_v6: 0,
+        _pad: [0; 3],
+    };
+    n.maps.maglev.insert(
+        MaglevKey {
+            table_id: 7,
+            slot: 0,
+        },
+        mk(BE1_IP),
+    );
+    n.maps.maglev.insert(
+        MaglevKey {
+            table_id: 7,
+            slot: 1,
+        },
+        mk(BE2_IP),
+    );
+
+    let mut seen_taps = std::collections::HashSet::new();
+    for src in [[10u8, 0, 9, 1], [10, 0, 9, 2], [10, 0, 9, 3], [10, 0, 9, 4]] {
+        let inner = eth_ipv4_tcp(src, OVERLAY_VIP, 443);
+        let out = n.uplink(&inner, VNI, &local_for(HOSTB_UL, 9));
+        if let Action::Redirect(tap) = out.action {
+            seen_taps.insert(tap);
+        }
+    }
+    assert!(
+        seen_taps.contains(&BE1_TAP) && seen_taps.contains(&BE2_TAP),
+        "both same-node backends must be reachable (got {seen_taps:?})"
+    );
 }

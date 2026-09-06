@@ -307,29 +307,37 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
     //    backend; it is NOT answered by the dataplane).
     let lb_ul = lb_select_forward_icmp_error(&*pkt, &*maps, inner_off, in_.vni)
         .or_else(|| lb_select_forward(&*pkt, &*maps, inner_off, in_.vni));
-    // KNOWN LIMITATION (deferred to the N/S-LB edge spec): LB local-backend delivery still resolves the
-    // selected backend via `UNDERLAY[backend_underlay]`, but since the underlay-model change every
-    // interface shares the node VTEP and `program_interface` no longer writes a per-interface UNDERLAY
-    // entry — so `underlay_get(node_vtep)` hits the edge sentinel (invalid tap) or misses (reforward
-    // loop), and multiple same-node backends collapse to one maglev entry. Not exercised by P4 (N/S-LB
-    // livetests are skipped); the LB path must migrate to `(vni, backend-overlay-IP)` via INTERFACES
-    // when LB is rebuilt. NOTE: `lb_scenario_test.rs::backend_node` hand-seeds `UNDERLAY[backend]` with
-    // a real tap — a state the production control plane no longer produces; that seed is a fiction that
-    // keeps this arm's sim green and must NOT be read as "this works for local backends".
     let (tap, guest_mac, is_lb, peer_capable) = match lb_ul {
-        Some(bul) => match maps.underlay_get(&bul) {
-            Some(bu) => (bu.tap_ifindex, bu.guest_mac, true, false), // LB backend local (see KNOWN LIMITATION above)
-            None => {
+        Some(be) => {
+            if be.node_vtep == in_.local.underlay_ipv6 {
+                let overlay4 = [
+                    be.overlay_ip[0],
+                    be.overlay_ip[1],
+                    be.overlay_ip[2],
+                    be.overlay_ip[3],
+                ];
+                match maps.ifaces_get(be.vni, &overlay4) {
+                    Some(iv) if iv.is_local != 0 => {
+                        (iv.tap_ifindex, iv.guest_mac, true, iv.peer_capable != 0)
+                    }
+                    _ => {
+                        return UplinkOut {
+                            action: Action::Drop,
+                            tunnel: None,
+                        };
+                    }
+                }
+            } else {
                 // Remote backend: re-forward — same vni, no decap, packet bytes untouched. The
-                // kernel geneve device re-stamps the tunnel key toward `bul` via
+                // kernel geneve device re-stamps the tunnel key toward `be.node_vtep` via
                 // `bpf_skb_set_tunnel_key`.
-                let tunnel = reforward(in_.vni, &bul);
+                let tunnel = reforward(be.vni, &be.node_vtep);
                 return UplinkOut {
                     action: Action::Redirect(in_.local.uplink_ifindex),
                     tunnel: Some(tunnel),
                 };
             }
-        },
+        }
         None => {
             let dst = match pkt.read_array::<4>(inner_off + 16) {
                 Some(d) => d,
@@ -1224,7 +1232,7 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
             action: Action::Redirect(in_.local.uplink_ifindex),
             tunnel: Some(TunnelEncap {
                 vni: 0,
-                remote: backend,
+                remote: backend.node_vtep,
             }),
         };
     }
