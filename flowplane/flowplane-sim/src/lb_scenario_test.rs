@@ -10,7 +10,7 @@
 //! Coverage proves LB flows IFF an explicit rule permits its source on the port.
 
 use etherparse::PacketBuilder;
-use flowplane_common::{LbBackend, LbKey, LbValue, MaglevKey};
+use flowplane_common::{LbBackend, LbKey, LbValue};
 use flowplane_common::{Local, RouteValue};
 
 use crate::compilednic::{apply, CompiledNic};
@@ -216,39 +216,6 @@ fn edge_node() -> SimNode {
             vni: VNI,
             is_v6: 0,
             _pad: [0; 3],
-        },
-    );
-    e
-}
-
-/// Edge node with a v6 WAN-VIP LB (vni=0) → hostB. Keyed by the last-4 bytes of `WAN_VIP6`
-/// (matching the control-plane `last4`), mirroring `edge_node()`.
-fn edge_node_v6() -> SimNode {
-    let mut e = SimNode::with_local(local_for(EDGE_UL, 7));
-    let last4 = [WAN_VIP6[12], WAN_VIP6[13], WAN_VIP6[14], WAN_VIP6[15]];
-    e.maps.lb.insert(
-        LbKey {
-            vni: 0,
-            ipv4: last4,
-            port: 443,
-            proto: 6,
-            _pad: 0,
-        },
-        LbValue {
-            table_id: 1,
-            size: 1,
-        },
-    );
-    e.maps.maglev.insert(
-        MaglevKey {
-            table_id: 1,
-            slot: 0,
-        },
-        LbBackend {
-            node_vtep: HOSTB_UL,
-            vni: VNI,
-            is_v6: 1,
-            ..Default::default()
         },
     );
     e
@@ -546,44 +513,137 @@ fn ew_lb_anycast_dropped_without_policy() {
 /// Direct edge `wan_rx` test for a v6 WAN VIP. We assert on the EDGE hop only — not a full
 /// `Prog::WanRx → Delivered` Fabric trace — because the sim's Fabric/`SimNode::uplink` assumes a
 /// v4 inner and does NOT yet model v6-inner backend delivery (see fabric.rs:104-106). This proves
-/// the new code this slice adds: the edge v6 Maglev select + the tunnel decision toward the backend.
+/// the FIRST behavioral DSR change (B6): `wan_rx` now Geneve-dispatches with a VIP option — the
+/// edge captures the ORIGINAL VIP into a `DsrOpt` (from the packet's dst BEFORE rewriting), rewrites
+/// the inner dst to the backend's OWN overlay IP (the guest only accepts its own IP), and leaves the
+/// inner SRC as the real client (so the backend can key its DSR conntrack on the real client flow).
 #[test]
-fn ns_lb_v6_wan_rx_encaps_to_backend() {
+fn ns_lb_v6_wan_rx_dsr_encode() {
+    use flowplane_common::DsrOpt;
     use flowplane_core::encap::TunnelEncap;
+    use flowplane_core::encap::ETH_LEN;
     use flowplane_core::pkt::Action;
 
-    let edge = edge_node_v6();
+    const BE_IP6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x61];
+    let mut e = SimNode::with_local(local_for(EDGE_UL, 7));
+    let last4 = [WAN_VIP6[12], WAN_VIP6[13], WAN_VIP6[14], WAN_VIP6[15]];
+    e.maps.lb.insert(
+        LbKey {
+            vni: 0,
+            ipv4: last4,
+            port: 443,
+            proto: 6,
+            _pad: 0,
+        },
+        LbValue {
+            table_id: 1,
+            size: 1,
+        },
+    );
+    e.maps.add_maglev(
+        1,
+        0,
+        LbBackend {
+            node_vtep: HOSTB_UL,
+            overlay_ip: BE_IP6,
+            vni: VNI,
+            is_v6: 1,
+            _pad: [0; 3],
+        },
+    );
 
-    // A v6 WAN frame hitting the VIP on 443 → Maglev-selects HOSTB_UL, emits the tunnel decision
-    // (WAN LB service space is vni=0) — no outer bytes written, frame unchanged.
     let frame = eth_ipv6_tcp(WAN_SRC6, WAN_VIP6, 443);
+    let out = e.wan_rx(&frame);
+
+    assert_eq!(
+        out.action,
+        Action::Redirect(7),
+        "edge must redirect out its uplink ifindex (EDGE_UL local ifindex=7)"
+    );
+    assert_eq!(
+        out.tunnel,
+        Some(TunnelEncap {
+            vni: VNI,
+            remote: HOSTB_UL,
+            dsr_vip: Some(DsrOpt {
+                family: 1,
+                _pad: 0,
+                port: 443,
+                vip: WAN_VIP6
+            })
+        }),
+        "tunnel decision targets the Maglev-selected backend at its OWN vni, carrying a DSR option \
+         with the ORIGINAL VIP"
+    );
+    assert_eq!(
+        &out.pkt[ETH_LEN + 24..ETH_LEN + 40],
+        &BE_IP6,
+        "inner v6 dst rewritten -> backend overlay"
+    );
+    assert_eq!(
+        &out.pkt[ETH_LEN + 8..ETH_LEN + 24],
+        &WAN_SRC6,
+        "inner v6 src unchanged (client)"
+    );
+
+    // Negative sub-case: a non-VIP v6 dst (last-4 != VIP key) → Pass, no encap, no rewrite.
+    let non_vip = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 5];
+    let miss = eth_ipv6_tcp(WAN_SRC6, non_vip, 443);
+    let out2 = e.wan_rx(&miss);
+    assert_eq!(out2.action, Action::Pass, "non-VIP v6 dst must Pass");
+    assert_eq!(out2.tunnel, None, "non-VIP dst emits no tunnel decision");
+    assert_eq!(out2.pkt, miss, "non-VIP frame is byte-for-byte unchanged");
+}
+
+/// v4 mirror of [`ns_lb_v6_wan_rx_dsr_encode`]: the edge captures the ORIGINAL v4 VIP into a
+/// `DsrOpt { family: 0, .. }` (vip left-justified in the 16-byte field) and rewrites the inner v4
+/// dst to the backend's own overlay IP, using the existing `vip_dnat_rewrite` v4 helper's checksum
+/// fixups (reused from the floating-IP DNAT arm).
+#[test]
+fn ns_lb_v4_wan_rx_dsr_encode() {
+    use flowplane_common::DsrOpt;
+    use flowplane_core::encap::TunnelEncap;
+    use flowplane_core::encap::ETH_LEN;
+    use flowplane_core::pkt::Action;
+
+    const BE_IP4: [u8; 4] = [10, 0, 0, 181];
+    let edge = edge_node();
+
+    let frame = eth_ipv4_tcp(WAN_SRC, WAN_VIP, 443);
     let out = edge.wan_rx(&frame);
 
     assert_eq!(
         out.action,
         Action::Redirect(7),
-        "edge must redirect the encapped frame out its uplink ifindex (EDGE_UL local ifindex=7)"
+        "edge must redirect out its uplink ifindex (EDGE_UL local ifindex=7)"
     );
+    let mut vip16 = [0u8; 16];
+    vip16[0..4].copy_from_slice(&WAN_VIP);
     assert_eq!(
         out.tunnel,
         Some(TunnelEncap {
-            vni: 0,
+            vni: VNI,
             remote: HOSTB_UL,
-            dsr_vip: None
+            dsr_vip: Some(DsrOpt {
+                family: 0,
+                _pad: 0,
+                port: 443,
+                vip: vip16
+            })
         }),
-        "tunnel decision must target the Maglev-selected backend underlay (HOSTB_UL) at vni=0"
+        "tunnel decision targets the Maglev-selected backend at its OWN vni, carrying a DSR option \
+         with the ORIGINAL v4 VIP left-justified in the 16-byte field"
     );
     assert_eq!(
-        out.pkt, frame,
-        "frame is byte-for-byte unchanged (no outer bytes written)"
+        &out.pkt[ETH_LEN + 16..ETH_LEN + 20],
+        &BE_IP4,
+        "inner v4 dst rewritten -> backend overlay"
     );
-
-    // Negative sub-case: a non-VIP v6 dst (last-4 != VIP key) → Pass, no encap.
-    let non_vip = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 5];
-    let miss = eth_ipv6_tcp(WAN_SRC6, non_vip, 443);
-    let out2 = edge.wan_rx(&miss);
-    assert_eq!(out2.action, Action::Pass, "non-VIP v6 dst must Pass");
-    assert_eq!(out2.tunnel, None, "non-VIP dst emits no tunnel decision");
+    assert_eq!(
+        &out.pkt[ETH_LEN + 12..ETH_LEN + 16],
+        &WAN_SRC,
+        "inner v4 src unchanged (client)"
+    );
 }
 
 // ================= Local LB-backend delivery: distinct taps per backend =================

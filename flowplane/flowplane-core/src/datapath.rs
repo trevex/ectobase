@@ -1239,12 +1239,73 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
         _ => lb_select_forward(&*pkt, maps, ETH_LEN, 0),
     };
     if let Some(backend) = selected {
+        // B6: DSR-encode. Capture the ORIGINAL VIP (the packet's current inner dst, BEFORE
+        // rewriting) into the Geneve DSR option, then rewrite the inner dst -> the backend's OWN
+        // overlay IP (the guest only accepts its own IP as a dst). The inner SRC is left as the
+        // real client so the backend can key its own DSR conntrack/reverse-SNAT on the real client
+        // flow, not the VIP. `apply_encap` (B4) stamps `dsr_vip` on the wire — no eBPF change here.
+        let is_v6 = ethertype == 0x86DD;
+        let dsr = if is_v6 {
+            let vip = match pkt.read_array::<16>(ETH_LEN + 24) {
+                Some(v) => v,
+                None => {
+                    return WanRxOut {
+                        action: Action::Drop,
+                        tunnel: None,
+                    }
+                }
+            };
+            let port = pkt.read_u16_be(ETH_LEN + 40 + 2).unwrap_or(0);
+            let nexthdr = pkt.read_u8(ETH_LEN + 6).unwrap_or(0);
+            // Rewrite the inner dst VIP -> the backend's own overlay IP, folding the TCP/UDP
+            // checksum (no IPv6 header checksum to fix).
+            crate::conntrack::rewrite_v6_addr(
+                pkt,
+                ETH_LEN,
+                ETH_LEN + 24,
+                nexthdr,
+                &vip,
+                &backend.overlay_ip,
+            );
+            flowplane_common::DsrOpt {
+                family: 1,
+                _pad: 0,
+                port,
+                vip,
+            }
+        } else {
+            let vip4 = match pkt.read_array::<4>(ETH_LEN + 16) {
+                Some(v) => v,
+                None => {
+                    return WanRxOut {
+                        action: Action::Drop,
+                        tunnel: None,
+                    }
+                }
+            };
+            let port = pkt.read_u16_be(ETH_LEN + 20 + 2).unwrap_or(0);
+            let be4 = [
+                backend.overlay_ip[0],
+                backend.overlay_ip[1],
+                backend.overlay_ip[2],
+                backend.overlay_ip[3],
+            ];
+            vip_dnat_rewrite(pkt, ETH_LEN, &vip4, &be4);
+            let mut vip16 = [0u8; 16];
+            vip16[0..4].copy_from_slice(&vip4);
+            flowplane_common::DsrOpt {
+                family: 0,
+                _pad: 0,
+                port,
+                vip: vip16,
+            }
+        };
         return WanRxOut {
             action: Action::Redirect(in_.local.uplink_ifindex),
             tunnel: Some(TunnelEncap {
-                vni: 0,
+                vni: backend.vni,
                 remote: backend.node_vtep,
-                dsr_vip: None,
+                dsr_vip: Some(dsr),
             }),
         };
     }
