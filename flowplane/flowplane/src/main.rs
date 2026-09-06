@@ -46,12 +46,21 @@ pub(crate) fn mac_of(iface: &str) -> anyhow::Result<[u8; 6]> {
     parse_mac(s.trim())
 }
 
-/// Encap overhead subtracted from the underlay L3 MTU to get the guest L3 MTU: outer IPv6 (40) +
-/// outer UDP (8) + Geneve header (8) = 56 (`flowplane_common::GENEVE_OVERHEAD`). The outer Ethernet
+/// Base encap overhead subtracted from the underlay L3 MTU to get the guest L3 MTU: outer IPv6 (40)
+/// + outer UDP (8) + Geneve header (8) = 56 (`flowplane_common::GENEVE_OVERHEAD`). The outer Ethernet
 /// (14) is link framing, off the L3 MTU. (Pre-Geneve this was IP-in-IPv6 — a bare inner IP packet,
 /// no inner Ethernet/UDP/Geneve on the wire — so the overhead was 40; the Geneve retarget added the
 /// UDP + Geneve headers on top.)
-pub(crate) const ENCAP_OVERHEAD_V6: u32 = flowplane_common::GENEVE_OVERHEAD as u32;
+const GENEVE_BASE_OVERHEAD_V6: u32 = flowplane_common::GENEVE_OVERHEAD as u32;
+
+/// Encap overhead subtracted from the underlay L3 MTU to get the guest L3 MTU: the base Geneve
+/// overhead ([`GENEVE_BASE_OVERHEAD_V6`], 56) plus the DSR Geneve option
+/// (`flowplane_core::dsr::DSR_OPT_BUF_LEN`, 24) that the edge stamps onto edge->backend
+/// DSR-redirected packets (B9). Subtracted globally — not only on nodes that can host LB
+/// backends — so the guest MTU is uniform across the fleet and a full-MTU inner frame plus the DSR
+/// option always fits the underlay path MTU, however the traffic ends up routed.
+pub(crate) const ENCAP_OVERHEAD_V6: u32 =
+    GENEVE_BASE_OVERHEAD_V6 + flowplane_core::dsr::DSR_OPT_BUF_LEN as u32;
 
 /// Read `/sys/class/net/<iface>/mtu` (the interface's L3 MTU). Best-effort: `None` on any error.
 pub(crate) fn mtu_of(iface: &str) -> Option<u32> {
@@ -347,7 +356,7 @@ enum Cmd {
         /// Programs the ROUTES6 LPM trie so tc_guest_tx can forward overlay IPv6 packets.
         #[arg(long = "remote6")]
         remotes6: Vec<String>,
-        /// DHCP MTU option (server-wide). Defaults to 1500 - GENEVE_OVERHEAD (1444) if unset.
+        /// DHCP MTU option (server-wide). Defaults to 1500 - ENCAP_OVERHEAD_V6 (1420) if unset.
         #[arg(long = "dhcp-mtu")]
         dhcp_mtu: Option<u32>,
         /// DHCPv4 DNS server, repeatable (server-wide).
@@ -374,7 +383,7 @@ enum Cmd {
         guest_mac: String,
         #[arg(long)]
         gateway_mac: String,
-        /// DHCP MTU option. Defaults to 1500 - GENEVE_OVERHEAD (1444).
+        /// DHCP MTU option. Defaults to 1500 - ENCAP_OVERHEAD_V6 (1420).
         #[arg(long, default_value_t = 1500 - ENCAP_OVERHEAD_V6)]
         dhcp_mtu: u32,
         #[arg(long = "dhcp-dns")]
@@ -1599,15 +1608,28 @@ mod tests {
 
     #[test]
     fn guest_mtu_clamps_to_standard_without_jumbo() {
-        // Jumbo ok: full underlay minus encap (Geneve overhead = 56).
-        assert_eq!(guest_mtu_from(9000, true), 8944);
+        // Jumbo ok: full underlay minus encap (Geneve overhead 56 + DSR option 24 = 80).
+        assert_eq!(guest_mtu_from(9000, true), 8920);
         // Jumbo not ok: clamp to standard 1500 first, then minus encap.
-        assert_eq!(guest_mtu_from(9000, false), 1444);
+        assert_eq!(guest_mtu_from(9000, false), 1420);
         // Small underlay is unaffected by the clamp either way.
-        assert_eq!(guest_mtu_from(1500, false), 1444);
-        assert_eq!(guest_mtu_from(1500, true), 1444);
+        assert_eq!(guest_mtu_from(1500, false), 1420);
+        assert_eq!(guest_mtu_from(1500, true), 1420);
         // Floor at 576.
         assert_eq!(guest_mtu_from(600, true), 576);
+    }
+
+    #[test]
+    fn encap_overhead_v6_includes_dsr_geneve_option() {
+        // The advertised guest MTU must leave room for the DSR Geneve option that the edge
+        // stamps onto edge->backend redirected packets (B9), on top of the base Geneve overhead
+        // (outer IPv6 40 + outer UDP 8 + Geneve header 8 = 56), so a full-MTU inner frame plus the
+        // DSR option always fits the underlay path MTU.
+        assert_eq!(
+            ENCAP_OVERHEAD_V6,
+            flowplane_common::GENEVE_OVERHEAD as u32 + flowplane_core::dsr::DSR_OPT_BUF_LEN as u32
+        );
+        assert_eq!(ENCAP_OVERHEAD_V6, 80);
     }
 
     #[test]
