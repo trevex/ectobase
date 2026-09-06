@@ -175,7 +175,30 @@ pub fn add_lb_backend<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::AddLbBackendRequest,
 ) -> Result<pb::AddLbBackendResponse, Status> {
-    let backend = parse_nexthop6(&req.backend_underlay).map_err(invalid)?;
+    let node_vtep = parse_nexthop6(&req.backend_underlay).map_err(invalid)?;
+    let (overlay_ip, is_v6) = match req.backend_overlay_ip.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(a)) => {
+            let o = a.octets();
+            (
+                [o[0], o[1], o[2], o[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                0u8,
+            )
+        }
+        Ok(std::net::IpAddr::V6(a)) => (a.octets(), 1u8),
+        Err(e) => {
+            return Err(Status::invalid_argument(format!(
+                "invalid backend_overlay_ip {:?}: {e}",
+                req.backend_overlay_ip
+            )))
+        }
+    };
+    let backend = flowplane_common::LbBackend {
+        node_vtep,
+        overlay_ip,
+        vni: req.backend_vni,
+        is_v6,
+        _pad: [0; 3],
+    };
     let id = req.id.clone().into_bytes();
     core.add_lb_target(&id, backend).map_err(internal)?;
     Ok(pb::AddLbBackendResponse {})

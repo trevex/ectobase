@@ -27,7 +27,7 @@
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 
 use flowplane_common::{
-    FwMeta, FwRule, LbKey, LbValue, Local, MaglevKey, UnderlayValue, FW_ACTION_ACCEPT,
+    FwMeta, FwRule, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, FW_ACTION_ACCEPT,
     FW_DIR_INGRESS,
 };
 
@@ -59,12 +59,45 @@ fn local() -> Local {
     }
 }
 
-fn underlay_value() -> UnderlayValue {
-    UnderlayValue {
-        vni: VNI,
+/// Local-delivery `INTERFACES` row for the backend's own overlay VIP (what `process_interface`
+/// would program for the guest tap this LB VIP is backed by, DSR-style: same VIP, no NAT).
+fn iface_value() -> IfaceValue {
+    IfaceValue {
         tap_ifindex: TAP,
+        is_local: 1,
+        underlay_ipv6: BACKEND_UL,
         guest_mac: GUEST_MAC,
-        _pad: [0; 2],
+        peer_capable: 0,
+        _pad: [0; 1],
+    }
+}
+
+/// This node's own underlay as the Maglev-selected `LbBackend` (self-selection => local deliver,
+/// DSR): `node_vtep == self` and `overlay_ip`/`vni` resolve delivery via `INTERFACES`.
+fn backend() -> LbBackend {
+    LbBackend {
+        node_vtep: BACKEND_UL,
+        overlay_ip: [
+            OVERLAY_VIP[0],
+            OVERLAY_VIP[1],
+            OVERLAY_VIP[2],
+            OVERLAY_VIP[3],
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ],
+        vni: VNI,
+        is_v6: 0,
+        _pad: [0; 3],
     }
 }
 
@@ -103,13 +136,15 @@ fn allow_vip_rule() -> FwRule {
 }
 
 /// Native `flowplane_core::datapath::process_uplink` reference for the LB local-deliver fixture: a
-/// backend node whose UNDERLAY self-entry + overlay LB + Maglev self-selection + VIP-allow firewall
-/// match exactly the eBPF maps the (unreachable, see the module doc) LB dispatch would read. Sanity
-/// check on the fixture, not a byte-parity oracle.
+/// backend node whose INTERFACES local-delivery row + overlay LB + Maglev self-selection +
+/// VIP-allow firewall match exactly the eBPF maps the (unreachable, see the module doc) LB
+/// dispatch would read. Sanity check on the fixture, not a byte-parity oracle.
 fn native_reference(inner: &[u8]) -> (Action, Vec<u8>) {
     let mut node = SimNode::with_local(local());
-    // UNDERLAY self-entry: BACKEND_UL -> this node's vni + tap + guest MAC.
-    node.maps.underlay.insert(BACKEND_UL, underlay_value());
+    // INTERFACES local-delivery row for the backend's own overlay VIP (replaces the old
+    // UNDERLAY[backend] fiction — local-vs-remote is now `LbBackend.node_vtep == self`, and local
+    // delivery resolves the tap via INTERFACES[(vni, overlay_ip)]).
+    node.maps.add_iface(VNI, OVERLAY_VIP, iface_value());
     // Overlay LB VIP -> Maglev table 1.
     node.maps.lb.insert(
         LbKey {
@@ -124,13 +159,14 @@ fn native_reference(inner: &[u8]) -> (Action, Vec<u8>) {
             size: 1,
         },
     );
-    // Maglev slot 0 -> this node's own underlay (LB selects self => local deliver, DSR).
+    // Maglev slot 0 -> this node's own underlay as an LbBackend (LB selects self => local
+    // deliver, DSR).
     node.maps.maglev.insert(
         MaglevKey {
             table_id: TABLE_ID,
             slot: 0,
         },
-        BACKEND_UL,
+        backend(),
     );
     // Firewall: one ingress rule on TAP covering VIP:443 (enforcement is unconditional).
     node.maps.fw_meta.insert(

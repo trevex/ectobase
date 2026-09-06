@@ -324,7 +324,12 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let (log_id, log_backend) = (r.id.clone(), r.backend_underlay.clone());
+        let (log_id, log_backend, log_overlay, log_vni) = (
+            r.id.clone(),
+            r.backend_underlay.clone(),
+            r.backend_overlay_ip.clone(),
+            r.backend_vni,
+        );
         let resp = tokio::task::spawn_blocking(move || {
             attach
                 .control
@@ -332,7 +337,9 @@ impl DataplaneNode for NodeService {
         })
         .await
         .map_err(|e| Status::internal(format!("add_lb_backend task panicked: {e}")))??;
-        println!("LB backend add id={log_id} backend={log_backend}");
+        println!(
+            "LB backend add id={log_id} backend={log_backend} overlay={log_overlay} vni={log_vni}"
+        );
         Ok(Response::new(resp))
     }
 

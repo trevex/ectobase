@@ -1008,7 +1008,7 @@ async fn main() -> anyhow::Result<()> {
             // Key: (ip, port, proto, lb_underlay) -> table_id
             let mut table_ids: std::collections::HashMap<([u8; 4], u16, u8, [u8; 16]), u32> =
                 std::collections::HashMap::new();
-            let mut backends: std::collections::HashMap<u32, Vec<[u8; 16]>> =
+            let mut backends: std::collections::HashMap<u32, Vec<flowplane_common::LbBackend>> =
                 std::collections::HashMap::new();
             let mut next_table_id = 1u32;
             for lb in &lbs {
@@ -1050,7 +1050,17 @@ async fn main() -> anyhow::Result<()> {
                 let tid = *table_ids
                     .get(&(ip, port, proto, lb_underlay))
                     .context("--lb-target references an unknown --lb service")?;
-                backends.get_mut(&tid).unwrap().push(backend);
+                // The --lb-target CLI only carries the backend node underlay (sufficient for the
+                // edge/reforward path, vni=0 WAN edge with remote backends reached by node_vtep);
+                // overlay-IP/VNI-based LOCAL delivery is driven by the gRPC AddLbBackend path, not
+                // this CLI, so overlay_ip/vni/is_v6 are left zeroed.
+                backends
+                    .get_mut(&tid)
+                    .unwrap()
+                    .push(flowplane_common::LbBackend {
+                        node_vtep: backend,
+                        ..Default::default()
+                    });
             }
             for (tid, bes) in &backends {
                 if bes.is_empty() {
