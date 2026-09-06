@@ -5,6 +5,7 @@ package livetest
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -125,6 +126,18 @@ func TestLbDistributeSmoke(t *testing.T) {
 		t.Fatalf("wan VIP route: %v\n%s", err, out)
 	}
 	t.Cleanup(func() { _, _ = nodeExec(ctx, wan, "ip", "-6", "route", "del", lbVIP+"/128") })
+
+	// LB_HOLD: keep the full LB config + guest up and curl in a loop for 15m so the datapath
+	// can be traced externally (debugging aid; env-gated, no effect on normal CI runs).
+	if os.Getenv("LB_HOLD") != "" {
+		t.Logf("LB_HOLD set: holding setup up, curling VIP %s in a loop for 15m", lbVIP)
+		deadline := time.Now().Add(15 * time.Minute)
+		for time.Now().Before(deadline) {
+			_ = curlFromWan(ctx, wan, lbVIP)
+			time.Sleep(1 * time.Second)
+		}
+		return
+	}
 
 	eventually(t, waitDeadline, 5*time.Second, func() error {
 		out := curlFromWan(ctx, wan, lbVIP)
