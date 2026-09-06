@@ -188,11 +188,13 @@ func (*AddLbVipResponse) Descriptor() ([]byte, []int) {
 }
 
 type AddLbBackendRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                                  // the LB id from AddLbVip
-	BackendUnderlay string                 `protobuf:"bytes,2,opt,name=backend_underlay,json=backendUnderlay,proto3" json:"backend_underlay,omitempty"` // backend node underlay IPv6 /128
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                                       // the LB id from AddLbVip
+	BackendUnderlay  string                 `protobuf:"bytes,2,opt,name=backend_underlay,json=backendUnderlay,proto3" json:"backend_underlay,omitempty"`      // backend node underlay IPv6 /128 (the node VTEP)
+	BackendOverlayIp string                 `protobuf:"bytes,3,opt,name=backend_overlay_ip,json=backendOverlayIp,proto3" json:"backend_overlay_ip,omitempty"` // backend guest overlay IP (v4 or v6)
+	BackendVni       uint32                 `protobuf:"varint,4,opt,name=backend_vni,json=backendVni,proto3" json:"backend_vni,omitempty"`                    // backend delivery VNI (the guest's tenant VNI)
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *AddLbBackendRequest) Reset() {
@@ -237,6 +239,20 @@ func (x *AddLbBackendRequest) GetBackendUnderlay() string {
 		return x.BackendUnderlay
 	}
 	return ""
+}
+
+func (x *AddLbBackendRequest) GetBackendOverlayIp() string {
+	if x != nil {
+		return x.BackendOverlayIp
+	}
+	return ""
+}
+
+func (x *AddLbBackendRequest) GetBackendVni() uint32 {
+	if x != nil {
+		return x.BackendVni
+	}
+	return 0
 }
 
 type AddLbBackendResponse struct {
@@ -2130,10 +2146,13 @@ const file_dataplane_proto_rawDesc = "" +
 	"\vlb_underlay\x18\x04 \x01(\tR\n" +
 	"lbUnderlay\x12-\n" +
 	"\x05ports\x18\x05 \x03(\v2\x17.dataplane.v1.PortProtoR\x05ports\"\x12\n" +
-	"\x10AddLbVipResponse\"P\n" +
+	"\x10AddLbVipResponse\"\x9f\x01\n" +
 	"\x13AddLbBackendRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12)\n" +
-	"\x10backend_underlay\x18\x02 \x01(\tR\x0fbackendUnderlay\"\x16\n" +
+	"\x10backend_underlay\x18\x02 \x01(\tR\x0fbackendUnderlay\x12,\n" +
+	"\x12backend_overlay_ip\x18\x03 \x01(\tR\x10backendOverlayIp\x12\x1f\n" +
+	"\vbackend_vni\x18\x04 \x01(\rR\n" +
+	"backendVni\"\x16\n" +
 	"\x14AddLbBackendResponse\"!\n" +
 	"\x0fDelLbVipRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"\x12\n" +

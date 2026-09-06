@@ -76,8 +76,10 @@ message AddLbVipRequest {
 message AddLbVipResponse {}
 
 message AddLbBackendRequest {
-  string id = 1;               // the LB id from AddLbVip
-  string backend_underlay = 2; // backend node underlay IPv6 /128
+  string id = 1;                  // the LB id from AddLbVip
+  string backend_underlay = 2;    // backend node underlay IPv6 /128 (the node VTEP)
+  string backend_overlay_ip = 3;  // backend guest overlay IP (v4 or v6)
+  uint32 backend_vni = 4;         // backend delivery VNI (the guest's tenant VNI)
 }
 message AddLbBackendResponse {}
 
