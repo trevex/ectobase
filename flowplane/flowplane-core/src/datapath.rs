@@ -5,13 +5,14 @@
 //! runs under the sim and under the `BPF_PROG_TEST_RUN` anchor.
 
 use flowplane_common::{
-    Local, PortMeta, CT_F_NAT64, CT_REWRITE_DST, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS,
-    GENEVE_OVERHEAD, UNDERLAY_LOCAL_DELIVER,
+    CtEntry, Local, PortMeta, CT_F_NAT64, CT_REWRITE_DST, CT_REWRITE_SRC, FW_ACTION_DROP,
+    FW_DIR_EGRESS, FW_DIR_INGRESS, GENEVE_OVERHEAD, UNDERLAY_LOCAL_DELIVER,
 };
 
 use crate::arp_nd::{arp_reply, nd_reply};
 use crate::conntrack::{
     ct_apply, ct_create_default, ct_create_default6, ct_key, ct_key6, ct_refresh, ct_refresh6,
+    rewrite_v6_addr,
 };
 use crate::dhcp;
 use crate::egress::{deliver, egress_fw_ct6, route4, route_decision6, Deliver, EgressFwCt6};
@@ -694,6 +695,30 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
 
     // 2. VIP snat/dnat: not modelled (no VIP maps → no-op in the eBPF path too).
 
+    // B8: DSR reverse-SNAT. If this is the guest's REPLY to a DSR-load-balanced flow, the backend's
+    // ingress `uplink_dsr_note` tcx pre-program (B7c) already noted the VIP the edge dispatched, keyed
+    // on this exact reply 5-tuple (`invert_key(ct_key(forwarded))` == `ct_key(reply)`). Rewrite src
+    // (this guest's own overlay IP) -> that VIP so the reply is client-visible as coming from the VIP,
+    // then let it fall through the ordinary route/deliver tail (it typically routes out via the
+    // external/public route toward any anycast edge — no local INTERFACES entry for the real client).
+    // Reuses `ct_apply`'s CT_REWRITE_SRC path (byte-identical IP+L4 checksum fold to any other src
+    // rewrite) via a transient, map-free `CtEntry` — no new rewrite helper needed. A DSR flow has no
+    // `NAT` config of its own, so `snat_egress` below would no-op for it anyway; `is_dsr` skips the
+    // call explicitly since a DSR reply is not NAT-translated (SNAT and DSR reverse-SNAT are mutually
+    // exclusive translations of the very same src field, and must not both fire).
+    let mut is_dsr = false;
+    if let Some(key) = ct_key(&*pkt, ip_off, in_.meta.vni) {
+        if let Some(d) = maps.dsr_get(&key) {
+            let e = CtEntry {
+                xlate_ip: [d.vip[0], d.vip[1], d.vip[2], d.vip[3]],
+                flags: CT_REWRITE_SRC,
+                ..Default::default()
+            };
+            ct_apply(pkt, ip_off, &e);
+            is_dsr = true;
+        }
+    }
+
     // 3. Route lookup on the inner IPv4 dst.
     let dst = match pkt.read_array::<4>(ip_off + 16) {
         Some(d) => d,
@@ -723,8 +748,14 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
     // — silently evicting every SNAT reverse entry and breaking NAT-return. Mirrors the eBPF path,
     // which already passes `conntrack::now()` here (egress.rs); tests using `now: 0` are unaffected
     // (they stamp 0 and never sweep with a real clock).
+    //
+    // Skipped entirely for a DSR reply (`is_dsr`): a DSR flow has no `NAT` config, so `snat_egress`
+    // would already no-op (`nat_get` miss) — the explicit skip just documents that SNAT and the B8
+    // DSR reverse-SNAT above are mutually exclusive translations of the same src field.
     let is_ext = route.is_external != 0;
-    if snat_egress(pkt, maps, ip_off, in_.meta.vni, is_ext, in_.now) == SnatOutcome::Exhausted {
+    if !is_dsr
+        && snat_egress(pkt, maps, ip_off, in_.meta.vni, is_ext, in_.now) == SnatOutcome::Exhausted
+    {
         return GuestTxOut {
             action: Action::Drop,
             edt_tstamp,
@@ -873,6 +904,25 @@ pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
         }
         EgressFwCt6::Pass { was_new } => was_new,
     };
+
+    // B8: DSR reverse-SNAT. If this is the guest's REPLY to a DSR-load-balanced flow, the backend's
+    // ingress `uplink_dsr_note6` tcx pre-program (B7c) already noted the VIP the edge dispatched, keyed
+    // on this exact reply 5-tuple (`invert_key6(ct_key6(forwarded))` == `ct_key6(reply)`). Rewrite src
+    // (this guest's own overlay IP) -> that VIP so the reply is client-visible as coming from the VIP;
+    // the subsequent route decision keys off DST (the client), so it is unaffected by this src rewrite
+    // — the reply then falls through the ordinary route6/deliver tail exactly like any other flow
+    // (typically an encap toward the external/public route, since the real client has no local
+    // INTERFACES6 entry). Runs BEFORE stage 2 (route6 + deliver), same relative position as v4's
+    // insertion before its route lookup — after the firewall/conntrack stage above, which already
+    // tracked this flow's ORIGINAL (pre-rewrite) 5-tuple, matching what `dsr_note6` keyed off.
+    if let Some(key) = ct_key6(&*pkt, ip_off, in_.meta.vni) {
+        if let Some(d) = maps.dsr6_get(&key) {
+            if let Some(src) = pkt.read_array::<16>(ip_off + 8) {
+                let nexthdr = pkt.read_u8(ip_off + 6).unwrap_or(0);
+                rewrite_v6_addr(pkt, ip_off, ip_off + 8, nexthdr, &src, &d.vip);
+            }
+        }
+    }
 
     // Stage 2: route6 + deliver.
     match route_decision6(&*pkt, &*maps, in_.meta) {

@@ -35,14 +35,15 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    DsrOpt, FwMeta, FwRule, FwRule6, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey,
-    FW_ACTION_ACCEPT, FW_DIR_INGRESS,
+    DsrOpt, DsrVip, FwMeta, FwRule, FwRule6, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey,
+    PortMeta, RouteValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS, FW_DIR_INGRESS,
 };
 use flowplane_core::conntrack::{ct_key, ct_key6, dsr_note, dsr_note6, invert_key, invert_key6};
 use flowplane_core::encap::ETH_LEN;
 use flowplane_core::maps::Maps;
-use flowplane_core::pkt::Action;
+use flowplane_core::pkt::{Action, Pkt};
 
+use crate::maps::{Route4, Route6};
 use crate::{MemMaps, SimNode, VecPkt};
 
 const VNI: u32 = 100;
@@ -536,5 +537,289 @@ fn v4_lb_local_delivery_without_dsr_notes_nothing() {
         node.maps.conntrack.len(),
         0,
         "no DSR option -> no conntrack entry of any kind is created"
+    );
+}
+
+// ─── B8: guest-egress DSR reverse-SNAT (`SimNode::guest_tx_v6` / `guest_tx`) ───────────────────────
+//
+// At the backend, the guest's REPLY to a DSR-load-balanced flow (src = the guest's own overlay IP,
+// dst = the real client) must have its src rewritten to the VIP the edge dispatched — the reverse
+// state the ingress `uplink_dsr_note`/`uplink_dsr_note6` tcx pre-program recorded (B7/B7c) in `DSR`/
+// `DSR6`, keyed on the reply's OWN 5-tuple. `process_guest_tx`/`process_guest_tx_v6` apply it on
+// egress, between the firewall/conntrack stage and the route/deliver tail — the route decision keys
+// off DST (the real client), so it is unaffected; the rewritten src is what leaves via the ordinary
+// route (typically external, encapping toward any anycast edge, since the real client is never a
+// local `INTERFACES`/`INTERFACES6` entry).
+
+const EDGE_UNDERLAY6: [u8; 16] = [
+    0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xee, 0xee,
+];
+const EDGE_UNDERLAY: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xdd];
+const SERVICE_PORT: u16 = 443;
+const CLIENT_PORT: u16 = 51000;
+
+fn port_meta6_for(vni: u32, underlay: [u8; 16]) -> PortMeta {
+    PortMeta {
+        vni,
+        guest_ipv4: [0; 4],
+        gateway_ipv4: [0; 4],
+        guest_mac: GUEST_MAC,
+        l3: 0,
+        _pad: [0; 1],
+        underlay_ipv6: underlay,
+        gateway_ipv6: [0; 16],
+        guest_ipv6: BACKEND_OVERLAY_IP6,
+    }
+}
+
+fn port_meta4_for(vni: u32, underlay: [u8; 16]) -> PortMeta {
+    PortMeta {
+        vni,
+        guest_ipv4: BACKEND_OVERLAY_IP,
+        gateway_ipv4: [10, 0, 0, 1],
+        guest_mac: GUEST_MAC,
+        l3: 0,
+        _pad: [0; 1],
+        underlay_ipv6: underlay,
+        gateway_ipv6: [0; 16],
+        guest_ipv6: [0; 16],
+    }
+}
+
+/// Wildcard EGRESS-allow v6 firewall rule (any src/dst/port/proto) — the reply's egress firewall
+/// check must not deny-by-default block it, matching `guest_tx_v6_test.rs`'s `egress_allow_rule`.
+fn wildcard_egress_rule6() -> FwRule6 {
+    FwRule6 {
+        src_ip: [0; 16],
+        src_mask: [0; 16],
+        dst_ip: [0; 16],
+        dst_mask: [0; 16],
+        src_port_min: 0,
+        src_port_max: 65535,
+        dst_port_min: 0,
+        dst_port_max: 65535,
+        icmp_type: 0xffff,
+        icmp_code: 0xffff,
+        proto: 0,
+        action: FW_ACTION_ACCEPT,
+        direction: FW_DIR_EGRESS,
+        enabled: 1,
+    }
+}
+
+/// v4 mirror of `wildcard_egress_rule6`.
+fn wildcard_egress_rule4() -> FwRule {
+    FwRule {
+        src_ip: [0; 4],
+        src_mask: [0; 4],
+        dst_ip: [0; 4],
+        dst_mask: [0; 4],
+        src_port_min: 0,
+        src_port_max: 65535,
+        dst_port_min: 0,
+        dst_port_max: 65535,
+        icmp_type: 0xffff,
+        icmp_code: 0xffff,
+        proto: 0,
+        action: FW_ACTION_ACCEPT,
+        direction: FW_DIR_EGRESS,
+        enabled: 1,
+    }
+}
+
+/// A full guest Ethernet frame `[Eth][IPv6][TCP]` with EXPLICIT sport/dport (unlike `eth_ipv6_tcp`'s
+/// fixed sport=40000) — the reply direction needs sport=service port, dport=client port.
+fn eth_ipv6_tcp_reply(src: [u8; 16], dst: [u8; 16], sport: u16, dport: u16) -> Vec<u8> {
+    let b = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
+        .ipv6(src, dst, 64)
+        .tcp(sport, dport, 0, 1024);
+    let mut out = Vec::new();
+    b.write(&mut out, &[]).unwrap();
+    out
+}
+
+/// v4 mirror of `eth_ipv6_tcp_reply`.
+fn eth_ipv4_tcp_reply(src: [u8; 4], dst: [u8; 4], sport: u16, dport: u16) -> Vec<u8> {
+    let b = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
+        .ipv4(src, dst, 64)
+        .tcp(sport, dport, 0, 1024);
+    let mut out = Vec::new();
+    b.write(&mut out, &[]).unwrap();
+    out
+}
+
+/// A `SimNode` ready to run a v6 guest-egress reply off `TAP`: LOCAL identity + `maps.local` set
+/// (required for the `deliver()` Encap arm), a wildcard egress-allow v6 rule on `TAP`, and a
+/// public-VNI DEFAULT route (`::/0`) toward `EDGE_UNDERLAY6` so an unrecognised dst (the real client)
+/// still routes/encaps instead of Pass-ing.
+fn node_for_guest_tx6() -> SimNode {
+    let mut node = SimNode::with_local(local_for(HOSTB_UL, 9));
+    node.maps.local = Some(local_for(HOSTB_UL, 9));
+    node.src_ifindex = TAP;
+    node.maps.fw_meta6.insert(
+        TAP,
+        FwMeta {
+            ingress_count: 0,
+            egress_count: 1,
+        },
+    );
+    node.maps
+        .fw_rules6
+        .insert((TAP, 0), wildcard_egress_rule6());
+    node.maps.routes6.push(Route6 {
+        vni: VNI,
+        ipv6: [0u8; 16],
+        prefix: 0,
+        value: RouteValue {
+            nexthop_vni: VNI,
+            nexthop_ipv6: EDGE_UNDERLAY6,
+            is_external: 1,
+            _pad: [0; 3],
+        },
+    });
+    node
+}
+
+/// v4 mirror of `node_for_guest_tx6`.
+fn node_for_guest_tx4() -> SimNode {
+    let mut node = SimNode::with_local(local_for(HOSTB_UL, 9));
+    node.maps.local = Some(local_for(HOSTB_UL, 9));
+    node.src_ifindex = TAP;
+    node.maps.fw_meta.insert(
+        TAP,
+        FwMeta {
+            ingress_count: 0,
+            egress_count: 1,
+        },
+    );
+    node.maps.fw_rules.insert((TAP, 0), wildcard_egress_rule4());
+    node.maps.routes4.push(Route4 {
+        vni: VNI,
+        ipv4: [0u8; 4],
+        prefix: 0,
+        value: RouteValue {
+            nexthop_vni: VNI,
+            nexthop_ipv6: EDGE_UNDERLAY,
+            is_external: 1,
+            _pad: [0; 3],
+        },
+    });
+    node
+}
+
+#[test]
+fn v6_guest_reply_with_dsr_entry_reverse_snats_src_to_vip_and_encaps() {
+    let mut node = node_for_guest_tx6();
+    let reply = eth_ipv6_tcp_reply(BACKEND_OVERLAY_IP6, CLIENT_IP6, SERVICE_PORT, CLIENT_PORT);
+
+    // Seed the DSR6 note the way B7/B7c's `uplink_dsr_note` would have on ingress: keyed on the
+    // reply's OWN 5-tuple (== `invert_key6` of the originally-forwarded flow's key).
+    let key = ct_key6(&VecPkt::from_bytes(&reply), ETH_LEN, VNI).unwrap();
+    node.maps.dsr6_insert(
+        key,
+        DsrVip {
+            vip: VIP_IP6,
+            last_seen: 0,
+        },
+    );
+
+    let out = node.guest_tx_v6(&reply, &port_meta6_for(VNI, HOSTB_UL));
+
+    assert_eq!(
+        out.action,
+        Action::Redirect(9),
+        "reply routes out the uplink toward the edge"
+    );
+    assert!(
+        out.tunnel.is_some(),
+        "reply is encapped (public-VNI default route) toward the edge underlay"
+    );
+
+    let out_pkt = VecPkt::from_bytes(&out.pkt);
+    let src = out_pkt.read_array::<16>(ETH_LEN + 8).unwrap();
+    let dst = out_pkt.read_array::<16>(ETH_LEN + 24).unwrap();
+    assert_eq!(
+        src, VIP_IP6,
+        "reply src rewritten: guest overlay IP -> the VIP the edge dispatched"
+    );
+    assert_eq!(dst, CLIENT_IP6, "reply dst (the real client) is untouched");
+}
+
+/// Regression: a reply with NO recorded DSR entry is byte-unchanged (no reverse-SNAT) — DSR
+/// reverse-SNAT must not fire for an ordinary (non-DSR) flow.
+#[test]
+fn v6_guest_reply_without_dsr_entry_is_unchanged_regression() {
+    let mut node = node_for_guest_tx6();
+    let reply = eth_ipv6_tcp_reply(BACKEND_OVERLAY_IP6, CLIENT_IP6, SERVICE_PORT, CLIENT_PORT);
+    // No DSR6 entry seeded.
+
+    let out = node.guest_tx_v6(&reply, &port_meta6_for(VNI, HOSTB_UL));
+
+    assert!(
+        out.tunnel.is_some(),
+        "still routes/encaps toward the edge (route lookup is unaffected)"
+    );
+    let out_pkt = VecPkt::from_bytes(&out.pkt);
+    let src = out_pkt.read_array::<16>(ETH_LEN + 8).unwrap();
+    assert_eq!(
+        src, BACKEND_OVERLAY_IP6,
+        "no DSR entry -> src is NOT rewritten"
+    );
+}
+
+#[test]
+fn v4_guest_reply_with_dsr_entry_reverse_snats_src_to_vip_and_encaps() {
+    let mut node = node_for_guest_tx4();
+    let reply = eth_ipv4_tcp_reply(BACKEND_OVERLAY_IP, CLIENT_IP, SERVICE_PORT, CLIENT_PORT);
+
+    let key = ct_key(&VecPkt::from_bytes(&reply), ETH_LEN, VNI).unwrap();
+    node.maps.dsr_insert(
+        key,
+        DsrVip {
+            vip: vip16(VIP_IP),
+            last_seen: 0,
+        },
+    );
+
+    let out = node.guest_tx(&reply, &port_meta4_for(VNI, HOSTB_UL));
+
+    assert_eq!(
+        out.action,
+        Action::Redirect(9),
+        "reply routes out the uplink toward the edge"
+    );
+    assert!(
+        out.tunnel.is_some(),
+        "reply is encapped (public-VNI default route) toward the edge underlay"
+    );
+
+    let out_pkt = VecPkt::from_bytes(&out.pkt);
+    let src = out_pkt.read_array::<4>(ETH_LEN + 12).unwrap();
+    let dst = out_pkt.read_array::<4>(ETH_LEN + 16).unwrap();
+    assert_eq!(
+        src, VIP_IP,
+        "reply src rewritten: guest overlay IP -> the VIP the edge dispatched"
+    );
+    assert_eq!(dst, CLIENT_IP, "reply dst (the real client) is untouched");
+}
+
+/// v4 regression mirror of `v6_guest_reply_without_dsr_entry_is_unchanged_regression`.
+#[test]
+fn v4_guest_reply_without_dsr_entry_is_unchanged_regression() {
+    let mut node = node_for_guest_tx4();
+    let reply = eth_ipv4_tcp_reply(BACKEND_OVERLAY_IP, CLIENT_IP, SERVICE_PORT, CLIENT_PORT);
+    // No DSR entry seeded.
+
+    let out = node.guest_tx(&reply, &port_meta4_for(VNI, HOSTB_UL));
+
+    assert!(
+        out.tunnel.is_some(),
+        "still routes/encaps toward the edge (route lookup is unaffected)"
+    );
+    let out_pkt = VecPkt::from_bytes(&out.pkt);
+    let src = out_pkt.read_array::<4>(ETH_LEN + 12).unwrap();
+    assert_eq!(
+        src, BACKEND_OVERLAY_IP,
+        "no DSR entry -> src is NOT rewritten"
     );
 }
