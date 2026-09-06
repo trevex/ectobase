@@ -66,12 +66,16 @@ nft delete table inet "$NFT_TABLE" 2>/dev/null || true
 } | nft -f -
 
 # --- return routes into the fabric (ECMP via the edges) --------------------
-# WAN_ROUTES: ';'-separated entries, each "PREFIX NH1,NH2,...".
+# WAN_ROUTES: ';'-separated entries, each "PREFIX NH1,NH2,...". Family (-4/-6) is
+# picked per-entry from the prefix itself (B10: dual-stack WAN — WAN_ROUTES now
+# also carries the v4 N/S-LB VIP test range alongside the v6 fabric aggregates).
 IFS=';' read -ra route_entries <<< "${WAN_ROUTES:-}"
 for entry in "${route_entries[@]}"; do
   read -r prefix nexthops <<< "$entry"
   [[ -n "$prefix" ]] || continue
-  ipargs=(-6 route replace "$prefix")
+  fam=-6
+  [[ "$prefix" == *:* ]] || fam=-4
+  ipargs=("$fam" route replace "$prefix")
   IFS=',' read -ra nhs <<< "$nexthops"
   for nh in "${nhs[@]}"; do
     ipargs+=(nexthop via "$nh" dev "$BRIDGE")

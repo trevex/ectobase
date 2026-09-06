@@ -15,7 +15,7 @@ var update = flag.Bool("update", false, "update golden files")
 func TestClabGolden(t *testing.T) {
 	c, err := config.LoadBytes([]byte(`
 name: ectobase
-images: {talos: img/talos, tayga: img/tayga, wan: img/wan, registry: registry:2, frr: img/frr, vyos: img/vyos}
+images: {talos: img/talos, tayga: img/tayga, wan: img/wan, registry: registry:2, frr: img/frr, vyos: img/vyos, flowplane: img/flowplane}
 fabric:
   as: {edge: 65000, switch: 65010, host: 65100}
   nat64Prefix: 64:ff9b::/96
@@ -59,10 +59,25 @@ fabric:
 	for _, name := range []string{
 		"dispatch-1:", "k02-1:", "k02-2:",
 		"registry:", "wan:", "edge1:", "edge2:", "sw1:", "sw2:", "nat64-1:", "nat64-2:",
+		"flowplane-edge1:",
 	} {
 		if !strings.Contains(out, name) {
 			t.Errorf("expected node %q in rendered topology", name)
 		}
+	}
+	// B10: the N/S-LB edge sidecar shares edge1's netns (the real docker container
+	// name, not the bare node name) and attaches wan_rx on the dual-stack WAN uplink.
+	for _, want := range []string{
+		"network-mode: container:clab-ectobase-edge1",
+		"image: img/flowplane",
+		"--role edge --uplink eth1 --wan-uplink eth3",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in rendered topology (flowplane-edge1 sidecar)", want)
+		}
+	}
+	if strings.Contains(out, "flowplane-edge2") {
+		t.Errorf("only edge1 should get the flowplane sidecar today")
 	}
 	// The retired kind substrate must be gone: no k8s-kind lifecycle nodes, no
 	// ext-container node containers.

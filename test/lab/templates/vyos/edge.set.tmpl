@@ -16,13 +16,20 @@ set system host-name 'edge{{ .Edge }}'
 # Loopback /128 on a dummy interface (VyOS's `lo` isn't addressed the way FRR's
 # was); this is Resolver1/Resolver2 in the Talos machine config.
 set interfaces dummy dum0 address '{{ .EdgeLoopback }}::e{{ .Edge }}/128'
-# WAN segment + tayga NAT64 link (numbered; clab wires the links).
+# WAN segment + tayga NAT64 link (numbered; clab wires the links). eth3 is
+# dual-stack (B10): v6 for the existing fabric WAN segment, v4 so a v4 WAN client
+# can reach a v4 VIP (N/S-LB DSR) over the same segment.
 set interfaces ethernet eth3 address '{{ .WanNet }}::1{{ .Edge }}/64'
+set interfaces ethernet eth3 address '{{ .WanGwV4Base }}.1{{ .Edge }}/24'
 set interfaces ethernet eth4 address '{{ .TaygaNet }}:{{ .Edge }}::1/64'
 
 # The edge's own FIB: default out the WAN, NAT64 prefix to tayga.
 set protocols static route6 ::/0 next-hop '{{ .WanNet }}::1'
 set protocols static route6 {{ .NAT64Prefix }} next-hop '{{ .TaygaNet }}:{{ .Edge }}::2'
+# v4 default: mirrors the v6 default above, so a v4 DSR reply not destined to
+# this edge's own directly-connected /24 still finds its way out via the wan
+# bridge's v4 gateway.
+set protocols static route 0.0.0.0/0 next-hop '{{ .WanGwV4 }}'
 
 set protocols bgp system-as '{{ .ASEdge }}'
 set protocols bgp parameters router-id '10.0.0.{{ .Edge }}'
@@ -31,6 +38,10 @@ set protocols bgp address-family ipv6-unicast maximum-paths ebgp '64'
 # Advertise the loopback + NAT64 /96 explicitly.
 set protocols bgp address-family ipv6-unicast network '{{ .EdgeLoopback }}::e{{ .Edge }}/128'
 set protocols bgp address-family ipv6-unicast network '{{ .NAT64Prefix }}'
+# v4 return path (B10): redistribute this edge's directly-connected v4 WAN subnet
+# (eth3, {{ .WanGwV4Base }}.0/24) into the fabric — the simplest v4 return, mirroring
+# the explicit v6 `network` statements above without needing one per v4 prefix.
+set protocols bgp address-family ipv4-unicast redistribute connected
 
 # Unnumbered fabric uplinks toward the two ToRs; default-originate sources the
 # fabric's only ::/0 (no mgmt default left to compete with it).

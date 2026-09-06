@@ -31,6 +31,44 @@ topology:
       binds:
         - vyos/edge1.set:/opt/vyatta/etc/config/scripts/vyos-postconfig-bootup.script
       sysctls: {net.ipv6.conf.all.forwarding: 1}
+    # flowplane N/S-LB edge sidecar (B10): shares edge1's netns (network-mode names
+    # the real docker container, clab-<lab>-edge1 — the same container-mode-sharing
+    # convention the optional ceph sidecar below uses for its own owning container),
+    # so it sees edge1's eth1 (fabric uplink to sw1) and eth3 (the now-dual-stack
+    # v4+v6 WAN segment). `--role edge` attaches
+    # wan_rx to eth3 (wan_rx re-encaps a WAN-client packet toward a backend after
+    # Maglev-selecting it) and registers edge1's own loopback as the local-deliver
+    # underlay (uplink_rx hands a DSR reply decapped to this underlay off to VyOS for
+    # the last hop onto the WAN) — see flowplane/flowplane/src/control/mod.rs
+    # Control::attach_edge. --uplink eth1 is the primary fabric ToR uplink (LOCAL's
+    # outer-eth src + the encap next-hop target for --gateway-mac); eth2 (the second,
+    # ECMP'd ToR) needs no --extra-uplink since uplink_rx decaps on the shared geneve
+    # collect_md device, not the raw uplink NIC (attach_extra_uplink's doc comment).
+    # --gateway is required by the CLI but unused by this role (no guest interfaces to
+    # ARP-answer for); 169.254.0.1 is the same inert placeholder
+    # charts/ectobase-pool/templates/dataplane-ebpf.yaml and the retired
+    # hack/clab/edge-xdp-wrapper.sh both use. --gateway-mac is sw1's eth1-facing port
+    # MAC, only learnable once the unnumbered BGP session is up (ND "router" flag) —
+    # this placeholder is B11's to resolve live (dynamically, the way the production
+    # DaemonSet + the retired edge wrapper both do: `ip -6 neigh show dev eth1 | grep
+    # router`) before flowplane can actually forward. Only edge1 gets a sidecar — the
+    # livetest (livetest/lb_test.go) targets edge1 only; edge2 is architecturally
+    # identical and can get the same treatment once a live HA scenario needs it.
+    flowplane-edge1:
+      kind: linux
+      image: img/flowplane
+      network-mode: container:clab-ectobase-edge1
+      cap-add: ["NET_ADMIN", "SYS_ADMIN", "BPF"]
+      binds:
+        - /sys/fs/bpf:/sys/fs/bpf:shared
+      env:
+        # clab fabric links are veths (no native XDP/scatter-gather); test/edge-netns.sh's
+        # reference `serve --role edge` invocation sets this too.
+        FLOWPLANE_SKB_MODE: "1"
+      cmd: >-
+        serve --addr [::]:1337 --role edge --uplink eth1 --wan-uplink eth3
+        --local-underlay fd00:ffff::e1 --gateway 169.254.0.1
+        --gateway-mac 02:00:00:00:00:01
     edge2:
       kind: linux
       image: img/vyos
@@ -184,7 +222,7 @@ topology:
         WAN_V6_ADDR: fd00:29::1/64
         WAN_MASQ_V4: "172.29.0.0/16"
         WAN_MASQ_V6: "fd00:cafe::/32 fd00:ffff::/32 fd00:29::/64"
-        WAN_ROUTES: "fd00:cafe::/32 fd00:29::11,fd00:29::12;fd00:ffff::/32 fd00:29::11,fd00:29::12"
+        WAN_ROUTES: "fd00:cafe::/32 fd00:29::11,fd00:29::12;fd00:ffff::/32 fd00:29::11,fd00:29::12;192.0.2.0/24 172.29.0.11,172.29.0.12"
         # eth5 is the registry link; it must join br0 (the WAN L2 segment) so the
         # registry (fd00:29::5 on eth5) is reachable over the fabric from the nodes.
         # eth6 is the host↔WAN jump link; it must also join br0 so the host's

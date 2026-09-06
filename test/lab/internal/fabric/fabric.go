@@ -16,10 +16,18 @@ import (
 // Fixed fabric constants (from the icn/sandbox fabric defaults). The simplified
 // lab.yaml does not expose these; every cluster on the shared fabric uses them.
 const (
-	TaygaNet     = "fd00:64"        // nat64 edge links: fd00:64:1::/64, fd00:64:2::/64
-	WanNet       = "fd00:29"        // WAN segment fd00:29::/64; wan ::1, edge1 ::11, edge2 ::12
-	EdgeLoopback = "fd00:ffff"      // edge loopbacks: fd00:ffff::e1, fd00:ffff::e2
-	WanGwV4      = "172.29.0.1"     // wan bridge v4 gateway
+	TaygaNet     = "fd00:64"    // nat64 edge links: fd00:64:1::/64, fd00:64:2::/64
+	WanNet       = "fd00:29"    // WAN segment fd00:29::/64; wan ::1, edge1 ::11, edge2 ::12
+	EdgeLoopback = "fd00:ffff"  // edge loopbacks: fd00:ffff::e1, fd00:ffff::e2
+	WanGwV4      = "172.29.0.1" // wan bridge v4 gateway
+	// WanGwV4Base is the /24 dotted-triplet base of the WAN v4 segment (WanGwV4's
+	// subnet): the wan bridge holds WanGwV4 (.1); edge1/edge2 hold .11/.12 on eth3,
+	// dual-stack alongside their fd00:29::1N/64 (B10: dual-stack WAN segment).
+	WanGwV4Base = "172.29.0"
+	// WanVipV4Test is a v4 documentation prefix (RFC 5737 TEST-NET-1) for the N/S LB
+	// v4-VIP livetest — not in any overlay/underlay/fabric range, mirroring the v6
+	// VIP's own documentation prefix (see livetest/lb_test.go's lbVIP comment).
+	WanVipV4Test = "192.0.2.0/24"
 	NodeAggr     = "fd00:cafe::/32" // aggregate of every cluster's /48 node identities (fd00:cafe:<h>::/48)
 	PodAggr      = "fd00:244::/32"  // aggregate of every cluster's Cilium pod pool (fd00:244:<h>::/56)
 	LoopAggr     = "fd00:ffff::/32" // aggregate of the edge loopbacks
@@ -71,6 +79,7 @@ func (v *View) TaygaNet() string     { return TaygaNet }
 func (v *View) WanNet() string       { return WanNet }
 func (v *View) EdgeLoopback() string { return EdgeLoopback }
 func (v *View) WanGwV4() string      { return WanGwV4 }
+func (v *View) WanGwV4Base() string  { return WanGwV4Base }
 func (v *View) RegistryAddr() string { return RegistryAddr }
 
 // ClusterNames lists the clusters in declaration order — each cluster's nodes render
@@ -151,6 +160,7 @@ func Build(cfg *config.Config) *View {
 		v.Nodes = append(v.Nodes, cfg.Derived.Clusters[cl.Name].Nodes...)
 	}
 	edges := []string{WanNet + "::11", WanNet + "::12"}
+	edgesV4 := []string{WanGwV4Base + ".11", WanGwV4Base + ".12"}
 	v.Wan = Wan{
 		V4Addr: WanGwV4 + "/24",
 		V6Addr: WanNet + "::1/64",
@@ -162,6 +172,9 @@ func Build(cfg *config.Config) *View {
 		Routes: []Route{
 			{Prefix: NodeAggr, NextHops: edges},
 			{Prefix: LoopAggr, NextHops: edges},
+			// B10: dual-stack WAN — the v4 N/S-LB VIP test range routes back via the
+			// edges' v4 WAN addresses, mirroring the v6 NodeAggr/LoopAggr entries above.
+			{Prefix: WanVipV4Test, NextHops: edgesV4},
 		},
 	}
 	return v
