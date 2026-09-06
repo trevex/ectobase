@@ -23,6 +23,20 @@ const (
 	lbBackendIP4 = "10.0.0.181"
 	lbBackendIP6 = "2001:db8:1::181"
 	lbBackendMAC = "52:54:00:00:2b:01"
+
+	// lbVIP4 is TestLbDistributeSmokeV4's VIP: a v4 documentation prefix (RFC 5737
+	// TEST-NET-1, fabric.WanVipV4Test) — the WAN segment is dual-stack as of B10, so a v4
+	// WAN client (the `wan` node itself) can reach it the same way the v6 client reaches
+	// lbVIP above.
+	lbVIP4 = "192.0.2.1"
+	// overlayGwV4 is the dpservice-style on-link v4 overlay gateway every guest uses
+	// (charts/ectobase-pool/templates/dataplane-ebpf.yaml's `--gateway 169.254.0.1`; the
+	// same literal overlay_test.go's attachEndpoint routes guest netns default traffic
+	// through). Unlike the v6 gateway (fe80::1, unanswered — no --gateway6 configured, see
+	// guestGWMAC's static-ND workaround below), the datapath DOES answer ARP for this
+	// address, so it resolves live without a static neigh; TestLbDistributeSmokeV4 still
+	// pre-seeds one as a belt-and-suspenders measure against ARP-resolution flakiness.
+	overlayGwV4 = "169.254.0.1"
 )
 
 // TestLbDistributeSmoke drives the N/S IPv6 LoadBalancer datapath end-to-end on the fabric:
@@ -37,7 +51,6 @@ const (
 // LB CRD -> edge/distributed-LB control path yet, and the edge Maglev / DSR path is the thing under
 // test.
 func TestLbDistributeSmoke(t *testing.T) {
-	t.Skip("P3 pruned the flowplane-edge1 XDP sidecar (wan_rx Maglev + DSR edge); N/S-LB is re-integrated under Geneve/tcx in its own edge spec (see docs project_p2_deferred_ingress_features). Not a P4 datapath.")
 	cfg := loadConfig(t)
 	requireFabricUp(t, cfg)
 	ctx := context.Background()
@@ -48,8 +61,8 @@ func TestLbDistributeSmoke(t *testing.T) {
 	beContainer := nodeContainer(cfg, backend)
 	edge := clab.ContainerName(cfg.Name, "edge1")
 	wan := clab.ContainerName(cfg.Name, "wan")
-	edgeUnderlay := fabric.EdgeLoopback + "::e1"  // the edge's BGP-advertised local-deliver underlay
-	edge1WanAddr := fabric.WanNet + "::11"        // edge1 on the WAN segment
+	edgeUnderlay := fabric.EdgeLoopback + "::e1" // the edge's BGP-advertised local-deliver underlay
+	edge1WanAddr := fabric.WanNet + "::11"       // edge1 on the WAN segment
 
 	// 1. Backend guest, dual-stack (the v6 overlay IP wires the v6 firewall meta the DSR path needs).
 	//    Returns the guest's underlay /128 — the LB backend target.
@@ -96,7 +109,8 @@ func TestLbDistributeSmoke(t *testing.T) {
 	} {
 		mustGRPC(t, ctx, r.container, "AddLbVip", fmt.Sprintf(
 			`{"id":"lb","vni":%d,"vip":%q,"lb_underlay":%q,"ports":[{"port":80,"proto":6}]}`, r.vni, lbVIP, r.lbUnder))
-		mustGRPC(t, ctx, r.container, "AddLbBackend", fmt.Sprintf(`{"id":"lb","backend_underlay":%q}`, bul))
+		mustGRPC(t, ctx, r.container, "AddLbBackend", fmt.Sprintf(
+			`{"id":"lb","backend_underlay":%q,"backend_overlay_ip":%q,"backend_vni":%d}`, bul, lbBackendIP6, overlayVNI))
 		c := r.container
 		t.Cleanup(func() { _, _ = dataplaneGRPC(t, ctx, c, "DelLbVip", `{"id":"lb"}`) })
 	}
@@ -117,6 +131,106 @@ func TestLbDistributeSmoke(t *testing.T) {
 	t.Logf("N/S IPv6 LB smoke PASS: WAN client curled VIP %s -> backend on %s (edge Maglev + DSR)", lbVIP, backend.Cluster)
 }
 
+// TestLbDistributeSmokeV4 is TestLbDistributeSmoke's IPv4 sibling: since B10 the WAN
+// segment (edge1/edge2 eth3, and the `wan` node's br0) is dual-stack, so a v4 WAN client
+// can reach a v4 VIP over the exact same edge Maglev + distributed-LB + DSR path — see
+// TestLbDistributeSmoke's doc comment for the full datapath walk. The `wan` node doubles
+// as the v4 client here (it already holds fabric.WanGwV4 = 172.29.0.1/24 on its WAN
+// bridge; there is no separate v4-only client node).
+//
+// The two differences from the v6 flow: (1) the guest's default route resolves the
+// overlay gateway via ARP, not the v6 test's unanswered-ND workaround (see overlayGwV4's
+// doc comment); (2) the DSR return route covers the WAN v4 client's /24, not the v6 WAN
+// segment.
+func TestLbDistributeSmokeV4(t *testing.T) {
+	cfg := loadConfig(t)
+	requireFabricUp(t, cfg)
+	ctx := context.Background()
+
+	nodes := computeNodes(cfg)
+	require.NotEmpty(t, nodes, "need a compute node for the LB backend")
+	backend := nodes[0]
+	beContainer := nodeContainer(cfg, backend)
+	edge := clab.ContainerName(cfg.Name, "edge1")
+	wan := clab.ContainerName(cfg.Name, "wan")
+	edgeUnderlay := fabric.EdgeLoopback + "::e1"   // the edge's BGP-advertised local-deliver underlay (always v6)
+	edge1WanV4Addr := fabric.WanGwV4Base + ".11"   // edge1 on the (now dual-stack) WAN segment
+	wanClientV4Net := fabric.WanGwV4Base + ".0/24" // the wan node's own br0 subnet
+
+	// 1. Backend guest, dual-stack (same guest shape as the v6 test; only the v4 overlay
+	//    IP + v4 firewall meta are exercised here). Distinct interface/LB ids from the v6
+	//    test (lbbe4/lb4) so both tests can run in the same suite invocation without
+	//    colliding mid-run.
+	bul := attachGuest(t, ctx, cfg, backend, "lbbe4", []string{lbBackendIP4, lbBackendIP6}, lbBackendMAC)
+	t.Cleanup(func() {
+		_, _ = dataplaneGRPC(t, ctx, beContainer, "DetachInterface", `{"interface_id":"lbbe4"}`)
+	})
+
+	// 2. Guest netns: the VIP on lo (DSR reply src=VIP) + a v4 default route toward the
+	//    dpservice-style on-link overlay gateway (overlayGwV4). The datapath answers ARP
+	//    for it (unlike the v6 gateway), but a static neigh is pre-seeded anyway as
+	//    belt-and-suspenders against ARP-resolution flakiness (mirrors the v6 test's
+	//    static-ND workaround).
+	for _, cmd := range [][]string{
+		{"ip", "addr", "replace", lbVIP4 + "/32", "dev", "lo"},
+		{"ip", "route", "replace", overlayGwV4 + "/32", "dev", "lbbe4"},
+		{"ip", "neigh", "replace", overlayGwV4, "lladdr", guestGWMAC, "dev", "lbbe4"},
+		{"ip", "route", "replace", "default", "via", overlayGwV4, "dev", "lbbe4"},
+	} {
+		if out, err := nodeNetnsProbe(ctx, beContainer, "lbbe4", cmd...); err != nil {
+			t.Fatalf("guest setup %v: %v\n%s", cmd, err, out)
+		}
+	}
+	startLbBackendHTTPDv4(t, ctx, beContainer, "lbbe4", lbVIP4)
+
+	// 3. Firewall: v4 ingress-allow for the VIP (DSR keeps inner dst=VIP), v4 egress-allow for the reply.
+	mustGRPC(t, ctx, beContainer, "AddFwRule", fmt.Sprintf(
+		`{"interface_id":"lbbe4","rule_id":"lb-in4","dst_cidr":%q,"proto":6,"dst_port_min":80,"dst_port_max":80,"allow":true,"egress":false}`, lbVIP4+"/32"))
+	mustGRPC(t, ctx, beContainer, "AddFwRule",
+		`{"interface_id":"lbbe4","rule_id":"lb-eg4","src_cidr":"0.0.0.0/0","proto":0,"allow":true,"egress":true}`)
+	// DSR return route: the WAN v4 client's /24 -> the edge underlay (the underlay nexthop
+	// is always v6 regardless of the routed prefix's family — the fabric transport stays
+	// v6 end-to-end; only the encapped inner packet is v4 here).
+	mustGRPC(t, ctx, beContainer, "AddRoute", fmt.Sprintf(
+		`{"vni":%d,"prefix":%q,"nexthop_underlay":%q}`, overlayVNI, wanClientV4Net, edgeUnderlay))
+
+	// 4. Distributed-LB: register the VIP on the EDGE (vni=0, wan_rx) AND the BACKEND node
+	//    (vni=overlayVNI). Same lb_underlay convention as the v6 test (the backend's is its
+	//    node identity /128, distinct from any guest /128).
+	for _, r := range []struct {
+		container string
+		vni       int
+		lbUnder   string
+	}{
+		{edge, 0, edgeUnderlay},
+		{beContainer, overlayVNI, backend.IdentityAddr},
+	} {
+		mustGRPC(t, ctx, r.container, "AddLbVip", fmt.Sprintf(
+			`{"id":"lb4","vni":%d,"vip":%q,"lb_underlay":%q,"ports":[{"port":80,"proto":6}]}`, r.vni, lbVIP4, r.lbUnder))
+		mustGRPC(t, ctx, r.container, "AddLbBackend", fmt.Sprintf(
+			`{"id":"lb4","backend_underlay":%q,"backend_overlay_ip":%q,"backend_vni":%d}`, bul, lbBackendIP4, overlayVNI))
+		c := r.container
+		t.Cleanup(func() { _, _ = dataplaneGRPC(t, ctx, c, "DelLbVip", `{"id":"lb4"}`) })
+	}
+	// TODO(B11-live): assert Maglev distribution across 2 backends.
+
+	// 5. WAN client (the `wan` node, holding fabric.WanGwV4 on its br0) routes to the VIP
+	//    via edge1's v4 WAN address, then curl (retry to absorb neighbour/route settle).
+	if out, err := nodeExec(ctx, wan, "ip", "route", "replace", lbVIP4+"/32", "via", edge1WanV4Addr); err != nil {
+		t.Fatalf("wan VIP4 route: %v\n%s", err, out)
+	}
+	t.Cleanup(func() { _, _ = nodeExec(ctx, wan, "ip", "route", "del", lbVIP4+"/32") })
+
+	eventually(t, waitDeadline, 5*time.Second, func() error {
+		out := curlFromWanV4(ctx, wan, lbVIP4)
+		if !strings.Contains(out, "hello-lb") {
+			return fmt.Errorf("curl of VIP %s:80 did not return hello-lb:\n%s", lbVIP4, out)
+		}
+		return nil
+	})
+	t.Logf("N/S IPv4 LB smoke PASS: WAN client curled VIP %s -> backend on %s (edge Maglev + DSR)", lbVIP4, backend.Cluster)
+}
+
 // mustGRPC invokes a DataplaneNode method and fails the test on error.
 func mustGRPC(t *testing.T, ctx context.Context, container, method, data string) {
 	t.Helper()
@@ -129,12 +243,26 @@ func mustGRPC(t *testing.T, ctx context.Context, container, method, data string)
 // kills it. The DSR reply it emits has src=vip.
 func startLbBackendHTTPD(t *testing.T, ctx context.Context, container, netns, vip string) {
 	t.Helper()
+	startLbBackendHTTPDFamily(t, ctx, container, netns, vip, "AF_INET6")
+}
+
+// startLbBackendHTTPDv4 is startLbBackendHTTPD's IPv4 sibling: binds vip:80 AF_INET
+// instead of [vip]:80 AF_INET6.
+func startLbBackendHTTPDv4(t *testing.T, ctx context.Context, container, netns, vip string) {
+	t.Helper()
+	startLbBackendHTTPDFamily(t, ctx, container, netns, vip, "AF_INET")
+}
+
+// startLbBackendHTTPDFamily is the shared implementation behind startLbBackendHTTPD and
+// startLbBackendHTTPDv4 (af is the Python socket.AF_* attribute name to bind with).
+func startLbBackendHTTPDFamily(t *testing.T, ctx context.Context, container, netns, vip, af string) {
+	t.Helper()
 	py := fmt.Sprintf(`import http.server,socket
 class H(http.server.BaseHTTPRequestHandler):
  def do_GET(s): s.send_response(200); s.end_headers(); s.wfile.write(b'hello-lb\n')
  def log_message(s,*a): pass
-http.server.HTTPServer.address_family=socket.AF_INET6
-http.server.HTTPServer((%q,80),H).serve_forever()`, vip)
+http.server.HTTPServer.address_family=socket.%s
+http.server.HTTPServer((%q,80),H).serve_forever()`, af, vip)
 	err := exec.Sudo(ctx, "docker", "exec", "-d", container, "ip", "netns", "exec", netns, "python3", "-c", py)
 	require.NoError(t, err, "start httpd in %s netns %s", container, netns)
 	t.Cleanup(func() {
@@ -145,7 +273,22 @@ http.server.HTTPServer((%q,80),H).serve_forever()`, vip)
 // curlFromWan curls http://[vip]:80/ from inside the wan container's netns via a curl image (the wan
 // node ships no HTTP client), returning the combined output.
 func curlFromWan(ctx context.Context, wan, vip string) string {
+	return curlFromWanFamily(ctx, wan, vip, true)
+}
+
+// curlFromWanV4 is curlFromWan's IPv4 sibling: curls http://vip:80/ (no brackets, -4)
+// instead of http://[vip]:80/ (-6).
+func curlFromWanV4(ctx context.Context, wan, vip string) string {
+	return curlFromWanFamily(ctx, wan, vip, false)
+}
+
+// curlFromWanFamily is the shared implementation behind curlFromWan and curlFromWanV4.
+func curlFromWanFamily(ctx context.Context, wan, vip string, v6 bool) string {
+	url, flag := fmt.Sprintf("http://%s:80/", vip), "-4"
+	if v6 {
+		url, flag = fmt.Sprintf("http://[%s]:80/", vip), "-6"
+	}
 	out, _ := exec.SudoOutput(ctx, "docker", "run", "--rm", "--network", "container:"+wan,
-		"curlimages/curl:latest", "-6", "-s", "--max-time", "8", fmt.Sprintf("http://[%s]:80/", vip))
+		"curlimages/curl:latest", flag, "-s", "--max-time", "8", url)
 	return string(out)
 }
