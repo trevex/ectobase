@@ -98,14 +98,24 @@ impl<W: MapWriter> ControlCore<W> {
         Ok(())
     }
 
-    /// Append a backend underlay /128 to a registered LB and rebuild + write its Maglev table.
-    pub fn add_lb_target(&mut self, id: &[u8], backend: [u8; 16]) -> anyhow::Result<()> {
+    /// Append a backend to a registered LB and rebuild + write its Maglev table. The backend is
+    /// self-describing (`node_vtep` for local-vs-remote + reforward; `overlay_ip`/`vni`/`is_v6` for
+    /// local INTERFACES delivery).
+    pub fn add_lb_target(
+        &mut self,
+        id: &[u8],
+        backend: flowplane_common::LbBackend,
+    ) -> anyhow::Result<()> {
         let entry = self
             .lbs
             .get_mut(id)
             .ok_or_else(|| anyhow::anyhow!("unknown load balancer"))?;
-        // Reject duplicates.
-        if entry.backends.contains(&backend) {
+        // Reject duplicates (same node + same overlay IP == same backend).
+        if entry
+            .backends
+            .iter()
+            .any(|b| b.overlay_ip == backend.overlay_ip && b.node_vtep == backend.node_vtep)
+        {
             anyhow::bail!("load balancer target already exists");
         }
         entry.backends.push(backend);
@@ -124,14 +134,20 @@ impl<W: MapWriter> ControlCore<W> {
         Ok(())
     }
 
-    /// Remove a backend from an LB. Returns true if found, false if not.
-    pub fn del_lb_target(&mut self, id: &[u8], backend: [u8; 16]) -> anyhow::Result<bool> {
+    /// Remove a backend from an LB, identified by its owner node's underlay `node_vtep` (the
+    /// withdraw path `applyPublic` -> `DelLbBackend` is keyed on the backend node's owner underlay,
+    /// not the per-backend overlay IP). Returns true if found, false if not.
+    pub fn del_lb_target(
+        &mut self,
+        id: &[u8],
+        backend_node_vtep: [u8; 16],
+    ) -> anyhow::Result<bool> {
         let entry = self
             .lbs
             .get_mut(id)
             .ok_or_else(|| anyhow::anyhow!("unknown load balancer"))?;
         let before = entry.backends.len();
-        entry.backends.retain(|b| b != &backend);
+        entry.backends.retain(|b| b.node_vtep != backend_node_vtep);
         if entry.backends.len() == before {
             return Ok(false);
         }
@@ -244,8 +260,22 @@ mod tests {
         // table_id allocated is 1 (next_table_id starts at 1).
         let table_id = 1u32;
 
-        let b0 = [10u8, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        let b1 = [10u8, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let node0 = [0x20u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01];
+        let node1 = [0x20u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02];
+        let b0 = flowplane_common::LbBackend {
+            node_vtep: node0,
+            overlay_ip: [10, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            vni: 100,
+            is_v6: 0,
+            _pad: [0; 3],
+        };
+        let b1 = flowplane_common::LbBackend {
+            node_vtep: node1,
+            overlay_ip: [10, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            vni: 100,
+            is_v6: 0,
+            _pad: [0; 3],
+        };
         c.add_lb_target(b"vip", b0).expect("add b0");
         c.add_lb_target(b"vip", b1).expect("add b1");
         // All TABLE_SIZE slots filled for this table_id.
@@ -261,8 +291,8 @@ mod tests {
         // Duplicate backend rejected.
         assert!(c.add_lb_target(b"vip", b0).is_err());
 
-        // Remove one: still filled (one backend remains).
-        assert!(c.del_lb_target(b"vip", b0).expect("del b0"));
+        // Remove one (by node_vtep): still filled (one backend remains).
+        assert!(c.del_lb_target(b"vip", node0).expect("del b0"));
         let filled = (0..crate::maglev::TABLE_SIZE)
             .filter(|&slot| {
                 c.writer()
@@ -273,7 +303,7 @@ mod tests {
         assert_eq!(filled, crate::maglev::TABLE_SIZE as usize);
 
         // Remove the last backend: all slots cleared.
-        assert!(c.del_lb_target(b"vip", b1).expect("del b1"));
+        assert!(c.del_lb_target(b"vip", node1).expect("del b1"));
         let filled = (0..crate::maglev::TABLE_SIZE)
             .filter(|&slot| {
                 c.writer()

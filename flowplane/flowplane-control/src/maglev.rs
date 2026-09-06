@@ -14,9 +14,10 @@ fn fnv1a(bytes: &[u8], seed: u64) -> u64 {
     h
 }
 
-/// Build a Maglev lookup table of size `TABLE_SIZE` over `backends` (each identified by its
-/// 16-byte underlay IPv6). Returns `table[slot] = backend_index`. Empty backends -> empty vec.
-pub fn build(backends: &[[u8; 16]]) -> Vec<u32> {
+/// Build a Maglev lookup table of size `TABLE_SIZE` over `backends`, each hashed by its UNIQUE
+/// overlay IP (`LbBackend.overlay_ip`) so two backends sharing a node get distinct distributions.
+/// Returns `table[slot] = backend_index`. Empty backends -> empty vec.
+pub fn build(backends: &[flowplane_common::LbBackend]) -> Vec<u32> {
     let n = backends.len();
     let m = TABLE_SIZE as usize;
     if n == 0 {
@@ -26,8 +27,8 @@ pub fn build(backends: &[[u8; 16]]) -> Vec<u32> {
     let mut offset = vec![0usize; n];
     let mut skip = vec![0usize; n];
     for (i, b) in backends.iter().enumerate() {
-        offset[i] = (fnv1a(b, 1) % m as u64) as usize;
-        skip[i] = (fnv1a(b, 2) % (m as u64 - 1) + 1) as usize;
+        offset[i] = (fnv1a(&b.overlay_ip, 1) % m as u64) as usize;
+        skip[i] = (fnv1a(&b.overlay_ip, 2) % (m as u64 - 1) + 1) as usize;
     }
     let mut next = vec![0usize; n];
     let mut table = vec![u32::MAX; m];
@@ -54,11 +55,24 @@ pub fn build(backends: &[[u8; 16]]) -> Vec<u32> {
 mod tests {
     use super::*;
 
+    /// Wrap a raw 16-byte value (what `build` used to hash directly) into an `LbBackend` whose
+    /// `overlay_ip` carries those SAME bytes, so hashing on `overlay_ip` reproduces the exact
+    /// pre-`LbBackend` distribution these tests assert on.
+    fn backend_from_bytes(bytes: [u8; 16]) -> flowplane_common::LbBackend {
+        flowplane_common::LbBackend {
+            node_vtep: bytes,
+            overlay_ip: bytes,
+            vni: 0,
+            is_v6: 0,
+            _pad: [0; 3],
+        }
+    }
+
     #[test]
     fn distributes_evenly_across_two_backends() {
         let b0: [u8; 16] = [10, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         let b1: [u8; 16] = [10, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        let table = build(&[b0, b1]);
+        let table = build(&[backend_from_bytes(b0), backend_from_bytes(b1)]);
         assert_eq!(table.len(), TABLE_SIZE as usize);
         let c0 = table.iter().filter(|&&x| x == 0).count();
         let c1 = table.iter().filter(|&&x| x == 1).count();
@@ -79,8 +93,30 @@ mod tests {
     fn deterministic() {
         let b0: [u8; 16] = [10, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         let b1: [u8; 16] = [10, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        let a = build(&[b0, b1]);
-        let b = build(&[b0, b1]);
+        let a = build(&[backend_from_bytes(b0), backend_from_bytes(b1)]);
+        let b = build(&[backend_from_bytes(b0), backend_from_bytes(b1)]);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn build_distinguishes_same_node_backends_by_overlay() {
+        use flowplane_common::LbBackend;
+        let node: [u8; 16] = [0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xbb];
+        let be = |last: u8| LbBackend {
+            node_vtep: node, // SAME node for both
+            overlay_ip: [10, 0, 0, last, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            vni: 100,
+            is_v6: 0,
+            _pad: [0; 3],
+        };
+        let backends = vec![be(61), be(62)];
+        let table = build(&backends);
+        assert_eq!(table.len(), TABLE_SIZE as usize);
+        let n0 = table.iter().filter(|&&i| i == 0).count();
+        let n1 = table.iter().filter(|&&i| i == 1).count();
+        assert!(
+            n0 > 0 && n1 > 0,
+            "both same-node backends must get slots (n0={n0}, n1={n1})"
+        );
     }
 }
