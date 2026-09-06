@@ -3,7 +3,7 @@
 //! datapath programs `bpf_skb_set_tunnel_key`/`bpf_skb_get_tunnel_key` per-packet instead of a
 //! fixed per-device VNI/remote. Mirrors `veth.rs`'s `ip`-subprocess style; reuses `run`/`ifindex_of`
 //! so there is ONE way this daemon shells `ip` (no drift).
-use crate::veth::{ifindex_of, run};
+use crate::veth::{ifindex_of, link_exists, mac_of, run};
 use anyhow::{Context, Result};
 
 /// Well-known name for the single node-wide `collect_md` Geneve device the daemon creates at
@@ -26,12 +26,26 @@ pub fn geneve_add_args(name: &str) -> Vec<String> {
     ]
 }
 
-/// Idempotently create the `collect_md` Geneve device: delete-if-exists, `ip link add ... type
-/// geneve external`, bring it up, resolve + return its ifindex. Mirrors `veth.rs`'s
-/// create-fresh-then-configure idiom (`create_veth_pair`/`create_preallocated_veth`). Reuses
-/// `geneve_add_args` for the add command so the tested arg vector is exactly what gets shelled.
+/// Idempotently ensure the `collect_md` Geneve device exists and is correctly configured, returning
+/// its ifindex. On a FRESH start (device absent, or present but mis-MAC'd) it (re)creates the device
+/// `ip link add ... type geneve external`, stamps the gateway MAC, brings it up. On a RESTART where a
+/// correctly-configured device SURVIVES (the netdev is deliberately not torn down on graceful
+/// shutdown — see `Control::bring_up`), it CONFIRMS-without-recreating: the delete+add would sever
+/// every pinned tc/tcx link on the device (`uplink_rx`, `uplink_dsr_note`), and the adopt re-point can
+/// then silently re-point a program onto the now-dead link instead of re-attaching, leaving
+/// `uplink_rx` attached to nothing. Leaving the survivor in place keeps those links valid so the
+/// zero-gap adopt works as designed. Reuses `geneve_add_args` so the tested arg vector is exactly what
+/// gets shelled.
 pub fn ensure_geneve_dev(name: &str, gateway_mac: [u8; 6]) -> Result<u32> {
-    // Fresh start: remove any stale device from a previous run (ignores "does not exist").
+    // CONFIRM path: a correctly-MAC'd device already survives from a prior bring-up. Do NOT recreate
+    // it (that severs the pinned datapath links); just make sure it is up (idempotent, link-safe) and
+    // return its ifindex. The gateway-MAC match is the "this is our device, configured by the current
+    // code" signal — a survivor from before the MAC fix falls through to the recreate path below.
+    if link_exists(name) && mac_of(name).map(|m| m == gateway_mac).unwrap_or(false) {
+        run(&["ip", "link", "set", name, "up"]).with_context(|| format!("geneve dev {name} up"))?;
+        return ifindex_of(name);
+    }
+    // Fresh start: remove any stale/mis-MAC'd device from a previous run (ignores "does not exist").
     delete_geneve_dev(name)?;
     let mut argv: Vec<String> = vec!["ip".into()];
     argv.extend(geneve_add_args(name));
@@ -61,7 +75,7 @@ pub fn delete_geneve_dev(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::veth::link_exists;
+    use crate::veth::{link_exists, mac_of};
 
     #[test]
     fn geneve_add_args_are_collect_md() {
@@ -80,9 +94,19 @@ mod tests {
         let ifindex1 = ensure_geneve_dev(name, gw_mac).expect("create geneve dev");
         assert!(ifindex1 >= 2, "resolved a real ifindex");
         assert!(link_exists(name), "geneve dev present after create");
-        // Re-running must be idempotent (delete-then-recreate), not error.
-        let ifindex2 = ensure_geneve_dev(name, gw_mac).expect("re-create geneve dev");
-        assert!(ifindex2 >= 2);
+        assert_eq!(
+            mac_of(name).expect("read geneve mac"),
+            gw_mac,
+            "gateway MAC stamped"
+        );
+        // Re-running must be idempotent AND must PRESERVE the surviving device (CONFIRM path, not
+        // delete+recreate) so any pinned tc links on it stay valid — same ifindex proves it was not
+        // torn down and re-added.
+        let ifindex2 = ensure_geneve_dev(name, gw_mac).expect("confirm geneve dev");
+        assert_eq!(
+            ifindex2, ifindex1,
+            "confirm path preserves the surviving device"
+        );
         delete_geneve_dev(name).expect("delete geneve dev");
         assert!(
             !link_exists(name),
