@@ -171,27 +171,30 @@ pub fn add_lb_vip<W: MapWriter>(
     Ok(pb::AddLbVipResponse {})
 }
 
+/// Parse a backend overlay IP (v4 or v6) into its 16-byte wire form + the `is_v6` family flag: a v4
+/// address is left-justified in the first 4 bytes (the rest zero), a v6 address fills all 16 bytes.
+/// Shared by `add_lb_backend` and `del_lb_backend` so both encode/match overlay IPs identically.
+fn parse_backend_overlay_ip(s: &str) -> Result<([u8; 16], u8), String> {
+    match s.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(a)) => {
+            let o = a.octets();
+            Ok((
+                [o[0], o[1], o[2], o[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                0u8,
+            ))
+        }
+        Ok(std::net::IpAddr::V6(a)) => Ok((a.octets(), 1u8)),
+        Err(e) => Err(format!("invalid backend_overlay_ip {s:?}: {e}")),
+    }
+}
+
 pub fn add_lb_backend<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::AddLbBackendRequest,
 ) -> Result<pb::AddLbBackendResponse, Status> {
     let node_vtep = parse_nexthop6(&req.backend_underlay).map_err(invalid)?;
-    let (overlay_ip, is_v6) = match req.backend_overlay_ip.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V4(a)) => {
-            let o = a.octets();
-            (
-                [o[0], o[1], o[2], o[3], 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                0u8,
-            )
-        }
-        Ok(std::net::IpAddr::V6(a)) => (a.octets(), 1u8),
-        Err(e) => {
-            return Err(Status::invalid_argument(format!(
-                "invalid backend_overlay_ip {:?}: {e}",
-                req.backend_overlay_ip
-            )))
-        }
-    };
+    let (overlay_ip, is_v6) =
+        parse_backend_overlay_ip(&req.backend_overlay_ip).map_err(Status::invalid_argument)?;
     let backend = flowplane_common::LbBackend {
         node_vtep,
         overlay_ip,
@@ -217,9 +220,22 @@ pub fn del_lb_backend<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::DelLbBackendRequest,
 ) -> Result<pb::DelLbBackendResponse, Status> {
-    let backend = parse_nexthop6(&req.backend_underlay).map_err(invalid)?;
+    let backend_node_vtep = parse_nexthop6(&req.backend_underlay).map_err(invalid)?;
+    // backend_overlay_ip disambiguates two backends sharing the same node (two pods of one Service
+    // scheduled on the same node). Empty is the legacy/CLI shape (older callers that predate this
+    // field, e.g. main.rs's --lb-target path never sets it): fall back to an all-zero overlay IP,
+    // which del_lb_target treats as "match by node_vtep alone" (removing every backend on that node),
+    // preserving the pre-fix behavior for those callers instead of rejecting the request.
+    let backend_overlay_ip = if req.backend_overlay_ip.is_empty() {
+        [0u8; 16]
+    } else {
+        parse_backend_overlay_ip(&req.backend_overlay_ip)
+            .map_err(Status::invalid_argument)?
+            .0
+    };
     let id = req.id.clone().into_bytes();
-    core.del_lb_target(&id, backend).map_err(internal)?;
+    core.del_lb_target(&id, backend_node_vtep, backend_overlay_ip)
+        .map_err(internal)?;
     Ok(pb::DelLbBackendResponse {})
 }
 
@@ -645,5 +661,122 @@ mod tests {
             .writer()
             .fw_rules6
             .contains_key(&flowplane_common::FwRuleKey { ifindex: 0, idx: 0 }));
+    }
+
+    /// End-to-end through the RPC handlers: two backends on the SAME node (same backend_underlay)
+    /// but different backend_overlay_ip must both be added, and del_lb_backend targeting one overlay
+    /// IP must remove only that backend — the other must remain reachable via the Maglev table.
+    #[test]
+    fn add_del_lb_backend_disambiguates_same_node_by_overlay_ip() {
+        let mut c = core();
+        add_lb_vip(
+            &mut c,
+            &pb::AddLbVipRequest {
+                id: "vip".into(),
+                vni: 100,
+                vip: "203.0.113.60".into(),
+                lb_underlay: "2001:db8::ee".into(),
+                ports: vec![pb::PortProto {
+                    port: 443,
+                    proto: 6,
+                }],
+            },
+        )
+        .expect("add_lb_vip");
+
+        add_lb_backend(
+            &mut c,
+            &pb::AddLbBackendRequest {
+                id: "vip".into(),
+                backend_underlay: "2001:db8::1".into(),
+                backend_overlay_ip: "10.0.0.5".into(),
+                backend_vni: 100,
+            },
+        )
+        .expect("add backend 1");
+        add_lb_backend(
+            &mut c,
+            &pb::AddLbBackendRequest {
+                id: "vip".into(),
+                backend_underlay: "2001:db8::1".into(), // SAME node as backend 1
+                backend_overlay_ip: "10.0.0.7".into(),
+                backend_vni: 100,
+            },
+        )
+        .expect("add backend 2");
+
+        let has_overlay = |c: &ControlCore<MemMapWriter>, want: [u8; 4]| {
+            c.writer()
+                .maglev
+                .values()
+                .any(|b| b.overlay_ip[..4] == want)
+        };
+        assert!(has_overlay(&c, [10, 0, 0, 5]), "backend 1 must be live");
+        assert!(has_overlay(&c, [10, 0, 0, 7]), "backend 2 must be live");
+
+        del_lb_backend(
+            &mut c,
+            &pb::DelLbBackendRequest {
+                id: "vip".into(),
+                backend_underlay: "2001:db8::1".into(),
+                backend_overlay_ip: "10.0.0.5".into(),
+            },
+        )
+        .expect("del backend 1");
+
+        assert!(
+            !has_overlay(&c, [10, 0, 0, 5]),
+            "backend 1 must be gone after its overlay-scoped withdraw"
+        );
+        assert!(
+            has_overlay(&c, [10, 0, 0, 7]),
+            "backend 2 (same node, different overlay) must survive"
+        );
+    }
+
+    /// A caller that doesn't set backend_overlay_ip (the pre-fix / legacy shape) must fall back to
+    /// removing by backend_underlay alone, so older callers are not broken by this change.
+    #[test]
+    fn del_lb_backend_empty_overlay_falls_back_to_underlay_match() {
+        let mut c = core();
+        add_lb_vip(
+            &mut c,
+            &pb::AddLbVipRequest {
+                id: "vip".into(),
+                vni: 100,
+                vip: "203.0.113.61".into(),
+                lb_underlay: "2001:db8::ef".into(),
+                ports: vec![pb::PortProto {
+                    port: 443,
+                    proto: 6,
+                }],
+            },
+        )
+        .expect("add_lb_vip");
+        add_lb_backend(
+            &mut c,
+            &pb::AddLbBackendRequest {
+                id: "vip".into(),
+                backend_underlay: "2001:db8::2".into(),
+                backend_overlay_ip: "10.0.0.9".into(),
+                backend_vni: 100,
+            },
+        )
+        .expect("add backend");
+
+        del_lb_backend(
+            &mut c,
+            &pb::DelLbBackendRequest {
+                id: "vip".into(),
+                backend_underlay: "2001:db8::2".into(),
+                backend_overlay_ip: "".into(), // legacy caller: no overlay IP set
+            },
+        )
+        .expect("legacy del");
+
+        assert!(
+            c.writer().maglev.is_empty(),
+            "legacy del must still remove the backend"
+        );
     }
 }

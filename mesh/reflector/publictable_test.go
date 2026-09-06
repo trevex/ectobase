@@ -125,6 +125,46 @@ func TestDropOriginWithdrawsPublicRecords(t *testing.T) {
 	}
 }
 
+// TestSameNodeLBBackendsDistinctOverlayCoexistAndWithdrawIndependently proves the reflector half of
+// the same-node-multi-backend fix: two LB_VIP records with the SAME (kind, prefix, owner) but
+// DIFFERENT overlay IPs (two pods of one Service on the same node) must both persist in the RIB (a
+// late-joining sink must replay BOTH), and withdrawing one by its exact record (including overlay
+// IP) must leave the other intact.
+func TestSameNodeLBBackendsDistinctOverlayCoexistAndWithdrawIndependently(t *testing.T) {
+	r := NewRIB()
+	recA := publicRecord(pb.PublicKind_PUBLIC_KIND_LB_VIP, "203.0.113.50/32", "fd00::a", 100, 0, 0)
+	recA.OverlayIP = "10.0.0.5"
+	recB := publicRecord(pb.PublicKind_PUBLIC_KIND_LB_VIP, "203.0.113.50/32", "fd00::a", 100, 0, 0)
+	recB.OverlayIP = "10.0.0.7"
+
+	r.AnnouncePublic("nodeA", recA)
+	r.AnnouncePublic("nodeA", recB)
+
+	// A late-joining sink must replay BOTH backends — they must not have collapsed to one RIB entry.
+	late := &fakeSink{id: "nodeC"}
+	r.RegisterSink(late)
+	us := publicUpdates(late)
+	if len(us) != 2 {
+		t.Fatalf("want 2 distinct LB_VIP backends replayed, got %d: %+v", len(us), us)
+	}
+	overlays := map[string]bool{}
+	for _, pu := range us {
+		overlays[pu.Prefix.OverlayIp] = true
+	}
+	if !overlays["10.0.0.5"] || !overlays["10.0.0.7"] {
+		t.Fatalf("both overlay IPs must be present in the replayed snapshot, got %+v", us)
+	}
+
+	// Withdraw recA only: recB must survive.
+	r.WithdrawPublic("nodeA", recA)
+	afterWithdraw := &fakeSink{id: "nodeD"}
+	r.RegisterSink(afterWithdraw)
+	us2 := publicUpdates(afterWithdraw)
+	if len(us2) != 1 || us2[0].Prefix.OverlayIp != "10.0.0.7" {
+		t.Fatalf("after withdrawing 10.0.0.5, only 10.0.0.7 must remain, got %+v", us2)
+	}
+}
+
 func TestUnregisterSinkStopsPublicFanout(t *testing.T) {
 	r := NewRIB()
 	b := &fakeSink{id: "nodeB"}

@@ -89,8 +89,11 @@ message DelLbVipRequest {
 message DelLbVipResponse {}
 
 message DelLbBackendRequest {
-  string id = 1;               // the LB id from AddLbVip
-  string backend_underlay = 2; // backend node underlay IPv6 /128
+  string id = 1;                  // the LB id from AddLbVip
+  string backend_underlay = 2;    // backend node underlay IPv6 /128
+  string backend_overlay_ip = 3;  // backend guest overlay IP (v4 or v6); disambiguates two backends
+                                   // on the SAME node (same backend_underlay) behind the same VIP.
+                                   // Empty = match by backend_underlay alone (legacy/CLI callers).
 }
 message DelLbBackendResponse {}
 

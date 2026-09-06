@@ -18,16 +18,21 @@ type PublicRecord struct {
 	OverlayIP string
 }
 
-// publicKey identifies a record by (kind, prefix, owner). Duplicate announces
-// with the same key are idempotent.
+// publicKey identifies a record by (kind, prefix, owner, overlay). Duplicate announces with the same
+// key are idempotent. overlay is included for every kind (empty for non-LB_VIP kinds, so their
+// dedup/idempotency behavior is unchanged) because it is the only field that disambiguates two LB_VIP
+// backends on the SAME node behind the SAME VIP (e.g. two pods of one Service scheduled together):
+// without it, such records collide on (kind, prefix, owner) alone and one silently overwrites the
+// other in the RIB, so a late-joining sink only ever learns one of the two backends.
 type publicKey struct {
-	kind  pb.PublicKind
-	pfx   string
-	owner string
+	kind    pb.PublicKind
+	pfx     string
+	owner   string
+	overlay string
 }
 
 func (rec PublicRecord) key() publicKey {
-	return publicKey{rec.Kind, rec.Prefix, rec.OwnerUnderlay}
+	return publicKey{rec.Kind, rec.Prefix, rec.OwnerUnderlay, rec.OverlayIP}
 }
 
 // AnnouncePublic records a global public prefix owned by origin and broadcasts

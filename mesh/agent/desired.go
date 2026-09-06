@@ -32,8 +32,8 @@ type DesiredState struct {
 }
 
 // routeRef / natRef identify a withdrawn record by its reflector key (see reflector.natKey /
-// publicKey / the per-VNI RIB key). PublicPrefix is withdrawn by its full (kind, prefix, owner) key,
-// so we reuse the struct directly.
+// publicKey / the per-VNI RIB key). PublicPrefix is withdrawn by its full (kind, prefix, owner,
+// overlay) key, so we reuse the struct directly.
 type routeRef struct {
 	Vni    uint32
 	Prefix string
@@ -65,8 +65,14 @@ func (d busDelta) empty() bool {
 
 func routeKey(r Route) routeRef { return routeRef{Vni: r.Vni, Prefix: r.Prefix} }
 func natKey(n NatBlock) natRef  { return natRef{NatIP: n.NatIP, PortMin: n.PortMin, PortMax: n.PortMax} }
+
+// pubKey identifies a public record by (kind, prefix, owner, overlay IP). The overlay IP is included
+// for every kind (empty for non-LB_VIP kinds, so their dedup behavior is unchanged) because it is the
+// only field that disambiguates two LB_VIP backends on the SAME node behind the SAME VIP (e.g. two
+// pods of one Service scheduled together): without it, two such records collide on (kind, prefix,
+// owner) alone and silently overwrite each other, losing one backend's withdraw.
 func pubKey(p PublicPrefix) string {
-	return fmt.Sprintf("%d|%s|%s", p.Kind, p.Prefix, p.OwnerUnderlay)
+	return fmt.Sprintf("%d|%s|%s|%s", p.Kind, p.Prefix, p.OwnerUnderlay, p.OverlayIP)
 }
 
 // diffDesired computes the minimal set of stream messages to converge `applied` to `next`.

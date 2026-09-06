@@ -65,6 +65,45 @@ func TestDiffDesired_RemovedRecordsAreWithdrawn(t *testing.T) {
 	}
 }
 
+// TestDiffDesired_SameNodeLBBackendsDistinctOverlayBothSurvive proves the control-plane half of the
+// same-node-multi-backend fix: two LB_VIP records for the SAME (vip, owner-node) but with DIFFERENT
+// backend overlay IPs (e.g. two pods of one Service scheduled on the same node) must NOT collapse
+// into one announce — pubKey must disambiguate by overlay IP so both reach AddLbBackend.
+func TestDiffDesired_SameNodeLBBackendsDistinctOverlayBothSurvive(t *testing.T) {
+	next := DesiredState{
+		Pubs: []PublicPrefix{
+			{Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "fd00::a", Vni: 100, OverlayIP: "10.0.0.5"},
+			{Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "fd00::a", Vni: 100, OverlayIP: "10.0.0.7"},
+		},
+	}
+	d := diffDesired(DesiredState{}, next)
+	if len(d.announceP) != 2 {
+		t.Fatalf("two same-node backends with distinct overlay IPs must both be announced, got %d: %+v", len(d.announceP), d.announceP)
+	}
+	seen := map[string]bool{}
+	for _, p := range d.announceP {
+		seen[p.OverlayIP] = true
+	}
+	if !seen["10.0.0.5"] || !seen["10.0.0.7"] {
+		t.Fatalf("both overlay IPs must be present in the announce set, got %+v", d.announceP)
+	}
+
+	// Now withdraw the first (10.0.0.5) only: the second (10.0.0.7) must remain applied, not withdrawn.
+	applied := next
+	next2 := DesiredState{
+		Pubs: []PublicPrefix{
+			{Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "fd00::a", Vni: 100, OverlayIP: "10.0.0.7"},
+		},
+	}
+	d2 := diffDesired(applied, next2)
+	if len(d2.withdrawP) != 1 || d2.withdrawP[0].OverlayIP != "10.0.0.5" {
+		t.Fatalf("only the removed overlay IP's backend must be withdrawn, got %+v", d2.withdrawP)
+	}
+	if len(d2.announceP) != 0 {
+		t.Fatalf("the surviving backend must not be re-announced (unchanged), got %+v", d2.announceP)
+	}
+}
+
 func TestDiffDesired_ChangedValueReAnnouncesWithoutWithdraw(t *testing.T) {
 	applied := DesiredState{
 		Routes: []Route{{Vni: 100, Prefix: "0.0.0.0/0", Nexthop: "fd00::e1"}},

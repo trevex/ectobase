@@ -103,8 +103,9 @@ func (b *Bus) applyPublic(ctx context.Context, pp *rbv1.PublicPrefix, op rbv1.Ro
 				log.Printf("AddLbBackend vip=%s backend=%s: %v", vip, owner, err)
 			}
 		case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
-			if err := b.dp.DelLbBackend(ctx, vip, owner); err != nil {
-				log.Printf("DelLbBackend vip=%s backend=%s: %v", vip, owner, err)
+			// OverlayIP disambiguates two backends sharing the same owner node (see DelLbBackend doc).
+			if err := b.dp.DelLbBackend(ctx, vip, owner, pp.GetOverlayIp()); err != nil {
+				log.Printf("DelLbBackend vip=%s backend=%s overlay=%s: %v", vip, owner, pp.GetOverlayIp(), err)
 			}
 		}
 	default:

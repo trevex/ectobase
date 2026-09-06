@@ -134,20 +134,36 @@ impl<W: MapWriter> ControlCore<W> {
         Ok(())
     }
 
-    /// Remove a backend from an LB, identified by its owner node's underlay `node_vtep` (the
-    /// withdraw path `applyPublic` -> `DelLbBackend` is keyed on the backend node's owner underlay,
-    /// not the per-backend overlay IP). Returns true if found, false if not.
+    /// Remove a backend from an LB, identified by its owner node's underlay `node_vtep` AND its
+    /// overlay IP. The overlay IP disambiguates two backends that share the same `node_vtep` — two
+    /// guests (pods) backing the same VIP on the SAME node, the normal K8s Service-with-2-pods-on-
+    /// one-node case. Matching on `node_vtep` alone (the pre-fix behavior) would remove BOTH such
+    /// backends, or whichever happened to match first, on a single-backend withdraw.
+    ///
+    /// `backend_overlay_ip == [0; 16]` is treated as "not set" (legacy/CLI callers that predate the
+    /// overlay-IP disambiguation and never set it): an all-zero overlay IP is never a real guest
+    /// overlay address (0.0.0.0 / :: are both unroutable/unspecified), so this falls back to the OLD
+    /// node_vtep-only match, removing every backend on that node. Returns true if found, false if
+    /// not.
     pub fn del_lb_target(
         &mut self,
         id: &[u8],
         backend_node_vtep: [u8; 16],
+        backend_overlay_ip: [u8; 16],
     ) -> anyhow::Result<bool> {
         let entry = self
             .lbs
             .get_mut(id)
             .ok_or_else(|| anyhow::anyhow!("unknown load balancer"))?;
         let before = entry.backends.len();
-        entry.backends.retain(|b| b.node_vtep != backend_node_vtep);
+        let match_overlay_too = backend_overlay_ip != [0u8; 16];
+        entry.backends.retain(|b| {
+            if match_overlay_too {
+                !(b.node_vtep == backend_node_vtep && b.overlay_ip == backend_overlay_ip)
+            } else {
+                b.node_vtep != backend_node_vtep
+            }
+        });
         if entry.backends.len() == before {
             return Ok(false);
         }
@@ -291,8 +307,10 @@ mod tests {
         // Duplicate backend rejected.
         assert!(c.add_lb_target(b"vip", b0).is_err());
 
-        // Remove one (by node_vtep): still filled (one backend remains).
-        assert!(c.del_lb_target(b"vip", node0).expect("del b0"));
+        // Remove one (by node_vtep + overlay_ip): still filled (one backend remains).
+        assert!(c
+            .del_lb_target(b"vip", node0, b0.overlay_ip)
+            .expect("del b0"));
         let filled = (0..crate::maglev::TABLE_SIZE)
             .filter(|&slot| {
                 c.writer()
@@ -303,7 +321,9 @@ mod tests {
         assert_eq!(filled, crate::maglev::TABLE_SIZE as usize);
 
         // Remove the last backend: all slots cleared.
-        assert!(c.del_lb_target(b"vip", node1).expect("del b1"));
+        assert!(c
+            .del_lb_target(b"vip", node1, b1.overlay_ip)
+            .expect("del b1"));
         let filled = (0..crate::maglev::TABLE_SIZE)
             .filter(|&slot| {
                 c.writer()
@@ -316,5 +336,120 @@ mod tests {
         // delete_lb removes the LB rows.
         assert!(c.delete_lb(b"vip").expect("delete_lb"));
         assert!(!c.delete_lb(b"vip").expect("delete_lb again"));
+    }
+
+    /// Two backends behind one VIP on the SAME node (same node_vtep) but with DIFFERENT overlay IPs
+    /// — the normal K8s Service-with-2-pods-on-one-node case — must both be addable, and removing one
+    /// by (node_vtep, overlay_ip) must leave the other intact. Before this fix, del_lb_target matched
+    /// by node_vtep alone and would have deleted BOTH (or, since the first match is removed via
+    /// retain, silently removed the wrong one).
+    #[test]
+    fn del_lb_target_disambiguates_same_node_backends_by_overlay_ip() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        let lb_ul = [0x20u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xcc];
+        c.create_lb(
+            b"vip",
+            100,
+            LbIpBytes::Ipv4([10, 0, 100, 3]),
+            lb_ul,
+            vec![(443, 6)],
+        )
+        .expect("create_lb");
+
+        // Both backends live on the SAME node (same node_vtep) but back different pods (different
+        // overlay_ip).
+        let node = [0x20u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x09];
+        let first = flowplane_common::LbBackend {
+            node_vtep: node,
+            overlay_ip: [10, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            vni: 100,
+            is_v6: 0,
+            _pad: [0; 3],
+        };
+        let second = flowplane_common::LbBackend {
+            node_vtep: node,
+            overlay_ip: [10, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            vni: 100,
+            is_v6: 0,
+            _pad: [0; 3],
+        };
+        c.add_lb_target(b"vip", first).expect("add first");
+        c.add_lb_target(b"vip", second).expect("add second");
+        assert_eq!(c.lbs.get(b"vip".as_slice()).unwrap().backends.len(), 2);
+
+        // Remove ONLY the first backend (same node_vtep as the second, distinct overlay_ip).
+        assert!(c
+            .del_lb_target(b"vip", node, first.overlay_ip)
+            .expect("del first"));
+
+        let entry = c.lbs.get(b"vip".as_slice()).unwrap();
+        assert_eq!(
+            entry.backends.len(),
+            1,
+            "removing one same-node backend must not remove the other"
+        );
+        assert_eq!(
+            entry.backends[0].overlay_ip, second.overlay_ip,
+            "the surviving backend must be the SECOND one, not the first"
+        );
+    }
+
+    /// Legacy/CLI callers that don't set an overlay IP pass an all-zero `backend_overlay_ip`. That
+    /// must fall back to the OLD node_vtep-only match (removing every backend on that node), so older
+    /// callers keep working exactly as before this fix — it must NOT touch a backend on another node.
+    #[test]
+    fn del_lb_target_zero_overlay_falls_back_to_node_vtep_match_removing_all() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        let lb_ul = [0x20u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xdd];
+        c.create_lb(
+            b"vip",
+            100,
+            LbIpBytes::Ipv4([10, 0, 100, 4]),
+            lb_ul,
+            vec![(443, 6)],
+        )
+        .expect("create_lb");
+
+        let node = [0x20u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x0a];
+        let other_node = [0x20u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x0b];
+        let a = flowplane_common::LbBackend {
+            node_vtep: node,
+            overlay_ip: [10, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            vni: 100,
+            is_v6: 0,
+            _pad: [0; 3],
+        };
+        let b = flowplane_common::LbBackend {
+            node_vtep: node,
+            overlay_ip: [10, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            vni: 100,
+            is_v6: 0,
+            _pad: [0; 3],
+        };
+        let elsewhere = flowplane_common::LbBackend {
+            node_vtep: other_node,
+            overlay_ip: [10, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            vni: 100,
+            is_v6: 0,
+            _pad: [0; 3],
+        };
+        c.add_lb_target(b"vip", a).expect("add a");
+        c.add_lb_target(b"vip", b).expect("add b");
+        c.add_lb_target(b"vip", elsewhere).expect("add elsewhere");
+
+        assert!(c
+            .del_lb_target(b"vip", node, [0u8; 16])
+            .expect("legacy del by node_vtep"));
+
+        let entry = c.lbs.get(b"vip".as_slice()).unwrap();
+        assert_eq!(
+            entry.backends.len(),
+            1,
+            "legacy zero-overlay del must remove ALL backends on the targeted node"
+        );
+        assert_eq!(
+            entry.backends[0].node_vtep, other_node,
+            "a backend on a DIFFERENT node must survive"
+        );
     }
 }

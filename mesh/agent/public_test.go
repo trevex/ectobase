@@ -65,6 +65,42 @@ func TestApplyPublicEdgeUnderlayAddThenWithdraw(t *testing.T) {
 	}
 }
 
+// TestApplyPublic_LBVIP_SameNodeDistinctOverlayBackendsWithdrawIndependently proves the agent-side
+// half of the same-node-multi-backend fix end to end: two LB_VIP ADD updates for the SAME VIP/owner
+// but DIFFERENT backend overlay IPs (two pods of one Service on the same node) must both reach
+// AddLbBackend, and a WITHDRAW naming one overlay IP must remove only that backend on the dataplane
+// — the other must remain.
+func TestApplyPublic_LBVIP_SameNodeDistinctOverlayBackendsWithdrawIndependently(t *testing.T) {
+	dp := newRecordingDP()
+	b := NewBus("edge1", "2001:db8::e", dp, true) // isEdge = true
+	ctx := context.Background()
+
+	addA := &rbv1.PublicPrefix{
+		Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "2001:db8::dd",
+		OverlayIp: "10.0.0.5", Vni: 100,
+	}
+	addB := &rbv1.PublicPrefix{
+		Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "2001:db8::dd",
+		OverlayIp: "10.0.0.7", Vni: 100,
+	}
+	b.applyPublic(ctx, addA, rbv1.RouteOp_ROUTE_OP_ADD)
+	b.applyPublic(ctx, addB, rbv1.RouteOp_ROUTE_OP_ADD)
+
+	if got := dp.lbBackends["203.0.113.50"]; len(got) != 2 {
+		t.Fatalf("both same-node backends must reach AddLbBackend, got %+v", got)
+	}
+
+	// Withdraw only the FIRST backend (overlay 10.0.0.5); the second (10.0.0.7) must remain.
+	b.applyPublic(ctx, addA, rbv1.RouteOp_ROUTE_OP_WITHDRAW)
+
+	if got := dp.lbBackends["203.0.113.50"]; len(got) != 1 || got[0] != "2001:db8::dd" {
+		t.Fatalf("after withdrawing one backend, exactly the other must remain: %+v", got)
+	}
+	if remaining := dp.lbBackendOverlaysFor("203.0.113.50"); len(remaining) != 1 || remaining[0] != "10.0.0.7" {
+		t.Fatalf("the SURVIVING backend must be the 10.0.0.7 one, not 10.0.0.5: %+v", remaining)
+	}
+}
+
 func TestApplyPublicNatIPIsNoOp(t *testing.T) {
 	b := NewBus("nodeA", "fd00::a", newRecordingDP(), false)
 	natIP := &rbv1.PublicPrefix{

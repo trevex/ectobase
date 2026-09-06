@@ -27,9 +27,14 @@ type recordingDP struct {
 	fwInstalled map[string]bool
 	lbVips      []string            // ids added
 	lbDels      []string            // ids deleted
-	lbBackends  map[string][]string // id -> backends
+	lbBackends  map[string][]string // id -> backend underlays, in call order (may repeat: two backends can share a node)
 	// lbBackendMeta records the last AddLbBackend call's overlay IP + VNI per (id, backendUnderlay).
 	lbBackendMeta map[string]lbBackendCall
+	// lbBackendRefs tracks (underlay, overlay) pairs per id, in call order, so DelLbBackend can
+	// disambiguate two backends that share the same underlay (same node) by their distinct overlay
+	// IP — mirrors the real dataplane's node_vtep+overlay_ip match (see flowplane-control's
+	// del_lb_target).
+	lbBackendRefs map[string][]lbBackendRef
 	routeAdds     []routeCall // every AddRoute call, in order
 	// natSrc/natSrcN record AddNatSource calls (local egress SNAT programming).
 	natSrc  map[string]natSrcCall // sourceIP -> last call
@@ -45,6 +50,12 @@ type lbBackendCall struct {
 	backendUnderlay  string
 	backendOverlayIP string
 	backendVni       uint32
+}
+
+// lbBackendRef pairs a backend's node underlay with its overlay IP, in AddLbBackend call order.
+type lbBackendRef struct {
+	underlay string
+	overlay  string
 }
 
 type qosCall struct {
@@ -80,6 +91,7 @@ func newRecordingDP() *recordingDP {
 		fwReplace:     map[string][]FwRuleWithID{},
 		lbBackends:    map[string][]string{},
 		lbBackendMeta: map[string]lbBackendCall{},
+		lbBackendRefs: map[string][]lbBackendRef{},
 		natSrc:        map[string]natSrcCall{}, natSrcN: map[string]int{},
 		qos: map[string]qosCall{}, qosN: map[string]int{},
 	}
@@ -187,6 +199,7 @@ func (f *recordingDP) AddLbBackend(ctx context.Context, id, backendUnderlay, bac
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lbBackends[id] = append(f.lbBackends[id], backendUnderlay)
+	f.lbBackendRefs[id] = append(f.lbBackendRefs[id], lbBackendRef{underlay: backendUnderlay, overlay: backendOverlayIP})
 	f.lbBackendMeta[id+"|"+backendUnderlay] = lbBackendCall{
 		backendUnderlay:  backendUnderlay,
 		backendOverlayIP: backendOverlayIP,
@@ -194,17 +207,46 @@ func (f *recordingDP) AddLbBackend(ctx context.Context, id, backendUnderlay, bac
 	}
 	return nil
 }
-func (f *recordingDP) DelLbBackend(ctx context.Context, id, backendUnderlay string) error {
+
+// DelLbBackend mirrors flowplane-control's del_lb_target: backendOverlayIP disambiguates two
+// backends sharing the same backendUnderlay (same node). An empty backendOverlayIP is the legacy
+// fallback — match by backendUnderlay alone, removing every backend on that node — exactly one
+// matching entry is removed at a time otherwise (retain drops only the FIRST match, mirroring a
+// real backend list where duplicates are distinct backend instances, not a set).
+func (f *recordingDP) DelLbBackend(ctx context.Context, id, backendUnderlay, backendOverlayIP string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	cur := f.lbBackends[id][:0]
-	for _, b := range f.lbBackends[id] {
-		if b != backendUnderlay {
-			cur = append(cur, b)
+	refs := f.lbBackendRefs[id]
+	out := refs[:0]
+	removed := false
+	for _, ref := range refs {
+		matches := ref.underlay == backendUnderlay && (backendOverlayIP == "" || ref.overlay == backendOverlayIP)
+		if matches && (!removed || backendOverlayIP == "") {
+			removed = true
+			continue // drop this entry
 		}
+		out = append(out, ref)
 	}
-	f.lbBackends[id] = cur
+	f.lbBackendRefs[id] = out
+	// Keep the legacy lbBackends slice (underlays only) consistent with the refs list.
+	us := make([]string, 0, len(out))
+	for _, ref := range out {
+		us = append(us, ref.underlay)
+	}
+	f.lbBackends[id] = us
 	return nil
+}
+
+// lbBackendOverlaysFor returns the overlay IPs currently recorded for id's backends, in call order —
+// used by tests to assert exactly WHICH backend survived a selective withdraw.
+func (f *recordingDP) lbBackendOverlaysFor(id string) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, 0, len(f.lbBackendRefs[id]))
+	for _, ref := range f.lbBackendRefs[id] {
+		out = append(out, ref.overlay)
+	}
+	return out
 }
 func (f *recordingDP) ConfigureQoS(_ context.Context, iface string, egressMbps, publicMbps, ingressMbps uint32) error {
 	f.mu.Lock()

@@ -53,8 +53,12 @@ type Dataplane interface {
 	// AddLbBackend appends a backend underlay /128 to a registered LB VIP. backendOverlayIP and
 	// backendVni are the backend NIC's overlay IP + VPC VNI, needed to Geneve-encap to it.
 	AddLbBackend(ctx context.Context, id, backendUnderlay, backendOverlayIP string, backendVni uint32) error
-	// DelLbBackend removes a backend underlay /128 from a registered LB VIP.
-	DelLbBackend(ctx context.Context, id, backendUnderlay string) error
+	// DelLbBackend removes a backend underlay /128 from a registered LB VIP. backendOverlayIP
+	// disambiguates two backends that share the same backendUnderlay (two guests backing the same VIP
+	// on the SAME node — a normal K8s Service-with-2-pods-on-one-node case): without it the dataplane
+	// cannot tell which of the two to remove. Empty is accepted for older/legacy callers and falls
+	// back to matching by backendUnderlay alone (removing every backend on that node).
+	DelLbBackend(ctx context.Context, id, backendUnderlay, backendOverlayIP string) error
 	// ConfigureQoS sets the per-interface QoS lanes: egressMbps is EDT-shaped, publicMbps and
 	// ingressMbps are policed. All 0 = unlimited (clears). Idempotent.
 	ConfigureQoS(ctx context.Context, interfaceID string, egressMbps, publicMbps, ingressMbps uint32) error
@@ -744,8 +748,10 @@ func (d dpAdapter) AddLbBackend(ctx context.Context, id, backendUnderlay, backen
 	})
 	return err
 }
-func (d dpAdapter) DelLbBackend(ctx context.Context, id, backendUnderlay string) error {
-	_, err := d.c.DelLbBackend(ctx, &dpv1.DelLbBackendRequest{Id: id, BackendUnderlay: backendUnderlay})
+func (d dpAdapter) DelLbBackend(ctx context.Context, id, backendUnderlay, backendOverlayIP string) error {
+	_, err := d.c.DelLbBackend(ctx, &dpv1.DelLbBackendRequest{
+		Id: id, BackendUnderlay: backendUnderlay, BackendOverlayIp: backendOverlayIP,
+	})
 	return err
 }
 func (d dpAdapter) ConfigureQoS(ctx context.Context, interfaceID string, egressMbps, publicMbps, ingressMbps uint32) error {

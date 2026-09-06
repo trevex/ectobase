@@ -372,11 +372,12 @@ func (*DelLbVipResponse) Descriptor() ([]byte, []int) {
 }
 
 type DelLbBackendRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                                  // the LB id from AddLbVip
-	BackendUnderlay string                 `protobuf:"bytes,2,opt,name=backend_underlay,json=backendUnderlay,proto3" json:"backend_underlay,omitempty"` // backend node underlay IPv6 /128
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                                       // the LB id from AddLbVip
+	BackendUnderlay  string                 `protobuf:"bytes,2,opt,name=backend_underlay,json=backendUnderlay,proto3" json:"backend_underlay,omitempty"`      // backend node underlay IPv6 /128
+	BackendOverlayIp string                 `protobuf:"bytes,3,opt,name=backend_overlay_ip,json=backendOverlayIp,proto3" json:"backend_overlay_ip,omitempty"` // backend guest overlay IP (v4 or v6); disambiguates two backends
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *DelLbBackendRequest) Reset() {
@@ -419,6 +420,13 @@ func (x *DelLbBackendRequest) GetId() string {
 func (x *DelLbBackendRequest) GetBackendUnderlay() string {
 	if x != nil {
 		return x.BackendUnderlay
+	}
+	return ""
+}
+
+func (x *DelLbBackendRequest) GetBackendOverlayIp() string {
+	if x != nil {
+		return x.BackendOverlayIp
 	}
 	return ""
 }
@@ -2156,10 +2164,11 @@ const file_dataplane_proto_rawDesc = "" +
 	"\x14AddLbBackendResponse\"!\n" +
 	"\x0fDelLbVipRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"\x12\n" +
-	"\x10DelLbVipResponse\"P\n" +
+	"\x10DelLbVipResponse\"~\n" +
 	"\x13DelLbBackendRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12)\n" +
-	"\x10backend_underlay\x18\x02 \x01(\tR\x0fbackendUnderlay\"\x16\n" +
+	"\x10backend_underlay\x18\x02 \x01(\tR\x0fbackendUnderlay\x12,\n" +
+	"\x12backend_overlay_ip\x18\x03 \x01(\tR\x10backendOverlayIp\"\x16\n" +
 	"\x14DelLbBackendResponse\"\x8c\x02\n" +
 	"\x10AddFwRuleRequest\x12!\n" +
 	"\finterface_id\x18\x01 \x01(\tR\vinterfaceId\x12\x17\n" +
