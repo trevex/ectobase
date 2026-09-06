@@ -4,7 +4,7 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule, LbKey, LbValue, Local, MaglevKey, UnderlayValue, FW_ACTION_ACCEPT,
+    FwMeta, FwRule, LbBackend, LbKey, LbValue, Local, MaglevKey, UnderlayValue, FW_ACTION_ACCEPT,
     FW_DIR_INGRESS,
 };
 use flowplane_core::pkt::Action;
@@ -90,7 +90,11 @@ fn ping_to_lb_vip_forwards_to_backend_not_answered() {
             table_id: 3,
             slot: 0,
         },
-        BACKEND_UL,
+        LbBackend {
+            node_vtep: BACKEND_UL,
+            vni: VNI,
+            ..Default::default()
+        },
     );
     n.maps.underlay.insert(
         BACKEND_UL,

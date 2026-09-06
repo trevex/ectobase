@@ -520,18 +520,29 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
     // 1. v6 LB dispatch (mirror the pre-4c hand-inlined `v6_uplink_rx`'s LB block).
     let lb_ul = lb_select_forward_v6(&*pkt, &*maps, inner_off, in_.vni);
     let (tap, guest_mac, is_lb, peer_capable) = match lb_ul {
-        Some(bul) => match maps.underlay_get(&bul) {
-            Some(bu) => (bu.tap_ifindex, bu.guest_mac, true, false), // LB backend local (see KNOWN LIMITATION on the v4 LB arm)
-            None => {
+        Some(be) => {
+            if be.node_vtep == in_.local.underlay_ipv6 {
+                match maps.ifaces6_get(be.vni, &be.overlay_ip) {
+                    Some(iv) if iv.is_local != 0 => {
+                        (iv.tap_ifindex, iv.guest_mac, true, iv.peer_capable != 0)
+                    }
+                    _ => {
+                        return UplinkOut {
+                            action: Action::Drop,
+                            tunnel: None,
+                        };
+                    }
+                }
+            } else {
                 // Remote backend: re-forward — same vni, no decap, packet bytes untouched. The
-                // kernel geneve device re-stamps the tunnel key toward `bul`.
-                let tunnel = reforward(in_.vni, &bul);
+                // kernel geneve device re-stamps the tunnel key toward `be.node_vtep`.
+                let tunnel = reforward(be.vni, &be.node_vtep);
                 return UplinkOut {
                     action: Action::Redirect(in_.local.uplink_ifindex),
                     tunnel: Some(tunnel),
                 };
             }
-        },
+        }
         None => {
             let dst = match pkt.read_array::<16>(inner_off + 24) {
                 Some(d) => d,

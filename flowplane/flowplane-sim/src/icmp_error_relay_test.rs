@@ -3,7 +3,9 @@
 //! Maglev backend that owns the ORIGINAL client->VIP flow. Faithful rebuild of the pre-P2 eBPF
 //! `lb::lb_select_forward_icmp_error` (recovered from 7a9a962), now in flowplane_core + sim-tested.
 
-use flowplane_common::{FwMeta, FwRule, LbKey, LbValue, Local, MaglevKey, UnderlayValue};
+use flowplane_common::{
+    FwMeta, FwRule, LbBackend, LbKey, LbValue, Local, MaglevKey, UnderlayValue,
+};
 use flowplane_core::pkt::Action;
 
 use crate::SimNode;
@@ -91,14 +93,22 @@ fn edge_node_two_backends() -> SimNode {
             table_id: 1,
             slot: 0,
         },
-        BACKEND_A_UL,
+        LbBackend {
+            node_vtep: BACKEND_A_UL,
+            vni: VNI,
+            ..Default::default()
+        },
     );
     n.maps.maglev.insert(
         MaglevKey {
             table_id: 1,
             slot: 1,
         },
-        BACKEND_B_UL,
+        LbBackend {
+            node_vtep: BACKEND_B_UL,
+            vni: VNI,
+            ..Default::default()
+        },
     );
     n
 }
@@ -167,7 +177,11 @@ fn icmp_error_to_vip_relays_to_backend() {
             table_id: 9,
             slot: 0,
         },
-        BACKEND_A_UL,
+        LbBackend {
+            node_vtep: BACKEND_A_UL,
+            vni: VNI,
+            ..Default::default()
+        },
     );
     // local backend delivery reuses the existing LB UNDERLAY[backend] path (the documented fiction).
     n.maps.underlay.insert(
@@ -258,7 +272,11 @@ fn icmp_error_embedded_udp_relayed_but_icmp_embedded_not() {
             table_id: 5,
             slot: 0,
         },
-        BACKEND_A_UL,
+        LbBackend {
+            node_vtep: BACKEND_A_UL,
+            vni: VNI,
+            ..Default::default()
+        },
     );
     relayed.maps.underlay.insert(
         BACKEND_A_UL,

@@ -10,8 +10,8 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule6, LbKey, LbValue, Local, MaglevKey, PortMeta, UnderlayValue, FW_ACTION_ACCEPT,
-    FW_DIR_INGRESS, UNDERLAY_LOCAL_DELIVER,
+    FwMeta, FwRule6, LbBackend, LbKey, LbValue, Local, MaglevKey, PortMeta, UnderlayValue,
+    FW_ACTION_ACCEPT, FW_DIR_INGRESS, UNDERLAY_LOCAL_DELIVER,
 };
 use flowplane_core::conntrack::ct_key6;
 use flowplane_core::encap::{TunnelEncap, ETH_LEN};
@@ -270,7 +270,12 @@ fn install_lb6(node: &mut SimNode, backend: [u8; 16]) {
             table_id: 5,
             slot: 0,
         },
-        backend,
+        LbBackend {
+            node_vtep: backend,
+            vni: VNI,
+            is_v6: 1,
+            ..Default::default()
+        },
     );
 }
 

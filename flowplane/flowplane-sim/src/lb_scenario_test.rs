@@ -591,6 +591,42 @@ fn ns_lb_v6_wan_rx_encaps_to_backend() {
 // via `INTERFACES[(vni, overlay_ip)]` (v4) / `INTERFACES6[(vni, overlay_ip)]` (v6) — so two
 // backends on one node, with distinct overlay IPs, now reach their OWN distinct taps.
 
+/// Install an ingress ALLOW rule on `tap` for TCP -> ANY dst : 443 (v6 firewall). Mirrors
+/// `ns_scenario_v6_test.rs::allow_tcp6`, but wildcards `dst_ip`/`dst_mask` (this file's `apply_fw`
+/// v4 helper — `allow_from_any_443` — is source-wildcarded, dest-agnostic; the v6 mirror needs the
+/// same shape since the LB/DSR delivery keeps the inner dst as the VIP, not either backend's own
+/// overlay IP). No `apply6`/`compilednic` v6 helper exists in this sim yet (checked: only a v4
+/// `apply()` — see `compilednic.rs`), so this seeds `FW_META6`/`FW_RULES6` directly, the same way
+/// `ns_scenario_v6_test.rs` and `firewall_test.rs` do.
+fn apply_fw6(maps: &mut MemMaps, tap: u32, port: u16) {
+    maps.fw_meta6.insert(
+        tap,
+        flowplane_common::FwMeta {
+            ingress_count: 1,
+            egress_count: 0,
+        },
+    );
+    maps.fw_rules6.insert(
+        (tap, 0),
+        flowplane_common::FwRule6 {
+            src_ip: [0; 16],
+            src_mask: [0; 16],
+            dst_ip: [0; 16],
+            dst_mask: [0; 16],
+            src_port_min: 0,
+            src_port_max: 65535,
+            dst_port_min: port,
+            dst_port_max: port,
+            icmp_type: 0xffff,
+            icmp_code: 0xffff,
+            proto: 6,
+            action: flowplane_common::FW_ACTION_ACCEPT,
+            direction: flowplane_common::FW_DIR_INGRESS,
+            enabled: 1,
+        },
+    );
+}
+
 #[test]
 fn ns_lb_two_backends_one_node_deliver_to_distinct_taps_v4() {
     use flowplane_common::{IfaceValue, LbBackend, LbKey, LbValue, MaglevKey};
@@ -677,5 +713,84 @@ fn ns_lb_two_backends_one_node_deliver_to_distinct_taps_v4() {
     assert!(
         seen_taps.contains(&BE1_TAP) && seen_taps.contains(&BE2_TAP),
         "both same-node backends must be reachable (got {seen_taps:?})"
+    );
+}
+
+#[test]
+fn ns_lb_two_backends_one_node_deliver_to_distinct_taps_v6() {
+    use flowplane_common::{IfaceValue, LbBackend, LbKey, LbValue, MaglevKey};
+    use flowplane_core::pkt::Action;
+
+    const BE1_IP6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x61];
+    const BE2_IP6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x62];
+    const BE1_TAP: u32 = 61;
+    const BE2_TAP: u32 = 62;
+    let vip6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 100, 1];
+    let vip_last4 = [vip6[12], vip6[13], vip6[14], vip6[15]];
+
+    let mut n = SimNode::with_local(local_for(HOSTB_UL, 9));
+    for (ip6, tap) in [(BE1_IP6, BE1_TAP), (BE2_IP6, BE2_TAP)] {
+        n.maps.add_iface6(
+            VNI,
+            ip6,
+            IfaceValue {
+                tap_ifindex: tap,
+                is_local: 1,
+                underlay_ipv6: HOSTB_UL,
+                guest_mac: GUEST_MAC,
+                peer_capable: 0,
+                _pad: [0; 1],
+            },
+        );
+        apply_fw6(&mut n.maps, tap, 443);
+    }
+    n.maps.lb.insert(
+        LbKey {
+            vni: VNI,
+            ipv4: vip_last4,
+            port: 443,
+            proto: 6,
+            _pad: 0,
+        },
+        LbValue {
+            table_id: 8,
+            size: 2,
+        },
+    );
+    let mk = |ip6: [u8; 16]| LbBackend {
+        node_vtep: HOSTB_UL,
+        overlay_ip: ip6,
+        vni: VNI,
+        is_v6: 1,
+        _pad: [0; 3],
+    };
+    n.maps.maglev.insert(
+        MaglevKey {
+            table_id: 8,
+            slot: 0,
+        },
+        mk(BE1_IP6),
+    );
+    n.maps.maglev.insert(
+        MaglevKey {
+            table_id: 8,
+            slot: 1,
+        },
+        mk(BE2_IP6),
+    );
+
+    let mut seen_taps = std::collections::HashSet::new();
+    for last in [1u8, 2, 3, 4] {
+        let mut src6 = [0x20u8, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        src6[15] = last;
+        let inner = eth_ipv6_tcp(src6, vip6, 443);
+        let out = n.uplink_v6(&inner, VNI, &local_for(HOSTB_UL, 9));
+        if let Action::Redirect(tap) = out.action {
+            seen_taps.insert(tap);
+        }
+    }
+    assert!(
+        seen_taps.contains(&BE1_TAP) && seen_taps.contains(&BE2_TAP),
+        "both same-node v6 backends must be reachable (got {seen_taps:?})"
     );
 }

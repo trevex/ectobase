@@ -1,7 +1,7 @@
 use crate::firewall_test::tcp_v4;
 use crate::{MemMaps, VecPkt};
 use etherparse::PacketBuilder;
-use flowplane_common::{LbKey, LbValue, MaglevKey};
+use flowplane_common::{LbBackend, LbKey, LbValue, MaglevKey};
 use flowplane_core::lb::{lb_select_forward, lb_select_forward_v6};
 
 fn tcp_v6(src: [u8; 16], dst: [u8; 16], sport: u16, dport: u16) -> Vec<u8> {
@@ -16,6 +16,11 @@ fn lb_select_returns_maglev_backend() {
     let vni = 100u32;
     let vip = [10, 0, 100, 1];
     let backend_ul = [0x20u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xbb];
+    let backend = LbBackend {
+        node_vtep: backend_ul,
+        vni,
+        ..Default::default()
+    };
     let mut m = MemMaps::default();
     m.lb.insert(
         LbKey {
@@ -35,11 +40,11 @@ fn lb_select_returns_maglev_backend() {
             table_id: 1,
             slot: 0,
         },
-        backend_ul,
+        backend,
     ); // size 1 => slot 0 always
 
     let pkt = VecPkt::from_bytes(&tcp_v4([203, 0, 113, 9], vip, 5000, 443));
-    assert_eq!(lb_select_forward(&pkt, &m, 0, vni), Some(backend_ul));
+    assert_eq!(lb_select_forward(&pkt, &m, 0, vni), Some(backend));
     let pkt2 = VecPkt::from_bytes(&tcp_v4([203, 0, 113, 9], [10, 0, 0, 5], 5000, 443));
     assert_eq!(lb_select_forward(&pkt2, &m, 0, vni), None);
 }
@@ -52,6 +57,12 @@ fn lb_select_v6_returns_maglev_backend() {
     let vip4 = [10, 0, 100, 1];
     let src6 = [0x20u8, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 203, 0, 113, 9];
     let backend_ul = [0x20u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xbb];
+    let backend = LbBackend {
+        node_vtep: backend_ul,
+        vni,
+        is_v6: 1,
+        ..Default::default()
+    };
     let mut m = MemMaps::default();
     m.lb.insert(
         LbKey {
@@ -71,12 +82,12 @@ fn lb_select_v6_returns_maglev_backend() {
             table_id: 1,
             slot: 0,
         },
-        backend_ul,
+        backend,
     ); // size 1 => slot 0 always
 
     // ip_off = 0: PacketBuilder::ipv6 emits starting at the IPv6 header (no Ethernet).
     let pkt = VecPkt::from_bytes(&tcp_v6(src6, vip6, 5000, 443));
-    assert_eq!(lb_select_forward_v6(&pkt, &m, 0, vni), Some(backend_ul));
+    assert_eq!(lb_select_forward_v6(&pkt, &m, 0, vni), Some(backend));
 
     // Non-LB dst (last-4 != VIP key) => None.
     let other = [0x20u8, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 5];
