@@ -102,6 +102,24 @@ pub fn create_netkit_pair(spec: &VethSpec, mode: NetkitMode) -> Result<DeviceInf
             &["ip", "link", "set", &spec.guest_name, "mtu", &mtu],
         )
         .context("set netkit peer mtu")?;
+        // Disable tx-checksum offload on the guest end — only when the uplink can't finalize
+        // CHECKSUM_PARTIAL in hardware (software-veth/netkit fabric). Mirrors create_veth_pair: without
+        // it a netkit guest emits CHECKSUM_PARTIAL replies, and any datapath L3 rewrite of a
+        // locally-generated guest packet (e.g. the DSR reverse-SNAT src->VIP) then corrupts the inner
+        // TCP/UDP checksum (the direct-byte csum fold is only valid over a COMPLETE checksum).
+        // Best-effort.
+        if spec.disable_csum_offload {
+            let _ = run_netns(
+                &spec.netns_path,
+                &[
+                    "ethtool",
+                    "-K",
+                    &spec.guest_name,
+                    "tx-checksum-ip-generic",
+                    "off",
+                ],
+            );
+        }
         // Configure the PRIMARY (datapath) end in the root netns: MTU >= the peer's, then up. No MAC
         // is set on the primary either — `mode l3` carries no L2/eth header.
         run(&["ip", "link", "set", primary, "mtu", &mtu]).context("set netkit primary mtu")?;

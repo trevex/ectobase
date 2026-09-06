@@ -215,8 +215,9 @@ impl Control {
         // restart — unlike the pinned BPF maps/links, this netdev is NOT torn down on graceful
         // shutdown (see the `Serve` shutdown handler in main.rs), so re-running `ensure_geneve_dev`
         // here just confirms/repairs it.
-        let geneve_ifindex = flowplane_device::ensure_geneve_dev(flowplane_device::GENEVE_DEV)
-            .context("bring up collect_md geneve device")?;
+        let geneve_ifindex =
+            flowplane_device::ensure_geneve_dev(flowplane_device::GENEVE_DEV, gateway_mac)
+                .context("bring up collect_md geneve device")?;
         let mut geneve_ifindex_map = GeneveIfindexMap::open(&mut ebpf)?;
         geneve_ifindex_map.set(geneve_ifindex)?;
         // uplink_rx is tcx on the geneve `collect_md` DEVICE's ingress — NOT the physical uplink

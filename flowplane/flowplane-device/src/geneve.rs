@@ -30,13 +30,23 @@ pub fn geneve_add_args(name: &str) -> Vec<String> {
 /// geneve external`, bring it up, resolve + return its ifindex. Mirrors `veth.rs`'s
 /// create-fresh-then-configure idiom (`create_veth_pair`/`create_preallocated_veth`). Reuses
 /// `geneve_add_args` for the add command so the tested arg vector is exactly what gets shelled.
-pub fn ensure_geneve_dev(name: &str) -> Result<u32> {
+pub fn ensure_geneve_dev(name: &str, gateway_mac: [u8; 6]) -> Result<u32> {
     // Fresh start: remove any stale device from a previous run (ignores "does not exist").
     delete_geneve_dev(name)?;
     let mut argv: Vec<String> = vec!["ip".into()];
     argv.extend(geneve_add_args(name));
     let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
     run(&argv).with_context(|| format!("create geneve dev {name}"))?;
+    // Stamp the device MAC = the anycast overlay gateway MAC (while still DOWN). The kernel
+    // `collect_md` geneve device carries INNER ETHERNET (TEB) and runs `eth_type_trans` on decap: an
+    // overlay->WAN reply (e.g. a DSR reverse-SNAT src->VIP) arrives with inner dst MAC = the gateway
+    // MAC (the guest sent it to its default gateway), so the device MAC MUST match or `ip6_rcv_core`
+    // drops it `PACKET_OTHERHOST` before it can be forwarded/local-delivered. Backends never hit this
+    // (their `uplink_rx`/`uplink_dsr_note` bpf_redirect at the tc-ingress hook, BEFORE that check);
+    // it only bites where the kernel decap path reaches the IP stack — the edge's local-deliver.
+    let macs = crate::veth::fmt_mac(gateway_mac);
+    run(&["ip", "link", "set", name, "address", &macs])
+        .with_context(|| format!("set geneve dev {name} mac"))?;
     run(&["ip", "link", "set", name, "up"]).with_context(|| format!("geneve dev {name} up"))?;
     ifindex_of(name)
 }
@@ -66,11 +76,12 @@ mod tests {
     fn ensure_geneve_dev_is_idempotent_and_up() {
         let name = "fpdev-geneve-test0";
         let _ = delete_geneve_dev(name);
-        let ifindex1 = ensure_geneve_dev(name).expect("create geneve dev");
+        let gw_mac = [0x02, 0, 0, 0, 0, 0x01];
+        let ifindex1 = ensure_geneve_dev(name, gw_mac).expect("create geneve dev");
         assert!(ifindex1 >= 2, "resolved a real ifindex");
         assert!(link_exists(name), "geneve dev present after create");
         // Re-running must be idempotent (delete-then-recreate), not error.
-        let ifindex2 = ensure_geneve_dev(name).expect("re-create geneve dev");
+        let ifindex2 = ensure_geneve_dev(name, gw_mac).expect("re-create geneve dev");
         assert!(ifindex2 >= 2);
         delete_geneve_dev(name).expect("delete geneve dev");
         assert!(
