@@ -1244,6 +1244,7 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
             tunnel: Some(TunnelEncap {
                 vni: 0,
                 remote: backend.node_vtep,
+                dsr_vip: None,
             }),
         };
     }
@@ -1258,6 +1259,7 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
                         tunnel: Some(TunnelEncap {
                             vni: owner_vni,
                             remote: owner_ul,
+                            dsr_vip: None,
                         }),
                     };
                 }

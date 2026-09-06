@@ -24,7 +24,7 @@ use flowplane_core::pkt::Action;
 use crate::coreimpl::{GlobalMaps, TcPkt};
 use crate::maps::LOCAL;
 use crate::parse::{ETH_LEN, ETH_P_IP, ETH_P_IPV6};
-use crate::tunnel::{get_tunnel_key, redirect as tunnel_redirect, set_tunnel_key};
+use crate::tunnel::{apply_encap, get_tunnel_key, redirect as tunnel_redirect};
 
 /// Execute an `Action` + optional `TunnelEncap` decision from a `flowplane_core::datapath`
 /// orchestrator. An LB-remote-backend reforward / neighbor-NAT relay hit (`Some(tunnel)`) re-stamps
@@ -42,7 +42,7 @@ use crate::tunnel::{get_tunnel_key, redirect as tunnel_redirect, set_tunnel_key}
 #[inline(always)]
 pub(crate) fn execute(ctx: &TcContext, action: Action, tunnel: Option<TunnelEncap>) -> i32 {
     if let Some(tunnel) = tunnel {
-        if !set_tunnel_key(ctx.skb.skb, &tunnel) {
+        if !apply_encap(ctx.skb.skb, &tunnel) {
             return TC_ACT_SHOT;
         }
         return tunnel_redirect();

@@ -1013,6 +1013,7 @@ fn uplink_relays_to_neighbor_nat_owner_when_not_locally_claimed() {
         Some(TunnelEncap {
             vni: NEIGH_VNI,
             remote: NEIGH_OWNER_UL,
+            dsr_vip: None,
         }),
         "tunnel decision must re-target the SAME vni at the neighbor-NAT owner's underlay"
     );
@@ -1052,6 +1053,7 @@ fn wan_rx_relays_to_neighbor_nat_owner_with_the_real_owner_vni() {
         Some(TunnelEncap {
             vni: NEIGH_VNI, // the OWNER's real vni — NOT 0, NOT discarded
             remote: NEIGH_OWNER_UL,
+            dsr_vip: None,
         }),
         "wan_rx relay must carry the owner's REAL vni, not a discarded one"
     );

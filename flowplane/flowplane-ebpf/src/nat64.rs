@@ -114,7 +114,7 @@ pub fn tc_nat64_egress(
         None => return Ok(None),
     };
     let tunnel = flowplane_core::encap::tunnel_encap(&route);
-    if !crate::tunnel::set_tunnel_key(ctx.skb.skb, &tunnel) {
+    if !crate::tunnel::apply_encap(ctx.skb.skb, &tunnel) {
         return Err(DpErr::Bounds);
     }
     Ok(Some(crate::tunnel::redirect()))

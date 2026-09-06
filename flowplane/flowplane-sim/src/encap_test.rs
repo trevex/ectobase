@@ -126,7 +126,8 @@ fn guest_tx_v4_emits_tunnel_encap_and_leaves_inner_bytes_unchanged() {
         out.tunnel,
         Some(TunnelEncap {
             vni: ROUTE_VNI,
-            remote: NEXTHOP_UNDERLAY
+            remote: NEXTHOP_UNDERLAY,
+            dsr_vip: None
         }),
         "tunnel decision carries the ROUTE's vni + nexthop underlay"
     );

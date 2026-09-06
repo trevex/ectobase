@@ -211,7 +211,8 @@ fn nat64_egress_tcp_translates_snats_and_encaps() {
         out.tunnel,
         Some(TunnelEncap {
             vni: VNI,
-            remote: NEXTHOP_UNDERLAY
+            remote: NEXTHOP_UNDERLAY,
+            dsr_vip: None
         }),
         "tunnel decision carries the route's vni + nexthop underlay"
     );
@@ -279,7 +280,8 @@ fn nat64_egress_udp_translates_and_folds_checksum() {
         out.tunnel,
         Some(TunnelEncap {
             vni: VNI,
-            remote: NEXTHOP_UNDERLAY
+            remote: NEXTHOP_UNDERLAY,
+            dsr_vip: None
         }),
         "tunnel decision carries the route's vni + nexthop underlay"
     );
@@ -332,7 +334,8 @@ fn nat64_egress_icmpv6_echo_becomes_icmpv4_echo() {
         out.tunnel,
         Some(TunnelEncap {
             vni: VNI,
-            remote: NEXTHOP_UNDERLAY
+            remote: NEXTHOP_UNDERLAY,
+            dsr_vip: None
         }),
         "tunnel decision carries the route's vni + nexthop underlay"
     );

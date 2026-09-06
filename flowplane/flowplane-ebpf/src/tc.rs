@@ -212,7 +212,7 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
                         );
                     }
                 }
-                if !crate::tunnel::set_tunnel_key(ctx.skb.skb, &tunnel) {
+                if !crate::tunnel::apply_encap(ctx.skb.skb, &tunnel) {
                     return TC_ACT_SHOT;
                 }
                 return crate::tunnel::redirect();
@@ -316,7 +316,7 @@ fn encap_v6_egress(
             );
         }
     }
-    if !crate::tunnel::set_tunnel_key(ctx.skb.skb, tunnel) {
+    if !crate::tunnel::apply_encap(ctx.skb.skb, tunnel) {
         return TC_ACT_SHOT;
     }
     crate::tunnel::redirect()

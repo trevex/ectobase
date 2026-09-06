@@ -568,7 +568,8 @@ fn ns_lb_v6_wan_rx_encaps_to_backend() {
         out.tunnel,
         Some(TunnelEncap {
             vni: 0,
-            remote: HOSTB_UL
+            remote: HOSTB_UL,
+            dsr_vip: None
         }),
         "tunnel decision must target the Maglev-selected backend underlay (HOSTB_UL) at vni=0"
     );

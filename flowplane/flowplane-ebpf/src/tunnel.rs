@@ -116,6 +116,22 @@ pub fn set_tunnel_opt(skb: *mut __sk_buff, buf: &[u8; DSR_OPT_BUF_LEN as usize])
     ret == 0
 }
 
+/// Apply a core `TunnelEncap` to the skb: set the tunnel key, and if the encap carries a DSR VIP
+/// option, attach it as a Geneve TLV (AFTER the key). Returns false on any helper failure.
+#[inline(always)]
+pub fn apply_encap(skb: *mut __sk_buff, tunnel: &TunnelEncap) -> bool {
+    if !set_tunnel_key(skb, tunnel) {
+        return false;
+    }
+    if let Some(opt) = tunnel.dsr_vip {
+        let buf = flowplane_core::dsr::encode(&opt);
+        if !set_tunnel_opt(skb, &buf) {
+            return false;
+        }
+    }
+    true
+}
+
 /// Read the Geneve TLV off the skb tunnel metadata (counterpart to [`set_tunnel_opt`] for the
 /// ingress/decap direction). Returns the helper's raw return value: `>= 0` means the option was
 /// present (and `buf` was filled), `< 0` means no option (or another helper error) — `buf` should

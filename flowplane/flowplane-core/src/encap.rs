@@ -19,6 +19,9 @@ pub use flowplane_common::proto::{ETH_LEN, IPV6_LEN};
 pub struct TunnelEncap {
     pub vni: u32,
     pub remote: [u8; 16],
+    /// When present, the encap carries a DSR Geneve TLV with this VIP identity (edge -> backend).
+    /// `None` for every non-DSR encap (plain overlay egress, reforward).
+    pub dsr_vip: Option<flowplane_common::DsrOpt>,
 }
 
 /// Build the tunnel-key decision for a matched overlay route. Single-sourced so every route-driven
@@ -28,6 +31,7 @@ pub fn tunnel_encap(route: &RouteValue) -> TunnelEncap {
     TunnelEncap {
         vni: route.nexthop_vni,
         remote: route.nexthop_ipv6,
+        dsr_vip: None,
     }
 }
 
@@ -42,5 +46,6 @@ pub fn reforward(vni: u32, backend: &[u8; 16]) -> TunnelEncap {
     TunnelEncap {
         vni,
         remote: *backend,
+        dsr_vip: None,
     }
 }
