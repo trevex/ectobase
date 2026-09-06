@@ -1,6 +1,6 @@
 use flowplane_common::{
-    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceValue, LbKey,
-    LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta,
+    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceValue, LbBackend,
+    LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta,
     RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
@@ -40,7 +40,7 @@ pub struct MemMaps {
     /// Firewall-only IPv6 conntrack (`CONNTRACK6` map).
     pub conntrack6: HashMap<CtKey6, CtEntry>,
     pub lb: HashMap<LbKey, LbValue>,
-    pub maglev: HashMap<MaglevKey, [u8; 16]>,
+    pub maglev: HashMap<MaglevKey, LbBackend>,
     pub nat: HashMap<NatKey, NatValue>,
     /// Registered NAT IPs (`NAT_IPS` map), keyed `(vni, ipv4)`. The ingress return path uses this to
     /// demux NAT returns peer-independently: if the inner dst is a registered nat_ip, the external
@@ -152,7 +152,7 @@ impl Maps for MemMaps {
     fn lb_get(&self, key: &LbKey) -> Option<LbValue> {
         self.lb.get(key).copied()
     }
-    fn maglev_get(&self, key: &MaglevKey) -> Option<[u8; 16]> {
+    fn maglev_get(&self, key: &MaglevKey) -> Option<LbBackend> {
         self.maglev.get(key).copied()
     }
     fn neighbor_nat_lookup(&self, vni: u32, dst: [u8; 4], dport: u16) -> Option<[u8; 16]> {
@@ -244,12 +244,16 @@ mod tests {
                 size: 3,
             },
         );
+        let backend = LbBackend {
+            node_vtep: [0x20; 16],
+            ..Default::default()
+        };
         m.maglev.insert(
             MaglevKey {
                 table_id: 7,
                 slot: 2,
             },
-            [0x20; 16],
+            backend,
         );
         assert_eq!(m.lb_get(&lk).map(|v| v.size), Some(3));
         assert_eq!(
@@ -257,7 +261,7 @@ mod tests {
                 table_id: 7,
                 slot: 2
             }),
-            Some([0x20; 16])
+            Some(backend)
         );
         assert_eq!(
             m.maglev_get(&MaglevKey {

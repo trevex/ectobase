@@ -4,9 +4,9 @@ use aya_ebpf::{
 };
 use flowplane_common::{
     Config, CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey,
-    IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbKey, LbValue,
-    Local, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteLpmData,
-    RouteLpmData6, RouteValue, UnderlayValue, VipKey,
+    IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbBackend, LbKey,
+    LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta,
+    RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue, VipKey,
 };
 
 #[map]
@@ -53,7 +53,7 @@ pub static VIPS: HashMap<VipKey, [u8; 4]> = HashMap::pinned(1024, 0);
 #[map]
 pub static LB: HashMap<LbKey, LbValue> = HashMap::pinned(1024, 0);
 #[map]
-pub static MAGLEV: HashMap<MaglevKey, [u8; 16]> = HashMap::pinned(65536, 0);
+pub static MAGLEV: HashMap<MaglevKey, LbBackend> = HashMap::pinned(65536, 0);
 #[map]
 /// Unified conntrack. Sized to dpservice's DP_FLOW_TABLE_MAX order (LRU_HASH preallocates, ~80-100MB;
 /// memcg-accounted on kernels >= 5.11). The size is fixed at load time by the loader.

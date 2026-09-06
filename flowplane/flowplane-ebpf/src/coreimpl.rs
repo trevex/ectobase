@@ -1,8 +1,8 @@
 use aya_ebpf::{bindings::bpf_adj_room_mode::BPF_ADJ_ROOM_MAC, programs::TcContext};
 use flowplane_common::{
     CtEntry, CtKey, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceKey6,
-    IfaceValue, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, PortMeta,
-    RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue, VipKey,
+    IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue,
+    PortMeta, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue, VipKey,
 };
 use flowplane_core::maps::Maps;
 use flowplane_core::pkt::Pkt;
@@ -57,7 +57,7 @@ impl Maps for GlobalMaps {
         unsafe { crate::maps::LB.get(key).copied() }
     }
     #[inline(always)]
-    fn maglev_get(&self, key: &MaglevKey) -> Option<[u8; 16]> {
+    fn maglev_get(&self, key: &MaglevKey) -> Option<LbBackend> {
         unsafe { crate::maps::MAGLEV.get(key).copied() }
     }
     #[inline(always)]

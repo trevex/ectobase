@@ -164,7 +164,11 @@ impl MapWriter for AyaWriter {
     fn lb_remove(&mut self, k: &flowplane_common::LbKey) -> anyhow::Result<()> {
         self.lb.remove(k)
     }
-    fn maglev_upsert(&mut self, k: flowplane_common::MaglevKey, v: [u8; 16]) -> anyhow::Result<()> {
+    fn maglev_upsert(
+        &mut self,
+        k: flowplane_common::MaglevKey,
+        v: flowplane_common::LbBackend,
+    ) -> anyhow::Result<()> {
         self.maglev.upsert(k, v)
     }
     fn maglev_remove(&mut self, k: &flowplane_common::MaglevKey) -> anyhow::Result<()> {

@@ -1,6 +1,7 @@
 use flowplane_common::{
-    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceValue, LbKey,
-    LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, PortMeta, RouteValue, UnderlayValue,
+    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRuleKey, IfaceValue, LbBackend,
+    LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, PortMeta, RouteValue,
+    UnderlayValue,
 };
 
 /// Typed access to the datapath maps the core needs. eBPF impl wraps the `#[map]` statics
@@ -31,7 +32,7 @@ pub trait Maps {
         None
     }
     fn lb_get(&self, key: &LbKey) -> Option<LbValue>;
-    fn maglev_get(&self, key: &MaglevKey) -> Option<[u8; 16]>;
+    fn maglev_get(&self, key: &MaglevKey) -> Option<LbBackend>;
     /// Neighbor-NAT return-route lookup (`NEIGHBOR_NAT` table, linear-scanned): if `(vni, dst,
     /// dport)` matches a registered block, return the OWNING node's underlay /128. NEIGHBOR_NAT
     /// entries are installed ONLY for nat_ip blocks owned by ANOTHER node (mesh gossip; see

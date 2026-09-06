@@ -2,7 +2,7 @@
 use crate::writer::{CtFlushScope, MapWriter};
 use flowplane_common::{
     DhcpConfig, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey,
-    IfaceMetaVal, IfaceValue, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatValue,
+    IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatValue,
     NeighborNatEntry, PortMeta, RouteValue, UnderlayValue, VipKey,
 };
 use std::collections::{HashMap, HashSet};
@@ -16,7 +16,7 @@ pub struct MemMapWriter {
     pub neigh_nat: HashMap<u32, NeighborNatEntry>,
     pub neigh_nat_count: u32,
     pub lb: HashMap<LbKey, LbValue>,
-    pub maglev: HashMap<MaglevKey, [u8; 16]>,
+    pub maglev: HashMap<MaglevKey, LbBackend>,
     pub underlay: HashMap<[u8; 16], UnderlayValue>,
     pub fw_rules: HashMap<FwRuleKey, FwRule>,
     pub fw_meta: HashMap<u32, FwMeta>,
@@ -100,7 +100,7 @@ impl MapWriter for MemMapWriter {
         self.lb.remove(k);
         Ok(())
     }
-    fn maglev_upsert(&mut self, k: MaglevKey, v: [u8; 16]) -> anyhow::Result<()> {
+    fn maglev_upsert(&mut self, k: MaglevKey, v: LbBackend) -> anyhow::Result<()> {
         self.maglev.insert(k, v);
         Ok(())
     }

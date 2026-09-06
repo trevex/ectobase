@@ -2,7 +2,7 @@
 //! used in tests) implement this; `ControlCore` programs maps only through it.
 use flowplane_common::{
     DhcpConfig, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey,
-    IfaceMetaVal, IfaceValue, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatValue,
+    IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatValue,
     NeighborNatEntry, PortMeta, RouteValue, UnderlayValue, VipKey,
 };
 
@@ -45,7 +45,7 @@ pub trait MapWriter {
     fn neigh_nat_count_set(&mut self, count: u32) -> anyhow::Result<()>;
     fn lb_upsert(&mut self, key: LbKey, val: LbValue) -> anyhow::Result<()>;
     fn lb_remove(&mut self, key: &LbKey) -> anyhow::Result<()>;
-    fn maglev_upsert(&mut self, key: MaglevKey, val: [u8; 16]) -> anyhow::Result<()>;
+    fn maglev_upsert(&mut self, key: MaglevKey, val: LbBackend) -> anyhow::Result<()>;
     fn maglev_remove(&mut self, key: &MaglevKey) -> anyhow::Result<()>;
     fn underlay_upsert(&mut self, key: [u8; 16], val: UnderlayValue) -> anyhow::Result<()>;
     fn underlay_remove(&mut self, key: &[u8; 16]) -> anyhow::Result<()>;

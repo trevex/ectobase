@@ -6,8 +6,8 @@ use aya::maps::{
 use aya::Ebpf;
 use flowplane_common::{
     CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey,
-    IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbKey, LbValue, Local,
-    MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteLpmData,
+    IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbBackend, LbKey, LbValue,
+    Local, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteLpmData,
     RouteLpmData6, RouteValue, UnderlayValue, VipKey,
 };
 
@@ -321,7 +321,7 @@ impl Lb {
 
 /// Typed handle over the `MAGLEV` BPF map.
 pub struct Maglev {
-    map: HashMap<MapData, MaglevKey, [u8; 16]>,
+    map: HashMap<MapData, MaglevKey, LbBackend>,
 }
 
 impl Maglev {
@@ -330,7 +330,7 @@ impl Maglev {
         Ok(Self { map })
     }
 
-    pub fn upsert(&mut self, key: MaglevKey, val: [u8; 16]) -> anyhow::Result<()> {
+    pub fn upsert(&mut self, key: MaglevKey, val: LbBackend) -> anyhow::Result<()> {
         self.map.insert(key, val, 0).context("insert maglev")
     }
 
