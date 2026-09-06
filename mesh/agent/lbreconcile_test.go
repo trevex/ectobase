@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	rbv1 "github.com/trevex/ectobase/mesh/gen/routebusv1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -46,7 +46,7 @@ func TestDesiredLB_JoinsUnderlayFromDataplane(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("want 1 lbBacking, got %d", len(got))
 	}
-	if got[0].VIP != "203.0.113.50" || got[0].Vni != 100 || got[0].NicUnderlay != "2001:db8::dd" {
+	if got[0].VIP != "203.0.113.50" || got[0].Vni != 100 || got[0].NicUnderlay != "2001:db8::dd" || got[0].OverlayIP != "10.0.10.5" {
 		t.Fatalf("lbBacking = %+v", got[0])
 	}
 	if len(got[0].Ports) != 1 || got[0].Ports[0].Port != 443 || got[0].Ports[0].Proto != 6 {
@@ -192,6 +192,9 @@ func TestDesiredPublic_EmitsLBVIP(t *testing.T) {
 	var found bool
 	for _, pp := range recs {
 		if pp.Kind == rbv1.PublicKind_PUBLIC_KIND_LB_VIP && pp.Prefix == "203.0.113.50/32" && pp.OwnerUnderlay == "2001:db8::dd" {
+			if pp.Vni != 100 || pp.OverlayIP != "10.0.0.20" {
+				t.Fatalf("LB_VIP record missing backend vni/overlay ip: %+v", pp)
+			}
 			found = true
 		}
 	}

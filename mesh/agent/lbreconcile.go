@@ -14,6 +14,7 @@ type lbBacking struct {
 	VIP         string   // v4 or v6
 	Vni         uint32   // the backend NIC's VPC VNI (for the E/W anycast route)
 	NicUnderlay string   // the backend NIC's /128 (E/W route nexthop + LB_VIP owner_underlay)
+	OverlayIP   string   // the backend NIC's overlay IP (for AddLbBackend's Geneve encap)
 	Ports       []LbPort // service tuples (proto as IP protocol number)
 }
 
@@ -35,10 +36,11 @@ func (r *Reconciler) desiredLB(ctx context.Context, ulByKey map[ipKey]string, lo
 		if !localNIC(c, localSet) || len(c.Spec.LB) == 0 {
 			continue
 		}
-		ul := ""
+		ul, overlayIP := "", ""
 		for _, ip := range c.Spec.OverlayIPs {
 			if u, ok := ulByKey[ipKey{uint32(c.Spec.VNI), ip}]; ok {
 				ul = u
+				overlayIP = ip
 				break
 			}
 		}
@@ -50,7 +52,7 @@ func (r *Reconciler) desiredLB(ctx context.Context, ulByKey map[ipKey]string, lo
 			for _, p := range lb.Ports {
 				ports = append(ports, LbPort{Port: uint32(p.Port), Proto: protoNum(p.Proto)})
 			}
-			out = append(out, lbBacking{VIP: lb.VIP, Vni: uint32(c.Spec.VNI), NicUnderlay: ul, Ports: ports})
+			out = append(out, lbBacking{VIP: lb.VIP, Vni: uint32(c.Spec.VNI), NicUnderlay: ul, OverlayIP: overlayIP, Ports: ports})
 		}
 	}
 	return out, nil

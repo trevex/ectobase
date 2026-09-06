@@ -126,5 +126,6 @@ message PublicPrefix {
   uint32     vni            = 4;
   uint32     port_min       = 5;
   uint32     port_max       = 6;
+  string     overlay_ip     = 7;  // LB_VIP: the backend guest's overlay IP (for AddLbBackend)
 }
 message PublicUpdate { PublicPrefix prefix = 1; RouteOp op = 2; }

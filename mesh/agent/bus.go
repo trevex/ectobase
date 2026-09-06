@@ -50,8 +50,9 @@ type Dataplane interface {
 	AddLbVip(ctx context.Context, id string, vni uint32, vip, lbUnderlay string, ports []LbPort) error
 	// DelLbVip removes a registered LB VIP by id.
 	DelLbVip(ctx context.Context, id string) error
-	// AddLbBackend appends a backend underlay /128 to a registered LB VIP.
-	AddLbBackend(ctx context.Context, id, backendUnderlay string) error
+	// AddLbBackend appends a backend underlay /128 to a registered LB VIP. backendOverlayIP and
+	// backendVni are the backend NIC's overlay IP + VPC VNI, needed to Geneve-encap to it.
+	AddLbBackend(ctx context.Context, id, backendUnderlay, backendOverlayIP string, backendVni uint32) error
 	// DelLbBackend removes a backend underlay /128 from a registered LB VIP.
 	DelLbBackend(ctx context.Context, id, backendUnderlay string) error
 	// ConfigureQoS sets the per-interface QoS lanes: egressMbps is EDT-shaped, publicMbps and
@@ -352,6 +353,7 @@ func (b *Bus) sendDelta(stream rbv1.RouteBus_SessionClient, d busDelta) error {
 	for _, p := range d.withdrawP {
 		if err := stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_WithdrawPublic{WithdrawPublic: &rbv1.PublicPrefix{
 			Kind: p.Kind, Prefix: p.Prefix, OwnerUnderlay: p.OwnerUnderlay, Vni: p.Vni, PortMin: p.PortMin, PortMax: p.PortMax,
+			OverlayIp: p.OverlayIP,
 		}}}); err != nil {
 			return err
 		}
@@ -384,7 +386,7 @@ func (b *Bus) AnnounceNat(stream rbv1.RouteBus_SessionClient, blk NatBlock) erro
 func (b *Bus) AnnouncePublic(stream rbv1.RouteBus_SessionClient, pp PublicPrefix) error {
 	return stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_AnnouncePublic{AnnouncePublic: &rbv1.PublicPrefix{
 		Kind: pp.Kind, Prefix: pp.Prefix, OwnerUnderlay: pp.OwnerUnderlay,
-		Vni: pp.Vni, PortMin: pp.PortMin, PortMax: pp.PortMax,
+		Vni: pp.Vni, PortMin: pp.PortMin, PortMax: pp.PortMax, OverlayIp: pp.OverlayIP,
 	}}})
 }
 
@@ -733,8 +735,13 @@ func (d dpAdapter) DelLbVip(ctx context.Context, id string) error {
 	_, err := d.c.DelLbVip(ctx, &dpv1.DelLbVipRequest{Id: id})
 	return err
 }
-func (d dpAdapter) AddLbBackend(ctx context.Context, id, backendUnderlay string) error {
-	_, err := d.c.AddLbBackend(ctx, &dpv1.AddLbBackendRequest{Id: id, BackendUnderlay: backendUnderlay})
+func (d dpAdapter) AddLbBackend(ctx context.Context, id, backendUnderlay, backendOverlayIP string, backendVni uint32) error {
+	_, err := d.c.AddLbBackend(ctx, &dpv1.AddLbBackendRequest{
+		Id:               id,
+		BackendUnderlay:  backendUnderlay,
+		BackendOverlayIp: backendOverlayIP,
+		BackendVni:       backendVni,
+	})
 	return err
 }
 func (d dpAdapter) DelLbBackend(ctx context.Context, id, backendUnderlay string) error {

@@ -1219,6 +1219,7 @@ type PublicPrefix struct {
 	Vni           uint32                 `protobuf:"varint,4,opt,name=vni,proto3" json:"vni,omitempty"`
 	PortMin       uint32                 `protobuf:"varint,5,opt,name=port_min,json=portMin,proto3" json:"port_min,omitempty"`
 	PortMax       uint32                 `protobuf:"varint,6,opt,name=port_max,json=portMax,proto3" json:"port_max,omitempty"`
+	OverlayIp     string                 `protobuf:"bytes,7,opt,name=overlay_ip,json=overlayIp,proto3" json:"overlay_ip,omitempty"` // LB_VIP: the backend guest's overlay IP (for AddLbBackend)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1293,6 +1294,13 @@ func (x *PublicPrefix) GetPortMax() uint32 {
 		return x.PortMax
 	}
 	return 0
+}
+
+func (x *PublicPrefix) GetOverlayIp() string {
+	if x != nil {
+		return x.OverlayIp
+	}
+	return ""
 }
 
 type PublicUpdate struct {
@@ -1423,14 +1431,16 @@ const file_routebus_proto_rawDesc = "" +
 	"\bport_min\x18\x04 \x01(\rR\aportMin\x12\x19\n" +
 	"\bport_max\x18\x05 \x01(\rR\aportMax\x12%\n" +
 	"\x0eowner_underlay\x18\x06 \x01(\tR\rownerUnderlay\x12$\n" +
-	"\x02op\x18\a \x01(\x0e2\x14.routebus.v1.RouteOpR\x02op\"\xc2\x01\n" +
+	"\x02op\x18\a \x01(\x0e2\x14.routebus.v1.RouteOpR\x02op\"\xe1\x01\n" +
 	"\fPublicPrefix\x12+\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x17.routebus.v1.PublicKindR\x04kind\x12\x16\n" +
 	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12%\n" +
 	"\x0eowner_underlay\x18\x03 \x01(\tR\rownerUnderlay\x12\x10\n" +
 	"\x03vni\x18\x04 \x01(\rR\x03vni\x12\x19\n" +
 	"\bport_min\x18\x05 \x01(\rR\aportMin\x12\x19\n" +
-	"\bport_max\x18\x06 \x01(\rR\aportMax\"g\n" +
+	"\bport_max\x18\x06 \x01(\rR\aportMax\x12\x1d\n" +
+	"\n" +
+	"overlay_ip\x18\a \x01(\tR\toverlayIp\"g\n" +
 	"\fPublicUpdate\x121\n" +
 	"\x06prefix\x18\x01 \x01(\v2\x19.routebus.v1.PublicPrefixR\x06prefix\x12$\n" +
 	"\x02op\x18\x02 \x01(\x0e2\x14.routebus.v1.RouteOpR\x02op*L\n" +

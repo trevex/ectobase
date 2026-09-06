@@ -28,7 +28,9 @@ type recordingDP struct {
 	lbVips      []string            // ids added
 	lbDels      []string            // ids deleted
 	lbBackends  map[string][]string // id -> backends
-	routeAdds   []routeCall         // every AddRoute call, in order
+	// lbBackendMeta records the last AddLbBackend call's overlay IP + VNI per (id, backendUnderlay).
+	lbBackendMeta map[string]lbBackendCall
+	routeAdds     []routeCall // every AddRoute call, in order
 	// natSrc/natSrcN record AddNatSource calls (local egress SNAT programming).
 	natSrc  map[string]natSrcCall // sourceIP -> last call
 	natSrcN map[string]int        // sourceIP -> call count
@@ -37,6 +39,12 @@ type recordingDP struct {
 	qosN map[string]int     // interfaceID -> call count
 	// ifaces is what ListInterfaces returns: the node-local attached interfaces + their underlays.
 	ifaces []LocalInterface
+}
+
+type lbBackendCall struct {
+	backendUnderlay  string
+	backendOverlayIP string
+	backendVni       uint32
 }
 
 type qosCall struct {
@@ -68,10 +76,11 @@ func newRecordingDP() *recordingDP {
 	return &recordingDP{
 		added: map[string]string{}, external: map[string]bool{}, withdrew: map[string]bool{},
 		nbrNat: map[string]string{}, nbrNatWd: map[string]bool{},
-		fwInstalled: map[string]bool{},
-		fwReplace:   map[string][]FwRuleWithID{},
-		lbBackends:  map[string][]string{},
-		natSrc:      map[string]natSrcCall{}, natSrcN: map[string]int{},
+		fwInstalled:   map[string]bool{},
+		fwReplace:     map[string][]FwRuleWithID{},
+		lbBackends:    map[string][]string{},
+		lbBackendMeta: map[string]lbBackendCall{},
+		natSrc:        map[string]natSrcCall{}, natSrcN: map[string]int{},
 		qos: map[string]qosCall{}, qosN: map[string]int{},
 	}
 }
@@ -174,10 +183,15 @@ func (f *recordingDP) DelLbVip(ctx context.Context, id string) error {
 	f.lbDels = append(f.lbDels, id)
 	return nil
 }
-func (f *recordingDP) AddLbBackend(ctx context.Context, id, backendUnderlay string) error {
+func (f *recordingDP) AddLbBackend(ctx context.Context, id, backendUnderlay, backendOverlayIP string, backendVni uint32) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lbBackends[id] = append(f.lbBackends[id], backendUnderlay)
+	f.lbBackendMeta[id+"|"+backendUnderlay] = lbBackendCall{
+		backendUnderlay:  backendUnderlay,
+		backendOverlayIP: backendOverlayIP,
+		backendVni:       backendVni,
+	}
 	return nil
 }
 func (f *recordingDP) DelLbBackend(ctx context.Context, id, backendUnderlay string) error {

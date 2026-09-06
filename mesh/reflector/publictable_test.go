@@ -20,6 +20,21 @@ func publicRecord(kind pb.PublicKind, prefix, owner string, vni, min, max uint32
 	return PublicRecord{Kind: kind, Prefix: prefix, OwnerUnderlay: owner, Vni: vni, PortMin: min, PortMax: max}
 }
 
+func TestAnnouncePublicRelaysOverlayIP(t *testing.T) {
+	r := NewRIB()
+	a := &fakeSink{id: "nodeA"}
+	r.RegisterSink(a)
+
+	rec := publicRecord(pb.PublicKind_PUBLIC_KIND_LB_VIP, "203.0.113.50/32", "2001:db8::dd", 100, 0, 0)
+	rec.OverlayIP = "10.0.10.5"
+	r.AnnouncePublic("nodeA", rec)
+
+	us := publicUpdates(a)
+	if len(us) != 1 || us[0].Prefix.OverlayIp != "10.0.10.5" || us[0].Prefix.Vni != 100 {
+		t.Fatalf("reflector must relay overlay_ip/vni through fanout, got %+v", us)
+	}
+}
+
 func TestAnnouncePublicFansOutToAllSinks(t *testing.T) {
 	r := NewRIB()
 	a := &fakeSink{id: "nodeA"}

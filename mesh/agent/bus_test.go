@@ -159,9 +159,13 @@ func TestApplyPublic_LBVIP_EdgeAddsBackend(t *testing.T) {
 	b := NewBus("edge1", "2001:db8::e", dp, true) // isEdge = true
 	b.applyPublic(context.Background(), &rbv1.PublicPrefix{
 		Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "2001:db8::dd",
+		OverlayIp: "10.0.10.5", Vni: 100,
 	}, rbv1.RouteOp_ROUTE_OP_ADD)
 	if got := dp.lbBackends["203.0.113.50"]; len(got) != 1 || got[0] != "2001:db8::dd" {
 		t.Fatalf("edge AddLbBackend not recorded: %+v", dp.lbBackends)
+	}
+	if meta, ok := dp.lbBackendMeta["203.0.113.50|2001:db8::dd"]; !ok || meta.backendOverlayIP != "10.0.10.5" || meta.backendVni != 100 {
+		t.Fatalf("AddLbBackend did not forward overlay ip/vni: %+v ok=%v", meta, ok)
 	}
 }
 

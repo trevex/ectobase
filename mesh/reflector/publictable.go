@@ -13,6 +13,9 @@ type PublicRecord struct {
 	Vni           uint32
 	PortMin       uint32
 	PortMax       uint32
+	// OverlayIP is set for LB_VIP records: the backend guest's overlay IP, relayed
+	// through so the learning edge can AddLbBackend with it.
+	OverlayIP string
 }
 
 // publicKey identifies a record by (kind, prefix, owner). Duplicate announces
@@ -89,6 +92,7 @@ func publicUpdate(rec PublicRecord, op pb.RouteOp) *pb.ServerMsg {
 			Vni:           rec.Vni,
 			PortMin:       rec.PortMin,
 			PortMax:       rec.PortMax,
+			OverlayIp:     rec.OverlayIP,
 		},
 		Op: op,
 	}}}

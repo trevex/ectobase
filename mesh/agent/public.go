@@ -20,6 +20,9 @@ type PublicPrefix struct {
 	Vni           uint32
 	PortMin       uint32
 	PortMax       uint32
+	// OverlayIP is set for LB_VIP records: the backend guest's overlay IP, forwarded to
+	// AddLbBackend so the edge can Geneve-encap to the right VNI+overlay-IP tuple.
+	OverlayIP string
 }
 
 // DesiredPublic returns the public-address records THIS node should announce on
@@ -38,7 +41,8 @@ func (r *Reconciler) DesiredPublic(ctx context.Context) ([]PublicPrefix, error) 
 		})
 	}
 	// LB backends on this node: one LB_VIP record per backed VIP so the edge can AddLbBackend.
-	// vni=0: the edge supplies its WAN LB-VNI at AddLbVip; AddLbBackend needs no VNI.
+	// Vni/OverlayIP here are the BACKEND NIC's VPC VNI + overlay IP (not the edge's WAN VNI, which
+	// is supplied separately at AddLbVip) — AddLbBackend needs them to Geneve-encap to the backend.
 	ulByKey, localSet, err := r.underlayByKey(ctx)
 	if err != nil {
 		return nil, err
@@ -56,7 +60,8 @@ func (r *Reconciler) DesiredPublic(ctx context.Context) ([]PublicPrefix, error) 
 			Kind:          rbv1.PublicKind_PUBLIC_KIND_LB_VIP,
 			Prefix:        prefix,
 			OwnerUnderlay: lb.NicUnderlay,
-			Vni:           0,
+			Vni:           lb.Vni,
+			OverlayIP:     lb.OverlayIP,
 		})
 	}
 	return recs, nil
@@ -94,7 +99,7 @@ func (b *Bus) applyPublic(ctx context.Context, pp *rbv1.PublicPrefix, op rbv1.Ro
 		owner := pp.GetOwnerUnderlay()
 		switch op {
 		case rbv1.RouteOp_ROUTE_OP_ADD:
-			if err := b.dp.AddLbBackend(ctx, vip, owner); err != nil {
+			if err := b.dp.AddLbBackend(ctx, vip, owner, pp.GetOverlayIp(), pp.GetVni()); err != nil {
 				log.Printf("AddLbBackend vip=%s backend=%s: %v", vip, owner, err)
 			}
 		case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
