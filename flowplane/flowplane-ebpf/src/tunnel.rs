@@ -14,9 +14,13 @@
 
 use aya_ebpf::{
     bindings::{__sk_buff, bpf_tunnel_key},
+    cty::c_void,
     helpers::{
         bpf_redirect,
-        gen::{bpf_skb_get_tunnel_key, bpf_skb_set_tunnel_key},
+        gen::{
+            bpf_skb_get_tunnel_key, bpf_skb_get_tunnel_opt, bpf_skb_set_tunnel_key,
+            bpf_skb_set_tunnel_opt,
+        },
     },
 };
 use flowplane_core::encap::TunnelEncap;
@@ -92,6 +96,34 @@ pub fn get_tunnel_key(skb: *mut __sk_buff) -> Option<(u32, [u8; 16])> {
         );
     }
     Some((key.tunnel_id, remote))
+}
+
+/// Total Geneve DSR option buffer = 4-byte Geneve option header + 20-byte payload (candidate layout;
+/// the B1 spike confirms/freezes this).
+pub const DSR_OPT_BUF_LEN: u32 = 24;
+
+/// Attach a Geneve TLV to the skb tunnel metadata. MUST be called AFTER [`set_tunnel_key`] — the
+/// kernel's `collect_md` Geneve device only serializes an option alongside a tunnel key that is
+/// already staged on the skb. `buf` is the RAW option bytes INCLUDING the 4-byte Geneve option
+/// header (class/type/len); there is no separate flags parameter (unlike `set_tunnel_key`'s
+/// `BPF_F_TUNINFO_IPV6` — `bpf_skb_set_tunnel_opt` takes only the buffer + its length). Returns
+/// `false` on a helper failure.
+#[inline(always)]
+pub fn set_tunnel_opt(skb: *mut __sk_buff, buf: &[u8; DSR_OPT_BUF_LEN as usize]) -> bool {
+    // SAFETY: `buf` is a valid, fully-initialized `DSR_OPT_BUF_LEN`-byte buffer for the duration of
+    // this call; the helper only reads from it.
+    let ret = unsafe { bpf_skb_set_tunnel_opt(skb, buf.as_ptr() as *mut c_void, DSR_OPT_BUF_LEN) };
+    ret == 0
+}
+
+/// Read the Geneve TLV off the skb tunnel metadata (counterpart to [`set_tunnel_opt`] for the
+/// ingress/decap direction). Returns the helper's raw return value: `>= 0` means the option was
+/// present (and `buf` was filled), `< 0` means no option (or another helper error) — `buf` should
+/// not be trusted in that case.
+#[inline(always)]
+pub fn get_tunnel_opt(skb: *mut __sk_buff, buf: &mut [u8; DSR_OPT_BUF_LEN as usize]) -> i64 {
+    // SAFETY: `buf` is a valid, writable `DSR_OPT_BUF_LEN`-byte buffer for the duration of this call.
+    unsafe { bpf_skb_get_tunnel_opt(skb, buf.as_mut_ptr() as *mut c_void, DSR_OPT_BUF_LEN) as i64 }
 }
 
 /// Redirect the (already tunnel-key-stamped) skb to the geneve `collect_md` device, which builds the
