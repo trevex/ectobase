@@ -75,6 +75,81 @@ pub fn lb_select_forward_v6<P: Pkt, M: Maps>(
     })
 }
 
+/// ICMPv6-error LB relay select (v6 sibling of [`lb_select_forward_icmp_error`]). If the outer IPv6 at
+/// `ip_off` is an ICMPv6 error (type 1 DestUnreach / 2 PacketTooBig / 3 TimeExceeded / 4 ParamProblem)
+/// whose embedded inner IPv6 (at `icmp_off + 8`) is a TCP/UDP flow SOURCED from an LB VIP, Maglev-select
+/// the backend that owns that flow and return its underlay /128; else None. Mirrors the v4 fn exactly:
+/// the LB key uses the embedded SRC (= the VIP) + embedded SPORT (= the service port); the Maglev slot
+/// is hashed over the SWAPPED embedded tuple, reconstructing the original client->VIP forward-flow hash
+/// so the error (notably the ICMPv6 Packet-Too-Big PMTUD case) lands on the same backend. No extension
+/// headers are assumed on either the outer or embedded IPv6 (matching [`lb_select_forward_v6`]), so all
+/// offsets are constant; the LB key uses the `last4` of the v6 addr (same control-plane convention).
+///
+/// KNOWN LIMITATION (deferred to the N/S-LB edge spec, IDENTICAL to the v4 fn): the relayed error reuses
+/// the shared LB delivery path, so `process_uplink_v6`'s ingress firewall evaluates it on its OUTER
+/// ICMPv6 tuple (src = the erroring router, proto = ICMPv6). A typical backend policy ("allow TCP/443
+/// from any") does not match ICMPv6, so the relayed error is firewall-dropped in production — a latent
+/// PMTUD gap, consistent with how all DSR-LB traffic is firewall-gated today. Do NOT fix here.
+///
+/// `#[inline(always)]`: same rationale as the v4 fn — out-of-lining a packet-reading subprogram loses
+/// the eBPF verifier's pkt-pointer range tracking across the call boundary.
+#[inline(always)]
+pub fn lb_select_forward_icmp_error_v6<P: Pkt, M: Maps>(
+    pkt: &P,
+    maps: &M,
+    ip_off: usize,
+    vni: u32,
+) -> Option<LbBackend> {
+    // Outer IPv6: nexthdr == ICMPv6(58) (no extension headers assumed, like lb_select_forward_v6).
+    if pkt.read_u8(ip_off + 6)? != 58 {
+        return None;
+    }
+    // ICMPv6 error type at icmp_off[0]; icmp_off = ip_off + 40 (fixed 40-byte v6 header).
+    let icmp_off = ip_off + 40;
+    let icmp_type = pkt.read_u8(icmp_off)?;
+    if icmp_type != 1 && icmp_type != 2 && icmp_type != 3 && icmp_type != 4 {
+        return None;
+    }
+    // Embedded inner IPv6 at icmp_off + 8 (ICMPv6 error = 8-byte header then the invoking packet).
+    let inner_ip_off = icmp_off + 8;
+    let inner_nexthdr = pkt.read_u8(inner_ip_off + 6)?;
+    // Only relay TCP/UDP (matching dpservice behaviour).
+    if inner_nexthdr != 6 && inner_nexthdr != 17 {
+        return None;
+    }
+    let inner_src = pkt.read_array::<16>(inner_ip_off + 8)?; // = the VIP
+    let inner_dst = pkt.read_array::<16>(inner_ip_off + 24)?; // = the client
+                                                              // LB key uses the last 4 bytes of the IPv6 address (matching the control-plane `last4`).
+    let inner_src4: [u8; 4] = [inner_src[12], inner_src[13], inner_src[14], inner_src[15]];
+    let inner_dst4: [u8; 4] = [inner_dst[12], inner_dst[13], inner_dst[14], inner_dst[15]];
+    // Inner L4 at inner_ip_off + 40 (right after inner IPv6 header; no extension headers assumed).
+    let inner_sport = u16::from_be_bytes(pkt.read_array::<2>(inner_ip_off + 40)?); // = service port
+    let inner_dport = u16::from_be_bytes(pkt.read_array::<2>(inner_ip_off + 42)?);
+    // LB key: dst = inner_src (VIP), port = inner_sport (service port), proto = inner_nexthdr.
+    let lb = maps.lb_get(&LbKey {
+        vni,
+        ipv4: inner_src4,
+        port: inner_sport,
+        proto: inner_nexthdr,
+        _pad: 0,
+    })?;
+    if lb.size == 0 {
+        return None;
+    }
+    // Swapped 5-tuple (client->VIP perspective) reconstructs the original forward-flow hash.
+    let slot = hash5(
+        &inner_dst4,
+        &inner_src4,
+        inner_dport,
+        inner_sport,
+        inner_nexthdr,
+    ) % lb.size;
+    maps.maglev_get(&MaglevKey {
+        table_id: lb.table_id,
+        slot,
+    })
+}
+
 /// ICMP-error LB relay select (v4). If the outer IPv4 at `ip_off` is an ICMP error (type 3/11/12)
 /// whose embedded inner IPv4 (at `outer_l4 + 8`) is a TCP/UDP flow SOURCED from an LB VIP, Maglev-
 /// select the backend that owns that flow and return its underlay /128; else None. The LB key uses

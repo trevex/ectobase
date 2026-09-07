@@ -18,7 +18,10 @@ use crate::dhcp;
 use crate::egress::{deliver, egress_fw_ct6, route4, route_decision6, Deliver, EgressFwCt6};
 use crate::encap::{reforward, tunnel_encap, TunnelEncap, ETH_LEN};
 use crate::firewall::{fw_eval_dir, fw_eval_dir6};
-use crate::lb::{lb_select_forward, lb_select_forward_icmp_error, lb_select_forward_v6};
+use crate::lb::{
+    lb_select_forward, lb_select_forward_icmp_error, lb_select_forward_icmp_error_v6,
+    lb_select_forward_v6,
+};
 use crate::maps::Maps;
 use crate::nat::{nat_return_rewrite6, snat_egress, snat_egress6, SnatOutcome};
 use crate::nat64::{
@@ -537,8 +540,13 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
     //    reverse entry → not rewritten here → the neighbor-NAT relay (mechanism #3) below re-forwards.
     let is_nat_return = nat_return_dnat6(pkt, maps, in_.vni);
 
-    // 1. v6 LB dispatch (mirror the pre-4c hand-inlined `v6_uplink_rx`'s LB block).
-    let lb_ul = lb_select_forward_v6(&*pkt, &*maps, inner_off, in_.vni);
+    // 1. v6 LB dispatch (mirror the pre-4c hand-inlined `v6_uplink_rx`'s LB block). The ICMPv6-error
+    //    relay wins first (v6 sibling of `process_uplink`'s v4 or_else at the top of this file): an
+    //    ICMPv6 error destined to a VIP must follow its EMBEDDED flow's backend, not the (mis-hashed)
+    //    outer ICMPv6 tuple. Everything else — incl. a normal ICMPv6 echo to a VIP — falls through to
+    //    the plain v6 select (echo load-balances to a backend; it is NOT answered by the dataplane).
+    let lb_ul = lb_select_forward_icmp_error_v6(&*pkt, &*maps, inner_off, in_.vni)
+        .or_else(|| lb_select_forward_v6(&*pkt, &*maps, inner_off, in_.vni));
     let (tap, guest_mac, is_lb, peer_capable) = match lb_ul {
         Some(be) => {
             if be.node_vtep == in_.local.underlay_ipv6 {
