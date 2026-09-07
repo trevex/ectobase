@@ -65,7 +65,6 @@ func TestLbDistributeSmoke(t *testing.T) {
 	edge := clab.ContainerName(cfg.Name, "flowplane-edge1")
 	wan := clab.ContainerName(cfg.Name, "wan")
 	edgeUnderlay := fabric.EdgeLoopback + "::e1" // the edge's BGP-advertised local-deliver underlay
-	edge1WanAddr := fabric.WanNet + "::11"       // edge1 on the WAN segment
 
 	// 1. Backend guest, dual-stack (the v6 overlay IP wires the v6 firewall meta the DSR path needs).
 	//    Returns the guest's underlay /128 — the LB backend target.
@@ -121,11 +120,8 @@ func TestLbDistributeSmoke(t *testing.T) {
 		t.Cleanup(func() { _, _ = dataplaneGRPC(t, ctx, c, "DelLbVip", `{"id":"lb"}`) })
 	}
 
-	// 5. WAN client route to the VIP via edge1, then curl (retry to absorb neighbour/route settle).
-	if out, err := nodeExec(ctx, wan, "ip", "-6", "route", "replace", lbVIP+"/128", "via", edge1WanAddr); err != nil {
-		t.Fatalf("wan VIP route: %v\n%s", err, out)
-	}
-	t.Cleanup(func() { _, _ = nodeExec(ctx, wan, "ip", "-6", "route", "del", lbVIP+"/128") })
+	// 5. WAN client curls the VIP; it is reachable via the edges' public-prefix BGP
+	//    advertisement + the WAN's PublicV6→edges ECMP return route (no per-VIP hack).
 
 	// LB_HOLD: keep the full LB config + guest up and curl in a loop for 15m so the datapath
 	// can be traced externally (debugging aid; env-gated, no effect on normal CI runs).
@@ -174,7 +170,6 @@ func TestLbDistributeSmokeV4(t *testing.T) {
 	edge := clab.ContainerName(cfg.Name, "flowplane-edge1")
 	wan := clab.ContainerName(cfg.Name, "wan")
 	edgeUnderlay := fabric.EdgeLoopback + "::e1"   // the edge's BGP-advertised local-deliver underlay (always v6)
-	edge1WanV4Addr := fabric.WanGwV4Base + ".11"   // edge1 on the (now dual-stack) WAN segment
 	wanClientV4Net := fabric.WanGwV4Base + ".0/24" // the wan node's own br0 subnet
 
 	// 1. Backend guest, dual-stack (same guest shape as the v6 test; only the v4 overlay
@@ -234,13 +229,8 @@ func TestLbDistributeSmokeV4(t *testing.T) {
 	}
 	// TODO(B11-live): assert Maglev distribution across 2 backends.
 
-	// 5. WAN client (the `wan` node, holding fabric.WanGwV4 on its br0) routes to the VIP
-	//    via edge1's v4 WAN address, then curl (retry to absorb neighbour/route settle).
-	if out, err := nodeExec(ctx, wan, "ip", "route", "replace", lbVIP4+"/32", "via", edge1WanV4Addr); err != nil {
-		t.Fatalf("wan VIP4 route: %v\n%s", err, out)
-	}
-	t.Cleanup(func() { _, _ = nodeExec(ctx, wan, "ip", "route", "del", lbVIP4+"/32") })
-
+	// 5. WAN client curls the v4 VIP; reachable via the edges' public-prefix BGP
+	//    advertisement + the WAN's WanVipV4Test→edges ECMP return route (no per-VIP hack).
 	eventually(t, waitDeadline, 5*time.Second, func() error {
 		out := curlFromWanV4(ctx, wan, lbVIP4)
 		if !strings.Contains(out, "hello-lb") {
