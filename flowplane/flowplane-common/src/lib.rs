@@ -1010,7 +1010,7 @@ mod tests {
 
     #[test]
     fn port_meta_and_iface_layout() {
-        // 4 (vni) + 4 (guest_ipv4) + 4 (gateway_ipv4) + 6 (guest_mac) + 1 (l3) + 1 (_pad)
+        // 4 (vni) + 4 (guest_ipv4) + 4 (gateway_ipv4) + 6 (guest_mac) + 1 (l3) + 1 (offloaded)
         // + 16 (underlay_ipv6) + 16 (gateway_ipv6) + 16 (guest_ipv6) = 68.
         assert_eq!(core::mem::size_of::<PortMeta>(), 68);
         assert_eq!(core::mem::size_of::<IfaceValue>(), 32);
