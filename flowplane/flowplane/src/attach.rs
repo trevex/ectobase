@@ -305,6 +305,20 @@ impl AttachState {
         // root netns as the tc_guest_tx device. Unlike veth/netkit there is no name we can predict
         // before claiming, so VF resolves device/ifname here rather than in the generic matches below.
         if resolved == DeviceType::Vf {
+            let ifname = Self::guest_ifname(interface_id);
+            // Idempotency FIRST, before ANY device work — same invariant the generic path relies on
+            // (see the long comment at the `overlay_status` match below): a KubeVirt virt-launcher
+            // attaches the same NIC via two interface_ids, so the 2nd ADD must adopt the 1st (return
+            // its outcome, claim NO 2nd VF) or it wedges the pod sandbox. `overlay_status` keys only on
+            // (vni, ip, mac) — none depend on the representor name — so claiming can wait until `Free`.
+            // A Conflict bails before claiming, so no VF was moved and no release is needed here.
+            match self.control.overlay_status(vni, ipv4, ipv6, mac) {
+                OverlayStatus::SameEndpoint => {
+                    return Ok(self.make_outcome(ifname, ipv4, ipv6, mac, underlay_ipv6));
+                }
+                OverlayStatus::Conflict => bail!("ROUTE_EXISTS: IP already in use in this VNI"),
+                OverlayStatus::Free => {}
+            }
             let dev = flowplane_device::claim_vf(&flowplane_device::sriov::VfSpec {
                 pci_address: pci_address.to_string(),
                 netns_path: (!netns_path.is_empty()).then(|| netns_path.to_string()),
@@ -314,21 +328,6 @@ impl AttachState {
             })
             .context("claim VF")?;
             let device = dev.host_name; // the representor
-            let ifname = Self::guest_ifname(interface_id);
-            match self.control.overlay_status(vni, ipv4, ipv6, mac) {
-                OverlayStatus::SameEndpoint => {
-                    return Ok(self.make_outcome(ifname, ipv4, ipv6, mac, underlay_ipv6));
-                }
-                OverlayStatus::Conflict => {
-                    let _ = flowplane_device::release_vf(
-                        pci_address,
-                        (!netns_path.is_empty()).then_some(netns_path),
-                        &Self::guest_ifname(interface_id),
-                    );
-                    bail!("ROUTE_EXISTS: IP already in use in this VNI");
-                }
-                OverlayStatus::Free => {}
-            }
             let params = IfaceParams {
                 vni,
                 ipv4,
@@ -362,6 +361,14 @@ impl AttachState {
                     );
                 } else {
                     let _ = self.control.detach_interface(interface_id.as_bytes());
+                    // Symmetric with the create_interface-Err arm above: release the claimed VF too,
+                    // else it leaks (parked in the guest netns, unreclaimable) — VFs are a scarce
+                    // hardware resource, unlike a veth we could just `ip link del`.
+                    let _ = flowplane_device::release_vf(
+                        pci_address,
+                        (!netns_path.is_empty()).then_some(netns_path),
+                        &Self::guest_ifname(interface_id),
+                    );
                     bail!("INTERFACES read-back failed after programming VF");
                 }
             }
