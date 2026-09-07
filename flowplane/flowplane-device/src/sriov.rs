@@ -102,6 +102,10 @@ pub fn claim_vf(spec: &VfSpec) -> Result<DeviceInfo> {
 
     let macs = fmt_mac(spec.mac);
     let mtu = spec.mtu.to_string();
+    // The representor is the root-netns datapath device: its MTU must be >= the guest's so a full-size
+    // return-path frame redirected onto it toward the VF is never dropped (same invariant veth.rs's
+    // host end / netkit.rs's primary set — matters on a jumbo underlay where guest MTU can be >1500).
+    run(&["ip", "link", "set", &representor, "mtu", &mtu]).context("set representor mtu")?;
     run(&["ip", "link", "set", &representor, "up"]).context("representor up")?;
     run(&["ip", "link", "set", &vf_netdev, "address", &macs]).context("set vf mac")?;
     run(&["ip", "link", "set", &vf_netdev, "mtu", &mtu]).context("set vf mtu")?;
