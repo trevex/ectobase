@@ -7,12 +7,36 @@
 use crate::veth::{fmt_mac, ifindex_of, run, run_netns, DeviceInfo};
 use anyhow::{bail, Context, Result};
 
-/// A representor's VF index parsed from a `phys_port_name`. mlx5 form `pf<M>vf<N>` and the bare
-/// `vf<N>` form both resolve to `N`. Anything else (PF/SF/uplink port names) → None.
-pub(crate) fn parse_phys_port_name(s: &str) -> Option<u32> {
-    let s = s.trim();
-    let (_pf, vf) = s.split_once("vf")?; // "pf0vf3" -> ("pf0","3"); "vf3" -> ("","3")
-    vf.parse::<u32>().ok()
+/// Parse one `devlink port show` line: return the port's `netdev <name>` iff the port handle begins
+/// with `<devlink_dev>/`, the port `flavour` is `pcivf`, and its `vfnum` equals `vfnum`. Portable
+/// across netdevsim (`netdevsim/netdevsim<id>/...`) and real NICs (`pci/<bdf>/...`). None otherwise.
+pub(crate) fn parse_devlink_port_line(line: &str, devlink_dev: &str, vfnum: u32) -> Option<String> {
+    let toks: Vec<&str> = line.split_whitespace().collect();
+    // first token is the port handle with a trailing ':' — e.g. "netdevsim/netdevsim99/128:".
+    let handle = toks.first()?.strip_suffix(':')?;
+    if !handle.starts_with(&format!("{devlink_dev}/")) {
+        return None;
+    }
+    let mut is_pcivf = false;
+    let mut vf_ok = false;
+    let mut netdev: Option<&str> = None;
+    for (i, t) in toks.iter().enumerate() {
+        match *t {
+            "flavour" if toks.get(i + 1) == Some(&"pcivf") => is_pcivf = true,
+            "vfnum" => {
+                if toks.get(i + 1).and_then(|n| n.parse::<u32>().ok()) == Some(vfnum) {
+                    vf_ok = true;
+                }
+            }
+            "netdev" => netdev = toks.get(i + 1).copied(),
+            _ => {}
+        }
+    }
+    if is_pcivf && vf_ok {
+        netdev.map(|n| n.to_string())
+    } else {
+        None
+    }
 }
 
 /// What the caller wants stood up over a VF.
@@ -39,50 +63,51 @@ fn vf_netdev_of(pci: &str) -> Result<String> {
     Ok(first.file_name().to_string_lossy().into_owned())
 }
 
-/// The VF's index on its parent PF: the `N` for which `<pf>/virtfnN` -> this `bdf`.
-pub(crate) fn vf_index_of(pci: &str) -> Result<u32> {
+/// Map a VF PCI BDF to (its PF's devlink device handle `pci/<pf_bdf>`, its vfnum). mlx5/real-NIC only
+/// (netdevsim has no PCI sysfs — the netdevsim test drives `representor_for` directly). vfnum = the `N`
+/// for which `<pf>/virtfnN` -> this bdf.
+fn pf_devlink_and_vfnum(pci: &str) -> Result<(String, u32)> {
     let physfn = std::fs::read_link(format!("/sys/bus/pci/devices/{pci}/physfn"))
         .with_context(|| format!("read physfn of {pci} (not a VF?)"))?;
     let pf = physfn
         .file_name()
-        .context("physfn has no basename")?
+        .context("physfn basename")?
         .to_string_lossy()
         .into_owned();
     for n in 0..256u32 {
-        let link = format!("/sys/bus/pci/devices/{pf}/virtfn{n}");
-        if let Ok(t) = std::fs::read_link(&link) {
+        if let Ok(t) = std::fs::read_link(format!("/sys/bus/pci/devices/{pf}/virtfn{n}")) {
             if t.file_name()
                 .map(|b| b.to_string_lossy() == *pci)
                 .unwrap_or(false)
             {
-                return Ok(n);
+                return Ok((format!("pci/{pf}"), n));
             }
         }
     }
     bail!("could not find virtfn index for {pci} under PF {pf}")
 }
 
-/// Find the switchdev representor netdev for `vf_index` whose parent PCI dev is `pf` — the root-netns
-/// netdev whose `phys_port_name` parses to `vf_index`. Requires the PF to be in switchdev mode (else
-/// no representor exists → error; flowplane does not enable switchdev — that is operator setup).
-fn find_representor(pf: &str, vf_index: u32) -> Result<String> {
-    for entry in std::fs::read_dir("/sys/class/net").context("read /sys/class/net")? {
-        let name = entry?.file_name().to_string_lossy().into_owned();
-        let ppn_path = format!("/sys/class/net/{name}/phys_port_name");
-        let Ok(ppn) = std::fs::read_to_string(&ppn_path) else {
-            continue;
-        };
-        if parse_phys_port_name(&ppn) != Some(vf_index) {
-            continue;
-        }
-        let dev = std::fs::read_link(format!("/sys/class/net/{name}/device"))
-            .ok()
-            .and_then(|p| p.file_name().map(|b| b.to_string_lossy().into_owned()));
-        if dev.as_deref() == Some(pf) {
-            return Ok(name);
+/// Resolve the switchdev representor netdev for `vfnum` under devlink device `devlink_dev`
+/// (e.g. "pci/0000:65:00.0" on mlx5, "netdevsim/netdevsim3" under test) by parsing `devlink port show`.
+/// Portable across netdevsim and real NICs — the standard switchdev representor lookup.
+fn representor_for(devlink_dev: &str, vfnum: u32) -> Result<String> {
+    let out = std::process::Command::new("devlink")
+        .args(["port", "show"])
+        .output()
+        .context("run `devlink port show`")?;
+    if !out.status.success() {
+        bail!(
+            "devlink port show failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        if let Some(netdev) = parse_devlink_port_line(line, devlink_dev, vfnum) {
+            return Ok(netdev);
         }
     }
-    bail!("no switchdev representor for vf{vf_index} on PF {pf} (is the PF in switchdev mode?)")
+    bail!("no switchdev pcivf representor for vfnum {vfnum} under {devlink_dev} (PF in switchdev mode?)")
 }
 
 /// CLAIM a pre-provisioned VF: resolve its representor, set the VF mac/mtu, move the VF into the guest
@@ -90,14 +115,8 @@ fn find_representor(pf: &str, vf_index: u32) -> Result<String> {
 /// VFs or set eswitch mode.
 pub fn claim_vf(spec: &VfSpec) -> Result<DeviceInfo> {
     let pci = &spec.pci_address;
-    let pf = std::fs::read_link(format!("/sys/bus/pci/devices/{pci}/physfn"))
-        .with_context(|| format!("read physfn of {pci}"))?
-        .file_name()
-        .context("physfn basename")?
-        .to_string_lossy()
-        .into_owned();
-    let vf_index = vf_index_of(pci)?;
-    let representor = find_representor(&pf, vf_index)?;
+    let (pf_devlink, vfnum) = pf_devlink_and_vfnum(pci)?;
+    let representor = representor_for(&pf_devlink, vfnum)?;
     let vf_netdev = vf_netdev_of(pci)?;
 
     let macs = fmt_mac(spec.mac);
@@ -146,12 +165,89 @@ mod tests {
     use super::*;
 
     #[test]
-    fn phys_port_name_parses_vf_index() {
-        assert_eq!(parse_phys_port_name("pf0vf3"), Some(3));
-        assert_eq!(parse_phys_port_name("pf1vf0"), Some(0));
-        assert_eq!(parse_phys_port_name("vf7"), Some(7));
-        assert_eq!(parse_phys_port_name("p0"), None); // PF/uplink port
-        assert_eq!(parse_phys_port_name("pf0sf88"), None); // subfunction rep, not a VF
-        assert_eq!(parse_phys_port_name(""), None);
+    fn parse_devlink_port_line_matches_vf() {
+        let l0 = "netdevsim/netdevsim99/128: type eth netdev eni99npf0vf0 flavour pcivf controller 0 pfnum 0 vfnum 0 external false splittable false";
+        let l1 = "netdevsim/netdevsim99/129: type eth netdev eni99npf0vf1 flavour pcivf controller 0 pfnum 0 vfnum 1 external false splittable false";
+        let pf = "netdevsim/netdevsim99/0: type eth netdev eni99np1 flavour physical port 1 splittable false";
+        assert_eq!(
+            parse_devlink_port_line(l0, "netdevsim/netdevsim99", 0).as_deref(),
+            Some("eni99npf0vf0")
+        );
+        assert_eq!(
+            parse_devlink_port_line(l1, "netdevsim/netdevsim99", 1).as_deref(),
+            Some("eni99npf0vf1")
+        );
+        assert_eq!(
+            parse_devlink_port_line(l0, "netdevsim/netdevsim99", 1),
+            None,
+            "vfnum mismatch"
+        );
+        assert_eq!(
+            parse_devlink_port_line(pf, "netdevsim/netdevsim99", 0),
+            None,
+            "physical flavour, not pcivf"
+        );
+        assert_eq!(
+            parse_devlink_port_line(l0, "netdevsim/netdevsim9", 0),
+            None,
+            "different devlink dev must not prefix-match"
+        );
+        // An mlx5-style line resolves too (portability):
+        let m = "pci/0000:03:00.0/131074: type eth netdev ens1f0npf0vf3 flavour pcivf controller 0 pfnum 0 vfnum 3 external false splittable false";
+        assert_eq!(
+            parse_devlink_port_line(m, "pci/0000:03:00.0", 3).as_deref(),
+            Some("ens1f0npf0vf3")
+        );
+    }
+
+    /// Privileged: stand up a netdevsim device in switchdev mode with 2 VFs and assert the devlink
+    /// resolver finds the real representor netdevs. netdevsim moves no packets — this validates the
+    /// portable representor resolution (`representor_for`) against a real kernel switchdev eswitch,
+    /// which is the mechanism the production mlx5 path also uses. The PCI→vfnum mapping
+    /// (`pf_devlink_and_vfnum`) is mlx5-only and is exercised in the live lab, not here.
+    #[test]
+    #[ignore = "privileged: modprobe netdevsim + devlink switchdev (needs root); run under sudo"]
+    fn representor_for_resolves_netdevsim_vf() {
+        use std::process::Command;
+        // Provision (the TEST owns provisioning; flowplane's claim path never provisions).
+        let _ = Command::new("modprobe").arg("netdevsim").status();
+        std::fs::write("/sys/bus/netdevsim/new_device", "99 1").expect("new_device");
+        struct Cleanup;
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::write("/sys/bus/netdevsim/devices/netdevsim99/sriov_numvfs", "0");
+                let _ = std::fs::write("/sys/bus/netdevsim/del_device", "99");
+            }
+        }
+        let _c = Cleanup;
+        assert!(
+            Command::new("devlink")
+                .args([
+                    "dev",
+                    "eswitch",
+                    "set",
+                    "netdevsim/netdevsim99",
+                    "mode",
+                    "switchdev"
+                ])
+                .status()
+                .expect("devlink eswitch set")
+                .success(),
+            "switchdev set"
+        );
+        std::fs::write("/sys/bus/netdevsim/devices/netdevsim99/sriov_numvfs", "2").expect("numvfs");
+        // The VF representor netdevs are created with kernel-default names (eth0, eth1, ...) and
+        // renamed to their `eni<id>npf<M>vf<N>` switchdev names ASYNCHRONOUSLY by udev; wait for that
+        // to settle so `devlink port show` reports the stable representor name (else we race the rename).
+        let _ = Command::new("udevadm").arg("settle").status();
+
+        assert_eq!(
+            representor_for("netdevsim/netdevsim99", 0).expect("resolve vf0 representor"),
+            "eni99npf0vf0"
+        );
+        assert_eq!(
+            representor_for("netdevsim/netdevsim99", 1).expect("resolve vf1 representor"),
+            "eni99npf0vf1"
+        );
     }
 }
