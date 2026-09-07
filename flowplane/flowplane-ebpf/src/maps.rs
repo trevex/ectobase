@@ -3,10 +3,11 @@ use aya_ebpf::{
     maps::{lpm_trie::LpmTrie, Array, HashMap, LruHashMap, ProgramArray},
 };
 use flowplane_common::{
-    Config, CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrVip, FwMeta, FwRule, FwRule6,
-    FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry,
-    LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry,
-    PortMeta, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue, VipKey,
+    Config, CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrVip, FwMeta, FwRule,
+    FwRule6, FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry,
+    LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6, NatValue, NatValue6,
+    NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteLpmData, RouteLpmData6, RouteValue,
+    UnderlayValue, VipKey, VipKey6,
 };
 
 #[map]
@@ -96,6 +97,23 @@ pub static NEIGHBOR_NAT: HashMap<u32, NeighborNatEntry> = HashMap::pinned(64, 0)
 /// Entry 0: number of populated NEIGHBOR_NAT slots (datapath scans 0..count).
 #[map]
 pub static NEIGHBOR_NAT_COUNT: Array<u32> = Array::pinned(1, 0);
+
+// --- NAT66 (v6 network SNAT) maps — v6 siblings of NAT / NAT_IPS / NEIGHBOR_NAT{,_COUNT}, plus a
+// dedicated v6 NAT conntrack (the v4 CONNTRACK's CtEntry.xlate_ip is v4-only).
+#[map]
+pub static NAT6: HashMap<NatKey6, NatValue6> = HashMap::pinned(1024, 0);
+/// Marks a (vni, nat_ip6) as a NAT66 public source (value = 1) — `Maps::is_nat_ip6`.
+#[map]
+pub static NAT_IPS6: HashMap<VipKey6, u8> = HashMap::pinned(1024, 0);
+/// Dedicated NAT66 conntrack (fwd + peer-independent reverse), `CtKey6` -> `CtEntry6`. Separate from
+/// the firewall-only `CONNTRACK6` (whose value is the v4-xlate `CtEntry`).
+#[map]
+pub static NAT_CT6: LruHashMap<CtKey6, CtEntry6> = LruHashMap::pinned(1_048_576, 0);
+#[map]
+pub static NEIGHBOR_NAT6: HashMap<u32, NeighborNat6Entry> = HashMap::pinned(64, 0);
+/// Entry 0: number of populated NEIGHBOR_NAT6 slots (datapath scans 0..count).
+#[map]
+pub static NEIGHBOR_NAT6_COUNT: Array<u32> = Array::pinned(1, 0);
 #[map]
 pub static METER: HashMap<u32, MeterState> = HashMap::pinned(1024, 0);
 #[map]

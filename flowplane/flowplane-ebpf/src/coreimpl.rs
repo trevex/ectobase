@@ -96,6 +96,35 @@ impl Maps for GlobalMaps {
                 .is_some()
         }
     }
+    // --- NAT66 (v6) ---
+    #[inline(always)]
+    fn nat_get6(&self, key: &flowplane_common::NatKey6) -> Option<flowplane_common::NatValue6> {
+        unsafe { crate::maps::NAT6.get(key).copied() }
+    }
+    #[inline(always)]
+    fn is_nat_ip6(&self, vni: u32, ip: &[u8; 16]) -> bool {
+        unsafe {
+            crate::maps::NAT_IPS6
+                .get(&flowplane_common::VipKey6 { vni, ipv6: *ip })
+                .is_some()
+        }
+    }
+    #[inline(always)]
+    fn neighbor_nat_lookup6(&self, vni: u32, dst: [u8; 16], dport: u16) -> Option<[u8; 16]> {
+        crate::nat::neighbor_nat_lookup6(vni, dst, dport)
+    }
+    #[inline(always)]
+    fn neighbor_nat_lookup_any6(&self, dst: [u8; 16], dport: u16) -> Option<([u8; 16], u32)> {
+        crate::nat::neighbor_nat_lookup_any6(dst, dport)
+    }
+    #[inline(always)]
+    fn nat_ct6_get(&self, key: &flowplane_common::CtKey6) -> Option<flowplane_common::CtEntry6> {
+        unsafe { crate::maps::NAT_CT6.get(key).copied() }
+    }
+    #[inline(always)]
+    fn nat_ct6_insert(&mut self, key: flowplane_common::CtKey6, entry: flowplane_common::CtEntry6) {
+        let _ = crate::maps::NAT_CT6.insert(&key, &entry, 0);
+    }
     #[inline(always)]
     fn vip_get(&self, vni: u32, v: &[u8; 4]) -> Option<[u8; 4]> {
         unsafe { crate::maps::VIPS.get(&VipKey { vni, ipv4: *v }).copied() }

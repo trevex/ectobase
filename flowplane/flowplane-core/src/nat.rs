@@ -13,7 +13,8 @@
 
 use flowplane_common::csum::{csum_replace2, csum_replace4};
 use flowplane_common::{
-    CtEntry, CtEntry6, CtKey, CtKey6, NatKey, NatKey6, CT_F_SRC_NAT, CT_REWRITE_DST, CT_REWRITE_SRC,
+    CtEntry, CtEntry6, CtKey, CtKey6, NatKey, NatKey6, NatValue6, CT_F_SRC_NAT, CT_REWRITE_DST,
+    CT_REWRITE_SRC,
 };
 
 use crate::conntrack::csum_replace16;
@@ -228,7 +229,11 @@ pub fn snat_egress<P: Pkt, M: Maps>(
 /// into the L4 checksum. The v6 sibling of `conntrack::ct_apply`'s `CT_REWRITE_DST` arm; same
 /// single-bound read-modify-write window shape as [`snat_egress6`], on DST offsets (addr @ ip_off+24,
 /// TCP/UDP dport @ l4+2, ICMPv6 echo id @ l4+4). `e` is the matched reverse `NAT_CT6` entry.
-#[inline(always)]
+// #[inline(never)]: its own BPF frame (old_dst[16] + the L4 window) so the caller `nat_return_dnat6`'s
+// dead `CtKey6`/`CtEntry6` slots free before this runs — trimming the v6 uplink combined stack under
+// the 512B verifier limit. v6-only (only `nat_return_dnat6` calls it). pkt via the RawPkt
+// re-derive-bounds seam → no `R2 pkt_end` wall.
+#[inline(never)]
 pub fn nat_return_rewrite6<P: Pkt>(pkt: &mut P, ip_off: usize, e: &CtEntry6) {
     let old_dst = match pkt.read_array::<16>(ip_off + 24) {
         Some(a) => a,
@@ -274,6 +279,70 @@ pub fn nat_return_rewrite6<P: Pkt>(pkt: &mut P, ip_off: usize, e: &CtEntry6) {
     }
 }
 
+/// Pick the NAT66 source port for a flow: reuse the established forward `NAT_CT6` entry, else
+/// hash-start + linear-probe a free peer-independent reverse key and pin both entries. Returns the
+/// chosen port, or `None` when the block is exhausted. `#[inline(never)]` + pkt-FREE (all inputs by
+/// value) so its `CtKey6`/`CtEntry6` stack locals get their OWN BPF frame — see `snat_egress6`'s call
+/// site for why (512B per-frame verifier limit). Not called by the sim directly; exercised via
+/// `snat_egress6`.
+#[inline(never)]
+fn snat6_pick_port<M: Maps>(maps: &mut M, fwd: &CtKey6, nat: &NatValue6, now: u64) -> Option<u16> {
+    if let Some(v) = maps.nat_ct6_get(fwd) {
+        if v.flags & CT_F_SRC_NAT != 0 {
+            return Some(v.xlate_port);
+        }
+    }
+    let range = nat.port_max.wrapping_sub(nat.port_min);
+    // A zero-width block has no ports to hand out. Return early BEFORE the `% range` below: it both
+    // handles the degenerate config AND proves `range != 0` to the compiler, so the modulo emits no
+    // divide-by-zero panic branch. A cold `panic` block (a call to a `-> !` handler, no `exit`) laid
+    // out last would make the appended `.text` subprogram end on a non-exit insn — the BPF verifier
+    // rejects that with "last insn is not an exit or jmp".
+    if range == 0 {
+        return None;
+    }
+    let start = (hash_v6(
+        &fwd.src_ip,
+        &fwd.dst_ip,
+        fwd.src_port,
+        fwd.dst_port,
+        fwd.proto,
+    ) % range as u32) as u16;
+    let mut i: u16 = 0;
+    while i < PROBE_LIMIT {
+        let cand = nat.port_min.wrapping_add((start.wrapping_add(i)) % range);
+        let rev_key = CtKey6 {
+            vni: fwd.vni,
+            src_ip: [0; 16],
+            dst_ip: nat.nat_ipv6,
+            src_port: 0,
+            dst_port: cand,
+            proto: fwd.proto,
+            _pad: [0; 3],
+        };
+        if maps.nat_ct6_get(&rev_key).is_none() {
+            // ONE `CtEntry6` buffer, mutated between the two inserts (reverse then forward), so only a
+            // single 32B entry lives on this frame instead of two — trimming the v6 combined stack.
+            let mut ent = CtEntry6 {
+                last_seen: now,
+                xlate_ip6: fwd.src_ip,
+                xlate_port: fwd.src_port,
+                flags: CT_REWRITE_DST | CT_F_SRC_NAT,
+                tcp_state: 0,
+                _pad: [0; 4],
+            };
+            maps.nat_ct6_insert(rev_key, ent);
+            ent.xlate_ip6 = nat.nat_ipv6;
+            ent.xlate_port = cand;
+            ent.flags = CT_REWRITE_SRC | CT_F_SRC_NAT;
+            maps.nat_ct6_insert(*fwd, ent);
+            return Some(cand);
+        }
+        i = i.wrapping_add(1);
+    }
+    None
+}
+
 /// NAT66 egress SNAT — the v6 sibling of [`snat_egress`]. If `is_external` and the guest
 /// `(vni, src-ipv6)` has a NAT66 config (`nat_get6`), allocate a source port (reusing the forward
 /// `NAT_CT6` entry for an established flow), rewrite the inner src IPv6 -> `nat_ipv6` and the L4 src
@@ -294,14 +363,12 @@ pub fn snat_egress6<P: Pkt, M: Maps>(
     if !is_external {
         return SnatOutcome::Continue;
     }
-    let hdr = match pkt.read_array::<40>(ip_off) {
-        Some(h) => h,
+    // Read src/dst as two 16-byte fields (NOT a 40-byte header buffer) to keep this frame's stack
+    // small — the eBPF verifier's 512B per-frame limit is tight for v6 (see snat6_pick_port).
+    let src = match pkt.read_array::<16>(ip_off + 8) {
+        Some(s) => s,
         None => return SnatOutcome::Continue,
     };
-    let mut src = [0u8; 16];
-    src.copy_from_slice(&hdr[8..24]);
-    let mut dst = [0u8; 16];
-    dst.copy_from_slice(&hdr[24..40]);
     let nat = match maps.nat_get6(&NatKey6 { vni, ipv6: src }) {
         Some(v) => v,
         None => return SnatOutcome::Continue,
@@ -315,6 +382,19 @@ pub fn snat_egress6<P: Pkt, M: Maps>(
         None => return SnatOutcome::Continue,
     };
 
+    // Port pick + conntrack in a SEPARATE #[inline(never)], pkt-FREE subprogram: its `CtKey6`
+    // (44B) rev-key + `CtEntry6` (32B) locals live in their own BPF frame, freed before the rewrite
+    // below — without this the combined footprint (v6 is ~2x v4's) blows the 512B per-frame limit
+    // (LLVM `bpf-stack-size` error). The whole flow tuple is bundled into the forward `CtKey6` so the
+    // helper takes only 4 register args (BPF passes ≤5 args in regs, no stack args). pkt-free (all
+    // inputs by value/ref) → no `R2 pkt_end` provenance wall across the call boundary.
+    // Read the inner dst directly into the key (no standalone `dst` local — its 16B would otherwise
+    // sit on this frame alongside `fwd_key.dst_ip`, and this frame's combined stack with
+    // `snat6_pick_port` is right at the 512B verifier limit).
+    let dst = match pkt.read_array::<16>(ip_off + 24) {
+        Some(d) => d,
+        None => return SnatOutcome::Continue,
+    };
     let fwd_key = CtKey6 {
         vni,
         src_ip: src,
@@ -324,76 +404,51 @@ pub fn snat_egress6<P: Pkt, M: Maps>(
         proto,
         _pad: [0; 3],
     };
-    let nat_port = match maps.nat_ct6_get(&fwd_key) {
-        Some(v) if v.flags & CT_F_SRC_NAT != 0 => v.xlate_port,
-        _ => {
-            let start = (hash_v6(&src, &dst, sport, dport, proto) % range as u32) as u16;
-            let mut chosen = nat.port_min.wrapping_add(start);
-            let mut allocated = false;
-            let mut i: u16 = 0;
-            while i < PROBE_LIMIT {
-                let cand = nat.port_min.wrapping_add((start.wrapping_add(i)) % range);
-                let rev_key = CtKey6 {
-                    vni,
-                    src_ip: [0; 16],
-                    dst_ip: nat.nat_ipv6,
-                    src_port: 0,
-                    dst_port: cand,
-                    proto,
-                    _pad: [0; 3],
-                };
-                if maps.nat_ct6_get(&rev_key).is_none() {
-                    chosen = cand;
-                    allocated = true;
-                    maps.nat_ct6_insert(
-                        rev_key,
-                        CtEntry6 {
-                            last_seen: now,
-                            xlate_ip6: src,
-                            xlate_port: sport,
-                            flags: CT_REWRITE_DST | CT_F_SRC_NAT,
-                            tcp_state: 0,
-                            _pad: [0; 4],
-                        },
-                    );
-                    break;
-                }
-                i += 1;
-            }
-            if !allocated {
-                return SnatOutcome::Exhausted;
-            }
-            maps.nat_ct6_insert(
-                fwd_key,
-                CtEntry6 {
-                    last_seen: now,
-                    xlate_ip6: nat.nat_ipv6,
-                    xlate_port: chosen,
-                    flags: CT_REWRITE_SRC | CT_F_SRC_NAT,
-                    tcp_state: 0,
-                    _pad: [0; 4],
-                },
-            );
-            chosen
-        }
+    let nat_port = match snat6_pick_port(maps, &fwd_key, &nat, now) {
+        Some(p) => p,
+        None => return SnatOutcome::Exhausted,
     };
 
+    // Rewrite in a SEPARATE #[inline(never)] pkt frame (its L4 read-modify-write window lives there,
+    // not here) — sequential with snat6_pick_port, so it does not stack ON it. Together the two splits
+    // keep the v6 SNAT combined stack under the 512B verifier limit.
+    snat6_apply_rewrite(pkt, ip_off, &fwd_key, &nat, nat_port);
+    SnatOutcome::Continue
+}
+
+/// The src-IPv6 + L4 rewrite tail of [`snat_egress6`], out-of-lined into its OWN `#[inline(never)]`
+/// BPF frame (holds the L4 read-modify-write window). Runs AFTER `snat6_pick_port` returns, so the two
+/// heavy frames are sequential (not nested) on the verifier's combined-stack accounting. Args are
+/// bundled into `&fwd_key` (carries the original src/sport/proto) + `&nat` (nat_ipv6) so the helper
+/// takes ≤5 register args (BPF passes no stack args). pkt via the RawPkt re-derive-bounds seam → no
+/// `R2 pkt_end` wall across the call.
+#[inline(never)]
+fn snat6_apply_rewrite<P: Pkt>(
+    pkt: &mut P,
+    ip_off: usize,
+    fwd: &CtKey6,
+    nat: &NatValue6,
+    nat_port: u16,
+) {
+    let src = fwd.src_ip;
+    let sport = fwd.src_port;
+    let proto = fwd.proto;
     // Rewrite src IPv6 -> nat_ipv6 (no IP checksum in v6), then the L4 src port -> nat_port, folding
     // BOTH the 16-byte address delta (csum_replace16) and the port delta (csum_replace2) into the L4
     // checksum. Single-bound read-modify-write windows, like the v4 twin.
     if !pkt.write_array(ip_off + 8, &nat.nat_ipv6) {
-        return SnatOutcome::Continue;
+        return;
     }
     let l4 = ip_off + 40;
     if proto == IPPROTO_TCP {
-        // TCP: sport at l4[0..2], checksum at l4[16..18]. Window = 18.
-        if let Some(mut h) = pkt.read_array::<18>(l4) {
-            let c0 = u16::from_be_bytes([h[16], h[17]]);
+        // TCP: sport at l4[0..2], checksum at l4[16..18], 16 bytes apart. Two 2-byte windows (not one
+        // 18-byte buffer) to keep this frame small — the checksum fold needs only the old cksum word.
+        if let Some(c) = pkt.read_array::<2>(l4 + 16) {
+            let c0 = u16::from_be_bytes(c);
             let c1 = csum_replace16(c0, &src, &nat.nat_ipv6);
             let c2 = csum_replace2(c1, sport, nat_port);
-            h[16..18].copy_from_slice(&c2.to_be_bytes());
-            h[0..2].copy_from_slice(&nat_port.to_be_bytes());
-            pkt.write_array(l4, &h);
+            pkt.write_array(l4 + 16, &c2.to_be_bytes());
+            pkt.write_array(l4, &nat_port.to_be_bytes());
         }
     } else if proto == IPPROTO_UDP {
         // UDP: sport at l4[0..2], checksum at l4[6..8] (mandatory/non-zero in v6). Window = 8.
@@ -419,5 +474,4 @@ pub fn snat_egress6<P: Pkt, M: Maps>(
             pkt.write_array(l4, &h);
         }
     }
-    SnatOutcome::Continue
 }

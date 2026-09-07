@@ -292,7 +292,7 @@ fn route_decision_v6(data: usize, data_end: usize, meta: &PortMeta) -> EgressVer
 /// and freed via return BEFORE `route_decision_v6` runs — none of the three stages' heavy frames ever
 /// coexist on the combined 512B stack.
 #[inline(never)]
-fn dsr_reverse_snat_v6(data: usize, data_end: usize, vni: u32) {
+fn dsr_reverse_snat_v6(data: usize, data_end: usize, vni: u32) -> bool {
     let mut pkt = crate::coreimpl::RawPkt::new(data, data_end);
     if let Some(key) = flowplane_core::conntrack::ct_key6(&pkt, ETH_LEN, vni) {
         if let Some(d) = crate::coreimpl::GlobalMaps.dsr6_get(&key) {
@@ -306,9 +306,11 @@ fn dsr_reverse_snat_v6(data: usize, data_end: usize, vni: u32) {
                     &src,
                     &d.vip,
                 );
+                return true;
             }
         }
     }
+    false
 }
 
 /// IPv6-inner egress decision (fw/ct + DSR reverse-SNAT + route6 + local/encap). Map-driven; used by
@@ -336,7 +338,33 @@ pub fn forward_decision_v6(
     };
     // Stage 2 (B8b): DSR reverse-SNAT — a no-op unless this reply's 5-tuple hit the `DSR6` map. Runs
     // BEFORE the route decision so a rewritten src still routes correctly (route/deliver key off DST).
-    dsr_reverse_snat_v6(data, data_end, meta.vni);
+    let did_dsr = dsr_reverse_snat_v6(data, data_end, meta.vni);
+    // Stage 2b (Plan B): NAT66 egress SNAT when the v6 route is external. Skipped after a DSR
+    // reverse-SNAT (mutually-exclusive src rewrites; a DSR flow has no NAT66 config anyway). Calls the
+    // shared core `snat_egress6` DIRECTLY (mirrors v4's `forward_decision_v4` snat stage) — the heavy
+    // port-alloc conntrack is out-of-lined inside `snat_egress6` (`snat6_pick_port`), so no wrapper is
+    // needed here. `is_external` from a route6 lookup on the inner dst (snat rewrites SRC, not the
+    // dst-keyed route decision below).
+    if !did_dsr {
+        let is_ext = {
+            let pkt = crate::coreimpl::RawPkt::new(data, data_end);
+            pkt.read_array::<16>(ETH_LEN + 24)
+                .and_then(|dst| crate::coreimpl::GlobalMaps.route6_get(meta.vni, &dst))
+                .map(|r| r.is_external != 0)
+                .unwrap_or(false)
+        };
+        if flowplane_core::nat::snat_egress6(
+            &mut crate::coreimpl::RawPkt::new(data, data_end),
+            &mut crate::coreimpl::GlobalMaps,
+            ETH_LEN,
+            meta.vni,
+            is_ext,
+            crate::conntrack::now(),
+        ) == flowplane_core::nat::SnatOutcome::Exhausted
+        {
+            return EgressVerdict::Drop;
+        }
+    }
     // Stage 3: route6 + deliver decision (its own sequential frame — freed before stage 4).
     let verdict = route_decision_v6(data, data_end, meta);
     // Stage 4: on a NEW flow delivered to a SAME-NODE guest, enforce the DESTINATION's ingress
