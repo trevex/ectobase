@@ -752,6 +752,14 @@ impl AttachState {
         // removes it outright. Idempotent: an already-absent device is fine, so errors are ignored.
         let _ = run(&["ip", "link", "del", &Self::host_veth_name(interface_id)]);
         let _ = run(&["ip", "link", "del", &Self::tap_name(interface_id)]);
+        // KNOWN LIMITATION (SR-IOV VF path): a VF interface is NOT explicitly reclaimed here — detach
+        // only has the interface_id, and neither the VF PCI address nor the representor is persisted
+        // per-interface, so `sriov::release_vf` cannot be called. In the standard k8s SR-IOV model this
+        // is acceptable: the device plugin owns VF allocation/reclaim by PCI address, and the kernel
+        // auto-returns a VF to the root netns when the pod netns is destroyed. Explicit VF release on
+        // detach (persisting the PCI/netns in the interface record + threading it through
+        // DetachInterface) is a tracked follow-up, designed together with the CNI/device-plugin
+        // integration — see the spec's deferred-work section. The map-side state IS cleaned above.
         dp.map(|_| ())
     }
 }
