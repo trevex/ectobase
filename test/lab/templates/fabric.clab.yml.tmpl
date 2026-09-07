@@ -69,7 +69,7 @@ topology:
       cmd: >-
         serve --addr unix:///run/flowplane/dataplane.sock --role edge --uplink eth1 --wan-uplink eth3
         --local-underlay {{ .EdgeLoopback }}::e1 --gateway 169.254.0.1
-        --gateway-mac 02:00:00:00:00:01
+        --gateway-mac 02:00:00:00:00:01 --pin-dir /sys/fs/bpf/flowplane-edge1
     edge2:
       kind: linux
       image: {{ index .Images "vyos" }}
@@ -90,7 +90,7 @@ topology:
       cmd: >-
         serve --addr unix:///run/flowplane/dataplane.sock --role edge --uplink eth1 --wan-uplink eth3
         --local-underlay {{ .EdgeLoopback }}::e2 --gateway 169.254.0.1
-        --gateway-mac 02:00:00:00:00:01
+        --gateway-mac 02:00:00:00:00:01 --pin-dir /sys/fs/bpf/flowplane-edge2
 
     nat64-1:
       kind: linux
