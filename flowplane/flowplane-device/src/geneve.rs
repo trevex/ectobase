@@ -38,48 +38,45 @@ pub fn geneve_add_args(name: &str) -> Vec<String> {
     ]
 }
 
-/// Idempotently ensure the `collect_md` Geneve device exists and is correctly configured, returning
-/// its ifindex. On a FRESH start (device absent, or present but mis-MAC'd) it (re)creates the device
-/// `ip link add ... type geneve external`, stamps the gateway MAC, brings it up. On a RESTART where a
-/// correctly-configured device SURVIVES (the netdev is deliberately not torn down on graceful
-/// shutdown — see `Control::bring_up`), it CONFIRMS-without-recreating: the delete+add would sever
-/// every pinned tc/tcx link on the device (`uplink_rx`, `uplink_dsr_note`), and the adopt re-point can
-/// then silently re-point a program onto the now-dead link instead of re-attaching, leaving
-/// `uplink_rx` attached to nothing. Leaving the survivor in place keeps those links valid so the
-/// zero-gap adopt works as designed. Reuses `geneve_add_args` so the tested arg vector is exactly what
-/// gets shelled.
+/// Idempotently ensure the `collect_md` Geneve device exists, is UP, and carries the gateway MAC,
+/// returning its ifindex + whether it was (re)created this call. A device that is absent OR mis-MAC'd
+/// is recreated (`ip link add ... type geneve external`); a correctly-MAC'd survivor is CONFIRMED
+/// without recreating (the delete+add would sever the pinned tc/tcx links — `uplink_rx`,
+/// `uplink_dsr_note` — and the adopt re-point can then silently land on a dead link, leaving
+/// `uplink_rx` attached to nothing; see `Control::bring_up`'s fresh-attach-on-recreate handling).
+/// Either way the MAC is stamped AFTER `up` and unconditionally (see below). Reuses `geneve_add_args`
+/// so the tested arg vector is exactly what gets shelled.
 pub fn ensure_geneve_dev(name: &str, gateway_mac: [u8; 6]) -> Result<GeneveDev> {
-    // CONFIRM path: a correctly-MAC'd device already survives from a prior bring-up. Do NOT recreate
-    // it (that severs the pinned datapath links); just make sure it is up (idempotent, link-safe) and
-    // return its ifindex. The gateway-MAC match is the "this is our device, configured by the current
-    // code" signal — a survivor from before the MAC fix falls through to the recreate path below.
-    if link_exists(name) && mac_of(name).map(|m| m == gateway_mac).unwrap_or(false) {
-        run(&["ip", "link", "set", name, "up"]).with_context(|| format!("geneve dev {name} up"))?;
-        return Ok(GeneveDev {
-            ifindex: ifindex_of(name)?,
-            recreated: false,
-        });
-    }
-    // Fresh start: remove any stale/mis-MAC'd device from a previous run (ignores "does not exist").
-    delete_geneve_dev(name)?;
-    let mut argv: Vec<String> = vec!["ip".into()];
-    argv.extend(geneve_add_args(name));
-    let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
-    run(&argv).with_context(|| format!("create geneve dev {name}"))?;
-    // Stamp the device MAC = the anycast overlay gateway MAC (while still DOWN). The kernel
-    // `collect_md` geneve device carries INNER ETHERNET (TEB) and runs `eth_type_trans` on decap: an
-    // overlay->WAN reply (e.g. a DSR reverse-SNAT src->VIP) arrives with inner dst MAC = the gateway
-    // MAC (the guest sent it to its default gateway), so the device MAC MUST match or `ip6_rcv_core`
-    // drops it `PACKET_OTHERHOST` before it can be forwarded/local-delivered. Backends never hit this
-    // (their `uplink_rx`/`uplink_dsr_note` bpf_redirect at the tc-ingress hook, BEFORE that check);
-    // it only bites where the kernel decap path reaches the IP stack — the edge's local-deliver.
     let macs = crate::veth::fmt_mac(gateway_mac);
+    // CONFIRM (already the gateway MAC) vs RECREATE (absent / mis-MAC'd / random). The confirm path
+    // preserves the surviving device's pinned datapath links for a zero-gap adopt.
+    let recreated = if link_exists(name) && mac_of(name).map(|m| m == gateway_mac).unwrap_or(false)
+    {
+        false
+    } else {
+        delete_geneve_dev(name)?;
+        let mut argv: Vec<String> = vec!["ip".into()];
+        argv.extend(geneve_add_args(name));
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        run(&argv).with_context(|| format!("create geneve dev {name}"))?;
+        true
+    };
+    // Bring up FIRST, then stamp the MAC — and stamp it UNCONDITIONALLY (idempotent on the confirm
+    // path). The kernel `collect_md` geneve device carries INNER ETHERNET (TEB) and runs
+    // `eth_type_trans` on decap: an overlay->WAN reply (e.g. a DSR reverse-SNAT src->VIP) arrives with
+    // inner dst MAC = the gateway MAC, so the device MAC MUST equal it or `ip6_rcv_core` drops it
+    // `PACKET_OTHERHOST` before it can be forwarded/local-delivered (backends never hit this —
+    // `uplink_rx` bpf_redirects at the tc-ingress hook, BEFORE that check; only the edge's kernel
+    // local-deliver does). CRUCIAL ordering: a geneve device can regenerate its link address on `up`,
+    // silently overriding a pre-`up` stamp (observed live — one anycast edge kept a random MAC and
+    // black-holed the DSR return); stamping AFTER `up` sticks. `setmac`-while-up on a geneve device is
+    // link-safe (does NOT sever tc links, verified live), so this is safe on the confirm path too.
+    run(&["ip", "link", "set", name, "up"]).with_context(|| format!("geneve dev {name} up"))?;
     run(&["ip", "link", "set", name, "address", &macs])
         .with_context(|| format!("set geneve dev {name} mac"))?;
-    run(&["ip", "link", "set", name, "up"]).with_context(|| format!("geneve dev {name} up"))?;
     Ok(GeneveDev {
         ifindex: ifindex_of(name)?,
-        recreated: true,
+        recreated,
     })
 }
 
