@@ -12,11 +12,18 @@
 //! Go `mesh/allocator`. This is only the datapath port pick WITHIN an already-allocated range.
 
 use flowplane_common::csum::{csum_replace2, csum_replace4};
-use flowplane_common::{CtEntry, CtKey, NatKey, CT_F_SRC_NAT, CT_REWRITE_DST, CT_REWRITE_SRC};
+use flowplane_common::{
+    CtEntry, CtEntry6, CtKey, CtKey6, NatKey, NatKey6, CT_F_SRC_NAT, CT_REWRITE_DST, CT_REWRITE_SRC,
+};
 
+use crate::conntrack::csum_replace16;
 use crate::maps::Maps;
-use crate::parse::{hash5, l4_ports, IPPROTO_ICMP, IPPROTO_TCP, IPPROTO_UDP};
+use crate::parse::{hash5, hash_v6, l4_ports, l4_ports_v6, IPPROTO_ICMP, IPPROTO_TCP, IPPROTO_UDP};
 use crate::pkt::Pkt;
+
+/// ICMPv6 next-header (l4_ports_v6 returns its echo id as both "ports"). Unlike ICMPv4, the ICMPv6
+/// checksum covers the IPv6 pseudo-header, so a src-address change MUST be folded into it.
+const IPPROTO_ICMPV6: u8 = 58;
 
 /// Max reverse-key probes when picking a source port. Mirrors the eBPF `nat::PROBE_LIMIT`.
 pub const PROBE_LIMIT: u16 = 64;
@@ -208,6 +215,154 @@ pub fn snat_egress<P: Pkt, M: Maps>(
             let c0 = u16::from_be_bytes([h[2], h[3]]);
             let c1 = csum_replace2(c0, sport, nat_port);
             h[2..4].copy_from_slice(&c1.to_be_bytes());
+            h[4..6].copy_from_slice(&nat_port.to_be_bytes());
+            pkt.write_array(l4, &h);
+        }
+    }
+    SnatOutcome::Continue
+}
+
+/// NAT66 egress SNAT — the v6 sibling of [`snat_egress`]. If `is_external` and the guest
+/// `(vni, src-ipv6)` has a NAT66 config (`nat_get6`), allocate a source port (reusing the forward
+/// `NAT_CT6` entry for an established flow), rewrite the inner src IPv6 -> `nat_ipv6` and the L4 src
+/// port / ICMPv6 id -> `nat_port`, and pin the forward + peer-independent reverse conntrack. Returns
+/// [`SnatOutcome::Exhausted`] (caller drops) if no free port. v6 deltas vs the v4 twin: fixed 40-byte
+/// header (no IHL, no IP checksum — IPv6 has none), the src-address delta is folded into the L4
+/// checksum via [`csum_replace16`] (the v6 pseudo-header includes the src addr — for TCP, UDP AND
+/// ICMPv6), and the conntrack lives in the dedicated `NAT_CT6` map (`CtKey6`->`CtEntry6`).
+#[inline(always)]
+pub fn snat_egress6<P: Pkt, M: Maps>(
+    pkt: &mut P,
+    maps: &mut M,
+    ip_off: usize,
+    vni: u32,
+    is_external: bool,
+    now: u64,
+) -> SnatOutcome {
+    if !is_external {
+        return SnatOutcome::Continue;
+    }
+    let hdr = match pkt.read_array::<40>(ip_off) {
+        Some(h) => h,
+        None => return SnatOutcome::Continue,
+    };
+    let mut src = [0u8; 16];
+    src.copy_from_slice(&hdr[8..24]);
+    let mut dst = [0u8; 16];
+    dst.copy_from_slice(&hdr[24..40]);
+    let nat = match maps.nat_get6(&NatKey6 { vni, ipv6: src }) {
+        Some(v) => v,
+        None => return SnatOutcome::Continue,
+    };
+    let range = nat.port_max.wrapping_sub(nat.port_min);
+    if range == 0 {
+        return SnatOutcome::Continue;
+    }
+    let (proto, sport, dport) = match l4_ports_v6(pkt, ip_off) {
+        Some(v) => v,
+        None => return SnatOutcome::Continue,
+    };
+
+    let fwd_key = CtKey6 {
+        vni,
+        src_ip: src,
+        dst_ip: dst,
+        src_port: sport,
+        dst_port: dport,
+        proto,
+        _pad: [0; 3],
+    };
+    let nat_port = match maps.nat_ct6_get(&fwd_key) {
+        Some(v) if v.flags & CT_F_SRC_NAT != 0 => v.xlate_port,
+        _ => {
+            let start = (hash_v6(&src, &dst, sport, dport, proto) % range as u32) as u16;
+            let mut chosen = nat.port_min.wrapping_add(start);
+            let mut allocated = false;
+            let mut i: u16 = 0;
+            while i < PROBE_LIMIT {
+                let cand = nat.port_min.wrapping_add((start.wrapping_add(i)) % range);
+                let rev_key = CtKey6 {
+                    vni,
+                    src_ip: [0; 16],
+                    dst_ip: nat.nat_ipv6,
+                    src_port: 0,
+                    dst_port: cand,
+                    proto,
+                    _pad: [0; 3],
+                };
+                if maps.nat_ct6_get(&rev_key).is_none() {
+                    chosen = cand;
+                    allocated = true;
+                    maps.nat_ct6_insert(
+                        rev_key,
+                        CtEntry6 {
+                            last_seen: now,
+                            xlate_ip6: src,
+                            xlate_port: sport,
+                            flags: CT_REWRITE_DST | CT_F_SRC_NAT,
+                            tcp_state: 0,
+                            _pad: [0; 4],
+                        },
+                    );
+                    break;
+                }
+                i += 1;
+            }
+            if !allocated {
+                return SnatOutcome::Exhausted;
+            }
+            maps.nat_ct6_insert(
+                fwd_key,
+                CtEntry6 {
+                    last_seen: now,
+                    xlate_ip6: nat.nat_ipv6,
+                    xlate_port: chosen,
+                    flags: CT_REWRITE_SRC | CT_F_SRC_NAT,
+                    tcp_state: 0,
+                    _pad: [0; 4],
+                },
+            );
+            chosen
+        }
+    };
+
+    // Rewrite src IPv6 -> nat_ipv6 (no IP checksum in v6), then the L4 src port -> nat_port, folding
+    // BOTH the 16-byte address delta (csum_replace16) and the port delta (csum_replace2) into the L4
+    // checksum. Single-bound read-modify-write windows, like the v4 twin.
+    if !pkt.write_array(ip_off + 8, &nat.nat_ipv6) {
+        return SnatOutcome::Continue;
+    }
+    let l4 = ip_off + 40;
+    if proto == IPPROTO_TCP {
+        // TCP: sport at l4[0..2], checksum at l4[16..18]. Window = 18.
+        if let Some(mut h) = pkt.read_array::<18>(l4) {
+            let c0 = u16::from_be_bytes([h[16], h[17]]);
+            let c1 = csum_replace16(c0, &src, &nat.nat_ipv6);
+            let c2 = csum_replace2(c1, sport, nat_port);
+            h[16..18].copy_from_slice(&c2.to_be_bytes());
+            h[0..2].copy_from_slice(&nat_port.to_be_bytes());
+            pkt.write_array(l4, &h);
+        }
+    } else if proto == IPPROTO_UDP {
+        // UDP: sport at l4[0..2], checksum at l4[6..8] (mandatory/non-zero in v6). Window = 8.
+        if let Some(mut h) = pkt.read_array::<8>(l4) {
+            let c0 = u16::from_be_bytes([h[6], h[7]]);
+            if c0 != 0 {
+                let c1 = csum_replace16(c0, &src, &nat.nat_ipv6);
+                let c2 = csum_replace2(c1, sport, nat_port);
+                h[6..8].copy_from_slice(&c2.to_be_bytes());
+            }
+            h[0..2].copy_from_slice(&nat_port.to_be_bytes());
+            pkt.write_array(l4, &h);
+        }
+    } else if proto == IPPROTO_ICMPV6 {
+        // ICMPv6: checksum at l4[2..4], echo id at l4[4..6]. The ICMPv6 checksum COVERS the v6
+        // pseudo-header, so the src-address change must be folded in (unlike ICMPv4). sport == the id.
+        if let Some(mut h) = pkt.read_array::<8>(l4) {
+            let c0 = u16::from_be_bytes([h[2], h[3]]);
+            let c1 = csum_replace16(c0, &src, &nat.nat_ipv6);
+            let c2 = csum_replace2(c1, sport, nat_port);
+            h[2..4].copy_from_slice(&c2.to_be_bytes());
             h[4..6].copy_from_slice(&nat_port.to_be_bytes());
             pkt.write_array(l4, &h);
         }

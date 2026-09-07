@@ -20,7 +20,7 @@ use crate::encap::{reforward, tunnel_encap, TunnelEncap, ETH_LEN};
 use crate::firewall::{fw_eval_dir, fw_eval_dir6};
 use crate::lb::{lb_select_forward, lb_select_forward_icmp_error, lb_select_forward_v6};
 use crate::maps::Maps;
-use crate::nat::{snat_egress, SnatOutcome};
+use crate::nat::{snat_egress, snat_egress6, SnatOutcome};
 use crate::nat64::{
     nat64_egress_parse, nat64_egress_write, nat64_ingress_parse, nat64_ingress_write,
 };
@@ -915,12 +915,35 @@ pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
     // INTERFACES6 entry). Runs BEFORE stage 2 (route6 + deliver), same relative position as v4's
     // insertion before its route lookup — after the firewall/conntrack stage above, which already
     // tracked this flow's ORIGINAL (pre-rewrite) 5-tuple, matching what `dsr_note6` keyed off.
+    let mut did_dsr = false;
     if let Some(key) = ct_key6(&*pkt, ip_off, in_.meta.vni) {
         if let Some(d) = maps.dsr6_get(&key) {
             if let Some(src) = pkt.read_array::<16>(ip_off + 8) {
                 let nexthdr = pkt.read_u8(ip_off + 6).unwrap_or(0);
                 rewrite_v6_addr(pkt, ip_off, ip_off + 8, nexthdr, &src, &d.vip);
+                did_dsr = true;
             }
+        }
+    }
+
+    // NAT66 egress SNAT (Plan B) — v6 sibling of process_guest_tx's stage-4 snat_egress. Runs when the
+    // v6 route is EXTERNAL and the guest has a NAT66 config; the src rewrite doesn't disturb the
+    // dst-keyed route_decision6 below. Skipped after a DSR reverse-SNAT (mutually-exclusive src
+    // rewrites — a DSR flow has no NAT config so snat_egress6 would no-op anyway, the skip documents
+    // it). is_external comes from a route6 lookup on the inner dst (route_decision6 re-looks-up).
+    if !did_dsr {
+        let is_ext6 = pkt
+            .read_array::<16>(ip_off + 24)
+            .and_then(|dst| maps.route6_get(in_.meta.vni, &dst))
+            .map(|r| r.is_external != 0)
+            .unwrap_or(false);
+        if snat_egress6(pkt, maps, ip_off, in_.meta.vni, is_ext6, in_.now) == SnatOutcome::Exhausted
+        {
+            return GuestTxOut {
+                action: Action::Drop,
+                edt_tstamp,
+                tunnel: None,
+            };
         }
     }
 
