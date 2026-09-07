@@ -271,6 +271,15 @@ pub struct VipKey {
     pub ipv4: [u8; 4],
 }
 
+/// Key for the `NAT_IPS6` marker map: (VNI, IPv6) — marks a public NAT66 source IP the local node
+/// owns. v6 sibling of [`VipKey`].
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+pub struct VipKey6 {
+    pub vni: u32,
+    pub ipv6: [u8; 16],
+}
+
 /// LB service key: (vni, balanced IPv4, L4 port, proto). proto: 6=TCP, 17=UDP, 1=ICMP.
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
@@ -389,6 +398,24 @@ pub struct NatValue {
     pub port_max: u16,
 }
 
+/// NAT66 config key: (vni, local guest IPv6). v6 sibling of [`NatKey`].
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+pub struct NatKey6 {
+    pub vni: u32,
+    pub ipv6: [u8; 16],
+}
+
+/// NAT66 config value: the public NAT IPv6 + the source-port range [port_min, port_max). v6 sibling
+/// of [`NatValue`].
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
+pub struct NatValue6 {
+    pub nat_ipv6: [u8; 16],
+    pub port_min: u16,
+    pub port_max: u16,
+}
+
 /// Unified conntrack entry value. Keyed by the 5-tuple (`CtKey`) of the packet that will be SEEN;
 /// the datapath's `ct_apply` rewrites that packet's src or dst address (+L4 port) to
 /// `xlate_ip`/`xlate_port`. Replaces the former feature-private `CtVal`/`NatCtVal`.
@@ -424,6 +451,22 @@ pub const CT_F_FIREWALL: u8 = 0x20;
 pub const CT_F_NAT64: u8 = 0x40;
 // 0x80 (former CT_F_DSR) is free: DSR reverse-SNAT state moved out of CtEntry into the dedicated
 // `DSR`/`DSR6` maps (see `DsrVip`) — B7b.
+
+/// Dedicated v6 NAT (NAT66) conntrack value, keyed by `CtKey6` in the `NAT_CT6` map. The v4 NAT
+/// stores its xlate state in `CtEntry.xlate_ip` (`[u8;4]`, v4-only) — NOT grown to hold a v6 address
+/// (the 24-byte / 512B-BPF-stack constraint that reverted the B5 `xlate_ip6` growth), so NAT66 gets
+/// its own value type + map, mirroring the DSR6 "dedicated v6 map" precedent. Same `CT_*` flags as
+/// [`CtEntry`] (`CT_REWRITE_SRC`/`CT_REWRITE_DST`/`CT_F_SRC_NAT`).
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
+pub struct CtEntry6 {
+    pub last_seen: u64,
+    pub xlate_ip6: [u8; 16],
+    pub xlate_port: u16,
+    pub flags: u8,
+    pub tcp_state: u8,
+    pub _pad: [u8; 4],
+}
 
 // CtEntry.tcp_state values (mirror dpservice dp_flow_tcp_state)
 pub const TCP_NONE: u8 = 0;
@@ -559,6 +602,21 @@ pub const NB_MAX_ENTRIES: u32 = 64;
 pub struct NeighborNatEntry {
     pub underlay: [u8; 16],
     pub nat_ip: [u8; 4],
+    pub vni: u32,
+    pub port_min: u16,
+    pub port_max: u16,
+    pub enabled: u8,
+    pub _pad: [u8; 3],
+}
+
+/// A NAT66 neighbor-NAT entry: v6 sibling of [`NeighborNatEntry`]. A remote node owns
+/// `(vni, nat_ip6, [port_min, port_max))`; return traffic to that nat_ip6:port is re-forwarded to
+/// `underlay`. `enabled` 1 = slot in use.
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
+pub struct NeighborNat6Entry {
+    pub underlay: [u8; 16],
+    pub nat_ip6: [u8; 16],
     pub vni: u32,
     pub port_min: u16,
     pub port_max: u16,
@@ -726,6 +784,11 @@ mod user_impls {
     unsafe impl aya::Pod for NatKey {}
     unsafe impl aya::Pod for NatValue {}
     unsafe impl aya::Pod for CtEntry {}
+    unsafe impl aya::Pod for NatKey6 {}
+    unsafe impl aya::Pod for NatValue6 {}
+    unsafe impl aya::Pod for CtEntry6 {}
+    unsafe impl aya::Pod for VipKey6 {}
+    unsafe impl aya::Pod for NeighborNat6Entry {}
     unsafe impl aya::Pod for FwRuleKey {}
     unsafe impl aya::Pod for FwRule {}
     unsafe impl aya::Pod for FwRule6 {}
@@ -997,6 +1060,16 @@ mod tests {
     fn nat_layouts() {
         assert_eq!(core::mem::size_of::<NatKey>(), 8);
         assert_eq!(core::mem::size_of::<NatValue>(), 8);
+    }
+
+    #[test]
+    fn nat6_layouts() {
+        assert_eq!(core::mem::size_of::<NatKey6>(), 20); // 4 + 16
+        assert_eq!(core::mem::size_of::<NatValue6>(), 20); // 16 + 2 + 2
+        assert_eq!(core::mem::size_of::<CtEntry6>(), 32); // 8 + 16 + 2 + 1 + 1 + 4
+        assert_eq!(core::mem::align_of::<CtEntry6>(), 8);
+        assert_eq!(core::mem::size_of::<VipKey6>(), 20); // 4 + 16
+        assert_eq!(core::mem::size_of::<NeighborNat6Entry>(), 44); // 16 + 16 + 4 + 2 + 2 + 1 + 3
     }
 
     #[test]
