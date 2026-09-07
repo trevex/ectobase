@@ -51,9 +51,10 @@ topology:
     # MAC, only learnable once the unnumbered BGP session is up (ND "router" flag) —
     # this placeholder is B11's to resolve live (dynamically, the way the production
     # DaemonSet + the retired edge wrapper both do: `ip -6 neigh show dev eth1 | grep
-    # router`) before flowplane can actually forward. Only edge1 gets a sidecar — the
-    # livetest (livetest/lb_test.go) targets edge1 only; edge2 is architecturally
-    # identical and can get the same treatment once a live HA scenario needs it.
+    # router`) before flowplane can actually forward. BOTH edges get a sidecar so the
+    # public prefixes can be advertised ANYCAST (WAN ECMPs to either edge) — the
+    # livetest registers each VIP on both edges. edge1/edge2 sidecars are identical bar
+    # their own local-deliver underlay (::e1 / ::e2).
     flowplane-edge1:
       kind: linux
       image: {{ index .Images "flowplane" }}
@@ -76,6 +77,20 @@ topology:
       binds:
         - vyos/edge2.set:/opt/vyatta/etc/config/scripts/vyos-postconfig-bootup.script
       sysctls: {net.ipv6.conf.all.forwarding: 1}
+    # edge2's flowplane sidecar (anycast peer of flowplane-edge1) — shares edge2's netns.
+    flowplane-edge2:
+      kind: linux
+      image: {{ index .Images "flowplane" }}
+      network-mode: container:clab-{{ .Name }}-edge2
+      cap-add: ["NET_ADMIN", "SYS_ADMIN", "BPF"]
+      binds:
+        - /sys/fs/bpf:/sys/fs/bpf:shared
+      env:
+        FLOWPLANE_SKB_MODE: "1"
+      cmd: >-
+        serve --addr unix:///run/flowplane/dataplane.sock --role edge --uplink eth1 --wan-uplink eth3
+        --local-underlay {{ .EdgeLoopback }}::e2 --gateway 169.254.0.1
+        --gateway-mac 02:00:00:00:00:01
 
     nat64-1:
       kind: linux

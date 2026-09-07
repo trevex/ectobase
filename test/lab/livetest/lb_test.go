@@ -63,8 +63,10 @@ func TestLbDistributeSmoke(t *testing.T) {
 	// The edge flowplane runs in the flowplane-edge1 sidecar (shares edge1's netns); its
 	// dataplane.sock lives in the sidecar's fs, so gRPC targets that container, not edge1.
 	edge := clab.ContainerName(cfg.Name, "flowplane-edge1")
+	edge2 := clab.ContainerName(cfg.Name, "flowplane-edge2")
 	wan := clab.ContainerName(cfg.Name, "wan")
-	edgeUnderlay := fabric.EdgeLoopback + "::e1" // the edge's BGP-advertised local-deliver underlay
+	edgeUnderlay := fabric.EdgeLoopback + "::e1"   // edge1's BGP-advertised local-deliver underlay
+	edge2Underlay := fabric.EdgeLoopback + "::e2" // edge2's — anycast peer; the WAN ECMPs to either
 
 	// 1. Backend guest, dual-stack (the v6 overlay IP wires the v6 firewall meta the DSR path needs).
 	//    Returns the guest's underlay /128 — the LB backend target.
@@ -110,6 +112,7 @@ func TestLbDistributeSmoke(t *testing.T) {
 		lbUnder   string
 	}{
 		{edge, 0, edgeUnderlay},
+		{edge2, 0, edge2Underlay}, // anycast: register the VIP on BOTH edges (WAN ECMPs to either)
 		{beContainer, overlayVNI, backend.IdentityAddr},
 	} {
 		mustGRPC(t, ctx, r.container, "AddLbVip", fmt.Sprintf(
@@ -168,8 +171,10 @@ func TestLbDistributeSmokeV4(t *testing.T) {
 	// The edge flowplane runs in the flowplane-edge1 sidecar (shares edge1's netns); its
 	// dataplane.sock lives in the sidecar's fs, so gRPC targets that container, not edge1.
 	edge := clab.ContainerName(cfg.Name, "flowplane-edge1")
+	edge2 := clab.ContainerName(cfg.Name, "flowplane-edge2")
 	wan := clab.ContainerName(cfg.Name, "wan")
-	edgeUnderlay := fabric.EdgeLoopback + "::e1"   // the edge's BGP-advertised local-deliver underlay (always v6)
+	edgeUnderlay := fabric.EdgeLoopback + "::e1"   // edge1's BGP-advertised local-deliver underlay (always v6)
+	edge2Underlay := fabric.EdgeLoopback + "::e2"  // edge2's — anycast peer; the WAN ECMPs to either
 	wanClientV4Net := fabric.WanGwV4Base + ".0/24" // the wan node's own br0 subnet
 
 	// 1. Backend guest, dual-stack (same guest shape as the v6 test; only the v4 overlay
@@ -218,6 +223,7 @@ func TestLbDistributeSmokeV4(t *testing.T) {
 		lbUnder   string
 	}{
 		{edge, 0, edgeUnderlay},
+		{edge2, 0, edge2Underlay}, // anycast: register the VIP on BOTH edges (WAN ECMPs to either)
 		{beContainer, overlayVNI, backend.IdentityAddr},
 	} {
 		mustGRPC(t, ctx, r.container, "AddLbVip", fmt.Sprintf(

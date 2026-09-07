@@ -68,16 +68,17 @@ fabric:
 	// B10: the N/S-LB edge sidecar shares edge1's netns (the real docker container
 	// name, not the bare node name) and attaches wan_rx on the dual-stack WAN uplink.
 	for _, want := range []string{
+		// Both edges get a flowplane sidecar (anycast public prefixes; WAN ECMPs to either).
 		"network-mode: container:clab-ectobase-edge1",
+		"network-mode: container:clab-ectobase-edge2",
+		"--local-underlay fd00:ffff::e1",
+		"--local-underlay fd00:ffff::e2",
 		"image: img/flowplane",
 		"--role edge --uplink eth1 --wan-uplink eth3",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("expected %q in rendered topology (flowplane-edge1 sidecar)", want)
+			t.Errorf("expected %q in rendered topology (flowplane edge sidecars)", want)
 		}
-	}
-	if strings.Contains(out, "flowplane-edge2") {
-		t.Errorf("only edge1 should get the flowplane sidecar today")
 	}
 	// The retired kind substrate must be gone: no k8s-kind lifecycle nodes, no
 	// ext-container node containers.
