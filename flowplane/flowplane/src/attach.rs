@@ -372,6 +372,32 @@ impl AttachState {
                     bail!("INTERFACES read-back failed after programming VF");
                 }
             }
+            // Configure the pod netns with the overlay addr(s) + default routes — flowplane's CNI is
+            // IPAM-less, so the dataplane assigns the guest IP INSIDE the netns (mirrors the generic
+            // container path below). A VF is an L2 container edge (real MAC, `via <gw>` routes), so
+            // `l3: false`. Skipped when there is no netns (a root-netns local test / a self-configuring
+            // VM handed the VF directly). Roll back (detach + release the VF) on failure.
+            if !netns_path.is_empty() {
+                if let Err(e) =
+                    flowplane_device::configure_guest_netns(&flowplane_device::GuestNetConfig {
+                        netns_path: netns_path.to_string(),
+                        guest_ifname: ifname.clone(),
+                        ipv4,
+                        gateway_ipv4: self.gateway_ipv4,
+                        ipv6,
+                        gateway_ipv6: self.gateway_ipv6,
+                        l3: false,
+                    })
+                {
+                    let _ = self.control.detach_interface(interface_id.as_bytes());
+                    let _ = flowplane_device::release_vf(
+                        pci_address,
+                        (!netns_path.is_empty()).then_some(netns_path),
+                        &Self::guest_ifname(interface_id),
+                    );
+                    return Err(e).context("configure guest netns for VF");
+                }
+            }
             return Ok(self.make_outcome(ifname, ipv4, ipv6, mac, underlay_ipv6));
         }
         // Whether this is an L3 (netkit) edge — threaded into PORT_META.l3 so the datapath treats the
