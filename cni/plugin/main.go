@@ -47,6 +47,10 @@ type netConf struct {
 	// domainAttachmentType:tap opens the primary tap by the literal name "tap0", so the binding
 	// NAD sets tapName:"tap0". Empty = the dataplane derives one.
 	TapName string `json:"tapName,omitempty"`
+	// DeviceID is the allocated VF's PCI BDF (e.g. "0000:65:00.3") for device_type=vf. This is the
+	// standard field name the k8s SR-IOV device plugin injects into the CNI network config JSON
+	// (the same key the reference sriov-cni reads), so it must stay "deviceID" — not renamed.
+	DeviceID string `json:"deviceID,omitempty"`
 }
 
 func loadNetConf(stdin []byte) (*netConf, error) {
@@ -122,6 +126,10 @@ func cmdAdd(args *skel.CmdArgs) error {
 		// KubeVirt's domainAttachmentType:tap opens that tap by name for the VM's NIC.
 		DeviceType: conf.DeviceType,
 		TapName:    conf.TapName,
+		// For device_type=vf the k8s SR-IOV device plugin injects the allocated VF's PCI BDF as
+		// the top-level "deviceID" field in the CNI network config; the dataplane needs it to bind
+		// the VF into the eBPF datapath.
+		PciAddress: conf.DeviceID,
 	})
 	if err != nil {
 		// Include netns + resolved overlay in the error so a launcher attach failure is diagnosable

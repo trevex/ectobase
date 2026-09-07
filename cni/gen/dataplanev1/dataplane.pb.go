@@ -902,7 +902,10 @@ type AttachInterfaceRequest struct {
 	// primary in root netns, peer as the pod eth0) | "tap" (VM: a single
 	// root-netns tap whose fd is handed to qemu) | "pod-tap" (VM,
 	// KubeVirt-compatible: tap in the pod netns spliced to a root-netns veth)
-	TapName       string `protobuf:"bytes,7,opt,name=tap_name,json=tapName,proto3" json:"tap_name,omitempty"` // exact device name for the tap (tap/pod-tap); empty = derive "tap-<id>".
+	TapName string `protobuf:"bytes,7,opt,name=tap_name,json=tapName,proto3" json:"tap_name,omitempty"` // exact device name for the tap (tap/pod-tap); empty = derive "tap-<id>".
+	// KubeVirt's domainAttachmentType:tap opens the primary tap by the literal
+	// name "tap0", so the binding CNI must pass tap_name="tap0".
+	PciAddress    string `protobuf:"bytes,8,opt,name=pci_address,json=pciAddress,proto3" json:"pci_address,omitempty"` // VF PCI BDF (e.g. "0000:65:00.3") for device_type="vf"; supplied by the
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -982,6 +985,13 @@ func (x *AttachInterfaceRequest) GetDeviceType() string {
 func (x *AttachInterfaceRequest) GetTapName() string {
 	if x != nil {
 		return x.TapName
+	}
+	return ""
+}
+
+func (x *AttachInterfaceRequest) GetPciAddress() string {
+	if x != nil {
+		return x.PciAddress
 	}
 	return ""
 }
@@ -2202,7 +2212,7 @@ const file_dataplane_proto_rawDesc = "" +
 	"\x1fReplaceInterfaceFirewallRequest\x12!\n" +
 	"\finterface_id\x18\x01 \x01(\tR\vinterfaceId\x12.\n" +
 	"\x05rules\x18\x02 \x03(\v2\x18.dataplane.v1.FwRuleSpecR\x05rules\"\"\n" +
-	" ReplaceInterfaceFirewallResponse\"\xdf\x01\n" +
+	" ReplaceInterfaceFirewallResponse\"\x80\x02\n" +
 	"\x16AttachInterfaceRequest\x12!\n" +
 	"\finterface_id\x18\x01 \x01(\tR\vinterfaceId\x12\x1d\n" +
 	"\n" +
@@ -2212,7 +2222,9 @@ const file_dataplane_proto_rawDesc = "" +
 	"\rrequested_ips\x18\x05 \x03(\tR\frequestedIps\x12\x1f\n" +
 	"\vdevice_type\x18\x06 \x01(\tR\n" +
 	"deviceType\x12\x19\n" +
-	"\btap_name\x18\a \x01(\tR\atapName\"\x96\x01\n" +
+	"\btap_name\x18\a \x01(\tR\atapName\x12\x1f\n" +
+	"\vpci_address\x18\b \x01(\tR\n" +
+	"pciAddress\"\x96\x01\n" +
 	"\x17AttachInterfaceResponse\x12\x16\n" +
 	"\x06ifname\x18\x01 \x01(\tR\x06ifname\x12\x10\n" +
 	"\x03ips\x18\x02 \x03(\tR\x03ips\x12\x10\n" +
