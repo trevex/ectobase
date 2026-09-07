@@ -206,6 +206,32 @@ func TestApplyNatInstallsNeighborNatOnlyForRemoteOwners(t *testing.T) {
 	}
 }
 
+// NAT66: a v6 source + v6 nat_ip flow through the (string-keyed, family-agnostic) apply path
+// exactly like v4 — the remote-owner gate is unchanged.
+func TestApplyNatInstallsNeighborNatForV6Block(t *testing.T) {
+	dp := newRecordingDP()
+	b := NewBus("nodeB", "fd00::b", dp, false)
+	ctx := context.Background()
+
+	// Peer-owned (fd00::a) v6 block -> installs a neighbor-nat return route keyed by the v6 nat_ip.
+	b.applyNat(ctx, &rbv1.NatUpdate{
+		Vni: 100, SourceIp: "fd00::9", NatIp: "2001:db8:2b::1",
+		PortMin: 1024, PortMax: 2048, OwnerUnderlay: "fd00::a", Op: rbv1.RouteOp_ROUTE_OP_ADD,
+	})
+	if owner, ok := dp.getNbrNat("2001:db8:2b::1", 1024, 2048); !ok || owner != "fd00::a" {
+		t.Fatalf("remote-owned v6 block should install AddNeighborNat -> fd00::a, got %q ok=%v", owner, ok)
+	}
+
+	// Locally-owned (fd00::b) v6 block -> no neighbor-nat (local SNAT is the reconciler's job).
+	b.applyNat(ctx, &rbv1.NatUpdate{
+		Vni: 100, SourceIp: "fd00::a9", NatIp: "2001:db8:2b::9",
+		PortMin: 4096, PortMax: 5120, OwnerUnderlay: "fd00::b", Op: rbv1.RouteOp_ROUTE_OP_ADD,
+	})
+	if _, ok := dp.getNbrNat("2001:db8:2b::9", 4096, 5120); ok {
+		t.Fatalf("locally-owned v6 block must NOT install a neighbor-nat")
+	}
+}
+
 func TestApplyPublicVNIRoute_ImportsIntoEgressVNIs(t *testing.T) {
 	dp := newRecordingDP()
 	b := NewBus("nodeA", "fd00::a", dp, false)
