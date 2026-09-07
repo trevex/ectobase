@@ -20,11 +20,11 @@ use crate::encap::{reforward, tunnel_encap, TunnelEncap, ETH_LEN};
 use crate::firewall::{fw_eval_dir, fw_eval_dir6};
 use crate::lb::{lb_select_forward, lb_select_forward_icmp_error, lb_select_forward_v6};
 use crate::maps::Maps;
-use crate::nat::{snat_egress, snat_egress6, SnatOutcome};
+use crate::nat::{nat_return_rewrite6, snat_egress, snat_egress6, SnatOutcome};
 use crate::nat64::{
     nat64_egress_parse, nat64_egress_write, nat64_ingress_parse, nat64_ingress_write,
 };
-use crate::parse::{l4_ports, IPPROTO_TCP, IPPROTO_UDP};
+use crate::parse::{l4_ports, l4_ports_v6, IPPROTO_TCP, IPPROTO_UDP};
 use crate::pkt::{Action, Pkt};
 use crate::uplink::{decap_and_rewrite, edge_local_deliver, ETH_P_IP, ETH_P_IPV6, GW_MAC};
 use flowplane_common::csum::csum_replace4;
@@ -528,6 +528,36 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
     // Post-decap (P2 Task 5, same as v4): `pkt` IS the inner v6 frame at `ETH_LEN`.
     let inner_off = ETH_LEN;
 
+    // 0. NAT66-return dispatch — v6 sibling of `process_uplink_rx`'s NAT branch. Gated on no-LB (a
+    //    VIP is never a nat_ip). If the inner dst is a registered nat_ip6 with a matching
+    //    peer-independent `CT_REWRITE_DST` reverse entry, this is an established NAT66 return →
+    //    reverse-DNAT + deliver (no ingress firewall: it is the reply to a guest-initiated,
+    //    already-egress-firewalled flow).
+    if lb_select_forward_v6(&*pkt, &*maps, inner_off, in_.vni).is_none() {
+        if let Some(mut key) = ct_key6(&*pkt, inner_off, in_.vni) {
+            if maps.is_nat_ip6(in_.vni, &key.dst_ip) {
+                key.src_ip = [0; 16];
+                key.src_port = 0;
+            }
+            if let Some(e) = maps.nat_ct6_get(&key) {
+                if e.flags & CT_REWRITE_DST != 0 {
+                    let action = process_uplink_nat_return6(
+                        pkt,
+                        maps,
+                        &UplinkNatReturnIn {
+                            vni: in_.vni,
+                            local: in_.local,
+                        },
+                    );
+                    return UplinkOut {
+                        action,
+                        tunnel: None,
+                    };
+                }
+            }
+        }
+    }
+
     // 1. v6 LB dispatch (mirror the pre-4c hand-inlined `v6_uplink_rx`'s LB block).
     let lb_ul = lb_select_forward_v6(&*pkt, &*maps, inner_off, in_.vni);
     let (tap, guest_mac, is_lb, peer_capable) = match lb_ul {
@@ -567,8 +597,19 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
                     }
                 }
             };
-            // Mechanisms #1 (normal guest delivery) + #4 (WAN-edge sentinel / genuine miss). No
-            // mechanism #3 here — see this fn's doc comment.
+            // Mechanism #3 (NAT66 neighbor-NAT relay): the inner dst may be a nat_ip6 owned by
+            // ANOTHER node (an OWNED nat_ip6 instead demuxes via the CT-based return path at the top
+            // of this fn). Mirror of v4 `process_uplink`'s neighbor-NAT relay.
+            if let Some((_proto, _sport, dport)) = l4_ports_v6(&*pkt, inner_off) {
+                if let Some(owner_ul) = maps.neighbor_nat_lookup6(in_.vni, dst, dport) {
+                    let tunnel = reforward(in_.vni, &owner_ul);
+                    return UplinkOut {
+                        action: Action::Redirect(in_.local.uplink_ifindex),
+                        tunnel: Some(tunnel),
+                    };
+                }
+            }
+            // Mechanisms #1 (normal guest delivery) + #4 (WAN-edge sentinel / genuine miss).
             match resolve_uplink_target6(&*maps, in_.vni, &dst, in_.local) {
                 UplinkTarget::Local {
                     tap_ifindex,
@@ -1069,6 +1110,52 @@ pub fn process_uplink_nat_return<P: Pkt, M: Maps>(
     }
 }
 
+/// NAT66 reverse-DNAT return path — the v6 sibling of [`process_uplink_nat_return`]. Build the inner
+/// v6 5-tuple key (demuxed peer-independently when the inner dst is a registered nat_ip6); on a
+/// matching `NAT_CT6` reverse entry with `CT_REWRITE_DST`, reverse-DNAT ([`nat_return_rewrite6`])
+/// restoring the guest's overlay IPv6 + port; resolve the delivery target (mechanism #2) from the
+/// restored guest IP and decap + deliver. `#[inline(never)]` for the same BPF-stack relief as the
+/// v4 twin.
+#[inline(never)]
+pub fn process_uplink_nat_return6<P: Pkt, M: Maps>(
+    pkt: &mut P,
+    maps: &mut M,
+    in_: &UplinkNatReturnIn,
+) -> Action {
+    let inner_off = ETH_LEN;
+    let mut xlate_ip: Option<[u8; 16]> = None;
+    if let Some(mut key) = ct_key6(&*pkt, inner_off, in_.vni) {
+        if maps.is_nat_ip6(in_.vni, &key.dst_ip) {
+            key.src_ip = [0; 16];
+            key.src_port = 0;
+        }
+        if let Some(e) = maps.nat_ct6_get(&key) {
+            if e.flags & CT_REWRITE_DST != 0 {
+                nat_return_rewrite6(pkt, inner_off, &e);
+                xlate_ip = Some(e.xlate_ip6);
+            }
+        }
+    }
+    let dst = match xlate_ip {
+        Some(ip) => ip,
+        None => return Action::Drop,
+    };
+    match resolve_uplink_target6(&*maps, in_.vni, &dst, in_.local) {
+        UplinkTarget::Local {
+            tap_ifindex,
+            guest_mac,
+            peer_capable,
+        } => {
+            let l3 = resolve_delivery_l3(&*maps, tap_ifindex);
+            match decap_and_rewrite(pkt, tap_ifindex, guest_mac, ETH_P_IPV6, l3, peer_capable) {
+                Ok(a) => a,
+                Err(_) => Action::Drop,
+            }
+        }
+        UplinkTarget::EdgeLocalDeliver | UplinkTarget::Drop => Action::Drop,
+    }
+}
+
 /// Unified host `uplink_rx` entry: makes the base-vs-NAT-return dispatch the eBPF `try_uplink_rx`
 /// makes inline (`nat_guest` gate, `ingress.rs:163-209`), in SHARED code, so the native SimNode
 /// decides identically instead of re-implementing it. A frame that LB does not claim,
@@ -1408,6 +1495,25 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
         if let Some(dst) = pkt.read_array::<4>(ETH_LEN + 16) {
             if let Some((_proto, _sport, dport)) = l4_ports(&*pkt, ETH_LEN) {
                 if let Some((owner_ul, owner_vni)) = maps.neighbor_nat_lookup_any(dst, dport) {
+                    return WanRxOut {
+                        action: Action::Redirect(in_.local.uplink_ifindex),
+                        tunnel: Some(TunnelEncap {
+                            vni: owner_vni,
+                            remote: owner_ul,
+                        }),
+                        dsr: None,
+                    };
+                }
+            }
+        }
+    }
+    // Mechanism #3 (WAN-edge sub-case), v6: a plain WAN-arriving IPv6 packet destined to a nat_ip6
+    // block owned by some node, relayed toward the owner WITH the owner's real VNI. Mirror of the v4
+    // arm above via `neighbor_nat_lookup_any6`.
+    if ethertype == 0x86DD {
+        if let Some(dst) = pkt.read_array::<16>(ETH_LEN + 24) {
+            if let Some((_proto, _sport, dport)) = l4_ports_v6(&*pkt, ETH_LEN) {
+                if let Some((owner_ul, owner_vni)) = maps.neighbor_nat_lookup_any6(dst, dport) {
                     return WanRxOut {
                         action: Action::Redirect(in_.local.uplink_ifindex),
                         tunnel: Some(TunnelEncap {

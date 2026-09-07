@@ -222,6 +222,58 @@ pub fn snat_egress<P: Pkt, M: Maps>(
     SnatOutcome::Continue
 }
 
+/// Reverse-DNAT a NAT66 return packet in place: inner DST IPv6 (the public `nat_ip6`) -> the reverse
+/// entry's `xlate_ip6` (the guest's overlay IP) and the L4 DST port (`nat_port`) -> `xlate_port`,
+/// folding BOTH the 16-byte address delta ([`csum_replace16`]) and the port delta (`csum_replace2`)
+/// into the L4 checksum. The v6 sibling of `conntrack::ct_apply`'s `CT_REWRITE_DST` arm; same
+/// single-bound read-modify-write window shape as [`snat_egress6`], on DST offsets (addr @ ip_off+24,
+/// TCP/UDP dport @ l4+2, ICMPv6 echo id @ l4+4). `e` is the matched reverse `NAT_CT6` entry.
+#[inline(always)]
+pub fn nat_return_rewrite6<P: Pkt>(pkt: &mut P, ip_off: usize, e: &CtEntry6) {
+    let old_dst = match pkt.read_array::<16>(ip_off + 24) {
+        Some(a) => a,
+        None => return,
+    };
+    let proto = pkt.read_u8(ip_off + 6).unwrap_or(0);
+    if !pkt.write_array(ip_off + 24, &e.xlate_ip6) {
+        return;
+    }
+    let l4 = ip_off + 40;
+    if proto == IPPROTO_TCP {
+        if let Some(mut h) = pkt.read_array::<18>(l4) {
+            let c0 = u16::from_be_bytes([h[16], h[17]]);
+            let dport = u16::from_be_bytes([h[2], h[3]]);
+            let c1 = csum_replace16(c0, &old_dst, &e.xlate_ip6);
+            let c2 = csum_replace2(c1, dport, e.xlate_port);
+            h[16..18].copy_from_slice(&c2.to_be_bytes());
+            h[2..4].copy_from_slice(&e.xlate_port.to_be_bytes());
+            pkt.write_array(l4, &h);
+        }
+    } else if proto == IPPROTO_UDP {
+        if let Some(mut h) = pkt.read_array::<8>(l4) {
+            let c0 = u16::from_be_bytes([h[6], h[7]]);
+            let dport = u16::from_be_bytes([h[2], h[3]]);
+            if c0 != 0 {
+                let c1 = csum_replace16(c0, &old_dst, &e.xlate_ip6);
+                let c2 = csum_replace2(c1, dport, e.xlate_port);
+                h[6..8].copy_from_slice(&c2.to_be_bytes());
+            }
+            h[2..4].copy_from_slice(&e.xlate_port.to_be_bytes());
+            pkt.write_array(l4, &h);
+        }
+    } else if proto == IPPROTO_ICMPV6 {
+        if let Some(mut h) = pkt.read_array::<8>(l4) {
+            let c0 = u16::from_be_bytes([h[2], h[3]]);
+            let id = u16::from_be_bytes([h[4], h[5]]);
+            let c1 = csum_replace16(c0, &old_dst, &e.xlate_ip6);
+            let c2 = csum_replace2(c1, id, e.xlate_port);
+            h[2..4].copy_from_slice(&c2.to_be_bytes());
+            h[4..6].copy_from_slice(&e.xlate_port.to_be_bytes());
+            pkt.write_array(l4, &h);
+        }
+    }
+}
+
 /// NAT66 egress SNAT — the v6 sibling of [`snat_egress`]. If `is_external` and the guest
 /// `(vni, src-ipv6)` has a NAT66 config (`nat_get6`), allocate a source port (reusing the forward
 /// `NAT_CT6` entry for an established flow), rewrite the inner src IPv6 -> `nat_ipv6` and the L4 src

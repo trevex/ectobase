@@ -11,10 +11,10 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule6, Local, NatKey6, NatValue6, PortMeta, RouteValue, FW_ACTION_ACCEPT,
-    FW_DIR_EGRESS,
+    CtEntry6, CtKey6, FwMeta, FwRule6, IfaceValue, Local, NatKey6, NatValue6, NeighborNat6Entry,
+    PortMeta, RouteValue, CT_F_SRC_NAT, CT_REWRITE_DST, FW_ACTION_ACCEPT, FW_DIR_EGRESS,
 };
-use flowplane_core::encap::ETH_LEN;
+use flowplane_core::encap::{TunnelEncap, ETH_LEN};
 use flowplane_core::pkt::Action;
 
 use crate::{MemMaps, SimNode};
@@ -262,5 +262,160 @@ fn snat6_port_exhaustion_drops() {
         second.action,
         Action::Drop,
         "second flow with the port block exhausted must be dropped"
+    );
+}
+
+// ─── (e) NAT66 reverse-DNAT return: owner-node delivers to the guest ──────────
+const RET_TAP: u32 = 55;
+const RET_GUEST_MAC: [u8; 6] = [0x66; 6];
+const RET_ORIG_SPORT: u16 = 40000; // restored inner dst port after reverse-DNAT
+const RET_NAT_PORT: u16 = 3111; // the allocated NAT port (inner dst port in the return)
+const RET_EXT_PORT: u16 = 443; // external peer port (inner src, unchanged)
+
+fn ret_reverse_ct_key(proto: u8) -> CtKey6 {
+    CtKey6 {
+        vni: VNI,
+        src_ip: [0; 16],
+        dst_ip: NAT_V6,
+        src_port: 0,
+        dst_port: RET_NAT_PORT,
+        proto,
+        _pad: [0; 3],
+    }
+}
+
+fn ret_reverse_ct_entry() -> CtEntry6 {
+    CtEntry6 {
+        last_seen: 0,
+        xlate_ip6: GUEST_V6,
+        xlate_port: RET_ORIG_SPORT,
+        flags: CT_REWRITE_DST | CT_F_SRC_NAT,
+        tcp_state: 0,
+        _pad: [0; 4],
+    }
+}
+
+/// Owner node seeded with the peer-independent reverse NAT_CT6 entry, the nat_ip6 registration, and
+/// an INTERFACES6 entry for the RESTORED guest overlay IP (mechanism #2 delivery target).
+fn ret_owner_node(proto: u8) -> SimNode {
+    let mut node = SimNode::new();
+    node.maps
+        .nat_ct6
+        .insert(ret_reverse_ct_key(proto), ret_reverse_ct_entry());
+    node.maps.nat_ips6.insert((VNI, NAT_V6));
+    node.maps.add_iface6(
+        VNI,
+        GUEST_V6,
+        IfaceValue {
+            tap_ifindex: RET_TAP,
+            is_local: 1,
+            underlay_ipv6: [0; 16],
+            guest_mac: RET_GUEST_MAC,
+            peer_capable: 0,
+            _pad: [0; 1],
+        },
+    );
+    node
+}
+
+/// Post-decap return frame `[Eth 0x86DD][IPv6 EXT_V6 → NAT_V6][TCP EXT_PORT → NAT_PORT]`.
+fn ret_tcp_frame() -> Vec<u8> {
+    let b = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
+        .ipv6(EXT_V6, NAT_V6, 64)
+        .tcp(RET_EXT_PORT, RET_NAT_PORT, 0, 1024);
+    let mut out = Vec::new();
+    b.write(&mut out, &[0x01, 0x02, 0x03, 0x04]).unwrap();
+    out
+}
+
+#[test]
+fn dnat6_return_rewrites_dst_ip_and_port_valid_checksum() {
+    let out = ret_owner_node(6).uplink_v6_dsr(&ret_tcp_frame(), VNI, &Local::default(), None);
+    assert_eq!(
+        out.action,
+        Action::Redirect(RET_TAP),
+        "reverse-DNAT'd return delivered to the guest tap"
+    );
+    let pkt = &out.pkt;
+    let ip_off = ETH_LEN;
+    // inner dst IPv6 restored to the guest overlay IP.
+    assert_eq!(
+        &pkt[ip_off + 24..ip_off + 40],
+        &GUEST_V6,
+        "inner dst IPv6 reverse-DNAT'd to the guest overlay IP"
+    );
+    // inner TCP dst port restored to the guest's original src port.
+    let dport = u16::from_be_bytes([pkt[ip_off + 40 + 2], pkt[ip_off + 40 + 3]]);
+    assert_eq!(
+        dport, RET_ORIG_SPORT,
+        "inner dst port restored to the guest's orig sport"
+    );
+    // checksum valid after the reverse rewrite (addr + port folded into the L4 csum).
+    assert!(
+        tcp6_checksum_valid(pkt, ip_off),
+        "reverse-DNAT must leave a valid TCP checksum"
+    );
+}
+
+// ─── (f) WAN-edge relay: nat_ip6 return to a remote owner is re-forwarded ─────
+const OWNER_UNDERLAY: [u8; 16] = [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x77];
+const OWNER_VNI: u32 = 909;
+
+#[test]
+fn wan6_rx_relays_nat_ip6_return_to_owner_with_owner_vni() {
+    let mut node = SimNode::with_local(local());
+    node.maps.neighbor_nat6.push(NeighborNat6Entry {
+        underlay: OWNER_UNDERLAY,
+        nat_ip6: NAT_V6,
+        vni: OWNER_VNI,
+        port_min: RET_NAT_PORT,
+        port_max: RET_NAT_PORT + 1,
+        enabled: 1,
+        _pad: [0; 3],
+    });
+    // A plain WAN v6 frame EXT_V6 → NAT_V6:NAT_PORT (no LB VIP, no local ownership).
+    let out = node.wan_rx(&ret_tcp_frame());
+    assert_eq!(
+        out.action,
+        Action::Redirect(local().uplink_ifindex),
+        "WAN-edge relays the nat_ip6 return out the uplink toward the owner"
+    );
+    assert_eq!(
+        out.tunnel,
+        Some(TunnelEncap {
+            vni: OWNER_VNI,
+            remote: OWNER_UNDERLAY,
+        }),
+        "relay carries the OWNER's real vni + underlay (so its reverse CT key matches)"
+    );
+}
+
+// ─── (g) intra-fabric relay: a non-owner node re-forwards a nat_ip6 return ────
+#[test]
+fn uplink6_relays_nat_ip6_return_to_owner() {
+    let mut node = SimNode::with_local(local());
+    node.maps.neighbor_nat6.push(NeighborNat6Entry {
+        underlay: OWNER_UNDERLAY,
+        nat_ip6: NAT_V6,
+        vni: VNI,
+        port_min: RET_NAT_PORT,
+        port_max: RET_NAT_PORT + 1,
+        enabled: 1,
+        _pad: [0; 3],
+    });
+    // Not a locally-owned nat_ip (no nat_ips6/nat_ct6), no local INTERFACES6 → neighbor relay.
+    let out = node.uplink_v6_dsr(&ret_tcp_frame(), VNI, &local(), None);
+    assert_eq!(
+        out.action,
+        Action::Redirect(local().uplink_ifindex),
+        "non-owner node relays the nat_ip6 return toward the owner"
+    );
+    assert_eq!(
+        out.tunnel,
+        Some(TunnelEncap {
+            vni: VNI,
+            remote: OWNER_UNDERLAY,
+        }),
+        "relay reforwards with the same vni toward the owner underlay"
     );
 }
