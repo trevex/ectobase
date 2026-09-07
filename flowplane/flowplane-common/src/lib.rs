@@ -106,9 +106,11 @@ pub struct PortMeta {
     pub gateway_ipv4: [u8; 4],
     pub guest_mac: [u8; 6],
     /// 1 = L3 pod edge (netkit): IP from byte 0, no L2 responders, synthetic-eth push/pop at the
-    /// edge; 0 = L2 (veth/tap).
+    /// edge; 0 = L2 (veth/tap/vf).
     pub l3: u8,
-    pub _pad: [u8; 1],
+    /// 1 = this port is an SR-IOV VF/SF representor eligible for hardware flow-offload (increment C
+    /// installs tc-flower rules for its established E/W flows). Written at attach; datapath-inert in A.
+    pub offloaded: u8,
     pub underlay_ipv6: [u8; 16],
     pub gateway_ipv6: [u8; 16],
     /// Guest overlay IPv6 address (all-zero when the guest is IPv4-only). Used by NAT64 to

@@ -38,7 +38,7 @@ fn port_meta() -> PortMeta {
         gateway_ipv4: GATEWAY_IPV4,
         guest_mac: GATEWAY_MAC,
         l3: 0,
-        _pad: [0; 1],
+        offloaded: 0,
         underlay_ipv6: [0; 16],
         gateway_ipv6: GATEWAY_IPV6,
         guest_ipv6: REQUESTER_IPV6,

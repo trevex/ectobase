@@ -129,7 +129,7 @@ fn mark_l3_pod(node: &mut SimNode, tap: u32) {
             gateway_ipv4: [10, 0, 0, 1],
             guest_mac: GUEST_MAC,
             l3: 1,
-            _pad: [0; 1],
+            offloaded: 0,
             underlay_ipv6: HOST_UNDERLAY,
             gateway_ipv6: [0; 16],
             guest_ipv6: [0; 16],

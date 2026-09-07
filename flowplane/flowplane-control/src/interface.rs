@@ -43,6 +43,9 @@ pub struct IfaceParams {
     /// The delivery device has a netns peer (veth/netkit) → written to `IfaceValue.peer_capable` so
     /// local delivery uses `bpf_redirect_peer`. `false` for a peerless root-netns tap.
     pub peer_capable: bool,
+    /// 1 = SR-IOV VF/SF representor eligible for later hardware flow-offload (increment C). Recorded
+    /// into PORT_META now; no datapath effect in increment A.
+    pub offloaded: bool,
 }
 
 /// Build a `MeterState` from per-lane caps in Mbit/s. Egress total is EDT-shaped: only
@@ -139,6 +142,7 @@ impl<W: MapWriter> ControlCore<W> {
             public_mbps,
             l3,
             peer_capable,
+            offloaded,
         } = params;
         self.w.ports_upsert(
             tap,
@@ -148,7 +152,7 @@ impl<W: MapWriter> ControlCore<W> {
                 gateway_ipv4,
                 guest_mac: effective_mac,
                 l3: u8::from(l3),
-                _pad: [0; 1],
+                offloaded: u8::from(offloaded),
                 underlay_ipv6,
                 gateway_ipv6,
                 guest_ipv6: ipv6,
@@ -324,6 +328,7 @@ mod tests {
             public_mbps: 0,
             l3: false,
             peer_capable: false,
+            offloaded: false,
         }
     }
 
@@ -504,6 +509,7 @@ mod tests {
             public_mbps: 40,
             l3: false,
             peer_capable: false,
+            offloaded: false,
         })
         .unwrap();
         let pm = c.w.ports.get(&7).unwrap();
@@ -535,6 +541,19 @@ mod tests {
         assert_eq!(m.public_bps, 40 * 1_000_000 / 8);
         // journal written
         assert_eq!(c.w.iface_meta.len(), 1);
+    }
+
+    #[test]
+    fn program_interface_records_offloaded_flag_in_port_meta() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        let mut p = params([10, 0, 0, 5], [0u8; 16]);
+        p.offloaded = true;
+        c.program_interface(p).unwrap();
+        let pm = c.w.ports.get(&42).expect("PORT_META written for tap 42");
+        assert_eq!(
+            pm.offloaded, 1,
+            "offloaded flag must round-trip into PortMeta"
+        );
     }
 
     #[test]

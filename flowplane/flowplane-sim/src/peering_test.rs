@@ -113,7 +113,7 @@ fn port_meta(vni: u32, guest_ip: [u8; 4]) -> PortMeta {
         gateway_ipv4: [10, 0, 0, 1],
         guest_mac: [0xaa; 6],
         l3: 0,
-        _pad: [0; 1],
+        offloaded: 0,
         underlay_ipv6: [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01],
         gateway_ipv6: [0; 16],
         guest_ipv6: [0; 16],

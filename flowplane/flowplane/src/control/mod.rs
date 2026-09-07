@@ -116,6 +116,9 @@ pub struct IfaceParams {
     /// (written to `IfaceValue.peer_capable`). True for veth/netkit/pod-tap; false for a peerless
     /// root-netns tap. Distinct from `netkit`: a veth is peer_capable but NOT netkit-attached.
     pub peer_capable: bool,
+    /// SR-IOV VF/SF representor eligible for later hardware flow-offload (increment C). Forwarded
+    /// into PORT_META via program_interface; datapath-inert in increment A.
+    pub offloaded: bool,
 }
 
 // Named shapes for the gRPC list/get return rows, so the signatures below read as
@@ -816,6 +819,7 @@ impl Control {
             public_mbps: params.public_mbps,
             l3: params.l3,
             peer_capable: params.peer_capable,
+            offloaded: params.offloaded,
         }) {
             // A non-pinned `link` drops here -> detaches. A pinned link is held by the bpffs pin, not
             // by `link`, so explicitly unpin to detach the program and avoid leaking the pin — keeping

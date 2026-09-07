@@ -410,6 +410,9 @@ impl AttachState {
             // never the tap) — proven live (VM ping broke). A root-netns `Tap` has no peer either. So
             // VMs keep plain bpf_redirect: primary xmit → netkit forward → peer RX → mirred → tap.
             peer_capable: matches!(resolved, DeviceType::Veth | DeviceType::Netkit),
+            // Task 4 flips this to true for VF attach; every existing device type keeps behavior
+            // identical (not hardware-offload-eligible) for now.
+            offloaded: false,
         };
         if let Err(e) = self
             .control
