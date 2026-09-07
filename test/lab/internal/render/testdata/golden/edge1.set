@@ -41,9 +41,15 @@ set protocols bgp address-family ipv6-unicast maximum-paths ebgp '64'
 # Advertise the loopback + NAT64 /96 explicitly.
 set protocols bgp address-family ipv6-unicast network 'fd00:ffff::e1/128'
 set protocols bgp address-family ipv6-unicast network '64:ff9b::/96'
+# Edge-owned PUBLIC prefixes (LB VIPs + NAT source IPs; hand-picked from these). Both
+# edges advertise them (anycast); the WAN also statically routes them back. The v4
+# prefix needs an EXPLICIT network — it is not directly connected on the edge, so
+# `redistribute connected` below does NOT cover it (only the eth3 /24 WAN subnet).
+set protocols bgp address-family ipv6-unicast network '2001:db8:2b::/64'
+set protocols bgp address-family ipv4-unicast network '192.0.2.0/24'
 # v4 return path (B10): redistribute this edge's directly-connected v4 WAN subnet
-# (eth3, 172.29.0.0/24) into the fabric — the simplest v4 return, mirroring
-# the explicit v6 `network` statements above without needing one per v4 prefix.
+# (eth3, 172.29.0.0/24) into the fabric — the connected-segment return; the
+# PublicV4 prefix above is advertised explicitly (it is not connected here).
 set protocols bgp address-family ipv4-unicast redistribute connected
 
 # Unnumbered fabric uplinks toward the two ToRs; default-originate sources the

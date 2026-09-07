@@ -24,10 +24,19 @@ const (
 	// subnet): the wan bridge holds WanGwV4 (.1); edge1/edge2 hold .11/.12 on eth3,
 	// dual-stack alongside their fd00:29::1N/64 (B10: dual-stack WAN segment).
 	WanGwV4Base = "172.29.0"
-	// WanVipV4Test is a v4 documentation prefix (RFC 5737 TEST-NET-1) for the N/S LB
-	// v4-VIP livetest — not in any overlay/underlay/fabric range, mirroring the v6
-	// VIP's own documentation prefix (see livetest/lb_test.go's lbVIP comment).
+	// WanVipV4Test is a v4 documentation prefix (RFC 5737 TEST-NET-1) — the edge's
+	// PUBLIC v4 prefix: hand-picked LB VIPs and NAT source IPs are drawn from it
+	// (not in any overlay/underlay/fabric range; see livetest/lb_test.go's lbVIP).
 	WanVipV4Test = "192.0.2.0/24"
+	// PublicV4 is the edge-owned public v4 prefix (alias of WanVipV4Test): both edges
+	// advertise it (anycast) and the WAN routes it back — hand-picked LB VIPs + NAT
+	// source IPs live here.
+	PublicV4 = WanVipV4Test
+	// PublicV6 is the edge-owned public v6 prefix (RFC 3849 documentation range,
+	// 2001:db8::/32): hand-picked v6 LB VIPs (e.g. 2001:db8:2b::1) and NAT66 source
+	// IPs are drawn from it. Advertised by both edges (anycast) + routed back from the
+	// WAN, mirroring PublicV4.
+	PublicV6 = "2001:db8:2b::/64"
 	NodeAggr     = "fd00:cafe::/32" // aggregate of every cluster's /48 node identities (fd00:cafe:<h>::/48)
 	PodAggr      = "fd00:244::/32"  // aggregate of every cluster's Cilium pod pool (fd00:244:<h>::/56)
 	LoopAggr     = "fd00:ffff::/32" // aggregate of the edge loopbacks
@@ -115,6 +124,10 @@ func (v *View) ASHost() int      { return v.Cfg.Fabric.AS.Host }
 func (v *View) NodeAggr() string { return NodeAggr }
 func (v *View) LoopAggr() string { return LoopAggr }
 
+// Edge-owned public prefixes (LB VIPs + NAT source IPs), advertised by both edges.
+func (v *View) PublicV4() string { return PublicV4 }
+func (v *View) PublicV6() string { return PublicV6 }
+
 // ClabView wraps the View with the render-time host paths the clab topology template
 // needs (kept OFF View so View stays pure/deterministic for the golden tests — the
 // modules dir is host-dependent). The View methods promote through the embed, so the
@@ -164,17 +177,22 @@ func Build(cfg *config.Config) *View {
 	v.Wan = Wan{
 		V4Addr: WanGwV4 + "/24",
 		V6Addr: WanNet + "::1/64",
-		// /16 covers the WAN /24 + the tayga NAT64 pools 172.29.64/65.0/24.
-		MasqV4: []string{"172.29.0.0/16"},
-		// Pure /128-VTEP model: only node identities (NodeAggr), edge loopbacks
-		// (LoopAggr), and the WAN segment need masq/return — no RA /64 aggregate.
-		MasqV6: []string{NodeAggr, LoopAggr, WanNet + "::/64"},
+		// /16 covers the WAN /24 + the tayga NAT64 pools 172.29.64/65.0/24; PublicV4 is
+		// the edge public prefix (LB VIPs + NAT) — masqueraded on the WAN→host hop so a
+		// doc-prefix source actually egresses the host (the edge/fabric keep it as-is).
+		MasqV4: []string{"172.29.0.0/16", PublicV4},
+		// Pure /128-VTEP model: node identities (NodeAggr), edge loopbacks (LoopAggr),
+		// the WAN segment, plus the edge public v6 prefix (LB/NAT), masqueraded on the
+		// WAN→host hop only (the edge/fabric keep the real public source).
+		MasqV6: []string{NodeAggr, LoopAggr, WanNet + "::/64", PublicV6},
 		Routes: []Route{
 			{Prefix: NodeAggr, NextHops: edges},
 			{Prefix: LoopAggr, NextHops: edges},
-			// B10: dual-stack WAN — the v4 N/S-LB VIP test range routes back via the
-			// edges' v4 WAN addresses, mirroring the v6 NodeAggr/LoopAggr entries above.
+			// Public prefixes route back into the fabric via BOTH edges (ECMP): this is
+			// what makes a hand-picked VIP/NAT-IP reachable from the WAN without a
+			// per-address static hack (v4 = WanVipV4Test/PublicV4; v6 = PublicV6).
 			{Prefix: WanVipV4Test, NextHops: edgesV4},
+			{Prefix: PublicV6, NextHops: edges},
 		},
 	}
 	return v
