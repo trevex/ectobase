@@ -55,6 +55,7 @@ impl DataplaneNode for NodeService {
                 &r.requested_ips,
                 device_type,
                 &r.tap_name,
+                &r.pci_address,
             )
         })
         .await

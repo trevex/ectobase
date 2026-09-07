@@ -150,6 +150,8 @@ message AttachInterfaceRequest {
   string tap_name = 7;     // exact device name for the tap (tap/pod-tap); empty = derive "tap-<id>".
                            // KubeVirt's domainAttachmentType:tap opens the primary tap by the literal
                            // name "tap0", so the binding CNI must pass tap_name="tap0".
+  string pci_address = 8;  // VF PCI BDF (e.g. "0000:65:00.3") for device_type="vf"; supplied by the
+                           // k8s SR-IOV device plugin. Ignored for every other device_type.
 }
 message AttachInterfaceResponse {
   string ifname = 1;

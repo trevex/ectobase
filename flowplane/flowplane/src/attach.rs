@@ -246,7 +246,9 @@ impl AttachState {
         requested_ips: &[String],
         device_type: DeviceType,
         tap_name: &str,
+        pci_address: &str,
     ) -> anyhow::Result<AttachOutcome> {
+        let _ = pci_address; // consumed by the DeviceType::Vf arm in a later task
         if interface_id.is_empty() {
             bail!("interface_id is required");
         }
