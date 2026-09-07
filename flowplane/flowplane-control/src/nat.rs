@@ -4,8 +4,10 @@
 //! `g.by_id` -> `self.ifaces_meta`, `g.lbs` -> `self.lbs`, `g.nat`/`g.nat_ips`/`g.neigh_nat*`
 //! map ops -> `self.w.<map>_<op>`, and the CT flush -> `self.w.conntrack_flush(scope)`.
 
-use crate::{ControlCore, CtFlushScope, MapWriter};
-use flowplane_common::{NatKey, NatValue, NeighborNatEntry, NB_MAX_ENTRIES};
+use crate::{ControlCore, CtFlushScope, CtFlushScope6, MapWriter};
+use flowplane_common::{
+    NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, NB_MAX_ENTRIES,
+};
 
 impl<W: MapWriter> ControlCore<W> {
     /// Program a guest's NAT config: (vni, guest_ip) -> (nat_ip, port_min, port_max).
@@ -186,6 +188,175 @@ impl<W: MapWriter> ControlCore<W> {
         self.neigh_nat_reprogram()?;
         Ok(true)
     }
+
+    // -----------------------------------------------------------------------
+    // NAT66 (v6) — faithful siblings of the v4 fns above, over the v6 structs/maps and `rec.ipv6`.
+    // -----------------------------------------------------------------------
+
+    /// Program a guest's NAT66 config: (vni, guest_ipv6) -> (nat_ipv6, port_min, port_max).
+    /// Returns the underlay route on success.
+    pub fn create_nat6(
+        &mut self,
+        interface_id: &[u8],
+        nat_ip: [u8; 16],
+        port_min: u16,
+        port_max: u16,
+        preferred_ul: Option<[u8; 16]>,
+    ) -> anyhow::Result<[u8; 16]> {
+        let rec = self
+            .ifaces_meta
+            .get(interface_id)
+            .ok_or_else(|| anyhow::anyhow!("NO_VM: unknown interface"))?;
+        let (vni, gip) = (rec.vni, rec.ipv6);
+        let underlay = rec.underlay;
+
+        // Check for existing NAT66 on this interface (any nat_ip).
+        if self.w.nat6_get(&NatKey6 { vni, ipv6: gip }).is_some() {
+            anyhow::bail!("SNAT_EXISTS: NAT already configured for this interface");
+        }
+
+        // Check for overlapping port range across all interfaces in this VNI with the same nat_ip.
+        for r in self.ifaces_meta.values() {
+            if r.vni == vni {
+                if let Some(v) = self.w.nat6_get(&NatKey6 { vni, ipv6: r.ipv6 }) {
+                    if v.nat_ipv6 == nat_ip && port_min < v.port_max && port_max > v.port_min {
+                        anyhow::bail!("SNAT_EXISTS: overlapping NAT port range");
+                    }
+                }
+            }
+        }
+
+        // Check preferred underlay collision.
+        if let Some(pul) = preferred_ul {
+            if self.ifaces_meta.values().any(|r| r.underlay == pul)
+                || self.lbs.values().any(|lb| lb.lb_underlay == pul)
+            {
+                anyhow::bail!("VNF_INSERT: preferred underlay collision");
+            }
+        }
+
+        self.w.nat6_upsert(
+            NatKey6 { vni, ipv6: gip },
+            NatValue6 {
+                nat_ipv6: nat_ip,
+                port_min,
+                port_max,
+            },
+        )?;
+        // Mark this nat_ip in NAT_IPS6 for peer-independent NAT-return demux (Maps::is_nat_ip6).
+        let _ = self.w.nat_ips6_set(vni, nat_ip);
+        Ok(preferred_ul.unwrap_or(underlay))
+    }
+
+    /// Remove a guest's NAT66 config. Returns true if found and deleted, false if none was set.
+    pub fn delete_nat6(&mut self, interface_id: &[u8]) -> anyhow::Result<bool> {
+        let (vni, gip, nat_ip, port_min, port_max) = {
+            let rec = self
+                .ifaces_meta
+                .get(interface_id)
+                .ok_or_else(|| anyhow::anyhow!("NO_VM: unknown interface"))?;
+            let (vni, gip) = (rec.vni, rec.ipv6);
+            let nat_val = match self.w.nat6_get(&NatKey6 { vni, ipv6: gip }) {
+                Some(v) => v,
+                None => return Ok(false),
+            };
+            let nat_ip = nat_val.nat_ipv6;
+            let port_min = nat_val.port_min;
+            let port_max = nat_val.port_max;
+            let _ = self.w.nat6_remove(&NatKey6 { vni, ipv6: gip });
+            // Remove the NAT_IPS6 marker if no other interface in this VNI uses the same nat_ip.
+            let still_used = self.ifaces_meta.iter().any(|(other_id, r)| {
+                other_id.as_slice() != interface_id
+                    && r.vni == vni
+                    && self
+                        .w
+                        .nat6_get(&NatKey6 {
+                            vni: r.vni,
+                            ipv6: r.ipv6,
+                        })
+                        .map(|v| v.nat_ipv6 == nat_ip)
+                        .unwrap_or(false)
+            });
+            if !still_used {
+                let _ = self.w.nat_ips6_remove(vni, nat_ip);
+            }
+            (vni, gip, nat_ip, port_min, port_max)
+        };
+        self.w.conntrack6_flush(CtFlushScope6 {
+            vni,
+            guest_ip6: gip,
+            nat_ip6: nat_ip,
+            port_min,
+            port_max,
+        })?;
+        Ok(true)
+    }
+
+    /// Reprogram NEIGHBOR_NAT6 and NEIGHBOR_NAT6_COUNT from the in-memory vec.
+    fn neigh_nat6_reprogram(&mut self) -> anyhow::Result<()> {
+        let n = self.neigh_nats6.len() as u32;
+        for (i, e) in self.neigh_nats6.iter().enumerate() {
+            self.w.neigh_nat6_upsert(i as u32, *e)?;
+        }
+        self.w.neigh_nat6_count_set(n)?;
+        Ok(())
+    }
+
+    /// Add a NAT66 neighbor-return entry (capped at NB_MAX_ENTRIES).
+    pub fn add_neighbor_nat6(
+        &mut self,
+        vni: u32,
+        nat_ip: [u8; 16],
+        port_min: u16,
+        port_max: u16,
+        underlay: [u8; 16],
+    ) -> anyhow::Result<()> {
+        if self.neigh_nats6.len() >= NB_MAX_ENTRIES as usize {
+            anyhow::bail!("neighbor NAT table full (max {})", NB_MAX_ENTRIES);
+        }
+        // Check for duplicate or overlapping port range (same nat_ip).
+        if self.neigh_nats6.iter().any(|e| {
+            e.nat_ip6 == nat_ip
+                && ((e.vni == vni && e.port_min == port_min && e.port_max == port_max)
+                    || (e.port_min < port_max && e.port_max > port_min))
+        }) {
+            anyhow::bail!(
+                "ALREADY_EXISTS: neighbor NAT entry already exists or port range overlaps"
+            );
+        }
+        self.neigh_nats6.push(NeighborNat6Entry {
+            underlay,
+            nat_ip6: nat_ip,
+            vni,
+            port_min,
+            port_max,
+            enabled: 1,
+            _pad: [0; 3],
+        });
+        self.neigh_nat6_reprogram()
+    }
+
+    /// Remove a NAT66 neighbor-return entry matching (vni, nat_ip, port_min, port_max).
+    pub fn del_neighbor_nat6(
+        &mut self,
+        vni: u32,
+        nat_ip: [u8; 16],
+        port_min: u16,
+        port_max: u16,
+    ) -> anyhow::Result<bool> {
+        let before = self.neigh_nats6.len();
+        self.neigh_nats6.retain(|e| {
+            !(e.vni == vni
+                && e.nat_ip6 == nat_ip
+                && e.port_min == port_min
+                && e.port_max == port_max)
+        });
+        if self.neigh_nats6.len() == before {
+            return Ok(false);
+        }
+        self.neigh_nat6_reprogram()?;
+        Ok(true)
+    }
 }
 
 #[cfg(test)]
@@ -275,5 +446,84 @@ mod tests {
             vni: 5,
             ipv4: [10, 0, 0, 2]
         }));
+    }
+
+    // v6 sibling of the two tests above.
+    const G6: [u8; 16] = [0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]; // fd00::2 (guest ULA)
+    const NAT6_A: [u8; 16] = [
+        0x20, 0x01, 0x0d, 0xb8, 0, 0x2b, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+    ]; // 2001:db8:2b::1
+    const NAT6_B: [u8; 16] = [
+        0x20, 0x01, 0x0d, 0xb8, 0, 0x2b, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2,
+    ]; // 2001:db8:2b::2
+
+    #[test]
+    fn add_and_del_neighbor_nat6_programs_maps_and_rejects_overlap() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        let vni: u32 = 10;
+        let underlay: [u8; 16] = [2u8; 16];
+
+        c.add_neighbor_nat6(vni, NAT6_A, 1024, 2048, underlay)
+            .unwrap();
+        assert_eq!(c.w.neigh_nat6_count, 1);
+        assert_eq!(
+            c.w.neigh_nat6.get(&0),
+            Some(&flowplane_common::NeighborNat6Entry {
+                underlay,
+                nat_ip6: NAT6_A,
+                vni,
+                port_min: 1024,
+                port_max: 2048,
+                enabled: 1,
+                _pad: [0; 3],
+            })
+        );
+
+        // Exact duplicate rejected.
+        assert!(c
+            .add_neighbor_nat6(vni, NAT6_A, 1024, 2048, underlay)
+            .is_err());
+        // Overlapping range on the same nat_ip (different vni) rejected.
+        assert!(c
+            .add_neighbor_nat6(vni + 1, NAT6_A, 1500, 3000, underlay)
+            .is_err());
+        // Non-overlapping range on a different nat_ip is fine.
+        c.add_neighbor_nat6(vni, NAT6_B, 1024, 2048, [3u8; 16])
+            .unwrap();
+        assert_eq!(c.w.neigh_nat6_count, 2);
+
+        assert!(c.del_neighbor_nat6(vni, NAT6_A, 1024, 2048).unwrap());
+        assert_eq!(c.w.neigh_nat6_count, 1);
+        assert!(!c.del_neighbor_nat6(vni, NAT6_A, 1024, 2048).unwrap());
+    }
+
+    #[test]
+    fn create_and_delete_nat6_programs_maps_and_flushes_ct() {
+        let mut c = ControlCore::new(MemMapWriter::default());
+        c.register_iface_meta(
+            b"if1".to_vec(),
+            IfaceMeta {
+                vni: 5,
+                ipv4: [0u8; 4],
+                ipv6: G6,
+                underlay: [1u8; 16],
+                ifindex: 1,
+            },
+        );
+        let ul = c.create_nat6(b"if1", NAT6_A, 1024, 2048, None).unwrap();
+        assert_eq!(ul, [1u8; 16]);
+        assert!(c
+            .w
+            .nat6
+            .contains_key(&flowplane_common::NatKey6 { vni: 5, ipv6: G6 }));
+        assert!(c.w.nat_ips6.contains(&(5, NAT6_A)));
+        // duplicate NAT on same iface rejected
+        assert!(c.create_nat6(b"if1", NAT6_A, 1024, 2048, None).is_err());
+        assert!(c.delete_nat6(b"if1").unwrap());
+        assert_eq!(c.w.ct6_flushes.len(), 1);
+        assert!(!c
+            .w
+            .nat6
+            .contains_key(&flowplane_common::NatKey6 { vni: 5, ipv6: G6 }));
     }
 }

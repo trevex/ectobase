@@ -331,6 +331,12 @@ impl Control {
         let neigh_nat = NeighborNat::open(&mut ebpf)?;
         let neigh_nat_count = NeighborNatCount::open(&mut ebpf)?;
         let nat_ips = NatIps::open(&mut ebpf)?;
+        // NAT66 (v6) config maps — siblings of the four v4 nat maps above.
+        let nat6 = crate::maps::Nat6::open(&mut ebpf)?;
+        let nat_ips6 = crate::maps::NatIps6::open(&mut ebpf)?;
+        let neigh_nat6 = crate::maps::NeighborNat6::open(&mut ebpf)?;
+        let neigh_nat6_count = crate::maps::NeighborNat6Count::open(&mut ebpf)?;
+        let nat_ct6 = crate::maps::NatCt6::open(&mut ebpf)?;
         let dhcp_config = DhcpConfigMap::open(&mut ebpf)?;
         let dhcp_meta = DhcpMetaMap::open(&mut ebpf)?;
         let iface_meta = IfaceMetaMap::open(&mut ebpf)?;
@@ -345,6 +351,11 @@ impl Control {
             nat_ips,
             neigh_nat,
             neigh_nat_count,
+            nat6,
+            nat_ips6,
+            neigh_nat6,
+            neigh_nat6_count,
+            nat_ct6,
             lb,
             maglev,
             underlay,

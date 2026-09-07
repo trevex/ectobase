@@ -5,14 +5,15 @@ use parking_lot::Mutex;
 
 use crate::maps::{
     Conntrack, Conntrack6, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwMetaMap6, FwRules, FwRules6,
-    IfaceMetaMap, Interfaces, Interfaces6, Lb, Maglev, Meter, Nat, NatIps, NeighborNat,
-    NeighborNatCount, PortMetaMap, Routes, Routes6, Underlay, Vips,
+    IfaceMetaMap, Interfaces, Interfaces6, Lb, Maglev, Meter, Nat, Nat6, NatCt6, NatIps, NatIps6,
+    NeighborNat, NeighborNat6, NeighborNat6Count, NeighborNatCount, PortMetaMap, Routes, Routes6,
+    Underlay, Vips,
 };
 use flowplane_common::{
-    CtKey, CtKey6, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, NatKey, NatValue,
-    NeighborNatEntry, PortMeta, RouteValue, VipKey,
+    CtKey, CtKey6, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, NatKey, NatKey6,
+    NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue, VipKey,
 };
-use flowplane_control::{CtFlushScope, MapWriter};
+use flowplane_control::{CtFlushScope, CtFlushScope6, MapWriter};
 
 pub struct AyaWriter {
     pub routes: Routes,
@@ -22,6 +23,13 @@ pub struct AyaWriter {
     pub nat_ips: NatIps,
     pub neigh_nat: NeighborNat,
     pub neigh_nat_count: NeighborNatCount,
+    // NAT66 (v6) domain — siblings of the four v4 nat handles above, plus the dedicated NAT66
+    // conntrack handle the teardown flush scans.
+    pub nat6: Nat6,
+    pub nat_ips6: NatIps6,
+    pub neigh_nat6: NeighborNat6,
+    pub neigh_nat6_count: NeighborNat6Count,
+    pub nat_ct6: NatCt6,
     // LB domain: LB service map, Maglev table, and the UNDERLAY map. UNDERLAY is also
     // read/written by the interface + edge paths via `core.writer_mut()`.
     pub lb: Lb,
@@ -108,6 +116,43 @@ fn ct_flush_for_guest(
     }
 }
 
+/// v6 sibling of [`ct_flush_for_guest`] — flush the `NAT_CT6` entries for a NAT66 flow: the forward
+/// entry (`CtKey6.src_ip == gip`, CT_REWRITE_SRC/CT_F_SRC_NAT) and the peer-independent reverse
+/// entry (`CtKey6.dst_ip == nat_ip`, dst_port in range, CT_REWRITE_DST).
+fn ct_flush_for_guest6(
+    ct: &mut NatCt6,
+    vni: u32,
+    gip: [u8; 16],
+    nat_ip: [u8; 16],
+    port_min: u16,
+    port_max: u16,
+) {
+    let to_remove: Vec<CtKey6> = ct
+        .entries()
+        .into_iter()
+        .filter_map(|(k, e)| {
+            if k.vni != vni {
+                return None;
+            }
+            let is_fwd = k.src_ip == gip
+                && (e.flags & flowplane_common::CT_REWRITE_SRC != 0
+                    || e.flags & flowplane_common::CT_F_SRC_NAT != 0);
+            let is_rev = k.dst_ip == nat_ip
+                && k.dst_port >= port_min
+                && k.dst_port < port_max
+                && e.flags & flowplane_common::CT_REWRITE_DST != 0;
+            if is_fwd || is_rev {
+                Some(k)
+            } else {
+                None
+            }
+        })
+        .collect();
+    for k in to_remove {
+        let _ = ct.remove(&k);
+    }
+}
+
 impl MapWriter for AyaWriter {
     fn route_upsert(
         &mut self,
@@ -153,6 +198,27 @@ impl MapWriter for AyaWriter {
     }
     fn neigh_nat_count_set(&mut self, c: u32) -> anyhow::Result<()> {
         self.neigh_nat_count.set(c)
+    }
+    fn nat6_upsert(&mut self, k: NatKey6, v: NatValue6) -> anyhow::Result<()> {
+        self.nat6.upsert(k, v)
+    }
+    fn nat6_remove(&mut self, k: &NatKey6) -> anyhow::Result<()> {
+        self.nat6.remove(k)
+    }
+    fn nat6_get(&self, k: &NatKey6) -> Option<NatValue6> {
+        self.nat6.get(k)
+    }
+    fn nat_ips6_set(&mut self, vni: u32, ip: [u8; 16]) -> anyhow::Result<()> {
+        self.nat_ips6.set(vni, ip)
+    }
+    fn nat_ips6_remove(&mut self, vni: u32, ip: [u8; 16]) -> anyhow::Result<()> {
+        self.nat_ips6.remove(vni, ip)
+    }
+    fn neigh_nat6_upsert(&mut self, i: u32, v: NeighborNat6Entry) -> anyhow::Result<()> {
+        self.neigh_nat6.upsert(i, v)
+    }
+    fn neigh_nat6_count_set(&mut self, c: u32) -> anyhow::Result<()> {
+        self.neigh_nat6_count.set(c)
     }
     fn lb_upsert(
         &mut self,
@@ -269,6 +335,19 @@ impl MapWriter for AyaWriter {
         // control inner). Mirrors the former `delete_nat` teardown.
         let mut ct = self.conntrack.lock();
         ct_flush_for_guest(&mut ct, s.vni, s.guest_ip, s.nat_ip, s.port_min, s.port_max);
+        Ok(())
+    }
+    fn conntrack6_flush(&mut self, s: CtFlushScope6) -> anyhow::Result<()> {
+        // NAT66 teardown: flush the guest's NAT_CT6 entries. AyaWriter owns the sole handle (no GC
+        // task holds it — the LRU map self-evicts), so no separate lock is needed.
+        ct_flush_for_guest6(
+            &mut self.nat_ct6,
+            s.vni,
+            s.guest_ip6,
+            s.nat_ip6,
+            s.port_min,
+            s.port_max,
+        );
         Ok(())
     }
 

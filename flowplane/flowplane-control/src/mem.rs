@@ -1,9 +1,10 @@
 //! In-memory `MapWriter` for testing `ControlCore` without CAP_BPF or a live map.
-use crate::writer::{CtFlushScope, MapWriter};
+use crate::writer::{CtFlushScope, CtFlushScope6, MapWriter};
 use flowplane_common::{
     DhcpConfig, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey,
-    IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatValue,
-    NeighborNatEntry, PortMeta, RouteValue, UnderlayValue, VipKey,
+    IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatKey6,
+    NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue, UnderlayValue,
+    VipKey,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -15,6 +16,11 @@ pub struct MemMapWriter {
     pub nat_ips: HashSet<(u32, [u8; 4])>,
     pub neigh_nat: HashMap<u32, NeighborNatEntry>,
     pub neigh_nat_count: u32,
+    // NAT66 (v6) siblings of the four v4 nat fields above.
+    pub nat6: HashMap<NatKey6, NatValue6>,
+    pub nat_ips6: HashSet<(u32, [u8; 16])>,
+    pub neigh_nat6: HashMap<u32, NeighborNat6Entry>,
+    pub neigh_nat6_count: u32,
     pub lb: HashMap<LbKey, LbValue>,
     pub maglev: HashMap<MaglevKey, LbBackend>,
     pub underlay: HashMap<[u8; 16], UnderlayValue>,
@@ -33,6 +39,7 @@ pub struct MemMapWriter {
     pub dhcp_meta_removed: Vec<u32>,
     pub vips: HashMap<VipKey, [u8; 4]>,
     pub ct_flushes: Vec<CtFlushScope>,
+    pub ct6_flushes: Vec<CtFlushScope6>,
     pub ct_iface_flushes: Vec<(u32, [u8; 4], [u8; 16])>,
 }
 
@@ -90,6 +97,33 @@ impl MapWriter for MemMapWriter {
     }
     fn neigh_nat_count_set(&mut self, c: u32) -> anyhow::Result<()> {
         self.neigh_nat_count = c;
+        Ok(())
+    }
+    fn nat6_upsert(&mut self, k: NatKey6, v: NatValue6) -> anyhow::Result<()> {
+        self.nat6.insert(k, v);
+        Ok(())
+    }
+    fn nat6_remove(&mut self, k: &NatKey6) -> anyhow::Result<()> {
+        self.nat6.remove(k);
+        Ok(())
+    }
+    fn nat6_get(&self, k: &NatKey6) -> Option<NatValue6> {
+        self.nat6.get(k).copied()
+    }
+    fn nat_ips6_set(&mut self, vni: u32, ip: [u8; 16]) -> anyhow::Result<()> {
+        self.nat_ips6.insert((vni, ip));
+        Ok(())
+    }
+    fn nat_ips6_remove(&mut self, vni: u32, ip: [u8; 16]) -> anyhow::Result<()> {
+        self.nat_ips6.remove(&(vni, ip));
+        Ok(())
+    }
+    fn neigh_nat6_upsert(&mut self, i: u32, v: NeighborNat6Entry) -> anyhow::Result<()> {
+        self.neigh_nat6.insert(i, v);
+        Ok(())
+    }
+    fn neigh_nat6_count_set(&mut self, c: u32) -> anyhow::Result<()> {
+        self.neigh_nat6_count = c;
         Ok(())
     }
     fn lb_upsert(&mut self, k: LbKey, v: LbValue) -> anyhow::Result<()> {
@@ -210,6 +244,10 @@ impl MapWriter for MemMapWriter {
     }
     fn conntrack_flush(&mut self, s: CtFlushScope) -> anyhow::Result<()> {
         self.ct_flushes.push(s);
+        Ok(())
+    }
+    fn conntrack6_flush(&mut self, s: CtFlushScope6) -> anyhow::Result<()> {
+        self.ct6_flushes.push(s);
         Ok(())
     }
     fn conntrack_flush_interface(

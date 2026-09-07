@@ -6,7 +6,7 @@
 use flowplane_control::{shadow::LbIpBytes, ControlCore, MapWriter};
 use tonic::Status;
 
-use crate::parse::{parse_fw_cidr, parse_ipv4, parse_nexthop6, parse_prefix, port_u16};
+use crate::parse::{parse_fw_cidr, parse_nexthop6, parse_prefix, port_u16};
 use crate::pb;
 
 #[inline]
@@ -70,24 +70,46 @@ pub fn add_nat_source<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::AddNatSourceRequest,
 ) -> Result<pb::AddNatSourceResponse, Status> {
-    let source = parse_ipv4(&req.source_ip).map_err(invalid)?;
-    let nat_ip = parse_ipv4(&req.nat_ip).map_err(invalid)?;
+    use std::net::IpAddr;
+    // Proto is family-agnostic (source_ip/nat_ip are strings); dispatch by the parsed family.
+    let source: IpAddr = req.source_ip.parse().map_err(invalid)?;
+    let nat: IpAddr = req.nat_ip.parse().map_err(invalid)?;
     let port_min = port_u16(req.port_min).map_err(invalid)?;
     let port_max = port_u16(req.port_max).map_err(invalid)?;
     let vni = req.vni;
     // Resolve (vni, source) -> interface id via the ControlCore accessor (the eBPF handler's
     // `find_interface_id` seam), then delete-then-create NAT idempotently.
-    let id = core.find_iface_by_vni_ipv4(vni, source).ok_or_else(|| {
-        Status::internal(format!(
-            "NO_VM: no local interface for vni={vni} ip={}",
-            std::net::Ipv4Addr::from(source)
-        ))
-    })?;
-    let res: anyhow::Result<()> = core.delete_nat(&id).and_then(|_| {
-        core.create_nat(&id, nat_ip, port_min, port_max, None)
-            .map(|_| ())
-    });
-    res.map_err(internal)?;
+    match (source, nat) {
+        (IpAddr::V4(s), IpAddr::V4(n)) => {
+            let id = core
+                .find_iface_by_vni_ipv4(vni, s.octets())
+                .ok_or_else(|| {
+                    Status::internal(format!("NO_VM: no local interface for vni={vni} ip={s}"))
+                })?;
+            let res: anyhow::Result<()> = core.delete_nat(&id).and_then(|_| {
+                core.create_nat(&id, n.octets(), port_min, port_max, None)
+                    .map(|_| ())
+            });
+            res.map_err(internal)?;
+        }
+        (IpAddr::V6(s), IpAddr::V6(n)) => {
+            let id = core
+                .find_iface_by_vni_ipv6(vni, s.octets())
+                .ok_or_else(|| {
+                    Status::internal(format!("NO_VM: no local interface for vni={vni} ip={s}"))
+                })?;
+            let res: anyhow::Result<()> = core.delete_nat6(&id).and_then(|_| {
+                core.create_nat6(&id, n.octets(), port_min, port_max, None)
+                    .map(|_| ())
+            });
+            res.map_err(internal)?;
+        }
+        _ => {
+            return Err(Status::invalid_argument(
+                "source_ip and nat_ip must be the same address family",
+            ))
+        }
+    }
     Ok(pb::AddNatSourceResponse {})
 }
 
@@ -95,12 +117,22 @@ pub fn withdraw_nat_source<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::WithdrawNatSourceRequest,
 ) -> Result<pb::WithdrawNatSourceResponse, Status> {
-    let source = parse_ipv4(&req.source_ip).map_err(invalid)?;
+    use std::net::IpAddr;
+    let source: IpAddr = req.source_ip.parse().map_err(invalid)?;
     let vni = req.vni;
     // Removing an absent source is not an error (mirror the eBPF handler): if the interface is
     // gone or has no NAT, treat it as already withdrawn.
-    if let Some(id) = core.find_iface_by_vni_ipv4(vni, source) {
-        core.delete_nat(&id).map_err(internal)?;
+    match source {
+        IpAddr::V4(s) => {
+            if let Some(id) = core.find_iface_by_vni_ipv4(vni, s.octets()) {
+                core.delete_nat(&id).map_err(internal)?;
+            }
+        }
+        IpAddr::V6(s) => {
+            if let Some(id) = core.find_iface_by_vni_ipv6(vni, s.octets()) {
+                core.delete_nat6(&id).map_err(internal)?;
+            }
+        }
     }
     Ok(pb::WithdrawNatSourceResponse {})
 }
@@ -109,16 +141,23 @@ pub fn add_neighbor_nat<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::AddNeighborNatRequest,
 ) -> Result<pb::AddNeighborNatResponse, Status> {
-    let nat_ip = parse_ipv4(&req.nat_ip).map_err(invalid)?;
+    use std::net::IpAddr;
+    let nat: IpAddr = req.nat_ip.parse().map_err(invalid)?;
+    // The owner underlay is a v6 VTEP in BOTH families (the underlay is IPv6-only).
     let owner = parse_nexthop6(&req.owner_underlay).map_err(invalid)?;
     let port_min = port_u16(req.port_min).map_err(invalid)?;
     let port_max = port_u16(req.port_max).map_err(invalid)?;
     let vni = req.vni;
     // Idempotent: drop any existing entry for this (vni, nat_ip, ports) first so a re-announce
     // replaces the owner underlay.
-    let res: anyhow::Result<()> = core
-        .del_neighbor_nat(vni, nat_ip, port_min, port_max)
-        .and_then(|_| core.add_neighbor_nat(vni, nat_ip, port_min, port_max, owner));
+    let res: anyhow::Result<()> = match nat {
+        IpAddr::V4(n) => core
+            .del_neighbor_nat(vni, n.octets(), port_min, port_max)
+            .and_then(|_| core.add_neighbor_nat(vni, n.octets(), port_min, port_max, owner)),
+        IpAddr::V6(n) => core
+            .del_neighbor_nat6(vni, n.octets(), port_min, port_max)
+            .and_then(|_| core.add_neighbor_nat6(vni, n.octets(), port_min, port_max, owner)),
+    };
     res.map_err(internal)?;
     Ok(pb::AddNeighborNatResponse {})
 }
@@ -127,13 +166,22 @@ pub fn withdraw_neighbor_nat<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::WithdrawNeighborNatRequest,
 ) -> Result<pb::WithdrawNeighborNatResponse, Status> {
-    let nat_ip = parse_ipv4(&req.nat_ip).map_err(invalid)?;
+    use std::net::IpAddr;
+    let nat: IpAddr = req.nat_ip.parse().map_err(invalid)?;
     let port_min = port_u16(req.port_min).map_err(invalid)?;
     let port_max = port_u16(req.port_max).map_err(invalid)?;
     let vni = req.vni;
     // Removing an absent entry is not an error (del_neighbor_nat returns Ok(false)).
-    core.del_neighbor_nat(vni, nat_ip, port_min, port_max)
-        .map_err(internal)?;
+    match nat {
+        IpAddr::V4(n) => {
+            core.del_neighbor_nat(vni, n.octets(), port_min, port_max)
+                .map_err(internal)?;
+        }
+        IpAddr::V6(n) => {
+            core.del_neighbor_nat6(vni, n.octets(), port_min, port_max)
+                .map_err(internal)?;
+        }
+    }
     Ok(pb::WithdrawNeighborNatResponse {})
 }
 
@@ -599,6 +647,67 @@ mod tests {
             },
         );
         assert!(r.is_ok(), "neighbor nat: {r:?}");
+    }
+
+    #[test]
+    fn add_neighbor_nat6_programs() {
+        let mut c = core();
+        let r = add_neighbor_nat(
+            &mut c,
+            &pb::AddNeighborNatRequest {
+                vni: 100,
+                nat_ip: "2001:db8:2b::7".into(),
+                owner_underlay: "2001:db8::bb".into(),
+                port_min: 20000,
+                port_max: 30000,
+            },
+        );
+        assert!(r.is_ok(), "neighbor nat6: {r:?}");
+        assert_eq!(c.writer().neigh_nat6_count, 1);
+    }
+
+    #[test]
+    fn add_nat_source_dispatches_v6_and_rejects_family_mismatch() {
+        use std::net::Ipv6Addr;
+        let mut c = core();
+        c.register_iface_meta(
+            b"if6".to_vec(),
+            IfaceMeta {
+                vni: 7,
+                ipv4: [0u8; 4],
+                ipv6: "fd00::9".parse::<Ipv6Addr>().unwrap().octets(),
+                underlay: [1u8; 16],
+                ifindex: 0,
+            },
+        );
+        // both v6 → NAT66 path.
+        let ok = add_nat_source(
+            &mut c,
+            &pb::AddNatSourceRequest {
+                vni: 7,
+                source_ip: "fd00::9".into(),
+                nat_ip: "2001:db8:2b::1".into(),
+                port_min: 1024,
+                port_max: 2048,
+            },
+        );
+        assert!(ok.is_ok(), "v6 nat source: {ok:?}");
+        assert!(c
+            .writer()
+            .nat_ips6
+            .contains(&(7, "2001:db8:2b::1".parse::<Ipv6Addr>().unwrap().octets())));
+        // family mismatch (v6 source, v4 nat) → InvalidArgument.
+        let bad = add_nat_source(
+            &mut c,
+            &pb::AddNatSourceRequest {
+                vni: 7,
+                source_ip: "fd00::9".into(),
+                nat_ip: "198.51.100.7".into(),
+                port_min: 1024,
+                port_max: 2048,
+            },
+        );
+        assert_eq!(bad.unwrap_err().code(), tonic::Code::InvalidArgument);
     }
 
     #[test]

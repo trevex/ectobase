@@ -5,10 +5,11 @@ use aya::maps::{
 };
 use aya::Ebpf;
 use flowplane_common::{
-    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey,
-    IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbBackend, LbKey, LbValue,
-    Local, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry, PortMeta, RouteLpmData,
-    RouteLpmData6, RouteValue, UnderlayValue, VipKey,
+    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey,
+    IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbBackend, LbKey,
+    LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry,
+    NeighborNatEntry, PortMeta, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue, VipKey,
+    VipKey6,
 };
 
 /// Typed handle over the `INTERFACES` BPF map (overlay (VNI, IPv4) -> delivery info).
@@ -423,6 +424,61 @@ impl Nat {
     }
 }
 
+/// Typed handle over the `NAT6` BPF map ((vni, guest ipv6) -> NAT66 config). v6 mirror of [`Nat`].
+pub struct Nat6 {
+    map: HashMap<MapData, NatKey6, NatValue6>,
+}
+
+impl Nat6 {
+    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
+        let map = HashMap::try_from(ebpf.take_map("NAT6").context("NAT6 map missing")?)?;
+        Ok(Self { map })
+    }
+
+    pub fn upsert(&mut self, key: NatKey6, val: NatValue6) -> anyhow::Result<()> {
+        self.map.insert(key, val, 0).context("insert nat6")
+    }
+
+    pub fn remove(&mut self, key: &NatKey6) -> anyhow::Result<()> {
+        self.map.remove(key).context("remove nat6")
+    }
+
+    pub fn get(&self, key: &NatKey6) -> Option<NatValue6> {
+        self.map.get(key, 0).ok()
+    }
+}
+
+/// Typed handle over the `NAT_CT6` BPF map (LRU hash, `CtKey6` -> `CtEntry6`) — the dedicated NAT66
+/// conntrack. Held by the control plane so a NAT66 teardown can flush the guest's entries (the map
+/// otherwise only auto-evicts via LRU).
+pub struct NatCt6 {
+    map: HashMap<MapData, CtKey6, CtEntry6>,
+}
+
+impl NatCt6 {
+    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
+        let map = HashMap::try_from(ebpf.take_map("NAT_CT6").context("NAT_CT6 map missing")?)?;
+        Ok(Self { map })
+    }
+
+    /// Adopt a previously-pinned NAT_CT6 map (HA restart). NAT_CT6 is `BPF_MAP_TYPE_LRU_HASH`.
+    pub fn from_pin(path: &str) -> anyhow::Result<Self> {
+        use aya::maps::Map;
+        let map_data = aya::maps::MapData::from_pin(path).context("open pinned NAT_CT6")?;
+        let map = HashMap::try_from(Map::LruHashMap(map_data))?;
+        Ok(Self { map })
+    }
+
+    pub fn remove(&mut self, key: &CtKey6) -> anyhow::Result<()> {
+        self.map.remove(key).context("remove nat_ct6")
+    }
+
+    /// Snapshot all (key, entry) pairs (used by the NAT66 teardown flush).
+    pub fn entries(&self) -> Vec<(CtKey6, CtEntry6)> {
+        self.map.iter().filter_map(|r| r.ok()).collect()
+    }
+}
+
 /// Typed handle over the `FW_RULES` BPF map ((ifindex, slot) -> rule).
 pub struct FwRules {
     map: HashMap<MapData, FwRuleKey, FwRule>,
@@ -542,6 +598,26 @@ impl NeighborNat {
     }
 }
 
+/// Typed handle over the `NEIGHBOR_NAT6` BPF map (slot index -> NeighborNat6Entry). v6 mirror of
+/// [`NeighborNat`].
+pub struct NeighborNat6 {
+    map: HashMap<MapData, u32, NeighborNat6Entry>,
+}
+
+impl NeighborNat6 {
+    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
+        let map = HashMap::try_from(
+            ebpf.take_map("NEIGHBOR_NAT6")
+                .context("NEIGHBOR_NAT6 map missing")?,
+        )?;
+        Ok(Self { map })
+    }
+
+    pub fn upsert(&mut self, idx: u32, val: NeighborNat6Entry) -> anyhow::Result<()> {
+        self.map.insert(idx, val, 0).context("insert neighbor_nat6")
+    }
+}
+
 /// Typed handle over the `METER` BPF map (ifindex -> per-interface token bucket state).
 pub struct Meter {
     map: HashMap<MapData, u32, MeterState>,
@@ -587,6 +663,31 @@ impl NatIps {
     }
 }
 
+/// Typed handle over the `NAT_IPS6` BPF map ((vni, nat_ipv6) -> 1u8). v6 mirror of [`NatIps`],
+/// keyed by [`VipKey6`]; marks NAT66 nat_ips for the ingress NAT-return demux (`is_nat_ip6`).
+pub struct NatIps6 {
+    map: HashMap<MapData, VipKey6, u8>,
+}
+
+impl NatIps6 {
+    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
+        let map = HashMap::try_from(ebpf.take_map("NAT_IPS6").context("NAT_IPS6 map missing")?)?;
+        Ok(Self { map })
+    }
+
+    pub fn set(&mut self, vni: u32, nat_ip: [u8; 16]) -> anyhow::Result<()> {
+        self.map
+            .insert(VipKey6 { vni, ipv6: nat_ip }, 1u8, 0)
+            .context("insert nat_ip6")
+    }
+
+    pub fn remove(&mut self, vni: u32, nat_ip: [u8; 16]) -> anyhow::Result<()> {
+        self.map
+            .remove(&VipKey6 { vni, ipv6: nat_ip })
+            .context("remove nat_ip6")
+    }
+}
+
 /// Typed handle over the single-entry `NEIGHBOR_NAT_COUNT` Array map.
 pub struct NeighborNatCount {
     map: Array<MapData, u32>,
@@ -605,6 +706,28 @@ impl NeighborNatCount {
         self.map
             .set(0, count, 0)
             .context("write NEIGHBOR_NAT_COUNT[0]")
+    }
+}
+
+/// Typed handle over the single-entry `NEIGHBOR_NAT6_COUNT` Array map. v6 mirror of
+/// [`NeighborNatCount`].
+pub struct NeighborNat6Count {
+    map: Array<MapData, u32>,
+}
+
+impl NeighborNat6Count {
+    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
+        let map = Array::try_from(
+            ebpf.take_map("NEIGHBOR_NAT6_COUNT")
+                .context("NEIGHBOR_NAT6_COUNT map missing")?,
+        )?;
+        Ok(Self { map })
+    }
+
+    pub fn set(&mut self, count: u32) -> anyhow::Result<()> {
+        self.map
+            .set(0, count, 0)
+            .context("write NEIGHBOR_NAT6_COUNT[0]")
     }
 }
 

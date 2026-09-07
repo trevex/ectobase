@@ -2,8 +2,9 @@
 //! used in tests) implement this; `ControlCore` programs maps only through it.
 use flowplane_common::{
     DhcpConfig, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey,
-    IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatValue,
-    NeighborNatEntry, PortMeta, RouteValue, UnderlayValue, VipKey,
+    IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatKey6,
+    NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue, UnderlayValue,
+    VipKey,
 };
 
 /// The set of conntrack entries a NAT teardown must invalidate; the eBPF writer flushes the
@@ -13,6 +14,17 @@ pub struct CtFlushScope {
     pub vni: u32,
     pub guest_ip: [u8; 4],
     pub nat_ip: [u8; 4],
+    pub port_min: u16,
+    pub port_max: u16,
+}
+
+/// The v6 sibling of [`CtFlushScope`] — invalidates the matching `NAT_CT6` entries on a NAT66
+/// teardown. `[u8; 16]` guest/nat addresses; ports unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CtFlushScope6 {
+    pub vni: u32,
+    pub guest_ip6: [u8; 16],
+    pub nat_ip6: [u8; 16],
     pub port_min: u16,
     pub port_max: u16,
 }
@@ -43,6 +55,15 @@ pub trait MapWriter {
     fn nat_ips_remove(&mut self, vni: u32, nat_ip: [u8; 4]) -> anyhow::Result<()>;
     fn neigh_nat_upsert(&mut self, idx: u32, val: NeighborNatEntry) -> anyhow::Result<()>;
     fn neigh_nat_count_set(&mut self, count: u32) -> anyhow::Result<()>;
+    // NAT66 (v6) write surface — sibling of the v4 nat methods above. No defaults: a silently
+    // no-op'd v6 NAT would fail OPEN (leak the guest source v6), so every backend implements these.
+    fn nat6_upsert(&mut self, key: NatKey6, val: NatValue6) -> anyhow::Result<()>;
+    fn nat6_remove(&mut self, key: &NatKey6) -> anyhow::Result<()>;
+    fn nat6_get(&self, key: &NatKey6) -> Option<NatValue6>;
+    fn nat_ips6_set(&mut self, vni: u32, nat_ip: [u8; 16]) -> anyhow::Result<()>;
+    fn nat_ips6_remove(&mut self, vni: u32, nat_ip: [u8; 16]) -> anyhow::Result<()>;
+    fn neigh_nat6_upsert(&mut self, idx: u32, val: NeighborNat6Entry) -> anyhow::Result<()>;
+    fn neigh_nat6_count_set(&mut self, count: u32) -> anyhow::Result<()>;
     fn lb_upsert(&mut self, key: LbKey, val: LbValue) -> anyhow::Result<()>;
     fn lb_remove(&mut self, key: &LbKey) -> anyhow::Result<()>;
     fn maglev_upsert(&mut self, key: MaglevKey, val: LbBackend) -> anyhow::Result<()>;
@@ -81,6 +102,8 @@ pub trait MapWriter {
     fn vips_remove(&mut self, key: &VipKey) -> anyhow::Result<()>;
     fn vips_get(&self, key: &VipKey) -> Option<[u8; 4]>;
     fn conntrack_flush(&mut self, scope: CtFlushScope) -> anyhow::Result<()>;
+    /// v6 sibling of `conntrack_flush` — flush the `NAT_CT6` entries for a NAT66 teardown.
+    fn conntrack6_flush(&mut self, scope: CtFlushScope6) -> anyhow::Result<()>;
     /// Flush ALL conntrack entries for a DETACHED interface's guest IPs — every v4 CONNTRACK entry
     /// whose key vni matches and whose src OR dst is `guest_ip`, and every v6 CONNTRACK6 entry
     /// matching `guest_ip6` (skipped when all-zero). Called on interface teardown so a later

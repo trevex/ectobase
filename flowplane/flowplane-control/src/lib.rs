@@ -11,7 +11,7 @@ pub mod shadow;
 pub mod writer;
 
 pub use interface::{meter_state, IfaceParams};
-pub use writer::{CtFlushScope, MapWriter};
+pub use writer::{CtFlushScope, CtFlushScope6, MapWriter};
 
 /// Backend-agnostic control-plane state + programming, generic over the map write surface.
 /// Holds the config shadow + interface metadata the agnostic ops need; programs maps via `W`.
@@ -28,6 +28,8 @@ pub struct ControlCore<W: MapWriter> {
     pub(crate) lbs: std::collections::HashMap<Vec<u8>, shadow::LbEntry>,
     pub(crate) next_table_id: u32,
     pub(crate) neigh_nats: Vec<flowplane_common::NeighborNatEntry>,
+    // NAT66 neighbor-return vec — v6 sibling of `neigh_nats`, drives the NEIGHBOR_NAT6 reprogram.
+    pub(crate) neigh_nats6: Vec<flowplane_common::NeighborNat6Entry>,
     // FIREWALL domain: ifindex -> ordered (rule_id, rule) pairs. Drives the FW_RULES /
     // FW_META reprogram. The eBPF `detach_interface` drops an interface's shadow entry via
     // `remove_fw_rules`.
@@ -47,6 +49,7 @@ impl<W: MapWriter> ControlCore<W> {
             lbs: std::collections::HashMap::new(),
             next_table_id: 1,
             neigh_nats: Vec::new(),
+            neigh_nats6: Vec::new(),
             fw: std::collections::HashMap::new(),
             fw6: std::collections::HashMap::new(),
         }
@@ -83,6 +86,15 @@ impl<W: MapWriter> ControlCore<W> {
         self.ifaces_meta
             .iter()
             .find(|(_, m)| m.vni == vni && m.ipv4 == ipv4)
+            .map(|(id, _)| id.clone())
+    }
+    /// v6 sibling of [`find_iface_by_vni_ipv4`] — resolve an interface id from `(vni, ipv6)`, for the
+    /// NAT66 handler path. Returns the FIRST matching id, or `None`.
+    #[must_use]
+    pub fn find_iface_by_vni_ipv6(&self, vni: u32, ipv6: [u8; 16]) -> Option<Vec<u8>> {
+        self.ifaces_meta
+            .iter()
+            .find(|(_, m)| m.vni == vni && m.ipv6 == ipv6)
             .map(|(id, _)| id.clone())
     }
     /// Snapshot the registered interface metadata as `(id, vni, ipv4, ipv6, underlay, ifindex)` rows.
