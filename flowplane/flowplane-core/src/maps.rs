@@ -1,7 +1,7 @@
 use flowplane_common::{
-    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrVip, FwMeta, FwRule, FwRuleKey, IfaceValue,
-    LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, PortMeta,
-    RouteValue, UnderlayValue,
+    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrVip, FwMeta, FwRule, FwRuleKey,
+    IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6, NatValue,
+    NatValue6, PortMeta, RouteValue, UnderlayValue,
 };
 
 /// Typed access to the datapath maps the core needs. eBPF impl wraps the `#[map]` statics
@@ -69,6 +69,27 @@ pub trait Maps {
     /// peer-independently: when the inner dst is a registered nat_ip, the external src ip+port are
     /// zeroed so the CT lookup hits the globally-unique `(vni,0,nat_ip,0,nat_port)` reverse entry.
     fn is_nat_ip(&self, vni: u32, ip: &[u8; 4]) -> bool;
+
+    // --- NAT66 (v6 network SNAT) — v6 siblings of the above. Default impls so non-NAT66 Maps
+    // impls compile unchanged; the sim + eBPF override them. Dedicated `NAT_CT6` conntrack (the v4
+    // `CtEntry.xlate_ip` is v4-only) keyed by `CtKey6`.
+    fn nat_get6(&self, _key: &NatKey6) -> Option<NatValue6> {
+        None
+    }
+    fn is_nat_ip6(&self, _vni: u32, _ip: &[u8; 16]) -> bool {
+        false
+    }
+    fn neighbor_nat_lookup6(&self, _vni: u32, _dst: [u8; 16], _dport: u16) -> Option<[u8; 16]> {
+        None
+    }
+    fn neighbor_nat_lookup_any6(&self, _dst: [u8; 16], _dport: u16) -> Option<([u8; 16], u32)> {
+        None
+    }
+    fn nat_ct6_get(&self, _key: &CtKey6) -> Option<CtEntry6> {
+        None
+    }
+    fn nat_ct6_insert(&mut self, _key: CtKey6, _entry: CtEntry6) {}
+
     /// Exact-match (`/32`) route lookup for an inner IPv4 dst in a VNI (`ROUTES` LPM trie, queried at
     /// prefix_len 64 = 32 VNI bits + 32 host bits — the same lookup the eBPF egress does).
     fn route4_get(&self, vni: u32, dst: &[u8; 4]) -> Option<RouteValue>;

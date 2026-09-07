@@ -258,7 +258,7 @@ pub fn ct_apply<P: Pkt>(pkt: &mut P, ip_off: usize, e: &CtEntry) {
 /// the address's 4-byte words. IPv6 has no IP-header checksum (unlike v4's `ct_apply`), so the
 /// whole address delta must be folded into the TCP/UDP checksum instead.
 #[inline(always)]
-fn csum_replace16(check: u16, old: &[u8; 16], new: &[u8; 16]) -> u16 {
+pub fn csum_replace16(check: u16, old: &[u8; 16], new: &[u8; 16]) -> u16 {
     let mut c = check;
     let mut i = 0;
     while i < 16 {

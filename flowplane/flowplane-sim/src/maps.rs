@@ -1,7 +1,7 @@
 use flowplane_common::{
-    CtEntry, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrVip, FwMeta, FwRule, FwRuleKey, IfaceValue,
-    LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue, NeighborNatEntry,
-    PortMeta, RouteValue, UnderlayValue,
+    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrVip, FwMeta, FwRule, FwRuleKey,
+    IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6, NatValue,
+    NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
 use std::collections::{HashMap, HashSet};
@@ -55,6 +55,15 @@ pub struct MemMaps {
     /// `Maps::neighbor_nat_lookup`. Tests populate directly (`m.neighbor_nat.push(..)`), mirroring
     /// how `m.lb`/`m.maglev` are seeded.
     pub neighbor_nat: Vec<NeighborNatEntry>,
+    /// NAT66 (v6 network SNAT) config (`NAT6` map), keyed `(vni, guest-ipv6)`.
+    pub nat6: HashMap<NatKey6, NatValue6>,
+    /// Registered NAT66 public source IPs (`NAT_IPS6`), keyed `(vni, ipv6)` — v6 sibling of `nat_ips`.
+    pub nat_ips6: HashSet<(u32, [u8; 16])>,
+    /// Dedicated NAT66 conntrack (`NAT_CT6`), fwd + reverse xlate — the v4 `conntrack`'s xlate is
+    /// v4-only, so v6 NAT gets its own CtKey6->CtEntry6 map.
+    pub nat_ct6: HashMap<CtKey6, CtEntry6>,
+    /// NAT66 neighbor-NAT return table (`NEIGHBOR_NAT6`), v6 sibling of `neighbor_nat`.
+    pub neighbor_nat6: Vec<NeighborNat6Entry>,
     pub routes4: Vec<Route4>,
     pub routes6: Vec<Route6>,
     /// Server-wide DHCP config (`DHCP_CONFIG[0]`): MTU + DNS lists.
@@ -200,6 +209,39 @@ impl Maps for MemMaps {
     }
     fn is_nat_ip(&self, vni: u32, ip: &[u8; 4]) -> bool {
         self.nat_ips.contains(&(vni, *ip))
+    }
+    // NAT66 (v6) — mirror the v4 filters exactly.
+    fn nat_get6(&self, key: &NatKey6) -> Option<NatValue6> {
+        self.nat6.get(key).copied()
+    }
+    fn is_nat_ip6(&self, vni: u32, ip: &[u8; 16]) -> bool {
+        self.nat_ips6.contains(&(vni, *ip))
+    }
+    fn neighbor_nat_lookup6(&self, vni: u32, dst: [u8; 16], dport: u16) -> Option<[u8; 16]> {
+        self.neighbor_nat6
+            .iter()
+            .find(|e| {
+                e.enabled != 0
+                    && e.vni == vni
+                    && e.nat_ip6 == dst
+                    && dport >= e.port_min
+                    && dport < e.port_max
+            })
+            .map(|e| e.underlay)
+    }
+    fn neighbor_nat_lookup_any6(&self, dst: [u8; 16], dport: u16) -> Option<([u8; 16], u32)> {
+        self.neighbor_nat6
+            .iter()
+            .find(|e| {
+                e.enabled != 0 && e.nat_ip6 == dst && dport >= e.port_min && dport < e.port_max
+            })
+            .map(|e| (e.underlay, e.vni))
+    }
+    fn nat_ct6_get(&self, key: &CtKey6) -> Option<CtEntry6> {
+        self.nat_ct6.get(key).copied()
+    }
+    fn nat_ct6_insert(&mut self, key: CtKey6, entry: CtEntry6) {
+        self.nat_ct6.insert(key, entry);
     }
     fn vip_get(&self, vni: u32, v: &[u8; 4]) -> Option<[u8; 4]> {
         self.vips.get(&(vni, *v)).copied()
