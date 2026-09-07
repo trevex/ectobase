@@ -63,6 +63,9 @@ func sendSniff(args []string) int {
 	// RX filter flags (candidates must match ALL set filters).
 	rxInnerIPSrc := fs.String("rx-inner-ip-src", "", "candidate filter: inner IPv4 src must match")
 	rxInnerIPDst := fs.String("rx-inner-ip-dst", "", "candidate filter: inner IPv4 dst must match")
+	rxInnerIP6Src := fs.String("rx-inner-ip6-src", "", "candidate filter: INNER IPv6 src must match (NAT66)")
+	rxInnerIP6Dst := fs.String("rx-inner-ip6-dst", "", "candidate filter: INNER IPv6 dst must match (NAT66)")
+	wantInnerIP6Src := fs.String("want-inner-ip6-src", "", "if --extract inner-ip6-src, assert it equals this addr")
 	rxL4 := fs.String("rx-l4", "", "candidate filter: require this L4 (tcp or udp)")
 	rxOuterIPv6 := fs.Bool("rx-outer-ipv6", false, "candidate filter: require an outer IPv6 layer")
 
@@ -142,6 +145,24 @@ func sendSniff(args []string) int {
 			return 2
 		}
 	}
+	// Inner-IPv6 filters (NAT66): the INNER IPv6 layer, i.e. the LAST IPv6 in the decoded stack —
+	// distinct from the OUTER Geneve/underlay IPv6 that `--rx-outer-ipv6` / `LayerTypeIPv6` sees.
+	var rxInnerSrcIP6, rxInnerDstIP6, wantInnerSrcIP6 net.IP
+	for _, p := range []struct {
+		flag, name string
+		out        *net.IP
+	}{
+		{*rxInnerIP6Src, "--rx-inner-ip6-src", &rxInnerSrcIP6},
+		{*rxInnerIP6Dst, "--rx-inner-ip6-dst", &rxInnerDstIP6},
+		{*wantInnerIP6Src, "--want-inner-ip6-src", &wantInnerSrcIP6},
+	} {
+		if p.flag != "" {
+			if *p.out = net.ParseIP(p.flag); *p.out == nil {
+				fmt.Fprintf(os.Stderr, "send-sniff: invalid %s %q\n", p.name, p.flag)
+				return 2
+			}
+		}
+	}
 
 	// ── sport range parse ─────────────────────────────────────────────────────
 	var sportMin, sportMax int
@@ -180,6 +201,18 @@ func sendSniff(args []string) int {
 		if rxInnerDstIP != nil {
 			v4, _ := pkt.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 			if v4 == nil || !v4.DstIP.Equal(rxInnerDstIP) {
+				return false
+			}
+		}
+		if rxInnerSrcIP6 != nil {
+			in6 := innerIPv6(pkt)
+			if in6 == nil || !in6.SrcIP.Equal(rxInnerSrcIP6) {
+				return false
+			}
+		}
+		if rxInnerDstIP6 != nil {
+			in6 := innerIPv6(pkt)
+			if in6 == nil || !in6.DstIP.Equal(rxInnerDstIP6) {
 				return false
 			}
 		}
@@ -272,6 +305,18 @@ func sendSniff(args []string) int {
 				}
 			}
 			fmt.Printf("OK: captured %d frame(s); inner-tcp-sport=%d\n", len(collected), val)
+		case "inner-ip6-src":
+			// NAT66 proof: the INNER IPv6 source was rewritten to the nat_ip.
+			in6 := innerIPv6(first)
+			if in6 == nil {
+				fmt.Fprintf(os.Stderr, "FAIL: --extract inner-ip6-src but first candidate has no inner IPv6 layer\n")
+				return 1
+			}
+			if wantInnerSrcIP6 != nil && !in6.SrcIP.Equal(wantInnerSrcIP6) {
+				fmt.Fprintf(os.Stderr, "FAIL: inner-ip6-src=%s, want %s\n", in6.SrcIP, wantInnerSrcIP6)
+				return 1
+			}
+			fmt.Printf("OK: captured %d frame(s); inner-ip6-src=%s\n", len(collected), in6.SrcIP)
 		default:
 			fmt.Fprintf(os.Stderr, "send-sniff: unknown --extract value %q\n", *extract)
 			return 2
@@ -281,6 +326,21 @@ func sendSniff(args []string) int {
 
 	fmt.Printf("OK: captured %d candidate frame(s) on %s\n", len(collected), rxIfaceName)
 	return 0
+}
+
+// innerIPv6 returns the INNER IPv6 header of a decoded packet: the LAST IPv6 layer in the stack.
+// For a NAT66 egress frame on the fabric uplink the stack is
+// outerEth·outerIPv6·UDP(6081)·Geneve·innerEth·innerIPv6·TCP — so `pkt.Layer(LayerTypeIPv6)` returns
+// the OUTER (underlay) header, while this returns the overlay/inner one the SNAT rewrote. Returns nil
+// if the packet has no IPv6 layer (e.g. not yet decoded through Geneve).
+func innerIPv6(pkt gopacket.Packet) *layers.IPv6 {
+	var inner *layers.IPv6
+	for _, l := range pkt.Layers() {
+		if v6, ok := l.(*layers.IPv6); ok {
+			inner = v6
+		}
+	}
+	return inner
 }
 
 // craftFrame builds a serialized Ethernet frame from the given parameters.
