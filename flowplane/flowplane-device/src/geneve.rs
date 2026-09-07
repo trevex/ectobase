@@ -47,36 +47,51 @@ pub fn geneve_add_args(name: &str) -> Vec<String> {
 /// Either way the MAC is stamped AFTER `up` and unconditionally (see below). Reuses `geneve_add_args`
 /// so the tested arg vector is exactly what gets shelled.
 pub fn ensure_geneve_dev(name: &str, gateway_mac: [u8; 6]) -> Result<GeneveDev> {
-    let macs = crate::veth::fmt_mac(gateway_mac);
     // CONFIRM (already the gateway MAC) vs RECREATE (absent / mis-MAC'd / random). The confirm path
-    // preserves the surviving device's pinned datapath links for a zero-gap adopt.
-    let recreated = if link_exists(name) && mac_of(name).map(|m| m == gateway_mac).unwrap_or(false)
-    {
-        false
-    } else {
-        delete_geneve_dev(name)?;
-        let mut argv: Vec<String> = vec!["ip".into()];
-        argv.extend(geneve_add_args(name));
-        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
-        run(&argv).with_context(|| format!("create geneve dev {name}"))?;
-        true
-    };
-    // Bring up FIRST, then stamp the MAC — and stamp it UNCONDITIONALLY (idempotent on the confirm
-    // path). The kernel `collect_md` geneve device carries INNER ETHERNET (TEB) and runs
-    // `eth_type_trans` on decap: an overlay->WAN reply (e.g. a DSR reverse-SNAT src->VIP) arrives with
-    // inner dst MAC = the gateway MAC, so the device MAC MUST equal it or `ip6_rcv_core` drops it
-    // `PACKET_OTHERHOST` before it can be forwarded/local-delivered (backends never hit this —
-    // `uplink_rx` bpf_redirects at the tc-ingress hook, BEFORE that check; only the edge's kernel
-    // local-deliver does). CRUCIAL ordering: a geneve device can regenerate its link address on `up`,
-    // silently overriding a pre-`up` stamp (observed live — one anycast edge kept a random MAC and
-    // black-holed the DSR return); stamping AFTER `up` sticks. `setmac`-while-up on a geneve device is
-    // link-safe (does NOT sever tc links, verified live), so this is safe on the confirm path too.
-    run(&["ip", "link", "set", name, "up"]).with_context(|| format!("geneve dev {name} up"))?;
-    run(&["ip", "link", "set", name, "address", &macs])
-        .with_context(|| format!("set geneve dev {name} mac"))?;
+    // preserves the surviving device's pinned datapath links for a zero-gap adopt — its MAC is already
+    // the gateway MAC, so nothing to (re)stamp; just make sure it is up.
+    if link_exists(name) && mac_of(name).map(|m| m == gateway_mac).unwrap_or(false) {
+        run(&["ip", "link", "set", name, "up"]).with_context(|| format!("geneve dev {name} up"))?;
+        return Ok(GeneveDev {
+            ifindex: ifindex_of(name)?,
+            recreated: false,
+        });
+    }
+    // RECREATE: absent / mis-MAC'd. Fresh device, so no pinned tc links yet — safe to toggle down/up.
+    delete_geneve_dev(name)?;
+    let mut argv: Vec<String> = vec!["ip".into()];
+    argv.extend(geneve_add_args(name));
+    let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+    run(&argv).with_context(|| format!("create geneve dev {name}"))?;
+    // Stamp the gateway MAC, then verify-and-RETRY. The kernel `collect_md` geneve device carries
+    // INNER ETHERNET (TEB) and runs `eth_type_trans` on decap: an overlay->WAN reply (a DSR
+    // reverse-SNAT src->VIP) arrives with inner dst MAC = the gateway MAC, so the device MAC MUST equal
+    // it or `ip6_rcv_core` drops it `PACKET_OTHERHOST` before eth3 egress (backends never hit this —
+    // `uplink_rx` bpf_redirects at the tc-ingress hook, before that check; only the edge's kernel
+    // local-deliver does). The stamp is RACY at bring-up — a geneve device intermittently keeps its
+    // random link address regardless of set-before-up OR set-after-up ordering (observed live: one
+    // anycast edge black-holed the DSR return with a random MAC while its peer, same binary, was fine).
+    // So set-with-the-device-DOWN (the canonical reliable way), bring up, read back, and retry a few
+    // times; a post-boot quiescent set always sticks, so a bounded retry converges.
+    let macs = crate::veth::fmt_mac(gateway_mac);
+    let mut stamped = false;
+    for _ in 0..5 {
+        let _ = run(&["ip", "link", "set", name, "down"]);
+        run(&["ip", "link", "set", name, "address", &macs])
+            .with_context(|| format!("set geneve dev {name} mac"))?;
+        run(&["ip", "link", "set", name, "up"]).with_context(|| format!("geneve dev {name} up"))?;
+        if mac_of(name).map(|m| m == gateway_mac).unwrap_or(false) {
+            stamped = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if !stamped {
+        anyhow::bail!("geneve dev {name} MAC did not stick as {macs} after retries");
+    }
     Ok(GeneveDev {
         ifindex: ifindex_of(name)?,
-        recreated,
+        recreated: true,
     })
 }
 
