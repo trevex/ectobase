@@ -8,42 +8,13 @@ use flowplane_core::pkt::Action;
 
 use crate::SimNode;
 
-// DEVIATION from the given spec (see task self-review): `process_uplink`'s shared LB local-delivery
-// arm is gated by the ingress firewall's default-deny (`fw_eval_dir`: `count == 0` => DROP) exactly
-// like any other LB backend (see `lb_scenario_test.rs`'s `apply_fw`/`allow_from_any_443` — this is
-// pre-existing, deliberate behaviour, unrelated to F3). The relay's LOCAL-delivery tests below must
-// therefore seed an explicit ingress allow-all on the backend tap, or every relayed packet is
-// dropped by the firewall before the relay selection can be observed. The two REMOTE-delivery tests
-// (`icmp_error_selects_on_embedded_inner_not_outer`, the embedded-ICMP arm of the last test) return
-// via `reforward()` before the firewall check runs, so they need no such seeding.
-fn allow_ingress_all(n: &mut SimNode, tap: u32) {
-    n.maps.fw_meta.insert(
-        tap,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    n.maps.fw_rules.insert(
-        (tap, 0),
-        FwRule {
-            src_ip: [0, 0, 0, 0],
-            src_mask: [0, 0, 0, 0],
-            dst_ip: [0, 0, 0, 0],
-            dst_mask: [0, 0, 0, 0],
-            src_port_min: 0,
-            src_port_max: 65535,
-            dst_port_min: 0,
-            dst_port_max: 65535,
-            icmp_type: 0xffff,
-            icmp_code: 0xffff,
-            proto: 0,
-            action: 1,
-            direction: 0,
-            enabled: 1,
-        },
-    );
-}
+// PMTUD fix (see `process_uplink`'s `is_icmp_relay` exemption): the ICMP-error relay arm is now EXEMPT
+// from the backend's ingress firewall, so the LOCAL-delivery relay tests below deliver regardless of the
+// backend policy — they seed NO ingress allow-all (an earlier revision had to, because the relayed error
+// was evaluated on its OUTER ICMP tuple and dropped by the default-deny). `icmp_error_relayed_through_
+// realistic_backend_firewall` proves the exemption survives a realistic restrictive policy; the plain
+// LOCAL tests run with no firewall at all. The REMOTE-delivery tests return via `reforward()` before the
+// firewall check regardless.
 
 const VNI: u32 = 100;
 const VIP: [u8; 4] = [203, 0, 113, 50];
@@ -207,7 +178,6 @@ fn icmp_error_to_vip_relays_to_backend() {
             _pad: [0; 1],
         },
     );
-    allow_ingress_all(&mut n, BACKEND_A_TAP); // see DEVIATION note above
 
     let frame = eth_icmp_error_embedding_vip_flow(3, 6); // dest-unreach, embedded TCP
     let orig = frame.clone();
@@ -224,6 +194,94 @@ fn icmp_error_to_vip_relays_to_backend() {
         &out.pkt[14..],
         &orig[14..],
         "ICMP-error IP payload relayed byte-unchanged"
+    );
+}
+
+/// A REALISTIC backend ingress policy: allow only TCP/`SERVICE_PORT` from anywhere (`ingress_count = 1`
+/// so the default-deny is armed). This does NOT match the relayed ICMP error's OUTER tuple (proto = 1),
+/// so before the PMTUD fix the relayed error was dropped here; after it, the relay arm is exempt.
+fn allow_ingress_tcp_service_port(n: &mut SimNode, tap: u32) {
+    n.maps.fw_meta.insert(
+        tap,
+        FwMeta {
+            ingress_count: 1,
+            egress_count: 0,
+        },
+    );
+    n.maps.fw_rules.insert(
+        (tap, 0),
+        FwRule {
+            src_ip: [0, 0, 0, 0],
+            src_mask: [0, 0, 0, 0],
+            dst_ip: [0, 0, 0, 0],
+            dst_mask: [0, 0, 0, 0],
+            src_port_min: 0,
+            src_port_max: 65535,
+            dst_port_min: SERVICE_PORT,
+            dst_port_max: SERVICE_PORT,
+            icmp_type: 0xffff,
+            icmp_code: 0xffff,
+            proto: 6,
+            action: 1,
+            direction: 0,
+            enabled: 1,
+        },
+    );
+}
+
+/// Build the size-1 self-select local-backend node used by the LOCAL-delivery relay tests, WITHOUT any
+/// firewall seeding (each caller seeds its own). Self-select: `LOCAL_UL == local()`'s underlay, so the
+/// LB arm takes the local-delivery branch and resolves the tap via `INTERFACES[(vni, overlay)]`.
+fn local_backend_node(inner_proto: u8, table_id: u32) -> SimNode {
+    let mut n = SimNode::with_local(local());
+    n.maps.lb.insert(
+        LbKey {
+            vni: VNI,
+            ipv4: VIP,
+            port: SERVICE_PORT,
+            proto: inner_proto,
+            _pad: 0,
+        },
+        LbValue { table_id, size: 1 },
+    );
+    n.maps.maglev.insert(
+        MaglevKey { table_id, slot: 0 },
+        LbBackend {
+            node_vtep: LOCAL_UL,
+            overlay_ip: v4_in_16(BACKEND_A_OVERLAY_IP),
+            vni: VNI,
+            is_v6: 0,
+            _pad: [0; 3],
+        },
+    );
+    n.maps.add_iface(
+        VNI,
+        BACKEND_A_OVERLAY_IP,
+        IfaceValue {
+            tap_ifindex: BACKEND_A_TAP,
+            is_local: 1,
+            underlay_ipv6: LOCAL_UL,
+            guest_mac: [7; 6],
+            peer_capable: 0,
+            _pad: [0; 1],
+        },
+    );
+    n
+}
+
+#[test]
+fn icmp_error_relayed_through_realistic_backend_firewall() {
+    // PMTUD fix: a relayed ICMP error is EXEMPT from the backend's ingress firewall. Seed a realistic
+    // "allow TCP/443 from any" backend policy — it does NOT match the relayed error's OUTER ICMP tuple
+    // (proto = 1), so before the fix this dropped (blackholing PMTUD/dest-unreachable feedback). The
+    // relay arm now bypasses step 2, so the error reaches the backend that owns the embedded flow.
+    let mut n = local_backend_node(6, 9);
+    allow_ingress_tcp_service_port(&mut n, BACKEND_A_TAP);
+    let frame = eth_icmp_error_embedding_vip_flow(3, 6); // dest-unreach, embedded TCP
+    assert_eq!(
+        n.uplink(&frame, VNI, &local()).action,
+        Action::Redirect(BACKEND_A_TAP),
+        "relayed ICMP error must bypass the backend ingress firewall (PMTUD reaches the backend)"
     );
 }
 
@@ -308,7 +366,6 @@ fn icmp_error_embedded_udp_relayed_but_icmp_embedded_not() {
             _pad: [0; 1],
         },
     );
-    allow_ingress_all(&mut relayed, BACKEND_A_TAP); // see DEVIATION note above
     let udp_frame = eth_icmp_error_embedding_vip_flow(3, 17);
     assert_eq!(
         relayed.uplink(&udp_frame, VNI, &local()).action,

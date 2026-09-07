@@ -309,8 +309,17 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
     //    its EMBEDDED flow's backend, not the (mis-hashed) outer ICMP tuple. Everything else — incl.
     //    a normal ICMP echo to a VIP — falls through to the plain select (echo load-balances to a
     //    backend; it is NOT answered by the dataplane).
-    let lb_ul = lb_select_forward_icmp_error(&*pkt, &*maps, inner_off, in_.vni)
-        .or_else(|| lb_select_forward(&*pkt, &*maps, inner_off, in_.vni));
+    // The ICMP-error relay result is captured separately so step 2 below can EXEMPT it from the ingress
+    // firewall (PMTUD fix): the relayed error carries an OUTER ICMP tuple (src = erroring router, proto
+    // = ICMP), which a typical backend policy ("allow TCP/443 from any") never matches, so the shared
+    // default-deny would blackhole PMTUD / dest-unreachable feedback. LB is DSR/stateless-firewalled
+    // (no conntrack RELATED state to consult), so the relay arm is exempted wholesale — mirroring how a
+    // stateful firewall admits an ICMP error embedding a tracked flow. The relay only ever fires for an
+    // error whose EMBEDDED src is a real LB VIP with a live backend, so the surface is an ICMP error
+    // delivered to the backend that owns that flow, which its own IP stack still validates.
+    let icmp_relay = lb_select_forward_icmp_error(&*pkt, &*maps, inner_off, in_.vni);
+    let is_icmp_relay = icmp_relay.is_some();
+    let lb_ul = icmp_relay.or_else(|| lb_select_forward(&*pkt, &*maps, inner_off, in_.vni));
     let (tap, guest_mac, is_lb, peer_capable) = match lb_ul {
         Some(be) => {
             if be.node_vtep == in_.local.underlay_ipv6 {
@@ -411,8 +420,10 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
         }
     };
 
-    // 2. Ingress firewall on NEW inbound flows against the deliver tap.
-    if uplink_ingress_firewall_drop(&*pkt, maps, inner_off, in_.vni, tap) {
+    // 2. Ingress firewall on NEW inbound flows against the deliver tap. EXEMPT the ICMP-error relay
+    //    (PMTUD fix — see the `is_icmp_relay` capture above): the relayed error's outer ICMP tuple would
+    //    never match the backend's L4 policy, so evaluating it here blackholes PMTUD feedback.
+    if !is_icmp_relay && uplink_ingress_firewall_drop(&*pkt, maps, inner_off, in_.vni, tap) {
         return UplinkOut {
             action: Action::Drop,
             tunnel: None,
@@ -545,8 +556,13 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
     //    ICMPv6 error destined to a VIP must follow its EMBEDDED flow's backend, not the (mis-hashed)
     //    outer ICMPv6 tuple. Everything else — incl. a normal ICMPv6 echo to a VIP — falls through to
     //    the plain v6 select (echo load-balances to a backend; it is NOT answered by the dataplane).
-    let lb_ul = lb_select_forward_icmp_error_v6(&*pkt, &*maps, inner_off, in_.vni)
-        .or_else(|| lb_select_forward_v6(&*pkt, &*maps, inner_off, in_.vni));
+    // ICMPv6-error relay captured separately so step 2 can EXEMPT it from the ingress firewall (PMTUD
+    // fix — v6 sibling of `process_uplink`'s `is_icmp_relay`): the relayed error's outer ICMPv6 tuple
+    // (nexthdr = 58) never matches a backend's TCP/UDP policy, so the shared default-deny would
+    // blackhole the ICMPv6 Packet-Too-Big PMTUD feedback. Same DSR/stateless-firewall rationale as v4.
+    let icmp_relay = lb_select_forward_icmp_error_v6(&*pkt, &*maps, inner_off, in_.vni);
+    let is_icmp_relay = icmp_relay.is_some();
+    let lb_ul = icmp_relay.or_else(|| lb_select_forward_v6(&*pkt, &*maps, inner_off, in_.vni));
     let (tap, guest_mac, is_lb, peer_capable) = match lb_ul {
         Some(be) => {
             if be.node_vtep == in_.local.underlay_ipv6 {
@@ -621,8 +637,12 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
 
     // 2. Ingress firewall on NEW inbound flows against the deliver tap. SKIPPED for a NAT66 return
     //    (it is the reply to an already-egress-firewalled guest flow — mirrors the v4 nat-return path,
-    //    which bypasses the ingress firewall).
-    if !is_nat_return && uplink_ingress_firewall_drop6(&*pkt, maps, inner_off, in_.vni, tap) {
+    //    which bypasses the ingress firewall) AND for the ICMPv6-error relay (PMTUD fix — see the
+    //    `is_icmp_relay` capture above; the relayed error's outer ICMPv6 tuple never matches L4 policy).
+    if !is_nat_return
+        && !is_icmp_relay
+        && uplink_ingress_firewall_drop6(&*pkt, maps, inner_off, in_.vni, tap)
+    {
         return UplinkOut {
             action: Action::Drop,
             tunnel: None,

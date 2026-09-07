@@ -9,40 +9,12 @@ use flowplane_core::pkt::Action;
 
 use crate::SimNode;
 
-// DEVIATION (identical to the v4 `icmp_error_relay_test.rs` note): `process_uplink_v6`'s shared LB
-// local-delivery arm is gated by the ingress firewall's default-deny (`fw_eval_dir`: `count == 0` =>
-// DROP) exactly like any other LB backend. The relay's LOCAL-delivery tests below must therefore seed
-// an explicit ingress allow-all on the backend tap, or every relayed packet is dropped by the firewall
-// before the relay selection can be observed. The REMOTE-delivery tests return via `reforward()` before
-// the firewall check runs, so they need no such seeding.
-fn allow_ingress_all6(n: &mut SimNode, tap: u32) {
-    n.maps.fw_meta6.insert(
-        tap,
-        FwMeta {
-            ingress_count: 1,
-            egress_count: 0,
-        },
-    );
-    n.maps.fw_rules6.insert(
-        (tap, 0),
-        FwRule6 {
-            src_ip: [0; 16],
-            src_mask: [0; 16],
-            dst_ip: [0; 16],
-            dst_mask: [0; 16],
-            src_port_min: 0,
-            src_port_max: 65535,
-            dst_port_min: 0,
-            dst_port_max: 65535,
-            icmp_type: 0xffff,
-            icmp_code: 0xffff,
-            proto: 0,
-            action: 1,
-            direction: 0,
-            enabled: 1,
-        },
-    );
-}
+// PMTUD fix (see `process_uplink_v6`'s `is_icmp_relay` exemption, v6 sibling of the v4 note): the
+// ICMPv6-error relay arm is now EXEMPT from the backend's ingress firewall, so the LOCAL-delivery relay
+// tests below deliver regardless of the backend policy and seed NO ingress allow-all. `icmpv6_error_
+// relayed_through_realistic_backend_firewall` proves the exemption survives a realistic restrictive
+// policy; the plain LOCAL tests run with no firewall at all. The REMOTE-delivery tests return via
+// `reforward()` before the firewall check regardless.
 
 const VNI: u32 = 100;
 const VIP: [u8; 16] = addr6(0x50);
@@ -196,7 +168,6 @@ fn local_backend_node(inner_proto: u8, table_id: u32) -> SimNode {
             _pad: [0; 1],
         },
     );
-    allow_ingress_all6(&mut n, BACKEND_A_TAP); // see DEVIATION note above
     n
 }
 
@@ -220,6 +191,54 @@ fn icmpv6_error_to_vip_relays_to_backend() {
         &out.pkt[14..],
         &orig[14..],
         "ICMPv6-error IP payload relayed byte-unchanged"
+    );
+}
+
+/// A REALISTIC backend ingress policy: allow only TCP/`SERVICE_PORT` from anywhere (`ingress_count = 1`
+/// so the default-deny is armed). This does NOT match the relayed ICMPv6 error's OUTER tuple (nexthdr =
+/// 58), so before the PMTUD fix the relayed error was dropped here; after it, the relay arm is exempt.
+fn allow_ingress_tcp_service_port6(n: &mut SimNode, tap: u32) {
+    n.maps.fw_meta6.insert(
+        tap,
+        FwMeta {
+            ingress_count: 1,
+            egress_count: 0,
+        },
+    );
+    n.maps.fw_rules6.insert(
+        (tap, 0),
+        FwRule6 {
+            src_ip: [0; 16],
+            src_mask: [0; 16],
+            dst_ip: [0; 16],
+            dst_mask: [0; 16],
+            src_port_min: 0,
+            src_port_max: 65535,
+            dst_port_min: SERVICE_PORT,
+            dst_port_max: SERVICE_PORT,
+            icmp_type: 0xffff,
+            icmp_code: 0xffff,
+            proto: 6,
+            action: 1,
+            direction: 0,
+            enabled: 1,
+        },
+    );
+}
+
+#[test]
+fn icmpv6_error_relayed_through_realistic_backend_firewall() {
+    // PMTUD fix (v6): a relayed ICMPv6 error is EXEMPT from the backend's ingress firewall. Seed a
+    // realistic "allow TCP/443 from any" backend policy — it does NOT match the relayed error's OUTER
+    // ICMPv6 tuple (nexthdr = 58), so before the fix this dropped (blackholing the ICMPv6 Packet-Too-Big
+    // PMTUD feedback). The relay arm now bypasses step 2, so the error reaches the owning backend.
+    let mut n = local_backend_node(6, 9);
+    allow_ingress_tcp_service_port6(&mut n, BACKEND_A_TAP);
+    let frame = eth_icmp6_error_embedding_vip_flow(2, 6); // packet-too-big, embedded TCP
+    assert_eq!(
+        n.uplink_v6(&frame, VNI, &local()).action,
+        Action::Redirect(BACKEND_A_TAP),
+        "relayed ICMPv6 error must bypass the backend ingress firewall (PMTUD reaches the backend)"
     );
 }
 
