@@ -530,6 +530,7 @@ mod tests {
                 requested_ips: vec!["10.0.0.10".into()],
                 device_type: String::new(),
                 tap_name: String::new(),
+                pci_address: String::new(),
             }))
             .await
             .unwrap_err();

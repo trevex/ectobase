@@ -51,6 +51,12 @@ pub enum DeviceType {
     /// point-to-point `mirred` splice (rather than a bridge) keeps it lean — no MAC-learning / STP /
     /// flooding — and forwards regardless of L2 addressing. MAC required (same reason as `Tap`).
     PodTap,
+    /// Container/VM (SR-IOV offload): a pre-provisioned VF whose switchdev REPRESENTOR (root netns)
+    /// is the datapath device running `tc_guest_tx`; the VF itself is moved into the guest netns.
+    /// L2 with a real MAC; `peer_capable=false` (switchdev delivers the VF, no bpf_redirect_peer);
+    /// `offloaded=true` (recorded into PORT_META for the later flow-offload increment). Requires
+    /// `pci_address` in the request.
+    Vf,
 }
 
 impl DeviceType {
@@ -65,10 +71,11 @@ impl DeviceType {
             "netkit" => Ok(DeviceType::Netkit),
             "tap" => Ok(DeviceType::Tap),
             "pod-tap" => Ok(DeviceType::PodTap),
+            "vf" => Ok(DeviceType::Vf),
             other => {
                 bail!(
                     "unknown device_type {other:?} \
-                     (want \"\"/\"auto\", \"veth\", \"netkit\", \"tap\", or \"pod-tap\")"
+                     (want \"\"/\"auto\", \"veth\", \"netkit\", \"tap\", \"pod-tap\", or \"vf\")"
                 )
             }
         }
@@ -77,7 +84,7 @@ impl DeviceType {
     /// Whether this device type requires an explicit VM MAC (local delivery rewrites the frame dst to
     /// `guest_mac`, so a derived MAC would silently drop every inbound frame to the VM).
     fn requires_mac(self) -> bool {
-        matches!(self, DeviceType::Tap | DeviceType::PodTap)
+        matches!(self, DeviceType::Tap | DeviceType::PodTap | DeviceType::Vf)
     }
 }
 
@@ -248,7 +255,6 @@ impl AttachState {
         tap_name: &str,
         pci_address: &str,
     ) -> anyhow::Result<AttachOutcome> {
-        let _ = pci_address; // consumed by the DeviceType::Vf arm in a later task
         if interface_id.is_empty() {
             bail!("interface_id is required");
         }
@@ -257,6 +263,9 @@ impl AttachState {
         // every inbound frame. Require it explicitly rather than deriving.
         if device_type.requires_mac() && mac_req.is_empty() {
             bail!("device_type={device_type:?} requires an explicit mac (the VM NIC MAC)");
+        }
+        if device_type == DeviceType::Vf && pci_address.is_empty() {
+            bail!("device_type=vf requires pci_address (the VF PCI BDF)");
         }
         // Overlay IPs: at least ONE family is required; either may be absent (all-zeros).
         let ipv4 = primary_ipv4(requested_ips).unwrap_or([0u8; 4]);
@@ -291,6 +300,73 @@ impl AttachState {
             }
             dt => dt,
         };
+        // SR-IOV VF: claim the pre-provisioned VF now (we need the representor name as the datapath
+        // device). The VF moves into the pod netns as `guest_ifname`; the representor stays in the
+        // root netns as the tc_guest_tx device. Unlike veth/netkit there is no name we can predict
+        // before claiming, so VF resolves device/ifname here rather than in the generic matches below.
+        if resolved == DeviceType::Vf {
+            let dev = flowplane_device::claim_vf(&flowplane_device::sriov::VfSpec {
+                pci_address: pci_address.to_string(),
+                netns_path: (!netns_path.is_empty()).then(|| netns_path.to_string()),
+                guest_name: Self::guest_ifname(interface_id),
+                mac,
+                mtu: self.guest_mtu as u32,
+            })
+            .context("claim VF")?;
+            let device = dev.host_name; // the representor
+            let ifname = Self::guest_ifname(interface_id);
+            match self.control.overlay_status(vni, ipv4, ipv6, mac) {
+                OverlayStatus::SameEndpoint => {
+                    return Ok(self.make_outcome(ifname, ipv4, ipv6, mac, underlay_ipv6));
+                }
+                OverlayStatus::Conflict => {
+                    let _ = flowplane_device::release_vf(
+                        pci_address,
+                        (!netns_path.is_empty()).then_some(netns_path),
+                        &Self::guest_ifname(interface_id),
+                    );
+                    bail!("ROUTE_EXISTS: IP already in use in this VNI");
+                }
+                OverlayStatus::Free => {}
+            }
+            let params = IfaceParams {
+                vni,
+                ipv4,
+                ipv6,
+                gateway_ipv4: self.gateway_ipv4,
+                gateway_ipv6: self.gateway_ipv6,
+                underlay_ipv6,
+                total_mbps: 0,
+                public_mbps: 0,
+                netkit: false, // representor takes tc_guest_tx via tcx/clsact, not netkit
+                l3: false,     // VF is L2 with a real MAC
+                peer_capable: false, // switchdev delivers the VF; no bpf_redirect_peer
+                offloaded: true, // recorded into PORT_META for the later flow-offload increment
+            };
+            if let Err(e) = self
+                .control
+                .create_interface(interface_id.as_bytes(), &device, params)
+            {
+                let _ = flowplane_device::release_vf(
+                    pci_address,
+                    (!netns_path.is_empty()).then_some(netns_path),
+                    &Self::guest_ifname(interface_id),
+                );
+                return Err(e).context("program datapath for VF interface");
+            }
+            if ipv4 != [0u8; 4] {
+                if let Some(tap) = self.control.interface_readback(vni, ipv4) {
+                    println!(
+                        "INTERFACES readback vni={vni} ip={} -> tap_ifindex={tap}",
+                        Ipv4Addr::from(ipv4)
+                    );
+                } else {
+                    let _ = self.control.detach_interface(interface_id.as_bytes());
+                    bail!("INTERFACES read-back failed after programming VF");
+                }
+            }
+            return Ok(self.make_outcome(ifname, ipv4, ipv6, mac, underlay_ipv6));
+        }
         // Whether this is an L3 (netkit) edge — threaded into PORT_META.l3 so the datapath treats the
         // primary as an L3 (no-eth) device. Only netkit is L3; veth/tap/pod-tap are all L2.
         let l3 = matches!(resolved, DeviceType::Netkit);
@@ -320,6 +396,7 @@ impl AttachState {
             }
             DeviceType::Tap => tap_dev.clone(),
             DeviceType::Auto => unreachable!("Auto resolved to a concrete device type above"),
+            DeviceType::Vf => unreachable!("Vf handled in its dedicated branch above"),
         };
         // The ifname reported to the CNI. Container edge: the guest device. VM (PodTap): the POD LINK
         // (`pod<hash>` = guest_ifname) that virt-launcher discovers — NOT the tap. (main.go's CNI
@@ -330,6 +407,7 @@ impl AttachState {
             DeviceType::Veth | DeviceType::Netkit | DeviceType::PodTap => guest_ifname.clone(),
             DeviceType::Tap => tap_dev.clone(),
             DeviceType::Auto => unreachable!("Auto resolved to a concrete device type above"),
+            DeviceType::Vf => unreachable!("Vf handled in its dedicated branch above"),
         };
         // Idempotent re-attach. A KubeVirt virt-launcher attaches the flowplane NAD TWICE — once as
         // the VMI's multus network source (carries the MAC + a generated ifname) and once as the
@@ -382,6 +460,7 @@ impl AttachState {
                 self.setup_pod_tap(&device, netns_path, &guest_ifname, &tap_dev, mac)
             }
             DeviceType::Auto => unreachable!("Auto resolved to a concrete device type above"),
+            DeviceType::Vf => unreachable!("Vf handled in its dedicated branch above"),
         };
         if let Err(e) = setup {
             let _ = run(&["ip", "link", "del", &device]);
@@ -848,6 +927,15 @@ mod tests {
         assert_eq!(DeviceType::parse("tap").unwrap(), DeviceType::Tap);
         assert_eq!(DeviceType::parse("pod-tap").unwrap(), DeviceType::PodTap);
         assert!(DeviceType::parse("bridge").is_err());
+    }
+
+    #[test]
+    fn device_type_parse_vf() {
+        assert_eq!(DeviceType::parse("vf").unwrap(), DeviceType::Vf);
+        assert!(
+            DeviceType::Vf.requires_mac(),
+            "a VF needs an explicit guest MAC"
+        );
     }
 
     #[test]
