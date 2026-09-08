@@ -200,8 +200,8 @@ enum Cmd {
         uplink: String,
         /// Node role: "node" (default, a hypervisor) or "edge" (a WAN edge sidecar sharing VyOS's
         /// netns — additionally attaches wan_rx and registers a local-deliver edge underlay).
-        #[arg(long, default_value = "node")]
-        role: String,
+        #[arg(long, value_enum, default_value = "node")]
+        role: Role,
         /// WAN-facing uplink interface (edge role only; wan_rx attaches here). Required for
         /// `--role edge`.
         #[arg(long = "wan-uplink")]
@@ -422,6 +422,70 @@ enum Cmd {
     },
 }
 
+/// Node role for `serve`: `node` (a hypervisor) or `edge` (a WAN edge sidecar).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum Role {
+    Node,
+    Edge,
+}
+
+/// Firewall rule direction (the `dir` field of a `--fw-rule` spec). `.code()` yields the `u8` the
+/// datapath's `FwRule.direction` expects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum Direction {
+    #[value(name = "in")]
+    Ingress,
+    #[value(name = "eg")]
+    Egress,
+}
+
+impl Direction {
+    fn code(self) -> u8 {
+        match self {
+            Direction::Ingress => flowplane_common::FW_DIR_INGRESS,
+            Direction::Egress => flowplane_common::FW_DIR_EGRESS,
+        }
+    }
+}
+
+/// Firewall rule action (the `action` field of a `--fw-rule` spec). `.code()` yields the `u8` the
+/// datapath's `FwRule.action` expects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum FwAction {
+    Accept,
+    Drop,
+}
+
+impl FwAction {
+    fn code(self) -> u8 {
+        match self {
+            FwAction::Accept => flowplane_common::FW_ACTION_ACCEPT,
+            FwAction::Drop => flowplane_common::FW_ACTION_DROP,
+        }
+    }
+}
+
+/// Firewall rule L4 protocol (the `proto` field of a `--fw-rule` spec). `.code()` yields the IP
+/// protocol number the datapath's `FwRule.proto` expects (0 = any/wildcard).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum FwProto {
+    Any,
+    Icmp,
+    Tcp,
+    Udp,
+}
+
+impl FwProto {
+    fn code(self) -> u8 {
+        match self {
+            FwProto::Any => 0,
+            FwProto::Icmp => 1,
+            FwProto::Tcp => 6,
+            FwProto::Udp => 17,
+        }
+    }
+}
+
 /// Resolve this hypervisor's underlay IPv6 identity (also the /64 the AttachInterface pool
 /// allocates from), in precedence order:
 ///   1. `--local-underlay` when set — tests / hosts without a fabric loopback.
@@ -567,15 +631,14 @@ async fn main() -> anyhow::Result<()> {
             )?;
             // WAN-edge role: attach wan_rx to the WAN uplink + register the local-deliver edge
             // underlay so this sidecar handles both egress decap and NAT-return re-encap.
-            match role.as_str() {
-                "node" => {}
-                "edge" => {
+            match role {
+                Role::Node => {}
+                Role::Edge => {
                     let w = wan_uplink
                         .as_deref()
                         .context("--role edge requires --wan-uplink")?;
                     ctrl.attach_edge(w, underlay)?;
                 }
-                other => anyhow::bail!("unknown --role {other:?} (expected \"node\" or \"edge\")"),
             }
             // Dual-homed hosts: also run uplink_rx on the additional fabric uplink(s) so returns
             // arriving via the other ToR (ECMP) are decapped too.
@@ -1196,23 +1259,28 @@ async fn main() -> anyhow::Result<()> {
                     "--fw-rule must be ifname:dir:action:proto:src_cidr:dst_cidr:dport, got {spec:?}"
                 );
                 let ifindex = ifindex(f[0])?;
-                let direction = match f[1] {
-                    "in" => flowplane_common::FW_DIR_INGRESS,
-                    "eg" => flowplane_common::FW_DIR_EGRESS,
-                    o => anyhow::bail!("--fw-rule dir must be in|eg, got {o}"),
-                };
-                let action = match f[2] {
-                    "accept" => flowplane_common::FW_ACTION_ACCEPT,
-                    "drop" => flowplane_common::FW_ACTION_DROP,
-                    o => anyhow::bail!("--fw-rule action must be accept|drop, got {o}"),
-                };
-                let proto: u8 = match f[3] {
-                    "any" => 0,
-                    "icmp" => 1,
-                    "tcp" => 6,
-                    "udp" => 17,
-                    o => anyhow::bail!("--fw-rule proto must be any|icmp|tcp|udp, got {o}"),
-                };
+                // Parse the enum sub-fields via clap's ValueEnum (same variant spellings the type
+                // documents) so the CLI vocabulary lives in one place; `.code()` maps to the u8 the
+                // datapath map fields expect.
+                use clap::ValueEnum;
+                let direction = Direction::from_str(f[1], false)
+                    .map_err(|e| {
+                        anyhow::anyhow!("--fw-rule dir must be in|eg, got {:?}: {e}", f[1])
+                    })?
+                    .code();
+                let action = FwAction::from_str(f[2], false)
+                    .map_err(|e| {
+                        anyhow::anyhow!("--fw-rule action must be accept|drop, got {:?}: {e}", f[2])
+                    })?
+                    .code();
+                let proto: u8 = FwProto::from_str(f[3], false)
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "--fw-rule proto must be any|icmp|tcp|udp, got {:?}: {e}",
+                            f[3]
+                        )
+                    })?
+                    .code();
                 let (src_ip, src_mask) = parse_cidr(f[4])?;
                 let (dst_ip, dst_mask) = parse_cidr(f[5])?;
                 let (dst_port_min, dst_port_max) = if f[6] == "*" {
