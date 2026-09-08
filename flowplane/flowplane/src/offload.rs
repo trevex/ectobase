@@ -568,4 +568,113 @@ mod tests {
         assert!(!is_idle(&f, 0, 50, 100), "flat but not yet timed out");
         assert!(is_idle(&f, 0, 200, 100), "flat and past timeout -> idle");
     }
+
+    /// PURE unit test (no root) for the Critical-review fix: `alloc_handle` recycles freed handles
+    /// via `free` instead of permanently losing capacity as flows churn. Without recycling, a band
+    /// that filled and drained would "leak" — `next` only climbs, so once it passes `max_flows` no
+    /// slot is ever available again even with zero flows actually installed.
+    #[test]
+    fn alloc_handle_recycles_and_bounds() {
+        let mut next = 1u32;
+        let mut free: Vec<u32> = Vec::new();
+        let max = 3usize;
+        let a = super::alloc_handle(&mut next, &mut free, max).unwrap();
+        let b = super::alloc_handle(&mut next, &mut free, max).unwrap();
+        let c = super::alloc_handle(&mut next, &mut free, max).unwrap();
+        assert_eq!(
+            super::alloc_handle(&mut next, &mut free, max),
+            None,
+            "band exhausted"
+        );
+        // free one, it must be reused (NOT permanently lost — the leak/exhaustion bug)
+        free.push(b);
+        assert_eq!(
+            super::alloc_handle(&mut next, &mut free, max),
+            Some(b),
+            "freed slot reused"
+        );
+        assert_eq!(
+            super::alloc_handle(&mut next, &mut free, max),
+            None,
+            "full again"
+        );
+        let _ = (a, c);
+    }
+
+    /// Tiny inline netdevsim provisioner. `flower::tests_support::netdevsim_pf` is `#[cfg(test)]`
+    /// inside the flowplane-device crate, so it does NOT exist when flowplane depends on
+    /// flowplane-device as a normal (non-test) dependency — `#[cfg(test)]` is crate-local, it only
+    /// compiles in when that crate itself is built in test mode. So this replicates the same ~10
+    /// lines here rather than trying to reach across the crate boundary. Mirrors
+    /// `flower::tests_support`: modprobe netdevsim, create a 1-port device, read back the PF
+    /// ifindex, RAII-delete the device on drop. Uses a UNIQUE id (51) so it doesn't collide with
+    /// flower.rs's own privileged gates (42/43/44) when run in parallel.
+    struct NetdevsimCleanup(u32);
+    impl Drop for NetdevsimCleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::write("/sys/bus/netdevsim/del_device", self.0.to_string());
+        }
+    }
+    fn netdevsim_pf(id: u32) -> (u32, NetdevsimCleanup) {
+        let _ = std::process::Command::new("modprobe")
+            .arg("netdevsim")
+            .status();
+        std::fs::write("/sys/bus/netdevsim/new_device", format!("{id} 1")).expect("new_device");
+        let _ = std::process::Command::new("udevadm").arg("settle").status();
+        let ifx: u32 = std::fs::read_to_string(format!("/sys/class/net/eni{id}np1/ifindex"))
+            .unwrap_or_else(|e| panic!("read eni{id}np1 ifindex: {e}"))
+            .trim()
+            .parse()
+            .expect("parse ifindex");
+        (ifx, NetdevsimCleanup(id))
+    }
+
+    /// PRIVILEGED netdevsim gate for the kernel-level primitives the manager's leak-prevention
+    /// relies on: install→list round-trip at the manager's own pref band, and enumerate+delete of
+    /// owned filters — exactly the operation both the startup flush in `run()` and the orphan-GC arm
+    /// of `idle_age_and_gc` perform on a listed filter. Proves those actually clear real kernel
+    /// state, not just bookkeeping.
+    ///
+    /// netdevsim can't run the async `run()` loop or exercise real CT maps / `in_hw` offload — that
+    /// needs a live daemon + hardware/switchdev representor and is deferred to the live lab. This
+    /// gate only proves the synchronous flower primitives the loop calls.
+    #[test]
+    #[ignore = "privileged: modprobe netdevsim (needs root); run under sudo"]
+    fn offload_flush_and_orphan_gc_primitives_on_netdevsim() {
+        let (ifx, _c) = netdevsim_pf(51);
+        let band = 40000u16..44096u16;
+        flower::ensure_clsact(ifx).unwrap();
+        let act = EncapRedirect {
+            vni: 100,
+            remote_vtep: [0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xee],
+            redirect_ifindex: ifx,
+        };
+        let k = |dp: u16| FlowKey {
+            l3: FlowL3::V4 {
+                src: [10, 0, 0, 1],
+                dst: [10, 0, 0, 2],
+            },
+            ip_proto: 6,
+            src_port: 1000,
+            dst_port: dp,
+        };
+        // install two owned filters
+        let h1 = flower::install_flow(ifx, 40000, 1, &k(443), &act).unwrap();
+        let h2 = flower::install_flow(ifx, 40001, 2, &k(8443), &act).unwrap();
+        assert_eq!(
+            flower::list_flows(ifx, band.clone()).unwrap().len(),
+            2,
+            "both owned filters listed"
+        );
+        // ORPHAN GC / startup-flush primitive: a filter in-band that the manager doesn't track must
+        // be deletable via list_flows+delete.
+        for f in flower::list_flows(ifx, band.clone()).unwrap() {
+            flower::delete_flow(&f.handle).unwrap();
+        }
+        assert!(
+            flower::list_flows(ifx, band.clone()).unwrap().is_empty(),
+            "startup-flush/orphan-GC clears all owned filters"
+        );
+        let _ = (h1, h2);
+    }
 }
