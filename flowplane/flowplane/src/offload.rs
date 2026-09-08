@@ -383,6 +383,18 @@ pub async fn run(
 
     // STARTUP FLUSH — clear any leaked owned filters across all offload-capable reps before we begin,
     // so a crash that left our band populated can't accumulate stale HW state.
+    //
+    // KNOWN LIMITATION (narrow restart-leak seam): `offloaded_reps()` enumerates only reps with a
+    // CURRENT INTERFACES entry (an attached, offloaded guest). A representor whose guest DETACHED while
+    // this manager was down still carries any owned filter (the VF representor persists on the PF and
+    // its clsact filters survive), but is NOT visited here — so that filter is not flushed at startup.
+    // Impact is bounded: in steady state the running manager deletes a detached iface's filters within
+    // one reconcile interval (INTERFACES miss → not desired → to_delete), and a leaked filter SELF-HEALS
+    // if that VF is ever reused for offload (the rep re-enters offloaded_reps() → orphan-GC deletes the
+    // untracked in-band filter). It leaks permanently only across a crash in that window on a VF that is
+    // then never reused for offload. ROBUST FIX (tracked follow-up): enumerate ALL switchdev pcivf
+    // representors from the device layer (a `devlink port show flavour pcivf` dump, like increment A's
+    // resolver) for the flush, independent of attach state — see the C spec's deferred section.
     for rep in control.offloaded_reps() {
         if let Ok(fs) = flower::list_flows(rep, band.clone()) {
             for f in fs {
