@@ -85,12 +85,6 @@ pub fn parse_nexthop6(s: &str) -> anyhow::Result<[u8; 16]> {
     Ok(a.octets())
 }
 
-/// Parse an IPv4 address string into its four octets.
-pub fn parse_ipv4(s: &str) -> anyhow::Result<[u8; 4]> {
-    let a: std::net::Ipv4Addr = s.parse().map_err(|_| anyhow::anyhow!("bad ipv4 {s:?}"))?;
-    Ok(a.octets())
-}
-
 /// Narrow a proto `uint32` port into a `u16`, rejecting out-of-range values.
 pub fn port_u16(p: u32) -> anyhow::Result<u16> {
     u16::try_from(p).map_err(|_| anyhow::anyhow!("port {p} out of range (0..=65535)"))

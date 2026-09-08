@@ -19,7 +19,6 @@ clap = { workspace = true }
 tonic = { workspace = true, features = ["transport"] }
 tonic-health = "0.12"
 prost = { workspace = true }
-uuid = { version = "1", features = ["v4"] }
 libc = "0.2"
 log = "0.4"
 env_logger = "0.11"

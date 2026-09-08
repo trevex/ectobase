@@ -1092,8 +1092,8 @@ async fn main() -> anyhow::Result<()> {
                 // overlay-IP/VNI-based LOCAL delivery is driven by the gRPC AddLbBackend path, not
                 // this CLI, so overlay_ip/vni/is_v6 are left zeroed.
                 backends
-                    .get_mut(&tid)
-                    .unwrap()
+                    .entry(tid)
+                    .or_default()
                     .push(flowplane_common::LbBackend {
                         node_vtep: backend,
                         ..Default::default()

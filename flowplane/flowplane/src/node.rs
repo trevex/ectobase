@@ -141,20 +141,16 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let (log_vni, log_prefix, log_nexthop, log_external) = (
-            r.vni,
-            r.prefix.clone(),
-            r.nexthop_underlay.clone(),
-            r.external,
+        let log = format!(
+            "ROUTE add vni={} prefix={} -> nexthop={} external={}",
+            r.vni, r.prefix, r.nexthop_underlay, r.external
         );
         let resp = tokio::task::spawn_blocking(move || {
             attach.control.with_core(|c| handlers::add_route(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("add_route task panicked: {e}")))??;
-        println!(
-            "ROUTE add vni={log_vni} prefix={log_prefix} -> nexthop={log_nexthop} external={log_external}"
-        );
+        println!("{log}");
         Ok(Response::new(resp))
     }
 
@@ -168,7 +164,7 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let (log_vni, log_prefix) = (r.vni, r.prefix.clone());
+        let log = format!("ROUTE withdraw vni={} prefix={}", r.vni, r.prefix);
         let resp = tokio::task::spawn_blocking(move || {
             attach
                 .control
@@ -176,7 +172,7 @@ impl DataplaneNode for NodeService {
         })
         .await
         .map_err(|e| Status::internal(format!("withdraw_route task panicked: {e}")))??;
-        println!("ROUTE withdraw vni={log_vni} prefix={log_prefix}");
+        println!("{log}");
         Ok(Response::new(resp))
     }
 
@@ -190,12 +186,9 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let (log_vni, log_src, log_nat_ip, log_pmin, log_pmax) = (
-            r.vni,
-            r.source_ip.clone(),
-            r.nat_ip.clone(),
-            r.port_min,
-            r.port_max,
+        let log = format!(
+            "NAT source vni={} src={} -> nat_ip={} ports={}..{}",
+            r.vni, r.source_ip, r.nat_ip, r.port_min, r.port_max
         );
         let resp = tokio::task::spawn_blocking(move || {
             attach
@@ -204,9 +197,7 @@ impl DataplaneNode for NodeService {
         })
         .await
         .map_err(|e| Status::internal(format!("add_nat_source task panicked: {e}")))??;
-        println!(
-            "NAT source vni={log_vni} src={log_src} -> nat_ip={log_nat_ip} ports={log_pmin}..{log_pmax}"
-        );
+        println!("{log}");
         Ok(Response::new(resp))
     }
 
@@ -220,7 +211,7 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let (log_vni, log_src) = (r.vni, r.source_ip.clone());
+        let log = format!("NAT source withdraw vni={} src={}", r.vni, r.source_ip);
         let resp = tokio::task::spawn_blocking(move || {
             attach
                 .control
@@ -228,7 +219,7 @@ impl DataplaneNode for NodeService {
         })
         .await
         .map_err(|e| Status::internal(format!("withdraw_nat_source task panicked: {e}")))??;
-        println!("NAT source withdraw vni={log_vni} src={log_src}");
+        println!("{log}");
         Ok(Response::new(resp))
     }
 
@@ -242,12 +233,9 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let (log_vni, log_nat_ip, log_pmin, log_pmax, log_owner) = (
-            r.vni,
-            r.nat_ip.clone(),
-            r.port_min,
-            r.port_max,
-            r.owner_underlay.clone(),
+        let log = format!(
+            "NEIGHBOR_NAT add vni={} nat_ip={} ports={}..{} -> owner={}",
+            r.vni, r.nat_ip, r.port_min, r.port_max, r.owner_underlay
         );
         let resp = tokio::task::spawn_blocking(move || {
             attach
@@ -256,9 +244,7 @@ impl DataplaneNode for NodeService {
         })
         .await
         .map_err(|e| Status::internal(format!("add_neighbor_nat task panicked: {e}")))??;
-        println!(
-            "NEIGHBOR_NAT add vni={log_vni} nat_ip={log_nat_ip} ports={log_pmin}..{log_pmax} -> owner={log_owner}"
-        );
+        println!("{log}");
         Ok(Response::new(resp))
     }
 
@@ -272,8 +258,10 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let (log_vni, log_nat_ip, log_pmin, log_pmax) =
-            (r.vni, r.nat_ip.clone(), r.port_min, r.port_max);
+        let log = format!(
+            "NEIGHBOR_NAT withdraw vni={} nat_ip={} ports={}..{}",
+            r.vni, r.nat_ip, r.port_min, r.port_max
+        );
         let resp = tokio::task::spawn_blocking(move || {
             attach
                 .control
@@ -281,9 +269,7 @@ impl DataplaneNode for NodeService {
         })
         .await
         .map_err(|e| Status::internal(format!("withdraw_neighbor_nat task panicked: {e}")))??;
-        println!(
-            "NEIGHBOR_NAT withdraw vni={log_vni} nat_ip={log_nat_ip} ports={log_pmin}..{log_pmax}"
-        );
+        println!("{log}");
         Ok(Response::new(resp))
     }
 
@@ -297,21 +283,16 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let (log_id, log_vni, log_vip, log_underlay, log_ports) = (
-            r.id.clone(),
-            r.vni,
-            r.vip.clone(),
-            r.lb_underlay.clone(),
-            r.ports.clone(),
+        let log = format!(
+            "LB VIP add id={} vni={} vip={} lb_underlay={} ports={:?}",
+            r.id, r.vni, r.vip, r.lb_underlay, r.ports
         );
         let resp = tokio::task::spawn_blocking(move || {
             attach.control.with_core(|c| handlers::add_lb_vip(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("add_lb_vip task panicked: {e}")))??;
-        println!(
-            "LB VIP add id={log_id} vni={log_vni} vip={log_vip} lb_underlay={log_underlay} ports={log_ports:?}"
-        );
+        println!("{log}");
         Ok(Response::new(resp))
     }
 
@@ -325,11 +306,9 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let (log_id, log_backend, log_overlay, log_vni) = (
-            r.id.clone(),
-            r.backend_underlay.clone(),
-            r.backend_overlay_ip.clone(),
-            r.backend_vni,
+        let log = format!(
+            "LB backend add id={} backend={} overlay={} vni={}",
+            r.id, r.backend_underlay, r.backend_overlay_ip, r.backend_vni
         );
         let resp = tokio::task::spawn_blocking(move || {
             attach
@@ -338,9 +317,7 @@ impl DataplaneNode for NodeService {
         })
         .await
         .map_err(|e| Status::internal(format!("add_lb_backend task panicked: {e}")))??;
-        println!(
-            "LB backend add id={log_id} backend={log_backend} overlay={log_overlay} vni={log_vni}"
-        );
+        println!("{log}");
         Ok(Response::new(resp))
     }
 
@@ -354,13 +331,13 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let log_id = r.id.clone();
+        let log = format!("LB VIP del id={}", r.id);
         let resp = tokio::task::spawn_blocking(move || {
             attach.control.with_core(|c| handlers::del_lb_vip(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("del_lb_vip task panicked: {e}")))??;
-        println!("LB VIP del id={log_id}");
+        println!("{log}");
         Ok(Response::new(resp))
     }
 
@@ -374,7 +351,7 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let (log_id, log_backend) = (r.id.clone(), r.backend_underlay.clone());
+        let log = format!("LB backend del id={} backend={}", r.id, r.backend_underlay);
         let resp = tokio::task::spawn_blocking(move || {
             attach
                 .control
@@ -382,7 +359,7 @@ impl DataplaneNode for NodeService {
         })
         .await
         .map_err(|e| Status::internal(format!("del_lb_backend task panicked: {e}")))??;
-        println!("LB backend del id={log_id} backend={log_backend}");
+        println!("{log}");
         Ok(Response::new(resp))
     }
 
@@ -396,35 +373,24 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let (
-            log_iface,
-            log_rule_id,
-            log_src,
-            log_dst,
-            log_proto,
-            log_pmin,
-            log_pmax,
-            log_allow,
-            log_egress,
-        ) = (
-            r.interface_id.clone(),
-            r.rule_id.clone(),
-            r.src_cidr.clone(),
-            r.dst_cidr.clone(),
+        let log = format!(
+            "FW rule add iface={} id={} src={} dst={} proto={} dports={}..={} allow={} egress={}",
+            r.interface_id,
+            r.rule_id,
+            r.src_cidr,
+            r.dst_cidr,
             r.proto,
             r.dst_port_min,
             r.dst_port_max,
             r.allow,
-            r.egress,
+            r.egress
         );
         let resp = tokio::task::spawn_blocking(move || {
             attach.control.with_core(|c| handlers::add_fw_rule(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("add_fw_rule task panicked: {e}")))??;
-        println!(
-            "FW rule add iface={log_iface} id={log_rule_id} src={log_src} dst={log_dst} proto={log_proto} dports={log_pmin}..={log_pmax} allow={log_allow} egress={log_egress}"
-        );
+        println!("{log}");
         Ok(Response::new(resp))
     }
 
@@ -438,13 +404,13 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let (log_iface, log_rule_id) = (r.interface_id.clone(), r.rule_id.clone());
+        let log = format!("FW rule del iface={} id={}", r.interface_id, r.rule_id);
         let resp = tokio::task::spawn_blocking(move || {
             attach.control.with_core(|c| handlers::del_fw_rule(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("del_fw_rule task panicked: {e}")))??;
-        println!("FW rule del iface={log_iface} id={log_rule_id}");
+        println!("{log}");
         Ok(Response::new(resp))
     }
 
@@ -458,7 +424,11 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let (log_iface, log_n) = (r.interface_id.clone(), r.rules.len());
+        let log = format!(
+            "FW replace iface={} rules={}",
+            r.interface_id,
+            r.rules.len()
+        );
         let resp = tokio::task::spawn_blocking(move || {
             attach
                 .control
@@ -468,7 +438,7 @@ impl DataplaneNode for NodeService {
         .map_err(|e| {
             Status::internal(format!("replace_interface_firewall task panicked: {e}"))
         })??;
-        println!("FW replace iface={log_iface} rules={log_n}");
+        println!("{log}");
         Ok(Response::new(resp))
     }
 
@@ -482,20 +452,16 @@ impl DataplaneNode for NodeService {
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let (log_iface, log_egress, log_public, log_ingress) = (
-            r.interface_id.clone(),
-            r.egress_mbps as u64,
-            r.public_mbps as u64,
-            r.ingress_mbps as u64,
+        let log = format!(
+            "QOS configure iface={} egress_mbps={} public_mbps={} ingress_mbps={}",
+            r.interface_id, r.egress_mbps as u64, r.public_mbps as u64, r.ingress_mbps as u64
         );
         let resp = tokio::task::spawn_blocking(move || {
             attach.control.with_core(|c| handlers::configure_qos(c, &r))
         })
         .await
         .map_err(|e| Status::internal(format!("configure_qos task panicked: {e}")))??;
-        println!(
-            "QOS configure iface={log_iface} egress_mbps={log_egress} public_mbps={log_public} ingress_mbps={log_ingress}"
-        );
+        println!("{log}");
         Ok(Response::new(resp))
     }
 }

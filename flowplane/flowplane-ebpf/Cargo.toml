@@ -9,7 +9,6 @@ flowplane-common = { path = "../flowplane-common", default-features = false }
 flowplane-core = { path = "../flowplane-core" }
 aya-ebpf = "0.1"
 aya-log-ebpf = "0.1"
-network-types = "0.0.7"
 
 [features]
 # Compile in `dlog!` datapath tracing (aya-log). Off by default → zero runtime/verifier cost.

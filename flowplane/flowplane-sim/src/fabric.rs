@@ -58,10 +58,6 @@ impl Fabric {
         self.nodes.insert(id, node);
     }
 
-    pub fn node_mut(&mut self, id: NodeId) -> &mut SimNode {
-        self.nodes.get_mut(id).expect("unknown node")
-    }
-
     /// Register that `underlay` /128 is owned by node `id` (its uplink_rx handles frames for it).
     pub fn route(&mut self, underlay: [u8; 16], id: NodeId) {
         self.routes.insert(underlay, id);

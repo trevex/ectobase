@@ -36,8 +36,8 @@ impl Interfaces {
         self.map.remove(&key).context("remove iface")
     }
 
-    /// Read-back accessor exercised by the (root-only) roundtrip test; not used by the daemon.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Read-back accessor. Backs `MapWriter::ifaces_get`, which the control plane uses to look up an
+    /// interface's delivery info by `(vni, ipv4)` (e.g. resolving an LB backend's overlay).
     pub fn get(&self, key: &IfaceKey) -> Option<IfaceValue> {
         self.map.get(key, 0).ok()
     }
@@ -73,14 +73,14 @@ impl Interfaces6 {
         self.map.remove(&key).context("remove iface6")
     }
 
-    /// Read-back accessor (parity with [`Interfaces::get`]); not used by the daemon.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Read-back accessor (parity with [`Interfaces::get`]). Backs `MapWriter::ifaces6_get`, used by
+    /// the control plane to look up an interface's delivery info by `(vni, ipv6)`.
     pub fn get(&self, key: &IfaceKey6) -> Option<IfaceValue> {
         self.map.get(key, 0).ok()
     }
 
-    /// Snapshot every (key, value) — parity with [`Interfaces::entries`].
-    #[allow(dead_code)]
+    /// Snapshot every (key, value) — parity with [`Interfaces::entries`]. Consumed at restart to
+    /// rebuild in-memory bookkeeping from the surviving pinned map.
     pub(crate) fn entries(&self) -> Vec<(IfaceKey6, IfaceValue)> {
         self.map.iter().filter_map(|r| r.ok()).collect()
     }
@@ -491,14 +491,6 @@ pub struct NatCt6 {
 impl NatCt6 {
     pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
         let map = HashMap::try_from(ebpf.take_map("NAT_CT6").context("NAT_CT6 map missing")?)?;
-        Ok(Self { map })
-    }
-
-    /// Adopt a previously-pinned NAT_CT6 map (HA restart). NAT_CT6 is `BPF_MAP_TYPE_LRU_HASH`.
-    pub fn from_pin(path: &str) -> anyhow::Result<Self> {
-        use aya::maps::Map;
-        let map_data = aya::maps::MapData::from_pin(path).context("open pinned NAT_CT6")?;
-        let map = HashMap::try_from(Map::LruHashMap(map_data))?;
         Ok(Self { map })
     }
 

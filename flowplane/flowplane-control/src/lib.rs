@@ -97,16 +97,4 @@ impl<W: MapWriter> ControlCore<W> {
             .find(|(_, m)| m.vni == vni && m.ipv6 == ipv6)
             .map(|(id, _)| id.clone())
     }
-    /// Snapshot the registered interface metadata as `(id, vni, ipv4, ipv6, underlay, ifindex)` rows.
-    /// Backs the `ListInterfaces` RPC — `ifaces_meta` is the agnostic source of truth for the
-    /// attached-interface set. The eBPF backend has its own richer `Control::list_interfaces` (adds
-    /// the resolved device); this exposes the agnostic subset.
-    #[must_use]
-    #[allow(clippy::type_complexity)]
-    pub fn iface_meta_rows(&self) -> Vec<(Vec<u8>, u32, [u8; 4], [u8; 16], [u8; 16], u32)> {
-        self.ifaces_meta
-            .iter()
-            .map(|(id, m)| (id.clone(), m.vni, m.ipv4, m.ipv6, m.underlay, m.ifindex))
-            .collect()
-    }
 }

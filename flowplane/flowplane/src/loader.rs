@@ -314,7 +314,10 @@ pub fn attach_tc_pinned_at(
         anyhow::anyhow!("tc link is not a tcx FdLink (kernel < 6.6); pinning unavailable")
     })?;
     let path = link_pin_path(pin_dir, name);
-    std::fs::create_dir_all(path.parent().unwrap()).ok();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create pin dir {}", parent.display()))?;
+    }
     let _ = std::fs::remove_file(&path);
     fd.pin(&path)
         .with_context(|| format!("pin tc link {}", path.display()))?;
@@ -353,7 +356,10 @@ pub fn attach_tc_pinned_at_first(
         anyhow::anyhow!("tc link is not a tcx FdLink (kernel < 6.6); pinning unavailable")
     })?;
     let path = link_pin_path(pin_dir, name);
-    std::fs::create_dir_all(path.parent().unwrap()).ok();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create pin dir {}", parent.display()))?;
+    }
     let _ = std::fs::remove_file(&path);
     fd.pin(&path)
         .with_context(|| format!("pin tc link {}", path.display()))?;
@@ -553,7 +559,10 @@ pub fn attach_netkit_pinned_at(
     let link = bpf_link_create_netkit(prog_fd.as_fd(), primary_ifindex)
         .with_context(|| format!("attach {prog} to netkit ifindex {primary_ifindex}"))?;
 
-    std::fs::create_dir_all(path.parent().unwrap()).ok();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create pin dir {}", parent.display()))?;
+    }
     let _ = std::fs::remove_file(&path);
     bpf_obj_pin(link.as_fd(), &path)
         .with_context(|| format!("pin netkit link {}", path.display()))?;
