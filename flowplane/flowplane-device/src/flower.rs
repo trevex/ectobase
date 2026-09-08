@@ -52,9 +52,15 @@
 //!       tc::TcHeader, tc::TcOption, tc::TcFilterFlower, tc::TcFilterFlowerOption  // <- for task 2+
 //! ---------------------------------------------------------------------------------------------
 
+use std::net::{Ipv4Addr, Ipv6Addr};
+
 use anyhow::{anyhow, bail, Context, Result};
-use netlink_packet_core::{
-    NetlinkMessage, NetlinkPayload, NLM_F_ACK, NLM_F_REQUEST,
+use netlink_packet_core::{NetlinkMessage, NetlinkPayload, NLM_F_ACK, NLM_F_REQUEST};
+use netlink_packet_route::tc::{
+    TcAction, TcActionAttribute, TcActionGeneric, TcActionMirror, TcActionMirrorOption,
+    TcActionOption, TcActionTunnelKey, TcActionTunnelKeyOption, TcActionType, TcAttribute,
+    TcFilterFlower, TcFilterFlowerOption, TcHandle, TcHeader, TcMessage, TcMirror,
+    TcMirrorActionType, TcOption, TcTunnelKey,
 };
 use netlink_packet_route::RouteNetlinkMessage;
 use netlink_sys::{protocols::NETLINK_ROUTE, Socket, SocketAddr};
@@ -71,9 +77,10 @@ pub mod nl {
 
     /// Open + `bind_auto` a fresh blocking `NETLINK_ROUTE` socket.
     fn open_socket() -> Result<Socket> {
-        let mut socket =
-            Socket::new(NETLINK_ROUTE).context("open NETLINK_ROUTE socket")?;
-        socket.bind_auto().context("bind_auto NETLINK_ROUTE socket")?;
+        let mut socket = Socket::new(NETLINK_ROUTE).context("open NETLINK_ROUTE socket")?;
+        socket
+            .bind_auto()
+            .context("bind_auto NETLINK_ROUTE socket")?;
         Ok(socket)
     }
 
@@ -98,11 +105,7 @@ pub mod nl {
     ///   * anything else                                           => Err (unexpected reply)
     ///
     /// `tolerate` holds negative kernel errnos (e.g. `-libc::EEXIST`).
-    pub fn request(
-        msg: RouteNetlinkMessage,
-        extra_flags: u16,
-        tolerate: &[i32],
-    ) -> Result<()> {
+    pub fn request(msg: RouteNetlinkMessage, extra_flags: u16, tolerate: &[i32]) -> Result<()> {
         let socket = open_socket()?;
         let buf = frame(msg, NLM_F_REQUEST | NLM_F_ACK | extra_flags);
         socket
@@ -119,7 +122,11 @@ pub mod nl {
                 if code == 0 || tolerate.contains(&code) {
                     Ok(())
                 } else {
-                    Err(anyhow!("netlink request failed: {} (errno {})", err.to_io(), code))
+                    Err(anyhow!(
+                        "netlink request failed: {} (errno {})",
+                        err.to_io(),
+                        code
+                    ))
                 }
             }
             NetlinkPayload::Done(_) => Ok(()),
@@ -223,6 +230,310 @@ pub fn ensure_clsact(ifindex: u32) -> Result<()> {
     .context("ensure clsact qdisc")
 }
 
+/// clsact **ingress** filter parent (`TC_H_CLSACT` == `TC_H_INGRESS` block, minor `fff2` ==
+/// `TC_H_MIN_INGRESS`). Filters attach here to run on RX; matches `TcHandle{0xffff, 0xfff2}`.
+const TC_CLSACT_INGRESS_PARENT: u32 = 0xFFFF_FFF2;
+
+/// `TCA_CLS_FLAGS_IN_HW` (`1 << 2`) — set by the kernel in `TCA_FLOWER_FLAGS` once the filter has
+/// been successfully offloaded to hardware (on netdevsim, an accept-all offload).
+const TCA_CLS_FLAGS_IN_HW: u32 = 1 << 2;
+
+/// tunnel_key `SET` mode (`TCA_TUNNEL_KEY_ACT_SET`); the encap-set variant of the action.
+const TCA_TUNNEL_KEY_ACT_SET: i32 = 1;
+
+/// IANA ethertypes used for the flower `EthType` match + the filter's wire protocol.
+const ETH_P_IP: u16 = 0x0800;
+const ETH_P_IPV6: u16 = 0x86DD;
+
+/// Layer-3 match half of a 5-tuple: exact `/32` (v4) or `/128` (v6) src+dst.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlowL3 {
+    V4 { src: [u8; 4], dst: [u8; 4] },
+    V6 { src: [u8; 16], dst: [u8; 16] },
+}
+
+/// A 5-tuple flow to match in flower: L3 addresses, IP protocol (6 TCP / 17 UDP), and ports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FlowKey {
+    pub l3: FlowL3,
+    /// IP protocol number — 6 (TCP) or 17 (UDP).
+    pub ip_proto: u8,
+    pub src_port: u16,
+    pub dst_port: u16,
+}
+
+/// The encap+redirect action to apply on a matched flow: set a Geneve tunnel_key (VNI + remote
+/// IPv6 VTEP) then mirred-redirect to `redirect_ifindex`'s egress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EncapRedirect {
+    pub vni: u32,
+    /// Remote VTEP (tunnel outer destination), always IPv6 in this datapath.
+    pub remote_vtep: [u8; 16],
+    pub redirect_ifindex: u32,
+}
+
+/// Identifies an installed filter for later delete/query: (ifindex, priority, handle).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FlowHandle {
+    pub ifindex: u32,
+    pub pref: u16,
+    pub handle: u32,
+}
+
+/// Build the `flower` `TCA_OPTIONS` NLAs for a 5-tuple + action set.
+///
+/// Emits `EthType` + exact-match L3 (src/dst with all-ones masks), `IpProto`, the proto-specific
+/// port matches (TCP→`TcpSrc/Dst`, UDP→`UdpSrc/Dst`), and the nested `Actions` list. `EthType` and
+/// the port values are passed in host order — the crate emits them big-endian on the wire (see
+/// `emit_u16_be` in `tc/filters/flower/core.rs`), so e.g. `EthType(0x0800)` is correct.
+fn build_flower_options(key: &FlowKey, act: &EncapRedirect) -> Vec<TcFilterFlowerOption> {
+    let mut opts = Vec::new();
+    match key.l3 {
+        FlowL3::V4 { src, dst } => {
+            opts.push(TcFilterFlowerOption::EthType(ETH_P_IP));
+            opts.push(TcFilterFlowerOption::Ipv4Src(Ipv4Addr::from(src)));
+            opts.push(TcFilterFlowerOption::Ipv4SrcMask(Ipv4Addr::new(
+                255, 255, 255, 255,
+            )));
+            opts.push(TcFilterFlowerOption::Ipv4Dst(Ipv4Addr::from(dst)));
+            opts.push(TcFilterFlowerOption::Ipv4DstMask(Ipv4Addr::new(
+                255, 255, 255, 255,
+            )));
+        }
+        FlowL3::V6 { src, dst } => {
+            opts.push(TcFilterFlowerOption::EthType(ETH_P_IPV6));
+            opts.push(TcFilterFlowerOption::Ipv6Src(Ipv6Addr::from(src)));
+            opts.push(TcFilterFlowerOption::Ipv6SrcMask(Ipv6Addr::from(
+                [0xFF; 16],
+            )));
+            opts.push(TcFilterFlowerOption::Ipv6Dst(Ipv6Addr::from(dst)));
+            opts.push(TcFilterFlowerOption::Ipv6DstMask(Ipv6Addr::from(
+                [0xFF; 16],
+            )));
+        }
+    }
+    opts.push(TcFilterFlowerOption::IpProto(key.ip_proto));
+    match key.ip_proto {
+        6 => {
+            opts.push(TcFilterFlowerOption::TcpSrc(key.src_port));
+            opts.push(TcFilterFlowerOption::TcpDst(key.dst_port));
+        }
+        17 => {
+            opts.push(TcFilterFlowerOption::UdpSrc(key.src_port));
+            opts.push(TcFilterFlowerOption::UdpDst(key.dst_port));
+        }
+        _ => {}
+    }
+    opts.push(TcFilterFlowerOption::Actions(build_actions(act)));
+    opts
+}
+
+/// Build the two-action list for the flower filter, in pipeline order:
+///   1. `tunnel_key` (SET) — attach Geneve encap metadata: `EncKeyId = vni`, `EncIpv6Dst =
+///      remote_vtep`. Generic control is `PIPE` so processing continues to the next action.
+///   2. `mirred` (egress REDIRECT) to `redirect_ifindex`. Generic control is `STOLEN` (the
+///      canonical control code iproute2 uses for a redirect — the packet leaves this pipeline).
+///
+/// Each action is a `TcAction { tab: 1, attributes: [Kind, Options] }`; the concrete parameters
+/// live in the nested `TcActionOption` under `TcActionAttribute::Options`.
+fn build_actions(act: &EncapRedirect) -> Vec<TcAction> {
+    // `TcActionGeneric` / `TcMirror` are `#[non_exhaustive]` in the crate, so we can't use a struct
+    // literal from here — build via `Default` and set the fields we care about.
+
+    // Action 1: tunnel_key SET (encap metadata). Generic control = PIPE (continue to next action).
+    // Each action's NLA type (`tab`) is its 1-based order index in the list (TCA_ACT_MAX_PRIO
+    // slots). Two actions sharing a `tab` collide in the kernel's action array and only one
+    // survives — so tunnel_key is slot 1, mirred is slot 2.
+    let mut tk_generic = TcActionGeneric::default();
+    tk_generic.action = TcActionType::Pipe;
+    let mut tunnel_key = TcAction::default(); // tab defaults to 1 (slot 1)
+    tunnel_key.attributes = vec![
+        TcActionAttribute::Kind(TcActionTunnelKey::KIND.to_string()),
+        TcActionAttribute::Options(vec![
+            TcActionOption::TunnelKey(TcActionTunnelKeyOption::Parms(TcTunnelKey {
+                generic: tk_generic,
+                t_action: TCA_TUNNEL_KEY_ACT_SET,
+            })),
+            TcActionOption::TunnelKey(TcActionTunnelKeyOption::EncKeyId(act.vni)),
+            // The kernel's tunnel_key SET requires BOTH an enc src and dst of the same family; the
+            // src is the (unspecified) local VTEP — the datapath/route picks the real source.
+            TcActionOption::TunnelKey(TcActionTunnelKeyOption::EncIpv6Src(Ipv6Addr::UNSPECIFIED)),
+            TcActionOption::TunnelKey(TcActionTunnelKeyOption::EncIpv6Dst(Ipv6Addr::from(
+                act.remote_vtep,
+            ))),
+        ]),
+    ];
+
+    // Action 2: mirred egress redirect. Generic control = STOLEN (packet leaves this pipeline).
+    let mut mirror_generic = TcActionGeneric::default();
+    mirror_generic.action = TcActionType::Stolen;
+    let mut mirror = TcMirror::default();
+    mirror.generic = mirror_generic;
+    mirror.eaction = TcMirrorActionType::EgressRedir;
+    mirror.ifindex = act.redirect_ifindex;
+    let mut mirred = TcAction::default();
+    mirred.tab = 2; // slot 2 (must differ from tunnel_key's slot 1)
+    mirred.attributes = vec![
+        TcActionAttribute::Kind(TcActionMirror::KIND.to_string()),
+        TcActionAttribute::Options(vec![TcActionOption::Mirror(TcActionMirrorOption::Parms(
+            mirror,
+        ))]),
+    ];
+    vec![tunnel_key, mirred]
+}
+
+/// Compute the tc `tcm_info` word encoding filter priority + wire protocol.
+///
+/// C equivalent: `TC_H_MAKE(prio << 16, htons(proto))` — high 16 bits = priority, low 16 bits =
+/// the ethertype in network byte order. The crate emits `TcHeader::info` as a native `u32`
+/// (`repr(C, packed)` struct, see `tc/header.rs`), and the kernel reads `tcm_info` natively, so we
+/// pack `(pref << 16) | htons(proto)` where `to_be()` yields the byte-swapped (network-order)
+/// ethertype on a little-endian host.
+fn filter_info(pref: u16, proto_ethertype: u16) -> u32 {
+    ((pref as u32) << 16) | (proto_ethertype.to_be() as u32 & 0xFFFF)
+}
+
+/// The wire ethertype for a flow's address family (`ETH_P_IP` / `ETH_P_IPV6`).
+fn flow_ethertype(key: &FlowKey) -> u16 {
+    match key.l3 {
+        FlowL3::V4 { .. } => ETH_P_IP,
+        FlowL3::V6 { .. } => ETH_P_IPV6,
+    }
+}
+
+/// Build the `TcMessage` header shared by install/delete/query for one filter: index=ifindex,
+/// parent=clsact ingress, handle=`handle`, info=prio+proto.
+fn filter_header(ifindex: u32, pref: u16, handle: u32, proto_ethertype: u16) -> TcHeader {
+    let mut header = TcHeader::default();
+    header.index = ifindex as i32;
+    header.parent = TcHandle::from(TC_CLSACT_INGRESS_PARENT);
+    header.handle = TcHandle::from(handle);
+    header.info = filter_info(pref, proto_ethertype);
+    header
+}
+
+/// Install a `flower` filter matching `key` with tunnel_key+mirred actions on `ifindex`'s clsact
+/// **ingress** at (`pref`, `handle`). Sent as `RTM_NEWTFILTER` with `NLM_F_CREATE | NLM_F_EXCL`.
+pub fn install_flow(
+    ifindex: u32,
+    pref: u16,
+    handle: u32,
+    key: &FlowKey,
+    act: &EncapRedirect,
+) -> Result<FlowHandle> {
+    use netlink_packet_core::{NLM_F_CREATE, NLM_F_EXCL};
+
+    let ethertype = flow_ethertype(key);
+    let tc = TcMessage::from_parts(
+        filter_header(ifindex, pref, handle, ethertype),
+        vec![
+            TcAttribute::Kind(TcFilterFlower::KIND.to_string()),
+            TcAttribute::Options(
+                build_flower_options(key, act)
+                    .into_iter()
+                    .map(TcOption::Flower)
+                    .collect(),
+            ),
+        ],
+    );
+
+    nl::request(
+        RouteNetlinkMessage::NewTrafficFilter(tc),
+        NLM_F_CREATE | NLM_F_EXCL,
+        &[],
+    )
+    .context("install flower flow")?;
+
+    Ok(FlowHandle {
+        ifindex,
+        pref,
+        handle,
+    })
+}
+
+/// Delete the flower filter identified by `h` (`RTM_DELTFILTER`, same header identity, no options).
+/// A missing filter (`-ENOENT`) is tolerated so delete is idempotent.
+pub fn delete_flow(h: &FlowHandle) -> Result<()> {
+    // Deleting by (ifindex, parent, prio, handle) — the protocol half of tcm_info is not needed to
+    // identify the filter, so pass 0 for the ethertype.
+    let tc = TcMessage::from_parts(filter_header(h.ifindex, h.pref, h.handle, 0), Vec::new());
+    nl::request(
+        RouteNetlinkMessage::DelTrafficFilter(tc),
+        0,
+        &[-libc::ENOENT],
+    )
+    .context("delete flower flow")
+}
+
+/// Dump the clsact-ingress filters on `h.ifindex` and return the flower option list of the one
+/// whose `handle` matches — `None` if no such filter is installed. This is the shared query path
+/// behind both existence checks and [`flow_in_hw`].
+fn query_flower_opts(h: &FlowHandle) -> Result<Option<Vec<TcFilterFlowerOption>>> {
+    use netlink_packet_core::NLM_F_DUMP;
+
+    let want = TcHandle::from(h.handle);
+    let tc = TcMessage::from_parts(filter_header(h.ifindex, h.pref, h.handle, 0), Vec::new());
+    let replies = nl::request_dump(RouteNetlinkMessage::GetTrafficFilter(tc), NLM_F_DUMP)
+        .context("dump flower filters")?;
+
+    for msg in replies {
+        let tc = match msg {
+            RouteNetlinkMessage::NewTrafficFilter(tc) => tc,
+            _ => continue,
+        };
+        if tc.header.handle != want {
+            continue;
+        }
+        // A single filter can carry multiple option attributes; flatten all flower options.
+        let mut flower = Vec::new();
+        for attr in &tc.attributes {
+            if let TcAttribute::Options(opts) = attr {
+                for opt in opts {
+                    if let TcOption::Flower(f) = opt {
+                        flower.push(f.clone());
+                    }
+                }
+            }
+        }
+        return Ok(Some(flower));
+    }
+    Ok(None)
+}
+
+/// True iff the filter identified by `h` currently exists on its clsact-ingress hook.
+#[cfg(test)]
+fn flow_present(h: &FlowHandle) -> Result<bool> {
+    Ok(query_flower_opts(h)?.is_some())
+}
+
+/// Query whether the filter identified by `h` is installed in hardware.
+///
+/// Dumps all filters on `h.ifindex`'s clsact ingress (`RTM_GETTFILTER` + `NLM_F_DUMP`), finds the
+/// message whose `handle` matches, and reads the offload state from the flower options: the
+/// `TCA_CLS_FLAGS_IN_HW` bit in `Flags`, or a non-zero `InHwCount`. Returns `false` when the filter
+/// is absent, or present but software-only.
+///
+/// NOTE: `in_hw` is only ever `true` on an offload-capable device (a real NIC / switchdev
+/// representor whose driver accepts flower). `netdevsim` offloads *only* BPF classifiers — flower
+/// filters there are always `not_in_hw` — so on netdevsim this reads the flag honestly and returns
+/// `false`. The netdevsim gate therefore validates the netlink *encoding* + install/query/delete
+/// round-trip, not hardware offload.
+pub fn flow_in_hw(h: &FlowHandle) -> Result<bool> {
+    let Some(opts) = query_flower_opts(h)? else {
+        return Ok(false);
+    };
+    for f in &opts {
+        match f {
+            TcFilterFlowerOption::Flags(flags) if flags & TCA_CLS_FLAGS_IN_HW != 0 => {
+                return Ok(true)
+            }
+            TcFilterFlowerOption::InHwCount(n) if *n > 0 => return Ok(true),
+            _ => {}
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 pub(crate) mod tests_support {
     use std::process::Command;
@@ -250,6 +561,239 @@ pub(crate) mod tests_support {
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        EncapRedirect, FlowKey, FlowL3, TcActionAttribute, TcActionOption, TcFilterFlowerOption,
+    };
+
+    /// Count the actions inside the `Actions(_)` flower option (there must be exactly one).
+    fn actions_len(opts: &[TcFilterFlowerOption]) -> usize {
+        opts.iter()
+            .filter_map(|o| match o {
+                TcFilterFlowerOption::Actions(a) => Some(a.len()),
+                _ => None,
+            })
+            .next()
+            .expect("flower options contain an Actions(_) entry")
+    }
+
+    #[test]
+    fn build_flower_options_v4_tcp() {
+        let key = FlowKey {
+            l3: FlowL3::V4 {
+                src: [10, 0, 0, 1],
+                dst: [10, 0, 0, 2],
+            },
+            ip_proto: 6,
+            src_port: 1111,
+            dst_port: 443,
+        };
+        let act = EncapRedirect {
+            vni: 100,
+            remote_vtep: [0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xee],
+            redirect_ifindex: 42,
+        };
+        let opts = super::build_flower_options(&key, &act);
+
+        assert!(opts
+            .iter()
+            .any(|o| matches!(o, TcFilterFlowerOption::EthType(0x0800))));
+        assert!(opts
+            .iter()
+            .any(|o| matches!(o, TcFilterFlowerOption::IpProto(6))));
+        assert!(opts.iter().any(|o| matches!(
+            o,
+            TcFilterFlowerOption::Ipv4Src(ip) if ip.octets() == [10, 0, 0, 1]
+        )));
+        assert!(opts.iter().any(|o| matches!(
+            o,
+            TcFilterFlowerOption::Ipv4Dst(ip) if ip.octets() == [10, 0, 0, 2]
+        )));
+        assert!(opts
+            .iter()
+            .any(|o| matches!(o, TcFilterFlowerOption::TcpSrc(1111))));
+        assert!(opts
+            .iter()
+            .any(|o| matches!(o, TcFilterFlowerOption::TcpDst(443))));
+        // No UDP port matches on a TCP flow.
+        assert!(!opts
+            .iter()
+            .any(|o| matches!(o, TcFilterFlowerOption::UdpSrc(_))));
+        assert_eq!(actions_len(&opts), 2, "tunnel_key + mirred");
+    }
+
+    #[test]
+    fn build_flower_options_v6_udp() {
+        let key = FlowKey {
+            l3: FlowL3::V6 {
+                src: [0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                dst: [0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+            },
+            ip_proto: 17,
+            src_port: 2222,
+            dst_port: 53,
+        };
+        let act = EncapRedirect {
+            vni: 200,
+            remote_vtep: [0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xee],
+            redirect_ifindex: 7,
+        };
+        let opts = super::build_flower_options(&key, &act);
+
+        assert!(opts
+            .iter()
+            .any(|o| matches!(o, TcFilterFlowerOption::EthType(0x86DD))));
+        assert!(opts
+            .iter()
+            .any(|o| matches!(o, TcFilterFlowerOption::IpProto(17))));
+        assert!(opts.iter().any(|o| matches!(
+            o,
+            TcFilterFlowerOption::Ipv6Src(ip) if ip.octets()[15] == 1
+        )));
+        assert!(opts.iter().any(|o| matches!(
+            o,
+            TcFilterFlowerOption::Ipv6Dst(ip) if ip.octets()[15] == 2
+        )));
+        assert!(opts
+            .iter()
+            .any(|o| matches!(o, TcFilterFlowerOption::UdpSrc(2222))));
+        assert!(opts
+            .iter()
+            .any(|o| matches!(o, TcFilterFlowerOption::UdpDst(53))));
+        // No TCP port matches on a UDP flow.
+        assert!(!opts
+            .iter()
+            .any(|o| matches!(o, TcFilterFlowerOption::TcpSrc(_))));
+        assert_eq!(actions_len(&opts), 2, "tunnel_key + mirred");
+    }
+
+    #[test]
+    fn build_actions_order_and_kinds() {
+        let act = EncapRedirect {
+            vni: 100,
+            remote_vtep: [0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xee],
+            redirect_ifindex: 42,
+        };
+        let actions = super::build_actions(&act);
+        assert_eq!(actions.len(), 2);
+
+        // Action 0 is tunnel_key, action 1 is mirred (pipeline order).
+        let kind = |a: &super::TcAction| -> String {
+            a.attributes
+                .iter()
+                .find_map(|attr| match attr {
+                    TcActionAttribute::Kind(k) => Some(k.clone()),
+                    _ => None,
+                })
+                .expect("action has a Kind")
+        };
+        assert_eq!(kind(&actions[0]), "tunnel_key");
+        assert_eq!(kind(&actions[1]), "mirred");
+
+        // tunnel_key carries the VNI as EncKeyId.
+        let has_vni = actions[0].attributes.iter().any(|attr| match attr {
+            TcActionAttribute::Options(opts) => opts.iter().any(|o| {
+                matches!(
+                    o,
+                    TcActionOption::TunnelKey(super::TcActionTunnelKeyOption::EncKeyId(100))
+                )
+            }),
+            _ => false,
+        });
+        assert!(has_vni, "tunnel_key options carry EncKeyId(vni)");
+    }
+
+    #[test]
+    fn filter_info_packs_prio_and_proto() {
+        // v4: prio 0xC000, proto 0x0800 → 0xC0000008 (matches the crate's flower GET fixtures).
+        assert_eq!(super::filter_info(0xC000, 0x0800), 0xC000_0008);
+        // Low 16 bits carry htons(ethertype); high 16 bits carry the priority.
+        assert_eq!(super::filter_info(100, 0x86DD) & 0xFFFF, 0xDD86);
+        assert_eq!(super::filter_info(100, 0x0800) >> 16, 100);
+    }
+
+    /// The netdevsim kernel gate. netdevsim only offloads BPF classifiers (never flower), so a
+    /// flower filter installed here is always `not_in_hw`. This test therefore validates what
+    /// netdevsim *can* prove: the kernel **accepts** our flower + tunnel_key + mirred netlink
+    /// encoding (no EINVAL), the installed filter is **queryable** with the 5-tuple we asked for,
+    /// `flow_in_hw` reads the (false) offload flag honestly, and `delete_flow` removes it. On real
+    /// offload-capable hardware the same encoding would flip `flow_in_hw` to true.
+    #[test]
+    #[ignore = "privileged: modprobe netdevsim (needs root); run under sudo"]
+    fn install_flow_in_hw_and_delete_on_netdevsim() {
+        let (ifx, _c) = super::tests_support::netdevsim_pf();
+        super::ensure_clsact(ifx).unwrap();
+        let act = EncapRedirect {
+            vni: 100,
+            remote_vtep: [0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xee],
+            redirect_ifindex: ifx,
+        };
+
+        // --- v4 / TCP: install is accepted (encoding valid), filter is queryable ---
+        let v4 = FlowKey {
+            l3: FlowL3::V4 {
+                src: [10, 0, 0, 1],
+                dst: [10, 0, 0, 2],
+            },
+            ip_proto: 6,
+            src_port: 1111,
+            dst_port: 443,
+        };
+        let h4 = super::install_flow(ifx, 100, 1, &v4, &act)
+            .expect("install v4 (kernel accepts encoding)");
+        let opts4 = super::query_flower_opts(&h4)
+            .expect("query v4")
+            .expect("v4 filter present after install");
+        assert!(opts4
+            .iter()
+            .any(|o| matches!(o, TcFilterFlowerOption::EthType(0x0800))));
+        assert!(opts4
+            .iter()
+            .any(|o| matches!(o, TcFilterFlowerOption::TcpDst(443))));
+        assert!(opts4
+            .iter()
+            .any(|o| matches!(o, TcFilterFlowerOption::Actions(a) if a.len() == 2)));
+        // netdevsim can't offload flower -> honestly false (would be true on real HW).
+        assert!(
+            !super::flow_in_hw(&h4).expect("in_hw v4 read"),
+            "netdevsim: flower is sw-only"
+        );
+
+        // --- v6 / UDP: install is accepted, filter is queryable ---
+        let v6 = FlowKey {
+            l3: FlowL3::V6 {
+                src: [0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                dst: [0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+            },
+            ip_proto: 17,
+            src_port: 2222,
+            dst_port: 53,
+        };
+        let h6 = super::install_flow(ifx, 101, 2, &v6, &act)
+            .expect("install v6 (kernel accepts encoding)");
+        let opts6 = super::query_flower_opts(&h6)
+            .expect("query v6")
+            .expect("v6 filter present after install");
+        assert!(opts6
+            .iter()
+            .any(|o| matches!(o, TcFilterFlowerOption::EthType(0x86DD))));
+        assert!(opts6
+            .iter()
+            .any(|o| matches!(o, TcFilterFlowerOption::UdpDst(53))));
+
+        // --- delete removes both; second delete is tolerated (idempotent) ---
+        super::delete_flow(&h4).expect("delete v4");
+        super::delete_flow(&h6).expect("delete v6");
+        assert!(
+            !super::flow_present(&h4).expect("query v4 after delete"),
+            "v4 gone after delete"
+        );
+        assert!(
+            !super::flow_present(&h6).expect("query v6 after delete"),
+            "v6 gone after delete"
+        );
+        super::delete_flow(&h4).expect("delete v4 again (ENOENT tolerated)");
+    }
+
     #[test]
     #[ignore = "privileged: modprobe netdevsim (needs root); run under sudo"]
     fn ensure_clsact_is_idempotent_on_netdevsim() {
@@ -263,8 +807,8 @@ mod tests {
     fn netlink_socket_roundtrips_a_qdisc_dump() {
         use netlink_packet_route::{tc::TcMessage, RouteNetlinkMessage};
         let msg = RouteNetlinkMessage::GetQueueDiscipline(TcMessage::default());
-        let out = super::nl::request_dump(msg, netlink_packet_core::NLM_F_DUMP)
-            .expect("qdisc dump");
+        let out =
+            super::nl::request_dump(msg, netlink_packet_core::NLM_F_DUMP).expect("qdisc dump");
         assert!(!out.is_empty(), "kernel returned at least one qdisc");
     }
 }

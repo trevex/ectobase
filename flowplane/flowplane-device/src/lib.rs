@@ -10,6 +10,10 @@ pub mod tap;
 pub mod underlay;
 pub mod veth;
 
+pub use flower::{
+    delete_flow, ensure_clsact, flow_in_hw, install_flow, EncapRedirect, FlowHandle, FlowKey,
+    FlowL3,
+};
 pub use geneve::{delete_geneve_dev, ensure_geneve_dev, geneve_add_args, GeneveDev, GENEVE_DEV};
 pub use netkit::{create_netkit_pair, delete_netkit, netkit_add_args, NetkitMode};
 pub use netns::{configure_guest_netns, GuestNetConfig};
