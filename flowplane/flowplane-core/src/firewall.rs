@@ -5,11 +5,119 @@
 //! materializing k8s "default-allow" as an explicit allow-all rule per unpolicied direction.
 
 use crate::maps::Maps;
-use crate::parse::{fw_rule_matches, icmp_type_code, l4_ports, PacketSelectors};
+use crate::parse::{icmp_type_code, l4_ports};
 use crate::pkt::Pkt;
-use flowplane_common::{
-    fw_rule6_matches, FwRuleKey, PacketSelectors6, FW_ACTION_DROP, FW_DIR_EGRESS, FW_MAX_RULES,
-};
+use flowplane_common::{FwRule, FwRule6, FwRuleKey, FW_ACTION_DROP, FW_DIR_EGRESS, FW_MAX_RULES};
+
+/// The packet fields a firewall rule is matched against. `icmp_type`/`icmp_code` are only
+/// consulted when `proto == 1` (ICMP).
+pub struct PacketSelectors {
+    pub src: [u8; 4],
+    pub dst: [u8; 4],
+    pub proto: u8,
+    pub sport: u16,
+    pub dport: u16,
+    pub icmp_type: u16,
+    pub icmp_code: u16,
+}
+
+/// Pure firewall match (no_std; used by the datapath and host-tested). Returns true if `r` matches
+/// the packet selectors `s`.
+///
+/// Lives here in `flowplane-core` (not the `flowplane-common` types crate) because it is datapath
+/// *logic*, not a shared POD type; the only callers are this crate's firewall evaluators
+/// ([`fw_eval_dir`] / [`fw_eval_dir6`]).
+#[inline]
+pub fn fw_rule_matches(r: &FwRule, s: &PacketSelectors) -> bool {
+    let PacketSelectors {
+        src,
+        dst,
+        proto,
+        sport,
+        dport,
+        icmp_type,
+        icmp_code,
+    } = *s;
+    if r.enabled == 0 {
+        return false;
+    }
+    if r.proto != 0 && r.proto != proto {
+        return false;
+    }
+    for i in 0..4 {
+        if src[i] & r.src_mask[i] != r.src_ip[i] & r.src_mask[i] {
+            return false;
+        }
+        if dst[i] & r.dst_mask[i] != r.dst_ip[i] & r.dst_mask[i] {
+            return false;
+        }
+    }
+    match proto {
+        6 | 17 => {
+            sport >= r.src_port_min
+                && sport <= r.src_port_max
+                && dport >= r.dst_port_min
+                && dport <= r.dst_port_max
+        }
+        1 => {
+            (r.icmp_type == 0xffff || icmp_type == r.icmp_type)
+                && (r.icmp_code == 0xffff || icmp_code == r.icmp_code)
+        }
+        _ => true,
+    }
+}
+
+/// IPv6 packet selectors (16-byte addresses). Mirror of `PacketSelectors`.
+pub struct PacketSelectors6 {
+    pub src: [u8; 16],
+    pub dst: [u8; 16],
+    pub proto: u8,
+    pub sport: u16,
+    pub dport: u16,
+    pub icmp_type: u16,
+    pub icmp_code: u16,
+}
+
+/// Pure IPv6 firewall match. Mirror of `fw_rule_matches`; ICMPv6 uses proto 58.
+#[inline]
+pub fn fw_rule6_matches(r: &FwRule6, s: &PacketSelectors6) -> bool {
+    let PacketSelectors6 {
+        src,
+        dst,
+        proto,
+        sport,
+        dport,
+        icmp_type,
+        icmp_code,
+    } = *s;
+    if r.enabled == 0 {
+        return false;
+    }
+    if r.proto != 0 && r.proto != proto {
+        return false;
+    }
+    for i in 0..16 {
+        if src[i] & r.src_mask[i] != r.src_ip[i] & r.src_mask[i] {
+            return false;
+        }
+        if dst[i] & r.dst_mask[i] != r.dst_ip[i] & r.dst_mask[i] {
+            return false;
+        }
+    }
+    match proto {
+        6 | 17 => {
+            sport >= r.src_port_min
+                && sport <= r.src_port_max
+                && dport >= r.dst_port_min
+                && dport <= r.dst_port_max
+        }
+        58 => {
+            (r.icmp_type == 0xffff || icmp_type == r.icmp_type)
+                && (r.icmp_code == 0xffff || icmp_code == r.icmp_code)
+        }
+        _ => true,
+    }
+}
 
 /// Evaluate the firewall for the IPv4 packet at `ip_off` against interface `ifindex` in `dir`
 /// (FW_DIR_*). Deny-by-default: returns FW_ACTION_ACCEPT only on an explicit matching accept rule,
@@ -128,4 +236,77 @@ pub fn fw_eval_dir6<P: Pkt, M: Maps>(
         idx += 1;
     }
     FW_ACTION_DROP
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fw_rule_matches, PacketSelectors};
+    use flowplane_common::{FwRule, FW_ACTION_ACCEPT, FW_DIR_INGRESS};
+
+    #[test]
+    fn fw_match_proto_and_ports() {
+        let r = FwRule {
+            src_ip: [0, 0, 0, 0],
+            src_mask: [0, 0, 0, 0],
+            dst_ip: [10, 0, 0, 5],
+            dst_mask: [255, 255, 255, 255],
+            src_port_min: 0,
+            src_port_max: 65535,
+            dst_port_min: 80,
+            dst_port_max: 80,
+            icmp_type: 0xffff,
+            icmp_code: 0xffff,
+            proto: 6,
+            action: FW_ACTION_ACCEPT,
+            direction: FW_DIR_INGRESS,
+            enabled: 1,
+        };
+        let sel = |dst: [u8; 4], proto: u8, dport: u16| PacketSelectors {
+            src: [1, 2, 3, 4],
+            dst,
+            proto,
+            sport: 12345,
+            dport,
+            icmp_type: 0,
+            icmp_code: 0,
+        };
+        assert!(fw_rule_matches(&r, &sel([10, 0, 0, 5], 6, 80)));
+        assert!(!fw_rule_matches(&r, &sel([10, 0, 0, 5], 6, 81)));
+        assert!(!fw_rule_matches(&r, &sel([10, 0, 0, 5], 17, 80)));
+        assert!(!fw_rule_matches(&r, &sel([10, 0, 0, 6], 6, 80)));
+    }
+
+    #[test]
+    fn fw_match_icmp_and_any() {
+        let r = FwRule {
+            src_ip: [0; 4],
+            src_mask: [0; 4],
+            dst_ip: [0; 4],
+            dst_mask: [0; 4],
+            src_port_min: 0,
+            src_port_max: 65535,
+            dst_port_min: 0,
+            dst_port_max: 65535,
+            icmp_type: 8,
+            icmp_code: 0xffff,
+            proto: 1,
+            action: FW_ACTION_ACCEPT,
+            direction: FW_DIR_INGRESS,
+            enabled: 1,
+        };
+        let icmp = |icmp_type: u16| PacketSelectors {
+            src: [1, 1, 1, 1],
+            dst: [2, 2, 2, 2],
+            proto: 1,
+            sport: 0,
+            dport: 0,
+            icmp_type,
+            icmp_code: 0,
+        };
+        assert!(fw_rule_matches(&r, &icmp(8)));
+        assert!(!fw_rule_matches(&r, &icmp(0)));
+        let mut d = r;
+        d.enabled = 0;
+        assert!(!fw_rule_matches(&d, &icmp(8)));
+    }
 }

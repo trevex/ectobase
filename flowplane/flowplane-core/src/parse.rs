@@ -1,10 +1,8 @@
 //! Pure IPv4 parse helpers rewritten over the `Pkt` trait (no raw pointers). Faithful ports of the
-//! eBPF `parse::l4_ports` / `firewall::icmp_type_code`. `PacketSelectors` and `fw_rule_matches` are
-//! single-sourced in `flowplane-common` and re-exported here for the core firewall evaluator.
+//! eBPF `parse::l4_ports` / `firewall::icmp_type_code`. The `PacketSelectors` inputs and the
+//! `fw_rule_matches` predicate they feed live in `crate::firewall` (datapath logic), not here.
 
 use crate::pkt::Pkt;
-
-pub use flowplane_common::{fw_rule_matches, PacketSelectors};
 
 pub const IPPROTO_ICMP: u8 = 1;
 pub const IPPROTO_TCP: u8 = 6;
