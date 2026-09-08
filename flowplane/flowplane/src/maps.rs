@@ -178,6 +178,12 @@ impl PortMetaMap {
     pub fn remove(&mut self, ifindex: u32) -> anyhow::Result<()> {
         self.map.remove(&ifindex).context("remove port_meta")
     }
+
+    /// Read-back accessor: `PORT_META[ifindex]`, `None` if the port has no entry. Used by the E/W
+    /// offload manager's offload-eligibility check (`PortMeta.offloaded`).
+    pub fn get(&self, ifindex: u32) -> Option<PortMeta> {
+        self.map.get(&ifindex, 0).ok()
+    }
 }
 
 /// Typed handle over the single-entry `INSPECT` Array map (debug packet inspector).
@@ -234,6 +240,20 @@ impl Routes {
         );
         self.map.remove(&key).context("remove route")
     }
+
+    /// Longest-prefix-match lookup for `ipv4` within `vni`'s routing table. A fully-specified
+    /// (max prefix_len) lookup key makes the kernel LPM_TRIE do the longest-match search itself.
+    /// Used by the E/W offload manager to resolve an established flow's remote VTEP + VNI.
+    pub fn get(&self, vni: u32, ipv4: [u8; 4]) -> Option<RouteValue> {
+        let key = Key::new(
+            32 + 32,
+            RouteLpmData {
+                vni: vni.to_be_bytes(),
+                ipv4,
+            },
+        );
+        self.map.get(&key, 0).ok()
+    }
 }
 
 /// Typed handle over the `ROUTES6` BPF LPM trie map (IPv6 overlay routes).
@@ -273,6 +293,19 @@ impl Routes6 {
             },
         );
         self.map.remove(&key).context("remove route6")
+    }
+
+    /// v6 sibling of [`Routes::get`]: longest-prefix-match lookup for `ipv6` within `vni`'s
+    /// routing table (`ROUTES6`).
+    pub fn get(&self, vni: u32, ipv6: [u8; 16]) -> Option<RouteValue> {
+        let key = Key::new(
+            32 + 128,
+            RouteLpmData6 {
+                vni: vni.to_be_bytes(),
+                ipv6,
+            },
+        );
+        self.map.get(&key, 0).ok()
     }
 }
 

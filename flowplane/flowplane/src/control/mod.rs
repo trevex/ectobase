@@ -1,11 +1,13 @@
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use aya::Ebpf;
-use flowplane_common::{IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, Local, IFACE_DEV_MAX};
+use flowplane_common::{
+    IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, Local, RouteValue, IFACE_DEV_MAX,
+};
 
 use crate::loader;
 use crate::maps::{
@@ -636,6 +638,93 @@ impl Control {
     /// Return a shared handle to the conntrack map (for the GC task and flush operations).
     pub fn take_conntrack(&self) -> Arc<Mutex<Conntrack>> {
         Arc::clone(&self.conntrack)
+    }
+
+    /// Return a shared handle to the v6 firewall conntrack map (`CONNTRACK6`), mirroring
+    /// [`Control::take_conntrack`]. Unlike the v4 handle, `CONNTRACK6` lives on `AyaWriter` (not a
+    /// dedicated `Control` field), so this reaches it through `core.writer()`.
+    pub fn take_conntrack6(&self) -> Arc<Mutex<Conntrack6>> {
+        Arc::clone(&self.inner.lock().core.writer().conntrack6)
+    }
+
+    /// The node-wide `collect_md` Geneve device's ifindex (`fp-geneve0`) — the tc-flower redirect
+    /// target the E/W offload manager programs established flows onto.
+    pub fn geneve_ifindex(&self) -> u32 {
+        self.inner.lock().geneve_ifindex
+    }
+
+    /// `INTERFACES[(vni, ipv4)]` lookup: the representor's delivery info (tap ifindex, locality),
+    /// used by the E/W offload manager to resolve an established flow's local representor.
+    pub fn iface_lookup_v4(&self, vni: u32, ipv4: [u8; 4]) -> Option<IfaceValue> {
+        self.inner
+            .lock()
+            .core
+            .writer()
+            .ifaces
+            .get(&IfaceKey::new(vni, ipv4))
+    }
+
+    /// v6 sibling of [`Control::iface_lookup_v4`] (`INTERFACES6`).
+    pub fn iface_lookup_v6(&self, vni: u32, ipv6: [u8; 16]) -> Option<IfaceValue> {
+        self.inner
+            .lock()
+            .core
+            .writer()
+            .ifaces6
+            .get(&IfaceKey6::new(vni, ipv6))
+    }
+
+    /// `ROUTES` longest-prefix-match lookup for `dst` — the remote VTEP + VNI an established
+    /// flow's inner destination routes through. `None` if no route covers `dst`.
+    pub fn route_lookup_v4(&self, vni: u32, dst: [u8; 4]) -> Option<RouteValue> {
+        self.inner.lock().core.writer().routes.get(vni, dst)
+    }
+
+    /// v6 sibling of [`Control::route_lookup_v4`] (`ROUTES6`).
+    pub fn route_lookup_v6(&self, vni: u32, dst: [u8; 16]) -> Option<RouteValue> {
+        self.inner.lock().core.writer().routes6.get(vni, dst)
+    }
+
+    /// Whether `tap`'s `PORT_META` entry is offload-eligible (`offloaded == 1`); `false` if the
+    /// port has no entry.
+    pub fn port_offloaded(&self, tap: u32) -> bool {
+        self.inner
+            .lock()
+            .core
+            .writer()
+            .ports
+            .get(tap)
+            .map(|m| m.offloaded != 0)
+            .unwrap_or(false)
+    }
+
+    /// The distinct set of offload-capable representor ifindexes: every `INTERFACES`/`INTERFACES6`
+    /// entry's `tap_ifindex` whose `PORT_META` has `offloaded == 1`. Used by the E/W offload
+    /// manager's startup flush to find (and clear) any leaked flower filters across all VF
+    /// representors.
+    pub fn offloaded_reps(&self) -> Vec<u32> {
+        let g = self.inner.lock();
+        let w = g.core.writer();
+        let mut set = BTreeSet::new();
+        for (_k, v) in w.ifaces.entries() {
+            if w.ports
+                .get(v.tap_ifindex)
+                .map(|m| m.offloaded != 0)
+                .unwrap_or(false)
+            {
+                set.insert(v.tap_ifindex);
+            }
+        }
+        for (_k, v) in w.ifaces6.entries() {
+            if w.ports
+                .get(v.tap_ifindex)
+                .map(|m| m.offloaded != 0)
+                .unwrap_or(false)
+            {
+                set.insert(v.tap_ifindex);
+            }
+        }
+        set.into_iter().collect()
     }
 
     /// Run `f` with an exclusive `&mut` borrow of the inner `ControlCore` under the `Inner` lock.
