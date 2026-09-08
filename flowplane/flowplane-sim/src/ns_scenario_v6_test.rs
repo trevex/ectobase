@@ -14,10 +14,10 @@ use flowplane_common::{
     UnderlayValue, FW_ACTION_ACCEPT, FW_DIR_INGRESS, UNDERLAY_LOCAL_DELIVER,
 };
 use flowplane_core::conntrack::ct_key6;
+use flowplane_core::decap::GW_MAC;
 use flowplane_core::encap::{TunnelEncap, ETH_LEN};
 use flowplane_core::maps::Maps;
 use flowplane_core::pkt::Action;
-use flowplane_core::uplink::GW_MAC;
 
 use crate::{SimNode, VecPkt};
 

@@ -136,6 +136,6 @@ pub fn tc_nat64_egress(
 // `adjust_room` — see `coreimpl.rs`). P2 Task 5 fixed the two disclosed staleness items this comment
 // used to describe: `process_uplink_nat64_ingress`'s resize is now the correct `grow_head(20)` at the
 // post-decap `ETH_LEN` offset (not the stale pre-decap `shrink_head(20)` at `ETH_LEN+IPV6_LEN`), and
-// `flowplane_core::uplink::decap_and_rewrite` no longer strips a (nonexistent) outer header either.
+// `flowplane_core::decap::decap_and_rewrite` no longer strips a (nonexistent) outer header either.
 // Restoring a verifier-safe (out-of-line, low-stack) hand-inlined fast path here remains follow-up
 // work if the shared-orchestrator path's stack cost ever becomes a problem again.

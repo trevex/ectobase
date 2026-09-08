@@ -9,10 +9,10 @@ use flowplane_common::{
     UNDERLAY_LOCAL_DELIVER,
 };
 use flowplane_core::conntrack::ct_key;
+use flowplane_core::decap::GW_MAC;
 use flowplane_core::encap::ETH_LEN;
 use flowplane_core::maps::Maps;
 use flowplane_core::pkt::Action;
-use flowplane_core::uplink::GW_MAC;
 
 use crate::{SimNode, VecPkt};
 

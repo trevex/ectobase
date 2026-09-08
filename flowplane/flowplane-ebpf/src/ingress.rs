@@ -143,7 +143,7 @@ pub(crate) fn execute(ctx: &TcContext, action: Action, tunnel: Option<TunnelEnca
         Action::Redirect(ifindex) => unsafe { bpf_redirect(ifindex, 0) as i32 },
         // Local delivery to a veth/netkit guest: inject at the pod-netns peer's ingress in the same
         // softirq (skips the primary's xmit + host-stack re-entry). Only produced for peer_capable
-        // targets (see flowplane_core::uplink::decap_and_rewrite).
+        // targets (see flowplane_core::decap::decap_and_rewrite).
         Action::RedirectPeer(ifindex) => unsafe { bpf_redirect_peer(ifindex, 0) as i32 },
         Action::Pass => TC_ACT_OK,
         Action::Drop => TC_ACT_SHOT,

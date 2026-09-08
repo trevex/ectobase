@@ -19,7 +19,7 @@ use crate::err::DpErr;
 use crate::pkt::{Action, Pkt};
 
 // `GW_MAC` (inner-eth src on host delivery) + `ETH_P_IP`/`ETH_P_IPV6` are single-sourced in
-// `flowplane_common::proto`; re-exported so `flowplane_core::uplink::{GW_MAC, ETH_P_IP, ETH_P_IPV6}`
+// `flowplane_common::proto`; re-exported so `flowplane_core::decap::{GW_MAC, ETH_P_IP, ETH_P_IPV6}`
 // keeps resolving.
 pub use flowplane_common::proto::{ETH_P_IP, ETH_P_IPV6, GW_MAC};
 

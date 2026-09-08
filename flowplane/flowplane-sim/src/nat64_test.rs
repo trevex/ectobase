@@ -451,7 +451,7 @@ fn ingress_frame(inner: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(ETH_LEN + inner.len());
     out.extend_from_slice(&UPLINK_MAC);
     out.extend_from_slice(&GATEWAY_MAC);
-    out.extend_from_slice(&flowplane_core::uplink::ETH_P_IP.to_be_bytes());
+    out.extend_from_slice(&flowplane_core::decap::ETH_P_IP.to_be_bytes());
     out.extend_from_slice(inner);
     out
 }

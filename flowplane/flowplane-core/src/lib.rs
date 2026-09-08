@@ -4,6 +4,7 @@ pub mod arp_nd;
 pub mod conntrack;
 mod csum;
 pub mod datapath;
+pub mod decap;
 pub mod dhcp;
 pub mod dsr;
 pub mod egress;
@@ -17,6 +18,5 @@ pub mod nat;
 pub mod nat64;
 pub mod parse;
 pub mod pkt;
-pub mod uplink;
 
 pub use err::DpErr;
