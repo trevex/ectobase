@@ -336,7 +336,18 @@ fn build_flower_options(key: &FlowKey, act: &EncapRedirect) -> Vec<TcFilterFlowe
 ///
 /// Each action is a `TcAction { tab: 1, attributes: [Kind, Options] }`; the concrete parameters
 /// live in the nested `TcActionOption` under `TcActionAttribute::Options`.
+/// The Geneve overlay outer UDP port (IANA-assigned). Set as the tunnel_key `EncDstPort` so the
+/// geneve device / hardware offload emits real Geneve.
+const GENEVE_UDP_PORT: u16 = 6081;
+
 fn build_actions(act: &EncapRedirect) -> Vec<TcAction> {
+    // Geneve VNI is 24-bit; `EncKeyId` takes a u32 and the kernel truncates silently — a caller
+    // passing a >24-bit vni is a bug, not a valid flow.
+    debug_assert!(
+        act.vni <= 0x00FF_FFFF,
+        "Geneve VNI is 24-bit; got {:#x}",
+        act.vni
+    );
     // `TcActionGeneric` / `TcMirror` are `#[non_exhaustive]` in the crate, so we can't use a struct
     // literal from here — build via `Default` and set the fields we care about.
 
@@ -361,6 +372,12 @@ fn build_actions(act: &EncapRedirect) -> Vec<TcAction> {
             TcActionOption::TunnelKey(TcActionTunnelKeyOption::EncIpv6Dst(Ipv6Addr::from(
                 act.remote_vtep,
             ))),
+            // Outer UDP destination port = the Geneve port (6081). REQUIRED: the geneve device's
+            // xmit uses `key.tp_dst` as the outer UDP dport, and mlx5 tunnel-encap offload only binds
+            // to the registered Geneve port — without it the metadata carries tp_dst=0 (emits to UDP
+            // port 0, never received; never offloaded). netdevsim accepts the action either way, so
+            // the netdevsim gate can't catch this — it's a live-hardware correctness requirement.
+            TcActionOption::TunnelKey(TcActionTunnelKeyOption::EncDstPort(GENEVE_UDP_PORT)),
         ]),
     ];
 
@@ -537,25 +554,31 @@ pub fn flow_in_hw(h: &FlowHandle) -> Result<bool> {
 #[cfg(test)]
 pub(crate) mod tests_support {
     use std::process::Command;
-    pub struct Cleanup;
+    /// Removes only THIS test's netdevsim device on drop. Deliberately does NOT `rmmod netdevsim`:
+    /// each privileged test uses a UNIQUE device id, so they no longer collide and can run in
+    /// parallel — a shared `rmmod` in drop would yank a concurrent test's device. The module is left
+    /// loaded (harmless; idempotent `modprobe` on the next run).
+    pub struct Cleanup {
+        id: u32,
+    }
     impl Drop for Cleanup {
         fn drop(&mut self) {
-            let _ = std::fs::write("/sys/bus/netdevsim/del_device", "42");
-            let _ = Command::new("rmmod").arg("netdevsim").status();
+            let _ = std::fs::write("/sys/bus/netdevsim/del_device", self.id.to_string());
         }
     }
-    /// modprobe netdevsim, create netdevsim42 (1 port), return (PF ifindex `eni42np1`, cleanup).
-    pub fn netdevsim_pf() -> (u32, Cleanup) {
+    /// modprobe netdevsim, create `netdevsim<id>` (1 port), return (PF ifindex `eni<id>np1`, cleanup).
+    /// Each test MUST pass a unique `id` so privileged tests don't collide under parallel `--ignored`.
+    pub fn netdevsim_pf(id: u32) -> (u32, Cleanup) {
         let _ = Command::new("modprobe").arg("netdevsim").status();
-        std::fs::write("/sys/bus/netdevsim/new_device", "42 1").expect("new_device");
+        std::fs::write("/sys/bus/netdevsim/new_device", format!("{id} 1")).expect("new_device");
         // small settle for the netdev to appear
         let _ = Command::new("udevadm").arg("settle").status();
-        let ifx: u32 = std::fs::read_to_string("/sys/class/net/eni42np1/ifindex")
-            .expect("read eni42np1 ifindex")
+        let ifx: u32 = std::fs::read_to_string(format!("/sys/class/net/eni{id}np1/ifindex"))
+            .unwrap_or_else(|e| panic!("read eni{id}np1 ifindex: {e}"))
             .trim()
             .parse()
             .expect("parse ifindex");
-        (ifx, Cleanup)
+        (ifx, Cleanup { id })
     }
 }
 
@@ -700,6 +723,21 @@ mod tests {
             _ => false,
         });
         assert!(has_vni, "tunnel_key options carry EncKeyId(vni)");
+
+        // tunnel_key sets the Geneve outer UDP port (6081) — required for real geneve/HW offload.
+        let has_geneve_port = actions[0].attributes.iter().any(|attr| match attr {
+            TcActionAttribute::Options(opts) => opts.iter().any(|o| {
+                matches!(
+                    o,
+                    TcActionOption::TunnelKey(super::TcActionTunnelKeyOption::EncDstPort(6081))
+                )
+            }),
+            _ => false,
+        });
+        assert!(
+            has_geneve_port,
+            "tunnel_key sets EncDstPort(6081) for Geneve"
+        );
     }
 
     #[test]
@@ -720,7 +758,7 @@ mod tests {
     #[test]
     #[ignore = "privileged: modprobe netdevsim (needs root); run under sudo"]
     fn install_flow_in_hw_and_delete_on_netdevsim() {
-        let (ifx, _c) = super::tests_support::netdevsim_pf();
+        let (ifx, _c) = super::tests_support::netdevsim_pf(42);
         super::ensure_clsact(ifx).unwrap();
         let act = EncapRedirect {
             vni: 100,
@@ -797,7 +835,7 @@ mod tests {
     #[test]
     #[ignore = "privileged: modprobe netdevsim (needs root); run under sudo"]
     fn ensure_clsact_is_idempotent_on_netdevsim() {
-        let (ifx, _c) = super::tests_support::netdevsim_pf();
+        let (ifx, _c) = super::tests_support::netdevsim_pf(43);
         super::ensure_clsact(ifx).expect("clsact created");
         super::ensure_clsact(ifx).expect("clsact idempotent (EEXIST tolerated)");
     }
