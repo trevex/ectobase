@@ -2,6 +2,7 @@
 
 pub mod arp_nd;
 pub mod conntrack;
+mod csum;
 pub mod datapath;
 pub mod dhcp;
 pub mod dsr;

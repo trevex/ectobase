@@ -91,22 +91,11 @@ pub fn is_nat64_addr(addr: &[u8; 16]) -> bool {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Checksum helpers — all operate on fixed-size stack arrays, never on packet
-// memory with variable offsets. Ported verbatim from the eBPF `nat64` module.
+// memory with variable offsets. The RFC1071 fold/accumulate primitives live in
+// `crate::csum`; the header checksums below build on them.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Fold a 32-bit accumulated ones-complement sum into a 16-bit checksum.
-#[inline(always)]
-fn csum_fold(mut sum: u32) -> u16 {
-    sum = (sum & 0xffff) + (sum >> 16);
-    sum = (sum & 0xffff) + (sum >> 16);
-    !(sum as u16)
-}
-
-/// Add a big-endian 16-bit word (from two bytes) to an accumulator.
-#[inline(always)]
-fn csum_add16(sum: u32, hi: u8, lo: u8) -> u32 {
-    sum.wrapping_add(((hi as u32) << 8) | lo as u32)
-}
+use crate::csum::{add_be16 as csum_add16, fold as csum_fold};
 
 /// Ones-complement checksum over a 20-byte IPv4 header in a stack buffer.
 #[inline(always)]

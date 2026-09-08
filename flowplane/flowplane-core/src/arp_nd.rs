@@ -35,8 +35,7 @@ pub const RA_LEN: usize = ETH_LEN + IPV6_LEN + 32;
 
 /// One's-complement checksum over `len` bytes of `pkt` starting at `off`, folded with an initial
 /// `sum` (the IPv6 pseudo-header). Reads through the `Pkt` trait a `u16` at a time; `len` must be
-/// even for the caller (the ICMPv6 NA header we sum is 32 bytes). Two fixed fold rounds suffice for
-/// any 32-bit accumulator (the BPF verifier requires bounded loops). Byte-identical to the previous
+/// even for the caller (the ICMPv6 NA header we sum is 32 bytes). Byte-identical to the previous
 /// `flowplane_common::arp_nd::csum16`.
 #[inline(always)]
 fn csum16<P: Pkt>(mut sum: u32, pkt: &P, off: usize, len: usize) -> u16 {
@@ -47,9 +46,7 @@ fn csum16<P: Pkt>(mut sum: u32, pkt: &P, off: usize, len: usize) -> u16 {
         }
         i += 2;
     }
-    sum = (sum & 0xffff) + (sum >> 16);
-    sum = (sum & 0xffff) + (sum >> 16);
-    !(sum as u16)
+    crate::csum::fold(sum)
 }
 
 /// If `pkt` is an ICMPv6 Neighbor Solicitation for `gateway_ipv6`, rewrite it in place into a

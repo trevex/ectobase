@@ -183,11 +183,7 @@ pub fn parse<P: Pkt>(pkt: &P) -> Option<Dhcpv4Request> {
     })
 }
 
-/// Fold `[u8; 2]` big-endian words into a one's-complement checksum accumulator.
-#[inline(always)]
-fn csum_add(sum: &mut u32, hi: u8, lo: u8) {
-    *sum = sum.wrapping_add(((hi as u32) << 8) | lo as u32);
-}
+use crate::csum::{add_be16, fold};
 
 /// Build the DHCPv4 OFFER/ACK into `pkt`, which the glue has ALREADY resized to [`REPLY_LEN`].
 ///
@@ -346,18 +342,16 @@ pub fn write<P: Pkt, M: Maps>(
         255,
     ];
     let mut s: u32 = 0;
-    csum_add(&mut s, ip_hdr[0], ip_hdr[1]);
-    csum_add(&mut s, ip_hdr[2], ip_hdr[3]);
-    csum_add(&mut s, ip_hdr[4], ip_hdr[5]);
-    csum_add(&mut s, ip_hdr[6], ip_hdr[7]);
-    csum_add(&mut s, ip_hdr[8], ip_hdr[9]);
-    csum_add(&mut s, ip_hdr[12], ip_hdr[13]);
-    csum_add(&mut s, ip_hdr[14], ip_hdr[15]);
-    csum_add(&mut s, ip_hdr[16], ip_hdr[17]);
-    csum_add(&mut s, ip_hdr[18], ip_hdr[19]);
-    s = (s & 0xffff) + (s >> 16);
-    s = (s & 0xffff) + (s >> 16);
-    let ip_csum = !(s as u16);
+    s = add_be16(s, ip_hdr[0], ip_hdr[1]);
+    s = add_be16(s, ip_hdr[2], ip_hdr[3]);
+    s = add_be16(s, ip_hdr[4], ip_hdr[5]);
+    s = add_be16(s, ip_hdr[6], ip_hdr[7]);
+    s = add_be16(s, ip_hdr[8], ip_hdr[9]);
+    s = add_be16(s, ip_hdr[12], ip_hdr[13]);
+    s = add_be16(s, ip_hdr[14], ip_hdr[15]);
+    s = add_be16(s, ip_hdr[16], ip_hdr[17]);
+    s = add_be16(s, ip_hdr[18], ip_hdr[19]);
+    let ip_csum = fold(s);
     pkt.write_array::<20>(ETH_LEN, &ip_hdr);
     pkt.write_array::<2>(ETH_LEN + 10, &ip_csum.to_be_bytes());
 
