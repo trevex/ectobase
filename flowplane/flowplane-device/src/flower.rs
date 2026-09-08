@@ -181,8 +181,83 @@ pub mod nl {
     }
 }
 
+/// clsact qdisc handle == parent (Linux `TC_H_CLSACT` == `TC_H_INGRESS`, major 0xFFFF / minor
+/// 0xFFF1). The crate exposes this as [`TcHandle::CLSACT`] (major u16::MAX, minor 0xFFF1).
+const TC_H_CLSACT: u32 = 0xFFFF_FFF1;
+
+/// Idempotently ensure a `clsact` qdisc on `ifindex` (RTM_NEWQDISC; EEXIST tolerated — an
+/// increment-A VF representor already has clsact for tc_guest_tx).
+///
+/// Message construction (netlink-packet-route 0.33): a [`TcMessage`] whose header carries
+/// `index = ifindex`, `handle = parent = TcHandle::CLSACT` (== `TC_H_CLSACT`), and a single
+/// `TcAttribute::Kind("clsact")` NLA (TCA_KIND). Sent as `NewQueueDiscipline` with
+/// `NLM_F_CREATE | NLM_F_EXCL`; a duplicate returns -EEXIST which we tolerate.
+pub fn ensure_clsact(ifindex: u32) -> Result<()> {
+    use netlink_packet_core::{NLM_F_CREATE, NLM_F_EXCL};
+    use netlink_packet_route::tc::{TcAttribute, TcHandle, TcMessage};
+
+    // Sanity: our named constant must equal the crate's CLSACT handle (major<<16 | minor).
+    debug_assert_eq!(
+        TC_H_CLSACT,
+        ((TcHandle::CLSACT.major as u32) << 16) | TcHandle::CLSACT.minor as u32
+    );
+
+    let mut tc = TcMessage::default();
+    tc.header.index = ifindex as i32;
+    // The clsact qdisc lives at handle `ffff:0` under parent `ffff:fff1` (TC_H_CLSACT) — i.e.
+    // `tc qdisc show` reports `qdisc clsact ffff: parent ffff:fff1`. Setting handle == parent ==
+    // TC_H_CLSACT is rejected by the kernel with EINVAL, so the handle major is 0xffff / minor 0.
+    tc.header.handle = TcHandle {
+        major: 0xffff,
+        minor: 0,
+    };
+    tc.header.parent = TcHandle::CLSACT;
+    // TCA_KIND = "clsact"
+    tc.attributes.push(TcAttribute::Kind("clsact".to_string()));
+
+    nl::request(
+        RouteNetlinkMessage::NewQueueDiscipline(tc),
+        NLM_F_CREATE | NLM_F_EXCL,
+        &[-libc::EEXIST],
+    )
+    .context("ensure clsact qdisc")
+}
+
+#[cfg(test)]
+pub(crate) mod tests_support {
+    use std::process::Command;
+    pub struct Cleanup;
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::write("/sys/bus/netdevsim/del_device", "42");
+            let _ = Command::new("rmmod").arg("netdevsim").status();
+        }
+    }
+    /// modprobe netdevsim, create netdevsim42 (1 port), return (PF ifindex `eni42np1`, cleanup).
+    pub fn netdevsim_pf() -> (u32, Cleanup) {
+        let _ = Command::new("modprobe").arg("netdevsim").status();
+        std::fs::write("/sys/bus/netdevsim/new_device", "42 1").expect("new_device");
+        // small settle for the netdev to appear
+        let _ = Command::new("udevadm").arg("settle").status();
+        let ifx: u32 = std::fs::read_to_string("/sys/class/net/eni42np1/ifindex")
+            .expect("read eni42np1 ifindex")
+            .trim()
+            .parse()
+            .expect("parse ifindex");
+        (ifx, Cleanup)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[ignore = "privileged: modprobe netdevsim (needs root); run under sudo"]
+    fn ensure_clsact_is_idempotent_on_netdevsim() {
+        let (ifx, _c) = super::tests_support::netdevsim_pf();
+        super::ensure_clsact(ifx).expect("clsact created");
+        super::ensure_clsact(ifx).expect("clsact idempotent (EEXIST tolerated)");
+    }
+
     #[test]
     #[ignore = "opens a NETLINK_ROUTE socket; run under sudo"]
     fn netlink_socket_roundtrips_a_qdisc_dump() {
