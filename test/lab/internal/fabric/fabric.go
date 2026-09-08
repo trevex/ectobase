@@ -36,7 +36,7 @@ const (
 	// 2001:db8::/32): hand-picked v6 LB VIPs (e.g. 2001:db8:2b::1) and NAT66 source
 	// IPs are drawn from it. Advertised by both edges (anycast) + routed back from the
 	// WAN, mirroring PublicV4.
-	PublicV6 = "2001:db8:2b::/64"
+	PublicV6     = "2001:db8:2b::/64"
 	NodeAggr     = "fd00:cafe::/32" // aggregate of every cluster's /48 node identities (fd00:cafe:<h>::/48)
 	PodAggr      = "fd00:244::/32"  // aggregate of every cluster's Cilium pod pool (fd00:244:<h>::/56)
 	LoopAggr     = "fd00:ffff::/32" // aggregate of the edge loopbacks

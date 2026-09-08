@@ -55,12 +55,12 @@ func TestRestartContinuity(t *testing.T) {
 	srcNode := nodeContainer(cfg, src)
 
 	const (
-		srcID  = "rcont"      // endpoint on the restarting node (k02)
-		dstID  = "rcont-peer" // peer endpoint on the other node (k03)
-		srcIP  = "10.0.0.60"
-		dstIP  = "10.0.0.61"
-		srcMAC = "52:54:00:00:00:60"
-		dstMAC = "52:54:00:00:00:61"
+		srcID        = "rcont"      // endpoint on the restarting node (k02)
+		dstID        = "rcont-peer" // peer endpoint on the other node (k03)
+		srcIP        = "10.0.0.60"
+		dstIP        = "10.0.0.61"
+		srcMAC       = "52:54:00:00:00:60"
+		dstMAC       = "52:54:00:00:00:61"
 		pingCount    = 60 // 60 * 0.2s = ~12 s window
 		pingInterval = "0.2"
 		// SKB fabric threshold: the clab uplinks are SKB/MTU-1500. The restart gap is bounded by the

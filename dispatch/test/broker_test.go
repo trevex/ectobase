@@ -117,7 +117,7 @@ func TestBroker_Loopback(t *testing.T) {
 	ctx := kitenvtest.Context()
 
 	b := &broker.Broker{
-		Dispatch:     dispatchClient,
+		Dispatch:    dispatchClient,
 		Downstream:  downstreamClient,
 		ClusterName: "c1",
 	}
@@ -317,7 +317,7 @@ func TestBroker_Loopback(t *testing.T) {
 		t.Fatalf("(e) central2 client.New: %v", err)
 	}
 	b2 := &broker.Broker{
-		Dispatch:     dispatchClient2,
+		Dispatch:    dispatchClient2,
 		Downstream:  downstreamClient,
 		ClusterName: "c1",
 	}

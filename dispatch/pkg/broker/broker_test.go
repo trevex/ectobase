@@ -121,11 +121,15 @@ func TestSyncCompiledVMs_NamespacedCreateUpdateGC(t *testing.T) {
 
 func TestSyncCompiledVolumeAttachments_NamespacedCreateUpdateGC(t *testing.T) {
 	s := runtime.NewScheme()
-	if err := compiledv1.AddToScheme(s); err != nil { t.Fatal(err) }
+	if err := compiledv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
 	att := func(ns, name, cn, img string) *compiledv1.CompiledVolumeAttachment {
 		return &compiledv1.CompiledVolumeAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: compiledv1.CompiledVolumeAttachmentSpec{ClusterName: cn, BootImage: img}}
 	}
-	idx := func(o client.Object) []string { return []string{o.(*compiledv1.CompiledVolumeAttachment).Spec.ClusterName} }
+	idx := func(o client.Object) []string {
+		return []string{o.(*compiledv1.CompiledVolumeAttachment).Spec.ClusterName}
+	}
 	dispatch := fake.NewClientBuilder().WithScheme(s).
 		WithIndex(&compiledv1.CompiledVolumeAttachment{}, "spec.clusterName", idx).
 		WithObjects(att("ns1", "a", "c1", "fedora"), att("ns1", "b", "c2", "x")).Build()
@@ -133,14 +137,20 @@ func TestSyncCompiledVolumeAttachments_NamespacedCreateUpdateGC(t *testing.T) {
 		WithObjects(att("ns1", "stale", "c1", "old"), att("ns1", "a", "c1", "OLD")).Build()
 
 	b := &Broker{Dispatch: dispatch, Downstream: downstream, ClusterName: "c1"}
-	if err := b.SyncCompiledVolumeAttachments(context.Background()); err != nil { t.Fatal(err) }
+	if err := b.SyncCompiledVolumeAttachments(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 
 	list := &compiledv1.CompiledVolumeAttachmentList{}
-	if err := downstream.List(context.Background(), list); err != nil { t.Fatal(err) }
+	if err := downstream.List(context.Background(), list); err != nil {
+		t.Fatal(err)
+	}
 	if len(list.Items) != 1 || list.Items[0].Name != "a" || list.Items[0].Spec.BootImage != "fedora" {
 		t.Fatalf("want [a(fedora)], got %+v", list.Items)
 	}
-	if err := b.SyncCompiledVolumeAttachments(context.Background()); err != nil { t.Fatalf("second sync: %v", err) }
+	if err := b.SyncCompiledVolumeAttachments(context.Background()); err != nil {
+		t.Fatalf("second sync: %v", err)
+	}
 }
 
 func TestSyncCompiledContainers_NamespacedCreateUpdateGC(t *testing.T) {

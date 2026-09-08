@@ -3,9 +3,9 @@ package controllers
 import (
 	"testing"
 
-	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
-	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
+	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )

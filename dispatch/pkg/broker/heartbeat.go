@@ -17,11 +17,13 @@ import (
 )
 
 // CapacityReporter yields the schedulable capacity to advertise for this cluster.
-type CapacityReporter interface{ Report(ctx context.Context) (corev1.ResourceList, error) }
+type CapacityReporter interface {
+	Report(ctx context.Context) (corev1.ResourceList, error)
+}
 
 // Heartbeater renews the broker's ClusterPool lease + reports capacity upward.
 type Heartbeater struct {
-	Dispatch        client.Client
+	Dispatch       client.Client
 	PoolName       string
 	HolderIdentity string
 	Reporter       CapacityReporter

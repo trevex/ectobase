@@ -17,12 +17,12 @@ import (
 
 	kitenvtest "go.opendefense.cloud/kit/envtest"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
-	netinstall "github.com/trevex/ectobase/api/net/install"
-	computeinstall "github.com/trevex/ectobase/api/compute/install"
-	platforminstall "github.com/trevex/ectobase/api/platform/install"
 	compiledinstall "github.com/trevex/ectobase/api/compiled/install"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	computeinstall "github.com/trevex/ectobase/api/compute/install"
+	netinstall "github.com/trevex/ectobase/api/net/install"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	platforminstall "github.com/trevex/ectobase/api/platform/install"
 	storageinstall "github.com/trevex/ectobase/api/storage/install"
 	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 )

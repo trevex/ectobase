@@ -31,9 +31,9 @@ func main() {
 
 	var (
 		dispatchKubeconfig string
-		clusterName   string
-		networkName   string
-		vmNetworkName string
+		clusterName        string
+		networkName        string
+		vmNetworkName      string
 	)
 	flag.StringVar(&dispatchKubeconfig, "dispatch-kubeconfig", "", "Path to the dispatch aggregated-apiserver kubeconfig (falls back to in-cluster/KUBECONFIG when empty).")
 	flag.StringVar(&clusterName, "cluster-name", "", "Default cluster binding stamped onto CompiledNICs whose NIC has no owning VirtualMachine.")

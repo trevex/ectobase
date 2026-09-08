@@ -22,9 +22,9 @@ import (
 
 const (
 	nat6GuestID  = "nat6smoke"
-	nat6GuestIP  = "fd00:100::22"        // overlay ULA guest v6 (VNI 100)
+	nat6GuestIP  = "fd00:100::22" // overlay ULA guest v6 (VNI 100)
 	nat6GuestMAC = "52:54:00:00:00:26"
-	nat6PublicIP = "2001:db8:2b::a"      // a hand-picked pick from PublicV6 (2001:db8:2b::/64)
+	nat6PublicIP = "2001:db8:2b::a" // a hand-picked pick from PublicV6 (2001:db8:2b::/64)
 	nat6PortMin  = 1024
 	nat6PortMax  = 2047
 	nat6ExtDst   = "2001:4860:4860::8888" // external v6 dst (route external=true); not reached, just sniffed
@@ -139,8 +139,8 @@ const (
 	nat6RetGuestIP  = "fd00:100::26"
 	nat6RetGuestMAC = "52:54:00:00:00:27"
 	nat6RetNatIP    = "2001:db8:2b::b" // distinct from the smoke test's ::a
-	nat6RetPort     = 20000           // single-port pool [P,P+1) => snat_egress6 deterministically picks P
-	nat6RetGSport   = 12345           // guest's original L4 sport; the reverse-DNAT restores it as the reply dport
+	nat6RetPort     = 20000            // single-port pool [P,P+1) => snat_egress6 deterministically picks P
+	nat6RetGSport   = 12345            // guest's original L4 sport; the reverse-DNAT restores it as the reply dport
 	nat6RetExtDst   = "2001:4860:4860::8844"
 )
 

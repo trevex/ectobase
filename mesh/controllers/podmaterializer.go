@@ -63,7 +63,7 @@ func buildPod(cc *compiledv1.CompiledContainer) *corev1.Pod {
 
 	grace := int64(0)
 	pod := &corev1.Pod{
-		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},
+		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:   cc.Namespace,
 			Name:        cc.Name,

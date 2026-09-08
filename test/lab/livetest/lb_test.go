@@ -65,7 +65,7 @@ func TestLbDistributeSmoke(t *testing.T) {
 	edge := clab.ContainerName(cfg.Name, "flowplane-edge1")
 	edge2 := clab.ContainerName(cfg.Name, "flowplane-edge2")
 	wan := clab.ContainerName(cfg.Name, "wan")
-	edgeUnderlay := fabric.EdgeLoopback + "::e1"   // edge1's BGP-advertised local-deliver underlay
+	edgeUnderlay := fabric.EdgeLoopback + "::e1"  // edge1's BGP-advertised local-deliver underlay
 	edge2Underlay := fabric.EdgeLoopback + "::e2" // edge2's — anycast peer; the WAN ECMPs to either
 
 	// 1. Backend guest, dual-stack (the v6 overlay IP wires the v6 firewall meta the DSR path needs).

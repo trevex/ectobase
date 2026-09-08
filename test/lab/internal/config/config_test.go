@@ -27,8 +27,8 @@ fabric:
 
 func TestValidateRejects(t *testing.T) {
 	for _, tc := range []string{
-		`name: x` + "\n" + `fabric: {as: {edge: 0, switch: 1, host: 2}, clusters: [{name: a, nodes: 1}]}`,       // edge ASN 0
-		`name: x` + "\n" + `fabric: {as: {edge: 1, switch: 1, host: 1}, clusters: [{name: a, nodes: 99}]}`,      // nodes > 15
+		`name: x` + "\n" + `fabric: {as: {edge: 0, switch: 1, host: 2}, clusters: [{name: a, nodes: 1}]}`,                     // edge ASN 0
+		`name: x` + "\n" + `fabric: {as: {edge: 1, switch: 1, host: 1}, clusters: [{name: a, nodes: 99}]}`,                    // nodes > 15
 		`name: x` + "\n" + `fabric: {as: {edge: 1, switch: 1, host: 1}, clusters: [{name: a, nodes: 1},{name: a, nodes: 1}]}`, // dup name
 	} {
 		if _, err := LoadBytes([]byte(tc)); err == nil {

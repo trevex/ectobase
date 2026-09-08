@@ -11,9 +11,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
-	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
+	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -111,7 +111,7 @@ func TestCompile_SelectorMismatch(t *testing.T) {
 }
 
 func TestCompile_UnpoliciedGetsAllowAll(t *testing.T) {
-	nic := testNIC()                                      // has labels that testPolicy() selects
+	nic := testNIC()                                                                      // has labels that testPolicy() selects
 	c := Compile(nic, nic.Status.VNI, nil, nil, nil, nil, Placement{ClusterName: "test"}) // no policies
 	if len(c.Spec.Firewall.Ingress) != 2 || !hasAllowCIDR(c.Spec.Firewall.Ingress, "0.0.0.0/0") || !hasAllowCIDR(c.Spec.Firewall.Ingress, "::/0") {
 		t.Fatalf("expected v4+v6 allow-all ingress rules, got %+v", c.Spec.Firewall.Ingress)

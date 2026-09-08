@@ -22,7 +22,7 @@ func TestPhaseFromLease(t *testing.T) {
 		want  string
 	}{
 		{"never", nil, PhasePending},
-		{"fresh", &platformv1.ClusterPoolLease{RenewTime: mt(990)}, PhaseReady},   // 10s old < 30s
+		{"fresh", &platformv1.ClusterPoolLease{RenewTime: mt(990)}, PhaseReady},    // 10s old < 30s
 		{"stale", &platformv1.ClusterPoolLease{RenewTime: mt(900)}, PhaseUnknown},  // 100s old > 30s
 		{"boundary", &platformv1.ClusterPoolLease{RenewTime: mt(970)}, PhaseReady}, // exactly 30s old (== stale) is still Ready
 		{"nil-renew", &platformv1.ClusterPoolLease{}, PhasePending},

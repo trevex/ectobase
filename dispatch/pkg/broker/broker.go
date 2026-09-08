@@ -26,7 +26,7 @@ import (
 // labels are mirrored: the `workload` label is load-bearing downstream (the
 // vm-materializer joins a VM to its volume attachments by it).
 type Broker struct {
-	Dispatch         client.Client
+	Dispatch    client.Client
 	Downstream  client.Client
 	ClusterName string
 }
