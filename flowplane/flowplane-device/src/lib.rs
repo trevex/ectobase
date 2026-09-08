@@ -17,7 +17,7 @@ pub use flower::{
 pub use geneve::{delete_geneve_dev, ensure_geneve_dev, geneve_add_args, GeneveDev, GENEVE_DEV};
 pub use netkit::{create_netkit_pair, delete_netkit, netkit_add_args, NetkitMode};
 pub use netns::{configure_guest_netns, GuestNetConfig};
-pub use sriov::{claim_vf, release_vf, VfSpec};
+pub use sriov::{claim_vf, pcivf_reps, release_vf, VfSpec};
 pub use tap::{create_persistent_tap, delete_tap, open_tap_fd};
 pub use underlay::{
     infer_underlay_address, infer_underlay_address_within, infer_underlay_prefix,

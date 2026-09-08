@@ -39,6 +39,60 @@ pub(crate) fn parse_devlink_port_line(line: &str, devlink_dev: &str, vfnum: u32)
     }
 }
 
+/// Pure parse of one `devlink port show` line: if the port's `flavour` is `pcivf` AND it carries a
+/// `netdev <name>`, return that netdev name; None otherwise (physical/other flavour, or a pcivf port
+/// with no netdev). Attach-state-independent and PF-independent — matches EVERY switchdev VF
+/// representor on the box, which is what the offload startup flush needs.
+fn parse_pcivf_netdev(line: &str) -> Option<&str> {
+    let toks: Vec<&str> = line.split_whitespace().collect();
+    let mut is_pcivf = false;
+    let mut netdev: Option<&str> = None;
+    for (i, t) in toks.iter().enumerate() {
+        match *t {
+            "flavour" if toks.get(i + 1) == Some(&"pcivf") => is_pcivf = true,
+            "netdev" => netdev = toks.get(i + 1).copied(),
+            _ => {}
+        }
+    }
+    if is_pcivf {
+        netdev
+    } else {
+        None
+    }
+}
+
+/// Enumerate the ifindexes of ALL switchdev `pcivf` representor netdevs on the system (every PF's VF
+/// representors), independent of overlay attach state. Used by the offload manager's startup flush to
+/// clear owned flower filters even on representors whose guest has since detached. Empty on a system
+/// with no switchdev VFs. Parses `devlink port show`: each line with `flavour pcivf` carries a
+/// `netdev <name>`; resolve `/sys/class/net/<name>/ifindex`.
+pub fn pcivf_reps() -> Result<Vec<u32>> {
+    // A host with no `devlink` (non-switchdev / no SR-IOV) has nothing to flush — not an error.
+    let out = match std::process::Command::new("devlink")
+        .args(["port", "show"])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return Ok(vec![]),
+    };
+    if !out.status.success() {
+        return Ok(vec![]);
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut seen = std::collections::BTreeSet::new();
+    let mut reps = Vec::new();
+    for line in text.lines() {
+        if let Some(name) = parse_pcivf_netdev(line) {
+            if let Ok(ifindex) = ifindex_of(name) {
+                if seen.insert(ifindex) {
+                    reps.push(ifindex);
+                }
+            }
+        }
+    }
+    Ok(reps)
+}
+
 /// What the caller wants stood up over a VF.
 pub struct VfSpec {
     /// The VF's PCI BDF, e.g. "0000:65:00.3".
@@ -200,6 +254,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parse_pcivf_netdev_matches_flavour() {
+        let l0 = "netdevsim/netdevsim99/128: type eth netdev eni99npf0vf0 flavour pcivf controller 0 pfnum 0 vfnum 0 external false splittable false";
+        let l1 = "netdevsim/netdevsim99/129: type eth netdev eni99npf0vf1 flavour pcivf controller 0 pfnum 0 vfnum 1 external false splittable false";
+        let pf = "netdevsim/netdevsim99/0: type eth netdev eni99np1 flavour physical port 1 splittable false";
+        assert_eq!(parse_pcivf_netdev(l0), Some("eni99npf0vf0"));
+        assert_eq!(parse_pcivf_netdev(l1), Some("eni99npf0vf1"));
+        assert_eq!(parse_pcivf_netdev(pf), None, "physical flavour, not pcivf");
+        // A pcivf port with no `netdev` token yields None (nothing to resolve/flush).
+        let no_netdev = "pci/0000:03:00.0/131074: type eth flavour pcivf controller 0 pfnum 0 vfnum 3 external false splittable false";
+        assert_eq!(parse_pcivf_netdev(no_netdev), None, "pcivf but no netdev");
+    }
+
     /// Privileged: stand up a netdevsim device in switchdev mode with 2 VFs and assert the devlink
     /// resolver finds the real representor netdevs. netdevsim moves no packets — this validates the
     /// portable representor resolution (`representor_for`) against a real kernel switchdev eswitch,
@@ -248,6 +315,55 @@ mod tests {
         assert_eq!(
             representor_for("netdevsim/netdevsim99", 1).expect("resolve vf1 representor"),
             "eni99npf0vf1"
+        );
+    }
+
+    /// Privileged: stand up a netdevsim device in switchdev mode with 2 VFs and assert `pcivf_reps()`
+    /// enumerates BOTH VF representor ifindexes (device-level, attach-state-independent) — the seam
+    /// the offload startup flush closes. Unique netdevsim id (61) so it can run alongside the sibling
+    /// test. netdevsim moves no packets; this validates the enumeration against a real kernel eswitch.
+    #[test]
+    #[ignore = "privileged: modprobe netdevsim + devlink switchdev (needs root); run under sudo"]
+    fn pcivf_reps_enumerates_netdevsim_vfs() {
+        use std::process::Command;
+        let _ = Command::new("modprobe").arg("netdevsim").status();
+        std::fs::write("/sys/bus/netdevsim/new_device", "61 1").expect("new_device");
+        struct Cleanup;
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::write("/sys/bus/netdevsim/devices/netdevsim61/sriov_numvfs", "0");
+                let _ = std::fs::write("/sys/bus/netdevsim/del_device", "61");
+            }
+        }
+        let _c = Cleanup;
+        assert!(
+            Command::new("devlink")
+                .args([
+                    "dev",
+                    "eswitch",
+                    "set",
+                    "netdevsim/netdevsim61",
+                    "mode",
+                    "switchdev"
+                ])
+                .status()
+                .expect("devlink eswitch set")
+                .success(),
+            "switchdev set"
+        );
+        std::fs::write("/sys/bus/netdevsim/devices/netdevsim61/sriov_numvfs", "2").expect("numvfs");
+        let _ = Command::new("udevadm").arg("settle").status();
+
+        let vf0 = ifindex_of("eni61npf0vf0").expect("resolve vf0 representor ifindex");
+        let vf1 = ifindex_of("eni61npf0vf1").expect("resolve vf1 representor ifindex");
+        let reps = pcivf_reps().expect("enumerate pcivf reps");
+        assert!(
+            reps.contains(&vf0),
+            "pcivf_reps {reps:?} must contain vf0 ifindex {vf0}"
+        );
+        assert!(
+            reps.contains(&vf1),
+            "pcivf_reps {reps:?} must contain vf1 ifindex {vf1}"
         );
     }
 }

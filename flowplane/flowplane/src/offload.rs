@@ -384,18 +384,25 @@ pub async fn run(
     // STARTUP FLUSH — clear any leaked owned filters across all offload-capable reps before we begin,
     // so a crash that left our band populated can't accumulate stale HW state.
     //
-    // KNOWN LIMITATION (narrow restart-leak seam): `offloaded_reps()` enumerates only reps with a
-    // CURRENT INTERFACES entry (an attached, offloaded guest). A representor whose guest DETACHED while
-    // this manager was down still carries any owned filter (the VF representor persists on the PF and
-    // its clsact filters survive), but is NOT visited here — so that filter is not flushed at startup.
-    // Impact is bounded: in steady state the running manager deletes a detached iface's filters within
-    // one reconcile interval (INTERFACES miss → not desired → to_delete), and a leaked filter SELF-HEALS
-    // if that VF is ever reused for offload (the rep re-enters offloaded_reps() → orphan-GC deletes the
-    // untracked in-band filter). It leaks permanently only across a crash in that window on a VF that is
-    // then never reused for offload. ROBUST FIX (tracked follow-up): enumerate ALL switchdev pcivf
-    // representors from the device layer (a `devlink port show flavour pcivf` dump, like increment A's
-    // resolver) for the flush, independent of attach state — see the C spec's deferred section.
-    for rep in control.offloaded_reps() {
+    // We flush the UNION of (a) DEVICE-level switchdev pcivf representors (`devlink port show flavour
+    // pcivf`, attach-state-independent) and (b) attach-state reps (`offloaded_reps()`, reps with a
+    // CURRENT INTERFACES entry). The device-level set closes the restart-leak seam: a representor whose
+    // guest DETACHED while this manager was down still carries any owned filter (the VF representor
+    // persists on the PF and its clsact filters survive) — it is absent from `offloaded_reps()` but is
+    // present in the pcivf dump, so it is now flushed at startup. If the devlink enumeration fails we
+    // fall back to attach-state reps only and warn.
+    //
+    // RESIDUAL GAP: a rep with NO devlink pcivf flavour AND no INTERFACES entry is not visited — but
+    // that shouldn't happen for a VF representor (a switchdev VF always shows `flavour pcivf`).
+    let mut flush_reps: std::collections::BTreeSet<u32> =
+        control.offloaded_reps().into_iter().collect();
+    match flowplane_device::sriov::pcivf_reps() {
+        Ok(reps) => flush_reps.extend(reps),
+        Err(e) => log::warn!(
+            "offload startup flush: pcivf_reps enumeration failed, flushing attach-state reps only: {e:#}"
+        ),
+    }
+    for rep in flush_reps {
         if let Ok(fs) = flower::list_flows(rep, band.clone()) {
             for f in fs {
                 if let Err(e) = flower::delete_flow(&f.handle) {
