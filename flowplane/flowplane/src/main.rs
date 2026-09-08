@@ -6,6 +6,7 @@
 mod attach;
 mod conntrack_gc;
 mod control;
+mod error;
 mod handlers;
 mod loader;
 mod maps;

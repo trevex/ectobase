@@ -60,10 +60,12 @@ impl DataplaneNode for NodeService {
         })
         .await
         .map_err(|e| Status::internal(format!("attach task panicked: {e}")))?
-        // `{:#}` renders the full anyhow context chain (e.g. the underlying `ip netns exec`/`ip
-        // tuntap` stderr), not just the top `.context(...)` — the truncated top line masked the
-        // real cause of pod-tap attach failures.
-        .map_err(|e| Status::internal(format!("{e:#}")))?;
+        // Typed boundary: a `ServiceError::Conflict` (ROUTE_EXISTS) becomes `AlreadyExists`, an
+        // `Invalid` becomes `InvalidArgument`, and only a genuine `Internal` becomes `Internal`
+        // (rendered with the full `{:#}` anyhow context chain — see `From<ServiceError>`). This lets
+        // the CNI distinguish a client conflict (don't retry / pick another IP) from a transient
+        // fault, instead of auto-retrying every failure as `Internal`.
+        .map_err(Status::from)?;
 
         Ok(Response::new(AttachInterfaceResponse {
             ifname: outcome.ifname,
@@ -87,7 +89,7 @@ impl DataplaneNode for NodeService {
         tokio::task::spawn_blocking(move || attach.detach(&id))
             .await
             .map_err(|e| Status::internal(format!("detach task panicked: {e}")))?
-            .map_err(|e| Status::internal(format!("{e:#}")))?;
+            .map_err(Status::from)?;
         Ok(Response::new(DetachInterfaceResponse {}))
     }
 

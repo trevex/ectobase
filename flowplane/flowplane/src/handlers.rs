@@ -4,24 +4,23 @@
 //! unit-testable directly against a `ControlCore<MemMapWriter>`.
 
 use flowplane_control::{shadow::LbIpBytes, ControlCore, MapWriter};
-use tonic::Status;
 
+use crate::error::ServiceError;
 use crate::parse::{parse_fw_cidr, parse_nexthop6, parse_prefix, port_u16};
 use crate::pb;
 
+/// Argument-validation failures (bad CIDR/IP/port). The genuinely-internal `ControlCore` errors are
+/// `anyhow::Error` and convert to `ServiceError::Internal` through `?` (blanket `#[from]`), so there
+/// is no `internal` helper — a bare `?` on an `anyhow::Result` does the right thing.
 #[inline]
-fn internal(e: impl std::fmt::Display) -> Status {
-    Status::internal(e.to_string())
-}
-#[inline]
-fn invalid(e: impl std::fmt::Display) -> Status {
-    Status::invalid_argument(e.to_string())
+fn invalid(e: impl std::fmt::Display) -> ServiceError {
+    ServiceError::Invalid(e.to_string())
 }
 
 pub fn add_route<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::AddRouteRequest,
-) -> Result<pb::AddRouteResponse, Status> {
+) -> Result<pb::AddRouteResponse, ServiceError> {
     let (is_v6, bytes, len) = parse_prefix(&req.prefix).map_err(invalid)?;
     let nexthop = parse_nexthop6(&req.nexthop_underlay).map_err(invalid)?;
     let vni = req.vni;
@@ -45,14 +44,14 @@ pub fn add_route<W: MapWriter>(
         core.delete_route(vni, v4, len)
             .and_then(|_| core.create_route(vni, v4, len, nexthop, dvni, external))
     };
-    res.map_err(internal)?;
+    res?;
     Ok(pb::AddRouteResponse {})
 }
 
 pub fn withdraw_route<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::WithdrawRouteRequest,
-) -> Result<pb::WithdrawRouteResponse, Status> {
+) -> Result<pb::WithdrawRouteResponse, ServiceError> {
     let (is_v6, bytes, len) = parse_prefix(&req.prefix).map_err(invalid)?;
     let vni = req.vni;
     let res: anyhow::Result<()> = if is_v6 {
@@ -62,14 +61,14 @@ pub fn withdraw_route<W: MapWriter>(
         v4.copy_from_slice(&bytes[..4]);
         core.delete_route(vni, v4, len).map(|_| ())
     };
-    res.map_err(internal)?;
+    res?;
     Ok(pb::WithdrawRouteResponse {})
 }
 
 pub fn add_nat_source<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::AddNatSourceRequest,
-) -> Result<pb::AddNatSourceResponse, Status> {
+) -> Result<pb::AddNatSourceResponse, ServiceError> {
     use std::net::IpAddr;
     // Proto is family-agnostic (source_ip/nat_ip are strings); dispatch by the parsed family.
     let source: IpAddr = req.source_ip.parse().map_err(invalid)?;
@@ -84,29 +83,33 @@ pub fn add_nat_source<W: MapWriter>(
             let id = core
                 .find_iface_by_vni_ipv4(vni, s.octets())
                 .ok_or_else(|| {
-                    Status::internal(format!("NO_VM: no local interface for vni={vni} ip={s}"))
+                    ServiceError::NotFound(format!(
+                        "NO_VM: no local interface for vni={vni} ip={s}"
+                    ))
                 })?;
             let res: anyhow::Result<()> = core.delete_nat(&id).and_then(|_| {
                 core.create_nat(&id, n.octets(), port_min, port_max, None)
                     .map(|_| ())
             });
-            res.map_err(internal)?;
+            res?;
         }
         (IpAddr::V6(s), IpAddr::V6(n)) => {
             let id = core
                 .find_iface_by_vni_ipv6(vni, s.octets())
                 .ok_or_else(|| {
-                    Status::internal(format!("NO_VM: no local interface for vni={vni} ip={s}"))
+                    ServiceError::NotFound(format!(
+                        "NO_VM: no local interface for vni={vni} ip={s}"
+                    ))
                 })?;
             let res: anyhow::Result<()> = core.delete_nat6(&id).and_then(|_| {
                 core.create_nat6(&id, n.octets(), port_min, port_max, None)
                     .map(|_| ())
             });
-            res.map_err(internal)?;
+            res?;
         }
         _ => {
-            return Err(Status::invalid_argument(
-                "source_ip and nat_ip must be the same address family",
+            return Err(ServiceError::Invalid(
+                "source_ip and nat_ip must be the same address family".into(),
             ))
         }
     }
@@ -116,7 +119,7 @@ pub fn add_nat_source<W: MapWriter>(
 pub fn withdraw_nat_source<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::WithdrawNatSourceRequest,
-) -> Result<pb::WithdrawNatSourceResponse, Status> {
+) -> Result<pb::WithdrawNatSourceResponse, ServiceError> {
     use std::net::IpAddr;
     let source: IpAddr = req.source_ip.parse().map_err(invalid)?;
     let vni = req.vni;
@@ -125,12 +128,12 @@ pub fn withdraw_nat_source<W: MapWriter>(
     match source {
         IpAddr::V4(s) => {
             if let Some(id) = core.find_iface_by_vni_ipv4(vni, s.octets()) {
-                core.delete_nat(&id).map_err(internal)?;
+                core.delete_nat(&id)?;
             }
         }
         IpAddr::V6(s) => {
             if let Some(id) = core.find_iface_by_vni_ipv6(vni, s.octets()) {
-                core.delete_nat6(&id).map_err(internal)?;
+                core.delete_nat6(&id)?;
             }
         }
     }
@@ -140,7 +143,7 @@ pub fn withdraw_nat_source<W: MapWriter>(
 pub fn add_neighbor_nat<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::AddNeighborNatRequest,
-) -> Result<pb::AddNeighborNatResponse, Status> {
+) -> Result<pb::AddNeighborNatResponse, ServiceError> {
     use std::net::IpAddr;
     let nat: IpAddr = req.nat_ip.parse().map_err(invalid)?;
     // The owner underlay is a v6 VTEP in BOTH families (the underlay is IPv6-only).
@@ -158,14 +161,14 @@ pub fn add_neighbor_nat<W: MapWriter>(
             .del_neighbor_nat6(vni, n.octets(), port_min, port_max)
             .and_then(|_| core.add_neighbor_nat6(vni, n.octets(), port_min, port_max, owner)),
     };
-    res.map_err(internal)?;
+    res?;
     Ok(pb::AddNeighborNatResponse {})
 }
 
 pub fn withdraw_neighbor_nat<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::WithdrawNeighborNatRequest,
-) -> Result<pb::WithdrawNeighborNatResponse, Status> {
+) -> Result<pb::WithdrawNeighborNatResponse, ServiceError> {
     use std::net::IpAddr;
     let nat: IpAddr = req.nat_ip.parse().map_err(invalid)?;
     let port_min = port_u16(req.port_min).map_err(invalid)?;
@@ -174,12 +177,10 @@ pub fn withdraw_neighbor_nat<W: MapWriter>(
     // Removing an absent entry is not an error (del_neighbor_nat returns Ok(false)).
     match nat {
         IpAddr::V4(n) => {
-            core.del_neighbor_nat(vni, n.octets(), port_min, port_max)
-                .map_err(internal)?;
+            core.del_neighbor_nat(vni, n.octets(), port_min, port_max)?;
         }
         IpAddr::V6(n) => {
-            core.del_neighbor_nat6(vni, n.octets(), port_min, port_max)
-                .map_err(internal)?;
+            core.del_neighbor_nat6(vni, n.octets(), port_min, port_max)?;
         }
     }
     Ok(pb::WithdrawNeighborNatResponse {})
@@ -188,12 +189,12 @@ pub fn withdraw_neighbor_nat<W: MapWriter>(
 pub fn add_lb_vip<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::AddLbVipRequest,
-) -> Result<pb::AddLbVipResponse, Status> {
+) -> Result<pb::AddLbVipResponse, ServiceError> {
     let lb_ip: LbIpBytes = match req.vip.parse::<std::net::IpAddr>() {
         Ok(std::net::IpAddr::V4(a)) => LbIpBytes::Ipv4(a.octets()),
         Ok(std::net::IpAddr::V6(a)) => LbIpBytes::Ipv6(a.octets()),
         Err(e) => {
-            return Err(Status::invalid_argument(format!(
+            return Err(ServiceError::Invalid(format!(
                 "invalid vip {:?}: {e}",
                 req.vip
             )))
@@ -214,8 +215,7 @@ pub fn add_lb_vip<W: MapWriter>(
         .map_err(invalid)?;
     let id = req.id.clone().into_bytes();
     let vni = req.vni;
-    core.create_lb(&id, vni, lb_ip, lb_underlay, ports)
-        .map_err(internal)?;
+    core.create_lb(&id, vni, lb_ip, lb_underlay, ports)?;
     Ok(pb::AddLbVipResponse {})
 }
 
@@ -239,10 +239,10 @@ fn parse_backend_overlay_ip(s: &str) -> Result<([u8; 16], u8), String> {
 pub fn add_lb_backend<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::AddLbBackendRequest,
-) -> Result<pb::AddLbBackendResponse, Status> {
+) -> Result<pb::AddLbBackendResponse, ServiceError> {
     let node_vtep = parse_nexthop6(&req.backend_underlay).map_err(invalid)?;
     let (overlay_ip, is_v6) =
-        parse_backend_overlay_ip(&req.backend_overlay_ip).map_err(Status::invalid_argument)?;
+        parse_backend_overlay_ip(&req.backend_overlay_ip).map_err(ServiceError::Invalid)?;
     let backend = flowplane_common::LbBackend {
         node_vtep,
         overlay_ip,
@@ -251,23 +251,23 @@ pub fn add_lb_backend<W: MapWriter>(
         _pad: [0; 3],
     };
     let id = req.id.clone().into_bytes();
-    core.add_lb_target(&id, backend).map_err(internal)?;
+    core.add_lb_target(&id, backend)?;
     Ok(pb::AddLbBackendResponse {})
 }
 
 pub fn del_lb_vip<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::DelLbVipRequest,
-) -> Result<pb::DelLbVipResponse, Status> {
+) -> Result<pb::DelLbVipResponse, ServiceError> {
     let id = req.id.clone().into_bytes();
-    core.delete_lb(&id).map_err(internal)?;
+    core.delete_lb(&id)?;
     Ok(pb::DelLbVipResponse {})
 }
 
 pub fn del_lb_backend<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::DelLbBackendRequest,
-) -> Result<pb::DelLbBackendResponse, Status> {
+) -> Result<pb::DelLbBackendResponse, ServiceError> {
     let backend_node_vtep = parse_nexthop6(&req.backend_underlay).map_err(invalid)?;
     // backend_overlay_ip disambiguates two backends sharing the same node (two pods of one Service
     // scheduled on the same node). Empty is the legacy/CLI shape (older callers that predate this
@@ -278,12 +278,11 @@ pub fn del_lb_backend<W: MapWriter>(
         [0u8; 16]
     } else {
         parse_backend_overlay_ip(&req.backend_overlay_ip)
-            .map_err(Status::invalid_argument)?
+            .map_err(ServiceError::Invalid)?
             .0
     };
     let id = req.id.clone().into_bytes();
-    core.del_lb_target(&id, backend_node_vtep, backend_overlay_ip)
-        .map_err(internal)?;
+    core.del_lb_target(&id, backend_node_vtep, backend_overlay_ip)?;
     Ok(pb::DelLbBackendResponse {})
 }
 
@@ -304,12 +303,12 @@ fn parse_fw_rule_fields(
     dst_port_max: u32,
     allow: bool,
     egress: bool,
-) -> Result<ParsedFwRule, Status> {
+) -> Result<ParsedFwRule, ServiceError> {
     use crate::parse::FwCidr;
     use flowplane_common::{FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS};
     let src = parse_fw_cidr(src_cidr).map_err(invalid)?;
     let dst = parse_fw_cidr(dst_cidr).map_err(invalid)?;
-    let proto = u8::try_from(proto).map_err(|_| Status::invalid_argument("proto > 255"))?;
+    let proto = u8::try_from(proto).map_err(|_| ServiceError::Invalid("proto > 255".into()))?;
     let dst_port_min = port_u16(dst_port_min).map_err(invalid)?;
     let dst_port_max = if dst_port_max == 0 {
         65535u16
@@ -334,8 +333,8 @@ fn parse_fw_rule_fields(
     let src_is_v6 = matches!(src, FwCidr::V6(..));
     let dst_is_v6 = matches!(dst, FwCidr::V6(..));
     if !src_cidr.is_empty() && !dst_cidr.is_empty() && src_is_v6 != dst_is_v6 {
-        return Err(Status::invalid_argument(
-            "firewall rule src and dst must be the same address family",
+        return Err(ServiceError::Invalid(
+            "firewall rule src and dst must be the same address family".into(),
         ));
     }
     if src_is_v6 || dst_is_v6 {
@@ -395,7 +394,7 @@ fn parse_fw_rule_fields(
 pub fn add_fw_rule<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::AddFwRuleRequest,
-) -> Result<pb::AddFwRuleResponse, Status> {
+) -> Result<pb::AddFwRuleResponse, ServiceError> {
     let iface = req.interface_id.clone().into_bytes();
     let rule_id = req.rule_id.clone().into_bytes();
     match parse_fw_rule_fields(
@@ -407,8 +406,8 @@ pub fn add_fw_rule<W: MapWriter>(
         req.allow,
         req.egress,
     )? {
-        ParsedFwRule::V6(rule) => core.add_fw_rule6(&iface, rule_id, rule).map_err(internal)?,
-        ParsedFwRule::V4(rule) => core.add_fw_rule(&iface, rule_id, rule).map_err(internal)?,
+        ParsedFwRule::V6(rule) => core.add_fw_rule6(&iface, rule_id, rule)?,
+        ParsedFwRule::V4(rule) => core.add_fw_rule(&iface, rule_id, rule)?,
     };
     Ok(pb::AddFwRuleResponse {})
 }
@@ -419,7 +418,7 @@ pub fn add_fw_rule<W: MapWriter>(
 pub fn replace_interface_firewall<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::ReplaceInterfaceFirewallRequest,
-) -> Result<pb::ReplaceInterfaceFirewallResponse, Status> {
+) -> Result<pb::ReplaceInterfaceFirewallResponse, ServiceError> {
     let iface = req.interface_id.clone().into_bytes();
     let mut v4: Vec<(Vec<u8>, flowplane_common::FwRule)> = Vec::new();
     let mut v6: Vec<(Vec<u8>, flowplane_common::FwRule6)> = Vec::new();
@@ -438,31 +437,30 @@ pub fn replace_interface_firewall<W: MapWriter>(
             ParsedFwRule::V6(rule) => v6.push((id, rule)),
         }
     }
-    core.replace_fw_rules(&iface, v4).map_err(internal)?;
-    core.replace_fw_rules6(&iface, v6).map_err(internal)?;
+    core.replace_fw_rules(&iface, v4)?;
+    core.replace_fw_rules6(&iface, v6)?;
     Ok(pb::ReplaceInterfaceFirewallResponse {})
 }
 
 pub fn del_fw_rule<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::DelFwRuleRequest,
-) -> Result<pb::DelFwRuleResponse, Status> {
+) -> Result<pb::DelFwRuleResponse, ServiceError> {
     let iface = req.interface_id.clone().into_bytes();
     let rule_id = req.rule_id.clone().into_bytes();
-    core.del_fw_rule(&iface, &rule_id).map_err(internal)?;
+    core.del_fw_rule(&iface, &rule_id)?;
     Ok(pb::DelFwRuleResponse {})
 }
 
 pub fn configure_qos<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::ConfigureQoSRequest,
-) -> Result<pb::ConfigureQoSResponse, Status> {
+) -> Result<pb::ConfigureQoSResponse, ServiceError> {
     let iface = req.interface_id.clone().into_bytes();
     let egress_mbps = req.egress_mbps as u64;
     let public_mbps = req.public_mbps as u64;
     let ingress_mbps = req.ingress_mbps as u64;
-    core.set_qos(&iface, egress_mbps, public_mbps, ingress_mbps)
-        .map_err(internal)?;
+    core.set_qos(&iface, egress_mbps, public_mbps, ingress_mbps)?;
     Ok(pb::ConfigureQoSResponse {})
 }
 
@@ -516,7 +514,10 @@ mod tests {
                 delivery_vni: 0,
             },
         );
-        assert_eq!(bad.unwrap_err().code(), tonic::Code::InvalidArgument);
+        assert_eq!(
+            tonic::Status::from(bad.unwrap_err()).code(),
+            tonic::Code::InvalidArgument
+        );
     }
 
     #[test]
@@ -646,7 +647,10 @@ mod tests {
                 egress: false,
             },
         );
-        assert_eq!(r.unwrap_err().code(), tonic::Code::InvalidArgument);
+        assert_eq!(
+            tonic::Status::from(r.unwrap_err()).code(),
+            tonic::Code::InvalidArgument
+        );
         // and the reverse (v6 src + v4 dst).
         let r2 = add_fw_rule(
             &mut c,
@@ -662,7 +666,10 @@ mod tests {
                 egress: false,
             },
         );
-        assert_eq!(r2.unwrap_err().code(), tonic::Code::InvalidArgument);
+        assert_eq!(
+            tonic::Status::from(r2.unwrap_err()).code(),
+            tonic::Code::InvalidArgument
+        );
     }
 
     #[test]
@@ -758,7 +765,10 @@ mod tests {
                 port_max: 2048,
             },
         );
-        assert_eq!(bad.unwrap_err().code(), tonic::Code::InvalidArgument);
+        assert_eq!(
+            tonic::Status::from(bad.unwrap_err()).code(),
+            tonic::Code::InvalidArgument
+        );
     }
 
     #[test]

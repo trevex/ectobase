@@ -19,6 +19,7 @@ use std::sync::{Arc, OnceLock};
 use anyhow::{bail, Context};
 
 use crate::control::{Control, IfaceParams, OverlayStatus};
+use crate::error::ServiceError;
 
 /// Guest-edge device backing an interface. Both run the SAME `tc_guest_tx` datapath on a single
 /// root-netns device (via `Control::create_interface`); they differ only in how that device is
@@ -254,24 +255,30 @@ impl AttachState {
         device_type: DeviceType,
         tap_name: &str,
         pci_address: &str,
-    ) -> anyhow::Result<AttachOutcome> {
+    ) -> Result<AttachOutcome, ServiceError> {
         if interface_id.is_empty() {
-            bail!("interface_id is required");
+            return Err(ServiceError::Invalid("interface_id is required".into()));
         }
         // A tap serves a VM whose virtio NIC has a fixed MAC; local delivery rewrites the frame dst to
         // `guest_mac`, so the programmed MAC must equal the VM's — a derived one would silently drop
         // every inbound frame. Require it explicitly rather than deriving.
         if device_type.requires_mac() && mac_req.is_empty() {
-            bail!("device_type={device_type:?} requires an explicit mac (the VM NIC MAC)");
+            return Err(ServiceError::Invalid(format!(
+                "device_type={device_type:?} requires an explicit mac (the VM NIC MAC)"
+            )));
         }
         if device_type == DeviceType::Vf && pci_address.is_empty() {
-            bail!("device_type=vf requires pci_address (the VF PCI BDF)");
+            return Err(ServiceError::Invalid(
+                "device_type=vf requires pci_address (the VF PCI BDF)".into(),
+            ));
         }
         // Overlay IPs: at least ONE family is required; either may be absent (all-zeros).
         let ipv4 = primary_ipv4(requested_ips).unwrap_or([0u8; 4]);
         let ipv6 = primary_ipv6(requested_ips);
         if ipv4 == [0u8; 4] && ipv6 == [0u8; 16] {
-            bail!("attach requires at least one overlay IP (IPv4 or IPv6) in requested_ips");
+            return Err(ServiceError::Invalid(
+                "attach requires at least one overlay IP (IPv4 or IPv6) in requested_ips".into(),
+            ));
         }
 
         // MAC: honour a caller-supplied MAC, else derive a stable one from the interface_id (so a
@@ -279,7 +286,7 @@ impl AttachState {
         let mac = if mac_req.is_empty() {
             Self::mac_for(interface_id)
         } else {
-            parse_mac(mac_req).context("invalid mac")?
+            parse_mac(mac_req).map_err(|e| ServiceError::Invalid(format!("invalid mac: {e:#}")))?
         };
 
         // Underlay = this node's VTEP, shared by every interface. Local delivery demuxes on the
@@ -316,7 +323,11 @@ impl AttachState {
                 OverlayStatus::SameEndpoint => {
                     return Ok(self.make_outcome(ifname, ipv4, ipv6, mac, underlay_ipv6));
                 }
-                OverlayStatus::Conflict => bail!("ROUTE_EXISTS: IP already in use in this VNI"),
+                OverlayStatus::Conflict => {
+                    return Err(ServiceError::Conflict(
+                        "ROUTE_EXISTS: IP already in use in this VNI".into(),
+                    ))
+                }
                 OverlayStatus::Free => {}
             }
             let dev = flowplane_device::claim_vf(&flowplane_device::sriov::VfSpec {
@@ -351,7 +362,9 @@ impl AttachState {
                     (!netns_path.is_empty()).then_some(netns_path),
                     &Self::guest_ifname(interface_id),
                 );
-                return Err(e).context("program datapath for VF interface");
+                return Err(ServiceError::Internal(
+                    e.context("program datapath for VF interface"),
+                ));
             }
             if ipv4 != [0u8; 4] {
                 if let Some(tap) = self.control.interface_readback(vni, ipv4) {
@@ -369,7 +382,9 @@ impl AttachState {
                         (!netns_path.is_empty()).then_some(netns_path),
                         &Self::guest_ifname(interface_id),
                     );
-                    bail!("INTERFACES read-back failed after programming VF");
+                    return Err(ServiceError::Internal(anyhow::anyhow!(
+                        "INTERFACES read-back failed after programming VF"
+                    )));
                 }
             }
             // Configure the pod netns with the overlay addr(s) + default routes — flowplane's CNI is
@@ -395,7 +410,9 @@ impl AttachState {
                         (!netns_path.is_empty()).then_some(netns_path),
                         &Self::guest_ifname(interface_id),
                     );
-                    return Err(e).context("configure guest netns for VF");
+                    return Err(ServiceError::Internal(
+                        e.context("configure guest netns for VF"),
+                    ));
                 }
             }
             return Ok(self.make_outcome(ifname, ipv4, ipv6, mac, underlay_ipv6));
@@ -456,7 +473,11 @@ impl AttachState {
             OverlayStatus::SameEndpoint => {
                 return Ok(self.make_outcome(ifname, ipv4, ipv6, mac, underlay_ipv6));
             }
-            OverlayStatus::Conflict => bail!("ROUTE_EXISTS: IP already in use in this VNI"),
+            OverlayStatus::Conflict => {
+                return Err(ServiceError::Conflict(
+                    "ROUTE_EXISTS: IP already in use in this VNI".into(),
+                ))
+            }
             OverlayStatus::Free => {}
         }
         // Create + configure the device. If anything fails after creation, tear it down so we don't
@@ -497,7 +518,7 @@ impl AttachState {
         };
         if let Err(e) = setup {
             let _ = run(&["ip", "link", "del", &device]);
-            return Err(e);
+            return Err(e.into());
         }
 
         // Delegate map-programming + datapath-attach to the legacy Control path (attaches
@@ -533,7 +554,9 @@ impl AttachState {
             .create_interface(interface_id.as_bytes(), &device, params)
         {
             let _ = run(&["ip", "link", "del", &device]);
-            return Err(e).context("program datapath for interface");
+            return Err(ServiceError::Internal(
+                e.context("program datapath for interface"),
+            ));
         }
 
         // Read the INTERFACES entry back out of the live map to prove it landed, and log a
@@ -549,7 +572,9 @@ impl AttachState {
                 None => {
                     let _ = self.control.detach_interface(interface_id.as_bytes());
                     let _ = run(&["ip", "link", "del", &device]);
-                    bail!("INTERFACES read-back failed after programming");
+                    return Err(ServiceError::Internal(anyhow::anyhow!(
+                        "INTERFACES read-back failed after programming"
+                    )));
                 }
             }
         }
@@ -573,7 +598,7 @@ impl AttachState {
                 // half-configured state (mirrors the read-back failure path).
                 let _ = self.control.detach_interface(interface_id.as_bytes());
                 let _ = run(&["ip", "link", "del", &device]);
-                return Err(e).context("configure guest netns");
+                return Err(ServiceError::Internal(e.context("configure guest netns")));
             }
         }
 
@@ -764,7 +789,7 @@ impl AttachState {
     /// Detach: remove the datapath programming (which also removes INTERFACES/INTERFACES6) and
     /// delete the host-side veth (its guest peer disappears with it). No underlay to reclaim — the
     /// node VTEP is shared by every interface, never per-endpoint.
-    pub fn detach(&self, interface_id: &str) -> anyhow::Result<()> {
+    pub fn detach(&self, interface_id: &str) -> Result<(), ServiceError> {
         // Best-effort cleanup: run ALL reclaim steps regardless of a datapath-detach failure. If the
         // datapath detach errored and we returned early (the old behaviour), the host veth would leak
         // on every partial detach. Reclaim the veth unconditionally, then surface the datapath error.
@@ -786,7 +811,7 @@ impl AttachState {
         // detach (persisting the PCI/netns in the interface record + threading it through
         // DetachInterface) is a tracked follow-up, designed together with the CNI/device-plugin
         // integration — see the spec's deferred-work section. The map-side state IS cleaned above.
-        dp.map(|_| ())
+        dp.map(|_| ()).map_err(ServiceError::from)
     }
 }
 
