@@ -703,7 +703,7 @@ async fn main() -> anyhow::Result<()> {
                 .add_service(node::pb::dataplane_node_server::DataplaneNodeServer::new(
                     node::NodeService::new(attach_state),
                 ));
-            if let Some(path) = flowplane_device::grpc::uds_path(&addr) {
+            if let Some(path) = flowplane_device::addr::uds_path(&addr) {
                 // Root-only unix socket: the dataplane gRPC is node-local and root-equivalent, so a
                 // 0600 socket restricts it to root on this node instead of any process that can reach
                 // a loopback TCP port.
