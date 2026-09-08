@@ -202,27 +202,44 @@ fn resolve_desired(
     out
 }
 
-/// Install one desired flow, allocating a (pref, handle) within the owned band. `next` is a
-/// monotonically-increasing cursor: pref = `pref_base + next`, handle = `next`. Once the cursor walks
-/// off the end of the band we log + skip (the cap is also enforced by the caller); this keeps
-/// allocation trivial and collision-free at the cost of not recycling freed slots — acceptable for a
-/// band sized to `max_flows`.
+/// Allocate a handle/slot number for a new flow: reuse a freed slot first (so the band never leaks
+/// capacity as flows churn), else the next unused slot while under the cap, else `None` (band
+/// genuinely full). Handles are 1-based (`1..=max_flows`): tc treats a filter handle of 0 as
+/// "kernel, pick one", which would desync our (ifindex, pref, handle) bookkeeping — so 0 is never
+/// used. With recycling, "band full" (`None`) coincides with `installed.len() == max_flows`, keeping
+/// the `installed.len() >= max_flows` guard and this allocator in agreement.
+fn alloc_handle(next: &mut u32, free: &mut Vec<u32>, max_flows: usize) -> Option<u32> {
+    free.pop().or_else(|| {
+        if (*next as usize) <= max_flows {
+            let h = *next;
+            *next += 1;
+            Some(h)
+        } else {
+            None
+        }
+    })
+}
+
+/// Install one desired flow on a freshly-allocated slot. `pref = pref_base + handle - 1` maps the
+/// 1-based handle 1:1 into the owned band `[pref_base, pref_base + max_flows)`. On install failure the
+/// slot is returned to `free` so it isn't leaked.
 fn install_one(
     installed: &mut HashMap<OffKey, InstalledFlow>,
     next: &mut u32,
+    free: &mut Vec<u32>,
     cfg: &OffloadCfg,
-    band: &Range<u16>,
     now: u64,
     k: OffKey,
     d: Desired,
 ) {
-    let handle = *next;
-    let pref = cfg.pref_base.wrapping_add(handle as u16);
-    if !band.contains(&pref) {
-        log::warn!("offload pref band {band:?} exhausted (next={next}); skipping install");
+    let Some(handle) = alloc_handle(next, free, cfg.max_flows) else {
+        log::warn!(
+            "offload band full ({} flows); skipping install",
+            cfg.max_flows
+        );
         return;
-    }
-    *next = next.saturating_add(1);
+    };
+    let pref = cfg.pref_base + (handle as u16) - 1;
     // clsact may already exist on an increment-A representor (tc_guest_tx) — EEXIST is tolerated.
     let _ = flower::ensure_clsact(d.rep_ifindex);
     match flower::install_flow(d.rep_ifindex, pref, handle, &d.key, &d.action) {
@@ -237,10 +254,13 @@ fn install_one(
                 },
             );
         }
-        Err(e) => log::warn!(
-            "offload install failed on rep {} pref {pref}: {e:#}",
-            d.rep_ifindex
-        ),
+        Err(e) => {
+            log::warn!(
+                "offload install failed on rep {} pref {pref}: {e:#}",
+                d.rep_ifindex
+            );
+            free.push(handle);
+        }
     }
 }
 
@@ -254,6 +274,7 @@ fn install_one(
 fn idle_age_and_gc(
     control: &Control,
     installed: &mut HashMap<OffKey, InstalledFlow>,
+    free: &mut Vec<u32>,
     band: &Range<u16>,
     now: u64,
     cfg: &OffloadCfg,
@@ -291,7 +312,9 @@ fn idle_age_and_gc(
                 Some(&key) => {
                     seen.insert(key);
                     if let Some(inst) = installed.get_mut(&key) {
-                        if f.pkts > inst.last_pkts {
+                        // `!=` (not `>`) so a HW counter RESET also resets the idle clock — otherwise
+                        // last_pkts stays stale-high and the flow could never be aged out.
+                        if f.pkts != inst.last_pkts {
                             inst.last_pkts = f.pkts;
                             inst.idle_since_ns = now;
                         } else if is_idle(inst, f.pkts, now, cfg.idle_timeout_ns) {
@@ -310,7 +333,7 @@ fn idle_age_and_gc(
         }
     }
 
-    // Idle flows — delete + forget.
+    // Idle flows — delete + forget, recycling the freed slot.
     for key in idle {
         if let Some(inst) = installed.remove(&key) {
             if let Err(e) = flower::delete_flow(&inst.handle) {
@@ -319,18 +342,22 @@ fn idle_age_and_gc(
                     inst.handle
                 );
             }
+            free.push(inst.handle.handle);
         }
     }
 
     // Stale bookkeeping: a filter we think is installed on a SUCCESSFULLY-dumped rep but that the
-    // kernel no longer lists (it dropped it) — drop our record so a later pass reinstalls it.
+    // kernel no longer lists (it dropped it) — drop our record so a later pass reinstalls it, and
+    // recycle its slot (the kernel already freed the filter, so no delete is issued).
     let stale: Vec<OffKey> = installed
         .iter()
         .filter(|(k, f)| dumped_reps.contains(&f.handle.ifindex) && !seen.contains(k))
         .map(|(k, _)| *k)
         .collect();
     for key in stale {
-        installed.remove(&key);
+        if let Some(inst) = installed.remove(&key) {
+            free.push(inst.handle.handle);
+        }
     }
 }
 
@@ -349,14 +376,19 @@ pub async fn run(
     let geneve = control.geneve_ifindex();
     let band = pref_band(&cfg);
     let mut installed: HashMap<OffKey, InstalledFlow> = HashMap::new();
+    // Slot allocator: `next` is the high-water cursor (1-based); `free` recycles handles freed by
+    // deletes/idle-aging/stale-GC so the band never leaks capacity as flows churn.
     let mut next: u32 = 1;
+    let mut free: Vec<u32> = Vec::new();
 
     // STARTUP FLUSH — clear any leaked owned filters across all offload-capable reps before we begin,
     // so a crash that left our band populated can't accumulate stale HW state.
     for rep in control.offloaded_reps() {
         if let Ok(fs) = flower::list_flows(rep, band.clone()) {
             for f in fs {
-                let _ = flower::delete_flow(&f.handle);
+                if let Err(e) = flower::delete_flow(&f.handle) {
+                    log::warn!("offload startup flush: delete failed {:?}: {e:#}", f.handle);
+                }
             }
         }
     }
@@ -375,23 +407,55 @@ pub async fn run(
                 if let Err(e) = flower::delete_flow(&f.handle) {
                     log::error!("offload delete FAILED (leak risk) {:?}: {e:#}", f.handle);
                 }
+                free.push(f.handle.handle);
             }
         }
+        // Reinstall (VTEP/action changed): REUSE the same pref+handle so there is no band hole and no
+        // bookkeeping divergence — a VTEP move doesn't need a fresh slot. A failed old-delete is a
+        // stale-destination leak, so it's logged loudly; a failed re-install recycles the slot.
         for (k, d) in diff.to_reinstall {
-            if let Some(f) = installed.remove(&k) {
-                let _ = flower::delete_flow(&f.handle);
+            if let Some(old) = installed.remove(&k) {
+                if let Err(e) = flower::delete_flow(&old.handle) {
+                    log::error!(
+                        "offload reinstall: old filter delete FAILED (stale-VTEP leak risk) {:?}: {e:#}",
+                        old.handle
+                    );
+                }
+                let _ = flower::ensure_clsact(d.rep_ifindex);
+                match flower::install_flow(
+                    old.handle.ifindex,
+                    old.handle.pref,
+                    old.handle.handle,
+                    &d.key,
+                    &d.action,
+                ) {
+                    Ok(fh) => {
+                        installed.insert(
+                            k,
+                            InstalledFlow {
+                                handle: fh,
+                                action: d.action,
+                                last_pkts: 0,
+                                idle_since_ns: now,
+                            },
+                        );
+                    }
+                    Err(e) => {
+                        log::warn!("offload reinstall install failed {k:?}: {e:#}");
+                        free.push(old.handle.handle);
+                    }
+                }
             }
-            install_one(&mut installed, &mut next, &cfg, &band, now, k, d);
         }
         for (k, d) in diff.to_install {
             if installed.len() >= cfg.max_flows {
                 log::warn!("offload cap {} reached", cfg.max_flows);
                 break;
             }
-            install_one(&mut installed, &mut next, &cfg, &band, now, k, d);
+            install_one(&mut installed, &mut next, &mut free, &cfg, now, k, d);
         }
 
-        idle_age_and_gc(&control, &mut installed, &band, now, &cfg);
+        idle_age_and_gc(&control, &mut installed, &mut free, &band, now, &cfg);
     }
 }
 
