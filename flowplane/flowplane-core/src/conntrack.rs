@@ -14,9 +14,34 @@ use crate::parse::{l4_ports, l4_ports_v6, IPPROTO_ICMP, IPPROTO_TCP, IPPROTO_UDP
 use crate::pkt::Pkt;
 use flowplane_common::csum::{csum_replace2, csum_replace4};
 use flowplane_common::{
-    CtEntry, CtKey, DsrVip, CT_F_DEFAULT, CT_REWRITE_DST, CT_REWRITE_SRC, TCP_ESTABLISHED,
-    TCP_FINWAIT, TCP_NEW_SYN, TCP_NEW_SYNACK, TCP_RST_FIN,
+    CtEntry, CtEntry6, CtKey, DsrVip, CT_F_DEFAULT, CT_F_DST_LB, CT_F_NAT64, CT_F_SRC_NAT,
+    CT_REWRITE_DST, CT_REWRITE_SRC, TCP_ESTABLISHED, TCP_FINWAIT, TCP_NEW_SYN, TCP_NEW_SYNACK,
+    TCP_RST_FIN,
 };
+
+/// A conntrack entry is hardware-offload-eligible iff it is a plain established East/West overlay
+/// flow: `CT_F_DEFAULT` set, NONE of the NAT/LB/NAT64/rewrite bits (those must stay on the eBPF
+/// path), no translation, and TCP-ESTABLISHED. v1 is TCP-only (UDP "established" is not expressible
+/// via `tcp_state` — deferred). Used by the userspace offload manager to pick flows to
+/// hardware-offload.
+#[inline(always)]
+pub fn offload_eligible(e: &CtEntry) -> bool {
+    const DISQUALIFY: u8 = CT_REWRITE_SRC | CT_REWRITE_DST | CT_F_SRC_NAT | CT_F_DST_LB | CT_F_NAT64;
+    e.flags & CT_F_DEFAULT != 0
+        && e.flags & DISQUALIFY == 0
+        && e.xlate_ip == [0u8; 4]
+        && e.tcp_state == TCP_ESTABLISHED
+}
+
+/// v6 sibling of [`offload_eligible`] (`CtEntry6.xlate_ip6`).
+#[inline(always)]
+pub fn offload_eligible6(e: &CtEntry6) -> bool {
+    const DISQUALIFY: u8 = CT_REWRITE_SRC | CT_REWRITE_DST | CT_F_SRC_NAT | CT_F_DST_LB | CT_F_NAT64;
+    e.flags & CT_F_DEFAULT != 0
+        && e.flags & DISQUALIFY == 0
+        && e.xlate_ip6 == [0u8; 16]
+        && e.tcp_state == TCP_ESTABLISHED
+}
 
 /// Idle timeout for non-established flows (30 s), in nanoseconds. Mirrors dpservice.
 pub const DEFAULT_TIMEOUT_NS: u64 = 30 * 1_000_000_000;
@@ -543,4 +568,84 @@ fn dsr_stash<M: Maps>(maps: &mut M, rev: &flowplane_common::CtKey, vip: &[u8; 16
             last_seen: now,
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offload_eligible_only_established_default_ew() {
+        use flowplane_common::{
+            CtEntry, CT_F_DEFAULT, CT_F_DST_LB, CT_F_NAT64, CT_F_SRC_NAT, TCP_ESTABLISHED,
+            TCP_NEW_SYN,
+        };
+        let base = CtEntry {
+            flags: CT_F_DEFAULT,
+            tcp_state: TCP_ESTABLISHED,
+            ..Default::default()
+        };
+        assert!(
+            offload_eligible(&base),
+            "plain established E/W flow is eligible"
+        );
+        assert!(
+            !offload_eligible(&CtEntry {
+                tcp_state: TCP_NEW_SYN,
+                ..base
+            }),
+            "not-yet-established"
+        );
+        assert!(
+            !offload_eligible(&CtEntry {
+                flags: CT_F_DEFAULT | CT_F_SRC_NAT,
+                ..base
+            }),
+            "NAT flow excluded"
+        );
+        assert!(
+            !offload_eligible(&CtEntry {
+                flags: CT_F_DEFAULT | CT_F_DST_LB,
+                ..base
+            }),
+            "LB flow excluded"
+        );
+        assert!(
+            !offload_eligible(&CtEntry {
+                flags: CT_F_DEFAULT | CT_F_NAT64,
+                ..base
+            }),
+            "NAT64 excluded"
+        );
+        assert!(
+            !offload_eligible(&CtEntry {
+                xlate_ip: [1, 2, 3, 4],
+                ..base
+            }),
+            "translated flow excluded"
+        );
+        assert!(
+            !offload_eligible(&CtEntry { flags: 0, ..base }),
+            "non-default excluded"
+        );
+    }
+
+    #[test]
+    fn offload_eligible6_matches_v4_semantics() {
+        use flowplane_common::{CtEntry6, CT_F_DEFAULT, CT_F_NAT64, TCP_ESTABLISHED};
+        let base = CtEntry6 {
+            flags: CT_F_DEFAULT,
+            tcp_state: TCP_ESTABLISHED,
+            ..Default::default()
+        };
+        assert!(offload_eligible6(&base));
+        assert!(!offload_eligible6(&CtEntry6 {
+            flags: CT_F_DEFAULT | CT_F_NAT64,
+            ..base
+        }));
+        assert!(!offload_eligible6(&CtEntry6 {
+            xlate_ip6: [1; 16],
+            ..base
+        }));
+    }
 }
