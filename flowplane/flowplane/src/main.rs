@@ -10,6 +10,7 @@ mod handlers;
 mod loader;
 mod maps;
 mod node;
+mod offload;
 mod parse;
 pub mod pb {
     tonic::include_proto!("dataplane.v1");
