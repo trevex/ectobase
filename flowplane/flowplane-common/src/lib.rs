@@ -67,7 +67,8 @@ pub struct IfaceValue {
     /// 1 = the local delivery device has a netns peer (veth/netkit) → local delivery may use
     /// `bpf_redirect_peer` (inject at the peer's ingress in the pod netns, same softirq). 0 = a
     /// peerless device (root-netns tap) → must use plain `bpf_redirect`. Set at attach from the
-    /// DeviceType. Additive ABI: reuses a former `_pad` byte, so `size_of::<IfaceValue>()` is unchanged.
+    /// DeviceType. Occupies one byte within the struct's existing size, so `size_of::<IfaceValue>()`
+    /// is unchanged.
     pub peer_capable: u8,
     pub _pad: [u8; 1],
 }
@@ -91,10 +92,10 @@ pub const UNDERLAY_LOCAL_DELIVER: u32 = u32::MAX;
 /// Geneve overlay wire overhead the kernel's `collect_md` device adds on top of the inner frame the
 /// eBPF programs see: outer IPv6 (40) + outer UDP (8) + Geneve header (8) = 56. The outer Ethernet
 /// (14) is link framing on the fabric NIC, not part of the L3/L4 overhead a guest's own MTU needs to
-/// account for. Since P2 stopped writing outer bytes in the datapath (the kernel builds them from a
-/// `TunnelEncap` decision — see `flowplane_core::encap`), `pkt.len()` on the egress Encap arm and the
-/// ingress uplink path is the INNER length only; anywhere that needs to reflect real wire bytes
-/// (rate metering, the advertised guest MTU) adds this constant back in.
+/// account for. The datapath does not write outer bytes (the kernel builds them from a `TunnelEncap`
+/// decision — see `flowplane_core::encap`), so `pkt.len()` on the egress Encap arm and the ingress
+/// uplink path is the INNER length only; anywhere that needs to reflect real wire bytes (rate
+/// metering, the advertised guest MTU) adds this constant back in.
 pub const GENEVE_OVERHEAD: usize = 56;
 
 /// Per-port metadata, keyed by the guest tap's host-side ifindex.
@@ -108,8 +109,8 @@ pub struct PortMeta {
     /// 1 = L3 pod edge (netkit): IP from byte 0, no L2 responders, synthetic-eth push/pop at the
     /// edge; 0 = L2 (veth/tap/vf).
     pub l3: u8,
-    /// 1 = this port is an SR-IOV VF/SF representor eligible for hardware flow-offload (increment C
-    /// installs tc-flower rules for its established E/W flows). Written at attach; datapath-inert in A.
+    /// 1 = this port is an SR-IOV VF/SF representor eligible for hardware flow-offload (the offload
+    /// manager installs tc-flower rules for its established E/W flows). Written at attach.
     pub offloaded: u8,
     pub underlay_ipv6: [u8; 16],
     pub gateway_ipv6: [u8; 16],
@@ -309,8 +310,7 @@ pub struct MaglevKey {
     pub slot: u32,
 }
 
-/// Maglev slot value: a fully self-describing LB backend. Replaces the bare `[u8; 16]` backend-node
-/// underlay that used to be the `MAGLEV` value. `node_vtep == Local.underlay_ipv6` decides
+/// Maglev slot value: a fully self-describing LB backend. `node_vtep == Local.underlay_ipv6` decides
 /// local-vs-remote delivery (no `is_local:0` INTERFACES rows needed); on a local hit the datapath
 /// resolves the delivery tap via `INTERFACES[(vni, overlay_ip4)]` / `INTERFACES6[(vni, overlay_ip6)]`.
 #[repr(C)]
@@ -342,7 +342,7 @@ pub struct DsrOpt {
     pub vip: [u8; 16],
 }
 
-/// DSR reverse-SNAT state (B7b): the VIP a backend must rewrite a guest reply's source address to,
+/// DSR reverse-SNAT state: the VIP a backend must rewrite a guest reply's source address to,
 /// stored in the dedicated `DSR`/`DSR6` LRU maps keyed by the reply 5-tuple (`CtKey`/`CtKey6` —
 /// `invert_key`/`invert_key6` of the forwarded flow's key). Deliberately compact (24 bytes) so it
 /// does not inflate `CtEntry` or the conntrack hot paths; `last_seen` is informational only — the
@@ -420,13 +420,12 @@ pub struct NatValue6 {
 
 /// Unified conntrack entry value. Keyed by the 5-tuple (`CtKey`) of the packet that will be SEEN;
 /// the datapath's `ct_apply` rewrites that packet's src or dst address (+L4 port) to
-/// `xlate_ip`/`xlate_port`. Replaces the former feature-private `CtVal`/`NatCtVal`.
+/// `xlate_ip`/`xlate_port`.
 ///
-/// DSR reverse-SNAT state does NOT live here (B7b): it was briefly stored inline (a `xlate_ip6`
-/// field grew this to 40 bytes) but that copy landed in the pre-existing hot stack frames
-/// (`ct_apply`/`ct_create_default`) and pushed `uplink_rx`'s combined BPF stack over the 512-byte
-/// verifier limit. DSR reverse state now lives in its own compact `DSR`/`DSR6` LRU maps (see
-/// [`DsrVip`]), keyed by the reply 5-tuple; `CtEntry` is back to its pre-DSR 24-byte layout.
+/// DSR reverse-SNAT state does NOT live here: storing it inline would grow `CtEntry`, and the copy
+/// landing in the hot `ct_apply`/`ct_create_default` stack frames would push `uplink_rx`'s combined
+/// BPF stack over the 512-byte verifier limit. DSR reverse state lives in its own compact `DSR`/`DSR6`
+/// LRU maps (see [`DsrVip`]), keyed by the reply 5-tuple; `CtEntry` stays at 24 bytes.
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct CtEntry {
@@ -451,14 +450,14 @@ pub const CT_F_FIREWALL: u8 = 0x20;
 /// and reverse conntrack entries carry this flag so the ingress reply path knows to expand
 /// IPv4 back to IPv6 when delivering the translated reply to the guest.
 pub const CT_F_NAT64: u8 = 0x40;
-// 0x80 (former CT_F_DSR) is free: DSR reverse-SNAT state moved out of CtEntry into the dedicated
-// `DSR`/`DSR6` maps (see `DsrVip`) — B7b.
+// 0x80 is unused/reserved. DSR reverse-SNAT state lives in the dedicated `DSR`/`DSR6` maps (see
+// `DsrVip`), not in CtEntry flags.
 
 /// Dedicated v6 NAT (NAT66) conntrack value, keyed by `CtKey6` in the `NAT_CT6` map. The v4 NAT
-/// stores its xlate state in `CtEntry.xlate_ip` (`[u8;4]`, v4-only) — NOT grown to hold a v6 address
-/// (the 24-byte / 512B-BPF-stack constraint that reverted the B5 `xlate_ip6` growth), so NAT66 gets
-/// its own value type + map, mirroring the DSR6 "dedicated v6 map" precedent. Same `CT_*` flags as
-/// [`CtEntry`] (`CT_REWRITE_SRC`/`CT_REWRITE_DST`/`CT_F_SRC_NAT`).
+/// stores its xlate state in `CtEntry.xlate_ip` (`[u8;4]`, v4-only), which is not grown to hold a v6
+/// address (that would break the 24-byte layout / 512B-BPF-stack constraint), so NAT66 gets its own
+/// value type + map, like the dedicated `DSR6` v6 map. Same `CT_*` flags as [`CtEntry`]
+/// (`CT_REWRITE_SRC`/`CT_REWRITE_DST`/`CT_F_SRC_NAT`).
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct CtEntry6 {
@@ -470,7 +469,7 @@ pub struct CtEntry6 {
     pub _pad: [u8; 4],
 }
 
-// CtEntry.tcp_state values (mirror dpservice dp_flow_tcp_state)
+// CtEntry.tcp_state values (TCP connection-tracking state machine)
 pub const TCP_NONE: u8 = 0;
 pub const TCP_NEW_SYN: u8 = 1;
 pub const TCP_NEW_SYNACK: u8 = 2;
@@ -540,8 +539,8 @@ pub struct FwMeta {
     pub egress_count: u32,
 }
 
-/// Max DNS servers per family carried in DHCP replies (dpservice's flags are repeatable; this caps
-/// the in-map array — 8 covers the conformance set + headroom).
+/// Max DNS servers per family carried in DHCP replies (caps the in-map array — 8 covers the
+/// conformance set + headroom).
 pub const DHCP_MAX_DNS: usize = 8;
 
 /// Tail-call indices into the `GUEST_PROGS_TC` program array (egress datapath split).
@@ -554,15 +553,15 @@ pub const GUEST_PROG_IPV4: u32 = 1;
 pub const GUEST_PROG_IPV6: u32 = 2;
 pub const GUEST_PROG_V6_FWD: u32 = 3;
 
-/// Tail-call index into the `UPLINK_PROGS` **tc** program array (ingress datapath split; the
-/// programs it tail-calls between were XDP pre-P2-Task-4b, now tc/tcx on the geneve device).
+/// Tail-call index into the `UPLINK_PROGS` **tc** program array (ingress datapath split; these
+/// programs are tc/tcx on the geneve device).
 /// `UPLINK_PROG_V6` dispatches the inner-IPv6 ingress path (`xdp_uplink_v6`), split out of
 /// `uplink_rx` because the v6 firewall/conntrack structures overflow the combined BPF stack. tc
 /// programs can only tail-call other tc programs of the SAME attach type, so this lives in its own
 /// array (not the guest-egress-side `GUEST_PROGS_TC`).
 pub const UPLINK_PROG_V6: u32 = 0;
 
-/// Server-wide DHCP config (DHCP_CONFIG[0]). Mirrors dpservice's --dhcp-mtu/--dhcp-dns/--dhcpv6-dns.
+/// Server-wide DHCP config (DHCP_CONFIG[0]): the MTU + v4/v6 DNS server lists advertised in DHCP replies.
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct DhcpConfig {
@@ -814,20 +813,20 @@ pub mod proto {
     pub const GW_MAC: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
 }
 
-/// ARP/ND wire-format constants. The byte-rewrite RESPONDERS moved to `flowplane_core::arp_nd` (the
+/// ARP/ND wire-format constants. The byte-rewrite responders live in `flowplane_core::arp_nd` (the
 /// `Pkt`-trait seam the eBPF datapath, native sim, and BPF_PROG_TEST_RUN anchor all share); this
-/// module now only re-exports the L2/L3 protocol constants so existing
-/// `arp_nd::{ETH_LEN, IPV6_LEN, ETH_P_IPV6}` import paths keep resolving.
+/// module re-exports the L2/L3 protocol constants so `arp_nd::{ETH_LEN, IPV6_LEN, ETH_P_IPV6}`
+/// import paths resolve.
 pub mod arp_nd {
     pub use super::proto::{ETH_LEN, ETH_P_IPV6, IPV6_LEN};
 }
 
 /// Cheap fixed-offset DHCP request detection (used by the guest-edge glue to decide whether to
-/// tail-call the DHCP responder). The DHCPv4 request parse + reply construction now live in
+/// tail-call the DHCP responder). The DHCPv4 request parse + reply construction live in
 /// `flowplane_core::dhcp` over the `Pkt`/`Maps` seam (the SAME code the eBPF datapath, the sim, and
 /// the byte-parity anchor run); this module keeps only the port-sniffing detectors, which are pure
 /// fixed-offset reads over `(data, data_end)` and have no packet/map trait dependency. The DHCPv6
-/// responder still lives in the eBPF crate (its option block is runtime-variable-length; see
+/// responder lives in the eBPF crate (its option block is runtime-variable-length; see
 /// `flowplane_core::dhcp` for why it cannot cross the fixed-size `Pkt` seam).
 pub mod dhcp {
     const ETH_LEN: usize = 14;
@@ -931,7 +930,7 @@ mod tests {
     use core::mem::{align_of, offset_of, size_of};
 
     /// BPF map lookups hash the *raw bytes* of the key, so any implicit padding hole (whose bytes
-    /// the writer may leave as garbage) silently breaks lookups — the dpservice-class trap. This
+    /// the writer may leave as garbage) silently breaks lookups — a classic BPF map-key trap. This
     /// pins the field offsets of the hot hashed keys and asserts each one has no padding beyond the
     /// explicit `_pad` fields, so a field reorder/insert that introduces a hole fails loudly here
     /// rather than as a heisen-miss in production.
@@ -1049,8 +1048,8 @@ mod tests {
 
     #[test]
     fn dsr_opt_layout() {
-        // family(1) + _pad(1) + port(2) + vip(16) = 20, the Geneve DSR TLV payload size the B1
-        // spike froze (24-byte buffer = 4-byte option header + this 20-byte payload).
+        // family(1) + _pad(1) + port(2) + vip(16) = 20, the Geneve DSR TLV payload size
+        // (24-byte buffer = 4-byte option header + this 20-byte payload).
         assert_eq!(offset_of!(DsrOpt, family), 0);
         assert_eq!(offset_of!(DsrOpt, port), 2);
         assert_eq!(offset_of!(DsrOpt, vip), 4);
@@ -1080,9 +1079,9 @@ mod tests {
         // + 1 (fwall_action) + 7 (_pad) = 24, u64-aligned. CONNTRACK/CONNTRACK6 are RUNTIME LRU maps
         // re-created on load — growing/shrinking the value is NOT a wire/journal ABI concern; the
         // coupling is the core+ebpf ct_apply twins + the aya_writer GC + this test, changed together.
-        // B7b: reverted the B5 `xlate_ip6` growth (40 -> 24) — DSR reverse-SNAT state moved to the
-        // dedicated `DSR`/`DSR6` maps (see `dsr_vip_layout`) to keep this struct (copied on the stack
-        // by every `ct_apply`/`ct_create_default` call) out of the `uplink_rx` verifier stack budget.
+        // DSR reverse-SNAT state lives in the dedicated `DSR`/`DSR6` maps (see `dsr_vip_layout`), not
+        // inline here — keeping this struct (copied on the stack by every `ct_apply`/`ct_create_default`
+        // call) small enough to stay within the `uplink_rx` verifier stack budget.
         assert_eq!(core::mem::size_of::<CtEntry>(), 24);
         // Alignment must also be unchanged (u64 = 8) — a bigger alignment would change the map layout.
         assert_eq!(core::mem::align_of::<CtEntry>(), 8);
@@ -1090,7 +1089,7 @@ mod tests {
 
     #[test]
     fn dsr_vip_layout() {
-        // 16 (vip) + 8 (last_seen) = 24, u64-aligned. RUNTIME LRU map value (DSR/DSR6, B7b) — no
+        // 16 (vip) + 8 (last_seen) = 24, u64-aligned. RUNTIME LRU map value (DSR/DSR6) — no
         // wire/journal ABI concern, same coupling rule as `ct_entry_layout`.
         assert_eq!(core::mem::size_of::<DsrVip>(), 24);
         assert_eq!(core::mem::align_of::<DsrVip>(), 8);

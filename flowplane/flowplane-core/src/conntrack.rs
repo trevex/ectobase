@@ -7,7 +7,7 @@
 //! wrapper passes `now()`, the sim passes 0.
 //!
 //! GC expiry: `timeout_ns` + `ct_is_expired` live here so the production GC loop and conformance
-//! tests share a single implementation. Mirrors dpservice (30 s default, 24 h established-TCP).
+//! tests share a single implementation (30 s idle default, 24 h for established TCP).
 
 use crate::maps::Maps;
 use crate::parse::{l4_ports, l4_ports_v6, IPPROTO_ICMP, IPPROTO_TCP, IPPROTO_UDP};
@@ -21,9 +21,8 @@ use flowplane_common::{
 
 /// A conntrack entry is hardware-offload-eligible iff it is a plain established East/West overlay
 /// flow: `CT_F_DEFAULT` set, NONE of the NAT/LB/NAT64/rewrite bits (those must stay on the eBPF
-/// path), no translation, and TCP-ESTABLISHED. v1 is TCP-only (UDP "established" is not expressible
-/// via `tcp_state` — deferred). Used by the userspace offload manager to pick flows to
-/// hardware-offload.
+/// path), no translation, and TCP-ESTABLISHED. TCP-only (UDP "established" is not expressible via
+/// `tcp_state`). Used by the userspace offload manager to pick flows to hardware-offload.
 #[inline(always)]
 pub fn offload_eligible(e: &CtEntry) -> bool {
     const DISQUALIFY: u8 =
@@ -45,10 +44,10 @@ pub fn offload_eligible6(e: &CtEntry6) -> bool {
         && e.tcp_state == TCP_ESTABLISHED
 }
 
-/// Idle timeout for non-established flows (30 s), in nanoseconds. Mirrors dpservice.
+/// Idle timeout for non-established flows (30 s), in nanoseconds.
 pub const DEFAULT_TIMEOUT_NS: u64 = 30 * 1_000_000_000;
 
-/// Idle timeout for TCP-ESTABLISHED flows (24 h), in nanoseconds. Mirrors dpservice.
+/// Idle timeout for TCP-ESTABLISHED flows (24 h), in nanoseconds.
 pub const TCP_ESTABLISHED_TIMEOUT_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
 
 /// Return the idle timeout (ns) for a conntrack entry: 24 h for ESTABLISHED TCP, 30 s otherwise.
@@ -97,8 +96,8 @@ const TCP_SYN: u8 = 0x02;
 const TCP_RST: u8 = 0x04;
 const TCP_ACK: u8 = 0x10;
 
-/// Advance the TCP state for a flow given a packet's TCP flags (functional parity with dpservice's
-/// NONE->NEW_SYN->NEW_SYNACK->ESTABLISHED->FINWAIT->RST_FIN progression). Pure.
+/// Advance the TCP state for a flow given a packet's TCP flags, over the
+/// NONE->NEW_SYN->NEW_SYNACK->ESTABLISHED->FINWAIT->RST_FIN progression. Pure.
 #[inline(always)]
 pub fn tcp_advance(state: u8, flags: u8) -> u8 {
     if flags & TCP_RST != 0 {
@@ -302,15 +301,14 @@ pub fn csum_replace16(check: u16, old: &[u8; 16], new: &[u8; 16]) -> u16 {
 /// mirroring `ct_apply`'s TCP window) or UDP (checksum @ l4+6, zero-stays-zero) checksum at
 /// `l4 = ip_off + 40`. Address-only: unlike `ct_apply`, no L4 port is rewritten (DSR reverse-SNAT
 /// preserves the client-visible VIP:port). Other next-headers (including ICMPv6) are left with
-/// the address rewritten but no checksum fix-up — out of scope for B5.
+/// the address rewritten but no checksum fix-up.
 ///
-/// Used by `wan_rx`'s DSR-encode (B6, `datapath::wan_rx` rewrites the inner dst VIP -> the backend's
-/// overlay IP) and by the backend's DSR reverse-SNAT egress rewrite: the core sim mirror
-/// (`datapath::process_guest_tx_v6`, B8) AND the real eBPF egress (`flowplane_ebpf::egress`'s
-/// `dsr_reverse_snat_v6`, B8b) both call this directly. `pub` (not `pub(crate)`) since B8b's caller
-/// lives in the separate `flowplane-ebpf` crate — no longer shared with a `ct_apply6` (removed in
-/// B7b: DSR reverse state moved out of `CtEntry` into the dedicated `DSR`/`DSR6` maps, see
-/// [`dsr_note`]/[`dsr_note6`]).
+/// Used by `wan_rx`'s DSR-encode (`datapath::process_wan_rx` rewrites the inner dst VIP -> the
+/// backend's overlay IP) and by the backend's DSR reverse-SNAT egress rewrite: the core sim mirror
+/// (`datapath::process_guest_tx_v6`) AND the real eBPF egress (`flowplane_ebpf::egress`'s
+/// `dsr_reverse_snat_v6`) both call this directly. `pub` (not `pub(crate)`) because the eBPF caller
+/// lives in the separate `flowplane-ebpf` crate. DSR reverse state lives in the dedicated `DSR`/`DSR6`
+/// maps (see [`dsr_note`]/[`dsr_note6`]), not in `CtEntry`.
 #[inline(always)]
 pub fn rewrite_v6_addr<P: Pkt>(
     pkt: &mut P,
@@ -493,9 +491,9 @@ pub fn ct_refresh6<P: Pkt, M: Maps>(
     maps.conntrack6_insert(*key, *e);
 }
 
-/// Note the DSR reverse VIP for a load-balanced v6 flow, in the dedicated `DSR6` map (B7b — moved
-/// out of `CONNTRACK6`/`CtEntry` to keep the hot conntrack frames off the `uplink_rx` verifier stack
-/// budget; see [`flowplane_common::DsrVip`]). `pkt` is the forwarded frame (src=client, dst=backend
+/// Note the DSR reverse VIP for a load-balanced v6 flow, in the dedicated `DSR6` map (kept out of
+/// `CONNTRACK6`/`CtEntry` so the hot conntrack frames stay off the `uplink_rx` verifier stack budget;
+/// see [`flowplane_common::DsrVip`]). `pkt` is the forwarded frame (src=client, dst=backend
 /// overlay). The reply key is `invert_key6` of the forwarded flow's key; idempotent (never
 /// overwrites an existing note).
 #[inline(always)]

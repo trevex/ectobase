@@ -15,8 +15,8 @@ use crate::maps::{
     GeneveIfindexMap, IfaceMetaMap, Interfaces, Interfaces6, Lb, LocalMap, Maglev, Meter, Nat,
     NatIps, NeighborNat, NeighborNatCount, PortMetaMap, Routes, Routes6, Vips,
 };
-// `Nat`, `NatIps`, `NeighborNat`, `NeighborNatCount` are still opened in `bring_up`/the test ctor,
-// then moved into `AyaWriter` (they no longer live in `Inner`).
+// `Nat`, `NatIps`, `NeighborNat`, `NeighborNatCount` are opened in `bring_up`/the test ctor and
+// moved into `AyaWriter`, which owns them; they are not held on `Inner`.
 
 // The `impl Control` blocks are split by domain into these child modules. Each is pure code
 // movement out of this file; they reach `Inner`'s private state via `super`.
@@ -72,8 +72,8 @@ impl OverlayStatus {
 /// Whether `device` is a `netkit` link, by parsing `ip -d link show <device>` (the `-d` detail line
 /// carries the link kind). Used ONLY on restart-adopt to pick the guest-program re-attach mechanism
 /// (netkit `bpf(BPF_LINK_UPDATE)` vs tcx) — the device kind is authoritative there, since the
-/// datapath L2/L3 semantics (which no longer imply the device kind, now that the VM pod-tap is
-/// netkit-L2) live in the surviving PORT_META map. Best-effort: any error / missing device → false
+/// datapath L2/L3 semantics (which do not imply the device kind, since the VM pod-tap is a
+/// netkit-L2 device) live in the PORT_META map. Best-effort: any error / missing device → false
 /// (fall back to the tcx re-attach path).
 fn device_is_netkit(device: &str) -> bool {
     std::process::Command::new("ip")
@@ -166,9 +166,9 @@ struct Inner {
     /// handle MUST stay alive here — dropping it after `set()` closes the map fd and `wan_rx` then
     /// fails to verify ("fd is not pointing to valid bpf_map"), exactly like `_locals`/`_guest_progs`.
     _geneve_ifindex: GeneveIfindexMap,
-    /// ifindex of the node-wide `collect_md` Geneve device (`flowplane_device::GENEVE_DEV`),
-    /// brought up in `bring_up` and programmed into `GENEVE_IFINDEX[0]` right after.
-    #[allow(dead_code)]
+    /// ifindex of the node-wide `collect_md` Geneve device (`flowplane_device::GENEVE_DEV`), brought
+    /// up in `bring_up` and programmed into `GENEVE_IFINDEX[0]` right after. Exposed via
+    /// [`Control::geneve_ifindex`] as the tc-flower redirect target for the E/W offload manager.
     geneve_ifindex: u32,
     core: ControlCore<AyaWriter>,
     /// Interfaces recovered by `rebuild_from_maps` on adopt: (interface_id, device) whose guest
@@ -196,7 +196,7 @@ struct Inner {
 // (interface_id, device, netkit): the bool tells the adopt caller whether to re-point the guest
 // program's pinned link as a netkit link (bpf(BPF_LINK_UPDATE)) or a tcx link (readopt_tc_link). It
 // is probed from the live device kind on adopt (device_is_netkit), NOT the journal l3 bit — the VM
-// pod-tap is a netkit device with L2 semantics, so l3 no longer implies the device kind.
+// pod-tap is a netkit device with L2 semantics, so l3 does not imply the device kind.
 type ReattachList = Vec<(Vec<u8>, String, bool)>;
 
 impl Control {
@@ -215,7 +215,7 @@ impl Control {
     ) -> anyhow::Result<Self> {
         let mut ebpf = loader::load_ebpf(pin_dir)?;
         loader::maybe_install_logger(&mut ebpf);
-        // Bring up the node-wide `collect_md` Geneve device (P2 overlay encap target). Idempotent
+        // Bring up the node-wide `collect_md` Geneve device (the overlay encap target). Idempotent
         // (delete-if-exists then add), so this is safe on both a fresh bring-up AND an adopt
         // restart — unlike the pinned BPF maps/links, this netdev is NOT torn down on graceful
         // shutdown (see the `Serve` shutdown handler in main.rs), so re-running `ensure_geneve_dev`
@@ -260,7 +260,7 @@ impl Control {
                     &uplink_pin,
                 )?;
             }
-            // B7c: `uplink_dsr_note` is a SEPARATE tcx program on the SAME geneve ingress hook,
+            // `uplink_dsr_note` is a SEPARATE tcx program on the SAME geneve ingress hook,
             // ordered to run BEFORE `uplink_rx` via `LinkOrder::first()` (see
             // `attach_tc_pinned_at_first`'s doc comment for the ordering guarantee — it is
             // independent of which of the two calls runs first). It does only the DSR-map note (its
@@ -462,7 +462,7 @@ impl Control {
             g.iface_underlay.insert(id.clone(), v.underlay);
             // The re-attach mechanism (netkit BPF_LINK_UPDATE vs tcx) is decided by the DEVICE KIND,
             // not the journal `l3` bit: the VM pod-tap is a netkit device with L2 (l3=0) semantics, so
-            // `l3` no longer distinguishes it from a veth/tap. Probe the live device (it survives a
+            // `l3` does not distinguish it from a veth/tap. Probe the live device (it survives a
             // flowplane restart — it lives in the node root netns / the still-running pod netns).
             let netkit = device_is_netkit(&device);
             reattach.push((id, device, netkit));
@@ -603,7 +603,7 @@ impl Control {
     /// via either ToR). The program is already loaded by `bring_up`; this just attaches it to
     /// another interface. LOCAL stays the primary uplink (egress + wan_rx redirect use it).
     ///
-    /// NOTE: under the P2 geneve `collect_md` model, decap happens on the geneve device's OWN RX
+    /// NOTE: under the geneve `collect_md` model, decap happens on the geneve device's OWN RX
     /// path regardless of which physical NIC the encapped packet arrived on (a single virtual
     /// device demuxes the tunnel), and `bring_up` attaches the "real" `uplink_rx` there — see its
     /// doc comment. So attaching `uplink_rx` directly to a raw extra physical NIC (as this fn does)
@@ -845,8 +845,8 @@ impl Control {
         // The guest program was pre-loaded in bring_up, so attach always succeeds and we get a
         // droppable link back — dropping it detaches the program on interface teardown.
         //
-        // netkit (L3) devices take the guest-EGRESS program via the `BPF_NETKIT_PEER` hook (spike-
-        // proven: PRIMARY=host→pod, PEER=pod egress; `tc_guest_tx` is the pod-egress pipeline), NOT
+        // netkit (L3) devices take the guest-EGRESS program via the `BPF_NETKIT_PEER` hook
+        // (PRIMARY=host→pod, PEER=pod egress; `tc_guest_tx` is the pod-egress pipeline), NOT
         // tcx/clsact — attaching a clsact/tcx program to an L3 netkit primary is the wrong attach point.
         // The attach targets the primary ifindex with attach_type PEER. netkit has
         // no aya attach API (aya-rs/aya#1540), so `attach_netkit_pinned_at` issues a raw
@@ -934,8 +934,8 @@ impl Control {
         g.iface_underlay
             .insert(interface_id.to_vec(), underlay_ipv6);
         // Mirror the agnostic interface metadata into the core so the NAT/LB/QoS conflict checks +
-        // the `set_qos` tap resolution can read it (also the sole ifindex source now `by_ifindex` is
-        // retired).
+        // the `set_qos` tap resolution can read it (also the sole ifindex source — there is no
+        // separate `by_ifindex` map).
         g.core.register_iface_meta(
             interface_id.to_vec(),
             flowplane_control::shadow::IfaceMeta {
@@ -952,7 +952,7 @@ impl Control {
     /// Tear down a local interface: detach tc_guest_tx (drop the link) and clear its maps + shadow.
     /// Returns true if found and deleted, false if not found.
     /// When the last interface on a VNI is removed, also auto-resets the VNI (purges neighbor NATs,
-    /// VIPs, and routes for that VNI) to match dpservice's behaviour.
+    /// VIPs, and routes for that VNI).
     pub fn detach_interface(&self, interface_id: &[u8]) -> anyhow::Result<bool> {
         let mut g = self.inner.lock();
         let rec = match g.by_id.remove(interface_id) {
@@ -960,8 +960,8 @@ impl Control {
             None => return Ok(false),
         };
         let vni = rec.vni;
-        // Resolve the tap ifindex from the core's agnostic mirror (formerly `Inner.by_ifindex`, now
-        // retired — `ifaces_meta` is the single source of truth). Read it BEFORE `forget_iface_meta`.
+        // Resolve the tap ifindex from the core's agnostic mirror (`ifaces_meta`, the single source of
+        // truth). Read it BEFORE `forget_iface_meta`.
         let tap = g.core.iface_ifindex(interface_id).unwrap_or(0);
         // Drop the core's agnostic mirror of this interface's metadata (registered in create_interface).
         g.core.forget_iface_meta(interface_id);
@@ -1022,8 +1022,8 @@ impl Control {
             .writer_mut()
             .conntrack_flush_interface(vni, rec.ipv4, rec.ipv6);
         // Auto-reset VNI when the last local interface on it is removed:
-        // purge neighbor NATs (and orphaned VIP/NAT/route state) for that VNI. This matches
-        // dpservice's async-deletion model where the VNI is implicitly reset on last-iface removal.
+        // purge neighbor NATs (and orphaned VIP/NAT/route state) for that VNI — the VNI is
+        // implicitly reset on last-iface removal.
         // The reconciliation itself lives in `ControlCore::purge_vni`; Control keeps only
         // the "is the VNI still in use?" decision (it reads `by_id`, which stays authoritative here).
         let vni_still_in_use = g.by_id.values().any(|r| r.vni == vni) || g.core.vni_has_lb(vni);

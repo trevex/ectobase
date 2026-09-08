@@ -34,14 +34,12 @@ use flowplane_common::csum::csum_replace4;
 
 /// Inputs for [`process_uplink`]. Under Geneve `collect_md` the kernel decaps before this runs and
 /// `get_tunnel_key` recovers only the VNI + sender remote — NOT "which local identity to deliver
-/// to" (that was previously encoded in the outer dst address under the per-interface /128 VTEP
-/// scheme). So there is no pre-resolved `UnderlayValue`/outer-dst here anymore: `vni` (from
-/// `get_tunnel_key().tunnel_id`) + the inner packet + maps are the ONLY inputs the delivery-target
-/// reconstruction (see [`resolve_uplink_target`]) has to work with. `local` supplies the outer
-/// MACs/ifindex for an LB remote `reforward` / neighbor-NAT relay / WAN-edge local-deliver rewrite;
-/// `now` is the monotonic clock (ns) the ingress-lane meter stamps `last_ns` from (models
-/// `bpf_ktime_get_ns()`). There is no `guest_ipv6` field here: the CT_F_NAT64 reverse-return path
-/// (see [`process_uplink_rx`]) needs the delivery tap resolved FIRST (it is per-tap `PORT_META`
+/// to". So `vni` (from `get_tunnel_key().tunnel_id`) + the inner packet + maps are the ONLY inputs
+/// the delivery-target reconstruction (see [`resolve_uplink_target`]) has to work with. `local`
+/// supplies the outer MACs/ifindex for an LB remote `reforward` / neighbor-NAT relay / WAN-edge
+/// local-deliver rewrite; `now` is the monotonic clock (ns) the ingress-lane meter stamps `last_ns`
+/// from (models `bpf_ktime_get_ns()`). There is no `guest_ipv6` field: the CT_F_NAT64 reverse-return
+/// path (see [`process_uplink_rx`]) needs the delivery tap resolved FIRST (it is per-tap `PORT_META`
 /// metadata), which only happens inside the dispatch itself — so it is read from `Maps` there,
 /// not threaded in as an input the caller can't yet know.
 pub struct UplinkIn<'a> {
@@ -52,15 +50,15 @@ pub struct UplinkIn<'a> {
 
 /// The outcome of reconstructing WHERE to deliver a decapped inner frame from `(vni, inner dst)` plus
 /// maps alone — this covers mechanism ONE (normal guest self-route) and mechanism FOUR (WAN-edge
-/// sentinel / genuine miss) of the four-mechanism ingress delivery-target reconstruction (see the P2
-/// Task-4 design doc). Mechanism TWO (NAT-return) and mechanism THREE (LB remote-backend /
+/// sentinel / genuine miss) of the four-mechanism ingress delivery-target reconstruction.
+/// Mechanism TWO (NAT-return) and mechanism THREE (LB remote-backend /
 /// neighbor-NAT relay) are resolved by their own callers instead — a plain `ROUTES`/`ROUTES6` lookup
 /// on the CURRENT packet bytes isn't the right tool for those (mechanism TWO keys off the reverse
 /// conntrack entry's restored guest IP, not the packet; mechanism THREE keys off `NEIGHBOR_NAT`, not
 /// `ROUTES`) — but mechanism TWO's callers reuse THIS resolver once they have the restored guest IP,
 /// since that address is exactly what the guest's own self-route is keyed on. Protocol-agnostic (the
 /// `tap_ifindex`/`guest_mac` a v4 self-route and a v6 self-route resolve to look identical) — shared
-/// by both [`resolve_uplink_target`] (v4) and [`resolve_uplink_target6`] (v6, P2 Task 4c).
+/// by both [`resolve_uplink_target`] (v4) and [`resolve_uplink_target6`] (v6).
 enum UplinkTarget {
     /// A local guest interface, resolved by demuxing the overlay dst against the node-VTEP
     /// `INTERFACES[(vni, guest_ipv4)]` / `INTERFACES6[(vni, guest_ipv6)]` map (`is_local != 0`),
@@ -93,10 +91,10 @@ enum UplinkTarget {
 /// already does, so there is no separate map for mechanism #2.
 ///
 /// `#[inline(never)]`: it is packet-FREE (takes `dst` by value; only map lookups), so out-of-lining
-/// it is verifier-safe and reclaims frame budget in its callers. P2 added a packet-reading
-/// (must-stay-inlined) ICMP-error relay + VIP-DNAT arm to `process_uplink`, pushing its inlined
-/// frame over the eBPF verifier's combined-2-call stack budget; moving this (larger, pkt-free) helper
-/// out-of-line brings `uplink_rx` back under budget without a pkt-pointer-tracking regression.
+/// it is verifier-safe and reclaims frame budget in its callers. `process_uplink`'s inlined frame —
+/// with its packet-reading (must-stay-inlined) ICMP-error relay + VIP-DNAT arm — would otherwise
+/// exceed the eBPF verifier's combined-2-call stack budget; keeping this larger, pkt-free helper
+/// out-of-line holds `uplink_rx` under budget without a pkt-pointer-tracking regression.
 #[inline(never)]
 fn resolve_uplink_target<M: Maps>(
     maps: &M,
@@ -123,16 +121,15 @@ fn resolve_uplink_target<M: Maps>(
 
 /// Resolve mechanisms #1 + #4 for an inner IPv6 `dst`: demux `INTERFACES6[(vni, dst)]` (local
 /// delivery on `is_local`), falling back to the WAN-edge sentinel check (else genuine-miss `Drop`) on
-/// an `INTERFACES6` miss. v6 mirror of [`resolve_uplink_target`] (P2 Task 4c) — v6 has no NAT/NAT64-return
+/// an `INTERFACES6` miss. v6 mirror of [`resolve_uplink_target`] — v6 has no NAT/NAT64-return
 /// mechanism TWO caller (those are v4-only; see [`process_uplink_v6`]'s doc comment), so this is used
 /// by [`process_uplink_v6`] alone. The `local.underlay_ipv6`/`UNDERLAY_LOCAL_DELIVER` sentinel check
 /// is the SAME node-identity lookup the v4 resolver uses — the WAN-edge role isn't protocol-specific.
 ///
-/// SECURITY DEFAULT (closes the pre-existing v6 gap — P2 Task 4c): an `INTERFACES6` miss that is also
-/// not the edge sentinel returns `UplinkTarget::Drop`, never a pass-through. HEAD's hand-inlined
-/// `v6_uplink_rx` fell through to `TC_ACT_OK` on a `ROUTES6` miss (fail-OPEN — a decapped overlay v6
-/// frame with no legitimate local claimant was handed to this node's own kernel netns); this resolver
-/// gives v6 the exact fail-closed default v4 already has.
+/// SECURITY DEFAULT: an `INTERFACES6` miss that is also not the edge sentinel returns
+/// `UplinkTarget::Drop`, never a pass-through — a decapped overlay v6 frame with no legitimate local
+/// claimant must never be handed to this node's own kernel netns. This is the same fail-closed
+/// default the v4 resolver has.
 #[inline(always)]
 fn resolve_uplink_target6<M: Maps>(
     maps: &M,
@@ -179,7 +176,7 @@ pub struct UplinkOut {
 ///
 /// `#[inline(never)]`, own subprogram: `firewall::fw_eval_dir` itself must stay `#[inline(always)]`
 /// (shared with the egress path — see its doc comment), so this ingress-only WRAPPER around the
-/// ct_key-miss-gated call is where the P2 Task 4b out-of-lining actually happens, splitting it from
+/// ct_key-miss-gated call is the out-of-lining lever, splitting it from
 /// [`uplink_track_flow`] (step 3) and the rest of [`process_uplink`] so their locals don't combine
 /// on `uplink_rx`'s BPF stack (they run sequentially, never nested, so this is safe).
 #[inline(never)]
@@ -240,7 +237,7 @@ fn resolve_delivery_l3<M: Maps>(maps: &M, tap_ifindex: u32) -> bool {
         .unwrap_or(false)
 }
 
-/// F2: rewrite an inbound frame's inner IPv4 DESTINATION `old` -> `new` (1:1 floating-IP DNAT),
+/// Rewrite an inbound frame's inner IPv4 DESTINATION `old` -> `new` (1:1 floating-IP DNAT),
 /// fixing the IPv4 header checksum and the TCP/UDP L4 checksum incrementally. ICMP needs no L4
 /// fixup (the ICMPv4 checksum does not cover addresses). Mirrors `nat.rs`'s SNAT read-modify-write
 /// window pattern for eBPF-verifier friendliness (one dominating bound per access).
@@ -292,17 +289,15 @@ fn vip_dnat_rewrite<P: Pkt>(pkt: &mut P, ip_off: usize, old: &[u8; 4], new: &[u8
 /// Returns the final delivery `Action` (+ tunnel decision on a relay/reforward arm), having mutated
 /// `pkt` in place.
 ///
-/// No explicit inline attribute (P2 Task 4b): its own body is now small (steps 2/3/5 are out-of-line
-/// subprograms — see [`uplink_ingress_firewall_drop`]/[`uplink_track_flow`]/`meter::ingress_pass`),
-/// so letting it merge back into its single real-eBPF call site (`ingress.rs::try_uplink_rx` via
-/// `process_uplink_rx`) keeps `uplink_rx`'s combined-call chain SHALLOWER (2 deep to each out-of-line
-/// stage, not 3) — `#[inline(never)]` here was tried first and passed `uplink_rx` alone, but the
-/// extra chain depth pushed `main -> process_uplink -> uplink_ingress_firewall_drop` over budget.
+/// Deliberately NOT `#[inline(never)]`: its body is small (steps 2/3/5 are out-of-line subprograms —
+/// see [`uplink_ingress_firewall_drop`]/[`uplink_track_flow`]/`meter::ingress_pass`), so merging it
+/// into its single real-eBPF call site (`ingress.rs::try_uplink_rx` via `process_uplink_rx`) keeps
+/// `uplink_rx`'s combined-call chain 2 levels deep to each out-of-line stage instead of 3, under the
+/// eBPF verifier's stack budget.
 pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn) -> UplinkOut {
-    // Post-decap (P2 Task 5): the kernel `collect_md` geneve device already stripped the outer
-    // Eth/IPv6/UDP/Geneve header before this program runs — `pkt` IS the inner frame, so the inner
-    // 5-tuple/route lookups read at `ETH_LEN`, not `ETH_LEN + IPV6_LEN` (that old offset modeled the
-    // inner sitting BEHIND a still-present outer header, which no longer exists on this path).
+    // Post-decap: the kernel `collect_md` geneve device already stripped the outer Eth/IPv6/UDP/Geneve
+    // header before this program runs — `pkt` IS the inner frame, so the inner 5-tuple/route lookups
+    // read at `ETH_LEN`, not `ETH_LEN + IPV6_LEN`.
     let inner_off = ETH_LEN;
 
     // 1. LB dispatch. The ICMP-error relay wins first: an ICMP error destined to a VIP must follow
@@ -330,16 +325,12 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
                     be.overlay_ip[3],
                 ];
                 match maps.ifaces_get(be.vni, &overlay4) {
-                    // B7c: the DSR reverse-VIP note (`conntrack::dsr_note`) used to live here, gated
-                    // on this exact "confirmed local LB-backend delivery" branch. It moved OUT to the
-                    // separate `uplink_dsr_note` tcx pre-program (see `flowplane-ebpf/src/ingress.rs`'s
-                    // doc comment) — inlining its `ct_key` build into this call graph pushed
-                    // `uplink_rx`'s combined stack over the verifier's 512-byte budget, and
-                    // out-of-lining it hit "R2 pointer arithmetic on pkt_end prohibited" (a pkt-taking
-                    // subprogram can't survive a call boundary once `pkt` crosses it). The new program
-                    // notes the VIP unconditionally whenever the DSR option is present, without
-                    // re-confirming local-backend delivery the way this branch does — see the B7c
-                    // commit message for the accepted trade-off.
+                    // The DSR reverse-VIP note (`conntrack::dsr_note`) is recorded by the separate
+                    // `uplink_dsr_note` tcx pre-program (see `flowplane-ebpf/src/ingress.rs`), not
+                    // here — keeping its `ct_key` build off this call graph holds `uplink_rx`'s
+                    // combined stack under the verifier's 512-byte budget. That program notes the VIP
+                    // unconditionally whenever the DSR option is present, without re-confirming
+                    // local-backend delivery the way this branch does.
                     Some(iv) if iv.is_local != 0 => {
                         (iv.tap_ifindex, iv.guest_mac, true, iv.peer_capable != 0)
                     }
@@ -371,14 +362,14 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
                     }
                 }
             };
-            // F2: 1:1 floating-IP ingress DNAT. `VIPS[(vni,V)] = G` means dst V must be rewritten to
-            // the backing guest G and delivered locally (VIPS is only programmed on the node that owns
-            // G — the `--vip` CLI maps a node's OWN guest — so a non-local G is a misconfig -> Drop, and
+            // 1:1 floating-IP ingress DNAT. `VIPS[(vni,V)] = G` means dst V must be rewritten to the
+            // backing guest G and delivered locally (VIPS is only programmed on the node that owns G —
+            // the `--vip` CLI maps a node's OWN guest — so a non-local G is a misconfig -> Drop, and
             // there is no reforward arm). A floating IP is never a nat_ip, so a VIP hit SKIPS the
-            // neighbor-NAT relay. Rebuild of the pre-P2 eBPF `vip::dnat_ingress`. NOTE: compute a single
-            // `deliver_dst` and fall through to ONE `resolve_uplink_target` below — duplicating that
-            // (inlined) match in a separate VIP branch blew the eBPF verifier's combined-call stack
-            // budget ("combined stack size of 2 calls is 528"), regressing `uplink_rx` load.
+            // neighbor-NAT relay. Compute a single `deliver_dst` and fall through to ONE
+            // `resolve_uplink_target` below — duplicating that (inlined) match in a separate VIP branch
+            // blows the eBPF verifier's combined-call stack budget ("combined stack size of 2 calls is
+            // 528"), regressing `uplink_rx` load.
             let deliver_dst = if let Some(g) = maps.vip_get(in_.vni, &dst) {
                 vip_dnat_rewrite(pkt, inner_off, &dst, &g);
                 g
@@ -471,8 +462,8 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
 /// [`uplink_ingress_firewall_drop`] (mirrors [`process_uplink_v6`] step 2), over `CONNTRACK6`/
 /// `fw_eval_dir6` instead of the v4 maps. `#[inline(never)]` for the SAME BPF-stack-relief reason:
 /// its `CtKey6` frame must be freed before [`uplink_track_flow6`]'s runs, and before the rest of
-/// [`process_uplink_v6`]'s locals accumulate on the tail-called `xdp_uplink_v6` stack (P2 Task 4c —
-/// this is the same 512B budget the pre-4c hand-inlined `v6_uplink_rx` was already tail-called for).
+/// [`process_uplink_v6`]'s locals accumulate on the tail-called `xdp_uplink_v6` stack (the 512B
+/// verifier budget the v6 program is tail-called into a fresh stack for).
 #[inline(never)]
 fn uplink_ingress_firewall_drop6<P: Pkt, M: Maps>(
     pkt: &P,
@@ -511,18 +502,15 @@ fn uplink_track_flow6<P: Pkt, M: Maps>(
 }
 
 /// Host `v6_uplink_rx` for the v6 LB + base ingress path, operating in place on `pkt`. v6 mirror of
-/// [`process_uplink`] (P2 Task 4c — this is the shared core orchestrator `v6.rs::v6_uplink_rx`
-/// previously had NO counterpart for, hand-inlining its own copy with no sim coverage and a
-/// fail-OPEN `ROUTES6`-miss default; see the P2 Task-4c design note). Mirrors the (now-former)
-/// hand-inlined `v6_uplink_rx`, adapted to the shared-core shape:
+/// [`process_uplink`], sharing the core orchestrator shape so the sim and the eBPF program run the
+/// same code:
 ///   1. `lb_select_forward_v6` → local backend (deliver to its tap) | remote (reforward, no decap) |
 ///      None → mechanisms #1/#4 (`resolve_uplink_target6`) — v6 has NO mechanism #3 (neighbor-NAT
 ///      relay is a v4-only NAT_IPS/NEIGHBOR_NAT concept; there is no v6 NAT) and NO mechanism #2
 ///      caller (v6 has no NAT-return/NAT64-return dispatch — those translate a v4 inner, so they can
 ///      only ever be reached via the v4 [`process_uplink_rx`]). A `ROUTES6` miss that is also not the
-///      WAN-edge sentinel is a genuine miss: **`Drop`, fail-closed** — this is the security fix (HEAD
-///      fell through to `TC_ACT_OK`/`Pass` here, leaking decapped overlay bytes into the local
-///      kernel netns on any miss);
+///      WAN-edge sentinel is a genuine miss: **`Drop`, fail-closed** — a decapped overlay v6 frame
+///      with no legitimate local claimant must never leak into the local kernel netns;
 ///   2. ingress firewall on the inner v6 5-tuple against the deliver tap (new-flow gate);
 ///   3. conntrack6 create-on-miss / refresh-on-hit, **skipped for LB** (DSR, no ct — mirrors
 ///      [`process_uplink`] step 3 exactly: LB is stateless-firewalled, every packet re-checked,
@@ -530,16 +518,15 @@ fn uplink_track_flow6<P: Pkt, M: Maps>(
 ///   4. decap + inner-Ethernet rewrite ([`decap_and_rewrite`] with `ETH_P_IPV6` — the rewrite itself
 ///      is protocol-agnostic, only the stamped ethertype differs from the v4 arm).
 ///
-/// SCOPE (confirmed against the pre-4c `v6.rs`): no ingress-lane metering step — `v6_uplink_rx` never
-/// had one (verified back to the pre-tcx `c2cdc55` v6 program; this is a pre-existing, out-of-scope
-/// gap, not something this task's fail-open fix touches). No ICMPv6-echo-to-VIP intercept — by design
-/// the dataplane does NOT answer ping locally (only ARP/ND/RA/DHCP are); ICMP echo to a VIP is
-/// forwarded to a backend by the LB select. (v4's ICMP-error LB relay was rebuilt as F3, v4-only.)
+/// SCOPE: no ingress-lane metering step — the v6 ingress path has none (a known gap). No
+/// ICMPv6-echo-to-VIP intercept — by design the dataplane does NOT answer ping locally (only
+/// ARP/ND/RA/DHCP are); ICMP echo to a VIP is forwarded to a backend by the LB select. The
+/// ICMP-error LB relay is v4-only.
 ///
 /// Returns the delivery `Action`, plus the tunnel-key decision the relay/reforward arm emits (`None`
 /// on every other branch) — reuses [`UplinkOut`] (protocol-agnostic).
 pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn) -> UplinkOut {
-    // Post-decap (P2 Task 5, same as v4): `pkt` IS the inner v6 frame at `ETH_LEN`.
+    // Post-decap (same as v4): `pkt` IS the inner v6 frame at `ETH_LEN`.
     let inner_off = ETH_LEN;
 
     // 0. NAT66-return reverse-DNAT (v6 sibling of `process_uplink_rx`'s NAT branch). If the inner dst
@@ -551,7 +538,7 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
     //    reverse entry → not rewritten here → the neighbor-NAT relay (mechanism #3) below re-forwards.
     let is_nat_return = nat_return_dnat6(pkt, maps, in_.vni);
 
-    // 1. v6 LB dispatch (mirror the pre-4c hand-inlined `v6_uplink_rx`'s LB block). The ICMPv6-error
+    // 1. v6 LB dispatch. The ICMPv6-error
     //    relay wins first (v6 sibling of `process_uplink`'s v4 or_else at the top of this file): an
     //    ICMPv6 error destined to a VIP must follow its EMBEDDED flow's backend, not the (mis-hashed)
     //    outer ICMPv6 tuple. Everything else — incl. a normal ICMPv6 echo to a VIP — falls through to
@@ -567,9 +554,9 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
         Some(be) => {
             if be.node_vtep == in_.local.underlay_ipv6 {
                 match maps.ifaces6_get(be.vni, &be.overlay_ip) {
-                    // B7c: see the v4 `process_uplink`'s matching comment — the DSR reverse-VIP note
-                    // (`conntrack::dsr_note6`) moved out to the separate `uplink_dsr_note` tcx
-                    // pre-program (verifier stack budget).
+                    // See the v4 `process_uplink`'s matching comment — the DSR reverse-VIP note
+                    // (`conntrack::dsr_note6`) is recorded by the separate `uplink_dsr_note` tcx
+                    // pre-program (verifier stack budget), not here.
                     Some(iv) if iv.is_local != 0 => {
                         (iv.tap_ifindex, iv.guest_mac, true, iv.peer_capable != 0)
                     }
@@ -746,8 +733,8 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
 
     // 2. VIP snat/dnat: not modelled (no VIP maps → no-op in the eBPF path too).
 
-    // B8: DSR reverse-SNAT. If this is the guest's REPLY to a DSR-load-balanced flow, the backend's
-    // ingress `uplink_dsr_note` tcx pre-program (B7c) already noted the VIP the edge dispatched, keyed
+    // DSR reverse-SNAT. If this is the guest's REPLY to a DSR-load-balanced flow, the backend's
+    // ingress `uplink_dsr_note` tcx pre-program already noted the VIP the edge dispatched, keyed
     // on this exact reply 5-tuple (`invert_key(ct_key(forwarded))` == `ct_key(reply)`). Rewrite src
     // (this guest's own overlay IP) -> that VIP so the reply is client-visible as coming from the VIP,
     // then let it fall through the ordinary route/deliver tail (it typically routes out via the
@@ -801,7 +788,7 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
     // (they stamp 0 and never sweep with a real clock).
     //
     // Skipped entirely for a DSR reply (`is_dsr`): a DSR flow has no `NAT` config, so `snat_egress`
-    // would already no-op (`nat_get` miss) — the explicit skip just documents that SNAT and the B8
+    // would already no-op (`nat_get` miss) — the explicit skip just documents that SNAT and the
     // DSR reverse-SNAT above are mutually exclusive translations of the same src field.
     let is_ext = route.is_external != 0;
     if !is_dsr
@@ -925,10 +912,9 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
 ///   - `Deliver::Encap { tunnel, uplink_ifindex }` → no byte write (see [`TunnelEncap`]) — EDT
 ///     egress shaping (`edt_egress`, records `edt_tstamp`) stamps off `pkt.len() + GENEVE_OVERHEAD`
 ///     (the unchanged inner frame length, plus the kernel's outer Eth/IPv6/UDP/Geneve bytes so
-///     shaping reflects real wire bytes) → `Redirect(uplink_ifindex)`. This is now representation-
-///     identical to the v4 encap arm; the old v4/v6 outer next-header difference (IPIP vs
-///     IPPROTO_IPV6) no longer exists on the wire here — the packet's own ethertype already says
-///     which it is;
+///     shaping reflects real wire bytes) → `Redirect(uplink_ifindex)`. Representation-identical to
+///     the v4 encap arm — there is no outer next-header difference on the wire; the packet's own
+///     ethertype says which family it is;
 ///   - `Deliver::Local { tap_ifindex, guest_mac }` → inner-Eth rewrite (dst = guest_mac, src =
 ///     GW_MAC, ethertype stays IPv6) → `Redirect(tap_ifindex)`, unshaped (`edt_tstamp = None`);
 ///   - `Deliver::Pass` → `Action::Pass`.
@@ -956,8 +942,8 @@ pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
         EgressFwCt6::Pass { was_new } => was_new,
     };
 
-    // B8: DSR reverse-SNAT. If this is the guest's REPLY to a DSR-load-balanced flow, the backend's
-    // ingress `uplink_dsr_note6` tcx pre-program (B7c) already noted the VIP the edge dispatched, keyed
+    // DSR reverse-SNAT. If this is the guest's REPLY to a DSR-load-balanced flow, the backend's
+    // ingress `uplink_dsr_note6` tcx pre-program already noted the VIP the edge dispatched, keyed
     // on this exact reply 5-tuple (`invert_key6(ct_key6(forwarded))` == `ct_key6(reply)`). Rewrite src
     // (this guest's own overlay IP) -> that VIP so the reply is client-visible as coming from the VIP;
     // the subsequent route decision keys off DST (the client), so it is unaffected by this src rewrite
@@ -977,7 +963,7 @@ pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
         }
     }
 
-    // NAT66 egress SNAT (Plan B) — v6 sibling of process_guest_tx's stage-4 snat_egress. Runs when the
+    // NAT66 egress SNAT — v6 sibling of process_guest_tx's stage-4 snat_egress. Runs when the
     // v6 route is EXTERNAL and the guest has a NAT66 config; the src rewrite doesn't disturb the
     // dst-keyed route_decision6 below. Skipped after a DSR reverse-SNAT (mutually-exclusive src
     // rewrites — a DSR flow has no NAT config so snat_egress6 would no-op anyway, the skip documents
@@ -1074,7 +1060,7 @@ pub fn process_uplink_nat_return<P: Pkt, M: Maps>(
     maps: &mut M,
     in_: &UplinkNatReturnIn,
 ) -> Action {
-    // Post-decap (P2 Task 5): see `process_uplink`'s doc comment on the same offset change.
+    // Post-decap: see `process_uplink`'s doc comment on the same offset change.
     let inner_off = ETH_LEN;
     let mut xlate_ip: Option<[u8; 4]> = None;
 
@@ -1126,7 +1112,7 @@ pub fn process_uplink_nat_return<P: Pkt, M: Maps>(
 /// Otherwise leaves the packet untouched and returns `false` (not a local NAT66 return — a normal
 /// flow or a remote-owned nat_ip6 handled by the neighbor-NAT relay). Its OWN `#[inline(never)]` BPF
 /// frame (holds the `CtKey6`/`CtEntry6` locals) so `process_uplink_v6`'s shared resolve/decap tail is
-/// NOT duplicated onto the return path — that duplication blew the 512B combined-stack limit.
+/// NOT duplicated onto the return path — that duplication would blow the 512B combined-stack limit.
 /// pkt-touching but self-contained (no delivery), so no `R2 pkt_end` wall.
 #[inline(never)]
 fn nat_return_dnat6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, vni: u32) -> bool {
@@ -1165,7 +1151,7 @@ fn nat_return_dnat6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, vni: u32) -> boo
 /// `PORT_META[tap_ifindex].guest_ipv6` once the delivery tap is resolved; see the CT_F_NAT64 branch
 /// below).
 pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn) -> UplinkOut {
-    // Post-decap (P2 Task 5): see `process_uplink`'s doc comment on the same offset change.
+    // Post-decap: see `process_uplink`'s doc comment on the same offset change.
     let inner_off = ETH_LEN;
 
     // NAT-return dispatch — gated on `lb_ul.is_none()` exactly as `try_uplink_rx` (an LB VIP is never
@@ -1184,7 +1170,7 @@ pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
                         // Refresh the reverse entry (last_seen + TCP state, map-only/byte-neutral) so
                         // an active NAT64 flow is not idle-GC'd mid-session. process_uplink_nat64_ingress
                         // takes no Maps and cannot do it; this mirrors the eBPF ingress `ct_touch` on
-                        // the CT_REWRITE_DST reverse entry (which the core path was previously missing).
+                        // the CT_REWRITE_DST reverse entry.
                         let mut r = e;
                         ct_refresh(&*pkt, maps, inner_off, &key, &mut r, in_.now);
                         // Mechanism #2 (NAT64-return): the reverse entry's `xlate_ip` IS the guest's
@@ -1205,14 +1191,12 @@ pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
                                 } => {
                                     // The guest's overlay IPv6 is per-tap metadata (`PORT_META`), not
                                     // derivable from `(vni, inner dst)` alone — it can only be read
-                                    // NOW, after `tap_ifindex` is resolved (fixes the disclosed gap:
-                                    // the eBPF glue used to pass a `[0;16]` placeholder here because
-                                    // it cannot know the tap before this dispatch runs, which made
-                                    // `nat64_ingress_parse` reject every real NAT64 return and fall
-                                    // through to `Action::Pass` — see `ingress.rs`'s former comment).
+                                    // NOW, after `tap_ifindex` is resolved. `nat64_ingress_parse`
+                                    // needs the real overlay IPv6 to accept a NAT64 return, so it must
+                                    // be sourced here rather than passed in before the tap is known.
                                     // Out-of-lined (`#[inline(never)]`): inlining the ~70-byte
                                     // `PortMeta` copy directly into this already-large dispatch
-                                    // pushed the verifier's combined-call-stack over budget
+                                    // pushes the verifier's combined-call-stack over budget
                                     // ("combined stack size of 2 calls is 528. Too large") — the
                                     // same BPF-stack-relief pattern as
                                     // [`uplink_ingress_firewall_drop`]/[`uplink_track_flow`].
@@ -1268,11 +1252,10 @@ pub struct UplinkNat64IngressIn<'a> {
 /// Host NAT64 ingress reply path, in place on `pkt`. Mirrors the eBPF ingress `nat64_ingress`:
 /// reverse `ct_apply` → `nat64_ingress_parse` (Pass on miss) → `grow_head(20)` → `nat64_ingress_write`.
 ///
-/// P2 Task 5: post-decap `pkt` arrives as `[InnerEth(14)][InnerIPv4(20)][L4]` (34+L4 bytes) — the
-/// kernel already stripped the outer Eth/IPv6/UDP/Geneve header. NAT64 v4→v6 EXPANDS the inner
-/// header (IPv4 20 → IPv6 40), so this is a **+20 GROW** to `[Eth(14)][IPv6(40)][L4]` (54+L4 bytes)
-/// — the mirror image of `nat64_egress`'s v6→v4 shrink, reversed. (The pre-Task-5 code shrank 20
-/// bytes here, which modeled the OLD pre-decap 74→54 collapse; that shape no longer exists.)
+/// Post-decap, `pkt` arrives as `[InnerEth(14)][InnerIPv4(20)][L4]` (34+L4 bytes) — the kernel
+/// already stripped the outer Eth/IPv6/UDP/Geneve header. NAT64 v4→v6 EXPANDS the inner header
+/// (IPv4 20 → IPv6 40), so this is a **+20 GROW** to `[Eth(14)][IPv6(40)][L4]` (54+L4 bytes) — the
+/// mirror image of `nat64_egress`'s v6→v4 shrink, reversed.
 ///
 /// `#[inline(never)]`: ingress-only, same BPF-stack-relief reasoning as [`process_uplink`].
 #[inline(never)]
@@ -1395,10 +1378,10 @@ pub struct WanRxOut {
 /// VIP hit or a neighbor-NAT relay hit, emit the tunnel-key decision (no byte write — see
 /// [`TunnelEncap`]) → `Redirect(uplink_ifindex)`; else `Pass`. The WAN LB service space is `vni = 0`
 /// (mirrors the `lb_select_forward*(.., 0)` lookup below). The relay hit uses the REAL owner VNI
-/// from [`Maps::neighbor_nat_lookup_any`] — the eBPF `try_wan_rx` (ingress.rs:452) discards it
-/// (`let (owner_ul, _vni) = ..`), a bug this reconstruction fixes: without the owner's VNI, the
-/// relayed packet's tunnel key would carry the WRONG VNI and the owner's peer-independent reverse
-/// conntrack key `(vni,0,nat_ip,0,nat_port)` would never match.
+/// from [`Maps::neighbor_nat_lookup_any`]. The eBPF `try_wan_rx` (ingress.rs:452) discards it
+/// (`let (owner_ul, _vni) = ..`); without the owner's VNI, the relayed packet's tunnel key would
+/// carry the WRONG VNI and the owner's peer-independent reverse conntrack key
+/// `(vni,0,nat_ip,0,nat_port)` would never match.
 pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> WanRxOut {
     let ethertype = match pkt.read_array::<2>(12) {
         Some(b) => u16::from_be_bytes(b),
@@ -1409,13 +1392,13 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
         _ => lb_select_forward(&*pkt, maps, ETH_LEN, 0),
     };
     if let Some(backend) = selected {
-        // B6: DSR-encode. Capture the ORIGINAL VIP (the packet's current inner dst, BEFORE
+        // DSR-encode. Capture the ORIGINAL VIP (the packet's current inner dst, BEFORE
         // rewriting) into the Geneve DSR option, then rewrite the inner dst -> the backend's OWN
         // overlay IP (the guest only accepts its own IP as a dst). The inner SRC is left as the
         // real client so the backend can key its own DSR conntrack/reverse-SNAT on the real client
         // flow, not the VIP. The `dsr` option travels on `WanRxOut` (not `TunnelEncap` — only this
         // edge encode ever sets it); `try_wan_rx` stamps it on the wire as a Geneve TLV AFTER the
-        // tunnel key, via `set_tunnel_opt` (B7b relocation).
+        // tunnel key, via `set_tunnel_opt`.
         let is_v6 = ethertype == 0x86DD;
         let dsr = if is_v6 {
             let vip = match pkt.read_array::<16>(ETH_LEN + 24) {
