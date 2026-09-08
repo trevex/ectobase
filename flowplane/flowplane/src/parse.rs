@@ -90,6 +90,36 @@ pub fn port_u16(p: u32) -> anyhow::Result<u16> {
     u16::try_from(p).map_err(|_| anyhow::anyhow!("port {p} out of range (0..=65535)"))
 }
 
+/// Parse `"aa:bb:cc:dd:ee:ff"` into 6 bytes.
+pub(crate) fn parse_mac(s: &str) -> anyhow::Result<[u8; 6]> {
+    use anyhow::Context;
+    let mut out = [0u8; 6];
+    let mut n = 0usize;
+    for (i, part) in s.split(':').enumerate() {
+        anyhow::ensure!(i < 6, "too many octets in MAC {s}");
+        out[i] = u8::from_str_radix(part, 16).with_context(|| format!("bad MAC octet {part}"))?;
+        n += 1;
+    }
+    anyhow::ensure!(n == 6, "MAC {s} must have 6 octets");
+    Ok(out)
+}
+
+/// Parse an IPv6 literal into 16 octets.
+pub(crate) fn parse_ipv6(s: &str) -> anyhow::Result<[u8; 16]> {
+    use anyhow::Context;
+    Ok(s.parse::<std::net::Ipv6Addr>()
+        .with_context(|| format!("bad IPv6 {s}"))?
+        .octets())
+}
+
+/// Parse an IPv4 literal into 4 octets.
+pub(crate) fn parse_ipv4(s: &str) -> anyhow::Result<[u8; 4]> {
+    use anyhow::Context;
+    Ok(s.parse::<std::net::Ipv4Addr>()
+        .with_context(|| format!("bad IPv4 {s}"))?
+        .octets())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,5 +171,46 @@ mod tests {
         ));
         assert!(matches!(parse_fw_cidr("::/0").unwrap(), FwCidr::V6(_, m) if m == [0u8;16]));
         assert!(parse_fw_cidr("2001:db8::/129").is_err());
+    }
+
+    #[test]
+    fn parse_mac_valid() {
+        assert_eq!(parse_mac("02:00:00:00:00:01").unwrap(), [2, 0, 0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn parse_mac_rejects_bad_octet() {
+        assert!(parse_mac("zz:00:00:00:00:01").is_err());
+    }
+
+    #[test]
+    fn parse_mac_rejects_too_short() {
+        assert!(parse_mac("02:00:00:00:00").is_err());
+    }
+
+    #[test]
+    fn parse_mac_rejects_too_long() {
+        assert!(parse_mac("02:00:00:00:00:01:ff").is_err());
+    }
+
+    #[test]
+    fn parse_ipv4_basic() {
+        assert_eq!(parse_ipv4("10.0.0.5").unwrap(), [10, 0, 0, 5]);
+    }
+
+    #[test]
+    fn parse_ipv4_rejects_garbage() {
+        assert!(parse_ipv4("not-an-ip").is_err());
+    }
+
+    #[test]
+    fn parse_ipv6_last_byte() {
+        let octets = parse_ipv6("fd00::1").unwrap();
+        assert_eq!(octets[15], 1);
+    }
+
+    #[test]
+    fn parse_ipv6_rejects_garbage() {
+        assert!(parse_ipv6("not-an-ip").is_err());
     }
 }
