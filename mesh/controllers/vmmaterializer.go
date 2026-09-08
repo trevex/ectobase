@@ -140,7 +140,7 @@ func (r *VMMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// and re-write those defaults on every reconcile — a churn loop hammering the webhook.
 	// With SSA the materializer owns ONLY the fields buildVM sets; kubevirt's field manager
 	// keeps its defaults, so re-applying the same intent is a genuine no-op.
-	if err := r.Client.Patch(ctx, desired, client.Apply, client.FieldOwner(vmFieldOwner), client.ForceOwnership); err != nil {
+	if err := r.Client.Patch(ctx, desired, client.Apply, client.FieldOwner(vmFieldOwner), client.ForceOwnership); err != nil { //nolint:staticcheck // SA1019: server-side-apply migration tracked (engineering review Go follow-up)
 		return ctrl.Result{}, fmt.Errorf("apply vm: %w", err)
 	}
 	return ctrl.Result{}, nil

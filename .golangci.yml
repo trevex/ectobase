@@ -1,0 +1,26 @@
+# golangci-lint configuration (v2 schema; installed: golangci-lint v2.x).
+#
+# Conservative, green-on-current linter set for the go.work modules
+# (api/, cni/, mesh/, dispatch/, test/...). Run per-module from the module
+# dir (see `make lint`) so the go.work workspace resolves correctly.
+#
+# gofmt is enforced both here (formatters) and by an explicit `gofmt -l`
+# gate in `make lint`.
+version: "2"
+
+linters:
+  # Explicit allow-list: only the linters below run (default set is disabled),
+  # so the gate is deterministic and green on current code.
+  default: none
+  enable:
+    - govet
+    - staticcheck # includes SA (bugs), plus U1000 (unused) via the `unused` linter below
+    - unused
+    - ineffassign
+    # TODO: enable errcheck after auditing the deliberate `_ =` sites
+    # (e.g. unstructured.SetNested* in nodecert.go) — enabling it now would
+    # require broad //nolint noise for intentional ignored-error idioms.
+
+formatters:
+  enable:
+    - gofmt

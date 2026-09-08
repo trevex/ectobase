@@ -82,10 +82,8 @@ func TestSyncAllocatesDeterministicDisjointBlocks(t *testing.T) {
 
 	// Disjoint port-blocks within the shared public IP.
 	a1, a2 := sources["10.0.0.1"], sources["10.0.0.2"]
-	if a1.PortMax < a2.PortMin && a2.PortMax < a1.PortMin {
-		// impossible, but keep the intent explicit
-	}
-	if !(a1.PortMax < a2.PortMin || a2.PortMax < a1.PortMin) {
+	disjoint := a1.PortMax < a2.PortMin || a2.PortMax < a1.PortMin
+	if !disjoint {
 		t.Fatalf("port-blocks overlap: %+v %+v", a1, a2)
 	}
 

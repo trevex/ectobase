@@ -82,7 +82,7 @@ func clusterNameOf(obj runtime.Object) string {
 		return ""
 	}
 	v := reflect.ValueOf(obj)
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		if v.IsNil() {
 			return ""
 		}

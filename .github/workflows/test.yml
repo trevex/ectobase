@@ -31,6 +31,43 @@ permissions:
   contents: read
 
 jobs:
+  # Go lint + fmt gate. golangci-lint (gofmt/govet/staticcheck/unused/ineffassign,
+  # see .golangci.yml) is run per go.work module so the workspace resolves, plus an
+  # explicit gofmt -l check over tracked Go sources. Same devShell tooling as local
+  # `make lint` (its Go portion). The Rust clippy half of `make lint` is not run here
+  # (the Rust suites live in the `test` job below).
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Go lint (golangci-lint per module)
+        run: |
+          nix develop --command bash -c '
+            set -uo pipefail
+            rc=0
+            for m in api cni mesh dispatch; do
+              echo "::group::golangci-lint $m"
+              (cd "$m" && golangci-lint run ./...) || rc=1
+              echo "::endgroup::"
+            done
+            exit $rc
+          '
+
+      - name: Go fmt check (gofmt -l)
+        run: |
+          nix develop --command bash -c '
+            unformatted="$(git ls-files "*.go" | grep -v "^dispatch/bin/\.modules/" | xargs gofmt -l)"
+            if [ -n "$unformatted" ]; then
+              echo "gofmt: unformatted Go files (run make fmt):"
+              echo "$unformatted"
+              exit 1
+            fi
+            echo "gofmt: all Go sources formatted"
+          '
+
   test:
     runs-on: ubuntu-latest
     steps:

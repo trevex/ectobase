@@ -72,7 +72,7 @@ func (r *VolumeMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.R
 	}
 	// Server-side apply: CDI's webhook/controller defaults many DataVolume fields;
 	// the materializer owns only its intent, so re-applying is a no-op (no churn).
-	if err := r.Client.Patch(ctx, desired, client.Apply, client.FieldOwner(dvFieldOwner), client.ForceOwnership); err != nil {
+	if err := r.Client.Patch(ctx, desired, client.Apply, client.FieldOwner(dvFieldOwner), client.ForceOwnership); err != nil { //nolint:staticcheck // SA1019: server-side-apply migration tracked (engineering review Go follow-up)
 		return ctrl.Result{}, fmt.Errorf("apply datavolume: %w", err)
 	}
 	return ctrl.Result{}, nil

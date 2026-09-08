@@ -111,7 +111,7 @@ func (r *PodMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// Server-side apply (mirrors vm-materializer): the materializer owns ONLY the fields
 	// buildPod sets, so kubelet/apiserver-defaulted fields aren't churned and re-applying
 	// the same intent is a genuine no-op.
-	if err := r.Client.Patch(ctx, desired, client.Apply, client.FieldOwner(podFieldOwner), client.ForceOwnership); err != nil {
+	if err := r.Client.Patch(ctx, desired, client.Apply, client.FieldOwner(podFieldOwner), client.ForceOwnership); err != nil { //nolint:staticcheck // SA1019: server-side-apply migration tracked (engineering review Go follow-up)
 		return ctrl.Result{}, fmt.Errorf("apply pod: %w", err)
 	}
 	return ctrl.Result{}, nil

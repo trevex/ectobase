@@ -180,13 +180,29 @@ lab-test: ## Run the live lab suite
 	$(LAB_ROOT) test
 
 # --- quality ---------------------------------------------------------------
+# Go modules in the go.work workspace. golangci-lint is run per-module (from the
+# module dir) so the workspace resolves correctly; gofmt runs over tracked Go
+# sources, skipping the vendored dispatch/bin/.modules tree and build artifacts.
+GO_MODULES := api cni mesh dispatch
+GO_SRC      = git ls-files '*.go' | grep -v '^dispatch/bin/\.modules/'
+
 .PHONY: fmt
-fmt: ## Format all Rust code
+fmt: ## Format all Rust + Go code
 	cargo fmt --all
+	$(GO_SRC) | xargs gofmt -w
 
 .PHONY: lint
-lint: ## Clippy across all targets (host crates)
+lint: ## Clippy (host crates) + golangci-lint per Go module + gofmt check
 	cargo clippy --all-targets
+	@for m in $(GO_MODULES); do \
+	  echo "golangci-lint run ($$m)"; \
+	  ( cd $$m && golangci-lint run ./... ) || exit 1; \
+	done
+	@unformatted="$$($(GO_SRC) | xargs gofmt -l)"; \
+	  if [ -n "$$unformatted" ]; then \
+	    echo "gofmt: unformatted Go files (run 'make fmt'):"; echo "$$unformatted"; exit 1; \
+	  fi; \
+	  echo "gofmt: all Go sources formatted"
 
 .PHONY: check
 check: ## fmt --check + clippy (what the pre-commit hooks run)
