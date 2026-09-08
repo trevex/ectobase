@@ -26,7 +26,8 @@ use flowplane_common::{
 /// hardware-offload.
 #[inline(always)]
 pub fn offload_eligible(e: &CtEntry) -> bool {
-    const DISQUALIFY: u8 = CT_REWRITE_SRC | CT_REWRITE_DST | CT_F_SRC_NAT | CT_F_DST_LB | CT_F_NAT64;
+    const DISQUALIFY: u8 =
+        CT_REWRITE_SRC | CT_REWRITE_DST | CT_F_SRC_NAT | CT_F_DST_LB | CT_F_NAT64;
     e.flags & CT_F_DEFAULT != 0
         && e.flags & DISQUALIFY == 0
         && e.xlate_ip == [0u8; 4]
@@ -36,7 +37,8 @@ pub fn offload_eligible(e: &CtEntry) -> bool {
 /// v6 sibling of [`offload_eligible`] (`CtEntry6.xlate_ip6`).
 #[inline(always)]
 pub fn offload_eligible6(e: &CtEntry6) -> bool {
-    const DISQUALIFY: u8 = CT_REWRITE_SRC | CT_REWRITE_DST | CT_F_SRC_NAT | CT_F_DST_LB | CT_F_NAT64;
+    const DISQUALIFY: u8 =
+        CT_REWRITE_SRC | CT_REWRITE_DST | CT_F_SRC_NAT | CT_F_DST_LB | CT_F_NAT64;
     e.flags & CT_F_DEFAULT != 0
         && e.flags & DISQUALIFY == 0
         && e.xlate_ip6 == [0u8; 16]
