@@ -326,7 +326,20 @@ fn parse_fw_rule_fields(
     } else {
         FW_DIR_INGRESS
     };
-    if matches!(src, FwCidr::V6(..)) || matches!(dst, FwCidr::V6(..)) {
+    // A rule must be single-family. An EMPTY CIDR is an untyped wildcard ("any"): `parse_fw_cidr`
+    // defaults it to a v4 wildcard, but it adopts whichever family the other (specified) side is,
+    // via the zero-fill arms below. Only two EXPLICITLY-specified CIDRs of different families are a
+    // real mismatch — accepting one would take the v6 branch and silently zero-fill (widen to
+    // `::/0`) the v4 side. Reject that.
+    let src_is_v6 = matches!(src, FwCidr::V6(..));
+    let dst_is_v6 = matches!(dst, FwCidr::V6(..));
+    if !src_cidr.is_empty() && !dst_cidr.is_empty() && src_is_v6 != dst_is_v6 {
+        return Err(Status::invalid_argument(
+            "firewall rule src and dst must be the same address family",
+        ));
+    }
+    if src_is_v6 || dst_is_v6 {
+        // v6 rule: any empty/wildcard v4 side is re-encoded as the v6 wildcard `::/0`.
         let (src_ip, src_mask) = match src {
             FwCidr::V6(i, m) => (i, m),
             FwCidr::V4(..) => ([0u8; 16], [0u8; 16]),
@@ -612,6 +625,44 @@ mod tests {
             .writer()
             .fw_rules6
             .contains_key(&flowplane_common::FwRuleKey { ifindex: 0, idx: 0 }));
+    }
+
+    #[test]
+    fn add_fw_rule_rejects_mixed_family() {
+        let mut c = core();
+        register_iface(&mut c, "if0", 100, [10, 0, 0, 5]);
+        // v4 src + v6 dst must be rejected rather than silently widened to ::/0.
+        let r = add_fw_rule(
+            &mut c,
+            &pb::AddFwRuleRequest {
+                interface_id: "if0".into(),
+                rule_id: "r1".into(),
+                src_cidr: "10.0.0.0/24".into(),
+                dst_cidr: "2001:db8::1/128".into(),
+                proto: 6,
+                dst_port_min: 80,
+                dst_port_max: 80,
+                allow: true,
+                egress: false,
+            },
+        );
+        assert_eq!(r.unwrap_err().code(), tonic::Code::InvalidArgument);
+        // and the reverse (v6 src + v4 dst).
+        let r2 = add_fw_rule(
+            &mut c,
+            &pb::AddFwRuleRequest {
+                interface_id: "if0".into(),
+                rule_id: "r2".into(),
+                src_cidr: "2001:db8::/64".into(),
+                dst_cidr: "10.0.0.5/32".into(),
+                proto: 6,
+                dst_port_min: 80,
+                dst_port_max: 80,
+                allow: true,
+                egress: false,
+            },
+        );
+        assert_eq!(r2.unwrap_err().code(), tonic::Code::InvalidArgument);
     }
 
     #[test]
