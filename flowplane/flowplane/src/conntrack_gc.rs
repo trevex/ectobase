@@ -9,7 +9,8 @@ use flowplane_core::conntrack::ct_is_expired;
 use crate::maps::Conntrack;
 
 /// Kernel-monotonic time (ns) — the same clock `bpf_ktime_get_ns` stamps `last_seen` with.
-fn ktime_now_ns() -> u64 {
+/// Shared with the E/W offload manager (`crate::offload`) so both age against the same clock.
+pub(crate) fn ktime_now_ns() -> u64 {
     let mut ts = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,

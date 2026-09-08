@@ -258,6 +258,11 @@ enum Cmd {
         dhcp_dns: Vec<String>,
         #[arg(long = "dhcpv6-dns")]
         dhcpv6_dns: Vec<String>,
+        /// Enable the E/W hardware flow-offload manager: reconcile established East/West overlay
+        /// flows onto offload-capable representors as tc-flower (Geneve encap + mirred) filters.
+        /// Default OFF — no manager task is spawned, zero datapath change.
+        #[arg(long)]
+        offload: bool,
     },
     /// Infer this host's underlay /64 from its interface addresses (prefers a lo/dummy* fabric
     /// loopback) and print it, then exit. No datapath, no root — reads `ip -6 -o addr`. Used by the
@@ -496,6 +501,7 @@ async fn main() -> anyhow::Result<()> {
             dhcp_mtu,
             dhcp_dns,
             dhcpv6_dns,
+            offload,
         } => {
             if let Some(n) = conntrack_max {
                 // SAFETY: single-threaded CLI startup, before any datapath thread is spawned.
@@ -599,6 +605,27 @@ async fn main() -> anyhow::Result<()> {
             // Wrap Control for the DataplaneNode service (the map handles live inside Control;
             // they can only be taken once).
             let control = std::sync::Arc::new(ctrl);
+
+            // E/W hardware flow-offload manager (opt-in via --offload). Default OFF → no task
+            // spawned → zero behavior change. When on, it reconciles established East/West overlay
+            // flows onto offload-capable representors and owns the leak-safe install/GC lifecycle.
+            if offload {
+                let ctl = std::sync::Arc::clone(&control);
+                let ct = ctl.take_conntrack();
+                let ct6 = ctl.take_conntrack6();
+                tokio::spawn(crate::offload::run(
+                    ctl,
+                    ct,
+                    ct6,
+                    crate::offload::OffloadCfg {
+                        interval: std::time::Duration::from_secs(5),
+                        idle_timeout_ns: 120 * 1_000_000_000,
+                        max_flows: 4096,
+                        pref_base: 40000,
+                    },
+                ));
+                log::info!("E/W flow offload manager started (--offload)");
+            }
 
             // Disable guest tx-checksum offload at attach ONLY on a software-veth uplink (clab/kind),
             // which can't finalize CHECKSUM_PARTIAL; a real NIC finalizes the inner checksum in HW.

@@ -569,6 +569,7 @@ dependencies = [
  "flowplane-sim",
  "ipnet",
  "libc",
+ "log",
  "parking_lot",
  "prost",
  "tempfile",
