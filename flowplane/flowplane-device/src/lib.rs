@@ -1,5 +1,6 @@
 //! Host-device + underlay-inference plumbing for the eBPF `flowplane` agent. Pure Linux plumbing
 //! (`ip`/`ip netns exec` subprocess) — no tonic, no eBPF.
+pub mod flower;
 pub mod geneve;
 pub mod grpc;
 pub mod netkit;
