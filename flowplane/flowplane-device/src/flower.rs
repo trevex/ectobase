@@ -60,7 +60,7 @@ use netlink_packet_route::tc::{
     TcAction, TcActionAttribute, TcActionGeneric, TcActionMirror, TcActionMirrorOption,
     TcActionOption, TcActionTunnelKey, TcActionTunnelKeyOption, TcActionType, TcAttribute,
     TcFilterFlower, TcFilterFlowerOption, TcHandle, TcHeader, TcMessage, TcMirror,
-    TcMirrorActionType, TcOption, TcTunnelKey,
+    TcMirrorActionType, TcOption, TcStats2, TcTunnelKey,
 };
 use netlink_packet_route::RouteNetlinkMessage;
 use netlink_sys::{protocols::NETLINK_ROUTE, Socket, SocketAddr};
@@ -551,6 +551,208 @@ pub fn flow_in_hw(h: &FlowHandle) -> Result<bool> {
     Ok(false)
 }
 
+/// One installed flower filter read back from the kernel (for startup-flush / orphan-GC / action-
+/// compare / idle-aging). `pkts` is the HW/SW packet counter from TCA_STATS.
+#[derive(Clone, Debug)]
+pub struct InstalledFilter {
+    pub handle: FlowHandle,
+    pub key: FlowKey,
+    pub action: EncapRedirect,
+    pub pkts: u64,
+}
+
+/// REVERSE of [`build_actions`]: pull the `EncapRedirect` back out of a flower filter's action list.
+///
+/// Walks each `TcAction`'s nested `Options`: the tunnel_key action yields `EncKeyId`→`vni` and
+/// `EncIpv6Dst`→`remote_vtep`; the mirred action yields its `ifindex`→`redirect_ifindex`. Returns
+/// `None` unless all three are present (a partial/foreign action set is not one of ours).
+fn parse_actions(actions: &[TcAction]) -> Option<EncapRedirect> {
+    let mut vni: Option<u32> = None;
+    let mut remote_vtep: Option<[u8; 16]> = None;
+    let mut redirect_ifindex: Option<u32> = None;
+
+    for act in actions {
+        for attr in &act.attributes {
+            let TcActionAttribute::Options(opts) = attr else {
+                continue;
+            };
+            for opt in opts {
+                match opt {
+                    TcActionOption::TunnelKey(TcActionTunnelKeyOption::EncKeyId(v)) => {
+                        vni = Some(*v)
+                    }
+                    TcActionOption::TunnelKey(TcActionTunnelKeyOption::EncIpv6Dst(ip)) => {
+                        remote_vtep = Some(ip.octets())
+                    }
+                    TcActionOption::Mirror(TcActionMirrorOption::Parms(m)) => {
+                        redirect_ifindex = Some(m.ifindex)
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Some(EncapRedirect {
+        vni: vni?,
+        remote_vtep: remote_vtep?,
+        redirect_ifindex: redirect_ifindex?,
+    })
+}
+
+/// REVERSE of [`build_flower_options`]: reconstruct the `(FlowKey, EncapRedirect)` a flower filter
+/// encodes. Reads `EthType`→family, `Ipv4Src/Dst`|`Ipv6Src/Dst`→addrs, `IpProto`→proto,
+/// `TcpSrc/Dst`|`UdpSrc/Dst`→ports, and reverses the nested `Actions`. Pure (no netlink) so it can be
+/// unit-tested directly on the output of `build_flower_options`. Returns `None` if the option set
+/// doesn't carry a complete 5-tuple + our action set — i.e. it isn't a manager-owned flow.
+fn parse_flower(opts: &[TcFilterFlowerOption]) -> Option<(FlowKey, EncapRedirect)> {
+    let mut ethertype: Option<u16> = None;
+    let mut v4_src: Option<[u8; 4]> = None;
+    let mut v4_dst: Option<[u8; 4]> = None;
+    let mut v6_src: Option<[u8; 16]> = None;
+    let mut v6_dst: Option<[u8; 16]> = None;
+    let mut ip_proto: Option<u8> = None;
+    let mut src_port: Option<u16> = None;
+    let mut dst_port: Option<u16> = None;
+    let mut actions: Option<&Vec<TcAction>> = None;
+
+    for o in opts {
+        match o {
+            TcFilterFlowerOption::EthType(e) => ethertype = Some(*e),
+            TcFilterFlowerOption::Ipv4Src(ip) => v4_src = Some(ip.octets()),
+            TcFilterFlowerOption::Ipv4Dst(ip) => v4_dst = Some(ip.octets()),
+            TcFilterFlowerOption::Ipv6Src(ip) => v6_src = Some(ip.octets()),
+            TcFilterFlowerOption::Ipv6Dst(ip) => v6_dst = Some(ip.octets()),
+            TcFilterFlowerOption::IpProto(p) => ip_proto = Some(*p),
+            TcFilterFlowerOption::TcpSrc(p) | TcFilterFlowerOption::UdpSrc(p) => {
+                src_port = Some(*p)
+            }
+            TcFilterFlowerOption::TcpDst(p) | TcFilterFlowerOption::UdpDst(p) => {
+                dst_port = Some(*p)
+            }
+            TcFilterFlowerOption::Actions(a) => actions = Some(a),
+            _ => {}
+        }
+    }
+
+    let l3 = match ethertype? {
+        ETH_P_IP => FlowL3::V4 {
+            src: v4_src?,
+            dst: v4_dst?,
+        },
+        ETH_P_IPV6 => FlowL3::V6 {
+            src: v6_src?,
+            dst: v6_dst?,
+        },
+        _ => return None,
+    };
+    let key = FlowKey {
+        l3,
+        ip_proto: ip_proto?,
+        src_port: src_port?,
+        dst_port: dst_port?,
+    };
+    let action = parse_actions(actions?)?;
+    Some((key, action))
+}
+
+/// Read the packet counter carried alongside a filter dump: prefer `TCA_STATS2`→`Basic`/`BasicHw`
+/// (`TcStatsBasic.packets`), falling back to the legacy top-level `TCA_STATS`→`TcStats.packets`.
+/// Returns 0 when neither is present — netdevsim omits stats on flower (real counts need HW).
+fn filter_pkts(attrs: &[TcAttribute]) -> u64 {
+    for attr in attrs {
+        if let TcAttribute::Stats2(stats2) = attr {
+            for s in stats2 {
+                match s {
+                    TcStats2::Basic(b) | TcStats2::BasicHw(b) => return b.packets as u64,
+                    _ => {}
+                }
+            }
+        }
+    }
+    for attr in attrs {
+        if let TcAttribute::Stats(s) = attr {
+            return s.packets as u64;
+        }
+    }
+    0
+}
+
+/// Dump every flower filter on `ifindex`'s clsact ingress whose priority (pref) is within
+/// `pref_band`, parsing back the 5-tuple match, the tunnel_key+mirred action, and the TCA_STATS
+/// packet count. The manager installs only within its own pref band, so this returns exactly the
+/// manager-owned filters.
+///
+/// Construction: a `TcMessage` with only `index = ifindex` and `parent = clsact-ingress` (no
+/// handle/prio → dump ALL filters on that hook), sent as `GetTrafficFilter` + `NLM_F_DUMP`. Each
+/// reply comes back as `NewTrafficFilter`; we recover `(pref, ethertype)` from `header.info`
+/// (`pref = info >> 16`, ethertype = `htons(info & 0xffff)` — reverse of [`filter_info`]), skip
+/// anything outside `pref_band` or not kind "flower", then reverse-parse options + read stats.
+pub fn list_flows(ifindex: u32, pref_band: std::ops::Range<u16>) -> Result<Vec<InstalledFilter>> {
+    use netlink_packet_core::NLM_F_DUMP;
+
+    let mut tc = TcMessage::default();
+    tc.header.index = ifindex as i32;
+    tc.header.parent = TcHandle::from(TC_CLSACT_INGRESS_PARENT);
+
+    let replies = nl::request_dump(RouteNetlinkMessage::GetTrafficFilter(tc), NLM_F_DUMP)
+        .context("dump flower filters for list_flows")?;
+
+    let mut out = Vec::new();
+    for msg in replies {
+        let tc = match msg {
+            RouteNetlinkMessage::NewTrafficFilter(tc) => tc,
+            _ => continue,
+        };
+
+        // header.info packs (pref << 16) | htons(ethertype) — reverse of `filter_info`.
+        let pref = (tc.header.info >> 16) as u16;
+        if !pref_band.contains(&pref) {
+            continue;
+        }
+
+        // Only flower filters (a dump may carry other kinds / chain-summary messages).
+        let is_flower = tc
+            .attributes
+            .iter()
+            .any(|a| matches!(a, TcAttribute::Kind(k) if k == TcFilterFlower::KIND));
+        if !is_flower {
+            continue;
+        }
+
+        // Flatten all flower options across any Options attributes.
+        let mut flower = Vec::new();
+        for attr in &tc.attributes {
+            if let TcAttribute::Options(opts) = attr {
+                for opt in opts {
+                    if let TcOption::Flower(f) = opt {
+                        flower.push(f.clone());
+                    }
+                }
+            }
+        }
+
+        // Skip filters whose options don't reverse-parse to a full 5-tuple + our action set (e.g. a
+        // handle-0 chain-summary message that names kind "flower" but carries no match).
+        let Some((key, action)) = parse_flower(&flower) else {
+            continue;
+        };
+
+        out.push(InstalledFilter {
+            handle: FlowHandle {
+                ifindex,
+                pref,
+                handle: u32::from(tc.header.handle),
+            },
+            key,
+            action,
+            pkts: filter_pkts(&tc.attributes),
+        });
+    }
+
+    Ok(out)
+}
+
 #[cfg(test)]
 pub(crate) mod tests_support {
     use std::process::Command;
@@ -838,6 +1040,138 @@ mod tests {
         let (ifx, _c) = super::tests_support::netdevsim_pf(43);
         super::ensure_clsact(ifx).expect("clsact created");
         super::ensure_clsact(ifx).expect("clsact idempotent (EEXIST tolerated)");
+    }
+
+    /// Pure reverse-parse round-trip (no root): `build_flower_options` FORWARD-encodes a flow, and
+    /// `parse_flower` REVERSE-decodes the exact same option list back to `(FlowKey, EncapRedirect)`.
+    /// Covers a v4/TCP and a v6/UDP flow.
+    #[test]
+    fn parse_flower_round_trips_v4_tcp_and_v6_udp() {
+        let act = EncapRedirect {
+            vni: 0x0A_BCDE,
+            remote_vtep: [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xee],
+            redirect_ifindex: 42,
+        };
+
+        let v4 = FlowKey {
+            l3: FlowL3::V4 {
+                src: [10, 0, 0, 1],
+                dst: [10, 0, 0, 2],
+            },
+            ip_proto: 6,
+            src_port: 1111,
+            dst_port: 443,
+        };
+        let opts4 = super::build_flower_options(&v4, &act);
+        let (k4, a4) = super::parse_flower(&opts4).expect("v4/TCP reverse-parses");
+        assert_eq!(k4, v4);
+        assert_eq!(a4, act);
+
+        let v6 = FlowKey {
+            l3: FlowL3::V6 {
+                src: [0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                dst: [0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+            },
+            ip_proto: 17,
+            src_port: 2222,
+            dst_port: 53,
+        };
+        let opts6 = super::build_flower_options(&v6, &act);
+        let (k6, a6) = super::parse_flower(&opts6).expect("v6/UDP reverse-parses");
+        assert_eq!(k6, v6);
+        assert_eq!(a6, act);
+    }
+
+    /// A flower option list missing a required field (here: no ports) is NOT a manager-owned flow,
+    /// so `parse_flower` must reject it rather than fabricate one.
+    #[test]
+    fn parse_flower_rejects_incomplete() {
+        let opts = vec![
+            TcFilterFlowerOption::EthType(0x0800),
+            TcFilterFlowerOption::Ipv4Src(std::net::Ipv4Addr::new(10, 0, 0, 1)),
+            TcFilterFlowerOption::Ipv4Dst(std::net::Ipv4Addr::new(10, 0, 0, 2)),
+            TcFilterFlowerOption::IpProto(6),
+            // no TcpSrc/TcpDst, no Actions
+        ];
+        assert!(super::parse_flower(&opts).is_none());
+    }
+
+    /// The netdevsim kernel gate for `list_flows`: install a v4/TCP and a v6/UDP filter in the
+    /// manager's pref band plus one OUT-of-band filter, then assert `list_flows` returns exactly the
+    /// two in-band flows with the right handle/pref, 5-tuple, and `EncapRedirect` — and that after
+    /// deleting them it returns empty. Proves the dump + reverse-parse round-trips real kernel
+    /// filters, and that the pref-band filter excludes foreign filters.
+    #[test]
+    #[ignore = "privileged: modprobe netdevsim (needs root); run under sudo"]
+    fn list_flows_round_trips_on_netdevsim() {
+        let (ifx, _c) = super::tests_support::netdevsim_pf(44);
+        super::ensure_clsact(ifx).unwrap();
+        let act = EncapRedirect {
+            vni: 0x0A_BCDE,
+            remote_vtep: [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xee],
+            redirect_ifindex: ifx,
+        };
+
+        let v4 = FlowKey {
+            l3: FlowL3::V4 {
+                src: [10, 0, 0, 1],
+                dst: [10, 0, 0, 2],
+            },
+            ip_proto: 6,
+            src_port: 1111,
+            dst_port: 443,
+        };
+        let v6 = FlowKey {
+            l3: FlowL3::V6 {
+                src: [0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                dst: [0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2],
+            },
+            ip_proto: 17,
+            src_port: 2222,
+            dst_port: 53,
+        };
+
+        let h4 = super::install_flow(ifx, 40000, 1, &v4, &act).expect("install v4");
+        let h6 = super::install_flow(ifx, 40001, 2, &v6, &act).expect("install v6");
+        // An out-of-band filter (pref 30000) that list_flows(40000..50000) must NOT return.
+        let h_out = super::install_flow(ifx, 30000, 3, &v4, &act).expect("install out-of-band");
+
+        let flows = super::list_flows(ifx, 40000..50000).expect("list_flows");
+        println!("list_flows returned {} filters: {flows:#?}", flows.len());
+        assert_eq!(flows.len(), 2, "exactly the two in-band flows");
+
+        let f4 = flows
+            .iter()
+            .find(|f| f.handle.pref == 40000)
+            .expect("v4 flow present");
+        assert_eq!(f4.handle, h4);
+        assert_eq!(f4.key, v4);
+        assert_eq!(f4.action, act);
+
+        let f6 = flows
+            .iter()
+            .find(|f| f.handle.pref == 40001)
+            .expect("v6 flow present");
+        assert_eq!(f6.handle, h6);
+        assert_eq!(f6.key, v6);
+        assert_eq!(f6.action, act);
+
+        // Out-of-band filter is excluded from the band-scoped listing.
+        assert!(
+            !flows.iter().any(|f| f.handle.pref == 30000),
+            "pref 30000 excluded from 40000..50000"
+        );
+
+        super::delete_flow(&h4).expect("delete v4");
+        super::delete_flow(&h6).expect("delete v6");
+        assert!(
+            super::list_flows(ifx, 40000..50000)
+                .expect("list after delete")
+                .is_empty(),
+            "band empty after deleting both in-band flows"
+        );
+
+        super::delete_flow(&h_out).expect("delete out-of-band");
     }
 
     #[test]
