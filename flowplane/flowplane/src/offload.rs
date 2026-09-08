@@ -87,6 +87,7 @@ pub fn is_idle(inst: &InstalledFlow, now_pkts: u64, now_ns: u64, idle_timeout_ns
 }
 
 /// Tunables for the async offload manager loop.
+#[derive(Clone)]
 pub struct OffloadCfg {
     /// Reconcile cadence (one snapshot + diff + install/GC pass per tick).
     pub interval: Duration,

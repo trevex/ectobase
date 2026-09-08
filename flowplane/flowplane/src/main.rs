@@ -463,6 +463,28 @@ fn resolve_underlay_ipv6(flag: Option<&str>, within: Option<Ipv6Net>) -> anyhow:
     )
 }
 
+/// Spawn a long-lived background loop that must never silently die: if the task panics or returns,
+/// log it and restart after a short backoff. `make` is re-invoked per restart, so it must
+/// re-derive (clone) any `Arc`/config it needs each time it is called.
+fn spawn_supervised<F, Fut>(name: &'static str, make: F)
+where
+    F: Fn() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(async move {
+        loop {
+            let h = tokio::spawn(make());
+            match h.await {
+                Ok(()) => {
+                    log::error!("background task {name} exited unexpectedly; restarting in 5s")
+                }
+                Err(e) => log::error!("background task {name} panicked ({e}); restarting in 5s"),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Logger backend for the eBPF `dlog!` tracing (active only with FLOWPLANE_DEBUG + a debug image).
@@ -598,10 +620,10 @@ async fn main() -> anyhow::Result<()> {
             );
             ctrl.set_dhcp_config(guest_mtu, &dns4, &dns6)
                 .map_err(|e| anyhow::anyhow!(e))?;
-            tokio::spawn(conntrack_gc::run(
-                ctrl.take_conntrack(),
-                std::time::Duration::from_secs(10),
-            ));
+            let gc_ct = ctrl.take_conntrack();
+            spawn_supervised("conntrack_gc", move || {
+                conntrack_gc::run(gc_ct.clone(), std::time::Duration::from_secs(10))
+            });
             // Wrap Control for the DataplaneNode service (the map handles live inside Control;
             // they can only be taken once).
             let control = std::sync::Arc::new(ctrl);
@@ -613,17 +635,20 @@ async fn main() -> anyhow::Result<()> {
                 let ctl = std::sync::Arc::clone(&control);
                 let ct = ctl.take_conntrack();
                 let ct6 = ctl.take_conntrack6();
-                tokio::spawn(crate::offload::run(
-                    ctl,
-                    ct,
-                    ct6,
-                    crate::offload::OffloadCfg {
-                        interval: std::time::Duration::from_secs(5),
-                        idle_timeout_ns: 120 * 1_000_000_000,
-                        max_flows: 4096,
-                        pref_base: 40000,
-                    },
-                ));
+                let cfg = crate::offload::OffloadCfg {
+                    interval: std::time::Duration::from_secs(5),
+                    idle_timeout_ns: 120 * 1_000_000_000,
+                    max_flows: 4096,
+                    pref_base: 40000,
+                };
+                spawn_supervised("offload", move || {
+                    crate::offload::run(
+                        std::sync::Arc::clone(&ctl),
+                        std::sync::Arc::clone(&ct),
+                        std::sync::Arc::clone(&ct6),
+                        cfg.clone(),
+                    )
+                });
                 log::info!("E/W flow offload manager started (--offload)");
             }
 
