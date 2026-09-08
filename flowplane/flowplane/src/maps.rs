@@ -12,179 +12,261 @@ use flowplane_common::{
     VipKey6,
 };
 
-/// Typed handle over the `INTERFACES` BPF map (overlay (VNI, IPv4) -> delivery info).
-// Exercised by the roundtrip test and consumed by the gRPC control plane.
-pub struct Interfaces {
-    map: HashMap<MapData, IfaceKey, IfaceValue>,
+/// Generate a typed handle over a BPF `HashMap`.
+///
+/// Emits `struct $ty { map: HashMap<MapData, $key, $val> }` plus an `open` that `take_map`s
+/// `$name` from a loaded eBPF object, and whichever of the accessor methods are listed:
+///
+/// - `upsert`         — `upsert(key: $key, val: $val)` → `HashMap::insert`
+/// - `remove`         — `remove(key: &$key)`           → `HashMap::remove`
+/// - `remove_owned`   — `remove(key: $key)`            → `HashMap::remove(&key)`
+/// - `get`            — `get(key: &$key) -> Option<$val>`
+/// - `get_owned`      — `get(key: $key)  -> Option<$val>`
+/// - `entries`        — `pub fn entries() -> Vec<($key, $val)>`
+/// - `entries_crate`  — `pub(crate) fn entries() -> Vec<($key, $val)>`
+///
+/// `$name` is the aya map name (must match the eBPF object) and doubles as the error context.
+macro_rules! bpf_hash_map {
+    (@upsert $key:ty, $val:ty, $name:literal) => {
+        pub fn upsert(&mut self, key: $key, val: $val) -> anyhow::Result<()> {
+            self.map.insert(key, val, 0).context(concat!("insert ", $name))
+        }
+    };
+    (@remove $key:ty, $val:ty, $name:literal) => {
+        pub fn remove(&mut self, key: &$key) -> anyhow::Result<()> {
+            self.map.remove(key).context(concat!("remove ", $name))
+        }
+    };
+    (@remove_owned $key:ty, $val:ty, $name:literal) => {
+        pub fn remove(&mut self, key: $key) -> anyhow::Result<()> {
+            self.map.remove(&key).context(concat!("remove ", $name))
+        }
+    };
+    (@get $key:ty, $val:ty, $name:literal) => {
+        pub fn get(&self, key: &$key) -> Option<$val> {
+            self.map.get(key, 0).ok()
+        }
+    };
+    (@get_owned $key:ty, $val:ty, $name:literal) => {
+        pub fn get(&self, key: $key) -> Option<$val> {
+            self.map.get(&key, 0).ok()
+        }
+    };
+    (@entries $key:ty, $val:ty, $name:literal) => {
+        pub fn entries(&self) -> Vec<($key, $val)> {
+            self.map.iter().filter_map(|r| r.ok()).collect()
+        }
+    };
+    (@entries_crate $key:ty, $val:ty, $name:literal) => {
+        pub(crate) fn entries(&self) -> Vec<($key, $val)> {
+            self.map.iter().filter_map(|r| r.ok()).collect()
+        }
+    };
+    (
+        $(#[$meta:meta])*
+        $ty:ident, $name:literal, $key:ty, $val:ty $(, $method:ident)* $(,)?
+    ) => {
+        $(#[$meta])*
+        pub struct $ty {
+            map: HashMap<MapData, $key, $val>,
+        }
+
+        impl $ty {
+            /// Take ownership of the `$name` map from a loaded eBPF object.
+            pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
+                let map = HashMap::try_from(
+                    ebpf.take_map($name).context(concat!($name, " map missing"))?,
+                )?;
+                Ok(Self { map })
+            }
+
+            $( bpf_hash_map!(@$method $key, $val, $name); )*
+        }
+    };
 }
 
-impl Interfaces {
-    /// Take ownership of the `INTERFACES` map from a loaded eBPF object.
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(
-            ebpf.take_map("INTERFACES")
-                .context("INTERFACES map missing")?,
-        )?;
-        Ok(Self { map })
-    }
+/// Generate a typed handle over a single-entry BPF `Array` (index 0).
+///
+/// Emits `struct $ty { map: Array<MapData, $val> }` plus `open`, and one setter:
+///
+/// - `set_owned` — `set(value: $val)`  → `Array::set(0, value, 0)`
+/// - `set_ref`   — `set(value: &$val)` → `Array::set(0, value, 0)`
+macro_rules! bpf_array_map {
+    (@set_owned $val:ty, $name:literal) => {
+        pub fn set(&mut self, value: $val) -> anyhow::Result<()> {
+            self.map.set(0, value, 0).context(concat!("write ", $name, "[0]"))
+        }
+    };
+    (@set_ref $val:ty, $name:literal) => {
+        pub fn set(&mut self, value: &$val) -> anyhow::Result<()> {
+            self.map.set(0, value, 0).context(concat!("write ", $name, "[0]"))
+        }
+    };
+    (
+        $(#[$meta:meta])*
+        $ty:ident, $name:literal, $val:ty $(, $method:ident)* $(,)?
+    ) => {
+        $(#[$meta])*
+        pub struct $ty {
+            map: Array<MapData, $val>,
+        }
 
-    pub fn upsert(&mut self, key: IfaceKey, val: IfaceValue) -> anyhow::Result<()> {
-        self.map.insert(key, val, 0).context("insert iface")
-    }
+        impl $ty {
+            /// Take ownership of the `$name` map from a loaded eBPF object.
+            pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
+                let map = Array::try_from(
+                    ebpf.take_map($name).context(concat!($name, " map missing"))?,
+                )?;
+                Ok(Self { map })
+            }
 
-    pub fn remove(&mut self, key: IfaceKey) -> anyhow::Result<()> {
-        self.map.remove(&key).context("remove iface")
-    }
-
-    /// Read-back accessor. Backs `MapWriter::ifaces_get`, which the control plane uses to look up an
-    /// interface's delivery info by `(vni, ipv4)` (e.g. resolving an LB backend's overlay).
-    pub fn get(&self, key: &IfaceKey) -> Option<IfaceValue> {
-        self.map.get(key, 0).ok()
-    }
-
-    /// Snapshot every (key, value) — used at restart to rebuild in-memory bookkeeping from the
-    /// surviving pinned map. Mirrors `Conntrack::entries`. (Consumed by the restart path.)
-    pub(crate) fn entries(&self) -> Vec<(IfaceKey, IfaceValue)> {
-        self.map.iter().filter_map(|r| r.ok()).collect()
-    }
+            $( bpf_array_map!(@$method $val, $name); )*
+        }
+    };
 }
 
-/// Typed handle over the `INTERFACES6` BPF map (overlay (VNI, IPv6) -> delivery info). IPv6 sibling
-/// of [`Interfaces`]; dual-written by the control plane alongside the v4 map.
-pub struct Interfaces6 {
-    map: HashMap<MapData, IfaceKey6, IfaceValue>,
-}
+bpf_hash_map!(
+    /// Typed handle over the `INTERFACES` BPF map (overlay (VNI, IPv4) -> delivery info).
+    /// Exercised by the roundtrip test and consumed by the gRPC control plane. `entries` snapshots
+    /// every pair at restart to rebuild in-memory bookkeeping from the surviving pinned map.
+    Interfaces, "INTERFACES", IfaceKey, IfaceValue, upsert, remove_owned, get, entries_crate
+);
 
-impl Interfaces6 {
-    /// Take ownership of the `INTERFACES6` map from a loaded eBPF object.
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(
-            ebpf.take_map("INTERFACES6")
-                .context("INTERFACES6 map missing")?,
-        )?;
-        Ok(Self { map })
-    }
+bpf_hash_map!(
+    /// Typed handle over the `INTERFACES6` BPF map (overlay (VNI, IPv6) -> delivery info). IPv6
+    /// sibling of [`Interfaces`]; dual-written by the control plane alongside the v4 map.
+    Interfaces6, "INTERFACES6", IfaceKey6, IfaceValue, upsert, remove_owned, get, entries_crate
+);
 
-    pub fn upsert(&mut self, key: IfaceKey6, val: IfaceValue) -> anyhow::Result<()> {
-        self.map.insert(key, val, 0).context("insert iface6")
-    }
+bpf_hash_map!(
+    /// Typed handle over the `IFACE_META` restart journal (interface_id -> rebuild detail). Written
+    /// by the control plane on attach/detach and scanned on restart; never read by the datapath.
+    IfaceMetaMap, "IFACE_META", IfaceMetaKey, IfaceMetaVal, upsert, remove, entries
+);
 
-    pub fn remove(&mut self, key: IfaceKey6) -> anyhow::Result<()> {
-        self.map.remove(&key).context("remove iface6")
-    }
+bpf_hash_map!(
+    /// Typed handle over the `PORT_META` BPF map (ifindex -> per-port metadata). `get` backs the
+    /// E/W offload manager's offload-eligibility check (`PortMeta.offloaded`).
+    PortMetaMap, "PORT_META", u32, PortMeta, upsert, remove_owned, get_owned
+);
 
-    /// Read-back accessor (parity with [`Interfaces::get`]). Backs `MapWriter::ifaces6_get`, used by
-    /// the control plane to look up an interface's delivery info by `(vni, ipv6)`.
-    pub fn get(&self, key: &IfaceKey6) -> Option<IfaceValue> {
-        self.map.get(key, 0).ok()
-    }
+bpf_hash_map!(
+    /// Typed handle over the `VIPS` BPF map.
+    Vips, "VIPS", VipKey, [u8; 4], upsert, remove, get
+);
 
-    /// Snapshot every (key, value) — parity with [`Interfaces::entries`]. Consumed at restart to
-    /// rebuild in-memory bookkeeping from the surviving pinned map.
-    pub(crate) fn entries(&self) -> Vec<(IfaceKey6, IfaceValue)> {
-        self.map.iter().filter_map(|r| r.ok()).collect()
-    }
-}
+bpf_hash_map!(
+    /// Typed handle over the `LB` BPF map.
+    Lb, "LB", LbKey, LbValue, upsert, remove
+);
 
-/// Typed handle over the `IFACE_META` restart journal (interface_id -> rebuild detail). Written by
-/// the control plane on attach/detach and scanned on restart; never read by the datapath.
-pub struct IfaceMetaMap {
-    map: HashMap<MapData, IfaceMetaKey, IfaceMetaVal>,
-}
+bpf_hash_map!(
+    /// Typed handle over the `MAGLEV` BPF map.
+    Maglev, "MAGLEV", MaglevKey, LbBackend, upsert, remove
+);
 
-impl IfaceMetaMap {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(
-            ebpf.take_map("IFACE_META")
-                .context("IFACE_META map missing")?,
-        )?;
-        Ok(Self { map })
-    }
+bpf_hash_map!(
+    /// Typed handle over the `CONNTRACK6` BPF map (LRU hash map). Firewall-only v6 mirror of
+    /// [`Conntrack`]; the control plane holds it so it can flush a detached interface's v6 entries.
+    Conntrack6, "CONNTRACK6", CtKey6, CtEntry, remove, entries
+);
 
-    pub fn upsert(&mut self, key: IfaceMetaKey, val: IfaceMetaVal) -> anyhow::Result<()> {
-        self.map.insert(key, val, 0).context("insert iface_meta")
-    }
+bpf_hash_map!(
+    /// Typed handle over the `NAT` BPF map ((vni, guest ipv4) -> nat config).
+    Nat, "NAT", NatKey, NatValue, upsert, remove, get
+);
 
-    pub fn remove(&mut self, key: &IfaceMetaKey) -> anyhow::Result<()> {
-        self.map.remove(key).context("remove iface_meta")
-    }
+bpf_hash_map!(
+    /// Typed handle over the `NAT6` BPF map ((vni, guest ipv6) -> NAT66 config). v6 mirror of
+    /// [`Nat`].
+    Nat6, "NAT6", NatKey6, NatValue6, upsert, remove, get
+);
 
-    /// Snapshot the whole journal — scanned once on restart to rebuild bookkeeping.
-    pub fn entries(&self) -> Vec<(IfaceMetaKey, IfaceMetaVal)> {
-        self.map.iter().filter_map(|r| r.ok()).collect()
-    }
-}
+bpf_hash_map!(
+    /// Typed handle over the `NAT_CT6` BPF map (LRU hash, `CtKey6` -> `CtEntry6`) — the dedicated
+    /// NAT66 conntrack. Held by the control plane so a NAT66 teardown can flush the guest's entries
+    /// (the map otherwise only auto-evicts via LRU).
+    NatCt6, "NAT_CT6", CtKey6, CtEntry6, remove, entries
+);
 
-/// Typed handle over the single-entry `LOCAL` Array map.
-pub struct LocalMap {
-    map: Array<MapData, Local>,
-}
+bpf_hash_map!(
+    /// Typed handle over the `FW_RULES` BPF map ((ifindex, slot) -> rule).
+    FwRules, "FW_RULES", FwRuleKey, FwRule, upsert, remove
+);
 
-impl LocalMap {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = Array::try_from(ebpf.take_map("LOCAL").context("LOCAL map missing")?)?;
-        Ok(Self { map })
-    }
+bpf_hash_map!(
+    /// Typed handle over the `FW_META` BPF map (ifindex -> per-direction rule counts).
+    FwMetaMap, "FW_META", u32, FwMeta, upsert
+);
 
-    pub fn set(&mut self, local: &Local) -> anyhow::Result<()> {
-        self.map.set(0, local, 0).context("write LOCAL[0]")
-    }
-}
+bpf_hash_map!(
+    /// Typed handle over the `FW_RULES6` BPF map ((ifindex, slot) -> IPv6 rule). Mirror of
+    /// [`FwRules`].
+    FwRules6, "FW_RULES6", FwRuleKey, FwRule6, upsert, remove
+);
 
-/// Typed handle over the single-entry `GENEVE_IFINDEX` Array map: the kernel `collect_md` geneve
-/// device's ifindex, read by the tc guest-egress encap path (`crate::tunnel::redirect`) to
-/// `bpf_redirect` an overlay-bound skb after `bpf_skb_set_tunnel_key` has stamped the tunnel-key
-/// metadata dst. Populated once by `Control::bring_up` right after `ensure_geneve_dev`.
-pub struct GeneveIfindexMap {
-    map: Array<MapData, u32>,
-}
+bpf_hash_map!(
+    /// Typed handle over the `FW_META6` BPF map (ifindex -> per-direction rule counts). Mirror of
+    /// [`FwMetaMap`].
+    FwMetaMap6, "FW_META6", u32, FwMeta, upsert
+);
 
-impl GeneveIfindexMap {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = Array::try_from(
-            ebpf.take_map("GENEVE_IFINDEX")
-                .context("GENEVE_IFINDEX map missing")?,
-        )?;
-        Ok(Self { map })
-    }
+bpf_hash_map!(
+    /// Typed handle over the `UNDERLAY` BPF map (underlay IPv6 -> VNI + tap + guest MAC).
+    Underlay, "UNDERLAY", [u8; 16], UnderlayValue, upsert, remove, get
+);
 
-    pub fn set(&mut self, geneve_ifindex: u32) -> anyhow::Result<()> {
-        self.map
-            .set(0, geneve_ifindex, 0)
-            .context("write GENEVE_IFINDEX[0]")
-    }
-}
+bpf_hash_map!(
+    /// Typed handle over the `NEIGHBOR_NAT` BPF map (slot index -> NeighborNatEntry).
+    NeighborNat, "NEIGHBOR_NAT", u32, NeighborNatEntry, upsert
+);
 
-/// Typed handle over the `PORT_META` BPF map (ifindex -> per-port metadata).
-pub struct PortMetaMap {
-    map: HashMap<MapData, u32, PortMeta>,
-}
+bpf_hash_map!(
+    /// Typed handle over the `NEIGHBOR_NAT6` BPF map (slot index -> NeighborNat6Entry). v6 mirror
+    /// of [`NeighborNat`].
+    NeighborNat6, "NEIGHBOR_NAT6", u32, NeighborNat6Entry, upsert
+);
 
-impl PortMetaMap {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(
-            ebpf.take_map("PORT_META")
-                .context("PORT_META map missing")?,
-        )?;
-        Ok(Self { map })
-    }
+bpf_hash_map!(
+    /// Typed handle over the `METER` BPF map (ifindex -> per-interface token bucket state).
+    Meter, "METER", u32, MeterState, upsert, remove
+);
 
-    pub fn upsert(&mut self, ifindex: u32, meta: PortMeta) -> anyhow::Result<()> {
-        self.map
-            .insert(ifindex, meta, 0)
-            .context("insert port_meta")
-    }
+bpf_hash_map!(
+    /// Typed handle over the `DHCP_META` BPF map (ifindex -> per-interface DHCP metadata).
+    DhcpMetaMap, "DHCP_META", u32, DhcpMeta, remove_owned
+);
 
-    pub fn remove(&mut self, ifindex: u32) -> anyhow::Result<()> {
-        self.map.remove(&ifindex).context("remove port_meta")
-    }
+bpf_array_map!(
+    /// Typed handle over the single-entry `LOCAL` Array map.
+    LocalMap, "LOCAL", Local, set_ref
+);
 
-    /// Read-back accessor: `PORT_META[ifindex]`, `None` if the port has no entry. Used by the E/W
-    /// offload manager's offload-eligibility check (`PortMeta.offloaded`).
-    pub fn get(&self, ifindex: u32) -> Option<PortMeta> {
-        self.map.get(&ifindex, 0).ok()
-    }
-}
+bpf_array_map!(
+    /// Typed handle over the single-entry `GENEVE_IFINDEX` Array map: the kernel `collect_md` geneve
+    /// device's ifindex, read by the tc guest-egress encap path (`crate::tunnel::redirect`) to
+    /// `bpf_redirect` an overlay-bound skb after `bpf_skb_set_tunnel_key` has stamped the tunnel-key
+    /// metadata dst. Populated once by `Control::bring_up` right after `ensure_geneve_dev`.
+    GeneveIfindexMap, "GENEVE_IFINDEX", u32, set_owned
+);
+
+bpf_array_map!(
+    /// Typed handle over the single-entry `NEIGHBOR_NAT_COUNT` Array map.
+    NeighborNatCount, "NEIGHBOR_NAT_COUNT", u32, set_owned
+);
+
+bpf_array_map!(
+    /// Typed handle over the single-entry `NEIGHBOR_NAT6_COUNT` Array map. v6 mirror of
+    /// [`NeighborNatCount`].
+    NeighborNat6Count, "NEIGHBOR_NAT6_COUNT", u32, set_owned
+);
+
+bpf_array_map!(
+    /// Typed handle over the single-entry `DHCP_CONFIG` Array map (server-wide DHCP parameters).
+    DhcpConfigMap, "DHCP_CONFIG", DhcpConfig, set_ref
+);
+
+// ── Hand-written wrappers: maps whose accessors carry custom logic the macros don't cover ──
 
 /// Typed handle over the single-entry `INSPECT` Array map (debug packet inspector).
 pub struct InspectMap {
@@ -309,70 +391,6 @@ impl Routes6 {
     }
 }
 
-/// Typed handle over the `VIPS` BPF map.
-pub struct Vips {
-    map: HashMap<MapData, VipKey, [u8; 4]>,
-}
-
-impl Vips {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(ebpf.take_map("VIPS").context("VIPS map missing")?)?;
-        Ok(Self { map })
-    }
-
-    pub fn upsert(&mut self, key: VipKey, val: [u8; 4]) -> anyhow::Result<()> {
-        self.map.insert(key, val, 0).context("insert vip")
-    }
-
-    pub fn remove(&mut self, key: &VipKey) -> anyhow::Result<()> {
-        self.map.remove(key).context("remove vip")
-    }
-
-    pub fn get(&self, key: &VipKey) -> Option<[u8; 4]> {
-        self.map.get(key, 0).ok()
-    }
-}
-
-/// Typed handle over the `LB` BPF map.
-pub struct Lb {
-    map: HashMap<MapData, LbKey, LbValue>,
-}
-
-impl Lb {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(ebpf.take_map("LB").context("LB map missing")?)?;
-        Ok(Self { map })
-    }
-
-    pub fn upsert(&mut self, key: LbKey, val: LbValue) -> anyhow::Result<()> {
-        self.map.insert(key, val, 0).context("insert lb")
-    }
-
-    pub fn remove(&mut self, key: &LbKey) -> anyhow::Result<()> {
-        self.map.remove(key).context("remove lb")
-    }
-}
-
-/// Typed handle over the `MAGLEV` BPF map.
-pub struct Maglev {
-    map: HashMap<MapData, MaglevKey, LbBackend>,
-}
-
-impl Maglev {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(ebpf.take_map("MAGLEV").context("MAGLEV map missing")?)?;
-        Ok(Self { map })
-    }
-
-    pub fn upsert(&mut self, key: MaglevKey, val: LbBackend) -> anyhow::Result<()> {
-        self.map.insert(key, val, 0).context("insert maglev")
-    }
-
-    pub fn remove(&mut self, key: &MaglevKey) -> anyhow::Result<()> {
-        self.map.remove(key).context("remove maglev")
-    }
-}
-
 /// Typed handle over the `CONNTRACK` BPF map (LRU hash map).
 pub struct Conntrack {
     map: HashMap<MapData, CtKey, CtEntry>,
@@ -405,261 +423,6 @@ impl Conntrack {
     /// Snapshot all (key, entry) pairs for a GC sweep.
     pub fn entries(&self) -> Vec<(CtKey, CtEntry)> {
         self.map.iter().filter_map(|r| r.ok()).collect()
-    }
-}
-
-/// Typed handle over the `CONNTRACK6` BPF map (LRU hash map). Firewall-only v6 mirror of
-/// [`Conntrack`]; the control plane holds it so it can flush a detached interface's v6 entries.
-pub struct Conntrack6 {
-    map: HashMap<MapData, CtKey6, CtEntry>,
-}
-
-impl Conntrack6 {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(
-            ebpf.take_map("CONNTRACK6")
-                .context("CONNTRACK6 map missing")?,
-        )?;
-        Ok(Self { map })
-    }
-
-    pub fn remove(&mut self, key: &CtKey6) -> anyhow::Result<()> {
-        self.map.remove(key).context("remove conntrack6")
-    }
-
-    /// Snapshot all (key, entry) pairs (used by the interface-detach flush).
-    pub fn entries(&self) -> Vec<(CtKey6, CtEntry)> {
-        self.map.iter().filter_map(|r| r.ok()).collect()
-    }
-}
-
-/// Typed handle over the `NAT` BPF map ((vni, guest ipv4) -> nat config).
-pub struct Nat {
-    map: HashMap<MapData, NatKey, NatValue>,
-}
-
-impl Nat {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(ebpf.take_map("NAT").context("NAT map missing")?)?;
-        Ok(Self { map })
-    }
-
-    pub fn upsert(&mut self, key: NatKey, val: NatValue) -> anyhow::Result<()> {
-        self.map.insert(key, val, 0).context("insert nat")
-    }
-
-    pub fn remove(&mut self, key: &NatKey) -> anyhow::Result<()> {
-        self.map.remove(key).context("remove nat")
-    }
-
-    pub fn get(&self, key: &NatKey) -> Option<NatValue> {
-        self.map.get(key, 0).ok()
-    }
-}
-
-/// Typed handle over the `NAT6` BPF map ((vni, guest ipv6) -> NAT66 config). v6 mirror of [`Nat`].
-pub struct Nat6 {
-    map: HashMap<MapData, NatKey6, NatValue6>,
-}
-
-impl Nat6 {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(ebpf.take_map("NAT6").context("NAT6 map missing")?)?;
-        Ok(Self { map })
-    }
-
-    pub fn upsert(&mut self, key: NatKey6, val: NatValue6) -> anyhow::Result<()> {
-        self.map.insert(key, val, 0).context("insert nat6")
-    }
-
-    pub fn remove(&mut self, key: &NatKey6) -> anyhow::Result<()> {
-        self.map.remove(key).context("remove nat6")
-    }
-
-    pub fn get(&self, key: &NatKey6) -> Option<NatValue6> {
-        self.map.get(key, 0).ok()
-    }
-}
-
-/// Typed handle over the `NAT_CT6` BPF map (LRU hash, `CtKey6` -> `CtEntry6`) — the dedicated NAT66
-/// conntrack. Held by the control plane so a NAT66 teardown can flush the guest's entries (the map
-/// otherwise only auto-evicts via LRU).
-pub struct NatCt6 {
-    map: HashMap<MapData, CtKey6, CtEntry6>,
-}
-
-impl NatCt6 {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(ebpf.take_map("NAT_CT6").context("NAT_CT6 map missing")?)?;
-        Ok(Self { map })
-    }
-
-    pub fn remove(&mut self, key: &CtKey6) -> anyhow::Result<()> {
-        self.map.remove(key).context("remove nat_ct6")
-    }
-
-    /// Snapshot all (key, entry) pairs (used by the NAT66 teardown flush).
-    pub fn entries(&self) -> Vec<(CtKey6, CtEntry6)> {
-        self.map.iter().filter_map(|r| r.ok()).collect()
-    }
-}
-
-/// Typed handle over the `FW_RULES` BPF map ((ifindex, slot) -> rule).
-pub struct FwRules {
-    map: HashMap<MapData, FwRuleKey, FwRule>,
-}
-
-impl FwRules {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(ebpf.take_map("FW_RULES").context("FW_RULES map missing")?)?;
-        Ok(Self { map })
-    }
-
-    pub fn upsert(&mut self, key: FwRuleKey, val: FwRule) -> anyhow::Result<()> {
-        self.map.insert(key, val, 0).context("insert fw rule")
-    }
-
-    pub fn remove(&mut self, key: &FwRuleKey) -> anyhow::Result<()> {
-        self.map.remove(key).context("remove fw rule")
-    }
-}
-
-/// Typed handle over the `FW_META` BPF map (ifindex -> per-direction rule counts).
-pub struct FwMetaMap {
-    map: HashMap<MapData, u32, FwMeta>,
-}
-
-impl FwMetaMap {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(ebpf.take_map("FW_META").context("FW_META map missing")?)?;
-        Ok(Self { map })
-    }
-
-    pub fn upsert(&mut self, ifindex: u32, val: FwMeta) -> anyhow::Result<()> {
-        self.map.insert(ifindex, val, 0).context("insert fw meta")
-    }
-}
-
-/// Typed handle over the `FW_RULES6` BPF map ((ifindex, slot) -> IPv6 rule). Mirror of [`FwRules`].
-pub struct FwRules6 {
-    map: HashMap<MapData, FwRuleKey, FwRule6>,
-}
-
-impl FwRules6 {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(
-            ebpf.take_map("FW_RULES6")
-                .context("FW_RULES6 map missing")?,
-        )?;
-        Ok(Self { map })
-    }
-
-    pub fn upsert(&mut self, key: FwRuleKey, val: FwRule6) -> anyhow::Result<()> {
-        self.map.insert(key, val, 0).context("insert fw rule6")
-    }
-
-    pub fn remove(&mut self, key: &FwRuleKey) -> anyhow::Result<()> {
-        self.map.remove(key).context("remove fw rule6")
-    }
-}
-
-/// Typed handle over the `FW_META6` BPF map (ifindex -> per-direction rule counts). Mirror of
-/// [`FwMetaMap`].
-pub struct FwMetaMap6 {
-    map: HashMap<MapData, u32, FwMeta>,
-}
-
-impl FwMetaMap6 {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(ebpf.take_map("FW_META6").context("FW_META6 map missing")?)?;
-        Ok(Self { map })
-    }
-
-    pub fn upsert(&mut self, ifindex: u32, val: FwMeta) -> anyhow::Result<()> {
-        self.map.insert(ifindex, val, 0).context("insert fw meta6")
-    }
-}
-
-/// Typed handle over the `UNDERLAY` BPF map (underlay IPv6 -> VNI + tap + guest MAC).
-pub struct Underlay {
-    map: HashMap<MapData, [u8; 16], UnderlayValue>,
-}
-
-impl Underlay {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(ebpf.take_map("UNDERLAY").context("UNDERLAY map missing")?)?;
-        Ok(Self { map })
-    }
-
-    pub fn upsert(&mut self, key: [u8; 16], val: UnderlayValue) -> anyhow::Result<()> {
-        self.map.insert(key, val, 0).context("insert underlay")
-    }
-
-    pub fn remove(&mut self, key: &[u8; 16]) -> anyhow::Result<()> {
-        self.map.remove(key).context("remove underlay")
-    }
-
-    pub fn get(&self, key: &[u8; 16]) -> Option<UnderlayValue> {
-        self.map.get(key, 0).ok()
-    }
-}
-
-/// Typed handle over the `NEIGHBOR_NAT` BPF map (slot index -> NeighborNatEntry).
-pub struct NeighborNat {
-    map: HashMap<MapData, u32, NeighborNatEntry>,
-}
-
-impl NeighborNat {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(
-            ebpf.take_map("NEIGHBOR_NAT")
-                .context("NEIGHBOR_NAT map missing")?,
-        )?;
-        Ok(Self { map })
-    }
-
-    pub fn upsert(&mut self, idx: u32, val: NeighborNatEntry) -> anyhow::Result<()> {
-        self.map.insert(idx, val, 0).context("insert neighbor_nat")
-    }
-}
-
-/// Typed handle over the `NEIGHBOR_NAT6` BPF map (slot index -> NeighborNat6Entry). v6 mirror of
-/// [`NeighborNat`].
-pub struct NeighborNat6 {
-    map: HashMap<MapData, u32, NeighborNat6Entry>,
-}
-
-impl NeighborNat6 {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(
-            ebpf.take_map("NEIGHBOR_NAT6")
-                .context("NEIGHBOR_NAT6 map missing")?,
-        )?;
-        Ok(Self { map })
-    }
-
-    pub fn upsert(&mut self, idx: u32, val: NeighborNat6Entry) -> anyhow::Result<()> {
-        self.map.insert(idx, val, 0).context("insert neighbor_nat6")
-    }
-}
-
-/// Typed handle over the `METER` BPF map (ifindex -> per-interface token bucket state).
-pub struct Meter {
-    map: HashMap<MapData, u32, MeterState>,
-}
-
-impl Meter {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(ebpf.take_map("METER").context("METER map missing")?)?;
-        Ok(Self { map })
-    }
-
-    pub fn upsert(&mut self, ifindex: u32, val: MeterState) -> anyhow::Result<()> {
-        self.map.insert(ifindex, val, 0).context("insert meter")
-    }
-
-    pub fn remove(&mut self, ifindex: &u32) -> anyhow::Result<()> {
-        self.map.remove(ifindex).context("remove meter")
     }
 }
 
@@ -710,87 +473,6 @@ impl NatIps6 {
         self.map
             .remove(&VipKey6 { vni, ipv6: nat_ip })
             .context("remove nat_ip6")
-    }
-}
-
-/// Typed handle over the single-entry `NEIGHBOR_NAT_COUNT` Array map.
-pub struct NeighborNatCount {
-    map: Array<MapData, u32>,
-}
-
-impl NeighborNatCount {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = Array::try_from(
-            ebpf.take_map("NEIGHBOR_NAT_COUNT")
-                .context("NEIGHBOR_NAT_COUNT map missing")?,
-        )?;
-        Ok(Self { map })
-    }
-
-    pub fn set(&mut self, count: u32) -> anyhow::Result<()> {
-        self.map
-            .set(0, count, 0)
-            .context("write NEIGHBOR_NAT_COUNT[0]")
-    }
-}
-
-/// Typed handle over the single-entry `NEIGHBOR_NAT6_COUNT` Array map. v6 mirror of
-/// [`NeighborNatCount`].
-pub struct NeighborNat6Count {
-    map: Array<MapData, u32>,
-}
-
-impl NeighborNat6Count {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = Array::try_from(
-            ebpf.take_map("NEIGHBOR_NAT6_COUNT")
-                .context("NEIGHBOR_NAT6_COUNT map missing")?,
-        )?;
-        Ok(Self { map })
-    }
-
-    pub fn set(&mut self, count: u32) -> anyhow::Result<()> {
-        self.map
-            .set(0, count, 0)
-            .context("write NEIGHBOR_NAT6_COUNT[0]")
-    }
-}
-
-/// Typed handle over the single-entry `DHCP_CONFIG` Array map (server-wide DHCP parameters).
-pub struct DhcpConfigMap {
-    map: Array<MapData, DhcpConfig>,
-}
-
-impl DhcpConfigMap {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = Array::try_from(
-            ebpf.take_map("DHCP_CONFIG")
-                .context("DHCP_CONFIG map missing")?,
-        )?;
-        Ok(Self { map })
-    }
-
-    pub fn set(&mut self, cfg: &DhcpConfig) -> anyhow::Result<()> {
-        self.map.set(0, cfg, 0).context("write DHCP_CONFIG[0]")
-    }
-}
-
-/// Typed handle over the `DHCP_META` BPF map (ifindex -> per-interface DHCP metadata).
-pub struct DhcpMetaMap {
-    map: HashMap<MapData, u32, DhcpMeta>,
-}
-
-impl DhcpMetaMap {
-    pub fn open(ebpf: &mut Ebpf) -> anyhow::Result<Self> {
-        let map = HashMap::try_from(
-            ebpf.take_map("DHCP_META")
-                .context("DHCP_META map missing")?,
-        )?;
-        Ok(Self { map })
-    }
-
-    pub fn remove(&mut self, ifindex: u32) -> anyhow::Result<()> {
-        self.map.remove(&ifindex).context("remove dhcp_meta")
     }
 }
 
