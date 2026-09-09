@@ -116,6 +116,22 @@ func main() {
 		log.Fatalf("setup vpc controller: %v", err)
 	}
 
+	if err := (&controllers.SubnetReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup subnet controller: %v", err)
+	}
+
+	if err := (&controllers.LBPoolReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup lbpool controller: %v", err)
+	}
+
+	if err := (&controllers.NICIPAMReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup nic-ipam controller: %v", err)
+	}
+
+	if err := (&controllers.LBVIPReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup lb-vip controller: %v", err)
+	}
+
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Fatalf("manager: %v", err)
 	}
