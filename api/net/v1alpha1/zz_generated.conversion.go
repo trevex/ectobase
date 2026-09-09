@@ -812,7 +812,6 @@ func Convert_net_LBPoolSpec_To_v1alpha1_LBPoolSpec(in *net.LBPoolSpec, out *LBPo
 
 func autoConvert_v1alpha1_LBPoolStatus_To_net_LBPoolStatus(in *LBPoolStatus, out *net.LBPoolStatus, s conversion.Scope) error {
 	out.State = in.State
-	out.Used = in.Used
 	out.Total = in.Total
 	return nil
 }
@@ -824,7 +823,6 @@ func Convert_v1alpha1_LBPoolStatus_To_net_LBPoolStatus(in *LBPoolStatus, out *ne
 
 func autoConvert_net_LBPoolStatus_To_v1alpha1_LBPoolStatus(in *net.LBPoolStatus, out *LBPoolStatus, s conversion.Scope) error {
 	out.State = in.State
-	out.Used = in.Used
 	out.Total = in.Total
 	return nil
 }
@@ -1394,9 +1392,7 @@ func Convert_net_SubnetSpec_To_v1alpha1_SubnetSpec(in *net.SubnetSpec, out *Subn
 
 func autoConvert_v1alpha1_SubnetStatus_To_net_SubnetStatus(in *SubnetStatus, out *net.SubnetStatus, s conversion.Scope) error {
 	out.State = in.State
-	out.V4Used = in.V4Used
 	out.V4Total = in.V4Total
-	out.V6Used = in.V6Used
 	out.V6Total = in.V6Total
 	return nil
 }
@@ -1408,9 +1404,7 @@ func Convert_v1alpha1_SubnetStatus_To_net_SubnetStatus(in *SubnetStatus, out *ne
 
 func autoConvert_net_SubnetStatus_To_v1alpha1_SubnetStatus(in *net.SubnetStatus, out *SubnetStatus, s conversion.Scope) error {
 	out.State = in.State
-	out.V4Used = in.V4Used
 	out.V4Total = in.V4Total
-	out.V6Used = in.V6Used
 	out.V6Total = in.V6Total
 	return nil
 }

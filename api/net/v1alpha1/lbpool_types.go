@@ -25,9 +25,6 @@ type LBPoolStatus struct {
 	// State is the current lifecycle state (e.g. Pending, Ready).
 	// +optional
 	State string `json:"state,omitempty" protobuf:"bytes,1,opt,name=state"`
-	// Used is the number of allocated VIP addresses.
-	// +optional
-	Used int32 `json:"used,omitempty" protobuf:"varint,2,opt,name=used"`
 	// Total is the total number of allocatable VIP addresses.
 	// +optional
 	Total int32 `json:"total,omitempty" protobuf:"varint,3,opt,name=total"`

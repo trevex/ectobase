@@ -240,7 +240,6 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `state` _string_ | State is the current lifecycle state (e.g. Pending, Ready). |  | Optional: \{\} <br /> |
-| `used` _integer_ | Used is the number of allocated VIP addresses. |  | Optional: \{\} <br /> |
 | `total` _integer_ | Total is the total number of allocatable VIP addresses. |  | Optional: \{\} <br /> |
 
 
@@ -594,9 +593,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `state` _string_ | State is the current lifecycle state (e.g. Pending, Ready). |  | Optional: \{\} <br /> |
-| `v4Used` _integer_ | V4Used is the number of allocated IPv4 addresses. |  | Optional: \{\} <br /> |
 | `v4Total` _integer_ | V4Total is the total number of allocatable IPv4 addresses. |  | Optional: \{\} <br /> |
-| `v6Used` _integer_ | V6Used is the number of allocated IPv6 addresses. |  | Optional: \{\} <br /> |
 | `v6Total` _integer_ | V6Total is the total number of allocatable IPv6 addresses. |  | Optional: \{\} <br /> |
 
 

@@ -9,12 +9,8 @@ package v1alpha1
 type SubnetStatusApplyConfiguration struct {
 	// State is the current lifecycle state (e.g. Pending, Ready).
 	State *string `json:"state,omitempty"`
-	// V4Used is the number of allocated IPv4 addresses.
-	V4Used *int32 `json:"v4Used,omitempty"`
 	// V4Total is the total number of allocatable IPv4 addresses.
 	V4Total *int32 `json:"v4Total,omitempty"`
-	// V6Used is the number of allocated IPv6 addresses.
-	V6Used *int32 `json:"v6Used,omitempty"`
 	// V6Total is the total number of allocatable IPv6 addresses.
 	V6Total *int32 `json:"v6Total,omitempty"`
 }
@@ -33,27 +29,11 @@ func (b *SubnetStatusApplyConfiguration) WithState(value string) *SubnetStatusAp
 	return b
 }
 
-// WithV4Used sets the V4Used field in the declarative configuration to the given value
-// and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the V4Used field is set to the value of the last call.
-func (b *SubnetStatusApplyConfiguration) WithV4Used(value int32) *SubnetStatusApplyConfiguration {
-	b.V4Used = &value
-	return b
-}
-
 // WithV4Total sets the V4Total field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the V4Total field is set to the value of the last call.
 func (b *SubnetStatusApplyConfiguration) WithV4Total(value int32) *SubnetStatusApplyConfiguration {
 	b.V4Total = &value
-	return b
-}
-
-// WithV6Used sets the V6Used field in the declarative configuration to the given value
-// and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the V6Used field is set to the value of the last call.
-func (b *SubnetStatusApplyConfiguration) WithV6Used(value int32) *SubnetStatusApplyConfiguration {
-	b.V6Used = &value
 	return b
 }
 

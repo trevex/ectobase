@@ -9,8 +9,6 @@ package v1alpha1
 type LBPoolStatusApplyConfiguration struct {
 	// State is the current lifecycle state (e.g. Pending, Ready).
 	State *string `json:"state,omitempty"`
-	// Used is the number of allocated VIP addresses.
-	Used *int32 `json:"used,omitempty"`
 	// Total is the total number of allocatable VIP addresses.
 	Total *int32 `json:"total,omitempty"`
 }
@@ -26,14 +24,6 @@ func LBPoolStatus() *LBPoolStatusApplyConfiguration {
 // If called multiple times, the State field is set to the value of the last call.
 func (b *LBPoolStatusApplyConfiguration) WithState(value string) *LBPoolStatusApplyConfiguration {
 	b.State = &value
-	return b
-}
-
-// WithUsed sets the Used field in the declarative configuration to the given value
-// and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the Used field is set to the value of the last call.
-func (b *LBPoolStatusApplyConfiguration) WithUsed(value int32) *LBPoolStatusApplyConfiguration {
-	b.Used = &value
 	return b
 }
 

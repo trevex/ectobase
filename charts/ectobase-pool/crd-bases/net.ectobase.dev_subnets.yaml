@@ -74,16 +74,8 @@ spec:
                 description: V4Total is the total number of allocatable IPv4 addresses.
                 format: int32
                 type: integer
-              v4Used:
-                description: V4Used is the number of allocated IPv4 addresses.
-                format: int32
-                type: integer
               v6Total:
                 description: V6Total is the total number of allocatable IPv6 addresses.
-                format: int32
-                type: integer
-              v6Used:
-                description: V6Used is the number of allocated IPv6 addresses.
                 format: int32
                 type: integer
             type: object

@@ -2723,13 +2723,6 @@ func schema_ectobase_api_net_v1alpha1_LBPoolStatus(ref common.ReferenceCallback)
 							Format:      "",
 						},
 					},
-					"used": {
-						SchemaProps: spec.SchemaProps{
-							Description: "Used is the number of allocated VIP addresses.",
-							Type:        []string{"integer"},
-							Format:      "int32",
-						},
-					},
 					"total": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Total is the total number of allocatable VIP addresses.",
@@ -3672,23 +3665,9 @@ func schema_ectobase_api_net_v1alpha1_SubnetStatus(ref common.ReferenceCallback)
 							Format:      "",
 						},
 					},
-					"v4Used": {
-						SchemaProps: spec.SchemaProps{
-							Description: "V4Used is the number of allocated IPv4 addresses.",
-							Type:        []string{"integer"},
-							Format:      "int32",
-						},
-					},
 					"v4Total": {
 						SchemaProps: spec.SchemaProps{
 							Description: "V4Total is the total number of allocatable IPv4 addresses.",
-							Type:        []string{"integer"},
-							Format:      "int32",
-						},
-					},
-					"v6Used": {
-						SchemaProps: spec.SchemaProps{
-							Description: "V6Used is the number of allocated IPv6 addresses.",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},

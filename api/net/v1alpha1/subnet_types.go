@@ -27,15 +27,9 @@ type SubnetStatus struct {
 	// State is the current lifecycle state (e.g. Pending, Ready).
 	// +optional
 	State string `json:"state,omitempty" protobuf:"bytes,1,opt,name=state"`
-	// V4Used is the number of allocated IPv4 addresses.
-	// +optional
-	V4Used int32 `json:"v4Used,omitempty" protobuf:"varint,2,opt,name=v4Used"`
 	// V4Total is the total number of allocatable IPv4 addresses.
 	// +optional
 	V4Total int32 `json:"v4Total,omitempty" protobuf:"varint,3,opt,name=v4Total"`
-	// V6Used is the number of allocated IPv6 addresses.
-	// +optional
-	V6Used int32 `json:"v6Used,omitempty" protobuf:"varint,4,opt,name=v6Used"`
 	// V6Total is the total number of allocatable IPv6 addresses.
 	// +optional
 	V6Total int32 `json:"v6Total,omitempty" protobuf:"varint,5,opt,name=v6Total"`

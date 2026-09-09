@@ -21,8 +21,6 @@ type LBPoolSpec struct {
 type LBPoolStatus struct {
 	// State is the current lifecycle state (e.g. Pending, Ready).
 	State string
-	// Used is the number of allocated VIP addresses.
-	Used int32
 	// Total is the total number of allocatable VIP addresses.
 	Total int32
 }

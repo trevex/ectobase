@@ -23,12 +23,8 @@ type SubnetSpec struct {
 type SubnetStatus struct {
 	// State is the current lifecycle state (e.g. Pending, Ready).
 	State string
-	// V4Used is the number of allocated IPv4 addresses.
-	V4Used int32
 	// V4Total is the total number of allocatable IPv4 addresses.
 	V4Total int32
-	// V6Used is the number of allocated IPv6 addresses.
-	V6Used int32
 	// V6Total is the total number of allocatable IPv6 addresses.
 	V6Total int32
 }

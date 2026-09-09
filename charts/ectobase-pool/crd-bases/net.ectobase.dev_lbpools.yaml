@@ -63,10 +63,6 @@ spec:
                 description: Total is the total number of allocatable VIP addresses.
                 format: int32
                 type: integer
-              used:
-                description: Used is the number of allocated VIP addresses.
-                format: int32
-                type: integer
             type: object
         type: object
     served: true
