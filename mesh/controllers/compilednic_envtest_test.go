@@ -61,9 +61,15 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 
 	// Manager drives the controller; a separate direct client does the test's writes/reads so we
 	// don't depend on the manager cache for our own object mutations.
+	// The CompiledNIC reconciler roots on NetworkInterface, so it registers "networkinterface" in
+	// controller-runtime's process-global controller-name set. The IPAM integration test
+	// (ipam_envtest_test.go) also wires a CompiledNICReconciler and is the one that must run under
+	// default name validation, so skip the (trivially-satisfied) uniqueness check on this
+	// single-controller manager to avoid a cross-test global-registry collision.
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme:  scheme,
-		Metrics: metricsserver.Options{BindAddress: "0"}, // disable the metrics listener (port clash)
+		Scheme:     scheme,
+		Metrics:    metricsserver.Options{BindAddress: "0"}, // disable the metrics listener (port clash)
+		Controller: config.Controller{SkipNameValidation: ptrTo(true)},
 	})
 	if err != nil {
 		t.Fatalf("new manager: %v", err)

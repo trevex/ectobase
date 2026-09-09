@@ -217,6 +217,7 @@ func (r *NICIPAMReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		r.APIReader = mgr.GetAPIReader()
 	}
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("nicipam").
 		For(&netv1.NetworkInterface{}).
 		Watches(&netv1.Subnet{}, handlerNICsForSubnet(r.Client)).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).

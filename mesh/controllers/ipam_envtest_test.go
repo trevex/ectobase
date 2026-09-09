@@ -18,7 +18,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
@@ -56,12 +55,12 @@ func TestIPAMEndToEndEnvtest(t *testing.T) {
 	}
 	defer func() { _ = env.Stop() }()
 
-	// NIC-IPAM and CompiledNIC reconcilers both root on NetworkInterface, so they'd derive the same
-	// "networkinterface" controller name in one manager; skip the uniqueness validation.
+	// NIC-IPAM and CompiledNIC reconcilers both root on NetworkInterface; the NIC-IPAM controller
+	// carries an explicit .Named("nicipam"), so the two no longer collide under the manager's
+	// default controller-name uniqueness validation (production-equivalent, no SkipNameValidation).
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme:     scheme,
-		Metrics:    metricsserver.Options{BindAddress: "0"},
-		Controller: config.Controller{SkipNameValidation: ptr(true)},
+		Scheme:  scheme,
+		Metrics: metricsserver.Options{BindAddress: "0"},
 	})
 	if err != nil {
 		t.Fatal(err)

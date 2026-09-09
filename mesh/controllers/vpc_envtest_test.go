@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
@@ -47,9 +48,14 @@ func TestVPCControllerEnvtest(t *testing.T) {
 	}
 	defer func() { _ = env.Stop() }()
 
+	// This single-controller manager registers "vpc" in controller-runtime's process-global
+	// controller-name set. The multi-controller IPAM integration test (ipam_envtest_test.go) also
+	// wires a VPCReconciler and is the one that must run under default name validation, so skip the
+	// (trivially-satisfied) uniqueness check here to avoid a cross-test global-registry collision.
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme:  scheme,
-		Metrics: metricsserver.Options{BindAddress: "0"}, // disable the metrics listener (port clash)
+		Scheme:     scheme,
+		Metrics:    metricsserver.Options{BindAddress: "0"}, // disable the metrics listener (port clash)
+		Controller: config.Controller{SkipNameValidation: ptr(true)},
 	})
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
