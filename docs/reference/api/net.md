@@ -16,6 +16,7 @@ the aggregated apiserver and consumed as CRDs by the mesh control plane.
 - [LoadBalancer](#loadbalancer)
 - [NATGateway](#natgateway)
 - [NetworkInterface](#networkinterface)
+- [Subnet](#subnet)
 - [VPC](#vpc)
 - [VPCPeering](#vpcpeering)
 
@@ -271,6 +272,7 @@ _Appears in:_
 - [LoadBalancerSpec](#loadbalancerspec)
 - [NATGatewaySpec](#natgatewayspec)
 - [NetworkInterfaceSpec](#networkinterfacespec)
+- [SubnetSpec](#subnetspec)
 - [VPCPeeringSpec](#vpcpeeringspec)
 
 | Field | Description | Default | Validation |
@@ -470,6 +472,67 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `rateMbps` _integer_ | RateMbps caps throughput in Mbit/s. 0 = unlimited. |  | Optional: \{\} <br /> |
 | `burstKB` _integer_ | BurstKB is an optional burst allowance in KB. Reserved (default burst in v1). 0 = default. |  | Optional: \{\} <br /> |
+
+
+#### Subnet
+
+
+
+Subnet is a VPC-scoped range of IPv4/IPv6 prefixes.
+
+
+
+_Appears in:_
+- [SubnetList](#subnetlist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `net.ectobase.dev/v1alpha1` | | |
+| `kind` _string_ | `Subnet` | | |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[SubnetSpec](#subnetspec)_ |  |  |  |
+| `status` _[SubnetStatus](#subnetstatus)_ |  |  |  |
+
+
+
+
+#### SubnetSpec
+
+
+
+SubnetSpec is the desired state of a Subnet (a VPC-scoped v4/v6 prefix range).
+
+
+
+_Appears in:_
+- [Subnet](#subnet)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `vpcRef` _[LocalObjectReference](#localobjectreference)_ | VPCRef references the owning VPC within the same namespace. |  |  |
+| `v4Prefix` _string_ | V4Prefix optionally pins the IPv4 CIDR for this subnet. |  | Optional: \{\} <br /> |
+| `v6Prefix` _string_ | V6Prefix optionally pins the IPv6 CIDR for this subnet. |  | Optional: \{\} <br /> |
+| `reservedIPs` _string array_ | ReservedIPs are addresses held back from allocation within this subnet. |  | Optional: \{\} <br /> |
+
+
+#### SubnetStatus
+
+
+
+SubnetStatus is the observed state of a Subnet.
+
+
+
+_Appears in:_
+- [Subnet](#subnet)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `state` _string_ | State is the current lifecycle state (e.g. Pending, Ready). |  | Optional: \{\} <br /> |
+| `v4Used` _integer_ | V4Used is the number of allocated IPv4 addresses. |  | Optional: \{\} <br /> |
+| `v4Total` _integer_ | V4Total is the total number of allocatable IPv4 addresses. |  | Optional: \{\} <br /> |
+| `v6Used` _integer_ | V6Used is the number of allocated IPv6 addresses. |  | Optional: \{\} <br /> |
+| `v6Total` _integer_ | V6Total is the total number of allocatable IPv6 addresses. |  | Optional: \{\} <br /> |
 
 
 #### VPC

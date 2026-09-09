@@ -70,6 +70,7 @@ func main() {
 		With(apiserver.Resource(&platform.ClusterPool{}, v1alpha1.SchemeGroupVersion)).
 		With(apiserver.Resource(&platform.RouteBusIdentity{}, v1alpha1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.VPC{}, netv1.SchemeGroupVersion)).
+		With(apiserver.Resource(&netapi.Subnet{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.NetworkInterface{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.FirewallPolicy{}, netv1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.FloatingIP{}, netv1.SchemeGroupVersion)).

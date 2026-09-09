@@ -146,6 +146,26 @@ func (in RateLimit) OpenAPIModelName() string {
 }
 
 // OpenAPIModelName returns the OpenAPI model name for this type.
+func (in Subnet) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.Subnet"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in SubnetList) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.SubnetList"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in SubnetSpec) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.SubnetSpec"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in SubnetStatus) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.SubnetStatus"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
 func (in VPC) OpenAPIModelName() string {
 	return "dev.ectobase.net.v1alpha1.VPC"
 }

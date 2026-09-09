@@ -16,7 +16,3 @@ rules:
   - compilednics
   verbs:
   - get
-  # list: a KubeVirt virt-launcher pod carries no net.ectobase.dev/network-interface annotation, so
-  # the CNI resolves its NIC by matching the interface MAC against CompiledNIC.Spec.MAC (namespace
-  # list). See cni/plugin/resolve.go resolveCompiledNICByMAC.
-  - list

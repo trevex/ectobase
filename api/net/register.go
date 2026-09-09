@@ -36,6 +36,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&VPC{},
 		&VPCList{},
+		&Subnet{},
+		&SubnetList{},
 		&NetworkInterface{},
 		&NetworkInterfaceList{},
 		&FirewallPolicy{},

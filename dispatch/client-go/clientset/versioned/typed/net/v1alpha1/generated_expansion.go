@@ -12,6 +12,8 @@ type NATGatewayExpansion interface{}
 
 type NetworkInterfaceExpansion interface{}
 
+type SubnetExpansion interface{}
+
 type VPCExpansion interface{}
 
 type VPCPeeringExpansion interface{}

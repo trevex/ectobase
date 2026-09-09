@@ -1,0 +1,94 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: subnets.net.ectobase.dev
+spec:
+  group: net.ectobase.dev
+  names:
+    kind: Subnet
+    listKind: SubnetList
+    plural: subnets
+    singular: subnet
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Subnet is a VPC-scoped range of IPv4/IPv6 prefixes.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: SubnetSpec is the desired state of a Subnet (a VPC-scoped
+              v4/v6 prefix range).
+            properties:
+              reservedIPs:
+                description: ReservedIPs are addresses held back from allocation within
+                  this subnet.
+                items:
+                  type: string
+                type: array
+              v4Prefix:
+                description: V4Prefix optionally pins the IPv4 CIDR for this subnet.
+                type: string
+              v6Prefix:
+                description: V6Prefix optionally pins the IPv6 CIDR for this subnet.
+                type: string
+              vpcRef:
+                description: VPCRef references the owning VPC within the same namespace.
+                properties:
+                  name:
+                    description: Name is the name of the referenced object.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - vpcRef
+            type: object
+          status:
+            description: SubnetStatus is the observed state of a Subnet.
+            properties:
+              state:
+                description: State is the current lifecycle state (e.g. Pending, Ready).
+                type: string
+              v4Total:
+                description: V4Total is the total number of allocatable IPv4 addresses.
+                format: int32
+                type: integer
+              v4Used:
+                description: V4Used is the number of allocated IPv4 addresses.
+                format: int32
+                type: integer
+              v6Total:
+                description: V6Total is the total number of allocatable IPv6 addresses.
+                format: int32
+                type: integer
+              v6Used:
+                description: V6Used is the number of allocated IPv6 addresses.
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

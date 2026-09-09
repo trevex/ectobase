@@ -18,6 +18,8 @@ type Interface interface {
 	NATGateways() NATGatewayInformer
 	// NetworkInterfaces returns a NetworkInterfaceInformer.
 	NetworkInterfaces() NetworkInterfaceInformer
+	// Subnets returns a SubnetInformer.
+	Subnets() SubnetInformer
 	// VPCs returns a VPCInformer.
 	VPCs() VPCInformer
 	// VPCPeerings returns a VPCPeeringInformer.
@@ -58,6 +60,11 @@ func (v *version) NATGateways() NATGatewayInformer {
 // NetworkInterfaces returns a NetworkInterfaceInformer.
 func (v *version) NetworkInterfaces() NetworkInterfaceInformer {
 	return &networkInterfaceInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// Subnets returns a SubnetInformer.
+func (v *version) Subnets() SubnetInformer {
+	return &subnetInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
 // VPCs returns a VPCInformer.

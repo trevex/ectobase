@@ -90,6 +90,10 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		netv1alpha1.NetworkInterfaceStatus{}.OpenAPIModelName():      schema_ectobase_api_net_v1alpha1_NetworkInterfaceStatus(ref),
 		netv1alpha1.PortStatus{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_PortStatus(ref),
 		netv1alpha1.RateLimit{}.OpenAPIModelName():                   schema_ectobase_api_net_v1alpha1_RateLimit(ref),
+		netv1alpha1.Subnet{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_Subnet(ref),
+		netv1alpha1.SubnetList{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_SubnetList(ref),
+		netv1alpha1.SubnetSpec{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_SubnetSpec(ref),
+		netv1alpha1.SubnetStatus{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_SubnetStatus(ref),
 		netv1alpha1.VPC{}.OpenAPIModelName():                         schema_ectobase_api_net_v1alpha1_VPC(ref),
 		netv1alpha1.VPCList{}.OpenAPIModelName():                     schema_ectobase_api_net_v1alpha1_VPCList(ref),
 		netv1alpha1.VPCPeering{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_VPCPeering(ref),
@@ -3272,6 +3276,202 @@ func schema_ectobase_api_net_v1alpha1_RateLimit(ref common.ReferenceCallback) co
 							Description: "BurstKB is an optional burst allowance in KB. Reserved (default burst in v1). 0 = default.",
 							Type:        []string{"integer"},
 							Format:      "int64",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_Subnet(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "Subnet is a VPC-scoped range of IPv4/IPv6 prefixes.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(netv1alpha1.SubnetSpec{}.OpenAPIModelName()),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(netv1alpha1.SubnetStatus{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			netv1alpha1.SubnetSpec{}.OpenAPIModelName(), netv1alpha1.SubnetStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_SubnetList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "SubnetList is a list of Subnet objects.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(netv1alpha1.Subnet{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			netv1alpha1.Subnet{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_SubnetSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "SubnetSpec is the desired state of a Subnet (a VPC-scoped v4/v6 prefix range).",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"vpcRef": {
+						SchemaProps: spec.SchemaProps{
+							Description: "VPCRef references the owning VPC within the same namespace.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
+						},
+					},
+					"v4Prefix": {
+						SchemaProps: spec.SchemaProps{
+							Description: "V4Prefix optionally pins the IPv4 CIDR for this subnet.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"v6Prefix": {
+						SchemaProps: spec.SchemaProps{
+							Description: "V6Prefix optionally pins the IPv6 CIDR for this subnet.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"reservedIPs": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ReservedIPs are addresses held back from allocation within this subnet.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"vpcRef"},
+			},
+		},
+		Dependencies: []string{
+			netv1alpha1.LocalObjectReference{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_SubnetStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "SubnetStatus is the observed state of a Subnet.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"state": {
+						SchemaProps: spec.SchemaProps{
+							Description: "State is the current lifecycle state (e.g. Pending, Ready).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"v4Used": {
+						SchemaProps: spec.SchemaProps{
+							Description: "V4Used is the number of allocated IPv4 addresses.",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"v4Total": {
+						SchemaProps: spec.SchemaProps{
+							Description: "V4Total is the total number of allocatable IPv4 addresses.",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"v6Used": {
+						SchemaProps: spec.SchemaProps{
+							Description: "V6Used is the number of allocated IPv6 addresses.",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"v6Total": {
+						SchemaProps: spec.SchemaProps{
+							Description: "V6Total is the total number of allocatable IPv6 addresses.",
+							Type:        []string{"integer"},
+							Format:      "int32",
 						},
 					},
 				},

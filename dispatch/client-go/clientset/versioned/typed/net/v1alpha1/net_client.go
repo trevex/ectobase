@@ -17,6 +17,7 @@ type NetV1alpha1Interface interface {
 	LoadBalancersGetter
 	NATGatewaysGetter
 	NetworkInterfacesGetter
+	SubnetsGetter
 	VPCsGetter
 	VPCPeeringsGetter
 }
@@ -44,6 +45,10 @@ func (c *NetV1alpha1Client) NATGateways(namespace string) NATGatewayInterface {
 
 func (c *NetV1alpha1Client) NetworkInterfaces(namespace string) NetworkInterfaceInterface {
 	return newNetworkInterfaces(c, namespace)
+}
+
+func (c *NetV1alpha1Client) Subnets(namespace string) SubnetInterface {
+	return newSubnets(c, namespace)
 }
 
 func (c *NetV1alpha1Client) VPCs(namespace string) VPCInterface {

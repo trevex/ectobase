@@ -32,6 +32,10 @@ func (c *FakeNetV1alpha1) NetworkInterfaces(namespace string) v1alpha1.NetworkIn
 	return newFakeNetworkInterfaces(c, namespace)
 }
 
+func (c *FakeNetV1alpha1) Subnets(namespace string) v1alpha1.SubnetInterface {
+	return newFakeSubnets(c, namespace)
+}
+
 func (c *FakeNetV1alpha1) VPCs(namespace string) v1alpha1.VPCInterface {
 	return newFakeVPCs(c, namespace)
 }

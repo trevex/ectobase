@@ -134,6 +134,12 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &applyconfigurationsnetv1alpha1.PortStatusApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("RateLimit"):
 		return &applyconfigurationsnetv1alpha1.RateLimitApplyConfiguration{}
+	case netv1alpha1.SchemeGroupVersion.WithKind("Subnet"):
+		return &applyconfigurationsnetv1alpha1.SubnetApplyConfiguration{}
+	case netv1alpha1.SchemeGroupVersion.WithKind("SubnetSpec"):
+		return &applyconfigurationsnetv1alpha1.SubnetSpecApplyConfiguration{}
+	case netv1alpha1.SchemeGroupVersion.WithKind("SubnetStatus"):
+		return &applyconfigurationsnetv1alpha1.SubnetStatusApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("VPC"):
 		return &applyconfigurationsnetv1alpha1.VPCApplyConfiguration{}
 	case netv1alpha1.SchemeGroupVersion.WithKind("VPCPeering"):

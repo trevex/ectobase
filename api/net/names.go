@@ -11,6 +11,9 @@ package net
 
 func (*VPC) GetSingularName() string { return "vpc" }
 
+func (*Subnet) GetSingularName() string { return "subnet" }
+func (*Subnet) ShortNames() []string    { return []string{"sn"} }
+
 func (*NetworkInterface) GetSingularName() string { return "networkinterface" }
 func (*NetworkInterface) ShortNames() []string    { return []string{"nic"} }
 
