@@ -6,6 +6,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/netip"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
@@ -33,14 +34,15 @@ func (r *LBPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // Sync sets LBPool.Status.State to Invalid (bad or missing CIDR) or Ready, and
 // fills the Total counter with the pool's combined allocatable address count.
 func (r *LBPoolReconciler) Sync(ctx context.Context, p *netv1.LBPool) error {
-	total := int32(0)
+	// accumulate wide, clamp to the int32 status field
+	var total64 int64
 	ok := false
 	if p.Spec.V4Prefix != nil {
 		pre, err := netip.ParsePrefix(*p.Spec.V4Prefix)
 		if err != nil || !pre.Addr().Is4() {
 			return r.setState(ctx, p, "Invalid", 0)
 		}
-		total += totalHosts(ptrPrefix(pre.Masked()))
+		total64 += int64(totalHosts(ptrPrefix(pre.Masked())))
 		ok = true
 	}
 	if p.Spec.V6Prefix != nil {
@@ -48,11 +50,15 @@ func (r *LBPoolReconciler) Sync(ctx context.Context, p *netv1.LBPool) error {
 		if err != nil || pre.Addr().Is4() {
 			return r.setState(ctx, p, "Invalid", 0)
 		}
-		total += totalHosts(ptrPrefix(pre.Masked()))
+		total64 += int64(totalHosts(ptrPrefix(pre.Masked())))
 		ok = true
 	}
 	if !ok {
 		return r.setState(ctx, p, "Invalid", 0)
+	}
+	total := int32(total64)
+	if total64 > math.MaxInt32 {
+		total = math.MaxInt32
 	}
 	return r.setState(ctx, p, "Ready", total)
 }

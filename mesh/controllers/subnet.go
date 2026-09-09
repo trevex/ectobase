@@ -109,7 +109,8 @@ func overlaps(a, b *netip.Prefix) bool {
 	return a.Overlaps(*b)
 }
 
-// totalHosts returns the usable host count, capped at int32, or 0 for nil.
+// totalHosts returns the prefix's total address count (including the
+// network/broadcast/reserved addresses), capped at int32, or 0 for nil.
 func totalHosts(p *netip.Prefix) int32 {
 	if p == nil {
 		return 0
