@@ -1,18 +1,18 @@
 # Using the lab
 
-This is a hands-on walkthrough of driving a live ectobase fabric: you author
-**intent** on the dispatch, watch it compile and sync into a compute pool, and see the
-overlay come up inside a real Pod and a real KubeVirt VM. It assumes the local
+This is a hands-on walkthrough of driving a live ectobase fabric: intent is authored
+on the dispatch, compiled and synced into a compute pool, and the overlay comes up
+inside a real Pod and a real KubeVirt VM. It assumes the local
 lab fabric from [Local fabric](./local-fabric.md) is up.
 
-By the end you will have created a VPC (with an **auto-allocated VNI**), attached a
-**pool-auto-scheduled** Container to it and pinged across the overlay, and — with
-the storage add-ons — booted a stateful VM in the same VPC.
+The walkthrough creates a VPC (with an auto-allocated VNI), attaches a
+pool-auto-scheduled Container to it and pings across the overlay, and, with
+the storage add-ons, boots a stateful VM in the same VPC.
 
-> **IPAM update.** Overlay IPs are now allocated centrally. Every VPC needs at least
+> Overlay IPs are now allocated centrally. Every VPC needs at least
 > one `Subnet`, and a NetworkInterface draws its IP from that Subnet (leave `ips: []`
 > to auto-allocate, or list an in-Subnet IP to pin). NICs reach `status.state:
-> Allocated` automatically — you no longer patch `status.state: Ready` by hand. For a
+> Allocated` automatically; no manual `status.state: Ready` patch is needed. For a
 > full VPC→Subnet→VM→LoadBalancer→NAT walkthrough see
 > [ipam-walkthrough.md](ipam-walkthrough.md).
 
@@ -29,7 +29,7 @@ make lab-up
 [Deploy with Helm](./deploy-helm.md) for what the charts contain and
 [Local fabric](./local-fabric.md) for the fabric itself.
 
-The **VM** section additionally needs Ceph and the Tier-2 prerequisites
+The VM section additionally needs Ceph and the Tier-2 prerequisites
 (KubeVirt + CDI + the vm-materializer):
 
 ```sh
@@ -41,9 +41,9 @@ The Container section needs only `make lab-up`.
 
 ## Accessing & inspecting the clusters
 
-The fabric is three Talos clusters — the **dispatch** (fleet control plane / aggregated
-apiserver) plus two compute pools, **k02** and **k03**. `lab up` chowns each
-per-cluster kubeconfig back to your user, so `kubectl` works **without sudo**. Set
+The fabric is three Talos clusters: the dispatch (fleet control plane / aggregated
+apiserver) plus two compute pools, k02 and k03. `lab up` chowns each
+per-cluster kubeconfig back to the invoking user, so `kubectl` works without sudo. Set
 one alias per cluster:
 
 ```sh
@@ -52,28 +52,28 @@ alias k02='kubectl --kubeconfig test/lab/build/ectobase/k02.kubeconfig'
 alias k03='kubectl --kubeconfig test/lab/build/ectobase/k03.kubeconfig'
 ```
 
-Orient yourself. The pools register with the dispatch as `ClusterPool`s and converge to
+The pools register with the dispatch as `ClusterPool`s and converge to
 `Ready` with their node `/64`s:
 
 ```sh
 khub get clusterpools.platform.ectobase.dev
 ```
 
-All **intent** is authored on the dispatch, so that is where you list workloads:
+All intent is authored on the dispatch, so that is where workloads are listed:
 
 ```sh
 khub get vpc,networkinterface,container,virtualmachine -A
 ```
 
-Each pool runs the `ectobase-pool` executors in the `ectobase-system` namespace —
-the mesh agent, the broker, the CNI installer, the dataplane, and the
+Each pool runs the `ectobase-pool` executors in the `ectobase-system` namespace,
+namely the mesh agent, the broker, the CNI installer, the dataplane, and the
 materializers:
 
 ```sh
 k02 -n ectobase-system get pods
 ```
 
-and it holds the **synced compiled** objects (never raw intent):
+and it holds the synced compiled objects (never raw intent):
 
 ```sh
 k02 get compilednics,compiledcontainers,compiledvms -A
@@ -81,17 +81,17 @@ k02 get compilednics,compiledcontainers,compiledvms -A
 
 ## The flow in one paragraph
 
-You author intent on the **dispatch**; the mesh compiler lowers it into small
+Intent is authored on the dispatch; the mesh compiler lowers it into small
 pool-scoped `Compiled*` objects and stamps the pool a dispatch scheduler chose; the
-**broker** syncs each `Compiled*` down to that pool; on the pool the
-**materializers** turn a `CompiledContainer` into a `Pod` and a `CompiledVM` into a
-KubeVirt `VirtualMachine`, while the **mesh agent** programs the dataplane for
+broker syncs each `Compiled*` down to that pool; on the pool the
+materializers turn a `CompiledContainer` into a `Pod` and a `CompiledVM` into a
+KubeVirt `VirtualMachine`, while the mesh agent programs the dataplane for
 whichever overlay interfaces actually attach on its node. The full picture is in
 [Compile, sync, materialize](../architecture/compile-sync-materialize.md).
 
 ## Create a VPC + NetworkInterface
 
-Author a VPC with **just a name** — no `spec.vni` — plus a NetworkInterface that
+Author a VPC with just a name (no `spec.vni`) plus a NetworkInterface that
 references it and carries the endpoint's overlay IP and MAC. Apply on the dispatch:
 
 ```yaml
@@ -124,8 +124,8 @@ spec:
 khub apply -f vpc.yaml
 ```
 
-A **VPC VNI allocator** on the dispatch assigns the VNI automatically and marks the VPC
-`Ready` — you never patch status by hand:
+A VPC VNI allocator on the dispatch assigns the VNI automatically and marks the VPC
+`Ready`, with no manual status patch:
 
 ```sh
 khub get vpc demo -o yaml
@@ -138,9 +138,9 @@ status:
   state: Ready
 ```
 
-The NIC allocates its overlay IP from the Subnet the same way — the live NIC IPAM
-allocator drives it to `status.state: Allocated` (you no longer patch it to `Ready`
-by hand), and only an `Allocated` NIC compiles:
+The NIC allocates its overlay IP from the Subnet the same way: the live NIC IPAM
+allocator drives it to `status.state: Allocated` (no manual `Ready` patch), and only
+an `Allocated` NIC compiles:
 
 ```sh
 khub get networkinterface demo-nic-a -o jsonpath='{.status.state} {.status.allocatedIPs}{"\n"}'
@@ -150,11 +150,11 @@ khub get networkinterface demo-nic-a -o jsonpath='{.status.state} {.status.alloc
 !!! success "Status: Implemented"
     A VPC created without `spec.vni` is auto-allocated a globally-unique VNI,
     published to `status.vni` with `status.state: Ready`. No manual status patch is
-    needed. Setting `spec.vni` instead **pins** that value. The allocation is
+    needed. Setting `spec.vni` instead pins that value. The allocation is
     collision-free and the VNI is reused once the VPC is deleted. The compiler
     gates on a `Ready` VPC with a non-zero VNI and propagates it to the NICs.
     NIC IPs are allocated centrally too: a NetworkInterface draws from a `Subnet` in
-    its VPC and reaches `status.state: Allocated` automatically — the compile gate now
+    its VPC and reaches `status.state: Allocated` automatically; the compile gate now
     requires `Allocated` (a NIC in a VPC with no Subnet goes `Invalid` and never
     compiles). See
     [Compile, sync, materialize → VNI allocation](../architecture/compile-sync-materialize.md#vni-allocation)
@@ -162,8 +162,8 @@ khub get networkinterface demo-nic-a -o jsonpath='{.status.state} {.status.alloc
 
 ## Run a Container workload
 
-Now attach a Container to that NIC. The Container **owns** the NIC via
-`interfaceRefs`, and it sets **no `clusterName` and no `nodeName`** — so the dispatch
+Now attach a Container to that NIC. The Container owns the NIC via
+`interfaceRefs`, and it sets no `clusterName` and no `nodeName`, so the dispatch
 scheduler binds it to a pool, and kube-scheduler on that pool picks the node.
 Apply on the dispatch:
 
@@ -186,7 +186,7 @@ khub apply -f container.yaml
 !!! success "Status: Implemented"
     A `Container` with no `spec.clusterName` is pool-scheduled by the dispatch (resource
     fit + spread, sharing pool capacity with VMs), exactly like a VM. `spec.nodeName`
-    stays an **optional** pin — leave it empty and the node is chosen by
+    stays an optional pin; leave it empty and the node is chosen by
     kube-scheduler on the pool.
 
 Watch the objects appear. First the scheduler stamps the chosen pool onto the
@@ -203,18 +203,18 @@ the dispatch, both bound to that pool:
 khub get compilednic,compiledcontainer -A
 ```
 
-The broker syncs both down to the bound pool. Point your pool alias at whatever
+The broker syncs both down to the bound pool. Point the pool alias at whatever
 `clusterName` was stamped (below assumes `k02`):
 
 ```sh
 k02 get compilednic,compiledcontainer -A
 ```
 
-The **pod-materializer** on the pool then turns the `CompiledContainer` into a real
-`Pod`, attached to the overlay via a **Multus secondary network**. The Pod carries
+The pod-materializer on the pool then turns the `CompiledContainer` into a real
+`Pod`, attached to the overlay via a Multus secondary network. The Pod carries
 the `k8s.v1.cni.cncf.io/networks` annotation selecting the overlay
-`NetworkAttachmentDefinition` the pool chart installs — named `flowplane` in the
-`ectobase-system` namespace — plus the `net.ectobase.dev/network-interface`
+`NetworkAttachmentDefinition` the pool chart installs (named `flowplane` in the
+`ectobase-system` namespace), plus the `net.ectobase.dev/network-interface`
 annotation the CNI resolves back to the `CompiledNIC`:
 
 ```sh
@@ -228,7 +228,7 @@ k02 -n "$NS" get pod "$POD" \
   -o jsonpath='{.metadata.annotations.k8s\.v1\.cni\.cncf\.io/networks}{"\n"}'
 ```
 
-Confirm the overlay interface landed inside the pod with the IP you assigned
+Confirm the overlay interface landed inside the pod with the assigned IP
 (`net1`, the secondary interface), then exec in:
 
 ```sh
@@ -242,7 +242,7 @@ k02 -n "$NS" exec "$POD" -- ping -c3 10.0.9.3  # ping another endpoint in the VP
     so the first pull is fetched and cached through it.
 
 To ping a second endpoint, create another NetworkInterface (e.g. `demo-nic-c` with
-`10.0.9.3`) in the same VPC and a second Container owning it — the two can be
+`10.0.9.3`) in the same VPC and a second Container owning it; the two can be
 auto-scheduled onto different pools and still reach each other over the
 encapsulated overlay.
 
@@ -252,12 +252,12 @@ encapsulated overlay.
     The VM path needs Ceph (`make lab-ceph`) and the Tier-2 prerequisites
     (`make lab-tier2-up`): KubeVirt, CDI, and the vm-materializer. The materializer
     builds the correct KubeVirt objects, but the surrounding KubeVirt/tap wiring is
-    still being hardened — treat the VM path as partial relative to the fully-proven
+    still being hardened; treat the VM path as partial relative to the fully-proven
     Pod path. See [KubeVirt integration](../architecture/kubevirt-integration.md).
 
 A VM in a VPC is the same shape as a Container, plus a persistent boot disk. Author
 a NetworkInterface, an RBD-backed `Volume` with a `bootImage`, and a
-`VirtualMachine` that owns both — again with **no `clusterName`** (auto-scheduled).
+`VirtualMachine` that owns both, again with no `clusterName` (auto-scheduled).
 Apply on the dispatch:
 
 ```yaml
@@ -326,9 +326,9 @@ khub get virtualmachine demo-vm -o jsonpath='{.spec.clusterName}{"\n"}'
 khub get compiledvm,compiledvolumeattachment -A
 ```
 
-On the bound pool, the **vm-materializer** turns those into a KubeVirt
-`VirtualMachine` and a CDI `DataVolume` — plus, from `spec.cloudInit`, a
-`cloudInitNoCloud` disk carrying your user-data. KubeVirt then runs a
+On the bound pool, the vm-materializer turns those into a KubeVirt
+`VirtualMachine` and a CDI `DataVolume`, plus, from `spec.cloudInit`, a
+`cloudInitNoCloud` disk carrying the user-data. KubeVirt then runs a
 `VirtualMachineInstance` in a `virt-launcher` pod. Inspect the VMI, see which node
 KubeVirt placed it on, and open its serial console:
 
@@ -340,7 +340,7 @@ k02 get vm.kubevirt.io demo-vm -o jsonpath='{.spec.template.spec.volumes[?(@.nam
 virtctl --kubeconfig test/lab/build/ectobase/k02.kubeconfig console demo-vm
 ```
 
-Log in as the cloud-init user (`fedora`) on the console — or SSH over the overlay
+Log in as the cloud-init user (`fedora`) on the console, or SSH over the overlay
 from another endpoint in the same VPC:
 
 ```sh
@@ -350,12 +350,12 @@ ssh fedora@10.0.9.20
 
 The VMI's overlay interface attaches via the KubeVirt `flowplane` network-binding
 plugin (a tap); the guest self-addresses `10.0.9.20` from the dataplane's DHCP
-responder, and — as with the Pod — the node agent programs the datapath for it
+responder, and, as with the Pod, the node agent programs the datapath for it
 wherever it lands.
 
-!!! warning "Status: Partial — guest datapath"
+!!! warning "Status: Partial, guest datapath"
     The compile → sync → materialize path for `cloudInit` is proven end-to-end (the
-    KubeVirt VM carries the NoCloud disk). Actually *booting* the guest and reaching
+    KubeVirt VM carries the NoCloud disk). Actually booting the guest and reaching
     it over the overlay depends on the KubeVirt tap datapath, which is still being
     hardened (see the "Partial" note above and
     [KubeVirt integration](../architecture/kubevirt-integration.md)). Console/SSH work
@@ -364,10 +364,10 @@ wherever it lands.
 ## Firewall policies
 
 Each VPC has a `spec.defaultPolicy` (the `demo` VPC above used `Allow`). The
-production posture is **deny-by-default**: leave `defaultPolicy` unset (or `Deny`)
+production posture is deny-by-default: leave `defaultPolicy` unset (or `Deny`)
 and open specific flows with a `FirewallPolicy`, which selects interfaces by label and
-lists ingress/egress rules. Label the NICs you want to govern, then author the policy
-on the dispatch — the compiler folds matching rules into each `CompiledNIC` and the
+lists ingress/egress rules. Label the NICs to govern, then author the policy
+on the dispatch; the compiler folds matching rules into each `CompiledNIC` and the
 node agent programs them.
 
 ```yaml
@@ -395,11 +395,11 @@ khub apply -f firewall.yaml
 
 ## Cross-VPC connectivity (VPC peering)
 
-Two VPCs are isolated by default. A **mutual-consent** `VPCPeering` pair imports routes
+Two VPCs are isolated by default. A mutual-consent `VPCPeering` pair imports routes
 across them: each side names the other and exposes its own prefixes; both go
 `status.state: Ready` only when the reciprocal peering exists. This is a control-plane
-route-import — no datapath change — so firewall policy still governs the flow
-(deny-by-default means you also need an allow rule, as above).
+route-import (no datapath change), so firewall policy still governs the flow
+(deny-by-default means an allow rule is also needed, as above).
 
 ```yaml
 apiVersion: net.ectobase.dev/v1alpha1
@@ -432,7 +432,7 @@ khub get vpcpeering        # both -> Ready once the pair is mutual
 ## North-South: egress & load balancing
 
 Giving a workload internet egress (`NATGateway` + `FloatingIP`) or a public VIP
-(`LoadBalancer`) is authored the same way — a CRD on the dispatch that the compiler
+(`LoadBalancer`) is authored the same way: a CRD on the dispatch that the compiler
 folds into the workload's `CompiledNIC`. Under IPAM a `LoadBalancer` draws its VIP
 from an `LBPool` (as NICs draw from a `Subnet`); the
 [IPAM walkthrough](ipam-walkthrough.md) covers the LoadBalancer + NAT path end-to-end:
@@ -446,16 +446,16 @@ spec:
   # ...pool/port-block allocation...
 ```
 
-!!! warning "Status: Partial — no N-S edge control path yet"
-    The **node-side** compile path works (the compiler folds `LoadBalancer`/`NATGateway`
+!!! warning "Status: Partial, no N-S edge control path yet"
+    The node-side compile path works (the compiler folds `LoadBalancer`/`NATGateway`
     into `CompiledNIC`, and the agent programs the backend distributed-LB / egress SNAT
-    at the node uplink). What is **not** wired yet is the **North-South edge** control
+    at the node uplink). What is not wired yet is the North-South edge control
     plane: registering a VIP on the WAN edge, or masquerading to the internet, is still
     programmed directly on the edge datapath in the live tests (`TestLbDistributeSmoke`,
     `TestNatEgressSmoke` drive the edge over the dataplane gRPC, not via these CRDs). So
     a `khub apply -f loadbalancer.yaml` compiles, but a WAN client will not reach it
-    end-to-end from intent alone. The datapath itself is proven — see
-    [Load balancer](../features/loadbalancer.md) and [NAT](../features/nat.md) — the gap
+    end-to-end from intent alone. The datapath itself is proven (see
+    [Load balancer](../features/loadbalancer.md) and [NAT](../features/nat.md)); the gap
     is the edge control-plane wiring, tracked as a follow-up.
 
 ## Trace the objects end-to-end
@@ -467,19 +467,19 @@ column.
 
 | Stage | Object | Where | Command |
 |---|---|---|---|
-| Intent | `VPC` / `NetworkInterface` / `Container` / `VirtualMachine` / `Volume` | **dispatch** | `khub get vpc,networkinterface,container,virtualmachine,volume -A` |
-| Compiled | `CompiledNIC` / `CompiledContainer` / `CompiledVM` / `CompiledVolumeAttachment` | **dispatch** | `khub get compilednic,compiledcontainer,compiledvm,compiledvolumeattachment -A` |
-| Synced | the same `Compiled*` (broker-selected by `spec.clusterName`) | **pool** | `k02 get compilednic,compiledcontainer,compiledvm,compiledvolumeattachment -A` |
-| Materialized | `Pod` (+ NAD) / KubeVirt `VirtualMachine` + `VirtualMachineInstance` + `DataVolume` | **pool** | `k02 get pod,networkattachmentdefinition -n ectobase-system; k02 get virtualmachine,virtualmachineinstance,datavolume -A` |
+| Intent | `VPC` / `NetworkInterface` / `Container` / `VirtualMachine` / `Volume` | dispatch | `khub get vpc,networkinterface,container,virtualmachine,volume -A` |
+| Compiled | `CompiledNIC` / `CompiledContainer` / `CompiledVM` / `CompiledVolumeAttachment` | dispatch | `khub get compilednic,compiledcontainer,compiledvm,compiledvolumeattachment -A` |
+| Synced | the same `Compiled*` (broker-selected by `spec.clusterName`) | pool | `k02 get compilednic,compiledcontainer,compiledvm,compiledvolumeattachment -A` |
+| Materialized | `Pod` (+ NAD) / KubeVirt `VirtualMachine` + `VirtualMachineInstance` + `DataVolume` | pool | `k02 get pod,networkattachmentdefinition -n ectobase-system; k02 get virtualmachine,virtualmachineinstance,datavolume -A` |
 
-The mesh **agent** on each pool node then programs the dataplane for whichever
-overlay interfaces attach locally — matched by the unique `(VNI, overlay IP)` key,
+The mesh agent on each pool node then programs the dataplane for whichever
+overlay interfaces attach locally, matched by the unique `(VNI, overlay IP)` key,
 so policy follows the interface wherever it lands. See
 [CNI integration → Self-locating agent](../architecture/cni-integration.md#self-locating-agent).
 
 ## Cleanup
 
-Deleting the workload on the dispatch cascades through the pipeline — GC removes the
+Deleting the workload on the dispatch cascades through the pipeline; GC removes the
 `Compiled*` twins and the materialized Pod/VM on the pool:
 
 ```sh
@@ -487,7 +487,7 @@ khub delete container demo-ctr-a
 khub delete virtualmachine demo-vm
 ```
 
-Delete the VPC, its NICs, and any Volumes when you no longer need them; the VPC's
+Delete the VPC, its NICs, and any Volumes once they are no longer needed; the VPC's
 VNI returns to the free pool for reuse:
 
 ```sh
