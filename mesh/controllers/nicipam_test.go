@@ -80,3 +80,40 @@ func TestNICAllocateAndAdopt(t *testing.T) {
 		t.Fatalf("auto v4 = %v want 10.0.1.1", ga.Status.AllocatedIPs[0])
 	}
 }
+
+func TestNICOutOfSubnetIsInvalid(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = netv1.AddToScheme(scheme)
+	sub := readySubnet("s", "blue", "10.0.1.0/24", "")
+	bad := nic("bad", "blue", "s", "10.0.9.9")
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sub, bad).WithStatusSubresource(&netv1.NetworkInterface{}).Build()
+	r := &NICIPAMReconciler{Client: cl, APIReader: cl}
+	if err := r.Sync(context.Background(), bad); err != nil {
+		t.Fatal(err)
+	}
+	var g netv1.NetworkInterface
+	_ = cl.Get(context.Background(), keyOf(bad), &g)
+	if g.Status.State != "Invalid" {
+		t.Fatalf("state = %q want Invalid", g.Status.State)
+	}
+}
+
+func TestNICExhaustion(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = netv1.AddToScheme(scheme)
+	sub := readySubnet("s", "blue", "192.168.0.0/30", "")
+	occ1 := nic("o1", "blue", "s", "192.168.0.1")
+	occ2 := nic("o2", "blue", "s", "192.168.0.2")
+	want := nic("want", "blue", "s")
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sub, occ1, occ2, want).WithStatusSubresource(&netv1.NetworkInterface{}).Build()
+	r := &NICIPAMReconciler{Client: cl, APIReader: cl}
+	ctx := context.Background()
+	_ = r.Sync(ctx, occ1)
+	_ = r.Sync(ctx, occ2)
+	_ = r.Sync(ctx, want)
+	var g netv1.NetworkInterface
+	_ = cl.Get(ctx, keyOf(want), &g)
+	if g.Status.State != "Exhausted" {
+		t.Fatalf("state = %q want Exhausted", g.Status.State)
+	}
+}
