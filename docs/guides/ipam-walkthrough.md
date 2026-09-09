@@ -1,4 +1,4 @@
-# Guided walkthrough: VPC, Subnet, VMs, LoadBalancer, NAT (with IPAM)
+# Guided IPAM walkthrough: VPC, Subnet, VMs, LoadBalancer, NAT
 
 This is a hands-on, copy-pasteable walkthrough for driving a live ectobase fabric
 with the central IPAM model. It covers four steps:

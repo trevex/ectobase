@@ -393,7 +393,7 @@ khub apply -f firewall.yaml
     applied). Rules compile into `CompiledNIC.spec.firewall` and the agent programs the
     node datapath. See [Firewall](../features/firewall.md).
 
-## Cross-VPC connectivity (VPC peering)
+## Cross-VPC connectivity with VPC peering
 
 Two VPCs are isolated by default. A mutual-consent `VPCPeering` pair imports routes
 across them: each side names the other and exposes its own prefixes; both go
