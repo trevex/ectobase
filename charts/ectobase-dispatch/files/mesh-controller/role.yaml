@@ -71,14 +71,29 @@ rules:
   - net.ectobase.dev
   resources:
   - firewallpolicies
+  - lbpools
   - loadbalancers
   - networkinterfaces
+  - subnets
   - vpcpeerings
   - vpcs
   verbs:
   - get
   - list
   - watch
+- apiGroups:
+  - net.ectobase.dev
+  resources:
+  - lbpools/status
+  - loadbalancers/status
+  - networkinterfaces/status
+  - subnets/status
+  - vpcpeerings/status
+  - vpcs/status
+  verbs:
+  - get
+  - patch
+  - update
 - apiGroups:
   - net.ectobase.dev
   resources:
@@ -94,15 +109,6 @@ rules:
   - natgateways/status
   verbs:
   - get
-  - update
-- apiGroups:
-  - net.ectobase.dev
-  resources:
-  - vpcpeerings/status
-  - vpcs/status
-  verbs:
-  - get
-  - patch
   - update
 - apiGroups:
   - storage.ectobase.dev

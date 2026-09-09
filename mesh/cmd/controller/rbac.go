@@ -7,7 +7,13 @@ package main
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=natgateways,verbs=get;list;watch;update
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=natgateways/status,verbs=get;update
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=networkinterfaces,verbs=get;list;watch
+//+kubebuilder:rbac:groups=net.ectobase.dev,resources=networkinterfaces/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=firewallpolicies;loadbalancers,verbs=get;list;watch
+//+kubebuilder:rbac:groups=net.ectobase.dev,resources=loadbalancers/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=net.ectobase.dev,resources=subnets,verbs=get;list;watch
+//+kubebuilder:rbac:groups=net.ectobase.dev,resources=subnets/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=net.ectobase.dev,resources=lbpools,verbs=get;list;watch
+//+kubebuilder:rbac:groups=net.ectobase.dev,resources=lbpools/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=vpcs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=vpcs/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=net.ectobase.dev,resources=vpcpeerings,verbs=get;list;watch
