@@ -12,6 +12,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 type SubnetReconciler struct {
@@ -135,6 +137,34 @@ func (r *SubnetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&netv1.Subnet{}).
+		Watches(&netv1.Subnet{}, r.siblingSubnets()).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)
+}
+
+// siblingSubnets re-enqueues the other Subnets in the same VPC when a Subnet
+// changes or is deleted, so a Conflict loser can recompute (and go Ready) once
+// the winning sibling is removed or fixed.
+func (r *SubnetReconciler) siblingSubnets() handler.EventHandler {
+	return handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+		changed, ok := obj.(*netv1.Subnet)
+		if !ok {
+			return nil
+		}
+		var list netv1.SubnetList
+		if err := r.Client.List(ctx, &list, client.InNamespace(changed.Namespace)); err != nil {
+			return nil
+		}
+		var reqs []reconcile.Request
+		for i := range list.Items {
+			o := &list.Items[i]
+			if o.Name == changed.Name && o.Namespace == changed.Namespace {
+				continue // skip the object itself (For() already handles it)
+			}
+			if o.Spec.VPCRef.Name == changed.Spec.VPCRef.Name {
+				reqs = append(reqs, reconcile.Request{NamespacedName: keyOf(o)})
+			}
+		}
+		return reqs
+	})
 }
