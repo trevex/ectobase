@@ -168,6 +168,12 @@ func TestPhase3_HeartbeatScheduleCompileSync_E2E(t *testing.T) {
 		t.Fatalf("dispatch get nic-a for status: %v", err)
 	}
 	curNic.Status.VNI = 1000
+	// Satisfy the compiler's IPAM gate: a NIC only compiles once its overlay IPs are allocated for
+	// the current spec generation. No allocator runs here, so stamp the terminal allocation status
+	// directly (mirrors the real NICIPAMReconciler output).
+	curNic.Status.State = "Allocated"
+	curNic.Status.ObservedGeneration = curNic.Generation
+	curNic.Status.AllocatedIPs = []string{"10.0.0.1"}
 	if err := dispatchClient.Status().Update(ctx, curNic); err != nil {
 		t.Fatalf("dispatch status update nic-a: %v", err)
 	}

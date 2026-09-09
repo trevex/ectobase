@@ -163,6 +163,12 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 			t.Fatalf("dispatch Get %s for status: %v", nic.Name, err)
 		}
 		cur.Status.VNI = vni
+		// Satisfy the IPAM gate on the compiler: a NIC only compiles once its overlay IPs are
+		// allocated for the current spec generation. No allocator runs in this test, so stamp the
+		// terminal allocation status directly (mirrors the real NICIPAMReconciler output).
+		cur.Status.State = "Allocated"
+		cur.Status.ObservedGeneration = cur.Generation
+		cur.Status.AllocatedIPs = []string{"10.0.0.1"}
 		if err := dispatchClient.Status().Update(ctx, cur); err != nil {
 			t.Fatalf("dispatch Status().Update %s: %v", nic.Name, err)
 		}
