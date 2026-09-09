@@ -168,11 +168,17 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 		if !lbMatchesNIC(lb, nic, nicLabels) {
 			continue
 		}
+		// VIP gate: only carry membership for an LB whose VIP the allocator has finalized. An
+		// unallocated (or not-yet-Allocated) LB is skipped so the compiled membership never carries a
+		// stale/absent VIP — the LB status watch re-enqueues the NIC once allocation lands.
+		if lb.Status.State != "Allocated" || lb.Status.AllocatedVIP == "" {
+			continue
+		}
 		ports := make([]compiledv1.CompiledLBPort, 0, len(lb.Spec.Ports))
 		for _, p := range lb.Spec.Ports {
 			ports = append(ports, compiledv1.CompiledLBPort{Port: p.Port, Proto: p.Proto})
 		}
-		compiled.Spec.LB = append(compiled.Spec.LB, compiledv1.CompiledLB{VIP: lb.Spec.VIP, Ports: ports})
+		compiled.Spec.LB = append(compiled.Spec.LB, compiledv1.CompiledLB{VIP: lb.Status.AllocatedVIP, Ports: ports})
 	}
 
 	for _, p := range peerings {
@@ -385,11 +391,12 @@ func (r *CompiledNICReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&compiledv1.CompiledNIC{}).
 		Watches(&netv1.FirewallPolicy{}, handler.EnqueueRequestsFromMapFunc(r.nicsForFirewallPolicy),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Watches(&netv1.LoadBalancer{}, handler.EnqueueRequestsFromMapFunc(r.nicsForLB),
-			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&netv1.VPCPeering{}, handler.EnqueueRequestsFromMapFunc(r.nicsForPeering)).
-		// NATGateway allocations and VPC VNIs land in .status (no generation bump), so these watches
-		// use the default predicate (react to status updates) rather than GenerationChangedPredicate.
+		// LoadBalancer VIPs, NATGateway allocations and VPC VNIs land in .status (no generation bump),
+		// so these watches use the default predicate (react to status updates) rather than
+		// GenerationChangedPredicate. The compiled LB membership sources status.allocatedVIP, so the
+		// NIC must recompile when the VIP is allocated (a status-only update).
+		Watches(&netv1.LoadBalancer{}, handler.EnqueueRequestsFromMapFunc(r.nicsForLB)).
 		Watches(&netv1.NATGateway{}, handler.EnqueueRequestsFromMapFunc(r.nicsForNAT)).
 		Watches(&netv1.VPC{}, handler.EnqueueRequestsFromMapFunc(r.nicsForVPC)).
 		// A VirtualMachine's spec.clusterName (placement) is stamped onto its NICs' CompiledNICs, so

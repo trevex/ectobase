@@ -224,10 +224,10 @@ func TestCompile_LBSelectorMatch(t *testing.T) {
 	lb := netv1.LoadBalancer{
 		ObjectMeta: metav1.ObjectMeta{Name: "web-lb", Namespace: "default"},
 		Spec: netv1.LoadBalancerSpec{
-			VIP:            "203.0.113.50",
 			Ports:          []netv1.LoadBalancerPort{{Port: 443, Proto: "TCP"}},
 			TargetSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
 		},
+		Status: netv1.LoadBalancerStatus{State: "Allocated", AllocatedVIP: "203.0.113.50"},
 	}
 	c := Compile(nic, nic.Status.VNI, nil, []netv1.LoadBalancer{lb}, nil, nil, Placement{ClusterName: "test"})
 	if len(c.Spec.LB) != 1 {
@@ -246,10 +246,10 @@ func TestCompile_LBRefMatch(t *testing.T) {
 	lb := netv1.LoadBalancer{
 		ObjectMeta: metav1.ObjectMeta{Name: "db-lb", Namespace: "default"},
 		Spec: netv1.LoadBalancerSpec{
-			VIP:        "2001:db8::1",
 			Ports:      []netv1.LoadBalancerPort{{Port: 5432, Proto: "TCP"}},
 			TargetRefs: []netv1.LocalObjectReference{{Name: "db-0"}},
 		},
+		Status: netv1.LoadBalancerStatus{State: "Allocated", AllocatedVIP: "2001:db8::1"},
 	}
 	c := Compile(nic, nic.Status.VNI, nil, []netv1.LoadBalancer{lb}, nil, nil, Placement{ClusterName: "test"})
 	if len(c.Spec.LB) != 1 || c.Spec.LB[0].VIP != "2001:db8::1" {
