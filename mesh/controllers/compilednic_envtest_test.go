@@ -96,6 +96,7 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 		nodeName := "node-1"
 		nic.Spec.NodeName = &nodeName
 		mustCreate(ctx, t, direct, nic)
+		markNICAllocated(ctx, t, direct, client.ObjectKey{Namespace: "default", Name: "nic-frontend"}, "10.0.0.10")
 
 		// Create a matching FirewallPolicy with one ingress Allow rule.
 		pol := &netv1.FirewallPolicy{}
@@ -138,6 +139,7 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 		nic.Spec.VPCRef = netv1.LocalObjectReference{Name: "blue"}
 		nic.Spec.IPs = []string{"10.0.0.20"}
 		mustCreate(ctx, t, direct, nic)
+		markNICAllocated(ctx, t, direct, client.ObjectKey{Namespace: "default", Name: "nic-backend"}, "10.0.0.20")
 
 		eventually(t, 15*time.Second, func() error {
 			return checkCompiledNIC(ctx, direct, "default", "default-nic-backend", func(c *compiledv1.CompiledNIC) error {
@@ -242,6 +244,7 @@ func TestCompiledNICControllerEnvtest_DeletedPolicyClearsRule(t *testing.T) {
 	nodeName := "node-1"
 	nic.Spec.NodeName = &nodeName
 	mustCreate(ctx, t, direct, nic)
+	markNICAllocated(ctx, t, direct, client.ObjectKey{Namespace: "default", Name: "nic-green"}, "10.0.20.11")
 
 	// A FirewallPolicy selecting side=green with one ingress Deny of 0.0.0.0/0.
 	pol := &netv1.FirewallPolicy{}
@@ -299,6 +302,24 @@ func TestCompiledNICControllerEnvtest_DeletedPolicyClearsRule(t *testing.T) {
 
 // ptrTo returns a pointer to v (for optional *bool config fields like SkipNameValidation).
 func ptrTo[T any](v T) *T { return &v }
+
+// markNICAllocated stamps the IPAM allocation status the CompiledNIC gate requires: State=Allocated,
+// AllocatedIPs set, and ObservedGeneration == the current spec generation. Without it the compiler
+// gate (see Reconcile) never emits a CompiledNIC, so envtest fixtures must call this after creating
+// a NIC to stand in for the NICIPAM allocator.
+func markNICAllocated(ctx context.Context, t *testing.T, c client.Client, key client.ObjectKey, ips ...string) {
+	t.Helper()
+	var nic netv1.NetworkInterface
+	if err := c.Get(ctx, key, &nic); err != nil {
+		t.Fatalf("get nic %s for allocation: %v", key, err)
+	}
+	nic.Status.State = "Allocated"
+	nic.Status.ObservedGeneration = nic.Generation
+	nic.Status.AllocatedIPs = ips
+	if err := c.Status().Update(ctx, &nic); err != nil {
+		t.Fatalf("mark nic %s allocated: %v", key, err)
+	}
+}
 
 // hasFwRule reports whether the rule list contains a rule with the given CIDR and Action.
 func hasFwRule(rules []compiledv1.CompiledFwRule, cidr, action string) bool {

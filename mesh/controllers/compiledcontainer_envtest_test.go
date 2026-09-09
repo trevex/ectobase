@@ -109,6 +109,7 @@ func TestCompiledContainerControllerEnvtest(t *testing.T) {
 	nic.Spec.IPs = []string{"10.0.0.10"}
 	nic.Spec.MAC = "02:00:00:00:00:aa"
 	mustCreate(ctx, t, direct, nic)
+	markNICAllocated(ctx, t, direct, client.ObjectKey{Namespace: "default", Name: "nic-a"}, "10.0.0.10")
 
 	// The owning Container: placement authority (clusterName + nodeName).
 	ctr := &computev1.Container{}

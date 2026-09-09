@@ -103,7 +103,7 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 		Spec: compiledv1.CompiledNICSpec{
 			VNI:        vni,
 			Port:       port,
-			OverlayIPs: append([]string(nil), nic.Spec.IPs...),
+			OverlayIPs: append([]string(nil), nic.Status.AllocatedIPs...),
 			Firewall:   compiledv1.CompiledFirewall{},
 			MAC:        nic.Spec.MAC,
 		},
@@ -186,9 +186,9 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 	}
 
 	// Egress SNAT: record a CompiledNATSource for every overlay IP a NATGateway has allocated a
-	// block to. Iterating over the NIC's IPs (not the map) keeps output order stable, so an
+	// block to. Iterating over the NIC's allocated IPs (not the map) keeps output order stable, so an
 	// unchanged NIC recompiles to an identical spec (no spurious CompiledNIC write / RV churn).
-	for _, ip := range nic.Spec.IPs {
+	for _, ip := range nic.Status.AllocatedIPs {
 		a, ok := natBySource[ip]
 		if !ok {
 			continue
@@ -300,6 +300,15 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.Client.Get(ctx, req.NamespacedName, &nic); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	// IPAM gate: never compile a NIC whose overlay IPs are not yet allocated for
+	// the current spec generation. The NIC status watch re-enqueues when the
+	// allocator finishes; a spec edit bumps Generation (de-gating) until the
+	// allocator re-runs. Downstream therefore only ever sees final addresses.
+	if nic.Status.State != "Allocated" ||
+		nic.Status.ObservedGeneration != nic.Generation ||
+		len(nic.Status.AllocatedIPs) == 0 {
+		return ctrl.Result{}, nil
+	}
 	var policies netv1.FirewallPolicyList
 	if err := r.Client.List(ctx, &policies, client.InNamespace(nic.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list firewallpolicies: %w", err)
@@ -409,7 +418,7 @@ func (r *CompiledNICReconciler) nicsForNAT(ctx context.Context, obj client.Objec
 	}
 	var reqs []reconcile.Request
 	for i := range nics.Items {
-		for _, ip := range nics.Items[i].Spec.IPs {
+		for _, ip := range nics.Items[i].Status.AllocatedIPs {
 			if _, ok := sources[ip]; ok {
 				reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{
 					Namespace: nics.Items[i].Namespace, Name: nics.Items[i].Name,

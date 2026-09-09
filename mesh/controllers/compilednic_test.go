@@ -30,8 +30,11 @@ func testNIC() *netv1.NetworkInterface {
 	nic.Namespace = "default"
 	nic.Labels = map[string]string{"role": "frontend"}
 	nic.Spec.VPCRef = netv1.LocalObjectReference{Name: "blue"}
-	nic.Spec.IPs = []string{"10.0.0.10"}
 	nic.Spec.NodeName = &node
+	// Overlay IPs are the allocator's output (status.allocatedIPs), not the request (spec.ips):
+	// Compile sources OverlayIPs and egress-SNAT sources from status.
+	nic.Status.State = "Allocated"
+	nic.Status.AllocatedIPs = []string{"10.0.0.10"}
 	nic.Status.VNI = 100
 	nic.Status.UnderlayRoute = "2001:db8:fefe::bb"
 	nic.Status.Port = &netv1.PortStatus{
@@ -397,7 +400,7 @@ func TestReconcile_NoWriteWhenUnchanged(t *testing.T) {
 	nic := &netv1.NetworkInterface{
 		ObjectMeta: metav1.ObjectMeta{Name: "web-0", Namespace: "default", Labels: map[string]string{"app": "web"}},
 		Spec:       netv1.NetworkInterfaceSpec{NodeName: &node},
-		Status:     netv1.NetworkInterfaceStatus{VNI: 100, UnderlayRoute: "2001:db8::dd"},
+		Status:     netv1.NetworkInterfaceStatus{State: "Allocated", AllocatedIPs: []string{"10.0.0.30"}, VNI: 100, UnderlayRoute: "2001:db8::dd"},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(nic).Build()
 	r := &CompiledNICReconciler{Client: cl}
