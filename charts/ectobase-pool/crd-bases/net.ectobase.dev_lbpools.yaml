@@ -1,0 +1,75 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: lbpools.net.ectobase.dev
+spec:
+  group: net.ectobase.dev
+  names:
+    kind: LBPool
+    listKind: LBPoolList
+    plural: lbpools
+    singular: lbpool
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped
+              VIP prefix range).
+            properties:
+              reservedIPs:
+                description: ReservedIPs are addresses held back from allocation within
+                  this pool.
+                items:
+                  type: string
+                type: array
+              v4Prefix:
+                description: V4Prefix optionally pins the IPv4 CIDR for this VIP pool.
+                type: string
+              v6Prefix:
+                description: V6Prefix optionally pins the IPv6 CIDR for this VIP pool.
+                type: string
+            type: object
+          status:
+            description: LBPoolStatus is the observed state of an LBPool.
+            properties:
+              state:
+                description: State is the current lifecycle state (e.g. Pending, Ready).
+                type: string
+              total:
+                description: Total is the total number of allocatable VIP addresses.
+                format: int32
+                type: integer
+              used:
+                description: Used is the number of allocated VIP addresses.
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

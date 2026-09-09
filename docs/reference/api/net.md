@@ -13,6 +13,7 @@ the aggregated apiserver and consumed as CRDs by the mesh control plane.
 ### Resource Types
 - [FirewallPolicy](#firewallpolicy)
 - [FloatingIP](#floatingip)
+- [LBPool](#lbpool)
 - [LoadBalancer](#loadbalancer)
 - [NATGateway](#natgateway)
 - [NetworkInterface](#networkinterface)
@@ -183,6 +184,64 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `egress` _[EgressQoS](#egressqos)_ | Egress shapes outbound (VM->out) throughput. |  | Optional: \{\} <br /> |
 | `ingress` _[RateLimit](#ratelimit)_ | Ingress polices inbound (out->VM) throughput. |  | Optional: \{\} <br /> |
+
+
+#### LBPool
+
+
+
+LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.
+
+
+
+_Appears in:_
+- [LBPoolList](#lbpoollist)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `apiVersion` _string_ | `net.ectobase.dev/v1alpha1` | | |
+| `kind` _string_ | `LBPool` | | |
+| `metadata` _[ObjectMeta](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#objectmeta-v1-meta)_ | Refer to Kubernetes API documentation for fields of `metadata`. |  |  |
+| `spec` _[LBPoolSpec](#lbpoolspec)_ |  |  |  |
+| `status` _[LBPoolStatus](#lbpoolstatus)_ |  |  |  |
+
+
+
+
+#### LBPoolSpec
+
+
+
+LBPoolSpec is the desired state of an LBPool (a fleet-scoped VIP prefix range).
+
+
+
+_Appears in:_
+- [LBPool](#lbpool)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `v4Prefix` _string_ | V4Prefix optionally pins the IPv4 CIDR for this VIP pool. |  | Optional: \{\} <br /> |
+| `v6Prefix` _string_ | V6Prefix optionally pins the IPv6 CIDR for this VIP pool. |  | Optional: \{\} <br /> |
+| `reservedIPs` _string array_ | ReservedIPs are addresses held back from allocation within this pool. |  | Optional: \{\} <br /> |
+
+
+#### LBPoolStatus
+
+
+
+LBPoolStatus is the observed state of an LBPool.
+
+
+
+_Appears in:_
+- [LBPool](#lbpool)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `state` _string_ | State is the current lifecycle state (e.g. Pending, Ready). |  | Optional: \{\} <br /> |
+| `used` _integer_ | Used is the number of allocated VIP addresses. |  | Optional: \{\} <br /> |
+| `total` _integer_ | Total is the total number of allocatable VIP addresses. |  | Optional: \{\} <br /> |
 
 
 #### LoadBalancer

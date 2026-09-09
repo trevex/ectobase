@@ -61,6 +61,26 @@ func (in InterfaceQoS) OpenAPIModelName() string {
 }
 
 // OpenAPIModelName returns the OpenAPI model name for this type.
+func (in LBPool) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.LBPool"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in LBPoolList) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.LBPoolList"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in LBPoolSpec) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.LBPoolSpec"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in LBPoolStatus) OpenAPIModelName() string {
+	return "dev.ectobase.net.v1alpha1.LBPoolStatus"
+}
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
 func (in LoadBalancer) OpenAPIModelName() string {
 	return "dev.ectobase.net.v1alpha1.LoadBalancer"
 }

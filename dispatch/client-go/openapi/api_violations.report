@@ -19,6 +19,7 @@ API rule violation: list_type_missing,github.com/trevex/ectobase/api/compute/v1a
 API rule violation: list_type_missing,github.com/trevex/ectobase/api/compute/v1alpha1,VirtualMachineSpec,VolumeRefs
 API rule violation: list_type_missing,github.com/trevex/ectobase/api/net/v1alpha1,FirewallPolicySpec,Egress
 API rule violation: list_type_missing,github.com/trevex/ectobase/api/net/v1alpha1,FirewallPolicySpec,Ingress
+API rule violation: list_type_missing,github.com/trevex/ectobase/api/net/v1alpha1,LBPoolSpec,ReservedIPs
 API rule violation: list_type_missing,github.com/trevex/ectobase/api/net/v1alpha1,LoadBalancerSpec,Ports
 API rule violation: list_type_missing,github.com/trevex/ectobase/api/net/v1alpha1,LoadBalancerSpec,TargetRefs
 API rule violation: list_type_missing,github.com/trevex/ectobase/api/net/v1alpha1,NATGatewaySpec,PublicIPs

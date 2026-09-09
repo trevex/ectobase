@@ -73,6 +73,10 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		netv1alpha1.FloatingIPSpec{}.OpenAPIModelName():              schema_ectobase_api_net_v1alpha1_FloatingIPSpec(ref),
 		netv1alpha1.FloatingIPStatus{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_FloatingIPStatus(ref),
 		netv1alpha1.InterfaceQoS{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_InterfaceQoS(ref),
+		netv1alpha1.LBPool{}.OpenAPIModelName():                      schema_ectobase_api_net_v1alpha1_LBPool(ref),
+		netv1alpha1.LBPoolList{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_LBPoolList(ref),
+		netv1alpha1.LBPoolSpec{}.OpenAPIModelName():                  schema_ectobase_api_net_v1alpha1_LBPoolSpec(ref),
+		netv1alpha1.LBPoolStatus{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_LBPoolStatus(ref),
 		netv1alpha1.LoadBalancer{}.OpenAPIModelName():                schema_ectobase_api_net_v1alpha1_LoadBalancer(ref),
 		netv1alpha1.LoadBalancerList{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_LoadBalancerList(ref),
 		netv1alpha1.LoadBalancerPort{}.OpenAPIModelName():            schema_ectobase_api_net_v1alpha1_LoadBalancerPort(ref),
@@ -2564,6 +2568,178 @@ func schema_ectobase_api_net_v1alpha1_InterfaceQoS(ref common.ReferenceCallback)
 		},
 		Dependencies: []string{
 			netv1alpha1.EgressQoS{}.OpenAPIModelName(), netv1alpha1.RateLimit{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_LBPool(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ObjectMeta{}.OpenAPIModelName()),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(netv1alpha1.LBPoolSpec{}.OpenAPIModelName()),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(netv1alpha1.LBPoolStatus{}.OpenAPIModelName()),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			netv1alpha1.LBPoolSpec{}.OpenAPIModelName(), netv1alpha1.LBPoolStatus{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_LBPoolList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "LBPoolList is a list of LBPool objects.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref(metav1.ListMeta{}.OpenAPIModelName()),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref(netv1alpha1.LBPool{}.OpenAPIModelName()),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			netv1alpha1.LBPool{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_LBPoolSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "LBPoolSpec is the desired state of an LBPool (a fleet-scoped VIP prefix range).",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"v4Prefix": {
+						SchemaProps: spec.SchemaProps{
+							Description: "V4Prefix optionally pins the IPv4 CIDR for this VIP pool.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"v6Prefix": {
+						SchemaProps: spec.SchemaProps{
+							Description: "V6Prefix optionally pins the IPv6 CIDR for this VIP pool.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"reservedIPs": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ReservedIPs are addresses held back from allocation within this pool.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_net_v1alpha1_LBPoolStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "LBPoolStatus is the observed state of an LBPool.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"state": {
+						SchemaProps: spec.SchemaProps{
+							Description: "State is the current lifecycle state (e.g. Pending, Ready).",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"used": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Used is the number of allocated VIP addresses.",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"total": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Total is the total number of allocatable VIP addresses.",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+				},
+			},
+		},
 	}
 }
 
