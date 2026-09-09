@@ -117,3 +117,20 @@ func TestNICExhaustion(t *testing.T) {
 		t.Fatalf("state = %q want Exhausted", g.Status.State)
 	}
 }
+
+func TestNICAdoptsLegacyIPs(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = netv1.AddToScheme(scheme)
+	sub := readySubnet("s", "blue", "10.0.1.0/24", "")
+	legacy := nic("legacy", "blue", "s", "10.0.1.77")
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sub, legacy).WithStatusSubresource(&netv1.NetworkInterface{}).Build()
+	r := &NICIPAMReconciler{Client: cl, APIReader: cl}
+	if err := r.Sync(context.Background(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	var g netv1.NetworkInterface
+	_ = cl.Get(context.Background(), keyOf(legacy), &g)
+	if g.Status.State != "Allocated" || len(g.Status.AllocatedIPs) != 1 || g.Status.AllocatedIPs[0] != "10.0.1.77" {
+		t.Fatalf("legacy adoption = %+v want [10.0.1.77]", g.Status)
+	}
+}
