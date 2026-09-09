@@ -36,6 +36,28 @@ func nic(name, vpc, subnet string, ips ...string) *netv1.NetworkInterface {
 	}
 }
 
+func TestNICPeersNeedingRetry(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = netv1.AddToScheme(scheme)
+	// stuck peer in same VPC, a Ready peer, and a different-VPC stuck peer
+	stuck := nic("stuck", "blue", "s")
+	stuck.Status.State = "Exhausted"
+	ready := nic("ready", "blue", "s")
+	ready.Status.State = "Allocated"
+	other := nic("other", "green", "s2")
+	other.Status.State = "Exhausted"
+	gone := nic("gone", "blue", "s")
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(stuck, ready, other).Build()
+
+	reqs := nicPeersNeedingRetry(context.Background(), cl, gone)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want exactly 1 (stuck): %v", len(reqs), reqs)
+	}
+	if reqs[0].Name != "stuck" {
+		t.Fatalf("got %q, want stuck (not ready/Allocated, not other/different-VPC)", reqs[0].Name)
+	}
+}
+
 func TestNICAllocateAndAdopt(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := netv1.AddToScheme(scheme); err != nil {

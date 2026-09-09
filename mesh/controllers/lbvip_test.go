@@ -26,6 +26,28 @@ func lb(name, pool, vip string) *netv1.LoadBalancer {
 	}
 }
 
+func TestLBPeersNeedingRetry(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = netv1.AddToScheme(scheme)
+	// stuck peer on same pool, a Ready peer, and a different-pool stuck peer
+	stuck := lb("stuck", "p", "")
+	stuck.Status.State = "Exhausted"
+	ready := lb("ready", "p", "")
+	ready.Status.State = "Allocated"
+	other := lb("other", "q", "")
+	other.Status.State = "Exhausted"
+	gone := lb("gone", "p", "")
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(stuck, ready, other).Build()
+
+	reqs := lbPeersNeedingRetry(context.Background(), cl, gone)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want exactly 1 (stuck): %v", len(reqs), reqs)
+	}
+	if reqs[0].Name != "stuck" {
+		t.Fatalf("got %q, want stuck (not ready/Allocated, not other/different-pool)", reqs[0].Name)
+	}
+}
+
 func TestLBVIPAllocateAndAdopt(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = netv1.AddToScheme(scheme)

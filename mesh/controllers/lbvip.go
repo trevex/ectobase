@@ -11,9 +11,12 @@ import (
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	"github.com/trevex/ectobase/mesh/allocator"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -190,8 +193,56 @@ func (r *LBVIPReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&netv1.LoadBalancer{}).
 		Watches(&netv1.LBPool{}, r.lbsForPool()).
+		// Delete-only watch on the LB's own type: when a sibling LB is deleted
+		// (freeing a VIP), re-enqueue same-pool peers parked in Exhausted/Pending
+		// so they retry immediately instead of waiting for the ~10h resync. The
+		// predicate suppresses create/update/generic so ordinary status churn does
+		// not amplify reconciles.
+		Watches(&netv1.LoadBalancer{}, r.peersNeedingRetry(),
+			builder.WithPredicates(predicate.Funcs{
+				CreateFunc:  func(event.CreateEvent) bool { return false },
+				UpdateFunc:  func(event.UpdateEvent) bool { return false },
+				DeleteFunc:  func(event.DeleteEvent) bool { return true },
+				GenericFunc: func(event.GenericEvent) bool { return false },
+			})).
 		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)
+}
+
+// peersNeedingRetry re-enqueues same-pool LoadBalancers parked in Exhausted/Pending
+// when a sibling is deleted (freeing a VIP), instead of waiting for resync.
+func (r *LBVIPReconciler) peersNeedingRetry() handler.EventHandler {
+	return handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+		gone, ok := obj.(*netv1.LoadBalancer)
+		if !ok {
+			return nil
+		}
+		return lbPeersNeedingRetry(ctx, r.Client, gone)
+	})
+}
+
+// lbPeersNeedingRetry lists same-namespace LoadBalancers and returns reconcile
+// requests for every OTHER LB backed by gone's pool whose State is Exhausted or
+// Pending — the ones that a freed VIP may now let allocate.
+func lbPeersNeedingRetry(ctx context.Context, c client.Client, gone *netv1.LoadBalancer) []reconcile.Request {
+	var list netv1.LoadBalancerList
+	if err := c.List(ctx, &list, client.InNamespace(gone.Namespace)); err != nil {
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range list.Items {
+		o := &list.Items[i]
+		if o.Name == gone.Name && o.Namespace == gone.Namespace {
+			continue
+		}
+		if o.Spec.PoolRef.Name != gone.Spec.PoolRef.Name {
+			continue
+		}
+		if o.Status.State == "Exhausted" || o.Status.State == "Pending" {
+			reqs = append(reqs, reconcile.Request{NamespacedName: keyOf(o)})
+		}
+	}
+	return reqs
 }
 
 // lbsForPool re-enqueues LoadBalancers referencing a pool when the LBPool
