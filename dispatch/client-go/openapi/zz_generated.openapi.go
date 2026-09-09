@@ -3308,7 +3308,7 @@ func schema_ectobase_api_net_v1alpha1_NetworkInterfaceSpec(ref common.ReferenceC
 					},
 					"ips": {
 						SchemaProps: spec.SchemaProps{
-							Description: "IPs are the user-specified overlay IPs (v4 and/or v6). The platform does not allocate these.",
+							Description: "IPs is the requested overlay set. Empty => the platform allocates from the subnet. Populated => the requested IPs are validated for subnet membership and uniqueness, then reserved (bring-your-own).",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
@@ -3346,6 +3346,13 @@ func schema_ectobase_api_net_v1alpha1_NetworkInterfaceSpec(ref common.ReferenceC
 							Description: "ClusterName is the compute cluster this standalone (e.g. Pod) NIC targets. The compiler uses it for placement (CompiledNIC.spec.clusterName) when no VirtualMachine owns this NIC; an owning VM's placement takes precedence.",
 							Type:        []string{"string"},
 							Format:      "",
+						},
+					},
+					"subnetRef": {
+						SchemaProps: spec.SchemaProps{
+							Description: "SubnetRef selects the Subnet to allocate from. Optional when the VPC has exactly one Subnet, in which case that Subnet is used.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 						},
 					},
 				},
@@ -3389,6 +3396,28 @@ func schema_ectobase_api_net_v1alpha1_NetworkInterfaceStatus(ref common.Referenc
 							Description: "State is the current lifecycle state (e.g. Pending, Ready).",
 							Type:        []string{"string"},
 							Format:      "",
+						},
+					},
+					"allocatedIPs": {
+						SchemaProps: spec.SchemaProps{
+							Description: "AllocatedIPs is the authoritative overlay address set assigned by the IP allocator. CompiledNIC.Spec.OverlayIPs is sourced from this, never Spec.IPs.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"observedGeneration": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ObservedGeneration is the Spec generation the allocation reflects. Compile is gated on ObservedGeneration == metadata.generation.",
+							Type:        []string{"integer"},
+							Format:      "int64",
 						},
 					},
 				},

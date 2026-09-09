@@ -11,8 +11,13 @@ import (
 type NetworkInterfaceSpec struct {
 	// VPCRef references the VPC this interface belongs to.
 	VPCRef LocalObjectReference
-	// IPs are the user-specified overlay IPs (v4 and/or v6).
+	// IPs is the requested overlay set. Empty => the platform allocates from
+	// the subnet. Populated => the requested IPs are validated for subnet
+	// membership and uniqueness, then reserved (bring-your-own).
 	IPs []string
+	// SubnetRef selects the Subnet to allocate from. Optional when the VPC has
+	// exactly one Subnet, in which case that Subnet is used.
+	SubnetRef LocalObjectReference
 	// MAC is the interface's L2 address.
 	MAC string
 	// NodeName is the node the interface is scheduled onto.
@@ -59,6 +64,12 @@ type NetworkInterfaceStatus struct {
 	Port *PortStatus
 	// State is the current lifecycle state (e.g. Pending, Ready).
 	State string
+	// AllocatedIPs is the authoritative overlay address set assigned by the IP
+	// allocator. CompiledNIC.Spec.OverlayIPs is sourced from this, never Spec.IPs.
+	AllocatedIPs []string
+	// ObservedGeneration is the Spec generation the allocation reflects. Compile
+	// is gated on ObservedGeneration == metadata.generation.
+	ObservedGeneration int64
 }
 
 // +genclient

@@ -49,8 +49,9 @@ spec:
                 type: string
               ips:
                 description: |-
-                  IPs are the user-specified overlay IPs (v4 and/or v6). The platform does
-                  not allocate these.
+                  IPs is the requested overlay set. Empty => the platform allocates from
+                  the subnet. Populated => the requested IPs are validated for subnet
+                  membership and uniqueness, then reserved (bring-your-own).
                 items:
                   type: string
                 type: array
@@ -102,6 +103,17 @@ spec:
                         type: integer
                     type: object
                 type: object
+              subnetRef:
+                description: |-
+                  SubnetRef selects the Subnet to allocate from. Optional when the VPC has
+                  exactly one Subnet, in which case that Subnet is used.
+                properties:
+                  name:
+                    description: Name is the name of the referenced object.
+                    type: string
+                required:
+                - name
+                type: object
               vpcRef:
                 description: VPCRef references the VPC this interface belongs to.
                 properties:
@@ -117,6 +129,19 @@ spec:
           status:
             description: NetworkInterfaceStatus is the observed state of a NetworkInterface.
             properties:
+              allocatedIPs:
+                description: |-
+                  AllocatedIPs is the authoritative overlay address set assigned by the IP
+                  allocator. CompiledNIC.Spec.OverlayIPs is sourced from this, never Spec.IPs.
+                items:
+                  type: string
+                type: array
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the Spec generation the allocation reflects. Compile
+                  is gated on ObservedGeneration == metadata.generation.
+                format: int64
+                type: integer
               port:
                 description: Port describes the dataplane port allocated for this
                   interface.

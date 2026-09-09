@@ -454,11 +454,12 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `vpcRef` _[LocalObjectReference](#localobjectreference)_ | VPCRef references the VPC this interface belongs to. |  |  |
-| `ips` _string array_ | IPs are the user-specified overlay IPs (v4 and/or v6). The platform does<br />not allocate these. |  | Optional: \{\} <br /> |
+| `ips` _string array_ | IPs is the requested overlay set. Empty => the platform allocates from<br />the subnet. Populated => the requested IPs are validated for subnet<br />membership and uniqueness, then reserved (bring-your-own). |  | Optional: \{\} <br /> |
 | `mac` _string_ | MAC is the interface's L2 address. REQUIRED for a KubeVirt VM (device_type<br />pod-tap/tap): the datapath programs this as the guest MAC, and the VMI's<br />spec.domain.devices.interfaces[].macAddress MUST be set to the same value so<br />KubeVirt gives the VM's virtio NIC that MAC. Empty for containers (derived). |  | Optional: \{\} <br /> |
 | `nodeName` _string_ | NodeName is the node the interface is scheduled onto. Set by the scheduler. |  | Optional: \{\} <br /> |
 | `qos` _[InterfaceQoS](#interfaceqos)_ | QoS caps/shapes throughput for this interface. Nil = unlimited. |  | Optional: \{\} <br /> |
 | `clusterName` _string_ | ClusterName is the compute cluster this standalone (e.g. Pod) NIC targets. The<br />compiler uses it for placement (CompiledNIC.spec.clusterName) when no<br />VirtualMachine owns this NIC; an owning VM's placement takes precedence. |  | Optional: \{\} <br /> |
+| `subnetRef` _[LocalObjectReference](#localobjectreference)_ | SubnetRef selects the Subnet to allocate from. Optional when the VPC has<br />exactly one Subnet, in which case that Subnet is used. |  | Optional: \{\} <br /> |
 
 
 #### NetworkInterfaceStatus
@@ -478,6 +479,8 @@ _Appears in:_
 | `underlayRoute` _string_ | UnderlayRoute is the allocated underlay /128 from the host's underlay /64. |  | Optional: \{\} <br /> |
 | `port` _[PortStatus](#portstatus)_ | Port describes the dataplane port allocated for this interface. |  | Optional: \{\} <br /> |
 | `state` _string_ | State is the current lifecycle state (e.g. Pending, Ready). |  | Optional: \{\} <br /> |
+| `allocatedIPs` _string array_ | AllocatedIPs is the authoritative overlay address set assigned by the IP<br />allocator. CompiledNIC.Spec.OverlayIPs is sourced from this, never Spec.IPs. |  | Optional: \{\} <br /> |
+| `observedGeneration` _integer_ | ObservedGeneration is the Spec generation the allocation reflects. Compile<br />is gated on ObservedGeneration == metadata.generation. |  | Optional: \{\} <br /> |
 
 
 #### PortStatus

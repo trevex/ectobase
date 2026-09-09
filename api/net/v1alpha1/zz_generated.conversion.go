@@ -1142,7 +1142,17 @@ func Convert_net_NetworkInterface_To_v1alpha1_NetworkInterface(in *net.NetworkIn
 
 func autoConvert_v1alpha1_NetworkInterfaceList_To_net_NetworkInterfaceList(in *NetworkInterfaceList, out *net.NetworkInterfaceList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]net.NetworkInterface)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]net.NetworkInterface, len(*in))
+		for i := range *in {
+			if err := Convert_v1alpha1_NetworkInterface_To_net_NetworkInterface(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -1153,7 +1163,17 @@ func Convert_v1alpha1_NetworkInterfaceList_To_net_NetworkInterfaceList(in *Netwo
 
 func autoConvert_net_NetworkInterfaceList_To_v1alpha1_NetworkInterfaceList(in *net.NetworkInterfaceList, out *NetworkInterfaceList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]NetworkInterface)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]NetworkInterface, len(*in))
+		for i := range *in {
+			if err := Convert_net_NetworkInterface_To_v1alpha1_NetworkInterface(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -1171,6 +1191,9 @@ func autoConvert_v1alpha1_NetworkInterfaceSpec_To_net_NetworkInterfaceSpec(in *N
 	out.NodeName = (*string)(unsafe.Pointer(in.NodeName))
 	out.QoS = (*net.InterfaceQoS)(unsafe.Pointer(in.QoS))
 	out.ClusterName = in.ClusterName
+	if err := Convert_v1alpha1_LocalObjectReference_To_net_LocalObjectReference(&in.SubnetRef, &out.SubnetRef, s); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1184,6 +1207,9 @@ func autoConvert_net_NetworkInterfaceSpec_To_v1alpha1_NetworkInterfaceSpec(in *n
 		return err
 	}
 	out.IPs = *(*[]string)(unsafe.Pointer(&in.IPs))
+	if err := Convert_net_LocalObjectReference_To_v1alpha1_LocalObjectReference(&in.SubnetRef, &out.SubnetRef, s); err != nil {
+		return err
+	}
 	out.MAC = in.MAC
 	out.NodeName = (*string)(unsafe.Pointer(in.NodeName))
 	out.QoS = (*InterfaceQoS)(unsafe.Pointer(in.QoS))
@@ -1201,6 +1227,8 @@ func autoConvert_v1alpha1_NetworkInterfaceStatus_To_net_NetworkInterfaceStatus(i
 	out.UnderlayRoute = in.UnderlayRoute
 	out.Port = (*net.PortStatus)(unsafe.Pointer(in.Port))
 	out.State = in.State
+	out.AllocatedIPs = *(*[]string)(unsafe.Pointer(&in.AllocatedIPs))
+	out.ObservedGeneration = in.ObservedGeneration
 	return nil
 }
 
@@ -1214,6 +1242,8 @@ func autoConvert_net_NetworkInterfaceStatus_To_v1alpha1_NetworkInterfaceStatus(i
 	out.UnderlayRoute = in.UnderlayRoute
 	out.Port = (*PortStatus)(unsafe.Pointer(in.Port))
 	out.State = in.State
+	out.AllocatedIPs = *(*[]string)(unsafe.Pointer(&in.AllocatedIPs))
+	out.ObservedGeneration = in.ObservedGeneration
 	return nil
 }
 

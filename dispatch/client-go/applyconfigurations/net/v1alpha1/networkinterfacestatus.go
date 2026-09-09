@@ -15,6 +15,12 @@ type NetworkInterfaceStatusApplyConfiguration struct {
 	Port *PortStatusApplyConfiguration `json:"port,omitempty"`
 	// State is the current lifecycle state (e.g. Pending, Ready).
 	State *string `json:"state,omitempty"`
+	// AllocatedIPs is the authoritative overlay address set assigned by the IP
+	// allocator. CompiledNIC.Spec.OverlayIPs is sourced from this, never Spec.IPs.
+	AllocatedIPs []string `json:"allocatedIPs,omitempty"`
+	// ObservedGeneration is the Spec generation the allocation reflects. Compile
+	// is gated on ObservedGeneration == metadata.generation.
+	ObservedGeneration *int64 `json:"observedGeneration,omitempty"`
 }
 
 // NetworkInterfaceStatusApplyConfiguration constructs a declarative configuration of the NetworkInterfaceStatus type for use with
@@ -52,5 +58,23 @@ func (b *NetworkInterfaceStatusApplyConfiguration) WithPort(value *PortStatusApp
 // If called multiple times, the State field is set to the value of the last call.
 func (b *NetworkInterfaceStatusApplyConfiguration) WithState(value string) *NetworkInterfaceStatusApplyConfiguration {
 	b.State = &value
+	return b
+}
+
+// WithAllocatedIPs adds the given value to the AllocatedIPs field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the AllocatedIPs field.
+func (b *NetworkInterfaceStatusApplyConfiguration) WithAllocatedIPs(values ...string) *NetworkInterfaceStatusApplyConfiguration {
+	for i := range values {
+		b.AllocatedIPs = append(b.AllocatedIPs, values[i])
+	}
+	return b
+}
+
+// WithObservedGeneration sets the ObservedGeneration field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the ObservedGeneration field is set to the value of the last call.
+func (b *NetworkInterfaceStatusApplyConfiguration) WithObservedGeneration(value int64) *NetworkInterfaceStatusApplyConfiguration {
+	b.ObservedGeneration = &value
 	return b
 }

@@ -712,6 +712,7 @@ func (in *NetworkInterfaceSpec) DeepCopyInto(out *NetworkInterfaceSpec) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	out.SubnetRef = in.SubnetRef
 	if in.NodeName != nil {
 		in, out := &in.NodeName, &out.NodeName
 		*out = new(string)
@@ -742,6 +743,11 @@ func (in *NetworkInterfaceStatus) DeepCopyInto(out *NetworkInterfaceStatus) {
 		in, out := &in.Port, &out.Port
 		*out = new(PortStatus)
 		**out = **in
+	}
+	if in.AllocatedIPs != nil {
+		in, out := &in.AllocatedIPs, &out.AllocatedIPs
+		*out = make([]string, len(*in))
+		copy(*out, *in)
 	}
 	return
 }

@@ -11,8 +11,9 @@ import (
 type NetworkInterfaceSpec struct {
 	// VPCRef references the VPC this interface belongs to.
 	VPCRef LocalObjectReference `json:"vpcRef" protobuf:"bytes,1,opt,name=vpcRef"`
-	// IPs are the user-specified overlay IPs (v4 and/or v6). The platform does
-	// not allocate these.
+	// IPs is the requested overlay set. Empty => the platform allocates from
+	// the subnet. Populated => the requested IPs are validated for subnet
+	// membership and uniqueness, then reserved (bring-your-own).
 	// +optional
 	IPs []string `json:"ips,omitempty" protobuf:"bytes,2,rep,name=ips"`
 	// MAC is the interface's L2 address. REQUIRED for a KubeVirt VM (device_type
@@ -32,6 +33,10 @@ type NetworkInterfaceSpec struct {
 	// VirtualMachine owns this NIC; an owning VM's placement takes precedence.
 	// +optional
 	ClusterName string `json:"clusterName,omitempty" protobuf:"bytes,6,opt,name=clusterName"`
+	// SubnetRef selects the Subnet to allocate from. Optional when the VPC has
+	// exactly one Subnet, in which case that Subnet is used.
+	// +optional
+	SubnetRef LocalObjectReference `json:"subnetRef,omitempty" protobuf:"bytes,7,opt,name=subnetRef"`
 }
 
 // InterfaceQoS is per-interface traffic control. Egress is EDT-shaped (smoothed) at the uplink fq
@@ -82,6 +87,14 @@ type NetworkInterfaceStatus struct {
 	// State is the current lifecycle state (e.g. Pending, Ready).
 	// +optional
 	State string `json:"state,omitempty" protobuf:"bytes,4,opt,name=state"`
+	// AllocatedIPs is the authoritative overlay address set assigned by the IP
+	// allocator. CompiledNIC.Spec.OverlayIPs is sourced from this, never Spec.IPs.
+	// +optional
+	AllocatedIPs []string `json:"allocatedIPs,omitempty" protobuf:"bytes,5,rep,name=allocatedIPs"`
+	// ObservedGeneration is the Spec generation the allocation reflects. Compile
+	// is gated on ObservedGeneration == metadata.generation.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty" protobuf:"varint,6,opt,name=observedGeneration"`
 }
 
 // +genclient

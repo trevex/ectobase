@@ -9,8 +9,9 @@ package v1alpha1
 type NetworkInterfaceSpecApplyConfiguration struct {
 	// VPCRef references the VPC this interface belongs to.
 	VPCRef *LocalObjectReferenceApplyConfiguration `json:"vpcRef,omitempty"`
-	// IPs are the user-specified overlay IPs (v4 and/or v6). The platform does
-	// not allocate these.
+	// IPs is the requested overlay set. Empty => the platform allocates from
+	// the subnet. Populated => the requested IPs are validated for subnet
+	// membership and uniqueness, then reserved (bring-your-own).
 	IPs []string `json:"ips,omitempty"`
 	// MAC is the interface's L2 address. REQUIRED for a KubeVirt VM (device_type
 	// pod-tap/tap): the datapath programs this as the guest MAC, and the VMI's
@@ -25,6 +26,9 @@ type NetworkInterfaceSpecApplyConfiguration struct {
 	// compiler uses it for placement (CompiledNIC.spec.clusterName) when no
 	// VirtualMachine owns this NIC; an owning VM's placement takes precedence.
 	ClusterName *string `json:"clusterName,omitempty"`
+	// SubnetRef selects the Subnet to allocate from. Optional when the VPC has
+	// exactly one Subnet, in which case that Subnet is used.
+	SubnetRef *LocalObjectReferenceApplyConfiguration `json:"subnetRef,omitempty"`
 }
 
 // NetworkInterfaceSpecApplyConfiguration constructs a declarative configuration of the NetworkInterfaceSpec type for use with
@@ -80,5 +84,13 @@ func (b *NetworkInterfaceSpecApplyConfiguration) WithQoS(value *InterfaceQoSAppl
 // If called multiple times, the ClusterName field is set to the value of the last call.
 func (b *NetworkInterfaceSpecApplyConfiguration) WithClusterName(value string) *NetworkInterfaceSpecApplyConfiguration {
 	b.ClusterName = &value
+	return b
+}
+
+// WithSubnetRef sets the SubnetRef field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the SubnetRef field is set to the value of the last call.
+func (b *NetworkInterfaceSpecApplyConfiguration) WithSubnetRef(value *LocalObjectReferenceApplyConfiguration) *NetworkInterfaceSpecApplyConfiguration {
+	b.SubnetRef = value
 	return b
 }
