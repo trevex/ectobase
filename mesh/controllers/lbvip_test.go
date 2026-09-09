@@ -50,3 +50,46 @@ func TestLBVIPAllocateAndAdopt(t *testing.T) {
 		t.Fatalf("auto = %+v want .1", g.Status)
 	}
 }
+
+func TestLBVIPStickyAcrossGenerationBump(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = netv1.AddToScheme(scheme)
+	pool := readyPool("p", "198.51.100.0/24")
+	a := lb("a", "p", "") // auto
+	b := lb("b", "p", "") // auto
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool, a, b).WithStatusSubresource(&netv1.LoadBalancer{}).Build()
+	r := &LBVIPReconciler{Client: cl, APIReader: cl}
+	ctx := context.Background()
+	_ = r.Sync(ctx, a) // a -> .1
+	_ = r.Sync(ctx, b) // b -> .2
+
+	// free the lower address by deleting a
+	var ga netv1.LoadBalancer
+	_ = cl.Get(ctx, keyOf(a), &ga)
+	if err := cl.Delete(ctx, &ga); err != nil {
+		t.Fatal(err)
+	}
+
+	var gb netv1.LoadBalancer
+	_ = cl.Get(ctx, keyOf(b), &gb)
+	if gb.Status.AllocatedVIP != "198.51.100.2" {
+		t.Fatalf("precondition: b should have .2, got %v", gb.Status.AllocatedVIP)
+	}
+	gb.Generation = 2
+	if err := cl.Update(ctx, &gb); err != nil {
+		t.Fatal(err)
+	}
+	_ = cl.Get(ctx, keyOf(b), &gb)
+	gb.Generation = 2
+	if err := r.Sync(ctx, &gb); err != nil {
+		t.Fatal(err)
+	}
+	var got netv1.LoadBalancer
+	_ = cl.Get(ctx, keyOf(b), &got)
+	if got.Status.AllocatedVIP != "198.51.100.2" {
+		t.Fatalf("b VIP renumbered on unrelated edit: got %v want 198.51.100.2 (sticky)", got.Status.AllocatedVIP)
+	}
+	if got.Status.ObservedGeneration != 2 {
+		t.Fatalf("observedGeneration = %d want 2", got.Status.ObservedGeneration)
+	}
+}

@@ -65,6 +65,13 @@ func (r *LBVIPReconciler) Sync(ctx context.Context, lb *netv1.LoadBalancer) erro
 	}
 	resv := append(allocator.ReservedFor(prefix), parseAddrs(pool.Spec.ReservedIPs)...)
 
+	// Prefer the LB's own current VIP when auto-allocating, so an unrelated
+	// spec edit (generation bump) never silently renumbers a live VIP.
+	var preferred *netip.Addr
+	if a, err := netip.ParseAddr(lb.Status.AllocatedVIP); err == nil {
+		preferred = &a
+	}
+
 	var vip netip.Addr
 	if pinned != nil {
 		if !allocator.InPrefix(prefix, *pinned) {
@@ -79,14 +86,32 @@ func (r *LBVIPReconciler) Sync(ctx context.Context, lb *netv1.LoadBalancer) erro
 			}
 		}
 		vip = *pinned
-	} else {
-		a, ok := allocator.LowestFree(prefix, used, resv)
-		if !ok {
-			return r.setState(ctx, lb, "Exhausted", "")
-		}
+	} else if a, ok := stickyOrLowest(prefix, preferred, used, resv); ok {
 		vip = a
+	} else {
+		return r.setState(ctx, lb, "Exhausted", "")
 	}
 	return r.setState(ctx, lb, "Allocated", vip.String())
+}
+
+// stickyOrLowest keeps the previously-allocated VIP if it is still valid and
+// free, otherwise falls back to the lowest free address in the prefix.
+func stickyOrLowest(prefix netip.Prefix, preferred *netip.Addr, used map[netip.Addr]struct{}, resv []netip.Addr) (netip.Addr, bool) {
+	if preferred != nil && allocator.InPrefix(prefix, *preferred) {
+		if _, taken := used[*preferred]; !taken {
+			blocked := false
+			for _, x := range resv {
+				if x == *preferred {
+					blocked = true
+					break
+				}
+			}
+			if !blocked {
+				return *preferred, true
+			}
+		}
+	}
+	return allocator.LowestFree(prefix, used, resv)
 }
 
 // poolPrefixFor returns the pool prefix matching a pinned VIP's family, or the

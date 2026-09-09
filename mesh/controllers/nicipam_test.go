@@ -81,6 +81,51 @@ func TestNICAllocateAndAdopt(t *testing.T) {
 	}
 }
 
+func TestNICStickyAcrossGenerationBump(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = netv1.AddToScheme(scheme)
+	sub := readySubnet("s", "blue", "10.0.1.0/24", "")
+	a := nic("a", "blue", "s") // auto
+	b := nic("b", "blue", "s") // auto
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sub, a, b).WithStatusSubresource(&netv1.NetworkInterface{}).Build()
+	r := &NICIPAMReconciler{Client: cl, APIReader: cl}
+	ctx := context.Background()
+	_ = r.Sync(ctx, a) // a -> 10.0.1.1
+	_ = r.Sync(ctx, b) // b -> 10.0.1.2
+
+	// free the lower address by deleting a
+	var ga netv1.NetworkInterface
+	_ = cl.Get(ctx, keyOf(a), &ga)
+	if err := cl.Delete(ctx, &ga); err != nil {
+		t.Fatal(err)
+	}
+
+	// bump b's generation (simulate an unrelated spec edit) and re-sync
+	var gb netv1.NetworkInterface
+	_ = cl.Get(ctx, keyOf(b), &gb)
+	if gb.Status.AllocatedIPs[0] != "10.0.1.2" {
+		t.Fatalf("precondition: b should have .2, got %v", gb.Status.AllocatedIPs)
+	}
+	gb.Generation = 2
+	if err := cl.Update(ctx, &gb); err != nil {
+		t.Fatal(err)
+	}
+	// re-fetch (Update may reset status expectations) then Sync
+	_ = cl.Get(ctx, keyOf(b), &gb)
+	gb.Generation = 2
+	if err := r.Sync(ctx, &gb); err != nil {
+		t.Fatal(err)
+	}
+	var got netv1.NetworkInterface
+	_ = cl.Get(ctx, keyOf(b), &got)
+	if len(got.Status.AllocatedIPs) != 1 || got.Status.AllocatedIPs[0] != "10.0.1.2" {
+		t.Fatalf("b renumbered on unrelated edit: got %v want [10.0.1.2] (sticky)", got.Status.AllocatedIPs)
+	}
+	if got.Status.ObservedGeneration != 2 {
+		t.Fatalf("observedGeneration = %d want 2", got.Status.ObservedGeneration)
+	}
+}
+
 func TestNICOutOfSubnetIsInvalid(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = netv1.AddToScheme(scheme)

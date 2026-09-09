@@ -74,10 +74,23 @@ func (r *NICIPAMReconciler) Sync(ctx context.Context, nic *netv1.NetworkInterfac
 	// only when the NIC pins nothing.
 	hasPins := len(nic.Spec.IPs) > 0
 
+	// Prefer the NIC's own current allocation when auto-allocating, so an
+	// unrelated spec edit (generation bump) never silently renumbers it.
+	var prefV4, prefV6 *netip.Addr
+	for _, s := range nic.Status.AllocatedIPs {
+		if a, err := netip.ParseAddr(s); err == nil {
+			if a.Is4() {
+				prefV4 = &a
+			} else {
+				prefV6 = &a
+			}
+		}
+	}
+
 	var out []string
 	if v4 != nil {
 		if pinnedV4 != nil || !hasPins {
-			ip, ok := r.assignFamily(*v4, pinnedV4, usedV4, sub.Spec.ReservedIPs)
+			ip, ok := r.assignFamily(*v4, pinnedV4, prefV4, usedV4, sub.Spec.ReservedIPs)
 			if !ok {
 				return r.setState(ctx, nic, exhaustedOrInvalid(pinnedV4), nil)
 			}
@@ -88,7 +101,7 @@ func (r *NICIPAMReconciler) Sync(ctx context.Context, nic *netv1.NetworkInterfac
 	}
 	if v6 != nil {
 		if pinnedV6 != nil || !hasPins {
-			ip, ok := r.assignFamily(*v6, pinnedV6, usedV6, sub.Spec.ReservedIPs)
+			ip, ok := r.assignFamily(*v6, pinnedV6, prefV6, usedV6, sub.Spec.ReservedIPs)
 			if !ok {
 				return r.setState(ctx, nic, exhaustedOrInvalid(pinnedV6), nil)
 			}
@@ -105,8 +118,10 @@ func (r *NICIPAMReconciler) Sync(ctx context.Context, nic *netv1.NetworkInterfac
 }
 
 // assignFamily adopts a pinned in-prefix, free address, or allocates the lowest
-// free one. ok=false means exhaustion (nil pinned) or an invalid/taken pin.
-func (r *NICIPAMReconciler) assignFamily(prefix netip.Prefix, pinned *netip.Addr, used map[netip.Addr]struct{}, reserved []string) (netip.Addr, bool) {
+// free one. When not pinned it prefers the previously-allocated address (sticky)
+// before falling back to the lowest free one. ok=false means exhaustion (nil
+// pinned) or an invalid/taken pin.
+func (r *NICIPAMReconciler) assignFamily(prefix netip.Prefix, pinned, preferred *netip.Addr, used map[netip.Addr]struct{}, reserved []string) (netip.Addr, bool) {
 	resv := append(allocator.ReservedFor(prefix), parseAddrs(reserved)...)
 	if pinned != nil {
 		if !allocator.InPrefix(prefix, *pinned) {
@@ -121,6 +136,22 @@ func (r *NICIPAMReconciler) assignFamily(prefix netip.Prefix, pinned *netip.Addr
 			}
 		}
 		return *pinned, true
+	}
+	// Sticky: keep the previously-allocated address if still valid and free,
+	// so an unrelated spec edit never renumbers a live workload.
+	if preferred != nil && allocator.InPrefix(prefix, *preferred) {
+		if _, taken := used[*preferred]; !taken {
+			blocked := false
+			for _, x := range resv {
+				if x == *preferred {
+					blocked = true
+					break
+				}
+			}
+			if !blocked {
+				return *preferred, true
+			}
+		}
 	}
 	return allocator.LowestFree(prefix, used, resv)
 }
