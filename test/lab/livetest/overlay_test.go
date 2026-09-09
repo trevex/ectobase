@@ -53,10 +53,9 @@ func TestCrossClusterOverlayPing(t *testing.T) {
 	// 1. VPC + two NICs (each pinned to a node via spec.nodeName) + two halted anchor
 	//    VMs (which stamp CompiledNIC.clusterName). applied to the dispatch.
 	applyDispatch(t, ctx, cfg, overlayFixture(nodeA, nodeC))
-	// The compiler gates on a Ready VPC with a vni; mark VPC + both NICs Ready.
+	// The compiler gates on a Ready VPC with a vni; mark VPC Ready. The NICs go
+	// Allocated via the live NICIPAMReconciler once the Subnet covers their IPs.
 	patchVNIReady(t, ctx, cfg, "vpcs.net.ectobase.dev", "blue")
-	patchVNIReady(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", "nic-a")
-	patchVNIReady(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", "nic-c")
 
 	// 2. Each compute cluster's CompiledNIC lands (broker sync) with the expected node.
 	for _, tc := range []struct {
@@ -106,6 +105,11 @@ func overlayFixture(a, c config.DerivedNode) string {
 kind: VPC
 metadata: {name: blue}
 spec: {vni: %d, defaultPolicy: Allow}
+---
+apiVersion: net.ectobase.dev/v1alpha1
+kind: Subnet
+metadata: {name: blue-subnet}
+spec: {vpcRef: {name: blue}, v4Prefix: 10.0.0.0/24}
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NetworkInterface

@@ -15,6 +15,18 @@ metadata:
 spec:
   vni: 100
 ---
+# Subnet covering tier2-nic's 10.0.0.20 so the live NICIPAMReconciler adopts the pinned
+# spec.ips as a reservation and drives the NIC to status.state=Allocated (compile gate).
+apiVersion: net.ectobase.dev/v1alpha1
+kind: Subnet
+metadata:
+  name: blue-subnet
+  namespace: default
+spec:
+  vpcRef:
+    name: blue
+  v4Prefix: 10.0.0.0/24
+---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NetworkInterface
 metadata:

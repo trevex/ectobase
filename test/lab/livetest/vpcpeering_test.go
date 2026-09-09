@@ -86,12 +86,10 @@ func TestVPCPeering(t *testing.T) {
 	//    in step 5, are the placement authority). Green NICs carry label side=green so the
 	//    FirewallPolicy selector governs them (replacing the compiler's allow-all fallback).
 	applyDispatch(t, ctx, cfg, vpcPeeringCentralFixture(blue, green, local))
-	// The compiler gates on Ready VPCs/NICs with a vni; patch each with its own vni.
+	// The compiler gates on Ready VPCs with a vni; patch each with its own vni. The NICs
+	// go Allocated via the live NICIPAMReconciler once each VPC's Subnet covers their IPs.
 	patchVNIReadyN(t, ctx, cfg, "vpcs.net.ectobase.dev", "peer-blue", peerBlueVNI)
 	patchVNIReadyN(t, ctx, cfg, "vpcs.net.ectobase.dev", "peer-green", peerGreenVNI)
-	patchVNIReadyN(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", blue.nic, blue.vni)
-	patchVNIReadyN(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", green.nic, green.vni)
-	patchVNIReadyN(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", local.nic, local.vni)
 
 	t.Cleanup(func() {
 		_, _ = kubectl(ctx, cfg, "dispatch", "delete", "vpcpeering.net.ectobase.dev", "blue-to-green", "green-to-blue", "--ignore-not-found", "--wait=false")
@@ -268,6 +266,18 @@ apiVersion: net.ectobase.dev/v1alpha1
 kind: VPC
 metadata: {name: peer-green}
 spec: {vni: %d}
+---
+apiVersion: net.ectobase.dev/v1alpha1
+kind: Subnet
+metadata: {name: peer-blue-subnet}
+spec: {vpcRef: {name: peer-blue}, v4Prefix: 10.0.10.0/24}
+---
+# green owns two NICs in different /24s (10.0.20.11 and 10.0.10.77); a /16 covers both
+# and keeps sole-subnet inference. It's in a different VPC than blue's /24 (no overlap).
+apiVersion: net.ectobase.dev/v1alpha1
+kind: Subnet
+metadata: {name: peer-green-subnet}
+spec: {vpcRef: {name: peer-green}, v4Prefix: 10.0.0.0/16}
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NetworkInterface

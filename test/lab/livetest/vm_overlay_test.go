@@ -62,10 +62,9 @@ func TestVMOverlayConnectivity(t *testing.T) {
 	// 1. VPC + two NICs on the DISPATCH (no placement on the NICs — the owning VM/Container
 	//    stamp it). defaultPolicy Allow so guest egress isn't deny-by-default dropped.
 	applyDispatch(t, ctx, cfg, vmOverlayDispatchFixture(cluster, nodeK8sName(node)))
-	// The compiler gates on a Ready VPC/NIC carrying a vni.
+	// The compiler gates on a Ready VPC carrying a vni. The NICs go Allocated via the
+	// live NICIPAMReconciler once the Subnet covers their IPs.
 	patchVMOverlayReady(t, ctx, cfg, "vpcs.net.ectobase.dev", "vmov-vpc")
-	patchVMOverlayReady(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", vmOverlayVMNIC)
-	patchVMOverlayReady(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", vmOverlayPeerNIC)
 
 	// 2. NADs are shipped by the pool chart / lab KubeVirt deploy: the peer container's
 	//    `ectobase-system/flowplane-overlay` (templates/flowplane-overlay-nad.yaml) and the VM's
@@ -169,6 +168,11 @@ func vmOverlayDispatchFixture(cluster, node string) string {
 kind: VPC
 metadata: {name: vmov-vpc}
 spec: {vni: %d, defaultPolicy: Allow}
+---
+apiVersion: net.ectobase.dev/v1alpha1
+kind: Subnet
+metadata: {name: vmov-subnet}
+spec: {vpcRef: {name: vmov-vpc}, v4Prefix: 10.0.6.0/24}
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NetworkInterface

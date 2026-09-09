@@ -70,10 +70,9 @@ func TestPodOverlayPing(t *testing.T) {
 	//    the placement authority (it stamps CompiledNIC.clusterName + nodeName). Just IPs +
 	//    mac here. defaultPolicy Allow so guest egress isn't deny-by-default dropped.
 	applyDispatch(t, ctx, cfg, podDispatchFixture(epA.nic, epA.ip, epA.mac, epC.nic, epC.ip, epC.mac))
-	// The compiler gates on a Ready VPC with a vni; mark VPC + both NICs Ready.
+	// The compiler gates on a Ready VPC with a vni; mark VPC Ready. The NICs go
+	// Allocated via the live NICIPAMReconciler once the Subnet covers their IPs.
 	patchPodVNIReady(t, ctx, cfg, "vpcs.net.ectobase.dev", "pod-vpc")
-	patchPodVNIReady(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", epA.nic)
-	patchPodVNIReady(t, ctx, cfg, "networkinterfaces.net.ectobase.dev", epC.nic)
 	t.Cleanup(func() {
 		_, _ = kubectl(ctx, cfg, "dispatch", "delete", "networkinterface.net.ectobase.dev", epA.nic, "--ignore-not-found", "--wait=false")
 		_, _ = kubectl(ctx, cfg, "dispatch", "delete", "networkinterface.net.ectobase.dev", epC.nic, "--ignore-not-found", "--wait=false")
@@ -204,6 +203,11 @@ func podDispatchFixture(nicA, ipA, macA, nicC, ipC, macC string) string {
 kind: VPC
 metadata: {name: pod-vpc}
 spec: {vni: %d, defaultPolicy: Allow}
+---
+apiVersion: net.ectobase.dev/v1alpha1
+kind: Subnet
+metadata: {name: pod-subnet}
+spec: {vpcRef: {name: pod-vpc}, v4Prefix: 10.0.2.0/24}
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NetworkInterface
