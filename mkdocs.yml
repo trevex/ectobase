@@ -79,6 +79,7 @@ nav:
       - Deploying with Helm: guides/deploy-helm.md
       - The local fabric: guides/local-fabric.md
       - Using the lab: guides/using-the-lab.md
+      - IPAM walkthrough: guides/ipam-walkthrough.md
       - Operations runbook: guides/runbook.md
       - Development: guides/development.md
   - Reference:

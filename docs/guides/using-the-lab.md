@@ -9,6 +9,13 @@ By the end you will have created a VPC (with an **auto-allocated VNI**), attache
 **pool-auto-scheduled** Container to it and pinged across the overlay, and — with
 the storage add-ons — booted a stateful VM in the same VPC.
 
+> **IPAM update.** Overlay IPs are now allocated centrally. Every VPC needs at least
+> one `Subnet`, and a NetworkInterface draws its IP from that Subnet (leave `ips: []`
+> to auto-allocate, or list an in-Subnet IP to pin). NICs reach `status.state:
+> Allocated` automatically — you no longer patch `status.state: Ready` by hand. For a
+> full VPC→Subnet→VM→LoadBalancer→NAT walkthrough see
+> [ipam-walkthrough.md](ipam-walkthrough.md).
+
 ## Prerequisites
 
 Bring the fabric up and deploy both charts:
@@ -96,13 +103,20 @@ spec:
   defaultPolicy: Allow      # so guest egress isn't deny-by-default dropped
 ---
 apiVersion: net.ectobase.dev/v1alpha1
+kind: Subnet
+metadata: { name: demo-sn0, namespace: default }
+spec: { vpcRef: { name: demo }, v4Prefix: 10.0.9.0/24 }   # covers every 10.0.9.x NIC in this VPC
+---
+apiVersion: net.ectobase.dev/v1alpha1
 kind: NetworkInterface
 metadata:
   name: demo-nic-a
 spec:
   vpcRef:
     name: demo
-  ips: ["10.0.9.1"]
+  subnetRef:
+    name: demo-sn0
+  ips: ["10.0.9.1"]         # in-Subnet pin; leave as ips: [] to auto-allocate
   mac: "52:54:00:00:09:0a"
 ```
 
@@ -124,13 +138,27 @@ status:
   state: Ready
 ```
 
+The NIC allocates its overlay IP from the Subnet the same way — the live NIC IPAM
+allocator drives it to `status.state: Allocated` (you no longer patch it to `Ready`
+by hand), and only an `Allocated` NIC compiles:
+
+```sh
+khub get networkinterface demo-nic-a -o jsonpath='{.status.state} {.status.allocatedIPs}{"\n"}'
+# Allocated ["10.0.9.1"]
+```
+
 !!! success "Status: Implemented"
     A VPC created without `spec.vni` is auto-allocated a globally-unique VNI,
     published to `status.vni` with `status.state: Ready`. No manual status patch is
     needed. Setting `spec.vni` instead **pins** that value. The allocation is
     collision-free and the VNI is reused once the VPC is deleted. The compiler
-    gates on a `Ready` VPC with a non-zero VNI and propagates it to the NICs. See
-    [Compile, sync, materialize → VNI allocation](../architecture/compile-sync-materialize.md#vni-allocation).
+    gates on a `Ready` VPC with a non-zero VNI and propagates it to the NICs.
+    NIC IPs are allocated centrally too: a NetworkInterface draws from a `Subnet` in
+    its VPC and reaches `status.state: Allocated` automatically — the compile gate now
+    requires `Allocated` (a NIC in a VPC with no Subnet goes `Invalid` and never
+    compiles). See
+    [Compile, sync, materialize → VNI allocation](../architecture/compile-sync-materialize.md#vni-allocation)
+    and the [IPAM walkthrough](ipam-walkthrough.md).
 
 ## Run a Container workload
 
@@ -240,6 +268,8 @@ metadata:
 spec:
   vpcRef:
     name: demo
+  subnetRef:
+    name: demo-sn0                 # same VPC, same Subnet as demo-nic-a
   ips: ["10.0.9.20"]
   mac: "52:54:00:00:09:20"        # the VMI's virtio NIC MUST carry this MAC
 ---
@@ -403,7 +433,9 @@ khub get vpcpeering        # both -> Ready once the pair is mutual
 
 Giving a workload internet egress (`NATGateway` + `FloatingIP`) or a public VIP
 (`LoadBalancer`) is authored the same way — a CRD on the dispatch that the compiler
-folds into the workload's `CompiledNIC`:
+folds into the workload's `CompiledNIC`. Under IPAM a `LoadBalancer` draws its VIP
+from an `LBPool` (as NICs draw from a `Subnet`); the
+[IPAM walkthrough](ipam-walkthrough.md) covers the LoadBalancer + NAT path end-to-end:
 
 ```yaml
 apiVersion: net.ectobase.dev/v1alpha1
