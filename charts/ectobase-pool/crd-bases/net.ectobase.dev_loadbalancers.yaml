@@ -42,6 +42,15 @@ spec:
               LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity
               (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
             properties:
+              poolRef:
+                description: PoolRef selects the LBPool to allocate the VIP from.
+                properties:
+                  name:
+                    description: Name is the name of the referenced object.
+                    type: string
+                required:
+                - name
+                type: object
               ports:
                 description: Ports are the LB service (port, proto) tuples.
                 items:
@@ -121,8 +130,9 @@ spec:
                 type: object
                 x-kubernetes-map-type: atomic
               vip:
-                description: VIP is the virtual IP (IPv4 or IPv6). It is the LB identity
-                  and the AddLbVip id.
+                description: |-
+                  VIP is the requested virtual IP. Empty => allocate from PoolRef; set =>
+                  validate membership in the pool + reserve (bring-your-own).
                 type: string
             required:
             - ports
@@ -131,6 +141,15 @@ spec:
           status:
             description: LoadBalancerStatus is the observed state of a LoadBalancer.
             properties:
+              allocatedVIP:
+                description: AllocatedVIP is the authoritative VIP assigned by the
+                  VIP allocator.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the Spec generation the allocation
+                  reflects.
+                format: int64
+                type: integer
               state:
                 description: State is the lifecycle state (Pending | Ready).
                 type: string

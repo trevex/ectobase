@@ -12,8 +12,11 @@ import (
 // LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity
 // (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
 type LoadBalancerSpecApplyConfiguration struct {
-	// VIP is the virtual IP (IPv4 or IPv6). It is the LB identity and the AddLbVip id.
+	// VIP is the requested virtual IP. Empty => allocate from PoolRef; set =>
+	// validate membership in the pool + reserve (bring-your-own).
 	VIP *string `json:"vip,omitempty"`
+	// PoolRef selects the LBPool to allocate the VIP from.
+	PoolRef *LocalObjectReferenceApplyConfiguration `json:"poolRef,omitempty"`
 	// Ports are the LB service (port, proto) tuples.
 	Ports []LoadBalancerPortApplyConfiguration `json:"ports,omitempty"`
 	// TargetSelector selects backend NetworkInterfaces by label. Mutually exclusive with TargetRefs.
@@ -33,6 +36,14 @@ func LoadBalancerSpec() *LoadBalancerSpecApplyConfiguration {
 // If called multiple times, the VIP field is set to the value of the last call.
 func (b *LoadBalancerSpecApplyConfiguration) WithVIP(value string) *LoadBalancerSpecApplyConfiguration {
 	b.VIP = &value
+	return b
+}
+
+// WithPoolRef sets the PoolRef field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the PoolRef field is set to the value of the last call.
+func (b *LoadBalancerSpecApplyConfiguration) WithPoolRef(value *LocalObjectReferenceApplyConfiguration) *LoadBalancerSpecApplyConfiguration {
+	b.PoolRef = value
 	return b
 }
 

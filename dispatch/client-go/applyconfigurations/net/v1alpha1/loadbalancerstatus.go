@@ -9,6 +9,10 @@ package v1alpha1
 type LoadBalancerStatusApplyConfiguration struct {
 	// State is the lifecycle state (Pending | Ready).
 	State *string `json:"state,omitempty"`
+	// AllocatedVIP is the authoritative VIP assigned by the VIP allocator.
+	AllocatedVIP *string `json:"allocatedVIP,omitempty"`
+	// ObservedGeneration is the Spec generation the allocation reflects.
+	ObservedGeneration *int64 `json:"observedGeneration,omitempty"`
 }
 
 // LoadBalancerStatusApplyConfiguration constructs a declarative configuration of the LoadBalancerStatus type for use with
@@ -22,5 +26,21 @@ func LoadBalancerStatus() *LoadBalancerStatusApplyConfiguration {
 // If called multiple times, the State field is set to the value of the last call.
 func (b *LoadBalancerStatusApplyConfiguration) WithState(value string) *LoadBalancerStatusApplyConfiguration {
 	b.State = &value
+	return b
+}
+
+// WithAllocatedVIP sets the AllocatedVIP field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the AllocatedVIP field is set to the value of the last call.
+func (b *LoadBalancerStatusApplyConfiguration) WithAllocatedVIP(value string) *LoadBalancerStatusApplyConfiguration {
+	b.AllocatedVIP = &value
+	return b
+}
+
+// WithObservedGeneration sets the ObservedGeneration field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the ObservedGeneration field is set to the value of the last call.
+func (b *LoadBalancerStatusApplyConfiguration) WithObservedGeneration(value int64) *LoadBalancerStatusApplyConfiguration {
+	b.ObservedGeneration = &value
 	return b
 }

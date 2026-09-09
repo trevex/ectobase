@@ -297,7 +297,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `vip` _string_ | VIP is the virtual IP (IPv4 or IPv6). It is the LB identity and the AddLbVip id. |  |  |
+| `vip` _string_ | VIP is the requested virtual IP. Empty => allocate from PoolRef; set =><br />validate membership in the pool + reserve (bring-your-own). |  |  |
+| `poolRef` _[LocalObjectReference](#localobjectreference)_ | PoolRef selects the LBPool to allocate the VIP from. |  | Optional: \{\} <br /> |
 | `ports` _[LoadBalancerPort](#loadbalancerport) array_ | Ports are the LB service (port, proto) tuples. |  |  |
 | `targetSelector` _[LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#labelselector-v1-meta)_ | TargetSelector selects backend NetworkInterfaces by label. Mutually exclusive with TargetRefs. |  | Optional: \{\} <br /> |
 | `targetRefs` _[LocalObjectReference](#localobjectreference) array_ | TargetRefs names backend NetworkInterfaces explicitly. Mutually exclusive with TargetSelector. |  | Optional: \{\} <br /> |
@@ -317,6 +318,8 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `state` _string_ | State is the lifecycle state (Pending \| Ready). |  | Optional: \{\} <br /> |
+| `allocatedVIP` _string_ | AllocatedVIP is the authoritative VIP assigned by the VIP allocator. |  | Optional: \{\} <br /> |
+| `observedGeneration` _integer_ | ObservedGeneration is the Spec generation the allocation reflects. |  | Optional: \{\} <br /> |
 
 
 #### LocalObjectReference

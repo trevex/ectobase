@@ -2878,10 +2878,17 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancerSpec(ref common.ReferenceCallb
 				Properties: map[string]spec.Schema{
 					"vip": {
 						SchemaProps: spec.SchemaProps{
-							Description: "VIP is the virtual IP (IPv4 or IPv6). It is the LB identity and the AddLbVip id.",
+							Description: "VIP is the requested virtual IP. Empty => allocate from PoolRef; set => validate membership in the pool + reserve (bring-your-own).",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
+						},
+					},
+					"poolRef": {
+						SchemaProps: spec.SchemaProps{
+							Description: "PoolRef selects the LBPool to allocate the VIP from.",
+							Default:     map[string]interface{}{},
+							Ref:         ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 						},
 					},
 					"ports": {
@@ -2939,6 +2946,20 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancerStatus(ref common.ReferenceCal
 							Description: "State is the lifecycle state (Pending | Ready).",
 							Type:        []string{"string"},
 							Format:      "",
+						},
+					},
+					"allocatedVIP": {
+						SchemaProps: spec.SchemaProps{
+							Description: "AllocatedVIP is the authoritative VIP assigned by the VIP allocator.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"observedGeneration": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ObservedGeneration is the Spec generation the allocation reflects.",
+							Type:        []string{"integer"},
+							Format:      "int64",
 						},
 					},
 				},

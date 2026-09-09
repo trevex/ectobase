@@ -10,8 +10,12 @@ import (
 // LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity
 // (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
 type LoadBalancerSpec struct {
-	// VIP is the virtual IP (IPv4 or IPv6). It is the LB identity and the AddLbVip id.
+	// VIP is the requested virtual IP. Empty => allocate from PoolRef; set =>
+	// validate membership in the pool + reserve (bring-your-own).
 	VIP string `json:"vip"`
+	// PoolRef selects the LBPool to allocate the VIP from.
+	// +optional
+	PoolRef LocalObjectReference `json:"poolRef,omitempty" protobuf:"bytes,5,opt,name=poolRef"`
 	// Ports are the LB service (port, proto) tuples.
 	Ports []LoadBalancerPort `json:"ports"`
 	// TargetSelector selects backend NetworkInterfaces by label. Mutually exclusive with TargetRefs.
@@ -35,6 +39,12 @@ type LoadBalancerStatus struct {
 	// State is the lifecycle state (Pending | Ready).
 	// +optional
 	State string `json:"state,omitempty"`
+	// AllocatedVIP is the authoritative VIP assigned by the VIP allocator.
+	// +optional
+	AllocatedVIP string `json:"allocatedVIP,omitempty" protobuf:"bytes,2,opt,name=allocatedVIP"`
+	// ObservedGeneration is the Spec generation the allocation reflects.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty" protobuf:"varint,3,opt,name=observedGeneration"`
 }
 
 // +genclient
