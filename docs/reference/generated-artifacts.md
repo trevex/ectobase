@@ -1,23 +1,22 @@
 # Generated artifacts
 
-A large part of ectobase's repository is **generated, not hand-written**. The Go
+A large part of ectobase's repository is generated, not hand-written. The Go
 API types and a small set of RBAC markers are the single source of truth; a
 `make generate` pipeline derives everything downstream from them — deepcopy and
 conversion code, CRD manifests, per-component RBAC roles, and the CRD API
 reference. Nothing that is generated is ever edited by hand, so the manifests
 cannot drift from the code they describe.
 
-This page documents that pipeline as durable architecture. It is driven entirely
-by the `generate` (and its sub-target `docs-crd-ref`) targets in the top-level
-`Makefile`.
+The `generate` target and its `docs-crd-ref` sub-target in the top-level
+`Makefile` drive the whole pipeline.
 
 ## SolAr-style API layout
 
 Each API group is split into two Go packages:
 
-- an **internal** package (`api/<group>/`) holding apimachinery-only,
+- an internal package (`api/<group>/`) holding apimachinery-only,
   dispatch-facing types, and
-- a **versioned** package (`api/<group>/v1alpha1/`) holding the on-the-wire
+- a versioned package (`api/<group>/v1alpha1/`) holding the on-the-wire
   types plus their kubebuilder markers.
 
 `kube::codegen` (from `k8s.io/code-generator`) generates the `zz_generated.*`
@@ -47,9 +46,10 @@ flowchart TD
 ## Deepcopy and conversion
 
 `make generate` runs the `kube::codegen` helpers in both `api/` and `dispatch/`. These
-produce the `zz_generated.deepcopy.go`, `zz_generated.conversion.go`,
-`zz_generated.defaults.go` and `zz_generated.model_name.go` files under each
-versioned package — the runtime.Object plumbing every Kubernetes type needs. They
+produce the `zz_generated.deepcopy.go`, `zz_generated.conversion.go` and
+`zz_generated.model_name.go` files under each versioned package (plus
+`zz_generated.defaults.go` where a group declares defaulters, currently only
+`platform`) — the runtime.Object plumbing every Kubernetes type needs. They
 are regenerated from the Go types on every run.
 
 ## CRDs
@@ -96,9 +96,9 @@ so the ClusterRole a component runs with is exactly the set of markers on its
 code — permissions are proven against the reconcilers that need them.
 
 !!! note "The dispatch-broker has two roles"
-    The broker needs two distinct least-privilege identities: a **dispatch-side** role
+    The broker needs two distinct least-privilege identities: a dispatch-side role
     (read compiled objects, manage ClusterPools in the dispatch apiserver) and a
-    **pool-side** role (write compiled objects into the pool cluster). Because
+    pool-side role (write compiled objects into the pool cluster). Because
     `controller-gen` merges every marker under a package into one role, the
     markers are split into two import-nowhere sub-packages,
     `dispatch/cmd/broker/rbac/dispatchside` and `.../poolside`, generated into the dispatch chart
@@ -123,10 +123,10 @@ cross-resource context the generated pages deliberately omit.
 
 ## Why generate everything
 
-The payoff is **no drift**. There is no hand-maintained RBAC that can fall behind
+The payoff is no drift. There is no hand-maintained RBAC that can fall behind
 a new reconciler, no CRD YAML that can lag a new field, and no API reference that
 can go stale. Editing a Go type or an RBAC marker and re-running `make generate`
 propagates the change to every derived artifact at once — deepcopy, conversion,
-CRDs, roles and docs. The rule of thumb: **if a file is `zz_generated.*`, lives
+CRDs, roles and docs. The rule of thumb: if a file is `zz_generated.*`, lives
 under `crd-bases`/`test/crds`/`files/<role>`, or under `docs/reference/api/`, do
-not edit it — change the source and regenerate.**
+not edit it — change the source and regenerate.

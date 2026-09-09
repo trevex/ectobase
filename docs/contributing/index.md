@@ -18,7 +18,7 @@ CNI plugin, the CRD API, the Helm charts, and the lab/test harnesses.
 | `dispatch/` | The fleet control plane: the extension `apiserver`, the `controller` (compiler), and the `broker` (per-pool kubelet-analog) under `cmd/`, plus the generated client. |
 | `flowplane/` | The Rust workspace: the eBPF dataplane, its userspace loader/agent/CLI, the pure-core datapath library, the shared map types, and the in-process simulator. |
 | `charts/` | The Helm charts — `ectobase-dispatch` and `ectobase-pool` — with generated CRDs and RBAC. |
-| `test/` | Test harnesses: Go conformance/e2e suites (`test/conformance/`, `test/e2e/`), the CRD bases for envtest (`test/crds/`), test container images (`test/images/`), and the `test/lab/` Talos + containerlab live lab. |
+| `test/` | Test harnesses: the Go e2e suite (`test/e2e/`), the CRD bases for envtest (`test/crds/`), test container images (`test/images/`), and the `test/lab/` Talos + containerlab live lab. `test/e2e/` and `test/lab/` are each a separate Go module, outside the default `go test ./...` matrix. |
 | `docs/` | This mkdocs-material site (plus the design-spec/plan archive under `docs/superpowers/`). |
 
 See [Repository layout & crates](../architecture/layout.md) for the crate-level breakdown
@@ -37,7 +37,7 @@ make            # list every annotated make target
 The dev shell provides the pinned Rust toolchain, Go, `bpf-linker`, `protobuf`, `bpftool`,
 `qemu`, `talosctl`/`containerlab`/`helm`, `controller-gen` + `crd-ref-docs`, and
 `mkdocs`+`mkdocs-material`. It exports `KUBEBUILDER_ASSETS` so controller-runtime
-**envtest** integration tests can spin a real in-process apiserver under `go test`.
+envtest integration tests can spin a real in-process apiserver under `go test`.
 
 Key targets (the full annotated list prints from a bare `make`):
 
@@ -56,14 +56,14 @@ Key targets (the full annotated list prints from a bare `make`):
 Each concern is asserted at the cheapest level that can observe it (see
 [Testing strategy](../testing/strategy.md) for the full rationale):
 
-- **Unit** (`make test`) — `flowplane-core` logic and `#[repr(C)]` POD layouts. No root.
-- **Sim** (`make sim`) — byte-level datapath behaviour over the native simulator, plus
+- Unit (`make test`) — `flowplane-core` logic and `#[repr(C)]` POD layouts. No root.
+- Sim (`make sim`) — byte-level datapath behaviour over the native simulator, plus
   whole flows across a `Fabric`. No root, no clab.
-- **envtest** (`go test` in the devShell) — controllers/compilers against a real
+- envtest (`go test` in the devShell) — controllers/compilers against a real
   in-process apiserver via `KUBEBUILDER_ASSETS`.
-- **Live lab** (`make lab-test`) — the Go live suite (`test/lab/livetest/`) against the
-  Talos + containerlab fabric, for behaviours that only appear under sustained kernel
-  forwarding (zero-drop restart, native-XDP paths). Sudo.
+- Live lab (`make lab-test`) — the Go live suite (`test/lab/livetest/`, a separate
+  module) against the Talos + containerlab fabric, for behaviours that only appear under
+  sustained kernel forwarding (zero-drop restart, native-XDP paths). Sudo.
 
 ## How a change flows
 
@@ -79,17 +79,17 @@ flowchart LR
     edit --> gen --> charts --> docs --> test
 ```
 
-1. **Edit the types** under `api/<group>/v1alpha1/` (or the reconciler / datapath code).
-2. **Run `make generate`.** This regenerates deepcopy + conversion functions, the CRD
+1. Edit the types under `api/<group>/v1alpha1/` (or the reconciler / datapath code).
+2. Run `make generate`. This regenerates deepcopy + conversion functions, the CRD
    manifests (into the pool chart's `crd-bases` and `test/crds`), the per-component RBAC
    roles (into each chart's `files/`), and the per-group CRD API reference under
    `docs/reference/api/`. Never hand-edit those generated artifacts.
-3. **Update the charts** (`charts/ectobase-dispatch`, `charts/ectobase-pool`) if the change adds
+3. Update the charts (`charts/ectobase-dispatch`, `charts/ectobase-pool`) if the change adds
    a component, permission, or value; keep the `helm-unittest` suites and snapshots current.
-4. **Update the docs** — the published pages are the living source of truth. Any change to
+4. Update the docs — the published pages are the living source of truth. Any change to
    behaviour, architecture, or the API updates the relevant page in the same commit
    (see [Writing docs](documentation.md)).
-5. **Test at the right tier** — sim for datapath byte behaviour, envtest for controllers,
+5. Test at the right tier — sim for datapath byte behaviour, envtest for controllers,
    the live lab for end-to-end forwarding.
 
 ## See also

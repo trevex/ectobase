@@ -1,9 +1,8 @@
 # CRD interactions
 
 The generated per-field API pages describe each Custom Resource in isolation. This
-page is the connective tissue they lack: how the resources relate, and how a
-user's declared **intent** becomes a **compiled** object and is finally
-**executed** on a node.
+page describes how the resources relate, and how a user's declared intent becomes a
+compiled object and is finally executed on a node.
 
 ## The five API groups
 
@@ -13,25 +12,23 @@ the lifecycle. All live under `*.ectobase.dev` and are served at version
 
 | Group | Written by | Kinds |
 | --- | --- | --- |
-| [`net.ectobase.dev`](api/net.md) | users | VPC, NetworkInterface, FirewallPolicy, LoadBalancer, NATGateway, FloatingIP, VPCPeering |
+| [`net.ectobase.dev`](api/net.md) | users | VPC, Subnet, NetworkInterface, FirewallPolicy, LoadBalancer, LBPool, NATGateway, FloatingIP, VPCPeering |
 | [`compute.ectobase.dev`](api/compute.md) | users | VirtualMachine, Container |
 | [`storage.ectobase.dev`](api/storage.md) | users | Volume |
 | [`compiled.ectobase.dev`](api/compiled.md) | controllers | CompiledNIC, CompiledVM, CompiledContainer, CompiledVolumeAttachment |
 | [`platform.ectobase.dev`](api/platform.md) | dispatch controller | ClusterPool |
 
-The **net**, **compute** and **storage** groups are *authored* — a user (or a
-higher-level system) declares desired state in them. The **compiled** group is
-*derived* — no human writes it; the mesh compiler produces it. The
-**platform** group is *operational* — it models the fleet of pool clusters that
-workloads can be scheduled onto.
+The net, compute and storage groups are authored: a user (or a higher-level system)
+declares desired state in them. The compiled group is derived: the mesh compiler
+produces it, and no human writes it. The platform group is operational: it models the
+fleet of pool clusters that workloads can be scheduled onto.
 
 ## Intent, compiled, executed
 
-The core idea is a three-stage lowering. Users declare high-level intent; a
-compiler flattens the graph of related resources into a small, self-contained
-per-workload object; a per-pool broker ships that object to the cluster that owns
-the workload; and node-local executors turn it into real datapath and platform
-objects.
+Lowering runs in three stages. Users declare high-level intent; a compiler flattens
+the graph of related resources into a small, self-contained per-workload object; a
+per-pool broker ships that object to the cluster that owns the workload; and
+node-local executors turn it into real datapath and platform objects.
 
 ```mermaid
 flowchart LR
@@ -44,6 +41,8 @@ flowchart LR
         LB[LoadBalancer]
         PEER[VPCPeering]
         VPC[VPC]
+        SUBNET[Subnet]
+        LBPOOL[LBPool]
     end
 
     subgraph compiled["Compiled (controller-written)"]
@@ -60,6 +59,8 @@ flowchart LR
     end
 
     VM & CT -->|owns placement| NIC
+    SUBNET -->|allocate overlay IPs| NIC
+    LBPOOL -->|allocate VIP| LB
     NIC & FW & LB & PEER & VPC --> CNIC
     VM --> CVM
     CT --> CCT
@@ -73,36 +74,45 @@ flowchart LR
 
 ### 1. Workloads own placement; NICs derive it
 
-A workload — a **Container** or **VirtualMachine** — is the placement authority.
-It declares *where* it runs (which pool). Its **NetworkInterface**s do not decide
-placement themselves; they inherit it from the workload that owns them. This keeps
-a workload and all of its NICs co-located on the same node and pool without the
-user having to restate placement per interface.
+A workload, a Container or VirtualMachine, is the placement authority. It declares
+where it runs (which pool). Its NetworkInterfaces, named in the workload's
+`spec.interfaceRefs`, inherit placement from the workload that owns them rather than
+deciding it. This keeps a workload and all of its NICs co-located on the same node
+and pool without the user having to restate placement per interface.
 
 ### 2. The compiler lowers the intent graph
 
 The mesh compiler (the `mesh-controller`) watches the authored groups and
 flattens each workload's slice of the graph into a single compiled object:
 
-- **NetworkInterface + FirewallPolicy + LoadBalancer + VPCPeering → CompiledNIC.**
+- NetworkInterface + FirewallPolicy + LoadBalancer + VPCPeering → CompiledNIC.
   The compiler resolves the interface's VPC membership, folds in the firewall
   rules that apply to it, the load-balancer backends it participates in, and the
   peer route imports from any VPCPeering — producing one self-contained policy
   object per NIC. The agent reads only this; it never reads the raw net-group
-  resources. NAT allocation (from **NATGateway**, and public addresses from
-  **FloatingIP**) is resolved centrally and lands here too.
-- **VirtualMachine → CompiledVM.** Boot / interface / placement facts flattened
+  resources. Address allocation is resolved centrally and lands here too: overlay
+  IPs from the interface's VPC-scoped Subnet, VIPs from the LoadBalancer's LBPool,
+  NAT from NATGateway, and public addresses from FloatingIP.
+- VirtualMachine → CompiledVM. Boot / interface / placement facts flattened
   for the VM materializer.
-- **Container → CompiledContainer.** The same, for containers, consumed by the
+- Container → CompiledContainer. The same, for containers, consumed by the
   pod materializer.
-- **Volume → CompiledVolumeAttachment.** The storage attachment a workload needs.
+- Volume → CompiledVolumeAttachment. The storage attachment a workload needs.
+
+Central IPAM gates compilation. The compiler emits a CompiledNIC only once the
+interface's addresses are finalized: `NetworkInterface.status.state` is `Allocated`,
+`status.observedGeneration` matches the spec generation, and `status.allocatedIPs`
+is populated (CompiledNIC's overlay IPs are sourced from `status.allocatedIPs`, never
+`spec.ips`). It carries a LoadBalancer's membership only once that LB reaches
+`Allocated` with an assigned `status.allocatedVIP`. A resource that regresses out of
+`Allocated` suppresses re-emission but keeps its last compiled object.
 
 The compiler writes the `compiled.ectobase.dev` objects with a `spec.clusterName`
 identifying the pool that owns the workload.
 
 ### 3. The broker syncs compiled objects to the owning pool
 
-Each pool cluster runs a **dispatch-broker** (a kubelet-analog). It watches the
+Each pool cluster runs a dispatch-broker (a kubelet-analog). It watches the
 compiled objects in the dispatch apiserver, filtered to its own `spec.clusterName`,
 and set-reconciles them onto the pool cluster's local apiserver. This is the seam
 that keeps the dispatch authoritative while giving each pool a local, node-reachable
@@ -112,25 +122,25 @@ copy of exactly the compiled objects it owns.
 
 Inside the pool, node-local executors turn compiled objects into real state:
 
-- **mesh agent** consumes CompiledNIC and programs the node's flowplane
+- mesh agent consumes CompiledNIC and programs the node's flowplane
   datapath (firewall, NAT, LB, VNI, peer route imports) — one agent per node.
-- **pod-materializer** turns CompiledContainer into a `v1.Pod` attached to the
+- pod-materializer turns CompiledContainer into a `v1.Pod` attached to the
   flowplane overlay.
-- **vm-materializer** turns CompiledVM (and CompiledVolumeAttachment) into a
+- vm-materializer turns CompiledVM (and CompiledVolumeAttachment) into a
   KubeVirt `VirtualMachine`.
 
 ## Intent → compiled → executor summary
 
 | Intent kind(s) | Compiled kind | Executor | Produces |
 | --- | --- | --- | --- |
-| NetworkInterface + FirewallPolicy + LoadBalancer + VPCPeering (+ VPC, NATGateway, FloatingIP) | CompiledNIC | mesh agent (per node) | flowplane datapath programming (firewall / NAT / LB / VNI / peer routes) |
+| NetworkInterface + FirewallPolicy + LoadBalancer + VPCPeering (+ VPC, Subnet, LBPool, NATGateway, FloatingIP) | CompiledNIC | mesh agent (per node) | flowplane datapath programming (firewall / NAT / LB / VNI / peer routes) |
 | VirtualMachine | CompiledVM | vm-materializer (per pool) | KubeVirt VirtualMachine |
 | Container | CompiledContainer | pod-materializer (per pool) | Pod on the flowplane overlay |
 | Volume | CompiledVolumeAttachment | vm-materializer (per pool) | volume attachment on the VM |
 
 ## Where placement lives: ClusterPool
 
-**ClusterPool** (`platform.ectobase.dev`) is the fleet inventory: one object per
+ClusterPool (`platform.ectobase.dev`) is the fleet inventory: one object per
 pool cluster. The dispatch controller reconciles it (seeding a new pool's lifecycle
 phase), and its `clusterName` is what the compiler stamps onto compiled objects
 and what each pool's broker filters on. It is the anchor that ties a workload's

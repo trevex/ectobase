@@ -4,20 +4,20 @@
     The vendored dpservice Python conformance suite has been removed; every applicable test
     now has a named native replacement (sim test, byte-parity anchor, or Go e2e/live smoke).
 
-**Purpose — the parity record.**
 This document maps every applicable dpservice Python conformance test to the named
 native replacement that superseded it. It is the durable record of what the (now removed)
 vendored Python suite once covered and where each behaviour is asserted today.
 
-**Test-at-the-right-level principle:**
-- **Sim (flowplane-sim)** — byte-level datapath correctness; runs in-process with
+Each concern is asserted at the level that can observe it:
+
+- Sim (flowplane-sim) — byte-level datapath correctness; runs in-process with
   `MemMaps`/`VecPkt`; zero privileges, zero network stack.
-- **Byte-parity anchors (flowplane/tests/)** — prove the real eBPF bytecode produces
+- Byte-parity anchors (flowplane/tests/) — prove the real eBPF bytecode produces
   identical output to the sim/core for the same input; golden-from-original for several
   responders.
-- **Go e2e / live smoke (`test/lab/livetest/`)** — real gRPC attach, real kernel/clab
+- Go e2e / live smoke (`test/lab/livetest/`) — real gRPC attach, real kernel/clab
   topology; proves the control-plane wiring and live forwarding.
-- **Live lab fabric (`test/lab/`, `make lab-test`)** — proves zero-drop under sustained
+- Live lab fabric (`test/lab/`, `make lab-test`) — proves zero-drop under sustained
   traffic on the Talos + containerlab fabric; not a per-feature test.
 
 ---
@@ -28,11 +28,13 @@ vendored Python suite once covered and where each behaviour is asserted today.
 
 | Python test | Asserts | Native destination |
 |---|---|---|
-| `test_ipv4_in_ipv6` | IPv4-in-IPv6 outer header written correctly; inner src/dst preserved | `encap_test::encap_writes_outer_v6_header` + `encap_test::encap_inner_len_uses_logical_not_linear` (sim); `anchor_uplink::uplink_rx_bytecode_matches_native_sim` (byte-parity anchor) |
-| `test_ipv6_in_ipv6` | IPv6-in-IPv6 (outer IPv6 wraps inner IPv6) outer header written correctly | `encap_test::encap_writes_outer_v6_header` (sim, inner_proto driven by `EncapParams`); `anchor_uplink` covers decap path |
+| `test_ipv4_in_ipv6` | IPv4-in-IPv6 outer header written correctly; inner src/dst preserved | `encap_test::guest_tx_v4_emits_tunnel_encap_and_leaves_inner_bytes_unchanged` + `encap_test::guest_tx_v4_local_delivery_emits_no_tunnel_decision` (sim); `anchor_guest_tx::guest_tx_encap_redirect_inner_unchanged_matches_native_sim` (byte-parity anchor) |
+| `test_ipv6_in_ipv6` | IPv6-in-IPv6 (outer IPv6 wraps inner IPv6) outer header written correctly | `guest_tx_v6_test::native_v6_egress_encaps_ipv6_in_ipv6_and_tracks_conntrack6` (sim); `anchor_uplink` covers the ingress fail-safe path |
 
-**Note:** The Python test also exercises the full live round-trip (scapy sniff on the PF
-tap), which the byte-parity anchors cover at the eBPF bytecode level.
+Note: the Python test also exercises the full live round-trip (scapy sniff on the PF
+tap). The encap-side byte behaviour is anchored by `anchor_guest_tx`; the post-decap
+ingress path is covered by the sim, since under Geneve `collect_md` the ingress anchor
+can only prove the program fails safe without a tunnel key.
 
 ---
 
@@ -43,12 +45,12 @@ tap), which the byte-parity anchors cover at the eBPF bytecode level.
 | `test_network_lb_external_icmp_echo` | Maglev selection; inbound packet delivered | `lb_select_test::lb_select_returns_maglev_backend`; `ns_scenario_test::external_to_guest_encap_decap_fw_allow_ct` (sim) |
 | `test_external_lb_relay` (IPv4) | LB relay to a remote backend (outer dst == backend UL) | `lb_scenario_test::ew_lb_reforward_delivered` + `lb_scenario_test::ns_lb_delivered_with_vip_allow` (sim Fabric) |
 | `test_external_lb_icmp_error_relay` | ICMP error (type 3/code 4) relayed through LB; outer dst == backend UL | `lb_scenario_test::ns_lb_delivered_with_vip_allow` (covers relay path; ICMP-error inner-type-matching is an eBPF detail anchored in `anchor_lb`) |
-| `test_network_lb_external_icmpv6_echo` | IPv6 WAN VIP → Maglev select → encap | `lb_scenario_test::ns_lb_v6_wan_rx_encaps_to_backend` (sim); `lb_select_test::lb_select_v6_returns_maglev_backend` |
-| `test_external_lb_relay_ipv6` | IPv6 LB relay outer dst == backend UL | `lb_scenario_test::ns_lb_v6_wan_rx_encaps_to_backend` (sim) |
+| `test_network_lb_external_icmpv6_echo` | IPv6 WAN VIP → Maglev select → encap | `lb_scenario_test::ns_lb_v6_wan_rx_dsr_encode` (sim); `lb_select_test::lb_select_v6_returns_maglev_backend` |
+| `test_external_lb_relay_ipv6` | IPv6 LB relay outer dst == backend UL | `lb_scenario_test::ns_lb_v6_wan_rx_dsr_encode` (sim) |
 | `test_nat_to_lb_nat` | NAT VM → LB VM on same VNI; VIP+NAT co-existence | `lb_scenario_test::ew_lb_reforward_delivered` + `nat_test::snat_distinct_sources_map_to_distinct_blocks` (sim) |
 | `test_vip_nat_to_lb_on_another_vni` | VIP/NAT cross-VNI to LB; E/W reforward | `lb_scenario_test::ew_lb_reforward_delivered` (sim Fabric); `vni_test::vni_isolation_*` |
 | `test_pf_to_vf_lb_tcp` | LB inbound → backend tap delivery (IPv4); firewall must permit | `lb_scenario_test::ns_lb_delivered_with_vip_allow` + `ns_scenario_test::external_to_guest_firewall_drop_on_unopened_port` (sim) |
-| `test_pf_to_vf_lb_ipv6_tcp` | LB inbound → backend tap delivery (IPv6) | `lb_scenario_test::ns_lb_v6_wan_rx_encaps_to_backend` (edge sim); `anchor_lb::uplink_rx_lb_deliver_bytecode_matches_native_sim` (byte-parity) |
+| `test_pf_to_vf_lb_ipv6_tcp` | LB inbound → backend tap delivery (IPv6) | `lb_scenario_test::ns_lb_v6_wan_rx_dsr_encode` (edge sim); `anchor_lb::uplink_rx_lb_deliver_bytecode_fails_safe_without_tunnel_key` (byte-parity) |
 
 ---
 
@@ -70,7 +72,7 @@ tap), which the byte-parity anchors cover at the eBPF bytecode level.
 | Python test | Asserts | Native destination |
 |---|---|---|
 | `test_nat_default_route` | SNAT applied on external route, NOT on internal route prefix | `nat_test::snat_rewrites_src_ip_and_port_with_valid_checksums` + `nat_test::snat_no_op_for_internal_route` (sim) |
-| `test_network_nat_external_icmp_echo` | SNAT egress + DNAT return path (ICMP echo) | `nat_test::snat_rewrites_src_ip_and_port_with_valid_checksums`; DNAT return: `nat_test::dnat_return_tcp_rewrites_dst_ip_and_port` + `anchor_dnat::dnat_return_bytecode_matches_native_sim` |
+| `test_network_nat_external_icmp_echo` | SNAT egress + DNAT return path (ICMP echo) | `nat_test::snat_rewrites_src_ip_and_port_with_valid_checksums`; DNAT return: `nat_test::dnat_return_tcp_rewrites_dst_ip_and_port` + `anchor_dnat::dnat_return_bytecode_fails_safe_without_tunnel_key` |
 | `test_network_nat_pkt_relay` | Neighbor-NAT relay; `getnat`/`listneighnats` consistent | Relay path: `lb_scenario_test::ew_lb_reforward_delivered` (sim); API consistency is `test_zzz_grpc` scope (dropped) |
 | `test_network_nat_foreign_ip` | Packet to foreign IP (not NAT VIP) dropped | `nat_test::snat_no_op_for_internal_route` covers route-miss semantics; deny-by-default: `firewall_test::deny_by_default_when_no_rules` |
 | `test_network_nat_vip_co_existence_on_same_vm` | NAT + VIP on same VM can co-exist | Control-plane only; datapath tested via `nat_test::snat_distinct_sources_map_to_distinct_blocks` (block isolation) |
@@ -79,14 +81,14 @@ tap), which the byte-parity anchors cover at the eBPF bytecode level.
 | `test_vf_to_pf_network_nat_icmp_identifier_check` | Two concurrent ICMP streams get distinct IDs | `nat_test::snat_distinct_sources_map_to_distinct_blocks` (distinct port/ID per source) |
 | `test_vf_to_pf_network_nat_icmpv6` | NAT64 ICMP echo egress + return | `nat_test::dnat_return_tcp_rewrites_dst_ip_and_port` / `nat_test::dnat_return_udp_rewrites_dst_ip_and_port` (same `ct_apply`); NAT64 header translation anchored in `anchor_dnat` golden |
 | `test_vf_to_pf_network_nat_max_port_tcp` | NAT port wraps at max; second flow gets distinct port | `nat_test::snat_distinct_sources_map_to_distinct_blocks` (block-boundary arithmetic) |
-| `test_vf_to_pf_network_nat_tcp` | NAT TCP SNAT + return | `nat_test::snat_rewrites_src_ip_and_port_with_valid_checksums` + `nat_test::dnat_return_tcp_rewrites_dst_ip_and_port` (sim); `anchor_dnat::dnat_return_bytecode_matches_native_sim` |
+| `test_vf_to_pf_network_nat_tcp` | NAT TCP SNAT + return | `nat_test::snat_rewrites_src_ip_and_port_with_valid_checksums` + `nat_test::dnat_return_tcp_rewrites_dst_ip_and_port` (sim); `anchor_dnat::dnat_return_bytecode_fails_safe_without_tunnel_key` |
 | `test_vf_to_pf_network_nat_tcp_with_ipv6` | NAT64 TCP egress | Same as above for IPv6 inner path |
 | `test_vf_to_pf_vip_snat` | VIP SNAT on egress (src rewritten to VIP) | `nat_test::snat_rewrites_src_ip_and_port_with_valid_checksums` (same `snat_egress` codepath; `nat_ip` == VIP) |
 | `test_vm_nat_async_tcp_icmperr` | ICMP error (type 3) returned through NAT; inner IP not NATted | `nat_test::dnat_return_tcp_rewrites_dst_ip_and_port` (DNAT return); ICMP-error inner-header handling covered by `anchor_dnat` golden bytes |
 | `test_vf_to_pf_firewall_tcp_block` | Egress firewall blocks packet on non-matching port | `firewall_test::ingress_allow_rule_matches` + `firewall_test::deny_by_default_when_no_rules` (sim); `ns_scenario_test::external_to_guest_firewall_drop_on_unopened_port` |
-| `test_vf_to_pf_firewall_tcp_allow` | Egress firewall allows packet on matching port | `firewall_test::ingress_allow_rule_matches` (sim); `anchor_guest_tx::guest_tx_snat_bytecode_matches_native_sim` |
+| `test_vf_to_pf_firewall_tcp_allow` | Egress firewall allows packet on matching port | `firewall_test::ingress_allow_rule_matches` (sim); `anchor_guest_tx::guest_tx_encap_redirect_inner_unchanged_matches_native_sim` |
 | `test_vf_to_pf_firewall_ipv6_tcp_allow` | IPv6 egress firewall allow | Same as above (firewall_test covers proto=0 wildcard + port range) |
-| `test_vf_to_pf_tcp_in_ipv6` | IPv6 direct egress (no NAT); Ethernet dst rewritten; round-trip | `encap_test::encap_writes_outer_v6_header` + `ns_scenario_test::external_to_guest_encap_decap_fw_allow_ct` (sim) |
+| `test_vf_to_pf_tcp_in_ipv6` | IPv6 direct egress (no NAT); Ethernet dst rewritten; round-trip | `guest_tx_v6_test::native_v6_egress_encaps_ipv6_in_ipv6_and_tracks_conntrack6` + `ns_scenario_test::external_to_guest_encap_decap_fw_allow_ct` (sim) |
 
 ---
 
@@ -102,8 +104,8 @@ tap), which the byte-parity anchors cover at the eBPF bytecode level.
 
 | Python test | Asserts | Native destination |
 |---|---|---|
-| `test_l2_arp` | ARP request for gateway IP → ARP reply; sender MAC = guest (per-port virtual gateway) | `arp_nd_test::arp_request_becomes_reply` + `arp_nd_test::non_gateway_arp_passes_unchanged` (sim); `anchor_arp_nd::arp_nd_bytecode_matches_native_sim` + `anchor_arp_nd::arp_nd_bytecode_matches_original_golden` (byte-parity) |
-| `test_l2_addr_once` | MAC learned from DHCP then updated; dpservice-specific representor MAC model | **DROPPED** — dpservice SR-IOV representor MAC-learning model; ectobase/flowplane uses a static `PortMeta.guest_mac` set by the control plane (no MAC learning); the underlying ARP responder byte-path is covered by `arp_nd_test::arp_request_becomes_reply` |
+| `test_l2_arp` | ARP request for gateway IP → ARP reply; sender MAC = guest (per-port virtual gateway) | `arp_nd_test::arp_request_becomes_reply` + `arp_nd_test::non_gateway_arp_passes_unchanged` (sim). No byte-parity anchor; the ARP/ND responder is asserted at the sim level only. |
+| `test_l2_addr_once` | MAC learned from DHCP then updated; dpservice-specific representor MAC model | DROPPED — dpservice SR-IOV representor MAC-learning model; ectobase/flowplane uses a static `PortMeta.guest_mac` set by the control plane (no MAC learning); the underlying ARP responder byte-path is covered by `arp_nd_test::arp_request_becomes_reply` |
 
 ---
 
@@ -111,7 +113,7 @@ tap), which the byte-parity anchors cover at the eBPF bytecode level.
 
 | Python test | Asserts | Native destination |
 |---|---|---|
-| `test_nd` | IPv6 Neighbor Solicitation → Neighbor Advertisement; target-LL-addr = guest MAC; ICMPv6 checksum valid | `arp_nd_test::ns_becomes_neighbor_advertisement` (sim); `anchor_arp_nd::arp_nd_bytecode_matches_native_sim` + `anchor_arp_nd::arp_nd_bytecode_matches_original_golden` (byte-parity) |
+| `test_nd` | IPv6 Neighbor Solicitation → Neighbor Advertisement; target-LL-addr = guest MAC; ICMPv6 checksum valid | `arp_nd_test::ns_becomes_neighbor_advertisement` (sim). No byte-parity anchor; asserted at the sim level only. |
 
 ---
 
@@ -119,7 +121,7 @@ tap), which the byte-parity anchors cover at the eBPF bytecode level.
 
 | Python test | Asserts | Native destination |
 |---|---|---|
-| `test_vni_existence` | VNI in-use / not-in-use via gRPC `getvni` | **DROPPED** — pure control-plane API surface; no datapath behaviour; covered by `test_zzz_grpc::test_grpc_vni` (also dropped, see below) |
+| `test_vni_existence` | VNI in-use / not-in-use via gRPC `getvni` | DROPPED — pure control-plane API surface; no datapath behaviour; covered by `test_zzz_grpc::test_grpc_vni` (also dropped, see below) |
 | `test_vni_reset` | `resetvni` clears routes in that VNI; other VNIs unaffected | Datapath isolation: `vni_test::vni_isolation_route_miss_for_wrong_vni_returns_pass` + `vni_test::vni_isolation_same_dst_different_vni_yields_different_actions` (sim); API: dropped |
 | `test_vni_neighnats` | neighbor NATs survive `delinterface`; explicit `delneighnat` required | Control-plane lifecycle only; no datapath coverage needed beyond NAT relay path already in `nat_test` and `lb_scenario_test` |
 | `test_vni_dnat_reset` | VNI reset purges DNAT stale entries; subsequent VIP unaffected | Control-plane lifecycle; datapath DNAT correctness covered by `nat_test::dnat_return_*` |
@@ -137,7 +139,7 @@ tap), which the byte-parity anchors cover at the eBPF bytecode level.
 | `test3_vf_to_vf_ingress_firewall_tcp` | Ingress firewall on destination VM DROP for non-matching src | `firewall_test::deny_by_default_when_no_rules` (sim); `lb_scenario_test::ns_lb_dropped_when_policy_misses_vip` + `lb_scenario_test::ew_lb_anycast_dropped_without_policy` |
 | `test_vf_to_vf_icmp` | Same-node ICMP echo round-trip (twice); `addfwallrule` proto=icmp | `firewall_test::ingress_allow_rule_matches` (proto=icmp is same `fw_eval_dir` codepath) |
 | `test_vf_to_vf_icmpv6` | Same-node ICMPv6 echo round-trip | Same as above; IPv6 ICMP checksum verified by `arp_nd_test` path |
-| `test_vf_to_vf_ipv6_tcp` | Same-node IPv6 TCP delivery | `firewall_test::ingress_allow_rule_matches` + encap/decap via `encap_test` |
+| `test_vf_to_vf_ipv6_tcp` | Same-node IPv6 TCP delivery | `firewall_test::ingress_allow_rule_matches` + encap/decap via `guest_tx_v6_test` |
 
 ---
 
@@ -145,7 +147,7 @@ tap), which the byte-parity anchors cover at the eBPF bytecode level.
 
 ### DHCPv6 — `test_dhcpv6.py`
 
-**Status: covered by the Go live lease smoke — `test/lab/livetest/dhcp_test.go::TestDhcpLeaseSmoke` (DHCPv6 case).**
+Status: covered by the Go live lease smoke — `test/lab/livetest/dhcp_test.go::TestDhcpLeaseSmoke` (DHCPv6 case).
 
 `test_dhcpv6_vf0` / `test_dhcpv6_vf1` test a full DHCPv6 Solicit→Reply + Request→Reply
 exchange including PXE/iPXE vendor-class and Boot File URL options, plus a Confirm→Reply.
@@ -162,7 +164,7 @@ extracted into `flowplane-core` and is sim-tested in `dhcp_test.rs`):
 - The DHCPv6 responder therefore stays entirely in `flowplane-ebpf` (XDP path), not in
   `flowplane-core`, and its conformance is asserted at the live level instead of the sim level.
 
-**Current state:** `TestDhcpLeaseSmoke` (`test/lab/livetest/dhcp_test.go`) drives a real
+Current state: `TestDhcpLeaseSmoke` (`test/lab/livetest/dhcp_test.go`) drives a real
 DHCPv6 client through the datapath and asserts the ADVERTISE/Reply IA Address equals the
 guest's configured IPv6 (programmed via `DataplaneNode/AttachInterface` `requested_ips`,
 after the dual-stack fix that made `AttachInterface` set `guest_ipv6`). This is the sole
@@ -173,23 +175,23 @@ Python suite is complete.
 
 ### HA graceful-restart — `xtratest_ha.py`
 
-**Status: partially deferred to shell smoke + clab.**
+Status: partially deferred to shell smoke + clab.
 
 `xtratest_ha.py` tests the dpservice active/backup HA handover model (MAC sync, NAT
 table dump/sync, Maglev consistency across two dpservice instances). This model does not
 map to ectobase/flowplane: flowplane has no HA-peer protocol; state survives via
 `IFACE_META` journal on restart. The applicable behaviour:
 
-- **Maglev determinism across restart** — covered by
+- Maglev determinism across restart — covered by
   `lb_scenario_test::ew_lb_reforward_converges_no_loop` (same Maglev selection after
   flow age-out) and `TestRestartContinuity` (`test/lab/livetest/restart_test.go`, live
   restart smoke).
-- **CT/NAT state survival** — covered by the `make ha` pinned-maps kill+adopt smoke and
+- CT/NAT state survival — covered by the `make ha` pinned-maps kill+adopt smoke and
   `TestRestartContinuity` (graceful-restart: state written to journal, re-loaded on bring-up).
-- **MAC sync across two instances** — not applicable (no HA peer; MAC is in `PortMeta`
+- MAC sync across two instances — not applicable (no HA peer; MAC is in `PortMeta`
   static config).
 
-The `xtratest_ha.py` dpservice bulk-sync / two-instance tests are **DROPPED** as
+The `xtratest_ha.py` dpservice bulk-sync / two-instance tests are DROPPED as
 not applicable to the ectobase architecture.
 
 ---
@@ -212,7 +214,7 @@ not applicable to the ectobase architecture.
 
 ## Residual gaps
 
-**NONE.**
+None.
 
 All applicable Python tests have a named native destination (sim test, byte-parity
 anchor, or Go live smoke). The DHCPv6 conformance path is the Go probe

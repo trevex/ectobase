@@ -1,13 +1,13 @@
 # Compile, sync, materialize
 
 ectobase never programs the datapath directly from user intent. Intent CRDs are
-first **compiled** into small, pool-scoped `Compiled*` objects, then **synced**
-down to the owning pool, then **materialized** into real Kubernetes/KubeVirt
-objects and **programmed** onto the dataplane. This is the single pipeline every
+first compiled into small, pool-scoped `Compiled*` objects, then synced
+down to the owning pool, then materialized into real Kubernetes/KubeVirt
+objects and programmed onto the dataplane. This is the single pipeline every
 workload flows through:
 
-> **intent** (authored on the dispatch) → **`Compiled*`** (compiled on the dispatch, stamped
-> per pool) → **synced down** to the pool → **materialized / programmed** on the pool.
+> intent (authored on the dispatch) → `Compiled*` (compiled on the dispatch, stamped
+> per pool) → synced down to the pool → materialized / programmed on the pool.
 
 !!! success "Status: Implemented"
     The compiler, the broker sync, the pod-materialize path, and the agent's
@@ -17,11 +17,11 @@ workload flows through:
 
 ## VNI allocation
 
-Before a NIC can be compiled, its VPC needs a VNI. A **VPC VNI allocator**
+Before a NIC can be compiled, its VPC needs a VNI. A VPC VNI allocator
 (`VPCReconciler`, `mesh/controllers/vpc.go`) runs on the dispatch and assigns every
 VPC a globally-unique VNI, published to `VPC.status.vni` alongside
-`status.state: Ready`. Creating a VPC with **no `spec.vni`** auto-allocates the
-lowest free VNI in `[1000, 2^24-1]`; setting `spec.vni` **pins** that value. No
+`status.state: Ready`. Creating a VPC with no `spec.vni` auto-allocates the
+lowest free VNI in `[1000, 2^24-1]`; setting `spec.vni` pins that value. No
 manual status patch is ever needed — the allocation is automatic, collision-free,
 and reused once a VPC is deleted (a deleted VPC simply drops out of the used-set).
 
@@ -31,39 +31,39 @@ and reused once a VPC is deleted (a deleted VPC simply drops out of the used-set
     double-allocates. Contested pins resolve deterministically to exactly one
     `Ready` VPC; the losers go `Conflict`, and an exhausted range goes `Exhausted`.
 
-The `CompiledNICReconciler` gates on a **`Ready` VPC with a non-zero VNI** and
+The `CompiledNICReconciler` gates on a `Ready` VPC with a non-zero VNI and
 propagates that VNI onto every `CompiledNIC` it lowers, so the datapath is
 programmed with the allocated overlay identity.
 
 ## The compiler
 
-The compiler is the set of **mesh controller reconcilers**
+The compiler is the set of mesh controller reconcilers
 (`mesh/controllers/`), which run on the dispatch against the aggregated apiserver
 (`charts/ectobase-dispatch/templates/compiler.yaml`, the `mesh-controller`
 Deployment). Each reconciler lowers one intent type into its `Compiled*` twin and
 stamps the target pool (and, where applicable, node) onto it:
 
-- **`CompiledNICReconciler`** (`compilednic.go`) — the richest one. Its `Compile`
-  function lowers a `NetworkInterface` **together with** the `FirewallPolicy`,
+- `CompiledNICReconciler` (`compilednic.go`) — the richest one. Its `Compile`
+  function lowers a `NetworkInterface` together with the `FirewallPolicy`,
   `LoadBalancer`, `VPCPeering`, and `NATGateway` allocations that apply to it into a
-  single per-NIC `CompiledNIC` of **static central policy**: the firewall rules
+  single per-NIC `CompiledNIC` of static central policy: the firewall rules
   whose selector matches the NIC, its LB memberships, its resolved peer-import
-  prefixes, and its NAT sources. (Node-local facts like the underlay are *not*
+  prefixes, and its NAT sources. (Node-local facts like the underlay are not
   compiled in — the agent reads those from the local dataplane.)
-- **`CompiledVMReconciler`** (`compiledvm.go`) — `VirtualMachine` → `CompiledVM`.
-- **`CompiledContainerReconciler`** (`compiledcontainer.go`) — `Container` →
+- `CompiledVMReconciler` (`compiledvm.go`) — `VirtualMachine` → `CompiledVM`.
+- `CompiledContainerReconciler` (`compiledcontainer.go`) — `Container` →
   `CompiledContainer` (the pod template plus its overlay interfaces).
-- **`CompiledVolumeAttachmentReconciler`** (`compiledvolumeattachment.go`) — a
+- `CompiledVolumeAttachmentReconciler` (`compiledvolumeattachment.go`) — a
   `VirtualMachine` plus its referenced `Volume`s → one `CompiledVolumeAttachment`
   per `VolumeRef`.
 
 ### How placement is resolved
 
-Placement happens in two independent steps: the **dispatch picks the pool**, and the
-**pool picks the node**.
+Placement happens in two independent steps: the dispatch picks the pool, and the
+pool picks the node.
 
 The pool binding is a `spec.clusterName` on the workload. Both `Container` and
-`VirtualMachine` are **pool-scheduled by the dispatch** (`dispatch/pkg/scheduler`): a
+`VirtualMachine` are pool-scheduled by the dispatch (`dispatch/pkg/scheduler`): a
 workload authored with an empty `spec.clusterName` is bound to a `Ready` pool by
 resource fit and spread, exactly the same for containers and VMs. An explicit
 `spec.clusterName` pins the pool and the scheduler leaves it alone.
@@ -72,18 +72,18 @@ Every compiled object then carries `spec.clusterName` — the pool it is bound t
 and this is what the broker selects on. For NICs, the binding is resolved by
 `resolvePlacement` (`compilednic.go`) with a clear precedence:
 
-1. **Owning `Container`** — supplies the cluster binding (and, if the Container
+1. Owning `Container` — supplies the cluster binding (and, if the Container
    sets an optional `spec.nodeName`, that node pin is carried down to the Pod).
-2. **Owning `VirtualMachine`** — supplies the cluster binding.
-3. **The NIC's own `spec.clusterName`** — for a standalone NIC with no owning
+2. Owning `VirtualMachine` — supplies the cluster binding.
+3. The NIC's own `spec.clusterName` — for a standalone NIC with no owning
    workload.
-4. **The compiler default** — the `mesh-controller`'s configured default
+4. The compiler default — the `mesh-controller`'s configured default
    cluster.
 
-The *node* within the chosen pool is picked on the pool cluster — by
+The node within the chosen pool is picked on the pool cluster — by
 kube-scheduler for Pods, by KubeVirt for VMs — not by the dispatch. `spec.nodeName` is
-an **optional pin**, not a requirement; when it is empty the pool schedules the
-workload freely. Crucially, a `CompiledNIC` carries **no** node field at all: the
+an optional pin, not a requirement; when it is empty the pool schedules the
+workload freely. Crucially, a `CompiledNIC` carries no node field at all: the
 agent self-locates its policy by the interface's `(VNI, overlay IP)` key wherever
 the interface actually attaches (see
 [Self-locating agent](#agent--dataplane) below), so auto-placed and
@@ -97,7 +97,7 @@ attachments.
 
 ## The broker sync
 
-The **broker** (`dispatch/pkg/broker`, `dispatch/cmd/broker/main.go`) syncs each compiled
+The broker (`dispatch/pkg/broker`, `dispatch/cmd/broker/main.go`) syncs each compiled
 type from the dispatch down to the owning pool's local CRDs — a declarative
 set-reconcile filtered by `spec.clusterName == this pool`, with create / update /
 delete + GC. It is idempotent and restart-safe. This seam is described in full in
@@ -114,12 +114,12 @@ executors.
 
 `PodMaterializerReconciler` (`podmaterializer.go`) turns a `CompiledContainer`
 into a `v1.Pod` on the overlay. It applies (server-side) a Pod built from the
-compiled pod template. `spec.nodeName` is an **optional** node pin: when set it
+compiled pod template. `spec.nodeName` is an optional node pin: when set it
 becomes a `kubernetes.io/hostname` node selector; when empty (the common case for
-an auto-scheduled Container) the Pod is left for **kube-scheduler** on the pool to
+an auto-scheduled Container) the Pod is left for kube-scheduler on the pool to
 place. The Pod is attached to the
-flowplane overlay via the **Multus** secondary-network annotation
-(`k8s.v1.cni.cncf.io/networks`) plus the **flowplane-cni** NIC-ref annotation
+flowplane overlay via the Multus secondary-network annotation
+(`k8s.v1.cni.cncf.io/networks`) plus the flowplane-cni NIC-ref annotation
 (`net.ectobase.dev/network-interface`), which the CNI plugin resolves to the
 broker-synced `CompiledNIC`.
 
@@ -144,20 +144,20 @@ network-binding plugin (a tap device).
 
 ### agent → dataplane
 
-The mesh **agent** (`mesh/agent`) consumes `CompiledNIC` as its **central
-policy** and programs the local `flowplane` datapath from it: firewall rules
+The mesh agent (`mesh/agent`) consumes `CompiledNIC` as its central
+policy and programs the local `flowplane` datapath from it: firewall rules
 (`fwreconcile.go`), LB memberships (`lbreconcile.go`), NAT sources
 (`natreconcile.go`), and peering imports (`importreconcile.go`). It applies a
-`CompiledNIC`'s policy **iff that NIC's interface is locally attached**, matched by
+`CompiledNIC`'s policy iff that NIC's interface is locally attached, matched by
 the unique `(VNI, overlay IP)` key the dataplane reports for its attached
-interfaces — not by any declared node. The agent deliberately reads **only**
+interfaces — not by any declared node. The agent deliberately reads only
 `CompiledNIC` for policy — never the raw `NetworkInterface`/`VPC`/`NATGateway` —
 and gets node-local facts (overlay IPs, underlay) from the dataplane itself. The
 dynamic overlay routes it programs come from the [route bus](./route-bus.md), not
 from the compiled objects.
 
-Because policy is keyed by `(VNI, overlay IP)` rather than a `nodeName`, **policy
-follows the interface**: wherever the CNI attaches a NIC, that node's agent
+Because policy is keyed by `(VNI, overlay IP)` rather than a `nodeName`, policy
+follows the interface: wherever the CNI attaches a NIC, that node's agent
 programs its firewall/NAT/LB/QoS, and no other node's does. This is what lets
 auto-placed workloads, rescheduling, and live migration "just work" with no
 control-plane node write-back — the `CompiledNIC` has no node field at all. See
@@ -208,10 +208,10 @@ flowchart TB
 
 | Intent (dispatch) | Compiled (dispatch, pool-stamped) | Executor (pool) | Result |
 |---|---|---|---|
-| `NetworkInterface` (+ `FirewallPolicy`, `LoadBalancer`, `VPCPeering`, `NATGateway`) | `CompiledNIC` | mesh **agent** | dataplane programmed (firewall / LB / NAT / imports) |
-| `Container` | `CompiledContainer` | **pod-materializer** | `v1.Pod` on the overlay |
-| `VirtualMachine` | `CompiledVM` | **vm-materializer** | KubeVirt `VirtualMachine` |
-| `VirtualMachine` + `Volume` | `CompiledVolumeAttachment` | **vm-materializer** | CDI `DataVolume` disk(s) |
+| `NetworkInterface` (+ `FirewallPolicy`, `LoadBalancer`, `VPCPeering`, `NATGateway`) | `CompiledNIC` | mesh agent | dataplane programmed (firewall / LB / NAT / imports) |
+| `Container` | `CompiledContainer` | pod-materializer | `v1.Pod` on the overlay |
+| `VirtualMachine` | `CompiledVM` | vm-materializer | KubeVirt `VirtualMachine` |
+| `VirtualMachine` + `Volume` | `CompiledVolumeAttachment` | vm-materializer | CDI `DataVolume` disk(s) |
 
 ## See also
 

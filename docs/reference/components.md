@@ -1,8 +1,8 @@
 # Components
 
-ectobase is a fleet control plane (the **dispatch**) driving many workload clusters
-(**pools**), with a per-node dataplane on every pool node. This page lists each
-binary/image: what it is, where it runs, and what it talks to.
+ectobase is a fleet control plane, the dispatch, driving many workload clusters,
+the pools, with a per-node dataplane on every pool node. This page lists each
+binary and image: what it is, where it runs, and what it talks to.
 
 The dispatch components ship in the [`ectobase-dispatch`](helm-values.md#ectobase-dispatch)
 chart; the pool components ship in [`ectobase-pool`](helm-values.md#ectobase-pool).
@@ -20,7 +20,7 @@ is backed by kine over PostgreSQL. Deployed by the dispatch chart; talks to kine
 
 ### dispatch-controller
 
-The central control-plane reconciler. Today it runs the **ClusterPool**
+The central control-plane reconciler. Today it runs the ClusterPool
 reconciler (seeding a new pool's lifecycle phase); the fleet scheduler and
 failover reconcilers register on the same manager. Deployed by the dispatch chart;
 talks to the dispatch apiserver.
@@ -29,15 +29,15 @@ talks to the dispatch apiserver.
 
 The per-cluster broker (a kubelet-analog). It watches the compiled objects
 (CompiledNIC, CompiledVM, CompiledContainer, CompiledVolumeAttachment) in the dispatch
-apiserver **filtered by `spec.clusterName`** and set-reconciles them onto a
+apiserver filtered by `spec.clusterName` and set-reconciles them onto a
 downstream pool cluster's apiserver. Although logically owned by a pool, it runs
 against two apiservers: the dispatch (source) and the pool (destination). The dispatch
 chart provisions the broker's dispatch-side identity; the pool chart deploys the
 running broker (see below).
 
-### mesh controller (compiler)
+### mesh controller
 
-The `mesh-controller` binary — the **compiler**. It watches the authored
+The `mesh-controller` binary is the compiler. It watches the authored
 `net`/`compute`/`storage` groups and lowers them into `compiled.ectobase.dev`
 objects (NetworkInterface + FirewallPolicy + LoadBalancer + VPCPeering →
 CompiledNIC; VirtualMachine → CompiledVM; Container → CompiledContainer; Volume →
@@ -50,8 +50,9 @@ to the dispatch apiserver. Shares the `mesh` image with the reflector.
 The central route reflector. It accepts `routebus.v1` Session streams from the
 per-node agents and reflects per-VNI overlay routes between them — this is how
 overlay reachability is distributed (not BGP). Deployed by the dispatch chart as a
-Deployment fronted by a Service; the dispatch-controller passes its address to agents
-via `reflectorAdmin`. Shares the `mesh` image with the compiler.
+Deployment fronted by a Service. Agents dial its session port over the pool chart's
+`reflectorAddress`; the dispatch-controller dials its separate RouteBusAdmin fence
+port over `reflectorAdmin` (`-reflector-admin`). Shares the `mesh` image with the compiler.
 
 ## Pool components
 
@@ -76,15 +77,15 @@ flowplane.
 
 ### pod-materializer
 
-The downstream controller that materializes local **CompiledContainer** objects
+The downstream controller that materializes local CompiledContainer objects
 into `v1.Pod` objects, attached to the flowplane overlay via Multus and the
 flowplane-cni annotation and pinned to a node. Targets the plain downstream k8s
 cluster (not the dispatch aggregated apiserver). Deployed by the pool chart.
 
 ### vm-materializer
 
-The downstream controller that materializes local **CompiledVM** objects (and
-**CompiledVolumeAttachment**) into KubeVirt `VirtualMachine` objects
+The downstream controller that materializes local CompiledVM objects (and
+CompiledVolumeAttachment) into KubeVirt `VirtualMachine` objects
 (containerDisk boot, pinned-MAC overlay interfaces on the flowplane Multus
 network, runStrategy). Targets a downstream cluster with KubeVirt installed.
 Opt-in via the pool chart (`vmMaterializer.enabled`).

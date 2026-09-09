@@ -1,7 +1,7 @@
 # Getting started (Nix + make)
 
-Everything ectobase needs to build and test is provided by the **Nix flake devShell**. You do not
-install Rust, Go, protobuf, `bpf-linker`, `talosctl`, `containerlab`, or `qemu`
+Everything ectobase needs to build and test is provided by the Nix flake devShell. Rust, Go,
+protobuf, `bpf-linker`, `talosctl`, `containerlab`, and `qemu` are not installed
 by hand — they are all pinned in `flake.nix`.
 
 ```sh
@@ -13,20 +13,20 @@ make            # list every target with its one-line description
 
 `flake.nix` `buildInputs` bring in, among others:
 
-- **`rustup`** — the Rust toolchain is *not* a Nix package. It is pinned by `rust-toolchain.toml`
-  to a nightly (`nightly-2026-01-15`) chosen so its `rustc` emits **LLVM 21** bitcode, matching the
-  nixpkgs `bpf-linker` (built against LLVM 21). This avoids the *"Invalid record"* mismatch when
+- `rustup` — the Rust toolchain is not a Nix package. It is pinned by `rust-toolchain.toml`
+  to a nightly (`nightly-2026-01-15`) chosen so its `rustc` emits LLVM 21 bitcode, matching the
+  nixpkgs `bpf-linker` (built against LLVM 21). This avoids the "Invalid record" mismatch when
   `bpf-linker` links the eBPF object. `rust-src` is included for `-Z build-std=core` (the `bpfel`
   target has no prebuilt std). `aya-build` is told to use exactly this toolchain.
-- **Go** (with default tools) — for `mesh`, the `cni/` plugin, and `controller-gen`.
-- **`bpf-linker`, `protobuf` + `grpcurl`** — eBPF linking and the gRPC contracts.
-- **`talosctl`, `containerlab`, `kubectl`, `helm`** — the integration fabric (the `test/lab` CLI):
+- Go (with default tools) — for `mesh`, the `cni/` plugin, and `controller-gen`.
+- `bpf-linker`, `protobuf` + `grpcurl` — eBPF linking and the gRPC contracts.
+- `talosctl`, `containerlab`, `kubectl`, `helm` — the integration fabric (the `test/lab` CLI):
   `talosctl` is pinned to the Talos release the lab's node image ships (Talos ≥1.14, needed for
   the native GoBGP `BGPPeerConfig` doc).
-- **`qemu`, `libvirt`, `OVMF`, `iproute2`, `bridge-utils`, `ethtool`, `tcpdump`** — VM boot and
+- `qemu`, `libvirt`, `OVMF`, `iproute2`, `bridge-utils`, `ethtool`, `tcpdump` — VM boot and
   netns e2e harnesses.
-- **`mkdocs` + `mkdocs-material`** — this documentation (`make docs` = `mkdocs build --strict`).
-- **`KUBEBUILDER_ASSETS`** — a real in-process apiserver for the controller-runtime envtest
+- `mkdocs` + `mkdocs-material` — this documentation (`make docs` = `mkdocs build --strict`).
+- `KUBEBUILDER_ASSETS` — a real in-process apiserver for the controller-runtime envtest
   integration tests.
 
 Because every tool is on the devShell `PATH`, the test scripts use bare tool names (no
@@ -41,7 +41,7 @@ make build       # build flowplane (host crates + the eBPF object, via aya-build
 make release     # the same, release mode
 ```
 
-The eBPF crate (`flowplane-ebpf`) is **not** a host crate — the workspace `default-members` excludes
+The eBPF crate (`flowplane-ebpf`) is not a host crate — the workspace `default-members` excludes
 it so the host build never tries to compile the `#![no_main]` eBPF binary. Its bytecode is produced
 by `aya-build` from `flowplane/build.rs` during `make build`. The Go modules build with the standard
 `go build`/`go test` toolchain from the devShell.
@@ -50,7 +50,7 @@ by `aya-build` from `flowplane/build.rs` during `make build`. The Go modules bui
 
 | Target | What it does |
 |---|---|
-| `make generate` | Regenerate the deepcopy/conversion + CRD manifests, the per-component RBAC roles, and the CRD API reference — all directly into the two Helm charts. Run it after editing any CRD type or a component's RBAC markers. |
+| `make generate` | Regenerate the deepcopy/conversion + CRD manifests, the per-component RBAC roles, and the CRD API reference. The `net`/`compiled` CRDs and per-component RBAC land in the two Helm charts; the dispatch-aggregated CRDs go to `test/crds` and the API reference to `docs/reference/api/`. Run it after editing any CRD type or a component's RBAC markers. |
 | `make proto-go` | Generate the Go gRPC stubs for `dataplane.v1` into `cni/gen/`. |
 | `make proto-routebus` | Generate the Go gRPC stubs for `routebus.v1` into `mesh/gen/`. |
 | `make docs` | Build the mkdocs site (`mkdocs build --strict` — broken links/nav fail the build). |
@@ -75,7 +75,7 @@ Tests run at several levels of privilege and fidelity — see the
 | `make lab-up` | sudo | Bring up the clab + Talos fabric and deploy the two Helm charts |
 | `make lab-test` | sudo | Run the live multi-cluster suite against an up fabric |
 
-The `e2e`, `ha`, and `tap-*` targets need **passwordless sudo** (XDP attach, network namespaces, raw
+The `e2e`, `ha`, and `tap-*` targets need passwordless sudo (XDP attach, network namespaces, raw
 sockets); the scripts elevate individual commands themselves. On a NixOS host see the
 [runbook](./runbook.md) for the real-`sudo`-path gotcha.
 

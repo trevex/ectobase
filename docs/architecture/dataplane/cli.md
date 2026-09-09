@@ -1,7 +1,7 @@
 # The flowplane CLI
 
-`flowplane` is a single binary that both **runs the production datapath daemon** and
-provides **static/debug bring-up modes** for the labs. All modes load the embedded eBPF
+`flowplane` is a single binary that both runs the production datapath daemon and
+provides static/debug bring-up modes for the labs. All modes load the embedded eBPF
 bytecode; they differ in how the maps get populated (gRPC vs. flags) and which programs
 get attached. This chapter documents the subcommands in `flowplane/flowplane/src/main.rs`.
 
@@ -41,7 +41,7 @@ atomic `bpf_link_update`) is described in [HA & graceful restart](../ha-graceful
 
 ## `bringup` — static, flag-driven datapath
 
-Brings up the **full** map-driven datapath from command-line flags (no gRPC), then idles.
+Brings up the full map-driven datapath from command-line flags (no gRPC), then idles.
 This is how the netns lab configures a node without the Kubernetes control plane. Every
 map is populated from repeatable flags, each encoding one control-plane object:
 
@@ -83,7 +83,7 @@ Each attaches one program to an interface and idles:
 ## `infer-underlay` — resolve the underlay `/64`
 
 Prints this host's inferred underlay `/64` (preferring a `lo`/`dummy*` fabric loopback)
-and exits. **No root, no datapath** — it just reads `ip -6 -o addr`. The containerlab
+and exits. It needs no root and touches no datapath; it just reads `ip -6 -o addr`. The containerlab
 IPv6-fabric e2e uses it to assert the inferred `/64` matches the fabric-announced `dummy0`.
 
 ## Where to go next

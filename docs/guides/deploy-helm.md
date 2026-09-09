@@ -1,14 +1,14 @@
 # Deploying with Helm
 
 !!! success "Status: Implemented"
-    ectobase deploys as **two Helm charts** — one for the fleet/dispatch cluster, one per
+    ectobase deploys as two Helm charts, one for the fleet/dispatch cluster and one per
     compute/pool cluster. The charts are the generated deploy artifact: their CRDs and RBAC
     are produced by `make generate` directly into the chart trees, so they never drift from
     the API types or the component code.
 
-ectobase is a multi-cluster substrate. A single **dispatch** cluster runs the control plane (an
+ectobase is a multi-cluster substrate. A single dispatch cluster runs the control plane (an
 aggregated apiserver, the dispatch controller, the mesh compiler, and the reflector); each
-**compute/pool** cluster runs the dataplane, the mesh agent, and a broker that syncs
+compute/pool cluster runs the dataplane, the mesh agent, and a broker that syncs
 compiled objects down from the dispatch. Those two roles map onto the two charts:
 
 | Chart | Runs on | Installs |
@@ -22,23 +22,24 @@ namespaces, the broker secret, and the two `helm install`s below.
 
 ## 1. Dispatch cluster
 
-The dispatch chart carries two namespaces on purpose:
+The dispatch chart carries two namespaces:
 
-- The **release namespace** (`namespace`, default `system`) holds the baseline-PSA-safe pods:
+- The release namespace (`namespace`, default `system`) holds the baseline-PSA-safe pods:
   the aggregated apiserver, dispatch-controller, kine, and the dispatch-side broker identity. Create it
   with `--create-namespace`.
-- The chart itself creates the **PSA-privileged `ectobase-system`** namespace
+- The chart itself creates the PSA-privileged `ectobase-system` namespace
   (`agentNamespace`) for the hostNetwork mesh compiler and reflector.
 
 ```sh
 helm install ectobase-dispatch charts/ectobase-dispatch \
   --namespace system --create-namespace \
-  --set reflectorAdmin='[fd00:cafe:1::1]:1338'
+  --set reflectorAdmin='[fd00:cafe:1::1]:1339'
 ```
 
-`reflectorAdmin` is the address the dispatch-controller hands to the agents (the `-reflector-admin`
-flag); it is the dispatch's fabric identity where the reflector listens. Point it at the dispatch's
-reachable address on your underlay.
+`reflectorAdmin` is the RouteBusAdmin fence address the dispatch-controller dials (the
+`-reflector-admin` flag): the reflector's admin port 1339, separate from the agent-facing session
+port 1338 so a session-cert holder cannot reach the fence API. Point it at the dispatch's reachable
+address on the underlay.
 
 Wait for the aggregated API to serve before proceeding — the apiserver pod must start and its
 `APIService` become `Available`:
@@ -55,7 +56,7 @@ Source of truth: `charts/ectobase-dispatch/values.yaml` (schema: `values.schema.
 |---|---|---|
 | `namespace` | `system` | Release namespace for the baseline-safe apiserver/controller/kine + broker identity. |
 | `agentNamespace` | `ectobase-system` | PSA-privileged namespace the chart creates for the hostNetwork compiler + reflector. |
-| `reflectorAdmin` | `[fd00:db8:0:1::1]:1338` | Address passed to the dispatch-controller as `-reflector-admin` (where the reflector listens). |
+| `reflectorAdmin` | `[fd00:db8:0:1::1]:1339` | Fence address the dispatch-controller dials via `-reflector-admin`: the reflector's admin port 1339, separate from the agent session port 1338. |
 | `imagePullPolicy` | `IfNotPresent` | Applied to every container. |
 | `images.dispatchApiserver` | `…/dispatch-apiserver:dev` | Aggregated apiserver image. |
 | `images.dispatchController` | `…/dispatch-controller:dev` | Dispatch controller (ClusterPool reconciler + scheduler). |
@@ -65,15 +66,15 @@ Source of truth: `charts/ectobase-dispatch/values.yaml` (schema: `values.schema.
 
 ## 2. Each compute/pool cluster
 
-The pool chart does **not** manage its own release namespace, and its broker needs the
+The pool chart does not manage its own release namespace, and its broker needs the
 dispatch-broker kubeconfig at startup. So two fixtures must exist before `helm install`:
 
-1. A **PSA-privileged `ectobase-system`** namespace (the dataplane pods are
+1. A PSA-privileged `ectobase-system` namespace (the dataplane pods are
    privileged/hostPID/hostPath, the agent/broker are hostNetwork — Talos enforces baseline PSA
    cluster-wide and would reject them; the lab fabric runs on Talos today, so this always
-   applies there — a bare `kind` cluster, if you test outside the lab, does not enforce PSA by
+   applies there; a bare `kind` cluster outside the lab does not enforce PSA by
    default).
-2. A **`broker-dispatch-kubeconfig` Secret** (key `kubeconfig`) holding the broker's credential to
+2. A `broker-dispatch-kubeconfig` Secret (key `kubeconfig`) holding the broker's credential to
    the dispatch — a token kubeconfig pointing at the dispatch's apiserver on the fabric.
 
 ```sh
@@ -96,7 +97,7 @@ helm install ectobase-pool charts/ectobase-pool \
 ```
 
 `broker.clusterName` is the pool's name (must match a `ClusterPool` on the dispatch) and is
-**required**. `apiserverAddress` is *this* cluster's local apiserver (the agent reads/writes
+required. `apiserverAddress` is this cluster's local apiserver (the agent reads/writes
 its own cluster); `reflectorAddress` is the dispatch's reflector on the fabric. The NAD CRD
 (`NetworkAttachmentDefinition`) must exist first — the chart renders a NAD unconditionally.
 
@@ -113,7 +114,7 @@ Source of truth: `charts/ectobase-pool/values.yaml` (schema: `values.schema.json
 | `reflectorAddress` | `[fd00:db8:0:1::1]:1338` | Dispatch reflector address the agent dials. |
 | `apiserverAddress` | `https://[fd00:db8:0:1::1]:6443` | This cluster's local apiserver (the agent's kubeconfig server URL). |
 | `installCRDs` | `true` | Install the `net`/`compiled` CRDs with the chart (managed on `helm upgrade`). |
-| `broker.clusterName` | `""` | **Required.** This cluster's pool name (e.g. `k02`). |
+| `broker.clusterName` | `""` | Required. This cluster's pool name (e.g. `k02`). |
 | `broker.dispatchKubeconfigSecret` | `broker-dispatch-kubeconfig` | Secret (key `kubeconfig`) with the broker's dispatch token. |
 | `vmMaterializer.enabled` | `false` | Deploy the vm-materializer (CompiledVM → KubeVirt VM). Pools with KubeVirt only. |
 | `tier1Failover.enabled` | `false` | Render the Tier-1 local-failover objects (medik8s NHC + SNR). Opt-in per pool. |
@@ -128,8 +129,8 @@ The Tier-1 knobs live under `tier1Failover.*` (`snrNamespace`, `nodeSelector`, `
 
 ## Trying it end to end
 
-The [local fabric](./local-fabric.md) runs this exact two-chart install for you across a
-dispatch + compute-pool Talos fabric — `make lab-up` renders the charts, brings up the clusters,
+The [local fabric](./local-fabric.md) runs this exact two-chart install across a
+dispatch + compute-pool Talos fabric: `make lab-up` renders the charts, brings up the clusters,
 mints the broker secret, and installs both charts. Read
 `test/lab/internal/deploy/ectobase.go` to see the reference sequence (namespaces, secret,
 the two `helm install`s) that this page mirrors.
@@ -138,5 +139,5 @@ the two `helm install`s) that this page mirrors.
 
 !!! note "Status: Planned"
     The charts are consumed today from the repo tree (`charts/ectobase-dispatch`,
-    `charts/ectobase-pool`). Publishing them as versioned **OCI chart releases** is planned;
+    `charts/ectobase-pool`). Publishing them as versioned OCI chart releases is planned;
     until then, install from a checkout of the repository at the desired revision.

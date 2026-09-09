@@ -1,6 +1,6 @@
-# BPF maps & state model
+# BPF maps and state model
 
-`flowplane` is a **map-driven** dataplane: the eBPF programs make no distributed
+`flowplane` is a map-driven dataplane: the eBPF programs make no distributed
 decisions, they only read (and, for connection state, write) BPF maps. All policy lives
 in those maps, written by the userspace control plane. This chapter documents the real
 maps declared in `flowplane-ebpf/src/maps.rs`, what each holds, and who writes it.
@@ -9,24 +9,24 @@ maps declared in `flowplane-ebpf/src/maps.rs`, what each holds, and who writes i
 
 There are three writers:
 
-- **the loader** (`flowplane`) — fixes map capacities at load time and, on a graceful
+- the loader (`flowplane`) — fixes map capacities at load time and, on a graceful
   restart, re-opens the pinned maps and reseeds bookkeeping.
-- **the control plane** (`flowplane`'s `DataplaneNode` gRPC / CLI) — writes the
+- the control plane (`flowplane`'s `DataplaneNode` gRPC / CLI) — writes the
   policy/config maps (interfaces, routes, firewall, NAT, LB, VIP, meter, DHCP, underlay,
   neighbor-NAT) in response to control-plane calls.
-- **the datapath itself** — writes only the connection-state maps: `CONNTRACK` (flow
+- the datapath itself — writes only the connection-state maps: `CONNTRACK` (flow
   entries) and `METER` (token-bucket state).
 
-Most policy maps are **pinned to bpffs** (default `/sys/fs/bpf/flowplane`) so they — and
+Most policy maps are pinned to bpffs (default `/sys/fs/bpf/flowplane`) so they — and
 the flow state in them — survive a control-plane restart. See
 [HA & graceful restart](../ha-graceful-restart.md).
 
-## Policy & config maps (control-plane written)
+## Policy and config maps: control-plane written
 
 | Map | Type | Key → Value | Holds |
 |---|---|---|---|
 | `INTERFACES` | HashMap (1024) | `IfaceKey` → `IfaceValue` | per-interface overlay identity (VNI + IPs → tap ifindex, underlay endpoint). |
-| `IFACE_META` | HashMap (1024) | `IfaceMetaKey` → `IfaceMetaVal` | **restart journal** — `interface_id → (vni, v4/v6, device, underlay, tap)`. Written on attach, removed on detach, scanned on restart to rebuild in-memory bookkeeping and re-attach guest programs. **Never read by the datapath.** |
+| `IFACE_META` | HashMap (1024) | `IfaceMetaKey` → `IfaceMetaVal` | restart journal — `interface_id → (vni, v4/v6, device, underlay, tap)`. Written on attach, removed on detach, scanned on restart to rebuild in-memory bookkeeping and re-attach guest programs. Never read by the datapath. |
 | `ROUTES` | LPM trie (65536) | `(VNI ++ IPv4, prefix)` → `RouteValue` | per-VNI IPv4 overlay routes → next-hop underlay `/128`. Queried at prefix_len 64 (32 VNI + 32 host). |
 | `ROUTES6` | LPM trie (65536) | `(VNI ++ IPv6, prefix)` → `RouteValue` | per-VNI IPv6 overlay routes. Queried at prefix_len 160 (32 VNI + 128 host). |
 | `UNDERLAY` | HashMap (4096) | underlay `/128` → `UnderlayValue` | the reverse map: an arriving outer IPv6 dst → `(VNI, tap ifindex, guest MAC)`. `tap_ifindex = UNDERLAY_LOCAL_DELIVER` marks a WAN-edge local-deliver underlay; `tap_ifindex = 0` marks a VNI-only entry (e.g. a NAT-gateway node with no local interface). |
@@ -37,7 +37,7 @@ the flow state in them — survive a control-plane restart. See
 | `NAT` | HashMap (1024) | `NatKey` → `NatValue` | network-NAT config per `(vni, guest-ipv4)`: `nat_ip` + port range. |
 | `NAT_IPS` | HashMap (1024) | `VipKey` → `u8` | marks a `(vni, nat_ip)` as a NAT IP so ingress can answer ICMP echo to it in-datapath. |
 | `LB` | HashMap (1024) | `LbKey` → `LbValue` | load-balancer service definition (VIP+port+proto → Maglev table handle). |
-| `MAGLEV` | HashMap (65536) | `MaglevKey` → `[u8;16]` | Maglev lookup table: hashed slot → backend underlay `/128`. |
+| `MAGLEV` | HashMap (65536) | `MaglevKey` → `LbBackend` | Maglev lookup table: hashed slot → the selected backend (underlay VTEP /128 + overlay IP + VNI + family). |
 | `FW_RULES` | HashMap (16384) | `FwRuleKey` → `FwRule` | firewall rule slots, keyed `(ifindex, slot)`. |
 | `FW_META` | HashMap (1024) | ifindex → `FwMeta` | per-interface firewall rule counts per direction (ingress/egress). Absence ⇒ deny (deny-by-default). |
 | `NEIGHBOR_NAT` | HashMap (64) | slot → `NeighborNatEntry` | distributed NAT-gateway return: `nat_ip:port-range@owner-underlay@vni`, so return traffic is reforwarded to the owning node. |
@@ -45,16 +45,16 @@ the flow state in them — survive a control-plane restart. See
 | `DHCP_CONFIG` | Array (1) | `[0]` → `DhcpConfig` | server-wide DHCP: MTU + DNS server lists (v4/v6). |
 | `DHCP_META` | HashMap (1024) | ifindex → `DhcpMeta` | per-interface DHCP: hostname + PXE. |
 
-## Connection-state maps (datapath written)
+## Connection-state maps: datapath written
 
 | Map | Type | Key → Value | Holds |
 |---|---|---|---|
 | `CONNTRACK` | LRU HashMap (1,048,576) | `CtKey` → `CtEntry` | the unified stateful conntrack table (NAT/NAT64/firewall flows). LRU pre-allocated (~80–100 MB, memcg-accounted); sized to dpservice's `DP_FLOW_TABLE_MAX` order. Capacity is fixed at load time and overridable via `--conntrack-max` / `FLOWPLANE_CONNTRACK_MAX`. |
 | `METER` | HashMap (1024) | ifindex → `MeterState` | per-interface egress srTCM token-bucket state. Read and refilled by the datapath meter; the cap is programmed by the control plane. |
 
-## Redirect / devmap helpers (loader written)
+## Redirect / devmap helpers: loader written
 
-XDP `bpf_redirect` *into* a veth only delivers if the veth peer has an XDP program
+XDP `bpf_redirect` into a veth only delivers if the veth peer has an XDP program
 attached — a constraint that bites in the containerlab veth harness (but not on real
 NICs). These devmaps route redirects through `bpf_redirect_map` instead, which does not
 carry the peer-program requirement:

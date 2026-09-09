@@ -2,11 +2,11 @@
 
 Everything in ectobase flows through one reconcile loop:
 
-> **intent → compiled → programmed / materialized**
+> intent → compiled → programmed / materialized
 
-You author declarative intent as CRDs; the **compiler** lowers that intent into `Compiled*` objects
-stamped for a specific pool; the **broker** syncs those down; and finally the **agent** programs the
-dataplane while **materializers** create the actual Pods and VMs. This page walks the loop and
+You author declarative intent as CRDs; the compiler lowers that intent into `Compiled*` objects
+stamped for a specific pool; the broker syncs those down; and finally the agent programs the
+dataplane while materializers create the actual Pods and VMs. This page walks the loop and
 explains why it is split the way it is.
 
 ## The flow
@@ -59,22 +59,23 @@ Intent is authored against the dispatch's aggregated API in five groups:
 | `platform.ectobase.dev` | `ClusterPool` |
 | `compiled.ectobase.dev` | (output only — see below) |
 
-These describe *what you want*, not how any node achieves it: a VPC's VNI, a NIC's overlay
+These describe what you want, not how any node achieves it: a VPC's VNI, a NIC's overlay
 addresses, a firewall policy's rules, an LB's VIP and backends.
 
 ### 2. Compile — lowering intent into `Compiled*`
 
-The **compiler** (the mesh controllers) reconciles that intent into the `compiled.ectobase.dev`
+The compiler (the mesh controllers) reconciles that intent into the `compiled.ectobase.dev`
 group: `CompiledNIC`, `CompiledVM`, `CompiledContainer`, and `CompiledVolumeAttachment`. A
-`CompiledNIC` is the keystone: a fully lowered, node-local bundle of one interface's VNI, underlay
-address, firewall rules, NAT sources, LB memberships, and peer imports — everything the dataplane
-needs for that NIC, resolved and precomputed. Each compiled object is **stamped for a specific pool**
-(via its cluster binding), which is what lets the fleet route it to the right place.
+`CompiledNIC` is the keystone: a fully lowered, node-local bundle of one interface's VNI, overlay
+IPs, firewall rules, NAT sources, LB memberships, and peer imports — everything the dataplane
+needs for that NIC, resolved and precomputed. It deliberately omits the underlay `/128`, which is
+node-local state the dataplane allocates at attach. Each compiled object is stamped for a specific
+pool (via its cluster binding), which is what lets the fleet route it to the right place.
 
 ### 3. Sync — the broker
 
-Each pool's **broker** watches the compiled objects in the dispatch apiserver, **filtered by
-`spec.clusterName`**, and set-reconciles them onto the pool's downstream apiserver as ordinary CRDs.
+Each pool's broker watches the compiled objects in the dispatch apiserver, filtered by
+`spec.clusterName`, and set-reconciles them onto the pool's downstream apiserver as ordinary CRDs.
 The broker is a kubelet-analog: it does not interpret the objects, it just faithfully mirrors the
 subset destined for its pool into local storage where pool-side controllers can act on them.
 
@@ -82,29 +83,29 @@ subset destined for its pool into local storage where pool-side controllers can 
 
 Inside the pool, two kinds of consumer act on the synced compiled objects:
 
-- The **agent** reads `CompiledNIC` and programs the local flowplane dataplane over the
+- The agent reads `CompiledNIC` and programs the local flowplane dataplane over the
   `DataplaneNode` gRPC. It also distributes overlay routes over the [route bus](../architecture/route-bus.md).
-- The **materializers** turn compiled workload objects into real Kubernetes resources: the
-  **pod-materializer** creates a `v1.Pod` (attached to the overlay via Multus + flowplane-cni) from a
-  `CompiledContainer`; the **vm-materializer** creates a KubeVirt `VirtualMachine` from a
+- The materializers turn compiled workload objects into real Kubernetes resources: the
+  pod-materializer creates a `v1.Pod` (attached to the overlay via Multus + flowplane-cni) from a
+  `CompiledContainer`; the vm-materializer creates a KubeVirt `VirtualMachine` from a
   `CompiledVM`. See [Workloads](workloads.md) for both paths.
 
 ## Why the split
 
-The intent→compiled→programmed indirection is not incidental — it is the core design decision.
+The intent→compiled→programmed indirection is the core design decision.
 
-**Central policy authoring.** Intent is authored and validated once, against the dispatch, for the whole
+Central policy authoring: intent is authored and validated once, against the dispatch, for the whole
 fleet. Cross-cutting policy (firewall, LB, NAT allocation, VPC peering) is resolved centrally in the
 compiler, not re-derived on every node.
 
-**Per-pool distribution.** Compiled objects are stamped per pool, so the broker can sync exactly the
-slice each cluster needs — and only that slice — over the `spec.clusterName` filter. A pool never
+Per-pool distribution: compiled objects are stamped per pool, so the broker can sync exactly the
+slice each cluster needs, and only that slice, over the `spec.clusterName` filter. A pool never
 sees another pool's objects.
 
-**A minimal node footprint.** The agent reads **only** `CompiledNIC` plus **node-local facts** it
+A minimal node footprint: the agent reads only `CompiledNIC` plus node-local facts it
 learns from the dataplane itself (for example, the interfaces actually present via `ListInterfaces`).
 It never reads the raw `net.ectobase.dev` CRDs. This keeps the trust and blast radius at the node
-small: a node cannot misinterpret high-level intent because it never sees it — it only applies a
+small: a node cannot misinterpret high-level intent because it never sees it; it only applies a
 fully lowered bundle. It is also the seam that makes brokering compiled objects out to many clusters
 tractable.
 

@@ -1,21 +1,21 @@
 # ectobase
 
-**ectobase** is a Kubernetes-native, multi-cluster IaaS platform that runs **containers and
-KubeVirt virtual machines** side by side on a shared, tenant-isolated overlay network. The overlay
-is implemented in **eBPF/XDP** and rides on a plain routed **IPv6 fabric**: every workload gets an
+ectobase is a Kubernetes-native, multi-cluster IaaS platform that runs containers and
+KubeVirt virtual machines side by side on a shared, tenant-isolated overlay network. The overlay
+is implemented in eBPF and rides on a plain routed IPv6 fabric: every workload gets an
 overlay address that is meaningful only within its tenant, and every host encapsulates and
-decapsulates guest traffic in the kernel. On top of that overlay the platform provides routing,
-stateful NAT, load balancing with DSR, a deny-by-default firewall, DHCP/ARP/ND, QoS, and
-North-South internet egress — all driven by declarative Kubernetes intent.
+decapsulates guest traffic in the kernel using a Geneve tunnel. On top of that overlay the platform
+provides routing, stateful NAT, load balancing with DSR, a deny-by-default firewall, DHCP/ARP/ND,
+QoS, and North-South internet egress — all driven by declarative Kubernetes intent.
 
-The vision is a single control surface for a **fleet** of compute clusters: you author intent once
+The vision is a single control surface for a fleet of compute clusters: intent is authored once
 against an aggregated API, and the platform compiles that intent, distributes it to the right
 cluster, and materializes it as a real container or VM wired into the overlay.
 
 ## Architecture at a glance
 
-ectobase is two **planes** — a dataplane and a control plane — arranged as a **fleet** of one *dispatch*
-cluster and many *pool* clusters, all reachable over the IPv6 fabric.
+ectobase is two planes — a dataplane and a control plane — arranged as a fleet of one dispatch
+cluster and many pool clusters, all reachable over the IPv6 fabric.
 
 ```mermaid
 flowchart TB
@@ -54,30 +54,30 @@ flowchart TB
     dpA <-. IPv6 fabric .-> dpB
 ```
 
-The **compiler** lowers user intent into a single per-NIC
+The compiler lowers user intent into a single per-NIC
 [`CompiledNIC`](architecture/compile-sync-materialize.md) (plus `CompiledVM` / `CompiledContainer` /
-`CompiledVolumeAttachment`) stamped for a specific pool. Each pool's **broker** syncs those compiled
-objects down; **materializers** turn them into Pods and VMs, and the per-node **agent** programs the
+`CompiledVolumeAttachment`) stamped for a specific pool. Each pool's broker syncs those compiled
+objects down; materializers turn them into Pods and VMs, and the per-node agent programs the
 `CompiledNIC` into the local dataplane. Overlay reachability is distributed over the
-[route bus](architecture/route-bus.md) — a metalbond-style pub/sub RIB, **not** BGP in the hot path.
+[route bus](architecture/route-bus.md) — a metalbond-style pub/sub RIB, not BGP in the hot path.
 BGP appears only at the [WAN edge](features/ns-edge.md).
 
 ## Start here
 
-- **Operators** → [Deploying with Helm](guides/deploy-helm.md), then the
+- Operators → [Deploying with Helm](guides/deploy-helm.md), then the
   [Operations runbook](guides/runbook.md).
-- **Contributors** → [Development](guides/development.md) and [Getting started](guides/getting-started.md).
-- **Architects** → the [Concepts](concepts/two-planes-and-the-fleet.md) chapter and the
+- Contributors → [Development](guides/development.md) and [Getting started](guides/getting-started.md).
+- Architects → the [Concepts](concepts/two-planes-and-the-fleet.md) chapter and the
   [Architecture](architecture/layout.md) reference, starting with the
   [overlay](concepts/overlay.md).
 
 ## The two planes
 
-- **flowplane** — the eBPF/XDP **dataplane** (Rust, built on [aya](https://aya-rs.dev/)). A
+- flowplane — the eBPF dataplane (Rust, built on [aya](https://aya-rs.dev/)). A
   map-driven kernel overlay: every forwarding decision is a per-flow table lookup. It holds no
   policy of its own and exposes a small per-node gRPC surface (`DataplaneNode`) that the control
   plane programs. Code: `flowplane/`.
-- **mesh** — the per-cluster **control plane** (Go, controller-runtime). CRDs describe intent;
+- mesh — the per-cluster control plane (Go, controller-runtime). CRDs describe intent;
   controllers compile intent into `Compiled*` objects; the agent programs the local dataplane; the
   reflector distributes overlay routes. Code: `mesh/`, `cni/`.
 
@@ -87,7 +87,7 @@ Several capabilities are designed and partially built, gated on hardware or furt
 work:
 
 !!! note "Status: Planned"
-    - **Cross-pool failover.** Two-tier, fence-gated evacuation of a lost pool is partially built
+    - Cross-pool failover. Two-tier, fence-gated evacuation of a lost pool is partially built
       (health/lease tracking, Ceph NetworkFence, route blocklisting); end-to-end reschedule across
       pools is still being completed.
 

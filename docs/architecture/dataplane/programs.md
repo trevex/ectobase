@@ -44,60 +44,60 @@ flowchart LR
 `uplink_rx` (XDP, `ingress::try_uplink_rx`) handles everything arriving from the fabric.
 For an encapsulated overlay frame it:
 
-1. **Resolves the destination interface** from the *outer* IPv6 destination via the
+1. Resolves the destination interface from the outer IPv6 destination via the
    `UNDERLAY` map — yielding the VNI, tap ifindex, and guest MAC. Keying on the underlay
    `/128` (not the inner IP) is what makes overlapping overlay IPv4 across VNIs safe.
-2. Handles several branches *before* plain delivery, in order:
-   - **Edge local-deliver** — if the resolved entry carries the `UNDERLAY_LOCAL_DELIVER`
+2. Handles several branches before plain delivery, in order:
+   - Edge local-deliver — if the resolved entry carries the `UNDERLAY_LOCAL_DELIVER`
      sentinel tap, decap and hand the inner packet to the local kernel (the WAN edge's
      VyOS, which masquerades it to the real internet).
-   - **Load balancing** — Maglev-select a backend underlay for the VIP. If the backend is
-     remote, **reforward** the still-encapped frame straight to the backend node without
+   - Load balancing — Maglev-select a backend underlay for the VIP. If the backend is
+     remote, reforward the still-encapped frame straight to the backend node without
      decapping (DSR: the inner destination stays the VIP). See
      [Load balancing](../../features/loadbalancer.md).
-   - **NAT return** — a conntrack lookup for a `CT_REWRITE_DST` entry restores the guest's
+   - NAT return — a conntrack lookup for a `CT_REWRITE_DST` entry restores the guest's
      inner destination (and, for NAT64, expands an IPv4 reply back to IPv6).
-   - **Neighbor NAT** — if the packet targets a `nat_ip` owned by *another* node,
+   - Neighbor NAT — if the packet targets a `nat_ip` owned by another node,
      reforward it to the owning node's underlay (distributed NAT-gateway return).
-   - **In-datapath ICMP echo reply** — echo requests to a NAT IP or an LB VIP are
+   - In-datapath ICMP echo reply — echo requests to a NAT IP or an LB VIP are
      answered by the datapath itself and re-encapped back out, without involving any VM.
-3. Applies the **firewall** (deny-by-default) and touches/creates **conntrack** state.
-4. **Decaps** — strips the outer Ethernet+IPv6, rewrites the inner Ethernet
+3. Applies the firewall (deny-by-default) and touches/creates conntrack state.
+4. Decaps — strips the outer Ethernet+IPv6, rewrites the inner Ethernet
    (dst = guest MAC, src = gateway MAC), and redirects to the guest tap (via the
    `GUEST_DEV` devmap).
 
-`uplink_rx` runs on *every* fabric uplink a host has, so a dual-homed host decaps returns
+`uplink_rx` runs on every fabric uplink a host has, so a dual-homed host decaps returns
 arriving via either ToR.
 
-## `tc_guest_tx` — the guest edge (egress)
+## `tc_guest_tx` — the guest egress edge
 
-`tc_guest_tx` (tcx on the guest's host-side veth/tap ingress, which *is* guest egress)
+`tc_guest_tx` (tcx on the guest's host-side veth/tap ingress, which is guest egress)
 processes everything a guest emits:
 
-1. **DHCP / NAT64 dispatch** — DHCPv4/DHCPv6 requests tail-call the `tc_guest_dhcp`
+1. DHCP / NAT64 dispatch — DHCPv4/DHCPv6 requests tail-call the `tc_guest_dhcp`
    responder; overlay-egress traffic to a NAT64 prefix (`64:ff9b::/96`) tail-calls
    `tc_guest_nat64`. The tail calls run through the `GUEST_PROGS_TC` program array (tc
    classifiers can only tail-call other tc programs), each getting a fresh verifier stack
    budget.
-2. **Firewall** (deny-by-default, egress direction) and **conntrack** creation.
-3. **VIP / SNAT** rewrites and, if configured, **rate metering** (srTCM token bucket).
-4. **Route + deliver decision** (`egress::forward_decision_v4` / `_v6`): an exact-match
+2. Firewall (deny-by-default, egress direction) and conntrack creation.
+3. VIP / SNAT rewrites and, if configured, rate metering (srTCM token bucket).
+4. Route + deliver decision (`egress::forward_decision_v4` / `_v6`): an exact-match
    lookup in `ROUTES`/`ROUTES6` for the guest's VNI yields either:
-   - **Local** — the destination is on the same host: redirect the inner frame directly
+   - Local — the destination is on the same host: redirect the inner frame directly
      to the local tap (the same-host fast path);
-   - **Encap** — write the outer Ethernet+IPv6 header and redirect out the fabric uplink;
-   - **Pass** — no route: hand to the kernel.
+   - Encap — write the outer Ethernet+IPv6 header and redirect out the fabric uplink;
+   - Pass — no route: hand to the kernel.
 
 The heavy per-protocol logic (DHCP, NAT64, route lookup, encap) all lives in
 `flowplane-core`; `tc_guest_tx` and its tail-call targets are the tc-context glue.
 
 ## `wan_rx` — the WAN-edge return path
 
-On an **edge** node (`serve --role edge`, sharing VyOS's netns), `wan_rx` (XDP,
+On an edge node (`serve --role edge`, sharing VyOS's netns), `wan_rx` (XDP,
 `ingress::try_wan_rx`) is attached to the WAN-facing uplink. It catches internet return
-traffic destined to a registered `nat_ip` and **encapsulates it back toward the owning
-hypervisor** over the fabric (`encap::encap_and_redirect_via_devmap`), completing the
-distributed NAT-gateway loop. The reverse direction — overlay egress *to* the internet —
+traffic destined to a registered `nat_ip` and encapsulates it back toward the owning
+hypervisor over the fabric (`encap::encap_and_redirect_via_devmap`), completing the
+distributed NAT-gateway loop. The reverse direction — overlay egress to the internet —
 is delivered on the far host by the `uplink_rx` edge local-deliver branch described above.
 Both directions reuse the same encap/decap core. See
 [North-South WAN edge](../../features/ns-edge.md).
@@ -107,22 +107,22 @@ Both directions reuse the same encap/decap core. See
 The datapath answers L2/L3 control-plane requests locally, so a guest never needs an
 external DHCP or discovery service:
 
-- **DHCPv4 / DHCPv6** — `tc_guest_dhcp` (tail-call target, slot `GUEST_PROG_DHCP`)
+- DHCPv4 / DHCPv6 — `tc_guest_dhcp` (tail-call target, slot `GUEST_PROG_DHCP`)
   parses the request and writes a fixed-layout reply offering the guest's overlay
   address, gateway, MTU, and DNS servers (from `DHCP_CONFIG` + per-interface `DHCP_META`).
   It also learns the guest MAC.
-- **ARP** (IPv4) and **IPv6 ND** — answered inline for the configured overlay gateway
+- ARP (IPv4) and IPv6 ND — answered inline for the configured overlay gateway
   address, presenting the gateway at the interface's own MAC.
 
 See [DHCP / ARP / IPv6 ND responders](../../features/dhcp-arp-nd.md).
 
 ## Debug / support programs
 
-- **`xdp_pass`** — a trivial `XDP_PASS` program. XDP `bpf_redirect` *into* a veth only
+- `xdp_pass` — a trivial `XDP_PASS` program. XDP `bpf_redirect` into a veth only
   delivers if the veth peer has an XDP program attached; `xdp_pass` (and the `GUEST_DEV`/
   `UPLINK_DEV` devmaps) satisfy that requirement in the containerlab veth harness.
   Production NICs are unaffected.
-- **`xdp_inspect`** — attaches to any interface and dumps the first packet bytes into the
+- `xdp_inspect` — attaches to any interface and dumps the first packet bytes into the
   `INSPECT` map on a timer; a debugging aid, not part of the datapath.
 
 ## Where to go next

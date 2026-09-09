@@ -2,21 +2,21 @@
 
 !!! warning "Status: Partial"
     Policing (drop) and the EDT stamping/wiring are implemented and validated in the lab. True FQ
-    *pacing* (loss-free shaping) can only be measured on real fabric/VMs — nested netns + veth do
+    pacing (loss-free shaping) can only be measured on real fabric/VMs — nested netns + veth do
     not provide real FQ, so the clab run validates policing and "tstamp is set", not the pacing.
 
-Per-interface QoS gives each guest three independent traffic-control lanes: **EDT-shaped total
-egress**, **policed external egress**, and **policed ingress**. The headline capability is *true
-shaping* — pacing traffic to a rate with no packet loss — using the kernel's Earliest-Departure-Time
-model (EDT + the FQ qdisc), the same design Cilium's Bandwidth Manager adopted after moving off TBF
+Per-interface QoS gives each guest three independent traffic-control lanes: EDT-shaped total
+egress, policed external egress, and policed ingress. The central capability is true shaping:
+pacing traffic to a rate with no packet loss, using the kernel's Earliest-Departure-Time model
+(EDT + the FQ qdisc), the same design Cilium's Bandwidth Manager adopted after moving off TBF
 policing.
 
 ## The unified tcx guest edge
 
-Shaping requires the guest egress path to traverse an **egress qdisc**, which is only possible on
+Shaping requires the guest egress path to traverse an egress qdisc, which is only possible on
 the tc/skb path. An XDP `bpf_redirect`/devmap transmit uses `ndo_xdp_xmit`, which bypasses the qdisc
-entirely — making shaping structurally impossible on the XDP path. So the guest edge is unified on a
-single **tcx** datapath (`tc_guest_tx`) for both container veth and VM tap. There is one guest
+entirely, making shaping structurally impossible on the XDP path. So the guest edge is unified on a
+single tcx datapath (`tc_guest_tx`) for both container veth and VM tap. There is one guest
 program and one attach path; the uplink edge stays XDP (`uplink_rx` / `wan_rx`), and it gains an FQ
 qdisc so egress traffic redirected onto it is paced.
 
@@ -25,13 +25,13 @@ host→guest traverses the tap qdisc → tcx egress.
 
 ## Shape vs police
 
-The distinction is fundamental:
+Shaping and policing differ in both mechanism and over-rate behaviour:
 
 | | Shape | Police |
 |---|---|---|
-| **Mechanism** | EDT: stamp a departure time, FQ delays the packet | Token bucket: drop when the bucket is empty |
-| **Over-rate behaviour** | delay (no loss), smoothed to the rate | drop |
-| **Where** | egress total lane | external-egress (public) lane, ingress lane |
+| Mechanism | EDT: stamp a departure time, FQ delays the packet | Token bucket: drop when the bucket is empty |
+| Over-rate behaviour | delay (no loss), smoothed to the rate | drop |
+| Where | egress total lane | external-egress (public) lane, ingress lane |
 
 Shaping paces without loss and is the right model for a bandwidth cap; policing drops and is used
 where a hard sub-cap or an inbound cap is wanted.
@@ -43,17 +43,17 @@ All lanes are keyed by interface ifindex and live in one QoS map entry per inter
 
 | Lane | Direction | Mechanism | Where |
 |---|---|---|---|
-| Egress total | VM → out | **EDT shaping** (smoothed) | stamp in `tc_guest_tx`, pace at uplink FQ |
-| Egress public | VM → external | token-bucket **police** | `tc_guest_tx`, on `is_external` |
-| Ingress | out → VM | token-bucket **police** | `uplink_rx`, after resolving the dest tap |
+| Egress total | VM → out | EDT shaping (smoothed) | stamp in `tc_guest_tx`, pace at uplink FQ |
+| Egress public | VM → external | token-bucket police | `tc_guest_tx`, on `is_external` |
+| Ingress | out → VM | token-bucket police | `uplink_rx`, after resolving the dest tap |
 
-### Egress shaping (EDT)
+### Egress shaping with EDT
 
 In `tc_guest_tx`, once the forward decision resolves the source VM's egress rate, a pure-core
 function computes the packet's departure time and the datapath stamps it on the skb via
 `bpf_skb_set_tstamp(skb, tstamp, BPF_SKB_TSTAMP_DELIVERY_MONO)`. The existing encap
-(`bpf_skb_adjust_room`) and `bpf_redirect(uplink)` preserve `tstamp`, and because a **tc** redirect
-goes through `dev_queue_xmit`, the packet hits the uplink's **FQ**, which holds it until its
+(`bpf_skb_adjust_room`) and `bpf_redirect(uplink)` preserve `tstamp`, and because a tc redirect
+goes through `dev_queue_xmit`, the packet hits the uplink's FQ, which holds it until its
 timestamp.
 
 The scheduling math lives in `flowplane-core/src/meter.rs` as `edt_departure` — the shaping analog
@@ -78,17 +78,17 @@ pub fn edt_departure(rate_bps: u64, wire_len: u64, t_last: u64, now: u64) -> (u6
 `edt_departure` on the egress rate, writes it back, and returns the departure timestamp — `None`
 means no shaping is configured (no entry, or rate 0) and the caller sends immediately.
 
-FQ hashes the encapped uplink traffic by the outer (per-dest-node) header, so per-flow *fairness*
-degrades to per-dest-node buckets — but EDT *pacing* honours `tstamp` regardless of the flow bucket,
+FQ hashes the encapped uplink traffic by the outer (per-dest-node) header, so per-flow fairness
+degrades to per-dest-node buckets — but EDT pacing honours `tstamp` regardless of the flow bucket,
 which is what shaping needs.
 
 ### External-egress and ingress policing
 
 Both reuse the token bucket `take` unchanged:
 
-- **`public_pass`** runs in `tc_guest_tx` on `is_external` only — an additional drop cap on external
+- `public_pass` runs in `tc_guest_tx` on `is_external` only — an additional drop cap on external
   egress, layered on top of the EDT total shaping.
-- **`ingress_pass`** runs in `uplink_rx` after decap resolves the destination tap, keyed by that
+- `ingress_pass` runs in `uplink_rx` after decap resolves the destination tap, keyed by that
   tap. Policing (drop) works fine in XDP; ingress is policed only.
 
 ```rust
@@ -107,8 +107,8 @@ pub fn take(bps: u64, burst: u64, tokens: u64, last_ns: u64, now: u64, len: u64)
 ### Same-node delivery is never shaped
 
 Same-node VM→VM (the `Deliver::Local` fast path) redirects tap→tap directly, bypassing the uplink
-FQ, so it is **not** egress-shaped. Cross-node egress (encap → uplink) and all external egress
-**are** shaped.
+FQ, so it is not egress-shaped. Cross-node egress (encap → uplink) and all external egress
+are shaped.
 
 ## The `InterfaceQoS` API
 
@@ -134,12 +134,12 @@ type RateLimit struct {
 `EgressQoS.RateMbps` → the EDT total lane, `EgressQoS.PublicMbps` → the public police lane,
 `Ingress.RateMbps` → the ingress police lane.
 
-Like the firewall, NAT, and load-balancer policy, QoS rides the **compiled** path rather than the
+Like the firewall, NAT, and load-balancer policy, QoS rides the compiled path rather than the
 raw `NetworkInterface`: the compiler flattens `NetworkInterfaceSpec.QoS` into
 `CompiledNIC.spec.qos` (a `CompiledQoS{egressMbps, publicMbps, ingressMbps}` — burst is not
 programmed), the broker syncs the `CompiledNIC` to the workload's pool, and the node agent programs
 QoS from the `CompiledNIC` — selecting it, like all the agent's policy, by the NIC's interface being
-**locally attached** (matched by the unique `(VNI, overlay IP)` key), not by a declared node. So QoS
+locally attached (matched by the unique `(VNI, overlay IP)` key), not by a declared node. So QoS
 follows the workload across pools and reschedules, and the agent reads no raw `NetworkInterface` at
 all. The agent's QoS reconciler diffs the desired caps against what it has applied and idempotently
 clears a lane to unlimited when the spec drops it or the NIC is deleted. The uplink loader ensures an
@@ -147,11 +147,11 @@ clears a lane to unlimited when the spec drops it or the NIC is deleted. The upl
 
 ## Validating shaping
 
-**A containerlab run cannot validate precise pacing.** Nested netns + veth means no real FQ pacing
+A containerlab run cannot validate precise pacing. Nested netns + veth means no real FQ pacing
 (the same reason Cilium disables its Bandwidth Manager in Kind). So in clab, the egress/ingress
-**policing** and the "tstamp is set" wiring validate; **true FQ shaping validates only on real
-fabric/VMs**. The EDT *computation* is covered by `flowplane-core/src/meter.rs` unit tests plus an
-in-process sim departure-spacing test over a controlled clock, but a claim that shaping *paces*
+policing and the "tstamp is set" wiring validate; true FQ shaping validates only on real
+fabric/VMs. The EDT computation is covered by `flowplane-core/src/meter.rs` unit tests plus an
+in-process sim departure-spacing test over a controlled clock, but a claim that shaping paces
 requires a real-hardware measurement.
 
 Kernel floor: tcx links need ≥ 6.6; `bpf_skb_set_tstamp` delivery-mono needs a recent kernel.

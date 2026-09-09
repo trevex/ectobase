@@ -1,7 +1,7 @@
 # Helm chart values
 
-ectobase ships two Helm charts: **`ectobase-dispatch`** for the fleet control plane
-and **`ectobase-pool`** for a workload cluster and its per-node dataplane. This
+ectobase ships two Helm charts: `ectobase-dispatch` for the fleet control plane
+and `ectobase-pool` for a workload cluster and its per-node dataplane. This
 page documents the important knobs of each, grouped by concern. It is not an
 exhaustive key dump — see each chart's `values.yaml` for every field.
 
@@ -34,7 +34,7 @@ the reflector, and the broker's dispatch-side identity.
 
 | Value | Default | Meaning |
 | --- | --- | --- |
-| `reflectorAdmin` | `[fd00:db8:0:1::1]:1338` | Address the dispatch-controller passes to agents (`-reflector-admin`); the fabric loopback of the control-plane node. |
+| `reflectorAdmin` | `[fd00:db8:0:1::1]:1339` | Reflector RouteBusAdmin (fence) address the dispatch-controller dials via `-reflector-admin`; the separate admin port, not the agent-facing session port `1338`. |
 
 ---
 
