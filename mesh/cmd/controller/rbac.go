@@ -19,3 +19,8 @@ package main
 //+kubebuilder:rbac:groups=storage.ectobase.dev,resources=volumes,verbs=get;list;watch
 //+kubebuilder:rbac:groups=compiled.ectobase.dev,resources=compilednics;compiledvms;compiledvolumeattachments;compiledcontainers,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=compiled.ectobase.dev,resources=compilednics/status;compiledvms/status;compiledvolumeattachments/status;compiledcontainers/status,verbs=get;update;patch
+
+// Leader election (review I3): the manager holds a Lease lock so only one pod is
+// active fleet-wide (single-writer allocators). Leader election also emits events.
+//+kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=events,verbs=create;patch

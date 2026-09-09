@@ -80,9 +80,21 @@ func main() {
 	// charts/ectobase-dispatch/templates/compiler.yaml),
 	// so a default :8080 listener collides on rolling restart (new pod can't bind while the old holds
 	// it) → crashloop. Nothing scrapes it in this deployment; "0" turns it off.
+	//
+	// Leader election (review I3): the IPAM/VPC/NAT allocators rely on single-writer
+	// serialization for used-set race-safety. A rolling restart can briefly run two
+	// controller pods → double-allocation. A Lease lock ensures only one manager is
+	// active fleet-wide; ReleaseOnCancel lets a graceful shutdown (SetupSignalHandler
+	// cancels the Start context) hand the lease over immediately for fast failover.
+	// LeaderElectionNamespace is left empty: controller-runtime reads the pod's
+	// in-cluster serviceaccount namespace (ectobase-system).
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme:  scheme,
-		Metrics: metricsserver.Options{BindAddress: "0"},
+		Scheme:                        scheme,
+		Metrics:                       metricsserver.Options{BindAddress: "0"},
+		LeaderElection:                true,
+		LeaderElectionID:              "ectobase-mesh-controller",
+		LeaderElectionResourceLock:    "leases",
+		LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
 		log.Fatalf("new manager: %v", err)
