@@ -61,3 +61,16 @@ func TestLowestFreeV6(t *testing.T) {
 		t.Fatalf("v6 first = %v,%v want fd00:1::1", got, ok)
 	}
 }
+
+func TestInPrefix(t *testing.T) {
+	p := netip.MustParsePrefix("10.0.1.0/24")
+	if !InPrefix(p, netip.MustParseAddr("10.0.1.42")) {
+		t.Fatal("10.0.1.42 should be in 10.0.1.0/24")
+	}
+	if InPrefix(p, netip.MustParseAddr("10.0.2.1")) {
+		t.Fatal("10.0.2.1 should not be in 10.0.1.0/24")
+	}
+	if InPrefix(p, netip.MustParseAddr("fd00::1")) {
+		t.Fatal("v6 addr should not be in a v4 prefix")
+	}
+}

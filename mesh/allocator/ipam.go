@@ -55,3 +55,11 @@ func LowestFree(prefix netip.Prefix, used map[netip.Addr]struct{}, reserved []ne
 	}
 	return netip.Addr{}, false
 }
+
+// InPrefix reports whether addr is a member of prefix (same family and range).
+func InPrefix(prefix netip.Prefix, addr netip.Addr) bool {
+	if prefix.Addr().Is4() != addr.Is4() {
+		return false
+	}
+	return prefix.Contains(addr)
+}
