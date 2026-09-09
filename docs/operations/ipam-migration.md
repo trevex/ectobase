@@ -16,3 +16,17 @@ free-form and unallocated. Migration is non-disruptive and requires no renumberi
 
 Rollout order: create Subnets/LBPools first (they go `Ready`), then patch the
 `Ref` fields. Watch for `State=Invalid`/`Conflict` before removing any legacy path.
+
+## De-gate semantics (keep-last-good)
+
+Compilation is gated on `State=Allocated` for the current generation, but that gate
+only *suppresses re-emission* — it never deletes an already-compiled object. If a
+NIC or LB regresses out of `Allocated` (edited to a bad IP, its `Subnet`/`LBPool`
+deleted, or its `Generation` bumped mid-edit) it goes `Invalid`/`Pending`, yet its
+existing `CompiledNIC` is **left in place**: the running datapath keeps serving the
+last successfully-allocated IPs until re-allocation succeeds. This is intentional —
+in a PAM tool a transient bad edit must not tear down live connectivity.
+
+To actually revoke an allocation and remove it from the datapath, **delete the
+`NetworkInterface`** (or `LoadBalancer`); owner-ref GC then removes the compiled
+object. Editing a resource into an invalid state is not a teardown path.

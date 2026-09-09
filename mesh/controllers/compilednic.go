@@ -310,6 +310,16 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// the current spec generation. The NIC status watch re-enqueues when the
 	// allocator finishes; a spec edit bumps Generation (de-gating) until the
 	// allocator re-runs. Downstream therefore only ever sees final addresses.
+	//
+	// Keep-last-good contract: this gate SUPPRESSES (re)emission but deliberately
+	// does NOT delete an existing CompiledNIC. A NIC that regresses out of Allocated
+	// — edited to a bad IP, its Subnet deleted, or its Generation bumped mid-edit so
+	// it drops to Invalid/Pending — keeps serving its last successfully-compiled
+	// state; the running datapath continues on its last-good IPs until re-allocation
+	// lands. This is intentional in a PAM tool: a transient bad edit must not tear
+	// down live connectivity. Revocation/teardown is via DELETING the
+	// NetworkInterface (owner-ref GC removes the CompiledNIC), never via editing it
+	// into an invalid state.
 	if nic.Status.State != "Allocated" ||
 		nic.Status.ObservedGeneration != nic.Generation ||
 		len(nic.Status.AllocatedIPs) == 0 {
