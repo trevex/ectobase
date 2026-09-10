@@ -40,3 +40,8 @@ subjects:
   - kind: ServiceAccount
     name: dispatch-broker
     namespace: {{ .Values.namespace }}
+  # Cert-authenticated brokers present Org=ectobase:brokers; per-pool write-scope is enforced
+  # by the ClusterRestriction admission plugin off the CN (ectobase:cluster:<pool>).
+  - kind: Group
+    name: "ectobase:brokers"
+    apiGroup: rbac.authorization.k8s.io
