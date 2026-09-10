@@ -136,14 +136,41 @@ Alongside the sync, the broker reports upward:
 
 ### The broker's dispatch credential
 
-The broker authenticates to the dispatch with a dedicated identity, `dispatch-broker`. The
-dispatch-side chart provisions the ServiceAccount + ClusterRole + Binding
-(`charts/ectobase-dispatch/templates/broker-identity.yaml`), and the pool-side broker
-Deployment mounts a kubeconfig Secret for it
-(`charts/ectobase-pool/templates/broker.yaml`, `--dispatch-kubeconfig`). The broker
-talks to the local pool apiserver in-cluster (its downstream client) and to the
-dispatch through that mounted credential. The `ClusterRestriction` admission plugin
-plus the field-scoped cache mean a broker can only ever touch its own pool's slice.
+The broker's identity to the dispatch is a cert-manager client certificate, not a shared
+ServiceAccount token. The pool chart mints a `Certificate`
+(`charts/ectobase-pool/templates/routebus-tls.yaml`) with `commonName: ectobase:cluster:<pool>`
+and `organizations: [ectobase:brokers]`, issued from the pool's own `ectobase-pool-ca`
+Issuer — the same intermediate that signs the route-bus node leaves. The broker Deployment
+(`charts/ectobase-pool/templates/broker.yaml`, `--dispatch-client-cert`/`--dispatch-client-key`)
+mounts that cert instead of a kubeconfig; client-go reloads it off disk as cert-manager rotates
+it (2160h/90d), so the credential never goes stale between restarts the way the old 24h token
+did. The broker talks to the local pool apiserver in-cluster (its downstream client) and to the
+dispatch over this mTLS-authenticated channel; it also verifies the dispatch server's own
+cert-manager-issued serving cert against the `ectobase-ca` root, so `insecure-skip-tls-verify`
+is gone.
+
+The dispatch's x509 authenticator turns the cert's CN into the broker's Kubernetes username,
+`ectobase:cluster:<pool>` — the exact prefix the `ClusterRestriction` admission plugin parses to
+scope writes to that pool's own `ClusterPool` status and placement status
+(`dispatch/pkg/clusterrestriction/admission.go`). Under the old shared-SA token every pool
+authenticated as the same central identity (`system:serviceaccount:system:dispatch-broker`),
+which never matched that prefix, so the plugin was effectively inert; the per-pool CN is what
+activates it as a real write-scope. The PKI behind all of this is the platform-wide `ectobase-ca`
+root (see [Control/data split & the route bus](./route-bus.md)) — the route bus is one consumer
+of that root, not its owner; the same CA now also backs the dispatch's serving cert and the
+broker's client cert.
+
+This closes write-scoping, not read-scoping: the broker's dispatch-side *read* set is still
+bounded only by the field-scoped cache described above (`spec.clusterName` selector), not by
+RBAC — a broker with the right identity could still be granted broader read access by
+misconfigured RBAC, since none exists to prevent it beyond the plugin's write checks. A
+namespace-per-pool authorization model that closes that gap centrally is a separate,
+not-yet-built effort.
+
+The legacy token path (a dedicated `dispatch-broker` ServiceAccount + kubeconfig Secret,
+`charts/ectobase-dispatch/templates/broker-identity.yaml`) still exists as a migration fallback
+when `pki.enabled=false`; the dispatch apiserver's delegated authentication unions bearer-token
+and x509 client-cert authn, so both credential types work side by side during a rollout.
 
 ```mermaid
 flowchart TB
