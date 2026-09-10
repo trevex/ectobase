@@ -112,19 +112,24 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		return fmt.Errorf("dispatch aggregated API: %w", err)
 	}
 
-	// --- Shared broker→dispatch kubeconfig (lab fixture) ---
-	// The dispatch-side dispatch-broker ServiceAccount is created by the ectobase-dispatch chart (system ns); mint
-	// a token for it and hand-write the broker's kubeconfig to the dispatch's fabric address.
-	slog.Info("minting broker dispatch token")
-	token, err := exec.OutputStr(ctx, "kubectl", "--kubeconfig", s.DispatchKubeconfig,
-		"create", "token", "dispatch-broker", "-n", "system", "--duration=24h")
-	if err != nil {
-		return fmt.Errorf("create broker token: %w", err)
-	}
-	brokerKubeconfig := filepath.Join(s.WorkDir, "broker-dispatch.kubeconfig")
-	if err := os.WriteFile(brokerKubeconfig,
-		[]byte(mintKubeconfig(s.DispatchIdentity, strings.TrimSpace(token))), 0o600); err != nil {
-		return fmt.Errorf("write broker kubeconfig: %w", err)
+	// --- Shared broker→dispatch kubeconfig (lab fixture; token path only) ---
+	// In mtls mode the broker gets its dispatch credential from cert-manager
+	// (broker-dispatch-tls, minted by the pool chart) instead, so none of this runs.
+	var brokerKubeconfig string
+	if !s.RouteBusMTLS {
+		// The dispatch-side dispatch-broker ServiceAccount is created by the ectobase-dispatch chart (system ns); mint
+		// a token for it and hand-write the broker's kubeconfig to the dispatch's fabric address.
+		slog.Info("minting broker dispatch token")
+		token, err := exec.OutputStr(ctx, "kubectl", "--kubeconfig", s.DispatchKubeconfig,
+			"create", "token", "dispatch-broker", "-n", "system", "--duration=24h")
+		if err != nil {
+			return fmt.Errorf("create broker token: %w", err)
+		}
+		brokerKubeconfig = filepath.Join(s.WorkDir, "broker-dispatch.kubeconfig")
+		if err := os.WriteFile(brokerKubeconfig,
+			[]byte(mintKubeconfig(s.DispatchIdentity, strings.TrimSpace(token))), 0o600); err != nil {
+			return fmt.Errorf("write broker kubeconfig: %w", err)
+		}
 	}
 
 	// Pre-create one ClusterPool per compute cluster (lab fixture). platform.ectobase.dev is served
@@ -166,15 +171,19 @@ func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster, brokerKu
 	if err := kubectlApply(ctx, c.Kubeconfig, s.NADCRDPath); err != nil {
 		return fmt.Errorf("cluster %s: apply NAD CRD: %w", c.Name, err)
 	}
-	// The pool chart does not manage its release namespace, and the broker-dispatch-kubeconfig Secret
-	// must exist before the chart's broker pod starts — so pre-create the (PSA-privileged)
-	// ectobase-system namespace + the secret ahead of helm.
+	// The pool chart does not manage its release namespace, so pre-create the (PSA-privileged)
+	// ectobase-system namespace ahead of helm regardless of mtls.
 	if err := ensureHelmNamespace(ctx, c.Kubeconfig, "ectobase-system", "ectobase-pool"); err != nil {
 		return fmt.Errorf("cluster %s: ensure namespace: %w", c.Name, err)
 	}
-	if err := createSecretFromFile(ctx, c.Kubeconfig, "ectobase-system",
-		"broker-dispatch-kubeconfig", "kubeconfig", brokerKubeconfig); err != nil {
-		return fmt.Errorf("cluster %s: create broker secret: %w", c.Name, err)
+	// In token mode the broker-dispatch-kubeconfig Secret must exist before the chart's broker pod
+	// starts, so create it ahead of helm too. In mtls mode cert-manager mints broker-dispatch-tls
+	// via the chart instead, so this is skipped.
+	if !s.RouteBusMTLS {
+		if err := createSecretFromFile(ctx, c.Kubeconfig, "ectobase-system",
+			"broker-dispatch-kubeconfig", "kubeconfig", brokerKubeconfig); err != nil {
+			return fmt.Errorf("cluster %s: create broker secret: %w", c.Name, err)
+		}
 	}
 	// The pool chart renders a cert-manager Issuer (ectobase-pool-ca) and each agent
 	// self-mints a leaf Certificate, so cert-manager must be up first. The pool uses a
@@ -188,14 +197,17 @@ func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster, brokerKu
 	if err := helmInstallPool(ctx, c.Kubeconfig, c.Name, s.PoolChartPath, s.DispatchIdentity, s.UnderlayWithin, s.RouteBusMTLS, c.UnderlayCIDRs, s.ImageRegistry); err != nil {
 		return fmt.Errorf("cluster %s: helm install ectobase-pool: %w", c.Name, err)
 	}
-	// The broker mounts broker-dispatch-kubeconfig as a volume, so an existing broker pod keeps the
-	// OLD kubeconfig across a re-`deploy` that rewrote the secret (helm won't roll it — the
-	// secret is created outside the chart). On a fresh up the broker starts after the secret so
-	// this is a no-op; on re-deploy it makes the broker pick up the current dispatch address.
-	// Best-effort.
-	if err := exec.Run(ctx, "kubectl", "--kubeconfig", c.Kubeconfig, "-n", "ectobase-system",
-		"rollout", "restart", "deploy/dispatch-broker"); err != nil {
-		slog.Debug("rollout restart dispatch-broker", "cluster", c.Name, "err", err)
+	if !s.RouteBusMTLS {
+		// The broker mounts broker-dispatch-kubeconfig as a volume, so an existing broker pod keeps the
+		// OLD kubeconfig across a re-`deploy` that rewrote the secret (helm won't roll it — the
+		// secret is created outside the chart). On a fresh up the broker starts after the secret so
+		// this is a no-op; on re-deploy it makes the broker pick up the current dispatch address.
+		// Best-effort. Not needed in mtls mode: cert-manager's broker-dispatch-tls Secret is
+		// managed by the chart, so helm itself rolls the broker when it changes.
+		if err := exec.Run(ctx, "kubectl", "--kubeconfig", c.Kubeconfig, "-n", "ectobase-system",
+			"rollout", "restart", "deploy/dispatch-broker"); err != nil {
+			slog.Debug("rollout restart dispatch-broker", "cluster", c.Name, "err", err)
+		}
 	}
 	// Multus (thin) so a Pod annotated onto our overlay is attached via Multus ->
 	// flowplane-cni (a SECONDARY network) instead of a hand-driven gRPC attach. Installed
@@ -329,10 +341,13 @@ func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIde
 	args = append(args, imageSetArgs(imageRegistry, dispatchImages)...)
 	if mtls {
 		// reflectorIP MUST equal the host part of reflectorAdmin/reflectorAddress (dispatchIdentity)
-		// or client cert verification of the reflector server fails.
+		// or client cert verification of the reflector server fails. dispatchApiserver.serviceIP is
+		// the IP SAN on the dispatch-apiserver's serving cert; it MUST equal dispatchIdentity, the IP
+		// the broker (and everyone else) dials.
 		args = append(args,
 			"--set", "pki.enabled=true",
 			"--set", "pki.reflectorIP="+reflectorIP,
+			"--set", "dispatchApiserver.serviceIP="+dispatchIdentity,
 		)
 	}
 	return exec.Run(ctx, "helm", args...)
@@ -361,10 +376,14 @@ func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, di
 	timeout := "8m"
 	if mtls {
 		// The intermediate is IP-name-constrained to the pool /48. underlayCIDRs is a single
-		// CIDR (no comma) so helm --set takes it literally.
+		// CIDR (no comma) so helm --set takes it literally. dispatchServer is the URL the
+		// broker dials for its dispatch credential; the host MUST match the dispatch-apiserver
+		// serving cert's IP SAN (dispatchIdentity, see helmInstallDispatch's pki.reflectorIP /
+		// dispatchApiserver.serviceIP).
 		args = append(args,
 			"--set", "pki.enabled=true",
 			"--set", "pki.underlayCIDRs="+underlayCIDRs,
+			"--set", "dispatchServer=https://["+dispatchIdentity+"]:6443",
 		)
 		// mTLS adds a serial startup chain to agent readiness (broker CSR -> dispatch signer ->
 		// intermediate Secret -> pool Issuer ready -> cert-manager mints the node leaf -> agent
