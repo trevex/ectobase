@@ -124,7 +124,7 @@ spec:
   ports:
     - name: https
       port: 443
-      targetPort: 6443
+      targetPort: {{ ternary 6444 6443 .Values.pki.enabled }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -136,6 +136,12 @@ metadata:
     {{- include "ectobase-dispatch.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  {{- if .Values.pki.enabled }}
+  # hostNetwork singleton: a rolling update would surge a 2nd pod that collides on the host
+  # port (6444), deadlocking the rollout. Recreate tears the old pod down first.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       app: dispatch-apiserver
@@ -144,6 +150,15 @@ spec:
       labels:
         app: dispatch-apiserver
     spec:
+      {{- if .Values.pki.enabled }}
+      # Direct fabric exposure: the cross-cluster broker connects straight to the ectobase
+      # apiserver (verifying its ectobase-ca serving cert + presenting its client cert), rather
+      # than via the host kube-apiserver's aggregation (which serves the HOST cluster CA). 6443
+      # is the host kube-apiserver, so bind 6444. Aggregation for in-cluster clients is
+      # unaffected (the ClusterIP Service targetPort follows to 6444).
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
       serviceAccountName: dispatch-apiserver
       containers:
         - name: apiserver
@@ -153,7 +168,7 @@ spec:
             {{- include "ectobase-dispatch.resources" . | nindent 12 }}
           args:
             - "--etcd-servers=http://kine:2379"
-            - "--secure-port=6443"
+            - "--secure-port={{ ternary 6444 6443 .Values.pki.enabled }}"
             - "--cert-dir=/var/run/apiserver/certs"
             - "--audit-log-path=-"
             # The admission-policy plugins' informers watch alpha resources
@@ -171,7 +186,7 @@ spec:
             {{- end }}
           ports:
             - name: https
-              containerPort: 6443
+              containerPort: {{ ternary 6444 6443 .Values.pki.enabled }}
           volumeMounts:
             - name: cert-dir
               mountPath: /var/run/apiserver/certs
@@ -186,14 +201,14 @@ spec:
           readinessProbe:
             httpGet:
               path: /readyz
-              port: 6443
+              port: {{ ternary 6444 6443 .Values.pki.enabled }}
               scheme: HTTPS
             initialDelaySeconds: 5
             periodSeconds: 5
           livenessProbe:
             httpGet:
               path: /livez
-              port: 6443
+              port: {{ ternary 6444 6443 .Values.pki.enabled }}
               scheme: HTTPS
             initialDelaySeconds: 15
             periodSeconds: 10

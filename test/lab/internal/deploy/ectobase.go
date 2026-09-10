@@ -435,7 +435,7 @@ func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, di
 		args = append(args,
 			"--set", "pki.enabled=true",
 			"--set", "pki.underlayCIDRs="+underlayCIDRs,
-			"--set", "dispatchServer=https://["+dispatchIdentity+"]:6443",
+			"--set", "dispatchServer=https://["+dispatchIdentity+"]:6444",
 		)
 		// mTLS adds a serial startup chain to agent readiness (broker CSR -> dispatch signer ->
 		// intermediate Secret -> pool Issuer ready -> cert-manager mints the node leaf -> agent
@@ -523,7 +523,7 @@ kind: Config
 clusters:
 - name: dispatch
   cluster:
-    server: "https://[%s]:6443"
+    server: "https://[%s]:6444"
     certificate-authority-data: %s
 contexts:
 - name: broker@dispatch
