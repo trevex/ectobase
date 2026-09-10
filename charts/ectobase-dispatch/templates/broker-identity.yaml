@@ -45,3 +45,45 @@ subjects:
   - kind: Group
     name: "ectobase:brokers"
     apiGroup: rbac.authorization.k8s.io
+---
+# Bootstrap identity: a fresh pool's broker uses a short-lived token for this SA to submit its
+# RouteBusIdentity CSR and read back the signed intermediate — the ONLY thing it can do — before
+# cert-manager mints the pool's steady-state broker client cert. Intermediate RENEWALS thereafter
+# use the steady-state leaf (Org=ectobase:brokers, granted routebusidentities by the role above),
+# so this identity is needed only at first boot.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dispatch-broker-bootstrap
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dispatch-broker-bootstrap
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["platform.ectobase.dev"]
+    resources: ["routebusidentities"]
+    verbs: ["create", "get", "update"]
+  - apiGroups: ["platform.ectobase.dev"]
+    resources: ["routebusidentities/status"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dispatch-broker-bootstrap
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dispatch-broker-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: dispatch-broker-bootstrap
+    namespace: {{ .Values.namespace }}
