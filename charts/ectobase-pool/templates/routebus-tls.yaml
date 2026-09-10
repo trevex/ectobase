@@ -1,4 +1,4 @@
-{{- if .Values.routebus.mtls.enabled }}
+{{- if .Values.pki.enabled }}
 # Copyright 2026 ectobase contributors
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -13,13 +13,13 @@
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
-  name: routebus-pool-ca
+  name: ectobase-pool-ca
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "ectobase-pool.labels" . | nindent 4 }}
 spec:
   ca:
-    secretName: {{ .Values.routebus.mtls.intermediateSecret }}
+    secretName: {{ .Values.pki.intermediateSecret }}
 # The per-node agent leaves are NOT declared here: each agent self-mints its own cert-manager
 # Certificate (CN=node, IP SAN=its underlay /128) from this Issuer at startup, so the reflector
 # can bind route nexthops to the node's own underlay. See mesh/agent/nodecert.go.

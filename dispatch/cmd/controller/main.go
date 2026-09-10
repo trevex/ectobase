@@ -52,7 +52,7 @@ func main() {
 	csiClusterID := flag.String("csi-cluster-id", "", "Ceph clusterID (fsid) written to NetworkFence spec.parameters.clusterID; required against a real ceph-csi driver")
 	csiSecretName := flag.String("csi-secret-name", "rook-csi-rbd-provisioner", "NetworkFence provisioner secret name")
 	csiSecretNS := flag.String("csi-secret-namespace", "rook-ceph", "NetworkFence provisioner secret namespace")
-	routebusCACert := flag.String("routebus-ca-cert", "", "route-bus root CA cert PEM (dispatch cert-manager routebus-ca secret); empty => RouteBusIdentity signer inactive")
+	routebusCACert := flag.String("routebus-ca-cert", "", "route-bus root CA cert PEM (dispatch cert-manager ectobase-ca secret); empty => RouteBusIdentity signer inactive")
 	routebusCAKey := flag.String("routebus-ca-key", "", "route-bus root CA key PEM")
 
 	flag.Parse()
@@ -134,7 +134,7 @@ func main() {
 	}
 
 	// Route-bus PKI signer: signs per-pool intermediate CAs from the root (mounted from the
-	// dispatch cert-manager routebus-ca secret). Inactive when the root isn't mounted (mTLS off).
+	// dispatch cert-manager ectobase-ca secret). Inactive when the root isn't mounted (mTLS off).
 	root, err := pki.LoadRootCA(*routebusCACert, *routebusCAKey)
 	if err != nil {
 		log.Fatalf("load route-bus root CA: %v", err)

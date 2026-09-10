@@ -47,7 +47,7 @@ spec:
             # agent-facing session port, so an agent holding a valid session cert
             # cannot drive fencing. Only the dispatch-controller reaches :1339.
             - "--admin-listen=:1339"
-            {{- if .Values.routebus.mtls.enabled }}
+            {{- if .Values.pki.enabled }}
             - "--admin-client-cn=dispatch-controller"
             - "--tls-ca=/etc/routebus-tls/ca.crt"
             - "--tls-cert=/etc/routebus-tls/tls.crt"
@@ -60,13 +60,13 @@ spec:
             - name: routebus-admin
               containerPort: 1339
               protocol: TCP
-          {{- if .Values.routebus.mtls.enabled }}
+          {{- if .Values.pki.enabled }}
           volumeMounts:
             - name: routebus-tls
               mountPath: /etc/routebus-tls
               readOnly: true
           {{- end }}
-      {{- if .Values.routebus.mtls.enabled }}
+      {{- if .Values.pki.enabled }}
       volumes:
         - name: routebus-tls
           secret:

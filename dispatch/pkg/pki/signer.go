@@ -201,7 +201,7 @@ func publicKeysEqual(a, b any) bool {
 	return string(ad) == string(bd)
 }
 
-// LoadRootCA reads the root CA cert + key PEM (the dispatch cert-manager routebus-ca Secret,
+// LoadRootCA reads the root CA cert + key PEM (the dispatch cert-manager ectobase-ca Secret,
 // mounted as tls.crt/tls.key) into signing material. Returns nil,nil when both paths are empty
 // (mTLS not configured — the signer stays inactive).
 func LoadRootCA(certPath, keyPath string) (*RootCA, error) {

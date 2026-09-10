@@ -1,4 +1,4 @@
-{{- if .Values.routebus.mtls.enabled }}
+{{- if .Values.pki.enabled }}
 # Copyright 2026 ectobase contributors
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -11,11 +11,11 @@
 # NOTE: a CA-type ClusterIssuer reads its CA secret from cert-manager's
 # cluster-resource-namespace (default "cert-manager"). Install cert-manager with
 # --cluster-resource-namespace={{ .Values.agentNamespace }}, or mirror the
-# {{ .Values.routebus.mtls.caSecretName }} secret into cert-manager's namespace.
+# {{ .Values.pki.caSecretName }} secret into cert-manager's namespace.
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
-  name: routebus-selfsign
+  name: ectobase-ca-selfsign
   # The root CA + selfsign issuer live in the dispatch-controller's namespace so the signer
   # can mount the root cert+key to sign pool intermediates. The cluster-scoped ClusterIssuer
   # (below) still needs this CA secret in cert-manager's cluster-resource-namespace.
@@ -28,31 +28,31 @@ spec:
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: routebus-ca
+  name: ectobase-ca
   namespace: {{ .Values.namespace }}
   labels:
     {{- include "ectobase-dispatch.labels" . | nindent 4 }}
 spec:
   isCA: true
-  commonName: ectobase-routebus-ca
-  secretName: {{ .Values.routebus.mtls.caSecretName }}
+  commonName: ectobase-ca
+  secretName: {{ .Values.pki.caSecretName }}
   duration: 87600h # 10y
   privateKey:
     algorithm: ECDSA
     size: 256
   issuerRef:
-    name: routebus-selfsign
+    name: ectobase-ca-selfsign
     kind: Issuer
 ---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
-  name: {{ .Values.routebus.mtls.clusterIssuer }}
+  name: {{ .Values.pki.clusterIssuer }}
   labels:
     {{- include "ectobase-dispatch.labels" . | nindent 4 }}
 spec:
   ca:
-    secretName: {{ .Values.routebus.mtls.caSecretName }}
+    secretName: {{ .Values.pki.caSecretName }}
 ---
 # Reflector server identity. Agents dial the reflector by its fabric-loopback IP,
 # so the IP MUST be a SAN or client verification fails.
@@ -70,7 +70,7 @@ spec:
     algorithm: ECDSA
     size: 256
   ipAddresses:
-    - {{ .Values.routebus.mtls.reflectorIP | quote }}
+    - {{ .Values.pki.reflectorIP | quote }}
   dnsNames:
     - reflector
     - reflector.{{ .Values.agentNamespace }}
@@ -79,7 +79,7 @@ spec:
     - server auth
     - client auth
   issuerRef:
-    name: {{ .Values.routebus.mtls.clusterIssuer }}
+    name: {{ .Values.pki.clusterIssuer }}
     kind: ClusterIssuer
 ---
 # dispatch-controller client identity. commonName MUST match the reflector's
@@ -101,6 +101,6 @@ spec:
   usages:
     - client auth
   issuerRef:
-    name: {{ .Values.routebus.mtls.clusterIssuer }}
+    name: {{ .Values.pki.clusterIssuer }}
     kind: ClusterIssuer
 {{- end }}

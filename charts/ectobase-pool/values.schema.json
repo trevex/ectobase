@@ -141,24 +141,18 @@
         }
       }
     },
-    "routebus": {
+    "pki": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "mtls": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "intermediateSecret": {
-              "type": "string"
-            },
-            "underlayCIDRs": {
-              "type": "string"
-            }
-          }
+        "enabled": {
+          "type": "boolean"
+        },
+        "intermediateSecret": {
+          "type": "string"
+        },
+        "underlayCIDRs": {
+          "type": "string"
         }
       }
     }

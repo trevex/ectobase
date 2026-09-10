@@ -45,12 +45,12 @@ spec:
             - "--dataplane=unix:///run/flowplane/dataplane.sock"
             # Reach the API over the fabric (the mgmt net has no inter-node path here).
             - "--kubeconfig=/etc/mesh/kubeconfig"
-            {{- if .Values.routebus.mtls.enabled }}
+            {{- if .Values.pki.enabled }}
             # Per-node mTLS: the agent self-mints a leaf (CN=node, IP SAN=this node's underlay)
             # from the pool Issuer via cert-manager, then dials the reflector verifying it with the
             # ROOT (the broker-written intermediate Secret's ca.crt).
             - "--tls-ca=/etc/routebus-root/ca.crt"
-            - "--routebus-issuer=routebus-pool-ca"
+            - "--routebus-issuer=ectobase-pool-ca"
             - "--routebus-cert-namespace={{ .Values.namespace }}"
             {{- end }}
           env:
@@ -71,7 +71,7 @@ spec:
             - name: flowplane-sock
               mountPath: /run/flowplane
               readOnly: true
-            {{- if .Values.routebus.mtls.enabled }}
+            {{- if .Values.pki.enabled }}
             # Only the ROOT is mounted; the per-node leaf is minted at runtime and read via the API.
             - name: routebus-root
               mountPath: /etc/routebus-root
@@ -85,10 +85,10 @@ spec:
           hostPath:
             path: /run/flowplane
             type: DirectoryOrCreate
-        {{- if .Values.routebus.mtls.enabled }}
+        {{- if .Values.pki.enabled }}
         - name: routebus-root
           secret:
-            secretName: {{ .Values.routebus.mtls.intermediateSecret }}
+            secretName: {{ .Values.pki.intermediateSecret }}
             items:
               - key: ca.crt
                 path: ca.crt

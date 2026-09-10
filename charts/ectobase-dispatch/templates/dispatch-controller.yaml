@@ -64,7 +64,7 @@ spec:
             {{- include "ectobase-dispatch.resources" . | nindent 12 }}
           args:
             - "-reflector-admin={{ .Values.reflectorAdmin }}"
-            {{- if .Values.routebus.mtls.enabled }}
+            {{- if .Values.pki.enabled }}
             - "-reflector-tls-ca=/etc/routebus-tls/ca.crt"
             - "-reflector-tls-cert=/etc/routebus-tls/tls.crt"
             - "-reflector-tls-key=/etc/routebus-tls/tls.key"
@@ -88,7 +88,7 @@ spec:
             # falls back to a plain LIST+WATCH.
             - name: KUBE_FEATURE_WatchListClient
               value: "false"
-          {{- if .Values.routebus.mtls.enabled }}
+          {{- if .Values.pki.enabled }}
           volumeMounts:
             - name: routebus-tls
               mountPath: /etc/routebus-tls
@@ -102,5 +102,5 @@ spec:
             secretName: dispatch-controller-routebus-tls
         - name: routebus-ca
           secret:
-            secretName: {{ .Values.routebus.mtls.caSecretName }}
+            secretName: {{ .Values.pki.caSecretName }}
           {{- end }}

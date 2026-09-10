@@ -52,7 +52,7 @@ type EctobaseSpec struct {
 	ImageRegistry string
 
 	// RouteBusMTLS turns on the route-bus mutual-TLS PKI: install cert-manager in every
-	// cluster and pass routebus.mtls.enabled=true to both charts. The dispatch cluster gets
+	// cluster and pass pki.enabled=true to both charts. The dispatch cluster gets
 	// cert-manager --cluster-resource-namespace=system (the ClusterIssuer's CA secret lives
 	// there); each pool gets its underlay /48 as the intermediate's IP name-constraint.
 	RouteBusMTLS bool
@@ -176,7 +176,7 @@ func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster, brokerKu
 		"broker-dispatch-kubeconfig", "kubeconfig", brokerKubeconfig); err != nil {
 		return fmt.Errorf("cluster %s: create broker secret: %w", c.Name, err)
 	}
-	// The pool chart renders a cert-manager Issuer (routebus-pool-ca) and each agent
+	// The pool chart renders a cert-manager Issuer (ectobase-pool-ca) and each agent
 	// self-mints a leaf Certificate, so cert-manager must be up first. The pool uses a
 	// NAMESPACED Issuer (reads its secret from its own namespace), so no
 	// cluster-resource-namespace override is needed here.
@@ -331,8 +331,8 @@ func helmInstallDispatch(ctx context.Context, kubeconfig, chartPath, dispatchIde
 		// reflectorIP MUST equal the host part of reflectorAdmin/reflectorAddress (dispatchIdentity)
 		// or client cert verification of the reflector server fails.
 		args = append(args,
-			"--set", "routebus.mtls.enabled=true",
-			"--set", "routebus.mtls.reflectorIP="+reflectorIP,
+			"--set", "pki.enabled=true",
+			"--set", "pki.reflectorIP="+reflectorIP,
 		)
 	}
 	return exec.Run(ctx, "helm", args...)
@@ -363,8 +363,8 @@ func helmInstallPool(ctx context.Context, kubeconfig, clusterName, chartPath, di
 		// The intermediate is IP-name-constrained to the pool /48. underlayCIDRs is a single
 		// CIDR (no comma) so helm --set takes it literally.
 		args = append(args,
-			"--set", "routebus.mtls.enabled=true",
-			"--set", "routebus.mtls.underlayCIDRs="+underlayCIDRs,
+			"--set", "pki.enabled=true",
+			"--set", "pki.underlayCIDRs="+underlayCIDRs,
 		)
 		// mTLS adds a serial startup chain to agent readiness (broker CSR -> dispatch signer ->
 		// intermediate Secret -> pool Issuer ready -> cert-manager mints the node leaf -> agent
