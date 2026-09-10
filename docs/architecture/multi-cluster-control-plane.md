@@ -149,6 +149,17 @@ dispatch over this mTLS-authenticated channel; it also verifies the dispatch ser
 cert-manager-issued serving cert against the `ectobase-ca` root, so `insecure-skip-tls-verify`
 is gone.
 
+The broker reaches the aggregated apiserver **directly**, not through the host kube-apiserver's
+aggregation. The host kube-apiserver (`:6443`) serves the *host* cluster CA and authenticates
+callers via the aggregation front-proxy, so a broker dialing it could neither verify against
+`ectobase-ca` nor have its client-cert CN read. Instead the aggregated apiserver is exposed on
+the dispatch fabric IP at `:6444` (`hostNetwork` in the lab; a LoadBalancer/VIP in production),
+and the broker dials that. This is purely additive: aggregation still serves in-cluster clients
+(the compiler, dispatch-controller) via requestheader, and the aggregated apiserver still
+delegates *authorization* (SubjectAccessReview) to the host — only the broker's *authentication*
+now happens directly (x509 client cert), which is what its `DelegatingAuthenticationOptions`
+union already supports.
+
 The dispatch's x509 authenticator turns the cert's CN into the broker's Kubernetes username,
 `ectobase:cluster:<pool>` — the exact prefix the `ClusterRestriction` admission plugin parses to
 scope writes to that pool's own `ClusterPool` status and placement status
@@ -173,6 +184,16 @@ mTLS is the sole broker→dispatch auth path. `charts/ectobase-dispatch/template
 now grants the `dispatch-broker` `ClusterRole` only to the `ectobase:brokers` cert group; the
 narrow `dispatch-broker-bootstrap` ServiceAccount remains as the first-boot enrollment identity
 (routebusidentities-only) used before a fresh pool's steady-state client cert exists.
+
+That bootstrap resolves a chicken-and-egg: the steady-state cert is issued from the pool
+intermediate, which the broker itself bootstraps *over* the dispatch connection. A fresh pool
+is pre-provisioned two Secrets out-of-band — the `ectobase-ca` root (`dispatch-root-ca`, the
+trust anchor) and a short-lived bootstrap-token kubeconfig for `dispatch-broker-bootstrap`
+(`broker-dispatch-bootstrap`). On first boot the broker (a two-phase startup in
+`dispatch/cmd/broker`) uses that token to submit its `RouteBusIdentity` CSR and write the
+intermediate; cert-manager then mints `broker-dispatch-tls`; the broker waits for it and runs
+steady-state on mTLS, using the leaf (not the bootstrap token) for all later intermediate
+renewals. See [Deploy with Helm](../operations/deploy-helm.md#fresh-pool-enrollment-bootstrap).
 
 ```mermaid
 flowchart TB

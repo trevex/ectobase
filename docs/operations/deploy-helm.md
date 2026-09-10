@@ -93,7 +93,7 @@ helm install ectobase-pool charts/ectobase-pool \
   --set underlayWithin='fd00:cafe::/32' \
   --set pki.enabled=true \
   --set pki.underlayCIDRs='fd00:cafe:2::/48' \
-  --set dispatchServer='https://[fd00:cafe:1::1]:6443'
+  --set dispatchServer='https://[fd00:cafe:1::1]:6444'
 ```
 
 `broker.clusterName` is the pool's name (must match a `ClusterPool` on the dispatch) and is
@@ -117,6 +117,15 @@ serving cert needs the dispatch's fabric IPv6 as an IP SAN — set it via
 `dispatchApiserver.serviceIP` on the dispatch chart, and it must equal the host in the pool
 chart's `dispatchServer` URL (the address the broker actually dials):
 
+The broker connects **directly** to the aggregated apiserver, not through the host
+kube-apiserver's aggregation layer. With `pki.enabled`, the aggregated apiserver runs
+`hostNetwork` on the dispatch node's fabric IP at **port 6444** (`6443` is the host
+kube-apiserver, which serves the *host* cluster CA, not `ectobase-ca`) — so `dispatchServer`
+is `https://[<serviceIP>]:6444`. In-cluster clients (mesh compiler, dispatch-controller) keep
+using aggregation unchanged; direct exposure is an additional ingress the apiserver's auth
+stack already supports. In the single-node lab this is `hostNetwork`; a production dispatch
+would front the apiserver with a stable LoadBalancer/VIP instead.
+
 ```sh
 # dispatch cluster
 helm install ectobase-dispatch charts/ectobase-dispatch \
@@ -134,6 +143,25 @@ admission plugin's per-pool write-scoping — see
 broker→dispatch auth path. The legacy `broker-dispatch-kubeconfig` token Secret and the
 shared full-privilege dispatch-side `dispatch-broker` ServiceAccount have been removed —
 cert-manager must be installed in every cluster before `helm install`.
+
+#### Fresh-pool enrollment (bootstrap)
+
+The broker's steady-state cert (`broker-dispatch-tls`) is issued from the pool's intermediate
+CA, which the broker itself bootstraps *over* the dispatch connection — so a fresh pool needs
+two Secrets pre-provisioned out-of-band (in `ectobase-system`) *before* the broker starts:
+
+- **`dispatch-root-ca`** (key `ca.crt`) — the `ectobase-ca` root cert (copy it from the
+  dispatch cluster's `ectobase-ca` Secret). The broker's trust anchor for verifying the
+  dispatch serving cert.
+- **`broker-dispatch-bootstrap`** (key `kubeconfig`) — a short-lived kubeconfig for the
+  narrow `dispatch-broker-bootstrap` ServiceAccount (`kubectl create token
+  dispatch-broker-bootstrap -n system --duration=1h`), with the root as
+  `certificate-authority-data`. Used only for the first-boot `RouteBusIdentity` CSR.
+
+On first boot the broker uses the bootstrap token to submit its CSR and write the intermediate
+Secret; cert-manager then mints `broker-dispatch-tls`; the broker waits for it and switches to
+steady-state mTLS (and uses that leaf, not the bootstrap token, for all later intermediate
+renewals). The lab deploy (`test/lab`) provisions both Secrets automatically.
 
 ### Pool values
 
