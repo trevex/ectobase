@@ -153,10 +153,23 @@ two Secrets pre-provisioned out-of-band (in `ectobase-system`) *before* the brok
 - **`dispatch-root-ca`** (key `ca.crt`) — the `ectobase-ca` root cert (copy it from the
   dispatch cluster's `ectobase-ca` Secret). The broker's trust anchor for verifying the
   dispatch serving cert.
-- **`broker-dispatch-bootstrap`** (key `kubeconfig`) — a short-lived kubeconfig for the
-  narrow `dispatch-broker-bootstrap` ServiceAccount (`kubectl create token
-  dispatch-broker-bootstrap -n system --duration=1h`), with the root as
+- **`broker-dispatch-bootstrap`** (key `kubeconfig`) — a short-lived kubeconfig for **this
+  pool's own** bootstrap ServiceAccount (`kubectl create token
+  dispatch-broker-bootstrap-<pool> -n system --duration=1h`), with the root as
   `certificate-authority-data`. Used only for the first-boot `RouteBusIdentity` CSR.
+
+On the dispatch side, enrollment also creates four per-pool objects alongside the `ClusterPool`
+(the lab generates them; see `clusterPoolsManifest` in `test/lab/internal/deploy/ectobase.go`):
+a pre-created **`RouteBusIdentity`** named `<pool>`, the **`dispatch-broker-bootstrap-<pool>`**
+ServiceAccount, and a **`dispatch-broker-pool-<pool>`** ClusterRole + Binding scoped with
+`resourceNames: [<pool>]` and bound to both that SA and the pool's cert identity
+`ectobase:cluster:<pool>`.
+
+That per-pool scoping is load-bearing, not cosmetic: a `RouteBusIdentity` carries a pool's
+intermediate-CA CSR and signed cert, so a fleet-wide grant (or one shared bootstrap SA) would let
+any pool's credential obtain **another** pool's intermediate CA and mint leaves impersonating that
+pool's nodes on the route bus. The object is pre-created precisely so the grant can omit `create`,
+which RBAC cannot scope by name.
 
 On first boot the broker uses the bootstrap token to submit its CSR and write the intermediate
 Secret; cert-manager then mints `broker-dispatch-tls`; the broker waits for it and switches to

@@ -7,12 +7,24 @@ package dispatchside
 
 //+kubebuilder:rbac:groups=compiled.ectobase.dev,resources=compilednics;compiledvms;compiledvolumeattachments;compiledcontainers,verbs=get;list;watch
 // The broker only READS ClusterPool spec (to resolve its cluster) and writes its OWN pool STATUS
-// (heartbeat + per-VM placement). It never creates or mutates pool spec — the operator owns that —
-// so the parent resource is read-only here and the ClusterRestriction admission plugin is
-// defense-in-depth, not the sole guard against a broker editing pools.
+// (the lease/capacity heartbeat + node prefixes). It never creates or mutates pool spec — the
+// operator owns that — so the parent resource is read-only here, scoped to the broker's own pool
+// by the ClusterRestriction admission plugin (which matches the ClusterPool name against the
+// broker's cert CN).
+//
+// NOTE: nothing on compute.ectobase.dev is granted, so the broker's attempt to report
+// VirtualMachine.status.placement upward (dispatch/pkg/broker/broker.go) is RBAC-denied and
+// silently dropped — that field has never been populated in a deployed cluster. Granting it
+// here would be a CROSS-POOL write (ClusterRestriction does not scope virtualmachines), so the
+// fix is to report placement into the pool's own namespaced CompiledVM status instead; see the
+// per-pool authorization design.
 //+kubebuilder:rbac:groups=platform.ectobase.dev,resources=clusterpools,verbs=get;list;watch
 //+kubebuilder:rbac:groups=platform.ectobase.dev,resources=clusterpools/status,verbs=get;update;patch
-// Route-bus PKI: the broker submits its pool intermediate-CA CSR as a RouteBusIdentity and reads
-// back the signed cert (the dispatch signer fills status).
-//+kubebuilder:rbac:groups=platform.ectobase.dev,resources=routebusidentities,verbs=get;list;watch;create;update
-//+kubebuilder:rbac:groups=platform.ectobase.dev,resources=routebusidentities/status,verbs=get
+// Route-bus PKI access is deliberately NOT granted here. A RouteBusIdentity carries a pool's
+// intermediate-CA CSR + signed cert, so a fleet-wide grant on this shared role would let ANY
+// pool's credential obtain ANY other pool's intermediate CA (and thus mint leaves impersonating
+// that pool's nodes on the bus). Instead each pool gets its own ClusterRole scoped with
+// resourceNames to its own object, bound to that pool's cert identity (ectobase:cluster:<pool>)
+// and its first-boot bootstrap SA — provisioned per pool at enrollment alongside the ClusterPool.
+// Because resourceNames cannot scope `create`, the RouteBusIdentity is pre-created at enrollment
+// and the broker only ever get/updates it.

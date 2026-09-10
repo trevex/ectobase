@@ -38,6 +38,44 @@ func TestClusterPoolsManifest(t *testing.T) {
 	}
 }
 
+// TestClusterPoolsManifestScopesRouteBusPerPool guards the per-pool isolation of the route-bus
+// PKI: a pool's RouteBusIdentity carries its intermediate-CA CSR + signed cert, so the grant must
+// be resourceNames-scoped to that pool alone. A fleet-wide grant (or a shared bootstrap SA) would
+// let any pool obtain any OTHER pool's intermediate CA and mint leaves impersonating its nodes.
+func TestClusterPoolsManifestScopesRouteBusPerPool(t *testing.T) {
+	got := clusterPoolsManifest([]ComputeCluster{{Name: "k02"}, {Name: "k03"}})
+
+	for _, want := range []string{
+		// Pre-created so the grant can omit `create` (resourceNames cannot scope it).
+		"kind: RouteBusIdentity",
+		// Per-pool bootstrap SA — never a single shared one.
+		"name: dispatch-broker-bootstrap-k02",
+		"name: dispatch-broker-bootstrap-k03",
+		// Scoped to this pool's own object only.
+		`resourceNames: ["k02"]`,
+		`resourceNames: ["k03"]`,
+		// Bound to the steady-state cert identity too, not just the bootstrap SA.
+		`name: "ectobase:cluster:k02"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("manifest missing %q:\n%s", want, got)
+		}
+	}
+
+	// The grant must never include `create` — that verb cannot be resourceNames-scoped, so
+	// granting it would re-open cross-pool RouteBusIdentity creation.
+	if strings.Contains(got, `"create"`) {
+		t.Fatalf("per-pool route-bus grant must not include create:\n%s", got)
+	}
+	// One identity + one SA + one ClusterRole + one binding per pool. Anchored to line start so
+	// the `kind:` entries inside roleRef/subjects don't count as resources.
+	for _, kind := range []string{"\nkind: RouteBusIdentity", "\nkind: ServiceAccount", "\nkind: ClusterRole\n", "\nkind: ClusterRoleBinding"} {
+		if n := strings.Count(got, kind); n != 2 {
+			t.Fatalf("expected 2 of %q, got %d:\n%s", kind, n, got)
+		}
+	}
+}
+
 func TestClusterPoolsManifestEmpty(t *testing.T) {
 	if got := clusterPoolsManifest(nil); got != "" {
 		t.Fatalf("expected empty manifest for no clusters, got %q", got)

@@ -189,7 +189,7 @@ func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster) error {
 		}
 
 		token, err := exec.OutputStr(ctx, "kubectl", "--kubeconfig", s.DispatchKubeconfig,
-			"create", "token", "dispatch-broker-bootstrap", "-n", "system", "--duration=1h")
+			"create", "token", "dispatch-broker-bootstrap-"+c.Name, "-n", "system", "--duration=1h")
 		if err != nil {
 			return fmt.Errorf("cluster %s: create bootstrap token: %w", c.Name, err)
 		}
@@ -491,9 +491,59 @@ func clusterPoolsManifest(compute []ComputeCluster) string {
 apiVersion: platform.ectobase.dev/v1alpha1
 kind: ClusterPool
 metadata:
-  name: %s
+  name: %[1]s
 spec:
   region: eu
+---
+# Pre-created so this pool's route-bus access can be resourceNames-scoped: RBAC cannot scope
+# `+"`create`"+` by name, so the broker only ever get/updates its own RouteBusIdentity. The signer
+# leaves a stub with no spec.request alone until the broker fills in its CSR.
+apiVersion: platform.ectobase.dev/v1alpha1
+kind: RouteBusIdentity
+metadata:
+  name: %[1]s
+spec:
+  poolName: %[1]s
+---
+# This pool's first-boot bootstrap identity (the short-lived enrollment token is minted for it).
+# One SA PER POOL: a shared one would let any pool bootstrap any other pool's intermediate CA.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dispatch-broker-bootstrap-%[1]s
+  namespace: system
+---
+# Route-bus identity access for THIS pool only, granted to both the first-boot bootstrap SA and
+# the steady-state cert identity (CN=ectobase:cluster:%[1]s).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dispatch-broker-pool-%[1]s
+rules:
+  - apiGroups: ["platform.ectobase.dev"]
+    resources: ["routebusidentities"]
+    resourceNames: ["%[1]s"]
+    verbs: ["get", "update"]
+  - apiGroups: ["platform.ectobase.dev"]
+    resources: ["routebusidentities/status"]
+    resourceNames: ["%[1]s"]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dispatch-broker-pool-%[1]s
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dispatch-broker-pool-%[1]s
+subjects:
+  - kind: User
+    name: "ectobase:cluster:%[1]s"
+    apiGroup: rbac.authorization.k8s.io
+  - kind: ServiceAccount
+    name: dispatch-broker-bootstrap-%[1]s
+    namespace: system
 `, c.Name))
 	}
 	return b.String()
