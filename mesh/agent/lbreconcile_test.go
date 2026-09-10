@@ -112,6 +112,7 @@ func TestReconcileLB_EdgeAddsAndDiffs(t *testing.T) {
 	lb := &netv1.LoadBalancer{
 		ObjectMeta: metav1.ObjectMeta{Name: "web-lb", Namespace: "default"},
 		Spec:       netv1.LoadBalancerSpec{VIP: "203.0.113.50", Ports: []netv1.LoadBalancerPort{{Port: 443, Proto: "TCP"}}},
+		Status:     netv1.LoadBalancerStatus{State: "Allocated", AllocatedVIP: "203.0.113.50"},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(lb).Build()
 	dp := newRecordingDP()
@@ -139,6 +140,7 @@ func TestReconcileLB_V6VIP(t *testing.T) {
 	lb := &netv1.LoadBalancer{
 		ObjectMeta: metav1.ObjectMeta{Name: "web-lb6", Namespace: "default"},
 		Spec:       netv1.LoadBalancerSpec{VIP: "2001:db8::a", Ports: []netv1.LoadBalancerPort{{Port: 443, Proto: "TCP"}}},
+		Status:     netv1.LoadBalancerStatus{State: "Allocated", AllocatedVIP: "2001:db8::a"},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(lb).Build()
 	dp := newRecordingDP()
@@ -149,6 +151,33 @@ func TestReconcileLB_V6VIP(t *testing.T) {
 	}
 	if len(dp.lbVips) != 1 || dp.lbVips[0] != "2001:db8::a" {
 		t.Fatalf("want AddLbVip 2001:db8::a, got %+v", dp.lbVips)
+	}
+}
+
+func TestReconcileLB_UsesAllocatedVIPNotSpec(t *testing.T) {
+	// The edge must program the centrally-allocated VIP. An auto-allocated LB has
+	// an empty spec.vip; its VIP lives in status.allocatedVIP. A not-yet-allocated
+	// LB (both empty) must be skipped, never installing an empty VIP.
+	s := lbTestScheme(t)
+	auto := &netv1.LoadBalancer{
+		ObjectMeta: metav1.ObjectMeta{Name: "auto-lb", Namespace: "default"},
+		Spec:       netv1.LoadBalancerSpec{VIP: "", Ports: []netv1.LoadBalancerPort{{Port: 443, Proto: "TCP"}}},
+		Status:     netv1.LoadBalancerStatus{State: "Allocated", AllocatedVIP: "203.0.113.60"},
+	}
+	pending := &netv1.LoadBalancer{
+		ObjectMeta: metav1.ObjectMeta{Name: "pending-lb", Namespace: "default"},
+		Spec:       netv1.LoadBalancerSpec{VIP: "", Ports: []netv1.LoadBalancerPort{{Port: 80, Proto: "TCP"}}},
+		// no AllocatedVIP yet
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(auto, pending).Build()
+	dp := newRecordingDP()
+	r := &Reconciler{client: cl, nodeID: "edge1", underlay: "2001:db8::e", edgeLoopback: "fd00::1", dp: dp}
+
+	if err := r.ReconcileLB(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(dp.lbVips) != 1 || dp.lbVips[0] != "203.0.113.60" {
+		t.Fatalf("want AddLbVip of the allocated VIP 203.0.113.60 only, got %+v", dp.lbVips)
 	}
 }
 

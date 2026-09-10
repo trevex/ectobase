@@ -72,11 +72,19 @@ func (r *Reconciler) ReconcileLB(ctx context.Context) error {
 	desired := map[string][]LbPort{} // vip -> ports
 	for i := range lbs.Items {
 		lb := &lbs.Items[i]
+		// Program the centrally-allocated VIP, not the requested one. spec.vip is
+		// empty for auto-allocated LBs; status.allocatedVIP is authoritative for
+		// both auto and bring-your-own. Skip until it is assigned so a not-yet-
+		// allocated LB never installs an empty VIP at the edge.
+		vip := lb.Status.AllocatedVIP
+		if vip == "" {
+			continue
+		}
 		ports := make([]LbPort, 0, len(lb.Spec.Ports))
 		for _, p := range lb.Spec.Ports {
 			ports = append(ports, LbPort{Port: uint32(p.Port), Proto: protoNum(p.Proto)})
 		}
-		desired[lb.Spec.VIP] = ports
+		desired[vip] = ports
 	}
 	if r.appliedLbVips == nil {
 		r.appliedLbVips = map[string][]LbPort{}
