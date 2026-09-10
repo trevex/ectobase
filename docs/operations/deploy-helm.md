@@ -180,7 +180,7 @@ Source of truth: `charts/ectobase-pool/values.yaml` (schema: `values.schema.json
 | `pki.enabled` | `true` | Mint the broker's dispatch credential as a cert-manager `Certificate` (`broker-dispatch-tls`); also turns on route-bus mTLS. Mandatory — REQUIRES cert-manager in the pool. MUST match the dispatch chart's `pki.enabled`. |
 | `pki.intermediateSecret` | `ectobase-pool-ca` | Pool CA Secret the broker requests from dispatch and backs its local `Issuer` with (mints the broker leaf and the agent's node leaves). |
 | `pki.underlayCIDRs` | `""` | Comma-separated pool underlay range(s); name-constrains the pool intermediate. |
-| `dispatchServer` | `https://[fd00:db8:0:1::1]:6443` | mTLS mode only: the dispatch aggregated-apiserver URL the broker dials. Host must equal the dispatch chart's `dispatchApiserver.serviceIP`. |
+| `dispatchServer` | `https://[fd00:db8:0:1::1]:6444` | The directly-exposed dispatch aggregated-apiserver URL the broker dials (`:6444`, not the host kube-apiserver's `:6443`). Host must equal the dispatch chart's `dispatchApiserver.serviceIP`. |
 | `vmMaterializer.enabled` | `false` | Deploy the vm-materializer (CompiledVM → KubeVirt VM). Pools with KubeVirt only. |
 | `tier1Failover.enabled` | `false` | Render the Tier-1 local-failover objects (medik8s NHC + SNR). Opt-in per pool. |
 | `images.flowplane` | `…/flowplane:dev` | eBPF dataplane image. |

@@ -40,7 +40,7 @@ apiserverAddress: "https://[fd00:db8:0:1::1]:6443"
 
 # dispatchServer is the dispatch aggregated-apiserver URL the broker dials over the fabric
 # (mTLS mode). Host MUST match the serving cert's IP SAN (dispatchApiserver.serviceIP).
-dispatchServer: "https://[fd00:db8:0:1::1]:6443"
+dispatchServer: "https://[fd00:db8:0:1::1]:6444"
 
 # Install the net.ectobase.dev CRDs with the chart (managed on helm upgrade).
 installCRDs: true
