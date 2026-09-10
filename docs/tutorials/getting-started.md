@@ -77,10 +77,10 @@ Tests run at several levels of privilege and fidelity — see the
 
 The `e2e`, `ha`, and `tap-*` targets need passwordless sudo (XDP attach, network namespaces, raw
 sockets); the scripts elevate individual commands themselves. On a NixOS host see the
-[runbook](./runbook.md) for the real-`sudo`-path gotcha.
+[runbook](../operations/runbook.md) for the real-`sudo`-path gotcha.
 
 ## Next steps
 
 - The integration environment: [the clab + Talos fabric](./local-fabric.md).
 - Zero-downtime restart semantics: [HA & graceful restart](../architecture/ha-graceful-restart.md).
-- Hard-won operational findings: [the runbook](./runbook.md).
+- Hard-won operational findings: [the runbook](../operations/runbook.md).

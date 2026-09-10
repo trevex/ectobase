@@ -101,11 +101,11 @@ code that ships is the code under test. See
 
 The primary integration environment is a containerlab IPv6 fabric wrapping
 Talos-in-container clusters, with the full mesh stack and the `flowplane` DaemonSet
-deployed. See [The clab + Talos fabric](../guides/local-fabric.md) for bring-up and
+deployed. See [The clab + Talos fabric](../tutorials/local-fabric.md) for bring-up and
 scenarios.
 
 ## See also
 
-- [Getting started (Nix + make)](../guides/getting-started.md)
+- [Getting started (Nix + make)](../tutorials/getting-started.md)
 - [Design history (specs & plans archive)](../contributing/index.md)
 - [The in-process sim](../testing/sim.md)

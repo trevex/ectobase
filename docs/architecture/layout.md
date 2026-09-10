@@ -20,7 +20,7 @@ CNI plugin, the CRD API, Kubernetes manifests, and the lab/test harnesses.
 The Nix flake (`flake.nix`) provides the entire toolchain — pinned Rust, `bpf-linker`,
 `protobuf`, Go, `talosctl`/`containerlab`, `qemu`, `bpftool`, and
 friends. `make` (from inside `nix develop`) is the entry point for all build/test/lab
-targets. See [Getting started](../guides/getting-started.md).
+targets. See [Getting started](../tutorials/getting-started.md).
 
 ## The `flowplane` Rust workspace
 

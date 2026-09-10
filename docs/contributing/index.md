@@ -2,7 +2,7 @@
 
 This page is the map: where things live, how the toolchain works, and how a change
 flows from a type edit through generated artifacts, charts, docs, and tests. For the
-detailed command-by-command workflow see [Dev environment & workflows](../guides/development.md);
+detailed command-by-command workflow see [Dev environment & workflows](development.md);
 for the docs conventions see [Writing docs](documentation.md).
 
 ## Where things live
@@ -94,7 +94,7 @@ flowchart LR
 
 ## See also
 
-- [Dev environment & workflows](../guides/development.md) — the detailed command reference and pre-commit hooks.
+- [Dev environment & workflows](development.md) — the detailed command reference and pre-commit hooks.
 - [Writing docs](documentation.md) — the mkdocs/mermaid/status-badge conventions.
 - [Repository layout & crates](../architecture/layout.md) — the module and crate breakdown.
 - [The CRD API](../reference/crd-interactions.md) — how the five API groups relate.

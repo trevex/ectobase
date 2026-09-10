@@ -215,6 +215,7 @@ flowchart TB
 
 ## See also
 
+- [Intent to datapath](../concepts/intent-to-datapath.md) — the concept: the reconcile loop this pipeline implements.
 - [Multi-cluster control plane](./multi-cluster-control-plane.md) — the dispatch/pool split and the broker seam.
 - [Control/data split & the route bus](./route-bus.md) — how the agent learns dynamic overlay routes.
 - [KubeVirt integration](./kubevirt-integration.md) — the VM materialize path in depth.

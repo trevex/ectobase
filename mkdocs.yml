@@ -49,6 +49,11 @@ nav:
       - The overlay: concepts/overlay.md
       - Intent to datapath: concepts/intent-to-datapath.md
       - Workloads (containers & VMs): concepts/workloads.md
+  - Tutorials:
+      - Getting started: tutorials/getting-started.md
+      - The local fabric: tutorials/local-fabric.md
+      - Using the lab: tutorials/using-the-lab.md
+      - IPAM walkthrough: tutorials/ipam-walkthrough.md
   - Architecture:
       - Repository layout: architecture/layout.md
       - Multi-cluster control plane: architecture/multi-cluster-control-plane.md
@@ -74,14 +79,10 @@ nav:
       - North-South WAN edge: features/ns-edge.md
       - QoS: features/qos.md
       - DHCP / ARP / ND: features/dhcp-arp-nd.md
-  - Guides:
-      - Getting started: guides/getting-started.md
-      - Deploying with Helm: guides/deploy-helm.md
-      - The local fabric: guides/local-fabric.md
-      - Using the lab: guides/using-the-lab.md
-      - IPAM walkthrough: guides/ipam-walkthrough.md
-      - Operations runbook: guides/runbook.md
-      - Development: guides/development.md
+  - Operations:
+      - Deploying with Helm: operations/deploy-helm.md
+      - Operations runbook: operations/runbook.md
+      - IPAM migration: operations/ipam-migration.md
   - Reference:
       - CRD interactions: reference/crd-interactions.md
       - "API: net": reference/api/net.md
@@ -99,3 +100,4 @@ nav:
   - Contributing:
       - Overview: contributing/index.md
       - Writing docs: contributing/documentation.md
+      - Development: contributing/development.md

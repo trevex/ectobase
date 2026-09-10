@@ -51,7 +51,7 @@ Prereqs (run everything inside `nix develop`):
 - Docker with IPv6 enabled on the clab management network; tens of GB of disk headroom.
 - Passwordless real `sudo` (the live commands drive containerlab + host networking). On
   NixOS the real setuid binary is `/run/wrappers/bin/sudo` — see the
-  [runbook](./runbook.md).
+  [runbook](../operations/runbook.md).
 
 ```sh
 make lab-render     # expand templates into test/lab/build/<name>/ (no root)
@@ -72,7 +72,7 @@ make lab-tier2-up   # KubeVirt + CDI + the vm-materializer, and wire the ceph fs
 
 ### What `lab up` deploys
 
-The last step of `up` is the two-chart install (see [Deploying with Helm](./deploy-helm.md)
+The last step of `up` is the two-chart install (see [Deploying with Helm](../operations/deploy-helm.md)
 for the operator-facing version, and `test/lab/internal/deploy/ectobase.go` for the exact
 sequence):
 
@@ -189,5 +189,5 @@ bring-up (each cost real debugging — do not "simplify" them away):
   host ip6tables FORWARD chain (clab sets that chain's policy to DROP), so a multi-node
   cluster's nodes can't ND each other → never Ready.
 
-See the [runbook](./runbook.md) for the operational gotchas (real-`sudo` path, conntrack-map
+See the [runbook](../operations/runbook.md) for the operational gotchas (real-`sudo` path, conntrack-map
 OOM / `make bpf-clean`, the edge `FLOWPLANE_PIN_LINKS=false`, in-container `bpftool`).

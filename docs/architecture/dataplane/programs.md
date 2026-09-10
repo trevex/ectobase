@@ -151,6 +151,7 @@ requirement that once needed an `xdp_pass` shim no longer applies.
 
 ## Where to go next
 
+- [The overlay](../../concepts/overlay.md) — the concept these programs implement: Geneve over an IPv6 underlay.
 - [The pure-core seam](pure-core.md) — how these programs share code with the simulator.
 - [BPF maps & state model](maps.md) — the maps every program reads and writes.
 - [The flowplane CLI](cli.md) — how the programs get attached.

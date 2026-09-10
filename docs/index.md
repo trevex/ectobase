@@ -64,9 +64,11 @@ BGP appears only at the [WAN edge](features/ns-edge.md).
 
 ## Start here
 
-- Operators → [Deploying with Helm](guides/deploy-helm.md), then the
-  [Operations runbook](guides/runbook.md).
-- Contributors → [Development](guides/development.md) and [Getting started](guides/getting-started.md).
+- New to ectobase → read [Concepts](concepts/two-planes-and-the-fleet.md), then work through
+  [Tutorials](tutorials/getting-started.md).
+- Operators → [Deploying with Helm](operations/deploy-helm.md), then the
+  [Operations runbook](operations/runbook.md).
+- Contributors → [Development](contributing/development.md) and [Getting started](tutorials/getting-started.md).
 - Architects → the [Concepts](concepts/two-planes-and-the-fleet.md) chapter and the
   [Architecture](architecture/layout.md) reference, starting with the
   [overlay](concepts/overlay.md).

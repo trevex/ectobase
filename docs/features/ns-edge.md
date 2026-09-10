@@ -143,5 +143,5 @@ recompute, not a connection. Draining an edge withdraws its BGP/health, ECMP rem
 in-flight flows reshuffle to other edges that recompute the same mapping. BGP appears only at
 the edge's northbound WAN announcement; internal reachability is the route bus, never BGP.
 
-See the [clab + Talos fabric](../guides/local-fabric.md) for the FRR edge topology this runs on, and
-the [runbook](../guides/runbook.md) for the edge dual-XDP-attach pinning caveat in SKB mode.
+See the [clab + Talos fabric](../tutorials/local-fabric.md) for the FRR edge topology this runs on, and
+the [runbook](../operations/runbook.md) for the edge dual-XDP-attach pinning caveat in SKB mode.

@@ -17,8 +17,8 @@ make docs-serve   # mkdocs serve — live-reloading local preview
 `--strict` means a dead internal link or a page missing from the nav fails the build, so
 keep cross-references and `mkdocs.yml` nav in sync when you add or move a page. Pages live
 under `docs/` in the tree that the nav mirrors (`concepts/`, `architecture/`,
-`architecture/dataplane/`, `features/`, `guides/`, `reference/`, `testing/`,
-`contributing/`).
+`architecture/dataplane/`, `features/`, `tutorials/`, `operations/`, `reference/`,
+`testing/`, `contributing/`).
 
 ## Diagrams: mermaid
 
@@ -86,6 +86,6 @@ Docs are part of the change, not a follow-up.
 ## See also
 
 - [Contributing overview](index.md) — where things live and how a change flows.
-- [Dev environment & workflows](../guides/development.md) — the devShell and `make` targets.
+- [Dev environment & workflows](development.md) — the devShell and `make` targets.
 - [The CRD API](../reference/crd-interactions.md) — the hand-written API overview the
   generated per-group pages complement.

@@ -26,7 +26,7 @@ make lab-up
 
 `lab-up` stands up the clab + Talos fabric and deploys the two Helm charts
 (`ectobase-dispatch` on the dispatch cluster, `ectobase-pool` on each compute pool). See
-[Deploy with Helm](./deploy-helm.md) for what the charts contain and
+[Deploy with Helm](../operations/deploy-helm.md) for what the charts contain and
 [Local fabric](./local-fabric.md) for the fabric itself.
 
 The VM section additionally needs Ceph and the Tier-2 prerequisites
@@ -502,4 +502,4 @@ khub delete vpc demo
 - [Multi-cluster control plane](../architecture/multi-cluster-control-plane.md) — the dispatch/pool split, the broker, and the scheduler.
 - [CNI integration](../architecture/cni-integration.md) — how a Pod joins the overlay and how the agent self-locates.
 - [Rescheduling & failover](../architecture/rescheduling-and-failover.md) — why moving a workload's pool is enough.
-- [Local fabric](./local-fabric.md) and [Deploy with Helm](./deploy-helm.md) — the fabric and the charts.
+- [Local fabric](./local-fabric.md) and [Deploy with Helm](../operations/deploy-helm.md) — the fabric and the charts.

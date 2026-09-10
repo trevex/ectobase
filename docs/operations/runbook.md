@@ -88,5 +88,5 @@ not list tcx).
 | Native XDP won't attach on a VM tap | vhost-net → KVM `XDP_TX`-on-tun limit | use tcx (default) / a native-XDP fabric |
 | Need to inspect BPF/tcx state on a node | Talos nodes are shell-less (no in-container bpftool) | devShell bpftool v7.6.0 via `nsenter` from the host |
 
-See the [clab + Talos fabric](./local-fabric.md) doc for the fabric-level host/kernel interactions
+See the [clab + Talos fabric](../tutorials/local-fabric.md) doc for the fabric-level host/kernel interactions
 (bridge-nf ND drop, FRR bring-up) that the bring-up scripts also handle.

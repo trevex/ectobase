@@ -129,7 +129,7 @@ The Tier-1 knobs live under `tier1Failover.*` (`snrNamespace`, `nodeSelector`, `
 
 ## Trying it end to end
 
-The [local fabric](./local-fabric.md) runs this exact two-chart install across a
+The [local fabric](../tutorials/local-fabric.md) runs this exact two-chart install across a
 dispatch + compute-pool Talos fabric: `make lab-up` renders the charts, brings up the clusters,
 mints the broker secret, and installs both charts. Read
 `test/lab/internal/deploy/ectobase.go` to see the reference sequence (namespaces, secret,

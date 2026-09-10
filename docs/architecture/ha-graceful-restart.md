@@ -74,7 +74,7 @@ Link pinning is controlled by `--pin-links` (env `FLOWPLANE_PIN_LINKS`), default
 with no data-format change (pinned maps and the `IFACE_META` journal are independent of link
 pinning). One production case runs with it off: the [WAN edge](../features/ns-edge.md) in SKB/generic
 XDP mode, where pinning the first XDP link and attaching a second silently drops the first — see the
-[runbook](../guides/runbook.md). The edge is stateless anycast, so it does not need pinned-link zero-gap HA;
+[runbook](../operations/runbook.md). The edge is stateless anycast, so it does not need pinned-link zero-gap HA;
 its maps still pin for conntrack continuity, only the links re-attach fresh.
 
 Kernels < 6.6 have no tcx: the guest tc attach falls back to netlink `cls_bpf`, which persists across

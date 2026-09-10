@@ -189,6 +189,7 @@ partitioned from the dispatch. This is what bounds dispatch apiserver load as po
 
 ## See also
 
+- [Two planes and the fleet](../concepts/two-planes-and-the-fleet.md) — the concept behind the dispatch/pool split and the fleet model.
 - [Compile → sync → materialize](./compile-sync-materialize.md) — the intent → `Compiled*` → executed pipeline.
 - [Control/data split & the route bus](./route-bus.md) — the reflector and overlay distribution.
 - [Rescheduling & failover](./rescheduling-and-failover.md) — fence-gated pool failover.

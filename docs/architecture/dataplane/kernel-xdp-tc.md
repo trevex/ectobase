@@ -7,6 +7,9 @@ stated with what the kernel does and how it bit us, so the constraint survives i
 bug. Several are veth/netkit-specific (the containerlab/Talos fabric); real NICs behave more
 forgivingly, which is why a clab-green datapath can still carry latent assumptions.
 
+For the overlay these classifiers implement — Geneve over an IPv6 underlay — see
+[The overlay](../../concepts/overlay.md).
+
 ## The overlay is kernel Geneve, not a hand-rolled tunnel
 
 The datapath does not write outer-header bytes. The kernel geneve `collect_md` device builds the outer

@@ -99,5 +99,5 @@ IPv6-fabric e2e uses it to assert the inferred `/64` matches the fabric-announce
 
 - [Datapath programs](programs.md) — the programs these commands attach.
 - [BPF maps & state model](maps.md) — the maps `bringup` flags populate.
-- [The clab + Talos fabric](../../guides/local-fabric.md) — where `serve` runs in integration.
-- [Getting started](../../guides/getting-started.md) — the `make` targets that wrap these.
+- [The clab + Talos fabric](../../tutorials/local-fabric.md) — where `serve` runs in integration.
+- [Getting started](../../tutorials/getting-started.md) — the `make` targets that wrap these.

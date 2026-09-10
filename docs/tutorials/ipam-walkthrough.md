@@ -13,6 +13,9 @@ compiles that intent into per-workload `Compiled*` objects, syncs them to the co
 pool, and the datapath programs eBPF. The platform assigns overlay IPs and VIPs; users
 declare address space (Subnet/LBPool) and the central allocators fill in the rest.
 
+For the broader tour — including containers, VMs, VPC peering, and firewall — see
+[Using the lab](using-the-lab.md).
+
 > Steps 1–2 (VPC/Subnet/VM overlay connectivity) are exercised by the live suite and
 > work end-to-end. For steps 3–4, IPAM does allocate the VIP and NAT port-blocks and
 > records LB membership / SNAT sources in the compiled `CompiledNIC`, and those
