@@ -35,7 +35,14 @@ spec:
           command: ["broker"]
           args:
             - "--cluster-name={{ .Values.broker.clusterName }}"
+            {{- if .Values.pki.enabled }}
+            - "--dispatch-server={{ .Values.dispatchServer }}"
+            - "--dispatch-ca=/secrets/dispatch-cert/ca.crt"
+            - "--dispatch-client-cert=/secrets/dispatch-cert/tls.crt"
+            - "--dispatch-client-key=/secrets/dispatch-cert/tls.key"
+            {{- else }}
             - "--dispatch-kubeconfig=/secrets/dispatch/kubeconfig"
+            {{- end }}
             {{- if .Values.pki.enabled }}
             # Bootstrap this pool's route-bus intermediate CA (generate keypair locally, CSR to
             # dispatch, write the signed intermediate into this Secret in POD_NAMESPACE).
@@ -51,10 +58,22 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
           volumeMounts:
+            {{- if .Values.pki.enabled }}
+            - name: dispatch-cert
+              mountPath: /secrets/dispatch-cert
+              readOnly: true
+            {{- else }}
             - name: dispatch-kubeconfig
               mountPath: /secrets/dispatch
               readOnly: true
+            {{- end }}
       volumes:
+        {{- if .Values.pki.enabled }}
+        - name: dispatch-cert
+          secret:
+            secretName: broker-dispatch-tls
+        {{- else }}
         - name: dispatch-kubeconfig
           secret:
             secretName: {{ .Values.broker.dispatchKubeconfigSecret }}
+        {{- end }}
