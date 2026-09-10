@@ -37,9 +37,14 @@ spec:
             - "--cluster-name={{ .Values.broker.clusterName }}"
             {{- if .Values.pki.enabled }}
             - "--dispatch-server={{ .Values.dispatchServer }}"
-            - "--dispatch-ca=/secrets/dispatch-cert/ca.crt"
+            # The dispatch serving cert is ROOT-signed; verify against the pre-provisioned root
+            # (NOT the leaf/intermediate Secret's ca.crt). Mirrors the agent's routebus-root mount.
+            - "--dispatch-ca=/secrets/dispatch-root/ca.crt"
             - "--dispatch-client-cert=/secrets/dispatch-cert/tls.crt"
             - "--dispatch-client-key=/secrets/dispatch-cert/tls.key"
+            # First-boot only: short-lived token used to bootstrap the pool intermediate (submit
+            # the RouteBusIdentity CSR) until cert-manager mints broker-dispatch-tls from it.
+            - "--dispatch-bootstrap-kubeconfig=/secrets/dispatch-bootstrap/kubeconfig"
             {{- else }}
             - "--dispatch-kubeconfig=/secrets/dispatch/kubeconfig"
             {{- end }}
@@ -62,6 +67,12 @@ spec:
             - name: dispatch-cert
               mountPath: /secrets/dispatch-cert
               readOnly: true
+            - name: dispatch-root
+              mountPath: /secrets/dispatch-root
+              readOnly: true
+            - name: dispatch-bootstrap
+              mountPath: /secrets/dispatch-bootstrap
+              readOnly: true
             {{- else }}
             - name: dispatch-kubeconfig
               mountPath: /secrets/dispatch
@@ -69,9 +80,23 @@ spec:
             {{- end }}
       volumes:
         {{- if .Values.pki.enabled }}
+        # Optional: cert-manager mints broker-dispatch-tls only AFTER the broker bootstraps the
+        # pool intermediate, so it is absent at first pod start (the broker waits for it).
         - name: dispatch-cert
           secret:
             secretName: broker-dispatch-tls
+            optional: true
+        # Pre-provisioned dispatch root CA (out-of-band at enrollment); the enrollment trust anchor.
+        - name: dispatch-root
+          secret:
+            secretName: dispatch-root-ca
+            items:
+              - key: ca.crt
+                path: ca.crt
+        # Short-lived bootstrap-token kubeconfig (out-of-band at enrollment); first-boot only.
+        - name: dispatch-bootstrap
+          secret:
+            secretName: broker-dispatch-bootstrap
         {{- else }}
         - name: dispatch-kubeconfig
           secret:
