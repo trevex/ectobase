@@ -41,6 +41,10 @@ dispatchApiserver:
   # the extension-apiserver-authentication reader are the standard host-cluster access an
   # aggregated apiserver needs. Turn on only if the admission chain needs broader host reads.
   grantClusterAdmin: false
+  # serviceIP is the IPv6 fabric address the broker dials the aggregated apiserver at
+  # (kubeconfig server host). It MUST be an IP SAN on the serving cert, or the broker's
+  # TLS verification fails once insecure-skip-tls-verify is dropped.
+  serviceIP: "fd00:db8:0:1::1"
 
 # kine is the etcd-v3-over-Postgres storage for the aggregated apiserver.
 kine:

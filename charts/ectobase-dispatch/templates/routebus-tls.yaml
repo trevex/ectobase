@@ -103,4 +103,31 @@ spec:
   issuerRef:
     name: {{ .Values.pki.clusterIssuer }}
     kind: ClusterIssuer
+---
+# Dispatch aggregated-apiserver serving cert. The broker dials by fabric IP literal, so that
+# IP MUST be an IP SAN or the broker's TLS verification fails. Issued from the ectobase root.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: dispatch-apiserver-tls
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
+spec:
+  secretName: dispatch-apiserver-tls
+  duration: 8760h # 1y
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  ipAddresses:
+    - {{ .Values.dispatchApiserver.serviceIP | quote }}
+  dnsNames:
+    - apiserver-service
+    - apiserver-service.{{ .Values.namespace }}
+    - apiserver-service.{{ .Values.namespace }}.svc
+  usages:
+    - server auth
+  issuerRef:
+    name: {{ .Values.pki.clusterIssuer }}
+    kind: ClusterIssuer
 {{- end }}
