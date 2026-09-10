@@ -3,9 +3,9 @@
 A large part of ectobase's repository is generated, not hand-written. The Go
 API types and a small set of RBAC markers are the single source of truth; a
 `make generate` pipeline derives everything downstream from them — deepcopy and
-conversion code, CRD manifests, per-component RBAC roles, and the CRD API
-reference. Nothing that is generated is ever edited by hand, so the manifests
-cannot drift from the code they describe.
+conversion code, CRD manifests, per-component RBAC roles, a typed Go client, and
+the CRD API reference. Nothing that is generated is ever edited by hand, so the
+manifests cannot drift from the code they describe.
 
 The `generate` target and its `docs-crd-ref` sub-target in the top-level
 `Makefile` drive the whole pipeline.
@@ -33,6 +33,7 @@ flowchart TD
     end
 
     TYPES -->|kube::codegen| DEEP["zz_generated deepcopy / conversion + install"]
+    TYPES -->|kube::codegen gen_client / gen_openapi| CLIENT["dispatch/client-go<br/>clientset / listers / informers / applyconfigurations / openapi"]
     TYPES -->|controller-gen crd| CRD["CRD manifests"]
     TYPES -->|crd-ref-docs| REF["docs/reference/api/*.md"]
     MARKERS -->|controller-gen rbac| ROLES["role.yaml per component"]
@@ -51,6 +52,23 @@ produce the `zz_generated.deepcopy.go`, `zz_generated.conversion.go` and
 `zz_generated.defaults.go` where a group declares defaulters, currently only
 `platform`) — the runtime.Object plumbing every Kubernetes type needs. They
 are regenerated from the Go types on every run.
+
+## Typed client
+
+The `dispatch/` codegen run also emits a full typed Go client under
+`dispatch/client-go/`, so in-tree callers and tests reach the aggregated
+apiserver through generated code rather than the dynamic client. `kube::codegen`
+produces four client families plus an OpenAPI model:
+
+| Output | Path | Role |
+| --- | --- | --- |
+| Clientset | `dispatch/client-go/clientset/` | Versioned typed CRUD client, with a `fake/` clientset for tests. |
+| Listers and informers | `dispatch/client-go/{listers,informers}/` | Cache-backed list and watch machinery (`--with-watch`). |
+| Apply configurations | `dispatch/client-go/applyconfigurations/` | Server-side-apply builders (`--with-applyconfig`). |
+| OpenAPI | `dispatch/client-go/openapi/zz_generated.openapi.go` | The OpenAPI schema the apiserver serves, alongside its `api_violations.report`. |
+
+A kind's `+genclient` marker drives all of these, so the client regenerates with
+the API surface on every `make generate` and never lags a new kind.
 
 ## CRDs
 
