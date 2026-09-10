@@ -93,9 +93,11 @@ khub get subnet demo-sn0 -o jsonpath='{.status.state} v4Total={.status.v4Total}{
 
 ## 2. Boot a VM in the VPC with an auto-allocated overlay IP
 
-A VM owns its NICs via `interfaceRefs`. Each VM NIC needs a MAC (KubeVirt's virtio
-NIC must carry the same MAC). Leave `ips: []` to have the platform allocate an
-address from the Subnet, or list an IP inside the Subnet to pin it (BYO).
+A VM owns its NICs via `interfaceRefs`. Leave `ips: []` to have the platform
+allocate an address from the Subnet, or list an IP inside the Subnet to pin it
+(BYO). The **MAC is allocated the same way**: omit `mac` and the platform assigns
+a stable, VPC-unique, locally-administered address (KubeVirt's virtio NIC is
+programmed with the allocated MAC automatically), or set `mac` to pin your own.
 
 We use an ephemeral cirros `image:` containerDisk here (no storage tier needed). Pin the
 VM to a KubeVirt-capable pool with `clusterName` (use the pool where you ran
@@ -114,7 +116,7 @@ spec:
   vpcRef:   { name: demo }
   subnetRef: { name: demo-sn0 }   # optional: inferred when the VPC has one Subnet
   ips: []                     # empty => allocate from demo-sn0
-  mac: "52:54:00:00:10:01"    # REQUIRED for a KubeVirt VM NIC
+  # mac omitted => allocate a stable, VPC-unique MAC (set it to pin your own)
 ---
 apiVersion: compute.ectobase.dev/v1alpha1
 kind: VirtualMachine
@@ -134,13 +136,13 @@ spec:
 EOF
 ```
 
-Verify the allocation. The NIC status carries the authoritative
-allocated address and the `Allocated` state that gates compilation:
+Verify the allocation. The NIC status carries the authoritative allocated
+address and MAC, plus the `Allocated` state that gates compilation:
 
 ```sh
 khub get networkinterface app-0-nic0 \
-  -o jsonpath='{.status.state} ips={.status.allocatedIPs}{"\n"}'
-# Allocated ips=["10.10.0.1"]
+  -o jsonpath='{.status.state} ips={.status.allocatedIPs} mac={.status.allocatedMAC}{"\n"}'
+# Allocated ips=["10.10.0.1"] mac=02:...
 ```
 
 Verify it compiled and synced to the pool. The compiled twin is named
@@ -191,7 +193,7 @@ spec:
   vpcRef:   { name: demo }
   subnetRef: { name: demo-sn0 }
   ips: []                     # allocate from demo-sn0 (=> 10.10.0.2)
-  mac: "52:54:00:00:10:02"
+  # mac omitted => allocated automatically
 ---
 apiVersion: compute.ectobase.dev/v1alpha1
 kind: VirtualMachine
@@ -313,7 +315,8 @@ EOF
   A freed sibling address triggers a retry automatically, with no wait for resync.
 - `state: Pending`. The referenced Subnet/Pool isn't `Ready` yet (transient).
 - Allocation is sticky. Editing an unrelated field on a NIC/LB does not
-  renumber it; the allocator re-adopts its current `allocatedIPs`/`allocatedVIP`.
+  renumber it; the allocator re-adopts its current `allocatedIPs`/`allocatedVIP`,
+  and a NIC keeps its `allocatedMAC` even across an IP renumber.
 - De-gate keeps the last good state. If a NIC later goes `Invalid`/`Pending` (bad edit,
   Subnet deleted), its existing `CompiledNIC` is kept, so the running datapath is not
   torn down by a transient edit. To revoke a workload, delete its NetworkInterface
@@ -322,6 +325,11 @@ EOF
 - BYO IPs: to pin, put an in-Subnet address in `spec.ips`; the allocator validates
   membership + uniqueness and reserves it. This is also the migration path for
   pre-IPAM NICs (see [ipam-migration.md](../operations/ipam-migration.md)).
+- BYO MAC: to pin, set `spec.mac`; the allocator validates its format and
+  VPC-uniqueness (a clash surfaces as `state: Invalid`). Omit it and a stable,
+  VPC-unique `02:`-prefixed MAC is derived from the NIC's identity, published as
+  `status.allocatedMAC`, and stamped into the guest — surviving detach/re-attach
+  and IP renumbers.
 
 ## Cleanup
 

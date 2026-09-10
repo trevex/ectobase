@@ -18,7 +18,10 @@ type NetworkInterfaceSpec struct {
 	// SubnetRef selects the Subnet to allocate from. Optional when the VPC has
 	// exactly one Subnet, in which case that Subnet is used.
 	SubnetRef LocalObjectReference
-	// MAC is the interface's L2 address.
+	// MAC is a bring-your-own L2 address request. Empty => the platform allocates
+	// a stable, VPC-unique, locally-administered MAC into Status.AllocatedMAC.
+	// Populated => validated for format and VPC-uniqueness, then reserved. The
+	// authoritative value is always Status.AllocatedMAC, never this field.
 	MAC string
 	// NodeName is the node the interface is scheduled onto.
 	NodeName *string
@@ -67,6 +70,11 @@ type NetworkInterfaceStatus struct {
 	// AllocatedIPs is the authoritative overlay address set assigned by the IP
 	// allocator. CompiledNIC.Spec.OverlayIPs is sourced from this, never Spec.IPs.
 	AllocatedIPs []string
+	// AllocatedMAC is the authoritative L2 address assigned by the MAC allocator:
+	// a stable, VPC-unique, locally-administered MAC derived from the NIC's UID
+	// (or the pinned Spec.MAC). CompiledNIC.Spec.MAC is sourced from this, never
+	// Spec.MAC. Empty until the interface reaches State=="Allocated".
+	AllocatedMAC string
 	// ObservedGeneration is the Spec generation the allocation reflects. Compile
 	// is gated on ObservedGeneration == metadata.generation.
 	ObservedGeneration int64

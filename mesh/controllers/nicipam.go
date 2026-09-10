@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/netip"
 	"sort"
 
@@ -38,7 +39,8 @@ func (r *NICIPAMReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 func (r *NICIPAMReconciler) Sync(ctx context.Context, nic *netv1.NetworkInterface) error {
 	if nic.Status.State == "Allocated" &&
 		nic.Status.ObservedGeneration == nic.Generation &&
-		len(nic.Status.AllocatedIPs) > 0 {
+		len(nic.Status.AllocatedIPs) > 0 &&
+		nic.Status.AllocatedMAC != "" {
 		return nil
 	}
 
@@ -54,7 +56,7 @@ func (r *NICIPAMReconciler) Sync(ctx context.Context, nic *netv1.NetworkInterfac
 		return r.setState(ctx, nic, "Pending", nil)
 	}
 
-	usedV4, usedV6, err := r.usedSets(ctx, nic, sub)
+	usedV4, usedV6, usedMAC, err := r.usedSets(ctx, nic, sub)
 	if err != nil {
 		return fmt.Errorf("build used-set: %w", err)
 	}
@@ -117,7 +119,54 @@ func (r *NICIPAMReconciler) Sync(ctx context.Context, nic *netv1.NetworkInterfac
 	if len(out) == 0 {
 		return r.setState(ctx, nic, "Invalid", nil)
 	}
+
+	// MAC is allocated alongside the IP: a stable, VPC-unique locally-administered
+	// address. setState leaves Status.AllocatedMAC untouched, so assigning it here
+	// persists it in the same status write; a failed pin surfaces as Invalid.
+	mac, ok := r.assignMAC(nic, usedMAC)
+	if !ok {
+		return r.setState(ctx, nic, "Invalid", nil)
+	}
+	nic.Status.AllocatedMAC = mac
 	return r.setState(ctx, nic, "Allocated", out)
+}
+
+// assignMAC resolves the NIC's L2 address: an explicit Spec.MAC pin (validated
+// for format and VPC-uniqueness), else the sticky Status.AllocatedMAC if still
+// free, else a fresh MAC derived from the NIC's stable identity. ok=false means
+// an invalid or already-taken pin. Returned MACs are canonical lowercase.
+func (r *NICIPAMReconciler) assignMAC(nic *netv1.NetworkInterface, used map[string]struct{}) (string, bool) {
+	if nic.Spec.MAC != "" {
+		hw, err := net.ParseMAC(nic.Spec.MAC)
+		if err != nil {
+			return "", false
+		}
+		m := hw.String()
+		if _, taken := used[m]; taken {
+			return "", false
+		}
+		return m, true
+	}
+	// Sticky: keep the previously-allocated MAC if still free, so an unrelated
+	// spec edit (or a collision-loser's re-derivation) never renumbers a live NIC.
+	if cur := nic.Status.AllocatedMAC; cur != "" {
+		if hw, err := net.ParseMAC(cur); err == nil {
+			if _, taken := used[hw.String()]; !taken {
+				return hw.String(), true
+			}
+		}
+	}
+	return allocator.LowestFreeMAC(macSeed(nic), used)
+}
+
+// macSeed is the stable identity a NIC's derived MAC hashes from. UID is
+// preferred (survives spec edits, matches the interface_id the agent derives
+// from downstream); namespace/name is the fallback when UID is unset.
+func macSeed(nic *netv1.NetworkInterface) string {
+	if nic.UID != "" {
+		return string(nic.UID)
+	}
+	return nic.Namespace + "/" + nic.Name
 }
 
 // assignFamily adopts a pinned in-prefix, free address, or allocates the lowest
@@ -168,15 +217,17 @@ func exhaustedOrInvalid(pinned *netip.Addr) string {
 	return "Exhausted"
 }
 
-// usedSets returns the v4 and v6 addresses already allocated to OTHER NICs in
-// the same VPC, from a strong non-cached list.
-func (r *NICIPAMReconciler) usedSets(ctx context.Context, self *netv1.NetworkInterface, sub *netv1.Subnet) (map[netip.Addr]struct{}, map[netip.Addr]struct{}, error) {
+// usedSets returns the v4 addresses, v6 addresses, and MACs already allocated to
+// OTHER NICs in the same VPC, from a strong non-cached list. MAC keys are
+// canonical net.HardwareAddr.String() form.
+func (r *NICIPAMReconciler) usedSets(ctx context.Context, self *netv1.NetworkInterface, sub *netv1.Subnet) (map[netip.Addr]struct{}, map[netip.Addr]struct{}, map[string]struct{}, error) {
 	var list netv1.NetworkInterfaceList
 	if err := r.APIReader.List(ctx, &list, client.InNamespace(self.Namespace)); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	usedV4 := map[netip.Addr]struct{}{}
 	usedV6 := map[netip.Addr]struct{}{}
+	usedMAC := map[string]struct{}{}
 	for i := range list.Items {
 		o := &list.Items[i]
 		if (o.UID != "" && o.UID == self.UID) || (o.Name == self.Name && o.Namespace == self.Namespace) {
@@ -194,8 +245,11 @@ func (r *NICIPAMReconciler) usedSets(ctx context.Context, self *netv1.NetworkInt
 				}
 			}
 		}
+		if hw, err := net.ParseMAC(o.Status.AllocatedMAC); err == nil {
+			usedMAC[hw.String()] = struct{}{}
+		}
 	}
-	return usedV4, usedV6, nil
+	return usedV4, usedV6, usedMAC, nil
 }
 
 func (r *NICIPAMReconciler) resolveSubnet(ctx context.Context, nic *netv1.NetworkInterface) (*netv1.Subnet, error) {

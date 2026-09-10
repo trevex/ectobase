@@ -21,6 +21,11 @@ type NetworkInterfaceStatusApplyConfiguration struct {
 	// ObservedGeneration is the Spec generation the allocation reflects. Compile
 	// is gated on ObservedGeneration == metadata.generation.
 	ObservedGeneration *int64 `json:"observedGeneration,omitempty"`
+	// AllocatedMAC is the authoritative L2 address assigned by the MAC allocator:
+	// a stable, VPC-unique, locally-administered MAC derived from the NIC's UID
+	// (or the pinned Spec.MAC). CompiledNIC.Spec.MAC is sourced from this, never
+	// Spec.MAC. Empty until the interface reaches State=="Allocated".
+	AllocatedMAC *string `json:"allocatedMAC,omitempty"`
 }
 
 // NetworkInterfaceStatusApplyConfiguration constructs a declarative configuration of the NetworkInterfaceStatus type for use with
@@ -76,5 +81,13 @@ func (b *NetworkInterfaceStatusApplyConfiguration) WithAllocatedIPs(values ...st
 // If called multiple times, the ObservedGeneration field is set to the value of the last call.
 func (b *NetworkInterfaceStatusApplyConfiguration) WithObservedGeneration(value int64) *NetworkInterfaceStatusApplyConfiguration {
 	b.ObservedGeneration = &value
+	return b
+}
+
+// WithAllocatedMAC sets the AllocatedMAC field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the AllocatedMAC field is set to the value of the last call.
+func (b *NetworkInterfaceStatusApplyConfiguration) WithAllocatedMAC(value string) *NetworkInterfaceStatusApplyConfiguration {
+	b.AllocatedMAC = &value
 	return b
 }

@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"net"
 	"testing"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
@@ -145,6 +146,118 @@ func TestNICStickyAcrossGenerationBump(t *testing.T) {
 	}
 	if got.Status.ObservedGeneration != 2 {
 		t.Fatalf("observedGeneration = %d want 2", got.Status.ObservedGeneration)
+	}
+}
+
+func TestNICAllocatesStableUniqueMAC(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = netv1.AddToScheme(scheme)
+	sub := readySubnet("s", "blue", "10.0.1.0/24", "")
+	a := nic("a", "blue", "s")
+	b := nic("b", "blue", "s")
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sub, a, b).WithStatusSubresource(&netv1.NetworkInterface{}).Build()
+	r := &NICIPAMReconciler{Client: cl, APIReader: cl}
+	ctx := context.Background()
+	if err := r.Sync(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Sync(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+
+	get := func(n string) netv1.NetworkInterface {
+		var x netv1.NetworkInterface
+		if err := cl.Get(ctx, keyOf(&netv1.NetworkInterface{ObjectMeta: metav1.ObjectMeta{Name: n, Namespace: "default"}}), &x); err != nil {
+			t.Fatal(err)
+		}
+		return x
+	}
+	ma, mb := get("a").Status.AllocatedMAC, get("b").Status.AllocatedMAC
+	for name, m := range map[string]string{"a": ma, "b": mb} {
+		hw, err := net.ParseMAC(m)
+		if err != nil {
+			t.Fatalf("%s MAC %q not parseable: %v", name, m, err)
+		}
+		if hw[0]&0x02 == 0 || hw[0]&0x01 != 0 {
+			t.Fatalf("%s MAC %q is not locally-administered unicast", name, m)
+		}
+	}
+	if ma == mb {
+		t.Fatalf("two NICs in the same VPC got the same MAC %q", ma)
+	}
+}
+
+func TestNICMACStickyAcrossGenerationBump(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = netv1.AddToScheme(scheme)
+	sub := readySubnet("s", "blue", "10.0.1.0/24", "")
+	a := nic("a", "blue", "s")
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sub, a).WithStatusSubresource(&netv1.NetworkInterface{}).Build()
+	r := &NICIPAMReconciler{Client: cl, APIReader: cl}
+	ctx := context.Background()
+	if err := r.Sync(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	var g netv1.NetworkInterface
+	_ = cl.Get(ctx, keyOf(a), &g)
+	first := g.Status.AllocatedMAC
+	if first == "" {
+		t.Fatal("no MAC allocated")
+	}
+	g.Generation = 2
+	if err := cl.Update(ctx, &g); err != nil {
+		t.Fatal(err)
+	}
+	_ = cl.Get(ctx, keyOf(a), &g)
+	g.Generation = 2
+	if err := r.Sync(ctx, &g); err != nil {
+		t.Fatal(err)
+	}
+	_ = cl.Get(ctx, keyOf(a), &g)
+	if g.Status.AllocatedMAC != first {
+		t.Fatalf("MAC changed on unrelated edit: %q -> %q", first, g.Status.AllocatedMAC)
+	}
+}
+
+func TestNICPinnedMACIsHonoredAndCanonicalized(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = netv1.AddToScheme(scheme)
+	sub := readySubnet("s", "blue", "10.0.1.0/24", "")
+	pinned := nic("pinned", "blue", "s")
+	pinned.Spec.MAC = "AA:BB:CC:DD:EE:FF"
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sub, pinned).WithStatusSubresource(&netv1.NetworkInterface{}).Build()
+	r := &NICIPAMReconciler{Client: cl, APIReader: cl}
+	if err := r.Sync(context.Background(), pinned); err != nil {
+		t.Fatal(err)
+	}
+	var g netv1.NetworkInterface
+	_ = cl.Get(context.Background(), keyOf(pinned), &g)
+	if g.Status.State != "Allocated" {
+		t.Fatalf("state = %q want Allocated", g.Status.State)
+	}
+	if g.Status.AllocatedMAC != "aa:bb:cc:dd:ee:ff" {
+		t.Fatalf("allocated MAC = %q want canonical aa:bb:cc:dd:ee:ff", g.Status.AllocatedMAC)
+	}
+}
+
+func TestNICPinnedMACCollisionIsInvalid(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = netv1.AddToScheme(scheme)
+	sub := readySubnet("s", "blue", "10.0.1.0/24", "")
+	occupant := nic("occ", "blue", "s")
+	occupant.Status.AllocatedMAC = "aa:bb:cc:dd:ee:ff"
+	occupant.Status.State = "Allocated"
+	clash := nic("clash", "blue", "s")
+	clash.Spec.MAC = "aa:bb:cc:dd:ee:ff"
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sub, occupant, clash).WithStatusSubresource(&netv1.NetworkInterface{}).Build()
+	r := &NICIPAMReconciler{Client: cl, APIReader: cl}
+	if err := r.Sync(context.Background(), clash); err != nil {
+		t.Fatal(err)
+	}
+	var g netv1.NetworkInterface
+	_ = cl.Get(context.Background(), keyOf(clash), &g)
+	if g.Status.State != "Invalid" {
+		t.Fatalf("state = %q want Invalid (MAC already taken by a peer)", g.Status.State)
 	}
 }
 

@@ -1237,6 +1237,7 @@ func autoConvert_v1alpha1_NetworkInterfaceStatus_To_net_NetworkInterfaceStatus(i
 	out.State = in.State
 	out.AllocatedIPs = *(*[]string)(unsafe.Pointer(&in.AllocatedIPs))
 	out.ObservedGeneration = in.ObservedGeneration
+	out.AllocatedMAC = in.AllocatedMAC
 	return nil
 }
 
@@ -1251,6 +1252,7 @@ func autoConvert_net_NetworkInterfaceStatus_To_v1alpha1_NetworkInterfaceStatus(i
 	out.Port = (*PortStatus)(unsafe.Pointer(in.Port))
 	out.State = in.State
 	out.AllocatedIPs = *(*[]string)(unsafe.Pointer(&in.AllocatedIPs))
+	out.AllocatedMAC = in.AllocatedMAC
 	out.ObservedGeneration = in.ObservedGeneration
 	return nil
 }

@@ -457,7 +457,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `vpcRef` _[LocalObjectReference](#localobjectreference)_ | VPCRef references the VPC this interface belongs to. |  |  |
 | `ips` _string array_ | IPs is the requested overlay set. Empty => the platform allocates from<br />the subnet. Populated => the requested IPs are validated for subnet<br />membership and uniqueness, then reserved (bring-your-own). |  | Optional: \{\} <br /> |
-| `mac` _string_ | MAC is the interface's L2 address. REQUIRED for a KubeVirt VM (device_type<br />pod-tap/tap): the datapath programs this as the guest MAC, and the VMI's<br />spec.domain.devices.interfaces[].macAddress MUST be set to the same value so<br />KubeVirt gives the VM's virtio NIC that MAC. Empty for containers (derived). |  | Optional: \{\} <br /> |
+| `mac` _string_ | MAC is a bring-your-own L2 address request. Empty => the platform allocates<br />a stable, VPC-unique, locally-administered MAC into Status.AllocatedMAC.<br />Populated => the address is validated for format and VPC-uniqueness, then<br />reserved (a bad or clashing pin surfaces as Status.State=="Invalid"). The<br />authoritative value the datapath and the KubeVirt VMI use is always<br />Status.AllocatedMAC, never this field directly. |  | Optional: \{\} <br /> |
 | `nodeName` _string_ | NodeName is the node the interface is scheduled onto. Set by the scheduler. |  | Optional: \{\} <br /> |
 | `qos` _[InterfaceQoS](#interfaceqos)_ | QoS caps/shapes throughput for this interface. Nil = unlimited. |  | Optional: \{\} <br /> |
 | `clusterName` _string_ | ClusterName is the compute cluster this standalone (e.g. Pod) NIC targets. The<br />compiler uses it for placement (CompiledNIC.spec.clusterName) when no<br />VirtualMachine owns this NIC; an owning VM's placement takes precedence. |  | Optional: \{\} <br /> |
@@ -483,6 +483,7 @@ _Appears in:_
 | `state` _string_ | State is the current lifecycle state (e.g. Pending, Ready). |  | Optional: \{\} <br /> |
 | `allocatedIPs` _string array_ | AllocatedIPs is the authoritative overlay address set assigned by the IP<br />allocator. CompiledNIC.Spec.OverlayIPs is sourced from this, never Spec.IPs. |  | Optional: \{\} <br /> |
 | `observedGeneration` _integer_ | ObservedGeneration is the Spec generation the allocation reflects. Compile<br />is gated on ObservedGeneration == metadata.generation. |  | Optional: \{\} <br /> |
+| `allocatedMAC` _string_ | AllocatedMAC is the authoritative L2 address assigned by the MAC allocator:<br />a stable, VPC-unique, locally-administered MAC derived from the NIC's UID<br />(or the pinned Spec.MAC). CompiledNIC.Spec.MAC is sourced from this, never<br />Spec.MAC. Empty until the interface reaches State=="Allocated". |  | Optional: \{\} <br /> |
 
 
 #### PortStatus

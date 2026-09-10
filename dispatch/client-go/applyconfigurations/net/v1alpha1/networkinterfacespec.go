@@ -13,10 +13,12 @@ type NetworkInterfaceSpecApplyConfiguration struct {
 	// the subnet. Populated => the requested IPs are validated for subnet
 	// membership and uniqueness, then reserved (bring-your-own).
 	IPs []string `json:"ips,omitempty"`
-	// MAC is the interface's L2 address. REQUIRED for a KubeVirt VM (device_type
-	// pod-tap/tap): the datapath programs this as the guest MAC, and the VMI's
-	// spec.domain.devices.interfaces[].macAddress MUST be set to the same value so
-	// KubeVirt gives the VM's virtio NIC that MAC. Empty for containers (derived).
+	// MAC is a bring-your-own L2 address request. Empty => the platform allocates
+	// a stable, VPC-unique, locally-administered MAC into Status.AllocatedMAC.
+	// Populated => the address is validated for format and VPC-uniqueness, then
+	// reserved (a bad or clashing pin surfaces as Status.State=="Invalid"). The
+	// authoritative value the datapath and the KubeVirt VMI use is always
+	// Status.AllocatedMAC, never this field directly.
 	MAC *string `json:"mac,omitempty"`
 	// NodeName is the node the interface is scheduled onto. Set by the scheduler.
 	NodeName *string `json:"nodeName,omitempty"`

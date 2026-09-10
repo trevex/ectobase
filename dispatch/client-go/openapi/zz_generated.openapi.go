@@ -3337,7 +3337,7 @@ func schema_ectobase_api_net_v1alpha1_NetworkInterfaceSpec(ref common.ReferenceC
 					},
 					"mac": {
 						SchemaProps: spec.SchemaProps{
-							Description: "MAC is the interface's L2 address. REQUIRED for a KubeVirt VM (device_type pod-tap/tap): the datapath programs this as the guest MAC, and the VMI's spec.domain.devices.interfaces[].macAddress MUST be set to the same value so KubeVirt gives the VM's virtio NIC that MAC. Empty for containers (derived).",
+							Description: "MAC is a bring-your-own L2 address request. Empty => the platform allocates a stable, VPC-unique, locally-administered MAC into Status.AllocatedMAC. Populated => the address is validated for format and VPC-uniqueness, then reserved (a bad or clashing pin surfaces as Status.State==\"Invalid\"). The authoritative value the datapath and the KubeVirt VMI use is always Status.AllocatedMAC, never this field directly.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -3432,6 +3432,13 @@ func schema_ectobase_api_net_v1alpha1_NetworkInterfaceStatus(ref common.Referenc
 							Description: "ObservedGeneration is the Spec generation the allocation reflects. Compile is gated on ObservedGeneration == metadata.generation.",
 							Type:        []string{"integer"},
 							Format:      "int64",
+						},
+					},
+					"allocatedMAC": {
+						SchemaProps: spec.SchemaProps{
+							Description: "AllocatedMAC is the authoritative L2 address assigned by the MAC allocator: a stable, VPC-unique, locally-administered MAC derived from the NIC's UID (or the pinned Spec.MAC). CompiledNIC.Spec.MAC is sourced from this, never Spec.MAC. Empty until the interface reaches State==\"Allocated\".",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 				},

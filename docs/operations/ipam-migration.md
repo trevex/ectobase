@@ -17,6 +17,17 @@ free-form and unallocated. Migration is non-disruptive and requires no renumberi
 Rollout order: create Subnets/LBPools first (they go `Ready`), then patch the
 `Ref` fields. Watch for `State=Invalid`/`Conflict` before removing any legacy path.
 
+## MACs are allocated too
+
+`NetworkInterface.Spec.MAC` follows the same request semantics as `Spec.IPs`. A
+pre-IPAM NIC that pinned a MAC keeps it: on first reconcile the allocator adopts
+`Spec.MAC` as a validated, VPC-unique reservation and republishes it to
+`Status.AllocatedMAC` (a format-invalid or clashing pin goes `Invalid`, like a bad
+IP). A NIC that left `Spec.MAC` empty is assigned a stable, VPC-unique,
+locally-administered (`02:`-prefixed) MAC derived from its identity — so no NIC
+renumbers its L2 address during migration. `CompiledNIC.Spec.MAC` and the KubeVirt
+guest are sourced from `Status.AllocatedMAC`, never `Spec.MAC` directly.
+
 ## De-gate semantics: keep-last-good
 
 Compilation is gated on `State=Allocated` for the current generation, but that gate

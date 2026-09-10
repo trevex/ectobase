@@ -56,9 +56,12 @@ The vm-materializer builds the `VirtualMachine` deterministically from the
 `CompiledVM`:
 
 - Interfaces. For each interface in the `CompiledVM` spec it emits a KubeVirt
-  `Interface` with the pinned MAC and a `Binding{Name: flowplane}` (the tap
+  `Interface` with the allocated MAC and a `Binding{Name: flowplane}` (the tap
   binding plugin), plus a `Multus` network referencing the interface's network
-  name. Pinning the MAC keeps the guest's L2 identity stable across reschedules.
+  name. The MAC is the central IPAM allocation (`NetworkInterface.Status.AllocatedMAC`,
+  a stable VPC-unique `02:`-prefixed address, or a pinned `Spec.MAC`) carried
+  through the compile hop, so the guest's L2 identity is fixed across reschedules
+  and IP renumbers without the operator hand-assigning one.
 - Disks. When the VM has `CompiledVolumeAttachment`s it boots from persistent
   CDI DataVolume disks (boot attachment first, then the rest by name); with no
   attachments it falls back to an ephemeral `containerDisk` from the VM image.

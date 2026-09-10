@@ -37,7 +37,7 @@ func CompileVM(vm *computev1.VirtualMachine, nics []netv1.NetworkInterface, plac
 	}
 	macByNIC := map[string]string{}
 	for i := range nics {
-		macByNIC[nics[i].Name] = nics[i].Spec.MAC
+		macByNIC[nics[i].Name] = macOrSpec(&nics[i])
 	}
 	var ifaces []compiledv1.CompiledVMInterface
 	for _, ref := range vm.Spec.InterfaceRefs {

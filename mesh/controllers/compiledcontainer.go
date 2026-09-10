@@ -30,7 +30,7 @@ import (
 func CompileContainer(ctr *computev1.Container, nics []netv1.NetworkInterface, networkName string) compiledv1.CompiledContainer {
 	macByNIC := map[string]string{}
 	for i := range nics {
-		macByNIC[nics[i].Name] = nics[i].Spec.MAC
+		macByNIC[nics[i].Name] = macOrSpec(&nics[i])
 	}
 	var ifaces []compiledv1.CompiledContainerInterface
 	for _, ref := range ctr.Spec.InterfaceRefs {

@@ -16,10 +16,12 @@ type NetworkInterfaceSpec struct {
 	// membership and uniqueness, then reserved (bring-your-own).
 	// +optional
 	IPs []string `json:"ips,omitempty" protobuf:"bytes,2,rep,name=ips"`
-	// MAC is the interface's L2 address. REQUIRED for a KubeVirt VM (device_type
-	// pod-tap/tap): the datapath programs this as the guest MAC, and the VMI's
-	// spec.domain.devices.interfaces[].macAddress MUST be set to the same value so
-	// KubeVirt gives the VM's virtio NIC that MAC. Empty for containers (derived).
+	// MAC is a bring-your-own L2 address request. Empty => the platform allocates
+	// a stable, VPC-unique, locally-administered MAC into Status.AllocatedMAC.
+	// Populated => the address is validated for format and VPC-uniqueness, then
+	// reserved (a bad or clashing pin surfaces as Status.State=="Invalid"). The
+	// authoritative value the datapath and the KubeVirt VMI use is always
+	// Status.AllocatedMAC, never this field directly.
 	// +optional
 	MAC string `json:"mac,omitempty" protobuf:"bytes,5,opt,name=mac"`
 	// NodeName is the node the interface is scheduled onto. Set by the scheduler.
@@ -95,6 +97,12 @@ type NetworkInterfaceStatus struct {
 	// is gated on ObservedGeneration == metadata.generation.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty" protobuf:"varint,6,opt,name=observedGeneration"`
+	// AllocatedMAC is the authoritative L2 address assigned by the MAC allocator:
+	// a stable, VPC-unique, locally-administered MAC derived from the NIC's UID
+	// (or the pinned Spec.MAC). CompiledNIC.Spec.MAC is sourced from this, never
+	// Spec.MAC. Empty until the interface reaches State=="Allocated".
+	// +optional
+	AllocatedMAC string `json:"allocatedMAC,omitempty" protobuf:"bytes,7,opt,name=allocatedMAC"`
 }
 
 // +genclient

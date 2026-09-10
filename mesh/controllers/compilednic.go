@@ -24,6 +24,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
+// macOrSpec returns the NIC's authoritative L2 address: the allocator-assigned
+// Status.AllocatedMAC when present, else the pinned Spec.MAC as a fallback for
+// objects not yet MAC-allocated (mirrors how OverlayIPs prefers AllocatedIPs).
+func macOrSpec(nic *netv1.NetworkInterface) string {
+	if nic.Status.AllocatedMAC != "" {
+		return nic.Status.AllocatedMAC
+	}
+	return nic.Spec.MAC
+}
+
 // PeerImportSpec is a pre-resolved peering import for a specific LOCAL VPC (peerVNI + the peer's
 // exposed prefixes). The controller computes these from Ready VPCPeerings; Compile just filters by
 // the NIC's VPC.
@@ -105,7 +115,9 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 			Port:       port,
 			OverlayIPs: append([]string(nil), nic.Status.AllocatedIPs...),
 			Firewall:   compiledv1.CompiledFirewall{},
-			MAC:        nic.Spec.MAC,
+			// Authoritative MAC comes from the allocator's Status, like OverlayIPs.
+			// Spec.MAC is only a fallback for objects not yet MAC-allocated.
+			MAC: macOrSpec(nic),
 		},
 	}
 

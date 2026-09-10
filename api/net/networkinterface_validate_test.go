@@ -19,4 +19,13 @@ func TestNetworkInterfaceValidate(t *testing.T) {
 	if errs := nic.Validate(ctx); len(errs) == 0 {
 		t.Fatal("expected error for malformed IP")
 	}
+
+	nic = &NetworkInterface{Spec: NetworkInterfaceSpec{MAC: "aa:bb:cc:dd:ee:ff"}}
+	if errs := nic.Validate(ctx); len(errs) != 0 {
+		t.Fatalf("valid MAC rejected: %v", errs)
+	}
+	nic = &NetworkInterface{Spec: NetworkInterfaceSpec{MAC: "not-a-mac"}}
+	if errs := nic.Validate(ctx); len(errs) == 0 {
+		t.Fatal("expected error for malformed MAC")
+	}
 }
