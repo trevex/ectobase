@@ -25,7 +25,7 @@ pki:
   # enabled turns on mutual TLS to the reflector. REQUIRES cert-manager in the pool. The pool
   # gets its own intermediate CA via a RouteBusIdentity CSR to dispatch (no cross-cluster
   # cert-manager dependency). MUST match the dispatch chart's pki.enabled.
-  enabled: false
+  enabled: true
   # intermediateSecret is the pool CA Secret the broker requests from dispatch and writes
   # locally ({tls.crt=intermediate, tls.key=pool key, ca.crt=root}); it backs the pool
   # cert-manager Issuer that mints per-node agent leaves, and carries the root the agent trusts.
@@ -49,7 +49,6 @@ installCRDs: true
 # pool cluster. The broker is ALWAYS deployed in the pool chart; clusterName is required.
 broker:
   clusterName: ""                       # this cluster's pool name (e.g. k02); required
-  dispatchKubeconfigSecret: broker-dispatch-kubeconfig  # Secret (key: kubeconfig) with a dispatch token
 
 # vm-materializer: turns broker-synced CompiledVM/CompiledVolumeAttachment into KubeVirt VMs.
 # Off by default; on for pools with KubeVirt installed.

@@ -5,15 +5,15 @@ import (
 	"testing"
 )
 
-func TestMintKubeconfigQuotesBracketedV6Server(t *testing.T) {
-	kc := mintKubeconfig("fd00:cafe:abcd:1::1", "tok-123")
+func TestMintKubeconfigCAQuotesBracketedV6Server(t *testing.T) {
+	kc := mintKubeconfigCA("fd00:cafe:abcd:1::1", "tok-123", "Y2E=")
 	// The bracketed-IPv6 server MUST be double-quoted, else YAML parses [..] as a
 	// flow sequence and the kubeconfig breaks.
-	if !strings.Contains(kc, `server: "https://[fd00:cafe:abcd:1::1]:6443"`) {
+	if !strings.Contains(kc, `server: "https://[fd00:cafe:abcd:1::1]:6444"`) {
 		t.Fatalf("server line not present/quoted:\n%s", kc)
 	}
-	if !strings.Contains(kc, "insecure-skip-tls-verify: true") {
-		t.Fatalf("expected insecure-skip-tls-verify: true:\n%s", kc)
+	if !strings.Contains(kc, "certificate-authority-data: Y2E=") {
+		t.Fatalf("expected certificate-authority-data: Y2E=:\n%s", kc)
 	}
 	if !strings.Contains(kc, "token: tok-123") {
 		t.Fatalf("token not embedded:\n%s", kc)

@@ -77,8 +77,9 @@ type ComputeCluster struct {
 // user would: the ectobase-dispatch chart on the dispatch cluster (aggregated apiserver +
 // controller + kine + compiler + reflector + dispatch-side broker identity), then the
 // ectobase-pool chart on each compute cluster (dataplane + agent + broker + cni +
-// materializers). Lab-only bits — the broker→dispatch token/kubeconfig and the
-// pre-created ClusterPools — are minted here as fixtures around the installs.
+// materializers). Lab-only bits — the mTLS enrollment fixtures (dispatch root CA +
+// bootstrap-token kubeconfig) and the pre-created ClusterPools — are minted here
+// around the installs.
 //
 // It assumes every referenced kubeconfig already exists (the fabric is up). Every
 // kubectl/helm call passes --kubeconfig explicitly.
@@ -120,26 +121,6 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		return fmt.Errorf("dispatch aggregated API: %w", err)
 	}
 
-	// --- Shared broker→dispatch kubeconfig (lab fixture; token path only) ---
-	// In mtls mode the broker gets its dispatch credential from cert-manager
-	// (broker-dispatch-tls, minted by the pool chart) instead, so none of this runs.
-	var brokerKubeconfig string
-	if !s.RouteBusMTLS {
-		// The dispatch-side dispatch-broker ServiceAccount is created by the ectobase-dispatch chart (system ns); mint
-		// a token for it and hand-write the broker's kubeconfig to the dispatch's fabric address.
-		slog.Info("minting broker dispatch token")
-		token, err := exec.OutputStr(ctx, "kubectl", "--kubeconfig", s.DispatchKubeconfig,
-			"create", "token", "dispatch-broker", "-n", "system", "--duration=24h")
-		if err != nil {
-			return fmt.Errorf("create broker token: %w", err)
-		}
-		brokerKubeconfig = filepath.Join(s.WorkDir, "broker-dispatch.kubeconfig")
-		if err := os.WriteFile(brokerKubeconfig,
-			[]byte(mintKubeconfig(s.DispatchIdentity, strings.TrimSpace(token))), 0o600); err != nil {
-			return fmt.Errorf("write broker kubeconfig: %w", err)
-		}
-	}
-
 	// Pre-create one ClusterPool per compute cluster (lab fixture). platform.ectobase.dev is served
 	// by the aggregated apiserver, so this must run after waitAggregatedAPI.
 	slog.Info("pre-creating compute ClusterPools", "count", len(s.Compute))
@@ -155,7 +136,7 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 	// --- Each compute cluster (in parallel: independent, each targets its own kubeconfig) ---
 	var eg errgroup.Group
 	for _, c := range s.Compute {
-		eg.Go(func() error { return installPool(ctx, s, c, brokerKubeconfig) })
+		eg.Go(func() error { return installPool(ctx, s, c) })
 	}
 	if err := eg.Wait(); err != nil {
 		return err
@@ -172,7 +153,7 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 // installPool deploys the ectobase-pool chart (+ its NAD CRD, broker secret, and Multus)
 // onto one compute cluster. It touches only that cluster's kubeconfig, so callers run it
 // concurrently across compute clusters.
-func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster, brokerKubeconfig string) error {
+func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster) error {
 	slog.Info("installing ectobase-pool chart on compute cluster", "cluster", c.Name)
 	// The chart renders a NetworkAttachmentDefinition unconditionally, so the NAD CRD must
 	// exist first.
@@ -184,16 +165,7 @@ func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster, brokerKu
 	if err := ensureHelmNamespace(ctx, c.Kubeconfig, "ectobase-system", "ectobase-pool"); err != nil {
 		return fmt.Errorf("cluster %s: ensure namespace: %w", c.Name, err)
 	}
-	// In token mode the broker-dispatch-kubeconfig Secret must exist before the chart's broker pod
-	// starts, so create it ahead of helm too. In mtls mode cert-manager mints broker-dispatch-tls
-	// via the chart instead, so this is skipped.
-	if !s.RouteBusMTLS {
-		if err := createSecretFromFile(ctx, c.Kubeconfig, "ectobase-system",
-			"broker-dispatch-kubeconfig", "kubeconfig", brokerKubeconfig); err != nil {
-			return fmt.Errorf("cluster %s: create broker secret: %w", c.Name, err)
-		}
-	}
-	// In mtls mode the fresh-pool enrollment Secrets must exist before the chart's broker
+	// The fresh-pool enrollment Secrets must exist before the chart's broker
 	// pod starts too: the pre-provisioned dispatch root CA (so the broker can verify the
 	// dispatch server) and a short-lived bootstrap-token kubeconfig (a narrow,
 	// routebusidentities-only credential the broker uses for its first-boot RouteBusIdentity
@@ -243,18 +215,6 @@ func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster, brokerKu
 	if err := helmInstallPool(ctx, c.Kubeconfig, c.Name, s.PoolChartPath, s.DispatchIdentity, s.UnderlayWithin, s.RouteBusMTLS, c.UnderlayCIDRs, s.ImageRegistry); err != nil {
 		return fmt.Errorf("cluster %s: helm install ectobase-pool: %w", c.Name, err)
 	}
-	if !s.RouteBusMTLS {
-		// The broker mounts broker-dispatch-kubeconfig as a volume, so an existing broker pod keeps the
-		// OLD kubeconfig across a re-`deploy` that rewrote the secret (helm won't roll it — the
-		// secret is created outside the chart). On a fresh up the broker starts after the secret so
-		// this is a no-op; on re-deploy it makes the broker pick up the current dispatch address.
-		// Best-effort. Not needed in mtls mode: cert-manager's broker-dispatch-tls Secret is
-		// managed by the chart, so helm itself rolls the broker when it changes.
-		if err := exec.Run(ctx, "kubectl", "--kubeconfig", c.Kubeconfig, "-n", "ectobase-system",
-			"rollout", "restart", "deploy/dispatch-broker"); err != nil {
-			slog.Debug("rollout restart dispatch-broker", "cluster", c.Name, "err", err)
-		}
-	}
 	// Multus (thin) so a Pod annotated onto our overlay is attached via Multus ->
 	// flowplane-cni (a SECONDARY network) instead of a hand-driven gRPC attach. Installed
 	// AFTER the chart so flowplane-cni + the dataplane-kubeconfig already exist. Compute
@@ -286,7 +246,8 @@ func kubectlApplyStdin(ctx context.Context, kubeconfig, yaml string) error {
 // enforce PSA so this only bites on Talos). It also stamps Helm's managed-by label + release
 // annotations so a chart that DID manage the namespace could adopt it; the pool chart does not
 // manage its release namespace, so those are harmless here — the reason to pre-create is that the
-// broker-dispatch-kubeconfig Secret has to exist before the chart's broker pod starts.
+// mTLS enrollment Secrets (dispatch-root-ca, broker-dispatch-bootstrap) have to exist before
+// the chart's broker pod starts.
 func ensureHelmNamespace(ctx context.Context, kubeconfig, ns, release string) error {
 	m := fmt.Sprintf(`apiVersion: v1
 kind: Namespace
@@ -493,37 +454,12 @@ func poolField(ctx context.Context, kubeconfig, name, jsonpath string) (string, 
 	return strings.TrimSpace(out), err
 }
 
-// mintKubeconfig hand-writes a token kubeconfig for the broker→dispatch connection.
-// The bracketed-IPv6 server MUST be double-quoted: an unquoted https://[..]:6443
-// is a YAML flow sequence and fails to parse. TLS verify is skipped because
-// the dispatch's serving cert is self-signed.
-func mintKubeconfig(dispatchHost, token string) string {
-	return fmt.Sprintf(`apiVersion: v1
-kind: Config
-clusters:
-- name: dispatch
-  cluster:
-    server: "https://[%s]:6443"
-    insecure-skip-tls-verify: true
-contexts:
-- name: broker@dispatch
-  context:
-    cluster: dispatch
-    user: dispatch-broker
-current-context: broker@dispatch
-users:
-- name: dispatch-broker
-  user:
-    token: %s
-`, dispatchHost, token)
-}
-
 // mintKubeconfigCA hand-writes a short-lived bootstrap-token kubeconfig for the broker's
-// first-boot RouteBusIdentity CSR in mtls mode. Unlike mintKubeconfig, the connection is
-// verified against the pre-shared dispatch root CA (caB64, already base64 — the raw value
-// read from the ectobase-ca Secret's tls.crt data key) rather than skipping TLS verify: the
-// whole point of the mTLS enrollment path is a verified connection even for this narrow,
-// one-time bootstrap credential.
+// first-boot RouteBusIdentity CSR. The connection is verified against the pre-shared
+// dispatch root CA (caB64, already base64 — the raw value read from the ectobase-ca
+// Secret's tls.crt data key) rather than skipping TLS verify: the whole point of the
+// mTLS enrollment path is a verified connection even for this narrow, one-time
+// bootstrap credential.
 func mintKubeconfigCA(dispatchHost, token, caB64 string) string {
 	return fmt.Sprintf(`apiVersion: v1
 kind: Config

@@ -558,9 +558,8 @@ func deployEctobase(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("dispatch cluster %q has no nodes", dispatchCluster)
 	}
 
-	// Route-bus mTLS PKI is on by default; set ECTOBASE_ROUTEBUS_MTLS=false to bring the
-	// fabric up on the plaintext route bus (dev/debug baseline).
-	mtls := os.Getenv("ECTOBASE_ROUTEBUS_MTLS") != "false"
+	// Route-bus mTLS PKI is mandatory: it is the sole broker->dispatch auth path.
+	mtls := true
 
 	p := buildPaths(cfg)
 	var compute []deploy.ComputeCluster

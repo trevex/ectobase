@@ -45,8 +45,6 @@ spec:
             # First-boot only: short-lived token used to bootstrap the pool intermediate (submit
             # the RouteBusIdentity CSR) until cert-manager mints broker-dispatch-tls from it.
             - "--dispatch-bootstrap-kubeconfig=/secrets/dispatch-bootstrap/kubeconfig"
-            {{- else }}
-            - "--dispatch-kubeconfig=/secrets/dispatch/kubeconfig"
             {{- end }}
             {{- if .Values.pki.enabled }}
             # Bootstrap this pool's route-bus intermediate CA (generate keypair locally, CSR to
@@ -73,10 +71,6 @@ spec:
             - name: dispatch-bootstrap
               mountPath: /secrets/dispatch-bootstrap
               readOnly: true
-            {{- else }}
-            - name: dispatch-kubeconfig
-              mountPath: /secrets/dispatch
-              readOnly: true
             {{- end }}
       volumes:
         {{- if .Values.pki.enabled }}
@@ -97,8 +91,4 @@ spec:
         - name: dispatch-bootstrap
           secret:
             secretName: broker-dispatch-bootstrap
-        {{- else }}
-        - name: dispatch-kubeconfig
-          secret:
-            secretName: {{ .Values.broker.dispatchKubeconfigSecret }}
         {{- end }}

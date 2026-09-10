@@ -27,7 +27,6 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -48,13 +47,11 @@ func main() {
 	os.Setenv("KUBE_FEATURE_WatchListClient", "false") //nolint:errcheck
 
 	var (
-		dispatchKubeconfig   string
 		downstreamKubeconfig string
 		clusterName          string
 		routebusSecret       string
 		routebusSecretNS     string
 	)
-	flag.StringVar(&dispatchKubeconfig, "dispatch-kubeconfig", "", "Path to the dispatch aggregated-apiserver kubeconfig.")
 	flag.StringVar(&downstreamKubeconfig, "downstream-kubeconfig", "", "Path to the downstream cluster kubeconfig.")
 	flag.StringVar(&clusterName, "cluster-name", "", "Cluster name this broker instance serves (required).")
 	flag.StringVar(&routebusSecret, "routebus-intermediate-secret", "", "if set, bootstrap this pool's route-bus intermediate CA into this Secret (enables the mTLS PKI); empty => disabled")
@@ -72,6 +69,9 @@ func main() {
 
 	if clusterName == "" {
 		log.Fatal("--cluster-name is required")
+	}
+	if dispatchServer == "" {
+		log.Fatal("--dispatch-server is required")
 	}
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
@@ -151,17 +151,11 @@ func main() {
 		}
 	}
 
-	// Dispatch rest.Config — mTLS from cert files if --dispatch-server is given (client-go
-	// re-reads the cert/key/CA files from disk, so cert-manager rotation needs no broker
-	// restart); else --dispatch-kubeconfig (legacy fallback), else in-cluster/KUBECONFIG.
-	var dispatchCfg *rest.Config
-	if dispatchServer != "" {
-		dispatchCfg, err = dispatchConfig(dispatchAuth{
-			server: dispatchServer, caFile: dispatchCA, certFile: dispatchCert, keyFile: dispatchKey,
-		})
-	} else {
-		dispatchCfg, err = clientcmd.BuildConfigFromFlags("", dispatchKubeconfig)
-	}
+	// Dispatch rest.Config — mTLS from cert files (client-go re-reads the cert/key/CA files
+	// from disk, so cert-manager rotation needs no broker restart).
+	dispatchCfg, err := dispatchConfig(dispatchAuth{
+		server: dispatchServer, caFile: dispatchCA, certFile: dispatchCert, keyFile: dispatchKey,
+	})
 	if err != nil {
 		log.Fatalf("build dispatch rest.Config: %v", err)
 	}

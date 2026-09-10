@@ -1,21 +1,14 @@
 # Copyright 2026 ectobase contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Dispatch-side dispatch-broker identity: the ServiceAccount + ClusterRole + Binding that
-# the per-pool broker uses when authenticating to the dispatch apiserver. Lives in
-# the dispatch's `system` namespace ({{ .Values.namespace }}). RBAC rules are sourced
-# from the generated files/dispatch-broker/role.yaml.
+# Dispatch-side dispatch-broker identity: the ClusterRole + Binding that grants the
+# "ectobase:brokers" cert group (the mTLS route-bus identity every pool broker presents)
+# access to the dispatch apiserver. Lives in the dispatch's `system` namespace
+# ({{ .Values.namespace }}). RBAC rules are sourced from the generated
+# files/dispatch-broker/role.yaml.
 #
 # NOTE: the downstream (in-pool) broker SA and its RBAC live in the ectobase
 # (pool) chart, NOT here.
----
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: dispatch-broker
-  namespace: {{ .Values.namespace }}
-  labels:
-    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -37,9 +30,6 @@ roleRef:
   kind: ClusterRole
   name: dispatch-broker
 subjects:
-  - kind: ServiceAccount
-    name: dispatch-broker
-    namespace: {{ .Values.namespace }}
   # Cert-authenticated brokers present Org=ectobase:brokers; per-pool write-scope is enforced
   # by the ClusterRestriction admission plugin off the CN (ectobase:cluster:<pool>).
   - kind: Group

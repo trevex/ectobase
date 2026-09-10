@@ -21,9 +21,9 @@ pki:
   # enabled turns on mutual TLS for the route bus AND CN-gates the fence API to the
   # dispatch-controller identity. REQUIRES cert-manager in the cluster (the dispatch chart
   # provisions a self-signed CA + ClusterIssuer that this and the pool chart issue
-  # from). Left off by default so a cert-manager-less lab still comes up on plaintext
-  # (dev only — the admin API is split onto its own port regardless).
-  enabled: false
+  # from). Mandatory: mTLS is the sole broker→dispatch auth path (cert-manager is
+  # a required dependency).
+  enabled: true
   # clusterIssuer is the shared CA ClusterIssuer name; MUST match the pool chart.
   clusterIssuer: ectobase-ca
   # caSecretName holds the CA keypair backing the ClusterIssuer.

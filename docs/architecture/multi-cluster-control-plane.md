@@ -167,10 +167,12 @@ misconfigured RBAC, since none exists to prevent it beyond the plugin's write ch
 namespace-per-pool authorization model that closes that gap centrally is a separate,
 not-yet-built effort.
 
-The legacy token path (a dedicated `dispatch-broker` ServiceAccount + kubeconfig Secret,
-`charts/ectobase-dispatch/templates/broker-identity.yaml`) still exists as a migration fallback
-when `pki.enabled=false`; the dispatch apiserver's delegated authentication unions bearer-token
-and x509 client-cert authn, so both credential types work side by side during a rollout.
+The legacy token path (a dedicated, shared full-privilege `dispatch-broker` ServiceAccount +
+kubeconfig Secret) has been removed: `pki.enabled` is mandatory (`true`) on both charts, and
+mTLS is the sole broker→dispatch auth path. `charts/ectobase-dispatch/templates/broker-identity.yaml`
+now grants the `dispatch-broker` `ClusterRole` only to the `ectobase:brokers` cert group; the
+narrow `dispatch-broker-bootstrap` ServiceAccount remains as the first-boot enrollment identity
+(routebusidentities-only) used before a fresh pool's steady-state client cert exists.
 
 ```mermaid
 flowchart TB

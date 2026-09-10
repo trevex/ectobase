@@ -57,7 +57,7 @@ Source of truth: `charts/ectobase-dispatch/values.yaml` (schema: `values.schema.
 | `namespace` | `system` | Release namespace for the baseline-safe apiserver/controller/kine + broker identity. |
 | `agentNamespace` | `ectobase-system` | PSA-privileged namespace the chart creates for the hostNetwork compiler + reflector. |
 | `reflectorAdmin` | `[fd00:db8:0:1::1]:1339` | Fence address the dispatch-controller dials via `-reflector-admin`: the reflector's admin port 1339, separate from the agent session port 1338. |
-| `pki.enabled` | `false` | Turn on cert-manager PKI: route-bus mTLS, the dispatch serving cert, and trusting `ectobase-ca` as a client CA for cert-authenticated brokers. MUST match the pool chart's `pki.enabled`. |
+| `pki.enabled` | `true` | Cert-manager PKI: route-bus mTLS, the dispatch serving cert, and trusting `ectobase-ca` as a client CA for cert-authenticated brokers. Mandatory — REQUIRES cert-manager in the cluster. MUST match the pool chart's `pki.enabled`. |
 | `pki.clusterIssuer` / `pki.caSecretName` | `ectobase-ca` | The shared root `ClusterIssuer` / CA Secret name. |
 | `dispatchApiserver.serviceIP` | `fd00:db8:0:1::1` | IPv6 fabric address the broker dials the aggregated apiserver at; set as an IP SAN on the serving cert. Must equal the host the pool chart's `dispatchServer` dials. |
 | `imagePullPolicy` | `IfNotPresent` | Applied to every container. |
@@ -130,16 +130,10 @@ The `CN=ectobase:cluster:<pool>` identity is also what activates the `ClusterRes
 admission plugin's per-pool write-scoping — see
 [Multi-cluster control plane](../architecture/multi-cluster-control-plane.md#the-brokers-dispatch-credential).
 
-`pki.enabled` defaults to `false` on both charts. With it off, the broker falls back to the
-legacy path: a `broker-dispatch-kubeconfig` Secret (key `kubeconfig`) holding a token minted for
-the dispatch-side `dispatch-broker` ServiceAccount, and `insecure-skip-tls-verify` on the
-dispatch connection. That path still works — the aggregated apiserver's delegated
-authentication unions token and cert auth — but it is a migration fallback, not the default:
-
-```sh
-kubectl create secret generic broker-dispatch-kubeconfig \
-  -n ectobase-system --from-file=kubeconfig=./broker-dispatch.kubeconfig
-```
+`pki.enabled` defaults to `true` on both charts and is mandatory: mTLS is the sole
+broker→dispatch auth path. The legacy `broker-dispatch-kubeconfig` token Secret and the
+shared full-privilege dispatch-side `dispatch-broker` ServiceAccount have been removed —
+cert-manager must be installed in every cluster before `helm install`.
 
 ### Pool values
 
@@ -155,8 +149,7 @@ Source of truth: `charts/ectobase-pool/values.yaml` (schema: `values.schema.json
 | `apiserverAddress` | `https://[fd00:db8:0:1::1]:6443` | This cluster's local apiserver (the agent's kubeconfig server URL). |
 | `installCRDs` | `true` | Install the `net`/`compiled` CRDs with the chart (managed on `helm upgrade`). |
 | `broker.clusterName` | `""` | Required. This cluster's pool name (e.g. `k02`). |
-| `broker.dispatchKubeconfigSecret` | `broker-dispatch-kubeconfig` | Legacy path only (`pki.enabled=false`): Secret (key `kubeconfig`) with the broker's dispatch token. |
-| `pki.enabled` | `false` | Mint the broker's dispatch credential as a cert-manager `Certificate` (`broker-dispatch-tls`) instead of using the token Secret; also turns on route-bus mTLS. MUST match the dispatch chart's `pki.enabled`. |
+| `pki.enabled` | `true` | Mint the broker's dispatch credential as a cert-manager `Certificate` (`broker-dispatch-tls`); also turns on route-bus mTLS. Mandatory — REQUIRES cert-manager in the pool. MUST match the dispatch chart's `pki.enabled`. |
 | `pki.intermediateSecret` | `ectobase-pool-ca` | Pool CA Secret the broker requests from dispatch and backs its local `Issuer` with (mints the broker leaf and the agent's node leaves). |
 | `pki.underlayCIDRs` | `""` | Comma-separated pool underlay range(s); name-constrains the pool intermediate. |
 | `dispatchServer` | `https://[fd00:db8:0:1::1]:6443` | mTLS mode only: the dispatch aggregated-apiserver URL the broker dials. Host must equal the dispatch chart's `dispatchApiserver.serviceIP`. |
@@ -175,10 +168,9 @@ The Tier-1 knobs live under `tier1Failover.*` (`snrNamespace`, `nodeSelector`, `
 
 The [local fabric](../tutorials/local-fabric.md) runs this exact two-chart install across a
 dispatch + compute-pool Talos fabric: `make lab-up` renders the charts, brings up the clusters,
-and installs both charts, mTLS enabled by default (`ECTOBASE_ROUTEBUS_MTLS=false` opts back into
-the token path). Read `test/lab/internal/deploy/ectobase.go` to see the reference sequence
-(namespaces, the `pki.enabled` flags, the two `helm install`s) that this page mirrors — it also
-carries the legacy token-minting path for comparison.
+and installs both charts with mTLS mandatory. Read `test/lab/internal/deploy/ectobase.go` to see
+the reference sequence (namespaces, the `pki.enabled` flags, the two `helm install`s) that this
+page mirrors.
 
 ## Releasing the charts
 

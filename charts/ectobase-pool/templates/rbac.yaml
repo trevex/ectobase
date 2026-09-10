@@ -34,8 +34,9 @@ subjects:
 # The per-cluster broker (kubelet-analog) syncs compiled objects from the dispatch down into
 # THIS downstream cluster's compiled.ectobase.dev CRDs (create/update/patch/delete + GC), reads
 # Nodes for underlay/prefix reporting, and reads VMIs for VM lifecycle status. Dispatch-side
-# credentials come from a separate mounted kubeconfig (broker.dispatchKubeconfigSecret); this
-# RBAC is only the downstream (in-cluster) half. Dispatch-side RBAC is minted by the e2e token.
+# credentials come from the mTLS route-bus client cert (broker-dispatch-tls, minted by
+# cert-manager); this RBAC is only the downstream (in-cluster) half. Dispatch-side RBAC is
+# granted to the "ectobase:brokers" cert group (see the dispatch chart's broker-identity.yaml).
 apiVersion: v1
 kind: ServiceAccount
 metadata:

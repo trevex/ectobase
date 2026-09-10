@@ -85,10 +85,6 @@
       "properties": {
         "clusterName": {
           "type": "string"
-        },
-        "dispatchKubeconfigSecret": {
-          "type": "string",
-          "minLength": 1
         }
       }
     },
