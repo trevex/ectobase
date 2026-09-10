@@ -24,17 +24,21 @@ targets. See [Getting started](../guides/getting-started.md).
 
 ## The `flowplane` Rust workspace
 
-The dataplane is a Cargo workspace of five crates. The crucial split is between the
+The dataplane is a Cargo workspace of seven crates. The crucial split is between the
 pure datapath logic (`flowplane-core`, `no_std`, generic over traits) and the two
 concrete environments that run it: the real eBPF programs (`flowplane-ebpf`) and the
 native simulator (`flowplane-sim`). See [The pure-core seam](../architecture/dataplane/pure-core.md)
-for why this split exists.
+for why this split exists. Two further crates factor the userspace agent's non-datapath
+work out of the binary: `flowplane-control` (backend-agnostic control-plane map
+programming) and `flowplane-device` (host device and netlink lifecycle).
 
 ```mermaid
 flowchart TD
     common["flowplane-common<br/>#[repr(C)] POD map key/value types<br/>(no_std; 'user' feature adds aya)"]
     core["flowplane-core<br/>no_std pure datapath logic<br/>generic over Pkt / Maps traits"]
-    ebpf["flowplane-ebpf<br/>XDP + tc programs (aya-ebpf)<br/>real map statics + glue"]
+    ebpf["flowplane-ebpf<br/>tcx classifiers + xdp_inspect (aya-ebpf)<br/>real map statics + glue"]
+    control["flowplane-control<br/>backend-agnostic control-plane<br/>map programming (MapWriter trait)"]
+    device["flowplane-device<br/>host device / netlink lifecycle<br/>(ip / netns subprocess plumbing)"]
     fp["flowplane<br/>userspace loader / gRPC server / CLI"]
     sim["flowplane-sim<br/>in-process datapath simulator<br/>heap-backed Pkt / Maps"]
 
@@ -44,6 +48,9 @@ flowchart TD
     common --> ebpf
     common --> fp
     common --> sim
+    common --> control
+    control --> fp
+    device --> fp
     ebpf -.compiled to bytecode via aya-build.-> fp
     core --> fp
 ```
@@ -52,8 +59,10 @@ flowchart TD
 |---|---|
 | `flowplane-common` | `#[repr(C)]` plain-old-data types shared between eBPF and userspace — the map key/value structs (`IfaceKey`, `RouteValue`, `CtKey`/`CtEntry`, `NatKey`/`NatValue`, `FwRule`, …) and protocol constants — with layout tests. `no_std` by default; a `user` feature adds the aya `Pod` integration for the userspace side. |
 | `flowplane-core` | `no_std`, generic pure datapath logic. Every forwarding function (parse, encap/decap, NAT, NAT64, LB, firewall, conntrack, meter, ARP/ND, DHCP, egress-route, uplink-deliver) is written against the `Pkt` and `Maps` traits, so the same code runs in eBPF, in the sim, and in unit tests. Depends only on `flowplane-common`. |
-| `flowplane-ebpf` | The actual eBPF programs (`uplink_rx`, `wan_rx`, `tc_guest_tx`, `tc_guest_dhcp`, `tc_guest_nat64`, `xdp_uplink_v6`, `xdp_inspect`) plus the `#[map]` declarations. `coreimpl.rs` binds the `Pkt`/`Maps` traits to the real kernel maps and the XDP/tc packet context; the program bodies are thin glue that call into `flowplane-core`. Compiled to bytecode by `aya-build` and embedded into the `flowplane` binary. |
-| `flowplane` | The Rust userspace daemon and CLI. Contains the `DataplaneNode` gRPC server + map control plane (`control.rs`), the eBPF loader with link/adopt logic (`loader.rs`), veth/tap lifecycle + IPAM (`attach.rs`), the underlay inference (`underlay.rs`), the Maglev table builder (`maglev.rs`), conntrack GC (`conntrack_gc.rs`), and the CLI (`main.rs`). This is the binary that ships in the container image. |
+| `flowplane-ebpf` | The actual eBPF programs plus the `#[map]` declarations. The forwarding programs are tc classifiers (`uplink_dsr_note`, `uplink_rx`, `wan_rx`, `tc_guest_tx`, `tc_guest_egress_v6`, `tc_guest_nat64`, `tc_guest_dhcp`, and `xdp_uplink_v6` — a tail-called classifier that keeps its old name); `xdp_inspect` is the only real XDP program. `coreimpl.rs` binds the `Pkt`/`Maps` traits to the real kernel maps and the tc packet context; the program bodies are thin glue that call into `flowplane-core`. Compiled to bytecode by `aya-build` and embedded into the `flowplane` binary. |
+| `flowplane-control` | Backend-agnostic control-plane map programming: `ControlCore<W: MapWriter>` turns control-plane objects into map writes (firewall, interface, lb, maglev, nat, routes, shadow) through the `MapWriter` trait, without depending on aya. The Maglev consistent-hash table builder (`maglev.rs`) lives here. Depends only on `flowplane-common`; a `mem-writer` feature supplies an in-memory writer for tests. The concrete aya-backed writer lives in the `flowplane` binary (`control/aya_writer.rs`). |
+| `flowplane-device` | Host device and netlink lifecycle for the agent: geneve `collect_md` device, netkit/veth/tap creation, SR-IOV VF/SF claim, tc-flower offload, guest-netns setup, address/underlay inference (`underlay.rs`). Pure Linux plumbing over `ip`/`ip netns exec` subprocesses and raw netlink — no tonic, no eBPF. |
+| `flowplane` | The Rust userspace daemon and CLI. Contains the `DataplaneNode` gRPC server + map control plane (`control/`, including the aya `MapWriter`), the eBPF loader with link/adopt logic (`loader.rs`), guest interface lifecycle + IPAM (`attach/`), conntrack GC (`conntrack_gc.rs`), hardware-offload management (`offload.rs`), and the CLI (`cli/`, `main.rs`). Composes `flowplane-control` and `flowplane-device`. This is the binary that ships in the container image. |
 | `flowplane-sim` | An in-process datapath simulator: heap-backed `Pkt`/`Maps` impls (`VecPkt`, `MemMaps`), a `SimNode` that runs the real `flowplane-core` logic, and a multi-node `Fabric` that follows encap/redirect hops across simulated nodes. No kernel, no clab, no root — the fast dev/regression loop. `compilednic.rs` lowers a `CompiledNIC` into sim maps so the control-plane→datapath path is tested end-to-end. See [The in-process sim](../testing/sim.md). |
 
 ### Build note

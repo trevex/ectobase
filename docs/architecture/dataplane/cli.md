@@ -10,24 +10,32 @@ flowchart TD
     serve["serve<br/>production daemon<br/>(DataplaneNode gRPC drives the maps)"]
     bringup["bringup<br/>static flag-driven full datapath<br/>(netns lab, no gRPC)"]
     tcbringup["tc-bringup<br/>minimal tc guest edge (one tap)"]
-    load["load / pass / inspect<br/>attach one program and idle"]
+    load["load / inspect<br/>attach one program and idle"]
     infer["infer-underlay<br/>print inferred /64 and exit"]
 ```
 
 ## `serve` — the production daemon
 
-The only mode used in a real deployment. It attaches `uplink_rx` to the fabric uplink(s),
-serves the `DataplaneNode` gRPC on `127.0.0.1:1337`, and attaches/detaches the guest edge
-per interface as gRPC calls (from the node agent and the CNI plugin) drive it. All map
-state comes from gRPC — no datapath flags.
+The only mode used in a real deployment. It attaches the forwarding programs (`uplink_rx`
+on the geneve `collect_md` device, the guest edge per interface), serves the
+`DataplaneNode` gRPC, and attaches/detaches the guest edge as gRPC calls (from the node
+agent and the CNI plugin) drive it. All map state comes from gRPC; there are no datapath
+flags.
+
+`--addr` selects the listen socket. A `unix://` path binds a Unix domain socket at that
+path with mode 0600 (the deployed form: the dataplane gRPC is node-local and
+root-equivalent, so a 0600 socket restricts it to root on the node); any other value is
+parsed as a TCP `SocketAddr`. The `127.0.0.1:1337` in the flag's help text is an example of
+the TCP form, not the default.
 
 Key flags:
 
 | Flag | Meaning |
 |---|---|
+| `--addr` | listen socket. A `unix://` path binds a 0600 Unix socket; anything else (e.g. `127.0.0.1:1337`) binds TCP. |
 | `--role node\|edge` | `node` (default) is a hypervisor; `edge` additionally attaches `wan_rx` and registers a local-deliver edge underlay (shares VyOS's netns). |
-| `--uplink` / `--extra-uplink` | the primary fabric uplink (`uplink_rx` attaches here) and any additional fabric uplinks (a dual-homed host runs `uplink_rx` on every uplink so returns via either ToR decap). |
-| `--wan-uplink` | the WAN-facing uplink (`wan_rx` attaches here); required for `--role edge`. |
+| `--uplink` / `--extra-uplink` | the primary fabric uplink drives EDT egress shaping and the MTU/jumbo probe; `uplink_rx` itself attaches to the geneve `collect_md` device, which demuxes decap for every uplink, so `--extra-uplink` is a no-op under the geneve model and kept only for compatibility. |
+| `--wan-uplink` | the WAN-facing uplink (`wan_rx` attaches to its tcx ingress); required for `--role edge`. |
 | `--local-underlay` | this host's underlay IPv6 (outer src on encap; base of the `/128` allocation pool). Optional — otherwise resolved from the kubelet node IP (`HOST_IP`/`NODE_IP`) or inferred from a `lo`/`dummy*` fabric loopback. |
 | `--gateway-mac` | underlay next-hop MAC — the outer Ethernet dst for all encapped traffic. |
 | `--gateway` / `--gateway6` | overlay IPv4/IPv6 gateway the datapath answers ARP/ND for. |
@@ -70,15 +78,16 @@ egress encap) in isolation — a single-interface subset of `bringup`. It accept
 flag set: `--uplink`, `--local-underlay`, `--gateway-mac`, per-guest v4/v6 identity, and
 `--remote`/`--remote6` routes.
 
-## `load` / `pass` / `inspect` — single-program debug helpers
+## `load` / `inspect` — single-program debug helpers
 
-Each attaches one program to an interface and idles:
+Each attaches one program to an interface and idles. There is no `pass` subcommand: the
+overlay pipeline is entirely tcx, so the `xdp_pass` shim that native-XDP-redirect-into-veth
+once required is gone.
 
 | Subcommand | Program | Use |
 |---|---|---|
-| `load --uplink <iface>` | `uplink_rx` | attach the ingress datapath and idle. |
-| `pass --iface <iface>` | `xdp_pass` | attach the trivial pass program — the redirect-target enabler for veth peers. |
-| `inspect --iface <iface>` | `xdp_inspect` | attach the inspector and print the first packet bytes periodically. |
+| `load --uplink <iface>` | `uplink_rx` | attach `uplink_rx` as a clsact/tcx ingress classifier directly on `<iface>` and idle. This is a debug helper; `serve` attaches `uplink_rx` to the geneve `collect_md` device instead. |
+| `inspect --iface <iface>` | `xdp_inspect` | attach the XDP inspector (native, falling back to SKB mode) and print the first packet bytes periodically. |
 
 ## `infer-underlay` — resolve the underlay `/64`
 
