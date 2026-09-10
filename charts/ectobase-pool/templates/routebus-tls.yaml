@@ -23,4 +23,31 @@ spec:
 # The per-node agent leaves are NOT declared here: each agent self-mints its own cert-manager
 # Certificate (CN=node, IP SAN=its underlay /128) from this Issuer at startup, so the reflector
 # can bind route nexthops to the node's own underlay. See mesh/agent/nodecert.go.
+---
+# Broker → dispatch client identity. CN carries the pool name so the dispatch x509
+# authenticator sets username ectobase:cluster:<pool>, activating the ClusterRestriction
+# write-scope. CN-only (no SAN) trivially satisfies the intermediate's name constraints.
+# Org "ectobase:brokers" is the RBAC group the broker ClusterRole is bound to.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: broker-dispatch-tls
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ectobase-pool.labels" . | nindent 4 }}
+spec:
+  secretName: broker-dispatch-tls
+  duration: 2160h # 90d
+  commonName: "ectobase:cluster:{{ .Values.broker.clusterName }}"
+  subject:
+    organizations:
+      - "ectobase:brokers"
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  usages:
+    - client auth
+  issuerRef:
+    name: ectobase-pool-ca
+    kind: Issuer
 {{- end }}
