@@ -142,6 +142,14 @@ func (b *PoolCertBootstrapper) Start(ctx context.Context) error {
 	}
 }
 
+// EnsureOnce provisions the pool intermediate exactly once (idempotent: a no-op if the
+// existing intermediate is still fresh). Used at broker first-boot to break the credential
+// bootstrap chicken-and-egg before the steady-state mTLS leaf exists.
+func (b *PoolCertBootstrapper) EnsureOnce(ctx context.Context) error {
+	b.defaults()
+	return b.ensure(ctx)
+}
+
 // ensure provisions or renews the pool intermediate Secret. Idempotent: a no-op when the
 // existing Secret carries a still-fresh intermediate.
 func (b *PoolCertBootstrapper) ensure(ctx context.Context) error {

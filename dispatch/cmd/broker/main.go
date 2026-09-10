@@ -66,6 +66,8 @@ func main() {
 	flag.StringVar(&dispatchCA, "dispatch-ca", "", "CA file verifying the dispatch serving cert")
 	flag.StringVar(&dispatchCert, "dispatch-client-cert", "", "broker client cert file (cert-manager-rotated)")
 	flag.StringVar(&dispatchKey, "dispatch-client-key", "", "broker client key file")
+	var dispatchBootstrapKubeconfig string
+	flag.StringVar(&dispatchBootstrapKubeconfig, "dispatch-bootstrap-kubeconfig", "", "first-boot bootstrap-token kubeconfig; used to bootstrap the pool intermediate before the steady-state mTLS leaf exists")
 	flag.Parse()
 
 	if clusterName == "" {
@@ -73,6 +75,10 @@ func main() {
 	}
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
+
+	// SetupSignalHandler must be called exactly once; ctx is reused below for the first-boot
+	// bootstrap phase and for the final mgr.Start.
+	ctx := ctrl.SetupSignalHandler()
 
 	// Build scheme covering all groups the broker touches:
 	//   - net.ectobase.dev (networking types, on dispatch),
@@ -92,11 +98,63 @@ func main() {
 	}
 	metav1.AddToGroupVersion(scheme, schema.GroupVersion{Version: "v1"})
 
+	// Downstream client — plain client.Client (no cache; broker writes here directly).
+	downstreamCfg, err := clientcmd.BuildConfigFromFlags("", downstreamKubeconfig)
+	if err != nil {
+		log.Fatalf("build downstream rest.Config: %v", err)
+	}
+	downstreamClient, err := client.New(downstreamCfg, client.Options{Scheme: scheme})
+	if err != nil {
+		log.Fatalf("build downstream client: %v", err)
+	}
+
+	// Pool underlay CIDRs — parsed once; used by both the first-boot bootstrap phase below
+	// and the steady-state renewal bootstrapper added as a manager runnable further down.
+	var cidrs []string
+	for _, c := range strings.Split(routebusCIDRs, ",") {
+		if c = strings.TrimSpace(c); c != "" {
+			cidrs = append(cidrs, c)
+		}
+	}
+
+	// FIRST-BOOT BOOTSTRAP (mTLS mode only): a fresh pool has no steady-state client cert yet —
+	// cert-manager only issues the broker's leaf (broker-dispatch-tls) AFTER the pool
+	// intermediate exists, and the intermediate is bootstrapped BY the broker over dispatch.
+	// Break that chicken-and-egg with a short-lived bootstrap-token connection: bootstrap the
+	// intermediate once, then wait for cert-manager to mint the leaf before building the
+	// steady-state dispatch client below.
+	mtls := dispatchServer != ""
+	if mtls && routebusSecret != "" && needsBootstrap(dispatchCert, dispatchKey) {
+		if dispatchBootstrapKubeconfig == "" {
+			log.Fatal("mTLS mode with no client cert present requires --dispatch-bootstrap-kubeconfig for first-boot bootstrap")
+		}
+		bootCfg, berr := clientcmd.BuildConfigFromFlags("", dispatchBootstrapKubeconfig)
+		if berr != nil {
+			log.Fatalf("build bootstrap dispatch config: %v", berr)
+		}
+		bootClient, berr := client.New(bootCfg, client.Options{Scheme: scheme})
+		if berr != nil {
+			log.Fatalf("build bootstrap dispatch client: %v", berr)
+		}
+		boot := &broker.PoolCertBootstrapper{
+			Dispatch: bootClient, Downstream: downstreamClient,
+			PoolName: clusterName, SecretName: routebusSecret, SecretNS: routebusSecretNS,
+			PermittedCIDRs: cidrs,
+		}
+		log.Printf("first boot: bootstrapping pool intermediate via bootstrap token")
+		if berr := boot.EnsureOnce(ctx); berr != nil {
+			log.Fatalf("bootstrap pool intermediate: %v", berr)
+		}
+		log.Printf("intermediate bootstrapped; waiting for cert-manager to mint the client cert")
+		if berr := waitForLeaf(ctx, dispatchCert, dispatchKey, 5*time.Minute, 3*time.Second); berr != nil {
+			log.Fatalf("waiting for broker client cert: %v", berr)
+		}
+	}
+
 	// Dispatch rest.Config — mTLS from cert files if --dispatch-server is given (client-go
 	// re-reads the cert/key/CA files from disk, so cert-manager rotation needs no broker
 	// restart); else --dispatch-kubeconfig (legacy fallback), else in-cluster/KUBECONFIG.
 	var dispatchCfg *rest.Config
-	var err error
 	if dispatchServer != "" {
 		dispatchCfg, err = dispatchConfig(dispatchAuth{
 			server: dispatchServer, caFile: dispatchCA, certFile: dispatchCert, keyFile: dispatchKey,
@@ -106,16 +164,6 @@ func main() {
 	}
 	if err != nil {
 		log.Fatalf("build dispatch rest.Config: %v", err)
-	}
-
-	// Downstream client — plain client.Client (no cache; broker writes here directly).
-	downstreamCfg, err := clientcmd.BuildConfigFromFlags("", downstreamKubeconfig)
-	if err != nil {
-		log.Fatalf("build downstream rest.Config: %v", err)
-	}
-	downstreamClient, err := client.New(downstreamCfg, client.Options{Scheme: scheme})
-	if err != nil {
-		log.Fatalf("build downstream client: %v", err)
 	}
 
 	// Manager on the DISPATCH config. Cache is scoped to this cluster's slice via a
@@ -234,12 +282,6 @@ func main() {
 		if derr != nil {
 			log.Fatalf("build direct dispatch client: %v", derr)
 		}
-		var cidrs []string
-		for _, c := range strings.Split(routebusCIDRs, ",") {
-			if c = strings.TrimSpace(c); c != "" {
-				cidrs = append(cidrs, c)
-			}
-		}
 		boot := &broker.PoolCertBootstrapper{
 			Dispatch:       dispatchDirect,
 			Downstream:     downstreamClient,
@@ -253,7 +295,7 @@ func main() {
 		}
 	}
 
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		log.Fatalf("manager: %v", err)
 	}
 }
