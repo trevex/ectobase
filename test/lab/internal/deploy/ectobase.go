@@ -90,8 +90,10 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 	// --- Dispatch cluster: one Helm release ---
 	// The ectobase-dispatch chart carries the aggregated apiserver + controller + kine, the mesh
 	// compiler, the reflector, and the dispatch-side dispatch-broker identity. --create-namespace makes the
-	// release namespace (system, whose pods are baseline-PSA-safe); the chart itself creates the
-	// PSA-privileged ectobase-system namespace for the hostNetwork compiler + reflector. The
+	// release namespace (system); in mtls mode the aggregated apiserver runs hostNetwork there (direct
+	// fabric exposure at :6444), which baseline PSA forbids, so system is pre-created PSA-privileged
+	// below. The chart itself creates the PSA-privileged ectobase-system namespace for the hostNetwork
+	// compiler + reflector. The
 	// reflector runs on the dispatch's fabric identity, so the controller's -reflector-admin is pointed
 	// there via a chart value (retiring the old post-apply patch). The clusters set
 	// cluster.allowSchedulingOnControlPlanes so control-plane nodes are never tainted.
@@ -102,6 +104,11 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 	if s.RouteBusMTLS {
 		if err := CertManager(ctx, nil, s.DispatchKubeconfig, "system"); err != nil {
 			return fmt.Errorf("dispatch cert-manager: %w", err)
+		}
+		// The hostNetwork aggregated apiserver (direct :6444 exposure) is rejected by baseline PSA,
+		// so pre-create `system` PSA-privileged (the chart's --create-namespace then no-ops).
+		if err := ensureHelmNamespace(ctx, s.DispatchKubeconfig, "system", "ectobase-dispatch"); err != nil {
+			return fmt.Errorf("dispatch system namespace: %w", err)
 		}
 	}
 
