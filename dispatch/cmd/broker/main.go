@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -60,6 +61,11 @@ func main() {
 	flag.StringVar(&routebusSecretNS, "routebus-intermediate-namespace", os.Getenv("POD_NAMESPACE"), "namespace for the intermediate CA Secret (defaults to POD_NAMESPACE)")
 	var routebusCIDRs string
 	flag.StringVar(&routebusCIDRs, "routebus-underlay-cidrs", "", "comma-separated pool underlay CIDRs (e.g. the pool /48); the intermediate is IP-name-constrained to these so it can only mint node leaves inside the pool's underlay")
+	var dispatchServer, dispatchCA, dispatchCert, dispatchKey string
+	flag.StringVar(&dispatchServer, "dispatch-server", "", "dispatch apiserver URL (mTLS mode); with --dispatch-{ca,client-cert,client-key}")
+	flag.StringVar(&dispatchCA, "dispatch-ca", "", "CA file verifying the dispatch serving cert")
+	flag.StringVar(&dispatchCert, "dispatch-client-cert", "", "broker client cert file (cert-manager-rotated)")
+	flag.StringVar(&dispatchKey, "dispatch-client-key", "", "broker client key file")
 	flag.Parse()
 
 	if clusterName == "" {
@@ -86,8 +92,18 @@ func main() {
 	}
 	metav1.AddToGroupVersion(scheme, schema.GroupVersion{Version: "v1"})
 
-	// Dispatch rest.Config — from --dispatch-kubeconfig if given, else in-cluster/KUBECONFIG.
-	dispatchCfg, err := clientcmd.BuildConfigFromFlags("", dispatchKubeconfig)
+	// Dispatch rest.Config — mTLS from cert files if --dispatch-server is given (client-go
+	// re-reads the cert/key/CA files from disk, so cert-manager rotation needs no broker
+	// restart); else --dispatch-kubeconfig (legacy fallback), else in-cluster/KUBECONFIG.
+	var dispatchCfg *rest.Config
+	var err error
+	if dispatchServer != "" {
+		dispatchCfg, err = dispatchConfig(dispatchAuth{
+			server: dispatchServer, caFile: dispatchCA, certFile: dispatchCert, keyFile: dispatchKey,
+		})
+	} else {
+		dispatchCfg, err = clientcmd.BuildConfigFromFlags("", dispatchKubeconfig)
+	}
 	if err != nil {
 		log.Fatalf("build dispatch rest.Config: %v", err)
 	}
