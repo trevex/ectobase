@@ -161,12 +161,28 @@ spec:
             # not serve, so informer-sync never completes and /readyz stays 500.
             # We serve no admission policies here, so disable those plugins.
             - "--disable-admission-plugins=MutatingAdmissionPolicy,ValidatingAdmissionPolicy"
+            {{- if .Values.pki.enabled }}
+            # Serve the cert-manager cert (bypasses the self-signed --cert-dir path) and trust
+            # the ectobase root as a client CA. Unioned with the existing delegated token authn,
+            # so bearer-token brokers keep working during migration.
+            - "--tls-cert-file=/secrets/serving/tls.crt"
+            - "--tls-private-key-file=/secrets/serving/tls.key"
+            - "--client-ca-file=/secrets/client-ca/tls.crt"
+            {{- end }}
           ports:
             - name: https
               containerPort: 6443
           volumeMounts:
             - name: cert-dir
               mountPath: /var/run/apiserver/certs
+            {{- if .Values.pki.enabled }}
+            - name: serving-cert
+              mountPath: /secrets/serving
+              readOnly: true
+            - name: client-ca
+              mountPath: /secrets/client-ca
+              readOnly: true
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /readyz
@@ -184,3 +200,11 @@ spec:
       volumes:
         - name: cert-dir
           emptyDir: {}
+        {{- if .Values.pki.enabled }}
+        - name: serving-cert
+          secret:
+            secretName: dispatch-apiserver-tls
+        - name: client-ca
+          secret:
+            secretName: {{ .Values.pki.caSecretName }}
+        {{- end }}
