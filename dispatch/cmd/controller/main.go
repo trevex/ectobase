@@ -31,7 +31,7 @@ import (
 	"github.com/trevex/ectobase/dispatch/pkg/clusterpool"
 	"github.com/trevex/ectobase/dispatch/pkg/failover"
 	"github.com/trevex/ectobase/dispatch/pkg/fence"
-	"github.com/trevex/ectobase/dispatch/pkg/routebusca"
+	"github.com/trevex/ectobase/dispatch/pkg/pki"
 	"github.com/trevex/ectobase/dispatch/pkg/scheduler"
 	routebusv1 "github.com/trevex/ectobase/mesh/gen/routebusv1"
 	"github.com/trevex/ectobase/mesh/routebus"
@@ -135,14 +135,14 @@ func main() {
 
 	// Route-bus PKI signer: signs per-pool intermediate CAs from the root (mounted from the
 	// dispatch cert-manager routebus-ca secret). Inactive when the root isn't mounted (mTLS off).
-	root, err := routebusca.LoadRootCA(*routebusCACert, *routebusCAKey)
+	root, err := pki.LoadRootCA(*routebusCACert, *routebusCAKey)
 	if err != nil {
 		log.Fatalf("load route-bus root CA: %v", err)
 	}
 	if root == nil {
 		log.Printf("route-bus CA not configured (--routebus-ca-cert/key unset); RouteBusIdentity signer inactive")
 	}
-	if err := (&routebusca.Signer{Client: mgr.GetClient(), Root: root}).SetupWithManager(mgr); err != nil {
+	if err := (&pki.Signer{Client: mgr.GetClient(), Root: root}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup routebus signer controller: %v", err)
 	}
 

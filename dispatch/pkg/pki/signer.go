@@ -1,13 +1,13 @@
 // Copyright 2026 ectobase contributors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package routebusca is the dispatch-side signer for route-bus PKI. It watches
+// Package pki is the dispatch-side signer for ectobase PKI. It watches
 // RouteBusIdentity requests, signs a per-pool, name-constrained intermediate CA from the
 // root CA (a dispatch-only cert-manager Secret), and writes the signed intermediate +
 // root bundle back into status. Pools mint their own per-node agent leaves from the
 // intermediate; the reflector trusts only the root and gets cross-pool isolation for free
 // because Go's TLS chain verification enforces the intermediate's NameConstraints.
-package routebusca
+package pki
 
 import (
 	"context"
