@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"os"
@@ -185,6 +186,44 @@ func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster, brokerKu
 			return fmt.Errorf("cluster %s: create broker secret: %w", c.Name, err)
 		}
 	}
+	// In mtls mode the fresh-pool enrollment Secrets must exist before the chart's broker
+	// pod starts too: the pre-provisioned dispatch root CA (so the broker can verify the
+	// dispatch server) and a short-lived bootstrap-token kubeconfig (a narrow,
+	// routebusidentities-only credential the broker uses for its first-boot RouteBusIdentity
+	// CSR — cert-manager mints the steady-state mTLS leaf after that). Both are sourced from
+	// the dispatch chart's `system` namespace: the ectobase-ca Secret (root cert) and the
+	// dispatch-broker-bootstrap ServiceAccount (token source).
+	if s.RouteBusMTLS {
+		rootCAB64, err := exec.OutputStr(ctx, "kubectl", "--kubeconfig", s.DispatchKubeconfig,
+			"get", "secret", "ectobase-ca", "-n", "system", "-o", `jsonpath={.data.tls\.crt}`)
+		if err != nil {
+			return fmt.Errorf("cluster %s: read dispatch root CA: %w", c.Name, err)
+		}
+		rootCAB64 = strings.TrimSpace(rootCAB64)
+		rootCAPEM, err := base64.StdEncoding.DecodeString(rootCAB64)
+		if err != nil {
+			return fmt.Errorf("cluster %s: decode dispatch root CA: %w", c.Name, err)
+		}
+		if err := createSecretFromLiteral(ctx, c.Kubeconfig, "ectobase-system",
+			"dispatch-root-ca", "ca.crt", string(rootCAPEM)); err != nil {
+			return fmt.Errorf("cluster %s: create dispatch-root-ca secret: %w", c.Name, err)
+		}
+
+		token, err := exec.OutputStr(ctx, "kubectl", "--kubeconfig", s.DispatchKubeconfig,
+			"create", "token", "dispatch-broker-bootstrap", "-n", "system", "--duration=1h")
+		if err != nil {
+			return fmt.Errorf("cluster %s: create bootstrap token: %w", c.Name, err)
+		}
+		bootstrapKubeconfig := filepath.Join(s.WorkDir, "broker-dispatch-bootstrap."+c.Name+".kubeconfig")
+		if err := os.WriteFile(bootstrapKubeconfig,
+			[]byte(mintKubeconfigCA(s.DispatchIdentity, strings.TrimSpace(token), rootCAB64)), 0o600); err != nil {
+			return fmt.Errorf("cluster %s: write bootstrap kubeconfig: %w", c.Name, err)
+		}
+		if err := createSecretFromFile(ctx, c.Kubeconfig, "ectobase-system",
+			"broker-dispatch-bootstrap", "kubeconfig", bootstrapKubeconfig); err != nil {
+			return fmt.Errorf("cluster %s: create broker-dispatch-bootstrap secret: %w", c.Name, err)
+		}
+	}
 	// The pool chart renders a cert-manager Issuer (ectobase-pool-ca) and each agent
 	// self-mints a leaf Certificate, so cert-manager must be up first. The pool uses a
 	// NAMESPACED Issuer (reads its secret from its own namespace), so no
@@ -278,6 +317,19 @@ func createSecretFromFile(ctx context.Context, kubeconfig, ns, name, key, path s
 	manifest, err := exec.Output(ctx, "kubectl", "--kubeconfig", kubeconfig,
 		"create", "secret", "generic", name, "-n", ns,
 		"--from-file="+key+"="+path, "--dry-run=client", "-o", "yaml")
+	if err != nil {
+		return fmt.Errorf("render secret manifest: %w", err)
+	}
+	return kubectlApplyStdin(ctx, kubeconfig, string(manifest))
+}
+
+// createSecretFromLiteral idempotently creates (or updates) an Opaque secret with a
+// single literal-value key via the same dry-run|apply pattern as createSecretFromFile,
+// for in-memory values (e.g. a decoded PEM) that have no backing file.
+func createSecretFromLiteral(ctx context.Context, kubeconfig, ns, name, key, value string) error {
+	manifest, err := exec.Output(ctx, "kubectl", "--kubeconfig", kubeconfig,
+		"create", "secret", "generic", name, "-n", ns,
+		"--from-literal="+key+"="+value, "--dry-run=client", "-o", "yaml")
 	if err != nil {
 		return fmt.Errorf("render secret manifest: %w", err)
 	}
@@ -457,6 +509,33 @@ users:
   user:
     token: %s
 `, dispatchHost, token)
+}
+
+// mintKubeconfigCA hand-writes a short-lived bootstrap-token kubeconfig for the broker's
+// first-boot RouteBusIdentity CSR in mtls mode. Unlike mintKubeconfig, the connection is
+// verified against the pre-shared dispatch root CA (caB64, already base64 — the raw value
+// read from the ectobase-ca Secret's tls.crt data key) rather than skipping TLS verify: the
+// whole point of the mTLS enrollment path is a verified connection even for this narrow,
+// one-time bootstrap credential.
+func mintKubeconfigCA(dispatchHost, token, caB64 string) string {
+	return fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+- name: dispatch
+  cluster:
+    server: "https://[%s]:6443"
+    certificate-authority-data: %s
+contexts:
+- name: broker@dispatch
+  context:
+    cluster: dispatch
+    user: dispatch-broker
+current-context: broker@dispatch
+users:
+- name: dispatch-broker
+  user:
+    token: %s
+`, dispatchHost, caB64, token)
 }
 
 // clusterPoolsManifest renders one cluster-scoped ClusterPool per compute cluster
