@@ -54,7 +54,7 @@ pub fn load_ebpf(pin_dir: &Path) -> anyhow::Result<Ebpf> {
 }
 
 /// A per-process bpffs pin dir for load paths that do NOT persist datapath state across a restart:
-/// the debug/lab subcommands (`Load`/`Pass`/`Inspect`/`TcBringup`, and `Bringup` without `--pin-dir`).
+/// the debug/lab subcommands (`Load`/`Inspect`/`TcBringup`, and `Bringup` without `--pin-dir`).
 /// The state maps are declared `pinned`, so every load needs *some* bpffs `map_pin_path`; these
 /// callers get a private `/sys/fs/bpf/flowplane-eph-<pid>` dir. Nothing here is meant to survive — the
 /// maps stay alive via the returned handles even after this dir is removed — so the persistent

@@ -3,14 +3,16 @@
 //! Replaces the old byte-written outer Eth+IPv6 header: instead of growing the skb and writing an
 //! outer frame by hand, the tc programs stamp the resolved [`TunnelEncap`] decision as the skb's
 //! tunnel-key metadata dst via `bpf_skb_set_tunnel_key`, then redirect to the kernel's `collect_md`
-//! Geneve device (Task 1). The geneve device reads the metadata dst back on transmit and builds the
-//! real outer Eth/IPv6/UDP/Geneve header itself.
+//! Geneve device. The geneve device reads the metadata dst back on transmit and builds the real
+//! outer Eth/IPv6/UDP/Geneve header itself.
 //!
 //! `bpf_skb_set_tunnel_key` is an skb-only helper (tc/cls_act, cgroup_skb, sock_ops, sk_skb,
-//! cgroup_sock_addr) — it has no XDP counterpart, since XDP runs before skb allocation (pre
-//! `collect_md` metadata dst). So this module is used ONLY by the tc guest-egress path
-//! (`tc.rs`/`nat64.rs`). The uplink/WAN-edge XDP programs (`ingress.rs`) cannot adopt it without
-//! first migrating to tc — that conversion is out of scope here (see `xdp_encap.rs`).
+//! cgroup_sock_addr); it has no XDP counterpart, because XDP runs before skb allocation and the
+//! `collect_md` metadata dst. Every forwarding program is a tc classifier now (`uplink_rx`,
+//! `wan_rx`, `tc_guest_*`), so every path that resolves a [`TunnelEncap`] decision stamps it here:
+//! guest egress (`tc.rs`/`nat64.rs`), the WAN-edge DSR encode, and the uplink LB reforward
+//! (`ingress.rs`, via `apply_encap`). `get_tunnel_key` reads the VNI back on the geneve-device
+//! ingress hook.
 
 use aya_ebpf::{
     bindings::{__sk_buff, bpf_tunnel_key},
