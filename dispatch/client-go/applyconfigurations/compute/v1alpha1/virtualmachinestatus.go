@@ -15,8 +15,10 @@ type VirtualMachineStatusApplyConfiguration struct {
 	Phase *string `json:"phase,omitempty"`
 	// Conditions capture scheduling/failover observations (Scheduled, Unschedulable, FailoverBlocked).
 	Conditions []v1.ConditionApplyConfiguration `json:"conditions,omitempty"`
-	// Placement is the VM's actual running location, stamped by the broker. Central
-	// uses NodePrefix as the fence coordinate and to gate recovery drain.
+	// Placement is the VM's actual running location. The pool's broker reports it onto the
+	// matching CompiledVM's status — its RBAC is scoped to its own pool namespace — and a mesh
+	// controller mirrors it here. Central uses NodePrefix as the fence coordinate and to gate
+	// recovery drain.
 	Placement *VMPlacementApplyConfiguration `json:"placement,omitempty"`
 }
 

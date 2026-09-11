@@ -43,7 +43,8 @@ type VirtualMachineStatus struct {
 	Phase string
 	// Conditions capture scheduling/failover observations.
 	Conditions []metav1.Condition
-	// Placement is the VM's actual running location, stamped by the broker.
+	// Placement is the VM's actual running location. The pool's broker reports it onto the
+	// matching CompiledVM's status; a mesh controller mirrors it here.
 	Placement *VMPlacement
 }
 

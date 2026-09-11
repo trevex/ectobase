@@ -59,13 +59,13 @@ spec:
               exec flowplane serve --addr unix:///run/flowplane/dataplane.sock --uplink "$UPLINK" --gateway 169.254.0.1 --gateway-mac "$GW_MAC"{{ if .Values.underlayWithin }} --underlay-within {{ .Values.underlayWithin }}{{ end }} $EXTRA
 {{- if eq .Values.env "clab" }}
           env:
-            # Compute nodes MUST run generic/SKB XDP on clab. uplink_rx delivers to guests by
-            # XDP-redirecting into the guest veth (GUEST_DEV devmap). On containerlab veths a NATIVE
-            # XDP redirect into a veth fails with -95/EOPNOTSUPP (the veth ndo_xdp_xmit peer
-            # requirement) — only the generic/SKB path delivers. Nodes never do XDP_PASS-to-stack, so
-            # they gain nothing from native. (The WAN edge is the opposite: it needs NATIVE for its
-            # decap+XDP_PASS local-deliver and does no guest-veth redirect — see edge-xdp-wrapper.sh.)
-            # On real hardware native works for both; this generic pin is a clab-veth constraint.
+            # FLOWPLANE_SKB_MODE is the JUMBO GATE, not an XDP attach mode — the forwarding
+            # datapath is tcx, not XDP. Jumbo guest MTUs are only handed out when the uplink can
+            # carry non-linear frames: unconditionally in skb mode, otherwise only if every uplink
+            # definitively advertises XDP scatter-gather. Containerlab veths advertise no
+            # xdp-features, so the probe returns unknown and would conservatively clamp the guest to
+            # the standard MTU — which would defeat the fabric's deliberate 9000 underlay uplinks.
+            # On real hardware that advertises SG this pin is unnecessary.
             - name: FLOWPLANE_SKB_MODE
               value: "1"
 {{- end }}

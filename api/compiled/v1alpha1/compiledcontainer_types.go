@@ -50,7 +50,7 @@ type CompiledContainerInterface struct {
 	// annotation, which flowplane-cni resolves to the CompiledNIC.
 	// +optional
 	NetworkInterfaceRef string `json:"networkInterfaceRef,omitempty"`
-	// MAC is the pinned L2 address (from the NetworkInterface).
+	// MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac).
 	// +optional
 	MAC string `json:"mac,omitempty"`
 }

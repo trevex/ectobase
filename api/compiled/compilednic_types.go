@@ -25,7 +25,8 @@ type CompiledNICSpec struct {
 	LB []CompiledLB
 	// PeerImports lists peer VPCs whose routes this NIC imports.
 	PeerImports []CompiledPeerImport
-	// MAC is the guest L2 address copied from the source NetworkInterface.
+	// MAC is the guest L2 address sourced from the NetworkInterface's allocation
+	// (status.allocatedMAC, or a pinned spec.mac adopted into it).
 	MAC string
 	// QoS is the flattened per-interface QoS caps to program, or nil for unlimited.
 	QoS *CompiledQoS

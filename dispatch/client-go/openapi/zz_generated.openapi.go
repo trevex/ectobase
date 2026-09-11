@@ -510,7 +510,7 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledContainerInterface(ref common
 					},
 					"mac": {
 						SchemaProps: spec.SchemaProps{
-							Description: "MAC is the pinned L2 address (from the NetworkInterface).",
+							Description: "MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac).",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -998,7 +998,7 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledNICSpec(ref common.ReferenceC
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "CompiledNICSpec is the fully lowered per-NIC STATIC POLICY the control plane hands to a node: identity, VNI, overlay IPs, firewall rules (resolved from FirewallPolicy selectors), egress-SNAT allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC + FirewallPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.\n\nThe source NetworkInterface is the CompiledNIC's OWNER (a controller ownerReference) and its name is encoded in the object name — so the spec carries no NICRef. It also deliberately does NOT carry the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the correct node-local nexthop. Keeping node-local state out of this central object avoids a compile->sync round-trip that would lag (and flap) the announced nexthop.",
+				Description: "CompiledNICSpec is the fully lowered per-NIC STATIC POLICY the control plane hands to a node: identity, VNI, overlay IPs, firewall rules (resolved from FirewallPolicy selectors), egress-SNAT allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC + FirewallPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.\n\nThe source NetworkInterface is recorded in the compiled.ectobase.dev/source-namespace and /source-name annotations and encoded in the object name (<sourceNamespace>-<sourceName>) — so the spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer on the NetworkInterface instead. It also deliberately does NOT carry the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the correct node-local nexthop. Keeping node-local state out of this central object avoids a compile->sync round-trip that would lag (and flap) the announced nexthop.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"clusterName": {
@@ -1089,7 +1089,7 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledNICSpec(ref common.ReferenceC
 					},
 					"mac": {
 						SchemaProps: spec.SchemaProps{
-							Description: "MAC is the guest L2 address copied from the source NetworkInterface. The CNI programs it as the datapath guest MAC (empty for containers — the datapath derives one).",
+							Description: "MAC is the guest L2 address sourced from the NetworkInterface's allocation (status.allocatedMAC, or a pinned spec.mac adopted into it). The CNI programs it as the datapath guest MAC, and it is also the key a KubeVirt virt-launcher pod's interface is resolved by, since that pod carries no network-interface annotation.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -1258,12 +1258,12 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledVMInterface(ref common.Refere
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "CompiledVMInterface is a resolved overlay interface for a VM: the pinned MAC and the multus network (NetworkAttachmentDefinition) name for the flowplane binding.",
+				Description: "CompiledVMInterface is a resolved overlay interface for a VM: the allocated MAC and the multus network (NetworkAttachmentDefinition) name for the flowplane binding.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"mac": {
 						SchemaProps: spec.SchemaProps{
-							Description: "MAC is the pinned L2 address (from the NetworkInterface).",
+							Description: "MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac).",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -1968,7 +1968,7 @@ func schema_ectobase_api_compute_v1alpha1_VMPlacement(ref common.ReferenceCallba
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "VMPlacement is the VM's actual running location, reported upward by the broker.",
+				Description: "VMPlacement is the VM's actual running location, as observed by the pool that runs it and mirrored here from its CompiledVM.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"clusterName": {
@@ -2223,7 +2223,7 @@ func schema_ectobase_api_compute_v1alpha1_VirtualMachineStatus(ref common.Refere
 					},
 					"placement": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Placement is the VM's actual running location, stamped by the broker. Central uses NodePrefix as the fence coordinate and to gate recovery drain.",
+							Description: "Placement is the VM's actual running location. The pool's broker reports it onto the matching CompiledVM's status — its RBAC is scoped to its own pool namespace — and a mesh controller mirrors it here. Central uses NodePrefix as the fence coordinate and to gate recovery drain.",
 							Ref:         ref(computev1alpha1.VMPlacement{}.OpenAPIModelName()),
 						},
 					},

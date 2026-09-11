@@ -10,8 +10,11 @@ package v1alpha1
 // allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC +
 // FirewallPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.
 //
-// The source NetworkInterface is the CompiledNIC's OWNER (a controller ownerReference) and its name
-// is encoded in the object name — so the spec carries no NICRef. It also deliberately does NOT carry
+// The source NetworkInterface is recorded in the compiled.ectobase.dev/source-namespace and
+// /source-name annotations and encoded in the object name (<sourceNamespace>-<sourceName>) — so the
+// spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace
+// on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer
+// on the NetworkInterface instead. It also deliberately does NOT carry
 // the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent
 // obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the
 // correct node-local nexthop. Keeping node-local state out of this central object avoids a
@@ -41,8 +44,10 @@ type CompiledNICSpecApplyConfiguration struct {
 	// firewall permission; that comes solely from FirewallPolicy). Populated from Ready VPCPeerings
 	// involving this NIC's VPC.
 	PeerImports []CompiledPeerImportApplyConfiguration `json:"peerImports,omitempty"`
-	// MAC is the guest L2 address copied from the source NetworkInterface. The CNI
-	// programs it as the datapath guest MAC (empty for containers — the datapath derives one).
+	// MAC is the guest L2 address sourced from the NetworkInterface's allocation
+	// (status.allocatedMAC, or a pinned spec.mac adopted into it). The CNI programs it as the
+	// datapath guest MAC, and it is also the key a KubeVirt virt-launcher pod's interface is
+	// resolved by, since that pod carries no network-interface annotation.
 	MAC *string `json:"mac,omitempty"`
 	// QoS is the flattened per-interface QoS caps to program, or nil for unlimited.
 	QoS *CompiledQoSApplyConfiguration `json:"qos,omitempty"`

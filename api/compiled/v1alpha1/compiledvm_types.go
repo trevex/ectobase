@@ -42,10 +42,10 @@ type CloudInit struct {
 	UserData string `json:"userData,omitempty"`
 }
 
-// CompiledVMInterface is a resolved overlay interface for a VM: the pinned MAC
+// CompiledVMInterface is a resolved overlay interface for a VM: the allocated MAC
 // and the multus network (NetworkAttachmentDefinition) name for the flowplane binding.
 type CompiledVMInterface struct {
-	// MAC is the pinned L2 address (from the NetworkInterface).
+	// MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac).
 	// +optional
 	MAC string `json:"mac,omitempty"`
 	// NetworkName is the multus NetworkAttachmentDefinition name for the overlay binding.

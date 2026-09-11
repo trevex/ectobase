@@ -5,7 +5,8 @@ package v1alpha1
 // VMPlacementApplyConfiguration represents a declarative configuration of the VMPlacement type for use
 // with apply.
 //
-// VMPlacement is the VM's actual running location, reported upward by the broker.
+// VMPlacement is the VM's actual running location, as observed by the pool that runs it and
+// mirrored here from its CompiledVM.
 type VMPlacementApplyConfiguration struct {
 	// ClusterName is the pool the VM is running on.
 	ClusterName *string `json:"clusterName,omitempty"`

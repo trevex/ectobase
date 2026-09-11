@@ -26,7 +26,7 @@ type CompiledVMSpec struct {
 
 // CompiledVMInterface is a resolved overlay interface for a VM.
 type CompiledVMInterface struct {
-	// MAC is the pinned L2 address (from the NetworkInterface).
+	// MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac).
 	MAC string
 	// NetworkName is the multus NetworkAttachmentDefinition name for the overlay binding.
 	NetworkName string

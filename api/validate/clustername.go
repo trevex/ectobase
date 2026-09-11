@@ -21,16 +21,18 @@ const clusterNameNamespacePrefix = "pool-"
 // "pool-" + ClusterName is itself always a legal namespace.
 var maxClusterNameLen = validation.DNS1123LabelMaxLength - len(clusterNameNamespacePrefix)
 
-// PoolNamespace is the namespace holding a pool's compiled objects, on the dispatch and mirrored
-// on the pool cluster. It lives next to ClusterName deliberately: the validator's length bound is
+// PoolNamespace is the namespace holding a pool's compiled objects on the dispatch. It is a
+// dispatch-side layout only: the broker mirrors each twin back into its SOURCE namespace on the
+// pool cluster (see downstreamNamespace in dispatch/pkg/broker). It lives next to ClusterName
+// deliberately: the validator's length bound is
 // derived from this prefix, so defining the two apart is how they drift into a name that
 // validates but yields an illegal namespace.
 func PoolNamespace(clusterName string) string { return clusterNameNamespacePrefix + clusterName }
 
 // ClusterName validates a pool identifier. The value is not free-form: each pool's compiled
-// objects are stored in a per-pool `pool-<clusterName>` namespace on the dispatch and mirrored
-// into the same namespace on the pool cluster, and per-pool RBAC is bound to it. So the name has
-// to be a DNS-1123 label AND short enough that the prefixed namespace is one too.
+// objects are stored in a per-pool `pool-<clusterName>` namespace on the dispatch, and per-pool
+// RBAC is bound to it. So the name has to be a DNS-1123 label AND short enough that the prefixed
+// namespace is one too.
 //
 // An empty name is allowed here — callers that require placement enforce that separately (a NIC
 // with no clusterName is resolved from its owning workload or the compiler default).

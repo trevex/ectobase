@@ -5,10 +5,10 @@ package v1alpha1
 // CompiledVMInterfaceApplyConfiguration represents a declarative configuration of the CompiledVMInterface type for use
 // with apply.
 //
-// CompiledVMInterface is a resolved overlay interface for a VM: the pinned MAC
+// CompiledVMInterface is a resolved overlay interface for a VM: the allocated MAC
 // and the multus network (NetworkAttachmentDefinition) name for the flowplane binding.
 type CompiledVMInterfaceApplyConfiguration struct {
-	// MAC is the pinned L2 address (from the NetworkInterface).
+	// MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac).
 	MAC *string `json:"mac,omitempty"`
 	// NetworkName is the multus NetworkAttachmentDefinition name for the overlay binding.
 	NetworkName *string `json:"networkName,omitempty"`

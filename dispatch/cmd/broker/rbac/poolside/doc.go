@@ -1,6 +1,8 @@
 // Package poolside carries the dispatch-broker POOL-SIDE (downstream, in-cluster) RBAC markers.
 // Marker-only; read by controller-gen via paths=./cmd/broker/rbac/poolside/...; imported
-// nowhere. See the dispatchside package for why the two roles are split.
+// nowhere. There is no dispatchside counterpart: the broker's dispatch-side grant is per pool by
+// construction (a namespaced Role in pool-<clusterName> plus a resourceNames-scoped ClusterRole),
+// so it is provisioned at enrollment rather than generated into a chart.
 package poolside
 
 //+kubebuilder:rbac:groups=compiled.ectobase.dev,resources=compilednics;compiledvms;compiledvolumeattachments;compiledcontainers,verbs=get;list;watch;create;update;patch;delete

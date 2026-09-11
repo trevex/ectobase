@@ -65,11 +65,12 @@ spec:
                   NetworkInterface).
                 items:
                   description: |-
-                    CompiledVMInterface is a resolved overlay interface for a VM: the pinned MAC
+                    CompiledVMInterface is a resolved overlay interface for a VM: the allocated MAC
                     and the multus network (NetworkAttachmentDefinition) name for the flowplane binding.
                   properties:
                     mac:
-                      description: MAC is the pinned L2 address (from the NetworkInterface).
+                      description: MAC is the NetworkInterface's allocated L2 address
+                        (status.allocatedMAC, or a pinned spec.mac).
                       type: string
                     networkName:
                       description: NetworkName is the multus NetworkAttachmentDefinition

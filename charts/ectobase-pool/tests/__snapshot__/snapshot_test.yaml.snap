@@ -474,7 +474,7 @@ renders (ebpf clab):
                         description: CompiledContainerInterface is a resolved overlay interface for a container.
                         properties:
                           mac:
-                            description: MAC is the pinned L2 address (from the NetworkInterface).
+                            description: MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac).
                             type: string
                           networkInterfaceRef:
                             description: |-
@@ -611,8 +611,11 @@ renders (ebpf clab):
                     allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC +
                     FirewallPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.
 
-                    The source NetworkInterface is the CompiledNIC's OWNER (a controller ownerReference) and its name
-                    is encoded in the object name — so the spec carries no NICRef. It also deliberately does NOT carry
+                    The source NetworkInterface is recorded in the compiled.ectobase.dev/source-namespace and
+                    /source-name annotations and encoded in the object name (<sourceNamespace>-<sourceName>) — so the
+                    spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace
+                    on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer
+                    on the NetworkInterface instead. It also deliberately does NOT carry
                     the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent
                     obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the
                     correct node-local nexthop. Keeping node-local state out of this central object avoids a
@@ -706,8 +709,10 @@ renders (ebpf clab):
                       type: array
                     mac:
                       description: |-
-                        MAC is the guest L2 address copied from the source NetworkInterface. The CNI
-                        programs it as the datapath guest MAC (empty for containers — the datapath derives one).
+                        MAC is the guest L2 address sourced from the NetworkInterface's allocation
+                        (status.allocatedMAC, or a pinned spec.mac adopted into it). The CNI programs it as the
+                        datapath guest MAC, and it is also the key a KubeVirt virt-launcher pod's interface is
+                        resolved by, since that pod carries no network-interface annotation.
                       type: string
                     nat:
                       description: |-
@@ -890,11 +895,11 @@ renders (ebpf clab):
                       description: Interfaces are the VM's overlay interfaces (one per owned NetworkInterface).
                       items:
                         description: |-
-                          CompiledVMInterface is a resolved overlay interface for a VM: the pinned MAC
+                          CompiledVMInterface is a resolved overlay interface for a VM: the allocated MAC
                           and the multus network (NetworkAttachmentDefinition) name for the flowplane binding.
                         properties:
                           mac:
-                            description: MAC is the pinned L2 address (from the NetworkInterface).
+                            description: MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac).
                             type: string
                           networkName:
                             description: NetworkName is the multus NetworkAttachmentDefinition name for the overlay binding.
@@ -2932,7 +2937,7 @@ renders (ebpf hw):
                         description: CompiledContainerInterface is a resolved overlay interface for a container.
                         properties:
                           mac:
-                            description: MAC is the pinned L2 address (from the NetworkInterface).
+                            description: MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac).
                             type: string
                           networkInterfaceRef:
                             description: |-
@@ -3069,8 +3074,11 @@ renders (ebpf hw):
                     allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC +
                     FirewallPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.
 
-                    The source NetworkInterface is the CompiledNIC's OWNER (a controller ownerReference) and its name
-                    is encoded in the object name — so the spec carries no NICRef. It also deliberately does NOT carry
+                    The source NetworkInterface is recorded in the compiled.ectobase.dev/source-namespace and
+                    /source-name annotations and encoded in the object name (<sourceNamespace>-<sourceName>) — so the
+                    spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace
+                    on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer
+                    on the NetworkInterface instead. It also deliberately does NOT carry
                     the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent
                     obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the
                     correct node-local nexthop. Keeping node-local state out of this central object avoids a
@@ -3164,8 +3172,10 @@ renders (ebpf hw):
                       type: array
                     mac:
                       description: |-
-                        MAC is the guest L2 address copied from the source NetworkInterface. The CNI
-                        programs it as the datapath guest MAC (empty for containers — the datapath derives one).
+                        MAC is the guest L2 address sourced from the NetworkInterface's allocation
+                        (status.allocatedMAC, or a pinned spec.mac adopted into it). The CNI programs it as the
+                        datapath guest MAC, and it is also the key a KubeVirt virt-launcher pod's interface is
+                        resolved by, since that pod carries no network-interface annotation.
                       type: string
                     nat:
                       description: |-
@@ -3348,11 +3358,11 @@ renders (ebpf hw):
                       description: Interfaces are the VM's overlay interfaces (one per owned NetworkInterface).
                       items:
                         description: |-
-                          CompiledVMInterface is a resolved overlay interface for a VM: the pinned MAC
+                          CompiledVMInterface is a resolved overlay interface for a VM: the allocated MAC
                           and the multus network (NetworkAttachmentDefinition) name for the flowplane binding.
                         properties:
                           mac:
-                            description: MAC is the pinned L2 address (from the NetworkInterface).
+                            description: MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac).
                             type: string
                           networkName:
                             description: NetworkName is the multus NetworkAttachmentDefinition name for the overlay binding.
@@ -5387,7 +5397,7 @@ renders (tier1 on):
                         description: CompiledContainerInterface is a resolved overlay interface for a container.
                         properties:
                           mac:
-                            description: MAC is the pinned L2 address (from the NetworkInterface).
+                            description: MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac).
                             type: string
                           networkInterfaceRef:
                             description: |-
@@ -5524,8 +5534,11 @@ renders (tier1 on):
                     allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC +
                     FirewallPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.
 
-                    The source NetworkInterface is the CompiledNIC's OWNER (a controller ownerReference) and its name
-                    is encoded in the object name — so the spec carries no NICRef. It also deliberately does NOT carry
+                    The source NetworkInterface is recorded in the compiled.ectobase.dev/source-namespace and
+                    /source-name annotations and encoded in the object name (<sourceNamespace>-<sourceName>) — so the
+                    spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace
+                    on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer
+                    on the NetworkInterface instead. It also deliberately does NOT carry
                     the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent
                     obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the
                     correct node-local nexthop. Keeping node-local state out of this central object avoids a
@@ -5619,8 +5632,10 @@ renders (tier1 on):
                       type: array
                     mac:
                       description: |-
-                        MAC is the guest L2 address copied from the source NetworkInterface. The CNI
-                        programs it as the datapath guest MAC (empty for containers — the datapath derives one).
+                        MAC is the guest L2 address sourced from the NetworkInterface's allocation
+                        (status.allocatedMAC, or a pinned spec.mac adopted into it). The CNI programs it as the
+                        datapath guest MAC, and it is also the key a KubeVirt virt-launcher pod's interface is
+                        resolved by, since that pod carries no network-interface annotation.
                       type: string
                     nat:
                       description: |-
@@ -5803,11 +5818,11 @@ renders (tier1 on):
                       description: Interfaces are the VM's overlay interfaces (one per owned NetworkInterface).
                       items:
                         description: |-
-                          CompiledVMInterface is a resolved overlay interface for a VM: the pinned MAC
+                          CompiledVMInterface is a resolved overlay interface for a VM: the allocated MAC
                           and the multus network (NetworkAttachmentDefinition) name for the flowplane binding.
                         properties:
                           mac:
-                            description: MAC is the pinned L2 address (from the NetworkInterface).
+                            description: MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac).
                             type: string
                           networkName:
                             description: NetworkName is the multus NetworkAttachmentDefinition name for the overlay binding.
@@ -7882,7 +7897,7 @@ renders (tier1 watchdog):
                         description: CompiledContainerInterface is a resolved overlay interface for a container.
                         properties:
                           mac:
-                            description: MAC is the pinned L2 address (from the NetworkInterface).
+                            description: MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac).
                             type: string
                           networkInterfaceRef:
                             description: |-
@@ -8019,8 +8034,11 @@ renders (tier1 watchdog):
                     allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC +
                     FirewallPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.
 
-                    The source NetworkInterface is the CompiledNIC's OWNER (a controller ownerReference) and its name
-                    is encoded in the object name — so the spec carries no NICRef. It also deliberately does NOT carry
+                    The source NetworkInterface is recorded in the compiled.ectobase.dev/source-namespace and
+                    /source-name annotations and encoded in the object name (<sourceNamespace>-<sourceName>) — so the
+                    spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace
+                    on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer
+                    on the NetworkInterface instead. It also deliberately does NOT carry
                     the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent
                     obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the
                     correct node-local nexthop. Keeping node-local state out of this central object avoids a
@@ -8114,8 +8132,10 @@ renders (tier1 watchdog):
                       type: array
                     mac:
                       description: |-
-                        MAC is the guest L2 address copied from the source NetworkInterface. The CNI
-                        programs it as the datapath guest MAC (empty for containers — the datapath derives one).
+                        MAC is the guest L2 address sourced from the NetworkInterface's allocation
+                        (status.allocatedMAC, or a pinned spec.mac adopted into it). The CNI programs it as the
+                        datapath guest MAC, and it is also the key a KubeVirt virt-launcher pod's interface is
+                        resolved by, since that pod carries no network-interface annotation.
                       type: string
                     nat:
                       description: |-
@@ -8298,11 +8318,11 @@ renders (tier1 watchdog):
                       description: Interfaces are the VM's overlay interfaces (one per owned NetworkInterface).
                       items:
                         description: |-
-                          CompiledVMInterface is a resolved overlay interface for a VM: the pinned MAC
+                          CompiledVMInterface is a resolved overlay interface for a VM: the allocated MAC
                           and the multus network (NetworkAttachmentDefinition) name for the flowplane binding.
                         properties:
                           mac:
-                            description: MAC is the pinned L2 address (from the NetworkInterface).
+                            description: MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac).
                             type: string
                           networkName:
                             description: NetworkName is the multus NetworkAttachmentDefinition name for the overlay binding.
@@ -10387,7 +10407,7 @@ renders with vm-materializer enabled:
                         description: CompiledContainerInterface is a resolved overlay interface for a container.
                         properties:
                           mac:
-                            description: MAC is the pinned L2 address (from the NetworkInterface).
+                            description: MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac).
                             type: string
                           networkInterfaceRef:
                             description: |-
@@ -10524,8 +10544,11 @@ renders with vm-materializer enabled:
                     allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC +
                     FirewallPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.
 
-                    The source NetworkInterface is the CompiledNIC's OWNER (a controller ownerReference) and its name
-                    is encoded in the object name — so the spec carries no NICRef. It also deliberately does NOT carry
+                    The source NetworkInterface is recorded in the compiled.ectobase.dev/source-namespace and
+                    /source-name annotations and encoded in the object name (<sourceNamespace>-<sourceName>) — so the
+                    spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace
+                    on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer
+                    on the NetworkInterface instead. It also deliberately does NOT carry
                     the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent
                     obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the
                     correct node-local nexthop. Keeping node-local state out of this central object avoids a
@@ -10619,8 +10642,10 @@ renders with vm-materializer enabled:
                       type: array
                     mac:
                       description: |-
-                        MAC is the guest L2 address copied from the source NetworkInterface. The CNI
-                        programs it as the datapath guest MAC (empty for containers — the datapath derives one).
+                        MAC is the guest L2 address sourced from the NetworkInterface's allocation
+                        (status.allocatedMAC, or a pinned spec.mac adopted into it). The CNI programs it as the
+                        datapath guest MAC, and it is also the key a KubeVirt virt-launcher pod's interface is
+                        resolved by, since that pod carries no network-interface annotation.
                       type: string
                     nat:
                       description: |-
@@ -10803,11 +10828,11 @@ renders with vm-materializer enabled:
                       description: Interfaces are the VM's overlay interfaces (one per owned NetworkInterface).
                       items:
                         description: |-
-                          CompiledVMInterface is a resolved overlay interface for a VM: the pinned MAC
+                          CompiledVMInterface is a resolved overlay interface for a VM: the allocated MAC
                           and the multus network (NetworkAttachmentDefinition) name for the flowplane binding.
                         properties:
                           mac:
-                            description: MAC is the pinned L2 address (from the NetworkInterface).
+                            description: MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac).
                             type: string
                           networkName:
                             description: NetworkName is the multus NetworkAttachmentDefinition name for the overlay binding.

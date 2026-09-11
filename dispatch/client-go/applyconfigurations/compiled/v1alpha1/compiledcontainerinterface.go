@@ -12,7 +12,7 @@ type CompiledContainerInterfaceApplyConfiguration struct {
 	// NetworkInterfaceRef is "<namespace>/<nic>" — the pod's net.ectobase.dev/network-interface
 	// annotation, which flowplane-cni resolves to the CompiledNIC.
 	NetworkInterfaceRef *string `json:"networkInterfaceRef,omitempty"`
-	// MAC is the pinned L2 address (from the NetworkInterface).
+	// MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac).
 	MAC *string `json:"mac,omitempty"`
 }
 
