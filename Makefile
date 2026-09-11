@@ -182,7 +182,10 @@ lab-test: ## Run the live lab suite
 # Go modules in the go.work workspace. golangci-lint is run per-module (from the
 # module dir) so the workspace resolves correctly; gofmt runs over tracked Go
 # sources, skipping the vendored dispatch/bin/.modules tree and build artifacts.
-GO_MODULES := api cni mesh dispatch
+# Every module in go.work. test/lab and test/e2e are included deliberately: they hold real unit
+# tests (e.g. the per-pool enrollment/RBAC manifest assertions) that guard production behaviour, so
+# leaving them out of lint and test means nothing checks them.
+GO_MODULES := api cni mesh dispatch test/lab test/e2e
 GO_SRC      = git ls-files '*.go' | grep -v '^dispatch/bin/\.modules/'
 
 .PHONY: fmt
@@ -212,6 +215,20 @@ check: ## fmt --check + clippy (what the pre-commit hooks run)
 .PHONY: test
 test: ## Host unit + POD-layout tests (no root needed)
 	cargo test -p flowplane-common -p flowplane
+
+.PHONY: ci
+ci: ## Everything CI runs (non-privileged): lint + sim + host tests + chart tests + every Go module
+	# Mirrors .github/workflows/test.yml. Exists because the pieces were only reachable as separate
+	# targets, so it was easy to run `make lint && make test` locally, miss `chart-test`, and let the
+	# helm snapshots drift until CI caught it. Keep this in sync with that workflow.
+	$(MAKE) lint
+	$(MAKE) sim
+	$(MAKE) test
+	$(MAKE) chart-test
+	@for m in $(GO_MODULES); do \
+	  echo "go test ($$m)"; \
+	  ( cd $$m && go test ./... ) || exit 1; \
+	done
 
 .PHONY: verifier
 verifier: ## Load the tcx overlay-ingress + guest-facing tc programs through the kernel verifier (needs root)

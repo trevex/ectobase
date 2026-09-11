@@ -487,7 +487,7 @@ users:
 func clusterPoolsManifest(compute []ComputeCluster) string {
 	var b strings.Builder
 	for _, c := range compute {
-		b.WriteString(fmt.Sprintf(`---
+		fmt.Fprintf(&b, `---
 # This pool's compiled objects live here ON THE DISPATCH — the broker mirrors them back into their
 # source namespace downstream, so no matching namespace is needed on the pool cluster.
 # NamespaceLifecycle admission rejects writes into a namespace that does not exist, so the compiler
@@ -598,7 +598,7 @@ subjects:
   - kind: ServiceAccount
     name: dispatch-broker-bootstrap-%[1]s
     namespace: system
-`, c.Name))
+`, c.Name)
 	}
 	return b.String()
 }
