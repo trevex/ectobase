@@ -28,6 +28,7 @@ import (
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
+	"github.com/trevex/ectobase/api/validate"
 	"github.com/trevex/ectobase/dispatch/pkg/broker"
 	"github.com/trevex/ectobase/dispatch/pkg/clusterpool"
 	"github.com/trevex/ectobase/dispatch/pkg/scheduler"
@@ -58,6 +59,11 @@ func TestPhase3_HeartbeatScheduleCompileSync_E2E(t *testing.T) {
 	computeinstall.Install(scheme)
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
+	}
+	// corev1 is needed to create the per-pool Namespace object the dispatch apiserver's
+	// NamespaceLifecycle admission requires before a compiler can create a twin in it.
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register corev1 scheme: %v", err)
 	}
 
 	// --- DISPATCH: kit aggregated apiserver. ---
@@ -108,6 +114,13 @@ func TestPhase3_HeartbeatScheduleCompileSync_E2E(t *testing.T) {
 	}
 
 	ctx := kitenvtest.Context()
+
+	// The dispatch apiserver enforces NamespaceLifecycle, so the pool namespace the mesh
+	// compiler writes twins into (validate.PoolNamespace(cluster)) must exist first.
+	poolC1 := validate.PoolNamespace("c1")
+	if err := dispatchClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: poolC1}}); err != nil {
+		t.Fatalf("dispatch create pool namespace %s: %v", poolC1, err)
+	}
 
 	// ================================================================
 	// (1) HEARTBEAT: create pool c1, simulate a fresh broker beat by writing the
@@ -212,7 +225,7 @@ func TestPhase3_HeartbeatScheduleCompileSync_E2E(t *testing.T) {
 		t.Fatalf("compile Reconcile nic-a: %v", err)
 	}
 	compiled := &compiledv1.CompiledNIC{}
-	if err := dispatchClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "default-nic-a"}, compiled); err != nil {
+	if err := dispatchClient.Get(ctx, client.ObjectKey{Namespace: poolC1, Name: "default-nic-a"}, compiled); err != nil {
 		t.Fatalf("dispatch get default-nic-a: %v", err)
 	}
 	if compiled.Spec.ClusterName != "c1" {

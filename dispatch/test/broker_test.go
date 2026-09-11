@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	apiregistrationv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
@@ -20,6 +21,7 @@ import (
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	netinstall "github.com/trevex/ectobase/api/net/install"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
+	"github.com/trevex/ectobase/api/validate"
 	"github.com/trevex/ectobase/dispatch/pkg/broker"
 )
 
@@ -34,10 +36,11 @@ import (
 //     CompiledNIC CRD installed from charts/ectobase-pool/crd-bases.
 //
 // The broker is driven directly via SyncOnce (no informer/WatchListClient) so
-// the assertions are deterministic. CompiledNIC is namespaced; both apiservers
-// serve the "default" namespace out of the box (dispatch does not register a
-// core-namespace REST handler, so we cannot create an arbitrary namespace on it —
-// "default" is the namespace present on BOTH sides), so objects land there.
+// the assertions are deterministic. CompiledNIC is namespaced. Fixtures are created
+// DIRECTLY on the dispatch in the per-pool namespace (validate.PoolNamespace(cluster) —
+// the layout the mesh compilers write into) and stamped with the source annotations the
+// broker reads to mirror each twin back into its SOURCE namespace ("default", present
+// on both sides) downstream, so downstream assertions still land there.
 func TestBroker_Loopback(t *testing.T) {
 	// The kit envtest harness builds the aggregated apiserver with `-mod mod`,
 	// which conflicts with the repo's go.work workspace mode. Disable workspace
@@ -57,6 +60,11 @@ func TestBroker_Loopback(t *testing.T) {
 	// harness can poll the aggregated APIService for readiness.
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
+	}
+	// corev1 is needed to create the per-pool Namespace objects the dispatch apiserver's
+	// NamespaceLifecycle admission requires before a twin can be created in them.
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register corev1 scheme: %v", err)
 	}
 
 	// --- DISPATCH: kit aggregated apiserver. ---
@@ -116,17 +124,44 @@ func TestBroker_Loopback(t *testing.T) {
 
 	ctx := kitenvtest.Context()
 
+	// mustPoolNamespaces creates the per-pool Namespace object (on the dispatch client c) for
+	// each cluster name the fixtures below get compiled into. The dispatch apiserver enforces
+	// NamespaceLifecycle admission, so a twin cannot be created in a namespace that doesn't exist.
+	mustPoolNamespaces := func(c client.Client, clusters ...string) {
+		t.Helper()
+		for _, cluster := range clusters {
+			poolNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: validate.PoolNamespace(cluster)}}
+			if err := c.Create(ctx, poolNs); err != nil {
+				t.Fatalf("create pool namespace %s: %v", poolNs.Name, err)
+			}
+		}
+	}
+	mustPoolNamespaces(dispatchClient, "c1", "c2")
+	// poolC1 is where every c1-bound twin lives on the dispatch (both dispatchEnv and, after the
+	// (e)-(g) restart, dispatchEnv2 — PoolNamespace depends only on the cluster name).
+	poolC1 := validate.PoolNamespace("c1")
+
 	b := &broker.Broker{
 		Dispatch:    dispatchClient,
 		Downstream:  downstreamClient,
 		ClusterName: "c1",
 	}
 
-	// newNIC constructs a valid CompiledNIC: the CRD marks vni, port and firewall as
-	// required, so all are set (firewall/port take empty-but-present values).
+	// newNIC constructs a valid CompiledNIC fixture directly on the dispatch, in the PER-POOL
+	// namespace the mesh compilers now write twins into (validate.PoolNamespace(cluster)), stamped
+	// with the source annotations the broker reads to mirror it back into ITS source namespace (ns)
+	// downstream — the CRD marks vni, port and firewall as required, so all are set (firewall/port
+	// take empty-but-present values).
 	newNIC := func(name, cluster string) *compiledv1.CompiledNIC {
 		return &compiledv1.CompiledNIC{
-			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: validate.PoolNamespace(cluster),
+				Name:      name,
+				Annotations: map[string]string{
+					compiledv1.SourceNamespaceAnnotation: ns,
+					compiledv1.SourceNameAnnotation:      name,
+				},
+			},
 			Spec: compiledv1.CompiledNICSpec{
 				ClusterName: cluster,
 				VNI:         1000,
@@ -192,27 +227,51 @@ func TestBroker_Loopback(t *testing.T) {
 		return keys
 	}
 
-	// newVM constructs a minimal CompiledVM bound to a cluster.
+	// newVM constructs a minimal CompiledVM bound to a cluster, placed in the pool namespace and
+	// stamped with the source annotations (see newNIC).
 	newVM := func(name, cluster, image string) *compiledv1.CompiledVM {
 		return &compiledv1.CompiledVM{
-			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
-			Spec:       compiledv1.CompiledVMSpec{ClusterName: cluster, Image: image},
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: validate.PoolNamespace(cluster),
+				Name:      name,
+				Annotations: map[string]string{
+					compiledv1.SourceNamespaceAnnotation: ns,
+					compiledv1.SourceNameAnnotation:      name,
+				},
+			},
+			Spec: compiledv1.CompiledVMSpec{ClusterName: cluster, Image: image},
 		}
 	}
 
-	// newAtt constructs a minimal CompiledVolumeAttachment bound to a cluster.
+	// newAtt constructs a minimal CompiledVolumeAttachment bound to a cluster, placed in the pool
+	// namespace and stamped with the source annotations (see newNIC).
 	newAtt := func(name, cluster, bootImage string) *compiledv1.CompiledVolumeAttachment {
 		return &compiledv1.CompiledVolumeAttachment{
-			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
-			Spec:       compiledv1.CompiledVolumeAttachmentSpec{ClusterName: cluster, BootImage: bootImage},
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: validate.PoolNamespace(cluster),
+				Name:      name,
+				Annotations: map[string]string{
+					compiledv1.SourceNamespaceAnnotation: ns,
+					compiledv1.SourceNameAnnotation:      name,
+				},
+			},
+			Spec: compiledv1.CompiledVolumeAttachmentSpec{ClusterName: cluster, BootImage: bootImage},
 		}
 	}
 
-	// newCtr constructs a minimal CompiledContainer bound to a cluster.
+	// newCtr constructs a minimal CompiledContainer bound to a cluster, placed in the pool
+	// namespace and stamped with the source annotations (see newNIC).
 	newCtr := func(name, cluster, image string) *compiledv1.CompiledContainer {
 		return &compiledv1.CompiledContainer{
-			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name},
-			Spec:       compiledv1.CompiledContainerSpec{ClusterName: cluster, Image: image},
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: validate.PoolNamespace(cluster),
+				Name:      name,
+				Annotations: map[string]string{
+					compiledv1.SourceNamespaceAnnotation: ns,
+					compiledv1.SourceNameAnnotation:      name,
+				},
+			},
+			Spec: compiledv1.CompiledContainerSpec{ClusterName: cluster, Image: image},
 		}
 	}
 
@@ -239,7 +298,7 @@ func TestBroker_Loopback(t *testing.T) {
 	// (b) UPDATE: dispatch nic-a nodeName node-1->node-1b propagates downstream.
 	// ================================================================
 	cur := &compiledv1.CompiledNIC{}
-	if err := dispatchClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "nic-a"}, cur); err != nil {
+	if err := dispatchClient.Get(ctx, client.ObjectKey{Namespace: poolC1, Name: "nic-a"}, cur); err != nil {
 		t.Fatalf("(b) dispatch Get nic-a: %v", err)
 	}
 	if err := dispatchClient.Update(ctx, cur); err != nil {
@@ -254,7 +313,7 @@ func TestBroker_Loopback(t *testing.T) {
 	// ================================================================
 	// (c) GC: deleting dispatch nic-a empties downstream.
 	// ================================================================
-	del := &compiledv1.CompiledNIC{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "nic-a"}}
+	del := &compiledv1.CompiledNIC{ObjectMeta: metav1.ObjectMeta{Namespace: poolC1, Name: "nic-a"}}
 	if err := dispatchClient.Delete(ctx, del); err != nil {
 		t.Fatalf("(c) dispatch Delete nic-a: %v", err)
 	}
@@ -316,6 +375,9 @@ func TestBroker_Loopback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("(e) central2 client.New: %v", err)
 	}
+	// dispatchEnv2 is a brand-new control plane (fresh etcd), so it starts with none of the pool
+	// namespaces dispatchEnv had — recreate them here.
+	mustPoolNamespaces(dispatchClient2, "c1", "c2")
 	b2 := &broker.Broker{
 		Dispatch:    dispatchClient2,
 		Downstream:  downstreamClient,
@@ -350,7 +412,7 @@ func TestBroker_Loopback(t *testing.T) {
 
 	// Update vm-a image dispatch->downstream.
 	curVM := &compiledv1.CompiledVM{}
-	if err := dispatchClient2.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm-a"}, curVM); err != nil {
+	if err := dispatchClient2.Get(ctx, client.ObjectKey{Namespace: poolC1, Name: "vm-a"}, curVM); err != nil {
 		t.Fatalf("(e) dispatch Get vm-a: %v", err)
 	}
 	curVM.Spec.Image = "fedora-updated"
@@ -370,7 +432,7 @@ func TestBroker_Loopback(t *testing.T) {
 	t.Log("(e) CompiledVM update: PASS (downstream vm-a image=fedora-updated)")
 
 	// GC: delete dispatch vm-a, downstream should be empty.
-	delVM := &compiledv1.CompiledVM{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "vm-a"}}
+	delVM := &compiledv1.CompiledVM{ObjectMeta: metav1.ObjectMeta{Namespace: poolC1, Name: "vm-a"}}
 	if err := dispatchClient2.Delete(ctx, delVM); err != nil {
 		t.Fatalf("(e) dispatch Delete vm-a: %v", err)
 	}
@@ -410,7 +472,7 @@ func TestBroker_Loopback(t *testing.T) {
 
 	// Update att-a bootImage dispatch->downstream.
 	curAtt := &compiledv1.CompiledVolumeAttachment{}
-	if err := dispatchClient2.Get(ctx, client.ObjectKey{Namespace: ns, Name: "att-a"}, curAtt); err != nil {
+	if err := dispatchClient2.Get(ctx, client.ObjectKey{Namespace: poolC1, Name: "att-a"}, curAtt); err != nil {
 		t.Fatalf("(f) dispatch Get att-a: %v", err)
 	}
 	curAtt.Spec.BootImage = "fedora-updated"
@@ -430,7 +492,7 @@ func TestBroker_Loopback(t *testing.T) {
 	t.Log("(f) CompiledVolumeAttachment update: PASS (downstream att-a bootImage=fedora-updated)")
 
 	// GC: delete dispatch att-a, downstream should be empty.
-	delAtt := &compiledv1.CompiledVolumeAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "att-a"}}
+	delAtt := &compiledv1.CompiledVolumeAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: poolC1, Name: "att-a"}}
 	if err := dispatchClient2.Delete(ctx, delAtt); err != nil {
 		t.Fatalf("(f) dispatch Delete att-a: %v", err)
 	}
@@ -470,7 +532,7 @@ func TestBroker_Loopback(t *testing.T) {
 
 	// Update ctr-a image dispatch->downstream.
 	curCtr := &compiledv1.CompiledContainer{}
-	if err := dispatchClient2.Get(ctx, client.ObjectKey{Namespace: ns, Name: "ctr-a"}, curCtr); err != nil {
+	if err := dispatchClient2.Get(ctx, client.ObjectKey{Namespace: poolC1, Name: "ctr-a"}, curCtr); err != nil {
 		t.Fatalf("(g) dispatch Get ctr-a: %v", err)
 	}
 	curCtr.Spec.Image = "nginx-updated"
@@ -490,7 +552,7 @@ func TestBroker_Loopback(t *testing.T) {
 	t.Log("(g) CompiledContainer update: PASS (downstream ctr-a image=nginx-updated)")
 
 	// GC: delete dispatch ctr-a, downstream should be empty.
-	delCtr := &compiledv1.CompiledContainer{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "ctr-a"}}
+	delCtr := &compiledv1.CompiledContainer{ObjectMeta: metav1.ObjectMeta{Namespace: poolC1, Name: "ctr-a"}}
 	if err := dispatchClient2.Delete(ctx, delCtr); err != nil {
 		t.Fatalf("(g) dispatch Delete ctr-a: %v", err)
 	}

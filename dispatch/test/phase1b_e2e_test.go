@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	apiregistrationv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
@@ -24,6 +25,7 @@ import (
 	netinstall "github.com/trevex/ectobase/api/net/install"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
+	"github.com/trevex/ectobase/api/validate"
 	"github.com/trevex/ectobase/dispatch/pkg/broker"
 	"github.com/trevex/ectobase/mesh/controllers"
 )
@@ -41,8 +43,10 @@ import (
 //
 // The reconciler is driven directly via Reconcile (no manager/informer) so the
 // assertions are deterministic. CompiledNIC/NetworkInterface/VirtualMachine are
-// namespaced; both apiservers serve the "default" namespace out of the box
-// (dispatch registers no core-namespace REST handler), so objects land there.
+// namespaced; both apiservers serve the "default" namespace out of the box, so the
+// high-level source objects land there. The compiled CompiledNIC twins land in the
+// per-pool namespace on the dispatch (validate.PoolNamespace(cluster)), which the
+// dispatch apiserver's NamespaceLifecycle admission requires to exist up front.
 func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	// The kit envtest harness builds the aggregated apiserver with `-mod mod`,
 	// which conflicts with the repo's go.work workspace mode. Disable workspace
@@ -63,6 +67,11 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	computeinstall.Install(scheme)
 	if err := apiregistrationv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register apiregistration scheme: %v", err)
+	}
+	// corev1 is needed to create the per-pool Namespace objects the dispatch apiserver's
+	// NamespaceLifecycle admission requires before a compiler can create a twin in them.
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register corev1 scheme: %v", err)
 	}
 
 	// --- DISPATCH: kit aggregated apiserver. ---
@@ -115,6 +124,15 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	}
 
 	ctx := kitenvtest.Context()
+
+	// The dispatch apiserver enforces NamespaceLifecycle, so each pool namespace the
+	// mesh compilers write twins into (validate.PoolNamespace(cluster)) must exist first.
+	for _, cluster := range []string{"c1", "c2"} {
+		poolNs := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: validate.PoolNamespace(cluster)}}
+		if err := dispatchClient.Create(ctx, poolNs); err != nil {
+			t.Fatalf("dispatch create pool namespace %s: %v", poolNs.Name, err)
+		}
+	}
 
 	// ================================================================
 	// Seed DISPATCH with the high-level objects for two workloads.
@@ -211,11 +229,11 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 	}
 
 	// ================================================================
-	// ASSERT (dispatch): nic-a compiled to name "default-nic-a", bound to c1, with
-	// the workload=vm1 label inherited from its owning VM.
+	// ASSERT (dispatch): nic-a compiled to name "default-nic-a" in the c1 pool namespace, bound to
+	// c1, with the workload=vm1 label inherited from its owning VM.
 	// ================================================================
 	compiledA := &compiledv1.CompiledNIC{}
-	if err := dispatchClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "default-nic-a"}, compiledA); err != nil {
+	if err := dispatchClient.Get(ctx, client.ObjectKey{Namespace: validate.PoolNamespace("c1"), Name: "default-nic-a"}, compiledA); err != nil {
 		t.Fatalf("dispatch Get default-nic-a: %v", err)
 	}
 	if compiledA.Spec.ClusterName != "c1" {
@@ -230,7 +248,7 @@ func TestPhase1b_CompileBindSync_E2E(t *testing.T) {
 
 	// nic-b compiled to c2 (owned by vm2) — used to prove bounded pull below.
 	compiledB := &compiledv1.CompiledNIC{}
-	if err := dispatchClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "default-nic-b"}, compiledB); err != nil {
+	if err := dispatchClient.Get(ctx, client.ObjectKey{Namespace: validate.PoolNamespace("c2"), Name: "default-nic-b"}, compiledB); err != nil {
 		t.Fatalf("dispatch Get default-nic-b: %v", err)
 	}
 	if compiledB.Spec.ClusterName != "c2" {

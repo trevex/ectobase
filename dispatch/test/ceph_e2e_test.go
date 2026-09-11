@@ -32,6 +32,7 @@ import (
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	storageinstall "github.com/trevex/ectobase/api/storage/install"
 	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
+	"github.com/trevex/ectobase/api/validate"
 	"github.com/trevex/ectobase/dispatch/pkg/broker"
 	"github.com/trevex/ectobase/dispatch/pkg/clusterpool"
 	"github.com/trevex/ectobase/dispatch/pkg/scheduler"
@@ -49,13 +50,14 @@ import (
 //     (VolumeRefs:[boot]) owning nic-a are created; scheduler.Reconciler binds vm1 to c1;
 //  3. the mesh CompiledVMReconciler lowers vm1 -> a dispatch CompiledVM default-vm1
 //     AND the CompiledVolumeAttachmentReconciler emits a dispatch CompiledVolumeAttachment
-//     vm1-boot (clusterName c1, Boot, BootImage, workload=vm1);
+//     default-vm1-boot (clusterName c1, Boot, BootImage, workload=vm1), both in the c1 pool
+//     namespace on the dispatch (validate.PoolNamespace("c1"));
 //  4. the c1 broker's SyncCompiledVMs + SyncCompiledVolumeAttachments materialize both
-//     downstream;
-//  5. the downstream VolumeMaterializerReconciler turns vm1-boot into a
+//     downstream, mirrored back into their SOURCE namespace via the twins' source annotations;
+//  5. the downstream VolumeMaterializerReconciler turns default-vm1-boot into a
 //     cdiv1.DataVolume (registry source docker://fedora, storageClass ceph-rbd, 10Gi);
 //  6. the downstream VMMaterializerReconciler turns default-vm1 into a kubevirt.io/v1
-//     VirtualMachine that boots from the vm1-boot DataVolume (NO containerDisk).
+//     VirtualMachine that boots from the default-vm1-boot DataVolume (NO containerDisk).
 //
 // The downstream envtest loads three CRD dirs: the net+compiled CRDs
 // (charts/ectobase-pool/crd-bases) + the compute/storage/platform CRDs (test/crds)
@@ -81,6 +83,11 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 	}
 	if err := cdiv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("register cdi scheme: %v", err)
+	}
+	// corev1 is needed to create the per-pool Namespace objects the dispatch apiserver's
+	// NamespaceLifecycle admission requires before a compiler can create a twin in them.
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register corev1 scheme: %v", err)
 	}
 
 	// --- DISPATCH: kit aggregated apiserver. ---
@@ -134,6 +141,13 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 	}
 
 	ctx := kitenvtest.Context()
+
+	// The dispatch apiserver enforces NamespaceLifecycle, so the pool namespace the mesh
+	// compilers write twins into (validate.PoolNamespace(cluster)) must exist first.
+	poolC1 := validate.PoolNamespace("c1")
+	if err := dispatchClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: poolC1}}); err != nil {
+		t.Fatalf("dispatch create pool namespace %s: %v", poolC1, err)
+	}
 
 	// ================================================================
 	// (1) HEARTBEAT + POOL PHASE: create pool c1, simulate a fresh beat, derive Ready.
@@ -236,7 +250,9 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 
 	// ================================================================
 	// (3) COMPILE: CompiledVMReconciler lowers vm1 -> default-vm1 AND
-	//     CompiledVolumeAttachmentReconciler emits vm1-boot (bound c1, Boot, fedora).
+	//     CompiledVolumeAttachmentReconciler emits default-vm1-boot (namespace-qualified: the
+	//     twin name is <source-namespace>-<source-name>-<volume-ref>, since twins now share one
+	//     pool namespace) (bound c1, Boot, fedora).
 	// ================================================================
 	cr := &controllers.CompiledVMReconciler{Client: dispatchClient, NetworkName: "flowplane-overlay"}
 	if _, err := cr.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Namespace: ns, Name: "vm1"}}); err != nil {
@@ -248,7 +264,7 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 	}
 
 	compiled := &compiledv1.CompiledVM{}
-	if err := dispatchClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "default-vm1"}, compiled); err != nil {
+	if err := dispatchClient.Get(ctx, client.ObjectKey{Namespace: poolC1, Name: "default-vm1"}, compiled); err != nil {
 		t.Fatalf("dispatch get default-vm1: %v", err)
 	}
 	if compiled.Spec.ClusterName != "c1" {
@@ -256,29 +272,29 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 	}
 
 	att := &compiledv1.CompiledVolumeAttachment{}
-	if err := dispatchClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm1-boot"}, att); err != nil {
-		t.Fatalf("dispatch get CompiledVolumeAttachment vm1-boot: %v", err)
+	if err := dispatchClient.Get(ctx, client.ObjectKey{Namespace: poolC1, Name: "default-vm1-boot"}, att); err != nil {
+		t.Fatalf("dispatch get CompiledVolumeAttachment default-vm1-boot: %v", err)
 	}
 	if att.Spec.ClusterName != "c1" {
-		t.Fatalf("expected vm1-boot clusterName=c1, got %q", att.Spec.ClusterName)
+		t.Fatalf("expected default-vm1-boot clusterName=c1, got %q", att.Spec.ClusterName)
 	}
 	if !att.Spec.Boot {
-		t.Fatalf("expected vm1-boot Boot=true (BootImage set)")
+		t.Fatalf("expected default-vm1-boot Boot=true (BootImage set)")
 	}
 	if att.Spec.BootImage != "quay.io/containerdisks/fedora:41" {
-		t.Fatalf("expected vm1-boot BootImage=fedora, got %q", att.Spec.BootImage)
+		t.Fatalf("expected default-vm1-boot BootImage=fedora, got %q", att.Spec.BootImage)
 	}
 	if att.Labels["workload"] != "vm1" {
-		t.Fatalf("expected vm1-boot workload=vm1 label, got %q", att.Labels["workload"])
+		t.Fatalf("expected default-vm1-boot workload=vm1 label, got %q", att.Labels["workload"])
 	}
 	wantSize := resource.MustParse("10Gi")
 	if att.Spec.Size.Cmp(wantSize) != 0 {
-		t.Fatalf("expected vm1-boot Size=10Gi, got %s", att.Spec.Size.String())
+		t.Fatalf("expected default-vm1-boot Size=10Gi, got %s", att.Spec.Size.String())
 	}
-	t.Log("(3) compile: PASS (default-vm1 + vm1-boot bound c1, Boot fedora, workload label)")
+	t.Log("(3) compile: PASS (default-vm1 + default-vm1-boot bound c1, Boot fedora, workload label)")
 
 	// ================================================================
-	// (4) SYNC: the c1 broker materializes default-vm1 + vm1-boot DOWNSTREAM.
+	// (4) SYNC: the c1 broker materializes default-vm1 + default-vm1-boot DOWNSTREAM.
 	// ================================================================
 	b := &broker.Broker{Dispatch: dispatchClient, Downstream: downstreamClient, ClusterName: "c1"}
 	if err := b.SyncCompiledVMs(ctx); err != nil {
@@ -298,26 +314,26 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 	if err := downstreamClient.List(ctx, downAtts); err != nil {
 		t.Fatalf("downstream List CompiledVolumeAttachment: %v", err)
 	}
-	if len(downAtts.Items) != 1 || downAtts.Items[0].Name != "vm1-boot" {
-		t.Fatalf("sync: expected downstream CompiledVolumeAttachment=[vm1-boot], got %d items", len(downAtts.Items))
+	if len(downAtts.Items) != 1 || downAtts.Items[0].Name != "default-vm1-boot" {
+		t.Fatalf("sync: expected downstream CompiledVolumeAttachment=[default-vm1-boot], got %d items", len(downAtts.Items))
 	}
 	if downAtts.Items[0].Spec.ClusterName != "c1" || downAtts.Items[0].Spec.BootImage != "quay.io/containerdisks/fedora:41" {
-		t.Fatalf("sync: expected downstream vm1-boot clusterName=c1 bootImage=fedora, got clusterName=%q bootImage=%q",
+		t.Fatalf("sync: expected downstream default-vm1-boot clusterName=c1 bootImage=fedora, got clusterName=%q bootImage=%q",
 			downAtts.Items[0].Spec.ClusterName, downAtts.Items[0].Spec.BootImage)
 	}
-	t.Log("(4) sync: PASS (downstream=[default-vm1] + [vm1-boot] bound c1)")
+	t.Log("(4) sync: PASS (downstream=[default-vm1] + [default-vm1-boot] bound c1)")
 
 	// ================================================================
-	// (5) MATERIALIZE VOLUME: VolumeMaterializerReconciler turns vm1-boot into a
+	// (5) MATERIALIZE VOLUME: VolumeMaterializerReconciler turns default-vm1-boot into a
 	//     cdiv1.DataVolume (registry source docker://fedora, ceph-rbd, 10Gi).
 	// ================================================================
 	volr := &controllers.VolumeMaterializerReconciler{Client: downstreamClient}
-	if _, err := volr.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Namespace: ns, Name: "vm1-boot"}}); err != nil {
-		t.Fatalf("materialize Reconcile vm1-boot (DataVolume): %v", err)
+	if _, err := volr.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKey{Namespace: ns, Name: "default-vm1-boot"}}); err != nil {
+		t.Fatalf("materialize Reconcile default-vm1-boot (DataVolume): %v", err)
 	}
 	dv := &cdiv1.DataVolume{}
-	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm1-boot"}, dv); err != nil {
-		t.Fatalf("downstream get DataVolume vm1-boot: %v", err)
+	if err := downstreamClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "default-vm1-boot"}, dv); err != nil {
+		t.Fatalf("downstream get DataVolume default-vm1-boot: %v", err)
 	}
 	if dv.Spec.Source == nil || dv.Spec.Source.Registry == nil || dv.Spec.Source.Registry.URL == nil {
 		t.Fatalf("materialize: expected DataVolume registry source, got %+v", dv.Spec.Source)
@@ -332,11 +348,11 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 	if gotStorage.Cmp(wantSize) != 0 {
 		t.Fatalf("materialize: expected DataVolume storage=10Gi, got %s", gotStorage.String())
 	}
-	t.Log("(5) materialize volume: PASS (DataVolume vm1-boot: registry docker://fedora, ceph-rbd, 10Gi)")
+	t.Log("(5) materialize volume: PASS (DataVolume default-vm1-boot: registry docker://fedora, ceph-rbd, 10Gi)")
 
 	// ================================================================
 	// (6) MATERIALIZE VM: VMMaterializerReconciler turns default-vm1 into a
-	//     kubevirt.io/v1.VirtualMachine booting from the vm1-boot DataVolume (NO
+	//     kubevirt.io/v1.VirtualMachine booting from the default-vm1-boot DataVolume (NO
 	//     containerDisk).
 	// ================================================================
 	vmr := &controllers.VMMaterializerReconciler{Client: downstreamClient}
@@ -357,11 +373,11 @@ func TestCeph_ScheduleCompileSyncMaterializeVolume_E2E(t *testing.T) {
 	if vols[0].ContainerDisk != nil {
 		t.Fatalf("materialize: expected NO containerDisk (booting from DataVolume), got %+v", vols[0].ContainerDisk)
 	}
-	if vols[0].DataVolume == nil || vols[0].DataVolume.Name != "vm1-boot" {
-		t.Fatalf("materialize: expected dataVolume volume named vm1-boot, got %+v", vols[0].DataVolume)
+	if vols[0].DataVolume == nil || vols[0].DataVolume.Name != "default-vm1-boot" {
+		t.Fatalf("materialize: expected dataVolume volume named default-vm1-boot, got %+v", vols[0].DataVolume)
 	}
-	if vols[0].Name != "vm1-boot" {
-		t.Fatalf("materialize: expected volume name=vm1-boot, got %q", vols[0].Name)
+	if vols[0].Name != "default-vm1-boot" {
+		t.Fatalf("materialize: expected volume name=default-vm1-boot, got %q", vols[0].Name)
 	}
-	t.Log("(6) materialize vm: PASS (kubevirt VM default-vm1 boots from DataVolume vm1-boot, no containerDisk)")
+	t.Log("(6) materialize vm: PASS (kubevirt VM default-vm1 boots from DataVolume default-vm1-boot, no containerDisk)")
 }
