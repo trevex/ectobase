@@ -22,7 +22,8 @@ import (
 // objects (CompiledNIC via SyncOnce, CompiledVM via SyncCompiledVMs,
 // CompiledVolumeAttachment via SyncCompiledVolumeAttachments, CompiledContainer via
 // SyncCompiledContainers) exactly match the
-// central objects bound to ClusterName (spec.clusterName), per-type. Both spec AND
+// dispatch objects in this pool's namespace, per-type, mirrored back into each twin's source
+// namespace downstream. Both spec AND
 // labels are mirrored: the `workload` label is load-bearing downstream (the
 // vm-materializer joins a VM to its volume attachments by it).
 type Broker struct {
@@ -38,8 +39,9 @@ type Broker struct {
 	ClusterName string
 }
 
-// poolNamespace is where this pool's compiled objects live on the dispatch (and, mirrored, on the
-// pool cluster). Listing by namespace rather than by a spec.clusterName field selector is what
+// poolNamespace is where this pool's compiled objects live on the dispatch. It is a dispatch-side
+// layout only — see downstreamNamespace for where they land on the pool cluster. Listing by
+// namespace rather than by a spec.clusterName field selector is what
 // lets a namespaced RoleBinding authorize the broker: a cluster-wide LIST carries an empty
 // namespace in its SubjectAccessReview, which no RoleBinding can ever match.
 func (b *Broker) poolNamespace() string { return validate.PoolNamespace(b.ClusterName) }
@@ -62,21 +64,30 @@ func downstreamNamespace(twin client.Object) string {
 	return twin.GetNamespace()
 }
 
+// downstreamKey is a dispatch-side twin's identity AS IT WILL EXIST downstream. The desired set
+// must be keyed this way, because the current set it is diffed against is read from downstream: key
+// the desired set by the twin's dispatch namespace instead and the two key spaces never intersect,
+// so every twin reads as both absent (create it) and unwanted (GC it) and the sync deletes and
+// recreates the whole set on every tick — which cascades into the materialized Pod and VMI.
+func downstreamKey(twin client.Object) string {
+	return downstreamNamespace(twin) + "/" + twin.GetName()
+}
+
 // key identifies a namespaced CompiledNIC as "namespace/name".
 func key(o *compiledv1.CompiledNIC) string { return o.Namespace + "/" + o.Name }
 
-// SyncOnce is a declarative set-reconcile: desired = central CompiledNICs with
-// spec.clusterName==ClusterName; make downstream match (create/update/delete).
+// SyncOnce is a declarative set-reconcile: desired = the CompiledNICs in this pool's namespace on
+// the dispatch; make downstream match (create/update/delete).
 // Idempotent and restart-safe (no in-memory diff; derived from live sets each call).
 func (b *Broker) SyncOnce(ctx context.Context) error {
-	// Fetch desired set from the dispatch, filtered by clusterName field index.
+	// Fetch desired set from this pool's namespace on the dispatch.
 	desired := &compiledv1.CompiledNICList{}
 	if err := b.Dispatch.List(ctx, desired, client.InNamespace(b.poolNamespace())); err != nil {
 		return fmt.Errorf("list dispatch: %w", err)
 	}
 	want := make(map[string]compiledv1.CompiledNIC, len(desired.Items))
 	for _, o := range desired.Items {
-		want[key(&o)] = o
+		want[downstreamKey(&o)] = o
 	}
 
 	// Fetch current set from downstream.
@@ -136,7 +147,7 @@ func keyAtt(o *compiledv1.CompiledVolumeAttachment) string { return o.Namespace 
 func keyCtr(o *compiledv1.CompiledContainer) string { return o.Namespace + "/" + o.Name }
 
 // SyncCompiledVMs is the CompiledVM twin of SyncOnce: declarative set-reconcile of
-// CompiledVMs bound to ClusterName, dispatch->downstream (create/update/delete).
+// the CompiledVMs in this pool's namespace, dispatch->downstream (create/update/delete).
 func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 	desired := &compiledv1.CompiledVMList{}
 	if err := b.Dispatch.List(ctx, desired, client.InNamespace(b.poolNamespace())); err != nil {
@@ -144,7 +155,7 @@ func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 	}
 	want := make(map[string]compiledv1.CompiledVM, len(desired.Items))
 	for _, o := range desired.Items {
-		want[keyVM(&o)] = o
+		want[downstreamKey(&o)] = o
 	}
 	have := &compiledv1.CompiledVMList{}
 	if err := b.Downstream.List(ctx, have); err != nil {
@@ -186,7 +197,7 @@ func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 }
 
 // SyncCompiledVolumeAttachments is the CompiledVolumeAttachment twin of SyncOnce:
-// declarative set-reconcile of attachments bound to ClusterName, dispatch->downstream.
+// declarative set-reconcile of the attachments in this pool's namespace, dispatch->downstream.
 func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 	desired := &compiledv1.CompiledVolumeAttachmentList{}
 	if err := b.Dispatch.List(ctx, desired, client.InNamespace(b.poolNamespace())); err != nil {
@@ -194,7 +205,7 @@ func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 	}
 	want := make(map[string]compiledv1.CompiledVolumeAttachment, len(desired.Items))
 	for _, o := range desired.Items {
-		want[keyAtt(&o)] = o
+		want[downstreamKey(&o)] = o
 	}
 	have := &compiledv1.CompiledVolumeAttachmentList{}
 	if err := b.Downstream.List(ctx, have); err != nil {
@@ -236,7 +247,7 @@ func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 }
 
 // SyncCompiledContainers is the CompiledContainer twin of SyncOnce: declarative
-// set-reconcile of CompiledContainers bound to ClusterName, dispatch->downstream.
+// set-reconcile of the CompiledContainers in this pool's namespace, dispatch->downstream.
 func (b *Broker) SyncCompiledContainers(ctx context.Context) error {
 	desired := &compiledv1.CompiledContainerList{}
 	if err := b.Dispatch.List(ctx, desired, client.InNamespace(b.poolNamespace())); err != nil {
@@ -244,7 +255,7 @@ func (b *Broker) SyncCompiledContainers(ctx context.Context) error {
 	}
 	want := make(map[string]compiledv1.CompiledContainer, len(desired.Items))
 	for _, o := range desired.Items {
-		want[keyCtr(&o)] = o
+		want[downstreamKey(&o)] = o
 	}
 	have := &compiledv1.CompiledContainerList{}
 	if err := b.Downstream.List(ctx, have); err != nil {
