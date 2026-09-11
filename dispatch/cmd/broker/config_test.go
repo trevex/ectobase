@@ -15,12 +15,12 @@ func TestDispatchConfigFromCertFiles(t *testing.T) {
 	if cfg.Host != "https://[fd00:db8:0:1::1]:6443" {
 		t.Fatalf("host = %q", cfg.Host)
 	}
-	if cfg.TLSClientConfig.CertFile != "/secrets/broker-cert/tls.crt" ||
-		cfg.TLSClientConfig.KeyFile != "/secrets/broker-cert/tls.key" ||
-		cfg.TLSClientConfig.CAFile != "/secrets/dispatch-ca/tls.crt" {
+	if cfg.CertFile != "/secrets/broker-cert/tls.crt" ||
+		cfg.KeyFile != "/secrets/broker-cert/tls.key" ||
+		cfg.CAFile != "/secrets/dispatch-ca/tls.crt" {
 		t.Fatalf("tls files not set from paths: %+v", cfg.TLSClientConfig)
 	}
-	if cfg.TLSClientConfig.Insecure {
+	if cfg.Insecure {
 		t.Fatal("must not be insecure when a CA file is provided")
 	}
 }

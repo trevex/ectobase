@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 
+	"github.com/trevex/ectobase/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -26,5 +27,6 @@ func (o *NetworkInterface) Validate(ctx context.Context) field.ErrorList {
 			errs = append(errs, field.Invalid(field.NewPath("spec", "mac"), o.Spec.MAC, "not a valid MAC address"))
 		}
 	}
+	errs = append(errs, validate.ClusterName(field.NewPath("spec", "clusterName"), o.Spec.ClusterName)...)
 	return errs
 }

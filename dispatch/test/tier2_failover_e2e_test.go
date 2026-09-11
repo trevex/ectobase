@@ -20,15 +20,15 @@ import (
 // TestTier2_Failover_FenceRebindRelease drives the WHOLE Tier-2 flow through the
 // REAL kit aggregated apiserver (conversions, status subresource, the reconciler):
 //
-//   - poolA is lost (Phase=Unknown, lease RenewTime stale by 10m) with one node /64;
-//     poolB is Ready; vm1 (default ns) is bound to poolA.
+//   - pool-a is lost (Phase=Unknown, lease RenewTime stale by 10m) with one node /64;
+//     pool-b is Ready; vm1 (default ns) is bound to pool-a.
 //   - With CONFIRMING fencers one Reconcile must (1) fence the /64 and record it in
-//     poolA.Status.FencedPrefixes, then (2) re-bind vm1 poolA->poolB.
-//   - Recovery: poolA comes back (Phase=Ready) and its returning broker confirms the
+//     pool-a.Status.FencedPrefixes, then (2) re-bind vm1 pool-a->pool-b.
+//   - Recovery: pool-a comes back (Phase=Ready) and its returning broker confirms the
 //     /64 drained (NodeDrain[Drained=true]); the next Reconcile must RELEASE the fence,
 //     leaving FencedPrefixes empty.
 //
-// Note the recovery step marks poolA Ready as well as drained: a still-lost pool would
+// Note the recovery step marks pool-a Ready as well as drained: a still-lost pool would
 // be re-fenced on the same pass (releaseDrained runs, then the fence barrier re-applies),
 // so a genuine release is only observable once the pool is no longer lost — matching the
 // reconciler's design (see the readyPoolObj release unit tests in internal/failover).
@@ -37,8 +37,8 @@ func TestTier2_Failover_FenceRebindRelease(t *testing.T) {
 	const ns = "default"
 	const prefix = "2001:db8:0:1::/64"
 
-	// poolA: lost — Unknown phase + a lease that renewed 10 minutes ago.
-	poolA := &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: "poolA"}}
+	// pool-a: lost — Unknown phase + a lease that renewed 10 minutes ago.
+	poolA := &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: "pool-a"}}
 	if err := c.Create(ctx, poolA); err != nil {
 		t.Fatalf("create poolA: %v", err)
 	}
@@ -54,8 +54,8 @@ func TestTier2_Failover_FenceRebindRelease(t *testing.T) {
 		t.Fatalf("status update poolA: %v", err)
 	}
 
-	// poolB: the healthy failover target.
-	poolB := &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: "poolB"}}
+	// pool-b: the healthy failover target.
+	poolB := &platformv1.ClusterPool{ObjectMeta: metav1.ObjectMeta{Name: "pool-b"}}
 	if err := c.Create(ctx, poolB); err != nil {
 		t.Fatalf("create poolB: %v", err)
 	}
@@ -68,16 +68,16 @@ func TestTier2_Failover_FenceRebindRelease(t *testing.T) {
 		t.Fatalf("status update poolB: %v", err)
 	}
 
-	// vm1 bound to the lost poolA.
+	// vm1 bound to the lost pool-a.
 	vm := &computev1.VirtualMachine{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "vm1"},
-		Spec:       computev1.VirtualMachineSpec{ClusterName: "poolA"},
+		Spec:       computev1.VirtualMachineSpec{ClusterName: "pool-a"},
 	}
 	if err := c.Create(ctx, vm); err != nil {
 		t.Fatalf("create vm1: %v", err)
 	}
 
-	reqA := ctrl.Request{NamespacedName: client.ObjectKey{Name: "poolA"}}
+	reqA := ctrl.Request{NamespacedName: client.ObjectKey{Name: "pool-a"}}
 	r := &failover.Reconciler{
 		Client:            c,
 		StorageFencer:     confirmingFencer{},
@@ -94,12 +94,12 @@ func TestTier2_Failover_FenceRebindRelease(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm1"}, got); err != nil {
 		t.Fatalf("get vm1: %v", err)
 	}
-	if got.Spec.ClusterName != "poolB" {
+	if got.Spec.ClusterName != "pool-b" {
 		t.Fatalf("expected vm1 re-bound to poolB, got %q", got.Spec.ClusterName)
 	}
 
 	fencedA := &platformv1.ClusterPool{}
-	if err := c.Get(ctx, client.ObjectKey{Name: "poolA"}, fencedA); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "pool-a"}, fencedA); err != nil {
 		t.Fatalf("get poolA after fence: %v", err)
 	}
 	if len(fencedA.Status.FencedPrefixes) != 1 || fencedA.Status.FencedPrefixes[0] != prefix {
@@ -120,7 +120,7 @@ func TestTier2_Failover_FenceRebindRelease(t *testing.T) {
 	}
 
 	releasedA := &platformv1.ClusterPool{}
-	if err := c.Get(ctx, client.ObjectKey{Name: "poolA"}, releasedA); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Name: "pool-a"}, releasedA); err != nil {
 		t.Fatalf("get poolA after release: %v", err)
 	}
 	if len(releasedA.Status.FencedPrefixes) != 0 {

@@ -19,11 +19,11 @@ func TestNodePrefixesFromNodes(t *testing.T) {
 
 func TestPlacementForVM(t *testing.T) {
 	nodes := []NodeFact{{Name: "n1", Prefix: "2001:db8:0:1::/64"}}
-	pl := PlacementForVM("poolA", "n1", nodes)
-	if pl == nil || pl.NodePrefix != "2001:db8:0:1::/64" || pl.ClusterName != "poolA" {
+	pl := PlacementForVM("pool-a", "n1", nodes)
+	if pl == nil || pl.NodePrefix != "2001:db8:0:1::/64" || pl.ClusterName != "pool-a" {
 		t.Fatalf("unexpected placement: %+v", pl)
 	}
-	if PlacementForVM("poolA", "unknown", nodes) != nil {
+	if PlacementForVM("pool-a", "unknown", nodes) != nil {
 		t.Fatalf("unknown node must yield nil placement")
 	}
 }
