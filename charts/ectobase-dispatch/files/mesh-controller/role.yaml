@@ -45,6 +45,7 @@ rules:
   verbs:
   - get
   - list
+  - update
   - watch
 - apiGroups:
   - compute.ectobase.dev
@@ -73,7 +74,6 @@ rules:
   - firewallpolicies
   - lbpools
   - loadbalancers
-  - networkinterfaces
   - subnets
   - vpcpeerings
   - vpcs
@@ -98,6 +98,7 @@ rules:
   - net.ectobase.dev
   resources:
   - natgateways
+  - networkinterfaces
   verbs:
   - get
   - list

@@ -120,6 +120,13 @@ func main() {
 		log.Fatalf("setup compiledvolumeattachment controller: %v", err)
 	}
 
+	// Backstop for the compiled-twin finalizers: reclaims twins whose source is gone (a
+	// force-removed finalizer, or a leftover from an older layout). APIReader, not the cache —
+	// a lagging cache reporting a live source as missing would delete a twin still in use.
+	if err := mgr.Add(&controllers.OrphanSweeper{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}); err != nil {
+		log.Fatalf("add compiled orphan sweeper: %v", err)
+	}
+
 	if err := (&controllers.VPCPeeringReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
 		log.Fatalf("setup vpcpeering controller: %v", err)
 	}
