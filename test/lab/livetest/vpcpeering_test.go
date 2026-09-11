@@ -95,7 +95,7 @@ func TestVPCPeering(t *testing.T) {
 		_, _ = kubectl(ctx, cfg, "dispatch", "delete", "vpcpeering.net.ectobase.dev", "blue-to-green", "green-to-blue", "--ignore-not-found", "--wait=false")
 		_, _ = kubectl(ctx, cfg, "dispatch", "delete", "firewallpolicy.net.ectobase.dev", "green-deny-all", "green-allow-blue", "--ignore-not-found", "--wait=false")
 		for _, ep := range all {
-			_, _ = kubectl(ctx, cfg, "dispatch", "delete", "container.net.ectobase.dev", containerName(ep.nic), "--ignore-not-found", "--wait=false")
+			_, _ = kubectl(ctx, cfg, "dispatch", "delete", "containers.compute.ectobase.dev", containerName(ep.nic), "--ignore-not-found", "--wait=false")
 			_, _ = kubectl(ctx, cfg, "dispatch", "delete", "networkinterface.net.ectobase.dev", ep.nic, "--ignore-not-found", "--wait=false")
 		}
 		_, _ = kubectl(ctx, cfg, "dispatch", "delete", "vpc.net.ectobase.dev", "peer-blue", "peer-green", "--ignore-not-found", "--wait=false")

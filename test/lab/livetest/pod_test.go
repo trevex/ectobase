@@ -91,7 +91,7 @@ func TestPodOverlayPing(t *testing.T) {
 		ep := ep
 		applyDispatch(t, ctx, cfg, containerFixture(containerName(ep.nic), ep.node.Cluster, nodeK8sName(ep.node), ep.nic))
 		t.Cleanup(func() {
-			_, _ = kubectl(ctx, cfg, "dispatch", "delete", "container.net.ectobase.dev", containerName(ep.nic), "--ignore-not-found", "--wait=false")
+			_, _ = kubectl(ctx, cfg, "dispatch", "delete", "containers.compute.ectobase.dev", containerName(ep.nic), "--ignore-not-found", "--wait=false")
 		})
 	}
 
@@ -167,9 +167,10 @@ func TestPodOverlayPing(t *testing.T) {
 	})
 
 	// 7. Jumbo overlay. Two checks: (a) the overlay iface got a jumbo MTU — flowplane derives it
-	//    from the 9000 underlay uplinks (8944 = 9000 - 56 Geneve encap) and the CNI provisions it,
+	//    from the 9000 underlay uplinks (8920 = 9000 - ENCAP_OVERHEAD_V6 80: 56 Geneve encap plus
+	//    the 24-byte DSR Geneve option, subtracted fleet-wide) and the CNI provisions it,
 	//    so a value >1500 proves jumbo was plumbed end-to-end; (b) an 8000-byte payload actually
-	//    crosses the overlay. At an 8944 iface the ~8028-byte packet is sent unfragmented and encaps
+	//    crosses the overlay. At an 8920 iface the ~8028-byte packet is sent unfragmented and encaps
 	//    to ~8084, which fits the 9000 underlay — if any underlay hop weren't jumbo the encapped
 	//    outer IPv6/UDP/Geneve frame would be dropped (routers don't fragment IPv6). Routes
 	//    converged in step 6.
