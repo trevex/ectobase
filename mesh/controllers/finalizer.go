@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
@@ -34,12 +36,11 @@ const (
 	finalizerCompiledVolumeAttachment = "compiled.ectobase.dev/compiledvolumeattachment"
 )
 
-// Source back-reference stamped on every compiled twin. Annotations rather than labels: an object
-// name may exceed the 63-character label-value limit, and nothing selects on these — the orphan
-// sweep only reads them to resolve a twin back to its source.
+// Source back-reference keys. Defined once in the api module (compiledv1) because the broker reads
+// them too, to mirror each twin back into its SOURCE namespace downstream.
 const (
-	annSourceNamespace = "compiled.ectobase.dev/source-namespace"
-	annSourceName      = "compiled.ectobase.dev/source-name"
+	annSourceNamespace = compiledv1.SourceNamespaceAnnotation
+	annSourceName      = compiledv1.SourceNameAnnotation
 )
 
 // compiledTwinName is the name of a 1:1 twin for a source object. It is namespace-qualified so

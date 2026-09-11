@@ -24,7 +24,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/clientcmd"
@@ -37,6 +36,7 @@ import (
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
+	"github.com/trevex/ectobase/api/validate"
 	"github.com/trevex/ectobase/dispatch/pkg/broker"
 )
 
@@ -160,49 +160,22 @@ func main() {
 		log.Fatalf("build dispatch rest.Config: %v", err)
 	}
 
-	// Manager on the DISPATCH config. Cache is scoped to this cluster's slice via a
-	// field selector on spec.clusterName so the informer only streams the objects
-	// this broker owns — bounding both memory and apiserver watch traffic.
+	// Manager on the DISPATCH config. The cache is scoped to this pool's NAMESPACE rather than
+	// filtered by a spec.clusterName field selector. Both bound what the informer streams, but only
+	// the namespace scope is expressible in RBAC: a cluster-wide LIST/WATCH authorizes against an
+	// empty namespace in its SubjectAccessReview, which a namespaced RoleBinding can never match,
+	// so a field-selector cache would 403 the moment per-pool read RBAC is switched on.
+	poolNamespace := validate.PoolNamespace(clusterName)
 	mgr, err := ctrl.NewManager(dispatchCfg, ctrl.Options{
 		Scheme:  scheme,
 		Metrics: metricsserver.Options{BindAddress: "0"},
 		Cache: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&compiledv1.CompiledNIC{}: {
-					Field: fields.OneTermEqualSelector("spec.clusterName", clusterName),
-				},
-				&compiledv1.CompiledVM{}: {
-					Field: fields.OneTermEqualSelector("spec.clusterName", clusterName),
-				},
-				&compiledv1.CompiledVolumeAttachment{}: {
-					Field: fields.OneTermEqualSelector("spec.clusterName", clusterName),
-				},
-				&compiledv1.CompiledContainer{}: {
-					Field: fields.OneTermEqualSelector("spec.clusterName", clusterName),
-				},
-			},
+			DefaultNamespaces: map[string]cache.Config{poolNamespace: {}},
 		},
 	})
 	if err != nil {
 		log.Fatalf("new manager: %v", err)
 	}
-
-	// The cache's ByObject.Field selector is only a server-side WATCH filter; the broker's
-	// Broker.List(MatchingFields{"spec.clusterName"}) against the cached client additionally needs a
-	// registered field INDEX, else it fails "Index with name field:spec.clusterName does not exist"
-	// and nothing ever syncs downstream. Register the index for each synced type.
-	idxCtx := context.Background()
-	idx := func(obj client.Object, extract func(client.Object) string) {
-		if ierr := mgr.GetFieldIndexer().IndexField(idxCtx, obj, "spec.clusterName", func(o client.Object) []string {
-			return []string{extract(o)}
-		}); ierr != nil {
-			log.Fatalf("index spec.clusterName on %T: %v", obj, ierr)
-		}
-	}
-	idx(&compiledv1.CompiledNIC{}, func(o client.Object) string { return o.(*compiledv1.CompiledNIC).Spec.ClusterName })
-	idx(&compiledv1.CompiledVM{}, func(o client.Object) string { return o.(*compiledv1.CompiledVM).Spec.ClusterName })
-	idx(&compiledv1.CompiledVolumeAttachment{}, func(o client.Object) string { return o.(*compiledv1.CompiledVolumeAttachment).Spec.ClusterName })
-	idx(&compiledv1.CompiledContainer{}, func(o client.Object) string { return o.(*compiledv1.CompiledContainer).Spec.ClusterName })
 
 	// Reconciler: on any CompiledNIC OR CompiledVM event, trigger a full set-reconcile
 	// of BOTH types. A full resync per event is correct here: the syncs are declarative +

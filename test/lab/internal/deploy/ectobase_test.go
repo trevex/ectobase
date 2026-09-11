@@ -46,6 +46,11 @@ func TestClusterPoolsManifestScopesRouteBusPerPool(t *testing.T) {
 	got := clusterPoolsManifest([]ComputeCluster{{Name: "k02"}, {Name: "k03"}})
 
 	for _, want := range []string{
+		// The pool namespace must exist before the compiler writes a twin into it —
+		// NamespaceLifecycle admission rejects writes to a namespace that does not exist.
+		"kind: Namespace",
+		"name: pool-k02",
+		"name: pool-k03",
 		// Pre-created so the grant can omit `create` (resourceNames cannot scope it).
 		"kind: RouteBusIdentity",
 		// Per-pool bootstrap SA — never a single shared one.

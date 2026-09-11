@@ -488,6 +488,15 @@ func clusterPoolsManifest(compute []ComputeCluster) string {
 	var b strings.Builder
 	for _, c := range compute {
 		b.WriteString(fmt.Sprintf(`---
+# This pool's compiled objects live here ON THE DISPATCH — the broker mirrors them back into their
+# source namespace downstream, so no matching namespace is needed on the pool cluster.
+# NamespaceLifecycle admission rejects writes into a namespace that does not exist, so the compiler
+# cannot emit a twin until this is created.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pool-%[1]s
+---
 apiVersion: platform.ectobase.dev/v1alpha1
 kind: ClusterPool
 metadata:

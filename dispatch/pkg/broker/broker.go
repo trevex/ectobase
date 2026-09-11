@@ -16,6 +16,7 @@ import (
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
+	"github.com/trevex/ectobase/api/validate"
 )
 
 // Broker is the per-cluster set-reconcile engine: it makes the downstream compiled
@@ -31,6 +32,30 @@ type Broker struct {
 	ClusterName string
 }
 
+// poolNamespace is where this pool's compiled objects live on the dispatch (and, mirrored, on the
+// pool cluster). Listing by namespace rather than by a spec.clusterName field selector is what
+// lets a namespaced RoleBinding authorize the broker: a cluster-wide LIST carries an empty
+// namespace in its SubjectAccessReview, which no RoleBinding can ever match.
+func (b *Broker) poolNamespace() string { return validate.PoolNamespace(b.ClusterName) }
+
+// downstreamNamespace is where a twin is mirrored on the pool cluster: its SOURCE namespace, not
+// the namespace it occupies on the dispatch.
+//
+// The per-pool namespace exists to make the broker's dispatch-side reads scopeable by RBAC; it is
+// not a layout the rest of the system should have to know about. Mirroring back to the source
+// namespace keeps that detail on the dispatch side, so the CNI (which resolves a pod's CompiledNIC
+// in the pod's own namespace) and the materializers (which create workloads in the twin's
+// namespace) are unaffected — and guest workloads keep running where their owner put them.
+//
+// Falls back to the twin's own namespace when unstamped, which is what a twin compiled before the
+// back-reference existed looks like.
+func downstreamNamespace(twin client.Object) string {
+	if ns := twin.GetAnnotations()[compiledv1.SourceNamespaceAnnotation]; ns != "" {
+		return ns
+	}
+	return twin.GetNamespace()
+}
+
 // key identifies a namespaced CompiledNIC as "namespace/name".
 func key(o *compiledv1.CompiledNIC) string { return o.Namespace + "/" + o.Name }
 
@@ -40,7 +65,7 @@ func key(o *compiledv1.CompiledNIC) string { return o.Namespace + "/" + o.Name }
 func (b *Broker) SyncOnce(ctx context.Context) error {
 	// Fetch desired set from the dispatch, filtered by clusterName field index.
 	desired := &compiledv1.CompiledNICList{}
-	if err := b.Dispatch.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
+	if err := b.Dispatch.List(ctx, desired, client.InNamespace(b.poolNamespace())); err != nil {
 		return fmt.Errorf("list dispatch: %w", err)
 	}
 	want := make(map[string]compiledv1.CompiledNIC, len(desired.Items))
@@ -84,7 +109,7 @@ func (b *Broker) SyncOnce(ctx context.Context) error {
 			continue
 		}
 		local := &compiledv1.CompiledNIC{}
-		local.Namespace = w.Namespace
+		local.Namespace = downstreamNamespace(&w)
 		local.Name = w.Name
 		local.Spec = w.Spec
 		local.Labels = maps.Clone(w.Labels)
@@ -108,7 +133,7 @@ func keyCtr(o *compiledv1.CompiledContainer) string { return o.Namespace + "/" +
 // CompiledVMs bound to ClusterName, dispatch->downstream (create/update/delete).
 func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 	desired := &compiledv1.CompiledVMList{}
-	if err := b.Dispatch.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
+	if err := b.Dispatch.List(ctx, desired, client.InNamespace(b.poolNamespace())); err != nil {
 		return fmt.Errorf("list dispatch vms: %w", err)
 	}
 	want := make(map[string]compiledv1.CompiledVM, len(desired.Items))
@@ -143,7 +168,7 @@ func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 			continue
 		}
 		local := &compiledv1.CompiledVM{}
-		local.Namespace = w.Namespace
+		local.Namespace = downstreamNamespace(&w)
 		local.Name = w.Name
 		local.Spec = w.Spec
 		local.Labels = maps.Clone(w.Labels)
@@ -158,7 +183,7 @@ func (b *Broker) SyncCompiledVMs(ctx context.Context) error {
 // declarative set-reconcile of attachments bound to ClusterName, dispatch->downstream.
 func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 	desired := &compiledv1.CompiledVolumeAttachmentList{}
-	if err := b.Dispatch.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
+	if err := b.Dispatch.List(ctx, desired, client.InNamespace(b.poolNamespace())); err != nil {
 		return fmt.Errorf("list dispatch attachments: %w", err)
 	}
 	want := make(map[string]compiledv1.CompiledVolumeAttachment, len(desired.Items))
@@ -193,7 +218,7 @@ func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 			continue
 		}
 		local := &compiledv1.CompiledVolumeAttachment{}
-		local.Namespace = w.Namespace
+		local.Namespace = downstreamNamespace(&w)
 		local.Name = w.Name
 		local.Spec = w.Spec
 		local.Labels = maps.Clone(w.Labels)
@@ -208,7 +233,7 @@ func (b *Broker) SyncCompiledVolumeAttachments(ctx context.Context) error {
 // set-reconcile of CompiledContainers bound to ClusterName, dispatch->downstream.
 func (b *Broker) SyncCompiledContainers(ctx context.Context) error {
 	desired := &compiledv1.CompiledContainerList{}
-	if err := b.Dispatch.List(ctx, desired, client.MatchingFields{"spec.clusterName": b.ClusterName}); err != nil {
+	if err := b.Dispatch.List(ctx, desired, client.InNamespace(b.poolNamespace())); err != nil {
 		return fmt.Errorf("list dispatch containers: %w", err)
 	}
 	want := make(map[string]compiledv1.CompiledContainer, len(desired.Items))
@@ -243,7 +268,7 @@ func (b *Broker) SyncCompiledContainers(ctx context.Context) error {
 			continue
 		}
 		local := &compiledv1.CompiledContainer{}
-		local.Namespace = w.Namespace
+		local.Namespace = downstreamNamespace(&w)
 		local.Name = w.Name
 		local.Spec = w.Spec
 		local.Labels = maps.Clone(w.Labels)

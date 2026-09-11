@@ -13,7 +13,25 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
+	"github.com/trevex/ectobase/api/validate"
 )
+
+// onDispatch places a fixture where the compiler actually writes it: the per-pool namespace, with
+// the source back-reference stamped on it. Fixtures are authored in their SOURCE namespace (as the
+// workload author sees them) and relocated here, mirroring the real pipeline — the broker is then
+// expected to mirror them BACK to that source namespace downstream, which is what keeps the pool
+// namespace a dispatch-side detail.
+func onDispatch[T client.Object](o T, clusterName string) T {
+	ann := o.GetAnnotations()
+	if ann == nil {
+		ann = map[string]string{}
+	}
+	ann[compiledv1.SourceNamespaceAnnotation] = o.GetNamespace()
+	ann[compiledv1.SourceNameAnnotation] = o.GetName()
+	o.SetAnnotations(ann)
+	o.SetNamespace(validate.PoolNamespace(clusterName))
+	return o
+}
 
 // TestSync_NamespacedCreateUpdateGC drives the set-reconcile over the REAL,
 // namespaced CompiledNIC across TWO namespaces: create, update (drift),
@@ -29,10 +47,8 @@ func TestSync_NamespacedCreateUpdateGC(t *testing.T) {
 			Spec:       compiledv1.CompiledNICSpec{ClusterName: cn},
 		}
 	}
-	idx := func(o client.Object) []string { return []string{o.(*compiledv1.CompiledNIC).Spec.ClusterName} }
 	dispatch := fake.NewClientBuilder().WithScheme(s).
-		WithIndex(&compiledv1.CompiledNIC{}, "spec.clusterName", idx).
-		WithObjects(wl("ns1", "a", "c1"), wl("ns2", "b", "c1"), wl("ns1", "c", "c2")).Build()
+		WithObjects(onDispatch(wl("ns1", "a", "c1"), "c1"), onDispatch(wl("ns2", "b", "c1"), "c1"), onDispatch(wl("ns1", "c", "c2"), "c2")).Build()
 	downstream := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(wl("ns1", "stale", "c1"), wl("ns1", "a", "c1")).Build()
 
@@ -83,10 +99,8 @@ func TestSyncCompiledVMs_NamespacedCreateUpdateGC(t *testing.T) {
 	vm := func(ns, name, cn, img string) *compiledv1.CompiledVM {
 		return &compiledv1.CompiledVM{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: compiledv1.CompiledVMSpec{ClusterName: cn, Image: img}}
 	}
-	idx := func(o client.Object) []string { return []string{o.(*compiledv1.CompiledVM).Spec.ClusterName} }
 	dispatch := fake.NewClientBuilder().WithScheme(s).
-		WithIndex(&compiledv1.CompiledVM{}, "spec.clusterName", idx).
-		WithObjects(vm("ns1", "a", "c1", "fedora"), vm("ns1", "b", "c2", "x")).Build()
+		WithObjects(onDispatch(vm("ns1", "a", "c1", "fedora"), "c1"), onDispatch(vm("ns1", "b", "c2", "x"), "c2")).Build()
 	downstream := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(vm("ns1", "stale", "c1", "old"), vm("ns1", "a", "c1", "OLD")).Build()
 
@@ -127,12 +141,8 @@ func TestSyncCompiledVolumeAttachments_NamespacedCreateUpdateGC(t *testing.T) {
 	att := func(ns, name, cn, img string) *compiledv1.CompiledVolumeAttachment {
 		return &compiledv1.CompiledVolumeAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: compiledv1.CompiledVolumeAttachmentSpec{ClusterName: cn, BootImage: img}}
 	}
-	idx := func(o client.Object) []string {
-		return []string{o.(*compiledv1.CompiledVolumeAttachment).Spec.ClusterName}
-	}
 	dispatch := fake.NewClientBuilder().WithScheme(s).
-		WithIndex(&compiledv1.CompiledVolumeAttachment{}, "spec.clusterName", idx).
-		WithObjects(att("ns1", "a", "c1", "fedora"), att("ns1", "b", "c2", "x")).Build()
+		WithObjects(onDispatch(att("ns1", "a", "c1", "fedora"), "c1"), onDispatch(att("ns1", "b", "c2", "x"), "c2")).Build()
 	downstream := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(att("ns1", "stale", "c1", "old"), att("ns1", "a", "c1", "OLD")).Build()
 
@@ -161,10 +171,8 @@ func TestSyncCompiledContainers_NamespacedCreateUpdateGC(t *testing.T) {
 	ctr := func(ns, name, cn, img string) *compiledv1.CompiledContainer {
 		return &compiledv1.CompiledContainer{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: compiledv1.CompiledContainerSpec{ClusterName: cn, Image: img}}
 	}
-	idx := func(o client.Object) []string { return []string{o.(*compiledv1.CompiledContainer).Spec.ClusterName} }
 	dispatch := fake.NewClientBuilder().WithScheme(s).
-		WithIndex(&compiledv1.CompiledContainer{}, "spec.clusterName", idx).
-		WithObjects(ctr("ns1", "a", "c1", "nginx"), ctr("ns1", "b", "c2", "x")).Build()
+		WithObjects(onDispatch(ctr("ns1", "a", "c1", "nginx"), "c1"), onDispatch(ctr("ns1", "b", "c2", "x"), "c2")).Build()
 	downstream := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(ctr("ns1", "stale", "c1", "old"), ctr("ns1", "a", "c1", "OLD")).Build()
 
@@ -210,12 +218,8 @@ func TestSync_PropagatesLabels(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns1", Name: "vm1-boot", Labels: map[string]string{"workload": "vm1"}},
 		Spec:       compiledv1.CompiledVolumeAttachmentSpec{ClusterName: "c1"},
 	}
-	idx := func(o client.Object) []string {
-		return []string{o.(*compiledv1.CompiledVolumeAttachment).Spec.ClusterName}
-	}
 	dispatch := fake.NewClientBuilder().WithScheme(s).
-		WithIndex(&compiledv1.CompiledVolumeAttachment{}, "spec.clusterName", idx).
-		WithObjects(att).Build()
+		WithObjects(onDispatch(att, "c1")).Build()
 	downstream := fake.NewClientBuilder().WithScheme(s).Build()
 
 	b := &Broker{Dispatch: dispatch, Downstream: downstream, ClusterName: "c1"}
