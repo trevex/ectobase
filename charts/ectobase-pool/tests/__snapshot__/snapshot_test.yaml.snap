@@ -203,6 +203,7 @@ renders (ebpf clab):
           - compilednics
         verbs:
           - get
+          - list
   6: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -2660,6 +2661,7 @@ renders (ebpf hw):
           - compilednics
         verbs:
           - get
+          - list
   6: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -5114,6 +5116,7 @@ renders (tier1 on):
           - compilednics
         verbs:
           - get
+          - list
   6: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -7608,6 +7611,7 @@ renders (tier1 watchdog):
           - compilednics
         verbs:
           - get
+          - list
   6: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -10112,6 +10116,7 @@ renders with vm-materializer enabled:
           - compilednics
         verbs:
           - get
+          - list
   6: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding

@@ -16,3 +16,4 @@ rules:
   - compilednics
   verbs:
   - get
+  - list
