@@ -5,10 +5,14 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // Compiled twins are torn down by a finalizer on their SOURCE object rather than by
@@ -88,4 +92,83 @@ func deleteIfExists(ctx context.Context, c client.Client, obj client.Object) err
 		return err
 	}
 	return nil
+}
+
+// twinsOfSource returns every twin in list stamped with the given source.
+//
+// It searches across ALL namespaces rather than computing where the twin ought to be, because a
+// twin's namespace is derived from its source's PLACEMENT, and placement is frequently
+// unresolvable exactly when we need it: a VM may be deleted before the NIC it owns, at which
+// point recomputing would resolve to the wrong pool and silently leak the twin. The stamped
+// back-reference is the only thing that stays true. This also means twins left in a previous
+// layout are still found and cleaned up.
+//
+// The list is served from the manager's cache (the compilers watch these types), so a
+// cluster-wide list here is an in-memory scan, not an API round trip.
+func twinsOfSource(ctx context.Context, c client.Client, list client.ObjectList, srcNamespace, srcName string) ([]client.Object, error) {
+	if err := c.List(ctx, list); err != nil {
+		return nil, fmt.Errorf("list twins: %w", err)
+	}
+	items, err := meta.ExtractList(list)
+	if err != nil {
+		return nil, fmt.Errorf("extract twins: %w", err)
+	}
+	var out []client.Object
+	for _, item := range items {
+		twin, ok := item.(client.Object)
+		if !ok {
+			continue
+		}
+		ns, name, stamped := sourceOf(twin)
+		if stamped && ns == srcNamespace && name == srcName {
+			out = append(out, twin)
+		}
+	}
+	return out, nil
+}
+
+// deleteTwinsOfSource removes every twin stamped with the given source (teardown).
+func deleteTwinsOfSource(ctx context.Context, c client.Client, list client.ObjectList, srcNamespace, srcName string) error {
+	twins, err := twinsOfSource(ctx, c, list, srcNamespace, srcName)
+	if err != nil {
+		return err
+	}
+	for _, twin := range twins {
+		if err := deleteIfExists(ctx, c, twin); err != nil {
+			return fmt.Errorf("delete twin %s/%s: %w", twin.GetNamespace(), twin.GetName(), err)
+		}
+	}
+	return nil
+}
+
+// pruneTwinsOfSource deletes twins of this source that are not in keep. It covers two cases with
+// one mechanism: twins for inputs that were removed (e.g. a dropped VolumeRef), and twins stranded
+// in a namespace the compiler no longer writes to after a layout change.
+func pruneTwinsOfSource(ctx context.Context, c client.Client, list client.ObjectList, srcNamespace, srcName string, keep map[types.NamespacedName]bool) error {
+	twins, err := twinsOfSource(ctx, c, list, srcNamespace, srcName)
+	if err != nil {
+		return err
+	}
+	for _, twin := range twins {
+		if keep[types.NamespacedName{Namespace: twin.GetNamespace(), Name: twin.GetName()}] {
+			continue
+		}
+		if err := deleteIfExists(ctx, c, twin); err != nil {
+			return fmt.Errorf("prune twin %s/%s: %w", twin.GetNamespace(), twin.GetName(), err)
+		}
+	}
+	return nil
+}
+
+// requestForSource maps a compiled twin back to the source that produced it.
+//
+// This replaces .Owns(): EnqueueRequestForOwner derives the request from the DEPENDENT's
+// namespace, so once a twin lives in a pool namespace it would enqueue a source key that does not
+// exist. The stamped back-reference survives the move.
+func requestForSource(_ context.Context, obj client.Object) []reconcile.Request {
+	ns, name, ok := sourceOf(obj)
+	if !ok {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: ns, Name: name}}}
 }

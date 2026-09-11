@@ -27,14 +27,16 @@ func TestCompileVolumeAttachments(t *testing.T) {
 	for _, a := range atts {
 		byName[a.Name] = a
 	}
-	boot := byName["vm1-boot"]
-	if boot.Namespace != "ns" || boot.Labels["workload"] != "vm1" || boot.Spec.ClusterName != "c1" {
+	// Namespace-qualified: "<vm.Namespace>-<vm.Name>-<ref.Name>", so two same-named VMs in
+	// different tenant namespaces cannot collide once they share one pool namespace.
+	boot := byName["ns-vm1-boot"]
+	if boot.Namespace != "pool-c1" || boot.Labels["workload"] != "vm1" || boot.Spec.ClusterName != "c1" {
 		t.Fatalf("boot meta: %+v", boot)
 	}
 	if !boot.Spec.Boot || boot.Spec.BootImage != "quay.io/containerdisks/fedora:41" || boot.Spec.StorageClass != "ceph-rbd" || boot.Spec.Size.Cmp(resource.MustParse("10Gi")) != 0 {
 		t.Fatalf("boot spec: %+v", boot.Spec)
 	}
-	data := byName["vm1-data"]
+	data := byName["ns-vm1-data"]
 	if data.Spec.Boot || data.Spec.BootImage != "" || data.Spec.Size.Cmp(resource.MustParse("5Gi")) != 0 {
 		t.Fatalf("data spec: %+v", data.Spec)
 	}

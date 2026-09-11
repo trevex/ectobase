@@ -10,6 +10,7 @@ import (
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
+	"github.com/trevex/ectobase/api/validate"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,7 +18,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -38,8 +38,13 @@ func CompileVolumeAttachments(vm *computev1.VirtualMachine, volumes []storagev1.
 			continue // volume not found yet; the Volume watch re-triggers
 		}
 		att := compiledv1.CompiledVolumeAttachment{
-			TypeMeta:   metav1.TypeMeta{APIVersion: "compiled.ectobase.dev/v1alpha1", Kind: "CompiledVolumeAttachment"},
-			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%s", vm.Name, ref.Name), Namespace: vm.Namespace},
+			TypeMeta: metav1.TypeMeta{APIVersion: "compiled.ectobase.dev/v1alpha1", Kind: "CompiledVolumeAttachment"},
+			// Namespace-qualified: two VMs of the same name in different tenant namespaces would
+			// otherwise collide on this name once they share one pool namespace.
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      compiledTwinName(vm.Namespace, vm.Name) + "-" + ref.Name,
+				Namespace: validate.PoolNamespace(placement.ClusterName),
+			},
 			Spec: compiledv1.CompiledVolumeAttachmentSpec{
 				ClusterName:  placement.ClusterName,
 				Size:         vol.Spec.Size,
@@ -65,24 +70,21 @@ func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req 
 	if err := r.Client.Get(ctx, req.NamespacedName, &vm); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	// 1:N teardown: delete every attachment this VM owns, keyed by the same workload label the
-	// steady-state reconcile lists on. Its own finalizer, not CompiledVMReconciler's — both
-	// source from VirtualMachine, and a shared one would let the VM vanish after whichever
-	// reconciler ran first released it.
+	// 1:N teardown: delete every attachment stamped with this VM. Its own finalizer, not
+	// CompiledVMReconciler's — both source from VirtualMachine, and a shared one would let the VM
+	// vanish after whichever reconciler ran first released it.
 	if !vm.DeletionTimestamp.IsZero() {
-		var have compiledv1.CompiledVolumeAttachmentList
-		if err := r.Client.List(ctx, &have, client.InNamespace(vm.Namespace), client.MatchingLabels{"workload": vm.Name}); err != nil {
-			return ctrl.Result{}, fmt.Errorf("list attachments for teardown: %w", err)
-		}
-		for i := range have.Items {
-			if err := deleteIfExists(ctx, r.Client, &have.Items[i]); err != nil {
-				return ctrl.Result{}, fmt.Errorf("teardown attachment %s: %w", have.Items[i].Name, err)
-			}
+		if err := deleteTwinsOfSource(ctx, r.Client, &compiledv1.CompiledVolumeAttachmentList{}, vm.Namespace, vm.Name); err != nil {
+			return ctrl.Result{}, fmt.Errorf("teardown attachments: %w", err)
 		}
 		return ctrl.Result{}, releaseFinalizer(ctx, r.Client, &vm, finalizerCompiledVolumeAttachment)
 	}
 	if err := ensureFinalizer(ctx, r.Client, &vm, finalizerCompiledVolumeAttachment); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure compiledvolumeattachment finalizer: %w", err)
+	}
+	// No pool, no namespace to compile into — and nothing downstream could consume the twins.
+	if vm.Spec.ClusterName == "" {
+		return ctrl.Result{}, nil
 	}
 	var volList storagev1.VolumeList
 	if err := r.Client.List(ctx, &volList, client.InNamespace(vm.Namespace)); err != nil {
@@ -90,22 +92,32 @@ func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req 
 	}
 	placement := Placement{ClusterName: vm.Spec.ClusterName, WorkloadID: vm.Name}
 	desired := CompileVolumeAttachments(&vm, volList.Items, placement)
-	want := map[string]compiledv1.CompiledVolumeAttachment{}
+	want := map[types.NamespacedName]compiledv1.CompiledVolumeAttachment{}
+	keep := map[types.NamespacedName]bool{}
 	for _, a := range desired {
-		want[a.Name] = a
+		key := types.NamespacedName{Namespace: a.Namespace, Name: a.Name}
+		want[key] = a
+		keep[key] = true
 	}
-	var have compiledv1.CompiledVolumeAttachmentList
-	if err := r.Client.List(ctx, &have, client.InNamespace(vm.Namespace), client.MatchingLabels{"workload": vm.Name}); err != nil {
+	// Found by stamp rather than by namespace+label: the twins live in the pool namespace now, and
+	// this also catches any stranded in a namespace the compiler no longer writes to.
+	haveTwins, err := twinsOfSource(ctx, r.Client, &compiledv1.CompiledVolumeAttachmentList{}, vm.Namespace, vm.Name)
+	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("list attachments: %w", err)
 	}
-	haveNames := map[string]bool{}
-	for i := range have.Items {
-		cur := &have.Items[i]
-		haveNames[cur.Name] = true
-		w, ok := want[cur.Name]
+	haveKeys := map[types.NamespacedName]bool{}
+	for _, obj := range haveTwins {
+		cur, ok := obj.(*compiledv1.CompiledVolumeAttachment)
 		if !ok {
+			continue
+		}
+		curKey := types.NamespacedName{Namespace: cur.Namespace, Name: cur.Name}
+		haveKeys[curKey] = true
+		w, ok := want[curKey]
+		if !ok {
+			// A VolumeRef was removed, or the twin is in a namespace we no longer write to.
 			if err := r.Client.Delete(ctx, cur); err != nil && !apierrors.IsNotFound(err) {
-				return ctrl.Result{}, fmt.Errorf("gc attachment %s: %w", cur.Name, err)
+				return ctrl.Result{}, fmt.Errorf("gc attachment %s/%s: %w", cur.Namespace, cur.Name, err)
 			}
 			continue
 		}
@@ -125,17 +137,14 @@ func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req 
 			}
 		}
 	}
-	for name, w := range want {
-		if haveNames[name] {
+	for key, w := range want {
+		if haveKeys[key] {
 			continue
 		}
 		att := w
-		if err := controllerutil.SetControllerReference(&vm, &att, r.Client.Scheme()); err != nil {
-			return ctrl.Result{}, err
-		}
 		stampSource(&att, vm.Namespace, vm.Name)
 		if err := r.Client.Create(ctx, &att); err != nil {
-			return ctrl.Result{}, fmt.Errorf("create attachment %s: %w", name, err)
+			return ctrl.Result{}, fmt.Errorf("create attachment %s/%s: %w", key.Namespace, key.Name, err)
 		}
 	}
 	return ctrl.Result{}, nil
@@ -149,7 +158,9 @@ func (r *CompiledVolumeAttachmentReconciler) SetupWithManager(mgr ctrl.Manager) 
 		// "virtualmachine" otherwise -> duplicate-controller-name panic at manager start).
 		Named("compiledvolumeattachment").
 		For(&computev1.VirtualMachine{}).
-		Owns(&compiledv1.CompiledVolumeAttachment{}).
+		// Not Owns(): the twin lives in the pool namespace, and EnqueueRequestForOwner derives the
+		// request from the DEPENDENT's namespace, which would enqueue a VM key that does not exist.
+		Watches(&compiledv1.CompiledVolumeAttachment{}, handler.EnqueueRequestsFromMapFunc(requestForSource)).
 		// Only Volume spec changes (Size/StorageClass/BootImage) affect the compiled
 		// attachment; GenerationChangedPredicate skips re-compiling on Volume status writes.
 		Watches(&storagev1.Volume{}, handler.EnqueueRequestsFromMapFunc(r.vmsForVolume),

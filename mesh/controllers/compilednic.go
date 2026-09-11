@@ -11,6 +11,7 @@ import (
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	"github.com/trevex/ectobase/api/validate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -18,7 +19,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -108,7 +108,7 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      compiledTwinName(nic.Namespace, nic.Name),
-			Namespace: nic.Namespace,
+			Namespace: validate.PoolNamespace(placement.ClusterName),
 		},
 		Spec: compiledv1.CompiledNICSpec{
 			VNI:        vni,
@@ -322,11 +322,7 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// out of Allocated (keep-last-good) still has one, and the gate returns early — so gating
 	// first would leak the twin on delete.
 	if !nic.DeletionTimestamp.IsZero() {
-		twin := &compiledv1.CompiledNIC{ObjectMeta: metav1.ObjectMeta{
-			Namespace: nic.Namespace,
-			Name:      compiledTwinName(nic.Namespace, nic.Name),
-		}}
-		if err := deleteIfExists(ctx, r.Client, twin); err != nil {
+		if err := deleteTwinsOfSource(ctx, r.Client, &compiledv1.CompiledNICList{}, nic.Namespace, nic.Name); err != nil {
 			return ctrl.Result{}, fmt.Errorf("teardown compilednic: %w", err)
 		}
 		return ctrl.Result{}, releaseFinalizer(ctx, r.Client, &nic, finalizerCompiledNIC)
@@ -390,15 +386,18 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, fmt.Errorf("list virtualmachines: %w", err)
 	}
 	placement := resolvePlacement(&nic, containers.Items, vms.Items, r.DefaultClusterName)
+	// Without a pool there is no namespace to compile into, and nothing downstream could consume
+	// the twin anyway (the broker only ever reads its own pool's). Wait for placement instead of
+	// emitting an undeliverable object into a "pool-" namespace that cannot exist.
+	if placement.ClusterName == "" {
+		return ctrl.Result{}, nil
+	}
 	compiled := Compile(&nic, vni, policies.Items, lbs.Items, peerImports, natBySource, placement)
 	key := types.NamespacedName{Namespace: compiled.Namespace, Name: compiled.Name}
 	var existing compiledv1.CompiledNIC
 	err = r.Client.Get(ctx, key, &existing)
 	switch {
 	case apierrors.IsNotFound(err):
-		if err := controllerutil.SetControllerReference(&nic, &compiled, r.Client.Scheme()); err != nil {
-			return ctrl.Result{}, err
-		}
 		stampSource(&compiled, nic.Namespace, nic.Name)
 		if err := r.Client.Create(ctx, &compiled); err != nil {
 			return ctrl.Result{}, fmt.Errorf("create compilednic: %w", err)
@@ -420,16 +419,25 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, fmt.Errorf("update compilednic: %w", err)
 		}
 	}
+	// Drop any other twin still stamped with this NIC — one left in a namespace the compiler no
+	// longer writes to (a re-bound pool, or an earlier layout). Without this the stale copy stays
+	// visible to whoever still reads that namespace.
+	if err := pruneTwinsOfSource(ctx, r.Client, &compiledv1.CompiledNICList{}, nic.Namespace, nic.Name,
+		map[types.NamespacedName]bool{key: true}); err != nil {
+		return ctrl.Result{}, fmt.Errorf("prune stale compilednics: %w", err)
+	}
 	return ctrl.Result{}, nil
 }
 
 // SetupWithManager registers the CompiledNICReconciler with the controller-runtime Manager.
-// It watches NetworkInterfaces directly (Owns their CompiledNICs) and re-enqueues NICs
-// whenever a matching FirewallPolicy changes.
+// It watches NetworkInterfaces directly (and their CompiledNICs, mapped back via the stamped
+// source reference) and re-enqueues NICs whenever a matching FirewallPolicy changes.
 func (r *CompiledNICReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&netv1.NetworkInterface{}).
-		Owns(&compiledv1.CompiledNIC{}).
+		// Not Owns(): the twin lives in the pool namespace, and EnqueueRequestForOwner derives the
+		// request from the DEPENDENT's namespace, which would enqueue a NIC key that does not exist.
+		Watches(&compiledv1.CompiledNIC{}, handler.EnqueueRequestsFromMapFunc(requestForSource)).
 		Watches(&netv1.FirewallPolicy{}, handler.EnqueueRequestsFromMapFunc(r.nicsForFirewallPolicy),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&netv1.VPCPeering{}, handler.EnqueueRequestsFromMapFunc(r.nicsForPeering)).

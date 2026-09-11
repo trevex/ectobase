@@ -23,7 +23,7 @@ func TestCompileVM(t *testing.T) {
 
 	cvm := CompileVM(vm, nics, Placement{ClusterName: "c1", WorkloadID: "vm1"}, "flowplane-overlay")
 
-	if cvm.Name != "ns-vm1" || cvm.Namespace != "ns" {
+	if cvm.Name != "ns-vm1" || cvm.Namespace != "pool-c1" {
 		t.Fatalf("name/ns: %s/%s", cvm.Namespace, cvm.Name)
 	}
 	if cvm.Spec.ClusterName != "c1" {

@@ -21,6 +21,12 @@ const clusterNameNamespacePrefix = "pool-"
 // "pool-" + ClusterName is itself always a legal namespace.
 var maxClusterNameLen = validation.DNS1123LabelMaxLength - len(clusterNameNamespacePrefix)
 
+// PoolNamespace is the namespace holding a pool's compiled objects, on the dispatch and mirrored
+// on the pool cluster. It lives next to ClusterName deliberately: the validator's length bound is
+// derived from this prefix, so defining the two apart is how they drift into a name that
+// validates but yields an illegal namespace.
+func PoolNamespace(clusterName string) string { return clusterNameNamespacePrefix + clusterName }
+
 // ClusterName validates a pool identifier. The value is not free-form: each pool's compiled
 // objects are stored in a per-pool `pool-<clusterName>` namespace on the dispatch and mirrored
 // into the same namespace on the pool cluster, and per-pool RBAC is bound to it. So the name has

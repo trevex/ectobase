@@ -11,13 +11,13 @@ import (
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	"github.com/trevex/ectobase/api/validate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -42,7 +42,7 @@ func CompileContainer(ctr *computev1.Container, nics []netv1.NetworkInterface, n
 	}
 	compiled := compiledv1.CompiledContainer{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "compiled.ectobase.dev/v1alpha1", Kind: "CompiledContainer"},
-		ObjectMeta: metav1.ObjectMeta{Name: compiledTwinName(ctr.Namespace, ctr.Name), Namespace: ctr.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: compiledTwinName(ctr.Namespace, ctr.Name), Namespace: validate.PoolNamespace(ctr.Spec.ClusterName)},
 		Spec: compiledv1.CompiledContainerSpec{
 			ClusterName:   ctr.Spec.ClusterName,
 			NodeName:      ctr.Spec.NodeName,
@@ -73,17 +73,17 @@ func (r *CompiledContainerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !ctr.DeletionTimestamp.IsZero() {
-		twin := &compiledv1.CompiledContainer{ObjectMeta: metav1.ObjectMeta{
-			Namespace: ctr.Namespace,
-			Name:      compiledTwinName(ctr.Namespace, ctr.Name),
-		}}
-		if err := deleteIfExists(ctx, r.Client, twin); err != nil {
+		if err := deleteTwinsOfSource(ctx, r.Client, &compiledv1.CompiledContainerList{}, ctr.Namespace, ctr.Name); err != nil {
 			return ctrl.Result{}, fmt.Errorf("teardown compiledcontainer: %w", err)
 		}
 		return ctrl.Result{}, releaseFinalizer(ctx, r.Client, &ctr, finalizerCompiledContainer)
 	}
 	if err := ensureFinalizer(ctx, r.Client, &ctr, finalizerCompiledContainer); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure compiledcontainer finalizer: %w", err)
+	}
+	// No pool, no namespace to compile into — and nothing downstream could consume the twin.
+	if ctr.Spec.ClusterName == "" {
+		return ctrl.Result{}, nil
 	}
 	var nicList netv1.NetworkInterfaceList
 	if err := r.Client.List(ctx, &nicList, client.InNamespace(ctr.Namespace)); err != nil {
@@ -95,9 +95,6 @@ func (r *CompiledContainerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	err := r.Client.Get(ctx, key, &existing)
 	switch {
 	case apierrors.IsNotFound(err):
-		if err := controllerutil.SetControllerReference(&ctr, &compiled, r.Client.Scheme()); err != nil {
-			return ctrl.Result{}, err
-		}
 		stampSource(&compiled, ctr.Namespace, ctr.Name)
 		if err := r.Client.Create(ctx, &compiled); err != nil {
 			return ctrl.Result{}, fmt.Errorf("create compiledcontainer: %w", err)
@@ -117,6 +114,12 @@ func (r *CompiledContainerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			return ctrl.Result{}, fmt.Errorf("update compiledcontainer: %w", err)
 		}
 	}
+	// Drop any other twin still stamped with this source — one left in a namespace the compiler no
+	// longer writes to (a re-bound pool, or an earlier layout).
+	if err := pruneTwinsOfSource(ctx, r.Client, &compiledv1.CompiledContainerList{}, ctr.Namespace, ctr.Name,
+		map[types.NamespacedName]bool{key: true}); err != nil {
+		return ctrl.Result{}, fmt.Errorf("prune stale compiledcontainers: %w", err)
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -126,7 +129,9 @@ func (r *CompiledContainerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("compiledcontainer").
 		For(&computev1.Container{}).
-		Owns(&compiledv1.CompiledContainer{}).
+		// Not Owns(): the twin lives in the pool namespace, and EnqueueRequestForOwner derives the
+		// request from the DEPENDENT's namespace, which would enqueue a source key that does not exist.
+		Watches(&compiledv1.CompiledContainer{}, handler.EnqueueRequestsFromMapFunc(requestForSource)).
 		// MAC lives in NetworkInterface.spec, so a MAC change bumps generation;
 		// GenerationChangedPredicate avoids recompiling every Container on unrelated NIC status writes
 		// (e.g. port allocation).

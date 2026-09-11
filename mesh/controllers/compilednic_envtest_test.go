@@ -14,6 +14,7 @@ import (
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -45,6 +46,9 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 	if err := computev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
 
 	env := &envtest.Environment{
 		CRDDirectoryPaths: []string{
@@ -74,7 +78,7 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	if err := (&CompiledNICReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+	if err := (&CompiledNICReconciler{Client: mgr.GetClient(), DefaultClusterName: "c1"}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("setup reconciler: %v", err)
 	}
 
@@ -90,6 +94,9 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("direct client: %v", err)
 	}
+	// The apiserver enforces NamespaceLifecycle, so the twin's per-pool namespace must exist
+	// before the compiler can create anything in it.
+	mustCreate(ctx, t, direct, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "pool-c1"}})
 
 	t.Run("Policied", func(t *testing.T) {
 		// Create a NIC with labels that the policy will select.
@@ -118,7 +125,7 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 
 		// Poll until the CompiledNIC appears and has the expected firewall rules.
 		eventually(t, 15*time.Second, func() error {
-			return checkCompiledNIC(ctx, direct, "default", "default-nic-frontend", func(c *compiledv1.CompiledNIC) error {
+			return checkCompiledNIC(ctx, direct, "pool-c1", "default-nic-frontend", func(c *compiledv1.CompiledNIC) error {
 				// Ingress should have exactly the policy rule (no allow-all, since the policy governs it).
 				if len(c.Spec.Firewall.Ingress) != 1 {
 					return fmt.Errorf("ingress rules = %d, want 1", len(c.Spec.Firewall.Ingress))
@@ -148,7 +155,7 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 		markNICAllocated(ctx, t, direct, client.ObjectKey{Namespace: "default", Name: "nic-backend"}, "10.0.0.20")
 
 		eventually(t, 15*time.Second, func() error {
-			return checkCompiledNIC(ctx, direct, "default", "default-nic-backend", func(c *compiledv1.CompiledNIC) error {
+			return checkCompiledNIC(ctx, direct, "pool-c1", "default-nic-backend", func(c *compiledv1.CompiledNIC) error {
 				if len(c.Spec.Firewall.Ingress) != 2 || !hasAllowCIDR(c.Spec.Firewall.Ingress, "0.0.0.0/0") || !hasAllowCIDR(c.Spec.Firewall.Ingress, "::/0") {
 					return fmt.Errorf("ingress = %+v, want v4+v6 allow-all", c.Spec.Firewall.Ingress)
 				}
@@ -198,6 +205,9 @@ func TestCompiledNICControllerEnvtest_DeletedPolicyClearsRule(t *testing.T) {
 	if err := computev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
 
 	env := &envtest.Environment{
 		CRDDirectoryPaths: []string{
@@ -223,7 +233,7 @@ func TestCompiledNICControllerEnvtest_DeletedPolicyClearsRule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	if err := (&CompiledNICReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+	if err := (&CompiledNICReconciler{Client: mgr.GetClient(), DefaultClusterName: "c1"}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("setup reconciler: %v", err)
 	}
 
@@ -239,6 +249,9 @@ func TestCompiledNICControllerEnvtest_DeletedPolicyClearsRule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("direct client: %v", err)
 	}
+	// The apiserver enforces NamespaceLifecycle, so the twin's per-pool namespace must exist
+	// before the compiler can create anything in it.
+	mustCreate(ctx, t, direct, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "pool-c1"}})
 
 	// A NIC labeled {side: green}, scheduled to a node, with an overlay IP.
 	nic := &netv1.NetworkInterface{}
@@ -266,7 +279,7 @@ func TestCompiledNICControllerEnvtest_DeletedPolicyClearsRule(t *testing.T) {
 
 	// The CompiledNIC's Ingress must contain the Deny rule.
 	eventually(t, 15*time.Second, func() error {
-		return checkCompiledNIC(ctx, direct, "default", "default-nic-green", func(c *compiledv1.CompiledNIC) error {
+		return checkCompiledNIC(ctx, direct, "pool-c1", "default-nic-green", func(c *compiledv1.CompiledNIC) error {
 			if !hasFwRule(c.Spec.Firewall.Ingress, "0.0.0.0/0", "Deny") {
 				return fmt.Errorf("ingress = %+v, want a {0.0.0.0/0 Deny} rule", c.Spec.Firewall.Ingress)
 			}
@@ -283,7 +296,7 @@ func TestCompiledNICControllerEnvtest_DeletedPolicyClearsRule(t *testing.T) {
 	// Assert on the ABSENCE of any Deny (the property under test), and — as a positive sanity check
 	// — that the allow-all default has materialized for both families.
 	eventually(t, 15*time.Second, func() error {
-		return checkCompiledNIC(ctx, direct, "default", "default-nic-green", func(c *compiledv1.CompiledNIC) error {
+		return checkCompiledNIC(ctx, direct, "pool-c1", "default-nic-green", func(c *compiledv1.CompiledNIC) error {
 			for _, r := range c.Spec.Firewall.Ingress {
 				if r.Action == "Deny" {
 					return fmt.Errorf("stale Deny rule persists after policy delete: ingress = %+v", c.Spec.Firewall.Ingress)

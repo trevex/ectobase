@@ -403,14 +403,14 @@ func TestReconcile_NoWriteWhenUnchanged(t *testing.T) {
 		Status:     netv1.NetworkInterfaceStatus{State: "Allocated", AllocatedIPs: []string{"10.0.0.30"}, VNI: 100, UnderlayRoute: "2001:db8::dd"},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(nic).Build()
-	r := &CompiledNICReconciler{Client: cl}
+	r := &CompiledNICReconciler{Client: cl, DefaultClusterName: "c1"}
 	req := reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "web-0"}}
 
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
 	var first compiledv1.CompiledNIC
-	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "default-web-0"}, &first); err != nil {
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "pool-c1", Name: "default-web-0"}, &first); err != nil {
 		t.Fatal(err)
 	}
 	rv1 := first.ResourceVersion
@@ -420,7 +420,7 @@ func TestReconcile_NoWriteWhenUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	var second compiledv1.CompiledNIC
-	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "default-web-0"}, &second); err != nil {
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "pool-c1", Name: "default-web-0"}, &second); err != nil {
 		t.Fatal(err)
 	}
 	if second.ResourceVersion != rv1 {

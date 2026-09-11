@@ -3,7 +3,7 @@
   "apiVersion": "compiled.ectobase.dev/v1alpha1",
   "metadata": {
     "name": "default-nic-frontend",
-    "namespace": "default"
+    "namespace": "pool-test"
   },
   "spec": {
     "clusterName": "test",

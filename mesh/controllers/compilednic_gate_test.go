@@ -42,7 +42,9 @@ func TestCompileGatedUntilAllocated(t *testing.T) {
 	ctx := context.Background()
 	key := client.ObjectKey{Namespace: "default", Name: "nic"}
 	// Compile names the CompiledNIC "<namespace>-<name>"; the reconcile request keys on the NIC.
-	compiledKey := client.ObjectKey{Namespace: "default", Name: "default-nic"}
+	// The twin lives in the per-pool namespace derived from DefaultClusterName ("pool-a" here),
+	// i.e. "pool-pool-a" (PoolNamespace = "pool-" + clusterName).
+	compiledKey := client.ObjectKey{Namespace: "pool-pool-a", Name: "default-nic"}
 
 	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
 		t.Fatalf("reconcile (ungated): %v", err)
@@ -115,7 +117,7 @@ func TestCompileUsesAllocatedVIP(t *testing.T) {
 		t.Fatal(err)
 	}
 	var c compiledv1.CompiledNIC
-	if err := cl.Get(ctx, client.ObjectKey{Namespace: "default", Name: "default-nic"}, &c); err != nil {
+	if err := cl.Get(ctx, client.ObjectKey{Namespace: "pool-pool-a", Name: "default-nic"}, &c); err != nil {
 		t.Fatal(err)
 	}
 	if !compiledMembershipHasVIP(c, "198.51.100.7") {

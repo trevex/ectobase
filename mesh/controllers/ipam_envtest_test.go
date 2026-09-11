@@ -14,6 +14,7 @@ import (
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -40,6 +41,9 @@ func TestIPAMEndToEndEnvtest(t *testing.T) {
 	}
 	// CompiledNICReconciler watches computev1 VirtualMachine/Container for placement.
 	if err := computev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 	env := &envtest.Environment{
@@ -88,6 +92,10 @@ func TestIPAMEndToEndEnvtest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The apiserver enforces NamespaceLifecycle, so the twin's per-pool namespace (PoolNamespace
+	// of DefaultClusterName "pool-a", i.e. "pool-pool-a") must exist before the compiler can
+	// create anything in it.
+	mustCreate(ctx, t, direct, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "pool-pool-a"}})
 
 	mustCreate(ctx, t, direct, &netv1.VPC{ObjectMeta: metav1.ObjectMeta{Name: "blue", Namespace: "default"}})
 	// Subnet: create with spec only — the real SubnetReconciler drives Status Ready (envtest ignores
@@ -103,7 +111,7 @@ func TestIPAMEndToEndEnvtest(t *testing.T) {
 
 	eventually(t, 40*time.Second, func() error {
 		var c compiledv1.CompiledNIC
-		if err := direct.Get(ctx, client.ObjectKey{Namespace: "default", Name: "default-nic"}, &c); err != nil {
+		if err := direct.Get(ctx, client.ObjectKey{Namespace: "pool-pool-a", Name: "default-nic"}, &c); err != nil {
 			return err
 		}
 		if len(c.Spec.OverlayIPs) != 1 {

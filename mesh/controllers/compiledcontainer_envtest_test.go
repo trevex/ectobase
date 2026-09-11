@@ -14,6 +14,8 @@ import (
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -45,6 +47,9 @@ func TestCompiledContainerControllerEnvtest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := computev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 
@@ -90,6 +95,9 @@ func TestCompiledContainerControllerEnvtest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("direct client: %v", err)
 	}
+	// The apiserver enforces NamespaceLifecycle, so the twins' per-pool namespace (derived from
+	// the Container's clusterName, "c1") must exist before the compilers can create anything in it.
+	mustCreate(ctx, t, direct, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "pool-c1"}})
 
 	// A Ready VPC so the NIC's VNI resolves (status.vni is a subresource → set separately).
 	vpc := &netv1.VPC{}
@@ -125,7 +133,7 @@ func TestCompiledContainerControllerEnvtest(t *testing.T) {
 	// on CompiledNIC — the agent self-locates via the dataplane's ListInterfaces instead).
 	eventually(t, 15*time.Second, func() error {
 		var c compiledv1.CompiledNIC
-		if err := direct.Get(ctx, client.ObjectKey{Namespace: "default", Name: "default-nic-a"}, &c); err != nil {
+		if err := direct.Get(ctx, client.ObjectKey{Namespace: "pool-c1", Name: "default-nic-a"}, &c); err != nil {
 			return err
 		}
 		if c.Spec.ClusterName != "c1" {
@@ -137,7 +145,7 @@ func TestCompiledContainerControllerEnvtest(t *testing.T) {
 	// The CompiledContainer is emitted with placement + one resolved interface.
 	eventually(t, 15*time.Second, func() error {
 		var cc compiledv1.CompiledContainer
-		if err := direct.Get(ctx, client.ObjectKey{Namespace: "default", Name: "default-ctr1"}, &cc); err != nil {
+		if err := direct.Get(ctx, client.ObjectKey{Namespace: "pool-c1", Name: "default-ctr1"}, &cc); err != nil {
 			return err
 		}
 		if cc.Spec.ClusterName != "c1" {

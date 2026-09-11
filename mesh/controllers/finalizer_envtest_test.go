@@ -15,8 +15,10 @@ import (
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -39,7 +41,7 @@ func TestCompiledTeardownFinalizerEnvtest(t *testing.T) {
 
 	scheme := runtime.NewScheme()
 	for _, add := range []func(*runtime.Scheme) error{
-		netv1.AddToScheme, compiledv1.AddToScheme, computev1.AddToScheme, storagev1.AddToScheme,
+		netv1.AddToScheme, compiledv1.AddToScheme, computev1.AddToScheme, storagev1.AddToScheme, corev1.AddToScheme,
 	} {
 		if err := add(scheme); err != nil {
 			t.Fatal(err)
@@ -67,7 +69,7 @@ func TestCompiledTeardownFinalizerEnvtest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	if err := (&CompiledNICReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+	if err := (&CompiledNICReconciler{Client: mgr.GetClient(), DefaultClusterName: "c1"}).SetupWithManager(mgr); err != nil {
 		t.Fatalf("setup nic reconciler: %v", err)
 	}
 	// Both of these root on VirtualMachine — the dual-finalizer case below depends on it.
@@ -88,6 +90,10 @@ func TestCompiledTeardownFinalizerEnvtest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("direct client: %v", err)
 	}
+	// All three subtests place into cluster "c1" (via DefaultClusterName or vm.Spec.ClusterName),
+	// so the twins all land in this one per-pool namespace. The apiserver enforces
+	// NamespaceLifecycle, so it must exist before any compiler can create a twin in it.
+	mustCreate(ctx, t, direct, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "pool-c1"}})
 
 	t.Run("NICTeardown", func(t *testing.T) {
 		nic := &netv1.NetworkInterface{}
@@ -97,7 +103,7 @@ func TestCompiledTeardownFinalizerEnvtest(t *testing.T) {
 		mustCreate(ctx, t, direct, nic)
 		markNICAllocated(ctx, t, direct, client.ObjectKey{Namespace: "default", Name: "nic-teardown"}, "10.0.0.20")
 
-		twin := client.ObjectKey{Namespace: "default", Name: "default-nic-teardown"}
+		twin := client.ObjectKey{Namespace: "pool-c1", Name: "default-nic-teardown"}
 		mustExistEventually(ctx, t, direct, twin, &compiledv1.CompiledNIC{})
 
 		mustDelete(ctx, t, direct, nic)
@@ -120,7 +126,7 @@ func TestCompiledTeardownFinalizerEnvtest(t *testing.T) {
 		key := client.ObjectKey{Namespace: "default", Name: "nic-regressed"}
 		markNICAllocated(ctx, t, direct, key, "10.0.0.21")
 
-		twin := client.ObjectKey{Namespace: "default", Name: "default-nic-regressed"}
+		twin := client.ObjectKey{Namespace: "pool-c1", Name: "default-nic-regressed"}
 		mustExistEventually(ctx, t, direct, twin, &compiledv1.CompiledNIC{})
 
 		// Regress out of Allocated; the twin is deliberately left in place.
@@ -153,8 +159,9 @@ func TestCompiledTeardownFinalizerEnvtest(t *testing.T) {
 		vm.Spec.VolumeRefs = []computev1.LocalObjectReference{{Name: "vol-a"}}
 		mustCreate(ctx, t, direct, vm)
 
-		vmTwin := client.ObjectKey{Namespace: "default", Name: "default-vm-teardown"}
-		attTwin := client.ObjectKey{Namespace: "default", Name: "vm-teardown-vol-a"}
+		// The attachment twin name is namespace-qualified: "<vm.Namespace>-<vm.Name>-<ref.Name>".
+		vmTwin := client.ObjectKey{Namespace: "pool-c1", Name: "default-vm-teardown"}
+		attTwin := client.ObjectKey{Namespace: "pool-c1", Name: "default-vm-teardown-vol-a"}
 		mustExistEventually(ctx, t, direct, vmTwin, &compiledv1.CompiledVM{})
 		mustExistEventually(ctx, t, direct, attTwin, &compiledv1.CompiledVolumeAttachment{})
 

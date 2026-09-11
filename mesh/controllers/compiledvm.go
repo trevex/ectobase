@@ -11,13 +11,13 @@ import (
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	"github.com/trevex/ectobase/api/validate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -45,7 +45,7 @@ func CompileVM(vm *computev1.VirtualMachine, nics []netv1.NetworkInterface, plac
 	}
 	compiled := compiledv1.CompiledVM{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "compiled.ectobase.dev/v1alpha1", Kind: "CompiledVM"},
-		ObjectMeta: metav1.ObjectMeta{Name: compiledTwinName(vm.Namespace, vm.Name), Namespace: vm.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: compiledTwinName(vm.Namespace, vm.Name), Namespace: validate.PoolNamespace(placement.ClusterName)},
 		Spec: compiledv1.CompiledVMSpec{
 			ClusterName: placement.ClusterName,
 			Image:       vm.Spec.Image,
@@ -82,17 +82,17 @@ func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !vm.DeletionTimestamp.IsZero() {
-		twin := &compiledv1.CompiledVM{ObjectMeta: metav1.ObjectMeta{
-			Namespace: vm.Namespace,
-			Name:      compiledTwinName(vm.Namespace, vm.Name),
-		}}
-		if err := deleteIfExists(ctx, r.Client, twin); err != nil {
+		if err := deleteTwinsOfSource(ctx, r.Client, &compiledv1.CompiledVMList{}, vm.Namespace, vm.Name); err != nil {
 			return ctrl.Result{}, fmt.Errorf("teardown compiledvm: %w", err)
 		}
 		return ctrl.Result{}, releaseFinalizer(ctx, r.Client, &vm, finalizerCompiledVM)
 	}
 	if err := ensureFinalizer(ctx, r.Client, &vm, finalizerCompiledVM); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensure compiledvm finalizer: %w", err)
+	}
+	// No pool, no namespace to compile into — and nothing downstream could consume the twin.
+	if vm.Spec.ClusterName == "" {
+		return ctrl.Result{}, nil
 	}
 	var nicList netv1.NetworkInterfaceList
 	if err := r.Client.List(ctx, &nicList, client.InNamespace(vm.Namespace)); err != nil {
@@ -105,9 +105,6 @@ func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	err := r.Client.Get(ctx, key, &existing)
 	switch {
 	case apierrors.IsNotFound(err):
-		if err := controllerutil.SetControllerReference(&vm, &compiled, r.Client.Scheme()); err != nil {
-			return ctrl.Result{}, err
-		}
 		stampSource(&compiled, vm.Namespace, vm.Name)
 		if err := r.Client.Create(ctx, &compiled); err != nil {
 			return ctrl.Result{}, fmt.Errorf("create compiledvm: %w", err)
@@ -127,6 +124,12 @@ func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, fmt.Errorf("update compiledvm: %w", err)
 		}
 	}
+	// Drop any other twin still stamped with this source — one left in a namespace the compiler no
+	// longer writes to (a re-bound pool, or an earlier layout).
+	if err := pruneTwinsOfSource(ctx, r.Client, &compiledv1.CompiledVMList{}, vm.Namespace, vm.Name,
+		map[types.NamespacedName]bool{key: true}); err != nil {
+		return ctrl.Result{}, fmt.Errorf("prune stale compiledvms: %w", err)
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -139,7 +142,9 @@ func (r *CompiledVMReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// "virtualmachine" and the manager rejects the duplicate.
 		Named("compiledvm").
 		For(&computev1.VirtualMachine{}).
-		Owns(&compiledv1.CompiledVM{}).
+		// Not Owns(): the twin lives in the pool namespace, and EnqueueRequestForOwner derives the
+		// request from the DEPENDENT's namespace, which would enqueue a source key that does not exist.
+		Watches(&compiledv1.CompiledVM{}, handler.EnqueueRequestsFromMapFunc(requestForSource)).
 		// MAC lives in NetworkInterface.spec, so a MAC change bumps generation;
 		// GenerationChangedPredicate avoids recompiling every VM on unrelated NIC
 		// status writes (e.g. port allocation).
