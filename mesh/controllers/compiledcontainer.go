@@ -42,7 +42,7 @@ func CompileContainer(ctr *computev1.Container, nics []netv1.NetworkInterface, n
 	}
 	compiled := compiledv1.CompiledContainer{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "compiled.ectobase.dev/v1alpha1", Kind: "CompiledContainer"},
-		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%s", ctr.Namespace, ctr.Name), Namespace: ctr.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: compiledTwinName(ctr.Namespace, ctr.Name), Namespace: ctr.Namespace},
 		Spec: compiledv1.CompiledContainerSpec{
 			ClusterName:   ctr.Spec.ClusterName,
 			NodeName:      ctr.Spec.NodeName,
@@ -72,6 +72,19 @@ func (r *CompiledContainerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err := r.Client.Get(ctx, req.NamespacedName, &ctr); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	if !ctr.DeletionTimestamp.IsZero() {
+		twin := &compiledv1.CompiledContainer{ObjectMeta: metav1.ObjectMeta{
+			Namespace: ctr.Namespace,
+			Name:      compiledTwinName(ctr.Namespace, ctr.Name),
+		}}
+		if err := deleteIfExists(ctx, r.Client, twin); err != nil {
+			return ctrl.Result{}, fmt.Errorf("teardown compiledcontainer: %w", err)
+		}
+		return ctrl.Result{}, releaseFinalizer(ctx, r.Client, &ctr, finalizerCompiledContainer)
+	}
+	if err := ensureFinalizer(ctx, r.Client, &ctr, finalizerCompiledContainer); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure compiledcontainer finalizer: %w", err)
+	}
 	var nicList netv1.NetworkInterfaceList
 	if err := r.Client.List(ctx, &nicList, client.InNamespace(ctr.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list nics: %w", err)
@@ -85,6 +98,7 @@ func (r *CompiledContainerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		if err := controllerutil.SetControllerReference(&ctr, &compiled, r.Client.Scheme()); err != nil {
 			return ctrl.Result{}, err
 		}
+		stampSource(&compiled, ctr.Namespace, ctr.Name)
 		if err := r.Client.Create(ctx, &compiled); err != nil {
 			return ctrl.Result{}, fmt.Errorf("create compiledcontainer: %w", err)
 		}

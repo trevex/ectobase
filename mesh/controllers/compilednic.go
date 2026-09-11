@@ -107,7 +107,7 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 			Kind:       "CompiledNIC",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-%s", nic.Namespace, nic.Name),
+			Name:      compiledTwinName(nic.Namespace, nic.Name),
 			Namespace: nic.Namespace,
 		},
 		Spec: compiledv1.CompiledNICSpec{
@@ -318,6 +318,19 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.Client.Get(ctx, req.NamespacedName, &nic); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	// Teardown runs BEFORE the IPAM gate below. A NIC that compiled a twin and later regressed
+	// out of Allocated (keep-last-good) still has one, and the gate returns early — so gating
+	// first would leak the twin on delete.
+	if !nic.DeletionTimestamp.IsZero() {
+		twin := &compiledv1.CompiledNIC{ObjectMeta: metav1.ObjectMeta{
+			Namespace: nic.Namespace,
+			Name:      compiledTwinName(nic.Namespace, nic.Name),
+		}}
+		if err := deleteIfExists(ctx, r.Client, twin); err != nil {
+			return ctrl.Result{}, fmt.Errorf("teardown compilednic: %w", err)
+		}
+		return ctrl.Result{}, releaseFinalizer(ctx, r.Client, &nic, finalizerCompiledNIC)
+	}
 	// IPAM gate: never compile a NIC whose overlay IPs are not yet allocated for
 	// the current spec generation. The NIC status watch re-enqueues when the
 	// allocator finishes; a spec edit bumps Generation (de-gating) until the
@@ -330,12 +343,17 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// state; the running datapath continues on its last-good IPs until re-allocation
 	// lands. This is intentional in a PAM tool: a transient bad edit must not tear
 	// down live connectivity. Revocation/teardown is via DELETING the
-	// NetworkInterface (owner-ref GC removes the CompiledNIC), never via editing it
+	// NetworkInterface (the finalizer above removes the CompiledNIC), never via editing it
 	// into an invalid state.
 	if nic.Status.State != "Allocated" ||
 		nic.Status.ObservedGeneration != nic.Generation ||
 		len(nic.Status.AllocatedIPs) == 0 {
 		return ctrl.Result{}, nil
+	}
+	// Only NICs that actually compile a twin get finalized, and only once past the gate — so a
+	// NIC that never allocates is never held in Terminating by us.
+	if err := ensureFinalizer(ctx, r.Client, &nic, finalizerCompiledNIC); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure compilednic finalizer: %w", err)
 	}
 	var policies netv1.FirewallPolicyList
 	if err := r.Client.List(ctx, &policies, client.InNamespace(nic.Namespace)); err != nil {
@@ -381,6 +399,7 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if err := controllerutil.SetControllerReference(&nic, &compiled, r.Client.Scheme()); err != nil {
 			return ctrl.Result{}, err
 		}
+		stampSource(&compiled, nic.Namespace, nic.Name)
 		if err := r.Client.Create(ctx, &compiled); err != nil {
 			return ctrl.Result{}, fmt.Errorf("create compilednic: %w", err)
 		}

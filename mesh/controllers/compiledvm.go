@@ -45,7 +45,7 @@ func CompileVM(vm *computev1.VirtualMachine, nics []netv1.NetworkInterface, plac
 	}
 	compiled := compiledv1.CompiledVM{
 		TypeMeta:   metav1.TypeMeta{APIVersion: "compiled.ectobase.dev/v1alpha1", Kind: "CompiledVM"},
-		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%s", vm.Namespace, vm.Name), Namespace: vm.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: compiledTwinName(vm.Namespace, vm.Name), Namespace: vm.Namespace},
 		Spec: compiledv1.CompiledVMSpec{
 			ClusterName: placement.ClusterName,
 			Image:       vm.Spec.Image,
@@ -81,6 +81,19 @@ func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.Client.Get(ctx, req.NamespacedName, &vm); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	if !vm.DeletionTimestamp.IsZero() {
+		twin := &compiledv1.CompiledVM{ObjectMeta: metav1.ObjectMeta{
+			Namespace: vm.Namespace,
+			Name:      compiledTwinName(vm.Namespace, vm.Name),
+		}}
+		if err := deleteIfExists(ctx, r.Client, twin); err != nil {
+			return ctrl.Result{}, fmt.Errorf("teardown compiledvm: %w", err)
+		}
+		return ctrl.Result{}, releaseFinalizer(ctx, r.Client, &vm, finalizerCompiledVM)
+	}
+	if err := ensureFinalizer(ctx, r.Client, &vm, finalizerCompiledVM); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure compiledvm finalizer: %w", err)
+	}
 	var nicList netv1.NetworkInterfaceList
 	if err := r.Client.List(ctx, &nicList, client.InNamespace(vm.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list nics: %w", err)
@@ -95,6 +108,7 @@ func (r *CompiledVMReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if err := controllerutil.SetControllerReference(&vm, &compiled, r.Client.Scheme()); err != nil {
 			return ctrl.Result{}, err
 		}
+		stampSource(&compiled, vm.Namespace, vm.Name)
 		if err := r.Client.Create(ctx, &compiled); err != nil {
 			return ctrl.Result{}, fmt.Errorf("create compiledvm: %w", err)
 		}

@@ -65,6 +65,25 @@ func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req 
 	if err := r.Client.Get(ctx, req.NamespacedName, &vm); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	// 1:N teardown: delete every attachment this VM owns, keyed by the same workload label the
+	// steady-state reconcile lists on. Its own finalizer, not CompiledVMReconciler's — both
+	// source from VirtualMachine, and a shared one would let the VM vanish after whichever
+	// reconciler ran first released it.
+	if !vm.DeletionTimestamp.IsZero() {
+		var have compiledv1.CompiledVolumeAttachmentList
+		if err := r.Client.List(ctx, &have, client.InNamespace(vm.Namespace), client.MatchingLabels{"workload": vm.Name}); err != nil {
+			return ctrl.Result{}, fmt.Errorf("list attachments for teardown: %w", err)
+		}
+		for i := range have.Items {
+			if err := deleteIfExists(ctx, r.Client, &have.Items[i]); err != nil {
+				return ctrl.Result{}, fmt.Errorf("teardown attachment %s: %w", have.Items[i].Name, err)
+			}
+		}
+		return ctrl.Result{}, releaseFinalizer(ctx, r.Client, &vm, finalizerCompiledVolumeAttachment)
+	}
+	if err := ensureFinalizer(ctx, r.Client, &vm, finalizerCompiledVolumeAttachment); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensure compiledvolumeattachment finalizer: %w", err)
+	}
 	var volList storagev1.VolumeList
 	if err := r.Client.List(ctx, &volList, client.InNamespace(vm.Namespace)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list volumes: %w", err)
@@ -114,6 +133,7 @@ func (r *CompiledVolumeAttachmentReconciler) Reconcile(ctx context.Context, req 
 		if err := controllerutil.SetControllerReference(&vm, &att, r.Client.Scheme()); err != nil {
 			return ctrl.Result{}, err
 		}
+		stampSource(&att, vm.Namespace, vm.Name)
 		if err := r.Client.Create(ctx, &att); err != nil {
 			return ctrl.Result{}, fmt.Errorf("create attachment %s: %w", name, err)
 		}
