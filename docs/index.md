@@ -32,7 +32,7 @@ flowchart TB
         brokerA["Broker<br/>(kubelet-analog)"]
         matA["Materializers<br/>(Pod / KubeVirt VM)"]
         agentA["Agent"]
-        dpA["flowplane<br/>(XDP + tc/tcx)"]
+        dpA["flowplane<br/>(eBPF, tcx)"]
         brokerA --> matA
         agentA -->|program| dpA
     end

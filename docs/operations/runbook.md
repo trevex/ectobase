@@ -49,22 +49,27 @@ yet. Run `make bpf-clean` whenever a debugging session (host-run netns scenarios
 or repeated `make lab-up`/`lab-down` cycles) accumulates memory — a `clab destroy` removes the
 containers but never touches the host-side pins.
 
-## Edge dual-XDP-attach in SKB mode — deferred (P4)
+## Co-located edge sidecars need separate bpffs pin directories
 
-This used to document an aya generic-XDP `bpf_link` quirk (pinning a first XDP link and then
-attaching a second silently drops the first) worked around via `--pin-links false` on the
-WAN-edge flowplane sidecar's dual attach (`uplink_rx` + `wan_rx`). That sidecar has been pruned
-from this fabric; the N/S-LB edge datapath is a later (P4) concern. Non-edge nodes keep
-`--pin-links` on (see [HA & restart](../architecture/ha-graceful-restart.md)).
+Each WAN edge runs a `flowplane --role edge` sidecar in the VyOS container's netns, and both
+share the host's bpffs. Without a split they collide on the same pinned links and maps, and one
+edge silently adopts the other's state. The fabric gives each its own `--pin-dir`
+(`/sys/fs/bpf/flowplane-edge1` / `-edge2`); `--pin-links` stays on everywhere, so graceful
+restart still works (see [HA & restart](../architecture/ha-graceful-restart.md)).
+
+The in-cluster DaemonSet needs no such split: each node has its own bpffs and runs exactly one
+flowplane pod.
 
 ## Native XDP is blocked under vhost (ironcore-in-a-box)
 
 In an ironcore-in-a-box style VM host, native XDP on the VM tap is blocked while SKB/generic mode
 works end-to-end. The cause is the vhost chain: guest traffic goes `vhost-net → KVM`, and native XDP
-on the `tun`/tap under vhost hits an `XDP_TX`-on-vhost-tun limitation. The guest edge is on tcx,
-which works cleanly under vhost-net regardless (guest→host via `netif_receive_skb` → tcx ingress,
-host→guest via the tap qdisc → tcx egress), so the unified guest edge is unaffected. When
-native-XDP behaviour is needed, use a native-XDP fabric, not the vhost VM path.
+on the `tun`/tap under vhost hits an `XDP_TX`-on-vhost-tun limitation. This is one of the reasons the
+datapath is tcx: the guest edge works cleanly under vhost-net regardless (guest→host via
+`netif_receive_skb` → tcx ingress, host→guest via the tap qdisc → tcx egress), and no forwarding
+program is XDP at all any more. The limitation still applies to the one XDP program left —
+`flowplane inspect`'s debug dumper, which tries a native attach and falls back to generic
+(`XdpFlags::SKB_MODE`), so on a vhost tap expect it to report `SKB/generic` mode.
 
 ## Talos nodes have no in-container `bpftool` — always use the devShell `bpftool` via `nsenter`
 
@@ -74,9 +79,13 @@ including a `bpftool` v7.1.0 too old to render tcx attachments anyway). Every da
 command has to reach the node from the host instead, via `nsenter` into its network namespace.
 
 Use the devShell `bpftool` (v7.6.0) from the host and `nsenter` into the node's netns.
-`bpftool net show dev <veth>` renders the tcx section correctly; `bpftool net show` renders the
-uplink XDP prog-id (this is what the restart-continuity test uses, not `tc filter show`, which does
-not list tcx).
+`bpftool net show dev <dev>` renders the tcx section correctly, which `tc filter show` does not — a
+tcx attachment is invisible to it, so an empty `tc filter show` proves nothing. The
+restart-continuity test does not go through `bpftool net` at all: because bpf links are
+kernel-global, it reads the pinned link straight off the node's bpffs from the host with
+`bpftool -j link show pinned /proc/<node-pid>/root/sys/fs/bpf/flowplane/links/guest-<hex(id)>` and
+compares the `prog_id` across the restart (see
+[HA & graceful restart](../architecture/ha-graceful-restart.md)).
 
 ## Quick reference
 
@@ -84,9 +93,8 @@ not list tcx).
 |---|---|---|
 | `sudo` fails to elevate in a sub-script | PATH-shadowed `sudo` on NixOS | use `/run/wrappers/bin/sudo` |
 | Host RAM climbs across clab cycles / OOM | leaked pinned conntrack maps | `make bpf-clean` (auto-wired into clab up/down) |
-| Edge N/S-LB datapath | pruned from the fabric | deferred (P4) |
-| Native XDP won't attach on a VM tap | vhost-net → KVM `XDP_TX`-on-tun limit | use tcx (default) / a native-XDP fabric |
+| Native XDP won't attach on a VM tap | vhost-net → KVM `XDP_TX`-on-tun limit | forwarding is tcx regardless; `flowplane inspect` falls back to generic XDP |
 | Need to inspect BPF/tcx state on a node | Talos nodes are shell-less (no in-container bpftool) | devShell bpftool v7.6.0 via `nsenter` from the host |
 
 See the [clab + Talos fabric](../tutorials/local-fabric.md) doc for the fabric-level host/kernel interactions
-(bridge-nf ND drop, FRR bring-up) that the bring-up scripts also handle.
+(bridge-nf ND drop, VyOS bring-up) that the bring-up scripts also handle.

@@ -55,9 +55,9 @@ flowchart TD
     lookup -->|no match| pass["Pass<br/>(no overlay route)"]
     lookup -->|RouteValue| deliver{"UNDERLAY[nexthop]<br/>resolves to a<br/>LOCAL tap?"}
     deliver -->|yes<br/>same host| local["Deliver::Local<br/>rewrite inner Eth,<br/>redirect to tap<br/>(ingress firewall applies)"]
-    deliver -->|no| encap["Deliver::Encap<br/>IP-in-IPv6 toward nexthop /128,<br/>redirect to uplink"]
+    deliver -->|no| encap["Deliver::Encap<br/>stamp Geneve tunnel key toward nexthop /128,<br/>redirect to the geneve device"]
 
-    rx["overlay packet on uplink<br/>(uplink_rx)"] --> decap["decap outer Eth+IPv6,<br/>rewrite inner Eth for guest"]
+    rx["inner frame on the geneve device<br/>(uplink_rx)"] --> decap["VNI from the tunnel key,<br/>rewrite inner Eth for guest"]
     decap --> redirect["redirect to local tap"]
 ```
 
@@ -67,12 +67,14 @@ flowchart TD
   local `UNDERLAY` map to a live tap (`tap_ifindex != 0`), the destination is on this
   same host — the packet is delivered locally without ever touching the wire (the
   same-host fast path), subject to the destination's ingress firewall. Otherwise the
-  packet is encapsulated IP-in-IPv6 toward the nexthop `/128` and redirected to the
-  uplink. If there is no local node identity at all, the result is `Pass`.
-- On the receiving node, `uplink_rx` decapsulates the outer Eth+IPv6 tunnel header,
-  rewrites the inner Ethernet for the target guest, and redirects to its tap.
+  packet's Geneve tunnel key is stamped toward the nexthop `/128` and it is redirected
+  to the `collect_md` geneve device, which builds the outer header. If there is no local
+  node identity at all, the result is `Pass`.
+- On the receiving node the kernel strips the outer header on the geneve device's own RX
+  path, so `uplink_rx` sees the inner frame directly. It takes the VNI from the tunnel
+  key, rewrites the inner Ethernet for the target guest, and redirects to its tap.
 
-See [The overlay: IPv6 underlay + IP-in-IPv6](../concepts/overlay.md) for the exact
+See [The overlay: Geneve over an IPv6 underlay](../concepts/overlay.md) for the exact
 encap format and [Datapath programs](../architecture/dataplane/programs.md) for the full program flow.
 
 ## How routes are learned and announced: the route bus
@@ -137,7 +139,7 @@ datapath: route4/route6 lookup → deliver (local tap | encap to /128)
 
 ## Related
 
-- [The overlay: IPv6 underlay + IP-in-IPv6](../concepts/overlay.md)
+- [The overlay: Geneve over an IPv6 underlay](../concepts/overlay.md)
 - [Control/data split & the route bus](../architecture/route-bus.md)
 - [Distributed firewall](firewall.md)
 - [VPC peering](vpc-peering.md)

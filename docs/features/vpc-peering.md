@@ -149,6 +149,9 @@ unioned deterministically), and:
   explicit mutual pair, and peer-of-peer routes are not re-exported.
 - No aggregate-CIDR advertising change. The route bus keeps advertising per-guest host routes;
   `exposedPrefixes` filters them importer-side.
+- No L2 across the peering. MACs are allocated unique per VPC, not fleet-wide; peering is routed
+  (delivery resolves on `(VNI, overlay IP)` and the receiving node rewrites the inner Ethernet), so
+  a duplicate MAC in a peer VPC is never observable.
 
 The forgotten-`FirewallPolicy` footgun (reachability without policy = silent no-connectivity) is
 deliberate; `VPCPeering` status surfaces that policy is still required.

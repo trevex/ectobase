@@ -63,7 +63,9 @@ Each concern is asserted at the cheapest level that can observe it (see
   in-process apiserver via `KUBEBUILDER_ASSETS`.
 - Live lab (`make lab-test`) — the Go live suite (`test/lab/livetest/`, a separate
   module) against the Talos + containerlab fabric, for behaviours that only appear under
-  sustained kernel forwarding (zero-drop restart, native-XDP paths). Sudo.
+  sustained kernel forwarding on a real multi-node substrate: zero-drop restart, the kernel
+  Geneve `collect_md` round trip no `BPF_PROG_TEST_RUN` anchor can drive, the real netkit /
+  veth / VM-tap attach paths, and the multi-cluster control plane end to end. Sudo.
 
 ## How a change flows
 

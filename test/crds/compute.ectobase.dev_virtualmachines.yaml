@@ -287,8 +287,10 @@ spec:
                 type: string
               placement:
                 description: |-
-                  Placement is the VM's actual running location, stamped by the broker. Central
-                  uses NodePrefix as the fence coordinate and to gate recovery drain.
+                  Placement is the VM's actual running location. The pool's broker reports it onto the
+                  matching CompiledVM's status — its RBAC is scoped to its own pool namespace — and a mesh
+                  controller mirrors it here. Central uses NodePrefix as the fence coordinate and to gate
+                  recovery drain.
                 properties:
                   clusterName:
                     description: ClusterName is the pool the VM is running on.

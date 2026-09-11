@@ -107,16 +107,25 @@ is populated (CompiledNIC's overlay IPs are sourced from `status.allocatedIPs`, 
 `Allocated` with an assigned `status.allocatedVIP`. A resource that regresses out of
 `Allocated` suppresses re-emission but keeps its last compiled object.
 
+The same is true of L2: the IPAM reconciler allocates a MAC in the same status write, and
+`CompiledNIC.spec.mac` is sourced from `status.allocatedMAC` — a stable, VPC-unique,
+locally-administered address — falling back to `spec.mac` only for a NIC not yet
+MAC-allocated. A pinned `spec.mac` is still honoured, but by route of the allocator: it is
+validated for format and VPC-uniqueness and adopted into `status.allocatedMAC` (an invalid or
+already-taken pin makes the NIC `Invalid`, and nothing compiles).
+
 The compiler writes the `compiled.ectobase.dev` objects with a `spec.clusterName`
-identifying the pool that owns the workload.
+identifying the pool that owns the workload, into that pool's `pool-<clusterName>` namespace
+on the dispatch, named `<sourceNamespace>-<sourceName>` after the object they were compiled
+from.
 
 ### 3. The broker syncs compiled objects to the owning pool
 
-Each pool cluster runs a dispatch-broker (a kubelet-analog). It watches the
-compiled objects in the dispatch apiserver, filtered to its own `spec.clusterName`,
-and set-reconciles them onto the pool cluster's local apiserver. This is the seam
-that keeps the dispatch authoritative while giving each pool a local, node-reachable
-copy of exactly the compiled objects it owns.
+Each pool cluster runs a dispatch-broker (a kubelet-analog). It watches the compiled objects
+in its own `pool-<clusterName>` namespace on the dispatch apiserver — the only namespace its
+RBAC authorizes — and set-reconciles them onto the pool cluster's local apiserver, back into
+each object's source namespace. This is the seam that keeps the dispatch authoritative while
+giving each pool a local, node-reachable copy of exactly the compiled objects it owns.
 
 ### 4. Executors realize the compiled objects
 
@@ -142,9 +151,11 @@ Inside the pool, node-local executors turn compiled objects into real state:
 
 ClusterPool (`platform.ectobase.dev`) is the fleet inventory: one object per
 pool cluster. The dispatch controller reconciles it (seeding a new pool's lifecycle
-phase), and its `clusterName` is what the compiler stamps onto compiled objects
-and what each pool's broker filters on. It is the anchor that ties a workload's
-placement decision to a concrete cluster.
+phase), and its name is what the compiler stamps onto compiled objects as
+`spec.clusterName` and what names the `pool-<clusterName>` namespace each pool's broker is
+scoped to. It is validated as a DNS-1123 label of at most 58 characters so that derived
+namespace is itself legal (`api/validate/clustername.go`). It is the anchor that ties a
+workload's placement decision to a concrete cluster.
 
 ## See also
 

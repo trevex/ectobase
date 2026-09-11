@@ -13,12 +13,18 @@ policing.
 
 ## The unified tcx guest edge
 
-Shaping requires the guest egress path to traverse an egress qdisc, which is only possible on
-the tc/skb path. An XDP `bpf_redirect`/devmap transmit uses `ndo_xdp_xmit`, which bypasses the qdisc
-entirely, making shaping structurally impossible on the XDP path. So the guest edge is unified on a
-single tcx datapath (`tc_guest_tx`) for both container veth and VM tap. There is one guest
-program and one attach path; the uplink edge stays XDP (`uplink_rx` / `wan_rx`), and it gains an FQ
-qdisc so egress traffic redirected onto it is paced.
+Shaping requires the guest egress path to traverse an egress qdisc, which is only possible on the
+tc/skb path: an XDP `bpf_redirect`/devmap transmit uses `ndo_xdp_xmit`, which bypasses the qdisc
+entirely, making shaping structurally impossible on an XDP fast path. That is why the guest edge was
+unified on a single tc datapath (`tc_guest_tx`) for both container veth/netkit and VM tap — one guest
+program, one attach path. The rest of the forwarding path has since followed: `uplink_rx`, `wan_rx`,
+and `uplink_dsr_note` are tcx classifiers as well (see
+[Datapath programs](../architecture/dataplane/programs.md)), so every program in the path works on an
+skb and the departure timestamp it stamps survives to the transmit path.
+
+The qdisc side is explicit: the loader puts an `fq` root qdisc on each physical uplink
+(`ensure_fq_qdisc`, called for the primary uplink, every `--extra-uplink`, and the edge's WAN
+uplink), so overlay egress leaving via that NIC is paced against the stamp.
 
 tcx works cleanly under vhost-net: guest→host traverses `netif_receive_skb` → tcx ingress, and
 host→guest traverses the tap qdisc → tcx egress.
@@ -51,10 +57,10 @@ All lanes are keyed by interface ifindex and live in one QoS map entry per inter
 
 In `tc_guest_tx`, once the forward decision resolves the source VM's egress rate, a pure-core
 function computes the packet's departure time and the datapath stamps it on the skb via
-`bpf_skb_set_tstamp(skb, tstamp, BPF_SKB_TSTAMP_DELIVERY_MONO)`. The existing encap
-(`bpf_skb_adjust_room`) and `bpf_redirect(uplink)` preserve `tstamp`, and because a tc redirect
-goes through `dev_queue_xmit`, the packet hits the uplink's FQ, which holds it until its
-timestamp.
+`bpf_skb_set_tstamp(skb, tstamp, BPF_SKB_TSTAMP_DELIVERY_MONO)`. The stamp goes on before the encap
+decision is executed — a tunnel-key stamp (`bpf_skb_set_tunnel_key`) plus a `bpf_redirect` to the
+kernel geneve `collect_md` device, neither of which touches `tstamp` — so the encapped frame reaches
+the uplink's FQ still carrying its departure time, and FQ holds it until then.
 
 The scheduling math lives in `flowplane-core/src/meter.rs` as `edt_departure` — the shaping analog
 of the policing `take`, sharing the same verifier-friendly discipline (saturating math, no 128-bit
@@ -88,8 +94,9 @@ Both reuse the token bucket `take` unchanged:
 
 - `public_pass` runs in `tc_guest_tx` on `is_external` only — an additional drop cap on external
   egress, layered on top of the EDT total shaping.
-- `ingress_pass` runs in `uplink_rx` after decap resolves the destination tap, keyed by that
-  tap. Policing (drop) works fine in XDP; ingress is policed only.
+- `ingress_pass` runs in `uplink_rx` once the (already-decapped) frame's delivery target resolves to
+  a local tap, keyed by that tap. Policing needs no qdisc — it is a drop decision taken inside the
+  program — so it is hook-agnostic; ingress is policed only.
 
 ```rust
 pub fn take(bps: u64, burst: u64, tokens: u64, last_ns: u64, now: u64, len: u64) -> (bool, u64) {
@@ -143,7 +150,9 @@ locally attached (matched by the unique `(VNI, overlay IP)` key), not by a decla
 follows the workload across pools and reschedules, and the agent reads no raw `NetworkInterface` at
 all. The agent's QoS reconciler diffs the desired caps against what it has applied and idempotently
 clears a lane to unlimited when the spec drops it or the NIC is deleted. The uplink loader ensures an
-`mq` root + `fq` leaves (or a single `fq` on a one-queue NIC) so the EDT stamps actually pace.
+`fq` root qdisc (`tc qdisc replace dev <if> root fq`) so the EDT stamps actually pace. On a real
+multi-queue NIC an `mq` root with per-queue `fq` leaves would be preferable; that is not implemented
+yet, and `root fq` is correct for the single-queue/veth case and a safe default elsewhere.
 
 ## Validating shaping
 

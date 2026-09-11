@@ -3,7 +3,7 @@
 ectobase is a fleet of Kubernetes clusters, not a single one. It separates a
 dispatch — the fleet control plane where all intent is authored and compiled —
 from N pools — the compute clusters that actually run workloads on the shared
-eBPF/XDP overlay. The dispatch decides what and where; each pool executes its own
+eBPF overlay. The dispatch decides what and where; each pool executes its own
 slice locally. This split bounds the load on the fleet API and lets a pool keep
 operating on its locally synced copy of state.
 
@@ -39,9 +39,10 @@ Because these groups are aggregated — registered with the host cluster via
 `APIService` objects that point at the in-cluster `apiserver-service`
 (`charts/ectobase-dispatch/templates/apiservice.yaml`) — the dispatch host cluster needs
 no CRDs. One apiserver process owns the whole schema and gives every client a
-single, fleet-wide API surface. A thin admission plugin, `ClusterRestriction`
-(`dispatch/pkg/clusterrestriction`), constrains each pool's broker identity so it may
-write only its own `ClusterPool` status and may never set `spec.clusterName`.
+single, fleet-wide API surface. Each pool's broker identity is constrained by ordinary
+RBAC rather than a custom admission plugin: a namespaced `Role`/`RoleBinding` in that
+pool's own `pool-<clusterName>` namespace, plus `resourceNames`-scoped cluster grants for
+the cluster-scoped objects it owns.
 
 Aggregation, not CRDs, is the right fit on the dispatch. A single aggregated server
 presents many groups behind one endpoint with server-side compilation and admission, and
@@ -79,8 +80,8 @@ the central rendezvous of the overlay [route bus](./route-bus.md). It runs on
 hostNetwork pinned to a control-plane node, listening on that node's fabric
 loopback so every node — in every pool — can reach it over the shared IPv6
 fabric. The per-pool mesh agents open a long-lived `RouteBus.Session` stream
-to it to learn which overlay prefix lives behind which underlay node. The bus can
-be secured with [per-node mutual TLS](./route-bus.md#securing-the-bus-per-node-mtls-underlay-authz):
+to it to learn which overlay prefix lives behind which underlay node. The bus is
+secured with [per-node mutual TLS](./route-bus.md#securing-the-bus-per-node-mtls-underlay-authz):
 a dispatch-held root CA signs a name-constrained intermediate per pool, each node
 self-mints a leaf bound to its own underlay, and the reflector rejects any announce
 outside the session's underlay.
@@ -106,33 +107,35 @@ compiled objects the broker syncs down.
 ## The dispatch ↔ pool relationship
 
 The broker is the sole seam between a pool and the dispatch. It is a kubelet-analog:
-it watches the dispatch for the compiled objects stamped with this pool's
-`spec.clusterName` and reconciles them down into the pool's local CRDs.
+it watches the dispatch's `pool-<clusterName>` namespace — where the compiler writes this
+pool's compiled objects — and reconciles them down into the pool's local CRDs, into each
+object's source namespace.
 
 ### Broker sync
 
 The broker (`dispatch/pkg/broker/broker.go`) runs a declarative set-reconcile per
 compiled type — `CompiledNIC`, `CompiledVM`, `CompiledVolumeAttachment`,
-`CompiledContainer`. On any event it recomputes the desired set (dispatch objects with
-`spec.clusterName == this pool`) and the current set (the pool's local objects) and
-makes them match: create missing, update drifted (spec and labels — the
+`CompiledContainer`. On any event it recomputes the desired set (the dispatch objects in
+this pool's `pool-<clusterName>` namespace) and the current set (the pool's local
+objects) and makes them match: create missing, update drifted (spec and labels — the
 `workload` label is load-bearing downstream), and garbage-collect any local
 object no longer in the desired set. The sync is idempotent and restart-safe: it
 derives both sets live each tick and keeps no in-memory diff state.
 
-To keep watch traffic and memory bounded, the broker's dispatch cache scopes each
-compiled type with a field selector on `spec.clusterName`, so its informer
-streams only the objects this pool owns (`dispatch/cmd/broker/main.go`).
+The broker's dispatch cache is scoped to the `pool-<clusterName>` namespace rather than
+filtered by a `spec.clusterName` field selector (`dispatch/cmd/broker/main.go`). Both bound
+what the informer streams, but only the namespace scope is expressible in RBAC: a
+cluster-wide LIST/WATCH authorizes against an empty namespace, which no `RoleBinding` can
+ever match.
 
 Alongside the sync, the broker reports upward:
 
 - a ClusterPool lease + capacity heartbeat every 10s (the freshness signal the
   dispatch-controller turns into a phase), summing allocatable resources over Ready
   downstream nodes;
-- fence facts — each node's `/64` underlay prefix (read from the
-  agent-stamped Node annotation) and each running VM's node — patched into the
-  ClusterPool status and per-VM placement, so the dispatch can fence precisely on
-  failover.
+- fence facts — each node's `/64` underlay prefix (read from the agent-stamped Node
+  annotation) patched into the ClusterPool status, and each running VM's node patched onto
+  that VM's `CompiledVM.status.placement`, so the dispatch can fence precisely on failover.
 
 ### The broker's dispatch credential
 
@@ -161,39 +164,42 @@ now happens directly (x509 client cert), which is what its `DelegatingAuthentica
 union already supports.
 
 The dispatch's x509 authenticator turns the cert's CN into the broker's Kubernetes username,
-`ectobase:cluster:<pool>` — the exact prefix the `ClusterRestriction` admission plugin parses to
-scope writes to that pool's own `ClusterPool` status and placement status
-(`dispatch/pkg/clusterrestriction/admission.go`). Under the old shared-SA token every pool
-authenticated as the same central identity (`system:serviceaccount:system:dispatch-broker`),
-which never matched that prefix, so the plugin was effectively inert; the per-pool CN is what
-activates it as a real write-scope. The PKI behind all of this is the platform-wide `ectobase-ca`
-root (see [Control/data split & the route bus](./route-bus.md)) — the route bus is one consumer
-of that root, not its owner; the same CA now also backs the dispatch's serving cert and the
-broker's client cert.
+`ectobase:cluster:<pool>` — the subject each pool's per-pool RBAC is bound to. Under the old
+shared-SA token every pool authenticated as the same central identity
+(`system:serviceaccount:system:dispatch-broker`), so no per-pool grant could be expressed at
+all; the per-pool CN is what makes RBAC a real boundary. The PKI behind all of this is the
+platform-wide `ectobase-ca` root (see [Control/data split & the route bus](./route-bus.md)) —
+the route bus is one consumer of that root, not its owner; the same CA now also backs the
+dispatch's serving cert and the broker's client cert.
 
-This closes write-scoping, not read-scoping: the broker's dispatch-side *read* set is still
-bounded only by the field-scoped cache described above (`spec.clusterName` selector), not by
-RBAC — a broker with the right identity could still be granted broader read access by
-misconfigured RBAC, since none exists to prevent it beyond the plugin's write checks. A
-namespace-per-pool authorization model that closes that gap centrally is a separate,
-not-yet-built effort.
+That per-pool identity closes read-scoping as well as write-scoping. The compiler writes each
+pool's compiled objects into a `pool-<clusterName>` namespace on the dispatch, and enrollment
+provisions a `Role`/`RoleBinding` in exactly that namespace — read-only on the four compiled
+kinds, plus `compiledvms/status` for the placement the pool observes. A `RoleBinding` only
+authorizes requests carrying its namespace, so a broker cannot list another pool's compiled
+state even if it drops its own client-side filter, and status-only writes mean it can never
+edit a spec, create, or delete a twin. The cluster-scoped objects it owns (its `ClusterPool`,
+its `RouteBusIdentity`) are granted by a `resourceNames`-scoped `ClusterRole`, which is why
+the broker reads those through an uncached client. See `clusterPoolsManifest` in
+`test/lab/internal/deploy/ectobase.go`.
 
 The legacy token path (a dedicated, shared full-privilege `dispatch-broker` ServiceAccount +
 kubeconfig Secret) has been removed: `pki.enabled` is mandatory (`true`) on both charts, and
 mTLS is the sole broker→dispatch auth path. `charts/ectobase-dispatch/templates/broker-identity.yaml`
-now grants the `dispatch-broker` `ClusterRole` only to the `ectobase:brokers` cert group; the
-narrow `dispatch-broker-bootstrap` ServiceAccount remains as the first-boot enrollment identity
-(routebusidentities-only) used before a fresh pool's steady-state client cert exists.
+no longer ships any fleet-wide broker role at all — every grant is provisioned per pool at
+enrollment; a narrow, per-pool `dispatch-broker-bootstrap-<pool>` ServiceAccount remains as the
+first-boot enrollment identity (`resourceNames`-scoped to that pool's own objects) used before a
+fresh pool's steady-state client cert exists.
 
 That bootstrap resolves a chicken-and-egg: the steady-state cert is issued from the pool
 intermediate, which the broker itself bootstraps *over* the dispatch connection. A fresh pool
 is pre-provisioned two Secrets out-of-band — the `ectobase-ca` root (`dispatch-root-ca`, the
-trust anchor) and a short-lived bootstrap-token kubeconfig for `dispatch-broker-bootstrap`
-(`broker-dispatch-bootstrap`). On first boot the broker (a two-phase startup in
-`dispatch/cmd/broker`) uses that token to submit its `RouteBusIdentity` CSR and write the
-intermediate; cert-manager then mints `broker-dispatch-tls`; the broker waits for it and runs
-steady-state on mTLS, using the leaf (not the bootstrap token) for all later intermediate
-renewals. See [Deploy with Helm](../operations/deploy-helm.md#fresh-pool-enrollment-bootstrap).
+trust anchor) and a short-lived bootstrap-token kubeconfig for its own
+`dispatch-broker-bootstrap-<pool>` (`broker-dispatch-bootstrap`). On first boot the broker (a
+two-phase startup in `dispatch/cmd/broker`) uses that token to submit its `RouteBusIdentity`
+CSR and write the intermediate; cert-manager then mints `broker-dispatch-tls`; the broker
+waits for it and runs steady-state on mTLS, using the leaf (not the bootstrap token) for all
+later intermediate renewals. See [Deploy with Helm](../operations/deploy-helm.md#fresh-pool-enrollment-bootstrap).
 
 ```mermaid
 flowchart TB
@@ -216,7 +222,7 @@ flowchart TB
         agent --> dp
     end
 
-    brk -->|"watch Compiled* where<br/>spec.clusterName == pool<br/>+ lease/fence heartbeat"| api
+    brk -->|"watch Compiled* in<br/>namespace pool-&lt;pool&gt;<br/>+ lease/fence heartbeat"| api
     agent <-->|"RouteBus.Session (routebus.v1)<br/>over the IPv6 fabric"| rfl
 ```
 

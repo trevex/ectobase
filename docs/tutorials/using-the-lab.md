@@ -18,7 +18,8 @@ the storage add-ons, boots a stateful VM in the same VPC.
 
 ## Prerequisites
 
-Bring the fabric up and deploy both charts:
+Bring the fabric up and deploy both charts (first run also needs the fabric images —
+see [Local fabric](./local-fabric.md#bring-it-up)):
 
 ```sh
 make lab-up
@@ -92,7 +93,8 @@ whichever overlay interfaces actually attach on its node. The full picture is in
 ## Create a VPC + NetworkInterface
 
 Author a VPC with just a name (no `spec.vni`) plus a NetworkInterface that
-references it and carries the endpoint's overlay IP and MAC. Apply on the dispatch:
+references it and pins the endpoint's overlay IP and MAC (both are optional — omit them
+to let central IPAM allocate). Apply on the dispatch:
 
 ```yaml
 apiVersion: net.ectobase.dev/v1alpha1
@@ -117,7 +119,7 @@ spec:
   subnetRef:
     name: demo-sn0
   ips: ["10.0.9.1"]         # in-Subnet pin; leave as ips: [] to auto-allocate
-  mac: "52:54:00:00:09:0a"
+  mac: "52:54:00:00:09:0a"  # optional pin; omit to auto-allocate
 ```
 
 ```sh
@@ -213,12 +215,12 @@ k02 get compilednic,compiledcontainer -A
 The pod-materializer on the pool then turns the `CompiledContainer` into a real
 `Pod`, attached to the overlay via a Multus secondary network. The Pod carries
 the `k8s.v1.cni.cncf.io/networks` annotation selecting the overlay
-`NetworkAttachmentDefinition` the pool chart installs (named `flowplane` in the
+`NetworkAttachmentDefinition` the pool chart installs (named `flowplane-overlay` in the
 `ectobase-system` namespace), plus the `net.ectobase.dev/network-interface`
 annotation the CNI resolves back to the `CompiledNIC`:
 
 ```sh
-k02 get networkattachmentdefinition -n ectobase-system flowplane
+k02 get networkattachmentdefinition -n ectobase-system flowplane-overlay
 k02 get pods -A -l net.ectobase.dev/container=default-demo-ctr-a
 POD=$(k02 get pod -A -l net.ectobase.dev/container=default-demo-ctr-a \
         -o jsonpath='{.items[0].metadata.name}')
@@ -248,12 +250,21 @@ encapsulated overlay.
 
 ## Run a VM in a VPC
 
-!!! warning "Status: Partial"
+!!! success "Status: Implemented"
     The VM path needs Ceph (`make lab-ceph`) and the Tier-2 prerequisites
-    (`make lab-tier2-up`): KubeVirt, CDI, and the vm-materializer. The materializer
-    builds the correct KubeVirt objects, but the surrounding KubeVirt/tap wiring is
-    still being hardened; treat the VM path as partial relative to the fully-proven
-    Pod path. See [KubeVirt integration](../architecture/kubevirt-integration.md).
+    (`make lab-tier2-up`): KubeVirt, CDI, and the vm-materializer. It is proven end-to-end by
+    `TestVMOverlayConnectivity` (`test/lab/livetest/vm_overlay_test.go`; `-tags live`, so it runs
+    against a real lab, not in CI): dispatch intent — a VPC, a Subnet, a VM NIC and a peer NIC, a
+    `VirtualMachine` and a peer `Container` — compiles and syncs, the vm-materializer produces a
+    KubeVirt VM whose VMI reaches `Running`, the CNI creates the pod-netns tap per KubeVirt's
+    `domainAttachmentType: tap` contract, the guest self-addresses from the dataplane's DHCP/ARP
+    responders, and the peer Pod pings the VM's overlay IP.
+
+    Two things that test does not cover: it boots an ephemeral cirros `containerDisk` rather than
+    the RBD/CDI boot disk shown below (that path is exercised by `TestTier2Failover`, which gates
+    on the fence + cross-cluster reschedule and treats VMI `Running` as best-effort), and the VM
+    and its peer share a node, so the ping is a local `(VNI, overlay IP)` delivery rather than a
+    cross-node encap. See [KubeVirt integration](../architecture/kubevirt-integration.md).
 
 A VM in a VPC is the same shape as a Container, plus a persistent boot disk. Author
 a NetworkInterface, an RBD-backed `Volume` with a `bootImage`, and a
@@ -271,7 +282,7 @@ spec:
   subnetRef:
     name: demo-sn0                 # same VPC, same Subnet as demo-nic-a
   ips: ["10.0.9.20"]
-  mac: "52:54:00:00:09:20"        # the VMI's virtio NIC MUST carry this MAC
+  mac: "52:54:00:00:09:20"        # optional pin; omitted => allocated. Either way the VMI's virtio NIC carries it
 ---
 apiVersion: storage.ectobase.dev/v1alpha1
 kind: Volume
@@ -340,6 +351,11 @@ k02 get vm.kubevirt.io demo-vm -o jsonpath='{.spec.template.spec.volumes[?(@.nam
 virtctl --kubeconfig test/lab/build/ectobase/k02.kubeconfig console demo-vm
 ```
 
+(`virtctl` is the one command here the devShell does not provide — `flake.nix` has no
+`virtctl` in its `buildInputs`. Install it separately, matching the KubeVirt release the
+lab pins (`v1.5.0`, `test/lab/internal/deploy/kubevirt.go`), or skip it and
+`k02 -n "$NS" exec` into the VM's `virt-launcher` pod instead.)
+
 Log in as the cloud-init user (`fedora`) on the console, or SSH over the overlay
 from another endpoint in the same VPC:
 
@@ -353,13 +369,14 @@ plugin (a tap); the guest self-addresses `10.0.9.20` from the dataplane's DHCP
 responder, and, as with the Pod, the node agent programs the datapath for it
 wherever it lands.
 
-!!! warning "Status: Partial, guest datapath"
+!!! success "Status: Implemented, with one hand-verified step"
     The compile → sync → materialize path for `cloudInit` is proven end-to-end (the
-    KubeVirt VM carries the NoCloud disk). Actually booting the guest and reaching
-    it over the overlay depends on the KubeVirt tap datapath, which is still being
-    hardened (see the "Partial" note above and
-    [KubeVirt integration](../architecture/kubevirt-integration.md)). Console/SSH work
-    once the guest boots on a node whose overlay datapath is up.
+    KubeVirt VM carries the NoCloud disk), and booting a guest and reaching it over the overlay is
+    proven live by `TestVMOverlayConnectivity` (`test/lab/livetest/vm_overlay_test.go`, a
+    `-tags live` test): a peer container pings the VM's overlay IP once the guest has
+    self-configured from the dataplane's DHCP responder. What no live test asserts is this section's last mile — that the
+    `cloudInit` user-data yields a usable login — so console/SSH is the step you verify by hand.
+    See [KubeVirt integration](../architecture/kubevirt-integration.md).
 
 ## Firewall policies
 
@@ -446,31 +463,39 @@ spec:
   # ...pool/port-block allocation...
 ```
 
-!!! warning "Status: Partial, no N-S edge control path yet"
+!!! warning "Status: Partial, the N-S edge control path is built but not deployed"
     The node-side compile path works (the compiler folds `LoadBalancer`/`NATGateway`
     into `CompiledNIC`, and the agent programs the backend distributed-LB / egress SNAT
-    at the node uplink). What is not wired yet is the North-South edge control
-    plane: registering a VIP on the WAN edge, or masquerading to the internet, is still
-    programmed directly on the edge datapath in the live tests (`TestLbDistributeSmoke`,
-    `TestNatEgressSmoke` drive the edge over the dataplane gRPC, not via these CRDs). So
-    a `khub apply -f loadbalancer.yaml` compiles, but a WAN client will not reach it
-    end-to-end from intent alone. The datapath itself is proven (see
-    [Load balancer](../features/loadbalancer.md) and [NAT](../features/nat.md)); the gap
-    is the edge control-plane wiring, tracked as a follow-up.
+    at the node uplink). The edge half now exists in the agent too: an agent started with
+    `--edge-loopback` runs an edge-only `ReconcileLB` that `AddLbVip`s each `LoadBalancer`'s
+    centrally-allocated `status.allocatedVIP` (`mesh/agent/lbreconcile.go`); backend nodes announce
+    `LB_VIP` records on the route bus and only an edge turns them into `AddLbBackend`
+    (`mesh/agent/public.go`); and a NAT return relay is installed from announced NAT blocks
+    (`mesh/agent/bus.go`). What is missing is the deployment — nothing runs that agent on an edge.
+    The lab's edge sidecars are a bare `flowplane serve --role edge`
+    (`test/lab/templates/fabric.clab.yml.tmpl`) and the pool chart's agent DaemonSet passes no
+    `--edge-loopback`, so the live tests still drive the edge over the dataplane gRPC:
+    `TestLbDistributeSmoke{,V4}` (`test/lab/livetest/lb_test.go`) register each VIP on both edge
+    sidecars, and `TestNatEgressReturn6` (`test/lab/livetest/nategress6_test.go`) installs the
+    NAT66 return relay the same way. So a `khub apply -f loadbalancer.yaml` compiles and programs
+    the backend node, but a WAN client will not reach the VIP end-to-end from intent alone. The
+    datapath itself is proven (see [Load balancer](../features/loadbalancer.md) and
+    [NAT](../features/nat.md)); the gap is wiring an edge agent into a deployment.
 
 ## Trace the objects end-to-end
 
 The same intent shows up at four stages. Author on the dispatch; the compiled twin is
-produced on the dispatch and pool-stamped; the broker syncs it into the bound pool; the
+produced on the dispatch in that pool's own `pool-<clusterName>` namespace; the broker
+syncs it into the bound pool, mirrored back into the intent's source namespace; the
 materializer produces the concrete Pod/VMI. Run each `get` on the cluster in its
 column.
 
 | Stage | Object | Where | Command |
 |---|---|---|---|
 | Intent | `VPC` / `NetworkInterface` / `Container` / `VirtualMachine` / `Volume` | dispatch | `khub get vpc,networkinterface,container,virtualmachine,volume -A` |
-| Compiled | `CompiledNIC` / `CompiledContainer` / `CompiledVM` / `CompiledVolumeAttachment` | dispatch | `khub get compilednic,compiledcontainer,compiledvm,compiledvolumeattachment -A` |
-| Synced | the same `Compiled*` (broker-selected by `spec.clusterName`) | pool | `k02 get compilednic,compiledcontainer,compiledvm,compiledvolumeattachment -A` |
-| Materialized | `Pod` (+ NAD) / KubeVirt `VirtualMachine` + `VirtualMachineInstance` + `DataVolume` | pool | `k02 get pod,networkattachmentdefinition -n ectobase-system; k02 get virtualmachine,virtualmachineinstance,datavolume -A` |
+| Compiled | `CompiledNIC` / `CompiledContainer` / `CompiledVM` / `CompiledVolumeAttachment` | dispatch (ns `pool-<cluster>`) | `khub get compilednic,compiledcontainer,compiledvm,compiledvolumeattachment -A` |
+| Synced | the same `Compiled*` (broker-selected by the `pool-<clusterName>` namespace) | pool | `k02 get compilednic,compiledcontainer,compiledvm,compiledvolumeattachment -A` |
+| Materialized | `Pod` (+ NAD) / KubeVirt `VirtualMachine` + `VirtualMachineInstance` + `DataVolume` | pool | `k02 get pod -A -l net.ectobase.dev/container; k02 get networkattachmentdefinition -n ectobase-system; k02 get virtualmachine,virtualmachineinstance,datavolume -A` |
 
 The mesh agent on each pool node then programs the dataplane for whichever
 overlay interfaces attach locally, matched by the unique `(VNI, overlay IP)` key,

@@ -55,7 +55,7 @@ by `aya-build` from `flowplane/build.rs` during `make build`. The Go modules bui
 | `make proto-routebus` | Generate the Go gRPC stubs for `routebus.v1` into `mesh/gen/`. |
 | `make docs` | Build the mkdocs site (`mkdocs build --strict` — broken links/nav fail the build). |
 | `make docs-serve` | Serve the docs locally with live reload. |
-| `make image` / `make image-mesh` / `make image-cni` | Build the flowplane / mesh / CNI-plugin container images (see [the lab guide](./local-fabric.md) for the fabric's own images: `make lab-images` + `make image-talos-mirror`). |
+| `make image` / `make image-mesh` / `make image-cni` / `make image-dispatch` | Build the flowplane / mesh / CNI-plugin container images, and the three dispatch images (apiserver, controller, broker). `make lab-app-images` builds all six the charts deploy (see [the lab guide](./local-fabric.md) for the fabric's own images: `make lab-images` + `make image-talos-mirror`). |
 
 ## Test targets
 
@@ -65,8 +65,10 @@ Tests run at several levels of privilege and fidelity — see the
 | Target | Needs | What |
 |---|---|---|
 | `make test` | — | Host unit + POD-layout tests (no root) |
-| `make lint` / `make check` | — | clippy across all targets / the pre-commit `fmt --check` + clippy |
+| `make lint` / `make check` | — | clippy + golangci-lint per Go module + a gofmt check / the pre-commit `fmt --check` + clippy |
 | `make sim` | — | In-process datapath tests (no root, no clab) — the everyday dev loop |
+| `make chart-test` | — | helm-unittest for both charts |
+| `make ci` | — | Everything CI runs: lint + sim + test + chart-test + `go test` in every Go module |
 | `make sim-anchor` | sudo | `BPF_PROG_TEST_RUN` byte-parity: native pure-core output == real bytecode |
 | `make verifier` | sudo | Load the programs through the kernel verifier |
 | `make e2e` | sudo | 3-node netns overlay end-to-end |
@@ -75,8 +77,9 @@ Tests run at several levels of privilege and fidelity — see the
 | `make lab-up` | sudo | Bring up the clab + Talos fabric and deploy the two Helm charts |
 | `make lab-test` | sudo | Run the live multi-cluster suite against an up fabric |
 
-The `e2e`, `ha`, and `tap-*` targets need passwordless sudo (XDP attach, network namespaces, raw
-sockets); the scripts elevate individual commands themselves. On a NixOS host see the
+The `e2e`, `ha`, and `tap-*` targets need passwordless sudo (loading/attaching eBPF programs and
+mounting bpffs for their pins, plus network namespaces and veth/bridge/tap devices); the scripts
+elevate individual commands themselves. On a NixOS host see the
 [runbook](../operations/runbook.md) for the real-`sudo`-path gotcha.
 
 ## Next steps

@@ -29,7 +29,7 @@ flowchart LR
         cva["CompiledVolumeAttachment"]
     end
 
-    broker["Broker<br/>(per pool, filters spec.clusterName)"]
+    broker["Broker<br/>(per pool, reads its pool namespace)"]
 
     subgraph pool["Pool"]
         agent["Agent → flowplane dataplane"]
@@ -74,8 +74,8 @@ pool (via its cluster binding), which is what lets the fleet route it to the rig
 
 ### 3. Sync — the broker
 
-Each pool's broker watches the compiled objects in the dispatch apiserver, filtered by
-`spec.clusterName`, and set-reconciles them onto the pool's downstream apiserver as ordinary CRDs.
+Each pool's broker watches the compiled objects in its own `pool-<clusterName>` namespace on the
+dispatch apiserver and set-reconciles them onto the pool's downstream apiserver as ordinary CRDs.
 The broker is a kubelet-analog: it does not interpret the objects, it just faithfully mirrors the
 subset destined for its pool into local storage where pool-side controllers can act on them.
 
@@ -98,9 +98,9 @@ Central policy authoring: intent is authored and validated once, against the dis
 fleet. Cross-cutting policy (firewall, LB, NAT allocation, VPC peering) is resolved centrally in the
 compiler, not re-derived on every node.
 
-Per-pool distribution: compiled objects are stamped per pool, so the broker can sync exactly the
-slice each cluster needs, and only that slice, over the `spec.clusterName` filter. A pool never
-sees another pool's objects.
+Per-pool distribution: compiled objects are written into a per-pool namespace, so the broker syncs
+exactly the slice each cluster needs, and only that slice. A pool never sees another pool's
+objects — that is RBAC, not just a client-side filter.
 
 A minimal node footprint: the agent reads only `CompiledNIC` plus node-local facts it
 learns from the dataplane itself (for example, the interfaces actually present via `ListInterfaces`).

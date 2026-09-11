@@ -152,19 +152,19 @@ cannot: routes that vanished during a disconnect.
 The route bus is the fabric's source of truth for where every overlay prefix lives.
 Without authentication, any workload that can reach the reflector could announce a
 nexthop for another node's underlay and silently blackhole or hijack that traffic.
-The optional mutual-TLS PKI closes this: it binds each session to a node identity and
+The mutual-TLS PKI closes this: it binds each session to a node identity and
 cryptographically constrains what that node may announce. Private keys never cross a
 cluster or node boundary — only a CSR and signed certificates do.
 
 ```mermaid
 flowchart TB
-    root["dispatch root CA<br/>(cert-manager self-signed, dispatch-controller ns)"]
+    root["ectobase root CA (ectobase-ca)<br/>(cert-manager self-signed, dispatch-controller ns)"]
     subgraph signer["dispatch-controller"]
-        sign["RouteBusIdentity signer<br/>(routebusca)"]
+        sign["RouteBusIdentity signer<br/>(pki)"]
     end
     subgraph pool["pool (per compute cluster)"]
         broker["broker"]
-        issuer["cert-manager CA Issuer<br/>(routebus-pool-ca)"]
+        issuer["cert-manager CA Issuer<br/>(ectobase-pool-ca)"]
         agent["agent (per node)"]
     end
     root --> sign
@@ -177,12 +177,13 @@ flowchart TB
 
 The trust chain has three levels:
 
-1. Root CA — a cert-manager self-signed CA held on the dispatch (in the
-   dispatch-controller's namespace, so the signer can mount its key). The reflector
-   trusts only this root.
+1. Root CA (`ectobase-ca`) — the platform-wide cert-manager self-signed CA held on the
+   dispatch (in the dispatch-controller's namespace, so the signer can mount its key).
+   The reflector trusts only this root, and so does the aggregated apiserver.
 2. Per-pool intermediate — each pool's broker generates an intermediate keypair
-   locally and submits a CSR as a `RouteBusIdentity` (platform group) on dispatch.
-   The `routebusca` signer (`dispatch/pkg/routebusca`) signs a path-len-0 intermediate
+   locally and submits a CSR into its pre-created `RouteBusIdentity` (platform group)
+   on dispatch — pre-created because RBAC cannot scope `create` by name.
+   The `pki` signer (`dispatch/pkg/pki`) signs a path-len-0 intermediate
    that is name-constrained to the pool's DNS domain and its underlay IP ranges
    (its `/48`). The broker writes `{tls.crt=intermediate, tls.key=pool key, ca.crt=root}`
    into a Secret that backs a pool cert-manager CA Issuer. Because Go's TLS chain
@@ -201,19 +202,20 @@ On each session it binds the verified client cert's IP SANs and rejects any
 (`mesh/reflector/underlayauthz.go`). A node owns a `/64` and its endpoints get `/128`s
 inside it, so the check masks both to `/64` — exact-`/128` would reject the legitimate
 per-endpoint nexthops. When a session is not mutually authenticated (mTLS off / dev
-mode) enforcement is disabled and every announcement is allowed, matching the bus's
-mTLS-optional posture. The admin (fence) API is additionally CN-gated to the
+mode) enforcement is disabled and every announcement is allowed — a reflector-binary
+fallback the charts never take, since `pki.enabled` is mandatory. The admin (fence) API
+is additionally CN-gated to the
 `dispatch-controller` identity and split onto its own listener, so a session-cert
 holder can never drive fencing.
 
 ### Enabling it
 
-Set `routebus.mtls.enabled=true` on both charts (they issue from one trust
+`pki.enabled` is `true` by default and mandatory on both charts (they issue from one trust
 anchor). The dispatch chart owns the root CA + a CA-type `ClusterIssuer`; because a
 CA `ClusterIssuer` reads its CA secret from cert-manager's
 `--cluster-resource-namespace`, cert-manager on the dispatch cluster must be installed
 with that flag pointed at the namespace holding the root secret (`system`). Each pool
-sets `routebus.mtls.underlayCIDRs` to its underlay `/48` (the intermediate's IP
+sets `pki.underlayCIDRs` to its underlay `/48` (the intermediate's IP
 name-constraint). cert-manager is required in every participating cluster.
 
 ## Why not BGP for the overlay?

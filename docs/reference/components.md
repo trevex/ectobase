@@ -28,12 +28,13 @@ talks to the dispatch apiserver.
 ### dispatch-broker
 
 The per-cluster broker (a kubelet-analog). It watches the compiled objects
-(CompiledNIC, CompiledVM, CompiledContainer, CompiledVolumeAttachment) in the dispatch
-apiserver filtered by `spec.clusterName` and set-reconciles them onto a
-downstream pool cluster's apiserver. Although logically owned by a pool, it runs
-against two apiservers: the dispatch (source) and the pool (destination). The dispatch
-chart provisions the broker's dispatch-side identity; the pool chart deploys the
-running broker (see below).
+(CompiledNIC, CompiledVM, CompiledContainer, CompiledVolumeAttachment) in its own
+`pool-<clusterName>` namespace on the dispatch apiserver and set-reconciles them onto a
+downstream pool cluster's apiserver, into each object's source namespace. Although
+logically owned by a pool, it runs against two apiservers: the dispatch (source) and the
+pool (destination). Its dispatch-side grants are provisioned per pool at enrollment,
+alongside that pool's `ClusterPool` and `pool-<clusterName>` namespace; the pool chart
+deploys the running broker (see below).
 
 ### mesh controller
 
@@ -42,7 +43,9 @@ The `mesh-controller` binary is the compiler. It watches the authored
 objects (NetworkInterface + FirewallPolicy + LoadBalancer + VPCPeering →
 CompiledNIC; VirtualMachine → CompiledVM; Container → CompiledContainer; Volume →
 CompiledVolumeAttachment). It also resolves central NAT allocations onto
-NATGateway status. Runs hostNetwork in the dispatch cluster (agent namespace); talks
+NATGateway status, and runs two lifecycle loops beside the compilers: an orphan sweeper
+that reclaims compiled twins whose source object is gone, and a placement mirror that
+copies a `CompiledVM`'s broker-reported placement onto the source `VirtualMachine`. Runs hostNetwork in the dispatch cluster (agent namespace); talks
 to the dispatch apiserver. Shares the `mesh` image with the reflector.
 
 ### reflector
@@ -69,11 +72,13 @@ local flowplane.
 
 ### flowplane-cni
 
-The primary-UDN CNI plugin (`flowplane-cni`). It is the Multus default delegate
-for a workload pod: on ADD it resolves the pod's overlay `{vni, ips}` from the
-`net.ectobase.dev` CRDs and calls the node-local flowplane dataplane to attach
-the interface. Installed on every node; talks to the pool apiserver and the local
-flowplane.
+The overlay CNI plugin (`flowplane-cni`), invoked as a Multus secondary network.
+On ADD it resolves the pod's overlay `{vni, ips, mac}` from the broker-synced
+`CompiledNIC` — by the pod's `net.ectobase.dev/network-interface` annotation for a
+container, or by listing the namespace's CompiledNICs and matching `spec.mac` for a
+KubeVirt virt-launcher pod (which carries no such annotation) — and calls the node-local
+flowplane dataplane to attach the interface. Installed on every node; talks to the pool
+apiserver and the local flowplane.
 
 ### pod-materializer
 
@@ -86,13 +91,13 @@ cluster (not the dispatch aggregated apiserver). Deployed by the pool chart.
 
 The downstream controller that materializes local CompiledVM objects (and
 CompiledVolumeAttachment) into KubeVirt `VirtualMachine` objects
-(containerDisk boot, pinned-MAC overlay interfaces on the flowplane Multus
+(containerDisk boot, allocated-MAC overlay interfaces on the flowplane Multus
 network, runStrategy). Targets a downstream cluster with KubeVirt installed.
 Opt-in via the pool chart (`vmMaterializer.enabled`).
 
 ### flowplane (eBPF dataplane)
 
-The default node dataplane. It runs the eBPF tc/XDP datapath and exposes a
+The default node dataplane. It runs the eBPF tcx datapath and exposes a
 `DataplaneNode` gRPC service that the agent and CNI drive (interface attach,
 route programming, firewall/NAT/LB state). Runs as a DaemonSet (one per node);
 talks to the local kernel datapath and serves gRPC to the local agent and CNI.

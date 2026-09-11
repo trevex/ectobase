@@ -29,7 +29,7 @@ The levels, in order of cost:
 | Byte-parity anchors | `make sim-anchor` | The real eBPF bytecode agrees with the native core for the same input (`BPF_PROG_TEST_RUN`): the encap-redirect anchor is byte-identical; the Geneve `collect_md` ingress anchors prove the program fails safe when a test skb carries no tunnel key. Sudo. |
 | Go controller envtest | `go test` (in devShell) | Controllers against a real in-process apiserver (`KUBEBUILDER_ASSETS`). |
 | Go e2e smoke | `make e2e` | Real program load/attach, real veth redirect, real `DataplaneNode` gRPC, real DHCP client exchange, graceful-restart state survival. Sudo. |
-| Live lab scenarios | `make lab-test` | Behaviors that only appear under sustained kernel forwarding — most importantly zero-drop across a graceful restart, and native-XDP-only paths. The Go live suite (`test/lab/livetest/`) runs against the Talos + containerlab fabric. Sudo. |
+| Live lab scenarios | `make lab-test` | Behaviors that only appear under sustained kernel forwarding on a real multi-node fabric: zero-drop across a graceful restart (pinned-link adopt), the kernel Geneve `collect_md` encap/decap round trip that `BPF_PROG_TEST_RUN` cannot construct an input for, the real device kinds and their attach paths (netkit / veth / VM tap), and the multi-cluster control plane end to end (BGP+ECMP underlay, brokers, LB, NAT64/DNS64, KubeVirt VMs). The Go live suite (`test/lab/livetest/`) runs against the Talos + containerlab fabric. Sudo. |
 
 ## The load-bearing pattern: one core, run everywhere
 
@@ -38,7 +38,7 @@ functions are generic over the `Pkt` and `Maps` traits. That same code runs in t
 contexts:
 
 - eBPF — `CtxPkt`/`GlobalMaps` (`flowplane-ebpf/src/coreimpl.rs`) bind the traits
-  to the real XDP/tcx packet context and kernel BPF maps.
+  to the real tc/tcx packet context (`TcContext`) and kernel BPF maps.
 - Native sim — `VecPkt`/`MemMaps` (`flowplane-sim`) provide heap-backed,
   in-process implementations.
 - Unit tests — call the same functions directly.

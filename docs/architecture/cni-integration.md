@@ -52,15 +52,26 @@ invokes `flowplane-cni` with the pod coordinates in `CNI_ARGS`. The plugin:
 1. Identifies the pod. It parses `K8S_POD_NAMESPACE`, `K8S_POD_NAME`, and
    `K8S_POD_UID` from `CNI_ARGS`.
 2. Finds the bound interface. Using the on-node kubeconfig it reads the pod
-   object and follows its `net.ectobase.dev/network-interface` annotation to the
-   `NetworkInterface` custom resource that describes this attachment.
-3. Resolves overlay identity from `CompiledNIC`. It GETs the
-   `CompiledNIC` named `<ns>-<nic>` in the NIC's namespace and reads the
-   overlay `{VNI, overlay IPs, MAC}` from its spec. The plugin reads only this
-   lowered object — never the raw `NetworkInterface`/`VPC`/policy objects — so the
-   compute cluster never needs the source CRDs. A `CompiledNIC` with `vni == 0`
-   is treated as not-yet-compiled and the ADD fails cleanly so the kubelet
-   retries.
+   object. A container pod carries the `net.ectobase.dev/network-interface`
+   annotation (written by the pod-materializer) naming its `NetworkInterface` as
+   `<ns>/<nic>`. A KubeVirt virt-launcher pod carries no such annotation —
+   KubeVirt, not ectobase, creates that pod — so the plugin takes the interface
+   MAC from the launcher's `k8s.v1.cni.cncf.io/networks` (Multus) annotation
+   instead, preferring the selection element that names the `flowplane` NAD. That
+   path is single-NIC-only: a VM with more than one flowplane NIC carries several
+   MAC-bearing elements and the plugin cannot tell which one this ADD is for, so
+   it fails rather than guess.
+3. Resolves overlay identity from `CompiledNIC`. On the annotation path it GETs
+   the `CompiledNIC` named `<ns>-<nic>` in the NIC's namespace; on the MAC path it
+   LISTs the namespace's `CompiledNIC`s and matches `spec.mac` — the allocated MAC
+   is the only key tying a launcher's interface back to a `NetworkInterface`,
+   which is why the plugin's role grants `get` *and* `list` on `compilednics`
+   (with `get` alone every VM's CNI ADD fails and the guest never reaches the
+   overlay). Either way it reads the overlay `{VNI, overlay IPs, MAC}` from the
+   spec. The plugin reads only this lowered object — never the raw
+   `NetworkInterface`/`VPC`/policy objects — so the compute cluster never needs
+   the source CRDs. A `CompiledNIC` with `vni == 0` is treated as
+   not-yet-compiled and the ADD fails cleanly so the kubelet retries.
 4. Programs the datapath. It dials the node-local `DataplaneNode` gRPC
    (default `unix:///run/flowplane/dataplane.sock`, reachable because the plugin and
    the dataplane DaemonSet share the `/run/flowplane` socket directory over a hostPath)
@@ -106,8 +117,13 @@ sequenceDiagram
 
     Kubelet->>Multus: CNI ADD (pod on flowplane network)
     Multus->>CNI: ADD (CNI_ARGS: K8S_POD_*)
-    CNI->>API: GET pod → network-interface annotation
-    CNI->>API: GET CompiledNIC <ns>-<nic>
+    alt container pod (has network-interface annotation)
+        CNI->>API: GET pod → network-interface annotation
+        CNI->>API: GET CompiledNIC <ns>-<nic>
+    else KubeVirt virt-launcher (no annotation)
+        CNI->>API: GET pod → MAC from Multus networks annotation
+        CNI->>API: LIST CompiledNICs in ns → match spec.mac
+    end
     API-->>CNI: {VNI, overlayIPs, MAC}
     CNI->>DP: AttachInterface(id, netns, VNI, MAC, IPs, deviceType)
     DP->>DP: create veth (or pod-tap) + program eBPF overlay
@@ -151,10 +167,11 @@ compose cleanly.
 | Concern | Location |
 | --- | --- |
 | Plugin entrypoint, ADD/DEL/CHECK | `cni/plugin/main.go` |
-| Pod → NetworkInterface → `CompiledNIC` resolution | `cni/plugin/resolve.go` |
+| Pod/VM → `CompiledNIC` resolution (annotation, or by-MAC for launchers) | `cni/plugin/resolve.go` |
 | gRPC dial + attach/detach | `cni/plugin/attach.go` |
 | `DataplaneNode` service (`AttachInterface`, …) | `api/proto/dataplane/v1/dataplane.proto` |
-| Installer DaemonSet + RBAC | `charts/ectobase-pool/templates/cni.yaml` |
+| Installer DaemonSet | `charts/ectobase-pool/templates/cni.yaml` |
+| Plugin RBAC (markers → generated role) | `cni/plugin/rbac.go`, `charts/ectobase-pool/files/flowplane-cni/role.yaml` |
 | `flowplane` NAD | `charts/ectobase-pool/templates/kubevirt-binding.yaml` |
 | Multus (thin) install | `test/lab/internal/deploy/multus.go` |
 | Compiled per-NIC policy | `api/compiled/v1alpha1/compilednic_types.go` |

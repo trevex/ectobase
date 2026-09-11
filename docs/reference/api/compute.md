@@ -155,7 +155,8 @@ _Appears in:_
 
 
 
-VMPlacement is the VM's actual running location, reported upward by the broker.
+VMPlacement is the VM's actual running location, as observed by the pool that runs it and
+mirrored here from its CompiledVM.
 
 
 
@@ -251,6 +252,6 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `phase` _string_ | Phase is the current lifecycle phase of the VirtualMachine. |  |  |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#condition-v1-meta) array_ | Conditions capture scheduling/failover observations (Scheduled, Unschedulable, FailoverBlocked). |  | Optional: \{\} <br /> |
-| `placement` _[VMPlacement](#vmplacement)_ | Placement is the VM's actual running location, stamped by the broker. Central<br />uses NodePrefix as the fence coordinate and to gate recovery drain. |  | Optional: \{\} <br /> |
+| `placement` _[VMPlacement](#vmplacement)_ | Placement is the VM's actual running location. The pool's broker reports it onto the<br />matching CompiledVM's status — its RBAC is scoped to its own pool namespace — and a mesh<br />controller mirrors it here. Central uses NodePrefix as the fence coordinate and to gate<br />recovery drain. |  | Optional: \{\} <br /> |
 
 

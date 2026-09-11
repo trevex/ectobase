@@ -68,9 +68,10 @@ workload authored with an empty `spec.clusterName` is bound to a `Ready` pool by
 resource fit and spread, exactly the same for containers and VMs. An explicit
 `spec.clusterName` pins the pool and the scheduler leaves it alone.
 
-Every compiled object then carries `spec.clusterName` — the pool it is bound to —
-and this is what the broker selects on. For NICs, the binding is resolved by
-`resolvePlacement` (`compilednic.go`) with a clear precedence:
+Every compiled object then carries `spec.clusterName` — the pool it is bound to — and is
+written into that pool's `pool-<clusterName>` namespace on the dispatch, which is what the
+broker selects on. For NICs, the binding is resolved by `resolvePlacement`
+(`compilednic.go`) with a clear precedence:
 
 1. Owning `Container` — supplies the cluster binding (and, if the Container
    sets an optional `spec.nodeName`, that node pin is carried down to the Pod).
@@ -86,7 +87,7 @@ an optional pin, not a requirement; when it is empty the pool schedules the
 workload freely. Crucially, a `CompiledNIC` carries no node field at all: the
 agent self-locates its policy by the interface's `(VNI, overlay IP)` key wherever
 the interface actually attaches (see
-[Self-locating agent](#agent--dataplane) below), so auto-placed and
+[Self-locating agent](#agent-dataplane) below), so auto-placed and
 rescheduled/live-migrated workloads need no node write-back.
 
 `CompiledContainer`, `CompiledVM`, and `CompiledVolumeAttachment` inherit
@@ -95,12 +96,35 @@ workload owns the compiled objects, the compiler also stamps a `workload` label
 onto them; the vm-materializer relies on it to join a VM to its volume
 attachments.
 
+### Where twins live, and how they are torn down
+
+A twin is not written next to its source. The compiler writes it into the target pool's
+`pool-<clusterName>` namespace on the dispatch (`validate.PoolNamespace`), named
+`<sourceNamespace>-<sourceName>` (`compiledTwinName`, `mesh/controllers/finalizer.go`) so
+twins from different tenant namespaces cannot collide once they share one namespace. That
+layout is what lets a namespaced `RoleBinding` authorize a pool's broker; it is a
+dispatch-side detail, and the broker mirrors each twin back into its *source* namespace on
+the pool cluster, so the CNI and the materializers still find twins where they always were.
+
+Because the twin is in a different namespace, it carries no ownerReference — Kubernetes
+forbids a cross-namespace owner. Instead each compiler puts its own finalizer on the source
+(`compiled.ectobase.dev/compilednic` and friends — one per compiler, so two compilers
+sourcing from the same `VirtualMachine` cannot release each other's) and deletes the twins it
+stamped before releasing it, and stamps the back-reference as the annotations
+`compiled.ectobase.dev/source-namespace` / `-source-name`
+(`api/compiled/v1alpha1/annotations.go` — annotations, not labels: a name can exceed the
+63-character label-value limit). An `OrphanSweeper` (`mesh/controllers/orphansweep.go`) is
+the backstop for what a finalizer cannot cover — a finalizer force-removed to unstick a
+delete, or twins left by an older layout: every 10 minutes it deletes stamped twins older
+than `MinAge` (5 minutes) whose source resolves `NotFound` against an *uncached* reader.
+
 ## The broker sync
 
 The broker (`dispatch/pkg/broker`, `dispatch/cmd/broker/main.go`) syncs each compiled
 type from the dispatch down to the owning pool's local CRDs — a declarative
-set-reconcile filtered by `spec.clusterName == this pool`, with create / update /
-delete + GC. It is idempotent and restart-safe. This seam is described in full in
+set-reconcile over this pool's `pool-<clusterName>` namespace on the dispatch, with
+create / update / delete + GC, each twin mirrored back into its *source* namespace on the
+pool cluster. It is idempotent and restart-safe. This seam is described in full in
 [Multi-cluster control plane → Broker sync](./multi-cluster-control-plane.md#broker-sync);
 here it is simply the middle stage: the compiled objects the dispatch produced become
 real CRDs in the pool that hosts the workload.
@@ -181,7 +205,7 @@ flowchart TB
         vm --> catt
     end
 
-    broker["broker<br/>set-reconcile by spec.clusterName"]
+    broker["broker<br/>set-reconcile by pool namespace"]
     cnic --> broker
     ccont --> broker
     cvm --> broker

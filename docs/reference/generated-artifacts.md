@@ -99,7 +99,6 @@ package, a `doc.go`). `controller-gen rbac` renders each marker set into a
 | `mesh/cmd/pod-materializer` | `files/pod-materializer/role.yaml` | pool |
 | `cni` | `files/flowplane-cni/role.yaml` | pool |
 | `dispatch/cmd/controller` | `files/dispatch-controller/role.yaml` | dispatch |
-| `dispatch/cmd/broker/rbac/dispatchside` | `files/dispatch-broker/role.yaml` | dispatch |
 | `dispatch/cmd/broker/rbac/poolside` | `files/dispatch-broker/role.yaml` | pool |
 
 The chart templates then inject the generated rules — the `rbac.yaml` template
@@ -113,14 +112,14 @@ rules:
 so the ClusterRole a component runs with is exactly the set of markers on its
 code — permissions are proven against the reconcilers that need them.
 
-!!! note "The dispatch-broker has two roles"
-    The broker needs two distinct least-privilege identities: a dispatch-side role
-    (read compiled objects, manage ClusterPools in the dispatch apiserver) and a
-    pool-side role (write compiled objects into the pool cluster). Because
-    `controller-gen` merges every marker under a package into one role, the
-    markers are split into two import-nowhere sub-packages,
-    `dispatch/cmd/broker/rbac/dispatchside` and `.../poolside`, generated into the dispatch chart
-    and the pool chart respectively.
+!!! note "The dispatch-broker's two sides"
+    The broker needs two distinct least-privilege identities. The pool-side one (write
+    compiled objects into the pool cluster) is generated from markers in the import-nowhere
+    package `dispatch/cmd/broker/rbac/poolside` into the pool chart. The dispatch-side one is
+    **not** generated: it is per pool by construction — a namespaced `Role` in
+    `pool-<clusterName>` plus a `resourceNames`-scoped `ClusterRole` — so it is provisioned at
+    enrollment rather than shipped with the chart. See `clusterPoolsManifest` in
+    `test/lab/internal/deploy/ectobase.go`.
 
 ## CRD API reference
 

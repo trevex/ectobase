@@ -13,7 +13,7 @@ compiled objects down from the dispatch. Those two roles map onto the two charts
 
 | Chart | Runs on | Installs |
 |---|---|---|
-| `charts/ectobase-dispatch` | the dispatch cluster | aggregated apiserver + kine (+ postgres), dispatch-controller, mesh compiler, reflector, dispatch-side broker identity |
+| `charts/ectobase-dispatch` | the dispatch cluster | aggregated apiserver + kine (+ postgres), dispatch-controller, mesh compiler, reflector, the `ectobase-ca` root + ClusterIssuer |
 | `charts/ectobase-pool` | each compute cluster | dataplane (`ebpf`), mesh agent, broker, cni, KubeVirt NAD, pod-materializer (always), vm-materializer / tier1 (gated), the `net` + `compiled` CRDs |
 
 The reference install sequence lives in `test/lab/internal/deploy/ectobase.go` — the lab CLI
@@ -24,15 +24,20 @@ namespaces and the two `helm install`s below.
 
 The dispatch chart carries two namespaces:
 
-- The release namespace (`namespace`, default `system`) holds the baseline-PSA-safe pods:
-  the aggregated apiserver, dispatch-controller, kine, and the dispatch-side broker identity. Create it
-  with `--create-namespace`.
+- The release namespace (`namespace`, default `system`) holds the aggregated apiserver,
+  dispatch-controller, kine, and the ectobase root CA. With the default `pki.enabled=true` the
+  apiserver runs `hostNetwork` (direct `:6444` exposure), which baseline PSA rejects — on a
+  PSA-enforcing cluster (Talos) create the namespace PSA-privileged *before* `helm install`
+  rather than relying on `--create-namespace`.
 - The chart itself creates the PSA-privileged `ectobase-system` namespace
   (`agentNamespace`) for the hostNetwork mesh compiler and reflector.
 
 ```sh
+kubectl create namespace system
+kubectl label namespace system pod-security.kubernetes.io/enforce=privileged
+
 helm install ectobase-dispatch charts/ectobase-dispatch \
-  --namespace system --create-namespace \
+  --namespace system \
   --set reflectorAdmin='[fd00:cafe:1::1]:1339'
 ```
 
@@ -54,7 +59,7 @@ Source of truth: `charts/ectobase-dispatch/values.yaml` (schema: `values.schema.
 
 | Value | Default | Meaning |
 |---|---|---|
-| `namespace` | `system` | Release namespace for the baseline-safe apiserver/controller/kine + broker identity. |
+| `namespace` | `system` | Release namespace for the apiserver/controller/kine + the `ectobase-ca` root. Must be PSA-privileged: the apiserver is hostNetwork when `pki.enabled`. |
 | `agentNamespace` | `ectobase-system` | PSA-privileged namespace the chart creates for the hostNetwork compiler + reflector. |
 | `reflectorAdmin` | `[fd00:db8:0:1::1]:1339` | Fence address the dispatch-controller dials via `-reflector-admin`: the reflector's admin port 1339, separate from the agent session port 1338. |
 | `pki.enabled` | `true` | Cert-manager PKI: route-bus mTLS, the dispatch serving cert, and trusting `ectobase-ca` as a client CA for cert-authenticated brokers. Mandatory — REQUIRES cert-manager in the cluster. MUST match the pool chart's `pki.enabled`. |
@@ -106,9 +111,9 @@ its own cluster); `reflectorAddress` is the dispatch's reflector on the fabric. 
 The broker's credential to the dispatch is a cert-manager `Certificate`, not a token. With
 `pki.enabled=true` on both charts, the pool chart renders `broker-dispatch-tls`: `CN=ectobase:cluster:<pool>`,
 `O=ectobase:brokers`, issued by the pool's `ectobase-pool-ca` Issuer (the same intermediate the
-agent's node leaves come from) and auto-renewed by cert-manager every 90d. There is no
-`kubectl create token`, no hand-minted kubeconfig, and nothing to re-mint on expiry — client-go
-reloads the cert+key files off disk as cert-manager rotates them.
+agent's node leaves come from) on a 90d lifetime, auto-rotated by cert-manager well before
+expiry. There is no `kubectl create token`, no hand-minted kubeconfig, and nothing to re-mint —
+client-go reloads the cert+key files off disk as cert-manager rotates them.
 
 On the dispatch side, the aggregated apiserver trusts the `ectobase-ca` root as a client CA
 (`--client-ca-file`) and serves a cert-manager-issued serving cert instead of its self-signed
@@ -129,14 +134,14 @@ would front the apiserver with a stable LoadBalancer/VIP instead.
 ```sh
 # dispatch cluster
 helm install ectobase-dispatch charts/ectobase-dispatch \
-  --namespace system --create-namespace \
+  --namespace system \
   --set reflectorAdmin='[fd00:cafe:1::1]:1339' \
   --set pki.enabled=true \
   --set dispatchApiserver.serviceIP='fd00:cafe:1::1'
 ```
 
-The `CN=ectobase:cluster:<pool>` identity is also what activates the `ClusterRestriction`
-admission plugin's per-pool write-scoping — see
+The `CN=ectobase:cluster:<pool>` identity is also the subject each pool's per-pool RBAC binds —
+the namespaced `Role` in `pool-<pool>` and the `resourceNames`-scoped `ClusterRole` — see
 [Multi-cluster control plane](../architecture/multi-cluster-control-plane.md#the-brokers-dispatch-credential).
 
 `pki.enabled` defaults to `true` on both charts and is mandatory: mTLS is the sole
@@ -158,12 +163,14 @@ two Secrets pre-provisioned out-of-band (in `ectobase-system`) *before* the brok
   dispatch-broker-bootstrap-<pool> -n system --duration=1h`), with the root as
   `certificate-authority-data`. Used only for the first-boot `RouteBusIdentity` CSR.
 
-On the dispatch side, enrollment also creates four per-pool objects alongside the `ClusterPool`
+On the dispatch side, enrollment also creates seven per-pool objects alongside the `ClusterPool`
 (the lab generates them; see `clusterPoolsManifest` in `test/lab/internal/deploy/ectobase.go`):
-a pre-created **`RouteBusIdentity`** named `<pool>`, the **`dispatch-broker-bootstrap-<pool>`**
-ServiceAccount, and a **`dispatch-broker-pool-<pool>`** ClusterRole + Binding scoped with
-`resourceNames: [<pool>]` and bound to both that SA and the pool's cert identity
-`ectobase:cluster:<pool>`.
+the **`pool-<pool>` Namespace** the compiler writes this pool's twins into, a **`dispatch-broker`
+Role + RoleBinding** in it (read-only on the compiled kinds plus `compiledvms/status`, bound to
+`ectobase:cluster:<pool>`), a pre-created **`RouteBusIdentity`** named `<pool>`, the
+**`dispatch-broker-bootstrap-<pool>`** ServiceAccount, and a **`dispatch-broker-pool-<pool>`**
+ClusterRole + Binding scoped with `resourceNames: [<pool>]` and bound to both that SA and the
+pool's cert identity `ectobase:cluster:<pool>`.
 
 That per-pool scoping is load-bearing, not cosmetic: a `RouteBusIdentity` carries a pool's
 intermediate-CA CSR and signed cert, so a fleet-wide grant (or one shared bootstrap SA) would let

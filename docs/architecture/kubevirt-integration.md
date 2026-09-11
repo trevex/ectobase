@@ -37,6 +37,14 @@ carries the eBPF datapath. KubeVirt's `domainAttachmentType: tap` then opens
 the guest from inside the datapath, so the VM self-configures its address,
 gateway, and MTU.
 
+The launcher pod carries no `net.ectobase.dev/network-interface` annotation —
+KubeVirt, not ectobase, creates it — so flowplane-cni resolves the VM's
+`CompiledNIC` by the interface MAC KubeVirt puts in the launcher's Multus
+annotation (`k8s.v1.cni.cncf.io/networks`), listing the namespace's `CompiledNIC`s
+and matching `spec.mac`. That is why the plugin's role needs `list` (not just
+`get`) on `compilednics`, and why a vanilla KubeVirt VM works too, as long as its
+interface MAC matches a `NetworkInterface`'s allocated MAC.
+
 ## Why tap, not managedTap
 
 KubeVirt also ships a `managedTap` attachment mode, but it is unsuitable here:
@@ -79,6 +87,16 @@ The materializer also watches `CompiledVolumeAttachment` and maps each event bac
 to its owning `CompiledVM` (named `<namespace>-<workload>`), so adding or changing
 a disk re-materializes the VM's disk list.
 
+Placement flows back the other way. The pool's broker knows which node KubeVirt
+actually started the VMI on, but it may only write inside its own pool namespace,
+so it reports that onto `CompiledVM.status.placement` (cluster, node, and the
+node's `/64` underlay prefix — the fence coordinate). `VMPlacementMirrorReconciler`
+(`mesh/controllers/vmplacementmirror.go`) on the dispatch then mirrors it onto the
+source `VirtualMachine.status.placement`, resolving the source through the twin's
+stamped back-reference. That last hop stays with the dispatch controller because a
+`VirtualMachine` sits in a tenant namespace shared with other pools' workloads;
+granting a broker that write would let any pool stamp placement on any pool's VM.
+
 ## Flow
 
 ```mermaid
@@ -91,7 +109,7 @@ sequenceDiagram
     participant DP as DataplaneNode
 
     Broker->>VMM: CompiledVM (+ CompiledVolumeAttachments)
-    VMM->>KV: apply VirtualMachine (flowplane binding, pinned MAC)
+    VMM->>KV: apply VirtualMachine (flowplane binding, allocated MAC)
     KV->>KV: start virt-launcher pod (inject flowplane NAD)
     Multus->>CNI: CNI ADD in launcher netns (deviceType=pod-tap, tap0)
     CNI->>DP: AttachInterface(VNI, MAC, IPs, pod-tap)
@@ -109,3 +127,5 @@ sequenceDiagram
 | KubeVirt CR binding registration | `test/lab/internal/deploy/kubevirt.go` |
 | CNI `pod-tap` device handling | `cni/plugin/main.go`, `api/proto/dataplane/v1/dataplane.proto` |
 | Compiled VM spec | `api/compiled/v1alpha1/compiledvm_types.go` |
+| Broker → `CompiledVM.status.placement` | `dispatch/pkg/broker/broker.go` (`ReportStatus`) |
+| `CompiledVM.status.placement` → `VirtualMachine.status.placement` | `mesh/controllers/vmplacementmirror.go` |

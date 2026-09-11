@@ -24,13 +24,16 @@ controller-runtime envtest integration tests can spin a real apiserver under `go
 | `make sim` | Fast in-process datapath tests (pure-core + native sim). | no |
 | `make lint` / `make fmt` | Clippy plus golangci-lint per Go module and a gofmt check / format all Rust and Go. | no |
 | `make check` | `fmt --check` + clippy — exactly what the pre-commit hooks run. | no |
+| `make chart-test` | helm-unittest for `charts/ectobase-dispatch` + `charts/ectobase-pool`. | no |
+| `make ci` | Everything CI runs non-privileged: `lint` + `sim` + `test` + `chart-test` + `go test` in every Go module. | no |
 | `make sim-anchor` | `BPF_PROG_TEST_RUN` byte-parity anchor (native core vs bytecode). | sudo |
 | `make verifier` | Load the programs through the kernel verifier. | sudo |
 | `make e2e` | 3-node netns overlay end-to-end. | sudo |
 | `make ha` | HA pinned-maps kill+adopt smoke. | sudo |
 | `make docs` / `make docs-serve` | Build (`mkdocs build --strict`) / live-serve this site. | no |
 
-The `sudo` targets need passwordless sudo (XDP attach, netns, raw sockets); the
+The `sudo` targets need passwordless sudo (loading/attaching eBPF programs and mounting bpffs for
+their pins, plus network namespaces and veth/bridge/tap devices); the
 scripts elevate individual commands themselves. `make` with no target prints the full
 annotated list.
 
@@ -44,6 +47,10 @@ The flake wires a pre-commit hook set (`git-hooks.nix`) that runs on every commi
 Both run through the same `rustup`-provided toolchain as the rest of the build, so
 there is exactly one Rust toolchain in play. `make check` runs the identical pair, so
 you can verify locally before committing.
+
+Before *pushing*, run `make ci` — it mirrors `.github/workflows/test.yml` (lint + sim +
+host tests + chart tests + `go test` in every Go module), so nothing green locally is red
+in CI.
 
 ## After changing the API
 

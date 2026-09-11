@@ -62,11 +62,14 @@ Unlike containers, VMs are scheduled: the dispatch-controller binds an unbound `
 `ClusterPool` that fits its resource requests before compilation proceeds. The compiler then lowers
 the VM into a `CompiledVM` (and its interfaces into `CompiledNIC`s carrying the same cluster binding).
 
-The vm-materializer turns a `CompiledVM` into a KubeVirt `kubevirt.io/v1.VirtualMachine` with
-pinned-MAC overlay interfaces on the flowplane Multus network, attached through a KubeVirt
-network-binding plugin (`flowplane`) that wires the overlay via a tap device. Boot disks come
-from CDI `DataVolume`s when the VM references persistent `Volume`s (an RBD-backed boot disk first,
-then data disks); with no volumes it falls back to an ephemeral containerDisk from the VM's `Image`.
+The vm-materializer turns a `CompiledVM` into a KubeVirt `kubevirt.io/v1.VirtualMachine` whose
+overlay interfaces carry the NIC's centrally-allocated MAC (`status.allocatedMAC`) on the flowplane
+Multus network, attached through a KubeVirt network-binding plugin (`flowplane`) that wires the
+overlay via a tap device. Boot disks come from CDI `DataVolume`s when the VM references persistent
+`Volume`s (an RBD-backed boot disk first, then data disks); with no volumes it falls back to an
+ephemeral containerDisk from the VM's `Image`. The launcher pod carries no
+`net.ectobase.dev/network-interface` annotation, so flowplane-cni resolves the VM's `CompiledNIC`
+by that MAC instead.
 
 ## Containers vs VMs at a glance
 

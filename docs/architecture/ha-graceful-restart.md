@@ -28,19 +28,27 @@ interface.
 ### 2. Pinned bpf-links + atomic re-point
 
 An fd-owned `bpf_link` normally dies when the last fd closes, detaching the program. On kernel ≥ 6.6
-(XDP via `bpf_link_create`, tc via tcx), every attach is an fd-owned link, so all pin uniformly
-under `<pin_dir>/links/<name>`:
+every forwarding attach is an fd-owned link — tcx for veth/tap/geneve devices, a netkit link
+(`bpf(BPF_LINK_CREATE)` with `BPF_NETKIT_PEER`) for a netkit primary — so all pin uniformly under
+`<pin_dir>/links/<name>`:
 
 | Link path | Program | Hook |
 |---|---|---|
-| `links/uplink-<iface>` | `uplink_rx` (+ extra uplinks) | XDP |
-| `links/wan-<iface>` | `wan_rx` (edge role) | XDP |
-| `links/guest-<interface_id>` | `tc_guest_tx` (tcx) | tcx |
+| `links/uplink-geneve` | `uplink_rx` | tcx ingress on the geneve `collect_md` device (`fp-geneve0`) |
+| `links/uplink-dsr-note-geneve` | `uplink_dsr_note` | tcx ingress on the same geneve hook, ordered first |
+| `links/wan-<iface>` | `wan_rx` (edge role) | tcx ingress on the WAN uplink |
+| `links/uplink-<iface>` | `uplink_rx` on an `--extra-uplink` | tcx ingress on that NIC |
+| `links/guest-<hex(interface_id)>` | `tc_guest_tx` | tcx ingress on a veth/tap, or netkit PEER on a netkit primary |
+
+No program pins as an XDP link — the forwarding datapath is entirely tcx/netkit, and the one
+remaining XDP program is the `flowplane inspect` debug dumper, which nothing pins (see
+[Datapath programs](dataplane/programs.md)).
 
 Pinning a link to bpffs makes it — and thus the attached program — outlive the process. On restart
-the new process re-opens each pin (`PinnedLink::from_pin`) and calls `attach_to_link`, which is an
-atomic `bpf_link_update`: it re-points the still-attached link at the freshly-loaded program in
-one kernel operation. The hook is never empty.
+the new process re-opens each pin and atomically re-points it at the freshly-loaded program in one
+kernel operation: `PinnedLink::from_pin` + `attach_to_link` for a tcx link, `bpf(BPF_OBJ_GET)` +
+`bpf(BPF_LINK_UPDATE)` for a netkit link (`readopt_tc_link` / `readopt_netkit_link` in
+`flowplane/src/loader.rs`). The hook is never empty.
 
 ```mermaid
 sequenceDiagram
@@ -72,32 +80,40 @@ detach/re-attach branch — the re-point is correct and gap-free for every case,
 Link pinning is controlled by `--pin-links` (env `FLOWPLANE_PIN_LINKS`), default on.
 `--pin-links=false` restores in-process links with a fresh re-attach on restart — the safe rollback,
 with no data-format change (pinned maps and the `IFACE_META` journal are independent of link
-pinning). One production case runs with it off: the [WAN edge](../features/ns-edge.md) in SKB/generic
-XDP mode, where pinning the first XDP link and attaching a second silently drops the first — see the
-[runbook](../operations/runbook.md). The edge is stateless anycast, so it does not need pinned-link zero-gap HA;
-its maps still pin for conntrack continuity, only the links re-attach fresh.
+pinning). Nothing in the fabric or the charts runs with it off today, the
+[WAN edge](../features/ns-edge.md) included: co-located edge sidecars are isolated by a per-edge
+bpffs `--pin-dir` (`/sys/fs/bpf/flowplane-edge1` / `-edge2`) instead, so they keep pinned-link
+zero-gap restart — see the [runbook](../operations/runbook.md). One case the flag cannot cover: a
+netkit guest attach exists only on the pinning path and is rejected outright with pinning off
+(`netkit attach requires pin-links mode`).
 
-Kernels < 6.6 have no tcx: the guest tc attach falls back to netlink `cls_bpf`, which persists across
-the process on its own but cannot be re-opened as a link — the guest edge keeps the fresh-reattach
-behaviour there. The uplink/wan XDP zero-gap path is unaffected.
+Kernels < 6.6 have no tcx: aya's `SchedClassifier::attach` falls back to a netlink `cls_bpf` attach,
+whose link cannot be pinned to or re-opened from bpffs — `attach_tc_pinned_at` fails loudly ("tc link
+is not a tcx FdLink (kernel < 6.6); pinning unavailable") rather than silently degrading. Link
+pinning therefore needs ≥ 6.6 for every hook alike (geneve, WAN, guest); on an older kernel run with
+`--pin-links=false` and accept a fresh re-attach on restart.
 
 ## The zero-drop test
 
 `TestRestartContinuity` (`test/lab/livetest/restart_test.go`) formalizes the guarantee. A continuous
-ping flow runs through the datapath while the `flowplane` container is `crictl`-stopped and
-kubelet-restarted, asserting the unique fingerprint of adopt-and-repoint:
+cross-cluster overlay ping (60 probes at 0.2 s — a ~12 s window) runs through one compute node's
+datapath while that node's `flowplane` DaemonSet pod is deleted and rescheduled (Talos nodes are
+shell-less, so the test deletes the pod and lets the DaemonSet reschedule it rather than driving
+`crictl`), asserting the unique fingerprint of adopt-and-repoint:
 
-1. Packet loss across the restart boundary is ≤ the threshold (target ~0).
-2. The pinned bpf-link at `$PIN/links/uplink-eth1` survived the stop — same path present both
-   before and after, proving the link was held by bpffs, not the process.
-3. The prog-id on the uplink changed (before → after) — proving the restart atomically
-   re-pointed the pinned link at the freshly-loaded program (`bpf_link_update`), not a detach +
-   re-attach (which would show no prog-id mid-restart, i.e. a gap).
+1. Packet loss across the restart boundary is ≤ the threshold (15 of the 60 probes).
+2. The pinned bpf-link at `/sys/fs/bpf/flowplane/links/guest-<hex(interface_id)>` survived the pod
+   delete — the source endpoint is a netkit L3 guest, and the pin is present both before and after,
+   proving the link was held by the node's hostPath bpffs, not the process.
+3. The prog-id bound to that pinned link changed (before → after) — proving the restart atomically
+   re-pointed the link at the freshly-loaded `tc_guest_tx` (`readopt_netkit_link` →
+   `bpf(BPF_LINK_UPDATE)`), not a detach + re-attach (which would open a gap).
 
-The pin-survived + prog-id-changed combination is the signature that distinguishes a true zero-gap
-re-point from a detach/reattach. On the clab SKB fabric the tc guest attach may not land reliably, so
-the loss threshold there tolerates the full restart window plus clab overhead; on a native-XDP fabric
-(where the uplink XDP is genuinely zero-gap) a tight threshold of 2–3 pings is realistic.
+Both prog-ids are read with the host `bpftool -j link show pinned <pin>`, reaching the node's bpffs
+through `/proc/<node-pid>/root` — the link pin itself, not `bpftool net show` and not `tc filter
+show`. The pin-survived + prog-id-changed combination is the signature that distinguishes a true
+zero-gap re-point from a detach/reattach. The loss threshold is sized for the pod stop + reschedule +
+adopt window on the clab fabric, not for a datapath detach: the link stays attached throughout.
 
 The `make ha` target runs the pinned-maps kill+adopt smoke (state survival); the continuity scenario
 adds the forwarding-gap assertion on top.

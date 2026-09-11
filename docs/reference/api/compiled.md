@@ -73,7 +73,7 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `networkName` _string_ | NetworkName is the multus NetworkAttachmentDefinition name for the overlay binding. |  | Optional: \{\} <br /> |
 | `networkInterfaceRef` _string_ | NetworkInterfaceRef is "<namespace>/<nic>" — the pod's net.ectobase.dev/network-interface<br />annotation, which flowplane-cni resolves to the CompiledNIC. |  | Optional: \{\} <br /> |
-| `mac` _string_ | MAC is the pinned L2 address (from the NetworkInterface). |  | Optional: \{\} <br /> |
+| `mac` _string_ | MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac). |  | Optional: \{\} <br /> |
 
 
 #### CompiledContainerList
@@ -258,8 +258,11 @@ identity, VNI, overlay IPs, firewall rules (resolved from FirewallPolicy selecto
 allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC +
 FirewallPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.
 
-The source NetworkInterface is the CompiledNIC's OWNER (a controller ownerReference) and its name
-is encoded in the object name — so the spec carries no NICRef. It also deliberately does NOT carry
+The source NetworkInterface is recorded in the compiled.ectobase.dev/source-namespace and
+/source-name annotations and encoded in the object name (<sourceNamespace>-<sourceName>) — so the
+spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace
+on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer
+on the NetworkInterface instead. It also deliberately does NOT carry
 the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent
 obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the
 correct node-local nexthop. Keeping node-local state out of this central object avoids a
@@ -280,7 +283,7 @@ _Appears in:_
 | `nat` _[CompiledNATSource](#compilednatsource) array_ | NAT lists the egress-SNAT sources for this NIC's overlay IPs — one entry per NATGateway<br />allocation whose source is one of this NIC's IPs. Empty if the NIC's VPC has no NAT gateway. |  | Optional: \{\} <br /> |
 | `lb` _[CompiledLB](#compiledlb) array_ | LB lists the load balancers this NIC is a backend of. Pure forwarding membership —<br />it grants NO firewall permission (that comes solely from FirewallPolicy). |  | Optional: \{\} <br /> |
 | `peerImports` _[CompiledPeerImport](#compiledpeerimport) array_ | PeerImports lists peer VPCs whose routes this NIC imports (reachability only — grants NO<br />firewall permission; that comes solely from FirewallPolicy). Populated from Ready VPCPeerings<br />involving this NIC's VPC. |  | Optional: \{\} <br /> |
-| `mac` _string_ | MAC is the guest L2 address copied from the source NetworkInterface. The CNI<br />programs it as the datapath guest MAC (empty for containers — the datapath derives one). |  | Optional: \{\} <br /> |
+| `mac` _string_ | MAC is the guest L2 address sourced from the NetworkInterface's allocation<br />(status.allocatedMAC, or a pinned spec.mac adopted into it). The CNI programs it as the<br />datapath guest MAC, and it is also the key a KubeVirt virt-launcher pod's interface is<br />resolved by, since that pod carries no network-interface annotation. |  | Optional: \{\} <br /> |
 | `qos` _[CompiledQoS](#compiledqos)_ | QoS is the flattened per-interface QoS caps to program, or nil for unlimited. |  | Optional: \{\} <br /> |
 
 
@@ -361,7 +364,7 @@ _Appears in:_
 
 
 
-CompiledVMInterface is a resolved overlay interface for a VM: the pinned MAC
+CompiledVMInterface is a resolved overlay interface for a VM: the allocated MAC
 and the multus network (NetworkAttachmentDefinition) name for the flowplane binding.
 
 
@@ -371,7 +374,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `mac` _string_ | MAC is the pinned L2 address (from the NetworkInterface). |  | Optional: \{\} <br /> |
+| `mac` _string_ | MAC is the NetworkInterface's allocated L2 address (status.allocatedMAC, or a pinned spec.mac). |  | Optional: \{\} <br /> |
 | `networkName` _string_ | NetworkName is the multus NetworkAttachmentDefinition name for the overlay binding. |  | Optional: \{\} <br /> |
 
 

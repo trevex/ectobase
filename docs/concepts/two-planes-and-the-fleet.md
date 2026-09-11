@@ -72,7 +72,7 @@ flowchart TB
     end
 
     compiler -->|Compiled* stamped per pool| api
-    api <-->|spec.clusterName filter| broker
+    api <-->|pool namespace| broker
     refl <-->|routebus.v1| agent
 ```
 
@@ -90,7 +90,7 @@ and the reflector.
 
 Each pool is registered as a `ClusterPool` (`platform.ectobase.dev`) and is a genuine Kubernetes
 cluster running the dataplane. Its broker is a kubelet-analog: it watches the compiled objects in
-the dispatch apiserver filtered by `spec.clusterName` and set-reconciles them onto the pool's
+its own `pool-<clusterName>` namespace on the dispatch apiserver and set-reconciles them onto the pool's
 downstream apiserver as ordinary CRDs. Where the dispatch has aggregated types, the pool has the
 concrete CRDs the broker writes into. Once written, the pool's materializers turn compiled
 objects into Pods and KubeVirt VMs, and the agent programs `CompiledNIC` into flowplane.
