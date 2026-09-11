@@ -14,7 +14,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
-	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
 	"github.com/trevex/ectobase/api/validate"
 )
@@ -317,24 +316,37 @@ func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[
 		return fmt.Errorf("patch pool %s status: %w", b.ClusterName, err)
 	}
 
-	// Per-VM placement: stamp each central VirtualMachine we can resolve. Failures are
-	// swallowed (the pool status — the fence-gating signal — already landed above).
+	// Per-VM placement is reported onto this pool's own CompiledVM, NOT onto the source
+	// VirtualMachine. The VirtualMachine lives in a tenant namespace shared with every other
+	// pool's workloads, so writing it would need a grant no per-pool RBAC can scope — a broker
+	// could then stamp placement on another pool's VM. The CompiledVM is in this pool's
+	// namespace, so the same write is scopeable; a mesh controller mirrors it onto the
+	// VirtualMachine, which is a cross-namespace write the dispatch controller may legitimately
+	// make. Failures are swallowed: the pool status above is the fence-gating signal.
+	//
+	// The key's name half is the downstream VMI name, which is the CompiledVM's name (the
+	// materializer names the KubeVirt VM after it); its namespace half is the source namespace and
+	// is irrelevant here, since the twin lives in the pool namespace on the dispatch.
 	for vmKey, nodeName := range vmNode {
-		ns, name, ok := splitVMKey(vmKey)
+		_, name, ok := splitVMKey(vmKey)
 		if !ok {
-			continue // malformed key without a namespace — don't guess and mis-target.
+			continue // malformed key — don't guess and mis-target.
 		}
-		var vm computev1.VirtualMachine
-		if err := b.Dispatch.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &vm); err != nil {
-			continue // VM may not be a dispatch-tracked object; skip.
+		var cvm compiledv1.CompiledVM
+		if err := b.Dispatch.Get(ctx, client.ObjectKey{Namespace: b.poolNamespace(), Name: name}, &cvm); err != nil {
+			continue // not one of ours (e.g. a raw KubeVirt VMI with no CompiledVM anchor); skip.
 		}
 		placement := PlacementForVM(b.ClusterName, nodeName, nodes)
 		if placement == nil {
 			continue // node unknown (no prefix resolved) — nothing to report yet.
 		}
-		vmOrig := vm.DeepCopy()
-		vm.Status.Placement = placement
-		_ = b.Dispatch.Status().Patch(ctx, &vm, client.MergeFrom(vmOrig))
+		cvmOrig := cvm.DeepCopy()
+		cvm.Status.Placement = &compiledv1.VMPlacement{
+			ClusterName: placement.ClusterName,
+			NodeName:    placement.NodeName,
+			NodePrefix:  placement.NodePrefix,
+		}
+		_ = b.Dispatch.Status().Patch(ctx, &cvm, client.MergeFrom(cvmOrig))
 	}
 	return nil
 }

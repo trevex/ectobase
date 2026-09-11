@@ -120,6 +120,12 @@ func main() {
 		log.Fatalf("setup compiledvolumeattachment controller: %v", err)
 	}
 
+	// Mirrors each pool's reported VM placement from its CompiledVM up onto the source
+	// VirtualMachine — the cross-namespace half of that write, which a pool's broker must not have.
+	if err := (&controllers.VMPlacementMirrorReconciler{Client: mgr.GetClient()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup vmplacementmirror controller: %v", err)
+	}
+
 	// Backstop for the compiled-twin finalizers: reclaims twins whose source is gone (a
 	// force-removed finalizer, or a leftover from an older layout). APIReader, not the cache —
 	// a lagging cache reporting a live source as missing would delete a twin still in use.

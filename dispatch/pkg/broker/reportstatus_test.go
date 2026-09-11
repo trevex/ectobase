@@ -12,11 +12,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computeinstall "github.com/trevex/ectobase/api/compute/install"
-	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netinstall "github.com/trevex/ectobase/api/net/install"
 	platforminstall "github.com/trevex/ectobase/api/platform/install"
 	platformv1 "github.com/trevex/ectobase/api/platform/v1alpha1"
+	"github.com/trevex/ectobase/api/validate"
 )
 
 // TestReportStatus_WritesPrefixesPlacementAndDrain proves ReportStatus stamps the
@@ -33,6 +34,9 @@ func TestReportStatus_WritesPrefixesPlacementAndDrain(t *testing.T) {
 	if err := computeinstall.AddToScheme(s); err != nil {
 		t.Fatal(err)
 	}
+	if err := compiledv1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
 
 	const (
 		prefix1 = "2001:db8:0:1::/64" // node-1, hosts vm1 -> stays busy (fenced)
@@ -44,13 +48,16 @@ func TestReportStatus_WritesPrefixesPlacementAndDrain(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "c1"},
 		Status:     platformv1.ClusterPoolStatus{FencedPrefixes: []string{prefix1, prefix2}},
 	}
-	vm := &computev1.VirtualMachine{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "vm1"},
+	// Placement is reported onto this pool's own CompiledVM (in its pool namespace), never onto
+	// the tenant-namespace VirtualMachine — that write is not scopeable by per-pool RBAC, so a
+	// mesh controller performs the cross-namespace hop instead.
+	cvm := &compiledv1.CompiledVM{
+		ObjectMeta: metav1.ObjectMeta{Namespace: validate.PoolNamespace("c1"), Name: "default-vm1"},
 	}
 	c := fake.NewClientBuilder().
 		WithScheme(s).
-		WithObjects(pool, vm).
-		WithStatusSubresource(pool, vm).
+		WithObjects(pool, cvm).
+		WithStatusSubresource(pool, cvm).
 		Build()
 
 	b := &Broker{Dispatch: c, ClusterName: "c1"}
@@ -58,7 +65,7 @@ func TestReportStatus_WritesPrefixesPlacementAndDrain(t *testing.T) {
 		{Name: "node-1", Prefix: prefix1},
 		{Name: "node-2", Prefix: prefix2},
 	}
-	vmNode := map[string]string{"default/vm1": "node-1"}
+	vmNode := map[string]string{"default/default-vm1": "node-1"}
 
 	if err := b.ReportStatus(context.Background(), nodes, vmNode); err != nil {
 		t.Fatalf("ReportStatus: %v", err)
@@ -86,17 +93,18 @@ func TestReportStatus_WritesPrefixesPlacementAndDrain(t *testing.T) {
 		t.Fatalf("prefix2 is empty, must be drained: %v", gotPool.Status.NodeDrain)
 	}
 
-	// VM: Placement stamped with cluster + node + resolved /64.
-	gotVM := &computev1.VirtualMachine{}
-	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "default", Name: "vm1"}, gotVM); err != nil {
+	// CompiledVM: Placement stamped with cluster + node + resolved /64, in the POOL namespace.
+	gotCVM := &compiledv1.CompiledVM{}
+	if err := c.Get(context.Background(),
+		client.ObjectKey{Namespace: validate.PoolNamespace("c1"), Name: "default-vm1"}, gotCVM); err != nil {
 		t.Fatal(err)
 	}
-	if gotVM.Status.Placement == nil {
-		t.Fatalf("vm1 placement not stamped")
+	if gotCVM.Status.Placement == nil {
+		t.Fatalf("vm1 placement not stamped onto its CompiledVM")
 	}
-	if gotVM.Status.Placement.ClusterName != "c1" ||
-		gotVM.Status.Placement.NodeName != "node-1" ||
-		gotVM.Status.Placement.NodePrefix != prefix1 {
-		t.Fatalf("vm1 placement: %+v", gotVM.Status.Placement)
+	if gotCVM.Status.Placement.ClusterName != "c1" ||
+		gotCVM.Status.Placement.NodeName != "node-1" ||
+		gotCVM.Status.Placement.NodePrefix != prefix1 {
+		t.Fatalf("vm1 placement: %+v", gotCVM.Status.Placement)
 	}
 }

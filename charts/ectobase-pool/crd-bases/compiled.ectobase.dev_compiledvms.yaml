@@ -149,6 +149,23 @@ spec:
               KubeVirt VirtualMachine via declarative set-reconcile, so — unlike CompiledNIC,
               whose node agent tracks an applied generation — no GenerationApplied is needed here.
             properties:
+              placement:
+                description: |-
+                  Placement is where this VM actually runs, reported upward by the pool's broker. It lands
+                  here rather than directly on the source VirtualMachine because the broker's writes are
+                  scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine.
+                properties:
+                  clusterName:
+                    description: ClusterName is the pool the VM is running on.
+                    type: string
+                  nodeName:
+                    description: NodeName is the node running the VM.
+                    type: string
+                  nodePrefix:
+                    description: NodePrefix is that node's /64 underlay prefix (the
+                      fence coordinate).
+                    type: string
+                type: object
               state:
                 description: State is the materialization state (e.g. Applied, Pending).
                 type: string

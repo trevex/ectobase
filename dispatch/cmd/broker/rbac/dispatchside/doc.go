@@ -6,6 +6,10 @@
 package dispatchside
 
 //+kubebuilder:rbac:groups=compiled.ectobase.dev,resources=compilednics;compiledvms;compiledvolumeattachments;compiledcontainers,verbs=get;list;watch
+// The broker reports each VM's actual running location onto its OWN pool's CompiledVM status —
+// never onto the source VirtualMachine, which sits in a tenant namespace shared with other pools'
+// workloads and so would need a grant no per-pool RBAC can scope. A mesh controller mirrors it up.
+//+kubebuilder:rbac:groups=compiled.ectobase.dev,resources=compiledvms/status,verbs=get;update;patch
 // The broker only READS ClusterPool spec (to resolve its cluster) and writes its OWN pool STATUS
 // (the lease/capacity heartbeat + node prefixes). It never creates or mutates pool spec — the
 // operator owns that — so the parent resource is read-only here, scoped to the broker's own pool

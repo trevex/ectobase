@@ -70,6 +70,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &compiledv1alpha1.CompiledVolumeAttachmentStatusApplyConfiguration{}
 	case v1alpha1.SchemeGroupVersion.WithKind("PortStatus"):
 		return &compiledv1alpha1.PortStatusApplyConfiguration{}
+	case v1alpha1.SchemeGroupVersion.WithKind("VMPlacement"):
+		return &compiledv1alpha1.VMPlacementApplyConfiguration{}
 
 		// Group=compute.ectobase.dev, Version=v1alpha1
 	case computev1alpha1.SchemeGroupVersion.WithKind("CloudInit"):

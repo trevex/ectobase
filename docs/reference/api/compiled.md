@@ -434,6 +434,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `state` _string_ | State is the materialization state (e.g. Applied, Pending). |  | Optional: \{\} <br /> |
+| `placement` _[VMPlacement](#vmplacement)_ | Placement is where this VM actually runs, reported upward by the pool's broker. It lands<br />here rather than directly on the source VirtualMachine because the broker's writes are<br />scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine. |  | Optional: \{\} <br /> |
 
 
 #### CompiledVolumeAttachment
@@ -548,5 +549,27 @@ _Appears in:_
 | --- | --- |
 | `tap` | PortTypeTap is a tap-backed (vhost-user) port.<br /> |
 | `vf` | PortTypeVF is an SR-IOV virtual-function passthrough port.<br /> |
+
+
+#### VMPlacement
+
+
+
+VMPlacement is a VM's actual running location, as observed by the pool that runs it.
+
+Deliberately redeclared here rather than reusing compute.VMPlacement: the compiled group is
+self-contained by design — a pool consumes only compiled.ectobase.dev and never needs the source
+API — and an import the other way would break that.
+
+
+
+_Appears in:_
+- [CompiledVMStatus](#compiledvmstatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `clusterName` _string_ | ClusterName is the pool the VM is running on. |  | Optional: \{\} <br /> |
+| `nodeName` _string_ | NodeName is the node running the VM. |  | Optional: \{\} <br /> |
+| `nodePrefix` _string_ | NodePrefix is that node's /64 underlay prefix (the fence coordinate). |  | Optional: \{\} <br /> |
 
 

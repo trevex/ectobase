@@ -12,6 +12,10 @@ package v1alpha1
 type CompiledVMStatusApplyConfiguration struct {
 	// State is the materialization state (e.g. Applied, Pending).
 	State *string `json:"state,omitempty"`
+	// Placement is where this VM actually runs, reported upward by the pool's broker. It lands
+	// here rather than directly on the source VirtualMachine because the broker's writes are
+	// scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine.
+	Placement *VMPlacementApplyConfiguration `json:"placement,omitempty"`
 }
 
 // CompiledVMStatusApplyConfiguration constructs a declarative configuration of the CompiledVMStatus type for use with
@@ -25,5 +29,13 @@ func CompiledVMStatus() *CompiledVMStatusApplyConfiguration {
 // If called multiple times, the State field is set to the value of the last call.
 func (b *CompiledVMStatusApplyConfiguration) WithState(value string) *CompiledVMStatusApplyConfiguration {
 	b.State = &value
+	return b
+}
+
+// WithPlacement sets the Placement field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Placement field is set to the value of the last call.
+func (b *CompiledVMStatusApplyConfiguration) WithPlacement(value *VMPlacementApplyConfiguration) *CompiledVMStatusApplyConfiguration {
+	b.Placement = value
 	return b
 }

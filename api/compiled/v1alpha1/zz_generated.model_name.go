@@ -144,3 +144,8 @@ func (in LocalObjectReference) OpenAPIModelName() string {
 func (in PortStatus) OpenAPIModelName() string {
 	return "dev.ectobase.compiled.v1alpha1.PortStatus"
 }
+
+// OpenAPIModelName returns the OpenAPI model name for this type.
+func (in VMPlacement) OpenAPIModelName() string {
+	return "dev.ectobase.compiled.v1alpha1.VMPlacement"
+}

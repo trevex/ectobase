@@ -50,6 +50,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		v1alpha1.CompiledVolumeAttachmentStatus{}.OpenAPIModelName(): schema_ectobase_api_compiled_v1alpha1_CompiledVolumeAttachmentStatus(ref),
 		v1alpha1.LocalObjectReference{}.OpenAPIModelName():           schema_ectobase_api_compiled_v1alpha1_LocalObjectReference(ref),
 		v1alpha1.PortStatus{}.OpenAPIModelName():                     schema_ectobase_api_compiled_v1alpha1_PortStatus(ref),
+		v1alpha1.VMPlacement{}.OpenAPIModelName():                    schema_ectobase_api_compiled_v1alpha1_VMPlacement(ref),
 		computev1alpha1.CloudInit{}.OpenAPIModelName():               schema_ectobase_api_compute_v1alpha1_CloudInit(ref),
 		computev1alpha1.Container{}.OpenAPIModelName():               schema_ectobase_api_compute_v1alpha1_Container(ref),
 		computev1alpha1.ContainerList{}.OpenAPIModelName():           schema_ectobase_api_compute_v1alpha1_ContainerList(ref),
@@ -1406,9 +1407,17 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledVMStatus(ref common.Reference
 							Format:      "",
 						},
 					},
+					"placement": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Placement is where this VM actually runs, reported upward by the pool's broker. It lands here rather than directly on the source VirtualMachine because the broker's writes are scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine.",
+							Ref:         ref(v1alpha1.VMPlacement{}.OpenAPIModelName()),
+						},
+					},
 				},
 			},
 		},
+		Dependencies: []string{
+			v1alpha1.VMPlacement{}.OpenAPIModelName()},
 	}
 }
 
@@ -1624,6 +1633,40 @@ func schema_ectobase_api_compiled_v1alpha1_PortStatus(ref common.ReferenceCallba
 					"pciAddress": {
 						SchemaProps: spec.SchemaProps{
 							Description: "PCIAddress is the PCI address for vf ports.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_ectobase_api_compiled_v1alpha1_VMPlacement(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "VMPlacement is a VM's actual running location, as observed by the pool that runs it.\n\nDeliberately redeclared here rather than reusing compute.VMPlacement: the compiled group is self-contained by design — a pool consumes only compiled.ectobase.dev and never needs the source API — and an import the other way would break that.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"clusterName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ClusterName is the pool the VM is running on.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"nodeName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "NodeName is the node running the VM.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"nodePrefix": {
+						SchemaProps: spec.SchemaProps{
+							Description: "NodePrefix is that node's /64 underlay prefix (the fence coordinate).",
 							Type:        []string{"string"},
 							Format:      "",
 						},

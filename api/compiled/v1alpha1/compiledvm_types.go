@@ -61,6 +61,28 @@ type CompiledVMStatus struct {
 	// State is the materialization state (e.g. Applied, Pending).
 	// +optional
 	State string `json:"state,omitempty"`
+	// Placement is where this VM actually runs, reported upward by the pool's broker. It lands
+	// here rather than directly on the source VirtualMachine because the broker's writes are
+	// scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine.
+	// +optional
+	Placement *VMPlacement `json:"placement,omitempty" protobuf:"bytes,2,opt,name=placement"`
+}
+
+// VMPlacement is a VM's actual running location, as observed by the pool that runs it.
+//
+// Deliberately redeclared here rather than reusing compute.VMPlacement: the compiled group is
+// self-contained by design — a pool consumes only compiled.ectobase.dev and never needs the source
+// API — and an import the other way would break that.
+type VMPlacement struct {
+	// ClusterName is the pool the VM is running on.
+	// +optional
+	ClusterName string `json:"clusterName,omitempty" protobuf:"bytes,1,opt,name=clusterName"`
+	// NodeName is the node running the VM.
+	// +optional
+	NodeName string `json:"nodeName,omitempty" protobuf:"bytes,2,opt,name=nodeName"`
+	// NodePrefix is that node's /64 underlay prefix (the fence coordinate).
+	// +optional
+	NodePrefix string `json:"nodePrefix,omitempty" protobuf:"bytes,3,opt,name=nodePrefix"`
 }
 
 // +genclient

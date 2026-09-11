@@ -16,6 +16,14 @@ rules:
   - list
   - watch
 - apiGroups:
+  - compiled.ectobase.dev
+  resources:
+  - compiledvms/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - platform.ectobase.dev
   resources:
   - clusterpools

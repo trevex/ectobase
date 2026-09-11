@@ -43,6 +43,24 @@ type CloudInit struct {
 type CompiledVMStatus struct {
 	// State is the materialization state (e.g. Applied, Pending).
 	State string
+	// Placement is where this VM actually runs, reported upward by the pool's broker. It lands
+	// here rather than directly on the source VirtualMachine because the broker's writes are
+	// scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine.
+	Placement *VMPlacement
+}
+
+// VMPlacement is a VM's actual running location, as observed by the pool that runs it.
+//
+// Deliberately redeclared here rather than reusing compute.VMPlacement: the compiled group is
+// self-contained by design — a pool consumes only compiled.ectobase.dev and never needs the source
+// API — and an import the other way would break that.
+type VMPlacement struct {
+	// ClusterName is the pool the VM is running on.
+	ClusterName string
+	// NodeName is the node running the VM.
+	NodeName string
+	// NodePrefix is that node's /64 underlay prefix (the fence coordinate).
+	NodePrefix string
 }
 
 // +genclient
