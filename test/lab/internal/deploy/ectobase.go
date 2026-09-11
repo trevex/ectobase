@@ -514,6 +514,40 @@ metadata:
 spec:
   poolName: %[1]s
 ---
+# This pool's compiled objects, scoped by NAMESPACE. This is what closes cross-pool reads: a
+# RoleBinding only authorizes requests carrying this namespace, so the broker cannot list another
+# pool's compiled state even if it drops its own client-side filter.
+#
+# Read-only on the objects themselves — the compiler owns them. The one write is compiledvms/status
+# (the placement a pool observes), and only the status subresource, so a broker can never edit a
+# spec (e.g. re-home a workload by rewriting spec.clusterName) nor create or delete twins.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dispatch-broker
+  namespace: pool-%[1]s
+rules:
+  - apiGroups: ["compiled.ectobase.dev"]
+    resources: ["compilednics", "compiledvms", "compiledvolumeattachments", "compiledcontainers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["compiled.ectobase.dev"]
+    resources: ["compiledvms/status"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dispatch-broker
+  namespace: pool-%[1]s
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dispatch-broker
+subjects:
+  - kind: User
+    name: "ectobase:cluster:%[1]s"
+    apiGroup: rbac.authorization.k8s.io
+---
 # This pool's first-boot bootstrap identity (the short-lived enrollment token is minted for it).
 # One SA PER POOL: a shared one would let any pool bootstrap any other pool's intermediate CA.
 apiVersion: v1
@@ -522,8 +556,9 @@ metadata:
   name: dispatch-broker-bootstrap-%[1]s
   namespace: system
 ---
-# Route-bus identity access for THIS pool only, granted to both the first-boot bootstrap SA and
-# the steady-state cert identity (CN=ectobase:cluster:%[1]s).
+# Cluster-scoped access for THIS pool only. Everything here is resourceNames-scoped, which is why
+# the broker reads these by name through an UNCACHED client: a cached read would issue a
+# cluster-wide list/watch, and resourceNames cannot match a request that carries no name.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -537,6 +572,16 @@ rules:
     resources: ["routebusidentities/status"]
     resourceNames: ["%[1]s"]
     verbs: ["get", "update"]
+  # The pool reads its own ClusterPool and reports lease/capacity/fence facts onto its status.
+  # It never writes the spec — the operator owns placement — so no write on the parent resource.
+  - apiGroups: ["platform.ectobase.dev"]
+    resources: ["clusterpools"]
+    resourceNames: ["%[1]s"]
+    verbs: ["get"]
+  - apiGroups: ["platform.ectobase.dev"]
+    resources: ["clusterpools/status"]
+    resourceNames: ["%[1]s"]
+    verbs: ["get", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

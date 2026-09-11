@@ -50,6 +50,9 @@ renders (ebpf clab):
                 - --reflector=[fd00:db8:0:1::1]:1338
                 - --dataplane=unix:///run/flowplane/dataplane.sock
                 - --kubeconfig=/etc/mesh/kubeconfig
+                - --tls-ca=/etc/routebus-root/ca.crt
+                - --routebus-issuer=ectobase-pool-ca
+                - --routebus-cert-namespace=ectobase-system
               command:
                 - agent
               env:
@@ -75,6 +78,9 @@ renders (ebpf clab):
                 - mountPath: /run/flowplane
                   name: flowplane-sock
                   readOnly: true
+                - mountPath: /etc/routebus-root
+                  name: routebus-root
+                  readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           serviceAccountName: mesh-agent
@@ -88,6 +94,12 @@ renders (ebpf clab):
                 path: /run/flowplane
                 type: DirectoryOrCreate
               name: flowplane-sock
+            - name: routebus-root
+              secret:
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+                secretName: ectobase-pool-ca
   3: |
     apiVersion: apps/v1
     kind: Deployment
@@ -113,7 +125,12 @@ renders (ebpf clab):
           containers:
             - args:
                 - --cluster-name=test
-                - --dispatch-kubeconfig=/secrets/dispatch/kubeconfig
+                - --dispatch-server=https://[fd00:db8:0:1::1]:6444
+                - --dispatch-ca=/secrets/dispatch-root/ca.crt
+                - --dispatch-client-cert=/secrets/dispatch-cert/tls.crt
+                - --dispatch-client-key=/secrets/dispatch-cert/tls.key
+                - --dispatch-bootstrap-kubeconfig=/secrets/dispatch-bootstrap/kubeconfig
+                - --routebus-intermediate-secret=ectobase-pool-ca
               command:
                 - broker
               env:
@@ -129,8 +146,14 @@ renders (ebpf clab):
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /secrets/dispatch
-                  name: dispatch-kubeconfig
+                - mountPath: /secrets/dispatch-cert
+                  name: dispatch-cert
+                  readOnly: true
+                - mountPath: /secrets/dispatch-root
+                  name: dispatch-root
+                  readOnly: true
+                - mountPath: /secrets/dispatch-bootstrap
+                  name: dispatch-bootstrap
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
@@ -140,9 +163,19 @@ renders (ebpf clab):
           tolerations:
             - operator: Exists
           volumes:
-            - name: dispatch-kubeconfig
+            - name: dispatch-cert
               secret:
-                secretName: broker-dispatch-kubeconfig
+                optional: true
+                secretName: broker-dispatch-tls
+            - name: dispatch-root
+              secret:
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+                secretName: dispatch-root-ca
+            - name: dispatch-bootstrap
+              secret:
+                secretName: broker-dispatch-bootstrap
   4: |
     apiVersion: v1
     kind: ServiceAccount
@@ -170,7 +203,6 @@ renders (ebpf clab):
           - compilednics
         verbs:
           - get
-          - list
   6: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -938,6 +970,22 @@ renders (ebpf clab):
                     KubeVirt VirtualMachine via declarative set-reconcile, so — unlike CompiledNIC,
                     whose node agent tracks an applied generation — no GenerationApplied is needed here.
                   properties:
+                    placement:
+                      description: |-
+                        Placement is where this VM actually runs, reported upward by the pool's broker. It lands
+                        here rather than directly on the source VirtualMachine because the broker's writes are
+                        scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine.
+                      properties:
+                        clusterName:
+                          description: ClusterName is the pool the VM is running on.
+                          type: string
+                        nodeName:
+                          description: NodeName is the node running the VM.
+                          type: string
+                        nodePrefix:
+                          description: NodePrefix is that node's /64 underlay prefix (the fence coordinate).
+                          type: string
+                      type: object
                     state:
                       description: State is the materialization state (e.g. Applied, Pending).
                       type: string
@@ -1240,6 +1288,75 @@ renders (ebpf clab):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+      name: lbpools.net.ectobase.dev
+    spec:
+      group: net.ectobase.dev
+      names:
+        kind: LBPool
+        listKind: LBPoolList
+        plural: lbpools
+        singular: lbpool
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped VIP prefix range).
+                  properties:
+                    reservedIPs:
+                      description: ReservedIPs are addresses held back from allocation within this pool.
+                      items:
+                        type: string
+                      type: array
+                    v4Prefix:
+                      description: V4Prefix optionally pins the IPv4 CIDR for this VIP pool.
+                      type: string
+                    v6Prefix:
+                      description: V6Prefix optionally pins the IPv6 CIDR for this VIP pool.
+                      type: string
+                  type: object
+                status:
+                  description: LBPoolStatus is the observed state of an LBPool.
+                  properties:
+                    state:
+                      description: State is the current lifecycle state (e.g. Pending, Ready).
+                      type: string
+                    total:
+                      description: Total is the total number of allocatable VIP addresses.
+                      format: int32
+                      type: integer
+                  type: object
+              type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}
+  15: |
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        controller-gen.kubebuilder.io/version: v0.20.1
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -1277,6 +1394,15 @@ renders (ebpf clab):
                     LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity
                     (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
                   properties:
+                    poolRef:
+                      description: PoolRef selects the LBPool to allocate the VIP from.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
                     ports:
                       description: Ports are the LB service (port, proto) tuples.
                       items:
@@ -1351,7 +1477,9 @@ renders (ebpf clab):
                       type: object
                       x-kubernetes-map-type: atomic
                     vip:
-                      description: VIP is the virtual IP (IPv4 or IPv6). It is the LB identity and the AddLbVip id.
+                      description: |-
+                        VIP is the requested virtual IP. Empty => allocate from PoolRef; set =>
+                        validate membership in the pool + reserve (bring-your-own).
                       type: string
                   required:
                     - ports
@@ -1360,6 +1488,13 @@ renders (ebpf clab):
                 status:
                   description: LoadBalancerStatus is the observed state of a LoadBalancer.
                   properties:
+                    allocatedVIP:
+                      description: AllocatedVIP is the authoritative VIP assigned by the VIP allocator.
+                      type: string
+                    observedGeneration:
+                      description: ObservedGeneration is the Spec generation the allocation reflects.
+                      format: int64
+                      type: integer
                     state:
                       description: State is the lifecycle state (Pending | Ready).
                       type: string
@@ -1369,7 +1504,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  15: |
+  16: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -1479,7 +1614,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  16: |
+  17: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -1528,17 +1663,20 @@ renders (ebpf clab):
                       type: string
                     ips:
                       description: |-
-                        IPs are the user-specified overlay IPs (v4 and/or v6). The platform does
-                        not allocate these.
+                        IPs is the requested overlay set. Empty => the platform allocates from
+                        the subnet. Populated => the requested IPs are validated for subnet
+                        membership and uniqueness, then reserved (bring-your-own).
                       items:
                         type: string
                       type: array
                     mac:
                       description: |-
-                        MAC is the interface's L2 address. REQUIRED for a KubeVirt VM (device_type
-                        pod-tap/tap): the datapath programs this as the guest MAC, and the VMI's
-                        spec.domain.devices.interfaces[].macAddress MUST be set to the same value so
-                        KubeVirt gives the VM's virtio NIC that MAC. Empty for containers (derived).
+                        MAC is a bring-your-own L2 address request. Empty => the platform allocates
+                        a stable, VPC-unique, locally-administered MAC into Status.AllocatedMAC.
+                        Populated => the address is validated for format and VPC-uniqueness, then
+                        reserved (a bad or clashing pin surfaces as Status.State=="Invalid"). The
+                        authoritative value the datapath and the KubeVirt VMI use is always
+                        Status.AllocatedMAC, never this field directly.
                       type: string
                     nodeName:
                       description: NodeName is the node the interface is scheduled onto. Set by the scheduler.
@@ -1575,6 +1713,17 @@ renders (ebpf clab):
                               type: integer
                           type: object
                       type: object
+                    subnetRef:
+                      description: |-
+                        SubnetRef selects the Subnet to allocate from. Optional when the VPC has
+                        exactly one Subnet, in which case that Subnet is used.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
                     vpcRef:
                       description: VPCRef references the VPC this interface belongs to.
                       properties:
@@ -1590,6 +1739,26 @@ renders (ebpf clab):
                 status:
                   description: NetworkInterfaceStatus is the observed state of a NetworkInterface.
                   properties:
+                    allocatedIPs:
+                      description: |-
+                        AllocatedIPs is the authoritative overlay address set assigned by the IP
+                        allocator. CompiledNIC.Spec.OverlayIPs is sourced from this, never Spec.IPs.
+                      items:
+                        type: string
+                      type: array
+                    allocatedMAC:
+                      description: |-
+                        AllocatedMAC is the authoritative L2 address assigned by the MAC allocator:
+                        a stable, VPC-unique, locally-administered MAC derived from the NIC's UID
+                        (or the pinned Spec.MAC). CompiledNIC.Spec.MAC is sourced from this, never
+                        Spec.MAC. Empty until the interface reaches State=="Allocated".
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        ObservedGeneration is the Spec generation the allocation reflects. Compile
+                        is gated on ObservedGeneration == metadata.generation.
+                      format: int64
+                      type: integer
                     port:
                       description: Port describes the dataplane port allocated for this interface.
                       properties:
@@ -1622,7 +1791,91 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  17: |
+  18: |
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        controller-gen.kubebuilder.io/version: v0.20.1
+      name: subnets.net.ectobase.dev
+    spec:
+      group: net.ectobase.dev
+      names:
+        kind: Subnet
+        listKind: SubnetList
+        plural: subnets
+        singular: subnet
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: Subnet is a VPC-scoped range of IPv4/IPv6 prefixes.
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: SubnetSpec is the desired state of a Subnet (a VPC-scoped v4/v6 prefix range).
+                  properties:
+                    reservedIPs:
+                      description: ReservedIPs are addresses held back from allocation within this subnet.
+                      items:
+                        type: string
+                      type: array
+                    v4Prefix:
+                      description: V4Prefix optionally pins the IPv4 CIDR for this subnet.
+                      type: string
+                    v6Prefix:
+                      description: V6Prefix optionally pins the IPv6 CIDR for this subnet.
+                      type: string
+                    vpcRef:
+                      description: VPCRef references the owning VPC within the same namespace.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
+                  required:
+                    - vpcRef
+                  type: object
+                status:
+                  description: SubnetStatus is the observed state of a Subnet.
+                  properties:
+                    state:
+                      description: State is the current lifecycle state (e.g. Pending, Ready).
+                      type: string
+                    v4Total:
+                      description: V4Total is the total number of allocatable IPv4 addresses.
+                      format: int32
+                      type: integer
+                    v6Total:
+                      description: V6Total is the total number of allocatable IPv6 addresses.
+                      format: int32
+                      type: integer
+                  type: object
+              type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}
+  19: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -1715,7 +1968,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  18: |
+  20: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -1784,7 +2037,7 @@ renders (ebpf clab):
           storage: true
           subresources:
             status: {}
-  19: |
+  21: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
@@ -1900,7 +2153,7 @@ renders (ebpf clab):
                 path: /var/run/netns
                 type: DirectoryOrCreate
               name: netns
-  20: |
+  22: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -1917,7 +2170,7 @@ renders (ebpf clab):
             }
           ]
         }
-  21: |
+  23: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -1935,7 +2188,7 @@ renders (ebpf clab):
             }
           ]
         }
-  22: |
+  24: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -1968,13 +2221,13 @@ renders (ebpf clab):
                   cpu: 50m
                   memory: 64Mi
           serviceAccountName: pod-materializer
-  23: |
+  25: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: mesh-agent
       namespace: ectobase-system
-  24: |
+  26: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -2027,7 +2280,7 @@ renders (ebpf clab):
           - get
           - list
           - watch
-  25: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -2040,13 +2293,13 @@ renders (ebpf clab):
       - kind: ServiceAccount
         name: mesh-agent
         namespace: ectobase-system
-  26: |
+  28: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: dispatch-broker
       namespace: ectobase-system
-  27: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -2097,7 +2350,7 @@ renders (ebpf clab):
           - get
           - list
           - watch
-  28: |
+  30: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -2110,13 +2363,13 @@ renders (ebpf clab):
       - kind: ServiceAccount
         name: dispatch-broker
         namespace: ectobase-system
-  29: |
+  31: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  30: |
+  32: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -2153,7 +2406,7 @@ renders (ebpf clab):
           - get
           - patch
           - update
-  31: |
+  33: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -2166,6 +2419,42 @@ renders (ebpf clab):
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
+  34: |
+    apiVersion: cert-manager.io/v1
+    kind: Issuer
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase
+      name: ectobase-pool-ca
+      namespace: ectobase-system
+    spec:
+      ca:
+        secretName: ectobase-pool-ca
+  35: |
+    apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase
+      name: broker-dispatch-tls
+      namespace: ectobase-system
+    spec:
+      commonName: ectobase:cluster:test
+      duration: 2160h
+      issuerRef:
+        kind: Issuer
+        name: ectobase-pool-ca
+      privateKey:
+        algorithm: ECDSA
+        size: 256
+      secretName: broker-dispatch-tls
+      subject:
+        organizations:
+          - ectobase:brokers
+      usages:
+        - client auth
 renders (ebpf hw):
   1: |
     apiVersion: v1
@@ -2218,6 +2507,9 @@ renders (ebpf hw):
                 - --reflector=[fd00:db8:0:1::1]:1338
                 - --dataplane=unix:///run/flowplane/dataplane.sock
                 - --kubeconfig=/etc/mesh/kubeconfig
+                - --tls-ca=/etc/routebus-root/ca.crt
+                - --routebus-issuer=ectobase-pool-ca
+                - --routebus-cert-namespace=ectobase-system
               command:
                 - agent
               env:
@@ -2243,6 +2535,9 @@ renders (ebpf hw):
                 - mountPath: /run/flowplane
                   name: flowplane-sock
                   readOnly: true
+                - mountPath: /etc/routebus-root
+                  name: routebus-root
+                  readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           serviceAccountName: mesh-agent
@@ -2256,6 +2551,12 @@ renders (ebpf hw):
                 path: /run/flowplane
                 type: DirectoryOrCreate
               name: flowplane-sock
+            - name: routebus-root
+              secret:
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+                secretName: ectobase-pool-ca
   3: |
     apiVersion: apps/v1
     kind: Deployment
@@ -2281,7 +2582,12 @@ renders (ebpf hw):
           containers:
             - args:
                 - --cluster-name=test
-                - --dispatch-kubeconfig=/secrets/dispatch/kubeconfig
+                - --dispatch-server=https://[fd00:db8:0:1::1]:6444
+                - --dispatch-ca=/secrets/dispatch-root/ca.crt
+                - --dispatch-client-cert=/secrets/dispatch-cert/tls.crt
+                - --dispatch-client-key=/secrets/dispatch-cert/tls.key
+                - --dispatch-bootstrap-kubeconfig=/secrets/dispatch-bootstrap/kubeconfig
+                - --routebus-intermediate-secret=ectobase-pool-ca
               command:
                 - broker
               env:
@@ -2297,8 +2603,14 @@ renders (ebpf hw):
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /secrets/dispatch
-                  name: dispatch-kubeconfig
+                - mountPath: /secrets/dispatch-cert
+                  name: dispatch-cert
+                  readOnly: true
+                - mountPath: /secrets/dispatch-root
+                  name: dispatch-root
+                  readOnly: true
+                - mountPath: /secrets/dispatch-bootstrap
+                  name: dispatch-bootstrap
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
@@ -2308,9 +2620,19 @@ renders (ebpf hw):
           tolerations:
             - operator: Exists
           volumes:
-            - name: dispatch-kubeconfig
+            - name: dispatch-cert
               secret:
-                secretName: broker-dispatch-kubeconfig
+                optional: true
+                secretName: broker-dispatch-tls
+            - name: dispatch-root
+              secret:
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+                secretName: dispatch-root-ca
+            - name: dispatch-bootstrap
+              secret:
+                secretName: broker-dispatch-bootstrap
   4: |
     apiVersion: v1
     kind: ServiceAccount
@@ -2338,7 +2660,6 @@ renders (ebpf hw):
           - compilednics
         verbs:
           - get
-          - list
   6: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -3106,6 +3427,22 @@ renders (ebpf hw):
                     KubeVirt VirtualMachine via declarative set-reconcile, so — unlike CompiledNIC,
                     whose node agent tracks an applied generation — no GenerationApplied is needed here.
                   properties:
+                    placement:
+                      description: |-
+                        Placement is where this VM actually runs, reported upward by the pool's broker. It lands
+                        here rather than directly on the source VirtualMachine because the broker's writes are
+                        scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine.
+                      properties:
+                        clusterName:
+                          description: ClusterName is the pool the VM is running on.
+                          type: string
+                        nodeName:
+                          description: NodeName is the node running the VM.
+                          type: string
+                        nodePrefix:
+                          description: NodePrefix is that node's /64 underlay prefix (the fence coordinate).
+                          type: string
+                      type: object
                     state:
                       description: State is the materialization state (e.g. Applied, Pending).
                       type: string
@@ -3408,6 +3745,75 @@ renders (ebpf hw):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+      name: lbpools.net.ectobase.dev
+    spec:
+      group: net.ectobase.dev
+      names:
+        kind: LBPool
+        listKind: LBPoolList
+        plural: lbpools
+        singular: lbpool
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped VIP prefix range).
+                  properties:
+                    reservedIPs:
+                      description: ReservedIPs are addresses held back from allocation within this pool.
+                      items:
+                        type: string
+                      type: array
+                    v4Prefix:
+                      description: V4Prefix optionally pins the IPv4 CIDR for this VIP pool.
+                      type: string
+                    v6Prefix:
+                      description: V6Prefix optionally pins the IPv6 CIDR for this VIP pool.
+                      type: string
+                  type: object
+                status:
+                  description: LBPoolStatus is the observed state of an LBPool.
+                  properties:
+                    state:
+                      description: State is the current lifecycle state (e.g. Pending, Ready).
+                      type: string
+                    total:
+                      description: Total is the total number of allocatable VIP addresses.
+                      format: int32
+                      type: integer
+                  type: object
+              type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}
+  15: |
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        controller-gen.kubebuilder.io/version: v0.20.1
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -3445,6 +3851,15 @@ renders (ebpf hw):
                     LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity
                     (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
                   properties:
+                    poolRef:
+                      description: PoolRef selects the LBPool to allocate the VIP from.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
                     ports:
                       description: Ports are the LB service (port, proto) tuples.
                       items:
@@ -3519,7 +3934,9 @@ renders (ebpf hw):
                       type: object
                       x-kubernetes-map-type: atomic
                     vip:
-                      description: VIP is the virtual IP (IPv4 or IPv6). It is the LB identity and the AddLbVip id.
+                      description: |-
+                        VIP is the requested virtual IP. Empty => allocate from PoolRef; set =>
+                        validate membership in the pool + reserve (bring-your-own).
                       type: string
                   required:
                     - ports
@@ -3528,6 +3945,13 @@ renders (ebpf hw):
                 status:
                   description: LoadBalancerStatus is the observed state of a LoadBalancer.
                   properties:
+                    allocatedVIP:
+                      description: AllocatedVIP is the authoritative VIP assigned by the VIP allocator.
+                      type: string
+                    observedGeneration:
+                      description: ObservedGeneration is the Spec generation the allocation reflects.
+                      format: int64
+                      type: integer
                     state:
                       description: State is the lifecycle state (Pending | Ready).
                       type: string
@@ -3537,7 +3961,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  15: |
+  16: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -3647,7 +4071,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  16: |
+  17: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -3696,17 +4120,20 @@ renders (ebpf hw):
                       type: string
                     ips:
                       description: |-
-                        IPs are the user-specified overlay IPs (v4 and/or v6). The platform does
-                        not allocate these.
+                        IPs is the requested overlay set. Empty => the platform allocates from
+                        the subnet. Populated => the requested IPs are validated for subnet
+                        membership and uniqueness, then reserved (bring-your-own).
                       items:
                         type: string
                       type: array
                     mac:
                       description: |-
-                        MAC is the interface's L2 address. REQUIRED for a KubeVirt VM (device_type
-                        pod-tap/tap): the datapath programs this as the guest MAC, and the VMI's
-                        spec.domain.devices.interfaces[].macAddress MUST be set to the same value so
-                        KubeVirt gives the VM's virtio NIC that MAC. Empty for containers (derived).
+                        MAC is a bring-your-own L2 address request. Empty => the platform allocates
+                        a stable, VPC-unique, locally-administered MAC into Status.AllocatedMAC.
+                        Populated => the address is validated for format and VPC-uniqueness, then
+                        reserved (a bad or clashing pin surfaces as Status.State=="Invalid"). The
+                        authoritative value the datapath and the KubeVirt VMI use is always
+                        Status.AllocatedMAC, never this field directly.
                       type: string
                     nodeName:
                       description: NodeName is the node the interface is scheduled onto. Set by the scheduler.
@@ -3743,6 +4170,17 @@ renders (ebpf hw):
                               type: integer
                           type: object
                       type: object
+                    subnetRef:
+                      description: |-
+                        SubnetRef selects the Subnet to allocate from. Optional when the VPC has
+                        exactly one Subnet, in which case that Subnet is used.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
                     vpcRef:
                       description: VPCRef references the VPC this interface belongs to.
                       properties:
@@ -3758,6 +4196,26 @@ renders (ebpf hw):
                 status:
                   description: NetworkInterfaceStatus is the observed state of a NetworkInterface.
                   properties:
+                    allocatedIPs:
+                      description: |-
+                        AllocatedIPs is the authoritative overlay address set assigned by the IP
+                        allocator. CompiledNIC.Spec.OverlayIPs is sourced from this, never Spec.IPs.
+                      items:
+                        type: string
+                      type: array
+                    allocatedMAC:
+                      description: |-
+                        AllocatedMAC is the authoritative L2 address assigned by the MAC allocator:
+                        a stable, VPC-unique, locally-administered MAC derived from the NIC's UID
+                        (or the pinned Spec.MAC). CompiledNIC.Spec.MAC is sourced from this, never
+                        Spec.MAC. Empty until the interface reaches State=="Allocated".
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        ObservedGeneration is the Spec generation the allocation reflects. Compile
+                        is gated on ObservedGeneration == metadata.generation.
+                      format: int64
+                      type: integer
                     port:
                       description: Port describes the dataplane port allocated for this interface.
                       properties:
@@ -3790,7 +4248,91 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  17: |
+  18: |
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        controller-gen.kubebuilder.io/version: v0.20.1
+      name: subnets.net.ectobase.dev
+    spec:
+      group: net.ectobase.dev
+      names:
+        kind: Subnet
+        listKind: SubnetList
+        plural: subnets
+        singular: subnet
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: Subnet is a VPC-scoped range of IPv4/IPv6 prefixes.
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: SubnetSpec is the desired state of a Subnet (a VPC-scoped v4/v6 prefix range).
+                  properties:
+                    reservedIPs:
+                      description: ReservedIPs are addresses held back from allocation within this subnet.
+                      items:
+                        type: string
+                      type: array
+                    v4Prefix:
+                      description: V4Prefix optionally pins the IPv4 CIDR for this subnet.
+                      type: string
+                    v6Prefix:
+                      description: V6Prefix optionally pins the IPv6 CIDR for this subnet.
+                      type: string
+                    vpcRef:
+                      description: VPCRef references the owning VPC within the same namespace.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
+                  required:
+                    - vpcRef
+                  type: object
+                status:
+                  description: SubnetStatus is the observed state of a Subnet.
+                  properties:
+                    state:
+                      description: State is the current lifecycle state (e.g. Pending, Ready).
+                      type: string
+                    v4Total:
+                      description: V4Total is the total number of allocatable IPv4 addresses.
+                      format: int32
+                      type: integer
+                    v6Total:
+                      description: V6Total is the total number of allocatable IPv6 addresses.
+                      format: int32
+                      type: integer
+                  type: object
+              type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}
+  19: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -3883,7 +4425,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  18: |
+  20: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -3952,7 +4494,7 @@ renders (ebpf hw):
           storage: true
           subresources:
             status: {}
-  19: |
+  21: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
@@ -4065,7 +4607,7 @@ renders (ebpf hw):
                 path: /var/run/netns
                 type: DirectoryOrCreate
               name: netns
-  20: |
+  22: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -4082,7 +4624,7 @@ renders (ebpf hw):
             }
           ]
         }
-  21: |
+  23: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -4100,7 +4642,7 @@ renders (ebpf hw):
             }
           ]
         }
-  22: |
+  24: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -4133,13 +4675,13 @@ renders (ebpf hw):
                   cpu: 50m
                   memory: 64Mi
           serviceAccountName: pod-materializer
-  23: |
+  25: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: mesh-agent
       namespace: ectobase-system
-  24: |
+  26: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -4192,7 +4734,7 @@ renders (ebpf hw):
           - get
           - list
           - watch
-  25: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -4205,13 +4747,13 @@ renders (ebpf hw):
       - kind: ServiceAccount
         name: mesh-agent
         namespace: ectobase-system
-  26: |
+  28: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: dispatch-broker
       namespace: ectobase-system
-  27: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -4262,7 +4804,7 @@ renders (ebpf hw):
           - get
           - list
           - watch
-  28: |
+  30: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -4275,13 +4817,13 @@ renders (ebpf hw):
       - kind: ServiceAccount
         name: dispatch-broker
         namespace: ectobase-system
-  29: |
+  31: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  30: |
+  32: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -4318,7 +4860,7 @@ renders (ebpf hw):
           - get
           - patch
           - update
-  31: |
+  33: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -4331,6 +4873,42 @@ renders (ebpf hw):
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
+  34: |
+    apiVersion: cert-manager.io/v1
+    kind: Issuer
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase
+      name: ectobase-pool-ca
+      namespace: ectobase-system
+    spec:
+      ca:
+        secretName: ectobase-pool-ca
+  35: |
+    apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase
+      name: broker-dispatch-tls
+      namespace: ectobase-system
+    spec:
+      commonName: ectobase:cluster:test
+      duration: 2160h
+      issuerRef:
+        kind: Issuer
+        name: ectobase-pool-ca
+      privateKey:
+        algorithm: ECDSA
+        size: 256
+      secretName: broker-dispatch-tls
+      subject:
+        organizations:
+          - ectobase:brokers
+      usages:
+        - client auth
 renders (tier1 on):
   1: |
     apiVersion: v1
@@ -4383,6 +4961,9 @@ renders (tier1 on):
                 - --reflector=[fd00:db8:0:1::1]:1338
                 - --dataplane=unix:///run/flowplane/dataplane.sock
                 - --kubeconfig=/etc/mesh/kubeconfig
+                - --tls-ca=/etc/routebus-root/ca.crt
+                - --routebus-issuer=ectobase-pool-ca
+                - --routebus-cert-namespace=ectobase-system
               command:
                 - agent
               env:
@@ -4408,6 +4989,9 @@ renders (tier1 on):
                 - mountPath: /run/flowplane
                   name: flowplane-sock
                   readOnly: true
+                - mountPath: /etc/routebus-root
+                  name: routebus-root
+                  readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           serviceAccountName: mesh-agent
@@ -4421,6 +5005,12 @@ renders (tier1 on):
                 path: /run/flowplane
                 type: DirectoryOrCreate
               name: flowplane-sock
+            - name: routebus-root
+              secret:
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+                secretName: ectobase-pool-ca
   3: |
     apiVersion: apps/v1
     kind: Deployment
@@ -4446,7 +5036,12 @@ renders (tier1 on):
           containers:
             - args:
                 - --cluster-name=test
-                - --dispatch-kubeconfig=/secrets/dispatch/kubeconfig
+                - --dispatch-server=https://[fd00:db8:0:1::1]:6444
+                - --dispatch-ca=/secrets/dispatch-root/ca.crt
+                - --dispatch-client-cert=/secrets/dispatch-cert/tls.crt
+                - --dispatch-client-key=/secrets/dispatch-cert/tls.key
+                - --dispatch-bootstrap-kubeconfig=/secrets/dispatch-bootstrap/kubeconfig
+                - --routebus-intermediate-secret=ectobase-pool-ca
               command:
                 - broker
               env:
@@ -4462,8 +5057,14 @@ renders (tier1 on):
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /secrets/dispatch
-                  name: dispatch-kubeconfig
+                - mountPath: /secrets/dispatch-cert
+                  name: dispatch-cert
+                  readOnly: true
+                - mountPath: /secrets/dispatch-root
+                  name: dispatch-root
+                  readOnly: true
+                - mountPath: /secrets/dispatch-bootstrap
+                  name: dispatch-bootstrap
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
@@ -4473,9 +5074,19 @@ renders (tier1 on):
           tolerations:
             - operator: Exists
           volumes:
-            - name: dispatch-kubeconfig
+            - name: dispatch-cert
               secret:
-                secretName: broker-dispatch-kubeconfig
+                optional: true
+                secretName: broker-dispatch-tls
+            - name: dispatch-root
+              secret:
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+                secretName: dispatch-root-ca
+            - name: dispatch-bootstrap
+              secret:
+                secretName: broker-dispatch-bootstrap
   4: |
     apiVersion: v1
     kind: ServiceAccount
@@ -4503,7 +5114,6 @@ renders (tier1 on):
           - compilednics
         verbs:
           - get
-          - list
   6: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -5271,6 +5881,22 @@ renders (tier1 on):
                     KubeVirt VirtualMachine via declarative set-reconcile, so — unlike CompiledNIC,
                     whose node agent tracks an applied generation — no GenerationApplied is needed here.
                   properties:
+                    placement:
+                      description: |-
+                        Placement is where this VM actually runs, reported upward by the pool's broker. It lands
+                        here rather than directly on the source VirtualMachine because the broker's writes are
+                        scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine.
+                      properties:
+                        clusterName:
+                          description: ClusterName is the pool the VM is running on.
+                          type: string
+                        nodeName:
+                          description: NodeName is the node running the VM.
+                          type: string
+                        nodePrefix:
+                          description: NodePrefix is that node's /64 underlay prefix (the fence coordinate).
+                          type: string
+                      type: object
                     state:
                       description: State is the materialization state (e.g. Applied, Pending).
                       type: string
@@ -5573,6 +6199,75 @@ renders (tier1 on):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+      name: lbpools.net.ectobase.dev
+    spec:
+      group: net.ectobase.dev
+      names:
+        kind: LBPool
+        listKind: LBPoolList
+        plural: lbpools
+        singular: lbpool
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped VIP prefix range).
+                  properties:
+                    reservedIPs:
+                      description: ReservedIPs are addresses held back from allocation within this pool.
+                      items:
+                        type: string
+                      type: array
+                    v4Prefix:
+                      description: V4Prefix optionally pins the IPv4 CIDR for this VIP pool.
+                      type: string
+                    v6Prefix:
+                      description: V6Prefix optionally pins the IPv6 CIDR for this VIP pool.
+                      type: string
+                  type: object
+                status:
+                  description: LBPoolStatus is the observed state of an LBPool.
+                  properties:
+                    state:
+                      description: State is the current lifecycle state (e.g. Pending, Ready).
+                      type: string
+                    total:
+                      description: Total is the total number of allocatable VIP addresses.
+                      format: int32
+                      type: integer
+                  type: object
+              type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}
+  15: |
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        controller-gen.kubebuilder.io/version: v0.20.1
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -5610,6 +6305,15 @@ renders (tier1 on):
                     LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity
                     (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
                   properties:
+                    poolRef:
+                      description: PoolRef selects the LBPool to allocate the VIP from.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
                     ports:
                       description: Ports are the LB service (port, proto) tuples.
                       items:
@@ -5684,7 +6388,9 @@ renders (tier1 on):
                       type: object
                       x-kubernetes-map-type: atomic
                     vip:
-                      description: VIP is the virtual IP (IPv4 or IPv6). It is the LB identity and the AddLbVip id.
+                      description: |-
+                        VIP is the requested virtual IP. Empty => allocate from PoolRef; set =>
+                        validate membership in the pool + reserve (bring-your-own).
                       type: string
                   required:
                     - ports
@@ -5693,6 +6399,13 @@ renders (tier1 on):
                 status:
                   description: LoadBalancerStatus is the observed state of a LoadBalancer.
                   properties:
+                    allocatedVIP:
+                      description: AllocatedVIP is the authoritative VIP assigned by the VIP allocator.
+                      type: string
+                    observedGeneration:
+                      description: ObservedGeneration is the Spec generation the allocation reflects.
+                      format: int64
+                      type: integer
                     state:
                       description: State is the lifecycle state (Pending | Ready).
                       type: string
@@ -5702,7 +6415,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  15: |
+  16: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -5812,7 +6525,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  16: |
+  17: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -5861,17 +6574,20 @@ renders (tier1 on):
                       type: string
                     ips:
                       description: |-
-                        IPs are the user-specified overlay IPs (v4 and/or v6). The platform does
-                        not allocate these.
+                        IPs is the requested overlay set. Empty => the platform allocates from
+                        the subnet. Populated => the requested IPs are validated for subnet
+                        membership and uniqueness, then reserved (bring-your-own).
                       items:
                         type: string
                       type: array
                     mac:
                       description: |-
-                        MAC is the interface's L2 address. REQUIRED for a KubeVirt VM (device_type
-                        pod-tap/tap): the datapath programs this as the guest MAC, and the VMI's
-                        spec.domain.devices.interfaces[].macAddress MUST be set to the same value so
-                        KubeVirt gives the VM's virtio NIC that MAC. Empty for containers (derived).
+                        MAC is a bring-your-own L2 address request. Empty => the platform allocates
+                        a stable, VPC-unique, locally-administered MAC into Status.AllocatedMAC.
+                        Populated => the address is validated for format and VPC-uniqueness, then
+                        reserved (a bad or clashing pin surfaces as Status.State=="Invalid"). The
+                        authoritative value the datapath and the KubeVirt VMI use is always
+                        Status.AllocatedMAC, never this field directly.
                       type: string
                     nodeName:
                       description: NodeName is the node the interface is scheduled onto. Set by the scheduler.
@@ -5908,6 +6624,17 @@ renders (tier1 on):
                               type: integer
                           type: object
                       type: object
+                    subnetRef:
+                      description: |-
+                        SubnetRef selects the Subnet to allocate from. Optional when the VPC has
+                        exactly one Subnet, in which case that Subnet is used.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
                     vpcRef:
                       description: VPCRef references the VPC this interface belongs to.
                       properties:
@@ -5923,6 +6650,26 @@ renders (tier1 on):
                 status:
                   description: NetworkInterfaceStatus is the observed state of a NetworkInterface.
                   properties:
+                    allocatedIPs:
+                      description: |-
+                        AllocatedIPs is the authoritative overlay address set assigned by the IP
+                        allocator. CompiledNIC.Spec.OverlayIPs is sourced from this, never Spec.IPs.
+                      items:
+                        type: string
+                      type: array
+                    allocatedMAC:
+                      description: |-
+                        AllocatedMAC is the authoritative L2 address assigned by the MAC allocator:
+                        a stable, VPC-unique, locally-administered MAC derived from the NIC's UID
+                        (or the pinned Spec.MAC). CompiledNIC.Spec.MAC is sourced from this, never
+                        Spec.MAC. Empty until the interface reaches State=="Allocated".
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        ObservedGeneration is the Spec generation the allocation reflects. Compile
+                        is gated on ObservedGeneration == metadata.generation.
+                      format: int64
+                      type: integer
                     port:
                       description: Port describes the dataplane port allocated for this interface.
                       properties:
@@ -5955,7 +6702,91 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  17: |
+  18: |
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        controller-gen.kubebuilder.io/version: v0.20.1
+      name: subnets.net.ectobase.dev
+    spec:
+      group: net.ectobase.dev
+      names:
+        kind: Subnet
+        listKind: SubnetList
+        plural: subnets
+        singular: subnet
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: Subnet is a VPC-scoped range of IPv4/IPv6 prefixes.
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: SubnetSpec is the desired state of a Subnet (a VPC-scoped v4/v6 prefix range).
+                  properties:
+                    reservedIPs:
+                      description: ReservedIPs are addresses held back from allocation within this subnet.
+                      items:
+                        type: string
+                      type: array
+                    v4Prefix:
+                      description: V4Prefix optionally pins the IPv4 CIDR for this subnet.
+                      type: string
+                    v6Prefix:
+                      description: V6Prefix optionally pins the IPv6 CIDR for this subnet.
+                      type: string
+                    vpcRef:
+                      description: VPCRef references the owning VPC within the same namespace.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
+                  required:
+                    - vpcRef
+                  type: object
+                status:
+                  description: SubnetStatus is the observed state of a Subnet.
+                  properties:
+                    state:
+                      description: State is the current lifecycle state (e.g. Pending, Ready).
+                      type: string
+                    v4Total:
+                      description: V4Total is the total number of allocatable IPv4 addresses.
+                      format: int32
+                      type: integer
+                    v6Total:
+                      description: V6Total is the total number of allocatable IPv6 addresses.
+                      format: int32
+                      type: integer
+                  type: object
+              type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}
+  19: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -6048,7 +6879,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  18: |
+  20: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -6117,7 +6948,7 @@ renders (tier1 on):
           storage: true
           subresources:
             status: {}
-  19: |
+  21: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
@@ -6233,7 +7064,7 @@ renders (tier1 on):
                 path: /var/run/netns
                 type: DirectoryOrCreate
               name: netns
-  20: |
+  22: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -6250,7 +7081,7 @@ renders (tier1 on):
             }
           ]
         }
-  21: |
+  23: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -6268,7 +7099,7 @@ renders (tier1 on):
             }
           ]
         }
-  22: |
+  24: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -6301,13 +7132,13 @@ renders (tier1 on):
                   cpu: 50m
                   memory: 64Mi
           serviceAccountName: pod-materializer
-  23: |
+  25: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: mesh-agent
       namespace: ectobase-system
-  24: |
+  26: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -6360,7 +7191,7 @@ renders (tier1 on):
           - get
           - list
           - watch
-  25: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -6373,13 +7204,13 @@ renders (tier1 on):
       - kind: ServiceAccount
         name: mesh-agent
         namespace: ectobase-system
-  26: |
+  28: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: dispatch-broker
       namespace: ectobase-system
-  27: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -6430,7 +7261,7 @@ renders (tier1 on):
           - get
           - list
           - watch
-  28: |
+  30: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -6443,13 +7274,13 @@ renders (tier1 on):
       - kind: ServiceAccount
         name: dispatch-broker
         namespace: ectobase-system
-  29: |
+  31: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  30: |
+  32: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -6486,7 +7317,7 @@ renders (tier1 on):
           - get
           - patch
           - update
-  31: |
+  33: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -6499,7 +7330,43 @@ renders (tier1 on):
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
-  32: |
+  34: |
+    apiVersion: cert-manager.io/v1
+    kind: Issuer
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase
+      name: ectobase-pool-ca
+      namespace: ectobase-system
+    spec:
+      ca:
+        secretName: ectobase-pool-ca
+  35: |
+    apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase
+      name: broker-dispatch-tls
+      namespace: ectobase-system
+    spec:
+      commonName: ectobase:cluster:test
+      duration: 2160h
+      issuerRef:
+        kind: Issuer
+        name: ectobase-pool-ca
+      privateKey:
+        algorithm: ECDSA
+        size: 256
+      secretName: broker-dispatch-tls
+      subject:
+        organizations:
+          - ectobase:brokers
+      usages:
+        - client auth
+  36: |
     apiVersion: remediation.medik8s.io/v1alpha1
     kind: NodeHealthCheck
     metadata:
@@ -6524,7 +7391,7 @@ renders (tier1 on):
         - duration: 60s
           status: Unknown
           type: Ready
-  33: |
+  37: |
     apiVersion: self-node-remediation.medik8s.io/v1alpha1
     kind: SelfNodeRemediationTemplate
     metadata:
@@ -6588,6 +7455,9 @@ renders (tier1 watchdog):
                 - --reflector=[fd00:db8:0:1::1]:1338
                 - --dataplane=unix:///run/flowplane/dataplane.sock
                 - --kubeconfig=/etc/mesh/kubeconfig
+                - --tls-ca=/etc/routebus-root/ca.crt
+                - --routebus-issuer=ectobase-pool-ca
+                - --routebus-cert-namespace=ectobase-system
               command:
                 - agent
               env:
@@ -6613,6 +7483,9 @@ renders (tier1 watchdog):
                 - mountPath: /run/flowplane
                   name: flowplane-sock
                   readOnly: true
+                - mountPath: /etc/routebus-root
+                  name: routebus-root
+                  readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           serviceAccountName: mesh-agent
@@ -6626,6 +7499,12 @@ renders (tier1 watchdog):
                 path: /run/flowplane
                 type: DirectoryOrCreate
               name: flowplane-sock
+            - name: routebus-root
+              secret:
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+                secretName: ectobase-pool-ca
   3: |
     apiVersion: apps/v1
     kind: Deployment
@@ -6651,7 +7530,12 @@ renders (tier1 watchdog):
           containers:
             - args:
                 - --cluster-name=test
-                - --dispatch-kubeconfig=/secrets/dispatch/kubeconfig
+                - --dispatch-server=https://[fd00:db8:0:1::1]:6444
+                - --dispatch-ca=/secrets/dispatch-root/ca.crt
+                - --dispatch-client-cert=/secrets/dispatch-cert/tls.crt
+                - --dispatch-client-key=/secrets/dispatch-cert/tls.key
+                - --dispatch-bootstrap-kubeconfig=/secrets/dispatch-bootstrap/kubeconfig
+                - --routebus-intermediate-secret=ectobase-pool-ca
               command:
                 - broker
               env:
@@ -6667,8 +7551,14 @@ renders (tier1 watchdog):
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /secrets/dispatch
-                  name: dispatch-kubeconfig
+                - mountPath: /secrets/dispatch-cert
+                  name: dispatch-cert
+                  readOnly: true
+                - mountPath: /secrets/dispatch-root
+                  name: dispatch-root
+                  readOnly: true
+                - mountPath: /secrets/dispatch-bootstrap
+                  name: dispatch-bootstrap
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
@@ -6678,9 +7568,19 @@ renders (tier1 watchdog):
           tolerations:
             - operator: Exists
           volumes:
-            - name: dispatch-kubeconfig
+            - name: dispatch-cert
               secret:
-                secretName: broker-dispatch-kubeconfig
+                optional: true
+                secretName: broker-dispatch-tls
+            - name: dispatch-root
+              secret:
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+                secretName: dispatch-root-ca
+            - name: dispatch-bootstrap
+              secret:
+                secretName: broker-dispatch-bootstrap
   4: |
     apiVersion: v1
     kind: ServiceAccount
@@ -6708,7 +7608,6 @@ renders (tier1 watchdog):
           - compilednics
         verbs:
           - get
-          - list
   6: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -7476,6 +8375,22 @@ renders (tier1 watchdog):
                     KubeVirt VirtualMachine via declarative set-reconcile, so — unlike CompiledNIC,
                     whose node agent tracks an applied generation — no GenerationApplied is needed here.
                   properties:
+                    placement:
+                      description: |-
+                        Placement is where this VM actually runs, reported upward by the pool's broker. It lands
+                        here rather than directly on the source VirtualMachine because the broker's writes are
+                        scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine.
+                      properties:
+                        clusterName:
+                          description: ClusterName is the pool the VM is running on.
+                          type: string
+                        nodeName:
+                          description: NodeName is the node running the VM.
+                          type: string
+                        nodePrefix:
+                          description: NodePrefix is that node's /64 underlay prefix (the fence coordinate).
+                          type: string
+                      type: object
                     state:
                       description: State is the materialization state (e.g. Applied, Pending).
                       type: string
@@ -7778,6 +8693,75 @@ renders (tier1 watchdog):
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+      name: lbpools.net.ectobase.dev
+    spec:
+      group: net.ectobase.dev
+      names:
+        kind: LBPool
+        listKind: LBPoolList
+        plural: lbpools
+        singular: lbpool
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped VIP prefix range).
+                  properties:
+                    reservedIPs:
+                      description: ReservedIPs are addresses held back from allocation within this pool.
+                      items:
+                        type: string
+                      type: array
+                    v4Prefix:
+                      description: V4Prefix optionally pins the IPv4 CIDR for this VIP pool.
+                      type: string
+                    v6Prefix:
+                      description: V6Prefix optionally pins the IPv6 CIDR for this VIP pool.
+                      type: string
+                  type: object
+                status:
+                  description: LBPoolStatus is the observed state of an LBPool.
+                  properties:
+                    state:
+                      description: State is the current lifecycle state (e.g. Pending, Ready).
+                      type: string
+                    total:
+                      description: Total is the total number of allocatable VIP addresses.
+                      format: int32
+                      type: integer
+                  type: object
+              type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}
+  15: |
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        controller-gen.kubebuilder.io/version: v0.20.1
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -7815,6 +8799,15 @@ renders (tier1 watchdog):
                     LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity
                     (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
                   properties:
+                    poolRef:
+                      description: PoolRef selects the LBPool to allocate the VIP from.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
                     ports:
                       description: Ports are the LB service (port, proto) tuples.
                       items:
@@ -7889,7 +8882,9 @@ renders (tier1 watchdog):
                       type: object
                       x-kubernetes-map-type: atomic
                     vip:
-                      description: VIP is the virtual IP (IPv4 or IPv6). It is the LB identity and the AddLbVip id.
+                      description: |-
+                        VIP is the requested virtual IP. Empty => allocate from PoolRef; set =>
+                        validate membership in the pool + reserve (bring-your-own).
                       type: string
                   required:
                     - ports
@@ -7898,6 +8893,13 @@ renders (tier1 watchdog):
                 status:
                   description: LoadBalancerStatus is the observed state of a LoadBalancer.
                   properties:
+                    allocatedVIP:
+                      description: AllocatedVIP is the authoritative VIP assigned by the VIP allocator.
+                      type: string
+                    observedGeneration:
+                      description: ObservedGeneration is the Spec generation the allocation reflects.
+                      format: int64
+                      type: integer
                     state:
                       description: State is the lifecycle state (Pending | Ready).
                       type: string
@@ -7907,7 +8909,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  15: |
+  16: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -8017,7 +9019,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  16: |
+  17: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -8066,17 +9068,20 @@ renders (tier1 watchdog):
                       type: string
                     ips:
                       description: |-
-                        IPs are the user-specified overlay IPs (v4 and/or v6). The platform does
-                        not allocate these.
+                        IPs is the requested overlay set. Empty => the platform allocates from
+                        the subnet. Populated => the requested IPs are validated for subnet
+                        membership and uniqueness, then reserved (bring-your-own).
                       items:
                         type: string
                       type: array
                     mac:
                       description: |-
-                        MAC is the interface's L2 address. REQUIRED for a KubeVirt VM (device_type
-                        pod-tap/tap): the datapath programs this as the guest MAC, and the VMI's
-                        spec.domain.devices.interfaces[].macAddress MUST be set to the same value so
-                        KubeVirt gives the VM's virtio NIC that MAC. Empty for containers (derived).
+                        MAC is a bring-your-own L2 address request. Empty => the platform allocates
+                        a stable, VPC-unique, locally-administered MAC into Status.AllocatedMAC.
+                        Populated => the address is validated for format and VPC-uniqueness, then
+                        reserved (a bad or clashing pin surfaces as Status.State=="Invalid"). The
+                        authoritative value the datapath and the KubeVirt VMI use is always
+                        Status.AllocatedMAC, never this field directly.
                       type: string
                     nodeName:
                       description: NodeName is the node the interface is scheduled onto. Set by the scheduler.
@@ -8113,6 +9118,17 @@ renders (tier1 watchdog):
                               type: integer
                           type: object
                       type: object
+                    subnetRef:
+                      description: |-
+                        SubnetRef selects the Subnet to allocate from. Optional when the VPC has
+                        exactly one Subnet, in which case that Subnet is used.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
                     vpcRef:
                       description: VPCRef references the VPC this interface belongs to.
                       properties:
@@ -8128,6 +9144,26 @@ renders (tier1 watchdog):
                 status:
                   description: NetworkInterfaceStatus is the observed state of a NetworkInterface.
                   properties:
+                    allocatedIPs:
+                      description: |-
+                        AllocatedIPs is the authoritative overlay address set assigned by the IP
+                        allocator. CompiledNIC.Spec.OverlayIPs is sourced from this, never Spec.IPs.
+                      items:
+                        type: string
+                      type: array
+                    allocatedMAC:
+                      description: |-
+                        AllocatedMAC is the authoritative L2 address assigned by the MAC allocator:
+                        a stable, VPC-unique, locally-administered MAC derived from the NIC's UID
+                        (or the pinned Spec.MAC). CompiledNIC.Spec.MAC is sourced from this, never
+                        Spec.MAC. Empty until the interface reaches State=="Allocated".
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        ObservedGeneration is the Spec generation the allocation reflects. Compile
+                        is gated on ObservedGeneration == metadata.generation.
+                      format: int64
+                      type: integer
                     port:
                       description: Port describes the dataplane port allocated for this interface.
                       properties:
@@ -8160,7 +9196,91 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  17: |
+  18: |
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        controller-gen.kubebuilder.io/version: v0.20.1
+      name: subnets.net.ectobase.dev
+    spec:
+      group: net.ectobase.dev
+      names:
+        kind: Subnet
+        listKind: SubnetList
+        plural: subnets
+        singular: subnet
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: Subnet is a VPC-scoped range of IPv4/IPv6 prefixes.
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: SubnetSpec is the desired state of a Subnet (a VPC-scoped v4/v6 prefix range).
+                  properties:
+                    reservedIPs:
+                      description: ReservedIPs are addresses held back from allocation within this subnet.
+                      items:
+                        type: string
+                      type: array
+                    v4Prefix:
+                      description: V4Prefix optionally pins the IPv4 CIDR for this subnet.
+                      type: string
+                    v6Prefix:
+                      description: V6Prefix optionally pins the IPv6 CIDR for this subnet.
+                      type: string
+                    vpcRef:
+                      description: VPCRef references the owning VPC within the same namespace.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
+                  required:
+                    - vpcRef
+                  type: object
+                status:
+                  description: SubnetStatus is the observed state of a Subnet.
+                  properties:
+                    state:
+                      description: State is the current lifecycle state (e.g. Pending, Ready).
+                      type: string
+                    v4Total:
+                      description: V4Total is the total number of allocatable IPv4 addresses.
+                      format: int32
+                      type: integer
+                    v6Total:
+                      description: V6Total is the total number of allocatable IPv6 addresses.
+                      format: int32
+                      type: integer
+                  type: object
+              type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}
+  19: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -8253,7 +9373,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  18: |
+  20: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -8322,7 +9442,7 @@ renders (tier1 watchdog):
           storage: true
           subresources:
             status: {}
-  19: |
+  21: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
@@ -8438,7 +9558,7 @@ renders (tier1 watchdog):
                 path: /var/run/netns
                 type: DirectoryOrCreate
               name: netns
-  20: |
+  22: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -8455,7 +9575,7 @@ renders (tier1 watchdog):
             }
           ]
         }
-  21: |
+  23: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -8473,7 +9593,7 @@ renders (tier1 watchdog):
             }
           ]
         }
-  22: |
+  24: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -8506,13 +9626,13 @@ renders (tier1 watchdog):
                   cpu: 50m
                   memory: 64Mi
           serviceAccountName: pod-materializer
-  23: |
+  25: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: mesh-agent
       namespace: ectobase-system
-  24: |
+  26: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -8565,7 +9685,7 @@ renders (tier1 watchdog):
           - get
           - list
           - watch
-  25: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -8578,13 +9698,13 @@ renders (tier1 watchdog):
       - kind: ServiceAccount
         name: mesh-agent
         namespace: ectobase-system
-  26: |
+  28: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: dispatch-broker
       namespace: ectobase-system
-  27: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -8635,7 +9755,7 @@ renders (tier1 watchdog):
           - get
           - list
           - watch
-  28: |
+  30: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -8648,13 +9768,13 @@ renders (tier1 watchdog):
       - kind: ServiceAccount
         name: dispatch-broker
         namespace: ectobase-system
-  29: |
+  31: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  30: |
+  32: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -8691,7 +9811,7 @@ renders (tier1 watchdog):
           - get
           - patch
           - update
-  31: |
+  33: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -8704,7 +9824,43 @@ renders (tier1 watchdog):
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
-  32: |
+  34: |
+    apiVersion: cert-manager.io/v1
+    kind: Issuer
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase
+      name: ectobase-pool-ca
+      namespace: ectobase-system
+    spec:
+      ca:
+        secretName: ectobase-pool-ca
+  35: |
+    apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase
+      name: broker-dispatch-tls
+      namespace: ectobase-system
+    spec:
+      commonName: ectobase:cluster:test
+      duration: 2160h
+      issuerRef:
+        kind: Issuer
+        name: ectobase-pool-ca
+      privateKey:
+        algorithm: ECDSA
+        size: 256
+      secretName: broker-dispatch-tls
+      subject:
+        organizations:
+          - ectobase:brokers
+      usages:
+        - client auth
+  36: |
     apiVersion: remediation.medik8s.io/v1alpha1
     kind: NodeHealthCheck
     metadata:
@@ -8729,7 +9885,7 @@ renders (tier1 watchdog):
         - duration: 60s
           status: Unknown
           type: Ready
-  33: |
+  37: |
     apiVersion: self-node-remediation.medik8s.io/v1alpha1
     kind: SelfNodeRemediationTemplate
     metadata:
@@ -8741,7 +9897,7 @@ renders (tier1 watchdog):
       template:
         spec:
           remediationStrategy: OutOfServiceTaint
-  34: |
+  38: |
     apiVersion: self-node-remediation.medik8s.io/v1alpha1
     kind: SelfNodeRemediationConfig
     metadata:
@@ -8803,6 +9959,9 @@ renders with vm-materializer enabled:
                 - --reflector=[fd00:db8:0:1::1]:1338
                 - --dataplane=unix:///run/flowplane/dataplane.sock
                 - --kubeconfig=/etc/mesh/kubeconfig
+                - --tls-ca=/etc/routebus-root/ca.crt
+                - --routebus-issuer=ectobase-pool-ca
+                - --routebus-cert-namespace=ectobase-system
               command:
                 - agent
               env:
@@ -8828,6 +9987,9 @@ renders with vm-materializer enabled:
                 - mountPath: /run/flowplane
                   name: flowplane-sock
                   readOnly: true
+                - mountPath: /etc/routebus-root
+                  name: routebus-root
+                  readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           serviceAccountName: mesh-agent
@@ -8841,6 +10003,12 @@ renders with vm-materializer enabled:
                 path: /run/flowplane
                 type: DirectoryOrCreate
               name: flowplane-sock
+            - name: routebus-root
+              secret:
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+                secretName: ectobase-pool-ca
   3: |
     apiVersion: apps/v1
     kind: Deployment
@@ -8866,7 +10034,12 @@ renders with vm-materializer enabled:
           containers:
             - args:
                 - --cluster-name=test
-                - --dispatch-kubeconfig=/secrets/dispatch/kubeconfig
+                - --dispatch-server=https://[fd00:db8:0:1::1]:6444
+                - --dispatch-ca=/secrets/dispatch-root/ca.crt
+                - --dispatch-client-cert=/secrets/dispatch-cert/tls.crt
+                - --dispatch-client-key=/secrets/dispatch-cert/tls.key
+                - --dispatch-bootstrap-kubeconfig=/secrets/dispatch-bootstrap/kubeconfig
+                - --routebus-intermediate-secret=ectobase-pool-ca
               command:
                 - broker
               env:
@@ -8882,8 +10055,14 @@ renders with vm-materializer enabled:
                   cpu: 50m
                   memory: 64Mi
               volumeMounts:
-                - mountPath: /secrets/dispatch
-                  name: dispatch-kubeconfig
+                - mountPath: /secrets/dispatch-cert
+                  name: dispatch-cert
+                  readOnly: true
+                - mountPath: /secrets/dispatch-root
+                  name: dispatch-root
+                  readOnly: true
+                - mountPath: /secrets/dispatch-bootstrap
+                  name: dispatch-bootstrap
                   readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
@@ -8893,9 +10072,19 @@ renders with vm-materializer enabled:
           tolerations:
             - operator: Exists
           volumes:
-            - name: dispatch-kubeconfig
+            - name: dispatch-cert
               secret:
-                secretName: broker-dispatch-kubeconfig
+                optional: true
+                secretName: broker-dispatch-tls
+            - name: dispatch-root
+              secret:
+                items:
+                  - key: ca.crt
+                    path: ca.crt
+                secretName: dispatch-root-ca
+            - name: dispatch-bootstrap
+              secret:
+                secretName: broker-dispatch-bootstrap
   4: |
     apiVersion: v1
     kind: ServiceAccount
@@ -8923,7 +10112,6 @@ renders with vm-materializer enabled:
           - compilednics
         verbs:
           - get
-          - list
   6: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -9691,6 +10879,22 @@ renders with vm-materializer enabled:
                     KubeVirt VirtualMachine via declarative set-reconcile, so — unlike CompiledNIC,
                     whose node agent tracks an applied generation — no GenerationApplied is needed here.
                   properties:
+                    placement:
+                      description: |-
+                        Placement is where this VM actually runs, reported upward by the pool's broker. It lands
+                        here rather than directly on the source VirtualMachine because the broker's writes are
+                        scoped to its own pool namespace; a mesh controller mirrors it onto the VirtualMachine.
+                      properties:
+                        clusterName:
+                          description: ClusterName is the pool the VM is running on.
+                          type: string
+                        nodeName:
+                          description: NodeName is the node running the VM.
+                          type: string
+                        nodePrefix:
+                          description: NodePrefix is that node's /64 underlay prefix (the fence coordinate).
+                          type: string
+                      type: object
                     state:
                       description: State is the materialization state (e.g. Applied, Pending).
                       type: string
@@ -9993,6 +11197,75 @@ renders with vm-materializer enabled:
     metadata:
       annotations:
         controller-gen.kubebuilder.io/version: v0.20.1
+      name: lbpools.net.ectobase.dev
+    spec:
+      group: net.ectobase.dev
+      names:
+        kind: LBPool
+        listKind: LBPoolList
+        plural: lbpools
+        singular: lbpool
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped VIP prefix range).
+                  properties:
+                    reservedIPs:
+                      description: ReservedIPs are addresses held back from allocation within this pool.
+                      items:
+                        type: string
+                      type: array
+                    v4Prefix:
+                      description: V4Prefix optionally pins the IPv4 CIDR for this VIP pool.
+                      type: string
+                    v6Prefix:
+                      description: V6Prefix optionally pins the IPv6 CIDR for this VIP pool.
+                      type: string
+                  type: object
+                status:
+                  description: LBPoolStatus is the observed state of an LBPool.
+                  properties:
+                    state:
+                      description: State is the current lifecycle state (e.g. Pending, Ready).
+                      type: string
+                    total:
+                      description: Total is the total number of allocatable VIP addresses.
+                      format: int32
+                      type: integer
+                  type: object
+              type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}
+  15: |
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        controller-gen.kubebuilder.io/version: v0.20.1
       name: loadbalancers.net.ectobase.dev
     spec:
       group: net.ectobase.dev
@@ -10030,6 +11303,15 @@ renders with vm-materializer enabled:
                     LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity
                     (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
                   properties:
+                    poolRef:
+                      description: PoolRef selects the LBPool to allocate the VIP from.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
                     ports:
                       description: Ports are the LB service (port, proto) tuples.
                       items:
@@ -10104,7 +11386,9 @@ renders with vm-materializer enabled:
                       type: object
                       x-kubernetes-map-type: atomic
                     vip:
-                      description: VIP is the virtual IP (IPv4 or IPv6). It is the LB identity and the AddLbVip id.
+                      description: |-
+                        VIP is the requested virtual IP. Empty => allocate from PoolRef; set =>
+                        validate membership in the pool + reserve (bring-your-own).
                       type: string
                   required:
                     - ports
@@ -10113,6 +11397,13 @@ renders with vm-materializer enabled:
                 status:
                   description: LoadBalancerStatus is the observed state of a LoadBalancer.
                   properties:
+                    allocatedVIP:
+                      description: AllocatedVIP is the authoritative VIP assigned by the VIP allocator.
+                      type: string
+                    observedGeneration:
+                      description: ObservedGeneration is the Spec generation the allocation reflects.
+                      format: int64
+                      type: integer
                     state:
                       description: State is the lifecycle state (Pending | Ready).
                       type: string
@@ -10122,7 +11413,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  15: |
+  16: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -10232,7 +11523,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  16: |
+  17: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -10281,17 +11572,20 @@ renders with vm-materializer enabled:
                       type: string
                     ips:
                       description: |-
-                        IPs are the user-specified overlay IPs (v4 and/or v6). The platform does
-                        not allocate these.
+                        IPs is the requested overlay set. Empty => the platform allocates from
+                        the subnet. Populated => the requested IPs are validated for subnet
+                        membership and uniqueness, then reserved (bring-your-own).
                       items:
                         type: string
                       type: array
                     mac:
                       description: |-
-                        MAC is the interface's L2 address. REQUIRED for a KubeVirt VM (device_type
-                        pod-tap/tap): the datapath programs this as the guest MAC, and the VMI's
-                        spec.domain.devices.interfaces[].macAddress MUST be set to the same value so
-                        KubeVirt gives the VM's virtio NIC that MAC. Empty for containers (derived).
+                        MAC is a bring-your-own L2 address request. Empty => the platform allocates
+                        a stable, VPC-unique, locally-administered MAC into Status.AllocatedMAC.
+                        Populated => the address is validated for format and VPC-uniqueness, then
+                        reserved (a bad or clashing pin surfaces as Status.State=="Invalid"). The
+                        authoritative value the datapath and the KubeVirt VMI use is always
+                        Status.AllocatedMAC, never this field directly.
                       type: string
                     nodeName:
                       description: NodeName is the node the interface is scheduled onto. Set by the scheduler.
@@ -10328,6 +11622,17 @@ renders with vm-materializer enabled:
                               type: integer
                           type: object
                       type: object
+                    subnetRef:
+                      description: |-
+                        SubnetRef selects the Subnet to allocate from. Optional when the VPC has
+                        exactly one Subnet, in which case that Subnet is used.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
                     vpcRef:
                       description: VPCRef references the VPC this interface belongs to.
                       properties:
@@ -10343,6 +11648,26 @@ renders with vm-materializer enabled:
                 status:
                   description: NetworkInterfaceStatus is the observed state of a NetworkInterface.
                   properties:
+                    allocatedIPs:
+                      description: |-
+                        AllocatedIPs is the authoritative overlay address set assigned by the IP
+                        allocator. CompiledNIC.Spec.OverlayIPs is sourced from this, never Spec.IPs.
+                      items:
+                        type: string
+                      type: array
+                    allocatedMAC:
+                      description: |-
+                        AllocatedMAC is the authoritative L2 address assigned by the MAC allocator:
+                        a stable, VPC-unique, locally-administered MAC derived from the NIC's UID
+                        (or the pinned Spec.MAC). CompiledNIC.Spec.MAC is sourced from this, never
+                        Spec.MAC. Empty until the interface reaches State=="Allocated".
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        ObservedGeneration is the Spec generation the allocation reflects. Compile
+                        is gated on ObservedGeneration == metadata.generation.
+                      format: int64
+                      type: integer
                     port:
                       description: Port describes the dataplane port allocated for this interface.
                       properties:
@@ -10375,7 +11700,91 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  17: |
+  18: |
+    apiVersion: apiextensions.k8s.io/v1
+    kind: CustomResourceDefinition
+    metadata:
+      annotations:
+        controller-gen.kubebuilder.io/version: v0.20.1
+      name: subnets.net.ectobase.dev
+    spec:
+      group: net.ectobase.dev
+      names:
+        kind: Subnet
+        listKind: SubnetList
+        plural: subnets
+        singular: subnet
+      scope: Namespaced
+      versions:
+        - name: v1alpha1
+          schema:
+            openAPIV3Schema:
+              description: Subnet is a VPC-scoped range of IPv4/IPv6 prefixes.
+              properties:
+                apiVersion:
+                  description: |-
+                    APIVersion defines the versioned schema of this representation of an object.
+                    Servers should convert recognized schemas to the latest internal value, and
+                    may reject unrecognized values.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  type: string
+                kind:
+                  description: |-
+                    Kind is a string value representing the REST resource this object represents.
+                    Servers may infer this from the endpoint the client submits requests to.
+                    Cannot be updated.
+                    In CamelCase.
+                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                  type: string
+                metadata:
+                  type: object
+                spec:
+                  description: SubnetSpec is the desired state of a Subnet (a VPC-scoped v4/v6 prefix range).
+                  properties:
+                    reservedIPs:
+                      description: ReservedIPs are addresses held back from allocation within this subnet.
+                      items:
+                        type: string
+                      type: array
+                    v4Prefix:
+                      description: V4Prefix optionally pins the IPv4 CIDR for this subnet.
+                      type: string
+                    v6Prefix:
+                      description: V6Prefix optionally pins the IPv6 CIDR for this subnet.
+                      type: string
+                    vpcRef:
+                      description: VPCRef references the owning VPC within the same namespace.
+                      properties:
+                        name:
+                          description: Name is the name of the referenced object.
+                          type: string
+                      required:
+                        - name
+                      type: object
+                  required:
+                    - vpcRef
+                  type: object
+                status:
+                  description: SubnetStatus is the observed state of a Subnet.
+                  properties:
+                    state:
+                      description: State is the current lifecycle state (e.g. Pending, Ready).
+                      type: string
+                    v4Total:
+                      description: V4Total is the total number of allocatable IPv4 addresses.
+                      format: int32
+                      type: integer
+                    v6Total:
+                      description: V6Total is the total number of allocatable IPv6 addresses.
+                      format: int32
+                      type: integer
+                  type: object
+              type: object
+          served: true
+          storage: true
+          subresources:
+            status: {}
+  19: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -10468,7 +11877,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  18: |
+  20: |
     apiVersion: apiextensions.k8s.io/v1
     kind: CustomResourceDefinition
     metadata:
@@ -10537,7 +11946,7 @@ renders with vm-materializer enabled:
           storage: true
           subresources:
             status: {}
-  19: |
+  21: |
     apiVersion: apps/v1
     kind: DaemonSet
     metadata:
@@ -10653,7 +12062,7 @@ renders with vm-materializer enabled:
                 path: /var/run/netns
                 type: DirectoryOrCreate
               name: netns
-  20: |
+  22: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -10670,7 +12079,7 @@ renders with vm-materializer enabled:
             }
           ]
         }
-  21: |
+  23: |
     apiVersion: k8s.cni.cncf.io/v1
     kind: NetworkAttachmentDefinition
     metadata:
@@ -10688,7 +12097,7 @@ renders with vm-materializer enabled:
             }
           ]
         }
-  22: |
+  24: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -10721,13 +12130,13 @@ renders with vm-materializer enabled:
                   cpu: 50m
                   memory: 64Mi
           serviceAccountName: pod-materializer
-  23: |
+  25: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: mesh-agent
       namespace: ectobase-system
-  24: |
+  26: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -10780,7 +12189,7 @@ renders with vm-materializer enabled:
           - get
           - list
           - watch
-  25: |
+  27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -10793,13 +12202,13 @@ renders with vm-materializer enabled:
       - kind: ServiceAccount
         name: mesh-agent
         namespace: ectobase-system
-  26: |
+  28: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: dispatch-broker
       namespace: ectobase-system
-  27: |
+  29: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -10850,7 +12259,7 @@ renders with vm-materializer enabled:
           - get
           - list
           - watch
-  28: |
+  30: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -10863,13 +12272,13 @@ renders with vm-materializer enabled:
       - kind: ServiceAccount
         name: dispatch-broker
         namespace: ectobase-system
-  29: |
+  31: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: pod-materializer
       namespace: ectobase-system
-  30: |
+  32: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -10906,7 +12315,7 @@ renders with vm-materializer enabled:
           - get
           - patch
           - update
-  31: |
+  33: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -10919,13 +12328,13 @@ renders with vm-materializer enabled:
       - kind: ServiceAccount
         name: pod-materializer
         namespace: ectobase-system
-  32: |
+  34: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
       name: vm-materializer
       namespace: ectobase-system
-  33: |
+  35: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -10984,7 +12393,7 @@ renders with vm-materializer enabled:
           - patch
           - update
           - watch
-  34: |
+  36: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -10997,7 +12406,43 @@ renders with vm-materializer enabled:
       - kind: ServiceAccount
         name: vm-materializer
         namespace: ectobase-system
-  35: |
+  37: |
+    apiVersion: cert-manager.io/v1
+    kind: Issuer
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase
+      name: ectobase-pool-ca
+      namespace: ectobase-system
+    spec:
+      ca:
+        secretName: ectobase-pool-ca
+  38: |
+    apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase
+      name: broker-dispatch-tls
+      namespace: ectobase-system
+    spec:
+      commonName: ectobase:cluster:test
+      duration: 2160h
+      issuerRef:
+        kind: Issuer
+        name: ectobase-pool-ca
+      privateKey:
+        algorithm: ECDSA
+        size: 256
+      secretName: broker-dispatch-tls
+      subject:
+        organizations:
+          - ectobase:brokers
+      usages:
+        - client auth
+  39: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:

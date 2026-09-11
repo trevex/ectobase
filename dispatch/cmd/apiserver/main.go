@@ -28,7 +28,6 @@ import (
 	storageinstall "github.com/trevex/ectobase/api/storage/install"
 	storagev1 "github.com/trevex/ectobase/api/storage/v1alpha1"
 	"github.com/trevex/ectobase/dispatch/client-go/openapi"
-	"github.com/trevex/ectobase/dispatch/pkg/clusterrestriction"
 )
 
 const (
@@ -63,10 +62,11 @@ func main() {
 	code := apiserver.NewBuilder(scheme).
 		WithComponentName(componentName).
 		WithOpenAPIDefinitions(componentName, "v0.1.0", openapi.GetOpenAPIDefinitions).
-		// Thin ClusterRestriction: a broker (ectobase:cluster:<name>) may write only
-		// its own ClusterPool status and may never set spec.clusterName. Enabled by
-		// default; Phase-1 disables MutatingAdmissionPolicy/ValidatingAdmissionPolicy.
-		WithAdmissionPlugin(clusterrestriction.PluginName, clusterrestriction.Register).
+		// No broker-specific admission plugin. A pool's access is bounded by RBAC alone now —
+		// namespace-scoped for its compiled objects, resourceNames-scoped for the cluster-scoped
+		// ones it owns, and status-subresource-only for every write. That covers each guarantee the
+		// old ClusterRestriction plugin made (no deletes, no spec writes, no other pool's
+		// ClusterPool) and one it could not: another pool's state cannot even be READ.
 		With(apiserver.Resource(&platform.ClusterPool{}, v1alpha1.SchemeGroupVersion)).
 		With(apiserver.Resource(&platform.RouteBusIdentity{}, v1alpha1.SchemeGroupVersion)).
 		With(apiserver.Resource(&netapi.VPC{}, netv1.SchemeGroupVersion)).

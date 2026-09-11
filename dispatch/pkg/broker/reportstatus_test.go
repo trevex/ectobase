@@ -60,7 +60,7 @@ func TestReportStatus_WritesPrefixesPlacementAndDrain(t *testing.T) {
 		WithStatusSubresource(pool, cvm).
 		Build()
 
-	b := &Broker{Dispatch: c, ClusterName: "c1"}
+	b := &Broker{Dispatch: c, Pools: c, ClusterName: "c1"}
 	nodes := []NodeFact{
 		{Name: "node-1", Prefix: prefix1},
 		{Name: "node-2", Prefix: prefix2},

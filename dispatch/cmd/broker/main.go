@@ -210,13 +210,22 @@ func main() {
 		log.Fatalf("setup compiledcontainer broker controller: %v", err)
 	}
 
+	// One UNCACHED dispatch client for the cluster-scoped resources (ClusterPool,
+	// RouteBusIdentity). A cached read of either would start a cluster-wide LIST/WATCH, and RBAC
+	// cannot narrow a list/watch to one object — resourceNames only matches a named request. Going
+	// by name keeps both inside this pool's own grant.
+	dispatchDirect, err := client.New(dispatchCfg, client.Options{Scheme: scheme})
+	if err != nil {
+		log.Fatalf("build direct dispatch client: %v", err)
+	}
+
 	// Heartbeater: renew the ClusterPool lease + report node capacity every 10s.
 	holderIdentity, err := os.Hostname()
 	if err != nil {
 		holderIdentity = clusterName
 	}
 	hb := &broker.Heartbeater{
-		Dispatch:       mgr.GetClient(),
+		Dispatch:       dispatchDirect,
 		PoolName:       clusterName,
 		HolderIdentity: holderIdentity,
 		Reporter:       &nodeCapacityReporter{downstream: downstreamClient},
@@ -232,6 +241,7 @@ func main() {
 	// a slow node/VMI list never delays the lease renewal.
 	sr := &statusReporter{
 		dispatch:    mgr.GetClient(),
+		pools:       dispatchDirect,
 		downstream:  downstreamClient,
 		clusterName: clusterName,
 		interval:    10 * time.Second,
@@ -245,10 +255,6 @@ func main() {
 	// + root bundle into the pool Secret that backs the pool cert-manager CA Issuer. A direct
 	// (uncached) dispatch client avoids adding a cluster-wide RouteBusIdentity watch to the cache.
 	if routebusSecret != "" {
-		dispatchDirect, derr := client.New(dispatchCfg, client.Options{Scheme: scheme})
-		if derr != nil {
-			log.Fatalf("build direct dispatch client: %v", derr)
-		}
 		boot := &broker.PoolCertBootstrapper{
 			Dispatch:       dispatchDirect,
 			Downstream:     downstreamClient,
@@ -273,6 +279,7 @@ func main() {
 // tested ReportStatus seam.
 type statusReporter struct {
 	dispatch    client.Client
+	pools       client.Client // uncached: ClusterPool is cluster-scoped (see the hoisted client)
 	downstream  client.Client
 	clusterName string
 	interval    time.Duration
@@ -302,7 +309,7 @@ func (s *statusReporter) reportOnce(ctx context.Context) error {
 		return fmt.Errorf("gather nodes: %w", err)
 	}
 	vmNode := s.gatherVMNodes(ctx)
-	b := &broker.Broker{Dispatch: s.dispatch, Downstream: s.downstream, ClusterName: s.clusterName}
+	b := &broker.Broker{Dispatch: s.dispatch, Pools: s.pools, Downstream: s.downstream, ClusterName: s.clusterName}
 	return b.ReportStatus(ctx, nodes, vmNode)
 }
 

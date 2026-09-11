@@ -23,6 +23,9 @@ type CapacityReporter interface {
 
 // Heartbeater renews the broker's ClusterPool lease + reports capacity upward.
 type Heartbeater struct {
+	// Dispatch is UNCACHED on purpose: ClusterPool is cluster-scoped, so a cached read would open
+	// a cluster-wide LIST/WATCH that RBAC cannot narrow to this pool (resourceNames does not apply
+	// to a list). A by-name Get every interval is cheap and stays inside a per-pool grant.
 	Dispatch       client.Client
 	PoolName       string
 	HolderIdentity string

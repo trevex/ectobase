@@ -26,7 +26,14 @@ import (
 // labels are mirrored: the `workload` label is load-bearing downstream (the
 // vm-materializer joins a VM to its volume attachments by it).
 type Broker struct {
-	Dispatch    client.Client
+	// Dispatch is the CACHED client for this pool's compiled objects. Its cache is scoped to the
+	// pool namespace, which is what makes those reads authorizable by a namespaced RoleBinding.
+	Dispatch client.Client
+	// Pools reads and patches this pool's ClusterPool, and must be UNCACHED. ClusterPool is
+	// cluster-scoped, so a cached read would start a cluster-wide LIST/WATCH informer — and RBAC
+	// cannot scope a list/watch by resourceNames (a list carries no name to match). Reading it
+	// by name keeps the grant narrow enough to name exactly this pool.
+	Pools       client.Client
 	Downstream  client.Client
 	ClusterName string
 }
@@ -289,7 +296,7 @@ func (b *Broker) SyncCompiledContainers(ctx context.Context) error {
 // treated as an error — vmNode is a superset gathered from the live downstream.
 func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[string]string) error {
 	var pool platformv1.ClusterPool
-	if err := b.Dispatch.Get(ctx, client.ObjectKey{Name: b.ClusterName}, &pool); err != nil {
+	if err := b.Pools.Get(ctx, client.ObjectKey{Name: b.ClusterName}, &pool); err != nil {
 		return fmt.Errorf("get pool %s: %w", b.ClusterName, err)
 	}
 	orig := pool.DeepCopy()
@@ -312,7 +319,7 @@ func (b *Broker) ReportStatus(ctx context.Context, nodes []NodeFact, vmNode map[
 	// pool-health controller writes Phase on this same status subresource. A full Update from a
 	// cached Get 409-conflicts against them and clobbers their fields; MergeFrom patches only
 	// NodePrefixes/NodeDrain (this pool's fence facts) with no resourceVersion precondition.
-	if err := b.Dispatch.Status().Patch(ctx, &pool, client.MergeFrom(orig)); err != nil {
+	if err := b.Pools.Status().Patch(ctx, &pool, client.MergeFrom(orig)); err != nil {
 		return fmt.Errorf("patch pool %s status: %w", b.ClusterName, err)
 	}
 

@@ -2,37 +2,15 @@ suite: dispatch dispatch-broker rbac
 templates:
   - templates/broker-identity.yaml
 tests:
-  # Dispatch broker-identity.yaml documents (0-indexed):
-  #   0: SA  dispatch-broker
-  #   1: CR  dispatch-broker  (platform.ectobase.dev clusterpools; NO virtualmachineinstances)
-  #   2: CRB dispatch-broker
-  - it: dispatch-broker ClusterRole carries the read-only clusterpools rule + status writer
+  # This template used to render a fleet-wide ClusterRole bound to the "ectobase:brokers" cert
+  # group, which let every pool's credential READ every other pool's compiled state — admission
+  # never sees a GET/LIST, so nothing but the broker's own client-side filter stood in the way.
+  #
+  # A pool's access is now provisioned per pool at enrollment: namespace-scoped for its compiled
+  # objects, resourceNames-scoped for the cluster-scoped ones it owns, status-subresource-only for
+  # every write. So this template must render NOTHING — a fleet-wide grant reappearing here would
+  # silently re-open cross-pool reads, which is exactly the regression worth catching.
+  - it: renders no fleet-wide broker RBAC
     asserts:
-      - isKind:
-          of: ClusterRole
-        documentIndex: 1
-      # The broker READS pool spec (get;list;watch) but must NOT write it — spec writes are the
-      # operator's; the broker only writes clusterpools/status (see below).
-      - contains:
-          path: rules
-          content:
-            apiGroups: ["platform.ectobase.dev"]
-            resources: ["clusterpools"]
-            verbs: ["get", "list", "watch"]
-        documentIndex: 1
-      - contains:
-          path: rules
-          content:
-            apiGroups: ["platform.ectobase.dev"]
-            resources: ["clusterpools/status"]
-            verbs: ["get", "patch", "update"]
-        documentIndex: 1
-
-  - it: dispatch-broker ClusterRole does NOT contain virtualmachineinstances (pool-only resource)
-    asserts:
-      - notContains:
-          path: rules
-          content:
-            resources: ["virtualmachineinstances"]
-          any: true
-        documentIndex: 1
+      - hasDocuments:
+          count: 0

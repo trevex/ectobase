@@ -57,7 +57,6 @@ generate: ## Regenerate deepcopy/conversion (kube::codegen) + CRD manifests (con
 	cd mesh && controller-gen rbac:roleName=pod-materializer paths=./cmd/pod-materializer/... output:rbac:artifacts:config=../charts/ectobase-pool/files/pod-materializer
 	cd cni && controller-gen rbac:roleName=flowplane-cni paths=./... output:rbac:artifacts:config=../charts/ectobase-pool/files/flowplane-cni
 	cd dispatch && controller-gen rbac:roleName=dispatch-controller paths=./cmd/controller/... output:rbac:artifacts:config=../charts/ectobase-dispatch/files/dispatch-controller
-	cd dispatch && controller-gen rbac:roleName=dispatch-broker paths=./cmd/broker/rbac/dispatchside/... output:rbac:artifacts:config=../charts/ectobase-dispatch/files/dispatch-broker
 	cd dispatch && controller-gen rbac:roleName=dispatch-broker paths=./cmd/broker/rbac/poolside/... output:rbac:artifacts:config=../charts/ectobase-pool/files/dispatch-broker
 	# Docs: regenerate the per-group CRD API reference so it never drifts from the types.
 	$(MAKE) docs-crd-ref

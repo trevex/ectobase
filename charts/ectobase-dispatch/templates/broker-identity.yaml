@@ -1,40 +1,27 @@
 # Copyright 2026 ectobase contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# Dispatch-side dispatch-broker identity: the ClusterRole + Binding that grants the
-# "ectobase:brokers" cert group (the mTLS route-bus identity every pool broker presents)
-# access to the dispatch apiserver. Lives in the dispatch's `system` namespace
-# ({{ .Values.namespace }}). RBAC rules are sourced from the generated
-# files/dispatch-broker/role.yaml.
+# There is deliberately NO fleet-wide broker role here.
 #
-# NOTE: the downstream (in-pool) broker SA and its RBAC live in the ectobase
-# (pool) chart, NOT here.
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: dispatch-broker
-  labels:
-    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
-rules:
-  {{- (.Files.Get "files/dispatch-broker/role.yaml" | fromYaml).rules | toYaml | nindent 2 }}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: dispatch-broker
-  labels:
-    {{- include "ectobase-dispatch.labels" . | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: dispatch-broker
-subjects:
-  # Cert-authenticated brokers present Org=ectobase:brokers; per-pool write-scope is enforced
-  # by the ClusterRestriction admission plugin off the CN (ectobase:cluster:<pool>).
-  - kind: Group
-    name: "ectobase:brokers"
-    apiGroup: rbac.authorization.k8s.io
+# A pool broker used to hold one shared ClusterRole, bound to the "ectobase:brokers" cert group,
+# granting compiled.* and platform.* across the whole fleet. That made cross-pool READS possible:
+# every pool's credential could list every other pool's compiled state, and only the broker's own
+# client-side filter kept it from doing so. A filter the caller chooses is not an authorization
+# boundary.
+#
+# Each pool's access is now provisioned at enrollment, alongside its ClusterPool, and is scoped two
+# ways (see clusterPoolsManifest in test/lab/internal/deploy/ectobase.go):
+#
+#   * by NAMESPACE — a Role/RoleBinding in pool-<name> for that pool's compiled objects, which is
+#     expressible only because the broker's cache and lists are namespace-scoped: a cluster-wide
+#     LIST authorizes against an empty namespace that no RoleBinding can match;
+#   * by NAME — a ClusterRole/Binding with resourceNames for the cluster-scoped objects it owns
+#     (its ClusterPool, its RouteBusIdentity), which is why the broker reads those UNCACHED.
+#
+# Writes stay narrow within that: status subresources only, so a broker can never edit a spec,
+# create, or delete. That is what made the ClusterRestriction admission plugin redundant.
+#
+# NOTE: the downstream (in-pool) broker SA and its RBAC live in the ectobase (pool) chart, NOT here.
 
 # NOTE: the first-boot bootstrap identity is NOT fleet-wide. A RouteBusIdentity carries a pool's
 # intermediate-CA CSR + signed cert, so one shared bootstrap ServiceAccount (or a fleet-wide grant

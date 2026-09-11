@@ -111,7 +111,7 @@ renders the dispatch control plane:
       ports:
         - name: https
           port: 443
-          targetPort: 6443
+          targetPort: 6444
       selector:
         app: dispatch-apiserver
   7: |
@@ -130,6 +130,8 @@ renders the dispatch control plane:
       selector:
         matchLabels:
           app: dispatch-apiserver
+      strategy:
+        type: Recreate
       template:
         metadata:
           labels:
@@ -138,27 +140,30 @@ renders the dispatch control plane:
           containers:
             - args:
                 - --etcd-servers=http://kine:2379
-                - --secure-port=6443
+                - --secure-port=6444
                 - --cert-dir=/var/run/apiserver/certs
                 - --audit-log-path=-
                 - --disable-admission-plugins=MutatingAdmissionPolicy,ValidatingAdmissionPolicy
+                - --tls-cert-file=/secrets/serving/tls.crt
+                - --tls-private-key-file=/secrets/serving/tls.key
+                - --client-ca-file=/secrets/client-ca/tls.crt
               image: ghcr.io/trevex/ectobase/dispatch-apiserver:dev
               imagePullPolicy: IfNotPresent
               livenessProbe:
                 httpGet:
                   path: /livez
-                  port: 6443
+                  port: 6444
                   scheme: HTTPS
                 initialDelaySeconds: 15
                 periodSeconds: 10
               name: apiserver
               ports:
-                - containerPort: 6443
+                - containerPort: 6444
                   name: https
               readinessProbe:
                 httpGet:
                   path: /readyz
-                  port: 6443
+                  port: 6444
                   scheme: HTTPS
                 initialDelaySeconds: 5
                 periodSeconds: 5
@@ -169,10 +174,24 @@ renders the dispatch control plane:
               volumeMounts:
                 - mountPath: /var/run/apiserver/certs
                   name: cert-dir
+                - mountPath: /secrets/serving
+                  name: serving-cert
+                  readOnly: true
+                - mountPath: /secrets/client-ca
+                  name: client-ca
+                  readOnly: true
+          dnsPolicy: ClusterFirstWithHostNet
+          hostNetwork: true
           serviceAccountName: dispatch-apiserver
           volumes:
             - emptyDir: {}
               name: cert-dir
+            - name: serving-cert
+              secret:
+                secretName: dispatch-apiserver-tls
+            - name: client-ca
+              secret:
+                secretName: ectobase-ca
   8: |
     apiVersion: apiregistration.k8s.io/v1
     kind: APIService
@@ -269,86 +288,6 @@ renders the dispatch control plane:
       version: v1alpha1
       versionPriority: 100
   13: |
-    apiVersion: v1
-    kind: ServiceAccount
-    metadata:
-      labels:
-        app.kubernetes.io/managed-by: Helm
-        app.kubernetes.io/part-of: ectobase-dispatch
-        helm.sh/chart: ectobase-dispatch-0.1.0
-      name: dispatch-broker
-      namespace: system
-  14: |
-    apiVersion: rbac.authorization.k8s.io/v1
-    kind: ClusterRole
-    metadata:
-      labels:
-        app.kubernetes.io/managed-by: Helm
-        app.kubernetes.io/part-of: ectobase-dispatch
-        helm.sh/chart: ectobase-dispatch-0.1.0
-      name: dispatch-broker
-    rules:
-      - apiGroups:
-          - compiled.ectobase.dev
-        resources:
-          - compiledcontainers
-          - compilednics
-          - compiledvms
-          - compiledvolumeattachments
-        verbs:
-          - get
-          - list
-          - watch
-      - apiGroups:
-          - platform.ectobase.dev
-        resources:
-          - clusterpools
-        verbs:
-          - get
-          - list
-          - watch
-      - apiGroups:
-          - platform.ectobase.dev
-        resources:
-          - clusterpools/status
-        verbs:
-          - get
-          - patch
-          - update
-      - apiGroups:
-          - platform.ectobase.dev
-        resources:
-          - routebusidentities
-        verbs:
-          - create
-          - get
-          - list
-          - update
-          - watch
-      - apiGroups:
-          - platform.ectobase.dev
-        resources:
-          - routebusidentities/status
-        verbs:
-          - get
-  15: |
-    apiVersion: rbac.authorization.k8s.io/v1
-    kind: ClusterRoleBinding
-    metadata:
-      labels:
-        app.kubernetes.io/managed-by: Helm
-        app.kubernetes.io/part-of: ectobase-dispatch
-        helm.sh/chart: ectobase-dispatch-0.1.0
-      name: dispatch-broker
-    roleRef:
-      apiGroup: rbac.authorization.k8s.io
-      kind: ClusterRole
-      name: dispatch-broker
-    subjects:
-      - kind: ServiceAccount
-        name: dispatch-broker
-        namespace: system
-  16: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -388,7 +327,7 @@ renders the dispatch control plane:
           serviceAccountName: mesh-controller
           tolerations:
             - operator: Exists
-  17: |
+  14: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
@@ -398,7 +337,7 @@ renders the dispatch control plane:
         helm.sh/chart: ectobase-dispatch-0.1.0
       name: dispatch-controller
       namespace: system
-  18: |
+  15: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -497,7 +436,7 @@ renders the dispatch control plane:
           - patch
           - update
           - watch
-  19: |
+  16: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -514,7 +453,7 @@ renders the dispatch control plane:
       - kind: ServiceAccount
         name: dispatch-controller
         namespace: system
-  20: |
+  17: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -538,6 +477,11 @@ renders the dispatch control plane:
           containers:
             - args:
                 - -reflector-admin=[fd00:db8:0:1::1]:1339
+                - -reflector-tls-ca=/etc/routebus-tls/ca.crt
+                - -reflector-tls-cert=/etc/routebus-tls/tls.crt
+                - -reflector-tls-key=/etc/routebus-tls/tls.key
+                - -routebus-ca-cert=/etc/routebus-ca/tls.crt
+                - -routebus-ca-key=/etc/routebus-ca/tls.key
                 - -csi-driver=rbd.csi.ceph.com
                 - -csi-cluster-id=
                 - -csi-secret-name=csi-rbd-secret
@@ -552,8 +496,22 @@ renders the dispatch control plane:
                 requests:
                   cpu: 50m
                   memory: 64Mi
+              volumeMounts:
+                - mountPath: /etc/routebus-tls
+                  name: routebus-tls
+                  readOnly: true
+                - mountPath: /etc/routebus-ca
+                  name: routebus-ca
+                  readOnly: true
           serviceAccountName: dispatch-controller
-  21: |
+          volumes:
+            - name: routebus-tls
+              secret:
+                secretName: dispatch-controller-routebus-tls
+            - name: routebus-ca
+              secret:
+                secretName: ectobase-ca
+  18: |
     apiVersion: v1
     kind: Secret
     metadata:
@@ -566,7 +524,7 @@ renders the dispatch control plane:
     stringData:
       password: kine
     type: Opaque
-  22: |
+  19: |
     apiVersion: v1
     kind: Service
     metadata:
@@ -583,7 +541,7 @@ renders the dispatch control plane:
           targetPort: 5432
       selector:
         app: dispatch-postgres
-  23: |
+  20: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -638,7 +596,7 @@ renders the dispatch control plane:
           volumes:
             - emptyDir: {}
               name: data
-  24: |
+  21: |
     apiVersion: v1
     kind: Service
     metadata:
@@ -655,7 +613,7 @@ renders the dispatch control plane:
           targetPort: 2379
       selector:
         app: dispatch-kine
-  25: |
+  22: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -702,7 +660,7 @@ renders the dispatch control plane:
                 requests:
                   cpu: 50m
                   memory: 64Mi
-  26: |
+  23: |
     apiVersion: v1
     kind: Namespace
     metadata:
@@ -712,7 +670,7 @@ renders the dispatch control plane:
         helm.sh/chart: ectobase-dispatch-0.1.0
         pod-security.kubernetes.io/enforce: privileged
       name: ectobase-system
-  27: |
+  24: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
@@ -722,7 +680,7 @@ renders the dispatch control plane:
         helm.sh/chart: ectobase-dispatch-0.1.0
       name: mesh-controller
       namespace: ectobase-system
-  28: |
+  25: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRole
     metadata:
@@ -732,6 +690,13 @@ renders the dispatch control plane:
         helm.sh/chart: ectobase-dispatch-0.1.0
       name: mesh-controller
     rules:
+      - apiGroups:
+          - ""
+        resources:
+          - events
+        verbs:
+          - create
+          - patch
       - apiGroups:
           - compiled.ectobase.dev
         resources:
@@ -766,6 +731,7 @@ renders the dispatch control plane:
         verbs:
           - get
           - list
+          - update
           - watch
       - apiGroups:
           - compute.ectobase.dev
@@ -777,11 +743,24 @@ renders the dispatch control plane:
           - patch
           - update
       - apiGroups:
+          - coordination.k8s.io
+        resources:
+          - leases
+        verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+      - apiGroups:
           - net.ectobase.dev
         resources:
           - firewallpolicies
+          - lbpools
           - loadbalancers
-          - networkinterfaces
+          - subnets
           - vpcpeerings
           - vpcs
         verbs:
@@ -791,7 +770,21 @@ renders the dispatch control plane:
       - apiGroups:
           - net.ectobase.dev
         resources:
+          - lbpools/status
+          - loadbalancers/status
+          - networkinterfaces/status
+          - subnets/status
+          - vpcpeerings/status
+          - vpcs/status
+        verbs:
+          - get
+          - patch
+          - update
+      - apiGroups:
+          - net.ectobase.dev
+        resources:
           - natgateways
+          - networkinterfaces
         verbs:
           - get
           - list
@@ -805,15 +798,6 @@ renders the dispatch control plane:
           - get
           - update
       - apiGroups:
-          - net.ectobase.dev
-        resources:
-          - vpcpeerings/status
-          - vpcs/status
-        verbs:
-          - get
-          - patch
-          - update
-      - apiGroups:
           - storage.ectobase.dev
         resources:
           - volumes
@@ -821,7 +805,7 @@ renders the dispatch control plane:
           - get
           - list
           - watch
-  29: |
+  26: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
     metadata:
@@ -838,7 +822,7 @@ renders the dispatch control plane:
       - kind: ServiceAccount
         name: mesh-controller
         namespace: ectobase-system
-  30: |
+  27: |
     apiVersion: v1
     kind: ServiceAccount
     metadata:
@@ -848,7 +832,7 @@ renders the dispatch control plane:
         helm.sh/chart: ectobase-dispatch-0.1.0
       name: mesh-reflector
       namespace: ectobase-system
-  31: |
+  28: |
     apiVersion: apps/v1
     kind: Deployment
     metadata:
@@ -873,6 +857,10 @@ renders the dispatch control plane:
             - args:
                 - --listen=:1338
                 - --admin-listen=:1339
+                - --admin-client-cn=dispatch-controller
+                - --tls-ca=/etc/routebus-tls/ca.crt
+                - --tls-cert=/etc/routebus-tls/tls.crt
+                - --tls-key=/etc/routebus-tls/tls.key
               command:
                 - reflector
               image: ghcr.io/trevex/ectobase/mesh:dev
@@ -889,6 +877,10 @@ renders the dispatch control plane:
                 requests:
                   cpu: 50m
                   memory: 64Mi
+              volumeMounts:
+                - mountPath: /etc/routebus-tls
+                  name: routebus-tls
+                  readOnly: true
           dnsPolicy: ClusterFirstWithHostNet
           hostNetwork: true
           nodeSelector:
@@ -896,7 +888,11 @@ renders the dispatch control plane:
           serviceAccountName: mesh-reflector
           tolerations:
             - operator: Exists
-  32: |
+          volumes:
+            - name: routebus-tls
+              secret:
+                secretName: reflector-routebus-tls
+  29: |
     apiVersion: v1
     kind: Service
     metadata:
@@ -920,3 +916,125 @@ renders the dispatch control plane:
       selector:
         app.kubernetes.io/name: reflector
       type: ClusterIP
+  30: |
+    apiVersion: cert-manager.io/v1
+    kind: Issuer
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: ectobase-ca-selfsign
+      namespace: system
+    spec:
+      selfSigned: {}
+  31: |
+    apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: ectobase-ca
+      namespace: system
+    spec:
+      commonName: ectobase-ca
+      duration: 87600h
+      isCA: true
+      issuerRef:
+        kind: Issuer
+        name: ectobase-ca-selfsign
+      privateKey:
+        algorithm: ECDSA
+        size: 256
+      secretName: ectobase-ca
+  32: |
+    apiVersion: cert-manager.io/v1
+    kind: ClusterIssuer
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: ectobase-ca
+    spec:
+      ca:
+        secretName: ectobase-ca
+  33: |
+    apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: reflector-routebus-tls
+      namespace: ectobase-system
+    spec:
+      dnsNames:
+        - reflector
+        - reflector.ectobase-system
+        - reflector.ectobase-system.svc
+      duration: 8760h
+      ipAddresses:
+        - fd00:db8:0:1::1
+      issuerRef:
+        kind: ClusterIssuer
+        name: ectobase-ca
+      privateKey:
+        algorithm: ECDSA
+        size: 256
+      secretName: reflector-routebus-tls
+      usages:
+        - server auth
+        - client auth
+  34: |
+    apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: dispatch-controller-routebus-tls
+      namespace: system
+    spec:
+      commonName: dispatch-controller
+      duration: 8760h
+      issuerRef:
+        kind: ClusterIssuer
+        name: ectobase-ca
+      privateKey:
+        algorithm: ECDSA
+        size: 256
+      secretName: dispatch-controller-routebus-tls
+      usages:
+        - client auth
+  35: |
+    apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      labels:
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: ectobase-dispatch
+        helm.sh/chart: ectobase-dispatch-0.1.0
+      name: dispatch-apiserver-tls
+      namespace: system
+    spec:
+      dnsNames:
+        - apiserver-service
+        - apiserver-service.system
+        - apiserver-service.system.svc
+      duration: 8760h
+      ipAddresses:
+        - fd00:db8:0:1::1
+      issuerRef:
+        kind: ClusterIssuer
+        name: ectobase-ca
+      privateKey:
+        algorithm: ECDSA
+        size: 256
+      secretName: dispatch-apiserver-tls
+      usages:
+        - server auth
