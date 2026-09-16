@@ -80,7 +80,8 @@ type NetworkInterfaceStatus struct {
 	// VNI is the effective VXLAN network identifier resolved from the VPC.
 	// +optional
 	VNI int32 `json:"vni,omitempty" protobuf:"varint,1,opt,name=vni"`
-	// UnderlayRoute is the allocated underlay /128 from the host's underlay /64.
+	// UnderlayRoute is the underlay address this interface is reached at: the host node's
+	// single VTEP, shared by every interface on that node.
 	// +optional
 	UnderlayRoute string `json:"underlayRoute,omitempty" protobuf:"bytes,2,opt,name=underlayRoute"`
 	// Port describes the dataplane port allocated for this interface.

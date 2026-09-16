@@ -63,18 +63,19 @@ type Dataplane interface {
 	// ingressMbps are policed. All 0 = unlimited (clears). Idempotent.
 	ConfigureQoS(ctx context.Context, interfaceID string, egressMbps, publicMbps, ingressMbps uint32) error
 	// ListInterfaces returns the interfaces currently attached on this node, each with its overlay
-	// identity and node-local underlay /128. The agent announces overlay routes from this (the
-	// underlay is node-local dataplane state, not central config).
+	// identity and this node's VTEP. The agent announces overlay routes from this (the underlay is
+	// node-local dataplane state, not central config).
 	ListInterfaces(ctx context.Context) ([]LocalInterface, error)
 }
 
 // LocalInterface is one interface attached on this node: its overlay identity (vni + IPs) and the
-// node-local underlay /128 the dataplane allocated to it. Reported by DataplaneNode.ListInterfaces.
+// underlay it is reachable at — this node's VTEP, shared by every interface on the node (nothing is
+// allocated per endpoint). Reported by DataplaneNode.ListInterfaces.
 type LocalInterface struct {
 	InterfaceID string
 	Vni         uint32
 	OverlayIPs  []string // overlay IPv4 and/or IPv6
-	Underlay    string   // node-local allocated /128
+	Underlay    string   // this node's VTEP (same for every interface on the node)
 }
 
 // FwRule is one compiled firewall rule the agent installs on the dataplane.

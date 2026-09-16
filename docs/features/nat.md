@@ -62,8 +62,8 @@ flowchart TD
 Return traffic from the internet arrives at the [WAN edge](ns-edge.md) addressed to a
 public IP + port. The edge must forward it to the node that owns that
 `(nat_ip, port)` block; the neighbor-NAT lookup does this. The owning node announces its
-NAT block on the route bus with owner = the NIC's underlay `/128`, so every node
-(including the edge) learns which underlay address to encapsulate the return toward.
+NAT block on the route bus with owner = that node's own VTEP, so every node
+(including the edge) learns which node to encapsulate the return toward.
 
 The edge's `uplink_rx` / `wan_rx` path matches the return packet's `(nat_ip, dport)`
 against its neighbor-NAT table, gets back the owning node's underlay `/128` and VNI, and
@@ -83,7 +83,7 @@ announces NAT purely from there.
   stamps a `CompiledNATSource{ SourceIP, NATIP, PortMin, PortMax }` onto `CompiledNIC.Spec.NAT`.
 - The agent, iterating its local `CompiledNIC`s, calls `AddNatSource` for each entry (which
   programs the datapath `NAT` map) and announces a `NatBlock` on the route bus with
-  `OwnerUnderlay = the NIC's underlay /128`.
+  `OwnerUnderlay = this node's VTEP`.
 
 This keeps the agent's input surface small (only `CompiledNIC`) and makes the owner of a
 NAT block explicit and self-describing on the wire.
@@ -102,10 +102,10 @@ NATGateway.Status.Allocations[]  { Source, PublicIP, PortMin, PortMax }
 CompiledNIC.Spec.NAT[]  CompiledNATSource{ SourceIP, NATIP, PortMin, PortMax }
         │  agent.Desired() — for each local CompiledNIC.NAT entry
         ├─ DataplaneNode gRPC: AddNatSource(vni, srcIP, natIP, portMin, portMax)
-        └─ route-bus announce: NatBlock{ …, OwnerUnderlay = NIC /128 }
+        └─ route-bus announce: NatBlock{ …, OwnerUnderlay = node VTEP }
         ▼
 datapath egress: snat_egress rewrites src → nat_ip : nat_port (+ conntrack)
-datapath return: neighbor-NAT lookup at the edge → encap toward owner /128 → reverse
+datapath return: neighbor-NAT lookup at the edge → encap toward owner VTEP → reverse
 ```
 
 - CRD → allocator. `NATGatewayReconciler` turns pool + block size into a deterministic
@@ -114,12 +114,12 @@ datapath return: neighbor-NAT lookup at the edge → encap toward owner /128 →
 - Allocator → compiler. `CompiledNICReconciler` folds the allocations into each NIC's
   `CompiledNIC.Spec.NAT`. A NAT-gateway status change re-enqueues affected NICs.
 - Compiler → agent → dataplane. The agent programs the `NAT` map and announces the
-  block (owner = NIC `/128`) on the route bus, so return traffic finds the owning node.
+  block (owner = the node VTEP) on the route bus, so return traffic finds the owning node.
 
 ## Related
 
 - [North-South WAN edge](ns-edge.md) — where return traffic enters and neighbor-NAT runs.
-- [Routing & multi-VNI tenancy](routing-vni.md) — the underlay-`/128`-nexthop model NAT
-  blocks reuse.
+- [Routing & multi-VNI tenancy](routing-vni.md) — the node-VTEP-nexthop model NAT blocks
+  reuse.
 - [Compilers: CompiledNIC](../architecture/compile-sync-materialize.md)
 - NAT64 (`64:ff9b::/96`) reuses the same egress path for IPv6-only guests reaching IPv4.

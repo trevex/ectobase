@@ -17,19 +17,19 @@ There are two distinct ways a VIP is reached, and they use different machinery:
   the [WAN edge](ns-edge.md). The edge runs the Maglev datapath, picks a backend, and
   forwards to it. This is the classic ingress load balancer.
 - East-West (in-overlay → VIP), via anycast. Every backend node announces the same
-  VIP as an overlay host route on the route bus, nexthop = that backend's own underlay
-  `/128`. Multiple backends announcing the same VIP means the fabric ECMPs across them.
+  VIP as an overlay host route on the route bus, nexthop = that backend's own node VTEP.
+  Multiple backend nodes announcing the same VIP means the fabric ECMPs across them.
   No LB-specific datapath state is needed for E/W — it reuses the plain route channel.
 
 ```mermaid
 flowchart TD
     subgraph ns["North-South (edge)"]
         ext["external client → VIP:port"] --> edge["edge wan_rx / vip_rx:<br/>maglev select backend"]
-        edge --> dsr1["encap toward backend /128<br/>(inner dst stays VIP — DSR)"]
+        edge --> dsr1["encap toward backend's node VTEP<br/>(inner dst stays VIP — DSR)"]
     end
     subgraph ew["East-West (anycast)"]
         guest["in-overlay guest → VIP:port"] --> route["ROUTES lookup: VIP is a host route<br/>with N backend nexthops"]
-        route --> ecmp["fabric ECMP → one backend /128"]
+        route --> ecmp["fabric ECMP → one backend node VTEP"]
     end
     dsr1 --> be["backend NIC<br/>ingress firewall: dst = VIP"]
     ecmp --> be
@@ -43,8 +43,13 @@ code (`flowplane_core::lb::lb_select_forward` / `lb_select_forward_v6`):
 - A service is keyed `(vni, VIP, port, proto)` in the `LB` map. For ICMP the port is
   ignored (looked up as 0).
 - The flow's 5-tuple is hashed (`hash5` over src/dst/sport/dport/proto) modulo the LB's
-  table size to pick a Maglev slot; the slot maps (via the `MAGLEV` map) to a backend's
-  underlay `/128`.
+  table size to pick a Maglev slot; the slot maps (via the `MAGLEV` map) to a full
+  `LbBackend { node_vtep, overlay_ip, vni, is_v6 }`. The underlay alone can no longer name
+  a backend — every interface on a node shares that node's VTEP, so two backends on the
+  same node carry the same `node_vtep` — which is exactly why `overlay_ip` is in the value.
+  The datapath decides local-vs-remote with `be.node_vtep == local.underlay_ipv6`: a remote
+  backend is re-forwarded toward `node_vtep`, a local hit resolves the delivery tap via
+  `INTERFACES[(vni, overlay_ip)]` (`INTERFACES6` when `is_v6`).
 - The Maglev lookup table is built in userspace (`maglev::build`) as a fixed-size prime
   table (1021 slots). Each backend gets a permutation `(offset, skip)` derived from an
   FNV-1a hash of the backend's overlay IP; slots are filled by walking each backend's
@@ -91,8 +96,8 @@ The two delivery models map onto two different agent responsibilities:
   route, not maglev.
 - Backend (`desiredLB` → route announce). Any node hosting a backend NIC, for each
   `CompiledNIC.LB` entry, announces the VIP as an anycast overlay host route with nexthop =
-  that NIC's underlay `/128`. Multiple backends → the fabric ECMPs. A NIC without an
-  allocated underlay yet is skipped (nothing to announce until it is attached).
+  this node's VTEP. Multiple backend nodes → the fabric ECMPs. A NIC the local dataplane
+  does not yet report is skipped (nothing to announce until it is attached).
 
 ## How it's wired
 
@@ -109,13 +114,13 @@ LoadBalancer.Status.AllocatedVIP
 CompiledNIC.Spec.LB[]  CompiledLB{ VIP, Ports[] }
         │
         ├─ backend node: agent.desiredLB() → route-bus announce
-        │     Route{ Vni, Prefix = VIP /32|/128, Nexthop = NIC /128 }   (E/W anycast, ECMP)
+        │     Route{ Vni, Prefix = VIP /32|/128, Nexthop = node VTEP }  (E/W anycast, ECMP)
         │     + LB_VIP record on the bus (for edge backend discovery)
         │
         └─ edge node: agent.ReconcileLB() → DataplaneNode gRPC
               AddLbVip(vip, ...) ; backends learned from LB_VIP records
         ▼
-datapath: lb_select_forward — maglev select backend /128
+datapath: lb_select_forward — maglev select LbBackend {node VTEP, overlay IP, vni}
           DSR forward — inner dst stays VIP → backend ingress firewall sees dst = VIP
 ```
 
@@ -132,7 +137,7 @@ datapath: lb_select_forward — maglev select backend /128
 ## Related
 
 - [Distributed firewall](firewall.md) — why DSR needs an explicit `VIP:port` rule.
-- [Routing & multi-VNI tenancy](routing-vni.md) — the anycast route + underlay-`/128`
-  nexthop the E/W path reuses.
+- [Routing & multi-VNI tenancy](routing-vni.md) — the anycast route + node-VTEP nexthop
+  the E/W path reuses.
 - [North-South WAN edge](ns-edge.md) — where the maglev VIP datapath runs for ingress.
 - [Compilers: CompiledNIC](../architecture/compile-sync-materialize.md)

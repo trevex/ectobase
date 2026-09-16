@@ -144,9 +144,9 @@ reports (`DataplaneNode.ListInterfaces`) — never by a declared `nodeName`. The
 
 The join key is `(VNI, overlay IP)`, not the overlay IP alone, because overlay IPs
 can collide across VPCs — two VPCs may both use `10.0.0.1`. The VNI disambiguates,
-so the pair is globally unique. The node-local underlay nexthop is then taken
-from the matched local interface (underlay allocation is node-local dataplane
-state, not central config).
+so the pair is globally unique. The matched local interface then reports this
+node's VTEP — the one underlay address every interface on the node shares
+(node-local dataplane state, not central config).
 
 The consequence is that policy follows the interface. Wherever the CNI lands a
 NIC — on an auto-scheduled node, or after a reschedule / live migration — the

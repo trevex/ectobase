@@ -132,7 +132,7 @@ can only prove the program fails safe without a tunnel key.
 
 | Python test | Asserts | Native destination |
 |---|---|---|
-| `test_vf_to_vf_tcp` | Same-node VM-to-VM TCP delivery | `ns_scenario_test::external_to_guest_encap_decap_fw_allow_ct` covers the ingress-firewall + delivery path; same-node shortcut is the `underlay_get` hit-with-tap branch in `SimNode` |
+| `test_vf_to_vf_tcp` | Same-node VM-to-VM TCP delivery | `ns_scenario_test::external_to_guest_encap_decap_fw_allow_ct` covers the ingress-firewall + delivery path; the same-node shortcut is the `INTERFACES[(vni, dst)]` `is_local` branch in `flowplane_core::egress::deliver` |
 | `test_vf_to_vf_vip_dnat` | VM→VIP (on same node) DNAT'd to backend; round-trip | `nat_test::dnat_return_tcp_rewrites_dst_ip_and_port` + `lb_scenario_test::ew_lb_local_deliver_no_reforward` (sim) |
 | `test1_vf_to_vf_firewall_tcp` | Ingress firewall ALLOW on matching src prefix | `firewall_test::ingress_allow_rule_matches` (sim) |
 | `test2_vf_to_vf_firewall_tcp` | Egress firewall DROP on non-matching src prefix | `firewall_test::ingress_allow_rule_matches` + `firewall_test::deny_by_default_when_no_rules` (sim); `ns_scenario_test::external_to_guest_firewall_drop_on_unopened_port` |

@@ -37,8 +37,10 @@ forcing a slice through the eBPF path would not verify. Typed reads/writes are
 fixed-size (const-generic `N`) so the eBPF impl lowers each to a single fixed-width
 load/store instead of a byte loop — keeping large in-place rewriters (SNAT, encap) inside
 the verifier's single-function budget. `grow_head`/`shrink_head` model
-`bpf_xdp_adjust_head` (encap headroom / decap); `logical_len()` returns the wire length
-(`skb->len` on tc) so a non-linear skb encapsulates with the correct outer length.
+`bpf_xdp_adjust_head`; the overlay no longer resizes frames — the kernel owns outer-header
+add/strip — so their remaining user is the NAT64 header swap (`grow_head(20)` on the v4→v6
+ingress translation, `shrink_head(20)` on the v6→v4 egress one). `logical_len()` returns the
+wire length (`skb->len` on tc), which on a non-linear skb exceeds the linear head.
 
 `Maps` — one method per logical map operation the core needs (`local`, `underlay_get`,
 `route4_get`/`route6_get`, `fw_meta`/`fw_rule`, `conntrack_get`/`conntrack_insert`,
@@ -54,7 +56,7 @@ wrappers over the map globals and stays verifier-friendly.
 | Sim | `flowplane-sim` | `VecPkt` over a `Vec<u8>` | `MemMaps` — `HashMap`-backed stand-ins |
 
 Because both impls satisfy the same traits, `flowplane_core::firewall::fw_eval_dir`,
-`encap::write_outer_v6`, `decap::decap_and_rewrite`, and every other core function
+`encap::tunnel_encap`, `decap::decap_and_rewrite`, and every other core function
 execute identical logic whether they run in the kernel or in a native test.
 
 ## The hard rule: call the core, never fork it

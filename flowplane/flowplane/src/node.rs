@@ -14,8 +14,8 @@ use pb::{
 use crate::attach::AttachState;
 use crate::handlers;
 
-/// The DataplaneNode gRPC service. Holds the shared attach state (live datapath control + underlay
-/// IPAM) when serving with a datapath; `None` means AttachInterface/DetachInterface are not wired
+/// The DataplaneNode gRPC service. Holds the shared attach state (live datapath control + this
+/// node's VTEP) when serving with a datapath; `None` means AttachInterface/DetachInterface are not wired
 /// (e.g. a control-plane-less server) and return `failed_precondition`.
 #[derive(Default)]
 pub struct NodeService {

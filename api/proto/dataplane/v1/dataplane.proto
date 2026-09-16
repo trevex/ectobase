@@ -158,7 +158,7 @@ message AttachInterfaceResponse {
   repeated string ips = 2;
   string mac = 3;
   string gateway = 4;
-  string underlay_route = 5; // allocated underlay /128 the overlay encaps to
+  string underlay_route = 5; // this node's VTEP — the underlay the overlay encaps to
   // NOTE: no MTU field — the dataplane sets the guest veth link MTU itself at attach (it owns the
   // veth lifecycle), so the CNI never needs it. See attach.rs (guest_mtu) + docs/dataplane/kernel-xdp-tc.md.
 }
@@ -173,7 +173,7 @@ message InterfaceInfo {
   uint32 vni = 2;
   string ipv4 = 3;           // overlay IPv4 ("" if none)
   string ipv6 = 4;           // overlay IPv6 ("" if none)
-  string underlay_route = 5; // node-local allocated underlay /128 (the overlay encaps to it)
+  string underlay_route = 5; // this node's VTEP, shared by every interface on it
 }
 
 message DetachInterfaceRequest { string interface_id = 1; }

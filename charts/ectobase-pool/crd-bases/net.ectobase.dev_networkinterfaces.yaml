@@ -173,8 +173,9 @@ spec:
                 description: State is the current lifecycle state (e.g. Pending, Ready).
                 type: string
               underlayRoute:
-                description: UnderlayRoute is the allocated underlay /128 from the
-                  host's underlay /64.
+                description: |-
+                  UnderlayRoute is the underlay address this interface is reached at: the host node's
+                  single VTEP, shared by every interface on that node.
                 type: string
               vni:
                 description: VNI is the effective VXLAN network identifier resolved

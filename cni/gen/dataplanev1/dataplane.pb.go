@@ -1002,7 +1002,7 @@ type AttachInterfaceResponse struct {
 	Ips           []string               `protobuf:"bytes,2,rep,name=ips,proto3" json:"ips,omitempty"`
 	Mac           string                 `protobuf:"bytes,3,opt,name=mac,proto3" json:"mac,omitempty"`
 	Gateway       string                 `protobuf:"bytes,4,opt,name=gateway,proto3" json:"gateway,omitempty"`
-	UnderlayRoute string                 `protobuf:"bytes,5,opt,name=underlay_route,json=underlayRoute,proto3" json:"underlay_route,omitempty"` // allocated underlay /128 the overlay encaps to
+	UnderlayRoute string                 `protobuf:"bytes,5,opt,name=underlay_route,json=underlayRoute,proto3" json:"underlay_route,omitempty"` // this node's VTEP — the underlay the overlay encaps to
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1159,7 +1159,7 @@ type InterfaceInfo struct {
 	Vni           uint32                 `protobuf:"varint,2,opt,name=vni,proto3" json:"vni,omitempty"`
 	Ipv4          string                 `protobuf:"bytes,3,opt,name=ipv4,proto3" json:"ipv4,omitempty"`                                        // overlay IPv4 ("" if none)
 	Ipv6          string                 `protobuf:"bytes,4,opt,name=ipv6,proto3" json:"ipv6,omitempty"`                                        // overlay IPv6 ("" if none)
-	UnderlayRoute string                 `protobuf:"bytes,5,opt,name=underlay_route,json=underlayRoute,proto3" json:"underlay_route,omitempty"` // node-local allocated underlay /128 (the overlay encaps to it)
+	UnderlayRoute string                 `protobuf:"bytes,5,opt,name=underlay_route,json=underlayRoute,proto3" json:"underlay_route,omitempty"` // this node's VTEP, shared by every interface on it
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

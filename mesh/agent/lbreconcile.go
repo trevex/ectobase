@@ -9,19 +9,20 @@ import (
 )
 
 // lbBacking is one (VIP, backend NIC) pairing this node hosts: a CompiledNIC.LB entry together with
-// the backend NIC's own node-local underlay /128 (resolved from the local dataplane).
+// this node's VTEP (resolved from the local dataplane).
 type lbBacking struct {
 	VIP         string   // v4 or v6
 	Vni         uint32   // the backend NIC's VPC VNI (for the E/W anycast route)
-	NicUnderlay string   // the backend NIC's /128 (E/W route nexthop + LB_VIP owner_underlay)
+	NicUnderlay string   // this node's VTEP (E/W route nexthop + LB_VIP owner_underlay)
 	OverlayIP   string   // the backend NIC's overlay IP (for AddLbBackend's Geneve encap)
 	Ports       []LbPort // service tuples (proto as IP protocol number)
 }
 
 // desiredLB lists the CompiledNICs locally attached on this node and, for each CompiledNIC.LB entry,
-// emits an lbBacking keyed on the backend NIC's node-local underlay /128 — resolved by joining the
-// NIC's (VNI, overlayIP) to ulByKey (from the local dataplane's attached interfaces). A NIC is
-// "local" iff its (VNI, overlayIP) appears in localSet; its underlay is the matching ulByKey entry.
+// emits an lbBacking carrying this node's VTEP — resolved by joining the NIC's (VNI, overlayIP) to
+// ulByKey (from the local dataplane's attached interfaces). A NIC is "local" iff its
+// (VNI, overlayIP) appears in localSet. The VTEP does not identify the backend on its own — two
+// backends on this node share it — which is why OverlayIP is carried alongside.
 // A NIC whose overlay IP isn't attached locally yet is skipped (nothing to announce until it is).
 // Both maps are keyed by (VNI, overlayIP) so the function is safe under overlapping VPC subnets.
 func (r *Reconciler) desiredLB(ctx context.Context, ulByKey map[ipKey]string, localSet map[ipKey]struct{}) ([]lbBacking, error) {

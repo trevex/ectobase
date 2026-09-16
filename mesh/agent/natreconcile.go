@@ -16,7 +16,7 @@ const nat64WellKnownPrefix = "64:ff9b::/96"
 const PublicVNI uint32 = 0
 
 // NatBlock is a NAT block this node ANNOUNCES on the routebus (so every other node can return-route
-// to us). It carries the owning NIC's underlay as the owner. It aliases the shared routebus.NatBlock
+// to us). It carries the owning NODE's VTEP as the owner. It aliases the shared routebus.NatBlock
 // so the agent and reflector use one canonical representation. The agent derives the blocks to
 // announce from the CompiledNICs scheduled to this node (CompiledNIC.NAT), not from NATGateway.
 type NatBlock = routebus.NatBlock

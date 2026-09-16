@@ -10,10 +10,10 @@ the single well-known public VNI (0) to arbitrary peer VNIs.
 Two properties define the feature:
 
 - Reachability is imported, not tunnelled differently. The local agent installs the peer VPC's
-  overlay routes into the local VPC's route table, keyed by the local VNI. The overlay's
-  underlay-derived delivery does the rest — the receiver derives the delivery VNI from the
-  underlay `/128`, not from anything carried in the packet, so a route imported under VNI-A that
-  points at a VNI-B guest's underlay Just Works.
+  overlay routes into the local VPC's route table, keyed by the local VNI. The route itself carries
+  the delivery VNI — the *sender* stamps it into the Geneve tunnel header from the matched route's
+  `nexthop_vni`, so an imported route that names the peer's VNI and the peer's node VTEP is
+  delivered exactly like native peer-VPC traffic.
 - Security is orthogonal. Peering grants reachability only. The deny-by-default ingress
   [firewall](./firewall.md) still drops cross-VPC traffic until a `FirewallPolicy` explicitly
   allows the peer's CIDRs. Reachability without policy means no connectivity — a deliberate
@@ -23,10 +23,13 @@ Two properties define the feature:
 
 Routes in a VNI table are looked up keyed by `(vni, dst)` (`flowplane-core/src/egress.rs`
 `route4`/`route6`). A route under VNI-B is invisible to a lookup under VNI-A — that is the
-tenant-isolation invariant. Delivery VNI is derived at the receiver from `UNDERLAY[outer_dst]`,
-not from a VNI tag on the wire. So importing VNI-B's routes into VNI-A's table with VNI-B's
-underlay nexthop makes them resolvable and deliverable with no kernel change. Peering is entirely
-a question of which routes land in which VNI table, which is control-plane bookkeeping.
+tenant-isolation invariant. The delivery VNI rides the Geneve tunnel header, and the sender stamps
+it from the matched route's `nexthop_vni` (`flowplane-core/src/encap.rs`, `tunnel_encap`) — which
+for an import is set to the peer's origin VNI (`mesh/agent/bus.go`, `applyPeer`). So importing
+VNI-B's routes into VNI-A's table with VNI-B's node VTEP as the nexthop *and VNI-B as the delivery
+VNI* makes them resolvable and deliverable with no kernel change: the receiving node demuxes
+`INTERFACES[(VNI-B, dst)]` exactly as it does for native VNI-B traffic. Peering is entirely a
+question of which routes land in which VNI table, which is control-plane bookkeeping.
 
 ## Mutual consent
 
@@ -134,14 +137,16 @@ unioned deterministically), and:
 3. VPC-B's agent subscribes to VNI-A and imports A's exposed prefixes into VNI-B's route table
    (local precedence honoured).
 4. Datapath (unchanged): a VPC-B guest sends to an exposed A-address → `route4(vni_B, dst)`
-   now hits the imported route → encap to the A-guest's underlay → A's node underlay-derives
-   VNI-A → delivers to the A guest.
+   now hits the imported route → Geneve tunnel key `{vni = VNI-A, remote = A's node VTEP}` →
+   A's node demuxes `INTERFACES[(VNI-A, dst)]` → delivers to the A guest.
 5. Return is symmetric (A imports B's exposed prefixes) — but the destination NIC's
    deny-by-default ingress firewall drops it until a `FirewallPolicy` allows the peer's CIDR.
 
 ## Scope
 
-- No datapath / route-bus protocol change. Peering is control-plane only.
+- No eBPF change and no route-bus protocol change. Peering is control-plane bookkeeping plus the
+  `AddRoute` RPC's existing `delivery_vni` field (landing in `RouteValue.nexthop_vni`); no
+  forwarding logic was added.
 - No firewall coupling. Peering never grants firewall permission; `FirewallPolicy` is the sole
   security gate.
 - No overlap rejection. Overlapping guest ranges are allowed; own-VNI routes win.

@@ -36,16 +36,16 @@ Key flags:
 | `--role node\|edge` | `node` (default) is a hypervisor; `edge` additionally attaches `wan_rx` and registers a local-deliver edge underlay (shares VyOS's netns). |
 | `--uplink` / `--extra-uplink` | the primary fabric uplink drives EDT egress shaping and the MTU/jumbo probe; `uplink_rx` itself attaches to the geneve `collect_md` device, which demuxes decap for every uplink, so `--extra-uplink` is a no-op under the geneve model and kept only for compatibility. |
 | `--wan-uplink` | the WAN-facing uplink (`wan_rx` attaches to its tcx ingress); required for `--role edge`. |
-| `--local-underlay` | this host's underlay IPv6 (outer src on encap; base of the `/128` allocation pool). Optional — otherwise resolved from the kubelet node IP (`HOST_IP`/`NODE_IP`) or inferred from a `lo`/`dummy*` fabric loopback. |
-| `--gateway-mac` | underlay next-hop MAC — the outer Ethernet dst for all encapped traffic. |
+| `--local-underlay` | this host's underlay IPv6, the node VTEP — outer src on encap, and the underlay every interface on this node is programmed with (no per-endpoint `/128` is allocated). Optional — otherwise resolved from the kubelet node IP (`HOST_IP`/`NODE_IP`) or inferred from a `lo`/`dummy*` fabric loopback. |
+| `--gateway-mac` | the MAC stamped on the `collect_md` geneve device. That device carries INNER Ethernet (TEB), so an edge's kernel local-deliver needs the inner dst MAC to equal it or `eth_type_trans` drops the frame `PACKET_OTHERHOST`. The kernel builds the outer Ethernet itself, from the fabric neighbor table — this is not an outer-eth dst. |
 | `--gateway` / `--gateway6` | overlay IPv4/IPv6 gateway the datapath answers ARP/ND for. |
 | `--pin-dir` | bpffs pin directory (default `/sys/fs/bpf/flowplane`) — pins programs + maps so a restart re-adopts. |
 | `--pin-links` | pin program links so a same-image restart is a zero-forwarding-gap re-point (default on; disable for a guaranteed fresh re-attach). |
 | `--conntrack-max` | override the `CONNTRACK` capacity (also `FLOWPLANE_CONNTRACK_MAX`). |
 | `--dhcp-*` | server-wide DHCP options. |
 
-The graceful-restart machinery (map pinning, `IFACE_META` journal replay, IPAM reseed,
-atomic `bpf_link_update`) is described in [HA & graceful restart](../ha-graceful-restart.md).
+The graceful-restart machinery (map pinning, `IFACE_META` journal replay, atomic
+`bpf_link_update`) is described in [HA & graceful restart](../ha-graceful-restart.md).
 
 ## `bringup` — static, flag-driven datapath
 

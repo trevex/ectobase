@@ -62,6 +62,11 @@ impl FwProto {
     }
 }
 
+/// LEGACY debug/lab bring-up. This command predates the P2 Geneve pivot and was mechanically kept
+/// compiling (XDP -> tcx), not made geneve-aware — see the note on the `uplink_rx` attach below.
+/// Its addressing model is the OLD one: `--guest` takes a per-interface underlay `/128` and writes
+/// an `UNDERLAY` entry per guest. Production (`serve`) is node-VTEP: one underlay for every
+/// interface on the node, with local delivery demuxed on `(vni, overlay ip)` via `INTERFACES`.
 #[derive(clap::Args)]
 pub struct BringupArgs {
     /// Uplink interface (uplink_rx attaches here).

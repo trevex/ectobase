@@ -17,9 +17,9 @@ import (
 // spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace
 // on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer
 // on the NetworkInterface instead. It also deliberately does NOT carry
-// the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent
-// obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the
-// correct node-local nexthop. Keeping node-local state out of this central object avoids a
+// the NIC's underlay address: every interface on a node shares that node's one VTEP, which the
+// dataplane resolves at startup, and the agent obtains it from the local DataplaneNode
+// (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this central object avoids a
 // compile->sync round-trip that would lag (and flap) the announced nexthop.
 type CompiledNICSpec struct {
 	// ClusterName is the cluster this compiled NIC is bound to (the pod->node

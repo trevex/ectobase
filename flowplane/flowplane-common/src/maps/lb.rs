@@ -37,7 +37,9 @@ pub struct LbValue {
     pub size: u32,
 }
 
-/// Maglev slot key: (table_id, slot). Value in the map is the backend IPv4 (`[u8;4]`).
+/// Maglev slot key: (table_id, slot). Value in the map is an [`LbBackend`] — the backend's node
+/// VTEP plus its own overlay IP, VNI and family. The VTEP alone cannot name a backend: two
+/// backends on one node share it.
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
 pub struct MaglevKey {

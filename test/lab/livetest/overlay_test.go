@@ -184,8 +184,8 @@ func flowplanePod(ctx context.Context, cfg *config.Config, cluster string) (stri
 // attachEndpoint creates a netns on the node (via the flowplane pod), calls the real
 // dataplane AttachInterface over grpcurl in the node's network namespace, addresses
 // the endpoint netns dpservice-style (/32 + 169.254.0.1 gateway), and returns the
-// allocated underlay /128. Idempotent: re-running against an existing endpoint keeps
-// the same underlay.
+// underlay it is reachable at — this node's VTEP, shared by every interface on it.
+// Idempotent: re-running against an existing endpoint keeps the same underlay.
 func attachEndpoint(t *testing.T, ctx context.Context, cfg *config.Config, node config.DerivedNode, id, ip, mac string) string {
 	t.Helper()
 	container := nodeContainer(cfg, node)

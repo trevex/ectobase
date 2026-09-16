@@ -998,7 +998,7 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledNICSpec(ref common.ReferenceC
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "CompiledNICSpec is the fully lowered per-NIC STATIC POLICY the control plane hands to a node: identity, VNI, overlay IPs, firewall rules (resolved from FirewallPolicy selectors), egress-SNAT allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC + FirewallPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.\n\nThe source NetworkInterface is recorded in the compiled.ectobase.dev/source-namespace and /source-name annotations and encoded in the object name (<sourceNamespace>-<sourceName>) — so the spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer on the NetworkInterface instead. It also deliberately does NOT carry the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the correct node-local nexthop. Keeping node-local state out of this central object avoids a compile->sync round-trip that would lag (and flap) the announced nexthop.",
+				Description: "CompiledNICSpec is the fully lowered per-NIC STATIC POLICY the control plane hands to a node: identity, VNI, overlay IPs, firewall rules (resolved from FirewallPolicy selectors), egress-SNAT allocations, LB membership, and peer imports — derived from the NetworkInterface + VPC + FirewallPolicy + LoadBalancer + NATGateway + VPCPeering so the agent never reads those directly.\n\nThe source NetworkInterface is recorded in the compiled.ectobase.dev/source-namespace and /source-name annotations and encoded in the object name (<sourceNamespace>-<sourceName>) — so the spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer on the NetworkInterface instead. It also deliberately does NOT carry the NIC's underlay address: every interface on a node shares that node's one VTEP, which the dataplane resolves at startup, and the agent obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this central object avoids a compile->sync round-trip that would lag (and flap) the announced nexthop.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"clusterName": {
@@ -3437,7 +3437,7 @@ func schema_ectobase_api_net_v1alpha1_NetworkInterfaceStatus(ref common.Referenc
 					},
 					"underlayRoute": {
 						SchemaProps: spec.SchemaProps{
-							Description: "UnderlayRoute is the allocated underlay /128 from the host's underlay /64.",
+							Description: "UnderlayRoute is the underlay address this interface is reached at: the host node's single VTEP, shared by every interface on that node.",
 							Type:        []string{"string"},
 							Format:      "",
 						},

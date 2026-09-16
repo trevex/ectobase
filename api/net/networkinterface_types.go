@@ -61,7 +61,8 @@ type RateLimit struct {
 type NetworkInterfaceStatus struct {
 	// VNI is the effective VXLAN network identifier resolved from the VPC.
 	VNI int32
-	// UnderlayRoute is the allocated underlay /128 from the host's underlay /64.
+	// UnderlayRoute is the underlay address this interface is reached at: the host node's
+	// single VTEP, shared by every interface on that node.
 	UnderlayRoute string
 	// Port describes the dataplane port allocated for this interface.
 	Port *PortStatus

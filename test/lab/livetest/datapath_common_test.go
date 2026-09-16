@@ -35,8 +35,8 @@ const guestGWMAC = "02:00:00:00:00:01"
 // attachGuest creates a guest netns on the node (via the flowplane pod, which
 // hostPath-mounts the node's /var/run/netns), calls AttachInterface over the real
 // dataplane with the given (dual-stack) IPs and MAC, brings the in-netns guest iface
-// up (named == id) so AF_PACKET probes can bind, and returns the allocated underlay
-// /128. Idempotent: reuses an already-attached endpoint's underlay.
+// up (named == id) so AF_PACKET probes can bind, and returns the underlay it is
+// reachable at — this node's VTEP. Idempotent: reuses an already-attached endpoint.
 //
 // Unlike overlay_test.go's attachEndpoint, this does NOT address the netns (the
 // datapath probes speak raw L2 over AF_PACKET) and it accepts multiple requested_ips.

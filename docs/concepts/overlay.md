@@ -72,7 +72,7 @@ veth/tap ingress:
 1. applies the firewall (deny-by-default) and, if configured, SNAT/VIP rewrites and rate
    metering;
 2. looks up the inner destination in the per-VNI route table (`ROUTES` for IPv4, `ROUTES6`
-   for IPv6) to find the next-hop underlay `/128`;
+   for IPv6) to find the next-hop node VTEP and the VNI to deliver under;
 3. either takes the same-host fast path (below) or stamps the Geneve tunnel key and
    redirects the frame to the geneve device, which builds the outer header and transmits.
 

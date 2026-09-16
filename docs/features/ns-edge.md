@@ -50,8 +50,8 @@ NATGateway port-block allocator (in the dispatch controller) assigns each source
 deterministic `(public-IP, port-block)` — the GCP Cloud NAT model. The block is stamped into the
 source NIC's `CompiledNIC.NAT`, and the source node performs the SNAT locally on egress.
 
-The NAT block owner is the source NIC's underlay (`mesh/agent/natreconcile.go`,
-`NatBlock` carries the owning NIC's underlay). Each node announces the NAT blocks it owns on the
+The NAT block owner is the source node's VTEP (`mesh/agent/natreconcile.go`,
+`NatBlock` carries the owning node's underlay). Each node announces the NAT blocks it owns on the
 route bus so every other node — and the edge — can return-route to it. When a return packet arrives
 from the WAN, the receiving edge maps `(public-IP, dst-port ∈ block) → source underlay` from that
 distributed reverse map and re-encaps toward the owning source node. Because the mapping is a pure
@@ -117,7 +117,7 @@ hardcoded — new edges joining the anycast pool need no CRD edit.
 
 Internet → VIP ingress rides the same channel and the same edge. A `LoadBalancer`-backed NIC
 announces an `LB_VIP` PublicPrefix (`mesh/agent/public.go`, `DesiredPublic`) carrying the VIP
-and the backing NIC's underlay. Only the edge consumes `LB_VIP` records (`applyPublic`,
+and the backing node's VTEP. Only the edge consumes `LB_VIP` records (`applyPublic`,
 gated on `b.isEdge`) — east-west LB uses the plain anycast route, but the edge runs the Maglev
 backend table and registers each backend via `AddLbBackend`:
 

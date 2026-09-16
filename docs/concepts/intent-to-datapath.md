@@ -68,9 +68,10 @@ The compiler (the mesh controllers) reconciles that intent into the `compiled.ec
 group: `CompiledNIC`, `CompiledVM`, `CompiledContainer`, and `CompiledVolumeAttachment`. A
 `CompiledNIC` is the keystone: a fully lowered, node-local bundle of one interface's VNI, overlay
 IPs, firewall rules, NAT sources, LB memberships, and peer imports — everything the dataplane
-needs for that NIC, resolved and precomputed. It deliberately omits the underlay `/128`, which is
-node-local state the dataplane allocates at attach. Each compiled object is stamped for a specific
-pool (via its cluster binding), which is what lets the fleet route it to the right place.
+needs for that NIC, resolved and precomputed. It deliberately omits the underlay address, which is
+node-local: every interface on a node shares that node's single VTEP, which the dataplane resolves
+at startup and reports back to the agent. Each compiled object is stamped for a specific pool (via
+its cluster binding), which is what lets the fleet route it to the right place.
 
 ### 3. Sync — the broker
 

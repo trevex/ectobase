@@ -15,15 +15,15 @@ The mechanism is adopt-and-repoint, not detach-and-reattach.
 
 ### 1. Pinned state maps + the `IFACE_META` journal
 
-`flowplane`'s state maps (conntrack, NAT, routes, IPAM, the per-port `PortMeta`, ...) are pinned
+`flowplane`'s state maps (conntrack, NAT, routes, the per-port `PortMeta`, ...) are pinned
 to bpffs (default `/sys/fs/bpf/flowplane`). A pinned map outlives the process that created it, so
 its contents — live conntrack, NAT allocations, learned routes — are intact when the new process
 starts. On restart the new process adopts the pinned maps rather than recreating them.
 
 The in-memory bookkeeping the process needs (which interfaces exist, their IDs, IPs, VNIs) is
 rebuilt from an `IFACE_META` journal: an on-bpffs record of every attached interface, replayed at
-startup. IPAM is reseeded from the recovered state so a live `/128` is never reissued to a new
-interface.
+startup. There is no underlay address pool to reseed: every interface on the node is programmed with
+the one node VTEP, so a restart re-derives the same underlay rather than re-allocating one.
 
 ### 2. Pinned bpf-links + atomic re-point
 
@@ -58,7 +58,7 @@ sequenceDiagram
     Old->>K: pin maps + pin links (uplink/wan/guest)
     Note over Old: process exits (crash / upgrade / kill)
     Note over K: programs STAY attached via pinned links;<br/>maps keep conntrack/NAT/route state
-    New->>K: adopt pinned maps + replay IFACE_META + reseed IPAM
+    New->>K: adopt pinned maps + replay IFACE_META
     New->>K: from_pin(link) + attach_to_link (bpf_link_update)
     Note over K: atomic re-point → hook never empty → ZERO gap
 ```

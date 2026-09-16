@@ -36,8 +36,9 @@ pub struct ServeArgs {
     /// no-op (see `Control::attach_extra_uplink`'s doc comment).
     #[arg(long = "extra-uplink")]
     extra_uplink: Vec<String>,
-    /// This hypervisor's underlay IPv6 (outer src on encap; also the /64 the AttachInterface
-    /// pool allocates from). Optional: when unset, resolved from the kubelet node IP
+    /// This hypervisor's underlay IPv6 — the node VTEP: outer src on encap, and the underlay
+    /// EVERY interface on this node is programmed with (no per-endpoint /128 is allocated; see
+    /// flowplane_device::underlay). Optional: when unset, resolved from the kubelet node IP
     /// (`HOST_IP`/`NODE_IP` downward-API env) or inferred from the host's lo/dummy* fabric
     /// loopback. Set explicitly for tests / hosts without a fabric loopback.
     #[arg(long = "local-underlay")]
@@ -49,7 +50,10 @@ pub struct ServeArgs {
     /// still overrides it.
     #[arg(long = "underlay-within")]
     underlay_within: Option<String>,
-    /// Underlay next-hop MAC — outer eth dst for ALL encapped traffic.
+    /// MAC stamped on the `collect_md` geneve device. That device carries INNER Ethernet, so an
+    /// edge's kernel local-deliver needs the inner dst MAC to match it (else eth_type_trans drops
+    /// the frame PACKET_OTHERHOST). The kernel builds the OUTER Ethernet itself, from the fabric
+    /// neighbor table — this is not an outer-eth dst.
     #[arg(long)]
     gateway_mac: String,
     /// Override the CONNTRACK map capacity (entries). Also settable via FLOWPLANE_CONNTRACK_MAX.
@@ -333,8 +337,8 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Resolve this hypervisor's underlay IPv6 identity (also the /64 the AttachInterface pool
-/// allocates from), in precedence order:
+/// Resolve this hypervisor's underlay IPv6 identity — the node VTEP every interface on this node
+/// is programmed with — in precedence order:
 ///   1. `--local-underlay` when set — tests / hosts without a fabric loopback.
 ///   2. `--underlay-within <cidr>` when set — the authoritative cluster-wide filter: the host
 ///      address inside the expected node aggregate (e.g. `fd00:cafe::/32`). This overrides a wrong

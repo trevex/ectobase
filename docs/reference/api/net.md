@@ -478,7 +478,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `vni` _integer_ | VNI is the effective VXLAN network identifier resolved from the VPC. |  | Optional: \{\} <br /> |
-| `underlayRoute` _string_ | UnderlayRoute is the allocated underlay /128 from the host's underlay /64. |  | Optional: \{\} <br /> |
+| `underlayRoute` _string_ | UnderlayRoute is the underlay address this interface is reached at: the host node's<br />single VTEP, shared by every interface on that node. |  | Optional: \{\} <br /> |
 | `port` _[PortStatus](#portstatus)_ | Port describes the dataplane port allocated for this interface. |  | Optional: \{\} <br /> |
 | `state` _string_ | State is the current lifecycle state (e.g. Pending, Ready). |  | Optional: \{\} <br /> |
 | `allocatedIPs` _string array_ | AllocatedIPs is the authoritative overlay address set assigned by the IP<br />allocator. CompiledNIC.Spec.OverlayIPs is sourced from this, never Spec.IPs. |  | Optional: \{\} <br /> |

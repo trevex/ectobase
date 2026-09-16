@@ -422,7 +422,7 @@ impl Control {
         };
         // Do the FALLIBLE datapath writes first and commit the in-memory bookkeeping only after they
         // all succeed. Otherwise a failed map write left a ghost by_id/links entry behind while
-        // attach.rs (seeing the Err) deleted the veth + released the IPAM /128 — so Control
+        // attach.rs (seeing the Err) deleted the veth — so Control
         // referenced a dead device and a retry of the same id hit "interface already exists". `link`
         // is a local until commit, so any early return here drops it, detaching the guest program.
         //

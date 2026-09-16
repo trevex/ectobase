@@ -616,9 +616,9 @@ renders (ebpf clab):
                     spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace
                     on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer
                     on the NetworkInterface instead. It also deliberately does NOT carry
-                    the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent
-                    obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the
-                    correct node-local nexthop. Keeping node-local state out of this central object avoids a
+                    the NIC's underlay address: every interface on a node shares that node's one VTEP, which the
+                    dataplane resolves at startup, and the agent obtains it from the local DataplaneNode
+                    (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this central object avoids a
                     compile->sync round-trip that would lag (and flap) the announced nexthop.
                   properties:
                     clusterName:
@@ -1785,7 +1785,9 @@ renders (ebpf clab):
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
                     underlayRoute:
-                      description: UnderlayRoute is the allocated underlay /128 from the host's underlay /64.
+                      description: |-
+                        UnderlayRoute is the underlay address this interface is reached at: the host node's
+                        single VTEP, shared by every interface on that node.
                       type: string
                     vni:
                       description: VNI is the effective VXLAN network identifier resolved from the VPC.
@@ -3079,9 +3081,9 @@ renders (ebpf hw):
                     spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace
                     on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer
                     on the NetworkInterface instead. It also deliberately does NOT carry
-                    the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent
-                    obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the
-                    correct node-local nexthop. Keeping node-local state out of this central object avoids a
+                    the NIC's underlay address: every interface on a node shares that node's one VTEP, which the
+                    dataplane resolves at startup, and the agent obtains it from the local DataplaneNode
+                    (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this central object avoids a
                     compile->sync round-trip that would lag (and flap) the announced nexthop.
                   properties:
                     clusterName:
@@ -4248,7 +4250,9 @@ renders (ebpf hw):
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
                     underlayRoute:
-                      description: UnderlayRoute is the allocated underlay /128 from the host's underlay /64.
+                      description: |-
+                        UnderlayRoute is the underlay address this interface is reached at: the host node's
+                        single VTEP, shared by every interface on that node.
                       type: string
                     vni:
                       description: VNI is the effective VXLAN network identifier resolved from the VPC.
@@ -5539,9 +5543,9 @@ renders (tier1 on):
                     spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace
                     on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer
                     on the NetworkInterface instead. It also deliberately does NOT carry
-                    the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent
-                    obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the
-                    correct node-local nexthop. Keeping node-local state out of this central object avoids a
+                    the NIC's underlay address: every interface on a node shares that node's one VTEP, which the
+                    dataplane resolves at startup, and the agent obtains it from the local DataplaneNode
+                    (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this central object avoids a
                     compile->sync round-trip that would lag (and flap) the announced nexthop.
                   properties:
                     clusterName:
@@ -6708,7 +6712,9 @@ renders (tier1 on):
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
                     underlayRoute:
-                      description: UnderlayRoute is the allocated underlay /128 from the host's underlay /64.
+                      description: |-
+                        UnderlayRoute is the underlay address this interface is reached at: the host node's
+                        single VTEP, shared by every interface on that node.
                       type: string
                     vni:
                       description: VNI is the effective VXLAN network identifier resolved from the VPC.
@@ -8039,9 +8045,9 @@ renders (tier1 watchdog):
                     spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace
                     on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer
                     on the NetworkInterface instead. It also deliberately does NOT carry
-                    the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent
-                    obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the
-                    correct node-local nexthop. Keeping node-local state out of this central object avoids a
+                    the NIC's underlay address: every interface on a node shares that node's one VTEP, which the
+                    dataplane resolves at startup, and the agent obtains it from the local DataplaneNode
+                    (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this central object avoids a
                     compile->sync round-trip that would lag (and flap) the announced nexthop.
                   properties:
                     clusterName:
@@ -9208,7 +9214,9 @@ renders (tier1 watchdog):
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
                     underlayRoute:
-                      description: UnderlayRoute is the allocated underlay /128 from the host's underlay /64.
+                      description: |-
+                        UnderlayRoute is the underlay address this interface is reached at: the host node's
+                        single VTEP, shared by every interface on that node.
                       type: string
                     vni:
                       description: VNI is the effective VXLAN network identifier resolved from the VPC.
@@ -10549,9 +10557,9 @@ renders with vm-materializer enabled:
                     spec carries no NICRef. There is no ownerReference: the twin is written into a per-pool namespace
                     on the dispatch and Kubernetes forbids a cross-namespace owner, so teardown runs off a finalizer
                     on the NetworkInterface instead. It also deliberately does NOT carry
-                    the NIC's underlay /128: that is node-local state the dataplane allocates at attach, and the agent
-                    obtains it from the local DataplaneNode (ListInterfaces) to announce overlay routes with the
-                    correct node-local nexthop. Keeping node-local state out of this central object avoids a
+                    the NIC's underlay address: every interface on a node shares that node's one VTEP, which the
+                    dataplane resolves at startup, and the agent obtains it from the local DataplaneNode
+                    (ListInterfaces) to announce overlay routes with the correct node nexthop. Keeping node-local state out of this central object avoids a
                     compile->sync round-trip that would lag (and flap) the announced nexthop.
                   properties:
                     clusterName:
@@ -11718,7 +11726,9 @@ renders with vm-materializer enabled:
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
                     underlayRoute:
-                      description: UnderlayRoute is the allocated underlay /128 from the host's underlay /64.
+                      description: |-
+                        UnderlayRoute is the underlay address this interface is reached at: the host node's
+                        single VTEP, shared by every interface on that node.
                       type: string
                     vni:
                       description: VNI is the effective VXLAN network identifier resolved from the VPC.
