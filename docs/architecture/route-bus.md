@@ -198,10 +198,15 @@ The trust chain has three levels:
 
 mTLS authenticates who a session is; the reflector then enforces what it may say.
 On each session it binds the verified client cert's IP SANs and rejects any
-`Announce`/`AnnounceNat`/`AnnouncePublic` whose underlay is outside the node's `/64`
-(`mesh/reflector/underlayauthz.go`). A node owns a `/64` and its endpoints get `/128`s
-inside it, so the check masks both to `/64` — exact-`/128` would reject the legitimate
-per-endpoint nexthops. When a session is not mutually authenticated (mTLS off / dev
+`Announce`/`AnnounceNat`/`AnnouncePublic` whose underlay is not *exactly* one of them
+(`mesh/reflector/underlayauthz.go`). An exact match is sufficient because a node has a
+single VTEP and every announce it makes carries it — route nexthops, NAT-block owners and
+LB_VIP owners all resolve to that one address. (The check masked to `/64` while each
+endpoint held its own underlay `/128` carved from the node's prefix; Geneve retired that
+model. The `/64` is still the fence coordinate, just not an announce-authz unit.) A speaker
+that legitimately announces an owner different from its datapath address — the WAN edge,
+whose `EDGE_UNDERLAY` record pairs its anycast underlay with its control loopback — carries
+both as IP SANs on its leaf. When a session is not mutually authenticated (mTLS off / dev
 mode) enforcement is disabled and every announcement is allowed — a reflector-binary
 fallback the charts never take, since `pki.enabled` is mandatory. The admin (fence) API
 is additionally CN-gated to the
