@@ -14,15 +14,19 @@ The underlay is a routed IPv6 fabric. Each hypervisor has a stable underlay IPv6
 identity is:
 
 - the outer source address on every Geneve frame the host sends, and
-- the base of the `/64` pool from which the host allocates a per-interface underlay
-  `/128` for each workload it hosts.
+- the outer destination other hosts send toward to reach any workload it hosts.
 
-Each interface — not just each host — has its own underlay `/128`. That per-interface
-`/128` is the interface's identity on the underlay: it is the outer destination other
-hosts send toward, so the fabric routes a Geneve frame to the node that hosts the target
-interface. On arrival the VNI comes from the Geneve header, not from the underlay address;
-overlapping overlay IPv4 ranges coexist across tenants because delivery resolves on
-`(VNI, inner destination)` (see [multi-VNI tenancy](#multi-vni-tenancy)).
+That single address is the node's VTEP, and it is the underlay for **every** interface on
+the node — no per-endpoint `/128` is allocated. Geneve is what makes that possible: the VNI
+travels in the tunnel header, so the outer destination only has to identify the *node*, and
+the receiving host resolves the specific interface by demuxing `(VNI, inner destination)`
+against its `INTERFACES` maps. Overlapping overlay IPv4 ranges coexist across tenants for the
+same reason (see [multi-VNI tenancy](#multi-vni-tenancy)).
+
+The older design gave each interface its own underlay `/128` carved from the host's `/64`,
+because a bare IP-in-IPv6 outer header carried no VNI and the destination address had to do
+that work itself. The host's `/64` remains meaningful as the **fence coordinate** — failover
+fences a whole node by its prefix — but it is no longer an endpoint-addressing unit.
 
 ## Geneve encapsulation
 
