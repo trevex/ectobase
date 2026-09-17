@@ -29,6 +29,10 @@ use flowplane_core::encap::TunnelEncap;
 use flowplane_core::err::DpErr;
 use flowplane_core::pkt::Action;
 
+/// `PACKET_HOST` from the kernel's `if_packet.h`: this frame is addressed to us. Set on the
+/// WAN-edge local-deliver path so `ip_rcv` will route it instead of dropping it as OTHERHOST.
+const PACKET_HOST: u32 = 0;
+
 use aya_ebpf::bindings::__sk_buff;
 use flowplane_common::DsrOpt;
 
@@ -124,8 +128,9 @@ pub fn try_uplink_dsr_note(ctx: &TcContext) -> i32 {
 /// the Geneve tunnel key toward the new remote and redirects to the geneve device — no byte write:
 /// the packet is still exactly the decapped inner frame the kernel handed us, and the geneve device
 /// re-encaps it on transmit. Otherwise the `Action` alone decides: `Redirect` is a plain tc redirect
-/// (guest tap delivery), `Pass` hands the frame to the local kernel (WAN-edge local-deliver), `Drop`
-/// shoots it.
+/// (guest tap delivery), `PassToStack` hands the frame to the local kernel for the WAN-edge
+/// local-deliver (reclassifying it PACKET_HOST first, or ip_rcv would drop it as OTHERHOST), `Pass`
+/// leaves a frame that is not ours alone, and `Drop` shoots it.
 ///
 /// `pub(crate)`: shared with `v6::v6_uplink_rx`, which also dispatches to a `flowplane_core::datapath`
 /// orchestrator's `Action`/`TunnelEncap` pair. `#[inline(always)]` — this crosses a MODULE boundary,
@@ -146,6 +151,19 @@ pub(crate) fn execute(ctx: &TcContext, action: Action, tunnel: Option<TunnelEnca
         // targets (see flowplane_core::decap::decap_and_rewrite).
         Action::RedirectPeer(ifindex) => unsafe { bpf_redirect_peer(ifindex, 0) as i32 },
         Action::Pass => TC_ACT_OK,
+        // WAN-edge local deliver: hand the frame to THIS node's stack to be routed onto the real
+        // WAN. The MAC rewrite that `edge_local_deliver` just did is not enough on its own —
+        // `eth_type_trans()` already stamped `skb->pkt_type` when the inner frame surfaced on the
+        // geneve device, and a decapped overlay frame carries the guest's next-hop MAC rather than
+        // the device's, so it is sitting at PACKET_OTHERHOST and `ip_rcv` would drop it before
+        // routing. Reclassify it as locally destined; only this arm does, because everywhere else
+        // `Pass` means "not ours".
+        Action::PassToStack => {
+            if ctx.skb.change_type(PACKET_HOST).is_err() {
+                return TC_ACT_SHOT;
+            }
+            TC_ACT_OK
+        }
         Action::Drop => TC_ACT_SHOT,
     }
 }

@@ -85,8 +85,15 @@ pub fn decap_and_rewrite<P: Pkt>(
 /// so the sim exercises the SAME mechanism.
 ///
 /// `ethertype` is the INNER protocol being exposed (`ETH_P_IP` for a v4 inner — the only case wired
-/// up here; a v6 inner is Task 4c). Returns `Action::Pass` on success (hand off to the kernel) or
-/// `Action::Drop` on a bounds failure. Does NOT resize the frame.
+/// up here; a v6 inner is Task 4c). Returns [`Action::PassToStack`] on success or `Action::Drop` on
+/// a bounds failure. Does NOT resize the frame.
+///
+/// `PassToStack`, not `Pass`: the MAC rewrite below is necessary but NOT sufficient. The kernel
+/// already ran `eth_type_trans()` when the inner frame surfaced on the geneve device, and stamped
+/// `skb->pkt_type = PACKET_OTHERHOST` — the decapped frame carries the guest's next-hop MAC, which
+/// is not the geneve device's. `ip_rcv` drops OTHERHOST before routing, so without the
+/// reclassification `PassToStack` carries, this rewrite silently achieves nothing and every
+/// LB reply and NAT return dies one hop short of the WAN.
 #[inline(always)]
 pub fn edge_local_deliver<P: Pkt>(pkt: &mut P, uplink_mac: [u8; 6], ethertype: u16) -> Action {
     if pkt.len() < ETH_LEN {
@@ -99,5 +106,5 @@ pub fn edge_local_deliver<P: Pkt>(pkt: &mut P, uplink_mac: [u8; 6], ethertype: u
     if !ok {
         return Action::Drop;
     }
-    Action::Pass
+    Action::PassToStack
 }

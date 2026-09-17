@@ -14,6 +14,21 @@ pub enum Action {
     /// valid for a veth/netkit device (a `peer_capable` local-delivery target); the sim treats it as a
     /// plain delivery to the ifindex (the peer hop is a kernel-datapath detail it doesn't model).
     RedirectPeer(u32),
+    /// Hand the frame to THIS node's kernel stack, reclassifying it as locally destined first
+    /// (`bpf_skb_change_type(PACKET_HOST)`).
+    ///
+    /// Distinct from [`Action::Pass`] because rewriting the destination MAC is not enough on its
+    /// own. The kernel's `eth_type_trans()` stamps `skb->pkt_type` when the inner frame surfaces on
+    /// the `collect_md` geneve device — BEFORE any tc-ingress program runs. A decapped overlay
+    /// frame carries the GUEST's idea of the next-hop MAC, which is not the geneve device's, so it
+    /// is already stamped `PACKET_OTHERHOST` by the time we see it; `ip_rcv` then drops it on the
+    /// floor no matter what we write into the Ethernet header afterwards.
+    ///
+    /// Only the WAN-edge local-deliver path produces this (see `decap::edge_local_deliver`), where
+    /// handing the frame to the local stack to be routed onto the real WAN is exactly the intent.
+    /// `Pass` must NOT reclassify: elsewhere it means "not ours, leave it alone", and forcing
+    /// PACKET_HOST there would make this node absorb frames addressed to someone else.
+    PassToStack,
 }
 
 #[allow(clippy::len_without_is_empty)]

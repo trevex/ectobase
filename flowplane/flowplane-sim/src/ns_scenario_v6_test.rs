@@ -422,8 +422,10 @@ fn v6_wan_edge_sentinel_decaps_and_passes_to_kernel_on_routes6_miss() {
 
     assert_eq!(
         out.action,
-        Action::Pass,
-        "edge local-deliver hands off to the kernel via Pass, not a guest Redirect"
+        Action::PassToStack,
+        "edge local-deliver must hand off to the kernel via PassToStack, not a bare Pass: the MAC \
+         rewrite alone leaves the skb at PACKET_OTHERHOST (eth_type_trans already ran on the geneve \
+         device) and ip_rcv drops it before routing, so the reply dies one hop short of the WAN"
     );
     assert_eq!(
         &out.pkt[0..6],

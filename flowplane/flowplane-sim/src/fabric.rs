@@ -101,7 +101,12 @@ impl Fabric {
                         outcome: Outcome::Dropped { node: cur },
                     }
                 }
-                Action::Pass => {
+                // Both hand the frame to this node's kernel and end the fabric trace here.
+                // `PassToStack` additionally reclassifies the skb as PACKET_HOST in eBPF, which the
+                // fabric model has no representation for — it models bytes and forwarding, not skb
+                // metadata. Asserting the DISTINCTION is `edge_local_deliver`'s own unit test;
+                // whether it reached the stack at all is what this outcome records.
+                Action::Pass | Action::PassToStack => {
                     return Trace {
                         hops,
                         outcome: Outcome::Passed { node: cur },
