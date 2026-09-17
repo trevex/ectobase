@@ -25,26 +25,24 @@ const (
 	// lbIntentVIP is a BRING-YOUR-OWN VIP inside fabric.PublicV4 (192.0.2.0/24, which both edges
 	// advertise and the WAN routes back). Pinned rather than auto-allocated so it cannot collide
 	// with TestLbDistributeSmokeV4's hardcoded 192.0.2.1 — the allocator's lowest-free would.
-	lbIntentVIP = "192.0.2.7"
-	lbIntentNIC = "lbi-nic"
-	lbIntentIP  = "10.0.5.10"
-	lbIntentMAC = "52:54:00:00:05:10"
-	// lbIntentIface is this test's own dataplane interface id (distinct from the smoke tests'
-	// lbbe/lbbe4 so the whole suite can run in one invocation).
-	lbIntentIface   = "lbi-be"
+	lbIntentVIP     = "192.0.2.7"
+	lbIntentNIC     = "lbi-nic"
+	lbIntentIP      = "10.0.5.10"
+	lbIntentMAC     = "52:54:00:00:05:10"
 	lbIntentBody    = "hello-intent-lb"
 	lbIntentTimeout = 4 * time.Minute
 )
 
-// TestLbFromIntentProgramsBothEdges is the North-South CONTROL path driven by intent alone: apply a
-// LoadBalancer on the dispatch, and both WAN edges program it — with nobody calling the dataplane
-// gRPC by hand.
+// TestLbFromIntentReachesTheWan is the North-South path driven by INTENT ALONE: apply a
+// LoadBalancer on the dispatch and a WAN client reaches the VIP, with nobody calling the dataplane
+// gRPC by hand anywhere in this test.
 //
 // This is what TestLbDistributeSmoke{,V4} could not cover. They hand-program AddLbVip +
-// AddLbBackend on both edge sidecars over gRPC precisely because nothing ran an agent on an edge;
-// they remain the datapath tier. This test covers the path that made that hand-programming
-// necessary, and asserts on the edges' own maps — see the note at the bottom for why it stops
-// there rather than curling the VIP.
+// AddLbBackend on both edge sidecars over gRPC, precisely because nothing ran an agent on an edge;
+// they remain the datapath tier, isolating Maglev/DSR from the control path above them.
+//
+// The backend is a real Pod, materialized from a Container — not a hand-attached guest — so the
+// only dataplane gRPC in the whole flow is the CNI's own attach, exactly as in production.
 //
 // The chain under test, none of which existed end to end before:
 //
@@ -55,7 +53,7 @@ const (
 //	                                  PublicPrefix carrying the VIP's service PORTS
 //	reflector                      -> relays it to every session
 //	EDGE agent (no apiserver)      -> applyPublic: AddLbVip(ports) then AddLbBackend
-func TestLbFromIntentProgramsBothEdges(t *testing.T) {
+func TestLbFromIntentReachesTheWan(t *testing.T) {
 	cfg := loadConfig(t)
 	requireFabricUp(t, cfg)
 	ctx := context.Background()
@@ -65,7 +63,10 @@ func TestLbFromIntentProgramsBothEdges(t *testing.T) {
 		t.Skip("need at least one compute node")
 	}
 	backend := nodes[0]
-	beContainer := nodeContainer(cfg, backend)
+	// The backend's VTEP: every interface on a node shares the node's one underlay address, which is
+	// exactly what the LB_VIP record carries as owner_underlay and the edge stores as node_vtep.
+	backendVTEP := backend.IdentityAddr
+	wan := clab.ContainerName(cfg.Name, "wan")
 
 	// 1. Intent on the dispatch: a VPC + Subnet, an LBPool covering the edge's public v4 prefix, a
 	//    LoadBalancer pinned to our VIP and selecting by label, and the backend NIC carrying that
@@ -76,7 +77,7 @@ func TestLbFromIntentProgramsBothEdges(t *testing.T) {
 	t.Cleanup(func() {
 		for _, kind := range []string{
 			"loadbalancer.net.ectobase.dev/lbi-lb", "lbpool.net.ectobase.dev/lbi-pool",
-			"virtualmachine.compute.ectobase.dev/lbi-anchor",
+			"containers.compute.ectobase.dev/ctr-" + lbIntentNIC,
 			"networkinterface.net.ectobase.dev/" + lbIntentNIC,
 			"subnet.net.ectobase.dev/lbi-subnet", "vpc.net.ectobase.dev/lbi-vpc",
 		} {
@@ -84,25 +85,42 @@ func TestLbFromIntentProgramsBothEdges(t *testing.T) {
 		}
 	})
 
-	// 2. The backend ENDPOINT. This is a hand-attached guest, not a Pod, and deliberately so: it is
-	//    the exact backend shape TestLbDistributeSmokeV4 proves the datapath with, so this test
-	//    changes exactly ONE variable from it — who programs the load balancer. (A CNI-attached Pod
-	//    backend does not work for N/S DSR today; its reply carries an inner destination MAC the
-	//    edge reads as PACKET_OTHERHOST and drops before routing. That gap is pre-existing and
-	//    orthogonal to the control path under test here — see the note at the bottom of this file.)
-	//
-	//    Attaching an endpoint is the CNI's job in production; every LB-specific call below this
-	//    line is gone, which is the point of the test.
-	backendVTEP := attachGuestInVNI(t, ctx, cfg, backend, lbIntentIface, lbIntentVNI, []string{lbIntentIP}, lbIntentMAC)
-	t.Cleanup(func() {
-		_, _ = dataplaneGRPC(t, ctx, beContainer, "DetachInterface",
-			fmt.Sprintf(`{"interface_id":%q}`, lbIntentIface))
+	// 2. The backend ENDPOINT: a real Pod, materialized from the Container above by the
+	//    pod-materializer and attached to the overlay by flowplane-cni. Nothing in this test
+	//    attaches it — that is the point. The backend is what makes the NIC an LB backend worth
+	//    announcing: the agent decides a CompiledNIC is LOCAL by matching its (VNI, overlayIP)
+	//    against the dataplane's attached interfaces.
+	var pod string
+	eventually(t, 3*time.Minute, 5*time.Second, func() error {
+		p, err := podForContainer(ctx, cfg, backend.Cluster, "default-ctr-"+lbIntentNIC)
+		if err != nil {
+			return err
+		}
+		phase, err := kubectl(ctx, cfg, backend.Cluster, "get", "pod", p, "-o", "jsonpath={.status.phase}")
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(phase) != "Running" {
+			desc, _ := kubectl(ctx, cfg, backend.Cluster, "describe", "pod", p)
+			return fmt.Errorf("backend pod %s phase=%q:\n%s", p, strings.TrimSpace(phase), tail(desc, 25))
+		}
+		pod = p
+		return nil
 	})
-
-	// The guest needs no netns routing or HTTP server here: this test asserts on what the EDGES
-	// programmed, not on carrying traffic. It exists purely so the agent sees the CompiledNIC's
-	// (VNI, overlayIP) as locally attached — which is what makes the NIC an LB backend worth
-	// announcing at all.
+	// Serving on its OVERLAY address specifically: the Geneve-TLV DSR variant rewrites the inner
+	// destination to the backend's own overlay IP, so a server bound only to loopback would never
+	// see the request.
+	eventually(t, 90*time.Second, 5*time.Second, func() error {
+		out, err := kubectl(ctx, cfg, backend.Cluster, "exec", pod, "--",
+			"wget", "-q", "-O", "-", "-T", "3", "http://"+lbIntentIP+"/")
+		if err != nil {
+			return fmt.Errorf("backend not serving on its overlay IP yet: %w\n%s", err, out)
+		}
+		if !strings.Contains(out, lbIntentBody) {
+			return fmt.Errorf("backend returned %q, want %q", strings.TrimSpace(out), lbIntentBody)
+		}
+		return nil
+	})
 
 	// 3. The allocator finalizes the VIP. Everything downstream is gated on this: the compiler
 	//    refuses to emit LB membership for a LoadBalancer that is not Allocated, so a VIP that
@@ -136,23 +154,38 @@ func TestLbFromIntentProgramsBothEdges(t *testing.T) {
 		return nil
 	})
 
-	// 5. THE ASSERTION. Both edges must now have programmed the load balancer — from the route bus
-	//    alone, with nobody in this test calling AddLbVip or AddLbBackend.
+	// 5. Both edges programmed the load balancer — from the route bus alone, with nobody in this
+	//    test calling AddLbVip or AddLbBackend.
 	//
-	//    This reads the edges' BPF maps rather than curling the VIP from the WAN deliberately. The
-	//    control path is what this test exists to cover, and asserting it directly makes the test
-	//    both precise (it names the VIP, port, proto and backend it expects) and independent of
-	//    datapath gaps that have nothing to do with who programmed the LB — see the note at the
-	//    bottom of this file. TestLbDistributeSmoke{,V4} remain the datapath tier.
+	//    Asserted on the edges' own BPF maps BEFORE the curl below, because it localizes a failure:
+	//    if this passes and the curl does not, the control path is fine and the datapath is at
+	//    fault. It also names exactly what it expects (VIP, port, proto, backend), which a curl
+	//    cannot.
 	//
 	//    BOTH edges, because the public prefixes are anycast: the WAN ECMPs to either, so a VIP
-	//    programmed on only one of them is a coin-flip outage.
+	//    programmed on only one of them is a coin-flip outage the curl would catch only sometimes.
 	for _, edge := range []string{"edge1", "edge2"} {
 		edge := edge
 		eventually(t, 2*time.Minute, 5*time.Second, func() error {
 			return edgeHasLb(ctx, cfg, edge, lbIntentVIP, 80, 6, backendVTEP, lbIntentIP, lbIntentVNI)
 		})
 	}
+
+	// 6. THE POINT. A WAN client curls the VIP and gets the backend's response. Nothing in this
+	//    test called AddLbVip, AddLbBackend, AddRoute or AttachInterface — the LoadBalancer object
+	//    and a Container are the entire input.
+	//
+	//    The return hop is intent-driven too: the edge agents originate 0.0.0.0/0 into the public
+	//    VNI, and the backend node imports it into this VPC precisely because its NIC is an LB
+	//    member — so the DSR reply finds its way back with no hand-installed route either.
+	eventually(t, lbIntentTimeout, 5*time.Second, func() error {
+		out := curlFromWanV4(ctx, wan, lbIntentVIP)
+		if !strings.Contains(out, lbIntentBody) {
+			return fmt.Errorf("curl http://%s/ from the WAN did not return %q:\n%s\n%s",
+				lbIntentVIP, lbIntentBody, out, lbIntentDiagnostics(ctx, cfg))
+		}
+		return nil
+	})
 }
 
 // edgeHasLb checks that an edge's datapath carries the VIP as a load balancer whose Maglev table
@@ -277,17 +310,22 @@ kind: NetworkInterface
 metadata:
   name: %s
   labels: {app: lbi-backend}
-spec: {vpcRef: {name: lbi-vpc}, ips: [%q], mac: %q, nodeName: %q}
+spec: {vpcRef: {name: lbi-vpc}, ips: [%q], mac: %q}
 ---
-# A HALTED anchor VM, the overlay_test.go pattern. spec.nodeName above pins the node, but the
-# owning workload is what stamps CompiledNIC.clusterName — the pool the twin is emitted into —
-# so without an owner no CompiledNIC is ever produced. Halted means nothing is materialized:
-# this exists purely to supply that one field.
+# The Container owns the NIC and is the PLACEMENT AUTHORITY: it stamps CompiledNIC.clusterName (the
+# pool the twin is emitted into) and nodeName. Without an owning workload no CompiledNIC is ever
+# produced, so the NIC carries no placement of its own. busybox httpd serves the fixed body the WAN
+# curl asserts on, bound to all interfaces so it is listening before the overlay iface is attached.
 apiVersion: compute.ectobase.dev/v1alpha1
-kind: VirtualMachine
-metadata: {name: lbi-anchor}
-spec: {clusterName: %q, interfaceRefs: [{name: lbi-nic}], runStrategy: Halted}
-`, lbIntentVNI, lbIntentVIP, lbIntentNIC, lbIntentIP, lbIntentMAC, node, cluster)
+kind: Container
+metadata: {name: ctr-%[3]s, namespace: default}
+spec:
+  clusterName: %[7]q
+  nodeName: %[6]q
+  interfaceRefs: [{name: %[3]s}]
+  image: busybox:1.36
+  command: ["sh", "-c", "mkdir -p /www && echo %[8]s > /www/index.html && exec httpd -f -p 80 -h /www"]
+`, lbIntentVNI, lbIntentVIP, lbIntentNIC, lbIntentIP, lbIntentMAC, node, cluster, lbIntentBody)
 }
 
 func patchLbIntentVPCReady(t *testing.T, ctx context.Context, cfg *config.Config) {
@@ -386,19 +424,15 @@ func normalizeHex(dump string) string {
 	return sb.String()
 }
 
-// Why this test stops at the edge's maps rather than curling the VIP from the WAN.
+// A note on the edge return hop, because it cost a long debugging session and the failure mode is
+// deeply unobvious.
 //
-// Carrying real traffic end-to-end needs the datapath to reverse-SNAT the backend's reply to the
-// VIP and the edge to route the decapped reply onto the WAN. Both have gaps today that are
-// independent of who programmed the load balancer, and were found while bringing this test up:
+// The decapped reply surfaces on the edge's geneve device carrying the GUEST's next-hop MAC, not the
+// device's, so the kernel's eth_type_trans() stamps it PACKET_OTHERHOST before any tc program runs
+// and ip_rcv drops it before routing. `edge_local_deliver` rewrites the destination MAC, which looks
+// like it should fix exactly this — but pkt_type is already decided by then, so the rewrite alone
+// changes nothing. `Action::PassToStack` is what makes it work: it also issues
+// bpf_skb_change_type(PACKET_HOST).
 //
-//   - A CNI-attached POD backend replies correctly (the reply is DSR-rewritten to the VIP and
-//     reaches the edge), but the edge's kernel marks the decapped frame PACKET_OTHERHOST — its
-//     inner destination MAC is not the edge's — and drops it before routing. Visible as
-//     `fp-geneve0 P` in tcpdump where a working flow shows `fp-geneve0 In`.
-//   - A hand-attached guest in its own VPC replies, but the reply is not reverse-SNAT'd at all.
-//
-// TestLbDistributeSmoke{,V4} do carry traffic end-to-end, because they hand-configure a backend
-// around both gaps (an explicit on-link gateway route plus a static ARP entry, and their own
-// non-external return route). They remain the datapath tier; closing these gaps so an
-// ordinary intent-driven backend carries N/S traffic is separate work.
+// Symptom to recognize: `tcpdump -nni any` in the edge netns shows the reply as `fp-geneve0 P`
+// (PACKET_OTHERHOST) and nothing leaves on the WAN uplink. A healthy flow ends in `eth3 Out`.

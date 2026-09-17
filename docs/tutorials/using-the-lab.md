@@ -477,15 +477,12 @@ spec:
     intermediate in `build/<name>/edge/pki`, which `lab deploy` provisions as a `RouteBusIdentity`
     named `edge`. See [North-South WAN edge](../features/ns-edge.md#running-an-agent-on-an-edge).
 
-    `TestLbFromIntentProgramsBothEdges` (`test/lab/livetest/lbintent_test.go`) proves it, asserting
-    on the edges' own LB + Maglev maps. `TestLbDistributeSmoke{,V4}` (`test/lab/livetest/lb_test.go`)
-    and `TestNatEgressReturn6` (`test/lab/livetest/nategress6_test.go`) keep their hand-programmed
-    form deliberately, as the datapath tier: they isolate Maglev/DSR/NAT-return from the control
-    path above them.
-
-    Carrying real N/S traffic to an *ordinary* intent-driven backend is not there yet — two
-    datapath gaps, both independent of who programs the LB, are documented at the bottom of
-    `lbintent_test.go`.
+    `TestLbFromIntentReachesTheWan` (`test/lab/livetest/lbintent_test.go`) proves it end to end: it
+    applies a `LoadBalancer` plus a `Container`, asserts both edges programmed the VIP + Maglev
+    table, and curls the VIP from the WAN client. `TestLbDistributeSmoke{,V4}`
+    (`test/lab/livetest/lb_test.go`) and `TestNatEgressReturn6`
+    (`test/lab/livetest/nategress6_test.go`) keep their hand-programmed form deliberately, as the
+    datapath tier: they isolate Maglev/DSR/NAT-return from the control path above them.
 
 ## Trace the objects end-to-end
 

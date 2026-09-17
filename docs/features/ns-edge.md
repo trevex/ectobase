@@ -2,11 +2,9 @@
 
 !!! warning "Status: Partial"
     Egress SNAT with the distributed return is validated end-to-end on the lab fabric, as is the
-    internet→VIP ingress datapath (`TestLbDistributeSmoke{,V4}`). The CONTROL path is now validated
-    too: applying a `LoadBalancer` programs both edges with no hand-driven gRPC
-    (`TestLbFromIntentProgramsBothEdges`). What is not yet joined up is real N/S traffic to an
-    ordinary intent-driven backend — two datapath gaps stand in the way, documented at the bottom
-    of `test/lab/livetest/lbintent_test.go`. On real WAN hardware the edge role (anycast underlay,
+    internet→VIP ingress path **from intent alone**: applying a `LoadBalancer` programs both edges
+    with no hand-driven gRPC, and a WAN client reaches the VIP on a real Pod backend
+    (`TestLbFromIntentReachesTheWan`). On real WAN hardware the edge role (anycast underlay,
     BGP announcement) is deployment-gated. Not built here: **convergence gating** — an edge
     attracting its share of the anycast ECMP before it has programmed its VIPs will blackhole. The
     lever is aggregate-level readiness (withhold the prefix advertisement until the bus session has
