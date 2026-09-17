@@ -266,3 +266,70 @@ func TestApplyNonPublicRoute_InstallsDirectly(t *testing.T) {
 		t.Fatalf("non-public route must install directly (vni=100, external=false): %+v", dp.routeAdds)
 	}
 }
+
+// The ordering a steady-state cluster ALWAYS has: the agent learns the edge's public defaults once
+// at session open, and a VNI becomes egress-needing only LATER — when someone creates the
+// LoadBalancer or NATGateway that makes a local NIC an LB backend or a SNAT source.
+//
+// The import used to be event-driven only (Bus.apply imports into whatever egressVNIs held at the
+// instant the RouteUpdate arrived), so that VNI never got the default and its guests had no route
+// off the node. Live, an LB backend's DSR reply reached the guest and then died with nowhere to go;
+// only an agent restart fixed it, because a fresh session replays the snapshot AFTER the first
+// reconcile has set egressVNIs.
+func TestEgressImportFollowsAVniThatBecomesEgressNeedingLater(t *testing.T) {
+	dp := newRecordingDP()
+	b := NewBus("nodeA", "fd00::a", dp, false)
+	ctx := context.Background()
+
+	// 1. Session open: the edge's defaults arrive while NO local VNI needs egress yet.
+	for _, prefix := range []string{"0.0.0.0/0", "::/0"} {
+		b.apply(ctx, &rbv1.RouteUpdate{
+			Vni: PublicVNI, Prefix: prefix, Nexthops: []string{"fd00:ffff::e1"},
+			Op: rbv1.RouteOp_ROUTE_OP_ADD, External: true,
+		})
+	}
+	if _, ok := dp.get(205, "0.0.0.0/0"); ok {
+		t.Fatal("precondition: nothing should be imported while no VNI needs egress")
+	}
+
+	// 2. A LoadBalancer lands: VNI 205 becomes egress-needing on the next reconcile.
+	b.syncEgressImports(ctx, nil, []uint32{205})
+
+	for _, prefix := range []string{"0.0.0.0/0", "::/0"} {
+		nh, ok := dp.get(205, prefix)
+		if !ok {
+			t.Errorf("default %s was never imported into the newly-egress vni 205", prefix)
+			continue
+		}
+		if nh != "fd00:ffff::e1" {
+			t.Errorf("imported %s with nexthop %q, want the edge underlay", prefix, nh)
+		}
+		if !dp.external[key(205, prefix)] {
+			t.Errorf("imported %s must be external=true so SNAT sources follow it", prefix)
+		}
+	}
+
+	// 3. The LoadBalancer goes away: the VNI stops needing egress and the defaults are withdrawn,
+	//    so a stale default cannot outlive the thing that justified it.
+	b.syncEgressImports(ctx, []uint32{205}, nil)
+	for _, prefix := range []string{"0.0.0.0/0", "::/0"} {
+		if !dp.withdrew[key(205, prefix)] {
+			t.Errorf("default %s was not withdrawn when vni 205 stopped needing egress", prefix)
+		}
+	}
+}
+
+// A VNI that was already importing must not be re-imported every reconcile tick.
+func TestEgressImportIsQuietForAnUnchangedVni(t *testing.T) {
+	dp := newRecordingDP()
+	b := NewBus("nodeA", "fd00::a", dp, false)
+	ctx := context.Background()
+	b.apply(ctx, &rbv1.RouteUpdate{
+		Vni: PublicVNI, Prefix: "0.0.0.0/0", Nexthops: []string{"fd00:ffff::e1"},
+		Op: rbv1.RouteOp_ROUTE_OP_ADD, External: true,
+	})
+	b.syncEgressImports(ctx, []uint32{205}, []uint32{205})
+	if _, ok := dp.get(205, "0.0.0.0/0"); ok {
+		t.Fatal("an unchanged egress VNI must not be re-imported (apply already keeps it current)")
+	}
+}

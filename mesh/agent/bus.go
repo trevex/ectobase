@@ -271,9 +271,11 @@ func (b *Bus) reconcileStep(ctx context.Context, stream rbv1.RouteBus_SessionCli
 		return nil
 	}
 	b.mu.Lock()
+	prevEgress := b.egressVNIs
 	b.egressVNIs = append(b.egressVNIs[:0:0], desired.EgressVNIs...)
 	b.setPeerImportsLocked(desired.PeeringImports)
 	b.mu.Unlock()
+	b.syncEgressImports(ctx, prevEgress, desired.EgressVNIs)
 	d := diffDesired(*applied, desired)
 	if d.empty() {
 		return nil
@@ -283,6 +285,63 @@ func (b *Bus) reconcileStep(ctx context.Context, stream rbv1.RouteBus_SessionCli
 	}
 	*applied = desired
 	return nil
+}
+
+// syncEgressImports installs the already-learned public-VNI defaults into egress VNIs that just
+// appeared, and withdraws them from ones that just went away.
+//
+// Without this the import is EVENT-DRIVEN ONLY: Bus.apply imports a public-VNI route into whatever
+// egressVNIs happened to hold at the instant that RouteUpdate arrived. But the normal ordering is
+// the other way round — an agent learns the edge's defaults once at session open, and a VNI becomes
+// egress-needing LATER, when someone creates the LoadBalancer or NATGateway that makes a local NIC
+// an LB backend or a SNAT source. Nothing re-imported for that VNI, so its guests had no route off
+// the node: an LB backend's DSR reply reached the guest and then died with nowhere to go, and only
+// an agent restart (which replays the whole snapshot AFTER the first reconcile has set egressVNIs)
+// ever fixed it. That is a steady-state cluster's ONLY ordering, so N/S from intent alone could
+// never work without this.
+//
+// Runs on the Run goroutine, like apply — no locking beyond the learnedPublic snapshot.
+func (b *Bus) syncEgressImports(ctx context.Context, prev, next []uint32) {
+	prevSet, nextSet := vniSet(prev), vniSet(next)
+	b.mu.Lock()
+	learned := make(map[string]string, len(b.learnedPublic))
+	for prefix, nh := range b.learnedPublic {
+		learned[prefix] = nh
+	}
+	b.mu.Unlock()
+
+	for vni := range nextSet {
+		if prevSet[vni] {
+			continue // already importing; apply keeps it current
+		}
+		for prefix, nh := range learned {
+			// deliveryVNI = PublicVNI mirrors Bus.apply's import arm exactly (the dataplane reads a
+			// delivery_vni of 0 as "use the key vni"); external=true so SNAT sources follow it.
+			if err := b.dp.AddRoute(ctx, vni, prefix, nh, true, PublicVNI); err != nil {
+				log.Printf("egress import AddRoute vni=%d %s -> %s: %v", vni, prefix, nh, err)
+				continue
+			}
+			log.Printf("imported public default %s -> %s into newly-egress vni=%d", prefix, nh, vni)
+		}
+	}
+	for vni := range prevSet {
+		if nextSet[vni] {
+			continue
+		}
+		for prefix := range learned {
+			if err := b.dp.WithdrawRoute(ctx, vni, prefix); err != nil {
+				log.Printf("egress unimport WithdrawRoute vni=%d %s: %v", vni, prefix, err)
+			}
+		}
+	}
+}
+
+func vniSet(vnis []uint32) map[uint32]bool {
+	out := make(map[uint32]bool, len(vnis))
+	for _, v := range vnis {
+		out[v] = true
+	}
+	return out
 }
 
 // handleServerMsg applies one inbound server message to the local dataplane.
