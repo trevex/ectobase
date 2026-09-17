@@ -39,6 +39,12 @@ pub enum SnatOutcome {
     /// MUST drop: forwarding would leak the guest source IP and, worse, reusing an
     /// already-allocated port would mis-demux that other flow's return traffic.
     Exhausted,
+    /// External SNAT was required but the packet has no L4 port field to translate — a NON-FIRST
+    /// IPv4 fragment. The caller MUST drop, for the same leak reason as [`Self::Exhausted`]:
+    /// forwarding would put the guest's overlay source on the wire un-SNATed. It cannot be
+    /// translated either, since the reverse demux is `(nat_ip, port)`-keyed and the fragment has no
+    /// port; supporting it would need a fragment-tracking map carrying the first fragment's ports.
+    Untranslatable,
 }
 
 /// Egress network SNAT. If `is_external` and the guest `(vni, src)` has a NAT config, allocate a
@@ -77,9 +83,11 @@ pub fn snat_egress<P: Pkt, M: Maps>(
     if range == 0 {
         return SnatOutcome::Continue;
     }
+    // Past this point SNAT is REQUIRED (external route + a NAT binding with a live port range), so
+    // an unkeyable packet may not simply be forwarded — see `SnatOutcome::Untranslatable`.
     let (proto, sport, dport) = match l4_ports(pkt, ip_off) {
         Some(v) => v,
-        None => return SnatOutcome::Continue,
+        None => return SnatOutcome::Untranslatable,
     };
 
     // Forward conntrack: reuse the allocated port for an already-tracked flow.

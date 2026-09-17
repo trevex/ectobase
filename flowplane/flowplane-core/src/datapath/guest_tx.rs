@@ -174,7 +174,7 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
     // DSR reverse-SNAT above are mutually exclusive translations of the same src field.
     let is_ext = route.is_external != 0;
     if !is_dsr
-        && snat_egress(pkt, maps, ip_off, in_.meta.vni, is_ext, in_.now) == SnatOutcome::Exhausted
+        && snat_egress(pkt, maps, ip_off, in_.meta.vni, is_ext, in_.now) != SnatOutcome::Continue
     {
         return GuestTxOut {
             action: Action::Drop,
@@ -356,7 +356,7 @@ pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
             .and_then(|dst| maps.route6_get(in_.meta.vni, &dst))
             .map(|r| r.is_external != 0)
             .unwrap_or(false);
-        if snat_egress6(pkt, maps, ip_off, in_.meta.vni, is_ext6, in_.now) == SnatOutcome::Exhausted
+        if snat_egress6(pkt, maps, ip_off, in_.meta.vni, is_ext6, in_.now) != SnatOutcome::Continue
         {
             return GuestTxOut {
                 action: Action::Drop,

@@ -116,7 +116,7 @@ pub fn forward_decision_v4(
         meta.vni,
         is_ext,
         crate::conntrack::now(),
-    ) == flowplane_core::nat::SnatOutcome::Exhausted
+    ) != flowplane_core::nat::SnatOutcome::Continue
     {
         return EgressVerdict::Drop;
     }
@@ -369,7 +369,7 @@ pub fn forward_decision_v6(
             meta.vni,
             is_ext,
             crate::conntrack::now(),
-        ) == flowplane_core::nat::SnatOutcome::Exhausted
+        ) != flowplane_core::nat::SnatOutcome::Continue
         {
             return EgressVerdict::Drop;
         }

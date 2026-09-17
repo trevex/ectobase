@@ -57,6 +57,21 @@ flowchart TD
 - Conntrack. Forward and reverse conntrack entries are pinned so subsequent packets of
   the flow reuse the same port, and the return path can reverse the translation.
 
+!!! warning "Fragmented datagrams do not traverse NAT"
+
+    Only the *first* fragment of an IPv4 datagram carries an L4 header, so a non-first
+    fragment has no source port to rewrite — and since the return path demuxes on
+    `(nat_ip, port)` alone, there is nothing to reverse it with either. Such a fragment is
+    **dropped** rather than forwarded un-SNATed, which would put the guest's overlay
+    source address on the wire. The same applies to load balancing: a fragment is never
+    Maglev-selected, because hashing it would scatter one datagram across backends.
+
+    Fragments of one datagram do share a single conntrack key (`(proto, 0, 0)`), so they
+    are at least consistent for firewall and conntrack purposes — but a port-specific
+    firewall rule will not match them. Supporting fragmented flows end-to-end needs a
+    fragment-tracking map keyed `(src, dst, proto, ip_id)` carrying the first fragment's
+    ports; that is deliberately not built.
+
 ## The return path: neighbor-NAT
 
 Return traffic from the internet arrives at the [WAN edge](ns-edge.md) addressed to a
