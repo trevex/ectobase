@@ -94,11 +94,11 @@ dropped if only the backend's own overlay IP is allowed (see the DSR gotcha belo
 
 ## The DSR gotcha
 
-Load balancing uses direct server return: the inner destination address stays the VIP
+Load balancing uses direct server return: the inner destination address stays the LB address
 all the way to the backend (see [Load balancing](loadbalancer.md)). The backend's ingress
-firewall therefore sees `dst = VIP`, not the backend's own overlay IP. A
+firewall therefore sees `dst = LB address`, not the backend's own overlay IP. A
 `FirewallPolicy` written for the backend's overlay IP will not match LB-delivered traffic,
-so deny-by-default drops it. The fix is an explicit `VIP:port` allow rule in the
+so deny-by-default drops it. The fix is an explicit `LB address:port` allow rule in the
 backend's ingress policy. LB membership never generates this rule; it must be authored as
 policy.
 
@@ -134,6 +134,6 @@ datapath: fw_eval_dir(pkt, ifindex, dir) → ACCEPT only on explicit match, else
 ## Related
 
 - [Routing & multi-VNI tenancy](routing-vni.md) — the reachability half of the two-step.
-- [Load balancing (Maglev + DSR)](loadbalancer.md) — why DSR needs explicit VIP rules.
+- [Load balancing (Maglev + DSR)](loadbalancer.md) — why DSR needs explicit LB address rules.
 - [VPC peering](vpc-peering.md) — imports grant reachability, not permission.
 - [Compilers: CompiledNIC](../architecture/compile-sync-materialize.md)

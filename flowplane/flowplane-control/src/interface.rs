@@ -1,7 +1,7 @@
 //! Interface map-programming + QoS + DHCP config (backend-agnostic core).
 //!
 //! Moved verbatim out of the eBPF `Control` (control/mod.rs), applying the MapWriter transform:
-//! `g.ports`/`g.ifaces`/`g.meter`/`g.iface_meta`/`g.vips` map ops -> `self.w.<map>_<op>`,
+//! `g.ports`/`g.ifaces`/`g.meter`/`g.iface_meta`/`g.floating_ips` map ops -> `self.w.<map>_<op>`,
 //! `g.core.writer_mut().<underlay|route|route6|nat|neigh_nat>_<op>` -> `self.w.<...>`,
 //! `g.core.neigh_nats`/`g.core.routes_shadow`/`g.core.routes6_shadow` -> `self.<...>`, and
 //! `Self::meter_state(...)` -> the pure `meter_state(...)` free fn.
@@ -14,8 +14,8 @@
 
 use crate::{ControlCore, MapWriter};
 use flowplane_common::{
-    DhcpConfig, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, MeterState, NatKey,
-    PortMeta, RouteValue, VipKey, IFACE_DEV_MAX,
+    DhcpConfig, FloatingIPKey, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue,
+    MeterState, NatKey, PortMeta, RouteValue, IFACE_DEV_MAX,
 };
 
 /// Per-interface addressing + rate-limit parameters for `program_interface`. The agnostic subset of
@@ -248,7 +248,7 @@ impl<W: MapWriter> ControlCore<W> {
     }
 
     /// Auto-reset a VNI when its last local interface is removed: purge neighbor NATs, the removed
-    /// interface's VIP mapping (and its reverse), its NAT config, and the VNI's routes. Mirrors
+    /// interface's LB address mapping (and its reverse), its NAT config, and the VNI's routes. Mirrors
     /// dpservice's async-deletion model. Called by the eBPF `detach_interface` after it has decided
     /// the VNI is no longer in use; `ipv4` is the removed interface's guest IPv4.
     pub fn purge_vni(&mut self, vni: u32, ipv4: [u8; 4]) -> anyhow::Result<()> {
@@ -263,12 +263,14 @@ impl<W: MapWriter> ControlCore<W> {
             }
             let _ = self.w.neigh_nat_count_set(n);
         }
-        // Purge VIP entries for the removed interface's guest IP (and its reverse).
-        let maybe_vip = self.w.vips_get(&VipKey { vni, ipv4 });
-        if let Some(vip) = maybe_vip {
-            let _ = self.w.vips_remove(&VipKey { vni, ipv4: vip });
+        // Purge LB address entries for the removed interface's guest IP (and its reverse).
+        let maybe_floating_ip = self.w.floating_ips_get(&FloatingIPKey { vni, ipv4 });
+        if let Some(lb_ip) = maybe_floating_ip {
+            let _ = self
+                .w
+                .floating_ips_remove(&FloatingIPKey { vni, ipv4: lb_ip });
         }
-        let _ = self.w.vips_remove(&VipKey { vni, ipv4 });
+        let _ = self.w.floating_ips_remove(&FloatingIPKey { vni, ipv4 });
         // Purge NAT config for the removed interface's guest IP.
         let _ = self.w.nat_remove(&NatKey { vni, ipv4 });
         // Purge routes for this VNI (same as reset_vni).
@@ -308,7 +310,7 @@ impl<W: MapWriter> ControlCore<W> {
 mod tests {
     use super::{meter_state, IfaceParams};
     use crate::{mem::MemMapWriter, shadow::IfaceMeta, ControlCore, MapWriter};
-    use flowplane_common::{IfaceKey, IfaceKey6, NatKey, VipKey};
+    use flowplane_common::{FloatingIPKey, IfaceKey, IfaceKey6, NatKey};
 
     /// Build an `IfaceParams` with fixed ancillary fields; only `ipv4`/`ipv6` vary across the
     /// family-conditional tests (vni=100, tap=42, effective_mac=[1..6]).
@@ -557,7 +559,7 @@ mod tests {
     }
 
     #[test]
-    fn purge_vni_clears_neigh_vips_nat_routes() {
+    fn purge_vni_clears_neigh_floating_ips_nat_routes() {
         let mut c = ControlCore::new(MemMapWriter::default());
         let vni = 5u32;
         let gip = [10, 0, 0, 2];
@@ -567,10 +569,12 @@ mod tests {
         c.add_neighbor_nat(vni, [203, 0, 113, 1], 1024, 2048, [2u8; 16])
             .unwrap();
         assert_eq!(c.w.neigh_nat_count, 1);
-        // Seed a VIP (gip -> vip) and its reverse.
-        let vip = [10, 0, 0, 9];
-        c.w.vips_upsert(VipKey { vni, ipv4: gip }, vip).unwrap();
-        c.w.vips_upsert(VipKey { vni, ipv4: vip }, gip).unwrap();
+        // Seed an LB address (gip -> lb_ip) and its reverse.
+        let lb_ip = [10, 0, 0, 9];
+        c.w.floating_ips_upsert(FloatingIPKey { vni, ipv4: gip }, lb_ip)
+            .unwrap();
+        c.w.floating_ips_upsert(FloatingIPKey { vni, ipv4: lb_ip }, gip)
+            .unwrap();
         // Seed a NAT for gip.
         c.w.nat_upsert(
             NatKey { vni, ipv4: gip },
@@ -602,9 +606,15 @@ mod tests {
         // neigh-NAT purged
         assert!(c.neigh_nats.is_empty());
         assert_eq!(c.w.neigh_nat_count, 0);
-        // VIPs (both directions) purged
-        assert!(c.w.vips_get(&VipKey { vni, ipv4: gip }).is_none());
-        assert!(c.w.vips_get(&VipKey { vni, ipv4: vip }).is_none());
+        // LB addresses (both directions) purged
+        assert!(c
+            .w
+            .floating_ips_get(&FloatingIPKey { vni, ipv4: gip })
+            .is_none());
+        assert!(c
+            .w
+            .floating_ips_get(&FloatingIPKey { vni, ipv4: lb_ip })
+            .is_none());
         // NAT purged
         assert!(!c.w.nat.contains_key(&NatKey { vni, ipv4: gip }));
         // routes purged (map + shadow)

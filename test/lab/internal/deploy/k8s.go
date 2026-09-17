@@ -23,16 +23,16 @@ const (
 )
 
 // WaitAPIServer blocks until the Kubernetes API server answers /readyz via
-// kubeconfig. kubeconfig's server is the anycast API VIP, which lives on a
-// per-node vip0 dummy interface ONLY while that node's own apiserver is healthy
-// (see the cluster-patch api-vip pod) — reachable from the host over the fabric
+// kubeconfig. kubeconfig's server is the anycast API address, which lives on a
+// per-node apiaddr0 dummy interface ONLY while that node's own apiserver is healthy
+// (see the cluster-patch api-lbIP pod) — reachable from the host over the fabric
 // only once GoBGP/RA have converged and stayed converged. Right after bootstrap
 // that is exactly what is still flapping, so this reaches it instead via `nsenter
 // -t <pid> -n` into nodeContainer's OWN network namespace (pid resolved with
-// clab.ContainerPID): for a single-CP cluster the VIP (and the node itself) is
+// clab.ContainerPID): for a single-CP cluster the LB address (and the node itself) is
 // on-link inside that netns, immune to fabric-routing flaps. nodeContainer is the
 // clab container name of a control-plane node (the caller picks one that should be
-// currently serving the VIP).
+// currently serving the LB address).
 func WaitAPIServer(ctx context.Context, kubeconfig, nodeContainer string) error {
 	slog.Info("waiting for the Kubernetes API server", "via", nodeContainer)
 	pid, err := clab.ContainerPID(ctx, nodeContainer)

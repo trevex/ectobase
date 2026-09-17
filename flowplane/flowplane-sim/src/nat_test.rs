@@ -1058,13 +1058,13 @@ fn wan_rx_relays_to_neighbor_nat_owner_with_the_real_owner_vni() {
     assert_eq!(out.pkt, plain, "wan_rx relay does not rewrite bytes");
 }
 
-/// A WAN-arriving packet with no matching LB VIP AND no matching `NEIGHBOR_NAT` block falls through
+/// A WAN-arriving packet with no matching LB address AND no matching `NEIGHBOR_NAT` block falls through
 /// to `Pass` (handed to the local kernel — VyOS routing/BGP), exactly as `try_wan_rx` does for
 /// traffic it does not recognize at all. Distinct from the uplink-side genuine-miss case (which
 /// DROPS): `wan_rx` is the WAN's own ingress point, not a fabric decap path with overlay bytes to
 /// protect.
 #[test]
-fn wan_rx_passes_when_no_vip_and_no_neighbor_nat_match() {
+fn wan_rx_passes_when_no_lb_ip_and_no_neighbor_nat_match() {
     let builder = PacketBuilder::ethernet2([0xaa; 6], [0xbb; 6])
         .ipv4(EXT_IP, [1, 2, 3, 4], 64)
         .tcp(443, 9999, 0, 1024);

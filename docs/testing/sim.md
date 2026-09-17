@@ -46,7 +46,7 @@ intervals without kernel FQ. Its methods map one-to-one onto the eBPF entry poin
 | `uplink` | `uplink_rx` LB + base ingress: LB-select → ingress FW → conntrack → decap |
 | `uplink_nat_return` | `uplink_rx` reverse-DNAT (network NAT return) |
 | `uplink_nat64_ingress` | NAT64 ingress reply reconstruction |
-| `wan_rx` | edge WAN-VIP ingress (Maglev-select + encap) |
+| `wan_rx` | edge WAN-LB address ingress (Maglev-select + encap) |
 | `guest_arp_nd` | guest-facing ARP / IPv6 ND responder |
 | `guest_dhcp4` | guest DHCPv4 OFFER/ACK responder |
 
@@ -104,8 +104,8 @@ This runs multi-node scenarios in-process that would otherwise need netns or cla
   backend (`bpf_redirect` semantics).
 - The LB-DSR firewall case — `lb_scenario_test.rs` reproduces the "LB packets
   dropped" failure synthetically and pins the fix: because LB is DSR (the inner
-  destination stays the VIP), a policy written for a backend's own overlay IP does not
-  cover its LB traffic, so an explicit `VIP:port` allow rule is required. The dataplane
+  destination stays the LB address), a policy written for a backend's own overlay IP does not
+  cover its LB traffic, so an explicit `LB address:port` allow rule is required. The dataplane
   is deny-by-default and LB membership never generates firewall rules; the control
   plane materializes k8s open-until-selected as explicit allow-all for unpolicied NICs.
 

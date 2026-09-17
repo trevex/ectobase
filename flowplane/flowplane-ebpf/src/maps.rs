@@ -3,11 +3,11 @@ use aya_ebpf::{
     maps::{lpm_trie::LpmTrie, Array, HashMap, LruHashMap, ProgramArray},
 };
 use flowplane_common::{
-    Config, CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrVip, FwMeta, FwRule,
-    FwRule6, FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry,
-    LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6, NatValue, NatValue6,
-    NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteLpmData, RouteLpmData6, RouteValue,
-    UnderlayValue, VipKey, VipKey6,
+    Config, CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrLbIP, FloatingIPKey,
+    FloatingIPKey6, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey,
+    IfaceMetaVal, IfaceValue, InspectEntry, LbBackend, LbKey, LbValue, Local, MaglevKey,
+    MeterState, NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry,
+    PortMeta, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue,
 };
 
 #[map]
@@ -47,10 +47,10 @@ pub static GENEVE_IFINDEX: Array<u32> = Array::pinned(1, 0);
 pub fn geneve_ifindex() -> u32 {
     GENEVE_IFINDEX.get(0).copied().unwrap_or(0)
 }
-/// 1:1 VIP map. Value is the mapped IPv4 counterpart: (vni,G)->V for egress SNAT, (vni,V)->G for
+/// 1:1 LB address map. Value is the mapped IPv4 counterpart: (vni,G)->V for egress SNAT, (vni,V)->G for
 /// ingress DNAT.
 #[map]
-pub static VIPS: HashMap<VipKey, [u8; 4]> = HashMap::pinned(1024, 0);
+pub static FLOATING_IPS: HashMap<FloatingIPKey, [u8; 4]> = HashMap::pinned(1024, 0);
 #[map]
 pub static LB: HashMap<LbKey, LbValue> = HashMap::pinned(1024, 0);
 #[map]
@@ -66,7 +66,7 @@ pub static NAT: HashMap<NatKey, NatValue> = HashMap::pinned(1024, 0);
 /// entry `(vni,0,nat_ip,0,nat_port)`. The dataplane does NOT answer ICMP echo to a NAT IP — pings
 /// are forwarded (an unsolicited ping to a SNAT address has no backend and drops).
 #[map]
-pub static NAT_IPS: HashMap<VipKey, u8> = HashMap::pinned(1024, 0);
+pub static NAT_IPS: HashMap<FloatingIPKey, u8> = HashMap::pinned(1024, 0);
 #[map]
 pub static FW_RULES: HashMap<FwRuleKey, FwRule> = HashMap::pinned(16384, 0);
 #[map]
@@ -80,16 +80,16 @@ pub static FW_META6: HashMap<u32, FwMeta> = HashMap::pinned(1024, 0);
 /// IPv6 firewall-only conntrack (`CtKey6` -> `CtEntry`). Mirror of `CONNTRACK` (LRU, same cap/flags).
 #[map]
 pub static CONNTRACK6: LruHashMap<CtKey6, CtEntry> = LruHashMap::pinned(1_048_576, 0);
-/// DSR reverse-VIP state (B7b), keyed on the guest-reply 5-tuple (`invert_key(ct_key(forwarded))`).
+/// DSR reverse-LB address state (B7b), keyed on the guest-reply 5-tuple (`invert_key(ct_key(forwarded))`).
 /// Split out of `CONNTRACK`/`CtEntry` into its own compact LRU map: the DSR-create call copied a
 /// (then-40-byte) `CtEntry` on the stack in `uplink_rx`'s hot conntrack frames, pushing the combined
 /// BPF stack over the 512-byte verifier limit. Sized modestly relative to `CONNTRACK` — one entry per
 /// concurrently DSR-active flow, not one per interface/route.
 #[map]
-pub static DSR: LruHashMap<CtKey, DsrVip> = LruHashMap::pinned(65536, 0);
+pub static DSR: LruHashMap<CtKey, DsrLbIP> = LruHashMap::pinned(65536, 0);
 /// IPv6 sibling of `DSR`, keyed on `CtKey6`.
 #[map]
-pub static DSR6: LruHashMap<CtKey6, DsrVip> = LruHashMap::pinned(65536, 0);
+pub static DSR6: LruHashMap<CtKey6, DsrLbIP> = LruHashMap::pinned(65536, 0);
 #[map]
 pub static UNDERLAY: HashMap<[u8; 16], UnderlayValue> = HashMap::pinned(4096, 0);
 #[map]
@@ -104,7 +104,7 @@ pub static NEIGHBOR_NAT_COUNT: Array<u32> = Array::pinned(1, 0);
 pub static NAT6: HashMap<NatKey6, NatValue6> = HashMap::pinned(1024, 0);
 /// Marks a (vni, nat_ip6) as a NAT66 public source (value = 1) — `Maps::is_nat_ip6`.
 #[map]
-pub static NAT_IPS6: HashMap<VipKey6, u8> = HashMap::pinned(1024, 0);
+pub static NAT_IPS6: HashMap<FloatingIPKey6, u8> = HashMap::pinned(1024, 0);
 /// Dedicated NAT66 conntrack (fwd + peer-independent reverse), `CtKey6` -> `CtEntry6`. Separate from
 /// the firewall-only `CONNTRACK6` (whose value is the v4-xlate `CtEntry`).
 #[map]

@@ -37,7 +37,7 @@ impl<W: MapWriter> ControlCore<W> {
 
         // Write the per-port LB rows, tracking each so a partial failure can be unwound. Otherwise an
         // upsert error part-way left orphaned LB map rows (and a burned table_id) with NO `lbs`
-        // bookkeeping — DelLbVip iterates entry.ports, so it could never reach or remove them.
+        // bookkeeping — DelLoadBalancer iterates entry.ports, so it could never reach or remove them.
         let mut written: Vec<LbKey> = Vec::with_capacity(ports.len());
         let mut result: anyhow::Result<()> = Ok(());
         for &(port, proto) in &ports {
@@ -64,7 +64,7 @@ impl<W: MapWriter> ControlCore<W> {
         // overlay (relay) LBs. The WAN edge (vni==0) reaches the LB via wan_rx on a raw WAN frame and
         // never resolves UNDERLAY[lb_underlay]; writing it there would clobber the edge's
         // LOCAL_DELIVER egress entry (attach_edge). So skip the write for vni==0.
-        // tap_ifindex=0 and guest_mac=[0;6] because the LB VIP is anycast (no local tap).
+        // tap_ifindex=0 and guest_mac=[0;6] because the LB address is anycast (no local tap).
         if result.is_ok() && vni != 0 {
             result = self.w.underlay_upsert(
                 lb_underlay,
@@ -136,7 +136,7 @@ impl<W: MapWriter> ControlCore<W> {
 
     /// Remove a backend from an LB, identified by its owner node's underlay `node_vtep` AND its
     /// overlay IP. The overlay IP disambiguates two backends that share the same `node_vtep` — two
-    /// guests (pods) backing the same VIP on the SAME node, the normal K8s Service-with-2-pods-on-
+    /// guests (pods) backing the same LB address on the SAME node, the normal K8s Service-with-2-pods-on-
     /// one-node case. Matching on `node_vtep` alone (the pre-fix behavior) would remove BOTH such
     /// backends, or whichever happened to match first, on a single-backend withdraw.
     ///
@@ -232,7 +232,7 @@ mod tests {
 
         // WAN edge (vni==0): create_lb must NOT program UNDERLAY[lb_underlay].
         c.create_lb(
-            b"vip-a",
+            b"lb_ip-a",
             0,
             LbIpBytes::Ipv4([203, 0, 113, 50]),
             lb_ul,
@@ -246,7 +246,7 @@ mod tests {
 
         // Overlay relay LB (vni!=0): create_lb MUST program UNDERLAY[lb_underlay].
         c.create_lb(
-            b"vip-b",
+            b"lb_ip-b",
             100,
             LbIpBytes::Ipv4([10, 0, 100, 1]),
             lb_ul,
@@ -266,7 +266,7 @@ mod tests {
         let mut c = ControlCore::new(MemMapWriter::default());
         let lb_ul = [0x20u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xbb];
         c.create_lb(
-            b"vip",
+            b"lb_ip",
             100,
             LbIpBytes::Ipv4([10, 0, 100, 2]),
             lb_ul,
@@ -292,8 +292,8 @@ mod tests {
             is_v6: 0,
             _pad: [0; 3],
         };
-        c.add_lb_target(b"vip", b0).expect("add b0");
-        c.add_lb_target(b"vip", b1).expect("add b1");
+        c.add_lb_target(b"lb_ip", b0).expect("add b0");
+        c.add_lb_target(b"lb_ip", b1).expect("add b1");
         // All TABLE_SIZE slots filled for this table_id.
         let filled = (0..crate::maglev::TABLE_SIZE)
             .filter(|&slot| {
@@ -305,11 +305,11 @@ mod tests {
         assert_eq!(filled, crate::maglev::TABLE_SIZE as usize);
 
         // Duplicate backend rejected.
-        assert!(c.add_lb_target(b"vip", b0).is_err());
+        assert!(c.add_lb_target(b"lb_ip", b0).is_err());
 
         // Remove one (by node_vtep + overlay_ip): still filled (one backend remains).
         assert!(c
-            .del_lb_target(b"vip", node0, b0.overlay_ip)
+            .del_lb_target(b"lb_ip", node0, b0.overlay_ip)
             .expect("del b0"));
         let filled = (0..crate::maglev::TABLE_SIZE)
             .filter(|&slot| {
@@ -322,7 +322,7 @@ mod tests {
 
         // Remove the last backend: all slots cleared.
         assert!(c
-            .del_lb_target(b"vip", node1, b1.overlay_ip)
+            .del_lb_target(b"lb_ip", node1, b1.overlay_ip)
             .expect("del b1"));
         let filled = (0..crate::maglev::TABLE_SIZE)
             .filter(|&slot| {
@@ -334,11 +334,11 @@ mod tests {
         assert_eq!(filled, 0);
 
         // delete_lb removes the LB rows.
-        assert!(c.delete_lb(b"vip").expect("delete_lb"));
-        assert!(!c.delete_lb(b"vip").expect("delete_lb again"));
+        assert!(c.delete_lb(b"lb_ip").expect("delete_lb"));
+        assert!(!c.delete_lb(b"lb_ip").expect("delete_lb again"));
     }
 
-    /// Two backends behind one VIP on the SAME node (same node_vtep) but with DIFFERENT overlay IPs
+    /// Two backends behind one LB address on the SAME node (same node_vtep) but with DIFFERENT overlay IPs
     /// — the normal K8s Service-with-2-pods-on-one-node case — must both be addable, and removing one
     /// by (node_vtep, overlay_ip) must leave the other intact. Before this fix, del_lb_target matched
     /// by node_vtep alone and would have deleted BOTH (or, since the first match is removed via
@@ -348,7 +348,7 @@ mod tests {
         let mut c = ControlCore::new(MemMapWriter::default());
         let lb_ul = [0x20u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xcc];
         c.create_lb(
-            b"vip",
+            b"lb_ip",
             100,
             LbIpBytes::Ipv4([10, 0, 100, 3]),
             lb_ul,
@@ -373,16 +373,16 @@ mod tests {
             is_v6: 0,
             _pad: [0; 3],
         };
-        c.add_lb_target(b"vip", first).expect("add first");
-        c.add_lb_target(b"vip", second).expect("add second");
-        assert_eq!(c.lbs.get(b"vip".as_slice()).unwrap().backends.len(), 2);
+        c.add_lb_target(b"lb_ip", first).expect("add first");
+        c.add_lb_target(b"lb_ip", second).expect("add second");
+        assert_eq!(c.lbs.get(b"lb_ip".as_slice()).unwrap().backends.len(), 2);
 
         // Remove ONLY the first backend (same node_vtep as the second, distinct overlay_ip).
         assert!(c
-            .del_lb_target(b"vip", node, first.overlay_ip)
+            .del_lb_target(b"lb_ip", node, first.overlay_ip)
             .expect("del first"));
 
-        let entry = c.lbs.get(b"vip".as_slice()).unwrap();
+        let entry = c.lbs.get(b"lb_ip".as_slice()).unwrap();
         assert_eq!(
             entry.backends.len(),
             1,
@@ -402,7 +402,7 @@ mod tests {
         let mut c = ControlCore::new(MemMapWriter::default());
         let lb_ul = [0x20u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xdd];
         c.create_lb(
-            b"vip",
+            b"lb_ip",
             100,
             LbIpBytes::Ipv4([10, 0, 100, 4]),
             lb_ul,
@@ -433,15 +433,15 @@ mod tests {
             is_v6: 0,
             _pad: [0; 3],
         };
-        c.add_lb_target(b"vip", a).expect("add a");
-        c.add_lb_target(b"vip", b).expect("add b");
-        c.add_lb_target(b"vip", elsewhere).expect("add elsewhere");
+        c.add_lb_target(b"lb_ip", a).expect("add a");
+        c.add_lb_target(b"lb_ip", b).expect("add b");
+        c.add_lb_target(b"lb_ip", elsewhere).expect("add elsewhere");
 
         assert!(c
-            .del_lb_target(b"vip", node, [0u8; 16])
+            .del_lb_target(b"lb_ip", node, [0u8; 16])
             .expect("legacy del by node_vtep"));
 
-        let entry = c.lbs.get(b"vip".as_slice()).unwrap();
+        let entry = c.lbs.get(b"lb_ip".as_slice()).unwrap();
         assert_eq!(
             entry.backends.len(),
             1,

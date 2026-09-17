@@ -71,8 +71,8 @@ func routeKey(r Route) routeRef { return routeRef{Vni: r.Vni, Prefix: r.Prefix} 
 func natKey(n NatBlock) natRef  { return natRef{NatIP: n.NatIP, PortMin: n.PortMin, PortMax: n.PortMax} }
 
 // pubKey identifies a public record by (kind, prefix, owner, overlay IP). The overlay IP is included
-// for every kind (empty for non-LB_VIP kinds, so their dedup behavior is unchanged) because it is the
-// only field that disambiguates two LB_VIP backends on the SAME node behind the SAME VIP (e.g. two
+// for every kind (empty for non-LB_IP kinds, so their dedup behavior is unchanged) because it is the
+// only field that disambiguates two LB_IP backends on the SAME node behind the SAME LB address (e.g. two
 // pods of one Service scheduled together): without it, two such records collide on (kind, prefix,
 // owner) alone and silently overwrite each other, losing one backend's withdraw.
 func pubKey(p PublicPrefix) string {
@@ -82,7 +82,7 @@ func pubKey(p PublicPrefix) string {
 // pubEqual compares two public records by VALUE, which decides whether a same-key record is
 // re-announced. It cannot be `a != b`: PublicPrefix carries a Ports slice, so the struct is not
 // comparable — and a silent `==` on the scalar fields alone would swallow a port-set change, the
-// one edit that requires the edge to re-register the VIP.
+// one edit that requires the edge to re-register the LB address.
 func pubEqual(a, b PublicPrefix) bool {
 	return a.Kind == b.Kind && a.Prefix == b.Prefix && a.OwnerUnderlay == b.OwnerUnderlay &&
 		a.Vni == b.Vni && a.PortMin == b.PortMin && a.PortMax == b.PortMax &&

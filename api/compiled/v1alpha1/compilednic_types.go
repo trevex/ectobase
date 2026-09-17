@@ -113,10 +113,10 @@ type CompiledNATSource struct {
 	PortMax int32 `json:"portMax"`
 }
 
-// CompiledLB is one load-balancer this NIC backs: the VIP (v4 or v6) and its service ports.
+// CompiledLB is one load-balancer this NIC backs: the LB address (v4 or v6) and its service ports.
 type CompiledLB struct {
-	// VIP is the load-balancer virtual IP (IPv4 or IPv6).
-	VIP string `json:"vip"`
+	// LB address is the load-balancer virtual IP (IPv4 or IPv6).
+	IP string `json:"ip"`
 	// Ports are the LB service (port, proto) tuples.
 	// +optional
 	Ports []CompiledLBPort `json:"ports,omitempty"`

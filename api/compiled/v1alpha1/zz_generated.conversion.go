@@ -517,7 +517,7 @@ func Convert_compiled_CompiledFwRule_To_v1alpha1_CompiledFwRule(in *compiled.Com
 }
 
 func autoConvert_v1alpha1_CompiledLB_To_compiled_CompiledLB(in *CompiledLB, out *compiled.CompiledLB, s conversion.Scope) error {
-	out.VIP = in.VIP
+	out.IP = in.IP
 	out.Ports = *(*[]compiled.CompiledLBPort)(unsafe.Pointer(&in.Ports))
 	return nil
 }
@@ -528,7 +528,7 @@ func Convert_v1alpha1_CompiledLB_To_compiled_CompiledLB(in *CompiledLB, out *com
 }
 
 func autoConvert_compiled_CompiledLB_To_v1alpha1_CompiledLB(in *compiled.CompiledLB, out *CompiledLB, s conversion.Scope) error {
-	out.VIP = in.VIP
+	out.IP = in.IP
 	out.Ports = *(*[]CompiledLBPort)(unsafe.Pointer(&in.Ports))
 	return nil
 }

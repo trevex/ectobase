@@ -46,7 +46,7 @@ pub struct GuestTxOut {
 ///      an established flow's CT_REWRITE_SRC translation (ct_apply) is NOT modelled here (separate
 ///      slice) — the anchor + tests exercise fresh flows. The last_seen/TCP-state refresh on a hit
 ///      (ct_refresh, mirroring the eBPF ct_touch) IS applied in step 5 (map-only, byte-neutral);
-///   2. VIP snat/dnat: NOT modelled (separate slice; anchor installs no VIP maps → no-op);
+///   2. LB address snat/dnat: NOT modelled (separate slice; anchor installs no LB address maps → no-op);
 ///   3. route lookup (`route4`) → Pass on miss;
 ///   4. network NAT SNAT (`snat_egress`) when the route is external;
 ///   5. conntrack: create-on-miss (`ct_create_default`) / refresh-on-hit (`ct_refresh`, last_seen +
@@ -63,10 +63,10 @@ pub struct GuestTxOut {
 ///
 /// Returns the delivery `Action` + the EDT timestamp, having mutated `pkt` in place.
 ///
-/// NOTE (scope): only the fresh-flow / non-VIP path is composed here for the OUTPUT PACKET — that
+/// NOTE (scope): only the fresh-flow / non-LB address path is composed here for the OUTPUT PACKET — that
 /// slice is byte-identical to the eBPF program and thus anchorable. Metering does not mutate packet
 /// bytes (it only reads/writes the METER map and returns a verdict), so with no METER entry the
-/// emitted bytes are unaffected; the interleaved un-ported step (ct_apply, vip) and the
+/// emitted bytes are unaffected; the interleaved un-ported step (ct_apply, lb_ip) and the
 /// ct_refresh hit-path are map/refresh-only on this fixture and do not change the emitted bytes.
 pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestTxIn) -> GuestTxOut {
     // Reset the stamp so a Local/Pass verdict leaves edt_tstamp = None (unshaped), matching the
@@ -92,12 +92,12 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
         }
     }
 
-    // 2. VIP snat/dnat: not modelled (no VIP maps → no-op in the eBPF path too).
+    // 2. LB address snat/dnat: not modelled (no LB address maps → no-op in the eBPF path too).
 
     // DSR reverse-SNAT. If this is the guest's REPLY to a DSR-load-balanced flow, the backend's
-    // ingress `uplink_dsr_note` tcx pre-program already noted the VIP the edge dispatched, keyed
+    // ingress `uplink_dsr_note` tcx pre-program already noted the LB address the edge dispatched, keyed
     // on this exact reply 5-tuple (`invert_key(ct_key(forwarded))` == `ct_key(reply)`). Rewrite src
-    // (this guest's own overlay IP) -> that VIP so the reply is client-visible as coming from the VIP,
+    // (this guest's own overlay IP) -> that LB address so the reply is client-visible as coming from the LB_IP_CONST,
     // then let it fall through the ordinary route/deliver tail (it typically routes out via the
     // external/public route toward any anycast edge — no local INTERFACES entry for the real client).
     // Reuses `ct_apply`'s CT_REWRITE_SRC path (byte-identical IP+L4 checksum fold to any other src
@@ -109,7 +109,7 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
     if let Some(key) = ct_key(&*pkt, ip_off, in_.meta.vni) {
         if let Some(d) = maps.dsr_get(&key) {
             let e = CtEntry {
-                xlate_ip: [d.vip[0], d.vip[1], d.vip[2], d.vip[3]],
+                xlate_ip: [d.lb_ip[0], d.lb_ip[1], d.lb_ip[2], d.lb_ip[3]],
                 flags: CT_REWRITE_SRC,
                 ..Default::default()
             };
@@ -281,7 +281,7 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
 ///   - `Deliver::Pass` → `Action::Pass`.
 ///
 /// SCOPE: native v6→v6 ONLY. There is NO NAT64 here (v6→v4 lives in [`process_guest_tx_nat64`]) and
-/// no VIP/network-NAT (v6 firewall + conntrack6 only, matching the eBPF v6 path). Returns the
+/// no LB address/network-NAT (v6 firewall + conntrack6 only, matching the eBPF v6 path). Returns the
 /// delivery `Action` + the EDT timestamp, having mutated `pkt` in place.
 pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
     pkt: &mut P,
@@ -304,9 +304,9 @@ pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
     };
 
     // DSR reverse-SNAT. If this is the guest's REPLY to a DSR-load-balanced flow, the backend's
-    // ingress `uplink_dsr_note6` tcx pre-program already noted the VIP the edge dispatched, keyed
+    // ingress `uplink_dsr_note6` tcx pre-program already noted the LB address the edge dispatched, keyed
     // on this exact reply 5-tuple (`invert_key6(ct_key6(forwarded))` == `ct_key6(reply)`). Rewrite src
-    // (this guest's own overlay IP) -> that VIP so the reply is client-visible as coming from the VIP;
+    // (this guest's own overlay IP) -> that LB address so the reply is client-visible as coming from the LB_IP_CONST;
     // the subsequent route decision keys off DST (the client), so it is unaffected by this src rewrite
     // — the reply then falls through the ordinary route6/deliver tail exactly like any other flow
     // (typically an encap toward the external/public route, since the real client has no local
@@ -318,7 +318,7 @@ pub fn process_guest_tx_v6<P: Pkt, M: Maps>(
         if let Some(d) = maps.dsr6_get(&key) {
             if let Some(src) = pkt.read_array::<16>(ip_off + 8) {
                 let nexthdr = pkt.read_u8(ip_off + 6).unwrap_or(0);
-                rewrite_v6_addr(pkt, ip_off, ip_off + 8, nexthdr, &src, &d.vip);
+                rewrite_v6_addr(pkt, ip_off, ip_off + 8, nexthdr, &src, &d.lb_ip);
                 did_dsr = true;
             }
         }

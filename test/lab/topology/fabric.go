@@ -200,8 +200,8 @@ type ciliumCtx struct{ PodSubnet string }
 // talosClusterCtx is the talos/cluster-patch.yaml.tmpl data (per cluster). Resolver1/2
 // are the two edge-loopback nameservers.
 type talosClusterCtx struct {
-	PodSubnet, SvcSubnet, NodeNet64, APIVipAddr, Resolver1, Resolver2 string
-	RegistryHost, RegistryEndpoint                                    string
+	PodSubnet, SvcSubnet, NodeNet64, APIAddr, Resolver1, Resolver2 string
+	RegistryHost, RegistryEndpoint                                 string
 }
 
 // talosNodeCtx is the data for both talos/node-patch.yaml.tmpl and
@@ -229,7 +229,7 @@ func genTalosCluster(ctx context.Context, cfg *config.Config, p paths, cluster s
 		PodSubnet:        dc.PodSubnet,
 		SvcSubnet:        dc.SvcSubnet,
 		NodeNet64:        dc.NodeNet64,
-		APIVipAddr:       dc.APIVipAddr,
+		APIAddr:          dc.APIAddr,
 		Resolver1:        res1,
 		Resolver2:        res2,
 		RegistryHost:     fabric.RegistryHost,
@@ -239,7 +239,7 @@ func genTalosCluster(ctx context.Context, cfg *config.Config, p paths, cluster s
 		return fmt.Errorf("render cluster-patch: %w", err)
 	}
 
-	sans := []string{dc.APIVipAddr}
+	sans := []string{dc.APIAddr}
 	nodes := make([]talos.NodeSpec, 0, len(dc.Nodes))
 	for _, n := range dc.Nodes {
 		sans = append(sans, n.IdentityAddr)
@@ -272,7 +272,7 @@ func genTalosCluster(ctx context.Context, cfg *config.Config, p paths, cluster s
 		SecretsPath:  filepath.Join(p.build, "talos-secrets", cluster+".yaml"),
 		MountsDir:    filepath.Join(p.build, "mounts"),
 		ClusterName:  cluster,
-		Endpoint:     fmt.Sprintf("https://[%s]:6443", dc.APIVipAddr),
+		Endpoint:     fmt.Sprintf("https://[%s]:6443", dc.APIAddr),
 		SANs:         sans,
 		ClusterPatch: []byte(clusterPatch),
 		// KubeFlannelCNIConfig stripped -> no CNI doc + no legacy .cluster.network makes
@@ -333,7 +333,7 @@ func Up(ctx context.Context, cfg *config.Config) error {
 		kubeconfig := p.clusterKubeconfig(cl.Name)
 		talosconfig := filepath.Join(p.build, "talos", cl.Name, "talosconfig")
 		// Bootstrap the container-mode Talos control plane over clab-mgmt (talosctl
-		// reaches the Talos API on each node's mgmt IP — the anycast API VIP + GoBGP
+		// reaches the Talos API on each node's mgmt IP — the anycast API address + GoBGP
 		// have not converged yet). Writes build/<name>/<cluster>.kubeconfig, where the
 		// deploy pipeline expects it.
 		if err := talos.Bootstrap(ctx, cfg, cl.Name, talosconfig, kubeconfig); err != nil {
@@ -346,7 +346,7 @@ func Up(ctx context.Context, cfg *config.Config) error {
 
 		// Reach the readyz check via nsenter into the first (in a single-CP cluster, the
 		// only) control-plane node's own netns — see WaitAPIServer: right after bootstrap
-		// the fabric path to the anycast API VIP is exactly what may still be flapping.
+		// the fabric path to the anycast API address is exactly what may still be flapping.
 		cpContainer := clab.ContainerName(cfg.Name, dc.Nodes[0].Name())
 		if err := deploy.WaitAPIServer(ctx, kubeconfig, cpContainer); err != nil {
 			return fmt.Errorf("cluster %s api server: %w", cl.Name, err)
@@ -632,18 +632,18 @@ func repoRoot() (string, error) {
 }
 
 // fabricHostPrefix is the aggregate the host routes into the fabric: every
-// cluster's node identities and anycast API VIPs live under fd00:cafe::/32.
+// cluster's node identities and anycast API addresses live under fd00:cafe::/32.
 const fabricHostPrefix = "fd00:cafe::/32"
 
 // addHostFabricRoute brings up the host end of the WAN-segment jump veth and routes
-// fd00:cafe::/32 (node identities + anycast API VIPs) into the fabric via the wan
+// fd00:cafe::/32 (node identities + anycast API addresses) into the fabric via the wan
 // container (fd00:29::1), which ECMPs to both edges. Replaces the old mgmt-network
 // next hop (mgmt net removal is task B2).
 func addHostFabricRoute(ctx context.Context) error {
 	// Take the jump veth out of NetworkManager's hands FIRST. On NM hosts the freshly
 	// created ectojump lands "managed" and NM asynchronously reconfigures it — flushing
 	// the addr/route we set below and breaking NDP to the wan (neighbor fd00:29::1 goes
-	// FAILED), so the host cannot reach the fabric API VIP and every deploy helm/kubectl
+	// FAILED), so the host cannot reach the fabric API address and every deploy helm/kubectl
 	// times out. `nmcli device set ... managed no` is best-effort: hosts without NM (or
 	// where the device is already unmanaged) simply no-op, so a non-zero exit is not fatal.
 	if err := exec.Sudo(ctx, "nmcli", "device", "set", fabric.JumpIface, "managed", "no"); err != nil {

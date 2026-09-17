@@ -60,7 +60,7 @@ Intent is authored against the dispatch's aggregated API in five groups:
 | `compiled.ectobase.dev` | (output only — see below) |
 
 These describe what you want, not how any node achieves it: a VPC's VNI, a NIC's overlay
-addresses, a firewall policy's rules, an LB's VIP and backends.
+addresses, a firewall policy's rules, an LB's LB address and backends.
 
 ### 2. Compile — lowering intent into `Compiled*`
 

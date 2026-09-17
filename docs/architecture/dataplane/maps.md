@@ -12,7 +12,7 @@ There are three writers:
 - the loader (`flowplane`) — fixes map capacities at load time and, on a graceful
   restart, re-opens the pinned maps and reseeds bookkeeping.
 - the control plane (`flowplane`'s `DataplaneNode` gRPC / CLI) — writes the
-  policy/config maps (interfaces, routes, firewall, NAT, LB, VIP, meter, DHCP, underlay,
+  policy/config maps (interfaces, routes, firewall, NAT, LB, LB address, meter, DHCP, underlay,
   neighbor-NAT) in response to control-plane calls.
 - the datapath itself — writes only the connection-state maps: `CONNTRACK` (flow
   entries) and `METER` (token-bucket state).
@@ -29,14 +29,14 @@ the flow state in them — survive a control-plane restart. See
 | `IFACE_META` | HashMap (1024) | `IfaceMetaKey` → `IfaceMetaVal` | restart journal — `interface_id → (vni, v4/v6, device, underlay, tap)`. Written on attach, removed on detach, scanned on restart to rebuild in-memory bookkeeping and re-attach guest programs. Never read by the datapath. |
 | `ROUTES` | LPM trie (65536) | `(VNI ++ IPv4, prefix)` → `RouteValue` | per-VNI IPv4 overlay routes → next-hop underlay `/128`. Queried at prefix_len 64 (32 VNI + 32 host). |
 | `ROUTES6` | LPM trie (65536) | `(VNI ++ IPv6, prefix)` → `RouteValue` | per-VNI IPv6 overlay routes. Queried at prefix_len 160 (32 VNI + 128 host). |
-| `UNDERLAY` | HashMap (4096) | underlay `/128` → `UnderlayValue` | residual node-identity markers — **not** the local-delivery path (that is `INTERFACES`/`INTERFACES6`, keyed on `(VNI, overlay IP)`). Under `collect_md` the datapath never sees an outer dst, and a plain interface writes nothing here (the node VTEP is shared, so writing it would clobber the edge sentinel). `serve` has two writers left: `Control::attach_edge` (the local-deliver sentinel, keyed under the edge's own `LOCAL.underlay_ipv6`) and `create_lb` for an overlay-relay LB VIP (`vni != 0` only); the only reader is the edge-sentinel check in `uplink_rx`. `tap_ifindex = UNDERLAY_LOCAL_DELIVER` marks a WAN-edge local-deliver underlay; `tap_ifindex = 0` marks a VNI-only entry (e.g. a NAT-gateway node with no local interface). |
+| `UNDERLAY` | HashMap (4096) | underlay `/128` → `UnderlayValue` | residual node-identity markers — **not** the local-delivery path (that is `INTERFACES`/`INTERFACES6`, keyed on `(VNI, overlay IP)`). Under `collect_md` the datapath never sees an outer dst, and a plain interface writes nothing here (the node VTEP is shared, so writing it would clobber the edge sentinel). `serve` has two writers left: `Control::attach_edge` (the local-deliver sentinel, keyed under the edge's own `LOCAL.underlay_ipv6`) and `create_lb` for an overlay-relay LB address (`vni != 0` only); the only reader is the edge-sentinel check in `uplink_rx`. `tap_ifindex = UNDERLAY_LOCAL_DELIVER` marks a WAN-edge local-deliver underlay; `tap_ifindex = 0` marks a VNI-only entry (e.g. a NAT-gateway node with no local interface). |
 | `CONFIG` | Array (1) | `[0]` → `Config` | server-wide datapath config. |
 | `LOCAL` | Array (1) | `[0]` → `Local` | this host's identity: `uplink_ifindex` (the redirect target for every uplink-bound verdict), `uplink_mac` (the inner-Ethernet dst the WAN-edge local-deliver rewrites to), and `underlay_ipv6` — this node's VTEP, used for the LB local-vs-remote test (`backend.node_vtep == local.underlay_ipv6`) and to key the edge local-deliver sentinel lookup. `gateway_mac` is now the geneve device's own link address, not an outer-Ethernet dst — the kernel builds outer frames, so the datapath no longer reads the field. |
 | `PORT_META` | HashMap (1024) | ifindex → `PortMeta` | per-interface datapath metadata (overlay gateway v4/v6, guest v6, underlay identity). |
-| `VIPS` | HashMap (1024) | `VipKey` → `[u8;4]` | 1:1 VIP mapping. `(vni,G)→V` for egress SNAT, `(vni,V)→G` for ingress DNAT. |
+| `FLOATING_IPS` | HashMap (1024) | `FloatingIPKey` → `[u8;4]` | 1:1 LB address mapping. `(vni,G)→V` for egress SNAT, `(vni,V)→G` for ingress DNAT. |
 | `NAT` | HashMap (1024) | `NatKey` → `NatValue` | network-NAT config per `(vni, guest-ipv4)`: `nat_ip` + port range. |
-| `NAT_IPS` | HashMap (1024) | `VipKey` → `u8` | marks a `(vni, nat_ip)` as a NAT IP so ingress can answer ICMP echo to it in-datapath. |
-| `LB` | HashMap (1024) | `LbKey` → `LbValue` | load-balancer service definition (VIP+port+proto → Maglev table handle). |
+| `NAT_IPS` | HashMap (1024) | `FloatingIPKey` → `u8` | marks a `(vni, nat_ip)` as a NAT IP so ingress can answer ICMP echo to it in-datapath. |
+| `LB` | HashMap (1024) | `LbKey` → `LbValue` | load-balancer service definition (LB address+port+proto → Maglev table handle). |
 | `MAGLEV` | HashMap (65536) | `MaglevKey` → `LbBackend` | Maglev lookup table: hashed slot → the selected backend (underlay VTEP /128 + overlay IP + VNI + family). |
 | `FW_RULES` | HashMap (16384) | `FwRuleKey` → `FwRule` | firewall rule slots, keyed `(ifindex, slot)`. |
 | `FW_META` | HashMap (1024) | ifindex → `FwMeta` | per-interface firewall rule counts per direction (ingress/egress). Absence ⇒ deny (deny-by-default). |

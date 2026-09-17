@@ -75,31 +75,31 @@ func (x *PortProto) GetProto() uint32 {
 	return 0
 }
 
-type AddLbVipRequest struct {
+type AddLoadBalancerRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                   // stable LB id (used to add backends later)
 	Vni           uint32                 `protobuf:"varint,2,opt,name=vni,proto3" json:"vni,omitempty"`                                // overlay VNI; 0 for the WAN edge (no VNI)
-	Vip           string                 `protobuf:"bytes,3,opt,name=vip,proto3" json:"vip,omitempty"`                                 // the public VIP (IPv4 or IPv6)
+	Ip            string                 `protobuf:"bytes,3,opt,name=ip,proto3" json:"ip,omitempty"`                                   // the public LB address (IPv4 or IPv6)
 	LbUnderlay    string                 `protobuf:"bytes,4,opt,name=lb_underlay,json=lbUnderlay,proto3" json:"lb_underlay,omitempty"` // the LB's own underlay /128 (anycast)
 	Ports         []*PortProto           `protobuf:"bytes,5,rep,name=ports,proto3" json:"ports,omitempty"`                             // the LB services
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *AddLbVipRequest) Reset() {
-	*x = AddLbVipRequest{}
+func (x *AddLoadBalancerRequest) Reset() {
+	*x = AddLoadBalancerRequest{}
 	mi := &file_dataplane_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *AddLbVipRequest) String() string {
+func (x *AddLoadBalancerRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*AddLbVipRequest) ProtoMessage() {}
+func (*AddLoadBalancerRequest) ProtoMessage() {}
 
-func (x *AddLbVipRequest) ProtoReflect() protoreflect.Message {
+func (x *AddLoadBalancerRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_dataplane_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -111,66 +111,66 @@ func (x *AddLbVipRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use AddLbVipRequest.ProtoReflect.Descriptor instead.
-func (*AddLbVipRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use AddLoadBalancerRequest.ProtoReflect.Descriptor instead.
+func (*AddLoadBalancerRequest) Descriptor() ([]byte, []int) {
 	return file_dataplane_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *AddLbVipRequest) GetId() string {
+func (x *AddLoadBalancerRequest) GetId() string {
 	if x != nil {
 		return x.Id
 	}
 	return ""
 }
 
-func (x *AddLbVipRequest) GetVni() uint32 {
+func (x *AddLoadBalancerRequest) GetVni() uint32 {
 	if x != nil {
 		return x.Vni
 	}
 	return 0
 }
 
-func (x *AddLbVipRequest) GetVip() string {
+func (x *AddLoadBalancerRequest) GetIp() string {
 	if x != nil {
-		return x.Vip
+		return x.Ip
 	}
 	return ""
 }
 
-func (x *AddLbVipRequest) GetLbUnderlay() string {
+func (x *AddLoadBalancerRequest) GetLbUnderlay() string {
 	if x != nil {
 		return x.LbUnderlay
 	}
 	return ""
 }
 
-func (x *AddLbVipRequest) GetPorts() []*PortProto {
+func (x *AddLoadBalancerRequest) GetPorts() []*PortProto {
 	if x != nil {
 		return x.Ports
 	}
 	return nil
 }
 
-type AddLbVipResponse struct {
+type AddLoadBalancerResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *AddLbVipResponse) Reset() {
-	*x = AddLbVipResponse{}
+func (x *AddLoadBalancerResponse) Reset() {
+	*x = AddLoadBalancerResponse{}
 	mi := &file_dataplane_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *AddLbVipResponse) String() string {
+func (x *AddLoadBalancerResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*AddLbVipResponse) ProtoMessage() {}
+func (*AddLoadBalancerResponse) ProtoMessage() {}
 
-func (x *AddLbVipResponse) ProtoReflect() protoreflect.Message {
+func (x *AddLoadBalancerResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_dataplane_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -182,14 +182,14 @@ func (x *AddLbVipResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use AddLbVipResponse.ProtoReflect.Descriptor instead.
-func (*AddLbVipResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use AddLoadBalancerResponse.ProtoReflect.Descriptor instead.
+func (*AddLoadBalancerResponse) Descriptor() ([]byte, []int) {
 	return file_dataplane_proto_rawDescGZIP(), []int{2}
 }
 
 type AddLbBackendRequest struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
-	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                                       // the LB id from AddLbVip
+	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                                       // the LB id from AddLoadBalancer
 	BackendUnderlay  string                 `protobuf:"bytes,2,opt,name=backend_underlay,json=backendUnderlay,proto3" json:"backend_underlay,omitempty"`      // backend node underlay IPv6 /128 (the node VTEP)
 	BackendOverlayIp string                 `protobuf:"bytes,3,opt,name=backend_overlay_ip,json=backendOverlayIp,proto3" json:"backend_overlay_ip,omitempty"` // backend guest overlay IP (v4 or v6)
 	BackendVni       uint32                 `protobuf:"varint,4,opt,name=backend_vni,json=backendVni,proto3" json:"backend_vni,omitempty"`                    // backend delivery VNI (the guest's tenant VNI)
@@ -291,27 +291,27 @@ func (*AddLbBackendResponse) Descriptor() ([]byte, []int) {
 	return file_dataplane_proto_rawDescGZIP(), []int{4}
 }
 
-type DelLbVipRequest struct {
+type DelLoadBalancerRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // the LB id from AddLbVip
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // the LB id from AddLoadBalancer
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *DelLbVipRequest) Reset() {
-	*x = DelLbVipRequest{}
+func (x *DelLoadBalancerRequest) Reset() {
+	*x = DelLoadBalancerRequest{}
 	mi := &file_dataplane_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *DelLbVipRequest) String() string {
+func (x *DelLoadBalancerRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*DelLbVipRequest) ProtoMessage() {}
+func (*DelLoadBalancerRequest) ProtoMessage() {}
 
-func (x *DelLbVipRequest) ProtoReflect() protoreflect.Message {
+func (x *DelLoadBalancerRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_dataplane_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -323,38 +323,38 @@ func (x *DelLbVipRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use DelLbVipRequest.ProtoReflect.Descriptor instead.
-func (*DelLbVipRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use DelLoadBalancerRequest.ProtoReflect.Descriptor instead.
+func (*DelLoadBalancerRequest) Descriptor() ([]byte, []int) {
 	return file_dataplane_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *DelLbVipRequest) GetId() string {
+func (x *DelLoadBalancerRequest) GetId() string {
 	if x != nil {
 		return x.Id
 	}
 	return ""
 }
 
-type DelLbVipResponse struct {
+type DelLoadBalancerResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *DelLbVipResponse) Reset() {
-	*x = DelLbVipResponse{}
+func (x *DelLoadBalancerResponse) Reset() {
+	*x = DelLoadBalancerResponse{}
 	mi := &file_dataplane_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *DelLbVipResponse) String() string {
+func (x *DelLoadBalancerResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*DelLbVipResponse) ProtoMessage() {}
+func (*DelLoadBalancerResponse) ProtoMessage() {}
 
-func (x *DelLbVipResponse) ProtoReflect() protoreflect.Message {
+func (x *DelLoadBalancerResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_dataplane_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -366,14 +366,14 @@ func (x *DelLbVipResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use DelLbVipResponse.ProtoReflect.Descriptor instead.
-func (*DelLbVipResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use DelLoadBalancerResponse.ProtoReflect.Descriptor instead.
+func (*DelLoadBalancerResponse) Descriptor() ([]byte, []int) {
 	return file_dataplane_proto_rawDescGZIP(), []int{6}
 }
 
 type DelLbBackendRequest struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
-	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                                       // the LB id from AddLbVip
+	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                                                       // the LB id from AddLoadBalancer
 	BackendUnderlay  string                 `protobuf:"bytes,2,opt,name=backend_underlay,json=backendUnderlay,proto3" json:"backend_underlay,omitempty"`      // backend node underlay IPv6 /128
 	BackendOverlayIp string                 `protobuf:"bytes,3,opt,name=backend_overlay_ip,json=backendOverlayIp,proto3" json:"backend_overlay_ip,omitempty"` // backend guest overlay IP (v4 or v6); disambiguates two backends
 	unknownFields    protoimpl.UnknownFields
@@ -2156,25 +2156,25 @@ const file_dataplane_proto_rawDesc = "" +
 	"\x0fdataplane.proto\x12\fdataplane.v1\"5\n" +
 	"\tPortProto\x12\x12\n" +
 	"\x04port\x18\x01 \x01(\rR\x04port\x12\x14\n" +
-	"\x05proto\x18\x02 \x01(\rR\x05proto\"\x95\x01\n" +
-	"\x0fAddLbVipRequest\x12\x0e\n" +
+	"\x05proto\x18\x02 \x01(\rR\x05proto\"\x9a\x01\n" +
+	"\x16AddLoadBalancerRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x10\n" +
-	"\x03vni\x18\x02 \x01(\rR\x03vni\x12\x10\n" +
-	"\x03vip\x18\x03 \x01(\tR\x03vip\x12\x1f\n" +
+	"\x03vni\x18\x02 \x01(\rR\x03vni\x12\x0e\n" +
+	"\x02ip\x18\x03 \x01(\tR\x02ip\x12\x1f\n" +
 	"\vlb_underlay\x18\x04 \x01(\tR\n" +
 	"lbUnderlay\x12-\n" +
-	"\x05ports\x18\x05 \x03(\v2\x17.dataplane.v1.PortProtoR\x05ports\"\x12\n" +
-	"\x10AddLbVipResponse\"\x9f\x01\n" +
+	"\x05ports\x18\x05 \x03(\v2\x17.dataplane.v1.PortProtoR\x05ports\"\x19\n" +
+	"\x17AddLoadBalancerResponse\"\x9f\x01\n" +
 	"\x13AddLbBackendRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12)\n" +
 	"\x10backend_underlay\x18\x02 \x01(\tR\x0fbackendUnderlay\x12,\n" +
 	"\x12backend_overlay_ip\x18\x03 \x01(\tR\x10backendOverlayIp\x12\x1f\n" +
 	"\vbackend_vni\x18\x04 \x01(\rR\n" +
 	"backendVni\"\x16\n" +
-	"\x14AddLbBackendResponse\"!\n" +
-	"\x0fDelLbVipRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"\x12\n" +
-	"\x10DelLbVipResponse\"~\n" +
+	"\x14AddLbBackendResponse\"(\n" +
+	"\x16DelLoadBalancerRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\x19\n" +
+	"\x17DelLoadBalancerResponse\"~\n" +
 	"\x13DelLbBackendRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12)\n" +
 	"\x10backend_underlay\x18\x02 \x01(\tR\x0fbackendUnderlay\x12,\n" +
@@ -2295,7 +2295,7 @@ const file_dataplane_proto_rawDesc = "" +
 	"\fingress_mbps\x18\x04 \x01(\rR\vingressMbps\x12&\n" +
 	"\x0fegress_burst_kb\x18\x05 \x01(\rR\regressBurstKb\x12(\n" +
 	"\x10ingress_burst_kb\x18\x06 \x01(\rR\x0eingressBurstKb\"\x16\n" +
-	"\x14ConfigureQoSResponse2\xec\f\n" +
+	"\x14ConfigureQoSResponse2\x96\r\n" +
 	"\rDataplaneNode\x12^\n" +
 	"\x0fAttachInterface\x12$.dataplane.v1.AttachInterfaceRequest\x1a%.dataplane.v1.AttachInterfaceResponse\x12^\n" +
 	"\x0fDetachInterface\x12$.dataplane.v1.DetachInterfaceRequest\x1a%.dataplane.v1.DetachInterfaceResponse\x12[\n" +
@@ -2306,10 +2306,10 @@ const file_dataplane_proto_rawDesc = "" +
 	"\fAddNatSource\x12!.dataplane.v1.AddNatSourceRequest\x1a\".dataplane.v1.AddNatSourceResponse\x12d\n" +
 	"\x11WithdrawNatSource\x12&.dataplane.v1.WithdrawNatSourceRequest\x1a'.dataplane.v1.WithdrawNatSourceResponse\x12[\n" +
 	"\x0eAddNeighborNat\x12#.dataplane.v1.AddNeighborNatRequest\x1a$.dataplane.v1.AddNeighborNatResponse\x12j\n" +
-	"\x13WithdrawNeighborNat\x12(.dataplane.v1.WithdrawNeighborNatRequest\x1a).dataplane.v1.WithdrawNeighborNatResponse\x12I\n" +
-	"\bAddLbVip\x12\x1d.dataplane.v1.AddLbVipRequest\x1a\x1e.dataplane.v1.AddLbVipResponse\x12U\n" +
-	"\fAddLbBackend\x12!.dataplane.v1.AddLbBackendRequest\x1a\".dataplane.v1.AddLbBackendResponse\x12I\n" +
-	"\bDelLbVip\x12\x1d.dataplane.v1.DelLbVipRequest\x1a\x1e.dataplane.v1.DelLbVipResponse\x12U\n" +
+	"\x13WithdrawNeighborNat\x12(.dataplane.v1.WithdrawNeighborNatRequest\x1a).dataplane.v1.WithdrawNeighborNatResponse\x12^\n" +
+	"\x0fAddLoadBalancer\x12$.dataplane.v1.AddLoadBalancerRequest\x1a%.dataplane.v1.AddLoadBalancerResponse\x12U\n" +
+	"\fAddLbBackend\x12!.dataplane.v1.AddLbBackendRequest\x1a\".dataplane.v1.AddLbBackendResponse\x12^\n" +
+	"\x0fDelLoadBalancer\x12$.dataplane.v1.DelLoadBalancerRequest\x1a%.dataplane.v1.DelLoadBalancerResponse\x12U\n" +
 	"\fDelLbBackend\x12!.dataplane.v1.DelLbBackendRequest\x1a\".dataplane.v1.DelLbBackendResponse\x12L\n" +
 	"\tAddFwRule\x12\x1e.dataplane.v1.AddFwRuleRequest\x1a\x1f.dataplane.v1.AddFwRuleResponse\x12L\n" +
 	"\tDelFwRule\x12\x1e.dataplane.v1.DelFwRuleRequest\x1a\x1f.dataplane.v1.DelFwRuleResponse\x12y\n" +
@@ -2331,12 +2331,12 @@ func file_dataplane_proto_rawDescGZIP() []byte {
 var file_dataplane_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
 var file_dataplane_proto_goTypes = []any{
 	(*PortProto)(nil),                        // 0: dataplane.v1.PortProto
-	(*AddLbVipRequest)(nil),                  // 1: dataplane.v1.AddLbVipRequest
-	(*AddLbVipResponse)(nil),                 // 2: dataplane.v1.AddLbVipResponse
+	(*AddLoadBalancerRequest)(nil),           // 1: dataplane.v1.AddLoadBalancerRequest
+	(*AddLoadBalancerResponse)(nil),          // 2: dataplane.v1.AddLoadBalancerResponse
 	(*AddLbBackendRequest)(nil),              // 3: dataplane.v1.AddLbBackendRequest
 	(*AddLbBackendResponse)(nil),             // 4: dataplane.v1.AddLbBackendResponse
-	(*DelLbVipRequest)(nil),                  // 5: dataplane.v1.DelLbVipRequest
-	(*DelLbVipResponse)(nil),                 // 6: dataplane.v1.DelLbVipResponse
+	(*DelLoadBalancerRequest)(nil),           // 5: dataplane.v1.DelLoadBalancerRequest
+	(*DelLoadBalancerResponse)(nil),          // 6: dataplane.v1.DelLoadBalancerResponse
 	(*DelLbBackendRequest)(nil),              // 7: dataplane.v1.DelLbBackendRequest
 	(*DelLbBackendResponse)(nil),             // 8: dataplane.v1.DelLbBackendResponse
 	(*AddFwRuleRequest)(nil),                 // 9: dataplane.v1.AddFwRuleRequest
@@ -2371,7 +2371,7 @@ var file_dataplane_proto_goTypes = []any{
 	(*ConfigureQoSResponse)(nil),             // 38: dataplane.v1.ConfigureQoSResponse
 }
 var file_dataplane_proto_depIdxs = []int32{
-	0,  // 0: dataplane.v1.AddLbVipRequest.ports:type_name -> dataplane.v1.PortProto
+	0,  // 0: dataplane.v1.AddLoadBalancerRequest.ports:type_name -> dataplane.v1.PortProto
 	13, // 1: dataplane.v1.ReplaceInterfaceFirewallRequest.rules:type_name -> dataplane.v1.FwRuleSpec
 	20, // 2: dataplane.v1.ListInterfacesResponse.interfaces:type_name -> dataplane.v1.InterfaceInfo
 	16, // 3: dataplane.v1.DataplaneNode.AttachInterface:input_type -> dataplane.v1.AttachInterfaceRequest
@@ -2384,9 +2384,9 @@ var file_dataplane_proto_depIdxs = []int32{
 	31, // 10: dataplane.v1.DataplaneNode.WithdrawNatSource:input_type -> dataplane.v1.WithdrawNatSourceRequest
 	33, // 11: dataplane.v1.DataplaneNode.AddNeighborNat:input_type -> dataplane.v1.AddNeighborNatRequest
 	35, // 12: dataplane.v1.DataplaneNode.WithdrawNeighborNat:input_type -> dataplane.v1.WithdrawNeighborNatRequest
-	1,  // 13: dataplane.v1.DataplaneNode.AddLbVip:input_type -> dataplane.v1.AddLbVipRequest
+	1,  // 13: dataplane.v1.DataplaneNode.AddLoadBalancer:input_type -> dataplane.v1.AddLoadBalancerRequest
 	3,  // 14: dataplane.v1.DataplaneNode.AddLbBackend:input_type -> dataplane.v1.AddLbBackendRequest
-	5,  // 15: dataplane.v1.DataplaneNode.DelLbVip:input_type -> dataplane.v1.DelLbVipRequest
+	5,  // 15: dataplane.v1.DataplaneNode.DelLoadBalancer:input_type -> dataplane.v1.DelLoadBalancerRequest
 	7,  // 16: dataplane.v1.DataplaneNode.DelLbBackend:input_type -> dataplane.v1.DelLbBackendRequest
 	9,  // 17: dataplane.v1.DataplaneNode.AddFwRule:input_type -> dataplane.v1.AddFwRuleRequest
 	11, // 18: dataplane.v1.DataplaneNode.DelFwRule:input_type -> dataplane.v1.DelFwRuleRequest
@@ -2402,9 +2402,9 @@ var file_dataplane_proto_depIdxs = []int32{
 	32, // 28: dataplane.v1.DataplaneNode.WithdrawNatSource:output_type -> dataplane.v1.WithdrawNatSourceResponse
 	34, // 29: dataplane.v1.DataplaneNode.AddNeighborNat:output_type -> dataplane.v1.AddNeighborNatResponse
 	36, // 30: dataplane.v1.DataplaneNode.WithdrawNeighborNat:output_type -> dataplane.v1.WithdrawNeighborNatResponse
-	2,  // 31: dataplane.v1.DataplaneNode.AddLbVip:output_type -> dataplane.v1.AddLbVipResponse
+	2,  // 31: dataplane.v1.DataplaneNode.AddLoadBalancer:output_type -> dataplane.v1.AddLoadBalancerResponse
 	4,  // 32: dataplane.v1.DataplaneNode.AddLbBackend:output_type -> dataplane.v1.AddLbBackendResponse
-	6,  // 33: dataplane.v1.DataplaneNode.DelLbVip:output_type -> dataplane.v1.DelLbVipResponse
+	6,  // 33: dataplane.v1.DataplaneNode.DelLoadBalancer:output_type -> dataplane.v1.DelLoadBalancerResponse
 	8,  // 34: dataplane.v1.DataplaneNode.DelLbBackend:output_type -> dataplane.v1.DelLbBackendResponse
 	10, // 35: dataplane.v1.DataplaneNode.AddFwRule:output_type -> dataplane.v1.AddFwRuleResponse
 	12, // 36: dataplane.v1.DataplaneNode.DelFwRule:output_type -> dataplane.v1.DelFwRuleResponse

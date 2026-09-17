@@ -5,11 +5,11 @@ package v1alpha1
 // LBPoolSpecApplyConfiguration represents a declarative configuration of the LBPoolSpec type for use
 // with apply.
 //
-// LBPoolSpec is the desired state of an LBPool (a fleet-scoped VIP prefix range).
+// LBPoolSpec is the desired state of an LBPool (a fleet-scoped LB address prefix range).
 type LBPoolSpecApplyConfiguration struct {
-	// V4Prefix optionally pins the IPv4 CIDR for this VIP pool.
+	// V4Prefix optionally pins the IPv4 CIDR for this LB address pool.
 	V4Prefix *string `json:"v4Prefix,omitempty"`
-	// V6Prefix optionally pins the IPv6 CIDR for this VIP pool.
+	// V6Prefix optionally pins the IPv6 CIDR for this LB address pool.
 	V6Prefix *string `json:"v6Prefix,omitempty"`
 	// ReservedIPs are addresses held back from allocation within this pool.
 	ReservedIPs []string `json:"reservedIPs,omitempty"`

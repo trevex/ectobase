@@ -29,9 +29,9 @@ const (
 	DataplaneNode_WithdrawNatSource_FullMethodName        = "/dataplane.v1.DataplaneNode/WithdrawNatSource"
 	DataplaneNode_AddNeighborNat_FullMethodName           = "/dataplane.v1.DataplaneNode/AddNeighborNat"
 	DataplaneNode_WithdrawNeighborNat_FullMethodName      = "/dataplane.v1.DataplaneNode/WithdrawNeighborNat"
-	DataplaneNode_AddLbVip_FullMethodName                 = "/dataplane.v1.DataplaneNode/AddLbVip"
+	DataplaneNode_AddLoadBalancer_FullMethodName          = "/dataplane.v1.DataplaneNode/AddLoadBalancer"
 	DataplaneNode_AddLbBackend_FullMethodName             = "/dataplane.v1.DataplaneNode/AddLbBackend"
-	DataplaneNode_DelLbVip_FullMethodName                 = "/dataplane.v1.DataplaneNode/DelLbVip"
+	DataplaneNode_DelLoadBalancer_FullMethodName          = "/dataplane.v1.DataplaneNode/DelLoadBalancer"
 	DataplaneNode_DelLbBackend_FullMethodName             = "/dataplane.v1.DataplaneNode/DelLbBackend"
 	DataplaneNode_AddFwRule_FullMethodName                = "/dataplane.v1.DataplaneNode/AddFwRule"
 	DataplaneNode_DelFwRule_FullMethodName                = "/dataplane.v1.DataplaneNode/DelFwRule"
@@ -70,16 +70,16 @@ type DataplaneNodeClient interface {
 	AddNeighborNat(ctx context.Context, in *AddNeighborNatRequest, opts ...grpc.CallOption) (*AddNeighborNatResponse, error)
 	// WithdrawNeighborNat removes a return-to-owner entry. Removing an absent one is not an error.
 	WithdrawNeighborNat(ctx context.Context, in *WithdrawNeighborNatRequest, opts ...grpc.CallOption) (*WithdrawNeighborNatResponse, error)
-	// AddLbVip registers an external load balancer VIP: an IPv4 (vni=0 for the WAN edge) with a set
+	// AddLoadBalancer registers an external load balancer LB address: an IPv4 (vni=0 for the WAN edge) with a set
 	// of (port, proto) services, programming the LB map + allocating a Maglev table. Backends are
 	// added via AddLbBackend. On the WAN edge, wan_rx Maglev-selects a backend and encaps to it.
-	AddLbVip(ctx context.Context, in *AddLbVipRequest, opts ...grpc.CallOption) (*AddLbVipResponse, error)
-	// AddLbBackend appends a backend underlay /128 to a registered LB VIP and rebuilds its Maglev
+	AddLoadBalancer(ctx context.Context, in *AddLoadBalancerRequest, opts ...grpc.CallOption) (*AddLoadBalancerResponse, error)
+	// AddLbBackend appends a backend underlay /128 to a registered LB address and rebuilds its Maglev
 	// table.
 	AddLbBackend(ctx context.Context, in *AddLbBackendRequest, opts ...grpc.CallOption) (*AddLbBackendResponse, error)
-	// DelLbVip removes a registered LB VIP (and all its state/Maglev table) by id.
-	DelLbVip(ctx context.Context, in *DelLbVipRequest, opts ...grpc.CallOption) (*DelLbVipResponse, error)
-	// DelLbBackend removes a single backend underlay /128 from a registered LB VIP and rebuilds its
+	// DelLoadBalancer removes a registered LB address (and all its state/Maglev table) by id.
+	DelLoadBalancer(ctx context.Context, in *DelLoadBalancerRequest, opts ...grpc.CallOption) (*DelLoadBalancerResponse, error)
+	// DelLbBackend removes a single backend underlay /128 from a registered LB address and rebuilds its
 	// Maglev table.
 	DelLbBackend(ctx context.Context, in *DelLbBackendRequest, opts ...grpc.CallOption) (*DelLbBackendResponse, error)
 	// AddFwRule programs a single per-interface firewall rule (ingress or egress). A LoadBalancer
@@ -206,10 +206,10 @@ func (c *dataplaneNodeClient) WithdrawNeighborNat(ctx context.Context, in *Withd
 	return out, nil
 }
 
-func (c *dataplaneNodeClient) AddLbVip(ctx context.Context, in *AddLbVipRequest, opts ...grpc.CallOption) (*AddLbVipResponse, error) {
+func (c *dataplaneNodeClient) AddLoadBalancer(ctx context.Context, in *AddLoadBalancerRequest, opts ...grpc.CallOption) (*AddLoadBalancerResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AddLbVipResponse)
-	err := c.cc.Invoke(ctx, DataplaneNode_AddLbVip_FullMethodName, in, out, cOpts...)
+	out := new(AddLoadBalancerResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_AddLoadBalancer_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -226,10 +226,10 @@ func (c *dataplaneNodeClient) AddLbBackend(ctx context.Context, in *AddLbBackend
 	return out, nil
 }
 
-func (c *dataplaneNodeClient) DelLbVip(ctx context.Context, in *DelLbVipRequest, opts ...grpc.CallOption) (*DelLbVipResponse, error) {
+func (c *dataplaneNodeClient) DelLoadBalancer(ctx context.Context, in *DelLoadBalancerRequest, opts ...grpc.CallOption) (*DelLoadBalancerResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DelLbVipResponse)
-	err := c.cc.Invoke(ctx, DataplaneNode_DelLbVip_FullMethodName, in, out, cOpts...)
+	out := new(DelLoadBalancerResponse)
+	err := c.cc.Invoke(ctx, DataplaneNode_DelLoadBalancer_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -317,16 +317,16 @@ type DataplaneNodeServer interface {
 	AddNeighborNat(context.Context, *AddNeighborNatRequest) (*AddNeighborNatResponse, error)
 	// WithdrawNeighborNat removes a return-to-owner entry. Removing an absent one is not an error.
 	WithdrawNeighborNat(context.Context, *WithdrawNeighborNatRequest) (*WithdrawNeighborNatResponse, error)
-	// AddLbVip registers an external load balancer VIP: an IPv4 (vni=0 for the WAN edge) with a set
+	// AddLoadBalancer registers an external load balancer LB address: an IPv4 (vni=0 for the WAN edge) with a set
 	// of (port, proto) services, programming the LB map + allocating a Maglev table. Backends are
 	// added via AddLbBackend. On the WAN edge, wan_rx Maglev-selects a backend and encaps to it.
-	AddLbVip(context.Context, *AddLbVipRequest) (*AddLbVipResponse, error)
-	// AddLbBackend appends a backend underlay /128 to a registered LB VIP and rebuilds its Maglev
+	AddLoadBalancer(context.Context, *AddLoadBalancerRequest) (*AddLoadBalancerResponse, error)
+	// AddLbBackend appends a backend underlay /128 to a registered LB address and rebuilds its Maglev
 	// table.
 	AddLbBackend(context.Context, *AddLbBackendRequest) (*AddLbBackendResponse, error)
-	// DelLbVip removes a registered LB VIP (and all its state/Maglev table) by id.
-	DelLbVip(context.Context, *DelLbVipRequest) (*DelLbVipResponse, error)
-	// DelLbBackend removes a single backend underlay /128 from a registered LB VIP and rebuilds its
+	// DelLoadBalancer removes a registered LB address (and all its state/Maglev table) by id.
+	DelLoadBalancer(context.Context, *DelLoadBalancerRequest) (*DelLoadBalancerResponse, error)
+	// DelLbBackend removes a single backend underlay /128 from a registered LB address and rebuilds its
 	// Maglev table.
 	DelLbBackend(context.Context, *DelLbBackendRequest) (*DelLbBackendResponse, error)
 	// AddFwRule programs a single per-interface firewall rule (ingress or egress). A LoadBalancer
@@ -383,14 +383,14 @@ func (UnimplementedDataplaneNodeServer) AddNeighborNat(context.Context, *AddNeig
 func (UnimplementedDataplaneNodeServer) WithdrawNeighborNat(context.Context, *WithdrawNeighborNatRequest) (*WithdrawNeighborNatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method WithdrawNeighborNat not implemented")
 }
-func (UnimplementedDataplaneNodeServer) AddLbVip(context.Context, *AddLbVipRequest) (*AddLbVipResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method AddLbVip not implemented")
+func (UnimplementedDataplaneNodeServer) AddLoadBalancer(context.Context, *AddLoadBalancerRequest) (*AddLoadBalancerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddLoadBalancer not implemented")
 }
 func (UnimplementedDataplaneNodeServer) AddLbBackend(context.Context, *AddLbBackendRequest) (*AddLbBackendResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AddLbBackend not implemented")
 }
-func (UnimplementedDataplaneNodeServer) DelLbVip(context.Context, *DelLbVipRequest) (*DelLbVipResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method DelLbVip not implemented")
+func (UnimplementedDataplaneNodeServer) DelLoadBalancer(context.Context, *DelLoadBalancerRequest) (*DelLoadBalancerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DelLoadBalancer not implemented")
 }
 func (UnimplementedDataplaneNodeServer) DelLbBackend(context.Context, *DelLbBackendRequest) (*DelLbBackendResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DelLbBackend not implemented")
@@ -608,20 +608,20 @@ func _DataplaneNode_WithdrawNeighborNat_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DataplaneNode_AddLbVip_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AddLbVipRequest)
+func _DataplaneNode_AddLoadBalancer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddLoadBalancerRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(DataplaneNodeServer).AddLbVip(ctx, in)
+		return srv.(DataplaneNodeServer).AddLoadBalancer(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: DataplaneNode_AddLbVip_FullMethodName,
+		FullMethod: DataplaneNode_AddLoadBalancer_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DataplaneNodeServer).AddLbVip(ctx, req.(*AddLbVipRequest))
+		return srv.(DataplaneNodeServer).AddLoadBalancer(ctx, req.(*AddLoadBalancerRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -644,20 +644,20 @@ func _DataplaneNode_AddLbBackend_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DataplaneNode_DelLbVip_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DelLbVipRequest)
+func _DataplaneNode_DelLoadBalancer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DelLoadBalancerRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(DataplaneNodeServer).DelLbVip(ctx, in)
+		return srv.(DataplaneNodeServer).DelLoadBalancer(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: DataplaneNode_DelLbVip_FullMethodName,
+		FullMethod: DataplaneNode_DelLoadBalancer_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DataplaneNodeServer).DelLbVip(ctx, req.(*DelLbVipRequest))
+		return srv.(DataplaneNodeServer).DelLoadBalancer(ctx, req.(*DelLoadBalancerRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -800,16 +800,16 @@ var DataplaneNode_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _DataplaneNode_WithdrawNeighborNat_Handler,
 		},
 		{
-			MethodName: "AddLbVip",
-			Handler:    _DataplaneNode_AddLbVip_Handler,
+			MethodName: "AddLoadBalancer",
+			Handler:    _DataplaneNode_AddLoadBalancer_Handler,
 		},
 		{
 			MethodName: "AddLbBackend",
 			Handler:    _DataplaneNode_AddLbBackend_Handler,
 		},
 		{
-			MethodName: "DelLbVip",
-			Handler:    _DataplaneNode_DelLbVip_Handler,
+			MethodName: "DelLoadBalancer",
+			Handler:    _DataplaneNode_DelLoadBalancer_Handler,
 		},
 		{
 			MethodName: "DelLbBackend",

@@ -9,7 +9,7 @@ package v1alpha1
 type LBPoolStatusApplyConfiguration struct {
 	// State is the current lifecycle state (e.g. Pending, Ready).
 	State *string `json:"state,omitempty"`
-	// Total is the total number of allocatable VIP addresses.
+	// Total is the total number of allocatable LB address addresses.
 	Total *int32 `json:"total,omitempty"`
 }
 

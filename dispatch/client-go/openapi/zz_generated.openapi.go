@@ -790,12 +790,12 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledLB(ref common.ReferenceCallba
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "CompiledLB is one load-balancer this NIC backs: the VIP (v4 or v6) and its service ports.",
+				Description: "CompiledLB is one load-balancer this NIC backs: the LB address (v4 or v6) and its service ports.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
-					"vip": {
+					"ip": {
 						SchemaProps: spec.SchemaProps{
-							Description: "VIP is the load-balancer virtual IP (IPv4 or IPv6).",
+							Description: "LB address is the load-balancer virtual IP (IPv4 or IPv6).",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
@@ -816,7 +816,7 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledLB(ref common.ReferenceCallba
 						},
 					},
 				},
-				Required: []string{"vip"},
+				Required: []string{"ip"},
 			},
 		},
 		Dependencies: []string{
@@ -2618,7 +2618,7 @@ func schema_ectobase_api_net_v1alpha1_LBPool(ref common.ReferenceCallback) commo
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.",
+				Description: "LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"kind": {
@@ -2714,19 +2714,19 @@ func schema_ectobase_api_net_v1alpha1_LBPoolSpec(ref common.ReferenceCallback) c
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "LBPoolSpec is the desired state of an LBPool (a fleet-scoped VIP prefix range).",
+				Description: "LBPoolSpec is the desired state of an LBPool (a fleet-scoped LB address prefix range).",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"v4Prefix": {
 						SchemaProps: spec.SchemaProps{
-							Description: "V4Prefix optionally pins the IPv4 CIDR for this VIP pool.",
+							Description: "V4Prefix optionally pins the IPv4 CIDR for this LB address pool.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
 					},
 					"v6Prefix": {
 						SchemaProps: spec.SchemaProps{
-							Description: "V6Prefix optionally pins the IPv6 CIDR for this VIP pool.",
+							Description: "V6Prefix optionally pins the IPv6 CIDR for this LB address pool.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -2768,7 +2768,7 @@ func schema_ectobase_api_net_v1alpha1_LBPoolStatus(ref common.ReferenceCallback)
 					},
 					"total": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Total is the total number of allocatable VIP addresses.",
+							Description: "Total is the total number of allocatable LB address addresses.",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},
@@ -2909,12 +2909,12 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancerSpec(ref common.ReferenceCallb
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.",
+				Description: "LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.\n\nDeliberately NOT called a \"LB address\". A load-balancer address is 1:N and ingress-only — clients reach it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway address, never to this one. The 1:1, bidirectional \"virtual IP\" that a single interface owns for both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP. Naming both \"LB address\" conflated them once too often.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
-					"vip": {
+					"ip": {
 						SchemaProps: spec.SchemaProps{
-							Description: "VIP is the requested virtual IP. Empty => allocate from PoolRef; set => validate membership in the pool + reserve (bring-your-own).",
+							Description: "IP is the requested load-balancer address. Empty => allocate from PoolRef; set => validate membership in the pool + reserve (bring-your-own).",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
@@ -2922,7 +2922,7 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancerSpec(ref common.ReferenceCallb
 					},
 					"poolRef": {
 						SchemaProps: spec.SchemaProps{
-							Description: "PoolRef selects the LBPool to allocate the VIP from.",
+							Description: "PoolRef selects the LBPool to allocate the IP from.",
 							Default:     map[string]interface{}{},
 							Ref:         ref(netv1alpha1.LocalObjectReference{}.OpenAPIModelName()),
 						},
@@ -2962,7 +2962,7 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancerSpec(ref common.ReferenceCallb
 						},
 					},
 				},
-				Required: []string{"vip", "ports"},
+				Required: []string{"ip", "ports"},
 			},
 		},
 		Dependencies: []string{
@@ -2984,9 +2984,9 @@ func schema_ectobase_api_net_v1alpha1_LoadBalancerStatus(ref common.ReferenceCal
 							Format:      "",
 						},
 					},
-					"allocatedVIP": {
+					"allocatedIP": {
 						SchemaProps: spec.SchemaProps{
-							Description: "AllocatedVIP is the authoritative VIP assigned by the VIP allocator.",
+							Description: "AllocatedIP is the authoritative address assigned by the LB address allocator. Mirrors NetworkInterface.status.allocatedIPs: spec is the request, status is the truth.",
 							Type:        []string{"string"},
 							Format:      "",
 						},

@@ -5,11 +5,11 @@ use aya::maps::{
 };
 use aya::Ebpf;
 use flowplane_common::{
-    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, FwMeta, FwRule, FwRule6, FwRuleKey,
-    IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, InspectEntry, LbBackend, LbKey,
-    LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry,
-    NeighborNatEntry, PortMeta, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue, VipKey,
-    VipKey6,
+    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, FloatingIPKey, FloatingIPKey6, FwMeta,
+    FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue,
+    InspectEntry, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6,
+    NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteLpmData,
+    RouteLpmData6, RouteValue, UnderlayValue,
 };
 
 /// Generate a typed handle over a BPF `HashMap`.
@@ -151,8 +151,8 @@ bpf_hash_map!(
 );
 
 bpf_hash_map!(
-    /// Typed handle over the `VIPS` BPF map.
-    Vips, "VIPS", VipKey, [u8; 4], upsert, remove, get
+    /// Typed handle over the `FLOATING_IPS` BPF map.
+    FloatingIPs, "FLOATING_IPS", FloatingIPKey, [u8; 4], upsert, remove, get
 );
 
 bpf_hash_map!(
@@ -429,7 +429,7 @@ impl Conntrack {
 /// Typed handle over the `NAT_IPS` BPF map ((vni, nat_ip) -> 1u8), marking NAT IP addresses
 /// so the ingress can generate ICMP echo replies without involving the VM.
 pub struct NatIps {
-    map: HashMap<MapData, VipKey, u8>,
+    map: HashMap<MapData, FloatingIPKey, u8>,
 }
 
 impl NatIps {
@@ -440,21 +440,21 @@ impl NatIps {
 
     pub fn set(&mut self, vni: u32, nat_ip: [u8; 4]) -> anyhow::Result<()> {
         self.map
-            .insert(VipKey { vni, ipv4: nat_ip }, 1u8, 0)
+            .insert(FloatingIPKey { vni, ipv4: nat_ip }, 1u8, 0)
             .context("insert nat_ip")
     }
 
     pub fn remove(&mut self, vni: u32, nat_ip: [u8; 4]) -> anyhow::Result<()> {
         self.map
-            .remove(&VipKey { vni, ipv4: nat_ip })
+            .remove(&FloatingIPKey { vni, ipv4: nat_ip })
             .context("remove nat_ip")
     }
 }
 
 /// Typed handle over the `NAT_IPS6` BPF map ((vni, nat_ipv6) -> 1u8). v6 mirror of [`NatIps`],
-/// keyed by [`VipKey6`]; marks NAT66 nat_ips for the ingress NAT-return demux (`is_nat_ip6`).
+/// keyed by [`FloatingIPKey6`]; marks NAT66 nat_ips for the ingress NAT-return demux (`is_nat_ip6`).
 pub struct NatIps6 {
-    map: HashMap<MapData, VipKey6, u8>,
+    map: HashMap<MapData, FloatingIPKey6, u8>,
 }
 
 impl NatIps6 {
@@ -465,13 +465,13 @@ impl NatIps6 {
 
     pub fn set(&mut self, vni: u32, nat_ip: [u8; 16]) -> anyhow::Result<()> {
         self.map
-            .insert(VipKey6 { vni, ipv6: nat_ip }, 1u8, 0)
+            .insert(FloatingIPKey6 { vni, ipv6: nat_ip }, 1u8, 0)
             .context("insert nat_ip6")
     }
 
     pub fn remove(&mut self, vni: u32, nat_ip: [u8; 16]) -> anyhow::Result<()> {
         self.map
-            .remove(&VipKey6 { vni, ipv6: nat_ip })
+            .remove(&FloatingIPKey6 { vni, ipv6: nat_ip })
             .context("remove nat_ip6")
     }
 }

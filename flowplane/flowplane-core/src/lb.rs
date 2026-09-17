@@ -77,10 +77,10 @@ pub fn lb_select_forward_v6<P: Pkt, M: Maps>(
 
 /// ICMPv6-error LB relay select (v6 sibling of [`lb_select_forward_icmp_error`]). If the outer IPv6 at
 /// `ip_off` is an ICMPv6 error (type 1 DestUnreach / 2 PacketTooBig / 3 TimeExceeded / 4 ParamProblem)
-/// whose embedded inner IPv6 (at `icmp_off + 8`) is a TCP/UDP flow SOURCED from an LB VIP, Maglev-select
+/// whose embedded inner IPv6 (at `icmp_off + 8`) is a TCP/UDP flow SOURCED from an LB_IP_CONST, Maglev-select
 /// the backend that owns that flow and return its underlay /128; else None. Mirrors the v4 fn exactly:
-/// the LB key uses the embedded SRC (= the VIP) + embedded SPORT (= the service port); the Maglev slot
-/// is hashed over the SWAPPED embedded tuple, reconstructing the original client->VIP forward-flow hash
+/// the LB key uses the embedded SRC (= the LB_IP_CONST) + embedded SPORT (= the service port); the Maglev slot
+/// is hashed over the SWAPPED embedded tuple, reconstructing the original client->LB address forward-flow hash
 /// so the error (notably the ICMPv6 Packet-Too-Big PMTUD case) lands on the same backend. No extension
 /// headers are assumed on either the outer or embedded IPv6 (matching [`lb_select_forward_v6`]), so all
 /// offsets are constant; the LB key uses the `last4` of the v6 addr (same control-plane convention).
@@ -117,7 +117,7 @@ pub fn lb_select_forward_icmp_error_v6<P: Pkt, M: Maps>(
     if inner_nexthdr != 6 && inner_nexthdr != 17 {
         return None;
     }
-    let inner_src = pkt.read_array::<16>(inner_ip_off + 8)?; // = the VIP
+    let inner_src = pkt.read_array::<16>(inner_ip_off + 8)?; // = the LB address
     let inner_dst = pkt.read_array::<16>(inner_ip_off + 24)?; // = the client
                                                               // LB key uses the last 4 bytes of the IPv6 address (matching the control-plane `last4`).
     let inner_src4: [u8; 4] = [inner_src[12], inner_src[13], inner_src[14], inner_src[15]];
@@ -125,7 +125,7 @@ pub fn lb_select_forward_icmp_error_v6<P: Pkt, M: Maps>(
     // Inner L4 at inner_ip_off + 40 (right after inner IPv6 header; no extension headers assumed).
     let inner_sport = u16::from_be_bytes(pkt.read_array::<2>(inner_ip_off + 40)?); // = service port
     let inner_dport = u16::from_be_bytes(pkt.read_array::<2>(inner_ip_off + 42)?);
-    // LB key: dst = inner_src (VIP), port = inner_sport (service port), proto = inner_nexthdr.
+    // LB key: dst = inner_src (LB_IP_CONST), port = inner_sport (service port), proto = inner_nexthdr.
     let lb = maps.lb_get(&LbKey {
         vni,
         ipv4: inner_src4,
@@ -136,7 +136,7 @@ pub fn lb_select_forward_icmp_error_v6<P: Pkt, M: Maps>(
     if lb.size == 0 {
         return None;
     }
-    // Swapped 5-tuple (client->VIP perspective) reconstructs the original forward-flow hash.
+    // Swapped 5-tuple (client->LB address perspective) reconstructs the original forward-flow hash.
     let slot = hash5(
         &inner_dst4,
         &inner_src4,
@@ -151,10 +151,10 @@ pub fn lb_select_forward_icmp_error_v6<P: Pkt, M: Maps>(
 }
 
 /// ICMP-error LB relay select (v4). If the outer IPv4 at `ip_off` is an ICMP error (type 3/11/12)
-/// whose embedded inner IPv4 (at `outer_l4 + 8`) is a TCP/UDP flow SOURCED from an LB VIP, Maglev-
+/// whose embedded inner IPv4 (at `outer_l4 + 8`) is a TCP/UDP flow SOURCED from an LB_IP_CONST, Maglev-
 /// select the backend that owns that flow and return its underlay /128; else None. The LB key uses
-/// the embedded SRC (= the VIP) + embedded SPORT (= the service port); the Maglev slot is hashed over
-/// the SWAPPED embedded tuple, reconstructing the original client->VIP forward-flow hash so the error
+/// the embedded SRC (= the LB_IP_CONST) + embedded SPORT (= the service port); the Maglev slot is hashed over
+/// the SWAPPED embedded tuple, reconstructing the original client->LB address forward-flow hash so the error
 /// lands on the same backend. Faithful port of the pre-P2 eBPF `lb::lb_select_forward_icmp_error`
 /// (recovered from 7a9a962). IHL==5 required for both outer + embedded IPv4 to keep offsets constant.
 ///
@@ -199,12 +199,12 @@ pub fn lb_select_forward_icmp_error<P: Pkt, M: Maps>(
     if inner_proto != 6 && inner_proto != 17 {
         return None;
     }
-    let inner_src = pkt.read_array::<4>(inner_ip_off + 12)?; // = the VIP
+    let inner_src = pkt.read_array::<4>(inner_ip_off + 12)?; // = the LB address
     let inner_dst = pkt.read_array::<4>(inner_ip_off + 16)?; // = the client
     let inner_l4_off = inner_ip_off + 20;
     let inner_sport = u16::from_be_bytes(pkt.read_array::<2>(inner_l4_off)?); // = service port
     let inner_dport = u16::from_be_bytes(pkt.read_array::<2>(inner_l4_off + 2)?);
-    // LB key: dst = inner_src (VIP), port = inner_sport (service port), proto = inner_proto.
+    // LB key: dst = inner_src (LB_IP_CONST), port = inner_sport (service port), proto = inner_proto.
     let lb = maps.lb_get(&LbKey {
         vni,
         ipv4: inner_src,
@@ -215,7 +215,7 @@ pub fn lb_select_forward_icmp_error<P: Pkt, M: Maps>(
     if lb.size == 0 {
         return None;
     }
-    // Swapped 5-tuple (client->VIP perspective) reconstructs the original forward-flow hash.
+    // Swapped 5-tuple (client->LB address perspective) reconstructs the original forward-flow hash.
     let slot = hash5(
         &inner_dst,
         &inner_src,

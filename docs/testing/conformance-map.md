@@ -8,6 +8,12 @@ This document maps every applicable dpservice Python conformance test to the nam
 native replacement that superseded it. It is the durable record of what the (now removed)
 vendored Python suite once covered and where each behaviour is asserted today.
 
+!!! note "The `test_*_vip_*` names in the left column are UPSTREAM and stay verbatim"
+    ectobase has no object called a "VIP" — a load balancer has an `ip`, and the 1:1
+    bidirectional address is a `FloatingIP` (see [Load balancing](../features/loadbalancer.md)).
+    The left column names dpservice's OWN tests, though, so those identifiers are quoted exactly
+    as they exist upstream. Renaming them here would break the mapping this page exists to record.
+
 Each concern is asserted at the level that can observe it:
 
 - Sim (flowplane-sim) — byte-level datapath correctness; runs in-process with
@@ -43,13 +49,13 @@ can only prove the program fails safe without a tunnel key.
 | Python test | Asserts | Native destination |
 |---|---|---|
 | `test_network_lb_external_icmp_echo` | Maglev selection; inbound packet delivered | `lb_select_test::lb_select_returns_maglev_backend`; `ns_scenario_test::external_to_guest_encap_decap_fw_allow_ct` (sim) |
-| `test_external_lb_relay` (IPv4) | LB relay to a remote backend (outer dst == backend UL) | `lb_scenario_test::ew_lb_reforward_delivered` + `lb_scenario_test::ns_lb_delivered_with_vip_allow` (sim Fabric) |
-| `test_external_lb_icmp_error_relay` | ICMP error (type 3/code 4) relayed through LB; outer dst == backend UL | `lb_scenario_test::ns_lb_delivered_with_vip_allow` (covers relay path; ICMP-error inner-type-matching is an eBPF detail anchored in `anchor_lb`) |
-| `test_network_lb_external_icmpv6_echo` | IPv6 WAN VIP → Maglev select → encap | `lb_scenario_test::ns_lb_v6_wan_rx_dsr_encode` (sim); `lb_select_test::lb_select_v6_returns_maglev_backend` |
+| `test_external_lb_relay` (IPv4) | LB relay to a remote backend (outer dst == backend UL) | `lb_scenario_test::ew_lb_reforward_delivered` + `lb_scenario_test::ns_lb_delivered_with_lb_ip_allow` (sim Fabric) |
+| `test_external_lb_icmp_error_relay` | ICMP error (type 3/code 4) relayed through LB; outer dst == backend UL | `lb_scenario_test::ns_lb_delivered_with_lb_ip_allow` (covers relay path; ICMP-error inner-type-matching is an eBPF detail anchored in `anchor_lb`) |
+| `test_network_lb_external_icmpv6_echo` | IPv6 WAN LB address → Maglev select → encap | `lb_scenario_test::ns_lb_v6_wan_rx_dsr_encode` (sim); `lb_select_test::lb_select_v6_returns_maglev_backend` |
 | `test_external_lb_relay_ipv6` | IPv6 LB relay outer dst == backend UL | `lb_scenario_test::ns_lb_v6_wan_rx_dsr_encode` (sim) |
-| `test_nat_to_lb_nat` | NAT VM → LB VM on same VNI; VIP+NAT co-existence | `lb_scenario_test::ew_lb_reforward_delivered` + `nat_test::snat_distinct_sources_map_to_distinct_blocks` (sim) |
-| `test_vip_nat_to_lb_on_another_vni` | VIP/NAT cross-VNI to LB; E/W reforward | `lb_scenario_test::ew_lb_reforward_delivered` (sim Fabric); `vni_test::vni_isolation_*` |
-| `test_pf_to_vf_lb_tcp` | LB inbound → backend tap delivery (IPv4); firewall must permit | `lb_scenario_test::ns_lb_delivered_with_vip_allow` + `ns_scenario_test::external_to_guest_firewall_drop_on_unopened_port` (sim) |
+| `test_nat_to_lb_nat` | NAT VM → LB VM on same VNI; LB address+NAT co-existence | `lb_scenario_test::ew_lb_reforward_delivered` + `nat_test::snat_distinct_sources_map_to_distinct_blocks` (sim) |
+| `test_vip_nat_to_lb_on_another_vni` | LB address/NAT cross-VNI to LB; E/W reforward | `lb_scenario_test::ew_lb_reforward_delivered` (sim Fabric); `vni_test::vni_isolation_*` |
+| `test_pf_to_vf_lb_tcp` | LB inbound → backend tap delivery (IPv4); firewall must permit | `lb_scenario_test::ns_lb_delivered_with_lb_ip_allow` + `ns_scenario_test::external_to_guest_firewall_drop_on_unopened_port` (sim) |
 | `test_pf_to_vf_lb_ipv6_tcp` | LB inbound → backend tap delivery (IPv6) | `lb_scenario_test::ns_lb_v6_wan_rx_dsr_encode` (edge sim); `anchor_lb::uplink_rx_lb_deliver_bytecode_fails_safe_without_tunnel_key` (byte-parity) |
 
 ---
@@ -74,16 +80,16 @@ can only prove the program fails safe without a tunnel key.
 | `test_nat_default_route` | SNAT applied on external route, NOT on internal route prefix | `nat_test::snat_rewrites_src_ip_and_port_with_valid_checksums` + `nat_test::snat_no_op_for_internal_route` (sim) |
 | `test_network_nat_external_icmp_echo` | SNAT egress + DNAT return path (ICMP echo) | `nat_test::snat_rewrites_src_ip_and_port_with_valid_checksums`; DNAT return: `nat_test::dnat_return_tcp_rewrites_dst_ip_and_port` + `anchor_dnat::dnat_return_bytecode_fails_safe_without_tunnel_key` |
 | `test_network_nat_pkt_relay` | Neighbor-NAT relay; `getnat`/`listneighnats` consistent | Relay path: `lb_scenario_test::ew_lb_reforward_delivered` (sim); API consistency is `test_zzz_grpc` scope (dropped) |
-| `test_network_nat_foreign_ip` | Packet to foreign IP (not NAT VIP) dropped | `nat_test::snat_no_op_for_internal_route` covers route-miss semantics; deny-by-default: `firewall_test::deny_by_default_when_no_rules` |
-| `test_network_nat_vip_co_existence_on_same_vm` | NAT + VIP on same VM can co-exist | Control-plane only; datapath tested via `nat_test::snat_distinct_sources_map_to_distinct_blocks` (block isolation) |
-| `test_network_nat_to_vip_on_another_vni` | NAT VM → VIP VM cross-VNI; SNAT egress + DNAT return | `nat_test::snat_rewrites_src_ip_and_port_with_valid_checksums` + `nat_test::dnat_return_tcp_rewrites_dst_ip_and_port` + `vni_test::vni_isolation_*` (sim) |
+| `test_network_nat_foreign_ip` | Packet to foreign IP (not NAT LB address) dropped | `nat_test::snat_no_op_for_internal_route` covers route-miss semantics; deny-by-default: `firewall_test::deny_by_default_when_no_rules` |
+| `test_network_nat_vip_co_existence_on_same_vm` | NAT + LB address on same VM can co-exist | Control-plane only; datapath tested via `nat_test::snat_distinct_sources_map_to_distinct_blocks` (block isolation) |
+| `test_network_nat_to_vip_on_another_vni` | NAT VM → LB address VM cross-VNI; SNAT egress + DNAT return | `nat_test::snat_rewrites_src_ip_and_port_with_valid_checksums` + `nat_test::dnat_return_tcp_rewrites_dst_ip_and_port` + `vni_test::vni_isolation_*` (sim) |
 | `test_vf_to_pf_network_nat_icmp` | NAT ICMP egress + return; ID preserved | `nat_test::dnat_return_tcp_rewrites_dst_ip_and_port` (covers DNAT return byte-rewrite; ICMP ID handled by same `ct_apply` path anchored in `anchor_dnat`) |
 | `test_vf_to_pf_network_nat_icmp_identifier_check` | Two concurrent ICMP streams get distinct IDs | `nat_test::snat_distinct_sources_map_to_distinct_blocks` (distinct port/ID per source) |
 | `test_vf_to_pf_network_nat_icmpv6` | NAT64 ICMP echo egress + return | `nat_test::dnat_return_tcp_rewrites_dst_ip_and_port` / `nat_test::dnat_return_udp_rewrites_dst_ip_and_port` (same `ct_apply`); NAT64 header translation anchored in `anchor_dnat` golden |
 | `test_vf_to_pf_network_nat_max_port_tcp` | NAT port wraps at max; second flow gets distinct port | `nat_test::snat_distinct_sources_map_to_distinct_blocks` (block-boundary arithmetic) |
 | `test_vf_to_pf_network_nat_tcp` | NAT TCP SNAT + return | `nat_test::snat_rewrites_src_ip_and_port_with_valid_checksums` + `nat_test::dnat_return_tcp_rewrites_dst_ip_and_port` (sim); `anchor_dnat::dnat_return_bytecode_fails_safe_without_tunnel_key` |
 | `test_vf_to_pf_network_nat_tcp_with_ipv6` | NAT64 TCP egress | Same as above for IPv6 inner path |
-| `test_vf_to_pf_vip_snat` | VIP SNAT on egress (src rewritten to VIP) | `nat_test::snat_rewrites_src_ip_and_port_with_valid_checksums` (same `snat_egress` codepath; `nat_ip` == VIP) |
+| `test_vf_to_pf_vip_snat` | LB address SNAT on egress (src rewritten to LB address) | `nat_test::snat_rewrites_src_ip_and_port_with_valid_checksums` (same `snat_egress` codepath; `nat_ip` == LB address) |
 | `test_vm_nat_async_tcp_icmperr` | ICMP error (type 3) returned through NAT; inner IP not NATted | `nat_test::dnat_return_tcp_rewrites_dst_ip_and_port` (DNAT return); ICMP-error inner-header handling covered by `anchor_dnat` golden bytes |
 | `test_vf_to_pf_firewall_tcp_block` | Egress firewall blocks packet on non-matching port | `firewall_test::ingress_allow_rule_matches` + `firewall_test::deny_by_default_when_no_rules` (sim); `ns_scenario_test::external_to_guest_firewall_drop_on_unopened_port` |
 | `test_vf_to_pf_firewall_tcp_allow` | Egress firewall allows packet on matching port | `firewall_test::ingress_allow_rule_matches` (sim); `anchor_guest_tx::guest_tx_encap_redirect_inner_unchanged_matches_native_sim` |
@@ -124,7 +130,7 @@ can only prove the program fails safe without a tunnel key.
 | `test_vni_existence` | VNI in-use / not-in-use via gRPC `getvni` | DROPPED — pure control-plane API surface; no datapath behaviour; covered by `test_zzz_grpc::test_grpc_vni` (also dropped, see below) |
 | `test_vni_reset` | `resetvni` clears routes in that VNI; other VNIs unaffected | Datapath isolation: `vni_test::vni_isolation_route_miss_for_wrong_vni_returns_pass` + `vni_test::vni_isolation_same_dst_different_vni_yields_different_actions` (sim); API: dropped |
 | `test_vni_neighnats` | neighbor NATs survive `delinterface`; explicit `delneighnat` required | Control-plane lifecycle only; no datapath coverage needed beyond NAT relay path already in `nat_test` and `lb_scenario_test` |
-| `test_vni_dnat_reset` | VNI reset purges DNAT stale entries; subsequent VIP unaffected | Control-plane lifecycle; datapath DNAT correctness covered by `nat_test::dnat_return_*` |
+| `test_vni_dnat_reset` | VNI reset purges DNAT stale entries; subsequent LB address unaffected | Control-plane lifecycle; datapath DNAT correctness covered by `nat_test::dnat_return_*` |
 
 ---
 
@@ -133,10 +139,10 @@ can only prove the program fails safe without a tunnel key.
 | Python test | Asserts | Native destination |
 |---|---|---|
 | `test_vf_to_vf_tcp` | Same-node VM-to-VM TCP delivery | `ns_scenario_test::external_to_guest_encap_decap_fw_allow_ct` covers the ingress-firewall + delivery path; the same-node shortcut is the `INTERFACES[(vni, dst)]` `is_local` branch in `flowplane_core::egress::deliver` |
-| `test_vf_to_vf_vip_dnat` | VM→VIP (on same node) DNAT'd to backend; round-trip | `nat_test::dnat_return_tcp_rewrites_dst_ip_and_port` + `lb_scenario_test::ew_lb_local_deliver_no_reforward` (sim) |
+| `test_vf_to_vf_vip_dnat` | VM→LB address (on same node) DNAT'd to backend; round-trip | `nat_test::dnat_return_tcp_rewrites_dst_ip_and_port` + `lb_scenario_test::ew_lb_local_deliver_no_reforward` (sim) |
 | `test1_vf_to_vf_firewall_tcp` | Ingress firewall ALLOW on matching src prefix | `firewall_test::ingress_allow_rule_matches` (sim) |
 | `test2_vf_to_vf_firewall_tcp` | Egress firewall DROP on non-matching src prefix | `firewall_test::ingress_allow_rule_matches` + `firewall_test::deny_by_default_when_no_rules` (sim); `ns_scenario_test::external_to_guest_firewall_drop_on_unopened_port` |
-| `test3_vf_to_vf_ingress_firewall_tcp` | Ingress firewall on destination VM DROP for non-matching src | `firewall_test::deny_by_default_when_no_rules` (sim); `lb_scenario_test::ns_lb_dropped_when_policy_misses_vip` + `lb_scenario_test::ew_lb_anycast_dropped_without_policy` |
+| `test3_vf_to_vf_ingress_firewall_tcp` | Ingress firewall on destination VM DROP for non-matching src | `firewall_test::deny_by_default_when_no_rules` (sim); `lb_scenario_test::ns_lb_dropped_when_policy_misses_lb_ip` + `lb_scenario_test::ew_lb_anycast_dropped_without_policy` |
 | `test_vf_to_vf_icmp` | Same-node ICMP echo round-trip (twice); `addfwallrule` proto=icmp | `firewall_test::ingress_allow_rule_matches` (proto=icmp is same `fw_eval_dir` codepath) |
 | `test_vf_to_vf_icmpv6` | Same-node ICMPv6 echo round-trip | Same as above; IPv6 ICMP checksum verified by `arp_nd_test` path |
 | `test_vf_to_vf_ipv6_tcp` | Same-node IPv6 TCP delivery | `firewall_test::ingress_allow_rule_matches` + encap/decap via `guest_tx_v6_test` |
@@ -204,7 +210,7 @@ not applicable to the ectobase architecture.
 | `test_pf_to_vf.py` → PF/VF SR-IOV tests | SR-IOV Physical-Function → Virtual-Function representor delivery | ectobase uses veth/tap ports, not SR-IOV VFs; the PF/VF representor forwarding model is dpservice-specific. The LB-delivery sub-tests are mapped above. |
 | `test_vf_to_pf.py` → SR-IOV-specific | VF → PF (internet egress via SR-IOV NIC representors) | Same as above. The NAT/firewall sub-tests in this file ARE applicable and mapped to native destinations in the NAT table above. |
 | `test_telemetry.py` | DPDK graph-node counters, DPDK heap stats, Prometheus exporter, hash-table saturation | Completely dpservice/DPDK internal; flowplane uses eBPF maps and tc/XDP, no DPDK graph. Not applicable. |
-| `test_zzz_grpc.py` | dpservice gRPC API surface (CRUD for interface/route/VIP/NAT/LB/prefix/fwallrule objects, error codes, list pagination, HA external-underlay allocation) | The equivalent API surface is the `DataplaneNode` gRPC in flowplane; its own unit/integration tests cover CRUD correctness. The dpservice error-code table (`DPSERVICE_ERROR_CODES.txt`) is not applicable. |
+| `test_zzz_grpc.py` | dpservice gRPC API surface (CRUD for interface/route/LB address/NAT/LB/prefix/fwallrule objects, error codes, list pagination, HA external-underlay allocation) | The equivalent API surface is the `DataplaneNode` gRPC in flowplane; its own unit/integration tests cover CRUD correctness. The dpservice error-code table (`DPSERVICE_ERROR_CODES.txt`) is not applicable. |
 | `test_arp.py::test_l2_addr_once` | dpservice representor MAC-learning (MAC auto-discovered from VF representor, then updated by DHCP) | ectobase assigns `guest_mac` statically via `PortMeta`; there is no MAC-learning path. |
 | `test_vni.py::test_vni_existence` / `test_vni_neighnats` / `test_vni_dnat_reset` | dpservice VNI lifecycle API (in-use tracking, async neighbornat cleanup, DNAT entry purge on VNI reset) | Pure control-plane lifecycle; no datapath behaviour observable at the sim or byte level. |
 | `xtratest_ha.py` (HA bulk sync, MAC sync, virtsvc HA) | dpservice active/backup HA with table-dump synchronisation protocol | ectobase HA model is journal-based restart, not two-instance sync. See Deferred section above. |

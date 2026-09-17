@@ -130,7 +130,7 @@ impl Control {
         let ifaces6 = Interfaces6::open(&mut ebpf)?;
         let routes = Routes::open(&mut ebpf)?;
         let routes6 = Routes6::open(&mut ebpf)?;
-        let vips = Vips::open(&mut ebpf)?;
+        let floating_ips = FloatingIPs::open(&mut ebpf)?;
         let lb = Lb::open(&mut ebpf)?;
         let maglev = Maglev::open(&mut ebpf)?;
         let nat = Nat::open(&mut ebpf)?;
@@ -178,7 +178,7 @@ impl Control {
             ports,
             ifaces,
             ifaces6,
-            vips,
+            floating_ips,
             meter,
             dhcp_config,
             dhcp_meta,

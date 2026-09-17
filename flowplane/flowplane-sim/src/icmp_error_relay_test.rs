@@ -1,6 +1,6 @@
-//! F3 — ICMP-error LB relay oracle coverage (v4). An ICMP error (type 3/11/12) destined to a VIP,
-//! whose embedded inner is a TCP/UDP flow SOURCED from that VIP, is relayed (bytes unchanged) to the
-//! Maglev backend that owns the ORIGINAL client->VIP flow. Faithful rebuild of the pre-P2 eBPF
+//! F3 — ICMP-error LB relay oracle coverage (v4). An ICMP error (type 3/11/12) destined to an LB_IP_CONST,
+//! whose embedded inner is a TCP/UDP flow SOURCED from that LB_IP_CONST, is relayed (bytes unchanged) to the
+//! Maglev backend that owns the ORIGINAL client->LB address flow. Faithful rebuild of the pre-P2 eBPF
 //! `lb::lb_select_forward_icmp_error` (recovered from 7a9a962), now in flowplane_core + sim-tested.
 
 use flowplane_common::{FwMeta, FwRule, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey};
@@ -17,7 +17,7 @@ use crate::SimNode;
 // firewall check regardless.
 
 const VNI: u32 = 100;
-const VIP: [u8; 4] = [203, 0, 113, 50];
+const LB_IP_CONST: [u8; 4] = [203, 0, 113, 50];
 const CLIENT: [u8; 4] = [198, 51, 100, 9];
 const ROUTER: [u8; 4] = [192, 0, 2, 1]; // the node that emitted the ICMP error (outer src)
 const SERVICE_PORT: u16 = 443;
@@ -51,13 +51,13 @@ fn local() -> Local {
     }
 }
 
-/// A node with a 2-backend WAN LB service for VIP:SERVICE_PORT (both backends remote by default).
+/// A node with a 2-backend WAN LB service for IP:SERVICE_PORT (both backends remote by default).
 fn edge_node_two_backends() -> SimNode {
     let mut n = SimNode::with_local(local());
     n.maps.lb.insert(
         LbKey {
             vni: VNI,
-            ipv4: VIP,
+            ipv4: LB_IP_CONST,
             port: SERVICE_PORT,
             proto: 6,
             _pad: 0,
@@ -94,8 +94,8 @@ fn edge_node_two_backends() -> SimNode {
 
 /// Build `[Eth][outer IPv4 proto=ICMP][ICMP error(8)][embedded IPv4][embedded L4(8)]`, hand-assembled
 /// with correct outer + embedded IPv4 header checksums. `err_type` = ICMP type (3/11/12). Embedded
-/// inner = the ORIGINAL VIP->CLIENT packet (src=VIP:SERVICE_PORT, dst=CLIENT:CLIENT_PORT).
-fn eth_icmp_error_embedding_vip_flow(err_type: u8, inner_proto: u8) -> Vec<u8> {
+/// inner = the ORIGINAL LB address->CLIENT packet (src=IP:SERVICE_PORT, dst=CLIENT:CLIENT_PORT).
+fn eth_icmp_error_embedding_lb_flow(err_type: u8, inner_proto: u8) -> Vec<u8> {
     fn ipv4_hdr(src: [u8; 4], dst: [u8; 4], proto: u8, total_len: u16) -> [u8; 20] {
         let mut h = [0u8; 20];
         h[0] = 0x45; // v4, IHL=5
@@ -115,33 +115,33 @@ fn eth_icmp_error_embedding_vip_flow(err_type: u8, inner_proto: u8) -> Vec<u8> {
         h[10..12].copy_from_slice(&csum.to_be_bytes());
         h
     }
-    // embedded inner: VIP:SERVICE_PORT -> CLIENT:CLIENT_PORT, first 8 L4 bytes suffice.
+    // embedded inner: IP:SERVICE_PORT -> CLIENT:CLIENT_PORT, first 8 L4 bytes suffice.
     let mut embedded = Vec::new();
-    embedded.extend_from_slice(&ipv4_hdr(VIP, CLIENT, inner_proto, 28)); // 20 IP + 8 L4
+    embedded.extend_from_slice(&ipv4_hdr(LB_IP_CONST, CLIENT, inner_proto, 28)); // 20 IP + 8 L4
     embedded.extend_from_slice(&SERVICE_PORT.to_be_bytes()); // sport
     embedded.extend_from_slice(&CLIENT_PORT.to_be_bytes()); // dport
     embedded.extend_from_slice(&[0u8; 4]); // rest of the (truncated) L4 header
                                            // outer ICMP error: type, code=0, csum(unchecked here), 4 unused bytes, then embedded.
     let mut icmp = vec![err_type, 0, 0, 0, 0, 0, 0, 0];
     icmp.extend_from_slice(&embedded);
-    // outer IPv4: ROUTER -> VIP, proto=ICMP(1).
+    // outer IPv4: ROUTER -> LB_IP_CONST, proto=ICMP(1).
     let outer_total = (20 + icmp.len()) as u16;
     let mut frame = vec![
         0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x08, 0x00,
     ];
-    frame.extend_from_slice(&ipv4_hdr(ROUTER, VIP, 1, outer_total));
+    frame.extend_from_slice(&ipv4_hdr(ROUTER, LB_IP_CONST, 1, outer_total));
     frame.extend_from_slice(&icmp);
     frame
 }
 
 #[test]
-fn icmp_error_to_vip_relays_to_backend() {
-    // size-1 table: any embedded VIP flow relays to the single backend, delivered locally.
+fn icmp_error_to_lb_ip_relays_to_backend() {
+    // size-1 table: any embedded LB address flow relays to the single backend, delivered locally.
     let mut n = SimNode::with_local(local());
     n.maps.lb.insert(
         LbKey {
             vni: VNI,
-            ipv4: VIP,
+            ipv4: LB_IP_CONST,
             port: SERVICE_PORT,
             proto: 6,
             _pad: 0,
@@ -179,14 +179,14 @@ fn icmp_error_to_vip_relays_to_backend() {
         },
     );
 
-    let frame = eth_icmp_error_embedding_vip_flow(3, 6); // dest-unreach, embedded TCP
+    let frame = eth_icmp_error_embedding_lb_flow(3, 6); // dest-unreach, embedded TCP
     let orig = frame.clone();
     let out = n.uplink(&frame, VNI, &local());
 
     assert_eq!(
         out.action,
         Action::Redirect(BACKEND_A_TAP),
-        "ICMP error to a VIP must be relayed to the Maglev backend (local delivery)"
+        "ICMP error to an LB address must be relayed to the Maglev backend (local delivery)"
     );
     // The relay forwards the ICMP-error frame's IP payload unchanged (only the inner Ethernet header,
     // bytes 0..14, is rewritten by decap_and_rewrite; the IP payload at 14.. is intact).
@@ -237,7 +237,7 @@ fn local_backend_node(inner_proto: u8, table_id: u32) -> SimNode {
     n.maps.lb.insert(
         LbKey {
             vni: VNI,
-            ipv4: VIP,
+            ipv4: LB_IP_CONST,
             port: SERVICE_PORT,
             proto: inner_proto,
             _pad: 0,
@@ -277,7 +277,7 @@ fn icmp_error_relayed_through_realistic_backend_firewall() {
     // relay arm now bypasses step 2, so the error reaches the backend that owns the embedded flow.
     let mut n = local_backend_node(6, 9);
     allow_ingress_tcp_service_port(&mut n, BACKEND_A_TAP);
-    let frame = eth_icmp_error_embedding_vip_flow(3, 6); // dest-unreach, embedded TCP
+    let frame = eth_icmp_error_embedding_lb_flow(3, 6); // dest-unreach, embedded TCP
     assert_eq!(
         n.uplink(&frame, VNI, &local()).action,
         Action::Redirect(BACKEND_A_TAP),
@@ -289,7 +289,7 @@ fn icmp_error_relayed_through_realistic_backend_firewall() {
 fn icmp_error_selects_on_embedded_inner_not_outer() {
     // Prove the relay hashes the EMBEDDED flow. 2-backend table, both remote -> observe the reforward
     // target (TunnelEncap.remote). Determinism: same embedded flow -> same backend every build.
-    let frame = eth_icmp_error_embedding_vip_flow(11, 6); // time-exceeded, embedded TCP
+    let frame = eth_icmp_error_embedding_lb_flow(11, 6); // time-exceeded, embedded TCP
     let out = edge_node_two_backends().uplink(&frame, VNI, &local());
 
     let remote = out
@@ -309,16 +309,16 @@ fn icmp_error_selects_on_embedded_inner_not_outer() {
 }
 
 #[test]
-fn icmp_error_embedded_src_not_a_vip_is_not_relayed() {
+fn icmp_error_embedded_src_not_an_lb_ip_is_not_relayed() {
     // No LB service for the embedded src -> not relayed -> normal path (Drop: no local iface/not edge).
     let mut n = edge_node_two_backends();
     n.maps.lb.clear();
-    let frame = eth_icmp_error_embedding_vip_flow(3, 6);
+    let frame = eth_icmp_error_embedding_lb_flow(3, 6);
     let out = n.uplink(&frame, VNI, &local());
     assert_eq!(
         out.action,
         Action::Drop,
-        "no VIP match -> falls through to the base path (Drop)"
+        "no LB address match -> falls through to the base path (Drop)"
     );
 }
 
@@ -329,7 +329,7 @@ fn icmp_error_embedded_udp_relayed_but_icmp_embedded_not() {
     relayed.maps.lb.insert(
         LbKey {
             vni: VNI,
-            ipv4: VIP,
+            ipv4: LB_IP_CONST,
             port: SERVICE_PORT,
             proto: 17,
             _pad: 0,
@@ -340,7 +340,7 @@ fn icmp_error_embedded_udp_relayed_but_icmp_embedded_not() {
         },
     );
     // Self-select (LOCAL_UL == this node's own `local()` underlay) — same shape as
-    // `icmp_error_to_vip_relays_to_backend`.
+    // `icmp_error_to_lb_ip_relays_to_backend`.
     relayed.maps.maglev.insert(
         MaglevKey {
             table_id: 5,
@@ -366,7 +366,7 @@ fn icmp_error_embedded_udp_relayed_but_icmp_embedded_not() {
             _pad: [0; 1],
         },
     );
-    let udp_frame = eth_icmp_error_embedding_vip_flow(3, 17);
+    let udp_frame = eth_icmp_error_embedding_lb_flow(3, 17);
     assert_eq!(
         relayed.uplink(&udp_frame, VNI, &local()).action,
         Action::Redirect(BACKEND_A_TAP),
@@ -374,7 +374,7 @@ fn icmp_error_embedded_udp_relayed_but_icmp_embedded_not() {
     );
 
     let mut n = edge_node_two_backends();
-    let icmp_inner = eth_icmp_error_embedding_vip_flow(3, 1);
+    let icmp_inner = eth_icmp_error_embedding_lb_flow(3, 1);
     assert_eq!(
         n.uplink(&icmp_inner, VNI, &local()).action,
         Action::Drop,

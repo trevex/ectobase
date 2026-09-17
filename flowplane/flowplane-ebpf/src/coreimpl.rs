@@ -1,8 +1,8 @@
 use aya_ebpf::{bindings::bpf_adj_room_mode::BPF_ADJ_ROOM_MAC, programs::TcContext};
 use flowplane_common::{
-    CtEntry, CtKey, DhcpConfig, DhcpMeta, DsrVip, FwMeta, FwRule, FwRuleKey, IfaceKey, IfaceKey6,
-    IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatValue,
-    PortMeta, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue, VipKey,
+    CtEntry, CtKey, DhcpConfig, DhcpMeta, DsrLbIP, FloatingIPKey, FwMeta, FwRule, FwRuleKey,
+    IfaceKey, IfaceKey6, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState,
+    NatKey, NatValue, PortMeta, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue,
 };
 use flowplane_core::maps::Maps;
 use flowplane_core::pkt::Pkt;
@@ -53,19 +53,19 @@ impl Maps for GlobalMaps {
         let _ = crate::maps::CONNTRACK6.insert(&key, &entry, 0);
     }
     #[inline(always)]
-    fn dsr_get(&self, key: &CtKey) -> Option<DsrVip> {
+    fn dsr_get(&self, key: &CtKey) -> Option<DsrLbIP> {
         unsafe { crate::maps::DSR.get(key).copied() }
     }
     #[inline(always)]
-    fn dsr_insert(&mut self, key: CtKey, v: DsrVip) {
+    fn dsr_insert(&mut self, key: CtKey, v: DsrLbIP) {
         let _ = crate::maps::DSR.insert(&key, &v, 0);
     }
     #[inline(always)]
-    fn dsr6_get(&self, key: &flowplane_common::CtKey6) -> Option<DsrVip> {
+    fn dsr6_get(&self, key: &flowplane_common::CtKey6) -> Option<DsrLbIP> {
         unsafe { crate::maps::DSR6.get(key).copied() }
     }
     #[inline(always)]
-    fn dsr6_insert(&mut self, key: flowplane_common::CtKey6, v: DsrVip) {
+    fn dsr6_insert(&mut self, key: flowplane_common::CtKey6, v: DsrLbIP) {
         let _ = crate::maps::DSR6.insert(&key, &v, 0);
     }
     #[inline(always)]
@@ -92,7 +92,7 @@ impl Maps for GlobalMaps {
     fn is_nat_ip(&self, vni: u32, ip: &[u8; 4]) -> bool {
         unsafe {
             crate::maps::NAT_IPS
-                .get(&VipKey { vni, ipv4: *ip })
+                .get(&FloatingIPKey { vni, ipv4: *ip })
                 .is_some()
         }
     }
@@ -105,7 +105,7 @@ impl Maps for GlobalMaps {
     fn is_nat_ip6(&self, vni: u32, ip: &[u8; 16]) -> bool {
         unsafe {
             crate::maps::NAT_IPS6
-                .get(&flowplane_common::VipKey6 { vni, ipv6: *ip })
+                .get(&flowplane_common::FloatingIPKey6 { vni, ipv6: *ip })
                 .is_some()
         }
     }
@@ -126,8 +126,12 @@ impl Maps for GlobalMaps {
         let _ = crate::maps::NAT_CT6.insert(&key, &entry, 0);
     }
     #[inline(always)]
-    fn vip_get(&self, vni: u32, v: &[u8; 4]) -> Option<[u8; 4]> {
-        unsafe { crate::maps::VIPS.get(&VipKey { vni, ipv4: *v }).copied() }
+    fn floating_ip_get(&self, vni: u32, v: &[u8; 4]) -> Option<[u8; 4]> {
+        unsafe {
+            crate::maps::FLOATING_IPS
+                .get(&FloatingIPKey { vni, ipv4: *v })
+                .copied()
+        }
     }
     #[inline(always)]
     fn route4_get(&self, vni: u32, dst: &[u8; 4]) -> Option<RouteValue> {

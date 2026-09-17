@@ -448,9 +448,9 @@ khub get vpcpeering        # both -> Ready once the pair is mutual
 
 ## North-South: egress & load balancing
 
-Giving a workload internet egress (`NATGateway` + `FloatingIP`) or a public VIP
+Giving a workload internet egress (`NATGateway` + `FloatingIP`) or a public LB address
 (`LoadBalancer`) is authored the same way: a CRD on the dispatch that the compiler
-folds into the workload's `CompiledNIC`. Under IPAM a `LoadBalancer` draws its VIP
+folds into the workload's `CompiledNIC`. Under IPAM a `LoadBalancer` draws its LB address
 from an `LBPool` (as NICs draw from a `Subnet`); the
 [IPAM walkthrough](ipam-walkthrough.md) covers the LoadBalancer + NAT path end-to-end:
 
@@ -464,11 +464,11 @@ spec:
 ```
 
 !!! note "The N-S path runs from intent alone"
-    `khub apply -f loadbalancer.yaml` and a WAN client reaches the VIP, with nobody calling the
+    `khub apply -f loadbalancer.yaml` and a WAN client reaches the LB address, with nobody calling the
     dataplane gRPC by hand. The chain: the compiler folds `LoadBalancer`/`NATGateway` into
-    `CompiledNIC`; the backend node's agent announces an `LB_VIP` record on the route bus carrying
-    the VIP, its service ports, and the backend's identity; and an agent running **on each edge**
-    turns that into `AddLbVip` + `AddLbBackend` (`mesh/agent/public.go`).
+    `CompiledNIC`; the backend node's agent announces an `LB_IP` record on the route bus carrying
+    the LB address, its service ports, and the backend's identity; and an agent running **on each edge**
+    turns that into `AddLoadBalancer` + `AddLbBackend` (`mesh/agent/public.go`).
 
     Each lab edge runs `mesh-agent-edge{1,2}` in its VyOS netns
     (`test/lab/templates/fabric.clab.yml.tmpl`), sharing the flowplane sidecar's dataplane socket
@@ -478,8 +478,8 @@ spec:
     named `edge`. See [North-South WAN edge](../features/ns-edge.md#running-an-agent-on-an-edge).
 
     `TestLbFromIntentReachesTheWan` (`test/lab/livetest/lbintent_test.go`) proves it end to end: it
-    applies a `LoadBalancer` plus a `Container`, asserts both edges programmed the VIP + Maglev
-    table, and curls the VIP from the WAN client. `TestLbDistributeSmoke{,V4}`
+    applies a `LoadBalancer` plus a `Container`, asserts both edges programmed the LB address + Maglev
+    table, and curls the LB address from the WAN client. `TestLbDistributeSmoke{,V4}`
     (`test/lab/livetest/lb_test.go`) and `TestNatEgressReturn6`
     (`test/lab/livetest/nategress6_test.go`) keep their hand-programmed form deliberately, as the
     datapath tier: they isolate Maglev/DSR/NAT-return from the control path above them.

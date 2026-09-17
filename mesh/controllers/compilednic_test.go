@@ -227,14 +227,14 @@ func TestCompile_LBSelectorMatch(t *testing.T) {
 			Ports:          []netv1.LoadBalancerPort{{Port: 443, Proto: "TCP"}},
 			TargetSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
 		},
-		Status: netv1.LoadBalancerStatus{State: "Allocated", AllocatedVIP: "203.0.113.50"},
+		Status: netv1.LoadBalancerStatus{State: "Allocated", AllocatedIP: "203.0.113.50"},
 	}
 	c := Compile(nic, nic.Status.VNI, nil, []netv1.LoadBalancer{lb}, nil, nil, Placement{ClusterName: "test"})
 	if len(c.Spec.LB) != 1 {
 		t.Fatalf("want 1 CompiledLB, got %d", len(c.Spec.LB))
 	}
-	if c.Spec.LB[0].VIP != "203.0.113.50" {
-		t.Fatalf("VIP = %q, want 203.0.113.50", c.Spec.LB[0].VIP)
+	if c.Spec.LB[0].IP != "203.0.113.50" {
+		t.Fatalf("LB address = %q, want 203.0.113.50", c.Spec.LB[0].IP)
 	}
 	if len(c.Spec.LB[0].Ports) != 1 || c.Spec.LB[0].Ports[0].Port != 443 || c.Spec.LB[0].Ports[0].Proto != "TCP" {
 		t.Fatalf("ports = %+v, want [{443 TCP}]", c.Spec.LB[0].Ports)
@@ -249,10 +249,10 @@ func TestCompile_LBRefMatch(t *testing.T) {
 			Ports:      []netv1.LoadBalancerPort{{Port: 5432, Proto: "TCP"}},
 			TargetRefs: []netv1.LocalObjectReference{{Name: "db-0"}},
 		},
-		Status: netv1.LoadBalancerStatus{State: "Allocated", AllocatedVIP: "2001:db8::1"},
+		Status: netv1.LoadBalancerStatus{State: "Allocated", AllocatedIP: "2001:db8::1"},
 	}
 	c := Compile(nic, nic.Status.VNI, nil, []netv1.LoadBalancer{lb}, nil, nil, Placement{ClusterName: "test"})
-	if len(c.Spec.LB) != 1 || c.Spec.LB[0].VIP != "2001:db8::1" {
+	if len(c.Spec.LB) != 1 || c.Spec.LB[0].IP != "2001:db8::1" {
 		t.Fatalf("ref match failed: %+v", c.Spec.LB)
 	}
 }
@@ -262,7 +262,7 @@ func TestCompile_LBNoMatch(t *testing.T) {
 	lb := netv1.LoadBalancer{
 		ObjectMeta: metav1.ObjectMeta{Name: "web-lb", Namespace: "default"},
 		Spec: netv1.LoadBalancerSpec{
-			VIP:            "203.0.113.50",
+			IP:             "203.0.113.50",
 			TargetSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
 		},
 	}

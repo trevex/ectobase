@@ -2,11 +2,11 @@
 
 !!! warning "Status: Partial"
     Egress SNAT with the distributed return is validated end-to-end on the lab fabric, as is the
-    internet→VIP ingress path **from intent alone**: applying a `LoadBalancer` programs both edges
-    with no hand-driven gRPC, and a WAN client reaches the VIP on a real Pod backend
+    internet→LB address ingress path **from intent alone**: applying a `LoadBalancer` programs both edges
+    with no hand-driven gRPC, and a WAN client reaches the LB address on a real Pod backend
     (`TestLbFromIntentReachesTheWan`). On real WAN hardware the edge role (anycast underlay,
     BGP announcement) is deployment-gated. Not built here: **convergence gating** — an edge
-    attracting its share of the anycast ECMP before it has programmed its VIPs will blackhole. The
+    attracting its share of the anycast ECMP before it has programmed its LB addresses will blackhole. The
     lever is aggregate-level readiness (withhold the prefix advertisement until the bus session has
     converged) and the protocol already carries the signal, `EndOfRIB`.
 
@@ -25,7 +25,7 @@ internet↔overlay return path:
 
 ```
 uplink_rx  (fabric uplink)  — overlay egress decap, LB local-deliver, NAT return
-wan_rx     (WAN uplink)     — internet → overlay: NAT-return re-encap, VIP ingress
+wan_rx     (WAN uplink)     — internet → overlay: NAT-return re-encap, LB address ingress
 ```
 
 An edge is started with a `--wan-uplink` and a unique control-plane loopback (`--edge-loopback`
@@ -104,7 +104,7 @@ flowchart LR
 An edge is a **router, not a Kubernetes node** — the same role it has in ironcore's dpservice. It
 runs no pool chart, has no kubelet, and joins no cluster. But it still needs a mesh agent, because
 everything above rides the route bus: without one, an edge announces no identity and no egress
-defaults, and every `LB_VIP` record its backends announce is dropped fleet-wide.
+defaults, and every `LB_IP` record its backends announce is dropped fleet-wide.
 
 So the agent has an **API-less edge mode**, selected by `--edge-loopback` with no `--kubeconfig`:
 
@@ -169,38 +169,38 @@ hardcoded — new edges joining the anycast pool need no CRD edit.
 
 ## External load balancing
 
-Internet → VIP ingress rides the same channel and the same edge. A `LoadBalancer`-backed NIC
-announces an `LB_VIP` PublicPrefix (`mesh/agent/public.go`, `DesiredPublic`) carrying **both halves
-of the load balancer**: the VIP with its service `ports`, and this backend's VTEP + overlay IP +
+Internet → LB address ingress rides the same channel and the same edge. A `LoadBalancer`-backed NIC
+announces an `LB_IP` PublicPrefix (`mesh/agent/public.go`, `DesiredPublic`) carrying **both halves
+of the load balancer**: the LB address with its service `ports`, and this backend's VTEP + overlay IP +
 VNI. Carrying the ports is what lets a bus-only edge program the whole thing — an edge has no API
 server, so a backend announcement is its only source for the service tuples.
 
-Only the edge consumes `LB_VIP` records (`applyPublic`, gated on `b.isEdge`) — east-west LB uses
+Only the edge consumes `LB_IP` records (`applyPublic`, gated on `b.isEdge`) — east-west LB uses
 the plain anycast route, but the edge runs the Maglev backend table. It registers the load balancer
 on first sight and then attaches the backend, in that order, because `add_lb_target` rejects an
 unknown LB:
 
 ```go
-case rbv1.PublicKind_PUBLIC_KIND_LB_VIP:
+case rbv1.PublicKind_PUBLIC_KIND_LB_IP:
     if !b.isEdge { return }         // only the edge runs maglev/backends
-    // on ADD:      AddLbVip(vip, vni=0, lbUnderlay=this edge, ports) if new, then AddLbBackend
-    // on WITHDRAW: DelLbBackend — and DelLbVip once the last backend leaves
+    // on ADD:      AddLoadBalancer(ip, vni=0, lbUnderlay=this edge, ports) if new, then AddLbBackend
+    // on WITHDRAW: DelLbBackend — and DelLoadBalancer once the last backend leaves
 ```
 
 The dataplane is not idempotent here (`create_lb` rejects a duplicate id, `add_lb_target` a
-duplicate backend) and the edge sees each record repeatedly — every backend of one VIP announces
+duplicate backend) and the edge sees each record repeatedly — every backend of one LB address announces
 the same ports, and the reflector replays the whole snapshot on reconnect — so `applyPublic` diffs
 against per-edge bookkeeping rather than replaying blindly.
 
-The edge's VIP set is therefore *derived from backend announcements*, not from an authoritative
-list. A VIP with zero attached backends is never programmed at the edge. That is the correct
+The edge's LB address set is therefore *derived from backend announcements*, not from an authoritative
+list. An LB address with zero attached backends is never programmed at the edge. That is the correct
 behaviour — an edge that Maglev-hashes to an empty backend set can only blackhole — but it does mean
-a bring-your-own VIP is not reserved at the edge until something backs it.
+a bring-your-own LB address is not reserved at the edge until something backs it.
 
-On the wire `wan_rx` handles VIP ingress: a plain internet packet to a registered VIP is
+On the wire `wan_rx` handles LB address ingress: a plain internet packet to a registered LB address is
 Maglev-selected to a backend and encapped to that backend's underlay. The reply is DSR — the
-backend node reverse-SNATs its source to the VIP so replies bypass the edge entirely. Because
-Maglev backend selection is a pure function of the VIP + 5-tuple + the distributed backend set, any
+backend node reverse-SNATs its source to the LB address so replies bypass the edge entirely. Because
+Maglev backend selection is a pure function of the LB address + 5-tuple + the distributed backend set, any
 edge picks the same backend, and the edge holds no ingress return state.
 
 ## Why it is drain-safe

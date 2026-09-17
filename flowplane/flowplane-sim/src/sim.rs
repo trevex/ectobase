@@ -56,7 +56,7 @@ pub struct SimNode {
 /// `TunnelEncap` decision when this call's verdict was an overlay encap (`None` otherwise — Local
 /// delivery, Pass, Drop, and every decap/ingress path never set it). Since production egress no
 /// longer writes outer bytes, `tunnel` is how tests observe the encap decision. `dsr` mirrors
-/// `WanRxOut::dsr` (B7b) — populated only by [`SimNode::wan_rx`] on a VIP hit; every other
+/// `WanRxOut::dsr` (B7b) — populated only by [`SimNode::wan_rx`] on an LB address hit; every other
 /// entrypoint always sets it `None`.
 pub struct SimOut {
     pub action: Action,
@@ -131,13 +131,13 @@ impl SimNode {
     ) -> SimOut {
         let mut pkt = VecPkt::from_bytes(inner);
         if let Some(opt) = dsr {
-            let vip4 = [opt.vip[0], opt.vip[1], opt.vip[2], opt.vip[3]];
+            let lb_ip4 = [opt.lb_ip[0], opt.lb_ip[1], opt.lb_ip[2], opt.lb_ip[3]];
             flowplane_core::conntrack::dsr_note(
                 &pkt,
                 &mut self.maps,
                 flowplane_core::encap::ETH_LEN,
                 vni,
-                &vip4,
+                &lb_ip4,
                 self.now,
             );
         }
@@ -170,7 +170,7 @@ impl SimNode {
     /// is always `None`.
     ///
     /// Scope: the `ct_touch` refresh, NAT64 v4->v6 expansion, neighbor-NAT reforward, and inner
-    /// `dnat_ingress` (VIP) branches are NOT modelled here — this seam covers the network-NAT
+    /// `dnat_ingress` (LB_IP_CONST) branches are NOT modelled here — this seam covers the network-NAT
     /// reverse-DNAT apply (`ct_apply`), which is the byte-output-relevant slice for a plain
     /// (non-NAT64) NAT return.
     pub fn uplink_nat_return(&mut self, inner: &[u8], vni: u32, local: &Local) -> SimOut {
@@ -303,7 +303,7 @@ impl SimNode {
                 &mut self.maps,
                 flowplane_core::encap::ETH_LEN,
                 vni,
-                &opt.vip,
+                &opt.lb_ip,
                 self.now,
             );
         }
@@ -363,7 +363,7 @@ impl SimNode {
     ///   1. conntrack: on a NEW flow (miss) enforce the SOURCE egress firewall (deny-by-default);
     ///      an established flow's CT_REWRITE_SRC translation + refresh (ct_apply/ct_touch) is NOT
     ///      modelled here (separate slice) — the anchor + tests exercise fresh flows;
-    ///   2. VIP snat/dnat: NOT modelled (separate slice; anchor installs no VIP maps → no-op);
+    ///   2. LB address snat/dnat: NOT modelled (separate slice; anchor installs no LB address maps → no-op);
     ///   3. route lookup (`route4`) → Pass on miss;
     ///   4. network NAT SNAT (`snat_egress`) when the route is external;
     ///   5. conntrack create-on-miss (`ct_create_default`);
@@ -378,10 +378,10 @@ impl SimNode {
     /// Returns the delivery `Action` + the resulting frame bytes (UNCHANGED on the Encap path — see
     /// `TunnelEncap`) + the tunnel decision.
     ///
-    /// NOTE (scope): only the fresh-flow / non-VIP path is composed here for the OUTPUT PACKET — that
+    /// NOTE (scope): only the fresh-flow / non-LB address path is composed here for the OUTPUT PACKET — that
     /// slice is byte-identical to the eBPF program and thus anchorable. Metering does not mutate
     /// packet bytes (it only reads/writes the METER map and returns a verdict), so with no METER entry
-    /// the emitted bytes are unaffected; the interleaved un-ported steps (ct_apply/ct_touch, vip) are
+    /// the emitted bytes are unaffected; the interleaved un-ported steps (ct_apply/ct_touch, lb_ip) are
     /// map/refresh-only on this fixture and do not change the emitted bytes.
     pub fn guest_tx(&mut self, frame: &[u8], meta: &PortMeta) -> SimOut {
         let mut pkt = VecPkt::from_bytes(frame);
@@ -515,11 +515,11 @@ impl SimNode {
         }
     }
 
-    /// Edge WAN-VIP ingress (`wan_rx`): a plain `[Eth][IPv4|IPv6]` WAN frame; if its dst+port is a WAN
-    /// LB VIP (vni=0), Maglev-select a backend and emit the tunnel-key decision toward it (no byte
-    /// write). Else Pass. Mirrors `ingress.rs::try_wan_rx` VIP branch. Dispatches on the frame's
+    /// Edge WAN-LB address ingress (`wan_rx`): a plain `[Eth][IPv4|IPv6]` WAN frame; if its dst+port is a WAN
+    /// LB address (vni=0), Maglev-select a backend and emit the tunnel-key decision toward it (no byte
+    /// write). Else Pass. Mirrors `ingress.rs::try_wan_rx` LB address branch. Dispatches on the frame's
     /// ethertype (bytes [12..14]): `0x0800` runs the v4 core select, `0x86DD` runs the v6 core select.
-    /// Returns `Some(TunnelEncap{vni: 0, remote: backend})` with `pkt` UNCHANGED on a VIP hit, or the
+    /// Returns `Some(TunnelEncap{vni: 0, remote: backend})` with `pkt` UNCHANGED on an LB address hit, or the
     /// input unchanged with `tunnel: None` on Pass.
     pub fn wan_rx(&self, plain: &[u8]) -> SimOut {
         let mut pkt = VecPkt::from_bytes(plain);

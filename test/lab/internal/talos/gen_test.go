@@ -53,7 +53,7 @@ routerID: 10.0.100.1
 routeSource: fd00:cafe:abcd::1
 advertise:
   - dummy0
-  - vip0
+  - apiaddr0
 multipath: true
 neighbors:
   - link: eth1

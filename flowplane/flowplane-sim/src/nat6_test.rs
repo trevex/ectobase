@@ -373,7 +373,7 @@ fn wan6_rx_relays_nat_ip6_return_to_owner_with_owner_vni() {
         enabled: 1,
         _pad: [0; 3],
     });
-    // A plain WAN v6 frame EXT_V6 → NAT_V6:NAT_PORT (no LB VIP, no local ownership).
+    // A plain WAN v6 frame EXT_V6 → NAT_V6:NAT_PORT (no LB_IP_CONST, no local ownership).
     let out = node.wan_rx(&ret_tcp_frame());
     assert_eq!(
         out.action,

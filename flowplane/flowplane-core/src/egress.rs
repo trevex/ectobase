@@ -3,7 +3,7 @@
 //! eBPF `egress::forward_decision_v4` / `forward_decision_v6`.
 //!
 //! Scope (option A, mirroring `uplink.rs`): this covers ONLY the map-driven ROUTE lookup and the
-//! resulting deliver decision (local tap vs. encap vs. pass). The conntrack/firewall/VIP/NAT/meter
+//! resulting deliver decision (local tap vs. encap vs. pass). The conntrack/firewall/LB address/NAT/meter
 //! steps that the eBPF wrapper interleaves around it stay in the wrapper — those are separate
 //! `Pkt`/`Maps` slices. The eBPF `forward_decision_v4` now: looks up the route via
 //! [`route4`], runs its inline nat/ct/meter, then asks [`deliver`] for the local/encap decision.
@@ -63,7 +63,7 @@ pub fn route6<M: Maps>(maps: &M, vni: u32, dst: &[u8; 16]) -> Option<RouteValue>
 /// dst left-justified in the 16-byte buffer). `route` is still needed for the encap-on-miss arm
 /// (the tunnel key rides `route.nexthop_ipv6`). The destination ingress-firewall gate on the v4
 /// local path stays in the eBPF wrapper (it needs `was_new` + the packet), exactly as the wrapper
-/// still owns conntrack/vip/meter.
+/// still owns conntrack/lb_ip/meter.
 ///
 /// Note: the old `inner_proto` (outer next-header) and `flow_label` (RFC 6438 outer flow-label
 /// entropy) parameters are gone — both were only meaningful to the byte-written outer header this

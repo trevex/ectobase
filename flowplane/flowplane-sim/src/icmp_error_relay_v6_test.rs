@@ -1,6 +1,6 @@
 //! ICMPv6-error LB relay oracle coverage (v6 sibling of `icmp_error_relay_test.rs`). An ICMPv6 error
-//! (type 1/2/3/4) destined to a VIP, whose embedded inner is a TCP/UDP flow SOURCED from that VIP, is
-//! relayed (bytes unchanged) to the Maglev backend that owns the ORIGINAL client->VIP flow — so PMTUD
+//! (type 1/2/3/4) destined to an LB_IP_CONST, whose embedded inner is a TCP/UDP flow SOURCED from that LB_IP_CONST, is
+//! relayed (bytes unchanged) to the Maglev backend that owns the ORIGINAL client->LB address flow — so PMTUD
 //! (ICMPv6 Packet Too Big, type 2) / dest-unreachable errors reach the right backend. Fresh v6 mirror
 //! of the v4 F3 relay (no pre-P2 eBPF original existed for v6); now in flowplane_core + sim-tested.
 
@@ -17,7 +17,7 @@ use crate::SimNode;
 // `reforward()` before the firewall check regardless.
 
 const VNI: u32 = 100;
-const VIP: [u8; 16] = addr6(0x50);
+const LB_IP_CONST: [u8; 16] = addr6(0x50);
 const CLIENT: [u8; 16] = addr6(0x09);
 const ROUTER: [u8; 16] = addr6(0x01); // the node that emitted the ICMPv6 error (outer src)
 const SERVICE_PORT: u16 = 443;
@@ -31,7 +31,7 @@ const BACKEND_A_TAP: u32 = 61;
 // resolves the delivery tap via `INTERFACES6[(vni, BACKEND_A_OVERLAY_IP6)]`.
 const BACKEND_A_OVERLAY_IP6: [u8; 16] = addr6(0xb1);
 
-/// A documentation-prefix v6 addr (`2001:db8::last`) for the overlay VIP/client/router side.
+/// A documentation-prefix v6 addr (`2001:db8::last`) for the overlay LB address/client/router side.
 const fn addr6(last: u8) -> [u8; 16] {
     [
         0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, last,
@@ -57,13 +57,13 @@ fn local() -> Local {
     }
 }
 
-/// A node with a 2-backend WAN LB service for `(VNI, last4(VIP), SERVICE_PORT, TCP)` (both remote).
+/// A node with a 2-backend WAN LB service for `(VNI, last4(LB_IP_CONST), SERVICE_PORT, TCP)` (both remote).
 fn edge_node_two_backends() -> SimNode {
     let mut n = SimNode::with_local(local());
     n.maps.lb.insert(
         LbKey {
             vni: VNI,
-            ipv4: last4(VIP),
+            ipv4: last4(LB_IP_CONST),
             port: SERVICE_PORT,
             proto: 6,
             _pad: 0,
@@ -102,8 +102,8 @@ fn edge_node_two_backends() -> SimNode {
 
 /// Build `[Eth(0x86DD)][outer IPv6 nexthdr=ICMPv6(58)][ICMPv6 error(8)][embedded IPv6][embedded L4(8)]`.
 /// `err_type` = ICMPv6 type (1 DestUnreach / 2 PacketTooBig / 3 TimeExceeded / 4 ParamProblem). The
-/// embedded inner = the ORIGINAL VIP->CLIENT packet (src=VIP:SERVICE_PORT, dst=CLIENT:CLIENT_PORT).
-fn eth_icmp6_error_embedding_vip_flow(err_type: u8, inner_proto: u8) -> Vec<u8> {
+/// embedded inner = the ORIGINAL LB address->CLIENT packet (src=IP:SERVICE_PORT, dst=CLIENT:CLIENT_PORT).
+fn eth_icmp6_error_embedding_lb_flow(err_type: u8, inner_proto: u8) -> Vec<u8> {
     fn ipv6_hdr(src: [u8; 16], dst: [u8; 16], nexthdr: u8, payload_len: u16) -> [u8; 40] {
         let mut h = [0u8; 40];
         h[0] = 0x60; // version 6
@@ -114,20 +114,20 @@ fn eth_icmp6_error_embedding_vip_flow(err_type: u8, inner_proto: u8) -> Vec<u8> 
         h[24..40].copy_from_slice(&dst);
         h
     }
-    // embedded inner: VIP:SERVICE_PORT -> CLIENT:CLIENT_PORT, first 8 L4 bytes suffice.
+    // embedded inner: IP:SERVICE_PORT -> CLIENT:CLIENT_PORT, first 8 L4 bytes suffice.
     let mut embedded = Vec::new();
-    embedded.extend_from_slice(&ipv6_hdr(VIP, CLIENT, inner_proto, 8)); // 8 L4 bytes as payload
+    embedded.extend_from_slice(&ipv6_hdr(LB_IP_CONST, CLIENT, inner_proto, 8)); // 8 L4 bytes as payload
     embedded.extend_from_slice(&SERVICE_PORT.to_be_bytes()); // sport
     embedded.extend_from_slice(&CLIENT_PORT.to_be_bytes()); // dport
     embedded.extend_from_slice(&[0u8; 4]); // rest of the (truncated) L4 header
                                            // ICMPv6 error: type, code=0, csum(unchecked here), 4 bytes (MTU/pointer/unused), then embedded.
     let mut icmp = vec![err_type, 0, 0, 0, 0, 0, 0, 0];
     icmp.extend_from_slice(&embedded);
-    // outer IPv6: ROUTER -> VIP, nexthdr=ICMPv6(58).
+    // outer IPv6: ROUTER -> LB_IP_CONST, nexthdr=ICMPv6(58).
     let mut frame = vec![
         0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x86, 0xDD,
     ];
-    frame.extend_from_slice(&ipv6_hdr(ROUTER, VIP, 58, icmp.len() as u16));
+    frame.extend_from_slice(&ipv6_hdr(ROUTER, LB_IP_CONST, 58, icmp.len() as u16));
     frame.extend_from_slice(&icmp);
     frame
 }
@@ -139,7 +139,7 @@ fn local_backend_node(inner_proto: u8, table_id: u32) -> SimNode {
     n.maps.lb.insert(
         LbKey {
             vni: VNI,
-            ipv4: last4(VIP),
+            ipv4: last4(LB_IP_CONST),
             port: SERVICE_PORT,
             proto: inner_proto,
             _pad: 0,
@@ -172,18 +172,18 @@ fn local_backend_node(inner_proto: u8, table_id: u32) -> SimNode {
 }
 
 #[test]
-fn icmpv6_error_to_vip_relays_to_backend() {
-    // ICMPv6 Packet Too Big (type 2 — the v6 PMTUD case): the embedded VIP flow relays to the single
+fn icmpv6_error_to_lb_ip_relays_to_backend() {
+    // ICMPv6 Packet Too Big (type 2 — the v6 PMTUD case): the embedded LB address flow relays to the single
     // backend, delivered locally. The relay forwards the frame's IP payload byte-unchanged.
     let mut n = local_backend_node(6, 9);
-    let frame = eth_icmp6_error_embedding_vip_flow(2, 6); // packet-too-big, embedded TCP
+    let frame = eth_icmp6_error_embedding_lb_flow(2, 6); // packet-too-big, embedded TCP
     let orig = frame.clone();
     let out = n.uplink_v6(&frame, VNI, &local());
 
     assert_eq!(
         out.action,
         Action::Redirect(BACKEND_A_TAP),
-        "ICMPv6 error to a VIP must be relayed to the Maglev backend (local delivery)"
+        "ICMPv6 error to an LB address must be relayed to the Maglev backend (local delivery)"
     );
     // Only the inner Ethernet header (bytes 0..14) is rewritten by decap_and_rewrite; the IP payload
     // at 14.. is intact.
@@ -234,7 +234,7 @@ fn icmpv6_error_relayed_through_realistic_backend_firewall() {
     // PMTUD feedback). The relay arm now bypasses step 2, so the error reaches the owning backend.
     let mut n = local_backend_node(6, 9);
     allow_ingress_tcp_service_port6(&mut n, BACKEND_A_TAP);
-    let frame = eth_icmp6_error_embedding_vip_flow(2, 6); // packet-too-big, embedded TCP
+    let frame = eth_icmp6_error_embedding_lb_flow(2, 6); // packet-too-big, embedded TCP
     assert_eq!(
         n.uplink_v6(&frame, VNI, &local()).action,
         Action::Redirect(BACKEND_A_TAP),
@@ -249,7 +249,7 @@ fn icmpv6_error_selects_on_embedded_inner_not_outer() {
     // same backend every build, regardless of error type.
     let mut chosen: Option<[u8; 16]> = None;
     for err_type in [1u8, 2, 3, 4] {
-        let frame = eth_icmp6_error_embedding_vip_flow(err_type, 6);
+        let frame = eth_icmp6_error_embedding_lb_flow(err_type, 6);
         let out = edge_node_two_backends().uplink_v6(&frame, VNI, &local());
         let remote = out
             .tunnel
@@ -272,16 +272,16 @@ fn icmpv6_error_selects_on_embedded_inner_not_outer() {
 }
 
 #[test]
-fn icmpv6_error_embedded_src_not_a_vip_is_not_relayed() {
+fn icmpv6_error_embedded_src_not_an_lb_ip_is_not_relayed() {
     // No LB service for the embedded src -> not relayed -> normal path (Drop: no local iface/not edge).
     let mut n = edge_node_two_backends();
     n.maps.lb.clear();
-    let frame = eth_icmp6_error_embedding_vip_flow(1, 6);
+    let frame = eth_icmp6_error_embedding_lb_flow(1, 6);
     let out = n.uplink_v6(&frame, VNI, &local());
     assert_eq!(
         out.action,
         Action::Drop,
-        "no VIP match -> falls through to the base v6 path (Drop)"
+        "no LB address match -> falls through to the base v6 path (Drop)"
     );
 }
 
@@ -289,7 +289,7 @@ fn icmpv6_error_embedded_src_not_a_vip_is_not_relayed() {
 fn icmpv6_error_embedded_udp_relayed_but_icmp6_embedded_not() {
     // Embedded UDP relays; embedded ICMPv6 (proto 58) does not (matches dpservice: TCP/UDP only).
     let mut relayed = local_backend_node(17, 5);
-    let udp_frame = eth_icmp6_error_embedding_vip_flow(1, 17);
+    let udp_frame = eth_icmp6_error_embedding_lb_flow(1, 17);
     assert_eq!(
         relayed.uplink_v6(&udp_frame, VNI, &local()).action,
         Action::Redirect(BACKEND_A_TAP),
@@ -297,7 +297,7 @@ fn icmpv6_error_embedded_udp_relayed_but_icmp6_embedded_not() {
     );
 
     let mut n = edge_node_two_backends();
-    let icmp_inner = eth_icmp6_error_embedding_vip_flow(1, 58);
+    let icmp_inner = eth_icmp6_error_embedding_lb_flow(1, 58);
     assert_eq!(
         n.uplink_v6(&icmp_inner, VNI, &local()).action,
         Action::Drop,

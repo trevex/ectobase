@@ -19,10 +19,10 @@ func readyPool(name, v4 string) *netv1.LBPool {
 	return p
 }
 
-func lb(name, pool, vip string) *netv1.LoadBalancer {
+func lb(name, pool, lbIP string) *netv1.LoadBalancer {
 	return &netv1.LoadBalancer{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Generation: 1},
-		Spec:       netv1.LoadBalancerSpec{PoolRef: netv1.LocalObjectReference{Name: pool}, VIP: vip},
+		Spec:       netv1.LoadBalancerSpec{PoolRef: netv1.LocalObjectReference{Name: pool}, IP: lbIP},
 	}
 }
 
@@ -48,14 +48,14 @@ func TestLBPeersNeedingRetry(t *testing.T) {
 	}
 }
 
-func TestLBVIPAllocateAndAdopt(t *testing.T) {
+func TestLBAddressAllocateAndAdopt(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = netv1.AddToScheme(scheme)
 	pool := readyPool("p", "198.51.100.0/24")
 	byo := lb("byo", "p", "198.51.100.10")
 	auto := lb("auto", "p", "")
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool, byo, auto).WithStatusSubresource(&netv1.LoadBalancer{}).Build()
-	r := &LBVIPReconciler{Client: cl, APIReader: cl}
+	r := &LoadBalancerIPReconciler{Client: cl, APIReader: cl}
 	ctx := context.Background()
 	_ = r.Sync(ctx, byo)
 	_ = r.Sync(ctx, auto)
@@ -65,22 +65,22 @@ func TestLBVIPAllocateAndAdopt(t *testing.T) {
 		_ = cl.Get(ctx, keyOf(&netv1.LoadBalancer{ObjectMeta: metav1.ObjectMeta{Name: n, Namespace: "default"}}), &x)
 		return x
 	}
-	if g := get("byo"); g.Status.State != "Allocated" || g.Status.AllocatedVIP != "198.51.100.10" {
+	if g := get("byo"); g.Status.State != "Allocated" || g.Status.AllocatedIP != "198.51.100.10" {
 		t.Fatalf("byo = %+v", g.Status)
 	}
-	if g := get("auto"); g.Status.State != "Allocated" || g.Status.AllocatedVIP != "198.51.100.1" {
+	if g := get("auto"); g.Status.State != "Allocated" || g.Status.AllocatedIP != "198.51.100.1" {
 		t.Fatalf("auto = %+v want .1", g.Status)
 	}
 }
 
-func TestLBVIPStickyAcrossGenerationBump(t *testing.T) {
+func TestLBAddressStickyAcrossGenerationBump(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = netv1.AddToScheme(scheme)
 	pool := readyPool("p", "198.51.100.0/24")
 	a := lb("a", "p", "") // auto
 	b := lb("b", "p", "") // auto
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pool, a, b).WithStatusSubresource(&netv1.LoadBalancer{}).Build()
-	r := &LBVIPReconciler{Client: cl, APIReader: cl}
+	r := &LoadBalancerIPReconciler{Client: cl, APIReader: cl}
 	ctx := context.Background()
 	_ = r.Sync(ctx, a) // a -> .1
 	_ = r.Sync(ctx, b) // b -> .2
@@ -94,8 +94,8 @@ func TestLBVIPStickyAcrossGenerationBump(t *testing.T) {
 
 	var gb netv1.LoadBalancer
 	_ = cl.Get(ctx, keyOf(b), &gb)
-	if gb.Status.AllocatedVIP != "198.51.100.2" {
-		t.Fatalf("precondition: b should have .2, got %v", gb.Status.AllocatedVIP)
+	if gb.Status.AllocatedIP != "198.51.100.2" {
+		t.Fatalf("precondition: b should have .2, got %v", gb.Status.AllocatedIP)
 	}
 	gb.Generation = 2
 	if err := cl.Update(ctx, &gb); err != nil {
@@ -108,8 +108,8 @@ func TestLBVIPStickyAcrossGenerationBump(t *testing.T) {
 	}
 	var got netv1.LoadBalancer
 	_ = cl.Get(ctx, keyOf(b), &got)
-	if got.Status.AllocatedVIP != "198.51.100.2" {
-		t.Fatalf("b VIP renumbered on unrelated edit: got %v want 198.51.100.2 (sticky)", got.Status.AllocatedVIP)
+	if got.Status.AllocatedIP != "198.51.100.2" {
+		t.Fatalf("b LB address renumbered on unrelated edit: got %v want 198.51.100.2 (sticky)", got.Status.AllocatedIP)
 	}
 	if got.Status.ObservedGeneration != 2 {
 		t.Fatalf("observedGeneration = %d want 2", got.Status.ObservedGeneration)

@@ -1,10 +1,10 @@
 //! In-memory `MapWriter` for testing `ControlCore` without CAP_BPF or a live map.
 use crate::writer::{CtFlushScope, CtFlushScope6, MapWriter};
 use flowplane_common::{
-    DhcpConfig, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey,
-    IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatKey6,
-    NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue, UnderlayValue,
-    VipKey,
+    DhcpConfig, FloatingIPKey, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6,
+    IfaceMetaKey, IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey, MeterState,
+    NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta,
+    RouteValue, UnderlayValue,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -37,7 +37,7 @@ pub struct MemMapWriter {
     // IfaceMetaKey is only Copy/Clone (not Hash), so key the fake by the padded id array.
     pub iface_meta: HashMap<[u8; flowplane_common::IFACE_ID_MAX], IfaceMetaVal>,
     pub dhcp_meta_removed: Vec<u32>,
-    pub vips: HashMap<VipKey, [u8; 4]>,
+    pub floating_ips: HashMap<FloatingIPKey, [u8; 4]>,
     pub ct_flushes: Vec<CtFlushScope>,
     pub ct6_flushes: Vec<CtFlushScope6>,
     pub ct_iface_flushes: Vec<(u32, [u8; 4], [u8; 16])>,
@@ -231,16 +231,16 @@ impl MapWriter for MemMapWriter {
         self.dhcp_meta_removed.push(i);
         Ok(())
     }
-    fn vips_upsert(&mut self, k: VipKey, v: [u8; 4]) -> anyhow::Result<()> {
-        self.vips.insert(k, v);
+    fn floating_ips_upsert(&mut self, k: FloatingIPKey, v: [u8; 4]) -> anyhow::Result<()> {
+        self.floating_ips.insert(k, v);
         Ok(())
     }
-    fn vips_remove(&mut self, k: &VipKey) -> anyhow::Result<()> {
-        self.vips.remove(k);
+    fn floating_ips_remove(&mut self, k: &FloatingIPKey) -> anyhow::Result<()> {
+        self.floating_ips.remove(k);
         Ok(())
     }
-    fn vips_get(&self, k: &VipKey) -> Option<[u8; 4]> {
-        self.vips.get(k).copied()
+    fn floating_ips_get(&self, k: &FloatingIPKey) -> Option<[u8; 4]> {
+        self.floating_ips.get(k).copied()
     }
     fn conntrack_flush(&mut self, s: CtFlushScope) -> anyhow::Result<()> {
         self.ct_flushes.push(s);

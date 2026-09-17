@@ -11,9 +11,9 @@ use flowplane_common::{
 
 use crate::loader;
 use crate::maps::{
-    Conntrack, Conntrack6, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwMetaMap6, FwRules, FwRules6,
-    GeneveIfindexMap, IfaceMetaMap, Interfaces, Interfaces6, Lb, LocalMap, Maglev, Meter, Nat,
-    NatIps, NeighborNat, NeighborNatCount, PortMetaMap, Routes, Routes6, Vips,
+    Conntrack, Conntrack6, DhcpConfigMap, DhcpMetaMap, FloatingIPs, FwMetaMap, FwMetaMap6, FwRules,
+    FwRules6, GeneveIfindexMap, IfaceMetaMap, Interfaces, Interfaces6, Lb, LocalMap, Maglev, Meter,
+    Nat, NatIps, NeighborNat, NeighborNatCount, PortMetaMap, Routes, Routes6,
 };
 // `Nat`, `NatIps`, `NeighborNat`, `NeighborNatCount` are opened in `bring_up`/the test ctor and
 // moved into `AyaWriter`, which owns them; they are not held on `Inner`.
@@ -495,7 +495,7 @@ impl Control {
     /// Tear down a local interface: detach tc_guest_tx (drop the link) and clear its maps + shadow.
     /// Returns true if found and deleted, false if not found.
     /// When the last interface on a VNI is removed, also auto-resets the VNI (purges neighbor NATs,
-    /// VIPs, and routes for that VNI).
+    /// LB addresses, and routes for that VNI).
     pub fn detach_interface(&self, interface_id: &[u8]) -> anyhow::Result<bool> {
         let mut g = self.inner.lock();
         let rec = match g.by_id.remove(interface_id) {
@@ -565,7 +565,7 @@ impl Control {
             .writer_mut()
             .conntrack_flush_interface(vni, rec.ipv4, rec.ipv6);
         // Auto-reset VNI when the last local interface on it is removed:
-        // purge neighbor NATs (and orphaned VIP/NAT/route state) for that VNI — the VNI is
+        // purge neighbor NATs (and orphaned LB address/NAT/route state) for that VNI — the VNI is
         // implicitly reset on last-iface removal.
         // The reconciliation itself lives in `ControlCore::purge_vni`; Control keeps only
         // the "is the VNI still in use?" decision (it reads `by_id`, which stays authoritative here).

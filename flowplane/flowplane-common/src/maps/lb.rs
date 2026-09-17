@@ -1,19 +1,19 @@
-//! Load-balancer / DSR / VIP map key & value types (the `VIPS`, `NAT_IPS6`, `LB`, `MAGLEV`,
+//! Load-balancer / DSR / LB address map key & value types (the `FLOATING_IPS`, `NAT_IPS6`, `LB`, `MAGLEV`,
 //! `DSR` / `DSR6` maps and the Geneve DSR TLV payload).
 
-/// Key for the `vips` map: (VNI, IPv4). Value is the mapped IPv4 (the 1:1 counterpart).
+/// Key for the `floating_ips` map: (VNI, IPv4). Value is the mapped IPv4 (the 1:1 counterpart).
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
-pub struct VipKey {
+pub struct FloatingIPKey {
     pub vni: u32,
     pub ipv4: [u8; 4],
 }
 
 /// Key for the `NAT_IPS6` marker map: (VNI, IPv6) — marks a public NAT66 source IP the local node
-/// owns. v6 sibling of [`VipKey`].
+/// owns. v6 sibling of [`FloatingIPKey`].
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
-pub struct VipKey6 {
+pub struct FloatingIPKey6 {
     pub vni: u32,
     pub ipv6: [u8; 16],
 }
@@ -65,30 +65,30 @@ pub struct LbBackend {
     pub _pad: [u8; 3],
 }
 
-/// The DSR identity an edge dispatches to a backend: the VIP (+ service port + family) the backend
+/// The DSR identity an edge dispatches to a backend: the LB address (+ service port + family) the backend
 /// must reverse-SNAT the guest reply source to. Payload of the Geneve DSR TLV (see flowplane-core::dsr).
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct DsrOpt {
-    /// 0 = VIP is IPv4 (first 4 bytes of `vip`); 1 = IPv6 (full 16 bytes).
+    /// 0 = LB address is IPv4 (first 4 bytes of `lb_ip`); 1 = IPv6 (full 16 bytes).
     pub family: u8,
     pub _pad: u8,
     /// Service L4 port (host order in the struct; encode/decode handle network order).
     pub port: u16,
-    /// The VIP, v4 left-justified in 16 bytes when `family == 0`.
-    pub vip: [u8; 16],
+    /// The LB_IP_CONST, v4 left-justified in 16 bytes when `family == 0`.
+    pub lb_ip: [u8; 16],
 }
 
-/// DSR reverse-SNAT state: the VIP a backend must rewrite a guest reply's source address to,
+/// DSR reverse-SNAT state: the LB address a backend must rewrite a guest reply's source address to,
 /// stored in the dedicated `DSR`/`DSR6` LRU maps keyed by the reply 5-tuple (`CtKey`/`CtKey6` —
 /// `invert_key`/`invert_key6` of the forwarded flow's key). Deliberately compact (24 bytes) so it
 /// does not inflate `CtEntry` or the conntrack hot paths; `last_seen` is informational only — the
 /// LRU map itself handles eviction.
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
-pub struct DsrVip {
-    /// The VIP, v4 left-justified in 16 bytes for a v4 flow (mirrors `DsrOpt::vip`/`LbBackend::overlay_ip`).
-    pub vip: [u8; 16],
+pub struct DsrLbIP {
+    /// The LB_IP_CONST, v4 left-justified in 16 bytes for a v4 flow (mirrors `DsrOpt::lb_ip`/`LbBackend::overlay_ip`).
+    pub lb_ip: [u8; 16],
     /// Informational: kernel-monotonic ns timestamp of the most recent note. Not read by the
     /// reverse-SNAT rewrite; the LRU map's own eviction handles lifecycle.
     pub last_seen: u64,
@@ -99,14 +99,14 @@ pub struct DsrVip {
 #[cfg(feature = "user")]
 mod user_impls {
     use super::*;
-    unsafe impl aya::Pod for VipKey {}
-    unsafe impl aya::Pod for VipKey6 {}
+    unsafe impl aya::Pod for FloatingIPKey {}
+    unsafe impl aya::Pod for FloatingIPKey6 {}
     unsafe impl aya::Pod for LbKey {}
     unsafe impl aya::Pod for LbValue {}
     unsafe impl aya::Pod for MaglevKey {}
     unsafe impl aya::Pod for LbBackend {}
     unsafe impl aya::Pod for DsrOpt {}
-    unsafe impl aya::Pod for DsrVip {}
+    unsafe impl aya::Pod for DsrLbIP {}
 }
 
 #[cfg(test)]
@@ -124,15 +124,15 @@ mod tests {
         assert_eq!(offset_of!(LbKey, _pad), 11);
         assert_eq!(size_of::<LbKey>(), 4 + 4 + 2 + 1 + 1);
         // The padding-free word-packed keys.
-        assert_eq!(size_of::<VipKey>(), 4 + 4);
+        assert_eq!(size_of::<FloatingIPKey>(), 4 + 4);
         assert_eq!(size_of::<MaglevKey>(), 4 + 4);
         assert_eq!(align_of::<LbKey>(), 4, "LbKey must stay 4-byte aligned");
     }
 
     #[test]
-    fn vip_key_layout() {
-        assert_eq!(size_of::<VipKey>(), 8);
-        assert_eq!(size_of::<VipKey6>(), 20); // 4 + 16
+    fn floating_ip_key_layout() {
+        assert_eq!(size_of::<FloatingIPKey>(), 8);
+        assert_eq!(size_of::<FloatingIPKey6>(), 20); // 4 + 16
     }
 
     #[test]
@@ -153,20 +153,20 @@ mod tests {
 
     #[test]
     fn dsr_opt_layout() {
-        // family(1) + _pad(1) + port(2) + vip(16) = 20, the Geneve DSR TLV payload size
+        // family(1) + _pad(1) + port(2) + lb_ip(16) = 20, the Geneve DSR TLV payload size
         // (24-byte buffer = 4-byte option header + this 20-byte payload).
         assert_eq!(offset_of!(DsrOpt, family), 0);
         assert_eq!(offset_of!(DsrOpt, port), 2);
-        assert_eq!(offset_of!(DsrOpt, vip), 4);
+        assert_eq!(offset_of!(DsrOpt, lb_ip), 4);
         assert_eq!(size_of::<DsrOpt>(), 20);
         assert_eq!(align_of::<DsrOpt>(), 2);
     }
 
     #[test]
-    fn dsr_vip_layout() {
-        // 16 (vip) + 8 (last_seen) = 24, u64-aligned. RUNTIME LRU map value (DSR/DSR6) — no
+    fn dsr_lb_ip_layout() {
+        // 16 (lb_ip) + 8 (last_seen) = 24, u64-aligned. RUNTIME LRU map value (DSR/DSR6) — no
         // wire/journal ABI concern, same coupling rule as `ct_entry_layout`.
-        assert_eq!(size_of::<DsrVip>(), 24);
-        assert_eq!(align_of::<DsrVip>(), 8);
+        assert_eq!(size_of::<DsrLbIP>(), 24);
+        assert_eq!(align_of::<DsrLbIP>(), 8);
     }
 }

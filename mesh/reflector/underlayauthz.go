@@ -49,7 +49,7 @@ func newUnderlayGuard(ctx context.Context) underlayGuard {
 //
 // This is an exact match, not a prefix match, because under the node-VTEP scheme a node has one
 // underlay address and every announce it makes carries it — route nexthops, NAT-block owners and
-// LB_VIP owners all resolve to that single VTEP. (It was a /64 prefix match while each endpoint
+// LB_IP owners all resolve to that single VTEP. (It was a /64 prefix match while each endpoint
 // got its own underlay /128 carved from the node's /64; Geneve retired that, since the VNI rides
 // the tunnel header and local delivery demuxes on (vni, overlay ip) via INTERFACES. The node's
 // /64 is still the FENCE coordinate — see StampNodePrefix — just not an announce-authz unit.)

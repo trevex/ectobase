@@ -25,12 +25,12 @@ type recordingDP struct {
 	// fwInstalled models the real dataplane: a rule id is unique per interface, and AddFwRule on an
 	// existing id fails (ALREADY_EXISTS) — so a correct reconcile must NOT re-add unchanged rules.
 	fwInstalled map[string]bool
-	lbVips      []string // ids added, in call order
+	lbIPs       []string // ids added, in call order
 	lbDels      []string // ids deleted, in call order
-	// lbRegistered is the set of LBs currently registered (id -> the last AddLbVip call), modelling
+	// lbRegistered is the set of LBs currently registered (id -> the last AddLoadBalancer call), modelling
 	// the real dataplane's `lbs` table: create_lb rejects a duplicate id, add_lb_target rejects an
-	// unknown one, and DelLbVip drops the LB with its backends.
-	lbRegistered map[string]lbVipCall
+	// unknown one, and DelLoadBalancer drops the LB with its backends.
+	lbRegistered map[string]lbCall
 	lbBackends   map[string][]string // id -> backend underlays, in call order (may repeat: two backends can share a node)
 	// lbBackendMeta records the last AddLbBackend call's overlay IP + VNI per (id, backendUnderlay).
 	lbBackendMeta map[string]lbBackendCall
@@ -56,12 +56,12 @@ type lbBackendCall struct {
 	backendVni       uint32
 }
 
-// lbVipCall records one AddLbVip call in full, so tests can assert the vni/underlay/ports the edge
-// registered a VIP with — not merely that it registered one.
-type lbVipCall struct {
-	id, vip, lbUnderlay string
-	vni                 uint32
-	ports               []LbPort
+// lbCall records one AddLoadBalancer call in full, so tests can assert the vni/underlay/ports the edge
+// registered an LB address with — not merely that it registered one.
+type lbCall struct {
+	id, lbIP, lbUnderlay string
+	vni                  uint32
+	ports                []LbPort
 }
 
 // lbBackendRef pairs a backend's node underlay with its overlay IP, in AddLbBackend call order.
@@ -101,7 +101,7 @@ func newRecordingDP() *recordingDP {
 		nbrNat: map[string]string{}, nbrNatWd: map[string]bool{},
 		fwInstalled:   map[string]bool{},
 		fwReplace:     map[string][]FwRuleWithID{},
-		lbRegistered:  map[string]lbVipCall{},
+		lbRegistered:  map[string]lbCall{},
 		lbBackends:    map[string][]string{},
 		lbBackendMeta: map[string]lbBackendCall{},
 		lbBackendRefs: map[string][]lbBackendRef{},
@@ -196,24 +196,24 @@ func (f *recordingDP) get(vni uint32, prefix string) (string, bool) {
 }
 func key(vni uint32, prefix string) string { return fmt.Sprintf("%d %s", vni, prefix) } // VNI-aware: dual-role tests need per-table keys
 
-// AddLbVip mirrors flowplane-control's create_lb: a duplicate id is REJECTED ("load balancer
+// AddLoadBalancer mirrors flowplane-control's create_lb: a duplicate id is REJECTED ("load balancer
 // already exists"). Modelling that is what makes an idempotence bug in the caller a test failure
 // rather than a silent second registration the real dataplane would have refused.
-func (f *recordingDP) AddLbVip(ctx context.Context, id string, vni uint32, vip, lbUnderlay string, ports []LbPort) error {
+func (f *recordingDP) AddLoadBalancer(ctx context.Context, id string, vni uint32, lbIP, lbUnderlay string, ports []LbPort) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.lbRegistered[id]; ok {
 		return fmt.Errorf("load balancer %q already exists", id)
 	}
-	f.lbRegistered[id] = lbVipCall{id: id, vni: vni, vip: vip, lbUnderlay: lbUnderlay, ports: append([]LbPort(nil), ports...)}
-	f.lbVips = append(f.lbVips, id)
+	f.lbRegistered[id] = lbCall{id: id, vni: vni, lbIP: lbIP, lbUnderlay: lbUnderlay, ports: append([]LbPort(nil), ports...)}
+	f.lbIPs = append(f.lbIPs, id)
 	return nil
 }
-func (f *recordingDP) DelLbVip(ctx context.Context, id string) error {
+func (f *recordingDP) DelLoadBalancer(ctx context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.lbRegistered, id)
-	// A real DelLbVip tears the whole LB down, backends included.
+	// A real DelLoadBalancer tears the whole LB down, backends included.
 	delete(f.lbBackends, id)
 	delete(f.lbBackendRefs, id)
 	f.lbDels = append(f.lbDels, id)

@@ -76,11 +76,11 @@ const (
 	PublicKind_PUBLIC_KIND_UNSPECIFIED   PublicKind = 0
 	PublicKind_PUBLIC_KIND_EDGE_UNDERLAY PublicKind = 1 // edge anycast datapath /128; owner_underlay = edge's UNIQUE loopback
 	PublicKind_PUBLIC_KIND_NAT_IP        PublicKind = 2 // distributed-SNAT nat_ip block (port_min/max = the block)
-	// A backed LB VIP: announced by each BACKEND node, one record per (VIP, backend NIC). It
-	// carries both halves the edge needs — the VIP + its service `ports` (for AddLbVip) and the
+	// A backed LB address: announced by each BACKEND node, one record per (LB address, backend NIC). It
+	// carries both halves the edge needs — the LB address + its service `ports` (for AddLoadBalancer) and the
 	// backend's owner_underlay/overlay_ip/vni (for AddLbBackend) — so the edge programs the whole
 	// load balancer from backend announcements alone, with no API server of its own.
-	PublicKind_PUBLIC_KIND_LB_VIP      PublicKind = 3
+	PublicKind_PUBLIC_KIND_LB_IP       PublicKind = 3
 	PublicKind_PUBLIC_KIND_FLOATING_IP PublicKind = 4 // reserved
 )
 
@@ -90,14 +90,14 @@ var (
 		0: "PUBLIC_KIND_UNSPECIFIED",
 		1: "PUBLIC_KIND_EDGE_UNDERLAY",
 		2: "PUBLIC_KIND_NAT_IP",
-		3: "PUBLIC_KIND_LB_VIP",
+		3: "PUBLIC_KIND_LB_IP",
 		4: "PUBLIC_KIND_FLOATING_IP",
 	}
 	PublicKind_value = map[string]int32{
 		"PUBLIC_KIND_UNSPECIFIED":   0,
 		"PUBLIC_KIND_EDGE_UNDERLAY": 1,
 		"PUBLIC_KIND_NAT_IP":        2,
-		"PUBLIC_KIND_LB_VIP":        3,
+		"PUBLIC_KIND_LB_IP":         3,
 		"PUBLIC_KIND_FLOATING_IP":   4,
 	}
 )
@@ -1276,9 +1276,9 @@ type PublicPrefix struct {
 	Vni           uint32                 `protobuf:"varint,4,opt,name=vni,proto3" json:"vni,omitempty"`
 	PortMin       uint32                 `protobuf:"varint,5,opt,name=port_min,json=portMin,proto3" json:"port_min,omitempty"`
 	PortMax       uint32                 `protobuf:"varint,6,opt,name=port_max,json=portMax,proto3" json:"port_max,omitempty"`
-	OverlayIp     string                 `protobuf:"bytes,7,opt,name=overlay_ip,json=overlayIp,proto3" json:"overlay_ip,omitempty"` // LB_VIP: the backend guest's overlay IP (for AddLbBackend)
-	// LB_VIP: the load balancer's service tuples, so a bus-only edge can AddLbVip before it
-	// AddLbBackends. Every backend of one VIP announces the same set; the edge keys on the VIP.
+	OverlayIp     string                 `protobuf:"bytes,7,opt,name=overlay_ip,json=overlayIp,proto3" json:"overlay_ip,omitempty"` // LB_IP: the backend guest's overlay IP (for AddLbBackend)
+	// LB_IP: the load balancer's service tuples, so a bus-only edge can AddLoadBalancer before it
+	// AddLbBackends. Every backend of one LB address announces the same set; the edge keys on the LB address.
 	Ports         []*PortProto `protobuf:"bytes,8,rep,name=ports,proto3" json:"ports,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1518,13 +1518,13 @@ const file_routebus_proto_rawDesc = "" +
 	"\aRouteOp\x12\x18\n" +
 	"\x14ROUTE_OP_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fROUTE_OP_ADD\x10\x01\x12\x15\n" +
-	"\x11ROUTE_OP_WITHDRAW\x10\x02*\x95\x01\n" +
+	"\x11ROUTE_OP_WITHDRAW\x10\x02*\x94\x01\n" +
 	"\n" +
 	"PublicKind\x12\x1b\n" +
 	"\x17PUBLIC_KIND_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19PUBLIC_KIND_EDGE_UNDERLAY\x10\x01\x12\x16\n" +
-	"\x12PUBLIC_KIND_NAT_IP\x10\x02\x12\x16\n" +
-	"\x12PUBLIC_KIND_LB_VIP\x10\x03\x12\x1b\n" +
+	"\x12PUBLIC_KIND_NAT_IP\x10\x02\x12\x15\n" +
+	"\x11PUBLIC_KIND_LB_IP\x10\x03\x12\x1b\n" +
 	"\x17PUBLIC_KIND_FLOATING_IP\x10\x042I\n" +
 	"\bRouteBus\x12=\n" +
 	"\aSession\x12\x16.routebus.v1.ClientMsg\x1a\x16.routebus.v1.ServerMsg(\x010\x012\x91\x01\n" +

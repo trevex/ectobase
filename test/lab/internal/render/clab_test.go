@@ -83,7 +83,7 @@ fabric:
 	// Each WAN edge runs a mesh agent in its netns, in API-less edge mode: --edge-loopback with NO
 	// --kubeconfig, minting its route-bus leaf from the fleet intermediate rather than cert-manager,
 	// and sharing the flowplane sidecar's socket over the host-backed bind. Without this the edge
-	// announces nothing and every LB_VIP record on the bus is dropped fleet-wide.
+	// announces nothing and every LB_IP record on the bus is dropped fleet-wide.
 	for _, want := range []string{
 		"image: img/mesh",
 		"agent --node-id edge1 --underlay fd00:ffff::e1",

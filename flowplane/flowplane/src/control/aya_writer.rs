@@ -4,14 +4,15 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::maps::{
-    Conntrack, Conntrack6, DhcpConfigMap, DhcpMetaMap, FwMetaMap, FwMetaMap6, FwRules, FwRules6,
-    IfaceMetaMap, Interfaces, Interfaces6, Lb, Maglev, Meter, Nat, Nat6, NatCt6, NatIps, NatIps6,
-    NeighborNat, NeighborNat6, NeighborNat6Count, NeighborNatCount, PortMetaMap, Routes, Routes6,
-    Underlay, Vips,
+    Conntrack, Conntrack6, DhcpConfigMap, DhcpMetaMap, FloatingIPs, FwMetaMap, FwMetaMap6, FwRules,
+    FwRules6, IfaceMetaMap, Interfaces, Interfaces6, Lb, Maglev, Meter, Nat, Nat6, NatCt6, NatIps,
+    NatIps6, NeighborNat, NeighborNat6, NeighborNat6Count, NeighborNatCount, PortMetaMap, Routes,
+    Routes6, Underlay,
 };
 use flowplane_common::{
-    CtKey, CtKey6, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue, NatKey, NatKey6,
-    NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue, VipKey,
+    CtKey, CtKey6, FloatingIPKey, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue,
+    NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta,
+    RouteValue,
 };
 use flowplane_control::{CtFlushScope, CtFlushScope6, MapWriter};
 
@@ -46,7 +47,7 @@ pub struct AyaWriter {
     pub ports: PortMetaMap,
     pub ifaces: Interfaces,
     pub ifaces6: Interfaces6,
-    pub vips: Vips,
+    pub floating_ips: FloatingIPs,
     pub meter: Meter,
     pub dhcp_config: DhcpConfigMap,
     pub dhcp_meta: DhcpMetaMap,
@@ -321,14 +322,14 @@ impl MapWriter for AyaWriter {
     fn dhcp_meta_remove(&mut self, i: u32) -> anyhow::Result<()> {
         self.dhcp_meta.remove(i)
     }
-    fn vips_upsert(&mut self, k: VipKey, v: [u8; 4]) -> anyhow::Result<()> {
-        self.vips.upsert(k, v)
+    fn floating_ips_upsert(&mut self, k: FloatingIPKey, v: [u8; 4]) -> anyhow::Result<()> {
+        self.floating_ips.upsert(k, v)
     }
-    fn vips_remove(&mut self, k: &VipKey) -> anyhow::Result<()> {
-        self.vips.remove(k)
+    fn floating_ips_remove(&mut self, k: &FloatingIPKey) -> anyhow::Result<()> {
+        self.floating_ips.remove(k)
     }
-    fn vips_get(&self, k: &VipKey) -> Option<[u8; 4]> {
-        self.vips.get(k)
+    fn floating_ips_get(&self, k: &FloatingIPKey) -> Option<[u8; 4]> {
+        self.floating_ips.get(k)
     }
     fn conntrack_flush(&mut self, s: CtFlushScope) -> anyhow::Result<()> {
         // Flush CT entries for this guest under the conntrack lock (a separate lock from the

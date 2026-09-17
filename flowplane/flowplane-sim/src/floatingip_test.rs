@@ -1,5 +1,5 @@
-//! F2 — 1:1 floating-IP ingress DNAT oracle coverage (rebuild of the pre-P2 eBPF `vip::dnat_ingress`,
-//! now in `flowplane_core::datapath`). A frame whose inner dst is a floating IP `V` with `VIPS[(vni,V)]
+//! F2 — 1:1 floating-IP ingress DNAT oracle coverage (rebuild of the pre-P2 eBPF `lb_ip::dnat_ingress`,
+//! now in `flowplane_core::datapath`). A frame whose inner dst is a floating IP `V` with `FLOATING_IPS[(vni,V)]
 //! = G` is rewritten dst V->G (+checksums) and delivered locally to G's tap. ICMP echo to a floating
 //! IP is DNAT'd + forwarded to the guest (the guest answers), never answered by the dataplane.
 
@@ -10,7 +10,7 @@ use flowplane_core::pkt::Action;
 use crate::SimNode;
 
 const VNI: u32 = 100;
-const VIP: [u8; 4] = [203, 0, 113, 7]; // the floating IP (inner dst on the wire)
+const LB_IP_CONST: [u8; 4] = [203, 0, 113, 7]; // the floating IP (inner dst on the wire)
 const GUEST: [u8; 4] = [10, 0, 0, 9]; // the backing guest overlay IPv4
 const CLIENT: [u8; 4] = [198, 51, 100, 5];
 const TAP: u32 = 77;
@@ -25,19 +25,19 @@ fn local() -> Local {
     }
 }
 
-/// A node that owns floating IP VIP->GUEST and has GUEST as a local interface.
+/// A node that owns floating IP LB address->GUEST and has GUEST as a local interface.
 ///
-/// DEVIATION from the task's given verbatim `vip_node()`: also seeds a permissive ingress `FW_META`/
+/// DEVIATION from the task's given verbatim `floating_ip_node()`: also seeds a permissive ingress `FW_META`/
 /// `FW_RULES` ALLOW-all entry for `TAP`. `process_uplink`'s step 2 (`uplink_ingress_firewall_drop`)
 /// evaluates the deny-by-default ingress firewall on every NEW flow's delivery tap unconditionally —
-/// including the F2 VIP-DNAT arm, which sets `is_lb = false` exactly like normal guest delivery — so
+/// including the F2 LB address-DNAT arm, which sets `is_lb = false` exactly like normal guest delivery — so
 /// without an explicit ALLOW rule for `TAP` every local-delivery sim test in this codebase (e.g.
 /// `ns_scenario_test.rs::allow_tcp`, `lb_scenario_test.rs::apply_fw`) seeds one; this test module is
 /// no exception. The rule matches on the POST-DNAT dst (`GUEST`) since the firewall evaluates the
-/// packet AFTER `vip_dnat_rewrite` has already run.
-fn vip_node() -> SimNode {
+/// packet AFTER `floating_ip_dnat_rewrite` has already run.
+fn floating_ip_node() -> SimNode {
     let mut n = SimNode::with_local(local());
-    n.maps.add_vip(VNI, VIP, GUEST);
+    n.maps.add_floating_ip(VNI, LB_IP_CONST, GUEST);
     n.maps.add_iface(
         VNI,
         GUEST,
@@ -99,8 +99,8 @@ fn eth_ipv4_icmp_echo(src: [u8; 4], dst: [u8; 4]) -> Vec<u8> {
 
 #[test]
 fn floating_ip_dnat_tcp_rewrites_dst_and_delivers_local() {
-    let frame = eth_ipv4_tcp(CLIENT, VIP, 443);
-    let out = vip_node().uplink(&frame, VNI, &local());
+    let frame = eth_ipv4_tcp(CLIENT, LB_IP_CONST, 443);
+    let out = floating_ip_node().uplink(&frame, VNI, &local());
 
     assert_eq!(
         out.action,
@@ -122,8 +122,8 @@ fn floating_ip_dnat_tcp_rewrites_dst_and_delivers_local() {
 
 #[test]
 fn floating_ip_dnat_icmp_echo_forwarded_to_guest_not_answered() {
-    let frame = eth_ipv4_icmp_echo(CLIENT, VIP);
-    let out = vip_node().uplink(&frame, VNI, &local());
+    let frame = eth_ipv4_icmp_echo(CLIENT, LB_IP_CONST);
+    let out = floating_ip_node().uplink(&frame, VNI, &local());
 
     assert_eq!(
         out.action,
@@ -142,24 +142,24 @@ fn floating_ip_dnat_icmp_echo_forwarded_to_guest_not_answered() {
 }
 
 #[test]
-fn non_vip_dst_takes_normal_path_unchanged() {
-    // dst not in VIPS and not a local interface -> Drop (fail-closed), inner bytes unchanged.
+fn non_floating_ip_dst_takes_normal_path_unchanged() {
+    // dst not in FLOATING_IPS and not a local interface -> Drop (fail-closed), inner bytes unchanged.
     let frame = eth_ipv4_tcp(CLIENT, [203, 0, 113, 200], 443);
-    let mut n = vip_node();
+    let mut n = floating_ip_node();
     let out = n.uplink(&frame, VNI, &local());
     assert_eq!(
         out.action,
         Action::Drop,
-        "non-VIP, non-local dst is fail-closed dropped"
+        "non-LB_IP_CONST, non-local dst is fail-closed dropped"
     );
 }
 
 #[test]
 fn floating_ip_maps_to_nonlocal_guest_drops() {
-    // VIPS hit but G is not a local interface (misconfig) -> Drop, no reforward.
+    // FLOATING_IPS hit but G is not a local interface (misconfig) -> Drop, no reforward.
     let mut n = SimNode::with_local(local());
-    n.maps.add_vip(VNI, VIP, GUEST); // no add_iface for GUEST
-    let frame = eth_ipv4_tcp(CLIENT, VIP, 443);
+    n.maps.add_floating_ip(VNI, LB_IP_CONST, GUEST); // no add_iface for GUEST
+    let frame = eth_ipv4_tcp(CLIENT, LB_IP_CONST, 443);
     let out = n.uplink(&frame, VNI, &local());
     assert_eq!(
         out.action,

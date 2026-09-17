@@ -159,7 +159,7 @@ pub fn tc_guest_tx(ctx: TcContext) -> i32 {
     // PASS/DROP, deliver to a local guest tap (redirect), or encapsulate into the overlay and
     // redirect out the uplink.
     if ethertype == 0x0800 {
-        // Make the inner IPv4 header range writable for the in-place pipeline (NAT/VIP).
+        // Make the inner IPv4 header range writable for the in-place pipeline (NAT/LB_IP_CONST).
         let _ = ctx.pull_data((flowplane_common::arp_nd::ETH_LEN + 40) as u32);
         // Re-establish a clean lower bound for the verifier after pull_data invalidated the
         // pkt-range facts: the inner IPv4 base header (ETH_LEN + 20) must be present. This mirrors

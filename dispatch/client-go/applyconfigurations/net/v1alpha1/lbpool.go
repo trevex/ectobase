@@ -11,7 +11,7 @@ import (
 // LBPoolApplyConfiguration represents a declarative configuration of the LBPool type for use
 // with apply.
 //
-// LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.
+// LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.
 type LBPoolApplyConfiguration struct {
 	v1.TypeMetaApplyConfiguration    `json:",inline"`
 	*v1.ObjectMetaApplyConfiguration `json:"metadata,omitempty"`

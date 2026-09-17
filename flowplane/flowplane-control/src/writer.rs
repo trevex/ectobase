@@ -1,10 +1,10 @@
 //! The control-plane map write surface. The eBPF `AyaWriter` (and the in-memory `MemMapWriter`
 //! used in tests) implement this; `ControlCore` programs maps only through it.
 use flowplane_common::{
-    DhcpConfig, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey,
-    IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey, MeterState, NatKey, NatKey6,
-    NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue, UnderlayValue,
-    VipKey,
+    DhcpConfig, FloatingIPKey, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6,
+    IfaceMetaKey, IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey, MeterState,
+    NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta,
+    RouteValue, UnderlayValue,
 };
 
 /// The set of conntrack entries a NAT teardown must invalidate; the eBPF writer flushes the
@@ -98,9 +98,9 @@ pub trait MapWriter {
     fn iface_meta_upsert(&mut self, key: IfaceMetaKey, val: IfaceMetaVal) -> anyhow::Result<()>;
     fn iface_meta_remove(&mut self, key: &IfaceMetaKey) -> anyhow::Result<()>;
     fn dhcp_meta_remove(&mut self, ifindex: u32) -> anyhow::Result<()>;
-    fn vips_upsert(&mut self, key: VipKey, val: [u8; 4]) -> anyhow::Result<()>;
-    fn vips_remove(&mut self, key: &VipKey) -> anyhow::Result<()>;
-    fn vips_get(&self, key: &VipKey) -> Option<[u8; 4]>;
+    fn floating_ips_upsert(&mut self, key: FloatingIPKey, val: [u8; 4]) -> anyhow::Result<()>;
+    fn floating_ips_remove(&mut self, key: &FloatingIPKey) -> anyhow::Result<()>;
+    fn floating_ips_get(&self, key: &FloatingIPKey) -> Option<[u8; 4]>;
     fn conntrack_flush(&mut self, scope: CtFlushScope) -> anyhow::Result<()>;
     /// v6 sibling of `conntrack_flush` — flush the `NAT_CT6` entries for a NAT66 teardown.
     fn conntrack6_flush(&mut self, scope: CtFlushScope6) -> anyhow::Result<()>;

@@ -5,7 +5,7 @@
 //! runs under the sim and under the `BPF_PROG_TEST_RUN` anchor.
 //!
 //! The orchestrators are split per hook (review P1.2): [`uplink`] (ingress LB/base + NAT-return),
-//! [`guest_tx`] (guest egress v4/v6/NAT64), [`nat64`] (NAT64 ingress reply), [`wan_rx`] (edge WAN-VIP
+//! [`guest_tx`] (guest egress v4/v6/NAT64), [`nat64`] (NAT64 ingress reply), [`wan_rx`] (edge WAN-LB address
 //! ingress), [`guest_local`] (ARP/ND + DHCPv4 responders). Every previously-`pub` item stays
 //! reachable at `datapath::<name>` via the `pub use` re-exports below — the eBPF program, the sim,
 //! and the anchor tests call these by those exact paths and must not change.
@@ -37,14 +37,19 @@ use flowplane_common::csum::csum_replace4;
 /// fixup (the ICMPv4 checksum does not cover addresses). Mirrors `nat.rs`'s SNAT read-modify-write
 /// window pattern for eBPF-verifier friendliness (one dominating bound per access).
 ///
-/// Shared by the ingress uplink DNAT arm ([`uplink::process_uplink`]) AND the edge WAN-VIP DSR
+/// Shared by the ingress uplink DNAT arm ([`uplink::process_uplink`]) AND the edge WAN-LB address DSR
 /// rewrite ([`wan_rx::process_wan_rx`]) — hence it lives here in `mod` rather than in either hook
 /// module.
 ///
 /// `#[inline(never)]`: keeps this out of `process_uplink`'s already-tight combined call stack (same
 /// BPF-stack-relief discipline as `uplink_ingress_firewall_drop`).
 #[inline(never)]
-pub(crate) fn vip_dnat_rewrite<P: Pkt>(pkt: &mut P, ip_off: usize, old: &[u8; 4], new: &[u8; 4]) {
+pub(crate) fn floating_ip_dnat_rewrite<P: Pkt>(
+    pkt: &mut P,
+    ip_off: usize,
+    old: &[u8; 4],
+    new: &[u8; 4],
+) {
     // dst IP at ip_off + 16.
     if !pkt.write_array(ip_off + 16, new) {
         return;

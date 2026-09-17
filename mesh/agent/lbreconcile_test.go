@@ -30,7 +30,7 @@ func TestDesiredLB_JoinsUnderlayFromDataplane(t *testing.T) {
 		Spec: compiledv1.CompiledNICSpec{
 			VNI:        100,
 			OverlayIPs: []string{"10.0.10.5"},
-			LB:         []compiledv1.CompiledLB{{VIP: "203.0.113.50", Ports: []compiledv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
+			LB:         []compiledv1.CompiledLB{{IP: "203.0.113.50", Ports: []compiledv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
@@ -46,7 +46,7 @@ func TestDesiredLB_JoinsUnderlayFromDataplane(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("want 1 lbBacking, got %d", len(got))
 	}
-	if got[0].VIP != "203.0.113.50" || got[0].Vni != 100 || got[0].NicUnderlay != "2001:db8::dd" || got[0].OverlayIP != "10.0.10.5" {
+	if got[0].IP != "203.0.113.50" || got[0].Vni != 100 || got[0].NicUnderlay != "2001:db8::dd" || got[0].OverlayIP != "10.0.10.5" {
 		t.Fatalf("lbBacking = %+v", got[0])
 	}
 	if len(got[0].Ports) != 1 || got[0].Ports[0].Port != 443 || got[0].Ports[0].Proto != 6 {
@@ -61,7 +61,7 @@ func TestDesiredLB_SkipsWhenNoUnderlay(t *testing.T) {
 		Spec: compiledv1.CompiledNICSpec{
 			VNI:        100,
 			OverlayIPs: []string{"10.0.10.5"},
-			LB:         []compiledv1.CompiledLB{{VIP: "203.0.113.50"}},
+			LB:         []compiledv1.CompiledLB{{IP: "203.0.113.50"}},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
@@ -76,7 +76,7 @@ func TestDesiredLB_SkipsWhenNoUnderlay(t *testing.T) {
 	}
 }
 
-func TestDesired_EmitsVIPAnycastRoute(t *testing.T) {
+func TestDesired_EmitsLBAnycastRoute(t *testing.T) {
 	s := lbTestScheme(t)
 	node := "nodeA"
 	cnic := &compiledv1.CompiledNIC{
@@ -84,7 +84,7 @@ func TestDesired_EmitsVIPAnycastRoute(t *testing.T) {
 		Spec: compiledv1.CompiledNICSpec{
 			VNI:        100,
 			OverlayIPs: []string{"10.0.0.20"},
-			LB:         []compiledv1.CompiledLB{{VIP: "203.0.113.50", Ports: []compiledv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
+			LB:         []compiledv1.CompiledLB{{IP: "203.0.113.50", Ports: []compiledv1.CompiledLBPort{{Port: 443, Proto: "TCP"}}}},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
@@ -103,11 +103,11 @@ func TestDesired_EmitsVIPAnycastRoute(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("VIP anycast route not emitted; got %+v", announce)
+		t.Fatalf("LB address anycast route not emitted; got %+v", announce)
 	}
 }
 
-func TestDesiredPublic_EmitsLBVIP(t *testing.T) {
+func TestDesiredPublic_EmitsLBIP(t *testing.T) {
 	s := lbTestScheme(t)
 	node := "nodeA"
 	cnic := &compiledv1.CompiledNIC{
@@ -115,7 +115,7 @@ func TestDesiredPublic_EmitsLBVIP(t *testing.T) {
 		Spec: compiledv1.CompiledNICSpec{
 			VNI:        100,
 			OverlayIPs: []string{"10.0.0.20"},
-			LB:         []compiledv1.CompiledLB{{VIP: "203.0.113.50"}},
+			LB:         []compiledv1.CompiledLB{{IP: "203.0.113.50"}},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()
@@ -129,14 +129,14 @@ func TestDesiredPublic_EmitsLBVIP(t *testing.T) {
 	}
 	var found bool
 	for _, pp := range recs {
-		if pp.Kind == rbv1.PublicKind_PUBLIC_KIND_LB_VIP && pp.Prefix == "203.0.113.50/32" && pp.OwnerUnderlay == "2001:db8::dd" {
+		if pp.Kind == rbv1.PublicKind_PUBLIC_KIND_LB_IP && pp.Prefix == "203.0.113.50/32" && pp.OwnerUnderlay == "2001:db8::dd" {
 			if pp.Vni != 100 || pp.OverlayIP != "10.0.0.20" {
-				t.Fatalf("LB_VIP record missing backend vni/overlay ip: %+v", pp)
+				t.Fatalf("LB_IP record missing backend vni/overlay ip: %+v", pp)
 			}
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("LB_VIP record not emitted; got %+v", recs)
+		t.Fatalf("LB_IP record not emitted; got %+v", recs)
 	}
 }

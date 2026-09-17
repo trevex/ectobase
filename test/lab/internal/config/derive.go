@@ -17,14 +17,14 @@ type Derived struct {
 }
 
 type DerivedCluster struct {
-	Hash       uint16 // FNV-1a group of the cluster name (the <h> in fd00:cafe:<h>)
-	Prefix48   string // fd00:cafe:<h>::/48
-	NodeNet64  string // fd00:cafe:<h>::/64 (nodeIP validSubnets + etcd advertisedSubnets)
-	APIVip     string // fd00:cafe:<h>:1::1/128
-	APIVipAddr string // fd00:cafe:<h>:1::1 (bare, for the https://[vip]:6443 endpoint)
-	PodSubnet  string // fd00:244:<h>::/56 (per-cluster Cilium pod pool)
-	SvcSubnet  string // fd00:96:<h>::/108 (per-cluster service CIDR)
-	Nodes      []DerivedNode
+	Hash        uint16 // FNV-1a group of the cluster name (the <h> in fd00:cafe:<h>)
+	Prefix48    string // fd00:cafe:<h>::/48
+	NodeNet64   string // fd00:cafe:<h>::/64 (nodeIP validSubnets + etcd advertisedSubnets)
+	APIAddrCIDR string // fd00:cafe:<h>:1::1/128
+	APIAddr     string // fd00:cafe:<h>:1::1 (bare, for the https://[lbIP]:6443 endpoint)
+	PodSubnet   string // fd00:244:<h>::/56 (per-cluster Cilium pod pool)
+	SvcSubnet   string // fd00:96:<h>::/108 (per-cluster service CIDR)
+	Nodes       []DerivedNode
 }
 
 type DerivedNode struct {
@@ -64,13 +64,13 @@ func (c *Config) derive() {
 	for _, cl := range c.Fabric.Clusters {
 		h := hash48(cl.Name)
 		dc := DerivedCluster{
-			Hash:       h,
-			Prefix48:   fmt.Sprintf("fd00:cafe:%x::/48", h),
-			NodeNet64:  fmt.Sprintf("fd00:cafe:%x::/64", h),
-			APIVip:     fmt.Sprintf("fd00:cafe:%x:1::1/128", h),
-			APIVipAddr: fmt.Sprintf("fd00:cafe:%x:1::1", h),
-			PodSubnet:  fmt.Sprintf("fd00:244:%x::/56", h),
-			SvcSubnet:  fmt.Sprintf("fd00:96:%x::/108", h),
+			Hash:        h,
+			Prefix48:    fmt.Sprintf("fd00:cafe:%x::/48", h),
+			NodeNet64:   fmt.Sprintf("fd00:cafe:%x::/64", h),
+			APIAddrCIDR: fmt.Sprintf("fd00:cafe:%x:1::1/128", h),
+			APIAddr:     fmt.Sprintf("fd00:cafe:%x:1::1", h),
+			PodSubnet:   fmt.Sprintf("fd00:244:%x::/56", h),
+			SvcSubnet:   fmt.Sprintf("fd00:96:%x::/108", h),
 		}
 		for i := 1; i <= cl.Nodes; i++ {
 			port++

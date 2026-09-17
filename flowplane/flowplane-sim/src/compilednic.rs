@@ -50,7 +50,7 @@ pub struct Rule {
 /// Serde mirror of CompiledLB.
 #[derive(Deserialize, Default)]
 pub struct Lb {
-    pub vip: String,
+    pub ip: String,
     #[serde(default)]
     pub ports: Vec<LbPort>,
 }

@@ -74,8 +74,8 @@ type CompiledNATSource struct {
 
 // CompiledLB is one load-balancer this NIC backs.
 type CompiledLB struct {
-	// VIP is the load-balancer virtual IP (IPv4 or IPv6).
-	VIP string
+	// LB address is the load-balancer virtual IP (IPv4 or IPv6).
+	IP string
 	// Ports are the LB service (port, proto) tuples.
 	Ports []CompiledLBPort
 }

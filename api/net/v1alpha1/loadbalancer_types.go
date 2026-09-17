@@ -7,13 +7,19 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity
-// (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
+// LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6);
+// backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
+//
+// Deliberately NOT called a "LB address". A load-balancer address is 1:N and ingress-only — clients reach
+// it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway
+// address, never to this one. The 1:1, bidirectional "virtual IP" that a single interface owns for
+// both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.
+// Naming both "LB address" conflated them once too often.
 type LoadBalancerSpec struct {
-	// VIP is the requested virtual IP. Empty => allocate from PoolRef; set =>
+	// IP is the requested load-balancer address. Empty => allocate from PoolRef; set =>
 	// validate membership in the pool + reserve (bring-your-own).
-	VIP string `json:"vip"`
-	// PoolRef selects the LBPool to allocate the VIP from.
+	IP string `json:"ip"`
+	// PoolRef selects the LBPool to allocate the IP from.
 	// +optional
 	PoolRef LocalObjectReference `json:"poolRef,omitempty" protobuf:"bytes,5,opt,name=poolRef"`
 	// Ports are the LB service (port, proto) tuples.
@@ -39,9 +45,10 @@ type LoadBalancerStatus struct {
 	// State is the lifecycle state (Pending | Ready).
 	// +optional
 	State string `json:"state,omitempty"`
-	// AllocatedVIP is the authoritative VIP assigned by the VIP allocator.
+	// AllocatedIP is the authoritative address assigned by the LB address allocator. Mirrors
+	// NetworkInterface.status.allocatedIPs: spec is the request, status is the truth.
 	// +optional
-	AllocatedVIP string `json:"allocatedVIP,omitempty" protobuf:"bytes,2,opt,name=allocatedVIP"`
+	AllocatedIP string `json:"allocatedIP,omitempty" protobuf:"bytes,2,opt,name=allocatedIP"`
 	// ObservedGeneration is the Spec generation the allocation reflects.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty" protobuf:"varint,3,opt,name=observedGeneration"`

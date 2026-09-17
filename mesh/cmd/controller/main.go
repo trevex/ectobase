@@ -153,8 +153,8 @@ func main() {
 		log.Fatalf("setup nic-ipam controller: %v", err)
 	}
 
-	if err := (&controllers.LBVIPReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
-		log.Fatalf("setup lb-vip controller: %v", err)
+	if err := (&controllers.LoadBalancerIPReconciler{Client: mgr.GetClient(), APIReader: mgr.GetAPIReader()}).SetupWithManager(mgr); err != nil {
+		log.Fatalf("setup lb-lbIP controller: %v", err)
 	}
 
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {

@@ -90,7 +90,7 @@ func Bootstrap(ctx context.Context, cfg *config.Config, cluster, talosconfig, ku
 	}
 
 	// Fetch the kubeconfig once the API serves. --force overwrites any stale file. Still
-	// via nsenter (local to the node), so this does not depend on the anycast API VIP
+	// via nsenter (local to the node), so this does not depend on the anycast API address
 	// having propagated over the fabric yet — talosctl asks the node directly for it.
 	slog.Info("writing kubeconfig", "cluster", cluster, "path", kubeconfig)
 	if err := wait.WaitFor(ctx, 5*time.Minute, 5*time.Second, func() (bool, error) {

@@ -34,7 +34,7 @@ pub struct CtKey6 {
 /// DSR reverse-SNAT state does NOT live here: storing it inline would grow `CtEntry`, and the copy
 /// landing in the hot `ct_apply`/`ct_create_default` stack frames would push `uplink_rx`'s combined
 /// BPF stack over the 512-byte verifier limit. DSR reverse state lives in its own compact `DSR`/`DSR6`
-/// LRU maps (see `DsrVip`), keyed by the reply 5-tuple; `CtEntry` stays at 24 bytes.
+/// LRU maps (see `DsrLbIP`), keyed by the reply 5-tuple; `CtEntry` stays at 24 bytes.
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct CtEntry {
@@ -60,7 +60,7 @@ pub const CT_F_FIREWALL: u8 = 0x20;
 /// IPv4 back to IPv6 when delivering the translated reply to the guest.
 pub const CT_F_NAT64: u8 = 0x40;
 // 0x80 is unused/reserved. DSR reverse-SNAT state lives in the dedicated `DSR`/`DSR6` maps (see
-// `DsrVip`), not in CtEntry flags.
+// `DsrLbIP`), not in CtEntry flags.
 
 /// Dedicated v6 NAT (NAT66) conntrack value, keyed by `CtKey6` in the `NAT_CT6` map. The v4 NAT
 /// stores its xlate state in `CtEntry.xlate_ip` (`[u8;4]`, v4-only), which is not grown to hold a v6

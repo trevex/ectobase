@@ -38,8 +38,8 @@ type GenSpec struct {
 	SecretsPath  string // persisted PKI, OUTSIDE Dir, per cluster (stable across renders)
 	MountsDir    string // per-node /run,/var,/etc/cni bind sources live under here
 	ClusterName  string
-	Endpoint     string   // https://[apiVip]:6443
-	SANs         []string // additional SANs (API VIP + node identities)
+	Endpoint     string   // https://[apiAddr]:6443
+	SANs         []string // additional SANs (API address + node identities)
 	ClusterPatch []byte   // rendered cluster-wide patch -> Dir/cluster.yaml
 	StripDocs    []string // machine-config doc kinds to drop from controlplane
 	Nodes        []NodeSpec

@@ -1,6 +1,6 @@
 //! Locks the "dataplane forwards L3 (incl. ICMP echo); it does NOT answer ping locally" principle
 //! (only ARP/ND/RA/DHCP are answered locally, elsewhere). A regression that reintroduces a local
-//! ICMP echo responder for a VIP / NAT IP fails here.
+//! ICMP echo responder for an LB address / NAT IP fails here.
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
@@ -12,7 +12,7 @@ use flowplane_core::pkt::Action;
 use crate::SimNode;
 
 const VNI: u32 = 100;
-const VIP: [u8; 4] = [203, 0, 113, 50];
+const LB_IP_CONST: [u8; 4] = [203, 0, 113, 50];
 const NAT_IP: [u8; 4] = [203, 0, 113, 60];
 const CLIENT: [u8; 4] = [198, 51, 100, 9];
 // The backend is THIS node itself (LB self-select, DSR): its node_vtep must equal `local()`'s own
@@ -73,13 +73,13 @@ fn eth_ipv4_icmp_echo(src: [u8; 4], dst: [u8; 4]) -> Vec<u8> {
 }
 
 #[test]
-fn ping_to_lb_vip_forwards_to_backend_not_answered() {
+fn ping_to_lb_ip_forwards_to_backend_not_answered() {
     let mut n = SimNode::with_local(local());
     // ICMP LB service (proto 1, port 0 — lb_select_forward uses lookup_port 0 for ICMP).
     n.maps.lb.insert(
         LbKey {
             vni: VNI,
-            ipv4: VIP,
+            ipv4: LB_IP_CONST,
             port: 0,
             proto: 1,
             _pad: 0,
@@ -120,12 +120,12 @@ fn ping_to_lb_vip_forwards_to_backend_not_answered() {
     );
     allow_ingress_all(&mut n, BACKEND_TAP);
 
-    let frame = eth_ipv4_icmp_echo(CLIENT, VIP);
+    let frame = eth_ipv4_icmp_echo(CLIENT, LB_IP_CONST);
     let out = n.uplink(&frame, VNI, &local());
     assert_eq!(
         out.action,
         Action::Redirect(BACKEND_TAP),
-        "ping to an LB VIP must be Maglev-forwarded to a backend, NOT answered locally"
+        "ping to an LB address must be Maglev-forwarded to a backend, NOT answered locally"
     );
     // Still an echo REQUEST (type 8): the dataplane did not synthesize a reply.
     let l4 = 14 + 20;

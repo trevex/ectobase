@@ -69,7 +69,7 @@ the kernel and the simulator.
 When a guest emits a packet, the guest-edge program (`tc_guest_tx`) on the host-side
 veth/tap ingress:
 
-1. applies the firewall (deny-by-default) and, if configured, SNAT/VIP rewrites and rate
+1. applies the firewall (deny-by-default) and, if configured, SNAT/LB address rewrites and rate
    metering;
 2. looks up the inner destination in the per-VNI route table (`ROUTES` for IPv4, `ROUTES6`
    for IPv6) to find the next-hop node VTEP and the VNI to deliver under;
@@ -109,7 +109,7 @@ that could otherwise collide is VNI-qualified. Specifically:
   to the address bits, so a `/32` lookup is really a `(VNI ++ IPv4)` lookup;
 - interface resolution on ingress is by `(VNI, inner destination)` in `INTERFACES`, with
   the VNI taken from the Geneve header;
-- conntrack, NAT, VIP, and firewall keys are all VNI-qualified.
+- conntrack, NAT, LB address, and firewall keys are all VNI-qualified.
 
 A VNI corresponds to a `VPC` in the CRD API. Cross-VNI reachability is not implicit: it is
 granted explicitly via [VPC peering](../features/vpc-peering.md) (control-plane route

@@ -18,7 +18,7 @@ set system host-name 'edge{{ .Edge }}'
 set interfaces dummy dum0 address '{{ .EdgeLoopback }}::e{{ .Edge }}/128'
 # WAN segment + tayga NAT64 link (numbered; clab wires the links). eth3 is
 # dual-stack (B10): v6 for the existing fabric WAN segment, v4 so a v4 WAN client
-# can reach a v4 VIP (N/S-LB DSR) over the same segment.
+# can reach a v4 LB address (N/S-LB DSR) over the same segment.
 set interfaces ethernet eth3 address '{{ .WanNet }}::1{{ .Edge }}/64'
 set interfaces ethernet eth3 address '{{ .WanGwV4Base }}.1{{ .Edge }}/24'
 set interfaces ethernet eth4 address '{{ .TaygaNet }}:{{ .Edge }}::1/64'
@@ -38,7 +38,7 @@ set protocols bgp address-family ipv6-unicast maximum-paths ebgp '64'
 # Advertise the loopback + NAT64 /96 explicitly.
 set protocols bgp address-family ipv6-unicast network '{{ .EdgeLoopback }}::e{{ .Edge }}/128'
 set protocols bgp address-family ipv6-unicast network '{{ .NAT64Prefix }}'
-# Edge-owned PUBLIC prefixes (LB VIPs + NAT source IPs; hand-picked from these). Both
+# Edge-owned PUBLIC prefixes (LB addresses + NAT source IPs; hand-picked from these). Both
 # edges advertise them (anycast); the WAN also statically routes them back. The v4
 # prefix needs an EXPLICIT network — it is not directly connected on the edge, so
 # `redistribute connected` below does NOT cover it (only the eth3 /24 WAN subnet).

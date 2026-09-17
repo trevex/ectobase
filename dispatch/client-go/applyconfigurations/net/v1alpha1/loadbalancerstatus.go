@@ -9,8 +9,9 @@ package v1alpha1
 type LoadBalancerStatusApplyConfiguration struct {
 	// State is the lifecycle state (Pending | Ready).
 	State *string `json:"state,omitempty"`
-	// AllocatedVIP is the authoritative VIP assigned by the VIP allocator.
-	AllocatedVIP *string `json:"allocatedVIP,omitempty"`
+	// AllocatedIP is the authoritative address assigned by the LB address allocator. Mirrors
+	// NetworkInterface.status.allocatedIPs: spec is the request, status is the truth.
+	AllocatedIP *string `json:"allocatedIP,omitempty"`
 	// ObservedGeneration is the Spec generation the allocation reflects.
 	ObservedGeneration *int64 `json:"observedGeneration,omitempty"`
 }
@@ -29,11 +30,11 @@ func (b *LoadBalancerStatusApplyConfiguration) WithState(value string) *LoadBala
 	return b
 }
 
-// WithAllocatedVIP sets the AllocatedVIP field in the declarative configuration to the given value
+// WithAllocatedIP sets the AllocatedIP field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the AllocatedVIP field is set to the value of the last call.
-func (b *LoadBalancerStatusApplyConfiguration) WithAllocatedVIP(value string) *LoadBalancerStatusApplyConfiguration {
-	b.AllocatedVIP = &value
+// If called multiple times, the AllocatedIP field is set to the value of the last call.
+func (b *LoadBalancerStatusApplyConfiguration) WithAllocatedIP(value string) *LoadBalancerStatusApplyConfiguration {
+	b.AllocatedIP = &value
 	return b
 }
 

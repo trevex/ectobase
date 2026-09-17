@@ -9,13 +9,19 @@ import (
 // LoadBalancerSpecApplyConfiguration represents a declarative configuration of the LoadBalancerSpec type for use
 // with apply.
 //
-// LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity
-// (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
+// LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6);
+// backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
+//
+// Deliberately NOT called a "LB address". A load-balancer address is 1:N and ingress-only — clients reach
+// it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway
+// address, never to this one. The 1:1, bidirectional "virtual IP" that a single interface owns for
+// both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.
+// Naming both "LB address" conflated them once too often.
 type LoadBalancerSpecApplyConfiguration struct {
-	// VIP is the requested virtual IP. Empty => allocate from PoolRef; set =>
+	// IP is the requested load-balancer address. Empty => allocate from PoolRef; set =>
 	// validate membership in the pool + reserve (bring-your-own).
-	VIP *string `json:"vip,omitempty"`
-	// PoolRef selects the LBPool to allocate the VIP from.
+	IP *string `json:"ip,omitempty"`
+	// PoolRef selects the LBPool to allocate the IP from.
 	PoolRef *LocalObjectReferenceApplyConfiguration `json:"poolRef,omitempty"`
 	// Ports are the LB service (port, proto) tuples.
 	Ports []LoadBalancerPortApplyConfiguration `json:"ports,omitempty"`
@@ -31,11 +37,11 @@ func LoadBalancerSpec() *LoadBalancerSpecApplyConfiguration {
 	return &LoadBalancerSpecApplyConfiguration{}
 }
 
-// WithVIP sets the VIP field in the declarative configuration to the given value
+// WithIP sets the IP field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the VIP field is set to the value of the last call.
-func (b *LoadBalancerSpecApplyConfiguration) WithVIP(value string) *LoadBalancerSpecApplyConfiguration {
-	b.VIP = &value
+// If called multiple times, the IP field is set to the value of the last call.
+func (b *LoadBalancerSpecApplyConfiguration) WithIP(value string) *LoadBalancerSpecApplyConfiguration {
+	b.IP = &value
 	return b
 }
 

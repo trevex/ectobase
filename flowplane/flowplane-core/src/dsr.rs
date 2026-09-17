@@ -1,5 +1,5 @@
-//! DSR Geneve-option encode/decode: the VIP identity the edge dispatches to the backend so the
-//! backend can reverse-SNAT the guest reply src -> VIP. Payload of the Geneve DSR TLV. Layout
+//! DSR Geneve-option encode/decode: the LB address identity the edge dispatches to the backend so the
+//! backend can reverse-SNAT the guest reply src -> LB address. Payload of the Geneve DSR TLV. Layout
 //! frozen by the B1 spike (verifier-accepted on the collect_md device).
 
 use flowplane_common::DsrOpt;
@@ -21,7 +21,7 @@ pub fn encode(opt: &DsrOpt) -> [u8; DSR_OPT_BUF_LEN] {
     b[4] = opt.family;
     b[5] = 0;
     b[6..8].copy_from_slice(&opt.port.to_be_bytes());
-    b[8..24].copy_from_slice(&opt.vip);
+    b[8..24].copy_from_slice(&opt.lb_ip);
     b
 }
 
@@ -31,13 +31,13 @@ pub fn decode(b: &[u8; DSR_OPT_BUF_LEN]) -> Option<DsrOpt> {
     if class != OPT_CLASS || b[2] != OPT_TYPE {
         return None;
     }
-    let mut vip = [0u8; 16];
-    vip.copy_from_slice(&b[8..24]);
+    let mut lb_ip = [0u8; 16];
+    lb_ip.copy_from_slice(&b[8..24]);
     Some(DsrOpt {
         family: b[4],
         _pad: 0,
         port: u16::from_be_bytes([b[6], b[7]]),
-        vip,
+        lb_ip,
     })
 }
 
@@ -51,7 +51,7 @@ mod tests {
             family: 1,
             _pad: 0,
             port: 443,
-            vip: [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            lb_ip: [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
         };
         assert_eq!(decode(&encode(&opt)), Some(opt));
     }
@@ -62,7 +62,7 @@ mod tests {
             family: 0,
             _pad: 0,
             port: 80,
-            vip: [203, 0, 113, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            lb_ip: [203, 0, 113, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         };
         assert_eq!(decode(&encode(&opt)), Some(opt));
     }
@@ -73,7 +73,7 @@ mod tests {
             family: 0,
             _pad: 0,
             port: 80,
-            vip: [1; 16],
+            lb_ip: [1; 16],
         });
         b[0] = 0xFF; // wrong class
         assert_eq!(decode(&b), None);

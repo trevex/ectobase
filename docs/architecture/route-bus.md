@@ -201,7 +201,7 @@ On each session it binds the verified client cert's IP SANs and rejects any
 `Announce`/`AnnounceNat`/`AnnouncePublic` whose underlay is not *exactly* one of them
 (`mesh/reflector/underlayauthz.go`). An exact match is sufficient because a node has a
 single VTEP and every announce it makes carries it — route nexthops, NAT-block owners and
-LB_VIP owners all resolve to that one address. (The check masked to `/64` while each
+LB_IP owners all resolve to that one address. (The check masked to `/64` while each
 endpoint held its own underlay `/128` carved from the node's prefix; Geneve retired that
 model. The `/64` is still the fence coordinate, just not an announce-authz unit.) A speaker
 that legitimately announces an owner different from its datapath address — the WAN edge,

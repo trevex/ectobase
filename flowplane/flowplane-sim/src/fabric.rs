@@ -169,10 +169,10 @@ mod tests {
 
     const EDGE_UL: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xed, 0xee];
     const BACKEND_UL: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xba, 0xcc];
-    const VIP: [u8; 4] = [203, 0, 113, 1];
-    // The backend's own concrete overlay IP (distinct from the VIP): local LB-backend delivery
-    // resolves via `INTERFACES[(vni, backend's overlay ip)]`, never the VIP itself (DSR keeps the
-    // inner dst as the VIP).
+    const LB_IP_CONST: [u8; 4] = [203, 0, 113, 1];
+    // The backend's own concrete overlay IP (distinct from the LB_IP_CONST): local LB-backend delivery
+    // resolves via `INTERFACES[(vni, backend's overlay ip)]`, never the LB address itself (DSR keeps the
+    // inner dst as the LB_IP_CONST).
     const BACKEND_OVERLAY_IP: [u8; 4] = [10, 0, 0, 181];
     const BACKEND_GUEST_MAC: [u8; 6] = [0x66, 0x66, 0x66, 0x66, 0xba, 0xcc];
     const TAP: u32 = 42;
@@ -184,11 +184,11 @@ mod tests {
         ]
     }
 
-    /// Build a plain `[Eth][IPv4][TCP]` WAN frame as arrives at the edge (dst = VIP, dport = 443).
+    /// Build a plain `[Eth][IPv4][TCP]` WAN frame as arrives at the edge (dst = LB_IP_CONST, dport = 443).
     fn wan_frame() -> Vec<u8> {
         let src_ip = [203u8, 0, 113, 9]; // external client
         let builder = PacketBuilder::ethernet2([0xaa; 6], [0xbb; 6])
-            .ipv4(src_ip, VIP, 64)
+            .ipv4(src_ip, LB_IP_CONST, 64)
             .tcp(50000, 443, 0, 1024);
         let mut out = Vec::new();
         builder.write(&mut out, &[]).unwrap();
@@ -199,7 +199,7 @@ mod tests {
     fn two_node_wan_lb_delivers_to_backend() {
         let mut fabric = Fabric::new();
 
-        // Edge node: knows this WAN VIP (vni=0) and routes to backend_ul via Maglev.
+        // Edge node: knows this WAN LB address (vni=0) and routes to backend_ul via Maglev.
         let mut edge = SimNode::with_local(Local {
             uplink_ifindex: 7,
             uplink_mac: [0x02; 6],
@@ -209,7 +209,7 @@ mod tests {
         edge.maps.lb.insert(
             LbKey {
                 vni: 0,
-                ipv4: VIP,
+                ipv4: LB_IP_CONST,
                 port: 443,
                 proto: 6,
                 _pad: 0,
@@ -257,13 +257,13 @@ mod tests {
         // `lb_select_forward` (`be.node_vtep == local.underlay_ipv6`) and resolves the delivery tap
         // via `INTERFACES[(vni, be.overlay_ip)]` — this does NOT depend on the ingress
         // delivery-target reconstruction (`ROUTES` self-route) at all, which covers ordinary guest
-        // delivery, not anycast/VIP delivery. Without this, the backend has no way to recognize "I
-        // own this VIP" on ingress (WAN VIPs are anycast, not a guest's own overlay IP, so they have
+        // delivery, not anycast/LB address delivery. Without this, the backend has no way to recognize "I
+        // own this LB address" on ingress (WAN LB addresses are anycast, not a guest's own overlay IP, so they have
         // no ROUTES self-route).
         backend.maps.lb.insert(
             LbKey {
                 vni: 0,
-                ipv4: VIP,
+                ipv4: LB_IP_CONST,
                 port: 443,
                 proto: 6,
                 _pad: 0,

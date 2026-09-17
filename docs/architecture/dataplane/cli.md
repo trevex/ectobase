@@ -58,7 +58,7 @@ map is populated from repeatable flags, each encoding one control-plane object:
 | `--guest ifname=ip4=mac=underlay=vni` | a local guest interface (`INTERFACES`, `UNDERLAY`, tc guest edge on `ifname`). |
 | `--remote ip4=nexthop=vni` | a remote overlay route (`ROUTES`). |
 | `--guest6` / `--remote6` | dual-stack v6 counterparts (`PortMeta.gateway_ipv6`, `ROUTES6`). |
-| `--vip iface_ip=vip_ip` | a 1:1 VIP mapping (both `VIPS` directions). |
+| `--floating-ip iface_ip=floating_ip` | a 1:1 floating-IP mapping (both `FLOATING_IPS` directions: egress SNAT, ingress DNAT). |
 | `--lb ip:port:proto:lb_underlay` + `--lb-target …=backend_underlay` | an LB service + backends (allocates the Maglev table). |
 | `--nat guest_ip=nat_ip:min:max` | a NAT source block (`NAT`). |
 | `--neighbor-nat nat_ip:min:max@owner@vni` | a distributed-NAT return entry (`NEIGHBOR_NAT`). |

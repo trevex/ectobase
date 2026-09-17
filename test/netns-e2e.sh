@@ -258,7 +258,7 @@ cmd_up() {
         --guest "gA2-h=10.0.0.7=${GA2_MAC}=fd00:a::7=0" \
         --guest "gC-h=10.0.0.5=${GC_MAC}=fd00:a::205=100" \
         --remote "10.0.0.6=fd00:b::6=0" \
-        --vip "10.0.0.7=10.0.0.100" \
+        --floating-ip "10.0.0.7=10.0.0.100" \
         --lb "10.0.0.200:0:1:fd00:a::200" \
         --lb-target "10.0.0.200:0:1:fd00:a::200=fd00:a::5" \
         --lb-target "10.0.0.200:0:1:fd00:a::200=fd00:a::7" \
@@ -368,7 +368,7 @@ cmd_test() {
     # gB-h has an ingress whitelist: accept ICMP from 10.0.0.5, drop ICMP from 10.0.0.7. This also
     # exercises hypa's second interface (guesta2/gA2-h) — its packets reach the datapath and are
     # dropped by policy at hypb (not by the link being down; guesta2 connectivity is also proven by
-    # the VIP (Test 6) and LB (Test 7) tests).
+    # the LB address (Test 6) and LB (Test 7) tests).
     if sudo ip netns exec guesta ping -c 2 -W 2 10.0.0.6 >/dev/null 2>&1; then
         echo "  ACCEPT-rule OK: guesta(10.0.0.5) -> guestb reaches"
     else
@@ -399,12 +399,12 @@ cmd_test() {
     sudo ip netns exec guestb ping -c 3 -W 2 10.0.0.5
     echo ""
 
-    echo "=== Test 6: VIP — guestb -> guesta2's VIP 10.0.0.100 (DNAT in, SNAT out) ==="
+    echo "=== Test 6: LB address — guestb -> guesta2's LB address 10.0.0.100 (DNAT in, SNAT out) ==="
     # 0% loss proves DNAT delivered to guesta2 AND its SNAT'd reply returned with a correct
     # checksum (a bad checksum would be dropped by guestb). tcpdump prints packets to STDOUT, so
     # redirect stdout (not just stderr) to the proof file.
     if [[ -n "$TCPDUMP" ]]; then
-        sudo ip netns exec guestb "$TCPDUMP" -ni gB 'icmp' -c 6 >/tmp/vip-td.txt 2>&1 &
+        sudo ip netns exec guestb "$TCPDUMP" -ni gB 'icmp' -c 6 >/tmp/floatingip-td.txt 2>&1 &
         TDV=$!
         sleep 0.3
     fi
@@ -412,10 +412,10 @@ cmd_test() {
     if [[ -n "$TCPDUMP" ]]; then
         wait $TDV 2>/dev/null || true
         echo "--- SNAT proof: echo replies must be sourced from 10.0.0.100 ---"
-        grep -E '10\.0\.0\.100 > 10\.0\.0\.6: ICMP echo reply' /tmp/vip-td.txt \
-            && echo "  SNAT proof OK: reply source is the VIP" \
-            || echo "  WARNING: no VIP-sourced reply seen"
-        rm -f /tmp/vip-td.txt
+        grep -E '10\.0\.0\.100 > 10\.0\.0\.6: ICMP echo reply' /tmp/floatingip-td.txt \
+            && echo "  SNAT proof OK: reply source is the LB address" \
+            || echo "  WARNING: no LB address-sourced reply seen"
+        rm -f /tmp/floatingip-td.txt
     fi
     echo ""
 

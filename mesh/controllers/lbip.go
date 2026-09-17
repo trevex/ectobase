@@ -20,12 +20,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-type LBVIPReconciler struct {
+type LoadBalancerIPReconciler struct {
 	Client    client.Client
 	APIReader client.Reader
 }
 
-func (r *LBVIPReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *LoadBalancerIPReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var lb netv1.LoadBalancer
 	if err := r.Client.Get(ctx, req.NamespacedName, &lb); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -36,9 +36,9 @@ func (r *LBVIPReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	return ctrl.Result{}, r.Sync(ctx, &lb)
 }
 
-// Sync allocates or adopts a VIP for one LoadBalancer from its LBPool and writes Status.
-func (r *LBVIPReconciler) Sync(ctx context.Context, lb *netv1.LoadBalancer) error {
-	if lb.Status.State == "Allocated" && lb.Status.ObservedGeneration == lb.Generation && lb.Status.AllocatedVIP != "" {
+// Sync allocates or adopts an LB address for one LoadBalancer from its LBPool and writes Status.
+func (r *LoadBalancerIPReconciler) Sync(ctx context.Context, lb *netv1.LoadBalancer) error {
+	if lb.Status.State == "Allocated" && lb.Status.ObservedGeneration == lb.Generation && lb.Status.AllocatedIP != "" {
 		return nil
 	}
 	var pool netv1.LBPool
@@ -50,8 +50,8 @@ func (r *LBVIPReconciler) Sync(ctx context.Context, lb *netv1.LoadBalancer) erro
 	}
 
 	var pinned *netip.Addr
-	if lb.Spec.VIP != "" {
-		a, err := netip.ParseAddr(lb.Spec.VIP)
+	if lb.Spec.IP != "" {
+		a, err := netip.ParseAddr(lb.Spec.IP)
 		if err != nil {
 			return r.setState(ctx, lb, "Invalid", "")
 		}
@@ -62,20 +62,20 @@ func (r *LBVIPReconciler) Sync(ctx context.Context, lb *netv1.LoadBalancer) erro
 		return r.setState(ctx, lb, "Invalid", "")
 	}
 
-	used, err := r.usedVIPs(ctx, lb, &pool)
+	used, err := r.usedIPs(ctx, lb, &pool)
 	if err != nil {
-		return fmt.Errorf("build vip used-set: %w", err)
+		return fmt.Errorf("build lbIP used-set: %w", err)
 	}
 	resv := append(allocator.ReservedFor(prefix), parseAddrs(pool.Spec.ReservedIPs)...)
 
-	// Prefer the LB's own current VIP when auto-allocating, so an unrelated
-	// spec edit (generation bump) never silently renumbers a live VIP.
+	// Prefer the LB's own current LB address when auto-allocating, so an unrelated
+	// spec edit (generation bump) never silently renumbers a live LB address.
 	var preferred *netip.Addr
-	if a, err := netip.ParseAddr(lb.Status.AllocatedVIP); err == nil {
+	if a, err := netip.ParseAddr(lb.Status.AllocatedIP); err == nil {
 		preferred = &a
 	}
 
-	var vip netip.Addr
+	var lbIP netip.Addr
 	if pinned != nil {
 		if !allocator.InPrefix(prefix, *pinned) {
 			return r.setState(ctx, lb, "Invalid", "")
@@ -88,16 +88,16 @@ func (r *LBVIPReconciler) Sync(ctx context.Context, lb *netv1.LoadBalancer) erro
 				return r.setState(ctx, lb, "Invalid", "")
 			}
 		}
-		vip = *pinned
+		lbIP = *pinned
 	} else if a, ok := stickyOrLowest(prefix, preferred, used, resv); ok {
-		vip = a
+		lbIP = a
 	} else {
 		return r.setState(ctx, lb, "Exhausted", "")
 	}
-	return r.setState(ctx, lb, "Allocated", vip.String())
+	return r.setState(ctx, lb, "Allocated", lbIP.String())
 }
 
-// stickyOrLowest keeps the previously-allocated VIP if it is still valid and
+// stickyOrLowest keeps the previously-allocated LB address if it is still valid and
 // free, otherwise falls back to the lowest free address in the prefix.
 func stickyOrLowest(prefix netip.Prefix, preferred *netip.Addr, used map[netip.Addr]struct{}, resv []netip.Addr) (netip.Addr, bool) {
 	if preferred != nil && allocator.InPrefix(prefix, *preferred) {
@@ -117,7 +117,7 @@ func stickyOrLowest(prefix netip.Prefix, preferred *netip.Addr, used map[netip.A
 	return allocator.LowestFree(prefix, used, resv)
 }
 
-// poolPrefixFor returns the pool prefix matching a pinned VIP's family, or the
+// poolPrefixFor returns the pool prefix matching a pinned LB address's family, or the
 // pool's single prefix (preferring v4) when unpinned.
 func poolPrefixFor(p *netv1.LBPool, pinned *netip.Addr) (netip.Prefix, error) {
 	var v4, v6 *netip.Prefix
@@ -142,7 +142,7 @@ func poolPrefixFor(p *netv1.LBPool, pinned *netip.Addr) (netip.Prefix, error) {
 		if !pinned.Is4() && v6 != nil {
 			return *v6, nil
 		}
-		return netip.Prefix{}, fmt.Errorf("pinned VIP family not offered by pool")
+		return netip.Prefix{}, fmt.Errorf("pinned LB address family not offered by pool")
 	}
 	if v4 != nil {
 		return *v4, nil
@@ -153,9 +153,9 @@ func poolPrefixFor(p *netv1.LBPool, pinned *netip.Addr) (netip.Prefix, error) {
 	return netip.Prefix{}, fmt.Errorf("pool has no valid prefix")
 }
 
-// usedVIPs returns the addresses already allocated to OTHER LoadBalancers backed
+// usedIPs returns the addresses already allocated to OTHER LoadBalancers backed
 // by the same pool in this namespace, from a strong non-cached list.
-func (r *LBVIPReconciler) usedVIPs(ctx context.Context, self *netv1.LoadBalancer, pool *netv1.LBPool) (map[netip.Addr]struct{}, error) {
+func (r *LoadBalancerIPReconciler) usedIPs(ctx context.Context, self *netv1.LoadBalancer, pool *netv1.LBPool) (map[netip.Addr]struct{}, error) {
 	var list netv1.LoadBalancerList
 	if err := r.APIReader.List(ctx, &list, client.InNamespace(self.Namespace)); err != nil {
 		return nil, err
@@ -169,16 +169,16 @@ func (r *LBVIPReconciler) usedVIPs(ctx context.Context, self *netv1.LoadBalancer
 		if o.Spec.PoolRef.Name != pool.Name {
 			continue
 		}
-		if a, err := netip.ParseAddr(o.Status.AllocatedVIP); err == nil {
+		if a, err := netip.ParseAddr(o.Status.AllocatedIP); err == nil {
 			used[a] = struct{}{}
 		}
 	}
 	return used, nil
 }
 
-func (r *LBVIPReconciler) setState(ctx context.Context, lb *netv1.LoadBalancer, state, vip string) error {
+func (r *LoadBalancerIPReconciler) setState(ctx context.Context, lb *netv1.LoadBalancer, state, lbIP string) error {
 	lb.Status.State = state
-	lb.Status.AllocatedVIP = vip
+	lb.Status.AllocatedIP = lbIP
 	lb.Status.ObservedGeneration = lb.Generation
 	if err := r.Client.Status().Update(ctx, lb); err != nil {
 		return fmt.Errorf("update loadbalancer status: %w", err)
@@ -186,7 +186,7 @@ func (r *LBVIPReconciler) setState(ctx context.Context, lb *netv1.LoadBalancer, 
 	return nil
 }
 
-func (r *LBVIPReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *LoadBalancerIPReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.APIReader == nil {
 		r.APIReader = mgr.GetAPIReader()
 	}
@@ -194,7 +194,7 @@ func (r *LBVIPReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&netv1.LoadBalancer{}).
 		Watches(&netv1.LBPool{}, r.lbsForPool()).
 		// Delete-only watch on the LB's own type: when a sibling LB is deleted
-		// (freeing a VIP), re-enqueue same-pool peers parked in Exhausted/Pending
+		// (freeing an address), re-enqueue same-pool peers parked in Exhausted/Pending
 		// so they retry immediately instead of waiting for the ~10h resync. The
 		// predicate suppresses create/update/generic so ordinary status churn does
 		// not amplify reconciles.
@@ -210,8 +210,8 @@ func (r *LBVIPReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // peersNeedingRetry re-enqueues same-pool LoadBalancers parked in Exhausted/Pending
-// when a sibling is deleted (freeing a VIP), instead of waiting for resync.
-func (r *LBVIPReconciler) peersNeedingRetry() handler.EventHandler {
+// when a sibling is deleted (freeing an address), instead of waiting for resync.
+func (r *LoadBalancerIPReconciler) peersNeedingRetry() handler.EventHandler {
 	return handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
 		gone, ok := obj.(*netv1.LoadBalancer)
 		if !ok {
@@ -223,7 +223,7 @@ func (r *LBVIPReconciler) peersNeedingRetry() handler.EventHandler {
 
 // lbPeersNeedingRetry lists same-namespace LoadBalancers and returns reconcile
 // requests for every OTHER LB backed by gone's pool whose State is Exhausted or
-// Pending — the ones that a freed VIP may now let allocate.
+// Pending — the ones that a freed LB address may now let allocate.
 func lbPeersNeedingRetry(ctx context.Context, c client.Client, gone *netv1.LoadBalancer) []reconcile.Request {
 	var list netv1.LoadBalancerList
 	if err := c.List(ctx, &list, client.InNamespace(gone.Namespace)); err != nil {
@@ -247,7 +247,7 @@ func lbPeersNeedingRetry(ctx context.Context, c client.Client, gone *netv1.LoadB
 
 // lbsForPool re-enqueues LoadBalancers referencing a pool when the LBPool
 // changes (e.g. becomes Ready), so allocation retries without waiting for resync.
-func (r *LBVIPReconciler) lbsForPool() handler.EventHandler {
+func (r *LoadBalancerIPReconciler) lbsForPool() handler.EventHandler {
 	return handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
 		pool, ok := obj.(*netv1.LBPool)
 		if !ok {

@@ -60,7 +60,7 @@ flowchart LR
 
     VM & CT -->|owns placement| NIC
     SUBNET -->|allocate overlay IPs| NIC
-    LBPOOL -->|allocate VIP| LB
+    LBPOOL -->|allocate LB address| LB
     NIC & FW & LB & PEER & VPC --> CNIC
     VM --> CVM
     CT --> CCT
@@ -91,7 +91,7 @@ flattens each workload's slice of the graph into a single compiled object:
   peer route imports from any VPCPeering — producing one self-contained policy
   object per NIC. The agent reads only this; it never reads the raw net-group
   resources. Address allocation is resolved centrally and lands here too: overlay
-  IPs from the interface's VPC-scoped Subnet, VIPs from the LoadBalancer's LBPool,
+  IPs from the interface's VPC-scoped Subnet, LB addresses from the LoadBalancer's LBPool,
   NAT from NATGateway, and public addresses from FloatingIP.
 - VirtualMachine → CompiledVM. Boot / interface / placement facts flattened
   for the VM materializer.
@@ -104,7 +104,7 @@ interface's addresses are finalized: `NetworkInterface.status.state` is `Allocat
 `status.observedGeneration` matches the spec generation, and `status.allocatedIPs`
 is populated (CompiledNIC's overlay IPs are sourced from `status.allocatedIPs`, never
 `spec.ips`). It carries a LoadBalancer's membership only once that LB reaches
-`Allocated` with an assigned `status.allocatedVIP`. A resource that regresses out of
+`Allocated` with an assigned `status.allocatedIP`. A resource that regresses out of
 `Allocated` suppresses re-emission but keeps its last compiled object.
 
 The same is true of L2: the IPAM reconciler allocates a MAC in the same status write, and

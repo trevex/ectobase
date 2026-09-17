@@ -62,8 +62,8 @@ virtual device demuxes every decapped overlay frame regardless of which uplink c
 dual-homed host needs no per-NIC attach. Two separate tcx programs share the geneve ingress hook,
 ordered by the loader's `LinkOrder::first()` attach.
 
-`uplink_dsr_note` runs first. Its only job is the DSR reverse-VIP note: it reads the Geneve DSR
-option off the skb tunnel metadata (`bpf_skb_get_tunnel_opt`) and records the reverse-VIP conntrack
+`uplink_dsr_note` runs first. Its only job is the DSR reverse-LB address note: it reads the Geneve DSR
+option off the skb tunnel metadata (`bpf_skb_get_tunnel_opt`) and records the reverse-LB address conntrack
 entry (`conntrack::dsr_note`/`dsr_note6`). It always returns `TC_ACT_UNSPEC` (`TCX_NEXT`) so
 `uplink_rx` runs next. It exists as its own program because folding the note into `uplink_rx` blows
 the verifier's 512-byte combined-stack budget, and out-of-lining it onto `uplink_rx`'s call graph is
@@ -79,9 +79,9 @@ the delivery target from `(vni, inner destination)` across four mechanisms:
   the tap, using `bpf_redirect_peer` when the delivery device has a pod-netns peer (veth/netkit) and
   a plain `bpf_redirect` otherwise. Keying on the overlay `(vni, ip)` is what makes overlapping
   overlay IPv4 across VNIs safe.
-- Load balancing: Maglev-select a backend underlay for the VIP. If the backend is remote, re-stamp
+- Load balancing: Maglev-select a backend underlay for the LB address. If the backend is remote, re-stamp
   the tunnel key at the backend node and redirect back to the geneve device without decapping. The
-  inner destination stays the VIP (DSR). See [Load balancing](../../features/loadbalancer.md).
+  inner destination stays the LB address (DSR). See [Load balancing](../../features/loadbalancer.md).
 - NAT return: a conntrack `CT_REWRITE_DST` entry restores the guest's inner destination (and, for
   NAT64, expands an IPv4 reply back to IPv6).
 - Edge local-deliver: on the WAN edge, an `INTERFACES` miss against the edge's own
@@ -105,7 +105,7 @@ processes everything a guest emits:
    `tc_guest_egress_v6`. Every tail call runs through the `GUEST_PROGS_TC` program array and gets a
    fresh verifier stack budget.
 3. Firewall (deny-by-default, egress direction) and conntrack creation.
-4. VIP / SNAT rewrites and, if configured, rate metering.
+4. LB address / SNAT rewrites and, if configured, rate metering.
 5. Route and deliver decision: an exact-match lookup in `ROUTES`/`ROUTES6` for the guest's VNI
    yields either a local redirect straight to the destination tap (same-host fast path), an overlay
    encap (stamp the resolved `{vni, remote}` tunnel key via `bpf_skb_set_tunnel_key` and redirect to

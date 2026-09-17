@@ -64,7 +64,7 @@ pub(crate) fn resolve_dsr_opt(skb: *mut __sk_buff) -> Option<DsrOpt> {
 }
 
 /// Tcx ingress "pre-program" on the geneve `collect_md` device (see `main.rs::uplink_dsr_note`),
-/// attached to run BEFORE `uplink_rx` on the SAME hook. Its ONLY job is the DSR reverse-VIP note
+/// attached to run BEFORE `uplink_rx` on the SAME hook. Its ONLY job is the DSR reverse-LB address note
 /// (`flowplane_core::conntrack::dsr_note`/`dsr_note6`), recorded independently of
 /// `process_uplink`/`process_uplink_v6` because:
 ///   - inlining the DSR `ct_key` build (~48B) into `uplink_rx`'s own frame pushes its combined
@@ -88,7 +88,7 @@ pub(crate) fn resolve_dsr_opt(skb: *mut __sk_buff) -> Option<DsrOpt> {
 /// `uplink_rx` entirely, silently breaking every uplink packet).
 ///
 /// NOTE (scope): this does NOT re-run `uplink_rx`'s own LB selection to confirm this node is actually
-/// the chosen local backend before noting the VIP — it notes unconditionally whenever the DSR option
+/// the chosen local backend before noting the LB address — it notes unconditionally whenever the DSR option
 /// is present on this node's uplink. In practice `wan_rx` only ever stamps the option on a frame it is
 /// ALSO tunnel-keying toward this exact backend's node_vtep, so arriving here with the option set
 /// already implies this node is the intended backend; this program does not (cannot, cheaply, on its
@@ -115,10 +115,10 @@ pub fn try_uplink_dsr_note(ctx: &TcContext) -> i32 {
     let mut maps = GlobalMaps;
     let now = crate::conntrack::now();
     if ethertype == ETH_P_IPV6 {
-        dsr_note6(&pkt, &mut maps, ETH_LEN, vni, &opt.vip, now);
+        dsr_note6(&pkt, &mut maps, ETH_LEN, vni, &opt.lb_ip, now);
     } else if ethertype == ETH_P_IP {
-        let vip = [opt.vip[0], opt.vip[1], opt.vip[2], opt.vip[3]];
-        dsr_note(&pkt, &mut maps, ETH_LEN, vni, &vip, now);
+        let lb_ip = [opt.lb_ip[0], opt.lb_ip[1], opt.lb_ip[2], opt.lb_ip[3]];
+        dsr_note(&pkt, &mut maps, ETH_LEN, vni, &lb_ip, now);
     }
     TC_ACT_UNSPEC
 }
@@ -203,7 +203,7 @@ pub fn try_uplink_rx(ctx: &TcContext) -> Result<i32, DpErr> {
     // is the only point that value is actually knowable (needed for the CT_F_NAT64 ingress return).
     //
     // The DSR Geneve option is not read or threaded here — `UplinkIn` has no DSR field. The DSR
-    // reverse-VIP note runs entirely in the separate `uplink_dsr_note` tcx pre-program (see
+    // reverse-LB address note runs entirely in the separate `uplink_dsr_note` tcx pre-program (see
     // `try_uplink_dsr_note` below), which runs BEFORE this program on the same geneve ingress hook:
     // inlining the DSR note's `ct_key` build into `uplink_rx` pushes its combined call-stack over the
     // verifier's 512-byte budget (`resolve_uplink_target`'s out-of-lining alone is not enough
@@ -222,10 +222,10 @@ pub fn try_uplink_rx(ctx: &TcContext) -> Result<i32, DpErr> {
 }
 
 /// WAN-edge return path (`wan_rx`, tcx on the WAN uplink): delegates entirely to
-/// `flowplane_core::datapath::process_wan_rx` (VIP ingress + the neighbor-NAT relay carrying the
+/// `flowplane_core::datapath::process_wan_rx` (LB address ingress + the neighbor-NAT relay carrying the
 /// real owner VNI — see its doc comment for the bug that fixed), then executes its verdict.
 ///
-/// On a VIP hit `out.dsr` is `Some` (the DSR option lives on `WanRxOut`, not `TunnelEncap` —
+/// On an LB address hit `out.dsr` is `Some` (the DSR option lives on `WanRxOut`, not `TunnelEncap` —
 /// only this program's edge encode ever sets it). This is handled here, NOT via the shared
 /// `execute()` (which stays key-only, shared with `try_uplink_rx`/`v6_uplink_rx` — neither of which
 /// ever carries a DSR option): stamp the tunnel key via `apply_encap`, then — only when `dsr` is

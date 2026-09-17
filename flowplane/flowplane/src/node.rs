@@ -275,10 +275,10 @@ impl DataplaneNode for NodeService {
         Ok(Response::new(resp))
     }
 
-    async fn add_lb_vip(
+    async fn add_load_balancer(
         &self,
-        req: Request<pb::AddLbVipRequest>,
-    ) -> Result<Response<pb::AddLbVipResponse>, Status> {
+        req: Request<pb::AddLoadBalancerRequest>,
+    ) -> Result<Response<pb::AddLoadBalancerResponse>, Status> {
         let attach = self
             .attach
             .as_ref()
@@ -286,14 +286,16 @@ impl DataplaneNode for NodeService {
             .clone();
         let r = req.into_inner();
         let log = format!(
-            "LB VIP add id={} vni={} vip={} lb_underlay={} ports={:?}",
-            r.id, r.vni, r.vip, r.lb_underlay, r.ports
+            "load balancer add id={} vni={} lb_ip={} lb_underlay={} ports={:?}",
+            r.id, r.vni, r.ip, r.lb_underlay, r.ports
         );
         let resp = tokio::task::spawn_blocking(move || {
-            attach.control.with_core(|c| handlers::add_lb_vip(c, &r))
+            attach
+                .control
+                .with_core(|c| handlers::add_load_balancer(c, &r))
         })
         .await
-        .map_err(|e| Status::internal(format!("add_lb_vip task panicked: {e}")))??;
+        .map_err(|e| Status::internal(format!("add_load_balancer task panicked: {e}")))??;
         println!("{log}");
         Ok(Response::new(resp))
     }
@@ -323,22 +325,24 @@ impl DataplaneNode for NodeService {
         Ok(Response::new(resp))
     }
 
-    async fn del_lb_vip(
+    async fn del_load_balancer(
         &self,
-        req: Request<pb::DelLbVipRequest>,
-    ) -> Result<Response<pb::DelLbVipResponse>, Status> {
+        req: Request<pb::DelLoadBalancerRequest>,
+    ) -> Result<Response<pb::DelLoadBalancerResponse>, Status> {
         let attach = self
             .attach
             .as_ref()
             .ok_or_else(|| Status::failed_precondition("datapath not initialized"))?
             .clone();
         let r = req.into_inner();
-        let log = format!("LB VIP del id={}", r.id);
+        let log = format!("load balancer del id={}", r.id);
         let resp = tokio::task::spawn_blocking(move || {
-            attach.control.with_core(|c| handlers::del_lb_vip(c, &r))
+            attach
+                .control
+                .with_core(|c| handlers::del_load_balancer(c, &r))
         })
         .await
-        .map_err(|e| Status::internal(format!("del_lb_vip task panicked: {e}")))??;
+        .map_err(|e| Status::internal(format!("del_load_balancer task panicked: {e}")))??;
         println!("{log}");
         Ok(Response::new(resp))
     }

@@ -10,7 +10,7 @@
 //! LB local-deliver branch this file used to byte-anchor has no bytecode oracle anymore.
 //!
 //! What this anchor still proves: the real compiled `uplink_rx`, fed a post-decap inner frame whose
-//! IPv4 dst is the overlay LB VIP (the exact fixture that used to drive the LB local-deliver path)
+//! IPv4 dst is the overlay LB address (the exact fixture that used to drive the LB local-deliver path)
 //! and with the SAME LB/Maglev/firewall map state a real LB backend would carry, still fails SAFE —
 //! `TC_ACT_OK`, packet unchanged — because the tunnel-key gate runs before the LB dispatch. In
 //! production this is unreachable (the geneve device always stamps a tunnel key), but it is exactly
@@ -42,7 +42,7 @@ const TAP: u32 = 42;
 const TABLE_ID: u32 = 1;
 const GUEST_MAC: [u8; 6] = [0x66, 0x66, 0x66, 0x66, 0x66, 0x00];
 const GUEST_IP: [u8; 4] = [10, 0, 0, 20]; // the client guest (LB source)
-const OVERLAY_VIP: [u8; 4] = [10, 0, 100, 1]; // the balanced overlay VIP (inner dst, DSR)
+const OVERLAY_LB_IP: [u8; 4] = [10, 0, 100, 1]; // the balanced overlay LB address (inner dst, DSR)
 const BACKEND_UL: [u8; 16] = ul(0xbb); // this node's underlay == the Maglev backend
 const DPORT: u16 = 443;
 
@@ -59,8 +59,8 @@ fn local() -> Local {
     }
 }
 
-/// Local-delivery `INTERFACES` row for the backend's own overlay VIP (what `process_interface`
-/// would program for the guest tap this LB VIP is backed by, DSR-style: same VIP, no NAT).
+/// Local-delivery `INTERFACES` row for the backend's own overlay LB address (what `process_interface`
+/// would program for the guest tap this LB address is backed by, DSR-style: same LB_IP_CONST, no NAT).
 fn iface_value() -> IfaceValue {
     IfaceValue {
         tap_ifindex: TAP,
@@ -78,10 +78,10 @@ fn backend() -> LbBackend {
     LbBackend {
         node_vtep: BACKEND_UL,
         overlay_ip: [
-            OVERLAY_VIP[0],
-            OVERLAY_VIP[1],
-            OVERLAY_VIP[2],
-            OVERLAY_VIP[3],
+            OVERLAY_LB_IP[0],
+            OVERLAY_LB_IP[1],
+            OVERLAY_LB_IP[2],
+            OVERLAY_LB_IP[3],
             0,
             0,
             0,
@@ -101,26 +101,26 @@ fn backend() -> LbBackend {
     }
 }
 
-/// The POST-decap inner frame `[InnerEth(14)][IPv4][TCP]` from `GUEST_IP` -> `OVERLAY_VIP:DPORT` —
+/// The POST-decap inner frame `[InnerEth(14)][IPv4][TCP]` from `GUEST_IP` -> `OVERLAY_LB_IP:DPORT` —
 /// exactly what the kernel `collect_md` geneve device would hand `uplink_rx`. This is also the
 /// literal `BPF_PROG_TEST_RUN` input below — there is no outer wrapper to build anymore.
 fn inner_eth_frame() -> Vec<u8> {
     use etherparse::PacketBuilder;
     let builder = PacketBuilder::ethernet2([0x11; 6], [0x22; 6])
-        .ipv4(GUEST_IP, OVERLAY_VIP, 64)
+        .ipv4(GUEST_IP, OVERLAY_LB_IP, 64)
         .tcp(40000, DPORT, 0, 1024);
     let mut out = Vec::new();
     builder.write(&mut out, &[]).unwrap();
     out
 }
 
-/// The single ingress ALLOW rule the backend installs on `TAP`, covering the VIP dst (DSR: the
-/// inner dst stays the VIP, so the policy MUST cover `VIP:443`, not the backend's own IP).
-fn allow_vip_rule() -> FwRule {
+/// The single ingress ALLOW rule the backend installs on `TAP`, covering the LB address dst (DSR: the
+/// inner dst stays the LB_IP_CONST, so the policy MUST cover `IP:443`, not the backend's own IP).
+fn allow_floating_ip_rule() -> FwRule {
     FwRule {
         src_ip: [0; 4],
         src_mask: [0; 4],
-        dst_ip: OVERLAY_VIP,
+        dst_ip: OVERLAY_LB_IP,
         dst_mask: [255, 255, 255, 255],
         src_port_min: 0,
         src_port_max: 65535,
@@ -137,19 +137,19 @@ fn allow_vip_rule() -> FwRule {
 
 /// Native `flowplane_core::datapath::process_uplink` reference for the LB local-deliver fixture: a
 /// backend node whose INTERFACES local-delivery row + overlay LB + Maglev self-selection +
-/// VIP-allow firewall match exactly the eBPF maps the (unreachable, see the module doc) LB
+/// LB address-allow firewall match exactly the eBPF maps the (unreachable, see the module doc) LB
 /// dispatch would read. Sanity check on the fixture, not a byte-parity oracle.
 fn native_reference(inner: &[u8]) -> (Action, Vec<u8>) {
     let mut node = SimNode::with_local(local());
-    // INTERFACES local-delivery row for the backend's own overlay VIP (replaces the old
+    // INTERFACES local-delivery row for the backend's own overlay LB address (replaces the old
     // UNDERLAY[backend] fiction — local-vs-remote is now `LbBackend.node_vtep == self`, and local
     // delivery resolves the tap via INTERFACES[(vni, overlay_ip)]).
-    node.maps.add_iface(VNI, OVERLAY_VIP, iface_value());
-    // Overlay LB VIP -> Maglev table 1.
+    node.maps.add_iface(VNI, OVERLAY_LB_IP, iface_value());
+    // Overlay LB address -> Maglev table 1.
     node.maps.lb.insert(
         LbKey {
             vni: VNI,
-            ipv4: OVERLAY_VIP,
+            ipv4: OVERLAY_LB_IP,
             port: DPORT,
             proto: 6,
             _pad: 0,
@@ -168,7 +168,7 @@ fn native_reference(inner: &[u8]) -> (Action, Vec<u8>) {
         },
         backend(),
     );
-    // Firewall: one ingress rule on TAP covering VIP:443 (enforcement is unconditional).
+    // Firewall: one ingress rule on TAP covering IP:443 (enforcement is unconditional).
     node.maps.fw_meta.insert(
         TAP,
         FwMeta {
@@ -176,7 +176,9 @@ fn native_reference(inner: &[u8]) -> (Action, Vec<u8>) {
             egress_count: 0,
         },
     );
-    node.maps.fw_rules.insert((TAP, 0), allow_vip_rule());
+    node.maps
+        .fw_rules
+        .insert((TAP, 0), allow_floating_ip_rule());
 
     let l = local();
     let out = node.uplink(inner, VNI, &l);
@@ -295,14 +297,14 @@ fn uplink_rx_lb_deliver_bytecode_fails_safe_without_tunnel_key() {
     prog.load().expect("verify/load uplink_rx");
     let prog_fd = prog.fd().expect("uplink_rx fd").as_fd().as_raw_fd();
 
-    // Run the real bytecode on the (undecorated) inner LB-VIP frame — no tunnel-key metadata attached.
+    // Run the real bytecode on the (undecorated) inner LB-address frame — no tunnel-key metadata attached.
     let out = bpf_prog_test_run_skb(prog_fd, &inner, 1 /* loopback, always present */)
         .expect("BPF_PROG_TEST_RUN on uplink_rx (needs CAP_BPF + kernel tc test-run support)");
 
     assert_eq!(
         out.retval, TC_ACT_OK,
         "uplink_rx must fail SAFE (TC_ACT_OK passthrough) when no tunnel-key metadata is present, \
-         even for an LB-VIP-shaped fixture — the tunnel-key gate runs before the LB dispatch (see \
+         even for an LB-address-shaped fixture — the tunnel-key gate runs before the LB dispatch (see \
          the module doc); production never reaches this branch"
     );
     assert_eq!(

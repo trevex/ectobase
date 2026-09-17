@@ -8,6 +8,7 @@ mod csum;
 mod dbg;
 mod dhcp;
 mod egress;
+mod floatingip;
 mod ingress;
 mod inspect;
 mod maps;
@@ -18,7 +19,6 @@ mod parse;
 mod tc;
 mod tunnel;
 mod v6;
-mod vip;
 
 use aya_ebpf::{
     bindings::TC_ACT_OK,
@@ -28,7 +28,7 @@ use aya_ebpf::{
 
 /// B7c: tcx ingress "pre-program" on the geneve `collect_md` device, attached BEFORE `uplink_rx` on
 /// the SAME hook (see `flowplane::control::Control::bring_up`'s `LinkOrder::first()` attach). Its only
-/// job is the DSR reverse-VIP map note — split out of `uplink_rx` into its OWN fresh 512B BPF stack,
+/// job is the DSR reverse-LB address map note — split out of `uplink_rx` into its OWN fresh 512B BPF stack,
 /// since neither inlining nor out-of-lining it on `uplink_rx`'s own call graph verifies (see
 /// `ingress::try_uplink_dsr_note`'s doc comment for the full story). ALWAYS returns `TC_ACT_UNSPEC`
 /// (== `TCX_NEXT` under the kernel's tcx multi-prog dispatcher) so `uplink_rx` always runs next.

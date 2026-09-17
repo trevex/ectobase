@@ -343,7 +343,7 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
 ///   2. `--underlay-within <cidr>` when set — the authoritative cluster-wide filter: the host
 ///      address inside the expected node aggregate (e.g. `fd00:cafe::/32`). This overrides a wrong
 ///      `status.hostIP` (a mgmt address) and ignores unrelated global addresses (a Talos hostDNS
-///      `lo` ULA, CNI veth /128s, the node's own API-VIP /64, …).
+///      `lo` ULA, CNI veth /128s, the node's own API-LB address /64, …).
 ///   3. the kubelet node IP from the downward-API env (`HOST_IP`/`NODE_IP` = `status.hostIP`) —
 ///      the proper-cluster path (a KubeVirt node's fabric identity) when hostIP is the fabric addr.
 ///   4. inference from the host's `dummy*`/`lo` fabric-loopback address.

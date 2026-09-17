@@ -683,8 +683,11 @@ renders (ebpf clab):
                         LB lists the load balancers this NIC is a backend of. Pure forwarding membership —
                         it grants NO firewall permission (that comes solely from FirewallPolicy).
                       items:
-                        description: 'CompiledLB is one load-balancer this NIC backs: the VIP (v4 or v6) and its service ports.'
+                        description: 'CompiledLB is one load-balancer this NIC backs: the LB address (v4 or v6) and its service ports.'
                         properties:
+                          ip:
+                            description: LB address is the load-balancer virtual IP (IPv4 or IPv6).
+                            type: string
                           ports:
                             description: Ports are the LB service (port, proto) tuples.
                             items:
@@ -700,11 +703,8 @@ renders (ebpf clab):
                                 - proto
                               type: object
                             type: array
-                          vip:
-                            description: VIP is the load-balancer virtual IP (IPv4 or IPv6).
-                            type: string
                         required:
-                          - vip
+                          - ip
                         type: object
                       type: array
                     mac:
@@ -1307,7 +1307,7 @@ renders (ebpf clab):
         - name: v1alpha1
           schema:
             openAPIV3Schema:
-              description: LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.
+              description: LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.
               properties:
                 apiVersion:
                   description: |-
@@ -1327,7 +1327,7 @@ renders (ebpf clab):
                 metadata:
                   type: object
                 spec:
-                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped VIP prefix range).
+                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped LB address prefix range).
                   properties:
                     reservedIPs:
                       description: ReservedIPs are addresses held back from allocation within this pool.
@@ -1335,10 +1335,10 @@ renders (ebpf clab):
                         type: string
                       type: array
                     v4Prefix:
-                      description: V4Prefix optionally pins the IPv4 CIDR for this VIP pool.
+                      description: V4Prefix optionally pins the IPv4 CIDR for this LB address pool.
                       type: string
                     v6Prefix:
-                      description: V6Prefix optionally pins the IPv6 CIDR for this VIP pool.
+                      description: V6Prefix optionally pins the IPv6 CIDR for this LB address pool.
                       type: string
                   type: object
                 status:
@@ -1348,7 +1348,7 @@ renders (ebpf clab):
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
                     total:
-                      description: Total is the total number of allocatable VIP addresses.
+                      description: Total is the total number of allocatable LB address addresses.
                       format: int32
                       type: integer
                   type: object
@@ -1397,11 +1397,22 @@ renders (ebpf clab):
                   type: object
                 spec:
                   description: |-
-                    LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity
-                    (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
+                    LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6);
+                    backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
+
+                    Deliberately NOT called a "LB address". A load-balancer address is 1:N and ingress-only — clients reach
+                    it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway
+                    address, never to this one. The 1:1, bidirectional "virtual IP" that a single interface owns for
+                    both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.
+                    Naming both "LB address" conflated them once too often.
                   properties:
+                    ip:
+                      description: |-
+                        IP is the requested load-balancer address. Empty => allocate from PoolRef; set =>
+                        validate membership in the pool + reserve (bring-your-own).
+                      type: string
                     poolRef:
-                      description: PoolRef selects the LBPool to allocate the VIP from.
+                      description: PoolRef selects the LBPool to allocate the IP from.
                       properties:
                         name:
                           description: Name is the name of the referenced object.
@@ -1482,20 +1493,17 @@ renders (ebpf clab):
                           type: object
                       type: object
                       x-kubernetes-map-type: atomic
-                    vip:
-                      description: |-
-                        VIP is the requested virtual IP. Empty => allocate from PoolRef; set =>
-                        validate membership in the pool + reserve (bring-your-own).
-                      type: string
                   required:
+                    - ip
                     - ports
-                    - vip
                   type: object
                 status:
                   description: LoadBalancerStatus is the observed state of a LoadBalancer.
                   properties:
-                    allocatedVIP:
-                      description: AllocatedVIP is the authoritative VIP assigned by the VIP allocator.
+                    allocatedIP:
+                      description: |-
+                        AllocatedIP is the authoritative address assigned by the LB address allocator. Mirrors
+                        NetworkInterface.status.allocatedIPs: spec is the request, status is the truth.
                       type: string
                     observedGeneration:
                       description: ObservedGeneration is the Spec generation the allocation reflects.
@@ -3139,8 +3147,11 @@ renders (ebpf hw):
                         LB lists the load balancers this NIC is a backend of. Pure forwarding membership —
                         it grants NO firewall permission (that comes solely from FirewallPolicy).
                       items:
-                        description: 'CompiledLB is one load-balancer this NIC backs: the VIP (v4 or v6) and its service ports.'
+                        description: 'CompiledLB is one load-balancer this NIC backs: the LB address (v4 or v6) and its service ports.'
                         properties:
+                          ip:
+                            description: LB address is the load-balancer virtual IP (IPv4 or IPv6).
+                            type: string
                           ports:
                             description: Ports are the LB service (port, proto) tuples.
                             items:
@@ -3156,11 +3167,8 @@ renders (ebpf hw):
                                 - proto
                               type: object
                             type: array
-                          vip:
-                            description: VIP is the load-balancer virtual IP (IPv4 or IPv6).
-                            type: string
                         required:
-                          - vip
+                          - ip
                         type: object
                       type: array
                     mac:
@@ -3763,7 +3771,7 @@ renders (ebpf hw):
         - name: v1alpha1
           schema:
             openAPIV3Schema:
-              description: LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.
+              description: LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.
               properties:
                 apiVersion:
                   description: |-
@@ -3783,7 +3791,7 @@ renders (ebpf hw):
                 metadata:
                   type: object
                 spec:
-                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped VIP prefix range).
+                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped LB address prefix range).
                   properties:
                     reservedIPs:
                       description: ReservedIPs are addresses held back from allocation within this pool.
@@ -3791,10 +3799,10 @@ renders (ebpf hw):
                         type: string
                       type: array
                     v4Prefix:
-                      description: V4Prefix optionally pins the IPv4 CIDR for this VIP pool.
+                      description: V4Prefix optionally pins the IPv4 CIDR for this LB address pool.
                       type: string
                     v6Prefix:
-                      description: V6Prefix optionally pins the IPv6 CIDR for this VIP pool.
+                      description: V6Prefix optionally pins the IPv6 CIDR for this LB address pool.
                       type: string
                   type: object
                 status:
@@ -3804,7 +3812,7 @@ renders (ebpf hw):
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
                     total:
-                      description: Total is the total number of allocatable VIP addresses.
+                      description: Total is the total number of allocatable LB address addresses.
                       format: int32
                       type: integer
                   type: object
@@ -3853,11 +3861,22 @@ renders (ebpf hw):
                   type: object
                 spec:
                   description: |-
-                    LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity
-                    (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
+                    LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6);
+                    backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
+
+                    Deliberately NOT called a "LB address". A load-balancer address is 1:N and ingress-only — clients reach
+                    it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway
+                    address, never to this one. The 1:1, bidirectional "virtual IP" that a single interface owns for
+                    both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.
+                    Naming both "LB address" conflated them once too often.
                   properties:
+                    ip:
+                      description: |-
+                        IP is the requested load-balancer address. Empty => allocate from PoolRef; set =>
+                        validate membership in the pool + reserve (bring-your-own).
+                      type: string
                     poolRef:
-                      description: PoolRef selects the LBPool to allocate the VIP from.
+                      description: PoolRef selects the LBPool to allocate the IP from.
                       properties:
                         name:
                           description: Name is the name of the referenced object.
@@ -3938,20 +3957,17 @@ renders (ebpf hw):
                           type: object
                       type: object
                       x-kubernetes-map-type: atomic
-                    vip:
-                      description: |-
-                        VIP is the requested virtual IP. Empty => allocate from PoolRef; set =>
-                        validate membership in the pool + reserve (bring-your-own).
-                      type: string
                   required:
+                    - ip
                     - ports
-                    - vip
                   type: object
                 status:
                   description: LoadBalancerStatus is the observed state of a LoadBalancer.
                   properties:
-                    allocatedVIP:
-                      description: AllocatedVIP is the authoritative VIP assigned by the VIP allocator.
+                    allocatedIP:
+                      description: |-
+                        AllocatedIP is the authoritative address assigned by the LB address allocator. Mirrors
+                        NetworkInterface.status.allocatedIPs: spec is the request, status is the truth.
                       type: string
                     observedGeneration:
                       description: ObservedGeneration is the Spec generation the allocation reflects.
@@ -5592,8 +5608,11 @@ renders (tier1 on):
                         LB lists the load balancers this NIC is a backend of. Pure forwarding membership —
                         it grants NO firewall permission (that comes solely from FirewallPolicy).
                       items:
-                        description: 'CompiledLB is one load-balancer this NIC backs: the VIP (v4 or v6) and its service ports.'
+                        description: 'CompiledLB is one load-balancer this NIC backs: the LB address (v4 or v6) and its service ports.'
                         properties:
+                          ip:
+                            description: LB address is the load-balancer virtual IP (IPv4 or IPv6).
+                            type: string
                           ports:
                             description: Ports are the LB service (port, proto) tuples.
                             items:
@@ -5609,11 +5628,8 @@ renders (tier1 on):
                                 - proto
                               type: object
                             type: array
-                          vip:
-                            description: VIP is the load-balancer virtual IP (IPv4 or IPv6).
-                            type: string
                         required:
-                          - vip
+                          - ip
                         type: object
                       type: array
                     mac:
@@ -6216,7 +6232,7 @@ renders (tier1 on):
         - name: v1alpha1
           schema:
             openAPIV3Schema:
-              description: LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.
+              description: LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.
               properties:
                 apiVersion:
                   description: |-
@@ -6236,7 +6252,7 @@ renders (tier1 on):
                 metadata:
                   type: object
                 spec:
-                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped VIP prefix range).
+                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped LB address prefix range).
                   properties:
                     reservedIPs:
                       description: ReservedIPs are addresses held back from allocation within this pool.
@@ -6244,10 +6260,10 @@ renders (tier1 on):
                         type: string
                       type: array
                     v4Prefix:
-                      description: V4Prefix optionally pins the IPv4 CIDR for this VIP pool.
+                      description: V4Prefix optionally pins the IPv4 CIDR for this LB address pool.
                       type: string
                     v6Prefix:
-                      description: V6Prefix optionally pins the IPv6 CIDR for this VIP pool.
+                      description: V6Prefix optionally pins the IPv6 CIDR for this LB address pool.
                       type: string
                   type: object
                 status:
@@ -6257,7 +6273,7 @@ renders (tier1 on):
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
                     total:
-                      description: Total is the total number of allocatable VIP addresses.
+                      description: Total is the total number of allocatable LB address addresses.
                       format: int32
                       type: integer
                   type: object
@@ -6306,11 +6322,22 @@ renders (tier1 on):
                   type: object
                 spec:
                   description: |-
-                    LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity
-                    (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
+                    LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6);
+                    backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
+
+                    Deliberately NOT called a "LB address". A load-balancer address is 1:N and ingress-only — clients reach
+                    it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway
+                    address, never to this one. The 1:1, bidirectional "virtual IP" that a single interface owns for
+                    both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.
+                    Naming both "LB address" conflated them once too often.
                   properties:
+                    ip:
+                      description: |-
+                        IP is the requested load-balancer address. Empty => allocate from PoolRef; set =>
+                        validate membership in the pool + reserve (bring-your-own).
+                      type: string
                     poolRef:
-                      description: PoolRef selects the LBPool to allocate the VIP from.
+                      description: PoolRef selects the LBPool to allocate the IP from.
                       properties:
                         name:
                           description: Name is the name of the referenced object.
@@ -6391,20 +6418,17 @@ renders (tier1 on):
                           type: object
                       type: object
                       x-kubernetes-map-type: atomic
-                    vip:
-                      description: |-
-                        VIP is the requested virtual IP. Empty => allocate from PoolRef; set =>
-                        validate membership in the pool + reserve (bring-your-own).
-                      type: string
                   required:
+                    - ip
                     - ports
-                    - vip
                   type: object
                 status:
                   description: LoadBalancerStatus is the observed state of a LoadBalancer.
                   properties:
-                    allocatedVIP:
-                      description: AllocatedVIP is the authoritative VIP assigned by the VIP allocator.
+                    allocatedIP:
+                      description: |-
+                        AllocatedIP is the authoritative address assigned by the LB address allocator. Mirrors
+                        NetworkInterface.status.allocatedIPs: spec is the request, status is the truth.
                       type: string
                     observedGeneration:
                       description: ObservedGeneration is the Spec generation the allocation reflects.
@@ -8085,8 +8109,11 @@ renders (tier1 watchdog):
                         LB lists the load balancers this NIC is a backend of. Pure forwarding membership —
                         it grants NO firewall permission (that comes solely from FirewallPolicy).
                       items:
-                        description: 'CompiledLB is one load-balancer this NIC backs: the VIP (v4 or v6) and its service ports.'
+                        description: 'CompiledLB is one load-balancer this NIC backs: the LB address (v4 or v6) and its service ports.'
                         properties:
+                          ip:
+                            description: LB address is the load-balancer virtual IP (IPv4 or IPv6).
+                            type: string
                           ports:
                             description: Ports are the LB service (port, proto) tuples.
                             items:
@@ -8102,11 +8129,8 @@ renders (tier1 watchdog):
                                 - proto
                               type: object
                             type: array
-                          vip:
-                            description: VIP is the load-balancer virtual IP (IPv4 or IPv6).
-                            type: string
                         required:
-                          - vip
+                          - ip
                         type: object
                       type: array
                     mac:
@@ -8709,7 +8733,7 @@ renders (tier1 watchdog):
         - name: v1alpha1
           schema:
             openAPIV3Schema:
-              description: LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.
+              description: LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.
               properties:
                 apiVersion:
                   description: |-
@@ -8729,7 +8753,7 @@ renders (tier1 watchdog):
                 metadata:
                   type: object
                 spec:
-                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped VIP prefix range).
+                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped LB address prefix range).
                   properties:
                     reservedIPs:
                       description: ReservedIPs are addresses held back from allocation within this pool.
@@ -8737,10 +8761,10 @@ renders (tier1 watchdog):
                         type: string
                       type: array
                     v4Prefix:
-                      description: V4Prefix optionally pins the IPv4 CIDR for this VIP pool.
+                      description: V4Prefix optionally pins the IPv4 CIDR for this LB address pool.
                       type: string
                     v6Prefix:
-                      description: V6Prefix optionally pins the IPv6 CIDR for this VIP pool.
+                      description: V6Prefix optionally pins the IPv6 CIDR for this LB address pool.
                       type: string
                   type: object
                 status:
@@ -8750,7 +8774,7 @@ renders (tier1 watchdog):
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
                     total:
-                      description: Total is the total number of allocatable VIP addresses.
+                      description: Total is the total number of allocatable LB address addresses.
                       format: int32
                       type: integer
                   type: object
@@ -8799,11 +8823,22 @@ renders (tier1 watchdog):
                   type: object
                 spec:
                   description: |-
-                    LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity
-                    (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
+                    LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6);
+                    backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
+
+                    Deliberately NOT called a "LB address". A load-balancer address is 1:N and ingress-only — clients reach
+                    it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway
+                    address, never to this one. The 1:1, bidirectional "virtual IP" that a single interface owns for
+                    both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.
+                    Naming both "LB address" conflated them once too often.
                   properties:
+                    ip:
+                      description: |-
+                        IP is the requested load-balancer address. Empty => allocate from PoolRef; set =>
+                        validate membership in the pool + reserve (bring-your-own).
+                      type: string
                     poolRef:
-                      description: PoolRef selects the LBPool to allocate the VIP from.
+                      description: PoolRef selects the LBPool to allocate the IP from.
                       properties:
                         name:
                           description: Name is the name of the referenced object.
@@ -8884,20 +8919,17 @@ renders (tier1 watchdog):
                           type: object
                       type: object
                       x-kubernetes-map-type: atomic
-                    vip:
-                      description: |-
-                        VIP is the requested virtual IP. Empty => allocate from PoolRef; set =>
-                        validate membership in the pool + reserve (bring-your-own).
-                      type: string
                   required:
+                    - ip
                     - ports
-                    - vip
                   type: object
                 status:
                   description: LoadBalancerStatus is the observed state of a LoadBalancer.
                   properties:
-                    allocatedVIP:
-                      description: AllocatedVIP is the authoritative VIP assigned by the VIP allocator.
+                    allocatedIP:
+                      description: |-
+                        AllocatedIP is the authoritative address assigned by the LB address allocator. Mirrors
+                        NetworkInterface.status.allocatedIPs: spec is the request, status is the truth.
                       type: string
                     observedGeneration:
                       description: ObservedGeneration is the Spec generation the allocation reflects.
@@ -10588,8 +10620,11 @@ renders with vm-materializer enabled:
                         LB lists the load balancers this NIC is a backend of. Pure forwarding membership —
                         it grants NO firewall permission (that comes solely from FirewallPolicy).
                       items:
-                        description: 'CompiledLB is one load-balancer this NIC backs: the VIP (v4 or v6) and its service ports.'
+                        description: 'CompiledLB is one load-balancer this NIC backs: the LB address (v4 or v6) and its service ports.'
                         properties:
+                          ip:
+                            description: LB address is the load-balancer virtual IP (IPv4 or IPv6).
+                            type: string
                           ports:
                             description: Ports are the LB service (port, proto) tuples.
                             items:
@@ -10605,11 +10640,8 @@ renders with vm-materializer enabled:
                                 - proto
                               type: object
                             type: array
-                          vip:
-                            description: VIP is the load-balancer virtual IP (IPv4 or IPv6).
-                            type: string
                         required:
-                          - vip
+                          - ip
                         type: object
                       type: array
                     mac:
@@ -11212,7 +11244,7 @@ renders with vm-materializer enabled:
         - name: v1alpha1
           schema:
             openAPIV3Schema:
-              description: LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.
+              description: LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.
               properties:
                 apiVersion:
                   description: |-
@@ -11232,7 +11264,7 @@ renders with vm-materializer enabled:
                 metadata:
                   type: object
                 spec:
-                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped VIP prefix range).
+                  description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped LB address prefix range).
                   properties:
                     reservedIPs:
                       description: ReservedIPs are addresses held back from allocation within this pool.
@@ -11240,10 +11272,10 @@ renders with vm-materializer enabled:
                         type: string
                       type: array
                     v4Prefix:
-                      description: V4Prefix optionally pins the IPv4 CIDR for this VIP pool.
+                      description: V4Prefix optionally pins the IPv4 CIDR for this LB address pool.
                       type: string
                     v6Prefix:
-                      description: V6Prefix optionally pins the IPv6 CIDR for this VIP pool.
+                      description: V6Prefix optionally pins the IPv6 CIDR for this LB address pool.
                       type: string
                   type: object
                 status:
@@ -11253,7 +11285,7 @@ renders with vm-materializer enabled:
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
                     total:
-                      description: Total is the total number of allocatable VIP addresses.
+                      description: Total is the total number of allocatable LB address addresses.
                       format: int32
                       type: integer
                   type: object
@@ -11302,11 +11334,22 @@ renders with vm-materializer enabled:
                   type: object
                 spec:
                   description: |-
-                    LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity
-                    (v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
+                    LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6);
+                    backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
+
+                    Deliberately NOT called a "LB address". A load-balancer address is 1:N and ingress-only — clients reach
+                    it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway
+                    address, never to this one. The 1:1, bidirectional "virtual IP" that a single interface owns for
+                    both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.
+                    Naming both "LB address" conflated them once too often.
                   properties:
+                    ip:
+                      description: |-
+                        IP is the requested load-balancer address. Empty => allocate from PoolRef; set =>
+                        validate membership in the pool + reserve (bring-your-own).
+                      type: string
                     poolRef:
-                      description: PoolRef selects the LBPool to allocate the VIP from.
+                      description: PoolRef selects the LBPool to allocate the IP from.
                       properties:
                         name:
                           description: Name is the name of the referenced object.
@@ -11387,20 +11430,17 @@ renders with vm-materializer enabled:
                           type: object
                       type: object
                       x-kubernetes-map-type: atomic
-                    vip:
-                      description: |-
-                        VIP is the requested virtual IP. Empty => allocate from PoolRef; set =>
-                        validate membership in the pool + reserve (bring-your-own).
-                      type: string
                   required:
+                    - ip
                     - ports
-                    - vip
                   type: object
                 status:
                   description: LoadBalancerStatus is the observed state of a LoadBalancer.
                   properties:
-                    allocatedVIP:
-                      description: AllocatedVIP is the authoritative VIP assigned by the VIP allocator.
+                    allocatedIP:
+                      description: |-
+                        AllocatedIP is the authoritative address assigned by the LB address allocator. Mirrors
+                        NetworkInterface.status.allocatedIPs: spec is the request, status is the truth.
                       type: string
                     observedGeneration:
                       description: ObservedGeneration is the Spec generation the allocation reflects.

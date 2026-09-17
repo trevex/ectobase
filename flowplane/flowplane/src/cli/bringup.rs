@@ -93,9 +93,10 @@ pub struct BringupArgs {
     /// underlay gateway set via --gateway-mac.
     #[arg(long = "remote")]
     remotes: Vec<String>,
-    /// VIP mapping, repeatable: "<interface_ipv4>=<vip_ipv4>" (programs both VIPS directions).
-    #[arg(long = "vip")]
-    vips: Vec<String>,
+    /// Floating-IP mapping, repeatable: "<interface_ipv4>=<floating_ipv4>" (programs both
+    /// FLOATING_IPS directions: egress SNAT guest->floating, ingress DNAT floating->guest).
+    #[arg(long = "floating-ip")]
+    floating_ips: Vec<String>,
     /// Load balancer service, repeatable:
     /// "<ipv4>:<port>:<proto>:<lb_underlay_ipv6>" (proto numeric: 1=ICMP, 6=TCP, 17=UDP).
     /// For ICMP use port 0. The lb_underlay_ipv6 is the LB's own underlay /128 (programs
@@ -175,7 +176,7 @@ pub async fn run(args: BringupArgs) -> anyhow::Result<()> {
         gateway_mac,
         guests,
         remotes,
-        vips: vips_args,
+        floating_ips: floating_ip_args,
         lbs,
         lb_targets,
         nats,
@@ -455,13 +456,21 @@ pub async fn run(args: BringupArgs) -> anyhow::Result<()> {
         )?;
     }
 
-    let mut vip_map = maps::Vips::open(&mut ebpf)?;
-    for v in &vips_args {
-        let (g, vip) = v.split_once('=').context("--vip must be ifaceip=vipip")?;
+    let mut floating_ip_map = maps::FloatingIPs::open(&mut ebpf)?;
+    for v in &floating_ip_args {
+        let (g, lb_ip) = v
+            .split_once('=')
+            .context("--floating-ip must be ifaceip=floatingip")?;
         let g = parse_ipv4(g)?;
-        let vip = parse_ipv4(vip)?;
-        vip_map.upsert(flowplane_common::VipKey { vni: 0, ipv4: g }, vip)?; // (0,G)->V egress SNAT
-        vip_map.upsert(flowplane_common::VipKey { vni: 0, ipv4: vip }, g)?;
+        let lb_ip = parse_ipv4(lb_ip)?;
+        floating_ip_map.upsert(flowplane_common::FloatingIPKey { vni: 0, ipv4: g }, lb_ip)?; // (0,G)->V egress SNAT
+        floating_ip_map.upsert(
+            flowplane_common::FloatingIPKey {
+                vni: 0,
+                ipv4: lb_ip,
+            },
+            g,
+        )?;
         // (0,V)->G ingress DNAT
     }
 
@@ -820,12 +829,12 @@ pub async fn run(args: BringupArgs) -> anyhow::Result<()> {
     ));
 
     println!(
-                "bringup: uplink={uplink} guests={} guests6={} routes={} routes6={} vips={} lbs={} nats={} fw={} neigh_nats={} meters={}; ctrl-c to stop",
+                "bringup: uplink={uplink} guests={} guests6={} routes={} routes6={} floating_ips={} lbs={} nats={} fw={} neigh_nats={} meters={}; ctrl-c to stop",
                 guests.len(),
                 guests6.len(),
                 remotes.len(),
                 remotes6.len(),
-                vips_args.len(),
+                floating_ip_args.len(),
                 lbs.len(),
                 nats.len(),
                 fw_rules.len(),

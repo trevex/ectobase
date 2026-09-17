@@ -909,7 +909,7 @@ func Convert_net_LoadBalancerPort_To_v1alpha1_LoadBalancerPort(in *net.LoadBalan
 }
 
 func autoConvert_v1alpha1_LoadBalancerSpec_To_net_LoadBalancerSpec(in *LoadBalancerSpec, out *net.LoadBalancerSpec, s conversion.Scope) error {
-	out.VIP = in.VIP
+	out.IP = in.IP
 	if err := Convert_v1alpha1_LocalObjectReference_To_net_LocalObjectReference(&in.PoolRef, &out.PoolRef, s); err != nil {
 		return err
 	}
@@ -925,7 +925,7 @@ func Convert_v1alpha1_LoadBalancerSpec_To_net_LoadBalancerSpec(in *LoadBalancerS
 }
 
 func autoConvert_net_LoadBalancerSpec_To_v1alpha1_LoadBalancerSpec(in *net.LoadBalancerSpec, out *LoadBalancerSpec, s conversion.Scope) error {
-	out.VIP = in.VIP
+	out.IP = in.IP
 	if err := Convert_net_LocalObjectReference_To_v1alpha1_LocalObjectReference(&in.PoolRef, &out.PoolRef, s); err != nil {
 		return err
 	}
@@ -942,7 +942,7 @@ func Convert_net_LoadBalancerSpec_To_v1alpha1_LoadBalancerSpec(in *net.LoadBalan
 
 func autoConvert_v1alpha1_LoadBalancerStatus_To_net_LoadBalancerStatus(in *LoadBalancerStatus, out *net.LoadBalancerStatus, s conversion.Scope) error {
 	out.State = in.State
-	out.AllocatedVIP = in.AllocatedVIP
+	out.AllocatedIP = in.AllocatedIP
 	out.ObservedGeneration = in.ObservedGeneration
 	return nil
 }
@@ -954,7 +954,7 @@ func Convert_v1alpha1_LoadBalancerStatus_To_net_LoadBalancerStatus(in *LoadBalan
 
 func autoConvert_net_LoadBalancerStatus_To_v1alpha1_LoadBalancerStatus(in *net.LoadBalancerStatus, out *LoadBalancerStatus, s conversion.Scope) error {
 	out.State = in.State
-	out.AllocatedVIP = in.AllocatedVIP
+	out.AllocatedIP = in.AllocatedIP
 	out.ObservedGeneration = in.ObservedGeneration
 	return nil
 }

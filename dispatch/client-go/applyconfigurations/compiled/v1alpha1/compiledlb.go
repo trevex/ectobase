@@ -5,10 +5,10 @@ package v1alpha1
 // CompiledLBApplyConfiguration represents a declarative configuration of the CompiledLB type for use
 // with apply.
 //
-// CompiledLB is one load-balancer this NIC backs: the VIP (v4 or v6) and its service ports.
+// CompiledLB is one load-balancer this NIC backs: the LB address (v4 or v6) and its service ports.
 type CompiledLBApplyConfiguration struct {
-	// VIP is the load-balancer virtual IP (IPv4 or IPv6).
-	VIP *string `json:"vip,omitempty"`
+	// LB address is the load-balancer virtual IP (IPv4 or IPv6).
+	IP *string `json:"ip,omitempty"`
 	// Ports are the LB service (port, proto) tuples.
 	Ports []CompiledLBPortApplyConfiguration `json:"ports,omitempty"`
 }
@@ -19,11 +19,11 @@ func CompiledLB() *CompiledLBApplyConfiguration {
 	return &CompiledLBApplyConfiguration{}
 }
 
-// WithVIP sets the VIP field in the declarative configuration to the given value
+// WithIP sets the IP field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the VIP field is set to the value of the last call.
-func (b *CompiledLBApplyConfiguration) WithVIP(value string) *CompiledLBApplyConfiguration {
-	b.VIP = &value
+// If called multiple times, the IP field is set to the value of the last call.
+func (b *CompiledLBApplyConfiguration) WithIP(value string) *CompiledLBApplyConfiguration {
+	b.IP = &value
 	return b
 }
 

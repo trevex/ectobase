@@ -197,12 +197,12 @@ mod tests {
     #[test]
     fn within_filter_selects_the_expected_aggregate() {
         // The authoritative cluster-wide filter: even with a mgmt hostIP, a Talos lo ULA, and the
-        // node's own API-VIP /64 all present, `within = fd00:cafe::/32` + dummy preference pins the
-        // dummy0 node-identity /64 (fd00:cafe:1914::/64), never the API VIP (fd00:cafe:1914:1::/64).
+        // node's own API-LB address /64 all present, `within = fd00:cafe::/32` + dummy preference pins the
+        // dummy0 node-identity /64 (fd00:cafe:1914::/64), never the API address (fd00:cafe:1914:1::/64).
         let addrs = vec![
             a("eth0", "3fff:172:20:20::7", 64), // docker mgmt (status.hostIP): excluded
             a("lo", "fd54:616c:6f73:0:204f:5320:444e:531", 128), // Talos hostDNS: excluded
-            a("vip0", "fd00:cafe:1914:1::1", 128), // API VIP: in-aggregate but not dummy
+            a("apiaddr0", "fd00:cafe:1914:1::1", 128), // API IP: in-aggregate but not dummy
             a("dummy0", "fd00:cafe:1914::1", 128), // node identity: PICK
         ];
         let within = Some("fd00:cafe::/32".parse::<Ipv6Net>().unwrap());

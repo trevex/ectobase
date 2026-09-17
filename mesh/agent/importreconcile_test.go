@@ -65,7 +65,7 @@ func TestDesiredEgressVNIs_LBBackend(t *testing.T) {
 		Spec: compiledv1.CompiledNICSpec{
 			VNI:        200,
 			OverlayIPs: []string{"10.0.0.5"},
-			LB:         []compiledv1.CompiledLB{{VIP: "203.0.113.5"}},
+			LB:         []compiledv1.CompiledLB{{IP: "203.0.113.5"}},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cnic).Build()

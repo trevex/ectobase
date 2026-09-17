@@ -22,22 +22,22 @@ const (
 	// lbIntentVNI is this test's own VPC (distinct from overlayVNI/podVNI so it can run alongside
 	// the rest of the suite).
 	lbIntentVNI = 205
-	// lbIntentVIP is a BRING-YOUR-OWN VIP inside fabric.PublicV4 (192.0.2.0/24, which both edges
+	// lbIntentLbIP is a BRING-YOUR-OWN load-balancer address inside fabric.PublicV4 (192.0.2.0/24, which both edges
 	// advertise and the WAN routes back). Pinned rather than auto-allocated so it cannot collide
 	// with TestLbDistributeSmokeV4's hardcoded 192.0.2.1 — the allocator's lowest-free would.
-	lbIntentVIP     = "192.0.2.7"
-	lbIntentNIC     = "lbi-nic"
-	lbIntentIP      = "10.0.5.10"
-	lbIntentMAC     = "52:54:00:00:05:10"
-	lbIntentBody    = "hello-intent-lb"
-	lbIntentTimeout = 4 * time.Minute
+	lbIntentLbIP      = "192.0.2.7"
+	lbIntentNIC       = "lbi-nic"
+	lbIntentBackendIP = "10.0.5.10"
+	lbIntentMAC       = "52:54:00:00:05:10"
+	lbIntentBody      = "hello-intent-lb"
+	lbIntentTimeout   = 4 * time.Minute
 )
 
 // TestLbFromIntentReachesTheWan is the North-South path driven by INTENT ALONE: apply a
-// LoadBalancer on the dispatch and a WAN client reaches the VIP, with nobody calling the dataplane
+// LoadBalancer on the dispatch and a WAN client reaches the LB address, with nobody calling the dataplane
 // gRPC by hand anywhere in this test.
 //
-// This is what TestLbDistributeSmoke{,V4} could not cover. They hand-program AddLbVip +
+// This is what TestLbDistributeSmoke{,V4} could not cover. They hand-program AddLoadBalancer +
 // AddLbBackend on both edge sidecars over gRPC, precisely because nothing ran an agent on an edge;
 // they remain the datapath tier, isolating Maglev/DSR from the control path above them.
 //
@@ -46,13 +46,13 @@ const (
 //
 // The chain under test, none of which existed end to end before:
 //
-//	LoadBalancer + LBPool          -> LBVIPReconciler assigns status.allocatedVIP
+//	LoadBalancer + LBPool          -> LoadBalancerIPReconciler assigns status.allocatedIP
 //	NetworkInterface (labelled)    -> compiler emits CompiledNIC.spec.lb (gated on Allocated)
 //	broker                         -> syncs the CompiledNIC into the pool
-//	BACKEND node's agent           -> desiredLB joins it to the node VTEP; announces an LB_VIP
-//	                                  PublicPrefix carrying the VIP's service PORTS
+//	BACKEND node's agent           -> desiredLB joins it to the node VTEP; announces an LB_IP
+//	                                  PublicPrefix carrying the LB address's service PORTS
 //	reflector                      -> relays it to every session
-//	EDGE agent (no apiserver)      -> applyPublic: AddLbVip(ports) then AddLbBackend
+//	EDGE agent (no apiserver)      -> applyPublic: AddLoadBalancer(ports) then AddLbBackend
 func TestLbFromIntentReachesTheWan(t *testing.T) {
 	cfg := loadConfig(t)
 	requireFabricUp(t, cfg)
@@ -64,12 +64,12 @@ func TestLbFromIntentReachesTheWan(t *testing.T) {
 	}
 	backend := nodes[0]
 	// The backend's VTEP: every interface on a node shares the node's one underlay address, which is
-	// exactly what the LB_VIP record carries as owner_underlay and the edge stores as node_vtep.
+	// exactly what the LB_IP record carries as owner_underlay and the edge stores as node_vtep.
 	backendVTEP := backend.IdentityAddr
 	wan := clab.ContainerName(cfg.Name, "wan")
 
 	// 1. Intent on the dispatch: a VPC + Subnet, an LBPool covering the edge's public v4 prefix, a
-	//    LoadBalancer pinned to our VIP and selecting by label, and the backend NIC carrying that
+	//    LoadBalancer pinned to our LB address and selecting by label, and the backend NIC carrying that
 	//    label. No FirewallPolicy: the compiler materializes an explicit allow-all for every
 	//    direction no policy governs, which is what a k8s default-allow lowers to.
 	applyDispatch(t, ctx, cfg, lbIntentFixture(nodeK8sName(backend), backend.Cluster))
@@ -112,7 +112,7 @@ func TestLbFromIntentReachesTheWan(t *testing.T) {
 	// see the request.
 	eventually(t, 90*time.Second, 5*time.Second, func() error {
 		out, err := kubectl(ctx, cfg, backend.Cluster, "exec", pod, "--",
-			"wget", "-q", "-O", "-", "-T", "3", "http://"+lbIntentIP+"/")
+			"wget", "-q", "-O", "-", "-T", "3", "http://"+lbIntentBackendIP+"/")
 		if err != nil {
 			return fmt.Errorf("backend not serving on its overlay IP yet: %w\n%s", err, out)
 		}
@@ -122,76 +122,76 @@ func TestLbFromIntentReachesTheWan(t *testing.T) {
 		return nil
 	})
 
-	// 3. The allocator finalizes the VIP. Everything downstream is gated on this: the compiler
-	//    refuses to emit LB membership for a LoadBalancer that is not Allocated, so a VIP that
+	// 3. The allocator finalizes the LB address. Everything downstream is gated on this: the compiler
+	//    refuses to emit LB membership for a LoadBalancer that is not Allocated, so an LB address that
 	//    never lands means an edge that never programs anything.
 	eventually(t, 2*time.Minute, 3*time.Second, func() error {
-		vip, err := kubectl(ctx, cfg, "dispatch", "get", "loadbalancer.net.ectobase.dev", "lbi-lb",
-			"-o", "jsonpath={.status.allocatedVIP}")
+		lbIP, err := kubectl(ctx, cfg, "dispatch", "get", "loadbalancer.net.ectobase.dev", "lbi-lb",
+			"-o", "jsonpath={.status.allocatedIP}")
 		if err != nil {
 			return fmt.Errorf("get LoadBalancer status: %w", err)
 		}
-		if strings.TrimSpace(vip) != lbIntentVIP {
+		if strings.TrimSpace(lbIP) != lbIntentLbIP {
 			state, _ := kubectl(ctx, cfg, "dispatch", "get", "loadbalancer.net.ectobase.dev", "lbi-lb",
 				"-o", "jsonpath={.status.state}")
-			return fmt.Errorf("allocatedVIP = %q (state %q), want %s",
-				strings.TrimSpace(vip), strings.TrimSpace(state), lbIntentVIP)
+			return fmt.Errorf("allocatedIP = %q (state %q), want %s",
+				strings.TrimSpace(lbIP), strings.TrimSpace(state), lbIntentLbIP)
 		}
 		return nil
 	})
 
-	// 4. The compiled LB membership reaches the POOL — the backend agent's only source for the VIP
+	// 4. The compiled LB membership reaches the POOL — the backend agent's only source for the LB address
 	//    and, since the proto change, for its service ports too.
 	eventually(t, 2*time.Minute, 5*time.Second, func() error {
 		out, err := kubectl(ctx, cfg, backend.Cluster, "get", "compilednics.compiled.ectobase.dev",
-			"default-"+lbIntentNIC, "-o", "jsonpath={.spec.lb[0].vip} {.spec.lb[0].ports[0].port}")
+			"default-"+lbIntentNIC, "-o", "jsonpath={.spec.lb[0].ip} {.spec.lb[0].ports[0].port}")
 		if err != nil {
 			return fmt.Errorf("get CompiledNIC on %s: %w", backend.Cluster, err)
 		}
-		if got := strings.TrimSpace(out); got != lbIntentVIP+" 80" {
-			return fmt.Errorf("CompiledNIC spec.lb = %q, want %q", got, lbIntentVIP+" 80")
+		if got := strings.TrimSpace(out); got != lbIntentLbIP+" 80" {
+			return fmt.Errorf("CompiledNIC spec.lb = %q, want %q", got, lbIntentLbIP+" 80")
 		}
 		return nil
 	})
 
 	// 5. Both edges programmed the load balancer — from the route bus alone, with nobody in this
-	//    test calling AddLbVip or AddLbBackend.
+	//    test calling AddLoadBalancer or AddLbBackend.
 	//
 	//    Asserted on the edges' own BPF maps BEFORE the curl below, because it localizes a failure:
 	//    if this passes and the curl does not, the control path is fine and the datapath is at
-	//    fault. It also names exactly what it expects (VIP, port, proto, backend), which a curl
+	//    fault. It also names exactly what it expects (LB address, port, proto, backend), which a curl
 	//    cannot.
 	//
-	//    BOTH edges, because the public prefixes are anycast: the WAN ECMPs to either, so a VIP
+	//    BOTH edges, because the public prefixes are anycast: the WAN ECMPs to either, so an LB address
 	//    programmed on only one of them is a coin-flip outage the curl would catch only sometimes.
 	for _, edge := range []string{"edge1", "edge2"} {
 		edge := edge
 		eventually(t, 2*time.Minute, 5*time.Second, func() error {
-			return edgeHasLb(ctx, cfg, edge, lbIntentVIP, 80, 6, backendVTEP, lbIntentIP, lbIntentVNI)
+			return edgeHasLb(ctx, cfg, edge, lbIntentLbIP, 80, 6, backendVTEP, lbIntentBackendIP, lbIntentVNI)
 		})
 	}
 
-	// 6. THE POINT. A WAN client curls the VIP and gets the backend's response. Nothing in this
-	//    test called AddLbVip, AddLbBackend, AddRoute or AttachInterface — the LoadBalancer object
+	// 6. THE POINT. A WAN client curls the LB address and gets the backend's response. Nothing in this
+	//    test called AddLoadBalancer, AddLbBackend, AddRoute or AttachInterface — the LoadBalancer object
 	//    and a Container are the entire input.
 	//
 	//    The return hop is intent-driven too: the edge agents originate 0.0.0.0/0 into the public
 	//    VNI, and the backend node imports it into this VPC precisely because its NIC is an LB
 	//    member — so the DSR reply finds its way back with no hand-installed route either.
 	eventually(t, lbIntentTimeout, 5*time.Second, func() error {
-		out := curlFromWanV4(ctx, wan, lbIntentVIP)
+		out := curlFromWanV4(ctx, wan, lbIntentLbIP)
 		if !strings.Contains(out, lbIntentBody) {
 			return fmt.Errorf("curl http://%s/ from the WAN did not return %q:\n%s\n%s",
-				lbIntentVIP, lbIntentBody, out, lbIntentDiagnostics(ctx, cfg))
+				lbIntentLbIP, lbIntentBody, out, lbIntentDiagnostics(ctx, cfg))
 		}
 		return nil
 	})
 }
 
-// edgeHasLb checks that an edge's datapath carries the VIP as a load balancer whose Maglev table
+// edgeHasLb checks that an edge's datapath carries the LB address as a load balancer whose Maglev table
 // resolves to the given backend. It decodes the LB + MAGLEV maps rather than trusting a log line,
-// so a half-programmed edge (VIP registered, no backends — which can only blackhole) fails loudly.
-func edgeHasLb(ctx context.Context, cfg *config.Config, edge, vip string, port, proto int, backendVTEP, overlayIP string, vni int) error {
+// so a half-programmed edge (LB address registered, no backends — which can only blackhole) fails loudly.
+func edgeHasLb(ctx context.Context, cfg *config.Config, edge, lbIP string, port, proto int, backendVTEP, overlayIP string, vni int) error {
 	pinDir := "/sys/fs/bpf/flowplane-" + edge
 
 	lbDump, err := exec.SudoOutput(ctx, "sh", "-c",
@@ -200,12 +200,12 @@ func edgeHasLb(ctx context.Context, cfg *config.Config, edge, vip string, port, 
 		return fmt.Errorf("dump %s LB map: %w", edge, err)
 	}
 	// The LB key is (vni, ipv4, port, proto). vni is 0 — the reserved public/WAN VNI the edge
-	// registers every VIP under (create_lb skips the UNDERLAY write there so it cannot clobber
+	// registers every LB address under (create_lb skips the UNDERLAY write there so it cannot clobber
 	// attach_edge's LOCAL_DELIVER entry).
-	wantKey := lbKeyBytes(vip, port, proto)
+	wantKey := lbKeyBytes(lbIP, port, proto)
 	if !strings.Contains(normalizeHex(string(lbDump)), wantKey) {
 		return fmt.Errorf("%s has no LB entry for %s:%d/proto%d (want key %s) in:\n%s",
-			edge, vip, port, proto, wantKey, tail(string(lbDump), 10))
+			edge, lbIP, port, proto, wantKey, tail(string(lbDump), 10))
 	}
 
 	mgDump, err := exec.SudoOutput(ctx, "sh", "-c",
@@ -276,7 +276,7 @@ func TestEdgeAgentsRunWithoutAnApiserver(t *testing.T) {
 }
 
 // lbIntentFixture renders the whole intent: VPC, Subnet, LBPool, LoadBalancer and the backend NIC.
-// The LoadBalancer pins spec.vip (bring-your-own) and selects its backend by label — the two halves
+// The LoadBalancer pins spec.ip (bring-your-own) and selects its backend by label — the two halves
 // the compiler joins into CompiledNIC.spec.lb.
 func lbIntentFixture(node, cluster string) string {
 	return fmt.Sprintf(`apiVersion: net.ectobase.dev/v1alpha1
@@ -290,7 +290,7 @@ metadata: {name: lbi-subnet}
 spec: {vpcRef: {name: lbi-vpc}, v4Prefix: 10.0.5.0/24}
 ---
 # The edge-owned public v4 prefix (fabric.PublicV4): both edges advertise it as our ASN and the WAN
-# routes it back via either, so any VIP inside it is anycast across the edge fleet.
+# routes it back via either, so any LB address inside it is anycast across the edge fleet.
 apiVersion: net.ectobase.dev/v1alpha1
 kind: LBPool
 metadata: {name: lbi-pool}
@@ -300,7 +300,7 @@ apiVersion: net.ectobase.dev/v1alpha1
 kind: LoadBalancer
 metadata: {name: lbi-lb}
 spec:
-  vip: %q
+  ip: %q
   poolRef: {name: lbi-pool}
   ports: [{port: 80, proto: TCP}]
   targetSelector: {matchLabels: {app: lbi-backend}}
@@ -325,7 +325,7 @@ spec:
   interfaceRefs: [{name: %[3]s}]
   image: busybox:1.36
   command: ["sh", "-c", "mkdir -p /www && echo %[8]s > /www/index.html && exec httpd -f -p 80 -h /www"]
-`, lbIntentVNI, lbIntentVIP, lbIntentNIC, lbIntentIP, lbIntentMAC, node, cluster, lbIntentBody)
+`, lbIntentVNI, lbIntentLbIP, lbIntentNIC, lbIntentBackendIP, lbIntentMAC, node, cluster, lbIntentBody)
 }
 
 func patchLbIntentVPCReady(t *testing.T, ctx context.Context, cfg *config.Config) {
@@ -337,7 +337,7 @@ func patchLbIntentVPCReady(t *testing.T, ctx context.Context, cfg *config.Config
 }
 
 // lbIntentDiagnostics collects what actually distinguishes the failure modes when the WAN curl does
-// not come back: whether the edge agents are on the bus at all, and what they did with the LB_VIP
+// not come back: whether the edge agents are on the bus at all, and what they did with the LB_IP
 // records. Best-effort — it only ever appears inside a failure message.
 func lbIntentDiagnostics(ctx context.Context, cfg *config.Config) string {
 	var b strings.Builder
@@ -367,10 +367,10 @@ func containerLogs(ctx context.Context, container string) (string, error) {
 	return string(out), nil
 }
 
-// lbKeyBytes renders the LB map key for a v4 VIP: vni(0, LE u32) ++ ipv4 ++ port(LE u16) ++ proto
+// lbKeyBytes renders the LB map key for a v4 LB address: vni(0, LE u32) ++ ipv4 ++ port(LE u16) ++ proto
 // ++ pad. Little-endian because that is how the kernel lays the struct out on x86.
-func lbKeyBytes(vip string, port, proto int) string {
-	return hexBytes(le32(0)) + hexBytes(ipBytes(vip)[:4]) +
+func lbKeyBytes(lbIP string, port, proto int) string {
+	return hexBytes(le32(0)) + hexBytes(ipBytes(lbIP)[:4]) +
 		hexBytes([]byte{byte(port & 0xff), byte(port >> 8)}) + fmt.Sprintf("%02x", proto)
 }
 

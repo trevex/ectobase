@@ -5,25 +5,25 @@ with the central IPAM model. It covers four steps:
 
 1. Create a VPC and a Subnet (the VPC's address space).
 2. Boot a VM in the VPC and watch the platform allocate its overlay IP.
-3. Put a second VM behind a LoadBalancer (VIP drawn from an LBPool).
+3. Put a second VM behind a LoadBalancer (LB address drawn from an LBPool).
 4. Give the VPC NAT egress to the WAN.
 
 Everything is authored as intent on the dispatch (central) cluster. The platform
 compiles that intent into per-workload `Compiled*` objects, syncs them to the compute
-pool, and the datapath programs eBPF. The platform assigns overlay IPs and VIPs; users
+pool, and the datapath programs eBPF. The platform assigns overlay IPs and LB addresses; users
 declare address space (Subnet/LBPool) and the central allocators fill in the rest.
 
 For the broader tour — including containers, VMs, VPC peering, and firewall — see
 [Using the lab](using-the-lab.md).
 
 > Steps 1–2 (VPC/Subnet/VM overlay connectivity) are exercised by the live suite and
-> work end-to-end. For steps 3–4, IPAM does allocate the VIP and NAT port-blocks and
+> work end-to-end. For steps 3–4, IPAM does allocate the LB address and NAT port-blocks and
 > records LB membership / SNAT sources in the compiled `CompiledNIC`, and those
 > allocations are observable via the status fields shown below, but the North-South
 > edge control plane is not yet driven by the `LoadBalancer` / `NATGateway` CRDs.
 > Actual WAN reachability is still programmed directly over the
 > dataplane gRPC socket (see `test/lab/livetest/lb_test.go`,
-> `nategress_test.go`). So a WAN client won't reach a VIP or egress from
+> `nategress_test.go`). So a WAN client won't reach an LB address or egress from
 > `kubectl apply` alone yet. The steps below verify the parts that are wired.
 
 ## 0. Prerequisites
@@ -168,7 +168,7 @@ k02 get virtualmachineinstance -n ectobase-system -l workload=app-0
 
 ## 3. A second VM behind a LoadBalancer
 
-First register a VIP pool (`LBPool`), then a `LoadBalancer` that draws a VIP from it
+First register an LB address pool (`LBPool`), then a `LoadBalancer` that draws an LB address from it
 and selects backend NICs by label. Create a `web-0` VM whose NIC is labelled
 `app: web`.
 
@@ -177,10 +177,10 @@ khub apply -f - <<'EOF'
 apiVersion: net.ectobase.dev/v1alpha1
 kind: LBPool
 metadata:
-  name: demo-vips
+  name: demo-lbpool
   namespace: default
 spec:
-  v4Prefix: 203.0.113.0/28    # the VIP address space
+  v4Prefix: 203.0.113.0/28    # the LB address address space
 ---
 apiVersion: net.ectobase.dev/v1alpha1
 kind: NetworkInterface
@@ -213,8 +213,8 @@ metadata:
   name: web-lb
   namespace: default
 spec:
-  vip: ""                     # empty => allocate from poolRef
-  poolRef: { name: demo-vips }
+  ip: ""                     # empty => allocate from poolRef
+  poolRef: { name: demo-lbpool }
   ports:
     - { port: 443, proto: TCP }
   targetSelector:             # selects backends by NIC label (or use targetRefs: [names])
@@ -223,23 +223,23 @@ spec:
 EOF
 ```
 
-Verify the VIP was allocated and that the backend NIC's compiled twin records LB
-membership with that VIP:
+Verify the LB address was allocated and that the backend NIC's compiled twin records LB
+membership with that LB address:
 
 ```sh
-khub get loadbalancer web-lb -o jsonpath='{.status.state} vip={.status.allocatedVIP}{"\n"}'
-# Allocated vip=203.0.113.1
+khub get loadbalancer web-lb -o jsonpath='{.status.state} ip={.status.allocatedIP}{"\n"}'
+# Allocated ip=203.0.113.1
 
 k02 get compilednic default-web-0-nic0 -o jsonpath='{.spec.lb}{"\n"}'
-# [{"vip":"203.0.113.1","ports":[{"port":443,"proto":"TCP"}]}]
+# [{"ip":"203.0.113.1","ports":[{"port":443,"proto":"TCP"}]}]
 ```
 
-> The edge gap here is the one described in the top callout. IPAM has allocated the VIP
+> The edge gap here is the one described in the top callout. IPAM has allocated the LB address
 > and wired the backend membership into the datapath's `CompiledNIC`, so E/W traffic to
-> the VIP from inside the fabric follows. But driving the North-South edge from this
+> the LB address from inside the fabric follows. But driving the North-South edge from this
 > `LoadBalancer` CRD is not wired yet, so a WAN client reaching `203.0.113.1:443` today
 > still requires programming the edge directly (that's what `lb_test.go`'s
-> `AddLbVip` over the dataplane gRPC socket does).
+> `AddLoadBalancer` over the dataplane gRPC socket does).
 
 ## 4. NAT egress for the VPC
 
@@ -309,13 +309,13 @@ EOF
 
 - `state: Invalid` on a NIC/LB. The request can't be satisfied against the address
   space: the VPC has no Subnet, the NIC's `subnetRef` is ambiguous (VPC has >1 Subnet
-  and none named), or a pinned `ips`/`vip` falls outside the Subnet/Pool prefix.
+  and none named), or a pinned `ips`/`ip` falls outside the Subnet/Pool prefix.
   Fix the Subnet/LBPool or the pinned address.
 - `state: Exhausted`. The Subnet/Pool is full. Widen the prefix or free addresses.
   A freed sibling address triggers a retry automatically, with no wait for resync.
 - `state: Pending`. The referenced Subnet/Pool isn't `Ready` yet (transient).
 - Allocation is sticky. Editing an unrelated field on a NIC/LB does not
-  renumber it; the allocator re-adopts its current `allocatedIPs`/`allocatedVIP`,
+  renumber it; the allocator re-adopts its current `allocatedIPs`/`allocatedIP`,
   and a NIC keeps its `allocatedMAC` even across an IP renumber.
 - De-gate keeps the last good state. If a NIC later goes `Invalid`/`Pending` (bad edit,
   Subnet deleted), its existing `CompiledNIC` is kept, so the running datapath is not
@@ -339,7 +339,7 @@ khub delete natgateway demo-egress --ignore-not-found
 khub delete loadbalancer web-lb --ignore-not-found
 khub delete virtualmachine app-0 web-0 --ignore-not-found
 khub delete networkinterface app-0-nic0 web-0-nic0 --ignore-not-found
-khub delete lbpool demo-vips --ignore-not-found
+khub delete lbpool demo-lbpool --ignore-not-found
 khub delete subnet demo-sn0 --ignore-not-found
 khub delete vpc demo --ignore-not-found
 ```

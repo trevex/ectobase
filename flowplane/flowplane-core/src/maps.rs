@@ -1,5 +1,5 @@
 use flowplane_common::{
-    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrVip, FwMeta, FwRule, FwRuleKey,
+    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrLbIP, FwMeta, FwRule, FwRuleKey,
     IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6, NatValue,
     NatValue6, PortMeta, RouteValue, UnderlayValue,
 };
@@ -21,22 +21,22 @@ pub trait Maps {
     }
     /// Firewall-only IPv6 conntrack insert (`CONNTRACK6` map). DEFAULT no-op — see [`Self::conntrack6_get`].
     fn conntrack6_insert(&mut self, _key: CtKey6, _entry: CtEntry) {}
-    /// DSR reverse-VIP lookup (`DSR` map, B7b): keyed on the guest-reply 5-tuple
-    /// (`invert_key(ct_key(forwarded))`). Holds the VIP a backend's reply must be reverse-SNAT'd to.
+    /// DSR reverse-LB address lookup (`DSR` map, B7b): keyed on the guest-reply 5-tuple
+    /// (`invert_key(ct_key(forwarded))`). Holds the LB address a backend's reply must be reverse-SNAT'd to.
     /// Split out of `CONNTRACK`/`CtEntry` into its own compact LRU map so the DSR-create path does
     /// not inflate the hot conntrack stack frames (`ct_apply`/`ct_create_default`) that `uplink_rx`'s
     /// combined BPF stack budget is sensitive to. Required (no default): v4 DSR is wired on both the
     /// eBPF `GlobalMaps` and the sim `MemMaps`.
-    fn dsr_get(&self, key: &CtKey) -> Option<DsrVip>;
-    /// Note a DSR reverse VIP (`DSR` map insert) — see [`Self::dsr_get`].
-    fn dsr_insert(&mut self, key: CtKey, v: DsrVip);
+    fn dsr_get(&self, key: &CtKey) -> Option<DsrLbIP>;
+    /// Note a DSR reverse LB address (`DSR` map insert) — see [`Self::dsr_get`].
+    fn dsr_insert(&mut self, key: CtKey, v: DsrLbIP);
     /// IPv6 sibling of [`Self::dsr_get`] (`DSR6` map). DEFAULT `None`, mirroring [`Self::conntrack6_get`]
-    /// — a backend without v6 DSR wiring simply never notes/finds a reverse VIP.
-    fn dsr6_get(&self, _key: &CtKey6) -> Option<DsrVip> {
+    /// — a backend without v6 DSR wiring simply never notes/finds a reverse LB address.
+    fn dsr6_get(&self, _key: &CtKey6) -> Option<DsrLbIP> {
         None
     }
     /// IPv6 sibling of [`Self::dsr_insert`] (`DSR6` map). DEFAULT no-op — see [`Self::dsr6_get`].
-    fn dsr6_insert(&mut self, _key: CtKey6, _v: DsrVip) {}
+    fn dsr6_insert(&mut self, _key: CtKey6, _v: DsrLbIP) {}
     /// IPv6 firewall meta (`FW_META6`). DEFAULT `None` — a backend without v6 fw wiring denies v6 by
     /// default (see [`crate::firewall::fw_eval_dir6`]). Overridden by the sim `MemMaps`; the eBPF
     /// `GlobalMaps` gains an override in a later v6-firewall task.
@@ -118,11 +118,11 @@ pub trait Maps {
     fn ifaces6_get(&self, _vni: u32, _ipv6: &[u8; 16]) -> Option<IfaceValue> {
         None
     }
-    /// 1:1 floating-IP ingress lookup: the `VIPS` map's `(vni, V) → G` direction — the counterpart
+    /// 1:1 floating-IP ingress lookup: the `FLOATING_IPS` map's `(vni, V) → G` direction — the counterpart
     /// of the egress `snat_egress` `(vni, G) → V` read. `Some(G)` means an inbound frame's inner
     /// dst `V` must be DNAT'd to the backing guest IPv4 `G` and delivered locally (see
     /// [`crate::datapath::process_uplink`]'s floating-IP arm). Required (no default): both the eBPF
     /// `GlobalMaps` and the sim `MemMaps` wire it — a floating IP the core cannot see is a silent
     /// black hole, not a graceful degradation.
-    fn vip_get(&self, vni: u32, v: &[u8; 4]) -> Option<[u8; 4]>;
+    fn floating_ip_get(&self, vni: u32, v: &[u8; 4]) -> Option<[u8; 4]>;
 }

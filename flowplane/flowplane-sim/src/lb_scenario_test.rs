@@ -4,7 +4,7 @@
 //!
 //! Firewall model under test (matches `compilednic::apply` + the agent's `compiledToFw`): an INGRESS
 //! rule's `cidr` matches the packet's **source** (k8s `from` semantics), `port` is the destination
-//! port. LB is DSR — the inner dst stays the VIP — and the traffic's SOURCE is the external/remote
+//! port. LB is DSR — the inner dst stays the LB address — and the traffic's SOURCE is the external/remote
 //! client. So a backend policy that only permits INTERNAL sources does NOT cover external N/S LB
 //! traffic (its source is external) → dropped; a policy permitting the LB source (or any) → delivered.
 //! Coverage proves LB flows IFF an explicit rule permits its source on the port.
@@ -26,20 +26,20 @@ const EDGE_UL: [u8; 16] = ul(0xaa);
 const HOSTB_TAP: u32 = 42;
 const GUEST_MAC: [u8; 6] = [0x66, 0x66, 0x66, 0x66, 0x66, 0x00];
 
-const WAN_VIP: [u8; 4] = [203, 0, 113, 50]; // N/S public VIP (edge, vni=0)
+const WAN_LB_IP: [u8; 4] = [203, 0, 113, 50]; // N/S public LB address (edge, vni=0)
 const WAN_SRC: [u8; 4] = [203, 0, 113, 9];
-// v6 N/S public VIP (edge, vni=0). LB is keyed by the last-4 bytes (control-plane `last4`).
-const WAN_VIP6: [u8; 16] = [
+// v6 N/S public LB address (edge, vni=0). LB is keyed by the last-4 bytes (control-plane `last4`).
+const WAN_LB_IP6: [u8; 16] = [
     0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0xa8, 0xc8, 0x32,
 ];
 const WAN_SRC6: [u8; 16] = [
     0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0xa8, 0xc8, 0x09,
 ];
-const OVERLAY_VIP: [u8; 4] = [10, 0, 100, 1]; // E/W overlay VIP (vni=100)
+const OVERLAY_LB_IP: [u8; 4] = [10, 0, 100, 1]; // E/W overlay LB address (vni=100)
 const GUEST_A: [u8; 4] = [10, 0, 0, 20]; // an internal E/W client (in 10.0.0.0/8)
-                                         // hostB's own concrete backend overlay IP (distinct from any VIP): the real `INTERFACES` delivery
-                                         // key for local LB-backend delivery is `(vni, backend's OWN overlay ip)`, never the VIP itself (DSR
-                                         // keeps the inner dst as the VIP) -- see `flowplane_core::datapath::process_uplink`'s LB arm.
+                                         // hostB's own concrete backend overlay IP (distinct from any LB_IP_CONST): the real `INTERFACES` delivery
+                                         // key for local LB-backend delivery is `(vni, backend's OWN overlay ip)`, never the LB address itself (DSR
+                                         // keeps the inner dst as the LB_IP_CONST) -- see `flowplane_core::datapath::process_uplink`'s LB arm.
 const BACKEND_OVERLAY_IP: [u8; 4] = [10, 0, 0, 181];
 
 const fn ul(last: u8) -> [u8; 16] {
@@ -116,14 +116,14 @@ fn allow_all() -> &'static str {
 }
 
 /// Build a backend node (hostB): an `INTERFACES` local-delivery row for hostB's own concrete
-/// backend overlay IP + mesh-replicated WAN-VIP LB (mirroring `edge_node()`'s config — a REAL
+/// backend overlay IP + mesh-replicated WAN-LB address LB (mirroring `edge_node()`'s config — a REAL
 /// Maglev backend carries the same LB state every participating node does, via mesh gossip) +
 /// optional overlay-LB self-registration. The WAN LB replication is what lets `hostB`'s OWN
-/// `uplink_rx` recognize "I own this VIP" on ingress: WAN VIPs are anycast, not a guest's own
+/// `uplink_rx` recognize "I own this LB address" on ingress: WAN LB addresses are anycast, not a guest's own
 /// overlay IP, so they have no `ROUTES` self-route for the ingress delivery-target reconstruction to
 /// find — `lb_select_forward` re-selecting itself (`be.node_vtep == local.underlay_ipv6`) and then
 /// resolving the delivery tap via `INTERFACES[(vni, be.overlay_ip)]` is the ONLY mechanism that
-/// resolves VIP delivery.
+/// resolves LB address delivery.
 fn backend_node(with_overlay_lb: bool) -> SimNode {
     let mut n = SimNode::with_local(local_for(HOSTB_UL, 9));
     n.maps.add_iface(
@@ -141,7 +141,7 @@ fn backend_node(with_overlay_lb: bool) -> SimNode {
     n.maps.lb.insert(
         LbKey {
             vni: 0,
-            ipv4: WAN_VIP,
+            ipv4: WAN_LB_IP,
             port: 443,
             proto: 6,
             _pad: 0,
@@ -166,7 +166,7 @@ fn backend_node(with_overlay_lb: bool) -> SimNode {
         n.maps.lb.insert(
             LbKey {
                 vni: VNI,
-                ipv4: OVERLAY_VIP,
+                ipv4: OVERLAY_LB_IP,
                 port: 443,
                 proto: 6,
                 _pad: 0,
@@ -191,13 +191,13 @@ fn backend_node(with_overlay_lb: bool) -> SimNode {
     n
 }
 
-/// Edge node with the WAN-VIP LB (vni=0) → hostB.
+/// Edge node with the WAN-LB address LB (vni=0) → hostB.
 fn edge_node() -> SimNode {
     let mut e = SimNode::with_local(local_for(EDGE_UL, 7));
     e.maps.lb.insert(
         LbKey {
             vni: 0,
-            ipv4: WAN_VIP,
+            ipv4: WAN_LB_IP,
             port: 443,
             proto: 6,
             _pad: 0,
@@ -224,7 +224,7 @@ fn edge_node() -> SimNode {
 // ============================ North-South ============================
 
 #[test]
-fn ns_lb_delivered_with_vip_allow() {
+fn ns_lb_delivered_with_lb_ip_allow() {
     let mut fab = Fabric::new();
     fab.add_node("edge", edge_node());
     let mut b = backend_node(false);
@@ -232,7 +232,7 @@ fn ns_lb_delivered_with_vip_allow() {
     fab.add_node("hostB", b);
     fab.route(HOSTB_UL, "hostB");
 
-    let frame = eth_ipv4_tcp(WAN_SRC, WAN_VIP, 443);
+    let frame = eth_ipv4_tcp(WAN_SRC, WAN_LB_IP, 443);
     let t = fab.deliver("edge", Prog::WanRx, &frame);
     assert_eq!(
         t.outcome,
@@ -247,7 +247,7 @@ fn ns_lb_delivered_with_vip_allow() {
 }
 
 #[test]
-fn ns_lb_dropped_when_policy_misses_vip() {
+fn ns_lb_dropped_when_policy_misses_lb_ip() {
     // THE CLAB REPRODUCTION: the backend's policy only permits INTERNAL sources (10.0.0.0/8) on 443,
     // but N/S LB traffic arrives with an EXTERNAL source (a public client) — so it is denied.
     let mut fab = Fabric::new();
@@ -257,7 +257,7 @@ fn ns_lb_dropped_when_policy_misses_vip() {
     fab.add_node("hostB", b);
     fab.route(HOSTB_UL, "hostB");
 
-    let frame = eth_ipv4_tcp(WAN_SRC, WAN_VIP, 443);
+    let frame = eth_ipv4_tcp(WAN_SRC, WAN_LB_IP, 443);
     let t = fab.deliver("edge", Prog::WanRx, &frame);
     assert_eq!(
         t.outcome,
@@ -275,7 +275,7 @@ fn ns_lb_delivered_unpolicied_allow_all() {
     fab.add_node("hostB", b);
     fab.route(HOSTB_UL, "hostB");
 
-    let frame = eth_ipv4_tcp(WAN_SRC, WAN_VIP, 443);
+    let frame = eth_ipv4_tcp(WAN_SRC, WAN_LB_IP, 443);
     let t = fab.deliver("edge", Prog::WanRx, &frame);
     assert_eq!(
         t.outcome,
@@ -290,7 +290,7 @@ fn ns_lb_delivered_unpolicied_allow_all() {
 
 #[test]
 fn ew_lb_reforward_delivered() {
-    // guestA -> OVERLAY_VIP; origin encaps to the LB relay underlay; relay Maglev-selects hostB
+    // guestA -> OVERLAY_LB_IP; origin encaps to the LB relay underlay; relay Maglev-selects hostB
     // (remote) and reforwards; hostB delivers. Trace shows the reforward hop.
     let mut fab = Fabric::new();
 
@@ -301,7 +301,7 @@ fn ew_lb_reforward_delivered() {
     relay.maps.lb.insert(
         LbKey {
             vni: VNI,
-            ipv4: OVERLAY_VIP,
+            ipv4: OVERLAY_LB_IP,
             port: 443,
             proto: 6,
             _pad: 0,
@@ -334,7 +334,7 @@ fn ew_lb_reforward_delivered() {
     fab.route(RELAY_UL, "relay");
     fab.route(HOSTB_UL, "hostB");
 
-    let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
+    let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_LB_IP, 443);
     let encapped = encap_to(&inner);
     let t = fab.deliver("relay", Prog::UplinkRx(VNI), &encapped);
     assert_eq!(
@@ -358,7 +358,7 @@ fn ew_lb_local_deliver_no_reforward() {
     fab.add_node("hostB", b);
     fab.route(HOSTB_UL, "hostB");
 
-    let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
+    let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_LB_IP, 443);
     let encapped = encap_to(&inner);
     let t = fab.deliver("hostB", Prog::UplinkRx(VNI), &encapped);
     assert_eq!(
@@ -383,7 +383,7 @@ fn ew_lb_reforward_converges_no_loop() {
     relay.maps.lb.insert(
         LbKey {
             vni: VNI,
-            ipv4: OVERLAY_VIP,
+            ipv4: OVERLAY_LB_IP,
             port: 443,
             proto: 6,
             _pad: 0,
@@ -414,7 +414,7 @@ fn ew_lb_reforward_converges_no_loop() {
     fab.route(RELAY_UL, "relay");
     fab.route(HOSTB_UL, "hostB");
 
-    let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
+    let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_LB_IP, 443);
     let encapped = encap_to(&inner);
     let t = fab.deliver("relay", Prog::UplinkRx(VNI), &encapped);
     assert_ne!(
@@ -427,19 +427,19 @@ fn ew_lb_reforward_converges_no_loop() {
 
 #[test]
 fn ew_lb_anycast_delivered_with_policy() {
-    // Model A: the E/W VIP is an anycast route → guest encaps straight to the backend /128.
+    // Model A: the E/W LB address is an anycast route → guest encaps straight to the backend /128.
     // The backend has NO LB maps; uplink_rx base-delivers after the ingress firewall. Internal
     // source (10.0.0.0/8) is permitted on 443, so it is delivered.
     let mut fab = Fabric::new();
     let mut b = backend_node(false);
     apply_fw(&mut b.maps, HOSTB_TAP, allow_internal_443());
-    // The anycast VIP's ingress delivery-target marker (`resolve_uplink_target`'s mechanism #1):
-    // hostB's own control plane self-registers an `INTERFACES[(vni, VIP)]` local-delivery entry for
-    // the VIP it serves (distinct from the LB path — no `LB`/`MAGLEV` maps here), the same way a
+    // The anycast LB address's ingress delivery-target marker (`resolve_uplink_target`'s mechanism #1):
+    // hostB's own control plane self-registers an `INTERFACES[(vni, LB_IP_CONST)]` local-delivery entry for
+    // the LB address it serves (distinct from the LB path — no `LB`/`MAGLEV` maps here), the same way a
     // guest's own overlay IP entry does.
     b.maps.add_iface(
         VNI,
-        OVERLAY_VIP,
+        OVERLAY_LB_IP,
         flowplane_common::IfaceValue {
             tap_ifindex: HOSTB_TAP,
             is_local: 1,
@@ -452,7 +452,7 @@ fn ew_lb_anycast_delivered_with_policy() {
     fab.add_node("hostB", b);
     fab.route(HOSTB_UL, "hostB");
 
-    let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
+    let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_LB_IP, 443);
     let encapped = encap_to(&inner);
     let t = fab.deliver("hostB", Prog::UplinkRx(VNI), &encapped);
     assert_eq!(
@@ -487,7 +487,7 @@ fn ew_lb_anycast_dropped_without_policy() {
     // exercise.
     b.maps.add_route4(
         VNI,
-        OVERLAY_VIP,
+        OVERLAY_LB_IP,
         RouteValue {
             nexthop_vni: VNI,
             nexthop_ipv6: HOSTB_UL,
@@ -498,7 +498,7 @@ fn ew_lb_anycast_dropped_without_policy() {
     fab.add_node("hostB", b);
     fab.route(HOSTB_UL, "hostB");
 
-    let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
+    let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_LB_IP, 443);
     let encapped = encap_to(&inner);
     let t = fab.deliver("hostB", Prog::UplinkRx(VNI), &encapped);
     assert_eq!(
@@ -508,13 +508,13 @@ fn ew_lb_anycast_dropped_without_policy() {
     );
 }
 
-// ============================ North-South (v6 VIP) ============================
+// ============================ North-South (v6 LB_IP_CONST) ============================
 
-/// Direct edge `wan_rx` test for a v6 WAN VIP. We assert on the EDGE hop only — not a full
+/// Direct edge `wan_rx` test for a v6 WAN LB address. We assert on the EDGE hop only — not a full
 /// `Prog::WanRx → Delivered` Fabric trace — because the sim's Fabric/`SimNode::uplink` assumes a
 /// v4 inner and does NOT yet model v6-inner backend delivery (see fabric.rs:104-106). This proves
-/// the FIRST behavioral DSR change (B6): `wan_rx` now Geneve-dispatches with a VIP option — the
-/// edge captures the ORIGINAL VIP into a `DsrOpt` (from the packet's dst BEFORE rewriting), rewrites
+/// the FIRST behavioral DSR change (B6): `wan_rx` now Geneve-dispatches with an LB address option — the
+/// edge captures the ORIGINAL LB address into a `DsrOpt` (from the packet's dst BEFORE rewriting), rewrites
 /// the inner dst to the backend's OWN overlay IP (the guest only accepts its own IP), and leaves the
 /// inner SRC as the real client (so the backend can key its DSR conntrack on the real client flow).
 #[test]
@@ -526,7 +526,12 @@ fn ns_lb_v6_wan_rx_dsr_encode() {
 
     const BE_IP6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x61];
     let mut e = SimNode::with_local(local_for(EDGE_UL, 7));
-    let last4 = [WAN_VIP6[12], WAN_VIP6[13], WAN_VIP6[14], WAN_VIP6[15]];
+    let last4 = [
+        WAN_LB_IP6[12],
+        WAN_LB_IP6[13],
+        WAN_LB_IP6[14],
+        WAN_LB_IP6[15],
+    ];
     e.maps.lb.insert(
         LbKey {
             vni: 0,
@@ -552,7 +557,7 @@ fn ns_lb_v6_wan_rx_dsr_encode() {
         },
     );
 
-    let frame = eth_ipv6_tcp(WAN_SRC6, WAN_VIP6, 443);
+    let frame = eth_ipv6_tcp(WAN_SRC6, WAN_LB_IP6, 443);
     let out = e.wan_rx(&frame);
 
     assert_eq!(
@@ -574,9 +579,9 @@ fn ns_lb_v6_wan_rx_dsr_encode() {
             family: 1,
             _pad: 0,
             port: 443,
-            vip: WAN_VIP6
+            lb_ip: WAN_LB_IP6
         }),
-        "wan_rx carries a DSR option with the ORIGINAL VIP"
+        "wan_rx carries a DSR option with the ORIGINAL LB address"
     );
     assert_eq!(
         &out.pkt[ETH_LEN + 24..ETH_LEN + 40],
@@ -589,19 +594,25 @@ fn ns_lb_v6_wan_rx_dsr_encode() {
         "inner v6 src unchanged (client)"
     );
 
-    // Negative sub-case: a non-VIP v6 dst (last-4 != VIP key) → Pass, no encap, no rewrite.
-    let non_vip = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 5];
-    let miss = eth_ipv6_tcp(WAN_SRC6, non_vip, 443);
+    // Negative sub-case: a non-LB address v6 dst (last-4 != LB address key) → Pass, no encap, no rewrite.
+    let non_floating_ip = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 5];
+    let miss = eth_ipv6_tcp(WAN_SRC6, non_floating_ip, 443);
     let out2 = e.wan_rx(&miss);
-    assert_eq!(out2.action, Action::Pass, "non-VIP v6 dst must Pass");
-    assert_eq!(out2.tunnel, None, "non-VIP dst emits no tunnel decision");
-    assert_eq!(out2.dsr, None, "non-VIP dst emits no DSR option");
-    assert_eq!(out2.pkt, miss, "non-VIP frame is byte-for-byte unchanged");
+    assert_eq!(out2.action, Action::Pass, "non-LB address v6 dst must Pass");
+    assert_eq!(
+        out2.tunnel, None,
+        "non-LB address dst emits no tunnel decision"
+    );
+    assert_eq!(out2.dsr, None, "non-LB address dst emits no DSR option");
+    assert_eq!(
+        out2.pkt, miss,
+        "non-LB address frame is byte-for-byte unchanged"
+    );
 }
 
-/// v4 mirror of [`ns_lb_v6_wan_rx_dsr_encode`]: the edge captures the ORIGINAL v4 VIP into a
-/// `DsrOpt { family: 0, .. }` (vip left-justified in the 16-byte field) and rewrites the inner v4
-/// dst to the backend's own overlay IP, using the existing `vip_dnat_rewrite` v4 helper's checksum
+/// v4 mirror of [`ns_lb_v6_wan_rx_dsr_encode`]: the edge captures the ORIGINAL v4 LB address into a
+/// `DsrOpt { family: 0, .. }` (lb_ip left-justified in the 16-byte field) and rewrites the inner v4
+/// dst to the backend's own overlay IP, using the existing `floating_ip_dnat_rewrite` v4 helper's checksum
 /// fixups (reused from the floating-IP DNAT arm).
 #[test]
 fn ns_lb_v4_wan_rx_dsr_encode() {
@@ -613,7 +624,7 @@ fn ns_lb_v4_wan_rx_dsr_encode() {
     const BE_IP4: [u8; 4] = [10, 0, 0, 181];
     let edge = edge_node();
 
-    let frame = eth_ipv4_tcp(WAN_SRC, WAN_VIP, 443);
+    let frame = eth_ipv4_tcp(WAN_SRC, WAN_LB_IP, 443);
     let out = edge.wan_rx(&frame);
 
     assert_eq!(
@@ -621,8 +632,8 @@ fn ns_lb_v4_wan_rx_dsr_encode() {
         Action::Redirect(7),
         "edge must redirect out its uplink ifindex (EDGE_UL local ifindex=7)"
     );
-    let mut vip16 = [0u8; 16];
-    vip16[0..4].copy_from_slice(&WAN_VIP);
+    let mut lb_ip16 = [0u8; 16];
+    lb_ip16[0..4].copy_from_slice(&WAN_LB_IP);
     assert_eq!(
         out.tunnel,
         Some(TunnelEncap {
@@ -637,9 +648,9 @@ fn ns_lb_v4_wan_rx_dsr_encode() {
             family: 0,
             _pad: 0,
             port: 443,
-            vip: vip16
+            lb_ip: lb_ip16
         }),
-        "wan_rx carries a DSR option with the ORIGINAL v4 VIP left-justified in the 16-byte field"
+        "wan_rx carries a DSR option with the ORIGINAL v4 LB address left-justified in the 16-byte field"
     );
     assert_eq!(
         &out.pkt[ETH_LEN + 16..ETH_LEN + 20],
@@ -666,7 +677,7 @@ fn ns_lb_v4_wan_rx_dsr_encode() {
 /// Install an ingress ALLOW rule on `tap` for TCP -> ANY dst : 443 (v6 firewall). Mirrors
 /// `ns_scenario_v6_test.rs::allow_tcp6`, but wildcards `dst_ip`/`dst_mask` (this file's `apply_fw`
 /// v4 helper — `allow_from_any_443` — is source-wildcarded, dest-agnostic; the v6 mirror needs the
-/// same shape since the LB/DSR delivery keeps the inner dst as the VIP, not either backend's own
+/// same shape since the LB/DSR delivery keeps the inner dst as the LB_IP_CONST, not either backend's own
 /// overlay IP). No `apply6`/`compilednic` v6 helper exists in this sim yet (checked: only a v4
 /// `apply()` — see `compilednic.rs`), so this seeds `FW_META6`/`FW_RULES6` directly, the same way
 /// `ns_scenario_v6_test.rs` and `firewall_test.rs` do.
@@ -740,7 +751,7 @@ fn ns_lb_two_backends_one_node_deliver_to_distinct_taps_v4() {
     n.maps.lb.insert(
         LbKey {
             vni: VNI,
-            ipv4: OVERLAY_VIP,
+            ipv4: OVERLAY_LB_IP,
             port: 443,
             proto: 6,
             _pad: 0,
@@ -776,7 +787,7 @@ fn ns_lb_two_backends_one_node_deliver_to_distinct_taps_v4() {
 
     let mut seen_taps = std::collections::HashSet::new();
     for src in [[10u8, 0, 9, 1], [10, 0, 9, 2], [10, 0, 9, 3], [10, 0, 9, 4]] {
-        let inner = eth_ipv4_tcp(src, OVERLAY_VIP, 443);
+        let inner = eth_ipv4_tcp(src, OVERLAY_LB_IP, 443);
         let out = n.uplink(&inner, VNI, &local_for(HOSTB_UL, 9));
         if let Action::Redirect(tap) = out.action {
             seen_taps.insert(tap);
@@ -797,8 +808,8 @@ fn ns_lb_two_backends_one_node_deliver_to_distinct_taps_v6() {
     const BE2_IP6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x62];
     const BE1_TAP: u32 = 61;
     const BE2_TAP: u32 = 62;
-    let vip6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 100, 1];
-    let vip_last4 = [vip6[12], vip6[13], vip6[14], vip6[15]];
+    let lb_ip6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 100, 1];
+    let lb_ip_last4 = [lb_ip6[12], lb_ip6[13], lb_ip6[14], lb_ip6[15]];
 
     let mut n = SimNode::with_local(local_for(HOSTB_UL, 9));
     for (ip6, tap) in [(BE1_IP6, BE1_TAP), (BE2_IP6, BE2_TAP)] {
@@ -819,7 +830,7 @@ fn ns_lb_two_backends_one_node_deliver_to_distinct_taps_v6() {
     n.maps.lb.insert(
         LbKey {
             vni: VNI,
-            ipv4: vip_last4,
+            ipv4: lb_ip_last4,
             port: 443,
             proto: 6,
             _pad: 0,
@@ -855,7 +866,7 @@ fn ns_lb_two_backends_one_node_deliver_to_distinct_taps_v6() {
     for last in [1u8, 2, 3, 4] {
         let mut src6 = [0x20u8, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         src6[15] = last;
-        let inner = eth_ipv6_tcp(src6, vip6, 443);
+        let inner = eth_ipv6_tcp(src6, lb_ip6, 443);
         let out = n.uplink_v6(&inner, VNI, &local_for(HOSTB_UL, 9));
         if let Action::Redirect(tap) = out.action {
             seen_taps.insert(tap);

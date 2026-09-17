@@ -186,17 +186,17 @@ pub fn withdraw_neighbor_nat<W: MapWriter>(
     Ok(pb::WithdrawNeighborNatResponse {})
 }
 
-pub fn add_lb_vip<W: MapWriter>(
+pub fn add_load_balancer<W: MapWriter>(
     core: &mut ControlCore<W>,
-    req: &pb::AddLbVipRequest,
-) -> Result<pb::AddLbVipResponse, ServiceError> {
-    let lb_ip: LbIpBytes = match req.vip.parse::<std::net::IpAddr>() {
+    req: &pb::AddLoadBalancerRequest,
+) -> Result<pb::AddLoadBalancerResponse, ServiceError> {
+    let lb_ip: LbIpBytes = match req.ip.parse::<std::net::IpAddr>() {
         Ok(std::net::IpAddr::V4(a)) => LbIpBytes::Ipv4(a.octets()),
         Ok(std::net::IpAddr::V6(a)) => LbIpBytes::Ipv6(a.octets()),
         Err(e) => {
             return Err(ServiceError::Invalid(format!(
-                "invalid vip {:?}: {e}",
-                req.vip
+                "invalid lb_ip {:?}: {e}",
+                req.ip
             )))
         }
     };
@@ -216,7 +216,7 @@ pub fn add_lb_vip<W: MapWriter>(
     let id = req.id.clone().into_bytes();
     let vni = req.vni;
     core.create_lb(&id, vni, lb_ip, lb_underlay, ports)?;
-    Ok(pb::AddLbVipResponse {})
+    Ok(pb::AddLoadBalancerResponse {})
 }
 
 /// Parse a backend overlay IP (v4 or v6) into its 16-byte wire form + the `is_v6` family flag: a v4
@@ -255,13 +255,13 @@ pub fn add_lb_backend<W: MapWriter>(
     Ok(pb::AddLbBackendResponse {})
 }
 
-pub fn del_lb_vip<W: MapWriter>(
+pub fn del_load_balancer<W: MapWriter>(
     core: &mut ControlCore<W>,
-    req: &pb::DelLbVipRequest,
-) -> Result<pb::DelLbVipResponse, ServiceError> {
+    req: &pb::DelLoadBalancerRequest,
+) -> Result<pb::DelLoadBalancerResponse, ServiceError> {
     let id = req.id.clone().into_bytes();
     core.delete_lb(&id)?;
-    Ok(pb::DelLbVipResponse {})
+    Ok(pb::DelLoadBalancerResponse {})
 }
 
 pub fn del_lb_backend<W: MapWriter>(
@@ -839,12 +839,12 @@ mod tests {
     #[test]
     fn add_del_lb_backend_disambiguates_same_node_by_overlay_ip() {
         let mut c = core();
-        add_lb_vip(
+        add_load_balancer(
             &mut c,
-            &pb::AddLbVipRequest {
-                id: "vip".into(),
+            &pb::AddLoadBalancerRequest {
+                id: "lb_ip".into(),
                 vni: 100,
-                vip: "203.0.113.60".into(),
+                ip: "203.0.113.60".into(),
                 lb_underlay: "2001:db8::ee".into(),
                 ports: vec![pb::PortProto {
                     port: 443,
@@ -852,12 +852,12 @@ mod tests {
                 }],
             },
         )
-        .expect("add_lb_vip");
+        .expect("add_load_balancer");
 
         add_lb_backend(
             &mut c,
             &pb::AddLbBackendRequest {
-                id: "vip".into(),
+                id: "lb_ip".into(),
                 backend_underlay: "2001:db8::1".into(),
                 backend_overlay_ip: "10.0.0.5".into(),
                 backend_vni: 100,
@@ -867,7 +867,7 @@ mod tests {
         add_lb_backend(
             &mut c,
             &pb::AddLbBackendRequest {
-                id: "vip".into(),
+                id: "lb_ip".into(),
                 backend_underlay: "2001:db8::1".into(), // SAME node as backend 1
                 backend_overlay_ip: "10.0.0.7".into(),
                 backend_vni: 100,
@@ -887,7 +887,7 @@ mod tests {
         del_lb_backend(
             &mut c,
             &pb::DelLbBackendRequest {
-                id: "vip".into(),
+                id: "lb_ip".into(),
                 backend_underlay: "2001:db8::1".into(),
                 backend_overlay_ip: "10.0.0.5".into(),
             },
@@ -909,12 +909,12 @@ mod tests {
     #[test]
     fn del_lb_backend_empty_overlay_falls_back_to_underlay_match() {
         let mut c = core();
-        add_lb_vip(
+        add_load_balancer(
             &mut c,
-            &pb::AddLbVipRequest {
-                id: "vip".into(),
+            &pb::AddLoadBalancerRequest {
+                id: "lb_ip".into(),
                 vni: 100,
-                vip: "203.0.113.61".into(),
+                ip: "203.0.113.61".into(),
                 lb_underlay: "2001:db8::ef".into(),
                 ports: vec![pb::PortProto {
                     port: 443,
@@ -922,11 +922,11 @@ mod tests {
                 }],
             },
         )
-        .expect("add_lb_vip");
+        .expect("add_load_balancer");
         add_lb_backend(
             &mut c,
             &pb::AddLbBackendRequest {
-                id: "vip".into(),
+                id: "lb_ip".into(),
                 backend_underlay: "2001:db8::2".into(),
                 backend_overlay_ip: "10.0.0.9".into(),
                 backend_vni: 100,
@@ -937,7 +937,7 @@ mod tests {
         del_lb_backend(
             &mut c,
             &pb::DelLbBackendRequest {
-                id: "vip".into(),
+                id: "lb_ip".into(),
                 backend_underlay: "2001:db8::2".into(),
                 backend_overlay_ip: "".into(), // legacy caller: no overlay IP set
             },

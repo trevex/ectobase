@@ -190,7 +190,7 @@ _Appears in:_
 
 
 
-LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.
+LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.
 
 
 
@@ -212,7 +212,7 @@ _Appears in:_
 
 
 
-LBPoolSpec is the desired state of an LBPool (a fleet-scoped VIP prefix range).
+LBPoolSpec is the desired state of an LBPool (a fleet-scoped LB address prefix range).
 
 
 
@@ -221,8 +221,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `v4Prefix` _string_ | V4Prefix optionally pins the IPv4 CIDR for this VIP pool. |  | Optional: \{\} <br /> |
-| `v6Prefix` _string_ | V6Prefix optionally pins the IPv6 CIDR for this VIP pool. |  | Optional: \{\} <br /> |
+| `v4Prefix` _string_ | V4Prefix optionally pins the IPv4 CIDR for this LB address pool. |  | Optional: \{\} <br /> |
+| `v6Prefix` _string_ | V6Prefix optionally pins the IPv6 CIDR for this LB address pool. |  | Optional: \{\} <br /> |
 | `reservedIPs` _string array_ | ReservedIPs are addresses held back from allocation within this pool. |  | Optional: \{\} <br /> |
 
 
@@ -240,7 +240,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `state` _string_ | State is the current lifecycle state (e.g. Pending, Ready). |  | Optional: \{\} <br /> |
-| `total` _integer_ | Total is the total number of allocatable VIP addresses. |  | Optional: \{\} <br /> |
+| `total` _integer_ | Total is the total number of allocatable LB address addresses. |  | Optional: \{\} <br /> |
 
 
 #### LoadBalancer
@@ -286,8 +286,14 @@ _Appears in:_
 
 
 
-LoadBalancerSpec is the desired state of a LoadBalancer. The VIP is the LB's identity
-(v4 or v6); backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
+LoadBalancerSpec is the desired state of a LoadBalancer. The IP is the LB's identity (v4 or v6);
+backends are the NetworkInterfaces matched by TargetSelector or named by TargetRefs.
+
+Deliberately NOT called a "LB address". A load-balancer address is 1:N and ingress-only — clients reach
+it and it Maglev-hashes to a backend, but a backend's own egress is SNATed to its NATGateway
+address, never to this one. The 1:1, bidirectional "virtual IP" that a single interface owns for
+both directions (ironcore/dpservice VirtualIP, AWS Elastic IP) is a different object: FloatingIP.
+Naming both "LB address" conflated them once too often.
 
 
 
@@ -296,8 +302,8 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `vip` _string_ | VIP is the requested virtual IP. Empty => allocate from PoolRef; set =><br />validate membership in the pool + reserve (bring-your-own). |  |  |
-| `poolRef` _[LocalObjectReference](#localobjectreference)_ | PoolRef selects the LBPool to allocate the VIP from. |  | Optional: \{\} <br /> |
+| `ip` _string_ | IP is the requested load-balancer address. Empty => allocate from PoolRef; set =><br />validate membership in the pool + reserve (bring-your-own). |  |  |
+| `poolRef` _[LocalObjectReference](#localobjectreference)_ | PoolRef selects the LBPool to allocate the IP from. |  | Optional: \{\} <br /> |
 | `ports` _[LoadBalancerPort](#loadbalancerport) array_ | Ports are the LB service (port, proto) tuples. |  |  |
 | `targetSelector` _[LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#labelselector-v1-meta)_ | TargetSelector selects backend NetworkInterfaces by label. Mutually exclusive with TargetRefs. |  | Optional: \{\} <br /> |
 | `targetRefs` _[LocalObjectReference](#localobjectreference) array_ | TargetRefs names backend NetworkInterfaces explicitly. Mutually exclusive with TargetSelector. |  | Optional: \{\} <br /> |
@@ -317,7 +323,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `state` _string_ | State is the lifecycle state (Pending \| Ready). |  | Optional: \{\} <br /> |
-| `allocatedVIP` _string_ | AllocatedVIP is the authoritative VIP assigned by the VIP allocator. |  | Optional: \{\} <br /> |
+| `allocatedIP` _string_ | AllocatedIP is the authoritative address assigned by the LB address allocator. Mirrors<br />NetworkInterface.status.allocatedIPs: spec is the request, status is the truth. |  | Optional: \{\} <br /> |
 | `observedGeneration` _integer_ | ObservedGeneration is the Spec generation the allocation reflects. |  | Optional: \{\} <br /> |
 
 

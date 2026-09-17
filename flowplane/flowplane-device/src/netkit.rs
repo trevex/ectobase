@@ -105,7 +105,7 @@ pub fn create_netkit_pair(spec: &VethSpec, mode: NetkitMode) -> Result<DeviceInf
         // Disable tx-checksum offload on the guest end — only when the uplink can't finalize
         // CHECKSUM_PARTIAL in hardware (software-veth/netkit fabric). Mirrors create_veth_pair: without
         // it a netkit guest emits CHECKSUM_PARTIAL replies, and any datapath L3 rewrite of a
-        // locally-generated guest packet (e.g. the DSR reverse-SNAT src->VIP) then corrupts the inner
+        // locally-generated guest packet (e.g. the DSR reverse-SNAT src->LB_IP_CONST) then corrupts the inner
         // TCP/UDP checksum (the direct-byte csum fold is only valid over a COMPLETE checksum).
         // Best-effort.
         if spec.disable_csum_offload {

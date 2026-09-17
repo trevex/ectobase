@@ -65,7 +65,7 @@ pub fn ensure_geneve_dev(name: &str, gateway_mac: [u8; 6]) -> Result<GeneveDev> 
     run(&argv).with_context(|| format!("create geneve dev {name}"))?;
     // Stamp the gateway MAC, then verify-and-RETRY. The kernel `collect_md` geneve device carries
     // INNER ETHERNET (TEB) and runs `eth_type_trans` on decap: an overlay->WAN reply (a DSR
-    // reverse-SNAT src->VIP) arrives with inner dst MAC = the gateway MAC, so the device MAC MUST equal
+    // reverse-SNAT src->LB_IP_CONST) arrives with inner dst MAC = the gateway MAC, so the device MAC MUST equal
     // it or `ip6_rcv_core` drops it `PACKET_OTHERHOST` before eth3 egress (backends never hit this —
     // `uplink_rx` bpf_redirects at the tc-ingress hook, before that check; only the edge's kernel
     // local-deliver does). The stamp is RACY at bring-up — a geneve device intermittently keeps its

@@ -28,6 +28,8 @@ mod encap_test;
 #[cfg(test)]
 mod firewall_test;
 #[cfg(test)]
+mod floatingip_test;
+#[cfg(test)]
 mod flow_label_test;
 #[cfg(test)]
 mod forward_principle_test;
@@ -59,7 +61,5 @@ mod parse_v6_test;
 mod peering_test;
 #[cfg(test)]
 mod reforward_test;
-#[cfg(test)]
-mod vip_test;
 #[cfg(test)]
 mod vni_test;

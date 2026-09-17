@@ -8,7 +8,7 @@ ipv6:
 
 kubeProxyReplacement: true
 # Talos KubePrism — a host-local apiserver load-balancer, decoupled from the anycast
-# API VIP + GoBGP convergence (Talos-recommended for kube-proxy replacement). The
+# API address + GoBGP convergence (Talos-recommended for kube-proxy replacement). The
 # cluster-patch's KubePrismConfig pins this same port (7445).
 k8sServiceHost: localhost
 k8sServicePort: "7445"

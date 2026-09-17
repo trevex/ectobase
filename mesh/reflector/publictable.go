@@ -5,13 +5,13 @@ import (
 	"github.com/trevex/ectobase/mesh/routebus"
 )
 
-// LbPort is one LB service tuple carried on an LB_VIP record. Aliases the shared
+// LbPort is one LB service tuple carried on an LB_IP record. Aliases the shared
 // routebus.LbPort so the agent and reflector speak one representation.
 type LbPort = routebus.LbPort
 
 // PublicRecord is a globally-relevant "public" prefix advertised on the typed
 // PublicPrefix channel: an edge anycast /128, a distributed-SNAT nat_ip block,
-// an LB VIP, or a floating IP. Like NAT blocks, public records are GLOBAL (not
+// an LB address, or a floating IP. Like NAT blocks, public records are GLOBAL (not
 // per-VNI): every node learns every record so it can steer traffic to the owner.
 type PublicRecord struct {
 	Kind          pb.PublicKind
@@ -20,19 +20,19 @@ type PublicRecord struct {
 	Vni           uint32
 	PortMin       uint32
 	PortMax       uint32
-	// OverlayIP is set for LB_VIP records: the backend guest's overlay IP, relayed
+	// OverlayIP is set for LB_IP records: the backend guest's overlay IP, relayed
 	// through so the learning edge can AddLbBackend with it.
 	OverlayIP string
-	// Ports is set for LB_VIP records: the LB's service tuples, relayed through so the learning
-	// edge can AddLbVip the load balancer before adding this backend to it. Not part of the key —
-	// every backend of one VIP announces the same set, and a change re-announces under the same key.
+	// Ports is set for LB_IP records: the LB's service tuples, relayed through so the learning
+	// edge can AddLoadBalancer the load balancer before adding this backend to it. Not part of the key —
+	// every backend of one LB address announces the same set, and a change re-announces under the same key.
 	Ports []LbPort
 }
 
 // publicKey identifies a record by (kind, prefix, owner, overlay). Duplicate announces with the same
-// key are idempotent. overlay is included for every kind (empty for non-LB_VIP kinds, so their
-// dedup/idempotency behavior is unchanged) because it is the only field that disambiguates two LB_VIP
-// backends on the SAME node behind the SAME VIP (e.g. two pods of one Service scheduled together):
+// key are idempotent. overlay is included for every kind (empty for non-LB_IP kinds, so their
+// dedup/idempotency behavior is unchanged) because it is the only field that disambiguates two LB_IP
+// backends on the SAME node behind the SAME LB address (e.g. two pods of one Service scheduled together):
 // without it, such records collide on (kind, prefix, owner) alone and one silently overwrites the
 // other in the RIB, so a late-joining sink only ever learns one of the two backends.
 type publicKey struct {

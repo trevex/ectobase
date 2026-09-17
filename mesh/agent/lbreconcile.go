@@ -5,12 +5,12 @@ import (
 	"fmt"
 )
 
-// lbBacking is one (VIP, backend NIC) pairing this node hosts: a CompiledNIC.LB entry together with
-// this node's VTEP (resolved from the local dataplane).
+// lbBacking is one (LB address, backend NIC) pairing this node hosts: a CompiledNIC.LB entry
+// together with this node's VTEP (resolved from the local dataplane).
 type lbBacking struct {
-	VIP         string   // v4 or v6
+	IP          string   // the load balancer's address, v4 or v6
 	Vni         uint32   // the backend NIC's VPC VNI (for the E/W anycast route)
-	NicUnderlay string   // this node's VTEP (E/W route nexthop + LB_VIP owner_underlay)
+	NicUnderlay string   // this node's VTEP (E/W route nexthop + LB_IP owner_underlay)
 	OverlayIP   string   // the backend NIC's overlay IP (for AddLbBackend's Geneve encap)
 	Ports       []LbPort // service tuples (proto as IP protocol number)
 }
@@ -50,7 +50,7 @@ func (r *Reconciler) desiredLB(ctx context.Context, ulByKey map[ipKey]string, lo
 			for _, p := range lb.Ports {
 				ports = append(ports, LbPort{Port: uint32(p.Port), Proto: protoNum(p.Proto)})
 			}
-			out = append(out, lbBacking{VIP: lb.VIP, Vni: uint32(c.Spec.VNI), NicUnderlay: ul, OverlayIP: overlayIP, Ports: ports})
+			out = append(out, lbBacking{IP: lb.IP, Vni: uint32(c.Spec.VNI), NicUnderlay: ul, OverlayIP: overlayIP, Ports: ports})
 		}
 	}
 	return out, nil
@@ -59,12 +59,12 @@ func (r *Reconciler) desiredLB(ctx context.Context, ulByKey map[ipKey]string, lo
 // The edge does NOT reconcile LoadBalancers from an API server. It has none — it is a router, not a
 // Kubernetes node — and even a pool-resident edge could not: the broker syncs only the compiled.*
 // kinds downstream, so a raw LoadBalancer never reaches a pool API server and listing them there
-// always returned zero items. The edge instead learns each VIP from the LB_VIP records its BACKENDS
+// always returned zero items. The edge instead learns each LB address from the LB_IP records its BACKENDS
 // announce, which carry the service ports alongside the backend identity (see DesiredPublic) — so
-// Bus.applyPublic does the AddLbVip + AddLbBackend pair. The consequence is deliberate: a VIP with
+// Bus.applyPublic does the AddLoadBalancer + AddLbBackend pair. The consequence is deliberate: an LB address with
 // no backends is never programmed at the edge, which is correct (an edge that Maglev-hashes to an
-// empty backend set can only blackhole) but does mean a VIP is not reserved until something backs it.
+// empty backend set can only blackhole) but does mean an LB address is not reserved until something backs it.
 //
-// Announced VIPs are always the centrally-ALLOCATED ones: the compiler only writes a CompiledNIC.LB
-// entry for a LoadBalancer whose status is Allocated with a non-empty allocatedVIP (see
-// controllers/compilednic.go), so an auto-allocated LB's empty spec.vip can never reach the edge.
+// Announced LB addresses are always the centrally-ALLOCATED ones: the compiler only writes a CompiledNIC.LB
+// entry for a LoadBalancer whose status is Allocated with a non-empty allocatedIP (see
+// controllers/compilednic.go), so an auto-allocated LB's empty spec.lbIP can never reach the edge.

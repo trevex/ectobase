@@ -7,12 +7,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// LBPoolSpec is the desired state of an LBPool (a fleet-scoped VIP prefix range).
+// LBPoolSpec is the desired state of an LBPool (a fleet-scoped LB address prefix range).
 type LBPoolSpec struct {
-	// V4Prefix optionally pins the IPv4 CIDR for this VIP pool.
+	// V4Prefix optionally pins the IPv4 CIDR for this LB address pool.
 	// +optional
 	V4Prefix *string `json:"v4Prefix,omitempty" protobuf:"bytes,1,opt,name=v4Prefix"`
-	// V6Prefix optionally pins the IPv6 CIDR for this VIP pool.
+	// V6Prefix optionally pins the IPv6 CIDR for this LB address pool.
 	// +optional
 	V6Prefix *string `json:"v6Prefix,omitempty" protobuf:"bytes,2,opt,name=v6Prefix"`
 	// ReservedIPs are addresses held back from allocation within this pool.
@@ -25,7 +25,7 @@ type LBPoolStatus struct {
 	// State is the current lifecycle state (e.g. Pending, Ready).
 	// +optional
 	State string `json:"state,omitempty" protobuf:"bytes,1,opt,name=state"`
-	// Total is the total number of allocatable VIP addresses.
+	// Total is the total number of allocatable LB address addresses.
 	// +optional
 	Total int32 `json:"total,omitempty" protobuf:"varint,3,opt,name=total"`
 }
@@ -35,7 +35,7 @@ type LBPoolStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 
-// LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.
+// LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.
 type LBPool struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`

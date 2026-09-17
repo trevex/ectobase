@@ -71,17 +71,17 @@ func TestCompileGatedUntilAllocated(t *testing.T) {
 	}
 }
 
-// compiledMembershipHasVIP reports whether any compiled LB membership on c carries the given VIP.
-func compiledMembershipHasVIP(c compiledv1.CompiledNIC, vip string) bool {
+// compiledMembershipHasIP reports whether any compiled LB membership on c carries the given LB address.
+func compiledMembershipHasIP(c compiledv1.CompiledNIC, lbIP string) bool {
 	for _, m := range c.Spec.LB {
-		if m.VIP == vip {
+		if m.IP == lbIP {
 			return true
 		}
 	}
 	return false
 }
 
-func TestCompileUsesAllocatedVIP(t *testing.T) {
+func TestCompileUsesAllocatedIP(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = netv1.AddToScheme(scheme)
 	_ = compiledv1.AddToScheme(scheme)
@@ -106,7 +106,7 @@ func TestCompileUsesAllocatedVIP(t *testing.T) {
 	}
 	lb.Status.State = "Allocated"
 	lb.Status.ObservedGeneration = 1
-	lb.Status.AllocatedVIP = "198.51.100.7"
+	lb.Status.AllocatedIP = "198.51.100.7"
 
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(vpc, n, lb).
 		WithStatusSubresource(&netv1.NetworkInterface{}, &netv1.VPC{}, &netv1.LoadBalancer{}).Build()
@@ -120,7 +120,7 @@ func TestCompileUsesAllocatedVIP(t *testing.T) {
 	if err := cl.Get(ctx, client.ObjectKey{Namespace: "pool-pool-a", Name: "default-nic"}, &c); err != nil {
 		t.Fatal(err)
 	}
-	if !compiledMembershipHasVIP(c, "198.51.100.7") {
-		t.Fatalf("compiled LB membership missing allocated VIP: %+v", c.Spec.LB)
+	if !compiledMembershipHasIP(c, "198.51.100.7") {
+		t.Fatalf("compiled LB membership missing allocated IP: %+v", c.Spec.LB)
 	}
 }

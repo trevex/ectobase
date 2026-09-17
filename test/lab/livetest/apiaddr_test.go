@@ -12,8 +12,8 @@ import (
 
 // TestClusterAPIReady asserts each cluster's API server is reachable and serving
 // (/readyz returns ok via the collected kubeconfig) and its node reports Ready.
-// (The collected kubeconfig points at the Talos anycast API VIP, which is only
-// announced once GoBGP has relayed it into the fabric — so this also proves VIP +
+// (The collected kubeconfig points at the Talos anycast API address, which is only
+// announced once GoBGP has relayed it into the fabric — so this also proves LB address +
 // BGP convergence, not just apiserver health.)
 func TestClusterAPIReady(t *testing.T) {
 	cfg := loadConfig(t)

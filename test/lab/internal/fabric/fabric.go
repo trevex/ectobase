@@ -25,16 +25,16 @@ const (
 	// subnet): the wan bridge holds WanGwV4 (.1); edge1/edge2 hold .11/.12 on eth3,
 	// dual-stack alongside their fd00:29::1N/64 (B10: dual-stack WAN segment).
 	WanGwV4Base = "172.29.0"
-	// WanVipV4Test is a v4 documentation prefix (RFC 5737 TEST-NET-1) — the edge's
-	// PUBLIC v4 prefix: hand-picked LB VIPs and NAT source IPs are drawn from it
-	// (not in any overlay/underlay/fabric range; see livetest/lb_test.go's lbVIP).
-	WanVipV4Test = "192.0.2.0/24"
-	// PublicV4 is the edge-owned public v4 prefix (alias of WanVipV4Test): both edges
-	// advertise it (anycast) and the WAN routes it back — hand-picked LB VIPs + NAT
+	// WanPublicV4Test is a v4 documentation prefix (RFC 5737 TEST-NET-1) — the edge's
+	// PUBLIC v4 prefix: hand-picked LB addresses and NAT source IPs are drawn from it
+	// (not in any overlay/underlay/fabric range; see livetest/lb_test.go's lbIP).
+	WanPublicV4Test = "192.0.2.0/24"
+	// PublicV4 is the edge-owned public v4 prefix (alias of WanPublicV4Test): both edges
+	// advertise it (anycast) and the WAN routes it back — hand-picked LB addresses + NAT
 	// source IPs live here.
-	PublicV4 = WanVipV4Test
+	PublicV4 = WanPublicV4Test
 	// PublicV6 is the edge-owned public v6 prefix (RFC 3849 documentation range,
-	// 2001:db8::/32): hand-picked v6 LB VIPs (e.g. 2001:db8:2b::1) and NAT66 source
+	// 2001:db8::/32): hand-picked v6 LB addresses (e.g. 2001:db8:2b::1) and NAT66 source
 	// IPs are drawn from it. Advertised by both edges (anycast) + routed back from the
 	// WAN, mirroring PublicV4.
 	PublicV6     = "2001:db8:2b::/64"
@@ -178,7 +178,7 @@ func (v *View) ASHost() int      { return v.Cfg.Fabric.AS.Host }
 func (v *View) NodeAggr() string { return NodeAggr }
 func (v *View) LoopAggr() string { return LoopAggr }
 
-// Edge-owned public prefixes (LB VIPs + NAT source IPs), advertised by both edges.
+// Edge-owned public prefixes (LB addresses + NAT source IPs), advertised by both edges.
 func (v *View) PublicV4() string { return PublicV4 }
 func (v *View) PublicV6() string { return PublicV6 }
 
@@ -232,7 +232,7 @@ func Build(cfg *config.Config) *View {
 		V4Addr: WanGwV4 + "/24",
 		V6Addr: WanNet + "::1/64",
 		// /16 covers the WAN /24 + the tayga NAT64 pools 172.29.64/65.0/24; PublicV4 is
-		// the edge public prefix (LB VIPs + NAT) — masqueraded on the WAN→host hop so a
+		// the edge public prefix (LB addresses + NAT) — masqueraded on the WAN→host hop so a
 		// doc-prefix source actually egresses the host (the edge/fabric keep it as-is).
 		MasqV4: []string{"172.29.0.0/16", PublicV4},
 		// Pure /128-VTEP model: node identities (NodeAggr), edge loopbacks (LoopAggr),
@@ -243,9 +243,9 @@ func Build(cfg *config.Config) *View {
 			{Prefix: NodeAggr, NextHops: edges},
 			{Prefix: LoopAggr, NextHops: edges},
 			// Public prefixes route back into the fabric via BOTH edges (ECMP): this is
-			// what makes a hand-picked VIP/NAT-IP reachable from the WAN without a
-			// per-address static hack (v4 = WanVipV4Test/PublicV4; v6 = PublicV6).
-			{Prefix: WanVipV4Test, NextHops: edgesV4},
+			// what makes a hand-picked LB address/NAT-IP reachable from the WAN without a
+			// per-address static hack (v4 = WanPublicV4Test/PublicV4; v6 = PublicV6).
+			{Prefix: WanPublicV4Test, NextHops: edgesV4},
 			{Prefix: PublicV6, NextHops: edges},
 		},
 	}

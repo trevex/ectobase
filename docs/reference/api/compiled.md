@@ -176,7 +176,7 @@ _Appears in:_
 
 
 
-CompiledLB is one load-balancer this NIC backs: the VIP (v4 or v6) and its service ports.
+CompiledLB is one load-balancer this NIC backs: the LB address (v4 or v6) and its service ports.
 
 
 
@@ -185,7 +185,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `vip` _string_ | VIP is the load-balancer virtual IP (IPv4 or IPv6). |  |  |
+| `ip` _string_ | LB address is the load-balancer virtual IP (IPv4 or IPv6). |  |  |
 | `ports` _[CompiledLBPort](#compiledlbport) array_ | Ports are the LB service (port, proto) tuples. |  | Optional: \{\} <br /> |
 
 

@@ -20,7 +20,7 @@ pub enum EgressVerdict {
     Encap(TunnelEncap),
 }
 
-/// Run the in-place IPv4 egress pipeline (conntrack/firewall/vip/nat/meter/route) and decide what
+/// Run the in-place IPv4 egress pipeline (conntrack/firewall/lb_ip/nat/meter/route) and decide what
 /// the caller's glue should do. Map-driven; used by tc `tc_guest_tx`. Mutates the packet in place
 /// but does NOT resize. Caller has already verified ethertype == ETH_P_IP and that ETH_LEN+20
 /// bytes are present.
@@ -73,20 +73,20 @@ pub fn forward_decision_v4(
         }
     }
     // B8b: DSR reverse-SNAT. If this is the guest's REPLY to a DSR-load-balanced flow, the backend's
-    // ingress `uplink_dsr_note` tcx pre-program (B7c) already noted the client-visible VIP for this
+    // ingress `uplink_dsr_note` tcx pre-program (B7c) already noted the client-visible LB address for this
     // exact reply 5-tuple (`invert_key(ct_key(forwarded))` == `ct_key(reply)`) in the `DSR` map.
-    // Rewrite the inner src (this guest's own overlay IP) -> that VIP, mirroring
+    // Rewrite the inner src (this guest's own overlay IP) -> that LB_IP_CONST, mirroring
     // `flowplane_core::datapath::process_guest_tx`'s B8 stage byte-for-byte (same `ct_key` lookup,
     // same transient `CtEntry{ xlate_ip, flags: CT_REWRITE_SRC, .. }` fed through `ct_apply` — the
     // SAME rewrite path the established-flow CT hit above already uses). Out-of-line so this stays a
     // separate, sequential BPF stack frame — see `dsr_reverse_snat_v4`'s doc comment.
     dsr_reverse_snat_v4(data, data_end, meta.vni);
-    // SNAT: rewrite inner IPv4 source if a VIP mapping exists (G->V).
-    crate::vip::snat_egress(data, data_end, ETH_LEN, meta.vni);
-    // DNAT: rewrite inner IPv4 destination if a VIP mapping exists (V->G). This handles
-    // same-host VIP traffic where the sender sends to another VM's VIP; the ingress path
+    // SNAT: rewrite inner IPv4 source if an LB address mapping exists (G->V).
+    crate::floatingip::snat_egress(data, data_end, ETH_LEN, meta.vni);
+    // DNAT: rewrite inner IPv4 destination if an LB address mapping exists (V->G). This handles
+    // same-host LB address traffic where the sender sends to another VM's LB_IP_CONST; the ingress path
     // (uplink_rx) never sees this packet, so DNAT must be applied here before route lookup.
-    crate::vip::dnat_egress(data, data_end, ETH_LEN, meta.vni);
+    crate::floatingip::dnat_egress(data, data_end, ETH_LEN, meta.vni);
     // inner IPv4 dst at ETH_LEN + 16
     let dst = unsafe { core::ptr::read_unaligned(p.add(ETH_LEN + 16) as *const [u8; 4]) };
     // Route lookup via the shared core seam (`ROUTES` LPM at prefix_len 64). Same bytecode result as
@@ -172,18 +172,18 @@ pub fn forward_decision_v4(
 /// hit in `forward_decision_v4` above already uses). A miss (no note, or not a DSR flow) is a no-op.
 ///
 /// Out-of-line (`#[inline(never)]`) purely for STACK BUDGET: `forward_decision_v4` is
-/// `#[inline(always)]`, so its whole body (CT/firewall, VIP, route, network-NAT, deliver) is one
+/// `#[inline(always)]`, so its whole body (CT/firewall, LB_IP_CONST, route, network-NAT, deliver) is one
 /// large frame folded directly into `tc_guest_tx` — the biggest program in this crate. Making this
 /// map-lookup-plus-rewrite its OWN out-of-line subprogram keeps its locals (`CtKey`, the transient
 /// `CtEntry`) off that already-tight combined frame; the call is sequential (runs once, returns
-/// before the caller continues into VIP/route/NAT below), so it does not nest with anything else.
+/// before the caller continues into LB address/route/NAT below), so it does not nest with anything else.
 #[inline(never)]
 fn dsr_reverse_snat_v4(data: usize, data_end: usize, vni: u32) {
     let mut pkt = crate::coreimpl::RawPkt::new(data, data_end);
     if let Some(key) = flowplane_core::conntrack::ct_key(&pkt, ETH_LEN, vni) {
         if let Some(d) = crate::coreimpl::GlobalMaps.dsr_get(&key) {
             let e = CtEntry {
-                xlate_ip: [d.vip[0], d.vip[1], d.vip[2], d.vip[3]],
+                xlate_ip: [d.lb_ip[0], d.lb_ip[1], d.lb_ip[2], d.lb_ip[3]],
                 flags: CT_REWRITE_SRC,
                 ..Default::default()
             };
@@ -284,7 +284,7 @@ fn route_decision_v6(data: usize, data_end: usize, meta: &PortMeta) -> EgressVer
 /// DSR reverse-SNAT (B8b) for the inner-v6 egress flow: v6 sibling of [`dsr_reverse_snat_v4`], and the
 /// real-eBPF counterpart of `flowplane_core::datapath::process_guest_tx_v6`'s B8 stage (byte-identical
 /// rewrite: same `ct_key6` lookup against the `DSR6` map, same address-only [`rewrite_v6_addr`] — no
-/// port/ICMP rewrite; DSR preserves the client-visible VIP:port). A miss (no note, or not a DSR flow)
+/// port/ICMP rewrite; DSR preserves the client-visible IP:port). A miss (no note, or not a DSR flow)
 /// is a no-op.
 ///
 /// Out-of-line (`#[inline(never)]`) so its `CtKey6` + rewrite locals get their OWN sequential BPF
@@ -304,7 +304,7 @@ fn dsr_reverse_snat_v6(data: usize, data_end: usize, vni: u32) -> bool {
                     ETH_LEN + 8,
                     nexthdr,
                     &src,
-                    &d.vip,
+                    &d.lb_ip,
                 );
                 return true;
             }

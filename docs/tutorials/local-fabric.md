@@ -177,7 +177,7 @@ Both VyOS edges do run a flowplane sidecar. Each shares its VyOS container's net
 (`network-mode: container:clab-<lab>-edge{1,2}`) and serves `--role edge --uplink eth1
 --wan-uplink eth3`, so `wan_rx` lands on the tcx ingress of the dual-stack WAN segment while the
 fabric ToR uplink supplies `LOCAL`. Both carry the sidecar so the edge-owned public prefixes can be
-advertised *anycast* — the WAN ECMPs to either edge, and the live tests register each VIP on both
+advertised *anycast* — the WAN ECMPs to either edge, and the live tests register each LB address on both
 (`TestLbDistributeSmoke{,V4}` in `test/lab/livetest/lb_test.go`, `TestNatEgressReturn6` in
 `nategress6_test.go`).
 

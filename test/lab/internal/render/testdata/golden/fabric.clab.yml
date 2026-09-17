@@ -14,7 +14,7 @@ mgmt:
   # given node's Talos API / kubectl directly and fabric-independently via `nsenter
   # -t <container-pid> -n` into that node's own network namespace (talos.Bootstrap,
   # deploy.WaitAPIServer) — its /128 (and, for a single-CP cluster, the anycast API
-  # VIP) is on-link inside that netns regardless of what the fabric is doing.
+  # LB address) is on-link inside that netns regardless of what the fabric is doing.
 
 topology:
   defaults:
@@ -53,7 +53,7 @@ topology:
     # DaemonSet + the retired edge wrapper both do: `ip -6 neigh show dev eth1 | grep
     # router`) before flowplane can actually forward. BOTH edges get a sidecar so the
     # public prefixes can be advertised ANYCAST (WAN ECMPs to either edge) — the
-    # livetest registers each VIP on both edges. edge1/edge2 sidecars are identical bar
+    # livetest registers each LB address on both edges. edge1/edge2 sidecars are identical bar
     # their own local-deliver underlay (::e1 / ::e2).
     flowplane-edge1:
       kind: linux
@@ -106,7 +106,7 @@ topology:
     # edge's netns (so it dials the reflector over the BGP fabric, which already carries NodeAggr)
     # and its flowplane sidecar's socket dir (the host-backed bind above). This is what makes the
     # North-South path work from intent alone: the agent announces the edge's EDGE_UNDERLAY identity
-    # and the egress defaults into the public VNI, and learns each LB VIP + its backends off the
+    # and the egress defaults into the public VNI, and learns each LB address + its backends off the
     # route bus — the three things the live tests used to hand-program over the dataplane gRPC.
     #
     # Its route-bus identity is a leaf it mints ITSELF from the edge fleet's intermediate in

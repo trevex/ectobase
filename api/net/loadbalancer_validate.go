@@ -12,12 +12,12 @@ import (
 
 // Validate implements the kit rest.Validater hook (central CREATE admission).
 // Stateless only: format + intra-object rules. Cross-object checks (pool exists,
-// VIP membership) are enforced by the LoadBalancer reconciler and surfaced via status.
+// LB address membership) are enforced by the LoadBalancer reconciler and surfaced via status.
 func (o *LoadBalancer) Validate(ctx context.Context) field.ErrorList {
 	var errs field.ErrorList
-	if o.Spec.VIP != "" {
-		if _, err := netip.ParseAddr(o.Spec.VIP); err != nil {
-			errs = append(errs, field.Invalid(field.NewPath("spec", "vip"), o.Spec.VIP, "not a valid IP address"))
+	if o.Spec.IP != "" {
+		if _, err := netip.ParseAddr(o.Spec.IP); err != nil {
+			errs = append(errs, field.Invalid(field.NewPath("spec", "lbIP"), o.Spec.IP, "not a valid IP address"))
 		}
 	}
 	if o.Spec.PoolRef.Name == "" {

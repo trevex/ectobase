@@ -25,7 +25,7 @@ func TestAnnouncePublicRelaysOverlayIP(t *testing.T) {
 	a := &fakeSink{id: "nodeA"}
 	r.RegisterSink(a)
 
-	rec := publicRecord(pb.PublicKind_PUBLIC_KIND_LB_VIP, "203.0.113.50/32", "2001:db8::dd", 100, 0, 0)
+	rec := publicRecord(pb.PublicKind_PUBLIC_KIND_LB_IP, "203.0.113.50/32", "2001:db8::dd", 100, 0, 0)
 	rec.OverlayIP = "10.0.10.5"
 	r.AnnouncePublic("nodeA", rec)
 
@@ -126,15 +126,15 @@ func TestDropOriginWithdrawsPublicRecords(t *testing.T) {
 }
 
 // TestSameNodeLBBackendsDistinctOverlayCoexistAndWithdrawIndependently proves the reflector half of
-// the same-node-multi-backend fix: two LB_VIP records with the SAME (kind, prefix, owner) but
+// the same-node-multi-backend fix: two LB_IP records with the SAME (kind, prefix, owner) but
 // DIFFERENT overlay IPs (two pods of one Service on the same node) must both persist in the RIB (a
 // late-joining sink must replay BOTH), and withdrawing one by its exact record (including overlay
 // IP) must leave the other intact.
 func TestSameNodeLBBackendsDistinctOverlayCoexistAndWithdrawIndependently(t *testing.T) {
 	r := NewRIB()
-	recA := publicRecord(pb.PublicKind_PUBLIC_KIND_LB_VIP, "203.0.113.50/32", "fd00::a", 100, 0, 0)
+	recA := publicRecord(pb.PublicKind_PUBLIC_KIND_LB_IP, "203.0.113.50/32", "fd00::a", 100, 0, 0)
 	recA.OverlayIP = "10.0.0.5"
-	recB := publicRecord(pb.PublicKind_PUBLIC_KIND_LB_VIP, "203.0.113.50/32", "fd00::a", 100, 0, 0)
+	recB := publicRecord(pb.PublicKind_PUBLIC_KIND_LB_IP, "203.0.113.50/32", "fd00::a", 100, 0, 0)
 	recB.OverlayIP = "10.0.0.7"
 
 	r.AnnouncePublic("nodeA", recA)
@@ -145,7 +145,7 @@ func TestSameNodeLBBackendsDistinctOverlayCoexistAndWithdrawIndependently(t *tes
 	r.RegisterSink(late)
 	us := publicUpdates(late)
 	if len(us) != 2 {
-		t.Fatalf("want 2 distinct LB_VIP backends replayed, got %d: %+v", len(us), us)
+		t.Fatalf("want 2 distinct LB_IP backends replayed, got %d: %+v", len(us), us)
 	}
 	overlays := map[string]bool{}
 	for _, pu := range us {

@@ -17,7 +17,7 @@ spec:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: LBPool is a fleet-scoped range of IPv4/IPv6 VIP prefixes.
+        description: LBPool is a fleet-scoped range of IPv4/IPv6 LB address prefixes.
         properties:
           apiVersion:
             description: |-
@@ -38,7 +38,7 @@ spec:
             type: object
           spec:
             description: LBPoolSpec is the desired state of an LBPool (a fleet-scoped
-              VIP prefix range).
+              LB address prefix range).
             properties:
               reservedIPs:
                 description: ReservedIPs are addresses held back from allocation within
@@ -47,10 +47,12 @@ spec:
                   type: string
                 type: array
               v4Prefix:
-                description: V4Prefix optionally pins the IPv4 CIDR for this VIP pool.
+                description: V4Prefix optionally pins the IPv4 CIDR for this LB address
+                  pool.
                 type: string
               v6Prefix:
-                description: V6Prefix optionally pins the IPv6 CIDR for this VIP pool.
+                description: V6Prefix optionally pins the IPv6 CIDR for this LB address
+                  pool.
                 type: string
             type: object
           status:
@@ -60,7 +62,7 @@ spec:
                 description: State is the current lifecycle state (e.g. Pending, Ready).
                 type: string
               total:
-                description: Total is the total number of allocatable VIP addresses.
+                description: Total is the total number of allocatable LB address addresses.
                 format: int32
                 type: integer
             type: object

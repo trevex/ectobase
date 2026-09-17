@@ -12,7 +12,7 @@ func TestDiffDesired_InitialAnnouncesEverything(t *testing.T) {
 		Subs:   []uint32{100, 200},
 		Routes: []Route{{Vni: 100, Prefix: "10.0.0.5/32", Nexthop: "fd00::a"}},
 		Nats:   []NatBlock{{Vni: 100, NatIP: "1.2.3.4", PortMin: 1024, PortMax: 2047, OwnerUnderlay: "fd00::a"}},
-		Pubs:   []PublicPrefix{{Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "fd00::a"}},
+		Pubs:   []PublicPrefix{{Kind: rbv1.PublicKind_PUBLIC_KIND_LB_IP, Prefix: "203.0.113.50/32", OwnerUnderlay: "fd00::a"}},
 	}
 	d := diffDesired(DesiredState{}, next)
 	if len(d.announceR) != 1 || len(d.announceN) != 1 || len(d.announceP) != 1 {
@@ -32,7 +32,7 @@ func TestDiffDesired_NoChangeIsEmpty(t *testing.T) {
 		Subs:   []uint32{100},
 		Routes: []Route{{Vni: 100, Prefix: "10.0.0.5/32", Nexthop: "fd00::a"}},
 		Nats:   []NatBlock{{Vni: 100, NatIP: "1.2.3.4", PortMin: 1024, PortMax: 2047, OwnerUnderlay: "fd00::a"}},
-		Pubs:   []PublicPrefix{{Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "fd00::a"}},
+		Pubs:   []PublicPrefix{{Kind: rbv1.PublicKind_PUBLIC_KIND_LB_IP, Prefix: "203.0.113.50/32", OwnerUnderlay: "fd00::a"}},
 	}
 	if d := diffDesired(s, s); !d.empty() {
 		t.Fatalf("identical desired must produce no delta: %+v", d)
@@ -44,7 +44,7 @@ func TestDiffDesired_RemovedRecordsAreWithdrawn(t *testing.T) {
 		Subs:   []uint32{100, 200},
 		Routes: []Route{{Vni: 100, Prefix: "10.0.0.5/32", Nexthop: "fd00::a"}},
 		Nats:   []NatBlock{{Vni: 100, NatIP: "1.2.3.4", PortMin: 1024, PortMax: 2047, OwnerUnderlay: "fd00::a"}},
-		Pubs:   []PublicPrefix{{Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "fd00::a"}},
+		Pubs:   []PublicPrefix{{Kind: rbv1.PublicKind_PUBLIC_KIND_LB_IP, Prefix: "203.0.113.50/32", OwnerUnderlay: "fd00::a"}},
 	}
 	// NIC descheduled: everything drops away.
 	d := diffDesired(applied, DesiredState{Subs: []uint32{100}})
@@ -66,14 +66,14 @@ func TestDiffDesired_RemovedRecordsAreWithdrawn(t *testing.T) {
 }
 
 // TestDiffDesired_SameNodeLBBackendsDistinctOverlayBothSurvive proves the control-plane half of the
-// same-node-multi-backend fix: two LB_VIP records for the SAME (vip, owner-node) but with DIFFERENT
+// same-node-multi-backend fix: two LB_IP records for the SAME (lbIP, owner-node) but with DIFFERENT
 // backend overlay IPs (e.g. two pods of one Service scheduled on the same node) must NOT collapse
 // into one announce — pubKey must disambiguate by overlay IP so both reach AddLbBackend.
 func TestDiffDesired_SameNodeLBBackendsDistinctOverlayBothSurvive(t *testing.T) {
 	next := DesiredState{
 		Pubs: []PublicPrefix{
-			{Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "fd00::a", Vni: 100, OverlayIP: "10.0.0.5"},
-			{Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "fd00::a", Vni: 100, OverlayIP: "10.0.0.7"},
+			{Kind: rbv1.PublicKind_PUBLIC_KIND_LB_IP, Prefix: "203.0.113.50/32", OwnerUnderlay: "fd00::a", Vni: 100, OverlayIP: "10.0.0.5"},
+			{Kind: rbv1.PublicKind_PUBLIC_KIND_LB_IP, Prefix: "203.0.113.50/32", OwnerUnderlay: "fd00::a", Vni: 100, OverlayIP: "10.0.0.7"},
 		},
 	}
 	d := diffDesired(DesiredState{}, next)
@@ -92,7 +92,7 @@ func TestDiffDesired_SameNodeLBBackendsDistinctOverlayBothSurvive(t *testing.T) 
 	applied := next
 	next2 := DesiredState{
 		Pubs: []PublicPrefix{
-			{Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "fd00::a", Vni: 100, OverlayIP: "10.0.0.7"},
+			{Kind: rbv1.PublicKind_PUBLIC_KIND_LB_IP, Prefix: "203.0.113.50/32", OwnerUnderlay: "fd00::a", Vni: 100, OverlayIP: "10.0.0.7"},
 		},
 	}
 	d2 := diffDesired(applied, next2)

@@ -22,8 +22,8 @@ use crate::nat::nat_return_rewrite6;
 use crate::parse::{l4_ports, l4_ports_v6};
 use crate::pkt::{Action, Pkt};
 
+use super::floating_ip_dnat_rewrite;
 use super::nat64::{process_uplink_nat64_ingress, UplinkNat64IngressIn};
-use super::vip_dnat_rewrite;
 
 /// Inputs for [`process_uplink`]. Under Geneve `collect_md` the kernel decaps before this runs and
 /// `get_tunnel_key` recovers only the VNI + sender remote — NOT "which local identity to deliver
@@ -85,7 +85,7 @@ enum UplinkTarget {
 ///
 /// `#[inline(never)]`: it is packet-FREE (takes `dst` by value; only map lookups), so out-of-lining
 /// it is verifier-safe and reclaims frame budget in its callers. `process_uplink`'s inlined frame —
-/// with its packet-reading (must-stay-inlined) ICMP-error relay + VIP-DNAT arm — would otherwise
+/// with its packet-reading (must-stay-inlined) ICMP-error relay + LB address-DNAT arm — would otherwise
 /// exceed the eBPF verifier's combined-2-call stack budget; keeping this larger, pkt-free helper
 /// out-of-line holds `uplink_rx` under budget without a pkt-pointer-tracking regression.
 #[inline(never)]
@@ -244,9 +244,9 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
     // read at `ETH_LEN`, not `ETH_LEN + IPV6_LEN`.
     let inner_off = ETH_LEN;
 
-    // 1. LB dispatch. The ICMP-error relay wins first: an ICMP error destined to a VIP must follow
+    // 1. LB dispatch. The ICMP-error relay wins first: an ICMP error destined to an LB address must follow
     //    its EMBEDDED flow's backend, not the (mis-hashed) outer ICMP tuple. Everything else — incl.
-    //    a normal ICMP echo to a VIP — falls through to the plain select (echo load-balances to a
+    //    a normal ICMP echo to an LB address — falls through to the plain select (echo load-balances to a
     //    backend; it is NOT answered by the dataplane).
     // The ICMP-error relay result is captured separately so step 2 below can EXEMPT it from the ingress
     // firewall (PMTUD fix): the relayed error carries an OUTER ICMP tuple (src = erroring router, proto
@@ -254,7 +254,7 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
     // default-deny would blackhole PMTUD / dest-unreachable feedback. LB is DSR/stateless-firewalled
     // (no conntrack RELATED state to consult), so the relay arm is exempted wholesale — mirroring how a
     // stateful firewall admits an ICMP error embedding a tracked flow. The relay only ever fires for an
-    // error whose EMBEDDED src is a real LB VIP with a live backend, so the surface is an ICMP error
+    // error whose EMBEDDED src is a real LB address with a live backend, so the surface is an ICMP error
     // delivered to the backend that owns that flow, which its own IP stack still validates.
     let icmp_relay = lb_select_forward_icmp_error(&*pkt, &*maps, inner_off, in_.vni);
     let is_icmp_relay = icmp_relay.is_some();
@@ -269,10 +269,10 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
                     be.overlay_ip[3],
                 ];
                 match maps.ifaces_get(be.vni, &overlay4) {
-                    // The DSR reverse-VIP note (`conntrack::dsr_note`) is recorded by the separate
+                    // The DSR reverse-LB address note (`conntrack::dsr_note`) is recorded by the separate
                     // `uplink_dsr_note` tcx pre-program (see `flowplane-ebpf/src/ingress.rs`), not
                     // here — keeping its `ct_key` build off this call graph holds `uplink_rx`'s
-                    // combined stack under the verifier's 512-byte budget. That program notes the VIP
+                    // combined stack under the verifier's 512-byte budget. That program notes the LB address
                     // unconditionally whenever the DSR option is present, without re-confirming
                     // local-backend delivery the way this branch does.
                     Some(iv) if iv.is_local != 0 => {
@@ -306,16 +306,16 @@ pub fn process_uplink<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &UplinkIn
                     }
                 }
             };
-            // 1:1 floating-IP ingress DNAT. `VIPS[(vni,V)] = G` means dst V must be rewritten to the
-            // backing guest G and delivered locally (VIPS is only programmed on the node that owns G —
-            // the `--vip` CLI maps a node's OWN guest — so a non-local G is a misconfig -> Drop, and
-            // there is no reforward arm). A floating IP is never a nat_ip, so a VIP hit SKIPS the
+            // 1:1 floating-IP ingress DNAT. `FLOATING_IPS[(vni,V)] = G` means dst V must be rewritten to the
+            // backing guest G and delivered locally (FLOATING_IPS is only programmed on the node that owns G —
+            // the `--lb_ip` CLI maps a node's OWN guest — so a non-local G is a misconfig -> Drop, and
+            // there is no reforward arm). A floating IP is never a nat_ip, so an LB address hit SKIPS the
             // neighbor-NAT relay. Compute a single `deliver_dst` and fall through to ONE
-            // `resolve_uplink_target` below — duplicating that (inlined) match in a separate VIP branch
+            // `resolve_uplink_target` below — duplicating that (inlined) match in a separate LB address branch
             // blows the eBPF verifier's combined-call stack budget ("combined stack size of 2 calls is
             // 528"), regressing `uplink_rx` load.
-            let deliver_dst = if let Some(g) = maps.vip_get(in_.vni, &dst) {
-                vip_dnat_rewrite(pkt, inner_off, &dst, &g);
+            let deliver_dst = if let Some(g) = maps.floating_ip_get(in_.vni, &dst) {
+                floating_ip_dnat_rewrite(pkt, inner_off, &dst, &g);
                 g
             } else {
                 // Mechanism #3: neighbor-NAT relay — the inner dst may be a nat_ip owned by ANOTHER
@@ -463,8 +463,8 @@ fn uplink_track_flow6<P: Pkt, M: Maps>(
 ///      is protocol-agnostic, only the stamped ethertype differs from the v4 arm).
 ///
 /// SCOPE: no ingress-lane metering step — the v6 ingress path has none (a known gap). No
-/// ICMPv6-echo-to-VIP intercept — by design the dataplane does NOT answer ping locally (only
-/// ARP/ND/RA/DHCP are); ICMP echo to a VIP is forwarded to a backend by the LB select. The
+/// ICMPv6-echo-to-LB address intercept — by design the dataplane does NOT answer ping locally (only
+/// ARP/ND/RA/DHCP are); ICMP echo to an LB address is forwarded to a backend by the LB select. The
 /// ICMP-error LB relay is v4-only.
 ///
 /// Returns the delivery `Action`, plus the tunnel-key decision the relay/reforward arm emits (`None`
@@ -484,8 +484,8 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
 
     // 1. v6 LB dispatch. The ICMPv6-error
     //    relay wins first (v6 sibling of `process_uplink`'s v4 or_else at the top of this file): an
-    //    ICMPv6 error destined to a VIP must follow its EMBEDDED flow's backend, not the (mis-hashed)
-    //    outer ICMPv6 tuple. Everything else — incl. a normal ICMPv6 echo to a VIP — falls through to
+    //    ICMPv6 error destined to an LB address must follow its EMBEDDED flow's backend, not the (mis-hashed)
+    //    outer ICMPv6 tuple. Everything else — incl. a normal ICMPv6 echo to an LB address — falls through to
     //    the plain v6 select (echo load-balances to a backend; it is NOT answered by the dataplane).
     // ICMPv6-error relay captured separately so step 2 can EXEMPT it from the ingress firewall (PMTUD
     // fix — v6 sibling of `process_uplink`'s `is_icmp_relay`): the relayed error's outer ICMPv6 tuple
@@ -498,7 +498,7 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
         Some(be) => {
             if be.node_vtep == in_.local.underlay_ipv6 {
                 match maps.ifaces6_get(be.vni, &be.overlay_ip) {
-                    // See the v4 `process_uplink`'s matching comment — the DSR reverse-VIP note
+                    // See the v4 `process_uplink`'s matching comment — the DSR reverse-LB address note
                     // (`conntrack::dsr_note6`) is recorded by the separate `uplink_dsr_note` tcx
                     // pre-program (verifier stack budget), not here.
                     Some(iv) if iv.is_local != 0 => {
@@ -715,7 +715,7 @@ pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
     // Post-decap: see `process_uplink`'s doc comment on the same offset change.
     let inner_off = ETH_LEN;
 
-    // NAT-return dispatch — gated on `lb_ul.is_none()` exactly as `try_uplink_rx` (an LB VIP is never
+    // NAT-return dispatch — gated on `lb_ul.is_none()` exactly as `try_uplink_rx` (an LB address is never
     // itself a nat_ip, but keep the gate to mirror the eBPF ordering precisely).
     if lb_select_forward(&*pkt, &*maps, inner_off, in_.vni).is_none() {
         if let Some(mut key) = ct_key(&*pkt, inner_off, in_.vni) {

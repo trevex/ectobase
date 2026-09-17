@@ -11,22 +11,22 @@ import (
 func TestLoadBalancerValidate(t *testing.T) {
 	ctx := context.Background()
 
-	// PoolRef set, empty VIP (allocate) => no errors.
+	// PoolRef set, empty LB address (allocate) => no errors.
 	lb := &LoadBalancer{Spec: LoadBalancerSpec{PoolRef: LocalObjectReference{Name: "p"}}}
 	if errs := lb.Validate(ctx); len(errs) != 0 {
 		t.Fatalf("valid LB rejected: %v", errs)
 	}
 
-	// PoolRef set, valid bring-your-own VIP => no errors.
-	lb = &LoadBalancer{Spec: LoadBalancerSpec{PoolRef: LocalObjectReference{Name: "p"}, VIP: "203.0.113.5"}}
+	// PoolRef set, valid bring-your-own LB address => no errors.
+	lb = &LoadBalancer{Spec: LoadBalancerSpec{PoolRef: LocalObjectReference{Name: "p"}, IP: "203.0.113.5"}}
 	if errs := lb.Validate(ctx); len(errs) != 0 {
-		t.Fatalf("valid LB with VIP rejected: %v", errs)
+		t.Fatalf("valid LB with LB address rejected: %v", errs)
 	}
 
-	// Malformed VIP => error.
-	lb = &LoadBalancer{Spec: LoadBalancerSpec{PoolRef: LocalObjectReference{Name: "p"}, VIP: "nope"}}
+	// Malformed LB address => error.
+	lb = &LoadBalancer{Spec: LoadBalancerSpec{PoolRef: LocalObjectReference{Name: "p"}, IP: "nope"}}
 	if errs := lb.Validate(ctx); len(errs) == 0 {
-		t.Fatal("expected error for malformed vip")
+		t.Fatal("expected error for malformed lbIP")
 	}
 
 	// Missing PoolRef.Name => error.

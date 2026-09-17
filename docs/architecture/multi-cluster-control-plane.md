@@ -156,7 +156,7 @@ The broker reaches the aggregated apiserver **directly**, not through the host k
 aggregation. The host kube-apiserver (`:6443`) serves the *host* cluster CA and authenticates
 callers via the aggregation front-proxy, so a broker dialing it could neither verify against
 `ectobase-ca` nor have its client-cert CN read. Instead the aggregated apiserver is exposed on
-the dispatch fabric IP at `:6444` (`hostNetwork` in the lab; a LoadBalancer/VIP in production),
+the dispatch fabric IP at `:6444` (`hostNetwork` in the lab; a LoadBalancer/LB address in production),
 and the broker dials that. This is purely additive: aggregation still serves in-cluster clients
 (the compiler, dispatch-controller) via requestheader, and the aggregated apiserver still
 delegates *authorization* (SubjectAccessReview) to the host — only the broker's *authentication*

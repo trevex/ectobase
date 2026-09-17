@@ -217,16 +217,16 @@ fn v6_established_flow_refreshes_conntrack6_and_bypasses_firewall_reeval() {
 
 // ─── v6 LB dispatch (E/W): local backend deliver, remote backend reforward ────────────────────────
 
-const OVERLAY_VIP6: [u8; 16] = [
+const OVERLAY_LB_IP6: [u8; 16] = [
     0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0xa8, 0xc8, 0x01,
 ];
 const GUEST_A6: [u8; 16] = [
     0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x20,
 ];
 const REMOTE_BACKEND_UL: [u8; 16] = [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xcc];
-// The backend's own concrete overlay IPv6 (distinct from `OVERLAY_VIP6`): local LB-backend delivery
-// resolves via `INTERFACES6[(vni, backend's overlay ip)]`, never the VIP itself (DSR keeps the inner
-// dst as the VIP). Only meaningful for the LOCAL-delivery test (`install_lb6`'s remote-backend
+// The backend's own concrete overlay IPv6 (distinct from `OVERLAY_LB_IP6`): local LB-backend delivery
+// resolves via `INTERFACES6[(vni, backend's overlay ip)]`, never the LB address itself (DSR keeps the inner
+// dst as the LB_IP_CONST). Only meaningful for the LOCAL-delivery test (`install_lb6`'s remote-backend
 // caller never reaches the `INTERFACES6` lookup).
 const BACKEND_OVERLAY_IP6: [u8; 16] = [
     0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x81,
@@ -251,13 +251,13 @@ fn eth_ipv6_tcp(src: [u8; 16], dst: [u8; 16], dport: u16) -> Vec<u8> {
     out
 }
 
-/// Install a v6 LB service `(VNI, OVERLAY_VIP6, 443, TCP)` -> Maglev table pointing at `backend`.
+/// Install a v6 LB service `(VNI, OVERLAY_LB_IP6, 443, TCP)` -> Maglev table pointing at `backend`.
 fn install_lb6(node: &mut SimNode, backend: [u8; 16]) {
     let last4 = [
-        OVERLAY_VIP6[12],
-        OVERLAY_VIP6[13],
-        OVERLAY_VIP6[14],
-        OVERLAY_VIP6[15],
+        OVERLAY_LB_IP6[12],
+        OVERLAY_LB_IP6[13],
+        OVERLAY_LB_IP6[14],
+        OVERLAY_LB_IP6[15],
     ];
     node.maps.lb.insert(
         LbKey {
@@ -306,14 +306,14 @@ fn v6_lb_local_backend_delivered_no_conntrack6_created() {
     );
     install_lb6(&mut node, HOSTB_UL);
     allow_tcp6(&mut node, TAP, 443);
-    // The firewall matches on GUEST_IP6 above; for the LB/DSR path the inner dst stays the VIP, so
-    // widen the allow rule to the VIP instead.
+    // The firewall matches on GUEST_IP6 above; for the LB/DSR path the inner dst stays the LB_IP_CONST, so
+    // widen the allow rule to the LB address instead.
     node.maps.fw_rules6.insert(
         (TAP, 0),
         FwRule6 {
             src_ip: [0; 16],
             src_mask: [0; 16],
-            dst_ip: OVERLAY_VIP6,
+            dst_ip: OVERLAY_LB_IP6,
             dst_mask: [0xff; 16],
             src_port_min: 0,
             src_port_max: 65535,
@@ -328,7 +328,7 @@ fn v6_lb_local_backend_delivered_no_conntrack6_created() {
         },
     );
 
-    let inner = eth_ipv6_tcp(GUEST_A6, OVERLAY_VIP6, 443);
+    let inner = eth_ipv6_tcp(GUEST_A6, OVERLAY_LB_IP6, 443);
     let out = node.uplink_v6(&inner, VNI, &local_for(HOSTB_UL, 9));
 
     assert_eq!(
@@ -353,7 +353,7 @@ fn v6_lb_remote_backend_reforwards_with_tunnel_decision_no_decap() {
     ));
     install_lb6(&mut node, REMOTE_BACKEND_UL);
 
-    let inner = eth_ipv6_tcp(GUEST_A6, OVERLAY_VIP6, 443);
+    let inner = eth_ipv6_tcp(GUEST_A6, OVERLAY_LB_IP6, 443);
     let local = local_for([0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xee], 8);
     let out = node.uplink_v6(&inner, VNI, &local);
 

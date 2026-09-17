@@ -1,5 +1,5 @@
 use flowplane_common::{
-    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrVip, FwMeta, FwRule, FwRuleKey,
+    CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrLbIP, FwMeta, FwRule, FwRuleKey,
     IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6, NatValue,
     NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteValue, UnderlayValue,
 };
@@ -39,10 +39,10 @@ pub struct MemMaps {
     pub conntrack: HashMap<CtKey, CtEntry>,
     /// Firewall-only IPv6 conntrack (`CONNTRACK6` map).
     pub conntrack6: HashMap<CtKey6, CtEntry>,
-    /// DSR reverse-VIP state (`DSR` map, B7b), keyed on the guest-reply 5-tuple.
-    pub dsr: HashMap<CtKey, DsrVip>,
+    /// DSR reverse-LB address state (`DSR` map, B7b), keyed on the guest-reply 5-tuple.
+    pub dsr: HashMap<CtKey, DsrLbIP>,
     /// IPv6 sibling of `dsr` (`DSR6` map).
-    pub dsr6: HashMap<CtKey6, DsrVip>,
+    pub dsr6: HashMap<CtKey6, DsrLbIP>,
     pub lb: HashMap<LbKey, LbValue>,
     pub maglev: HashMap<MaglevKey, LbBackend>,
     pub nat: HashMap<NatKey, NatValue>,
@@ -80,8 +80,8 @@ pub struct MemMaps {
     pub ifaces: HashMap<(u32, [u8; 4]), IfaceValue>,
     /// Local-delivery demux by overlay (VNI, IPv6) (`INTERFACES6` map). Seed with [`Self::add_iface6`].
     pub ifaces6: HashMap<(u32, [u8; 16]), IfaceValue>,
-    /// 1:1 floating-IP map (`VIPS`), keyed `(vni, V)` → guest `G`. Seed with [`Self::add_vip`].
-    pub vips: HashMap<(u32, [u8; 4]), [u8; 4]>,
+    /// 1:1 floating-IP map (`FLOATING_IPS`), keyed `(vni, V)` → guest `G`. Seed with [`Self::add_floating_ip`].
+    pub floating_ips: HashMap<(u32, [u8; 4]), [u8; 4]>,
 }
 
 /// True if the first `prefix` bits of `a` and `b` (big-endian byte order) are equal.
@@ -125,9 +125,9 @@ impl MemMaps {
     pub fn add_iface6(&mut self, vni: u32, ipv6: [u8; 16], value: IfaceValue) {
         self.ifaces6.insert((vni, ipv6), value);
     }
-    /// Seed a `VIPS` 1:1 floating-IP entry: inner dst `v` (the VIP) → backing guest `g`.
-    pub fn add_vip(&mut self, vni: u32, v: [u8; 4], g: [u8; 4]) {
-        self.vips.insert((vni, v), g);
+    /// Seed a `FLOATING_IPS` 1:1 floating-IP entry: inner dst `v` (the LB_IP_CONST) → backing guest `g`.
+    pub fn add_floating_ip(&mut self, vni: u32, v: [u8; 4], g: [u8; 4]) {
+        self.floating_ips.insert((vni, v), g);
     }
     /// Seed a `MAGLEV` slot with a full `LbBackend` value.
     pub fn add_maglev(&mut self, table_id: u32, slot: u32, backend: LbBackend) {
@@ -160,16 +160,16 @@ impl Maps for MemMaps {
     fn conntrack6_insert(&mut self, key: CtKey6, entry: CtEntry) {
         self.conntrack6.insert(key, entry);
     }
-    fn dsr_get(&self, key: &CtKey) -> Option<DsrVip> {
+    fn dsr_get(&self, key: &CtKey) -> Option<DsrLbIP> {
         self.dsr.get(key).copied()
     }
-    fn dsr_insert(&mut self, key: CtKey, v: DsrVip) {
+    fn dsr_insert(&mut self, key: CtKey, v: DsrLbIP) {
         self.dsr.insert(key, v);
     }
-    fn dsr6_get(&self, key: &CtKey6) -> Option<DsrVip> {
+    fn dsr6_get(&self, key: &CtKey6) -> Option<DsrLbIP> {
         self.dsr6.get(key).copied()
     }
-    fn dsr6_insert(&mut self, key: CtKey6, v: DsrVip) {
+    fn dsr6_insert(&mut self, key: CtKey6, v: DsrLbIP) {
         self.dsr6.insert(key, v);
     }
     fn fw_meta6(&self, ifindex: u32) -> Option<FwMeta> {
@@ -243,8 +243,8 @@ impl Maps for MemMaps {
     fn nat_ct6_insert(&mut self, key: CtKey6, entry: CtEntry6) {
         self.nat_ct6.insert(key, entry);
     }
-    fn vip_get(&self, vni: u32, v: &[u8; 4]) -> Option<[u8; 4]> {
-        self.vips.get(&(vni, *v)).copied()
+    fn floating_ip_get(&self, vni: u32, v: &[u8; 4]) -> Option<[u8; 4]> {
+        self.floating_ips.get(&(vni, *v)).copied()
     }
     fn route4_get(&self, vni: u32, dst: &[u8; 4]) -> Option<RouteValue> {
         // Longest-prefix match over the stored routes for this VNI (mirrors the eBPF LPM trie).
@@ -335,12 +335,15 @@ mod tests {
     }
 
     #[test]
-    fn vips_roundtrip() {
+    fn floating_ips_roundtrip() {
         let mut m = MemMaps::default();
-        m.add_vip(100, [203, 0, 113, 7], [10, 0, 0, 9]);
-        assert_eq!(m.vip_get(100, &[203, 0, 113, 7]), Some([10, 0, 0, 9]));
+        m.add_floating_ip(100, [203, 0, 113, 7], [10, 0, 0, 9]);
+        assert_eq!(
+            m.floating_ip_get(100, &[203, 0, 113, 7]),
+            Some([10, 0, 0, 9])
+        );
         // wrong vni misses; unmapped V misses.
-        assert_eq!(m.vip_get(101, &[203, 0, 113, 7]), None);
-        assert_eq!(m.vip_get(100, &[203, 0, 113, 8]), None);
+        assert_eq!(m.floating_ip_get(101, &[203, 0, 113, 7]), None);
+        assert_eq!(m.floating_ip_get(100, &[203, 0, 113, 8]), None);
     }
 }

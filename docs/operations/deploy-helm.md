@@ -129,7 +129,7 @@ kube-apiserver, which serves the *host* cluster CA, not `ectobase-ca`) — so `d
 is `https://[<serviceIP>]:6444`. In-cluster clients (mesh compiler, dispatch-controller) keep
 using aggregation unchanged; direct exposure is an additional ingress the apiserver's auth
 stack already supports. In the single-node lab this is `hostNetwork`; a production dispatch
-would front the apiserver with a stable LoadBalancer/VIP instead.
+would front the apiserver with a stable LoadBalancer/LB address instead.
 
 ```sh
 # dispatch cluster

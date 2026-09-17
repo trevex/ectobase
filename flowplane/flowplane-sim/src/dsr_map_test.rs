@@ -1,10 +1,10 @@
 //! B7/B7b/B7c: at the backend node, the DSR Geneve option (read off the tunnel metadata the same
-//! `get_tunnel_key` call recovers `vni` from) notes the REVERSE DSR VIP so the guest's reply is later
-//! reverse-SNAT'd src -> VIP (`ct_apply`/its v6 sibling, applied on egress in B8). The only
+//! `get_tunnel_key` call recovers `vni` from) notes the REVERSE DSR LB address so the guest's reply is later
+//! reverse-SNAT'd src -> LB address (`ct_apply`/its v6 sibling, applied on egress in B8). The only
 //! per-connection DSR state lives here on the backend.
 //!
 //! B7b moved this state OUT of `CONNTRACK`/`CtEntry` (which briefly grew an `xlate_ip6` field, B5)
-//! into dedicated compact `DSR`/`DSR6` LRU maps (see `flowplane_common::DsrVip`) — the `CtEntry` copy
+//! into dedicated compact `DSR`/`DSR6` LRU maps (see `flowplane_common::DsrLbIP`) — the `CtEntry` copy
 //! on the stack in the pre-existing hot conntrack frames (`ct_apply`/`ct_create_default`) had pushed
 //! `uplink_rx`'s combined BPF stack over the verifier's 512-byte limit. This file was `dsr_ct_test.rs`
 //! before B7b; renamed to reflect the new map-based storage.
@@ -20,12 +20,12 @@
 //!
 //! # Coverage
 //!
-//! 1. `flowplane_core::conntrack::dsr_note`/`dsr_note6` directly (unit level): the reverse VIP is
+//! 1. `flowplane_core::conntrack::dsr_note`/`dsr_note6` directly (unit level): the reverse LB address is
 //!    stored in the `DSR`/`DSR6` map at `invert_key(ct_key(forwarded))` /
-//!    `invert_key6(ct_key6(forwarded))`, with `DsrVip::vip == vip` (left-justified for v4);
-//!    idempotent (a second call with a different VIP never overwrites the first).
+//!    `invert_key6(ct_key6(forwarded))`, with `DsrLbIP::lb_ip == lb_ip` (left-justified for v4);
+//!    idempotent (a second call with a different LB address never overwrites the first).
 //! 2. End-to-end through `SimNode::uplink_v6_dsr`/`uplink_dsr`: a DSR-forwarded frame hitting a LOCAL
-//!    LB-backend delivery notes the reverse DSR VIP in the map — the SAME core path
+//!    LB-backend delivery notes the reverse DSR LB address in the map — the SAME core path
 //!    `process_uplink`/`process_uplink_v6` runs in production, driven (post-B7c) by the SEPARATE
 //!    `uplink_dsr_note` tcx program's `get_tunnel_opt` + `dsr::decode` (see `ingress.rs`/`v6.rs`).
 //! 3. Regression: a non-DSR (`dsr: None`) LB delivery notes NOTHING (no `DSR`/`DSR6` entry, and no
@@ -35,7 +35,7 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    DsrOpt, DsrVip, FwMeta, FwRule, FwRule6, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey,
+    DsrLbIP, DsrOpt, FwMeta, FwRule, FwRule6, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey,
     PortMeta, RouteValue, FW_ACTION_ACCEPT, FW_DIR_EGRESS, FW_DIR_INGRESS,
 };
 use flowplane_core::conntrack::{ct_key, ct_key6, dsr_note, dsr_note6, invert_key, invert_key6};
@@ -60,9 +60,9 @@ fn local_for(underlay: [u8; 16], ifindex: u32) -> flowplane_common::Local {
     }
 }
 
-/// Left-justify a v4 address into the 16-byte `DsrVip::vip` layout (mirrors `DsrOpt::vip`/
+/// Left-justify a v4 address into the 16-byte `DsrLbIP::lb_ip` layout (mirrors `DsrOpt::lb_ip`/
 /// `LbBackend::overlay_ip`).
-fn vip16(v4: [u8; 4]) -> [u8; 16] {
+fn lb_ip16(v4: [u8; 4]) -> [u8; 16] {
     let mut b = [0u8; 16];
     b[..4].copy_from_slice(&v4);
     b
@@ -72,17 +72,17 @@ fn vip16(v4: [u8; 4]) -> [u8; 16] {
 
 const CLIENT_IP6: [u8; 16] = [0xfd, 0, 0, 0x29, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9];
 const BACKEND_OVERLAY_IP6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x81];
-const VIP_IP6: [u8; 16] = [
+const LB_IP6_CONST: [u8; 16] = [
     0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0xa8, 0xc8, 0x01,
 ];
-const OTHER_VIP_IP6: [u8; 16] = [
+const OTHER_LB_IP6: [u8; 16] = [
     0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0xa8, 0xc8, 0x02,
 ];
 
 const CLIENT_IP: [u8; 4] = [203, 0, 113, 9];
 const BACKEND_OVERLAY_IP: [u8; 4] = [10, 0, 0, 181];
-const VIP_IP: [u8; 4] = [10, 0, 100, 1];
-const OTHER_VIP_IP: [u8; 4] = [10, 0, 100, 2];
+const LB_IP_CONST: [u8; 4] = [10, 0, 100, 1];
+const OTHER_LB_IP: [u8; 4] = [10, 0, 100, 2];
 
 /// Build a bare `[IPv6(40)][TCP(20)][payload]` frame at `ip_off = 0`, matching `ct_apply_test.rs`'s
 /// `bare_ipv6_tcp` pattern — a DSR-forwarded frame at the backend: `src = client, dst = backend
@@ -109,14 +109,17 @@ fn dsr_note6_inserts_reverse_entry_keyed_on_guest_reply_tuple() {
     let pkt = VecPkt::from_bytes(&raw);
     let mut maps = MemMaps::default();
 
-    dsr_note6(&pkt, &mut maps, 0, VNI, &VIP_IP6, 12345);
+    dsr_note6(&pkt, &mut maps, 0, VNI, &LB_IP6_CONST, 12345);
 
     let fwd = ct_key6(&pkt, 0, VNI).unwrap();
     let rev = invert_key6(&fwd);
     let e = maps
         .dsr6_get(&rev)
         .expect("reverse DSR6 map entry must exist, keyed on invert_key6(forwarded)");
-    assert_eq!(e.vip, VIP_IP6, "reverse entry notes reply src -> VIP");
+    assert_eq!(
+        e.lb_ip, LB_IP6_CONST,
+        "reverse entry notes reply src -> LB address"
+    );
     assert_eq!(e.last_seen, 12345);
 
     // No FORWARD entry is created by this fn — only the reverse.
@@ -138,13 +141,16 @@ fn dsr_note6_is_idempotent_never_overwrites() {
     let pkt = VecPkt::from_bytes(&raw);
     let mut maps = MemMaps::default();
 
-    dsr_note6(&pkt, &mut maps, 0, VNI, &VIP_IP6, 1);
-    dsr_note6(&pkt, &mut maps, 0, VNI, &OTHER_VIP_IP6, 2);
+    dsr_note6(&pkt, &mut maps, 0, VNI, &LB_IP6_CONST, 1);
+    dsr_note6(&pkt, &mut maps, 0, VNI, &OTHER_LB_IP6, 2);
 
     let fwd = ct_key6(&pkt, 0, VNI).unwrap();
     let rev = invert_key6(&fwd);
     let e = maps.dsr6_get(&rev).unwrap();
-    assert_eq!(e.vip, VIP_IP6, "first writer wins; never overwritten");
+    assert_eq!(
+        e.lb_ip, LB_IP6_CONST,
+        "first writer wins; never overwritten"
+    );
     assert_eq!(
         e.last_seen, 1,
         "last_seen from the first call, not the second"
@@ -157,7 +163,7 @@ fn dsr_note_inserts_reverse_entry_v4() {
     let pkt = VecPkt::from_bytes(&raw);
     let mut maps = MemMaps::default();
 
-    dsr_note(&pkt, &mut maps, 0, VNI, &VIP_IP, 6789);
+    dsr_note(&pkt, &mut maps, 0, VNI, &LB_IP_CONST, 6789);
 
     let fwd = ct_key(&pkt, 0, VNI).unwrap();
     let rev = invert_key(&fwd);
@@ -165,9 +171,9 @@ fn dsr_note_inserts_reverse_entry_v4() {
         .dsr_get(&rev)
         .expect("reverse DSR map entry must exist, keyed on invert_key(forwarded)");
     assert_eq!(
-        e.vip,
-        vip16(VIP_IP),
-        "reverse entry notes reply src -> VIP (v4 left-justified in 16 bytes)"
+        e.lb_ip,
+        lb_ip16(LB_IP_CONST),
+        "reverse entry notes reply src -> LB address (v4 left-justified in 16 bytes)"
     );
     assert_eq!(e.last_seen, 6789);
     assert!(
@@ -183,13 +189,17 @@ fn dsr_note_is_idempotent_never_overwrites_v4() {
     let pkt = VecPkt::from_bytes(&raw);
     let mut maps = MemMaps::default();
 
-    dsr_note(&pkt, &mut maps, 0, VNI, &VIP_IP, 1);
-    dsr_note(&pkt, &mut maps, 0, VNI, &OTHER_VIP_IP, 2);
+    dsr_note(&pkt, &mut maps, 0, VNI, &LB_IP_CONST, 1);
+    dsr_note(&pkt, &mut maps, 0, VNI, &OTHER_LB_IP, 2);
 
     let fwd = ct_key(&pkt, 0, VNI).unwrap();
     let rev = invert_key(&fwd);
     let e = maps.dsr_get(&rev).unwrap();
-    assert_eq!(e.vip, vip16(VIP_IP), "first writer wins; never overwritten");
+    assert_eq!(
+        e.lb_ip,
+        lb_ip16(LB_IP_CONST),
+        "first writer wins; never overwritten"
+    );
     assert_eq!(
         e.last_seen, 1,
         "last_seen from the first call, not the second"
@@ -198,14 +208,14 @@ fn dsr_note_is_idempotent_never_overwrites_v4() {
 
 // ─── end-to-end: SimNode::uplink_v6_dsr / uplink_dsr through the LB local-delivery arm ─────────────
 
-const OVERLAY_VIP6: [u8; 16] = [
+const OVERLAY_LB_IP6: [u8; 16] = [
     0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0xa8, 0xc8, 0x01,
 ];
 const GUEST_A6: [u8; 16] = [
     0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x20,
 ];
 
-const OVERLAY_VIP: [u8; 4] = [10, 0, 100, 1];
+const OVERLAY_LB_IP: [u8; 4] = [10, 0, 100, 1];
 const GUEST_A: [u8; 4] = [10, 0, 0, 20];
 
 /// A full guest Ethernet frame `[Eth(0x86DD)][IPv6][TCP]` src -> dst on `dport`.
@@ -228,14 +238,14 @@ fn eth_ipv4_tcp(src: [u8; 4], dst: [u8; 4], dport: u16) -> Vec<u8> {
     out
 }
 
-/// Install a v6 LB service `(VNI, OVERLAY_VIP6, 443, TCP)` -> Maglev table pointing at a LOCAL
+/// Install a v6 LB service `(VNI, OVERLAY_LB_IP6, 443, TCP)` -> Maglev table pointing at a LOCAL
 /// backend (`node_vtep == backend_underlay`).
 fn install_lb6(node: &mut SimNode, backend_underlay: [u8; 16]) {
     let last4 = [
-        OVERLAY_VIP6[12],
-        OVERLAY_VIP6[13],
-        OVERLAY_VIP6[14],
-        OVERLAY_VIP6[15],
+        OVERLAY_LB_IP6[12],
+        OVERLAY_LB_IP6[13],
+        OVERLAY_LB_IP6[14],
+        OVERLAY_LB_IP6[15],
     ];
     node.maps.lb.insert(
         LbKey {
@@ -270,7 +280,7 @@ fn install_lb(node: &mut SimNode, backend_underlay: [u8; 16]) {
     node.maps.lb.insert(
         LbKey {
             vni: VNI,
-            ipv4: OVERLAY_VIP,
+            ipv4: OVERLAY_LB_IP,
             port: 443,
             proto: 6,
             _pad: 0,
@@ -298,7 +308,7 @@ fn install_lb(node: &mut SimNode, backend_underlay: [u8; 16]) {
 }
 
 /// Install a wildcard-dst ingress ALLOW rule on `tap` for TCP:`port` (v6) — the LB/DSR delivery
-/// keeps the inner dst as the VIP, never either backend's own overlay IP, so the rule must not pin
+/// keeps the inner dst as the LB_IP_CONST, never either backend's own overlay IP, so the rule must not pin
 /// `dst_ip` (mirrors `lb_scenario_test.rs`'s `apply_fw6`).
 fn allow_tcp6_any_dst(maps: &mut MemMaps, tap: u32, port: u16) {
     maps.fw_meta6.insert(
@@ -360,7 +370,7 @@ fn allow_tcp_any_dst(maps: &mut MemMaps, tap: u32, port: u16) {
 }
 
 #[test]
-fn v6_lb_local_delivery_with_dsr_notes_reverse_vip() {
+fn v6_lb_local_delivery_with_dsr_notes_reverse_lb_ip() {
     let mut node = SimNode::with_local(local_for(HOSTB_UL, 9));
     node.maps.add_iface6(
         VNI,
@@ -377,12 +387,12 @@ fn v6_lb_local_delivery_with_dsr_notes_reverse_vip() {
     install_lb6(&mut node, HOSTB_UL);
     allow_tcp6_any_dst(&mut node.maps, TAP, 443);
 
-    let inner = eth_ipv6_tcp(GUEST_A6, OVERLAY_VIP6, 443);
+    let inner = eth_ipv6_tcp(GUEST_A6, OVERLAY_LB_IP6, 443);
     let dsr = Some(DsrOpt {
         family: 1,
         _pad: 0,
         port: 443,
-        vip: OVERLAY_VIP6,
+        lb_ip: OVERLAY_LB_IP6,
     });
     let out = node.uplink_v6_dsr(&inner, VNI, &local_for(HOSTB_UL, 9), dsr);
 
@@ -392,7 +402,7 @@ fn v6_lb_local_delivery_with_dsr_notes_reverse_vip() {
         "LB-selected local backend delivered to its own tap"
     );
 
-    // DSR never rewrites the inner dst (stays the VIP) and the DSR note is made BEFORE the inner
+    // DSR never rewrites the inner dst (stays the LB_IP_CONST) and the DSR note is made BEFORE the inner
     // Ethernet rewrite (which only touches MACs, not L3), so `ct_key6` over the ORIGINAL `inner`
     // bytes reproduces the exact forwarded-frame tuple `dsr_note6` keyed off internally.
     let fwd = ct_key6(&VecPkt::from_bytes(&inner), ETH_LEN, VNI).unwrap();
@@ -401,7 +411,10 @@ fn v6_lb_local_delivery_with_dsr_notes_reverse_vip() {
         .maps
         .dsr6_get(&rev)
         .expect("reverse DSR6 map entry must exist after a DSR local-LB delivery");
-    assert_eq!(e.vip, OVERLAY_VIP6, "reverse entry notes reply src -> VIP");
+    assert_eq!(
+        e.lb_ip, OVERLAY_LB_IP6,
+        "reverse entry notes reply src -> LB address"
+    );
 
     assert!(
         node.maps.dsr6_get(&fwd).is_none(),
@@ -417,7 +430,7 @@ fn v6_lb_local_delivery_with_dsr_notes_reverse_vip() {
 #[test]
 fn v6_lb_local_delivery_without_dsr_notes_nothing() {
     // Regression: `dsr: None` (the default for every pre-existing non-DSR uplink caller) must not
-    // note a reverse DSR VIP — matches the pre-existing "LB is DSR, no ct" contract.
+    // note a reverse DSR LB address — matches the pre-existing "LB is DSR, no ct" contract.
     let mut node = SimNode::with_local(local_for(HOSTB_UL, 9));
     node.maps.add_iface6(
         VNI,
@@ -434,7 +447,7 @@ fn v6_lb_local_delivery_without_dsr_notes_nothing() {
     install_lb6(&mut node, HOSTB_UL);
     allow_tcp6_any_dst(&mut node.maps, TAP, 443);
 
-    let inner = eth_ipv6_tcp(GUEST_A6, OVERLAY_VIP6, 443);
+    let inner = eth_ipv6_tcp(GUEST_A6, OVERLAY_LB_IP6, 443);
     let out = node.uplink_v6(&inner, VNI, &local_for(HOSTB_UL, 9));
 
     assert_eq!(out.action, Action::Redirect(TAP));
@@ -451,7 +464,7 @@ fn v6_lb_local_delivery_without_dsr_notes_nothing() {
 }
 
 #[test]
-fn v4_lb_local_delivery_with_dsr_notes_reverse_vip() {
+fn v4_lb_local_delivery_with_dsr_notes_reverse_lb_ip() {
     let mut node = SimNode::with_local(local_for(HOSTB_UL, 9));
     node.maps.add_iface(
         VNI,
@@ -468,12 +481,12 @@ fn v4_lb_local_delivery_with_dsr_notes_reverse_vip() {
     install_lb(&mut node, HOSTB_UL);
     allow_tcp_any_dst(&mut node.maps, TAP, 443);
 
-    let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
+    let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_LB_IP, 443);
     let dsr = Some(DsrOpt {
         family: 0,
         _pad: 0,
         port: 443,
-        vip: vip16(OVERLAY_VIP),
+        lb_ip: lb_ip16(OVERLAY_LB_IP),
     });
     let out = node.uplink_dsr(&inner, VNI, &local_for(HOSTB_UL, 9), dsr);
 
@@ -490,9 +503,9 @@ fn v4_lb_local_delivery_with_dsr_notes_reverse_vip() {
         .dsr_get(&rev)
         .expect("reverse DSR map entry must exist after a DSR local-LB delivery");
     assert_eq!(
-        e.vip,
-        vip16(OVERLAY_VIP),
-        "reverse entry notes reply src -> VIP"
+        e.lb_ip,
+        lb_ip16(OVERLAY_LB_IP),
+        "reverse entry notes reply src -> LB address"
     );
 
     assert!(
@@ -524,7 +537,7 @@ fn v4_lb_local_delivery_without_dsr_notes_nothing() {
     install_lb(&mut node, HOSTB_UL);
     allow_tcp_any_dst(&mut node.maps, TAP, 443);
 
-    let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_VIP, 443);
+    let inner = eth_ipv4_tcp(GUEST_A, OVERLAY_LB_IP, 443);
     let out = node.uplink(&inner, VNI, &local_for(HOSTB_UL, 9));
 
     assert_eq!(out.action, Action::Redirect(TAP));
@@ -543,7 +556,7 @@ fn v4_lb_local_delivery_without_dsr_notes_nothing() {
 // ─── B8: guest-egress DSR reverse-SNAT (`SimNode::guest_tx_v6` / `guest_tx`) ───────────────────────
 //
 // At the backend, the guest's REPLY to a DSR-load-balanced flow (src = the guest's own overlay IP,
-// dst = the real client) must have its src rewritten to the VIP the edge dispatched — the reverse
+// dst = the real client) must have its src rewritten to the LB address the edge dispatched — the reverse
 // state the ingress `uplink_dsr_note`/`uplink_dsr_note6` tcx pre-program recorded (B7/B7c) in `DSR`/
 // `DSR6`, keyed on the reply's OWN 5-tuple. `process_guest_tx`/`process_guest_tx_v6` apply it on
 // egress, between the firewall/conntrack stage and the route/deliver tail — the route decision keys
@@ -708,7 +721,7 @@ fn node_for_guest_tx4() -> SimNode {
 }
 
 #[test]
-fn v6_guest_reply_with_dsr_entry_reverse_snats_src_to_vip_and_encaps() {
+fn v6_guest_reply_with_dsr_entry_reverse_snats_src_to_lb_ip_and_encaps() {
     let mut node = node_for_guest_tx6();
     let reply = eth_ipv6_tcp_reply(BACKEND_OVERLAY_IP6, CLIENT_IP6, SERVICE_PORT, CLIENT_PORT);
 
@@ -717,8 +730,8 @@ fn v6_guest_reply_with_dsr_entry_reverse_snats_src_to_vip_and_encaps() {
     let key = ct_key6(&VecPkt::from_bytes(&reply), ETH_LEN, VNI).unwrap();
     node.maps.dsr6_insert(
         key,
-        DsrVip {
-            vip: VIP_IP6,
+        DsrLbIP {
+            lb_ip: LB_IP6_CONST,
             last_seen: 0,
         },
     );
@@ -739,8 +752,8 @@ fn v6_guest_reply_with_dsr_entry_reverse_snats_src_to_vip_and_encaps() {
     let src = out_pkt.read_array::<16>(ETH_LEN + 8).unwrap();
     let dst = out_pkt.read_array::<16>(ETH_LEN + 24).unwrap();
     assert_eq!(
-        src, VIP_IP6,
-        "reply src rewritten: guest overlay IP -> the VIP the edge dispatched"
+        src, LB_IP6_CONST,
+        "reply src rewritten: guest overlay IP -> the LB address the edge dispatched"
     );
     assert_eq!(dst, CLIENT_IP6, "reply dst (the real client) is untouched");
 }
@@ -768,15 +781,15 @@ fn v6_guest_reply_without_dsr_entry_is_unchanged_regression() {
 }
 
 #[test]
-fn v4_guest_reply_with_dsr_entry_reverse_snats_src_to_vip_and_encaps() {
+fn v4_guest_reply_with_dsr_entry_reverse_snats_src_to_lb_ip_and_encaps() {
     let mut node = node_for_guest_tx4();
     let reply = eth_ipv4_tcp_reply(BACKEND_OVERLAY_IP, CLIENT_IP, SERVICE_PORT, CLIENT_PORT);
 
     let key = ct_key(&VecPkt::from_bytes(&reply), ETH_LEN, VNI).unwrap();
     node.maps.dsr_insert(
         key,
-        DsrVip {
-            vip: vip16(VIP_IP),
+        DsrLbIP {
+            lb_ip: lb_ip16(LB_IP_CONST),
             last_seen: 0,
         },
     );
@@ -797,8 +810,8 @@ fn v4_guest_reply_with_dsr_entry_reverse_snats_src_to_vip_and_encaps() {
     let src = out_pkt.read_array::<4>(ETH_LEN + 12).unwrap();
     let dst = out_pkt.read_array::<4>(ETH_LEN + 16).unwrap();
     assert_eq!(
-        src, VIP_IP,
-        "reply src rewritten: guest overlay IP -> the VIP the edge dispatched"
+        src, LB_IP_CONST,
+        "reply src rewritten: guest overlay IP -> the LB address the edge dispatched"
     );
     assert_eq!(dst, CLIENT_IP, "reply dst (the real client) is untouched");
 }

@@ -46,16 +46,16 @@ type Dataplane interface {
 	// v4+v6) in one call. Declarative + restart-safe: the agent pushes the full desired set every
 	// reconcile, so a stale dataplane rule never survives an agent restart or in-place policy change.
 	ReplaceInterfaceFirewall(ctx context.Context, interfaceID string, rules []FwRuleWithID) error
-	// AddLbVip registers a load balancer VIP (id == VIP). vni is the WAN/public VNI (0 at the edge);
+	// AddLoadBalancer registers a load balancer (id == its address). vni is the WAN/public VNI (0 at the edge);
 	// lbUnderlay is the edge's own anycast underlay (unused-but-required for vni==0).
-	AddLbVip(ctx context.Context, id string, vni uint32, vip, lbUnderlay string, ports []LbPort) error
-	// DelLbVip removes a registered LB VIP by id.
-	DelLbVip(ctx context.Context, id string) error
-	// AddLbBackend appends a backend underlay /128 to a registered LB VIP. backendOverlayIP and
+	AddLoadBalancer(ctx context.Context, id string, vni uint32, lbIP, lbUnderlay string, ports []LbPort) error
+	// DelLoadBalancer removes a registered LB address by id.
+	DelLoadBalancer(ctx context.Context, id string) error
+	// AddLbBackend appends a backend underlay /128 to a registered LB address. backendOverlayIP and
 	// backendVni are the backend NIC's overlay IP + VPC VNI, needed to Geneve-encap to it.
 	AddLbBackend(ctx context.Context, id, backendUnderlay, backendOverlayIP string, backendVni uint32) error
-	// DelLbBackend removes a backend underlay /128 from a registered LB VIP. backendOverlayIP
-	// disambiguates two backends that share the same backendUnderlay (two guests backing the same VIP
+	// DelLbBackend removes a backend underlay /128 from a registered LB address. backendOverlayIP
+	// disambiguates two backends that share the same backendUnderlay (two guests backing the same LB address
 	// on the SAME node — a normal K8s Service-with-2-pods-on-one-node case): without it the dataplane
 	// cannot tell which of the two to remove. Empty is accepted for older/legacy callers and falls
 	// back to matching by backendUnderlay alone (removing every backend on that node).
@@ -97,7 +97,7 @@ type FwRuleWithID struct {
 	Rule FwRule
 }
 
-// LbPort is one LB service tuple for AddLbVip. Proto is the IP protocol number (6=TCP, 17=UDP).
+// LbPort is one LB service tuple for AddLoadBalancer. Proto is the IP protocol number (6=TCP, 17=UDP).
 // It aliases the shared routebus.LbPort so the agent and reflector use one canonical
 // representation on the PublicPrefix channel.
 type LbPort = routebus.LbPort
@@ -130,14 +130,14 @@ type Bus struct {
 	egressVNIs    []uint32          // local VNIs that import the public default(s); set each reconcile
 	learnedPublic map[string]string // public-VNI prefix -> nexthop (recorded, imported into egressVNIs)
 
-	// edgeLbs is the EDGE's bookkeeping for the load balancers it has programmed, keyed by VIP (==
-	// the dataplane's LB id), built entirely from the LB_VIP records backends announce. The
+	// edgeLbs is the EDGE's bookkeeping for the load balancers it has programmed, keyed by LB address (==
+	// the dataplane's LB id), built entirely from the LB_IP records backends announce. The
 	// dataplane is not idempotent here (create_lb rejects a duplicate id, add_lb_target a duplicate
 	// backend) and the edge sees each record repeatedly, so this is what makes applyPublic a diff.
 	// Touched only from the Run goroutine (handleServerMsg), like installed/origin — no lock.
 	//
 	// It PERSISTS across reconnects, deliberately. Resetting it per session would make the first
-	// record for each VIP re-create the LB (see registerLbVip), which would in turn prune anything
+	// record for each LB address re-create the LB (see registerLoadBalancer), which would in turn prune anything
 	// stale — but at the cost of a real teardown/rebuild blip on EVERY reflector reconnect, and
 	// reconnects are far more common than the staleness it would fix.
 	//
@@ -530,7 +530,7 @@ func (b *Bus) apply(ctx context.Context, ru *rbv1.RouteUpdate) {
 	}
 	if ru.Vni == PublicVNI {
 		// Public-VNI routes are aggregation records: record them and IMPORT into each local egress VNI
-		// (a tenant node has no VNI-0 table). External=true so SNAT sources follow it; LB-VIP replies
+		// (a tenant node has no VNI-0 table). External=true so SNAT sources follow it; LB-address replies
 		// miss SNAT and stay public.
 		b.mu.Lock()
 		switch ru.Op {
@@ -836,16 +836,16 @@ func (d dpAdapter) ReplaceInterfaceFirewall(ctx context.Context, interfaceID str
 	})
 	return err
 }
-func (d dpAdapter) AddLbVip(ctx context.Context, id string, vni uint32, vip, lbUnderlay string, ports []LbPort) error {
+func (d dpAdapter) AddLoadBalancer(ctx context.Context, id string, vni uint32, lbIP, lbUnderlay string, ports []LbPort) error {
 	pp := make([]*dpv1.PortProto, 0, len(ports))
 	for _, p := range ports {
 		pp = append(pp, &dpv1.PortProto{Port: p.Port, Proto: p.Proto})
 	}
-	_, err := d.c.AddLbVip(ctx, &dpv1.AddLbVipRequest{Id: id, Vni: vni, Vip: vip, LbUnderlay: lbUnderlay, Ports: pp})
+	_, err := d.c.AddLoadBalancer(ctx, &dpv1.AddLoadBalancerRequest{Id: id, Vni: vni, Ip: lbIP, LbUnderlay: lbUnderlay, Ports: pp})
 	return err
 }
-func (d dpAdapter) DelLbVip(ctx context.Context, id string) error {
-	_, err := d.c.DelLbVip(ctx, &dpv1.DelLbVipRequest{Id: id})
+func (d dpAdapter) DelLoadBalancer(ctx context.Context, id string) error {
+	_, err := d.c.DelLoadBalancer(ctx, &dpv1.DelLoadBalancerRequest{Id: id})
 	return err
 }
 func (d dpAdapter) AddLbBackend(ctx context.Context, id, backendUnderlay, backendOverlayIP string, backendVni uint32) error {

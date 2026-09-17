@@ -25,7 +25,7 @@ use crate::tunnel::get_tunnel_key;
 ///     (fail-open) — closing the disclosed security gap where a genuine miss leaked decapped overlay
 ///     v6 bytes into this node's own kernel netns.
 ///
-/// The ICMPv6-echo-to-VIP intercept the pre-4b inline path had is intentionally NOT ported (deferred
+/// The ICMPv6-echo-to-LB address intercept the pre-4b inline path had is intentionally NOT ported (deferred
 /// to its own M2+ feature spec, same as v4's dropped ICMP-echo/ICMP-error features — see the P2
 /// Task-4c brief); v6 has no NAT/NAT64-return dispatch either (v4-only — those translate a v4 inner).
 ///

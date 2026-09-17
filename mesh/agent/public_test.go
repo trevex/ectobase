@@ -65,22 +65,22 @@ func TestApplyPublicEdgeUnderlayAddThenWithdraw(t *testing.T) {
 	}
 }
 
-// TestApplyPublic_LBVIP_SameNodeDistinctOverlayBackendsWithdrawIndependently proves the agent-side
-// half of the same-node-multi-backend fix end to end: two LB_VIP ADD updates for the SAME VIP/owner
+// TestApplyPublic_LBIP_SameNodeDistinctOverlayBackendsWithdrawIndependently proves the agent-side
+// half of the same-node-multi-backend fix end to end: two LB_IP ADD updates for the SAME LB address/owner
 // but DIFFERENT backend overlay IPs (two pods of one Service on the same node) must both reach
 // AddLbBackend, and a WITHDRAW naming one overlay IP must remove only that backend on the dataplane
 // — the other must remain.
-func TestApplyPublic_LBVIP_SameNodeDistinctOverlayBackendsWithdrawIndependently(t *testing.T) {
+func TestApplyPublic_LBIP_SameNodeDistinctOverlayBackendsWithdrawIndependently(t *testing.T) {
 	dp := newRecordingDP()
 	b := NewBus("edge1", "2001:db8::e", dp, true) // isEdge = true
 	ctx := context.Background()
 
 	addA := &rbv1.PublicPrefix{
-		Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "2001:db8::dd",
+		Kind: rbv1.PublicKind_PUBLIC_KIND_LB_IP, Prefix: "203.0.113.50/32", OwnerUnderlay: "2001:db8::dd",
 		OverlayIp: "10.0.0.5", Vni: 100,
 	}
 	addB := &rbv1.PublicPrefix{
-		Kind: rbv1.PublicKind_PUBLIC_KIND_LB_VIP, Prefix: "203.0.113.50/32", OwnerUnderlay: "2001:db8::dd",
+		Kind: rbv1.PublicKind_PUBLIC_KIND_LB_IP, Prefix: "203.0.113.50/32", OwnerUnderlay: "2001:db8::dd",
 		OverlayIp: "10.0.0.7", Vni: 100,
 	}
 	b.applyPublic(ctx, addA, rbv1.RouteOp_ROUTE_OP_ADD)
