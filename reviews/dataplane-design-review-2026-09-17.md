@@ -166,15 +166,19 @@ self-contained increments.
 
 ## 3. Control-plane resilience gaps (P1)
 
-1. **NAT/public channel has no snapshot-prune.** Routes get `EndOfRIB` + prune; NAT
-   blocks, public prefixes, and LB backends do not (`mesh/agent/bus.go:143-150,361-384`).
-   A record withdrawn while an edge was disconnected lingers forever — Maglev keeps
-   hashing flows to a gone backend. Acknowledged in-code; it's the direct N/S analog of a
-   blackhole. **Fix:** extend the EndOfRIB/prune contract to the global channel.
-2. **Edge anycast has no readiness gating.** An edge attracts ECMP the moment BGP is up,
-   before its LB/NAT tables are programmed → blackhole window on every edge
-   deploy/restart (`docs/features/ns-edge.md:3-12`). The lever (EndOfRIB-gated readiness)
-   already exists — wire it to the health signal that gates the anycast announce.
+1. ~~**NAT/public channel has no snapshot-prune.**~~ **FIXED** (`a334ef8`). The reflector
+   closes its global replay with a new `EndOfGlobal` marker and the agent prunes unreplayed
+   NAT blocks and LB backends against it, dropping a load balancer whose last backend is gone.
+   The marker carries the replayed record count and the agent prunes only on an exact match:
+   a sink drops on overflow, so pruning against a lossy snapshot would withdraw LIVE state —
+   strictly worse than the staleness. **Note this exposed a pre-existing sibling hazard:**
+   prune-on-EndOfRIB has the same lossy-snapshot exposure for routes and no count guard. Not
+   fixed there; worth doing.
+2. ~~**Edge anycast has no readiness gating.**~~ **HALF FIXED** (`c7f779b`). `Bus.Converged`
+   (global snapshot + EndOfRIB for every subscribed VNI, latching) is exposed over
+   `--health-addr` `/readyz`. But nothing consumes it yet: the lab advertises the public
+   prefixes from static VyOS `network` statements, so a lab edge still attracts ECMP before
+   converging. **Remaining:** gate a real deployment's advertisement on `/readyz`.
 3. **Tier-2 fence completeness depends on stale broker state.** Failover fences exactly
    `pool.Status.NodePrefixes` as last reported before the partition
    (`dispatch/pkg/failover/failover.go:67-85`). A node added *during* the partition is
