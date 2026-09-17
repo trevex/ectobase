@@ -40,8 +40,17 @@ All of §1 is fixed on `fix/p0-dataplane-batch`, each with a failing test writte
 (`make ci` green; 185 sim/core tests). Two findings did not survive scrutiny and are
 corrected in place below — 1.3's IPv6 half and part of 1.4.
 
-`make verifier` (root) has been run and passes. It caught a real regression the non-privileged
-gate could not see: `xdp_uplink_v6` stopped loading ("combined stack size of 3 calls is 640"),
+Privileged gates run and passing: `make verifier` **and** `make sim-anchor` (all five
+`BPF_PROG_TEST_RUN` byte-parity anchors — uplink/LB/DNAT fail-safe, `guest_tx` encap
+byte-identical to the native sim, DHCP against both the native sim and the original golden).
+
+One coverage note found while checking that the DHCP golden legitimately did NOT move: that anchor
+seeds `DHCP_CONFIG` with an explicit MTU, so it covers the CONFIGURED path only. The fallback MTU
+fixed in §1.7 has no bytecode anchor and is covered by the sim oracle alone. Production always
+writes `DHCP_CONFIG`, so this is acceptable — but it belongs on the Makefile's "NOT YET ANCHORED"
+list alongside DHCPv6, ARP/ND and the NAT64 translation.
+
+`make verifier` caught a real regression the non-privileged gate could not see: `xdp_uplink_v6` stopped loading ("combined stack size of 3 calls is 640"),
 bisected to the v6 LB key fix — a 24-byte `LbKey6` plus two 16-byte arrays for `hash_v6` where the
 old code hashed 4-byte truncations. Fixed by streaming the hash from the packet, restructuring the
 v6 ICMP rewrite to hold one address at a time, and out-of-lining the packet-free helpers. Both

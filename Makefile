@@ -261,6 +261,8 @@ sim-anchor: verifier ## Privileged BPF_PROG_TEST_RUN byte-parity anchors (native
 	sudo -E $$(command -v cargo) test -p flowplane --test anchor_dhcp -- --ignored       # tc_guest_dhcp DHCPv4 OFFER (native + golden)
 	# NOT YET ANCHORED (coverage gaps, tracked separately — do not assume these are covered):
 	#   - tc_guest_dhcp DHCPv6 ADVERTISE/REPLY (only the DHCPv4 OFFER is byte-anchored above).
+	#   - the DHCP FALLBACK MTU (no DHCP_CONFIG). anchor_dhcp seeds DHCP_CONFIG with an explicit
+	#     mtu, so it anchors the CONFIGURED path only; the fallback is sim-covered alone.
 	#   - guest-tx ARP/ND replies and the NAT64 egress/ingress translation have no byte-parity anchor.
 
 .PHONY: e2e
