@@ -39,6 +39,14 @@ pub fn l4_ports(data: usize, data_end: usize, ip_off: usize) -> Option<(u8, u16,
     if data + ip_off + 20 > data_end {
         return None;
     }
+    // Non-first fragment => no L4 header at `ip_off + ihl`; refuse rather than read payload as
+    // ports. Mirrors `flowplane_core::parse::l4_ports` (see its doc for the consequences).
+    let frag_off = u16::from_be_bytes([unsafe { *p.add(ip_off + 6) } & 0x1f, unsafe {
+        *p.add(ip_off + 7)
+    }]);
+    if frag_off != 0 {
+        return None;
+    }
     let ihl = (unsafe { *p.add(ip_off) } & 0x0f) as usize * 4;
     let proto = unsafe { *p.add(ip_off + 9) };
     let l4 = ip_off + ihl;

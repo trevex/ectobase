@@ -36,6 +36,14 @@ fabric NIC). The outer IPv6 next-header is `17` (UDP); the Geneve header carries
 and the inner frame's ethertype, so one encapsulation format carries both inner IPv4 and
 inner IPv6.
 
+The **advertised guest MTU** reserves 24 bytes more than that — `underlay − 80`, not
+`underlay − 56` — because the edge stamps a 24-byte [DSR Geneve option](../features/loadbalancer.md)
+onto edge→backend packets. The reserve is fleet-wide and uniform: any interface may become
+an LB backend later, and a guest's MTU is advertised once (DHCP option 26 / RA MTU option /
+link MTU), so it cannot be renegotiated on an LB membership change. One constant,
+`flowplane_common::ENCAP_OVERHEAD_V6`, is the single source of truth for every path that
+advertises or derives it.
+
 The Geneve frame the kernel `collect_md` device builds on the wire is:
 
 ```mermaid

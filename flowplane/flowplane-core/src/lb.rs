@@ -1,5 +1,5 @@
 use crate::maps::Maps;
-use crate::parse::{hash5, l4_ports};
+use crate::parse::{hash5, hash_v6_at, l4_ports};
 use crate::pkt::Pkt;
 use flowplane_common::{LbBackend, LbKey, MaglevKey};
 
@@ -35,9 +35,16 @@ pub fn lb_select_forward<P: Pkt, M: Maps>(
 }
 
 /// Maglev backend select for an IPv6 LB service. Faithful port of eBPF `lb::lb_select_forward_v6`
-/// (the IPv6-in-IPv6 uplink relay path). Reads the inner IPv6 at `ip_off`; the LB key uses the
-/// last 4 bytes of the v6 dst (matching the control-plane `last4`). Returns the backend underlay
-/// /128, or None if `(vni, dst4, port, proto)` is not an LB service (or the table is empty).
+/// (the IPv6-in-IPv6 uplink relay path). Reads the inner IPv6 at `ip_off`; the LB key is the FULL
+/// v6 dst in `LB6`. Returns the backend underlay /128, or None if `(vni, dst6, port, proto)` is not
+/// an LB service (or the table is empty).
+///
+/// `#[inline(always)]`: MUST stay inlined. `wan_rx` calls this, and its eBPF glue hands the core a
+/// `RawPkt` built from raw `data`/`data_end`; passing `pkt_end` across a bpf-to-bpf call boundary
+/// is rejected outright ("R3 pointer arithmetic on pkt_end prohibited"). Out-of-lining it to
+/// reclaim stack in `xdp_uplink_v6` traded a stack-limit failure for a load failure —
+/// `lb_select_forward_icmp_error_v6`, which only `process_uplink_v6` calls, is the one that can be
+/// out-of-lined.
 #[inline(always)]
 pub fn lb_select_forward_v6<P: Pkt, M: Maps>(
     pkt: &P,
@@ -51,16 +58,12 @@ pub fn lb_select_forward_v6<P: Pkt, M: Maps>(
         return None;
     }
     let dst6 = pkt.read_array::<16>(ip_off + 24)?;
-    let src6 = pkt.read_array::<16>(ip_off + 8)?;
-    // LB key uses the last 4 bytes of the IPv6 address (matching the control-plane `last4`).
-    let dst4: [u8; 4] = [dst6[12], dst6[13], dst6[14], dst6[15]];
-    let src4: [u8; 4] = [src6[12], src6[13], src6[14], src6[15]];
     // L4 ports at ip_off + 40 (right after inner IPv6 header; no extension headers assumed).
     let sport = u16::from_be_bytes(pkt.read_array::<2>(ip_off + 40)?);
     let dport = u16::from_be_bytes(pkt.read_array::<2>(ip_off + 42)?);
-    let lb = maps.lb_get(&LbKey {
+    let lb = maps.lb6_get(&flowplane_common::LbKey6 {
         vni,
-        ipv4: dst4,
+        ipv6: dst6,
         port: dport,
         proto: nexthdr,
         _pad: 0,
@@ -68,7 +71,11 @@ pub fn lb_select_forward_v6<P: Pkt, M: Maps>(
     if lb.size == 0 {
         return None;
     }
-    let slot = hash5(&src4, &dst4, sport, dport, nexthdr) % lb.size;
+    // Slot hash folds the FULL addresses: the last 4 bytes alone lost the entropy of the prefix,
+    // so flows from distinct /64s collapsed onto one slot. Streamed from the packet rather than
+    // from arrays — `dst6` above is already 16 bytes of this frame's stack and the v6 uplink path
+    // has no room for two more (see `hash_v6_at`).
+    let slot = hash_v6_at(pkt, ip_off + 8, ip_off + 24, sport, dport, nexthdr)? % lb.size;
     maps.maglev_get(&MaglevKey {
         table_id: lb.table_id,
         slot,
@@ -83,7 +90,7 @@ pub fn lb_select_forward_v6<P: Pkt, M: Maps>(
 /// is hashed over the SWAPPED embedded tuple, reconstructing the original client->LB address forward-flow hash
 /// so the error (notably the ICMPv6 Packet-Too-Big PMTUD case) lands on the same backend. No extension
 /// headers are assumed on either the outer or embedded IPv6 (matching [`lb_select_forward_v6`]), so all
-/// offsets are constant; the LB key uses the `last4` of the v6 addr (same control-plane convention).
+/// offsets are constant; the LB key is the FULL embedded v6 src in `LB6`.
 ///
 /// KNOWN LIMITATION (deferred to the N/S-LB edge spec, IDENTICAL to the v4 fn): the relayed error reuses
 /// the shared LB delivery path, so `process_uplink_v6`'s ingress firewall evaluates it on its OUTER
@@ -91,9 +98,15 @@ pub fn lb_select_forward_v6<P: Pkt, M: Maps>(
 /// from any") does not match ICMPv6, so the relayed error is firewall-dropped in production — a latent
 /// PMTUD gap, consistent with how all DSR-LB traffic is firewall-gated today. Do NOT fix here.
 ///
-/// `#[inline(always)]`: same rationale as the v4 fn — out-of-lining a packet-reading subprogram loses
-/// the eBPF verifier's pkt-pointer range tracking across the call boundary.
-#[inline(always)]
+/// `#[inline(never)]`: out-of-lined for the BPF stack budget. Both v6 selects now carry a 24-byte
+/// `LbKey6` (the full-address key) plus a 16-byte address, and inlining them into
+/// `process_uplink_v6` grew its frame until the worst 3-call chain in `xdp_uplink_v6` exceeded the
+/// verifier's 512-byte limit. As a separate frame this is freed before the deeper resolve/decap
+/// tail runs. Safe despite reading the packet: access goes through the `Pkt` re-derive-bounds seam
+/// (every read re-proves its own bound), which is why `nat_return_rewrite6` can do the same — the
+/// "out-of-lining a packet-reading subprogram loses pkt-pointer tracking" hazard applies to the raw
+/// `data`/`data_end` pointer style, not to this one.
+#[inline(never)]
 pub fn lb_select_forward_icmp_error_v6<P: Pkt, M: Maps>(
     pkt: &P,
     maps: &M,
@@ -117,18 +130,17 @@ pub fn lb_select_forward_icmp_error_v6<P: Pkt, M: Maps>(
     if inner_nexthdr != 6 && inner_nexthdr != 17 {
         return None;
     }
-    let inner_src = pkt.read_array::<16>(inner_ip_off + 8)?; // = the LB address
-    let inner_dst = pkt.read_array::<16>(inner_ip_off + 24)?; // = the client
-                                                              // LB key uses the last 4 bytes of the IPv6 address (matching the control-plane `last4`).
-    let inner_src4: [u8; 4] = [inner_src[12], inner_src[13], inner_src[14], inner_src[15]];
-    let inner_dst4: [u8; 4] = [inner_dst[12], inner_dst[13], inner_dst[14], inner_dst[15]];
+    // The embedded SRC is the LB address, and is needed for the key below. The embedded DST (the
+    // client) is deliberately NOT read into a local — `hash_v6_at` streams it from the packet, so
+    // this frame never holds two 16-byte addresses.
+    let inner_src = pkt.read_array::<16>(inner_ip_off + 8)?;
     // Inner L4 at inner_ip_off + 40 (right after inner IPv6 header; no extension headers assumed).
     let inner_sport = u16::from_be_bytes(pkt.read_array::<2>(inner_ip_off + 40)?); // = service port
     let inner_dport = u16::from_be_bytes(pkt.read_array::<2>(inner_ip_off + 42)?);
-    // LB key: dst = inner_src (LB_IP_CONST), port = inner_sport (service port), proto = inner_nexthdr.
-    let lb = maps.lb_get(&LbKey {
+    // LB key: dst = inner_src (the full LB address), port = inner_sport (service port).
+    let lb = maps.lb6_get(&flowplane_common::LbKey6 {
         vni,
-        ipv4: inner_src4,
+        ipv6: inner_src,
         port: inner_sport,
         proto: inner_nexthdr,
         _pad: 0,
@@ -137,13 +149,17 @@ pub fn lb_select_forward_icmp_error_v6<P: Pkt, M: Maps>(
         return None;
     }
     // Swapped 5-tuple (client->LB address perspective) reconstructs the original forward-flow hash.
-    let slot = hash5(
-        &inner_dst4,
-        &inner_src4,
+    // Must fold the same FULL addresses `lb_select_forward_v6` does, or the error lands on a
+    // different backend than the flow it belongs to. Swapping the two OFFSETS is what swaps the
+    // tuple; `hash_v6_at` is byte-identical to the `hash_v6` this used to call.
+    let slot = hash_v6_at(
+        pkt,
+        inner_ip_off + 24,
+        inner_ip_off + 8,
         inner_dport,
         inner_sport,
         inner_nexthdr,
-    ) % lb.size;
+    )? % lb.size;
     maps.maglev_get(&MaglevKey {
         table_id: lb.table_id,
         slot,
@@ -227,4 +243,22 @@ pub fn lb_select_forward_icmp_error<P: Pkt, M: Maps>(
         table_id: lb.table_id,
         slot,
     })
+}
+
+/// Out-of-lined shim over [`lb_select_forward_v6`], for callers that need its frame to be a
+/// SEPARATE, sequential BPF frame rather than part of their own.
+///
+/// `lb_select_forward_v6` itself must stay `#[inline(always)]` because `wan_rx` calls it and cannot
+/// take a `pkt_end` across a bpf-to-bpf boundary. `process_uplink_v6` has no such constraint (it
+/// already calls out-of-lined `nat_return_dnat6`), and it is the program that needs the stack back:
+/// the full-address `LbKey6` plus the deeper NAT-return chain put its worst 3-call path over the
+/// verifier's 512-byte limit. Hence one shared implementation, two inlining decisions.
+#[inline(never)]
+pub fn lb_select_forward_v6_outlined<P: Pkt, M: Maps>(
+    pkt: &P,
+    maps: &M,
+    ip_off: usize,
+    vni: u32,
+) -> Option<LbBackend> {
+    lb_select_forward_v6(pkt, maps, ip_off, vni)
 }

@@ -30,20 +30,6 @@ pub enum LbIp {
     Ipv6([u8; 16]),
 }
 
-impl LbIp {
-    /// Return the last 4 bytes of the address for underlay derivation.
-    pub fn last4(&self) -> [u8; 4] {
-        match self {
-            LbIp::Ipv4(ip) => *ip,
-            LbIp::Ipv6(ip) => {
-                let mut b = [0u8; 4];
-                b.copy_from_slice(&ip[12..16]);
-                b
-            }
-        }
-    }
-}
-
 /// Registered load balancer: its Maglev table id, the (port,proto) services it answers, and the
 /// ordered backend list (drives the Maglev table). Keyed in `ControlCore.lbs` by the LB's id.
 /// Moved verbatim out of `control/mod.rs`; the NAT preferred-underlay collision check

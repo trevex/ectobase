@@ -116,6 +116,30 @@ fn node() -> SimNode {
     node
 }
 
+/// v6 sibling of `guest_tx_drops_a_frame_too_short_to_conntrack_key`: a frame too short to hold a
+/// 40-byte IPv6 header cannot be keyed, and `egress_fw_ct6` returning `Pass` for it skipped the
+/// deny-by-default egress firewall outright.
+#[test]
+fn guest_tx_v6_drops_a_frame_too_short_to_conntrack_key() {
+    // No v6 firewall rules at all → deny-by-default; nothing may leave this guest.
+    let mut n = SimNode::with_local(local());
+    n.maps.local = Some(local());
+    n.src_ifindex = SRC_IFINDEX;
+
+    // Eth header + only 20 bytes of "IPv6" — src (ip_off+8) needs 24, dst (ip_off+24) needs 40.
+    let mut truncated = vec![0u8; ETH_LEN + 20];
+    truncated[12] = 0x86; // ethertype IPv6
+    truncated[13] = 0xDD;
+    truncated[ETH_LEN] = 0x60; // version 6
+
+    let out = n.guest_tx_v6(&truncated, &port_meta());
+    assert_eq!(
+        out.action,
+        Action::Drop,
+        "an unkeyable (truncated) v6 guest frame must be dropped, not passed"
+    );
+}
+
 /// `[Eth 0x86DD][IPv6 GUEST_V6 → EXT_V6][TCP]` guest frame.
 fn tcp_frame() -> Vec<u8> {
     let b = PacketBuilder::ethernet2(GUEST_MAC, [0x11; 6])

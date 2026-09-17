@@ -145,8 +145,13 @@ pub fn egress_fw_ct6<P: Pkt, M: Maps>(
                 return EgressFwCt6::Pass { was_new: true };
             }
         }
+        return EgressFwCt6::Pass { was_new: false };
     }
-    EgressFwCt6::Pass { was_new: false }
+    // FAIL CLOSED on an unkeyable frame. `ct_key6` only returns None when the frame is too short to
+    // hold a 40-byte IPv6 header (an unrecognised next-header still keys as `(nexthdr, 0, 0)`), so
+    // this is malformed, not untracked. Since keying is what gates the firewall, passing it would
+    // let a guest skip a deny-by-default policy entirely by truncating its own frame.
+    EgressFwCt6::Drop
 }
 
 /// STAGE 2 (shared core) — route6 lookup + deliver decision for a native v6→v6 guest egress flow.

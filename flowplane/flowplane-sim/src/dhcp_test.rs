@@ -330,7 +330,11 @@ fn request_becomes_ack() {
 
 #[test]
 fn no_dhcp_config_falls_back_to_default_mtu_no_dns() {
-    // Without DHCP_CONFIG, the responder defaults MTU = 1500 - GENEVE_OVERHEAD (1444) and omits DNS.
+    // Without DHCP_CONFIG the responder falls back to the standard 1500 link MTU minus the FULL
+    // encap reserve. That reserve is Geneve (56) PLUS the 24-byte DSR Geneve option the edge
+    // stamps onto edge->backend packets: an LB backend whose advertised MTU only accounted for
+    // Geneve would emit full-size frames that no longer fit once the option is added. Same
+    // reserve the configured path uses (`ENCAP_OVERHEAD_V6`).
     let node = SimNode::new();
     let out = node.guest_dhcp4(
         &dhcp_request_frame(DHCP_MSG_DISCOVER),
@@ -338,11 +342,13 @@ fn no_dhcp_config_falls_back_to_default_mtu_no_dns() {
         INGRESS_IFINDEX,
     );
     assert_eq!(out.action, Action::Redirect(INGRESS_IFINDEX));
-    let default_mtu = 1500u16 - flowplane_common::GENEVE_OVERHEAD as u16;
+    let default_mtu = 1500u16
+        - flowplane_common::GENEVE_OVERHEAD as u16
+        - flowplane_core::dsr::DSR_OPT_BUF_LEN as u16;
     assert_eq!(
         find_option(&out.pkt, 26).as_deref(),
         Some(&default_mtu.to_be_bytes()[..]),
-        "default MTU = 1500 - GENEVE_OVERHEAD"
+        "default MTU = 1500 - GENEVE_OVERHEAD - DSR option"
     );
     assert_eq!(
         find_option(&out.pkt, 6),

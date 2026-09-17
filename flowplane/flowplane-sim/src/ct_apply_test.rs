@@ -221,6 +221,43 @@ fn ct_apply_rewrite_src_udp_zero_csum_stays_zero() {
 }
 
 /// FLAG-LESS / DEFAULT entry is a complete no-op: `ct_apply` returns immediately without touching
+/// A required rewrite that CANNOT be applied must be reported, not silently skipped. `ct_apply`
+/// only handles a 20-byte IPv4 header, so an options-carrying packet (IHL > 5) is unrewritable —
+/// and returning without a signal left the caller forwarding it UNTRANSLATED. On the DSR reverse-
+/// SNAT path that means a guest reply leaves with its internal overlay src instead of the LB
+/// address (leaking the overlay IP to the client and breaking the connection); on the NAT-return
+/// path it means delivering a packet whose dst is still the public nat_ip.
+#[test]
+fn ct_apply_reports_failure_when_a_required_rewrite_cannot_be_applied() {
+    // A valid IPv4 packet whose IHL is 6 (one 4-byte option word) — parseable, keyable,
+    // firewallable, conntrackable, but outside ct_apply's fixed 20-byte window.
+    let raw = bare_ipv4_tcp(GUEST_IP, EXT_IP, ORIG_SPORT, DPORT);
+    let mut with_options = raw.clone();
+    with_options[0] = 0x46; // version 4, IHL 6
+    with_options.splice(20..20, [0x01, 0x01, 0x01, 0x00]); // 4 bytes of IP options (NOP,NOP,NOP,EOL)
+
+    let e = CtEntry {
+        last_seen: 0,
+        xlate_ip: NAT_IP,
+        xlate_port: NAT_SPORT,
+        flags: CT_REWRITE_SRC,
+        tcp_state: 0,
+        fwall_action: 0,
+        _pad: [0; 7],
+    };
+
+    let mut pkt = VecPkt::from_bytes(&with_options);
+    assert!(
+        !ct_apply(&mut pkt, 0, &e),
+        "an unapplied-but-required rewrite must report false so the caller drops"
+    );
+    assert_eq!(
+        pkt.bytes(),
+        with_options.as_slice(),
+        "a failed ct_apply must not half-rewrite the packet"
+    );
+}
+
 /// any byte.  Covers both the `flags == 0` case and the `CT_F_DEFAULT` (0x10) case (neither has
 /// `CT_REWRITE_SRC | CT_REWRITE_DST` set).
 #[test]

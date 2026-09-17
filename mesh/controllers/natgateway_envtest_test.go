@@ -75,9 +75,9 @@ func TestNATGatewayControllerEnvtest(t *testing.T) {
 	}
 
 	// Two sources in VPC "blue" + one in "green" (must be excluded), and the gateway.
-	mustCreate(ctx, t, direct, newNIC("nic-a", "blue", "10.0.0.1"))
-	mustCreate(ctx, t, direct, newNIC("nic-b", "blue", "10.0.0.2"))
-	mustCreate(ctx, t, direct, newNIC("nic-c", "green", "10.0.0.9"))
+	mustCreateAllocatedNIC(ctx, t, direct, "nic-a", "blue", "10.0.0.1")
+	mustCreateAllocatedNIC(ctx, t, direct, "nic-b", "blue", "10.0.0.2")
+	mustCreateAllocatedNIC(ctx, t, direct, "nic-c", "green", "10.0.0.9")
 
 	gw := &netv1.NATGateway{}
 	gw.Name = "gw"
@@ -94,7 +94,7 @@ func TestNATGatewayControllerEnvtest(t *testing.T) {
 	})
 
 	// Adding a third blue NIC must re-trigger reconcile via natgwsForNIC → the table grows to 3.
-	mustCreate(ctx, t, direct, newNIC("nic-d", "blue", "10.0.0.3"))
+	mustCreateAllocatedNIC(ctx, t, direct, "nic-d", "blue", "10.0.0.3")
 	eventually(t, 15*time.Second, func() error {
 		return checkAllocations(ctx, direct, 3)
 	})
@@ -111,6 +111,25 @@ func mustCreate(ctx context.Context, t *testing.T, c client.Client, obj client.O
 	t.Helper()
 	if err := c.Create(ctx, obj); err != nil {
 		t.Fatalf("create %T %s: %v", obj, obj.GetName(), err)
+	}
+}
+
+// mustCreateAllocatedNIC creates a NIC and then commits its allocated overlay IPs to status,
+// which is what central IPAM does and the only place the NAT reconciler reads. A real
+// apiserver drops status on create (it is a subresource), so seeding it in the object
+// literal — as a fake client would allow — silently yields a NIC with no overlay IPs.
+func mustCreateAllocatedNIC(ctx context.Context, t *testing.T, c client.Client, name, vpc string, ips ...string) {
+	t.Helper()
+	nic := &netv1.NetworkInterface{}
+	nic.Name = name
+	nic.Namespace = "default"
+	nic.Spec.VPCRef = netv1.LocalObjectReference{Name: vpc}
+	mustCreate(ctx, t, c, nic)
+	nic.Status.State = "Allocated"
+	nic.Status.ObservedGeneration = nic.Generation
+	nic.Status.AllocatedIPs = ips
+	if err := c.Status().Update(ctx, nic); err != nil {
+		t.Fatalf("commit status for NIC %s: %v", name, err)
 	}
 }
 

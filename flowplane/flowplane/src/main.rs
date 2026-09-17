@@ -48,21 +48,16 @@ pub(crate) fn mac_of(iface: &str) -> anyhow::Result<[u8; 6]> {
     crate::parse::parse_mac(s.trim())
 }
 
-/// Base encap overhead subtracted from the underlay L3 MTU to get the guest L3 MTU: outer IPv6 (40)
-/// + outer UDP (8) + Geneve header (8) = 56 (`flowplane_common::GENEVE_OVERHEAD`). The outer Ethernet
-/// (14) is link framing, off the L3 MTU. (Pre-Geneve this was IP-in-IPv6 — a bare inner IP packet,
-/// no inner Ethernet/UDP/Geneve on the wire — so the overhead was 40; the Geneve retarget added the
-/// UDP + Geneve headers on top.)
-const GENEVE_BASE_OVERHEAD_V6: u32 = flowplane_common::GENEVE_OVERHEAD as u32;
-
 /// Encap overhead subtracted from the underlay L3 MTU to get the guest L3 MTU: the base Geneve
-/// overhead ([`GENEVE_BASE_OVERHEAD_V6`], 56) plus the DSR Geneve option
-/// (`flowplane_core::dsr::DSR_OPT_BUF_LEN`, 24) that the edge stamps onto edge->backend
-/// DSR-redirected packets (B9). Subtracted globally — not only on nodes that can host LB
-/// backends — so the guest MTU is uniform across the fleet and a full-MTU inner frame plus the DSR
-/// option always fits the underlay path MTU, however the traffic ends up routed.
-pub(crate) const ENCAP_OVERHEAD_V6: u32 =
-    GENEVE_BASE_OVERHEAD_V6 + flowplane_core::dsr::DSR_OPT_BUF_LEN as u32;
+/// overhead (outer IPv6 40 + outer UDP 8 + Geneve 8 = 56) plus the 24-byte DSR Geneve option the
+/// edge stamps onto edge->backend DSR-redirected packets (B9). The outer Ethernet (14) is link
+/// framing, off the L3 MTU. (Pre-Geneve this was IP-in-IPv6 — a bare inner IP packet, no inner
+/// Ethernet/UDP/Geneve on the wire — so the overhead was 40; the Geneve retarget added the UDP +
+/// Geneve headers on top.) Subtracted globally — not only on nodes that can host LB backends — so
+/// the guest MTU is uniform across the fleet and a full-MTU inner frame plus the DSR option always
+/// fits the underlay path MTU, however the traffic ends up routed. Defined once in
+/// `flowplane_common` so every advertisement path (DHCP opt-26, RA, link MTU) agrees.
+pub(crate) const ENCAP_OVERHEAD_V6: u32 = flowplane_common::ENCAP_OVERHEAD_V6 as u32;
 
 // ---------------------------------------------------------------------------
 // CLI

@@ -111,6 +111,31 @@ fn encap_node() -> SimNode {
     node
 }
 
+/// A frame too short to hold a 20-byte IPv4 header cannot be conntrack-keyed, and an unkeyable
+/// frame must DROP, not sail past a deny-by-default firewall. Two separate fail-opens made a
+/// truncated guest frame escape: the egress firewall only ran inside the `ct_key == Some` arm, and
+/// the route step then returned `Pass`, handing unfiltered guest bytes to the host stack.
+#[test]
+fn guest_tx_drops_a_frame_too_short_to_conntrack_key() {
+    // A node with NO firewall rules at all: deny-by-default, so nothing from this guest may pass.
+    let mut node = SimNode::with_local(local());
+    node.maps.local = Some(local());
+    node.src_ifindex = SRC_IFINDEX;
+
+    // Eth header + only 12 bytes of "IPv4" — src (ip_off+12) and dst (ip_off+16) are past the end.
+    let mut truncated = vec![0u8; 14 + 12];
+    truncated[12] = 0x08; // ethertype IPv4, so tc_guest_tx dispatches it down the v4 path
+    truncated[13] = 0x00;
+    truncated[14] = 0x45; // version 4, IHL 5
+
+    let out = node.guest_tx(&truncated, &port_meta());
+    assert_eq!(
+        out.action,
+        Action::Drop,
+        "an unkeyable (truncated) guest frame must be dropped, never passed to the host stack"
+    );
+}
+
 #[test]
 fn guest_tx_v4_emits_tunnel_encap_and_leaves_inner_bytes_unchanged() {
     let mut node = encap_node();

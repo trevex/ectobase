@@ -44,6 +44,7 @@ pub struct MemMaps {
     /// IPv6 sibling of `dsr` (`DSR6` map).
     pub dsr6: HashMap<CtKey6, DsrLbIP>,
     pub lb: HashMap<LbKey, LbValue>,
+    pub lb6: HashMap<flowplane_common::LbKey6, LbValue>,
     pub maglev: HashMap<MaglevKey, LbBackend>,
     pub nat: HashMap<NatKey, NatValue>,
     /// Registered NAT IPs (`NAT_IPS` map), keyed `(vni, ipv4)`. The ingress return path uses this to
@@ -180,6 +181,9 @@ impl Maps for MemMaps {
     }
     fn lb_get(&self, key: &LbKey) -> Option<LbValue> {
         self.lb.get(key).copied()
+    }
+    fn lb6_get(&self, key: &flowplane_common::LbKey6) -> Option<LbValue> {
+        self.lb6.get(key).copied()
     }
     fn maglev_get(&self, key: &MaglevKey) -> Option<LbBackend> {
         self.maglev.get(key).copied()

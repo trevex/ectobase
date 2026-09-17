@@ -10,8 +10,8 @@
 
 use etherparse::PacketBuilder;
 use flowplane_common::{
-    FwMeta, FwRule6, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey, PortMeta,
-    UnderlayValue, FW_ACTION_ACCEPT, FW_DIR_INGRESS, UNDERLAY_LOCAL_DELIVER,
+    FwMeta, FwRule6, IfaceValue, LbBackend, LbValue, Local, MaglevKey, PortMeta, UnderlayValue,
+    FW_ACTION_ACCEPT, FW_DIR_INGRESS, UNDERLAY_LOCAL_DELIVER,
 };
 use flowplane_core::conntrack::ct_key6;
 use flowplane_core::decap::GW_MAC;
@@ -253,16 +253,10 @@ fn eth_ipv6_tcp(src: [u8; 16], dst: [u8; 16], dport: u16) -> Vec<u8> {
 
 /// Install a v6 LB service `(VNI, OVERLAY_LB_IP6, 443, TCP)` -> Maglev table pointing at `backend`.
 fn install_lb6(node: &mut SimNode, backend: [u8; 16]) {
-    let last4 = [
-        OVERLAY_LB_IP6[12],
-        OVERLAY_LB_IP6[13],
-        OVERLAY_LB_IP6[14],
-        OVERLAY_LB_IP6[15],
-    ];
-    node.maps.lb.insert(
-        LbKey {
+    node.maps.lb6.insert(
+        flowplane_common::LbKey6 {
             vni: VNI,
-            ipv4: last4,
+            ipv6: OVERLAY_LB_IP6,
             port: 443,
             proto: 6,
             _pad: 0,

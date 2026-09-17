@@ -34,6 +34,8 @@ mod flow_label_test;
 #[cfg(test)]
 mod forward_principle_test;
 #[cfg(test)]
+mod frag_test;
+#[cfg(test)]
 mod guest_tx_v6_test;
 #[cfg(test)]
 mod icmp_error_relay_test;
@@ -49,6 +51,10 @@ mod meter_test;
 mod nat64_test;
 #[cfg(test)]
 mod nat6_test;
+#[cfg(test)]
+mod nat_icmp_error_test;
+#[cfg(test)]
+mod nat_icmp_error_v6_test;
 #[cfg(test)]
 mod nat_test;
 #[cfg(test)]

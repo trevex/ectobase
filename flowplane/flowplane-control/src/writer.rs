@@ -2,9 +2,9 @@
 //! used in tests) implement this; `ControlCore` programs maps only through it.
 use flowplane_common::{
     DhcpConfig, FloatingIPKey, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6,
-    IfaceMetaKey, IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey, MeterState,
-    NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta,
-    RouteValue, UnderlayValue,
+    IfaceMetaKey, IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbKey6, LbValue, MaglevKey,
+    MeterState, NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry,
+    PortMeta, RouteValue, UnderlayValue,
 };
 
 /// The set of conntrack entries a NAT teardown must invalidate; the eBPF writer flushes the
@@ -66,6 +66,9 @@ pub trait MapWriter {
     fn neigh_nat6_count_set(&mut self, count: u32) -> anyhow::Result<()>;
     fn lb_upsert(&mut self, key: LbKey, val: LbValue) -> anyhow::Result<()>;
     fn lb_remove(&mut self, key: &LbKey) -> anyhow::Result<()>;
+    /// IPv6 LB service row (`LB6`), keyed on the full v6 address — see [`LbKey6`].
+    fn lb6_upsert(&mut self, key: LbKey6, val: LbValue) -> anyhow::Result<()>;
+    fn lb6_remove(&mut self, key: &LbKey6) -> anyhow::Result<()>;
     fn maglev_upsert(&mut self, key: MaglevKey, val: LbBackend) -> anyhow::Result<()>;
     fn maglev_remove(&mut self, key: &MaglevKey) -> anyhow::Result<()>;
     fn underlay_upsert(&mut self, key: [u8; 16], val: UnderlayValue) -> anyhow::Result<()>;

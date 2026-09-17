@@ -31,8 +31,12 @@ pub fn process_uplink_nat64_ingress<P: Pkt>(pkt: &mut P, in_: &UplinkNat64Ingres
     let inner_off = ETH_LEN;
     let orig_sport = in_.rev.xlate_port;
 
-    // 1. Reverse conntrack apply: restore the guest IPv4 dst + orig L4 port (+ checksums).
-    ct_apply(pkt, inner_off, in_.rev);
+    // 1. Reverse conntrack apply: restore the guest IPv4 dst + orig L4 port (+ checksums). A
+    //    required restore that cannot be applied must drop — step 2 would otherwise translate a
+    //    packet still addressed to the nat_ip into IPv6 and hand it to the guest.
+    if !ct_apply(pkt, inner_off, in_.rev) {
+        return Action::Drop;
+    }
 
     // 2. Parse (IHL/proto/TTL/addrs/checksum + reconstructed 64:ff9b:: IPv6 src).
     let xlate =

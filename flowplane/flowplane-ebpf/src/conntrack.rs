@@ -51,9 +51,9 @@ pub fn ct_key(data: usize, data_end: usize, ip_off: usize, vni: u32) -> Option<C
 /// bpf-to-bpf subprogram-call boundary. `data`/`data_end` are passed by the caller after any preceding
 /// helper calls so the verifier's pkt-range tracking is already re-established at the call site.
 #[inline(always)]
-pub fn ct_apply(data: usize, data_end: usize, ip_off: usize, e: &CtEntry) {
+pub fn ct_apply(data: usize, data_end: usize, ip_off: usize, e: &CtEntry) -> bool {
     let mut pkt = RawPkt::new(data, data_end);
-    flowplane_core::conntrack::ct_apply(&mut pkt, ip_off, e);
+    flowplane_core::conntrack::ct_apply(&mut pkt, ip_off, e)
 }
 
 /// Refresh last_seen (and TCP state for TCP) on a matched entry, writing it back.

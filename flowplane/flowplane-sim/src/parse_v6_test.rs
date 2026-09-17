@@ -61,3 +61,38 @@ fn icmp_type_code_v6_non_icmp_is_sentinel() {
     let pkt = VecPkt::from_bytes(&v6_tcp(1234, 80));
     assert_eq!(icmp_type_code_v6(&pkt, 0), (0xffff, 0xffff));
 }
+
+/// `hash_v6_at` exists only to keep two 16-byte addresses off the BPF stack; it must fold to
+/// EXACTLY the same value as `hash_v6`, because the v6 LB forward path and the ICMPv6-error relay
+/// path pick a Maglev slot with it and must agree on the backend for one flow. Any divergence
+/// would send an error to a different backend than the flow it belongs to.
+#[test]
+fn hash_v6_at_matches_hash_v6() {
+    use flowplane_core::parse::{hash_v6, hash_v6_at};
+
+    let src = [0x20u8, 1, 0xd, 0xb8, 0, 0, 0, 0, 9, 9, 9, 9, 10, 0, 100, 1];
+    let dst = [
+        0x20u8, 1, 0xd, 0xb8, 0xff, 0xff, 0, 0, 1, 2, 3, 4, 10, 0, 100, 1,
+    ];
+
+    // Lay the two addresses out at arbitrary but distinct offsets and read them back streamed.
+    let mut buf = vec![0u8; 8 + 16 + 16];
+    buf[8..24].copy_from_slice(&src);
+    buf[24..40].copy_from_slice(&dst);
+    let pkt = crate::VecPkt::from_bytes(&buf);
+
+    for &(sport, dport, proto) in &[(50000u16, 443u16, 6u8), (0, 0, 17), (1, 65535, 6)] {
+        assert_eq!(
+            hash_v6_at(&pkt, 8, 24, sport, dport, proto),
+            Some(hash_v6(&src, &dst, sport, dport, proto)),
+            "streamed and array folds must be byte-identical ({sport},{dport},{proto})"
+        );
+    }
+    // Swapping the offsets must equal swapping the arrays — this is how the ICMP-error relay
+    // reconstructs the forward-flow hash from the quoted (reversed) tuple.
+    assert_eq!(
+        hash_v6_at(&pkt, 24, 8, 443, 50000, 6),
+        Some(hash_v6(&dst, &src, 443, 50000, 6)),
+        "swapping the two offsets must swap the tuple"
+    );
+}

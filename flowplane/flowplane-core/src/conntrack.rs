@@ -180,8 +180,11 @@ pub fn invert_key6(k: &flowplane_common::CtKey6) -> flowplane_common::CtKey6 {
 ///   UDP), and the port change (when `xlate_port != 0`) into the L4 checksum, with the exact RFC-1624
 ///   incremental updates of the inline path. ICMP folds the id change into the ICMP checksum.
 ///
-/// Only handles standard 20-byte IPv4 headers (IHL == 5); packets with options were dropped at
-/// ingress, so `l4 = ip_off + 20` is a CONSTANT offset (no variable-offset provenance to fight).
+/// Only handles standard 20-byte IPv4 headers (IHL == 5), so `l4 = ip_off + 20` is a CONSTANT
+/// offset (no variable-offset provenance to fight). Returns whether the packet is in a deliverable
+/// state: `true` when the entry needed no translation or the translation was fully applied, `false`
+/// when a REQUIRED rewrite could not be applied (IP options, or a truncated window) — callers MUST
+/// drop on `false` rather than forward a half- or un-translated packet.
 ///
 /// eBPF-verifier seam: the inline path split reads (phase 1) from writes (phase 3) with raw pointers
 /// re-derived against a single dominating bound. Here we use the READ-MODIFY-WRITE window idiom (as
@@ -190,19 +193,22 @@ pub fn invert_key6(k: &flowplane_common::CtKey6) -> flowplane_common::CtKey6 {
 /// stack-local arrays; then ONE `write_array` per window re-checks the SAME range and stores it back.
 /// Byte-identical to the deleted inline rewrite (same fields, same checksum ops, same conditions).
 #[inline(always)]
-pub fn ct_apply<P: Pkt>(pkt: &mut P, ip_off: usize, e: &CtEntry) {
+pub fn ct_apply<P: Pkt>(pkt: &mut P, ip_off: usize, e: &CtEntry) -> bool {
     // DEFAULT (flag-less) entries carry no translation — never rewrite, or we'd null the address.
     if e.flags & (CT_REWRITE_SRC | CT_REWRITE_DST) == 0 {
-        return;
+        return true;
     }
     // Read the whole 20-byte IPv4 header window (faithful to the eBPF `ip_off + 20 > data_end`).
     let mut ip = match pkt.read_array::<20>(ip_off) {
         Some(h) => h,
-        None => return,
+        None => return false,
     };
-    // Only handle standard 20-byte headers (IHL == 5); options-carrying flows were dropped upstream.
+    // Only handle standard 20-byte headers (IHL == 5), so `l4 = ip_off + 20` is a CONSTANT offset.
+    // An options-carrying packet is NOT dropped upstream (`parse::l4_ports` honours IHL, so it keys,
+    // firewalls and conntracks fine) — it simply cannot be rewritten through this fixed window, so
+    // report failure and let the caller drop it. Silently returning forwarded it UNTRANSLATED.
     if ip[0] & 0x0f != 5 {
-        return;
+        return false;
     }
     let proto = ip[9];
     let rewrite_src = e.flags & CT_REWRITE_SRC != 0;
@@ -224,7 +230,7 @@ pub fn ct_apply<P: Pkt>(pkt: &mut P, ip_off: usize, e: &CtEntry) {
     ip[addr_rel..addr_rel + 4].copy_from_slice(&new_addr);
     // Store the IP header window back (single re-checked write).
     if !pkt.write_array(ip_off, &ip) {
-        return;
+        return false;
     }
 
     // L4 rewrite. `l4 = ip_off + 20` is a constant. Port offset: src at l4+0, dst at l4+2.
@@ -278,6 +284,7 @@ pub fn ct_apply<P: Pkt>(pkt: &mut P, ip_off: usize, e: &CtEntry) {
             pkt.write_array(l4, &h);
         }
     }
+    true
 }
 
 /// Fold a 16-byte address change into an L4 checksum by chaining four `csum_replace4` folds over

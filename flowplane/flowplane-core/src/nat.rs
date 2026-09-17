@@ -39,6 +39,12 @@ pub enum SnatOutcome {
     /// MUST drop: forwarding would leak the guest source IP and, worse, reusing an
     /// already-allocated port would mis-demux that other flow's return traffic.
     Exhausted,
+    /// External SNAT was required but the packet has no L4 port field to translate — a NON-FIRST
+    /// IPv4 fragment. The caller MUST drop, for the same leak reason as [`Self::Exhausted`]:
+    /// forwarding would put the guest's overlay source on the wire un-SNATed. It cannot be
+    /// translated either, since the reverse demux is `(nat_ip, port)`-keyed and the fragment has no
+    /// port; supporting it would need a fragment-tracking map carrying the first fragment's ports.
+    Untranslatable,
 }
 
 /// Egress network SNAT. If `is_external` and the guest `(vni, src)` has a NAT config, allocate a
@@ -77,9 +83,11 @@ pub fn snat_egress<P: Pkt, M: Maps>(
     if range == 0 {
         return SnatOutcome::Continue;
     }
+    // Past this point SNAT is REQUIRED (external route + a NAT binding with a live port range), so
+    // an unkeyable packet may not simply be forwarded — see `SnatOutcome::Untranslatable`.
     let (proto, sport, dport) = match l4_ports(pkt, ip_off) {
         Some(v) => v,
-        None => return SnatOutcome::Continue,
+        None => return SnatOutcome::Untranslatable,
     };
 
     // Forward conntrack: reuse the allocated port for an already-tracked flow.
@@ -221,6 +229,313 @@ pub fn snat_egress<P: Pkt, M: Maps>(
         }
     }
     SnatOutcome::Continue
+}
+
+/// ICMP error types that quote the packet that provoked them: Destination Unreachable (3, which
+/// carries the PMTUD Fragmentation-Needed case), Time Exceeded (11), Parameter Problem (12).
+const fn is_icmp_error_type(t: u8) -> bool {
+    t == 3 || t == 11 || t == 12
+}
+
+/// Identify the SNAT flow an inbound IPv4 ICMP **error** belongs to, from the packet it quotes.
+///
+/// Returns `(nat_ip, nat_port, quoted_proto)` — the public identity the guest's original packet
+/// left with — or `None` if this is not a relayable ICMP error.
+///
+/// The outer header of such an error is `router -> nat_ip` with proto ICMP, so it carries no port:
+/// the bytes the plain return path reads as a "port" are the ICMP unused/next-hop-MTU field. The
+/// port that identifies the flow is the SOURCE port of the quoted packet, which is the guest's
+/// original outbound packet as it appeared post-SNAT. Both the edge's `(nat_ip, port) -> owner`
+/// relay and the owner's `(vni, 0, nat_ip, 0, nat_port)` reverse conntrack key must be built from
+/// that instead. Callers MUST check the returned `nat_ip` against the outer destination before
+/// trusting it — an error quoting somebody else's packet is not evidence about this flow.
+///
+/// Only TCP/UDP quotes are relayable (a quoted ICMP has no port to demux on), and both the outer and
+/// quoted IPv4 headers must be option-free so every offset here is constant. RFC 792 guarantees the
+/// 8 ICMP + 20 quoted-IP + 8 quoted-L4 bytes this reads.
+///
+/// `#[inline(always)]`: reads the packet — out-of-lining a packet-reading subprogram loses the eBPF
+/// verifier's pkt-pointer range tracking across the call boundary (same rationale as
+/// [`crate::lb::lb_select_forward_icmp_error`]).
+#[inline(always)]
+pub fn nat_icmp_error_origin<P: Pkt>(pkt: &P, ip_off: usize) -> Option<([u8; 4], u16, u8)> {
+    if pkt.read_u8(ip_off)? & 0x0f != 5 || pkt.read_u8(ip_off + 9)? != IPPROTO_ICMP {
+        return None;
+    }
+    let icmp_off = ip_off + 20;
+    if !is_icmp_error_type(pkt.read_u8(icmp_off)?) {
+        return None;
+    }
+    // Quoted packet starts after the 8-byte ICMP error header.
+    let q = icmp_off + 8;
+    if pkt.read_u8(q)? & 0x0f != 5 {
+        return None;
+    }
+    let quoted_proto = pkt.read_u8(q + 9)?;
+    if quoted_proto != IPPROTO_TCP && quoted_proto != IPPROTO_UDP {
+        return None;
+    }
+    let quoted_src = pkt.read_array::<4>(q + 12)?;
+    let quoted_sport = u16::from_be_bytes(pkt.read_array::<2>(q + 20)?);
+    Some((quoted_src, quoted_sport, quoted_proto))
+}
+
+/// The port an inbound ICMP **error** should be relayed on, if it quotes a packet sourced from
+/// `expect_src` — i.e. from the very `nat_ip` the error is addressed to. `None` when this is not a
+/// relayable error or the quote is about some other flow.
+///
+/// Narrow variant of [`nat_icmp_error_origin`] for the WAN-edge relay, which needs only the port.
+/// `#[inline(always)]`: `wan_rx` cannot call an out-of-lined packet-reading subprogram at all — its
+/// glue passes raw `data`/`data_end`, and `pkt_end` may not cross a bpf-to-bpf boundary.
+#[inline(always)]
+pub fn nat_icmp_error_relay_port<P: Pkt>(
+    pkt: &P,
+    ip_off: usize,
+    expect_src: &[u8; 4],
+) -> Option<u16> {
+    let (quoted_src, quoted_sport, _) = nat_icmp_error_origin(pkt, ip_off)?;
+    (quoted_src == *expect_src).then_some(quoted_sport)
+}
+
+/// v6 sibling of [`nat_icmp_error_relay_port`]. Compares the quoted source a 4-byte word at a time
+/// against constant offsets rather than reading it into a `[u8; 16]`, so `wan_rx`'s frame never
+/// holds the address — it has no room for one (and cannot out-of-line this; see the v4 fn).
+#[inline(always)]
+pub fn nat_icmp_error_relay_port6<P: Pkt>(
+    pkt: &P,
+    ip_off: usize,
+    expect_src: &[u8; 16],
+) -> Option<u16> {
+    if pkt.read_u8(ip_off + 6)? != IPPROTO_ICMPV6 {
+        return None;
+    }
+    let icmp_off = ip_off + 40;
+    if !is_icmpv6_error_type(pkt.read_u8(icmp_off)?) {
+        return None;
+    }
+    let q = icmp_off + 8;
+    let quoted_next_hdr = pkt.read_u8(q + 6)?;
+    if quoted_next_hdr != IPPROTO_TCP && quoted_next_hdr != IPPROTO_UDP {
+        return None;
+    }
+    // Unrolled word compare: four constant-offset 4-byte reads, never a 16-byte local.
+    let mut i = 0usize;
+    while i < 16 {
+        let w = pkt.read_array::<4>(q + 8 + i)?;
+        if w[0] != expect_src[i]
+            || w[1] != expect_src[i + 1]
+            || w[2] != expect_src[i + 2]
+            || w[3] != expect_src[i + 3]
+        {
+            return None;
+        }
+        i += 4;
+    }
+    Some(u16::from_be_bytes(pkt.read_array::<2>(q + 40)?))
+}
+
+/// Reverse-translate an inbound IPv4 ICMP **error** for a SNATed flow, in place, so the guest that
+/// owns the flow can act on it (RFC 5508 §3.2). Returns false (caller drops) if the packet is not
+/// shaped as [`nat_icmp_error_origin`] requires.
+///
+/// Two copies of the public address have to change, not one:
+///   - the OUTER destination (`nat_ip` -> the guest's overlay IP), or the frame cannot be delivered;
+///   - the QUOTED source and source port (`nat_ip:nat_port` -> the guest's real address:port),
+///     because the guest's stack matches an ICMP error to a socket by the quoted 4-tuple. Leaving
+///     the quoted copy public makes the guest discard the error, which is the PMTUD black hole.
+///
+/// Checksums, all folded incrementally: the outer IPv4 header's own; the quoted IPv4 header's own;
+/// and the ICMP checksum, which covers the entire quoted packet — so it absorbs the quoted address
+/// delta, the quoted port delta, AND the delta of the quoted header checksum that itself just
+/// changed. A quoted UDP checksum is updated too (it sits inside the guaranteed 8 quoted L4 bytes
+/// and covers the src address via its pseudo-header); a quoted TCP checksum lives at quoted-L4 +16,
+/// beyond the guaranteed quote, and is left alone — receivers do not verify a quoted checksum.
+///
+/// One 36-byte read-modify-write window over `[ICMP(8)][quoted IP(20)][quoted L4(8)]` keeps every
+/// access at a constant offset off a single proven bound, the same idiom as [`snat_egress`].
+#[inline(always)]
+pub fn nat_icmp_error_return_rewrite<P: Pkt>(pkt: &mut P, ip_off: usize, e: &CtEntry) -> bool {
+    let (_, _, quoted_proto) = match nat_icmp_error_origin(&*pkt, ip_off) {
+        Some(v) => v,
+        None => return false,
+    };
+    let new_ip = e.xlate_ip;
+    let new_port = e.xlate_port;
+
+    // --- outer IPv4 header: dst nat_ip -> guest, folded into its own checksum.
+    let mut outer = match pkt.read_array::<20>(ip_off) {
+        Some(h) => h,
+        None => return false,
+    };
+    let old_dst: [u8; 4] = [outer[16], outer[17], outer[18], outer[19]];
+    let outer_c = u16::from_be_bytes([outer[10], outer[11]]);
+    outer[10..12].copy_from_slice(&csum_replace4(outer_c, &old_dst, &new_ip).to_be_bytes());
+    outer[16..20].copy_from_slice(&new_ip);
+    if !pkt.write_array(ip_off, &outer) {
+        return false;
+    }
+
+    // --- ICMP header + quoted packet, as one window. Offsets within it:
+    //     [0..8] ICMP error header (checksum @ 2), [8..28] quoted IPv4 (checksum @ 18, src @ 20),
+    //     [28..36] quoted L4 (sport @ 28, UDP checksum @ 34).
+    let icmp_off = ip_off + 20;
+    let mut w = match pkt.read_array::<36>(icmp_off) {
+        Some(h) => h,
+        None => return false,
+    };
+    let old_src: [u8; 4] = [w[20], w[21], w[22], w[23]];
+    let old_sport = u16::from_be_bytes([w[28], w[29]]);
+    let mut icmp_c = u16::from_be_bytes([w[2], w[3]]);
+
+    // The quoted IPv4 header's own checksum, and that change folded into the ICMP checksum since
+    // those two bytes are themselves part of the ICMP-covered region.
+    let q_old_c = u16::from_be_bytes([w[18], w[19]]);
+    let q_new_c = csum_replace4(q_old_c, &old_src, &new_ip);
+    icmp_c = csum_replace2(icmp_c, q_old_c, q_new_c);
+    // The quoted address and port changes themselves.
+    icmp_c = csum_replace4(icmp_c, &old_src, &new_ip);
+    icmp_c = csum_replace2(icmp_c, old_sport, new_port);
+    // A quoted UDP checksum covers the quoted src (pseudo-header) and sport; zero means "not
+    // computed" and must stay zero.
+    if quoted_proto == IPPROTO_UDP {
+        let u_old = u16::from_be_bytes([w[34], w[35]]);
+        if u_old != 0 {
+            let u_new = csum_replace2(csum_replace4(u_old, &old_src, &new_ip), old_sport, new_port);
+            icmp_c = csum_replace2(icmp_c, u_old, u_new);
+            w[34..36].copy_from_slice(&u_new.to_be_bytes());
+        }
+    }
+
+    w[2..4].copy_from_slice(&icmp_c.to_be_bytes());
+    w[18..20].copy_from_slice(&q_new_c.to_be_bytes());
+    w[20..24].copy_from_slice(&new_ip);
+    w[28..30].copy_from_slice(&new_port.to_be_bytes());
+    pkt.write_array(icmp_off, &w)
+}
+
+/// ICMPv6 error types that quote the packet that provoked them: Destination Unreachable (1),
+/// Packet Too Big (2, the PMTUD case), Time Exceeded (3), Parameter Problem (4).
+const fn is_icmpv6_error_type(t: u8) -> bool {
+    t == 1 || t == 2 || t == 3 || t == 4
+}
+
+/// Identify the NAT66 flow an inbound ICMPv6 **error** belongs to, from the packet it quotes.
+/// v6 sibling of [`nat_icmp_error_origin`] — see that for why the outer header cannot supply the
+/// port (here `l4_ports_v6`' ICMPv6 arm reads what is really the Packet-Too-Big MTU as an "id").
+/// Returns `(nat_ip6, nat_port, quoted_next_hdr)`; callers MUST check the returned address against
+/// the outer destination before trusting it.
+///
+/// No IPv6 extension headers are assumed on either the outer or the quoted header, matching the
+/// rest of the v6 datapath, so every offset here is constant.
+#[inline(always)]
+pub fn nat_icmp_error_origin6<P: Pkt>(pkt: &P, ip_off: usize) -> Option<([u8; 16], u16, u8)> {
+    if pkt.read_u8(ip_off + 6)? != IPPROTO_ICMPV6 {
+        return None;
+    }
+    let icmp_off = ip_off + 40;
+    if !is_icmpv6_error_type(pkt.read_u8(icmp_off)?) {
+        return None;
+    }
+    // Quoted packet starts after the 8-byte ICMPv6 error header.
+    let q = icmp_off + 8;
+    let quoted_next_hdr = pkt.read_u8(q + 6)?;
+    if quoted_next_hdr != IPPROTO_TCP && quoted_next_hdr != IPPROTO_UDP {
+        return None;
+    }
+    let quoted_src = pkt.read_array::<16>(q + 8)?;
+    let quoted_sport = u16::from_be_bytes(pkt.read_array::<2>(q + 40)?);
+    Some((quoted_src, quoted_sport, quoted_next_hdr))
+}
+
+/// Reverse-translate an inbound ICMPv6 **error** for a NAT66 flow, in place, so the guest that owns
+/// the flow can act on it. v6 sibling of [`nat_icmp_error_return_rewrite`]: the outer destination
+/// AND the quoted source/source-port all have to change, for the same reasons.
+///
+/// The checksum work differs from v4 in both directions. An IPv6 header has no checksum of its own,
+/// so neither the outer nor the quoted header needs one fixed — but the ICMPv6 checksum covers a
+/// PSEUDO-HEADER that includes the outer source and destination, so rewriting the outer dst changes
+/// it, where the v4 ICMP checksum was indifferent to the addresses. Net: fold the outer-dst delta,
+/// the quoted-src delta, and the quoted-port delta, plus a quoted UDP checksum if one is present.
+///
+/// `#[inline(never)]`: the v6 uplink path is the one under real pressure against the verifier's
+/// 512-byte combined-stack limit (see [`snat_egress6`] and `nat_return_rewrite6`). Packet access
+/// goes through the `Pkt` re-derive-bounds seam, so an out-of-lined frame costs no pkt-pointer
+/// provenance.
+///
+/// Deliberately does NOT use the one-big-window read-modify-write idiom the v4 sibling and
+/// [`snat_egress6`] use. A 56-byte window covering `[ICMPv6][quoted IPv6][quoted L4]`, live at the
+/// same time as the two 16-byte addresses the checksum folds need, put `xdp_uplink_v6` 64 bytes
+/// over the limit (`combined stack size of 3 calls is 576`). Instead each field is read, folded and
+/// written in turn so only ONE old address is live at a time; the extra bounds checks are cheap
+/// next to the frame budget. Consequently the ORDER below is load-bearing: the quoted UDP checksum
+/// is folded first, while the quoted address and port it depends on are still live.
+#[inline(never)]
+pub fn nat_icmp_error_return_rewrite6<P: Pkt>(pkt: &mut P, ip_off: usize, e: &CtEntry6) -> bool {
+    let (_, _, quoted_next_hdr) = match nat_icmp_error_origin6(&*pkt, ip_off) {
+        Some(v) => v,
+        None => return false,
+    };
+    let new_port = e.xlate_port;
+    let icmp_off = ip_off + 40;
+    let q = icmp_off + 8;
+
+    let mut icmp_c = match pkt.read_u16_be(icmp_off + 2) {
+        Some(c) => c,
+        None => return false,
+    };
+    let old_sport = match pkt.read_u16_be(q + 40) {
+        Some(p) => p,
+        None => return false,
+    };
+
+    {
+        // Quoted source: fold it (and anything that depends on it) before it goes out of scope.
+        let old_src = match pkt.read_array::<16>(q + 8) {
+            Some(a) => a,
+            None => return false,
+        };
+        // A quoted UDP checksum covers the quoted src (via its pseudo-header) and sport; zero
+        // means "not computed" and must stay zero. Folded FIRST — it needs both old values.
+        if quoted_next_hdr == IPPROTO_UDP {
+            if let Some(u_old) = pkt.read_u16_be(q + 46) {
+                if u_old != 0 {
+                    let u_new = csum_replace2(
+                        csum_replace16(u_old, &old_src, &e.xlate_ip6),
+                        old_sport,
+                        new_port,
+                    );
+                    icmp_c = csum_replace2(icmp_c, u_old, u_new);
+                    if !pkt.write_array(q + 46, &u_new.to_be_bytes()) {
+                        return false;
+                    }
+                }
+            }
+        }
+        icmp_c = csum_replace16(icmp_c, &old_src, &e.xlate_ip6);
+        if !pkt.write_array(q + 8, &e.xlate_ip6) {
+            return false;
+        }
+    }
+
+    icmp_c = csum_replace2(icmp_c, old_sport, new_port);
+    if !pkt.write_array(q + 40, &new_port.to_be_bytes()) {
+        return false;
+    }
+
+    {
+        // The outer dst is not part of the ICMPv6 message, but it IS part of the pseudo-header the
+        // ICMPv6 checksum covers — so its delta has to be folded too (no v4 analogue).
+        let old_dst = match pkt.read_array::<16>(ip_off + 24) {
+            Some(a) => a,
+            None => return false,
+        };
+        icmp_c = csum_replace16(icmp_c, &old_dst, &e.xlate_ip6);
+        if !pkt.write_array(ip_off + 24, &e.xlate_ip6) {
+            return false;
+        }
+    }
+
+    pkt.write_array(icmp_off + 2, &icmp_c.to_be_bytes())
 }
 
 /// Reverse-DNAT a NAT66 return packet in place: inner DST IPv6 (the public `nat_ip6`) -> the reverse

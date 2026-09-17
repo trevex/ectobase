@@ -2,9 +2,9 @@
 use crate::writer::{CtFlushScope, CtFlushScope6, MapWriter};
 use flowplane_common::{
     DhcpConfig, FloatingIPKey, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6,
-    IfaceMetaKey, IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbValue, MaglevKey, MeterState,
-    NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta,
-    RouteValue, UnderlayValue,
+    IfaceMetaKey, IfaceMetaVal, IfaceValue, LbBackend, LbKey, LbKey6, LbValue, MaglevKey,
+    MeterState, NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry,
+    PortMeta, RouteValue, UnderlayValue,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -22,6 +22,7 @@ pub struct MemMapWriter {
     pub neigh_nat6: HashMap<u32, NeighborNat6Entry>,
     pub neigh_nat6_count: u32,
     pub lb: HashMap<LbKey, LbValue>,
+    pub lb6: HashMap<LbKey6, LbValue>,
     pub maglev: HashMap<MaglevKey, LbBackend>,
     pub underlay: HashMap<[u8; 16], UnderlayValue>,
     pub fw_rules: HashMap<FwRuleKey, FwRule>,
@@ -132,6 +133,14 @@ impl MapWriter for MemMapWriter {
     }
     fn lb_remove(&mut self, k: &LbKey) -> anyhow::Result<()> {
         self.lb.remove(k);
+        Ok(())
+    }
+    fn lb6_upsert(&mut self, k: LbKey6, v: LbValue) -> anyhow::Result<()> {
+        self.lb6.insert(k, v);
+        Ok(())
+    }
+    fn lb6_remove(&mut self, k: &LbKey6) -> anyhow::Result<()> {
+        self.lb6.remove(k);
         Ok(())
     }
     fn maglev_upsert(&mut self, k: MaglevKey, v: LbBackend) -> anyhow::Result<()> {

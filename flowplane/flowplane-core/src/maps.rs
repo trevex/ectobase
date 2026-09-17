@@ -48,6 +48,8 @@ pub trait Maps {
         None
     }
     fn lb_get(&self, key: &LbKey) -> Option<LbValue>;
+    /// IPv6 LB service lookup (`LB6`), keyed on the FULL v6 address — see [`LbKey6`].
+    fn lb6_get(&self, key: &flowplane_common::LbKey6) -> Option<LbValue>;
     fn maglev_get(&self, key: &MaglevKey) -> Option<LbBackend>;
     /// Neighbor-NAT return-route lookup (`NEIGHBOR_NAT` table, linear-scanned): if `(vni, dst,
     /// dport)` matches a registered block, return the OWNING node's underlay /128. NEIGHBOR_NAT

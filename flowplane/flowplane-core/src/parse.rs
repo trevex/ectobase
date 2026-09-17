@@ -9,13 +9,25 @@ pub const IPPROTO_TCP: u8 = 6;
 pub const IPPROTO_UDP: u8 = 17;
 
 /// Read the L4 "ports" for a parsed IPv4 packet at `ip_off`. For TCP/UDP returns (proto,sport,dport)
-/// with ports in host order; for ICMP returns (proto,id,id). Returns None if out of bounds /
-/// unsupported. Faithful port of the eBPF `parse::l4_ports`.
+/// with ports in host order; for ICMP returns (proto,id,id). Returns None if out of bounds, for an
+/// unsupported L4, or for a NON-FIRST fragment (which has no L4 header to read). Callers that just
+/// need a flow key fall back to `(proto, 0, 0)` — see [`crate::conntrack::ct_key`] — so every
+/// fragment of one datagram keys alike; callers that must REWRITE an L4 field have to drop instead.
+/// Faithful port of the eBPF `parse::l4_ports`.
 #[inline(always)]
 pub fn l4_ports<P: Pkt>(pkt: &P, ip_off: usize) -> Option<(u8, u16, u16)> {
     // Faithful to the eBPF bound `data + ip_off + 20 > data_end`: the full 20-byte IPv4 header
     // must be present before we read IHL/proto.
     let hdr = pkt.read_array::<20>(ip_off)?;
+    // EVERY fragment of a datagram carries the original protocol number, but only the FIRST one
+    // carries the L4 header. Reading `ip_off + ihl` off the protocol byte alone therefore read
+    // PAYLOAD as ports on a non-first fragment, and callers inherited it: firewall matches on
+    // payload-derived ports, a distinct conntrack key per fragment, Maglev splitting a datagram
+    // across backends, `snat_egress` writing a port into the payload. Fragment offset (13 bits) is
+    // the low 5 bits of hdr[6] plus hdr[7]; nonzero means "not the first fragment".
+    if u16::from_be_bytes([hdr[6] & 0x1f, hdr[7]]) != 0 {
+        return None;
+    }
     let ihl = (hdr[0] & 0x0f) as usize * 4;
     let proto = hdr[9];
     let l4 = ip_off + ihl;
@@ -126,6 +138,35 @@ fn fold_addr_word<P: Pkt>(h: u32, pkt: &P, soff: usize, doff: usize) -> Option<u
     h = fnv_step(h, s[3]);
     h = fnv_step(h, d[3]);
     Some(h)
+}
+
+/// Streaming equivalent of [`hash_v6`] that reads both addresses straight from the packet at
+/// CONSTANT offsets, never holding a 16-byte address array on the stack. Byte-identical to
+/// `hash_v6` by construction — same interleaved `src[i], dst[i]` fold order via
+/// [`fold_addr_word`], then ports and proto (asserted in `parse_v6_test`).
+///
+/// This exists for the BPF stack budget, not for speed: the v6 uplink path already carries a
+/// 24-byte `LbKey6` plus the deeper resolve/decap frames, and materialising two 16-byte arrays
+/// just to hash them pushed `xdp_uplink_v6` over the verifier's 512-byte combined-call limit.
+/// Callers pass the SOURCE and DESTINATION address offsets, so the ICMP-error relay can hash the
+/// swapped embedded tuple by swapping the two arguments.
+#[inline(always)]
+pub fn hash_v6_at<P: Pkt>(
+    pkt: &P,
+    soff: usize,
+    doff: usize,
+    sport: u16,
+    dport: u16,
+    proto: u8,
+) -> Option<u32> {
+    let mut h = FNV_OFFSET;
+    h = fold_addr_word(h, pkt, soff, doff)?;
+    h = fold_addr_word(h, pkt, soff + 4, doff + 4)?;
+    h = fold_addr_word(h, pkt, soff + 8, doff + 8)?;
+    h = fold_addr_word(h, pkt, soff + 12, doff + 12)?;
+    h = fnv_u16(h, sport);
+    h = fnv_u16(h, dport);
+    Some(fnv_step(h, proto))
 }
 
 /// Streaming equivalent of `flow_label20(hash_v6(..))` for an inner IPv6 packet. `None` on OOB.

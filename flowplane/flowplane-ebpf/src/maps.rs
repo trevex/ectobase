@@ -5,7 +5,7 @@ use aya_ebpf::{
 use flowplane_common::{
     Config, CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, DsrLbIP, FloatingIPKey,
     FloatingIPKey6, FwMeta, FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey,
-    IfaceMetaVal, IfaceValue, InspectEntry, LbBackend, LbKey, LbValue, Local, MaglevKey,
+    IfaceMetaVal, IfaceValue, InspectEntry, LbBackend, LbKey, LbKey6, LbValue, Local, MaglevKey,
     MeterState, NatKey, NatKey6, NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry,
     PortMeta, RouteLpmData, RouteLpmData6, RouteValue, UnderlayValue,
 };
@@ -53,6 +53,12 @@ pub fn geneve_ifindex() -> u32 {
 pub static FLOATING_IPS: HashMap<FloatingIPKey, [u8; 4]> = HashMap::pinned(1024, 0);
 #[map]
 pub static LB: HashMap<LbKey, LbValue> = HashMap::pinned(1024, 0);
+/// IPv6 LB services, keyed on the FULL v6 address. Separate map rather than a widened [`LbKey`]:
+/// `LB` is pinned, so growing its key would break graceful-restart adoption, and every other
+/// family pair in the datapath is already split this way.
+#[map]
+pub static LB6: HashMap<LbKey6, LbValue> = HashMap::pinned(1024, 0);
+/// Shared by both families — an `LbValue.table_id` is unique across v4 and v6 services.
 #[map]
 pub static MAGLEV: HashMap<MaglevKey, LbBackend> = HashMap::pinned(65536, 0);
 #[map]

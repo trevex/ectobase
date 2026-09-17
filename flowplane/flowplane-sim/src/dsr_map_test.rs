@@ -241,16 +241,10 @@ fn eth_ipv4_tcp(src: [u8; 4], dst: [u8; 4], dport: u16) -> Vec<u8> {
 /// Install a v6 LB service `(VNI, OVERLAY_LB_IP6, 443, TCP)` -> Maglev table pointing at a LOCAL
 /// backend (`node_vtep == backend_underlay`).
 fn install_lb6(node: &mut SimNode, backend_underlay: [u8; 16]) {
-    let last4 = [
-        OVERLAY_LB_IP6[12],
-        OVERLAY_LB_IP6[13],
-        OVERLAY_LB_IP6[14],
-        OVERLAY_LB_IP6[15],
-    ];
-    node.maps.lb.insert(
-        LbKey {
+    node.maps.lb6.insert(
+        flowplane_common::LbKey6 {
             vni: VNI,
-            ipv4: last4,
+            ipv6: OVERLAY_LB_IP6,
             port: 443,
             proto: 6,
             _pad: 0,
