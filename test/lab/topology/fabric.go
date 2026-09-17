@@ -792,6 +792,35 @@ func cleanupHostRBD(ctx context.Context) {
 	}
 }
 
+// cleanupEdgeBPFPins removes the WAN edges' pinned datapath from the HOST bpffs.
+//
+// The edge flowplane sidecars bind /sys/fs/bpf from the host and pin into their own
+// `flowplane-edge<n>` namespace, so their maps and links outlive both the container and
+// `clab destroy` — which only removes containers. Nothing else sweeps them, so a pin dir survives
+// every down/up cycle indefinitely, and the next `serve --role edge` ADOPTS it. That is not a
+// hypothetical: an edge was found running on pin state from eight days and several fabrics earlier,
+// which is a genuinely confusing thing to debug (the datapath looks correctly programmed and simply
+// does not forward). It also leaks kernel memory — the CONNTRACK map alone preallocates ~100-150 MB.
+//
+// Deliberately narrow: only `flowplane-edge*`, never the plain `/sys/fs/bpf/flowplane` dir, which on
+// a developer's host belongs to a host-run `flowplane serve` this lab did not start and must not
+// destroy. hack/bpf-cleanup.sh remains the bigger hammer for that case.
+func cleanupEdgeBPFPins(ctx context.Context) {
+	dirs, err := filepath.Glob("/sys/fs/bpf/flowplane-edge*")
+	if err != nil || len(dirs) == 0 {
+		return
+	}
+	for _, d := range dirs {
+		// Root-owned bpffs: go through sudo the way every other privileged step here does, so this
+		// works whether or not the CLI itself is already running as root.
+		if err := exec.Sudo(ctx, "rm", "-rf", d); err != nil {
+			slog.Warn("remove edge bpf pin dir", "dir", d, "err", err)
+			continue
+		}
+		slog.Info("removed edge bpf pin dir", "dir", d)
+	}
+}
+
 // Down destroys the containerlab topology and removes build/<name>/ while
 // preserving the registry cache for a warm re-up. With purge, it removes the whole
 // build tree including the cache.
@@ -811,6 +840,8 @@ func Down(ctx context.Context, cfg *config.Config, purge bool) error {
 	// which hangs system shutdown ("cannot connect to ceph") and orphans the
 	// rbd-backed filesystem. Force-release them now that the holders (nodes) are gone.
 	cleanupHostRBD(ctx)
+	// After clab destroy: the edge sidecars are gone, so nothing holds their pinned maps/links open.
+	cleanupEdgeBPFPins(ctx)
 
 	if purge {
 		slog.Info("purging build tree (including registry cache)", "build", p.build)

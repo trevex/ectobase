@@ -16,6 +16,13 @@
 #   debugging session this reached ~30 GB and OOM-crashed the box. `clab destroy`
 #   removes the kind/clab CONTAINERS but never touches host-side pins.
 #
+#   `lab down` now sweeps the per-edge `flowplane-edge<n>` dirs itself (see
+#   topology.cleanupEdgeBPFPins), so the routine lab cycle no longer leaks them.
+#   This script stays the bigger hammer: it also reaps the plain
+#   /sys/fs/bpf/flowplane dir and the flowplane-eph-<pid> dirs left by host-run
+#   scenarios, which `lab down` deliberately will not touch (they may belong to a
+#   `flowplane serve` the lab did not start).
+#
 # WHAT IT DOES (idempotent; a no-op when nothing is leaked)
 #   1. kills stray host flowplane processes (serve/bringup/tc-bringup)
 #   2. rm -rf host /sys/fs/bpf/flowplane and /sys/fs/bpf/flowplane-eph-*

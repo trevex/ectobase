@@ -34,6 +34,8 @@ the process that created it, and two pin locations leak across restarts and host
 
 - `/sys/fs/bpf/flowplane` — the persistent `serve` dir (maps + `links/`).
 - `/sys/fs/bpf/flowplane-eph-<pid>` — per-PID dirs for `bringup` / `tc-bringup` / debug.
+- `/sys/fs/bpf/flowplane-edge<n>` — the per-edge `serve --role edge` dirs. `lab down` now sweeps
+  these itself, so the routine lab cycle no longer leaks them.
 
 Every host-run scenario and every crash-restart leaves a full conntrack map behind. Over a debugging
 session this can reach tens of GB and OOM the box. `clab destroy` removes the containers but never
@@ -45,9 +47,17 @@ map refcount frees the kernel memory), and tries the same sweep inside every run
 container. Talos compute nodes are shell-less, though, so the `docker exec sh` sweep degrades
 gracefully there (a per-container skip message) — cleaning up inside a Talos node's own bpffs
 currently needs a host `nsenter` into its net+mount namespace, which isn't wired into the script
-yet. Run `make bpf-clean` whenever a debugging session (host-run netns scenarios, crash restarts,
-or repeated `make lab-up`/`lab-down` cycles) accumulates memory — a `clab destroy` removes the
-containers but never touches the host-side pins.
+yet. Run `make bpf-clean` whenever a debugging session (host-run netns scenarios or crash restarts)
+accumulates memory — a `clab destroy` removes the containers but never touches the host-side pins.
+
+!!! warning "A surviving pin dir is ADOPTED, not just leaked memory"
+    The next `flowplane serve` on the same `--pin-dir` recovers that state deliberately (it is what
+    makes graceful restart zero-gap). Across a `lab down`/`up` it is a trap instead: the new fabric
+    inherits the old one's maps. This was hit for real — an edge ran on pin state from eight days
+    and several fabrics earlier, and presented as a datapath that looked correctly programmed and
+    simply refused to forward. `lab down` sweeps `flowplane-edge*` for exactly this reason; it
+    deliberately leaves `/sys/fs/bpf/flowplane` alone, since on a dev host that may belong to a
+    `flowplane serve` the lab did not start.
 
 ## Co-located edge sidecars need separate bpffs pin directories
 
