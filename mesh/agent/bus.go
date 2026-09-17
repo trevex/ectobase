@@ -159,6 +159,13 @@ type Bus struct {
 	// It must equal the marker's count for the prune to be safe — see EndOfGlobal in the proto.
 	globalRecords uint32
 
+	// --- convergence, the signal a deployment gates an anycast advertisement on (see Converged).
+	// Read from an HTTP readiness handler, so these ARE guarded by mu, unlike the snapshot sets.
+	subscribedVNIs map[uint32]bool // what we asked for on this session
+	eorSeen        map[uint32]bool // which of those have replayed fully (EndOfRIB)
+	globalDone     bool            // the global snapshot has replayed fully (EndOfGlobal)
+	converged      bool            // LATCHING: see Converged
+
 	// Peering import bookkeeping (VPC peering). peerImports is set each reconcile (localVNI -> imports).
 	// origin tags every installed (vni, prefix) as "own" (locally-originated / direct route) or "peer"
 	// (imported from a peer VNI) so LOCAL routes always take precedence over imports and an own-route
@@ -206,6 +213,72 @@ func (b *Bus) resetGlobalSnapshot() {
 	b.seenNat = map[natEntry]bool{}
 	b.seenPublic = map[publicEntry]bool{}
 	b.globalRecords = 0
+	b.mu.Lock()
+	// Replay progress is per-session; `converged` deliberately is not (see Converged).
+	b.globalDone = false
+	b.eorSeen = map[uint32]bool{}
+	b.mu.Unlock()
+}
+
+// Converged reports whether this session has received the FULL picture at least once: the global
+// snapshot (EndOfGlobal — the NAT blocks and LB addresses/backends an edge actually forwards on) plus an
+// EndOfRIB for every VNI it subscribed to.
+//
+// This is what an anycast advertisement must be gated on. An edge attracts its share of the ECMP
+// the instant its prefix is advertised, and until the snapshot has landed it has no Maglev table
+// for the LB addresses it is dispatching — a blackhole on every cold start.
+//
+// It LATCHES. Once true it stays true: a later reconnect (or a newly subscribed VNI) leaves the
+// already-programmed tables in place, so dropping the advertisement would reshuffle every WAN flow
+// across the remaining edges to fix nothing. The failure being prevented is the cold start, not
+// steady-state churn. Un-converging on prolonged disconnection is a separate policy decision (it
+// needs a staleness threshold) and is deliberately not made here.
+func (b *Bus) Converged() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.converged
+}
+
+// noteSubscribed records the VNI set this session asked the reflector for. Convergence is measured
+// against it, so it is the caller's (reconcileStep's) job to keep it current.
+func (b *Bus) noteSubscribed(vnis []uint32) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.subscribedVNIs = make(map[uint32]bool, len(vnis))
+	for _, v := range vnis {
+		b.subscribedVNIs[v] = true
+	}
+	b.recomputeConvergedLocked()
+}
+
+// noteEndOfRIB / noteEndOfGlobal record replay progress and re-evaluate the latch.
+func (b *Bus) noteEndOfRIB(vni uint32) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.eorSeen[vni] = true
+	b.recomputeConvergedLocked()
+}
+
+func (b *Bus) noteEndOfGlobal() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.globalDone = true
+	b.recomputeConvergedLocked()
+}
+
+// recomputeConvergedLocked sets the latch once the global snapshot and every subscribed VNI have
+// replayed. Never clears it — see Converged. Caller holds b.mu.
+func (b *Bus) recomputeConvergedLocked() {
+	if b.converged || !b.globalDone {
+		return
+	}
+	for v := range b.subscribedVNIs {
+		if !b.eorSeen[v] {
+			return
+		}
+	}
+	b.converged = true
+	log.Printf("route-bus converged (global snapshot + %d subscribed VNI(s)); safe to advertise", len(b.subscribedVNIs))
 }
 
 // pruneGlobal removes learned global state that was NOT replayed in this session's snapshot: a NAT
@@ -250,6 +323,8 @@ func NewBus(nodeID, underlay string, dp Dataplane, isEdge bool) *Bus {
 		installedNat:   map[natEntry]bool{},
 		seenNat:        map[natEntry]bool{},
 		seenPublic:     map[publicEntry]bool{},
+		subscribedVNIs: map[uint32]bool{},
+		eorSeen:        map[uint32]bool{},
 		installed:      map[uint32]map[string]bool{},
 		seen:           map[uint32]map[string]bool{},
 		peerImports:    map[uint32][]PeerImport{},
@@ -347,6 +422,7 @@ func (b *Bus) reconcileStep(ctx context.Context, stream rbv1.RouteBus_SessionCli
 	b.setPeerImportsLocked(desired.PeeringImports)
 	b.mu.Unlock()
 	b.syncEgressImports(ctx, prevEgress, desired.EgressVNIs)
+	b.noteSubscribed(desired.Subs)
 	d := diffDesired(*applied, desired)
 	if d.empty() {
 		return nil
@@ -430,9 +506,11 @@ func (b *Bus) handleServerMsg(ctx context.Context, msg *rbv1.ServerMsg) {
 	}
 	if eor := msg.GetEndOfRib(); eor != nil {
 		b.pruneVNI(ctx, eor.GetVni())
+		b.noteEndOfRIB(eor.GetVni())
 	}
 	if eog := msg.GetEndOfGlobal(); eog != nil {
 		b.pruneGlobal(ctx, eog.GetRecordCount())
+		b.noteEndOfGlobal()
 	}
 	// KeepAlive: no-op.
 }

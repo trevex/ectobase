@@ -5,10 +5,11 @@
     internet→LB address ingress path **from intent alone**: applying a `LoadBalancer` programs both edges
     with no hand-driven gRPC, and a WAN client reaches the LB address on a real Pod backend
     (`TestLbFromIntentReachesTheWan`). On real WAN hardware the edge role (anycast underlay,
-    BGP announcement) is deployment-gated. Not built here: **convergence gating** — an edge
-    attracting its share of the anycast ECMP before it has programmed its LB addresses will blackhole. The
-    lever is aggregate-level readiness (withhold the prefix advertisement until the bus session has
-    converged) and the protocol already carries the signal, `EndOfRIB`.
+    BGP announcement) is deployment-gated. **Convergence gating is half-built**: the readiness
+    signal now exists and is exposed (see [Convergence gating](#convergence-gating) below), but
+    nothing in the lab consumes it yet — the lab advertises the public prefixes from static VyOS
+    `network` statements, so an edge there still attracts ECMP before it has converged. Wiring a
+    real deployment's advertisement to `/readyz` is what closes it.
 
 The WAN edge bridges the tenant overlay to the internet. It gives overlay endpoints north-south
 connectivity — egress (VM → internet, SNAT), ingress (internet → service, L4 load-balanced), and
@@ -202,6 +203,31 @@ Maglev-selected to a backend and encapped to that backend's underlay. The reply 
 backend node reverse-SNATs its source to the LB address so replies bypass the edge entirely. Because
 Maglev backend selection is a pure function of the LB address + 5-tuple + the distributed backend set, any
 edge picks the same backend, and the edge holds no ingress return state.
+
+## Convergence gating
+
+Drain-safety cuts both ways: because any edge can serve any flow, ECMP will hand an edge traffic
+the instant its prefix is advertised. Before the route bus has replayed the LB addresses and their
+backends, that edge has **no Maglev table for the addresses it is dispatching** — so a cold start
+blackholes its share of inbound traffic until the snapshot lands.
+
+The gate is the agent's route-bus convergence. An agent is converged once, in a single session, it
+has received both:
+
+- `EndOfGlobal` — the global snapshot, carrying every NAT block and every LB address with its
+  backends. This is the state an edge actually forwards on.
+- `EndOfRIB` for **every** VNI it subscribed to. A bare edge subscribes to none, so the global
+  snapshot alone converges it.
+
+Run the agent with `--health-addr :8080` and it serves `/readyz`, which is `200` only once
+converged (`503` before). Gate the advertisement on it — a Kubernetes `readinessProbe` with the
+BGP speaker or Service keying off pod readiness.
+
+Readiness **latches**: once converged it stays converged for the process's life. A reflector blip
+does not invalidate tables that are already programmed, so dropping the advertisement would
+reshuffle every live WAN flow to fix nothing. The failure being prevented is the cold start, not
+steady-state churn. Withdrawing after a *prolonged* disconnection is a different policy — it needs
+a staleness threshold, and is deliberately not decided here.
 
 ## Why it is drain-safe
 

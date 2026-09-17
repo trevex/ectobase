@@ -129,6 +129,7 @@ topology:
         --reflector {{ .ReflectorAddress }}
         --dataplane unix://{{ .EdgeAgentSocketDir }}/dataplane.sock
         --routebus-intermediate {{ .EdgeAgentPKIDir }}
+        --health-addr :8080
     mesh-agent-edge2:
       kind: linux
       image: {{ .Image "mesh" }}
@@ -142,6 +143,7 @@ topology:
         --reflector {{ .ReflectorAddress }}
         --dataplane unix://{{ .EdgeAgentSocketDir }}/dataplane.sock
         --routebus-intermediate {{ .EdgeAgentPKIDir }}
+        --health-addr :8080
 
     nat64-1:
       kind: linux
