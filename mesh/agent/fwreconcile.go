@@ -71,7 +71,16 @@ func (r *Reconciler) ReconcileFirewall(ctx context.Context) error {
 
 // compiledToFw lowers a CompiledFwRule to the dataplane FwRule. k8s NetworkPolicy-style semantics: an
 // INGRESS rule's peer CIDR is the SOURCE (who may reach us) and an EGRESS rule's is the DESTINATION;
-// the port is always the destination port. (An allow-all `0.0.0.0/0` is symmetric either way.)
+// the port is always the destination port.
+//
+// The UNSPECIFIED side is left EMPTY, which the dataplane reads as an untyped "any" that adopts
+// whichever family the specified side has (flowplane's handlers.rs). Filling it with a literal
+// "0.0.0.0/0" instead — as this did — makes every v6 rule mixed-family, and the dataplane rejects a
+// mixed-family rule outright. That was not a partial failure: ReplaceInterfaceFirewall swaps an
+// interface's WHOLE rule set atomically, so one rejected rule discarded ALL of them and left the
+// interface deny-by-default, silently black-holing its traffic. Every unpolicied NIC hit it, because
+// the compiler materializes k8s default-allow as a DUAL-family pair (0.0.0.0/0 and ::/0) per
+// ungoverned direction precisely so v6 guests are not dropped.
 func compiledToFw(cr compiledv1.CompiledFwRule, egress bool) FwRule {
 	fw := FwRule{
 		Proto:      protoNum(cr.Proto),
@@ -81,9 +90,9 @@ func compiledToFw(cr compiledv1.CompiledFwRule, egress bool) FwRule {
 		Egress:     egress,
 	}
 	if egress {
-		fw.SrcCIDR, fw.DstCIDR = "0.0.0.0/0", cr.CIDR
+		fw.DstCIDR = cr.CIDR
 	} else {
-		fw.SrcCIDR, fw.DstCIDR = cr.CIDR, "0.0.0.0/0"
+		fw.SrcCIDR = cr.CIDR
 	}
 	return fw
 }

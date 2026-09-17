@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
@@ -193,3 +194,41 @@ func TestReconcileFirewall_OverlappingVPCIPs(t *testing.T) {
 		t.Fatalf("VNI-200 NIC (same IP, different VPC) was incorrectly programmed; fwReplace=%+v", dp.fwReplace)
 	}
 }
+
+// A NIC no FirewallPolicy governs gets a DUAL-FAMILY allow-all from the compiler (0.0.0.0/0 AND
+// ::/0 per direction, so a v6 guest is not dropped by deny-by-default). Lowering those must not
+// pair a v6 CIDR with a v4 one: the dataplane rejects a mixed-family rule outright, and because
+// ReplaceInterfaceFirewall swaps an interface's WHOLE set atomically, one rejected rule discards
+// every rule — leaving the interface deny-by-default and silently black-holing all its traffic.
+//
+// The dataplane treats an EMPTY CIDR as an untyped wildcard that adopts whichever family the other
+// side specifies (flowplane/src/handlers.rs), so the unspecified side must be left empty.
+func TestCompiledToFwKeepsRulesSingleFamily(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		cidr          string
+		egress        bool
+		wantSrc, want string
+	}{
+		{name: "v4 ingress", cidr: "0.0.0.0/0", wantSrc: "0.0.0.0/0", want: ""},
+		{name: "v6 ingress", cidr: "::/0", wantSrc: "::/0", want: ""},
+		{name: "v4 egress", cidr: "0.0.0.0/0", egress: true, wantSrc: "", want: "0.0.0.0/0"},
+		{name: "v6 egress", cidr: "::/0", egress: true, wantSrc: "", want: "::/0"},
+		{name: "v6 peer ingress", cidr: "2001:db8::/32", wantSrc: "2001:db8::/32", want: ""},
+		{name: "v4 peer egress", cidr: "10.0.0.0/8", egress: true, wantSrc: "", want: "10.0.0.0/8"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := compiledToFw(compiledv1.CompiledFwRule{CIDR: tc.cidr, Action: "Allow"}, tc.egress)
+			if got.SrcCIDR != tc.wantSrc || got.DstCIDR != tc.want {
+				t.Fatalf("compiledToFw(%q, egress=%v) = src %q dst %q, want src %q dst %q",
+					tc.cidr, tc.egress, got.SrcCIDR, got.DstCIDR, tc.wantSrc, tc.want)
+			}
+			// The property that actually matters, stated directly.
+			if isV6CIDR(got.SrcCIDR) != isV6CIDR(got.DstCIDR) && got.SrcCIDR != "" && got.DstCIDR != "" {
+				t.Fatalf("mixed-family rule: src %q dst %q", got.SrcCIDR, got.DstCIDR)
+			}
+		})
+	}
+}
+
+func isV6CIDR(s string) bool { return strings.Contains(s, ":") }
