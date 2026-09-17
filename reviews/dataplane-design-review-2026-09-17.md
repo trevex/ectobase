@@ -40,10 +40,22 @@ All of §1 is fixed on `fix/p0-dataplane-batch`, each with a failing test writte
 (`make ci` green; 185 sim/core tests). Two findings did not survive scrutiny and are
 corrected in place below — 1.3's IPv6 half and part of 1.4.
 
-**Still needs a privileged run:** `make verifier` (root) has NOT been executed. The ICMP-error
-relay adds a 36-byte rewrite window to `process_uplink_rx` and a 56-byte one to the v6 uplink
-path, both already tight against the verifier's 512-byte combined-stack limit. Run it before
-shipping.
+`make verifier` (root) has been run and passes. It caught a real regression the non-privileged
+gate could not see: `xdp_uplink_v6` stopped loading ("combined stack size of 3 calls is 640"),
+bisected to the v6 LB key fix — a 24-byte `LbKey6` plus two 16-byte arrays for `hash_v6` where the
+old code hashed 4-byte truncations. Fixed by streaming the hash from the packet, restructuring the
+v6 ICMP rewrite to hold one address at a time, and out-of-lining the packet-free helpers. Both
+program groups now load in ~1s (was 12s at 984k of the 1M insn limit).
+
+**Two lessons worth carrying:**
+
+- `make verifier` belongs in the definition of done for any datapath change. `make ci` cannot
+  see stack or insn-limit regressions at all.
+- These programs sit close enough to the verifier's limits that the next feature on the v6 uplink
+  path probably needs a **tail call**, not more inline-attribute shaving. Note also that
+  out-of-lining is NOT uniformly safe: `wan_rx`'s glue passes raw `data`/`data_end`, so a
+  packet-reading callee there fails with "R3 pointer arithmetic on pkt_end prohibited". Packet-free
+  helpers out-line safely anywhere; packet-reading ones only off `process_uplink*`.
 
 ## 1. Correctness bugs (P0) — FIXED
 
