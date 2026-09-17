@@ -42,6 +42,16 @@ const guestGWMAC = "02:00:00:00:00:01"
 // datapath probes speak raw L2 over AF_PACKET) and it accepts multiple requested_ips.
 func attachGuest(t *testing.T, ctx context.Context, cfg *config.Config, node config.DerivedNode, id string, ips []string, mac string) string {
 	t.Helper()
+	return attachGuestInVNI(t, ctx, cfg, node, id, overlayVNI, ips, mac)
+}
+
+// attachGuestInVNI is attachGuest with an explicit VNI, for a test that brings its own VPC rather
+// than sharing the suite's overlayVNI. The VNI is load-bearing beyond the tunnel header: the agent
+// decides a CompiledNIC is LOCAL by matching (VNI, overlayIP) against the dataplane's attached
+// interfaces, so a guest attached in the wrong VNI is invisible to every reconciler — no routes, no
+// firewall, no LB membership — while looking perfectly healthy on the wire.
+func attachGuestInVNI(t *testing.T, ctx context.Context, cfg *config.Config, node config.DerivedNode, id string, vni int, ips []string, mac string) string {
+	t.Helper()
 	container := nodeContainer(cfg, node)
 	pod, err := flowplanePod(ctx, cfg, node.Cluster)
 	require.NoError(t, err)
@@ -61,7 +71,7 @@ func attachGuest(t *testing.T, ctx context.Context, cfg *config.Config, node con
 		quoted[i] = fmt.Sprintf("%q", ip)
 	}
 	req := fmt.Sprintf(`{"interface_id":%q,"netns_path":"/var/run/netns/%s","vni":%d,"mac":%q,"requested_ips":[%s]}`,
-		id, id, overlayVNI, mac, strings.Join(quoted, ","))
+		id, id, vni, mac, strings.Join(quoted, ","))
 	out, err := dataplaneGRPC(t, ctx, container, "AttachInterface", req)
 	require.NoError(t, err, "AttachInterface %s on %s: %s", id, node.Cluster, out)
 	underlay := firstUnderlay(out)

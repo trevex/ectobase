@@ -17,6 +17,8 @@
 //	  <cluster>.kubeconfig            collected once the control plane is bootstrapped
 //	  registry/config.yml             registry/config.yml.tmpl
 //	  registry-cache/                 persistent mirror cache (preserved on down)
+//	  edge/pki/{ca.crt,tls.crt,tls.key}  WAN-edge fleet route-bus CA (written by the deploy)
+//	  edge/edge{1,2}/run/             flowplane dataplane socket dir, shared with the edge agent
 package topology
 
 import (
@@ -48,6 +50,7 @@ type paths struct {
 	topo  string // build/<name>/<name>.clab.yml
 	vyos  string // build/<name>/vyos (edge{1,2}.set, sw{1,2}.set)
 	reg   string // build/<name>/registry
+	edge  string // build/<name>/edge (pki/ + edge{1,2}/run/)
 }
 
 func buildPaths(cfg *config.Config) paths {
@@ -57,6 +60,7 @@ func buildPaths(cfg *config.Config) paths {
 		topo:  filepath.Join(b, cfg.Name+".clab.yml"),
 		vyos:  filepath.Join(b, "vyos"),
 		reg:   filepath.Join(b, "registry"),
+		edge:  filepath.Join(b, "edge"),
 	}
 }
 
@@ -70,7 +74,15 @@ func Render(ctx context.Context, cfg *config.Config) error {
 	p := buildPaths(cfg)
 	v := fabric.Build(cfg)
 
-	for _, dir := range []string{p.build, p.vyos, p.reg} {
+	// The edge dirs are clab BIND SOURCES, so they must exist before `clab deploy`: pki/ holds the
+	// fleet route-bus CA the deploy writes later (empty at render time — the agent waits for it), and
+	// edge{1,2}/run/ is where each flowplane sidecar and its agent meet over the dataplane socket.
+	edgeDirs := []string{
+		filepath.Join(p.edge, "pki"),
+		filepath.Join(p.edge, "edge1", "run"),
+		filepath.Join(p.edge, "edge2", "run"),
+	}
+	for _, dir := range append([]string{p.build, p.vyos, p.reg}, edgeDirs...) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %w", dir, err)
 		}
@@ -591,6 +603,11 @@ func deployEctobase(ctx context.Context, cfg *config.Config) error {
 		// Agents dial the reflector at the dispatch identity, so that bare IP is the reflector
 		// server cert's SAN.
 		ReflectorIP: dc.Nodes[0].IdentityAddr,
+		// The WAN edge agents' fleet CA. Its directory is a clab bind source created at render
+		// time; the agents have been waiting on it since `lab up` and converge once it lands.
+		// LoopAggr is the name constraint: edge underlays live there, outside every pool's /48.
+		EdgePKIDir:        filepath.Join(p.edge, "pki"),
+		EdgeUnderlayCIDRs: []string{fabric.LoopAggr},
 	}
 	return deploy.Ectobase(ctx, spec)
 }

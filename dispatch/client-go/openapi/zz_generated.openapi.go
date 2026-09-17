@@ -4479,12 +4479,12 @@ func schema_ectobase_api_platform_v1alpha1_RouteBusIdentitySpec(ref common.Refer
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "RouteBusIdentitySpec is a pool's request for a route-bus intermediate CA. The pool (its broker) generates the intermediate keypair LOCALLY and submits only the CSR — the private key is never transmitted. The dispatch signer returns a name-constrained intermediate that can mint per-node agent leaves scoped to this pool.",
+				Description: "RouteBusIdentitySpec is a request for a route-bus intermediate CA. The requester generates the intermediate keypair LOCALLY and submits only the CSR — the private key is never transmitted. The dispatch signer returns a name-constrained intermediate that can mint agent leaves scoped to it.\n\nUsually the requester is a ClusterPool (its broker), one identity per pool. The WAN edge FLEET is the other kind: an edge is a router rather than a Kubernetes node, so it has no broker and no cert-manager — it is modelled as an ordinary identity named `edge`, permitted the edge loopback aggregate, and each edge agent mints its own leaf from that intermediate in process.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"poolName": {
 						SchemaProps: spec.SchemaProps{
-							Description: "PoolName is the ClusterPool this identity belongs to. The signed intermediate is name-constrained to this pool so it can only mint node identities within it.",
+							Description: "PoolName is the identity this intermediate belongs to — a ClusterPool name, or `edge` for the WAN edge fleet. The signed intermediate is name-constrained to it so it can only mint leaves within it.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -4498,7 +4498,7 @@ func schema_ectobase_api_platform_v1alpha1_RouteBusIdentitySpec(ref common.Refer
 					},
 					"permittedUnderlayCIDRs": {
 						SchemaProps: spec.SchemaProps{
-							Description: "PermittedUnderlayCIDRs are the pool's underlay IPv6 ranges. The signer name-constrains the intermediate to these so it can only mint node leaves whose IP SAN falls inside the pool — the reflector binds route nexthops to that SAN.",
+							Description: "PermittedUnderlayCIDRs are this identity's underlay IPv6 ranges — a pool's /48, or the edge loopback aggregate for the edge fleet. The signer name-constrains the intermediate to these so it can only mint leaves whose IP SAN falls inside them; the reflector then binds route nexthops to that SAN. This constraint, not the minting code, is what bounds a holder of the intermediate — which matters most for the edge, where an agent signs its own leaf locally.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{

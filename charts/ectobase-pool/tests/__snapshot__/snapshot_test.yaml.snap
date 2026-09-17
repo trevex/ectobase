@@ -2279,15 +2279,6 @@ renders (ebpf clab):
           - get
           - list
           - watch
-      - apiGroups:
-          - net.ectobase.dev
-        resources:
-          - loadbalancers
-          - loadbalancers/status
-        verbs:
-          - get
-          - list
-          - watch
   27: |
     apiVersion: rbac.authorization.k8s.io/v1
     kind: ClusterRoleBinding
@@ -4737,15 +4728,6 @@ renders (ebpf hw):
         resources:
           - compilednics
           - compilednics/status
-        verbs:
-          - get
-          - list
-          - watch
-      - apiGroups:
-          - net.ectobase.dev
-        resources:
-          - loadbalancers
-          - loadbalancers/status
         verbs:
           - get
           - list
@@ -7202,15 +7184,6 @@ renders (tier1 on):
         resources:
           - compilednics
           - compilednics/status
-        verbs:
-          - get
-          - list
-          - watch
-      - apiGroups:
-          - net.ectobase.dev
-        resources:
-          - loadbalancers
-          - loadbalancers/status
         verbs:
           - get
           - list
@@ -9704,15 +9677,6 @@ renders (tier1 watchdog):
         resources:
           - compilednics
           - compilednics/status
-        verbs:
-          - get
-          - list
-          - watch
-      - apiGroups:
-          - net.ectobase.dev
-        resources:
-          - loadbalancers
-          - loadbalancers/status
         verbs:
           - get
           - list
@@ -12216,15 +12180,6 @@ renders with vm-materializer enabled:
         resources:
           - compilednics
           - compilednics/status
-        verbs:
-          - get
-          - list
-          - watch
-      - apiGroups:
-          - net.ectobase.dev
-        resources:
-          - loadbalancers
-          - loadbalancers/status
         verbs:
           - get
           - list

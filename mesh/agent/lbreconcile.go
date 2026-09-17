@@ -2,10 +2,7 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
-
-	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 )
 
 // lbBacking is one (VIP, backend NIC) pairing this node hosts: a CompiledNIC.LB entry together with
@@ -59,72 +56,15 @@ func (r *Reconciler) desiredLB(ctx context.Context, ulByKey map[ipKey]string, lo
 	return out, nil
 }
 
-// ReconcileLB is the EDGE-only LB VIP reconcile: it lists LoadBalancers and diffs AddLbVip/DelLbVip
-// against appliedLbVips. Backends are added separately by the bus's applyPublic (LB_VIP records).
-// Non-edge nodes are a no-op (they reach VIPs via the E/W anycast route, not maglev).
-func (r *Reconciler) ReconcileLB(ctx context.Context) error {
-	if r.dp == nil || r.edgeLoopback == "" {
-		return nil
-	}
-	var lbs netv1.LoadBalancerList
-	if err := r.client.List(ctx, &lbs); err != nil {
-		return fmt.Errorf("list loadbalancers: %w", err)
-	}
-	desired := map[string][]LbPort{} // vip -> ports
-	for i := range lbs.Items {
-		lb := &lbs.Items[i]
-		// Program the centrally-allocated VIP, not the requested one. spec.vip is
-		// empty for auto-allocated LBs; status.allocatedVIP is authoritative for
-		// both auto and bring-your-own. Skip until it is assigned so a not-yet-
-		// allocated LB never installs an empty VIP at the edge.
-		vip := lb.Status.AllocatedVIP
-		if vip == "" {
-			continue
-		}
-		ports := make([]LbPort, 0, len(lb.Spec.Ports))
-		for _, p := range lb.Spec.Ports {
-			ports = append(ports, LbPort{Port: uint32(p.Port), Proto: protoNum(p.Proto)})
-		}
-		desired[vip] = ports
-	}
-	if r.appliedLbVips == nil {
-		r.appliedLbVips = map[string][]LbPort{}
-	}
-	var errs []error
-	// Delete VIPs no longer desired (or whose ports changed → delete then re-add below).
-	for vip, prevPorts := range r.appliedLbVips {
-		if want, ok := desired[vip]; ok && lbPortsEqual(want, prevPorts) {
-			continue
-		}
-		if err := r.dp.DelLbVip(ctx, vip); err != nil {
-			errs = append(errs, fmt.Errorf("DelLbVip %s: %w", vip, err))
-			continue
-		}
-		delete(r.appliedLbVips, vip)
-	}
-	// Add VIPs newly desired (or just-deleted because ports changed). lbUnderlay = the edge's own
-	// anycast underlay; vni=0 (WAN). create_lb skips the UNDERLAY write for vni==0.
-	for vip, ports := range desired {
-		if cur, ok := r.appliedLbVips[vip]; ok && lbPortsEqual(cur, ports) {
-			continue
-		}
-		if err := r.dp.AddLbVip(ctx, vip, 0, vip, r.underlay, ports); err != nil {
-			errs = append(errs, fmt.Errorf("AddLbVip %s: %w", vip, err))
-			continue
-		}
-		r.appliedLbVips[vip] = ports
-	}
-	return errors.Join(errs...)
-}
-
-func lbPortsEqual(a, b []LbPort) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
+// The edge does NOT reconcile LoadBalancers from an API server. It has none — it is a router, not a
+// Kubernetes node — and even a pool-resident edge could not: the broker syncs only the compiled.*
+// kinds downstream, so a raw LoadBalancer never reaches a pool API server and listing them there
+// always returned zero items. The edge instead learns each VIP from the LB_VIP records its BACKENDS
+// announce, which carry the service ports alongside the backend identity (see DesiredPublic) — so
+// Bus.applyPublic does the AddLbVip + AddLbBackend pair. The consequence is deliberate: a VIP with
+// no backends is never programmed at the edge, which is correct (an edge that Maglev-hashes to an
+// empty backend set can only blackhole) but does mean a VIP is not reserved until something backs it.
+//
+// Announced VIPs are always the centrally-ALLOCATED ones: the compiler only writes a CompiledNIC.LB
+// entry for a LoadBalancer whose status is Allocated with a non-empty allocatedVIP (see
+// controllers/compilednic.go), so an auto-allocated LB's empty spec.vip can never reach the edge.

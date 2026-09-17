@@ -89,11 +89,17 @@ dropped" — is reproduced synthetically in the fabric simulator and pinned by t
 
 The two delivery models map onto two different agent responsibilities:
 
-- Edge (`ReconcileLB`). Only a WAN-edge node programs the maglev VIP datapath. It lists
-  `LoadBalancer`s and diffs `AddLbVip` / `DelLbVip` against what it has applied. Backends
-  are added separately, learned from `LB_VIP` records on the route bus (published by each
-  backend node). Non-edge nodes are a no-op here — they reach VIPs via the E/W anycast
-  route, not maglev.
+- Edge (`applyPublic`). Only a WAN-edge node programs the maglev VIP datapath, and it does so
+  entirely from the route bus — an edge is a router, not a Kubernetes node, so it has no
+  `LoadBalancer` to list. Each `LB_VIP` record carries the whole load balancer: the VIP with its
+  service ports (for `AddLbVip`) alongside the announcing backend's VTEP, overlay IP and VNI (for
+  `AddLbBackend`). The edge registers the VIP on first sight, then attaches the backend, and drops
+  the VIP again when its last backend withdraws. Non-edge nodes ignore `LB_VIP` records — they
+  reach VIPs via the E/W anycast route, not maglev.
+
+  A consequence worth stating: the edge's VIP set is *derived* from backend announcements, so a VIP
+  with zero backends is never programmed there. That is correct (an empty backend set can only
+  blackhole) but means a bring-your-own VIP is not reserved at the edge until something backs it.
 - Backend (`desiredLB` → route announce). Any node hosting a backend NIC, for each
   `CompiledNIC.LB` entry, announces the VIP as an anycast overlay host route with nexthop =
   this node's VTEP. Multiple backend nodes → the fabric ECMPs. A NIC the local dataplane
@@ -115,10 +121,10 @@ CompiledNIC.Spec.LB[]  CompiledLB{ VIP, Ports[] }
         │
         ├─ backend node: agent.desiredLB() → route-bus announce
         │     Route{ Vni, Prefix = VIP /32|/128, Nexthop = node VTEP }  (E/W anycast, ECMP)
-        │     + LB_VIP record on the bus (for edge backend discovery)
+        │     + LB_VIP PublicPrefix{ VIP, Ports[], owner VTEP, overlay IP, vni }
         │
-        └─ edge node: agent.ReconcileLB() → DataplaneNode gRPC
-              AddLbVip(vip, ...) ; backends learned from LB_VIP records
+        └─ edge node (no apiserver): agent.applyPublic() → DataplaneNode gRPC
+              AddLbVip(vip, vni=0, lbUnderlay=this edge, ports) then AddLbBackend(...)
         ▼
 datapath: lb_select_forward — maglev select LbBackend {node VTEP, overlay IP, vni}
           DSR forward — inner dst stays VIP → backend ingress firewall sees dst = VIP
@@ -127,9 +133,9 @@ datapath: lb_select_forward — maglev select LbBackend {node VTEP, overlay IP, 
 - CRD → compiler. `Compile()` records LB membership on each matched backend NIC's
   `CompiledNIC.Spec.LB`. This is forwarding membership only; permission still comes solely
   from `FirewallPolicy`.
-- Compiler → agent. Backend nodes announce the VIP as an anycast route (E/W) and publish
-  an `LB_VIP` record; the edge programs the maglev VIP (N/S) and learns backends from those
-  records.
+- Compiler → agent. Backend nodes announce the VIP as an anycast route (E/W) and publish an
+  `LB_VIP` record; the edge programs the maglev VIP (N/S) from those records alone — VIP, ports and
+  backends all arrive on the bus, which is what lets the edge stay API-less.
 - Agent → dataplane. The edge's `LB` + `MAGLEV` maps drive backend selection; DSR
   forwards VIP-addressed to the chosen backend. The backend's ingress firewall must
   explicitly allow `VIP:port`.

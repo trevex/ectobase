@@ -13,6 +13,7 @@ import (
 
 	dpv1 "github.com/trevex/ectobase/cni/gen/dataplanev1"
 	rbv1 "github.com/trevex/ectobase/mesh/gen/routebusv1"
+	"github.com/trevex/ectobase/mesh/routebus"
 )
 
 // Dataplane is the subset of flowplane the agent drives. dpAdapter wraps the real
@@ -97,10 +98,9 @@ type FwRuleWithID struct {
 }
 
 // LbPort is one LB service tuple for AddLbVip. Proto is the IP protocol number (6=TCP, 17=UDP).
-type LbPort struct {
-	Port  uint32
-	Proto uint32
-}
+// It aliases the shared routebus.LbPort so the agent and reflector use one canonical
+// representation on the PublicPrefix channel.
+type LbPort = routebus.LbPort
 
 // Route is a local overlay route this node announces.
 type Route struct {
@@ -129,6 +129,26 @@ type Bus struct {
 
 	egressVNIs    []uint32          // local VNIs that import the public default(s); set each reconcile
 	learnedPublic map[string]string // public-VNI prefix -> nexthop (recorded, imported into egressVNIs)
+
+	// edgeLbs is the EDGE's bookkeeping for the load balancers it has programmed, keyed by VIP (==
+	// the dataplane's LB id), built entirely from the LB_VIP records backends announce. The
+	// dataplane is not idempotent here (create_lb rejects a duplicate id, add_lb_target a duplicate
+	// backend) and the edge sees each record repeatedly, so this is what makes applyPublic a diff.
+	// Touched only from the Run goroutine (handleServerMsg), like installed/origin — no lock.
+	//
+	// It PERSISTS across reconnects, deliberately. Resetting it per session would make the first
+	// record for each VIP re-create the LB (see registerLbVip), which would in turn prune anything
+	// stale — but at the cost of a real teardown/rebuild blip on EVERY reflector reconnect, and
+	// reconnects are far more common than the staleness it would fix.
+	//
+	// The staleness in question: public records carry no EndOfRIB, so there is no prune-on-snapshot
+	// the way installed/seen gives routes. A backend WITHDRAWN while this edge was disconnected is
+	// simply absent from the replayed snapshot, and its dataplane entry lingers — Maglev keeps
+	// hashing a share of flows to a backend that is gone. The window is narrow (a backend node
+	// disconnecting is covered by the reflector's DropOrigin fan-out; this is only a backend
+	// withdrawing a record during an edge-agent outage) and the gap is shared with the NAT-block
+	// channel, so it is a known limitation of the public channel rather than something handled here.
+	edgeLbs map[string]*edgeLb
 
 	// Peering import bookkeeping (VPC peering). peerImports is set each reconcile (localVNI -> imports).
 	// origin tags every installed (vni, prefix) as "own" (locally-originated / direct route) or "peer"
@@ -161,6 +181,7 @@ func NewBus(nodeID, underlay string, dp Dataplane, isEdge bool) *Bus {
 	return &Bus{
 		nodeID: nodeID, underlay: underlay, dp: dp, isEdge: isEdge,
 		learnedEdge: map[string]string{}, learnedPublic: map[string]string{},
+		edgeLbs:        map[string]*edgeLb{},
 		installed:      map[uint32]map[string]bool{},
 		seen:           map[uint32]map[string]bool{},
 		peerImports:    map[uint32][]PeerImport{},
@@ -356,10 +377,7 @@ func (b *Bus) sendDelta(stream rbv1.RouteBus_SessionClient, d busDelta) error {
 		}
 	}
 	for _, p := range d.withdrawP {
-		if err := stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_WithdrawPublic{WithdrawPublic: &rbv1.PublicPrefix{
-			Kind: p.Kind, Prefix: p.Prefix, OwnerUnderlay: p.OwnerUnderlay, Vni: p.Vni, PortMin: p.PortMin, PortMax: p.PortMax,
-			OverlayIp: p.OverlayIP,
-		}}}); err != nil {
+		if err := stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_WithdrawPublic{WithdrawPublic: publicPrefixPB(p)}}); err != nil {
 			return err
 		}
 	}
@@ -389,10 +407,41 @@ func (b *Bus) AnnounceNat(stream rbv1.RouteBus_SessionClient, blk NatBlock) erro
 // AnnouncePublic sends one typed public-address record on the given session
 // stream (e.g. this edge's EDGE_UNDERLAY anycast -> owner-loopback mapping).
 func (b *Bus) AnnouncePublic(stream rbv1.RouteBus_SessionClient, pp PublicPrefix) error {
-	return stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_AnnouncePublic{AnnouncePublic: &rbv1.PublicPrefix{
+	return stream.Send(&rbv1.ClientMsg{Msg: &rbv1.ClientMsg_AnnouncePublic{AnnouncePublic: publicPrefixPB(pp)}})
+}
+
+// publicPrefixPB is the single agent-side encoder for a PublicPrefix onto the wire, shared by
+// announce and withdraw so a newly added field (like ports) cannot be carried by one and dropped
+// by the other.
+func publicPrefixPB(pp PublicPrefix) *rbv1.PublicPrefix {
+	return &rbv1.PublicPrefix{
 		Kind: pp.Kind, Prefix: pp.Prefix, OwnerUnderlay: pp.OwnerUnderlay,
 		Vni: pp.Vni, PortMin: pp.PortMin, PortMax: pp.PortMax, OverlayIp: pp.OverlayIP,
-	}}})
+		Ports: portsPB(pp.Ports),
+	}
+}
+
+// portsPB / portsFromPB convert between the agent's LbPort slice and the wire PortProto slice.
+func portsPB(ports []LbPort) []*rbv1.PortProto {
+	if len(ports) == 0 {
+		return nil
+	}
+	out := make([]*rbv1.PortProto, 0, len(ports))
+	for _, p := range ports {
+		out = append(out, &rbv1.PortProto{Port: p.Port, Proto: p.Proto})
+	}
+	return out
+}
+
+func portsFromPB(ports []*rbv1.PortProto) []LbPort {
+	if len(ports) == 0 {
+		return nil
+	}
+	out := make([]LbPort, 0, len(ports))
+	for _, p := range ports {
+		out = append(out, LbPort{Port: p.GetPort(), Proto: p.GetProto()})
+	}
+	return out
 }
 
 // applyNat programs a learned NAT block. Blocks OWNED BY THIS node are skipped:

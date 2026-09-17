@@ -1,6 +1,13 @@
 package reflector
 
-import pb "github.com/trevex/ectobase/mesh/gen/routebusv1"
+import (
+	pb "github.com/trevex/ectobase/mesh/gen/routebusv1"
+	"github.com/trevex/ectobase/mesh/routebus"
+)
+
+// LbPort is one LB service tuple carried on an LB_VIP record. Aliases the shared
+// routebus.LbPort so the agent and reflector speak one representation.
+type LbPort = routebus.LbPort
 
 // PublicRecord is a globally-relevant "public" prefix advertised on the typed
 // PublicPrefix channel: an edge anycast /128, a distributed-SNAT nat_ip block,
@@ -16,6 +23,10 @@ type PublicRecord struct {
 	// OverlayIP is set for LB_VIP records: the backend guest's overlay IP, relayed
 	// through so the learning edge can AddLbBackend with it.
 	OverlayIP string
+	// Ports is set for LB_VIP records: the LB's service tuples, relayed through so the learning
+	// edge can AddLbVip the load balancer before adding this backend to it. Not part of the key —
+	// every backend of one VIP announces the same set, and a change re-announces under the same key.
+	Ports []LbPort
 }
 
 // publicKey identifies a record by (kind, prefix, owner, overlay). Duplicate announces with the same
@@ -89,6 +100,10 @@ func (r *RIB) publicFanout(rec PublicRecord, op pb.RouteOp) {
 }
 
 func publicUpdate(rec PublicRecord, op pb.RouteOp) *pb.ServerMsg {
+	ports := make([]*pb.PortProto, 0, len(rec.Ports))
+	for _, p := range rec.Ports {
+		ports = append(ports, &pb.PortProto{Port: p.Port, Proto: p.Proto})
+	}
 	return &pb.ServerMsg{Msg: &pb.ServerMsg_PublicUpdate{PublicUpdate: &pb.PublicUpdate{
 		Prefix: &pb.PublicPrefix{
 			Kind:          rec.Kind,
@@ -98,7 +113,22 @@ func publicUpdate(rec PublicRecord, op pb.RouteOp) *pb.ServerMsg {
 			PortMin:       rec.PortMin,
 			PortMax:       rec.PortMax,
 			OverlayIp:     rec.OverlayIP,
+			Ports:         ports,
 		},
 		Op: op,
 	}}}
+}
+
+// publicRecordFromPB decodes an announced/withdrawn PublicPrefix off the wire. One decoder for
+// both directions so a new field cannot be honored on announce and dropped on withdraw.
+func publicRecordFromPB(p *pb.PublicPrefix) PublicRecord {
+	ports := make([]LbPort, 0, len(p.GetPorts()))
+	for _, pp := range p.GetPorts() {
+		ports = append(ports, LbPort{Port: pp.GetPort(), Proto: pp.GetProto()})
+	}
+	return PublicRecord{
+		Kind: p.GetKind(), Prefix: p.GetPrefix(), OwnerUnderlay: p.GetOwnerUnderlay(),
+		Vni: p.GetVni(), PortMin: p.GetPortMin(), PortMax: p.GetPortMax(),
+		OverlayIP: p.GetOverlayIp(), Ports: ports,
+	}
 }

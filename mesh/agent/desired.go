@@ -9,7 +9,11 @@ package agent
 // is currently applied on the live stream, and emits only the deltas (announce new/changed, withdraw
 // removed). On reconnect the "applied" set is reset to empty so the whole desired set is re-sent.
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/trevex/ectobase/mesh/routebus"
+)
 
 // PeerImport is one peer VPC's import for a local VNI (runtime form of CompiledNIC.PeerImports).
 type PeerImport struct {
@@ -73,6 +77,16 @@ func natKey(n NatBlock) natRef  { return natRef{NatIP: n.NatIP, PortMin: n.PortM
 // owner) alone and silently overwrite each other, losing one backend's withdraw.
 func pubKey(p PublicPrefix) string {
 	return fmt.Sprintf("%d|%s|%s|%s", p.Kind, p.Prefix, p.OwnerUnderlay, p.OverlayIP)
+}
+
+// pubEqual compares two public records by VALUE, which decides whether a same-key record is
+// re-announced. It cannot be `a != b`: PublicPrefix carries a Ports slice, so the struct is not
+// comparable — and a silent `==` on the scalar fields alone would swallow a port-set change, the
+// one edit that requires the edge to re-register the VIP.
+func pubEqual(a, b PublicPrefix) bool {
+	return a.Kind == b.Kind && a.Prefix == b.Prefix && a.OwnerUnderlay == b.OwnerUnderlay &&
+		a.Vni == b.Vni && a.PortMin == b.PortMin && a.PortMax == b.PortMax &&
+		a.OverlayIP == b.OverlayIP && routebus.LbPortsEqual(a.Ports, b.Ports)
 }
 
 // diffDesired computes the minimal set of stream messages to converge `applied` to `next`.
@@ -154,7 +168,7 @@ func diffDesired(applied, next DesiredState) busDelta {
 	for _, p := range next.Pubs {
 		k := pubKey(p)
 		nextP[k] = p
-		if old, ok := prevP[k]; !ok || old != p {
+		if old, ok := prevP[k]; !ok || !pubEqual(old, p) {
 			d.announceP = append(d.announceP, p)
 		}
 	}

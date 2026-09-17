@@ -463,24 +463,29 @@ spec:
   # ...pool/port-block allocation...
 ```
 
-!!! warning "Status: Partial, the N-S edge control path is built but not deployed"
-    The node-side compile path works (the compiler folds `LoadBalancer`/`NATGateway`
-    into `CompiledNIC`, and the agent programs the backend distributed-LB / egress SNAT
-    at the node uplink). The edge half now exists in the agent too: an agent started with
-    `--edge-loopback` runs an edge-only `ReconcileLB` that `AddLbVip`s each `LoadBalancer`'s
-    centrally-allocated `status.allocatedVIP` (`mesh/agent/lbreconcile.go`); backend nodes announce
-    `LB_VIP` records on the route bus and only an edge turns them into `AddLbBackend`
-    (`mesh/agent/public.go`); and a NAT return relay is installed from announced NAT blocks
-    (`mesh/agent/bus.go`). What is missing is the deployment — nothing runs that agent on an edge.
-    The lab's edge sidecars are a bare `flowplane serve --role edge`
-    (`test/lab/templates/fabric.clab.yml.tmpl`) and the pool chart's agent DaemonSet passes no
-    `--edge-loopback`, so the live tests still drive the edge over the dataplane gRPC:
-    `TestLbDistributeSmoke{,V4}` (`test/lab/livetest/lb_test.go`) register each VIP on both edge
-    sidecars, and `TestNatEgressReturn6` (`test/lab/livetest/nategress6_test.go`) installs the
-    NAT66 return relay the same way. So a `khub apply -f loadbalancer.yaml` compiles and programs
-    the backend node, but a WAN client will not reach the VIP end-to-end from intent alone. The
-    datapath itself is proven (see [Load balancer](../features/loadbalancer.md) and
-    [NAT](../features/nat.md)); the gap is wiring an edge agent into a deployment.
+!!! note "The N-S path runs from intent alone"
+    `khub apply -f loadbalancer.yaml` and a WAN client reaches the VIP, with nobody calling the
+    dataplane gRPC by hand. The chain: the compiler folds `LoadBalancer`/`NATGateway` into
+    `CompiledNIC`; the backend node's agent announces an `LB_VIP` record on the route bus carrying
+    the VIP, its service ports, and the backend's identity; and an agent running **on each edge**
+    turns that into `AddLbVip` + `AddLbBackend` (`mesh/agent/public.go`).
+
+    Each lab edge runs `mesh-agent-edge{1,2}` in its VyOS netns
+    (`test/lab/templates/fabric.clab.yml.tmpl`), sharing the flowplane sidecar's dataplane socket
+    over a host-backed bind. It is started `--edge-loopback` with **no** `--kubeconfig` — an edge is
+    a router, not a Kubernetes node — and mints its own route-bus leaf from the edge fleet's
+    intermediate in `build/<name>/edge/pki`, which `lab deploy` provisions as a `RouteBusIdentity`
+    named `edge`. See [North-South WAN edge](../features/ns-edge.md#running-an-agent-on-an-edge).
+
+    `TestLbFromIntentProgramsBothEdges` (`test/lab/livetest/lbintent_test.go`) proves it, asserting
+    on the edges' own LB + Maglev maps. `TestLbDistributeSmoke{,V4}` (`test/lab/livetest/lb_test.go`)
+    and `TestNatEgressReturn6` (`test/lab/livetest/nategress6_test.go`) keep their hand-programmed
+    form deliberately, as the datapath tier: they isolate Maglev/DSR/NAT-return from the control
+    path above them.
+
+    Carrying real N/S traffic to an *ordinary* intent-driven backend is not there yet — two
+    datapath gaps, both independent of who programs the LB, are documented at the bottom of
+    `lbintent_test.go`.
 
 ## Trace the objects end-to-end
 

@@ -7,20 +7,28 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// RouteBusIdentitySpec is a pool's request for a route-bus intermediate CA. The pool (its
-// broker) generates the intermediate keypair LOCALLY and submits only the CSR — the private
-// key is never transmitted. The dispatch signer returns a name-constrained intermediate that
-// can mint per-node agent leaves scoped to this pool.
+// RouteBusIdentitySpec is a request for a route-bus intermediate CA. The requester generates the
+// intermediate keypair LOCALLY and submits only the CSR — the private key is never transmitted.
+// The dispatch signer returns a name-constrained intermediate that can mint agent leaves scoped to
+// it.
+//
+// Usually the requester is a ClusterPool (its broker), one identity per pool. The WAN edge FLEET is
+// the other kind: an edge is a router rather than a Kubernetes node, so it has no broker and no
+// cert-manager — it is modelled as an ordinary identity named `edge`, permitted the edge loopback
+// aggregate, and each edge agent mints its own leaf from that intermediate in process.
 type RouteBusIdentitySpec struct {
-	// PoolName is the ClusterPool this identity belongs to. The signed intermediate is
-	// name-constrained to this pool so it can only mint node identities within it.
+	// PoolName is the identity this intermediate belongs to — a ClusterPool name, or `edge` for
+	// the WAN edge fleet. The signed intermediate is name-constrained to it so it can only mint
+	// leaves within it.
 	PoolName string `json:"poolName,omitempty" protobuf:"bytes,1,opt,name=poolName"`
 	// Request is the PEM-encoded PKCS#10 certificate-signing request for the pool's
 	// intermediate CA (the pool keeps the matching private key).
 	Request []byte `json:"request,omitempty" protobuf:"bytes,2,opt,name=request"`
-	// PermittedUnderlayCIDRs are the pool's underlay IPv6 ranges. The signer name-constrains
-	// the intermediate to these so it can only mint node leaves whose IP SAN falls inside the
-	// pool — the reflector binds route nexthops to that SAN.
+	// PermittedUnderlayCIDRs are this identity's underlay IPv6 ranges — a pool's /48, or the edge
+	// loopback aggregate for the edge fleet. The signer name-constrains the intermediate to these
+	// so it can only mint leaves whose IP SAN falls inside them; the reflector then binds route
+	// nexthops to that SAN. This constraint, not the minting code, is what bounds a holder of the
+	// intermediate — which matters most for the edge, where an agent signs its own leaf locally.
 	// +optional
 	PermittedUnderlayCIDRs []string `json:"permittedUnderlayCIDRs,omitempty" protobuf:"bytes,3,rep,name=permittedUnderlayCIDRs"`
 }

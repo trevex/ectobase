@@ -60,6 +60,15 @@ type EctobaseSpec struct {
 	// ReflectorIP is the bare fabric IPv6 the agents dial (== DispatchIdentity); it is added
 	// as a SAN on the reflector server cert. Only used when RouteBusMTLS is set.
 	ReflectorIP string
+
+	// EdgePKIDir is the build-tree directory the WAN edge fleet's route-bus CA is written to
+	// (ca.crt/tls.crt/tls.key). The clab edge-agent containers bind it read-only and mint their own
+	// leaves from it, so it is how an API-less edge gets onto the route bus at all. Only used when
+	// RouteBusMTLS is set; empty skips the whole step (a fabric with no edge agents).
+	EdgePKIDir string
+	// EdgeUnderlayCIDRs are the edge loopback aggregate(s). The signer name-constrains the fleet
+	// intermediate to these, so an edge can never mint itself a leaf inside a pool's underlay.
+	EdgeUnderlayCIDRs []string
 }
 
 // ComputeCluster is one broker-running compute cluster.
@@ -133,6 +142,15 @@ func Ectobase(ctx context.Context, s EctobaseSpec) error {
 		return fmt.Errorf("apply clusterpools: %w", err)
 	}
 
+	// The WAN edge fleet's route-bus CA. Alongside the ClusterPools because it is the same kind of
+	// fixture — an identity the aggregated API has to be serving before it can be requested — and
+	// ahead of the pools only because the edge agents have been waiting for it since `lab up`.
+	if s.RouteBusMTLS && s.EdgePKIDir != "" {
+		if err := provisionEdgeIdentity(ctx, s); err != nil {
+			return fmt.Errorf("provision edge route-bus identity: %w", err)
+		}
+	}
+
 	// --- Each compute cluster (in parallel: independent, each targets its own kubeconfig) ---
 	var eg errgroup.Group
 	for _, c := range s.Compute {
@@ -173,15 +191,9 @@ func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster) error {
 	// the dispatch chart's `system` namespace: the ectobase-ca Secret (root cert) and the
 	// dispatch-broker-bootstrap ServiceAccount (token source).
 	if s.RouteBusMTLS {
-		rootCAB64, err := exec.OutputStr(ctx, "kubectl", "--kubeconfig", s.DispatchKubeconfig,
-			"get", "secret", "ectobase-ca", "-n", "system", "-o", `jsonpath={.data.tls\.crt}`)
+		rootCAB64, rootCAPEM, err := dispatchRootCA(ctx, s.DispatchKubeconfig)
 		if err != nil {
-			return fmt.Errorf("cluster %s: read dispatch root CA: %w", c.Name, err)
-		}
-		rootCAB64 = strings.TrimSpace(rootCAB64)
-		rootCAPEM, err := base64.StdEncoding.DecodeString(rootCAB64)
-		if err != nil {
-			return fmt.Errorf("cluster %s: decode dispatch root CA: %w", c.Name, err)
+			return fmt.Errorf("cluster %s: %w", c.Name, err)
 		}
 		if err := createSecretFromLiteral(ctx, c.Kubeconfig, "ectobase-system",
 			"dispatch-root-ca", "ca.crt", string(rootCAPEM)); err != nil {
@@ -224,6 +236,23 @@ func installPool(ctx context.Context, s EctobaseSpec, c ComputeCluster) error {
 		return fmt.Errorf("cluster %s: install Multus: %w", c.Name, err)
 	}
 	return nil
+}
+
+// dispatchRootCA reads the dispatch chart's ROOT CA — the cert-manager `ectobase-ca` Secret in
+// `system`, the trust anchor every route-bus participant chains to — returning it both as the raw
+// base64 (to embed in a kubeconfig) and as decoded PEM.
+func dispatchRootCA(ctx context.Context, kubeconfig string) (b64 string, pemBytes []byte, err error) {
+	out, err := exec.OutputStr(ctx, "kubectl", "--kubeconfig", kubeconfig,
+		"get", "secret", "ectobase-ca", "-n", "system", "-o", `jsonpath={.data.tls\.crt}`)
+	if err != nil {
+		return "", nil, fmt.Errorf("read dispatch root CA: %w", err)
+	}
+	b64 = strings.TrimSpace(out)
+	pemBytes, err = base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return "", nil, fmt.Errorf("decode dispatch root CA: %w", err)
+	}
+	return b64, pemBytes, nil
 }
 
 // kubectlApply applies one or more manifest paths in a single kubectl call.

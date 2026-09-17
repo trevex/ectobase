@@ -29,7 +29,13 @@ func underlayPrefix(underlay string) string {
 // onto its own Node so the Tier-2 broker reads the correct fence coordinate. Best-effort
 // and idempotent: a non-IPv6 underlay is skipped (nil), an already-correct annotation is a
 // no-op, and a not-yet-registered Node returns an error the caller logs and retries next tick.
+//
+// A WAN edge skips it entirely: it is a router, not a Kubernetes node, so there is no Node object
+// to stamp — and nothing schedules onto it, so it is not a fence coordinate to begin with.
 func (r *Reconciler) StampNodePrefix(ctx context.Context) error {
+	if r.client == nil {
+		return nil // WAN edge: no API server, no Node object
+	}
 	prefix := underlayPrefix(r.underlay)
 	if prefix == "" {
 		return nil // not a v6 underlay -> not fence-eligible

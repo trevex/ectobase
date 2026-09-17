@@ -1,10 +1,7 @@
 package agent
 
 import (
-	"context"
-
 	"github.com/trevex/ectobase/mesh/routebus"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // nat64WellKnownPrefix is the RFC 6052 well-known NAT64 prefix.
@@ -36,13 +33,17 @@ type ExternalRoute struct {
 // ""); non-edge nodes originate nothing. The edge is tenant-agnostic: it originates the external
 // defaults ONCE into the public VNI (PublicVNI), nexthop = this edge's own anycast underlay.
 // Egress-needing tenant nodes subscribe to the public VNI and import the defaults into their own VNIs.
-func DesiredExternalRoutes(ctx context.Context, c client.Client, underlay, edgeLoopback string) ([]ExternalRoute, error) {
+//
+// It reads nothing — not the API server, not the dataplane. That is load-bearing, not incidental:
+// an edge has no API server, and these defaults are the one thing that must still be announced when
+// there is nothing to read.
+func DesiredExternalRoutes(underlay, edgeLoopback string) []ExternalRoute {
 	if edgeLoopback == "" {
-		return nil, nil // not a WAN edge: originate nothing
+		return nil // not a WAN edge: originate nothing
 	}
 	return []ExternalRoute{
 		{Vni: PublicVNI, Prefix: "0.0.0.0/0", Nexthop: underlay, External: true},
 		{Vni: PublicVNI, Prefix: nat64WellKnownPrefix, Nexthop: underlay, External: true},
 		{Vni: PublicVNI, Prefix: "::/0", Nexthop: underlay, External: true},
-	}, nil
+	}
 }

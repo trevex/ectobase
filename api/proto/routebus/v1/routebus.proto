@@ -32,8 +32,18 @@ enum PublicKind {
   PUBLIC_KIND_UNSPECIFIED = 0;
   PUBLIC_KIND_EDGE_UNDERLAY = 1;   // edge anycast datapath /128; owner_underlay = edge's UNIQUE loopback
   PUBLIC_KIND_NAT_IP = 2;          // distributed-SNAT nat_ip block (port_min/max = the block)
-  PUBLIC_KIND_LB_VIP = 3;          // reserved (external LB arc)
+  // A backed LB VIP: announced by each BACKEND node, one record per (VIP, backend NIC). It
+  // carries both halves the edge needs — the VIP + its service `ports` (for AddLbVip) and the
+  // backend's owner_underlay/overlay_ip/vni (for AddLbBackend) — so the edge programs the whole
+  // load balancer from backend announcements alone, with no API server of its own.
+  PUBLIC_KIND_LB_VIP = 3;
   PUBLIC_KIND_FLOATING_IP = 4;     // reserved
+}
+
+// PortProto is one LB service tuple. proto is the IP protocol NUMBER (6=TCP, 17=UDP).
+message PortProto {
+  uint32 port  = 1;
+  uint32 proto = 2;
 }
 
 // Agent -> reflector.
@@ -127,5 +137,8 @@ message PublicPrefix {
   uint32     port_min       = 5;
   uint32     port_max       = 6;
   string     overlay_ip     = 7;  // LB_VIP: the backend guest's overlay IP (for AddLbBackend)
+  // LB_VIP: the load balancer's service tuples, so a bus-only edge can AddLbVip before it
+  // AddLbBackends. Every backend of one VIP announces the same set; the edge keys on the VIP.
+  repeated PortProto ports  = 8;
 }
 message PublicUpdate { PublicPrefix prefix = 1; RouteOp op = 2; }

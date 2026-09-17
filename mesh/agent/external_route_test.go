@@ -21,20 +21,8 @@ func findExternalRoute(routes []ExternalRoute, prefix string) *ExternalRoute {
 }
 
 func TestDesiredExternalRoutesEdgeIntoPublicVNI(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := netv1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	if err := compiledv1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	// No VPC/NATGateway/LoadBalancer objects at all: the edge is tenant-agnostic.
-	c := fake.NewClientBuilder().WithScheme(scheme).Build()
-
-	routes, err := DesiredExternalRoutes(context.Background(), c, "fd00::e", "fd00:lo::1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// No inputs beyond the edge's own flags: the edge is tenant-agnostic AND API-server-free.
+	routes := DesiredExternalRoutes("fd00::e", "fd00:lo::1")
 	// Every route is originated into the public VNI (0), nexthop = the edge's own underlay.
 	for _, want := range []string{"0.0.0.0/0", "64:ff9b::/96", "::/0"} {
 		r := findExternalRoute(routes, want)
@@ -48,18 +36,7 @@ func TestDesiredExternalRoutesEdgeIntoPublicVNI(t *testing.T) {
 }
 
 func TestDesiredExternalRoutesNonEdgeStagesNothing(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := netv1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	if err := compiledv1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	c := fake.NewClientBuilder().WithScheme(scheme).Build()
-	routes, err := DesiredExternalRoutes(context.Background(), c, "fd00::b", "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	routes := DesiredExternalRoutes("fd00::b", "")
 	if len(routes) != 0 {
 		t.Fatalf("non-edge node must stage no external routes, got %+v", routes)
 	}

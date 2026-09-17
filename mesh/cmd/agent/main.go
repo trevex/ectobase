@@ -34,9 +34,19 @@ func main() {
 	tlsKey := flag.String("tls-key", "", "agent client key file (static/legacy mode)")
 	routebusIssuer := flag.String("routebus-issuer", "", "pool cert-manager Issuer to self-mint a per-node leaf from (CN=node, IP SAN=underlay); enables per-node mTLS")
 	routebusCertNS := flag.String("routebus-cert-namespace", "", "namespace for the self-minted per-node Certificate/Secret")
+	routebusIntermediate := flag.String("routebus-intermediate", "", "WAN edge only: directory holding the edge fleet's route-bus CA (ca.crt/tls.crt/tls.key). The agent mints its own leaf from it in-process — no cert-manager, no apiserver")
 	flag.Parse()
 	if *nodeID == "" || *underlay == "" {
 		log.Fatal("--node-id and --underlay are required")
+	}
+
+	// A WAN edge is a router, not a Kubernetes node: it has no apiserver to read and no Node object
+	// to stamp. --edge-loopback with no --kubeconfig selects that mode; everything the edge announces
+	// (its EDGE_UNDERLAY identity and the external egress defaults) comes from these flags alone. An
+	// edge that IS a pool node keeps its apiserver by passing --kubeconfig as usual.
+	edgeMode := *edgeLoopback != "" && *kubeconfig == ""
+	if edgeMode {
+		log.Printf("edge mode: WAN edge %s at underlay=%s loopback=%s, no apiserver", *nodeID, *underlay, *edgeLoopback)
 	}
 
 	dpConn, err := grpc.NewClient(*dataplaneAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -46,8 +56,29 @@ func main() {
 	defer dpConn.Close()
 	dp := agent.NewDataplaneAdapter(dpv1.NewDataplaneNodeClient(dpConn))
 
+	// SIGTERM/SIGINT cancel ctx so the bus session drains and Run returns; the loop below then exits.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	var rbCreds = insecure.NewCredentials()
 	switch {
+	case *routebusIntermediate != "":
+		// Edge mTLS: mint our own leaf from the edge fleet's intermediate, locally. The material is
+		// provisioned out of band and may not exist yet at first boot (in the lab the harness writes
+		// it during the substrate deploy, after this container already exists), so wait for it.
+		id := routebus.EdgeIdentity{
+			Dir:    *routebusIntermediate,
+			Node:   *nodeID,
+			IPSANs: []string{*underlay, *edgeLoopback},
+		}
+		if err := id.WaitForMaterial(ctx); err != nil {
+			log.Fatalf("wait for edge routebus material: %v", err)
+		}
+		tc, terr := id.ClientTLS()
+		if terr != nil {
+			log.Fatalf("edge routebus tls: %v", terr)
+		}
+		rbCreds = tc
 	case *routebusIssuer != "":
 		// Per-node mTLS: self-provision a leaf from the pool Issuer (IP SAN = this node's underlay)
 		// and verify the reflector with the ROOT from --tls-ca. Blocks until cert-manager mints it.
@@ -80,13 +111,11 @@ func main() {
 	defer rbConn.Close()
 	rb := rbv1.NewRouteBusClient(rbConn)
 
-	// SIGTERM/SIGINT cancel ctx so the bus session drains and Run returns; the loop below then exits.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	r, err := agent.NewReconciler(*kubeconfig, *nodeID, agent.Deps{
 		Underlay:     *underlay,
 		Dataplane:    dp,
 		EdgeLoopback: *edgeLoopback,
+		NoAPIServer:  edgeMode,
 	})
 	if err != nil {
 		log.Fatalf("reconciler: %v", err)
@@ -108,9 +137,6 @@ func main() {
 		}
 		if err := r.ReconcileFirewall(ctx); err != nil {
 			log.Printf("reconcile firewall: %v", err)
-		}
-		if err := r.ReconcileLB(ctx); err != nil {
-			log.Printf("reconcile lb: %v", err)
 		}
 		if err := r.ReconcileQoS(ctx); err != nil {
 			log.Printf("reconcile qos: %v", err)

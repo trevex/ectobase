@@ -62,6 +62,12 @@ topology:
       cap-add: ["NET_ADMIN", "SYS_ADMIN", "BPF"]
       binds:
         - /sys/fs/bpf:/sys/fs/bpf:shared
+        # The dataplane's root-only unix socket, on a HOST-backed dir so the mesh-agent-edge1
+        # container below can reach it. Without this the socket lives in this container's own
+        # filesystem and no second container can open it — and the TCP alternative is
+        # unauthenticated and root-equivalent (flowplane/src/cli/serve.rs). This is the same
+        # arrangement the pool chart uses for tenant nodes (hostPath /run/flowplane).
+        - edge/edge1/run:/run/flowplane
       env:
         # Jumbo gate, not an XDP attach mode: clab veths advertise no scatter-gather, so the probe
         # would conservatively clamp the guest MTU. test/edge-netns.sh's reference
@@ -86,12 +92,56 @@ topology:
       cap-add: ["NET_ADMIN", "SYS_ADMIN", "BPF"]
       binds:
         - /sys/fs/bpf:/sys/fs/bpf:shared
+        - edge/edge2/run:/run/flowplane
       env:
         FLOWPLANE_SKB_MODE: "1"
       cmd: >-
         serve --addr unix:///run/flowplane/dataplane.sock --role edge --uplink eth1 --wan-uplink eth3
         --local-underlay fd00:ffff::e2 --gateway 169.254.0.1
         --gateway-mac 02:00:00:00:00:01 --pin-dir /sys/fs/bpf/flowplane-edge2
+
+    # --- WAN-edge mesh agents -------------------------------------------------
+    # The edge is a ROUTER, not a Kubernetes node, so it runs no pool chart and has no apiserver:
+    # `agent --edge-loopback` with no --kubeconfig is the API-less edge mode. Each agent shares its
+    # edge's netns (so it dials the reflector over the BGP fabric, which already carries NodeAggr)
+    # and its flowplane sidecar's socket dir (the host-backed bind above). This is what makes the
+    # North-South path work from intent alone: the agent announces the edge's EDGE_UNDERLAY identity
+    # and the egress defaults into the public VNI, and learns each LB VIP + its backends off the
+    # route bus — the three things the live tests used to hand-program over the dataplane gRPC.
+    #
+    # Its route-bus identity is a leaf it mints ITSELF from the edge fleet's intermediate in
+    # edge/pki (written by the substrate deploy — see deploy.provisionEdgeIdentity; the fleet is an
+    # ordinary RouteBusIdentity named `edge`, name-constrained to LoopAggr). The directory does not
+    # exist yet at `lab up` time, which is fine: the agent waits for it and converges when it lands.
+    # Read-only, and shared by both edges — ONE fleet intermediate, one leaf per edge.
+    #
+    # The mesh image sets no ENTRYPOINT (see Dockerfile.mesh), so cmd is the full argv.
+    mesh-agent-edge1:
+      kind: linux
+      image: img/mesh
+      network-mode: container:clab-ectobase-edge1
+      binds:
+        - edge/edge1/run:/run/flowplane
+        - edge/pki:/etc/routebus:ro
+      cmd: >-
+        agent --node-id edge1 --underlay fd00:ffff::e1
+        --edge-loopback fd00:ffff::e1
+        --reflector [fd00:cafe:2e6b::1]:1338
+        --dataplane unix:///run/flowplane/dataplane.sock
+        --routebus-intermediate /etc/routebus
+    mesh-agent-edge2:
+      kind: linux
+      image: img/mesh
+      network-mode: container:clab-ectobase-edge2
+      binds:
+        - edge/edge2/run:/run/flowplane
+        - edge/pki:/etc/routebus:ro
+      cmd: >-
+        agent --node-id edge2 --underlay fd00:ffff::e2
+        --edge-loopback fd00:ffff::e2
+        --reflector [fd00:cafe:2e6b::1]:1338
+        --dataplane unix:///run/flowplane/dataplane.sock
+        --routebus-intermediate /etc/routebus
 
     nat64-1:
       kind: linux

@@ -23,9 +23,6 @@ type Reconciler struct {
 	underlay     string
 	edgeLoopback string    // if set, this node is a WAN edge; value = its UNIQUE control-plane loopback
 	dp           Dataplane // local flowplane; used to program egress SNAT sources
-	// appliedLbVips tracks the LB VIPs (id == VIP) this edge has AddLbVip'd, so ReconcileLB adds new
-	// ones, deletes removed ones, and never re-adds (create_lb rejects duplicate ids).
-	appliedLbVips map[string][]LbPort
 	// appliedQoS tracks the last per-interface QoS caps pushed so ReconcileQoS only calls
 	// ConfigureQoS when caps change (level-triggered convergence). Keyed by interface_id.
 	appliedQoS map[string]compiledQoSCaps // interfaceID -> last-applied caps
@@ -52,11 +49,20 @@ func (r *Reconciler) BeginTick() { r.tick = &tickSnapshot{} }
 func (r *Reconciler) EndTick()   { r.tick = nil }
 
 // listCNICs returns the node's CompiledNIC list, served from the per-tick cache when one is active.
+//
+// It is the reconciler's SINGLE funnel to the API server, which is what makes an API-less WAN edge
+// a small change rather than a parallel code path: with no client there are no CompiledNICs, so
+// Desired, DesiredPublic, desiredLB, desiredEgressVNIs, desiredPeeringImports, ReconcileFirewall
+// and ReconcileQoS all degrade to the no-guests case by construction — which is exactly what an
+// edge is. An edge hosts no guests, so that half of each function was empty anyway.
 func (r *Reconciler) listCNICs(ctx context.Context) (compiledv1.CompiledNICList, error) {
 	if r.tick != nil && r.tick.haveCNICs {
 		return r.tick.cnics, nil
 	}
 	var cnics compiledv1.CompiledNICList
+	if r.client == nil {
+		return cnics, nil // WAN edge: no API server, therefore no CompiledNICs
+	}
 	if err := r.client.List(ctx, &cnics); err != nil {
 		return cnics, err
 	}
@@ -76,10 +82,24 @@ type Deps struct {
 	// EdgeLoopback marks this node as a WAN edge with the given UNIQUE
 	// control-plane loopback (empty = not an edge).
 	EdgeLoopback string
+	// NoAPIServer builds a CLIENTLESS reconciler: it reads no CompiledNICs and stamps no Node.
+	// This is the WAN edge, which is a router rather than a Kubernetes node — it has no API server
+	// to read and hosts no guests to read about. Everything it announces (its EDGE_UNDERLAY
+	// identity and the external egress defaults) comes from its own flags.
+	NoAPIServer bool
 }
 
-// NewReconciler builds a Reconciler from a kubeconfig path (empty = in-cluster).
+// NewReconciler builds a Reconciler from a kubeconfig path (empty = in-cluster), or a clientless
+// one when deps.NoAPIServer is set (see that field).
 func NewReconciler(kubeconfig, nodeID string, deps Deps) (*Reconciler, error) {
+	if deps.NoAPIServer {
+		return &Reconciler{
+			nodeID:       nodeID,
+			underlay:     deps.Underlay,
+			dp:           deps.Dataplane,
+			edgeLoopback: deps.EdgeLoopback,
+		}, nil
+	}
 	cfg, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
 		return nil, fmt.Errorf("load kubeconfig %q: %w", kubeconfig, err)
@@ -202,11 +222,7 @@ func (r *Reconciler) Desired(ctx context.Context) (subs []uint32, announce []Rou
 	// external default routes (0.0.0.0/0 and NAT64 64:ff9b::/96) into every NATGateway's
 	// VPC VNI, nexthop'd at our own anycast underlay, so source hypervisors SNAT + encap
 	// egress toward us. Non-edge nodes get nothing here.
-	extRoutes, err := DesiredExternalRoutes(ctx, r.client, r.underlay, r.edgeLoopback)
-	if err != nil {
-		return nil, nil, nil, nil, nil, err
-	}
-	for _, er := range extRoutes {
+	for _, er := range DesiredExternalRoutes(r.underlay, r.edgeLoopback) {
 		vniSet[er.Vni] = struct{}{} // subscribe to the VNI we originate into
 		announce = append(announce, Route{Vni: er.Vni, Prefix: er.Prefix, Nexthop: er.Nexthop, External: er.External, DeliveryVNI: er.Vni})
 	}

@@ -24,7 +24,7 @@ topology:
   nodes:
     edge1:
       kind: linux
-      image: {{ index .Images "vyos" }}
+      image: {{ .Image "vyos" }}
       network-mode: none   # P3b: detach from clab mgmt — no eth0, fabric-only (links still attach)
       # vyos-router runs this as a vbash script on every boot (BGP+DNS64+NAT64-routes);
       # config.boot itself stays the image's stock default.
@@ -57,11 +57,17 @@ topology:
     # their own local-deliver underlay (::e1 / ::e2).
     flowplane-edge1:
       kind: linux
-      image: {{ index .Images "flowplane" }}
+      image: {{ .Image "flowplane" }}
       network-mode: container:clab-{{ .Name }}-edge1
       cap-add: ["NET_ADMIN", "SYS_ADMIN", "BPF"]
       binds:
         - /sys/fs/bpf:/sys/fs/bpf:shared
+        # The dataplane's root-only unix socket, on a HOST-backed dir so the mesh-agent-edge1
+        # container below can reach it. Without this the socket lives in this container's own
+        # filesystem and no second container can open it — and the TCP alternative is
+        # unauthenticated and root-equivalent (flowplane/src/cli/serve.rs). This is the same
+        # arrangement the pool chart uses for tenant nodes (hostPath /run/flowplane).
+        - edge/edge1/run:{{ .EdgeAgentSocketDir }}
       env:
         # Jumbo gate, not an XDP attach mode: clab veths advertise no scatter-gather, so the probe
         # would conservatively clamp the guest MTU. test/edge-netns.sh's reference
@@ -73,7 +79,7 @@ topology:
         --gateway-mac 02:00:00:00:00:01 --pin-dir /sys/fs/bpf/flowplane-edge1
     edge2:
       kind: linux
-      image: {{ index .Images "vyos" }}
+      image: {{ .Image "vyos" }}
       network-mode: none   # P3b: detach from clab mgmt — no eth0, fabric-only (links still attach)
       binds:
         - vyos/edge2.set:/opt/vyatta/etc/config/scripts/vyos-postconfig-bootup.script
@@ -81,11 +87,12 @@ topology:
     # edge2's flowplane sidecar (anycast peer of flowplane-edge1) — shares edge2's netns.
     flowplane-edge2:
       kind: linux
-      image: {{ index .Images "flowplane" }}
+      image: {{ .Image "flowplane" }}
       network-mode: container:clab-{{ .Name }}-edge2
       cap-add: ["NET_ADMIN", "SYS_ADMIN", "BPF"]
       binds:
         - /sys/fs/bpf:/sys/fs/bpf:shared
+        - edge/edge2/run:{{ .EdgeAgentSocketDir }}
       env:
         FLOWPLANE_SKB_MODE: "1"
       cmd: >-
@@ -93,9 +100,52 @@ topology:
         --local-underlay {{ .EdgeLoopback }}::e2 --gateway 169.254.0.1
         --gateway-mac 02:00:00:00:00:01 --pin-dir /sys/fs/bpf/flowplane-edge2
 
+    # --- WAN-edge mesh agents -------------------------------------------------
+    # The edge is a ROUTER, not a Kubernetes node, so it runs no pool chart and has no apiserver:
+    # `agent --edge-loopback` with no --kubeconfig is the API-less edge mode. Each agent shares its
+    # edge's netns (so it dials the reflector over the BGP fabric, which already carries NodeAggr)
+    # and its flowplane sidecar's socket dir (the host-backed bind above). This is what makes the
+    # North-South path work from intent alone: the agent announces the edge's EDGE_UNDERLAY identity
+    # and the egress defaults into the public VNI, and learns each LB VIP + its backends off the
+    # route bus — the three things the live tests used to hand-program over the dataplane gRPC.
+    #
+    # Its route-bus identity is a leaf it mints ITSELF from the edge fleet's intermediate in
+    # edge/pki (written by the substrate deploy — see deploy.provisionEdgeIdentity; the fleet is an
+    # ordinary RouteBusIdentity named `edge`, name-constrained to LoopAggr). The directory does not
+    # exist yet at `lab up` time, which is fine: the agent waits for it and converges when it lands.
+    # Read-only, and shared by both edges — ONE fleet intermediate, one leaf per edge.
+    #
+    # The mesh image sets no ENTRYPOINT (see Dockerfile.mesh), so cmd is the full argv.
+    mesh-agent-edge1:
+      kind: linux
+      image: {{ .Image "mesh" }}
+      network-mode: container:clab-{{ .Name }}-edge1
+      binds:
+        - edge/edge1/run:{{ .EdgeAgentSocketDir }}
+        - edge/pki:{{ .EdgeAgentPKIDir }}:ro
+      cmd: >-
+        agent --node-id edge1 --underlay {{ .EdgeLoopback }}::e1
+        --edge-loopback {{ .EdgeLoopback }}::e1
+        --reflector {{ .ReflectorAddress }}
+        --dataplane unix://{{ .EdgeAgentSocketDir }}/dataplane.sock
+        --routebus-intermediate {{ .EdgeAgentPKIDir }}
+    mesh-agent-edge2:
+      kind: linux
+      image: {{ .Image "mesh" }}
+      network-mode: container:clab-{{ .Name }}-edge2
+      binds:
+        - edge/edge2/run:{{ .EdgeAgentSocketDir }}
+        - edge/pki:{{ .EdgeAgentPKIDir }}:ro
+      cmd: >-
+        agent --node-id edge2 --underlay {{ .EdgeLoopback }}::e2
+        --edge-loopback {{ .EdgeLoopback }}::e2
+        --reflector {{ .ReflectorAddress }}
+        --dataplane unix://{{ .EdgeAgentSocketDir }}/dataplane.sock
+        --routebus-intermediate {{ .EdgeAgentPKIDir }}
+
     nat64-1:
       kind: linux
-      image: {{ index .Images "tayga" }}
+      image: {{ .Image "tayga" }}
       cap-add: ["NET_ADMIN"]
       devices: ["/dev/net/tun"]
       env:
@@ -107,7 +157,7 @@ topology:
         POOL_ADDR: 172.29.64.1
     nat64-2:
       kind: linux
-      image: {{ index .Images "tayga" }}
+      image: {{ .Image "tayga" }}
       cap-add: ["NET_ADMIN"]
       devices: ["/dev/net/tun"]
       env:
@@ -120,7 +170,7 @@ topology:
 
     sw1:
       kind: linux
-      image: {{ index .Images "vyos" }}
+      image: {{ .Image "vyos" }}
       network-mode: none   # P3b: detach from clab mgmt — no eth0, fabric-only (links still attach)
       # vyos-router runs this as a vbash script on every boot (BGP+RA relay);
       # config.boot itself stays the image's stock default.
@@ -129,7 +179,7 @@ topology:
       sysctls: {net.ipv6.conf.all.forwarding: 1}
     sw2:
       kind: linux
-      image: {{ index .Images "vyos" }}
+      image: {{ .Image "vyos" }}
       network-mode: none   # P3b: detach from clab mgmt — no eth0, fabric-only (links still attach)
       binds:
         - vyos/sw2.set:/opt/vyatta/etc/config/scripts/vyos-postconfig-bootup.script
@@ -151,7 +201,7 @@ topology:
 {{- range $n := .Nodes }}
     {{ $n.Name }}:
       kind: linux
-      image: {{ index $.Images "talos" }}
+      image: {{ $.Image "talos" }}
       network-mode: none
       # System containerd (machined's own image pulls) resolves via the container
       # runtime's /etc/resolv.conf, which is read-only and — being fabric-only, no
@@ -178,7 +228,7 @@ topology:
 {{- end }}
     wan:
       kind: linux
-      image: {{ index .Images "wan" }}
+      image: {{ .Image "wan" }}
       # All lab images are built locally (make lab-images) and not pushed to a
       # remote registry, so keep clab's IfNotPresent default — an Always policy
       # would force a failing remote pull of the local-only wan image.
@@ -197,7 +247,7 @@ topology:
 
     registry:
       kind: linux
-      image: {{ index .Images "registry" }}
+      image: {{ .Image "registry" }}
       # Persistent pull-through + push-local mirror. registry:2 reads its config
       # from /etc/docker/registry/config.yml; the cache is a host-path dir (clab
       # binds cannot name docker volumes). The exec entries give the registry its
@@ -226,7 +276,7 @@ topology:
     # (startup-delay) and finds the /64 already present.
     ceph-net:
       kind: linux
-      image: {{ index .Images "frr" }}
+      image: {{ .Image "frr" }}
       binds:
         - ceph/frr-daemons:/etc/frr/daemons
         - ceph/frr.conf:/etc/frr/frr.conf
@@ -240,7 +290,7 @@ topology:
     # and fails verification).
     ceph:
       kind: linux
-      image: {{ index .Images "ceph" }}
+      image: {{ .Image "ceph" }}
       network-mode: container:clab-{{ .Name }}-ceph-net
       startup-delay: 20   # wait for ceph-net to create dummy0 + the /64 before ceph/demo binds MON_IP
       # ceph/demo IPv6 knobs (the demo image mishandles v6 out of the box):

@@ -5,6 +5,7 @@
 package fabric
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -48,6 +49,23 @@ const (
 	JumpIface    = "ectojump"     // host-side ifname of the clab host:-endpoint veth
 )
 
+// DispatchCluster is the cluster hosting the dispatch aggregated apiserver, controller and
+// reflector. Every agent — pool node and WAN edge alike — dials the reflector at its fabric identity.
+const DispatchCluster = "dispatch"
+
+// ReflectorPort is the route-bus session port agents dial (the fence admin API is on 1339).
+const ReflectorPort = "1338"
+
+// EdgeAgentPKIDir is where each edge agent container sees the edge fleet's route-bus CA
+// (ca.crt/tls.crt/tls.key) — the layout of a pool CA Secret, so production can mount that verbatim.
+const EdgeAgentPKIDir = "/etc/routebus"
+
+// EdgeAgentSocketDir is where the edge agent and its flowplane sidecar meet: a host-backed bind of
+// the dataplane's unix socket directory. The sidecar's socket otherwise lives in its own container
+// filesystem, unreachable from a second container, and the TCP alternative is unauthenticated and
+// root-equivalent.
+const EdgeAgentSocketDir = "/run/flowplane"
+
 // RegistryHost is the in-fabric registry's routable [host]:port authority, as it
 // appears in an image reference ([fd00:29::5]:5000/trevex/ectobase/<name>:dev). The
 // nodes pull the locally-built :dev app images from here directly (no ghcr.io mirror
@@ -83,6 +101,17 @@ func (v *View) Name() string              { return v.Cfg.Name }
 func (v *View) Images() map[string]string { return v.Cfg.Images }
 func (v *View) NAT64Prefix() string       { return v.Cfg.Fabric.NAT64Prefix }
 
+// Image resolves one images.<key> from lab.yaml, FAILING the render when it is missing. Templates
+// use this rather than `index .Images "k"`, which quietly yields the empty string and produces a
+// topology with a blank `image:` — a node that then fails to start, far from the actual cause.
+func (v *View) Image(key string) (string, error) {
+	img := v.Cfg.Images[key]
+	if img == "" {
+		return "", fmt.Errorf("images.%s is not set in the lab config, but the topology needs it", key)
+	}
+	return img, nil
+}
+
 // Const accessors so templates can reference the fixed fabric constants ({{ .TaygaNet }}).
 func (v *View) TaygaNet() string     { return TaygaNet }
 func (v *View) WanNet() string       { return WanNet }
@@ -116,6 +145,31 @@ func (v *View) CephMonEndpoint() string { return "[" + v.Cfg.Derived.CephMonAddr
 // every cluster node (total nodes + 1), so the switch eth is eth{{add 2 CephPortSeq}}
 // — the next free host port on each ToR, colliding with no node port.
 func (v *View) CephPortSeq() int { return v.Cfg.TotalNodes() + 1 }
+
+// ReflectorAddress is the bracketed [host]:port the edge agents dial for the route bus — the
+// dispatch cluster's fabric identity, the same value the pool chart gets via reflectorAddress. The
+// edges reach it over the BGP fabric: they already carry NodeAggr, which is how the WAN reaches
+// nodes at all. Empty when no dispatch cluster is declared (a misconfigured lab.yaml).
+func (v *View) ReflectorAddress() string {
+	addr := v.DispatchIdentity()
+	if addr == "" {
+		return ""
+	}
+	return "[" + addr + "]:" + ReflectorPort
+}
+
+// DispatchIdentity is the dispatch cluster's first node's fabric /128.
+func (v *View) DispatchIdentity() string {
+	c, ok := v.Cfg.Derived.Clusters[DispatchCluster]
+	if !ok || len(c.Nodes) == 0 {
+		return ""
+	}
+	return c.Nodes[0].IdentityAddr
+}
+
+// Edge agent mount points, referenced by the clab topology.
+func (v *View) EdgeAgentPKIDir() string    { return EdgeAgentPKIDir }
+func (v *View) EdgeAgentSocketDir() string { return EdgeAgentSocketDir }
 
 // AS + aggregate accessors the FRR templates reference.
 func (v *View) ASEdge() int      { return v.Cfg.Fabric.AS.Edge }

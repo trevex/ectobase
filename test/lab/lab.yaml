@@ -4,6 +4,10 @@ images:
   # Same locally-built :dev image the DaemonSet pushes to the mirror; clab uses the
   # host-local copy (IfNotPresent default), so no remote pull.
   flowplane: ghcr.io/trevex/ectobase/flowplane:dev
+  # The mesh-agent sidecar on each WAN edge. An edge is a router, not a Kubernetes node, so it runs
+  # no pool chart — the agent is a clab node instead. Same locally-built :dev image the pool chart
+  # deploys (make image-mesh, via lab-app-images), host-local like flowplane.
+  mesh:     ghcr.io/trevex/ectobase/mesh:dev
   tayga:    ghcr.io/trevex/ectobase/tayga:latest
   wan:      ghcr.io/trevex/ectobase/wan:latest
   # Fabric routers (sw1/sw2/edge1/edge2), custom ISO->rootfs clab build (`make

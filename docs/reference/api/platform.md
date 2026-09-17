@@ -130,10 +130,15 @@ _Appears in:_
 
 
 
-RouteBusIdentitySpec is a pool's request for a route-bus intermediate CA. The pool (its
-broker) generates the intermediate keypair LOCALLY and submits only the CSR — the private
-key is never transmitted. The dispatch signer returns a name-constrained intermediate that
-can mint per-node agent leaves scoped to this pool.
+RouteBusIdentitySpec is a request for a route-bus intermediate CA. The requester generates the
+intermediate keypair LOCALLY and submits only the CSR — the private key is never transmitted.
+The dispatch signer returns a name-constrained intermediate that can mint agent leaves scoped to
+it.
+
+Usually the requester is a ClusterPool (its broker), one identity per pool. The WAN edge FLEET is
+the other kind: an edge is a router rather than a Kubernetes node, so it has no broker and no
+cert-manager — it is modelled as an ordinary identity named `edge`, permitted the edge loopback
+aggregate, and each edge agent mints its own leaf from that intermediate in process.
 
 
 
@@ -142,9 +147,9 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `poolName` _string_ | PoolName is the ClusterPool this identity belongs to. The signed intermediate is<br />name-constrained to this pool so it can only mint node identities within it. |  |  |
+| `poolName` _string_ | PoolName is the identity this intermediate belongs to — a ClusterPool name, or `edge` for<br />the WAN edge fleet. The signed intermediate is name-constrained to it so it can only mint<br />leaves within it. |  |  |
 | `request` _integer array_ | Request is the PEM-encoded PKCS#10 certificate-signing request for the pool's<br />intermediate CA (the pool keeps the matching private key). |  |  |
-| `permittedUnderlayCIDRs` _string array_ | PermittedUnderlayCIDRs are the pool's underlay IPv6 ranges. The signer name-constrains<br />the intermediate to these so it can only mint node leaves whose IP SAN falls inside the<br />pool — the reflector binds route nexthops to that SAN. |  | Optional: \{\} <br /> |
+| `permittedUnderlayCIDRs` _string array_ | PermittedUnderlayCIDRs are this identity's underlay IPv6 ranges — a pool's /48, or the edge<br />loopback aggregate for the edge fleet. The signer name-constrains the intermediate to these<br />so it can only mint leaves whose IP SAN falls inside them; the reflector then binds route<br />nexthops to that SAN. This constraint, not the minting code, is what bounds a holder of the<br />intermediate — which matters most for the edge, where an agent signs its own leaf locally. |  | Optional: \{\} <br /> |
 
 
 #### RouteBusIdentityStatus
