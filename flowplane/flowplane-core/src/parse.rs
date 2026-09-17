@@ -140,6 +140,35 @@ fn fold_addr_word<P: Pkt>(h: u32, pkt: &P, soff: usize, doff: usize) -> Option<u
     Some(h)
 }
 
+/// Streaming equivalent of [`hash_v6`] that reads both addresses straight from the packet at
+/// CONSTANT offsets, never holding a 16-byte address array on the stack. Byte-identical to
+/// `hash_v6` by construction — same interleaved `src[i], dst[i]` fold order via
+/// [`fold_addr_word`], then ports and proto (asserted in `parse_v6_test`).
+///
+/// This exists for the BPF stack budget, not for speed: the v6 uplink path already carries a
+/// 24-byte `LbKey6` plus the deeper resolve/decap frames, and materialising two 16-byte arrays
+/// just to hash them pushed `xdp_uplink_v6` over the verifier's 512-byte combined-call limit.
+/// Callers pass the SOURCE and DESTINATION address offsets, so the ICMP-error relay can hash the
+/// swapped embedded tuple by swapping the two arguments.
+#[inline(always)]
+pub fn hash_v6_at<P: Pkt>(
+    pkt: &P,
+    soff: usize,
+    doff: usize,
+    sport: u16,
+    dport: u16,
+    proto: u8,
+) -> Option<u32> {
+    let mut h = FNV_OFFSET;
+    h = fold_addr_word(h, pkt, soff, doff)?;
+    h = fold_addr_word(h, pkt, soff + 4, doff + 4)?;
+    h = fold_addr_word(h, pkt, soff + 8, doff + 8)?;
+    h = fold_addr_word(h, pkt, soff + 12, doff + 12)?;
+    h = fnv_u16(h, sport);
+    h = fnv_u16(h, dport);
+    Some(fnv_step(h, proto))
+}
+
 /// Streaming equivalent of `flow_label20(hash_v6(..))` for an inner IPv6 packet. `None` on OOB.
 #[inline(always)]
 fn inner_flow_hash_v6<P: Pkt>(pkt: &P, ip_off: usize) -> Option<u32> {

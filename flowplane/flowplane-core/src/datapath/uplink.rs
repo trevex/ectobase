@@ -15,7 +15,7 @@ use crate::encap::{reforward, TunnelEncap, ETH_LEN};
 use crate::firewall::{fw_eval_dir, fw_eval_dir6};
 use crate::lb::{
     lb_select_forward, lb_select_forward_icmp_error, lb_select_forward_icmp_error_v6,
-    lb_select_forward_v6,
+    lb_select_forward_v6_outlined,
 };
 use crate::maps::Maps;
 use crate::nat::{
@@ -126,7 +126,12 @@ fn resolve_uplink_target<M: Maps>(
 /// `UplinkTarget::Drop`, never a pass-through — a decapped overlay v6 frame with no legitimate local
 /// claimant must never be handed to this node's own kernel netns. This is the same fail-closed
 /// default the v4 resolver has.
-#[inline(always)]
+///
+/// `#[inline(never)]`, for the same reason the v4 resolver is: it is packet-FREE (takes `dst` by
+/// value and only touches maps), so out-of-lining is verifier-safe — no `pkt_end` crosses the call
+/// boundary — and it reclaims frame budget in `process_uplink_v6`, which is the program under real
+/// pressure against the 512-byte combined-call limit.
+#[inline(never)]
 fn resolve_uplink_target6<M: Maps>(
     maps: &M,
     vni: u32,
@@ -500,7 +505,8 @@ pub fn process_uplink_v6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
     // blackhole the ICMPv6 Packet-Too-Big PMTUD feedback. Same DSR/stateless-firewall rationale as v4.
     let icmp_relay = lb_select_forward_icmp_error_v6(&*pkt, &*maps, inner_off, in_.vni);
     let is_icmp_relay = icmp_relay.is_some();
-    let lb_ul = icmp_relay.or_else(|| lb_select_forward_v6(&*pkt, &*maps, inner_off, in_.vni));
+    let lb_ul =
+        icmp_relay.or_else(|| lb_select_forward_v6_outlined(&*pkt, &*maps, inner_off, in_.vni));
     let (tap, guest_mac, is_lb, peer_capable) = match lb_ul {
         Some(be) => {
             if be.node_vtep == in_.local.underlay_ipv6 {

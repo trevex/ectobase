@@ -5,7 +5,7 @@
 use crate::encap::{TunnelEncap, ETH_LEN};
 use crate::lb::{lb_select_forward, lb_select_forward_v6};
 use crate::maps::Maps;
-use crate::nat::{nat_icmp_error_origin, nat_icmp_error_origin6};
+use crate::nat::{nat_icmp_error_relay_port, nat_icmp_error_relay_port6};
 use crate::parse::{l4_ports, l4_ports_v6};
 use crate::pkt::{Action, Pkt};
 
@@ -129,10 +129,8 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
             // and unreachables reach the owner instead of being dropped here on a garbage port
             // (`l4_ports`' ICMP arm reads the unused/next-hop-MTU field as an "id"). Only a quote
             // of this very dst is honoured — see `nat_return_key` on why that check matters.
-            let relay_port = match nat_icmp_error_origin(&*pkt, ETH_LEN) {
-                Some((quoted_src, quoted_sport, _)) if quoted_src == dst => Some(quoted_sport),
-                _ => l4_ports(&*pkt, ETH_LEN).map(|(_proto, _sport, dport)| dport),
-            };
+            let relay_port = nat_icmp_error_relay_port(&*pkt, ETH_LEN, &dst)
+                .or_else(|| l4_ports(&*pkt, ETH_LEN).map(|(_proto, _sport, dport)| dport));
             if let Some(port) = relay_port {
                 if let Some((owner_ul, owner_vni)) = maps.neighbor_nat_lookup_any(dst, port) {
                     return WanRxOut {
@@ -154,10 +152,8 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
         if let Some(dst) = pkt.read_array::<16>(ETH_LEN + 24) {
             // Same ICMPv6-error preference as the v4 arm above: the owning port block is named by
             // the SOURCE port of the quoted packet, not by the error's own header.
-            let relay_port = match nat_icmp_error_origin6(&*pkt, ETH_LEN) {
-                Some((quoted_src, quoted_sport, _)) if quoted_src == dst => Some(quoted_sport),
-                _ => l4_ports_v6(&*pkt, ETH_LEN).map(|(_proto, _sport, dport)| dport),
-            };
+            let relay_port = nat_icmp_error_relay_port6(&*pkt, ETH_LEN, &dst)
+                .or_else(|| l4_ports_v6(&*pkt, ETH_LEN).map(|(_proto, _sport, dport)| dport));
             if let Some(dport) = relay_port {
                 if let Some((owner_ul, owner_vni)) = maps.neighbor_nat_lookup_any6(dst, dport) {
                     return WanRxOut {

@@ -63,7 +63,11 @@ pub fn neighbor_nat_lookup_any(dst: [u8; 4], dport: u16) -> Option<([u8; 16], u3
 }
 
 /// v6 sibling of [`neighbor_nat_lookup`]: `(vni, nat_ip6, dport)` -> owning node underlay /128.
-#[inline(always)]
+///
+/// `#[inline(never)]`: packet-FREE (a linear scan of 44-byte `NEIGHBOR_NAT6` entries, maps only),
+/// so out-of-lining cannot lose pkt-pointer provenance, and it keeps the entry copies out of
+/// `process_uplink_v6`'s frame — which is up against the verifier's combined-stack limit.
+#[inline(never)]
 pub fn neighbor_nat_lookup6(vni: u32, dst: [u8; 16], dport: u16) -> Option<[u8; 16]> {
     let count = match NEIGHBOR_NAT6_COUNT.get(0) {
         Some(c) => *c,
