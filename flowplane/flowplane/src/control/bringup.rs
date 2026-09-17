@@ -132,6 +132,7 @@ impl Control {
         let routes6 = Routes6::open(&mut ebpf)?;
         let floating_ips = FloatingIPs::open(&mut ebpf)?;
         let lb = Lb::open(&mut ebpf)?;
+        let lb6 = crate::maps::Lb6::open(&mut ebpf)?;
         let maglev = Maglev::open(&mut ebpf)?;
         let nat = Nat::open(&mut ebpf)?;
         let fw_rules = FwRules::open(&mut ebpf)?;
@@ -169,6 +170,7 @@ impl Control {
             neigh_nat6_count,
             nat_ct6,
             lb,
+            lb6,
             maglev,
             underlay,
             fw_rules,

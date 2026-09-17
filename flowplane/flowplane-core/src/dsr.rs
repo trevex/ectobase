@@ -5,7 +5,7 @@
 use flowplane_common::DsrOpt;
 
 /// Total buffer = 4-byte Geneve option header + 20-byte DsrOpt payload.
-pub const DSR_OPT_BUF_LEN: usize = 24;
+pub use flowplane_common::DSR_OPT_BUF_LEN;
 
 // Geneve option identity (private class/type) — the exact bytes the B1 spike round-tripped.
 const OPT_CLASS: u16 = 0x0108;

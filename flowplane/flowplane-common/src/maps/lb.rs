@@ -29,6 +29,20 @@ pub struct LbKey {
     pub _pad: u8,
 }
 
+/// IPv6 LB service key: (vni, balanced IPv6, L4 port, proto). v6 sibling of [`LbKey`], in its own
+/// `LB6` map for the same reason every other family pair is split (`INTERFACES`/`INTERFACES6`,
+/// `ROUTES`/`ROUTES6`, ...): the key holds the FULL 128-bit address. Truncating a v6 LB address
+/// into [`LbKey::ipv4`] aliased every address sharing those 4 bytes onto one service.
+#[repr(C)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+pub struct LbKey6 {
+    pub vni: u32,
+    pub ipv6: [u8; 16],
+    pub port: u16,
+    pub proto: u8,
+    pub _pad: u8,
+}
+
 /// LB value: the Maglev table id + its size (number of slots).
 #[repr(C)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
@@ -102,6 +116,7 @@ mod user_impls {
     unsafe impl aya::Pod for FloatingIPKey {}
     unsafe impl aya::Pod for FloatingIPKey6 {}
     unsafe impl aya::Pod for LbKey {}
+    unsafe impl aya::Pod for LbKey6 {}
     unsafe impl aya::Pod for LbValue {}
     unsafe impl aya::Pod for MaglevKey {}
     unsafe impl aya::Pod for LbBackend {}
@@ -140,6 +155,18 @@ mod tests {
         assert_eq!(size_of::<LbKey>(), 12);
         assert_eq!(size_of::<LbValue>(), 8);
         assert_eq!(size_of::<MaglevKey>(), 8);
+    }
+
+    #[test]
+    fn lb_key6_layout() {
+        // vni(4) ipv6(16) port(2) proto(1) _pad(1) = 24, no implicit padding.
+        assert_eq!(offset_of!(LbKey6, vni), 0);
+        assert_eq!(offset_of!(LbKey6, ipv6), 4);
+        assert_eq!(offset_of!(LbKey6, port), 20);
+        assert_eq!(offset_of!(LbKey6, proto), 22);
+        assert_eq!(offset_of!(LbKey6, _pad), 23);
+        assert_eq!(size_of::<LbKey6>(), 24);
+        assert_eq!(align_of::<LbKey6>(), 4);
     }
 
     #[test]

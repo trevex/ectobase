@@ -185,7 +185,10 @@ fn uplink_ingress_firewall_drop<P: Pkt, M: Maps>(
             maps.conntrack_get(&key).is_none()
                 && fw_eval_dir(pkt, maps, inner_off, tap, FW_DIR_INGRESS) == FW_ACTION_DROP
         }
-        None => false,
+        // Unreachable today (the caller already read the inner dst @ +16 to resolve the delivery
+        // target, which needs strictly more bytes than `ct_key` does) but stated fail-closed so the
+        // "unkeyable ⇒ dropped" invariant holds locally, without depending on that call ordering.
+        None => true,
     }
 }
 
@@ -421,7 +424,8 @@ fn uplink_ingress_firewall_drop6<P: Pkt, M: Maps>(
             maps.conntrack6_get(&key).is_none()
                 && fw_eval_dir6(pkt, maps, inner_off, tap, FW_DIR_INGRESS) == FW_ACTION_DROP
         }
-        None => false,
+        // Fail closed — see [`uplink_ingress_firewall_drop`]'s None arm.
+        None => true,
     }
 }
 
@@ -634,7 +638,11 @@ pub fn process_uplink_nat_return<P: Pkt, M: Maps>(
         // 2. Reverse-DNAT apply when the matched entry carries CT_REWRITE_DST.
         if let Some(e) = maps.conntrack_get(&key) {
             if e.flags & CT_REWRITE_DST != 0 {
-                ct_apply(pkt, inner_off, &e);
+                // A required reverse-DNAT that cannot be applied must drop: delivering the packet
+                // with its dst still set to the public nat_ip is not a valid return.
+                if !ct_apply(pkt, inner_off, &e) {
+                    return Action::Drop;
+                }
                 xlate_ip = Some(e.xlate_ip);
             }
         }

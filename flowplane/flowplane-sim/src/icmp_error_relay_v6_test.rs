@@ -4,7 +4,7 @@
 //! (ICMPv6 Packet Too Big, type 2) / dest-unreachable errors reach the right backend. Fresh v6 mirror
 //! of the v4 F3 relay (no pre-P2 eBPF original existed for v6); now in flowplane_core + sim-tested.
 
-use flowplane_common::{FwMeta, FwRule6, IfaceValue, LbBackend, LbKey, LbValue, Local, MaglevKey};
+use flowplane_common::{FwMeta, FwRule6, IfaceValue, LbBackend, LbValue, Local, MaglevKey};
 use flowplane_core::pkt::Action;
 
 use crate::SimNode;
@@ -43,11 +43,6 @@ const fn ul(last: u8) -> [u8; 16] {
     [0x20, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, last]
 }
 
-/// `last4` of a v6 addr — the control-plane LB-key convention (matches `lb_select_forward_v6`).
-const fn last4(a: [u8; 16]) -> [u8; 4] {
-    [a[12], a[13], a[14], a[15]]
-}
-
 fn local() -> Local {
     Local {
         uplink_ifindex: 5,
@@ -57,13 +52,13 @@ fn local() -> Local {
     }
 }
 
-/// A node with a 2-backend WAN LB service for `(VNI, last4(LB_IP_CONST), SERVICE_PORT, TCP)` (both remote).
+/// A node with a 2-backend WAN LB service for `(VNI, LB_IP_CONST, SERVICE_PORT, TCP)` (both remote).
 fn edge_node_two_backends() -> SimNode {
     let mut n = SimNode::with_local(local());
-    n.maps.lb.insert(
-        LbKey {
+    n.maps.lb6.insert(
+        flowplane_common::LbKey6 {
             vni: VNI,
-            ipv4: last4(LB_IP_CONST),
+            ipv6: LB_IP_CONST,
             port: SERVICE_PORT,
             proto: 6,
             _pad: 0,
@@ -136,10 +131,10 @@ fn eth_icmp6_error_embedding_lb_flow(err_type: u8, inner_proto: u8) -> Vec<u8> {
 /// branch and resolves the tap via `INTERFACES6[(vni, BACKEND_A_OVERLAY_IP6)]`.
 fn local_backend_node(inner_proto: u8, table_id: u32) -> SimNode {
     let mut n = SimNode::with_local(local());
-    n.maps.lb.insert(
-        LbKey {
+    n.maps.lb6.insert(
+        flowplane_common::LbKey6 {
             vni: VNI,
-            ipv4: last4(LB_IP_CONST),
+            ipv6: LB_IP_CONST,
             port: SERVICE_PORT,
             proto: inner_proto,
             _pad: 0,
@@ -275,7 +270,7 @@ fn icmpv6_error_selects_on_embedded_inner_not_outer() {
 fn icmpv6_error_embedded_src_not_an_lb_ip_is_not_relayed() {
     // No LB service for the embedded src -> not relayed -> normal path (Drop: no local iface/not edge).
     let mut n = edge_node_two_backends();
-    n.maps.lb.clear();
+    n.maps.lb6.clear();
     let frame = eth_icmp6_error_embedding_lb_flow(1, 6);
     let out = n.uplink_v6(&frame, VNI, &local());
     assert_eq!(

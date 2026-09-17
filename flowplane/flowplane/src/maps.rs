@@ -7,7 +7,7 @@ use aya::Ebpf;
 use flowplane_common::{
     CtEntry, CtEntry6, CtKey, CtKey6, DhcpConfig, DhcpMeta, FloatingIPKey, FloatingIPKey6, FwMeta,
     FwRule, FwRule6, FwRuleKey, IfaceKey, IfaceKey6, IfaceMetaKey, IfaceMetaVal, IfaceValue,
-    InspectEntry, LbBackend, LbKey, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6,
+    InspectEntry, LbBackend, LbKey, LbKey6, LbValue, Local, MaglevKey, MeterState, NatKey, NatKey6,
     NatValue, NatValue6, NeighborNat6Entry, NeighborNatEntry, PortMeta, RouteLpmData,
     RouteLpmData6, RouteValue, UnderlayValue,
 };
@@ -158,6 +158,11 @@ bpf_hash_map!(
 bpf_hash_map!(
     /// Typed handle over the `LB` BPF map.
     Lb, "LB", LbKey, LbValue, upsert, remove
+);
+
+bpf_hash_map!(
+    /// Typed handle over the `LB6` BPF map (IPv6 LB services, full-address key).
+    Lb6, "LB6", LbKey6, LbValue, upsert, remove
 );
 
 bpf_hash_map!(

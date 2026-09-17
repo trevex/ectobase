@@ -73,6 +73,10 @@ impl Maps for GlobalMaps {
         unsafe { crate::maps::LB.get(key).copied() }
     }
     #[inline(always)]
+    fn lb6_get(&self, key: &flowplane_common::LbKey6) -> Option<LbValue> {
+        unsafe { crate::maps::LB6.get(key).copied() }
+    }
+    #[inline(always)]
     fn maglev_get(&self, key: &MaglevKey) -> Option<LbBackend> {
         unsafe { crate::maps::MAGLEV.get(key).copied() }
     }

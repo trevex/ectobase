@@ -52,9 +52,8 @@ fn lb_select_returns_maglev_backend() {
 #[test]
 fn lb_select_v6_returns_maglev_backend() {
     let vni = 100u32;
-    // LB address with last-4 bytes = the LB key ipv4 (matching the control-plane `last4`).
+    // The v6 LB key is the FULL address (`LB6`), never a truncation of it.
     let lb_ip6 = [0x20u8, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 100, 1];
-    let lb_ip4 = [10, 0, 100, 1];
     let src6 = [0x20u8, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 203, 0, 113, 9];
     let backend_ul = [0x20u8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xbb];
     let backend = LbBackend {
@@ -64,10 +63,10 @@ fn lb_select_v6_returns_maglev_backend() {
         ..Default::default()
     };
     let mut m = MemMaps::default();
-    m.lb.insert(
-        LbKey {
+    m.lb6.insert(
+        flowplane_common::LbKey6 {
             vni,
-            ipv4: lb_ip4,
+            ipv6: lb_ip6,
             port: 443,
             proto: 6,
             _pad: 0,

@@ -1,5 +1,5 @@
 use crate::maps::Maps;
-use crate::parse::{hash5, l4_ports};
+use crate::parse::{hash5, hash_v6, l4_ports};
 use crate::pkt::Pkt;
 use flowplane_common::{LbBackend, LbKey, MaglevKey};
 
@@ -35,9 +35,9 @@ pub fn lb_select_forward<P: Pkt, M: Maps>(
 }
 
 /// Maglev backend select for an IPv6 LB service. Faithful port of eBPF `lb::lb_select_forward_v6`
-/// (the IPv6-in-IPv6 uplink relay path). Reads the inner IPv6 at `ip_off`; the LB key uses the
-/// last 4 bytes of the v6 dst (matching the control-plane `last4`). Returns the backend underlay
-/// /128, or None if `(vni, dst4, port, proto)` is not an LB service (or the table is empty).
+/// (the IPv6-in-IPv6 uplink relay path). Reads the inner IPv6 at `ip_off`; the LB key is the FULL
+/// v6 dst in `LB6`. Returns the backend underlay /128, or None if `(vni, dst6, port, proto)` is not
+/// an LB service (or the table is empty).
 #[inline(always)]
 pub fn lb_select_forward_v6<P: Pkt, M: Maps>(
     pkt: &P,
@@ -52,15 +52,12 @@ pub fn lb_select_forward_v6<P: Pkt, M: Maps>(
     }
     let dst6 = pkt.read_array::<16>(ip_off + 24)?;
     let src6 = pkt.read_array::<16>(ip_off + 8)?;
-    // LB key uses the last 4 bytes of the IPv6 address (matching the control-plane `last4`).
-    let dst4: [u8; 4] = [dst6[12], dst6[13], dst6[14], dst6[15]];
-    let src4: [u8; 4] = [src6[12], src6[13], src6[14], src6[15]];
     // L4 ports at ip_off + 40 (right after inner IPv6 header; no extension headers assumed).
     let sport = u16::from_be_bytes(pkt.read_array::<2>(ip_off + 40)?);
     let dport = u16::from_be_bytes(pkt.read_array::<2>(ip_off + 42)?);
-    let lb = maps.lb_get(&LbKey {
+    let lb = maps.lb6_get(&flowplane_common::LbKey6 {
         vni,
-        ipv4: dst4,
+        ipv6: dst6,
         port: dport,
         proto: nexthdr,
         _pad: 0,
@@ -68,7 +65,9 @@ pub fn lb_select_forward_v6<P: Pkt, M: Maps>(
     if lb.size == 0 {
         return None;
     }
-    let slot = hash5(&src4, &dst4, sport, dport, nexthdr) % lb.size;
+    // Slot hash folds the FULL addresses: the last 4 bytes alone lost the entropy of the prefix,
+    // so flows from distinct /64s collapsed onto one slot.
+    let slot = hash_v6(&src6, &dst6, sport, dport, nexthdr) % lb.size;
     maps.maglev_get(&MaglevKey {
         table_id: lb.table_id,
         slot,
@@ -83,7 +82,7 @@ pub fn lb_select_forward_v6<P: Pkt, M: Maps>(
 /// is hashed over the SWAPPED embedded tuple, reconstructing the original client->LB address forward-flow hash
 /// so the error (notably the ICMPv6 Packet-Too-Big PMTUD case) lands on the same backend. No extension
 /// headers are assumed on either the outer or embedded IPv6 (matching [`lb_select_forward_v6`]), so all
-/// offsets are constant; the LB key uses the `last4` of the v6 addr (same control-plane convention).
+/// offsets are constant; the LB key is the FULL embedded v6 src in `LB6`.
 ///
 /// KNOWN LIMITATION (deferred to the N/S-LB edge spec, IDENTICAL to the v4 fn): the relayed error reuses
 /// the shared LB delivery path, so `process_uplink_v6`'s ingress firewall evaluates it on its OUTER
@@ -119,16 +118,13 @@ pub fn lb_select_forward_icmp_error_v6<P: Pkt, M: Maps>(
     }
     let inner_src = pkt.read_array::<16>(inner_ip_off + 8)?; // = the LB address
     let inner_dst = pkt.read_array::<16>(inner_ip_off + 24)?; // = the client
-                                                              // LB key uses the last 4 bytes of the IPv6 address (matching the control-plane `last4`).
-    let inner_src4: [u8; 4] = [inner_src[12], inner_src[13], inner_src[14], inner_src[15]];
-    let inner_dst4: [u8; 4] = [inner_dst[12], inner_dst[13], inner_dst[14], inner_dst[15]];
-    // Inner L4 at inner_ip_off + 40 (right after inner IPv6 header; no extension headers assumed).
+                                                              // Inner L4 at inner_ip_off + 40 (right after inner IPv6 header; no extension headers assumed).
     let inner_sport = u16::from_be_bytes(pkt.read_array::<2>(inner_ip_off + 40)?); // = service port
     let inner_dport = u16::from_be_bytes(pkt.read_array::<2>(inner_ip_off + 42)?);
-    // LB key: dst = inner_src (LB_IP_CONST), port = inner_sport (service port), proto = inner_nexthdr.
-    let lb = maps.lb_get(&LbKey {
+    // LB key: dst = inner_src (the full LB address), port = inner_sport (service port).
+    let lb = maps.lb6_get(&flowplane_common::LbKey6 {
         vni,
-        ipv4: inner_src4,
+        ipv6: inner_src,
         port: inner_sport,
         proto: inner_nexthdr,
         _pad: 0,
@@ -137,9 +133,11 @@ pub fn lb_select_forward_icmp_error_v6<P: Pkt, M: Maps>(
         return None;
     }
     // Swapped 5-tuple (client->LB address perspective) reconstructs the original forward-flow hash.
-    let slot = hash5(
-        &inner_dst4,
-        &inner_src4,
+    // Must fold the same FULL addresses `lb_select_forward_v6` does or the error lands on a
+    // different backend than the flow it belongs to.
+    let slot = hash_v6(
+        &inner_dst,
+        &inner_src,
         inner_dport,
         inner_sport,
         inner_nexthdr,

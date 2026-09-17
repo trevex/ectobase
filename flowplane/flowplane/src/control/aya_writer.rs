@@ -34,6 +34,7 @@ pub struct AyaWriter {
     // LB domain: LB service map, Maglev table, and the UNDERLAY map. UNDERLAY is also
     // read/written by the interface + edge paths via `core.writer_mut()`.
     pub lb: Lb,
+    pub lb6: crate::maps::Lb6,
     pub maglev: Maglev,
     pub underlay: Underlay,
     // FIREWALL domain: per-interface rule slots + per-direction rule counts.
@@ -230,6 +231,16 @@ impl MapWriter for AyaWriter {
     }
     fn lb_remove(&mut self, k: &flowplane_common::LbKey) -> anyhow::Result<()> {
         self.lb.remove(k)
+    }
+    fn lb6_upsert(
+        &mut self,
+        k: flowplane_common::LbKey6,
+        v: flowplane_common::LbValue,
+    ) -> anyhow::Result<()> {
+        self.lb6.upsert(k, v)
+    }
+    fn lb6_remove(&mut self, k: &flowplane_common::LbKey6) -> anyhow::Result<()> {
+        self.lb6.remove(k)
     }
     fn maglev_upsert(
         &mut self,

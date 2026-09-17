@@ -11,6 +11,20 @@
 /// metering, the advertised guest MTU) adds this constant back in.
 pub const GENEVE_OVERHEAD: usize = 56;
 
+/// Total buffer of the DSR Geneve TLV: 4-byte Geneve option header + 20-byte `DsrOpt` payload.
+/// Canonical definition — `flowplane_core::dsr::DSR_OPT_BUF_LEN` and
+/// `flowplane_ebpf::tunnel::DSR_OPT_BUF_LEN` both derive from this so the wire layout, the
+/// encode/decode buffers and the MTU reserve below can never drift apart.
+pub const DSR_OPT_BUF_LEN: usize = 24;
+
+/// What an advertised guest MTU must leave free under the underlay MTU: the base Geneve overhead
+/// plus the DSR option. The option is reserved FLEET-WIDE rather than only on LB backends because
+/// any interface may become an LB backend later, and an MTU is advertised once at DHCP/RA time —
+/// re-advertising every guest on an LB membership change is not a thing. So every guest pays 24
+/// bytes to keep a full-size frame fitting after the edge stamps the option on an edge->backend
+/// redirect. Every MTU advertisement path (DHCPv4 opt-26, RA MTU option, link MTU) uses this.
+pub const ENCAP_OVERHEAD_V6: usize = GENEVE_OVERHEAD + DSR_OPT_BUF_LEN;
+
 /// Per-interface QoS state. Three lanes:
 /// - Egress total (EDT SHAPING): `total_bps` = shaped rate (bytes/s, 0 = unlimited);
 ///   `total_last_ns` = the EDT schedule cursor (`t_last`, ns). `total_burst`/`total_tokens` are

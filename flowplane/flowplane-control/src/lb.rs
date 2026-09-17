@@ -6,7 +6,51 @@
 
 use crate::shadow::{LbEntry, LbIp, LbIpBytes};
 use crate::{ControlCore, MapWriter};
-use flowplane_common::{LbKey, LbValue, MaglevKey};
+use flowplane_common::{LbKey, LbKey6, LbValue, MaglevKey};
+
+/// One LB service row, in whichever family map owns it. The two families live in separate maps
+/// (`LB` keyed on 4 bytes, `LB6` on the full 16) so a v6 address is never truncated into a v4 key;
+/// this keeps the register/unwind/delete paths from having to branch at every call site.
+#[derive(Copy, Clone)]
+enum LbRowKey {
+    V4(LbKey),
+    V6(LbKey6),
+}
+
+impl LbRowKey {
+    fn new(ip: &LbIp, vni: u32, port: u16, proto: u8) -> Self {
+        match ip {
+            LbIp::Ipv4(a) => LbRowKey::V4(LbKey {
+                vni,
+                ipv4: *a,
+                port,
+                proto,
+                _pad: 0,
+            }),
+            LbIp::Ipv6(a) => LbRowKey::V6(LbKey6 {
+                vni,
+                ipv6: *a,
+                port,
+                proto,
+                _pad: 0,
+            }),
+        }
+    }
+
+    fn upsert<W: MapWriter>(&self, w: &mut W, val: LbValue) -> anyhow::Result<()> {
+        match self {
+            LbRowKey::V4(k) => w.lb_upsert(*k, val),
+            LbRowKey::V6(k) => w.lb6_upsert(*k, val),
+        }
+    }
+
+    fn remove<W: MapWriter>(&self, w: &mut W) -> anyhow::Result<()> {
+        match self {
+            LbRowKey::V4(k) => w.lb_remove(k),
+            LbRowKey::V6(k) => w.lb6_remove(k),
+        }
+    }
+}
 
 impl<W: MapWriter> ControlCore<W> {
     /// Whether any registered load balancer still lives on `vni` (the eBPF `detach_interface`
@@ -33,23 +77,15 @@ impl<W: MapWriter> ControlCore<W> {
             LbIpBytes::Ipv4(a) => LbIp::Ipv4(*a),
             LbIpBytes::Ipv6(a) => LbIp::Ipv6(*a),
         };
-        let lb_ip_bytes4 = lb_ip.last4();
-
         // Write the per-port LB rows, tracking each so a partial failure can be unwound. Otherwise an
         // upsert error part-way left orphaned LB map rows (and a burned table_id) with NO `lbs`
         // bookkeeping — DelLoadBalancer iterates entry.ports, so it could never reach or remove them.
-        let mut written: Vec<LbKey> = Vec::with_capacity(ports.len());
+        let mut written: Vec<LbRowKey> = Vec::with_capacity(ports.len());
         let mut result: anyhow::Result<()> = Ok(());
         for &(port, proto) in &ports {
-            let key = LbKey {
-                vni,
-                ipv4: lb_ip_bytes4,
-                port,
-                proto,
-                _pad: 0,
-            };
-            if let Err(e) = self.w.lb_upsert(
-                key,
+            let key = LbRowKey::new(&lb_ip, vni, port, proto);
+            if let Err(e) = key.upsert(
+                &mut self.w,
                 LbValue {
                     table_id,
                     size: crate::maglev::TABLE_SIZE,
@@ -78,7 +114,7 @@ impl<W: MapWriter> ControlCore<W> {
         }
         if let Err(e) = result {
             for key in &written {
-                let _ = self.w.lb_remove(key); // unwind the partial LB rows
+                let _ = key.remove(&mut self.w); // unwind the partial LB rows
             }
             return Err(e);
         }
@@ -197,15 +233,8 @@ impl<W: MapWriter> ControlCore<W> {
             Some(e) => e,
             None => return Ok(false),
         };
-        let ip4 = entry.ip.last4();
         for &(port, proto) in &entry.ports {
-            let _ = self.w.lb_remove(&LbKey {
-                vni: entry.vni,
-                ipv4: ip4,
-                port,
-                proto,
-                _pad: 0,
-            });
+            let _ = LbRowKey::new(&entry.ip, entry.vni, port, proto).remove(&mut self.w);
         }
         for slot in 0..crate::maglev::TABLE_SIZE {
             let _ = self.w.maglev_remove(&MaglevKey {

@@ -90,6 +90,17 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
                 };
             }
         }
+    } else {
+        // FAIL CLOSED. `ct_key` only returns None when the frame is too short to hold a 20-byte
+        // IPv4 header (an unrecognised L4 still keys as `(proto, 0, 0)` — see `ct_key`), so this is
+        // a malformed frame, not an untracked protocol. Keying is what gates the firewall, so
+        // letting it through would hand an unevaluated guest frame to the route/Pass tail and out
+        // to the host stack — past a deny-by-default policy.
+        return GuestTxOut {
+            action: Action::Drop,
+            edt_tstamp,
+            tunnel: None,
+        };
     }
 
     // 2. LB address snat/dnat: not modelled (no LB address maps → no-op in the eBPF path too).
@@ -113,17 +124,27 @@ pub fn process_guest_tx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &GuestT
                 flags: CT_REWRITE_SRC,
                 ..Default::default()
             };
-            ct_apply(pkt, ip_off, &e);
+            // Drop if the reverse-SNAT could not be applied: forwarding the reply un-rewritten
+            // would send it out with this guest's own overlay src instead of the LB address,
+            // leaking an internal address to the client and breaking the flow anyway.
+            if !ct_apply(pkt, ip_off, &e) {
+                return GuestTxOut {
+                    action: Action::Drop,
+                    edt_tstamp,
+                    tunnel: None,
+                };
+            }
             is_dsr = true;
         }
     }
 
-    // 3. Route lookup on the inner IPv4 dst.
+    // 3. Route lookup on the inner IPv4 dst. Unreachable-but-fail-closed: this read needs exactly
+    //    the bytes `ct_key` already needed in step 1, so a frame reaching here always has them.
     let dst = match pkt.read_array::<4>(ip_off + 16) {
         Some(d) => d,
         None => {
             return GuestTxOut {
-                action: Action::Pass,
+                action: Action::Drop,
                 edt_tstamp,
                 tunnel: None,
             }

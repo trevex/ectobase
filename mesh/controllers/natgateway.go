@@ -72,7 +72,16 @@ func (r *NATGatewayReconciler) Sync(ctx context.Context, natgw *netv1.NATGateway
 		if nic.Spec.VPCRef.Name != natgw.Spec.VPCRef.Name {
 			continue
 		}
-		sources = append(sources, nic.Spec.IPs...)
+		// Status, never Spec.IPs: spec is an optional PIN, status is the overlay identity
+		// central IPAM committed. A NIC that auto-allocates (the normal case) pins nothing,
+		// so keying on spec gave it no SNAT block at all. Status covers both paths — a BYO
+		// pin is validated and then committed to status too.
+		//
+		// Deliberately NOT gated on State=="Allocated": once a NIC holds addresses those stay
+		// its identity until it is deleted, and dropping a source on a transient regression
+		// would free its block for reuse and re-NAT its live flows. An empty list (never
+		// allocated) contributes nothing.
+		sources = append(sources, nic.Status.AllocatedIPs...)
 	}
 	// Sorted only so that NEW sources fill free blocks deterministically; existing
 	// sources keep their block via Preassign below regardless of order.

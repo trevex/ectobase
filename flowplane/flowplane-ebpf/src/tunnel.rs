@@ -102,7 +102,7 @@ pub fn get_tunnel_key(skb: *mut __sk_buff) -> Option<(u32, [u8; 16])> {
 
 /// Total Geneve DSR option buffer = 4-byte Geneve option header + 20-byte payload (candidate layout;
 /// the B1 spike confirms/freezes this).
-pub const DSR_OPT_BUF_LEN: u32 = 24;
+pub const DSR_OPT_BUF_LEN: u32 = flowplane_common::DSR_OPT_BUF_LEN as u32;
 
 /// Attach a Geneve TLV to the skb tunnel metadata. MUST be called AFTER [`set_tunnel_key`] — the
 /// kernel's `collect_md` Geneve device only serializes an option alongside a tunnel key that is

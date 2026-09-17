@@ -52,8 +52,12 @@ pub fn forward_decision_v4(
         match unsafe { crate::maps::CONNTRACK.get(&key) } {
             Some(e) => {
                 let mut e = *e;
-                if e.flags & flowplane_common::CT_REWRITE_SRC != 0 {
-                    crate::conntrack::ct_apply(data, data_end, ETH_LEN, &e);
+                if e.flags & flowplane_common::CT_REWRITE_SRC != 0
+                    && !crate::conntrack::ct_apply(data, data_end, ETH_LEN, &e)
+                {
+                    // Required SNAT translation unapplied (IP options / short window): dropping
+                    // beats emitting the guest's untranslated source onto an external path.
+                    return EgressVerdict::Drop;
                 }
                 crate::conntrack::ct_touch(data, data_end, ETH_LEN, &key, &mut e);
             }
@@ -80,7 +84,11 @@ pub fn forward_decision_v4(
     // same transient `CtEntry{ xlate_ip, flags: CT_REWRITE_SRC, .. }` fed through `ct_apply` — the
     // SAME rewrite path the established-flow CT hit above already uses). Out-of-line so this stays a
     // separate, sequential BPF stack frame — see `dsr_reverse_snat_v4`'s doc comment.
-    dsr_reverse_snat_v4(data, data_end, meta.vni);
+    if !dsr_reverse_snat_v4(data, data_end, meta.vni) {
+        // DSR reverse-SNAT required but unapplied — see the core `process_guest_tx` DSR arm: the
+        // reply would otherwise leave carrying this guest's own overlay src, not the LB address.
+        return EgressVerdict::Drop;
+    }
     // SNAT: rewrite inner IPv4 source if an LB address mapping exists (G->V).
     crate::floatingip::snat_egress(data, data_end, ETH_LEN, meta.vni);
     // DNAT: rewrite inner IPv4 destination if an LB address mapping exists (V->G). This handles
@@ -178,7 +186,7 @@ pub fn forward_decision_v4(
 /// `CtEntry`) off that already-tight combined frame; the call is sequential (runs once, returns
 /// before the caller continues into LB address/route/NAT below), so it does not nest with anything else.
 #[inline(never)]
-fn dsr_reverse_snat_v4(data: usize, data_end: usize, vni: u32) {
+fn dsr_reverse_snat_v4(data: usize, data_end: usize, vni: u32) -> bool {
     let mut pkt = crate::coreimpl::RawPkt::new(data, data_end);
     if let Some(key) = flowplane_core::conntrack::ct_key(&pkt, ETH_LEN, vni) {
         if let Some(d) = crate::coreimpl::GlobalMaps.dsr_get(&key) {
@@ -187,9 +195,10 @@ fn dsr_reverse_snat_v4(data: usize, data_end: usize, vni: u32) {
                 flags: CT_REWRITE_SRC,
                 ..Default::default()
             };
-            flowplane_core::conntrack::ct_apply(&mut pkt, ETH_LEN, &e);
+            return flowplane_core::conntrack::ct_apply(&mut pkt, ETH_LEN, &e);
         }
     }
+    true
 }
 
 /// Result of the inner-v6 egress firewall/conntrack stage: either DROP the packet, or PASS it on

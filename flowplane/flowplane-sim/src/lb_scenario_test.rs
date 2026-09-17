@@ -28,7 +28,7 @@ const GUEST_MAC: [u8; 6] = [0x66, 0x66, 0x66, 0x66, 0x66, 0x00];
 
 const WAN_LB_IP: [u8; 4] = [203, 0, 113, 50]; // N/S public LB address (edge, vni=0)
 const WAN_SRC: [u8; 4] = [203, 0, 113, 9];
-// v6 N/S public LB address (edge, vni=0). LB is keyed by the last-4 bytes (control-plane `last4`).
+// v6 N/S public LB address (edge, vni=0). Keyed on the FULL address in LB6.
 const WAN_LB_IP6: [u8; 16] = [
     0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0xa8, 0xc8, 0x32,
 ];
@@ -526,16 +526,10 @@ fn ns_lb_v6_wan_rx_dsr_encode() {
 
     const BE_IP6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x61];
     let mut e = SimNode::with_local(local_for(EDGE_UL, 7));
-    let last4 = [
-        WAN_LB_IP6[12],
-        WAN_LB_IP6[13],
-        WAN_LB_IP6[14],
-        WAN_LB_IP6[15],
-    ];
-    e.maps.lb.insert(
-        LbKey {
+    e.maps.lb6.insert(
+        flowplane_common::LbKey6 {
             vni: 0,
-            ipv4: last4,
+            ipv6: WAN_LB_IP6,
             port: 443,
             proto: 6,
             _pad: 0,
@@ -712,7 +706,7 @@ fn apply_fw6(maps: &mut MemMaps, tap: u32, port: u16) {
 
 #[test]
 fn ns_lb_two_backends_one_node_deliver_to_distinct_taps_v4() {
-    use flowplane_common::{IfaceValue, LbBackend, LbKey, LbValue, MaglevKey};
+    use flowplane_common::{IfaceValue, LbBackend, LbValue, MaglevKey};
     use flowplane_core::pkt::Action;
 
     const BE1_IP: [u8; 4] = [10, 0, 0, 61];
@@ -799,9 +793,99 @@ fn ns_lb_two_backends_one_node_deliver_to_distinct_taps_v4() {
     );
 }
 
+// A v6 LB service must be keyed on the FULL 128-bit address. Keying on the last 4 bytes made any
+// address sharing those 4 bytes alias the service: traffic to a completely different /64 — an
+// ordinary guest address, or a second LB address — matched the first service's Maglev table and
+// was redirected to its backends.
+#[test]
+fn v6_lb_does_not_match_a_different_address_sharing_its_last_four_bytes() {
+    use flowplane_common::{IfaceValue, LbBackend, LbKey6, LbValue, MaglevKey};
+    use flowplane_core::pkt::Action;
+
+    const BE_IP6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x71];
+    const BE_TAP: u32 = 71;
+    // Two distinct LB-looking addresses that differ ONLY above the last 4 bytes.
+    const LB_IP6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 100, 1];
+    const ALIAS_IP6: [u8; 16] = [
+        0x20, 1, 0xd, 0xb8, 0xff, 0xff, 0, 0, 0, 0, 0, 0, 10, 0, 100, 1,
+    ];
+    assert_eq!(
+        LB_IP6[12..16],
+        ALIAS_IP6[12..16],
+        "the two addresses must share last4 for this test to mean anything"
+    );
+    assert_ne!(LB_IP6, ALIAS_IP6);
+
+    let mut n = SimNode::with_local(local_for(HOSTB_UL, 9));
+    n.maps.add_iface6(
+        VNI,
+        BE_IP6,
+        IfaceValue {
+            tap_ifindex: BE_TAP,
+            is_local: 1,
+            underlay_ipv6: HOSTB_UL,
+            guest_mac: GUEST_MAC,
+            peer_capable: 0,
+            _pad: [0; 1],
+        },
+    );
+    apply_fw6(&mut n.maps, BE_TAP, 443);
+    // Exactly ONE service registered, on LB_IP6.
+    n.maps.lb6.insert(
+        LbKey6 {
+            vni: VNI,
+            ipv6: LB_IP6,
+            port: 443,
+            proto: 6,
+            _pad: 0,
+        },
+        LbValue {
+            table_id: 9,
+            size: 1,
+        },
+    );
+    n.maps.maglev.insert(
+        MaglevKey {
+            table_id: 9,
+            slot: 0,
+        },
+        LbBackend {
+            node_vtep: HOSTB_UL,
+            overlay_ip: BE_IP6,
+            vni: VNI,
+            is_v6: 1,
+            _pad: [0; 3],
+        },
+    );
+
+    let src6 = [0x20u8, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9];
+    // Sanity: the real LB address still balances to the backend.
+    let hit = n.uplink_v6(
+        &eth_ipv6_tcp(src6, LB_IP6, 443),
+        VNI,
+        &local_for(HOSTB_UL, 9),
+    );
+    assert_eq!(
+        hit.action,
+        Action::Redirect(BE_TAP),
+        "the registered v6 LB address must still select its backend"
+    );
+    // The aliasing address is NOT a service: it must never reach an LB backend.
+    let miss = n.uplink_v6(
+        &eth_ipv6_tcp(src6, ALIAS_IP6, 443),
+        VNI,
+        &local_for(HOSTB_UL, 9),
+    );
+    assert_ne!(
+        miss.action,
+        Action::Redirect(BE_TAP),
+        "a different v6 address sharing last4 must not alias the LB service"
+    );
+}
+
 #[test]
 fn ns_lb_two_backends_one_node_deliver_to_distinct_taps_v6() {
-    use flowplane_common::{IfaceValue, LbBackend, LbKey, LbValue, MaglevKey};
+    use flowplane_common::{IfaceValue, LbBackend, LbValue, MaglevKey};
     use flowplane_core::pkt::Action;
 
     const BE1_IP6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x61];
@@ -809,7 +893,6 @@ fn ns_lb_two_backends_one_node_deliver_to_distinct_taps_v6() {
     const BE1_TAP: u32 = 61;
     const BE2_TAP: u32 = 62;
     let lb_ip6: [u8; 16] = [0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 100, 1];
-    let lb_ip_last4 = [lb_ip6[12], lb_ip6[13], lb_ip6[14], lb_ip6[15]];
 
     let mut n = SimNode::with_local(local_for(HOSTB_UL, 9));
     for (ip6, tap) in [(BE1_IP6, BE1_TAP), (BE2_IP6, BE2_TAP)] {
@@ -827,10 +910,10 @@ fn ns_lb_two_backends_one_node_deliver_to_distinct_taps_v6() {
         );
         apply_fw6(&mut n.maps, tap, 443);
     }
-    n.maps.lb.insert(
-        LbKey {
+    n.maps.lb6.insert(
+        flowplane_common::LbKey6 {
             vni: VNI,
-            ipv4: lb_ip_last4,
+            ipv6: lb_ip6,
             port: 443,
             proto: 6,
             _pad: 0,
