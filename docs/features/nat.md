@@ -84,8 +84,27 @@ The edge's `uplink_rx` / `wan_rx` path matches the return packet's `(nat_ip, dpo
 against its neighbor-NAT table, gets back the owning node's underlay `/128` and VNI, and
 encapsulates the return toward it. On the owning node, the reverse conntrack key
 `(vni, 0, nat_ip, 0, nat_port)` matches, the translation is reversed, and the packet is
-delivered to the original guest. (A plain IPv4 return from the internet carries no VNI, so
-the edge uses a VNI-agnostic lookup that returns both the underlay and the owner's VNI.)
+delivered to the original guest. (A plain return from the internet carries no VNI, so
+the edge uses a VNI-agnostic lookup that returns both the underlay and the owner's VNI.
+Both families work the same way, over `NEIGHBOR_NAT` / `NEIGHBOR_NAT6`.)
+
+### ICMP errors
+
+An ICMP error — a PMTUD "fragmentation needed" / "packet too big", or any unreachable —
+breaks the assumption above: it is addressed to the `nat_ip` but carries **no port of its
+own**. The port that names the flow is the *source* port of the packet the error quotes,
+which is the guest's original packet as it left post-SNAT. So both the edge's relay lookup
+and the owner's reverse conntrack key are built from the quoted packet instead, and a quote
+is only trusted when its source is the very `nat_ip` the error is addressed to — an error
+quoting someone else's packet says nothing about this flow.
+
+Delivering it then requires rewriting **both** copies of the public address
+([RFC 5508](https://www.rfc-editor.org/rfc/rfc5508) §3.2): the outer destination, or the
+frame cannot reach the guest, and the quoted source and source port, because a guest
+matches an ICMP error to a socket by the quoted tuple and silently discards one still
+addressed to the public identity. Every affected checksum is folded incrementally,
+including the ICMP checksum, which covers the quoted packet — and for ICMPv6 also covers a
+pseudo-header containing the outer address being rewritten.
 
 ## The agent derives NAT solely from CompiledNIC
 

@@ -18,7 +18,10 @@ use crate::lb::{
     lb_select_forward_v6,
 };
 use crate::maps::Maps;
-use crate::nat::{nat_icmp_error_origin, nat_icmp_error_return_rewrite, nat_return_rewrite6};
+use crate::nat::{
+    nat_icmp_error_origin, nat_icmp_error_origin6, nat_icmp_error_return_rewrite,
+    nat_icmp_error_return_rewrite6, nat_return_rewrite6,
+};
 use crate::parse::{l4_ports, l4_ports_v6};
 use crate::pkt::{Action, Pkt};
 
@@ -738,9 +741,26 @@ fn nat_return_dnat6<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, vni: u32) -> boo
     }
     key.src_ip = [0; 16];
     key.src_port = 0;
+    // An ICMPv6 error carries no port of its own; the flow is identified by the packet it quotes.
+    // Only a quote of this very nat_ip6 is honoured — see [`nat_return_key`] on why.
+    let mut is_icmp_error = false;
+    if let Some((quoted_src, quoted_sport, quoted_proto)) = nat_icmp_error_origin6(&*pkt, inner_off)
+    {
+        if quoted_src == key.dst_ip {
+            key.dst_port = quoted_sport;
+            key.proto = quoted_proto;
+            is_icmp_error = true;
+        }
+    }
     if let Some(e) = maps.nat_ct6_get(&key) {
         if e.flags & CT_REWRITE_DST != 0 {
-            nat_return_rewrite6(pkt, inner_off, &e);
+            // An ICMPv6 error needs both copies of the address translated (outer dst + the quoted
+            // packet); `nat_return_rewrite6` only knows about the outer one.
+            if is_icmp_error {
+                nat_icmp_error_return_rewrite6(pkt, inner_off, &e);
+            } else {
+                nat_return_rewrite6(pkt, inner_off, &e);
+            }
             return true;
         }
     }

@@ -5,7 +5,7 @@
 use crate::encap::{TunnelEncap, ETH_LEN};
 use crate::lb::{lb_select_forward, lb_select_forward_v6};
 use crate::maps::Maps;
-use crate::nat::nat_icmp_error_origin;
+use crate::nat::{nat_icmp_error_origin, nat_icmp_error_origin6};
 use crate::parse::{l4_ports, l4_ports_v6};
 use crate::pkt::{Action, Pkt};
 
@@ -152,7 +152,13 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
     // arm above via `neighbor_nat_lookup_any6`.
     if ethertype == 0x86DD {
         if let Some(dst) = pkt.read_array::<16>(ETH_LEN + 24) {
-            if let Some((_proto, _sport, dport)) = l4_ports_v6(&*pkt, ETH_LEN) {
+            // Same ICMPv6-error preference as the v4 arm above: the owning port block is named by
+            // the SOURCE port of the quoted packet, not by the error's own header.
+            let relay_port = match nat_icmp_error_origin6(&*pkt, ETH_LEN) {
+                Some((quoted_src, quoted_sport, _)) if quoted_src == dst => Some(quoted_sport),
+                _ => l4_ports_v6(&*pkt, ETH_LEN).map(|(_proto, _sport, dport)| dport),
+            };
+            if let Some(dport) = relay_port {
                 if let Some((owner_ul, owner_vni)) = maps.neighbor_nat_lookup_any6(dst, dport) {
                     return WanRxOut {
                         action: Action::Redirect(in_.local.uplink_ifindex),
