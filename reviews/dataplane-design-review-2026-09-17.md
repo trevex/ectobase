@@ -34,7 +34,18 @@ asymmetries plus doc drift.
 
 ---
 
-## 1. Correctness bugs (P0)
+## Status: the P0 batch is done (2026-09-17)
+
+All of §1 is fixed on `fix/p0-dataplane-batch`, each with a failing test written first
+(`make ci` green; 185 sim/core tests). Two findings did not survive scrutiny and are
+corrected in place below — 1.3's IPv6 half and part of 1.4.
+
+**Still needs a privileged run:** `make verifier` (root) has NOT been executed. The ICMP-error
+relay adds a 36-byte rewrite window to `process_uplink_rx` and a 56-byte one to the v6 uplink
+path, both already tight against the verifier's 512-byte combined-stack limit. Run it before
+shipping.
+
+## 1. Correctness bugs (P0) — FIXED
 
 ### 1.1 SNAT is dead for auto-allocated NICs *(verified)*
 `NATGatewayReconciler.Sync` collects NAT sources from `nic.Spec.IPs`
@@ -52,23 +63,34 @@ The v6 LB/Maglev key uses only the final 4 bytes of the IPv6 LB address
 silently share one backend table.
 **Fix:** key on the full 16 bytes (or a proper hash of them) in `LbKey`/`MaglevKey`.
 
-### 1.3 Fragments and v6 extension headers poison firewall + conntrack keys
-`l4_ports` reads L4 at a fixed offset with no IPv4 `frag_off`/MF check
-(`flowplane-core/src/parse.rs:15-34`), and the v6 path assumes L4 at `ip_off + 40` with no
-extension-header walk (`parse.rs:40-55`). Non-first fragments and EH-bearing v6 packets
-get garbage ports fed into firewall matching, conntrack keys, LB hashing, and NAT demux —
-fragments of one flow can land on different LB backends or different NAT verdicts.
-**Fix:** parse `frag_off`/MF; for non-first fragments either drop (documented) or key on
-`(src, dst, proto, ipid)`; walk the v6 EH chain (bounded) or explicitly drop packets with
-EHs. Whatever the choice, make it explicit and fail-closed, and add sim-oracle cases.
+### 1.3 IPv4 fragments poison firewall + conntrack keys — v6 half WITHDRAWN
+`l4_ports` read L4 at `ip_off + ihl` off the protocol byte alone with no `frag_off`/MF
+check (`flowplane-core/src/parse.rs`). Every IPv4 fragment carries the original protocol
+number but only the first carries an L4 header, so non-first fragments had payload bytes
+returned as ports — feeding firewall matching, conntrack keys, Maglev hashing and NAT
+demux, and `snat_egress` wrote a "source port" into the payload.
+**Fixed:** non-first fragments key as `(proto, 0, 0)` (so fragments of one datagram share a
+key and no payload is read or written as a port); paths that require an L4 translation drop
+via a new `SnatOutcome::Untranslatable`. Limitation documented in `docs/features/nat.md`.
 
-### 1.4 Firewall fails open on unkeyable frames
-When a conntrack key can't be built, the uplink ingress gate returns "don't drop"
-(`flowplane-core/src/datapath/uplink.rs:183-189`), and the egress firewall is only reached
-inside the `ct_key(..) == Some` branch (`egress.rs:51`). Frames too short/odd to key
-bypass a deny-by-default firewall. Combined with 1.3, a crafted fragment/EH packet is a
-policy-bypass primitive.
-**Fix:** unkeyable → drop, matching `fw_eval_dir`'s own fail-closed contract.
+**The IPv6 extension-header half of this finding was wrong.** Every fixed-offset v6 L4 read
+is already gated on `nexthdr ∈ {TCP, UDP, ICMPv6}` (`parse.rs` `l4_ports_v6`,
+`inner_flow_hash_v6`, `icmp_type_code_v6`; `lb.rs` v6 select). An EH-bearing packet has
+`nexthdr` = the EH number, so all of them bail out and it keys consistently as
+`(eh_proto, 0, 0)`. Such traffic is unsupported (a port-specific rule won't match it) but it
+was never misparsed. Nothing to fix.
+
+### 1.4 Firewall fails open on unkeyable frames — real on egress, not on ingress
+`ct_key`/`ct_key6` return `None` only for a frame too short to hold an IP header (an
+unrecognised L4 still keys as `(proto, 0, 0)`), and keying is what gates the firewall.
+**On guest egress this was a real leak:** the firewall ran only inside the `ct_key == Some`
+branch and the route step then returned `Action::Pass`, so a guest could truncate its own
+frame, skip a deny-by-default policy, and have it passed into the host stack. Fixed in both
+`process_guest_tx` and the shared `egress_fw_ct6`.
+**On uplink ingress it was unreachable**, not exploitable: the caller resolves the inner dst
+(needing strictly more bytes than `ct_key` does) and drops first. Both arms were still
+changed to `true` so the "unkeyable ⇒ dropped" invariant holds locally rather than depending
+on call ordering.
 
 ### 1.5 NAT has no ICMP-error handling (PMTUD broken for SNAT flows)
 LB has a dedicated embedded-packet ICMP-error relay (`lb.rs:78-230`); NAT has none.
@@ -238,10 +260,8 @@ get mirrored, and each gap is individually "known" but the set is growing.
 
 ## 7. Suggested sequencing
 
-1. **P0 correctness batch** (each small, testable, sim-coverable): 1.1 NAT source field;
-   1.2 v6 LB key; 1.4 fail-closed unkeyable frames; 1.6 drop-on-unrewritable; 1.7 DHCP
-   fallback MTU. Then 1.3 (frag/EH policy — needs a design decision first) and 1.5 (NAT
-   ICMP relay — pattern exists in `lb.rs`).
+1. ~~**P0 correctness batch**~~ — **DONE**, see the status note at the top. One follow-up
+   carried over: run `make verifier` (root) against the new ICMP-relay rewrite windows.
 2. **N/S resilience pair:** NAT/public snapshot-prune + edge readiness gating. These two
    close the only "silent traffic loss with no self-healing" paths in the system.
 3. **Failover safety:** fence completeness + dispatch-controller leader election.
