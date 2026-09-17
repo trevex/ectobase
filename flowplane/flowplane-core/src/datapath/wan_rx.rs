@@ -5,6 +5,7 @@
 use crate::encap::{TunnelEncap, ETH_LEN};
 use crate::lb::{lb_select_forward, lb_select_forward_v6};
 use crate::maps::Maps;
+use crate::nat::nat_icmp_error_origin;
 use crate::parse::{l4_ports, l4_ports_v6};
 use crate::pkt::{Action, Pkt};
 
@@ -123,8 +124,17 @@ pub fn process_wan_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &M, in_: &WanRxIn) -> 
     // owned by some node, relayed toward the owner WITH the owner's real VNI.
     if ethertype != 0x86DD {
         if let Some(dst) = pkt.read_array::<4>(ETH_LEN + 16) {
-            if let Some((_proto, _sport, dport)) = l4_ports(&*pkt, ETH_LEN) {
-                if let Some((owner_ul, owner_vni)) = maps.neighbor_nat_lookup_any(dst, dport) {
+            // An ICMP error addressed to a nat_ip has no port of its own — the one that names the
+            // owning port block is the SOURCE port of the packet it quotes. Prefer that, so PMTUD
+            // and unreachables reach the owner instead of being dropped here on a garbage port
+            // (`l4_ports`' ICMP arm reads the unused/next-hop-MTU field as an "id"). Only a quote
+            // of this very dst is honoured — see `nat_return_key` on why that check matters.
+            let relay_port = match nat_icmp_error_origin(&*pkt, ETH_LEN) {
+                Some((quoted_src, quoted_sport, _)) if quoted_src == dst => Some(quoted_sport),
+                _ => l4_ports(&*pkt, ETH_LEN).map(|(_proto, _sport, dport)| dport),
+            };
+            if let Some(port) = relay_port {
+                if let Some((owner_ul, owner_vni)) = maps.neighbor_nat_lookup_any(dst, port) {
                     return WanRxOut {
                         action: Action::Redirect(in_.local.uplink_ifindex),
                         tunnel: Some(TunnelEncap {

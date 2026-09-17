@@ -18,7 +18,7 @@ use crate::lb::{
     lb_select_forward_v6,
 };
 use crate::maps::Maps;
-use crate::nat::nat_return_rewrite6;
+use crate::nat::{nat_icmp_error_origin, nat_icmp_error_return_rewrite, nat_return_rewrite6};
 use crate::parse::{l4_ports, l4_ports_v6};
 use crate::pkt::{Action, Pkt};
 
@@ -613,6 +613,44 @@ pub struct UplinkNatReturnIn<'a> {
     pub local: &'a Local,
 }
 
+/// Build the reverse-NAT conntrack key for an inbound return packet, reporting whether it is an
+/// ICMP **error** — whose flow identity lives in the packet it quotes, not in its own header.
+///
+/// A plain return is keyed `(vni, 0, nat_ip, 0, nat_port)` straight off the outer header. An ICMP
+/// error addressed to the `nat_ip` has no port there at all (those bytes are the ICMP
+/// unused/next-hop-MTU field), so its port and protocol come from the quoted packet — the guest's
+/// own outbound packet as it left post-SNAT. Without this, the reverse lookup used a garbage port,
+/// missed, and the error was dropped: no PMTUD and no unreachables for any SNATed flow.
+///
+/// Shared by [`process_uplink_nat_return`] and the [`process_uplink_rx`] dispatch so the key they
+/// look up can never disagree. `#[inline(always)]`: reads the packet (see
+/// [`crate::nat::nat_icmp_error_origin`]).
+#[inline(always)]
+fn nat_return_key<P: Pkt, M: Maps>(
+    pkt: &P,
+    maps: &M,
+    inner_off: usize,
+    vni: u32,
+) -> Option<(flowplane_common::CtKey, bool)> {
+    let mut key = ct_key(pkt, inner_off, vni)?;
+    if !maps.is_nat_ip(vni, &key.dst_ip) {
+        return Some((key, false));
+    }
+    key.src_ip = [0; 4];
+    key.src_port = 0;
+    if let Some((quoted_src, quoted_sport, quoted_proto)) = nat_icmp_error_origin(pkt, inner_off) {
+        // Only honour a quote of the very nat_ip this packet is addressed to. An error quoting
+        // somebody else's packet is no evidence about this flow, and trusting it would let an
+        // attacker choose which conntrack entry — and so which guest — an error is delivered to.
+        if quoted_src == key.dst_ip {
+            key.dst_port = quoted_sport;
+            key.proto = quoted_proto;
+            return Some((key, true));
+        }
+    }
+    Some((key, false))
+}
+
 /// Host NAT reverse-DNAT return path, in place on `pkt`. Mirrors the eBPF `try_uplink_rx` NAT branch:
 /// build the inner 5-tuple key (demuxed peer-independently when the inner dst is a registered nat_ip);
 /// reverse-DNAT apply when the matched CT entry carries `CT_REWRITE_DST`; resolve the delivery
@@ -630,17 +668,21 @@ pub fn process_uplink_nat_return<P: Pkt, M: Maps>(
     let mut xlate_ip: Option<[u8; 4]> = None;
 
     // 1. Build the inner 5-tuple key; NAT returns are demuxed peer-independently.
-    if let Some(mut key) = ct_key(&*pkt, inner_off, in_.vni) {
-        if maps.is_nat_ip(in_.vni, &key.dst_ip) {
-            key.src_ip = [0; 4];
-            key.src_port = 0;
-        }
+    if let Some((key, is_icmp_error)) = nat_return_key(&*pkt, &*maps, inner_off, in_.vni) {
         // 2. Reverse-DNAT apply when the matched entry carries CT_REWRITE_DST.
         if let Some(e) = maps.conntrack_get(&key) {
             if e.flags & CT_REWRITE_DST != 0 {
+                // An ICMP error needs BOTH copies of the address translated (outer dst + the
+                // quoted packet) — `ct_apply` only knows about the outer one, and a guest
+                // discards an error whose quoted tuple is still the public identity.
+                let applied = if is_icmp_error {
+                    nat_icmp_error_return_rewrite(pkt, inner_off, &e)
+                } else {
+                    ct_apply(pkt, inner_off, &e)
+                };
                 // A required reverse-DNAT that cannot be applied must drop: delivering the packet
                 // with its dst still set to the public nat_ip is not a valid return.
-                if !ct_apply(pkt, inner_off, &e) {
+                if !applied {
                     return Action::Drop;
                 }
                 xlate_ip = Some(e.xlate_ip);
@@ -726,13 +768,10 @@ pub fn process_uplink_rx<P: Pkt, M: Maps>(pkt: &mut P, maps: &mut M, in_: &Uplin
     // NAT-return dispatch — gated on `lb_ul.is_none()` exactly as `try_uplink_rx` (an LB address is never
     // itself a nat_ip, but keep the gate to mirror the eBPF ordering precisely).
     if lb_select_forward(&*pkt, &*maps, inner_off, in_.vni).is_none() {
-        if let Some(mut key) = ct_key(&*pkt, inner_off, in_.vni) {
-            // Peer-independent demux: a registered nat_ip inner dst keys the
-            // `(vni,0,nat_ip,0,nat_port)` reverse entry the egress SNAT allocator stored.
-            if maps.is_nat_ip(in_.vni, &key.dst_ip) {
-                key.src_ip = [0; 4];
-                key.src_port = 0;
-            }
+        // Peer-independent demux: a registered nat_ip inner dst keys the
+        // `(vni,0,nat_ip,0,nat_port)` reverse entry the egress SNAT allocator stored. For an ICMP
+        // error the port comes from the quoted packet — see [`nat_return_key`].
+        if let Some((key, _)) = nat_return_key(&*pkt, &*maps, inner_off, in_.vni) {
             if let Some(e) = maps.conntrack_get(&key) {
                 if e.flags & CT_REWRITE_DST != 0 {
                     if e.flags & CT_F_NAT64 != 0 {
