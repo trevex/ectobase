@@ -141,14 +141,30 @@ type Bus struct {
 	// stale — but at the cost of a real teardown/rebuild blip on EVERY reflector reconnect, and
 	// reconnects are far more common than the staleness it would fix.
 	//
-	// The staleness in question: public records carry no EndOfRIB, so there is no prune-on-snapshot
-	// the way installed/seen gives routes. A backend WITHDRAWN while this edge was disconnected is
-	// simply absent from the replayed snapshot, and its dataplane entry lingers — Maglev keeps
-	// hashing a share of flows to a backend that is gone. The window is narrow (a backend node
-	// disconnecting is covered by the reflector's DropOrigin fan-out; this is only a backend
-	// withdrawing a record during an edge-agent outage) and the gap is shared with the NAT-block
-	// channel, so it is a known limitation of the public channel rather than something handled here.
+	// Staleness across a reconnect is handled by the EndOfGlobal prune (see pruneGlobal), not by
+	// resetting this: a backend WITHDRAWN while this edge was disconnected is absent from the
+	// replayed snapshot and is withdrawn once the snapshot is known to be complete.
 	edgeLbs map[string]*edgeLb
+
+	// --- global (NAT + public) snapshot tracking, the EndOfGlobal counterpart to installed/seen.
+	// Touched only from the Run goroutine (handleServerMsg), like installed/origin — no lock.
+	//
+	// installedNat PERSISTS across reconnects (the dataplane outlives a session) so the prune can
+	// remove a block that left the fabric while we were disconnected. seenNat/seenPublic are the
+	// CURRENT session's snapshot and reset at each session open.
+	installedNat map[natEntry]bool
+	seenNat      map[natEntry]bool
+	seenPublic   map[publicEntry]bool
+	// globalRecords counts the NAT + public records received in this session BEFORE EndOfGlobal.
+	// It must equal the marker's count for the prune to be safe — see EndOfGlobal in the proto.
+	globalRecords uint32
+
+	// --- convergence, the signal a deployment gates an anycast advertisement on (see Converged).
+	// Read from an HTTP readiness handler, so these ARE guarded by mu, unlike the snapshot sets.
+	subscribedVNIs map[uint32]bool // what we asked for on this session
+	eorSeen        map[uint32]bool // which of those have replayed fully (EndOfRIB)
+	globalDone     bool            // the global snapshot has replayed fully (EndOfGlobal)
+	converged      bool            // LATCHING: see Converged
 
 	// Peering import bookkeeping (VPC peering). peerImports is set each reconcile (localVNI -> imports).
 	// origin tags every installed (vni, prefix) as "own" (locally-originated / direct route) or "peer"
@@ -172,6 +188,128 @@ type Bus struct {
 	reconcileEvery time.Duration
 }
 
+// natEntry is one learned neighbor-NAT block, keyed exactly as the dataplane programs it so a
+// prune can withdraw it verbatim.
+type natEntry struct {
+	natIP            string
+	portMin, portMax uint32
+	vni              uint32
+}
+
+// publicEntry is one learned PublicPrefix record, keyed by what the prune has to act on: the LB
+// address plus the backend identity (a node VTEP alone is not enough — two backends of one service
+// can share a node).
+type publicEntry struct {
+	lbIP    string
+	owner   string
+	overlay string
+}
+
+// resetGlobalSnapshot starts a new global-snapshot epoch: the reflector is about to replay every
+// NAT block and public record, so forget what THIS session has seen and re-count. installedNat and
+// edgeLbs deliberately survive — they mirror dataplane state, which outlives the session, and are
+// what the prune diffs the incoming snapshot against.
+func (b *Bus) resetGlobalSnapshot() {
+	b.seenNat = map[natEntry]bool{}
+	b.seenPublic = map[publicEntry]bool{}
+	b.globalRecords = 0
+	b.mu.Lock()
+	// Replay progress is per-session; `converged` deliberately is not (see Converged).
+	b.globalDone = false
+	b.eorSeen = map[uint32]bool{}
+	b.mu.Unlock()
+}
+
+// Converged reports whether this session has received the FULL picture at least once: the global
+// snapshot (EndOfGlobal — the NAT blocks and LB addresses/backends an edge actually forwards on) plus an
+// EndOfRIB for every VNI it subscribed to.
+//
+// This is what an anycast advertisement must be gated on. An edge attracts its share of the ECMP
+// the instant its prefix is advertised, and until the snapshot has landed it has no Maglev table
+// for the LB addresses it is dispatching — a blackhole on every cold start.
+//
+// It LATCHES. Once true it stays true: a later reconnect (or a newly subscribed VNI) leaves the
+// already-programmed tables in place, so dropping the advertisement would reshuffle every WAN flow
+// across the remaining edges to fix nothing. The failure being prevented is the cold start, not
+// steady-state churn. Un-converging on prolonged disconnection is a separate policy decision (it
+// needs a staleness threshold) and is deliberately not made here.
+func (b *Bus) Converged() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.converged
+}
+
+// noteSubscribed records the VNI set this session asked the reflector for. Convergence is measured
+// against it, so it is the caller's (reconcileStep's) job to keep it current.
+func (b *Bus) noteSubscribed(vnis []uint32) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.subscribedVNIs = make(map[uint32]bool, len(vnis))
+	for _, v := range vnis {
+		b.subscribedVNIs[v] = true
+	}
+	b.recomputeConvergedLocked()
+}
+
+// noteEndOfRIB / noteEndOfGlobal record replay progress and re-evaluate the latch.
+func (b *Bus) noteEndOfRIB(vni uint32) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.eorSeen[vni] = true
+	b.recomputeConvergedLocked()
+}
+
+func (b *Bus) noteEndOfGlobal() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.globalDone = true
+	b.recomputeConvergedLocked()
+}
+
+// recomputeConvergedLocked sets the latch once the global snapshot and every subscribed VNI have
+// replayed. Never clears it — see Converged. Caller holds b.mu.
+func (b *Bus) recomputeConvergedLocked() {
+	if b.converged || !b.globalDone {
+		return
+	}
+	for v := range b.subscribedVNIs {
+		if !b.eorSeen[v] {
+			return
+		}
+	}
+	b.converged = true
+	log.Printf("route-bus converged (global snapshot + %d subscribed VNI(s)); safe to advertise", len(b.subscribedVNIs))
+}
+
+// pruneGlobal removes learned global state that was NOT replayed in this session's snapshot: a NAT
+// block whose owner released it, or an LB backend that stopped announcing, while this agent was
+// disconnected. The EndOfRIB equivalent for the global channel.
+//
+// It first checks the snapshot was COMPLETE. A sink's outbound queue drops on overflow
+// (reflector's chanSink.Send), so receiving fewer records than the reflector says it sent means the
+// snapshot is lossy — and pruning against a lossy snapshot would withdraw LIVE state, which is
+// strictly worse than the staleness being fixed. In that case do nothing and wait for the next
+// reconnect, which replays from scratch.
+func (b *Bus) pruneGlobal(ctx context.Context, want uint32) {
+	if b.globalRecords != want {
+		log.Printf("EndOfGlobal: snapshot incomplete (got %d records, reflector sent %d) — skipping prune; will retry on the next resync",
+			b.globalRecords, want)
+		return
+	}
+	for e := range b.installedNat {
+		if b.seenNat[e] {
+			continue
+		}
+		if err := b.dp.WithdrawNeighborNat(ctx, e.natIP, e.portMin, e.portMax, e.vni); err != nil {
+			log.Printf("prune WithdrawNeighborNat %s:[%d,%d) vni=%d: %v", e.natIP, e.portMin, e.portMax, e.vni, err)
+			continue
+		}
+		delete(b.installedNat, e)
+		log.Printf("pruned stale NAT block %s:[%d,%d) vni=%d", e.natIP, e.portMin, e.portMax, e.vni)
+	}
+	b.pruneLbBackends(ctx)
+}
+
 // defaultReconcileEvery bounds how stale this node's fabric-wide announcements can get after a CRD
 // change while the bus session stays up (the K8s watch would make this event-driven; the ticker is
 // the simple, robust floor).
@@ -182,6 +320,11 @@ func NewBus(nodeID, underlay string, dp Dataplane, isEdge bool) *Bus {
 		nodeID: nodeID, underlay: underlay, dp: dp, isEdge: isEdge,
 		learnedEdge: map[string]string{}, learnedPublic: map[string]string{},
 		edgeLbs:        map[string]*edgeLb{},
+		installedNat:   map[natEntry]bool{},
+		seenNat:        map[natEntry]bool{},
+		seenPublic:     map[publicEntry]bool{},
+		subscribedVNIs: map[uint32]bool{},
+		eorSeen:        map[uint32]bool{},
 		installed:      map[uint32]map[string]bool{},
 		seen:           map[uint32]map[string]bool{},
 		peerImports:    map[uint32][]PeerImport{},
@@ -215,6 +358,9 @@ func (b *Bus) Run(ctx context.Context, cc rbv1.RouteBusClient, reconcile func(co
 	// the per-session "seen" set so prune-on-EndOfRIB removes routes that left the RIB while we were
 	// disconnected (installed[] persists across sessions; the dataplane still holds those routes).
 	b.seen = map[uint32]map[string]bool{}
+	// Same for the GLOBAL channel: registering replays every NAT block and public record, then
+	// EndOfGlobal. (installedNat/edgeLbs persist for the same reason installed[] does.)
+	b.resetGlobalSnapshot()
 
 	recvCh := make(chan *rbv1.ServerMsg, 64)
 	recvErr := make(chan error, 1)
@@ -276,6 +422,7 @@ func (b *Bus) reconcileStep(ctx context.Context, stream rbv1.RouteBus_SessionCli
 	b.setPeerImportsLocked(desired.PeeringImports)
 	b.mu.Unlock()
 	b.syncEgressImports(ctx, prevEgress, desired.EgressVNIs)
+	b.noteSubscribed(desired.Subs)
 	d := diffDesired(*applied, desired)
 	if d.empty() {
 		return nil
@@ -350,16 +497,22 @@ func (b *Bus) handleServerMsg(ctx context.Context, msg *rbv1.ServerMsg) {
 		b.apply(ctx, ru)
 	}
 	if nu := msg.GetNatUpdate(); nu != nil {
+		b.globalRecords++
 		b.applyNat(ctx, nu)
 	}
 	if pu := msg.GetPublicUpdate(); pu != nil {
+		b.globalRecords++
 		b.applyPublic(ctx, pu.GetPrefix(), pu.GetOp())
 	}
 	if eor := msg.GetEndOfRib(); eor != nil {
 		b.pruneVNI(ctx, eor.GetVni())
+		b.noteEndOfRIB(eor.GetVni())
 	}
-	// KeepAlive: no-op. Global NAT/public records have no EoR marker; they re-converge via the
-	// owner's steady-state withdraw + the reflector's DropOrigin on disconnect.
+	if eog := msg.GetEndOfGlobal(); eog != nil {
+		b.pruneGlobal(ctx, eog.GetRecordCount())
+		b.noteEndOfGlobal()
+	}
+	// KeepAlive: no-op.
 }
 
 // pruneVNI removes any directly-installed route in vni that was NOT (re)seen in this session's
@@ -511,15 +664,24 @@ func (b *Bus) applyNat(ctx context.Context, nu *rbv1.NatUpdate) {
 	if nu.OwnerUnderlay == b.underlay {
 		return
 	}
+	e := natEntry{natIP: nu.NatIp, portMin: nu.PortMin, portMax: nu.PortMax, vni: nu.Vni}
 	switch nu.Op {
 	case rbv1.RouteOp_ROUTE_OP_ADD:
+		// Mark seen BEFORE the call: a replayed record the dataplane rejects as a duplicate is
+		// still part of this snapshot, and must not then be pruned as absent from it.
+		b.seenNat[e] = true
 		if err := b.dp.AddNeighborNat(ctx, nu.NatIp, nu.PortMin, nu.PortMax, nu.OwnerUnderlay, nu.Vni); err != nil {
 			log.Printf("AddNeighborNat %s:[%d,%d) -> %s vni=%d: %v", nu.NatIp, nu.PortMin, nu.PortMax, nu.OwnerUnderlay, nu.Vni, err)
+			return
 		}
+		b.installedNat[e] = true
 	case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
+		delete(b.seenNat, e)
 		if err := b.dp.WithdrawNeighborNat(ctx, nu.NatIp, nu.PortMin, nu.PortMax, nu.Vni); err != nil {
 			log.Printf("WithdrawNeighborNat %s:[%d,%d) vni=%d: %v", nu.NatIp, nu.PortMin, nu.PortMax, nu.Vni, err)
+			return
 		}
+		delete(b.installedNat, e)
 	}
 }
 

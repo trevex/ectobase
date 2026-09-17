@@ -19,18 +19,36 @@ type natKey struct {
 }
 
 // RegisterSink adds s to the global sink set (every session, regardless of the
-// VNIs it subscribes to) and replays the current NAT snapshot. Called on Hello.
+// VNIs it subscribes to) and replays the current NAT + public snapshot, closing
+// it with EndOfGlobal. Called on Hello.
+//
+// The marker carries how many records were replayed, and is queued while r.mu is
+// STILL HELD. Both matter:
+//   - the count lets the consumer tell a complete snapshot from one the sink's
+//     outbound queue dropped records from, and prune only on the former (see the
+//     EndOfGlobal doc in routebus.proto — pruning against a lossy snapshot would
+//     withdraw live state);
+//   - holding the lock across the replay AND the marker means a concurrent
+//     Announce/Withdraw fanout cannot interleave into the snapshot or slip in
+//     ahead of the marker, so the consumer's pre-marker count is exactly this
+//     count and no live delta can inflate it.
 func (r *RIB) RegisterSink(s Sink) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sinks[s.ID()] = s
+	var n uint32
 	for k := range r.nat {
 		b := r.nat[k]
 		s.Send(natUpdate(b, pb.RouteOp_ROUTE_OP_ADD))
+		n++
 	}
 	for k := range r.public {
 		s.Send(publicUpdate(r.public[k], pb.RouteOp_ROUTE_OP_ADD))
+		n++
 	}
+	s.Send(&pb.ServerMsg{Msg: &pb.ServerMsg_EndOfGlobal{
+		EndOfGlobal: &pb.EndOfGlobal{RecordCount: n},
+	}})
 }
 
 // UnregisterSink removes s from the global sink set (on disconnect). Its NAT

@@ -105,3 +105,56 @@ func TestUnregisterSinkStopsNatFanout(t *testing.T) {
 		t.Fatalf("unregistered sink must not receive NAT updates, got %+v", us)
 	}
 }
+
+// The EndOfGlobal marker is what lets a consumer prune the global channel, and its count is what
+// lets it distinguish a complete snapshot from one the sink dropped records from. Both have to be
+// exact, and the marker has to come LAST — a consumer counts records up to it.
+func TestRegisterSinkClosesTheSnapshotWithAnAccurateEndOfGlobal(t *testing.T) {
+	r := NewRIB()
+	// Two NAT blocks and one public record, announced before anyone registers.
+	seed := &fakeSink{id: "seed"}
+	r.RegisterSink(seed)
+	r.AnnounceNat("nodeA", natBlock(100, "10.0.0.1", "1.2.3.4", 1024, 2048, "fd00::a"))
+	r.AnnounceNat("nodeC", natBlock(100, "10.0.0.2", "1.2.3.5", 2048, 3072, "fd00::c"))
+	r.AnnouncePublic("nodeA", PublicRecord{
+		Kind: pb.PublicKind_PUBLIC_KIND_LB_IP, Prefix: "203.0.113.50/32",
+		OwnerUnderlay: "fd00::a", OverlayIP: "10.0.0.1", Vni: 100,
+	})
+
+	// A LATE joiner gets the whole snapshot, then the marker.
+	late := &fakeSink{id: "late"}
+	r.RegisterSink(late)
+
+	if len(late.msgs) == 0 {
+		t.Fatal("late joiner got no snapshot at all")
+	}
+	last := late.msgs[len(late.msgs)-1]
+	eog := last.GetEndOfGlobal()
+	if eog == nil {
+		t.Fatalf("EndOfGlobal must be the LAST message of the snapshot, got %T", last.Msg)
+	}
+	// Every message before the marker is a global record, and the count must match exactly.
+	records := uint32(len(late.msgs) - 1)
+	if eog.RecordCount != records {
+		t.Fatalf("EndOfGlobal.record_count = %d, but %d records were replayed", eog.RecordCount, records)
+	}
+	if records != 3 {
+		t.Fatalf("want 3 replayed records (2 NAT + 1 public), got %d", records)
+	}
+}
+
+// An empty fabric still has to close its snapshot: without a marker a consumer could never prune,
+// and "no records at all" is exactly the case where everything it holds is stale.
+func TestRegisterSinkSendsEndOfGlobalOnAnEmptyRIB(t *testing.T) {
+	r := NewRIB()
+	s := &fakeSink{id: "nodeA"}
+	r.RegisterSink(s)
+
+	if len(s.msgs) != 1 {
+		t.Fatalf("want exactly the EndOfGlobal marker, got %d messages", len(s.msgs))
+	}
+	eog := s.msgs[0].GetEndOfGlobal()
+	if eog == nil || eog.RecordCount != 0 {
+		t.Fatalf("want EndOfGlobal{record_count: 0}, got %+v", s.msgs[0].Msg)
+	}
+}

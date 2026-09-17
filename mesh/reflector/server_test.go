@@ -37,6 +37,24 @@ func hello(t *testing.T, s pb.RouteBus_SessionClient, id string) {
 	}
 }
 
+// recvSubstantive returns the next message that is not an EndOfGlobal snapshot marker. Every
+// session now gets one of those on Hello (and one per reconnect), which would otherwise shift every
+// positional Recv in these tests by one. The marker's own contract — that it closes the snapshot
+// and carries an accurate record count — is asserted in nattable_test.go, not here.
+func recvSubstantive(t *testing.T, s pb.RouteBus_SessionClient) *pb.ServerMsg {
+	t.Helper()
+	for {
+		m, err := s.Recv()
+		if err != nil {
+			t.Fatalf("recv: %v", err)
+		}
+		if m.GetEndOfGlobal() != nil {
+			continue
+		}
+		return m
+	}
+}
+
 func TestSessionAnnounceReachesSubscriber(t *testing.T) {
 	cl := startServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -52,8 +70,8 @@ func TestSessionAnnounceReachesSubscriber(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Drain the (empty) snapshot's EndOfRIB.
-	if m, err := subStream.Recv(); err != nil || m.GetEndOfRib() == nil {
-		t.Fatalf("want EndOfRIB, got %+v err=%v", m, err)
+	if m := recvSubstantive(t, subStream); m.GetEndOfRib() == nil {
+		t.Fatalf("want EndOfRIB, got %+v", m)
 	}
 
 	// Announcer.
@@ -113,10 +131,7 @@ func TestSessionAnnounceNatBroadcastsAndSnapshots(t *testing.T) {
 	}
 
 	// B receives the NatUpdate ADD without ever subscribing to a VNI.
-	m, err := bStream.Recv()
-	if err != nil {
-		t.Fatalf("recv nat update: %v", err)
-	}
+	m := recvSubstantive(t, bStream)
 	nu := m.GetNatUpdate()
 	if nu == nil || nu.Op != pb.RouteOp_ROUTE_OP_ADD || nu.NatIp != "1.2.3.4" ||
 		nu.PortMin != 1024 || nu.OwnerUnderlay != "fd00::a" {
@@ -129,20 +144,14 @@ func TestSessionAnnounceNatBroadcastsAndSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	hello(t, cStream, "nodeC")
-	m, err = cStream.Recv()
-	if err != nil {
-		t.Fatalf("recv snapshot: %v", err)
-	}
+	m = recvSubstantive(t, cStream)
 	if snap := m.GetNatUpdate(); snap == nil || snap.NatIp != "1.2.3.4" || snap.Op != pb.RouteOp_ROUTE_OP_ADD {
 		t.Fatalf("late joiner should replay the NAT snapshot, got %+v", m)
 	}
 
 	// A disconnects -> its NAT block is withdrawn to the survivors.
 	aStream.CloseSend()
-	m, err = bStream.Recv()
-	if err != nil {
-		t.Fatalf("recv withdraw: %v", err)
-	}
+	m = recvSubstantive(t, bStream)
 	if nu := m.GetNatUpdate(); nu == nil || nu.Op != pb.RouteOp_ROUTE_OP_WITHDRAW {
 		t.Fatalf("want NAT WITHDRAW after owner disconnect, got %+v", m)
 	}

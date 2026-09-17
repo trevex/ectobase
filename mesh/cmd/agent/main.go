@@ -8,6 +8,7 @@ import (
 	"flag"
 	"log"
 	"math/rand/v2"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -35,6 +36,7 @@ func main() {
 	routebusIssuer := flag.String("routebus-issuer", "", "pool cert-manager Issuer to self-mint a per-node leaf from (CN=node, IP SAN=underlay); enables per-node mTLS")
 	routebusCertNS := flag.String("routebus-cert-namespace", "", "namespace for the self-minted per-node Certificate/Secret")
 	routebusIntermediate := flag.String("routebus-intermediate", "", "WAN edge only: directory holding the edge fleet's route-bus CA (ca.crt/tls.crt/tls.key). The agent mints its own leaf from it in-process — no cert-manager, no apiserver")
+	healthAddr := flag.String("health-addr", "", "if set, serve readiness on this address (e.g. :8080). /readyz is 200 only once the route-bus session has CONVERGED — the full global snapshot plus every subscribed VNI. A WAN edge MUST gate its anycast advertisement on this: it attracts ECMP the moment the prefix is up, and before convergence it has no Maglev table for the LB addresses it dispatches. /healthz is liveness and always 200 once serving.")
 	flag.Parse()
 	if *nodeID == "" || *underlay == "" {
 		log.Fatal("--node-id and --underlay are required")
@@ -155,6 +157,9 @@ func main() {
 	// prune-on-EndOfRIB can remove routes that left the RIB while we were disconnected. On disconnect,
 	// retry (the reflector fast-withdrew our announcements; the next Run re-announces from scratch).
 	bus := agent.NewBus(*nodeID, *underlay, dp, *edgeLoopback != "")
+	if *healthAddr != "" {
+		serveHealth(ctx, *healthAddr, bus)
+	}
 	const maxBackoff = 30 * time.Second
 	backoff := time.Second
 	for ctx.Err() == nil {
@@ -175,4 +180,42 @@ func main() {
 		backoff = min(2*backoff, maxBackoff)
 	}
 	log.Print("shutdown signal received; agent exiting")
+}
+
+// serveHealth exposes liveness and route-bus readiness over HTTP so a deployment can gate on
+// convergence — a Kubernetes readinessProbe on /readyz, with whatever advertises the edge's anycast
+// prefix (BGP speaker, Service) keying off pod readiness.
+//
+// /readyz is the fix for the cold-start blackhole documented in docs/features/ns-edge.md: an edge
+// that advertises before its LB/NAT snapshot has landed DSR-dispatches traffic it has no Maglev
+// table for. Readiness LATCHES once converged (see agent.Bus.Converged), so a reflector blip does
+// not reshuffle live WAN flows.
+func serveHealth(ctx context.Context, addr string, bus *agent.Bus) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok\n"))
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if !bus.Converged() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("route-bus not converged\n"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("converged\n"))
+	})
+	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		<-ctx.Done()
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(sctx)
+	}()
+	go func() {
+		log.Printf("serving health on %s (/healthz, /readyz)", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("health server: %v", err)
+		}
+	}()
 }

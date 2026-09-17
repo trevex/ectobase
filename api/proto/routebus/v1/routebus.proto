@@ -70,6 +70,7 @@ message ServerMsg {
     KeepAlive keep_alive = 3;
     NatUpdate nat_update = 4;     // a global NAT block was announced/withdrawn
     PublicUpdate public_update = 5;
+    EndOfGlobal end_of_global = 6; // global (NAT + public) snapshot delivered; safe to prune
   }
 }
 
@@ -100,6 +101,22 @@ message RouteUpdate {
   bool external = 5;             // if set, matching source traffic egress-SNATs (e.g. an external default route)
 }
 message EndOfRIB { uint32 vni = 1; }
+
+// EndOfGlobal marks the end of the GLOBAL (non-per-VNI) snapshot: the NAT blocks and
+// PublicPrefix records a session is replayed when it registers. It is the prune trigger for
+// those channels — the counterpart to EndOfRIB for a VNI's routes. Without it a record
+// WITHDRAWN while a consumer was disconnected was simply absent from the replayed snapshot and
+// its dataplane entry lingered forever: Maglev kept hashing a share of flows to a backend that
+// no longer exists, and neighbor-NAT kept a return route to a block that moved.
+//
+// record_count is how many global records the reflector sent before this marker. The consumer
+// prunes ONLY if it received exactly that many. A sink's outbound queue drops on overflow (see
+// chanSink.Send), and pruning against a lossy snapshot would withdraw LIVE state — strictly worse
+// than the staleness being fixed. Counting turns a lossy replay into a safe no-op that retries on
+// the next reconnect. The marker is queued while the RIB lock is still held, so concurrent fanout
+// deltas land after it and cannot inflate the count.
+message EndOfGlobal { uint32 record_count = 1; }
+
 message KeepAlive {}
 
 // AnnounceNat announces this node's ownership of a deterministic egress SNAT

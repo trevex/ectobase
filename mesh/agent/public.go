@@ -103,10 +103,16 @@ func (b *Bus) applyPublic(ctx context.Context, pp *rbv1.PublicPrefix, op rbv1.Ro
 		if !b.isEdge {
 			return // only the edge runs maglev/backends; E/W uses the plain anycast route
 		}
+		pe := publicEntry{lbIP: stripMask(pp.GetPrefix()), owner: pp.GetOwnerUnderlay(), overlay: pp.GetOverlayIp()}
 		switch op {
 		case rbv1.RouteOp_ROUTE_OP_ADD:
+			// Marked seen regardless of whether the attach below succeeds: the record IS part of
+			// this snapshot, and treating a failed attach as "absent" would prune a backend the
+			// snapshot actually still carries.
+			b.seenPublic[pe] = true
 			b.addLbBackend(ctx, pp)
 		case rbv1.RouteOp_ROUTE_OP_WITHDRAW:
+			delete(b.seenPublic, pe)
 			b.delLbBackend(ctx, pp)
 		}
 	default:
@@ -264,4 +270,36 @@ func stripMask(cidr string) string {
 		return cidr[:i]
 	}
 	return cidr
+}
+
+// pruneLbBackends withdraws every attached LB backend that was not replayed in this session's
+// global snapshot — a backend that stopped announcing while this edge was disconnected, which
+// Maglev would otherwise keep hashing a share of flows to. Called from pruneGlobal, which has
+// already established that the snapshot was complete.
+//
+// Removing the LAST backend of an LB address takes the load balancer with it: a registered LB with an
+// empty Maglev table would blackhole (the edge still attracts the anycast prefix and still
+// DSR-dispatches) rather than fail closed, so there is nothing to keep it for.
+func (b *Bus) pruneLbBackends(ctx context.Context) {
+	for lbIP, lb := range b.edgeLbs {
+		for bk := range lb.backends {
+			if b.seenPublic[publicEntry{lbIP: lbIP, owner: bk.owner, overlay: bk.overlay}] {
+				continue
+			}
+			if err := b.dp.DelLbBackend(ctx, lbIP, bk.owner, bk.overlay); err != nil {
+				log.Printf("prune DelLbBackend lbIP=%s backend=%s overlay=%s: %v", lbIP, bk.owner, bk.overlay, err)
+				continue
+			}
+			delete(lb.backends, bk)
+			log.Printf("pruned stale LB backend lbIP=%s backend=%s overlay=%s", lbIP, bk.owner, bk.overlay)
+		}
+		if len(lb.backends) == 0 {
+			if err := b.dp.DelLoadBalancer(ctx, lbIP); err != nil {
+				log.Printf("prune DelLoadBalancer %s: %v", lbIP, err)
+				continue
+			}
+			delete(b.edgeLbs, lbIP)
+			log.Printf("pruned load balancer %s (no backends left)", lbIP)
+		}
+	}
 }
