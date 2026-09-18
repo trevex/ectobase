@@ -14,6 +14,12 @@ type CompiledFwRuleApplyConfiguration struct {
 	Proto *string `json:"proto,omitempty"`
 	// Port is the destination port (0 = any).
 	Port *int32 `json:"port,omitempty"`
+	// EndPort, when non-zero, extends Port to the inclusive destination-port range Port-EndPort.
+	EndPort *int32 `json:"endPort,omitempty"`
+	// ICMPType restricts an ICMP rule to one message type of the CIDR's ICMP family (nil = any).
+	ICMPType *int32 `json:"icmpType,omitempty"`
+	// ICMPCode restricts the rule to one code of ICMPType (nil = any).
+	ICMPCode *int32 `json:"icmpCode,omitempty"`
 	// Action is the rule action: "Allow" or "Deny".
 	Action *string `json:"action,omitempty"`
 }
@@ -45,6 +51,30 @@ func (b *CompiledFwRuleApplyConfiguration) WithProto(value string) *CompiledFwRu
 // If called multiple times, the Port field is set to the value of the last call.
 func (b *CompiledFwRuleApplyConfiguration) WithPort(value int32) *CompiledFwRuleApplyConfiguration {
 	b.Port = &value
+	return b
+}
+
+// WithEndPort sets the EndPort field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the EndPort field is set to the value of the last call.
+func (b *CompiledFwRuleApplyConfiguration) WithEndPort(value int32) *CompiledFwRuleApplyConfiguration {
+	b.EndPort = &value
+	return b
+}
+
+// WithICMPType sets the ICMPType field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the ICMPType field is set to the value of the last call.
+func (b *CompiledFwRuleApplyConfiguration) WithICMPType(value int32) *CompiledFwRuleApplyConfiguration {
+	b.ICMPType = &value
+	return b
+}
+
+// WithICMPCode sets the ICMPCode field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the ICMPCode field is set to the value of the last call.
+func (b *CompiledFwRuleApplyConfiguration) WithICMPCode(value int32) *CompiledFwRuleApplyConfiguration {
+	b.ICMPCode = &value
 	return b
 }
 

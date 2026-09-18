@@ -108,3 +108,44 @@ func TestFirewallPolicyValidateUpdate_UnchangedSpecPasses(t *testing.T) {
 		t.Fatalf("unchanged spec rejected: %v", errs)
 	}
 }
+
+func TestFirewallPolicyValidate_PortRangeAndICMP(t *testing.T) {
+	valid := []FirewallPolicyRule{
+		{CIDR: "10.0.0.0/8", Proto: "TCP", Port: 8000, EndPort: i32(8100), Action: "Allow"},
+		{CIDR: "10.0.0.0/8", Proto: "UDP", Port: 53, EndPort: i32(53), Action: "Allow"},
+		{CIDR: "10.0.0.0/8", Proto: "ICMP", ICMPType: i32(8), Action: "Allow"},
+		{CIDR: "2001:db8::/32", Proto: "ICMP", ICMPType: i32(1), ICMPCode: i32(4), Action: "Allow"},
+		{CIDR: "10.0.0.0/8", Proto: "ICMP", ICMPType: i32(0), ICMPCode: i32(0), Action: "Allow"}, // echo reply is type 0
+	}
+	for _, r := range valid {
+		p := validPolicy()
+		p.Spec.Ingress = []FirewallPolicyRule{r}
+		if errs := p.Validate(context.Background()); len(errs) != 0 {
+			t.Fatalf("valid rule %+v rejected: %v", r, errs)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		rule FirewallPolicyRule
+		path string
+	}{
+		{"endPort without port", FirewallPolicyRule{CIDR: "10.0.0.0/8", Proto: "TCP", EndPort: i32(80), Action: "Allow"}, "spec.ingress[0].endPort"},
+		{"endPort below port", FirewallPolicyRule{CIDR: "10.0.0.0/8", Proto: "TCP", Port: 443, EndPort: i32(80), Action: "Allow"}, "spec.ingress[0].endPort"},
+		{"endPort too high", FirewallPolicyRule{CIDR: "10.0.0.0/8", Proto: "TCP", Port: 443, EndPort: i32(65536), Action: "Allow"}, "spec.ingress[0].endPort"},
+		{"icmpType without ICMP", FirewallPolicyRule{CIDR: "10.0.0.0/8", Proto: "TCP", ICMPType: i32(8), Action: "Allow"}, "spec.ingress[0].icmpType"},
+		{"icmpType on any proto", FirewallPolicyRule{CIDR: "10.0.0.0/8", ICMPType: i32(8), Action: "Allow"}, "spec.ingress[0].icmpType"},
+		{"icmpType too high", FirewallPolicyRule{CIDR: "10.0.0.0/8", Proto: "ICMP", ICMPType: i32(256), Action: "Allow"}, "spec.ingress[0].icmpType"},
+		{"icmpType negative", FirewallPolicyRule{CIDR: "10.0.0.0/8", Proto: "ICMP", ICMPType: i32(-1), Action: "Allow"}, "spec.ingress[0].icmpType"},
+		{"icmpCode without icmpType", FirewallPolicyRule{CIDR: "10.0.0.0/8", Proto: "ICMP", ICMPCode: i32(0), Action: "Allow"}, "spec.ingress[0].icmpCode"},
+		{"icmpCode too high", FirewallPolicyRule{CIDR: "10.0.0.0/8", Proto: "ICMP", ICMPType: i32(3), ICMPCode: i32(300), Action: "Allow"}, "spec.ingress[0].icmpCode"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := validPolicy()
+			p.Spec.Ingress = []FirewallPolicyRule{tc.rule}
+			errs := p.Validate(context.Background())
+			if len(errs) != 1 || errs[0].Field != tc.path {
+				t.Fatalf("want exactly one error at %s, got %v", tc.path, errs)
+			}
+		})
+	}
+}

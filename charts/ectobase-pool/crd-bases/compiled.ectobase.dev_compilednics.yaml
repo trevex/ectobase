@@ -80,6 +80,21 @@ spec:
                             CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
                             rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                           type: string
+                        endPort:
+                          description: EndPort, when non-zero, extends Port to the
+                            inclusive destination-port range Port-EndPort.
+                          format: int32
+                          type: integer
+                        icmpCode:
+                          description: ICMPCode restricts the rule to one code of
+                            ICMPType (nil = any).
+                          format: int32
+                          type: integer
+                        icmpType:
+                          description: ICMPType restricts an ICMP rule to one message
+                            type of the CIDR's ICMP family (nil = any).
+                          format: int32
+                          type: integer
                         port:
                           description: Port is the destination port (0 = any).
                           format: int32
@@ -107,6 +122,21 @@ spec:
                             CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
                             rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                           type: string
+                        endPort:
+                          description: EndPort, when non-zero, extends Port to the
+                            inclusive destination-port range Port-EndPort.
+                          format: int32
+                          type: integer
+                        icmpCode:
+                          description: ICMPCode restricts the rule to one code of
+                            ICMPType (nil = any).
+                          format: int32
+                          type: integer
+                        icmpType:
+                          description: ICMPType restricts an ICMP rule to one message
+                            type of the CIDR's ICMP family (nil = any).
+                          format: int32
+                          type: integer
                         port:
                           description: Port is the destination port (0 = any).
                           format: int32

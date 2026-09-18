@@ -99,6 +99,15 @@ type CompiledFwRule struct {
 	// Port is the destination port (0 = any).
 	// +optional
 	Port int32 `json:"port,omitempty"`
+	// EndPort, when non-zero, extends Port to the inclusive destination-port range Port-EndPort.
+	// +optional
+	EndPort int32 `json:"endPort,omitempty"`
+	// ICMPType restricts an ICMP rule to one message type of the CIDR's ICMP family (nil = any).
+	// +optional
+	ICMPType *int32 `json:"icmpType,omitempty"`
+	// ICMPCode restricts the rule to one code of ICMPType (nil = any).
+	// +optional
+	ICMPCode *int32 `json:"icmpCode,omitempty"`
 	// Action is the rule action: "Allow" or "Deny".
 	Action string `json:"action"`
 }

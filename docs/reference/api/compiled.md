@@ -171,6 +171,9 @@ _Appears in:_
 | `cidr` _string_ | CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress<br />rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6). |  |  |
 | `proto` _string_ | Proto is the IP protocol ("TCP", "UDP", "ICMP", or "" for any). |  | Optional: \{\} <br /> |
 | `port` _integer_ | Port is the destination port (0 = any). |  | Optional: \{\} <br /> |
+| `endPort` _integer_ | EndPort, when non-zero, extends Port to the inclusive destination-port range Port-EndPort. |  | Optional: \{\} <br /> |
+| `icmpType` _integer_ | ICMPType restricts an ICMP rule to one message type of the CIDR's ICMP family (nil = any). |  | Optional: \{\} <br /> |
+| `icmpCode` _integer_ | ICMPCode restricts the rule to one code of ICMPType (nil = any). |  | Optional: \{\} <br /> |
 | `action` _string_ | Action is the rule action: "Allow" or "Deny". |  |  |
 
 

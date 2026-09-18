@@ -22,6 +22,19 @@
           "proto": "TCP",
           "port": 443,
           "action": "Allow"
+        },
+        {
+          "cidr": "10.0.1.0/24",
+          "proto": "TCP",
+          "port": 8000,
+          "endPort": 8100,
+          "action": "Allow"
+        },
+        {
+          "cidr": "10.0.2.0/24",
+          "proto": "ICMP",
+          "icmpType": 8,
+          "action": "Allow"
         }
       ],
       "egress": [

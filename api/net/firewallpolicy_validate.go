@@ -94,6 +94,32 @@ func validateFirewallRule(r *FirewallPolicyRule, path *field.Path) field.ErrorLi
 	case r.Port != 0 && protoOK && r.Proto != "TCP" && r.Proto != "UDP":
 		errs = append(errs, field.Invalid(path.Child("port"), r.Port, "a port requires proto TCP or UDP"))
 	}
+	if r.EndPort != nil {
+		switch {
+		case *r.EndPort < 1 || *r.EndPort > 65535:
+			errs = append(errs, field.Invalid(path.Child("endPort"), *r.EndPort, "must be between 1 and 65535"))
+		case r.Port == 0:
+			errs = append(errs, field.Invalid(path.Child("endPort"), *r.EndPort, "a range needs its start in port"))
+		case *r.EndPort < r.Port:
+			errs = append(errs, field.Invalid(path.Child("endPort"), *r.EndPort, "must not be below port"))
+		}
+	}
+	if r.ICMPType != nil {
+		switch {
+		case *r.ICMPType < 0 || *r.ICMPType > 255:
+			errs = append(errs, field.Invalid(path.Child("icmpType"), *r.ICMPType, "must be between 0 and 255"))
+		case protoOK && r.Proto != "ICMP":
+			errs = append(errs, field.Invalid(path.Child("icmpType"), *r.ICMPType, "an ICMP type requires proto ICMP"))
+		}
+	}
+	if r.ICMPCode != nil {
+		switch {
+		case *r.ICMPCode < 0 || *r.ICMPCode > 255:
+			errs = append(errs, field.Invalid(path.Child("icmpCode"), *r.ICMPCode, "must be between 0 and 255"))
+		case r.ICMPType == nil:
+			errs = append(errs, field.Invalid(path.Child("icmpCode"), *r.ICMPCode, "an ICMP code requires icmpType"))
+		}
+	}
 	errs = append(errs, validateFirewallPriority(r.Priority, path.Child("priority"))...)
 	return errs
 }

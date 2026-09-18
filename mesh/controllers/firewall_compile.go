@@ -70,7 +70,9 @@ func implicitRank(index int) fwRank {
 type fwEntry struct {
 	rule   compiledv1.CompiledFwRule
 	prefix netip.Prefix // masked
-	rank   fwRank
+	// portLo..portHi is the destination-port range (0..65535 = any); meaningful for TCP/UDP only.
+	portLo, portHi int32
+	rank           fwRank
 }
 
 func newFwEntry(r netv1.FirewallPolicyRule, rank fwRank) (fwEntry, error) {
@@ -86,11 +88,28 @@ func newFwEntry(r netv1.FirewallPolicyRule, rank fwRank) (fwEntry, error) {
 	default:
 		return fwEntry{}, fmt.Errorf("proto %q is not TCP, UDP or ICMP", r.Proto)
 	}
-	return fwEntry{
+	e := fwEntry{
 		rule:   compiledv1.CompiledFwRule{CIDR: r.CIDR, Proto: r.Proto, Port: r.Port, Action: r.Action},
 		prefix: p.Masked(),
-		rank:   rank,
-	}, nil
+		portLo: 0, portHi: 65535,
+		rank: rank,
+	}
+	if r.Port != 0 {
+		e.portLo, e.portHi = r.Port, r.Port
+		if r.EndPort != nil && *r.EndPort > r.Port {
+			e.portHi = *r.EndPort
+			e.rule.EndPort = *r.EndPort // a one-port range is just the port
+		}
+	}
+	if r.ICMPType != nil {
+		t := *r.ICMPType
+		e.rule.ICMPType = &t
+		if r.ICMPCode != nil {
+			c := *r.ICMPCode
+			e.rule.ICMPCode = &c
+		}
+	}
+	return e, nil
 }
 
 func (e fwEntry) v6() bool { return e.prefix.Addr().Is6() }
@@ -100,10 +119,21 @@ func (a fwEntry) covers(e fwEntry) bool {
 	if a.v6() != e.v6() || a.prefix.Bits() > e.prefix.Bits() || !a.prefix.Contains(e.prefix.Addr()) {
 		return false
 	}
-	if a.rule.Proto != "" && a.rule.Proto != e.rule.Proto {
+	switch {
+	case a.rule.Proto == "":
+		return true // any protocol, and admission forbids ports or ICMP types on it
+	case a.rule.Proto != e.rule.Proto:
 		return false
+	case a.rule.Proto == "ICMP":
+		return optCovers(a.rule.ICMPType, e.rule.ICMPType) && optCovers(a.rule.ICMPCode, e.rule.ICMPCode)
+	default:
+		return a.portLo <= e.portLo && e.portHi <= a.portHi
 	}
-	return a.rule.Port == 0 || a.rule.Port == e.rule.Port
+}
+
+// optCovers: an unset selector matches everything; a set one covers only the same value.
+func optCovers(a, e *int32) bool {
+	return a == nil || (e != nil && *a == *e)
 }
 
 // fwSet holds one direction's rules with precedence resolved at insert time (Cilium's mapstate

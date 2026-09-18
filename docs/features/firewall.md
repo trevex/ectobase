@@ -39,8 +39,17 @@ wins.
 ## From FirewallPolicy to datapath
 
 `FirewallPolicy` is a Kubernetes-native intent object with an `interfaceSelector`, an optional
-`priority`, and `ingress` / `egress` rule lists (each rule a `{cidr, proto, port, action}` plus
-an optional `priority`). The control plane compiles every policy that selects a NIC into one
+`priority`, and `ingress` / `egress` rule lists. Each rule is a `{cidr, proto, port, action}`,
+optionally narrowed by `endPort` (making `port`-`endPort` an inclusive range) or by `icmpType`
+and `icmpCode`, and optionally ordered by its own `priority`:
+
+```yaml
+ingress:
+  - { cidr: 10.0.0.0/8, proto: TCP, port: 8000, endPort: 8100, action: Allow }
+  - { cidr: 10.0.0.0/8, proto: ICMP, icmpType: 8, action: Allow }              # echo request only
+  - { cidr: 2001:db8::/32, proto: ICMP, icmpType: 1, icmpCode: 4, action: Deny } # ICMPv6 port unreachable
+```
+ The control plane compiles every policy that selects a NIC into one
 first-match-wins rule list per direction, which the agent programs into BPF maps.
 
 ### Admission
@@ -50,7 +59,10 @@ The dispatch apiserver validates a `FirewallPolicy` on create and on every spec 
 - `interfaceSelector` is required and must parse (`{}` selects every interface in the
   namespace);
 - `action` is `Allow` or `Deny`, `proto` is `TCP`, `UDP`, `ICMP` or empty (any);
-- `port` is 0 (any) to 65535 and needs `proto` `TCP` or `UDP`;
+- `port` is 0 (any) to 65535 and needs `proto` `TCP` or `UDP`; `endPort` needs a `port` and
+  must not be below it;
+- `icmpType` and `icmpCode` are 0 to 255, `icmpType` needs `proto` `ICMP`, and `icmpCode` needs
+  `icmpType`. Both are the ICMPv6 values on an IPv6 CIDR;
 - `cidr` is a CIDR with no host bits set: `10.0.0.5/24` is refused rather than read as
   either the `/24` or a typo for `/32`;
 - both priorities are 0 to 65535.
@@ -69,8 +81,9 @@ The dispatch apiserver validates a `FirewallPolicy` on create and on every spec 
    order. The ranking is total, so the compiled lists never depend on the order the apiserver
    lists policies in.
 2. **Shadowing.** A rule that a higher-ranked rule fully covers can never be the first match,
-   so it is dropped: its CIDR lies inside the other's, and the other's proto and port are the
-   same or wildcards. Duplicates collapse the same way. Rules that only overlap partly are
+   so it is dropped: its CIDR lies inside the other's, the other's proto is the same or any,
+   and the other's port range contains its range (an unset port is the full range) or the
+   other's ICMP type, and code, are unset or the same. Duplicates collapse the same way. Rules that only overlap partly are
    kept, since first match still decides between them. This follows Cilium's policy map
    discipline and gives the same result for any insertion order.
 3. **Default posture.** The NIC's `VPC.spec.defaultPolicy` decides what happens to traffic no
@@ -90,9 +103,9 @@ it lowers each `CompiledFwRule`:
 
 - an ingress rule's CIDR is the source (who may reach us);
 - an egress rule's CIDR is the destination;
-- the port is always the destination port;
+- the port, or the `port`-`endPort` range, is always the destination port;
 - `ICMP` means the ICMP of the CIDR's family, so it lowers to protocol 58 (ICMPv6) on an IPv6
-  CIDR.
+  CIDR, and `icmpType`/`icmpCode` are matched against that family's messages.
 
 ### The rule budget and the FirewallCompiled condition
 
@@ -121,7 +134,9 @@ replaces the interface's rules wholesale, and cleanup happens through `DetachInt
 Failures are collected, not fatal, so the loop retries the interfaces that didn't land.
 
 Each `CompiledFwRule` becomes a dataplane `FwRule` with the proto number, destination-port
-range, allow/deny bit, and direction, keyed per interface. Those land in the per-interface
+range, ICMP type and code, allow/deny bit, and direction, keyed per interface. On the wire
+`icmp_type` and `icmp_code` are optional fields, since type 0 (echo reply) is a real
+selector; unset becomes the datapath's `0xffff` wildcard. Those land in the per-interface
 firewall maps (`fw_meta` + the rule table) that `fw_eval_dir` reads.
 
 The dataplane replaces an interface's rules in both families or in neither. A family over

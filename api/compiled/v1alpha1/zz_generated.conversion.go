@@ -494,6 +494,9 @@ func autoConvert_v1alpha1_CompiledFwRule_To_compiled_CompiledFwRule(in *Compiled
 	out.CIDR = in.CIDR
 	out.Proto = in.Proto
 	out.Port = in.Port
+	out.EndPort = in.EndPort
+	out.ICMPType = (*int32)(unsafe.Pointer(in.ICMPType))
+	out.ICMPCode = (*int32)(unsafe.Pointer(in.ICMPCode))
 	out.Action = in.Action
 	return nil
 }
@@ -507,6 +510,9 @@ func autoConvert_compiled_CompiledFwRule_To_v1alpha1_CompiledFwRule(in *compiled
 	out.CIDR = in.CIDR
 	out.Proto = in.Proto
 	out.Port = in.Port
+	out.EndPort = in.EndPort
+	out.ICMPType = (*int32)(unsafe.Pointer(in.ICMPType))
+	out.ICMPCode = (*int32)(unsafe.Pointer(in.ICMPCode))
 	out.Action = in.Action
 	return nil
 }

@@ -86,8 +86,12 @@ type FwRule struct {
 	Proto      uint32 // 6=TCP, 17=UDP, 1=ICMP; 0 = any
 	DstPortMin uint32
 	DstPortMax uint32
-	Allow      bool // true = accept, false = drop
-	Egress     bool // true = egress rule, false = ingress
+	// IcmpType/IcmpCode select one ICMP(v6) message type/code; nil = any. Pointers because 0 is a
+	// real type (echo reply).
+	IcmpType *uint32
+	IcmpCode *uint32
+	Allow    bool // true = accept, false = drop
+	Egress   bool // true = egress rule, false = ingress
 }
 
 // FwRuleWithID pairs a stable rule id (slot order = list position) with a rule, for
@@ -1015,6 +1019,8 @@ func (d dpAdapter) ReplaceInterfaceFirewall(ctx context.Context, interfaceID str
 			Proto:      rr.Rule.Proto,
 			DstPortMin: rr.Rule.DstPortMin,
 			DstPortMax: rr.Rule.DstPortMax,
+			IcmpType:   rr.Rule.IcmpType,
+			IcmpCode:   rr.Rule.IcmpCode,
 			Allow:      rr.Rule.Allow,
 			Egress:     rr.Rule.Egress,
 		})

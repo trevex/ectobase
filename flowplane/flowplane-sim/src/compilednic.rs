@@ -44,6 +44,13 @@ pub struct Rule {
     pub proto: String,
     #[serde(default)]
     pub port: i32,
+    /// Inclusive end of a port range starting at `port` (0 = just `port`).
+    #[serde(default, rename = "endPort")]
+    pub end_port: i32,
+    #[serde(default, rename = "icmpType")]
+    pub icmp_type: Option<i32>,
+    #[serde(default, rename = "icmpCode")]
+    pub icmp_code: Option<i32>,
     pub action: String,
 }
 
@@ -105,7 +112,8 @@ fn proto_to_u8(proto: &str) -> u8 {
 
 /// Convert a single compiled firewall rule to the native FwRule. Mirrors the agent's `compiledToFw`:
 /// k8s semantics — an INGRESS rule's peer CIDR is the SOURCE (dst any), an EGRESS rule's is the
-/// DESTINATION (src any); the port is always the destination port.
+/// DESTINATION (src any); the port (or `port`-`endPort` range) is always the destination port, and
+/// ICMP type/code carry through.
 pub fn rule_to_fw(r: &Rule, direction: u8) -> FwRule {
     let (peer_ip, peer_mask) = parse_cidr(&r.cidr);
     let proto = proto_to_u8(&r.proto);
@@ -118,8 +126,10 @@ pub fn rule_to_fw(r: &Rule, direction: u8) -> FwRule {
     let (dst_port_min, dst_port_max) = if r.port == 0 {
         (0u16, 65535u16)
     } else {
-        (r.port as u16, r.port as u16)
+        (r.port as u16, r.end_port.max(r.port) as u16)
     };
+    // Unset ICMP selectors are the datapath's 0xffff wildcard; 0 is a real type (echo reply).
+    let icmp = |v: Option<i32>| v.map_or(0xffff, |t| t as u16);
 
     let (src_ip, src_mask, dst_ip, dst_mask) = if direction == FW_DIR_INGRESS {
         (peer_ip, peer_mask, [0; 4], [0; 4])
@@ -136,8 +146,8 @@ pub fn rule_to_fw(r: &Rule, direction: u8) -> FwRule {
         src_port_max: 65535,
         dst_port_min,
         dst_port_max,
-        icmp_type: 0xffff,
-        icmp_code: 0xffff,
+        icmp_type: icmp(r.icmp_type),
+        icmp_code: icmp(r.icmp_code),
         proto,
         action,
         direction,
@@ -192,9 +202,9 @@ mod tests {
         let mut maps = MemMaps::default();
         apply(&mut maps, &c, tap);
 
-        // Sanity: 1 ingress rule was installed.
+        // Sanity: the 443 rule, the 8000-8100 range and the typed ICMP rule were installed.
         let meta = maps.fw_meta.get(&tap).expect("fw_meta for tap");
-        assert_eq!(meta.ingress_count, 1, "should have 1 ingress rule");
+        assert_eq!(meta.ingress_count, 3, "should have 3 ingress rules");
 
         // Ingress rule = allow from SOURCE 10.0.0.0/24 on port 443. A packet FROM 10.0.0.5:*->:443
         // matches. (PacketBuilder::ipv4 emits starting at the IPv4 header, so ip_off = 0.)
@@ -220,6 +230,44 @@ mod tests {
             fw_eval_dir(&pkt_drop, &maps, 0, tap, FW_DIR_INGRESS),
             FW_ACTION_DROP,
             "port 80 should be dropped"
+        );
+
+        // Port range 8000-8100 from 10.0.1.0/24: inside passes, just past the end drops.
+        for (port, want) in [
+            (8000, FW_ACTION_ACCEPT),
+            (8050, FW_ACTION_ACCEPT),
+            (8100, FW_ACTION_ACCEPT),
+            (8101, FW_ACTION_DROP),
+        ] {
+            let pkt = VecPkt::from_bytes(&tcp_v4([10, 0, 1, 5], [10, 0, 0, 10], 5000, port));
+            assert_eq!(
+                fw_eval_dir(&pkt, &maps, 0, tap, FW_DIR_INGRESS),
+                want,
+                "range rule, port {port}"
+            );
+        }
+
+        // ICMP type 8 only, from 10.0.2.0/24: an echo request passes, an echo reply (type 0) drops.
+        let icmp = |request: bool| {
+            let b = etherparse::PacketBuilder::ipv4([10, 0, 2, 5], [10, 0, 0, 10], 64);
+            let b = if request {
+                b.icmpv4_echo_request(1, 1)
+            } else {
+                b.icmpv4_echo_reply(1, 1)
+            };
+            let mut out = Vec::new();
+            b.write(&mut out, &[]).unwrap();
+            VecPkt::from_bytes(&out)
+        };
+        assert_eq!(
+            fw_eval_dir(&icmp(true), &maps, 0, tap, FW_DIR_INGRESS),
+            FW_ACTION_ACCEPT,
+            "echo request"
+        );
+        assert_eq!(
+            fw_eval_dir(&icmp(false), &maps, 0, tap, FW_DIR_INGRESS),
+            FW_ACTION_DROP,
+            "echo reply"
         );
     }
 }

@@ -75,7 +75,7 @@ func mustCompileFirewall(t *testing.T, policies []netv1.FirewallPolicy, defaultP
 
 func assertRules(t *testing.T, dir string, got []compiledv1.CompiledFwRule, want ...string) {
 	t.Helper()
-	if g := render(got); !reflect.DeepEqual(g, want) && (len(g) != 0 || len(want) != 0) {
+	if g := renderFull(got); !reflect.DeepEqual(g, want) && (len(g) != 0 || len(want) != 0) {
 		t.Fatalf("%s:\n got  %q\n want %q", dir, g, want)
 	}
 }
@@ -387,4 +387,85 @@ func TestCompileFirewall_SkipsUnselectablePolicies(t *testing.T) {
 	other.Spec.InterfaceSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"app": "db"}}
 	fw := mustCompileFirewall(t, []netv1.FirewallPolicy{noSel, badSel, other}, nil)
 	assertRules(t, "ingress", fw.Ingress, "Allow 0.0.0.0/0", "Allow ::/0")
+}
+
+func portRange(r netv1.FirewallPolicyRule, lo, hi int32) netv1.FirewallPolicyRule {
+	r.Proto, r.Port, r.EndPort = "TCP", lo, &hi
+	return r
+}
+
+func icmp(r netv1.FirewallPolicyRule, typ, code *int32) netv1.FirewallPolicyRule {
+	r.Proto, r.ICMPType, r.ICMPCode = "ICMP", typ, code
+	return r
+}
+
+// renderFull adds the range and ICMP fields to render's form.
+func renderFull(rules []compiledv1.CompiledFwRule) []string {
+	out := render(rules)
+	for i, r := range rules {
+		if r.EndPort != 0 {
+			out[i] += fmt.Sprintf("-%d", r.EndPort)
+		}
+		if r.ICMPType != nil {
+			out[i] += fmt.Sprintf(" type %d", *r.ICMPType)
+		}
+		if r.ICMPCode != nil {
+			out[i] += fmt.Sprintf(" code %d", *r.ICMPCode)
+		}
+	}
+	return out
+}
+
+// Port ranges and ICMP type/code reach the compiled rule; a one-port range is just a port.
+func TestCompileFirewall_LowersRangesAndICMP(t *testing.T) {
+	fw := mustCompileFirewall(t, []netv1.FirewallPolicy{fwPolicy("p", nil, []netv1.FirewallPolicyRule{
+		portRange(allow("10.1.0.0/16"), 8000, 8100),
+		portRange(allow("10.2.0.0/16"), 53, 53),
+		icmp(allow("10.3.0.0/16"), prio(8), nil),
+		icmp(allow("2001:db8::/32"), prio(1), prio(4)),
+	}, nil)}, posture(netv1.VPCPolicyDeny))
+	want := []string{
+		"Allow 10.1.0.0/16 TCP/8000-8100",
+		"Allow 10.2.0.0/16 TCP/53",
+		"Allow 10.3.0.0/16 ICMP/0 type 8",
+		"Allow 2001:db8::/32 ICMP/0 type 1 code 4",
+	}
+	if got := renderFull(fw.Ingress); !reflect.DeepEqual(got, want) {
+		t.Fatalf("ingress:\n got  %q\n want %q", got, want)
+	}
+}
+
+// Coverage understands ranges (containment, not equality) and ICMP type/code wildcards.
+func TestCompileFirewall_ShadowingRangesAndICMP(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		rules []netv1.FirewallPolicyRule
+		want  []string
+	}{
+		{"range covers a port inside it", []netv1.FirewallPolicyRule{portRange(deny("10.0.0.0/8"), 1, 1024), tcp(allow("10.0.0.0/8"), 443)},
+			[]string{"Deny 10.0.0.0/8 TCP/1-1024"}},
+		{"range covers a sub-range", []netv1.FirewallPolicyRule{portRange(deny("10.0.0.0/8"), 1, 1024), portRange(allow("10.0.0.0/8"), 80, 90)},
+			[]string{"Deny 10.0.0.0/8 TCP/1-1024"}},
+		{"port does not cover a range around it", []netv1.FirewallPolicyRule{tcp(deny("10.0.0.0/8"), 443), portRange(allow("10.0.0.0/8"), 400, 500)},
+			[]string{"Deny 10.0.0.0/8 TCP/443", "Allow 10.0.0.0/8 TCP/400-500"}},
+		{"overlapping ranges both kept", []netv1.FirewallPolicyRule{portRange(deny("10.0.0.0/8"), 1, 100), portRange(allow("10.0.0.0/8"), 50, 150)},
+			[]string{"Deny 10.0.0.0/8 TCP/1-100", "Allow 10.0.0.0/8 TCP/50-150"}},
+		{"any-port covers a range", []netv1.FirewallPolicyRule{tcp(deny("10.0.0.0/8"), 0), portRange(allow("10.0.0.0/8"), 8000, 8100)},
+			[]string{"Deny 10.0.0.0/8 TCP/0"}},
+		{"any ICMP covers a type", []netv1.FirewallPolicyRule{icmp(deny("10.0.0.0/8"), nil, nil), icmp(allow("10.0.0.0/8"), prio(8), nil)},
+			[]string{"Deny 10.0.0.0/8 ICMP/0"}},
+		{"type covers its codes", []netv1.FirewallPolicyRule{icmp(deny("10.0.0.0/8"), prio(3), nil), icmp(allow("10.0.0.0/8"), prio(3), prio(4))},
+			[]string{"Deny 10.0.0.0/8 ICMP/0 type 3"}},
+		{"code does not cover its type", []netv1.FirewallPolicyRule{icmp(deny("10.0.0.0/8"), prio(3), prio(1)), icmp(allow("10.0.0.0/8"), prio(3), nil)},
+			[]string{"Deny 10.0.0.0/8 ICMP/0 type 3 code 1", "Allow 10.0.0.0/8 ICMP/0 type 3"}},
+		{"distinct types both kept", []netv1.FirewallPolicyRule{icmp(deny("10.0.0.0/8"), prio(8), nil), icmp(allow("10.0.0.0/8"), prio(0), nil)},
+			[]string{"Deny 10.0.0.0/8 ICMP/0 type 8", "Allow 10.0.0.0/8 ICMP/0 type 0"}},
+		{"any proto covers typed ICMP", []netv1.FirewallPolicyRule{deny("10.0.0.0/8"), icmp(allow("10.0.0.0/8"), prio(8), prio(0))},
+			[]string{"Deny 10.0.0.0/8"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fw := mustCompileFirewall(t, []netv1.FirewallPolicy{fwPolicy("p", nil, tc.rules, nil)}, posture(netv1.VPCPolicyDeny))
+			assertRules(t, "ingress", fw.Ingress, tc.want...)
+		})
+	}
 }

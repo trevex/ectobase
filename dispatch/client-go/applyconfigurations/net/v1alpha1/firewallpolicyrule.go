@@ -15,6 +15,16 @@ type FirewallPolicyRuleApplyConfiguration struct {
 	Proto *string `json:"proto,omitempty"`
 	// Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
 	Port *int32 `json:"port,omitempty"`
+	// EndPort, if set, makes the rule match the inclusive destination-port range Port-EndPort.
+	// Requires Port, and must not be below it.
+	EndPort *int32 `json:"endPort,omitempty"`
+	// ICMPType restricts an ICMP rule to one ICMP (or, on an IPv6 CIDR, ICMPv6) message type,
+	// e.g. 8 for IPv4 echo request, 128 for ICMPv6 echo request. Unset matches every type.
+	// Requires Proto ICMP.
+	ICMPType *int32 `json:"icmpType,omitempty"`
+	// ICMPCode restricts the rule further to one code of ICMPType. Unset matches every code.
+	// Requires ICMPType.
+	ICMPCode *int32 `json:"icmpCode,omitempty"`
 	// Action is "Allow" or "Deny".
 	Action *string `json:"action,omitempty"`
 	// Priority orders this rule against the other rules of equally-prioritized policies: lower
@@ -49,6 +59,30 @@ func (b *FirewallPolicyRuleApplyConfiguration) WithProto(value string) *Firewall
 // If called multiple times, the Port field is set to the value of the last call.
 func (b *FirewallPolicyRuleApplyConfiguration) WithPort(value int32) *FirewallPolicyRuleApplyConfiguration {
 	b.Port = &value
+	return b
+}
+
+// WithEndPort sets the EndPort field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the EndPort field is set to the value of the last call.
+func (b *FirewallPolicyRuleApplyConfiguration) WithEndPort(value int32) *FirewallPolicyRuleApplyConfiguration {
+	b.EndPort = &value
+	return b
+}
+
+// WithICMPType sets the ICMPType field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the ICMPType field is set to the value of the last call.
+func (b *FirewallPolicyRuleApplyConfiguration) WithICMPType(value int32) *FirewallPolicyRuleApplyConfiguration {
+	b.ICMPType = &value
+	return b
+}
+
+// WithICMPCode sets the ICMPCode field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the ICMPCode field is set to the value of the last call.
+func (b *FirewallPolicyRuleApplyConfiguration) WithICMPCode(value int32) *FirewallPolicyRuleApplyConfiguration {
+	b.ICMPCode = &value
 	return b
 }
 
