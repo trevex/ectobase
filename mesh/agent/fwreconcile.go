@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 )
@@ -83,7 +84,7 @@ func (r *Reconciler) ReconcileFirewall(ctx context.Context) error {
 // ungoverned direction precisely so v6 guests are not dropped.
 func compiledToFw(cr compiledv1.CompiledFwRule, egress bool) FwRule {
 	fw := FwRule{
-		Proto:      protoNum(cr.Proto),
+		Proto:      protoNum(cr.Proto, strings.Contains(cr.CIDR, ":")),
 		DstPortMin: uint32(cr.Port),
 		DstPortMax: uint32(cr.Port),
 		Allow:      cr.Action == "Allow",
@@ -97,13 +98,18 @@ func compiledToFw(cr compiledv1.CompiledFwRule, egress bool) FwRule {
 	return fw
 }
 
-func protoNum(s string) uint32 {
+// protoNum maps an API protocol name to its IP protocol number. "ICMP" names the ICMP of the rule's
+// family, so a v6 peer CIDR gets ICMPv6 (58); a v4 ICMP number on a v6 rule would never match.
+func protoNum(s string, v6 bool) uint32 {
 	switch s {
 	case "TCP", "tcp":
 		return 6
 	case "UDP", "udp":
 		return 17
 	case "ICMP", "icmp":
+		if v6 {
+			return 58
+		}
 		return 1
 	default:
 		return 0

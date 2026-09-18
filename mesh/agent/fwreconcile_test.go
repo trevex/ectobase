@@ -294,3 +294,23 @@ func TestReconcileFirewall_OverflowSurfacesAndSparesOtherInterfaces(t *testing.T
 		t.Fatalf("interface at exactly the per-family cap must be programmed with all 32 rules, got %d", got)
 	}
 }
+
+// "ICMP" in the API means the ICMP of the rule's family: a v6 peer CIDR must lower to ICMPv6 (58).
+// Lowering it to 1 made the rule match nothing a v6 guest ever sends — ICMPv6 was inexpressible.
+func TestCompiledToFwICMPFollowsFamily(t *testing.T) {
+	for _, tc := range []struct {
+		cidr   string
+		egress bool
+		want   uint32
+	}{
+		{cidr: "10.0.0.0/8", want: 1},
+		{cidr: "2001:db8::/32", want: 58},
+		{cidr: "::/0", egress: true, want: 58},
+		{cidr: "0.0.0.0/0", egress: true, want: 1},
+	} {
+		got := compiledToFw(compiledv1.CompiledFwRule{CIDR: tc.cidr, Proto: "ICMP", Action: "Allow"}, tc.egress)
+		if got.Proto != tc.want {
+			t.Errorf("ICMP on %s (egress=%v) lowered to proto %d, want %d", tc.cidr, tc.egress, got.Proto, tc.want)
+		}
+	}
+}
