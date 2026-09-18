@@ -43,8 +43,8 @@ flowchart TD
     subgraph dispatch["The dispatch (fleet)"]
         lost["ClusterPool Unknown<br/>&gt; FailoverThreshold"]
         lost --> fence["Fence every node /64:<br/>storage (Ceph blocklist)<br/>+ network (route withdraw)"]
-        fence -->|all /64s confirmed| rebind["Reschedule VMs to<br/>a healthy pool"]
-        fence -->|any fence unconfirmed| block["FailoverBlocked<br/>(fail safe: leave in place)"]
+        fence -->|all confirmed AND<br/>coverage provably complete| rebind["Reschedule VMs to<br/>a healthy pool"]
+        fence -->|any fence unconfirmed, or<br/>coverage not provable| block["FailoverBlocked<br/>(fail safe: leave in place)"]
         rebind --> recover["On recovery: broker drains<br/>stale VMIs → un-fence"]
     end
 
@@ -157,6 +157,33 @@ safe rather than open.
 
 Only once every `/64` has both fences confirmed active does the barrier
 lift and rescheduling begin.
+
+#### Is the fence COMPLETE? — `spec.underlayPrefix`
+
+Confirming a fence is not the same as having fenced everything. `NodePrefixes` is
+reported *by the broker*, so central's copy is frozen at whatever was last seen
+before contact was lost — and a node that joined **during** the outage is absent
+from it. A fence coordinate derived from the entity being fenced is exactly the
+thing you cannot lean on, because that entity is the one you have lost contact
+with.
+
+Whether that matters depends on the underlay topology, so central decides
+explicitly rather than assuming:
+
+| Situation | Fence coverage | Failover |
+|---|---|---|
+| `spec.underlayPrefix` declared | Complete by construction — the aggregate contains every node underlay, observed or not | Proceeds |
+| Not declared, nodes report **one** distinct `/64` | Complete — each node's identity is a `/128` inside that `/64`, so fencing it covers unobserved nodes too | Proceeds |
+| Not declared, nodes report **several** distinct `/64`s | Not provable — an unobserved node may sit in an unreported `/64` | **Fences what is known, then blocks the rebind** |
+
+The third row fences first and blocks second, deliberately. Containing the nodes
+central *does* know about is pure upside and costs nothing; the step that can
+corrupt a filesystem is reattaching a disk while some unfenced node may still be
+writing to it, so that is the step withheld. The blocked VMs carry the reason,
+which names the fix: declare `spec.underlayPrefix` on the `ClusterPool` — an
+aggregate (e.g. `fd00:cafe:1a2b::/48`) containing every node's underlay. It is
+central configuration set at pool registration, precisely so it does not depend
+on the unreachable cluster to report it.
 
 ```mermaid
 sequenceDiagram

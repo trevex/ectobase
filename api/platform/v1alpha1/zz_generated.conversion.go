@@ -204,6 +204,7 @@ func Convert_platform_ClusterPoolList_To_v1alpha1_ClusterPoolList(in *platform.C
 func autoConvert_v1alpha1_ClusterPoolSpec_To_platform_ClusterPoolSpec(in *ClusterPoolSpec, out *platform.ClusterPoolSpec, s conversion.Scope) error {
 	out.Region = in.Region
 	out.Endpoint = in.Endpoint
+	out.UnderlayPrefix = in.UnderlayPrefix
 	return nil
 }
 
@@ -215,6 +216,7 @@ func Convert_v1alpha1_ClusterPoolSpec_To_platform_ClusterPoolSpec(in *ClusterPoo
 func autoConvert_platform_ClusterPoolSpec_To_v1alpha1_ClusterPoolSpec(in *platform.ClusterPoolSpec, out *ClusterPoolSpec, s conversion.Scope) error {
 	out.Region = in.Region
 	out.Endpoint = in.Endpoint
+	out.UnderlayPrefix = in.UnderlayPrefix
 	return nil
 }
 

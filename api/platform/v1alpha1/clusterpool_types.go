@@ -14,6 +14,22 @@ type ClusterPoolSpec struct {
 	Region string `json:"region,omitempty" protobuf:"bytes,1,opt,name=region"`
 	// Endpoint is the reachable API endpoint of the attached cluster.
 	Endpoint string `json:"endpoint,omitempty" protobuf:"bytes,2,opt,name=endpoint"`
+	// UnderlayPrefix is this cluster's underlay aggregate (a CIDR that contains every node's
+	// underlay address, e.g. "fd00:cafe:1a2b::/48"). Declaring it makes Tier-2 fencing COMPLETE by
+	// construction: central fences this one prefix instead of enumerating node /64s, so a node it
+	// never observed — one that joined while the pool was unreachable — is fenced too.
+	//
+	// It is central configuration, set when the pool is registered, deliberately NOT reported by
+	// the broker: a fence coordinate must never be derived from the entity being fenced, because
+	// that entity is by definition the one you have lost contact with.
+	//
+	// When empty, central falls back to the broker-reported node /64s, which is only safe while
+	// every node in the cluster shares one /64 (each node's identity being a /128 inside it). If
+	// the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved
+	// node could sit in an unreported one, and failover blocks rather than fencing incompletely —
+	// set this field to unblock it. See docs/architecture/rescheduling-and-failover.md.
+	// +optional
+	UnderlayPrefix string `json:"underlayPrefix,omitempty" protobuf:"bytes,3,opt,name=underlayPrefix"`
 }
 
 // ClusterPoolStatus defines the observed state of a ClusterPool.

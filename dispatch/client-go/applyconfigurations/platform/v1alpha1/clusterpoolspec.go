@@ -11,6 +11,21 @@ type ClusterPoolSpecApplyConfiguration struct {
 	Region *string `json:"region,omitempty"`
 	// Endpoint is the reachable API endpoint of the attached cluster.
 	Endpoint *string `json:"endpoint,omitempty"`
+	// UnderlayPrefix is this cluster's underlay aggregate (a CIDR that contains every node's
+	// underlay address, e.g. "fd00:cafe:1a2b::/48"). Declaring it makes Tier-2 fencing COMPLETE by
+	// construction: central fences this one prefix instead of enumerating node /64s, so a node it
+	// never observed — one that joined while the pool was unreachable — is fenced too.
+	//
+	// It is central configuration, set when the pool is registered, deliberately NOT reported by
+	// the broker: a fence coordinate must never be derived from the entity being fenced, because
+	// that entity is by definition the one you have lost contact with.
+	//
+	// When empty, central falls back to the broker-reported node /64s, which is only safe while
+	// every node in the cluster shares one /64 (each node's identity being a /128 inside it). If
+	// the reported set contains MORE than one distinct /64, the cluster spans /64s, an unobserved
+	// node could sit in an unreported one, and failover blocks rather than fencing incompletely —
+	// set this field to unblock it. See docs/architecture/rescheduling-and-failover.md.
+	UnderlayPrefix *string `json:"underlayPrefix,omitempty"`
 }
 
 // ClusterPoolSpecApplyConfiguration constructs a declarative configuration of the ClusterPoolSpec type for use with
@@ -32,5 +47,13 @@ func (b *ClusterPoolSpecApplyConfiguration) WithRegion(value string) *ClusterPoo
 // If called multiple times, the Endpoint field is set to the value of the last call.
 func (b *ClusterPoolSpecApplyConfiguration) WithEndpoint(value string) *ClusterPoolSpecApplyConfiguration {
 	b.Endpoint = &value
+	return b
+}
+
+// WithUnderlayPrefix sets the UnderlayPrefix field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the UnderlayPrefix field is set to the value of the last call.
+func (b *ClusterPoolSpecApplyConfiguration) WithUnderlayPrefix(value string) *ClusterPoolSpecApplyConfiguration {
+	b.UnderlayPrefix = &value
 	return b
 }

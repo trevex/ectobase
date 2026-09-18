@@ -62,17 +62,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, rq ctrl.Request) (ctrl.Resul
 	if !poolLost(&pool, time.Now(), r.FailoverThreshold) {
 		return ctrl.Result{RequeueAfter: r.FailoverThreshold}, nil
 	}
-	// Whole-pool fence: every /64 must confirm BOTH fences active (barrier) before
-	// any re-bind. A pool with no reported /64s cannot be safely fenced -> block.
-	if len(pool.Status.NodePrefixes) == 0 {
-		return ctrl.Result{RequeueAfter: r.FailoverThreshold}, r.blockPoolVMs(ctx, pool.Name, "no NodePrefixes reported; cannot fence")
+	// Whole-pool fence: every target must confirm BOTH fences active (barrier) before any re-bind.
+	targets, complete, why := fenceCoverage(&pool)
+	if len(targets) == 0 {
+		return ctrl.Result{RequeueAfter: r.FailoverThreshold}, r.blockPoolVMs(ctx, pool.Name, why)
 	}
 	// Track a /64 the moment its STORAGE fence is applied so that a later barrier
 	// failure still records it in FencedPrefixes -> releaseDrained can release it on
 	// recovery. Releasing a network fence that was never set is a harmless idempotent
 	// no-op. The error paths persist only pool status + VM status, never Spec.
 	var fenced []string
-	for _, p := range pool.Status.NodePrefixes {
+	for _, p := range targets {
 		if err := r.StorageFencer.Fence(ctx, p); err != nil {
 			_ = r.setFencedPrefixes(ctx, &pool, fenced) // track what's already applied for later release
 			return ctrl.Result{RequeueAfter: r.FailoverThreshold}, r.blockPoolVMs(ctx, pool.Name, "storage fence unconfirmed for "+p+": "+err.Error())
@@ -86,7 +86,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, rq ctrl.Request) (ctrl.Resul
 	if err := r.setFencedPrefixes(ctx, &pool, fenced); err != nil {
 		return ctrl.Result{}, err
 	}
-	// All /64s fenced active -> schedule + sticky re-bind the whole batch.
+	// Everything we know about is now fenced — but fencing what we know is not the same as having
+	// fenced everything that exists. Reattaching a disk while an unfenced node may still be writing
+	// to it is the exact corruption this path exists to prevent, so the REBIND is what gets blocked,
+	// not the fencing: containing the nodes we do know about is pure upside and happens regardless.
+	if !complete {
+		return ctrl.Result{RequeueAfter: r.FailoverThreshold}, r.blockPoolVMs(ctx, pool.Name, why)
+	}
+	// Fence coverage provably complete -> schedule + sticky re-bind the whole batch.
 	return ctrl.Result{RequeueAfter: r.FailoverThreshold}, r.rebindPoolVMs(ctx, pool.Name)
 }
 
@@ -214,6 +221,55 @@ func (r *Reconciler) releaseDrained(ctx context.Context, pool *platformv1.Cluste
 func (r *Reconciler) block(ctx context.Context, vm *computev1.VirtualMachine, msg string) error {
 	meta.SetStatusCondition(&vm.Status.Conditions, metav1.Condition{Type: "FailoverBlocked", Status: metav1.ConditionTrue, Reason: "FenceUnconfirmed", Message: msg, ObservedGeneration: vm.Generation})
 	return r.Client.Status().Update(ctx, vm)
+}
+
+// fenceCoverage decides WHAT to fence for a lost pool and whether that fencing is COMPLETE — i.e.
+// whether it provably covers every node that could still be writing, including nodes central never
+// observed. Returns the targets, completeness, and (when incomplete or empty) the reason.
+//
+// The hazard: node /64s are reported BY THE BROKER, so the set central holds is frozen at whatever
+// was last seen before contact was lost. A node that joined during the outage is absent from it. A
+// fence coordinate derived from the entity being fenced is precisely what you cannot rely on,
+// because that entity is the one you have lost contact with.
+//
+//   - `spec.underlayPrefix` declared — one aggregate, complete BY CONSTRUCTION: it contains every
+//     node's underlay whether or not central ever saw the node. The correct coordinate, and central
+//     configuration rather than reported state.
+//   - not declared, reported prefixes collapse to ONE distinct /64 — complete for the same reason:
+//     in the single-/64-per-cluster topology every node's identity is a /128 inside that /64, so
+//     fencing it covers unobserved nodes too. Each node reports the /64 itself, so the raw list
+//     repeats it per node; dedup makes "how many distinct coordinates" the real question.
+//   - not declared, SEVERAL distinct /64s — the cluster spans /64s, so an unobserved node may sit
+//     in one never reported. Incomplete: the caller fences what is known (containment is free) but
+//     must not rebind.
+//
+// Callers distinguish "nothing to fence" (empty targets) from "fenced but not provably complete"
+// (targets, complete=false) — the first cannot protect anything, the second protects what it can.
+func fenceCoverage(pool *platformv1.ClusterPool) (targets []string, complete bool, why string) {
+	if p := pool.Spec.UnderlayPrefix; p != "" {
+		return []string{p}, true, ""
+	}
+	seen := map[string]bool{}
+	var distinct []string
+	for _, p := range pool.Status.NodePrefixes {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		distinct = append(distinct, p)
+	}
+	switch len(distinct) {
+	case 0:
+		return nil, false, "no NodePrefixes reported and spec.underlayPrefix unset; cannot fence anything"
+	case 1:
+		return distinct, true, ""
+	default:
+		return distinct, false, fmt.Sprintf("fenced the %d reported node /64s (%v) but coverage is not provably "+
+			"complete with spec.underlayPrefix unset: the reported set is the last seen before contact was lost, "+
+			"so a node that joined during the outage may sit in an unreported /64 and stay writable. Declare "+
+			"spec.underlayPrefix (an aggregate containing every node underlay) to make fencing complete",
+			len(distinct), distinct)
+	}
 }
 
 // poolLost reports whether pool is Unknown and its lease has been stale longer than threshold.

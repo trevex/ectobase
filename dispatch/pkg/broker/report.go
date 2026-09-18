@@ -14,15 +14,24 @@ type NodeFact struct {
 	Prefix string
 }
 
-// NodePrefixesFromNodes returns the /64 underlay prefixes of the given nodes (skipping
-// nodes with no assigned prefix), preserving order. This is the pool fence coordinate
-// the broker stamps into ClusterPool.Status.NodePrefixes.
+// NodePrefixesFromNodes returns the DISTINCT /64 underlay prefixes of the given nodes (skipping
+// nodes with no assigned prefix), in first-seen order. This is the pool fence coordinate the broker
+// stamps into ClusterPool.Status.NodePrefixes.
+//
+// Deduplicated because it is semantically a SET of fence coordinates, not a per-node list: every
+// node stamps its own underlay masked to a /64, so in the usual single-/64-per-cluster topology all
+// of them report the same prefix and the raw list is that one coordinate repeated once per node.
+// Central reads "how many distinct coordinates" to decide whether its fence coverage is provably
+// complete (see failover.fenceCoverage), so the duplicates were actively misleading there as well
+// as noise in the status.
 func NodePrefixesFromNodes(nodes []NodeFact) []string {
+	seen := map[string]bool{}
 	var out []string
 	for _, n := range nodes {
-		if n.Prefix == "" {
+		if n.Prefix == "" || seen[n.Prefix] {
 			continue
 		}
+		seen[n.Prefix] = true
 		out = append(out, n.Prefix)
 	}
 	return out
