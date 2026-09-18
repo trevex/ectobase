@@ -381,9 +381,10 @@ wherever it lands.
 ## Firewall policies
 
 Each VPC has a `spec.defaultPolicy` (the `demo` VPC above used `Allow`). The
-production posture is deny-by-default: leave `defaultPolicy` unset (or `Deny`)
-and open specific flows with a `FirewallPolicy`, which selects interfaces by label and
-lists ingress/egress rules. Label the NICs to govern, then author the policy
+production posture is deny-by-default: set `defaultPolicy: Deny` and open specific flows
+with a `FirewallPolicy`, which selects interfaces by label and lists ingress/egress rules.
+Leaving it unset is not deny-by-default: it keeps Kubernetes NetworkPolicy semantics, where a
+direction no policy governs stays open (see [Distributed firewall](../features/firewall.md)). Label the NICs to govern, then author the policy
 on the dispatch; the compiler folds matching rules into each `CompiledNIC` and the
 node agent programs them.
 
