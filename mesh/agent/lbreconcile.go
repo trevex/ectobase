@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // lbBacking is one (LB address, backend NIC) pairing this node hosts: a CompiledNIC.LB entry
@@ -48,7 +49,7 @@ func (r *Reconciler) desiredLB(ctx context.Context, ulByKey map[ipKey]string, lo
 		for _, lb := range c.Spec.LB {
 			ports := make([]LbPort, 0, len(lb.Ports))
 			for _, p := range lb.Ports {
-				ports = append(ports, LbPort{Port: uint32(p.Port), Proto: protoNum(p.Proto)})
+				ports = append(ports, LbPort{Port: uint32(p.Port), Proto: protoNum(p.Proto, strings.Contains(lb.IP, ":"))})
 			}
 			out = append(out, lbBacking{IP: lb.IP, Vni: uint32(c.Spec.VNI), NicUnderlay: ul, OverlayIP: overlayIP, Ports: ports})
 		}

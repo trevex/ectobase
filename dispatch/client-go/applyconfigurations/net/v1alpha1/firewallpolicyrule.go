@@ -8,14 +8,18 @@ package v1alpha1
 // FirewallPolicyRule is a single allow/deny rule for ingress or egress traffic.
 type FirewallPolicyRuleApplyConfiguration struct {
 	// CIDR is the source (ingress) or destination (egress) CIDR to match.
-	// "0.0.0.0/0" matches all addresses.
+	// "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
 	CIDR *string `json:"cidr,omitempty"`
-	// Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any).
+	// Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP
+	// of the CIDR's family (ICMPv6 for an IPv6 CIDR).
 	Proto *string `json:"proto,omitempty"`
-	// Port is the destination port to match (0 = any).
+	// Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
 	Port *int32 `json:"port,omitempty"`
 	// Action is "Allow" or "Deny".
 	Action *string `json:"action,omitempty"`
+	// Priority orders this rule against the other rules of equally-prioritized policies: lower
+	// wins. 0-65535; unset means 32768. Rules of equal priority keep their list order.
+	Priority *int32 `json:"priority,omitempty"`
 }
 
 // FirewallPolicyRuleApplyConfiguration constructs a declarative configuration of the FirewallPolicyRule type for use with
@@ -53,5 +57,13 @@ func (b *FirewallPolicyRuleApplyConfiguration) WithPort(value int32) *FirewallPo
 // If called multiple times, the Action field is set to the value of the last call.
 func (b *FirewallPolicyRuleApplyConfiguration) WithAction(value string) *FirewallPolicyRuleApplyConfiguration {
 	b.Action = &value
+	return b
+}
+
+// WithPriority sets the Priority field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Priority field is set to the value of the last call.
+func (b *FirewallPolicyRuleApplyConfiguration) WithPriority(value int32) *FirewallPolicyRuleApplyConfiguration {
+	b.Priority = &value
 	return b
 }

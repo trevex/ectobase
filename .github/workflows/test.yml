@@ -3,7 +3,8 @@ name: test
 # Fast, non-privileged unit/integration gate — the counterpart to docker.yml (which only builds and
 # publishes images). Runs the suites that need no root and no live cluster:
 #   * make sim        — pure-core + native datapath sim (flowplane-core + flowplane-sim)
-#   * make test       — flowplane host unit tests (builds the eBPF program via aya-build)
+#   * make test       — flowplane host unit tests (builds the eBPF program via aya-build) + the
+#                       flowplane-common / flowplane-control crate tests
 #   * make chart-test — helm-unittest for both charts
 #   * go test         — every Go module in go.work (api, cni, mesh, dispatch, test/lab, test/e2e)
 #

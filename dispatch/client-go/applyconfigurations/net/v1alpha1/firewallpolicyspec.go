@@ -13,6 +13,10 @@ import (
 type FirewallPolicySpecApplyConfiguration struct {
 	// InterfaceSelector selects the NetworkInterfaces this policy applies to via label matching.
 	InterfaceSelector *v1.LabelSelectorApplyConfiguration `json:"interfaceSelector,omitempty"`
+	// Priority orders this policy against the other policies selecting the same interface: lower
+	// wins. 0-65535; unset means 32768. Policies of equal priority are ordered by their rules'
+	// priorities, then by policy name.
+	Priority *int32 `json:"priority,omitempty"`
 	// Ingress is the ordered list of ingress rules to apply to selected interfaces.
 	Ingress []FirewallPolicyRuleApplyConfiguration `json:"ingress,omitempty"`
 	// Egress is the ordered list of egress rules to apply to selected interfaces.
@@ -30,6 +34,14 @@ func FirewallPolicySpec() *FirewallPolicySpecApplyConfiguration {
 // If called multiple times, the InterfaceSelector field is set to the value of the last call.
 func (b *FirewallPolicySpecApplyConfiguration) WithInterfaceSelector(value *v1.LabelSelectorApplyConfiguration) *FirewallPolicySpecApplyConfiguration {
 	b.InterfaceSelector = value
+	return b
+}
+
+// WithPriority sets the Priority field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Priority field is set to the value of the last call.
+func (b *FirewallPolicySpecApplyConfiguration) WithPriority(value int32) *FirewallPolicySpecApplyConfiguration {
+	b.Priority = &value
 	return b
 }
 

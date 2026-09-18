@@ -634,13 +634,15 @@ renders (ebpf clab):
                         egress:
                           description: Egress is the ordered list of egress firewall rules.
                           items:
-                            description: CompiledFwRule is a single compiled firewall rule (destination CIDR + proto + port + action).
+                            description: CompiledFwRule is a single compiled firewall rule (peer CIDR + proto + port + action).
                             properties:
                               action:
                                 description: 'Action is the rule action: "Allow" or "Deny".'
                                 type: string
                               cidr:
-                                description: CIDR is the destination CIDR to match ("0.0.0.0/0" = any).
+                                description: |-
+                                  CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
+                                  rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
                               port:
                                 description: Port is the destination port (0 = any).
@@ -657,13 +659,15 @@ renders (ebpf clab):
                         ingress:
                           description: Ingress is the ordered list of ingress firewall rules.
                           items:
-                            description: CompiledFwRule is a single compiled firewall rule (destination CIDR + proto + port + action).
+                            description: CompiledFwRule is a single compiled firewall rule (peer CIDR + proto + port + action).
                             properties:
                               action:
                                 description: 'Action is the rule action: "Allow" or "Deny".'
                                 type: string
                               cidr:
-                                description: CIDR is the destination CIDR to match ("0.0.0.0/0" = any).
+                                description: |-
+                                  CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
+                                  rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
                               port:
                                 description: Port is the destination port (0 = any).
@@ -1102,7 +1106,9 @@ renders (ebpf clab):
         - name: v1alpha1
           schema:
             openAPIV3Schema:
-              description: FirewallPolicy is a scaffold-only resource. Selector-based distributed firewall (§3.4).
+              description: |-
+                FirewallPolicy is a set of prioritized allow/deny rules applied to the NetworkInterfaces its
+                selector matches; the distributed firewall enforces it per interface in the datapath.
               properties:
                 apiVersion:
                   description: |-
@@ -1131,18 +1137,37 @@ renders (ebpf clab):
                         properties:
                           action:
                             description: Action is "Allow" or "Deny".
+                            enum:
+                              - Allow
+                              - Deny
                             type: string
                           cidr:
                             description: |-
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
-                              "0.0.0.0/0" matches all addresses.
+                              "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
                           port:
-                            description: Port is the destination port to match (0 = any).
+                            description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
+                            maximum: 65535
+                            minimum: 0
+                            type: integer
+                          priority:
+                            description: |-
+                              Priority orders this rule against the other rules of equally-prioritized policies: lower
+                              wins. 0-65535; unset means 32768. Rules of equal priority keep their list order.
+                            format: int32
+                            maximum: 65535
+                            minimum: 0
                             type: integer
                           proto:
-                            description: Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any).
+                            description: |-
+                              Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP
+                              of the CIDR's family (ICMPv6 for an IPv6 CIDR).
+                            enum:
+                              - TCP
+                              - UDP
+                              - ICMP
                             type: string
                         required:
                           - action
@@ -1156,18 +1181,37 @@ renders (ebpf clab):
                         properties:
                           action:
                             description: Action is "Allow" or "Deny".
+                            enum:
+                              - Allow
+                              - Deny
                             type: string
                           cidr:
                             description: |-
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
-                              "0.0.0.0/0" matches all addresses.
+                              "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
                           port:
-                            description: Port is the destination port to match (0 = any).
+                            description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
+                            maximum: 65535
+                            minimum: 0
+                            type: integer
+                          priority:
+                            description: |-
+                              Priority orders this rule against the other rules of equally-prioritized policies: lower
+                              wins. 0-65535; unset means 32768. Rules of equal priority keep their list order.
+                            format: int32
+                            maximum: 65535
+                            minimum: 0
                             type: integer
                           proto:
-                            description: Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any).
+                            description: |-
+                              Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP
+                              of the CIDR's family (ICMPv6 for an IPv6 CIDR).
+                            enum:
+                              - TCP
+                              - UDP
+                              - ICMP
                             type: string
                         required:
                           - action
@@ -1218,12 +1262,21 @@ renders (ebpf clab):
                           type: object
                       type: object
                       x-kubernetes-map-type: atomic
+                    priority:
+                      description: |-
+                        Priority orders this policy against the other policies selecting the same interface: lower
+                        wins. 0-65535; unset means 32768. Policies of equal priority are ordered by their rules'
+                        priorities, then by policy name.
+                      format: int32
+                      maximum: 65535
+                      minimum: 0
+                      type: integer
                   type: object
                 status:
                   description: |-
-                    FirewallPolicyStatus is the observed state of a FirewallPolicy.
-
-                    SCAFFOLD ONLY: intentionally empty.
+                    FirewallPolicyStatus is the observed state of a FirewallPolicy. Intentionally empty: the outcome
+                    of compiling a policy is reported per interface, on the NetworkInterface's FirewallCompiled
+                    condition.
                   type: object
               type: object
           served: true
@@ -1767,6 +1820,68 @@ renders (ebpf clab):
                         (or the pinned Spec.MAC). CompiledNIC.Spec.MAC is sourced from this, never
                         Spec.MAC. Empty until the interface reaches State=="Allocated".
                       type: string
+                    conditions:
+                      description: |-
+                        Conditions report compile-time observations about this interface. FirewallCompiled is False
+                        when the policies selecting it cannot be programmed (e.g. over the per-interface rule
+                        budget); the last good rule set then stays applied.
+                      items:
+                        description: Condition contains details for one aspect of the current state of this API Resource.
+                        properties:
+                          lastTransitionTime:
+                            description: |-
+                              lastTransitionTime is the last time the condition transitioned from one status to another.
+                              This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                            format: date-time
+                            type: string
+                          message:
+                            description: |-
+                              message is a human readable message indicating details about the transition.
+                              This may be an empty string.
+                            maxLength: 32768
+                            type: string
+                          observedGeneration:
+                            description: |-
+                              observedGeneration represents the .metadata.generation that the condition was set based upon.
+                              For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                              with respect to the current state of the instance.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          reason:
+                            description: |-
+                              reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                              Producers of specific condition types may define expected values and meanings for this field,
+                              and whether the values are considered a guaranteed API.
+                              The value should be a CamelCase string.
+                              This field may not be empty.
+                            maxLength: 1024
+                            minLength: 1
+                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                            type: string
+                          status:
+                            description: status of the condition, one of True, False, Unknown.
+                            enum:
+                              - "True"
+                              - "False"
+                              - Unknown
+                            type: string
+                          type:
+                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                            maxLength: 316
+                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                            type: string
+                        required:
+                          - lastTransitionTime
+                          - message
+                          - reason
+                          - status
+                          - type
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                        - type
+                      x-kubernetes-list-type: map
                     observedGeneration:
                       description: |-
                         ObservedGeneration is the Spec generation the allocation reflects. Compile
@@ -2027,8 +2142,14 @@ renders (ebpf clab):
                   properties:
                     defaultPolicy:
                       description: |-
-                        DefaultPolicy overrides the global default firewall posture for this VPC.
-                        One of Allow (k8s semantics) or Deny (VPC-wide default-deny).
+                        DefaultPolicy sets what happens to traffic no firewall rule matches. Allow: it passes (rules
+                        carve out denies). Deny: it drops, in every direction (rules carve out allows). Unset keeps
+                        Kubernetes NetworkPolicy semantics per direction: a direction no policy governs is open, a
+                        governed direction admits only what its rules allow. The VPC's FirewallDefault condition
+                        reports the posture in effect.
+                      enum:
+                        - Allow
+                        - Deny
                       type: string
                     vni:
                       description: |-
@@ -2040,6 +2161,67 @@ renders (ebpf clab):
                 status:
                   description: VPCStatus is the observed state of a VPC.
                   properties:
+                    conditions:
+                      description: |-
+                        Conditions report observations about the VPC. FirewallDefault states the default firewall
+                        posture in effect (reason Allow, Deny or PerDirection).
+                      items:
+                        description: Condition contains details for one aspect of the current state of this API Resource.
+                        properties:
+                          lastTransitionTime:
+                            description: |-
+                              lastTransitionTime is the last time the condition transitioned from one status to another.
+                              This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                            format: date-time
+                            type: string
+                          message:
+                            description: |-
+                              message is a human readable message indicating details about the transition.
+                              This may be an empty string.
+                            maxLength: 32768
+                            type: string
+                          observedGeneration:
+                            description: |-
+                              observedGeneration represents the .metadata.generation that the condition was set based upon.
+                              For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                              with respect to the current state of the instance.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          reason:
+                            description: |-
+                              reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                              Producers of specific condition types may define expected values and meanings for this field,
+                              and whether the values are considered a guaranteed API.
+                              The value should be a CamelCase string.
+                              This field may not be empty.
+                            maxLength: 1024
+                            minLength: 1
+                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                            type: string
+                          status:
+                            description: status of the condition, one of True, False, Unknown.
+                            enum:
+                              - "True"
+                              - "False"
+                              - Unknown
+                            type: string
+                          type:
+                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                            maxLength: 316
+                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                            type: string
+                        required:
+                          - lastTransitionTime
+                          - message
+                          - reason
+                          - status
+                          - type
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                        - type
+                      x-kubernetes-list-type: map
                     state:
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
@@ -3098,13 +3280,15 @@ renders (ebpf hw):
                         egress:
                           description: Egress is the ordered list of egress firewall rules.
                           items:
-                            description: CompiledFwRule is a single compiled firewall rule (destination CIDR + proto + port + action).
+                            description: CompiledFwRule is a single compiled firewall rule (peer CIDR + proto + port + action).
                             properties:
                               action:
                                 description: 'Action is the rule action: "Allow" or "Deny".'
                                 type: string
                               cidr:
-                                description: CIDR is the destination CIDR to match ("0.0.0.0/0" = any).
+                                description: |-
+                                  CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
+                                  rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
                               port:
                                 description: Port is the destination port (0 = any).
@@ -3121,13 +3305,15 @@ renders (ebpf hw):
                         ingress:
                           description: Ingress is the ordered list of ingress firewall rules.
                           items:
-                            description: CompiledFwRule is a single compiled firewall rule (destination CIDR + proto + port + action).
+                            description: CompiledFwRule is a single compiled firewall rule (peer CIDR + proto + port + action).
                             properties:
                               action:
                                 description: 'Action is the rule action: "Allow" or "Deny".'
                                 type: string
                               cidr:
-                                description: CIDR is the destination CIDR to match ("0.0.0.0/0" = any).
+                                description: |-
+                                  CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
+                                  rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
                               port:
                                 description: Port is the destination port (0 = any).
@@ -3566,7 +3752,9 @@ renders (ebpf hw):
         - name: v1alpha1
           schema:
             openAPIV3Schema:
-              description: FirewallPolicy is a scaffold-only resource. Selector-based distributed firewall (§3.4).
+              description: |-
+                FirewallPolicy is a set of prioritized allow/deny rules applied to the NetworkInterfaces its
+                selector matches; the distributed firewall enforces it per interface in the datapath.
               properties:
                 apiVersion:
                   description: |-
@@ -3595,18 +3783,37 @@ renders (ebpf hw):
                         properties:
                           action:
                             description: Action is "Allow" or "Deny".
+                            enum:
+                              - Allow
+                              - Deny
                             type: string
                           cidr:
                             description: |-
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
-                              "0.0.0.0/0" matches all addresses.
+                              "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
                           port:
-                            description: Port is the destination port to match (0 = any).
+                            description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
+                            maximum: 65535
+                            minimum: 0
+                            type: integer
+                          priority:
+                            description: |-
+                              Priority orders this rule against the other rules of equally-prioritized policies: lower
+                              wins. 0-65535; unset means 32768. Rules of equal priority keep their list order.
+                            format: int32
+                            maximum: 65535
+                            minimum: 0
                             type: integer
                           proto:
-                            description: Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any).
+                            description: |-
+                              Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP
+                              of the CIDR's family (ICMPv6 for an IPv6 CIDR).
+                            enum:
+                              - TCP
+                              - UDP
+                              - ICMP
                             type: string
                         required:
                           - action
@@ -3620,18 +3827,37 @@ renders (ebpf hw):
                         properties:
                           action:
                             description: Action is "Allow" or "Deny".
+                            enum:
+                              - Allow
+                              - Deny
                             type: string
                           cidr:
                             description: |-
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
-                              "0.0.0.0/0" matches all addresses.
+                              "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
                           port:
-                            description: Port is the destination port to match (0 = any).
+                            description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
+                            maximum: 65535
+                            minimum: 0
+                            type: integer
+                          priority:
+                            description: |-
+                              Priority orders this rule against the other rules of equally-prioritized policies: lower
+                              wins. 0-65535; unset means 32768. Rules of equal priority keep their list order.
+                            format: int32
+                            maximum: 65535
+                            minimum: 0
                             type: integer
                           proto:
-                            description: Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any).
+                            description: |-
+                              Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP
+                              of the CIDR's family (ICMPv6 for an IPv6 CIDR).
+                            enum:
+                              - TCP
+                              - UDP
+                              - ICMP
                             type: string
                         required:
                           - action
@@ -3682,12 +3908,21 @@ renders (ebpf hw):
                           type: object
                       type: object
                       x-kubernetes-map-type: atomic
+                    priority:
+                      description: |-
+                        Priority orders this policy against the other policies selecting the same interface: lower
+                        wins. 0-65535; unset means 32768. Policies of equal priority are ordered by their rules'
+                        priorities, then by policy name.
+                      format: int32
+                      maximum: 65535
+                      minimum: 0
+                      type: integer
                   type: object
                 status:
                   description: |-
-                    FirewallPolicyStatus is the observed state of a FirewallPolicy.
-
-                    SCAFFOLD ONLY: intentionally empty.
+                    FirewallPolicyStatus is the observed state of a FirewallPolicy. Intentionally empty: the outcome
+                    of compiling a policy is reported per interface, on the NetworkInterface's FirewallCompiled
+                    condition.
                   type: object
               type: object
           served: true
@@ -4231,6 +4466,68 @@ renders (ebpf hw):
                         (or the pinned Spec.MAC). CompiledNIC.Spec.MAC is sourced from this, never
                         Spec.MAC. Empty until the interface reaches State=="Allocated".
                       type: string
+                    conditions:
+                      description: |-
+                        Conditions report compile-time observations about this interface. FirewallCompiled is False
+                        when the policies selecting it cannot be programmed (e.g. over the per-interface rule
+                        budget); the last good rule set then stays applied.
+                      items:
+                        description: Condition contains details for one aspect of the current state of this API Resource.
+                        properties:
+                          lastTransitionTime:
+                            description: |-
+                              lastTransitionTime is the last time the condition transitioned from one status to another.
+                              This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                            format: date-time
+                            type: string
+                          message:
+                            description: |-
+                              message is a human readable message indicating details about the transition.
+                              This may be an empty string.
+                            maxLength: 32768
+                            type: string
+                          observedGeneration:
+                            description: |-
+                              observedGeneration represents the .metadata.generation that the condition was set based upon.
+                              For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                              with respect to the current state of the instance.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          reason:
+                            description: |-
+                              reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                              Producers of specific condition types may define expected values and meanings for this field,
+                              and whether the values are considered a guaranteed API.
+                              The value should be a CamelCase string.
+                              This field may not be empty.
+                            maxLength: 1024
+                            minLength: 1
+                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                            type: string
+                          status:
+                            description: status of the condition, one of True, False, Unknown.
+                            enum:
+                              - "True"
+                              - "False"
+                              - Unknown
+                            type: string
+                          type:
+                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                            maxLength: 316
+                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                            type: string
+                        required:
+                          - lastTransitionTime
+                          - message
+                          - reason
+                          - status
+                          - type
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                        - type
+                      x-kubernetes-list-type: map
                     observedGeneration:
                       description: |-
                         ObservedGeneration is the Spec generation the allocation reflects. Compile
@@ -4491,8 +4788,14 @@ renders (ebpf hw):
                   properties:
                     defaultPolicy:
                       description: |-
-                        DefaultPolicy overrides the global default firewall posture for this VPC.
-                        One of Allow (k8s semantics) or Deny (VPC-wide default-deny).
+                        DefaultPolicy sets what happens to traffic no firewall rule matches. Allow: it passes (rules
+                        carve out denies). Deny: it drops, in every direction (rules carve out allows). Unset keeps
+                        Kubernetes NetworkPolicy semantics per direction: a direction no policy governs is open, a
+                        governed direction admits only what its rules allow. The VPC's FirewallDefault condition
+                        reports the posture in effect.
+                      enum:
+                        - Allow
+                        - Deny
                       type: string
                     vni:
                       description: |-
@@ -4504,6 +4807,67 @@ renders (ebpf hw):
                 status:
                   description: VPCStatus is the observed state of a VPC.
                   properties:
+                    conditions:
+                      description: |-
+                        Conditions report observations about the VPC. FirewallDefault states the default firewall
+                        posture in effect (reason Allow, Deny or PerDirection).
+                      items:
+                        description: Condition contains details for one aspect of the current state of this API Resource.
+                        properties:
+                          lastTransitionTime:
+                            description: |-
+                              lastTransitionTime is the last time the condition transitioned from one status to another.
+                              This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                            format: date-time
+                            type: string
+                          message:
+                            description: |-
+                              message is a human readable message indicating details about the transition.
+                              This may be an empty string.
+                            maxLength: 32768
+                            type: string
+                          observedGeneration:
+                            description: |-
+                              observedGeneration represents the .metadata.generation that the condition was set based upon.
+                              For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                              with respect to the current state of the instance.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          reason:
+                            description: |-
+                              reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                              Producers of specific condition types may define expected values and meanings for this field,
+                              and whether the values are considered a guaranteed API.
+                              The value should be a CamelCase string.
+                              This field may not be empty.
+                            maxLength: 1024
+                            minLength: 1
+                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                            type: string
+                          status:
+                            description: status of the condition, one of True, False, Unknown.
+                            enum:
+                              - "True"
+                              - "False"
+                              - Unknown
+                            type: string
+                          type:
+                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                            maxLength: 316
+                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                            type: string
+                        required:
+                          - lastTransitionTime
+                          - message
+                          - reason
+                          - status
+                          - type
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                        - type
+                      x-kubernetes-list-type: map
                     state:
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
@@ -5559,13 +5923,15 @@ renders (tier1 on):
                         egress:
                           description: Egress is the ordered list of egress firewall rules.
                           items:
-                            description: CompiledFwRule is a single compiled firewall rule (destination CIDR + proto + port + action).
+                            description: CompiledFwRule is a single compiled firewall rule (peer CIDR + proto + port + action).
                             properties:
                               action:
                                 description: 'Action is the rule action: "Allow" or "Deny".'
                                 type: string
                               cidr:
-                                description: CIDR is the destination CIDR to match ("0.0.0.0/0" = any).
+                                description: |-
+                                  CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
+                                  rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
                               port:
                                 description: Port is the destination port (0 = any).
@@ -5582,13 +5948,15 @@ renders (tier1 on):
                         ingress:
                           description: Ingress is the ordered list of ingress firewall rules.
                           items:
-                            description: CompiledFwRule is a single compiled firewall rule (destination CIDR + proto + port + action).
+                            description: CompiledFwRule is a single compiled firewall rule (peer CIDR + proto + port + action).
                             properties:
                               action:
                                 description: 'Action is the rule action: "Allow" or "Deny".'
                                 type: string
                               cidr:
-                                description: CIDR is the destination CIDR to match ("0.0.0.0/0" = any).
+                                description: |-
+                                  CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
+                                  rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
                               port:
                                 description: Port is the destination port (0 = any).
@@ -6027,7 +6395,9 @@ renders (tier1 on):
         - name: v1alpha1
           schema:
             openAPIV3Schema:
-              description: FirewallPolicy is a scaffold-only resource. Selector-based distributed firewall (§3.4).
+              description: |-
+                FirewallPolicy is a set of prioritized allow/deny rules applied to the NetworkInterfaces its
+                selector matches; the distributed firewall enforces it per interface in the datapath.
               properties:
                 apiVersion:
                   description: |-
@@ -6056,18 +6426,37 @@ renders (tier1 on):
                         properties:
                           action:
                             description: Action is "Allow" or "Deny".
+                            enum:
+                              - Allow
+                              - Deny
                             type: string
                           cidr:
                             description: |-
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
-                              "0.0.0.0/0" matches all addresses.
+                              "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
                           port:
-                            description: Port is the destination port to match (0 = any).
+                            description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
+                            maximum: 65535
+                            minimum: 0
+                            type: integer
+                          priority:
+                            description: |-
+                              Priority orders this rule against the other rules of equally-prioritized policies: lower
+                              wins. 0-65535; unset means 32768. Rules of equal priority keep their list order.
+                            format: int32
+                            maximum: 65535
+                            minimum: 0
                             type: integer
                           proto:
-                            description: Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any).
+                            description: |-
+                              Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP
+                              of the CIDR's family (ICMPv6 for an IPv6 CIDR).
+                            enum:
+                              - TCP
+                              - UDP
+                              - ICMP
                             type: string
                         required:
                           - action
@@ -6081,18 +6470,37 @@ renders (tier1 on):
                         properties:
                           action:
                             description: Action is "Allow" or "Deny".
+                            enum:
+                              - Allow
+                              - Deny
                             type: string
                           cidr:
                             description: |-
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
-                              "0.0.0.0/0" matches all addresses.
+                              "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
                           port:
-                            description: Port is the destination port to match (0 = any).
+                            description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
+                            maximum: 65535
+                            minimum: 0
+                            type: integer
+                          priority:
+                            description: |-
+                              Priority orders this rule against the other rules of equally-prioritized policies: lower
+                              wins. 0-65535; unset means 32768. Rules of equal priority keep their list order.
+                            format: int32
+                            maximum: 65535
+                            minimum: 0
                             type: integer
                           proto:
-                            description: Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any).
+                            description: |-
+                              Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP
+                              of the CIDR's family (ICMPv6 for an IPv6 CIDR).
+                            enum:
+                              - TCP
+                              - UDP
+                              - ICMP
                             type: string
                         required:
                           - action
@@ -6143,12 +6551,21 @@ renders (tier1 on):
                           type: object
                       type: object
                       x-kubernetes-map-type: atomic
+                    priority:
+                      description: |-
+                        Priority orders this policy against the other policies selecting the same interface: lower
+                        wins. 0-65535; unset means 32768. Policies of equal priority are ordered by their rules'
+                        priorities, then by policy name.
+                      format: int32
+                      maximum: 65535
+                      minimum: 0
+                      type: integer
                   type: object
                 status:
                   description: |-
-                    FirewallPolicyStatus is the observed state of a FirewallPolicy.
-
-                    SCAFFOLD ONLY: intentionally empty.
+                    FirewallPolicyStatus is the observed state of a FirewallPolicy. Intentionally empty: the outcome
+                    of compiling a policy is reported per interface, on the NetworkInterface's FirewallCompiled
+                    condition.
                   type: object
               type: object
           served: true
@@ -6692,6 +7109,68 @@ renders (tier1 on):
                         (or the pinned Spec.MAC). CompiledNIC.Spec.MAC is sourced from this, never
                         Spec.MAC. Empty until the interface reaches State=="Allocated".
                       type: string
+                    conditions:
+                      description: |-
+                        Conditions report compile-time observations about this interface. FirewallCompiled is False
+                        when the policies selecting it cannot be programmed (e.g. over the per-interface rule
+                        budget); the last good rule set then stays applied.
+                      items:
+                        description: Condition contains details for one aspect of the current state of this API Resource.
+                        properties:
+                          lastTransitionTime:
+                            description: |-
+                              lastTransitionTime is the last time the condition transitioned from one status to another.
+                              This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                            format: date-time
+                            type: string
+                          message:
+                            description: |-
+                              message is a human readable message indicating details about the transition.
+                              This may be an empty string.
+                            maxLength: 32768
+                            type: string
+                          observedGeneration:
+                            description: |-
+                              observedGeneration represents the .metadata.generation that the condition was set based upon.
+                              For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                              with respect to the current state of the instance.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          reason:
+                            description: |-
+                              reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                              Producers of specific condition types may define expected values and meanings for this field,
+                              and whether the values are considered a guaranteed API.
+                              The value should be a CamelCase string.
+                              This field may not be empty.
+                            maxLength: 1024
+                            minLength: 1
+                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                            type: string
+                          status:
+                            description: status of the condition, one of True, False, Unknown.
+                            enum:
+                              - "True"
+                              - "False"
+                              - Unknown
+                            type: string
+                          type:
+                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                            maxLength: 316
+                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                            type: string
+                        required:
+                          - lastTransitionTime
+                          - message
+                          - reason
+                          - status
+                          - type
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                        - type
+                      x-kubernetes-list-type: map
                     observedGeneration:
                       description: |-
                         ObservedGeneration is the Spec generation the allocation reflects. Compile
@@ -6952,8 +7431,14 @@ renders (tier1 on):
                   properties:
                     defaultPolicy:
                       description: |-
-                        DefaultPolicy overrides the global default firewall posture for this VPC.
-                        One of Allow (k8s semantics) or Deny (VPC-wide default-deny).
+                        DefaultPolicy sets what happens to traffic no firewall rule matches. Allow: it passes (rules
+                        carve out denies). Deny: it drops, in every direction (rules carve out allows). Unset keeps
+                        Kubernetes NetworkPolicy semantics per direction: a direction no policy governs is open, a
+                        governed direction admits only what its rules allow. The VPC's FirewallDefault condition
+                        reports the posture in effect.
+                      enum:
+                        - Allow
+                        - Deny
                       type: string
                     vni:
                       description: |-
@@ -6965,6 +7450,67 @@ renders (tier1 on):
                 status:
                   description: VPCStatus is the observed state of a VPC.
                   properties:
+                    conditions:
+                      description: |-
+                        Conditions report observations about the VPC. FirewallDefault states the default firewall
+                        posture in effect (reason Allow, Deny or PerDirection).
+                      items:
+                        description: Condition contains details for one aspect of the current state of this API Resource.
+                        properties:
+                          lastTransitionTime:
+                            description: |-
+                              lastTransitionTime is the last time the condition transitioned from one status to another.
+                              This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                            format: date-time
+                            type: string
+                          message:
+                            description: |-
+                              message is a human readable message indicating details about the transition.
+                              This may be an empty string.
+                            maxLength: 32768
+                            type: string
+                          observedGeneration:
+                            description: |-
+                              observedGeneration represents the .metadata.generation that the condition was set based upon.
+                              For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                              with respect to the current state of the instance.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          reason:
+                            description: |-
+                              reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                              Producers of specific condition types may define expected values and meanings for this field,
+                              and whether the values are considered a guaranteed API.
+                              The value should be a CamelCase string.
+                              This field may not be empty.
+                            maxLength: 1024
+                            minLength: 1
+                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                            type: string
+                          status:
+                            description: status of the condition, one of True, False, Unknown.
+                            enum:
+                              - "True"
+                              - "False"
+                              - Unknown
+                            type: string
+                          type:
+                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                            maxLength: 316
+                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                            type: string
+                        required:
+                          - lastTransitionTime
+                          - message
+                          - reason
+                          - status
+                          - type
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                        - type
+                      x-kubernetes-list-type: map
                     state:
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
@@ -8060,13 +8606,15 @@ renders (tier1 watchdog):
                         egress:
                           description: Egress is the ordered list of egress firewall rules.
                           items:
-                            description: CompiledFwRule is a single compiled firewall rule (destination CIDR + proto + port + action).
+                            description: CompiledFwRule is a single compiled firewall rule (peer CIDR + proto + port + action).
                             properties:
                               action:
                                 description: 'Action is the rule action: "Allow" or "Deny".'
                                 type: string
                               cidr:
-                                description: CIDR is the destination CIDR to match ("0.0.0.0/0" = any).
+                                description: |-
+                                  CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
+                                  rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
                               port:
                                 description: Port is the destination port (0 = any).
@@ -8083,13 +8631,15 @@ renders (tier1 watchdog):
                         ingress:
                           description: Ingress is the ordered list of ingress firewall rules.
                           items:
-                            description: CompiledFwRule is a single compiled firewall rule (destination CIDR + proto + port + action).
+                            description: CompiledFwRule is a single compiled firewall rule (peer CIDR + proto + port + action).
                             properties:
                               action:
                                 description: 'Action is the rule action: "Allow" or "Deny".'
                                 type: string
                               cidr:
-                                description: CIDR is the destination CIDR to match ("0.0.0.0/0" = any).
+                                description: |-
+                                  CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
+                                  rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
                               port:
                                 description: Port is the destination port (0 = any).
@@ -8528,7 +9078,9 @@ renders (tier1 watchdog):
         - name: v1alpha1
           schema:
             openAPIV3Schema:
-              description: FirewallPolicy is a scaffold-only resource. Selector-based distributed firewall (§3.4).
+              description: |-
+                FirewallPolicy is a set of prioritized allow/deny rules applied to the NetworkInterfaces its
+                selector matches; the distributed firewall enforces it per interface in the datapath.
               properties:
                 apiVersion:
                   description: |-
@@ -8557,18 +9109,37 @@ renders (tier1 watchdog):
                         properties:
                           action:
                             description: Action is "Allow" or "Deny".
+                            enum:
+                              - Allow
+                              - Deny
                             type: string
                           cidr:
                             description: |-
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
-                              "0.0.0.0/0" matches all addresses.
+                              "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
                           port:
-                            description: Port is the destination port to match (0 = any).
+                            description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
+                            maximum: 65535
+                            minimum: 0
+                            type: integer
+                          priority:
+                            description: |-
+                              Priority orders this rule against the other rules of equally-prioritized policies: lower
+                              wins. 0-65535; unset means 32768. Rules of equal priority keep their list order.
+                            format: int32
+                            maximum: 65535
+                            minimum: 0
                             type: integer
                           proto:
-                            description: Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any).
+                            description: |-
+                              Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP
+                              of the CIDR's family (ICMPv6 for an IPv6 CIDR).
+                            enum:
+                              - TCP
+                              - UDP
+                              - ICMP
                             type: string
                         required:
                           - action
@@ -8582,18 +9153,37 @@ renders (tier1 watchdog):
                         properties:
                           action:
                             description: Action is "Allow" or "Deny".
+                            enum:
+                              - Allow
+                              - Deny
                             type: string
                           cidr:
                             description: |-
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
-                              "0.0.0.0/0" matches all addresses.
+                              "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
                           port:
-                            description: Port is the destination port to match (0 = any).
+                            description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
+                            maximum: 65535
+                            minimum: 0
+                            type: integer
+                          priority:
+                            description: |-
+                              Priority orders this rule against the other rules of equally-prioritized policies: lower
+                              wins. 0-65535; unset means 32768. Rules of equal priority keep their list order.
+                            format: int32
+                            maximum: 65535
+                            minimum: 0
                             type: integer
                           proto:
-                            description: Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any).
+                            description: |-
+                              Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP
+                              of the CIDR's family (ICMPv6 for an IPv6 CIDR).
+                            enum:
+                              - TCP
+                              - UDP
+                              - ICMP
                             type: string
                         required:
                           - action
@@ -8644,12 +9234,21 @@ renders (tier1 watchdog):
                           type: object
                       type: object
                       x-kubernetes-map-type: atomic
+                    priority:
+                      description: |-
+                        Priority orders this policy against the other policies selecting the same interface: lower
+                        wins. 0-65535; unset means 32768. Policies of equal priority are ordered by their rules'
+                        priorities, then by policy name.
+                      format: int32
+                      maximum: 65535
+                      minimum: 0
+                      type: integer
                   type: object
                 status:
                   description: |-
-                    FirewallPolicyStatus is the observed state of a FirewallPolicy.
-
-                    SCAFFOLD ONLY: intentionally empty.
+                    FirewallPolicyStatus is the observed state of a FirewallPolicy. Intentionally empty: the outcome
+                    of compiling a policy is reported per interface, on the NetworkInterface's FirewallCompiled
+                    condition.
                   type: object
               type: object
           served: true
@@ -9193,6 +9792,68 @@ renders (tier1 watchdog):
                         (or the pinned Spec.MAC). CompiledNIC.Spec.MAC is sourced from this, never
                         Spec.MAC. Empty until the interface reaches State=="Allocated".
                       type: string
+                    conditions:
+                      description: |-
+                        Conditions report compile-time observations about this interface. FirewallCompiled is False
+                        when the policies selecting it cannot be programmed (e.g. over the per-interface rule
+                        budget); the last good rule set then stays applied.
+                      items:
+                        description: Condition contains details for one aspect of the current state of this API Resource.
+                        properties:
+                          lastTransitionTime:
+                            description: |-
+                              lastTransitionTime is the last time the condition transitioned from one status to another.
+                              This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                            format: date-time
+                            type: string
+                          message:
+                            description: |-
+                              message is a human readable message indicating details about the transition.
+                              This may be an empty string.
+                            maxLength: 32768
+                            type: string
+                          observedGeneration:
+                            description: |-
+                              observedGeneration represents the .metadata.generation that the condition was set based upon.
+                              For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                              with respect to the current state of the instance.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          reason:
+                            description: |-
+                              reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                              Producers of specific condition types may define expected values and meanings for this field,
+                              and whether the values are considered a guaranteed API.
+                              The value should be a CamelCase string.
+                              This field may not be empty.
+                            maxLength: 1024
+                            minLength: 1
+                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                            type: string
+                          status:
+                            description: status of the condition, one of True, False, Unknown.
+                            enum:
+                              - "True"
+                              - "False"
+                              - Unknown
+                            type: string
+                          type:
+                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                            maxLength: 316
+                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                            type: string
+                        required:
+                          - lastTransitionTime
+                          - message
+                          - reason
+                          - status
+                          - type
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                        - type
+                      x-kubernetes-list-type: map
                     observedGeneration:
                       description: |-
                         ObservedGeneration is the Spec generation the allocation reflects. Compile
@@ -9453,8 +10114,14 @@ renders (tier1 watchdog):
                   properties:
                     defaultPolicy:
                       description: |-
-                        DefaultPolicy overrides the global default firewall posture for this VPC.
-                        One of Allow (k8s semantics) or Deny (VPC-wide default-deny).
+                        DefaultPolicy sets what happens to traffic no firewall rule matches. Allow: it passes (rules
+                        carve out denies). Deny: it drops, in every direction (rules carve out allows). Unset keeps
+                        Kubernetes NetworkPolicy semantics per direction: a direction no policy governs is open, a
+                        governed direction admits only what its rules allow. The VPC's FirewallDefault condition
+                        reports the posture in effect.
+                      enum:
+                        - Allow
+                        - Deny
                       type: string
                     vni:
                       description: |-
@@ -9466,6 +10133,67 @@ renders (tier1 watchdog):
                 status:
                   description: VPCStatus is the observed state of a VPC.
                   properties:
+                    conditions:
+                      description: |-
+                        Conditions report observations about the VPC. FirewallDefault states the default firewall
+                        posture in effect (reason Allow, Deny or PerDirection).
+                      items:
+                        description: Condition contains details for one aspect of the current state of this API Resource.
+                        properties:
+                          lastTransitionTime:
+                            description: |-
+                              lastTransitionTime is the last time the condition transitioned from one status to another.
+                              This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                            format: date-time
+                            type: string
+                          message:
+                            description: |-
+                              message is a human readable message indicating details about the transition.
+                              This may be an empty string.
+                            maxLength: 32768
+                            type: string
+                          observedGeneration:
+                            description: |-
+                              observedGeneration represents the .metadata.generation that the condition was set based upon.
+                              For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                              with respect to the current state of the instance.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          reason:
+                            description: |-
+                              reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                              Producers of specific condition types may define expected values and meanings for this field,
+                              and whether the values are considered a guaranteed API.
+                              The value should be a CamelCase string.
+                              This field may not be empty.
+                            maxLength: 1024
+                            minLength: 1
+                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                            type: string
+                          status:
+                            description: status of the condition, one of True, False, Unknown.
+                            enum:
+                              - "True"
+                              - "False"
+                              - Unknown
+                            type: string
+                          type:
+                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                            maxLength: 316
+                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                            type: string
+                        required:
+                          - lastTransitionTime
+                          - message
+                          - reason
+                          - status
+                          - type
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                        - type
+                      x-kubernetes-list-type: map
                     state:
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string
@@ -10571,13 +11299,15 @@ renders with vm-materializer enabled:
                         egress:
                           description: Egress is the ordered list of egress firewall rules.
                           items:
-                            description: CompiledFwRule is a single compiled firewall rule (destination CIDR + proto + port + action).
+                            description: CompiledFwRule is a single compiled firewall rule (peer CIDR + proto + port + action).
                             properties:
                               action:
                                 description: 'Action is the rule action: "Allow" or "Deny".'
                                 type: string
                               cidr:
-                                description: CIDR is the destination CIDR to match ("0.0.0.0/0" = any).
+                                description: |-
+                                  CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
+                                  rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
                               port:
                                 description: Port is the destination port (0 = any).
@@ -10594,13 +11324,15 @@ renders with vm-materializer enabled:
                         ingress:
                           description: Ingress is the ordered list of ingress firewall rules.
                           items:
-                            description: CompiledFwRule is a single compiled firewall rule (destination CIDR + proto + port + action).
+                            description: CompiledFwRule is a single compiled firewall rule (peer CIDR + proto + port + action).
                             properties:
                               action:
                                 description: 'Action is the rule action: "Allow" or "Deny".'
                                 type: string
                               cidr:
-                                description: CIDR is the destination CIDR to match ("0.0.0.0/0" = any).
+                                description: |-
+                                  CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
+                                  rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
                               port:
                                 description: Port is the destination port (0 = any).
@@ -11039,7 +11771,9 @@ renders with vm-materializer enabled:
         - name: v1alpha1
           schema:
             openAPIV3Schema:
-              description: FirewallPolicy is a scaffold-only resource. Selector-based distributed firewall (§3.4).
+              description: |-
+                FirewallPolicy is a set of prioritized allow/deny rules applied to the NetworkInterfaces its
+                selector matches; the distributed firewall enforces it per interface in the datapath.
               properties:
                 apiVersion:
                   description: |-
@@ -11068,18 +11802,37 @@ renders with vm-materializer enabled:
                         properties:
                           action:
                             description: Action is "Allow" or "Deny".
+                            enum:
+                              - Allow
+                              - Deny
                             type: string
                           cidr:
                             description: |-
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
-                              "0.0.0.0/0" matches all addresses.
+                              "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
                           port:
-                            description: Port is the destination port to match (0 = any).
+                            description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
+                            maximum: 65535
+                            minimum: 0
+                            type: integer
+                          priority:
+                            description: |-
+                              Priority orders this rule against the other rules of equally-prioritized policies: lower
+                              wins. 0-65535; unset means 32768. Rules of equal priority keep their list order.
+                            format: int32
+                            maximum: 65535
+                            minimum: 0
                             type: integer
                           proto:
-                            description: Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any).
+                            description: |-
+                              Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP
+                              of the CIDR's family (ICMPv6 for an IPv6 CIDR).
+                            enum:
+                              - TCP
+                              - UDP
+                              - ICMP
                             type: string
                         required:
                           - action
@@ -11093,18 +11846,37 @@ renders with vm-materializer enabled:
                         properties:
                           action:
                             description: Action is "Allow" or "Deny".
+                            enum:
+                              - Allow
+                              - Deny
                             type: string
                           cidr:
                             description: |-
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
-                              "0.0.0.0/0" matches all addresses.
+                              "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
                           port:
-                            description: Port is the destination port to match (0 = any).
+                            description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
+                            maximum: 65535
+                            minimum: 0
+                            type: integer
+                          priority:
+                            description: |-
+                              Priority orders this rule against the other rules of equally-prioritized policies: lower
+                              wins. 0-65535; unset means 32768. Rules of equal priority keep their list order.
+                            format: int32
+                            maximum: 65535
+                            minimum: 0
                             type: integer
                           proto:
-                            description: Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any).
+                            description: |-
+                              Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP
+                              of the CIDR's family (ICMPv6 for an IPv6 CIDR).
+                            enum:
+                              - TCP
+                              - UDP
+                              - ICMP
                             type: string
                         required:
                           - action
@@ -11155,12 +11927,21 @@ renders with vm-materializer enabled:
                           type: object
                       type: object
                       x-kubernetes-map-type: atomic
+                    priority:
+                      description: |-
+                        Priority orders this policy against the other policies selecting the same interface: lower
+                        wins. 0-65535; unset means 32768. Policies of equal priority are ordered by their rules'
+                        priorities, then by policy name.
+                      format: int32
+                      maximum: 65535
+                      minimum: 0
+                      type: integer
                   type: object
                 status:
                   description: |-
-                    FirewallPolicyStatus is the observed state of a FirewallPolicy.
-
-                    SCAFFOLD ONLY: intentionally empty.
+                    FirewallPolicyStatus is the observed state of a FirewallPolicy. Intentionally empty: the outcome
+                    of compiling a policy is reported per interface, on the NetworkInterface's FirewallCompiled
+                    condition.
                   type: object
               type: object
           served: true
@@ -11704,6 +12485,68 @@ renders with vm-materializer enabled:
                         (or the pinned Spec.MAC). CompiledNIC.Spec.MAC is sourced from this, never
                         Spec.MAC. Empty until the interface reaches State=="Allocated".
                       type: string
+                    conditions:
+                      description: |-
+                        Conditions report compile-time observations about this interface. FirewallCompiled is False
+                        when the policies selecting it cannot be programmed (e.g. over the per-interface rule
+                        budget); the last good rule set then stays applied.
+                      items:
+                        description: Condition contains details for one aspect of the current state of this API Resource.
+                        properties:
+                          lastTransitionTime:
+                            description: |-
+                              lastTransitionTime is the last time the condition transitioned from one status to another.
+                              This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                            format: date-time
+                            type: string
+                          message:
+                            description: |-
+                              message is a human readable message indicating details about the transition.
+                              This may be an empty string.
+                            maxLength: 32768
+                            type: string
+                          observedGeneration:
+                            description: |-
+                              observedGeneration represents the .metadata.generation that the condition was set based upon.
+                              For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                              with respect to the current state of the instance.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          reason:
+                            description: |-
+                              reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                              Producers of specific condition types may define expected values and meanings for this field,
+                              and whether the values are considered a guaranteed API.
+                              The value should be a CamelCase string.
+                              This field may not be empty.
+                            maxLength: 1024
+                            minLength: 1
+                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                            type: string
+                          status:
+                            description: status of the condition, one of True, False, Unknown.
+                            enum:
+                              - "True"
+                              - "False"
+                              - Unknown
+                            type: string
+                          type:
+                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                            maxLength: 316
+                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                            type: string
+                        required:
+                          - lastTransitionTime
+                          - message
+                          - reason
+                          - status
+                          - type
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                        - type
+                      x-kubernetes-list-type: map
                     observedGeneration:
                       description: |-
                         ObservedGeneration is the Spec generation the allocation reflects. Compile
@@ -11964,8 +12807,14 @@ renders with vm-materializer enabled:
                   properties:
                     defaultPolicy:
                       description: |-
-                        DefaultPolicy overrides the global default firewall posture for this VPC.
-                        One of Allow (k8s semantics) or Deny (VPC-wide default-deny).
+                        DefaultPolicy sets what happens to traffic no firewall rule matches. Allow: it passes (rules
+                        carve out denies). Deny: it drops, in every direction (rules carve out allows). Unset keeps
+                        Kubernetes NetworkPolicy semantics per direction: a direction no policy governs is open, a
+                        governed direction admits only what its rules allow. The VPC's FirewallDefault condition
+                        reports the posture in effect.
+                      enum:
+                        - Allow
+                        - Deny
                       type: string
                     vni:
                       description: |-
@@ -11977,6 +12826,67 @@ renders with vm-materializer enabled:
                 status:
                   description: VPCStatus is the observed state of a VPC.
                   properties:
+                    conditions:
+                      description: |-
+                        Conditions report observations about the VPC. FirewallDefault states the default firewall
+                        posture in effect (reason Allow, Deny or PerDirection).
+                      items:
+                        description: Condition contains details for one aspect of the current state of this API Resource.
+                        properties:
+                          lastTransitionTime:
+                            description: |-
+                              lastTransitionTime is the last time the condition transitioned from one status to another.
+                              This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                            format: date-time
+                            type: string
+                          message:
+                            description: |-
+                              message is a human readable message indicating details about the transition.
+                              This may be an empty string.
+                            maxLength: 32768
+                            type: string
+                          observedGeneration:
+                            description: |-
+                              observedGeneration represents the .metadata.generation that the condition was set based upon.
+                              For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                              with respect to the current state of the instance.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          reason:
+                            description: |-
+                              reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                              Producers of specific condition types may define expected values and meanings for this field,
+                              and whether the values are considered a guaranteed API.
+                              The value should be a CamelCase string.
+                              This field may not be empty.
+                            maxLength: 1024
+                            minLength: 1
+                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                            type: string
+                          status:
+                            description: status of the condition, one of True, False, Unknown.
+                            enum:
+                              - "True"
+                              - "False"
+                              - Unknown
+                            type: string
+                          type:
+                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                            maxLength: 316
+                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                            type: string
+                        required:
+                          - lastTransitionTime
+                          - message
+                          - reason
+                          - status
+                          - type
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                        - type
+                      x-kubernetes-list-type: map
                     state:
                       description: State is the current lifecycle state (e.g. Pending, Ready).
                       type: string

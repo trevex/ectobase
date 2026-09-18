@@ -12,8 +12,8 @@ type VPCSpec struct {
 	// VNI optionally pins the VXLAN network identifier. When nil or 0, the VNI is
 	// allocated by the central cluster from the global VNI space.
 	VNI *int32
-	// DefaultPolicy overrides the global default firewall posture for this VPC.
-	// One of Allow (k8s semantics) or Deny (VPC-wide default-deny).
+	// DefaultPolicy sets what happens to traffic no firewall rule matches: Allow passes it, Deny
+	// drops it in every direction, unset keeps Kubernetes NetworkPolicy semantics per direction.
 	DefaultPolicy *string
 }
 
@@ -23,6 +23,8 @@ type VPCStatus struct {
 	VNI int32
 	// State is the current lifecycle state (e.g. Pending, Ready).
 	State string
+	// Conditions report observations about the VPC (FirewallDefault).
+	Conditions []metav1.Condition
 }
 
 // +genclient

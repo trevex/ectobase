@@ -45,7 +45,8 @@ _Appears in:_
 
 
 
-FirewallPolicy is a scaffold-only resource. Selector-based distributed firewall (§3.4).
+FirewallPolicy is a set of prioritized allow/deny rules applied to the NetworkInterfaces its
+selector matches; the distributed firewall enforces it per interface in the datapath.
 
 
 
@@ -76,10 +77,11 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `cidr` _string_ | CIDR is the source (ingress) or destination (egress) CIDR to match.<br />"0.0.0.0/0" matches all addresses. |  |  |
-| `proto` _string_ | Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). |  | Optional: \{\} <br /> |
-| `port` _integer_ | Port is the destination port to match (0 = any). |  | Optional: \{\} <br /> |
-| `action` _string_ | Action is "Allow" or "Deny". |  |  |
+| `cidr` _string_ | CIDR is the source (ingress) or destination (egress) CIDR to match.<br />"0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses. |  |  |
+| `proto` _string_ | Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP<br />of the CIDR's family (ICMPv6 for an IPv6 CIDR). |  | Enum: [TCP UDP ICMP] <br />Optional: \{\} <br /> |
+| `port` _integer_ | Port is the destination port to match (0 = any). Requires Proto TCP or UDP. |  | Maximum: 65535 <br />Minimum: 0 <br />Optional: \{\} <br /> |
+| `action` _string_ | Action is "Allow" or "Deny". |  | Enum: [Allow Deny] <br /> |
+| `priority` _integer_ | Priority orders this rule against the other rules of equally-prioritized policies: lower<br />wins. 0-65535; unset means 32768. Rules of equal priority keep their list order. |  | Maximum: 65535 <br />Minimum: 0 <br />Optional: \{\} <br /> |
 
 
 #### FirewallPolicySpec
@@ -96,6 +98,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `interfaceSelector` _[LabelSelector](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#labelselector-v1-meta)_ | InterfaceSelector selects the NetworkInterfaces this policy applies to via label matching. |  | Optional: \{\} <br /> |
+| `priority` _integer_ | Priority orders this policy against the other policies selecting the same interface: lower<br />wins. 0-65535; unset means 32768. Policies of equal priority are ordered by their rules'<br />priorities, then by policy name. |  | Maximum: 65535 <br />Minimum: 0 <br />Optional: \{\} <br /> |
 | `ingress` _[FirewallPolicyRule](#firewallpolicyrule) array_ | Ingress is the ordered list of ingress rules to apply to selected interfaces. |  | Optional: \{\} <br /> |
 | `egress` _[FirewallPolicyRule](#firewallpolicyrule) array_ | Egress is the ordered list of egress rules to apply to selected interfaces. |  | Optional: \{\} <br /> |
 
@@ -104,9 +107,9 @@ _Appears in:_
 
 
 
-FirewallPolicyStatus is the observed state of a FirewallPolicy.
-
-SCAFFOLD ONLY: intentionally empty.
+FirewallPolicyStatus is the observed state of a FirewallPolicy. Intentionally empty: the outcome
+of compiling a policy is reported per interface, on the NetworkInterface's FirewallCompiled
+condition.
 
 
 
@@ -490,6 +493,7 @@ _Appears in:_
 | `allocatedIPs` _string array_ | AllocatedIPs is the authoritative overlay address set assigned by the IP<br />allocator. CompiledNIC.Spec.OverlayIPs is sourced from this, never Spec.IPs. |  | Optional: \{\} <br /> |
 | `observedGeneration` _integer_ | ObservedGeneration is the Spec generation the allocation reflects. Compile<br />is gated on ObservedGeneration == metadata.generation. |  | Optional: \{\} <br /> |
 | `allocatedMAC` _string_ | AllocatedMAC is the authoritative L2 address assigned by the MAC allocator:<br />a stable, VPC-unique, locally-administered MAC derived from the NIC's UID<br />(or the pinned Spec.MAC). CompiledNIC.Spec.MAC is sourced from this, never<br />Spec.MAC. Empty until the interface reaches State=="Allocated". |  | Optional: \{\} <br /> |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#condition-v1-meta) array_ | Conditions report compile-time observations about this interface. FirewallCompiled is False<br />when the policies selecting it cannot be programmed (e.g. over the per-interface rule<br />budget); the last good rule set then stays applied. |  | Optional: \{\} <br /> |
 
 
 #### PortStatus
@@ -719,7 +723,7 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `vni` _integer_ | VNI optionally pins the VXLAN network identifier. When nil or 0, the VNI is<br />allocated by the central cluster from the global VNI space. |  | Optional: \{\} <br /> |
-| `defaultPolicy` _string_ | DefaultPolicy overrides the global default firewall posture for this VPC.<br />One of Allow (k8s semantics) or Deny (VPC-wide default-deny). |  | Optional: \{\} <br /> |
+| `defaultPolicy` _string_ | DefaultPolicy sets what happens to traffic no firewall rule matches. Allow: it passes (rules<br />carve out denies). Deny: it drops, in every direction (rules carve out allows). Unset keeps<br />Kubernetes NetworkPolicy semantics per direction: a direction no policy governs is open, a<br />governed direction admits only what its rules allow. The VPC's FirewallDefault condition<br />reports the posture in effect. |  | Enum: [Allow Deny] <br />Optional: \{\} <br /> |
 
 
 #### VPCStatus
@@ -737,5 +741,6 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `vni` _integer_ | VNI is the effective, allocated VXLAN network identifier. |  | Optional: \{\} <br /> |
 | `state` _string_ | State is the current lifecycle state (e.g. Pending, Ready). |  | Optional: \{\} <br /> |
+| `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.30/#condition-v1-meta) array_ | Conditions report observations about the VPC. FirewallDefault states the default firewall<br />posture in effect (reason Allow, Deny or PerDirection). |  | Optional: \{\} <br /> |
 
 

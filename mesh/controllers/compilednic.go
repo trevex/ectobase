@@ -5,14 +5,17 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	"github.com/trevex/ectobase/api/validate"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -85,12 +88,13 @@ func resolvePlacement(nic *netv1.NetworkInterface, containers []computev1.Contai
 // node-local facts like the underlay from the local dataplane, not from here).
 //
 // It copies identity (name, nodeName, port, overlayIPs) from the NIC and stamps the caller-resolved
-// vni; translates each policy whose interfaceSelector matches the NIC's labels into CompiledFwRules;
-// records LB membership and peer imports; and, for each overlay IP with a NATGateway allocation
-// (natBySource, keyed by source overlay IP), records a CompiledNATSource. peerings is a pre-resolved
-// slice of PeerImportSpecs; only entries whose VPCName matches the NIC's VPC are emitted. The
-// returned CompiledNIC has no Status set (caller fills that in if needed).
-func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPolicy, lbs []netv1.LoadBalancer, peerings []PeerImportSpec, natBySource map[string]netv1.NATAllocation, placement Placement) compiledv1.CompiledNIC {
+// vni and firewall (see CompileFirewall — compiled separately because it can fail, and the caller
+// then decides what the interface enforces instead); records LB membership and peer imports; and,
+// for each overlay IP with a NATGateway allocation (natBySource, keyed by source overlay IP),
+// records a CompiledNATSource. peerings is a pre-resolved slice of PeerImportSpecs; only entries
+// whose VPCName matches the NIC's VPC are emitted. The returned CompiledNIC has no Status set
+// (caller fills that in if needed).
+func Compile(nic *netv1.NetworkInterface, vni int32, fw compiledv1.CompiledFirewall, lbs []netv1.LoadBalancer, peerings []PeerImportSpec, natBySource map[string]netv1.NATAllocation, placement Placement) compiledv1.CompiledNIC {
 	var port compiledv1.PortStatus
 	if nic.Status.Port != nil {
 		p := nic.Status.Port
@@ -114,7 +118,7 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 			VNI:        vni,
 			Port:       port,
 			OverlayIPs: append([]string(nil), nic.Status.AllocatedIPs...),
-			Firewall:   compiledv1.CompiledFirewall{},
+			Firewall:   fw,
 			// Authoritative MAC comes from the allocator's Status, like OverlayIPs.
 			// Spec.MAC is only a fallback for objects not yet MAC-allocated.
 			MAC: macOrSpec(nic),
@@ -122,55 +126,6 @@ func Compile(nic *netv1.NetworkInterface, vni int32, policies []netv1.FirewallPo
 	}
 
 	nicLabels := labels.Set(nic.Labels)
-
-	for _, policy := range policies {
-		if policy.Spec.InterfaceSelector == nil {
-			continue
-		}
-		sel, err := metav1.LabelSelectorAsSelector(policy.Spec.InterfaceSelector)
-		if err != nil {
-			// Invalid selector — skip this policy.
-			continue
-		}
-		if !sel.Matches(nicLabels) {
-			continue
-		}
-
-		// Translate ingress rules.
-		for _, r := range policy.Spec.Ingress {
-			compiled.Spec.Firewall.Ingress = append(compiled.Spec.Firewall.Ingress, compiledv1.CompiledFwRule{
-				CIDR:   r.CIDR,
-				Proto:  r.Proto,
-				Port:   r.Port,
-				Action: r.Action,
-			})
-		}
-
-		// Translate egress rules.
-		for _, r := range policy.Spec.Egress {
-			compiled.Spec.Firewall.Egress = append(compiled.Spec.Firewall.Egress, compiledv1.CompiledFwRule{
-				CIDR:   r.CIDR,
-				Proto:  r.Proto,
-				Port:   r.Port,
-				Action: r.Action,
-			})
-		}
-	}
-
-	// k8s default-allow is PER DIRECTION: a direction with no compiled rules is not governed by any
-	// policy, so materialize an explicit allow-all for it (the dataplane is deny-by-default, so an
-	// empty direction would otherwise drop). A direction that a policy governs keeps only its rules.
-	// Emit BOTH families: the dataplane enforces v4 AND v6 firewalling, so a ruleless direction
-	// needs a v6 default-allow (::/0) alongside the v4 one (0.0.0.0/0) or v6-only/dual-stack
-	// guests would be dropped by deny-by-default. Proto "" = any, Port 0 = any.
-	allowAll4 := compiledv1.CompiledFwRule{CIDR: "0.0.0.0/0", Action: "Allow"}
-	allowAll6 := compiledv1.CompiledFwRule{CIDR: "::/0", Action: "Allow"}
-	if len(compiled.Spec.Firewall.Ingress) == 0 {
-		compiled.Spec.Firewall.Ingress = append(compiled.Spec.Firewall.Ingress, allowAll4, allowAll6)
-	}
-	if len(compiled.Spec.Firewall.Egress) == 0 {
-		compiled.Spec.Firewall.Egress = append(compiled.Spec.Firewall.Egress, allowAll4, allowAll6)
-	}
 
 	// LB membership: for each LoadBalancer whose selector matches this NIC's labels or whose
 	// TargetRefs name it, record a CompiledLB. This is forwarding membership ONLY — it adds no
@@ -363,11 +318,17 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("resolve peer imports: %w", err)
 	}
+	// The VPC supplies the firewall posture and, when the NIC has none yet, the VNI. A missing VPC
+	// leaves both unset (VNI 0, per-direction posture), as before.
+	var vpc netv1.VPC
+	if err := r.Client.Get(ctx, types.NamespacedName{Namespace: nic.Namespace, Name: nic.Spec.VPCRef.Name}, &vpc); err != nil && !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, fmt.Errorf("get vpc: %w", err)
+	}
 	// Resolve the effective VNI here (status.vni, else the VPC's status.vni) so the CompiledNIC is
 	// self-contained — the agent never has to resolve it from the NIC/VPC.
 	vni := nic.Status.VNI
 	if vni == 0 {
-		vni = r.vpcVNI(ctx, nic.Namespace, nic.Spec.VPCRef.Name)
+		vni = vpc.Status.VNI
 	}
 	// Gather every NATGateway allocation keyed by source overlay IP so Compile can stamp this NIC's
 	// egress-SNAT sources. Allocations for other NICs are simply not matched by Compile.
@@ -392,32 +353,47 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if placement.ClusterName == "" {
 		return ctrl.Result{}, nil
 	}
-	compiled := Compile(&nic, vni, policies.Items, lbs.Items, peerImports, natBySource, placement)
-	key := types.NamespacedName{Namespace: compiled.Namespace, Name: compiled.Name}
+	key := types.NamespacedName{Namespace: validate.PoolNamespace(placement.ClusterName), Name: compiledTwinName(nic.Namespace, nic.Name)}
 	var existing compiledv1.CompiledNIC
 	err = r.Client.Get(ctx, key, &existing)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, err
+	}
+	haveLastGood := err == nil
+	fw, fwErr := CompileFirewall(nic.Labels, policies.Items, vpc.Spec.DefaultPolicy)
+	if fwErr != nil {
+		// Keep enforcing the last good rule set: a truncated one could drop a Deny, an emptied one
+		// would cut a running workload off over an unrelated policy edit. With nothing to keep,
+		// fail closed — an empty firewall is deny-all in the datapath.
+		fw = compiledv1.CompiledFirewall{}
+		if haveLastGood {
+			fw = existing.Spec.Firewall
+		}
+	}
+	compiled := Compile(&nic, vni, fw, lbs.Items, peerImports, natBySource, placement)
 	switch {
-	case apierrors.IsNotFound(err):
+	case !haveLastGood:
 		stampSource(&compiled, nic.Namespace, nic.Name)
 		if err := r.Client.Create(ctx, &compiled); err != nil {
 			return ctrl.Result{}, fmt.Errorf("create compilednic: %w", err)
 		}
-	case err != nil:
-		return ctrl.Result{}, err
 	default:
 		// The workload label lives in ObjectMeta (not Spec), so DeepEqual on Spec alone would miss a
 		// placement change that only re-stamps the label (e.g. a NIC gaining/losing an owning VM).
-		if reflect.DeepEqual(existing.Spec, compiled.Spec) && existing.Labels["workload"] == compiled.Labels["workload"] {
-			return ctrl.Result{}, nil // unchanged: no write, no resourceVersion churn
+		// Unchanged: no write, no resourceVersion churn.
+		if !reflect.DeepEqual(existing.Spec, compiled.Spec) || existing.Labels["workload"] != compiled.Labels["workload"] {
+			existing.Spec = compiled.Spec
+			if existing.Labels == nil {
+				existing.Labels = map[string]string{}
+			}
+			existing.Labels["workload"] = compiled.Labels["workload"]
+			if err := r.Client.Update(ctx, &existing); err != nil {
+				return ctrl.Result{}, fmt.Errorf("update compilednic: %w", err)
+			}
 		}
-		existing.Spec = compiled.Spec
-		if existing.Labels == nil {
-			existing.Labels = map[string]string{}
-		}
-		existing.Labels["workload"] = compiled.Labels["workload"]
-		if err := r.Client.Update(ctx, &existing); err != nil {
-			return ctrl.Result{}, fmt.Errorf("update compilednic: %w", err)
-		}
+	}
+	if err := r.reportFirewall(ctx, &nic, fw, fwErr, haveLastGood); err != nil {
+		return ctrl.Result{}, err
 	}
 	// Drop any other twin still stamped with this NIC — one left in a namespace the compiler no
 	// longer writes to (a re-bound pool, or an earlier layout). Without this the stale copy stays
@@ -427,6 +403,48 @@ func (r *CompiledNICReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, fmt.Errorf("prune stale compilednics: %w", err)
 	}
 	return ctrl.Result{}, nil
+}
+
+// reportFirewall sets the NIC's FirewallCompiled condition: True with the rule-budget use, or False
+// with why the policies did not compile and what the interface enforces meanwhile. It writes only
+// on change, since a NIC status write re-enqueues the NIC here and in the IP allocator.
+func (r *CompiledNICReconciler) reportFirewall(ctx context.Context, nic *netv1.NetworkInterface, fw compiledv1.CompiledFirewall, fwErr error, keptLastGood bool) error {
+	cond := metav1.Condition{
+		Type:               ConditionFirewallCompiled,
+		Status:             metav1.ConditionTrue,
+		Reason:             FirewallReasonCompiled,
+		ObservedGeneration: nic.Generation,
+	}
+	var fe *FirewallCompileError
+	switch {
+	case errors.As(fwErr, &fe):
+		cond.Status, cond.Reason = metav1.ConditionFalse, fe.Reason
+		if keptLastGood {
+			cond.Message = fe.Message + "; the last good rule set stays applied"
+		} else {
+			cond.Message = fe.Message + "; the interface denies all traffic until this is fixed"
+		}
+	case fwErr != nil:
+		return fwErr
+	default:
+		v4, v6 := 0, 0
+		for _, rule := range append(append([]compiledv1.CompiledFwRule(nil), fw.Ingress...), fw.Egress...) {
+			if strings.Contains(rule.CIDR, ":") {
+				v6++
+			} else {
+				v4++
+			}
+		}
+		cond.Message = fmt.Sprintf("%d ingress and %d egress rules; rule budget used: IPv4 %d/%d, IPv6 %d/%d",
+			len(fw.Ingress), len(fw.Egress), v4, FirewallRuleBudget, v6, FirewallRuleBudget)
+	}
+	if !meta.SetStatusCondition(&nic.Status.Conditions, cond) {
+		return nil
+	}
+	if err := r.Client.Status().Update(ctx, nic); err != nil {
+		return fmt.Errorf("update nic firewall condition: %w", err)
+	}
+	return nil
 }
 
 // SetupWithManager registers the CompiledNICReconciler with the controller-runtime Manager.

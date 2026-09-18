@@ -7,7 +7,9 @@
 //! rules already lives in `flowplane-core`. Keeping only the POD rule types here avoids hiding
 //! datapath logic in the types crate (review P1.2).
 
-/// Max firewall rules scanned per interface per direction in the datapath (bounded loop).
+/// Max firewall rules per interface PER ADDRESS FAMILY, ingress and egress sharing the budget: the
+/// datapath scans slots `0..FW_MAX_RULES` of `FW_RULES` (v4) or `FW_RULES6` (v6) for every packet,
+/// whatever its direction, so this bounds the evaluator loop.
 pub const FW_MAX_RULES: u32 = 16;
 
 /// Firewall rule slot key: (interface ifindex, slot index 0..FW_MAX_RULES).

@@ -10,6 +10,7 @@ mod routes;
 pub mod shadow;
 pub mod writer;
 
+pub use firewall::FwError;
 pub use interface::{meter_state, IfaceParams};
 pub use writer::{CtFlushScope, CtFlushScope6, MapWriter};
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	computev1 "github.com/trevex/ectobase/api/compute/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -140,6 +142,23 @@ func TestCompiledNICControllerEnvtest(t *testing.T) {
 				}
 				return nil
 			})
+		})
+
+		// The compile outcome lands on the NIC through the real status subresource and passes the
+		// CRD's metav1.Condition schema (reason/message formats a fake client would not check).
+		eventually(t, 15*time.Second, func() error {
+			var got netv1.NetworkInterface
+			if err := direct.Get(ctx, client.ObjectKey{Namespace: "default", Name: "nic-frontend"}, &got); err != nil {
+				return err
+			}
+			c := meta.FindStatusCondition(got.Status.Conditions, ConditionFirewallCompiled)
+			if c == nil || c.Status != metav1.ConditionTrue || c.Reason != FirewallReasonCompiled {
+				return fmt.Errorf("FirewallCompiled condition = %+v, want True/%s", c, FirewallReasonCompiled)
+			}
+			if want := "IPv4 2/16, IPv6 1/16"; !strings.Contains(c.Message, want) {
+				return fmt.Errorf("condition message %q does not report budget use %q", c.Message, want)
+			}
+			return nil
 		})
 	})
 

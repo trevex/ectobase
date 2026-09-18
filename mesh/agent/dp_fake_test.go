@@ -3,7 +3,11 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // recordingDP is the single recording fake for the Dataplane interface used by
@@ -166,9 +170,29 @@ func (f *recordingDP) DelFwRule(_ context.Context, iface, ruleID string) error {
 	f.fwDels = append(f.fwDels, struct{ iface, ruleID string }{iface, ruleID})
 	return nil
 }
+
+// fwMaxRulesPerFamily mirrors flowplane-common's FW_MAX_RULES: the dataplane holds at most this many
+// rules per interface PER ADDRESS FAMILY, ingress and egress sharing the budget.
+const fwMaxRulesPerFamily = 16
+
+// ReplaceInterfaceFirewall mirrors flowplane's replace_interface_firewall: the rule list is split by
+// family (v6 iff either CIDR is v6; an all-empty rule is an untyped v4 wildcard), a family over the
+// cap refuses the WHOLE replace with ResourceExhausted, and a refused replace leaves the prior set.
 func (f *recordingDP) ReplaceInterfaceFirewall(_ context.Context, iface string, rules []FwRuleWithID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	var v4, v6 int
+	for _, rr := range rules {
+		if strings.Contains(rr.Rule.SrcCIDR, ":") || strings.Contains(rr.Rule.DstCIDR, ":") {
+			v6++
+		} else {
+			v4++
+		}
+	}
+	if v4 > fwMaxRulesPerFamily || v6 > fwMaxRulesPerFamily {
+		return status.Errorf(codes.ResourceExhausted,
+			"too many firewall rules for interface (max %d per family): v4=%d v6=%d", fwMaxRulesPerFamily, v4, v6)
+	}
 	// Overwrite: the whole set for this interface becomes exactly `rules` (clears prior on empty).
 	f.fwReplace[iface] = append([]FwRuleWithID(nil), rules...)
 	// Keep fwInstalled consistent with a wholesale replace so any cross-checks stay accurate.
