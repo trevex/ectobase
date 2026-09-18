@@ -67,7 +67,7 @@ func TestCompile_ProducesCompiledNIC(t *testing.T) {
 	nic := testNIC()
 	pol := testPolicy()
 
-	c := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{pol}, nil, nil, nil, Placement{ClusterName: "test"})
+	c := Compile(nic, nic.Status.VNI, fwFor(t, nic, pol), nil, nil, nil, Placement{ClusterName: "test"})
 
 	if c.Spec.VNI != 100 {
 		t.Fatalf("VNI = %d, want 100", c.Spec.VNI)
@@ -101,7 +101,7 @@ func TestCompile_SelectorMismatch(t *testing.T) {
 	nic.Labels = map[string]string{"role": "backend"}
 	pol := testPolicy() // selects {role: frontend}
 
-	c := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{pol}, nil, nil, nil, Placement{ClusterName: "test"})
+	c := Compile(nic, nic.Status.VNI, fwFor(t, nic, pol), nil, nil, nil, Placement{ClusterName: "test"})
 
 	// No policy selects this NIC, so it is unpolicied → gets the k8s default-allow-all rules
 	// (both v4 and v6 families) in each direction.
@@ -114,8 +114,8 @@ func TestCompile_SelectorMismatch(t *testing.T) {
 }
 
 func TestCompile_UnpoliciedGetsAllowAll(t *testing.T) {
-	nic := testNIC()                                                                      // has labels that testPolicy() selects
-	c := Compile(nic, nic.Status.VNI, nil, nil, nil, nil, Placement{ClusterName: "test"}) // no policies
+	nic := testNIC()                                                                                // has labels that testPolicy() selects
+	c := Compile(nic, nic.Status.VNI, fwFor(t, nic), nil, nil, nil, Placement{ClusterName: "test"}) // no policies
 	if len(c.Spec.Firewall.Ingress) != 2 || !hasAllowCIDR(c.Spec.Firewall.Ingress, "0.0.0.0/0") || !hasAllowCIDR(c.Spec.Firewall.Ingress, "::/0") {
 		t.Fatalf("expected v4+v6 allow-all ingress rules, got %+v", c.Spec.Firewall.Ingress)
 	}
@@ -123,12 +123,23 @@ func TestCompile_UnpoliciedGetsAllowAll(t *testing.T) {
 		t.Fatalf("expected v4+v6 allow-all egress rules, got %+v", c.Spec.Firewall.Egress)
 	}
 	// A policied NIC keeps ONLY its policy rules — no allow-all appended.
-	c2 := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{testPolicy()}, nil, nil, nil, Placement{ClusterName: "test"})
+	c2 := Compile(nic, nic.Status.VNI, fwFor(t, nic, testPolicy()), nil, nil, nil, Placement{ClusterName: "test"})
 	for _, r := range c2.Spec.Firewall.Ingress {
 		if r.CIDR == "0.0.0.0/0" && r.Port == 0 && r.Proto == "" {
 			t.Fatalf("policied NIC must not get allow-all: %+v", c2.Spec.Firewall.Ingress)
 		}
 	}
+}
+
+// fwFor compiles the firewall the given policies produce for nic, as Reconcile does for a VPC with no
+// defaultPolicy (per-direction NetworkPolicy semantics).
+func fwFor(t *testing.T, nic *netv1.NetworkInterface, policies ...netv1.FirewallPolicy) compiledv1.CompiledFirewall {
+	t.Helper()
+	fw, err := CompileFirewall(nic.Labels, policies, nil)
+	if err != nil {
+		t.Fatalf("CompileFirewall: %v", err)
+	}
+	return fw
 }
 
 // hasCIDR reports whether the rule list contains an Allow rule for the given CIDR.
@@ -148,7 +159,7 @@ func hasAllowCIDR(rules []compiledv1.CompiledFwRule, cidr string) bool {
 func TestCompile_RulelessGetsBothFamilies(t *testing.T) {
 	// Ruleless NIC → both directions get both families.
 	nic := testNIC()
-	c := Compile(nic, nic.Status.VNI, nil, nil, nil, nil, Placement{ClusterName: "test"}) // no policies
+	c := Compile(nic, nic.Status.VNI, fwFor(t, nic), nil, nil, nil, Placement{ClusterName: "test"}) // no policies
 	for _, dir := range []struct {
 		name  string
 		rules []compiledv1.CompiledFwRule
@@ -166,7 +177,7 @@ func TestCompile_RulelessGetsBothFamilies(t *testing.T) {
 
 	// A direction WITH an explicit rule gets NEITHER default-allow. testPolicy() sets only
 	// ingress, so ingress is governed (no injection) while egress remains ruleless.
-	c2 := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{testPolicy()}, nil, nil, nil, Placement{ClusterName: "test"})
+	c2 := Compile(nic, nic.Status.VNI, fwFor(t, nic, testPolicy()), nil, nil, nil, Placement{ClusterName: "test"})
 	if hasAllowCIDR(c2.Spec.Firewall.Ingress, "0.0.0.0/0") || hasAllowCIDR(c2.Spec.Firewall.Ingress, "::/0") {
 		t.Fatalf("policied ingress must not get any default-allow: %+v", c2.Spec.Firewall.Ingress)
 	}
@@ -180,7 +191,7 @@ func TestCompile_WritesFixture(t *testing.T) {
 	nic := testNIC()
 	pol := testPolicy()
 
-	c := Compile(nic, nic.Status.VNI, []netv1.FirewallPolicy{pol}, nil, nil, nil, Placement{ClusterName: "test"})
+	c := Compile(nic, nic.Status.VNI, fwFor(t, nic, pol), nil, nil, nil, Placement{ClusterName: "test"})
 
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
@@ -229,7 +240,7 @@ func TestCompile_LBSelectorMatch(t *testing.T) {
 		},
 		Status: netv1.LoadBalancerStatus{State: "Allocated", AllocatedIP: "203.0.113.50"},
 	}
-	c := Compile(nic, nic.Status.VNI, nil, []netv1.LoadBalancer{lb}, nil, nil, Placement{ClusterName: "test"})
+	c := Compile(nic, nic.Status.VNI, fwFor(t, nic), []netv1.LoadBalancer{lb}, nil, nil, Placement{ClusterName: "test"})
 	if len(c.Spec.LB) != 1 {
 		t.Fatalf("want 1 CompiledLB, got %d", len(c.Spec.LB))
 	}
@@ -251,7 +262,7 @@ func TestCompile_LBRefMatch(t *testing.T) {
 		},
 		Status: netv1.LoadBalancerStatus{State: "Allocated", AllocatedIP: "2001:db8::1"},
 	}
-	c := Compile(nic, nic.Status.VNI, nil, []netv1.LoadBalancer{lb}, nil, nil, Placement{ClusterName: "test"})
+	c := Compile(nic, nic.Status.VNI, fwFor(t, nic), []netv1.LoadBalancer{lb}, nil, nil, Placement{ClusterName: "test"})
 	if len(c.Spec.LB) != 1 || c.Spec.LB[0].IP != "2001:db8::1" {
 		t.Fatalf("ref match failed: %+v", c.Spec.LB)
 	}
@@ -266,7 +277,7 @@ func TestCompile_LBNoMatch(t *testing.T) {
 			TargetSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
 		},
 	}
-	c := Compile(nic, nic.Status.VNI, nil, []netv1.LoadBalancer{lb}, nil, nil, Placement{ClusterName: "test"})
+	c := Compile(nic, nic.Status.VNI, fwFor(t, nic), []netv1.LoadBalancer{lb}, nil, nil, Placement{ClusterName: "test"})
 	if len(c.Spec.LB) != 0 {
 		t.Fatalf("want 0 CompiledLB for non-matching NIC, got %d", len(c.Spec.LB))
 	}
@@ -278,7 +289,7 @@ func TestCompile_PeerImports(t *testing.T) {
 		{VPCName: nic.Spec.VPCRef.Name, PeerVNI: 200, ImportPrefixes: []string{"10.1.0.0/24"}},
 		{VPCName: "some-other-vpc", PeerVNI: 300, ImportPrefixes: []string{"10.9.0.0/24"}}, // different VPC — must be ignored
 	}
-	c := Compile(nic, nic.Status.VNI, nil, nil, peerings, nil, Placement{ClusterName: "test"})
+	c := Compile(nic, nic.Status.VNI, fwFor(t, nic), nil, peerings, nil, Placement{ClusterName: "test"})
 	if len(c.Spec.PeerImports) != 1 {
 		t.Fatalf("PeerImports = %d, want 1", len(c.Spec.PeerImports))
 	}
@@ -295,7 +306,7 @@ func TestCompile_NATFromAllocations(t *testing.T) {
 		"10.0.0.10": {Source: "10.0.0.10", PublicIP: "203.0.113.7", PortMin: 1024, PortMax: 2047},
 		"10.9.9.9":  {Source: "10.9.9.9", PublicIP: "203.0.113.8", PortMin: 0, PortMax: 1023}, // other NIC — ignored
 	}
-	c := Compile(nic, nic.Status.VNI, nil, nil, nil, natBySource, Placement{ClusterName: "test"})
+	c := Compile(nic, nic.Status.VNI, fwFor(t, nic), nil, nil, natBySource, Placement{ClusterName: "test"})
 
 	if len(c.Spec.NAT) != 1 {
 		t.Fatalf("want 1 CompiledNATSource (only the NIC's own IP), got %d: %+v", len(c.Spec.NAT), c.Spec.NAT)
@@ -360,7 +371,7 @@ func TestCompile_StandaloneClusterNameAndMAC(t *testing.T) {
 		Spec:       netv1.NetworkInterfaceSpec{IPs: []string{"10.0.0.7"}, MAC: "aa:bb:cc:dd:ee:ff", ClusterName: "k02"},
 	}
 	placement := resolvePlacement(nic, nil, nil, "default-cluster")
-	c := Compile(nic, 100, nil, nil, nil, nil, placement)
+	c := Compile(nic, 100, fwFor(t, nic), nil, nil, nil, placement)
 	if c.Spec.ClusterName != "k02" {
 		t.Fatalf("clusterName not placed from nic.spec.clusterName: %q", c.Spec.ClusterName)
 	}
@@ -371,7 +382,7 @@ func TestCompile_StandaloneClusterNameAndMAC(t *testing.T) {
 
 func TestCompile_StampsPlacement(t *testing.T) {
 	nic := &netv1.NetworkInterface{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "nic-a"}, Spec: netv1.NetworkInterfaceSpec{IPs: []string{"10.0.0.1"}}}
-	c := Compile(nic, 100, nil, nil, nil, nil, Placement{ClusterName: "edge1", WorkloadID: "vm1"})
+	c := Compile(nic, 100, fwFor(t, nic), nil, nil, nil, Placement{ClusterName: "edge1", WorkloadID: "vm1"})
 	if c.Spec.ClusterName != "edge1" {
 		t.Fatalf("clusterName not stamped: %q", c.Spec.ClusterName)
 	}
@@ -402,7 +413,9 @@ func TestReconcile_NoWriteWhenUnchanged(t *testing.T) {
 		Spec:       netv1.NetworkInterfaceSpec{NodeName: &node},
 		Status:     netv1.NetworkInterfaceStatus{State: "Allocated", AllocatedIPs: []string{"10.0.0.30"}, VNI: 100, UnderlayRoute: "2001:db8::dd"},
 	}
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(nic).Build()
+	// NetworkInterface has a status subresource on the real apiserver (the compiler writes its
+	// FirewallCompiled condition there); the fake needs telling.
+	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&netv1.NetworkInterface{}).WithObjects(nic).Build()
 	r := &CompiledNICReconciler{Client: cl, DefaultClusterName: "c1"}
 	req := reconcile.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "web-0"}}
 
@@ -535,7 +548,7 @@ func TestCompile_QoSFolded(t *testing.T) {
 		Egress:  &netv1.EgressQoS{RateMbps: 500, PublicMbps: 100},
 		Ingress: &netv1.RateLimit{RateMbps: 200},
 	}
-	c := Compile(nic, nic.Status.VNI, nil, nil, nil, nil, Placement{ClusterName: "test"})
+	c := Compile(nic, nic.Status.VNI, fwFor(t, nic), nil, nil, nil, Placement{ClusterName: "test"})
 	if c.Spec.QoS == nil {
 		t.Fatal("expected CompiledNIC.spec.qos to be set")
 	}
@@ -553,7 +566,7 @@ func TestCompile_QoSFolded(t *testing.T) {
 func TestCompile_QoSNilWhenUnset(t *testing.T) {
 	nic := testNIC()
 	// No QoS set → compiled QoS must be nil (not a zero-value struct).
-	c := Compile(nic, nic.Status.VNI, nil, nil, nil, nil, Placement{ClusterName: "test"})
+	c := Compile(nic, nic.Status.VNI, fwFor(t, nic), nil, nil, nil, Placement{ClusterName: "test"})
 	if c.Spec.QoS != nil {
 		t.Fatalf("expected nil CompiledNIC.spec.qos, got %+v", c.Spec.QoS)
 	}
@@ -565,7 +578,7 @@ func TestCompile_QoSPartialEgress(t *testing.T) {
 	nic.Spec.QoS = &netv1.InterfaceQoS{
 		Egress: &netv1.EgressQoS{RateMbps: 1000},
 	}
-	c := Compile(nic, nic.Status.VNI, nil, nil, nil, nil, Placement{ClusterName: "test"})
+	c := Compile(nic, nic.Status.VNI, fwFor(t, nic), nil, nil, nil, Placement{ClusterName: "test"})
 	if c.Spec.QoS == nil {
 		t.Fatal("expected CompiledNIC.spec.qos to be set")
 	}

@@ -9,6 +9,8 @@ import (
 	"sort"
 
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -20,6 +22,10 @@ const (
 	VNIAllocStart int32 = 1000
 	VNIAllocEnd   int32 = 1<<24 - 1 // 16777215
 )
+
+// ConditionFirewallDefault is the VPC condition stating the default firewall posture in effect
+// (reason Allow, Deny or PerDirection), so the meaning of an unset spec.defaultPolicy is visible.
+const ConditionFirewallDefault = "FirewallDefault"
 
 // VPC lifecycle states written to VPC.status.state.
 const (
@@ -108,10 +114,6 @@ func (r *VPCReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		desired = free
 	}
 
-	// Idempotent: already allocated to the desired VNI and Ready.
-	if vpc.Status.VNI == desired && vpc.Status.State == vpcStateReady {
-		return ctrl.Result{}, nil
-	}
 	return ctrl.Result{}, r.setState(ctx, &vpc, desired, vpcStateReady)
 }
 
@@ -184,14 +186,37 @@ func lowestFreeVNI(used map[int32]struct{}) (int32, bool) {
 	return 0, false
 }
 
-// setState writes status.vni + status.state via the status subresource.
+// setState writes status.vni + status.state and the FirewallDefault condition via the status
+// subresource — only when one of them changed, so a settled VPC is never rewritten.
 func (r *VPCReconciler) setState(ctx context.Context, vpc *netv1.VPC, vni int32, state string) error {
+	condChanged := meta.SetStatusCondition(&vpc.Status.Conditions, firewallDefaultCondition(vpc))
+	if !condChanged && vpc.Status.VNI == vni && vpc.Status.State == state {
+		return nil
+	}
 	vpc.Status.VNI = vni
 	vpc.Status.State = state
 	if err := r.Client.Status().Update(ctx, vpc); err != nil {
 		return fmt.Errorf("update vpc status: %w", err)
 	}
 	return nil
+}
+
+// firewallDefaultCondition states what the compiler does with traffic no firewall rule matches,
+// for the VPC's spec.defaultPolicy (see CompileFirewall).
+func firewallDefaultCondition(vpc *netv1.VPC) metav1.Condition {
+	c := metav1.Condition{Type: ConditionFirewallDefault, Status: metav1.ConditionTrue, ObservedGeneration: vpc.Generation}
+	switch {
+	case vpc.Spec.DefaultPolicy == nil:
+		c.Reason = "PerDirection"
+		c.Message = "defaultPolicy is unset: a direction no FirewallPolicy governs is open, a governed direction admits only what its rules allow (Kubernetes NetworkPolicy semantics)"
+	case *vpc.Spec.DefaultPolicy == string(netv1.VPCPolicyAllow):
+		c.Reason = string(netv1.VPCPolicyAllow)
+		c.Message = "traffic no firewall rule matches is allowed: every interface's ingress and egress end with an implicit lowest-priority allow-all"
+	default:
+		c.Reason = string(netv1.VPCPolicyDeny)
+		c.Message = "traffic no firewall rule matches is dropped, in both directions, on every interface"
+	}
+	return c
 }
 
 // SetupWithManager registers the VPCReconciler. MaxConcurrentReconciles=1 is

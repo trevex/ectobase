@@ -62,8 +62,8 @@ func validateFirewallPriority(p *int32, path *field.Path) field.ErrorList {
 
 func validateFirewallRule(r *FirewallPolicyRule, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
-	switch {
-	case r.CIDR == "":
+	switch r.CIDR {
+	case "":
 		errs = append(errs, field.Required(path.Child("cidr"), "use 0.0.0.0/0 or ::/0 to match any address"))
 	default:
 		if p, err := netip.ParsePrefix(r.CIDR); err != nil {
