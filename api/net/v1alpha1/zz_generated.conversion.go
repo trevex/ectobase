@@ -556,6 +556,9 @@ func autoConvert_v1alpha1_FirewallPolicyRule_To_net_FirewallPolicyRule(in *Firew
 	out.CIDR = in.CIDR
 	out.Proto = in.Proto
 	out.Port = in.Port
+	out.EndPort = (*int32)(unsafe.Pointer(in.EndPort))
+	out.ICMPType = (*int32)(unsafe.Pointer(in.ICMPType))
+	out.ICMPCode = (*int32)(unsafe.Pointer(in.ICMPCode))
 	out.Action = in.Action
 	out.Priority = (*int32)(unsafe.Pointer(in.Priority))
 	return nil
@@ -570,6 +573,9 @@ func autoConvert_net_FirewallPolicyRule_To_v1alpha1_FirewallPolicyRule(in *net.F
 	out.CIDR = in.CIDR
 	out.Proto = in.Proto
 	out.Port = in.Port
+	out.EndPort = (*int32)(unsafe.Pointer(in.EndPort))
+	out.ICMPType = (*int32)(unsafe.Pointer(in.ICMPType))
+	out.ICMPCode = (*int32)(unsafe.Pointer(in.ICMPCode))
 	out.Action = in.Action
 	out.Priority = (*int32)(unsafe.Pointer(in.Priority))
 	return nil

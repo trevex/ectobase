@@ -87,8 +87,13 @@ func compiledToFw(cr compiledv1.CompiledFwRule, egress bool) FwRule {
 		Proto:      protoNum(cr.Proto, strings.Contains(cr.CIDR, ":")),
 		DstPortMin: uint32(cr.Port),
 		DstPortMax: uint32(cr.Port),
+		IcmpType:   u32ptr(cr.ICMPType),
+		IcmpCode:   u32ptr(cr.ICMPCode),
 		Allow:      cr.Action == "Allow",
 		Egress:     egress,
+	}
+	if cr.EndPort > cr.Port {
+		fw.DstPortMax = uint32(cr.EndPort)
 	}
 	if egress {
 		fw.DstCIDR = cr.CIDR
@@ -96,6 +101,14 @@ func compiledToFw(cr compiledv1.CompiledFwRule, egress bool) FwRule {
 		fw.SrcCIDR = cr.CIDR
 	}
 	return fw
+}
+
+func u32ptr(p *int32) *uint32 {
+	if p == nil {
+		return nil
+	}
+	v := uint32(*p)
+	return &v
 }
 
 // protoNum maps an API protocol name to its IP protocol number. "ICMP" names the ICMP of the rule's

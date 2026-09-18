@@ -58,6 +58,12 @@ type CompiledFwRule struct {
 	Proto string
 	// Port is the destination port (0 = any).
 	Port int32
+	// EndPort, when non-zero, extends Port to the inclusive destination-port range Port-EndPort.
+	EndPort int32
+	// ICMPType restricts an ICMP rule to one message type (nil = any).
+	ICMPType *int32
+	// ICMPCode restricts the rule to one code of ICMPType (nil = any).
+	ICMPCode *int32
 	// Action is the rule action: "Allow" or "Deny".
 	Action string
 }

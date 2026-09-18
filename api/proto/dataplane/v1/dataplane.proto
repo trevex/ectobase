@@ -128,6 +128,10 @@ message FwRuleSpec {
   uint32 dst_port_max = 6; // inclusive destination-port range high; 0 => treated as 65535
   bool allow = 7;          // true = accept, false = drop
   bool egress = 8;         // true = egress rule, false = ingress rule
+  // ICMP selectors, consulted only when proto is ICMP (1) or ICMPv6 (58). Unset = any; presence
+  // matters because 0 is a real type (echo reply). A code requires a type. Each is 0..=255.
+  optional uint32 icmp_type = 9;
+  optional uint32 icmp_code = 10;
 }
 
 message ReplaceInterfaceFirewallRequest {

@@ -703,15 +703,19 @@ func (*DelFwRuleResponse) Descriptor() ([]byte, []int) {
 // AddFwRuleRequest minus interface_id (carried once on the parent). The rule's address family is
 // inferred from the CIDRs (a v6 CIDR on either side makes it a v6 rule), exactly like AddFwRule.
 type FwRuleSpec struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	RuleId        string                 `protobuf:"bytes,1,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`                // stable rule id (debug/telemetry; slot order = position in the list)
-	SrcCidr       string                 `protobuf:"bytes,2,opt,name=src_cidr,json=srcCidr,proto3" json:"src_cidr,omitempty"`             // source CIDR ("0.0.0.0/0"/"::/0"/empty = any)
-	DstCidr       string                 `protobuf:"bytes,3,opt,name=dst_cidr,json=dstCidr,proto3" json:"dst_cidr,omitempty"`             // destination CIDR; empty = any
-	Proto         uint32                 `protobuf:"varint,4,opt,name=proto,proto3" json:"proto,omitempty"`                               // IP protocol number (6=TCP, 17=UDP, 1=ICMP); 0 = any
-	DstPortMin    uint32                 `protobuf:"varint,5,opt,name=dst_port_min,json=dstPortMin,proto3" json:"dst_port_min,omitempty"` // inclusive destination-port range low
-	DstPortMax    uint32                 `protobuf:"varint,6,opt,name=dst_port_max,json=dstPortMax,proto3" json:"dst_port_max,omitempty"` // inclusive destination-port range high; 0 => treated as 65535
-	Allow         bool                   `protobuf:"varint,7,opt,name=allow,proto3" json:"allow,omitempty"`                               // true = accept, false = drop
-	Egress        bool                   `protobuf:"varint,8,opt,name=egress,proto3" json:"egress,omitempty"`                             // true = egress rule, false = ingress rule
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	RuleId     string                 `protobuf:"bytes,1,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`                // stable rule id (debug/telemetry; slot order = position in the list)
+	SrcCidr    string                 `protobuf:"bytes,2,opt,name=src_cidr,json=srcCidr,proto3" json:"src_cidr,omitempty"`             // source CIDR ("0.0.0.0/0"/"::/0"/empty = any)
+	DstCidr    string                 `protobuf:"bytes,3,opt,name=dst_cidr,json=dstCidr,proto3" json:"dst_cidr,omitempty"`             // destination CIDR; empty = any
+	Proto      uint32                 `protobuf:"varint,4,opt,name=proto,proto3" json:"proto,omitempty"`                               // IP protocol number (6=TCP, 17=UDP, 1=ICMP); 0 = any
+	DstPortMin uint32                 `protobuf:"varint,5,opt,name=dst_port_min,json=dstPortMin,proto3" json:"dst_port_min,omitempty"` // inclusive destination-port range low
+	DstPortMax uint32                 `protobuf:"varint,6,opt,name=dst_port_max,json=dstPortMax,proto3" json:"dst_port_max,omitempty"` // inclusive destination-port range high; 0 => treated as 65535
+	Allow      bool                   `protobuf:"varint,7,opt,name=allow,proto3" json:"allow,omitempty"`                               // true = accept, false = drop
+	Egress     bool                   `protobuf:"varint,8,opt,name=egress,proto3" json:"egress,omitempty"`                             // true = egress rule, false = ingress rule
+	// ICMP selectors, consulted only when proto is ICMP (1) or ICMPv6 (58). Unset = any; presence
+	// matters because 0 is a real type (echo reply). A code requires a type. Each is 0..=255.
+	IcmpType      *uint32 `protobuf:"varint,9,opt,name=icmp_type,json=icmpType,proto3,oneof" json:"icmp_type,omitempty"`
+	IcmpCode      *uint32 `protobuf:"varint,10,opt,name=icmp_code,json=icmpCode,proto3,oneof" json:"icmp_code,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -800,6 +804,20 @@ func (x *FwRuleSpec) GetEgress() bool {
 		return x.Egress
 	}
 	return false
+}
+
+func (x *FwRuleSpec) GetIcmpType() uint32 {
+	if x != nil && x.IcmpType != nil {
+		return *x.IcmpType
+	}
+	return 0
+}
+
+func (x *FwRuleSpec) GetIcmpCode() uint32 {
+	if x != nil && x.IcmpCode != nil {
+		return *x.IcmpCode
+	}
+	return 0
 }
 
 type ReplaceInterfaceFirewallRequest struct {
@@ -2196,7 +2214,7 @@ const file_dataplane_proto_rawDesc = "" +
 	"\x10DelFwRuleRequest\x12!\n" +
 	"\finterface_id\x18\x01 \x01(\tR\vinterfaceId\x12\x17\n" +
 	"\arule_id\x18\x02 \x01(\tR\x06ruleId\"\x13\n" +
-	"\x11DelFwRuleResponse\"\xe3\x01\n" +
+	"\x11DelFwRuleResponse\"\xc3\x02\n" +
 	"\n" +
 	"FwRuleSpec\x12\x17\n" +
 	"\arule_id\x18\x01 \x01(\tR\x06ruleId\x12\x19\n" +
@@ -2208,7 +2226,14 @@ const file_dataplane_proto_rawDesc = "" +
 	"\fdst_port_max\x18\x06 \x01(\rR\n" +
 	"dstPortMax\x12\x14\n" +
 	"\x05allow\x18\a \x01(\bR\x05allow\x12\x16\n" +
-	"\x06egress\x18\b \x01(\bR\x06egress\"t\n" +
+	"\x06egress\x18\b \x01(\bR\x06egress\x12 \n" +
+	"\ticmp_type\x18\t \x01(\rH\x00R\bicmpType\x88\x01\x01\x12 \n" +
+	"\ticmp_code\x18\n" +
+	" \x01(\rH\x01R\bicmpCode\x88\x01\x01B\f\n" +
+	"\n" +
+	"_icmp_typeB\f\n" +
+	"\n" +
+	"_icmp_code\"t\n" +
 	"\x1fReplaceInterfaceFirewallRequest\x12!\n" +
 	"\finterface_id\x18\x01 \x01(\tR\vinterfaceId\x12.\n" +
 	"\x05rules\x18\x02 \x03(\v2\x18.dataplane.v1.FwRuleSpecR\x05rules\"\"\n" +
@@ -2422,6 +2447,7 @@ func file_dataplane_proto_init() {
 	if File_dataplane_proto != nil {
 		return
 	}
+	file_dataplane_proto_msgTypes[13].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

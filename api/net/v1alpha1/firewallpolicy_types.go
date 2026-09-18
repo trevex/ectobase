@@ -51,6 +51,25 @@ type FirewallPolicyRule struct {
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=65535
 	Port int32 `json:"port,omitempty"`
+	// EndPort, if set, makes the rule match the inclusive destination-port range Port-EndPort.
+	// Requires Port, and must not be below it.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	EndPort *int32 `json:"endPort,omitempty"`
+	// ICMPType restricts an ICMP rule to one ICMP (or, on an IPv6 CIDR, ICMPv6) message type,
+	// e.g. 8 for IPv4 echo request, 128 for ICMPv6 echo request. Unset matches every type.
+	// Requires Proto ICMP.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=255
+	ICMPType *int32 `json:"icmpType,omitempty"`
+	// ICMPCode restricts the rule further to one code of ICMPType. Unset matches every code.
+	// Requires ICMPType.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=255
+	ICMPCode *int32 `json:"icmpCode,omitempty"`
 	// Action is "Allow" or "Deny".
 	// +kubebuilder:validation:Enum=Allow;Deny
 	Action string `json:"action"`

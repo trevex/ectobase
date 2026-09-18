@@ -29,6 +29,12 @@ type FirewallPolicyRule struct {
 	Proto string
 	// Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
 	Port int32
+	// EndPort, if set, makes the rule match the inclusive destination-port range Port-EndPort.
+	EndPort *int32
+	// ICMPType restricts an ICMP rule to one message type; unset matches every type.
+	ICMPType *int32
+	// ICMPCode restricts the rule further to one code of ICMPType; unset matches every code.
+	ICMPCode *int32
 	// Action is "Allow" or "Deny".
 	Action string
 	// Priority orders this rule against the other rules of equally-prioritized policies: lower

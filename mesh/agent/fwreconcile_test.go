@@ -8,6 +8,8 @@ import (
 
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	dpv1 "github.com/trevex/ectobase/cni/gen/dataplanev1"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -312,5 +314,59 @@ func TestCompiledToFwICMPFollowsFamily(t *testing.T) {
 		if got.Proto != tc.want {
 			t.Errorf("ICMP on %s (egress=%v) lowered to proto %d, want %d", tc.cidr, tc.egress, got.Proto, tc.want)
 		}
+	}
+}
+
+func i32p(v int32) *int32 { return &v }
+
+// A port range lowers to the dataplane's inclusive [DstPortMin, DstPortMax]; ICMP selectors pass
+// through with presence intact (type 0, echo reply, is not "any").
+func TestCompiledToFwCarriesRangeAndICMP(t *testing.T) {
+	r := compiledToFw(compiledv1.CompiledFwRule{CIDR: "10.0.0.0/8", Proto: "TCP", Port: 8000, EndPort: 8100, Action: "Allow"}, false)
+	if r.DstPortMin != 8000 || r.DstPortMax != 8100 {
+		t.Fatalf("range lowered to %d-%d, want 8000-8100", r.DstPortMin, r.DstPortMax)
+	}
+	r = compiledToFw(compiledv1.CompiledFwRule{CIDR: "10.0.0.0/8", Proto: "TCP", Port: 443, Action: "Allow"}, false)
+	if r.DstPortMin != 443 || r.DstPortMax != 443 {
+		t.Fatalf("single port lowered to %d-%d, want 443-443", r.DstPortMin, r.DstPortMax)
+	}
+	r = compiledToFw(compiledv1.CompiledFwRule{CIDR: "2001:db8::/32", Proto: "ICMP", ICMPType: i32p(0), ICMPCode: i32p(0), Action: "Allow"}, false)
+	if r.IcmpType == nil || *r.IcmpType != 0 || r.IcmpCode == nil || *r.IcmpCode != 0 {
+		t.Fatalf("ICMP type/code 0/0 lost presence: %+v", r)
+	}
+	r = compiledToFw(compiledv1.CompiledFwRule{CIDR: "10.0.0.0/8", Proto: "ICMP", Action: "Allow"}, false)
+	if r.IcmpType != nil || r.IcmpCode != nil {
+		t.Fatalf("untyped ICMP rule must leave the selectors unset: %+v", r)
+	}
+}
+
+// captureDP records the last ReplaceInterfaceFirewall request; every other method panics via the
+// nil embedded interface, which is fine because the test calls only this one.
+type captureDP struct {
+	dpv1.DataplaneNodeClient
+	got *dpv1.ReplaceInterfaceFirewallRequest
+}
+
+func (c *captureDP) ReplaceInterfaceFirewall(_ context.Context, in *dpv1.ReplaceInterfaceFirewallRequest, _ ...grpc.CallOption) (*dpv1.ReplaceInterfaceFirewallResponse, error) {
+	c.got = in
+	return &dpv1.ReplaceInterfaceFirewallResponse{}, nil
+}
+
+func TestDataplaneAdapterSendsICMPSelectors(t *testing.T) {
+	typ, code := uint32(0), uint32(4)
+	c := &captureDP{}
+	err := NewDataplaneAdapter(c).ReplaceInterfaceFirewall(context.Background(), "if0", []FwRuleWithID{
+		{ID: "typed", Rule: FwRule{SrcCIDR: "10.0.0.0/8", Proto: 1, IcmpType: &typ, IcmpCode: &code, Allow: true}},
+		{ID: "any", Rule: FwRule{SrcCIDR: "10.0.0.0/8", Proto: 1, Allow: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	typed, anyICMP := c.got.Rules[0], c.got.Rules[1]
+	if typed.IcmpType == nil || *typed.IcmpType != 0 || typed.IcmpCode == nil || *typed.IcmpCode != 4 {
+		t.Fatalf("typed rule sent as %+v, want icmp_type=0 icmp_code=4 present", typed)
+	}
+	if anyICMP.IcmpType != nil || anyICMP.IcmpCode != nil {
+		t.Fatalf("untyped rule must send no ICMP selectors, got %+v", anyICMP)
 	}
 }

@@ -80,6 +80,9 @@ _Appears in:_
 | `cidr` _string_ | CIDR is the source (ingress) or destination (egress) CIDR to match.<br />"0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses. |  |  |
 | `proto` _string_ | Proto is the IP protocol to match ("TCP", "UDP", "ICMP", or "" for any). ICMP means the ICMP<br />of the CIDR's family (ICMPv6 for an IPv6 CIDR). |  | Enum: [TCP UDP ICMP] <br />Optional: \{\} <br /> |
 | `port` _integer_ | Port is the destination port to match (0 = any). Requires Proto TCP or UDP. |  | Maximum: 65535 <br />Minimum: 0 <br />Optional: \{\} <br /> |
+| `endPort` _integer_ | EndPort, if set, makes the rule match the inclusive destination-port range Port-EndPort.<br />Requires Port, and must not be below it. |  | Maximum: 65535 <br />Minimum: 1 <br />Optional: \{\} <br /> |
+| `icmpType` _integer_ | ICMPType restricts an ICMP rule to one ICMP (or, on an IPv6 CIDR, ICMPv6) message type,<br />e.g. 8 for IPv4 echo request, 128 for ICMPv6 echo request. Unset matches every type.<br />Requires Proto ICMP. |  | Maximum: 255 <br />Minimum: 0 <br />Optional: \{\} <br /> |
+| `icmpCode` _integer_ | ICMPCode restricts the rule further to one code of ICMPType. Unset matches every code.<br />Requires ICMPType. |  | Maximum: 255 <br />Minimum: 0 <br />Optional: \{\} <br /> |
 | `action` _string_ | Action is "Allow" or "Deny". |  | Enum: [Allow Deny] <br /> |
 | `priority` _integer_ | Priority orders this rule against the other rules of equally-prioritized policies: lower<br />wins. 0-65535; unset means 32768. Rules of equal priority keep their list order. |  | Maximum: 65535 <br />Minimum: 0 <br />Optional: \{\} <br /> |
 

@@ -644,6 +644,18 @@ renders (ebpf clab):
                                   CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
                                   rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
+                              endPort:
+                                description: EndPort, when non-zero, extends Port to the inclusive destination-port range Port-EndPort.
+                                format: int32
+                                type: integer
+                              icmpCode:
+                                description: ICMPCode restricts the rule to one code of ICMPType (nil = any).
+                                format: int32
+                                type: integer
+                              icmpType:
+                                description: ICMPType restricts an ICMP rule to one message type of the CIDR's ICMP family (nil = any).
+                                format: int32
+                                type: integer
                               port:
                                 description: Port is the destination port (0 = any).
                                 format: int32
@@ -669,6 +681,18 @@ renders (ebpf clab):
                                   CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
                                   rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
+                              endPort:
+                                description: EndPort, when non-zero, extends Port to the inclusive destination-port range Port-EndPort.
+                                format: int32
+                                type: integer
+                              icmpCode:
+                                description: ICMPCode restricts the rule to one code of ICMPType (nil = any).
+                                format: int32
+                                type: integer
+                              icmpType:
+                                description: ICMPType restricts an ICMP rule to one message type of the CIDR's ICMP family (nil = any).
+                                format: int32
+                                type: integer
                               port:
                                 description: Port is the destination port (0 = any).
                                 format: int32
@@ -1146,6 +1170,31 @@ renders (ebpf clab):
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
                               "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
+                          endPort:
+                            description: |-
+                              EndPort, if set, makes the rule match the inclusive destination-port range Port-EndPort.
+                              Requires Port, and must not be below it.
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                          icmpCode:
+                            description: |-
+                              ICMPCode restricts the rule further to one code of ICMPType. Unset matches every code.
+                              Requires ICMPType.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
+                          icmpType:
+                            description: |-
+                              ICMPType restricts an ICMP rule to one ICMP (or, on an IPv6 CIDR, ICMPv6) message type,
+                              e.g. 8 for IPv4 echo request, 128 for ICMPv6 echo request. Unset matches every type.
+                              Requires Proto ICMP.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
                           port:
                             description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
@@ -1190,6 +1239,31 @@ renders (ebpf clab):
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
                               "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
+                          endPort:
+                            description: |-
+                              EndPort, if set, makes the rule match the inclusive destination-port range Port-EndPort.
+                              Requires Port, and must not be below it.
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                          icmpCode:
+                            description: |-
+                              ICMPCode restricts the rule further to one code of ICMPType. Unset matches every code.
+                              Requires ICMPType.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
+                          icmpType:
+                            description: |-
+                              ICMPType restricts an ICMP rule to one ICMP (or, on an IPv6 CIDR, ICMPv6) message type,
+                              e.g. 8 for IPv4 echo request, 128 for ICMPv6 echo request. Unset matches every type.
+                              Requires Proto ICMP.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
                           port:
                             description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
@@ -3290,6 +3364,18 @@ renders (ebpf hw):
                                   CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
                                   rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
+                              endPort:
+                                description: EndPort, when non-zero, extends Port to the inclusive destination-port range Port-EndPort.
+                                format: int32
+                                type: integer
+                              icmpCode:
+                                description: ICMPCode restricts the rule to one code of ICMPType (nil = any).
+                                format: int32
+                                type: integer
+                              icmpType:
+                                description: ICMPType restricts an ICMP rule to one message type of the CIDR's ICMP family (nil = any).
+                                format: int32
+                                type: integer
                               port:
                                 description: Port is the destination port (0 = any).
                                 format: int32
@@ -3315,6 +3401,18 @@ renders (ebpf hw):
                                   CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
                                   rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
+                              endPort:
+                                description: EndPort, when non-zero, extends Port to the inclusive destination-port range Port-EndPort.
+                                format: int32
+                                type: integer
+                              icmpCode:
+                                description: ICMPCode restricts the rule to one code of ICMPType (nil = any).
+                                format: int32
+                                type: integer
+                              icmpType:
+                                description: ICMPType restricts an ICMP rule to one message type of the CIDR's ICMP family (nil = any).
+                                format: int32
+                                type: integer
                               port:
                                 description: Port is the destination port (0 = any).
                                 format: int32
@@ -3792,6 +3890,31 @@ renders (ebpf hw):
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
                               "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
+                          endPort:
+                            description: |-
+                              EndPort, if set, makes the rule match the inclusive destination-port range Port-EndPort.
+                              Requires Port, and must not be below it.
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                          icmpCode:
+                            description: |-
+                              ICMPCode restricts the rule further to one code of ICMPType. Unset matches every code.
+                              Requires ICMPType.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
+                          icmpType:
+                            description: |-
+                              ICMPType restricts an ICMP rule to one ICMP (or, on an IPv6 CIDR, ICMPv6) message type,
+                              e.g. 8 for IPv4 echo request, 128 for ICMPv6 echo request. Unset matches every type.
+                              Requires Proto ICMP.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
                           port:
                             description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
@@ -3836,6 +3959,31 @@ renders (ebpf hw):
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
                               "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
+                          endPort:
+                            description: |-
+                              EndPort, if set, makes the rule match the inclusive destination-port range Port-EndPort.
+                              Requires Port, and must not be below it.
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                          icmpCode:
+                            description: |-
+                              ICMPCode restricts the rule further to one code of ICMPType. Unset matches every code.
+                              Requires ICMPType.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
+                          icmpType:
+                            description: |-
+                              ICMPType restricts an ICMP rule to one ICMP (or, on an IPv6 CIDR, ICMPv6) message type,
+                              e.g. 8 for IPv4 echo request, 128 for ICMPv6 echo request. Unset matches every type.
+                              Requires Proto ICMP.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
                           port:
                             description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
@@ -5933,6 +6081,18 @@ renders (tier1 on):
                                   CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
                                   rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
+                              endPort:
+                                description: EndPort, when non-zero, extends Port to the inclusive destination-port range Port-EndPort.
+                                format: int32
+                                type: integer
+                              icmpCode:
+                                description: ICMPCode restricts the rule to one code of ICMPType (nil = any).
+                                format: int32
+                                type: integer
+                              icmpType:
+                                description: ICMPType restricts an ICMP rule to one message type of the CIDR's ICMP family (nil = any).
+                                format: int32
+                                type: integer
                               port:
                                 description: Port is the destination port (0 = any).
                                 format: int32
@@ -5958,6 +6118,18 @@ renders (tier1 on):
                                   CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
                                   rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
+                              endPort:
+                                description: EndPort, when non-zero, extends Port to the inclusive destination-port range Port-EndPort.
+                                format: int32
+                                type: integer
+                              icmpCode:
+                                description: ICMPCode restricts the rule to one code of ICMPType (nil = any).
+                                format: int32
+                                type: integer
+                              icmpType:
+                                description: ICMPType restricts an ICMP rule to one message type of the CIDR's ICMP family (nil = any).
+                                format: int32
+                                type: integer
                               port:
                                 description: Port is the destination port (0 = any).
                                 format: int32
@@ -6435,6 +6607,31 @@ renders (tier1 on):
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
                               "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
+                          endPort:
+                            description: |-
+                              EndPort, if set, makes the rule match the inclusive destination-port range Port-EndPort.
+                              Requires Port, and must not be below it.
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                          icmpCode:
+                            description: |-
+                              ICMPCode restricts the rule further to one code of ICMPType. Unset matches every code.
+                              Requires ICMPType.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
+                          icmpType:
+                            description: |-
+                              ICMPType restricts an ICMP rule to one ICMP (or, on an IPv6 CIDR, ICMPv6) message type,
+                              e.g. 8 for IPv4 echo request, 128 for ICMPv6 echo request. Unset matches every type.
+                              Requires Proto ICMP.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
                           port:
                             description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
@@ -6479,6 +6676,31 @@ renders (tier1 on):
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
                               "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
+                          endPort:
+                            description: |-
+                              EndPort, if set, makes the rule match the inclusive destination-port range Port-EndPort.
+                              Requires Port, and must not be below it.
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                          icmpCode:
+                            description: |-
+                              ICMPCode restricts the rule further to one code of ICMPType. Unset matches every code.
+                              Requires ICMPType.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
+                          icmpType:
+                            description: |-
+                              ICMPType restricts an ICMP rule to one ICMP (or, on an IPv6 CIDR, ICMPv6) message type,
+                              e.g. 8 for IPv4 echo request, 128 for ICMPv6 echo request. Unset matches every type.
+                              Requires Proto ICMP.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
                           port:
                             description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
@@ -8616,6 +8838,18 @@ renders (tier1 watchdog):
                                   CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
                                   rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
+                              endPort:
+                                description: EndPort, when non-zero, extends Port to the inclusive destination-port range Port-EndPort.
+                                format: int32
+                                type: integer
+                              icmpCode:
+                                description: ICMPCode restricts the rule to one code of ICMPType (nil = any).
+                                format: int32
+                                type: integer
+                              icmpType:
+                                description: ICMPType restricts an ICMP rule to one message type of the CIDR's ICMP family (nil = any).
+                                format: int32
+                                type: integer
                               port:
                                 description: Port is the destination port (0 = any).
                                 format: int32
@@ -8641,6 +8875,18 @@ renders (tier1 watchdog):
                                   CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
                                   rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
+                              endPort:
+                                description: EndPort, when non-zero, extends Port to the inclusive destination-port range Port-EndPort.
+                                format: int32
+                                type: integer
+                              icmpCode:
+                                description: ICMPCode restricts the rule to one code of ICMPType (nil = any).
+                                format: int32
+                                type: integer
+                              icmpType:
+                                description: ICMPType restricts an ICMP rule to one message type of the CIDR's ICMP family (nil = any).
+                                format: int32
+                                type: integer
                               port:
                                 description: Port is the destination port (0 = any).
                                 format: int32
@@ -9118,6 +9364,31 @@ renders (tier1 watchdog):
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
                               "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
+                          endPort:
+                            description: |-
+                              EndPort, if set, makes the rule match the inclusive destination-port range Port-EndPort.
+                              Requires Port, and must not be below it.
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                          icmpCode:
+                            description: |-
+                              ICMPCode restricts the rule further to one code of ICMPType. Unset matches every code.
+                              Requires ICMPType.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
+                          icmpType:
+                            description: |-
+                              ICMPType restricts an ICMP rule to one ICMP (or, on an IPv6 CIDR, ICMPv6) message type,
+                              e.g. 8 for IPv4 echo request, 128 for ICMPv6 echo request. Unset matches every type.
+                              Requires Proto ICMP.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
                           port:
                             description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
@@ -9162,6 +9433,31 @@ renders (tier1 watchdog):
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
                               "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
+                          endPort:
+                            description: |-
+                              EndPort, if set, makes the rule match the inclusive destination-port range Port-EndPort.
+                              Requires Port, and must not be below it.
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                          icmpCode:
+                            description: |-
+                              ICMPCode restricts the rule further to one code of ICMPType. Unset matches every code.
+                              Requires ICMPType.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
+                          icmpType:
+                            description: |-
+                              ICMPType restricts an ICMP rule to one ICMP (or, on an IPv6 CIDR, ICMPv6) message type,
+                              e.g. 8 for IPv4 echo request, 128 for ICMPv6 echo request. Unset matches every type.
+                              Requires Proto ICMP.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
                           port:
                             description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
@@ -11309,6 +11605,18 @@ renders with vm-materializer enabled:
                                   CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
                                   rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
+                              endPort:
+                                description: EndPort, when non-zero, extends Port to the inclusive destination-port range Port-EndPort.
+                                format: int32
+                                type: integer
+                              icmpCode:
+                                description: ICMPCode restricts the rule to one code of ICMPType (nil = any).
+                                format: int32
+                                type: integer
+                              icmpType:
+                                description: ICMPType restricts an ICMP rule to one message type of the CIDR's ICMP family (nil = any).
+                                format: int32
+                                type: integer
                               port:
                                 description: Port is the destination port (0 = any).
                                 format: int32
@@ -11334,6 +11642,18 @@ renders with vm-materializer enabled:
                                   CIDR is the peer CIDR to match: the SOURCE for an ingress rule, the DESTINATION for an egress
                                   rule ("0.0.0.0/0" = any IPv4, "::/0" = any IPv6).
                                 type: string
+                              endPort:
+                                description: EndPort, when non-zero, extends Port to the inclusive destination-port range Port-EndPort.
+                                format: int32
+                                type: integer
+                              icmpCode:
+                                description: ICMPCode restricts the rule to one code of ICMPType (nil = any).
+                                format: int32
+                                type: integer
+                              icmpType:
+                                description: ICMPType restricts an ICMP rule to one message type of the CIDR's ICMP family (nil = any).
+                                format: int32
+                                type: integer
                               port:
                                 description: Port is the destination port (0 = any).
                                 format: int32
@@ -11811,6 +12131,31 @@ renders with vm-materializer enabled:
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
                               "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
+                          endPort:
+                            description: |-
+                              EndPort, if set, makes the rule match the inclusive destination-port range Port-EndPort.
+                              Requires Port, and must not be below it.
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                          icmpCode:
+                            description: |-
+                              ICMPCode restricts the rule further to one code of ICMPType. Unset matches every code.
+                              Requires ICMPType.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
+                          icmpType:
+                            description: |-
+                              ICMPType restricts an ICMP rule to one ICMP (or, on an IPv6 CIDR, ICMPv6) message type,
+                              e.g. 8 for IPv4 echo request, 128 for ICMPv6 echo request. Unset matches every type.
+                              Requires Proto ICMP.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
                           port:
                             description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32
@@ -11855,6 +12200,31 @@ renders with vm-materializer enabled:
                               CIDR is the source (ingress) or destination (egress) CIDR to match.
                               "0.0.0.0/0" matches all IPv4 addresses, "::/0" all IPv6 addresses.
                             type: string
+                          endPort:
+                            description: |-
+                              EndPort, if set, makes the rule match the inclusive destination-port range Port-EndPort.
+                              Requires Port, and must not be below it.
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                          icmpCode:
+                            description: |-
+                              ICMPCode restricts the rule further to one code of ICMPType. Unset matches every code.
+                              Requires ICMPType.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
+                          icmpType:
+                            description: |-
+                              ICMPType restricts an ICMP rule to one ICMP (or, on an IPv6 CIDR, ICMPv6) message type,
+                              e.g. 8 for IPv4 echo request, 128 for ICMPv6 echo request. Unset matches every type.
+                              Requires Proto ICMP.
+                            format: int32
+                            maximum: 255
+                            minimum: 0
+                            type: integer
                           port:
                             description: Port is the destination port to match (0 = any). Requires Proto TCP or UDP.
                             format: int32

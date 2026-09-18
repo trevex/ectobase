@@ -294,34 +294,35 @@ enum ParsedFwRule {
     V6(flowplane_common::FwRule6),
 }
 
-/// Parse the wire fields of one firewall rule into a family-tagged `ParsedFwRule`. Shared by
-/// `add_fw_rule` and `replace_interface_firewall` so both encode rules identically.
-fn parse_fw_rule_fields(
-    src_cidr: &str,
-    dst_cidr: &str,
-    proto: u32,
-    dst_port_min: u32,
-    dst_port_max: u32,
-    allow: bool,
-    egress: bool,
-) -> Result<ParsedFwRule, ServiceError> {
+/// Parse the wire form of one firewall rule into a family-tagged `ParsedFwRule`. Shared by
+/// `add_fw_rule` (which lifts its request into a spec) and `replace_interface_firewall` so both
+/// encode rules identically.
+fn parse_fw_rule(spec: &pb::FwRuleSpec) -> Result<ParsedFwRule, ServiceError> {
     use crate::parse::FwCidr;
     use flowplane_common::{FW_ACTION_ACCEPT, FW_ACTION_DROP, FW_DIR_EGRESS, FW_DIR_INGRESS};
+    let (src_cidr, dst_cidr) = (spec.src_cidr.as_str(), spec.dst_cidr.as_str());
     let src = parse_fw_cidr(src_cidr).map_err(invalid)?;
     let dst = parse_fw_cidr(dst_cidr).map_err(invalid)?;
-    let proto = u8::try_from(proto).map_err(|_| ServiceError::Invalid("proto > 255".into()))?;
-    let dst_port_min = port_u16(dst_port_min).map_err(invalid)?;
-    let dst_port_max = if dst_port_max == 0 {
+    let proto =
+        u8::try_from(spec.proto).map_err(|_| ServiceError::Invalid("proto > 255".into()))?;
+    let dst_port_min = port_u16(spec.dst_port_min).map_err(invalid)?;
+    let dst_port_max = if spec.dst_port_max == 0 {
         65535u16
     } else {
-        port_u16(dst_port_max).map_err(invalid)?
+        port_u16(spec.dst_port_max).map_err(invalid)?
     };
-    let action = if allow {
+    if dst_port_min > dst_port_max {
+        return Err(ServiceError::Invalid(format!(
+            "dst port range {dst_port_min}-{dst_port_max} is inverted"
+        )));
+    }
+    let (icmp_type, icmp_code) = parse_icmp_selectors(spec)?;
+    let action = if spec.allow {
         FW_ACTION_ACCEPT
     } else {
         FW_ACTION_DROP
     };
-    let direction = if egress {
+    let direction = if spec.egress {
         FW_DIR_EGRESS
     } else {
         FW_DIR_INGRESS
@@ -357,8 +358,8 @@ fn parse_fw_rule_fields(
             src_port_max: 65535,
             dst_port_min,
             dst_port_max,
-            icmp_type: 0xffff,
-            icmp_code: 0xffff,
+            icmp_type,
+            icmp_code,
             proto,
             action,
             direction,
@@ -382,13 +383,42 @@ fn parse_fw_rule_fields(
             src_port_max: 65535,
             dst_port_min,
             dst_port_max,
-            icmp_type: 0xffff,
-            icmp_code: 0xffff,
+            icmp_type,
+            icmp_code,
             proto,
             action,
             direction,
             enabled: 1,
         }))
+    }
+}
+
+/// The ICMP(v6) selectors of a rule, as the datapath's `0xffff`-means-any u16s. Only an ICMP rule
+/// (proto 1 or 58) may carry them, a code needs a type, and each is a single octet on the wire.
+fn parse_icmp_selectors(spec: &pb::FwRuleSpec) -> Result<(u16, u16), ServiceError> {
+    const ANY: u16 = 0xffff;
+    if spec.icmp_type.is_none() && spec.icmp_code.is_none() {
+        return Ok((ANY, ANY));
+    }
+    if spec.proto != 1 && spec.proto != 58 {
+        return Err(ServiceError::Invalid(format!(
+            "ICMP type/code on a proto {} rule (needs 1 or 58)",
+            spec.proto
+        )));
+    }
+    let octet = |what: &str, v: u32| {
+        u8::try_from(v)
+            .map(u16::from)
+            .map_err(|_| ServiceError::Invalid(format!("ICMP {what} {v} > 255")))
+    };
+    match (spec.icmp_type, spec.icmp_code) {
+        (Some(t), code) => Ok((
+            octet("type", t)?,
+            code.map(|c| octet("code", c)).transpose()?.unwrap_or(ANY),
+        )),
+        (None, _) => Err(ServiceError::Invalid(
+            "ICMP code without an ICMP type".into(),
+        )),
     }
 }
 
@@ -398,15 +428,16 @@ pub fn add_fw_rule<W: MapWriter>(
 ) -> Result<pb::AddFwRuleResponse, ServiceError> {
     let iface = req.interface_id.clone().into_bytes();
     let rule_id = req.rule_id.clone().into_bytes();
-    match parse_fw_rule_fields(
-        &req.src_cidr,
-        &req.dst_cidr,
-        req.proto,
-        req.dst_port_min,
-        req.dst_port_max,
-        req.allow,
-        req.egress,
-    )? {
+    match parse_fw_rule(&pb::FwRuleSpec {
+        src_cidr: req.src_cidr.clone(),
+        dst_cidr: req.dst_cidr.clone(),
+        proto: req.proto,
+        dst_port_min: req.dst_port_min,
+        dst_port_max: req.dst_port_max,
+        allow: req.allow,
+        egress: req.egress,
+        ..Default::default()
+    })? {
         ParsedFwRule::V6(rule) => core.add_fw_rule6(&iface, rule_id, rule)?,
         ParsedFwRule::V4(rule) => core.add_fw_rule(&iface, rule_id, rule)?,
     };
@@ -426,15 +457,7 @@ pub fn replace_interface_firewall<W: MapWriter>(
     let mut v6: Vec<(Vec<u8>, flowplane_common::FwRule6)> = Vec::new();
     for spec in &req.rules {
         let id = spec.rule_id.clone().into_bytes();
-        match parse_fw_rule_fields(
-            &spec.src_cidr,
-            &spec.dst_cidr,
-            spec.proto,
-            spec.dst_port_min,
-            spec.dst_port_max,
-            spec.allow,
-            spec.egress,
-        )? {
+        match parse_fw_rule(spec)? {
             ParsedFwRule::V4(rule) => v4.push((id, rule)),
             ParsedFwRule::V6(rule) => v6.push((id, rule)),
         }
@@ -782,26 +805,8 @@ mod tests {
             &pb::ReplaceInterfaceFirewallRequest {
                 interface_id: "if0".into(),
                 rules: vec![
-                    pb::FwRuleSpec {
-                        rule_id: "fw-in-0".into(),
-                        src_cidr: "0.0.0.0/0".into(),
-                        dst_cidr: "".into(),
-                        proto: 0,
-                        dst_port_min: 0,
-                        dst_port_max: 0,
-                        allow: false,
-                        egress: false,
-                    },
-                    pb::FwRuleSpec {
-                        rule_id: "fw-in-1".into(),
-                        src_cidr: "::/0".into(),
-                        dst_cidr: "".into(),
-                        proto: 0,
-                        dst_port_min: 0,
-                        dst_port_max: 0,
-                        allow: true,
-                        egress: false,
-                    },
+                    fw_spec("fw-in-0", "0.0.0.0/0", false),
+                    fw_spec("fw-in-1", "::/0", true),
                 ],
             },
         )
@@ -838,12 +843,119 @@ mod tests {
         pb::FwRuleSpec {
             rule_id: id.into(),
             src_cidr: src_cidr.into(),
-            dst_cidr: "".into(),
-            proto: 0,
-            dst_port_min: 0,
-            dst_port_max: 0,
             allow,
-            egress: false,
+            ..Default::default()
+        }
+    }
+
+    fn replace_one(
+        c: &mut ControlCore<MemMapWriter>,
+        spec: pb::FwRuleSpec,
+    ) -> Result<(), ServiceError> {
+        replace_interface_firewall(
+            c,
+            &pb::ReplaceInterfaceFirewallRequest {
+                interface_id: "if0".into(),
+                rules: vec![spec],
+            },
+        )
+        .map(|_| ())
+    }
+
+    /// ICMP type/code reach the rule with presence intact: type 0 (echo reply) is a real
+    /// selector, unset is the 0xffff wildcard the datapath matches as "any".
+    #[test]
+    fn replace_interface_firewall_carries_icmp_selectors() {
+        let slot0 = flowplane_common::FwRuleKey { ifindex: 0, idx: 0 };
+        let mut c = core();
+        register_iface(&mut c, "if0", 5, [10, 0, 0, 2]);
+        replace_one(
+            &mut c,
+            pb::FwRuleSpec {
+                proto: 1,
+                icmp_type: Some(8),
+                ..fw_spec("echo", "10.0.0.0/8", true)
+            },
+        )
+        .unwrap();
+        let r = c.writer().fw_rules[&slot0];
+        assert_eq!((r.icmp_type, r.icmp_code), (8, 0xffff));
+
+        replace_one(
+            &mut c,
+            pb::FwRuleSpec {
+                proto: 58,
+                icmp_type: Some(0),
+                icmp_code: Some(0),
+                ..fw_spec("reply6", "2001:db8::/32", true)
+            },
+        )
+        .unwrap();
+        let r6 = c.writer().fw_rules6[&slot0];
+        assert_eq!((r6.icmp_type, r6.icmp_code), (0, 0));
+    }
+
+    #[test]
+    fn replace_interface_firewall_rejects_bad_selectors() {
+        let mut c = core();
+        register_iface(&mut c, "if0", 5, [10, 0, 0, 2]);
+        for (what, spec) in [
+            (
+                "type > 255",
+                pb::FwRuleSpec {
+                    proto: 1,
+                    icmp_type: Some(256),
+                    ..fw_spec("r", "10.0.0.0/8", true)
+                },
+            ),
+            (
+                "code > 255",
+                pb::FwRuleSpec {
+                    proto: 1,
+                    icmp_type: Some(3),
+                    icmp_code: Some(256),
+                    ..fw_spec("r", "10.0.0.0/8", true)
+                },
+            ),
+            (
+                "code without type",
+                pb::FwRuleSpec {
+                    proto: 1,
+                    icmp_code: Some(0),
+                    ..fw_spec("r", "10.0.0.0/8", true)
+                },
+            ),
+            (
+                "type on TCP",
+                pb::FwRuleSpec {
+                    proto: 6,
+                    icmp_type: Some(8),
+                    ..fw_spec("r", "10.0.0.0/8", true)
+                },
+            ),
+            (
+                "type on any proto",
+                pb::FwRuleSpec {
+                    icmp_type: Some(8),
+                    ..fw_spec("r", "10.0.0.0/8", true)
+                },
+            ),
+            (
+                "inverted port range",
+                pb::FwRuleSpec {
+                    proto: 6,
+                    dst_port_min: 9000,
+                    dst_port_max: 8000,
+                    ..fw_spec("r", "10.0.0.0/8", true)
+                },
+            ),
+        ] {
+            let err = replace_one(&mut c, spec).expect_err(what);
+            assert_eq!(
+                tonic::Status::from(err).code(),
+                tonic::Code::InvalidArgument,
+                "{what}"
+            );
         }
     }
 

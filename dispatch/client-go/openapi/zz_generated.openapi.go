@@ -771,6 +771,27 @@ func schema_ectobase_api_compiled_v1alpha1_CompiledFwRule(ref common.ReferenceCa
 							Format:      "int32",
 						},
 					},
+					"endPort": {
+						SchemaProps: spec.SchemaProps{
+							Description: "EndPort, when non-zero, extends Port to the inclusive destination-port range Port-EndPort.",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"icmpType": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ICMPType restricts an ICMP rule to one message type of the CIDR's ICMP family (nil = any).",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"icmpCode": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ICMPCode restricts the rule to one code of ICMPType (nil = any).",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
 					"action": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Action is the rule action: \"Allow\" or \"Deny\".",
@@ -2390,6 +2411,27 @@ func schema_ectobase_api_net_v1alpha1_FirewallPolicyRule(ref common.ReferenceCal
 					"port": {
 						SchemaProps: spec.SchemaProps{
 							Description: "Port is the destination port to match (0 = any). Requires Proto TCP or UDP.",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"endPort": {
+						SchemaProps: spec.SchemaProps{
+							Description: "EndPort, if set, makes the rule match the inclusive destination-port range Port-EndPort. Requires Port, and must not be below it.",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"icmpType": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ICMPType restricts an ICMP rule to one ICMP (or, on an IPv6 CIDR, ICMPv6) message type, e.g. 8 for IPv4 echo request, 128 for ICMPv6 echo request. Unset matches every type. Requires Proto ICMP.",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"icmpCode": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ICMPCode restricts the rule further to one code of ICMPType. Unset matches every code. Requires ICMPType.",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},

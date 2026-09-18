@@ -187,11 +187,24 @@ func TestCompile_RulelessGetsBothFamilies(t *testing.T) {
 	}
 }
 
+// fixturePolicies adds, to testPolicy's single-port rule, one rule per compiled-rule field the Rust
+// sim must honor: a port range and a typed ICMP rule. "fixture-extras" sorts after "allow-https", so
+// ingress[0] stays the 443 rule.
+func fixturePolicies() []netv1.FirewallPolicy {
+	extras := testPolicy()
+	extras.Name = "fixture-extras"
+	end, echoRequest := int32(8100), int32(8)
+	extras.Spec.Ingress = []netv1.FirewallPolicyRule{
+		{CIDR: "10.0.1.0/24", Proto: "TCP", Port: 8000, EndPort: &end, Action: "Allow"},
+		{CIDR: "10.0.2.0/24", Proto: "ICMP", ICMPType: &echoRequest, Action: "Allow"},
+	}
+	return []netv1.FirewallPolicy{testPolicy(), extras}
+}
+
 func TestCompile_WritesFixture(t *testing.T) {
 	nic := testNIC()
-	pol := testPolicy()
 
-	c := Compile(nic, nic.Status.VNI, fwFor(t, nic, pol), nil, nil, nil, Placement{ClusterName: "test"})
+	c := Compile(nic, nic.Status.VNI, fwFor(t, nic, fixturePolicies()...), nil, nil, nil, Placement{ClusterName: "test"})
 
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
