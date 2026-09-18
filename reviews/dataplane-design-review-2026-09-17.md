@@ -147,7 +147,7 @@ redesign, or an explicit documented budget.
 
 | Ceiling | Where | Why it breaks |
 |---|---|---|
-| **16 firewall rules** per direction per interface | `FW_MAX_RULES`, `fw.rs:11`; linear scan `firewall.rs:173-181` | Cloud policy sets are routinely 10–100× this. The sharpest expressiveness limit in the system. |
+| **16 firewall rules** per interface per family, shared across directions | `FW_MAX_RULES`, `fw.rs:11`; linear scan `firewall.rs:173-181` | Cloud policy sets are routinely 10–100× this. The sharpest expressiveness limit in the system. NOTE: this row originally said "per direction", copying `FW_MAX_RULES`' own doc comment, which is also wrong — the handler partitions by family and each family's 16 slots are shared between ingress and egress. |
 | **64 neighbor-NAT entries fleet-wide**, linear scan per WAN-return packet | `maps.rs:96-113` | Caps the whole fleet at ~64 advertised NAT port-blocks per family. |
 | **NAT/public route-bus records broadcast to every node** | `mesh/reflector/nattable.go:23-93` | O(blocks × nodes) fanout; the dominant term at fleet scale. Route records are per-VNI-scoped — NAT/public should be too (edges + owning nodes only). |
 | 1024 interfaces / 1024 taps per node | `INTERFACES`, `PORT_META` | Dense container nodes exceed this. |
