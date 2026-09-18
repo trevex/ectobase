@@ -44,6 +44,20 @@ pub struct MemMapWriter {
     pub ct_iface_flushes: Vec<(u32, [u8; 4], [u8; 16])>,
 }
 
+/// The real `FW_RULES{,6}` hash maps accept any slot index, but the datapath scans only
+/// `0..FW_MAX_RULES`, so a write past that window installs a rule that is never evaluated. Refuse it
+/// here so an overflowing caller fails its test instead of passing against an unbounded fake.
+fn fw_slot_in_scan_window(k: &FwRuleKey) -> anyhow::Result<()> {
+    if k.idx >= flowplane_common::FW_MAX_RULES {
+        anyhow::bail!(
+            "firewall slot {} is outside the datapath scan window (max {})",
+            k.idx,
+            flowplane_common::FW_MAX_RULES
+        );
+    }
+    Ok(())
+}
+
 impl MapWriter for MemMapWriter {
     fn route_upsert(
         &mut self,
@@ -163,6 +177,7 @@ impl MapWriter for MemMapWriter {
         self.underlay.get(k).copied()
     }
     fn fw_rules_upsert(&mut self, k: FwRuleKey, v: FwRule) -> anyhow::Result<()> {
+        fw_slot_in_scan_window(&k)?;
         self.fw_rules.insert(k, v);
         Ok(())
     }
@@ -175,6 +190,7 @@ impl MapWriter for MemMapWriter {
         Ok(())
     }
     fn fw_rules6_upsert(&mut self, k: FwRuleKey, v: FwRule6) -> anyhow::Result<()> {
+        fw_slot_in_scan_window(&k)?;
         self.fw_rules6.insert(k, v);
         Ok(())
     }
@@ -267,5 +283,33 @@ impl MapWriter for MemMapWriter {
     ) -> anyhow::Result<()> {
         self.ct_iface_flushes.push((vni, guest_ip, guest_ip6));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flowplane_common::FW_MAX_RULES;
+
+    // The datapath scans only slots 0..FW_MAX_RULES, so a rule written past the window would be
+    // accepted by the real hash map yet never evaluated. The fake refuses it so a caller that
+    // overflows fails a test instead of silently installing an inert rule.
+    #[test]
+    fn fw_slot_past_scan_window_is_refused() {
+        let mut w = MemMapWriter::default();
+        let last = FwRuleKey {
+            ifindex: 1,
+            idx: FW_MAX_RULES - 1,
+        };
+        let past = FwRuleKey {
+            ifindex: 1,
+            idx: FW_MAX_RULES,
+        };
+        w.fw_rules_upsert(last, FwRule::default()).unwrap();
+        w.fw_rules6_upsert(last, FwRule6::default()).unwrap();
+        assert!(w.fw_rules_upsert(past, FwRule::default()).is_err());
+        assert!(w.fw_rules6_upsert(past, FwRule6::default()).is_err());
+        assert!(!w.fw_rules.contains_key(&past));
+        assert!(!w.fw_rules6.contains_key(&past));
     }
 }

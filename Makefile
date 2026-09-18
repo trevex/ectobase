@@ -214,7 +214,7 @@ check: ## fmt --check + clippy (what the pre-commit hooks run)
 # --- tests -----------------------------------------------------------------
 .PHONY: test
 test: ## Host unit + POD-layout tests (no root needed)
-	cargo test -p flowplane-common -p flowplane
+	cargo test -p flowplane-common -p flowplane-control -p flowplane
 
 .PHONY: ci
 ci: ## Everything CI runs (non-privileged): lint + sim + host tests + chart tests + every Go module

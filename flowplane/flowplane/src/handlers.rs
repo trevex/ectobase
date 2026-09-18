@@ -11,7 +11,8 @@ use crate::pb;
 
 /// Argument-validation failures (bad CIDR/IP/port). The genuinely-internal `ControlCore` errors are
 /// `anyhow::Error` and convert to `ServiceError::Internal` through `?` (blanket `#[from]`), so there
-/// is no `internal` helper — a bare `?` on an `anyhow::Result` does the right thing.
+/// is no `internal` helper — a bare `?` on an `anyhow::Result` does the right thing. The firewall
+/// calls return a typed `FwError` instead, which `?` classifies via its `From` impl in `error.rs`.
 #[inline]
 fn invalid(e: impl std::fmt::Display) -> ServiceError {
     ServiceError::Invalid(e.to_string())
@@ -413,8 +414,9 @@ pub fn add_fw_rule<W: MapWriter>(
 }
 
 /// Replace an interface's ENTIRE firewall rule set with `req.rules` (ingress + egress, v4 + v6),
-/// clearing any prior rules. Splits the flat list into per-family slot-ordered vecs and calls the
-/// declarative core primitives; both families are replaced (an absent family is cleared).
+/// clearing any prior rules. Splits the flat list into per-family slot-ordered vecs and replaces both
+/// families (an absent family is cleared) — or neither, if the interface is unknown (`NotFound`) or
+/// a family is over its rule budget (`ResourceExhausted`).
 pub fn replace_interface_firewall<W: MapWriter>(
     core: &mut ControlCore<W>,
     req: &pb::ReplaceInterfaceFirewallRequest,
@@ -437,8 +439,7 @@ pub fn replace_interface_firewall<W: MapWriter>(
             ParsedFwRule::V6(rule) => v6.push((id, rule)),
         }
     }
-    core.replace_fw_rules(&iface, v4)?;
-    core.replace_fw_rules6(&iface, v6)?;
+    core.replace_interface_fw(&iface, v4, v6)?;
     Ok(pb::ReplaceInterfaceFirewallResponse {})
 }
 
@@ -831,6 +832,81 @@ mod tests {
             .writer()
             .fw_rules6
             .contains_key(&flowplane_common::FwRuleKey { ifindex: 0, idx: 0 }));
+    }
+
+    fn fw_spec(id: &str, src_cidr: &str, allow: bool) -> pb::FwRuleSpec {
+        pb::FwRuleSpec {
+            rule_id: id.into(),
+            src_cidr: src_cidr.into(),
+            dst_cidr: "".into(),
+            proto: 0,
+            dst_port_min: 0,
+            dst_port_max: 0,
+            allow,
+            egress: false,
+        }
+    }
+
+    /// A family over FW_MAX_RULES is a quota refusal, not a transient fault: it must surface as
+    /// ResourceExhausted (clients must not blind-retry it as Internal), and it must be refused
+    /// BEFORE either family is touched — the v4 set is within budget here, yet committing it while
+    /// refusing v6 would leave the interface on half of the new policy.
+    #[test]
+    fn replace_interface_firewall_over_cap_is_resource_exhausted_and_commits_nothing() {
+        let mut c = core();
+        register_iface(&mut c, "if0", 5, [10, 0, 0, 2]);
+        replace_interface_firewall(
+            &mut c,
+            &pb::ReplaceInterfaceFirewallRequest {
+                interface_id: "if0".into(),
+                rules: vec![fw_spec("old", "0.0.0.0/0", false)],
+            },
+        )
+        .unwrap();
+
+        let mut rules = vec![fw_spec("new-v4", "10.0.0.0/8", true)];
+        for i in 0..=flowplane_common::FW_MAX_RULES {
+            rules.push(fw_spec(
+                &format!("v6-{i}"),
+                &format!("2001:db8:{i:x}::/48"),
+                true,
+            ));
+        }
+        let err = replace_interface_firewall(
+            &mut c,
+            &pb::ReplaceInterfaceFirewallRequest {
+                interface_id: "if0".into(),
+                rules,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            tonic::Status::from(err).code(),
+            tonic::Code::ResourceExhausted
+        );
+
+        let slot0 = flowplane_common::FwRuleKey { ifindex: 0, idx: 0 };
+        let kept = c.writer().fw_rules.get(&slot0).expect("prior v4 rule kept");
+        assert_eq!(
+            kept.action,
+            flowplane_common::FW_ACTION_DROP,
+            "v4 was half-committed"
+        );
+        assert!(c.writer().fw_rules6.is_empty());
+    }
+
+    #[test]
+    fn replace_interface_firewall_unknown_interface_is_not_found() {
+        let mut c = core();
+        let err = replace_interface_firewall(
+            &mut c,
+            &pb::ReplaceInterfaceFirewallRequest {
+                interface_id: "nope".into(),
+                rules: vec![fw_spec("r", "0.0.0.0/0", true)],
+            },
+        )
+        .unwrap_err();
+        assert_eq!(tonic::Status::from(err).code(), tonic::Code::NotFound);
     }
 
     /// End-to-end through the RPC handlers: two backends on the SAME node (same backend_underlay)

@@ -2,11 +2,14 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	compiledv1 "github.com/trevex/ectobase/api/compiled/v1alpha1"
 	netv1 "github.com/trevex/ectobase/api/net/v1alpha1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -232,3 +235,62 @@ func TestCompiledToFwKeepsRulesSingleFamily(t *testing.T) {
 }
 
 func isV6CIDR(s string) bool { return strings.Contains(s, ":") }
+
+// fwRules builds n ingress Allow rules from distinct peer CIDRs of the given family.
+func fwRules(n int, v6 bool) []compiledv1.CompiledFwRule {
+	out := make([]compiledv1.CompiledFwRule, 0, n)
+	for i := 0; i < n; i++ {
+		cidr := fmt.Sprintf("10.%d.0.0/16", i)
+		if v6 {
+			cidr = fmt.Sprintf("2001:db8:%x::/48", i)
+		}
+		out = append(out, compiledv1.CompiledFwRule{CIDR: cidr, Action: "Allow"})
+	}
+	return out
+}
+
+// The dataplane caps an interface at FW_MAX_RULES (16) rules PER ADDRESS FAMILY, ingress and egress
+// sharing the budget; a replace over the cap is refused whole with ResourceExhausted and the prior set
+// stays. The agent must surface that (not swallow it) and still program every other interface.
+func TestReconcileFirewall_OverflowSurfacesAndSparesOtherInterfaces(t *testing.T) {
+	over := &compiledv1.CompiledNIC{
+		ObjectMeta: metav1.ObjectMeta{Name: "over", Namespace: "default"},
+		Spec: compiledv1.CompiledNICSpec{
+			VNI: 120, OverlayIPs: []string{"10.0.20.11"},
+			// 9 ingress + 8 egress v4 = 17 in ONE family: over the shared per-family budget.
+			Firewall: compiledv1.CompiledFirewall{Ingress: fwRules(9, false), Egress: fwRules(8, false)},
+		},
+	}
+	full := &compiledv1.CompiledNIC{
+		ObjectMeta: metav1.ObjectMeta{Name: "full", Namespace: "default"},
+		Spec: compiledv1.CompiledNICSpec{
+			VNI: 120, OverlayIPs: []string{"10.0.20.12"},
+			// 16 v4 + 16 v6 = 32 rules, but each family is exactly at its cap: accepted.
+			Firewall: compiledv1.CompiledFirewall{Ingress: append(fwRules(16, false), fwRules(16, true)...)},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(fwScheme(t)).WithObjects(over, full).Build()
+	dp := newRecordingDP()
+	dp.ifaces = []LocalInterface{
+		{InterfaceID: "ifOver", Vni: 120, OverlayIPs: []string{"10.0.20.11"}, Underlay: "fd00::a"},
+		{InterfaceID: "ifFull", Vni: 120, OverlayIPs: []string{"10.0.20.12"}, Underlay: "fd00::a"},
+	}
+	r := &Reconciler{client: cl, nodeID: "nodeA", dp: dp}
+
+	err := r.ReconcileFirewall(context.Background())
+	if err == nil {
+		t.Fatal("17 rules in one family must be refused by the dataplane, got nil error")
+	}
+	if got := status.Code(err); got != codes.ResourceExhausted {
+		t.Fatalf("overflow must surface as ResourceExhausted, got %v (%v)", got, err)
+	}
+	if !strings.Contains(err.Error(), "ifOver") {
+		t.Fatalf("error must name the refused interface: %v", err)
+	}
+	if _, ok := dp.fwReplace["ifOver"]; ok {
+		t.Fatalf("refused replace must leave the prior (here: no) rule set, got %+v", dp.fwReplace["ifOver"])
+	}
+	if got := len(dp.fwReplace["ifFull"]); got != 32 {
+		t.Fatalf("interface at exactly the per-family cap must be programmed with all 32 rules, got %d", got)
+	}
+}

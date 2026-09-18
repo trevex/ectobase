@@ -20,6 +20,10 @@ pub enum ServiceError {
     /// `InvalidArgument`.
     #[error("{0}")]
     Invalid(String),
+    /// The request exceeds a fixed dataplane budget (e.g. an interface's firewall rule slots). Maps
+    /// to `ResourceExhausted` — retrying the same request cannot succeed.
+    #[error("{0}")]
+    Exhausted(String),
     /// A genuine internal/server fault (shell-out failure, map programming error, …). Maps to
     /// `Internal`, which gRPC clients may retry.
     #[error(transparent)]
@@ -32,9 +36,22 @@ impl From<ServiceError> for tonic::Status {
             ServiceError::Conflict(m) => tonic::Status::already_exists(m),
             ServiceError::NotFound(m) => tonic::Status::not_found(m),
             ServiceError::Invalid(m) => tonic::Status::invalid_argument(m),
+            ServiceError::Exhausted(m) => tonic::Status::resource_exhausted(m),
             // `{:#}` renders the full anyhow context chain (e.g. the underlying `ip netns exec` /
             // `ip tuntap` stderr), not just the top `.context(...)` line.
             ServiceError::Internal(e) => tonic::Status::internal(format!("{e:#}")),
+        }
+    }
+}
+
+impl From<flowplane_control::FwError> for ServiceError {
+    fn from(e: flowplane_control::FwError) -> Self {
+        use flowplane_control::FwError;
+        match e {
+            FwError::UnknownInterface => ServiceError::NotFound(e.to_string()),
+            FwError::TooManyRules { .. } => ServiceError::Exhausted(e.to_string()),
+            FwError::AlreadyExists => ServiceError::Conflict(e.to_string()),
+            FwError::Map(e) => ServiceError::Internal(e),
         }
     }
 }
@@ -56,6 +73,10 @@ mod tests {
         assert_eq!(
             tonic::Status::from(ServiceError::Invalid("x".into())).code(),
             tonic::Code::InvalidArgument
+        );
+        assert_eq!(
+            tonic::Status::from(ServiceError::Exhausted("x".into())).code(),
+            tonic::Code::ResourceExhausted
         );
         assert_eq!(
             tonic::Status::from(ServiceError::Internal(anyhow::anyhow!("x"))).code(),

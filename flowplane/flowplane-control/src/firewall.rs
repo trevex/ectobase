@@ -5,8 +5,63 @@
 //! `g.fw_rules.remove/upsert` -> `self.w.fw_rules_remove/fw_rules_upsert`, and `g.fw_meta.upsert`
 //! -> `self.w.fw_meta_upsert`.
 
+use core::fmt;
+
 use crate::{ControlCore, MapWriter};
 use flowplane_common::{FwMeta, FwRule, FwRule6, FwRuleKey, FW_DIR_EGRESS, FW_MAX_RULES};
+
+/// A firewall programming failure, classified so the gRPC layer can return a meaningful status:
+/// an unknown interface, a rule-budget overflow and a duplicate rule id are client errors that a
+/// retry cannot fix, unlike a failed map write.
+#[derive(Debug)]
+pub enum FwError {
+    /// No interface with this id is attached on this node.
+    UnknownInterface,
+    /// One family's rule list exceeds the per-interface budget (`FW_MAX_RULES`, shared by ingress
+    /// and egress).
+    TooManyRules { family: &'static str, count: usize },
+    /// A rule with this id is already installed (the imperative `add_fw_rule*` path only).
+    AlreadyExists,
+    /// Programming the maps failed.
+    Map(anyhow::Error),
+}
+
+impl fmt::Display for FwError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            // The "NO_VM:" / "ALREADY_EXISTS:" prefixes predate this type; callers grep for them.
+            FwError::UnknownInterface => f.write_str("NO_VM: unknown interface"),
+            FwError::TooManyRules { family, count } => write!(
+                f,
+                "too many {family} firewall rules for interface: {count} (max {FW_MAX_RULES} per family)"
+            ),
+            FwError::AlreadyExists => f.write_str("ALREADY_EXISTS: firewall rule already exists"),
+            FwError::Map(e) => write!(f, "{e:#}"),
+        }
+    }
+}
+
+impl std::error::Error for FwError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            FwError::Map(e) => Some(e.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+impl From<anyhow::Error> for FwError {
+    fn from(e: anyhow::Error) -> Self {
+        FwError::Map(e)
+    }
+}
+
+fn check_budget(family: &'static str, count: usize) -> Result<(), FwError> {
+    if count > FW_MAX_RULES as usize {
+        return Err(FwError::TooManyRules { family, count });
+    }
+    Ok(())
+}
 
 impl<W: MapWriter> ControlCore<W> {
     /// Drop the firewall rule shadow for a detaching interface's ifindex (the discarded rules'
@@ -16,6 +71,30 @@ impl<W: MapWriter> ControlCore<W> {
         self.fw6.remove(&ifindex);
     }
 
+    fn fw_ifindex(&self, interface_id: &[u8]) -> Result<u32, FwError> {
+        self.ifaces_meta
+            .get(interface_id)
+            .map(|m| m.ifindex)
+            .ok_or(FwError::UnknownInterface)
+    }
+
+    /// Replace an interface's WHOLE firewall, both families, or nothing: the interface and both
+    /// families' budgets are checked before either family's maps are touched, so a refusal never
+    /// leaves the interface on half of the new policy. (A map write failing midway can still split
+    /// the families; closing that needs the atomic inner-map swap of the classifier redesign.)
+    pub fn replace_interface_fw(
+        &mut self,
+        interface_id: &[u8],
+        v4: Vec<(Vec<u8>, FwRule)>,
+        v6: Vec<(Vec<u8>, FwRule6)>,
+    ) -> Result<(), FwError> {
+        self.fw_ifindex(interface_id)?;
+        check_budget("IPv4", v4.len())?;
+        check_budget("IPv6", v6.len())?;
+        self.replace_fw_rules(interface_id, v4)?;
+        self.replace_fw_rules6(interface_id, v6)
+    }
+
     /// Replace ALL v4 firewall rules for an interface with `rules` (both directions), clearing any
     /// prior rules/slots. Declarative + restart-safe: callers push the complete desired set each
     /// reconcile, so a stale rule can never survive. `rules` is slot-ordered (idx = position).
@@ -23,20 +102,11 @@ impl<W: MapWriter> ControlCore<W> {
         &mut self,
         interface_id: &[u8],
         rules: Vec<(Vec<u8>, FwRule)>,
-    ) -> anyhow::Result<()> {
-        let ifindex = self
-            .ifaces_meta
-            .get(interface_id)
-            .map(|m| m.ifindex)
-            .ok_or_else(|| anyhow::anyhow!("NO_VM: unknown interface"))?;
-        if rules.len() > FW_MAX_RULES as usize {
-            anyhow::bail!(
-                "too many firewall rules for interface (max {})",
-                FW_MAX_RULES
-            );
-        }
+    ) -> Result<(), FwError> {
+        let ifindex = self.fw_ifindex(interface_id)?;
+        check_budget("IPv4", rules.len())?;
         self.fw.insert(ifindex, rules);
-        self.fw_reprogram(ifindex)
+        Ok(self.fw_reprogram(ifindex)?)
     }
 
     /// Replace ALL v6 firewall rules for an interface with `rules` (both directions), clearing any
@@ -45,20 +115,11 @@ impl<W: MapWriter> ControlCore<W> {
         &mut self,
         interface_id: &[u8],
         rules: Vec<(Vec<u8>, FwRule6)>,
-    ) -> anyhow::Result<()> {
-        let ifindex = self
-            .ifaces_meta
-            .get(interface_id)
-            .map(|m| m.ifindex)
-            .ok_or_else(|| anyhow::anyhow!("NO_VM: unknown interface"))?;
-        if rules.len() > FW_MAX_RULES as usize {
-            anyhow::bail!(
-                "too many firewall rules for interface (max {})",
-                FW_MAX_RULES
-            );
-        }
+    ) -> Result<(), FwError> {
+        let ifindex = self.fw_ifindex(interface_id)?;
+        check_budget("IPv6", rules.len())?;
         self.fw6.insert(ifindex, rules);
-        self.fw6_reprogram(ifindex)
+        Ok(self.fw6_reprogram(ifindex)?)
     }
 
     /// Reprogram all firewall slots for one interface from the in-memory `fw` vec.
@@ -101,30 +162,21 @@ impl<W: MapWriter> ControlCore<W> {
         interface_id: &[u8],
         rule_id: Vec<u8>,
         rule: FwRule,
-    ) -> anyhow::Result<()> {
-        let ifindex = self
-            .ifaces_meta
-            .get(interface_id)
-            .map(|m| m.ifindex)
-            .ok_or_else(|| anyhow::anyhow!("NO_VM: unknown interface"))?;
+    ) -> Result<(), FwError> {
+        let ifindex = self.fw_ifindex(interface_id)?;
         let entry = self.fw.entry(ifindex).or_default();
-        if entry.len() >= FW_MAX_RULES as usize {
-            anyhow::bail!(
-                "too many firewall rules for interface (max {})",
-                FW_MAX_RULES
-            );
-        }
+        check_budget("IPv4", entry.len() + 1)?;
         // Reject duplicate rule IDs.
         if entry.iter().any(|(id, _)| id == &rule_id) {
-            anyhow::bail!("ALREADY_EXISTS: firewall rule already exists");
+            return Err(FwError::AlreadyExists);
         }
         entry.push((rule_id, rule));
-        self.fw_reprogram(ifindex)
+        Ok(self.fw_reprogram(ifindex)?)
     }
 
     /// Remove a firewall rule by id from an interface. Tries the v4 shadow first, then v6.
     /// Returns true if removed, false if not found.
-    pub fn del_fw_rule(&mut self, interface_id: &[u8], rule_id: &[u8]) -> anyhow::Result<bool> {
+    pub fn del_fw_rule(&mut self, interface_id: &[u8], rule_id: &[u8]) -> Result<bool, FwError> {
         if self.del_fw_rule_v4(interface_id, rule_id)? {
             return Ok(true);
         }
@@ -133,12 +185,8 @@ impl<W: MapWriter> ControlCore<W> {
 
     /// Remove a v4 firewall rule by id from an interface.
     /// Returns true if removed, false if not found.
-    fn del_fw_rule_v4(&mut self, interface_id: &[u8], rule_id: &[u8]) -> anyhow::Result<bool> {
-        let ifindex = self
-            .ifaces_meta
-            .get(interface_id)
-            .map(|m| m.ifindex)
-            .ok_or_else(|| anyhow::anyhow!("NO_VM: unknown interface"))?;
+    fn del_fw_rule_v4(&mut self, interface_id: &[u8], rule_id: &[u8]) -> Result<bool, FwError> {
+        let ifindex = self.fw_ifindex(interface_id)?;
         let entry = self.fw.entry(ifindex).or_default();
         let before = entry.len();
         entry.retain(|(id, _)| id.as_slice() != rule_id);
@@ -189,35 +237,22 @@ impl<W: MapWriter> ControlCore<W> {
         interface_id: &[u8],
         rule_id: Vec<u8>,
         rule: FwRule6,
-    ) -> anyhow::Result<()> {
-        let ifindex = self
-            .ifaces_meta
-            .get(interface_id)
-            .map(|m| m.ifindex)
-            .ok_or_else(|| anyhow::anyhow!("NO_VM: unknown interface"))?;
+    ) -> Result<(), FwError> {
+        let ifindex = self.fw_ifindex(interface_id)?;
         let entry = self.fw6.entry(ifindex).or_default();
-        if entry.len() >= FW_MAX_RULES as usize {
-            anyhow::bail!(
-                "too many firewall rules for interface (max {})",
-                FW_MAX_RULES
-            );
-        }
+        check_budget("IPv6", entry.len() + 1)?;
         // Reject duplicate rule IDs.
         if entry.iter().any(|(id, _)| id == &rule_id) {
-            anyhow::bail!("ALREADY_EXISTS: firewall rule already exists");
+            return Err(FwError::AlreadyExists);
         }
         entry.push((rule_id, rule));
-        self.fw6_reprogram(ifindex)
+        Ok(self.fw6_reprogram(ifindex)?)
     }
 
     /// Remove a v6 firewall rule by id from an interface.
     /// Returns true if removed, false if not found.
-    fn del_fw_rule6(&mut self, interface_id: &[u8], rule_id: &[u8]) -> anyhow::Result<bool> {
-        let ifindex = self
-            .ifaces_meta
-            .get(interface_id)
-            .map(|m| m.ifindex)
-            .ok_or_else(|| anyhow::anyhow!("NO_VM: unknown interface"))?;
+    fn del_fw_rule6(&mut self, interface_id: &[u8], rule_id: &[u8]) -> Result<bool, FwError> {
+        let ifindex = self.fw_ifindex(interface_id)?;
         let entry = self.fw6.entry(ifindex).or_default();
         let before = entry.len();
         entry.retain(|(id, _)| id.as_slice() != rule_id);
